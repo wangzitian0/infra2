@@ -5,7 +5,7 @@ description: Infra2 Platform Deploy Evidence & Reality Guard. Automates Touch Re
 
 # Infra2 Platform Deploy Evidence & Reality Guard
 
-> **Core Axiom (AGENTS.md §5)**:
+> **Core Axiom (AGENTS.md Section 5)**:
 > *"Closed means deployed, real, and physically verified. Code merge is not deployment. Staging deploy is tag-driven soak. Production deploy requires explicit owner authorization and Touch Reality physical proof."*
 
 ## 1. When to Activate This Skill
@@ -47,25 +47,26 @@ Never declare success based only on GitHub green! Verify the physical system:
 #### Probe A: Physical Image & Container Digest Check
 ```bash
 # SSH to VPS (host from 1Password 'local' item, user: root)
-docker inspect -f '{{.Config.Image}}' platform-alerting-probes
-docker inspect -f '{{.Config.Image}}' platform-alerting
+# Note: For staging environment, set ENV_SUFFIX="-staging" (default empty for prod)
+docker inspect -f '{{.Config.Image}}' platform-alerting-probes${ENV_SUFFIX:-}
+docker inspect -f '{{.Config.Image}}' platform-alerting${ENV_SUFFIX:-}
 ```
 
 #### Probe B: Availability Ledger State
 Verify ledger JSON is writable and accumulating successful cycles (read-only probe without Lark side-effects):
 ```bash
-cat /var/lib/infra2-availability-ledger/availability-ledger.json | head -20
+head -20 /var/lib/infra2-availability-ledger/availability-ledger.json
 INFRA2_STABILITY_REPORT_DRY_RUN=1 python -m tools.stability_report
 ```
 
 #### Probe C: External Watchdog Blackbox
 Query Cloudflare watchdog from external network using configured status token:
 ```bash
-curl -fsS -H "Authorization: Bearer $INFRA2_WATCHDOG_WORKER_STATUS_TOKEN" https://infra2-cloudflare-watchdog.wangzitian0.workers.dev/outages
+curl -fsS -H "Authorization: Bearer ${INFRA2_WATCHDOG_WORKER_STATUS_TOKEN}" https://infra2-cloudflare-watchdog.wangzitian0.workers.dev/outages
 ```
 
 ## 3. Red Lines (Instant Rejection)
-- ❌ Merge commit on main without tag or promote: **DO NOT CLOSE ISSUE**.
-- ❌ GitHub Action green but VPS container digest unchanged: **REJECT EVIDENCE (GREEN-WHILE-STALE)**.
-- ❌ Ledger JSON missing or not cycling: **REJECT EVIDENCE**.
-- ❌ Watchdog reporting outages: **REJECT EVIDENCE**.
+- [REJECT] Merge commit on main without tag or promote: **DO NOT CLOSE ISSUE**.
+- [REJECT] GitHub Action green but VPS container digest unchanged: **REJECT EVIDENCE (GREEN-WHILE-STALE)**.
+- [REJECT] Ledger JSON missing or not cycling: **REJECT EVIDENCE**.
+- [REJECT] Watchdog reporting outages: **REJECT EVIDENCE**.
