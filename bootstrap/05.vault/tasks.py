@@ -380,7 +380,7 @@ def _vault_token_targets(root_dir: str) -> list[VaultTokenTarget]:
             {
                 "postgres": "01.postgres",
                 "redis": "02.redis",
-                "minio": "03.minio",
+                "minio": "03.s3",
                 "authentik": "10.authentik",
                 "alerting": "12.alerting",
                 "prefect": "23.prefect",

@@ -160,14 +160,22 @@ class TestConfig:
         f"https://{SERVICE_SUBDOMAINS['sso']}{ENV_SUFFIX}.{INTERNAL_DOMAIN}",
     )
 
-    # MinIO Object Storage
+    # S3-Compatible Object Storage
+    S3_CONSOLE_URL = os.getenv(
+        "S3_CONSOLE_URL",
+        f"https://{SERVICE_SUBDOMAINS['s3_console']}{ENV_SUFFIX}.{INTERNAL_DOMAIN}",
+    )
+    S3_API_URL = os.getenv(
+        "S3_API_URL",
+        f"https://{SERVICE_SUBDOMAINS['s3']}{ENV_SUFFIX}.{INTERNAL_DOMAIN}",
+    )
     MINIO_CONSOLE_URL = os.getenv(
         "MINIO_CONSOLE_URL",
-        f"https://{SERVICE_SUBDOMAINS['minio_console']}{ENV_SUFFIX}.{INTERNAL_DOMAIN}",
+        S3_CONSOLE_URL,
     )
     MINIO_API_URL = os.getenv(
         "MINIO_API_URL",
-        f"https://{SERVICE_SUBDOMAINS['minio_api']}{ENV_SUFFIX}.{INTERNAL_DOMAIN}",
+        S3_API_URL,
     )
 
     # App domain (e.g., report.zitian.party, report-pr-47.zitian.party, report-staging.zitian.party)

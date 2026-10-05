@@ -150,7 +150,12 @@ services:
       - "traefik.http.routers.platform-s3-console${ENV_DOMAIN_SUFFIX}.tls=true"
       - "traefik.http.routers.platform-s3-console${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
       - "traefik.http.routers.platform-s3-console${ENV_DOMAIN_SUFFIX}.service=platform-s3-console${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.routers.platform-s3-console${ENV_DOMAIN_SUFFIX}.middlewares=s3-console-redirect${ENV_DOMAIN_SUFFIX}@docker"
       - "traefik.http.services.platform-s3-console${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=9001"
+      # S3 Console Root Redirect: automatically redirect / to /rustfs/console/
+      - "traefik.http.middlewares.s3-console-redirect${ENV_DOMAIN_SUFFIX}.redirectregex.regex=^(https?://[^/]+)/?$$"
+      - "traefik.http.middlewares.s3-console-redirect${ENV_DOMAIN_SUFFIX}.redirectregex.replacement=$${1}/rustfs/console/"
+      - "traefik.http.middlewares.s3-console-redirect${ENV_DOMAIN_SUFFIX}.redirectregex.permanent=false"
 
 volumes:
   secrets:

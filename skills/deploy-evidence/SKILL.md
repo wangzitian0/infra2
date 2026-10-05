@@ -41,28 +41,19 @@ gh workflow run reconcile-iac-inputs.yml -f promote_prod=true -f after=vX.Y.Z
 gh run watch <run-id>
 ```
 
-### Phase 4: Touch Reality Physical Probes (Read-Only)
-Never declare success based only on GitHub green! Verify the physical system:
+### Phase 4: Touch Reality Physical Probes (Read-Only via Existing Tools)
+Never declare success based only on GitHub green! Verify the physical system using existing tools:
 
-#### Probe A: Physical Image & Container Digest Check
+#### 1. Availability Ledger & Watchdog Outages Verification
+Verify VPS availability ledger and Cloudflare Watchdog blackbox outages (dry-run mode without Lark side-effects):
 ```bash
-# SSH to VPS (host from 1Password 'local' item, user: root)
-# Note: For staging environment, set ENV_SUFFIX="-staging" (default empty for prod)
-docker inspect -f '{{.Config.Image}}' platform-alerting-probes${ENV_SUFFIX:-}
-docker inspect -f '{{.Config.Image}}' platform-alerting${ENV_SUFFIX:-}
-```
-
-#### Probe B: Availability Ledger State
-Verify ledger JSON is writable and accumulating successful cycles (read-only probe without Lark side-effects):
-```bash
-head -20 /var/lib/infra2-availability-ledger/availability-ledger.json
 INFRA2_STABILITY_REPORT_DRY_RUN=1 python -m tools.stability_report
 ```
 
-#### Probe C: External Watchdog Blackbox
-Query Cloudflare watchdog from external network using configured status token:
+#### 2. Physical Image, Container & Route Health Probes
+Verify container health, network reachability, and alerting bridge status using the probe runner (dry-run one-shot probe):
 ```bash
-curl -fsS -H "Authorization: Bearer ${INFRA2_WATCHDOG_WORKER_STATUS_TOKEN}" https://infra2-cloudflare-watchdog.wangzitian0.workers.dev/outages
+INFRA_PROBE_DRY_RUN=1 python -m tools.infra_probe_runner --once
 ```
 
 ## 3. Red Lines (Instant Rejection)
