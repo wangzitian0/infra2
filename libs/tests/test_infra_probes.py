@@ -321,11 +321,12 @@ def test_in_band_probe_compose_uses_internal_network_targets() -> None:
     assert "https://cloud.${INTERNAL_DOMAIN}" not in probe_block
     assert "https://vault.${INTERNAL_DOMAIN}" not in probe_block
     assert "https://minio.${INTERNAL_DOMAIN}" not in probe_block
+    assert "https://s3.${INTERNAL_DOMAIN}" not in probe_block
     assert "https://sso.${INTERNAL_DOMAIN}" not in probe_block
     assert "https://signoz.${INTERNAL_DOMAIN}" not in probe_block
     assert "http://dokploy:3000" in probe_block
     assert "http://vault:8200/v1/sys/health" in probe_block
-    assert "http://platform-minio${ENV_SUFFIX}:9000/minio/health/live" in probe_block
+    assert "http://platform-s3${ENV_SUFFIX}:9000/minio/health/live" in probe_block
     assert (
         "http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/"
         in probe_block

@@ -129,6 +129,22 @@ def test_only_a_health_check_still_starting_is_worth_waiting_for():
     assert not restarting.ok and not restarting.settling
 
 
+def test_created_container_settles_while_peers_are_healthy():
+    """#942: during initial startup, a newly created container transitions from
+    Created to Running. If all peer containers are healthy, it should settle."""
+    verdict = in_service_verdict(
+        ("s3", "vault-agent"),
+        parse_docker_ps(
+            _ps(
+                ("s3", "created", "Created"),
+                ("vault-agent", "running", "Up 10 seconds (healthy)"),
+            )
+        ),
+    )
+    assert not verdict.ok and verdict.settling
+    assert "s3 is created (Created)" in verdict.message
+
+
 class _Run:
     def __init__(self, ok: bool, stdout: str = "", stderr: str = ""):
         self.ok, self.stdout, self.stderr = ok, stdout, stderr

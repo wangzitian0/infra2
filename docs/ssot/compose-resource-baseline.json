@@ -25,8 +25,6 @@
     "platform/02.redis/compose.yaml::vault-agent",
     "platform/03.clickhouse/compose.yaml::init-clickhouse",
     "platform/03.clickhouse/compose.yaml::zookeeper",
-    "platform/03.minio/compose.yaml::minio",
-    "platform/03.minio/compose.yaml::vault-agent",
     "platform/10.authentik/compose.yaml::server",
     "platform/10.authentik/compose.yaml::token-init",
     "platform/10.authentik/compose.yaml::vault-agent",

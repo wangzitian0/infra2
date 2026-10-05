@@ -35,7 +35,7 @@ PATH_SERVICES = {
     "platform/clickhouse",
     "platform/authentik",
     "truealpha/data_engine",
-    "platform/minio",
+    "platform/s3",
 }
 ALL_SERVICES = PG_SERVICES | REDIS_SERVICES | PATH_SERVICES
 
@@ -198,7 +198,7 @@ def test_tar_exit_1_is_a_warning_and_the_run_continues(host) -> None:
     assert proc.returncode == 0, proc.stderr
     assert _ids(manifest) == ALL_SERVICES
     assert "WARN platform/redis: tar exit 1" in proc.stderr
-    assert "WARN platform/minio: tar exit 1" in proc.stderr
+    assert "WARN platform/s3: tar exit 1" in proc.stderr
 
 
 def test_a_failing_service_does_not_stop_the_rest(host) -> None:
@@ -278,9 +278,9 @@ def test_missing_path_directory_fails_that_service(host) -> None:
     shutil.rmtree(Path(host["env"]["BACKUP_DATA_ROOT"]) / "platform/minio")
     proc, manifest, _ = _run(host)
     assert proc.returncode == 1
-    assert "platform/minio" not in _ids(manifest)
-    assert "FAILED platform/minio" in proc.stderr
-    assert "missing data directory for platform/minio" in proc.stderr
+    assert "platform/s3" not in _ids(manifest)
+    assert "FAILED platform/s3" in proc.stderr
+    assert "missing data directory for platform/s3" in proc.stderr
 
 
 def test_script_services_are_declared_backup_inventory() -> None:

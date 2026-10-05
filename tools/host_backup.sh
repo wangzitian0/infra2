@@ -87,7 +87,7 @@ platform/signoz|path|${DATA_ROOT}/platform/signoz${SUFFIX}
 platform/clickhouse|path|${DATA_ROOT}/platform/clickhouse${SUFFIX}
 platform/authentik|path|${DATA_ROOT}/platform/authentik${SUFFIX}
 truealpha/data_engine|path|${DATA_ROOT}/truealpha/dagster${SUFFIX}
-platform/minio|path|${DATA_ROOT}/platform/minio${SUFFIX}
+platform/s3|path|${DATA_ROOT}/platform/minio${SUFFIX}
 EOF
 )
 

@@ -49,34 +49,36 @@ signals:
   cadence: 60s
   alert_threshold: 3 consecutive failures
   expected: 200,429,472,473
-- signal_id: production.minio.internal-http
+- signal_id: production.s3.internal-http
   environment: production
   component: minio
-  signal: minio-internal-http
+  signal: s3-internal-http
   primary_owner: internal
   severity: critical
   cadence: 60s
   alert_threshold: 3 consecutive failures
-- signal_id: staging.minio.internal-http
+  expected: '200'
+- signal_id: staging.s3.internal-http
   environment: staging
   component: minio
-  signal: minio-internal-http
+  signal: s3-internal-http
   primary_owner: internal
   severity: critical
   cadence: 60s
   alert_threshold: 3 consecutive failures
-- signal_id: production.minio.s3-head-bucket
+  expected: '200'
+- signal_id: production.s3.s3-head-bucket
   environment: production
   component: minio
-  signal: minio-s3-head-bucket
+  signal: s3-head-bucket
   primary_owner: internal
   severity: critical
   cadence: 60s
   alert_threshold: 3 consecutive failures
-- signal_id: staging.minio.s3-head-bucket
+- signal_id: staging.s3.s3-head-bucket
   environment: staging
   component: minio
-  signal: minio-s3-head-bucket
+  signal: s3-head-bucket
   primary_owner: internal
   severity: critical
   cadence: 60s

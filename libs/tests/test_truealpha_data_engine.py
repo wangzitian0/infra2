@@ -195,9 +195,9 @@ def test_deployer_fails_closed_on_missing_or_malformed_release_inputs(monkeypatc
     assert not deployer.ensure_runtime_secrets()
 
 
-def _load_minio_deploy_module():
+def _load_s3_deploy_module():
     spec = importlib.util.spec_from_file_location(
-        "platform_minio_deploy", ROOT / "platform/03.minio/deploy.py"
+        "platform_s3_deploy", ROOT / "platform/03.s3/deploy.py"
     )
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -211,7 +211,7 @@ def test_the_dialled_s3_port_matches_the_one_minio_publishes():
     19000/19001 while this service kept dialling the 9000 baked into Vault, so capture
     stayed broken after the publish landed.
     """
-    published = _load_minio_deploy_module().MinioDeployer._S3_HOST_PORTS
+    published = _load_s3_deploy_module().S3Deployer._S3_HOST_PORTS
     dialled = _load_deploy_module().DataEngineDeployer._MINIO_S3_PORTS
     assert set(published) == set(dialled)
     for env, addr in published.items():

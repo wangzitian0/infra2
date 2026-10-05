@@ -2,8 +2,10 @@ services:
   vault-agent:
     init: true  # tini as PID1 reaps healthcheck ssl_client zombies
     image: hashicorp/vault:1.15
-    container_name: platform-minio-vault-agent${ENV_SUFFIX}
+    container_name: platform-s3-vault-agent${ENV_SUFFIX}
     restart: always
+    mem_limit: 128m
+    mem_reservation: 32m
     entrypoint:
       - sh
       - -c
@@ -61,16 +63,18 @@ services:
       retries: 3
       start_period: 10s
 
-  minio:
-    # RustFS (S3-compatible, Apache 2.0, Rust memory-safe object storage)
+  s3:
+    # S3-compatible Object Storage service (currently powered by RustFS 1.0.0 engine)
     # Built with mc embedded to preserve 100% compatibility with shared tasks and scripts (#930)
     build:
       context: ../..
-      dockerfile: platform/03.minio/Dockerfile
+      dockerfile: platform/03.s3/Dockerfile
     pull_policy: build
-    image: platform-minio-rustfs:${IAC_CONFIG_HASH:-latest}
-    container_name: platform-minio${ENV_SUFFIX}
+    image: platform-s3:${IAC_CONFIG_HASH:-latest}
+    container_name: platform-s3${ENV_SUFFIX}
     restart: always
+    mem_limit: 2g
+    mem_reservation: 256m
     depends_on:
       - vault-agent
     environment:
@@ -88,10 +92,15 @@ services:
         set -a
         . /secrets/.env
         set +a
-        export RUSTFS_ROOT_USER="$${MINIO_ROOT_USER:-admin}"
-        export RUSTFS_ROOT_PASSWORD="$${MINIO_ROOT_PASSWORD}"
-        export RUSTFS_ACCESS_KEY="$${MINIO_ROOT_USER:-admin}"
-        export RUSTFS_SECRET_KEY="$${MINIO_ROOT_PASSWORD}"
+        # Root credentials exported for generic S3, RustFS, and MinIO backends
+        ROOT_USER="$${S3_ROOT_USER:-$${MINIO_ROOT_USER:-admin}}"
+        ROOT_PASSWORD="$${S3_ROOT_PASSWORD:-$${MINIO_ROOT_PASSWORD}}"
+        export S3_ROOT_USER="$$ROOT_USER"
+        export S3_ROOT_PASSWORD="$$ROOT_PASSWORD"
+        export RUSTFS_ROOT_USER="$$ROOT_USER"
+        export RUSTFS_ROOT_PASSWORD="$$ROOT_PASSWORD"
+        export RUSTFS_ACCESS_KEY="$$ROOT_USER"
+        export RUSTFS_SECRET_KEY="$$ROOT_PASSWORD"
         exec /entrypoint.sh --address ":9000" --console-address ":9001" /data
     healthcheck:
       # wget is present in the rustfs/rustfs:1.0.0 base image (Alpine layer).
@@ -111,14 +120,16 @@ services:
     # S3 write from a host-network consumer, and 127.0.0.1:9000 pointed at
     # nothing.
     ports:
-      - "${MINIO_S3_HOST_PORT:-127.0.0.1:0}:9000"
+      - "${S3_HOST_PORT:-${MINIO_S3_HOST_PORT:-127.0.0.1:0}}:9000"
     volumes:
       - secrets:/secrets:ro
       - ${DATA_PATH}:/data
     networks:
       dokploy-network:
         aliases:
+          - platform-s3${ENV_SUFFIX}
           - platform-rustfs${ENV_SUFFIX}
+          - platform-minio${ENV_SUFFIX}
     logging:
       driver: json-file
       options:
@@ -126,6 +137,20 @@ services:
         max-file: "2"
     labels:
       - "traefik.enable=true"
+      # S3 API Router -> Port 9000
+      - "traefik.http.routers.platform-s3-api${ENV_DOMAIN_SUFFIX}.rule=Host(`s3${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.platform-s3-api${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.platform-s3-api${ENV_DOMAIN_SUFFIX}.tls=true"
+      - "traefik.http.routers.platform-s3-api${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.platform-s3-api${ENV_DOMAIN_SUFFIX}.service=platform-s3-api${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.services.platform-s3-api${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=9000"
+      # S3 Console Router -> Port 9001 (fixes #941: supports s3-console, rustfs, and legacy minio domains)
+      - "traefik.http.routers.platform-s3-console${ENV_DOMAIN_SUFFIX}.rule=Host(`s3-console${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) || Host(`rustfs${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) || Host(`minio${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
+      - "traefik.http.routers.platform-s3-console${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.platform-s3-console${ENV_DOMAIN_SUFFIX}.tls=true"
+      - "traefik.http.routers.platform-s3-console${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.platform-s3-console${ENV_DOMAIN_SUFFIX}.service=platform-s3-console${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.services.platform-s3-console${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=9001"
 
 volumes:
   secrets:

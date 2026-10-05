@@ -86,18 +86,24 @@ def in_service_verdict(
     """
     missing: list[str] = []
     down: list[str] = []
+    created: list[str] = []
     starting: list[str] = []
     for name in expected:
         found = observed.get(name)
         if found is None:
             missing.append(name)
+        elif found.state == "created":
+            # #942: A container in "Created" state during initial deploy startup is
+            # converging (waiting on docker engine to exec or dependency to start),
+            # provided no peer container is explicitly unhealthy/down.
+            created.append(f"{name} is created ({found.status})")
         elif found.state != "running":
             down.append(f"{name} is {found.state} ({found.status})")
         elif found.health == "unhealthy":
             down.append(f"{name} is unhealthy ({found.status})")
         elif found.health == "health: starting":
             starting.append(name)
-    if not missing and not down and not starting:
+    if not missing and not down and not created and not starting:
         return InServiceVerdict(
             True, False, f"{len(expected)} service(s) running and healthy"
         )
@@ -106,9 +112,12 @@ def in_service_verdict(
         parts.append(f"no container for {', '.join(missing)}")
     if down:
         parts.append("; ".join(down))
+    if created:
+        parts.append("; ".join(created))
     if starting:
         parts.append(f"health still starting for {', '.join(starting)}")
-    return InServiceVerdict(False, not missing and not down, "; ".join(parts))
+    settling = not missing and not down and bool(starting or created)
+    return InServiceVerdict(False, settling, "; ".join(parts))
 
 
 _ENV_SUFFIX_REF = re.compile(r"\$\{ENV_SUFFIX(?::-[^}]*)?\}")

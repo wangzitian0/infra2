@@ -48,19 +48,19 @@ services:
     vault_agent_container: platform-redis-vault-agent${ENV_SUFFIX}
     app_containers:
       - platform-redis${ENV_SUFFIX}
-  - id: platform/minio
+  - id: platform/s3
     project: platform
-    dokploy_service: minio
+    dokploy_service: s3
     # Migrated to AppRole auth (#257/#259): vault-agent uses VAULT_ROLE_ID +
     # VAULT_SECRET_ID, not a static VAULT_APP_TOKEN.
     auth_method: approle
-    compose_path: platform/03.minio/compose.yaml
-    vault_agent_config_path: platform/03.minio/vault-agent.hcl
-    secret_template_path: platform/03.minio/secrets.ctmpl
+    compose_path: platform/03.s3/compose.yaml
+    vault_agent_config_path: platform/03.s3/vault-agent.hcl
+    secret_template_path: platform/03.s3/secrets.ctmpl
     vault_path_template: secret/data/platform/{env}/minio
-    vault_agent_container: platform-minio-vault-agent${ENV_SUFFIX}
+    vault_agent_container: platform-s3-vault-agent${ENV_SUFFIX}
     app_containers:
-      - platform-minio${ENV_SUFFIX}
+      - platform-s3${ENV_SUFFIX}
   - id: platform/authentik
     project: platform
     dokploy_service: authentik

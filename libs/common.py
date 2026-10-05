@@ -41,6 +41,7 @@ CONTAINERS = {
     "postgres": "platform-postgres",
     "redis": "platform-redis",
     "authentik": "platform-authentik-server",
+    "s3": "platform-s3",
     "minio": "platform-minio",
     "clickhouse": "platform-clickhouse",
     "signoz": "platform-signoz",
@@ -56,8 +57,10 @@ SERVICE_SUBDOMAINS = {
     "sso": "sso",  # sso.{domain} (Authentik)
     # Platform services
     "signoz": "signoz",  # signoz.{domain}
-    "minio_console": "minio",  # minio.{domain} -> Console (9001)
-    "minio_api": "s3",  # s3.{domain} -> S3 API (9000)
+    "s3": "s3",  # s3.{domain} -> S3 API (9000)
+    "s3_console": "s3-console",  # s3-console.{domain} -> Console (9001)
+    "minio_console": "minio",  # minio.{domain} -> Console (9001, legacy)
+    "minio_api": "s3",  # s3.{domain} -> S3 API (9000, legacy)
     "portal": "portal",  # portal.{domain}
 }
 
@@ -73,8 +76,10 @@ _BOOTSTRAP_ONLY_SHARED_SERVICES = frozenset({"vault", "dokploy"})
 _REGISTRY_BACKED_SHORT_NAMES = {
     "sso": "platform/authentik",
     "signoz": "platform/signoz",
-    "minio_api": "platform/minio",
-    "minio_console": "platform/minio",
+    "s3": "platform/s3",
+    "s3_console": "platform/s3",
+    "minio_api": "platform/s3",
+    "minio_console": "platform/s3",
     "portal": "platform/portal",
 }
 

@@ -17,6 +17,7 @@ services:
       REDIS_HOST: platform-redis${ENV_SUFFIX}
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000/minio/health/live
       MINIO_ENDPOINT: http://platform-minio${ENV_SUFFIX}:9000/minio/health/live
       SIGNOZ_OTEL_COLLECTOR: http://platform-signoz-otel-collector:13133
       OPENPANEL_API_URL: http://platform-openpanel-api:3000/healthcheck

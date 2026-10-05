@@ -28,10 +28,10 @@ services:
     data_path: /data/platform/clickhouse
     method: clickhouse_data_archive
     restore_command: restore ClickHouse data/log directories while service is stopped.
-  - service_id: platform/minio
+  - service_id: platform/s3
     data_path: /data/platform/minio
-    method: minio_bucket_mirror
-    restore_command: mirror the selected off-host bucket snapshot back into MinIO.
+    method: s3_bucket_mirror
+    restore_command: mirror the selected off-host bucket snapshot back into S3 storage.
   - service_id: platform/authentik
     data_path: /data/platform/authentik
     method: filesystem_archive

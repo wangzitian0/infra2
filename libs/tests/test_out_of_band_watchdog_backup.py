@@ -174,12 +174,12 @@ def test_a_staging_manifest_behind_the_production_pointer_is_red(host) -> None:
 def test_a_missing_or_stale_service_is_red_and_named(host) -> None:
     host.healthy().write_manifest(
         "production",
-        _manifest("production", drop=["platform/minio"], stale=["truealpha/postgres"]),
+        _manifest("production", drop=["platform/s3"], stale=["truealpha/postgres"]),
     )
 
     detail = host.results()[PRODUCTION].detail
 
-    assert "platform/minio: backup artifact is missing" in detail
+    assert "platform/s3: backup artifact is missing" in detail
     assert "truealpha/postgres: backup artifact is stale" in detail
     assert detail.startswith(f"2/{len(load_backup_inventory())} artifacts failed")
 

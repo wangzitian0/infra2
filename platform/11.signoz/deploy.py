@@ -255,7 +255,6 @@ class SigNozDeployer(Deployer):
         return result
 
     @classmethod
-    @classmethod
     def ensure_compose_domains(cls, client, compose_id: str, e: dict) -> dict:
         """Register both SigNoz Web UI domain and OTLP ingest domain BEFORE compose deploy.
 
@@ -301,7 +300,16 @@ class SigNozDeployer(Deployer):
                 f"{len(errors)} error(s) — see log above."
             )
 
-        return result
+        return {
+            "created": (res.get("created", 0) if isinstance(res, dict) else 0)
+            + result.get("created", 0),
+            "skipped": (res.get("skipped", 0) if isinstance(res, dict) else 0)
+            + result.get("skipped", 0),
+            "conflicts": (res.get("conflicts", []) if isinstance(res, dict) else [])
+            + result.get("conflicts", []),
+            "errors": (res.get("errors", []) if isinstance(res, dict) else [])
+            + result.get("errors", []),
+        }
 
     @classmethod
     def composing(cls, c, env_vars):

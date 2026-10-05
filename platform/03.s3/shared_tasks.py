@@ -11,9 +11,11 @@ from libs.console import header, success, error, warning, info
 
 @task
 def status(c):
-    """Check MinIO status: container health + both endpoints."""
-    # Check container health via docker
-    result = check_service(c, "minio", "mc ready local")
+    """Check S3 Object Storage status: container health + both endpoints."""
+    # Check container health via docker (try platform-s3 then fallback to platform-minio)
+    result = check_service(c, "s3", "mc ready local")
+    if not result.get("is_ready"):
+        result = check_service(c, "minio", "mc ready local")
 
     if not result.get("is_ready"):
         return result
@@ -128,11 +130,18 @@ def create_app_bucket(
         )
         # Store result["access_key"] and result["secret_key"] in Vault
     """
-    header("MinIO Bucket Setup", f"Creating bucket: {bucket_name}")
+    header("S3 Bucket Setup", f"Creating bucket: {bucket_name}")
 
     e = get_env()
     env_suffix = e.get("ENV_SUFFIX", "")
-    container_name = f"platform-minio{env_suffix}"
+    container_name = f"platform-s3{env_suffix}"
+    probe = c.run(
+        f"docker inspect --format '{{{{.State.Running}}}}' {container_name}",
+        hide=True,
+        warn=True,
+    )
+    if not probe.ok or probe.stdout.strip() != "true":
+        container_name = f"platform-minio{env_suffix}"
 
     # Generate credentials if not provided
     if not access_key:

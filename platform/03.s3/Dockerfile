@@ -1,7 +1,7 @@
 # Download mc CLI binary into RustFS image at build time.
 # This ensures zero breaking changes for existing provisioning scripts:
-# - platform/03.minio/shared_tasks.py (create_app_bucket, mc admin, mc mb)
-# - truealpha/10.app/provision_bucket.sh (docker exec platform-minio mc ...)
+# - platform/03.s3/shared_tasks.py (create_app_bucket, mc admin, mc mb)
+# - truealpha/10.app/provision_bucket.sh (docker exec platform-s3/platform-minio mc ...)
 FROM rustfs/rustfs:1.0.0
 
 ARG TARGETARCH=amd64

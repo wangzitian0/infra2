@@ -180,5 +180,5 @@ This ensures correct hostname resolution in Dokploy's shared network where each 
 
 - [PostgreSQL](../01.postgres/README.md)
 - [Redis](../02.redis/README.md)
-- [Platform MinIO](../../../platform/03.minio/README.md)
+- [Platform S3 Storage](../../../platform/03.s3/README.md)
 - [Vault Integration](../../../docs/ssot/db.vault-integration.md)

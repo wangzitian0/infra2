@@ -170,10 +170,10 @@ signals:
     severity: critical
     cadence: 60s
 
-  - signal_id: production.minio.public-route
+  - signal_id: production.s3.public-route
     environment: production
-    component: minio
-    signal: minio-public-route
+    component: s3
+    signal: s3-public-route
     primary_owner: self
     layer: vps
     failure_class: service-health
@@ -200,10 +200,10 @@ signals:
     severity: critical
     cadence: 60s
 
-  - signal_id: staging.minio.public-route
+  - signal_id: staging.s3.public-route
     environment: staging
-    component: minio
-    signal: minio-public-route
+    component: s3
+    signal: s3-public-route
     primary_owner: self
     layer: vps
     failure_class: service-health

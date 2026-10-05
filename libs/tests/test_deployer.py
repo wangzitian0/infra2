@@ -823,16 +823,16 @@ class TestDeployerVaultTokenPreflight:
         assert "AppRole" in status["details"]
 
 
-def test_minio_sync_secret_hook_repairs_root_user(monkeypatch) -> None:
-    """Infra-011: sync must ensure all MinIO template fields, not only password."""
-    module = _load_deploy_module("platform/03.minio/deploy.py", "minio_deploy_test")
+def test_s3_sync_secret_hook_repairs_root_user(monkeypatch) -> None:
+    """Infra-011: sync must ensure all S3 template fields, not only password."""
+    module = _load_deploy_module("platform/03.s3/deploy.py", "s3_deploy_test")
     secrets = FakeSecrets({"root_password": "existing"})
 
     monkeypatch.setattr(
-        module.MinioDeployer, "secrets_backend", classmethod(lambda cls: secrets)
+        module.S3Deployer, "secrets_backend", classmethod(lambda cls: secrets)
     )
 
-    assert module.MinioDeployer.ensure_runtime_secrets() is True
+    assert module.S3Deployer.ensure_runtime_secrets() is True
 
     assert secrets.values["root_user"] == "admin"
     assert secrets.values["root_password"] == "existing"
