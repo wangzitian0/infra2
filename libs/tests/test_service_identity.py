@@ -119,6 +119,17 @@ def test_canonical_stateful_deployment_environments():
     assert normalize_env_name("preview") == "preview"
     assert normalize_env_name("pr-123") == "pr_123"
     assert normalize_env_name("preview-web") == "preview_web"
+    assert normalize_env_name("canary") == "canary_preview"
+    assert normalize_env_name("canary-preview") == "canary_preview"
+    assert normalize_env_name("canary-999") == "canary_999"
+    assert normalize_env_name("branch-main") == "branch_main"
+    assert normalize_env_name("commit-1a2b3c4") == "commit_1a2b3c4"
+    assert normalize_env_name("tag-v1.0.0") == "tag_v1.0.0"
+
+    with pytest.raises(ValueError, match="whitespace"):
+        normalize_env_name("bad name")
+    with pytest.raises(ValueError, match="whitespace"):
+        normalize_env_name("bad/name")
 
 
 VALID_DOKPLOY_DYNAMIC_ALIASES = [
@@ -130,6 +141,8 @@ VALID_DOKPLOY_DYNAMIC_ALIASES = [
     "tag-v1.0.0",
     "tag-2.1.0",
     "preview-service",
+    "canary",
+    "canary-preview",
     "prod",
     "stg",
 ]

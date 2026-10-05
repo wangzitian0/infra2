@@ -44,6 +44,8 @@ def is_stateful_deploy_env(env: str | None, *, strict: bool = False) -> bool:
         or val.startswith("branch-")
         or val.startswith("tag-")
         or val.startswith("preview-")
+        or val.startswith("canary-")
+        or val == "canary"
     )
 
 

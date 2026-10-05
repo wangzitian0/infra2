@@ -160,13 +160,21 @@ def normalize_env_name(value: str | None) -> str:
         return "staging"
     if val in ("preview", "preview_env", "preview-env"):
         return "preview"
+    if val in ("canary", "canary-preview", "canary_preview"):
+        return "canary_preview"
     if val.startswith("pr-") or val.startswith("pr_"):
         return val.replace("-", "_")
-    if val.startswith("preview-"):
+    if val.startswith("preview-") or val.startswith("preview_"):
         return val.replace("-", "_")
-    if "-" in val or "/" in val:
-        raise ValueError("ENV name must not include '-' or '/' (use '_')")
-    return val
+    if val.startswith("branch-") or val.startswith("branch_"):
+        return val.replace("-", "_")
+    if val.startswith("commit-") or val.startswith("commit_"):
+        return val.replace("-", "_")
+    if val.startswith("tag-") or val.startswith("tag_"):
+        return val.replace("-", "_")
+    if "/" in val or "\\" in val or " " in val or "\t" in val or "\n" in val:
+        raise ValueError("ENV name must not include '/' or whitespace")
+    return val.replace("-", "_")
 
 
 def reset_env_cache() -> None:
@@ -253,13 +261,17 @@ def get_service_url(
     if not subdomain:
         raise ValueError(f"Unknown service: {service}")
 
-    env_name = normalize_env_name(e.get("ENV"))
+    norm = normalize_env_name(e.get("ENV"))
     if service in SHARED_PLATFORM_SERVICES():
-        env_name = "production"
+        tier = "production"
+    elif norm in ("production", "staging"):
+        tier = norm
+    else:
+        tier = "preview"
 
     from infra2_sdk.routing import resolve_service_url
 
-    return resolve_service_url(subdomain, tier=env_name, base_domain=domain).rstrip("/")
+    return resolve_service_url(subdomain, tier=tier, base_domain=domain).rstrip("/")
 
 
 def validate_env() -> list[str]:
@@ -282,10 +294,11 @@ def service_domain(subdomain: str, env: dict | None = None) -> str:
     domain = e.get("INTERNAL_DOMAIN")
     if not subdomain or not domain:
         return ""
-    env_name = normalize_env_name(e.get("ENV"))
+    norm = normalize_env_name(e.get("ENV"))
+    tier = norm if norm in ("production", "staging") else "preview"
     from infra2_sdk.routing import resolve_app_hostname
 
-    return resolve_app_hostname(subdomain, tier=env_name, base_domain=domain)
+    return resolve_app_hostname(subdomain, tier=tier, base_domain=domain)
 
 
 def __getattr__(name: str):

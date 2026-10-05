@@ -179,7 +179,7 @@ def test_reserved_deploy_canary_slot_is_globally_serialized() -> None:
     concurrency = workflow["jobs"]["deploy-v2-canary"]["concurrency"]
 
     assert concurrency == {
-        "group": "deploy-v2-canary-pr-999",
+        "group": "deploy-v2-canary",
         "cancel-in-progress": False,
     }
 
