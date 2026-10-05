@@ -257,33 +257,38 @@ services:
       # #163/#531: a `pgrep`-style "is the process alive" check would be a WEAK
       # signal -- Docker's own `state=running` already covers "the process
       # didn't exit." A real check needs to prove the worker can actually do
-      # its job: poll the Prefect API to pick up work. `prefect work-pool
-      # inspect <pool> -o json` (confirmed present on the installed prefect
-      # 3.7.4 CLI) does a real authenticated HTTP round-trip to
-      # PREFECT_API_URL and exits non-zero on any connectivity failure (verified
-      # live: exit 0 against the real API, exit 1 when pointed at an
-      # unreachable address). Checking the returned `status` field is stronger
-      # than a bare connectivity check: prefect-server's own Foreman service
-      # loop (in platform-prefect-services, ticking every 15s) marks a work
-      # pool NOT_READY as soon as it has no worker with a recent heartbeat, so
+      # its job: poll the Prefect API to pick up work. This reads the work pool
+      # over HTTP (`GET $PREFECT_API_URL/work_pools/<pool>`, the same endpoint
+      # the `prefect work-pool inspect` CLI wraps) and requires
+      # `status == READY`. prefect-server's own Foreman service loop (in
+      # platform-prefect-services, ticking every 15s) marks a work pool
+      # NOT_READY as soon as it has no worker with a recent heartbeat, so
       # `status == READY` is a live proxy for "this worker's heartbeat is
       # current," not just "the API answered." Together this catches: API/DNS
       # unreachable, the pool/queue deleted or misconfigured, and (via
       # Foreman's heartbeat bookkeeping) this worker having stopped polling --
       # none of which `state=running` or a process-existence check would catch.
+      #
+      # #961: do NOT spawn the `prefect` CLI here. Measured in this container,
+      # `prefect work-pool inspect` took 7.7-10.3s (it imports the whole prefect
+      # package) against an 8s subprocess timeout every 30s, so the probe itself
+      # flapped the container unhealthy and burned ~70% of a core per run. The
+      # urllib read answers in ~0.3s. Keep the urlopen timeout (3s) below the
+      # docker `timeout` (10s). The pool name must stay equal to `--pool` in
+      # `command` above (pinned by libs/tests/test_prefect_worker_healthcheck.py).
+      # Any error, timeout, non-JSON body, or status other than READY exits 1.
       test:
         - CMD-SHELL
         - |
           python -c "
-          import json, subprocess, sys
-          out = subprocess.run(
-              ['prefect', 'work-pool', 'inspect', 'default', '-o', 'json'],
-              capture_output=True, text=True, timeout=8,
-          )
-          if out.returncode != 0:
+          import json, os, sys, urllib.request
+          try:
+              url = os.environ['PREFECT_API_URL'].rstrip('/') + '/work_pools/default'
+              with urllib.request.urlopen(url, timeout=3) as resp:
+                  status = json.load(resp).get('status')
+          except Exception:
               sys.exit(1)
-          data = json.loads(out.stdout)
-          sys.exit(0 if data.get('status') == 'READY' else 1)
+          sys.exit(0 if status == 'READY' else 1)
           "
       interval: 30s
       timeout: 10s
