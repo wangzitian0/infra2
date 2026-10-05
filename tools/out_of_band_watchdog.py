@@ -8,7 +8,7 @@ bridge, Dokploy status, staging backups) still run, and their failures go to one
 daily report because another layer pages them (#908).
 
 A page is delivered only when the set of paged checks changes (#962,
-``libs/observability/page_dedup.py``): the same set on a later day is a
+``libs/page_dedup.py``): the same set on a later day is a
 `[报告] 仍未恢复` in the reports chat, and a day on which the set empties sends a
 RESOLVED page. Unreadable state pages as before.
 """
@@ -51,7 +51,7 @@ from libs.alerting import (  # noqa: E402
 )
 from libs.deploy_queue import deployment_start_epoch  # noqa: E402
 from libs.dokploy import get_dokploy  # noqa: E402
-from libs.observability.page_dedup import (  # noqa: E402
+from libs.page_dedup import (  # noqa: E402
     REPORT as DEDUP_REPORT,
     RESOLVED as DEDUP_RESOLVED,
     Finding,

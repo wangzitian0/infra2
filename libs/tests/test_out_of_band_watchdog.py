@@ -1982,7 +1982,7 @@ def test_main_pages_when_the_report_cannot_be_delivered(monkeypatch, tmp_path) -
 
 def _dedup_env(monkeypatch, api, **extra):
     """A scheduled run whose page-dedup state lives in the fake issues `api`."""
-    from libs.observability import page_dedup
+    from libs import page_dedup
 
     monkeypatch.setattr(page_dedup, "_api_from_env", lambda _env: api)
     return {

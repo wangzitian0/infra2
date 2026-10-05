@@ -42,6 +42,12 @@ aggregates several units (a backup check over many artifacts) names each failing
 in its keys, so a different unit failing, or the same unit failing worse in kind
 (severity), is a new identity.
 
+Lives beside ``libs/alerting.py`` rather than in ``libs/observability``: it renders
+pager/report text with the alerting layer's one definition of the format, and a domain
+package must not import a flat module (``libs/tests/test_import_boundaries.py``). It
+imports the issue trail's client from ``libs.observability.issue_trail``, which is the
+allowed direction.
+
 **State** is one open GitHub issue per job, titled exactly ``ops-checks paged: <job>``,
 whose body ends in a ``<!-- infra2-page-dedup {json} -->`` marker holding the
 identity's fingerprint, its (scrubbed) keys and when it began. It reuses the issue
@@ -548,7 +554,7 @@ def state_body(
         "",
         f"- Paged by: {run_url or '(no run URL)'}",
         "",
-        "Page-dedup state (`libs/observability/page_dedup.py`, #962): the job pages the "
+        "Page-dedup state (`libs/page_dedup.py`, #962): the job pages the "
         "pager chat only when this set changes (a finding appears or disappears, or "
         "everything resolves) and reports `仍未恢复` to the reports chat while it stays "
         "the same. One open issue per job; the next clean scheduled run closes it. "
@@ -620,7 +626,7 @@ def _close(
     body = (
         f"**`{job}` is clear**{duration}: every paged finding is gone in "
         f"{run_url or 'the latest run'}. Closed by the page-dedup state "
-        "(`libs/observability/page_dedup.py`, #962). A later red run opens a new issue."
+        "(`libs/page_dedup.py`, #962). A later red run opens a new issue."
     )
     cleared = f"{body}\n\n{encode_cleared_marker(job)}"
     failures: list[str] = []

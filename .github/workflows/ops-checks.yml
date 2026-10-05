@@ -712,7 +712,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-      # #962: the page-dedup state, one issue per job (libs/observability/page_dedup.py).
+      # #962: the page-dedup state, one issue per job (libs/page_dedup.py).
       issues: write
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
@@ -769,7 +769,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.observability.page_dedup import dedup_page, run_url_from_env
+          from libs.page_dedup import dedup_page, run_url_from_env
           from tools.facet_reconcile import (
               confirmed_finding_pairs,
               run_all,
@@ -811,7 +811,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.observability.page_dedup import resolve_page_state
+          from libs.page_dedup import resolve_page_state
           from tools.facet_reconcile import read_unevaluated
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
 
@@ -841,7 +841,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-      # #962: the page-dedup state, one issue per job (libs/observability/page_dedup.py).
+      # #962: the page-dedup state, one issue per job (libs/page_dedup.py).
       issues: write
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
@@ -921,7 +921,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.observability.page_dedup import dedup_page, run_url_from_env
+          from libs.page_dedup import dedup_page, run_url_from_env
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from tools.vault_self_refresh_audit_check import (
               confirmed_finding_pairs,
@@ -969,7 +969,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.observability.page_dedup import resolve_page_state
+          from libs.page_dedup import resolve_page_state
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from tools.vault_self_refresh_audit_check import read_unevaluated
 
@@ -999,7 +999,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-      # #962: the page-dedup state, one issue per job (libs/observability/page_dedup.py).
+      # #962: the page-dedup state, one issue per job (libs/page_dedup.py).
       issues: write
     env:
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
@@ -1062,7 +1062,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.observability.page_dedup import dedup_page, run_url_from_env
+          from libs.page_dedup import dedup_page, run_url_from_env
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from tools.secrets_reconcile_check import (
               load_report,
@@ -1103,7 +1103,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.observability.page_dedup import resolve_page_state
+          from libs.page_dedup import resolve_page_state
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from tools.secrets_reconcile_check import load_report, unevaluated_prefixes
 

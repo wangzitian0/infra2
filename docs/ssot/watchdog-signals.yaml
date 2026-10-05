@@ -611,7 +611,7 @@ signals:
   # vault-agent/app-container self-refresh state. primary_owner=self: it pages
   # Feishu directly from its own workflow step (see ops-checks.yml's "Alert on
   # confirmed failure" step), not via a separate out-of-band watchdog. #962: that
-  # page is cross-run deduplicated (libs/observability/page_dedup.py): it fires
+  # page is cross-run deduplicated (libs/page_dedup.py): it fires
   # only when the set of failing service::check identities changes (first
   # appearance, added, removed, all resolved -> RESOLVED); the same set on a later
   # day is "[报告] 仍未恢复 · 第 N 天" in the reports chat, not the pager.
