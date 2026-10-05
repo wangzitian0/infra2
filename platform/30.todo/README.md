@@ -1,6 +1,6 @@
 # Canary Todo (Infrastructure Verification Tool)
 
-Canary service deployed at `todo.zitian.party` for verifying and self-proving all platform infrastructure runtime capabilities.
+Canary service at `todo.zitian.party`. It proves the platform's real runtime paths. The full contract is in [`docs/ssot/platform.canary_todo.md`](../../docs/ssot/platform.canary_todo.md).
 
 ## Overview
 
@@ -12,16 +12,24 @@ Canary service deployed at `todo.zitian.party` for verifying and self-proving al
 
 ## Validated Capabilities
 
-The service actively validates platform infrastructure components via physical probes:
-1. **Postgres** (`platform/01.postgres`): Reads/writes relational state.
-2. **Redis** (`platform/02.redis`): Cache ping and distributed lock probe.
-3. **S3 Storage** (`platform/03.s3`): Object storage health and presigned operations.
-4. **SigNoz** (`platform/11.signoz`): OTel collector trace ingest health.
-5. **OpenPanel** (`platform/24.openpanel`): Analytics API healthcheck.
-6. **Authentik** (`platform/10.authentik`): SSO health & forward-auth integration.
+1. **Redis** (`platform/02.redis`): `AUTH`, then `SETEX`, `GET` and `DEL` of a random value. `-NOAUTH` fails.
+2. **Postgres** (`platform/01.postgres`): login as the read-only role `canary_ro`, then `SELECT 1`. An `E` reply fails.
+3. **S3** (`platform/03.s3`): `PUT`, `GET` and `DELETE` of one object under `canary/` in bucket `platform-canary`.
+4. **SigNoz** (`platform/11.signoz`): collector liveness. The canary also exports its own traces and logs.
+5. **OpenPanel** (`platform/24.openpanel`): API liveness.
+6. **Authentik** (`platform/10.authentik`): SSO liveness.
 
 ## Endpoints
 
-- **Health Probe (Public)**: `GET /api/health` (HTTP 200 JSON status)
-- **Canary Status (Public)**: `GET /api/canary/status` (Full infrastructure capability matrix)
-- **Interactive Web UI (SSO Protected)**: `GET /` (Authentik forward-auth protected Todo dashboard)
+- **Health (public)**: `GET /api/health` returns HTTP 200 JSON.
+- **Canary status (internal)**: `GET /api/canary/status` returns the check matrix. Each check is `pass`, `fail` or `unconfigured` (a missing credential). Only Redis, Postgres and S3 gate the HTTP status. SigNoz, OpenPanel and Authentik are informational. The probe runner reads it over the Docker network. SSO users reach it through the protected router. It is not public.
+- **Web UI (SSO)**: `GET /` is protected by Authentik ForwardAuth.
+
+## Deploy
+
+```bash
+# once per environment, staging first (see the SSOT doc, section 4)
+DEPLOY_ENV=<env> uv run invoke vault.setup-approle --project=platform --service=todo
+uv run invoke todo.sync
+uv run invoke todo.sso-setup
+```

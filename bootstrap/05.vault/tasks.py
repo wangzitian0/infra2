@@ -385,6 +385,7 @@ def _vault_token_targets(root_dir: str) -> list[VaultTokenTarget]:
                 "alerting": "12.alerting",
                 "prefect": "23.prefect",
                 "openpanel": "24.openpanel",
+                "todo": "30.todo",
             },
             "platform",
         ),

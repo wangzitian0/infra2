@@ -48,8 +48,8 @@ RUNNER_RENOTIFY_WINDOW_SEC = _probe_runner().DEFAULT_RENOTIFY_SECONDS
 def _frozen() -> dict[tuple[str, str], dict]:
     signals = yaml.safe_load(FROZEN.read_text(encoding="utf-8"))["signals"]
     # 41 + GitHub x2 (#658) + truealpha/app x2 (#608) + finance_report/app x2
-    # + app-layer postgres/redis x3, each in two environments
-    assert len(signals) == 59
+    # + app-layer postgres/redis x3 + todo canary status x1 (#991), each in two environments
+    assert len(signals) == 61
     return {(s["environment"], s["signal"]): s for s in signals}
 
 

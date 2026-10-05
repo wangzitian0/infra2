@@ -75,6 +75,15 @@ def test_todo_app_endpoints_contract(monkeypatch) -> None:
             "detail": "mock http 200",
         },
     )
+    monkeypatch.setattr(
+        todo_mod,
+        "_probe_s3",
+        lambda **kw: {
+            "status": "pass",
+            "latency_ms": 2.5,
+            "detail": "mock s3 put/get/delete ok",
+        },
+    )
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), todo_mod.TodoHandler)
     port = server.server_address[1]
@@ -227,7 +236,7 @@ def test_todo_app_concurrency_nonblocking(monkeypatch) -> None:
 
     probe_started = threading.Event()
 
-    # Simulate slow probe: each of the 6 checks sleeps 0.2s (total 1.2s)
+    # Simulate slow probes: each of the 6 checks sleeps 0.2s
     def _slow_probe(*args, **kwargs):
         probe_started.set()
         time.sleep(0.2)
@@ -236,6 +245,7 @@ def test_todo_app_concurrency_nonblocking(monkeypatch) -> None:
     monkeypatch.setattr(todo_mod, "_probe_postgres", _slow_probe)
     monkeypatch.setattr(todo_mod, "_probe_redis", _slow_probe)
     monkeypatch.setattr(todo_mod, "_probe_http", _slow_probe)
+    monkeypatch.setattr(todo_mod, "_probe_s3", _slow_probe)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), todo_mod.TodoHandler)
     port = server.server_address[1]
@@ -284,102 +294,6 @@ def test_todo_app_concurrency_nonblocking(monkeypatch) -> None:
         server.server_close()
 
 
-def test_probe_redis_noauth_handshake() -> None:
-    """Verify _probe_redis treats -NOAUTH challenge as physical proof of RESP engine responsiveness."""
-    spec = importlib.util.spec_from_file_location(
-        "todo_app", REPO_ROOT / "platform/30.todo/app.py"
-    )
-    assert spec is not None and spec.loader is not None
-    todo_mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(todo_mod)
-
-    import socket
-
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.bind(("127.0.0.1", 0))
-    srv.listen(1)
-    port = srv.getsockname()[1]
-
-    def _serve():
-        conn, _ = srv.accept()
-        with conn:
-            req = conn.recv(1024)
-            if b"PING" in req:
-                conn.sendall(b"-NOAUTH Authentication required.\r\n")
-
-    th = threading.Thread(target=_serve, daemon=True)
-    th.start()
-    try:
-        res = todo_mod._probe_redis("127.0.0.1", port, timeout=1.0)
-        assert res["status"] == "pass"
-        assert "auth required" in res["detail"]
-    finally:
-        srv.close()
-
-
-def test_probe_redis_authenticated_lifecycle() -> None:
-    """Verify _probe_redis with password completes full AUTH -> PING -> SETEX -> GET cycle."""
-    spec = importlib.util.spec_from_file_location(
-        "todo_app", REPO_ROOT / "platform/30.todo/app.py"
-    )
-    assert spec is not None and spec.loader is not None
-    todo_mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(todo_mod)
-
-    import socket
-
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.bind(("127.0.0.1", 0))
-    srv.listen(1)
-    port = srv.getsockname()[1]
-
-    def _serve():
-        conn, _ = srv.accept()
-        with conn:
-            rf = conn.makefile("rb")
-            # 1. Expect AUTH
-            assert rf.readline() == b"*2\r\n"
-            assert rf.readline() == b"$4\r\n"
-            assert rf.readline() == b"AUTH\r\n"
-            assert rf.readline() == b"$9\r\n"
-            assert rf.readline() == b"secret123\r\n"
-            conn.sendall(b"+OK\r\n")
-            # 2. Expect PING
-            assert rf.readline() == b"*1\r\n"
-            assert rf.readline() == b"$4\r\n"
-            assert rf.readline() == b"PING\r\n"
-            conn.sendall(b"+PONG\r\n")
-            # 3. Expect SETEX
-            assert rf.readline() == b"*4\r\n"
-            assert rf.readline() == b"$5\r\n"
-            assert rf.readline() == b"SETEX\r\n"
-            assert rf.readline() == b"$11\r\n"
-            assert rf.readline() == b"canary:ping\r\n"
-            assert rf.readline() == b"$2\r\n"
-            assert rf.readline() == b"10\r\n"
-            assert rf.readline() == b"$2\r\n"
-            assert rf.readline() == b"ok\r\n"
-            conn.sendall(b"+OK\r\n")
-            # 4. Expect GET
-            assert rf.readline() == b"*2\r\n"
-            assert rf.readline() == b"$3\r\n"
-            assert rf.readline() == b"GET\r\n"
-            assert rf.readline() == b"$11\r\n"
-            assert rf.readline() == b"canary:ping\r\n"
-            conn.sendall(b"$2\r\nok\r\n")
-
-    th = threading.Thread(target=_serve, daemon=True)
-    th.start()
-    try:
-        res = todo_mod._probe_redis(
-            "127.0.0.1", port, password="secret123", timeout=1.0
-        )
-        assert res["status"] == "pass"
-        assert "PONG & SETEX/GET verified" in res["detail"]
-    finally:
-        srv.close()
-
-
 def test_prepare_dirs_noop_on_empty_data_path(monkeypatch) -> None:
     """Verify _prepare_dirs returns True without calling ssh when data_path is empty."""
     import libs.deploy.deployer as d
@@ -420,15 +334,28 @@ def test_todo_traefik_dual_router_auth_contract() -> None:
     # 1. Traefik enabled
     assert labels_dict.get("traefik.enable") == "true"
 
-    # 2. Public bypass router: priority 100, matches health and canary status, no auth middleware
+    # 2. Public bypass router: priority 100, no auth middleware, and it serves ONLY the
+    #    health path. Evaluate the rule instead of matching its text (#991).
+    from libs.tests.traefik_rules import rule_matches
+
     public_rule = labels_dict.get(
         "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.rule"
     )
     assert public_rule is not None
-    assert "PathPrefix(`/api/health`)" in public_rule
-    assert "PathPrefix(`/api/canary/status`)" in public_rule
-    assert " || " in public_rule
-    assert "PathPrefix(`/api/health`, `/api/canary/status`)" not in public_rule
+    public_rule = public_rule.replace("${ENV_DOMAIN_SUFFIX}", "").replace(
+        "${INTERNAL_DOMAIN}", "zitian.party"
+    )
+    host = "todo.zitian.party"
+    assert rule_matches(public_rule, host=host, path="/api/health")
+    for path in (
+        "/api/canary/status",
+        "/api/canary/status/",
+        "/api/health/extra",
+        "/api/todos",
+        "/",
+    ):
+        assert not rule_matches(public_rule, host=host, path=path), path
+    assert not rule_matches(public_rule, host="evil.example", path="/api/health")
     assert (
         labels_dict.get(
             "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.priority"
