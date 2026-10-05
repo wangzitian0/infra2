@@ -495,3 +495,19 @@ signals:
   severity: critical
   cadence: 60s
   alert_threshold: 3 consecutive failures
+- signal_id: production.todo-canary-status
+  environment: production
+  component: todo
+  signal: todo-canary-status
+  primary_owner: internal
+  severity: error
+  cadence: 60s
+  alert_threshold: 3 consecutive failures
+- signal_id: staging.todo-canary-status
+  environment: staging
+  component: todo
+  signal: todo-canary-status
+  primary_owner: internal
+  severity: error
+  cadence: 60s
+  alert_threshold: 3 consecutive failures

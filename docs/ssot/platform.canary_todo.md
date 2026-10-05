@@ -1,75 +1,84 @@
-# Canary Todo 平台基建校验工具 SSOT
+# Canary Todo SSOT
 
 > **SSOT Key**: `platform.canary_todo`
-> **核心定义**：Canary Todo (`platform/30.todo`) 是部署于 `todo.zitian.party` 的合成探针与平台基建验收服务。它通过网络协议与端点握手，自证与验收平台基础设施（Postgres, Redis, S3/MinIO, SigNoz, OpenPanel, Authentik SSO）的运行时可达性。深层带鉴权读写与追踪遥测闭环跟踪于 Issue #973。
+> **Definition**: Canary Todo (`platform/30.todo`) is a synthetic service at `todo.zitian.party`. It proves that the platform's real runtime paths work: authenticated writes to Redis, a Postgres login, an S3 write, and telemetry export. The probe runner reads its status document, so a broken path pages or reports.
 
 ---
 
-## 1. 真理来源 (The Source)
+## 1. Source of Truth
 
-| 维度 | 物理位置 (SSOT) | 说明 |
-|------|----------------|------|
-| **服务代码与探针** | `platform/30.todo/app.py` | 具备物理探针与能力校验矩阵的轻量服务 |
-| **容器拓扑** | `platform/30.todo/compose.yaml` | 资源限制、网络拓扑与 Traefik 路由 |
-| **构建镜像** | `platform/30.todo/Dockerfile` | 钉牢 `infra2-sdk` 版本的 Python 3.11 镜像 |
-| **部署入口** | `platform/30.todo/deploy.py` | `TodoDeployer` 与 Authentik SSO 自动化注册任务 |
-| **外部路由** | Traefik / Dokploy Ingress | 公网绕过路由与 Authentik ForwardAuth 保护路由 |
+| Dimension | Location | Role |
+|-----------|----------|------|
+| Service code and probes | `platform/30.todo/app.py` | Probes, status document, telemetry bootstrap |
+| Container topology | `platform/30.todo/compose.yaml` | App container, vault-agent sidecar, Traefik routers |
+| Image | `platform/30.todo/Dockerfile` | Python 3.11 image. The `infra2-sdk` pin matches `pyproject.toml`. |
+| Deployer and facets | `platform/30.todo/deploy.py` | `TodoDeployer`: probe, signal, secrets, telemetry identity, Postgres role |
+| Secret contract | `platform/30.todo/env.manifest.json` | Generates `secrets.ctmpl` and `vault-policy.hcl` |
+| Tests | `libs/tests/test_todo_service.py`, `libs/tests/test_todo_canary_depth.py` | Behaviour, routing, and deployer contracts |
 
-### Code as SSOT 索引
+## 2. What Each Check Proves
 
-- **服务部署器**：`TodoDeployer` (`platform/30.todo/deploy.py`)
-- **健康检查探针**：`GET /api/health`（公网绕过）
-- **基建验收状态**：`GET /api/canary/status`（公网绕过）
-- **SSO 受保护看板**：`GET /`（经由 Authentik ForwardAuth 保护）
+`GET /api/canary/status` runs six checks in parallel. Each check has an 8 s deadline. A check that does not finish in time reports `fail`.
 
----
+| Check | Passes when | Fails when |
+|-------|-------------|------------|
+| `redis` | `AUTH`, `PING`, `SETEX`, `GET` (same random value), `DEL` all succeed | No password, `-NOAUTH`, `-WRONGPASS`, any other error reply, a different value on `GET` |
+| `postgres` | Login as role `canary_ro` and `SELECT 1` succeed | No credentials, any server `E` (ErrorResponse), a failed login |
+| `s3` (alias `minio`) | `PUT`, `GET` (same body) and `DELETE` of `canary/<random>` in bucket `platform-canary` succeed | No key, a denied or failed request, a different body |
+| `signoz`, `openpanel`, `authentik` | HTTP 2xx or 3xx on the liveness URL | Any other result |
 
-## 2. 架构模型与验证链路
+The document returns HTTP 200 when every check passes, and HTTP 503 otherwise.
 
-```mermaid
-graph TD
-    User["外部探测器 / 开发者"] -->|HTTPS /api/health 或 /api/canary/status| Traefik["Traefik (Dokploy Ingress)"]
-    User -->|HTTPS / (受控访问)| Traefik
-    
-    subgraph Ingress Routing
-        Traefik -->|优先级 100: 无鉴权放行| Bypass["/api/health & /api/canary/status"]
-        Traefik -->|优先级 10: Authentik ForwardAuth| AuthCheck["Authentik Outpost"]
-        AuthCheck -->|认证通过| ProtectedUI["/ (Todo Web Dashboard)"]
-    end
+## 3. Surfaces and Consumers
 
-    subgraph Canary Todo Service
-        Bypass --> TodoApp["platform-todo:8000 (app.py)"]
-        ProtectedUI --> TodoApp
-    end
+| Surface | Who can reach it | Used by |
+|---------|------------------|---------|
+| `GET /api/health` | Public (Traefik router priority 100, exact path) | Container healthcheck, external probes |
+| `GET /api/canary/status` | The Docker network, and SSO users through the protected router | Probe runner (`todo-canary-status`), the dashboard |
+| `GET /` and the rest | SSO users only (Authentik ForwardAuth, priority 10) | People |
 
-    subgraph Platform Physical Reality Probes
-        TodoApp -->|StartupMessage Handshake| PG["platform-postgres:5432"]
-        TodoApp -->|PING & SETEX/GET Lifecycle| Redis["platform-redis:6379"]
-        TodoApp -->|S3 Health & Presigned URL| S3["platform-s3:9000"]
-        TodoApp -->|OTel Collector Health Check| SigNoz["platform-signoz-otel-collector:13133"]
-        TodoApp -->|Analytics Ingest API| OpenPanel["platform-openpanel-api:3000"]
-        TodoApp -->|SSO Endpoint Liveness| Authentik["platform-authentik-server:9000"]
-    end
-```
+`/api/canary/status` is not public. It shows internal host names and raw errors, and it runs six real probes per request.
 
-### 关键决策 (Architecture Decision)
+**Probe consumer.** `TodoDeployer.probes` declares `todo-canary-status` (HTTP 200, severity `error` = P1, timeout 15 s). The probe runner polls it every 60 s. Three failed rounds raise an alert. A staging runner sends a report instead of a page. A signal entry for each environment derives from `TodoDeployer.signals`.
 
-1. **双轨路由分流 (Bypass vs SSO-Protected)**：
-   - 合成探针和健康检查（`/api/health`, `/api/canary/status`）以 Traefik 优先级 100 直接放行，不走 SSO 重定向，供 CI 及外部监控检测。
-   - 交互式看板（`/`）以优先级 10 绑定 Authentik ForwardAuth 中间件，供团队成员以单点登录身份安全访问。
-2. **物理真源可达性探测 (Physical Reality Reachability)**：
-   - 探针直接对 Postgres 发送 StartupMessage 握手、向 Redis 校验 PING 及 SETEX/GET 读写周期、请求 S3 HEAD 与 SigNoz 健康端点，并在 `/api/canary/status` 暴露诊断状态。真实带鉴权 CRUD 读写与 OTel trace 追踪上报在 Issue #973 中分阶段实现。
-3. **SDK 一致性保证**：
-   - `Dockerfile` 中的 `infra2-sdk` 版本由 `libs/tests/test_sdk_contract_adoption.py` 自动化测试严格守护，与 `pyproject.toml` 保持 100% 对齐。
+## 4. Credentials
 
----
+The vault-agent sidecar renders `/secrets/.env` from Vault. The app container sources it at start. Compose environment never carries these values.
 
-## 3. 设计约束 (Dos & Don'ts)
+| Variable | Source class | Origin | Operator action |
+|----------|--------------|--------|-----------------|
+| `REDIS_PASSWORD` | `runtime`, `provided_by` | Vault `platform/<env>/redis` key `password` | None |
+| `CANARY_POSTGRES_PASSWORD` | `runtime` | Generated once into Vault `platform/<env>/todo` | None |
+| `CANARY_S3_ACCESS_KEY`, `CANARY_S3_SECRET_KEY` | `human` | 1Password item `platform/<env>/todo`, copied to Vault on deploy | Create once per environment (below) |
 
-### ✅ 推荐模式
-- 平台新组件接入时，在 `app.py` 中扩充能力探测项，实现基建即代码的闭环自证。
-- 部署后使用 `invoke todo.sso-setup` 自动化注册 Authentik 代理应用。
+The policy lets the canary read only `platform/<env>/todo` and `platform/<env>/redis`. It cannot read the Postgres or S3 root credentials.
 
-### ⛔ 禁止模式
-- 禁止破坏公网放行路径 `/api/health` 与 `/api/canary/status` 的高优先级路由（会导致探测死锁）。
-- 禁止在 `Dockerfile` 中手写与 `pyproject.toml` 漂移的 SDK wheel 地址。
+**Postgres role.** `TodoDeployer.apply_secret_supply` runs on every sync. After the supply succeeds, it runs idempotent SQL as `postgres` over SSH. The SQL goes through stdin, so the password never appears in an argument list. The role has `LOGIN`, no superuser, no create rights, `CONNECTION LIMIT 5`, `default_transaction_read_only = on`, and no `GRANT`. `SELECT 1` needs only `CONNECT`, which `PUBLIC` holds. A rotated Vault password takes effect on the next sync.
+
+**One-time operator steps per environment** (staging first):
+
+1. `DEPLOY_ENV=<env> uv run invoke vault.setup-approle --project=platform --service=todo` (needs `VAULT_ROOT_TOKEN`). It creates the AppRole and policy, and injects `VAULT_ROLE_ID` and `VAULT_SECRET_ID` into the Dokploy compose env.
+2. On the VPS host, create the canary bucket and its scoped key: `DEPLOY_ENV=<env> uv run invoke s3.shared.create-app-bucket --bucket-name=platform-canary --access-key=<AK> --secret-key=<SK> --lifecycle-days=1`.
+3. Store the same key: `uv run invoke env.set CANARY_S3_ACCESS_KEY=<AK> --project=platform --env=<env> --service=todo --credential-type=root_vars`, and the same for `CANARY_S3_SECRET_KEY`.
+
+Without step 3 the `s3` check reports `fail` with the names of the missing variables. The deploy still succeeds.
+
+## 5. Telemetry
+
+`TodoDeployer.telemetry_service_name = "platform-todo"`. `Deployer.sync` issues `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`, the same way it does for `truealpha/app`. The compose adds `OTEL_EXPORTER_OTLP_ENDPOINT=http://platform-signoz-otel-collector:4318` and `ENV`.
+
+At start, `configure_service_telemetry()` calls `infra2_sdk.runtime.otel.configure_telemetry(..., set_global=True)` when the endpoint is set. The service refuses to start when the endpoint is set without `OTEL_SERVICE_NAME` or `ENV`. Otherwise the data would land under `unknown_service`.
+
+Each status run emits one `canary.run` span with one `canary.check.<name>` child span per check, and logs the outcome. SigNoz separates the environments by `deployment.environment.name`.
+
+## 6. Constraints
+
+### Do
+- Add a new platform capability as a new check in `app.py`. Prove a real write or login, not liveness.
+- Keep the probe target, the compose container name, and the app route equal. `test_probe_target_matches_the_compose_container_port_and_app_route` guards this.
+- Keep the Dockerfile `infra2-sdk` pin equal to `pyproject.toml`, and its OpenTelemetry pins equal to the SDK `otel` extra.
+
+### Do not
+- Do not route `/api/canary/status` without SSO. `test_only_the_health_path_is_served_without_sso` evaluates the real Traefik rules.
+- Do not count an authentication challenge, a server error reply, or a liveness response as proof of a write path.
+- Do not give the canary a root credential.

@@ -208,6 +208,7 @@ graph LR
 | `finance_report/app` | backend | `finance-report-backend` | 签发 | worker 不给:端点开着而没有环境标签会拒绝启动(2026-09-10 staging crash-loop) |
 | `truealpha/app` | llm | `truealpha-app` | 签发(app 与 preview 两份 compose) | `ta-app.sync`(`AppDeployer.telemetry_service_name`)、固定 compose promote、preview 三入口同名;`component=app` |
 | `truealpha/app` | web | — | 不签发 | Node/Next.js,无 OTel SDK;且一个 compose 的 `OTEL_SERVICE_NAME` 不能同时命名两个服务 |
+| `platform/todo` | todo | `platform-todo` | 签发 | `TodoDeployer.telemetry_service_name` makes `Deployer.sync` issue the identity; the compose adds `ENV`. The service refuses to start on the endpoint without `OTEL_SERVICE_NAME` or `ENV` (#991) |
 | `truealpha/data_engine` | dagster-* | — | **不签发** | 三个角色全是 `network_mode: host`(为 OpenD),Docker DNS 名 `platform-signoz-otel-collector` 在宿主网络解析不了;§4.4 规定 collector 永不 publish,故不另开端口,等有宿主可达的 ingest 再接。没有端点就不会触发应用侧"缺身份即 fast-fail" |
 
 compose 里 `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` 只写成 `${…:-}`(不硬编码、不给默认):身份只有部署一个签发方。`libs/tests/compose_env.py` 把 compose 对着各入口真实推送的 env 解析一遍,证明**容器**拿到的是签发值,而不只是"部署签发了"或"compose 引用了"。
@@ -289,6 +290,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 | L2 Platform | OpenPanel ClickHouse (op-ch) | data dir unwritable / event store broken | P1 | Write-path healthcheck + `openpanel-roundtrip` |
 | L2 Platform | OpenPanel Worker / Dashboard | `/healthcheck` / `/api/healthcheck` fails | P2 / P2 | Live probes (`openpanel-worker-http`, `openpanel-dashboard-http`);worker 停止落库时由 `openpanel-roundtrip` 以 P1 发 |
 | L2 Platform | Portal / Prefect | frontend / server-health unavailable | P2 / P1 | Planned |
+| L2 Platform | Canary Todo | the status document fails: Redis AUTH+SETEX/GET/DEL, Postgres login as `canary_ro` + `SELECT 1`, S3 PUT/GET/DELETE, or SigNoz/OpenPanel/Authentik liveness | P1 (staging: report) | Live (`todo-canary-status`, internal URL, 3-round debounce, #991) |
 | L3 Finance Report | fr-postgres / fr-redis | app db / cache health fails | P0 / P1 | Planned |
 | L3 Finance Report | fr-app backend | OTEL ERROR/CRITICAL/FATAL > 10 in 15m | P1 | code (`FinanceReportBackendErrorLogs`) |
 | L3 Finance Report | fr-app backend | RED SLO: ≥5 5xx and >5% of non-probe requests in 5m / non-probe p95 > 3000ms for 10m | P0/P1 | code (`FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`) |
@@ -521,6 +523,7 @@ Feishu page，且告警携带同一结构化记录。不得通过破坏 producti
 | synthetic round-trip(配置缺失 → `EX_CONFIG`,后端失败 → 1) | `test_observability_roundtrip_probe.py` | ✅ |
 | IaC/runtime/telemetry/alert 身份契约 | `tools/service_identity_audit.py`, `libs/tests/test_service_identity*.py` | ✅ |
 | truealpha 端点与身份签发(llm 容器拿到 collector 端点 + 各入口签发的身份;端点不无身份出现、不进 host 网络、不进 web;sync 与 promote/preview 同名)(#906) | `libs/tests/test_truealpha_app.py`, `test_deploy_primitive.py`, `test_preview_lifecycle.py` | ✅ |
+| Canary Todo depth: real Redis/Postgres/S3 write paths fail on NOAUTH, `E`, denied write; the probe consumer, the SSO-only routing, the telemetry bootstrap and the issued identity (#991) | `libs/tests/test_todo_canary_depth.py`, `libs/tests/test_todo_service.py` | ✅ |
 | 告警通道手动连通 | `uv run invoke alerting.test-feishu` | Manual gate |
 
 ---

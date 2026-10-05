@@ -68,3 +68,8 @@ finance-report-frontend-http|http|http://finance_report-frontend${ENV_SUFFIX}:30
 finance-report-postgres-tcp|tcp|finance_report-postgres${ENV_SUFFIX}:5432|connected|critical|5||finance_report/postgres
 finance-report-redis-tcp|tcp|finance_report-redis${ENV_SUFFIX}:6379|connected|critical|5||finance_report/redis
 truealpha-postgres-tcp|tcp|truealpha-postgres${ENV_SUFFIX}:5432|connected|critical|5||truealpha/postgres
+# platform/todo (#991): the canary's status document. It runs real Redis AUTH+SETEX/GET/DEL,
+# a Postgres login as a dedicated role, and an S3 PUT/GET/DELETE, so a failure means a
+# platform write path is broken. Declared `error` (P1): the platform's own probes carry P0
+# for the core services. The 15 s timeout exceeds the app's 8 s per-check deadline.
+todo-canary-status|http|http://platform-todo${ENV_SUFFIX}:8000/api/canary/status|200|error|15||platform/todo
