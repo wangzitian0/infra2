@@ -79,14 +79,12 @@ SSL/TLS 模式仍需在 Cloudflare 控制台手动确认（该 zone 的邮件相
 ### ⚠️ 重要注意事项
 
 > [!WARNING]
-> **Dokploy 域名变更需要 Redeploy**
+> **Dokploy 域名生效机制**
 >
-> 在 Dokploy UI 中修改域名配置后，必须触发一次 **Redeploy** 才能生效。
-> 这是因为 Traefik labels 是在 compose 文件部署时动态生成的。
->
-> - 如果修改了域名端口映射 → 需要 Redeploy
-> - 如果新增了域名 → `ensure_domains()` 会自动触发 Redeploy
-> - 如果删除了域名 → 需要手动 Redeploy
+> Traefik labels 是在 compose 文件部署时根据 Dokploy 数据库记录动态生成的。
+> 在 Deployer 部署流程中，`ensure_compose_domains()` 会在 compose 部署**前**预先向 Dokploy API 注册域名，
+> 因此部署过程单次生效，避免了部署后再 Redeploy 的耗时开销。
+> 若直接在 Dokploy UI 中手动修改已有服务的域名配置，则仍需触发一次 Redeploy 才能生效。
 
 ---
 

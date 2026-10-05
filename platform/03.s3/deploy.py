@@ -212,29 +212,13 @@ class S3Deployer(Deployer):
         return result
 
     @classmethod
-    def composing(cls, c, env_vars: dict) -> str:
-        """Deploy via Dokploy API and sync domains."""
-        # Call parent to deploy
-        compose_id = super().composing(c, env_vars)
-
-        # Sync domains: s3=API(9000), s3-console/rustfs/minio=Console(9001)
-        cls._sync_domains(compose_id)
-
-        return compose_id
-
-    @classmethod
-    def _sync_domains(cls, compose_id: str):
-        """Ensure domains exist: s3.{domain}=API (9000), console domains=Console (9001)."""
-        from libs.dokploy import get_dokploy
-
-        e = cls.env()
+    def ensure_compose_domains(cls, client, compose_id: str, e: dict) -> dict:
+        """Ensure domains exist BEFORE deploy: rustfs/minio.{domain}=Console, s3.{domain}=API."""
         domain = e.get("INTERNAL_DOMAIN")
         if not domain:
             warning("INTERNAL_DOMAIN not set, skipping domain sync")
-            return
+            return {"created": 0, "skipped": 0, "conflicts": [], "errors": []}
 
-        host = f"cloud.{domain}"
-        client = get_dokploy(host=host)
         domain_suffix = e.get("ENV_DOMAIN_SUFFIX", "")
 
         desired_domains = [
@@ -285,12 +269,10 @@ class S3Deployer(Deployer):
             success(
                 f"Domains: created={result['created']}, skipped={result['skipped']}"
             )
-            # Trigger redeploy to generate new compose with updated Traefik labels
-            info("Redeploying to apply domain changes...")
-            client.deploy_compose(compose_id)
-            success("Redeploy triggered - domain labels will be updated")
         elif result["skipped"] > 0:
             info(f"Domains already configured (skipped={result['skipped']})")
+
+        return result
 
     @classmethod
     def _sync_to_1password(cls, username: str, password: str, op_item: str) -> bool:

@@ -229,9 +229,6 @@ class OnePasswordDeployer(Deployer):
             )
             client.update_compose(compose_id, env=env_content)
 
-            info(f"Deploying compose (ID: {compose_id})")
-            client.deploy_compose(compose_id)
-
             # Configure domain via Dokploy API (using ensure_domains for idempotency)
             if cls.subdomain and cls.service_port:
                 domain_host = f"{cls.subdomain}.{domain}"
@@ -248,9 +245,11 @@ class OnePasswordDeployer(Deployer):
 
                 if result["created"] > 0:
                     success(f"Domain configured: https://{domain_host}")
-                    client.deploy_compose(compose_id)
                 elif result["skipped"] > 0:
                     info(f"Domain already configured: {domain_host}")
+
+            info(f"Deploying compose (ID: {compose_id})")
+            client.deploy_compose(compose_id)
 
             success("1Password Connect deployment triggered")
             warning("Wait 1-2 minutes for containers to start")

@@ -1,0 +1,68 @@
+# SSOT: Vault Agent Sidecar definition for platform and application services.
+# Services include this template using Docker Compose `include:`.
+services:
+  vault-agent:
+    init: true  # tini as PID1 reaps healthcheck ssl_client zombies
+    image: hashicorp/vault:1.15
+    restart: always
+    mem_limit: ${VAULT_AGENT_MEM_LIMIT:-128m}
+    entrypoint:
+      - sh
+      - -c
+      - |
+        rm -f /vault/secrets/.env /vault/.token /vault/role_id /vault/secret_id 2>/dev/null || true
+        if [ -z "$$VAULT_ROLE_ID" ] || [ -z "$$VAULT_SECRET_ID" ]; then
+          echo "VAULT_ROLE_ID and VAULT_SECRET_ID are required"
+          exit 1
+        fi
+        if [ -z "$$VAULT_ADDR" ]; then
+          echo "VAULT_ADDR is required"
+          exit 1
+        fi
+        echo "$$VAULT_ROLE_ID" > /vault/role_id
+        echo "$$VAULT_SECRET_ID" > /vault/secret_id
+        exec vault agent -config=/etc/vault/vault-agent.hcl
+    environment:
+      VAULT_ADDR: ${VAULT_ADDR}
+      VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
+      VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
+      ENV: ${ENV}
+      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+    volumes:
+      - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
+      - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
+      - secrets:/vault/secrets
+    networks:
+      - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |
+          # local checks every cycle (fast): secrets rendered + no unresolved template.
+          test -s /vault/secrets/.env && ! grep -q "<no value>" /vault/secrets/.env && test -s /vault/.token || exit 1
+          # vault token lookup THROTTLED to ~5min (token TTL is hours) so N vault-agents
+          # do not hammer Vault every 30s (#292). The local checks above still fail fast.
+          if [ -z "$$(find /tmp/.vault_hc -mmin -5 2>/dev/null)" ]; then
+            wget -q -T 3 --header="X-Vault-Token: $$(cat /vault/.token)" "$$VAULT_ADDR/v1/auth/token/lookup-self" -O /dev/null || exit 1
+            touch /tmp/.vault_hc
+          fi
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  secrets:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "size=10m,mode=0755"
+
+networks:
+  dokploy-network:
+    external: true
