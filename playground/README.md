@@ -1,31 +1,9 @@
-# playground - Yahoo Finance headless test
+# Playground
 
-Purpose: capture the Yahoo Finance behavior that blocks the `query1` quote/crumb
-endpoints even when using a headless browser and valid cookies.
+> **Purpose**: Experimental sandbox area for local experiments and prototype testing.
 
-## Contents
-- `playground/.venv` : earlier local venv
-- `playground/.venv-pw` : Playwright venv
-- `playground/yahoo_headless_test.py` : headless test script
+## Boundary Rules
 
-## Run
-```
-source playground/.venv-pw/bin/activate
-python -m playwright install chromium
-python playground/yahoo_headless_test.py
-```
-
-## Expected behavior (current)
-- `quote` endpoint: 401 or 429
-- `crumb` endpoint: 200 (crumb returned)
-- `chart` endpoint: 200
-- `quote` with crumb: 429
-
-## Curl quick check
-```
-curl -s -o /dev/null -w 'quote: %{http_code}\n' -H 'User-Agent: Mozilla/5.0' \
-  'https://query1.finance.yahoo.com/v7/finance/quote?symbols=AAPL'
-
-curl -s -o /dev/null -w 'chart: %{http_code}\n' -H 'User-Agent: Mozilla/5.0' \
-  'https://query2.finance.yahoo.com/v8/finance/chart/AAPL?interval=1d&range=5d'
-```
+- **Isolated Sandbox**: Sandboxes in this directory do not run in production.
+- **No Dependencies**: Production and platform services must not import or depend on files in this directory.
+- **No Secrets**: Never store credentials, tokens, or production data in this directory.

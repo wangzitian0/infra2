@@ -35,9 +35,9 @@ Stored at: `secret/data/finance_report/<env>/app`
 
 | Key | Description |
 |-----|-------------|
-| `S3_ENDPOINT` | MinIO/S3 endpoint URL |
-| `S3_ACCESS_KEY` | MinIO/S3 access key |
-| `S3_SECRET_KEY` | MinIO/S3 secret key |
+| `S3_ENDPOINT` | S3 object storage endpoint URL (RustFS) |
+| `S3_ACCESS_KEY` | S3 access key |
+| `S3_SECRET_KEY` | S3 secret key |
 | `S3_BUCKET` | Bucket name for statements |
 | `S3_PUBLIC_ENDPOINT` | Externally reachable S3 API endpoint for short-lived presigned URLs |
 | `S3_PUBLIC_BUCKET` | Public-endpoint bucket alias; defaults to `S3_BUCKET` |

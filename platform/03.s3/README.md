@@ -11,7 +11,6 @@ python -m tools.deploy_v2 --service platform/s3 --type staging --iac-ref vX.Y.Z 
 
 # Check status
 invoke s3.status
-# (legacy alias: invoke minio.status)
 ```
 
 ## Architecture
@@ -53,6 +52,14 @@ invoke s3.status
 - **Path**: `${DATA_PATH}` (staging uses `/data/platform/minio-staging`, prod uses `/data/platform/minio`)
 - **Persistence**: Host volume mount
 - **User/Group**: UID `10001`, GID `10001` (managed automatically by `Deployer._prepare_dirs`)
+
+## Legacy Compatibility Aliases
+
+The platform keeps compatibility aliases during the transition from MinIO to RustFS:
+- **Python Module Imports**: `platform.03.minio.shared` maps to `platform.03.s3.shared` for backwards-compatible imports.
+- **Docker Network**: Containers expose the `platform-minio` network alias together with `platform-s3`.
+- **Vault Secret Paths**: Secrets stay at `secret/platform/<env>/minio` to avoid secret migrations.
+- **Backup Identifiers**: Automated backup processes accept `platform/minio-*` archive names during the retention window.
 
 ## References
 
