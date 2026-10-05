@@ -1395,3 +1395,56 @@ def test_config_hash_counts_a_value_that_became_empty() -> None:
     assert (
         _compute_config_hash("x: 1", {"B": "2", "A": "1"}) == with_value
     )  # order-blind
+
+
+def test_prune_stale_dokploy_domains_when_subdomain_none() -> None:
+    """Issue #942/#953: composes with subdomain=None must prune stale attached Dokploy domains."""
+    from libs.deploy.deployer import Deployer
+
+    deleted = []
+
+    class FakeClient:
+        def _request(self, method, endpoint, **kwargs):
+            if endpoint == "domain.byComposeId?composeId=comp-1":
+                return [
+                    {
+                        "domainId": "d-1",
+                        "host": "minio-staging.zitian.party",
+                        "serviceName": "minio",
+                    },
+                    {
+                        "domainId": "d-2",
+                        "host": "s3-staging.zitian.party",
+                        "serviceName": "minio",
+                    },
+                ]
+            return []
+
+        def delete_domain(self, domain_id):
+            deleted.append(domain_id)
+            return {"domainId": domain_id}
+
+    client = FakeClient()
+    Deployer._prune_stale_dokploy_domains(client, "comp-1")
+    assert deleted == ["d-1", "d-2"]
+
+
+def test_s3_compose_has_console_root_redirect() -> None:
+    """Issue #941/#953: console router must redirect root / to /rustfs/console/."""
+    from pathlib import Path
+    import yaml
+
+    compose_path = (
+        Path(__file__).resolve().parents[2] / "platform/03.s3/compose.yaml"
+    )
+    compose = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+    labels = compose["services"]["s3"]["labels"]
+
+    # Traefik labels must define redirectregex middleware on console router
+    assert any("middlewares=s3-console-redirect" in lbl for lbl in labels)
+    assert any("redirectregex.regex" in lbl for lbl in labels)
+    assert any(
+        "redirectregex.replacement" in lbl and "rustfs/console" in lbl
+        for lbl in labels
+    )
+

@@ -443,6 +443,10 @@ class DokployClient:
             payload["serviceName"] = service_name
         return self._request("POST", "domain.create", json=payload)
 
+    def delete_domain(self, domain_id: str) -> dict:
+        """Delete domain from compose application."""
+        return self._request("POST", "domain.delete", json={"domainId": domain_id})
+
     def ensure_domains(
         self,
         compose_id: str,
