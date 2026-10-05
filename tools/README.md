@@ -9,7 +9,7 @@ reusable logic belongs in `libs/` (see the division-of-labor note below):
    scheduled workflows (`python tools/<script>.py`).
    Examples: `deploy_v2.py` (deploy front door), `pre_deploy_schema_check.py`
    (pre-deploy enum & schema compatibility gate, #698), `deploy_guard_audit.py` /
-   `ci_gate_audit.py` / `service_identity_audit.py` / `lint_platform_image_pins.py` /
+   `ci_gate_audit.py` / `service_identity_audit.py` / `lint_compose_resource_limits.py` /
    `coverage_regression_audit.py` (infra-ci
    gates), `reconcile_iac_inputs.py` (tag reconcile), `promotion_soak_guard.py`
    (the prod-promotion guard's staging-soak lookup, #970), `out_of_band_watchdog.py`
@@ -99,8 +99,7 @@ also enforces compose↔inventory equality and registry-derived `service_id` val
 - **`tools/`** — thin entry points: argv parsing, env wiring, exit codes.
   A tool that grows real logic should push it down into `libs/` so it gets
   covered by `libs/tests` (pattern: `tools/deploy_guard_audit.py` →
-  `libs/deploy_dependencies.py`; `tools/lint_platform_image_pins.py` →
-  `libs/image_pins.py`). Several older scripts still carry embedded logic —
+  `libs/deploy_dependencies.py`). Several older scripts still carry embedded logic —
   treat that as debt to sink, not a pattern to copy.
 
 ## Runner (invoke namespaces)

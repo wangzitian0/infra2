@@ -25,48 +25,16 @@ mutations to it survived. Three findings shaped what it does now:
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
 from pathlib import Path
 
 import yaml
 
-try:
-    from infra2_sdk.rules.compose import is_memory_ceiling as _is_ceiling
-except ImportError as exc:
-    name = getattr(exc, "name", None)
-    if name is not None and name != "infra2_sdk" and not name.startswith("infra2_sdk."):
-        raise
-    if name is None and "infra2_sdk" not in str(exc):
-        raise
-    # 512m, 1.5g, 2G, 1073741824. A bare 0, "0", "0b" or prose is not a ceiling.
-    SIZE_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([kmgtb]?b?)\s*$", re.I)
-    UNITS = {
-        "": 1,
-        "b": 1,
-        "k": 2**10,
-        "kb": 2**10,
-        "m": 2**20,
-        "mb": 2**20,
-        "g": 2**30,
-        "gb": 2**30,
-        "t": 2**40,
-        "tb": 2**40,
-    }
-
-    def _is_ceiling(value: object) -> bool:
-        """A value that actually caps memory. Docker treats 0 as unlimited."""
-        if isinstance(value, bool) or value is None:
-            return False
-        if isinstance(value, int | float):
-            return value > 0
-        if not isinstance(value, str):
-            return False
-        match = SIZE_RE.match(value)
-        if not match:
-            return False
-        return float(match.group(1)) * UNITS.get(match.group(2).lower(), 0) > 0
+from infra2_sdk.rules.compose import (
+    inspect_compose,
+    is_memory_ceiling as _is_ceiling,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE_PATH = ROOT / "docs/ssot/compose-resource-baseline.json"
@@ -148,7 +116,11 @@ def main() -> int:
 
     unlimited: set[str] = set()
     unreadable: list[str] = []
+    bare_latest: list[tuple[str, str]] = []
     for rel in _tracked_composes():
+        report = inspect_compose(ROOT / rel)
+        for ref in report.bare_latest_violations:
+            bare_latest.append((rel, ref))
         bad, reason = _unlimited_services(ROOT / rel)
         if reason and reason.startswith("unreadable"):
             unreadable.append(f"{rel} ({reason})")
@@ -159,6 +131,16 @@ def main() -> int:
         print("compose files that could not be parsed:\n")
         for item in unreadable:
             print(f"  {item}")
+        return 1
+
+    if bare_latest:
+        print("❌ Bare ':latest' image tags are not allowed (pin a digest):")
+        for rel, ref in bare_latest:
+            print(f"   {rel}: image: {ref}")
+        print(
+            "\nPin with `image: <repo>:<tag>@sha256:<digest>` "
+            "(get it via `docker inspect <image> --format '{{index .RepoDigests 0}}'`)."
+        )
         return 1
 
     new = sorted(unlimited - baseline)
