@@ -12,9 +12,9 @@ runtime roles:
   managing their own local code-server subprocess (the framework default for
   `-m data_engine.dagster_defs`, which self-terminates ~20s after its last
   heartbeat and gets respawned — harmless per `dagster.job_ticks` history, but
-  Local/CI/preview compose (`truealpha/truealpha/preview/compose.yaml`)
-  intentionally keeps the lightweight `-m data_engine.dagster_defs` default
-  instead — no extra service to boot, at the cost of the same churn.
+  needless churn for an always-on deployment). In contrast, local developer
+  workflows (`dagster-webserver -m data_engine.dagster_defs`) keep the
+  framework default without the dedicated code-server daemon.
 
 All three roles use the same image digest, isolated environment credentials, the
 environment's TrueAlpha Postgres, and a dedicated artifact directory. Dagster
