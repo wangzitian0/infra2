@@ -296,7 +296,7 @@ def build_breakdown_alert_payload(
                 else "No containers crash-looping"
             ),
         },
-        "groupLabels": {"alertname": "ContainerBreakdown"},
+        "groupLabels": {"alertname": alertname},
         "alerts": alerts,
         "externalURL": external_url,
     }
