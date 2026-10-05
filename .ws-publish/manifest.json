@@ -4,7 +4,7 @@
   "inputs": {
     "repo": "7130b62781078d23e8469bbb8eed17a930247ad3dba8e8b1234c0844edffb8bf",
     "root": "f73b8ab7dfd7a7901c5264c7694f32562f780d7fb4a5efc19f51dcee1f071259",
-    "skills": "8e4064f635c191212f84e629864120802971e161a0b81e5f5150bb90722f0e5f"
+    "skills": "712e580a12f0ee38100d662ce8674aaad9a447239e9127b7f7602991c95a8fa2"
   },
   "language": "en",
   "outputs": {
@@ -19,7 +19,7 @@
   "schema": 2,
   "skills": {
     "files": {
-      "skills/deploy-evidence/SKILL.md": "7c42e679aec66234000c983a0dcb0f05c31ca835c6a6bda7021a60c91cd1a4ac"
+      "skills/deploy-evidence/SKILL.md": "85c4673e25d29bd3c9df42e211a8a6ec087ff3c81f4a08e93929761c394c3ab8"
     },
     "link_dirs": [
       ".claude/skills",
@@ -31,7 +31,7 @@
     },
     "root": "skills"
   },
-  "source_revision": "f1a74ca0c63ebfd51dafc4860071a43ec46a0ea1",
+  "source_revision": "77aeb16f3e9178aaf72843d3e801c43f830f9003",
   "target": {
     "remote": "github.com/wangzitian0/infra2",
     "repo": "infra2",
