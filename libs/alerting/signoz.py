@@ -151,7 +151,7 @@ def build_signoz_log_alert_rule_payload(
 
     ``alertOnAbsent`` stays off: no error logs is the healthy state for this count.
     """
-    from libs.service_identity import ServiceIdentity
+    from libs.core.service_identity import ServiceIdentity
 
     identity = ServiceIdentity.build(
         service_id or f"infra/{service_name}",
@@ -255,7 +255,7 @@ def build_signoz_metric_alert_rule_payload(
     v0.143). A PromQL rule that must fire on missing data says so in the query,
     with ``absent_over_time(...)``.
     """
-    from libs.service_identity import ServiceIdentity
+    from libs.core.service_identity import ServiceIdentity
 
     identity = ServiceIdentity.build(
         service_id or f"infra/{service_name}",

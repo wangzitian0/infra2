@@ -22,6 +22,7 @@ STATEFUL_DEPLOY_ENVIRONMENTS = (
 MANAGED_BY = "infra2"
 DOCKER_LABEL_PREFIX = "party.zitian.infra"
 IDENTITY_SCHEMA_VERSION = "v1"
+PREVIEW_KINDS = ("branch", "pr", "commit", "tag", "canary")
 
 
 def is_stateful_deploy_env(env: str | None, *, strict: bool = False) -> bool:
@@ -57,6 +58,7 @@ __all__ = [
     "IDENTITY_SCHEMA_VERSION",
     "MANAGED_BY",
     "PREVIEW",
+    "PREVIEW_KINDS",
     "PRODUCTION",
     "REPO_ROOT",
     "STAGING",

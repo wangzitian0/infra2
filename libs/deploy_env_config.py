@@ -292,10 +292,7 @@ _TAG_VALUE_RE = re.compile(r"\Av\d+\.\d+\.\d+\Z")  # a release tag vX.Y.Z
 _BRANCH_VALUE_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")  # a git branch name (e.g. main)
 _CANARY_VALUE_RE = re.compile(r"\A[a-z0-9][a-z0-9_-]*\Z")  # a canary slot name (e.g. preview)
 
-# Every preview kind is <kind>-<value>; there is no bare special case, so any downstream
-# (telemetry label, URL, compose name) parses a slot the same way. `branch` (default main)
-# replaces the old bare `main` so the main-tip preview is report-branch-main.
-PREVIEW_KINDS = ("branch", "pr", "commit", "tag", "canary")
+from libs.core.constants import PREVIEW_KINDS
 
 # The Dokploy ENVIRONMENT name every service's preview stacks live under (kept distinct
 # from staging/prod composes; the lifecycle find-or-creates this environment). Shared

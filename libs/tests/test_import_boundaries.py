@@ -93,7 +93,6 @@ _DEBT_ROWS: tuple[tuple[str, str], ...] = (
     ("libs/observability/issue_trail.py", "libs.scheduler_peer_liveness"),
     ("libs/observability/probes.py", "libs.probe_specs"),
     ("libs/observability/probes.py", "libs.service_identity"),
-    ("libs/observability/watchers/breakdown_watch.py", "libs.alerting"),
     ("libs/observability/watchers/breakdown_watch.py", "libs.recency"),
     ("libs/observability/watchers/breakdown_watch.py", "libs.resident_watchers"),
     ("libs/security/prune.py", "libs.secrets_registry"),

@@ -66,8 +66,37 @@ def with_env_suffix(
     return _legacy_with_env_suffix(name, env)
 
 
+def normalize_env_name(value: str | None) -> str:
+    """Normalize environment name for consistent behavior."""
+    if not value or not value.strip():
+        return "production"
+    val = value.strip().lower()
+    if val in ("prod", "production"):
+        return "production"
+    if val in ("stg", "staging"):
+        return "staging"
+    if val in ("preview", "preview_env", "preview-env"):
+        return "preview"
+    if val in ("canary", "canary-preview", "canary_preview"):
+        return "canary_preview"
+    if val.startswith("pr-") or val.startswith("pr_"):
+        return val.replace("-", "_")
+    if val.startswith("preview-") or val.startswith("preview_"):
+        return val.replace("-", "_")
+    if val.startswith("branch-") or val.startswith("branch_"):
+        return val.replace("-", "_")
+    if val.startswith("commit-") or val.startswith("commit_"):
+        return val.replace("-", "_")
+    if val.startswith("tag-") or val.startswith("tag_"):
+        return val.replace("-", "_")
+    if "/" in val or "\\" in val or " " in val or "\t" in val or "\n" in val:
+        raise ValueError("ENV name must not include '/' or whitespace")
+    return val.replace("-", "_")
+
+
 __all__ = [
     "DeploymentEnvironment",
     "get_environment",
+    "normalize_env_name",
     "with_env_suffix",
 ]
