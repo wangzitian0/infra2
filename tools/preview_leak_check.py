@@ -59,8 +59,6 @@ PREVIEW_PROJECT = _PREVIEW_CONFIG.project
 
 # The bare main-tip preview and canary preview that are never treated as leaks.
 ALWAYS_KEEP_ALIASES = frozenset({"branch-main", CANARY_SLOT})
-# The canonical canary slot (deploy_v2_canary stands it up/tears it down on the CANARY_SLOT)
-CANARY_ALIAS = CANARY_SLOT
 # Every current alias is `<kind>-<slug>` for a known kind (branch/pr/commit/tag);
 # an alias with no known kind prefix (e.g. the bare `main` slug from before the
 # branch-main rename) is a pre-rename orphan the deterministic-name `down` can no
