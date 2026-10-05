@@ -31,6 +31,8 @@ from libs.alerting import (
     find_signoz_rule_id,
     format_signoz_alert,
     redacted_url,
+    signoz_feishu_channel_name,
+    signoz_rule_channels,
     validate_feishu_webhook_url,
 )
 
@@ -249,7 +251,7 @@ def test_log_error_alert_rule_uses_signoz_v2_threshold_schema() -> None:
     payload = build_signoz_log_alert_rule_payload(
         alert_name="ExampleBackendErrorLogs",
         service_name="example-backend",
-        channel_ids=["channel-1"],
+        channel_names=["channel-1"],
         summary="example backend emitted error logs",
     )
 
@@ -276,7 +278,7 @@ def test_log_error_alert_rule_carries_its_query_in_the_v5_queries_envelope() -> 
     payload = build_signoz_log_alert_rule_payload(
         alert_name="ExampleBackendErrorLogs",
         service_name="example-backend",
-        channel_ids=["channel-1"],
+        channel_names=["channel-1"],
         summary="example backend emitted error logs",
         environment="staging",
     )
@@ -320,7 +322,7 @@ def test_log_error_alert_rule_threshold_semantics_are_configurable() -> None:
     payload = build_signoz_log_alert_rule_payload(
         alert_name="BurstErrorLogs",
         service_name="example-backend",
-        channel_ids=["channel-1"],
+        channel_names=["channel-1"],
         summary="burst",
         threshold=10,
         match_type="in_total",
@@ -335,7 +337,7 @@ def test_log_error_alert_rule_threshold_semantics_are_configurable() -> None:
         build_signoz_log_alert_rule_payload(
             alert_name="BadMatch",
             service_name="example-backend",
-            channel_ids=["channel-1"],
+            channel_names=["channel-1"],
             summary="bad",
             match_type="sometiems",
         )
@@ -346,7 +348,7 @@ def test_metric_alert_rule_uses_signoz_v5_promql_schema() -> None:
     payload = build_signoz_metric_alert_rule_payload(
         alert_name="FinanceReportHigh5xxRate",
         promql="sum(rate(http_server_request_count[5m]))",
-        channel_ids=["channel-1"],
+        channel_names=["channel-1"],
         summary="backend 5xx rate high",
         severity="critical",
         threshold=0.05,
@@ -388,7 +390,7 @@ def test_metric_alert_rule_rejects_unknown_threshold_semantics() -> None:
         build_signoz_metric_alert_rule_payload(
             alert_name="BadOp",
             promql="sum(up)",
-            channel_ids=["channel-1"],
+            channel_names=["channel-1"],
             summary="bad op",
             op="abvoe",
         )
@@ -397,10 +399,34 @@ def test_metric_alert_rule_rejects_unknown_threshold_semantics() -> None:
         build_signoz_metric_alert_rule_payload(
             alert_name="BadMatch",
             promql="sum(up)",
-            channel_ids=["channel-1"],
+            channel_names=["channel-1"],
             summary="bad match type",
             match_type="sometiems",
         )
+
+
+def test_signoz_feishu_channel_name_is_per_environment_and_defaults_to_production() -> (
+    None
+):
+    """#973: the one name the channel is created under and every rule binds to."""
+    assert signoz_feishu_channel_name() == "infra2-feishu-alerts-production"
+    assert signoz_feishu_channel_name(None) == "infra2-feishu-alerts-production"
+    assert signoz_feishu_channel_name("  ") == "infra2-feishu-alerts-production"
+    assert signoz_feishu_channel_name("staging") == "infra2-feishu-alerts-staging"
+    payload = build_signoz_channel_payload(
+        channel_name=signoz_feishu_channel_name("staging"),
+        bridge_url="http://platform-alerting:8080/signoz/webhook",
+    )
+    assert payload["name"] == "infra2-feishu-alerts-staging"
+
+
+def test_signoz_rule_channels_normalises_names_and_refuses_none() -> None:
+    """#973: names are stripped and de-duplicated; no usable name is an error, because
+    SigNoz rejects a rule with no channel and never delivers one bound to a non-name."""
+    assert signoz_rule_channels([" a ", "b", "a", ""]) == ["a", "b"]
+    for bad in ([], [""], [None], [1], "a"):
+        with pytest.raises(AlertingError):
+            signoz_rule_channels(bad)
 
 
 def test_signoz_api_response_helpers_find_channel_and_rule_ids() -> None:

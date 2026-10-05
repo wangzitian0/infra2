@@ -18,6 +18,7 @@ FEISHU_WEBHOOK_HOSTS = {"open.feishu.cn", "open.larksuite.com"}
 FEISHU_WEBHOOK_PATH_PREFIX = "/open-apis/bot/v2/hook/"
 SIGNOZ_ALERT_SCHEMA_VERSION = "v2alpha1"
 SIGNOZ_ALERT_VERSION = "v5"
+SIGNOZ_FEISHU_CHANNEL_PREFIX = "infra2-feishu-alerts"
 # Log severity texts an error-log rule counts. Python's OTel LoggingHandler sends a
 # CRITICAL record as FATAL in current SDK releases and as CRITICAL in older ones, so
 # both spellings are counted.
@@ -1093,6 +1094,94 @@ def build_feishu_app_card_payload(chat_id: str, card: dict[str, Any]) -> dict[st
     }
 
 
+def signoz_feishu_channel_name(deploy_env: str | None = None) -> str:
+    """Name of the SigNoz notification channel that targets the Feishu bridge.
+
+    The single definition of that name. ``platform/12.alerting`` creates the channel
+    under it and every rendered rule binds to it, because SigNoz v0.105 routes a rule
+    to a channel **by name**: the dispatcher turns the threshold's ``channels`` entries
+    into receiver names, and the channel name is the receiver name
+    (``pkg/alertmanager/alertmanagerserver/dispatcher.go`` ``getOrCreateRoute``).
+    A rule bound to anything else (a channel *id*, a typo) is accepted by the API and
+    then fails at delivery with ``stage for receiver missing`` (#973).
+    """
+    return (
+        f"{SIGNOZ_FEISHU_CHANNEL_PREFIX}-{(deploy_env or '').strip() or 'production'}"
+    )
+
+
+def signoz_rule_channels(channel_names: Iterable[str]) -> list[str]:
+    """Normalise the channel names of a rule threshold; refuse to render none.
+
+    SigNoz v0.105 builds a rule's route policy from these names when the rule is
+    created and rejects a rule with none (``route_policy`` validation: "at least one
+    channel is required"); a name that is no receiver is silently undeliverable. So an
+    empty or non-string entry is an error here, not something to filter away.
+    """
+    if isinstance(channel_names, str):
+        raise AlertingError(
+            f"SigNoz rule channels must be a list of channel names, got {channel_names!r}"
+        )
+    channels: list[str] = []
+    for name in channel_names:
+        if not isinstance(name, str):
+            raise AlertingError(
+                f"SigNoz rule channels must be channel names (strings), got {name!r}"
+            )
+        name = name.strip()
+        if name and name not in channels:
+            channels.append(name)
+    if not channels:
+        raise AlertingError(
+            "A SigNoz alert rule needs at least one notification channel NAME "
+            "(condition.thresholds.spec[].channels); a rule without one never "
+            "reaches anyone"
+        )
+    return channels
+
+
+def signoz_rule_channel_problems(rule: Any, channel_name: str) -> list[str]:
+    """Why ``rule`` (rendered, or read back from SigNoz) is not bound to ``channel_name``.
+
+    Empty means bound. For a ``schemaVersion: v2alpha1`` rule SigNoz v0.105 reads the
+    binding from ``condition.thresholds.spec[].channels`` (``BasicRuleThreshold.Channels``
+    in ``pkg/types/ruletypes/threshold.go``) and only while
+    ``notificationSettings.usePolicy`` is false; with ``usePolicy`` true the channels are
+    ignored and the global routing policies decide. The legacy top-level
+    ``preferredChannels`` becomes a threshold's channels only for ``schemaVersion: v1``
+    rules (``processRuleDefaults``), so it is not written here.
+    """
+    if not isinstance(rule, Mapping):
+        return ["rule is not an object"]
+    problems: list[str] = []
+    schema_version = rule.get("schemaVersion")
+    if schema_version != SIGNOZ_ALERT_SCHEMA_VERSION:
+        problems.append(
+            f"schemaVersion is {schema_version!r}, not {SIGNOZ_ALERT_SCHEMA_VERSION!r}: "
+            "channels are read from the thresholds only for that schema"
+        )
+    settings = rule.get("notificationSettings")
+    if not isinstance(settings, Mapping) or settings.get("usePolicy"):
+        problems.append(
+            "notificationSettings.usePolicy must be false so the rule's own channels "
+            "route it"
+        )
+    condition = _dict(rule.get("condition"))
+    thresholds = _dict(condition.get("thresholds"))
+    specs = thresholds.get("spec")
+    if not isinstance(specs, list) or not specs:
+        problems.append("condition.thresholds.spec has no threshold")
+        return problems
+    for index, spec in enumerate(specs):
+        channels = _dict(spec).get("channels")
+        if not isinstance(channels, list) or channel_name not in channels:
+            problems.append(
+                f"threshold {index} channels {channels!r} do not include "
+                f"{channel_name!r}"
+            )
+    return problems
+
+
 def build_signoz_channel_payload(
     *,
     channel_name: str,
@@ -1119,7 +1208,7 @@ def build_signoz_log_alert_rule_payload(
     *,
     alert_name: str,
     service_name: str,
-    channel_ids: list[str],
+    channel_names: list[str],
     summary: str,
     severity: str = "error",
     threshold: int = 0,
@@ -1170,9 +1259,7 @@ def build_signoz_log_alert_rule_payload(
                         "target": int(threshold),
                         "matchType": _signoz_match_type(match_type),
                         "op": "1",
-                        "channels": [
-                            channel_id for channel_id in channel_ids if channel_id
-                        ],
+                        "channels": signoz_rule_channels(channel_names),
                         "targetUnit": "",
                     }
                 ],
@@ -1224,7 +1311,7 @@ def build_signoz_metric_alert_rule_payload(
     *,
     alert_name: str,
     promql: str,
-    channel_ids: list[str],
+    channel_names: list[str],
     summary: str,
     service_name: str = "finance-report-backend",
     severity: str = "warning",
@@ -1266,9 +1353,7 @@ def build_signoz_metric_alert_rule_payload(
                         "target": float(threshold),
                         "matchType": _signoz_match_type(match_type),
                         "op": _signoz_threshold_op(op),
-                        "channels": [
-                            channel_id for channel_id in channel_ids if channel_id
-                        ],
+                        "channels": signoz_rule_channels(channel_names),
                         "targetUnit": threshold_unit,
                     }
                 ],

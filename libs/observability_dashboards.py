@@ -16,13 +16,18 @@ from __future__ import annotations
 
 import json
 import re
+from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from libs.alerting import (
+    _iter_signoz_items,
     build_signoz_log_alert_rule_payload,
     build_signoz_metric_alert_rule_payload,
+    signoz_feishu_channel_name,
+    signoz_rule_channel_problems,
 )
 
 # Repository root: libs/observability_dashboards.py -> repo root is parents[1].
@@ -61,12 +66,15 @@ class LogErrorAlertDefinition:
     eval_window: str = "5m0s"
     frequency: str = "1m"
 
-    def to_signoz_payload(self, channel_ids: list[str]) -> dict[str, Any]:
-        """Render this definition into a SigNoz threshold-rule payload."""
+    def to_signoz_payload(self, channel_names: list[str]) -> dict[str, Any]:
+        """Render this definition into a SigNoz threshold-rule payload.
+
+        ``channel_names`` are notification-channel NAMES: SigNoz routes by name.
+        """
         return build_signoz_log_alert_rule_payload(
             alert_name=self.alert_name,
             service_name=self.service_name,
-            channel_ids=channel_ids,
+            channel_names=channel_names,
             summary=self.summary,
             severity=self.severity,
             threshold=self.threshold,
@@ -97,12 +105,15 @@ class MetricAlertDefinition:
     service_name: str = "finance-report-backend"
     group_by: list[str] | None = None
 
-    def to_signoz_payload(self, channel_ids: list[str]) -> dict[str, Any]:
-        """Render this definition into a SigNoz metric threshold-rule payload."""
+    def to_signoz_payload(self, channel_names: list[str]) -> dict[str, Any]:
+        """Render this definition into a SigNoz metric threshold-rule payload.
+
+        ``channel_names`` are notification-channel NAMES: SigNoz routes by name.
+        """
         return build_signoz_metric_alert_rule_payload(
             alert_name=self.alert_name,
             promql=self.promql,
-            channel_ids=channel_ids,
+            channel_names=channel_names,
             summary=self.summary,
             severity=self.severity,
             threshold=self.threshold,
@@ -237,6 +248,167 @@ def load_alert_definitions(
     return definitions
 
 
+def require_rule_channel(payload: dict[str, Any], channel_name: str) -> dict[str, Any]:
+    """Return ``payload`` if SigNoz would route it to ``channel_name``, else raise.
+
+    A rule that ends up with no channel is accepted or rejected by SigNoz depending on
+    its version and is never delivered; this makes that a definition error before
+    anything is applied (#973).
+    """
+    problems = signoz_rule_channel_problems(payload, channel_name)
+    if problems:
+        raise ObservabilityDefinitionError(
+            f"Alert '{payload.get('alert')}' would not be delivered to channel "
+            f"{channel_name!r}: " + "; ".join(problems)
+        )
+    return payload
+
+
+def render_alert_payloads(
+    channel_name: str | None = None,
+    *,
+    deploy_env: str | None = None,
+    path: Path = ALERT_RULES_FILE,
+) -> list[dict[str, Any]]:
+    """Render every checked-in alert rule bound to the Feishu bridge channel.
+
+    The channel defaults to :func:`libs.alerting.signoz_feishu_channel_name`, the same
+    definition ``platform/12.alerting`` creates the channel under. Each payload is
+    checked with :func:`require_rule_channel` after rendering.
+    """
+    name = channel_name or signoz_feishu_channel_name(deploy_env)
+    return [
+        require_rule_channel(definition.to_signoz_payload([name]), name)
+        for definition in load_alert_definitions(path)
+    ]
+
+
+@dataclass(frozen=True)
+class RoutingProblem:
+    """One reason the managed rules do not all reach the channel.
+
+    ``kind`` says what to do about it: ``channel`` (the channel is not listed exactly
+    once), ``missing`` (a catalog rule is absent or duplicated: run ``apply-alerts``),
+    ``unbound`` (a rule exists but SigNoz would not deliver it to the channel: run
+    ``apply-alerts``), ``stale`` (a managed rule that is no longer in the catalog: run
+    ``apply-alerts --prune``).
+    """
+
+    kind: str
+    subject: str
+    detail: str
+
+    def __str__(self) -> str:
+        return f"{self.subject}: {self.detail}"
+
+
+ROUTING_PROBLEM_KINDS = ("channel", "missing", "unbound", "stale")
+
+
+def check_alert_routing(
+    rules_response: Any,
+    channels_response: Any,
+    *,
+    expected_alerts: Iterable[str],
+    channel_name: str,
+    managed_source: str | None = None,
+) -> list[RoutingProblem]:
+    """Problems that stop SigNoz from delivering the managed rules to ``channel_name``.
+
+    Reads what ``GET /api/v1/rules`` and ``GET /api/v1/channels`` returned. Empty means
+    the channel exists once, every catalog rule exists once, enabled, bound to it, and
+    no rule labelled ``source=managed_source`` is left over that the catalog no longer
+    has. A stale managed rule is a problem even when bound: the catalog is the source of
+    truth, and ``apply-alerts`` only logs it until ``--prune``.
+    """
+    problems: list[RoutingProblem] = []
+    channels = [
+        item
+        for item in _iter_signoz_items(channels_response, collection_keys=("channels",))
+        if isinstance(item, dict)
+    ]
+    named = [item for item in channels if item.get("name") == channel_name]
+    if len(named) != 1:
+        problems.append(
+            RoutingProblem(
+                "channel",
+                channel_name,
+                f"channel exists {len(named)} times in SigNoz (expected 1)",
+            )
+        )
+    channel_ids = {str(item["id"]) for item in channels if item.get("id")}
+
+    by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for rule in _iter_signoz_items(rules_response, collection_keys=("rules", "items")):
+        if isinstance(rule, dict):
+            by_name[str(rule.get("alert") or rule.get("name"))].append(rule)
+
+    def unbound_reasons(rule: dict[str, Any]) -> list[str]:
+        reasons = signoz_rule_channel_problems(rule, channel_name)
+        if rule.get("disabled"):
+            reasons.append("rule is disabled")
+        bound_ids = sorted(
+            {
+                channel
+                for spec in _spec_list(rule)
+                for channel in (
+                    spec.get("channels")
+                    if isinstance(spec.get("channels"), list)
+                    else []
+                )
+                if isinstance(channel, str) and channel in channel_ids
+            }
+        )
+        if bound_ids:
+            reasons.append(
+                f"binds channel id(s) {bound_ids}; SigNoz routes by channel name"
+            )
+        return reasons
+
+    expected = set(expected_alerts)
+    for name in sorted(expected):
+        found = by_name.get(name, [])
+        if not found:
+            problems.append(RoutingProblem("missing", name, "rule is not in SigNoz"))
+        elif len(found) > 1:
+            problems.append(
+                RoutingProblem(
+                    "missing", name, f"{len(found)} rules share this name (expected 1)"
+                )
+            )
+        for rule in found:
+            problems.extend(
+                RoutingProblem("unbound", name, reason)
+                for reason in unbound_reasons(rule)
+            )
+    if managed_source:
+        for name, rules in sorted(by_name.items()):
+            if name in expected:
+                continue
+            for rule in rules:
+                if (rule.get("labels") or {}).get("source") != managed_source:
+                    continue
+                detail = (
+                    "stale managed rule, no longer in the catalog "
+                    "(`apply-alerts --prune` removes it)"
+                )
+                reasons = unbound_reasons(rule)
+                if reasons:
+                    detail += "; also not delivering: " + "; ".join(reasons)
+                problems.append(RoutingProblem("stale", name, detail))
+    return problems
+
+
+def _spec_list(rule: dict[str, Any]) -> list[dict[str, Any]]:
+    thresholds = (rule.get("condition") or {}).get("thresholds") or {}
+    specs = thresholds.get("spec") if isinstance(thresholds, dict) else None
+    return (
+        [spec for spec in specs if isinstance(spec, dict)]
+        if isinstance(specs, list)
+        else []
+    )
+
+
 # A PromQL string literal, and a bare (unquoted) metric selector such as `foo_bar{`.
 _PROMQL_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
 _BARE_METRIC_SELECTOR = re.compile(r"[A-Za-z_:][A-Za-z0-9_:]*\s*\{")
@@ -321,8 +493,35 @@ def _string_list(
     return [item.strip() for item in value]
 
 
+# SigNoz v0.105.1 stores a posted dashboard verbatim, except that ``Create`` runs a
+# lossy v4 -> v5 query migration whenever ``version != "v5"`` and ``Update`` never does
+# (``pkg/modules/dashboard/impldashboard/handler.go``). The checked-in file therefore
+# carries the v5 query shape and says so: Create and Update then store the same bytes.
+SIGNOZ_DASHBOARD_VERSION = "v5"
+# v4 builder-query keys the migration deletes (``pkg/transition/migrate_common.go``
+# ``updateQueryData``). A widget that still has one was not converted, or only half.
+_V4_QUERY_KEYS = (
+    "aggregateOperator",
+    "aggregateAttribute",
+    "filters",
+    "temporality",
+    "timeAggregation",
+    "spaceAggregation",
+    "reduceTo",
+    "seriesAggregation",
+)
+_LAYOUT_KEYS = ("i", "x", "y", "w", "h")
+
+
 def load_dashboard(path: Path = DASHBOARD_FILE) -> dict[str, Any]:
-    """Load and validate the checked-in SigNoz dashboard definition."""
+    """Load and validate the checked-in SigNoz dashboard definition.
+
+    The returned map is exactly what ``POST/PUT /api/v1/dashboards`` takes as its body
+    (SigNoz ``PostableDashboard`` = ``UpdatableDashboard`` = the dashboard map itself),
+    so the checks here are SigNoz's own expectations: a top-level ``title``, ``widgets``
+    that carry v5 queries, and a ``layout`` placing every widget (the UI draws only
+    widgets that have a layout entry).
+    """
     data = _load_json(path)
     if not isinstance(data, dict):
         raise ObservabilityDefinitionError(
@@ -333,23 +532,197 @@ def load_dashboard(path: Path = DASHBOARD_FILE) -> dict[str, Any]:
     if not title:
         raise ObservabilityDefinitionError(f"Dashboard needs a title: {path}")
 
+    if data.get("version") != SIGNOZ_DASHBOARD_VERSION:
+        raise ObservabilityDefinitionError(
+            f"Dashboard version must be {SIGNOZ_DASHBOARD_VERSION!r}, got "
+            f"{data.get('version')!r}: SigNoz migrates other versions' queries on "
+            f"create only, so create and update would store different dashboards: {path}"
+        )
+
     widgets = data.get("widgets")
     if not isinstance(widgets, list) or not widgets:
         raise ObservabilityDefinitionError(
             f"Dashboard needs a non-empty 'widgets' list: {path}"
         )
 
+    widget_ids: list[str] = []
     for widget in widgets:
         if not isinstance(widget, dict) or not str(widget.get("title") or "").strip():
             raise ObservabilityDefinitionError(
                 f"Each dashboard widget needs a title: {path}"
             )
+        widget_id = str(widget.get("id") or "").strip()
+        if not widget_id or widget_id in widget_ids:
+            raise ObservabilityDefinitionError(
+                f"Each dashboard widget needs a unique id (got {widget_id!r}): {path}"
+            )
+        widget_ids.append(widget_id)
+        _require_v5_builder_queries(widget, widget_id, path)
+
+    _require_layout_places_every_widget(data.get("layout"), widget_ids, path)
     return data
 
 
+def _require_v5_builder_queries(
+    widget: dict[str, Any], widget_id: str, path: Path
+) -> None:
+    query = widget.get("query")
+    builder = query.get("builder") if isinstance(query, dict) else None
+    queries = builder.get("queryData") if isinstance(builder, dict) else None
+    if not isinstance(queries, list) or not queries:
+        raise ObservabilityDefinitionError(
+            f"Widget '{widget_id}' needs query.builder.queryData: {path}"
+        )
+    for query_data in queries:
+        if not isinstance(query_data, dict):
+            raise ObservabilityDefinitionError(
+                f"Widget '{widget_id}' has a malformed query: {path}"
+            )
+        stale = [key for key in _V4_QUERY_KEYS if key in query_data]
+        if stale:
+            raise ObservabilityDefinitionError(
+                f"Widget '{widget_id}' still uses v4 query keys {stale} in {path}; "
+                "write the v5 shape (aggregations[] + filter.expression)."
+            )
+        aggregations = query_data.get("aggregations")
+        if not isinstance(aggregations, list) or not aggregations:
+            raise ObservabilityDefinitionError(
+                f"Widget '{widget_id}' query has no aggregations[] in {path}: SigNoz's "
+                "v4 migration drops a bare `count` aggregation, leaving a query that "
+                "aggregates nothing."
+            )
+        filter_expression = (query_data.get("filter") or {}).get("expression")
+        if not isinstance(filter_expression, str) or not filter_expression.strip():
+            raise ObservabilityDefinitionError(
+                f"Widget '{widget_id}' query needs filter.expression in {path}"
+            )
+
+
+def _require_layout_places_every_widget(
+    layout: Any, widget_ids: list[str], path: Path
+) -> None:
+    if not isinstance(layout, list) or not layout:
+        raise ObservabilityDefinitionError(
+            f"Dashboard needs a non-empty 'layout': SigNoz draws only widgets with a "
+            f"layout entry: {path}"
+        )
+    placed: list[str] = []
+    for entry in layout:
+        if not isinstance(entry, dict) or any(key not in entry for key in _LAYOUT_KEYS):
+            raise ObservabilityDefinitionError(
+                f"Each layout entry needs {_LAYOUT_KEYS}: {path}"
+            )
+        placed.append(str(entry["i"]))
+    if sorted(placed) != sorted(widget_ids):
+        raise ObservabilityDefinitionError(
+            f"Dashboard layout must place each widget exactly once: layout has "
+            f"{sorted(placed)}, widgets are {sorted(widget_ids)}: {path}"
+        )
+
+
 def build_dashboard_import_payload(path: Path = DASHBOARD_FILE) -> dict[str, Any]:
-    """Wrap a dashboard definition in the SigNoz /api/v1/dashboards body."""
-    return {"data": load_dashboard(path)}
+    """The ``/api/v1/dashboards`` request body: the dashboard map itself, unwrapped.
+
+    SigNoz v0.105.1 decodes the body straight into the dashboard map and stores it
+    (``PostableDashboard = StorableDashboardData = map[string]interface{}`` in
+    ``pkg/types/dashboardtypes/dashboard.go``; ``Create`` in
+    ``pkg/modules/dashboard/impldashboard/handler.go``). Wrapping it in ``{"data": …}``
+    stored the wrapper as the dashboard: an untitled dashboard with no widgets (#934).
+    """
+    return load_dashboard(path)
+
+
+@dataclass(frozen=True)
+class StoredDashboard:
+    """One dashboard row SigNoz lists under a title: its id and how its data is shaped."""
+
+    id: str
+    #: True for a row the pre-#934 apply stored: the wrapper ``{"data": dashboard}`` was
+    #: saved as the dashboard, so its title sits at ``data.data.title`` and SigNoz sees
+    #: an untitled dashboard with no widgets.
+    legacy: bool
+
+
+def find_stored_dashboards(
+    dashboards_response: Any, title: str
+) -> list[StoredDashboard]:
+    """Every dashboard SigNoz lists with exactly ``title``, best update target first.
+
+    ``GET /api/v1/dashboards`` returns ``[{"id", "data": <the dashboard map>, …}]``
+    (``Dashboard`` in ``pkg/types/dashboardtypes/dashboard.go``), so a correctly stored
+    dashboard has its title at ``data.title``. Rows stored by the pre-#934 apply nest it
+    one level deeper; they are returned too (``legacy``) so an apply converts one in
+    place instead of adding another copy. Correctly stored rows come first.
+    """
+    proper: list[StoredDashboard] = []
+    legacy: list[StoredDashboard] = []
+    for item in _iter_signoz_items(
+        dashboards_response, collection_keys=("dashboards",)
+    ):
+        if not isinstance(item, dict):
+            continue
+        data = item.get("data")
+        if not isinstance(data, dict):
+            continue
+        dashboard_id = item.get("id") or item.get("uuid")
+        if not dashboard_id:
+            continue
+        if data.get("title") == title:
+            proper.append(StoredDashboard(str(dashboard_id), legacy=False))
+        elif (
+            not data.get("title")
+            and isinstance(data.get("data"), dict)
+            and data["data"].get("title") == title
+        ):
+            legacy.append(StoredDashboard(str(dashboard_id), legacy=True))
+    return proper + legacy
+
+
+def check_dashboard_state(
+    dashboards_response: Any, dashboard: dict[str, Any]
+) -> list[str]:
+    """Problems with how SigNoz holds ``dashboard``; empty means one correct copy.
+
+    Correct is: exactly one row with that title, stored unwrapped (title at the top of
+    its data, not nested), at the checked-in version, with the checked-in widgets and a
+    layout placing them.
+    """
+    title = dashboard["title"]
+    stored = find_stored_dashboards(dashboards_response, title)
+    problems: list[str] = []
+    if len(stored) != 1:
+        problems.append(
+            f"{len(stored)} dashboards titled {title!r} in SigNoz (expected 1): "
+            f"{[entry.id for entry in stored]}"
+        )
+    if not stored or stored[0].legacy:
+        if stored:
+            problems.append(
+                f"dashboard {stored[0].id} is still stored wrapped in a data envelope"
+            )
+        return problems
+    row = next(
+        item
+        for item in _iter_signoz_items(
+            dashboards_response, collection_keys=("dashboards",)
+        )
+        if isinstance(item, dict)
+        and (item.get("id") or item.get("uuid")) == stored[0].id
+    )
+    data = row["data"]
+    if data.get("version") != dashboard.get("version"):
+        problems.append(
+            f"stored version {data.get('version')!r}, checked-in {dashboard.get('version')!r}"
+        )
+    stored_ids = [w.get("id") for w in data.get("widgets") or [] if isinstance(w, dict)]
+    wanted_ids = [w["id"] for w in dashboard["widgets"]]
+    if stored_ids != wanted_ids:
+        problems.append(
+            f"stored widgets {stored_ids} differ from checked-in {wanted_ids}"
+        )
+    if not data.get("layout"):
+        problems.append("stored dashboard has no layout, so SigNoz draws no widget")
+    return problems
 
 
 def load_openpanel_analytics(path: Path = OPENPANEL_ANALYTICS_FILE) -> dict[str, Any]:

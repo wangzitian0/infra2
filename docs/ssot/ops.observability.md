@@ -262,6 +262,8 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 - **v5 规则的 query 只能放在 `compositeQuery.queries[]`**:`version: v5` 的规则只从 `queries[]` 取 query,SigNoz 也不会对它跑 v3→v5 迁移;只带旧 `builderQueries` 的 v5 规则执行时没有任何 query。
 - **`alertOnAbsent` 只对 builder `threshold_rule` 生效**:PromQL 规则从不读这个字段(v0.105 到 v0.143 都是)。PromQL 规则要在"没数据"时告警,就在 query 里写 `absent_over_time(...)`;加载器拒绝 `alert_on_absent` 键。
 - **`in_total` 不能套在区间向量上**:PromQL 规则按 60s 步长跑 range query,`in_total` 把每个点相加;`increase(x[15m])` 的每个点已覆盖 15 分钟,一次事件会被重复计约 15 次。计数类规则用 `at_least_once` 比较窗口值;加载器拒绝 `in_total` + `[…]`。
+- **规则按渠道*名字*路由,不是 id(#973,v0.105.1 源码)**:`schemaVersion: v2alpha1` 的规则从 `condition.thresholds.spec[].channels` 取渠道(`BasicRuleThreshold.Channels`,`pkg/types/ruletypes/threshold.go`),且只在 `notificationSettings.usePolicy=false` 时生效;创建规则时把它们写成 route policy(`GetRuleRouteRequest`,`manager.go:CreateRule`),投递时 dispatcher 把这些字符串直接当 alertmanager receiver 名(`alertmanagerserver/dispatcher.go:getOrCreateRoute`)。渠道的 receiver 名就是渠道 `name`。写成渠道 id(旧 apply 的做法)或写错名,API 照收,投递时报 `stage for receiver missing`,告警永远送不出去;一个渠道都没有则创建即被拒(`route_policy` 校验 "at least one channel is required")。顶层 `preferredChannels` 只在 `schemaVersion: v1` 规则里被转成阈值渠道(`processRuleDefaults`);它另外只用来把 ruleId 写进 alertmanager 配置里各渠道子路由的 `ruleId=~"…"` matcher(`GetMatchers` → `CreateRuleIDMatcher`),而 dispatcher 不读这些子路由,所以该 matcher 一直是占位值 `-1` 不是故障(子路由的作用只是让渠道的 receiver 被构建)。**渠道名只在 `libs/alerting.py::signoz_feishu_channel_name` 定义一处**:`platform/12.alerting` 建渠道、规则渲染都用它;`require_rule_channel` 拒绝渲染后没有该渠道的规则。
+- **dashboard 请求体就是 dashboard map 本身,版本必须是 `v5`(#934,v0.105.1 源码)**:`POST/PUT /api/v1/dashboards` 把请求体原样解码并存储(`PostableDashboard = StorableDashboardData = map[string]interface{}`,`dashboardtypes/dashboard.go`;`impldashboard/handler.go:Create`),所以 `title`/`widgets`/`layout` 必须在顶层,外面包 `{"data":…}` 会存成一个无标题、无 widget 的空看板(每次 apply 还多一份)。`Create` 在 `version != "v5"` 时会跑有损的 v4→v5 查询迁移(它会丢掉没有 `aggregateAttribute` 的 `count`),`Update` 从不迁移,所以 `dashboard.json` 直接写 v5 查询(`aggregations[]` + `filter.expression`),创建与更新存下同样的字节;UI 只画 `layout` 里有条目的 widget,所以每个 widget 必须在 `layout` 里出现一次。加载器拒绝以上任一偏差。
 
 ---
 
@@ -404,8 +406,24 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 
    已知限制:cumulative counter 的某个 attribute 组合只在第一次计数后才出现,序列一出现就是 1,`increase()` 看不到这第一次;所以进程重启后第一次失败/5xx 不计入。`increase()` 会按窗口外推,值可能略高于真实次数(3 次拒绝可能算成约 3.75)。非探针流量很少,p95 可能只由几个请求决定;规则要求连续 10 分钟每分钟都超线,正是为了应对这一点。backend 健康检查自身的 p95 偏高(中位约 1.4s,最高 10s),另记在 #906。`FinanceReportReconciliationAnomaly` 已移出目录:它过滤 `outcome=~"failed|error|anomaly"`,而 app 只会发出 `auto_accepted|pending_review|accepted|rejected|superseded`,永远不会触发;app 发出真正的失败 outcome 后再恢复。apply 默认只记录不 prune,线上那条旧规则会保留(它本来就不会触发),需要时用 `--prune` 删除。
 4. 先跑 schema canary:`gh workflow run apply-observability.yml --ref <ref> -f mode=canary`(建一条 disabled PromQL 规则验 v5 信封再删)。apply 应在 app 发完所有引用 metric 名后。
-
-> **注**:`apply_alerts` 现为声明式 reconcile(upsert + 默认只 log 的 prune),见 [ops.pipeline.md](./ops.pipeline.md)。
+5. **投递自证(#973;apply 后必跑,只读 → 显式发一条)**:
+   ```bash
+   uv run python -m invoke fr-observability.shared.verify-alert-routing   # 只读:受管规则都绑定了飞书渠道名,渠道存在且唯一,目录之外没有遗留的受管规则
+   uv run python -m invoke fr-observability.shared.verify-dashboard       # 只读:SigNoz 里恰有一份正确的看板(顶层 title、v5、widget 与 layout 齐全)
+   uv run python -m invoke fr-observability.shared.test-alert-channel     # 显式:经该渠道真实发一条测试通知(POST /api/v1/testChannel),到飞书确认
+   ```
+   `verify-alert-routing` 失败(退出码 1)时按类别逐条列出:`unbound`(规则存在但 SigNoz 不会投递:没绑渠道名、绑了渠道 id、`usePolicy=true`、被禁用)、`missing`(目录里的规则缺失或重名)、`channel`(渠道不是恰好一个)、`stale`(带受管标签但已不在目录里的规则)。`unbound`/`missing` 用 `apply-alerts` 修;`stale` 只用 `apply-alerts --prune` 删。它证明"绑定已存下",不证明消息到达;到达要看飞书里的测试卡片,以及 `docker logs platform-signoz | grep "stage for receiver missing"` 在之后 24 小时内为 0。
+6. **看板去重(#934)**:`apply-dashboard` 按精确标题查找并原地更新(PUT);旧 apply 存的套了 `data` 外壳的行也算同一个看板(顶层没有可用 `title`、`data.data.title` 是目录标题),原地改写成正确形状,不再新增。同标题的多余副本**默认只报告 id,不删**;owner 批准后用 `apply-dashboard --delete-duplicates` 删除,只删标题完全相同的多余行,更新成功之后才删,并用重新列表确认已删除。
+7. **合并后的 owner 批准流程(#973 / #934,生产 apply 是 owner 保留权限)**:合并到 main 会触发 `apply-observability.yml`,默认执行 `apply-alerts` 与 `apply-dashboard`(不 prune、不删副本)。之后按顺序:
+   ```bash
+   uv run python -m invoke fr-observability.shared.verify-alert-routing                # 此时仅剩 stale 一类(线上遗留的 FinanceReportReconciliationAnomaly,#906 已把它移出目录,它仍绑着渠道 id)
+   uv run python -m invoke fr-observability.shared.apply-alerts --prune                # 一次性:删除上面这条受管遗留规则
+   uv run python -m invoke fr-observability.shared.verify-alert-routing                # 必须退出码 0
+   uv run python -m invoke fr-observability.shared.apply-dashboard --delete-duplicates # 删除 23 份旧看板里多余的 22 份
+   uv run python -m invoke fr-observability.shared.verify-dashboard                    # 必须退出码 0
+   uv run python -m invoke fr-observability.shared.test-alert-channel                  # 到飞书确认测试卡片
+   ```
+   `--prune` 只删带受管标签(`source=infra2/finance_report-alerts`)或 `Canary*` 的、目录之外的规则,不碰手工建的规则。**预期的一次性噪声**:这是 SigNoz 告警第一次真正能投递,首次 apply 之后可能一次性收到几条积压状态的告警,2026-10-01 18:43 触发后一直重试的 `FinanceReportBackendTelemetryAbsent` 也可能冲出来一次。这是预期现象,不是重复告警。
 
 ### SOP-005: Cloudflare 带外 watchdog(轻量带外,边缘 30min;#904)
 活在 [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/),**直发 Feishu**(不经它要验证的 bridge,email 兜底)。只判 VPS 自己报告不了的(§1.1),归属记于 [`watchdog-signals.yaml`](watchdog-signals.yaml);细节见其 README。
