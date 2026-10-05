@@ -314,7 +314,12 @@ def post_alert_bridge_payload(
     timeout: float = 10.0,
 ) -> dict:
     body = json.dumps(payload).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
+    # Same identity as the GET probes: Cloudflare answers a UA-less client (urllib's
+    # default ``Python-urllib``) with error 1010, which would drop the alert itself.
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": HTTP_PROBE_HEADERS["User-Agent"],
+    }
     if username or password:
         import base64
 

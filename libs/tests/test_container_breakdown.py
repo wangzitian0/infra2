@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 from libs.container_breakdown import (
     Breakdown,
     broken_state,
@@ -141,6 +143,22 @@ def test_build_alert_payload_shape_is_alertmanager_like():
     assert alert["labels"]["environment"] == "staging"
     assert alert["labels"]["failure_domain"] == "runtime"
     assert "vault-agent restarting" in alert["annotations"]["summary"]
+
+
+@pytest.mark.parametrize(
+    "alertname", ["ContainerBreakdown", "ContainerBreakdownChronic", "SomeOtherAlert"]
+)
+def test_group_labels_follow_the_alertname(alertname):
+    """#849: ``groupLabels`` was hardcoded to ``ContainerBreakdown`` while
+    ``commonLabels`` followed the ``alertname`` parameter, so the chronic digest was
+    grouped with the paging alert. Both must name the alert actually being sent."""
+    bd = Breakdown(container="vault-agent", state="restarting", reason="r", detail="d")
+
+    payload = build_breakdown_alert_payload([bd], alertname=alertname)
+
+    assert payload["groupLabels"] == {"alertname": alertname}
+    assert payload["commonLabels"]["alertname"] == alertname
+    assert {a["labels"]["alertname"] for a in payload["alerts"]} == {alertname}
 
 
 def test_build_alert_payload_resolved_when_empty():

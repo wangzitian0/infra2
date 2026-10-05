@@ -427,3 +427,49 @@ def test_transient_transport_error_surfaces_through_apply_secret_supply(
     out = capsys.readouterr().out
     assert "transient transport error" in out
     assert "UNEXPECTED_EOF" in out
+
+
+def test_apply_secret_supply_does_not_swallow_a_kwarg_it_cannot_honour() -> None:
+    """#849: ``**kwargs`` was forwarded into ``apply()``, which takes none beyond the
+    two this wrapper already names — so a stray keyword surfaced as a TypeError from
+    ``apply()``, pointing at the callee. The caller's mistake must be reported by the
+    function the caller actually called."""
+    with pytest.raises(TypeError) as raised:
+        secrets_supply.apply_secret_supply(object(), "staging", bogus=1)
+
+    message = str(raised.value)
+    assert "apply_secret_supply()" in message
+    assert "'bogus'" in message
+    assert "apply()" not in message
+
+
+def test_create_secrets_resolver_forwards_human_and_rejects_the_rest(
+    monkeypatch,
+) -> None:
+    """#849: ``resolver_for`` accepts ``store`` and ``human``; the wrapper named only
+    ``store`` and passed the rest blindly. ``human`` stays reachable, as an explicit
+    keyword; anything else is rejected by the wrapper, not by ``resolver_for``."""
+    seen: dict = {}
+
+    def fake_resolver_for(service, env, *, store=None, human=None):
+        seen.update(service=service, env=env, store=store, human=human)
+        return "resolver"
+
+    monkeypatch.setattr(secrets_supply, "resolver_for", fake_resolver_for)
+    human = object()
+    store = object()
+
+    assert (
+        secrets_supply.create_secrets_resolver(
+            "svc", "staging", store=store, human=human
+        )
+        == "resolver"
+    )
+    assert seen == {"service": "svc", "env": "staging", "store": store, "human": human}
+
+    with pytest.raises(TypeError) as raised:
+        secrets_supply.create_secrets_resolver("svc", "staging", bogus=1)
+    message = str(raised.value)
+    assert "create_secrets_resolver()" in message
+    assert "'bogus'" in message
+    assert "resolver_for()" not in message
