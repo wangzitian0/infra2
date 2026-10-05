@@ -56,7 +56,7 @@ invoke s3.status
 ## Legacy Compatibility Aliases
 
 The platform keeps compatibility aliases during the transition from MinIO to RustFS:
-- **Python Module Imports**: `platform.03.minio.shared` maps to `platform.03.s3.shared` for backwards-compatible imports.
+- **Python Module Imports**: Retired. Consumers import canonical `platform.03.s3.shared`.
 - **Docker Network**: Containers expose the `platform-minio` network alias together with `platform-s3`.
 - **Vault Secret Paths**: Secrets stay at `secret/platform/<env>/minio` to avoid secret migrations.
 - **Backup Identifiers**: Automated backup processes accept `platform/minio-*` archive names during the retention window.

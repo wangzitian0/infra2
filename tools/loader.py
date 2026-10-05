@@ -95,11 +95,6 @@ def _load_project(ns, root, project_name, prefix=""):
             coll,
             sub_name="shared",
         )
-        if comp_dir.name == "03.s3":
-            # Alias for legacy consumers importing platform.03.minio.shared (#954, #958)
-            mod = sys.modules.get(f"{project_name}.{comp_dir.name}.shared")
-            if mod:
-                sys.modules[f"{project_name}.03.minio.shared"] = mod
         loaded |= _load_tasks_into_collection(
             comp_dir / "deploy.py",
             f"{project_name}.{comp_dir.name}.deploy",

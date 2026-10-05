@@ -110,10 +110,14 @@ def test_backup_manifest_requires_fresh_off_host_artifacts() -> None:
     assert failed["checks"][0]["summary"] == "backup artifact is stale"
 
 
-def test_backup_manifest_resolves_legacy_service_alias() -> None:
+def test_backup_manifest_resolves_legacy_service_alias(monkeypatch) -> None:
     """Issue #952/#954/#958: When an inventory service is renamed (e.g. platform/s3),
     unpromoted production backup manifests may still label the artifact with the legacy ID
     (platform/minio). The verification must accept the legacy artifact rather than failing."""
+    monkeypatch.setattr(
+        "libs.backup.verification.legacy_backup_aliases",
+        lambda: {"platform/s3": ("platform/minio",)},
+    )
     s3_entry = next(e for e in load_backup_inventory() if e.service_id == "platform/s3")
     now = 1_800_000_000
     manifest = {
@@ -139,10 +143,14 @@ def test_backup_manifest_resolves_legacy_service_alias() -> None:
     )
 
 
-def test_latest_artifact_for_service_resolves_legacy_service_alias() -> None:
+def test_latest_artifact_for_service_resolves_legacy_service_alias(monkeypatch) -> None:
     """Rehearsal artifact lookup must honor the same legacy alias as manifest verification."""
     from libs.backup.rehearsal import latest_artifact_for_service
 
+    monkeypatch.setattr(
+        "libs.backup.verification.legacy_backup_aliases",
+        lambda: {"platform/s3": ("platform/minio",)},
+    )
     manifest = {
         "artifacts": [
             {
@@ -158,13 +166,24 @@ def test_latest_artifact_for_service_resolves_legacy_service_alias() -> None:
     assert artifact["service_id"] == "platform/minio"
 
 
-def test_legacy_backup_aliases_derived_from_registry() -> None:
+def test_legacy_backup_aliases_derived_from_registry(monkeypatch) -> None:
     """Legacy backup aliases must derive from Deployer.legacy_compose_names (SSOT)."""
     from libs.backup.verification import legacy_backup_aliases
+    from unittest.mock import MagicMock
 
-    aliases = legacy_backup_aliases()
-    assert "platform/s3" in aliases
-    assert aliases["platform/s3"] == ("platform/minio",)
+    # Canonical production registry has zero active legacy aliases (migration retired)
+    assert legacy_backup_aliases() == {}
+
+    # Dynamic derivation works when a deployer specifies legacy_compose_names
+    mock_meta = MagicMock()
+    mock_meta.legacy_compose_names = ("legacy_name",)
+    monkeypatch.setattr(
+        "libs.service_registry.service_attrs",
+        lambda: {"test_layer/test_service": mock_meta},
+    )
+    assert legacy_backup_aliases() == {
+        "test_layer/test_service": ("test_layer/legacy_name",)
+    }
 
 
 def test_backup_manifest_invalid_timestamp_becomes_failed_check() -> None:

@@ -170,10 +170,7 @@ class AppDeployer(Deployer):
 
     @classmethod
     def _ensure_s3_bucket(cls, c):
-        """Ensure S3-compatible storage bucket exists with proper security configuration."""
-        s3_shared = sys.modules.get("platform.03.s3.shared") or sys.modules.get(
-            "platform.03.minio.shared"
-        )
+        s3_shared = sys.modules.get("platform.03.s3.shared")
         if not s3_shared:
             raise RuntimeError(
                 "S3 shared tasks module (platform.03.s3.shared) not loaded; cannot provision bucket"

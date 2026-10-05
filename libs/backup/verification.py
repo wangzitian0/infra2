@@ -163,12 +163,6 @@ def legacy_backup_aliases() -> dict[str, tuple[str, ...]]:
     return aliases
 
 
-#: Legacy service_id aliases in backup manifests during migration (#954, #958)
-LEGACY_BACKUP_ALIASES: dict[str, tuple[str, ...]] = {
-    "platform/s3": ("platform/minio",),
-}
-
-
 def verify_backup_manifest(
     entries: list[BackupEntry],
     manifest: dict[str, Any],

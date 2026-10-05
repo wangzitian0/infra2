@@ -327,17 +327,17 @@ def test_truealpha_deploy_s3_module_resolution_and_fail_loud(monkeypatch) -> Non
     with pytest.raises(RuntimeError, match="Failed to create S3 bucket"):
         AppDeployer._ensure_s3_bucket(MagicMock())
 
-    # 5. Legacy platform.03.minio.shared fallback is honored when canonical is absent
+    # 5. Legacy platform.03.minio.shared fallback is retired (fails if canonical is absent)
     monkeypatch.delitem(sys.modules, "platform.03.s3.shared", raising=False)
     mock_minio = MagicMock()
     mock_minio.create_app_bucket.return_value = {"access_key": "k", "secret_key": "s"}
     monkeypatch.setitem(sys.modules, "platform.03.minio.shared", mock_minio)
-    AppDeployer._ensure_s3_bucket(MagicMock())
-    assert mock_minio.create_app_bucket.called
+    with pytest.raises(RuntimeError, match="S3 shared tasks module .* not loaded"):
+        AppDeployer._ensure_s3_bucket(MagicMock())
 
 
 def test_finance_report_deploy_s3_module_resolution_and_fail_loud(monkeypatch) -> None:
-    """Verify finance_report bucket provisioning fails loud when module is missing and honors aliases."""
+    """Verify finance_report bucket provisioning fails loud when module is missing and honors canonical s3."""
     import importlib.util
     import sys
     from unittest.mock import MagicMock
@@ -382,23 +382,20 @@ def test_finance_report_deploy_s3_module_resolution_and_fail_loud(monkeypatch) -
     with pytest.raises(RuntimeError, match="Failed to create S3 bucket"):
         AppDeployer._ensure_s3_bucket(MagicMock())
 
-    # 5. Legacy platform.03.minio.shared fallback is honored when canonical is absent
+    # 5. Legacy platform.03.minio.shared fallback is retired (fails if canonical is absent)
     monkeypatch.delitem(sys.modules, "platform.03.s3.shared", raising=False)
     mock_minio = MagicMock()
     mock_minio.create_app_bucket.return_value = {"access_key": "k", "secret_key": "s"}
     monkeypatch.setitem(sys.modules, "platform.03.minio.shared", mock_minio)
-    AppDeployer._ensure_s3_bucket(MagicMock())
-    assert mock_minio.create_app_bucket.called
+    with pytest.raises(RuntimeError, match="S3 shared tasks module .* not loaded"):
+        AppDeployer._ensure_s3_bucket(MagicMock())
 
 
-def test_tools_loader_populates_minio_alias() -> None:
-    """Verify tools.loader populates platform.03.minio.shared alias from platform.03.s3.shared."""
+def test_tools_loader_loads_canonical_s3_module_without_legacy_alias() -> None:
+    """Verify tools.loader populates platform.03.s3.shared and not legacy minio alias."""
     import sys
     from tools.loader import ns
 
     assert ns is not None
     assert "platform.03.s3.shared" in sys.modules
-    assert "platform.03.minio.shared" in sys.modules
-    assert (
-        sys.modules["platform.03.minio.shared"] is sys.modules["platform.03.s3.shared"]
-    )
+    assert "platform.03.minio.shared" not in sys.modules
