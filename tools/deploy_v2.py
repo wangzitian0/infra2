@@ -67,18 +67,15 @@ from tools.resolve_deploy_ref import (
     resolve_to_sha,
 )
 
+from libs.core.constants import APP_SOURCES
+
 _APP_SERVICE = "finance_report/app"
-_APP_REPO = "https://github.com/wangzitian0/finance_report.git"
-# Every app-backed service's version_ref (tag/sha) resolves against its OWN source repo.
-# Mirrors libs.app_deploy_request.APP_SOURCES (kept in sync there for the cross-repo
-# request contract's short "owner/repo" form) — a service missing here falls back to
-# _APP_REPO, which was the sole hardcoded target before this map existed (finance_report
-# was the only service, so it went unnoticed until truealpha's first automated deploy
-# resolved its `v0.0.3` tag against finance_report's own unrelated old `v0.0.3` tag).
 _SERVICE_REPOS: dict[str, str] = {
-    _APP_SERVICE: _APP_REPO,
-    "truealpha/app": "https://github.com/wangzitian0/truealpha.git",
+    service: f"https://github.com/{repo}.git" for service, repo in APP_SOURCES.items()
 }
+_APP_REPO = _SERVICE_REPOS.get(
+    _APP_SERVICE, "https://github.com/wangzitian0/finance_report.git"
+)
 _INFRA2_REPO = "https://github.com/wangzitian0/infra2"
 # Dokploy's github source clones a branch/tag ref (`git clone -b`), NOT a commit sha — a
 # raw sha fails "Remote branch <sha> not found" (finance_report#342). So when iac_ref is a
