@@ -283,6 +283,28 @@ def render_alert_payloads(
     ]
 
 
+@dataclass(frozen=True)
+class RoutingProblem:
+    """One reason the managed rules do not all reach the channel.
+
+    ``kind`` says what to do about it: ``channel`` (the channel is not listed exactly
+    once), ``missing`` (a catalog rule is absent or duplicated: run ``apply-alerts``),
+    ``unbound`` (a rule exists but SigNoz would not deliver it to the channel: run
+    ``apply-alerts``), ``stale`` (a managed rule that is no longer in the catalog: run
+    ``apply-alerts --prune``).
+    """
+
+    kind: str
+    subject: str
+    detail: str
+
+    def __str__(self) -> str:
+        return f"{self.subject}: {self.detail}"
+
+
+ROUTING_PROBLEM_KINDS = ("channel", "missing", "unbound", "stale")
+
+
 def check_alert_routing(
     rules_response: Any,
     channels_response: Any,
@@ -290,15 +312,16 @@ def check_alert_routing(
     expected_alerts: Iterable[str],
     channel_name: str,
     managed_source: str | None = None,
-) -> list[str]:
+) -> list[RoutingProblem]:
     """Problems that stop SigNoz from delivering the managed rules to ``channel_name``.
 
     Reads what ``GET /api/v1/rules`` and ``GET /api/v1/channels`` returned. Empty means
-    the channel exists once and every expected rule exists once, enabled, and bound to
-    it. A rule labelled ``source=managed_source`` that is not expected must be bound too
-    (stale managed rules still page).
+    the channel exists once, every catalog rule exists once, enabled, bound to it, and
+    no rule labelled ``source=managed_source`` is left over that the catalog no longer
+    has. A stale managed rule is a problem even when bound: the catalog is the source of
+    truth, and ``apply-alerts`` only logs it until ``--prune``.
     """
-    problems: list[str] = []
+    problems: list[RoutingProblem] = []
     channels = [
         item
         for item in _iter_signoz_items(channels_response, collection_keys=("channels",))
@@ -307,7 +330,11 @@ def check_alert_routing(
     named = [item for item in channels if item.get("name") == channel_name]
     if len(named) != 1:
         problems.append(
-            f"channel {channel_name!r} exists {len(named)} times in SigNoz (expected 1)"
+            RoutingProblem(
+                "channel",
+                channel_name,
+                f"channel exists {len(named)} times in SigNoz (expected 1)",
+            )
         )
     channel_ids = {str(item["id"]) for item in channels if item.get("id")}
 
@@ -316,29 +343,10 @@ def check_alert_routing(
         if isinstance(rule, dict):
             by_name[str(rule.get("alert") or rule.get("name"))].append(rule)
 
-    expected = set(expected_alerts)
-    to_check: list[tuple[str, dict[str, Any]]] = []
-    for name in sorted(expected):
-        found = by_name.get(name, [])
-        if not found:
-            problems.append(f"{name}: rule is not in SigNoz")
-        elif len(found) > 1:
-            problems.append(f"{name}: {len(found)} rules share this name (expected 1)")
-        to_check.extend((name, rule) for rule in found)
-    if managed_source:
-        for name, rules in sorted(by_name.items()):
-            if name in expected:
-                continue
-            to_check.extend(
-                (name, rule)
-                for rule in rules
-                if (rule.get("labels") or {}).get("source") == managed_source
-            )
-
-    for name, rule in to_check:
-        rule_problems = signoz_rule_channel_problems(rule, channel_name)
+    def unbound_reasons(rule: dict[str, Any]) -> list[str]:
+        reasons = signoz_rule_channel_problems(rule, channel_name)
         if rule.get("disabled"):
-            rule_problems.append("rule is disabled")
+            reasons.append("rule is disabled")
         bound_ids = sorted(
             {
                 channel
@@ -352,10 +360,42 @@ def check_alert_routing(
             }
         )
         if bound_ids:
-            rule_problems.append(
+            reasons.append(
                 f"binds channel id(s) {bound_ids}; SigNoz routes by channel name"
             )
-        problems.extend(f"{name}: {problem}" for problem in rule_problems)
+        return reasons
+
+    expected = set(expected_alerts)
+    for name in sorted(expected):
+        found = by_name.get(name, [])
+        if not found:
+            problems.append(RoutingProblem("missing", name, "rule is not in SigNoz"))
+        elif len(found) > 1:
+            problems.append(
+                RoutingProblem(
+                    "missing", name, f"{len(found)} rules share this name (expected 1)"
+                )
+            )
+        for rule in found:
+            problems.extend(
+                RoutingProblem("unbound", name, reason)
+                for reason in unbound_reasons(rule)
+            )
+    if managed_source:
+        for name, rules in sorted(by_name.items()):
+            if name in expected:
+                continue
+            for rule in rules:
+                if (rule.get("labels") or {}).get("source") != managed_source:
+                    continue
+                detail = (
+                    "stale managed rule, no longer in the catalog "
+                    "(`apply-alerts --prune` removes it)"
+                )
+                reasons = unbound_reasons(rule)
+                if reasons:
+                    detail += "; also not delivering: " + "; ".join(reasons)
+                problems.append(RoutingProblem("stale", name, detail))
     return problems
 
 
@@ -630,7 +670,7 @@ def find_stored_dashboards(
         if data.get("title") == title:
             proper.append(StoredDashboard(str(dashboard_id), legacy=False))
         elif (
-            "title" not in data
+            not data.get("title")
             and isinstance(data.get("data"), dict)
             and data["data"].get("title") == title
         ):

@@ -1285,7 +1285,7 @@ def _stored_rules(**overrides) -> dict:
     return {"status": "success", "data": {"rules": rules}}
 
 
-def _routing_problems(rules=None, channels=None, **kwargs) -> list[str]:
+def _routing_problem_objects(rules=None, channels=None, **kwargs) -> list:
     return check_alert_routing(
         rules if rules is not None else _stored_rules(),
         channels if channels is not None else _CHANNELS_RESPONSE,
@@ -1294,6 +1294,10 @@ def _routing_problems(rules=None, channels=None, **kwargs) -> list[str]:
         managed_source=_MANAGED,
         **kwargs,
     )
+
+
+def _routing_problems(rules=None, channels=None, **kwargs) -> list[str]:
+    return [str(p) for p in _routing_problem_objects(rules, channels, **kwargs)]
 
 
 def test_routing_check_passes_when_every_rule_is_bound() -> None:
@@ -1340,11 +1344,49 @@ def test_routing_check_flags_each_way_delivery_can_be_missing() -> None:
     assert any("rule is disabled" in p for p in run([first, disabled, *rules[2:]]))
     assert any("rule is not in SigNoz" in p for p in run(rules[1:]))
     assert any("2 rules share this name" in p for p in run(duplicated))
-    assert any(p.startswith("RenamedAwayRule:") for p in run(rules + [stale]))
+    assert any(
+        p.startswith("RenamedAwayRule:") and "stale managed rule" in p
+        for p in run(rules + [stale])
+    )
     assert not any("HandMade" in p for p in run(rules + [hand_made]))
     assert any("exists 0 times" in p for p in run(rules, {"data": []}))
     twice = {"data": _CHANNELS_RESPONSE["data"] * 2}
     assert any("exists 2 times" in p for p in run(rules, twice))
+
+
+def test_routing_check_tells_stale_from_unbound() -> None:
+    """#973: the post-apply procedure removes a stale managed rule with `--prune`; the
+    check says which rules are stale and which are unbound, so the operator sees why it
+    fails and which command fixes it. A stale rule is a failure even when it is bound
+    (the catalog is the truth), and a hand-made rule is never one."""
+    rules = _stored_rules()["data"]["rules"]
+    unbound = json.loads(json.dumps(rules[0]))
+    unbound["condition"]["thresholds"]["spec"][0]["channels"] = [CHANNEL_ID]
+    stale_bound = json.loads(json.dumps(rules[1]))
+    stale_bound.update(id="stale-1", alert="FinanceReportReconciliationAnomaly")
+    stale_unbound = json.loads(json.dumps(unbound))
+    stale_unbound.update(id="stale-2", alert="FinanceReportRenamed")
+    hand_made = {"id": "mine", "alert": "HandMade", "labels": {}}
+
+    problems = _routing_problem_objects(
+        {
+            "data": {
+                "rules": [unbound, *rules[1:], stale_bound, stale_unbound, hand_made]
+            }
+        }
+    )
+
+    by_kind: dict[str, set[str]] = {}
+    for problem in problems:
+        by_kind.setdefault(problem.kind, set()).add(problem.subject)
+    assert by_kind == {
+        "unbound": {rules[0]["alert"]},
+        "stale": {"FinanceReportReconciliationAnomaly", "FinanceReportRenamed"},
+    }
+    detail = {p.subject: p.detail for p in problems if p.kind == "stale"}
+    assert "--prune" in detail["FinanceReportReconciliationAnomaly"]
+    assert "also not delivering" not in detail["FinanceReportReconciliationAnomaly"]
+    assert "also not delivering" in detail["FinanceReportRenamed"]
 
 
 # ---- the tasks, against a fake SigNoz HTTP client ----------------------------
@@ -1820,3 +1862,251 @@ def test_verify_dashboard_task_reads_and_judges(monkeypatch) -> None:
     with pytest.raises(Exit) as exc:
         module.verify_dashboard(object())
     assert exc.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# #973: the REAL channel lookup, against a SigNoz whose channel id != its name
+
+REAL_CHANNEL_ID = "019e91c3-7a52-7d3e-9a4c-0b1f5e6d8a21"
+
+
+class _FakeSigNoz:
+    """SigNoz HTTP mock for the real platform/12.alerting helpers.
+
+    The channel's id is a UUID and differs from its name, as on the live instance; a
+    created rule keeps the body it was posted with, as SigNoz stores it.
+    """
+
+    def __init__(self, *, with_channel=True, rules=()):
+        self.channels = (
+            [{"id": REAL_CHANNEL_ID, "name": BRIDGE_CHANNEL, "type": "webhook"}]
+            if with_channel
+            else []
+        )
+        self.rules = {rule["id"]: dict(rule) for rule in rules}
+        self.calls: list[tuple[str, str, object]] = []
+        self._counter = 0
+
+    def request(self, _c, *, method, path, payload=None):
+        self.calls.append((method, path, payload))
+        ok = {"ok": True, "status": 200, "body": "{}"}
+        if (method, path) == ("GET", "/api/v1/channels"):
+            return {**ok, "data": {"status": "success", "data": list(self.channels)}}
+        if (method, path) == ("POST", "/api/v1/channels"):
+            self.channels.append(
+                {"id": f"0199{len(self.channels):04d}-0000-7000-8000-00000000cafe"}
+                | {"name": payload["name"], "type": "webhook"}
+            )
+            return {**ok, "status": 204, "data": None, "body": ""}
+        if (method, path) == ("GET", "/api/v1/rules"):
+            return {
+                **ok,
+                "data": {
+                    "status": "success",
+                    "data": {"rules": list(self.rules.values())},
+                },
+            }
+        if (method, path) == ("POST", "/api/v1/rules"):
+            self._counter += 1
+            rule_id = f"rule-{self._counter}"
+            self.rules[rule_id] = {**json.loads(json.dumps(payload)), "id": rule_id}
+            return {**ok, "data": {"status": "success", "data": {"id": rule_id}}}
+        if method == "DELETE" and path.startswith("/api/v1/rules/"):
+            self.rules.pop(path.rsplit("/", 1)[-1], None)
+            return {**ok, "data": None}
+        if method == "DELETE":  # the v2 path answers 200 for any id
+            return {**ok, "data": None}
+        return {"ok": False, "data": None, "status": 404, "body": "not found"}
+
+    def writes(self):
+        return [(m, p) for m, p, _ in self.calls if m != "GET"]
+
+
+def _install_real_alerting(monkeypatch, fake: _FakeSigNoz):
+    """The FR tasks + the real platform/12.alerting module over `fake`. Returns
+    (fr_tasks, alerting, Exit, errors)."""
+    module, Exit = _load_fr_observability_tasks(monkeypatch)
+    spec = importlib.util.spec_from_file_location(
+        "alerting_shared_real_under_test", ROOT / "platform/12.alerting/shared_tasks.py"
+    )
+    assert spec and spec.loader
+    alerting = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(alerting)
+    monkeypatch.setattr(
+        alerting, "get_env", lambda: {"ENV": "production", "ENV_SUFFIX": ""}
+    )
+    monkeypatch.setattr(alerting, "_signoz_request", fake.request)
+    import libs.env
+
+    monkeypatch.setattr(libs.env, "get_secrets", lambda *a, **k: {})
+    errors: list[str] = []
+    _patch_console(monkeypatch, error=lambda *a, **k: errors.append(str(a[0])))
+    monkeypatch.setitem(sys.modules, "platform.12.alerting.shared", alerting)
+    return module, alerting, Exit, errors
+
+
+def test_ensure_channel_returns_the_name_never_the_id(monkeypatch) -> None:
+    """#973: rules bind to the channel NAME, so what the real lookup/creation returns
+    must be the name even though SigNoz knows the channel by a different UUID."""
+    assert REAL_CHANNEL_ID != BRIDGE_CHANNEL
+    existing = _FakeSigNoz()
+    _, alerting, _, _ = _install_real_alerting(monkeypatch, existing)
+    assert alerting._ensure_signoz_channel(object()) == BRIDGE_CHANNEL
+
+    created = _FakeSigNoz(with_channel=False)
+    _, alerting, _, _ = _install_real_alerting(monkeypatch, created)
+    assert alerting._ensure_signoz_channel(object()) == BRIDGE_CHANNEL
+    (channel,) = created.channels
+    assert channel["name"] == BRIDGE_CHANNEL and channel["id"] != BRIDGE_CHANNEL
+
+
+@pytest.mark.parametrize("with_channel", [True, False])
+def test_apply_alerts_binds_every_rule_to_the_channel_name_end_to_end(
+    monkeypatch, with_channel
+) -> None:
+    """#973 regression: through the real channel lookup (found, or created during the
+    apply), every rule SigNoz stores has `channels == [<channel NAME>]`, not the UUID
+    SigNoz lists as the channel's id -- the exact bug that gave 156 `stage for receiver
+    missing` errors a day."""
+    fake = _FakeSigNoz(with_channel=with_channel)
+    module, _, _, _ = _install_real_alerting(monkeypatch, fake)
+
+    assert module.apply_alerts(object()) is True
+
+    (channel,) = fake.channels
+    assert channel["id"] != channel["name"] == BRIDGE_CHANNEL
+    assert {r["alert"] for r in fake.rules.values()} == set(_EXPECTED_RULES)
+    for rule in fake.rules.values():
+        assert _spec_channels(rule) == [[BRIDGE_CHANNEL]], rule["alert"]
+        assert channel["id"] not in json.dumps(rule)
+
+
+def _prod_before_this_fix() -> list[dict]:
+    """The live state #973 describes: every catalog rule bound to the channel UUID, plus
+    the managed rule the catalog dropped in #906 (`FinanceReportReconciliationAnomaly`)."""
+    rules = []
+    for index, payload in enumerate(render_alert_payloads(REAL_CHANNEL_ID), start=1):
+        rule = {**payload, "id": f"old-{index}", "state": "inactive"}
+        rule["labels"] = {**payload["labels"], "source": _MANAGED}
+        rules.append(rule)
+    stale = {
+        **rules[0],
+        "id": "old-stale",
+        "alert": "FinanceReportReconciliationAnomaly",
+    }
+    return [*rules, stale]
+
+
+def test_owner_approved_sequence_reaches_a_green_verify(monkeypatch) -> None:
+    """#973: the post-merge procedure, played on prod's before-state.
+
+    verify fails (7 unbound + 1 stale) -> the merge's default apply rebinds the 7 and
+    only logs the stale rule -> verify still fails, naming just the stale one ->
+    `apply-alerts --prune` removes it -> verify passes."""
+    fake = _FakeSigNoz(rules=_prod_before_this_fix())
+    module, _, Exit, errors = _install_real_alerting(monkeypatch, fake)
+
+    with pytest.raises(Exit):
+        module.verify_alert_routing(object())
+    assert sum("[unbound]" in e for e in errors) >= len(_EXPECTED_RULES)
+    assert any(
+        "[stale]" in e and "FinanceReportReconciliationAnomaly" in e for e in errors
+    )
+
+    errors.clear()
+    assert module.apply_alerts(object()) is True  # what the workflow runs on merge
+    assert "old-stale" in fake.rules  # logged, not pruned
+    with pytest.raises(Exit):
+        module.verify_alert_routing(object())
+    assert not any("[unbound]" in e for e in errors)
+    (stale_line,) = [e for e in errors if "[stale]" in e]
+    assert "FinanceReportReconciliationAnomaly" in stale_line
+    assert any("apply-alerts --prune" in e for e in errors)
+
+    assert module.apply_alerts(object(), prune=True) is True
+    assert "FinanceReportReconciliationAnomaly" not in {
+        r["alert"] for r in fake.rules.values()
+    }
+    assert module.verify_alert_routing(object()) is True
+
+
+def test_verify_is_red_on_the_pre_fix_state_and_green_only_after_rebinding(
+    monkeypatch,
+) -> None:
+    """The guard behind #973: if the apply bound the channel id again, verify -- run
+    against what that apply stored -- would stay red. (Here the 'apply' is the real one;
+    the mutation that makes it write ids is shown red by the end-to-end test above.)"""
+    fake = _FakeSigNoz(
+        rules=[r for r in _prod_before_this_fix() if r["id"] != "old-stale"]
+    )
+    module, _, Exit, _ = _install_real_alerting(monkeypatch, fake)
+
+    with pytest.raises(Exit):
+        module.verify_alert_routing(object())
+    module.apply_alerts(object())
+
+    assert module.verify_alert_routing(object()) is True
+
+
+# ---- an apply that cannot render must not touch the live catalog -------------
+
+
+class _BrokenDef:
+    alert_name = "FinanceReportP95LatencyHigh"
+
+    def __init__(self, how):
+        self.how = how
+
+    def to_signoz_payload(self, channel_names):
+        if self.how == "raises":
+            raise AlertingError("cannot render")
+        payload = _real_definition(self.alert_name).to_signoz_payload(channel_names)
+        payload["condition"]["thresholds"]["spec"][0]["channels"] = []  # forgot to bind
+        return payload
+
+
+@pytest.mark.parametrize("how", ["raises", "unbound"])
+def test_apply_alerts_validates_every_rule_before_deleting_any(
+    monkeypatch, how
+) -> None:
+    """A rule that cannot be rendered, or would end up unbound, stops the apply while
+    the live catalog is whole: the earlier (valid) rule is not deleted and re-created
+    first, which would leave a half-rebound catalog."""
+    live = _prod_before_this_fix()
+    fake = _FakeSigNoz(rules=live)
+    module, _, Exit, errors = _install_real_alerting(monkeypatch, fake)
+    monkeypatch.setattr(
+        module, "load_alert_definitions", lambda: [_Def(), _BrokenDef(how)]
+    )
+
+    with pytest.raises(Exit) as exc:
+        module.apply_alerts(object())
+
+    assert exc.value.code == 1
+    assert fake.writes() == []
+    assert set(fake.rules) == {rule["id"] for rule in live}
+    assert any("nothing was changed" in e for e in errors)
+
+
+# ---- legacy dashboard rows: no usable top-level title -------------------------
+
+
+@pytest.mark.parametrize("top_level", [{}, {"title": ""}, {"title": None}])
+def test_legacy_dashboard_row_is_found_whether_its_title_is_absent_or_empty(
+    top_level,
+) -> None:
+    """#934: prod's 23 rows carry no top-level `title` at all, `data.data.title` holds it
+    and the wrapper has `version: v5`; a row with an empty or null title is the same
+    legacy shape and must be found too (the old `"title" not in data` test missed it)."""
+    row = {
+        "id": "legacy",
+        "data": {
+            **top_level,
+            "data": {"title": DASH_TITLE, "widgets": [{"id": "x"}]},
+            "version": "v5",
+        },
+    }
+
+    found = find_stored_dashboards({"status": "success", "data": [row]}, DASH_TITLE)
+
+    assert [(d.id, d.legacy) for d in found] == [("legacy", True)]

@@ -395,14 +395,22 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 4. 先跑 schema canary:`gh workflow run apply-observability.yml --ref <ref> -f mode=canary`(建一条 disabled PromQL 规则验 v5 信封再删)。apply 应在 app 发完所有引用 metric 名后。
 5. **投递自证(#973;apply 后必跑,只读 → 显式发一条)**:
    ```bash
-   uv run python -m invoke fr-observability.shared.verify-alert-routing   # 只读:每条受管规则都绑定了飞书渠道名,渠道存在且唯一
+   uv run python -m invoke fr-observability.shared.verify-alert-routing   # 只读:受管规则都绑定了飞书渠道名,渠道存在且唯一,目录之外没有遗留的受管规则
    uv run python -m invoke fr-observability.shared.verify-dashboard       # 只读:SigNoz 里恰有一份正确的看板(顶层 title、v5、widget 与 layout 齐全)
    uv run python -m invoke fr-observability.shared.test-alert-channel     # 显式:经该渠道真实发一条测试通知(POST /api/v1/testChannel),到飞书确认
    ```
-   `verify-alert-routing` 失败(退出码 1)时逐条列出原因:规则缺失/重名/被禁用、渠道未列出、绑了渠道 id、`usePolicy=true`、阈值里没有该渠道名。它证明"绑定已存下",不证明消息到达;到达要看飞书里的测试卡片,以及 `docker logs platform-signoz | grep "stage for receiver missing"` 在之后 24 小时内为 0。
-6. **看板去重(#934)**:`apply-dashboard` 按精确标题查找并原地更新(PUT);旧 apply 存的套了 `data` 外壳的行也算同一个看板,原地改写成正确形状,不再新增。同标题的多余副本**默认只报告 id,不删**;owner 批准后用 `uv run python -m invoke fr-observability.shared.apply-dashboard --delete-duplicates` 删除,只删标题完全相同的多余行,更新成功之后才删,并用重新列表确认已删除。
-
-> **注**:`apply_alerts` 现为声明式 reconcile(upsert + 默认只 log 的 prune),见 [ops.pipeline.md](./ops.pipeline.md)。
+   `verify-alert-routing` 失败(退出码 1)时按类别逐条列出:`unbound`(规则存在但 SigNoz 不会投递:没绑渠道名、绑了渠道 id、`usePolicy=true`、被禁用)、`missing`(目录里的规则缺失或重名)、`channel`(渠道不是恰好一个)、`stale`(带受管标签但已不在目录里的规则)。`unbound`/`missing` 用 `apply-alerts` 修;`stale` 只用 `apply-alerts --prune` 删。它证明"绑定已存下",不证明消息到达;到达要看飞书里的测试卡片,以及 `docker logs platform-signoz | grep "stage for receiver missing"` 在之后 24 小时内为 0。
+6. **看板去重(#934)**:`apply-dashboard` 按精确标题查找并原地更新(PUT);旧 apply 存的套了 `data` 外壳的行也算同一个看板(顶层没有可用 `title`、`data.data.title` 是目录标题),原地改写成正确形状,不再新增。同标题的多余副本**默认只报告 id,不删**;owner 批准后用 `apply-dashboard --delete-duplicates` 删除,只删标题完全相同的多余行,更新成功之后才删,并用重新列表确认已删除。
+7. **合并后的 owner 批准流程(#973 / #934,生产 apply 是 owner 保留权限)**:合并到 main 会触发 `apply-observability.yml`,默认执行 `apply-alerts` 与 `apply-dashboard`(不 prune、不删副本)。之后按顺序:
+   ```bash
+   uv run python -m invoke fr-observability.shared.verify-alert-routing                # 此时仅剩 stale 一类(线上遗留的 FinanceReportReconciliationAnomaly,#906 已把它移出目录,它仍绑着渠道 id)
+   uv run python -m invoke fr-observability.shared.apply-alerts --prune                # 一次性:删除上面这条受管遗留规则
+   uv run python -m invoke fr-observability.shared.verify-alert-routing                # 必须退出码 0
+   uv run python -m invoke fr-observability.shared.apply-dashboard --delete-duplicates # 删除 23 份旧看板里多余的 22 份
+   uv run python -m invoke fr-observability.shared.verify-dashboard                    # 必须退出码 0
+   uv run python -m invoke fr-observability.shared.test-alert-channel                  # 到飞书确认测试卡片
+   ```
+   `--prune` 只删带受管标签(`source=infra2/finance_report-alerts`)或 `Canary*` 的、目录之外的规则,不碰手工建的规则。**预期的一次性噪声**:这是 SigNoz 告警第一次真正能投递,首次 apply 之后可能一次性收到几条积压状态的告警,2026-10-01 18:43 触发后一直重试的 `FinanceReportBackendTelemetryAbsent` 也可能冲出来一次。这是预期现象,不是重复告警。
 
 ### SOP-005: Cloudflare 带外 watchdog(轻量带外,边缘 30min;#904)
 活在 [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/),**直发 Feishu**(不经它要验证的 bridge,email 兜底)。只判 VPS 自己报告不了的(§1.1),归属记于 [`watchdog-signals.yaml`](watchdog-signals.yaml);细节见其 README。

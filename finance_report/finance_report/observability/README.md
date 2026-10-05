@@ -73,7 +73,10 @@ uv run python -m invoke signoz.shared.create-api-key
 # Apply finance_report definitions (idempotent):
 uv run python -m invoke fr-observability.shared.apply-alerts
 uv run python -m invoke fr-observability.shared.apply-dashboard
-# Duplicate same-title dashboards are only reported; remove them explicitly (#934):
+
+# Stale managed rules and duplicate same-title dashboards are only REPORTED by default.
+# Removing them is explicit (and owner-approved in production):
+uv run python -m invoke fr-observability.shared.apply-alerts --prune
 uv run python -m invoke fr-observability.shared.apply-dashboard --delete-duplicates
 
 # Prove it (read-only), then send one real test notification through the channel:
@@ -102,7 +105,14 @@ uv run python tools/signoz_alert_rule_probe.py
    `condition.compositeQuery.queries` (`promql` for the metric rules,
    `builder_query` with `signal=logs` for `FinanceReportBackendErrorLogs`).
 4. Run `verify-alert-routing`: it fails unless every managed rule is stored bound to
-   the channel name. Then `test-alert-channel` and confirm the card in the Lark group.
+   the channel name and no managed rule is left over that the catalog dropped. It lists
+   failures by kind: `unbound` / `missing` are fixed by `apply-alerts`, `stale` only by
+   `apply-alerts --prune`. After the #973 fix, production needs that one `--prune` once
+   (it removes `FinanceReportReconciliationAnomaly`, dropped from the catalog in #906),
+   then `verify-alert-routing` must exit 0. Then run `test-alert-channel` and confirm the
+   card in the Lark group. Expect a one-time burst: this is the first time SigNoz alerts
+   can be delivered, so backlogged state (for example the 2026-10-01
+   `FinanceReportBackendTelemetryAbsent` retry) may flush once.
 5. In SigNoz, open each rule after apply. An `error` health state means SigNoz
    could not run the query; `inactive` is expected. If
    `FinanceReportBackendTelemetryAbsent` fires right after apply, the backend's

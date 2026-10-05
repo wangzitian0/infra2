@@ -30,7 +30,10 @@ from urllib.parse import quote
 
 from invoke import task
 
+from libs.alerting import AlertingError
 from libs.observability_dashboards import (
+    ROUTING_PROBLEM_KINDS,
+    ObservabilityDefinitionError,
     build_dashboard_import_payload,
     check_alert_routing,
     check_dashboard_state,
@@ -118,6 +121,9 @@ def apply_alerts(c, dry_run=False, prune=False):
       ``Canary*`` residue) are removed. **LOG-ONLY by default** — pass ``--prune`` to
       actually delete (warn-before-fail; verify the would-prune list first). A rule
       with no managed marker (e.g. hand-made in the UI) is never touched.
+
+    Every rule is rendered and validated before the first delete, so a bad definition
+    stops the apply with the live catalog untouched.
     """
     from invoke.exceptions import Exit
 
@@ -139,6 +145,21 @@ def apply_alerts(c, dry_run=False, prune=False):
         error("Cannot apply alert rules without the SigNoz Feishu channel")
         raise Exit("Cannot apply alert rules without the SigNoz Feishu channel", code=1)
 
+    # Render and validate EVERY payload before the first DELETE: a rule that cannot be
+    # rendered (or would end up without the channel) must stop the apply while the live
+    # catalog is still whole, not after half of it has been re-created.
+    rendered: list[tuple[str, dict]] = []
+    try:
+        for definition in definitions:
+            payload = require_rule_channel(
+                definition.to_signoz_payload([channel_name]), channel_name
+            )
+            payload.setdefault("labels", {})["source"] = MANAGED_ALERT_SOURCE
+            rendered.append((definition.alert_name, payload))
+    except (AlertingError, ObservabilityDefinitionError) as exc:
+        error("Cannot render the alert catalog; nothing was changed", str(exc))
+        raise Exit(f"Cannot render the alert catalog: {exc}", code=1) from exc
+
     # List existing rules ONCE, then match locally — avoids an N+1 GET /api/v1/rules.
     listed = alerting._signoz_request(c, method="GET", path="/api/v1/rules")
     if not listed["ok"]:
@@ -153,17 +174,11 @@ def apply_alerts(c, dry_run=False, prune=False):
     # --- upsert: (re)write every catalog rule so a changed definition takes effect.
     # delete-then-create with verified deletion; a failed create fails the apply loudly
     # (CI non-zero) rather than silently leaving the old rule.
-    for definition in definitions:
-        payload = require_rule_channel(
-            definition.to_signoz_payload([channel_name]), channel_name
-        )
-        payload.setdefault("labels", {})["source"] = MANAGED_ALERT_SOURCE
-        existing_id = find_signoz_rule_id(existing_rules, definition.alert_name)
+    for alert_name, payload in rendered:
+        existing_id = find_signoz_rule_id(existing_rules, alert_name)
         if existing_id and not _delete_signoz_rule(alerting, c, str(existing_id)):
             all_ok = False
-            error(
-                f"Failed to remove existing rule before re-apply: {definition.alert_name}"
-            )
+            error(f"Failed to remove existing rule before re-apply: {alert_name}")
             continue
         created = alerting._signoz_request(
             c, method="POST", path="/api/v1/rules", payload=payload
@@ -171,12 +186,12 @@ def apply_alerts(c, dry_run=False, prune=False):
         if created["ok"]:
             success(
                 f"SigNoz alert rule {'updated' if existing_id else 'created'}: "
-                f"{definition.alert_name}"
+                f"{alert_name}"
             )
         else:
             all_ok = False
             error(
-                f"Failed to apply SigNoz alert rule: {definition.alert_name}",
+                f"Failed to apply SigNoz alert rule: {alert_name}",
                 f"status={created['status']} body={created['body'][:500]}",
             )
 
@@ -355,9 +370,11 @@ def verify_alert_routing(c):
     """Read-only: every managed rule is bound to the Feishu channel, by name.
 
     Reads ``GET /api/v1/rules`` and ``GET /api/v1/channels`` and fails (non-zero) unless
-    the channel exists once and each catalog rule, and each stale managed rule, exists
-    once, is enabled and lists the channel name in every threshold. It changes nothing;
-    it proves the binding is stored, not that a message arrives: for that, run
+    the channel exists once, each catalog rule exists once, is enabled and lists the
+    channel name in every threshold, and no managed rule is left that the catalog no
+    longer has. Each failure is printed under its kind: ``unbound``/``missing`` are fixed
+    by ``apply-alerts``, ``stale`` by ``apply-alerts --prune``. It changes nothing; it
+    proves the binding is stored, not that a message arrives: for that, run
     ``test-alert-channel``.
     """
     from invoke.exceptions import Exit
@@ -385,8 +402,23 @@ def verify_alert_routing(c):
         managed_source=MANAGED_ALERT_SOURCE,
     )
     if problems:
-        for problem in problems:
-            error(f"alert routing: {problem}")
+        counts = {
+            kind: sum(1 for p in problems if p.kind == kind)
+            for kind in ROUTING_PROBLEM_KINDS
+        }
+        error(
+            "alert routing: "
+            + ", ".join(f"{n} {kind}" for kind, n in counts.items() if n)
+        )
+        for kind in ROUTING_PROBLEM_KINDS:
+            for problem in (p for p in problems if p.kind == kind):
+                error(f"alert routing [{kind}]: {problem}")
+        if counts["stale"]:
+            error(
+                "stale managed rules are removed by "
+                "`fr-observability.shared.apply-alerts --prune`; "
+                "missing/unbound rules by `apply-alerts`"
+            )
         raise Exit("SigNoz alert rules are not all bound to the Feishu channel", code=1)
     success(f"{len(expected)} SigNoz rules are bound to channel {channel_name}")
     return True
