@@ -639,49 +639,23 @@ class Deployer:
         else:
             effective_env = env_str
 
-        if existing:
-            info("Updating existing compose service")
-            client.update_compose(
-                compose_id,
-                source_type="github",
-                githubId=github_id,
-                repository=GITHUB_REPO,
-                owner=GITHUB_OWNER,
-                branch=branch,
-                composePath=cls.compose_path,
-                env=effective_env,
-                autoDeploy=False,
-            )
-        else:
-            info("Creating new compose service with GitHub provider")
-            result = client.create_compose(
-                environment_id=env_id,
-                name=cls.service,
-                app_name=f"{project_name}-{cls.service}",
-                source_type="github",
-                githubId=github_id,
-                repository=GITHUB_REPO,
-                owner=GITHUB_OWNER,
-                branch=branch,
-                composePath=cls.compose_path,
-                env=effective_env,
-                autoDeploy=False,
-            )
-            compose_id = result["composeId"]
-            # Dokploy initializes new GitHub compose records with default source
-            # fields on some versions; update immediately so first deploy uses
-            # the intended repository and compose path.
-            client.update_compose(
-                compose_id,
-                source_type="github",
-                githubId=github_id,
-                repository=GITHUB_REPO,
-                owner=GITHUB_OWNER,
-                branch=branch,
-                composePath=cls.compose_path,
-                env=env_str,
-                autoDeploy=False,
-            )
+        from libs.deploy.dokploy_adapter import upsert_github_compose
+
+        compose_id = upsert_github_compose(
+            client,
+            service_name=cls.service,
+            project_name=project_name,
+            env_id=env_id,
+            github_id=github_id,
+            repository=GITHUB_REPO,
+            owner=GITHUB_OWNER,
+            branch=branch,
+            compose_path=cls.compose_path,
+            effective_env=effective_env,
+            existing=existing,
+            raw_env_str=env_str,
+            log_info=info,
+        )
 
         # Deploy
         # Fail closed BEFORE any deployment if an AppRole compose would ship

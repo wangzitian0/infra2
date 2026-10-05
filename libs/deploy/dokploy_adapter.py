@@ -222,6 +222,68 @@ def find_remote_compose(
     return existing
 
 
+def upsert_github_compose(
+    client: Any,
+    *,
+    service_name: str,
+    project_name: str,
+    env_id: str,
+    github_id: str,
+    repository: str,
+    owner: str,
+    branch: str,
+    compose_path: str,
+    effective_env: str,
+    existing: dict | None,
+    raw_env_str: str,
+    log_info: Callable[[str], None] | None = None,
+) -> str:
+    """Create or update a Dokploy GitHub compose service and return compose_id."""
+    info_log = log_info or logger.info
+    if existing:
+        compose_id = existing["composeId"]
+        info_log("Updating existing compose service")
+        client.update_compose(
+            compose_id,
+            source_type="github",
+            githubId=github_id,
+            repository=repository,
+            owner=owner,
+            branch=branch,
+            composePath=compose_path,
+            env=effective_env,
+            autoDeploy=False,
+        )
+    else:
+        info_log("Creating new compose service with GitHub provider")
+        result = client.create_compose(
+            environment_id=env_id,
+            name=service_name,
+            app_name=f"{project_name}-{service_name}",
+            source_type="github",
+            githubId=github_id,
+            repository=repository,
+            owner=owner,
+            branch=branch,
+            composePath=compose_path,
+            env=effective_env,
+            autoDeploy=False,
+        )
+        compose_id = result["composeId"]
+        client.update_compose(
+            compose_id,
+            source_type="github",
+            githubId=github_id,
+            repository=repository,
+            owner=owner,
+            branch=branch,
+            composePath=compose_path,
+            env=raw_env_str,
+            autoDeploy=False,
+        )
+    return compose_id
+
+
 def parse_remote_config_identity(existing: dict | None) -> dict[str, str | None]:
     """Parse configuration identity from Dokploy compose env string."""
     if not existing:
