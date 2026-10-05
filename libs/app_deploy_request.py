@@ -2,23 +2,20 @@
 
 from __future__ import annotations
 
-import base64
-import binascii
 import json
 import os
 import subprocess
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
 import httpx
 from infra2_sdk.deploy import (
-    PRODUCTION_EVIDENCE_POLICY_PATH,
     DeployOperation,
     DeployRequest,
     DeployType,
-    ProductionEvidencePolicy,
+    verify_production_evidence,
 )
 from infra2_sdk.refs import ResolvedRef, resolve_image_ref, resolve_pr
 
@@ -61,60 +58,6 @@ FIXED_DEPLOY_TYPES = frozenset({DeployType.STAGING, DeployType.PRODUCTION})
 PREFLIGHT_CANARY_DEPLOY_TYPES = frozenset({DeployType.PRODUCTION})
 _GITHUB_API_URL = "https://api.github.com"
 _GITHUB_API_VERSION = "2022-11-28"
-
-
-def fetch_production_evidence_policy(
-    request: DeployRequest,
-    *,
-    fetch_json: Callable[[str], Mapping[str, object]],
-) -> ProductionEvidencePolicy:
-    """Fetch the app's OWN evidence contract, pinned to the release being verified.
-
-    #576: each app repo is the sole authority on its own CI facts, declared as a
-    checked-in file at the SDK's canonical PRODUCTION_EVIDENCE_POLICY_PATH —
-    fetched here at ``request.source_sha`` so the contract and the workflows it
-    describes come from the SAME commit. There is deliberately NO fallback dict:
-    a missing or malformed contract fails closed, loudly, naming the app and the
-    expected path — an app without a contract is explicitly staging-only, never
-    silently so (the infra2#571 detection gap).
-    """
-    where = (
-        f"{request.source_repository}:{PRODUCTION_EVIDENCE_POLICY_PATH}"
-        f"@{request.source_sha}"
-    )
-    try:
-        payload = fetch_json(
-            f"/repos/{request.source_repository}/contents/"
-            f"{PRODUCTION_EVIDENCE_POLICY_PATH}?ref={request.source_sha}"
-        )
-    except (httpx.HTTPStatusError, ValueError, KeyError) as exc:
-        # _fetch_github_json wraps HTTP failures (including a 404 for a repo
-        # without the file) as ValueError; injected test fetchers may raise
-        # httpx errors or KeyError directly.
-        raise ValueError(
-            f"service {request.service!r} has no Production evidence contract: "
-            f"fetching {where} failed ({exc}). Production releases require the "
-            "app repo to declare its own contract file (infra2#576); without one "
-            "the app is staging-only."
-        ) from exc
-    content = payload.get("content")
-    if not isinstance(content, str):
-        raise ValueError(f"{where} did not return file content")
-    try:
-        raw = json.loads(base64.b64decode(content, validate=False))
-    except (binascii.Error, ValueError) as exc:
-        raise ValueError(f"{where} is not valid JSON: {exc}") from exc
-    if not isinstance(raw, Mapping):
-        raise ValueError(f"{where} must contain a JSON object")
-    try:
-        policy = ProductionEvidencePolicy.from_dict(raw)
-    except ValueError as exc:
-        raise ValueError(f"{where} is not a valid evidence contract: {exc}") from exc
-    if policy.service != request.service:
-        raise ValueError(
-            f"{where} declares service {policy.service!r}, not {request.service!r}"
-        )
-    return policy
 
 
 @dataclass(frozen=True)
@@ -204,86 +147,6 @@ def parse_request(payload: str | Mapping[str, object]) -> DeployRequest:
     if not isinstance(raw, Mapping):
         raise ValueError("deploy request must be a JSON object")
     return DeployRequest.from_dict(raw)
-
-
-def verify_production_evidence(
-    request: DeployRequest,
-    *,
-    fetch_json: Callable[[str], Mapping[str, object]] | None = None,
-) -> None:
-    """Verify production evidence against GitHub's read-only API.
-
-    The per-app expectations (workflow paths, events, display-title templates)
-    come from the app's OWN checked-in contract file — fetched at the release's
-    source_sha — never from an infra2-side dict (#576: the hardcoded
-    PRODUCTION_EVIDENCE_POLICIES that drifted into infra2#571's five blockers
-    is deleted, with no silent fallback).
-    """
-    fetch = fetch_json or _fetch_github_json
-    # Pure-local URL-shape validation first (fail fast, no network), then the
-    # app's own contract, then the evidence runs it describes.
-    source_run_id = _github_evidence_number(
-        request.evidence.source_run_url,
-        repository=request.source_repository,
-        resource="actions/runs",
-        field="source_run_url",
-    )
-    if source_run_id != request.evidence.source_run_id:
-        raise ValueError("evidence.source_run_id must match source_run_url")
-    staging_run_id = _github_evidence_number(
-        request.evidence.staging_run_url,
-        repository=request.source_repository,
-        resource="actions/runs",
-        field="staging_run_url",
-    )
-    pull_number = _github_evidence_number(
-        request.evidence.reviewed_change_url,
-        repository=request.source_repository,
-        resource="pull",
-        field="reviewed_change_url",
-    )
-    policy = fetch_production_evidence_policy(request, fetch_json=fetch)
-
-    source_run = fetch(
-        f"/repos/{request.source_repository}/actions/runs/{source_run_id}"
-    )
-    staging_run = fetch(
-        f"/repos/{request.source_repository}/actions/runs/{staging_run_id}"
-    )
-    reviewed_pull = fetch(f"/repos/{request.source_repository}/pulls/{pull_number}")
-    reviews = fetch(f"/repos/{request.source_repository}/pulls/{pull_number}/reviews")
-    if not isinstance(reviews, Sequence) or isinstance(reviews, (str, bytes, Mapping)):
-        raise ValueError(
-            f"GitHub evidence response for /repos/{request.source_repository}/pulls/{pull_number}/reviews must be a list"
-        )
-    _verify_run(
-        source_run,
-        label="source run",
-        repository=request.source_repository,
-        url=request.evidence.source_run_url,
-        sha=request.source_sha if policy.source.require_head_sha else None,
-        event=policy.source.event,
-        workflow_path=policy.source.workflow_path,
-        display_title=policy.source.expected_display_title(request.version_ref),
-    )
-    _verify_run(
-        staging_run,
-        label="staging run",
-        repository=request.source_repository,
-        url=request.evidence.staging_run_url,
-        sha=request.source_sha if policy.staging.require_head_sha else None,
-        event=policy.staging.event,
-        workflow_path=policy.staging.workflow_path,
-        display_title=policy.staging.expected_display_title(request.version_ref),
-    )
-    _verify_reviewed_pull(
-        reviewed_pull,
-        reviews=reviews,
-        repository=request.source_repository,
-        url=request.evidence.reviewed_change_url,
-        sha=request.source_sha,
-        base_ref=policy.review_base_ref,
-    )
 
 
 def validate_request_authority(
@@ -479,94 +342,6 @@ def _fetch_github_json(
         if not isinstance(payload, Mapping):
             raise ValueError(f"GitHub evidence response for {path} must be an object")
     return payload
-
-
-def _verify_run(
-    run: Mapping[str, object],
-    *,
-    label: str,
-    repository: str,
-    url: str,
-    sha: str | None,
-    event: str,
-    workflow_path: str,
-    display_title: str,
-) -> None:
-    """``sha=None`` means the run's expectation declared require_head_sha=false
-    (a branch-dispatched staging run: its head_sha is the branch tip at dispatch
-    time, not the release commit — the version linkage is the display title's
-    version_ref, plus the receiver's own version_ref->sha pin at execution time).
-    Every other check below is unconditional."""
-    remote_repository = run.get("repository")
-    if (
-        not isinstance(remote_repository, Mapping)
-        or remote_repository.get("full_name") != repository
-    ):
-        raise ValueError(f"{label} repository does not match source_repository")
-    if run.get("html_url") != url:
-        raise ValueError(f"{label} html_url does not match submitted evidence")
-    if run.get("status") != "completed" or run.get("conclusion") != "success":
-        raise ValueError(f"{label} must be completed successfully")
-    if sha is not None and run.get("head_sha") != sha:
-        raise ValueError(f"{label} head_sha does not match source_sha")
-    if run.get("path") != workflow_path:
-        raise ValueError(f"{label} workflow is not approved for Production evidence")
-    if run.get("event") != event:
-        raise ValueError(f"{label} event does not match the evidence policy")
-    if run.get("display_title") != display_title:
-        raise ValueError(f"{label} title does not match the requested version_ref")
-
-
-def _verify_reviewed_pull(
-    pull: Mapping[str, object],
-    *,
-    reviews: Sequence[object] | None = None,
-    repository: str,
-    url: str,
-    sha: str,
-    base_ref: str,
-) -> None:
-    base = pull.get("base")
-    remote_repository = base.get("repo") if isinstance(base, Mapping) else None
-    if (
-        not isinstance(remote_repository, Mapping)
-        or remote_repository.get("full_name") != repository
-    ):
-        raise ValueError(
-            "reviewed pull request repository does not match source_repository"
-        )
-    if pull.get("html_url") != url:
-        raise ValueError(
-            "reviewed pull request html_url does not match submitted evidence"
-        )
-    if pull.get("state") != "closed" or not pull.get("merged_at"):
-        raise ValueError("reviewed pull request must be merged")
-    if not isinstance(base, Mapping) or base.get("ref") != base_ref:
-        raise ValueError("reviewed pull request base branch is not approved")
-    if pull.get("merge_commit_sha") != sha:
-        raise ValueError(
-            "reviewed pull request merge_commit_sha does not match source_sha"
-        )
-
-    if reviews is not None:
-        user = pull.get("user")
-        pull_author = user.get("login") if isinstance(user, Mapping) else None
-
-        latest_states: dict[str, str] = {}
-        for r in reviews:
-            if not isinstance(r, Mapping):
-                continue
-            r_user = r.get("user")
-            reviewer = r_user.get("login") if isinstance(r_user, Mapping) else None
-            state = r.get("state")
-            if reviewer and isinstance(state, str):
-                latest_states[reviewer] = state
-
-        if pull_author:
-            latest_states.pop(pull_author, None)
-
-        if any(s == "CHANGES_REQUESTED" for s in latest_states.values()):
-            raise ValueError("reviewed pull request has pending CHANGES_REQUESTED")
 
 
 def _git_url(repository: str) -> str:
