@@ -126,7 +126,7 @@ def create_app_bucket(
     Example:
         # In downstream deploy.py pre_compose:
         import sys
-        s3_shared = sys.modules.get("platform.03.s3.shared") or sys.modules.get("platform.03.minio.shared")
+        s3_shared = sys.modules.get("platform.03.s3.shared")
         create_app_bucket = s3_shared.create_app_bucket
 
         result = create_app_bucket(

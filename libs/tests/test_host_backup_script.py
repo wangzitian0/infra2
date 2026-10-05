@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import stat
 import subprocess
@@ -21,23 +20,15 @@ from libs.backup_verification import load_backup_inventory
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools/host_backup.sh"
 
-PG_SERVICES = {"platform/postgres", "finance_report/postgres", "truealpha/postgres"}
-REDIS_SERVICES = {"platform/redis", "finance_report/redis"}
-PATH_SERVICES = {
-    "bootstrap/1password",
-    "bootstrap/iac_runner",
-    "bootstrap/vault",
-    "platform/alerting",
-    "platform/free",
-    "platform/openpanel",
-    "platform/portal",
-    "platform/signoz",
-    "platform/clickhouse",
-    "platform/authentik",
-    "truealpha/data_engine",
-    "platform/s3",
+INVENTORY = load_backup_inventory()
+ALL_SERVICES = {entry.service_id for entry in INVENTORY}
+PG_SERVICES = {
+    entry.service_id for entry in INVENTORY if entry.method.startswith("pg_dump")
 }
-ALL_SERVICES = PG_SERVICES | REDIS_SERVICES | PATH_SERVICES
+REDIS_SERVICES = {
+    entry.service_id for entry in INVENTORY if entry.method.startswith("redis")
+}
+PATH_SERVICES = ALL_SERVICES - PG_SERVICES - REDIS_SERVICES
 
 SHIMS = {
     # docker exec <container> pg_dumpall ... | docker exec <container> sh -c '...redis-cli SAVE'
@@ -283,25 +274,30 @@ def test_missing_path_directory_fails_that_service(host) -> None:
     assert "missing data directory for platform/s3" in proc.stderr
 
 
-def test_script_services_are_declared_backup_inventory() -> None:
+def test_script_has_no_hardcoded_services() -> None:
     body = SCRIPT.read_text()
-    block = body[body.index("SERVICES=$(cat <<EOF") : body.index("\nEOF\n")]
-    ids = set(re.findall(r"^([a-z0-9_]+/[a-z0-9_]+)\|(?:pg|redis|path)\|", block, re.M))
-    assert ids == ALL_SERVICES
-    declared = {entry.service_id for entry in load_backup_inventory()}
-    assert ids == declared, {
-        "missing_from_runner": declared - ids,
-        "missing_from_inventory": ids - declared,
-    }
+    assert "SERVICES=$(cat <<EOF" not in body
+    assert "platform/postgres|pg|" not in body
+    assert "platform/s3|path|" not in body
+    assert "libs.backup.emitter" in body
 
 
-def test_path_sources_match_backup_facets() -> None:
-    body = SCRIPT.read_text()
-    block = body[body.index("SERVICES=$(cat <<EOF") : body.index("\nEOF\n")]
+def test_emitter_services_match_declared_backup_inventory() -> None:
+    from libs.backup.emitter import emit_backup_targets
+
+    targets = emit_backup_targets()
+    target_ids = {t.service_id for t in targets}
+    declared_ids = {entry.service_id for entry in load_backup_inventory()}
+    assert target_ids == declared_ids
+
+
+def test_emitter_path_sources_match_backup_facets() -> None:
+    from libs.backup.emitter import emit_backup_targets
+
+    targets = {t.service_id: t for t in emit_backup_targets(data_root="/custom/data")}
     for entry in load_backup_inventory():
         if entry.service_id not in PATH_SERVICES:
             continue
-        source = entry.data_path.replace("/data", "${DATA_ROOT}", 1)
-        if not entry.service_id.startswith("bootstrap/"):
-            source += "${SUFFIX}"
-        assert f"{entry.service_id}|path|{source}" in block
+        target = targets[entry.service_id]
+        expected_path = entry.data_path.replace("/data", "/custom/data", 1)
+        assert target.primary_target == expected_path

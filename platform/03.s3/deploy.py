@@ -22,7 +22,7 @@ from libs.service_facets import (
     SignalFacet,
 )
 
-shared_tasks = sys.modules.get("platform.03.s3.shared") or sys.modules.get("platform.03.minio.shared")
+shared_tasks = sys.modules.get("platform.03.s3.shared")
 
 
 class S3Deployer(Deployer):
@@ -41,8 +41,9 @@ class S3Deployer(Deployer):
 
     service = "s3"
     display_name = "S3-Compatible Object Storage"
-    legacy_compose_names = ("minio",)
-    vault_service_name = "minio"  # preserve physical Vault path secret/data/platform/{env}/minio
+    vault_service_name = (
+        "minio"  # preserve physical Vault path secret/data/platform/{env}/minio
+    )
     compose_path = "platform/03.s3/compose.yaml"
     data_path = "/data/platform/minio"  # host data directory
     uid: str = "10001"

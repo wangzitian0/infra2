@@ -62,34 +62,14 @@ chmod 700 "${OUTPUT_DIR}" "${RUN_DIR}"
 : > "${ARTIFACTS_FILE}"
 
 # service_id | kind | source (container or data_path)
-# Mirrors the BackupFacet declarations on each service's deploy.py
-# (libs.backup_verification.load_backup_inventory derives the inventory; the
-# handwritten ops.backup-inventory.yaml was deleted in #542). kind in: pg | redis | path
-# Logical dumps FIRST (atomic, most critical), busy path archives LAST: the
-# 2026-08-20 restore drill (truealpha#650) found every scheduled prod run had
-# been ABORTING at platform/minio -- tar exits 1 when live files change under
-# it, set -e killed the run, and every service registered after minio
-# (finance_report, truealpha) was silently never backed up.
-SERVICES=$(cat <<EOF
-platform/postgres|pg|platform-postgres${SUFFIX}
-finance_report/postgres|pg|finance_report-postgres${SUFFIX}
-truealpha/postgres|pg|truealpha-postgres${SUFFIX}
-platform/redis|redis|platform-redis${SUFFIX}|${DATA_ROOT}/platform/redis${SUFFIX}
-finance_report/redis|redis|finance_report-redis${SUFFIX}|${DATA_ROOT}/finance_report/redis${SUFFIX}
-bootstrap/1password|path|${DATA_ROOT}/bootstrap/1password
-bootstrap/iac_runner|path|${DATA_ROOT}/bootstrap/iac-runner
-bootstrap/vault|path|${DATA_ROOT}/bootstrap/vault
-platform/alerting|path|${DATA_ROOT}/platform/alerting${SUFFIX}
-platform/free|path|${DATA_ROOT}/platform/free${SUFFIX}
-platform/openpanel|path|${DATA_ROOT}/platform/openpanel${SUFFIX}
-platform/portal|path|${DATA_ROOT}/platform/portal${SUFFIX}
-platform/signoz|path|${DATA_ROOT}/platform/signoz${SUFFIX}
-platform/clickhouse|path|${DATA_ROOT}/platform/clickhouse${SUFFIX}
-platform/authentik|path|${DATA_ROOT}/platform/authentik${SUFFIX}
-truealpha/data_engine|path|${DATA_ROOT}/truealpha/dagster${SUFFIX}
-platform/s3|path|${DATA_ROOT}/platform/minio${SUFFIX}
-EOF
-)
+# Derived dynamically from declared BackupFacet inventory (libs.backup.emitter).
+# Preserves safety invariant #618: logical dumps FIRST, busy path archives LAST.
+# Manual override via SERVICES is preserved for testing or single-service runs.
+if [ -z "${SERVICES:-}" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+  SERVICES="$(PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}" python3 -m libs.backup.emitter --environment "${ENVIRONMENT}" --data-root "${DATA_ROOT}")"
+fi
 
 sha256_of() { sha256sum "$1" | awk '{print $1}'; }
 
