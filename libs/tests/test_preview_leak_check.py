@@ -72,6 +72,10 @@ def _projects():
                         {"name": "finance-report-preview-pr-5", "composeId": "pr5"},
                         {"name": "finance-report-preview-pr-777", "composeId": "pr777"},
                         {
+                            "name": "finance-report-preview-canary-preview",
+                            "composeId": "canary_slot",
+                        },
+                        {
                             "name": "finance-report-preview-pr-999",
                             "composeId": "canary",
                         },
@@ -100,6 +104,7 @@ def test_collect_only_preview_env_composes() -> None:
         "mainslug": "main",
         "pr5": "pr-5",
         "pr777": "pr-777",
+        "canary_slot": "canary-preview",
         "canary": "pr-999",
         "tag": "tag-v1-2-3",
         "commit": "commit-1ab32d5",
@@ -110,7 +115,7 @@ def test_select_reaps_bare_slug_and_closed_pr_keeps_canary_and_valid() -> None:
     composes = plc.collect_preview_composes(_projects())
     orphans = plc.select_orphans(composes, open_pr_numbers={5})
     reaped = {c.compose_id for c, _ in orphans}
-    # bare `main` orphan + closed pr-777; branch-main, open pr-5, canary pr-999, tag kept.
+    # bare `main` orphan + closed pr-777; branch-main, open pr-5, canary pr-999, canary-preview, tag kept.
     assert reaped == {"mainslug", "pr777"}
 
 
@@ -121,6 +126,7 @@ def test_failsafe_keeps_prs_when_open_set_unknown_but_still_reaps_bare_slug() ->
 
 
 def test_canary_and_valid_kinds_are_never_flagged() -> None:
+    assert plc.orphan_reason("canary-preview", open_pr_numbers=set()) is None
     assert plc.orphan_reason("pr-999", open_pr_numbers=set()) is None
     assert plc.orphan_reason("branch-main", open_pr_numbers=set()) is None
     assert plc.orphan_reason("tag-v1-2-3", open_pr_numbers=set()) is None

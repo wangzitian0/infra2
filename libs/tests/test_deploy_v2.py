@@ -517,9 +517,9 @@ def test_preview_tag_slot_is_dns_safe_and_pulls_tag(calls):
 def test_canary_runs_code_on_the_reserved_slot(calls):
     res = _deploy(deploy_type="canary", version_ref="main")
     assert res.backend == "preview-lifecycle"
-    assert calls["preview"]["kind"] == "pr"
-    assert calls["preview"]["value"] == dv2.CANARY_PR
-    assert res.target.sub_domain == f"report-pr-{dv2.CANARY_PR}"
+    assert calls["preview"]["kind"] == "canary"
+    assert calls["preview"]["value"] == dv2.CANARY_SLOT
+    assert res.target.sub_domain == f"report-{dv2.CANARY_SLOT}"
 
 
 def test_canary_defaults_version_ref_to_main(calls):

@@ -74,6 +74,7 @@ nav:
           - Automation: ssot/platform.automation.md
           - AI (Planned): ssot/platform.ai.md
           - OpenPanel: ssot/platform.openpanel.md
+          - Canary Todo: ssot/platform.canary_todo.md
       - Data:
           - Overview: ssot/db.overview.md
           - Vault Integration: ssot/db.vault-integration.md

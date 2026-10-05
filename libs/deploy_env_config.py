@@ -33,6 +33,7 @@ project/env/compose-name to use) and update the hardcoded literal to the returne
 from __future__ import annotations
 
 import re
+import warnings
 from dataclasses import dataclass, replace
 
 from libs.common import normalize_env_name
@@ -289,11 +290,12 @@ _PR_VALUE_RE = re.compile(r"\A[1-9][0-9]*\Z")  # a positive PR number, no leadin
 _SHA7_RE = re.compile(r"\A[0-9a-f]{7,40}\Z")  # a (lowercased) commit sha, >=7 hex
 _TAG_VALUE_RE = re.compile(r"\Av\d+\.\d+\.\d+\Z")  # a release tag vX.Y.Z
 _BRANCH_VALUE_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")  # a git branch name (e.g. main)
+_CANARY_VALUE_RE = re.compile(r"\A[a-z0-9][a-z0-9_-]*\Z")  # a canary slot name (e.g. preview)
 
 # Every preview kind is <kind>-<value>; there is no bare special case, so any downstream
 # (telemetry label, URL, compose name) parses a slot the same way. `branch` (default main)
 # replaces the old bare `main` so the main-tip preview is report-branch-main.
-PREVIEW_KINDS = ("branch", "pr", "commit", "tag")
+PREVIEW_KINDS = ("branch", "pr", "commit", "tag", "canary")
 
 # The Dokploy ENVIRONMENT name every service's preview stacks live under (kept distinct
 # from staging/prod composes; the lifecycle find-or-creates this environment). Shared
@@ -441,11 +443,28 @@ def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
         return "branch", text
     if kind == "pr":
         text = str(value).strip()
+        if text == str(CANARY_PR):
+            warnings.warn(
+                f"Legacy canary slot pr-{CANARY_PR} mapped to {CANARY_SLOT}. "
+                "Use kind='canary' or CANARY_SLOT.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            return "canary", "preview"
         if not _PR_VALUE_RE.match(text):
             raise ValueError(
                 f"preview pr alias needs a positive PR number, got {value!r}"
             )
         return "pr", text
+    if kind == "canary":
+        text = str(value).strip().lower() if value is not None else ""
+        if not text or text in ("999", "pr-999", "preview", CANARY_SLOT):
+            text = "preview"
+        elif not _CANARY_VALUE_RE.match(text):
+            raise ValueError(
+                f"preview canary alias needs a valid slug, got {value!r}"
+            )
+        return "canary", text
     if kind == "commit":
         text = str(value).strip().lower()
         if not _SHA7_RE.match(text):

@@ -71,6 +71,7 @@
 | [platform.automation.md](./platform.automation.md) | `platform.automation` | Deployer 自动化 |
 | [platform.ai.md](./platform.ai.md) | `platform.ai` | AI 接入、OpenRouter |
 | [platform.openpanel.md](./platform.openpanel.md) | `platform.openpanel` | OpenPanel 产品分析部署 |
+| [platform.canary_todo.md](./platform.canary_todo.md) | `platform.canary_todo` | Canary Todo 平台基建校验工具 |
 
 ---
 
