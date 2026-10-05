@@ -154,7 +154,7 @@ probe runner 一次推送覆盖一组内所有失败探针,整条推送的 sever
 - **payload 契约**(来源 → bridge):labels `severity`、`environment`、`service_id`、`component`、`failure_domain`、
   `probe_kind`;`startsAt` / `endsAt`;annotations `symptom`、`target` / `expected` / `observed`、`description` / `summary`、
   `container` / `compose`、`impact`、`next_step`、`runbook_url`、`log_tail`。SigNoz 规则加 `runbook_url` annotation 即得具体
-  锚点(规则本身归 #906)。值里的 `<` / `>` 转义:值不能 @所有人,也不能伪造链接。
+  锚点(规则本身归 #906)。
 
 ---
 
