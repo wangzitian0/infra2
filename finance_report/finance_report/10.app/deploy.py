@@ -1,7 +1,7 @@
 import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.console import header, success, info, warning
+from libs.console import header, success, info, warning, error
 from libs.service_facets import ProbeFacet, PublicRouteFacet, SecretsFacet, SignalFacet
 from tools.openpanel_clients import openpanel_env
 
@@ -175,14 +175,14 @@ class AppDeployer(Deployer):
             "platform.03.minio.shared"
         )
         if not s3_shared:
-            warning("S3 shared tasks module not loaded; skipping bucket creation")
-            return
+            raise RuntimeError(
+                "S3 shared tasks module (platform.03.s3.shared) not loaded; cannot provision bucket"
+            )
         create_app_bucket = getattr(s3_shared, "create_app_bucket", None)
         if not create_app_bucket:
-            warning(
-                "S3 shared task create_app_bucket not found; skipping bucket creation"
+            raise RuntimeError(
+                "S3 shared task create_app_bucket not found on platform.03.s3.shared; cannot provision bucket"
             )
-            return
 
         secrets = cls.secrets_backend()
         bucket_name = (
@@ -219,8 +219,8 @@ class AppDeployer(Deployer):
         )
 
         if not minio_result:
-            warning("S3 bucket creation failed, please configure manually")
-            return
+            error("S3 bucket creation failed")
+            raise RuntimeError(f"Failed to create S3 bucket '{bucket_name}'")
 
         if not existing_access_key:
             if secrets.set("S3_ACCESS_KEY", minio_result["access_key"]):

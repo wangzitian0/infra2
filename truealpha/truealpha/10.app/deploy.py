@@ -411,14 +411,14 @@ class AppDeployer(Deployer):
             "platform.03.minio.shared"
         )
         if not s3_shared:
-            warning("S3 shared tasks module not loaded; skipping bucket creation")
-            return
+            raise RuntimeError(
+                "S3 shared tasks module (platform.03.s3.shared) not loaded; cannot provision bucket"
+            )
         create_app_bucket = getattr(s3_shared, "create_app_bucket", None)
         if not create_app_bucket:
-            warning(
-                "S3 shared task create_app_bucket not found; skipping bucket creation"
+            raise RuntimeError(
+                "S3 shared task create_app_bucket not found on platform.03.s3.shared; cannot provision bucket"
             )
-            return
 
         secrets = cls.secrets_backend()
         bucket_name = secrets.get("S3_BUCKET") or "truealpha-raw"
@@ -499,8 +499,8 @@ class AppDeployer(Deployer):
             public_download=False,
         )
         if not minio_result:
-            warning("S3 bucket creation failed, please configure manually")
-            return
+            error("S3 bucket creation failed")
+            raise RuntimeError(f"Failed to create S3 bucket '{bucket_name}'")
         cls._ensure_never_expires(c, bucket_name)
 
         for key, value in (

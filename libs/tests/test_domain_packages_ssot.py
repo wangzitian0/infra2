@@ -243,9 +243,10 @@ def test_truealpha_deploy_s3_fails_closed(monkeypatch) -> None:
     import sys
     from unittest.mock import MagicMock
 
-    mock_minio = MagicMock()
-    mock_minio.create_app_bucket = MagicMock()
-    monkeypatch.setitem(sys.modules, "platform.03.minio.shared", mock_minio)
+    mock_s3 = MagicMock()
+    mock_s3.create_app_bucket = MagicMock()
+    monkeypatch.setitem(sys.modules, "platform.03.s3.shared", mock_s3)
+    monkeypatch.delitem(sys.modules, "platform.03.minio.shared", raising=False)
 
     root = Path(__file__).resolve().parents[2]
     deploy_path = root / "truealpha/truealpha/10.app/deploy.py"
@@ -266,9 +267,128 @@ def test_truealpha_deploy_s3_fails_closed(monkeypatch) -> None:
     )
 
     def broken_ensure_bucket(*args, **kwargs):
-        raise ConnectionRefusedError("MinIO connection failed")
+        raise ConnectionRefusedError("S3 connection failed")
 
     monkeypatch.setattr("infra2_sdk.runtime.s3.ensure_bucket", broken_ensure_bucket)
 
     with pytest.raises(RuntimeError, match="unreachable; failing deploy closed"):
-        AppDeployer._ensure_minio_bucket(MagicMock())
+        AppDeployer._ensure_s3_bucket(MagicMock())
+
+
+def test_truealpha_deploy_s3_module_resolution_and_fail_loud(monkeypatch) -> None:
+    """Verify truealpha bucket provisioning fails loud when module is missing and honors aliases."""
+    import importlib.util
+    import sys
+    from unittest.mock import MagicMock
+
+    root = Path(__file__).resolve().parents[2]
+    deploy_path = root / "truealpha/truealpha/10.app/deploy.py"
+    spec = importlib.util.spec_from_file_location("test_ta_deploy_s3_res", deploy_path)
+    assert spec is not None and spec.loader is not None
+    app_deploy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(app_deploy)
+    AppDeployer = app_deploy.AppDeployer
+
+    mock_backend = MagicMock()
+    mock_backend.get.return_value = None  # no existing credentials
+    monkeypatch.setattr(
+        AppDeployer, "secrets_backend", classmethod(lambda cls, env=None: mock_backend)
+    )
+    monkeypatch.setattr(AppDeployer, "_ensure_never_expires", classmethod(lambda cls, c, b: None))
+    monkeypatch.setattr("shutil.which", lambda cmd: "/usr/bin/docker" if cmd == "docker" else None)
+
+    # 1. Missing module raises RuntimeError
+    monkeypatch.delitem(sys.modules, "platform.03.s3.shared", raising=False)
+    monkeypatch.delitem(sys.modules, "platform.03.minio.shared", raising=False)
+    with pytest.raises(RuntimeError, match="S3 shared tasks module .* not loaded"):
+        AppDeployer._ensure_s3_bucket(MagicMock())
+
+    # 2. Module missing create_app_bucket raises RuntimeError
+    mock_empty = MagicMock(spec=[])
+    monkeypatch.setitem(sys.modules, "platform.03.s3.shared", mock_empty)
+    with pytest.raises(RuntimeError, match="S3 shared task create_app_bucket not found"):
+        AppDeployer._ensure_s3_bucket(MagicMock())
+
+    # 3. Canonical platform.03.s3.shared is honored
+    mock_s3 = MagicMock()
+    mock_s3.create_app_bucket.return_value = {"access_key": "k", "secret_key": "s"}
+    monkeypatch.setitem(sys.modules, "platform.03.s3.shared", mock_s3)
+    AppDeployer._ensure_s3_bucket(MagicMock())
+    assert mock_s3.create_app_bucket.called
+
+    # 4. create_app_bucket returning None fails loud
+    mock_s3.create_app_bucket.return_value = None
+    with pytest.raises(RuntimeError, match="Failed to create S3 bucket"):
+        AppDeployer._ensure_s3_bucket(MagicMock())
+
+    # 5. Legacy platform.03.minio.shared fallback is honored when canonical is absent
+    monkeypatch.delitem(sys.modules, "platform.03.s3.shared", raising=False)
+    mock_minio = MagicMock()
+    mock_minio.create_app_bucket.return_value = {"access_key": "k", "secret_key": "s"}
+    monkeypatch.setitem(sys.modules, "platform.03.minio.shared", mock_minio)
+    AppDeployer._ensure_s3_bucket(MagicMock())
+    assert mock_minio.create_app_bucket.called
+
+
+def test_finance_report_deploy_s3_module_resolution_and_fail_loud(monkeypatch) -> None:
+    """Verify finance_report bucket provisioning fails loud when module is missing and honors aliases."""
+    import importlib.util
+    import sys
+    from unittest.mock import MagicMock
+
+    root = Path(__file__).resolve().parents[2]
+    deploy_path = root / "finance_report/finance_report/10.app/deploy.py"
+    spec = importlib.util.spec_from_file_location("test_fr_deploy_s3_res", deploy_path)
+    assert spec is not None and spec.loader is not None
+    app_deploy = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(app_deploy)
+    AppDeployer = app_deploy.AppDeployer
+
+    mock_backend = MagicMock()
+    mock_backend.get.return_value = None  # no existing credentials
+    monkeypatch.setattr(
+        AppDeployer, "secrets_backend", classmethod(lambda cls, env=None: mock_backend)
+    )
+
+    # 1. Missing module raises RuntimeError
+    monkeypatch.delitem(sys.modules, "platform.03.s3.shared", raising=False)
+    monkeypatch.delitem(sys.modules, "platform.03.minio.shared", raising=False)
+    with pytest.raises(RuntimeError, match="S3 shared tasks module .* not loaded"):
+        AppDeployer._ensure_s3_bucket(MagicMock())
+
+    # 2. Module missing create_app_bucket raises RuntimeError
+    mock_empty = MagicMock(spec=[])
+    monkeypatch.setitem(sys.modules, "platform.03.s3.shared", mock_empty)
+    with pytest.raises(RuntimeError, match="S3 shared task create_app_bucket not found"):
+        AppDeployer._ensure_s3_bucket(MagicMock())
+
+    # 3. Canonical platform.03.s3.shared is honored
+    mock_s3 = MagicMock()
+    mock_s3.create_app_bucket.return_value = {"access_key": "k", "secret_key": "s"}
+    monkeypatch.setitem(sys.modules, "platform.03.s3.shared", mock_s3)
+    AppDeployer._ensure_s3_bucket(MagicMock())
+    assert mock_s3.create_app_bucket.called
+
+    # 4. create_app_bucket returning None fails loud
+    mock_s3.create_app_bucket.return_value = None
+    with pytest.raises(RuntimeError, match="Failed to create S3 bucket"):
+        AppDeployer._ensure_s3_bucket(MagicMock())
+
+    # 5. Legacy platform.03.minio.shared fallback is honored when canonical is absent
+    monkeypatch.delitem(sys.modules, "platform.03.s3.shared", raising=False)
+    mock_minio = MagicMock()
+    mock_minio.create_app_bucket.return_value = {"access_key": "k", "secret_key": "s"}
+    monkeypatch.setitem(sys.modules, "platform.03.minio.shared", mock_minio)
+    AppDeployer._ensure_s3_bucket(MagicMock())
+    assert mock_minio.create_app_bucket.called
+
+
+def test_tools_loader_populates_minio_alias() -> None:
+    """Verify tools.loader populates platform.03.minio.shared alias from platform.03.s3.shared."""
+    import sys
+    from tools.loader import ns
+
+    assert "platform.03.s3.shared" in sys.modules
+    assert "platform.03.minio.shared" in sys.modules
+    assert sys.modules["platform.03.minio.shared"] is sys.modules["platform.03.s3.shared"]
+
