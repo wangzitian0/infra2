@@ -371,7 +371,9 @@ def test_probe_redis_authenticated_lifecycle() -> None:
     th = threading.Thread(target=_serve, daemon=True)
     th.start()
     try:
-        res = todo_mod._probe_redis("127.0.0.1", port, password="secret123", timeout=1.0)
+        res = todo_mod._probe_redis(
+            "127.0.0.1", port, password="secret123", timeout=1.0
+        )
         assert res["status"] == "pass"
         assert "PONG & SETEX/GET verified" in res["detail"]
     finally:
@@ -423,8 +425,10 @@ def test_todo_traefik_dual_router_auth_contract() -> None:
         "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.rule"
     )
     assert public_rule is not None
-    assert "/api/health" in public_rule
-    assert "/api/canary/status" in public_rule
+    assert "PathPrefix(`/api/health`)" in public_rule
+    assert "PathPrefix(`/api/canary/status`)" in public_rule
+    assert " || " in public_rule
+    assert "PathPrefix(`/api/health`, `/api/canary/status`)" not in public_rule
     assert (
         labels_dict.get(
             "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.priority"
@@ -530,10 +534,26 @@ def test_todo_app_authentik_identity_and_me_endpoint() -> None:
             assert "<script>alert('xss')</script>" not in html_xss
             assert "&lt;script&gt;" in html_xss
 
-        # HTTP HEAD requests supported without 501 error
-        head_req = urllib.request.Request(f"http://127.0.0.1:{port}/api/health", method="HEAD")
+        # HTTP HEAD requests supported without 501 error and return no body
+        head_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/health",
+            method="HEAD",
+        )
         with urllib.request.urlopen(head_req, timeout=3) as resp:
             assert resp.getcode() == 200
+            assert resp.headers.get("Content-Type") == "application/json"
+            assert "HEAD" in (resp.headers.get("Access-Control-Allow-Methods") or "")
+            assert resp.read() == b""
+
+        # HEAD request on HTML UI root returns headers but no body
+        head_ui_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/",
+            method="HEAD",
+        )
+        with urllib.request.urlopen(head_ui_req, timeout=3) as resp:
+            assert resp.getcode() == 200
+            assert "text/html" in (resp.headers.get("Content-Type") or "")
+            assert "HEAD" in (resp.headers.get("Access-Control-Allow-Methods") or "")
             assert resp.read() == b""
     finally:
         server.shutdown()
@@ -553,7 +573,9 @@ def test_portal_config_template_contains_canary_todo() -> None:
         if group.get("name") == "Platform Services":
             platform_services = group
             break
-    assert platform_services is not None, "Platform Services section not found in Homer config"
+    assert platform_services is not None, (
+        "Platform Services section not found in Homer config"
+    )
 
     todo_item = None
     for item in platform_services.get("items", []):
@@ -563,4 +585,3 @@ def test_portal_config_template_contains_canary_todo() -> None:
     assert todo_item is not None, "Canary Todo item not found in Homer config"
     assert todo_item["url"] == "https://todo{{ENV_DOMAIN_SUFFIX}}.{{INTERNAL_DOMAIN}}"
     assert todo_item["tag"] == "canary"
-
