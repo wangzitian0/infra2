@@ -150,9 +150,12 @@ services:
       # WATCHER plugin, since the watchers run inside the same loop (#543;
       # closes #163's sidecar gap: the old breakdown/guard sidecars had no
       # healthcheck at all). A hung runner goes unhealthy -> Dokploy restart.
+      # The state file lives on the `probe-state` volume (#960), so a recreated
+      # container inherits the previous file's mtime: the check stays red until
+      # the new loop's first touch, which start_period below covers.
       test:
         - CMD-SHELL
-        - "find /tmp/infra_probe_runner_state.json -mmin -2 | grep -q . || exit 1"
+        - "find /var/lib/infra-probe-state/infra_probe_runner_state.json -mmin -2 | grep -q . || exit 1"
       interval: 60s
       timeout: 5s
       retries: 3
@@ -176,7 +179,13 @@ services:
       # misconfigured lane after this many failed runs spanning this long.
       INFRA_PROBE_NEVER_GREEN_ESCALATION_FAILURES: ${INFRA_PROBE_NEVER_GREEN_ESCALATION_FAILURES:-3}
       INFRA_PROBE_NEVER_GREEN_ESCALATION_SECONDS: ${INFRA_PROBE_NEVER_GREEN_ESCALATION_SECONDS:-900}
-      INFRA_PROBE_STATE_FILE: /tmp/infra_probe_runner_state.json
+      # #960: runner state (`paged` / `failing_since`, debounce counters,
+      # `last_delivery_ok_at`, `ever_succeeded`) MUST survive container
+      # recreation — a deploy is exactly when a transient failure is paged, and a
+      # recreated runner with empty state never sends that page's RESOLVED. Both
+      # state files therefore live on the `probe-state` named volume, never /tmp
+      # (libs/tests/test_resident_watchers.py guards this).
+      INFRA_PROBE_STATE_FILE: /var/lib/infra-probe-state/infra_probe_runner_state.json
       # #904: per-signal daily ok/fail counts (libs/observability/local_ledger.py),
       # on a host directory so they survive redeploys; the weekly stability report
       # reads it over SSH at libs.observability.local_ledger.host_ledger_path().
@@ -185,7 +194,7 @@ services:
       INFRA_PROBE_HEARTBEAT_TOKEN: ${INFRA_PROBE_HEARTBEAT_TOKEN:-}
       INFRA_PROBE_HEARTBEAT_ENV: ${ENV:-production}
       INFRA_PROBE_HEARTBEAT_NAME: platform-alerting-probes${ENV_SUFFIX}
-      OBS_ROUNDTRIP_STATE_FILE: /tmp/observability_roundtrip_probe_state.json
+      OBS_ROUNDTRIP_STATE_FILE: /var/lib/infra-probe-state/observability_roundtrip_probe_state.json
       OBS_ROUNDTRIP_INTERVAL_SECONDS: ${OBS_ROUNDTRIP_INTERVAL_SECONDS:-300}
       OBS_ROUNDTRIP_QUERY_WAIT_SECONDS: ${OBS_ROUNDTRIP_QUERY_WAIT_SECONDS:-30}
       # Registry-rendered (#541): the probe set is DECLARED as ProbeFacet
@@ -245,6 +254,11 @@ services:
       - /var/lib/infra2-disk-probe:/hostfs:ro
       # The availability ledger (#904): one host directory per environment.
       - /var/lib/infra2-availability-ledger${ENV_SUFFIX}:/var/lib/infra2-availability-ledger
+      # Runner state (#960): a named volume scoped to this compose project, so
+      # staging and production never share it, and it survives container
+      # recreation (deploys). Kept apart from the ledger dir: different owner,
+      # different lifecycle (the ledger is read over SSH by the weekly report).
+      - probe-state:/var/lib/infra-probe-state
     networks:
       - dokploy-network
     logging:
@@ -261,6 +275,10 @@ volumes:
       type: tmpfs
       device: tmpfs
       o: "size=10m,mode=0755"
+  # Default local driver = persistent across `docker compose up` recreation.
+  # Do NOT give it tmpfs driver_opts like `secrets`: that would empty it on
+  # recreation, which is the #960 failure this volume exists to prevent.
+  probe-state:
 
 networks:
   dokploy-network:

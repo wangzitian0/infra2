@@ -12,7 +12,7 @@ topology (one sidecar, no separate watcher services).
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml
 
@@ -330,6 +330,111 @@ def test_compose_has_single_resident_sidecar_with_watcher_env() -> None:
     assert runner["cpu_shares"] == 512
     # the functional healthcheck (state-file freshness) survives the merge
     assert "infra_probe_runner_state.json" in runner["healthcheck"]["test"][1]
+
+
+# ---------------------------------------------------------------------------
+# #960: runner state must survive container recreation
+
+
+def _persistent_writable_mounts(service: dict, top_level_volumes: dict) -> list[str]:
+    """Container paths of ``service``'s mounts whose bytes outlive the container.
+
+    Persistent = writable AND backed by either a declared top-level named volume
+    that is not tmpfs-backed, or a host bind mount. A tmpfs volume (like
+    `secrets`) is declared but is emptied on recreation, so it does not count;
+    neither does a read-only mount (the runner could not write state to it).
+    """
+    mounts: list[str] = []
+    for entry in service.get("volumes", []):
+        assert isinstance(entry, str), f"long-form volume not handled: {entry!r}"
+        parts = entry.split(":")
+        assert len(parts) >= 2, f"anonymous volume cannot persist state: {entry!r}"
+        source, target = parts[0], parts[1]
+        if "ro" in parts[2:]:
+            continue
+        if source.startswith(("/", "./", "../")):
+            mounts.append(target)  # host bind mount
+            continue
+        declared = top_level_volumes.get(source)
+        if source not in top_level_volumes:
+            continue  # undeclared named volume: compose would reject it anyway
+        driver_opts = (declared or {}).get("driver_opts") or {}
+        if "tmpfs" in (driver_opts.get("type"), driver_opts.get("device")):
+            continue
+        mounts.append(target)
+    return mounts
+
+
+def _state_file_violations(service: dict, top_level_volumes: dict) -> list[str]:
+    """Every ``*_STATE_FILE`` env var of ``service`` not under a persistent mount."""
+    mounts = _persistent_writable_mounts(service, top_level_volumes)
+    violations: list[str] = []
+    for key, value in sorted(service.get("environment", {}).items()):
+        if not key.endswith("_STATE_FILE"):
+            continue
+        path = str(value)
+        if not path.startswith("/") or "$" in path:
+            violations.append(f"{key}={path!r} is not a literal absolute path")
+        elif not any(PurePosixPath(path).is_relative_to(m) for m in mounts):
+            violations.append(
+                f"{key}={path} is outside every persistent mount {mounts}"
+            )
+    return violations
+
+
+def test_probe_runner_state_files_live_on_a_persistent_volume() -> None:
+    """#960: a P0 paged at 05:00Z was never RESOLVED because the runner's state
+    files sat in the container's /tmp and the 05:03Z recreation started a new
+    runner with empty `paged` / `failing_since` state. Every state file of the
+    probes service must resolve under a writable, non-tmpfs mount of that same
+    service, and the healthcheck must watch the same file the loop touches."""
+    compose = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
+    runner = compose["services"]["infra-probe-runner"]
+    env = runner["environment"]
+
+    state_files = {k: v for k, v in env.items() if k.endswith("_STATE_FILE")}
+    # not vacuous: both known state files are present, so renaming one away
+    # (or dropping the env var and falling back to the /tmp default) fails here
+    assert set(state_files) == {"INFRA_PROBE_STATE_FILE", "OBS_ROUNDTRIP_STATE_FILE"}
+
+    assert _state_file_violations(runner, compose.get("volumes") or {}) == []
+
+    runner_state = state_files["INFRA_PROBE_STATE_FILE"]
+    assert runner_state in runner["healthcheck"]["test"][-1], (
+        "healthcheck must check the file the loop actually touches"
+    )
+
+
+def test_state_file_guard_detects_ephemeral_state() -> None:
+    """Self-check, so the guard above is not a vacuous pass: /tmp, a tmpfs
+    volume, a read-only mount, and an undeclared volume are all violations."""
+    declared = {
+        "state": None,
+        "secrets": {"driver_opts": {"type": "tmpfs", "device": "tmpfs"}},
+    }
+
+    def service(path: str, *mounts: str) -> dict:
+        return {"environment": {"X_STATE_FILE": path}, "volumes": list(mounts)}
+
+    ok = service("/var/lib/s/x.json", "state:/var/lib/s")
+    assert _state_file_violations(ok, declared) == []
+    assert (
+        _state_file_violations(
+            service("/var/lib/s/x.json", "/srv/s:/var/lib/s"), declared
+        )
+        == []
+    )  # a host bind mount persists too
+
+    for bad in (
+        service("/tmp/x.json", "state:/var/lib/s"),  # container /tmp
+        service("/var/lib/s/x.json", "secrets:/var/lib/s"),  # tmpfs volume
+        service("/var/lib/s/x.json", "state:/var/lib/s:ro"),  # read-only
+        service("/var/lib/s/x.json", "other:/var/lib/s"),  # not declared
+        service("/var/lib/sibling/x.json", "state:/var/lib/s"),  # prefix sibling
+        service("/var/lib/s/x.json"),  # no mount at all
+        service("${STATE_DIR}/x.json", "state:/var/lib/s"),  # unresolvable
+    ):
+        assert _state_file_violations(bad, declared), bad
 
 
 def test_deleted_sidecar_tools_stay_deleted() -> None:

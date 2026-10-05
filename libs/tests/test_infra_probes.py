@@ -2480,6 +2480,65 @@ def test_a_resolve_names_each_recovered_probe_and_how_long_it_was_down(
     assert "redis" not in blob
 
 
+def test_a_page_is_resolved_by_a_runner_recreated_while_it_was_open(
+    monkeypatch, tmp_path
+) -> None:
+    """#960: a P0 paged at 05:00Z was never RESOLVED because the container was
+    recreated at 05:03Z and the new runner started with empty state. With the state
+    file on storage that survives recreation, the new runner must close the page
+    (with the old runner's first-failure time); on empty state it never does."""
+    monkeypatch.setenv(
+        "INFRA_PROBE_SPECS",
+        "vault-http|http|http://vault:8200/v1/sys/health|200|critical|5||platform/vault",
+    )
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    clock = _Clock(1_790_236_800.0)  # 2026-09-24 08:00 UTC
+
+    def start_runner(state_path: Path):
+        """A container (re)creation: a fresh runner process over ``state_path``."""
+        runner, posted, _beats, script, _bridge = _scripted_runner(
+            monkeypatch, clock=clock
+        )
+
+        def loop() -> None:
+            runner.run_once(
+                state_path=state_path, failure_threshold=3, recovery_threshold=2
+            )
+            clock.now += 60
+
+        return posted, script, loop
+
+    # The volume directory does not exist before the first start (empty volume
+    # mount point is created by compose; here it is created by the runner).
+    volume_state = tmp_path / "probe-state" / "infra_probe_runner_state.json"
+    old_posted, old_script, old_loop = start_runner(volume_state)
+    old_script["results"] = {"vault-http": "503:sealed"}
+    for _ in range(3):
+        old_loop()
+    assert [p["status"] for p in old_posted] == ["firing"]
+    assert volume_state.is_file()
+
+    # Recreated at 08:03 with the volume (and so the state file) intact.
+    new_posted, new_script, new_loop = start_runner(volume_state)
+    new_script["results"] = {}
+    new_loop()  # first healthy loop: recovery 1/2, page still open
+    new_loop()  # second: resolved
+    assert [p["status"] for p in new_posted] == ["resolved"]
+    (resolved_alert,) = new_posted[0]["alerts"]
+    assert resolved_alert["labels"]["component"] == "vault-http"
+    assert resolved_alert["startsAt"] == "2026-09-24T08:00:00Z"  # the old failure
+    assert resolved_alert["endsAt"] == "2026-09-24T08:04:00Z"
+
+    # Control, the pre-#960 shape: the same recreation onto EMPTY state (the old
+    # container /tmp) never resolves the page the old runner sent.
+    lost_state = tmp_path / "container-tmp" / "infra_probe_runner_state.json"
+    lost_posted, lost_script, lost_loop = start_runner(lost_state)
+    lost_script["results"] = {}
+    for _ in range(4):
+        lost_loop()
+    assert lost_posted == []
+
+
 def test_a_page_carries_the_probe_target_and_expectation(monkeypatch) -> None:
     """#905: the card's 现象 needs the target and the expectation next to the reading."""
     monkeypatch.setenv("INFRA_ENVIRONMENT", "production")
