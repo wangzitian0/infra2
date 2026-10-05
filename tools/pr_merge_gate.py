@@ -51,6 +51,22 @@ ROOT = Path(__file__).resolve().parent.parent
 # A field `gh` was asked for and did not return, distinct from one never asked for.
 ABSENT = "ABSENT"
 DEFAULT_REPO = "wangzitian0/infra2"
+
+
+def _repo_slug(repo: str) -> str:
+    """Normalize 'owner/name' or git remote URL into 'owner/name'."""
+    repo = repo.removesuffix(".git").strip()
+    if "/" in repo:
+        parts = repo.split("/")
+        return f"{parts[-2]}/{parts[-1]}"
+    return repo
+
+
+def _is_local_root_repo(repo: str) -> bool:
+    """True when `repo` is the repository rooted at `ROOT` (infra2)."""
+    return _repo_slug(repo).lower() == _repo_slug(DEFAULT_REPO).lower()
+
+
 QUIET_MINUTES = 12
 SETTLE_MINUTES = 3  # event policy: after the review of the head, not after the push
 # GitHub's Copilot pull-request reviewer (a global bot id, the same in every repository).
@@ -679,6 +695,7 @@ class HeadFacts:
     # AGENTS.md's weighted total; see SEVERITY_WEIGHTS.
     unresolved_weight: float = 0.0
     review_threads_total: int = 0
+    repo: str = DEFAULT_REPO
     node_id: str = ""
     # GitHub's own merge computation. "UNKNOWN" means GitHub is still computing
     # a test merge and the caller should re-poll. ABSENT means `gh` was asked
@@ -1064,7 +1081,8 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
     )
     changed = tuple(str(f["path"]) for f in view.get("files") or [])
     # Two API reads per provable file, so only for an open pull request that actually
-    # touches one. A closed one is being audited, not merged.
+    # touches one. A closed one is being audited, not merged. External app repos
+    # (e.g. truealpha) do not share infra2's self-governing rule closure.
     proven = (
         _proven_tighter(
             repo,
@@ -1073,15 +1091,16 @@ def collect(number: int, *, repo: str = DEFAULT_REPO, gh: Runner = _gh) -> HeadF
             changed,
             gh=gh,
         )
-        if str(view.get("state") or "") == "OPEN"
+        if (str(view.get("state") or "") == "OPEN" and _is_local_root_repo(repo))
         else ()
     )
     drift = (
         _working_tree_rule_drift(repo, str(view.get("baseRefName") or ""), gh=gh)
-        if str(view.get("state") or "") == "OPEN"
+        if (str(view.get("state") or "") == "OPEN" and _is_local_root_repo(repo))
         else ()
     )
     return HeadFacts(
+        repo=repo,
         rule_drift=drift,
         number=int(view["number"]),
         state=str(view.get("state") or ""),
@@ -1285,105 +1304,108 @@ def evaluate(
             "list, so neither can be trusted here"
         )
         owner = True
-    if facts.rule_drift:
-        # Before asking what this pull request changes, ask whether the rules doing
-        # the asking are the merged ones. They are read from the working tree, so a
-        # checkout on another branch -- or with an uncommitted edit -- judges every
-        # pull request by a law nobody has enacted.
-        reasons.append(
-            f"the working tree's copy of the merge rules is not "
-            f"{facts.base}'s ({', '.join(facts.rule_drift)}): every verdict here "
-            f"would be issued under rules that are not merged — check out {facts.base} "
-            f"cleanly and re-run, or land those changes first"
-        )
-        owner = True
-
-    quoted_instruction = _owner_instruction_quoted(facts.body)
-    # Membership test is `is_self_governing`, not `f in self_governing_files()`:
-    # the latter is computed from the current tree, so a deleted or renamed
-    # workflow path escapes it (#818). The citation carve-out below is
-    # independent of that fix -- it excuses RULE_TEXT_FILES specifically, not
-    # workflow paths, so the two compose without touching each other's cases.
-    governing = sorted(f for f in facts.files if is_self_governing(f))
-    unproven = [
-        f
-        for f in governing
-        if f not in facts.proven_tighter
-        # RULE_TEXT_FILES get a second way to clear this check: a cited owner
-        # instruction in the PR body, verifiable by `_owner_instruction_quoted`
-        # rather than merely claimed. Everything else in the closure has no such
-        # carve-out -- see the comment above `_OWNER_INSTRUCTION_HEADER_RE`.
-        and not (f in RULE_TEXT_FILES and quoted_instruction)
-    ]
-    if unproven:
-        # Proven-tighter files are excluded, not the whole check: a PR that tightens the
-        # inventory and edits the gate's Python still needs the owner for the Python.
-        reasons.append(
-            f"changes what decides merges ({', '.join(unproven)}) without a mechanical "
-            f"proof that the change can only make this gate say no more often: the "
-            f"working-tree copy is what judged this PR, so owner approval of head "
-            f"{facts.head_sha[:7]} is required"
-        )
-        if any(f in RULE_TEXT_FILES for f in unproven):
+    if _is_local_root_repo(facts.repo):
+        if facts.rule_drift:
+            # Before asking what this pull request changes, ask whether the rules doing
+            # the asking are the merged ones. They are read from the working tree, so a
+            # checkout on another branch -- or with an uncommitted edit -- judges every
+            # pull request by a law nobody has enacted.
             reasons.append(
-                "rule-text files (AGENTS.md / docs/ssot/ops.merge-gate.md) can clear "
-                "this instead by citing the owner instruction that authorised the "
-                "edit in the PR body, under a heading matching 'owner instruction' / "
-                "'owner 指示' followed by a quoted line (`> ...` or 「...」)"
+                f"the working tree's copy of the merge rules is not "
+                f"{facts.base}'s ({', '.join(facts.rule_drift)}): every verdict here "
+                f"would be issued under rules that are not merged — check out {facts.base} "
+                f"cleanly and re-run, or land those changes first"
             )
-        owner = True
-    if not _declared_deploy_globs()[1]:
-        reasons.append(
-            "cannot read .github/workflows to determine which paths deploy on "
-            "merge: fix the read rather than merging on an unknown"
-        )
-        # exit 1 means "not yet"; a poller retries it forever. Not knowing
-        # whether a merge deploys is precisely the case that must escalate.
-        owner = True
-    fired = {f: _deploy_triggering(f) for f in facts.files}
-    deploying = sorted(f for f, w in fired.items() if w)
-    if deploying:
-        workflows = sorted({fired[f] for f in deploying if fired[f] != "on merge"})
-        via = f" via {', '.join(workflows)}" if workflows else ""
-        reasons.append(
-            f"merging would trigger a deploy{via} ({', '.join(deploying)}): owner "
-            f"approval of head {facts.head_sha[:7]} required"
-        )
-        owner = True
+            owner = True
+
+        quoted_instruction = _owner_instruction_quoted(facts.body)
+        # Membership test is `is_self_governing`, not `f in self_governing_files()`:
+        # the latter is computed from the current tree, so a deleted or renamed
+        # workflow path escapes it (#818). The citation carve-out below is
+        # independent of that fix -- it excuses RULE_TEXT_FILES specifically, not
+        # workflow paths, so the two compose without touching each other's cases.
+        governing = sorted(f for f in facts.files if is_self_governing(f))
+        unproven = [
+            f
+            for f in governing
+            if f not in facts.proven_tighter
+            # RULE_TEXT_FILES get a second way to clear this check: a cited owner
+            # instruction in the PR body, verifiable by `_owner_instruction_quoted`
+            # rather than merely claimed. Everything else in the closure has no such
+            # carve-out -- see the comment above `_OWNER_INSTRUCTION_HEADER_RE`.
+            and not (f in RULE_TEXT_FILES and quoted_instruction)
+        ]
+        if unproven:
+            # Proven-tighter files are excluded, not the whole check: a PR that tightens the
+            # inventory and edits the gate's Python still needs the owner for the Python.
+            reasons.append(
+                f"changes what decides merges ({', '.join(unproven)}) without a mechanical "
+                f"proof that the change can only make this gate say no more often: the "
+                f"working-tree copy is what judged this PR, so owner approval of head "
+                f"{facts.head_sha[:7]} is required"
+            )
+            if any(f in RULE_TEXT_FILES for f in unproven):
+                reasons.append(
+                    "rule-text files (AGENTS.md / docs/ssot/ops.merge-gate.md) can clear "
+                    "this instead by citing the owner instruction that authorised the "
+                    "edit in the PR body, under a heading matching 'owner instruction' / "
+                    "'owner 指示' followed by a quoted line (`> ...` or 「...」)"
+                )
+            owner = True
+        if not _declared_deploy_globs()[1]:
+            reasons.append(
+                "cannot read .github/workflows to determine which paths deploy on "
+                "merge: fix the read rather than merging on an unknown"
+            )
+            # exit 1 means "not yet"; a poller retries it forever. Not knowing
+            # whether a merge deploys is precisely the case that must escalate.
+            owner = True
+        fired = {f: _deploy_triggering(f) for f in facts.files}
+        deploying = sorted(f for f, w in fired.items() if w)
+        if deploying:
+            workflows = sorted({fired[f] for f in deploying if fired[f] != "on merge"})
+            via = f" via {', '.join(workflows)}" if workflows else ""
+            reasons.append(
+                f"merging would trigger a deploy{via} ({', '.join(deploying)}): owner "
+                f"approval of head {facts.head_sha[:7]} required"
+            )
+            owner = True
+
+        required, inventory_read = _required_checks()
+        if not inventory_read:
+            reasons.append(
+                "cannot read docs/ssot/ci-gate-inventory.yaml: the required-check "
+                "list is unavailable, so a gate that never ran cannot be noticed"
+            )
+        reported = {name for name, _ in facts.checks}
+        missing = sorted(required - reported)
+        if missing:
+            reasons.append(f"required check(s) never reported: {', '.join(missing)}")
+        # `skipping` is the designed state for a docs-only PR, and blocking on it
+        # outright made those permanently unmergeable. But the gate still has to
+        # tell 适用 from 意外 skipped, and the workflow's own answer cannot be
+        # trusted for it: infra-ci computes has_non_doc from `git diff` against the
+        # base, so a rewritten base yields a wrong file list, emits
+        # has_non_doc=false, and reports Detect Non-Doc Changes GREEN while every
+        # required gate skips. GitHub's own file list for the PR is independent of
+        # that computation, so it is what decides here.
+        if any(not f.endswith(".md") for f in facts.files):
+            skipped = sorted(
+                name
+                for name, verdict in facts.checks
+                if name in required and verdict in ("skipping", "SKIPPED")
+            )
+            if skipped:
+                reasons.append(
+                    f"required check(s) skipped although this PR changes non-Markdown "
+                    f"files: {', '.join(skipped)}"
+                )
+
     not_green = sorted(
         name
         for name, verdict in facts.checks
         if verdict not in GREEN_BUCKETS and verdict not in GREEN_STATES
     )
-    required, inventory_read = _required_checks()
-    if not inventory_read:
-        reasons.append(
-            "cannot read docs/ssot/ci-gate-inventory.yaml: the required-check "
-            "list is unavailable, so a gate that never ran cannot be noticed"
-        )
-    reported = {name for name, _ in facts.checks}
-    missing = sorted(required - reported)
-    if missing:
-        reasons.append(f"required check(s) never reported: {', '.join(missing)}")
-    # `skipping` is the designed state for a docs-only PR, and blocking on it
-    # outright made those permanently unmergeable. But the gate still has to
-    # tell 适用 from 意外 skipped, and the workflow's own answer cannot be
-    # trusted for it: infra-ci computes has_non_doc from `git diff` against the
-    # base, so a rewritten base yields a wrong file list, emits
-    # has_non_doc=false, and reports Detect Non-Doc Changes GREEN while every
-    # required gate skips. GitHub's own file list for the PR is independent of
-    # that computation, so it is what decides here.
-    if any(not f.endswith(".md") for f in facts.files):
-        skipped = sorted(
-            name
-            for name, verdict in facts.checks
-            if name in required and verdict in ("skipping", "SKIPPED")
-        )
-        if skipped:
-            reasons.append(
-                f"required check(s) skipped although this PR changes non-Markdown "
-                f"files: {', '.join(skipped)}"
-            )
     if not facts.checks:
         reasons.append("no checks reported yet")
     if not_green:
