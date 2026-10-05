@@ -733,70 +733,24 @@ class Deployer:
     def ensure_compose_domains(
         cls, client: DokployClient, compose_id: str, e: dict[str, str]
     ) -> dict:
-        """Ensure Dokploy-managed domains are configured BEFORE compose deployment.
+        """Ensure Dokploy-managed domains are configured BEFORE compose deployment."""
+        from libs.deploy.dokploy_adapter import (
+            ensure_compose_domains as _ensure_domains,
+        )
 
-        Configuring domains before running ``_deploy_compose_with_record_check`` ensures
-        Dokploy includes the domain routing in the compose startup in a single pass,
-        eliminating the redundant second redeploy.
-        """
-        route_pref = getattr(cls, "route_preference", None)
-        if route_pref is not None:
-            from dataclasses import asdict
-            from infra2_sdk.routing import resolve_dokploy_domains
-
-            domain = e.get("INTERNAL_DOMAIN")
-            if not domain:
-                warning("Domain configuration skipped: INTERNAL_DOMAIN missing")
-                return {"created": 0, "skipped": 0, "conflicts": [], "errors": []}
-
-            effective_env = e.get("ENV", "production")
-            specs = resolve_dokploy_domains(
-                route_pref, tier=effective_env, base_domain=domain
-            )
-            desired_domains = [asdict(s) for s in specs]
-            if desired_domains:
-                for d in desired_domains:
-                    info(f"Ensuring domain: https://{d['host']}{d.get('path', '')}")
-                result = client.ensure_domains(
-                    compose_id=compose_id,
-                    desired_domains=desired_domains,
-                )
-                if result.get("created", 0) > 0:
-                    success(f"Configured {result['created']} domain(s) in Dokploy")
-                if result.get("conflicts"):
-                    for c in result["conflicts"]:
-                        warning(
-                            f"Domain conflict: {c['host']} exists with port {c['existing_port']}, need {c['desired_port']}"
-                        )
-                return result
-
-        if cls.subdomain and cls.service_port:
-            domain_host = service_domain(cls.subdomain, e)
-            if not domain_host:
-                warning("Domain configuration skipped: INTERNAL_DOMAIN missing")
-                return {"created": 0, "skipped": 0, "conflicts": [], "errors": []}
-
-            info(f"Ensuring domain: {domain_host}")
-            desired_domains = [
-                {"host": domain_host, "port": cls.service_port, "https": True}
-            ]
-            result = client.ensure_domains(
-                compose_id=compose_id,
-                desired_domains=desired_domains,
-                service_name=cls.service_name,
-            )
-            if result.get("created", 0) > 0:
-                success(f"Domain configured: https://{domain_host}")
-            elif result.get("skipped", 0) > 0:
-                info(f"Domain already configured: {domain_host}")
-            if result.get("conflicts"):
-                for c in result["conflicts"]:
-                    warning(
-                        f"Domain conflict: {c['host']} exists with port {c['existing_port']}, need {c['desired_port']}"
-                    )
-            return result
-
-        return {"created": 0, "skipped": 0, "conflicts": [], "errors": []}
+        return _ensure_domains(
+            client,
+            compose_id,
+            env=e,
+            route_pref=getattr(cls, "route_preference", None),
+            subdomain=cls.subdomain,
+            service_port=cls.service_port,
+            service_name=cls.service_name,
+            service_domain_fn=service_domain,
+            log_info=info,
+            log_warning=warning,
+            log_success=success,
+        )
 
     @classmethod
     def _checkout_ref(cls) -> str | None:
@@ -1060,91 +1014,46 @@ class Deployer:
         interval_seconds: int | None = None,
     ) -> None:
         """Trigger deploy and fail fast if Dokploy does not record runtime work."""
-        timeout = cls._resolve_record_timeout(timeout_seconds)
-        interval = cls._resolve_record_interval(interval_seconds)
-
-        before_ids = cls._deployment_ids(
-            cls._get_compose_deployments(client, compose_id)
+        from libs.deploy_queue import deployment_start_epoch
+        from libs.deploy.dokploy_adapter import (
+            deploy_compose_with_record_check as _deploy_check,
         )
-        # infra2#525: captured immediately before triggering so
-        # _wait_for_new_deployment_record can rule out a "new" record that started
-        # before we even called deploy_compose (see min_started_at below) — it cannot
-        # be the record OUR call produced.
-        trigger_epoch = time.time()
-        client.deploy_compose(compose_id)
-        if cls._wait_for_new_deployment_record(
+
+        _deploy_check(
             client,
             compose_id,
-            before_ids,
-            timeout,
-            interval,
-            min_started_at=trigger_epoch,
-        ):
-            return
-
-        warning(
-            "Dokploy deploy did not produce a new deployment record; retrying with compose.redeploy"
-        )
-        before_ids = cls._deployment_ids(
-            cls._get_compose_deployments(client, compose_id)
-        )
-        trigger_epoch = time.time()
-        client.redeploy_compose(compose_id)
-        if cls._wait_for_new_deployment_record(
-            client,
-            compose_id,
-            before_ids,
-            timeout,
-            interval,
-            min_started_at=trigger_epoch,
-        ):
-            return
-
-        raise RuntimeError(
-            "Dokploy deploy/redeploy did not produce a new deployment record; "
-            "runtime may still be running stale code"
+            timeout_seconds=cls._resolve_record_timeout(timeout_seconds),
+            interval_seconds=cls._resolve_record_interval(interval_seconds),
+            wait_fn=lambda c, cid, prev, to, iv, min_s: cls._wait_for_new_deployment_record(
+                c, cid, prev, to, iv, min_started_at=min_s
+            ),
+            start_epoch_fn=deployment_start_epoch,
+            log_warning=warning,
         )
 
     @staticmethod
     def _deployment_ids(deployments: list[dict]) -> set[str]:
-        return {
-            str(deployment.get("deploymentId") or deployment.get("id") or "")
-            for deployment in deployments
-            if deployment.get("deploymentId") or deployment.get("id")
-        }
+        from libs.deploy.dokploy_adapter import deployment_ids
+
+        return deployment_ids(deployments)
 
     @staticmethod
     def _get_compose_deployments(client: Any, compose_id: str) -> list[dict]:
-        get_compose_deployments = getattr(client, "get_compose_deployments", None)
-        if callable(get_compose_deployments):
-            try:
-                deployments = get_compose_deployments(compose_id)
-            except Exception:  # noqa: BLE001 - keep compose snapshot as compatibility fallback.
-                deployments = client.get_compose(compose_id).get("deployments")
-        else:
-            deployments = client.get_compose(compose_id).get("deployments")
-        return (
-            [deployment for deployment in deployments if isinstance(deployment, dict)]
-            if isinstance(deployments, list)
-            else []
-        )
+        from libs.deploy.dokploy_adapter import get_compose_deployments
+
+        return get_compose_deployments(client, compose_id)
 
     @staticmethod
     def _started_before_trigger(deployment: dict, floor_epoch: float) -> bool:
-        """True if `deployment` has a parseable start timestamp clearly before
-        `floor_epoch` (beyond the clock-skew tolerance) — i.e. it cannot be the record
-        produced by OUR OWN deploy/redeploy_compose() call, since it started before we
-        even called it (infra2#525 finding 2). A record with no parseable
-        startedAt/createdAt/updatedAt is AMBIGUOUS, not excluded — this is only ever
-        used to rule a record OUT, never to rule one in, so an unparseable timestamp
-        preserves prior (pre-infra2#525) behavior rather than a new false-negative.
-        """
         from libs.deploy_queue import deployment_start_epoch
+        from libs.deploy.dokploy_adapter import started_before_trigger
 
-        started = deployment_start_epoch(deployment)
-        if started is None:
-            return False
-        return started < floor_epoch - _CLOCK_SKEW_TOLERANCE_SECONDS
+        return started_before_trigger(
+            deployment,
+            floor_epoch,
+            start_epoch_fn=deployment_start_epoch,
+            clock_skew_tolerance=_CLOCK_SKEW_TOLERANCE_SECONDS,
+        )
 
     _TERMINAL_SUCCESS_STATUSES = frozenset({"done", "success", "successful"})
 
@@ -1159,52 +1068,19 @@ class Deployer:
         *,
         min_started_at: float | None = None,
     ) -> bool:
-        """Wait for the record OUR trigger produced to reach a terminal status.
+        from libs.deploy_queue import deployment_start_epoch
+        from libs.deploy.dokploy_adapter import wait_for_new_deployment_record
 
-        True when it finished successfully; False when no record of ours appeared within
-        the deadline (the caller may re-trigger); raises when it entered ``error`` or is
-        still in progress at the deadline. ``running`` is not a result (#629): on
-        2026-09-07 the release lane went red 45–200 s before Dokploy had even created the
-        record, while the deploy went on and the redeploy fallback queued a second one. A
-        record that exists is therefore never re-triggered.
-        """
-        deadline = time.monotonic() + max(0, timeout_seconds)
-        in_progress: tuple[str, str] | None = None
-        while True:
-            deployments = cls._get_compose_deployments(client, compose_id)
-            current_ids = cls._deployment_ids(deployments)
-            new_ids = current_ids - previous_ids
-            if new_ids and isinstance(deployments, list):
-                for deployment in deployments:
-                    deployment_id = str(
-                        deployment.get("deploymentId") or deployment.get("id") or ""
-                    )
-                    if deployment_id not in new_ids:
-                        continue
-                    if min_started_at is not None and cls._started_before_trigger(
-                        deployment, min_started_at
-                    ):
-                        # infra2#525: a "new" record whose own timestamp predates when
-                        # WE called deploy/redeploy_compose cannot be the record our
-                        # call produced — it belongs to a different, unrelated
-                        # trigger. Skip it rather than reporting its status as ours.
-                        continue
-                    status = str(deployment.get("status") or "").lower()
-                    if status == "error":
-                        raise RuntimeError("Dokploy deployment record entered error")
-                    if status in cls._TERMINAL_SUCCESS_STATUSES:
-                        return True
-                    in_progress = (deployment_id, status or "unknown")
-            if time.monotonic() >= deadline:
-                if in_progress is not None:
-                    raise RuntimeError(
-                        f"Dokploy deployment {in_progress[0]} is still "
-                        f"'{in_progress[1]}' after {timeout_seconds}s; not re-triggering. "
-                        "Raise DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS if this Dokploy "
-                        "is slow (#629)."
-                    )
-                return False
-            time.sleep(max(1, interval_seconds))
+        return wait_for_new_deployment_record(
+            client,
+            compose_id,
+            previous_ids,
+            timeout_seconds,
+            interval_seconds,
+            min_started_at=min_started_at,
+            start_epoch_fn=deployment_start_epoch,
+            terminal_success_statuses=cls._TERMINAL_SUCCESS_STATUSES,
+        )
 
     @classmethod
     def post_compose(cls, c: "Context", shared_tasks: Any) -> bool:
@@ -1219,106 +1095,32 @@ class Deployer:
 
     @classmethod
     def _prune_stale_dokploy_domains(cls, client: Any, compose_id: str) -> None:
-        """Prune Dokploy-attached domains on composes using compose-level Traefik routing (subdomain=None).
+        from libs.deploy.dokploy_adapter import prune_stale_dokploy_domains
 
-        Dokploy validates attached domains during compose deployment and immediately fails if any
-        domain points to a serviceName not present in compose.yaml (e.g. after service renaming or adoption).
-        Services with subdomain=None manage their own routing via Traefik labels in compose.yaml.
-        """
-        if not hasattr(client, "delete_domain"):
-            return
-        domains: list[dict] = []
-        if hasattr(client, "_request"):
-            try:
-                res = client._request(
-                    "GET", f"domain.byComposeId?composeId={compose_id}"
-                )
-                if isinstance(res, list):
-                    domains = [d for d in res if isinstance(d, dict)]
-            except Exception:
-                domains = []
-        if not domains and hasattr(client, "get_compose"):
-            try:
-                comp = client.get_compose(compose_id)
-                if isinstance(comp, dict):
-                    raw_domains = comp.get("domains")
-                    if isinstance(raw_domains, list):
-                        domains = [d for d in raw_domains if isinstance(d, dict)]
-            except Exception:
-                domains = []
-        for d in domains:
-            d_id = d.get("domainId")
-            if d_id:
-                try:
-                    info(
-                        f"Pruning stale Dokploy domain attachment: {d.get('host')} "
-                        f"(serviceName={d.get('serviceName')})"
-                    )
-                    client.delete_domain(d_id)
-                except Exception as err:
-                    warning(
-                        f"Failed to delete stale Dokploy domain {d.get('host')}: {err}"
-                    )
+        prune_stale_dokploy_domains(
+            client, compose_id, log_info=info, log_warning=warning
+        )
 
     @classmethod
     def _find_remote_compose(cls, e: dict[str, str]) -> dict | None:
-        """This service's full compose record in its Dokploy project and environment."""
         from libs.dokploy import get_dokploy
+        from libs.deploy.dokploy_adapter import find_remote_compose
 
         client = get_dokploy()
-        project_name = cls.project_name(e)
-        env_name = e.get("ENV", "production")
-        existing = client.find_compose_by_name(
-            cls.service, project_name, env_name=env_name
+        return find_remote_compose(
+            client,
+            cls.service,
+            cls.project_name(e),
+            env_name=e.get("ENV", "production"),
+            legacy_names=getattr(cls, "legacy_compose_names", ()),
         )
-        if not existing:
-            for legacy_name in getattr(cls, "legacy_compose_names", ()):
-                existing = client.find_compose_by_name(
-                    legacy_name, project_name, env_name=env_name
-                )
-                if existing:
-                    break
-        return existing
 
     @classmethod
     def get_remote_config_identity(cls) -> dict[str, str | None]:
-        """Read the config identity stored in Dokploy's effective compose env."""
+        from libs.deploy.dokploy_adapter import parse_remote_config_identity
+
         existing = cls._find_remote_compose(cls.env())
-
-        if not existing:
-            return {
-                "runtime_hash": None,
-                "source_hash": None,
-                "deploy_ref": None,
-                "identity_schema": None,
-                "managed_by": None,
-                "service_id": None,
-                "environment": None,
-            }
-
-        env_str = existing.get("env", "")
-        values: dict[str, str] = {}
-        for line in env_str.split("\n"):
-            key, separator, value = line.partition("=")
-            if separator and key in {
-                "IAC_CONFIG_HASH",
-                "IAC_SOURCE_CONFIG_HASH",
-                "IAC_DEPLOY_REF",
-                "INFRA_IDENTITY_SCHEMA",
-                "INFRA_MANAGED_BY",
-                "INFRA_SERVICE_ID",
-                "INFRA_ENVIRONMENT",
-            }:
-                values[key] = value.strip()
-        return {
-            "runtime_hash": values.get("IAC_CONFIG_HASH"),
-            "source_hash": values.get("IAC_SOURCE_CONFIG_HASH"),
-            "deploy_ref": values.get("IAC_DEPLOY_REF"),
-            "identity_schema": values.get("INFRA_IDENTITY_SCHEMA"),
-            "managed_by": values.get("INFRA_MANAGED_BY"),
-            "service_id": values.get("INFRA_SERVICE_ID"),
-            "environment": values.get("INFRA_ENVIRONMENT"),
-        }
+        return parse_remote_config_identity(existing)
 
     @classmethod
     def get_remote_config_hash(cls) -> str | None:
@@ -1327,12 +1129,6 @@ class Deployer:
 
     @classmethod
     def _resolve_record_timeout(cls, timeout_seconds: int | None = None) -> int:
-        """Deployment-record / hash-poll timeout, honoring the env override.
-
-        Shared by the deploy-record wait and the post-deploy hash poll so an operator
-        who raises DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS to tolerate a slow Dokploy
-        widens both windows, not just one.
-        """
         return int(
             os.getenv(
                 "DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS",
@@ -1346,7 +1142,6 @@ class Deployer:
 
     @classmethod
     def _resolve_record_interval(cls, interval_seconds: int | None = None) -> int:
-        """Deployment-record / hash-poll interval, honoring the env override."""
         return int(
             os.getenv(
                 "DOKPLOY_DEPLOYMENT_RECORD_INTERVAL_SECONDS",
@@ -1360,40 +1155,14 @@ class Deployer:
 
     @classmethod
     def _await_effective_config_hash(cls, expected_hash: str) -> str | None:
-        """Poll Dokploy's effective IAC_CONFIG_HASH until it matches `expected_hash`
-        or the deployment timeout elapses, returning the last value read.
+        from libs.deploy.dokploy_adapter import await_effective_config_hash
 
-        Dokploy applies the compose-env update asynchronously, so a read taken
-        immediately after deploy can lag the deployed revision (returning a stale
-        hash or none). Polling avoids a false "stale config" verdict on that
-        settling delay while still surfacing a genuinely-unadvanced config (the
-        returned hash will still differ from `expected_hash` once the window
-        elapses).
-
-        A transient read error (one flaky Dokploy `compose.one`) does NOT abort the
-        deploy: polling multiplies the number of reads, so each is an independent
-        chance to hit a blip. A read error is tolerated like a non-matching read and
-        retried until the deadline; only if no clean read ever lands in the whole
-        window is the last error surfaced. The timeout/interval honor the same env
-        overrides as the deploy-record wait.
-        """
-        deadline = time.monotonic() + cls._resolve_record_timeout()
-        interval = max(1, cls._resolve_record_interval())
-        last_value: str | None = None
-        last_error: Exception | None = None
-        while True:
-            try:
-                last_value = cls.get_remote_config_hash()
-                last_error = None
-            except Exception as exc:  # transient Dokploy read; tolerate within window
-                last_error = exc
-            if last_value == expected_hash:
-                return last_value
-            if time.monotonic() >= deadline:
-                if last_value is None and last_error is not None:
-                    raise last_error
-                return last_value
-            time.sleep(interval)
+        return await_effective_config_hash(
+            cls.get_remote_config_hash,
+            expected_hash,
+            cls._resolve_record_timeout(),
+            cls._resolve_record_interval(),
+        )
 
     @classmethod
     def _assert_approle_creds_present(cls, effective_env: str) -> None:
