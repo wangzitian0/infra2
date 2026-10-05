@@ -156,8 +156,8 @@ class VaultService:
     # carry a per-alias suffix (-branch-main, -pr-N) that the fixed-environment audit
     # cannot resolve: ``${ENV_SUFFIX}`` resolved per audited env names the fixed stack's
     # containers instead, so every check measured the wrong stack under the preview's
-    # name — trivially green until the template content check (#692) compared the
-    # preview template against the fixed agent. The live audit reports it as skipped.
+    # Legacy compose names for backward-compatibility fallback during migration (#954, #958)
+    legacy_dokploy_services: tuple[str, ...] = ()
     ephemeral: bool = False
 
     @property
@@ -248,6 +248,7 @@ def _vault_service_from_facet(meta, facet) -> VaultService:
         id=facet.service_id or meta.service_id,
         project=meta.project,
         dokploy_service=meta.service,
+        legacy_dokploy_services=getattr(meta, "legacy_compose_names", ()),
         compose_path=compose_path,
         vault_agent_config_path=f"{compose_dir}/vault-agent.hcl",
         secret_template_path=f"{compose_dir}/secrets.ctmpl",
@@ -852,6 +853,15 @@ def collect_live_observations(
             project_name=service.project,
             env_name=env,
         )
+        if compose is None and service.legacy_dokploy_services:
+            for legacy_name in service.legacy_dokploy_services:
+                compose = client.find_compose_by_name(
+                    legacy_name,
+                    project_name=service.project,
+                    env_name=env,
+                )
+                if compose is not None:
+                    break
         env_text = compose.get("env", "") if compose else ""
         # AppRole services (#264/#531) have no static token to look up -- mirrors the
         # skip in classify_token / preflight_vault_token above.

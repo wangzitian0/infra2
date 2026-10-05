@@ -173,7 +173,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
       <!-- Add Todo Form -->
       <form onsubmit="addTodo(event)" class="flex gap-3">
-        <input type="text" id="todoInput" placeholder="输入待办项 (例如: 测试 MinIO 附件上传或 Redis 缓存失效)..." class="flex-1 bg-slate-950/80 border border-slate-800 rounded-lg px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition" required>
+        <input type="text" id="todoInput" placeholder="输入待办项 (例如: 测试 S3 附件上传或 Redis 缓存失效)..." class="flex-1 bg-slate-950/80 border border-slate-800 rounded-lg px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition" required>
         <button type="submit" class="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-sm font-medium transition active:scale-95 border border-slate-700">添加 Todo</button>
       </form>
 

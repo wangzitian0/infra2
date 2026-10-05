@@ -166,7 +166,7 @@ services:
       # environment at boot: S3_ENDPOINT must be present — the staging MinIO, the
       # same instance the staging stack uses.
       APP_ENV: staging
-      S3_ENDPOINT: http://platform-minio-staging:9000
+      S3_ENDPOINT: http://platform-s3-staging:9000
       # The ephemeral-DB DSN the entrypoint forces AFTER sourcing Vault secrets, pointing
       # at the local `db` service (NOT truealpha-postgres*).
       PREVIEW_DATABASE_URL: postgresql://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@truealpha-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-truealpha}
@@ -233,7 +233,7 @@ services:
       # environment at boot: S3_ENDPOINT must be present — the staging MinIO, the
       # same instance the staging stack uses.
       APP_ENV: staging
-      S3_ENDPOINT: http://platform-minio-staging:9000
+      S3_ENDPOINT: http://platform-s3-staging:9000
       HOSTNAME: 0.0.0.0
       PORT: "3000"
       PREVIEW_DATABASE_URL: postgresql://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@truealpha-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-truealpha}

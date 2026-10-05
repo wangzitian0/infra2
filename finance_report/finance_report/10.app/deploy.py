@@ -170,15 +170,17 @@ class AppDeployer(Deployer):
 
     @classmethod
     def _ensure_minio_bucket(cls, c):
-        """Ensure MinIO bucket exists with proper security configuration."""
-        minio_shared = sys.modules.get("platform.03.minio.shared")
-        if not minio_shared:
-            warning("MinIO shared tasks module not loaded; skipping bucket creation")
+        """Ensure S3-compatible storage bucket exists with proper security configuration."""
+        s3_shared = sys.modules.get("platform.03.s3.shared") or sys.modules.get(
+            "platform.03.minio.shared"
+        )
+        if not s3_shared:
+            warning("S3 shared tasks module not loaded; skipping bucket creation")
             return
-        create_app_bucket = getattr(minio_shared, "create_app_bucket", None)
+        create_app_bucket = getattr(s3_shared, "create_app_bucket", None)
         if not create_app_bucket:
             warning(
-                "MinIO shared task create_app_bucket not found; skipping bucket creation"
+                "S3 shared task create_app_bucket not found; skipping bucket creation"
             )
             return
 
@@ -191,19 +193,19 @@ class AppDeployer(Deployer):
 
         if bool(existing_access_key) ^ bool(existing_secret_key):
             warning(
-                "Partial MinIO credentials found in Vault; generating a new access/secret pair"
+                "Partial S3 credentials found in Vault; generating a new access/secret pair"
             )
             existing_access_key = None
             existing_secret_key = None
 
         if existing_access_key and existing_secret_key:
-            info("MinIO credentials already exist in Vault, skipping bucket creation")
+            info("S3 credentials already exist in Vault, skipping bucket creation")
             info(
-                f"To recreate bucket, run: invoke minio.create-app-bucket --bucket-name={bucket_name}"
+                f"To recreate bucket, run: invoke s3.create-app-bucket --bucket-name={bucket_name}"
             )
             return
 
-        header("MinIO Bucket Setup", f"Creating application bucket: {bucket_name}")
+        header("S3 Bucket Setup", f"Creating application bucket: {bucket_name}")
 
         minio_result = create_app_bucket(
             c,
@@ -235,6 +237,8 @@ class AppDeployer(Deployer):
         if not secrets.get("S3_BUCKET"):
             if secrets.set("S3_BUCKET", bucket_name):
                 success("Vault: S3_BUCKET stored")
+
+    _ensure_s3_bucket = _ensure_minio_bucket
 
 
 if shared_tasks:

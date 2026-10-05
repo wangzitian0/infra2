@@ -175,7 +175,7 @@ report.zitian.party
 ### 前置条件
 
 1. Vault 已就绪：`invoke vault.status`
-2. MinIO 已就绪：`invoke minio.shared.status`
+2. S3 兼容对象存储已就绪：`invoke s3.shared.status`
 3. Docker 镜像已构建并推送到 GHCR
 
 ### 部署步骤

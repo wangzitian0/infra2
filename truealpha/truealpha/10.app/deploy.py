@@ -407,14 +407,16 @@ class AppDeployer(Deployer):
 
     @classmethod
     def _ensure_minio_bucket(cls, c):
-        minio_shared = sys.modules.get("platform.03.minio.shared")
-        if not minio_shared:
-            warning("MinIO shared tasks module not loaded; skipping bucket creation")
+        s3_shared = sys.modules.get("platform.03.s3.shared") or sys.modules.get(
+            "platform.03.minio.shared"
+        )
+        if not s3_shared:
+            warning("S3 shared tasks module not loaded; skipping bucket creation")
             return
-        create_app_bucket = getattr(minio_shared, "create_app_bucket", None)
+        create_app_bucket = getattr(s3_shared, "create_app_bucket", None)
         if not create_app_bucket:
             warning(
-                "MinIO shared task create_app_bucket not found; skipping bucket creation"
+                "S3 shared task create_app_bucket not found; skipping bucket creation"
             )
             return
 
@@ -425,21 +427,21 @@ class AppDeployer(Deployer):
 
         if bool(existing_access_key) ^ bool(existing_secret_key):
             warning(
-                "Partial MinIO credentials found in Vault; generating a new access/secret pair"
+                "Partial S3 credentials found in Vault; generating a new access/secret pair"
             )
             existing_access_key = None
             existing_secret_key = None
 
         if existing_access_key and existing_secret_key:
-            info("MinIO credentials already exist in Vault, skipping bucket creation")
+            info("S3 credentials already exist in Vault, skipping bucket creation")
             try:
                 from infra2_sdk.runtime.s3 import S3Settings, ensure_bucket
 
                 env_suffix = get_env().get("ENV_SUFFIX", "")
                 endpoint = (
-                    f"http://platform-minio{env_suffix}:9000"
+                    f"http://platform-s3{env_suffix}:9000"
                     if env_suffix
-                    else "http://platform-minio:9000"
+                    else "http://platform-s3:9000"
                 )
                 s3_settings = S3Settings(
                     bucket=bucket_name,
@@ -447,7 +449,17 @@ class AppDeployer(Deployer):
                     access_key_id=existing_access_key,
                     secret_access_key=existing_secret_key,
                 )
-                ensure_bucket(s3_settings, allow_create=False)
+                try:
+                    ensure_bucket(s3_settings, allow_create=False)
+                except Exception:
+                    # Fallback to legacy hostname if platform-s3 is not yet adopted
+                    s3_settings = S3Settings(
+                        bucket=bucket_name,
+                        endpoint_url=f"http://platform-minio{env_suffix}:9000" if env_suffix else "http://platform-minio:9000",
+                        access_key_id=existing_access_key,
+                        secret_access_key=existing_secret_key,
+                    )
+                    ensure_bucket(s3_settings, allow_create=False)
                 info(f"S3 bucket '{bucket_name}' verified reachable via S3 API")
             except Exception as exc:
                 error(
@@ -517,7 +529,14 @@ class AppDeployer(Deployer):
             )
             return
         env_suffix = get_env().get("ENV_SUFFIX", "")
-        container = f"platform-minio{env_suffix}"
+        container = f"platform-s3{env_suffix}"
+        probe = c.run(
+            f"docker inspect --format '{{{{.State.Running}}}}' {container}",
+            hide=True,
+            warn=True,
+        )
+        if not probe.ok or probe.stdout.strip() != "true":
+            container = f"platform-minio{env_suffix}"
         result = c.run(
             f"docker exec {container} mc ilm rm --all --force local/{bucket_name}",
             hide=True,
@@ -534,6 +553,8 @@ class AppDeployer(Deployer):
             warning(
                 f"Could not clear lifecycle rules on '{bucket_name}', verify manually: {result.stderr}"
             )
+
+    _ensure_s3_bucket = _ensure_minio_bucket
 
 
 if shared_tasks:

@@ -54,7 +54,7 @@ body:
       placeholder: |
         Affected: ...
         Window: <start> → <end> (duration)
-        Source-of-truth intact? Vault (unseal keys / KV), 1Password, MinIO, postgres data — yes/no + evidence
+        Source-of-truth intact? Vault (unseal keys / KV), 1Password, S3 storage, postgres data — yes/no + evidence
     validations:
       required: true
   - type: textarea

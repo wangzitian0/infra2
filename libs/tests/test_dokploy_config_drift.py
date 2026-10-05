@@ -338,3 +338,47 @@ def test_an_input_added_after_the_release_is_not_a_structural_finding(
     # libs/gone.py exists nowhere -> a real structural finding
     assert missing == ["libs/gone.py"]
     assert expected == drift.config_hash_from_items(compose, {"ENV": "x"}, [], [])
+
+
+def test_scan_resolves_legacy_compose_names(monkeypatch) -> None:
+    """Issue #954/#958: When a platform service is renamed (e.g. minio -> s3), production
+    Dokploy still holds the legacy identity until Stage 3 promotion. scan() must fall back
+    to legacy_compose_names to match deployed state rather than reporting 'not_deployed'."""
+
+    class DummyDeployer:
+        project = "platform"
+        legacy_compose_names = ("minio",)
+        runtime_only_config_keys = frozenset()
+
+        @classmethod
+        def source_config_env_base(cls, env):
+            return {}
+
+    monkeypatch.setattr(
+        drift,
+        "_deployed_identities",
+        lambda: {
+            "platform/minio": DeployedIdentity(
+                runtime_hash="hash123",
+                source_hash="v1:src123",
+                deploy_ref="0" * 40,
+            )
+        },
+    )
+    monkeypatch.setattr(drift, "_commit_at_ref", lambda tag: "0" * 40)
+    monkeypatch.setattr(drift.service_registry, "all_services", lambda: ["platform/s3"])
+    monkeypatch.setattr(
+        drift,
+        "_load_deployer",
+        lambda sid: DummyDeployer if sid == "platform/s3" else None,
+    )
+    monkeypatch.setattr(drift, "_source_env_vars", lambda dep: {})
+    monkeypatch.setattr(
+        drift, "expected_hash_at", lambda dep, c, tag, env_vars: ("src123", [])
+    )
+
+    rows = drift.scan("v1.2.6")
+    assert len(rows) == 1
+    assert rows[0].service == "platform/s3"
+    assert rows[0].verdict == "in_sync"
+    assert rows[0].deployed == "v1:src123"

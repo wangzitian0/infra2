@@ -34,7 +34,10 @@ if [ "${2:-}" = "-" ]; then
 fi
 : "${VAULT_TOKEN:?set VAULT_TOKEN or pass '-' and pipe it on stdin}"
 
-MINIO="platform-minio${SUFFIX}"
+MINIO="platform-s3${SUFFIX}"
+if ! docker inspect --format '{{.State.Running}}' "$MINIO" 2>/dev/null | grep -q true; then
+  MINIO="platform-minio${SUFFIX}"
+fi
 BUCKET="truealpha-raw"
 APP_USER="truealpha_raw"
 POLICY="truealpha_raw_readwrite"

@@ -142,6 +142,12 @@ def inventory_data_paths(entries: list[BackupEntry]) -> dict[str, str]:
     return {entry.service_id: entry.data_path for entry in entries}
 
 
+#: Known legacy service_id aliases in backup manifests during migration (#954, #958)
+LEGACY_BACKUP_ALIASES: dict[str, tuple[str, ...]] = {
+    "platform/s3": ("platform/minio",),
+}
+
+
 def verify_backup_manifest(
     entries: list[BackupEntry],
     manifest: dict[str, Any],
@@ -154,6 +160,11 @@ def verify_backup_manifest(
     checks: list[BackupCheck] = []
     for entry in entries:
         artifact = artifacts.get(entry.service_id)
+        if not artifact and entry.service_id in LEGACY_BACKUP_ALIASES:
+            for legacy_id in LEGACY_BACKUP_ALIASES[entry.service_id]:
+                artifact = artifacts.get(legacy_id)
+                if artifact:
+                    break
         if not artifact:
             checks.append(
                 _check(

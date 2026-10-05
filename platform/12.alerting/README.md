@@ -379,7 +379,7 @@ coordinate is `(environment, service_id, component, failure_domain)`; volatile
 container IDs and error details stay in annotations. Legacy containers are
 resolved from Compose labels through the service registry and surface as
 `infra/unregistered` when no unique match exists.
-IaC Runner, MinIO, Postgres, Redis, and application dependency health remain
+IaC Runner, S3 (Object Storage), Postgres, Redis, and application dependency health remain
 service-level signals handled in-band through SigNoz and this bridge.
 
 A container breakdown pages **once**. While the incident continues unchanged it is not
@@ -402,7 +402,7 @@ Default internal probe coverage:
 
 - Dokploy internal HTTP endpoint
 - Vault internal health endpoint
-- MinIO internal live endpoint
+- S3 (Object Storage) internal live endpoint
 - Authentik internal health endpoint
 - SigNoz internal frontend/query path
 - Alert bridge `/health`
