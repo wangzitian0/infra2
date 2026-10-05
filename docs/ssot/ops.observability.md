@@ -475,7 +475,7 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 > ✅ **已退役**:每小时部署合成 compose 的 route canary(`tools/dokploy_route_canary.py` + `libs/dokploy_route_canary.py`,约 1000 行)整体删除,不设观察期。其原有覆盖由更便宜的常驻机制承接:公网路由可达性 → `PublicRouteFacet` 声明渲染进 probe runner(SOP-006)+ Cloudflare watchdog;Dokploy 控制面/部署状态 → 带外 watchdog 的 `run_dokploy_status_check`(缺 `DOKPLOY_API_KEY` fail-closed 归类 `configuration`,签名由 canary 移交);部署卡死 → deploy-queue guard(常驻 sidecar 插件)。真实 preview 路由回归由 app PR preview 流程自身承担。
 
 ### SOP-007B: deploy_v2 Canary(日级/变更触发)
-`tools/deploy_v2_canary.py` 只使用保留的 `pr-999` 预览位，健康检查后必须清理 stack 与临时 DB。
+`tools/deploy_v2_canary.py` 只使用保留的 `canary-preview` 预览位，健康检查后必须清理 stack 与临时 DB。
 成功保持静默，仅在 GitHub summary 输出 `infra2-sdk v1.0.0` `StageResult`；非 PR 失败才经带外
 Feishu page，且告警携带同一结构化记录。不得通过破坏 production 数据或恢复周期性
 `alert-delivery-canary` 来制造失败；Feishu 正向投递仍由日报送达自证。

@@ -36,13 +36,45 @@ from libs.service_facets import (
     RestartAfterFacet,
     SignalFacet,
 )
+from infra2_sdk.deploy import DeployState
 
 if TYPE_CHECKING:
     from invoke import Context
     from libs.dokploy import DokployClient
 
 
-__all__ = ["Deployer", "make_tasks", "discover_services", "load_deployer_class"]
+__all__ = [
+    "Deployer",
+    "SyncAction",
+    "SyncResult",
+    "make_tasks",
+    "discover_services",
+    "load_deployer_class",
+]
+
+
+class SyncAction:
+    """Deployment sync action types aligned with infra2-sdk DeployState."""
+
+    SKIPPED = "skipped"
+    FAILED = DeployState.FAILED.value  # "failed"
+    CREATED = "created"
+    UPDATED = "updated"
+    SUPPLIED = "supplied"
+
+
+class SyncResult(dict):
+    """Backward-compatible dictionary mapping for Deployer.sync result."""
+
+    def __init__(self, action: str, details: str, **extra: Any):
+        super().__init__(action=action, details=details, **extra)
+        self.action = action
+        self.details = details
+
+    @property
+    def is_success(self) -> bool:
+        return self.action != SyncAction.FAILED
+
 
 # Runtime-only AppRole credentials injected into Dokploy env out-of-band (by
 # bootstrap/05.vault setup-approle), not present in the git-derived desired env.
@@ -1467,7 +1499,9 @@ class Deployer:
         domains: list[dict] = []
         if hasattr(client, "_request"):
             try:
-                res = client._request("GET", f"domain.byComposeId?composeId={compose_id}")
+                res = client._request(
+                    "GET", f"domain.byComposeId?composeId={compose_id}"
+                )
                 if isinstance(res, list):
                     domains = [d for d in res if isinstance(d, dict)]
             except Exception:
@@ -1491,7 +1525,9 @@ class Deployer:
                     )
                     client.delete_domain(d_id)
                 except Exception as err:
-                    warning(f"Failed to delete stale Dokploy domain {d.get('host')}: {err}")
+                    warning(
+                        f"Failed to delete stale Dokploy domain {d.get('host')}: {err}"
+                    )
 
     @classmethod
     def _find_remote_compose(cls, e: dict[str, str]) -> dict | None:
@@ -1639,50 +1675,32 @@ class Deployer:
         service never starts. Run `vault.setup-approle` first.
         """
         from pathlib import Path
+        from libs.deploy.preflight import check_approle_creds
 
-        # Read the compose WITHOUT swallowing errors: it is a required,
-        # version-controlled artifact (already read for the config hash), so an
-        # unreadable compose is a real problem — failing closed beats skipping the
-        # preflight and re-opening the foot-gun.
         compose_text = Path(cls.compose_path).read_text(encoding="utf-8")
-        if (
-            "VAULT_ROLE_ID" not in compose_text
-            and "VAULT_SECRET_ID" not in compose_text
-        ):
-            return  # service does not use AppRole auth
-
-        env = _parse_env_text(effective_env)
-        missing = [
-            key
-            for key in ("VAULT_ROLE_ID", "VAULT_SECRET_ID")
-            if not (env.get(key) or "").strip()
-        ]
+        missing = check_approle_creds(compose_text, effective_env)
         if missing:
             e = cls.env()
-            raise ValueError(
-                f"{cls.service}: compose uses Vault AppRole auth but "
-                f"{', '.join(missing)} is missing from the deploy env — the vault-agent "
-                "would crash-loop on 'VAULT_ROLE_ID and VAULT_SECRET_ID are required'. "
-                f"Run `DEPLOY_ENV={e.get('ENV', 'production')} invoke vault.setup-approle "
-                f"--project {cls.project_name(e)} --service {cls.service} --deploy` before "
-                "deploying."
-            )
-
-        # Role/secret are present — also require VAULT_ADDR. The compose declares
-        # `VAULT_ADDR: ${VAULT_ADDR}` with NO default, and the vault-agent entrypoint only
-        # guards ROLE_ID/SECRET_ID, so a missing VAULT_ADDR slips through to runtime where
-        # the agent hangs reaching an empty address and the service deadlocks on its
-        # healthcheck (~6 min) with no clear cause. Fail fast here, symmetric with the
-        # creds — the preview path already guards VAULT_ADDR (preview_lifecycle
-        # ``_VAULT_CRED_KEYS``); this closes the same gap on the fixed staging/prod path.
-        if not (env.get("VAULT_ADDR") or "").strip():
-            raise ValueError(
-                f"{cls.service}: compose uses Vault AppRole auth but VAULT_ADDR is missing "
-                "from the deploy env — the vault-agent would hang reaching an empty Vault "
-                "address and the service would deadlock on its healthcheck. Set VAULT_ADDR "
-                "(e.g. https://vault.<INTERNAL_DOMAIN>) on the compose/project env before "
-                "deploying."
-            )
+            cred_missing = [
+                key for key in ("VAULT_ROLE_ID", "VAULT_SECRET_ID") if key in missing
+            ]
+            if cred_missing:
+                raise ValueError(
+                    f"{cls.service}: compose uses Vault AppRole auth but "
+                    f"{', '.join(cred_missing)} is missing from the deploy env — the vault-agent "
+                    "would crash-loop on 'VAULT_ROLE_ID and VAULT_SECRET_ID are required'. "
+                    f"Run `DEPLOY_ENV={e.get('ENV', 'production')} invoke vault.setup-approle "
+                    f"--project {cls.project_name(e)} --service {cls.service} --deploy` before "
+                    "deploying."
+                )
+            if "VAULT_ADDR" in missing:
+                raise ValueError(
+                    f"{cls.service}: compose uses Vault AppRole auth but VAULT_ADDR is missing "
+                    "from the deploy env — the vault-agent would hang reaching an empty Vault "
+                    "address and the service would deadlock on its healthcheck. Set VAULT_ADDR "
+                    "(e.g. https://vault.<INTERNAL_DOMAIN>) on the compose/project env before "
+                    "deploying."
+                )
 
     @classmethod
     def compute_local_config_hash(cls, c: "Context", env_vars: dict[str, str]) -> str:
@@ -1711,36 +1729,27 @@ class Deployer:
         if not existing:
             return {"valid": True, "error": None, "details": "No existing deployment"}
 
-        env_str = existing.get("env", "")
-        # AppRole services authenticate via VAULT_ROLE_ID/VAULT_SECRET_ID. A vestigial
-        # VAULT_APP_TOKEN left in Dokploy is unused and would expire un-renewed, so gating
-        # on it would hard-block an AppRole deploy. Skip the legacy token check for them.
-        if "VAULT_ROLE_ID=" in env_str and "VAULT_SECRET_ID=" in env_str:
+        from libs.deploy.preflight import (
+            extract_vault_token_from_env,
+            verify_token_status,
+        )
+
+        is_approle, token = extract_vault_token_from_env(existing.get("env", ""))
+        if is_approle:
             return {
                 "valid": True,
                 "error": None,
                 "details": "AppRole auth; legacy VAULT_APP_TOKEN preflight skipped",
             }
-        token = None
-        for line in env_str.split("\n"):
-            if line.startswith("VAULT_APP_TOKEN="):
-                token = line.split("=", 1)[1].strip()
-                break
-
         if not token:
             return {"valid": True, "error": None, "details": "No VAULT_APP_TOKEN found"}
 
         vault_addr = e.get(
             "VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"
         )
-
-        result = verify_vault_token(token, addr=vault_addr, min_ttl_hours=24)
-        if result["valid"]:
-            result["details"] = f"Token OK (TTL: {result['ttl_hours']}h)"
-        else:
-            result["details"] = f"Token invalid: {result['error']}"
-
-        return result
+        return verify_token_status(
+            token, vault_addr=vault_addr, min_ttl_hours=24, verifier=verify_vault_token
+        )
 
     @classmethod
     def sync(cls, c: "Context", force: bool = False) -> dict:
@@ -1755,12 +1764,15 @@ class Deployer:
         e = cls.env()
         if cls.prod_only and e.get("ENV", "production") != "production":
             info(f"{cls.service} is prod-only; skipping {e.get('ENV')} sync")
-            return {
-                "action": "skipped",
-                "details": f"prod-only service; not deployed to {e.get('ENV')}",
-            }
+            return SyncResult(
+                action=SyncAction.SKIPPED,
+                details=f"prod-only service; not deployed to {e.get('ENV')}",
+            )
         if missing := validate_env():
-            return {"action": "failed", "details": f"Missing env: {', '.join(missing)}"}
+            return SyncResult(
+                action=SyncAction.FAILED,
+                details=f"Missing env: {', '.join(missing)}",
+            )
 
         if os.environ.get("DEPLOY_ACTION") == "secrets-supply":
             # The runner was asked for the secret supply alone: deploy_v2 runs it before
@@ -1768,57 +1780,57 @@ class Deployer:
             # Copy human values, generate runtime ones, report what is missing — and
             # stop; the promote that follows recreates the containers (#649).
             if not cls.apply_secret_supply(c, env=e.get("ENV")):
-                return {
-                    "action": "failed",
-                    "details": "secret supply left required values missing",
-                }
-            return {
-                "action": "supplied",
-                "details": "secret supply applied; no compose",
-            }
+                return SyncResult(
+                    action=SyncAction.FAILED,
+                    details="secret supply left required values missing",
+                )
+            return SyncResult(
+                action=SyncAction.SUPPLIED,
+                details="secret supply applied; no compose",
+            )
 
         # Pre-check: verify VAULT_APP_TOKEN validity
         try:
             token_status = cls.verify_vault_app_token()
             if not token_status["valid"]:
-                return {
-                    "action": "failed",
-                    "details": (
+                return SyncResult(
+                    action=SyncAction.FAILED,
+                    details=(
                         f"VAULT_APP_TOKEN issue: {token_status.get('details', 'unknown')}. "
                         "This is a legacy static token; remove it from the service's Dokploy "
                         "env (services authenticate via AppRole now — `invoke vault.setup-approle`)."
                     ),
-                }
+                )
             elif token_status.get("ttl_hours", 999) < 48:
-                return {
-                    "action": "failed",
-                    "details": (
+                return SyncResult(
+                    action=SyncAction.FAILED,
+                    details=(
                         f"VAULT_APP_TOKEN expires in {token_status['ttl_hours']}h. "
                         "It is a legacy static token; remove it from the Dokploy env "
                         "(AppRole services don't use it)."
                     ),
-                }
+                )
         except Exception as exc:
-            return {
-                "action": "failed",
-                "details": f"Could not verify VAULT_APP_TOKEN: {exc}",
-            }
+            return SyncResult(
+                action=SyncAction.FAILED,
+                details=f"Could not verify VAULT_APP_TOKEN: {exc}",
+            )
 
         if not cls.ensure_runtime_secrets(c):
-            return {
-                "action": "failed",
-                "details": f"Failed to ensure runtime secrets for {cls.service}",
-            }
+            return SyncResult(
+                action=SyncAction.FAILED,
+                details=f"Failed to ensure runtime secrets for {cls.service}",
+            )
 
         # The secret supply runs on EVERY sync, before change detection: a human value
         # that changed in 1Password is exactly the deploy where nothing else changed and
         # the compose hash says "skip" (data_engine staging kept a stale SEC_USER_AGENT
         # through a green v1.1.68 deploy, #649). Changed values restart the consumers.
         if not cls.apply_secret_supply(c, env=e.get("ENV")):
-            return {
-                "action": "failed",
-                "details": "secret supply left required values missing",
-            }
+            return SyncResult(
+                action=SyncAction.FAILED,
+                details="secret supply left required values missing",
+            )
 
         # Build env vars
         env_vars_dict = cls.config_env_with_vault_addr(cls.compose_env_base(e), e)
@@ -1851,19 +1863,19 @@ class Deployer:
             except (OSError, subprocess.SubprocessError):
                 deploy_ref = ""
         if not EXACT_COMMIT_RE.fullmatch(deploy_ref):
-            return {
-                "action": "failed",
-                "details": "Deployment identity requires an exact 40-character IAC_DEPLOY_REF",
-            }
+            return SyncResult(
+                action=SyncAction.FAILED,
+                details="Deployment identity requires an exact 40-character IAC_DEPLOY_REF",
+            )
         from libs.deploy_dependencies import service_key_from_path
         from libs.service_identity import ServiceIdentity
 
         service_id = service_key_from_path(cls.compose_path)
         if not service_id:
-            return {
-                "action": "failed",
-                "details": f"Could not derive service identity from {cls.compose_path}",
-            }
+            return SyncResult(
+                action=SyncAction.FAILED,
+                details=f"Could not derive service identity from {cls.compose_path}",
+            )
         runtime_identity = ServiceIdentity.build(
             service_id,
             e.get("ENV", "production"),
@@ -1888,10 +1900,10 @@ class Deployer:
                     f"{cls.service}: remote config hash unreadable ({exc}); "
                     "skipping deploy (fail-closed) to avoid load-amplifying redeploys"
                 )
-                return {
-                    "action": "skipped",
-                    "details": f"Remote config unreadable; fail-closed: {exc}",
-                }
+                return SyncResult(
+                    action=SyncAction.SKIPPED,
+                    details=f"Remote config unreadable; fail-closed: {exc}",
+                )
             warning(
                 f"{cls.service}: remote config unreadable ({exc}); "
                 "proceeding because --force was requested"
@@ -1958,10 +1970,10 @@ class Deployer:
                 )
             else:
                 success(f"{cls.service}: config unchanged, skipping deploy")
-                return {
-                    "action": "skipped",
-                    "details": "Runtime and source config identities match",
-                }
+                return SyncResult(
+                    action=SyncAction.SKIPPED,
+                    details="Runtime and source config identities match",
+                )
 
         # Config changed or force - do full deploy
         if remote_hash is None:
@@ -1977,7 +1989,9 @@ class Deployer:
 
         # Prepare directories
         if not cls._prepare_dirs(c):
-            return {"action": "failed", "details": "Failed to prepare directories"}
+            return SyncResult(
+                action=SyncAction.FAILED, details="Failed to prepare directories"
+            )
 
         # Persist both config planes and the exact checked-out revision. These are
         # deliberately excluded from their own hash inputs above.
@@ -2004,7 +2018,7 @@ class Deployer:
             compose_id = cls.composing(c, env_vars_dict)
         except Exception as exc:
             error(f"Deploy failed: {exc}")
-            return {"action": "failed", "details": str(exc)}
+            return SyncResult(action=SyncAction.FAILED, details=str(exc))
 
         # Post-deploy verification: confirm Dokploy's effective compose env now
         # carries the intended IAC_CONFIG_HASH. This fails closed on the stale-env
@@ -2019,32 +2033,32 @@ class Deployer:
             effective_hash = cls._await_effective_config_hash(local_hash)
         except Exception as exc:  # noqa: BLE001 - verification must not crash the task.
             error(f"Post-deploy verification could not read effective config: {exc}")
-            return {
-                "action": "failed",
-                "details": f"Post-deploy verification failed: {exc}",
-            }
+            return SyncResult(
+                action=SyncAction.FAILED,
+                details=f"Post-deploy verification failed: {exc}",
+            )
         if effective_hash != local_hash:
             error(
                 "Post-deploy verification failed: effective IAC_CONFIG_HASH is stale "
                 f"(expected {local_hash}, got {effective_hash or 'none'})"
             )
-            return {
-                "action": "failed",
-                "details": (
+            return SyncResult(
+                action=SyncAction.FAILED,
+                details=(
                     "Effective remote config is stale after deploy "
                     f"(expected {local_hash}, got {effective_hash or 'none'}); "
                     "runtime may still be running prior config"
                 ),
-            }
+            )
 
         try:
             effective_identity = cls.get_remote_config_identity()
         except Exception as exc:  # noqa: BLE001 - identity proof is fail-closed.
             error(f"Post-deploy identity verification failed: {exc}")
-            return {
-                "action": "failed",
-                "details": f"Post-deploy identity verification failed: {exc}",
-            }
+            return SyncResult(
+                action=SyncAction.FAILED,
+                details=f"Post-deploy identity verification failed: {exc}",
+            )
         identity_mismatches = []
         if effective_identity["source_hash"] != source_hash:
             identity_mismatches.append(
@@ -2071,10 +2085,10 @@ class Deployer:
         if identity_mismatches:
             details = "; ".join(identity_mismatches)
             error(f"Post-deploy identity verification failed: {details}")
-            return {
-                "action": "failed",
-                "details": f"Effective remote identity is stale after deploy: {details}",
-            }
+            return SyncResult(
+                action=SyncAction.FAILED,
+                details=f"Effective remote identity is stale after deploy: {details}",
+            )
 
         # Runtime-applied verification (closed loop): the hash check above only
         # proves Dokploy RECORDED the intended config. Let services additionally
@@ -2085,10 +2099,10 @@ class Deployer:
         runtime_error = cls.verify_runtime_applied(c, env_vars_dict)
         if runtime_error:
             error(f"{cls.service}: runtime verification failed: {runtime_error}")
-            return {
-                "action": "failed",
-                "details": f"Runtime verification failed: {runtime_error}",
-            }
+            return SyncResult(
+                action=SyncAction.FAILED,
+                details=f"Runtime verification failed: {runtime_error}",
+            )
 
         # The record said done and the env carries the hash; now the containers
         # (#629, #691, #698): a deploy is not a success until the stack is in service.
@@ -2098,10 +2112,10 @@ class Deployer:
             in_service_error = f"could not verify: {exc}"
         if in_service_error:
             error(f"{cls.service}: not in service after deploy: {in_service_error}")
-            return {
-                "action": "failed",
-                "details": f"Not in service after deploy: {in_service_error}",
-            }
+            return SyncResult(
+                action=SyncAction.FAILED,
+                details=f"Not in service after deploy: {in_service_error}",
+            )
 
         # In service; now the services that do not survive this one being recreated
         # (#726). Only here, after an applied deploy — a skip recreated nothing.
@@ -2111,16 +2125,16 @@ class Deployer:
             error(
                 f"{cls.service}: deployed, but its dependents were not restarted: {exc}"
             )
-            return {
-                "action": "failed",
-                "details": f"Deployed, but dependents were not restarted: {exc}",
-            }
+            return SyncResult(
+                action=SyncAction.FAILED,
+                details=f"Deployed, but dependents were not restarted: {exc}",
+            )
 
         success(f"{cls.service}: deployed with hash {local_hash}")
-        result = {
-            "action": "updated" if remote_hash else "created",
-            "details": f"composeId: {compose_id}",
-        }
+        result = SyncResult(
+            action=SyncAction.UPDATED if remote_hash else SyncAction.CREATED,
+            details=f"composeId: {compose_id}",
+        )
         if restarted:
             result["restarted_dependents"] = restarted
         return result

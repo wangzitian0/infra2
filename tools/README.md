@@ -9,7 +9,7 @@ reusable logic belongs in `libs/` (see the division-of-labor note below):
    scheduled workflows (`python tools/<script>.py`).
    Examples: `deploy_v2.py` (deploy front door), `pre_deploy_schema_check.py`
    (pre-deploy enum & schema compatibility gate, #698), `deploy_guard_audit.py` /
-   `ci_gate_audit.py` / `service_identity_audit.py` / `lint_platform_image_pins.py` /
+   `ci_gate_audit.py` / `service_identity_audit.py` / `lint_compose_resource_limits.py` /
    `coverage_regression_audit.py` (infra-ci
    gates), `reconcile_iac_inputs.py` (tag reconcile), `promotion_soak_guard.py`
    (the prod-promotion guard's staging-soak lookup, #970), `out_of_band_watchdog.py`
@@ -99,8 +99,7 @@ also enforces compose↔inventory equality and registry-derived `service_id` val
 - **`tools/`** — thin entry points: argv parsing, env wiring, exit codes.
   A tool that grows real logic should push it down into `libs/` so it gets
   covered by `libs/tests` (pattern: `tools/deploy_guard_audit.py` →
-  `libs/deploy_dependencies.py`; `tools/lint_platform_image_pins.py` →
-  `libs/image_pins.py`). Several older scripts still carry embedded logic —
+  `libs/deploy_dependencies.py`). Several older scripts still carry embedded logic —
   treat that as debt to sink, not a pattern to copy.
 
 ## Runner (invoke namespaces)
@@ -214,7 +213,7 @@ invoke dokploy.env-ensure --project=platform --env=staging --description="stagin
 ## deploy_v2_canary.py
 
 End-to-end proof for the unified deploy primitive. It deploys Finance Report to
-the workflow-serialized `pr-999` slot, waits for the current trigger's terminal
+the workflow-serialized `canary-preview` slot, waits for the current trigger's terminal
 Dokploy deployment record, verifies the exact requested version on every public
 surface, and tears the stack and ephemeral database down in `finally`. Cleanup
 passes only after two consecutive observations of absence. Success and failure

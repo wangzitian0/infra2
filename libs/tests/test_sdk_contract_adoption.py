@@ -206,6 +206,8 @@ def test_pull_request_canary_binds_exact_head_authority_to_cloneable_branch() ->
 def test_retired_compatibility_modules_stay_removed() -> None:
     assert not (ROOT / "libs/ci_gate_schema.py").exists()
     assert not (ROOT / "libs/pipeline_stage_contract.py").exists()
+    assert not (ROOT / "libs/image_pins.py").exists()
+    assert not (ROOT / "tools/lint_platform_image_pins.py").exists()
 
 
 def test_detect_disagreement_can_produce_every_disagreement_kind() -> None:

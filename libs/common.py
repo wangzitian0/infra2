@@ -230,37 +230,6 @@ def get_env() -> dict[str, str | None]:
     return _env_cache
 
 
-def _domain_env_label(env_name: str) -> str:
-    """Convert internal env name into a DNS-safe label."""
-    return env_name.replace("_", "-")
-
-
-try:
-    from infra2_sdk.routing import resolve_app_hostname, resolve_service_url
-except ImportError:
-    # Minimal fallback for SDK-free environments
-    def resolve_app_hostname(
-        subdomain: str,
-        tier: str,
-        *,
-        base_domain: str = "zitian.party",
-        **kw,
-    ) -> str:
-        norm = normalize_env_name(tier)
-        suffix = "" if norm == "production" else f"-{_domain_env_label(norm)}"
-        return f"{subdomain}{suffix}.{base_domain}"
-
-    def resolve_service_url(
-        subdomain: str,
-        tier: str,
-        *,
-        base_domain: str = "zitian.party",
-        **kw,
-    ) -> str:
-        host = resolve_app_hostname(subdomain, tier, base_domain=base_domain)
-        return f"https://{host}"
-
-
 def get_service_url(
     service: str, domain: str | None = None, env: dict | None = None
 ) -> str:
@@ -284,9 +253,11 @@ def get_service_url(
     if not subdomain:
         raise ValueError(f"Unknown service: {service}")
 
-    env_name = e.get("ENV", "production")
+    env_name = normalize_env_name(e.get("ENV"))
     if service in SHARED_PLATFORM_SERVICES():
         env_name = "production"
+
+    from infra2_sdk.routing import resolve_service_url
 
     return resolve_service_url(subdomain, tier=env_name, base_domain=domain).rstrip("/")
 
@@ -311,8 +282,20 @@ def service_domain(subdomain: str, env: dict | None = None) -> str:
     domain = e.get("INTERNAL_DOMAIN")
     if not subdomain or not domain:
         return ""
-    env_name = e.get("ENV", "production")
+    env_name = normalize_env_name(e.get("ENV"))
+    from infra2_sdk.routing import resolve_app_hostname
+
     return resolve_app_hostname(subdomain, tier=env_name, base_domain=domain)
+
+
+def __getattr__(name: str):
+    if name in ("resolve_app_hostname", "resolve_service_url"):
+        import infra2_sdk.routing as routing
+
+        val = getattr(routing, name)
+        globals()[name] = val
+        return val
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # --------------------------------------------------------------------------- #

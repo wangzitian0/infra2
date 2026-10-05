@@ -43,7 +43,6 @@ if str(ROOT) not in sys.path:
 
 from libs.common import normalize_env_name  # noqa: E402
 from libs.deploy_env_config import (  # noqa: E402
-    CANARY_PR,
     CANARY_SLOT,
     PREVIEW_ENVIRONMENT,
     PREVIEW_KINDS,
@@ -59,10 +58,7 @@ _PREVIEW_CONFIG = preview_service_config("finance_report/app")
 PREVIEW_PROJECT = _PREVIEW_CONFIG.project
 
 # The bare main-tip preview and canary preview that are never treated as leaks.
-# Also keep legacy pr-999 during transition so old stacks are safely preserved if present.
-ALWAYS_KEEP_ALIASES = frozenset({"branch-main", CANARY_SLOT, f"pr-{CANARY_PR}"})
-# The canonical canary slot (deploy_v2_canary stands it up/tears it down on the CANARY_SLOT)
-CANARY_ALIAS = CANARY_SLOT
+ALWAYS_KEEP_ALIASES = frozenset({"branch-main", CANARY_SLOT})
 # Every current alias is `<kind>-<slug>` for a known kind (branch/pr/commit/tag);
 # an alias with no known kind prefix (e.g. the bare `main` slug from before the
 # branch-main rename) is a pre-rename orphan the deterministic-name `down` can no
@@ -126,7 +122,7 @@ def orphan_reason(alias: str, *, open_pr_numbers: set[int] | None) -> str | None
     for a PR that is provably closed. ``open_pr_numbers is None`` => PR state
     unknown => leave PR previews alone (fail-safe).
     """
-    if alias in ALWAYS_KEEP_ALIASES or alias == CANARY_ALIAS:
+    if alias in ALWAYS_KEEP_ALIASES:
         return None
     if not alias.startswith(VALID_KIND_PREFIXES):
         return f"pre-rename orphan alias '{alias}' (no current kind prefix)"

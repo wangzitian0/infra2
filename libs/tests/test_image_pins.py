@@ -1,6 +1,4 @@
-"""Tests for the bare-':latest' image-pin lint."""
-
-from libs.image_pins import bare_latest_violations
+from infra2_sdk.rules.compose import find_bare_latest_violations as bare_latest_violations
 
 
 def test_flags_bare_latest():

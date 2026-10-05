@@ -112,7 +112,9 @@ def _best_effort_down(
     last = None
     consecutive_absent = 0
     service_project = service.split("/", 1)[0]
+    project_hyphen = service_project.replace("_", "-")
     slot_suffix = f"-{CANARY_SLOT}"
+    dispatched_compose_id: str | None = None
     for i in range(attempts):
         try:
             result = down(
@@ -122,7 +124,19 @@ def _best_effort_down(
                 raise RuntimeError(
                     "preview teardown returned no compose convergence evidence"
                 )
-            if result.compose_id is None:
+            if result.compose_id is not None:
+                if dispatched_compose_id == result.compose_id:
+                    consecutive_absent = 0
+                    last = RuntimeError(
+                        f"canary compose {result.compose_id} is still present after the delete request"
+                    )
+                else:
+                    dispatched_compose_id = result.compose_id
+                    consecutive_absent = 0
+                    last = RuntimeError(
+                        f"canary compose {result.compose_id} deletion dispatched, awaiting convergence"
+                    )
+            else:
                 containers = client.get_containers()
                 if not isinstance(containers, list) or not all(
                     isinstance(row, dict) and isinstance(row.get("name"), str)
@@ -132,7 +146,10 @@ def _best_effort_down(
                 survivors = sorted(
                     row["name"]
                     for row in containers
-                    if row["name"].lstrip("/").startswith(f"{service_project}-")
+                    if (
+                        row["name"].lstrip("/").startswith(f"{service_project}-")
+                        or row["name"].lstrip("/").startswith(f"{project_hyphen}-")
+                    )
                     and row["name"].endswith(slot_suffix)
                 )
                 if survivors:
@@ -144,13 +161,7 @@ def _best_effort_down(
                     consecutive_absent += 1
                     if consecutive_absent >= 2:
                         return True
-            else:
-                consecutive_absent = 0
-                last = RuntimeError(
-                    f"canary compose {result.compose_id} is still present after "
-                    "the delete request"
-                )
-        except (httpx.HTTPError, RuntimeError, ValueError, AttributeError) as exc:
+        except Exception as exc:
             last = exc
             consecutive_absent = 0
         if i < attempts - 1:

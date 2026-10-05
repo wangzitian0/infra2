@@ -458,7 +458,7 @@ def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
         return "pr", text
     if kind == "canary":
         text = str(value).strip().lower() if value is not None else ""
-        if not text or text in ("999", "pr-999", "preview", CANARY_SLOT):
+        if not text or text in ("999", "pr-999", "preview", "canary", CANARY_SLOT):
             text = "preview"
         elif not _CANARY_VALUE_RE.match(text):
             raise ValueError(
@@ -578,6 +578,8 @@ def cors_allowed_origins(domain: str) -> list[str]:
     # e.g. report-branch-main, NOT report-main.
     for branch in _PREVIEW_CORS_BRANCHES:
         origins.append(f"https://report-branch-{branch}.{domain}")
+    # Canary preview slot.
+    origins.append(f"https://report-{CANARY_SLOT}.{domain}")
     # Preview pr/commit aliases — wildcard, since the value is per-deploy.
     for kind in _PREVIEW_CORS_WILDCARD_KINDS:
         origins.append(f"https://report-{kind}-*.{domain}")

@@ -80,18 +80,18 @@ remains routable during replacement, or a backend that starts while the frontend
 `Created`, cannot produce a false green. `--no-wait` explicitly omits both proofs and must
 not be used by a blocking deployment workflow.
 
-The reserved `pr-999` canary is a singleton mutable resource, so all workflow events share
+The reserved `canary-preview` canary is a singleton mutable resource, so all workflow events share
 one non-cancelling job concurrency group. A same-repository PR records its exact head SHA as
 the authoritative IaC identity and may pass the head branch only as a clone transport; the
 front door proves both refs resolve to the same commit before mutating Dokploy. If the
 non-idempotent `compose.create` call times out after Dokploy commits it, the lifecycle
 re-reads and adopts the one deterministic project/environment/name instead of creating a
 duplicate. Teardown is green only after two consecutive reads observe **both** the
-Dokploy compose record absent and zero containers for that service's reserved `pr-999`
+Dokploy compose record absent and zero containers for that service's reserved `canary-preview`
 slot in Dokploy's host container API. A deleted record with lingering `Created`,
 `Restarting` or running containers is a failed cleanup, even if Dokploy reports the
 delete request as successful. The 2026-09-23 live canary reported `torn_down: true`
-while the host still had four `pr-999` containers; record-only checks are insufficient.
+while the host still had four legacy canary containers; record-only checks are insufficient.
 
 A Finance Report backend runs migrations before Uvicorn in both preview and fixed
 staging/production stacks. Both backend healthchecks therefore grant a bounded 450-second
@@ -428,7 +428,7 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 1. **pre-rename 裸 slug**(无 `branch-/pr-/commit-/tag-` 前缀,如改名前遗留的 `main`);
 2. **已关闭 PR 的 `pr-<n>`**(1:1 teardown 漏了)。
 
-保留:`branch-main`、canary `pr-999`、`tag-*`、所有有效 kind。拉不到 open-PR 列表时,只判裸-slug(fail-safe)。**检测到泄露 → job 失败 → 飞书告警**。它**从不**在 CI 里删东西。
+保留:`branch-main`、`canary-preview`、`tag-*`、所有有效 kind。拉不到 open-PR 列表时,只判裸-slug(fail-safe)。**检测到泄露 → job 失败 → 飞书告警**。它**从不**在 CI 里删东西。
 
 ### 泄露告警处置 SOP
 
