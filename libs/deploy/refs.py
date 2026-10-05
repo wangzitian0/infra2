@@ -20,15 +20,12 @@ from __future__ import annotations
 
 import subprocess
 
-# `_ls_remote_rows` / `_redact_repo` are private to infra2_sdk (v2.3.1 exports no public
-# equivalent of either). This is the one place infra2 touches them; revisit when the SDK
-# publishes them (#955).
 from infra2_sdk.refs import (
     CommandRunner,
     ResolvedRef,
-    _ls_remote_rows,
-    _redact_repo,
     classify_ref,
+    ls_remote_rows,
+    redact_repo,
     resolve_image_ref as _sdk_resolve_image_ref,
     resolve_pr as _sdk_resolve_pr,
     resolve_to_sha as _sdk_resolve_to_sha,
@@ -98,9 +95,9 @@ def resolve_branch_to_sha(
         raise ValueError(f"invalid clone branch {branch!r}")
 
     remote_ref = f"refs/heads/{cleaned}"
-    for sha, name in _ls_remote_rows(repo, remote_ref, runner=runner):
+    for sha, name in ls_remote_rows(repo, remote_ref, runner=runner):
         if name == remote_ref:
             return sha
     raise ValueError(
-        f"clone branch {branch!r} ({remote_ref}) not found in {_redact_repo(repo)}"
+        f"clone branch {branch!r} ({remote_ref}) not found in {redact_repo(repo)}"
     )

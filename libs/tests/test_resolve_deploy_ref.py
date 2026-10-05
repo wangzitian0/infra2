@@ -191,16 +191,16 @@ def test_resolve_timeout_is_wrapped_as_value_error():
 
 def test_redact_repo_strips_embedded_credentials():
     assert (
-        refs._redact_repo("https://ghp_secret@github.com/x/y.git")
+        refs.redact_repo("https://ghp_secret@github.com/x/y.git")
         == "https://<redacted>@github.com/x/y.git"
     )
     assert (
-        refs._redact_repo("https://user:pass@github.com/x/y.git")
+        refs.redact_repo("https://user:pass@github.com/x/y.git")
         == "https://<redacted>@github.com/x/y.git"
     )
     # an unauthenticated URL is left untouched
     assert (
-        refs._redact_repo("https://github.com/x/y.git") == "https://github.com/x/y.git"
+        refs.redact_repo("https://github.com/x/y.git") == "https://github.com/x/y.git"
     )
 
 
