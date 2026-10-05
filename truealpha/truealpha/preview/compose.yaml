@@ -167,6 +167,12 @@ services:
       # same instance the staging stack uses.
       APP_ENV: staging
       S3_ENDPOINT: http://platform-s3-staging:9000
+      # Same telemetry contract as 10.app/compose.yaml: the one shared collector, and the
+      # identity libs.deploy.preview issues for this alias (deployment.environment.name =
+      # pr-<N> / commit-<sha7> / main). Never defaulted here.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
       # The ephemeral-DB DSN the entrypoint forces AFTER sourcing Vault secrets, pointing
       # at the local `db` service (NOT truealpha-postgres*).
       PREVIEW_DATABASE_URL: postgresql://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@truealpha-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-truealpha}

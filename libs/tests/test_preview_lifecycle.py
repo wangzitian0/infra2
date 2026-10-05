@@ -15,10 +15,15 @@ import httpx
 import pytest
 
 from libs.deploy import preview as pl
+from libs.tests.compose_env import container_env
 
 COMPOSE_PATH = (
     Path(__file__).resolve().parents[2]
     / "finance_report/finance_report/preview/compose.yaml"
+)
+
+TRUEALPHA_PREVIEW_COMPOSE = (
+    Path(__file__).resolve().parents[2] / "truealpha/truealpha/preview/compose.yaml"
 )
 
 # resolve_to_sha is patched in every test so no `git ls-remote` runs.
@@ -399,6 +404,45 @@ def test_up_app_domain_override_does_not_leak_into_the_otel_endpoint():
     assert (
         env["NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT"]
         == "https://otel.zitian.party/v1/traces"
+    )
+
+
+def test_truealpha_preview_llm_container_receives_the_collector_and_the_alias_identity():
+    """infra2#906: a truealpha preview alias exports to the same shared collector, under
+    the identity this path issues for the alias, so previews are told apart from staging
+    and production by deployment.environment.name rather than by a separate collector.
+    The compose is resolved against the env the preview actually pushes."""
+    client = FakeDokploy(existing=None)
+    pl.up(
+        "commit",
+        "1ab32d5e6f",
+        code="abc1234",
+        service="truealpha/app",
+        domain="truealpha.club",
+        client=client,
+        http_get=_ok_get,
+        iac_ref="b" * 40,
+        _now=lambda: 1000,
+    )
+    _cid, pushed = client.env_updates[0]
+
+    llm = container_env(TRUEALPHA_PREVIEW_COMPOSE, "llm", pushed)
+    assert (
+        llm["OTEL_EXPORTER_OTLP_ENDPOINT"]
+        == "http://platform-signoz-otel-collector:4318"
+    )
+    assert llm["OTEL_SERVICE_NAME"] == "truealpha-app"
+    attributes = dict(
+        pair.split("=", 1) for pair in llm["OTEL_RESOURCE_ATTRIBUTES"].split(",")
+    )
+    assert attributes["deployment.environment.name"] == "commit-1ab32d5"
+    assert attributes["service.name"] == llm["OTEL_SERVICE_NAME"]
+    assert attributes["infra.service.id"] == "truealpha/app"
+    assert attributes["infra.iac.ref"] == "b" * 40
+    # Same invariant as the fixed compose: no container gets the endpoint without the
+    # identity, and web (Node, no OTel SDK) gets neither.
+    assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in container_env(
+        TRUEALPHA_PREVIEW_COMPOSE, "web", pushed
     )
 
 

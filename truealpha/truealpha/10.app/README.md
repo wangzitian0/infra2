@@ -12,6 +12,20 @@ Two containers from the truealpha app repo's GHCR images
   scheduling, Vault scope, host-only OpenD access, resources, and promotion identity
   remain independent from the web/LLM serving plane.
 
+## Telemetry
+
+The llm container exports OTLP to the one shared SigNoz collector
+(`OTEL_EXPORTER_OTLP_ENDPOINT=http://platform-signoz-otel-collector:4318`, Docker network
+only) and takes `OTEL_SERVICE_NAME` (`truealpha-app`) and `OTEL_RESOURCE_ATTRIBUTES`
+(`deployment.environment.name`, `infra.service.id`, `service.version`, `infra.iac.ref`)
+from the deployment, never from Vault or a compose default. web gets none of it (Node, no
+OTel SDK). Contract: `docs/ssot/ops.observability.md` 4.2.
+
+The data engine (`../20.data_engine/`) is issued no telemetry: its Dagster roles run with
+`network_mode: host`, where the collector's Docker DNS name does not resolve, and the
+collector port is never published. With no endpoint the application-side exporter stays
+off, so no identity is issued either; it needs a host-reachable ingest first.
+
 ## v1 deploy model (deliberate simplification)
 
 `iac_pinned` like a platform service: `deploy_v2 --service truealpha/app --type

@@ -1,10 +1,15 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
 import yaml
+
+from libs.tests.compose_env import compose_services, raw_environment
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVICE_DIR = ROOT / "truealpha/truealpha/10.app"
+TRUEALPHA_COMPOSES = sorted((ROOT / "truealpha/truealpha").glob("*/compose.yaml"))
+COLLECTOR_OTLP_HTTP = "http://platform-signoz-otel-collector:4318"
 
 
 def _load_deploy_module():
@@ -166,3 +171,94 @@ def test_preview_api_router_does_not_claim_the_bare_api_prefix() -> None:
     assert "PathPrefix(`/api/mcp`)" in rule
     assert "Path(`/api/health`)" in rule
 
+
+def _services_exporting_otlp(compose: Path) -> set[str]:
+    return {
+        name
+        for name, service in compose_services(compose).items()
+        if "OTEL_EXPORTER_OTLP_ENDPOINT" in raw_environment(service)
+    }
+
+
+def test_the_guard_covers_every_truealpha_compose() -> None:
+    """The telemetry guards below govern what truealpha's composes may do, not today's
+    three files: a compose added later is in scope by the glob, and an empty glob (a
+    moved directory) fails here instead of turning every guard green-while-empty."""
+    names = {compose.parent.name for compose in TRUEALPHA_COMPOSES}
+    assert {"10.app", "20.data_engine", "preview"} <= names
+
+
+@pytest.mark.parametrize("compose", TRUEALPHA_COMPOSES, ids=lambda c: c.parent.name)
+def test_otlp_export_is_only_ever_enabled_with_the_issued_identity(
+    compose: Path,
+) -> None:
+    """The endpoint turns export on, and truealpha's services refuse to start when it is
+    on without the deployment-issued identity (infra2#906 / truealpha#1034). So a
+    container naming the endpoint must take BOTH identity variables verbatim from the
+    deploy-issued env -- not hardcoded and not defaulted -- and must be able to reach the
+    collector, which is Docker-network-only (never published, never on the host network).
+    """
+    for name, service in compose_services(compose).items():
+        env = raw_environment(service)
+        names_collector = any(
+            "platform-signoz-otel-collector" in v for v in env.values()
+        )
+        if service.get("network_mode") == "host":
+            assert not names_collector, (
+                f"{compose.parent.name}/{name} is on the host network, where the "
+                "collector's Docker DNS name does not resolve"
+            )
+        if "OTEL_EXPORTER_OTLP_ENDPOINT" not in env:
+            continue
+        where = f"{compose.parent.name}/{name}"
+        assert env["OTEL_EXPORTER_OTLP_ENDPOINT"] == COLLECTOR_OTLP_HTTP, where
+        assert service.get("network_mode") != "host", where
+        assert env.get("OTEL_SERVICE_NAME") == "${OTEL_SERVICE_NAME:-}", where
+        assert env.get("OTEL_RESOURCE_ATTRIBUTES") == "${OTEL_RESOURCE_ATTRIBUTES:-}", (
+            where
+        )
+
+
+@pytest.mark.parametrize("stack", ["10.app", "preview"])
+def test_only_the_llm_service_exports_telemetry(stack: str) -> None:
+    """llm (FastAPI, infra2-sdk configure_telemetry) is the one Python HTTP service. web is
+    Node with no OTel SDK, and the single compose-level OTEL_SERVICE_NAME the deployment
+    issues cannot name two services, so handing web the endpoint would mislabel it."""
+    compose = ROOT / "truealpha/truealpha" / stack / "compose.yaml"
+    assert _services_exporting_otlp(compose) == {"llm"}
+
+
+def test_data_engine_stays_off_the_collector_while_it_runs_on_the_host_network() -> (
+    None
+):
+    """The collector is Docker-network-only (ops.observability.md 4.2) and all three Dagster
+    roles run with network_mode: host for OpenD, so the Docker DNS name cannot resolve
+    from them and publishing the collector port is not this stack's call. Until a
+    host-reachable ingest exists, the data engine exports nothing -- and is handed no
+    identity either, so the SDK's endpoint-gated fail-fast never engages."""
+    compose = ROOT / "truealpha/truealpha/20.data_engine/compose.yaml"
+    services = compose_services(compose)
+    assert {n for n, s in services.items() if s.get("network_mode") == "host"} == {
+        "dagster-webserver",
+        "dagster-daemon",
+        "dagster-code-server",
+    }
+    assert _services_exporting_otlp(compose) == set()
+    for service in services.values():
+        assert not any(key.startswith("OTEL_") for key in raw_environment(service))
+
+
+def test_both_issuing_paths_name_the_app_service_alike() -> None:
+    """`ta-app.sync` (this Deployer) and promote / preview (ServiceSpec) each issue
+    OTEL_SERVICE_NAME into the same compose. If they disagree the compose changes identity
+    with whichever path deployed it last, splitting one service across two SigNoz names."""
+    from libs.deploy_contract import service_spec
+    from libs.service_registry import service_attrs
+
+    deployer = _load_deploy_module().AppDeployer
+    spec = service_spec("truealpha/app")
+
+    assert deployer.telemetry_service_name == "truealpha-app"
+    assert deployer.telemetry_service_name == spec.resolved_identity_service_name()
+    assert (deployer.telemetry_component or deployer.service) == spec.identity_component
+    assert service_attrs()["truealpha/app"].telemetry_service_name == "truealpha-app"
