@@ -40,10 +40,14 @@ from libs.common import normalize_env_name
 
 # The canary runs arbitrary code on a fixed throwaway preview slot no real PR reuses.
 # Canonical SSOT slot is CANARY_SLOT ("canary-preview") defined in infra2-sdk.
-# Kept as a pure string literal here so lightweight ops-checks jobs (preview-leak-check,
-# host-hygiene-schedule) can import this module without needing infra2-sdk installed (#783).
-CANARY_SLOT = "canary-preview"
-CANARY_PR = 999
+try:
+    from infra2_sdk import CANARY_SLOT, LEGACY_CANARY_PR
+
+    CANARY_PR = LEGACY_CANARY_PR
+except ImportError:
+    CANARY_SLOT = "canary-preview"
+    CANARY_PR = 999
+    LEGACY_CANARY_PR = 999
 
 # data default per env. Non-prod defaults to `staging` data (operator choice); prod is
 # always real prod data. A PR sha never runs on prod data and prod data never leaves
@@ -290,7 +294,9 @@ _PR_VALUE_RE = re.compile(r"\A[1-9][0-9]*\Z")  # a positive PR number, no leadin
 _SHA7_RE = re.compile(r"\A[0-9a-f]{7,40}\Z")  # a (lowercased) commit sha, >=7 hex
 _TAG_VALUE_RE = re.compile(r"\Av\d+\.\d+\.\d+\Z")  # a release tag vX.Y.Z
 _BRANCH_VALUE_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")  # a git branch name (e.g. main)
-_CANARY_VALUE_RE = re.compile(r"\A[a-z0-9][a-z0-9_-]*\Z")  # a canary slot name (e.g. preview)
+_CANARY_VALUE_RE = re.compile(
+    r"\A[a-z0-9][a-z0-9_-]*\Z"
+)  # a canary slot name (e.g. preview)
 
 # Every preview kind is <kind>-<value>; there is no bare special case, so any downstream
 # (telemetry label, URL, compose name) parses a slot the same way. `branch` (default main)
@@ -458,12 +464,17 @@ def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
         return "pr", text
     if kind == "canary":
         text = str(value).strip().lower() if value is not None else ""
-        if not text or text in ("999", "pr-999", "canary-999", "preview", "canary", CANARY_SLOT):
+        if not text or text in (
+            "999",
+            "pr-999",
+            "canary-999",
+            "preview",
+            "canary",
+            CANARY_SLOT,
+        ):
             text = "preview"
         elif not _CANARY_VALUE_RE.match(text):
-            raise ValueError(
-                f"preview canary alias needs a valid slug, got {value!r}"
-            )
+            raise ValueError(f"preview canary alias needs a valid slug, got {value!r}")
         return "canary", text
     if kind == "commit":
         text = str(value).strip().lower()
