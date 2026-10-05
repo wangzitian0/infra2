@@ -9,6 +9,8 @@ from tools.ci_runner import (
     DUMMY_COMPOSE_ENV,
     GATES,
     main,
+    run_compose,
+    run_deployers,
     run_harness,
     run_preflight,
     run_vault,
@@ -74,6 +76,16 @@ def test_ci_runner_preflight_gate_succeeds() -> None:
     assert ret == 0
 
 
+def test_ci_runner_compose_gate_succeeds() -> None:
+    ret = run_compose(verbose=False)
+    assert ret == 0
+
+
+def test_ci_runner_deployers_gate_succeeds() -> None:
+    ret = run_deployers(verbose=False)
+    assert ret == 0
+
+
 def test_ci_runner_harness_gate_succeeds() -> None:
     ret = run_harness(verbose=False)
     assert ret == 0
@@ -89,7 +101,9 @@ def test_ci_runner_vault_policy_only_succeeds() -> None:
     assert ret == 0
 
 
-def test_ci_runner_vault_mutation_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ci_runner_vault_mutation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     # Falsifiability test: a mutated vault-agent.hcl missing exit_on_err fails
     test_root = tmp_path / "mock_repo"
     test_root.mkdir()
@@ -99,24 +113,28 @@ def test_ci_runner_vault_mutation_fails(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr("tools.ci_runner.ROOT", test_root)
     ret = run_vault(agents_only=True, verbose=False)
     assert ret == 1
+    captured = capsys.readouterr()
+    assert "Missing 'exit_on_err = true'" in captured.out
 
 
-def test_ci_runner_deployer_mutation_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Falsifiability test: a deploy.py defining Deployer without service fails
-    from tools.ci_runner import run_deployers
-
+def test_ci_runner_deployer_mutation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Falsifiability test: a deploy.py defining Deployer subclass without service fails
     test_root = tmp_path / "mock_deployer_repo"
     test_root.mkdir()
     bad_deploy = test_root / "deploy.py"
     bad_deploy.write_text(
-        "class MockDeployer:\n"
+        "class Deployer:\n"
+        "    pass\n"
+        "class MockDeployer(Deployer):\n"
         "    service = ''\n"
-        "    compose_path = 'compose.yaml'\n"
-        "MockDeployer.__mro__ = (MockDeployer, type('Deployer', (), {}), object)\n",
+        "    compose_path = 'compose.yaml'\n",
         encoding="utf-8",
     )
 
     monkeypatch.setattr("tools.ci_runner.ROOT", test_root)
     ret = run_deployers(verbose=False)
     assert ret == 1
-
+    captured = capsys.readouterr()
+    assert "missing service name" in captured.out

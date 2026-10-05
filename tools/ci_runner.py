@@ -56,12 +56,15 @@ def _run_cmd(
     check: bool = True,
     capture_output: bool = False,
     set_pythonpath: bool = True,
+    timeout: float | None = 120,
 ) -> subprocess.CompletedProcess[str]:
     """Execute a system command and return the process result."""
     merged_env = os.environ.copy()
     if set_pythonpath:
         existing_pp = merged_env.get("PYTHONPATH", "")
         merged_env["PYTHONPATH"] = f"{ROOT}:{existing_pp}" if existing_pp else str(ROOT)
+    else:
+        merged_env.pop("PYTHONPATH", None)
     if env:
         merged_env.update(env)
     return subprocess.run(
@@ -71,6 +74,8 @@ def _run_cmd(
         check=check,
         capture_output=capture_output,
         text=True,
+        timeout=timeout,
+        stdin=subprocess.DEVNULL,
     )
 
 
@@ -135,7 +140,9 @@ def run_preflight(verbose: bool = False) -> int:
 
     total_time = time.monotonic() - start_time
     if failed:
-        print(f"❌ Preflight failed: {len(failed)} check(s) failed in {total_time:.2f}s")
+        print(
+            f"❌ Preflight failed: {len(failed)} check(s) failed in {total_time:.2f}s"
+        )
         return 1
 
     print(f"✅ Preflight passed: all {len(gates)} checks passed in {total_time:.2f}s")
@@ -159,17 +166,36 @@ def run_compose(verbose: bool = False) -> int:
     compose_files.sort()
     print(f"  Found {len(compose_files)} compose file(s) to validate.")
 
-    # 2. Check docker compose config if docker is available
+    # 2. Validate YAML syntax for all compose files
+    print("  Validating compose YAML syntax...")
+    import yaml
+
+    failed_yaml: list[Path] = []
+    for file in compose_files:
+        try:
+            with open(file, "r", encoding="utf-8") as f:
+                yaml.safe_load(f)
+        except Exception as exc:
+            print(f"  ❌ Compose syntax error in {file.relative_to(ROOT)}: {exc}")
+            failed_yaml.append(file)
+    if failed_yaml:
+        print(f"❌ {len(failed_yaml)} compose file(s) failed YAML syntax validation.")
+        return 1
+
+    # 3. Check docker compose config if docker is available
     has_docker = shutil.which("docker") is not None
     if has_docker:
-        # Check docker daemon availability with a short probe
-        probe = subprocess.run(
-            ["docker", "compose", "version"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
-        if probe.returncode != 0:
+        try:
+            probe = subprocess.run(
+                ["docker", "compose", "version"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                stdin=subprocess.DEVNULL,
+            )
+            if probe.returncode != 0:
+                has_docker = False
+        except (subprocess.SubprocessError, OSError):
             has_docker = False
 
     if has_docker:
@@ -196,9 +222,11 @@ def run_compose(verbose: bool = False) -> int:
             print(f"❌ {len(failed_compose)} compose file(s) failed validation.")
             return 1
     else:
-        print("  ℹ️ Docker not available or inactive. Skipped live compose config validation.")
+        print(
+            "  ℹ️ Docker daemon not running. Verified YAML syntax; skipped live docker compose config."
+        )
 
-    # 3. Lint compose resource limits and image pins
+    # 4. Lint compose resource limits and image pins
     print("  Running compose resource limits and image pins lint...")
     try:
         _run_cmd([sys.executable, "tools/lint_compose_resource_limits.py"])
@@ -221,13 +249,13 @@ def run_deployers(verbose: bool = False) -> int:
     print("▶ Validating Deployer classes and service facets...")
     start_time = time.monotonic()
 
-    # 1. Discover all deploy.py files
+    # 1. Discover all deploy.py files excluding third-party submodules
     deploy_files: list[Path] = []
     for path in ROOT.glob("**/deploy.py"):
         path_str = str(path)
         if any(
             skip in path_str
-            for skip in (".venv", "node_modules", ".git", "build", "dist")
+            for skip in (".venv", "node_modules", ".git", "build", "dist", "repos")
         ):
             continue
         deploy_files.append(path)
@@ -244,7 +272,10 @@ def run_deployers(verbose: bool = False) -> int:
                 continue
             module = importlib.util.module_from_spec(spec)
             sys.modules["deploy_module"] = module
-            spec.loader.exec_module(module)
+            try:
+                spec.loader.exec_module(module)
+            finally:
+                sys.modules.pop("deploy_module", None)
 
             # Discover Deployer subclasses
             deployer_cls = None
@@ -322,7 +353,12 @@ def run_vault(
         ]
         for hcl in agent_files:
             rel = hcl.relative_to(ROOT)
-            content = hcl.read_text(encoding="utf-8")
+            try:
+                content = hcl.read_text(encoding="utf-8")
+            except OSError as exc:
+                print(f"  ❌ Cannot read {rel}: {exc}")
+                failed = True
+                continue
             if "exit_on_err = true" not in content:
                 print(f"  ❌ Missing 'exit_on_err = true' in {rel}")
                 failed = True
@@ -337,7 +373,12 @@ def run_vault(
         ]
         for compose in compose_files:
             rel = compose.relative_to(ROOT)
-            content = compose.read_text(encoding="utf-8")
+            try:
+                content = compose.read_text(encoding="utf-8")
+            except OSError as exc:
+                print(f"  ❌ Cannot read {rel}: {exc}")
+                failed = True
+                continue
             if "vault-agent:" not in content:
                 continue
             if "rm -f /vault/secrets/.env" not in content:
@@ -347,7 +388,9 @@ def run_vault(
                 print(f"  ❌ Vault agent healthcheck missing token lookup in {rel}")
                 failed = True
             if "<no value>" not in content:
-                print(f"  ❌ Vault agent healthcheck does not reject <no value> in {rel}")
+                print(
+                    f"  ❌ Vault agent healthcheck does not reject <no value> in {rel}"
+                )
                 failed = True
             if re.search(r"VAULT_AGENT_MAX_SECRET_AGE_SECONDS|stat -c %Y", content):
                 print(f"  ❌ Vault agent must not use mtime freshness in {rel}")
@@ -386,8 +429,12 @@ def run_vault(
                     print(f"  ❌ Invalid HCL in {rel}: {exc}")
                     failed = True
             else:
-                # Basic non-empty balanced braces check when hcl2 is absent
-                content = pol.read_text(encoding="utf-8").strip()
+                try:
+                    content = pol.read_text(encoding="utf-8").strip()
+                except OSError as exc:
+                    print(f"  ❌ Cannot read {rel}: {exc}")
+                    failed = True
+                    continue
                 if not content:
                     print(f"  ❌ Empty policy file: {rel}")
                     failed = True
@@ -459,9 +506,39 @@ def run_lint(verbose: bool = False) -> int:
 
     # 2. ruff format check on changed files
     base_ref = os.environ.get("GITHUB_BASE_REF", "main")
-    changed_py_files: list[str] = []
+    changed_py_files: set[str] = set()
+
+    # Check working tree changes (both unstaged and staged)
     try:
-        diff_res = subprocess.run(
+        wt_diff = subprocess.run(
+            [
+                "git",
+                "diff",
+                "--name-only",
+                "HEAD",
+                "--",
+                "libs",
+                "bootstrap",
+                "platform",
+                "finance_report",
+                "truealpha",
+                "tools",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+        for line in wt_diff.stdout.splitlines():
+            if line.endswith(".py") and (ROOT / line).exists():
+                changed_py_files.add(line)
+    except Exception as exc:
+        print(f"  ⚠️ Warning: git diff HEAD check failed: {exc}")
+
+    # Check committed branch changes against base
+    try:
+        branch_diff = subprocess.run(
             [
                 "git",
                 "diff",
@@ -479,18 +556,20 @@ def run_lint(verbose: bool = False) -> int:
             capture_output=True,
             text=True,
             check=False,
+            timeout=30,
         )
-        if diff_res.returncode == 0:
-            changed_py_files = [
-                f for f in diff_res.stdout.splitlines() if f.endswith(".py")
-            ]
-    except Exception:
-        changed_py_files = []
+        if branch_diff.returncode == 0:
+            for line in branch_diff.stdout.splitlines():
+                if line.endswith(".py") and (ROOT / line).exists():
+                    changed_py_files.add(line)
+    except Exception as exc:
+        print(f"  ⚠️ Warning: git diff origin/{base_ref}...HEAD check failed: {exc}")
 
-    if changed_py_files:
-        print(f"  Checking format on {len(changed_py_files)} changed Python file(s)...")
+    sorted_files = sorted(changed_py_files)
+    if sorted_files:
+        print(f"  Checking format on {len(sorted_files)} changed Python file(s)...")
         try:
-            _run_cmd(["ruff", "format", "--check", *changed_py_files])
+            _run_cmd(["ruff", "format", "--check", *sorted_files])
             print("  ✅ ruff format passed.")
         except subprocess.CalledProcessError:
             print("  ❌ ruff format failed.")
@@ -570,10 +649,17 @@ GATES: dict[str, tuple[str, Callable[..., int]]] = {
 }
 
 
-def run_all(verbose: bool = False, fail_fast: bool = True) -> int:
+def run_all(
+    verbose: bool = False,
+    fail_fast: bool = True,
+    with_unit_tests: bool = False,
+) -> int:
     """Run all primary gate targets sequentially."""
     print("🚀 Running all CI gate targets...")
     suite = ["preflight", "compose", "deployers", "vault", "harness", "lint"]
+    if with_unit_tests:
+        suite.append("unit-tests")
+
     failed = False
     for target in suite:
         _, fn = GATES[target]
@@ -615,6 +701,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Do not stop on first failure when running all targets.",
     )
     parser.add_argument(
+        "--with-unit-tests",
+        action="store_true",
+        help="When running all targets, also execute the full unit test suite.",
+    )
+    parser.add_argument(
         "--agents-only",
         action="store_true",
         help="For vault target: validate vault-agent settings only.",
@@ -638,7 +729,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.target == "all":
-        return run_all(verbose=args.verbose, fail_fast=args.fail_fast)
+        return run_all(
+            verbose=args.verbose,
+            fail_fast=args.fail_fast,
+            with_unit_tests=args.with_unit_tests,
+        )
 
     if args.target == "vault":
         return run_vault(

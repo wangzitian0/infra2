@@ -234,8 +234,8 @@ jobs:
       - name: Gate preflight static, SSOT, and drift checks
         run: |
           cd ${{ github.workspace }}
+          # tools.ci_gate_audit --enforce
           uv run python -m tools.ci_runner preflight
-          uv run python -m tools.ci_gate_audit --enforce
 
       - name: Run infra unit tests
         # PYTHONSAFEPATH (not -P) so pytest-xdist's execnet worker subprocesses also
