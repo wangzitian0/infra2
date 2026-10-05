@@ -100,7 +100,7 @@ also enforces compose↔inventory equality and registry-derived `service_id` val
   A tool that grows real logic should push it down into `libs/` so it gets
   covered by `libs/tests` (pattern: `tools/deploy_guard_audit.py` →
   `libs/deploy_dependencies.py`; `tools/lint_platform_image_pins.py` →
-  `libs/image_pins.py`). Several older scripts still carry embedded logic —
+  `infra2_sdk.rules.compose`). Several older scripts still carry embedded logic —
   treat that as debt to sink, not a pattern to copy.
 
 ## Runner (invoke namespaces)

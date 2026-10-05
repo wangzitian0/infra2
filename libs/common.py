@@ -230,37 +230,6 @@ def get_env() -> dict[str, str | None]:
     return _env_cache
 
 
-def _domain_env_label(env_name: str) -> str:
-    """Convert internal env name into a DNS-safe label."""
-    return env_name.replace("_", "-")
-
-
-try:
-    from infra2_sdk.routing import resolve_app_hostname, resolve_service_url
-except ImportError:
-    # Minimal fallback for SDK-free environments
-    def resolve_app_hostname(
-        subdomain: str,
-        tier: str,
-        *,
-        base_domain: str = "zitian.party",
-        **kw,
-    ) -> str:
-        norm = normalize_env_name(tier)
-        suffix = "" if norm == "production" else f"-{_domain_env_label(norm)}"
-        return f"{subdomain}{suffix}.{base_domain}"
-
-    def resolve_service_url(
-        subdomain: str,
-        tier: str,
-        *,
-        base_domain: str = "zitian.party",
-        **kw,
-    ) -> str:
-        host = resolve_app_hostname(subdomain, tier, base_domain=base_domain)
-        return f"https://{host}"
-
-
 def get_service_url(
     service: str, domain: str | None = None, env: dict | None = None
 ) -> str:
@@ -274,6 +243,8 @@ def get_service_url(
     Returns:
         Full HTTPS URL for the service (no trailing slash)
     """
+    from infra2_sdk.routing import resolve_service_url
+
     e = env or get_env()
     if domain is None:
         domain = e.get("INTERNAL_DOMAIN")
@@ -307,6 +278,8 @@ def with_env_suffix(name: str, env: dict | None = None) -> str:
 
 def service_domain(subdomain: str, env: dict | None = None) -> str:
     """Build public domain with env suffix ('' for production) via infra2_sdk.routing."""
+    from infra2_sdk.routing import resolve_app_hostname
+
     e = env or get_env()
     domain = e.get("INTERNAL_DOMAIN")
     if not subdomain or not domain:

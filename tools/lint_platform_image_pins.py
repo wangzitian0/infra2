@@ -18,7 +18,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from libs.image_pins import bare_latest_violations  # noqa: E402
+from infra2_sdk.rules.compose import (  # noqa: E402
+    find_bare_latest_violations as bare_latest_violations,
+)
 
 DEFAULT_GLOBS = ["platform/*/compose.yaml"]
 

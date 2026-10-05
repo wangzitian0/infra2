@@ -74,7 +74,7 @@
 
 ### Rule 6: 镜像必须钉版本 (Pin Images)
 platform compose 中的镜像禁止浮动 tag——上游静默漂移且不可复现。事故先例：#253/#255 的 prefect 卡死源于浮动的 `:3-latest` tag 漂移。规范要求钉到不随上游移动的引用：至少钉具体版本，推荐钉 digest（`image: repo:tag@sha256:...`）。
-- **机械守卫**（范围小于规范本身）：`tools/lint_platform_image_pins.py`（infra-ci 阻断）目前只拦截字面量裸 `:latest`；其它浮动 tag（如 `:3-latest`、`:stable`）靠 review 把关。逻辑在 `libs/image_pins.py`，proof `libs/tests/test_image_pins.py`。
+- **机械守卫**（范围小于规范本身）：`tools/lint_platform_image_pins.py`（infra-ci 阻断）目前只拦截字面量裸 `:latest`；其它浮动 tag（如 `:3-latest`、`:stable`）靠 review 把关。逻辑在 `infra2_sdk.rules.compose`，proof `libs/tests/test_image_pins.py`。
 
 ### Rule 7: 发布前 Schema 与枚举双向校验 (Pre-Deploy Schema Gate, #698)
 在任何涉及持久化存储的应用部署销毁或重启容器前，必须执行 Pre-Deploy Schema Gate（`tools/pre_deploy_schema_check.py`）：
