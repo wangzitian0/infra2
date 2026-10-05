@@ -51,9 +51,9 @@ INFRA2_STABILITY_REPORT_DRY_RUN=1 python -m tools.stability_report
 ```
 
 #### 2. Physical Image, Container & Route Health Probes
-Verify container health, network reachability, and alerting bridge status using the probe runner:
+Verify container health, network reachability, and alerting bridge status using the probe runner (dry-run one-shot probe):
 ```bash
-python -m tools.infra_probe_runner --check
+INFRA_PROBE_DRY_RUN=1 python -m tools.infra_probe_runner --once
 ```
 
 ## 3. Red Lines (Instant Rejection)
