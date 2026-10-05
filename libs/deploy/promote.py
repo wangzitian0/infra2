@@ -31,6 +31,12 @@ from libs.core import REPO_ROOT
 from libs.deploy.failure_snapshot import emit_failure_snapshot
 from libs.observability.openpanel import openpanel_env
 from libs.deploy.refs import resolve_to_sha
+from libs.deploy.preflight import (
+    check_approle_creds,
+    extract_vault_token_from_env,
+    parse_env_var as _env_value,
+    verify_token_status,
+)
 
 # infra2#525: Dokploy deployment records carry no caller-supplied correlation id, so a
 # start-timestamp floor (captured just before OUR OWN deploy_compose() call) is the only
@@ -135,16 +141,6 @@ def wait_for_rollout(
         _sleep(max(1, interval))
 
 
-def _env_value(env_str: str, key: str) -> str | None:
-    """Read one KEY=VALUE from a Dokploy compose env blob (same simple line format
-    update_compose_env writes). Returns None if absent."""
-    for line in (env_str or "").split("\n"):
-        line = line.strip()
-        if line.startswith(f"{key}=") and not line.startswith("#"):
-            return line.split("=", 1)[1].strip()
-    return None
-
-
 def assert_approle_creds_present(service: str, client, compose_id: str) -> None:
     """Fail closed if this service's compose uses Vault AppRole auth but the env about
     to be deployed lacks role/secret/addr creds.
@@ -165,15 +161,8 @@ def assert_approle_creds_present(service: str, client, compose_id: str) -> None:
     if not meta or not meta.compose_path:
         return  # no statically-registered compose file to inspect
     compose_text = (REPO_ROOT / meta.compose_path).read_text(encoding="utf-8")
-    if "VAULT_ROLE_ID" not in compose_text and "VAULT_SECRET_ID" not in compose_text:
-        return  # service does not use AppRole auth
-
     env_text = client.get_compose_env(compose_id)
-    missing = [
-        key
-        for key in ("VAULT_ROLE_ID", "VAULT_SECRET_ID", "VAULT_ADDR")
-        if not (_env_value(env_text, key) or "").strip()
-    ]
+    missing = check_approle_creds(compose_text, env_text)
     if missing:
         raise ValueError(
             f"{service}: compose uses Vault AppRole auth but {', '.join(missing)} "
@@ -262,18 +251,14 @@ def preflight_vault_token(client, compose_id: str, *, min_ttl_hours: int = 48):
     positional caller-supplied param rather than a URL built inline).
     """
     from libs.common import infra_domain
-    from libs.env import verify_vault_token
 
     env_text = client.get_compose_env(compose_id)
-    if _env_value(env_text, "VAULT_ROLE_ID") and _env_value(
-        env_text, "VAULT_SECRET_ID"
-    ):
-        return  # AppRole auth -> any leftover VAULT_APP_TOKEN is unused; do not gate on it
-    token = _env_value(env_text, "VAULT_APP_TOKEN")
-    if not token:
-        return  # no token in this compose env -> nothing to gate on
-    result = verify_vault_token(
-        token, addr=f"https://vault.{infra_domain()}", min_ttl_hours=min_ttl_hours
+    is_approle, token = extract_vault_token_from_env(env_text)
+    if is_approle or not token:
+        return  # AppRole auth or no token -> nothing to gate on
+
+    result = verify_token_status(
+        token, vault_addr=f"https://vault.{infra_domain()}", min_ttl_hours=min_ttl_hours
     )
     if not result.get("valid"):
         raise RuntimeError(

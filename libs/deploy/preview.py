@@ -34,13 +34,13 @@ This is a pure importable backend — the operator surface is the deploy_v2 CLI:
 
 from __future__ import annotations
 
-import json
 import time
 from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import httpx
+from infra2_sdk.deploy_health import poll_until_healthy
 
 from libs.common import infra_domain
 from libs.compose_lock import compose_write_lock
@@ -490,41 +490,44 @@ def _wait_for_readiness(
     _sleep=time.sleep,
     _now=time.monotonic,
 ) -> bool:
-    """Require every configured public surface and its exact deploy version.
+    """Require every configured public surface and its exact deploy version via SDK."""
+    raw_getter = http_get or _http_get
 
-    All surfaces are checked on every pass. A 200 without parseable matching version
-    metadata is not readiness when the probe declares ``version_fields``.
-    """
-    getter = http_get or _http_get
+    def sdk_getter(u: str) -> tuple[int, str]:
+        try:
+            return raw_getter(u, 10)
+        except TypeError:
+            return raw_getter(u)
+
+    # Validate version sources first (fail-closed on unknown source)
+    for probe in probes:
+        if probe.version_fields and probe.version_source not in expected_versions:
+            raise ValueError(
+                f"no expected preview version for source {probe.version_source!r}"
+            )
+
     deadline = _now() + max(0, timeout)
     while True:
         all_ready = bool(probes)
         for probe in probes:
-            status, body = getter(f"{base_url.rstrip('/')}{probe.path}", 10)
-            if status != 200:
+            expected_ver = (
+                expected_versions.get(probe.version_source, "")
+                if probe.version_fields
+                else ""
+            )
+            url = f"{base_url.rstrip('/')}{probe.path}"
+            try:
+                poll_until_healthy(
+                    url,
+                    http_get=sdk_getter,
+                    expected_version=expected_ver,
+                    version_json_keys=probe.version_fields or ("git_sha", "version"),
+                    max_attempts=1,
+                    interval_seconds=0,
+                    sleep=lambda _: None,
+                )
+            except RuntimeError:
                 all_ready = False
-                continue
-            if probe.version_fields:
-                expected_version = expected_versions.get(probe.version_source)
-                if expected_version is None:
-                    raise ValueError(
-                        f"no expected preview version for source "
-                        f"{probe.version_source!r}"
-                    )
-                try:
-                    payload = json.loads(body)
-                except (json.JSONDecodeError, TypeError):
-                    all_ready = False
-                    continue
-                if not isinstance(payload, dict):
-                    all_ready = False
-                    continue
-                if not any(
-                    str(payload[field]) == expected_version
-                    for field in probe.version_fields
-                    if payload.get(field) is not None
-                ):
-                    all_ready = False
         if all_ready:
             return True
         if _now() >= deadline:
