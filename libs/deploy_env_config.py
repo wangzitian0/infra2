@@ -37,6 +37,7 @@ import warnings
 from dataclasses import dataclass, replace
 
 from libs.common import normalize_env_name
+from libs.core.constants import PREVIEW_KINDS
 
 # The canary runs arbitrary code on a fixed throwaway preview slot no real PR reuses.
 # Canonical SSOT slot is CANARY_SLOT ("canary-preview") defined in infra2-sdk.
@@ -298,7 +299,6 @@ _CANARY_VALUE_RE = re.compile(
     r"\A[a-z0-9][a-z0-9_-]*\Z"
 )  # a canary slot name (e.g. preview)
 
-from libs.core.constants import PREVIEW_KINDS
 
 # The Dokploy ENVIRONMENT name every service's preview stacks live under (kept distinct
 # from staging/prod composes; the lifecycle find-or-creates this environment). Shared
