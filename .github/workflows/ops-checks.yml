@@ -472,7 +472,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
-      group: deploy-v2-canary-pr-999
+      group: deploy-v2-canary
       cancel-in-progress: false
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}

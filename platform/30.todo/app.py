@@ -116,7 +116,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" id="radarGrid">
         <div class="p-4 bg-slate-950/60 rounded-lg border border-slate-800/80 flex items-center justify-between" id="card-postgres">
           <div>
-            <div class="text-xs text-slate-400 font-medium">PostgreSQL (DML/CRUD)</div>
+            <div class="text-xs text-slate-400 font-medium">PostgreSQL (Wire Protocol)</div>
             <div class="text-xs text-slate-500 mt-0.5" id="latency-postgres">-- ms</div>
           </div>
           <span class="badge badge-wait" id="badge-postgres">WAIT</span>

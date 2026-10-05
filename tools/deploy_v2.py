@@ -42,7 +42,6 @@ from libs.iac_runner_client import (
 )
 from libs.deploy_contract import (
     _SHA_RE,
-    SERVICES,
     DeployTarget,
     deploy_type_spec,
     is_tag_only_iac_env,
@@ -912,13 +911,6 @@ def deploy_v2(
             "(pass staging_validated, or break_glass for an emergency)"
         )
 
-    if service not in SERVICES:
-        raise ValueError(
-            f"{service!r} is not an app-backed service and is not marked iac_pinned; "
-            "deploy_v2 only routes services explicitly registered as app-backed "
-            "(libs.deploy_contract.SERVICES) or iac_pinned services derived from "
-            "libs.service_registry."
-        )
 
     _wait_for_image_dependencies(
         svc_spec,

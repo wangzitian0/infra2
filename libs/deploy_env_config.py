@@ -458,7 +458,7 @@ def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
         return "pr", text
     if kind == "canary":
         text = str(value).strip().lower() if value is not None else ""
-        if not text or text in ("999", "pr-999", "preview", "canary", CANARY_SLOT):
+        if not text or text in ("999", "pr-999", "canary-999", "preview", "canary", CANARY_SLOT):
             text = "preview"
         elif not _CANARY_VALUE_RE.match(text):
             raise ValueError(

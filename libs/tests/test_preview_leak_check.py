@@ -184,3 +184,53 @@ def test_main_remediate_deletes_and_exits_zero(monkeypatch) -> None:
     assert rc == 0
     # with no token only the bare-slug orphan is confirmed -> remediated
     assert client.deleted == [("mainslug", True)]
+
+
+def test_multi_project_leak_check_isolates_repos() -> None:
+    projects = [
+        {
+            "name": "finance_report",
+            "environments": [
+                {
+                    "name": "preview",
+                    "compose": [
+                        {"name": "finance-report-preview-pr-10", "composeId": "fr_10"},
+                    ],
+                }
+            ],
+        },
+        {
+            "name": "truealpha",
+            "environments": [
+                {
+                    "name": "preview",
+                    "compose": [
+                        {"name": "truealpha-preview-pr-20", "composeId": "ta_20"},
+                        {"name": "truealpha-preview-pr-30", "composeId": "ta_30"},
+                    ],
+                }
+            ],
+        },
+    ]
+
+    def opener(request, timeout=0):
+        url = request.full_url
+        if "finance_report" in url:
+            # PR 10 open in finance_report, PR 20 is NOT
+            batch = [{"number": 10}]
+        elif "truealpha" in url:
+            # PR 20 open in truealpha, PR 30 closed
+            batch = [{"number": 20}]
+        else:
+            batch = []
+        return _Resp(json.dumps(batch).encode())
+
+    client = _FakeClient(projects)
+    result = plc.detect(client, token="tok", opener=opener)
+    leak_ids = {c.compose_id for c, _ in result["leaks"]}
+    # ta_20 is kept (open in truealpha, even though not in finance_report)
+    # fr_10 is kept (open in finance_report)
+    # ta_30 is leaked (closed in truealpha)
+    assert leak_ids == {"ta_30"}
+    assert result["open_pr_fetch"] == "ok"
+

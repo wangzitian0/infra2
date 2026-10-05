@@ -411,7 +411,7 @@ commit `sha`（身份）+ `image_ref`（要拉的已发布镜像）——**code 
 | `preview/pr` | preview | `pr-<N>` | PR 号 |
 | `preview/commit` | preview | `commit-<sha7>` | sha |
 | `preview/tag` | preview | `tag-<slug>` | tag |
-| `canary` | preview | `pr-<保留位>` | 全部（探针，最大灵活）|
+| `canary` | preview | `canary-preview` | 全部（探针，最大灵活）|
 
 **三条框架护栏（与业务无关，保持稳定）**：
 1. **type 选策略/配置，不是内嵌值的扁平枚举**：每实例数据（分支名/PR 号/sha/tag）走 `version_ref`+派生槽，type 集合保持小。
