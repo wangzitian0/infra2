@@ -115,8 +115,8 @@ def test_select_reaps_bare_slug_and_closed_pr_keeps_canary_and_valid() -> None:
     composes = plc.collect_preview_composes(_projects())
     orphans = plc.select_orphans(composes, open_pr_numbers={5})
     reaped = {c.compose_id for c, _ in orphans}
-    # bare `main` orphan + closed pr-777; branch-main, open pr-5, canary pr-999, canary-preview, tag kept.
-    assert reaped == {"mainslug", "pr777"}
+    # bare `main` orphan + closed pr-777 + closed legacy pr-999; branch-main, open pr-5, canary-preview, tag kept.
+    assert reaped == {"mainslug", "pr777", "canary"}
 
 
 def test_failsafe_keeps_prs_when_open_set_unknown_but_still_reaps_bare_slug() -> None:
@@ -127,11 +127,13 @@ def test_failsafe_keeps_prs_when_open_set_unknown_but_still_reaps_bare_slug() ->
 
 def test_canary_and_valid_kinds_are_never_flagged() -> None:
     assert plc.orphan_reason("canary-preview", open_pr_numbers=set()) is None
-    assert plc.orphan_reason("pr-999", open_pr_numbers=set()) is None
     assert plc.orphan_reason("branch-main", open_pr_numbers=set()) is None
     assert plc.orphan_reason("tag-v1-2-3", open_pr_numbers=set()) is None
     # commit-<sha7> is a supported preview kind — must never be treated as an orphan.
     assert plc.orphan_reason("commit-1ab32d5", open_pr_numbers=set()) is None
+    # closed pr-999 is reaped, open pr-999 is kept.
+    assert plc.orphan_reason("pr-999", open_pr_numbers={999}) is None
+    assert plc.orphan_reason("pr-999", open_pr_numbers=set()) is not None
 
 
 def test_fetch_open_prs_paginates_and_failsafes() -> None:
@@ -147,7 +149,7 @@ def test_detect_reports_leaks_without_deleting() -> None:
     client = _FakeClient(_projects())
     result = plc.detect(client, token="tok", opener=_opener_for([[{"number": 5}]]))
     assert client.deleted == []  # detection never deletes
-    assert {c.compose_id for c, _ in result["leaks"]} == {"mainslug", "pr777"}
+    assert {c.compose_id for c, _ in result["leaks"]} == {"mainslug", "pr777", "canary"}
     assert result["open_pr_fetch"] == "ok"
 
 
@@ -157,7 +159,7 @@ def test_remediate_deletes_confirmed_leaks_with_volumes() -> None:
         "leaks"
     ]
     plc.remediate(client, leaks)
-    assert sorted(cid for cid, _ in client.deleted) == ["mainslug", "pr777"]
+    assert sorted(cid for cid, _ in client.deleted) == ["canary", "mainslug", "pr777"]
     assert all(delete_volumes is True for _, delete_volumes in client.deleted)
 
 

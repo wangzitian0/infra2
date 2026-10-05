@@ -284,7 +284,7 @@ def get_service_url(
     if not subdomain:
         raise ValueError(f"Unknown service: {service}")
 
-    env_name = e.get("ENV", "production")
+    env_name = normalize_env_name(e.get("ENV"))
     if service in SHARED_PLATFORM_SERVICES():
         env_name = "production"
 
@@ -311,7 +311,7 @@ def service_domain(subdomain: str, env: dict | None = None) -> str:
     domain = e.get("INTERNAL_DOMAIN")
     if not subdomain or not domain:
         return ""
-    env_name = e.get("ENV", "production")
+    env_name = normalize_env_name(e.get("ENV"))
     return resolve_app_hostname(subdomain, tier=env_name, base_domain=domain)
 
 

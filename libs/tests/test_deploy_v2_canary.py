@@ -524,7 +524,7 @@ def test_main_rejects_healthy_result_that_breaches_configured_deadline(
         return canary.CanaryResult(
             ok=True,
             target=_fake_target(),
-            alias="pr-999",
+            alias=canary.CANARY_SLOT,
             url="u",
             healthy=True,
             torn_down=True,
@@ -567,7 +567,7 @@ def test_main_no_wait_emits_skip_evidence(monkeypatch, capsys):
         lambda **kw: canary.CanaryResult(
             ok=None,
             target=_fake_target(),
-            alias="pr-999",
+            alias=canary.CANARY_SLOT,
             url="u",
             healthy=None,
             torn_down=True,
@@ -594,7 +594,7 @@ def test_main_treats_leak_as_cleanup_failure(monkeypatch):
         return CanaryResult(
             ok=True,
             target=_fake_target(),
-            alias="pr-999",
+            alias=canary.CANARY_SLOT,
             url="u",
             healthy=True,
             torn_down=False,
@@ -668,7 +668,7 @@ def test_main_iterates_registry_canary_services(monkeypatch, capsys):
         return canary.CanaryResult(
             ok=True,
             target=_fake_target(),
-            alias="pr-999",
+            alias=canary.CANARY_SLOT,
             url="u",
             healthy=True,
             torn_down=True,
@@ -680,3 +680,47 @@ def test_main_iterates_registry_canary_services(monkeypatch, capsys):
     assert seen == canary.canary_services() == ["finance_report/app"]
     payload = json.loads(capsys.readouterr().out)
     assert payload["torn_down"] is True
+
+
+def test_best_effort_down_converges_after_initial_delete_dispatch(monkeypatch):
+    calls = {"n": 0}
+
+    def down_sequence(kind, value, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return SimpleNamespace(compose_id="cmp-123")
+        return SimpleNamespace(compose_id=None)
+
+    monkeypatch.setattr(canary, "down", down_sequence)
+    ok = canary._best_effort_down(
+        domain="z.p",
+        client=_NoContainersClient(),
+        service="finance_report/app",
+        attempts=3,
+        _sleep=lambda *_: None,
+    )
+    assert ok is True
+    assert calls["n"] == 3  # 1 dispatch + 2 consecutive absent reads
+
+
+def test_best_effort_down_detects_hyphenated_container_survivors(monkeypatch):
+    calls = {"n": 0}
+
+    def down_sequence(kind, value, **kw):
+        calls["n"] += 1
+        return SimpleNamespace(compose_id=None)
+
+    class HyphenContainersClient:
+        def get_containers(self):
+            return [{"name": f"/finance-report-db-{canary.CANARY_SLOT}"}]
+
+    monkeypatch.setattr(canary, "down", down_sequence)
+    ok = canary._best_effort_down(
+        domain="z.p",
+        client=HyphenContainersClient(),
+        service="finance_report/app",
+        attempts=2,
+        _sleep=lambda *_: None,
+    )
+    assert ok is False
+

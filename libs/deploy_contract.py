@@ -341,7 +341,7 @@ def _is_valid_preview_sub_domain(spec: ServiceSpec, sub_domain: str) -> bool:
     #   -branch-<name> / -pr-<N> / -commit-<sha7> / -tag-<v1-2-3> (dots/slashes -> dashes).
     pattern = (
         rf"\A{re.escape(spec.base_subdomain)}-"
-        r"(branch-[a-z0-9-]+|pr-[1-9][0-9]*|commit-[0-9a-f]{7}|tag-v[0-9]+-[0-9]+-[0-9]+|canary-preview|canary)\Z"
+        r"(branch-[a-z0-9-]+|pr-[1-9][0-9]*|commit-[0-9a-f]{7}|tag-v[0-9]+-[0-9]+-[0-9]+|canary-preview)\Z"
     )
     return re.match(pattern, sub_domain) is not None
 

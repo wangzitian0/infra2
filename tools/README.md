@@ -214,7 +214,7 @@ invoke dokploy.env-ensure --project=platform --env=staging --description="stagin
 ## deploy_v2_canary.py
 
 End-to-end proof for the unified deploy primitive. It deploys Finance Report to
-the workflow-serialized `pr-999` slot, waits for the current trigger's terminal
+the workflow-serialized `canary-preview` slot, waits for the current trigger's terminal
 Dokploy deployment record, verifies the exact requested version on every public
 surface, and tears the stack and ephemeral database down in `finally`. Cleanup
 passes only after two consecutive observations of absence. Success and failure
