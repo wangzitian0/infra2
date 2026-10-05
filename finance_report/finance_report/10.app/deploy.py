@@ -156,8 +156,8 @@ class AppDeployer(Deployer):
             # Halt deployment when S3 endpoint cannot be resolved to avoid incomplete configuration
             return None
 
-        # Ensure MinIO bucket exists with proper security configuration
-        cls._ensure_minio_bucket(c)
+        # Ensure S3 bucket exists with proper security configuration
+        cls._ensure_s3_bucket(c)
 
         # OpenPanel PV tracking (model B: one project per environment). Client ids
         # are PUBLIC web client ids (config, not secret); unknown env => empty =>
@@ -169,7 +169,7 @@ class AppDeployer(Deployer):
         return env_vars
 
     @classmethod
-    def _ensure_minio_bucket(cls, c):
+    def _ensure_s3_bucket(cls, c):
         """Ensure S3-compatible storage bucket exists with proper security configuration."""
         s3_shared = sys.modules.get("platform.03.s3.shared") or sys.modules.get(
             "platform.03.minio.shared"
@@ -219,7 +219,7 @@ class AppDeployer(Deployer):
         )
 
         if not minio_result:
-            warning("MinIO bucket creation failed, please configure manually")
+            warning("S3 bucket creation failed, please configure manually")
             return
 
         if not existing_access_key:
@@ -238,7 +238,7 @@ class AppDeployer(Deployer):
             if secrets.set("S3_BUCKET", bucket_name):
                 success("Vault: S3_BUCKET stored")
 
-    _ensure_s3_bucket = _ensure_minio_bucket
+    _ensure_minio_bucket = _ensure_s3_bucket
 
 
 if shared_tasks:

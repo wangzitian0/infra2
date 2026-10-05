@@ -192,7 +192,7 @@ class AppDeployer(Deployer):
         # Raw-archive bucket (truealpha runtime contract: immutable source
         # bytes live in S3-compatible storage; Postgres raw.fetches keeps
         # checksums + pointers). Same pattern as finance_report's bucket.
-        cls._ensure_minio_bucket(c)
+        cls._ensure_s3_bucket(c)
         return env_vars
 
     @classmethod
@@ -406,7 +406,7 @@ class AppDeployer(Deployer):
         return False
 
     @classmethod
-    def _ensure_minio_bucket(cls, c):
+    def _ensure_s3_bucket(cls, c):
         s3_shared = sys.modules.get("platform.03.s3.shared") or sys.modules.get(
             "platform.03.minio.shared"
         )
@@ -484,7 +484,7 @@ class AppDeployer(Deployer):
                 "Run ONCE on the VPS host: VAULT_TOKEN=... bash truealpha/truealpha/10.app/provision_bucket.sh <staging|production>"
             )
 
-        header("MinIO Bucket Setup", f"Creating raw-archive bucket: {bucket_name}")
+        header("S3 Bucket Setup", f"Creating raw-archive bucket: {bucket_name}")
         # lifecycle_days=0 means create_app_bucket ADDS no expiry rule — the raw
         # archive is the append-only, immutable source-of-record (point-in-time
         # replay reads it forever), unlike report/statement buckets.
@@ -499,7 +499,7 @@ class AppDeployer(Deployer):
             public_download=False,
         )
         if not minio_result:
-            warning("MinIO bucket creation failed, please configure manually")
+            warning("S3 bucket creation failed, please configure manually")
             return
         cls._ensure_never_expires(c, bucket_name)
 
@@ -554,7 +554,7 @@ class AppDeployer(Deployer):
                 f"Could not clear lifecycle rules on '{bucket_name}', verify manually: {result.stderr}"
             )
 
-    _ensure_s3_bucket = _ensure_minio_bucket
+    _ensure_minio_bucket = _ensure_s3_bucket
 
 
 if shared_tasks:
