@@ -2,13 +2,13 @@
   "adapter": "rules-v2",
   "dirty_inputs": [],
   "inputs": {
-    "repo": "7130b62781078d23e8469bbb8eed17a930247ad3dba8e8b1234c0844edffb8bf",
-    "root": "1acee297b012a40616ebdaa23b5622ee67fa2495e42eea5eac09e404b617aa92",
-    "skills": "22692a8ac524f6c48a55305a78c51cdd2697e1d6669cde965f766214a4c307cf"
+    "repo": "14182cd9ec2a71a0171cd540a477cdb60545c377ee60d1bde5f31c273bc84845",
+    "root": "77a0f07f693247f372f94c6905d5e29e2fc30706cb3bb5221d054d202b495ba9",
+    "skills": "3ffa1235e76671ab7a86b4855b5c7151beb65be018fd5d0ab191da91ac8aa3f2"
   },
   "language": "en",
   "outputs": {
-    "AGENTS.md": "f82ae7e911de6443853763e32a0818aa137c1b5d5361d9612927c05688bc186b",
+    "AGENTS.md": "0aac05684376a8699c9b5f6ba56d1bec1fbca1130eeb050b78772395d77849db",
     "CLAUDE.md": "a54ff182c7e8acf56acfd6e4b9c3ff41e2c41a31c9b211b2deb9df75d9a478f9"
   },
   "profiles": [
@@ -20,7 +20,7 @@
   "skills": {
     "files": {
       "skills/audit/SKILL.md": "50f721df45da65f421032c7b7bc3890a7a6a25380c34684c1366dc4cfc65d39a",
-      "skills/close/SKILL.md": "4dca0217d2aba9144489403bbec22d95f4ec8c0687d022062278414d9bc67021",
+      "skills/close/SKILL.md": "39173a95b0a18473fe818c772b57ea4d369ff42722f6c0e7c751c3f0678af9d9",
       "skills/codegraph/SKILL.md": "846a10e24f95f87ebf4a6f8a2f9cb715476dcde4f3ac06de3bd29d0d4dda32fc",
       "skills/deploy-evidence/SKILL.md": "8c33f2324e3c1acdcf665f42101bb1454cfea05ac8c6d15ce7a39ce1692cb859",
       "skills/prr/SKILL.md": "a07a5a27e4b4e4f72f99e18d40451aa33401b5a68d370eb808a7e343688a75b7",
@@ -55,7 +55,7 @@
     },
     "root": "skills"
   },
-  "source_revision": "42b59501ee21c72a57899a5202060c49acec6020",
+  "source_revision": "8415c3c8268f1569da72c517a7ab80fc713d8b9d",
   "target": {
     "remote": "github.com/wangzitian0/infra2",
     "repo": "infra2",
