@@ -154,3 +154,26 @@ def test_modules_the_table_calls_implementations_really_are(
         f"{status!r}. Move its row up into the Frozen Shim rows with the module that "
         "now holds the implementation (#846)."
     )
+
+
+def _flat_modules() -> list[str]:
+    return sorted(
+        path.name for path in (ROOT / "libs").glob("*.py") if path.name != "__init__.py"
+    )
+
+
+def test_the_flat_module_list_is_not_empty() -> None:
+    """A glob that matched nothing would make the next test pass vacuously."""
+    assert len(_flat_modules()) >= 20, _flat_modules()
+
+
+@pytest.mark.parametrize("module", _flat_modules())
+def test_every_flat_module_is_in_the_readme(module: str) -> None:
+    """#955: 22 of 41 flat modules were missing from libs/README.md, so a reader could
+    not tell a shim from an implementation, or find what a module is for. Every flat
+    module is named either in the shim table or in the standalone-module table."""
+    text = README.read_text(encoding="utf-8")
+    assert f"`libs/{module}`" in text or f"(./{module})" in text, (
+        f"libs/{module} is not in libs/README.md: add it to the shim table (if it only "
+        "re-exports a domain module) or to 'Platform Clients & Standalone Modules'"
+    )

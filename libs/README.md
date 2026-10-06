@@ -35,6 +35,12 @@ Modules in `libs/` that provide direct integrations or operational clients:
 | [`console.py`](./console.py) | Rich CLI formatting and header blocks | `header()`, `success()`, `error()`, `prompt_action()` |
 | [`page_dedup.py`](./page_dedup.py) | Cross-run page dedup for the GitHub-plane daily jobs (#962): page only when the finding identity changes, report `仍未恢复 · 第 N 天` while unchanged, RESOLVED once; state = one issue per job (client reused from `observability.issue_trail`) | `dedup_page()`, `resolve_page_state()`, `decide()`, `make_identity()`, `Finding` |
 | [`availability_ledger.py`](./availability_ledger.py) | Pure availability ledger aggregation & uptime math | `aggregate_ledger()`, `calculate_uptime()` |
+| [`observability_dashboards.py`](./observability_dashboards.py) | Load and validate the checked-in SigNoz alert rules and dashboards; render apply payloads | `load_alert_definitions()`, `render_alert_payloads()`, `require_rule_channel()` |
+| [`vault_self_refresh_audit.py`](./vault_self_refresh_audit.py) | Read-only Vault self-refresh audit (inventory from `SecretsFacet`, live checks) | `load_inventory()`, `VaultService`, `CheckResult` |
+| [`vault_tokens.py`](./vault_tokens.py) | Vault per-service policy and AppRole naming | `VaultTokenTarget`, `policy_name()`, `normalize_selector()` |
+| [`release_markers.py`](./release_markers.py) | The release tag and the production marker, read from git | `newest_release_tag()`, `production_marker()`, `marker_status()` |
+| [`watchdog_signal_entries.py`](./watchdog_signal_entries.py) | Watchdog signal entries derived from each Deployer's facets (#543) | `render_internal_signal_entries()` |
+| [`coverage_regression.py`](./coverage_regression.py) | Line-coverage no-regression check against a committed baseline | `check_no_regression()`, `load_baseline()`, `read_coverage_summary()` |
 
 ---
 
@@ -66,6 +72,7 @@ six modules the code never followed).
 | `libs/container_breakdown_watch.py` | `libs.observability.watchers.breakdown_watch` | `BreakdownWatch`, `sweep`, `run_once` | Frozen Shim |
 | `libs/backup_verification.py` | `libs.backup.verification` | `load_backup_inventory`, `verify_backup_manifest` | Frozen Shim |
 | `libs/backup_restore.py` | `libs.backup.rehearsal` | `build_postgres_rehearsal_plan`, `run_postgres_restore_rehearsal` | Frozen Shim |
+| `libs/service_identity.py` | `libs.core.service_identity` | `ServiceIdentity`, `DOCKER_LABEL_PREFIX`, `MANAGED_BY` | Frozen Shim |
 | `libs/env.py` | `libs.security.store` | `OpSecrets`, `VaultSecrets`, `get_secrets`, `generate_password`, `verify_vault_token` | Frozen Shim |
 | `libs/service_registry.py` | `libs.core.registry` | `service_attrs`, `ServiceMeta`, `all_services`, `resolve_container_host` | Frozen Shim |
 | `libs/service_facets.py` | `libs.core.facets` | `ProbeFacet`, `PublicRouteFacet`, `SignalFacet`, `BackupFacet`, `Exemption` | Frozen Shim |
