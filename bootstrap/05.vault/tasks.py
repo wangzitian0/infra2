@@ -640,6 +640,9 @@ def setup_approle(c, project=None, service=None, deploy=True):
         from invoke.exceptions import Exit
 
         raise Exit("No matching AppRole targets", code=1)
+    # The runner's own redeploy stops a run inside the runner (SOP-007), so it goes
+    # last: every other role completes first.
+    targets.sort(key=lambda t: (t.project, t.service) == ("bootstrap", "iac_runner"))
 
     if not c.run("vault token lookup", env=venv, hide=True, warn=True).ok:
         from invoke.exceptions import Exit
@@ -817,9 +820,33 @@ def _secret_id_accessors(c, venv: dict[str, str], role: str) -> list[str] | None
 def _env_value(env_str: str, key: str) -> str:
     for line in env_str.splitlines():
         name, _, value = line.strip().partition("=")
-        if name == key:
+        if name.strip() == key:
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
             return value
     return ""
+
+
+def _scan_role_consumers(client: Any, role_id: str) -> list[tuple[str, str, str]]:
+    """``(composeId, label, VAULT_SECRET_ID)`` of each compose that logs in as ``role_id``."""
+    found = []
+    for project in client.list_projects():
+        for environment in project.get("environments") or []:
+            for compose in environment.get("compose") or []:
+                compose_id = compose.get("composeId")
+                if not compose_id:
+                    raise RuntimeError(
+                        f"compose {compose.get('name')!r} has no composeId"
+                    )
+                env_str = client.get_compose_env(compose_id)
+                if _env_value(env_str, "VAULT_ROLE_ID") != role_id:
+                    continue
+                label = f"{project.get('name')}/{environment.get('name')}/{compose.get('name')}"
+                found.append(
+                    (compose_id, label, _env_value(env_str, "VAULT_SECRET_ID"))
+                )
+    return found
 
 
 def _refresh_role_consumers(role_id: str, secret_id: str) -> bool:
@@ -829,31 +856,48 @@ def _refresh_role_consumers(role_id: str, secret_id: str) -> bool:
     (``libs/deploy/preview.py``), so the target compose is not the only consumer of a
     role. A consumer that keeps a destroyed secret id fails its next login. Returns
     True only when every consumer has the new secret id and a new ``done``
-    deployment record.
+    deployment record, and a second read finds no earlier secret id.
     """
     try:
         client, _env_name = _dokploy_client()
-        for project in client.list_projects():
-            for environment in project.get("environments") or []:
-                for compose in environment.get("compose") or []:
-                    compose_id = compose.get("composeId")
-                    if not compose_id:
-                        raise RuntimeError(
-                            f"compose {compose.get('name')!r} has no composeId"
-                        )
-                    env_str = client.get_compose_env(compose_id)
-                    if _env_value(env_str, "VAULT_ROLE_ID") != role_id:
-                        continue
-                    if _env_value(env_str, "VAULT_SECRET_ID") == secret_id:
-                        continue
-                    info(
-                        f"   Consumer {project.get('name')}/{environment.get('name')}/"
-                        f"{compose.get('name')}: new secret id, redeploying"
-                    )
-                    client.update_compose_env(
-                        compose_id, env_vars={"VAULT_SECRET_ID": secret_id}
-                    )
-                    _deploy_compose_with_record_check(client, compose_id)
+        consumers = _scan_role_consumers(client, role_id)
+        # The target already holds the new secret id. A scan that misses it cannot
+        # be complete (for example, a changed project.all shape).
+        if not any(held == secret_id for _, _, held in consumers):
+            raise RuntimeError("the scan did not find the target compose of the role")
+        blocked = []
+        for compose_id, label, held in consumers:
+            if held == secret_id:
+                continue
+            info(f"   Consumer {label}: new secret id, redeploying")
+            try:
+                client.update_compose_env(
+                    compose_id, env_vars={"VAULT_SECRET_ID": secret_id}
+                )
+                _deploy_compose_with_record_check(client, compose_id)
+            except Exception as exc:  # noqa: BLE001 - collect every blocked consumer.
+                error(f"   Consumer {label}: {exc}")
+                blocked.append(label)
+        if blocked:
+            error(
+                "   These composes still hold an earlier secret id: "
+                f"{', '.join(blocked)}. Repair or tear down each one (a preview: "
+                "`python -m tools.deploy_v2 ... --down`), then run the task again."
+            )
+            return False
+        # A deploy or a preview `up` that read the earlier env can write it back after
+        # the scan. Read again just before the destroy.
+        stale = [
+            label
+            for _, label, held in _scan_role_consumers(client, role_id)
+            if held != secret_id
+        ]
+        if stale:
+            error(
+                f"   An earlier secret id came back on: {', '.join(stale)}. "
+                "Run the task again when no deploy or preview run is in flight."
+            )
+            return False
     except Exception as exc:  # noqa: BLE001 - report and let caller mark failure.
         error(f"   Refreshing the consumers of the role failed: {exc}")
         return False

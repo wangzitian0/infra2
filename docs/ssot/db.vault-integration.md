@@ -125,8 +125,14 @@ The AppRole lifecycle is owned by infra2:
   the role's secret id accessors, issues a new secret id, and gives it to the
   target compose and to every other Dokploy compose whose env holds the same
   `VAULT_ROLE_ID` (a PR preview copies its source environment's credentials).
-  Each one needs a new `done` deployment record. Then the task destroys every
-  accessor from the list. A failed step destroys nothing and the task exits 1.
+  Each one needs a new `done` deployment record, and a second read of every
+  compose must find no earlier secret id. Then the task destroys every accessor
+  from the list. A failed step destroys nothing and the task exits 1.
+- A destroy ends new logins with an earlier secret id. Tokens already issued from
+  it stay valid until `token_max_ttl` (168h); revoking them is #1074.
+- Run the re-issue when no deploy or preview run is in flight: a run that read
+  the earlier env can write it back. The task targets `bootstrap/iac_runner` last,
+  because the runner's redeploy stops a run inside the runner.
 - `setup-approle --deploy=false` writes the policy and the role only. It issues no
   secret id, because nothing would store it.
 
