@@ -12,7 +12,7 @@ from libs.deploy import promote as dp
 from libs.deploy.promote import (
     ensure_generated_secrets as _real_ensure_generated_secrets,
 )
-from libs.deploy_queue import parse_epoch_seconds
+from libs.deploy.queue import parse_epoch_seconds
 from libs.tests.compose_env import container_env
 
 # A realistic full commit sha and its 7-char short form (the tag images are published

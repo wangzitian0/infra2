@@ -6,7 +6,7 @@ import subprocess
 
 import yaml
 
-from libs.harness_manifest import (
+from libs.core.harness.manifest import (
     HarnessManifestError,
     check_workspace,
     load_manifest,

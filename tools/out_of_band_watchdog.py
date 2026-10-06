@@ -49,7 +49,7 @@ from libs.alerting import (  # noqa: E402
     redact_credentials,
     render_pager_text,
 )
-from libs.deploy_queue import deployment_start_epoch  # noqa: E402
+from libs.deploy.queue import deployment_start_epoch  # noqa: E402
 from libs.dokploy import get_dokploy  # noqa: E402
 from libs.observability.page_dedup import (  # noqa: E402
     REPORT as DEDUP_REPORT,

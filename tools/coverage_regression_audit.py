@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.coverage_regression import (  # noqa: E402
+from libs.gate.coverage_regression import (  # noqa: E402
     CoverageArtifactMissing,
     CoverageBaselineInvalid,
     check_no_regression,

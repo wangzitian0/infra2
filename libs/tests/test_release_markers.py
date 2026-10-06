@@ -41,7 +41,7 @@ def _repo_with_releases(path: Path, *, marker: str, releases: tuple[str, ...]) -
 
 
 def test_the_report_reads_both_coordinates_out_of_a_real_repository(tmp_path):
-    from libs import release_markers
+    from libs.deploy import release_markers
 
     repo = _repo_with_releases(
         tmp_path / "infra2", marker="v1.1.76", releases=("v1.1.76", "v1.1.77")
@@ -56,7 +56,7 @@ def test_the_report_reads_both_coordinates_out_of_a_real_repository(tmp_path):
 
 
 def test_a_marker_older_than_the_release_pin_reads_as_stale(tmp_path):
-    from libs import release_markers
+    from libs.deploy import release_markers
 
     repo = _repo_with_releases(
         tmp_path / "infra2", marker="v1.1.52", releases=("v1.1.52", "v1.1.76")

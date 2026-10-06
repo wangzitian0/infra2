@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-from libs.deploy_queue import StuckDeploy
+from libs.deploy.queue import StuckDeploy
 from libs.observability.watchers import deploy_queue_guard as guard
 # ---------------------------------------------------------------------------
 # _load_env_file

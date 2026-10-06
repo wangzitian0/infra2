@@ -416,21 +416,33 @@ RETIRED_FLAT_SHIMS_BATCH1 = {
     "watchdog_signal_entries",
 }
 
+RETIRED_FLAT_SHIMS_BATCH2 = {
+    "coverage_regression",
+    "deploy_queue",
+    "harness_manifest",
+    "harness_status",
+    "harness_sweep",
+    "release_markers",
+    "service_identity",
+}
 
-def test_retired_batch1_flat_shim_files_stay_deleted() -> None:
-    """The 13 retired observability & backup flat shims must never be recreated."""
+ALL_RETIRED_FLAT_SHIMS = RETIRED_FLAT_SHIMS_BATCH1 | RETIRED_FLAT_SHIMS_BATCH2
+
+
+def test_retired_flat_shim_files_stay_deleted() -> None:
+    """The retired flat shims must never be recreated."""
     resurrected = [
         name
-        for name in sorted(RETIRED_FLAT_SHIMS_BATCH1)
+        for name in sorted(ALL_RETIRED_FLAT_SHIMS)
         if (ROOT / "libs" / f"{name}.py").exists()
     ]
     assert not resurrected, (
         f"Retired flat shim files recreated under libs/: {resurrected}. Use the domain "
-        "packages directly (libs.observability.*, libs.backup.*)."
+        "packages directly."
     )
 
 
-def test_no_tracked_python_file_uses_a_retired_batch1_flat_shim() -> None:
+def test_no_tracked_python_file_uses_a_retired_flat_shim() -> None:
     """Every tracked python file must import domain packages rather than retired shims."""
     import subprocess
 
@@ -444,7 +456,7 @@ def test_no_tracked_python_file_uses_a_retired_batch1_flat_shim() -> None:
     ).stdout.splitlines()
 
     violations: list[str] = []
-    retired_dotted = {f"libs.{s}" for s in RETIRED_FLAT_SHIMS_BATCH1}
+    retired_dotted = {f"libs.{s}" for s in ALL_RETIRED_FLAT_SHIMS}
 
     for rel in tracked:
         if rel == "libs/tests/test_import_boundaries.py":
