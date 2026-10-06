@@ -14,7 +14,7 @@ sys.path.insert(
     0, str(ROOT)
 )  # runnable as a script and as `python -m tools.fetch_app_manifests`
 
-from libs.app_manifests import CACHE_DIR, fetch_missing  # noqa: E402  (re-exported for tests)
+from libs.security.app_manifests import CACHE_DIR, fetch_missing  # noqa: E402
 
 __all__ = ["CACHE_DIR", "fetch_missing", "main"]
 

@@ -619,7 +619,7 @@ class TestDokployClient:
         the first caller's POST, not a stale snapshot.
 
         This forces the actual race window open (a caller's GET happens, then a real
-        delay before its POST) so that WITHOUT the libs.compose_lock serialization the
+        delay before its POST) so that WITHOUT the libs.deploy.compose_lock serialization the
         second caller's GET would race in during that delay, read the stale env, and
         its later POST would silently discard the first caller's key — reproducing the
         exact "whichever POST lands last silently wins" lost-update infra2#525

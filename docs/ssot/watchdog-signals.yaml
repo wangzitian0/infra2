@@ -552,7 +552,7 @@ signals:
   # sidecar's state-file healthcheck + probe heartbeat cover its liveness).
   # tier=minute/type=alert: a crash-looping container hurts users within
   # minutes. The consecutive_failures/renotify_window_sec below are
-  # libs.recency.evaluate_consecutive_hysteresis's fire thresholds -- exactly the
+  # libs.observability.recency.evaluate_consecutive_hysteresis's fire thresholds -- exactly the
   # debounce whose ABSENCE caused #475 (333 firing/resolved pairs in 48h from a
   # single flapping container, each wrongly resetting the renotify clock).
   # Staging and preview containers never page (#903): they go to the daily

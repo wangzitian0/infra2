@@ -32,7 +32,7 @@ used to fire+resolve every single blip (333 firing + ~equal resolved in 48h duri
 the prefect/vault-agent incident, each RESOLVED wrongly resetting the renotify
 timer). BREAKDOWN_FAILURE_THRESHOLD/BREAKDOWN_RECOVERY_THRESHOLD require N/M
 CONSECUTIVE polls in a direction before firing/resolving -- see
-libs.recency.evaluate_consecutive_hysteresis for the state machine (mirrors
+libs.observability.recency.evaluate_consecutive_hysteresis for the state machine (mirrors
 tools/infra_probe_runner.py's proven _should_send pattern). A bad poll seen while
 an incident is already active but before the recovery threshold is reached never
 starts a new incident or resets the renotify clock.

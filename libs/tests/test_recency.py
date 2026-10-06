@@ -6,7 +6,7 @@ in count/timestamp/now terms.
 
 from __future__ import annotations
 
-from libs.recency import (
+from libs.observability.recency import (
     ConsecutiveObservationState,
     evaluate_consecutive_hysteresis,
     is_recently_flapping,

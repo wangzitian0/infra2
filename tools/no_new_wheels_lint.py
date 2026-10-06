@@ -42,7 +42,6 @@ PRIMITIVES = (
 # not callsites; tests exercise callsites by design.
 SCAN_EXEMPT_FILES = {
     "tools/out_of_band_watchdog.py",  # defines deliver_out_of_band_alert
-    "libs/alerting.py",  # defines deliver_infra2_report + the shared engine
     "libs/alerting/delivery.py",  # defines deliver_infra2_report + the shared engine
     "libs/observability/probes.py",  # defines post_alert_bridge_payload
     "tools/no_new_wheels_lint.py",
