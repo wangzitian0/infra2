@@ -84,7 +84,7 @@ def world(monkeypatch: pytest.MonkeyPatch):
 
 
 def _target(tmp_path: Path) -> Path:
-    return tmp_path / ".cache/app-manifests" / PATH
+    return tmp_path / ".cache/app-manifests" / SHA / PATH
 
 
 def test_the_818_reset_is_retried_once_and_the_fetch_succeeds(
@@ -260,6 +260,8 @@ def test_a_fetched_manifest_appears_only_when_complete(tmp_path, monkeypatch) ->
 
     assert seen_during_write == [False]
     assert target.read_bytes() == body
+    # mkstemp creates 0600; the cached manifest keeps the 0644 a plain write gave
+    assert target.stat().st_mode & 0o777 == 0o644
     assert [p.name for p in target.parent.iterdir()] == [target.name]
 
 

@@ -72,17 +72,41 @@ def test_merged_manifest_rejects_conflicting_render_attributes(tmp_path) -> None
         secrets_registry.merged_manifest(service, root=tmp_path)
 
 
-def test_app_manifests_fall_back_to_the_ci_cache(tmp_path) -> None:
+def test_app_manifests_resolve_to_the_pinned_cache(tmp_path, monkeypatch) -> None:
+    """#1109: without a real checkout, an app manifest is read from the cache of the
+    pinned commit; a loose copy under repos/ is ignored, and a pin bump moves the path."""
+    from libs.security import app_manifests
+
+    pins = {"repos/truealpha": "a" * 40}
+    monkeypatch.setattr(app_manifests, "submodule_commit", lambda _root, sub: pins[sub])
     rel = "repos/truealpha/apps/x/required-env.generated.json"
-    _write(tmp_path, f"{secrets_registry.CACHE_DIR}/{rel}", [])
-    assert (
-        secrets_registry.manifest_file(rel, root=tmp_path)
-        == tmp_path / secrets_registry.CACHE_DIR / rel
+    _write(tmp_path, rel, [])  # a loose copy, as the iac-runner held since 2026-09-08
+    _write(tmp_path, f"{secrets_registry.CACHE_DIR}/{'a' * 40}/{rel}", [])
+
+    assert secrets_registry.manifest_file(rel, root=tmp_path) == (
+        tmp_path / secrets_registry.CACHE_DIR / ("a" * 40) / rel
+    )
+    pins["repos/truealpha"] = "b" * 40
+    assert secrets_registry.manifest_file(rel, root=tmp_path) == (
+        tmp_path / secrets_registry.CACHE_DIR / ("b" * 40) / rel
     )
     assert (
         secrets_registry.manifest_file("platform/x.json", root=tmp_path)
         == tmp_path / "platform/x.json"
     )
+
+
+def test_a_real_submodule_checkout_is_read_in_place(tmp_path, monkeypatch) -> None:
+    from libs.security import app_manifests
+
+    monkeypatch.setattr(
+        app_manifests, "submodule_commit", lambda *_a: pytest.fail("no pin needed")
+    )
+    rel = "repos/truealpha/apps/x/required-env.generated.json"
+    _write(tmp_path, rel, [])
+    (tmp_path / "repos/truealpha/.git").write_text("gitdir: x", encoding="utf-8")
+
+    assert secrets_registry.manifest_file(rel, root=tmp_path) == tmp_path / rel
 
 
 def test_load_manifest_fetches_an_absent_app_manifest_at_the_pinned_commit(
