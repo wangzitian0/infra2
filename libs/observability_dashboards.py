@@ -29,7 +29,9 @@ from libs.alerting import (
     signoz_feishu_channel_name,
     signoz_rule_channel_problems,
 )
-from libs.core.constants import REPO_ROOT
+
+# Repository root: libs/observability_dashboards.py -> repo root is parents[1].
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Canonical location of the finance_report observability definitions.
 FINANCE_REPORT_OBSERVABILITY_DIR = (
