@@ -47,6 +47,10 @@ git -C "$code_dir" fetch --tags --prune origin '+refs/heads/*:refs/remotes/origi
 git -C "$code_dir" checkout -f "$INFRA2_DEPLOY_SHA" -- bootstrap/06.iac_runner
 echo "IaC Runner bootstrap source HEAD: $(git -C "$code_dir" rev-parse --short HEAD)"
 
+# The checkout above pins this helper to INFRA2_DEPLOY_SHA, the commit of this script.
+# shellcheck source=SCRIPTDIR/../bootstrap/06.iac_runner/wait_for_idle.sh
+. "$code_dir/bootstrap/06.iac_runner/wait_for_idle.sh"
+
 env_file="$(mktemp)"
 next_env_file="$(mktemp)"
 cleanup() {
@@ -256,6 +260,19 @@ if ! grep -q '^DOKPLOY_API_KEY=' "$env_file"; then
     echo "Dokploy compose env and current container env are missing DOKPLOY_API_KEY; continuing because Vault-rendered secrets may provide it at runtime"
   fi
 fi
+
+echo "Building IaC Runner image for compose project $project"
+docker compose \
+  -p "$project" \
+  --env-file "$env_file" \
+  -f "$compose_file" \
+  -f "$traefik_override" \
+  build </dev/null
+
+# The recreate drops the runner's in-memory in-flight deploy state (#666). Wait after
+# the build, so a deploy that starts during a slow build also delays the recreate.
+# The --build below then hits the build cache.
+wait_for_runner_idle
 
 echo "Rebuilding and recreating IaC Runner compose project $project"
 docker compose \
