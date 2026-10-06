@@ -1,4 +1,5 @@
 """Dokploy environment management CLI tasks."""
+
 from __future__ import annotations
 
 from invoke import task
@@ -76,37 +77,55 @@ def env_list(c, project: str = "platform", host: str | None = None):
 
 
 @task
-def env_ensure(c, project: str = "platform", env: str = "staging", description: str = "", host: str | None = None):
+def env_ensure(
+    c,
+    project: str = "platform",
+    env: str = "staging",
+    description: str = "",
+    host: str | None = None,
+):
     """Ensure a Dokploy environment exists for a project."""
     env_name = normalize_env_name(env)
     header("Dokploy Environment", f"{project}/{env_name}")
     client = get_dokploy(host=host)
-    env_obj, created = client.ensure_environment(project, env_name, description=description)
+    env_obj, created = client.ensure_environment(
+        project, env_name, description=description
+    )
     if created:
         success(f"Created environment '{env_name}'")
     else:
         info(f"Environment '{env_name}' already exists")
-    console.print({"environmentId": env_obj.get("environmentId"), "name": env_obj.get("name")})
+    console.print(
+        {"environmentId": env_obj.get("environmentId"), "name": env_obj.get("name")}
+    )
 
 
 @task
-def logs(c, name, project: str = "platform", env: str | None = None, deployment: bool = False, tail: int = 50, host: str | None = None):
+def logs(
+    c,
+    name,
+    project: str = "platform",
+    env: str | None = None,
+    deployment: bool = False,
+    tail: int = 50,
+    host: str | None = None,
+):
     """Show logs for a Dokploy compose application.
-    
+
     If --deployment is set, shows deployment (build) logs.
     Otherwise, shows container runtime logs.
     """
     header("Dokploy Logs", f"{project}/{env or 'default'}/{name}")
     e = get_env()
-    
+
     # Derive host from INTERNAL_DOMAIN if not provided
     if not host:
         internal_domain = e.get("INTERNAL_DOMAIN")
         if internal_domain:
             host = f"cloud.{internal_domain}"
-    
+
     client = get_dokploy(host=host)
-    
+
     compose = client.find_compose_by_name(name, project_name=project, env_name=env)
     if not compose:
         error(f"Compose application '{name}' not found")
@@ -126,27 +145,29 @@ def logs(c, name, project: str = "platform", env: str | None = None, deployment:
             warning("This application appears to use SigNoz for logging.")
             info(f"SigNoz Dashboard: {signoz_url}/logs")
         except Exception:
-            warning("This application appears to use SigNoz for logs, but SigNoz URL could not be determined.")
-    
+            warning(
+                "This application appears to use SigNoz for logs, but SigNoz URL could not be determined."
+            )
+
     if deployment:
         # Show build logs
         latest = client.get_latest_deployment(compose_id)
         if not latest:
             error("No deployments found")
             return
-        
+
         log_path = latest.get("logPath")
         if not log_path:
             error("No log path found in deployment metadata")
             return
-        
+
         info(f"Fetching deployment logs from {log_path}...")
         c.run(f"ssh root@{host} 'tail -n {tail} {log_path}'")
     else:
         # Show container logs
         details = client.get_compose(compose_id)
-        app_name = details.get("appName") 
-        
+        app_name = details.get("appName")
+
         info(f"Fetching container logs for {app_name}*...")
         # Get all containers belonging to this compose (based on appName prefix)
         cmd = f"ssh root@{host} \"docker ps -a --filter name={app_name} --format '{{{{.Names}}}}' | xargs -I % sh -c 'echo [bold cyan]--- % ---[/]; docker logs --tail {tail} %'\""

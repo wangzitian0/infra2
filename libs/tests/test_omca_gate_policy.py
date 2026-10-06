@@ -1,4 +1,5 @@
 """Tests for OMCA gate policy evaluator (#461, #109)."""
+
 from __future__ import annotations
 
 import json
@@ -130,7 +131,9 @@ def test_non_strict_mode_does_not_block_on_heuristic_topics() -> None:
     assert len(blocking_strict) == 1
 
     # strict=False allows HIGH severity heuristic topics to pass
-    passed_lenient, blocking_lenient, warnings = evaluate_audit_report(report, strict=False)
+    passed_lenient, blocking_lenient, warnings = evaluate_audit_report(
+        report, strict=False
+    )
     assert passed_lenient is True
     assert blocking_lenient == []
     assert len(warnings) == 1
@@ -141,16 +144,21 @@ def test_main_cli_exit_codes(tmp_path: Path) -> None:
     clean_report.write_text(json.dumps({"verdict": "PASS", "findings": []}))
 
     import sys
+
     orig_argv = sys.argv
     try:
         sys.argv = ["omca_gate_policy", str(clean_report)]
         assert main() == 0
 
         bad_report = tmp_path / "bad.json"
-        bad_report.write_text(json.dumps({
-            "verdict": "BLOCKED",
-            "findings": [{"severity": "CRITICAL", "topic": "Crash"}],
-        }))
+        bad_report.write_text(
+            json.dumps(
+                {
+                    "verdict": "BLOCKED",
+                    "findings": [{"severity": "CRITICAL", "topic": "Crash"}],
+                }
+            )
+        )
         sys.argv = ["omca_gate_policy", str(bad_report)]
         assert main() == 1
     finally:
