@@ -1054,7 +1054,7 @@ def test_collect_live_observations_skips_token_lookup_for_approle_service(
 
         return Result()
 
-    monkeypatch.setattr("libs.common.get_env", fake_get_env)
+    monkeypatch.setattr("libs.core.environ.get_env", fake_get_env)
     monkeypatch.setattr("libs.deploy.dokploy_client.get_dokploy", fake_get_dokploy)
     monkeypatch.setattr(
         vault_self_refresh_audit_module, "verify_vault_token", fail_if_called
@@ -1123,7 +1123,7 @@ def test_collect_live_observations_falls_back_to_legacy_dokploy_services(
             return {"status": "running", "healthy": True, "container": container_name}
         return {"status": "missing", "healthy": False, "container": container_name}
 
-    monkeypatch.setattr("libs.common.get_env", fake_get_env)
+    monkeypatch.setattr("libs.core.environ.get_env", fake_get_env)
     monkeypatch.setattr(
         "libs.deploy.dokploy_client.get_dokploy", lambda host=None: FakeDokployClient()
     )

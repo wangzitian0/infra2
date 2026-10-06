@@ -32,7 +32,6 @@ from libs.core import registry as reg
 from libs.core.facets import SecretsFacet
 from libs.security.vault_self_refresh_audit import (
     VaultService,
-    _resolve_env_suffix,
     _vault_service_from_facet,
     inventory_ids_not_in_production,
     load_inventory,
