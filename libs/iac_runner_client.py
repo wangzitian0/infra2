@@ -46,6 +46,15 @@ STATUS_POLL_MAX_SECONDS = 10.0
 STATUS_NOT_FOUND_GRACE_SECONDS = 90.0
 
 
+class RunnerLostDeploymentError(RuntimeError):
+    """The runner has no record of a deploy it accepted: the request is lost (#666).
+
+    Raised only when ``not_found`` answers outlast ``not_found_grace``. A gateway error,
+    a timeout and a failed deploy are other errors: the runner may still hold that deploy,
+    so a caller must not submit it again.
+    """
+
+
 def status_poll_delays(
     initial: float = STATUS_POLL_INITIAL_SECONDS,
     backoff: float = STATUS_POLL_BACKOFF,
@@ -261,7 +270,8 @@ def poll_platform_deploy_status(
 
     A ``not_found`` answer is tolerated for ``not_found_grace`` seconds. A longer run of
     ``not_found`` answers means the runner has no record of the deploy: the poll fails
-    and names the deployment and that cause (#666). Only a real status resets this timer.
+    and names the deployment and that cause (#666), as a :class:`RunnerLostDeploymentError`
+    that a caller can tell from every other failure. Only a real status resets this timer.
     A gateway or transport error does not: after a runner recreation the gateway can flap
     between not_found and 502, and each answer would otherwise reset the other's timer.
 
@@ -350,7 +360,7 @@ def poll_platform_deploy_status(
                 )
                 if moment - not_found_since > not_found_grace:
                     lost_id = deployment_id or body.get("deployment_id") or "unknown"
-                    raise RuntimeError(
+                    raise RunnerLostDeploymentError(
                         f"iac_runner answered not_found for {int(moment - not_found_since)}s "
                         f"while polling deploy {ref[:12]} to {env} (deployment {lost_id}): "
                         "the runner has no record of this deployment; it was probably "
