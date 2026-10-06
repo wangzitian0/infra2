@@ -14,7 +14,7 @@ import sys
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.security.store import generate_password
 from libs.console import header, success, error, warning, info, env_vars
-from libs.service_facets import (
+from libs.core.facets import (
     PublicRouteFacet,
     BackupFacet,
     ProbeFacet,

@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.deploy_dependencies import (  # noqa: E402
+from libs.deploy.dependencies import (  # noqa: E402
     fanout_coverage_violations,
     service_key_from_path,
 )

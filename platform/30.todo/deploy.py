@@ -10,7 +10,7 @@ from invoke import task
 
 from libs.console import error, header, info, run_with_status, success
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import ProbeFacet, SecretsFacet, SignalFacet
+from libs.core.facets import ProbeFacet, SecretsFacet, SignalFacet
 
 shared_tasks = sys.modules.get("platform.30.todo.shared")
 

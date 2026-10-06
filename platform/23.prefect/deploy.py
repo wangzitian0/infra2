@@ -5,7 +5,7 @@ from libs.deploy.deployer import Deployer, make_tasks
 from libs.common import with_env_suffix
 from libs.security.store import get_secrets, vault_token
 from libs.console import success, info, fatal
-from libs.service_facets import ProbeFacet, SecretsFacet, SignalFacet
+from libs.core.facets import ProbeFacet, SecretsFacet, SignalFacet
 
 shared_tasks = sys.modules.get("platform.23.prefect.shared")
 
