@@ -290,7 +290,7 @@ collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一
 | L2 Platform | OpenPanel ClickHouse (op-ch) | data dir unwritable / event store broken | P1 | Write-path healthcheck + `openpanel-roundtrip` |
 | L2 Platform | OpenPanel Worker / Dashboard | `/healthcheck` / `/api/healthcheck` fails | P2 / P2 | Live probes (`openpanel-worker-http`, `openpanel-dashboard-http`);worker 停止落库时由 `openpanel-roundtrip` 以 P1 发 |
 | L2 Platform | Portal / Prefect | frontend / server-health unavailable | P2 / P1 | Planned |
-| L2 Platform | Canary Todo | a write path is red: Redis AUTH+SETEX/GET/DEL, Postgres login as `canary_ro` + `SELECT 1`, S3 PUT/GET/DELETE (`fail`), or a missing canary credential (`unconfigured`). SigNoz/OpenPanel/Authentik liveness is informational and never gates | P2 (staging: report); raise to P1 only after staging and production acceptance | Live (`todo-canary-status`, internal URL, 3-round debounce, #991) |
+| L2 Platform | Canary Todo | a write path is red: Redis AUTH+SETEX/GET/DEL, Postgres login as `canary_ro` + `SELECT 1`, S3 PUT/GET/DELETE (`fail`), or a missing canary credential (`unconfigured`). SigNoz/OpenPanel/Authentik liveness is informational and never gates | P1 (staging: report) | Live (`todo-canary-status`, internal URL, 3-round debounce, #991) |
 | L3 Finance Report | fr-postgres / fr-redis | app db / cache health fails | P0 / P1 | Planned |
 | L3 Finance Report | fr-app backend | OTEL ERROR/CRITICAL/FATAL > 10 in 15m | P1 | code (`FinanceReportBackendErrorLogs`) |
 | L3 Finance Report | fr-app backend | RED SLO: ≥5 5xx and >5% of non-probe requests in 5m / non-probe p95 > 3000ms for 10m | P0/P1 | code (`FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`) |

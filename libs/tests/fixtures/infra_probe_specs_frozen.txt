@@ -73,4 +73,4 @@ truealpha-postgres-tcp|tcp|truealpha-postgres${ENV_SUFFIX}:5432|connected|critic
 # for now: the probe is new and stays red while an operator step is open (an unconfigured
 # check), so it must not page. Raise it to `error` only after staging and production
 # acceptance. The 15 s timeout exceeds the app's 8 s per-check deadline.
-todo-canary-status|http|http://platform-todo${ENV_SUFFIX}:8000/api/canary/status|200|warning|15||platform/todo
+todo-canary-status|http|http://platform-todo${ENV_SUFFIX}:8000/api/canary/status|200|error|15||platform/todo

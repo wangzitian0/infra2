@@ -58,9 +58,14 @@ The document returns HTTP 200 only when every gating check passes. It returns HT
 
 `/api/canary/status` is not public. It shows internal host names and raw errors, and it runs real probes.
 
-**Probe consumer.** `TodoDeployer.probes` declares `todo-canary-status` (HTTP 200, severity `warning` = P2, timeout 15 s). The probe runner polls it every 60 s. Three red rounds raise an alert. A staging runner sends a report instead of a page. A signal entry for each environment derives from `TodoDeployer.signals`.
+**Probe consumer.** `TodoDeployer.probes` declares `todo-canary-status` (HTTP 200, severity `error` = P1, timeout 15 s). The probe runner polls it every 60 s. Three red rounds raise an alert. A staging runner sends a report instead of a page. A signal entry for each environment derives from `TodoDeployer.signals`.
 
-**Severity.** The probe ships at `warning` because it is new and stays red while an operator step is open (an `unconfigured` check). Raise it to `error` (P1) only after staging and production acceptance: every gating check passes in both environments, and the production canary has answered HTTP 200 for a full day. Change `ProbeFacet.severity` and the two frozen fixtures in the same PR.
+**Severity.** The probe shipped at `warning` (P2) because it was new and stayed red while an operator step was open (an `unconfigured` check). It is now `error` (P1). The raise needed two conditions: every gating check passes in both environments, and the production canary has answered HTTP 200 for a full day. Evidence, recorded on #991:
+
+- Staging fault drill on 2026-10-06. The staging canary S3 user was disabled, and the probe fired on the third red round. The alert reached the Feishu report chat as `[报告] InfraServiceProbeFailed · staging`, and the pager chat stayed silent. The alert resolved after the user was enabled again.
+- Production: the availability ledger shows `production:todo-canary-status` green for at least 1,440 consecutive rounds with no failure.
+
+A change to the severity changes `ProbeFacet.severity` and the two frozen fixtures in the same PR.
 
 ## 4. Credentials
 
