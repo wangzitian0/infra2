@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import itertools
 import json
+import subprocess
+
+from libs.deploy import preflight as _preflight
 from dataclasses import dataclass
 
 import httpx
@@ -234,12 +237,14 @@ def test_iac_ref_on_main_exempt_for_preview():
     assert called == []
 
 
-def test_iac_ref_on_main_fail_closed_on_api_error():
-    # a transport/API failure must raise (fail-closed), not let an unverified ref through
-    with pytest.raises(httpx.HTTPStatusError):
+def test_iac_ref_on_main_fail_closed_on_api_error(empty_checkout):
+    # a transport/API failure with no local proof must raise (fail-closed), not let an
+    # unverified ref through; the API error stays reachable as the exception cause
+    with pytest.raises(RuntimeError, match="compare API failed.*local git") as raised:
         assert_iac_ref_on_main(
             "v1.2.3", "prod", token="", transport=_cmp_transport("behind", code=502)
         )
+    assert isinstance(raised.value.__cause__, httpx.HTTPStatusError)
 
 
 def test_iac_ref_on_main_sends_the_workflow_token(monkeypatch):
@@ -278,7 +283,9 @@ def test_iac_ref_on_main_waits_out_a_short_rate_limit_then_succeeds():
     assert slept == [5.0] and answers == []
 
 
-def test_iac_ref_on_main_fails_closed_and_names_the_missing_token_when_anonymous():
+def test_iac_ref_on_main_fails_closed_and_names_the_missing_token_when_anonymous(
+    empty_checkout,
+):
     # an anonymous budget resets on the hour: far beyond what a deploy should block on
     resp = _CmpResp(
         "",
@@ -299,7 +306,7 @@ def test_iac_ref_on_main_fails_closed_and_names_the_missing_token_when_anonymous
     assert slept == []
 
 
-def test_iac_ref_on_main_gives_up_after_bounded_attempts():
+def test_iac_ref_on_main_gives_up_after_bounded_attempts(empty_checkout):
     resp = _CmpResp("", code=429, headers={"Retry-After": "2"})
     slept = []
     with pytest.raises(RuntimeError, match="budget is spent"):
@@ -312,6 +319,180 @@ def test_iac_ref_on_main_gives_up_after_bounded_attempts():
             now=lambda: 0.0,
         )
     assert slept == [2.0, 2.0]
+
+
+# --- #616 item 3: local-git fallback when the compare API cannot answer ---------------
+#
+# These tests use REAL git (no fake runner): the property under test is what git itself
+# says about a full clone, a shallow clone and an empty checkout.
+
+_GIT_IDENTITY = [
+    "-c",
+    "user.name=test",
+    "-c",
+    "user.email=test@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "-c",
+    "tag.gpgsign=false",
+]
+
+
+def _git(cwd, *args):
+    subprocess.run(
+        ["git", *_GIT_IDENTITY, *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _commit(cwd, name):
+    (cwd / name).write_text(name)
+    _git(cwd, "add", name)
+    _git(cwd, "commit", "-q", "-m", name)
+
+
+@pytest.fixture
+def empty_checkout(tmp_path, monkeypatch):
+    """A git repo with no commits: local git cannot answer for any ref."""
+    repo = tmp_path / "empty"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    monkeypatch.setattr(_preflight, "REPO_ROOT", repo)
+    return repo
+
+
+@pytest.fixture
+def infra2_origin(tmp_path):
+    """Origin history: v1.0.0 -> c2 -> c3 (main); side branch c4 carries off-main v9.9.9."""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "main")
+    _commit(origin, "c1")
+    _git(origin, "tag", "v1.0.0")
+    _commit(origin, "c2")
+    _commit(origin, "c3")
+    _git(origin, "checkout", "-q", "-b", "side")
+    _commit(origin, "c4")
+    _git(origin, "tag", "v9.9.9")
+    _git(origin, "checkout", "-q", "main")
+    return origin
+
+
+@pytest.fixture
+def full_clone(infra2_origin, tmp_path, monkeypatch):
+    clone = tmp_path / "full"
+    _git(tmp_path, "clone", "-q", f"file://{infra2_origin}", str(clone))
+    monkeypatch.setattr(_preflight, "REPO_ROOT", clone)
+    return clone
+
+
+@pytest.fixture
+def shallow_clone(infra2_origin, tmp_path, monkeypatch):
+    clone = tmp_path / "shallow"
+    _git(tmp_path, "clone", "-q", "--depth", "1", f"file://{infra2_origin}", str(clone))
+    monkeypatch.setattr(_preflight, "REPO_ROOT", clone)
+    return clone
+
+
+def test_iac_ref_on_main_local_git_proves_ancestry_when_the_api_errors(full_clone):
+    """Case (a): the compare API answers 502 and the full clone proves v1.0.0 is an
+    ancestor of origin/main, so the guard passes (#616 item 3)."""
+    assert_iac_ref_on_main(
+        "v1.0.0", "prod", token="", transport=_cmp_transport("behind", code=502)
+    )
+
+
+def test_iac_ref_on_main_local_git_proves_ancestry_when_the_transport_raises(
+    full_clone,
+):
+    def transport(url, **_kw):
+        raise httpx.ConnectError("network down")
+
+    assert_iac_ref_on_main("v1.0.0", "staging", token="", transport=transport)
+
+
+def test_iac_ref_on_main_refused_when_api_errors_and_local_git_says_not_ancestor(
+    full_clone,
+):
+    """Case (b): v9.9.9 exists locally but sits only on the side branch."""
+    with pytest.raises(
+        RuntimeError, match="compare API failed.*local git.*not reachable"
+    ):
+        assert_iac_ref_on_main(
+            "v9.9.9", "prod", token="", transport=_cmp_transport("behind", code=502)
+        )
+
+
+def test_iac_ref_on_main_refused_when_api_errors_and_the_commit_is_missing_locally(
+    full_clone,
+):
+    """Case (c): a tag that is absent locally cannot be proven, so it is refused."""
+    with pytest.raises(
+        RuntimeError, match="compare API failed.*local git.*cannot resolve"
+    ):
+        assert_iac_ref_on_main(
+            "v7.7.7", "prod", token="", transport=_cmp_transport("behind", code=502)
+        )
+
+
+def test_iac_ref_on_main_shallow_clone_is_not_trusted_by_accident(shallow_clone):
+    """Case (c): the depth-1 clone has origin/main but not the v1.0.0 commit. The answer
+    must be a refusal that names both failures, never a silent pass."""
+    local_tags = subprocess.run(
+        ["git", "tag", "--list"], cwd=shallow_clone, capture_output=True, text=True
+    ).stdout.split()
+    assert "v1.0.0" not in local_tags  # the fixture really lacks the commit
+    with pytest.raises(RuntimeError) as raised:
+        assert_iac_ref_on_main(
+            "v1.0.0", "prod", token="", transport=_cmp_transport("behind", code=502)
+        )
+    message = str(raised.value)
+    assert "compare API failed" in message
+    assert "local git" in message
+    assert "cannot resolve 'v1.0.0'" in message
+
+
+def test_iac_ref_on_main_refused_when_origin_main_is_missing_locally(empty_checkout):
+    with pytest.raises(RuntimeError, match="compare API failed.*local git"):
+        assert_iac_ref_on_main(
+            "v1.0.0", "prod", token="", transport=_cmp_transport("behind", code=502)
+        )
+
+
+def test_iac_ref_on_main_api_verdict_stays_authoritative_over_local_git(full_clone):
+    """Case (d): the API answered `ahead`, so local git (which would pass v1.0.0) is not
+    consulted to overturn it."""
+    with pytest.raises(ValueError, match="not on infra2 main"):
+        assert_iac_ref_on_main(
+            "v1.0.0", "prod", token="", transport=_cmp_transport("ahead")
+        )
+
+
+def test_iac_ref_on_main_local_git_covers_an_exhausted_rate_limit(full_clone):
+    resp = _CmpResp("", code=429, headers={"Retry-After": "2"})
+    slept = []
+    assert_iac_ref_on_main(
+        "v1.0.0",
+        "prod",
+        token="t",
+        transport=lambda url, **_kw: resp,
+        sleep=slept.append,
+        now=lambda: 0.0,
+    )
+    assert slept == [2.0, 2.0]
+
+
+def test_iac_ref_on_main_does_not_touch_local_git_when_the_api_answers(
+    tmp_path, monkeypatch
+):
+    # REPO_ROOT points at a directory that does not exist: any git call would fail loudly
+    monkeypatch.setattr(dv2, "REPO_ROOT", tmp_path / "missing", raising=False)
+    assert_iac_ref_on_main(
+        "v1.0.0", "prod", token="", transport=_cmp_transport("behind")
+    )
 
 
 # --- prod: release-only, pulls the TAG (the headline deliverable) ----------
