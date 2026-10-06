@@ -27,20 +27,9 @@ Modules in `libs/` that provide direct integrations or operational clients:
 | Module | Purpose | Key Exports |
 |--------|---------|-------------|
 | [`deploy/dokploy_client.py`](./deploy/dokploy_client.py) | Dokploy REST API wrapper (`libs/dokploy.py` is its shim) | `DokployClient`, `get_dokploy()` |
-| [`iac_runner_client.py`](./iac_runner_client.py) | Signed HMAC operation client for IaC Runner | `trigger_platform_deploy()`, `poll_platform_deploy_status()` |
-| [`app_deploy_request.py`](./app_deploy_request.py) | Fail-closed App deploy request validation | `verify_production_evidence()`, `validate_request_authority()` |
-| [`harness_manifest.py`](./harness_manifest.py) | Workspace inventory & autonomy boundary audit | `load_manifest()`, `validate_manifest()`, `check_workspace()` |
-| [`harness_status.py`](./harness_status.py) | Git checkout pin/remote/release observation | `workspace_status()`, `repository_status()` |
-| [`harness_sweep.py`](./harness_sweep.py) | Read-only orchestrator sweep for PRs & gates | `sweep()`, `sweep_once()`, `watch()` |
+| [`observability_dashboards.py`](./observability_dashboards.py) | SigNoz alert rules and dashboards loader. It stays here: moving it triggers apply-observability.yml, which needs owner approval (#1059 phase 2). | `load_alert_definitions()`, `render_alert_payloads()`, `require_rule_channel()` |
 | [`console.py`](./console.py) | Rich CLI formatting and header blocks | `header()`, `success()`, `error()`, `prompt_action()` |
-| [`page_dedup.py`](./page_dedup.py) | Cross-run page dedup for the GitHub-plane daily jobs (#962): page only when the finding identity changes, report `仍未恢复 · 第 N 天` while unchanged, RESOLVED once; state = one issue per job (client reused from `observability.issue_trail`) | `dedup_page()`, `resolve_page_state()`, `decide()`, `make_identity()`, `Finding` |
-| [`availability_ledger.py`](./availability_ledger.py) | Pure availability ledger aggregation & uptime math | `aggregate_ledger()`, `calculate_uptime()` |
-| [`observability_dashboards.py`](./observability_dashboards.py) | Load and validate the checked-in SigNoz alert rules and dashboards; render apply payloads | `load_alert_definitions()`, `render_alert_payloads()`, `require_rule_channel()` |
-| [`vault_self_refresh_audit.py`](./vault_self_refresh_audit.py) | Read-only Vault self-refresh audit (inventory from `SecretsFacet`, live checks) | `load_inventory()`, `VaultService`, `CheckResult` |
-| [`vault_tokens.py`](./vault_tokens.py) | Vault per-service policy and AppRole naming | `VaultTokenTarget`, `policy_name()`, `normalize_selector()` |
-| [`release_markers.py`](./release_markers.py) | The release tag and the production marker, read from git | `newest_release_tag()`, `production_marker()`, `marker_status()` |
-| [`watchdog_signal_entries.py`](./watchdog_signal_entries.py) | Watchdog signal entries derived from each Deployer's facets (#543) | `render_internal_signal_entries()` |
-| [`coverage_regression.py`](./coverage_regression.py) | Line-coverage no-regression check against a committed baseline | `check_no_regression()`, `load_baseline()`, `read_coverage_summary()` |
+| [`common.py`](./common.py) | Environment derivation re-export and operator health check helper | `get_env()`, `check_service()` |
 
 ---
 
@@ -86,6 +75,18 @@ six modules the code never followed).
 | `libs/scheduler_peer_liveness.py` | `libs.observability.scheduler_peer_liveness` | `BOUND_CAP_ENV`, `evaluate` | Frozen Shim |
 | `libs/resident_watchers.py` | `libs.observability.watchers.resident` | `ResidentWatcher`, `build_watchers` | Frozen Shim |
 | `libs/deploy_queue_guard.py` | `libs.observability.watchers.deploy_queue_guard` | `DeployQueueGuard`, `run_once` | Frozen Shim |
+| `libs/page_dedup.py` | `libs.observability.page_dedup` | `dedup_page`, `resolve_page_state`, `decide`, `Finding` | Frozen Shim |
+| `libs/availability_ledger.py` | `libs.observability.ledger` | `summarize_ledger`, `outage_intervals`, `build_report_message` | Frozen Shim |
+| `libs/watchdog_signal_entries.py` | `libs.observability.signal_entries` | `render_internal_signal_entries` | Frozen Shim |
+| `libs/harness_manifest.py` | `libs.core.harness.manifest` | `load_manifest`, `validate_manifest`, `check_workspace` | Frozen Shim |
+| `libs/harness_status.py` | `libs.core.harness.status` | `workspace_status`, `repository_status` | Frozen Shim |
+| `libs/harness_sweep.py` | `libs.core.harness.sweep` | `sweep`, `sweep_once`, `watch` | Frozen Shim |
+| `libs/iac_runner_client.py` | `libs.deploy.iac_runner_client` | `trigger_platform_deploy`, `poll_platform_deploy_status` | Frozen Shim |
+| `libs/release_markers.py` | `libs.deploy.release_markers` | `newest_release_tag`, `production_marker`, `marker_status` | Frozen Shim |
+| `libs/app_deploy_request.py` | `libs.deploy.app_deploy_request` | `verify_production_evidence`, `validate_request_authority` | Frozen Shim |
+| `libs/coverage_regression.py` | `libs.gate.coverage_regression` | `check_no_regression`, `load_baseline`, `read_coverage_summary` | Frozen Shim |
+| `libs/vault_self_refresh_audit.py` | `libs.security.vault_self_refresh_audit` | `load_inventory`, `VaultService`, `CheckResult` | Frozen Shim |
+| `libs/vault_tokens.py` | `libs.security.vault_tokens` | `VaultTokenTarget`, `policy_name`, `normalize_selector` | Frozen Shim |
 | `libs/common.py` | — (re-exports `libs.core.environ`, and holds `check_service`) | — | Not a shim |
 | `libs/console.py` | — (holds its own implementation) | — | Not a shim |
 

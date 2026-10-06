@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 MUST_IMPORT_WITHOUT_SDK = [
     "libs.watchdog_issue_trail",
     "libs.page_dedup",
+    "libs.observability.page_dedup",
     "tools.out_of_band_watchdog",
     "libs.container_breakdown",
     "libs.secrets_registry",

@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from libs import harness_sweep as sweep
-from libs.harness_sweep import (
+import libs.core.harness.sweep as sweep
+from libs.core.harness.sweep import (
     ACTION,
     DONE,
     STALL,

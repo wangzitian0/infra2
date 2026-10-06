@@ -25,9 +25,9 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from libs import page_dedup as pd
+from libs.observability import page_dedup as pd
 from libs.observability.issue_trail import FULL, OFF, OPEN_ONLY, ListingFailed
-from libs.page_dedup import (
+from libs.observability.page_dedup import (
     ABSENT,
     CORRUPT,
     FOUND,
