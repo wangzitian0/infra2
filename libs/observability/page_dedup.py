@@ -42,11 +42,9 @@ aggregates several units (a backup check over many artifacts) names each failing
 in its keys, so a different unit failing, or the same unit failing worse in kind
 (severity), is a new identity.
 
-Lives beside ``libs/alerting.py`` rather than in ``libs/observability``: it renders
-pager/report text with the alerting layer's one definition of the format, and a domain
-package must not import a flat module (``libs/tests/test_import_boundaries.py``). It
-imports the issue trail's client from ``libs.observability.issue_trail``, which is the
-allowed direction.
+Lives in ``libs.observability`` and renders pager/report text with the alerting
+package (``libs.alerting``). It imports the issue trail's client from
+``libs.observability.issue_trail``, which is within the same domain package.
 
 **State** is one open GitHub issue per job, titled exactly ``ops-checks paged: <job>``,
 whose body ends in a ``<!-- infra2-page-dedup {json} -->`` marker holding the
