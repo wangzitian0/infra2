@@ -7,7 +7,6 @@ must flag non-allowlisted Dokploy-native triggers.
 
 from libs.deploy.dependencies import (
     autodeploy_violations,
-    dockerfile_baked_shared_trees,
     explain_fanout,
     fanout_coverage_violations,
     load_dependency_manifest,
@@ -152,46 +151,104 @@ def test_explain_fanout_agrees_with_match_changed_services():
     ) == match_changed_services(files, manifest=manifest)
 
 
-def test_dockerfile_baked_shared_trees():
-    dockerfile = (
-        "FROM python:3.11-slim\n"
-        "COPY platform/12.alerting/app.py /app/app.py\n"  # service's own file, ignored
-        "COPY libs /app/libs\n"  # shared tree -> libs
-        "ADD ./tools /app/tools\n"  # shared tree -> tools
-        "COPY --from=builder /out/bin /usr/bin/bin\n"  # multi-stage, ignored
-        "# COPY common /app/common\n"  # comment, ignored
+def _service(root, compose: str, dockerfile: str | None = None, files=()):
+    """A service directory platform/99.ghost under a temporary repo root."""
+    service_dir = root / "platform" / "99.ghost"
+    service_dir.mkdir(parents=True)
+    (service_dir / "compose.yaml").write_text(compose, encoding="utf-8")
+    if dockerfile is not None:
+        (service_dir / "Dockerfile").write_text(dockerfile, encoding="utf-8")
+    for rel in files:
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x\n", encoding="utf-8")
+    return [service_dir / "compose.yaml"]
+
+
+_REPO_ROOT_CONTEXT = (
+    "services:\n"
+    "  ghost:\n"
+    "    build:\n"
+    "      context: ../..\n"
+    "      dockerfile: platform/99.ghost/Dockerfile\n"
+)
+
+
+def test_fanout_coverage_flags_an_undeclared_repo_root_file(tmp_path):
+    """#1117: `COPY uv.lock` changes the config hash; without a depends_on entry a
+    change to uv.lock selects no service. The tree-only guard never looked at it."""
+    composes = _service(
+        tmp_path,
+        _REPO_ROOT_CONTEXT,
+        "FROM x\nCOPY uv.lock /tmp/uv.lock\nCOPY platform/99.ghost /app/\n",
+        files=("uv.lock", "platform/99.ghost/app.py"),
     )
-    assert dockerfile_baked_shared_trees(dockerfile) == {"libs", "tools"}
-
-
-def test_fanout_coverage_violations_flags_undeclared_baked_tree():
-    # bakes libs/ but declares nothing -> under-fan-out landmine
-    dockerfiles = {"platform/ghost": "FROM x\nCOPY libs /app/libs\n"}
-    assert fanout_coverage_violations(dockerfiles, manifest={}) == [
-        "platform/ghost: libs"
+    assert fanout_coverage_violations(composes, manifest={}, root=tmp_path) == [
+        "platform/ghost: uv.lock"
     ]
-    # declaring the tree clears the violation
-    assert (
-        fanout_coverage_violations(
-            dockerfiles, manifest={"platform/ghost": ["libs/**"]}
-        )
-        == []
+    declared = {"platform/ghost": ["uv.lock"]}
+    assert fanout_coverage_violations(composes, manifest=declared, root=tmp_path) == []
+
+
+def test_fanout_coverage_flags_an_undeclared_shared_tree(tmp_path):
+    composes = _service(
+        tmp_path,
+        _REPO_ROOT_CONTEXT,
+        "FROM x\nCOPY libs /app/libs\nCOPY --from=builder /out /usr/bin/\n",
+        files=("libs/a.py", "libs/sub/b.py"),
     )
+    assert fanout_coverage_violations(composes, manifest={}, root=tmp_path) == [
+        "platform/ghost: libs/a.py",
+        "platform/ghost: libs/sub/b.py",
+    ]
+    declared = {"platform/ghost": ["libs/**"]}
+    assert fanout_coverage_violations(composes, manifest=declared, root=tmp_path) == []
+
+
+def test_fanout_coverage_flags_an_undeclared_bind_mount(tmp_path):
+    composes = _service(
+        tmp_path,
+        "services:\n"
+        "  ghost:\n"
+        "    image: x\n"
+        "    volumes:\n"
+        "      - ../../common/conf.yaml:/etc/conf.yaml:ro\n"
+        "      - ./own.yaml:/etc/own.yaml:ro\n",
+        files=("common/conf.yaml", "platform/99.ghost/own.yaml"),
+    )
+    assert fanout_coverage_violations(composes, manifest={}, root=tmp_path) == [
+        "platform/ghost: common/conf.yaml"
+    ]
+
+
+def test_fanout_coverage_resolves_sources_against_the_build_context(tmp_path):
+    """A service whose build context is its own directory may COPY a local `tools/`
+    folder; that is own-dir input, not the repo-root tools/ tree."""
+    composes = _service(
+        tmp_path,
+        "services:\n  ghost:\n    build:\n      context: .\n",
+        "FROM x\nCOPY tools/run.py /app/\n",
+        files=("platform/99.ghost/tools/run.py",),
+    )
+    assert fanout_coverage_violations(composes, manifest={}, root=tmp_path) == []
+
+
+def test_fanout_coverage_refuses_an_unreadable_compose(tmp_path):
+    import pytest
+    import yaml
+
+    composes = _service(tmp_path, "services: [unclosed\n")
+    with pytest.raises(yaml.YAMLError):
+        fanout_coverage_violations(composes, manifest={}, root=tmp_path)
 
 
 def test_shipped_manifest_has_no_fanout_coverage_violations():
-    # The real alerting Dockerfile bakes libs/+tools/ and the shipped manifest
-    # declares them; this locks the repo against regressing that coverage.
-    from pathlib import Path
+    from tools.deploy_guard_audit import audit, find_service_composes
 
-    root = Path(__file__).resolve().parents[2]
-    dockerfiles = {}
-    for service_root in ("platform", "finance_report", "bootstrap"):
-        base = root / service_root
-        if not base.is_dir():
-            continue
-        for df in base.rglob("Dockerfile*"):
-            key = service_key_from_path(df.relative_to(root).as_posix())
-            if key:
-                dockerfiles[key] = df.read_text(encoding="utf-8", errors="replace")
-    assert fanout_coverage_violations(dockerfiles) == []
+    composes = find_service_composes()
+    alerting = [c for c in composes if c.parent.name == "12.alerting"]
+    # The audit reads repo-root inputs: alerting COPYs libs/ and tools/ (#267).
+    assert fanout_coverage_violations(alerting, manifest={}), (
+        "the audit found no repo-root input for alerting, so it checks nothing"
+    )
+    assert audit() == []
