@@ -148,6 +148,8 @@ Token boundaries:
 - `bootstrap/vault/Root Token` is a Vault token. A successful Vault Web UI login
   and a successful Vault HTTP API token lookup are separate checks; automation
   that writes Vault KV requires a token with the needed API policy.
+- The stores, readers, reach, and leak consequence of each credential are in
+  [`ops.credential-reach.md`](./ops.credential-reach.md).
 
 `bootstrap/cloudflare` 推荐字段：
 
