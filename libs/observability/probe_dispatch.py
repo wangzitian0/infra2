@@ -19,6 +19,25 @@ PUBLIC_ROUTE_GROUP = "public-route"
 CHRONIC_DIGEST_ALERT_NAME = "InfraProbeChronic"
 CHRONIC_AFTER_SECONDS = 24 * 3600
 
+__all__ = [
+    "CHRONIC_AFTER_SECONDS",
+    "CHRONIC_DIGEST_ALERT_NAME",
+    "PUBLIC_ROUTE_GROUP",
+    "_chronic_digest_payload",
+    "_delivery_error",
+    "_failure_fingerprint",
+    "_incident_times",
+    "_load_state",
+    "_maintenance_active",
+    "_paged_public_routes",
+    "_probe_identity",
+    "_record_resolved",
+    "_record_sent",
+    "_restore_stream",
+    "_save_state",
+    "_should_send",
+]
+
 
 def _maintenance_active(now: float | None = None) -> bool:
     raw_until = os.getenv("INFRA_PROBE_MAINTENANCE_UNTIL", "").strip()

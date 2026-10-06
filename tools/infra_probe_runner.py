@@ -47,6 +47,9 @@ from libs.infra_probes import (
 )
 from libs.observability.local_ledger import record_probe_round
 from libs.observability.probe_dispatch import (
+    CHRONIC_AFTER_SECONDS,
+    CHRONIC_DIGEST_ALERT_NAME,
+    PUBLIC_ROUTE_GROUP,
     _chronic_digest_payload,
     _delivery_error,
     _incident_times,
@@ -90,17 +93,11 @@ MISCONFIGURED_SEVERITY = "warning"
 # alone would escalate after three minutes.
 DEFAULT_NEVER_GREEN_ESCALATION_FAILURES = 3
 DEFAULT_NEVER_GREEN_ESCALATION_SECONDS = 900
-# The chronic digest (#903): once per UTC day, a REPORT (delivery=report, never the
-# pager) listing every stream that has been failing for longer than a day — the probe
-# runner's counterpart of the breakdown watcher's ContainerBreakdownChronic.
-CHRONIC_DIGEST_ALERT_NAME = "InfraProbeChronic"
-CHRONIC_AFTER_SECONDS = 24 * 3600
 # Heartbeat contract v2 (#903): `ok` is the probe LOOP's health (a group run raised,
 # the state save failed, or a send still pending failed its bridge delivery) — never a
 # probe verdict. `failing_public_routes` lists only the routes this runner has already
 # told someone about (see _paged_public_routes): the Worker stands down on exactly those.
 HEARTBEAT_SCHEMA = 2
-PUBLIC_ROUTE_GROUP = "public-route"
 
 
 def _log_send(stream_key: str, results: list, severity_override: str | None) -> None:
@@ -676,7 +673,7 @@ def _probe_groups() -> list[ProbeGroup]:
     if public_specs:
         groups.append(
             ProbeGroup(
-                name="public-route",
+                name=PUBLIC_ROUTE_GROUP,
                 raw_specs=public_specs,
                 alert_name="InfraPublicRouteProbeFailed",
                 external_url="infra2://platform/12.alerting/public-route-probes",

@@ -21,8 +21,6 @@ from infra2_sdk.secrets import vault_token_status
 from libs.deploy.contract import DeployTarget, is_tag_only_iac_env
 from libs.deploy.env_config import env_config
 
-logger = logging.getLogger(__name__)
-
 _INFRA2_REPO = "https://github.com/wangzitian0/infra2"
 _DEFAULT_IMAGE_WAIT_SECONDS = 300.0
 _DEFAULT_IMAGE_POLL_SECONDS = 10.0
