@@ -32,7 +32,7 @@ REPO_NAME = Path(urlparse(GIT_REPO_URL).path).stem
 # The iac-runner image bakes only this directory (build context = here), so
 # `libs/` is NOT importable from /app. The dependency matcher + manifest live in
 # the checked-out repo; put it on the path so the lazy
-# `from libs.deploy_dependencies import ...` calls resolve (after update_repo()).
+# `from libs.deploy.dependencies import ...` calls resolve (after update_repo()).
 _CHECKOUT_PATH = str(WORKSPACE / REPO_NAME)
 if _CHECKOUT_PATH not in sys.path:
     sys.path.insert(0, _CHECKOUT_PATH)
@@ -752,12 +752,12 @@ def get_changed_services_from_files(changed_files: list[str]) -> set[str]:
     shared-tooling change (the over-fan-out behind the recurring mass redeploys).
     """
     try:
-        from libs.deploy_dependencies import match_changed_services
+        from libs.deploy.dependencies import match_changed_services
 
         return match_changed_services(changed_files)
     except Exception as exc:  # checked-out libs/ not importable yet
         logger.warning(
-            "deploy_dependencies unavailable (%s); own-dir-only fan-out", exc
+            "libs.deploy.dependencies unavailable (%s); own-dir-only fan-out", exc
         )
         return _own_dir_services(changed_files)
 
@@ -783,7 +783,7 @@ def _log_fanout_decision(changed_files: list[str], services: set[str]) -> None:
     nothing, so a no-op deploy is debuggable (correctly-skipped vs under-deployed).
     """
     try:
-        from libs.deploy_dependencies import explain_fanout
+        from libs.deploy.dependencies import explain_fanout
 
         decision = explain_fanout(changed_files)
     except Exception as exc:  # logging is best-effort; never fail the sync
