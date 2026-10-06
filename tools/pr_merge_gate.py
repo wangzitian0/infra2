@@ -11,8 +11,17 @@ each time because the timing was judged by eye between other work. This tool jud
     python -m tools.pr_merge_gate 704            # verdict, exit 0 when mergeable by rule
     python -m tools.pr_merge_gate 704 --merge    # squash-merge only when the verdict is ready
 
-Exit codes: 0 ready (or merged), 1 not yet (a check pending, a thread open, the head
-still settling), 2 needs the owner (protected file, deploy-triggering path, wrong base).
+Exit codes (#740), so a caller never reads the prose to decide:
+
+    0  ready (or merged with --merge)
+    1  wait: time alone fixes it (check pending, no check yet, head still settling)
+    2  needs the owner (deploy-triggering path, unproven self-governing change, base
+       is not main)
+    3  action required: waiting will not fix it (red check, open thread, conflict,
+       draft, PR not open, base changed under green checks)
+    4  could not evaluate: not a verdict on the PR. This checkout's merge rules are
+       not main's (#873; pull main), or gh failed or returned data the gate cannot
+       read. Fix the cause and re-run.
 
 Two policies for the settling condition:
 
@@ -184,8 +193,41 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
     args = parser.parse_args(argv)
 
     from libs.console import error, success, warning
+    from libs.gate.self_governance import _working_tree_rule_drift
+    from libs.gate.types import EXIT_UNEVALUABLE
 
-    facts = collect(args.number, repo=args.repo, gh=gh)
+    def unevaluable(why: str) -> int:
+        if args.json:
+            print(
+                json.dumps(
+                    {
+                        "number": args.number,
+                        "ready": False,
+                        "outcome": "unevaluable",
+                        "exit_code": EXIT_UNEVALUABLE,
+                        "reasons": [why],
+                    }
+                )
+            )
+        else:
+            warning(f"#{args.number}: could not evaluate (not a verdict): {why}")
+        return EXIT_UNEVALUABLE
+
+    # Preflight (#873): judge only with main's rules, and know it before reading any
+    # PR state. A stale checkout is a local fact with a local fix (pull main); it is
+    # not a reason to ask the owner.
+    if _is_local_root_repo(args.repo):
+        drift = _working_tree_rule_drift(args.repo, "main", gh=gh)
+        if drift:
+            return unevaluable(
+                "this checkout's merge rules are not main's "
+                f"({', '.join(drift)}): pull main and re-run"
+            )
+
+    try:
+        facts = collect(args.number, repo=args.repo, gh=gh)
+    except Exception as exc:  # noqa: BLE001 - any read failure is "could not evaluate"
+        return unevaluable(f"reading the PR failed: {type(exc).__name__}: {exc}")
     if args.request_review and not any(
         r[0] in AUTOMATED_REVIEWERS and r[2] > 0 for r in facts.reviews_on_head()
     ):
@@ -211,6 +253,7 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
                     f"omca audit failed to run (rc={audit_proc.returncode}): {audit_proc.stderr.strip()[:100]}"
                 )
                 verdict.ready = False
+                verdict.unevaluable = True
             else:
                 report = json.loads(audit_proc.stdout)
                 passed, blocking, _ = evaluate_audit_report(
@@ -220,9 +263,11 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
                     for b in blocking:
                         verdict.reasons.append(f"omca audit blocked: {b}")
                     verdict.ready = False
+                    verdict.action_required = True
         except Exception as exc:
             verdict.reasons.append(f"omca audit execution error: {exc}")
             verdict.ready = False
+            verdict.unevaluable = True
     if args.json:
         print(
             json.dumps(
@@ -231,6 +276,8 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
                     "head": facts.head_sha,
                     "ready": verdict.ready,
                     "owner_required": verdict.owner_required,
+                    "outcome": verdict.outcome,
+                    "exit_code": verdict.exit_code,
                     "reasons": verdict.reasons,
                     "quiet_remaining_seconds": verdict.quiet_remaining_seconds,
                     "policy": args.policy,
@@ -241,7 +288,7 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
         text = render(facts, verdict)
         if verdict.ready:
             success(text)
-        elif verdict.owner_required:
+        elif verdict.owner_required or verdict.unevaluable:
             error(text)
         else:
             warning(text)

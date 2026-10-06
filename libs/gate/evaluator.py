@@ -21,28 +21,38 @@ from libs.gate.types import (
     GREEN_STATES,
     MAX_REVIEW_THREADS,
     MERGE_STATES_OK,
+    ACT,
     QUIET_MINUTES,
     RULE_TEXT_FILES,
     SETTLE_MINUTES,
+    UNEVALUABLE,
+    WAIT,
     HeadFacts,
+    Reasons,
     Verdict,
     _is_local_root_repo,
 )
 
+# Check states GitHub reports while a check has not finished yet.
+PENDING_STATES = frozenset(
+    {"pending", "PENDING", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED", "EXPECTED"}
+)
 
-def _check_pr_state_and_conflicts(facts: HeadFacts, reasons: list[str]) -> bool:
+
+def _check_pr_state_and_conflicts(facts: HeadFacts, reasons: Reasons) -> bool:
     """Validate PR state, base branch, mergeability, and conflict status."""
     owner = False
     if facts.state == "OPEN" and not facts.last_push_at:
         reasons.append(
             "no timestamp for the head commit, so the settling window cannot be "
             "measured: gh returned no commits, or the head was past the 100 it "
-            "returns oldest-first"
+            "returns oldest-first",
+            UNEVALUABLE,
         )
     if facts.state != "OPEN":
-        reasons.append(f"pull request is {facts.state or 'unknown'}, not OPEN")
+        reasons.append(f"pull request is {facts.state or 'unknown'}, not OPEN", ACT)
     if facts.draft:
-        reasons.append("pull request is a draft")
+        reasons.append("pull request is a draft", ACT)
     if facts.base != "main":
         reasons.append(f"base branch is {facts.base!r}, not main")
         owner = True
@@ -62,14 +72,15 @@ def _check_pr_state_and_conflicts(facts: HeadFacts, reasons: list[str]) -> bool:
     if is_open and absent:
         reasons.append(
             f"gh did not return {', '.join(absent)} although asked for it: the "
-            "conflict check is unavailable, so this cannot be judged ready"
+            "conflict check is unavailable, so this cannot be judged ready",
+            UNEVALUABLE,
         )
 
     if is_open and facts.mergeable == ABSENT:
         pass
     elif is_open and facts.mergeable == "CONFLICTING":
         reasons.append(
-            "GitHub reports mergeable=CONFLICTING: rebase or merge main first"
+            "GitHub reports mergeable=CONFLICTING: rebase or merge main first", ACT
         )
     elif is_open and facts.mergeable == "UNKNOWN":
         reasons.append(
@@ -77,7 +88,9 @@ def _check_pr_state_and_conflicts(facts: HeadFacts, reasons: list[str]) -> bool:
             "rather than treating it as clean"
         )
     elif is_open and facts.mergeable and facts.mergeable != "MERGEABLE":
-        reasons.append(f"GitHub reports mergeable={facts.mergeable}, not MERGEABLE")
+        reasons.append(
+            f"GitHub reports mergeable={facts.mergeable}, not MERGEABLE", ACT
+        )
 
     if (
         is_open
@@ -90,21 +103,24 @@ def _check_pr_state_and_conflicts(facts: HeadFacts, reasons: list[str]) -> bool:
                 "mergeStateStatus is still UNKNOWN: re-run in a moment rather "
                 "than treating it as a conflict"
             )
-        else:
+        elif facts.merge_state == "BLOCKED":
+            # Usually required checks still running; red checks are reported below.
             reasons.append(f"mergeStateStatus is {facts.merge_state}, not CLEAN")
+        else:
+            reasons.append(f"mergeStateStatus is {facts.merge_state}, not CLEAN", ACT)
 
     if facts.changed_files and len(facts.files) < facts.changed_files:
         reasons.append(
             f"gh returned {len(facts.files)} of {facts.changed_files} changed files "
             "(the API caps at 100): the protected-file and deploy checks read that "
-            "list, so neither can be trusted here"
+            "list, so neither can be trusted here",
+            UNEVALUABLE,
         )
-        owner = True
 
     return owner
 
 
-def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: list[str]) -> bool:
+def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool:
     """Validate rule drift, self-governing closure, and deploy-triggering paths."""
     owner = False
     if not _is_local_root_repo(facts.repo):
@@ -115,9 +131,9 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: list[str]) -> bo
             f"the working tree's copy of the merge rules is not "
             f"{facts.base}'s ({', '.join(facts.rule_drift)}): every verdict here "
             f"would be issued under rules that are not merged — check out {facts.base} "
-            f"cleanly and re-run, or land those changes first"
+            f"cleanly and re-run, or land those changes first",
+            UNEVALUABLE,
         )
-        owner = True
 
     quoted_instruction = _owner_instruction_quoted(facts.body)
     governing = sorted(f for f in facts.files if is_self_governing(f))
@@ -146,9 +162,9 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: list[str]) -> bo
     if not _declared_deploy_globs()[1]:
         reasons.append(
             "cannot read .github/workflows to determine which paths deploy on "
-            "merge: fix the read rather than merging on an unknown"
+            "merge: fix the read rather than merging on an unknown",
+            UNEVALUABLE,
         )
-        owner = True
 
     fired = {f: _deploy_triggering(f) for f in facts.files}
     deploying = sorted(f for f, w in fired.items() if w)
@@ -165,7 +181,8 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: list[str]) -> bo
     if not inventory_read:
         reasons.append(
             "cannot read docs/ssot/ci-gate-inventory.yaml: the required-check "
-            "list is unavailable, so a gate that never ran cannot be noticed"
+            "list is unavailable, so a gate that never ran cannot be noticed",
+            UNEVALUABLE,
         )
     reported = {name for name, _ in facts.checks}
     missing = sorted(required - reported)
@@ -181,14 +198,15 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: list[str]) -> bo
         if skipped:
             reasons.append(
                 f"required check(s) skipped although this PR changes non-Markdown "
-                f"files: {', '.join(skipped)}"
+                f"files: {', '.join(skipped)}",
+                ACT,
             )
 
     return owner
 
 
 def _check_checks_green_and_stale(
-    facts: HeadFacts, *, is_open: bool, reasons: list[str]
+    facts: HeadFacts, *, is_open: bool, reasons: Reasons
 ) -> None:
     """Validate check outcomes and detect stale green runs against updated base."""
     not_green = sorted(
@@ -199,7 +217,15 @@ def _check_checks_green_and_stale(
     if not facts.checks:
         reasons.append("no checks reported yet")
     if not_green:
-        reasons.append(f"check(s) not green: {', '.join(not_green)}")
+        finished_red = any(
+            verdict not in PENDING_STATES
+            for name, verdict in facts.checks
+            if name in not_green
+        )
+        reasons.append(
+            f"check(s) not green: {', '.join(not_green)}",
+            ACT if finished_red else WAIT,
+        )
 
     stale = sorted(set(facts.files) & set(facts.base_changed_files))
     if stale and not not_green and is_open:
@@ -208,27 +234,31 @@ def _check_checks_green_and_stale(
         )
         reasons.append(
             f"checks are green against a base that has since changed {len(stale)} of "
-            f"this PR's files ({shown}): update the branch so they re-run"
+            f"this PR's files ({shown}): update the branch so they re-run",
+            ACT,
         )
 
 
-def _check_reviews(facts: HeadFacts, reasons: list[str]) -> None:
+def _check_reviews(facts: HeadFacts, reasons: Reasons) -> None:
     """Validate review decision and unresolved thread weights."""
     if facts.review_decision == "CHANGES_REQUESTED":
         reasons.append(
             "a reviewer has requested changes: resolve it with them rather than "
-            "merging over it"
+            "merging over it",
+            ACT,
         )
     if facts.unresolved_weight >= BLOCKING_SEVERITY_TOTAL:
         reasons.append(
             f"{facts.unresolved_threads} unresolved review thread(s) weigh "
             f"{facts.unresolved_weight:g} (AGENTS.md blocks at "
-            f"{BLOCKING_SEVERITY_TOTAL:g}; unlabelled counts as middle)"
+            f"{BLOCKING_SEVERITY_TOTAL:g}; unlabelled counts as middle)",
+            ACT,
         )
     if facts.review_threads_total > MAX_REVIEW_THREADS:
         reasons.append(
             f"{facts.review_threads_total} review threads, only the first "
-            f"{MAX_REVIEW_THREADS} were read: resolve or evaluate by hand"
+            f"{MAX_REVIEW_THREADS} were read: resolve or evaluate by hand",
+            ACT,
         )
 
 
@@ -239,7 +269,7 @@ def _check_settling_window(
     quiet_minutes: int,
     policy: str,
     settle_minutes: int,
-    reasons: list[str],
+    reasons: Reasons,
 ) -> int:
     """Evaluate quiet period or event settling policy; return remaining seconds."""
     if policy not in ("clock", "event", "either"):
@@ -298,7 +328,7 @@ def evaluate(
 ) -> Verdict:
     """The rule, in one place. Every failed condition is a reason; owner-only
     conditions are named as such so a caller never waits on something time cannot fix."""
-    reasons: list[str] = []
+    reasons = Reasons()
 
     # Step 1: PR state, base branch, conflicts, and truncation
     owner1 = _check_pr_state_and_conflicts(facts, reasons)
@@ -327,8 +357,10 @@ def evaluate(
     return Verdict(
         ready=not reasons,
         owner_required=owner1 or owner2,
-        reasons=reasons,
+        reasons=list(reasons),
         quiet_remaining_seconds=max(0, remaining),
+        action_required=ACT in reasons.kinds,
+        unevaluable=UNEVALUABLE in reasons.kinds,
     )
 
 
@@ -341,5 +373,10 @@ def render(facts: HeadFacts, verdict: Verdict) -> str:
             f"({len(facts.checks)}), threads resolved, settled, "
             "no protected or deploy-triggering paths"
         )
-    kind = "needs the owner" if verdict.owner_required else "not yet"
+    kind = {
+        "unevaluable": "could not evaluate (not a verdict on the PR)",
+        "owner": "needs the owner",
+        "action": "action required (waiting will not fix it)",
+        "wait": "not yet",
+    }[verdict.outcome]
     return f"{head}: {kind}\n" + "\n".join(f"  - {r}" for r in verdict.reasons)

@@ -100,7 +100,15 @@
 本文只保留 infra2 自己的门禁条件。文末仍需 owner 的第二类（改动"决定合流的东西"本身）不属于
 权限保留，而是自我裁决问题：门禁从工作树读规则，AI 合流自己的 PR 时读到的就是该 PR 引入的版本。
 判定与合流统一走 `python -m tools.pr_merge_gate <n> --policy either --request-review --merge`
-（exit 1 = 未到时机，exit 2 = 需要 owner），不靠肉眼看表。
+，不靠肉眼看表。Act on the exit code only (#740):
+
+| Exit | Meaning | Next step |
+|---|---|---|
+| 0 | Ready (merged with `--merge`). | Continue from the latest main. |
+| 1 | Wait. Time alone fixes it: a check is pending, no check has reported yet, or the head is settling. | Wait and re-run. |
+| 2 | Needs the owner. | Ask the owner about this head SHA. |
+| 3 | Action required. Waiting does not fix it: a red or cancelled check, an open review thread, a conflict, a draft, a PR that is not open, or a base that changed under green checks. | Fix the cause, push, re-run. |
+| 4 | Could not evaluate. This is not a verdict on the PR. The gate checkout's rules differ from main's (#873), or `gh` failed or returned unreadable data. The preflight finds a stale checkout before it reads any PR state. | Pull main in the gate checkout, or retry after the `gh` failure. |
 
 ## 线上测试
 

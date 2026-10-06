@@ -106,7 +106,8 @@ def test_pending_checks_and_open_threads_are_not_yet_not_owner():
         ),
         now=NOW,
     )
-    assert verdict.exit_code == 1 and not verdict.owner_required
+    # Open threads need someone to act (#740): exit 3, still not the owner.
+    assert verdict.exit_code == 3 and not verdict.owner_required
     assert "check(s) not green: Tests" in verdict.reasons
     assert any("weigh 1" in r for r in verdict.reasons)
 
@@ -520,7 +521,7 @@ def test_pr_merge_gate_audit_flag_detects_blockers(monkeypatch, capsys):
     )
     monkeypatch.setattr(gate.subprocess, "run", mock_run)
     exit_code = gate.main(["704", "--audit"], gh=_Gh(), now=lambda: ready_at)
-    assert exit_code == 1
+    assert exit_code == 3  # a blocking audit needs someone to act (#740)
     assert "omca audit blocked" in capsys.readouterr().out
 
 
@@ -966,7 +967,9 @@ def test_a_truncated_file_list_cannot_be_trusted_for_the_owner_gates():
         _green(files=tuple(f"f{i}.py" for i in range(100)), changed_files=163), now=NOW
     )
     assert not verdict.ready
-    assert verdict.owner_required
+    # It cannot be judged at all (#740): exit 4, not an owner verdict.
+    assert verdict.unevaluable and not verdict.owner_required
+    assert verdict.exit_code == 4
     assert any("100 of 163" in r for r in verdict.reasons)
 
 
@@ -1359,8 +1362,8 @@ def test_an_unreadable_workflow_read_escalates_rather_than_asking_for_patience(
     try:
         verdict = gate.evaluate(_green(), now=NOW)
         assert not verdict.ready
-        assert verdict.owner_required
-        assert verdict.exit_code == 2
+        assert verdict.unevaluable and not verdict.owner_required
+        assert verdict.exit_code == 4
     finally:
         gate._declared_deploy_globs.cache_clear()
 
@@ -1778,7 +1781,9 @@ def test_rule_drift_stops_a_merge_that_is_otherwise_ready():
     """It is not about what the PR changes: an unrelated PR is judged by the same
     working-tree rules, so it is stopped by the same fact."""
     verdict = gate.evaluate(_facts(rule_drift=("tools/pr_merge_gate.py",)), now=NOW)
-    assert verdict.owner_required and verdict.exit_code == 2
+    # A stale gate checkout cannot judge (#873): exit 4, never an owner verdict.
+    assert verdict.unevaluable and not verdict.owner_required
+    assert verdict.exit_code == 4
     assert "not merged" in verdict.reasons[0]
     assert "tools/pr_merge_gate.py" in verdict.reasons[0]
 
@@ -1794,7 +1799,7 @@ def test_rule_drift_is_not_excused_by_a_direction_proof():
         ),
         now=NOW,
     )
-    assert verdict.owner_required and verdict.exit_code == 2
+    assert verdict.unevaluable and verdict.exit_code == 4
 
 
 # -- workflow 文件也决定这个门禁怎么判（审计 2026-09-22 HIGH）----------------------
@@ -1974,12 +1979,19 @@ def test_thread_weight_upgrades_critical_signals_without_label():
     assert gate.thread_weight(["Please rename this variable for clarity."]) == 0.5
 
     # 包含高危安全信号的未标注评论: 1.0 (high)
-    assert gate.thread_weight(["CRITICAL: SQL injection vulnerability detected in query handler"]) == 1.0
+    assert (
+        gate.thread_weight(
+            ["CRITICAL: SQL injection vulnerability detected in query handler"]
+        )
+        == 1.0
+    )
     assert gate.thread_weight(["Fatal memory leak in worker loop"]) == 1.0
     assert gate.thread_weight(["Possible credential leak via stderr"]) == 1.0
 
     # 显式标注者优先（即便包含词汇）
-    assert gate.thread_weight(["severity: low - critical typo in documentation"]) == 0.25
+    assert (
+        gate.thread_weight(["severity: low - critical typo in documentation"]) == 0.25
+    )
 
 
 def test_repo_deps_resolves_relative_imports(tmp_path, monkeypatch):
@@ -2047,7 +2059,94 @@ def test_external_app_repo_still_enforces_general_checks_and_threads():
     )
     verdict = gate.evaluate(facts, now=NOW)
     assert not verdict.ready
-    assert verdict.exit_code == 1
+    assert verdict.exit_code == 3
     assert "check(s) not green: CI / Unit Tests" in verdict.reasons
     assert any("weigh 1" in r for r in verdict.reasons)
 
+
+# --- #740 / #873 / #812-5: one exit code per remedy -------------------------------
+
+
+class _StaleCheckoutGh(_Gh):
+    """main's tree differs from this checkout in one rule file."""
+
+    def __call__(self, argv):
+        if argv[:1] == ["api"] and "/git/trees/" in argv[1]:
+            self.calls.append(list(argv))
+            return _tree_payload({"tools/pr_merge_gate.py": "0" * 40})
+        return super().__call__(argv)
+
+
+def test_a_stale_gate_checkout_is_refused_before_any_pr_read(capsys):
+    """#873: the preflight runs first, says 'pull main', and is not an owner verdict."""
+    gh = _StaleCheckoutGh()
+    assert gate.main(["704"], gh=gh, now=lambda: NOW) == 4
+    assert not any(c[:2] == ["pr", "view"] for c in gh.calls), gh.calls
+    out = capsys.readouterr().out
+    assert "could not evaluate" in out and "pull main" in out
+    assert "owner" not in out
+
+
+def test_a_stale_gate_checkout_reports_unevaluable_in_json(capsys):
+    assert gate.main(["704", "--json"], gh=_StaleCheckoutGh(), now=lambda: NOW) == 4
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert payload["outcome"] == "unevaluable" and payload["exit_code"] == 4
+
+
+class _BrokenGh(_Gh):
+    def __call__(self, argv):
+        if argv[:2] == ["pr", "view"]:
+            raise RuntimeError("gh: HTTP 502")
+        return super().__call__(argv)
+
+
+def test_a_gh_failure_is_could_not_evaluate_not_a_traceback(capsys):
+    """#740: a crash used to surface as Python's exit 1, which reads as 'wait'."""
+    assert gate.main(["704"], gh=_BrokenGh(), now=lambda: NOW) == 4
+    assert "HTTP 502" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("facts_kwargs", "expected"),
+    [
+        ({"checks": (("Tests", "pending"),)}, 1),
+        ({"checks": ()}, 1),
+        ({"checks": (("Tests", "fail"),)}, 3),
+        ({"checks": (("Tests", "cancel"),)}, 3),
+        ({"checks": (("Tests", "pending"), ("Lint", "fail"))}, 3),
+        ({"unresolved_threads": 1, "unresolved_weight": 1.0}, 3),
+        ({"draft": True}, 3),
+        ({"state": "MERGED"}, 3),
+        ({"mergeable": "CONFLICTING"}, 3),
+        ({"mergeable": "UNKNOWN"}, 1),
+        ({"rule_drift": ("AGENTS.md",)}, 4),
+    ],
+    ids=[
+        "pending",
+        "no-checks-yet",
+        "red",
+        "cancelled",
+        "pending-and-red",
+        "open-thread",
+        "draft",
+        "merged",
+        "conflict",
+        "mergeable-unknown",
+        "rule-drift",
+    ],
+)
+def test_each_condition_maps_to_its_remedy(facts_kwargs, expected):
+    verdict = gate.evaluate(_facts(**facts_kwargs), now=NOW)
+    assert verdict.exit_code == expected, verdict.reasons
+    assert verdict.outcome == {1: "wait", 3: "action", 4: "unevaluable"}[expected]
+
+
+def test_a_deploy_path_still_needs_the_owner_even_with_a_red_check():
+    """Exit 2 outranks 3: the owner decision does not go away when CI turns green."""
+    verdict = gate.evaluate(
+        _facts(
+            files=("libs/observability_dashboards.py",), checks=(("Tests", "fail"),)
+        ),
+        now=NOW,
+    )
+    assert verdict.exit_code == 2 and verdict.action_required

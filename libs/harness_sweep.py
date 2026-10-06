@@ -77,7 +77,8 @@ MERGE_STATES_KNOWN = frozenset(
     {"CLEAN", "BLOCKED", "UNSTABLE", "HAS_HOOKS", "UNKNOWN", "DRAFT"}
 ) | frozenset(MERGE_STATES_ACTION)
 RUN_ACTIVE = frozenset({"queued", "in_progress", "waiting", "pending", "requested"})
-GATE_READY, GATE_NOT_YET, GATE_OWNER = 0, 1, 2
+# tools/pr_merge_gate exit codes (#740).
+GATE_READY, GATE_NOT_YET, GATE_OWNER, GATE_ACTION, GATE_UNEVALUABLE = 0, 1, 2, 3, 4
 # gh exits 1 with this message, before printing any JSON, when no check has registered.
 NO_CHECKS_MARKER = "no checks reported"
 # gh documents exit 8 for "checks pending"; the JSON on stdout is still complete.
@@ -342,6 +343,22 @@ def classify_pr(
             ACTION,
             f"OWNER: gate exit 2 (owner approval of {head} required)",
             (f.head, "owner"),
+        )
+    if gate_rc == GATE_ACTION:
+        return Status(
+            key,
+            ACTION,
+            f"ACT: gate exit 3 (waiting will not fix it; read the gate) @ {head}",
+            (f.head, "action"),
+        )
+    if gate_rc == GATE_UNEVALUABLE:
+        # #812-5 / #873: a stale gate checkout or a gh failure. Not an owner verdict.
+        return Status(
+            key,
+            UNKNOWN,
+            "gate exit 4: could not evaluate (pull main in the gate checkout, or "
+            f"gh failed) @ {head}",
+            (f.head, "unevaluable"),
         )
     if gate_rc not in (None, GATE_NOT_YET):
         return Status(

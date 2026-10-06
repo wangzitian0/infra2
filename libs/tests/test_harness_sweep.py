@@ -112,6 +112,21 @@ def test_a_crashed_or_missing_gate_is_unknown_not_a_verdict():
     assert _pr(_facts(), 127).state == UNKNOWN
 
 
+def test_gate_exit_3_needs_someone_to_act_and_is_not_the_owner():
+    status = _pr(_facts(), 3)
+    assert status.state == ACTION
+    assert status.detail.startswith("ACT") and "OWNER" not in status.detail
+
+
+def test_gate_exit_4_could_not_evaluate_is_not_shown_as_the_owner():
+    """#812-5: a stale gate checkout used to print the same OWNER text as a real
+    self-adjudication finding, and sent a session to the owner for a git pull."""
+    status = _pr(_facts(), 4)
+    assert status.state == UNKNOWN
+    assert "could not evaluate" in status.detail and "pull main" in status.detail
+    assert "OWNER" not in status.detail
+
+
 def test_gate_exit_1_after_settling_with_nothing_pending_needs_a_reader():
     status = _pr(_facts(head_at=NOW - 30 * MIN), gate=1)
     assert status.state == ACTION and "read the gate output" in status.detail
