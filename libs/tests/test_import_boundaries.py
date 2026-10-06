@@ -52,14 +52,10 @@ _FORBIDDEN_ROOTS = ("tools", "bootstrap")
 # libs.security, libs.deploy and libs.observability (the flat files are now frozen
 # shims, see libs/README.md).
 #
-# The two that remain point at libs.console. tools/pr_merge_gate.py imports it, so it
-# is in the gate's self-governing closure (tools.pr_merge_gate.self_governing_files()):
-# moving it changes what decides whether that very PR may merge, which is the owner's
-# call (AGENTS.md, merge gate rule 5). Retire these two rows in that owner-approved PR.
-_DEBT_ROWS: tuple[tuple[str, str], ...] = (
-    ("libs/deploy/deployer.py", "libs.console"),
-    ("libs/deploy/promote.py", "libs.console"),
-)
+# The previous entries pointing at libs.console were retired by introducing
+# libs.deploy.console, which cleanly decouples domain packages from flat modules.
+# Boundary debt is now zero.
+_DEBT_ROWS: tuple[tuple[str, str], ...] = ()
 
 DEBT: frozenset[tuple[str, str]] = frozenset(_DEBT_ROWS)
 

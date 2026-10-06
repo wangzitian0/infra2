@@ -1,0 +1,107 @@
+"""Console output utilities for deployment routines.
+
+Provides Rich formatting for deployer and promotion workflows.
+Domain packages under libs/ must not import flat libs.console.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+
+if TYPE_CHECKING:
+    from invoke import Context, Result
+
+console = Console()
+
+__all__ = [
+    "console",
+    "header",
+    "success",
+    "error",
+    "warning",
+    "info",
+    "fatal",
+    "check_failed",
+    "prompt_action",
+    "env_vars",
+    "run_with_status",
+]
+
+
+def header(title: str, subtitle: str | None = None) -> None:
+    """Display a task header."""
+    text = f"[bold cyan]{title}[/]"
+    if subtitle:
+        text += f"\n[dim]{subtitle}[/]"
+    console.print(Panel(text, border_style="cyan"))
+
+
+def success(msg: str) -> None:
+    """Print success message."""
+    console.print(f"[green]✅ {msg}[/]")
+
+
+def error(msg: str, detail: str | None = None) -> None:
+    """Print error message (non-fatal)."""
+    console.print(f"[red]❌ {msg}[/]")
+    if detail:
+        console.print(f"[dim]   {detail}[/]")
+
+
+def fatal(msg: str, detail: str | None = None) -> None:
+    """Print fatal error and exit."""
+    console.print(f"[bold red]🛑 FATAL: {msg}[/]")
+    if detail:
+        console.print(f"[dim]   {detail}[/]")
+    raise SystemExit(1)
+
+
+def check_failed(msg: str, detail: str | None = None) -> None:
+    """Print check failure."""
+    console.print(f"[yellow]⚠️  CHECK FAILED: {msg}[/]")
+    if detail:
+        console.print(f"[dim]   {detail}[/]")
+
+
+def warning(msg: str) -> None:
+    """Print warning message."""
+    console.print(f"[yellow]⚠️  {msg}[/]")
+
+
+def info(msg: str) -> None:
+    """Print info message."""
+    console.print(f"[blue]ℹ️  {msg}[/]")
+
+
+def prompt_action(title: str, instructions: list[str]) -> None:
+    """Display an action prompt for manual steps."""
+    table = Table(show_header=False, box=None, padding=(0, 2))
+    for i, instruction in enumerate(instructions, 1):
+        table.add_row(f"[yellow]{i}.[/]", instruction)
+    console.print(
+        Panel(table, title=f"[bold yellow]⏸️  {title}[/]", border_style="yellow")
+    )
+    console.input("[dim]Press Enter when complete...[/]")
+
+
+def env_vars(title: str, vars: dict[str, str]) -> None:
+    """Display environment variables."""
+    table = Table(show_header=False, box=None)
+    for key, value in vars.items():
+        table.add_row(f"[cyan]{key}[/]", f"[green]{value}[/]")
+    console.print(Panel(table, title=f"[bold]📋 {title}[/]", border_style="green"))
+
+
+def run_with_status(c: "Context", cmd: str, desc: str, hide: bool = True) -> "Result":
+    """Run a command with status indicator."""
+    with console.status(f"[cyan]{desc}...[/]"):
+        result = c.run(cmd, warn=True, hide=hide)
+    if result.ok:
+        success(desc)
+    else:
+        error(desc, result.stderr if result.stderr else "Command failed")
+    return result

@@ -11,6 +11,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -111,6 +112,15 @@ def host(tmp_path: Path):
         "BACKUP_REMOTE": "fake-remote:infra2",
         "RCLONE_LOG": str(rclone_log),
     }
+    tool_versions = Path.home() / ".tool-versions"
+    if tool_versions.exists():
+        (tmp_path / ".tool-versions").write_text(
+            tool_versions.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    asdf_dir = Path.home() / ".asdf"
+    if asdf_dir.exists():
+        env["ASDF_DATA_DIR"] = os.environ.get("ASDF_DATA_DIR", str(asdf_dir))
+        env["ASDF_DIR"] = os.environ.get("ASDF_DIR", str(asdf_dir))
     return {"env": env, "out": out, "log": log, "rclone_log": rclone_log}
 
 
@@ -400,6 +410,11 @@ def test_a_run_through_a_symlink_finds_the_emitter(host, tmp_path) -> None:
     sbin.mkdir()
     link = sbin / "infra2-host-backup.sh"
     link.symlink_to(SCRIPT)
+    tool_versions = Path.home() / ".tool-versions"
+    if tool_versions.exists():
+        (tmp_path / ".tool-versions").write_text(
+            tool_versions.read_text(encoding="utf-8"), encoding="utf-8"
+        )
     bash = shutil.which("bash")
     assert bash, "bash is required"
     proc = subprocess.run(
