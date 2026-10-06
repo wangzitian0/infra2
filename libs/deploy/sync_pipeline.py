@@ -13,7 +13,6 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from infra2_sdk.deploy import DeployState
 from libs.core.service_identity import ServiceIdentity
 
 if TYPE_CHECKING:
@@ -26,10 +25,15 @@ EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 
 class SyncAction:
-    """Deployment sync action types aligned with infra2-sdk DeployState."""
+    """Deployment sync action types aligned with infra2-sdk DeployState.
+
+    ``FAILED`` is a literal, not ``DeployState.FAILED.value``: invoke loads every task
+    module, so ``libs.deploy.deployer`` and this module must import without infra2-sdk
+    (#1016). ``test_sync_pipeline_sdk_alignment`` pins the literal to the SDK value.
+    """
 
     SKIPPED = "skipped"
-    FAILED = DeployState.FAILED.value  # "failed"
+    FAILED = "failed"
     CREATED = "created"
     UPDATED = "updated"
     SUPPLIED = "supplied"

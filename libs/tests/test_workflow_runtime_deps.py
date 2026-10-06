@@ -41,6 +41,8 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github/workflows"
 # Provided by the checkout, not by pip.
 REPO_PACKAGES = ("libs", "tools", "finance_report", "truealpha")
+# The module `python -m invoke` imports from the repo root (see `_entry_modules`).
+INVOKE_ENTRY = "tasks"
 
 # Run in the subprocess: block every top-level module the job does not install, then
 # import. `find_spec` raising ModuleNotFoundError is what a genuinely absent module
@@ -175,7 +177,13 @@ def _entry_modules(job: dict) -> set[str]:
             for index, token in enumerate(tokens):
                 if token == "-m" and index + 1 < len(tokens):
                     candidate = tokens[index + 1]
-                    if candidate.startswith(REPO_PACKAGES):
+                    if candidate == "invoke":
+                        # invoke imports the root `tasks.py`, and through
+                        # `tools.loader` every task module, before it runs one
+                        # task. #1016: a task module gained an SDK import and the
+                        # job that only runs `python -m invoke` died at import.
+                        found.add(INVOKE_ENTRY)
+                    elif candidate.startswith(REPO_PACKAGES):
                         found.add(candidate)
     expanded = set(found)
     for mod in list(found):
@@ -221,7 +229,7 @@ def _import_names(distributions: set[str]) -> set[str]:
     for import_name, dists in packages_distributions().items():
         for dist in dists:
             by_dist.setdefault(dist.lower().replace("_", "-"), set()).add(import_name)
-    names = set(REPO_PACKAGES)
+    names = set(REPO_PACKAGES) | {INVOKE_ENTRY}
     for dist in _dependency_closure(distributions):
         names.add(dist.replace("-", "_"))
         names |= by_dist.get(dist, set())
