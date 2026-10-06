@@ -426,7 +426,18 @@ RETIRED_FLAT_SHIMS_BATCH2 = {
     "service_identity",
 }
 
-ALL_RETIRED_FLAT_SHIMS = RETIRED_FLAT_SHIMS_BATCH1 | RETIRED_FLAT_SHIMS_BATCH2
+RETIRED_FLAT_SHIMS_BATCH2C = {
+    "secrets_registry",
+    "secrets_supply",
+    "vault_self_refresh_audit",
+    "vault_tokens",
+}
+
+ALL_RETIRED_FLAT_SHIMS = (
+    RETIRED_FLAT_SHIMS_BATCH1
+    | RETIRED_FLAT_SHIMS_BATCH2
+    | RETIRED_FLAT_SHIMS_BATCH2C
+)
 
 
 def test_retired_flat_shim_files_stay_deleted() -> None:

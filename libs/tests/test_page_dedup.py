@@ -473,7 +473,7 @@ def test_a_secrets_report_proves_only_what_it_observed() -> None:
 
 
 def test_facet_and_vault_name_what_they_did_not_evaluate(tmp_path) -> None:
-    from libs.vault_self_refresh_audit import classify_deployed_template
+    from libs.security.vault_self_refresh_audit import classify_deployed_template
     from tools import facet_reconcile as fr
     from tools import vault_self_refresh_audit_check as vault
 

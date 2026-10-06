@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from libs import common, env, secrets_supply
+from libs import common, env
 from libs.backup import (
     RehearsalSpecification,
     create_rehearsal_plan,
@@ -172,10 +172,6 @@ def test_backward_compatibility_shims() -> None:
     # env shims
     assert hasattr(env, "generate_secret_token")
     assert hasattr(env, "resolve_vault_token")
-
-    # secrets_supply shims
-    assert hasattr(secrets_supply, "apply_secret_supply")
-    assert hasattr(secrets_supply, "create_secrets_resolver")
 
 
 def test_rehearsal_timeout_guard(monkeypatch) -> None:

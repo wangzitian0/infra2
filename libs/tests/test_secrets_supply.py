@@ -14,7 +14,7 @@ import pytest
 import libs.deploy.deployer as deployer_module
 from libs.security import supply as secrets_supply
 from libs.deploy.deployer import Deployer
-from libs.secrets_supply import SupplyReport, TransientTransportError
+from libs.security.supply import SupplyReport, TransientTransportError
 from libs.tests.docker_host import DockerHost
 
 ENV = {"ENV": "staging", "ENV_SUFFIX": "-staging", "VPS_HOST": "vps.test"}

@@ -12,7 +12,7 @@ import types
 
 import pytest
 
-from libs.vault_tokens import policy_name
+from libs.security.vault_tokens import policy_name
 
 
 ROOT = Path(__file__).resolve().parents[2]

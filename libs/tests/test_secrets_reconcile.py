@@ -12,7 +12,7 @@ import yaml
 from infra2_sdk.capacity import CapacityReading
 from infra2_sdk.secrets import SecretsError, WriteResult, op_item, vault_path
 
-from libs.secrets_registry import SERVICES, Service
+from libs.security.registry import SERVICES, Service
 from tools import secrets_reconcile, secrets_reconcile_check
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -285,7 +285,7 @@ def test_render_lists_findings_per_row() -> None:
 def _resolver_for_root(root):
     from infra2_sdk.secrets import SecretsResolver
 
-    from libs.secrets_registry import merged_manifest
+    from libs.security.registry import merged_manifest
 
     def resolver_for(service, env, *, store=None, human=None):
         return SecretsResolver(
