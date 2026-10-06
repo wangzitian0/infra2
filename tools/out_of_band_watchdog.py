@@ -1275,6 +1275,8 @@ def run_scheduled_job_start_check(
     env: Mapping[str, str],
     timeout: float = 10.0,
     *,
+    max_attempts: int = 2,
+    retry_delay_seconds: float = 60.0,
     getter_factory=github_getter,
     now: datetime | None = None,
 ) -> list[CheckResult]:
@@ -1282,16 +1284,24 @@ def run_scheduled_job_start_check(
 
     A job GitHub fails before it starts never runs its own alert step, and the
     run still counts as a tick for truealpha's scheduler-liveness. An unreadable
-    answer is red.
+    answer is red, after one retry like the peer check.
     """
     getter = getter_factory(env.get("GITHUB_TOKEN", "").strip(), timeout=timeout)
-    verdict = scheduled_job_start.evaluate(getter, now=now or datetime.now(UTC))
+    attempts = max(1, max_attempts)
+    for attempt in range(1, attempts + 1):
+        verdict = scheduled_job_start.evaluate(getter, now=now or datetime.now(UTC))
+        if verdict.status != scheduled_job_start.UNVERIFIABLE or attempt == attempts:
+            break
+        if retry_delay_seconds > 0:
+            time.sleep(retry_delay_seconds)
     return [
         CheckResult(
             SCHEDULED_JOB_START_CHECK,
             verdict.ok,
             f"{verdict.status}: {verdict.detail}",
             "" if verdict.ok else "scheduled-job-start",
+            attempt_count=attempt,
+            units=verdict.units,
         )
     ]
 
@@ -1638,7 +1648,14 @@ def _run_all_watchdog_checks(
             retry_delay_seconds=retry_delay_seconds,
         )
     )
-    results.extend(run_scheduled_job_start_check(current_env, timeout))
+    results.extend(
+        run_scheduled_job_start_check(
+            current_env,
+            timeout,
+            max_attempts=retry_max_attempts,
+            retry_delay_seconds=retry_delay_seconds,
+        )
+    )
     return [
         replace(result, severity=_severity_for(result.name, result.failure_domain))
         for result in results

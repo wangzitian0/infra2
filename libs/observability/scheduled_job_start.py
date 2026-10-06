@@ -44,6 +44,9 @@ Get = Callable[[str], object]
 class StartVerdict:
     status: str
     detail: str
+    #: The page-dedup identity: sorted job names, never a run id or a time, so a new
+    #: job that fails to start pages again while the same one does not (#962).
+    units: tuple[str, ...] = ()
 
     @property
     def ok(self) -> bool:
@@ -103,6 +106,7 @@ def evaluate(
             get, now=now, repository=repository, workflow=workflow, window=window
         )
         found: list[str] = []
+        names: set[str] = set()
         for run in runs:
             # A run with a never-started job concludes failure; others need no read.
             if run.get("status") != "completed" or run.get("conclusion") != "failure":
@@ -110,11 +114,14 @@ def evaluate(
             path = f"/repos/{repository}/actions/runs/{run.get('id')}/jobs?per_page=100"
             for job in _list(get(path), "jobs", path):
                 if never_started(job):
+                    names.add(f"job:{job.get('name')}")
                     found.append(
                         f"{job.get('name')} (run {run.get('id')}, {run.get('created_at')})"
                     )
     except Exception as exc:  # noqa: BLE001 - an unreadable answer is red, never a pass.
-        return StartVerdict(UNVERIFIABLE, f"{type(exc).__name__}: {exc}")
+        return StartVerdict(
+            UNVERIFIABLE, f"{type(exc).__name__}: {exc}", ("read:unverifiable",)
+        )
     if found:
         shown = "; ".join(found[:DETAIL_LIMIT])
         more = (
@@ -124,6 +131,7 @@ def evaluate(
             NEVER_STARTED,
             f"{len(found)} scheduled job(s) of {workflow} failed before starting "
             f"in the last {hours} h, so their own alert never ran: {shown}{more}",
+            tuple(sorted(names)),
         )
     return StartVerdict(
         OK,

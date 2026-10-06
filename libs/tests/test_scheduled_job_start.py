@@ -151,3 +151,32 @@ def test_the_detail_names_a_few_jobs_and_counts_the_rest() -> None:
 
     assert verdict.detail.startswith("7 scheduled job(s)")
     assert "(+2 more)" in verdict.detail
+
+
+def test_units_are_the_job_names_without_run_ids_or_times() -> None:
+    """Two days with the same job failing to start keep one identity; a new job is a
+    new identity (page-dedup, #962)."""
+    day_one = FakeGitHub([NEVER_STARTED_RUN], {37426882755: [NEVER_STARTED_JOB]})
+    other_run = dict(NEVER_STARTED_RUN, id=99, created_at="2026-10-07T06:59:09Z")
+    day_two = FakeGitHub(
+        [other_run],
+        {
+            99: [
+                NEVER_STARTED_JOB,
+                dict(NEVER_STARTED_JOB, name="Secrets reconcile + capacity"),
+            ]
+        },
+    )
+
+    first = sjs.evaluate(day_one, now=NOW)
+    second = sjs.evaluate(day_two, now=NOW)
+
+    assert first.units == ("job:deploy_v2 live canary",)
+    assert second.units == (
+        "job:Secrets reconcile + capacity",
+        "job:deploy_v2 live canary",
+    )
+    assert sjs.evaluate(FakeGitHub([], {}, fail=True), now=NOW).units == (
+        "read:unverifiable",
+    )
+    assert sjs.evaluate(FakeGitHub([], {}), now=NOW).units == ()

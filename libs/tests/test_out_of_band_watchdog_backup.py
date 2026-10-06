@@ -294,6 +294,7 @@ def test_a_malformed_manifest_does_not_end_the_watchdog_run(
         "run_worker_status_check",
         "run_dokploy_status_check",
         "run_peer_scheduler_liveness_check",
+        "run_scheduled_job_start_check",
     ):
         monkeypatch.setattr(watchdog, name, lambda *_args, **_kwargs: [])
     monkeypatch.setattr(watchdog, "run_ssh_checks", lambda _config, _targets: [])

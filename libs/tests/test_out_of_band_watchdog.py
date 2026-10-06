@@ -1794,6 +1794,13 @@ def _run_day(
             result("truealpha-scheduler-liveness", "peer-scheduler-liveness")
         ],
     )
+    monkeypatch.setattr(
+        watchdog,
+        "run_scheduled_job_start_check",
+        lambda _env, _timeout, **_kwargs: [
+            result("infra2-scheduled-job-start", "scheduled-job-start")
+        ],
+    )
     pages: list[str] = []
     reports: list[str] = []
     events: list[dict] = []
@@ -2709,9 +2716,72 @@ def test_an_unreadable_scheduled_job_answer_is_red(monkeypatch) -> None:
         raise RuntimeError("GET answered HTTP 502")
 
     (result,) = watchdog.run_scheduled_job_start_check(
-        {}, getter_factory=lambda _token, **_kwargs: failing
+        {}, retry_delay_seconds=0, getter_factory=lambda _token, **_kwargs: failing
     )
 
     assert not result.ok
     assert result.failure_domain == "scheduled-job-start"
     assert result.detail.startswith("UNVERIFIABLE: ") and "HTTP 502" in result.detail
+    assert result.attempt_count == 2
+    assert result.units == ("read:unverifiable",)
+
+
+def test_one_failed_read_is_retried_before_the_check_turns_red(monkeypatch) -> None:
+    """#1105 audit: a single HTTP 502 must not page at P1."""
+    from libs.observability import scheduled_job_start
+
+    watchdog = _load_watchdog()
+    answers = iter(
+        [
+            scheduled_job_start.StartVerdict(scheduled_job_start.UNVERIFIABLE, "502"),
+            scheduled_job_start.StartVerdict(scheduled_job_start.OK, "0 runs"),
+        ]
+    )
+    monkeypatch.setattr(
+        scheduled_job_start, "evaluate", lambda _get, **_k: next(answers)
+    )
+
+    (result,) = watchdog.run_scheduled_job_start_check(
+        {}, retry_delay_seconds=0, getter_factory=lambda _token, **_kwargs: None
+    )
+
+    assert result.ok and result.attempt_count == 2
+
+
+def test_a_never_started_job_carries_its_name_as_the_dedup_unit(monkeypatch) -> None:
+    """#1105 audit: the page identity is the set of job names, so a second job that
+    fails to start pages again; run ids and times stay out of it."""
+    from libs.observability import scheduled_job_start
+
+    watchdog = _load_watchdog()
+    monkeypatch.setattr(
+        scheduled_job_start,
+        "evaluate",
+        lambda _get, **_k: scheduled_job_start.StartVerdict(
+            scheduled_job_start.NEVER_STARTED,
+            "2 job(s)",
+            ("job:Secrets reconcile + capacity", "job:deploy_v2 live canary"),
+        ),
+    )
+
+    (result,) = watchdog.run_scheduled_job_start_check(
+        {}, getter_factory=lambda _token, **_kwargs: None
+    )
+
+    assert result.units == (
+        "job:Secrets reconcile + capacity",
+        "job:deploy_v2 live canary",
+    )
+
+
+def test_main_pages_a_scheduled_job_that_never_started(monkeypatch, tmp_path) -> None:
+    code, pages, _reports, trail, _events = _run_day(
+        monkeypatch,
+        tmp_path,
+        worker_last_run=FRESH_CLEAN_RUN,
+        failing={"infra2-scheduled-job-start"},
+    )
+
+    assert code == 1
+    assert [_failure_names(page) for page in pages] == [{"infra2-scheduled-job-start"}]
+    assert set(trail.failing) == {"infra2-scheduled-job-start"}
