@@ -40,7 +40,6 @@ name: Ops Checks
       - "finance_report/finance_report/preview/**"
       - ".github/workflows/ops-checks.yml"
       - "docs/ssot/ops.alerting.md"
-      - "docs/project/Infra-011.reliability_hardening.md"
   pull_request:
     paths:
       - "tools/deploy_v2.py"
