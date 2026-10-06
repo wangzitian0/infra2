@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 from invoke import task
 
 from libs.core.environ import get_env, service_domain, validate_env
-from libs.console import (
+from libs.deploy.console import (
     env_vars,
     error,
     header,

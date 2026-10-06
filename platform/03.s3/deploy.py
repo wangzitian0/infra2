@@ -208,13 +208,12 @@ class S3Deployer(Deployer):
         info(f"S3 API: https://s3{domain_suffix}.{domain}")
         info(f"S3 Console: https://s3-console{domain_suffix}.{domain}")
         info(f"RustFS Console: https://rustfs{domain_suffix}.{domain}")
-        info(f"MinIO Console (legacy): https://minio{domain_suffix}.{domain}")
         info(f"Login: {root_user} / (password in 1Password)")
         return result
 
     @classmethod
     def ensure_compose_domains(cls, client, compose_id: str, e: dict) -> dict:
-        """Ensure domains exist BEFORE deploy: rustfs/minio.{domain}=Console, s3.{domain}=API."""
+        """Ensure domains exist BEFORE deploy: rustfs.{domain}=Console, s3.{domain}=API."""
         domain = e.get("INTERNAL_DOMAIN")
         if not domain:
             warning("INTERNAL_DOMAIN not set, skipping domain sync")
@@ -238,11 +237,6 @@ class S3Deployer(Deployer):
                 "port": 9001,
                 "https": True,
             },  # RustFS Console alias
-            {
-                "host": f"minio{domain_suffix}.{domain}",
-                "port": 9001,
-                "https": True,
-            },  # Legacy MinIO Console alias
         ]
 
         info(

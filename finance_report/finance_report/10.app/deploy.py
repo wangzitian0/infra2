@@ -2,7 +2,13 @@ import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.console import header, success, info, warning, error
-from libs.service_facets import ProbeFacet, PublicRouteFacet, SecretsFacet, SignalFacet
+from libs.service_facets import (
+    ProbeFacet,
+    PublicRouteFacet,
+    SecretsFacet,
+    SignalFacet,
+    StorageFacet,
+)
 from libs.observability.openpanel import openpanel_env
 
 shared_tasks = sys.modules.get("finance_report.10.app.shared")
@@ -77,6 +83,14 @@ class AppDeployer(Deployer):
             renotify_window_sec=0,
         ),
     )
+    storage = (
+        StorageFacet(
+            bucket="statements",
+            lifecycle_days=90,
+            versioning=False,
+            encryption=False,
+        ),
+    )
     telemetry_service_name = "finance-report-backend"
     telemetry_component = "backend"
 
@@ -147,8 +161,8 @@ class AppDeployer(Deployer):
         from libs.common import get_service_url
 
         try:
-            # "minio_api" is the key in SERVICE_SUBDOMAINS for the S3 interface
-            env_vars["S3_PUBLIC_ENDPOINT"] = get_service_url("minio_api", env=env_vars)
+            # "s3" is the canonical key in SERVICE_SUBDOMAINS for the S3 interface
+            env_vars["S3_PUBLIC_ENDPOINT"] = get_service_url("s3", env=env_vars)
         except Exception as e:
             from libs.console import error
 
