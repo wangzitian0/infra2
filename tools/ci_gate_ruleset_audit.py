@@ -24,7 +24,7 @@ from pathlib import Path
 
 import yaml
 
-from tools import ci_spec
+from libs.core import ci_spec
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = ROOT / "docs/ssot/ci-gate-inventory.yaml"

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tools import deploy_ingestion_smoke as smoke
+from libs.deploy import ingestion_verify as smoke
 
 
 def _counter(counts: dict[tuple[str, str | None], int]):

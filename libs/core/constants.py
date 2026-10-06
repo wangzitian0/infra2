@@ -24,6 +24,11 @@ DOCKER_LABEL_PREFIX = "party.zitian.infra"
 IDENTITY_SCHEMA_VERSION = "v1"
 PREVIEW_KINDS = ("branch", "pr", "commit", "tag", "canary")
 
+# GitHub Repository Configuration
+GITHUB_OWNER = "wangzitian0"
+GITHUB_REPO = "infra2"
+GITHUB_BRANCH = "main"
+
 APP_SOURCES: dict[str, str] = {
     "finance_report/app": "wangzitian0/finance_report",
     "truealpha/app": "wangzitian0/truealpha",

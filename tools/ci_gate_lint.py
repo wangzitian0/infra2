@@ -15,8 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from tools import ci_spec
-from tools.ci_spec import (
+from libs.core import ci_spec
+from libs.core.ci_spec import (
     BANNED_IN_GATE_PATTERNS,
     SHARD_MAX,
     SHARD_MIN,
