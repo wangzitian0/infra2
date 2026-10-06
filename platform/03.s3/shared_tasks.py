@@ -104,7 +104,7 @@ def create_app_bucket(
     bucket_name,
     access_key=None,
     secret_key=None,
-    enable_encryption=True,
+    enable_encryption=False,
     lifecycle_days=90,
     enable_versioning=False,
     public_download=False,
@@ -115,7 +115,7 @@ def create_app_bucket(
         bucket_name: Name of the bucket to create (e.g., 'finance-report-statements')
         access_key: S3 access key for the application user (auto-generated if None)
         secret_key: S3 secret key for the application user (auto-generated if None)
-        enable_encryption: Enable server-side encryption (SSE-S3) - default True
+        enable_encryption: Enable server-side encryption (SSE-S3) - default False
         lifecycle_days: Auto-delete files after N days (default 90, 0 to disable)
         enable_versioning: Enable bucket versioning - default False
         public_download: Allow anonymous public download via direct object URLs - default False
@@ -209,10 +209,36 @@ def create_app_bucket(
             hide=True,
             warn=True,
         )
-        if result.ok:
-            success("Server-side encryption enabled (SSE-S3)")
-        else:
-            warning(f"Failed to enable encryption: {result.stderr}")
+        if not result.ok:
+            error(f"Failed to enable encryption: {result.stderr}")
+            return None
+
+        # Verify encryption support with PUT probe. RustFS without KMS accepts
+        # the encrypt command but rejects all PutObject operations with InvalidRequest.
+        probe_key = f".probe-encryption-{bucket_name}"
+        probe_put = c.run(
+            f"docker exec {container_name} sh -c 'printf \"test\" | mc pipe local/{bucket_name}/{probe_key}'",
+            hide=True,
+            warn=True,
+        )
+        if not probe_put.ok:
+            c.run(
+                f"docker exec {container_name} mc encrypt clear local/{bucket_name}",
+                hide=True,
+                warn=True,
+            )
+            error(
+                f"SSE-S3 enabled but write probe failed (backend lacks KMS support): {probe_put.stderr}"
+            )
+            return None
+
+        # Remove probe object
+        c.run(
+            f"docker exec {container_name} mc rm --force local/{bucket_name}/{probe_key}",
+            hide=True,
+            warn=True,
+        )
+        success("Server-side encryption enabled and verified (SSE-S3)")
 
     # Step 4: Set lifecycle policy (auto-delete old files)
     if lifecycle_days > 0:
