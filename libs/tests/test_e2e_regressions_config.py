@@ -42,8 +42,6 @@ CLEARED_ENV = (
     "SSO_URL",
     "S3_CONSOLE_URL",
     "S3_API_URL",
-    "MINIO_CONSOLE_URL",
-    "MINIO_API_URL",
     "FINANCE_REPORT_BASE",
     "FINANCE_REPORT_URL",
     "FINANCE_REPORT_API_URL",
@@ -65,8 +63,8 @@ VALIDATED_URLS = {
     "OP_URL": "1password",
     "VAULT_URL": "vault",
     "SSO_URL": "sso",
-    "MINIO_CONSOLE_URL": "s3_console",
-    "MINIO_API_URL": "s3",
+    "S3_CONSOLE_URL": "s3_console",
+    "S3_API_URL": "s3",
 }
 
 
@@ -123,13 +121,13 @@ def test_default_config_passes_its_own_host_check(
 
 def test_legacy_console_host_is_rejected_with_the_expected_host(load_test_config):
     """The production fault in reverse: the old host `minio` is now a mismatch."""
-    config = load_test_config("production", MINIO_CONSOLE_URL=f"https://minio.{DOMAIN}")
+    config = load_test_config("production", S3_CONSOLE_URL=f"https://minio.{DOMAIN}")
 
     with pytest.raises(RuntimeError) as raised:
         config.validate()
 
     assert str(raised.value) == (
-        f"MINIO_CONSOLE_URL host mismatch. Expected s3-console.{DOMAIN}, "
+        f"S3_CONSOLE_URL host mismatch. Expected s3-console.{DOMAIN}, "
         f"got minio.{DOMAIN}. "
         "Set E2E_ALLOW_CUSTOM_DOMAIN=true to override."
     )
@@ -158,9 +156,9 @@ def test_every_checked_url_rejects_a_foreign_host(load_test_config, url_name):
 def test_custom_domain_flag_skips_the_host_check(load_test_config):
     config = load_test_config(
         "production",
-        MINIO_CONSOLE_URL=f"https://{FOREIGN_HOST}",
+        S3_CONSOLE_URL=f"https://{FOREIGN_HOST}",
         E2E_ALLOW_CUSTOM_DOMAIN="true",
     )
 
     assert config.validate() is None
-    assert config.MINIO_CONSOLE_URL == f"https://{FOREIGN_HOST}"
+    assert config.S3_CONSOLE_URL == f"https://{FOREIGN_HOST}"
