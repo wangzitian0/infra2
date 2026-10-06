@@ -3,7 +3,7 @@ sequences by compose_id (infra2#525).
 
 ## Why this exists
 
-``DokployClient.update_compose_env()`` (libs/dokploy.py) does a plain GET-merge-POST
+``DokployClient.update_compose_env()`` (libs/deploy/dokploy_client.py) does a plain GET-merge-POST
 against Dokploy's ``compose.one`` / ``compose.update`` endpoints, with no server-side
 version/etag/compare-and-swap. This was confirmed by reading a LIVE ``compose.one``
 response (2026-07-18, via the iac-runner's ``DOKPLOY_API_KEY``): its top-level keys are
@@ -73,7 +73,7 @@ def compose_write_lock(compose_id: str) -> Iterator[None]:
     """Serialize the wrapped block against other in-process callers of the same compose_id.
 
     Blocks until acquired (no timeout) — mirrors Dokploy's own single-concurrency
-    deploy queue (see libs/deploy_queue.py's FIFO framing) rather than failing fast: a
+    deploy queue (see libs/deploy/queue.py's FIFO framing) rather than failing fast: a
     second in-process caller for the same compose simply waits its turn instead of
     racing the first.
     """

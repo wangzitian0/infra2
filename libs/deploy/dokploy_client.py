@@ -536,7 +536,7 @@ class DokployClient:
             concurrent callers merging into the SAME compose_id cannot silently
             discard each other's write, because the second caller's GET is guaranteed
             to happen only after the first caller's POST has landed. This is an
-            in-process lock only — see libs/compose_lock.py for what it does and does
+            in-process lock only — see libs/deploy/compose_lock.py for what it does and does
             not cover.
         """
         from libs.deploy.compose_lock import compose_write_lock

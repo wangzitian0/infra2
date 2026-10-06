@@ -106,7 +106,7 @@ class ServiceMeta:
     # is actually promoted, and both derivations follow.
     not_yet_in_production: bool = False
     # Facet declarations (#541): typed per-service operational facts, read from
-    # the same Deployer class via AST. See libs/service_facets.py.
+    # the same Deployer class via AST. See libs/core/facets.py.
     probes: tuple[ProbeFacet, ...] = ()
     public_routes: tuple[PublicRouteFacet, ...] = ()
     signals: tuple[SignalFacet, ...] = ()

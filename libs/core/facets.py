@@ -29,7 +29,7 @@ These dataclasses are the typed vocabulary those declarations use:
                             *exempt* instead of silently MISSING.
 
 EXTRACTION CONSTRAINT (load-bearing): the registry reads Deployer attributes via
-AST (``libs/service_registry.py``), never by importing ``deploy.py`` (no import
+AST (``libs/core/registry.py``), never by importing ``deploy.py`` (no import
 side effects). Facet declarations must therefore be LITERAL constructor calls
 with literal arguments, assigned directly on the top-level Deployer subclass::
 
