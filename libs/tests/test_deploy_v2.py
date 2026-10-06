@@ -8,9 +8,11 @@ call happens — classify_ref stays real, so form validation is exercised for re
 
 from __future__ import annotations
 
+import ast
 import itertools
 import json
 import subprocess
+from pathlib import Path
 
 from libs.deploy import preflight as _preflight
 from dataclasses import dataclass
@@ -19,7 +21,11 @@ import httpx
 import pytest
 
 import tools.deploy_v2 as dv2
-from libs.iac_runner_client import status_poll_attempts, status_poll_delays
+from libs.iac_runner_client import (
+    RunnerLostDeploymentError,
+    status_poll_attempts,
+    status_poll_delays,
+)
 from tools.deploy_v2 import (
     DeployV2Result,
     assert_iac_ref_on_main,
@@ -1654,6 +1660,262 @@ def test_fixed_app_deploy_without_runner_credentials_skips_the_supply(
     assert calls["fixed"] is not None
 
 
+# --- a lost runner request: staging re-submits once, production fails at once (#666) ----
+
+
+_LOST_MESSAGE = (
+    "iac_runner answered not_found for 100s while polling deploy dddddddddddd to staging "
+    "(deployment {id}): the runner has no record of this deployment; it was probably "
+    "recreated between the request and the first poll (#666)"
+)
+_RUNNER_SITES = ["platform", "secret-supply", "batch"]
+
+
+def _lost(deployment_id="unknown"):
+    return RunnerLostDeploymentError(_LOST_MESSAGE.format(id=deployment_id))
+
+
+def _scripted_runner(monkeypatch, polls):
+    """Fake runner: each trigger gets a fresh id (``...01``, ``...02``); each poll plays the
+    next scripted outcome (an exception to raise, or a status dict to return)."""
+    rec = {"triggers": [], "polls": []}
+
+    def fake_trigger(**kw):
+        rec["triggers"].append(kw)
+        # a runaway re-submit loop must fail the test, not hang it
+        assert len(rec["triggers"]) <= 4, "runaway re-submit loop"
+        return {"status": "accepted", "deployment_id": f"{len(rec['triggers']):016x}"}
+
+    def fake_poll(**kw):
+        rec["polls"].append(kw)
+        assert len(rec["polls"]) <= len(polls), (
+            f"unexpected poll {len(rec['polls'])}: the script holds {len(polls)} outcome(s)"
+        )
+        outcome = polls[len(rec["polls"]) - 1]
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(dv2, "trigger_platform_deploy", fake_trigger)
+    monkeypatch.setattr(dv2, "poll_platform_deploy_status", fake_poll)
+    return rec
+
+
+def _run_runner_site(site, env_type):
+    """Enter deploy_v2 at one of the three places that talk to the runner.
+
+    platform       -> _deploy_platform  (one iac-pinned service)
+    secret-supply  -> _supply_app_secrets  (the supply before an app stack's promote)
+    batch          -> _deploy_platform_batch  (``--service a,b``, the reconcile's shape)
+    """
+    prod = env_type == "prod"
+    if site == "platform":
+        return _deploy(
+            service="platform/redis",
+            deploy_type=env_type,
+            version_ref="",
+            code_reviewed=True,
+        )
+    if site == "secret-supply":
+        return _deploy(
+            deploy_type=env_type,
+            version_ref="v1.2.3",
+            iac_runner_url="https://iac.example",
+            iac_webhook_secret="s",
+            staging_validated=prod,
+            code_reviewed=True,
+        )
+    assert site == "batch"
+    return dv2._deploy_platform_batch(
+        ["platform/redis", "platform/alerting"],
+        env_type,
+        "v0.0.0",
+        runner_url="https://iac.example",
+        secret="s",
+        triggered_by="deploy_v2",
+        code_reviewed=True,
+        wait=True,
+        timeout=120,
+    )
+
+
+@pytest.mark.parametrize("site", _RUNNER_SITES)
+def test_staging_resubmits_a_lost_request_once_and_succeeds(
+    calls, monkeypatch, capsys, site
+):
+    rec = _scripted_runner(
+        monkeypatch, [_lost(), {"status": "completed", "deployment_id": "x"}]
+    )
+    _run_runner_site(site, "staging")
+    assert len(rec["triggers"]) == 2
+    assert len(rec["polls"]) == 2
+    # the second poll follows the second request's id, not the lost one
+    assert rec["polls"][0]["deployment_id"] == f"{1:016x}"
+    assert rec["polls"][1]["deployment_id"] == f"{2:016x}"
+    err = capsys.readouterr().err
+    assert err.count("lost; re-submitting once") == 1
+    assert "deploy_v2 failed:" not in err and "ended '" not in err
+
+
+@pytest.mark.parametrize("site", _RUNNER_SITES)
+def test_staging_fails_when_the_resubmitted_request_is_lost_too(
+    calls, monkeypatch, site
+):
+    # the script has more losses than the code may consume: a third request would find one
+    rec = _scripted_runner(monkeypatch, [_lost(f"{n:016x}") for n in range(1, 5)])
+    with pytest.raises(RunnerLostDeploymentError) as excinfo:
+        _run_runner_site(site, "staging")
+    assert len(rec["triggers"]) == 2  # exactly one re-submit, never a third request
+    assert len(rec["polls"]) == 2
+    message = str(excinfo.value)
+    assert f"{1:016x}" in message and f"{2:016x}" in message
+    assert "no record of this deployment" in message  # the cause survives
+    assert isinstance(excinfo.value.__cause__, RunnerLostDeploymentError)
+
+
+@pytest.mark.parametrize("site", _RUNNER_SITES)
+def test_production_fails_at_once_on_a_lost_request(calls, monkeypatch, capsys, site):
+    original = _lost(f"{1:016x}")
+    # later losses stand ready: a production re-submit would find one and the test would see it
+    rec = _scripted_runner(
+        monkeypatch, [original] + [_lost(f"{n:016x}") for n in range(2, 5)]
+    )
+    with pytest.raises(RunnerLostDeploymentError) as excinfo:
+        _run_runner_site(site, "prod")
+    assert len(rec["triggers"]) == 1
+    assert len(rec["polls"]) == 1
+    assert excinfo.value is original  # the original error, not a re-wrapped one
+    assert "re-submitting" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("site", _RUNNER_SITES)
+@pytest.mark.parametrize(
+    ("outcome", "raised", "match"),
+    [
+        (
+            TimeoutError("did not settle within 17 polls"),
+            TimeoutError,
+            "did not settle",
+        ),
+        # a gateway failure is a RuntimeError too, but not a lost request: the runner may
+        # still hold the deploy, so a second request could run beside it
+        (
+            RuntimeError("iac_runner unreachable for 200s while polling deploy"),
+            RuntimeError,
+            "unreachable",
+        ),
+        ({"status": "failed", "details": "boom"}, RuntimeError, "ended 'failed'"),
+    ],
+    ids=["timeout", "gateway-down", "failed-status"],
+)
+def test_staging_does_not_resubmit_any_other_failure(
+    calls, monkeypatch, site, outcome, raised, match
+):
+    rec = _scripted_runner(monkeypatch, [outcome])
+    with pytest.raises(raised, match=match) as excinfo:
+        _run_runner_site(site, "staging")
+    assert not isinstance(excinfo.value, RunnerLostDeploymentError)
+    assert len(rec["triggers"]) == 1
+    assert len(rec["polls"]) == 1
+
+
+class _RunnerAnswer:
+    def __init__(self, payload, status_code):
+        self._payload = payload
+        self.status_code = status_code
+        self.content = b"x"
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        assert self.status_code < 400, f"unexpected HTTP {self.status_code}"
+
+
+@pytest.mark.parametrize("site", ["secret-supply", "batch"])
+@pytest.mark.parametrize(
+    ("env_type", "resubmits"), [("staging", True), ("prod", False)]
+)
+def test_the_real_client_loss_error_drives_the_resubmit_decision(
+    calls, monkeypatch, site, env_type, resubmits
+):
+    """Join the two halves: the REAL poll function, on a runner that answers ``not_found``
+    to the first request, must make deploy_v2 re-submit (staging) or stop (production)."""
+    from libs import iac_runner_client
+
+    real_poll = iac_runner_client.poll_platform_deploy_status
+    moment = [1700000000.0]
+    sent = []
+
+    def fake_trigger(**kw):
+        sent.append(kw)
+        assert len(sent) <= 4, "runaway re-submit loop"
+        return {"status": "accepted", "deployment_id": f"{len(sent):016x}"}
+
+    def runner_transport(url, *, content, headers, timeout):
+        # the runner of request 1 was recreated and forgot it; request 2 is a fresh runner's
+        if len(sent) == 1:
+            return _RunnerAnswer({"status": "not_found"}, 404)
+        return _RunnerAnswer({"status": "completed"}, 200)
+
+    def sleep(seconds):
+        moment[0] += seconds
+
+    monkeypatch.setattr(dv2, "trigger_platform_deploy", fake_trigger)
+    monkeypatch.setattr(
+        dv2,
+        "poll_platform_deploy_status",
+        lambda **kw: real_poll(
+            **kw, now=lambda: moment[0], sleep=sleep, transport=runner_transport
+        ),
+    )
+    if resubmits:
+        _run_runner_site(site, env_type)
+        assert len(sent) == 2
+    else:
+        with pytest.raises(RunnerLostDeploymentError, match="no record of this"):
+            _run_runner_site(site, env_type)
+        assert len(sent) == 1
+
+
+def test_a_request_that_is_not_awaited_is_sent_once_and_never_polled(monkeypatch):
+    rec = _scripted_runner(monkeypatch, [])
+    response, final = dv2._trigger_and_poll(
+        env="staging",
+        ref=SHA_IAC,
+        services=["platform/redis"],
+        url="https://iac.example",
+        secret="s",
+        triggered_by="deploy_v2",
+        wait=False,
+        timeout=120,
+        started=0.0,
+    )
+    assert response["deployment_id"] == f"{1:016x}" and final is None
+    assert len(rec["triggers"]) == 1 and rec["polls"] == []
+
+
+def test_the_runner_is_called_only_from_the_shared_trigger_and_poll_function():
+    """A fourth call site would carry no lost-request rule. Walk the module's syntax tree
+    (not its text): every call to the two client functions must sit inside
+    ``_trigger_and_poll``."""
+    client_functions = {"trigger_platform_deploy", "poll_platform_deploy_status"}
+    tree = ast.parse(Path(dv2.__file__).read_text())
+    callers: dict[str, set[str]] = {}
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef):
+            continue
+        for node in ast.walk(function):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in client_functions
+            ):
+                callers.setdefault(node.func.id, set()).add(function.name)
+    # not green-while-empty: both functions are called, and only by the shared one
+    assert callers == {name: {"_trigger_and_poll"} for name in client_functions}
+
+
 def test_image_manifest_exists_success(monkeypatch):
     import libs.deploy.preflight as preflight
 
@@ -1670,7 +1932,9 @@ def test_image_manifest_exists_not_found(monkeypatch):
     import libs.deploy.preflight as preflight
 
     def fake_resolve(*, image, reference, registry):
-        raise ReleaseError(f"image {image}:{reference} does not exist in the registry (status 404)")
+        raise ReleaseError(
+            f"image {image}:{reference} does not exist in the registry (status 404)"
+        )
 
     monkeypatch.setattr(preflight, "resolve_image_digest", fake_resolve)
     assert preflight._image_manifest_exists("ghcr.io/org/repo", "v1.0.0") is False
@@ -1697,5 +1961,3 @@ def test_image_manifest_exists_os_error_raises_runtime_error(monkeypatch):
     monkeypatch.setattr(preflight, "resolve_image_digest", fake_resolve)
     with pytest.raises(RuntimeError, match="registry connection failed"):
         preflight._image_manifest_exists("ghcr.io/org/repo", "v1.0.0")
-
-
