@@ -435,7 +435,7 @@ to `repos/` (as the first version did) left a third of the pins outside the chec
 that exists to watch pins.
 
 AGENTS.md says a pin "只表示开发快照，不是 ... deployment ... 依赖". That is not
-exactly true: [`libs/app_manifests.py`](../libs/app_manifests.py) resolves app
+exactly true: [`libs/security/app_manifests.py`](../libs/security/app_manifests.py) resolves app
 manifests from `raw.githubusercontent.com/<owner>/<repo>/<pinned-sha>/<path>` because
 neither infra-ci nor the iac-runner checks the submodules out, and
 `libs/secrets_registry.load_manifest` calls it at deploy time. The pinned commit
