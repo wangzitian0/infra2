@@ -38,6 +38,7 @@ from libs.deploy.preflight import (
     parse_env_var as _env_value,
     verify_token_status,
 )
+from libs.deploy.rollout import RolloutError, wait_for_deployment
 
 # infra2#525: Dokploy deployment records carry no caller-supplied correlation id, so a
 # start-timestamp floor (captured just before OUR OWN deploy_compose() call) is the only
@@ -100,46 +101,35 @@ def wait_for_rollout(
     """Poll until a NEW Dokploy deployment record reaches a terminal-good status.
 
     Raises RuntimeError if the new record errors, TimeoutError if none finishes in the
-    window. Close cousin of libs.deploy.deployer._wait_for_new_deployment_record, but NOT
-    identical: that one returns a bool and treats `running` as success (a health check
-    follows it), whereas this owns readiness itself — it keeps polling past `running`
-    until a terminal-good status and raises TimeoutError on the deadline. P2 step 5
-    reconciles the two pollers (D5) when deploy logic fully lands in infra2.
-
-    min_started_at (infra2#525 finding 2): "new" here means "not in before_ids", which
-    is also true of a deployment record produced by a DIFFERENT, unrelated
-    deploy_compose() call that lands between our before_ids snapshot and our poll —
-    Dokploy gives us no correlation id to disambiguate. When min_started_at is given
-    (the epoch just before we called our own deploy_compose()), a "new" record whose own
-    start timestamp is clearly earlier is excluded: it cannot be ours. This closes the
-    window between the snapshot and our own trigger; a same-compose deploy that starts
-    AFTER our trigger but before our first poll is still indistinguishable from our own
-    (Dokploy exposes no request/correlation id on deployment records) and is a residual,
-    documented risk — see libs/compose_lock.py for the complementary in-process lock
-    that keeps our OWN callers from ever producing that overlap.
+    window. Unified with libs.deploy.rollout.wait_for_deployment (D5).
     """
-    deadline = _now() + max(0, timeout)
-    while True:
-        new = [
-            d
-            for d in (client.get_compose_deployments(compose_id) or [])
-            if _dep_id(d) and _dep_id(d) not in before_ids
-        ]
-        if min_started_at is not None:
-            new = [d for d in new if not _started_before(d, min_started_at)]
-        for d in new:
-            status = str(d.get("status") or "").lower()
-            if status == "error":
-                raise RuntimeError(
-                    f"deploy rollout entered error (compose {compose_id})"
-                )
-            if status in {"done", "success", "successful"}:
-                return d
-        if _now() >= deadline:
-            raise TimeoutError(
-                f"deploy rollout did not finish within {timeout}s (compose {compose_id})"
-            )
-        _sleep(max(1, interval))
+    filter_fn = (
+        (lambda d: _started_before(d, min_started_at))
+        if min_started_at is not None
+        else None
+    )
+    try:
+        result = wait_for_deployment(
+            lambda: client.get_compose_deployments(compose_id) or [],
+            before_ids,
+            timeout_seconds=timeout,
+            interval_seconds=interval,
+            require_terminal=True,
+            raise_on_error=True,
+            raise_on_timeout=True,
+            is_filtered_fn=filter_fn,
+            _sleep=_sleep,
+            _now=_now,
+        )
+        return result.deployment
+    except RolloutError as exc:
+        raise RuntimeError(
+            f"deploy rollout entered error (compose {compose_id})"
+        ) from exc
+    except TimeoutError as exc:
+        raise TimeoutError(
+            f"deploy rollout did not finish within {timeout}s (compose {compose_id})"
+        ) from exc
 
 
 def assert_approle_creds_present(service: str, client, compose_id: str) -> None:

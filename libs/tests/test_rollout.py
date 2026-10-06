@@ -155,3 +155,19 @@ def test_pre_existing_record_is_ignored():
         _now=_clock([0.0, 1.0]),
     )
     assert result.status == "timeout"  # no NEW record, so it times out
+
+
+def test_filtered_record_is_ignored():
+    # d2 is new and done, but filtered by predicate -> not considered our deployment
+    deployments = _Deployments([[{"id": "d2", "status": "done", "skip": True}]])
+    result = wait_for_deployment(
+        deployments,
+        before_ids=set(),
+        timeout_seconds=0,
+        interval_seconds=1,
+        raise_on_timeout=False,
+        is_filtered_fn=lambda d: bool(d.get("skip")),
+        _sleep=_no_sleep,
+        _now=_clock([0.0, 1.0]),
+    )
+    assert result.status == "timeout"
