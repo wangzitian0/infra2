@@ -23,13 +23,13 @@ SigNoz is deployed in two parts:
 python -m tools.deploy_v2 --service platform/clickhouse --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
 # 2. Verify ClickHouse health
-invoke clickhouse.status
+DEPLOY_ENV=production invoke clickhouse.status
 
 # 3. Deploy SigNoz services
 python -m tools.deploy_v2 --service platform/signoz --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
 # 4. Verify SigNoz health
-invoke signoz.status
+DEPLOY_ENV=production invoke signoz.status
 ```
 
 ## Access
@@ -39,7 +39,7 @@ invoke signoz.status
 - **OTLP HTTP**: `platform-signoz-otel-collector${ENV_SUFFIX}:4318` (Docker network only)
 
 > **Note**: OTLP endpoints are only accessible within the `dokploy-network`. 
-> Use `invoke signoz.shared.test-trace` to verify connectivity.
+> Use `DEPLOY_ENV=<env> invoke signoz.shared.test-trace` to verify connectivity.
 
 ## File Structure
 
@@ -90,7 +90,7 @@ platform/
 docker logs platform-clickhouse${ENV_SUFFIX}
 
 # Re-initialize directories
-invoke clickhouse.pre-compose
+DEPLOY_ENV=<env> invoke clickhouse.pre-compose
 ```
 
 ### SigNoz 502 error
@@ -99,7 +99,7 @@ invoke clickhouse.pre-compose
 docker logs platform-signoz${ENV_SUFFIX}
 
 # Ensure ClickHouse is ready
-invoke clickhouse.status
+DEPLOY_ENV=<env> invoke clickhouse.status
 ```
 
 ### OTLP data not appearing
@@ -108,7 +108,7 @@ invoke clickhouse.status
 docker logs platform-signoz-otel-collector${ENV_SUFFIX}
 
 # Send a test trace
-invoke signoz.shared.test-trace
+DEPLOY_ENV=<env> invoke signoz.shared.test-trace
 
 # Verify ClickHouse connection
 docker exec platform-clickhouse${ENV_SUFFIX} clickhouse-client --query "SHOW DATABASES"

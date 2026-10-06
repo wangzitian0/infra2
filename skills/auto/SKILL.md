@@ -27,8 +27,11 @@ Run this after `smoke` passes. Use `prr` for the review and gate mechanics.
 
 Stop only for one of these:
 
-- **Production deploy** (apply, promote, runner rebuild). Merge is not deploy. After the merge, report the merge SHA, the staging evidence, and the production state, then ask the owner for "deploy" or "hold".
-- **Self-adjudication**: the PR changes what decides whether this PR may merge. A change that tightens the gate may proceed. A relaxation, or a change whose direction you cannot prove, goes to the owner.
+- **Production change** (apply, promote, runner rebuild, and the rest of the repository's production reservation). Merge is not deploy. After the merge, report the merge SHA, the staging evidence, and the production state, then ask the owner for "deploy" or "hold".
+- **Self-adjudication**: the PR changes what decides whether this PR may merge. A relaxation, or a change whose direction you cannot prove, goes to the owner.
+  A change that the gate proves tighter may proceed, with one exception. Until the owner signs off an unbypassable production lock (infra2 #1035),
+  an edit to a workflow, to merge-gate code or data, or to code that a release workflow runs goes to the owner.
+- **Irreversible action**: data deletion, or an external publication that cannot be recalled.
 - **Another worker's issue lock**: an issue-prefixed worktree, an open PR, or a running process.
 
 A large impact or an unclear preference is not a stop reason. Choose, state the basis, and keep a way back.

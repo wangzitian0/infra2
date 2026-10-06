@@ -41,6 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ENV: production
+      DEPLOY_ENV: production
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
       SIGNOZ_API_KEY: ${{ secrets.SIGNOZ_API_KEY }}
     steps:

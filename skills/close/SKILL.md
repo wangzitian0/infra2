@@ -18,9 +18,11 @@ git log --branches --not --remotes --oneline | wc -l   # commits that exist only
 
 | Condition | Mode |
 |---|---|
-| PR merged on main, and no service or runtime-config impact | **Complete** |
+| PR merged on main, and no service or runtime-config impact (a workflow change is an impact) | **Complete**, production disposition `none` |
+| PR merged, but the repository has no production release pipeline or production already runs the merged SHA | **Complete**, production disposition `none` |
 | PR merged, service impact, and the owner gave "deploy" or "hold" | **Complete** |
-| Anything else (unmerged, uncommitted, no disposition) | **Suspend** |
+| PR merged, service impact, no answer yet | **Complete** after the production question; the issue stays open (section 3) |
+| Anything else (unmerged, uncommitted) | **Suspend** |
 
 Unmerged work is never Complete. Do not close the issue and do not delete the worktree in Suspend.
 Unpushed commits are invisible to everyone else. One log feature lived 3 days on a never-pushed branch
@@ -60,15 +62,19 @@ Merge, staging deploy, and production deploy are three separate stages. Report a
 
 ```text
 [PROD GATEKEEPER]
-- Stage 1 merge: commit <sha>
+- Stage 1 merge: release tag vX.Y.Z = commit <sha>
 - Stage 2 staging: run <url>, soak <duration>, health <result>
 - Stage 3 production: image <digest>, watchdog <state>
-Authorize production deployment? Reply "deploy" or "hold".
+Authorize production deployment of vX.Y.Z? Reply "deploy" or "hold".
 ```
 
 - Claim "deployed" only with an evidence chain: image digest, ledger entry, and a real end-to-end probe (the real browser or TUI).
   The owner asked twice "are you sure the last version is deployed?" Find the proof, then answer.
-- No answer means Suspend. Closing in silence is forbidden.
+- Only a production change requires owner approval, with the owner present (owner instruction, 2026-10-06). Ask once, then finish the non-production close.
+  Closing in silence is forbidden.
+- Without an answer, keep the issue open. Reopen it if the merge closed it. Create the label `prod-pending` if it is missing.
+  Comment `prod disposition: pending` with the release tag or commit SHA, and add the label.
+- A "deploy" covers only the release it names. Immediately before dispatch, the owner must answer you live in this session; an earlier or relayed answer is not enough. Without approval, do not deploy production.
 - After "deploy", you own the whole loop, including the physical check. Never ask the owner to run a command.
 
 ## 4. Suspend: handover and issue
@@ -92,7 +98,8 @@ Commands for this machine are in `local.md`.
 1. Kill every background task, watcher, and subagent bound to the worktree. Check with `lsof +D "$WORKTREE"`.
    Removing a tree under a running task corrupts it.
 2. `git worktree remove ../<repo>_issue<N>_<slug>`.
-3. Close or update the issue with the merge proof.
+3. Close the issue with the merge proof when the production disposition is `none`, `deployed`, or `hold`.
+   With `pending`, keep it open (section 3).
 4. Delete scratch files. Record each leftover TODO in the handover.
 
 ## 6. Route each lesson (distill)

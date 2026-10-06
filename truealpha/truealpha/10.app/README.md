@@ -39,7 +39,7 @@ per-PR previews) is deferred until there is real mart data to protect.
 ```bash
 invoke env.set SEC_USER_AGENT='TrueAlpha research <email>' --project=truealpha --service=app
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/bootstrap/vault/Root Token/Root Token')
-invoke vault.setup-approle --project=truealpha --service=app
+DEPLOY_ENV=<env> invoke vault.setup-approle --project=truealpha --service=app
 python -m tools.deploy_v2 --service truealpha/app --type staging --iac-ref vX.Y.Z --domain zitian.party
 invoke ta-app.shared.status
 curl https://truealpha-staging.zitian.party/api/health

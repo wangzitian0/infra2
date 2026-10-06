@@ -376,7 +376,7 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 2. 写 1Password root vars + setup-approle:
    ```bash
    uv run invoke env.set FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/<token> --project=platform --env=production --service=alerting --credential-type=root_vars
-   uv run invoke vault.setup-approle --project=platform --service=alerting
+   DEPLOY_ENV=<env> uv run invoke vault.setup-approle --project=platform --service=alerting
    ```
 3. 部署 bridge:`uv run python -m tools.deploy_v2 --service platform/alerting --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed` → `invoke alerting.status`。
 4. 建 SigNoz channel:`invoke signoz.shared.create-api-key` → `invoke alerting.create-signoz-channel`。

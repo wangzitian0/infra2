@@ -43,9 +43,9 @@ Each gate came from a measured failure.
 3. **Re-review every fix independently.** The reviewer gets only the new code, not the defect story.
    For a security fix, ask for "the second chain from the same entry".
    On 2026-09-22 removing `eval` moved the value into an existing `python -c` string concatenation,
-   and a regex guard missed the `git -C <dir>` prefix. One round found 3 HIGH in the lead's own fix.
+   and a regex guard missed the `git -C <dir>` prefix. One round found 3 HIGH in the Director's own fix.
 4. **Screening output carries anchors.** Each fact cites `file#Lxx-Lyy` or a note id.
-   The lead reads 1 to 2 anchors before a decision. Lossy small-model summaries hide facts.
+   The Director reads 1 to 2 anchors before a decision. Lossy small-model summaries hide facts.
 
 ## Scouts (owner design: three categories, 4+3+2 = 9)
 
@@ -66,7 +66,7 @@ Use all nine only for a large or risky change. Lean mode uses one scout per cate
 - T1 completeness: did the change finish the stated goal, or only the happy path?
 - T2 side effects: latency, rate limits, lock contention, broken global invariants.
 
-The lead cross-checks scouts. A doc claim (M2) that a doc-blind scout (G1) cannot find in code is a false feature.
+The Director cross-checks scouts. A doc claim (M2) that a doc-blind scout (G1) cannot find in code is a false feature.
 A completeness claim (T1) against empty-run tests (G3) is false prosperity.
 
 ## Convergence
@@ -76,8 +76,7 @@ Swarm mode runs 10 scouts for 3 rounds: find, refute, judge. Use it for architec
 
 ## Scout liveness
 
-Judge by tool calls and worktree changes, not prose. Silence with tool calls is normal.
-Call a scout stalled after about 2 minutes with neither. Prove the old process stopped before you start a replacement,
-and give the replacement its own worktree. A worker once resumed after 100 minutes and collided with its replacement.
+Scouts are Interns with read-only tools. The Director never waits blind: read each running scout's tool-call output
+about every two minutes. No tool call for about two minutes means stalled. Prove the old process stopped before you start
+a replacement. The host rules ("Observation and liveness") hold the full rule.
 Accept `exit=0` plus a real diff or commit as completion. Prose is not evidence.
-Every child process and request needs an OS-level timeout.

@@ -105,7 +105,7 @@ sub-repo，后续统一承载各类 TUI 管理；它不进入 infra/App runtime 
 
 ### 多环境部署
 
-- 使用 `DEPLOY_ENV` 选择环境（默认 `production`，如 `staging`）
+- 使用 `DEPLOY_ENV` 选择环境（如 `staging`）。必须显式设置：没有默认值，未设置时任务报错；生产环境写 `DEPLOY_ENV=production`
 - 容器名/域名/数据路径会自动追加 `ENV_SUFFIX`（如 `-staging`）
 
 示例：
@@ -174,7 +174,7 @@ report.zitian.party
 
 ### 前置条件
 
-1. Vault 已就绪：`invoke vault.status`
+1. Vault 已就绪：`DEPLOY_ENV=production invoke vault.status`
 2. S3 兼容对象存储已就绪：`invoke s3.shared.status`
 3. Docker 镜像已构建并推送到 GHCR
 
@@ -194,8 +194,8 @@ invoke env.set PASSWORD=$(openssl rand -base64 24) --project=finance_report --en
 # DATABASE_URL, REDIS_URL, S3_*, OPENROUTER_API_KEY
 # 见 docs/project/Infra-009.finance_report_deploy.md
 
-# 4. 生成 Vault AppRole 凭证（role_id/secret_id → Dokploy env）
-invoke vault.setup-approle --project=finance_report
+# 4. 生成 Vault AppRole 凭证（role_id/secret_id → Dokploy env），显式给出环境
+DEPLOY_ENV=staging invoke vault.setup-approle --project=finance_report
 
 # Targeted staging repair for the app sidecar
 DEPLOY_ENV=staging invoke vault.setup-approle --project=finance_report --service=app
