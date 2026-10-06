@@ -191,7 +191,9 @@ A run must name its target (#1030):
 - An unset `BACKUP_REMOTE` exits 2 before any archive work.
 - `BACKUP_LOCAL_ONLY=1` makes a local-only run (manual tests). It writes only its own run directory. It never replaces `<env>-manifest.json`, which is the off-host record the watchdog reads, and it deletes no earlier run.
 - An emitter that prints no services fails the run; it does not write an empty manifest.
-- On 2026-10-05, a manual run without the remote replaced both canonical manifests with `local:` URIs, and the watchdog paged on all 17 artifacts (#1013, #1014). Local retention keeps the
+- On 2026-10-05, a manual run without the remote replaced both canonical manifests with `local:` URIs, and the watchdog paged on all 17 artifacts (#1013, #1014).
+
+Local retention keeps the
 most recent `BACKUP_KEEP` (default 7) run directories **per environment** and is
 skipped on a failed run. Run directories are named `production-<timestamp>` or
 `staging-<timestamp>` under `/data/backups/infra2`; each run's manifest records

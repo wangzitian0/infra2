@@ -352,6 +352,22 @@ def test_local_only_and_a_remote_together_are_refused(host) -> None:
     assert calls == []
 
 
+def test_local_only_zero_with_a_remote_is_an_off_host_run(host) -> None:
+    """Only the value 1 enables local-only; 0 means off (Copilot on #1032)."""
+    proc, manifest, _ = _run(host, BACKUP_LOCAL_ONLY="0")
+    assert proc.returncode == 0, proc.stderr
+    assert all(
+        a["remote_uri"].startswith("fake-remote:") for a in manifest["artifacts"]
+    )
+
+
+@pytest.mark.parametrize("value", ["yes", "true", "2"])
+def test_an_unknown_local_only_value_is_refused(host, value) -> None:
+    proc, _, calls = _run(host, BACKUP_REMOTE=None, BACKUP_LOCAL_ONLY=value)
+    assert proc.returncode == 2, proc.stderr
+    assert calls == []
+
+
 def test_a_local_only_run_never_replaces_the_canonical_manifest(host) -> None:
     latest = host["out"] / "production-manifest.json"
     latest.write_text('{"off-host": "record"}', encoding="utf-8")

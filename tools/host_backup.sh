@@ -40,7 +40,11 @@ umask 077  # Local archives include Vault and 1Password Connect state.
 OUTPUT_DIR="${BACKUP_OUTPUT_DIR:-/data/backups/infra2}"
 REMOTE="${BACKUP_REMOTE:-}"
 LOCAL_ONLY="${BACKUP_LOCAL_ONLY:-}"
-if [ -n "${REMOTE}" ] && [ -n "${LOCAL_ONLY}" ]; then
+case "${LOCAL_ONLY}" in
+  ""|0|1) ;;
+  *) echo "BACKUP_LOCAL_ONLY must be 1, 0 or unset (got '${LOCAL_ONLY}')" >&2; exit 2 ;;
+esac
+if [ -n "${REMOTE}" ] && [ "${LOCAL_ONLY}" = "1" ]; then
   echo "BACKUP_REMOTE and BACKUP_LOCAL_ONLY are mutually exclusive" >&2
   exit 2
 fi
