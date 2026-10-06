@@ -38,15 +38,21 @@ def test_admin_and_swarm_ports_are_not_public() -> None:
 def test_input_defaults_to_drop_on_the_public_interface_only() -> None:
     body = _chain("input")
     lines = [line.strip() for line in body.strip().splitlines()]
-    assert lines[1] == "iifname != $PUBLIC_IF accept", "non-public interfaces (lo, docker bridges) must pass first"
+    assert lines[1] == "iifname != $PUBLIC_IF accept", (
+        "non-public interfaces (lo, docker bridges) must pass first"
+    )
     assert "ct state established,related accept" in lines
-    assert lines[-1].startswith("counter drop"), "anything not allow-listed is dropped last"
+    assert lines[-1].startswith("counter drop"), (
+        "anything not allow-listed is dropped last"
+    )
     assert 'define PUBLIC_IF = "eth0"' in RULES
 
 
 def test_dokploy_port_is_dropped_before_dockers_forward_chain() -> None:
     body = _chain("forward")
-    assert "priority filter - 1" in body, "must run before Docker's FORWARD (priority filter)"
+    assert "priority filter - 1" in body, (
+        "must run before Docker's FORWARD (priority filter)"
+    )
     assert "iifname $PUBLIC_IF meta l4proto tcp ct original proto-dst 3000" in body
     assert "policy accept" in body, "the forward chain drops only the Dokploy port"
 
@@ -66,10 +72,16 @@ def test_unit_loads_the_installed_rules_and_removes_only_its_table() -> None:
 
 def test_apply_checks_syntax_and_arms_the_revert_before_loading() -> None:
     apply = SCRIPT[SCRIPT.index("apply() {") : SCRIPT.index("confirm() {")]
-    assert apply.index("check") < apply.index("systemd-run") < apply.index('nft -f "$RULES"')
-    assert "delete table inet \"$TABLE\"" in apply
+    assert (
+        apply.index("check")
+        < apply.index("systemd-run")
+        < apply.index('nft -f "$RULES"')
+    )
+    assert 'delete table inet "$TABLE"' in apply
     assert 'nft -c -f "$RULES"' in SCRIPT
     # Refuses to proceed when the stock nftables.service would flush every table, indented or not.
     check = SCRIPT[SCRIPT.index("check() {") : SCRIPT.index("apply() {")]
     assert "^[[:space:]]*flush[[:space:]]+ruleset" in check
-    assert "is-enabled --quiet nftables" in check and "is-active --quiet nftables" in check
+    assert (
+        "is-enabled --quiet nftables" in check and "is-active --quiet nftables" in check
+    )

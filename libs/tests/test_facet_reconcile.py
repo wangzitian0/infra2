@@ -161,4 +161,3 @@ def test_dns_section_fails_job_on_confirmed_drift(monkeypatch):
     assert section.blockers == ["rec-b"]
     assert section.confirmed == ["rec-b"]
     assert not section.skipped
-

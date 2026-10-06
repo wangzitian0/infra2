@@ -308,5 +308,3 @@ def test_workspace_status_propagates_contract_and_respects_snapshot_pin_drift(
     assert app_status.current is True
     assert result.ok is True
     assert result.current is True
-
-

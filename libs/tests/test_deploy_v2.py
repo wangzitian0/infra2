@@ -1670,7 +1670,9 @@ def test_image_manifest_exists_not_found(monkeypatch):
     import libs.deploy.preflight as preflight
 
     def fake_resolve(*, image, reference, registry):
-        raise ReleaseError(f"image {image}:{reference} does not exist in the registry (status 404)")
+        raise ReleaseError(
+            f"image {image}:{reference} does not exist in the registry (status 404)"
+        )
 
     monkeypatch.setattr(preflight, "resolve_image_digest", fake_resolve)
     assert preflight._image_manifest_exists("ghcr.io/org/repo", "v1.0.0") is False
@@ -1697,5 +1699,3 @@ def test_image_manifest_exists_os_error_raises_runtime_error(monkeypatch):
     monkeypatch.setattr(preflight, "resolve_image_digest", fake_resolve)
     with pytest.raises(RuntimeError, match="registry connection failed"):
         preflight._image_manifest_exists("ghcr.io/org/repo", "v1.0.0")
-
-

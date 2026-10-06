@@ -311,7 +311,9 @@ def test_run_schema_gate_raises_for_a_service_with_no_registered_backend_image()
 
 
 def test_sanitize_db_url_masks_credentials() -> None:
-    raw = "connection failed: postgresql://admin:super_secret_pwd@db.internal:5432/proddb"
+    raw = (
+        "connection failed: postgresql://admin:super_secret_pwd@db.internal:5432/proddb"
+    )
     sanitized = sg._sanitize_db_url(raw)
     assert "super_secret_pwd" not in sanitized
     assert "postgresql://admin:******@db.internal:5432/proddb" in sanitized
@@ -321,7 +323,10 @@ def test_run_schema_gate_sanitizes_db_credentials_in_error() -> None:
     runner = FakeRunner(
         [
             _ok(stdout='DATABASE_URL="postgresql://u:p@h:5432/db"\n'),
-            _fail(1, stderr="fatal: connection to postgresql://user:sensitive_pw@db:5432/app failed"),
+            _fail(
+                1,
+                stderr="fatal: connection to postgresql://user:sensitive_pw@db:5432/app failed",
+            ),
         ]
     )
     with pytest.raises(sg.SchemaGateError) as exc_info:

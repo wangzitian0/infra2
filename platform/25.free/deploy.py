@@ -108,7 +108,9 @@ class FreeDeployer(Deployer):
 
         free_uuid = existing_uuid or os.getenv("FREE_UUID") or _generate_uuid()
         free_path = (
-            existing_path or os.getenv("FREE_PATH") or f"/api/v1/{secrets.token_hex(16)}"
+            existing_path
+            or os.getenv("FREE_PATH")
+            or f"/api/v1/{secrets.token_hex(16)}"
         )
 
         import re
