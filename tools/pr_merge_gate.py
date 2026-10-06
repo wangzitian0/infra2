@@ -29,7 +29,9 @@ Two policies for the settling condition:
 - ``event``: an automated review has been submitted on the *current* head and three
   minutes have passed since that review — the thing the clock was waiting for, measured.
 - ``either``: whichever of the two is satisfied first — the review lets a head go early,
-  the clock stays the upper bound when no automated review ever arrives.
+  the clock stays the upper bound when no automated review ever arrives. For a PR that
+  an app or bot account opened, with no automated review of the head, the clock is
+  three minutes: Copilot does not review such a PR (#1075).
 """
 
 from __future__ import annotations
@@ -230,8 +232,15 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
     if args.request_review and not any(
         r[0] in AUTOMATED_REVIEWERS and r[2] > 0 for r in facts.reviews_on_head()
     ):
-        request_copilot_review(facts, gh=gh)
-        warning(f"#{facts.number}: Copilot review requested on {facts.head_sha[:7]}")
+        if request_copilot_review(facts, gh=gh):
+            warning(
+                f"#{facts.number}: Copilot review requested on {facts.head_sha[:7]}"
+            )
+        else:
+            warning(
+                f"#{facts.number}: the Copilot review request was not registered; "
+                "no automated review will come"
+            )
     verdict = evaluate(
         facts, now=now(), quiet_minutes=args.quiet_minutes, policy=args.policy
     )

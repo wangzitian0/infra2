@@ -146,6 +146,7 @@ class HeadFacts:
     absent_fields: tuple[str, ...] = ()
     reviews: tuple[tuple[str, str, float], ...] = ()
     body: str = ""
+    author: tuple[str, str] = ("", "")  # (GraphQL __typename, login); empty if unread
 
     def reviews_on_head(self) -> tuple[tuple[str, str, float], ...]:
         return tuple(r for r in self.reviews if r[1] == self.head_sha)

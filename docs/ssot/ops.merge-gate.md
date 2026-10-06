@@ -25,6 +25,8 @@
 - **静置**：自动 review（Copilot）已对**当前 head SHA** 提交且距该 review ≥ 3 分钟；
   自动 review 迟迟不来时以距最后一次 push 12 分钟为上限（先到者为准）。
   fix-up push 不会自动触发 Copilot 复审，需显式请求。
+  A pull request that an app or bot account opens gets no automated review, so it settles 3 minutes after the last push, not 12 (#1075).
+  If an automated review of its current head exists, the 3 minutes start at that review.
 - **变更契约完整**：PR description checklist 完整；代码、测试、SSOT、Project、Layer README / Onboarding 按影响同步；无未解释的 scope drift；PR description 显式引用其推进/关闭的 issue 编号（无则写明 None）——避免 PR 实质推进了某 issue 的 scope 却不留痕迹，导致 issue 可见状态滞后仓库实际进度（#508）。
 - **安全与运维门禁**：无敏感文件；已说明风险、回滚与 0 宕机影响；涉及 state discrepancy、密钥或生产数据时已按对应 SSOT 执行并留证。
 **仍需 owner 的两类，判据各不相同，分别列**：

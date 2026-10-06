@@ -176,7 +176,8 @@ def collect(
                 "graphql",
                 "-f",
                 "query=query{repository(owner:%s,name:%s){pullRequest(number:%d)"
-                "{reviewThreads(first:%d){totalCount nodes{isResolved "
+                "{author{__typename login} "
+                "reviewThreads(first:%d){totalCount nodes{isResolved "
                 "comments(first:%d){nodes{body}}}}}}}"
                 % (
                     json.dumps(owner),
@@ -188,8 +189,11 @@ def collect(
             ]
         )
     )
-    review_threads = threads["data"]["repository"]["pullRequest"]["reviewThreads"]
+    pull = threads["data"]["repository"]["pullRequest"]
+    review_threads = pull["reviewThreads"]
     nodes = review_threads["nodes"]
+    # null for a deleted account: read as unknown, which keeps the user rule.
+    author = pull.get("author") or {}
     commits = view.get("commits") or []
     last_push = max((_epoch(c["committedDate"]) for c in commits), default=0.0)
     head_sha = str(view.get("headRefOid") or "")
@@ -266,6 +270,7 @@ def collect(
         merge_state=_field(view, "mergeStateStatus"),
         base_changed_files=base_changed,
         body=str(view.get("body") or ""),
+        author=(str(author.get("__typename") or ""), str(author.get("login") or "")),
         reviews=tuple(
             (
                 str((r.get("author") or {}).get("login") or ""),

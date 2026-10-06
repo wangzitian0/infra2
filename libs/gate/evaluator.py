@@ -262,6 +262,13 @@ def _check_reviews(facts: HeadFacts, reasons: Reasons) -> None:
         )
 
 
+def _opened_by_bot(facts: HeadFacts) -> bool:
+    """True when an app or bot account opened the PR. Copilot does not review
+    such a PR, and a review request from the app token does not register (#1075)."""
+    typename, login = facts.author
+    return typename == "Bot" or login.endswith("[bot]") or login.startswith("app/")
+
+
 def _check_settling_window(
     facts: HeadFacts,
     *,
@@ -275,21 +282,35 @@ def _check_settling_window(
     if policy not in ("clock", "event", "either"):
         raise ValueError(f"unknown policy {policy!r}")
 
-    clock_remaining = math.ceil(facts.last_push_at + quiet_minutes * 60 - now)
+    automated = [
+        r for r in facts.reviews_on_head() if r[0] in AUTOMATED_REVIEWERS and r[2] > 0
+    ]
+    # The clock waits for a review. For a bot-opened PR none will come, so under
+    # `either` the clock shrinks to the settle time. Only the clock changes (#1075).
+    no_review_will_come = not automated and _opened_by_bot(facts)
+    clock_minutes = (
+        min(quiet_minutes, settle_minutes)
+        if policy == "either" and no_review_will_come
+        else quiet_minutes
+    )
+    clock_remaining = math.ceil(facts.last_push_at + clock_minutes * 60 - now)
     clock_reason = (
         f"head pushed {int(now - facts.last_push_at)}s ago; quiet period has "
         f"{clock_remaining}s to run"
     )
 
-    automated = [
-        r for r in facts.reviews_on_head() if r[0] in AUTOMATED_REVIEWERS and r[2] > 0
-    ]
     if automated:
         reviewed_at = max(r[2] for r in automated)
         event_remaining = math.ceil(reviewed_at + settle_minutes * 60 - now)
         event_reason = (
             f"head reviewed {int(now - reviewed_at)}s ago; settling for "
             f"{event_remaining}s more"
+        )
+    elif no_review_will_come:
+        event_remaining = None
+        event_reason = (
+            f"no automated review on head {facts.head_sha[:7]}: {facts.author[1]} "
+            "is an app or bot account, and Copilot does not review its PRs"
         )
     else:
         event_remaining = None
