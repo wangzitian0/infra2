@@ -11,6 +11,7 @@ from libs.gate.review import thread_weight
 from libs.gate.types import (
     DEFAULT_REPO,
     GH_TIMEOUT_S,
+    MAX_PR_COMMENTS,
     MAX_REVIEW_THREADS,
     MAX_THREAD_COMMENTS,
     NO_CHECKS_REPORTED,
@@ -143,6 +144,27 @@ def _field(view: dict, name: str) -> str:
     return str(value) if value else ABSENT
 
 
+def _pr_comments(block: object) -> tuple[tuple[str, float], ...]:
+    """PR conversation comments as (body, epoch of the current text).
+
+    The time is the last edit when there is one, else the creation: an edit that
+    makes an old comment name a new head does not date the claim back (#1075).
+    A missing or unreadable list, or an unreadable comment, reads as no comment.
+    """
+    nodes = block.get("nodes") if isinstance(block, dict) else None
+    found: list[tuple[str, float]] = []
+    for node in nodes if isinstance(nodes, list) else []:
+        if not isinstance(node, dict) or not isinstance(node.get("body"), str):
+            continue
+        try:
+            created = _epoch(node["createdAt"])
+            edited = _epoch(node["lastEditedAt"]) if node.get("lastEditedAt") else 0.0
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+        found.append((node["body"], max(created, edited)))
+    return tuple(found)
+
+
 def collect(
     number: int, *, repo: str = DEFAULT_REPO, gh: Runner | None = None
 ) -> HeadFacts:
@@ -176,20 +198,26 @@ def collect(
                 "graphql",
                 "-f",
                 "query=query{repository(owner:%s,name:%s){pullRequest(number:%d)"
-                "{reviewThreads(first:%d){totalCount nodes{isResolved "
+                "{author{__typename login} "
+                "comments(last:%d){nodes{body createdAt lastEditedAt}} "
+                "reviewThreads(first:%d){totalCount nodes{isResolved "
                 "comments(first:%d){nodes{body}}}}}}}"
                 % (
                     json.dumps(owner),
                     json.dumps(name),
                     number,
+                    MAX_PR_COMMENTS,
                     MAX_REVIEW_THREADS,
                     MAX_THREAD_COMMENTS,
                 ),
             ]
         )
     )
-    review_threads = threads["data"]["repository"]["pullRequest"]["reviewThreads"]
+    pull = threads["data"]["repository"]["pullRequest"]
+    review_threads = pull["reviewThreads"]
     nodes = review_threads["nodes"]
+    # null for a deleted account: read as unknown, which keeps the user rule.
+    author = pull.get("author") if isinstance(pull.get("author"), dict) else {}
     commits = view.get("commits") or []
     last_push = max((_epoch(c["committedDate"]) for c in commits), default=0.0)
     head_sha = str(view.get("headRefOid") or "")
@@ -266,6 +294,8 @@ def collect(
         merge_state=_field(view, "mergeStateStatus"),
         base_changed_files=base_changed,
         body=str(view.get("body") or ""),
+        author=(str(author.get("__typename") or ""), str(author.get("login") or "")),
+        comments=_pr_comments(pull.get("comments")),
         reviews=tuple(
             (
                 str((r.get("author") or {}).get("login") or ""),

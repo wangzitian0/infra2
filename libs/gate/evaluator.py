@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 
 from libs.gate.inventory import (
     _declared_deploy_globs,
@@ -24,7 +25,7 @@ from libs.gate.types import (
     ACT,
     QUIET_MINUTES,
     RULE_TEXT_FILES,
-    SETTLE_MINUTES,
+    SETTLE_SECONDS,
     UNEVALUABLE,
     WAIT,
     HeadFacts,
@@ -262,13 +263,46 @@ def _check_reviews(facts: HeadFacts, reasons: Reasons) -> None:
         )
 
 
+def _opened_by_bot(facts: HeadFacts) -> bool:
+    """True when an app or bot account opened the PR. Copilot does not review
+    such a PR, and a review request from the app token does not register (#1075)."""
+    typename, login = facts.author
+    return typename == "Bot" or login.endswith("[bot]") or login.startswith("app/")
+
+
+VERIFICATION_HEADING = "### Independent verification of head"
+_VERIFICATION_HEADING_RE = re.compile(
+    r"^" + re.escape(VERIFICATION_HEADING) + r"[ \t]+`?([0-9a-f]{7,40})`?[ \t]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_TEST_NAME_RE = re.compile(r"\btest_\w+|[\w./-]+::\w+")
+
+
+def _verified_at(facts: HeadFacts) -> float | None:
+    """When the newest independent verification comment of the current head got
+    its text, or None. The heading must name the current head (7 or more leading
+    hex characters of its SHA) and a later line must name a test (#1075)."""
+    head = facts.head_sha.lower()
+    times = [
+        at
+        for body, at in facts.comments
+        if len(head) >= 7
+        and any(
+            head.startswith(match.group(1).lower())
+            and _TEST_NAME_RE.search(body, match.end())
+            for match in _VERIFICATION_HEADING_RE.finditer(body)
+        )
+    ]
+    return max(times, default=None)
+
+
 def _check_settling_window(
     facts: HeadFacts,
     *,
     now: float,
     quiet_minutes: int,
     policy: str,
-    settle_minutes: int,
+    settle_seconds: int,
     reasons: Reasons,
 ) -> int:
     """Evaluate quiet period or event settling policy; return remaining seconds."""
@@ -284,12 +318,30 @@ def _check_settling_window(
     automated = [
         r for r in facts.reviews_on_head() if r[0] in AUTOMATED_REVIEWERS and r[2] > 0
     ]
+    # A bot-opened PR gets no Copilot review. An independent verification
+    # comment of the head is its review signal; nothing else shortens its wait.
+    bot_unreviewed = not automated and _opened_by_bot(facts)
+    verified_at = _verified_at(facts) if bot_unreviewed else None
     if automated:
         reviewed_at = max(r[2] for r in automated)
-        event_remaining = math.ceil(reviewed_at + settle_minutes * 60 - now)
+        event_remaining = math.ceil(reviewed_at + settle_seconds - now)
         event_reason = (
             f"head reviewed {int(now - reviewed_at)}s ago; settling for "
             f"{event_remaining}s more"
+        )
+    elif verified_at is not None:
+        event_remaining = math.ceil(verified_at + settle_seconds - now)
+        event_reason = (
+            f"head verified in a PR comment {int(now - verified_at)}s ago; "
+            f"settling for {event_remaining}s more"
+        )
+    elif bot_unreviewed:
+        event_remaining = None
+        event_reason = (
+            f"no automated review and no independent verification of head "
+            f"{facts.head_sha[:7]} yet: {facts.author[1]} is an app or bot account, "
+            f"so a verifier comments '{VERIFICATION_HEADING} {facts.head_sha[:7]}' "
+            "and names the tests"
         )
     else:
         event_remaining = None
@@ -324,7 +376,7 @@ def evaluate(
     now: float,
     quiet_minutes: int = QUIET_MINUTES,
     policy: str = "clock",
-    settle_minutes: int = SETTLE_MINUTES,
+    settle_seconds: int = SETTLE_SECONDS,
 ) -> Verdict:
     """The rule, in one place. Every failed condition is a reason; owner-only
     conditions are named as such so a caller never waits on something time cannot fix."""
@@ -350,7 +402,7 @@ def evaluate(
         now=now,
         quiet_minutes=quiet_minutes,
         policy=policy,
-        settle_minutes=settle_minutes,
+        settle_seconds=settle_seconds,
         reasons=reasons,
     )
 

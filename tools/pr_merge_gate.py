@@ -26,8 +26,12 @@ Exit codes (#740), so a caller never reads the prose to decide:
 Two policies for the settling condition:
 
 - ``clock`` (default, AGENTS.md as written): twelve minutes since the last push.
-- ``event``: an automated review has been submitted on the *current* head and three
-  minutes have passed since that review — the thing the clock was waiting for, measured.
+- ``event``: an automated review has been submitted on the *current* head and sixty
+  seconds have passed since that review — the thing the clock was waiting for, measured.
+  Copilot does not review a PR that an app or bot account opened (#1075). For such a PR
+  the review signal is a PR comment with the heading
+  ``### Independent verification of head <sha7>`` for the current head and at least one
+  named test (``test_...`` or ``path::name``); its time is when its text was written.
 - ``either``: whichever of the two is satisfied first — the review lets a head go early,
   the clock stays the upper bound when no automated review ever arrives.
 """
@@ -64,7 +68,7 @@ from libs.gate import (
     ROOT,
     RULE_TEXT_FILES,
     Runner,
-    SETTLE_MINUTES,
+    SETTLE_SECONDS,
     SEVERITY_WEIGHTS,
     UNLABELLED_SEVERITY_WEIGHT,
     Verdict,
@@ -123,7 +127,7 @@ __all__ = [
     "ROOT",
     "RULE_TEXT_FILES",
     "Runner",
-    "SETTLE_MINUTES",
+    "SETTLE_SECONDS",
     "SEVERITY_WEIGHTS",
     "UNLABELLED_SEVERITY_WEIGHT",
     "Verdict",
@@ -176,8 +180,10 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
         "--policy",
         choices=("clock", "event", "either"),
         default="clock",
-        help="settling rule: 12 min after the push (clock), 3 min after an automated "
-        "review of the head (event), or whichever comes first (either)",
+        help=f"settling rule: {QUIET_MINUTES} min after the push (clock), "
+        f"{SETTLE_SECONDS} s after an automated review of the head or, for a "
+        "bot-opened PR, its independent verification comment (event), or "
+        "whichever comes first (either)",
     )
     parser.add_argument(
         "--request-review",
@@ -230,8 +236,15 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
     if args.request_review and not any(
         r[0] in AUTOMATED_REVIEWERS and r[2] > 0 for r in facts.reviews_on_head()
     ):
-        request_copilot_review(facts, gh=gh)
-        warning(f"#{facts.number}: Copilot review requested on {facts.head_sha[:7]}")
+        if request_copilot_review(facts, gh=gh):
+            warning(
+                f"#{facts.number}: Copilot review requested on {facts.head_sha[:7]}"
+            )
+        else:
+            warning(
+                f"#{facts.number}: the Copilot review request was not registered; "
+                "no automated review will come"
+            )
     verdict = evaluate(
         facts, now=now(), quiet_minutes=args.quiet_minutes, policy=args.policy
     )
