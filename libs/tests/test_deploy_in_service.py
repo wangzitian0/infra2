@@ -190,7 +190,7 @@ def deployer(monkeypatch):
             return "a" * 40
 
     monkeypatch.setattr(
-        "libs.dokploy.get_dokploy",
+        "libs.deploy.dokploy_client.get_dokploy",
         lambda host=None: SimpleNamespace(
             get_compose=lambda compose_id: {"appName": "platform-app-abc123"}
         ),
@@ -557,7 +557,9 @@ def _redis_sync(
         def _checkout_sha(cls, ref):
             return RELEASE_SHA
 
-    monkeypatch.setattr("libs.dokploy.get_dokploy", lambda host=None: _Dokploy(env))
+    monkeypatch.setattr(
+        "libs.deploy.dokploy_client.get_dokploy", lambda host=None: _Dokploy(env)
+    )
     monkeypatch.setattr(d, "validate_env", lambda: [])
     monkeypatch.setattr(d.time, "sleep", lambda _s: None)
     monkeypatch.setenv("IAC_DEPLOY_REF", RELEASE_SHA)
@@ -784,7 +786,7 @@ def test_restart_dependents_needs_a_host(monkeypatch):
         redis.restart_dependents(_Host(RELEASE_SHA, REDIS_UP), {"ENV": "production"})
     # a deployer outside the registry never scans it and needs no host at all
     monkeypatch.setattr(
-        "libs.service_registry.service_attrs",
+        "libs.core.registry.service_attrs",
         lambda: (_ for _ in ()).throw(AssertionError("must not scan the registry")),
     )
     assert deployer_module.Deployer.restart_dependents(_Host(RELEASE_SHA, ""), {}) == []

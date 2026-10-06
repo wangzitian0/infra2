@@ -14,10 +14,8 @@ from typing import Any
 
 import yaml
 
-from libs.service_identity import ServiceIdentity
-
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from libs.core.service_identity import ServiceIdentity
+from libs.core.constants import REPO_ROOT
 
 
 class BackupManifestError(ValueError):
@@ -85,7 +83,7 @@ def load_backup_inventory(path: Path | str | None = None) -> list[BackupEntry]:
             for raw_entry in data.get("services", [])
         ]
 
-    from libs.service_registry import bootstrap_facet_attrs, service_attrs
+    from libs.core.registry import bootstrap_facet_attrs, service_attrs
 
     attrs = {**service_attrs(), **bootstrap_facet_attrs()}
     entries: list[BackupEntry] = []
@@ -150,7 +148,7 @@ def legacy_backup_aliases() -> dict[str, tuple[str, ...]]:
     Retirement condition: Once the host backup script emits platform/s3 and older manifests rotate
     out of the RPO window, legacy_compose_names can be retired.
     """
-    from libs.service_registry import service_attrs
+    from libs.core.registry import service_attrs
 
     attrs = service_attrs()
     aliases: dict[str, tuple[str, ...]] = {}

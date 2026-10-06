@@ -32,7 +32,7 @@ from infra2_sdk.secrets import (
     urllib_transport,
 )
 
-from libs.secrets_registry import Service, merged_manifest
+from libs.security.registry import Service, merged_manifest
 
 ONEPASSWORD_VAULT = "Infra2"
 

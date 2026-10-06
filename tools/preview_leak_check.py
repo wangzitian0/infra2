@@ -237,7 +237,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    from libs.dokploy import get_dokploy
+    from libs.deploy.dokploy_client import get_dokploy
 
     result = detect(get_dokploy(), token=args.token)
     leaks = result["leaks"]

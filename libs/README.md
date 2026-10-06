@@ -26,7 +26,7 @@ Modules in `libs/` that provide direct integrations or operational clients:
 
 | Module | Purpose | Key Exports |
 |--------|---------|-------------|
-| [`dokploy.py`](./dokploy.py) | Dokploy REST API wrapper | `DokployClient`, `get_dokploy()` |
+| [`deploy/dokploy_client.py`](./deploy/dokploy_client.py) | Dokploy REST API wrapper (`libs/dokploy.py` is its shim) | `DokployClient`, `get_dokploy()` |
 | [`iac_runner_client.py`](./iac_runner_client.py) | Signed HMAC operation client for IaC Runner | `trigger_platform_deploy()`, `poll_platform_deploy_status()` |
 | [`app_deploy_request.py`](./app_deploy_request.py) | Fail-closed App deploy request validation | `verify_production_evidence()`, `validate_request_authority()` |
 | [`harness_manifest.py`](./harness_manifest.py) | Workspace inventory & autonomy boundary audit | `load_manifest()`, `validate_manifest()`, `check_workspace()` |
@@ -35,6 +35,12 @@ Modules in `libs/` that provide direct integrations or operational clients:
 | [`console.py`](./console.py) | Rich CLI formatting and header blocks | `header()`, `success()`, `error()`, `prompt_action()` |
 | [`page_dedup.py`](./page_dedup.py) | Cross-run page dedup for the GitHub-plane daily jobs (#962): page only when the finding identity changes, report `仍未恢复 · 第 N 天` while unchanged, RESOLVED once; state = one issue per job (client reused from `observability.issue_trail`) | `dedup_page()`, `resolve_page_state()`, `decide()`, `make_identity()`, `Finding` |
 | [`availability_ledger.py`](./availability_ledger.py) | Pure availability ledger aggregation & uptime math | `aggregate_ledger()`, `calculate_uptime()` |
+| [`observability_dashboards.py`](./observability_dashboards.py) | Load and validate the checked-in SigNoz alert rules and dashboards; render apply payloads | `load_alert_definitions()`, `render_alert_payloads()`, `require_rule_channel()` |
+| [`vault_self_refresh_audit.py`](./vault_self_refresh_audit.py) | Read-only Vault self-refresh audit (inventory from `SecretsFacet`, live checks) | `load_inventory()`, `VaultService`, `CheckResult` |
+| [`vault_tokens.py`](./vault_tokens.py) | Vault per-service policy and AppRole naming | `VaultTokenTarget`, `policy_name()`, `normalize_selector()` |
+| [`release_markers.py`](./release_markers.py) | The release tag and the production marker, read from git | `newest_release_tag()`, `production_marker()`, `marker_status()` |
+| [`watchdog_signal_entries.py`](./watchdog_signal_entries.py) | Watchdog signal entries derived from each Deployer's facets (#543) | `render_internal_signal_entries()` |
+| [`coverage_regression.py`](./coverage_regression.py) | Line-coverage no-regression check against a committed baseline | `check_no_regression()`, `load_baseline()`, `read_coverage_summary()` |
 
 ---
 
@@ -66,25 +72,48 @@ six modules the code never followed).
 | `libs/container_breakdown_watch.py` | `libs.observability.watchers.breakdown_watch` | `BreakdownWatch`, `sweep`, `run_once` | Frozen Shim |
 | `libs/backup_verification.py` | `libs.backup.verification` | `load_backup_inventory`, `verify_backup_manifest` | Frozen Shim |
 | `libs/backup_restore.py` | `libs.backup.rehearsal` | `build_postgres_rehearsal_plan`, `run_postgres_restore_rehearsal` | Frozen Shim |
-| `libs/env.py` | — (holds its own implementation) | — | Not a shim |
-| `libs/common.py` | — (holds its own implementation) | — | Not a shim |
-| `libs/service_registry.py` | — (holds its own implementation) | — | Not a shim |
+| `libs/service_identity.py` | `libs.core.service_identity` | `ServiceIdentity`, `DOCKER_LABEL_PREFIX`, `MANAGED_BY` | Frozen Shim |
+| `libs/env.py` | `libs.security.store` | `OpSecrets`, `VaultSecrets`, `get_secrets`, `generate_password`, `verify_vault_token` | Frozen Shim |
+| `libs/service_registry.py` | `libs.core.registry` | `service_attrs`, `ServiceMeta`, `all_services`, `resolve_container_host` | Frozen Shim |
+| `libs/service_facets.py` | `libs.core.facets` | `ProbeFacet`, `PublicRouteFacet`, `SignalFacet`, `BackupFacet`, `Exemption` | Frozen Shim |
+| `libs/const.py` | `libs.core.constants` | `GITHUB_OWNER`, `GITHUB_REPO`, `GITHUB_BRANCH` | Frozen Shim |
+| `libs/secrets_registry.py` | `libs.security.registry` | `SERVICES`, `Service`, `lookup`, `merged_manifest`, `store_keys` | Frozen Shim |
+| `libs/app_manifests.py` | `libs.security.app_manifests` | `fetch_missing`, `CACHE_DIR` | Frozen Shim |
+| `libs/compose_lock.py` | `libs.deploy.compose_lock` | `compose_write_lock` | Frozen Shim |
+| `libs/deploy_dependencies.py` | `libs.deploy.dependencies` | `extra_dependency_globs`, `service_key_from_path` | Frozen Shim |
+| `libs/deploy_queue.py` | `libs.deploy.queue` | `deployment_start_epoch`, `find_stuck_deploys` | Frozen Shim |
+| `libs/deploy_env_config.py` | `libs.deploy.env_config` | `app_compose_env_config`, `preview_service_config`, `otel_env` | Frozen Shim |
+| `libs/deploy_contract.py` | `libs.deploy.contract` | `service_spec`, `ServiceSpec`, `deploy_type_spec` | Frozen Shim |
+| `libs/dokploy.py` | `libs.deploy.dokploy_client` | `DokployClient`, `get_dokploy`, `ensure_project` | Frozen Shim |
+| `libs/probe_specs.py` | `libs.observability.probe_specs` | `render_probe_spec_text`, `normalize_specs_text` | Frozen Shim |
+| `libs/recency.py` | `libs.observability.recency` | `evaluate_consecutive_hysteresis`, `ConsecutiveObservationState` | Frozen Shim |
+| `libs/scheduler_peer_liveness.py` | `libs.observability.scheduler_peer_liveness` | `BOUND_CAP_ENV`, `evaluate` | Frozen Shim |
+| `libs/resident_watchers.py` | `libs.observability.watchers.resident` | `ResidentWatcher`, `build_watchers` | Frozen Shim |
+| `libs/deploy_queue_guard.py` | `libs.observability.watchers.deploy_queue_guard` | `DeployQueueGuard`, `run_once` | Frozen Shim |
+| `libs/common.py` | — (re-exports `libs.core.environ`, and holds `check_service`) | — | Not a shim |
+| `libs/console.py` | — (holds its own implementation) | — | Not a shim |
 
-### The three that are not shims yet
+### The two that are not shims
 
-`libs/env.py` (293 lines), `libs/common.py` (394) and `libs/service_registry.py` (595)
-are **implementation modules that a domain package imports**, not re-exports. They are
-listed above so the table stays exhaustive, and the guard asserts they are *not*
-structurally shims — migrate one and the table must move with it.
+- `libs/common.py` re-exports `libs.core.environ` and keeps one function of its own,
+  `check_service`. That function is an operator task helper: it runs a health command
+  over SSH and prints through `libs.console`, which a domain package must not import.
+- `libs/console.py` holds its own implementation. `tools/pr_merge_gate.py` imports it, so
+  it is in the merge gate's self-governing closure; moving it is a separate,
+  owner-approved change. `libs/deploy/deployer.py` and `libs/deploy/promote.py` import
+  it, and those two edges are the last rows of the import-boundary debt ledger.
+
+The guard asserts that both are *not* structurally shims: migrate one and the table must
+move with it.
 
 `libs.security` imports without infra2-sdk (#847): `libs/security/__init__.py` loads
 `supply` / `prune` lazily (PEP 562), so only touching an SDK-backed name needs the wheel;
-`libs/tests/test_sdk_free_import_surface.py` pins it. `libs/env.py` still guards its own
-SDK import so minimal GitHub Actions jobs can use `verify_vault_token` /
-`generate_password`; its guards (`libs/tests/test_env.py::TestWithoutTheSdk`,
+`libs/tests/test_sdk_free_import_surface.py` pins it. `libs/security/store.py` (behind
+the `libs/env.py` shim) guards its own SDK import so minimal GitHub Actions jobs can
+use `verify_vault_token` / `generate_password`; its guards (`libs/tests/test_env.py::TestWithoutTheSdk`,
 `test_secrets_registry.py::test_the_registry_table_is_readable_without_the_sdk` and
 `test_workflow_runtime_deps.py::test_a_job_can_import_what_it_runs`) must keep passing
-unchanged when it moves.
+unchanged.
 
 ### Import boundaries
 

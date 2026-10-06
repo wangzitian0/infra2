@@ -9,7 +9,7 @@ from typing import Any
 
 from infra2_sdk.secrets import SecretsError, vault_path
 
-from libs.secrets_registry import SERVICES, Service, store_keys
+from libs.security.registry import SERVICES, Service, store_keys
 from libs.security.supply import vault_backend
 
 # infra2_sdk.runtime.config_schema.reconcile ignores these; so must the prune.

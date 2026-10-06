@@ -28,7 +28,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from libs import service_registry as reg
+from libs.core import registry as reg
 from libs.service_facets import SecretsFacet
 from libs.vault_self_refresh_audit import (
     VaultService,

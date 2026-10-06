@@ -21,12 +21,12 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from libs.common import infra_domain
-from libs.compose_lock import compose_write_lock
+from libs.core.environ import infra_domain
+from libs.deploy.compose_lock import compose_write_lock
 from libs.console import warning
 from libs.deploy import schema_gate
-from libs.deploy_env_config import app_compose_env_config, otel_env
-from libs.deploy_queue import deployment_start_epoch
+from libs.deploy.env_config import app_compose_env_config, otel_env
+from libs.deploy.queue import deployment_start_epoch
 from libs.core import REPO_ROOT
 from libs.deploy.failure_snapshot import emit_failure_snapshot
 from libs.observability.openpanel import openpanel_env
@@ -155,7 +155,7 @@ def assert_approle_creds_present(service: str, client, compose_id: str) -> None:
     function's caller never sets these keys, so reading the compose's current env here
     reflects exactly what will still be true after this deploy.
     """
-    from libs.service_registry import service_attrs
+    from libs.core.registry import service_attrs
 
     meta = service_attrs().get(service)
     if not meta or not meta.compose_path:
@@ -214,7 +214,7 @@ def ensure_generated_secrets(service: str, env: str) -> None:
     fail-closed.
     """
     from libs.deploy.deployer import load_deployer_class
-    from libs.env import VaultSecrets
+    from libs.security.store import VaultSecrets
 
     deployer_cls = load_deployer_class(service)
     if deployer_cls is None:
@@ -250,7 +250,7 @@ def preflight_vault_token(client, compose_id: str, *, min_ttl_hours: int = 48):
     form; this call site was the one #561 didn't cover, since it's phrased as a
     positional caller-supplied param rather than a URL built inline).
     """
-    from libs.common import infra_domain
+    from libs.core.environ import infra_domain
 
     env_text = client.get_compose_env(compose_id)
     is_approle, token = extract_vault_token_from_env(env_text)
@@ -298,7 +298,7 @@ def verify_in_service(
         in_service_verdict,
         observe_containers,
     )
-    from libs.service_registry import service_attrs
+    from libs.core.registry import service_attrs
 
     meta = service_attrs().get(service)
     if not meta or not meta.compose_path:
@@ -522,7 +522,7 @@ def deploy(
     # it from the deploy record instead of re-running the check (Infra-022 T3.2).
     rollback_class: str | None = None
     if schema_gate.gate_applies(service):
-        from libs.service_registry import service_attrs
+        from libs.core.registry import service_attrs
 
         meta = service_attrs().get(service)
         if meta is None or not meta.compose_path:
@@ -558,8 +558,8 @@ def deploy(
         "INTERNAL_DOMAIN": domain,
         "IAC_CONFIG_HASH": config_hash,
     }
-    from libs.deploy_contract import service_spec
-    from libs.service_identity import ServiceIdentity
+    from libs.deploy.contract import service_spec
+    from libs.core.service_identity import ServiceIdentity
 
     svc_spec = service_spec(service)
     identity = ServiceIdentity.build(

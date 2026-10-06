@@ -1055,7 +1055,7 @@ def test_collect_live_observations_skips_token_lookup_for_approle_service(
         return Result()
 
     monkeypatch.setattr("libs.common.get_env", fake_get_env)
-    monkeypatch.setattr("libs.dokploy.get_dokploy", fake_get_dokploy)
+    monkeypatch.setattr("libs.deploy.dokploy_client.get_dokploy", fake_get_dokploy)
     monkeypatch.setattr(
         vault_self_refresh_audit_module, "verify_vault_token", fail_if_called
     )
@@ -1125,7 +1125,7 @@ def test_collect_live_observations_falls_back_to_legacy_dokploy_services(
 
     monkeypatch.setattr("libs.common.get_env", fake_get_env)
     monkeypatch.setattr(
-        "libs.dokploy.get_dokploy", lambda host=None: FakeDokployClient()
+        "libs.deploy.dokploy_client.get_dokploy", lambda host=None: FakeDokployClient()
     )
     monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
     monkeypatch.setattr(
@@ -1150,8 +1150,7 @@ def test_collect_live_observations_falls_back_to_legacy_dokploy_services(
         == "platform-minio-vault-agent"
     )
     assert (
-        observations["services"][service.id]["app_containers"][0]["status"]
-        == "running"
+        observations["services"][service.id]["app_containers"][0]["status"] == "running"
     )
     assert (
         observations["services"][service.id]["app_containers"][0]["container"]
@@ -1306,7 +1305,7 @@ def test_safe_excerpt_redacts_keys_with_spaces_and_quotes() -> None:
     raw_log = (
         "INFO Starting service\n"
         "DEBUG password: my_super_secret_password\n"
-        "DEBUG key = \"super_secret_key\"\n"
+        'DEBUG key = "super_secret_key"\n'
         "DEBUG authorization: Bearer s.vaultToken123456\n"
         "INFO Running normally"
     )

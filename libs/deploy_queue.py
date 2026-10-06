@@ -1,208 +1,30 @@
-"""Detect deploy jobs stuck 'running' too long, via Dokploy's deployment status.
+"""Frozen shim: the implementation lives in ``libs.deploy.queue`` (#955).
 
-Pure logic (no network, no clock) so it is unit-testable; the Dokploy API calls
-and the Dokploy API calls live in `libs/deploy_queue_guard.py` (a watcher
-plugin in the single resident sidecar since #543).
-
-Why this works at the Dokploy-API layer instead of poking `bull:deployments:*`
-in Redis: the deploy queue is Dokploy's own BullMQ. We OBSERVE via the
-deployment status API and (in the sidecar) REMEDIATE via Dokploy's own
-`compose.killBuild` / `compose.cancelDeployment` / `compose.cleanQueues`. Raw
-`LREM`/`DEL` on the BullMQ keys corrupts its bookkeeping; going through Dokploy
-keeps the queue and the deployment DB record consistent.
+Import from ``libs.deploy.queue`` in new code. This module only re-exports it.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from libs.deploy.queue import (
+    ComposeDeployments,
+    QUEUE_IMPACT,
+    RUNNING_STATUS,
+    StuckDeploy,
+    build_deploy_guard_alert_payload,
+    deployment_start_epoch,
+    find_stuck_deploys,
+    is_running,
+    parse_epoch_seconds,
+)
 
-from libs.service_identity import ServiceIdentity
-
-RUNNING_STATUS = "running"
-QUEUE_IMPACT = "部署队列单并发 FIFO:它阻塞之后的所有部署"
-
-
-@dataclass(frozen=True)
-class ComposeDeployments:
-    """A Dokploy compose bound to its canonical operational identity."""
-
-    compose_id: str
-    compose_name: str
-    service_id: str
-    environment: str
-    deployments: tuple[dict, ...]
-
-
-@dataclass(frozen=True)
-class StuckDeploy:
-    """A compose's oldest running deployment that has exceeded the ceiling.
-
-    When several running records linger, find_stuck_deploys reports the OLDEST
-    (the one blocking the single-concurrency FIFO queue), not the latest.
-    """
-
-    compose_id: str
-    compose_name: str
-    deployment_id: str
-    age_seconds: float
-    service_id: str = ""
-    environment: str = "production"
-    #: epoch seconds the deployment started; 0 when unknown (#905: the card's 开始于)
-    started_at: float = 0.0
-
-
-def parse_epoch_seconds(value) -> float | None:
-    """Best-effort parse of a Dokploy timestamp into epoch seconds.
-
-    Accepts ISO-8601 strings (`2026-06-11T09:20:06.000Z` or naive), epoch
-    seconds, or epoch milliseconds. Returns None when unparseable so callers can
-    skip a deployment rather than mis-age it.
-    """
-    if value is None:
-        return None
-    if isinstance(value, bool):  # bool is an int subclass; never a timestamp
-        return None
-    if isinstance(value, (int, float)):
-        v = float(value)
-        return v / 1000.0 if v > 1e11 else v  # >~year 5138 in s -> it's millis
-    if isinstance(value, str):
-        s = value.strip()
-        if not s:
-            return None
-        if s.isdigit():
-            return parse_epoch_seconds(int(s))
-        try:
-            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.timestamp()
-    return None
-
-
-def deployment_start_epoch(deployment: dict) -> float | None:
-    """Earliest known start time of a deployment, across Dokploy field variants."""
-    for key in ("startedAt", "createdAt", "updatedAt"):
-        epoch = parse_epoch_seconds(deployment.get(key))
-        if epoch is not None:
-            return epoch
-    return None
-
-
-def is_running(deployment: dict) -> bool:
-    return str(deployment.get("status", "")).strip().lower() == RUNNING_STATUS
-
-
-def find_stuck_deploys(composes, now_epoch: float, ceiling_seconds: float):
-    """Return one StuckDeploy per compose whose running deploy exceeds the ceiling.
-
-    `composes`: iterable of ComposeDeployments. When a
-    compose has several running records (stale ones can linger), the OLDEST that
-    exceeds the ceiling is reported — that is the one blocking the FIFO queue.
-    """
-    stuck: list[StuckDeploy] = []
-    for compose in composes:
-        oldest: StuckDeploy | None = None
-        for deployment in compose.deployments:
-            if not is_running(deployment):
-                continue
-            start = deployment_start_epoch(deployment)
-            if start is None:
-                continue
-            age = now_epoch - start
-            if age <= ceiling_seconds:
-                continue
-            if oldest is None or age > oldest.age_seconds:
-                oldest = StuckDeploy(
-                    compose_id=compose.compose_id,
-                    compose_name=compose.compose_name,
-                    deployment_id=str(deployment.get("deploymentId", "")),
-                    age_seconds=age,
-                    service_id=compose.service_id,
-                    environment=compose.environment,
-                    started_at=start,
-                )
-        if oldest is not None:
-            stuck.append(oldest)
-    return stuck
-
-
-def build_deploy_guard_alert_payload(
-    stuck,
-    *,
-    firing: bool = True,
-    action_note: str = "",
-    external_url: str = "infra2://platform/12.alerting/deploy-queue-guard",
-) -> dict:
-    """Alertmanager/SigNoz-shaped payload for the alert bridge (`format_signoz_alert`).
-
-    #905: each alert names the compose, carries the symptom and the queue impact the
-    card shows, and ``startsAt`` (when the deployment started).
-    """
-    status = "firing" if firing else "resolved"
-    alerts = []
-    for s in stuck:
-        identity = ServiceIdentity.build(
-            s.service_id or "infra/unregistered",
-            s.environment,
-            component="deploy-queue",
-            service_name=(
-                s.service_id.split("/", 1)[-1] if s.service_id else "unregistered"
-            ),
-        )
-        alerts.append(
-            {
-                "status": status,
-                "labels": {
-                    "alertname": "DeployQueueStuck",
-                    **identity.alert_labels(
-                        severity="critical", failure_domain="deploy-queue"
-                    ),
-                },
-                "annotations": {
-                    "summary": f"{s.compose_name} deploy stuck running {int(s.age_seconds)}s",
-                    "description": action_note
-                    or (
-                        f"deployment {s.deployment_id} has been running > ceiling; "
-                        f"{QUEUE_IMPACT}"
-                    ),
-                    "observed": f"compose={s.compose_id} age={int(s.age_seconds)}s",
-                    "compose": s.compose_name,
-                    "symptom": (
-                        f"部署 {s.deployment_id} 已运行 {int(s.age_seconds)}s,超过上限"
-                        + (f";{action_note}" if action_note else "")
-                    ),
-                    "impact": QUEUE_IMPACT,
-                },
-                **(
-                    {
-                        "startsAt": datetime.fromtimestamp(
-                            s.started_at, tz=timezone.utc
-                        ).strftime("%Y-%m-%dT%H:%M:%SZ")
-                    }
-                    if s.started_at
-                    else {}
-                ),
-            }
-        )
-    summary = (
-        f"{len(stuck)} deploy(s) stuck running past the ceiling"
-        if stuck
-        else "No deploys stuck"
-    )
-    return {
-        "status": status,
-        "commonLabels": {
-            "alertname": "DeployQueueStuck",
-            "identity_schema": "v1",
-            "managed_by": "infra2",
-            "severity": "critical",
-            "team": "infra",
-        },
-        "commonAnnotations": {"summary": summary},
-        "groupLabels": {"alertname": "DeployQueueStuck"},
-        "alerts": alerts,
-        "externalURL": external_url,
-    }
+__all__ = [
+    "ComposeDeployments",
+    "QUEUE_IMPACT",
+    "RUNNING_STATUS",
+    "StuckDeploy",
+    "build_deploy_guard_alert_payload",
+    "deployment_start_epoch",
+    "find_stuck_deploys",
+    "is_running",
+    "parse_epoch_seconds",
+]

@@ -47,56 +47,18 @@ _FORBIDDEN_ROOTS = ("tools", "bootstrap")
 # entry in the change that removes the import (the test fails until you do), and never
 # add one -- fix the import instead.
 #
-# 1. domain package -> flat module. 13 of these 42 pairs (27 of the 89 import
-#    statements behind them) point at the three modules that still hold their
-#    implementation: libs.common, libs.env, libs.service_registry. Moving those into
-#    domain packages (and breaking the common <-> core.environ and
-#    service_registry <-> core.service cycles) retires most of this list.
-# 2. libs -> tools (library depending on the CLI layer): none remain. The
-#    libs/deploy -> tools.resolve_deploy_ref / tools.openpanel_clients edges were retired
-#    by moving the resolver to libs.deploy.refs; the ledger started at 45 pairs and
-#    this change took it to 42.
+# History: 45 pairs when the guard landed, 42 after the libs -> tools edges moved to
+# libs.deploy.refs, 2 after #955 moved the flat implementations into libs.core,
+# libs.security, libs.deploy and libs.observability (the flat files are now frozen
+# shims, see libs/README.md).
+#
+# The two that remain point at libs.console. tools/pr_merge_gate.py imports it, so it
+# is in the gate's self-governing closure (tools.pr_merge_gate.self_governing_files()):
+# moving it changes what decides whether that very PR may merge, which is the owner's
+# call (AGENTS.md, merge gate rule 5). Retire these two rows in that owner-approved PR.
 _DEBT_ROWS: tuple[tuple[str, str], ...] = (
-    ("libs/backup/verification.py", "libs.service_identity"),
-    ("libs/backup/verification.py", "libs.service_registry"),
-    ("libs/core/environ.py", "libs.common"),
-    ("libs/core/service.py", "libs.service_registry"),
-    ("libs/deploy/deployer.py", "libs.common"),
     ("libs/deploy/deployer.py", "libs.console"),
-    ("libs/deploy/deployer.py", "libs.const"),
-    ("libs/deploy/deployer.py", "libs.deploy_dependencies"),
-    ("libs/deploy/deployer.py", "libs.deploy_queue"),
-    ("libs/deploy/deployer.py", "libs.dokploy"),
-    ("libs/deploy/deployer.py", "libs.env"),
-    ("libs/deploy/deployer.py", "libs.secrets_registry"),
-    ("libs/deploy/deployer.py", "libs.service_facets"),
-    ("libs/deploy/deployer.py", "libs.service_registry"),
-    ("libs/deploy/preview.py", "libs.common"),
-    ("libs/deploy/preview.py", "libs.compose_lock"),
-    ("libs/deploy/preview.py", "libs.deploy_contract"),
-    ("libs/deploy/preview.py", "libs.deploy_env_config"),
-    ("libs/deploy/preview.py", "libs.service_identity"),
-    ("libs/deploy/promote.py", "libs.common"),
-    ("libs/deploy/promote.py", "libs.compose_lock"),
     ("libs/deploy/promote.py", "libs.console"),
-    ("libs/deploy/promote.py", "libs.deploy_contract"),
-    ("libs/deploy/promote.py", "libs.deploy_env_config"),
-    ("libs/deploy/promote.py", "libs.deploy_queue"),
-    ("libs/deploy/promote.py", "libs.env"),
-    ("libs/deploy/promote.py", "libs.service_identity"),
-    ("libs/deploy/promote.py", "libs.service_registry"),
-    ("libs/deploy/schema_gate.py", "libs.service_registry"),
-    ("libs/observability/breakdown.py", "libs.deploy_env_config"),
-    ("libs/observability/breakdown.py", "libs.service_identity"),
-    ("libs/observability/breakdown.py", "libs.service_registry"),
-    ("libs/observability/issue_trail.py", "libs.scheduler_peer_liveness"),
-    ("libs/observability/probes.py", "libs.probe_specs"),
-    ("libs/observability/probes.py", "libs.service_identity"),
-    ("libs/observability/watchers/breakdown_watch.py", "libs.recency"),
-    ("libs/observability/watchers/breakdown_watch.py", "libs.resident_watchers"),
-    ("libs/security/prune.py", "libs.secrets_registry"),
-    ("libs/security/store.py", "libs.env"),
-    ("libs/security/supply.py", "libs.secrets_registry"),
 )
 
 DEBT: frozenset[tuple[str, str]] = frozenset(_DEBT_ROWS)

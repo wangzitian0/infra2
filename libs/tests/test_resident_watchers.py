@@ -183,7 +183,7 @@ def test_deploy_queue_guard_is_prod_only_and_idles_elsewhere(monkeypatch) -> Non
     paged every stuck deploy a second time. Like the breakdown watcher it is now a
     prod-only singleton: the staging plugin stays registered but never talks to
     Dokploy, and a runner without ENV counts as production."""
-    import libs.deploy_queue_guard as guard
+    import libs.observability.watchers.deploy_queue_guard as guard
 
     # Recorded, not raised: maybe_run swallows a sweep's exceptions by contract, so a
     # stub that raises would let a staging sweep pass unnoticed.

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 from libs.core.constants import REPO_ROOT
 
 if TYPE_CHECKING:
-    from libs.service_registry import ServiceMeta
+    from libs.core.registry import ServiceMeta
 
 
 @dataclass(frozen=True)
@@ -86,7 +86,7 @@ def _service_from_meta(service_id: str, meta: ServiceMeta) -> Service:
     """Construct a Service domain entity from a ServiceMeta."""
     project = meta.project or service_id.split("/", 1)[0]
     service_name = meta.service or service_id.split("/", 1)[1]
-    
+
     # Resolve directory
     if meta.compose_path:
         directory = (REPO_ROOT / meta.compose_path).parent
@@ -116,7 +116,7 @@ def _service_from_meta(service_id: str, meta: ServiceMeta) -> Service:
 
 def load_service_registry() -> Mapping[str, Service]:
     """C-01: Load all services as unified Service domain entities."""
-    from libs import service_registry
+    from libs.core import registry as service_registry
 
     raw_metas = service_registry.service_attrs()
     return {

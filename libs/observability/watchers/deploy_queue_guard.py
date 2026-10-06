@@ -1,0 +1,326 @@
+"""Deploy-queue guard: detect deploys stuck 'running' too long and (optionally)
+remediate them through Dokploy's own API.
+
+Watcher plugin in the single resident alerting sidecar (#543) — runs inside
+`tools/infra_probe_runner.py --loop` via `libs.resident_watchers.build_watchers`
+(it was a standalone compose sidecar before the merge). Two halves,
+deliberately separated:
+
+  * OBSERVE (always): query Dokploy deployment status, alert via the alert
+    bridge when a deploy has been `running` past the ceiling. Read-only.
+  * REMEDIATE (opt-in, DEPLOY_GUARD_REMEDIATE=1): kill the stuck build and clean
+    the queue via `compose.killBuild` / `compose.cancelDeployment` /
+    `compose.cleanQueues`, then re-check; if it is STILL running, escalate.
+
+The remediation never touches Redis directly — Dokploy owns the BullMQ queue, so
+we go through its API to keep queue + deployment records consistent. This
+replaces the host watchdog's raw `LREM`/`DEL` surgery; the watchdog is now
+observe-only.
+
+Env (unchanged across the #543 merge — the names map into per-watcher config):
+  DOKPLOY_API_KEY / DOKPLOY_URL        Dokploy API (via libs.dokploy.get_dokploy)
+  ALERT_BRIDGE_URL                     where to POST alerts (the feishu bridge)
+  ALERTING_ENV_FILE                    env file re-read each sweep (default /secrets/.env)
+  DEPLOY_GUARD_CEILING_SECONDS         stuck threshold (default 1800 = 30 min)
+  DEPLOY_GUARD_INTERVAL_SECONDS        sweep interval (default 60; self-paced inside the loop)
+  DEPLOY_GUARD_REMEDIATE               "1" to arm kill-on-timeout (default "0")
+  DEPLOY_GUARD_GRACE_SECONDS           wait before post-kill re-check (default 20)
+  DEPLOY_GUARD_RENOTIFY_SECONDS        re-alert suppression window (default 1800)
+"""
+# alerts-as: deploy-queue-guard  (#543 single-sidecar merge redeemed the #542 exemption)
+
+from __future__ import annotations
+
+import logging
+import os
+import time
+from pathlib import Path
+
+from libs.alerting import is_report_only_environment
+from libs.deploy.queue import (
+    ComposeDeployments,
+    build_deploy_guard_alert_payload,
+    find_stuck_deploys,
+)
+from libs.observability.watchers.resident import ResidentWatcher
+
+logger = logging.getLogger("deploy-queue-guard")
+
+DEFAULT_CEILING = 1800
+DEFAULT_INTERVAL = 60
+DEFAULT_GRACE = 20
+DEFAULT_RENOTIFY = 1800
+
+
+def _load_env_file(path: Path) -> None:
+    """Source a KEY="value" env file into os.environ.
+
+    EMPTY values are skipped so an env file rendered before Vault has populated a
+    secret (e.g. DOKPLOY_API_KEY="") does not poison os.environ — a later
+    non-empty render is then picked up on the next reload. Already-set NON-EMPTY
+    keys are not overridden; a key that sits EMPTY in os.environ (e.g. the merged
+    sidecar's startup env-file load ran before Vault rendered the secret) IS
+    refreshed, so the guard still picks up a late-rendered DOKPLOY_API_KEY.
+    """
+    if not path.exists():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and value and not os.environ.get(key):
+            os.environ[key] = value
+
+
+def _env_int(key: str, default: int) -> int:
+    try:
+        return int(os.environ.get(key, "") or default)
+    except ValueError:
+        return default
+
+
+def _make_client():
+    from libs.deploy.dokploy_client import get_dokploy
+
+    return get_dokploy()
+
+
+#: Dokploy holds composes this estate does not own: `playground/*` is scratch, and
+#: `finance/appwrite` predates the registry. They resolve to no service_id by design, so
+#: naming them here is what keeps "unregistered" meaning "nobody knows what this is".
+#: Owner decision 2026-09-09: the probe/registry scope is registry-declared services only.
+UNREGISTERED_BY_DESIGN: frozenset[str] = frozenset(
+    {
+        "playground/*",
+        "finance/appwrite",
+    }
+)
+
+
+def _expected_unregistered(project: str, compose_name: str) -> bool:
+    project = (project or "").strip().lower()
+    compose_name = (compose_name or "").strip().lower()
+    return (
+        f"{project}/*" in UNREGISTERED_BY_DESIGN
+        or f"{project}/{compose_name}" in UNREGISTERED_BY_DESIGN
+        # A preview stack is named for its branch/PR and is created and destroyed by the
+        # preview lane, never registered.
+        or "preview" in compose_name
+    )
+
+
+def _list_composes(client):
+    """Typed compose deployments with identity resolved at topology ingestion.
+
+    Composes nobody registered are counted and reported once per sweep, not logged per
+    compose per sweep: that line ran 32,236 times in 24 hours on production
+    (2026-09-09), 99.8% of the probe container's entire log, and it buried the only
+    other thing in there — the breakdown alerts that were firing at the time.
+    """
+    from libs.core.registry import service_id_for_dokploy
+
+    out = []
+    unknown: set[str] = set()
+    registered = 0
+    for project in client.list_projects():
+        project_name = project.get("name", "")
+        for env in project.get("environments", []):
+            environment = (env.get("name") or "production").strip().lower()
+            for compose in env.get("compose", []):
+                compose_id = compose.get("composeId")
+                if not compose_id:
+                    continue
+                name = compose.get("name") or compose.get("appName") or compose_id
+                try:
+                    deployments = client.get_compose_deployments(compose_id)
+                except Exception as exc:  # one compose must not abort the sweep
+                    logger.warning("deployments fetch failed for %s: %s", name, exc)
+                    deployments = []
+                service_id = service_id_for_dokploy(project_name, name) or ""
+                if not service_id and not _expected_unregistered(project_name, name):
+                    unknown.add(f"{project_name}/{environment}/{name}")
+                if service_id:
+                    registered += 1
+                out.append(
+                    ComposeDeployments(
+                        compose_id=compose_id,
+                        compose_name=name,
+                        service_id=service_id,
+                        environment=environment,
+                        deployments=tuple(deployments),
+                    )
+                )
+    logger.info(
+        "deploy-queue guard swept %d compose(s): %d registered, %d unregistered by design, "
+        "%d unknown%s",
+        len(out),
+        registered,
+        len(out) - registered - len(unknown),
+        len(unknown),
+        f" ({', '.join(sorted(unknown))})" if unknown else "",
+    )
+    return out
+
+
+def _post_alert(payload: dict) -> None:
+    bridge_url = os.environ.get("ALERT_BRIDGE_URL", "").strip()
+    if not bridge_url:
+        logger.warning("ALERT_BRIDGE_URL unset; alert not delivered: %s", payload)
+        return
+    from libs.observability.probes import post_alert_bridge_payload
+
+    try:
+        # The bridge enforces Basic Auth when BRIDGE_BASIC_AUTH_* is set; pass it
+        # or these alerts get 401'd and silently dropped.
+        post_alert_bridge_payload(
+            bridge_url,
+            payload,
+            username=os.environ.get("BRIDGE_BASIC_AUTH_USERNAME", ""),
+            password=os.environ.get("BRIDGE_BASIC_AUTH_PASSWORD", ""),
+        )
+    except Exception as exc:  # alerting is best-effort; never crash the loop
+        logger.error("alert bridge delivery failed: %s", exc)
+
+
+def _remediate(client, stuck, grace_seconds: int) -> None:
+    """Kill + clean each stuck deploy via Dokploy API, then re-check and escalate."""
+    for s in stuck:
+        logger.warning(
+            "REMEDIATE %s: killing stuck deploy %s (age=%ds)",
+            s.compose_name,
+            s.deployment_id,
+            int(s.age_seconds),
+        )
+        _post_alert(
+            build_deploy_guard_alert_payload(
+                [s],
+                action_note=f"正通过 Dokploy API 终止卡住的部署 {s.deployment_id}",
+            )
+        )
+        for label, call in (
+            ("killBuild", client.kill_compose_build),
+            ("cancelDeployment", client.cancel_compose_deployment),
+            ("cleanQueues", client.clean_compose_queues),
+        ):
+            try:
+                call(s.compose_id)
+                logger.info("  %s ok for %s", label, s.compose_name)
+            except Exception as exc:
+                logger.error("  %s FAILED for %s: %s", label, s.compose_name, exc)
+
+    if grace_seconds > 0:
+        time.sleep(grace_seconds)
+
+    # Re-check: anything still running past the ceiling means the API kill did
+    # not clear it (e.g. the OOM-wedged build of dokploy#4461) -> escalate.
+    still = find_stuck_deploys(
+        _list_composes(client),
+        time.time(),
+        _env_int("DEPLOY_GUARD_CEILING_SECONDS", DEFAULT_CEILING),
+    )
+    killed = {s.compose_id for s in stuck}
+    persistent = [s for s in still if s.compose_id in killed]
+    if persistent:
+        for s in persistent:
+            logger.error(
+                "ESCALATE %s: still running after kill (age=%ds) — needs manual/worker restart",
+                s.compose_name,
+                int(s.age_seconds),
+            )
+        _post_alert(
+            build_deploy_guard_alert_payload(
+                persistent,
+                action_note="Dokploy 终止后仍在运行:需要人工介入或重启 worker",
+            )
+        )
+
+
+def run_once(
+    client, *, ceiling: int, remediate: bool, grace: int, alerted: dict
+) -> int:
+    composes = _list_composes(client)
+    stuck = find_stuck_deploys(composes, time.time(), ceiling)
+    if not stuck:
+        logger.info("deploy-queue guard: %d composes, none stuck", len(composes))
+        return 0
+
+    renotify = _env_int("DEPLOY_GUARD_RENOTIFY_SECONDS", DEFAULT_RENOTIFY)
+    now = time.time()
+    fresh = [s for s in stuck if now - alerted.get(s.compose_id, 0) >= renotify]
+    for s in stuck:
+        logger.warning(
+            "STUCK %s: deploy %s running %ds (ceiling=%ds)",
+            s.compose_name,
+            s.deployment_id,
+            int(s.age_seconds),
+            ceiling,
+        )
+    if fresh:
+        _post_alert(build_deploy_guard_alert_payload(fresh))
+        for s in fresh:
+            alerted[s.compose_id] = now
+
+    if remediate:
+        _remediate(client, stuck, grace)
+    else:
+        logger.info("remediation disabled (DEPLOY_GUARD_REMEDIATE!=1); observe-only")
+    return len(stuck)
+
+
+class DeployQueueGuard(ResidentWatcher):
+    """The deploy-queue sweep as a resident watcher plugin (#543).
+
+    Per sweep it reloads secrets and rebuilds the Dokploy client (cheap) so the
+    sidecar idles rather than crashlooping, and PICKS UP a DOKPLOY_API_KEY that
+    Vault renders after the container started — the standalone sidecar's exact
+    loop-iteration behavior.
+
+    Production-only singleton (#903), gated exactly like the breakdown watcher: the
+    Dokploy control plane is shared by every environment, so the production runner
+    already sees every stuck deploy. The staging copy used to page the same
+    DeployQueueStuck a second time; it stays registered but idle.
+    """
+
+    name = "deploy-queue-guard"
+
+    def __init__(self, environ=None) -> None:
+        super().__init__()
+        env = os.environ if environ is None else environ
+        self.interval_seconds = int(
+            env.get("DEPLOY_GUARD_INTERVAL_SECONDS", "") or DEFAULT_INTERVAL
+        )
+        self.ceiling = int(
+            env.get("DEPLOY_GUARD_CEILING_SECONDS", "") or DEFAULT_CEILING
+        )
+        self.grace = int(env.get("DEPLOY_GUARD_GRACE_SECONDS", "") or DEFAULT_GRACE)
+        self.remediate = (env.get("DEPLOY_GUARD_REMEDIATE") or "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+        }
+        self.env_path = Path(env.get("ALERTING_ENV_FILE") or "/secrets/.env")
+        self.alerted: dict[str, float] = {}
+        # Idle only on a recognised non-production runner: `prod` or a typo sweeps.
+        self.enabled = not is_report_only_environment(env.get("ENV"))
+        if not self.enabled:
+            logger.info(
+                "deploy-queue guard is prod-only (Dokploy is shared; the production "
+                "runner watches every deploy); plugin registered but idle on env=%s",
+                env.get("ENV"),
+            )
+
+    def _sweep(self) -> None:
+        if not self.enabled:
+            return
+        _load_env_file(self.env_path)
+        client = _make_client()  # raises when DOKPLOY_API_KEY is still unset
+        run_once(
+            client,
+            ceiling=self.ceiling,
+            remediate=self.remediate,
+            grace=self.grace,
+            alerted=self.alerted,
+        )

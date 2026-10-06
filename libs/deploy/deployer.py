@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from invoke import task
 
-from libs.common import get_env, service_domain, validate_env
+from libs.core.environ import get_env, service_domain, validate_env
 from libs.console import (
     env_vars,
     error,
@@ -52,8 +52,8 @@ from libs.deploy.sync_pipeline import (
     SyncPipeline,
     SyncResult,
 )
-from libs.env import get_secrets, verify_vault_token
-from libs.service_facets import (
+from libs.security.store import get_secrets, verify_vault_token
+from libs.core.facets import (
     BackupFacet,
     Exemption,
     ProbeFacet,
@@ -64,7 +64,7 @@ from libs.service_facets import (
 
 if TYPE_CHECKING:
     from invoke import Context
-    from libs.dokploy import DokployClient
+    from libs.deploy.dokploy_client import DokployClient
 
 
 __all__ = [
@@ -113,19 +113,19 @@ class _StackUnobservable(RuntimeError):
 
 
 def discover_services() -> dict[str, str]:
-    from libs.service_registry import _LAYERS as layers
+    from libs.core.registry import _LAYERS as layers
 
     return _discover_services_pure(layers)
 
 
 def load_deployer_class(service_id: str) -> type[Deployer] | None:
-    from libs.service_registry import _LAYERS as layers
+    from libs.core.registry import _LAYERS as layers
 
     return _load_deployer_class_pure(service_id, layers=layers, base_class=Deployer)
 
 
 def _dependency_items_from_disk(compose_path: str) -> list[tuple[str, bytes]]:
-    from libs.deploy_dependencies import extra_dependency_globs, service_key_from_path
+    from libs.deploy.dependencies import extra_dependency_globs, service_key_from_path
 
     key = service_key_from_path(compose_path)
     globs = extra_dependency_globs(key) if key else ()
@@ -343,7 +343,7 @@ class Deployer:
         ``env`` — see secrets_backend(); threaded through so this stays correct
         when called for an env other than the process's own ``ENV``.
         """
-        from libs import secrets_registry
+        from libs.security import registry as secrets_registry
 
         e = cls.env()
         effective_env = env or e.get("ENV", "production")
@@ -360,7 +360,7 @@ class Deployer:
         if not cls.secret_key:
             return True
 
-        from libs.env import VaultSecrets, generate_password
+        from libs.security.store import VaultSecrets, generate_password
 
         secrets_backend = cls.secrets_backend(env=effective_env)
 
@@ -389,7 +389,7 @@ class Deployer:
         When a value changed, the vault-agent and the app containers are restarted so the
         rendered file and the processes that sourced it agree (RC4, #640).
         """
-        from libs import secrets_registry
+        from libs.security import registry as secrets_registry
         from libs.security import supply as secrets_supply
 
         e = cls.env()
@@ -556,8 +556,8 @@ class Deployer:
     @classmethod
     def composing(cls, c: "Context", env_vars: dict[str, str]) -> str:
         """Deploy via Dokploy API using GitHub provider. Returns composeId."""
-        from libs.dokploy import get_dokploy, ensure_project
-        from libs.const import GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH
+        from libs.deploy.dokploy_client import get_dokploy, ensure_project
+        from libs.core.constants import GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH
 
         # Resolve branch dynamically to support deploying non-main commits/tags
         branch = cls._checkout_ref() or GITHUB_BRANCH
@@ -821,7 +821,7 @@ class Deployer:
     @classmethod
     def _stack_on_host(cls, c: "Context", compose_id: str) -> _HostStack | None:
         """Where the compose's containers run; None (with a warning) without VPS_HOST."""
-        from libs.dokploy import get_dokploy
+        from libs.deploy.dokploy_client import get_dokploy
 
         e = cls.env()
         on_host = cls._on_host(c, e)
@@ -854,8 +854,8 @@ class Deployer:
         containers restarted; raises when the host cannot list or restart them —
         the caller fails the sync, since a retry skips the now-unchanged stack.
         """
-        from libs.deploy_dependencies import service_key_from_path
-        from libs.service_registry import restart_after_containers
+        from libs.deploy.dependencies import service_key_from_path
+        from libs.core.registry import restart_after_containers
 
         service_id = service_key_from_path(cls.compose_path or "")
         if not service_id:
@@ -970,7 +970,7 @@ class Deployer:
         interval_seconds: int | None = None,
     ) -> None:
         """Trigger deploy and fail fast if Dokploy does not record runtime work."""
-        from libs.deploy_queue import deployment_start_epoch
+        from libs.deploy.queue import deployment_start_epoch
         from libs.deploy.dokploy_adapter import (
             deploy_compose_with_record_check as _deploy_check,
         )
@@ -1003,7 +1003,7 @@ class Deployer:
 
     @staticmethod
     def _started_before_trigger(deployment: dict, floor_epoch: float) -> bool:
-        from libs.deploy_queue import deployment_start_epoch
+        from libs.deploy.queue import deployment_start_epoch
         from libs.deploy.dokploy_adapter import started_before_trigger
 
         return started_before_trigger(
@@ -1026,7 +1026,7 @@ class Deployer:
         *,
         min_started_at: float | None = None,
     ) -> bool:
-        from libs.deploy_queue import deployment_start_epoch
+        from libs.deploy.queue import deployment_start_epoch
         from libs.deploy.dokploy_adapter import wait_for_new_deployment_record
 
         return wait_for_new_deployment_record(
@@ -1061,7 +1061,7 @@ class Deployer:
 
     @classmethod
     def _find_remote_compose(cls, e: dict[str, str]) -> dict | None:
-        from libs.dokploy import get_dokploy
+        from libs.deploy.dokploy_client import get_dokploy
         from libs.deploy.dokploy_adapter import find_remote_compose
 
         client = get_dokploy()
@@ -1217,7 +1217,7 @@ class Deployer:
     @classmethod
     def service_id_from_path(cls) -> str | None:
         """Derive service identity key from compose_path."""
-        from libs.deploy_dependencies import service_key_from_path
+        from libs.deploy.dependencies import service_key_from_path
 
         return service_key_from_path(cls.compose_path)
 

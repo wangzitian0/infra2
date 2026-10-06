@@ -28,10 +28,10 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from libs.deploy_env_config import PREVIEW_KINDS
+from libs.deploy.env_config import PREVIEW_KINDS
 
-from libs.service_identity import DOCKER_LABEL_PREFIX, ServiceIdentity
-from libs.service_registry import resolve_container_host
+from libs.core.service_identity import DOCKER_LABEL_PREFIX, ServiceIdentity
+from libs.core.registry import resolve_container_host
 
 # (substring, human-readable cause) — ordered, first match wins. These are the
 # concrete breakdown signals seen in the finance_report outage + adjacent ones.

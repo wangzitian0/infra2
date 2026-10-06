@@ -12,10 +12,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from libs import secrets_registry
+from libs.security import registry as secrets_registry
 from libs.deploy.deployer import Deployer
 from libs.security import supply as supply_module
-from libs.service_facets import SecretsFacet
+from libs.core.facets import SecretsFacet
 from libs.tests.docker_host import DockerHost
 
 AGENT = "platform-dummy-vault-agent-staging"

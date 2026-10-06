@@ -52,7 +52,7 @@ from pathlib import Path
 
 from libs.deploy.enum_sources import ENUM_SOURCES
 from libs.deploy.in_service import container_names
-from libs.service_registry import REPO_ROOT
+from libs.core.constants import REPO_ROOT
 
 _SCHEMA_CHECK_SCRIPT = (
     Path(__file__).resolve().parents[2] / "tools" / "pre_deploy_schema_check.py"

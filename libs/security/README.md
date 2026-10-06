@@ -13,7 +13,9 @@
 
 | Module | Role | Key Exports |
 |--------|------|-------------|
-| `store.py` | Secret resolution & token generation | `VaultSecrets`, `resolve_vault_token()`, `generate_secret_token()` |
+| `store.py` | 1Password and Vault stores, token helpers (was `libs/env.py`, #955) | `OpSecrets`, `VaultSecrets`, `get_secrets()`, `verify_vault_token()`, `generate_secret_token()`, `resolve_vault_token()` |
+| `registry.py` | Which services take which secrets, and from which manifests (was `libs/secrets_registry.py`) | `SERVICES`, `Service`, `lookup()`, `merged_manifest()`, `store_keys()` |
+| `app_manifests.py` | App environment manifests read at the pinned submodule commits (was `libs/app_manifests.py`) | `fetch_missing()`, `CACHE_DIR` |
 | `supply.py` | Manifest secret supply pipeline | `apply_secret_supply()`, `create_secrets_resolver()`, `SupplyReport` |
 | `prune.py` | Orphan KV key detection & cleanup | `prune_orphan_secrets()` |
 

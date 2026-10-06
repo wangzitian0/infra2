@@ -53,7 +53,7 @@ from libs.deploy_contract import (
     validate_ref_form,
 )
 from libs.deploy_env_config import CANARY_SLOT, env_config
-from libs.service_registry import domain_for_service
+from libs.core.registry import domain_for_service
 from libs.deploy.promote import deploy as _deploy_fixed
 from libs.deploy.promote import model_overrides_from_env
 from libs.deploy.preview import _validate_domain
@@ -1127,7 +1127,7 @@ def main(argv: list[str] | None = None) -> int:
                 alias_value = CANARY_SLOT
             else:
                 alias_value = args.version_ref
-            from libs.dokploy import get_dokploy
+            from libs.deploy.dokploy_client import get_dokploy
 
             # Reject a malformed domain before it reaches the Dokploy host string — the
             # same guard the preview backend applies on `up` (whitespace/empty would
@@ -1174,7 +1174,7 @@ def main(argv: list[str] | None = None) -> int:
         client = None
         if not service_spec(args.service).iac_pinned:
             # Imported lazily so importing the module needs no Dokploy creds.
-            from libs.dokploy import get_dokploy
+            from libs.deploy.dokploy_client import get_dokploy
 
             client = get_dokploy(host=f"cloud.{infra_domain()}")
         result = deploy_v2(

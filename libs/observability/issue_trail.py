@@ -45,7 +45,7 @@ from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from libs.scheduler_peer_liveness import BOUND_CAP_ENV
+from libs.observability.scheduler_peer_liveness import BOUND_CAP_ENV
 
 TITLE_PREFIX = "ops-checks watchdog is red: "
 #: An existing label ("A failure in a running environment."), so creation never

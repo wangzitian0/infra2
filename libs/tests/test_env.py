@@ -298,7 +298,7 @@ class TestWithoutTheSdk:
     that libs.deploy.promote degrades on (#649 incident)."""
 
     def test_op_secrets_degrade(self, monkeypatch, capsys):
-        import libs.env as env
+        import libs.security.store as env
 
         monkeypatch.setattr(env, "OnePasswordBackend", None)
         op = env.OpSecrets()
@@ -307,7 +307,7 @@ class TestWithoutTheSdk:
         assert "infra2-sdk" in capsys.readouterr().err
 
     def test_vault_secrets_raise_connection_error(self, monkeypatch):
-        import libs.env as env
+        import libs.security.store as env
 
         monkeypatch.setattr(env, "VaultKvBackend", None)
         vault = env.VaultSecrets(path="platform/production/postgres", token="t")

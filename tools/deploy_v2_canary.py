@@ -69,7 +69,7 @@ def canary_services() -> list[str]:
     closed on an empty set: a scheduled canary that silently probes nothing is
     worse than a red one.
     """
-    from libs.service_registry import service_attrs
+    from libs.core.registry import service_attrs
 
     services = sorted(
         service_id
@@ -378,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     # Imported lazily so importing the module (and its unit tests) needs no Dokploy creds.
-    from libs.dokploy import get_dokploy
+    from libs.deploy.dokploy_client import get_dokploy
 
     client = get_dokploy(host=f"cloud.{infra_domain()}")
     # --service = explicit single-service override (#538); default = every
