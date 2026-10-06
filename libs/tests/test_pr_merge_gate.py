@@ -212,11 +212,11 @@ def test_event_policy_waits_for_a_review_of_the_head_then_settles_briefly():
     fresh = _facts(
         head_sha=head,
         last_push_at=NOW - 60,
-        reviews=(("copilot-pull-request-reviewer", head, NOW - 100),),
+        reviews=(("copilot-pull-request-reviewer", head, NOW - 40),),
     )
     settling = gate.evaluate(fresh, now=NOW, policy="event")
-    assert not settling.ready and settling.quiet_remaining_seconds == 80
-    assert gate.evaluate(fresh, now=NOW + 80, policy="event").ready
+    assert not settling.ready and settling.quiet_remaining_seconds == 20
+    assert gate.evaluate(fresh, now=NOW + 20, policy="event").ready
     # a human review alone does not count as the automated pass the rule waits for
     human = _facts(head_sha=head, reviews=(("wangzitian0", head, NOW - 600),))
     assert not gate.evaluate(human, now=NOW, policy="event").ready
