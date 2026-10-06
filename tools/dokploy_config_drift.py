@@ -6,16 +6,22 @@ Drift uses the separately persisted, versioned ``IAC_SOURCE_CONFIG_HASH`` plus
 ``IAC_DEPLOY_REF``. Both are reconstructible from an immutable release without granting CI
 access to runtime secrets.
 
-How the expected hash is computed WITHOUT a worktree (main-worktree only):
+How the expected hash is computed: by the release's OWN code (#1071). ``scan`` runs this
+module of each compared commit (the production marker and every deployed ref) in a
+temporary detached worktree of that commit, without credentials, and removes it after.
+Only a commit on main runs. Inside that run:
   1. Enumerate WHICH files feed a service's hash using the REAL deploy enumeration on disk
      (_compose_artifact_files + the declared dependency globs) — no re-implementation, so the
      file set can't diverge from the deploy.
-  2. Read those files' CONTENT at the target ref via ``git cat-file --batch`` (in memory).
+  2. Read those files' CONTENT at the ref via ``git cat-file --batch`` (in memory).
   3. Feed (compose, env, items) to libs.deploy.deployer.config_hash_from_items — the SAME pure function
      compute_local_config_hash uses, now path-independent (so a ref's content reproduces the
      iac-runner's hash exactly).
+Main's code gives a different hash whenever main changed the enumeration or the env plane
+after the release. When a release run fails, the row falls back to this checkout's formula
+and its note says so.
 
-READ-ONLY (git object reads + Dokploy GETs; no deploy, no writes). REPORT-ONLY (exit 0;
+READ-ONLY (git object reads, temporary worktrees, Dokploy GETs; no deploy, no writes). REPORT-ONLY (exit 0;
 ``--strict`` exits 1 on real drift for opt-in CI). ``--self-check`` proves the git path matches
 disk at HEAD before trusting any tag comparison.
 """
@@ -172,18 +178,45 @@ for sid in json.loads(sys.argv[1]):
         out[sid] = {"hash": h, "missing": list(missing)}
     except Exception as exc:
         out[sid] = {"error": f"{type(exc).__name__}: {exc}"}
-print("REF_HASHES " + json.dumps(out))
+print("REF_HASHES " + json.dumps({"version": d.SOURCE_CONFIG_HASH_VERSION, "services": out}))
 """
+# One release run must not use most of the job's 15 minutes (ops-checks.yml).
+REF_RUN_TIMEOUT_S = 120
+# The release run needs the config env plane, never a credential. The plane is
+# secret-independent by design (``source_config_env_base``).
+_SECRET_ENV = re.compile(r"TOKEN|SECRET|PASSWORD|PRIVATE|WEBHOOK|API_KEY|_KEY$", re.I)
+
+
+def _release_env() -> dict[str, str]:
+    env = {k: v for k, v in os.environ.items() if not _SECRET_ENV.search(k)}
+    env["DEPLOY_ENV"] = "production"
+    return env
+
+
+def _on_main(commit: str, root: Path) -> bool:
+    """True when ``commit`` is on origin/main (or main). Only that code may run here."""
+    for base in ("origin/main", "main"):
+        proc = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", commit, base],
+            cwd=root,
+            capture_output=True,
+        )
+        if proc.returncode == 0:
+            return True
+    return False
 
 
 def hashes_with_ref_code(
     ref: str, service_ids: list[str], *, root: Path | None = None
-) -> dict[str, dict]:
-    """{service id: {"hash", "missing"} | {"error"}} computed by ``ref``'s own code.
+) -> dict:
+    """``{"version", "services": {id: {"hash", "missing"} | {"error"}}}`` by ``ref``'s own code.
 
-    The code runs in a temporary detached worktree of ``ref``, which is removed after.
-    Raises when the worktree or the script fails as a whole."""
+    The code runs in a temporary detached worktree of ``ref``, which is removed after,
+    without credentials in its environment. Raises when ``ref`` is not on main, or when
+    the worktree or the run fails as a whole."""
     root = root or ROOT
+    if not _on_main(ref, root):
+        raise RuntimeError(f"{ref} is not on main; its code does not run here")
     with tempfile.TemporaryDirectory(prefix="config-drift-") as tmp:
         tree = Path(tmp) / "tree"
         subprocess.run(
@@ -198,8 +231,8 @@ def hashes_with_ref_code(
                 cwd=tree,
                 capture_output=True,
                 text=True,
-                timeout=600,
-                env={**os.environ, "DEPLOY_ENV": "production"},
+                timeout=REF_RUN_TIMEOUT_S,
+                env=_release_env(),
             )
         finally:
             subprocess.run(
@@ -218,11 +251,41 @@ def hashes_with_ref_code(
 
 
 class _ReleaseHashes:
-    """Expected identities by each release's own code (#1071), one checkout per commit."""
+    """Expected identities by each release's own code (#1071), one checkout per commit.
+
+    A service whose release run fails gets this checkout's formula instead, and
+    ``fallbacks`` keeps the reason so the report shows it."""
 
     def __init__(self, service_ids: list[str]) -> None:
         self.service_ids = list(service_ids)
         self.by_commit: dict[str, dict | None] = {}
+        self.fallbacks: dict[str, str] = {}
+        self.disabled = ""
+
+    def _run(self, ref: str) -> dict | None:
+        try:
+            commit = _commit_at_ref(ref)
+        except Exception:  # noqa: BLE001 - an unresolvable ref fails below, loudly
+            commit = ref
+        if commit not in self.by_commit:
+            if self.disabled:
+                self.by_commit[commit] = None
+            else:
+                try:
+                    self.by_commit[commit] = hashes_with_ref_code(
+                        commit, self.service_ids
+                    )
+                except Exception as exc:  # noqa: BLE001 - fall back, and say so
+                    reason = f"the code at {ref} is unavailable ({exc})"
+                    print(f"config drift: {reason}", file=sys.stderr)
+                    if isinstance(exc, subprocess.TimeoutExpired):
+                        self.disabled = reason
+                    self.by_commit[commit] = None
+        return self.by_commit[commit]
+
+    def version(self, ref: str) -> str:
+        run = self._run(ref)
+        return (run or {}).get("version") or SOURCE_CONFIG_HASH_VERSION
 
     def expected(
         self,
@@ -232,23 +295,17 @@ class _ReleaseHashes:
         ref: str,
         env_vars: dict[str, str],
     ) -> tuple[str | None, list[str]]:
-        try:
-            commit = _commit_at_ref(ref)
-        except Exception:  # noqa: BLE001 - an unresolvable ref fails below, loudly
-            commit = ref
-        if commit not in self.by_commit:
-            try:
-                self.by_commit[commit] = hashes_with_ref_code(commit, self.service_ids)
-            except Exception as exc:  # noqa: BLE001 - fall back to this checkout's formula
-                print(
-                    f"config drift: the code at {ref} is unavailable ({exc}); "
-                    "using this checkout's formula",
-                    file=sys.stderr,
-                )
-                self.by_commit[commit] = None
-        result = (self.by_commit[commit] or {}).get(sid) or {}
+        run = self._run(ref)
+        result = ((run or {}).get("services") or {}).get(sid) or {}
         if result.get("hash"):
             return result["hash"], list(result.get("missing") or [])
+        why = result.get("error") or (
+            self.disabled or f"the code at {ref} gave no hash"
+        )
+        reason = f"this checkout's formula at {ref}: {why}"
+        if sid not in self.fallbacks:
+            print(f"config drift: {sid}: {reason}", file=sys.stderr)
+        self.fallbacks[sid] = reason
         return expected_hash_at(dep, c, ref, env_vars)
 
 
@@ -440,7 +497,7 @@ def scan(tag: str) -> list[Row]:
                 )
             )
             continue
-        versioned_expected = f"{SOURCE_CONFIG_HASH_VERSION}:{exp}" if exp else None
+        versioned_expected = f"{release.version(tag)}:{exp}" if exp else None
         if missing:
             rows.append(
                 Row(
@@ -470,7 +527,8 @@ def scan(tag: str) -> list[Row]:
                 )
             )
             continue
-        if not identity.source_hash.startswith(f"{SOURCE_CONFIG_HASH_VERSION}:"):
+        deployed_version = release.version(identity.deploy_ref)
+        if not identity.source_hash.startswith(f"{deployed_version}:"):
             rows.append(
                 Row(
                     sid,
@@ -514,9 +572,7 @@ def scan(tag: str) -> list[Row]:
             )
             continue
         provenance_identity = (
-            f"{SOURCE_CONFIG_HASH_VERSION}:{provenance_hash}"
-            if provenance_hash
-            else None
+            f"{deployed_version}:{provenance_hash}" if provenance_hash else None
         )
         if provenance_missing or provenance_identity != identity.source_hash:
             rows.append(
@@ -553,6 +609,10 @@ def scan(tag: str) -> list[Row]:
                     deployed_ref=identity.deploy_ref,
                 )
             )
+    for row in rows:
+        reason = release.fallbacks.get(row.service)
+        if reason:
+            row.note = f"{row.note}; {reason}" if row.note else reason
     return rows
 
 
@@ -572,6 +632,7 @@ def format_report(tag: str, rows: list[Row]) -> str:
             f"🔴 DRIFT {r.service}: deployed≠release "
             f"(expected={r.expected}@{r.expected_ref} "
             f"deployed={r.deployed}@{r.deployed_ref})"
+            + (f" — {r.note}" if r.note else "")
         )
     for r in errors:
         # Surface tool/runtime failures loudly — a silently-skipped service must not let the run
