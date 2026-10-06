@@ -15,7 +15,7 @@ from urllib.error import HTTPError, URLError
 
 import pytest
 
-from libs import scheduler_peer_liveness as peer
+from libs.observability import scheduler_peer_liveness as peer
 
 NOW = datetime(2026, 9, 17, 2, 30, tzinfo=UTC)
 WORKFLOW = f"/repos/{peer.PEER_REPOSITORY}/actions/workflows/{peer.PEER_WORKFLOW}"

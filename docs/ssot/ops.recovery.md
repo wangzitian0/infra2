@@ -134,7 +134,7 @@ uv run python tools/backup_verification.py --manifest /path/to/manifest.json --j
 
 ### SOP-005: 生成并上传 off-host 备份
 
-备份 runner 读取各服务 `BackupFacet` 声明派生的清单（[`libs/backup/`](../../libs/backup/README.md) `libs/backup/verification.py::load_backup_inventory` / 兼容门面 `libs/backup_verification.py`，#542），
+备份 runner 读取各服务 `BackupFacet` 声明派生的清单（[`libs/backup/`](../../libs/backup/README.md) `libs/backup/verification.py::load_backup_inventory`，#542），
 为每个登记的 `data_path` 创建 archive、计算 SHA256，并通过主机上的 `rclone`
 remote 上传到 off-host storage。
 

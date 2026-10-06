@@ -3,7 +3,7 @@
 
 The last step of the ops-checks ``watchdog`` job. It reads the verdict file the
 earlier steps appended to (``INFRA2_WATCHDOG_VERDICTS_PATH``) and, per
-``libs/watchdog_issue_trail.py``, opens or comments on one issue per red paging
+``libs/observability/issue_trail.py``, opens or comments on one issue per red paging
 check and closes the issues of checks that are green again. Report-only checks
 are never recorded, so they never open issues (#908); when every step recorded
 completely, an open issue whose check nobody recorded is closed as retired.
@@ -35,8 +35,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.scheduler_peer_liveness import BOUND_CAP_ENV  # noqa: E402
-from libs.watchdog_issue_trail import (  # noqa: E402
+from libs.observability.scheduler_peer_liveness import BOUND_CAP_ENV  # noqa: E402
+from libs.observability.issue_trail import (  # noqa: E402
     OFF,
     VERDICTS_ENV,
     GitHubIssues,

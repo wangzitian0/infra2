@@ -6,7 +6,7 @@ resident/continuous watching:
 
   1. the probe loop (INFRA_PROBE_SPECS / PUBLIC_ROUTE_PROBE_SPECS), alerting
      through the internal bridge;
-  2. registered watcher plugins (libs/resident_watchers.py) — the container
+  2. registered watcher plugins (libs/observability/watchers/resident.py) — the container
      breakdown watch and the deploy-queue guard, formerly two separate compose
      sidecars — invoked once per loop iteration with their own per-watcher
      state and self-paced intervals.
@@ -15,7 +15,7 @@ The compose healthcheck (state-file freshness) covers the WHOLE loop: a hung
 probe cycle OR a hung watcher stalls the next state write, the file goes
 stale, and the container flips unhealthy -> Dokploy restarts it (#163/#475
 monitor-the-monitor; the standalone sidecars had no healthcheck at all).
-See libs/resident_watchers.py for the plugin surface + timing budget.
+See libs/observability/watchers/resident.py for the plugin surface + timing budget.
 """
 # alert-delivery-exempt: the probe ENGINE — delivers on behalf of every registered internal probe signal (per-spec, not per-module)
 
@@ -34,7 +34,7 @@ from typing import NamedTuple
 from urllib.request import Request, urlopen
 
 from libs.alerting import is_report_only_environment, mark_report_payload
-from libs.infra_probes import (
+from libs.observability.probes import (
     HTTP_PROBE_HEADERS,
     ProbeResult,
     build_probe_alert_payload,
@@ -170,7 +170,7 @@ def _configure_logging() -> None:
 
     The root stays at WARNING so nothing else in the process becomes chatty; the two
     watcher loggers are raised to INFO explicitly. httpx/httpcore are pinned to WARNING
-    in libs.container_breakdown_watch, which polls the Docker socket every minute.
+    in libs.observability.watchers.breakdown_watch, which polls the Docker socket every minute.
     """
     # force=True: basicConfig is a no-op once the root logger has any handler, so
     # without it a library that configured logging first would leave the root level and
@@ -272,8 +272,8 @@ def _build_watchers() -> list:
     """Construct the registered resident watcher plugins (#543).
 
     A module-level seam so tests can stub the watcher set; the real registry
-    lives in libs/resident_watchers.build_watchers."""
-    from libs.resident_watchers import build_watchers
+    lives in libs/observability/watchers/resident.build_watchers."""
+    from libs.observability.watchers.resident import build_watchers
 
     return build_watchers()
 

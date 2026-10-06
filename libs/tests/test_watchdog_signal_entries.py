@@ -19,7 +19,7 @@ import pytest
 import yaml
 
 from libs.service_registry import service_attrs, service_id_for_component
-from libs.watchdog_signal_entries import render_internal_signal_entries
+from libs.observability.signal_entries import render_internal_signal_entries
 
 ROOT = Path(__file__).resolve().parents[2]
 FROZEN = Path(__file__).parent / "fixtures/watchdog_internal_signals_frozen.yaml"

@@ -4,7 +4,7 @@ Validates the user acceptance criterion:
   "手动 kill 有告警。"
 
 Covers both defense lines:
-1. libs.container_breakdown: In-band container breakdown watch running in the resident
+1. libs.observability.breakdown: In-band container breakdown watch running in the resident
    probe runner, detecting exited (non-zero) or dead containers and generating the
    Alertmanager/SigNoz Feishu card payload with log tail reason.
 2. tools.out_of_band_watchdog: Out-of-band SSH watchdog inspecting Docker health,
@@ -13,7 +13,7 @@ Covers both defense lines:
 
 from __future__ import annotations
 
-from libs.container_breakdown import (
+from libs.observability.breakdown import (
     broken_state,
     find_breakdown_containers,
     build_breakdown_alert_payload,

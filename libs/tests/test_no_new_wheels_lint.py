@@ -69,7 +69,7 @@ def test_exempt_marker_with_reason_passes(tmp_path: Path) -> None:
     ok = tmp_path / "tools" / "engine.py"
     ok.write_text(
         "# alert-delivery-exempt: the delivery engine itself\n"
-        "from libs.infra_probes import post_alert_bridge_payload\n"
+        "from libs.observability.probes import post_alert_bridge_payload\n"
         "post_alert_bridge_payload({})\n"
     )
     assert lint_python_callsites(root=tmp_path, signals=set()) == []

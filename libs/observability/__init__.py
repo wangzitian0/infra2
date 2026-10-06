@@ -6,12 +6,12 @@ from __future__ import annotations
 #
 # 此前这里是一串 eager import，于是 `import libs.observability` 会连带拉起
 # `probes.py`，而后者无条件 `from infra2_sdk.runtime import ...`。后果：
-# `libs/watchdog_issue_trail.py` 搬迁后改为经本包取符号，**从纯 stdlib 变成了需要
+# `libs/observability/issue_trail.py` 搬迁后改为经本包取符号，**从纯 stdlib 变成了需要
 # infra2-sdk**——而 `ops-checks.yml` 的 watchdog job 只装 `httpx python-dotenv rich`。
 #
 # 实测（屏蔽 infra2_sdk 后导入）：
-#   搬迁前 `libs.watchdog_issue_trail` → OK
-#   搬迁后 `libs.watchdog_issue_trail` → ImportError: No module named 'infra2_sdk'
+#   搬迁前 `libs.observability.issue_trail` → OK
+#   搬迁后 `libs.observability.issue_trail` → ImportError: No module named 'infra2_sdk'
 #
 # 这条链的终点是 out-of-band watchdog——**别的都挂了之后来叫人的那个**，而且
 # 它 schedule-only，没有任何 PR 会触发它，所以这次回归是静默的。

@@ -142,8 +142,8 @@ def test_facet_reader_fails_closed_on_wrong_constructor_or_shape() -> None:
 
 def test_probe_facet_spec_line_matches_probe_specs_format() -> None:
     """spec_line renders the exact 8-field `name|kind|target|expected|severity|
-    timeout|depends_on|service_id` line libs.infra_probes.parse_probe_specs reads."""
-    from libs.infra_probes import parse_probe_specs
+    timeout|depends_on|service_id` line libs.observability.probes.parse_probe_specs reads."""
+    from libs.observability.probes import parse_probe_specs
 
     facet = ProbeFacet(
         name="minio-internal-http",
