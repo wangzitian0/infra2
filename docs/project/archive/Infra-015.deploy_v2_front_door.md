@@ -42,7 +42,7 @@ The four axes are orthogonal; completeness is proven in
 | app, preview | `preview_lifecycle` | the `preview/*` types |
 | **`iac_pinned`** (all non-app) | **`iac_runner` `/deploy` webhook** | via `libs/deploy/iac_runner_client`, HMAC-SHA256 signed; `version_ref` unused |
 
-`iac_pinned` is **derived** from `libs/service_registry` (Infra-013), never a
+`iac_pinned` is **derived** from `libs/core/registry` (Infra-013), never a
 hand-copied list — adding a platform service cannot drift the deploy registry.
 
 ## Trigger model (SSOT §4.6 — the corrected model)

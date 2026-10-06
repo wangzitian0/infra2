@@ -36,7 +36,7 @@ class AppDeployer(Deployer):
     # shared-platform service — override the shared INTERNAL_DOMAIN entirely so
     # its compose's ${INTERNAL_DOMAIN} Traefik Host() rules resolve under
     # truealpha.club instead of zitian.party. Read by
-    # libs.deploy.app_deploy_request.make_plan via libs.service_registry.domain_for_service.
+    # libs.deploy.app_deploy_request.make_plan via libs.core.registry.domain_for_service.
     domain = "truealpha.club"
     service_port = 3000
     service_name = "web"

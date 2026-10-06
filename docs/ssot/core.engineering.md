@@ -31,7 +31,7 @@
 - 要找规范/权威定义 → [SSOT](README.md)；工程与文档准则在本文，合流门禁在
   [ops.merge-gate.md](ops.merge-gate.md)
 - 要找当前任务 → [Project](../project/README.md)
-- 要改监控/告警目标 → 派生自服务注册表（`libs/service_registry.py` + 各 `deploy.py` 的
+- 要改监控/告警目标 → 派生自服务注册表（`libs/core/registry.py` + 各 `deploy.py` 的
   `prod_only`），**禁止**手维护与 IaC 平行的服务清单。一致性校验见
   [`tools/watchdog_consistency_audit.py`](../../tools/watchdog_consistency_audit.py)；
   信号真源 [`watchdog-signals.yaml`](watchdog-signals.yaml)。

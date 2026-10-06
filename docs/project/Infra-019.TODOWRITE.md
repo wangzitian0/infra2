@@ -654,7 +654,7 @@ harness 发现的缺口该由 harness 去提，还是记给 App 自己排期。
   其 Test Anchor 正是 `test_postgresql.py`，`Used by` 正是这个 e2e README。链接是对的，是锚点后来烂了。
 - 实际存在三个 Postgres 实例、两类主体：`platform-postgres`（无 `POSTGRES_DB`）、
   `finance_report-postgres`（`POSTGRES_DB: finance_report`）、`truealpha-postgres`（`POSTGRES_DB: truealpha`），
-  在 `libs/service_registry.py:54-57` 注册为不同服务。
+  在 `libs/core/registry.py:54-57` 注册为不同服务。
 - 删除发生在 `a3e546e`（PR #435），理由是「never built，0 code references」。该理由对**文档键**成立，
   对**主体**不成立——删除当时 `finance_report/finance_report/01.postgres/` 已经存在。那次扫描找的是
   字符串 `db.business_pg`，因此完全漏掉了基础设施本身。

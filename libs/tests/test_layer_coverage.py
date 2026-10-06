@@ -1,5 +1,5 @@
 """Infra-013 follow-up (truealpha CI blind spot, #503): every layer registered in
-`libs.service_registry._LAYERS` must be covered by infra-ci's PR/push path filters
+`libs.core.registry._LAYERS` must be covered by infra-ci's PR/push path filters
 and by its ruff lint scope. A layer that exists in the registry but is missing from
 the workflow silently skips CI/lint for that layer's changes — this test fails
 closed on that gap instead of relying on someone noticing by hand."""
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 
-from libs.service_registry import _LAYERS
+from libs.core.registry import _LAYERS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INFRA_CI_PATH = REPO_ROOT / ".github/workflows/infra-ci.yml"
