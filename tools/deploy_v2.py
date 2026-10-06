@@ -36,6 +36,7 @@ from libs.iac_runner_client import (
     STATUS_POLL_BACKOFF,
     STATUS_POLL_INITIAL_SECONDS,
     STATUS_POLL_MAX_SECONDS,
+    RunnerLostDeploymentError,
     poll_platform_deploy_status,
     status_poll_attempts,
     trigger_platform_deploy,
@@ -243,32 +244,22 @@ def _deploy_platform(
         # iac_ref names an app release.
         pinned_ref = None
     started = time.monotonic()
-    response = trigger_platform_deploy(
+    response, final = _trigger_and_poll(
         env=env,
         ref=iac_sha,
         services=[service],
-        base_url=url,
+        url=url,
         secret=sec,
         triggered_by=triggered_by,
-        wait=False,
+        wait=wait,
+        timeout=timeout,
+        started=started,
         version_ref=pinned_ref,
     )
     detail = {"env": env, "ref": iac_sha, "services": [service], "iac_runner": response}
     if pinned_ref:
         detail["version_ref"] = pinned_ref
     if wait:
-        final = poll_platform_deploy_status(
-            env=env,
-            ref=iac_sha,
-            services=[service],
-            deployment_id=response.get("deployment_id"),
-            base_url=url,
-            secret=sec,
-            triggered_by=triggered_by,
-            attempts=_poll_attempts_for_timeout(timeout),
-            version_ref=pinned_ref,
-            **_STATUS_POLL_SCHEDULE,
-        )
         detail["iac_runner_final"] = final
         status = str(final.get("status", "")).lower()
         _progress(f"iac-runner sync of {service} to {env}", status, started)
@@ -316,6 +307,91 @@ def _progress(what: str, outcome: str, started: float) -> None:
     )
 
 
+# A staging deploy re-submits a request the runner lost once; a production deploy never does
+# (#666). Two submissions in all: the first, and the one re-submit.
+_STAGING_SUBMISSIONS = 2
+
+
+def _trigger_and_poll(
+    *,
+    env: str,
+    ref: str,
+    services: list[str],
+    url: str,
+    secret: str,
+    triggered_by: str,
+    wait: bool,
+    timeout: int,
+    started: float,
+    version_ref: str | None = None,
+    action: str | None = None,
+) -> tuple[dict, dict | None]:
+    """Fire the signed ``/deploy`` request and, when ``wait``, poll it to a terminal status.
+
+    The one place deploy_v2 sends a runner request and awaits it, so the lost-request
+    rule below holds on every path (#666). Returns ``(trigger response, final status)``;
+    the final status is ``None`` when ``wait`` is false.
+
+    A runner recreated between the request and the first poll has no record of the
+    deploy (:class:`RunnerLostDeploymentError`). The runner de-duplicates a repeated
+    ``/deploy``, and a sync of an unchanged configuration is a no-op (SSOT ops.pipeline
+    section 5), so a ``staging`` deploy sends the request once more. A ``production``
+    deploy raises the original error at once: a person decides. A second loss raises with
+    both deployment ids. Every other error (a timeout, a failed deploy, a bad argument)
+    passes through, as the runner may still hold that deploy.
+    """
+    runner_args = {
+        key: value
+        for key, value in (("version_ref", version_ref), ("action", action))
+        if value is not None
+    }
+    submissions = _STAGING_SUBMISSIONS if env == "staging" else 1
+    lost_ids: list[str] = []
+    while True:
+        response = trigger_platform_deploy(
+            env=env,
+            ref=ref,
+            services=services,
+            base_url=url,
+            secret=secret,
+            triggered_by=triggered_by,
+            wait=False,
+            **runner_args,
+        )
+        if not wait:
+            return response, None
+        try:
+            final = poll_platform_deploy_status(
+                env=env,
+                ref=ref,
+                services=services,
+                deployment_id=response.get("deployment_id"),
+                base_url=url,
+                secret=secret,
+                triggered_by=triggered_by,
+                attempts=_poll_attempts_for_timeout(timeout),
+                **runner_args,
+                **_STATUS_POLL_SCHEDULE,
+            )
+        except RunnerLostDeploymentError as lost:
+            lost_ids.append(str(response.get("deployment_id") or "unknown"))
+            if len(lost_ids) >= submissions:
+                if submissions == 1:
+                    raise
+                raise RunnerLostDeploymentError(
+                    f"iac_runner lost the request {len(lost_ids)} times for "
+                    f"{', '.join(services)} to {env} (deployments {', '.join(lost_ids)}); "
+                    f"it was re-submitted once and is not sent again: {lost}"
+                ) from lost
+            _progress(
+                f"iac-runner request for {', '.join(services)} to {env}",
+                "lost; re-submitting once",
+                started,
+            )
+            continue
+        return response, final
+
+
 def _supply_app_secrets(
     service: str,
     env: str,
@@ -346,27 +422,17 @@ def _supply_app_secrets(
         }
     runner_env = "production" if env == "prod" else env
     started = time.monotonic()
-    response = trigger_platform_deploy(
+    response, final = _trigger_and_poll(
         env=runner_env,
         ref=iac_sha,
         services=[service],
-        base_url=url,
+        url=url,
         secret=sec,
         triggered_by=triggered_by,
-        wait=False,
+        wait=True,
+        timeout=timeout,
+        started=started,
         action="secrets-supply",
-    )
-    final = poll_platform_deploy_status(
-        env=runner_env,
-        ref=iac_sha,
-        services=[service],
-        deployment_id=response.get("deployment_id"),
-        base_url=url,
-        secret=sec,
-        triggered_by=triggered_by,
-        attempts=_poll_attempts_for_timeout(timeout),
-        action="secrets-supply",
-        **_STATUS_POLL_SCHEDULE,
     )
     status = str(final.get("status", "")).lower()
     _progress(f"secret supply for {service} in {runner_env}", status, started)
@@ -425,28 +491,19 @@ def _deploy_platform_batch(
     url = runner_url or os.getenv("IAC_RUNNER_URL", "")
     sec = secret or os.getenv("IAC_WEBHOOK_SECRET", "")
     started = time.monotonic()
-    response = trigger_platform_deploy(
+    response, final = _trigger_and_poll(
         env=env,
         ref=iac_sha,
         services=services,
-        base_url=url,
+        url=url,
         secret=sec,
         triggered_by=triggered_by,
-        wait=False,
+        wait=wait,
+        timeout=timeout,
+        started=started,
     )
     detail = {"env": env, "ref": iac_sha, "services": services, "iac_runner": response}
     if wait:
-        final = poll_platform_deploy_status(
-            env=env,
-            ref=iac_sha,
-            services=services,
-            deployment_id=response.get("deployment_id"),
-            base_url=url,
-            secret=sec,
-            triggered_by=triggered_by,
-            attempts=_poll_attempts_for_timeout(timeout),
-            **_STATUS_POLL_SCHEDULE,
-        )
         detail["iac_runner_final"] = final
         status = str(final.get("status", "")).lower()
         _progress(f"iac-runner sync of {', '.join(services)} to {env}", status, started)

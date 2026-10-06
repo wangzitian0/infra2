@@ -215,4 +215,3 @@ def test_service_identity_and_common_env_convergence(monkeypatch) -> None:
     set_deploy_env("production")
     assert os.environ["INFRA_ENVIRONMENT"] == "production"
     assert os.environ["DEPLOY_ENV"] == "production"
-

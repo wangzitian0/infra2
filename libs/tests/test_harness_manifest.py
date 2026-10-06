@@ -90,9 +90,7 @@ def test_committed_inventory_is_valid_and_apps_are_autonomous() -> None:
     # Repo-layer rules projection — it must be declared, not left implicit, so
     # the A-layer discovery matrix in dev_env can assert "expected no Repo
     # layer" from this manifest instead of guessing.
-    sdk = next(
-        repo for repo in manifest["repositories"] if repo["id"] == "infra2-sdk"
-    )
+    sdk = next(repo for repo in manifest["repositories"] if repo["id"] == "infra2-sdk")
     assert sdk.get("rules_layer") == "none"
 
 
@@ -431,4 +429,3 @@ def test_committed_inventory_specifies_contract_tiering() -> None:
     }
     actual = {repo["id"]: repo.get("contract") for repo in manifest["repositories"]}
     assert actual == expected
-

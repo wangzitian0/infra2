@@ -244,7 +244,7 @@ post-merge 部署被 GitHub Actions `concurrency` 串行化,调 IaC Runner 前�
 完成 sync 结果,不只是请求被接受**。操作坐标是 `(env, exact_ref, normalized_service_set)`:服务集合是身份的一部分,
 不是日志附属字段;同一 release 并发部署不同服务不得互相命中 cache / in-flight / status。
 不走公网 Cloudflare 的 `wait=true`(会在 sync 完成前 524)。
-A `not_found` answer that lasts longer than 90 seconds is a lost request; the client fails and names the cause and the deployment id. Only a real status resets the 90-second timer: a gateway error does not.
+A `not_found` answer that lasts longer than 90 seconds is a lost request; the client fails and names the cause and the deployment id. Only a real status resets the 90-second timer: a gateway error does not. A staging deploy re-submits a lost request once; a production deploy fails at once.
 
 ### 5.1 Endpoints
 
@@ -267,6 +267,13 @@ A `not_found` answer that lasts longer than 90 seconds is a lost request; the cl
 
 **为什么 runner bootstrap 走带外**:IaC Runner 不能在自己正被 Actions 轮询的 `/deploy` 请求里重启自己;Actions
 从容器外拥有自更新步骤(更新 Dokploy compose checkout → 重建 runner 镜像 → 等 health → 再 `/deploy`)。
+
+**Idle wait before the recreate (#666):** A recreate drops the runner's in-memory deploy state.
+The script builds the image first. Then it reads `in_flight_deploys` from `/health` every 10 seconds.
+It recreates the runner immediately after the count is 0. The wait has a limit of 900 seconds
+(`IAC_RUNNER_IDLE_WAIT_SECONDS`). At the limit, the script prints a warning and recreates the runner.
+If the count is unknown, the script does not wait. An older runner image does not report the field.
+A deploy that starts between the last poll and the recreate is not protected.
 
 ### 5.3 两平面配置身份 + 幂等性保证
 

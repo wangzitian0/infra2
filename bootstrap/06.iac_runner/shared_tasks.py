@@ -1,6 +1,7 @@
 """
 IaC Runner health check
 """
+
 from invoke import task
 from libs.common import check_service
 

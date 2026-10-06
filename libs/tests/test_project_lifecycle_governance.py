@@ -26,7 +26,7 @@ ACTIVE_SERVICE_PROJECT_DOCS = {
 def test_active_services_not_in_project_archive() -> None:
     """Ensure active services do not have their defining project doc archived."""
     active_services = service_registry.service_attrs()
-    
+
     for service_id, doc_name in ACTIVE_SERVICE_PROJECT_DOCS.items():
         assert service_id in active_services, (
             f"Service {service_id} is expected to be registered in service_registry"
@@ -37,11 +37,15 @@ def test_active_services_not_in_project_archive() -> None:
             f"'{service_id}' is actively registered in service_registry!"
         )
         active_doc = PROJECT_DIR / doc_name
-        assert active_doc.exists(), f"Active doc {active_doc} must exist in docs/project/"
-        
+        assert active_doc.exists(), (
+            f"Active doc {active_doc} must exist in docs/project/"
+        )
+
         # Verify status is Active
         content = active_doc.read_text(encoding="utf-8")
-        status_match = re.search(r"^\s*>?\s*\*\*(?:Status|状态)\*\*:?\s*(.+?)\s*$", content, re.MULTILINE)
+        status_match = re.search(
+            r"^\s*>?\s*\*\*(?:Status|状态)\*\*:?\s*(.+?)\s*$", content, re.MULTILINE
+        )
         assert status_match is not None, f"{doc_name} missing Status header"
         status_val = status_match.group(1).strip()
         assert "Active" in status_val or "In Progress" in status_val, (
@@ -55,8 +59,12 @@ def test_archived_docs_do_not_claim_active_status() -> None:
     assert len(archived_files) > 0, f"No archived docs found in {ARCHIVE_DIR}"
     for archive_file in archived_files:
         content = archive_file.read_text(encoding="utf-8")
-        status_match = re.search(r"^\s*>?\s*\*\*(?:Status|状态)\*\*:?\s*(.+?)\s*$", content, re.MULTILINE)
-        assert status_match is not None, f"Archived file {archive_file.name} missing Status header"
+        status_match = re.search(
+            r"^\s*>?\s*\*\*(?:Status|状态)\*\*:?\s*(.+?)\s*$", content, re.MULTILINE
+        )
+        assert status_match is not None, (
+            f"Archived file {archive_file.name} missing Status header"
+        )
         status_val = status_match.group(1).strip()
         assert not status_val.startswith("Active"), (
             f"Archived file {archive_file.name} has Status: '{status_val}'. "

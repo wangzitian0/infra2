@@ -247,9 +247,7 @@ def test_failed_restore_respects_keep_container(
         ),
     ):
         with pytest.raises(RuntimeError, match="restore failed"):
-            run_rehearsal(
-                manifest_path=str(mock_manifest_file), keep_container=True
-            )
+            run_rehearsal(manifest_path=str(mock_manifest_file), keep_container=True)
 
     assert not any(cmd[:2] == ["docker", "rm"] for cmd in commands)
 

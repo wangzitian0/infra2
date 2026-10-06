@@ -133,19 +133,12 @@ URL_SUBDOMAIN_KEYS = {
     "S3_API_URL": "s3",
 }
 
-# The MINIO_* names stay valid. They default to the S3_* values.
-# They therefore use the same subdomain keys as the S3_* names.
-LEGACY_URL_ALIASES = {
-    "MINIO_CONSOLE_URL": "S3_CONSOLE_URL",
-    "MINIO_API_URL": "S3_API_URL",
-}
-
 
 def _service_host(url_name: str, env_suffix: str, internal_domain: str) -> str:
     """Return the canonical host for a URL name in URL_SUBDOMAIN_KEYS."""
     from libs.common import SERVICE_SUBDOMAINS
 
-    key = URL_SUBDOMAIN_KEYS[LEGACY_URL_ALIASES.get(url_name, url_name)]
+    key = URL_SUBDOMAIN_KEYS[url_name]
     return f"{SERVICE_SUBDOMAINS[key]}{env_suffix}.{internal_domain}"
 
 
@@ -189,14 +182,6 @@ class TestConfig:
     )
     S3_API_URL = os.getenv(
         "S3_API_URL", _default_url("S3_API_URL", ENV_SUFFIX, INTERNAL_DOMAIN)
-    )
-    MINIO_CONSOLE_URL = os.getenv(
-        "MINIO_CONSOLE_URL",
-        S3_CONSOLE_URL,
-    )
-    MINIO_API_URL = os.getenv(
-        "MINIO_API_URL",
-        S3_API_URL,
     )
 
     # App domain (e.g., report.zitian.party, report-pr-47.zitian.party, report-staging.zitian.party)
@@ -245,8 +230,8 @@ class TestConfig:
             "VAULT_URL": cls.VAULT_URL,
             "SSO_URL": cls.SSO_URL,
             "OP_URL": cls.OP_URL,
-            "MINIO_CONSOLE_URL": cls.MINIO_CONSOLE_URL,
-            "MINIO_API_URL": cls.MINIO_API_URL,
+            "S3_CONSOLE_URL": cls.S3_CONSOLE_URL,
+            "S3_API_URL": cls.S3_API_URL,
             "FINANCE_REPORT_URL": cls.FINANCE_REPORT_URL,
             "FINANCE_REPORT_API_URL": cls.FINANCE_REPORT_API_URL,
         }
@@ -278,8 +263,8 @@ class TestConfig:
                     "OP_URL",
                     "VAULT_URL",
                     "SSO_URL",
-                    "MINIO_CONSOLE_URL",
-                    "MINIO_API_URL",
+                    "S3_CONSOLE_URL",
+                    "S3_API_URL",
                 )
             }
             expected_domains["FINANCE_REPORT_URL"] = (

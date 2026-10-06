@@ -117,7 +117,9 @@ def test_every_ssot_cited_e2e_regressions_path_exists_on_disk() -> None:
     referenced = _referenced_proof_paths()
     assert referenced, "sanity: expected at least one SSOT doc to cite e2e_regressions"
     missing = {
-        path: citers for path, citers in referenced.items() if not (ROOT / path).is_file()
+        path: citers
+        for path, citers in referenced.items()
+        if not (ROOT / path).is_file()
     }
     assert not missing, (
         "SSOT docs cite e2e_regressions test paths that do not exist on disk "
