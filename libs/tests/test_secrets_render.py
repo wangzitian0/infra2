@@ -167,16 +167,20 @@ def test_fetch_app_manifests_reads_the_pinned_commit_and_only_fills_gaps(
     ).exists()  # never inside the gitlink path
     # a second pass is a no-op: the pinned cache counts as present
     assert fetch_app_manifests.fetch_missing(paths, root=tmp_path, fetch=fake) == []
-    # a real checkout (its own .git) is the source: nothing is fetched for it
+    # a real checkout (its own .git) is the source for what it holds: nothing fetched
     (tmp_path / "repos/truealpha/.git").write_text("gitdir: x", encoding="utf-8")
     assert (
         fetch_app_manifests.fetch_missing(
-            ["repos/truealpha/apps/y/required-env.generated.json"],
-            root=tmp_path,
-            fetch=fake,
+            ["repos/truealpha/loose.json"], root=tmp_path, fetch=fake
         )
         == []
     )
+    # ...and a file the checkout lacks is still fetched at the pin
+    assert fetch_app_manifests.fetch_missing(
+        ["repos/truealpha/apps/y/required-env.generated.json"],
+        root=tmp_path,
+        fetch=fake,
+    ) == [f"repos/truealpha/apps/y/required-env.generated.json @ {sha[:7]}"]
 
 
 def test_optional_keys_never_use_a_direct_map_access() -> None:

@@ -142,9 +142,10 @@ def cached_path(path: str, *, root: Path = ROOT, commit: str | None = None) -> P
 
 
 def manifest_file(path: str, *, root: Path = ROOT) -> Path:
-    """The file to read for ``path``: a real submodule checkout, else the pinned cache."""
+    """The file to read for ``path``: a real submodule checkout that holds it, else the
+    cache at the pinned commit (a checkout from before the file existed falls back)."""
     submodule = _submodule(path)
-    if submodule is None or is_checkout(root, submodule):
+    if submodule is None or (is_checkout(root, submodule) and (root / path).exists()):
         return root / path
     return cached_path(path, root=root)
 
@@ -181,7 +182,9 @@ def fetch_missing(
     fetched: list[str] = []
     for path in paths:
         submodule = _submodule(path)
-        if submodule is None or is_checkout(root, submodule):
+        if submodule is None or (
+            is_checkout(root, submodule) and (root / path).exists()
+        ):
             continue
         sha = submodule_commit(root, submodule)
         target = cached_path(path, root=root, commit=sha)

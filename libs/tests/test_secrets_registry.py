@@ -109,6 +109,23 @@ def test_a_real_submodule_checkout_is_read_in_place(tmp_path, monkeypatch) -> No
     assert secrets_registry.manifest_file(rel, root=tmp_path) == tmp_path / rel
 
 
+def test_a_checkout_without_the_file_falls_back_to_the_pinned_cache(
+    tmp_path, monkeypatch
+) -> None:
+    """#1108 audit: a submodule checked out before a manifest was added still resolves
+    it at the pin, as before."""
+    from libs.security import app_manifests
+
+    monkeypatch.setattr(app_manifests, "submodule_commit", lambda *_a: "c" * 40)
+    (tmp_path / "repos/truealpha").mkdir(parents=True)
+    (tmp_path / "repos/truealpha/.git").write_text("gitdir: x", encoding="utf-8")
+    rel = "repos/truealpha/apps/new/required-env.generated.json"
+
+    assert secrets_registry.manifest_file(rel, root=tmp_path) == (
+        tmp_path / secrets_registry.CACHE_DIR / ("c" * 40) / rel
+    )
+
+
 def test_load_manifest_fetches_an_absent_app_manifest_at_the_pinned_commit(
     tmp_path,
 ) -> None:
