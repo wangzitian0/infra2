@@ -29,12 +29,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-import yaml
-
-from infra2_sdk.rules.compose import (
-    inspect_compose,
-    is_memory_ceiling as _is_ceiling,
-)
+from infra2_sdk.rules.compose import inspect_compose
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE_PATH = ROOT / "docs/ssot/compose-resource-baseline.json"
@@ -56,45 +51,6 @@ def _tracked_composes() -> list[str]:
     return sorted(
         p for p in _git("ls-files").splitlines() if Path(p).name in COMPOSE_NAMES
     )
-
-
-
-def _unlimited_services(path: Path) -> tuple[list[str], str | None]:
-    """(services with no ceiling, reason this file was skipped or unreadable)."""
-    try:
-        docs = [d for d in yaml.safe_load_all(path.read_text(encoding="utf-8")) if d]
-    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
-        return [], f"unreadable: {type(exc).__name__}"
-    bad: list[str] = []
-    saw_services = False
-    for doc in docs:
-        if not isinstance(doc, dict):
-            continue
-        # A fragment that only composes other files declares no service of its
-        # own; the ceilings live where the services do.
-        if "include" in doc and not doc.get("services"):
-            return [], "include-only"
-        services = doc.get("services")
-        if not isinstance(services, dict):
-            continue
-        saw_services = True
-        for name, spec in services.items():
-            if not isinstance(spec, dict):
-                bad.append(str(name))
-                continue
-            if "extends" in spec:
-                continue  # the ceiling may be in the file it extends
-            # ops.standards.md §5 names compose fields -- mem_limit /
-            # mem_reservation / cpu_shares -- and never the `deploy.resources`
-            # form. Accepting a spelling the SSOT does not sanction, and then
-            # recommending it in the failure message, would teach contributors
-            # to write something the standard does not describe. Verified that
-            # no service in the tree relies on it today.
-            if not _is_ceiling(spec.get("mem_limit")):
-                bad.append(str(name))
-    if not saw_services:
-        return [], "no services"
-    return bad, None
 
 
 def main() -> int:
@@ -121,11 +77,10 @@ def main() -> int:
         report = inspect_compose(ROOT / rel)
         for ref in report.bare_latest_violations:
             bare_latest.append((rel, ref))
-        bad, reason = _unlimited_services(ROOT / rel)
-        if reason and reason.startswith("unreadable"):
-            unreadable.append(f"{rel} ({reason})")
+        if report.errors:
+            unreadable.append(f"{rel} ({'; '.join(report.errors)})")
             continue
-        unlimited.update(f"{rel}::{svc}" for svc in bad)
+        unlimited.update(f"{rel}::{svc}" for svc in report.unlimited_services)
 
     if unreadable:
         print("compose files that could not be parsed:\n")

@@ -1,32 +1,16 @@
-"""Unified Dokploy deployment-rollout poller (D5 — DRAFT proposal).
+"""Unified Dokploy deployment rollout poller.
 
-Today there are THREE near-duplicate pollers that each wait for a NEW Dokploy
-deployment record to appear and settle, but with divergent contracts:
+This module provides one poller that replaces duplicate polling implementations:
 
-| caller                                            | returns       | success rule              | on error      | on timeout        |
-|---------------------------------------------------|---------------|---------------------------|---------------|-------------------|
-| ``deploy.deployer._wait_for_new_deployment_record``| ``bool``      | ``running`` is OK (a health  | raise         | return ``False``  |
-|                                                   |               | check follows)            |               |                   |
-| ``deploy.promote.wait_for_rollout``               | ``dict``      | poll PAST ``running`` to a   | raise         | raise TimeoutError|
-|                                                   |               | terminal-good status      |               |                   |
-| (retired, #543) ``dokploy_route_canary``          | ``CanaryStep``| ``running``/done is OK       | classify (no  | classify (no      |
-|                                                   |               |                           | raise)        | raise)            |
+- libs.deploy.dokploy_adapter.wait_for_new_deployment_record
+- libs.deploy.promote.wait_for_rollout
 
-This module proposes ONE poller that spans all three via three flags, so each
-caller keeps its exact behaviour while sharing the loop:
+Flags reproduce each caller contract:
 
-- ``require_terminal``  — False: ``running``/done ends the wait (deployer, canary);
-                          True: keep polling until a terminal-good status (promote).
-- ``raise_on_error``    — True: raise on an ``error`` record (deployer, promote);
-                          False: return a classified result (canary).
-- ``raise_on_timeout``  — True: raise ``TimeoutError`` (promote);
-                          False: return a ``timeout`` result (deployer, canary).
-
-It returns a rich :class:`RolloutResult`; each caller maps that to its own return
-type (bool / dict / CanaryStep). **This PR adds the poller + tests only — it does
-NOT rewire the three callers.** Migrating them (and whether the deploy strategy
-host is ``libs/deploy`` or the app framework — the open (a)/(b) decision) is the
-discussion this draft exists for.
+- require_terminal: False allows progressing status. True requires terminal status.
+- raise_on_error: True raises on error status. False returns classified result.
+- raise_on_timeout: True raises TimeoutError. False returns timeout result.
+- is_filtered_fn: Optional predicate to exclude concurrent unrelated deployment records.
 """
 
 from __future__ import annotations
@@ -37,8 +21,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # Dokploy deployment statuses we treat as "the rollout is progressing/succeeded".
-_RUNNING_OR_DONE = {"running", "done", "success", "successful"}
-_TERMINAL_GOOD = {"done", "success", "successful"}
+TERMINAL_SUCCESS_STATUSES = frozenset({"done", "success", "successful"})
+_RUNNING_OR_DONE = frozenset({"running", "done", "success", "successful"})
+_TERMINAL_GOOD = TERMINAL_SUCCESS_STATUSES
 
 
 class RolloutError(RuntimeError):
@@ -84,8 +69,10 @@ def wait_for_deployment(
     timeout_seconds: int,
     interval_seconds: int,
     require_terminal: bool = False,
+    terminal_success_statuses: set[str] | frozenset[str] | None = None,
     raise_on_error: bool = True,
     raise_on_timeout: bool = False,
+    is_filtered_fn: Callable[[dict[str, Any]], bool] | None = None,
     _sleep: Callable[[float], None] = time.sleep,
     _now: Callable[[], float] = time.monotonic,
 ) -> RolloutResult:
@@ -97,27 +84,50 @@ def wait_for_deployment(
     """
     deadline = _now() + max(0, timeout_seconds)
     attempts = 0
+    terminal_statuses = (
+        set(terminal_success_statuses)
+        if terminal_success_statuses is not None
+        else _TERMINAL_GOOD
+    )
     while True:
         attempts += 1
-        deployments = get_deployments() or []
+        raw_deployments = get_deployments() or []
+        if is_filtered_fn is not None:
+            deployments = [d for d in raw_deployments if not is_filtered_fn(d)]
+        else:
+            deployments = raw_deployments
         current_ids = {_deployment_id(d) for d in deployments if _deployment_id(d)}
         new_ids = current_ids - before_ids
         if new_ids:
-            latest = _newest(deployments, new_ids)
-            status = str(latest.get("status") or "").lower()
-            ids = tuple(sorted(new_ids))
-            if status == "error":
-                if raise_on_error:
-                    raise RolloutError("Dokploy deployment record entered error")
-                return RolloutResult("error", latest, ids, attempts)
-            terminal = status in _TERMINAL_GOOD
-            progressing = status in _RUNNING_OR_DONE
-            if (require_terminal and terminal) or (
-                not require_terminal and progressing
-            ):
-                return RolloutResult(
-                    "done" if terminal else "running", latest, ids, attempts
-                )
+            new_records = [d for d in deployments if _deployment_id(d) in new_ids]
+            for d in new_records:
+                status = str(d.get("status") or "").lower()
+                if status == "error":
+                    if raise_on_error:
+                        raise RolloutError("Dokploy deployment record entered error")
+                    return RolloutResult("error", d, tuple(sorted(new_ids)), attempts)
+
+            terminal_records = [
+                d
+                for d in new_records
+                if str(d.get("status") or "").lower() in terminal_statuses
+            ]
+            if terminal_records:
+                latest = _newest(terminal_records, new_ids)
+                return RolloutResult("done", latest, tuple(sorted(new_ids)), attempts)
+
+            if not require_terminal:
+                progressing_records = [
+                    d
+                    for d in new_records
+                    if str(d.get("status") or "").lower() in _RUNNING_OR_DONE
+                ]
+                if progressing_records:
+                    latest = _newest(progressing_records, new_ids)
+                    return RolloutResult(
+                        "running", latest, tuple(sorted(new_ids)), attempts
+                    )
+
         if _now() >= deadline:
             if raise_on_timeout:
                 raise TimeoutError(

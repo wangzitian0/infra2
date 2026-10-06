@@ -14,10 +14,16 @@ from typing import Any
 
 from infra2_sdk.routing import resolve_dokploy_domains
 
+from libs.deploy.rollout import (
+    TERMINAL_SUCCESS_STATUSES,
+    RolloutError,
+    wait_for_deployment,
+)
+
 logger = logging.getLogger(__name__)
 
 _CLOCK_SKEW_TOLERANCE_SECONDS = 5
-_TERMINAL_SUCCESS_STATUSES = frozenset({"done", "success", "successful"})
+_TERMINAL_SUCCESS_STATUSES = TERMINAL_SUCCESS_STATUSES
 
 
 def deployment_ids(deployments: list[dict]) -> set[str]:
@@ -78,39 +84,50 @@ def wait_for_new_deployment_record(
     Returns true on success. Returns false when no record appears before deadline.
     Raises RuntimeError on error status or timeout with in-progress record.
     """
-    deadline = time.monotonic() + max(0, timeout_seconds)
-    in_progress: tuple[str, str] | None = None
-    while True:
-        deployments = get_compose_deployments(client, compose_id)
-        current_ids = deployment_ids(deployments)
-        new_ids = current_ids - previous_ids
-        if new_ids and isinstance(deployments, list):
-            for deployment in deployments:
-                dep_id = str(
-                    deployment.get("deploymentId") or deployment.get("id") or ""
-                )
-                if dep_id not in new_ids:
-                    continue
-                if min_started_at is not None and started_before_trigger(
-                    deployment, min_started_at, start_epoch_fn=start_epoch_fn
-                ):
-                    continue
-                status = str(deployment.get("status") or "").lower()
-                if status == "error":
-                    raise RuntimeError("Dokploy deployment record entered error")
-                if status in terminal_success_statuses:
-                    return True
-                in_progress = (dep_id, status or "unknown")
-        if time.monotonic() >= deadline:
-            if in_progress is not None:
-                raise RuntimeError(
-                    f"Dokploy deployment {in_progress[0]} is still "
-                    f"'{in_progress[1]}' after {timeout_seconds}s; not re-triggering. "
-                    "Raise DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS if this Dokploy "
-                    "is slow (#629)."
-                )
-            return False
-        time.sleep(max(1, interval_seconds))
+    filter_fn = (
+        (
+            lambda d: started_before_trigger(
+                d, min_started_at, start_epoch_fn=start_epoch_fn
+            )
+        )
+        if min_started_at is not None
+        else None
+    )
+    try:
+        result = wait_for_deployment(
+            lambda: get_compose_deployments(client, compose_id),
+            previous_ids,
+            timeout_seconds=timeout_seconds,
+            interval_seconds=interval_seconds,
+            require_terminal=True,
+            terminal_success_statuses=terminal_success_statuses,
+            raise_on_error=True,
+            raise_on_timeout=False,
+            is_filtered_fn=filter_fn,
+        )
+    except RolloutError as exc:
+        raise RuntimeError("Dokploy deployment record entered error") from exc
+
+    if result.status == "done":
+        return True
+
+    if result.status == "timeout":
+        if result.deployment:
+            dep_id = str(
+                result.deployment.get("deploymentId")
+                or result.deployment.get("id")
+                or ""
+            )
+            dep_status = str(result.deployment.get("status") or "unknown")
+            raise RuntimeError(
+                f"Dokploy deployment {dep_id} is still "
+                f"'{dep_status}' after {timeout_seconds}s; not re-triggering. "
+                "Raise DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS if this Dokploy "
+                "is slow (#629)."
+            )
+        return False
+
+    return False
 
 
 def deploy_compose_with_record_check(
