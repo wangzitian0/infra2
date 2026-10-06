@@ -244,7 +244,7 @@ post-merge 部署被 GitHub Actions `concurrency` 串行化,调 IaC Runner 前�
 完成 sync 结果,不只是请求被接受**。操作坐标是 `(env, exact_ref, normalized_service_set)`:服务集合是身份的一部分,
 不是日志附属字段;同一 release 并发部署不同服务不得互相命中 cache / in-flight / status。
 不走公网 Cloudflare 的 `wait=true`(会在 sync 完成前 524)。
-A `not_found` answer that lasts longer than 90 seconds is a lost request; the client fails and names the cause.
+A `not_found` answer that lasts longer than 90 seconds is a lost request; the client fails and names the cause and the deployment id. Only a real status resets the 90-second timer: a gateway error does not.
 
 ### 5.1 Endpoints
 
