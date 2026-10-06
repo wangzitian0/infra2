@@ -10,9 +10,9 @@ import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-# libs.release_markers is pure git; libs.app_deploy_request pulls in infra2_sdk and is
+# libs.deploy.release_markers is pure git; libs.app_deploy_request pulls in infra2_sdk and is
 # imported lazily, so `markers` runs in an ops job that installs neither (#650).
-from libs.release_markers import marker_status
+from libs.deploy.release_markers import marker_status
 
 if TYPE_CHECKING:  # the annotation must not drag infra2_sdk into the markers path
     from libs.app_deploy_request import DeployPlan

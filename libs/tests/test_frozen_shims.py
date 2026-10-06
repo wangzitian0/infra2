@@ -164,7 +164,7 @@ def _flat_modules() -> list[str]:
 
 def test_the_flat_module_list_is_not_empty() -> None:
     """A glob that matched nothing would make the next test pass vacuously."""
-    assert len(_flat_modules()) >= 20, _flat_modules()
+    assert len(_flat_modules()) >= 5, _flat_modules()
 
 
 @pytest.mark.parametrize("module", _flat_modules())

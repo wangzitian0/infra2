@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs import harness_sweep  # noqa: E402
-from libs.harness_manifest import check_workspace, load_manifest  # noqa: E402
-from libs.harness_status import WorkspaceStatus, workspace_status  # noqa: E402
+from libs.core.harness import sweep as harness_sweep  # noqa: E402
+from libs.core.harness.manifest import check_workspace, load_manifest  # noqa: E402
+from libs.core.harness.status import WorkspaceStatus, workspace_status  # noqa: E402
 
 SWEEP_DESCRIPTION = """Classify every watched agent, PR, release log, workflow run and
 worktree into one state: WAITING, DONE, ACTION, STALL or UNKNOWN. Read-only; merge

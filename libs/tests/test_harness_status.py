@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from libs.harness_status import (
+from libs.core.harness.status import (
     RepositoryStatus,
     repository_status,
     workspace_status,

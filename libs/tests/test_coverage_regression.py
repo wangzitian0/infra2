@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from libs.coverage_regression import (
+from libs.gate.coverage_regression import (
     CoverageArtifactMissing,
     CoverageBaselineInvalid,
     check_no_regression,

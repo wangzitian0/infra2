@@ -2,7 +2,7 @@
 
 import pytest
 
-from libs.service_identity import ServiceIdentity
+from libs.core.service_identity import ServiceIdentity
 
 
 def test_identity_renders_same_coordinates_into_every_plane() -> None:
@@ -80,7 +80,7 @@ def test_canonical_stateful_deployment_environments():
         is_stateful_deploy_env,
         normalize_env_name,
     )
-    from libs.service_identity import (
+    from libs.core.service_identity import (
         STATEFUL_DEPLOY_ENVIRONMENTS as SI_STATEFUL_ENVIRONMENTS,
         is_stateful_deploy_env as si_is_stateful,
     )
@@ -169,7 +169,7 @@ STRICT_MODE_STATEFUL_ENVS = [
 @pytest.mark.parametrize("env_name", VALID_DOKPLOY_DYNAMIC_ALIASES)
 def test_dokploy_dynamic_aliases_are_stateful_in_non_strict(env_name: str) -> None:
     from libs.common import is_stateful_deploy_env
-    from libs.service_identity import is_stateful_deploy_env as si_is_stateful
+    from libs.core.service_identity import is_stateful_deploy_env as si_is_stateful
 
     assert is_stateful_deploy_env(env_name, strict=False) is True
     assert si_is_stateful(env_name, strict=False) is True
@@ -178,7 +178,7 @@ def test_dokploy_dynamic_aliases_are_stateful_in_non_strict(env_name: str) -> No
 @pytest.mark.parametrize("bad_env", INVALID_DIRTY_ENV_INPUTS)
 def test_invalid_and_dirty_env_inputs_rejected(bad_env) -> None:
     from libs.common import is_stateful_deploy_env
-    from libs.service_identity import is_stateful_deploy_env as si_is_stateful
+    from libs.core.service_identity import is_stateful_deploy_env as si_is_stateful
 
     assert is_stateful_deploy_env(bad_env, strict=False) is False
     assert si_is_stateful(bad_env, strict=False) is False
@@ -187,7 +187,7 @@ def test_invalid_and_dirty_env_inputs_rejected(bad_env) -> None:
 @pytest.mark.parametrize("env_name", STRICT_MODE_STATEFUL_ENVS)
 def test_strict_mode_accepts_only_canonical_stateful_envs(env_name: str) -> None:
     from libs.common import is_stateful_deploy_env
-    from libs.service_identity import is_stateful_deploy_env as si_is_stateful
+    from libs.core.service_identity import is_stateful_deploy_env as si_is_stateful
 
     assert is_stateful_deploy_env(env_name, strict=True) is True
     assert si_is_stateful(env_name, strict=True) is True
@@ -196,7 +196,7 @@ def test_strict_mode_accepts_only_canonical_stateful_envs(env_name: str) -> None
 @pytest.mark.parametrize("alias", VALID_DOKPLOY_DYNAMIC_ALIASES)
 def test_strict_mode_rejects_all_dynamic_aliases(alias: str) -> None:
     from libs.common import is_stateful_deploy_env
-    from libs.service_identity import is_stateful_deploy_env as si_is_stateful
+    from libs.core.service_identity import is_stateful_deploy_env as si_is_stateful
 
     assert is_stateful_deploy_env(alias, strict=True) is False
     assert si_is_stateful(alias, strict=True) is False

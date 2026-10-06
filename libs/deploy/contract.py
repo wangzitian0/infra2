@@ -70,7 +70,7 @@ class ServiceSpec:
             resolved ``image_ref`` before this service can be deployed. This is an artifact
             readiness dependency, distinct from the build/config fan-out graph.
         identity_service_name: The ``service.name`` telemetry label
-            (``libs.service_identity.ServiceIdentity``) this app's deploy identity carries.
+            (``libs.core.service_identity.ServiceIdentity``) this app's deploy identity carries.
             Defaults to ``<service-part-of-key>`` with underscores dashed, matching the
             registry key unless the app's compose already established a different label.
         identity_component: The ``component`` telemetry label. Defaults to ``"app"``.

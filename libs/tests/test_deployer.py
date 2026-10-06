@@ -675,7 +675,7 @@ def test_wait_for_new_deployment_record_ignores_an_unrelated_concurrent_deploy(
     cannot be ours and must be skipped rather than reported as our own success."""
     import libs.deploy.deployer as deployer
     from libs.deploy.deployer import Deployer
-    from libs.deploy_queue import parse_epoch_seconds
+    from libs.deploy.queue import parse_epoch_seconds
 
     monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
 
@@ -710,7 +710,7 @@ def test_wait_for_new_deployment_record_accepts_our_own_record_after_unrelated_o
     min_started_at) shows up alongside the earlier unrelated one, it is accepted."""
     import libs.deploy.deployer as deployer
     from libs.deploy.deployer import Deployer
-    from libs.deploy_queue import parse_epoch_seconds
+    from libs.deploy.queue import parse_epoch_seconds
 
     monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
 

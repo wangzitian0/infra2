@@ -1112,7 +1112,7 @@ def test_public_router_does_not_name_the_canary_status() -> None:
 
 
 def _issued_telemetry_env(environment: str) -> dict[str, str]:
-    from libs.service_identity import ServiceIdentity
+    from libs.core.service_identity import ServiceIdentity
 
     identity = ServiceIdentity.build(
         "platform/todo",

@@ -55,23 +55,16 @@ six modules the code never followed).
 | Legacy Shim | Implementation Module | Re-exported Symbols | Status |
 |-------------|-----------------------|---------------------|--------|
 | `libs/secrets_supply.py` | `libs.security.supply` | `apply`, `resolver_for`, `vault_backend`, `retrying_transport` | Frozen Shim |
-| `libs/service_identity.py` | `libs.core.service_identity` | `ServiceIdentity`, `DOCKER_LABEL_PREFIX`, `MANAGED_BY` | Frozen Shim |
 | `libs/env.py` | `libs.security.store` | `OpSecrets`, `VaultSecrets`, `get_secrets`, `generate_password`, `verify_vault_token` | Frozen Shim |
 | `libs/service_registry.py` | `libs.core.registry` | `service_attrs`, `ServiceMeta`, `all_services`, `resolve_container_host` | Frozen Shim |
 | `libs/service_facets.py` | `libs.core.facets` | `ProbeFacet`, `PublicRouteFacet`, `SignalFacet`, `BackupFacet`, `Exemption` | Frozen Shim |
 | `libs/secrets_registry.py` | `libs.security.registry` | `SERVICES`, `Service`, `lookup`, `merged_manifest`, `store_keys` | Frozen Shim |
 | `libs/deploy_dependencies.py` | `libs.deploy.dependencies` | `extra_dependency_globs`, `service_key_from_path` | Frozen Shim |
-| `libs/deploy_queue.py` | `libs.deploy.queue` | `deployment_start_epoch`, `find_stuck_deploys` | Frozen Shim |
 | `libs/deploy_env_config.py` | `libs.deploy.env_config` | `app_compose_env_config`, `preview_service_config`, `otel_env` | Frozen Shim |
 | `libs/deploy_contract.py` | `libs.deploy.contract` | `service_spec`, `ServiceSpec`, `deploy_type_spec` | Frozen Shim |
 | `libs/dokploy.py` | `libs.deploy.dokploy_client` | `DokployClient`, `get_dokploy`, `ensure_project` | Frozen Shim |
-| `libs/harness_manifest.py` | `libs.core.harness.manifest` | `load_manifest`, `validate_manifest`, `check_workspace` | Frozen Shim |
-| `libs/harness_status.py` | `libs.core.harness.status` | `workspace_status`, `repository_status` | Frozen Shim |
-| `libs/harness_sweep.py` | `libs.core.harness.sweep` | `sweep`, `sweep_once`, `watch` | Frozen Shim |
 | `libs/iac_runner_client.py` | `libs.deploy.iac_runner_client` | `trigger_platform_deploy`, `poll_platform_deploy_status` | Frozen Shim |
-| `libs/release_markers.py` | `libs.deploy.release_markers` | `newest_release_tag`, `production_marker`, `marker_status` | Frozen Shim |
 | `libs/app_deploy_request.py` | `libs.deploy.app_deploy_request` | `verify_production_evidence`, `validate_request_authority` | Frozen Shim |
-| `libs/coverage_regression.py` | `libs.gate.coverage_regression` | `check_no_regression`, `load_baseline`, `read_coverage_summary` | Frozen Shim |
 | `libs/vault_self_refresh_audit.py` | `libs.security.vault_self_refresh_audit` | `load_inventory`, `VaultService`, `CheckResult` | Frozen Shim |
 | `libs/vault_tokens.py` | `libs.security.vault_tokens` | `VaultTokenTarget`, `policy_name`, `normalize_selector` | Frozen Shim |
 | `libs/common.py` | — (re-exports `libs.core.environ`, and holds `check_service`) | — | Not a shim |
