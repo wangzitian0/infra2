@@ -59,7 +59,9 @@ def test_compose_healthcheck_authenticates(service_dir):
         f"{service_dir}: the probe must run in a shell to source the password"
     )
     probe = " ".join(test[1:])
-    assert ". /secrets/.env" in probe, f"{service_dir}: probe does not load /secrets/.env"
+    assert ". /secrets/.env" in probe, (
+        f"{service_dir}: probe does not load /secrets/.env"
+    )
     assert 'redis-cli -a "$$PASSWORD" ping' in probe, (
         f"{service_dir}: healthcheck pings without the password — NOAUTH exits 0 and "
         "reads as healthy"

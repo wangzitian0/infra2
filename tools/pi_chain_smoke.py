@@ -103,12 +103,23 @@ def preflight(strict: bool) -> tuple[str, str]:
 def run_once() -> tuple[dict | None, str]:
     """Run pi once; return (assertions, error). assertions=None means transport-
     class failure (timeout / crash before a usable event stream)."""
-    cmd = ["pi", "--provider", PROVIDER, "--model", MODEL, "--mode", "json",
-           "--no-session", "-p", PROMPT]
+    cmd = [
+        "pi",
+        "--provider",
+        PROVIDER,
+        "--model",
+        MODEL,
+        "--mode",
+        "json",
+        "--no-session",
+        "-p",
+        PROMPT,
+    ]
     env = dict(os.environ, PI_SKIP_VERSION_CHECK="1")
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True,
-                              timeout=TIMEOUT_S, env=env)
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=TIMEOUT_S, env=env
+        )
     except subprocess.TimeoutExpired:
         return None, f"timeout after {TIMEOUT_S}s"
     events: list[dict] = []
@@ -120,23 +131,31 @@ def run_once() -> tuple[dict | None, str]:
             events.append(json.loads(line))
         except ValueError:
             continue  # tolerate unknown/non-NDJSON noise, anchor on typed events
-    ends = [e for e in events
-            if e.get("type") == "message_end"
-            and isinstance(e.get("message"), dict)
-            and e["message"].get("role") == "assistant"]
+    ends = [
+        e
+        for e in events
+        if e.get("type") == "message_end"
+        and isinstance(e.get("message"), dict)
+        and e["message"].get("role") == "assistant"
+    ]
     if not ends:
-        return None, (f"no assistant message_end event (exit={proc.returncode}, "
-                      f"stderr={proc.stderr.strip()[:200]!r})")
+        return None, (
+            f"no assistant message_end event (exit={proc.returncode}, "
+            f"stderr={proc.stderr.strip()[:200]!r})"
+        )
     message = ends[-1]["message"]
     usage = message.get("usage") or {}
-    text = "".join(c.get("text", "") for c in message.get("content", [])
-                   if isinstance(c, dict) and c.get("type") == "text")
+    text = "".join(
+        c.get("text", "")
+        for c in message.get("content", [])
+        if isinstance(c, dict) and c.get("type") == "text"
+    )
     total = usage.get("totalTokens")
     checks = {
         "exit0": proc.returncode == 0,
         "agent_end": any(e.get("type") == "agent_end" for e in events),
         "route_ok": message.get("provider") == PROVIDER
-                    and message.get("model") == MODEL,
+        and message.get("model") == MODEL,
         "stop_ok": message.get("stopReason") == "stop",
         "text_ok": SENTINEL in text,
         "tokens_ok": isinstance(total, int) and 0 < total <= BUDGET_TOTAL_TOKENS,
@@ -158,9 +177,11 @@ def run_once() -> tuple[dict | None, str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--strict", action="store_true",
-                        help="missing credentials are an infra error (exit 2) "
-                             "instead of a local SKIP")
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="missing credentials are an infra error (exit 2) instead of a local SKIP",
+    )
     args = parser.parse_args()
 
     status, detail = preflight(args.strict)
@@ -192,15 +213,34 @@ def main() -> int:
     if checks is None:
         print(json.dumps({"verdict": "INFRA", "reason": error}))
         return 2
-    failed = sorted(k for k in ("exit0", "agent_end", "route_ok", "stop_ok",
-                                "text_ok", "tokens_ok") if not checks.get(k))
+    failed = sorted(
+        k
+        for k in ("exit0", "agent_end", "route_ok", "stop_ok", "text_ok", "tokens_ok")
+        if not checks.get(k)
+    )
     if failed:
-        print(json.dumps({"verdict": "FAIL", "failed": failed,
-                          "credential_source": detail, **checks}))
+        print(
+            json.dumps(
+                {
+                    "verdict": "FAIL",
+                    "failed": failed,
+                    "credential_source": detail,
+                    **checks,
+                }
+            )
+        )
         return 1
-    print(json.dumps({"verdict": "PASS", "provider": PROVIDER, "model": MODEL,
-                      "totalTokens": checks["totalTokens"],
-                      "credential_source": detail}))
+    print(
+        json.dumps(
+            {
+                "verdict": "PASS",
+                "provider": PROVIDER,
+                "model": MODEL,
+                "totalTokens": checks["totalTokens"],
+                "credential_source": detail,
+            }
+        )
+    )
     return 0
 
 

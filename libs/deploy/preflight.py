@@ -284,7 +284,6 @@ def _image_manifest_exists(image: str, image_ref: str) -> bool:
         ) from exc
 
 
-
 def _wait_for_image_dependencies(
     spec,
     image_ref: str,

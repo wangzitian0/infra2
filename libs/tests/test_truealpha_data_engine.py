@@ -564,9 +564,9 @@ def test_verify_runtime_applied_passes_timeout_to_inspect(monkeypatch):
         f"expected 6 inspect calls (3 image + 3 health), got {len(inspect_calls)}"
     )
     for cmd, timeout in inspect_calls:
-        assert (
-            timeout == 15
-        ), f"expected timeout=15 for inspect call, got {timeout}: {cmd}"
+        assert timeout == 15, (
+            f"expected timeout=15 for inspect call, got {timeout}: {cmd}"
+        )
 
 
 def test_verify_runtime_applied_retries_on_command_timed_out(monkeypatch):
@@ -588,6 +588,7 @@ def test_verify_runtime_applied_retries_on_command_timed_out(monkeypatch):
     class MockContext:
         def run(self, cmd, warn=True, hide=True, timeout=None):
             if "docker pull" in cmd:
+
                 class PullResult:
                     ok = True
                     stdout = "pull success"
@@ -603,5 +604,3 @@ def test_verify_runtime_applied_retries_on_command_timed_out(monkeypatch):
     assert err is not None
     assert "promoted image digest was not applied" in err
     assert "unavailable" in err
-
-
