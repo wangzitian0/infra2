@@ -54,7 +54,7 @@ import time
 from typing import Any
 
 from libs.deploy_queue import parse_epoch_seconds
-from libs.env import verify_vault_token
+from libs.security.store import verify_vault_token
 from libs.recency import is_recently_flapping
 
 
@@ -204,7 +204,7 @@ def load_inventory() -> list[VaultService]:
     closed — two facets silently claiming one inventory entry is exactly the
     drift class the facet model exists to kill.
     """
-    from libs.service_registry import bootstrap_facet_attrs, service_attrs
+    from libs.core.registry import bootstrap_facet_attrs, service_attrs
 
     metas = {**bootstrap_facet_attrs(), **service_attrs()}
     services: list[VaultService] = []
@@ -273,7 +273,7 @@ def _vault_service_from_facet(meta, facet) -> VaultService:
 @functools.lru_cache(maxsize=1)
 def _preview_stack_dirs() -> frozenset[str]:
     """The stack directories the registry declares as previews (source_env set)."""
-    from libs.secrets_registry import SERVICES
+    from libs.security.registry import SERVICES
 
     return frozenset(service.directory for service in SERVICES if service.preview)
 
@@ -296,7 +296,7 @@ def inventory_ids_not_in_production() -> frozenset[str]:
     alias of an app that isn't in production cannot be there either.
     """
     from libs.deploy_env_config import services_without_prod_compose
-    from libs.service_registry import bootstrap_facet_attrs, service_attrs
+    from libs.core.registry import bootstrap_facet_attrs, service_attrs
 
     metas = {**bootstrap_facet_attrs(), **service_attrs()}
     owners = services_without_prod_compose() | {
@@ -835,7 +835,7 @@ def collect_live_observations(
     the default.
     """
     from libs.common import get_env
-    from libs.dokploy import get_dokploy
+    from libs.deploy.dokploy_client import get_dokploy
 
     env_vars = get_env()
     vps_host = host or env_vars.get("VPS_HOST")

@@ -750,7 +750,7 @@ def cli(monkeypatch):
     from libs.deploy_contract import make_target
 
     rec = {}
-    import libs.dokploy as dk
+    import libs.deploy.dokploy_client as dk
 
     monkeypatch.setattr(dk, "get_dokploy", lambda host: f"client@{host}")
 
@@ -903,7 +903,7 @@ def test_cli_reports_deploy_failure(monkeypatch, capsys):
     def boom(**kw):
         raise ValueError("does not accept a 'branch' version_ref")
 
-    import libs.dokploy as dk
+    import libs.deploy.dokploy_client as dk
 
     monkeypatch.setattr(dk, "get_dokploy", lambda host: object())
     monkeypatch.setattr(dv2, "deploy_v2", boom)
@@ -972,7 +972,7 @@ def test_cli_down_tears_down_the_selected_preview_alias(monkeypatch, capsys):
         )
         return _fake_down_result(kind, value, domain=domain, client=client)
 
-    import libs.dokploy as dk
+    import libs.deploy.dokploy_client as dk
 
     monkeypatch.setattr(dk, "get_dokploy", lambda host: f"client@{host}")
     monkeypatch.setattr(dv2, "_preview_down", fake_down)
@@ -1011,7 +1011,7 @@ def test_cli_down_tears_down_the_selected_preview_alias(monkeypatch, capsys):
 
 def test_cli_down_rejects_a_fixed_env(monkeypatch, capsys):
     # staging/prod have no ephemeral alias to remove — --down must fail closed.
-    import libs.dokploy as dk
+    import libs.deploy.dokploy_client as dk
 
     monkeypatch.setattr(
         dk,
@@ -1038,7 +1038,7 @@ def test_cli_down_rejects_a_fixed_env(monkeypatch, capsys):
 def test_cli_down_rejects_a_malformed_domain(monkeypatch, capsys):
     # a whitespace/empty domain would corrupt cloud.<domain>; --down must reject it
     # before building the Dokploy client — the same guard the preview backend applies on up.
-    import libs.dokploy as dk
+    import libs.deploy.dokploy_client as dk
 
     monkeypatch.setattr(
         dk,

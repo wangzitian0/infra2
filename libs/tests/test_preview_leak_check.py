@@ -164,7 +164,7 @@ def test_remediate_deletes_confirmed_leaks_with_volumes() -> None:
 
 
 def test_main_detect_exits_nonzero_on_leak_and_never_deletes(monkeypatch) -> None:
-    from libs import dokploy as dokploy_module
+    from libs.deploy import dokploy_client as dokploy_module
 
     client = _FakeClient(_projects())
     monkeypatch.setattr(dokploy_module, "get_dokploy", lambda *a, **k: client)
@@ -176,7 +176,7 @@ def test_main_detect_exits_nonzero_on_leak_and_never_deletes(monkeypatch) -> Non
 
 
 def test_main_remediate_deletes_and_exits_zero(monkeypatch) -> None:
-    from libs import dokploy as dokploy_module
+    from libs.deploy import dokploy_client as dokploy_module
 
     client = _FakeClient(_projects())
     monkeypatch.setattr(dokploy_module, "get_dokploy", lambda *a, **k: client)

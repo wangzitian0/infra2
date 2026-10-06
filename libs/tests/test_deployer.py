@@ -794,7 +794,7 @@ class TestDeployerVaultTokenPreflight:
         """#369: a vestigial VAULT_APP_TOKEN on an AppRole service must not gate deploys —
         it would expire un-renewed and hard-block a redeploy that would clean it up."""
         import libs.deploy.deployer as deployer
-        import libs.dokploy as dokploy
+        import libs.deploy.dokploy_client as dokploy
 
         dummy = self._deployer()
 
@@ -873,7 +873,9 @@ def test_authentik_sync_secret_hook_repairs_bootstrap_fields(monkeypatch) -> Non
     assert stores["authentik"].values["bootstrap_email"] == "admin@example.test"
 
 
-def test_base_deployer_ensure_runtime_secrets_passes_for_service_without_secret_key() -> None:
+def test_base_deployer_ensure_runtime_secrets_passes_for_service_without_secret_key() -> (
+    None
+):
     """Services without a manifest and with secret_key = '' require no Vault secrets."""
     from libs.deploy.deployer import Deployer
 
@@ -900,7 +902,9 @@ def test_base_deployer_creates_missing_vault_secret_path(monkeypatch) -> None:
         secret_key = "jwt_secret"
 
     monkeypatch.setattr(
-        StubWithSecretDeployer, "secrets_backend", classmethod(lambda cls, env=None: secrets)
+        StubWithSecretDeployer,
+        "secrets_backend",
+        classmethod(lambda cls, env=None: secrets),
     )
 
     assert StubWithSecretDeployer.ensure_runtime_secrets() is True
@@ -1052,7 +1056,7 @@ def test_alerting_template_fields_are_all_declared_in_its_manifest() -> None:
     the template is rendered from the same manifest the supply applies, so a field can
     no longer sit in the template without a declared source. This guards hand edits
     to the generated template."""
-    from libs import secrets_registry
+    from libs.security import registry as secrets_registry
 
     service = secrets_registry.lookup("platform", "alerting")
     assert service is not None
@@ -1108,7 +1112,7 @@ def test_remote_config_identity_reads_cross_plane_service_coordinates(
     monkeypatch,
 ) -> None:
     from libs.deploy.deployer import Deployer
-    import libs.dokploy as dokploy
+    import libs.deploy.dokploy_client as dokploy
 
     class DummyDeployer(Deployer):
         service = "alerting"
@@ -1510,11 +1514,11 @@ def test_composing_ensures_domains_before_single_deploy(monkeypatch):
     client.get_compose_env.return_value = ""
 
     monkeypatch.setattr(
-        "libs.dokploy.ensure_project",
+        "libs.deploy.dokploy_client.ensure_project",
         lambda *args, **kwargs: ("proj-1", "env-1"),
     )
     monkeypatch.setattr(
-        "libs.dokploy.get_dokploy",
+        "libs.deploy.dokploy_client.get_dokploy",
         lambda *args, **kwargs: client,
     )
 
@@ -1560,9 +1564,7 @@ def test_s3_compose_has_console_root_redirect() -> None:
     from pathlib import Path
     import yaml
 
-    compose_path = (
-        Path(__file__).resolve().parents[2] / "platform/03.s3/compose.yaml"
-    )
+    compose_path = Path(__file__).resolve().parents[2] / "platform/03.s3/compose.yaml"
     compose = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
     labels = compose["services"]["s3"]["labels"]
 
@@ -1570,6 +1572,5 @@ def test_s3_compose_has_console_root_redirect() -> None:
     assert any("middlewares=s3-console-redirect" in lbl for lbl in labels)
     assert any("redirectregex.regex" in lbl for lbl in labels)
     assert any(
-        "redirectregex.replacement" in lbl and "rustfs/console" in lbl
-        for lbl in labels
+        "redirectregex.replacement" in lbl and "rustfs/console" in lbl for lbl in labels
     )

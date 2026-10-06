@@ -385,7 +385,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     if args.ensure:
-        from libs.dokploy import get_dokploy
+        from libs.deploy.dokploy_client import get_dokploy
 
         ensure_host_hygiene_schedule(
             get_dokploy(),

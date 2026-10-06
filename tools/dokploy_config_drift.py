@@ -51,7 +51,7 @@ from libs.deploy_dependencies import (  # noqa: E402
     extra_dependency_globs,
     service_key_from_path,
 )
-from libs import service_registry  # noqa: E402
+from libs.core import registry as service_registry  # noqa: E402
 
 PRODUCTION_MARKER_RE = re.compile(r"production/v\d+\.\d+\.\d+")
 
@@ -256,8 +256,8 @@ def _commit_at_ref(ref: str) -> str:
 
 
 def _deployed_identities() -> dict[str, DeployedIdentity]:
-    from libs.dokploy import DokployClient
-    from libs.service_registry import _LAYERS
+    from libs.deploy.dokploy_client import DokployClient
+    from libs.core.registry import _LAYERS
 
     client = DokployClient()
     out: dict[str, DeployedIdentity] = {}

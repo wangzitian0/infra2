@@ -1,0 +1,658 @@
+"""
+Dokploy API Client
+
+Wraps Dokploy REST API for automated compose deployments.
+Requires DOKPLOY_API_KEY in environment (generate from /settings/profile).
+"""
+
+from __future__ import annotations
+import logging
+import os
+import time
+import httpx
+from dotenv import load_dotenv
+from libs.core.environ import normalize_env_name as _common_normalize_env_name
+
+logger = logging.getLogger(__name__)
+
+load_dotenv()
+
+
+def _normalize_env_name(env_name: str | None) -> str | None:
+    if not env_name:
+        return None
+    return _common_normalize_env_name(env_name)
+
+
+class DokployClient:
+    """Client for Dokploy REST API"""
+
+    def __init__(self, base_url: str | None = None, api_key: str | None = None):
+        from libs.core.environ import infra_domain
+
+        self.base_url = (
+            base_url
+            or os.getenv("DOKPLOY_URL")
+            or f"https://cloud.{infra_domain()}/api"
+        )
+        self.api_key = api_key or os.getenv("DOKPLOY_API_KEY")
+
+        # Fallback to 1Password
+        if not self.api_key:
+            try:
+                from libs.security.store import OpSecrets
+
+                for item in ("bootstrap-dokploy", "dokploy-docker", "init/env_vars"):
+                    op = OpSecrets(item=item)
+                    key = op.get("DOKPLOY_API_KEY")
+                    if key:
+                        self.api_key = key
+                        break
+            except (ImportError, AttributeError, KeyError):
+                # If 1Password integration or secret is unavailable, fall back to env var / final validation below.
+                pass
+
+        if not self.api_key:
+            raise ValueError(
+                "DOKPLOY_API_KEY not set. Generate from Dokploy /settings/profile or store in 1Password"
+            )
+
+    # Gateway blips (the dokploy-traefik in front of the API or Cloudflare edge returns
+    # these when the backend is briefly unresponsive or a transpacific packet drops). Safe to retry
+    # on a GET — and on a POST the caller marks ``idempotent`` (a set-desired-state write like
+    # ``compose.update``, where re-applying the same payload is a no-op even if the first attempt
+    # already acted). A 502/503/504, Cloudflare 520-524, or a read-timeout means the gateway never
+    # relayed a response; for a NON-idempotent POST (create/deploy/delete) the backend may still have
+    # acted, so those are never retried.
+    _TRANSIENT_STATUS = (502, 503, 504, 520, 521, 522, 523, 524)
+
+    def _request(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        _retries: int = 2,
+        _sleep=time.sleep,
+        idempotent: bool = False,
+        **kwargs,
+    ) -> dict | list:
+        """Make authenticated request to Dokploy API.
+
+        Transient gateway errors (502/503/504, Cloudflare 520-524) and connection errors (incl. read-timeouts
+        from a churning control plane, see #252) are retried with backoff when the request
+        is safe to repeat: any GET, or a POST the caller marks ``idempotent``. A flaky
+        control plane should self-heal rather than hard-fail the caller.
+        """
+        headers = {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "x-api-key": self.api_key,
+            **kwargs.pop("headers", {}),
+        }
+        url = f"{self.base_url}/{endpoint}"
+        retryable = method.upper() == "GET" or idempotent
+        attempt = 0
+        while True:
+            try:
+                with httpx.Client(timeout=30.0) as client:
+                    resp = client.request(method, url, headers=headers, **kwargs)
+                    resp.raise_for_status()
+                return resp.json() if resp.content else {}
+            except httpx.HTTPStatusError as exc:
+                if (
+                    retryable
+                    and exc.response.status_code in self._TRANSIENT_STATUS
+                    and attempt < _retries
+                ):
+                    attempt += 1
+                    _sleep(2**attempt)
+                    continue
+                raise httpx.HTTPStatusError(
+                    f"Dokploy API request failed for {method} {url}: "
+                    f"status code {exc.response.status_code} {exc.response.reason_phrase}",
+                    request=exc.request,
+                    response=exc.response,
+                ) from exc
+            except httpx.RequestError as exc:
+                if retryable and attempt < _retries:
+                    attempt += 1
+                    _sleep(2**attempt)
+                    continue
+                raise httpx.RequestError(
+                    f"Error while performing Dokploy API request {method} {url}: {exc}",
+                    request=exc.request,
+                ) from exc
+
+    # Project endpoints
+    def list_projects(self) -> list[dict]:
+        """List all projects"""
+        return self._request("GET", "project.all")
+
+    def create_project(self, name: str, description: str = "") -> dict:
+        """Create a new project"""
+        return self._request(
+            "POST", "project.create", json={"name": name, "description": description}
+        )
+
+    def list_environments(self, project_name: str) -> list[dict]:
+        """List environments for a project by name."""
+        projects = self.list_projects()
+        for project in projects:
+            if project.get("name") == project_name:
+                return project.get("environments", [])
+        return []
+
+    def create_environment(
+        self, project_id: str, name: str, description: str = ""
+    ) -> dict:
+        """Create a new environment under a project."""
+        payload = {
+            "projectId": project_id,
+            "name": name,
+        }
+        if description:
+            payload["description"] = description
+        return self._request("POST", "environment.create", json=payload)
+
+    def ensure_environment(
+        self, project_name: str, env_name: str, description: str = ""
+    ) -> tuple[dict, bool]:
+        """Ensure environment exists, returns (environment, created)."""
+        target = _normalize_env_name(env_name)
+        if not target:
+            raise ValueError("env_name is required")
+
+        projects = self.list_projects()
+        for project in projects:
+            if project.get("name") != project_name:
+                continue
+            for env in project.get("environments", []):
+                if _normalize_env_name(env.get("name")) == target:
+                    return env, False
+            env_desc = description or f"{target} env"
+            created = self.create_environment(project["projectId"], target, env_desc)
+            return created, True
+
+        raise ValueError(f"Project '{project_name}' not found in Dokploy")
+
+    # Compose endpoints
+    def create_compose(
+        self,
+        environment_id: str,
+        name: str,
+        compose_file: str = "",
+        env: str = "",
+        compose_type: str = "docker-compose",
+        app_name: str | None = None,
+        source_type: str = "raw",  # raw = use composeFile content, github = pull from repo
+        **kwargs,
+    ) -> dict:
+        """Create a new compose application in an environment"""
+        payload = {
+            "name": name,
+            "environmentId": environment_id,
+            "composeType": compose_type,
+            "sourceType": source_type,
+            **kwargs,
+        }
+        if compose_file:
+            payload["composeFile"] = compose_file
+        if app_name:
+            payload["appName"] = app_name
+        if env:
+            payload["env"] = env
+
+        # NOTE: Dokploy's compose.create reliably persists only name / environmentId /
+        # composeType / sourceType / appName, and it assigns its own appName (name + a
+        # random suffix). It does NOT reliably persist the github source binding
+        # (githubId / owner / repository / branch / composePath) NOR the env blob, even
+        # when passed here. Callers that need a github source and/or env MUST re-assert
+        # them with follow-up update_compose() / update_compose_env() (see
+        # libs/deploy/preview.up and libs/deploy/deployer); creating with source_type=
+        # "github" alone leaves the compose source-less ("Github Provider not found") and
+        # env-less.
+        return self._request("POST", "compose.create", json=payload)
+
+    def update_compose(
+        self,
+        compose_id: str,
+        compose_file: str | None = None,
+        env: str | None = None,
+        source_type: str | None = None,
+        **kwargs,
+    ) -> dict:
+        """Update compose application"""
+        payload = {"composeId": compose_id}
+        if compose_file is not None:
+            payload["composeFile"] = compose_file
+        if env is not None:
+            payload["env"] = env
+        if source_type is not None:
+            payload["sourceType"] = source_type
+
+        # Merge extra args (e.g. repository, branch, githubId)
+        payload.update(kwargs)
+
+        # compose.update sets the compose row to a fixed desired state, so a retry after a
+        # read-timeout re-applies the same payload — safe to retry on a churning control
+        # plane (#252), unlike compose.create/deploy/delete.
+        return self._request("POST", "compose.update", json=payload, idempotent=True)
+
+    def deploy_compose(self, compose_id: str) -> dict:
+        """Trigger deployment for compose application"""
+        return self._request("POST", "compose.deploy", json={"composeId": compose_id})
+
+    def redeploy_compose(self, compose_id: str) -> dict:
+        """Trigger redeployment for compose application"""
+        return self._request("POST", "compose.redeploy", json={"composeId": compose_id})
+
+    def delete_compose(self, compose_id: str, *, delete_volumes: bool = False) -> dict:
+        """Delete a compose application."""
+        return self._request(
+            "POST",
+            "compose.delete",
+            json={"composeId": compose_id, "deleteVolumes": delete_volumes},
+        )
+
+    def cancel_compose_deployment(self, compose_id: str) -> dict:
+        """Cancel the running deployment for a compose (Dokploy-native).
+
+        Use this instead of raw `bull:deployments:*` Redis surgery: Dokploy owns
+        the queue and lifecycle, so cancelling through its own API keeps the
+        BullMQ bookkeeping and the deployment DB record consistent.
+        """
+        return self._request(
+            "POST", "compose.cancelDeployment", json={"composeId": compose_id}
+        )
+
+    def kill_compose_build(self, compose_id: str) -> dict:
+        """Kill the stuck build process for a compose deployment."""
+        return self._request(
+            "POST", "compose.killBuild", json={"composeId": compose_id}
+        )
+
+    def clean_compose_queues(self, compose_id: str) -> dict:
+        """Drain pending BullMQ deploy jobs for a compose."""
+        return self._request(
+            "POST", "compose.cleanQueues", json={"composeId": compose_id}
+        )
+
+    def get_compose(self, compose_id: str) -> dict:
+        """Get compose details"""
+        return self._request("GET", f"compose.one?composeId={compose_id}")
+
+    def find_compose_by_name(
+        self,
+        name: str,
+        project_name: str = None,
+        env_name: str | None = None,
+    ) -> dict | None:
+        """Find compose by name across all projects/environments."""
+        target_env = _normalize_env_name(env_name)
+        projects = self.list_projects()
+        for project in projects:
+            if project_name and project["name"] != project_name:
+                continue
+            for env in project.get("environments", []):
+                if target_env and _normalize_env_name(env.get("name")) != target_env:
+                    continue
+                for compose in env.get("compose", []):
+                    if compose.get("name") == name:
+                        # `project.all` returns a TRUNCATED compose (no `env` /
+                        # source fields). Re-fetch the full object via compose.one
+                        # so callers that read env — e.g. get_remote_config_hash's
+                        # IAC_CONFIG_HASH post-deploy check — see real values
+                        # instead of a spurious "none". Let get_compose errors
+                        # propagate: silently falling back to the truncated object
+                        # would reintroduce the "hash reads as none" bug and hide
+                        # real API/auth failures from callers that handle them.
+                        compose_id = compose.get("composeId")
+                        if not compose_id:
+                            # Same hazard, fail closed: a matched compose with no
+                            # composeId can't be re-fetched, so returning the
+                            # truncated object would read IAC_CONFIG_HASH as "none"
+                            # and reintroduce the exact bug this re-fetch fixes.
+                            raise RuntimeError(
+                                f"Dokploy compose {name!r} matched but has no "
+                                "composeId; cannot fetch its full env."
+                            )
+                        return self.get_compose(compose_id)
+        return None
+
+    def get_environment_id(
+        self, project_name: str, env_name: str | None = None, require: bool = False
+    ) -> str | None:
+        """Get environment ID by name (falls back to default when env_name is omitted or production)."""
+        target = _normalize_env_name(env_name)
+        projects = self.list_projects()
+        for project in projects:
+            if project["name"] != project_name:
+                continue
+            if target:
+                for env in project.get("environments", []):
+                    if _normalize_env_name(env.get("name")) == target:
+                        return env.get("environmentId")
+                # For production, allow fallback to default environment to avoid breaking existing setups.
+                if target != "production":
+                    return None
+            for env in project.get("environments", []):
+                if env.get("isDefault"):
+                    return env.get("environmentId")
+            environments = project.get("environments", [])
+            if environments:
+                return environments[0].get("environmentId")
+        return None
+
+    def get_containers(self) -> list[dict]:
+        """Host containers as Dokploy sees them, including Created/Restarting states.
+
+        Observed live on 2026-09-23; callers must still validate the response shape.
+        """
+        return self._request("GET", "docker.getContainers")
+
+    def get_compose_deployments(self, compose_id: str) -> list[dict]:
+        """Get list of deployments for a compose application."""
+        try:
+            deployments = self._request(
+                "GET", f"deployment.allByCompose?composeId={compose_id}"
+            )
+        except Exception:  # noqa: BLE001 - older Dokploy versions may not expose this endpoint.
+            deployments = self.get_compose(compose_id).get("deployments")
+        if isinstance(deployments, list):
+            return [item for item in deployments if isinstance(item, dict)]
+        if isinstance(deployments, dict):
+            for key in ("deployments", "data", "items"):
+                items = deployments.get(key)
+                if isinstance(items, list):
+                    return [item for item in items if isinstance(item, dict)]
+        return []
+
+    def get_latest_deployment(self, compose_id: str) -> dict | None:
+        """Get the most recent deployment for a compose application"""
+        deployments = self.get_compose_deployments(compose_id)
+        return deployments[0] if deployments else None
+
+    def get_deployment_log_path(
+        self,
+        deployment_id: str,
+        compose_id: str | None = None,
+        project_name: str | None = None,
+        env_name: str | None = None,
+    ) -> str | None:
+        """Get the absolute path to the deployment log file on the server.
+
+        Optimized lookup using optional hints to avoid N+1 API calls.
+        """
+        # Fast path: if we know the compose_id, just look at that compose's deployments.
+        if compose_id:
+            deployments = self.get_compose_deployments(compose_id)
+            for depl in deployments:
+                if depl.get("deploymentId") == deployment_id:
+                    return depl.get("logPath")
+            return None
+
+        # Fallback: scan projects/environments/composes, optionally narrowed by hints.
+        target_env = _normalize_env_name(env_name) if env_name else None
+        projects = self.list_projects()
+        for project in projects:
+            # If a project_name hint is provided, skip other projects.
+            if project_name and project.get("name") != project_name:
+                continue
+
+            for env in project.get("environments", []):
+                # If an env_name hint is provided, skip non-matching environments.
+                if target_env and _normalize_env_name(env.get("name")) != target_env:
+                    continue
+
+                for compose in env.get("compose", []):
+                    # Fetch detailed deployments for each compose
+                    details = self.get_compose(compose["composeId"])
+                    for depl in details.get("deployments", []):
+                        if depl.get("deploymentId") == deployment_id:
+                            return depl.get("logPath")
+        return None
+
+    # Domain endpoints
+    def create_domain(
+        self,
+        compose_id: str,
+        host: str,
+        port: int,
+        https: bool = True,
+        path: str = "/",
+        service_name: str = None,
+    ) -> dict:
+        """Add domain to compose service
+
+        Args:
+            compose_id: ID of the compose application
+            host: Domain name (e.g., 'sso.example.com')
+            port: Container port (e.g., 9000)
+            https: Enable HTTPS with Let's Encrypt
+            path: Path prefix (default: '/')
+            service_name: Optional service name (for multi-service composes)
+        """
+        payload = {
+            "composeId": compose_id,
+            "host": host,
+            "port": port,
+            "https": https,
+            "path": path,
+        }
+        if service_name:
+            payload["serviceName"] = service_name
+        return self._request("POST", "domain.create", json=payload)
+
+    def delete_domain(self, domain_id: str) -> dict:
+        """Delete domain from compose application."""
+        return self._request("POST", "domain.delete", json={"domainId": domain_id})
+
+    def ensure_domains(
+        self,
+        compose_id: str,
+        desired_domains: list[dict],
+        service_name: str = None,
+    ) -> dict:
+        """Ensure required domains exist (create if missing, warn on conflict).
+
+        This method NEVER deletes existing domains. If a domain exists with
+        a different port, it warns the user to manually resolve the conflict.
+
+        Args:
+            compose_id: ID of the compose application
+            desired_domains: List of dicts with 'host', 'port', 'https' keys
+            service_name: Optional service name for multi-service composes
+
+        Returns:
+            Dict with 'created', 'skipped', 'conflicts' info
+        """
+        result = {"created": 0, "skipped": 0, "conflicts": [], "errors": []}
+
+        # Get existing domains
+        compose = self.get_compose(compose_id)
+        existing = compose.get("domains", [])
+        existing_by_key = {(d["host"], d.get("path") or "/"): d for d in existing}
+
+        for spec in desired_domains:
+            host = spec["host"]
+            desired_port = spec["port"]
+            path = spec.get("path") or "/"
+            target_service = spec.get("service_name") or service_name
+            key = (host, path)
+
+            if key in existing_by_key:
+                existing_port = existing_by_key[key].get("port")
+                if existing_port == desired_port:
+                    # Already configured correctly
+                    result["skipped"] += 1
+                else:
+                    # Conflict: same host and path, different port
+                    result["conflicts"].append(
+                        {
+                            "host": host,
+                            "existing_port": existing_port,
+                            "desired_port": desired_port,
+                        }
+                    )
+            else:
+                # Domain doesn't exist, create it
+                try:
+                    self.create_domain(
+                        compose_id=compose_id,
+                        host=host,
+                        port=desired_port,
+                        https=spec.get("https", True),
+                        path=path,
+                        service_name=target_service,
+                    )
+                    result["created"] += 1
+                except Exception as e:
+                    result["errors"].append(f"create {host}: {e}")
+
+        return result
+
+    # Environment endpoints
+    def get_compose_env(self, compose_id: str) -> str:
+        """Get environment variables for a compose service"""
+        compose = self.get_compose(compose_id)
+        return compose.get("env") or ""
+
+    def update_compose_env(
+        self, compose_id: str, env_vars: dict[str, str] = None, env_str: str = None
+    ) -> dict:
+        """Update environment variables for a compose service
+
+        Args:
+            compose_id: ID of the compose application
+            env_vars: Dict of key-value pairs (will be merged with existing)
+            env_str: Raw env string (will replace existing if provided)
+        Note:
+            This parser expects simple KEY=VALUE lines and does not handle quoted,
+            escaped, or multiline values.
+        Note (infra2#525):
+            Dokploy's compose.one has no version/etag/updatedAt field to gate this
+            write on (confirmed against a live response), so the merge below is
+            serialized per compose_id via libs.compose_lock.compose_write_lock: two
+            concurrent callers merging into the SAME compose_id cannot silently
+            discard each other's write, because the second caller's GET is guaranteed
+            to happen only after the first caller's POST has landed. This is an
+            in-process lock only — see libs/compose_lock.py for what it does and does
+            not cover.
+        """
+        from libs.deploy.compose_lock import compose_write_lock
+
+        with compose_write_lock(compose_id):
+            if env_str is None:
+                # Merge with existing
+                existing_env = self.get_compose_env(compose_id)
+                env_dict = {}
+
+                # Parse existing
+                for line in existing_env.split("\n"):
+                    line = line.strip()
+                    if line and "=" in line and not line.startswith("#"):
+                        key, value = line.split("=", 1)
+                        env_dict[key] = value
+
+                # Update with new values
+                if env_vars:
+                    env_dict.update(env_vars)
+
+                # Convert back to string
+                env_str = "\n".join(f"{k}={v}" for k, v in env_dict.items())
+
+            return self.update_compose(compose_id, env=env_str)
+
+    # Git Provider endpoints
+    def list_git_providers(self) -> list[dict]:
+        """List configured GitHub providers.
+
+        Dokploy exposes these at `github.githubProviders`; each entry is
+        `{"githubId": ..., "gitProvider": {"providerType": "github", ...}}`.
+        The previously-used `settings.gitProvider.all` path 404s on current
+        Dokploy, so Method 1 below always fell through to the fragile compose
+        inference — which then broke too once `project.all` stopped returning
+        per-compose `githubId`. Querying the authoritative endpoint fixes both.
+        """
+        return self._request("GET", "github.githubProviders")
+
+    def get_github_provider_id(self) -> str | None:
+        """Return the Dokploy `githubId` used to bind a compose to GitHub source."""
+        # Method 1: query the GitHub providers directly (authoritative).
+        try:
+            for p in self.list_git_providers():
+                github_id = p.get("githubId")
+                if github_id:
+                    return github_id
+        except Exception as exc:
+            logger.warning(
+                "Method 1 failed to query git providers from Dokploy: %s", exc
+            )
+
+        # Method 2: fall back to a compose that is already bound to GitHub.
+        try:
+            projects = self.list_projects()
+            for proj in projects:
+                for env in proj.get("environments", []):
+                    for comp in env.get("compose", []):
+                        if comp.get("githubId"):
+                            return comp.get("githubId")
+        except Exception as exc:
+            logger.warning(
+                "Method 2 failed to discover bound GitHub compose from Dokploy: %s", exc
+            )
+
+        return None
+
+
+def get_dokploy(host: str | None = None) -> DokployClient:
+    """Get configured Dokploy client
+
+    Args:
+        host: Optional host override (e.g. 'cloud.example.com')
+    """
+    base_url = None
+    if host:
+        base_url = f"https://{host}/api"
+    return DokployClient(base_url=base_url)
+
+
+# Convenience functions
+def ensure_project(
+    name: str,
+    description: str = "",
+    host: str | None = None,
+    env_name: str | None = None,
+    require_env: bool = False,
+) -> tuple[str, str | None]:
+    """Ensure project exists, return (projectId, environmentId)."""
+    client = get_dokploy(host=host)
+    projects = client.list_projects()
+    normalized_env = _normalize_env_name(env_name)
+
+    for project in projects:
+        if project["name"] == name:
+            env_id = client.get_environment_id(
+                name, normalized_env, require=require_env
+            )
+            if (normalized_env or require_env) and not env_id:
+                raise ValueError(
+                    f"Environment '{normalized_env}' not found in Dokploy project '{name}'. "
+                    "Create it in Dokploy UI before deploying."
+                )
+            return project["projectId"], env_id
+
+    result = client.create_project(name, description)
+    # API returns {'project': {...}, 'environment': {...}}
+    project_id = (
+        result.get("project", {}).get("projectId") if isinstance(result, dict) else None
+    )
+    if not project_id:
+        raise ValueError(f"Failed to create project {name}: invalid API response")
+    env_id = client.get_environment_id(name, normalized_env, require=False)
+    if (normalized_env or require_env) and not env_id:
+        raise ValueError(
+            f"Environment '{normalized_env}' not found in Dokploy project '{name}'. "
+            "Create it in Dokploy UI before deploying."
+        )
+    return project_id, env_id

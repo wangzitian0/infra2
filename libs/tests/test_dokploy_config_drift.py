@@ -230,7 +230,9 @@ def test_deployed_identities_includes_truealpha_and_excludes_unmanaged_projects(
     original ("platform", "finance_report") tuple — every truealpha/* service
     silently read as "not deployed" no matter what was actually live. The fix
     derives the allowlist from service_registry._LAYERS instead."""
-    monkeypatch.setattr("libs.dokploy.DokployClient", _FakeDokployClientForIdentities)
+    monkeypatch.setattr(
+        "libs.deploy.dokploy_client.DokployClient", _FakeDokployClientForIdentities
+    )
 
     identities = drift._deployed_identities()
 

@@ -178,7 +178,7 @@ def test_legacy_backup_aliases_derived_from_registry(monkeypatch) -> None:
     mock_meta = MagicMock()
     mock_meta.legacy_compose_names = ("legacy_name",)
     monkeypatch.setattr(
-        "libs.service_registry.service_attrs",
+        "libs.core.registry.service_attrs",
         lambda: {"test_layer/test_service": mock_meta},
     )
     assert legacy_backup_aliases() == {

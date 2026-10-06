@@ -60,11 +60,11 @@ from libs.observability.breakdown import (
     build_breakdown_alert_payload,
     find_breakdown_containers,
 )
-from libs.recency import (
+from libs.observability.recency import (
     ConsecutiveObservationState,
     evaluate_consecutive_hysteresis,
 )
-from libs.resident_watchers import ResidentWatcher
+from libs.observability.watchers.resident import ResidentWatcher
 
 logger = logging.getLogger("container-breakdown-watch")
 # httpx/httpcore log every 60s Docker-socket poll at INFO ("GET /containers/json 200"),

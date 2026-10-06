@@ -674,7 +674,7 @@ def test_preflight_vault_token_skips_when_compose_has_no_token():
 def test_preflight_vault_token_skips_for_approle_service(monkeypatch):
     # #369: an AppRole service (VAULT_ROLE_ID/VAULT_SECRET_ID present) must NOT be gated
     # on a vestigial VAULT_APP_TOKEN — it would expire un-renewed and hard-block deploys.
-    import libs.env as env_mod
+    import libs.security.store as env_mod
 
     def _boom(*_a, **_k):
         raise AssertionError("AppRole service must not hit the VAULT_APP_TOKEN check")
@@ -687,7 +687,7 @@ def test_preflight_vault_token_skips_for_approle_service(monkeypatch):
 
 
 def test_preflight_vault_token_raises_on_expiring_token(monkeypatch):
-    import libs.env as env_mod
+    import libs.security.store as env_mod
 
     monkeypatch.setattr(
         env_mod,
@@ -730,7 +730,7 @@ def test_assert_approle_creds_present_skips_a_non_approle_service(
     compose.write_text("services:\n  app:\n    image: example\n")
     fake_meta = SimpleNamespace(compose_path=str(compose))
     monkeypatch.setattr(
-        "libs.service_registry.service_attrs",
+        "libs.core.registry.service_attrs",
         lambda: {"some/service": fake_meta},
     )
     # Empty env would fail closed if this service used AppRole auth — it doesn't.
@@ -989,7 +989,7 @@ def test_deploy_proceeds_when_secret_provisioning_has_no_vault_access(monkeypatc
 
 
 def test_deploy_verify_vault_gates_before_any_mutation(monkeypatch):
-    import libs.env as env_mod
+    import libs.security.store as env_mod
 
     monkeypatch.setattr(
         env_mod,

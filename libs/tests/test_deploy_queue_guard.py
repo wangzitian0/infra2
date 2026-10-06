@@ -15,9 +15,7 @@ from pathlib import Path
 
 
 from libs.deploy_queue import StuckDeploy
-from libs import deploy_queue_guard as guard
-
-
+from libs.observability.watchers import deploy_queue_guard as guard
 # ---------------------------------------------------------------------------
 # _load_env_file
 
@@ -164,9 +162,11 @@ def test_post_alert_passes_basic_auth(monkeypatch) -> None:
     monkeypatch.setenv("ALERT_BRIDGE_URL", "http://bridge:8080/signoz/webhook")
     monkeypatch.setenv("BRIDGE_BASIC_AUTH_USERNAME", "u")
     monkeypatch.setenv("BRIDGE_BASIC_AUTH_PASSWORD", "p")
-    import libs.infra_probes
+    import libs.observability.probes
 
-    monkeypatch.setattr(libs.infra_probes, "post_alert_bridge_payload", fake_post)
+    monkeypatch.setattr(
+        libs.observability.probes, "post_alert_bridge_payload", fake_post
+    )
 
     guard._post_alert({"status": "firing"})
 
@@ -176,12 +176,12 @@ def test_post_alert_passes_basic_auth(monkeypatch) -> None:
 
 def test_post_alert_delivery_failure_does_not_crash_loop(monkeypatch) -> None:
     monkeypatch.setenv("ALERT_BRIDGE_URL", "http://bridge:8080/signoz/webhook")
-    import libs.infra_probes
+    import libs.observability.probes
 
     def boom(*a, **k):
         raise RuntimeError("bridge down")
 
-    monkeypatch.setattr(libs.infra_probes, "post_alert_bridge_payload", boom)
+    monkeypatch.setattr(libs.observability.probes, "post_alert_bridge_payload", boom)
 
     guard._post_alert({"status": "firing"})  # must not raise
 

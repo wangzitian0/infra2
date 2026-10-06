@@ -8,7 +8,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from libs import dokploy
+from libs.deploy import dokploy_client as dokploy
 from libs.dokploy import (
     DokployClient,
     ensure_project,
@@ -129,11 +129,7 @@ class TestDokployClient:
                 return "op-key"
 
         monkeypatch.delenv("DOKPLOY_API_KEY", raising=False)
-        monkeypatch.setitem(
-            __import__("sys").modules,
-            "libs.env",
-            type("FakeEnvModule", (), {"OpSecrets": FakeOpSecrets}),
-        )
+        monkeypatch.setattr("libs.security.store.OpSecrets", FakeOpSecrets)
 
         client = DokployClient(base_url="https://cloud.example.test/api")
 
@@ -331,7 +327,7 @@ class TestDokployClient:
             client.deploy_compose("c1")
         assert len(fake.calls) == 1  # exactly 1 attempt, zero retries
 
-    @patch("libs.dokploy.DokployClient._request")
+    @patch("libs.deploy.dokploy_client.DokployClient._request")
     def test_list_git_providers(self, mock_request):
         # Setup valid client
         with patch.dict(os.environ, {"DOKPLOY_API_KEY": "test-key"}):
@@ -347,7 +343,7 @@ class TestDokployClient:
             ]
             mock_request.assert_called_with("GET", "github.githubProviders")
 
-    @patch("libs.dokploy.DokployClient._request")
+    @patch("libs.deploy.dokploy_client.DokployClient._request")
     def test_get_compose_deployments(self, mock_request):
         with patch.dict(os.environ, {"DOKPLOY_API_KEY": "test-key"}):
             client = DokployClient()
@@ -360,7 +356,7 @@ class TestDokployClient:
                 "GET", "deployment.allByCompose?composeId=c1"
             )
 
-    @patch("libs.dokploy.DokployClient._request")
+    @patch("libs.deploy.dokploy_client.DokployClient._request")
     def test_get_compose_deployments_accepts_wrapped_response(self, mock_request):
         with patch.dict(os.environ, {"DOKPLOY_API_KEY": "test-key"}):
             client = DokployClient()
@@ -370,8 +366,8 @@ class TestDokployClient:
 
             assert deployments == [{"deploymentId": "d1"}]
 
-    @patch("libs.dokploy.DokployClient.get_compose")
-    @patch("libs.dokploy.DokployClient._request")
+    @patch("libs.deploy.dokploy_client.DokployClient.get_compose")
+    @patch("libs.deploy.dokploy_client.DokployClient._request")
     def test_get_compose_deployments_falls_back_to_compose_snapshot(
         self, mock_request, mock_get_compose
     ):
@@ -385,7 +381,7 @@ class TestDokployClient:
             assert deployments == [{"deploymentId": "d1"}]
             mock_get_compose.assert_called_with("c1")
 
-    @patch("libs.dokploy.DokployClient.get_compose_deployments")
+    @patch("libs.deploy.dokploy_client.DokployClient.get_compose_deployments")
     def test_get_latest_deployment(self, mock_get_depls):
         with patch.dict(os.environ, {"DOKPLOY_API_KEY": "test-key"}):
             client = DokployClient()
@@ -398,8 +394,8 @@ class TestDokployClient:
 
             assert latest == {"deploymentId": "d1"}
 
-    @patch("libs.dokploy.DokployClient.get_compose")
-    @patch("libs.dokploy.DokployClient.list_projects")
+    @patch("libs.deploy.dokploy_client.DokployClient.get_compose")
+    @patch("libs.deploy.dokploy_client.DokployClient.list_projects")
     def test_get_deployment_log_path(self, mock_list_projects, mock_get_compose):
         with patch.dict(os.environ, {"DOKPLOY_API_KEY": "test-key"}):
             client = DokployClient()
@@ -414,7 +410,7 @@ class TestDokployClient:
 
             assert log_path == "/path/to/log"
 
-    @patch("libs.dokploy.DokployClient.get_compose_deployments")
+    @patch("libs.deploy.dokploy_client.DokployClient.get_compose_deployments")
     def test_get_deployment_log_path_with_hints(self, mock_get_depls):
         with patch.dict(os.environ, {"DOKPLOY_API_KEY": "test-key"}):
             client = DokployClient()
@@ -714,12 +710,12 @@ class TestDokployClient:
 class TestGetDokployFactory:
     """Test factory function"""
 
-    @patch("libs.dokploy.DokployClient")
+    @patch("libs.deploy.dokploy_client.DokployClient")
     def test_get_dokploy_defaults(self, mock_cls):
         get_dokploy()
         mock_cls.assert_called_with(base_url=None)
 
-    @patch("libs.dokploy.DokployClient")
+    @patch("libs.deploy.dokploy_client.DokployClient")
     def test_get_dokploy_with_host(self, mock_cls):
         get_dokploy(host="my.host.com")
         mock_cls.assert_called_with(base_url="https://my.host.com/api")

@@ -58,12 +58,21 @@ def is_stateful_deploy_env(env: str | None, *, strict: bool = False) -> bool:
     )
 
 
+# GitHub repository of this control plane (``libs.const`` re-exports these).
+GITHUB_OWNER = "wangzitian0"
+GITHUB_REPO = "infra2"
+GITHUB_BRANCH = "main"
+
+
 __all__ = [
     "APP_SOURCES",
     "DEPLOYMENT_ENV_PREVIEW",
     "DEPLOYMENT_ENV_PRODUCTION",
     "DEPLOYMENT_ENV_STAGING",
     "DOCKER_LABEL_PREFIX",
+    "GITHUB_BRANCH",
+    "GITHUB_OWNER",
+    "GITHUB_REPO",
     "IDENTITY_SCHEMA_VERSION",
     "MANAGED_BY",
     "PREVIEW",

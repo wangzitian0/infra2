@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import libs.common as common
+import libs.core.environ as common
 
 
 def test_set_deploy_env_resets_the_memoized_config(monkeypatch) -> None:
@@ -10,7 +10,7 @@ def test_set_deploy_env_resets_the_memoized_config(monkeypatch) -> None:
         def get(self, key):
             return None
 
-    monkeypatch.setattr("libs.env.OpSecrets", lambda *a, **k: FakeOp())
+    monkeypatch.setattr("libs.security.store.OpSecrets", lambda *a, **k: FakeOp())
     monkeypatch.setenv("DEPLOY_ENV", "production")
     monkeypatch.delenv("ENV_SUFFIX", raising=False)
     monkeypatch.setattr(common, "_env_cache", None)

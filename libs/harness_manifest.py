@@ -63,7 +63,6 @@ def _parent_pin(
     return metadata[2].lower() if len(metadata) >= 3 else None
 
 
-
 class HarnessManifestError(ValueError):
     """Raised when the inventory cannot be decoded as a mapping."""
 

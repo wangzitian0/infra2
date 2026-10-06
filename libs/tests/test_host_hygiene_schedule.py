@@ -150,7 +150,7 @@ def test_ensure_updates_existing_named_job() -> None:
 
 
 def test_main_ensure_provisions_via_get_dokploy(monkeypatch) -> None:
-    from libs import dokploy as dokploy_module
+    from libs.deploy import dokploy_client as dokploy_module
 
     client = _FakeClient(existing=[])
     monkeypatch.setattr(dokploy_module, "get_dokploy", lambda *a, **k: client)

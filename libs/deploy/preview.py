@@ -42,10 +42,10 @@ from urllib.request import Request, urlopen
 import httpx
 from infra2_sdk.deploy_health import poll_until_healthy
 
-from libs.common import infra_domain
-from libs.compose_lock import compose_write_lock
+from libs.core.environ import infra_domain
+from libs.deploy.compose_lock import compose_write_lock
 from libs.deploy.promote import _deployment_ids, wait_for_rollout
-from libs.deploy_env_config import (
+from libs.deploy.env_config import (
     PREVIEW_ENVIRONMENT,
     PreviewAlias,
     PreviewReadinessProbe,
@@ -189,8 +189,8 @@ def _preview_env_vars(
         "PREVIEW_DB_PASSWORD": "preview",
         "PREVIEW_DB_NAME": config.db_name,
     }
-    from libs.deploy_contract import service_spec
-    from libs.service_identity import ServiceIdentity
+    from libs.deploy.contract import service_spec
+    from libs.core.service_identity import ServiceIdentity
 
     spec = service_spec(service)
     identity = ServiceIdentity.build(

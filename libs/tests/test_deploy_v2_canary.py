@@ -460,7 +460,7 @@ def test_alert_failure_is_best_effort(monkeypatch, capsys):
 
 def _main_with(monkeypatch, run_impl):
     import libs.alerting as al
-    import libs.dokploy as dk
+    import libs.deploy.dokploy_client as dk
 
     monkeypatch.setattr(dk, "get_dokploy", lambda host: object())
     monkeypatch.setattr(canary, "run_canary", run_impl)
@@ -561,7 +561,7 @@ def test_main_rejects_healthy_result_that_breaches_configured_deadline(
 
 
 def test_main_no_wait_emits_skip_evidence(monkeypatch, capsys):
-    import libs.dokploy as dk
+    import libs.deploy.dokploy_client as dk
 
     monkeypatch.setattr(dk, "get_dokploy", lambda host: object())
     monkeypatch.setattr(
@@ -630,7 +630,7 @@ def test_canary_services_derive_from_registry():
 
 
 def test_canary_services_fail_closed_when_none_declared(monkeypatch):
-    import libs.service_registry as reg
+    import libs.core.registry as reg
 
     monkeypatch.setattr(reg, "service_attrs", lambda: {})
     with pytest.raises(RuntimeError, match="deploy_v2_canary"):
@@ -661,7 +661,7 @@ def test_run_canary_forwards_exact_iac_authority_and_clone_ref(spies):
 
 
 def test_main_iterates_registry_canary_services(monkeypatch, capsys):
-    import libs.dokploy as dk
+    import libs.deploy.dokploy_client as dk
 
     monkeypatch.setattr(dk, "get_dokploy", lambda host: object())
     seen = []
