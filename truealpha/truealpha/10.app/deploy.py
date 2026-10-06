@@ -453,19 +453,7 @@ class AppDeployer(Deployer):
                     access_key_id=existing_access_key,
                     secret_access_key=existing_secret_key,
                 )
-                try:
-                    ensure_bucket(s3_settings, allow_create=False)
-                except Exception:
-                    # Fallback to legacy hostname if platform-s3 is not yet adopted
-                    s3_settings = S3Settings(
-                        bucket=bucket_name,
-                        endpoint_url=f"http://platform-minio{env_suffix}:9000"
-                        if env_suffix
-                        else "http://platform-minio:9000",
-                        access_key_id=existing_access_key,
-                        secret_access_key=existing_secret_key,
-                    )
-                    ensure_bucket(s3_settings, allow_create=False)
+                ensure_bucket(s3_settings, allow_create=False)
                 info(f"S3 bucket '{bucket_name}' verified reachable via S3 API")
             except Exception as exc:
                 error(
