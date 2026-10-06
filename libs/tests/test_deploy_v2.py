@@ -1471,3 +1471,50 @@ def test_fixed_app_deploy_without_runner_credentials_skips_the_supply(
     assert order == []
     assert result.detail["secret_supply"]["status"] == "skipped"
     assert calls["fixed"] is not None
+
+
+def test_image_manifest_exists_success(monkeypatch):
+    import libs.deploy.preflight as preflight
+
+    monkeypatch.setattr(
+        preflight,
+        "resolve_image_digest",
+        lambda *, image, reference, registry: "sha256:1234567890abcdef",
+    )
+    assert preflight._image_manifest_exists("ghcr.io/org/repo", "v1.0.0") is True
+
+
+def test_image_manifest_exists_not_found(monkeypatch):
+    from infra2_sdk.release import ReleaseError
+    import libs.deploy.preflight as preflight
+
+    def fake_resolve(*, image, reference, registry):
+        raise ReleaseError(f"image {image}:{reference} does not exist in the registry (status 404)")
+
+    monkeypatch.setattr(preflight, "resolve_image_digest", fake_resolve)
+    assert preflight._image_manifest_exists("ghcr.io/org/repo", "v1.0.0") is False
+
+
+def test_image_manifest_exists_error_raises_runtime_error(monkeypatch):
+    from infra2_sdk.release import ReleaseError
+    import libs.deploy.preflight as preflight
+
+    def fake_resolve(*, image, reference, registry):
+        raise ReleaseError("network timeout or auth failure")
+
+    monkeypatch.setattr(preflight, "resolve_image_digest", fake_resolve)
+    with pytest.raises(RuntimeError, match="registry refused manifest check"):
+        preflight._image_manifest_exists("ghcr.io/org/repo", "v1.0.0")
+
+
+def test_image_manifest_exists_os_error_raises_runtime_error(monkeypatch):
+    import libs.deploy.preflight as preflight
+
+    def fake_resolve(*, image, reference, registry):
+        raise OSError("connection reset by peer")
+
+    monkeypatch.setattr(preflight, "resolve_image_digest", fake_resolve)
+    with pytest.raises(RuntimeError, match="registry connection failed"):
+        preflight._image_manifest_exists("ghcr.io/org/repo", "v1.0.0")
+
+
