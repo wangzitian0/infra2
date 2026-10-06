@@ -193,7 +193,6 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
     args = parser.parse_args(argv)
 
     from libs.console import error, success, warning
-    from libs.gate.self_governance import _working_tree_rule_drift
     from libs.gate.types import EXIT_UNEVALUABLE
 
     def unevaluable(why: str) -> int:
