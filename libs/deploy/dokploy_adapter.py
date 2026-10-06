@@ -14,12 +14,16 @@ from typing import Any
 
 from infra2_sdk.routing import resolve_dokploy_domains
 
-from libs.deploy.rollout import RolloutError, wait_for_deployment
+from libs.deploy.rollout import (
+    TERMINAL_SUCCESS_STATUSES,
+    RolloutError,
+    wait_for_deployment,
+)
 
 logger = logging.getLogger(__name__)
 
 _CLOCK_SKEW_TOLERANCE_SECONDS = 5
-_TERMINAL_SUCCESS_STATUSES = frozenset({"done", "success", "successful"})
+_TERMINAL_SUCCESS_STATUSES = TERMINAL_SUCCESS_STATUSES
 
 
 def deployment_ids(deployments: list[dict]) -> set[str]:
@@ -96,6 +100,7 @@ def wait_for_new_deployment_record(
             timeout_seconds=timeout_seconds,
             interval_seconds=interval_seconds,
             require_terminal=True,
+            terminal_success_statuses=terminal_success_statuses,
             raise_on_error=True,
             raise_on_timeout=False,
             is_filtered_fn=filter_fn,
@@ -107,7 +112,7 @@ def wait_for_new_deployment_record(
         return True
 
     if result.status == "timeout":
-        if result.deployment and result.deployment.get("status"):
+        if result.deployment:
             dep_id = str(
                 result.deployment.get("deploymentId")
                 or result.deployment.get("id")

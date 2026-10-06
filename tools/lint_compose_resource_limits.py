@@ -29,8 +29,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import yaml
-
 from infra2_sdk.rules.compose import inspect_compose
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -53,27 +51,6 @@ def _tracked_composes() -> list[str]:
     return sorted(
         p for p in _git("ls-files").splitlines() if Path(p).name in COMPOSE_NAMES
     )
-
-
-def _unlimited_services(path: Path) -> tuple[list[str], str | None]:
-    """(services with no ceiling, reason this file was skipped or unreadable)."""
-    report = inspect_compose(path)
-    if report.errors:
-        return [], f"unreadable: {report.errors[0]}"
-    try:
-        docs = [d for d in yaml.safe_load_all(path.read_text(encoding="utf-8")) if d]
-        if any(
-            isinstance(d, dict) and "include" in d and not d.get("services")
-            for d in docs
-        ):
-            return [], "include-only"
-        if not any(
-            isinstance(d, dict) and isinstance(d.get("services"), dict) for d in docs
-        ):
-            return [], "no services"
-    except Exception as exc:
-        return [], f"unreadable: {type(exc).__name__}"
-    return list(report.unlimited_services), None
 
 
 def main() -> int:

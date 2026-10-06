@@ -44,6 +44,7 @@ from libs.deploy.env_util import (
     _parse_env_text,
     _preserve_runtime_env,
 )
+from libs.deploy.rollout import TERMINAL_SUCCESS_STATUSES
 from libs.deploy.sync_pipeline import (
     EXACT_COMMIT_RE,
     SOURCE_CONFIG_HASH_VERSION,
@@ -1013,7 +1014,7 @@ class Deployer:
             clock_skew_tolerance=_CLOCK_SKEW_TOLERANCE_SECONDS,
         )
 
-    _TERMINAL_SUCCESS_STATUSES = frozenset({"done", "success", "successful"})
+    _TERMINAL_SUCCESS_STATUSES = TERMINAL_SUCCESS_STATUSES
 
     @classmethod
     def _wait_for_new_deployment_record(

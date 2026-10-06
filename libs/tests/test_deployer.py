@@ -624,6 +624,24 @@ def test_wait_for_new_deployment_record_raises_when_ours_is_still_in_progress(
         )
 
 
+def test_wait_for_new_deployment_record_raises_when_record_status_is_empty_or_none(
+    monkeypatch,
+) -> None:
+    import libs.deploy.deployer as deployer
+    from libs.deploy.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
+
+    class Client:
+        def get_compose_deployments(self, compose_id):
+            return [{"deploymentId": "new", "status": ""}]
+
+    with pytest.raises(RuntimeError, match="still 'unknown' after 0s"):
+        Deployer._wait_for_new_deployment_record(
+            Client(), "compose-1", {"old"}, timeout_seconds=0, interval_seconds=1
+        )
+
+
 def test_wait_for_new_deployment_record_waits_through_running_to_done(
     monkeypatch,
 ) -> None:

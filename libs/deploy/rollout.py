@@ -21,8 +21,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # Dokploy deployment statuses we treat as "the rollout is progressing/succeeded".
-_RUNNING_OR_DONE = {"running", "done", "success", "successful"}
-_TERMINAL_GOOD = {"done", "success", "successful"}
+TERMINAL_SUCCESS_STATUSES = frozenset({"done", "success", "successful"})
+_RUNNING_OR_DONE = frozenset({"running", "done", "success", "successful"})
+_TERMINAL_GOOD = TERMINAL_SUCCESS_STATUSES
 
 
 class RolloutError(RuntimeError):
@@ -68,6 +69,7 @@ def wait_for_deployment(
     timeout_seconds: int,
     interval_seconds: int,
     require_terminal: bool = False,
+    terminal_success_statuses: set[str] | frozenset[str] | None = None,
     raise_on_error: bool = True,
     raise_on_timeout: bool = False,
     is_filtered_fn: Callable[[dict[str, Any]], bool] | None = None,
@@ -82,6 +84,11 @@ def wait_for_deployment(
     """
     deadline = _now() + max(0, timeout_seconds)
     attempts = 0
+    terminal_statuses = (
+        set(terminal_success_statuses)
+        if terminal_success_statuses is not None
+        else _TERMINAL_GOOD
+    )
     while True:
         attempts += 1
         raw_deployments = get_deployments() or []
@@ -103,7 +110,7 @@ def wait_for_deployment(
             terminal_records = [
                 d
                 for d in new_records
-                if str(d.get("status") or "").lower() in _TERMINAL_GOOD
+                if str(d.get("status") or "").lower() in terminal_statuses
             ]
             if terminal_records:
                 latest = _newest(terminal_records, new_ids)
