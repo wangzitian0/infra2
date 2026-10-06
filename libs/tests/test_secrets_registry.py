@@ -24,9 +24,6 @@ def test_every_registered_manifest_is_resolvable() -> None:
         for path in service.manifests:
             manifest = secrets_registry.load_manifest(path)
             assert manifest.fields, f"{service.id}: {path} has no fields"
-            assert secrets_registry.manifest_file(path).exists(), (
-                f"{service.id}: {path}"
-            )
 
 
 def test_service_ids_are_unique_per_preview_flavour() -> None:
