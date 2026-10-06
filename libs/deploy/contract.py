@@ -82,7 +82,7 @@ class ServiceSpec:
         supports_preview: Whether ``libs.deploy.preview`` can serve this service's
             preview/canary deploy types. False fails a preview/canary target closed. True
             requires a matching entry in
-            ``libs.deploy_env_config.preview_service_config`` (project / compose path /
+            ``libs.deploy.env_config.preview_service_config`` (project / compose path /
             DB name / base_subdomain, #522) — the preview lifecycle looks the service up
             there rather than assuming finance_report's internals.
     """

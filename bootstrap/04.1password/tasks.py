@@ -164,7 +164,7 @@ class OnePasswordDeployer(Deployer):
         header("1Password composing", "Deploy in Dokploy (automated)")
 
         try:
-            from libs.dokploy import ensure_project, get_dokploy
+            from libs.deploy.dokploy_client import ensure_project, get_dokploy
 
             # Ensure project exists
             domain = env_vars.get("INTERNAL_DOMAIN")

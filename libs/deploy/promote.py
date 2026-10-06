@@ -3,7 +3,7 @@
 
 This module is not the public deploy surface. ``deploy_v2(service, type, version_ref,
 iac_ref)`` resolves the coordinate, enforces the data-lane red lines, and then calls this
-backend for a bespoke app's fixed staging/prod composes (``libs.deploy_contract.SERVICES``
+backend for a bespoke app's fixed staging/prod composes (``libs.deploy.contract.SERVICES``
 — finance_report and, since #500, truealpha/app). The only deploy identity this backend
 accepts directly is ``service`` + ``env`` plus a resolved app commit/image ref; the data
 lane is derived from ``deploy_env_config.EnvConfig.data_default`` for observability and is
@@ -394,7 +394,7 @@ def _validate_deploy_preconditions(
     if cfg.compose_id is None:
         raise ValueError(
             f"{service!r} has no Dokploy compose registered for env {env!r} "
-            "(libs.deploy_env_config._APP_COMPOSE_OVERRIDES) — nothing to deploy to."
+            "(libs.deploy.env_config._APP_COMPOSE_OVERRIDES) — nothing to deploy to."
         )
     if cfg.requires_staging_first and not staging_validated and not break_glass:
         raise ValueError(

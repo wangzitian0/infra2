@@ -18,7 +18,7 @@ replaces the host watchdog's raw `LREM`/`DEL` surgery; the watchdog is now
 observe-only.
 
 Env (unchanged across the #543 merge — the names map into per-watcher config):
-  DOKPLOY_API_KEY / DOKPLOY_URL        Dokploy API (via libs.dokploy.get_dokploy)
+  DOKPLOY_API_KEY / DOKPLOY_URL        Dokploy API (via libs.deploy.dokploy_client.get_dokploy)
   ALERT_BRIDGE_URL                     where to POST alerts (the feishu bridge)
   ALERTING_ENV_FILE                    env file re-read each sweep (default /secrets/.env)
   DEPLOY_GUARD_CEILING_SECONDS         stuck threshold (default 1800 = 30 min)

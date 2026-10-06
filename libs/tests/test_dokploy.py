@@ -1,4 +1,4 @@
-"""Unit tests for libs/dokploy.py."""
+"""Unit tests for libs/deploy/dokploy_client.py."""
 
 import os
 import threading
@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from libs.deploy import dokploy_client as dokploy
-from libs.dokploy import (
+from libs.deploy.dokploy_client import (
     DokployClient,
     ensure_project,
     get_dokploy,

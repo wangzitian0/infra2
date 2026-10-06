@@ -82,7 +82,7 @@ def build_watchers(environ=None) -> list[ResidentWatcher]:
 
     Imported lazily so the probe runner's stdlib-only probe path stays
     importable even where a watcher's dependencies (httpx for the Docker
-    socket, libs.dokploy for the queue guard) are absent.
+    socket, libs.deploy.dokploy_client for the queue guard) are absent.
     """
     from libs.observability.watchers.breakdown_watch import BreakdownWatch
     from libs.observability.watchers.deploy_queue_guard import DeployQueueGuard

@@ -175,7 +175,7 @@ class Deployer:
     # Override the shared INTERNAL_DOMAIN entirely for this service (e.g. a dedicated
     # product domain instead of the platform's shared one). None = use whatever domain
     # the deploy request/caller passes in (today's behavior for every existing service).
-    # Read by libs.service_registry / libs.app_deploy_request, not by this class itself —
+    # Read by libs.service_registry / libs.deploy.app_deploy_request, not by this class itself —
     # a service with its own compose-level Traefik Host() rules (like subdomain=None
     # above) still needs its INTERNAL_DOMAIN substitution to resolve to the right zone.
     domain: str = None

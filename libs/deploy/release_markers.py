@@ -4,7 +4,7 @@
 production is pinned to, and `marker_status` is the gap between them — the daily #650
 report.
 
-Separate from libs/app_deploy_request because this is pure git: no deploy request, no
+Separate from libs/deploy/app_deploy_request because this is pure git: no deploy request, no
 secret store, no SDK. The report runs in an ops-checks job that installs none of that, and
 importing it through the request adapter killed the job on `ModuleNotFoundError: No module
 named 'infra2_sdk'` (run 34430724977, 2026-09-10).
@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _SEMVER_TAG_RE = re.compile(r"\Av[0-9]+\.[0-9]+\.[0-9]+\Z")
-#: Public: libs/app_deploy_request builds its refusal message from both of these, so
+#: Public: libs/deploy/app_deploy_request builds its refusal message from both of these, so
 #: they are part of this module's surface rather than its internals (review on #684).
 PRODUCTION_MARKER_PREFIX = "production/"
 # A production release also promotes the platform leg — truealpha/app carries
