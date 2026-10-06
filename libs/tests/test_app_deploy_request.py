@@ -6,7 +6,6 @@ import base64
 import json
 from types import SimpleNamespace
 
-import httpx
 import pytest
 from infra2_sdk.deploy import DeployOperation, DeployType
 from infra2_sdk.refs import ResolvedRef

@@ -76,7 +76,7 @@ six modules the code never followed).
 | `libs/resident_watchers.py` | `libs.observability.watchers.resident` | `ResidentWatcher`, `build_watchers` | Frozen Shim |
 | `libs/deploy_queue_guard.py` | `libs.observability.watchers.deploy_queue_guard` | `DeployQueueGuard`, `run_once` | Frozen Shim |
 | `libs/page_dedup.py` | `libs.observability.page_dedup` | `dedup_page`, `resolve_page_state`, `decide`, `Finding` | Frozen Shim |
-| `libs/availability_ledger.py` | `libs.observability.ledger` | `aggregate_ledger`, `calculate_uptime`, `build_report_message` | Frozen Shim |
+| `libs/availability_ledger.py` | `libs.observability.ledger` | `summarize_ledger`, `outage_intervals`, `build_report_message` | Frozen Shim |
 | `libs/watchdog_signal_entries.py` | `libs.observability.signal_entries` | `render_internal_signal_entries` | Frozen Shim |
 | `libs/harness_manifest.py` | `libs.core.harness.manifest` | `load_manifest`, `validate_manifest`, `check_workspace` | Frozen Shim |
 | `libs/harness_status.py` | `libs.core.harness.status` | `workspace_status`, `repository_status` | Frozen Shim |
