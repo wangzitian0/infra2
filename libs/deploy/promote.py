@@ -559,7 +559,7 @@ def deploy(
         "IAC_CONFIG_HASH": config_hash,
     }
     from libs.deploy_contract import service_spec
-    from libs.service_identity import ServiceIdentity
+    from libs.core.service_identity import ServiceIdentity
 
     svc_spec = service_spec(service)
     identity = ServiceIdentity.build(

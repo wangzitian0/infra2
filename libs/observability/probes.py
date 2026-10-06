@@ -214,7 +214,7 @@ def build_probe_alert_payload(
     started_at = started_at or {}
 
     def labels_for(result: ProbeResult) -> dict[str, str]:
-        from libs.service_identity import ServiceIdentity
+        from libs.core.service_identity import ServiceIdentity
 
         fallback_service = result.spec.name.split("-", 1)[0].replace("_", "-").lower()
         identity = ServiceIdentity.build(

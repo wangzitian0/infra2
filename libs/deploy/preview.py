@@ -190,7 +190,7 @@ def _preview_env_vars(
         "PREVIEW_DB_NAME": config.db_name,
     }
     from libs.deploy_contract import service_spec
-    from libs.service_identity import ServiceIdentity
+    from libs.core.service_identity import ServiceIdentity
 
     spec = service_spec(service)
     identity = ServiceIdentity.build(

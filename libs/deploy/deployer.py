@@ -557,7 +557,7 @@ class Deployer:
     def composing(cls, c: "Context", env_vars: dict[str, str]) -> str:
         """Deploy via Dokploy API using GitHub provider. Returns composeId."""
         from libs.dokploy import get_dokploy, ensure_project
-        from libs.const import GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH
+        from libs.core.constants import GITHUB_BRANCH, GITHUB_OWNER, GITHUB_REPO
 
         # Resolve branch dynamically to support deploying non-main commits/tags
         branch = cls._checkout_ref() or GITHUB_BRANCH

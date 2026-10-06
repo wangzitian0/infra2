@@ -30,7 +30,7 @@ from typing import Any
 
 from libs.deploy_env_config import PREVIEW_KINDS
 
-from libs.service_identity import DOCKER_LABEL_PREFIX, ServiceIdentity
+from libs.core.service_identity import DOCKER_LABEL_PREFIX, ServiceIdentity
 from libs.service_registry import resolve_container_host
 
 # (substring, human-readable cause) — ordered, first match wins. These are the

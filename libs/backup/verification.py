@@ -14,7 +14,7 @@ from typing import Any
 
 import yaml
 
-from libs.service_identity import ServiceIdentity
+from libs.core.service_identity import ServiceIdentity
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
