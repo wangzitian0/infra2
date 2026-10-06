@@ -14,9 +14,9 @@ stricter local rule.
    2026-09-21 and confirmed on 2026-09-22 that it spans every repository they own (the
    record and the conditions are in
    [`docs/ssot/ops.merge-gate.md`](../../docs/ssot/ops.merge-gate.md)). An agent merges
-   within that grant and the target repository's own merge gates; the two classes the
-   owner kept -- production deploys, and changes to what decides merges -- are listed
-   there, not here. Session-scoped authorization was superseded and must not be
+   within that grant and the target repository's own merge gates. The owner keeps one
+   class only: a production deployment (owner, 2026-10-06). A change to what decides
+   merges follows the gate-change checklist in that file. Session-scoped authorization was superseded and must not be
    re-derived from this file.
 5. Continue monitoring an open PR for late checks, review comments, and conflicting
    base changes until merge or close, then verify applicable post-merge checks.

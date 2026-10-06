@@ -155,7 +155,8 @@ uv run python -m tools.harness sweep /abs/path/watch.json --watch
 Each item gets exactly one state: `WAITING` (only time will move it), `DONE`, `ACTION`,
 `STALL` (no progress past its threshold, or a dead process without a verdict line) or
 `UNKNOWN` (a probe failed or returned a value outside the allow-lists). Merge gates are
-judged by exit code only (0 ready, 2 owner); their output is discarded, and a gate argv
+judged by exit code only (0 ready, 1 wait, 2 owner for a production deployment, 3 act,
+4 could not evaluate); their output is discarded, and a gate argv
 carrying `--merge`, `--request-review`, `--admin` or `--auto`, or an abbreviation argparse
 would expand to one, is refused. Exit codes: 0 nothing needs you, 1 action, 2 an item
 finished while others wait (watch only), 3 stall, 4 could not evaluate (including usage
@@ -450,7 +451,10 @@ non-test, non-Markdown source rather than listed, so a new consumer cannot
 silently escape it — while prose describing a path (including this README) does
 not register as a consumer.
 
-Exit 1 means "this one needs a human", with the changed files already printed.
+Exit 1 means the pin changes a derived file; the changed files are printed. The agent
+decides, with this checklist: read the App diff of each printed file, and confirm that
+every new required variable exists in the secret stores of each environment the service
+deploys to (`python -m tools.secrets_reconcile`). Record the result in the PR body.
 
 ```bash
 python3 tools/submodule_pin_impact.py

@@ -19,25 +19,28 @@ from libs.gate.types import (
     _get_workflow_dir,
 )
 
-_OWNER_INSTRUCTION_HEADER_RE = re.compile(
-    r"(?im)^(##+\s*)?(owner instruction|owner 指示)\b.*$"
-)
-_QUOTE_LINE_RE = re.compile(r"^>.*[^\W_]|「[^」]*[^\W_][^」]*」")
+_MUTATION_EVIDENCE_HEADER_RE = re.compile(r"(?im)^##+\s*mutation evidence\b.*$")
+# A test name: `test_<name>` or a pytest node id (`path::name`).
+_TEST_NAME_RE = re.compile(r"\btest_\w+|::\w+")
 
 
-def _owner_instruction_quoted(body: str) -> bool:
-    """True when the PR body cites the owner instruction, not just names it."""
+def _mutation_evidence_listed(body: str) -> bool:
+    """True when the PR body has a `## Mutation evidence` section (two or more #)
+    that names at least one test before the next heading (#1040).
+
+    It is the written half of the gate-change checklist. The test names are the
+    author's claim; the reviewer and CI hold them to it. The gate only refuses a PR
+    that does not make the claim at all."""
     lines = (body or "").splitlines()
     for i, line in enumerate(lines):
-        if not _OWNER_INSTRUCTION_HEADER_RE.match(line):
+        if not _MUTATION_EVIDENCE_HEADER_RE.match(line):
             continue
         for later in lines[i + 1 :]:
             stripped = later.strip()
-            if not stripped:
-                continue
-            if _QUOTE_LINE_RE.search(stripped):
+            if stripped.startswith("#"):
+                break
+            if _TEST_NAME_RE.search(stripped):
                 return True
-            break
     return False
 
 
