@@ -58,7 +58,7 @@ from libs.page_dedup import (  # noqa: E402
     dedup_page,
     resolve_page_state,
 )
-from libs.scheduler_peer_liveness import (  # noqa: E402
+from libs.observability.scheduler_peer_liveness import (  # noqa: E402
     BOUND_CAP_ENV,
     OK as PEER_OK,
     UNVERIFIABLE,

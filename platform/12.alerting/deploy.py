@@ -213,7 +213,7 @@ class AlertingDeployer(Deployer):
         multi-line text is encoded for the Dokploy env transport (double
         quotes + \\n escapes, which compose's dotenv expands back).
         """
-        from libs.probe_specs import (
+        from libs.observability.probe_specs import (
             encode_specs_env_value,
             render_probe_spec_text,
             resolve_env_suffix,
@@ -231,7 +231,7 @@ class AlertingDeployer(Deployer):
         render time (the $-free transport rejects placeholders), then the ;;
         encoding. Empty only when no service declares a public route.
         """
-        from libs.probe_specs import (
+        from libs.observability.probe_specs import (
             encode_specs_env_value,
             render_public_route_spec_text,
         )
@@ -328,7 +328,7 @@ class AlertingDeployer(Deployer):
         import time
 
         from libs.console import warning
-        from libs.probe_specs import missing_probe_names, normalize_specs_text
+        from libs.observability.probe_specs import missing_probe_names, normalize_specs_text
 
         e = cls.env()
         host = e.get("VPS_HOST")

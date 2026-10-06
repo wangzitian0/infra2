@@ -1520,7 +1520,7 @@ def test_main_runs_the_peer_check_with_the_watchdog_retry_settings(monkeypatch) 
 
 
 def _peer_factory(verdicts, seen):
-    from libs.scheduler_peer_liveness import PeerVerdict
+    from libs.observability.scheduler_peer_liveness import PeerVerdict
 
     answers = iter(verdicts)
 

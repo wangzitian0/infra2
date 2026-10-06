@@ -257,7 +257,7 @@ def test_deploy_queue_guard_registered_and_matches_code() -> None:
     consecutive_failures=1 is ceiling-qualified: a deploy only counts once it
     has been running past DEPLOY_GUARD_CEILING_SECONDS, so the 1800s ceiling is
     the real debounce and one qualifying sweep legitimately fires."""
-    import libs.deploy_queue_guard as module
+    import libs.observability.watchers.deploy_queue_guard as module
 
     inventory = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
     signals = {s["signal"]: s for s in inventory["signals"]}

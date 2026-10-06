@@ -10,7 +10,7 @@ import os
 import time
 from pathlib import Path
 
-from libs.backup_verification import (
+from libs.backup.verification import (
     build_backup_alert_payload,
     load_backup_inventory,
     verify_backup_manifest,

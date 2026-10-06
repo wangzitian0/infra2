@@ -33,7 +33,7 @@ import pytest
 
 from libs import secrets_registry
 from libs import service_registry as reg
-from libs.probe_specs import render_probe_spec_text
+from libs.observability.probe_specs import render_probe_spec_text
 from libs.tests.compose_env import compose_services, container_env, resolve
 from libs.tests.docker_host import DockerHost
 from libs.tests.traefik_rules import routers_from_labels, serving_router

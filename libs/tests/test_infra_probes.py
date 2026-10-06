@@ -352,7 +352,7 @@ def test_in_band_probe_compose_uses_internal_network_targets() -> None:
 
     #541: the probe set is registry-rendered (ProbeFacet declarations on the
     owning Deployers), so the rule is checked on the rendered text."""
-    from libs.probe_specs import render_probe_spec_text
+    from libs.observability.probe_specs import render_probe_spec_text
 
     probe_block = render_probe_spec_text()
 
@@ -388,7 +388,7 @@ def test_public_route_probes_derive_from_facets_and_registered_signals() -> None
     an unregistered public probe cannot ship."""
     import yaml
 
-    from libs.probe_specs import parse_probe_names, render_public_route_spec_text
+    from libs.observability.probe_specs import parse_probe_names, render_public_route_spec_text
 
     compose = (ROOT / "platform/12.alerting/compose.yaml").read_text(encoding="utf-8")
     assert "PUBLIC_ROUTE_PROBE_SPECS: ${PUBLIC_ROUTE_PROBE_SPECS:-}" in compose
@@ -690,7 +690,7 @@ def test_openpanel_ingest_loss_pages_p1_through_the_deployed_specs(
     registry-rendered INFRA_PROBE_SPECS the alerting deploy ships. Red before: every
     shape paged `warning`; the worker shape stayed `warning` with the probes raised
     until the payload took the worst severity instead of the first."""
-    from libs.probe_specs import (
+    from libs.observability.probe_specs import (
         encode_specs_env_value,
         render_probe_spec_text,
         resolve_env_suffix,
@@ -1578,7 +1578,7 @@ def test_probe_runner_loop_survives_an_unreadable_env_file(
 def test_the_full_dependency_route_is_probed_in_band_per_environment() -> None:
     """#921: `/api/health?full=1` asserts every finance_report dependency, at P2 in
     every environment: its dependencies' own probes page their outages."""
-    from libs.probe_specs import render_public_route_spec_text
+    from libs.observability.probe_specs import render_public_route_spec_text
 
     prod = render_public_route_spec_text("production", "zitian.party").splitlines()
     staging = render_public_route_spec_text("staging", "zitian.party").splitlines()
@@ -1748,7 +1748,7 @@ def test_truealpha_app_is_probed_inside_and_on_its_product_domain() -> None:
     truealpha#474), which the public-route renderer could not express."""
     import importlib.util
 
-    from libs.probe_specs import render_probe_spec_text, render_public_route_spec_text
+    from libs.observability.probe_specs import render_probe_spec_text, render_public_route_spec_text
 
     internal = render_probe_spec_text()
     assert (

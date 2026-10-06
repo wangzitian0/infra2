@@ -170,7 +170,7 @@ def _configure_logging() -> None:
 
     The root stays at WARNING so nothing else in the process becomes chatty; the two
     watcher loggers are raised to INFO explicitly. httpx/httpcore are pinned to WARNING
-    in libs.container_breakdown_watch, which polls the Docker socket every minute.
+    in libs.observability.watchers.breakdown_watch, which polls the Docker socket every minute.
     """
     # force=True: basicConfig is a no-op once the root logger has any handler, so
     # without it a library that configured logging first would leave the root level and
@@ -273,7 +273,7 @@ def _build_watchers() -> list:
 
     A module-level seam so tests can stub the watcher set; the real registry
     lives in libs/resident_watchers.build_watchers."""
-    from libs.resident_watchers import build_watchers
+    from libs.observability.watchers.resident import build_watchers
 
     return build_watchers()
 

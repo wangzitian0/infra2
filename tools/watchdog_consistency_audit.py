@@ -327,7 +327,7 @@ def _vps_public_route_errors(signals: list[dict[str, Any]]) -> list[str]:
 
 def _vps_public_routes() -> dict[tuple[str, str], str]:
     """(environment, probe name) -> severity of every in-band public-route probe."""
-    from libs.probe_specs import render_public_route_spec_text
+    from libs.observability.probe_specs import render_public_route_spec_text
 
     routes: dict[tuple[str, str], str] = {}
     for environment in ("production", "staging"):
@@ -470,7 +470,7 @@ def _compose_probe_specs() -> dict[str, str]:
     #541 cutover: the specs are no longer a compose.yaml literal — they are
     rendered from each service's ProbeFacet declarations via the registry, so
     this audit reads the same single derivation the deploy renders from."""
-    from libs.probe_specs import render_probe_spec_text
+    from libs.observability.probe_specs import render_probe_spec_text
 
     specs: dict[str, str] = {}
     for line in render_probe_spec_text().splitlines():
