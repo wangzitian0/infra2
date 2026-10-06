@@ -40,7 +40,7 @@ The four axes are orthogonal; completeness is proven in
 |---------------|---------|-------|
 | app, fixed env | `deploy_primitive` | staging / prod |
 | app, preview | `preview_lifecycle` | the `preview/*` types |
-| **`iac_pinned`** (all non-app) | **`iac_runner` `/deploy` webhook** | via `libs/iac_runner_client`, HMAC-SHA256 signed; `version_ref` unused |
+| **`iac_pinned`** (all non-app) | **`iac_runner` `/deploy` webhook** | via `libs/deploy/iac_runner_client`, HMAC-SHA256 signed; `version_ref` unused |
 
 `iac_pinned` is **derived** from `libs/service_registry` (Infra-013), never a
 hand-copied list — adding a platform service cannot drift the deploy registry.
@@ -102,7 +102,7 @@ input-drift trigger and still enters through `deploy_v2`.
 ## References
 - [SSOT: core.environments §4.6 / §4.7.2](../../ssot/core.environments.md)
 - [SSOT: ops.pipeline](../../ssot/ops.pipeline.md)
-- `libs/iac_runner_client.py`, `tools/deploy_v2.py`, `tools/deploy_contract.py`
+- `libs/deploy/iac_runner_client.py`, `tools/deploy_v2.py`, `tools/deploy_contract.py`
 - Root: finance_report#1072 · cutover issue #370
 - [[Infra-013]] service registry SSOT (the registry deploy_v2 derives from)
 

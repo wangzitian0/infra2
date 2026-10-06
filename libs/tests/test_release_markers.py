@@ -79,7 +79,7 @@ def test_the_markers_action_runs_without_the_deploy_sdk(tmp_path, capsys, monkey
     for name in [
         n
         for n in sys.modules
-        if n.startswith(("infra2_sdk", "libs.app_deploy_request"))
+        if n.startswith(("infra2_sdk", "libs.deploy.app_deploy_request"))
     ]:
         monkeypatch.delitem(sys.modules, name, raising=False)
     monkeypatch.setitem(sys.modules, "infra2_sdk", None)  # import -> ImportError

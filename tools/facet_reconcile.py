@@ -61,7 +61,7 @@ def run_compose_id_section() -> Section:
         # imports inside the try (live lesson from the first run: a missing
         # dependency in one section must degrade to THAT section's blocker,
         # not crash the whole runner before the report is even delivered)
-        from libs.dokploy import get_dokploy
+        from libs.deploy.dokploy_client import get_dokploy
         from tools.app_compose_id_drift import confirmed_drift, format_report, scan
 
         rows = scan(get_dokploy())

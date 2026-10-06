@@ -6,7 +6,7 @@ from rich.table import Table
 
 from libs.common import normalize_env_name, get_env, get_service_url
 from libs.console import header, success, error, info, console, warning
-from libs.dokploy import get_dokploy
+from libs.deploy.dokploy_client import get_dokploy
 
 
 # Services intentionally left on Dokploy-native autoDeploy because they are NOT

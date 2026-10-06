@@ -1,7 +1,7 @@
 # TrueAlpha Application — PREVIEW (multi-alias, ephemeral) compose template
 #
 # Used by `python -m tools.deploy_v2 --service truealpha/app --type preview/*` (backend:
-# libs/deploy/preview.py, generalized off libs.deploy_env_config.preview_service_config —
+# libs/deploy/preview.py, generalized off libs.deploy.env_config.preview_service_config —
 # #522) to stand up ONE throwaway preview stack per alias (branch-<name> / pr-<N> /
 # commit-<sha7> / tag-<slug>). Each alias gets its OWN copy of this compose as a distinct
 # Dokploy compose (project "truealpha", environment "preview"), with a unique ENV_SUFFIX so

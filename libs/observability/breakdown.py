@@ -55,7 +55,7 @@ BREAKDOWN_PATTERNS: tuple[tuple[str, str], ...] = (
 _MAX_DETAIL = 200
 _LOG_TAIL_LINES = 5
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
-# A preview slot's containers carry `-<kind>-<value>` (libs.deploy_env_config:
+# A preview slot's containers carry `-<kind>-<value>` (libs.deploy.env_config:
 # -pr-5, -branch-main, -commit-1ab32d5, -tag-v1-2-3).
 _PREVIEW_SLOT_NAME = re.compile(
     r"-(?:" + "|".join(re.escape(kind) for kind in PREVIEW_KINDS) + r")-"

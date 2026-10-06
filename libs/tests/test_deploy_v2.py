@@ -21,7 +21,7 @@ import httpx
 import pytest
 
 import tools.deploy_v2 as dv2
-from libs.iac_runner_client import (
+from libs.deploy.iac_runner_client import (
     RunnerLostDeploymentError,
     status_poll_attempts,
     status_poll_delays,
@@ -862,7 +862,7 @@ def test_unknown_service_rejected(calls):
 
 
 def test_resolve_data_lane_by_env():
-    from libs.deploy_contract import make_deploy_target
+    from libs.deploy.contract import make_deploy_target
 
     def t(env, **kw):
         return make_deploy_target(
@@ -882,7 +882,7 @@ def test_resolve_data_lane_by_env():
 
 
 def test_enforce_returns_data_lane():
-    from libs.deploy_contract import make_deploy_target
+    from libs.deploy.contract import make_deploy_target
 
     target = make_deploy_target(
         service="finance_report/app", env="prod", code_version=SHA_CODE, iac_ref=SHA_IAC
@@ -894,7 +894,7 @@ def test_enforce_data_lane_snapshot_freshness_warning(monkeypatch, tmp_path, cap
     import json
     import logging
     from datetime import datetime, timezone, timedelta
-    from libs.deploy_contract import make_deploy_target
+    from libs.deploy.contract import make_deploy_target
     import tools.deploy_v2 as dv2_mod
 
     old_time = (datetime.now(timezone.utc) - timedelta(days=8)).strftime(
@@ -934,7 +934,7 @@ def cli(monkeypatch):
     """Drive deploy_v2.main with client + deploy_v2 faked — no resolve, no Dokploy."""
     import json
 
-    from libs.deploy_contract import make_target
+    from libs.deploy.contract import make_target
 
     rec = {}
     import libs.deploy.dokploy_client as dk
@@ -1841,7 +1841,7 @@ def test_the_real_client_loss_error_drives_the_resubmit_decision(
 ):
     """Join the two halves: the REAL poll function, on a runner that answers ``not_found``
     to the first request, must make deploy_v2 re-submit (staging) or stop (production)."""
-    from libs import iac_runner_client
+    from libs.deploy import iac_runner_client as iac_runner_client
 
     real_poll = iac_runner_client.poll_platform_deploy_status
     moment = [1700000000.0]

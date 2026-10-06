@@ -44,7 +44,7 @@ automatically from the service's `ProbeFacet`/`SignalFacet` declarations);
 `tools/no_new_wheels_lint.py` blocks CI otherwise.
 
 `app_deploy_request.py` is the thin cross-repository adapter in front of `deploy_v2`.
-`libs/app_deploy_request.py` deserializes `infra2_sdk.deploy.DeployRequest`, validates
+`libs/deploy/app_deploy_request.py` deserializes `infra2_sdk.deploy.DeployRequest`, validates
 source authority and immutable coordinates, remotely verifies Production run/review evidence,
 and selects the released IaC ref; the tool only wires argv/env and invokes the existing deploy
 front door. There is no CLI bypass for Production evidence. Dokploy/Vault mutation stays in

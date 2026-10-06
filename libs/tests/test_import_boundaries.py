@@ -433,10 +433,19 @@ RETIRED_FLAT_SHIMS_BATCH2C = {
     "vault_tokens",
 }
 
+RETIRED_FLAT_SHIMS_DEPLOY = {
+    "app_deploy_request",
+    "deploy_contract",
+    "deploy_env_config",
+    "dokploy",
+    "iac_runner_client",
+}
+
 ALL_RETIRED_FLAT_SHIMS = (
     RETIRED_FLAT_SHIMS_BATCH1
     | RETIRED_FLAT_SHIMS_BATCH2
     | RETIRED_FLAT_SHIMS_BATCH2C
+    | RETIRED_FLAT_SHIMS_DEPLOY
 )
 
 
@@ -490,7 +499,7 @@ def test_no_tracked_python_file_uses_a_retired_flat_shim() -> None:
                 mod = node.module or ""
                 if mod == "libs":
                     for alias in node.names:
-                        if alias.name in RETIRED_FLAT_SHIMS_BATCH1:
+                        if alias.name in ALL_RETIRED_FLAT_SHIMS:
                             violations.append(
                                 f"{rel}:{node.lineno} imports retired libs.{alias.name}"
                             )

@@ -26,7 +26,7 @@ Modules in `libs/` that provide direct integrations or operational clients:
 
 | Module | Purpose | Key Exports |
 |--------|---------|-------------|
-| [`deploy/dokploy_client.py`](./deploy/dokploy_client.py) | Dokploy REST API wrapper (`libs/dokploy.py` is its shim) | `DokployClient`, `get_dokploy()` |
+| [`deploy/dokploy_client.py`](./deploy/dokploy_client.py) | Dokploy REST API wrapper (`libs/deploy/dokploy_client.py` is its shim) | `DokployClient`, `get_dokploy()` |
 | [`observability_dashboards.py`](./observability_dashboards.py) | SigNoz alert rules and dashboards loader. It stays here: moving it triggers apply-observability.yml, which needs owner approval (#1059 phase 2). | `load_alert_definitions()`, `render_alert_payloads()`, `require_rule_channel()` |
 | [`console.py`](./console.py) | Rich CLI formatting and header blocks | `header()`, `success()`, `error()`, `prompt_action()` |
 | [`common.py`](./common.py) | Environment derivation re-export and operator health check helper | `get_env()`, `check_service()` |
@@ -58,11 +58,6 @@ six modules the code never followed).
 | `libs/service_registry.py` | `libs.core.registry` | `service_attrs`, `ServiceMeta`, `all_services`, `resolve_container_host` | Frozen Shim |
 | `libs/service_facets.py` | `libs.core.facets` | `ProbeFacet`, `PublicRouteFacet`, `SignalFacet`, `BackupFacet`, `Exemption` | Frozen Shim |
 | `libs/deploy_dependencies.py` | `libs.deploy.dependencies` | `extra_dependency_globs`, `service_key_from_path` | Frozen Shim |
-| `libs/deploy_env_config.py` | `libs.deploy.env_config` | `app_compose_env_config`, `preview_service_config`, `otel_env` | Frozen Shim |
-| `libs/deploy_contract.py` | `libs.deploy.contract` | `service_spec`, `ServiceSpec`, `deploy_type_spec` | Frozen Shim |
-| `libs/dokploy.py` | `libs.deploy.dokploy_client` | `DokployClient`, `get_dokploy`, `ensure_project` | Frozen Shim |
-| `libs/iac_runner_client.py` | `libs.deploy.iac_runner_client` | `trigger_platform_deploy`, `poll_platform_deploy_status` | Frozen Shim |
-| `libs/app_deploy_request.py` | `libs.deploy.app_deploy_request` | `verify_production_evidence`, `validate_request_authority` | Frozen Shim |
 | `libs/common.py` | — (re-exports `libs.core.environ`, and holds `check_service`) | — | Not a shim |
 | `libs/console.py` | — (holds its own implementation) | — | Not a shim |
 

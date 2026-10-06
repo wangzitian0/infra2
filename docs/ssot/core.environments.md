@@ -309,7 +309,7 @@ an explicit per-environment Vault value.
 
 **签发归 infra2**：Deployer / fixed promote / preview 三个入口从 registry 和已验证部署坐标构建 `ServiceIdentity`；应用与 Vault Agent 只消费签发值，不得从 secret 或自身默认值重定义身份。标准字段是 `deployment.environment.name`；迁移期双写旧 `deployment.environment`，查询和新告警必须使用 `.name`。身份 metadata 不进入运行配置 hash，远端缺失/错误则触发一次 reconcile；部署后校验关键 `INFRA_*` 字段，避免永久重启抖动。OTLP 端点见 [ops.observability.md](ops.observability.md#41-应用接入-otlp)。
 
-对 **preview** 多别名而言，`deployment.environment.name` 的取值就是 alias token（见 §4.6）。同一份签发逻辑由 `libs/deploy/preview` 后端（经 `tools/deploy_v2 --type preview/*` 触发，非直接调用）注入 compose（vault-agent 与遥测共同消费），与 `libs/deploy_env_config.py::preview_alias` 派生的 `env_suffix` 保持同源。
+对 **preview** 多别名而言，`deployment.environment.name` 的取值就是 alias token（见 §4.6）。同一份签发逻辑由 `libs/deploy/preview` 后端（经 `tools/deploy_v2 --type preview/*` 触发，非直接调用）注入 compose（vault-agent 与遥测共同消费），与 `libs/deploy/env_config.py::preview_alias` 派生的 `env_suffix` 保持同源。
 
 ---
 
@@ -333,7 +333,7 @@ an explicit per-environment Vault value.
 | `commit` | `commit-<sha7>` | `-commit-<sha7>` | `report-commit-<sha7>.<domain>` | `finance-report-preview-commit-<sha7>` | `commit-<sha7>` |
 | `tag` | `tag-<v1-2-3>` | `-tag-<v1-2-3>` | `report-tag-<v1-2-3>.<domain>` | `finance-report-preview-tag-<v1-2-3>` | `tag-<v1-2-3>` |
 
-`branch` 默认 `main`（→ `branch-main`，取代旧的裸 `main` 槽）；`tag` 的点变横线做 DNS-safe slug（`v1.2.3` → `tag-v1-2-3`）。注意区分：**镜像** `IMAGE_TAG` 用规范值 `v1.2.3`（`preview_alias.value`），而 **URL / 遥测 `deployment.environment`** 用 slug `tag-v1-2-3`（即上表那一列）——过滤遥测时按 `tag-v1-2-3`。真源：`libs/deploy_env_config.py::preview_alias(kind, value)`（纯函数，确定性，单测覆盖）。
+`branch` 默认 `main`（→ `branch-main`，取代旧的裸 `main` 槽）；`tag` 的点变横线做 DNS-safe slug（`v1.2.3` → `tag-v1-2-3`）。注意区分：**镜像** `IMAGE_TAG` 用规范值 `v1.2.3`（`preview_alias.value`），而 **URL / 遥测 `deployment.environment`** 用 slug `tag-v1-2-3`（即上表那一列）——过滤遥测时按 `tag-v1-2-3`。真源：`libs/deploy/env_config.py::preview_alias(kind, value)`（纯函数，确定性，单测覆盖）。
 
 **preview 关键特性**：
 1. **多别名共存**：`branch-<name>` / `pr-<N>` / `commit-<sha7>` / `tag-<v>` 各自一套独立 compose 栈，互不冲突，也不与 staging/prod 撞容器名或 Host() 规则（靠唯一的 `ENV_SUFFIX`）。
@@ -348,7 +348,7 @@ an explicit per-environment Vault value.
 
 一次部署的**身份**由且仅由**四个正交轴**确定——每个轴独立（谁也推不出谁），合起来对
 `preview / staging / prod` 各类目标都充分。`type` 是判别式，`env` / `sub_domain` 由它**派生**，不是输入轴。
-契约/校验层 `libs/deploy_contract.py` 是**纯函数**（无副作用，单测覆盖）；`tools/deploy_v2.py` 是**执行前门**
+契约/校验层 `libs/deploy/contract.py` 是**纯函数**（无副作用，单测覆盖）；`tools/deploy_v2.py` 是**执行前门**
 （解析 + 分派到 `preview_lifecycle` / `deploy_primitive`，有副作用），两者都有单测。
 
 ```
@@ -391,7 +391,7 @@ commit `sha`（身份）+ `image_ref`（要拉的已发布镜像）——**code 
 - **RL-DATA-1**（§5 data-lane，执行层 `deploy_v2.enforce_data_lane_red_lines`）：`env=prod ⇒ data_lane=prod`；
   未评审代码不上 prod 数据——deny-by-default：`code_reviewed` 必须显式为 `True`，缺省(`None`)与 `False` 均 fail-closed。
 
-> **现状边界**：`libs.deploy_contract.SERVICES` 中注册的 bespoke app（`finance_report/app`；
+> **现状边界**：`libs.deploy.contract.SERVICES` 中注册的 bespoke app（`finance_report/app`；
 > `truealpha/app` 自 #500 起）走 app 后端（`deploy_primitive` / `preview_lifecycle`）；`iac_pinned`
 > 服务从 `libs.service_registry` 派生并走 iac_runner `/deploy` webhook。`truealpha/app` 已接入
 > `preview`（多别名预览栈）、`staging` 与 `prod`（已配置独立 compose ID）。完整 GitHub 评审信号

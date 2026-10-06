@@ -62,7 +62,7 @@ Platform 支持 staging 与 production 并行，优先使用 Dokploy 的 Project
 Track top issues discovered during the project.
 
 ## Top Issues (Top 30)
-- [x] `libs/dokploy.py`: environment selection missing; staging deploys target default env
+- [x] `libs/deploy/dokploy_client.py`: environment selection missing; staging deploys target default env
 - [x] `libs/deploy/deployer.py`: non-production requires explicit DATA_PATH or ENV_SUFFIX (guarded)
 - [x] `bootstrap/06.iac_runner` and `finance/wealthfolio`: route ownership is single-source and uses Dokploy Domains for simple public HTTP routes; enforced by `libs/tests/test_domain_routing_policy.py`
 - [ ] `platform/*/compose.yaml`: fixed `container_name` blocks multi-env (needs env suffix or remove container_name)

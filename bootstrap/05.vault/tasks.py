@@ -146,7 +146,7 @@ class VaultDeployer(Deployer):
     @classmethod
     def composing(cls, c, env_vars: dict) -> str:
         """Deploy Vault via Dokploy API (using GitHub provider)"""
-        from libs.dokploy import ensure_project, get_dokploy
+        from libs.deploy.dokploy_client import ensure_project, get_dokploy
         from libs.core.constants import GITHUB_BRANCH, GITHUB_OWNER, GITHUB_REPO
 
         e = cls.env()
@@ -497,7 +497,7 @@ def _redeploy_with_vault_creds(
 
 def _dokploy_client() -> tuple[Any, str]:
     """The Dokploy client for this environment, and the environment name."""
-    from libs.dokploy import get_dokploy
+    from libs.deploy.dokploy_client import get_dokploy
     from libs.common import get_env
 
     e = get_env()

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from libs.deploy_contract import (
+from libs.deploy.contract import (
     SERVICES,
     DeployTarget,
     ServiceSpec,
@@ -296,7 +296,7 @@ def test_platform_specs_are_derived_from_service_registry():
     # appear in the registry.
     from libs.service_registry import service_attrs
 
-    from libs.deploy_contract import SERVICES, all_service_keys, service_spec
+    from libs.deploy.contract import SERVICES, all_service_keys, service_spec
 
     reg = service_attrs()
     assert set(all_service_keys()) == set(reg) | set(SERVICES)
@@ -312,7 +312,7 @@ def test_truealpha_app_carries_the_data_engine_as_its_companion():
     """truealpha#712: the data engine is promoted by the same request as the app, so a
     release can no longer leave it behind. Every companion must itself be a deployable
     service the runner knows (iac_pinned), or the receiver would dispatch into a void."""
-    from libs.deploy_contract import service_spec
+    from libs.deploy.contract import service_spec
 
     spec = service_spec("truealpha/app")
     assert spec.companions == ("truealpha/data_engine",)

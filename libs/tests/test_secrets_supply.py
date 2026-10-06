@@ -397,7 +397,7 @@ def test_retrying_transport_fails_closed_past_the_retry_budget(monkeypatch) -> N
             "GET", "https://vault.test/v1/secret/data/truealpha/staging/app", {}, None
         )
 
-    assert len(calls) == 3  # 1 initial + 2 retries, same budget as libs/dokploy.py
+    assert len(calls) == 3  # 1 initial + 2 retries, same budget as libs/deploy/dokploy_client.py
     assert sleeps == [2, 4]
 
 
