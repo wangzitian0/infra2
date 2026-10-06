@@ -24,9 +24,12 @@ disk at HEAD before trusting any tag comparison.
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -145,6 +148,108 @@ def expected_hash_at(
     return config_hash_from_items(
         compose_content, env_vars, artifact_items, dep_items
     ), missing
+
+
+# A release's identity is defined by that release's code: its input enumeration and its
+# env plane. This checkout's code recomputes a different hash whenever main changes
+# libs/** or tools/** after a promote, and the daily reconcile then paged with nothing
+# drifted (#1071: v1.2.17's own code gives the deployed 46bc5a334f71, main's gives
+# 98f5136b6408).
+_REF_HASH_SCRIPT = r"""
+import json, sys
+sys.path.insert(0, ".")
+from invoke import Context
+from tools import dokploy_config_drift as d
+d._set_env("production")
+out = {}
+for sid in json.loads(sys.argv[1]):
+    try:
+        dep = d._load_deployer(sid)
+        if dep is None:
+            out[sid] = {"error": "no deployer at this ref"}
+            continue
+        h, missing = d.expected_hash_at(dep, Context(), "HEAD", d._source_env_vars(dep))
+        out[sid] = {"hash": h, "missing": list(missing)}
+    except Exception as exc:
+        out[sid] = {"error": f"{type(exc).__name__}: {exc}"}
+print("REF_HASHES " + json.dumps(out))
+"""
+
+
+def hashes_with_ref_code(
+    ref: str, service_ids: list[str], *, root: Path | None = None
+) -> dict[str, dict]:
+    """{service id: {"hash", "missing"} | {"error"}} computed by ``ref``'s own code.
+
+    The code runs in a temporary detached worktree of ``ref``, which is removed after.
+    Raises when the worktree or the script fails as a whole."""
+    root = root or ROOT
+    with tempfile.TemporaryDirectory(prefix="config-drift-") as tmp:
+        tree = Path(tmp) / "tree"
+        subprocess.run(
+            ["git", "worktree", "add", "--detach", "--quiet", str(tree), ref],
+            cwd=root,
+            check=True,
+            capture_output=True,
+        )
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", _REF_HASH_SCRIPT, json.dumps(service_ids)],
+                cwd=tree,
+                capture_output=True,
+                text=True,
+                timeout=600,
+                env={**os.environ, "DEPLOY_ENV": "production"},
+            )
+        finally:
+            subprocess.run(
+                ["git", "worktree", "remove", "--force", str(tree)],
+                cwd=root,
+                capture_output=True,
+            )
+    line = next(
+        (x for x in proc.stdout.splitlines() if x.startswith("REF_HASHES ")), None
+    )
+    if proc.returncode != 0 or line is None:
+        raise RuntimeError(
+            f"the code at {ref} could not compute hashes: {proc.stderr.strip()[-300:]}"
+        )
+    return json.loads(line.removeprefix("REF_HASHES "))
+
+
+class _ReleaseHashes:
+    """Expected identities by each release's own code (#1071), one checkout per commit."""
+
+    def __init__(self, service_ids: list[str]) -> None:
+        self.service_ids = list(service_ids)
+        self.by_commit: dict[str, dict | None] = {}
+
+    def expected(
+        self,
+        dep: type[Deployer],
+        c: Context,
+        sid: str,
+        ref: str,
+        env_vars: dict[str, str],
+    ) -> tuple[str | None, list[str]]:
+        try:
+            commit = _commit_at_ref(ref)
+        except Exception:  # noqa: BLE001 - an unresolvable ref fails below, loudly
+            commit = ref
+        if commit not in self.by_commit:
+            try:
+                self.by_commit[commit] = hashes_with_ref_code(commit, self.service_ids)
+            except Exception as exc:  # noqa: BLE001 - fall back to this checkout's formula
+                print(
+                    f"config drift: the code at {ref} is unavailable ({exc}); "
+                    "using this checkout's formula",
+                    file=sys.stderr,
+                )
+                self.by_commit[commit] = None
+        result = (self.by_commit[commit] or {}).get(sid) or {}
+        if result.get("hash"):
+            return result["hash"], list(result.get("missing") or [])
+        return expected_hash_at(dep, c, ref, env_vars)
 
 
 def _set_env(env_name: str) -> None:
@@ -294,7 +399,9 @@ def scan(tag: str) -> list[Row]:
     deployed = _deployed_identities()
     expected_ref = _commit_at_ref(tag)
     rows: list[Row] = []
-    for sid in service_registry.all_services():
+    service_ids = list(service_registry.all_services())
+    release = _ReleaseHashes(service_ids)
+    for sid in service_ids:
         dep = _load_deployer(sid)
         if dep is None:
             continue
@@ -320,7 +427,7 @@ def scan(tag: str) -> list[Row]:
             continue
         try:
             env_vars = _source_env_vars(dep)
-            exp, missing = expected_hash_at(dep, c, tag, env_vars)
+            exp, missing = release.expected(dep, c, sid, tag, env_vars)
         except Exception as exc:  # noqa: BLE001 — detector failure is not drift
             rows.append(
                 Row(
@@ -390,8 +497,8 @@ def scan(tag: str) -> list[Row]:
             )
             continue
         try:
-            provenance_hash, provenance_missing = expected_hash_at(
-                dep, c, identity.deploy_ref, env_vars
+            provenance_hash, provenance_missing = release.expected(
+                dep, c, sid, identity.deploy_ref, env_vars
             )
         except Exception as exc:  # noqa: BLE001
             rows.append(

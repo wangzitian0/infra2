@@ -96,6 +96,20 @@ def test_contents_at_ref_empty_paths_is_noop() -> None:
     assert contents_at_ref("HEAD", []) == {}
 
 
+# Captured before the autouse fixture below replaces the module attribute.
+_REAL_HASHES_WITH_REF_CODE = drift.hashes_with_ref_code
+
+
+@pytest.fixture(autouse=True)
+def _no_release_checkout(monkeypatch):
+    """Unit tests never check out a release; a test that needs one overrides this."""
+
+    def unavailable(ref, service_ids, *, root=None):
+        raise RuntimeError("no release checkout in unit tests")
+
+    monkeypatch.setattr(drift, "hashes_with_ref_code", unavailable)
+
+
 def _stub_single_service_scan(monkeypatch, identity, hashes_by_ref):
     class DummyDeployer:
         pass
@@ -384,3 +398,92 @@ def test_scan_resolves_legacy_compose_names(monkeypatch) -> None:
     assert rows[0].service == "platform/s3"
     assert rows[0].verdict == "in_sync"
     assert rows[0].deployed == "v1:src123"
+
+
+_STUB = """
+def _set_env(name):
+    pass
+
+
+def _load_deployer(sid):
+    return object
+
+
+def _source_env_vars(dep):
+    return {}
+
+
+def expected_hash_at(dep, c, ref, env):
+    return "HASH", []
+"""
+
+
+def _git(repo, *args):
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def test_hashes_with_ref_code_runs_the_code_of_that_ref(tmp_path) -> None:
+    """#1071: the expected identity of a release comes from that release's code.
+    Two commits carry two different formulas; each ref must answer with its own."""
+    repo = tmp_path / "repo"
+    (repo / "tools").mkdir(parents=True)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@example.invalid")
+    _git(repo, "config", "user.name", "t")
+    module = repo / "tools" / "dokploy_config_drift.py"
+    module.write_text(_STUB.replace("HASH", "release-a"))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "a")
+    commit_a = _git(repo, "rev-parse", "HEAD")
+    module.write_text(_STUB.replace("HASH", "release-b"))
+    _git(repo, "commit", "-q", "-am", "b")
+    commit_b = _git(repo, "rev-parse", "HEAD")
+
+    a = _REAL_HASHES_WITH_REF_CODE(commit_a, ["platform/x"], root=repo)
+    b = _REAL_HASHES_WITH_REF_CODE(commit_b, ["platform/x"], root=repo)
+
+    assert a == {"platform/x": {"hash": "release-a", "missing": []}}
+    assert b == {"platform/x": {"hash": "release-b", "missing": []}}
+    assert len(_git(repo, "worktree", "list").splitlines()) == 1
+
+
+def test_scan_takes_the_release_formula_over_this_checkout(monkeypatch) -> None:
+    """#1071: main's formula disagrees with the deployed identity, the release's own
+    code agrees with it. That is not drift."""
+    monkeypatch.setattr(
+        drift,
+        "hashes_with_ref_code",
+        lambda ref, ids, *, root=None: {
+            "platform/example": {"hash": "released", "missing": []}
+        },
+    )
+    row = _stub_single_service_scan(
+        monkeypatch,
+        DeployedIdentity(
+            runtime_hash="runtime", source_hash="v1:released", deploy_ref="b" * 40
+        ),
+        {"v1.2.3": "main-formula", "b" * 40: "main-formula"},
+    )
+
+    assert row.verdict == "in_sync"
+
+
+def test_scan_reports_drift_that_the_release_code_confirms(monkeypatch) -> None:
+    monkeypatch.setattr(
+        drift,
+        "hashes_with_ref_code",
+        lambda ref, ids, *, root=None: {
+            "platform/example": {"hash": "released", "missing": []}
+        },
+    )
+    row = _stub_single_service_scan(
+        monkeypatch,
+        DeployedIdentity(
+            runtime_hash="runtime", source_hash="v1:hand-edited", deploy_ref="b" * 40
+        ),
+        {"v1.2.3": "released", "b" * 40: "released"},
+    )
+
+    assert row.verdict == "DRIFT"
