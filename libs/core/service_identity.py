@@ -9,13 +9,12 @@ from libs.core.constants import (
     DEPLOYMENT_ENV_PREVIEW,
     DEPLOYMENT_ENV_PRODUCTION,
     DEPLOYMENT_ENV_STAGING,
+    DOCKER_LABEL_PREFIX,
+    IDENTITY_SCHEMA_VERSION,
+    MANAGED_BY,
     STATEFUL_DEPLOY_ENVIRONMENTS,
     is_stateful_deploy_env,
 )
-
-IDENTITY_SCHEMA_VERSION = "v1"
-MANAGED_BY = "infra2"
-DOCKER_LABEL_PREFIX = "party.zitian.infra"
 
 __all__ = [
     "DEPLOYMENT_ENV_PREVIEW",

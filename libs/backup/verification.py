@@ -15,9 +15,7 @@ from typing import Any
 import yaml
 
 from libs.core.service_identity import ServiceIdentity
-
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from libs.core.constants import REPO_ROOT
 
 
 class BackupManifestError(ValueError):

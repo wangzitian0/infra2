@@ -56,9 +56,9 @@ from typing import Any
 from libs.deploy_queue import parse_epoch_seconds
 from libs.security.store import verify_vault_token
 from libs.recency import is_recently_flapping
+from libs.core.constants import REPO_ROOT
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 SECRET_KEYS = ("token", "secret", "password", "key", "authorization")
 
 # (#542) The audit inventory is DERIVED from each service's Deployer
