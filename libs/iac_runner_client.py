@@ -40,6 +40,11 @@ STATUS_POLL_INITIAL_SECONDS = 2.0
 STATUS_POLL_BACKOFF = 1.25
 STATUS_POLL_MAX_SECONDS = 10.0
 
+# A `not_found` answer is normal for a moment right after the trigger. One that lasts
+# longer than this is a lost request: the runner restarted and dropped its in-memory
+# deploy state (#666). The poll then fails at once; it does not wait for the full budget.
+STATUS_NOT_FOUND_GRACE_SECONDS = 90.0
+
 
 def status_poll_delays(
     initial: float = STATUS_POLL_INITIAL_SECONDS,
@@ -237,6 +242,7 @@ def poll_platform_deploy_status(
     version_ref: str | None = None,
     action: str | None = None,
     gateway_grace: float = 180.0,
+    not_found_grace: float = STATUS_NOT_FOUND_GRACE_SECONDS,
     backoff: float = 1.0,
     max_interval: float | None = None,
 ) -> dict:
@@ -252,6 +258,10 @@ def poll_platform_deploy_status(
     recreated Traefik answers 404 without a JSON body, then 502/503/504; those are
     tolerated for ``gateway_grace`` seconds of consecutive gateway errors before the
     poll fails — naming the restart — instead of on the first one.
+
+    A ``not_found`` answer is tolerated for ``not_found_grace`` seconds. A longer run of
+    ``not_found`` answers means the runner has no record of the deploy: the poll fails
+    and names that cause (#666). Any other answer resets this timer.
 
     Returns the final status dict. A terminal status is anything other than ``running`` /
     ``pending`` / ``in_progress``. Raises ``ValueError`` for a bad env/ref/secret/base_url
@@ -294,6 +304,7 @@ def poll_platform_deploy_status(
     )
     last: dict = {}
     gateway_down_since: float | None = None
+    not_found_since: float | None = None
     for _ in range(max(1, attempts)):
         headers = _signed_headers(secret, payload, now=now, nonce=nonce_factory())
         try:
@@ -305,6 +316,7 @@ def poll_platform_deploy_status(
             )
         except (httpx.TimeoutException, httpx.RequestError) as exc:
             moment = float(now())
+            not_found_since = None
             gateway_down_since = (
                 gateway_down_since if gateway_down_since is not None else moment
             )
@@ -322,12 +334,25 @@ def poll_platform_deploy_status(
         # (wait=False), not a terminal failure — a single 404 must not crash the whole
         # reconcile, so we treat it as non-terminal and keep polling. A genuine routing
         # 404 (no JSON body / different status) still surfaces via raise_for_status().
+        # The tolerance has a bound: after `not_found_grace` seconds of consecutive
+        # not_found answers the request is lost, so the poll fails (#666).
         code = getattr(resp, "status_code", None)
         body = _json_object_or_none(resp) if code == 404 else None
         if code == 404 and body is not None:
             if str(body.get("status", "")).lower() == "not_found":
                 last = body
                 gateway_down_since = None
+                moment = float(now())
+                not_found_since = (
+                    not_found_since if not_found_since is not None else moment
+                )
+                if moment - not_found_since > not_found_grace:
+                    raise RuntimeError(
+                        f"iac_runner answered not_found for {int(moment - not_found_since)}s "
+                        f"while polling deploy {ref[:12]} to {env}: the runner has no record "
+                        "of this deployment; it was probably recreated between the request "
+                        "and the first poll (#666)"
+                    )
                 sleep(next(delays))
                 continue
         # The runner is being recreated (#666) or Cloudflare timed out to origin:
@@ -337,6 +362,7 @@ def poll_platform_deploy_status(
         # one — is a genuine routing error and still raises below.
         if code in gateway_codes or (code == 404 and body is None):
             moment = float(now())
+            not_found_since = None
             gateway_down_since = (
                 gateway_down_since if gateway_down_since is not None else moment
             )
@@ -349,6 +375,7 @@ def poll_platform_deploy_status(
             sleep(next(delays))
             continue
         gateway_down_since = None
+        not_found_since = None
         resp.raise_for_status()
         last = resp.json() if resp.content else {}
         if str(last.get("status", "")).lower() not in terminal_excluded:
