@@ -121,6 +121,39 @@ def _validate_url(name: str, url: str) -> None:
         raise RuntimeError(f"{name} must be a valid http(s) URL. Got: {url}")
 
 
+# One table maps each platform URL name to its SERVICE_SUBDOMAINS key.
+# The default URLs and the host check in TestConfig.validate() both read it.
+# Add a subdomain key here only. Do not write a key name at a second place.
+URL_SUBDOMAIN_KEYS = {
+    "DOKPLOY_URL": "dokploy",
+    "OP_URL": "1password",
+    "VAULT_URL": "vault",
+    "SSO_URL": "sso",
+    "S3_CONSOLE_URL": "s3_console",
+    "S3_API_URL": "s3",
+}
+
+# The MINIO_* names stay valid. They default to the S3_* values.
+# They therefore use the same subdomain keys as the S3_* names.
+LEGACY_URL_ALIASES = {
+    "MINIO_CONSOLE_URL": "S3_CONSOLE_URL",
+    "MINIO_API_URL": "S3_API_URL",
+}
+
+
+def _service_host(url_name: str, env_suffix: str, internal_domain: str) -> str:
+    """Return the canonical host for a URL name in URL_SUBDOMAIN_KEYS."""
+    from libs.common import SERVICE_SUBDOMAINS
+
+    key = URL_SUBDOMAIN_KEYS[LEGACY_URL_ALIASES.get(url_name, url_name)]
+    return f"{SERVICE_SUBDOMAINS[key]}{env_suffix}.{internal_domain}"
+
+
+def _default_url(url_name: str, env_suffix: str, internal_domain: str) -> str:
+    """Return the default https URL for a URL name in URL_SUBDOMAIN_KEYS."""
+    return f"https://{_service_host(url_name, env_suffix, internal_domain)}"
+
+
 class TestConfig:
     """Test configuration from environment variables.
 
@@ -128,9 +161,6 @@ class TestConfig:
     Optional: DEPLOY_ENV (defaults to production), BASE_DOMAIN (app domain override),
     PR_NUMBER when DEPLOY_ENV=pr-test, E2E_USERNAME/E2E_PASSWORD, PORTAL_URL, DB creds.
     """
-
-    # Import SERVICE_SUBDOMAINS for canonical subdomain mapping
-    from libs.common import SERVICE_SUBDOMAINS
 
     ENV_CONTEXT = _build_env_context()
     DEPLOY_ENV = ENV_CONTEXT["deploy_env"]
@@ -142,32 +172,23 @@ class TestConfig:
     # Domain
     INTERNAL_DOMAIN = _resolve_internal_domain()
 
-    # Generate URLs from SERVICE_SUBDOMAINS (single source of truth)
+    # Generate URLs from URL_SUBDOMAIN_KEYS (single source of truth)
     DOKPLOY_URL = os.getenv(
-        "DOKPLOY_URL",
-        f"https://{SERVICE_SUBDOMAINS['dokploy']}{ENV_SUFFIX}.{INTERNAL_DOMAIN}",
+        "DOKPLOY_URL", _default_url("DOKPLOY_URL", ENV_SUFFIX, INTERNAL_DOMAIN)
     )
-    OP_URL = os.getenv(
-        "OP_URL",
-        f"https://{SERVICE_SUBDOMAINS['1password']}{ENV_SUFFIX}.{INTERNAL_DOMAIN}",
-    )
+    OP_URL = os.getenv("OP_URL", _default_url("OP_URL", ENV_SUFFIX, INTERNAL_DOMAIN))
     VAULT_URL = os.getenv(
-        "VAULT_URL",
-        f"https://{SERVICE_SUBDOMAINS['vault']}{ENV_SUFFIX}.{INTERNAL_DOMAIN}",
+        "VAULT_URL", _default_url("VAULT_URL", ENV_SUFFIX, INTERNAL_DOMAIN)
     )
-    SSO_URL = os.getenv(
-        "SSO_URL",
-        f"https://{SERVICE_SUBDOMAINS['sso']}{ENV_SUFFIX}.{INTERNAL_DOMAIN}",
-    )
+    SSO_URL = os.getenv("SSO_URL", _default_url("SSO_URL", ENV_SUFFIX, INTERNAL_DOMAIN))
 
     # S3-Compatible Object Storage
     S3_CONSOLE_URL = os.getenv(
         "S3_CONSOLE_URL",
-        f"https://{SERVICE_SUBDOMAINS['s3_console']}{ENV_SUFFIX}.{INTERNAL_DOMAIN}",
+        _default_url("S3_CONSOLE_URL", ENV_SUFFIX, INTERNAL_DOMAIN),
     )
     S3_API_URL = os.getenv(
-        "S3_API_URL",
-        f"https://{SERVICE_SUBDOMAINS['s3']}{ENV_SUFFIX}.{INTERNAL_DOMAIN}",
+        "S3_API_URL", _default_url("S3_API_URL", ENV_SUFFIX, INTERNAL_DOMAIN)
     )
     MINIO_CONSOLE_URL = os.getenv(
         "MINIO_CONSOLE_URL",
@@ -251,14 +272,19 @@ class TestConfig:
 
         if not allow_custom_domain:
             expected_domains = {
-                "DOKPLOY_URL": f"{cls.SERVICE_SUBDOMAINS['dokploy']}{cls.ENV_SUFFIX}.{cls.INTERNAL_DOMAIN}",
-                "OP_URL": f"{cls.SERVICE_SUBDOMAINS['1password']}{cls.ENV_SUFFIX}.{cls.INTERNAL_DOMAIN}",
-                "VAULT_URL": f"{cls.SERVICE_SUBDOMAINS['vault']}{cls.ENV_SUFFIX}.{cls.INTERNAL_DOMAIN}",
-                "SSO_URL": f"{cls.SERVICE_SUBDOMAINS['sso']}{cls.ENV_SUFFIX}.{cls.INTERNAL_DOMAIN}",
-                "MINIO_CONSOLE_URL": f"{cls.SERVICE_SUBDOMAINS['minio_console']}{cls.ENV_SUFFIX}.{cls.INTERNAL_DOMAIN}",
-                "MINIO_API_URL": f"{cls.SERVICE_SUBDOMAINS['minio_api']}{cls.ENV_SUFFIX}.{cls.INTERNAL_DOMAIN}",
-                "FINANCE_REPORT_URL": f"report{cls.ENV_SUFFIX}.{cls.INTERNAL_DOMAIN}",
+                name: _service_host(name, cls.ENV_SUFFIX, cls.INTERNAL_DOMAIN)
+                for name in (
+                    "DOKPLOY_URL",
+                    "OP_URL",
+                    "VAULT_URL",
+                    "SSO_URL",
+                    "MINIO_CONSOLE_URL",
+                    "MINIO_API_URL",
+                )
             }
+            expected_domains["FINANCE_REPORT_URL"] = (
+                f"report{cls.ENV_SUFFIX}.{cls.INTERNAL_DOMAIN}"
+            )
             for name, expected_host in expected_domains.items():
                 actual_host = urlparse(required_urls[name]).hostname
                 if actual_host != expected_host:
