@@ -532,7 +532,7 @@ class DokployClient:
         Note (infra2#525):
             Dokploy's compose.one has no version/etag/updatedAt field to gate this
             write on (confirmed against a live response), so the merge below is
-            serialized per compose_id via libs.compose_lock.compose_write_lock: two
+            serialized per compose_id via libs.deploy.compose_lock.compose_write_lock: two
             concurrent callers merging into the SAME compose_id cannot silently
             discard each other's write, because the second caller's GET is guaranteed
             to happen only after the first caller's POST has landed. This is an
