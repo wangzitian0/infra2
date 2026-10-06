@@ -25,12 +25,12 @@
 
 ### Applying Secret Supply during Deployment
 ```python
-from libs.core import get_service
 from libs.security import apply_secret_supply
+from libs.security.registry import lookup
 
-service = get_service("platform/alerting")
+service = lookup("platform", "alerting")
 # Apply manifest to Vault: generates runtime passwords and copies 1Password human values
-report = apply_secret_supply(service, env="staging")
+report = apply_secret_supply(service, "staging")
 print(f"Supplied: {report.changed}, Missing: {report.missing}")
 ```
 
@@ -39,8 +39,8 @@ print(f"Supplied: {report.changed}, Missing: {report.missing}")
 from libs.security import resolve_vault_token, VaultSecrets
 
 token = resolve_vault_token()
-client = VaultSecrets(token=token)
-secret_val = client.get("platform/postgres", "staging").get("POSTGRES_PASSWORD")
+client = VaultSecrets(path="platform/staging/postgres", token=token)
+secret_val = client.get("POSTGRES_PASSWORD")
 ```
 
 ### Pruning Orphan Secrets

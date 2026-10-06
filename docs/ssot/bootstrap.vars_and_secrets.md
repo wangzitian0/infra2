@@ -309,15 +309,15 @@ invoke env.get POSTGRES_PASSWORD --project=platform --env=production --service=p
 
 ```python
 from libs.security import VaultSecrets, apply_secret_supply, resolve_vault_token
-from libs.core import get_service
+from libs.security.registry import lookup
 
 # 1. 运行时值 (Vault, 默认) —— 只读访问
 token = resolve_vault_token()
-client = VaultSecrets(token=token)
-password = client.get("platform/postgres", "staging").get("POSTGRES_PASSWORD")
+client = VaultSecrets(path="platform/staging/postgres", token=token)
+password = client.get("POSTGRES_PASSWORD")
 
 # 2. 部署时机密供给 —— 走 Service manifest 声明式 supply，严禁手工敲入
-service = get_service("platform/alerting")
+service = lookup("platform", "alerting")
 report = apply_secret_supply(service, "staging")  # 复制 / 生成 / 回写 / 核对
 # report.ok, report.changed, report.missing (只有名字，绝不泄露值)
 ```

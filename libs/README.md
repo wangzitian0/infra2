@@ -127,26 +127,25 @@ whose import no longer exists.
 
 ## 🚀 Recommended Usage Patterns
 
-### 1. Domain Entities & Registry (`libs.core`)
+### 1. Service Registry & Environment (`libs.core`)
 ```python
-from libs.core import get_service, load_service_registry, DeploymentEnvironment
+from libs.core.environ import get_env, with_env_suffix
+from libs.core.registry import service_attrs
 
-service = get_service("platform/postgres")
-registry = load_service_registry()
-env = DeploymentEnvironment.from_str("staging")
+meta = service_attrs()["platform/postgres"]  # ServiceMeta, read from its deploy.py
+print(meta.compose_path, meta.prod_only, [p.name for p in meta.probes])
+container = with_env_suffix("platform-postgres", get_env())  # "-staging" outside prod
 ```
 
 ### 2. Secret Supply & Vault Access (`libs.security`)
 ```python
-from libs.core import get_service
-from libs.security import apply_secret_supply, resolve_vault_token, VaultSecrets
+from libs.security import VaultSecrets, apply_secret_supply
+from libs.security.registry import lookup
 
-service = get_service("platform/alerting")
-report = apply_secret_supply(service, env="staging")
+service = lookup("platform", "alerting")  # the secrets row, with its manifests
+report = apply_secret_supply(service, "staging")
 
-token = resolve_vault_token()
-client = VaultSecrets(token=token)
-secret = client.get("platform/postgres", "staging")
+password = VaultSecrets(path="platform/staging/postgres").get("POSTGRES_PASSWORD")
 ```
 
 ### 3. Disaster Recovery & Rehearsal (`libs.backup`)

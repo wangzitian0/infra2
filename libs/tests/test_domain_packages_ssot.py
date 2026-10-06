@@ -1,7 +1,7 @@
 """Test suite for Phase 3 Domain Packages (SSOT Convergence).
 
 Verifies the 4 domain packages:
-1. libs.core (Service, environ, constants)
+1. libs.core (environ, constants)
 2. libs.security (store, supply, prune)
 3. libs.backup (rehearsal, verification)
 4. libs.observability (breakdown, watchers, probes, issue_trail)
@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from libs import common, env, secrets_supply, service_registry
+from libs import common, env, secrets_supply
 from libs.backup import (
     RehearsalSpecification,
     create_rehearsal_plan,
@@ -22,10 +22,7 @@ from libs.backup import (
 )
 from libs.core import (
     DeploymentEnvironment,
-    Service,
     get_environment,
-    get_service,
-    load_service_registry,
     with_env_suffix,
 )
 from libs.observability import (
@@ -46,44 +43,6 @@ from libs.security import (
 # ==========================================
 # 1. libs.core Tests
 # ==========================================
-
-
-def test_core_service_entity_properties() -> None:
-    """Test Service domain entity constructor and derived properties."""
-    svc = Service(
-        id="test/app",
-        project="test",
-        service="app",
-        directory=Path("/tmp/test"),
-    )
-    assert svc.id == "test/app"
-    assert svc.project == "test"
-    assert svc.service == "app"
-    assert svc.identity == "test/app"
-    assert svc.container_name == "test-app"
-
-
-def test_core_service_registry_loading() -> None:
-    """C-01 & C-02: Test load_service_registry and get_service."""
-    registry = load_service_registry()
-    assert len(registry) >= 15
-    assert "platform/postgres" in registry
-    assert "truealpha/app" in registry
-
-    # Test get_service with str and tuple
-    pg = get_service("platform/postgres")
-    assert pg is not None
-    assert pg.id == "platform/postgres"
-    assert pg.container_name == "platform-postgres"
-
-    pg_tuple = get_service(("platform", "postgres"))
-    assert pg_tuple == pg
-
-    ta = get_service("truealpha/app")
-    assert ta is not None
-    assert ta.domain == "truealpha.club"
-    assert len(ta.storage) == 1
-    assert ta.storage[0].bucket == "truealpha-raw"
 
 
 def test_core_environment_handling() -> None:
@@ -203,11 +162,6 @@ def test_observability_watcher_and_trail_aliases() -> None:
 
 def test_backward_compatibility_shims() -> None:
     """Verify all re-exports in legacy modules work identically."""
-    # service_registry shims
-    assert hasattr(service_registry, "Service")
-    assert hasattr(service_registry, "load_service_registry")
-    assert service_registry.Service is Service
-
     # common shims
     assert hasattr(common, "DeploymentEnvironment")
     assert hasattr(common, "get_environment")
