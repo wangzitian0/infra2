@@ -439,7 +439,7 @@ def create_api_key(
     success(f"Created API key: {name} (id: {api_key_id})")
 
     if store_vault:
-        from libs.env import get_secrets
+        from libs.security.store import get_secrets
 
         deploy_env = env["ENV"]
         secrets = get_secrets("platform", "signoz", deploy_env)

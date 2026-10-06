@@ -27,6 +27,6 @@ def status(c) -> dict:
 @task
 def get_secret(c, vault: str, item: str, field: str) -> str | None:
     """Get a secret from 1Password"""
-    from libs.env import OpSecrets
+    from libs.security.store import OpSecrets
 
     return OpSecrets(item=item, vault=vault).get(field)

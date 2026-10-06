@@ -946,7 +946,7 @@ def test_ensure_generated_secrets_degrades_when_this_context_has_no_vault_access
     # immediately in that context. A deploy must still proceed — this context
     # simply cannot perform the self-heal, which is not the same as the
     # self-heal having failed.
-    from libs.env import VaultSecrets
+    from libs.security.store import VaultSecrets
 
     exc_cls = getattr(VaultSecrets, exc_attr)
 
@@ -966,7 +966,7 @@ def test_deploy_proceeds_when_secret_provisioning_has_no_vault_access(monkeypatc
     """End-to-end: deploy() itself must not fail closed on this — the whole point
     is that a routine staging/prod deploy keeps working even though its receiver
     has no Vault credentials to self-heal with."""
-    from libs.env import VaultSecrets
+    from libs.security.store import VaultSecrets
 
     class _NoVaultAccessDeployer:
         @classmethod

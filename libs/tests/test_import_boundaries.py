@@ -248,7 +248,7 @@ def test_the_scan_sees_the_real_tree() -> None:
         "libs.observability",
         "libs.backup",
     } <= _domain_packages(ROOT)
-    assert {"libs.common", "libs.env", "libs.service_registry"} <= _flat_modules(ROOT)
+    assert {"libs.common", "libs.service_registry"} <= _flat_modules(ROOT)
 
 
 def test_a_libs_to_tools_import_is_no_longer_present_for_the_deploy_domain() -> None:
@@ -273,7 +273,7 @@ def _edges(source: str, package: str) -> set[str]:
         ("import libs.common as c", "libs.core", {"libs.common"}),
         ("from libs.common import infra_domain", "libs.core", {"libs.common"}),
         ("from libs import common", "libs.core", {"libs.common"}),
-        ("from libs import common, env", "libs.core", {"libs.common", "libs.env"}),
+        ("from libs import common, console", "libs.core", {"libs.common", "libs.console"}),
         # relative, resolved against the importing file's package
         ("from .. import common", "libs.core", {"libs.common"}),
         ("from ..common import infra_domain", "libs.core", {"libs.common"}),
@@ -284,9 +284,9 @@ def _edges(source: str, package: str) -> set[str]:
         ("from . import common", "libs", {"libs.common"}),
         # inside a function and under TYPE_CHECKING
         (
-            "def f():\n    from libs.env import VaultSecrets\n",
+            "def f():\n    from libs.console import console\n",
             "libs.security",
-            {"libs.env"},
+            {"libs.console"},
         ),
         (
             "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import libs.common\n",
@@ -441,11 +441,16 @@ RETIRED_FLAT_SHIMS_DEPLOY = {
     "iac_runner_client",
 }
 
+RETIRED_FLAT_SHIMS_BATCH2D = {
+    "env",
+}
+
 ALL_RETIRED_FLAT_SHIMS = (
     RETIRED_FLAT_SHIMS_BATCH1
     | RETIRED_FLAT_SHIMS_BATCH2
     | RETIRED_FLAT_SHIMS_BATCH2C
     | RETIRED_FLAT_SHIMS_DEPLOY
+    | RETIRED_FLAT_SHIMS_BATCH2D
 )
 
 

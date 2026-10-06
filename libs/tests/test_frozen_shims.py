@@ -98,8 +98,8 @@ def _is_pure_reexport(path: Path) -> tuple[bool, str]:
 
 def test_the_shim_table_is_not_empty() -> None:
     """A parser that silently matches nothing would pass every test below."""
-    assert len(TABLE) >= 6, TABLE
-    assert len(FROZEN) >= 4, FROZEN
+    assert len(TABLE) >= 5, TABLE
+    assert len(FROZEN) >= 3, FROZEN
     assert NOT_FROZEN, "expected the table to still list the un-migrated modules"
 
 

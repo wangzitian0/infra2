@@ -223,7 +223,7 @@ def _derived_service(source: str) -> VaultService:
 def _deploy_side_vault_path(meta_project: str, meta_service: str) -> str:
     """The path the DEPLOY side actually uses: libs.env.get_secrets(app_vars)
     stores at secret/data/{project}/{env}/{service} (VaultSecrets.path)."""
-    from libs.env import get_secrets
+    from libs.security.store import get_secrets
 
     secrets = get_secrets(
         project=meta_project,

@@ -12,7 +12,7 @@ import subprocess
 import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.env import generate_password
+from libs.security.store import generate_password
 from libs.console import header, success, error, warning, info, env_vars
 from libs.service_facets import (
     PublicRouteFacet,
