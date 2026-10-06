@@ -26,11 +26,6 @@ from libs.core.constants import REPO_ROOT
 _ROOT = REPO_ROOT
 DEFAULT_MANIFEST = _ROOT / "docs" / "ssot" / "deploy-dependencies.yaml"
 
-# Shared trees that fan out to NOTHING by default (deploy tooling / shared code).
-# A service that COPYs one of these into its image at build time bakes the code
-# in and MUST declare it in the manifest, or a change silently leaves it stale.
-SHARED_TREES = ("libs", "tools", "common")
-
 
 def service_key_from_path(file_path: str) -> str | None:
     """Map a changed file under a service directory to its service key.
@@ -171,52 +166,42 @@ def explain_fanout(
     return FanoutDecision(selected=selected, dropped=dropped)
 
 
-def dockerfile_baked_shared_trees(dockerfile_text: str) -> set[str]:
-    """Top-level SHARED_TREES a Dockerfile COPY/ADDs from the build context.
-
-    Detects `COPY libs /app/libs`, `ADD tools/x .`, etc. Multi-stage copies
-    (`COPY --from=...`) are ignored: they pull from a prior image layer, not the
-    repo build context, so they create no source-tree deploy dependency.
-    """
-    trees: set[str] = set()
-    for raw in dockerfile_text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split()
-        instr = parts[0].upper()
-        if instr not in {"COPY", "ADD"}:
-            continue
-        operands = parts[1:]
-        flags = [p for p in operands if p.startswith("--")]
-        if any(f.startswith("--from") for f in flags):
-            continue  # copies from another build stage, not the context
-        positional = [p for p in operands if not p.startswith("--")]
-        sources = positional[:-1] if len(positional) >= 2 else positional
-        for src in sources:
-            top = src.lstrip("./").split("/")[0]
-            if top in SHARED_TREES:
-                trees.add(top)
-    return trees
-
-
 def fanout_coverage_violations(
-    service_dockerfiles: dict[str, str], manifest: dict[str, list[str]] | None = None
+    compose_paths, manifest: dict[str, list[str]] | None = None, root: Path = _ROOT
 ) -> list[str]:
-    """Services that bake a shared tree into their image but don't declare it.
+    """Config-hash inputs that would not fan out to their service (#1117).
 
-    A violation is an under-fan-out landmine: the Dockerfile COPYs a shared tree
-    (libs/tools/common) so the service runs that code, yet no manifest glob would
-    fan a change in that tree out to it — a change would silently leave the
-    service running stale baked-in code. Returns sorted "service_key: tree".
+    The config hash reads every file a service's compose builds from or mounts:
+    the Dockerfile, its COPY/ADD sources resolved against the build context, and
+    each relative bind mount (`config_hash._compose_artifact_files`). An input
+    outside the service directory that no manifest glob matches changes the
+    hash, yet a change to it selects no service, so a release leaves the
+    service on stale input. Returns sorted "service_key: repo-relative path".
+
+    Raises on a compose file that is not valid YAML: an unread compose has no
+    inputs, and a guard that reads none passes while it checks nothing.
     """
+    import yaml
+
+    from libs.deploy.config_hash import _compose_artifact_files
+
+    root = root.resolve()
     if manifest is None:
         manifest = load_dependency_manifest()
-    violations: list[str] = []
-    for service_key, text in service_dockerfiles.items():
-        globs = manifest.get(service_key, [])
-        for tree in dockerfile_baked_shared_trees(text):
-            probe = f"{tree}/__changed_probe__"
-            if not any(fnmatch.fnmatch(probe, g) for g in globs):
-                violations.append(f"{service_key}: {tree}")
+    violations: set[str] = set()
+    for compose in compose_paths:
+        compose = Path(compose).resolve()
+        key = service_key_from_path(compose.relative_to(root).as_posix())
+        if key is None:
+            raise ValueError(f"{compose} is not in a service directory")
+        text = compose.read_text(encoding="utf-8")
+        yaml.safe_load(text)
+        for path in _compose_artifact_files(str(compose), text):
+            try:
+                rel = path.relative_to(root).as_posix()
+            except ValueError:
+                violations.add(f"{key}: {path} (outside the repository)")
+                continue
+            if key not in match_changed_services([rel], manifest=manifest):
+                violations.add(f"{key}: {rel}")
     return sorted(violations)
