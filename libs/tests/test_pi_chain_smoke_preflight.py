@@ -123,8 +123,13 @@ def test_main_maps_skip_to_exit_zero(monkeypatch, capsys) -> None:
 
 
 _PASSING_CHECKS = {
-    "exit0": True, "agent_end": True, "route_ok": True, "stop_ok": True,
-    "text_ok": True, "tokens_ok": True, "totalTokens": 42,
+    "exit0": True,
+    "agent_end": True,
+    "route_ok": True,
+    "stop_ok": True,
+    "text_ok": True,
+    "tokens_ok": True,
+    "totalTokens": 42,
 }
 
 
@@ -155,7 +160,9 @@ def test_main_names_the_credential_source_it_actually_used(
     assert verdict["credential_source"] == detail
 
 
-def test_main_names_the_credential_source_on_a_failed_run_too(monkeypatch, capsys) -> None:
+def test_main_names_the_credential_source_on_a_failed_run_too(
+    monkeypatch, capsys
+) -> None:
     """The source name must survive a FAIL verdict as well -- diagnosing a
     remote failure benefits from knowing which credential line was live,
     not just that the run failed. Symmetric with the PASS-path assertion

@@ -44,7 +44,9 @@ def render_index() -> str:
     for key, entry in entries.items():
         prefix = key.split(".", 1)[0]
         if prefix not in _CATEGORY:
-            raise SystemExit(f"gen_ssot_index: no category for key prefix {prefix!r} ({key})")
+            raise SystemExit(
+                f"gen_ssot_index: no category for key prefix {prefix!r} ({key})"
+            )
         header = _CATEGORY[prefix]
         if not sections or sections[-1][0] != header:
             sections.append((header, []))
@@ -63,7 +65,9 @@ def render_readme() -> str:
     """Full README with the region between the markers replaced by the generated index."""
     text = README.read_text(encoding="utf-8")
     if BEGIN not in text or END not in text:
-        raise SystemExit(f"gen_ssot_index: markers not found in {README} — add them once")
+        raise SystemExit(
+            f"gen_ssot_index: markers not found in {README} — add them once"
+        )
     pre = text.split(BEGIN)[0]
     post = text.split(END, 1)[1]
     return f"{pre}{BEGIN}\n\n{render_index()}\n\n{END}{post}"
@@ -80,7 +84,9 @@ def main() -> int:
         print(f"wrote {README}")
         return 0
     if README.read_text(encoding="utf-8") != expected:
-        print("SSOT README index is stale — run: python tools/gen_ssot_index.py --write")
+        print(
+            "SSOT README index is stale — run: python tools/gen_ssot_index.py --write"
+        )
         return 1
     print("SSOT README index is up to date")
     return 0

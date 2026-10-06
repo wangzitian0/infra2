@@ -19,7 +19,9 @@ import httpx
 from infra2_sdk.release import ReleaseError, resolve_image_digest
 from infra2_sdk.secrets import vault_token_status
 
+from libs.core.constants import REPO_ROOT
 from libs.deploy.contract import DeployTarget, is_tag_only_iac_env
+from libs.deploy.git_provenance import assert_after_on_main
 from libs.deploy.env_config import env_config
 
 _INFRA2_REPO = "https://github.com/wangzitian0/infra2"
@@ -139,32 +141,17 @@ def _rate_limit_wait_seconds(resp, now: float) -> float:
     return float(_RATE_LIMIT_DEFAULT_WAIT_SECONDS)
 
 
-def assert_iac_ref_on_main(
-    iac_ref: str,
-    deploy_type: str,
+def _github_compare_status(
+    url: str,
+    headers: dict[str, str],
     *,
-    repo: str = _INFRA2_REPO,
-    token: str | None = None,
-    transport=httpx.get,
-    sleep=time.sleep,
-    now=time.time,
-    max_attempts: int = 3,
-) -> None:
-    """Fail-closed: a fixed-env (staging/prod) iac_ref must be an ON-MAIN release tag."""
-    if not is_tag_only_iac_env(deploy_type):
-        return
-    url = (
-        f"https://api.github.com/repos/{_infra2_owner_name(repo)}"
-        f"/compare/main...{iac_ref.strip()}"
-    )
-    headers = {"Accept": "application/vnd.github+json"}
-    tok = (
-        token
-        if token is not None
-        else (os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or "").strip()
-    )
-    if tok:
-        headers["Authorization"] = f"Bearer {tok}"
+    anonymous: bool,
+    transport,
+    sleep,
+    now,
+    max_attempts: int,
+) -> str | None:
+    """GitHub's compare ``status`` for ``url``; raise when the API cannot answer."""
     for attempt in range(1, max_attempts + 1):
         resp = transport(url, headers=headers, timeout=30)
         if not _rate_limited(resp):
@@ -176,7 +163,7 @@ def assert_iac_ref_on_main(
         why = (
             "the call was UNAUTHENTICATED -- export GITHUB_TOKEN (github.token) in the deploy "
             "step; anonymous calls share GitHub's 60/hour budget per runner IP"
-            if not tok
+            if anonymous
             else "the token's GitHub API budget is spent"
         )
         raise RuntimeError(
@@ -184,7 +171,64 @@ def assert_iac_ref_on_main(
             f"budget resets in ~{wait:.0f}s (attempt {attempt}/{max_attempts}, #635)"
         )
     resp.raise_for_status()
-    status = (resp.json() or {}).get("status")
+    return (resp.json() or {}).get("status")
+
+
+def assert_iac_ref_on_main(
+    iac_ref: str,
+    deploy_type: str,
+    *,
+    repo: str = _INFRA2_REPO,
+    token: str | None = None,
+    transport=httpx.get,
+    sleep=time.sleep,
+    now=time.time,
+    max_attempts: int = 3,
+    repo_root: Path | None = None,
+) -> None:
+    """Fail-closed: a fixed-env (staging/prod) iac_ref must be an ON-MAIN release tag.
+
+    GitHub's compare API decides whenever it answers. When it cannot answer (HTTP error,
+    transport failure, exhausted rate limit), local git in ``repo_root`` (default: this
+    checkout) decides through ``assert_after_on_main``: the commit and ``origin/main``
+    must both be present and the commit must be an ancestor. When local git cannot
+    prove it either, the guard raises and names both failures (#616 item 3).
+    """
+    if not is_tag_only_iac_env(deploy_type):
+        return
+    ref = iac_ref.strip()
+    url = (
+        f"https://api.github.com/repos/{_infra2_owner_name(repo)}/compare/main...{ref}"
+    )
+    headers = {"Accept": "application/vnd.github+json"}
+    tok = (
+        token
+        if token is not None
+        else (os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or "").strip()
+    )
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
+    try:
+        status = _github_compare_status(
+            url,
+            headers,
+            anonymous=not tok,
+            transport=transport,
+            sleep=sleep,
+            now=now,
+            max_attempts=max_attempts,
+        )
+    except Exception as api_error:  # noqa: BLE001 - no answer: ask local git instead
+        try:
+            assert_after_on_main(ref, repo_root or REPO_ROOT)
+        except SystemExit as local_failure:
+            local_reason = str(local_failure.code).removeprefix("::error::")
+            raise RuntimeError(
+                f"cannot prove iac_ref {iac_ref!r} is on infra2 main: the GitHub compare "
+                f"API failed ({type(api_error).__name__}: {api_error}) and local git did "
+                f"not confirm it ({local_reason}) (#616)"
+            ) from api_error
+        return
     if status not in ("behind", "identical"):
         raise ValueError(
             f"iac_ref {iac_ref!r} is not on infra2 main (compare status={status!r}); "
@@ -238,7 +282,6 @@ def _image_manifest_exists(image: str, image_ref: str) -> bool:
         raise RuntimeError(
             f"registry connection failed for {image}:{image_ref} ({exc})"
         ) from exc
-
 
 
 def _wait_for_image_dependencies(

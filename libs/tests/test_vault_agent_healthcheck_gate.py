@@ -43,13 +43,17 @@ def test_gate_selects_files_by_a_marker_the_fleet_still_carries():
         "VAULT_APP_TOKEN left every compose with #369; a gate keyed on it checks nothing"
     )
     assert len(VAULT_AGENT_COMPOSE_FILES) >= 16, VAULT_AGENT_COMPOSE_FILES
-    assert "truealpha/truealpha/20.data_engine/compose.yaml" in VAULT_AGENT_COMPOSE_FILES
+    assert (
+        "truealpha/truealpha/20.data_engine/compose.yaml" in VAULT_AGENT_COMPOSE_FILES
+    )
     stale = [
         path
         for path in VAULT_AGENT_COMPOSE_FILES
         if "VAULT_APP_TOKEN" in (ROOT / path).read_text(encoding="utf-8")
     ]
-    assert not stale, f"static-token marker is back in {stale}; the gate assumes AppRole"
+    assert not stale, (
+        f"static-token marker is back in {stale}; the gate assumes AppRole"
+    )
 
 
 @pytest.mark.parametrize("relative_path", VAULT_AGENT_COMPOSE_FILES)
@@ -65,9 +69,9 @@ def test_vault_agent_healthcheck_passes_the_gate(relative_path):
     assert "<no value>" in text, (
         f"{relative_path}: healthcheck does not reject unresolved template values"
     )
-    assert "VAULT_AGENT_MAX_SECRET_AGE_SECONDS" not in text and "stat -c %Y" not in text, (
-        f"{relative_path}: healthcheck must not use rendered-file mtime freshness"
-    )
+    assert (
+        "VAULT_AGENT_MAX_SECRET_AGE_SECONDS" not in text and "stat -c %Y" not in text
+    ), f"{relative_path}: healthcheck must not use rendered-file mtime freshness"
     # Stronger than the literals: the two-stage probe itself, parsed from the compose.
     agent = yaml.safe_load(text)["services"]["vault-agent"]
     test = agent["healthcheck"]["test"]

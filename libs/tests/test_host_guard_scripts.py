@@ -213,7 +213,9 @@ def test_heartbeat_success(guard_host) -> None:
     assert "/fail" not in _commands(guard_host)
 
 
-def test_host_guard_env_validation_never_executes_shell(guard_host, tmp_path: Path) -> None:
+def test_host_guard_env_validation_never_executes_shell(
+    guard_host, tmp_path: Path
+) -> None:
     env_file = tmp_path / "host-guard.env"
     marker = tmp_path / "should-not-exist"
     env_file.write_text(
@@ -260,7 +262,9 @@ def test_host_guard_checks_literal_distinct_urls(guard_host, tmp_path: Path) -> 
     assert result.returncode == 0, result.stderr
 
 
-def test_host_guard_apply_rejects_a_different_env_file(guard_host, tmp_path: Path) -> None:
+def test_host_guard_apply_rejects_a_different_env_file(
+    guard_host, tmp_path: Path
+) -> None:
     guard_host["INFRA2_HOST_GUARD_ENV"] = str(tmp_path / "other.env")
     script = ROOT / "bootstrap/01.dokploy_install/host_guard/install_host_guard.sh"
 

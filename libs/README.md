@@ -27,6 +27,7 @@ Modules in `libs/` that provide direct integrations or operational clients:
 | Module | Purpose | Key Exports |
 |--------|---------|-------------|
 | [`deploy/dokploy_client.py`](./deploy/dokploy_client.py) | Dokploy REST API wrapper (`libs/dokploy.py` is its shim) | `DokployClient`, `get_dokploy()` |
+| [`observability_dashboards.py`](./observability_dashboards.py) | SigNoz alert rules and dashboards loader. It stays here: moving it triggers apply-observability.yml, which needs owner approval (#1059 phase 2). | `load_alert_definitions()`, `render_alert_payloads()`, `require_rule_channel()` |
 | [`console.py`](./console.py) | Rich CLI formatting and header blocks | `header()`, `success()`, `error()`, `prompt_action()` |
 | [`common.py`](./common.py) | Environment derivation re-export and operator health check helper | `get_env()`, `check_service()` |
 
@@ -75,7 +76,6 @@ six modules the code never followed).
 | `libs/resident_watchers.py` | `libs.observability.watchers.resident` | `ResidentWatcher`, `build_watchers` | Frozen Shim |
 | `libs/deploy_queue_guard.py` | `libs.observability.watchers.deploy_queue_guard` | `DeployQueueGuard`, `run_once` | Frozen Shim |
 | `libs/page_dedup.py` | `libs.observability.page_dedup` | `dedup_page`, `resolve_page_state`, `decide`, `Finding` | Frozen Shim |
-| `libs/observability_dashboards.py` | `libs.observability.dashboards` | `load_alert_definitions`, `render_alert_payloads`, `require_rule_channel` | Frozen Shim |
 | `libs/availability_ledger.py` | `libs.observability.ledger` | `aggregate_ledger`, `calculate_uptime`, `build_report_message` | Frozen Shim |
 | `libs/watchdog_signal_entries.py` | `libs.observability.signal_entries` | `render_internal_signal_entries` | Frozen Shim |
 | `libs/harness_manifest.py` | `libs.core.harness.manifest` | `load_manifest`, `validate_manifest`, `check_workspace` | Frozen Shim |

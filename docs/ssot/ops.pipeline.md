@@ -244,7 +244,7 @@ post-merge 部署被 GitHub Actions `concurrency` 串行化,调 IaC Runner 前�
 完成 sync 结果,不只是请求被接受**。操作坐标是 `(env, exact_ref, normalized_service_set)`:服务集合是身份的一部分,
 不是日志附属字段;同一 release 并发部署不同服务不得互相命中 cache / in-flight / status。
 不走公网 Cloudflare 的 `wait=true`(会在 sync 完成前 524)。
-A `not_found` answer that lasts longer than 90 seconds is a lost request; the client fails and names the cause and the deployment id. Only a real status resets the 90-second timer: a gateway error does not.
+A `not_found` answer that lasts longer than 90 seconds is a lost request; the client fails and names the cause and the deployment id. Only a real status resets the 90-second timer: a gateway error does not. A staging deploy re-submits a lost request once; a production deploy fails at once.
 
 ### 5.1 Endpoints
 
@@ -267,6 +267,13 @@ A `not_found` answer that lasts longer than 90 seconds is a lost request; the cl
 
 **为什么 runner bootstrap 走带外**:IaC Runner 不能在自己正被 Actions 轮询的 `/deploy` 请求里重启自己;Actions
 从容器外拥有自更新步骤(更新 Dokploy compose checkout → 重建 runner 镜像 → 等 health → 再 `/deploy`)。
+
+**Idle wait before the recreate (#666):** A recreate drops the runner's in-memory deploy state.
+The script builds the image first. Then it reads `in_flight_deploys` from `/health` every 10 seconds.
+It recreates the runner immediately after the count is 0. The wait has a limit of 900 seconds
+(`IAC_RUNNER_IDLE_WAIT_SECONDS`). At the limit, the script prints a warning and recreates the runner.
+If the count is unknown, the script does not wait. An older runner image does not report the field.
+A deploy that starts between the last poll and the recreate is not protected.
 
 ### 5.3 两平面配置身份 + 幂等性保证
 
@@ -352,6 +359,7 @@ infra2 当前固定 `infra2-sdk==1.0.0` 的不可变 release wheel；`deploy_v2_
   reconcile 入口由 `assert_after_on_main` **fail-closed** 强制(Infra-011 不变式:*iac_pinned prod
   reconcile 只能来自 reviewed main*)。在未合并 feature 分支上打 release tag 不会再打穿 prod
   (v1.1.16 事故根因)。`--dry-run` 仅做 plan,豁免此校验。
+  app 侧 `deploy_v2` 的 `assert_iac_ref_on_main` 以 GitHub compare API 为准;API 无法作答(HTTP 错误、传输失败、限流耗尽)时,回落本地 `git merge-base --is-ancestor <tag> origin/main`(与 `assert_after_on_main` 同一实现,#616)。本地 commit 或 `origin/main` 缺失(如 depth-1 克隆)、或非祖先,一律拒绝,报错同时写明 API 与本地 git 两个失败原因;API 已作答时本地 git 不推翻其结论。
 - **禁止 tag 推送自动部署 prod**:prod 必须经**显式 promote**(`promote_prod=true` / `--promote-prod`);
   tag 只自动晋升 staging。「打 tag」与「动 prod」必须解耦。
 - 禁止跳过 staging 直接 prod。

@@ -86,14 +86,11 @@ def test_committed_inventory_is_valid_and_apps_are_autonomous() -> None:
     assert {repo["id"] for repo in apps} == {"finance-report", "truealpha"}
     assert {repo["governance"] for repo in apps} == {"autonomous"}
 
-    # dev_env #51: infra2-sdk is a nested submodule that does not carry a
-    # Repo-layer rules projection — it must be declared, not left implicit, so
-    # the A-layer discovery matrix in dev_env can assert "expected no Repo
-    # layer" from this manifest instead of guessing.
-    sdk = next(
-        repo for repo in manifest["repositories"] if repo["id"] == "infra2-sdk"
-    )
-    assert sdk.get("rules_layer") == "none"
+    # infra2-sdk carries its own Repo-layer AGENTS.md at the pinned commit. A
+    # rules_layer: none declaration would contradict the checkout, and the
+    # A-layer discovery matrix in dev_env fails on that contradiction.
+    sdk = next(repo for repo in manifest["repositories"] if repo["id"] == "infra2-sdk")
+    assert "rules_layer" not in sdk
 
 
 def test_missing_checkout_is_error_by_default(tmp_path: Path) -> None:
@@ -431,4 +428,3 @@ def test_committed_inventory_specifies_contract_tiering() -> None:
     }
     actual = {repo["id"]: repo.get("contract") for repo in manifest["repositories"]}
     assert actual == expected
-

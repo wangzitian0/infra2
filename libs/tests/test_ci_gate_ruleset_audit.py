@@ -172,7 +172,9 @@ def test_current_inventory_matches_the_real_infra_ci_workflow() -> None:
     """Every declared blocking gate must resolve to a real job `name:` in its
     workflow file — catches a gate pointing at a renamed/removed job."""
     gates = list(cgra._blocking_gates())
-    assert len(gates) > 0, "No blocking gates found in inventory (GREEN-WHILE-EMPTY risk)"
+    assert len(gates) > 0, (
+        "No blocking gates found in inventory (GREEN-WHILE-EMPTY risk)"
+    )
     for gate in gates:
         name = cgra._job_display_name(gate["workflow"], gate["job"])
         assert name is not None, (
@@ -190,7 +192,9 @@ def test_current_inventory_has_no_self_contradicting_gates() -> None:
     itself with `# gate-exempt: <reason>` beside the step.
     """
     gates = list(cgra._blocking_gates())
-    assert len(gates) > 0, "No blocking gates found in inventory (GREEN-WHILE-EMPTY risk)"
+    assert len(gates) > 0, (
+        "No blocking gates found in inventory (GREEN-WHILE-EMPTY risk)"
+    )
     contradicting = [
         f"{gate['id']} ({', '.join(found)})"
         for gate in gates

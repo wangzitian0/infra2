@@ -11,6 +11,7 @@ from libs.deploy.iac_runner_client import (
     STATUS_POLL_BACKOFF,
     STATUS_POLL_INITIAL_SECONDS,
     STATUS_POLL_MAX_SECONDS,
+    RunnerLostDeploymentError,
     poll_platform_deploy_status,
     status_poll_attempts,
     status_poll_delays,
@@ -18,6 +19,7 @@ from libs.deploy.iac_runner_client import (
 )
 
 __all__ = [
+    "RunnerLostDeploymentError",
     "STATUS_NOT_FOUND_GRACE_SECONDS",
     "STATUS_POLL_BACKOFF",
     "STATUS_POLL_INITIAL_SECONDS",

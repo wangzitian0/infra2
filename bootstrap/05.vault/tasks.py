@@ -5,6 +5,7 @@ Uses libs/ system for consistent environment and console utilities.
 
 import json
 import os
+import re
 import time
 
 from invoke import task
@@ -483,15 +484,7 @@ def _redeploy_with_vault_creds(
     registered in Dokploy. Raises on Dokploy/API errors — callers own how to report them.
     Backs ``_configure_dokploy_approle`` (VAULT_ROLE_ID/VAULT_SECRET_ID).
     """
-    from libs.dokploy import get_dokploy
-    from libs.common import get_env
-
-    e = get_env()
-    domain = e.get("INTERNAL_DOMAIN")
-    env_name = e.get("ENV", "production")
-    host = f"cloud.{domain}" if domain else None
-    client = get_dokploy(host=host)
-
+    client, env_name = _dokploy_client()
     compose = client.find_compose_by_name(service, project, env_name=env_name)
     if not compose:
         return None
@@ -500,6 +493,17 @@ def _redeploy_with_vault_creds(
     info("   Triggering redeploy and waiting for runtime deployment record...")
     _deploy_compose_with_record_check(client, compose_id)
     return compose
+
+
+def _dokploy_client() -> tuple[Any, str]:
+    """The Dokploy client for this environment, and the environment name."""
+    from libs.dokploy import get_dokploy
+    from libs.common import get_env
+
+    e = get_env()
+    domain = e.get("INTERNAL_DOMAIN")
+    host = f"cloud.{domain}" if domain else None
+    return get_dokploy(host=host), e.get("ENV", "production")
 
 
 def _deploy_compose_with_record_check(client: Any, compose_id: str) -> None:
@@ -592,7 +596,8 @@ APPROLE_TOKEN_MAX_TTL = "168h"
     help={
         "project": "Limit setup to one project, e.g. finance_report.",
         "service": "Limit setup to one service, e.g. app.",
-        "deploy": "Update Dokploy env (VAULT_ROLE_ID/VAULT_SECRET_ID) and redeploy.",
+        "deploy": "Issue a secret id, give it to every compose of the role, redeploy, "
+        "then destroy the earlier secret ids. False writes policy and role only.",
     }
 )
 def setup_approle(c, project=None, service=None, deploy=True):
@@ -600,6 +605,10 @@ def setup_approle(c, project=None, service=None, deploy=True):
 
     Replaces the token_file periodic-token model: each service's vault-agent logs
     in with role_id/secret_id and natively renews/re-auths its token (#257).
+
+    A re-issue ends the earlier secret ids (#1070): after the target and every other
+    compose of the role run the new secret id, the task destroys each secret id that
+    existed before the run. A failed step destroys nothing and the task exits 1.
     """
     import io
 
@@ -631,6 +640,9 @@ def setup_approle(c, project=None, service=None, deploy=True):
         from invoke.exceptions import Exit
 
         raise Exit("No matching AppRole targets", code=1)
+    # The runner's own redeploy stops a run inside the runner (SOP-007), so it goes
+    # last: every other role completes first.
+    targets.sort(key=lambda t: (t.project, t.service) == ("bootstrap", "iac_runner"))
 
     if not c.run("vault token lookup", env=venv, hide=True, warn=True).ok:
         from invoke.exceptions import Exit
@@ -692,6 +704,20 @@ def setup_approle(c, project=None, service=None, deploy=True):
             failed.append((target.project, target.service, "role_write_failed"))
             continue
 
+        if not deploy:
+            # Nothing would store or print a secret id issued here, so it would only
+            # add one more valid credential that no service uses (#1070).
+            info(f"   Role {role}: policy and role written; no secret id issued")
+            continue
+
+        # The accessors from before this run. They are destroyed only after every
+        # consumer of the role runs the new secret id (#1070).
+        prior_accessors = _secret_id_accessors(c, venv, role)
+        if prior_accessors is None:
+            error(f"Failed to list the existing secret ids of {role}")
+            failed.append((target.project, target.service, "secret_id_list_failed"))
+            continue
+
         role_id_res = c.run(
             f"vault read -format=json auth/approle/role/{role}/role-id",
             env=venv,
@@ -709,14 +735,24 @@ def setup_approle(c, project=None, service=None, deploy=True):
             failed.append((target.project, target.service, "credential_failed"))
             continue
         role_id = json.loads(role_id_res.stdout)["data"]["role_id"]
-        secret_id = json.loads(secret_id_res.stdout)["data"]["secret_id"]
+        issued = json.loads(secret_id_res.stdout)["data"]
+        secret_id = issued["secret_id"]
+        new_accessor = issued["secret_id_accessor"]
         success(f"   Role {role}: role_id + secret_id ready")
 
-        if deploy:
-            if not _configure_dokploy_approle(
-                c, target.service, role_id, secret_id, target.dokploy_project
-            ):
-                failed.append((target.project, target.service, "dokploy_config_failed"))
+        if not _configure_dokploy_approle(
+            c, target.service, role_id, secret_id, target.dokploy_project
+        ):
+            failed.append((target.project, target.service, "dokploy_config_failed"))
+            warning(f"   {role}: earlier secret ids stay valid; nothing destroyed")
+            continue
+        if not _refresh_role_consumers(role_id, secret_id):
+            failed.append((target.project, target.service, "consumer_refresh_failed"))
+            warning(f"   {role}: earlier secret ids stay valid; nothing destroyed")
+            continue
+        stale = [a for a in prior_accessors if a != new_accessor]
+        if not _destroy_secret_ids(c, venv, role, stale):
+            failed.append((target.project, target.service, "secret_id_destroy_failed"))
 
     if failed:
         error("Some services failed:")
@@ -747,3 +783,150 @@ def _configure_dokploy_approle(
     except Exception as exc:  # noqa: BLE001 - report and let caller mark failure.
         error(f"   Dokploy approle config failed: {exc}")
         return False
+
+
+# A Vault secret id accessor is a UUID. The check keeps a value from Vault output
+# out of a shell command unless it has this shape.
+_ACCESSOR_RE = re.compile(r"^[0-9A-Za-z-]{1,64}$")
+
+
+def _secret_id_accessors(c, venv: dict[str, str], role: str) -> list[str] | None:
+    """The accessors of every secret id of ``role``, or None when Vault did not answer.
+
+    ``vault list -format=json`` prints ``{}`` and exits 2 when the role has no secret
+    id; any other failure prints no JSON.
+    """
+    res = c.run(
+        f"vault list -format=json auth/approle/role/{role}/secret-id",
+        env=venv,
+        hide=True,
+        warn=True,
+    )
+    try:
+        data = json.loads(res.stdout or "")
+    except ValueError:
+        return None
+    if data == {}:
+        return []
+    if (
+        res.ok
+        and isinstance(data, list)
+        and all(isinstance(a, str) and _ACCESSOR_RE.match(a) for a in data)
+    ):
+        return data
+    return None
+
+
+def _env_value(env_str: str, key: str) -> str:
+    """The value of ``key`` in a Dokploy env string, without quotes.
+
+    A key that occurs twice has no single value: Dokploy merges by the exact name
+    and the container reads the last line, so the task cannot know what runs.
+    """
+    values = []
+    for line in env_str.splitlines():
+        name, _, value = line.strip().partition("=")
+        if name.strip() == key:
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            values.append(value)
+    if len(values) > 1:
+        raise ValueError(f"{key} occurs {len(values)} times in one compose env")
+    return values[0] if values else ""
+
+
+def _scan_role_consumers(client: Any, role_id: str) -> list[tuple[str, str, str]]:
+    """``(composeId, label, VAULT_SECRET_ID)`` of each compose that logs in as ``role_id``."""
+    found = []
+    for project in client.list_projects():
+        for environment in project.get("environments") or []:
+            for compose in environment.get("compose") or []:
+                compose_id = compose.get("composeId")
+                if not compose_id:
+                    raise RuntimeError(
+                        f"compose {compose.get('name')!r} has no composeId"
+                    )
+                env_str = client.get_compose_env(compose_id)
+                if _env_value(env_str, "VAULT_ROLE_ID") != role_id:
+                    continue
+                label = f"{project.get('name')}/{environment.get('name')}/{compose.get('name')}"
+                found.append(
+                    (compose_id, label, _env_value(env_str, "VAULT_SECRET_ID"))
+                )
+    return found
+
+
+def _refresh_role_consumers(role_id: str, secret_id: str) -> bool:
+    """Give the new secret id to every Dokploy compose that logs in as ``role_id``.
+
+    A PR preview copies the AppRole credentials of its source environment
+    (``libs/deploy/preview.py``), so the target compose is not the only consumer of a
+    role. A consumer that keeps a destroyed secret id fails its next login. Returns
+    True only when every consumer has the new secret id and a new ``done``
+    deployment record, and a second read finds no earlier secret id.
+    """
+    try:
+        client, _env_name = _dokploy_client()
+        consumers = _scan_role_consumers(client, role_id)
+        # The target already holds the new secret id. A scan that misses it cannot
+        # be complete (for example, a changed project.all shape).
+        if not any(held == secret_id for _, _, held in consumers):
+            raise RuntimeError("the scan did not find the target compose of the role")
+        blocked = []
+        for compose_id, label, held in consumers:
+            if held == secret_id:
+                continue
+            info(f"   Consumer {label}: new secret id, redeploying")
+            try:
+                client.update_compose_env(
+                    compose_id, env_vars={"VAULT_SECRET_ID": secret_id}
+                )
+                _deploy_compose_with_record_check(client, compose_id)
+            except Exception as exc:  # noqa: BLE001 - collect every blocked consumer.
+                error(f"   Consumer {label}: {exc}")
+                blocked.append(label)
+        if blocked:
+            error(
+                "   These composes did not finish the switch to the new secret id: "
+                f"{', '.join(blocked)}. Repair or tear down each one (a preview: "
+                "`python -m tools.deploy_v2 ... --down`), then run the task again."
+            )
+            return False
+        # A deploy or a preview `up` that read the earlier env can write it back after
+        # the scan. Read again just before the destroy.
+        stale = [
+            label
+            for _, label, held in _scan_role_consumers(client, role_id)
+            if held != secret_id
+        ]
+        if stale:
+            error(
+                f"   An earlier secret id came back on: {', '.join(stale)}. "
+                "Run the task again when no deploy or preview run is in flight."
+            )
+            return False
+    except Exception as exc:  # noqa: BLE001 - report and let caller mark failure.
+        error(f"   Refreshing the consumers of the role failed: {exc}")
+        return False
+    return True
+
+
+def _destroy_secret_ids(
+    c, venv: dict[str, str], role: str, accessors: list[str]
+) -> bool:
+    """Destroy each listed secret id of ``role``. True only when all are gone."""
+    ok = True
+    for accessor in accessors:
+        if not c.run(
+            f"vault write auth/approle/role/{role}/secret-id-accessor/destroy "
+            f"secret_id_accessor={accessor}",
+            env=venv,
+            hide=True,
+            warn=True,
+        ).ok:
+            error(f"   {role}: failed to destroy secret id accessor {accessor}")
+            ok = False
+    if ok:
+        success(f"   {role}: destroyed {len(accessors)} earlier secret id(s)")
+    return ok

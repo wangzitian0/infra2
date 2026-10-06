@@ -33,7 +33,6 @@ project/env/compose-name to use) and update the hardcoded literal to the returne
 from __future__ import annotations
 
 import re
-import warnings
 from dataclasses import dataclass, replace
 
 from libs.core.environ import normalize_env_name
@@ -42,13 +41,9 @@ from libs.core.constants import PREVIEW_KINDS
 # The canary runs arbitrary code on a fixed throwaway preview slot no real PR reuses.
 # Canonical SSOT slot is CANARY_SLOT ("canary-preview") defined in infra2-sdk.
 try:
-    from infra2_sdk import CANARY_SLOT, LEGACY_CANARY_PR
-
-    CANARY_PR = LEGACY_CANARY_PR
+    from infra2_sdk import CANARY_SLOT
 except ImportError:
     CANARY_SLOT = "canary-preview"
-    CANARY_PR = 999
-    LEGACY_CANARY_PR = 999
 
 # data default per env. Non-prod defaults to `staging` data (operator choice); prod is
 # always real prod data. A PR sha never runs on prod data and prod data never leaves
@@ -446,14 +441,6 @@ def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
         return "branch", text
     if kind == "pr":
         text = str(value).strip()
-        if text == str(CANARY_PR):
-            warnings.warn(
-                f"Legacy canary slot pr-{CANARY_PR} mapped to {CANARY_SLOT}. "
-                "Use kind='canary' or CANARY_SLOT.",
-                DeprecationWarning,
-                stacklevel=3,
-            )
-            return "canary", "preview"
         if not _PR_VALUE_RE.match(text):
             raise ValueError(
                 f"preview pr alias needs a positive PR number, got {value!r}"
@@ -462,9 +449,6 @@ def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
     if kind == "canary":
         text = str(value).strip().lower() if value is not None else ""
         if not text or text in (
-            "999",
-            "pr-999",
-            "canary-999",
             "preview",
             "canary",
             CANARY_SLOT,
