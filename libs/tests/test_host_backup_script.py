@@ -59,6 +59,9 @@ for rule in "${rules[@]}"; do
 done
 exit 0
 """,
+    # Off-host uploads go to their own log, so the call order of the archive steps
+    # stays readable in SHIM_LOG.
+    "rclone": """#!/usr/bin/env bash\necho "rclone $*" >> "$RCLONE_LOG"\n""",
     "stat": """#!/usr/bin/env bash\nwc -c < "${@: -1}" | tr -d ' '\n""",
     "sha256sum": """#!/usr/bin/env bash\necho "0000000000000000000000000000000000000000000000000000000000000000  $1"\n""",
 }
@@ -96,24 +99,31 @@ def host(tmp_path: Path):
     out.mkdir()
     log = tmp_path / "calls.log"
     log.touch()
+    rclone_log = tmp_path / "rclone.log"
+    rclone_log.touch()
     env = {
         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
         "HOME": str(tmp_path),
         "SHIM_LOG": str(log),
         "BACKUP_OUTPUT_DIR": str(out),
         "BACKUP_DATA_ROOT": str(data),
+        # The scheduled runs always upload off-host (docs/ssot/ops.recovery.md).
+        "BACKUP_REMOTE": "fake-remote:infra2",
+        "RCLONE_LOG": str(rclone_log),
     }
-    return {"env": env, "out": out, "log": log}
+    return {"env": env, "out": out, "log": log, "rclone_log": rclone_log}
 
 
 def _run(
-    host, **extra: str
+    host, **extra: str | None
 ) -> tuple[subprocess.CompletedProcess[str], dict, list[str]]:
+    """Run the script; an ``extra`` value of None removes that variable."""
     bash = shutil.which("bash")
     assert bash, "bash is required"
+    env = {**host["env"], **extra}
     proc = subprocess.run(
         [bash, str(SCRIPT)],
-        env={**host["env"], **extra},
+        env={key: value for key, value in env.items() if value is not None},
         capture_output=True,
         text=True,
         timeout=60,
@@ -301,3 +311,112 @@ def test_emitter_path_sources_match_backup_facets() -> None:
         target = targets[entry.service_id]
         expected_path = entry.data_path.replace("/data", "/custom/data", 1)
         assert target.primary_target == expected_path
+
+
+# --- #1030: a run without an off-host remote must not replace the off-host record ---
+
+
+def test_an_off_host_run_uploads_every_artifact_and_records_remote_uris(host) -> None:
+    proc, manifest, _ = _run(host)
+    assert proc.returncode == 0, proc.stderr
+    uris = [artifact["remote_uri"] for artifact in manifest["artifacts"]]
+    assert uris and all(
+        uri.startswith("fake-remote:infra2/weekly/production/") for uri in uris
+    ), uris
+    uploads = [
+        line
+        for line in host["rclone_log"].read_text().splitlines()
+        if line.startswith("rclone copyto") and not line.endswith("manifest.json")
+    ]
+    assert len(uploads) == len(uris), uploads
+
+
+def test_an_unset_remote_is_refused_before_any_archive(host) -> None:
+    """#1030: an unset BACKUP_REMOTE used to mean 'local only', and a manual run
+    replaced the off-host manifest that the watchdog reads."""
+    latest = host["out"] / "production-manifest.json"
+    latest.write_text('{"keep": "me"}', encoding="utf-8")
+
+    proc, _, calls = _run(host, BACKUP_REMOTE=None)
+
+    assert proc.returncode == 2, proc.stderr
+    assert "BACKUP_LOCAL_ONLY" in proc.stderr
+    assert calls == [], "no archive work may start"
+    assert not list(host["out"].glob("production-*/")), "no run directory"
+    assert latest.read_text(encoding="utf-8") == '{"keep": "me"}'
+
+
+def test_local_only_and_a_remote_together_are_refused(host) -> None:
+    proc, _, calls = _run(host, BACKUP_LOCAL_ONLY="1")
+    assert proc.returncode == 2, proc.stderr
+    assert calls == []
+
+
+def test_a_local_only_run_never_replaces_the_canonical_manifest(host) -> None:
+    latest = host["out"] / "production-manifest.json"
+    latest.write_text('{"off-host": "record"}', encoding="utf-8")
+
+    proc, manifest, _ = _run(host, BACKUP_REMOTE=None, BACKUP_LOCAL_ONLY="1")
+
+    assert proc.returncode == 0, proc.stderr
+    assert latest.read_text(encoding="utf-8") == '{"off-host": "record"}'
+    assert _ids(manifest) == ALL_SERVICES
+    assert all(a["remote_uri"].startswith("local:") for a in manifest["artifacts"])
+    assert host["rclone_log"].read_text() == ""
+
+
+def test_a_local_only_run_deletes_no_earlier_run(host) -> None:
+    for i in range(1, 4):
+        (host["out"] / f"production-2026010{i}T000000Z").mkdir()
+
+    proc, _, _ = _run(host, BACKUP_REMOTE=None, BACKUP_LOCAL_ONLY="1", BACKUP_KEEP="1")
+
+    assert proc.returncode == 0, proc.stderr
+    assert len(list(host["out"].glob("production-*/"))) == 4
+
+
+def test_a_run_through_a_symlink_finds_the_emitter(host, tmp_path) -> None:
+    """The host installs the script as a symlink in /usr/local/sbin. The service list
+    comes from libs.backup.emitter in the checkout the symlink points into, so the
+    script must resolve the link before it derives the repo root (#1030; the VPS ran
+    on an uncommitted hot-patch of exactly this)."""
+    sbin = tmp_path / "sbin"
+    sbin.mkdir()
+    link = sbin / "infra2-host-backup.sh"
+    link.symlink_to(SCRIPT)
+    bash = shutil.which("bash")
+    assert bash, "bash is required"
+    proc = subprocess.run(
+        [bash, str(link)],
+        env=host["env"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=tmp_path,
+    )
+    assert proc.returncode == 0, proc.stderr
+    manifest = json.loads(
+        (host["out"] / "production-manifest.json").read_text(encoding="utf-8")
+    )
+    assert _ids(manifest) == ALL_SERVICES
+
+
+def test_an_empty_service_list_fails_instead_of_writing_an_empty_manifest(
+    host, tmp_path
+) -> None:
+    """An emitter that prints nothing must not produce a green run with 0 artifacts."""
+    fake_bin = tmp_path / "fake-python"
+    fake_bin.mkdir()
+    shim = fake_bin / "python3"
+    shim.write_text("#!/usr/bin/env bash\nexit 0\n")
+    shim.chmod(0o755)
+    latest = host["out"] / "production-manifest.json"
+    latest.write_text('{"off-host": "record"}', encoding="utf-8")
+
+    proc, _, calls = _run(host, PATH=f"{fake_bin}{os.pathsep}{host['env']['PATH']}")
+
+    assert proc.returncode != 0, proc.stderr
+    assert "no services" in proc.stderr
+    assert calls == []
+    assert not list(host["out"].glob("production-*/")), "no empty run directory"
+    assert latest.read_text(encoding="utf-8") == '{"off-host": "record"}'
