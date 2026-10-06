@@ -50,7 +50,7 @@ redis ────┘
 
 ## Prerequisites
 
-1. **Vault ready**: `invoke vault.status` should return healthy
+1. **Vault ready**: `DEPLOY_ENV=production invoke vault.status` should return healthy
 2. **S3 ready**: `invoke s3.status` should return healthy
 3. **Secrets written**: Secrets in `secret/finance_report/<env>/*`
 
@@ -65,13 +65,13 @@ python -m tools.deploy_v2 --service finance_report/app --type staging --version-
 # Check status
 invoke fr-postgres.shared.status
 invoke fr-redis.shared.status
-invoke fr-app.shared.status
+DEPLOY_ENV=staging invoke fr-app.shared.status
 ```
 
 ## Environment Variables
 
 Uses standard environment convention:
-- `DEPLOY_ENV` selects target environment (default: `production`)
+- `DEPLOY_ENV` selects target environment. It has no default: write `DEPLOY_ENV=production` to choose production
 - `ENV_DOMAIN_SUFFIX` derived from `DEPLOY_ENV` (`""` for prod, `-<env>` for non-prod)
 - `ENV_SUFFIX` for container/data isolation if needed
 

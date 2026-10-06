@@ -160,7 +160,7 @@ def assert_approle_creds_present(service: str, client, compose_id: str) -> None:
             f"{'is' if len(missing) == 1 else 'are'} missing from the deploy env — the "
             "vault-agent would crash-loop (missing role/secret) or hang reaching an "
             "empty address (missing VAULT_ADDR) and deadlock on its healthcheck (~6 "
-            f"min) instead of starting. Run `invoke vault.setup-approle "
+            f"min) instead of starting. Run `DEPLOY_ENV=<env> invoke vault.setup-approle "
             f"--service={service} --deploy` (or set VAULT_ADDR, e.g. "
             "https://vault.<INTERNAL_DOMAIN>) on the compose/project env before "
             "deploying."

@@ -45,7 +45,7 @@ from libs.security import (
 # ==========================================
 
 
-def test_core_environment_handling() -> None:
+def test_core_environment_handling(monkeypatch) -> None:
     """C-03 & C-04: Test DeploymentEnvironment and with_env_suffix."""
     deploy_env = DeploymentEnvironment(
         name="staging",
@@ -64,8 +64,11 @@ def test_core_environment_handling() -> None:
     assert prod_env.is_production is True
     assert with_env_suffix("platform-redis", prod_env) == "platform-redis"
 
+    monkeypatch.setenv("DEPLOY_ENV", "staging")  # get_environment() has no default
     curr = get_environment()
     assert isinstance(curr, DeploymentEnvironment)
+    assert curr.name == "staging"
+    assert curr.env_suffix == "-staging"
 
 
 # ==========================================

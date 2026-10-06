@@ -63,7 +63,7 @@ flowchart TB
 
 ### 2.1 环境选择
 
-- **DEPLOY_ENV**: 目标环境（默认 `production`）
+- **DEPLOY_ENV**: 目标环境。必须显式设置，没有默认值。`INFRA_ENVIRONMENT` 与它等效，且优先于它。两者都未设置（或为空白）时，`get_env()` 抛出 `EnvironmentNotSetError`，任务停止。生产环境同样要显式写 `DEPLOY_ENV=production`。
 - **ENV_DOMAIN_SUFFIX**: 域名后缀（production 为空，非生产为 `-<env>`）
 - **ENV_SUFFIX**: 可选，仅在需要容器/数据路径隔离时显式设置
 - **DATA_PATH**: 优先显式设置；也可用 `{data_path}${ENV_SUFFIX}`（如 `/data/platform/postgres-staging`）
@@ -128,21 +128,24 @@ python -m tools.deploy_v2 --service platform/postgres --type prod --iac-ref vX.Y
 # Staging
 python -m tools.deploy_v2 --service platform/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
 
-# 分步部署
-invoke postgres.pre-compose   # 创建目录、生成密码
-invoke postgres.composing      # 通过 Dokploy API 部署
-invoke postgres.post-compose   # 验证健康状态
+# 分步部署（每条命令都写明环境）
+DEPLOY_ENV=staging invoke postgres.pre-compose   # 创建目录、生成密码
+DEPLOY_ENV=staging invoke postgres.composing      # 通过 Dokploy API 部署
+DEPLOY_ENV=staging invoke postgres.post-compose   # 验证健康状态
 ```
 
 分步 `invoke` 任务只用于 bootstrap/repair 调试；常规 staging/prod 部署必须走 `deploy_v2`。
+不带 `DEPLOY_ENV` 的 `invoke` 任务会立即报错，不会落到生产环境。针对生产环境的分步部署任务是生产部署，需要 owner 授权。
 
 ### SOP-002: 检查服务状态
 
 ```bash
-invoke postgres.shared.status
-invoke redis.shared.status
-invoke authentik.shared.status
+DEPLOY_ENV=staging invoke postgres.shared.status
+DEPLOY_ENV=staging invoke redis.shared.status
+DEPLOY_ENV=staging invoke authentik.shared.status
 ```
+
+检查生产环境时写 `DEPLOY_ENV=production`。
 
 ### SOP-003: 管理密钥
 
@@ -177,12 +180,12 @@ python -m tools.deploy_v2 --service finance_report/redis --type staging --iac-re
 python -m tools.deploy_v2 --service finance_report/app --type staging --version-ref vX.Y.Z --iac-ref vX.Y.Z --domain zitian.party
 
 # 检查状态
-invoke fr-postgres.shared.status
-invoke fr-redis.shared.status
-invoke fr-app.shared.status
+DEPLOY_ENV=staging invoke fr-postgres.shared.status
+DEPLOY_ENV=staging invoke fr-redis.shared.status
+DEPLOY_ENV=staging invoke fr-app.shared.status
 
 # Vault token 配置（需指定 project 参数）
-invoke vault.setup-approle --project=finance_report
+DEPLOY_ENV=staging invoke vault.setup-approle --project=finance_report
 ```
 
 **约束**:
@@ -197,7 +200,7 @@ invoke vault.setup-approle --project=finance_report
 | 行为描述 | 测试方式 |
 |----------|----------|
 | **所有模块加载** | `invoke --list` 无报错 |
-| **服务健康** | `invoke {service}.shared.status` |
+| **服务健康** | `DEPLOY_ENV=<env> invoke {service}.shared.status` |
 | **Vault 读写** | `invoke env.get POSTGRES_PASSWORD --project=platform --env=<env> --service=postgres` |
 
 ---

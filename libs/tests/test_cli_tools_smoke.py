@@ -5,6 +5,8 @@ from __future__ import annotations
 import subprocess
 from types import SimpleNamespace
 
+import pytest
+
 from tools import dokploy_env, env_tool, local_init
 
 
@@ -161,7 +163,7 @@ def test_dokploy_env_list_and_ensure_use_client(monkeypatch) -> None:
 def test_dokploy_logs_fails_fast_when_compose_or_host_missing(monkeypatch) -> None:
     client = FakeDokployClient()
     monkeypatch.setattr(dokploy_env, "get_dokploy", lambda host=None: client)
-    monkeypatch.setattr(dokploy_env, "get_env", lambda: {})
+    monkeypatch.setattr(dokploy_env, "get_env", lambda env_name=None: {})
 
     dokploy_env.logs.body(None, "app", project="platform")
 
@@ -180,7 +182,10 @@ def test_dokploy_logs_runs_deployment_tail(monkeypatch) -> None:
     monkeypatch.setattr(
         dokploy_env,
         "get_env",
-        lambda: {"VPS_HOST": "vps.example.test", "INTERNAL_DOMAIN": "example.test"},
+        lambda env_name=None: {
+            "VPS_HOST": "vps.example.test",
+            "INTERNAL_DOMAIN": "example.test",
+        },
     )
     context = SimpleNamespace(commands=[])
     context.run = lambda cmd: context.commands.append(cmd)
@@ -190,3 +195,40 @@ def test_dokploy_logs_runs_deployment_tail(monkeypatch) -> None:
     assert context.commands == [
         "ssh root@vps.example.test 'tail -n 25 /tmp/deploy.log'"
     ]
+
+
+def test_dokploy_logs_without_an_environment_fails_closed(monkeypatch) -> None:
+    """A bare `invoke dokploy.logs` has no environment: it must not default to production."""
+    from libs.core.environ import EnvironmentNotSetError
+
+    monkeypatch.setattr(
+        dokploy_env, "get_dokploy", lambda host=None: FakeDokployClient()
+    )
+
+    with pytest.raises(EnvironmentNotSetError, match="INFRA_ENVIRONMENT"):
+        dokploy_env.logs.body(None, "app", project="platform")
+
+
+def test_dokploy_logs_named_environment_selects_the_config(monkeypatch) -> None:
+    """`--env staging` is enough: the task asks for staging's config, not the process's."""
+    client = FakeDokployClient()
+    client.compose = {"composeId": "compose-1"}
+    client.latest_deployment = {
+        "deploymentId": "deploy-1",
+        "logPath": "/tmp/deploy.log",
+    }
+    requested: list[str | None] = []
+
+    def fake_get_env(env_name=None):
+        requested.append(env_name)
+        return {"VPS_HOST": "vps.example.test", "INTERNAL_DOMAIN": "example.test"}
+
+    monkeypatch.setattr(dokploy_env, "get_dokploy", lambda host=None: client)
+    monkeypatch.setattr(dokploy_env, "get_env", fake_get_env)
+    context = SimpleNamespace(run=lambda cmd: None)
+
+    dokploy_env.logs.body(
+        context, "app", project="platform", env="staging", deployment=True
+    )
+
+    assert requested == ["staging"]

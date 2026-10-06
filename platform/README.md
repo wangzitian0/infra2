@@ -48,13 +48,13 @@ platform/{nn}.{service}/
 
 ## Prerequisites
 
-1. **Vault ready**: `invoke vault.status` should return healthy
+1. **Vault ready**: `DEPLOY_ENV=production invoke vault.status` should return healthy
 2. **Enable KV engine**: `vault secrets enable -path=secret kv-v2` (one-time)
-3. **Setup AppRole**: `export VAULT_ROOT_TOKEN=<token> && invoke vault.setup-approle`
+3. **Setup AppRole**: `export VAULT_ROOT_TOKEN=<token> && DEPLOY_ENV=<env> invoke vault.setup-approle`
 
 ## Environments
 
-- `DEPLOY_ENV` selects the target environment (default: `production`)
+- `DEPLOY_ENV` selects the target environment. It has no default: with neither `DEPLOY_ENV` nor `INFRA_ENVIRONMENT` set, a task stops with `EnvironmentNotSetError`. Write `DEPLOY_ENV=production` to choose production
 - `ENV_DOMAIN_SUFFIX` is derived from `DEPLOY_ENV` (`""` for production, `-<env>` for non-prod)
 - `ENV_SUFFIX` is optional and must be explicitly set when you need container/data isolation
 - Data paths use `${DATA_PATH}` (recommended) or `{data_path}${ENV_SUFFIX}` if set

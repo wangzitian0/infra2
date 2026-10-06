@@ -21,7 +21,7 @@ chmod 700), prepared by `Deployer._prepare_dirs()` before deploy.
 ```bash
 invoke env.set POSTGRES_PASSWORD=<value> --project=truealpha --service=postgres
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/bootstrap/vault/Root Token/Root Token')
-invoke vault.setup-approle --project=truealpha --service=postgres
+DEPLOY_ENV=<env> invoke vault.setup-approle --project=truealpha --service=postgres
 python -m tools.deploy_v2 --service truealpha/postgres --type staging --iac-ref vX.Y.Z --domain zitian.party
 invoke ta-postgres.shared.status
 ```

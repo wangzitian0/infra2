@@ -12,15 +12,19 @@ HashiCorp Vault - 秘密管理和加密服务。
 ### 自动化任务 (Invoke)
 
 ```bash
-invoke vault.setup
-invoke vault.prepare
-invoke vault.deploy
-invoke vault.init
-invoke vault.unseal
-invoke vault.status
-invoke vault.setup-approle
+# Vault 是共享的 bootstrap 服务：它的任务显式写 production
+DEPLOY_ENV=production invoke vault.setup
+DEPLOY_ENV=production invoke vault.prepare
+DEPLOY_ENV=production invoke vault.deploy
+DEPLOY_ENV=production invoke vault.init
+DEPLOY_ENV=production invoke vault.unseal
+DEPLOY_ENV=production invoke vault.status
+# AppRole 按环境创建
+DEPLOY_ENV=<env> invoke vault.setup-approle
 ```
 
+> 每个 `invoke` 任务都必须显式给出环境。`INFRA_ENVIRONMENT` 与 `DEPLOY_ENV` 都未设置时，任务立即报错 `EnvironmentNotSetError`，不会默认落到生产环境。
+> 对 production 的 `vault.setup`、`vault.prepare`、`vault.deploy`、`vault.init`、`vault.unseal` 是生产变更，需要 owner 授权；`vault.status` 只读。
 > CLI 输出统一使用 `libs.console`，避免直接 `print`。
 > `vault.setup-approle` 为每个服务创建 `{project, env, service}` 作用域的 AppRole，把 `role_id`/`secret_id`（`secret_id_ttl=0` 永不过期）注入 Dokploy env，不打印任何 secret。
 > Generated app tokens are scoped by `{project, env, service}` and previous
@@ -29,7 +33,7 @@ invoke vault.setup-approle
 ### 1. 部署 Vault
 
 ```bash
-invoke vault.deploy
+DEPLOY_ENV=production invoke vault.deploy
 ```
 
 自动执行：
@@ -40,7 +44,7 @@ invoke vault.deploy
 ### 2. 初始化 Vault
 
 ```bash
-invoke vault.init
+DEPLOY_ENV=production invoke vault.init
 ```
 
 `init` 会先检查 Vault 是否可达，然后提示手动初始化步骤。
@@ -75,13 +79,13 @@ vault operator unseal <key3>
 
 ### 4. 注入服务认证凭证（AppRole，Vault-Init）
 
-服务运行时通过 **AppRole** 认证 Vault：`invoke vault.setup-approle` 为每个服务生成
+服务运行时通过 **AppRole** 认证 Vault：`DEPLOY_ENV=<env> invoke vault.setup-approle` 为每个服务生成
 `role_id` + `secret_id`，并注入 Dokploy env `VAULT_ROLE_ID`/`VAULT_SECRET_ID`。
 
 ```bash
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Root Token') # item: bootstrap/vault/Root Token
-# 全部服务（按 deploy.py 注册派生）
-invoke vault.setup-approle --deploy
+# 全部服务（按 deploy.py 注册派生），先在 staging 执行
+DEPLOY_ENV=staging invoke vault.setup-approle --deploy
 # 单个服务 / staging 修复
 DEPLOY_ENV=staging invoke vault.setup-approle --project=finance_report --service=app --deploy
 ```

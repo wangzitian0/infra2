@@ -105,7 +105,7 @@ def collect_live_observations(
     from libs.common import get_env
     from libs.deploy.dokploy_client import get_dokploy
 
-    env_vars = get_env()
+    env_vars = get_env(env)
     vps_host = host or env_vars.get("VPS_HOST")
     if not vps_host:
         raise ValueError("VPS_HOST is required for live audit")
