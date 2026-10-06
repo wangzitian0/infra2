@@ -135,9 +135,9 @@ def test_step_settling_window_clock_passed():
 def test_evaluate_step_pipeline_end_to_end():
     facts = _base_facts(last_push_at=1000.0)
     verdict = evaluate(facts, now=2000.0, quiet_minutes=12, policy="clock")
-    # In wangzitian0/infra2, libs/gate/evaluator.py is in the self-governing closure.
-    # Without a direction proof it needs the gate-change checklist (#1040), not the
-    # owner.
+    # In wangzitian0/infra2, libs/gate/evaluator.py decides whether a merge reaches
+    # production. Without a tightening proof it needs the owner (the reservation
+    # guards itself, owner principle 2026-10-06).
     assert not verdict.ready
-    assert not verdict.owner_required and verdict.action_required
-    assert any("changes what decides merges" in r for r in verdict.reasons)
+    assert verdict.owner_required
+    assert any("detects production deployments" in r for r in verdict.reasons)

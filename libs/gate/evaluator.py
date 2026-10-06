@@ -21,11 +21,13 @@ from libs.gate.types import (
     GREEN_STATES,
     MAX_REVIEW_THREADS,
     MERGE_STATES_OK,
+    PRODUCTION_GUARD_FILES,
     ACT,
     QUIET_MINUTES,
     SETTLE_MINUTES,
     UNEVALUABLE,
     WAIT,
+    WORKFLOW_PREFIX,
     HeadFacts,
     Reasons,
     Verdict,
@@ -140,6 +142,22 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
     # review of this head and a written list of the tests that fail under a mutation.
     governing = sorted(f for f in facts.files if is_self_governing(f))
     unproven = [f for f in governing if f not in facts.proven_tighter]
+    # The reservation guards itself: production detection is not checklist work. The
+    # guard set is matched against the PR's files directly, not through the closure.
+    guarding = sorted(
+        f
+        for f in facts.files
+        if (f in PRODUCTION_GUARD_FILES or f.startswith(WORKFLOW_PREFIX))
+        and f not in facts.proven_tighter
+    )
+    if guarding:
+        reasons.append(
+            f"changes how the gate detects production deployments "
+            f"({', '.join(guarding)}) without a tightening proof: the owner reserves "
+            f"production, so owner approval of head {facts.head_sha[:7]} is required"
+        )
+        owner = True
+    unproven = [f for f in unproven if f not in guarding]
     if unproven:
         named = ", ".join(unproven)
         if not any(

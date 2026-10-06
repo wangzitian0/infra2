@@ -41,6 +41,7 @@
   | Rule text changes in its dev_env source and passes the publish guards | text and dev_env CI | not merged in dev_env |
 
   The direction proof stays the fast path. It covers only closed-set inputs (the CI gate inventory, workflow job names and push paths). A change that the proof cannot read is not refused; it needs the review and the evidence instead. A proven file does not cover an unproven file in the same PR.
+- **The reservation guards itself.** Some files decide whether a merge reaches production, or pin the text that defines the reservation: `PRODUCTION_GUARD_FILES` in `libs/gate/types.py` (the gate's decision code and `libs/tests/test_production_reservation.py`) and every workflow, which carries the deploy triggers. An unproven change to one of them needs the owner's approval of the head SHA (exit 2). The checklist above does not clear it, because a relaxation there could let a later production merge pass without the owner. `libs/tests/test_production_reservation.py` pins the reservation text in this file, so narrowing that text also needs the owner.
 - **Protected files.** `CLAUDE.md` and `AGENTS.md` are generated from the dev_env rule source; change the source, not the file. An App's protected architecture docs follow that App's own checklist. A quoted owner instruction is not required.
 - **合流后闭环**：使用仓库允许的合流方式；确认 merge commit 已落在目标分支并监看 post-merge checks。失败时立即停止 tag / promote，报告并修复，不得继续发布。
   **但 `cancelled` 在合流前与合流后不是同一个含义**：作为 Merge Authority 一律算不满足（见上）；

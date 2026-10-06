@@ -981,7 +981,7 @@ def test_changing_what_decides_merges_needs_the_gate_change_checklist():
     """#1040 (owner principle 2026-10-06): the preflight judges with main's rules, so
     a PR cannot judge itself; a gate change needs its checklist, not the owner."""
     for path in (
-        "tools/pr_merge_gate.py",
+        "libs/console.py",
         "libs/tests/test_pr_merge_gate.py",
         "docs/ssot/ops.merge-gate.md",
         "docs/ssot/ci-gate-inventory.yaml",
@@ -996,7 +996,7 @@ def test_changing_what_decides_merges_needs_the_gate_change_checklist():
 def test_a_gate_change_with_review_and_mutation_evidence_is_ready():
     verdict = gate.evaluate(
         _green(
-            files=("tools/pr_merge_gate.py", "AGENTS.md"),
+            files=("libs/tests/test_pr_merge_gate.py", "AGENTS.md"),
             body="### Mutation evidence\n\n- test_example_fails_when_the_branch_flips\n",
             reviews=(("copilot-pull-request-reviewer", "abcdef0123456789", NOW - 600),),
         ),
@@ -1008,7 +1008,7 @@ def test_a_gate_change_with_review_and_mutation_evidence_is_ready():
 def test_a_gate_change_with_evidence_waits_for_an_automated_review():
     verdict = gate.evaluate(
         _green(
-            files=("tools/pr_merge_gate.py",),
+            files=("libs/console.py",),
             body="### Mutation evidence\n\n- test_example_fails_when_the_branch_flips\n",
         ),
         now=NOW,
@@ -1602,10 +1602,11 @@ def test_a_proven_file_does_not_excuse_an_unproven_one():
         ),
         now=NOW,
     )
-    assert verdict.exit_code == 3 and not verdict.owner_required
-    blocking = [r for r in verdict.reasons if "what decides merges" in r]
-    assert blocking and all("tools/pr_merge_gate.py" in r for r in blocking)
-    assert not any("ci-gate-inventory.yaml" in r for r in blocking), (
+    # tools/pr_merge_gate.py guards production, so the unproven half needs the owner.
+    assert verdict.exit_code == 2 and verdict.owner_required
+    blocking = [r for r in verdict.reasons if "tools/pr_merge_gate.py" in r]
+    assert blocking
+    assert not any("ci-gate-inventory.yaml" in r for r in verdict.reasons), (
         "the proven file must not be named as a blocker"
     )
 
@@ -1875,12 +1876,12 @@ def test_deleting_a_workflow_escalates_to_the_owner():
     assert deleted in verdict.reasons[0]
 
 
-def test_renaming_a_workflow_still_needs_the_gate_change_checklist():
+def test_renaming_a_workflow_escalates_to_the_owner():
     """同一枚硬币的另一面：改名之后旧路径从树上消失、新路径也还没被 glob 到 ——
-    两条路径出现在 `facts.files` 里时都必须仍然要求 gate-change checklist（#1040）。"""
+    workflow 承载部署触发，未证明收紧的改动回 owner（生产保留，2026-10-06）。"""
     renamed = f"{gate.WORKFLOW_PREFIX}renamed-by-this-pr.yml"
     verdict = gate.evaluate(_facts(files=(renamed,)), now=NOW)
-    assert verdict.exit_code == 3 and not verdict.owner_required
+    assert verdict.owner_required and verdict.exit_code == 2
     assert any(renamed in r for r in verdict.reasons)
 
 
@@ -2080,3 +2081,43 @@ def test_a_deploy_path_still_needs_the_owner_even_with_a_red_check():
         now=NOW,
     )
     assert verdict.exit_code == 2 and verdict.action_required
+
+
+# -- The reservation guards itself (#1040 audit, owner principle 2026-10-06) ---------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "libs/gate/evaluator.py",
+        "libs/gate/types.py",
+        "libs/gate/inventory.py",
+        "tools/pr_merge_gate.py",
+        "libs/tests/test_production_reservation.py",
+        f"{gate.WORKFLOW_PREFIX}deploy.yml",
+    ],
+)
+def test_a_change_to_production_detection_needs_the_owner(path):
+    """Mutation evidence and a review cannot clear it: relaxing these could let a
+    later production merge pass without the owner."""
+    verdict = gate.evaluate(
+        _green(
+            files=(path,),
+            body="### Mutation evidence\n\n- test_example_fails_when_flipped\n",
+            reviews=(("copilot-pull-request-reviewer", "abcdef0123456789", NOW - 600),),
+        ),
+        now=NOW,
+    )
+    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
+    assert any("detects production deployments" in r for r in verdict.reasons)
+
+
+def test_a_proven_tightening_of_a_workflow_needs_no_owner():
+    path = f"{gate.WORKFLOW_PREFIX}ops-checks.yml"
+    verdict = gate.evaluate(_green(files=(path,), proven_tighter=(path,)), now=NOW)
+    assert not verdict.owner_required, verdict.reasons
+
+
+def test_a_non_guard_closure_member_still_uses_the_checklist():
+    verdict = gate.evaluate(_green(files=("libs/console.py",)), now=NOW)
+    assert not verdict.owner_required and verdict.exit_code == 3, verdict.reasons
