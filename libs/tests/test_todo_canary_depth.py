@@ -936,7 +936,11 @@ def test_parallel_http_requests_run_the_probes_once(app, monkeypatch) -> None:
 
     _patch_probes(app, monkeypatch)
     monkeypatch.setattr(app, "_probe_postgres", counting_postgres)
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), app.TodoHandler)
+
+    class QueuedServer(http.server.ThreadingHTTPServer):
+        request_queue_size = 16
+
+    server = QueuedServer(("127.0.0.1", 0), app.TodoHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     codes: list[int] = []
     try:

@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir \
     "opentelemetry-api>=1.24,<2" "opentelemetry-sdk>=1.24,<2" \
     "opentelemetry-exporter-otlp-proto-http>=1.24,<2" \
     "opentelemetry-instrumentation-logging>=0.45b0,<1" \
-    "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v2.5.0/infra2_sdk-2.5.0-py3-none-any.whl"
+    "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v3.0.0/infra2_sdk-3.0.0-py3-none-any.whl"
 
 COPY platform/30.todo /app/
 
