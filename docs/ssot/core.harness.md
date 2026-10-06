@@ -124,7 +124,7 @@ source。`--require-current` 在任一 checkout 落后/领先/脏、或 pinned c
 [`coordination.md` Orchestrator Liveness](../../harness/workspace/coordination.md#orchestrator-liveness)。
 它把 watch list 中每个 agent、PR、release log、workflow run、worktree 归为唯一状态
 `WAITING / DONE / ACTION / STALL / UNKNOWN`：只有 `WAITING` 允许继续等待，且只由 GitHub
-事实白名单判定；合流 gate 只按退出码判定（0 ready、2 owner），其文本一律丢弃；携带
+事实白名单判定；合流 gate 只按退出码判定（0 ready、1 wait、2 owner（仅 prod 部署）、3 act、4 could not evaluate），其文本一律丢弃；携带
 `--merge`、`--request-review`、`--admin`、`--auto`（含 argparse 可展开的缩写）的 gate
 命令被拒绝。agent transcript 只 `stat`，从不读取。`--watch` 只打印状态迁移与心跳，
 任一项离开 `WAITING` 即退出。退出码：0 无需处理、1 需行动、2 有项完成而其余仍在等待

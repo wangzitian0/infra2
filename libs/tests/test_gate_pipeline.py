@@ -73,8 +73,9 @@ def test_step_pr_state_and_conflicts_wrong_base():
     reasons = Reasons()
     facts = _base_facts(base="feature")
     owner = _check_pr_state_and_conflicts(facts, reasons)
-    assert owner
+    assert not owner  # retarget the PR; not a production deployment (#1040)
     assert any("not main" in r for r in reasons)
+    assert ACT in reasons.kinds
 
 
 def test_step_pr_state_and_conflicts_conflicting():
@@ -134,8 +135,9 @@ def test_step_settling_window_clock_passed():
 def test_evaluate_step_pipeline_end_to_end():
     facts = _base_facts(last_push_at=1000.0)
     verdict = evaluate(facts, now=2000.0, quiet_minutes=12, policy="clock")
-    # In wangzitian0/infra2, libs/gate/evaluator.py is in self_governing closure,
-    # so without owner proof it requires owner action.
+    # In wangzitian0/infra2, libs/gate/evaluator.py decides whether a merge reaches
+    # production. Without a tightening proof it needs the owner (the reservation
+    # guards itself, owner principle 2026-10-06).
     assert not verdict.ready
     assert verdict.owner_required
-    assert any("changes what decides merges" in r for r in verdict.reasons)
+    assert any("detects production deployments" in r for r in verdict.reasons)

@@ -20,6 +20,24 @@ AUTOMATED_REVIEWERS = frozenset({"copilot-pull-request-reviewer"})
 
 RULE_TEXT_FILES = ("AGENTS.md", "docs/ssot/ops.merge-gate.md")
 
+# The owner reserves production deployment (2026-10-06). These files decide whether a
+# merge reaches production (exit 2), or pin the text that defines the reservation.
+# Relaxing one could let a later production merge pass without the owner, so an
+# unproven change to one needs the owner, not the gate-change checklist. Workflows
+# (WORKFLOW_PREFIX) carry the deploy triggers and are treated the same way.
+PRODUCTION_GUARD_FILES = frozenset(
+    {
+        "tools/pr_merge_gate.py",
+        "libs/gate/__init__.py",
+        "libs/gate/client.py",
+        "libs/gate/evaluator.py",
+        "libs/gate/inventory.py",
+        "libs/gate/self_governance.py",
+        "libs/gate/types.py",
+        "libs/tests/test_production_reservation.py",
+    }
+)
+
 SEVERITY_WEIGHTS = {"high": 1.0, "middle": 0.5, "medium": 0.5, "low": 0.25}
 UNLABELLED_SEVERITY_WEIGHT = SEVERITY_WEIGHTS["middle"]
 BLOCKING_SEVERITY_TOTAL = 1.0

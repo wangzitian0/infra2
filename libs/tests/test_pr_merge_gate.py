@@ -447,7 +447,10 @@ def test_main_merges_only_a_ready_head_and_pins_the_head_commit(capsys):
     assert "merged #704 at feedfac" in capsys.readouterr().out
 
 
-def test_main_json_reports_the_owner_gate(capsys):
+def test_main_json_reports_a_gate_change_as_action_not_owner(capsys):
+    """#1040: a change to what decides merges is a checklist (exit 3 without the
+    written evidence), never an owner verdict."""
+
     class _Protected(_Gh):
         def __call__(self, argv):
             if argv[:1] == ["api"] and "/git/trees/" in argv[1]:
@@ -460,9 +463,10 @@ def test_main_json_reports_the_owner_gate(capsys):
                 return json.dumps(doc)
             return out
 
-    assert gate.main(["704", "--json"], gh=_Protected(), now=lambda: NOW) == 2
+    assert gate.main(["704", "--json"], gh=_Protected(), now=lambda: NOW) == 3
     doc = json.loads(capsys.readouterr().out)
-    assert doc["owner_required"] and doc["ready"] is False
+    assert not doc["owner_required"] and doc["ready"] is False
+    assert doc["outcome"] == "action"
 
 
 def test_a_failing_gh_call_is_an_error_not_a_verdict():
@@ -973,22 +977,45 @@ def test_a_truncated_file_list_cannot_be_trusted_for_the_owner_gates():
     assert any("100 of 163" in r for r in verdict.reasons)
 
 
-def test_changing_what_decides_merges_needs_the_owner():
-    # The gate decides from the working tree, which for an agent merging its
-    # own PR is that PR's branch -- the change judges itself. #765 moved the
-    # merge-authority rules into SSOT, out of the protected file, while a
-    # .md-only PR also skips every required check.
+def test_changing_what_decides_merges_needs_the_gate_change_checklist():
+    """#1040 (owner principle 2026-10-06): the preflight judges with main's rules, so
+    a PR cannot judge itself; a gate change needs its checklist, not the owner."""
     for path in (
-        "tools/pr_merge_gate.py",
+        "libs/console.py",
         "libs/tests/test_pr_merge_gate.py",
         "docs/ssot/ops.merge-gate.md",
         "docs/ssot/ci-gate-inventory.yaml",
         "AGENTS.md",
     ):
         verdict = gate.evaluate(_green(files=(path,)), now=NOW)
-        assert not verdict.ready, path
-        assert verdict.owner_required, path
-        assert any("what decides merges" in r for r in verdict.reasons), path
+        assert not verdict.ready and not verdict.owner_required, path
+        assert verdict.exit_code == 3, (path, verdict.reasons)
+        assert any("Mutation evidence" in r for r in verdict.reasons), path
+
+
+def test_a_gate_change_with_review_and_mutation_evidence_is_ready():
+    verdict = gate.evaluate(
+        _green(
+            files=("libs/tests/test_pr_merge_gate.py", "AGENTS.md"),
+            body="### Mutation evidence\n\n- test_example_fails_when_the_branch_flips\n",
+            reviews=(("copilot-pull-request-reviewer", "abcdef0123456789", NOW - 600),),
+        ),
+        now=NOW,
+    )
+    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+
+
+def test_a_gate_change_with_evidence_waits_for_an_automated_review():
+    verdict = gate.evaluate(
+        _green(
+            files=("libs/console.py",),
+            body="### Mutation evidence\n\n- test_example_fails_when_the_branch_flips\n",
+        ),
+        now=NOW,
+        policy="clock",
+    )
+    assert verdict.exit_code == 1 and not verdict.owner_required, verdict.reasons
+    assert any("automated review" in r for r in verdict.reasons)
 
 
 def test_an_ordinary_green_head_still_merges():
@@ -999,138 +1026,41 @@ def test_an_ordinary_green_head_still_merges():
     assert not verdict.owner_required
 
 
-# -- #814: rule-text files get a second way to clear "what decides merges" --------
+# -- #1040: the written half of the gate-change checklist ---------------------------
 #
-# AGENTS.md / ops.merge-gate.md have no direction-proof reading (prose, not a closed
-# schema), so they always went to the owner even for a change that only tightens the
-# gate. 2026-09-22 owner instruction ("授权给你 merge 权限啊。为什么卡我这？") added a
-# second, non-directional way out for exactly these two files: cite the instruction
-# in the PR body. `_owner_instruction_quoted` is the mechanical check for that
-# citation; it must not read anything else in self_governing_files() as excused.
+# A change to what decides merges without a direction proof names, in the PR body,
+# the tests that fail under a relevant mutation. `_mutation_evidence_listed` checks
+# that the section exists and names at least one test; the reviewer and CI hold the
+# author to the claim.
 
 
 @pytest.mark.parametrize(
     "body",
     [
-        "## Owner instruction\n\n> 授权给你 merge 权限啊。为什么卡我这？",
-        "## owner 指示\n\n> 授权给你 merge 权限啊。为什么卡我这？",
-        "Owner instruction:\n> quote right under it, no blank line",
-        "## Owner Instruction\n\n「授权给你 merge 权限啊」",
-        "## Owner instruction\n\n\n> quote after two blank lines",
-        "intro text\n\n## Owner instruction\n> quote\n\nmore text after the quote",
-        "## Owner instruction\n\n> 授权给你 merge 权限啊",
-        # A 「...」 quote merely needs to appear on the line, not open it -- the
-        # SSOT wording is "含「...」原话", not "line starts with 「".
-        "## Owner instruction\n\n"
-        "2026-09-22: 「加速收敛啊，包括 sub-agent」;「总裁要约定心跳机制的哇」",
-        # Nested `>` markers are fine as long as a real word character follows
-        # them somewhere on the line -- only the markers-with-no-text shape is
-        # rejected (see the reject list below).
-        "## Owner instruction\n\n>> x",
-        "## Owner instruction\n\n> > 授权",
-        # An empty nested quote next to a real one still has real content
-        # somewhere on the line, so it counts.
-        "## Owner instruction\n\n「」」「真内容」",
+        "### Mutation evidence\n\n- test_a_red_check_is_action",
+        "## Mutation evidence\n\n| Mutation | Test |\n|---|---|\n| flip | test_x |",
+        "intro\n\n### Mutation Evidence (red on old code)\n\n`libs/tests/t.py::test_y`",
+        "### Mutation evidence\n\n\n- libs/tests/test_gate.py::test_z fails",
     ],
 )
-def test_owner_instruction_quoted_recognises_a_header_and_its_quote(body):
-    assert gate._owner_instruction_quoted(body)
+def test_mutation_evidence_listed_accepts_a_section_that_names_a_test(body):
+    assert gate._mutation_evidence_listed(body)
 
 
 @pytest.mark.parametrize(
     "body",
     [
         "",
-        "no header at all, just prose that mentions the owner instruction",
-        "## Owner instruction\n\nthis only claims one exists, no quote follows",
-        "## Owner instruction",  # header with nothing after it
-        "## Owner instruction\n\n\n",  # header, then only blank lines to EOF
-        "## Something else\n\n> a quote, but under the wrong header",
-        # A bare `>` (or `「」`) is a citation of nothing -- it must not count as
-        # quoting the instruction just because it looks like markdown quote syntax.
-        "## Owner instruction\n\n>",
-        "## Owner instruction\n\n>   ",
-        "## Owner instruction\n\n「」",
-        # A stray `」` is not "content" either -- `\S` matches a closing bracket
-        # just as readily as real text, so a naive fix for the empty-quote bug
-        # above can still be fooled by an empty quote followed by loose `」`s.
-        "## Owner instruction\n\n「」」",
-        "## Owner instruction\n\n「」 」",
-        # Nested `>` quote markers with no quoted text are still a citation of
-        # nothing -- `>` itself must not count as the required word character.
-        "## Owner instruction\n\n>>",
-        "## Owner instruction\n\n> >",
-        "## Owner instruction\n\n> > >",
-        "## Owner instruction\n\n>>>",
-        # Punctuation-only content (no word character) does not count either.
-        "## Owner instruction\n\n> 。」",
+        "no heading, but it mentions test_something",
+        "### Mutation evidence",
+        "### Mutation evidence\n\nwe ran the tests, trust us",
+        "### Mutation evidence\n\n## Next section\n\n- test_after_the_heading",
+        "# Mutation evidence\n\n- test_one_hash_is_a_title_not_a_section",
+        "### Owner instruction\n\n> 批准",
     ],
 )
-def test_owner_instruction_quoted_rejects_a_header_without_a_quote_beneath_it(body):
-    assert not gate._owner_instruction_quoted(body)
-
-
-def test_owner_instruction_quoted_tries_a_later_header_after_an_empty_one():
-    body = (
-        "## Owner instruction\n\nfirst attempt claims one, quotes nothing\n\n"
-        "## Owner instruction\n\n> second attempt actually quotes the words"
-    )
-    assert gate._owner_instruction_quoted(body)
-
-
-def test_rule_text_files_clear_the_owner_gate_when_the_body_cites_the_instruction():
-    verdict = gate.evaluate(
-        _green(
-            files=("AGENTS.md", "docs/ssot/ops.merge-gate.md"),
-            body="## Owner instruction\n\n> 授权给你 merge 权限啊。为什么卡我这？",
-        ),
-        now=NOW,
-    )
-    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
-
-
-def test_rule_text_files_still_need_the_owner_without_a_citation():
-    """The control for the test above: an empty body is the pre-#814 status quo,
-    and the reason must point the caller at the way out."""
-    verdict = gate.evaluate(
-        _green(files=("AGENTS.md", "docs/ssot/ops.merge-gate.md")), now=NOW
-    )
-    assert verdict.owner_required and verdict.exit_code == 2
-    assert any("what decides merges" in r for r in verdict.reasons)
-    assert any("citing the owner instruction" in r for r in verdict.reasons), (
-        verdict.reasons
-    )
-
-
-def test_a_header_with_no_quote_beneath_it_still_needs_the_owner():
-    verdict = gate.evaluate(
-        _green(
-            files=("AGENTS.md",),
-            body="## Owner instruction\n\nthis merely asserts one exists",
-        ),
-        now=NOW,
-    )
-    assert verdict.owner_required and verdict.exit_code == 2
-
-
-def test_a_citation_does_not_excuse_the_gates_own_code():
-    """A quote in the body proves nothing about pr_merge_gate.py itself: the
-    defendant-rewrites-the-law hazard self_governing_files() exists for is
-    unaffected by what the PR body says about itself. Mirrors
-    test_a_proven_file_does_not_excuse_an_unproven_one for the direction-proof
-    carve-out."""
-    verdict = gate.evaluate(
-        _green(
-            files=("AGENTS.md", "tools/pr_merge_gate.py"),
-            body="## Owner instruction\n\n> 授权给你 merge 权限啊。为什么卡我这？",
-        ),
-        now=NOW,
-    )
-    assert verdict.owner_required and verdict.exit_code == 2
-    assert "tools/pr_merge_gate.py" in verdict.reasons[0]
-    assert "AGENTS.md" not in verdict.reasons[0], (
-        "the cited rule-text file must not be named as a blocker"
-    )
+def test_mutation_evidence_listed_rejects_a_missing_or_empty_section(body):
+    assert not gate._mutation_evidence_listed(body)
 
 
 def test_a_head_missing_from_the_commit_page_cannot_be_judged_settled():
@@ -1377,12 +1307,11 @@ def test_a_draft_is_not_mergeable():
     assert any("draft" in r for r in verdict.reasons)
 
 
-def test_a_pr_targeting_something_other_than_main_needs_the_owner():
-    # Same: `base=` appeared once, as base="main". This branch sets owner too,
-    # so both the block and the escalation were uncovered.
+def test_a_pr_targeting_something_other_than_main_needs_action_not_the_owner():
+    # #1040: retargeting the PR fixes it; it is not a production deployment.
     verdict = gate.evaluate(_green(base="release/1.0"), now=NOW)
-    assert not verdict.ready
-    assert verdict.owner_required
+    assert not verdict.ready and not verdict.owner_required
+    assert verdict.exit_code == 3
     assert any("not main" in r for r in verdict.reasons)
 
 
@@ -1654,14 +1583,14 @@ def test_a_proven_inventory_change_does_not_need_the_owner():
     assert verdict.ready and verdict.exit_code == 0, verdict.reasons
 
 
-def test_the_same_change_unproven_still_needs_the_owner():
+def test_the_same_change_unproven_still_needs_the_checklist():
     """The control for the test above: it is the proof doing the work, not the path."""
     verdict = gate.evaluate(
         _facts(files=("docs/ssot/ci-gate-inventory.yaml", "tools/ci_gate_audit.py")),
         now=NOW,
     )
-    assert verdict.owner_required and verdict.exit_code == 2
-    assert "ci-gate-inventory.yaml" in verdict.reasons[0]
+    assert verdict.exit_code == 3 and not verdict.owner_required
+    assert any("ci-gate-inventory.yaml" in r for r in verdict.reasons)
 
 
 def test_a_proven_file_does_not_excuse_an_unproven_one():
@@ -1673,9 +1602,11 @@ def test_a_proven_file_does_not_excuse_an_unproven_one():
         ),
         now=NOW,
     )
-    assert verdict.owner_required and verdict.exit_code == 2
-    assert "tools/pr_merge_gate.py" in verdict.reasons[0]
-    assert "ci-gate-inventory.yaml" not in verdict.reasons[0], (
+    # tools/pr_merge_gate.py guards production, so the unproven half needs the owner.
+    assert verdict.exit_code == 2 and verdict.owner_required
+    blocking = [r for r in verdict.reasons if "tools/pr_merge_gate.py" in r]
+    assert blocking
+    assert not any("ci-gate-inventory.yaml" in r for r in verdict.reasons), (
         "the proven file must not be named as a blocker"
     )
 
@@ -1947,11 +1878,11 @@ def test_deleting_a_workflow_escalates_to_the_owner():
 
 def test_renaming_a_workflow_escalates_to_the_owner():
     """同一枚硬币的另一面：改名之后旧路径从树上消失、新路径也还没被 glob 到 ——
-    两条路径出现在 `facts.files` 里时都必须仍然升级。"""
+    workflow 承载部署触发，未证明收紧的改动回 owner（生产保留，2026-10-06）。"""
     renamed = f"{gate.WORKFLOW_PREFIX}renamed-by-this-pr.yml"
     verdict = gate.evaluate(_facts(files=(renamed,)), now=NOW)
     assert verdict.owner_required and verdict.exit_code == 2
-    assert renamed in verdict.reasons[0]
+    assert any(renamed in r for r in verdict.reasons)
 
 
 def test_a_new_workflow_is_self_governing_before_it_exists():
@@ -2150,3 +2081,43 @@ def test_a_deploy_path_still_needs_the_owner_even_with_a_red_check():
         now=NOW,
     )
     assert verdict.exit_code == 2 and verdict.action_required
+
+
+# -- The reservation guards itself (#1040 audit, owner principle 2026-10-06) ---------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "libs/gate/evaluator.py",
+        "libs/gate/types.py",
+        "libs/gate/inventory.py",
+        "tools/pr_merge_gate.py",
+        "libs/tests/test_production_reservation.py",
+        f"{gate.WORKFLOW_PREFIX}deploy.yml",
+    ],
+)
+def test_a_change_to_production_detection_needs_the_owner(path):
+    """Mutation evidence and a review cannot clear it: relaxing these could let a
+    later production merge pass without the owner."""
+    verdict = gate.evaluate(
+        _green(
+            files=(path,),
+            body="### Mutation evidence\n\n- test_example_fails_when_flipped\n",
+            reviews=(("copilot-pull-request-reviewer", "abcdef0123456789", NOW - 600),),
+        ),
+        now=NOW,
+    )
+    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
+    assert any("detects production deployments" in r for r in verdict.reasons)
+
+
+def test_a_proven_tightening_of_a_workflow_needs_no_owner():
+    path = f"{gate.WORKFLOW_PREFIX}ops-checks.yml"
+    verdict = gate.evaluate(_green(files=(path,), proven_tighter=(path,)), now=NOW)
+    assert not verdict.owner_required, verdict.reasons
+
+
+def test_a_non_guard_closure_member_still_uses_the_checklist():
+    verdict = gate.evaluate(_green(files=("libs/console.py",)), now=NOW)
+    assert not verdict.owner_required and verdict.exit_code == 3, verdict.reasons

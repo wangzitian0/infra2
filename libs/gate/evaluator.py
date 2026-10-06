@@ -10,7 +10,7 @@ from libs.gate.inventory import (
     _required_checks,
 )
 from libs.gate.self_governance import (
-    _owner_instruction_quoted,
+    _mutation_evidence_listed,
     is_self_governing,
 )
 from libs.gate.types import (
@@ -21,12 +21,13 @@ from libs.gate.types import (
     GREEN_STATES,
     MAX_REVIEW_THREADS,
     MERGE_STATES_OK,
+    PRODUCTION_GUARD_FILES,
     ACT,
     QUIET_MINUTES,
-    RULE_TEXT_FILES,
     SETTLE_MINUTES,
     UNEVALUABLE,
     WAIT,
+    WORKFLOW_PREFIX,
     HeadFacts,
     Reasons,
     Verdict,
@@ -54,8 +55,8 @@ def _check_pr_state_and_conflicts(facts: HeadFacts, reasons: Reasons) -> bool:
     if facts.draft:
         reasons.append("pull request is a draft", ACT)
     if facts.base != "main":
-        reasons.append(f"base branch is {facts.base!r}, not main")
-        owner = True
+        # Retarget the PR; this is not a production deployment (#1040).
+        reasons.append(f"base branch is {facts.base!r}, not main", ACT)
 
     is_open = facts.state == "OPEN"
     absent = sorted(
@@ -135,29 +136,44 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
             UNEVALUABLE,
         )
 
-    quoted_instruction = _owner_instruction_quoted(facts.body)
+    # Gate-change checklist (#1040, owner principle 2026-10-06). The preflight already
+    # proved this verdict comes from main's rules (#873), so a PR cannot judge itself.
+    # A change without a direction proof is not an owner case: it needs an automated
+    # review of this head and a written list of the tests that fail under a mutation.
     governing = sorted(f for f in facts.files if is_self_governing(f))
-    unproven = [
+    unproven = [f for f in governing if f not in facts.proven_tighter]
+    # The reservation guards itself: production detection is not checklist work. The
+    # guard set is matched against the PR's files directly, not through the closure.
+    guarding = sorted(
         f
-        for f in governing
-        if f not in facts.proven_tighter
-        and not (f in RULE_TEXT_FILES and quoted_instruction)
-    ]
-    if unproven:
+        for f in facts.files
+        if (f in PRODUCTION_GUARD_FILES or f.startswith(WORKFLOW_PREFIX))
+        and f not in facts.proven_tighter
+    )
+    if guarding:
         reasons.append(
-            f"changes what decides merges ({', '.join(unproven)}) without a mechanical "
-            f"proof that the change can only make this gate say no more often: the "
-            f"working-tree copy is what judged this PR, so owner approval of head "
-            f"{facts.head_sha[:7]} is required"
+            f"changes how the gate detects production deployments "
+            f"({', '.join(guarding)}) without a tightening proof: the owner reserves "
+            f"production, so owner approval of head {facts.head_sha[:7]} is required"
         )
-        if any(f in RULE_TEXT_FILES for f in unproven):
-            reasons.append(
-                "rule-text files (AGENTS.md / docs/ssot/ops.merge-gate.md) can clear "
-                "this instead by citing the owner instruction that authorised the "
-                "edit in the PR body, under a heading matching 'owner instruction' / "
-                "'owner 指示' followed by a quoted line (`> ...` or 「...」)"
-            )
         owner = True
+    unproven = [f for f in unproven if f not in guarding]
+    if unproven:
+        named = ", ".join(unproven)
+        if not any(
+            r[0] in AUTOMATED_REVIEWERS and r[2] > 0 for r in facts.reviews_on_head()
+        ):
+            reasons.append(
+                f"changes what decides merges ({named}): the gate-change checklist "
+                f"waits for an automated review of head {facts.head_sha[:7]}"
+            )
+        if not _mutation_evidence_listed(facts.body):
+            reasons.append(
+                f"changes what decides merges ({named}) without a direction proof: "
+                "add a '### Mutation evidence' section to the PR body that names the "
+                "tests that fail under a relevant mutation (#1040)",
+                ACT,
+            )
 
     if not _declared_deploy_globs()[1]:
         reasons.append(

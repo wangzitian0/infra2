@@ -96,7 +96,8 @@ outcomes and never matched "1 unresolved review thread(s)"
 `python -m tools.harness sweep <watch.json>` (run from the infra2 root) prints one
 state per item: `WAITING`, `DONE`, `ACTION`, `STALL` or `UNKNOWN`. Only `WAITING` is a
 reason to keep waiting, and it is decided from an allow-list of GitHub facts. A PR
-gate's exit code decides ready (0) and owner (2); its text is discarded, and a gate
+gate's exit code decides ready (0), wait (1), owner for a production deployment (2), act (3)
+and could not evaluate (4); its text is discarded, and a gate
 command carrying `--merge`, `--request-review`, `--admin` or `--auto` (or an abbreviation
 of one) is refused. With `--watch` the sweep prints only transitions and heartbeats and
 exits as soon as any item leaves `WAITING`:
