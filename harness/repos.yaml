@@ -31,12 +31,10 @@ repositories:
     contract: pinned
     source: https://github.com/wangzitian0/infra2-sdk
     release_identity: sdk-semver
-    # Nested submodule — does not carry a Repo-layer rules projection (no
-    # AGENTS.md/CLAUDE.md is expected here). Its constraints travel through the
-    # published SDK artifact and this repo's own README.md/pyproject.toml, per
+    # Nested submodule. It carries its own Repo-layer AGENTS.md (since the
+    # pinned commit 7eb451f), so no rules_layer declaration applies. Its
+    # public contract still travels through the published SDK artifact, per
     # core.harness.md §1 ("SDK 公共契约 | 已发布的 infra2-sdk SemVer artifact").
-    # dev_env issue #51.
-    rules_layer: none
     authority:
       - README.md
       - pyproject.toml
