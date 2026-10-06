@@ -24,7 +24,7 @@ from typing import Any
 
 from libs.core.environ import infra_domain
 from libs.deploy.compose_lock import compose_write_lock
-from libs.console import warning
+from libs.deploy.console import warning
 from libs.deploy import schema_gate
 from libs.deploy.env_config import app_compose_env_config, otel_env
 from libs.deploy.queue import deployment_start_epoch

@@ -98,7 +98,9 @@ six modules the code never followed).
 - `libs/console.py` holds its own implementation. `tools/pr_merge_gate.py` imports it, so
   it is in the merge gate's self-governing closure; moving it is a separate,
   owner-approved change. `libs/deploy/deployer.py` and `libs/deploy/promote.py` import
-  it, and those two edges are the last rows of the import-boundary debt ledger.
+  the decoupled copy `libs/deploy/console.py`, so the import-boundary debt ledger is
+  empty. `test_deploy_console_code_equals_flat_console_code` fails when the two copies
+  differ in code.
 
 The guard asserts that both are *not* structurally shims: migrate one and the table must
 move with it.

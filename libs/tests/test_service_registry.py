@@ -305,6 +305,17 @@ def test_storage_facet_declared_on_truealpha_app() -> None:
     assert storage_facet.encryption is True
 
 
+def test_storage_facet_declared_on_finance_report_app() -> None:
+    attrs = reg.service_attrs()
+    app = attrs["finance_report/app"]
+    assert len(app.storage) == 1
+    storage_facet = app.storage[0]
+    assert storage_facet.bucket == "statements"
+    assert storage_facet.lifecycle_days == 90
+    assert storage_facet.versioning is False
+    assert storage_facet.encryption is False
+
+
 def test_facet_instance_rejects_dynamic_kwargs_unpacking() -> None:
     code = "StorageFacet(**options)"
     call_node = ast.parse(code, mode="eval").body
