@@ -186,7 +186,7 @@ def bootstrap(c):
     3. vault.setup -> deploys Vault
     4. platform services -> uses Vault
     """
-    from libs.env import OpSecrets
+    from libs.security.store import OpSecrets
 
     header("Bootstrap Check", "Validating 1Password config")
 
@@ -254,7 +254,7 @@ def phase(c):
     Each phase reads from its respective 1Password item.
     """
     from rich.table import Table
-    from libs.env import OpSecrets
+    from libs.security.store import OpSecrets
 
     header("Bootstrap Phase Detection")
 

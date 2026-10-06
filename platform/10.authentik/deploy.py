@@ -3,9 +3,8 @@
 import sys
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.common import with_env_suffix
-from libs.env import vault_token
+from libs.security.store import generate_password, get_secrets, vault_token
 from libs.console import success, warning, info, error, run_with_status
-from libs.env import generate_password, get_secrets
 from libs.service_facets import (
     PublicRouteFacet,
     BackupFacet,

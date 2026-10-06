@@ -76,7 +76,7 @@ class VaultDeployer(Deployer):
         }
 
         try:
-            from libs.env import OpSecrets
+            from libs.security.store import OpSecrets
 
             vault_result = c.run(
                 "op vault get Infra2 --format json", hide=True, warn=True

@@ -47,7 +47,7 @@ def _require_env(name: str) -> str:
 def _load_init_vars() -> dict[str, str]:
     """Load init/env_vars from 1Password when env vars are missing."""
     try:
-        from libs.env import OpSecrets
+        from libs.security.store import OpSecrets
     except Exception:
         return {}
     try:

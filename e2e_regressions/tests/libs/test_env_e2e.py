@@ -23,7 +23,7 @@ class TestVaultE2E:
     
     @pytest.fixture
     def secrets(self):
-        from libs.env import get_secrets
+        from libs.security.store import get_secrets
         return get_secrets('platform', 'e2e_test', 'production')
     
     def test_vault_write_and_read(self, secrets):
@@ -53,7 +53,7 @@ class Test1PasswordE2E:
     
     @pytest.fixture
     def secrets(self):
-        from libs.env import OpSecrets
+        from libs.security.store import OpSecrets
         return OpSecrets(item='bootstrap/e2e_test')
     
     @pytest.mark.skip(reason="Requires specific 1Password vault setup")
@@ -69,13 +69,13 @@ class TestGenerateAndStoreE2E:
     
     @pytest.fixture
     def secrets(self):
-        from libs.env import get_secrets
+        from libs.security.store import get_secrets
         return get_secrets('platform', 'e2e_test', 'production')
     
     def test_generate_and_store_creates_password(self, secrets):
         """Test generating and storing a password in Vault"""
         import uuid
-        from libs.env import generate_password
+        from libs.security.store import generate_password
         test_key = f"e2e_generated_{uuid.uuid4().hex[:8]}"
         
         # Generate and store

@@ -1938,9 +1938,9 @@ def _install_real_alerting(monkeypatch, fake: _FakeSigNoz):
         alerting, "get_env", lambda: {"ENV": "production", "ENV_SUFFIX": ""}
     )
     monkeypatch.setattr(alerting, "_signoz_request", fake.request)
-    import libs.env
+    import libs.security.store as env_store
 
-    monkeypatch.setattr(libs.env, "get_secrets", lambda *a, **k: {})
+    monkeypatch.setattr(env_store, "get_secrets", lambda *a, **k: {})
     errors: list[str] = []
     _patch_console(monkeypatch, error=lambda *a, **k: errors.append(str(a[0])))
     monkeypatch.setitem(sys.modules, "platform.12.alerting.shared", alerting)

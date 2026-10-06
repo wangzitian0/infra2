@@ -70,7 +70,7 @@ def _run_create_api_key(monkeypatch, process_environment: str) -> list[tuple]:
         stores.append((project, service, env, store))
         return store
 
-    monkeypatch.setattr("libs.env.get_secrets", fake_get_secrets)
+    monkeypatch.setattr("libs.security.store.get_secrets", fake_get_secrets)
 
     result = module.create_api_key.body(context)
 

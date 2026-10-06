@@ -915,7 +915,7 @@ def test_base_deployer_ensure_runtime_secrets_passes_for_service_without_secret_
 def test_base_deployer_creates_missing_vault_secret_path(monkeypatch) -> None:
     """Infra-011.6: sync repairs an absent Vault path for unmanifested service with secret_key."""
     from libs.deploy.deployer import Deployer
-    from libs.env import VaultSecrets
+    from libs.security.store import VaultSecrets
 
     class MissingPathSecrets(FakeSecrets):
         def get(self, key):
@@ -1248,7 +1248,7 @@ def test_alerting_heartbeat_coordinates_only_tolerate_an_absent_vault_path(
     """Review on #648: a missing path (first deploy) renders a heartbeat-less stack,
     but auth / connectivity errors must surface instead of silently dropping the
     heartbeat coordinates."""
-    from libs.env import VaultSecrets
+    from libs.security.store import VaultSecrets
 
     module = _load_deploy_module(
         "platform/12.alerting/deploy.py", "alerting_heartbeat_errors_test"

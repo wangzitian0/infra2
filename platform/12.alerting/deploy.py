@@ -3,7 +3,7 @@
 import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.env import VaultSecrets, get_secrets
+from libs.security.store import VaultSecrets, get_secrets
 from libs.console import success
 from libs.service_facets import (
     PublicRouteFacet,

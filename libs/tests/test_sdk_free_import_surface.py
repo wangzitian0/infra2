@@ -36,7 +36,7 @@ MUST_IMPORT_WITHOUT_SDK = [
     # #847：最小 GitHub Actions job 用 `verify_vault_token` / `generate_password` /
     # `VaultSecrets`，所以 `libs.env` 与 `libs.security`（它的 domain 归宿）都必须无 SDK 可导入。
     # `libs.security.__init__` 对 `supply` / `prune` 做惰性导出，才让后者成立。
-    "libs.env",
+    "libs.security.store",
     "libs.security",
 ]
 
