@@ -91,7 +91,7 @@ def healthy_host() -> list[dict]:
     from pathlib import Path
 
     from libs.deploy.in_service import expected_running_containers
-    from libs.service_registry import service_attrs
+    from libs.core.registry import service_attrs
 
     rows = []
     for meta in service_attrs().values():

@@ -294,7 +294,7 @@ def test_platform_specs_are_derived_from_service_registry():
     # service can still have a (now-dormant, for deploy_v2 purposes) Deployer class
     # registered, e.g. truealpha's AppDeployer, so it's fine for a SERVICES key to also
     # appear in the registry.
-    from libs.service_registry import service_attrs
+    from libs.core.registry import service_attrs
 
     from libs.deploy.contract import SERVICES, all_service_keys, service_spec
 

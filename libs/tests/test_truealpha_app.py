@@ -253,7 +253,7 @@ def test_both_issuing_paths_name_the_app_service_alike() -> None:
     OTEL_SERVICE_NAME into the same compose. If they disagree the compose changes identity
     with whichever path deployed it last, splitting one service across two SigNoz names."""
     from libs.deploy.contract import service_spec
-    from libs.service_registry import service_attrs
+    from libs.core.registry import service_attrs
 
     deployer = _load_deploy_module().AppDeployer
     spec = service_spec("truealpha/app")

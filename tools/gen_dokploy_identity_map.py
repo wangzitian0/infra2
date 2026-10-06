@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.service_registry import (  # noqa: E402
+from libs.core.registry import (  # noqa: E402
     DOKPLOY_IDENTITY_MAP_PATH,
     _BOOTSTRAP_COMPOSE_IDS,
     service_attrs,

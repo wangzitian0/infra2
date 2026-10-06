@@ -10,7 +10,7 @@ from pathlib import Path
 
 import yaml
 
-from libs.service_registry import _LAYERS
+from libs.core.registry import _LAYERS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 INFRA_CI_PATH = REPO_ROOT / ".github/workflows/infra-ci.yml"

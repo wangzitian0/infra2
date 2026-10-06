@@ -248,7 +248,7 @@ def test_the_scan_sees_the_real_tree() -> None:
         "libs.observability",
         "libs.backup",
     } <= _domain_packages(ROOT)
-    assert {"libs.common", "libs.service_registry"} <= _flat_modules(ROOT)
+    assert {"libs.common"} <= _flat_modules(ROOT)
 
 
 def test_a_libs_to_tools_import_is_no_longer_present_for_the_deploy_domain() -> None:
@@ -445,12 +445,17 @@ RETIRED_FLAT_SHIMS_BATCH2D = {
     "env",
 }
 
+RETIRED_FLAT_SHIMS_BATCH2E = {
+    "service_registry",
+}
+
 ALL_RETIRED_FLAT_SHIMS = (
     RETIRED_FLAT_SHIMS_BATCH1
     | RETIRED_FLAT_SHIMS_BATCH2
     | RETIRED_FLAT_SHIMS_BATCH2C
     | RETIRED_FLAT_SHIMS_DEPLOY
     | RETIRED_FLAT_SHIMS_BATCH2D
+    | RETIRED_FLAT_SHIMS_BATCH2E
 )
 
 

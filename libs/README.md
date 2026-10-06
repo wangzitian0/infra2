@@ -54,7 +54,6 @@ six modules the code never followed).
 
 | Legacy Shim | Implementation Module | Re-exported Symbols | Status |
 |-------------|-----------------------|---------------------|--------|
-| `libs/service_registry.py` | `libs.core.registry` | `service_attrs`, `ServiceMeta`, `all_services`, `resolve_container_host` | Frozen Shim |
 | `libs/service_facets.py` | `libs.core.facets` | `ProbeFacet`, `PublicRouteFacet`, `SignalFacet`, `BackupFacet`, `Exemption` | Frozen Shim |
 | `libs/deploy_dependencies.py` | `libs.deploy.dependencies` | `extra_dependency_globs`, `service_key_from_path` | Frozen Shim |
 | `libs/common.py` | — (re-exports `libs.core.environ`, and holds `check_service`) | — | Not a shim |
