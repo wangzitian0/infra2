@@ -7,7 +7,7 @@ import os
 import sys
 
 from tools import observability_roundtrip_probe as probe
-from tools.openpanel_clients import OPENPANEL_CLIENTS
+from libs.observability.openpanel import OPENPANEL_CLIENTS
 
 
 def test_signoz_roundtrip_posts_otlp_log_and_queries_nonce(monkeypatch) -> None:

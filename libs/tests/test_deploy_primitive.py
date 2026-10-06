@@ -1071,7 +1071,7 @@ def test_staging_deploy_injects_openpanel_client_id():
     """#372: the per-env OpenPanel client id reaches the compose env on the live
     deploy_v2/deploy_primitive path (it previously only lived in the unused
     pre_compose, so analytics never started)."""
-    from tools.openpanel_clients import OPENPANEL_CLIENTS
+    from libs.observability.openpanel import OPENPANEL_CLIENTS
 
     client = FakeDokploy()
     dp.deploy("staging", FULL_SHA, domain="zitian.party", client=client)
@@ -1082,7 +1082,7 @@ def test_staging_deploy_injects_openpanel_client_id():
 
 def test_prod_deploy_injects_openpanel_client_id_normalizing_prod_alias():
     """`prod` (deploy_v2 naming) maps to the `production` OpenPanel project."""
-    from tools.openpanel_clients import OPENPANEL_CLIENTS
+    from libs.observability.openpanel import OPENPANEL_CLIENTS
 
     client = FakeDokploy()
     dp.deploy(

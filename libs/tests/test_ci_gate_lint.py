@@ -1,11 +1,12 @@
 """Tests for CI gate linter and Left-to-Right hierarchy rules (#461, #508)."""
+
 from __future__ import annotations
 
 from pathlib import Path
 import yaml
 
 from tools.ci_gate_lint import lint_workflow
-from tools.ci_spec import (
+from libs.core.ci_spec import (
     GATE_WALL_CLOCK_BUDGET_S,
     MAX_SINGLE_TEST_S,
     SHARD_MAX,

@@ -3,7 +3,7 @@ import sys
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.console import header, success, info, warning, error
 from libs.service_facets import ProbeFacet, PublicRouteFacet, SecretsFacet, SignalFacet
-from tools.openpanel_clients import openpanel_env
+from libs.observability.openpanel import openpanel_env
 
 shared_tasks = sys.modules.get("finance_report.10.app.shared")
 

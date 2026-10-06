@@ -511,7 +511,7 @@ def test_up_updates_existing_compose_in_place():
     # #375: every preview alias shares the one "preview" OpenPanel project, injected at
     # runtime so preview analytics actually emits (was missing — only deploy_primitive
     # had it). Non-empty client-id + canonical environment, mirroring staging/prod.
-    from tools.openpanel_clients import openpanel_env
+    from libs.observability.openpanel import openpanel_env
 
     assert (
         env_vars["OPENPANEL_CLIENT_ID"]

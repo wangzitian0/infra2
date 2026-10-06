@@ -14,7 +14,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
-from tools.openpanel_clients import openpanel_env
+from libs.observability.openpanel import openpanel_env
 
 
 DEFAULT_INTERVAL_SECONDS = 5 * 60
