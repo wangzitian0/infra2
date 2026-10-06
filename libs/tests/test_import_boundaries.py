@@ -371,3 +371,30 @@ def test_collect_violations_on_a_synthetic_tree(tmp_path: Path) -> None:
         ("libs/dom/bad.py", "bootstrap.thing"),
         ("libs/other.py", "tools"),
     }
+
+
+def _code_without_docstrings(path: Path) -> str:
+    """AST dump of a module with every docstring removed."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)):
+            body = node.body
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                node.body = body[1:] or [ast.Pass()]
+    return ast.dump(tree)
+
+
+def test_deploy_console_code_equals_flat_console_code() -> None:
+    """``libs.deploy.console`` is a decoupled copy of ``libs.console``.
+
+    ``libs.console`` is in the merge gate closure, so it cannot become a re-export.
+    Two copies need a guard: the code (not the docstrings) must stay equal.
+    """
+    flat = _code_without_docstrings(ROOT / "libs" / "console.py")
+    deploy = _code_without_docstrings(ROOT / "libs" / "deploy" / "console.py")
+    assert deploy == flat, "libs/deploy/console.py drifted from libs/console.py"

@@ -409,11 +409,6 @@ def test_a_run_through_a_symlink_finds_the_emitter(host, tmp_path) -> None:
     sbin.mkdir()
     link = sbin / "infra2-host-backup.sh"
     link.symlink_to(SCRIPT)
-    tool_versions = Path.home() / ".tool-versions"
-    if tool_versions.exists():
-        (tmp_path / ".tool-versions").write_text(
-            tool_versions.read_text(encoding="utf-8"), encoding="utf-8"
-        )
     bash = shutil.which("bash")
     assert bash, "bash is required"
     proc = subprocess.run(
