@@ -12,7 +12,7 @@ from libs.deploy import promote as dp
 from libs.deploy.promote import (
     ensure_generated_secrets as _real_ensure_generated_secrets,
 )
-from libs.deploy_queue import parse_epoch_seconds
+from libs.deploy.queue import parse_epoch_seconds
 from libs.tests.compose_env import container_env
 
 # A realistic full commit sha and its 7-char short form (the tag images are published
@@ -91,7 +91,7 @@ def healthy_host() -> list[dict]:
     from pathlib import Path
 
     from libs.deploy.in_service import expected_running_containers
-    from libs.service_registry import service_attrs
+    from libs.core.registry import service_attrs
 
     rows = []
     for meta in service_attrs().values():
@@ -946,7 +946,7 @@ def test_ensure_generated_secrets_degrades_when_this_context_has_no_vault_access
     # immediately in that context. A deploy must still proceed — this context
     # simply cannot perform the self-heal, which is not the same as the
     # self-heal having failed.
-    from libs.env import VaultSecrets
+    from libs.security.store import VaultSecrets
 
     exc_cls = getattr(VaultSecrets, exc_attr)
 
@@ -966,7 +966,7 @@ def test_deploy_proceeds_when_secret_provisioning_has_no_vault_access(monkeypatc
     """End-to-end: deploy() itself must not fail closed on this — the whole point
     is that a routine staging/prod deploy keeps working even though its receiver
     has no Vault credentials to self-heal with."""
-    from libs.env import VaultSecrets
+    from libs.security.store import VaultSecrets
 
     class _NoVaultAccessDeployer:
         @classmethod

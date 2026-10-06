@@ -167,7 +167,7 @@ def test_duplicate_derived_inventory_ids_fail_closed() -> None:
         attrs["platform/postgres"] = clashing
         return attrs
 
-    import libs.vault_self_refresh_audit as audit_module
+    import libs.security.vault_self_refresh_audit as audit_module
 
     original = reg.service_attrs
     try:
@@ -183,7 +183,7 @@ def test_duplicate_derived_inventory_ids_fail_closed() -> None:
 
 _COUNTERFACTUAL_DEPLOY = """
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import SecretsFacet
+from libs.core.facets import SecretsFacet
 
 
 class ExampleDeployer(Deployer):
@@ -221,9 +221,9 @@ def _derived_service(source: str) -> VaultService:
 
 
 def _deploy_side_vault_path(meta_project: str, meta_service: str) -> str:
-    """The path the DEPLOY side actually uses: libs.env.get_secrets(app_vars)
+    """The path the DEPLOY side actually uses: libs.security.store.get_secrets(app_vars)
     stores at secret/data/{project}/{env}/{service} (VaultSecrets.path)."""
-    from libs.env import get_secrets
+    from libs.security.store import get_secrets
 
     secrets = get_secrets(
         project=meta_project,
@@ -242,7 +242,7 @@ def test_counterfactual_secrets_facet_edit_moves_audit_and_deploy_in_lockstep() 
     Two counterfactual edits:
       1. `service` attr edit — the vault path fact. The audit expectation
          (VaultService.vault_path_template) and the deploy-side secret path
-         (libs.env.get_secrets' VaultSecrets.path) are built from the SAME
+         (libs.security.store.get_secrets' VaultSecrets.path) are built from the SAME
          (project, service) attrs, so both move identically.
       2. SecretsFacet field edit (an app container name) — the audit's
          container expectation follows the facet with no YAML to update.

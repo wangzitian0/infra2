@@ -1,4 +1,4 @@
-"""libs/harness_sweep + `tools.harness sweep`: one state per watched item, read-only."""
+"""libs/core/harness/sweep + `tools.harness sweep`: one state per watched item, read-only."""
 
 from __future__ import annotations
 

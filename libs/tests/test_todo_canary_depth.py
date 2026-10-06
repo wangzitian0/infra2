@@ -31,9 +31,9 @@ from urllib.parse import unquote, urlsplit
 
 import pytest
 
-from libs import secrets_registry
-from libs import service_registry as reg
-from libs.probe_specs import render_probe_spec_text
+from libs.security import registry as secrets_registry
+from libs.core import registry as reg
+from libs.observability.probe_specs import render_probe_spec_text
 from libs.tests.compose_env import compose_services, container_env, resolve
 from libs.tests.docker_host import DockerHost
 from libs.tests.traefik_rules import routers_from_labels, serving_router
@@ -1010,7 +1010,7 @@ def test_probe_renders_into_the_probe_runner_specs() -> None:
 
 
 def test_todo_signal_is_a_debounced_minute_alert() -> None:
-    from libs.watchdog_signal_entries import render_internal_signal_entries
+    from libs.observability.signal_entries import render_internal_signal_entries
 
     entries = [
         entry
@@ -1112,7 +1112,7 @@ def test_public_router_does_not_name_the_canary_status() -> None:
 
 
 def _issued_telemetry_env(environment: str) -> dict[str, str]:
-    from libs.service_identity import ServiceIdentity
+    from libs.core.service_identity import ServiceIdentity
 
     identity = ServiceIdentity.build(
         "platform/todo",

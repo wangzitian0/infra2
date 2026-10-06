@@ -1,6 +1,6 @@
 """The one writer of the deployment secret store (plan PR-E).
 
-SSOT for ``libs.security``'s deploy-time secret supply; ``libs.secrets_supply`` is a
+SSOT for ``libs.security``'s deploy-time secret supply; ``libs.security.supply`` is a
 backward-compatibility shim over this module.
 
 Every value a service reads is declared in its manifest with a source class. On every

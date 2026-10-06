@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from libs.availability_ledger import (
+from libs.observability.ledger import (
     apply_unavailability,
     build_environment_line,
     build_report_message,

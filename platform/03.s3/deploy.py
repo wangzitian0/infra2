@@ -12,9 +12,9 @@ import subprocess
 import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.env import generate_password
+from libs.security.store import generate_password
 from libs.console import header, success, error, warning, info, env_vars
-from libs.service_facets import (
+from libs.core.facets import (
     PublicRouteFacet,
     BackupFacet,
     ProbeFacet,
@@ -60,7 +60,7 @@ class S3Deployer(Deployer):
 
     # Infra probes (#541): rendered into INFRA_PROBE_SPECS by platform/alerting.
     # The http probe proves the S3 process answers its liveness endpoint.
-    # kind="s3" (infra2_sdk.runtime.s3, via libs/infra_probes.py) does a real `head_bucket`
+    # kind="s3" (infra2_sdk.runtime.s3, via libs/observability/probes.py) does a real `head_bucket`
     # through a dedicated, minimal-privilege monitoring key against one small
     # healthcheck bucket — proves the S3 API path actually works.
     probes = (

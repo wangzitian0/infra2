@@ -3,7 +3,7 @@
 
 This module is not the public deploy surface. ``deploy_v2(service, type, version_ref,
 iac_ref)`` resolves the coordinate, enforces the data-lane red lines, and then calls this
-backend for a bespoke app's fixed staging/prod composes (``libs.deploy_contract.SERVICES``
+backend for a bespoke app's fixed staging/prod composes (``libs.deploy.contract.SERVICES``
 — finance_report and, since #500, truealpha/app). The only deploy identity this backend
 accepts directly is ``service`` + ``env`` plus a resolved app commit/image ref; the data
 lane is derived from ``deploy_env_config.EnvConfig.data_default`` for observability and is
@@ -234,7 +234,7 @@ def preflight_vault_token(client, compose_id: str, *, min_ttl_hours: int = 48):
     AppRole services (VAULT_ROLE_ID/VAULT_SECRET_ID present) are skipped: post-migration a
     vestigial VAULT_APP_TOKEN can linger in Dokploy and expire un-renewed, so gating on it
     would hard-block an AppRole deploy that would otherwise clean it up. Reuses the
-    class-free libs.env.verify_vault_token. This does NOT auto-repair; it fails closed.
+    class-free libs.security.store.verify_vault_token. This does NOT auto-repair; it fails closed.
 
     No caller-supplied domain: the token being verified lives on the ONE shared Vault
     instance, never a per-service app-routing domain (infra_domain() — #561's general
@@ -394,7 +394,7 @@ def _validate_deploy_preconditions(
     if cfg.compose_id is None:
         raise ValueError(
             f"{service!r} has no Dokploy compose registered for env {env!r} "
-            "(libs.deploy_env_config._APP_COMPOSE_OVERRIDES) — nothing to deploy to."
+            "(libs.deploy.env_config._APP_COMPOSE_OVERRIDES) — nothing to deploy to."
         )
     if cfg.requires_staging_first and not staging_validated and not break_glass:
         raise ValueError(

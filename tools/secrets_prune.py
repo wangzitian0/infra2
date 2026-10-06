@@ -3,7 +3,7 @@
 
 A service's store may hold exactly three kinds of value: what its Vault Agent template
 renders into the container (the manifest's store-backed fields), what an operator task
-reads directly (``Service.store_only_keys`` in libs/secrets_registry.py, each entry
+reads directly (``Service.store_only_keys`` in libs/security/registry.py, each entry
 naming its reader), and what a probe or an operator parks under a reserved prefix
 (``RESERVED_PREFIXES`` below — the same names the SDK's reconcile ignores), which this
 tool keeps and never counts as an orphan. Anything else is an orphan — a value written
@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.secrets_registry import SERVICES  # noqa: E402
+from libs.security.registry import SERVICES  # noqa: E402
 from libs.security.prune import (  # noqa: E402
     RESERVED_PREFIXES,
     PrunePlan,

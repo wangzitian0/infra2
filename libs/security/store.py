@@ -1,6 +1,6 @@
 """Secret-store access for infra2 tasks, over the infra2-sdk adapters (plan PR-E).
 
-The implementation behind the ``libs.env`` shim and ``libs.security`` (#955).
+The implementation behind the ``libs.security.store`` shim and ``libs.security`` (#955).
 
 Three credential types, two stores:
 

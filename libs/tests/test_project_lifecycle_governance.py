@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from libs import service_registry
+from libs.core import registry as service_registry
 
 ROOT = Path(__file__).resolve().parents[2]
 PROJECT_DIR = ROOT / "docs/project"

@@ -172,7 +172,7 @@ def _green_facts(**kwargs) -> HeadFacts:
     assert required, "the inventory read failed: 'all green' would prove nothing"
     defaults = dict(
         head_sha=HEAD,
-        files=("libs/probe_specs.py",),
+        files=("libs/observability/probe_specs.py",),
         checks=tuple((name, "pass") for name in required),
         reviews=(),
         author=USER,

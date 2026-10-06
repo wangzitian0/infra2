@@ -2,7 +2,7 @@
 
 import sys
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import BackupFacet, ProbeFacet, SecretsFacet, SignalFacet
+from libs.core.facets import BackupFacet, ProbeFacet, SecretsFacet, SignalFacet
 
 shared_tasks = sys.modules.get("platform.02.redis.shared")
 
@@ -35,7 +35,7 @@ class RedisDeployer(Deployer):
     # minute-tier alert debounced by the probe runner's shared loop —
     # DEFAULT_FAILURE_THRESHOLD=3 / DEFAULT_RENOTIFY_SECONDS=0 (#903: no timer)
     # (tools/infra_probe_runner.py). watchdog-signals entries derive from this
-    # (libs/watchdog_signal_entries.py); the values here must state what the
+    # (libs/observability/signal_entries.py); the values here must state what the
     # runner actually does, not an aspiration.
     signals = (
         SignalFacet(

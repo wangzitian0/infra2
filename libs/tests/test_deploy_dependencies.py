@@ -5,7 +5,7 @@ declared deps must select exactly the right services, and the autoDeploy audit
 must flag non-allowlisted Dokploy-native triggers.
 """
 
-from libs.deploy_dependencies import (
+from libs.deploy.dependencies import (
     autodeploy_violations,
     dockerfile_baked_shared_trees,
     explain_fanout,

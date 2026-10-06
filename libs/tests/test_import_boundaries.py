@@ -248,7 +248,7 @@ def test_the_scan_sees_the_real_tree() -> None:
         "libs.observability",
         "libs.backup",
     } <= _domain_packages(ROOT)
-    assert {"libs.common", "libs.env", "libs.service_registry"} <= _flat_modules(ROOT)
+    assert {"libs.common", "libs.console"} <= _flat_modules(ROOT)
 
 
 def test_a_libs_to_tools_import_is_no_longer_present_for_the_deploy_domain() -> None:
@@ -273,7 +273,11 @@ def _edges(source: str, package: str) -> set[str]:
         ("import libs.common as c", "libs.core", {"libs.common"}),
         ("from libs.common import infra_domain", "libs.core", {"libs.common"}),
         ("from libs import common", "libs.core", {"libs.common"}),
-        ("from libs import common, env", "libs.core", {"libs.common", "libs.env"}),
+        (
+            "from libs import common, console",
+            "libs.core",
+            {"libs.common", "libs.console"},
+        ),
         # relative, resolved against the importing file's package
         ("from .. import common", "libs.core", {"libs.common"}),
         ("from ..common import infra_domain", "libs.core", {"libs.common"}),
@@ -284,9 +288,9 @@ def _edges(source: str, package: str) -> set[str]:
         ("from . import common", "libs", {"libs.common"}),
         # inside a function and under TYPE_CHECKING
         (
-            "def f():\n    from libs.env import VaultSecrets\n",
+            "def f():\n    from libs.console import console\n",
             "libs.security",
-            {"libs.env"},
+            {"libs.console"},
         ),
         (
             "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import libs.common\n",
@@ -398,3 +402,133 @@ def test_deploy_console_code_equals_flat_console_code() -> None:
     flat = _code_without_docstrings(ROOT / "libs" / "console.py")
     deploy = _code_without_docstrings(ROOT / "libs" / "deploy" / "console.py")
     assert deploy == flat, "libs/deploy/console.py drifted from libs/console.py"
+
+
+RETIRED_FLAT_SHIMS = frozenset(
+    {
+        "secrets_supply",
+        "infra_probes",
+        "watchdog_issue_trail",
+        "container_breakdown",
+        "container_breakdown_watch",
+        "backup_verification",
+        "backup_restore",
+        "service_identity",
+        "env",
+        "service_registry",
+        "service_facets",
+        "secrets_registry",
+        "deploy_dependencies",
+        "deploy_queue",
+        "deploy_env_config",
+        "deploy_contract",
+        "dokploy",
+        "probe_specs",
+        "scheduler_peer_liveness",
+        "resident_watchers",
+        "deploy_queue_guard",
+        "app_deploy_request",
+        "availability_ledger",
+        "coverage_regression",
+        "harness_manifest",
+        "harness_status",
+        "harness_sweep",
+        "iac_runner_client",
+        "page_dedup",
+        "release_markers",
+        "vault_self_refresh_audit",
+        "vault_tokens",
+        "watchdog_signal_entries",
+    }
+)
+
+
+def _retired_shim_uses(source: str) -> list[str]:
+    """Imports, import_module calls and patch-target strings that name a retired shim."""
+    found: list[str] = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                parts = alias.name.split(".")
+                if (
+                    parts[0] == "libs"
+                    and len(parts) > 1
+                    and parts[1] in RETIRED_FLAT_SHIMS
+                ):
+                    found.append(alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            parts = node.module.split(".")
+            if parts[0] == "libs" and len(parts) > 1 and parts[1] in RETIRED_FLAT_SHIMS:
+                found.append(node.module)
+            if node.module == "libs":
+                found.extend(
+                    f"libs.{a.name}" for a in node.names if a.name in RETIRED_FLAT_SHIMS
+                )
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            parts = node.value.split(".")
+            if (
+                len(parts) > 1
+                and parts[0] == "libs"
+                and parts[1] in RETIRED_FLAT_SHIMS
+                and all(p.isidentifier() for p in parts)
+            ):
+                found.append(node.value)
+    return found
+
+
+def test_retired_flat_shim_files_stay_deleted() -> None:
+    present = sorted(
+        n for n in RETIRED_FLAT_SHIMS if (ROOT / "libs" / f"{n}.py").exists()
+    )
+    assert present == [], f"retired shim file came back: {present}"
+
+
+def test_no_tracked_python_file_uses_a_retired_flat_shim() -> None:
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "ls-files", "*.py"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    self_path = Path(__file__).resolve().relative_to(ROOT).as_posix()
+    scanned = [
+        f
+        for f in tracked
+        if f != self_path
+        and not f.startswith(("repos/", "oh-my-code-agent/", ".venv/"))
+    ]
+    assert len(scanned) > 200, "GREEN-WHILE-EMPTY: the scan found too few Python files"
+    offenders = {}
+    for rel in scanned:
+        hits = _retired_shim_uses((ROOT / rel).read_text(encoding="utf-8"))
+        if hits:
+            offenders[rel] = hits
+    assert offenders == {}, offenders
+
+
+@pytest.mark.parametrize(
+    "source,expected",
+    [
+        ("import libs.env\n", ["libs.env"]),
+        (
+            "from libs.service_registry import service_attrs\n",
+            ["libs.service_registry"],
+        ),
+        ("from libs import common, dokploy\n", ["libs.dokploy"]),
+        ('importlib.import_module("libs.deploy_queue")\n', ["libs.deploy_queue"]),
+        (
+            'monkeypatch.setattr("libs.secrets_supply.get_secrets", f)\n',
+            ["libs.secrets_supply.get_secrets"],
+        ),
+        ("from libs.security.store import get_secrets\n", []),
+        ("from libs import common, console\n", []),
+        ("import libs.environment_notes\n", []),
+    ],
+)
+def test_retired_shim_scanner_flags_each_spelling(
+    source: str, expected: list[str]
+) -> None:
+    assert _retired_shim_uses(source) == expected

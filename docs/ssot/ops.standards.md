@@ -17,7 +17,7 @@
 ### 标准标签 (Tagging)
 - 对外服务必须配置 Traefik labels（`traefik.enable`, router rule, entrypoints, tls）。
 - 内部服务必须显式 `traefik.enable=false`，避免误暴露。
-- 服务身份只有一个版本化契约：`libs/service_identity.py` 的 `v1`。canonical
+- 服务身份只有一个版本化契约：`libs/core/service_identity.py` 的 `v1`。canonical
   坐标为 `service_id=<namespace>/<service>`、`environment`、`component`，发布
   坐标为 `service.version` / `iac_ref`；`managed_by=infra2` 标识签发者。
 - IaC/Dokploy 使用 `INFRA_*`，OpenTelemetry 使用 semantic conventions

@@ -413,7 +413,7 @@ DEPLOY_ENV=production invoke vault.setup-approle --project=bootstrap --service=i
 - Vault Agent sidecar 以 AppRole 登录并原生续期，拉取 `bootstrap/{env}/iac_runner` 密钥。
 - Sync subprocesses get `VAULT_TOKEN` from an in-container
   `auth/approle/login` (`resolve_vault_token`) — a short-TTL bounded token so the
-  deploy-time secret supply (`libs/secrets_supply.py`) can read and fill
+  deploy-time secret supply (`libs/security/supply.py`) can read and fill
   `{project}/{env}/*` runtime secret fields before deployment. The token must not
   grant `delete`, and it must not mutate bootstrap root credentials. The same value is
   still passed as `VAULT_ROOT_TOKEN` for one release so tasks pinned to the old name
@@ -523,7 +523,7 @@ path "auth/token/lookup-self"          { capabilities = ["read"] }
 
 **v2（#369）已砍掉**以下两条（上面的 policy 块即收敛后的最终形态）：
 - `secret/data/bootstrap/+/vault_token_accessors/*`（CRUD）——曾是**追踪/轮换旧静态
-  token 的账本**（`libs/vault_tokens.py`，仅旧 `setup-tokens` 任务用，**`.sync` 部署路径从不调用它**）。
+  token 的账本**（`libs/security/vault_tokens.py`，仅旧 `setup-tokens` 任务用，**`.sync` 部署路径从不调用它**）。
   全员 AppRole 后无静态 token 可追踪 → 已连同 `setup-tokens` 任务一并删除。
 - `auth/token/renew-self`（update）——AppRole 由 agent 原生续期/重登录，app 不需自 renew。
 
@@ -581,7 +581,7 @@ path "auth/token/lookup-self"          { capabilities = ["read"] }
      的 `SecretsFacet`，audit inventory 由此派生，#542）；
   7. 保留现有 policy（含 accessors）。先在 staging 验证完整发布链路（release tag → reconcile → `/deploy` → `.sync` → 服务 healthy）。
 - **v2（权限收敛）—— 已完成（#369）**：砍掉 `vault_token_accessors` grant 与 `renew-self`，删除
-  `setup-tokens` 任务与 `libs/vault_tokens.py` 静态 token 账本代码（仅保留 AppRole 复用的
+  `setup-tokens` 任务与 `libs/security/vault_tokens.py` 静态 token 账本代码（仅保留 AppRole 复用的
   `policy_name`/`normalize_selector`/`VaultTokenTarget`），并从 `RUNTIME_ENV_KEYS_TO_PRESERVE` 移除
   `VAULT_APP_TOKEN`。**这些后续现已完成 / 定型**：其它服务 policy 的 `renew-self` 已全部清理；ClickHouse 旧
   token_file 变体（含 `compose-with-vault.yaml`）已在 #384 删除；`VAULT_APP_TOKEN` 部署预检有意保留为残留 token 的安全网。

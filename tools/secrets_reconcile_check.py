@@ -40,7 +40,7 @@ def remote_command() -> str:
 
 
 def ssh_args(env: Mapping[str, str]) -> list[str]:
-    """The watchdog SSH convention (see libs/vault_self_refresh_audit._ssh)."""
+    """The watchdog SSH convention (see libs/security/vault_self_refresh_audit._ssh)."""
     args = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
     if key_path := env.get("INFRA2_WATCHDOG_SSH_KEY_PATH", "").strip():
         args += [

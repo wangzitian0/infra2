@@ -19,10 +19,10 @@
 | `issue_trail.py` | GitHub Issue trail reconciliation | `reconcile_watchdog_issues()`, `record_verdicts()`, `load_trail()`, `CheckVerdict` |
 | `openpanel.py` | OpenPanel analytics client configuration SSOT | `OPENPANEL_CLIENTS`, `openpanel_env()` |
 | `local_ledger.py` | VPS availability ledger: per-signal daily ok/fail counts written by the probe runner (#904) | `record_probe_round()`, `host_ledger_path()`, `to_report_days()` |
-| `probe_specs.py` | Probe specs rendered from the registry for the probe runner (was `libs/probe_specs.py`, #955) | `render_probe_spec_text()`, `normalize_specs_text()` |
+| `probe_specs.py` | Probe specs rendered from the registry for the probe runner (was `libs/observability/probe_specs.py`, #955) | `render_probe_spec_text()`, `normalize_specs_text()` |
 | `recency.py` | Consecutive-observation hysteresis (was `libs/recency.py`) | `evaluate_consecutive_hysteresis()`, `ConsecutiveObservationState` |
-| `scheduler_peer_liveness.py` | Liveness of the peer scheduler workflow (was `libs/scheduler_peer_liveness.py`) | `evaluate()`, `BOUND_CAP_ENV` |
-| `watchers/` | Alerting sidecar resident watcher plugins: `resident.py` (base and registry, was `libs/resident_watchers.py`), `deploy_queue_guard.py` (was `libs/deploy_queue_guard.py`), `breakdown_watch.py` | `ResidentWatcher`, `build_watchers()`, `DeployQueueGuard`, `ContainerBreakdownWatcher` |
+| `scheduler_peer_liveness.py` | Liveness of the peer scheduler workflow (was `libs/observability/scheduler_peer_liveness.py`) | `evaluate()`, `BOUND_CAP_ENV` |
+| `watchers/` | Alerting sidecar resident watcher plugins: `resident.py` (base and registry, was `libs/observability/watchers/resident.py`), `deploy_queue_guard.py` (was `libs/observability/watchers/deploy_queue_guard.py`), `breakdown_watch.py` | `ResidentWatcher`, `build_watchers()`, `DeployQueueGuard`, `ContainerBreakdownWatcher` |
 
 ## Usage Examples
 

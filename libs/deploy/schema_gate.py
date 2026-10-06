@@ -20,7 +20,7 @@ which only exist inside its published OCI image, not in infra2's own Python envi
 - Only the VPS host itself runs the docker daemon AND sits on ``dokploy-network``.
 
 So this SSHes to the VPS (the same ``INFRA2_WATCHDOG_SSH_*`` convention
-``tools/secrets_reconcile_check.py`` and ``libs/vault_self_refresh_audit.py`` already
+``tools/secrets_reconcile_check.py`` and ``libs/security/vault_self_refresh_audit.py`` already
 use) and:
 
 1. Reads ``DATABASE_URL`` from the CURRENTLY RUNNING vault-agent sidecar's rendered
@@ -90,7 +90,7 @@ def gate_applies(service: str) -> bool:
 
 def _ssh_args(host: str) -> list[str]:
     """The watchdog SSH convention (``tools/secrets_reconcile_check.py``,
-    ``libs/vault_self_refresh_audit.py``): explicit key/port/user when
+    ``libs/security/vault_self_refresh_audit.py``): explicit key/port/user when
     ``INFRA2_WATCHDOG_SSH_*`` are provisioned (a GitHub Actions runner has no ambient
     identity/known_hosts trust for the VPS), ambient SSH config otherwise (invoked from
     inside the VPS, where root's default identity already trusts itself).

@@ -5,7 +5,7 @@
 ``(service, type, version_ref, iac_ref)``. ``type`` is the discriminant: it interprets
 ``version_ref`` (PR# / sha / tag / branch -> a resolved sha + the image_ref to pull),
 fails closed on a form it does not accept, derives the env + sub_domain, and declares its
-gates. It builds + validates the :class:`~libs.deploy_contract.DeployTarget` (so no
+gates. It builds + validates the :class:`~libs.deploy.contract.DeployTarget` (so no
 illegal target reaches a backend), enforces the gates + data-lane red lines, then routes
 to the existing, already-tested backend — passing the resolved ``image_ref``:
 
@@ -29,10 +29,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import httpx  # Dokploy transport errors from libs.dokploy surface as httpx exceptions
+import httpx  # Dokploy transport errors from libs.deploy.dokploy_client surface as httpx exceptions
 
 from libs.common import infra_domain
-from libs.iac_runner_client import (
+from libs.deploy.iac_runner_client import (
     STATUS_POLL_BACKOFF,
     STATUS_POLL_INITIAL_SECONDS,
     STATUS_POLL_MAX_SECONDS,
@@ -41,7 +41,7 @@ from libs.iac_runner_client import (
     status_poll_attempts,
     trigger_platform_deploy,
 )
-from libs.deploy_contract import (
+from libs.deploy.contract import (
     _SHA_RE,
     DeployTarget,
     DeployTypeSpec,
@@ -61,7 +61,7 @@ from libs.deploy.preflight import (
     enforce_data_lane_red_lines,
     resolve_data_lane,
 )
-from libs.deploy_env_config import CANARY_SLOT, env_config
+from libs.deploy.env_config import CANARY_SLOT, env_config
 from libs.core.registry import domain_for_service
 from libs.deploy.promote import deploy as _deploy_fixed
 from libs.deploy.promote import model_overrides_from_env
@@ -272,7 +272,7 @@ def _deploy_platform(
 
 
 # The /deploy/status schedule every deploy_v2 wait uses (truealpha#860): 2 s first, then
-# growing to the 10 s it always was. See libs.iac_runner_client for the arithmetic.
+# growing to the 10 s it always was. See libs.deploy.iac_runner_client for the arithmetic.
 _STATUS_POLL_SCHEDULE = {
     "interval": STATUS_POLL_INITIAL_SECONDS,
     "backoff": STATUS_POLL_BACKOFF,
@@ -580,8 +580,8 @@ def _deploy_preview_v2(
     if not svc_spec.supports_preview:
         raise ValueError(
             f"{service!r} does not support preview/canary deploys yet "
-            "(libs.deploy_contract.ServiceSpec.supports_preview=False) — register a "
-            "libs.deploy_env_config.preview_service_config entry for it first (#522)."
+            "(libs.deploy.contract.ServiceSpec.supports_preview=False) — register a "
+            "libs.deploy.env_config.preview_service_config entry for it first (#522)."
         )
     result = _preview_up(
         spec.alias_kind,

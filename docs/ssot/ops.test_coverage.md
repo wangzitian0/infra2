@@ -10,7 +10,7 @@
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
 | **覆盖率地板** | [`docs/ssot/coverage-baseline.json`](./coverage-baseline.json) | 提交在仓库里的 no-regression 基线 |
-| **门禁逻辑** | [`libs/coverage_regression.py`](https://github.com/wangzitian0/infra2/blob/main/libs/coverage_regression.py) | 解析 Cobertura XML、加载/写入基线、判定是否退化 |
+| **门禁逻辑** | [`libs/gate/coverage_regression.py`](https://github.com/wangzitian0/infra2/blob/main/libs/coverage_regression.py) | 解析 Cobertura XML、加载/写入基线、判定是否退化 |
 | **CLI 入口** | [`tools/coverage_regression_audit.py`](https://github.com/wangzitian0/infra2/blob/main/tools/coverage_regression_audit.py) | PR 门禁调用的命令 |
 | **生成命令** | `infra-ci.yml`「Run infra unit tests」步骤 | `pytest --cov=libs --cov=tools --cov-report=xml:coverage/infra2-coverage.xml` |
 

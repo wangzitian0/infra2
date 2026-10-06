@@ -1,4 +1,4 @@
-"""libs/secrets_registry: the one list of manifests behind rendering, supply and reconcile."""
+"""libs/security/registry: the one list of manifests behind rendering, supply and reconcile."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from collections import Counter
 
 import pytest
 
-from libs import secrets_registry
-from libs.secrets_registry import SERVICES, Service
+from libs.security import registry as secrets_registry
+from libs.security.registry import SERVICES, Service
 
 
 def test_every_registered_manifest_is_resolvable() -> None:
@@ -153,7 +153,7 @@ def test_every_provided_by_names_a_store_backed_field_of_that_provider() -> None
 
 def test_the_registry_table_is_readable_without_the_sdk() -> None:
     """The ops-checks vault audit installs no infra2_sdk; it reads SERVICES through
-    libs.vault_self_refresh_audit to tell preview stacks apart (#701) and went red on
+    libs.security.vault_self_refresh_audit to tell preview stacks apart (#701) and went red on
     `ModuleNotFoundError: infra2_sdk` the first time (run 34938044492). The table is data;
     only manifest loading needs the SDK."""
     import os
@@ -165,8 +165,8 @@ def test_the_registry_table_is_readable_without_the_sdk() -> None:
         "import sys\n"
         "for name in ('infra2_sdk', 'infra2_sdk.runtime', 'infra2_sdk.runtime.config_schema'):\n"
         "    sys.modules[name] = None\n"
-        "from libs.secrets_registry import SERVICES\n"
-        "from libs.vault_self_refresh_audit import load_inventory\n"
+        "from libs.security.registry import SERVICES\n"
+        "from libs.security.vault_self_refresh_audit import load_inventory\n"
         "print(len(SERVICES), sum(s.ephemeral for s in load_inventory()))\n"
     )
     result = subprocess.run(

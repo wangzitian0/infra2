@@ -56,7 +56,7 @@ from libs.deploy.deployer import (  # noqa: E402
     config_hash_from_items,
     load_deployer_class as _load_deployer,
 )
-from libs.deploy_dependencies import (  # noqa: E402
+from libs.deploy.dependencies import (  # noqa: E402
     extra_dependency_globs,
     service_key_from_path,
 )

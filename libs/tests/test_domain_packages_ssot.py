@@ -14,7 +14,11 @@ from pathlib import Path
 
 import pytest
 
-from libs import common, env, secrets_supply
+from libs import common
+
+from libs.security import store as env
+
+from libs.security import supply as secrets_supply
 from libs.backup import (
     RehearsalSpecification,
     create_rehearsal_plan,

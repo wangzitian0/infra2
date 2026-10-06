@@ -1420,7 +1420,7 @@ def test_main_records_the_paging_verdicts_for_the_issue_trail(
     monkeypatch, tmp_path
 ) -> None:
     """truealpha#876 W4 / #908: paging verdicts reach the trail, green included."""
-    from libs.watchdog_issue_trail import load_trail
+    from libs.observability.issue_trail import load_trail
 
     watchdog = _load_watchdog()
     peer = watchdog.CheckResult(
@@ -1463,7 +1463,7 @@ def test_a_configuration_failure_on_a_report_only_check_pages_as_the_watchdog(
     The next run that records cleanly closes that issue, which a report-only
     check's own name never would (it is never recorded again).
     """
-    from libs.watchdog_issue_trail import load_trail
+    from libs.observability.issue_trail import load_trail
 
     watchdog = _load_watchdog()
     missing_key = watchdog.CheckResult(
@@ -1520,7 +1520,7 @@ def test_main_runs_the_peer_check_with_the_watchdog_retry_settings(monkeypatch) 
 
 
 def _peer_factory(verdicts, seen):
-    from libs.scheduler_peer_liveness import PeerVerdict
+    from libs.observability.scheduler_peer_liveness import PeerVerdict
 
     answers = iter(verdicts)
 
@@ -1797,7 +1797,7 @@ def _run_day(
     code = watchdog.main(
         {key: value for key, value in env.items() if value is not None}
     )
-    from libs.watchdog_issue_trail import load_trail
+    from libs.observability.issue_trail import load_trail
 
     trail = load_trail(verdicts, expected_sources=["out-of-band-watchdog"])
     return code, pages, reports, trail, events

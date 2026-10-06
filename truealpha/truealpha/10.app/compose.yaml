@@ -113,7 +113,7 @@ services:
       S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000
       # Telemetry (infra2#906, docs/ssot/ops.observability.md 4.2). The endpoint is the ONE
       # shared collector: no ${ENV_SUFFIX}, reachable only on dokploy-network. Identity is
-      # issued by the deployment (libs.service_identity, every deploy path), never defaulted
+      # issued by the deployment (libs.core.service_identity, every deploy path), never defaulted
       # here: the service refuses to start when export is on without it, and the issued
       # value is what separates production / staging / pr-<N> in SigNoz. llm is the only
       # service that gets these -- web is Node with no OTel SDK, and one compose-level

@@ -26,71 +26,18 @@ Modules in `libs/` that provide direct integrations or operational clients:
 
 | Module | Purpose | Key Exports |
 |--------|---------|-------------|
-| [`deploy/dokploy_client.py`](./deploy/dokploy_client.py) | Dokploy REST API wrapper (`libs/dokploy.py` is its shim) | `DokployClient`, `get_dokploy()` |
+| [`deploy/dokploy_client.py`](./deploy/dokploy_client.py) | Dokploy REST API wrapper (`libs/deploy/dokploy_client.py` is its shim) | `DokployClient`, `get_dokploy()` |
 | [`observability_dashboards.py`](./observability_dashboards.py) | SigNoz alert rules and dashboards loader. It stays here: moving it triggers apply-observability.yml, which needs owner approval (#1059 phase 2). | `load_alert_definitions()`, `render_alert_payloads()`, `require_rule_channel()` |
 | [`console.py`](./console.py) | Rich CLI formatting and header blocks | `header()`, `success()`, `error()`, `prompt_action()` |
 | [`common.py`](./common.py) | Environment derivation re-export and operator health check helper | `get_env()`, `check_service()` |
 
 ---
 
-## 🛡️ Backward-Compatibility Shims (PEP 484)
+## 🛡️ Flat modules that remain
 
-Legacy flat modules in `libs/` are kept so existing CLI tools, workflows and
-`docs/ssot/` snippets keep importing the path they always did. A **Frozen Shim** holds
-**nothing but re-exports**: a docstring, one `from libs.<domain>.<module> import (...)`,
-and `__all__`.
-
-> [!IMPORTANT]
-> **Shim Boundary Policy**: **Never add new business logic to a Frozen Shim.** All new
-> features and refactorings go in the domain package (`libs.core`, `libs.security`,
-> `libs.backup`, `libs.observability`, `libs.deploy`) and are imported from there.
-
-This table is **not documentation, it is the contract**:
-`libs/tests/test_frozen_shims.py` parses it and, for every `Frozen Shim` row, asserts
-the module is structurally a re-export of exactly the module named here and that each
-re-exported name `is` the same object on both paths. A row that claims more than the
-code does fails the suite (#846: the table was written before the code moved, and for
-six modules the code never followed).
-
-| Legacy Shim | Implementation Module | Re-exported Symbols | Status |
-|-------------|-----------------------|---------------------|--------|
-| `libs/secrets_supply.py` | `libs.security.supply` | `apply`, `resolver_for`, `vault_backend`, `retrying_transport` | Frozen Shim |
-| `libs/infra_probes.py` | `libs.observability.probes` | `execute_probe`, `run_probes`, `ProbeSpec`, `post_alert_bridge_payload` | Frozen Shim |
-| `libs/watchdog_issue_trail.py` | `libs.observability.issue_trail` | `reconcile`, `record_verdicts`, `load_trail` | Frozen Shim |
-| `libs/container_breakdown.py` | `libs.observability.breakdown` | `analyze_container_logs`, `build_breakdown_alert_payload` | Frozen Shim |
-| `libs/container_breakdown_watch.py` | `libs.observability.watchers.breakdown_watch` | `BreakdownWatch`, `sweep`, `run_once` | Frozen Shim |
-| `libs/backup_verification.py` | `libs.backup.verification` | `load_backup_inventory`, `verify_backup_manifest` | Frozen Shim |
-| `libs/backup_restore.py` | `libs.backup.rehearsal` | `build_postgres_rehearsal_plan`, `run_postgres_restore_rehearsal` | Frozen Shim |
-| `libs/service_identity.py` | `libs.core.service_identity` | `ServiceIdentity`, `DOCKER_LABEL_PREFIX`, `MANAGED_BY` | Frozen Shim |
-| `libs/env.py` | `libs.security.store` | `OpSecrets`, `VaultSecrets`, `get_secrets`, `generate_password`, `verify_vault_token` | Frozen Shim |
-| `libs/service_registry.py` | `libs.core.registry` | `service_attrs`, `ServiceMeta`, `all_services`, `resolve_container_host` | Frozen Shim |
-| `libs/service_facets.py` | `libs.core.facets` | `ProbeFacet`, `PublicRouteFacet`, `SignalFacet`, `BackupFacet`, `Exemption` | Frozen Shim |
-| `libs/secrets_registry.py` | `libs.security.registry` | `SERVICES`, `Service`, `lookup`, `merged_manifest`, `store_keys` | Frozen Shim |
-| `libs/deploy_dependencies.py` | `libs.deploy.dependencies` | `extra_dependency_globs`, `service_key_from_path` | Frozen Shim |
-| `libs/deploy_queue.py` | `libs.deploy.queue` | `deployment_start_epoch`, `find_stuck_deploys` | Frozen Shim |
-| `libs/deploy_env_config.py` | `libs.deploy.env_config` | `app_compose_env_config`, `preview_service_config`, `otel_env` | Frozen Shim |
-| `libs/deploy_contract.py` | `libs.deploy.contract` | `service_spec`, `ServiceSpec`, `deploy_type_spec` | Frozen Shim |
-| `libs/dokploy.py` | `libs.deploy.dokploy_client` | `DokployClient`, `get_dokploy`, `ensure_project` | Frozen Shim |
-| `libs/probe_specs.py` | `libs.observability.probe_specs` | `render_probe_spec_text`, `normalize_specs_text` | Frozen Shim |
-| `libs/scheduler_peer_liveness.py` | `libs.observability.scheduler_peer_liveness` | `BOUND_CAP_ENV`, `evaluate` | Frozen Shim |
-| `libs/resident_watchers.py` | `libs.observability.watchers.resident` | `ResidentWatcher`, `build_watchers` | Frozen Shim |
-| `libs/deploy_queue_guard.py` | `libs.observability.watchers.deploy_queue_guard` | `DeployQueueGuard`, `run_once` | Frozen Shim |
-| `libs/page_dedup.py` | `libs.observability.page_dedup` | `dedup_page`, `resolve_page_state`, `decide`, `Finding` | Frozen Shim |
-| `libs/availability_ledger.py` | `libs.observability.ledger` | `summarize_ledger`, `outage_intervals`, `build_report_message` | Frozen Shim |
-| `libs/watchdog_signal_entries.py` | `libs.observability.signal_entries` | `render_internal_signal_entries` | Frozen Shim |
-| `libs/harness_manifest.py` | `libs.core.harness.manifest` | `load_manifest`, `validate_manifest`, `check_workspace` | Frozen Shim |
-| `libs/harness_status.py` | `libs.core.harness.status` | `workspace_status`, `repository_status` | Frozen Shim |
-| `libs/harness_sweep.py` | `libs.core.harness.sweep` | `sweep`, `sweep_once`, `watch` | Frozen Shim |
-| `libs/iac_runner_client.py` | `libs.deploy.iac_runner_client` | `trigger_platform_deploy`, `poll_platform_deploy_status` | Frozen Shim |
-| `libs/release_markers.py` | `libs.deploy.release_markers` | `newest_release_tag`, `production_marker`, `marker_status` | Frozen Shim |
-| `libs/app_deploy_request.py` | `libs.deploy.app_deploy_request` | `verify_production_evidence`, `validate_request_authority` | Frozen Shim |
-| `libs/coverage_regression.py` | `libs.gate.coverage_regression` | `check_no_regression`, `load_baseline`, `read_coverage_summary` | Frozen Shim |
-| `libs/vault_self_refresh_audit.py` | `libs.security.vault_self_refresh_audit` | `load_inventory`, `VaultService`, `CheckResult` | Frozen Shim |
-| `libs/vault_tokens.py` | `libs.security.vault_tokens` | `VaultTokenTarget`, `policy_name`, `normalize_selector` | Frozen Shim |
-| `libs/common.py` | — (re-exports `libs.core.environ`, and holds `check_service`) | — | Not a shim |
-| `libs/console.py` | — (holds its own implementation) | — | Not a shim |
-
-### The two that are not shims
+The repository does not maintain backward-compatibility shims in `libs/` (#1059).
+Domain packages are the single source of truth. Every caller imports domain packages
+directly. Two flat modules remain:
 
 - `libs/common.py` re-exports `libs.core.environ` and keeps one function of its own,
   `check_service`. That function is an operator task helper: it runs a health command
@@ -102,13 +49,13 @@ six modules the code never followed).
   empty. `test_deploy_console_code_equals_flat_console_code` fails when the two copies
   differ in code.
 
-The guard asserts that both are *not* structurally shims: migrate one and the table must
-move with it.
+The guard in `libs/tests/test_import_boundaries.py` asserts that all retired flat shims
+stay deleted and that no tracked Python file imports them.
 
 `libs.security` imports without infra2-sdk (#847): `libs/security/__init__.py` loads
 `supply` / `prune` lazily (PEP 562), so only touching an SDK-backed name needs the wheel;
 `libs/tests/test_sdk_free_import_surface.py` pins it. `libs/security/store.py` (behind
-the `libs/env.py` shim) guards its own SDK import so minimal GitHub Actions jobs can
+the `libs/security/store.py` shim) guards its own SDK import so minimal GitHub Actions jobs can
 use `verify_vault_token` / `generate_password`; its guards (`libs/tests/test_env.py::TestWithoutTheSdk`,
 `test_secrets_registry.py::test_the_registry_table_is_readable_without_the_sdk` and
 `test_workflow_runtime_deps.py::test_a_job_can_import_what_it_runs`) must keep passing

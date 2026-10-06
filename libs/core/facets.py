@@ -2,11 +2,11 @@
 
 Convergence part 1: the Deployer subclass in each service's ``deploy.py`` is the
 SINGLE declaration point for that service's operational facts, and
-``libs.service_registry.service_attrs()`` is the single derivation function.
+``libs.core.registry.service_attrs()`` is the single derivation function.
 These dataclasses are the typed vocabulary those declarations use:
 
 - :class:`ProbeFacet`     — one infra probe line (fields aligned with
-                            ``libs.infra_probes.ProbeSpec``); the alerting stack
+                            ``libs.observability.probes.ProbeSpec``); the alerting stack
                             renders the aggregate ``INFRA_PROBE_SPECS`` from them.
 - :class:`PublicRouteFacet` — a public HTTP surface probed from inside (#543);
                             declared as the plural ``public_routes`` tuple.
@@ -14,10 +14,10 @@ These dataclasses are the typed vocabulary those declarations use:
                             #425 T5's ``docs/ssot/watchdog-signals.yaml``:
                             tier / type / consecutive_failures / renotify_window_sec).
 - :class:`BackupFacet`    — backup method facts (fields aligned with
-                            ``libs.backup_verification.BackupEntry``; ``service_id``
+                            ``libs.backup.verification.BackupEntry``; ``service_id``
                             and ``data_path`` stay on the Deployer itself).
 - :class:`SecretsFacet`   — Vault self-refresh facts (fields aligned with
-                            ``libs.vault_self_refresh_audit.VaultService``); the
+                            ``libs.security.vault_self_refresh_audit.VaultService``); the
                             audit inventory is DERIVED from these (#542), so the
                             audit's expectations and the deployed vault-agent
                             wiring come from the same declaration.
@@ -69,7 +69,7 @@ class ProbeFacet:
 
     Renders to one ``INFRA_PROBE_SPECS`` line:
     ``name|kind|target|expected|severity|timeout_seconds|depends_on|service_id``
-    (field semantics == ``libs.infra_probes.ProbeSpec``).
+    (field semantics == ``libs.observability.probes.ProbeSpec``).
 
     ``service_id`` is normally left empty and derived from the DECLARING
     service's registry id. It is set explicitly only for probes a service
@@ -112,7 +112,7 @@ class PublicRouteFacet:
     other). The alerting deployer derives the per-environment probe line —
     ``https://{subdomain}{ENV_DOMAIN_SUFFIX}.{INTERNAL_DOMAIN}{path}`` with
     probe name ``{service}-public-route`` — into ``PUBLIC_ROUTE_PROBE_SPECS``
-    (see ``libs.probe_specs.render_public_route_spec_text``). Environment
+    (see ``libs.observability.probe_specs.render_public_route_spec_text``). Environment
     rules come from registry facts, not repetition: ``prod_only`` services
     render for production only (their staging host never exists — infra2#307),
     and non-production renders downgrade to ``warning`` severity (a broken
@@ -167,7 +167,7 @@ class SignalFacet:
 @dataclass(frozen=True)
 class BackupFacet:
     """Backup facts for the service's ``data_path`` (aligned with
-    ``libs.backup_verification.BackupEntry``; service_id/data_path derive from
+    ``libs.backup.verification.BackupEntry``; service_id/data_path derive from
     the owning Deployer, so they are usually not repeated here).
 
     ``service_id``/``data_path`` overrides follow SecretsFacet's convention:
@@ -178,7 +178,7 @@ class BackupFacet:
 
     ``retention_days``/``rpo_hours``/``remote`` left at their zero-values mean
     "use the inventory defaults" (30d / 24h / r2 — see
-    ``libs.backup_verification.INVENTORY_DEFAULTS``), mirroring how the deleted
+    ``libs.backup.verification.INVENTORY_DEFAULTS``), mirroring how the deleted
     handwritten YAML's ``defaults:`` block worked.
     """
 
@@ -197,14 +197,14 @@ class SecretsFacet:
 
     The vault self-refresh audit's inventory (formerly the handwritten
     ``vault-self-refresh-inventory.yaml`` SSOT, deleted) is DERIVED from these
-    declarations by ``libs.vault_self_refresh_audit.load_inventory`` (#542).
+    declarations by ``libs.security.vault_self_refresh_audit.load_inventory`` (#542).
     Everything derivable from the owning Deployer is NOT repeated here:
 
     - inventory ``id`` / ``project`` / ``dokploy_service`` derive from the
       declaring Deployer's registry id, ``project``, and ``service`` attrs;
     - ``vault_path_template`` derives as
       ``secret/data/{project}/{env}/{service}`` — the SAME (project, service)
-      facts ``libs.env.get_secrets`` uses to build the deploy-side Vault path,
+      facts ``libs.security.store.get_secrets`` uses to build the deploy-side Vault path,
       so the audit expectation and the deployed path cannot drift (#531);
     - ``compose_path`` defaults to the Deployer's own ``compose_path``, and the
       vault-agent config / secrets template are its ``vault-agent.hcl`` /
@@ -220,7 +220,7 @@ class SecretsFacet:
     WITHOUT the ``/secrets/.env`` mount (e.g. platform-prefect-worker), and
     ``optional_inert_fields`` (#526) names optional vault:true fields whose
     populated-ness is reported informationally — both formerly module-level
-    constants in libs/vault_self_refresh_audit.py, now declared where the
+    constants in libs/security/vault_self_refresh_audit.py, now declared where the
     service lives.
     """
 
@@ -251,7 +251,7 @@ class RestartAfterFacet:
     has the same failure mode (#713). The dependent declares it here, next to its own
     compose; the DEPENDENCY's Deployer reads the registry after a sync that actually
     redeployed it (never after a skip) and restarts these containers in the same
-    environment (``libs.service_registry.restart_after_containers``).
+    environment (``libs.core.registry.restart_after_containers``).
 
     ``services`` are compose service keys of the owning Deployer's ``compose_path``.
     Container names are not repeated here: they derive from that compose's

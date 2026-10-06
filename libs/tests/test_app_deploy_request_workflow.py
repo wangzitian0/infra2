@@ -7,7 +7,7 @@ import pytest
 import yaml
 from infra2_sdk.deploy import DeployOperation, DeployRequest, DeployType
 
-from libs.app_deploy_request import PREFLIGHT_CANARY_DEPLOY_TYPES, DeployPlan
+from libs.deploy.app_deploy_request import PREFLIGHT_CANARY_DEPLOY_TYPES, DeployPlan
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/app-deploy-request.yml"

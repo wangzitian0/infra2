@@ -220,7 +220,7 @@ libs/
 **规则**：
 - ✅ 每个领域包包含专属 `README.md`，定义其领域模型、API 与安全守卫
 - ✅ 外部仅通过领域包顶层导出（`from libs.<domain> import ...`）消费其能力
-- ✅ 平铺模块（`libs/env.py` 等）仅作为向后兼容 Shim 保留，严禁新增业务逻辑
+- ✅ 平铺模块（`libs/security/store.py` 等）仅作为向后兼容 Shim 保留，严禁新增业务逻辑
 
 ### Volume 路径规范
 

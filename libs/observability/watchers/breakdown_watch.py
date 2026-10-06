@@ -2,10 +2,10 @@
 *with the reason* pulled from its logs.
 
 SSOT for ``libs.observability.watchers``'s breakdown watcher plugin;
-``libs.container_breakdown_watch`` is a backward-compatibility shim over this module.
+``libs.observability.watchers.breakdown_watch`` is a backward-compatibility shim over this module.
 
 Watcher plugin in the single resident alerting sidecar (#543) — runs inside
-`tools/infra_probe_runner.py --loop` via `libs.resident_watchers.build_watchers`
+`tools/infra_probe_runner.py --loop` via `libs.observability.watchers.resident.build_watchers`
 (it was a standalone compose sidecar before the merge). Read-only: needs
 ``/var/run/docker.sock`` mounted ``:ro`` on the probe-runner container. Talks
 to the Docker Engine API over the socket with **httpx** (already a

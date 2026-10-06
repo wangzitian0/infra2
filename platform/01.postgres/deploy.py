@@ -2,7 +2,7 @@
 
 import sys
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import BackupFacet, ProbeFacet, SecretsFacet, SignalFacet
+from libs.core.facets import BackupFacet, ProbeFacet, SecretsFacet, SignalFacet
 
 shared_tasks = sys.modules.get("platform.01.postgres.shared")
 
@@ -25,7 +25,7 @@ class PostgresDeployer(Deployer):
     secret_key = "root_password"
 
     # Infra probes (#541): rendered into INFRA_PROBE_SPECS by platform/alerting.
-    # kind="postgres" (infra2_sdk.runtime.postgres, via libs/infra_probes.py) runs a
+    # kind="postgres" (infra2_sdk.runtime.postgres, via libs/observability/probes.py) runs a
     # real `SELECT 1` through a dedicated, minimal-privilege monitoring role — a bare
     # TCP handshake proves the port is open, not that Postgres itself is accepting
     # queries. Credentials come from the probe-runner's own vault secret
@@ -41,7 +41,7 @@ class PostgresDeployer(Deployer):
     # minute-tier alert debounced by the probe runner's shared loop —
     # DEFAULT_FAILURE_THRESHOLD=3 / DEFAULT_RENOTIFY_SECONDS=0 (#903: no timer)
     # (tools/infra_probe_runner.py). watchdog-signals entries derive from this
-    # (libs/watchdog_signal_entries.py); the values here must state what the
+    # (libs/observability/signal_entries.py); the values here must state what the
     # runner actually does, not an aspiration.
     signals = (
         SignalFacet(

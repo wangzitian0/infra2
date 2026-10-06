@@ -1,4 +1,4 @@
-"""Tests for the deploy-queue guard watcher (libs/deploy_queue_guard.py).
+"""Tests for the deploy-queue guard watcher (libs/observability/watchers/deploy_queue_guard.py).
 
 The pure stuck-detection logic is covered by test_deploy_queue.py; this file
 covers the watcher's orchestration: env-file loading semantics, the compose
@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-from libs.deploy_queue import StuckDeploy
+from libs.deploy.queue import StuckDeploy
 from libs.observability.watchers import deploy_queue_guard as guard
 # ---------------------------------------------------------------------------
 # _load_env_file

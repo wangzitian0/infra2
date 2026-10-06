@@ -13,7 +13,7 @@ from libs.common import (
     otel_ingest_endpoint,
     service_domain,
 )
-from libs.service_facets import PublicRouteFacet, BackupFacet, ProbeFacet, SignalFacet
+from libs.core.facets import PublicRouteFacet, BackupFacet, ProbeFacet, SignalFacet
 
 shared_tasks = sys.modules.get("platform.11.signoz.shared")
 
@@ -98,7 +98,7 @@ class SigNozDeployer(Deployer):
     # minute-tier alert debounced by the probe runner's shared loop —
     # DEFAULT_FAILURE_THRESHOLD=3 / DEFAULT_RENOTIFY_SECONDS=0 (#903: no timer)
     # (tools/infra_probe_runner.py). watchdog-signals entries derive from this
-    # (libs/watchdog_signal_entries.py); the values here must state what the
+    # (libs/observability/signal_entries.py); the values here must state what the
     # runner actually does, not an aspiration.
     signals = (
         SignalFacet(
@@ -120,10 +120,10 @@ class SigNozDeployer(Deployer):
 
         Substitutes ``${ENV_SUFFIX}`` (clickhouse DSN target) and the
         ``${OTEL_CORS_ALLOWED_ORIGINS}`` block, which is DERIVED from the FE origins
-        (libs.deploy_env_config.cors_allowed_origins) so the CORS allow-list can
+        (libs.deploy.env_config.cors_allowed_origins) so the CORS allow-list can
         never drift from the actual app domains it must mirror.
         """
-        from libs.deploy_env_config import cors_allowed_origins
+        from libs.deploy.env_config import cors_allowed_origins
 
         template_path = Path(__file__).with_name("otel-collector-config.yaml")
         content = template_path.read_text()

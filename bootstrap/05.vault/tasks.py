@@ -20,7 +20,7 @@ from libs.console import (
     prompt_action,
     run_with_status,
 )
-from libs.vault_tokens import (
+from libs.security.vault_tokens import (
     VaultTokenTarget,
     normalize_selector,
     policy_name as vault_policy_name,
@@ -76,7 +76,7 @@ class VaultDeployer(Deployer):
         }
 
         try:
-            from libs.env import OpSecrets
+            from libs.security.store import OpSecrets
 
             vault_result = c.run(
                 "op vault get Infra2 --format json", hide=True, warn=True
@@ -119,7 +119,7 @@ class VaultDeployer(Deployer):
                 env_vars["OP_ITEM_ID"] = ""
 
         except ImportError:
-            error("Missing libs.env dependencies")
+            error("Missing libs.security.store dependencies")
             return None
         except Exception as ex:
             error(f"Failed to fetch secrets: {ex}")
@@ -146,7 +146,7 @@ class VaultDeployer(Deployer):
     @classmethod
     def composing(cls, c, env_vars: dict) -> str:
         """Deploy Vault via Dokploy API (using GitHub provider)"""
-        from libs.dokploy import ensure_project, get_dokploy
+        from libs.deploy.dokploy_client import ensure_project, get_dokploy
         from libs.core.constants import GITHUB_BRANCH, GITHUB_OWNER, GITHUB_REPO
 
         e = cls.env()
@@ -497,7 +497,7 @@ def _redeploy_with_vault_creds(
 
 def _dokploy_client() -> tuple[Any, str]:
     """The Dokploy client for this environment, and the environment name."""
-    from libs.dokploy import get_dokploy
+    from libs.deploy.dokploy_client import get_dokploy
     from libs.common import get_env
 
     e = get_env()

@@ -14,7 +14,7 @@ import pytest
 import libs.deploy.deployer as deployer_module
 from libs.security import supply as secrets_supply
 from libs.deploy.deployer import Deployer
-from libs.secrets_supply import SupplyReport, TransientTransportError
+from libs.security.supply import SupplyReport, TransientTransportError
 from libs.tests.docker_host import DockerHost
 
 ENV = {"ENV": "staging", "ENV_SUFFIX": "-staging", "VPS_HOST": "vps.test"}
@@ -397,7 +397,9 @@ def test_retrying_transport_fails_closed_past_the_retry_budget(monkeypatch) -> N
             "GET", "https://vault.test/v1/secret/data/truealpha/staging/app", {}, None
         )
 
-    assert len(calls) == 3  # 1 initial + 2 retries, same budget as libs/dokploy.py
+    assert (
+        len(calls) == 3
+    )  # 1 initial + 2 retries, same budget as libs/deploy/dokploy_client.py
     assert sleeps == [2, 4]
 
 

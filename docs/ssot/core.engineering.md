@@ -31,7 +31,7 @@
 - 要找规范/权威定义 → [SSOT](README.md)；工程与文档准则在本文，合流门禁在
   [ops.merge-gate.md](ops.merge-gate.md)
 - 要找当前任务 → [Project](../project/README.md)
-- 要改监控/告警目标 → 派生自服务注册表（`libs/service_registry.py` + 各 `deploy.py` 的
+- 要改监控/告警目标 → 派生自服务注册表（`libs/core/registry.py` + 各 `deploy.py` 的
   `prod_only`），**禁止**手维护与 IaC 平行的服务清单。一致性校验见
   [`tools/watchdog_consistency_audit.py`](../../tools/watchdog_consistency_audit.py)；
   信号真源 [`watchdog-signals.yaml`](watchdog-signals.yaml)。
@@ -49,7 +49,7 @@
 - **DRY**：避免重复代码，使用函数/类/模块/组件等抽象。
 - **避免魔法数字**：使用常量/枚举/配置文件等替代。
 - **尽可能复用已有的库**：动手前永远先检查 libs 目录 [README.md](../../libs/README.md)。
-- **不造新轮子（收敛红线，#542/#543）**：新增告警路径必须注册 signal（`tools/no_new_wheels_lint.py` 阻断 CI）；新增常驻监视 = probe-runner 的 `ResidentWatcher` 插件（`libs/resident_watchers.py`），不新建 sidecar/compose 服务；新增定时 ops 检查挂 `ops-checks.yml` 并声明 `# signal:`；服务级运维事实（探针/信号/备份/密钥）只声明在该服务 `deploy.py` 的 Facet 上，由注册表派生，不另开清单。入口全景见 [tools/README.md](../../tools/README.md)。
+- **不造新轮子（收敛红线，#542/#543）**：新增告警路径必须注册 signal（`tools/no_new_wheels_lint.py` 阻断 CI）；新增常驻监视 = probe-runner 的 `ResidentWatcher` 插件（`libs/observability/watchers/resident.py`），不新建 sidecar/compose 服务；新增定时 ops 检查挂 `ops-checks.yml` 并声明 `# signal:`；服务级运维事实（探针/信号/备份/密钥）只声明在该服务 `deploy.py` 的 Facet 上，由注册表派生，不另开清单。入口全景见 [tools/README.md](../../tools/README.md)。
 - **能算出来的集合不要手写（#787/#791/#794）**：一份手写清单分不清「有意排除」和「上周二
   加的没人注意」。2026-09-22 同一形状在四处同时成立：`pr_merge_gate` 的自治文件清单、
   `ci_gate_audit.KNOWN_CI_WORKFLOWS`、`infra-ci.yml` 的 `paths`、`ops-checks.yml` 各 job 的

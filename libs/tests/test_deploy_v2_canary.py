@@ -16,7 +16,7 @@ import pytest
 from infra2_sdk.delivery import FailureDomain, PipelineStage, StageStatus
 
 import tools.deploy_v2_canary as canary
-from libs.deploy_contract import make_target
+from libs.deploy.contract import make_target
 from tools.deploy_v2_canary import CANARY_SLOT, run_canary
 
 SHA_CODE = "e" * 40

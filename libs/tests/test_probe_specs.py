@@ -1,7 +1,7 @@
 """Tests for the runtime probe-spec verification helpers."""
 
-from libs.infra_probes import parse_probe_specs
-from libs.probe_specs import (
+from libs.observability.probes import parse_probe_specs
+from libs.observability.probe_specs import (
     missing_probe_names,
     parse_probe_names,
     render_probe_spec_text,
@@ -97,7 +97,7 @@ def test_render_fails_closed_on_empty_registry_walk():
     would leave the fleet silently unmonitored."""
     import pytest
 
-    from libs.probe_specs import render_probe_spec_text
+    from libs.observability.probe_specs import render_probe_spec_text
 
     with pytest.raises(ValueError, match="ZERO probes"):
         render_probe_spec_text(attrs={})

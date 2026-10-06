@@ -6,7 +6,7 @@ per round. Each round also marks its 5-minute slot as present, so the weekly rep
 can count the time no round ran at all (a crashed runner, a host that was down for
 less than the Cloudflare staleness window, a deploy restart) as unavailable
 (:func:`gap_intervals`); the Cloudflare Worker's outage edges add the time the VPS
-was unreachable (``libs.availability_ledger.apply_unavailability``).
+was unreachable (``libs.observability.ledger.apply_unavailability``).
 
 Pure stdlib: the runner image and the weekly GitHub job both import this.
 
@@ -265,7 +265,7 @@ def record_probe_round(
 
 
 def to_report_days(ledger: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """The ledger's days in the ``libs.availability_ledger`` report shape."""
+    """The ledger's days in the ``libs.observability.ledger`` report shape."""
     days = ledger.get("days") if isinstance(ledger, Mapping) else None
     if not isinstance(days, Mapping):
         return []

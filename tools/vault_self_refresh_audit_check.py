@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Scheduled CI wrapper for the Vault self-refresh audit (#531).
 
-``libs/vault_self_refresh_audit.py`` was a manual-only operator tool (``invoke
+``libs/security/vault_self_refresh_audit.py`` was a manual-only operator tool (``invoke
 vault-audit.self-refresh``) since it was built in #166/#526 -- nothing ever forced it
 to run, which is exactly how both of #531's structural bugs (``classify_token``
 hardcoding the legacy ``vault_token_env_key`` a month after the fleet finished
@@ -16,7 +16,7 @@ task decorator isn't the right surface here). ``collect_live_observations`` need
 access to the VPS to inspect vault-agent/app containers; the GitHub Actions job
 provisions this via the same ``INFRA2_WATCHDOG_SSH_*`` secrets the
 watchdog jobs already use (see ``.github/workflows/ops-checks.yml`` and
-``libs/vault_self_refresh_audit.py::_ssh``'s CI-override env vars) -- no new secret.
+``libs/security/vault_self_refresh_audit.py::_ssh``'s CI-override env vars) -- no new secret.
 
 READ-ONLY: ``collect_live_observations`` only GETs Dokploy compose env and SSHes into
 the VPS to run ``docker inspect``/``docker exec cat``/``docker logs`` -- it never
@@ -46,7 +46,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.vault_self_refresh_audit import (  # noqa: E402
+from libs.security.vault_self_refresh_audit import (  # noqa: E402
     audit_from_observations,
     collect_live_observations,
     inventory_ids_not_in_production,

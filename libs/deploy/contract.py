@@ -70,7 +70,7 @@ class ServiceSpec:
             resolved ``image_ref`` before this service can be deployed. This is an artifact
             readiness dependency, distinct from the build/config fan-out graph.
         identity_service_name: The ``service.name`` telemetry label
-            (``libs.service_identity.ServiceIdentity``) this app's deploy identity carries.
+            (``libs.core.service_identity.ServiceIdentity``) this app's deploy identity carries.
             Defaults to ``<service-part-of-key>`` with underscores dashed, matching the
             registry key unless the app's compose already established a different label.
         identity_component: The ``component`` telemetry label. Defaults to ``"app"``.
@@ -82,7 +82,7 @@ class ServiceSpec:
         supports_preview: Whether ``libs.deploy.preview`` can serve this service's
             preview/canary deploy types. False fails a preview/canary target closed. True
             requires a matching entry in
-            ``libs.deploy_env_config.preview_service_config`` (project / compose path /
+            ``libs.deploy.env_config.preview_service_config`` (project / compose path /
             DB name / base_subdomain, #522) — the preview lifecycle looks the service up
             there rather than assuming finance_report's internals.
     """
@@ -111,7 +111,7 @@ class ServiceSpec:
 # lifecycle via libs.deploy.preview — truealpha/app does not yet, #500). EVERY OTHER
 # service is ``iac_pinned`` and routes to the iac_runner /deploy webhook — and its facts
 # (subdomain, prod_only) are DERIVED from its deploy.py Deployer class via
-# libs.service_registry, the single source of truth (Infra-013: never hand-copy service
+# libs.core.registry, the single source of truth (Infra-013: never hand-copy service
 # facts into a parallel list).
 _APP_KEY = "finance_report/app"
 _TRUEALPHA_APP_KEY = "truealpha/app"
@@ -204,7 +204,7 @@ def all_service_keys() -> list[str]:
 def service_spec(service: str) -> ServiceSpec:
     """Return the ServiceSpec for a service key. Raises ValueError if unknown.
 
-    The app is explicit; every other service is derived from libs.service_registry (its
+    The app is explicit; every other service is derived from libs.core.registry (its
     deploy.py), so the registry is never a hand-maintained copy.
     """
     if service in SERVICES:

@@ -966,7 +966,7 @@ def test_execute_promotes_the_declared_companions_after_the_primary(tmp_path) ->
 def _gate_cli(monkeypatch, request: dict, *extra: str) -> int:
     """The receiver CLI with every remote fact faked (no GitHub, no git)."""
     monkeypatch.setenv("APP_DEPLOY_REQUEST_JSON", json.dumps(request))
-    from libs import app_deploy_request as shim
+    from libs.deploy import app_deploy_request as shim
 
     make_plan = shim.make_plan
 

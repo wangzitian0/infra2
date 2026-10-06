@@ -14,8 +14,8 @@
 | Module | Role | Key Exports |
 |--------|------|-------------|
 | `environ.py` | Deployment environment of this process, suffixes, platform hosts (was `libs/common.py`, #955) | `get_env()`, `set_deploy_env()`, `with_env_suffix()`, `infra_domain()`, `service_domain()`, `DeploymentEnvironment` |
-| `registry.py` | Service registry read from each Deployer by AST (was `libs/service_registry.py`) | `service_attrs()`, `ServiceMeta`, `all_services()`, `resolve_container_host()` |
-| `facets.py` | Typed per-service facets a Deployer declares (was `libs/service_facets.py`) | `ProbeFacet`, `PublicRouteFacet`, `SignalFacet`, `BackupFacet`, `SecretsFacet`, `Exemption` |
+| `registry.py` | Service registry read from each Deployer by AST (was `libs/core/registry.py`) | `service_attrs()`, `ServiceMeta`, `all_services()`, `resolve_container_host()` |
+| `facets.py` | Typed per-service facets a Deployer declares (was `libs/core/facets.py`) | `ProbeFacet`, `PublicRouteFacet`, `SignalFacet`, `BackupFacet`, `SecretsFacet`, `Exemption` |
 | `constants.py` | Estate-wide constants and Docker labels | `DEPLOYMENT_ENV_PRODUCTION`, `DEPLOYMENT_ENV_STAGING`, `DEPLOYMENT_ENV_PREVIEW`, `DOCKER_LABEL_PREFIX`, `IDENTITY_SCHEMA_VERSION`, `MANAGED_BY`, `REPO_ROOT`, `GITHUB_OWNER` |
 | `ci_spec.py` | CI testing hierarchy budgets and workflow parser | `GATE_WALL_CLOCK_BUDGET_S`, `read_workflow()`, `defanged_steps()`, `load_workflow()` |
 

@@ -3,10 +3,10 @@
 import sys
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.common import with_env_suffix
-from libs.env import vault_token
+from libs.security.store import vault_token
 from libs.console import success, info, fatal
-from libs.env import get_secrets
-from libs.service_facets import ProbeFacet, SecretsFacet, SignalFacet
+from libs.security.store import get_secrets
+from libs.core.facets import ProbeFacet, SecretsFacet, SignalFacet
 
 shared_tasks = sys.modules.get("platform.23.prefect.shared")
 
@@ -39,7 +39,7 @@ class PrefectDeployer(Deployer):
     # minute-tier alert debounced by the probe runner's shared loop —
     # DEFAULT_FAILURE_THRESHOLD=3 / DEFAULT_RENOTIFY_SECONDS=0 (#903: no timer)
     # (tools/infra_probe_runner.py). watchdog-signals entries derive from this
-    # (libs/watchdog_signal_entries.py); the values here must state what the
+    # (libs/observability/signal_entries.py); the values here must state what the
     # runner actually does, not an aspiration.
     signals = (
         SignalFacet(

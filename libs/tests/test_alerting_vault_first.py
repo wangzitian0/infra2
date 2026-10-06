@@ -3,7 +3,7 @@
 The 1Password service account behind OP_SERVICE_ACCOUNT_TOKEN was deleted once; every
 alerting sync failed on an ``op`` read, and because a platform reconcile is
 all-or-nothing, no release promoted for days. The manifest-driven supply that replaced
-the bespoke alerting sync (plan PR-E, libs/secrets_supply.py) keeps the rule: when
+the bespoke alerting sync (plan PR-E, libs/security/supply.py) keeps the rule: when
 1Password is unreachable the deploy proceeds on what Vault already holds and only a
 Vault that lacks a required value fails it. These tests run the real infra2-sdk resolver
 over in-memory stores and a small manifest with one field of each source class.
@@ -20,8 +20,8 @@ from infra2_sdk.secrets import (
     vault_path,
 )
 
-from libs import secrets_supply
-from libs.secrets_registry import Service
+from libs.security import supply as secrets_supply
+from libs.security.registry import Service
 
 MANIFEST = EnvironmentManifest.from_dict(
     {

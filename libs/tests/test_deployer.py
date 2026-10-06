@@ -675,7 +675,7 @@ def test_wait_for_new_deployment_record_ignores_an_unrelated_concurrent_deploy(
     cannot be ours and must be skipped rather than reported as our own success."""
     import libs.deploy.deployer as deployer
     from libs.deploy.deployer import Deployer
-    from libs.deploy_queue import parse_epoch_seconds
+    from libs.deploy.queue import parse_epoch_seconds
 
     monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
 
@@ -710,7 +710,7 @@ def test_wait_for_new_deployment_record_accepts_our_own_record_after_unrelated_o
     min_started_at) shows up alongside the earlier unrelated one, it is accepted."""
     import libs.deploy.deployer as deployer
     from libs.deploy.deployer import Deployer
-    from libs.deploy_queue import parse_epoch_seconds
+    from libs.deploy.queue import parse_epoch_seconds
 
     monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
 
@@ -915,7 +915,7 @@ def test_base_deployer_ensure_runtime_secrets_passes_for_service_without_secret_
 def test_base_deployer_creates_missing_vault_secret_path(monkeypatch) -> None:
     """Infra-011.6: sync repairs an absent Vault path for unmanifested service with secret_key."""
     from libs.deploy.deployer import Deployer
-    from libs.env import VaultSecrets
+    from libs.security.store import VaultSecrets
 
     class MissingPathSecrets(FakeSecrets):
         def get(self, key):
@@ -1223,7 +1223,7 @@ def test_alerting_template_fields_are_all_declared_in_its_manifest() -> None:
     """Lineage: #600 found secrets.ctmpl documenting PROBE_POSTGRES_*/PROBE_S3_* and
     DOKPLOY_API_KEY while the bespoke 1Password → Vault sync never requested them, so
     an operator could seed 1Password exactly as told and the probes stayed fail-closed.
-    PR-E replaced that sync with the manifest-driven supply (libs/secrets_supply.py):
+    PR-E replaced that sync with the manifest-driven supply (libs/security/supply.py):
     the template is rendered from the same manifest the supply applies, so a field can
     no longer sit in the template without a declared source. This guards hand edits
     to the generated template."""
@@ -1248,7 +1248,7 @@ def test_alerting_heartbeat_coordinates_only_tolerate_an_absent_vault_path(
     """Review on #648: a missing path (first deploy) renders a heartbeat-less stack,
     but auth / connectivity errors must surface instead of silently dropping the
     heartbeat coordinates."""
-    from libs.env import VaultSecrets
+    from libs.security.store import VaultSecrets
 
     module = _load_deploy_module(
         "platform/12.alerting/deploy.py", "alerting_heartbeat_errors_test"

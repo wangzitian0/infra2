@@ -12,7 +12,7 @@ import types
 
 import pytest
 
-from libs.vault_tokens import policy_name
+from libs.security.vault_tokens import policy_name
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -149,9 +149,9 @@ class FakeDokployTokenDeploy:
 
 
 def _install_fake_dokploy(monkeypatch, client: FakeDokployTokenDeploy) -> None:
-    dokploy_module = types.ModuleType("libs.dokploy")
+    dokploy_module = types.ModuleType("libs.deploy.dokploy_client")
     dokploy_module.get_dokploy = lambda *_, **__: client
-    monkeypatch.setitem(sys.modules, "libs.dokploy", dokploy_module)
+    monkeypatch.setitem(sys.modules, "libs.deploy.dokploy_client", dokploy_module)
 
 
 def test_policy_names_are_env_scoped() -> None:

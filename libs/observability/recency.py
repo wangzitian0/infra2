@@ -1,6 +1,6 @@
 """Time-windowed health-signal primitive: is a bad signal recent, or historical?
 
-Why this module exists (#531): `libs/vault_self_refresh_audit.py` accumulated
+Why this module exists (#531): `libs/security/vault_self_refresh_audit.py` accumulated
 FOUR separate instances of the same bug -- a check that counts/inspects
 something without ever asking *when* it happened, so it eventually reports
 long-resolved history as an ongoing problem. The concrete instance that made
@@ -31,7 +31,7 @@ cumulative count and a last-occurrence timestamp read once, is the bad
 signal still live? That fits a check that samples Docker's lifetime
 ``RestartCount`` a single time (e.g. a daily audit).
 
-`libs/container_breakdown_watch.py` (#475) is a different shape: a
+`libs/observability/watchers/breakdown_watch.py` (#475) is a different shape: a
 continuously-running poller that calls its sweep function repeatedly and
 needs to know "how many CONSECUTIVE polls in a row has this thing been
 broken" and, symmetrically, "how many consecutive polls has it now been
@@ -118,7 +118,7 @@ class ConsecutiveObservationState:
     One instance per monitored thing (e.g. one per container name). The caller
     owns storage/keying (a plain ``dict[key, ConsecutiveObservationState]`` kept
     in memory for the lifetime of a long-running poll loop is the expected
-    usage -- see ``libs/container_breakdown_watch.py``); this class only holds
+    usage -- see ``libs/observability/watchers/breakdown_watch.py``); this class only holds
     the counters, it does no I/O and does not know about keys.
     """
 

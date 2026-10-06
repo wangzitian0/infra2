@@ -2,7 +2,7 @@
 
 One registry for everything derived from a service's environment manifest: the Vault
 Agent template and policy (tools/secrets_render.py), the secret supply on deploy
-(libs/secrets_supply.py) and the daily reconcile (tools/secrets_reconcile.py).
+(libs/security/supply.py) and the daily reconcile (tools/secrets_reconcile.py).
 """
 
 from __future__ import annotations

@@ -36,7 +36,7 @@ from libs.alerting import (
     mark_report_payload,
     pager_level,
 )
-from libs.deploy_queue import (
+from libs.deploy.queue import (
     ComposeDeployments,
     build_deploy_guard_alert_payload,
     find_stuck_deploys,
@@ -1045,7 +1045,7 @@ def test_the_english_prose_detector_spares_commands_links_and_products(chinese) 
 
 def test_the_bridge_writes_its_own_prose_in_chinese() -> None:
     """Every impact, next step and cause the in-band sources write is Chinese."""
-    from libs.deploy_queue import QUEUE_IMPACT
+    from libs.deploy.queue import QUEUE_IMPACT
     from libs.observability.breakdown import BREAKDOWN_PATTERNS, classify_reason
 
     texts = [

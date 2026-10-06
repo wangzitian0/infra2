@@ -32,7 +32,7 @@ REPO_NAME = Path(urlparse(GIT_REPO_URL).path).stem
 # The iac-runner image bakes only this directory (build context = here), so
 # `libs/` is NOT importable from /app. The dependency matcher + manifest live in
 # the checked-out repo; put it on the path so the lazy
-# `from libs.deploy_dependencies import ...` calls resolve (after update_repo()).
+# `from libs.deploy.dependencies import ...` calls resolve (after update_repo()).
 _CHECKOUT_PATH = str(WORKSPACE / REPO_NAME)
 if _CHECKOUT_PATH not in sys.path:
     sys.path.insert(0, _CHECKOUT_PATH)
@@ -186,7 +186,7 @@ def diagnose_failure(stderr: str, stdout: str = "") -> dict[str, str]:
         }
 
     # #810: a TLS/connection blip mid a secrets-supply Vault call (SSL EOF, a reset or
-    # aborted connection) -- libs/secrets_supply.py's retrying_transport already retried
+    # aborted connection) -- libs/security/supply.py's retrying_transport already retried
     # this with #759's backoff before giving up, so an operator does not need to open a
     # container to see "it failed once"; they need to know it's a network blip, not a
     # config problem, and how many times it already retried.
@@ -708,7 +708,7 @@ def run_invoke_task(
         # after apply_secret_supply — no compose (#649).
         env_vars["DEPLOY_ACTION"] = action
     if vault_root_token := resolve_vault_token(env_vars):
-        # The bounded AppRole token travels as VAULT_TOKEN (libs.env, infra2-sdk); the old
+        # The bounded AppRole token travels as VAULT_TOKEN (libs.security.store, infra2-sdk); the old
         # name is kept for one release so a child at an older iac_ref still finds it.
         env_vars["VAULT_TOKEN"] = vault_root_token
         env_vars["VAULT_ROOT_TOKEN"] = vault_root_token
@@ -752,7 +752,7 @@ def get_changed_services_from_files(changed_files: list[str]) -> set[str]:
     shared-tooling change (the over-fan-out behind the recurring mass redeploys).
     """
     try:
-        from libs.deploy_dependencies import match_changed_services
+        from libs.deploy.dependencies import match_changed_services
 
         return match_changed_services(changed_files)
     except Exception as exc:  # checked-out libs/ not importable yet
@@ -783,7 +783,7 @@ def _log_fanout_decision(changed_files: list[str], services: set[str]) -> None:
     nothing, so a no-op deploy is debuggable (correctly-skipped vs under-deployed).
     """
     try:
-        from libs.deploy_dependencies import explain_fanout
+        from libs.deploy.dependencies import explain_fanout
 
         decision = explain_fanout(changed_files)
     except Exception as exc:  # logging is best-effort; never fail the sync

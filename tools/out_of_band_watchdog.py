@@ -8,7 +8,7 @@ bridge, Dokploy status, staging backups) still run, and their failures go to one
 daily report because another layer pages them (#908).
 
 A page is delivered only when the set of paged checks changes (#962,
-``libs/page_dedup.py``): the same set on a later day is a
+``libs/observability/page_dedup.py``): the same set on a later day is a
 `[报告] 仍未恢复` in the reports chat, and a day on which the set empties sends a
 RESOLVED page. Unreadable state pages as before.
 """
@@ -49,16 +49,16 @@ from libs.alerting import (  # noqa: E402
     redact_credentials,
     render_pager_text,
 )
-from libs.deploy_queue import deployment_start_epoch  # noqa: E402
-from libs.dokploy import get_dokploy  # noqa: E402
-from libs.page_dedup import (  # noqa: E402
+from libs.deploy.queue import deployment_start_epoch  # noqa: E402
+from libs.deploy.dokploy_client import get_dokploy  # noqa: E402
+from libs.observability.page_dedup import (  # noqa: E402
     REPORT as DEDUP_REPORT,
     RESOLVED as DEDUP_RESOLVED,
     Finding,
     dedup_page,
     resolve_page_state,
 )
-from libs.scheduler_peer_liveness import (  # noqa: E402
+from libs.observability.scheduler_peer_liveness import (  # noqa: E402
     BOUND_CAP_ENV,
     OK as PEER_OK,
     UNVERIFIABLE,
@@ -66,7 +66,7 @@ from libs.scheduler_peer_liveness import (  # noqa: E402
     github_getter,
     parse_bound_cap_hours,
 )
-from libs.watchdog_issue_trail import (  # noqa: E402
+from libs.observability.issue_trail import (  # noqa: E402
     VERDICTS_ENV,
     WATCHDOG_SOURCE,
     CheckVerdict,

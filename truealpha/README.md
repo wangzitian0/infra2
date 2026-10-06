@@ -42,7 +42,7 @@ invoke ta-data_engine.shared.status
 ## Vault Secrets
 
 Secrets are stored in Vault KV v2 (AppRole auth from day one — declared per
-service as `SecretsFacet` on its Deployer, see `libs/service_facets.py`; the
+service as `SecretsFacet` on its Deployer, see `libs/core/facets.py`; the
 audit inventory derives from those declarations, #542):
 
 ```

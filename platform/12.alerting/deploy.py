@@ -3,9 +3,9 @@
 import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.env import VaultSecrets, get_secrets
+from libs.security.store import VaultSecrets, get_secrets
 from libs.console import success
-from libs.service_facets import (
+from libs.core.facets import (
     PublicRouteFacet,
     BackupFacet,
     ProbeFacet,
@@ -181,7 +181,7 @@ class AlertingDeployer(Deployer):
     # minute-tier alert debounced by the probe runner's shared loop —
     # DEFAULT_FAILURE_THRESHOLD=3 / DEFAULT_RENOTIFY_SECONDS=0 (#903: no timer)
     # (tools/infra_probe_runner.py). watchdog-signals entries derive from this
-    # (libs/watchdog_signal_entries.py); the values here must state what the
+    # (libs/observability/signal_entries.py); the values here must state what the
     # runner actually does, not an aspiration.
     signals = (
         SignalFacet(
@@ -213,7 +213,7 @@ class AlertingDeployer(Deployer):
         multi-line text is encoded for the Dokploy env transport (double
         quotes + \\n escapes, which compose's dotenv expands back).
         """
-        from libs.probe_specs import (
+        from libs.observability.probe_specs import (
             encode_specs_env_value,
             render_probe_spec_text,
             resolve_env_suffix,
@@ -231,7 +231,7 @@ class AlertingDeployer(Deployer):
         render time (the $-free transport rejects placeholders), then the ;;
         encoding. Empty only when no service declares a public route.
         """
-        from libs.probe_specs import (
+        from libs.observability.probe_specs import (
             encode_specs_env_value,
             render_public_route_spec_text,
         )
@@ -259,7 +259,7 @@ class AlertingDeployer(Deployer):
         result["INFRA_PROBE_SPECS"] = cls._probe_specs_env_value(e)
         result["PUBLIC_ROUTE_PROBE_SPECS"] = cls._public_route_specs_env_value(e)
         # The heartbeat coordinates are human values the supply keeps in Vault (synced
-        # from 1Password on deploy, #625 semantics preserved by libs/secrets_supply.py);
+        # from 1Password on deploy, #625 semantics preserved by libs/security/supply.py);
         # read Vault only — no task reads 1Password directly any more.
         vault_secrets = get_secrets(
             project=cls.project_name(e),
@@ -298,7 +298,7 @@ class AlertingDeployer(Deployer):
         """Prepare the stack; the manifest-driven supply fills Vault from 1Password."""
         if not cls._prepare_dirs(c):
             return None
-        # Deployer.apply_secret_supply (libs/secrets_supply.py) copies the human-entered
+        # Deployer.apply_secret_supply (libs/security/supply.py) copies the human-entered
         # alerting values from 1Password, refuses to deploy while Vault lacks a required
         # one, and deploys on Vault when 1Password cannot be reached (#625). It replaces
         # the bespoke sync that lived here.
@@ -328,7 +328,10 @@ class AlertingDeployer(Deployer):
         import time
 
         from libs.console import warning
-        from libs.probe_specs import missing_probe_names, normalize_specs_text
+        from libs.observability.probe_specs import (
+            missing_probe_names,
+            normalize_specs_text,
+        )
 
         e = cls.env()
         host = e.get("VPS_HOST")

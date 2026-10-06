@@ -253,11 +253,11 @@ def test_container_breakdown_watch_registered_and_matches_code() -> None:
 
 def test_deploy_queue_guard_registered_and_matches_code() -> None:
     """#543: the deploy-queue guard's T5 registration (the #542 exemption come
-    due) must match the live defaults in libs/deploy_queue_guard.py. Its
+    due) must match the live defaults in libs/observability/watchers/deploy_queue_guard.py. Its
     consecutive_failures=1 is ceiling-qualified: a deploy only counts once it
     has been running past DEPLOY_GUARD_CEILING_SECONDS, so the 1800s ceiling is
     the real debounce and one qualifying sweep legitimately fires."""
-    import libs.deploy_queue_guard as module
+    import libs.observability.watchers.deploy_queue_guard as module
 
     inventory = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
     signals = {s["signal"]: s for s in inventory["signals"]}
@@ -558,5 +558,5 @@ def test_public_route_probes_must_follow_the_naming_contract(monkeypatch) -> Non
 
     assert audit._vps_public_route_errors([]) == [
         "public-route probe finance-report-api-full-health-route (production) must "
-        "be named '*-public-route' (libs/probe_specs.py naming contract)"
+        "be named '*-public-route' (libs/observability/probe_specs.py naming contract)"
     ]

@@ -18,6 +18,7 @@ name: Ops Checks
     paths:
       - "libs/dokploy*.py"
       - "libs/vault_self_refresh_audit.py"
+      - "libs/security/vault_self_refresh_audit.py"
       - "tools/facet_reconcile.py"
       - "tools/dokploy_config_drift.py"
       - "tools/secrets_reconcile.py"
@@ -307,7 +308,7 @@ jobs:
         run: |
           python - <<'PY'
           import json, os, sys, urllib.request
-          from libs.watchdog_issue_trail import RUNNER_HEALTH_SOURCE, CheckVerdict, record_verdicts
+          from libs.observability.issue_trail import RUNNER_HEALTH_SOURCE, CheckVerdict, record_verdicts
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
 
           def record(ok, detail):
@@ -366,7 +367,7 @@ jobs:
       # One issue per red check (exact title; comment while it stays red), closed by the
       # next green scheduled run — in addition to Feishu, never instead. A step above
       # that recorded no verdict is itself red. Mode (schedule / drill / dry run) is
-      # decided by libs/watchdog_issue_trail.py::issue_trail_mode from the env above.
+      # decided by libs/observability/issue_trail.py::issue_trail_mode from the env above.
       - name: Record the verdicts as GitHub issues
         if: ${{ !cancelled() }}
         run: python tools/watchdog_issue_trail.py
@@ -718,7 +719,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-      # #962: the page-dedup state, one issue per job (libs/page_dedup.py).
+      # #962: the page-dedup state, one issue per job (libs/observability/page_dedup.py).
       issues: write
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
@@ -775,7 +776,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.page_dedup import dedup_page, run_url_from_env
+          from libs.observability.page_dedup import dedup_page, run_url_from_env
           from tools.facet_reconcile import (
               confirmed_finding_pairs,
               run_all,
@@ -817,7 +818,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.page_dedup import resolve_page_state
+          from libs.observability.page_dedup import resolve_page_state
           from tools.facet_reconcile import read_unevaluated
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
 
@@ -840,14 +841,14 @@ jobs:
     # app containers, so it can't run on untrusted PR branches — scheduled + manual
     # only, same as the other live-Dokploy/SSH-state checks in this file. Reuses the
     # INFRA2_WATCHDOG_SSH_* credentials the watchdog jobs already
-    # provision (no new secret) — see libs/vault_self_refresh_audit.py::_ssh.
+    # provision (no new secret) — see libs/security/vault_self_refresh_audit.py::_ssh.
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '17 8 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'vault-self-refresh-audit' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
       actions: read
-      # #962: the page-dedup state, one issue per job (libs/page_dedup.py).
+      # #962: the page-dedup state, one issue per job (libs/observability/page_dedup.py).
       issues: write
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
@@ -906,7 +907,7 @@ jobs:
           fi
           # READ-ONLY: GETs each inventory service's Dokploy compose env and SSHes into
           # the VPS to `docker inspect`/`docker exec cat`/`docker logs` its vault-agent
-          # and app containers (libs/vault_self_refresh_audit.py::collect_live_
+          # and app containers (libs/security/vault_self_refresh_audit.py::collect_live_
           # observations). Fails the STEP (exit 1) on ANY non-pass result, including a
           # transient SSH/Dokploy lookup hiccup, so it's visible in the run log and
           # retried on tomorrow's schedule — but only a confirmed `status="fail"`
@@ -927,7 +928,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.page_dedup import dedup_page, run_url_from_env
+          from libs.observability.page_dedup import dedup_page, run_url_from_env
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from tools.vault_self_refresh_audit_check import (
               confirmed_finding_pairs,
@@ -975,7 +976,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.page_dedup import resolve_page_state
+          from libs.observability.page_dedup import resolve_page_state
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from tools.vault_self_refresh_audit_check import read_unevaluated
 
@@ -1005,7 +1006,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-      # #962: the page-dedup state, one issue per job (libs/page_dedup.py).
+      # #962: the page-dedup state, one issue per job (libs/observability/page_dedup.py).
       issues: write
     env:
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
@@ -1068,7 +1069,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.page_dedup import dedup_page, run_url_from_env
+          from libs.observability.page_dedup import dedup_page, run_url_from_env
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from tools.secrets_reconcile_check import (
               load_report,
@@ -1109,7 +1110,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.page_dedup import resolve_page_state
+          from libs.observability.page_dedup import resolve_page_state
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from tools.secrets_reconcile_check import load_report, unevaluated_prefixes
 

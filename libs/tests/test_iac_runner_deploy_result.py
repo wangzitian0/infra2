@@ -108,7 +108,7 @@ def test_sync_result_includes_actionable_failure_summary(monkeypatch) -> None:
                 task="prefect.sync",
                 success=False,
                 stderr=(
-                    "libs.env.VaultSecrets.VaultSecretNotFoundError:\n"
+                    "libs.security.store.VaultSecrets.VaultSecretNotFoundError:\n"
                     "❌ Secret not found: platform/staging/prefect\n"
                 ),
             )
@@ -202,7 +202,7 @@ def test_sync_result_classifies_a_retry_exhausted_tls_blip_as_transient_transpor
     monkeypatch,
 ) -> None:
     """#810: truealpha/app v0.0.90 staging failed once on an SSL EOF that 28 minutes
-    earlier's v0.0.89 never hit. libs/secrets_supply.py's retrying_transport already
+    earlier's v0.0.89 never hit. libs/security/supply.py's retrying_transport already
     retried it (#759's backoff) before raising; the diagnostic must name it
     transient_transport with the retry count, not fall through to unknown_invoke_failure."""
     sync_runner = _load_module(
@@ -1336,7 +1336,7 @@ def test_a_push_to_main_deploys_nothing(monkeypatch) -> None:
         {
             "ref": "refs/heads/main",
             "after": "d505ba0caca8" + "0" * 28,
-            "commits": [{"modified": ["libs/secrets_registry.py"]}],
+            "commits": [{"modified": ["libs/security/registry.py"]}],
         }
     ).encode()
     signature = hmac.new(b"test-webhook-secret", body, hashlib.sha256).hexdigest()

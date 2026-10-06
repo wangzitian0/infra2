@@ -189,7 +189,7 @@ def services_without_prod_compose() -> frozenset[str]:
     ("fails closed if prod ever appears without this being updated first"), so
     "not yet in production" is DERIVED from it rather than declared a second
     time — consumed by the vault self-refresh audit's production exclusion
-    (libs.vault_self_refresh_audit.inventory_ids_not_in_production).
+    (libs.security.vault_self_refresh_audit.inventory_ids_not_in_production).
     """
     return frozenset(
         service
@@ -275,7 +275,7 @@ def bespoke_app_compose_targets() -> tuple[ComposeTarget, ...]:
 #   commit-<sha7>   -> <base>-commit-<sha7>.<domain> (a pinned commit)
 #   tag-<v1-2-3>    -> <base>-tag-<v1-2-3>.<domain>  (a release tag, DNS-safe slug)
 # where <base> is the deploying service's ``base_subdomain`` (``report`` for
-# finance_report/app, ``truealpha`` for truealpha/app — libs.deploy_contract.ServiceSpec).
+# finance_report/app, ``truealpha`` for truealpha/app — libs.deploy.contract.ServiceSpec).
 #
 # This is PURE config: no Dokploy calls, no resolution. libs/deploy/preview.py
 # turns the slug/suffix/url here into actual create_compose/deploy calls, and
@@ -325,7 +325,7 @@ class PreviewServiceConfig:
     finance_report/app — the ONLY previously-supported service. Each registered service
     gets its own Dokploy project (composes never collide across services), compose
     slug prefix, preview compose template path, and ephemeral-DB name. ``base_subdomain``
-    must match the service's ``libs.deploy_contract.ServiceSpec.base_subdomain`` (the
+    must match the service's ``libs.deploy.contract.ServiceSpec.base_subdomain`` (the
     preview URL is ``https://<base_subdomain>-<alias>.<domain>``); duplicated here rather
     than imported to avoid a preview<->contract import cycle (deploy_contract already
     imports this module for the fixed-env regime).

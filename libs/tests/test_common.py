@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from libs import service_registry
+from libs.core import registry as service_registry
 from libs.common import (
     _BOOTSTRAP_ONLY_SHARED_SERVICES,
     _REGISTRY_BACKED_SHORT_NAMES,

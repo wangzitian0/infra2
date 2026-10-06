@@ -160,7 +160,7 @@ invoke signoz.shared.test-trace --service-name=myapp
 ## Application Integration (Project/Env/Service)
 
 All application telemetry config is stored in Vault using the `project/env/service` hierarchy
-defined by the shared `libs/env` tooling. This keeps local development simple while production
+defined by the shared `libs/security/store` tooling. This keeps local development simple while production
 uses secure, IaC-managed secrets.
 
 **OTEL log export keys** (Vault, per service):

@@ -8,8 +8,8 @@ import urllib.request
 from libs.common import get_env
 from libs.console import error, header, info, success, warning
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.env import VaultSecrets, generate_password
-from libs.service_facets import (
+from libs.security.store import VaultSecrets, generate_password
+from libs.core.facets import (
     ProbeFacet,
     PublicRouteFacet,
     SecretsFacet,
@@ -36,12 +36,12 @@ class AppDeployer(Deployer):
     # shared-platform service — override the shared INTERNAL_DOMAIN entirely so
     # its compose's ${INTERNAL_DOMAIN} Traefik Host() rules resolve under
     # truealpha.club instead of zitian.party. Read by
-    # libs.app_deploy_request.make_plan via libs.service_registry.domain_for_service.
+    # libs.deploy.app_deploy_request.make_plan via libs.core.registry.domain_for_service.
     domain = "truealpha.club"
     service_port = 3000
     service_name = "web"
     # Telemetry identity (infra2#906). The `ta-app.sync` path (this Deployer) and the
-    # fixed-compose promote / preview paths (libs.deploy_contract.SERVICES["truealpha/app"])
+    # fixed-compose promote / preview paths (libs.deploy.contract.SERVICES["truealpha/app"])
     # each issue OTEL_SERVICE_NAME / OTEL_RESOURCE_ATTRIBUTES into the one compose; both
     # must name the same service or the compose flips identity depending on who deployed
     # it last. The llm container consumes it (compose.yaml); component stays "app" in both.
@@ -105,7 +105,7 @@ class AppDeployer(Deployer):
     #      service_id, borrowing the SOURCE env's app secrets
     #      (staging's, fixed in the generated template).
     # NOTE: production rollout is _APP_COMPOSE_OVERRIDES-gated (see
-    # libs/deploy_env_config.py). The prod compose_id is registered (live since
+    # libs/deploy/env_config.py). The prod compose_id is registered (live since
     # #547), so the vault audit covers this app AND its preview surface in
     # production — the "not yet in production" derivation dropped both
     # automatically when the compose_id landed.

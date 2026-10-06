@@ -1,6 +1,6 @@
 """One GitHub issue per red ops-checks watchdog check (truealpha#876 W4).
 
-SSOT for ``libs.observability``'s watchdog issue trail; ``libs.watchdog_issue_trail``
+SSOT for ``libs.observability``'s watchdog issue trail; ``libs.observability.issue_trail``
 is a backward-compatibility shim over this module.
 
 The nightly ops-checks watchdog job paged Feishu and nothing else, so on

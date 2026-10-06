@@ -5,7 +5,7 @@ AGENTS.md says a submodule pin "只表示开发快照，不是 package、runtime
 或 config-hash 依赖". That is not quite true, and the gap is the reason this
 exists: ``libs/app_manifests.ensure_present`` resolves app manifests from
 ``raw.githubusercontent.com/<owner>/<repo>/<pinned-sha>/<path>``, and
-``libs/secrets_registry.load_manifest`` calls it at deploy time, because neither
+``libs/security/registry.load_manifest`` calls it at deploy time, because neither
 infra-ci nor the iac-runner checks the submodules out. The pinned commit
 therefore selects which ``required-env`` contract a deploy validates against.
 
