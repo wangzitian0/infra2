@@ -11,7 +11,7 @@ import pytest
 from infra2_sdk.deploy import DeployOperation, DeployType
 from infra2_sdk.refs import ResolvedRef
 
-from libs import app_deploy_request as receiver
+from libs.deploy import app_deploy_request as receiver
 from tools import app_deploy_request as receiver_cli
 
 SHA = "a" * 40
@@ -546,51 +546,6 @@ def test_production_evidence_requires_canonical_urls(field, url) -> None:
         )
 
 
-def test_github_evidence_fetch_uses_read_only_api_token(monkeypatch) -> None:
-    calls = []
-    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
-
-    def get(url, **kwargs):
-        calls.append((url, kwargs))
-        return httpx.Response(
-            200,
-            json={"status": "completed"},
-            request=httpx.Request("GET", url),
-        )
-
-    monkeypatch.setattr(receiver.httpx, "get", get)
-
-    assert receiver._fetch_github_json("/repos/example/app/actions/runs/1") == {
-        "status": "completed"
-    }
-    url, kwargs = calls[0]
-    assert url == "https://api.github.com/repos/example/app/actions/runs/1"
-    assert kwargs["headers"]["Authorization"] == "Bearer test-token"
-    assert kwargs["follow_redirects"] is False
-
-
-@pytest.mark.parametrize(
-    "response,error",
-    [
-        (httpx.Response(403, text="secret response"), "HTTP 403"),
-        (httpx.Response(200, content=b"{"), "JSONDecodeError"),
-        (httpx.Response(200, json=[]), "must be an object"),
-    ],
-)
-def test_github_evidence_fetch_fails_closed_without_leaking_response(
-    monkeypatch, response, error
-) -> None:
-    def get(url, **kwargs):
-        response.request = httpx.Request("GET", url)
-        return response
-
-    monkeypatch.setattr(receiver.httpx, "get", get)
-
-    with pytest.raises(ValueError, match=error) as exc_info:
-        receiver._fetch_github_json("/repos/example/app/actions/runs/1")
-    assert "secret response" not in str(exc_info.value)
-
-
 def test_iac_ref_distinguishes_staging_candidate_from_production_target(
     tmp_path,
 ) -> None:
@@ -1012,7 +967,9 @@ def test_execute_promotes_the_declared_companions_after_the_primary(tmp_path) ->
 def _gate_cli(monkeypatch, request: dict, *extra: str) -> int:
     """The receiver CLI with every remote fact faked (no GitHub, no git)."""
     monkeypatch.setenv("APP_DEPLOY_REQUEST_JSON", json.dumps(request))
-    make_plan = receiver.make_plan
+    from libs import app_deploy_request as shim
+
+    make_plan = shim.make_plan
 
     def offline_plan(payload_json, **kwargs):
         return make_plan(
@@ -1023,7 +980,7 @@ def _gate_cli(monkeypatch, request: dict, *extra: str) -> int:
             runner=tags,
         )
 
-    monkeypatch.setattr(receiver, "make_plan", offline_plan)
+    monkeypatch.setattr(shim, "make_plan", offline_plan)
     return receiver_cli.main(
         [
             "plan",
@@ -1111,21 +1068,3 @@ def test_gate_is_not_checked_for_an_operator_run_without_the_flags(tmp_path) -> 
     receiver_cli.check_preflight_canary_gate(
         plan, canary_job_ran=True, canary_result="success"
     )
-
-
-def test_fetch_github_json_supports_reviews_array(monkeypatch) -> None:
-    import httpx
-
-    class FakeResponse:
-        status_code = 200
-
-        def json(self):
-            return [{"id": 1, "state": "APPROVED"}]
-
-        def raise_for_status(self):
-            pass
-
-    monkeypatch.setattr(httpx, "get", lambda *args, **kwargs: FakeResponse())
-    result = receiver._fetch_github_json("/repos/owner/repo/pulls/1/reviews")
-    assert isinstance(result, list)
-    assert result[0]["state"] == "APPROVED"

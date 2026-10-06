@@ -29,9 +29,10 @@ import pytest
 import yaml
 
 from libs.core import registry as reg
-from libs.service_facets import SecretsFacet
-from libs.vault_self_refresh_audit import (
+from libs.core.facets import SecretsFacet
+from libs.security.vault_self_refresh_audit import (
     VaultService,
+    _resolve_env_suffix,
     _vault_service_from_facet,
     inventory_ids_not_in_production,
     load_inventory,
@@ -97,7 +98,7 @@ def test_absorbed_constants_equivalence() -> None:
         those two names across the audit's production/staging runs;
       OPTIONAL_INERT_FIELD_WATCHLIST == (finance_report/app,
         LLM_ENCRYPTION_KEYS)."""
-    from libs.vault_self_refresh_audit import _resolve_env_suffix
+    from libs.security.vault_self_refresh_audit import _resolve_env_suffix
 
     by_id = {service.id: service for service in load_inventory()}
     assert by_id["platform/prefect"].mount_exempt_containers == (

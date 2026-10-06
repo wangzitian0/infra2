@@ -16,7 +16,7 @@ import math
 import httpx
 import pytest
 
-from libs.iac_runner_client import (
+from libs.deploy.iac_runner_client import (
     STATUS_NOT_FOUND_GRACE_SECONDS,
     _sign,
     poll_platform_deploy_status,

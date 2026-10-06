@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from libs.vault_self_refresh_audit import (
+from libs.security.vault_self_refresh_audit import (
     REPO_ROOT,
     discover_vault_agent_compose_paths,
     load_inventory,

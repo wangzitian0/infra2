@@ -6,8 +6,8 @@ from pathlib import Path
 
 import yaml
 
-from libs import vault_self_refresh_audit as vault_self_refresh_audit_module
-from libs.vault_self_refresh_audit import (
+from libs.security import vault_self_refresh_audit as vault_self_refresh_audit_module
+from libs.security.vault_self_refresh_audit import (
     classify_deployed_template,
     VaultService,
     _remote_container_logs,
@@ -778,7 +778,7 @@ def test_remote_container_state_captures_started_at(monkeypatch) -> None:
 
         return Result()
 
-    monkeypatch.setattr("libs.vault_self_refresh_audit._ssh", fake_ssh)
+    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
 
     result = _remote_container_state("vps.example", "platform-prefect-services")
 
@@ -806,7 +806,7 @@ def test_remote_container_logs_bounds_with_since_flag(monkeypatch) -> None:
 
         return Result()
 
-    monkeypatch.setattr("libs.vault_self_refresh_audit._ssh", fake_ssh)
+    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
 
     result = _remote_container_logs("vps.example", "platform-prefect-services")
 
@@ -837,7 +837,7 @@ def test_remote_secret_file_state_parses_stat_json(monkeypatch) -> None:
 
         return Result()
 
-    monkeypatch.setattr("libs.vault_self_refresh_audit._ssh", fake_ssh)
+    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
 
     result = _remote_secret_file_state("vps.example", "platform-postgres-vault-agent")
 
@@ -868,7 +868,7 @@ def test_remote_secret_file_text_returns_raw_cat_output(monkeypatch) -> None:
 
         return Result()
 
-    monkeypatch.setattr("libs.vault_self_refresh_audit._ssh", fake_ssh)
+    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
 
     result = _remote_secret_file_text("vps.example", "finance_report-app-vault-agent")
 
@@ -887,7 +887,7 @@ def test_remote_secret_file_text_returns_empty_on_ssh_failure(monkeypatch) -> No
 
         return Result()
 
-    monkeypatch.setattr("libs.vault_self_refresh_audit._ssh", fake_ssh)
+    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
 
     assert _remote_secret_file_text("vps.example", "some-vault-agent") == ""
 
