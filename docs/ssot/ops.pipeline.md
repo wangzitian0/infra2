@@ -505,7 +505,10 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 - **机制**:`tools/dokploy_config_drift.py` 对每个 iac_pinned 服务先证明线上
   `IAC_SOURCE_CONFIG_HASH` 能由其 `IAC_DEPLOY_REF` 重算,再与最新 `production/v*` marker 的
   expected source hash
-  比较(`contents_at_ref` 直接 `git cat-file` 读 revision 内容,不做 checkout)。服务在新 release 中输入
+  比较。两个期望 hash 都由**该 revision 自己的代码**计算(#1071):在该 commit 的临时 detached
+  worktree 里运行它的 `tools/dokploy_config_drift.py`(不带任何凭据、只跑 main 上的 commit、单次 120s),
+  用完即删;main 的代码在 release 之后改过输入枚举或 env plane 时会算出不同的 hash。release 代码
+  跑不起来时退回本 checkout 的公式,并在该行 note 里写明原因。服务在新 release 中输入
   未变化时允许保留旧 deploy ref,避免无意义重启;ref 不是“必须等于最新 tag”的重部署开关。runtime secret 只进入
   `IAC_CONFIG_HASH`,不参与 release fidelity。旧部署缺 source identity 时分类为 `legacy_identity`,
   不伪装成 DRIFT;下次正常 release/reconcile 会迁移。
