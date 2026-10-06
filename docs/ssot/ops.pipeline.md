@@ -352,6 +352,7 @@ infra2 当前固定 `infra2-sdk==1.0.0` 的不可变 release wheel；`deploy_v2_
   reconcile 入口由 `assert_after_on_main` **fail-closed** 强制(Infra-011 不变式:*iac_pinned prod
   reconcile 只能来自 reviewed main*)。在未合并 feature 分支上打 release tag 不会再打穿 prod
   (v1.1.16 事故根因)。`--dry-run` 仅做 plan,豁免此校验。
+  app 侧 `deploy_v2` 的 `assert_iac_ref_on_main` 以 GitHub compare API 为准;API 无法作答(HTTP 错误、传输失败、限流耗尽)时,回落本地 `git merge-base --is-ancestor <tag> origin/main`(与 `assert_after_on_main` 同一实现,#616)。本地 commit 或 `origin/main` 缺失(如 depth-1 克隆)、或非祖先,一律拒绝,报错同时写明 API 与本地 git 两个失败原因;API 已作答时本地 git 不推翻其结论。
 - **禁止 tag 推送自动部署 prod**:prod 必须经**显式 promote**(`promote_prod=true` / `--promote-prod`);
   tag 只自动晋升 staging。「打 tag」与「动 prod」必须解耦。
 - 禁止跳过 staging 直接 prod。
