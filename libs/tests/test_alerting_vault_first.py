@@ -20,8 +20,8 @@ from infra2_sdk.secrets import (
     vault_path,
 )
 
-from libs import secrets_supply
-from libs.secrets_registry import Service
+from libs.security import supply as secrets_supply
+from libs.security.registry import Service
 
 MANIFEST = EnvironmentManifest.from_dict(
     {

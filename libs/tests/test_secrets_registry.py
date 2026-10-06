@@ -8,8 +8,8 @@ from collections import Counter
 
 import pytest
 
-from libs import secrets_registry
-from libs.secrets_registry import SERVICES, Service
+from libs.security import registry as secrets_registry
+from libs.security.registry import SERVICES, Service
 
 
 def test_every_registered_manifest_is_resolvable() -> None:
@@ -171,8 +171,8 @@ def test_the_registry_table_is_readable_without_the_sdk() -> None:
         "import sys\n"
         "for name in ('infra2_sdk', 'infra2_sdk.runtime', 'infra2_sdk.runtime.config_schema'):\n"
         "    sys.modules[name] = None\n"
-        "from libs.secrets_registry import SERVICES\n"
-        "from libs.vault_self_refresh_audit import load_inventory\n"
+        "from libs.security.registry import SERVICES\n"
+        "from libs.security.vault_self_refresh_audit import load_inventory\n"
         "print(len(SERVICES), sum(s.ephemeral for s in load_inventory()))\n"
     )
     result = subprocess.run(

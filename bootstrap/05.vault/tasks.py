@@ -20,7 +20,7 @@ from libs.console import (
     prompt_action,
     run_with_status,
 )
-from libs.vault_tokens import (
+from libs.security.vault_tokens import (
     VaultTokenTarget,
     normalize_selector,
     policy_name as vault_policy_name,

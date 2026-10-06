@@ -20,7 +20,7 @@ __all__ = ["CACHE_DIR", "fetch_missing", "main"]
 
 
 def main() -> int:
-    from libs.secrets_registry import SERVICES
+    from libs.security.registry import SERVICES
 
     paths = sorted(
         {p for service in SERVICES for p in service.manifests if p.startswith("repos/")}

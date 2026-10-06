@@ -167,7 +167,7 @@ def test_duplicate_derived_inventory_ids_fail_closed() -> None:
         attrs["platform/postgres"] = clashing
         return attrs
 
-    import libs.vault_self_refresh_audit as audit_module
+    from libs.security import vault_self_refresh_audit as audit_module
 
     original = reg.service_attrs
     try:

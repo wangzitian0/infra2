@@ -36,8 +36,8 @@ from infra2_sdk.capacity import (  # noqa: E402
 )
 from infra2_sdk.secrets import OnePasswordBackend, SecretsError, vault_path  # noqa: E402
 
-from libs.secrets_registry import SERVICES, Service  # noqa: E402
-from libs.secrets_supply import ONEPASSWORD_VAULT, resolver_for, vault_backend  # noqa: E402
+from libs.security.registry import SERVICES, Service  # noqa: E402
+from libs.security.supply import ONEPASSWORD_VAULT, resolver_for, vault_backend  # noqa: E402
 
 # cloudflare/infra-watchdog/wrangler.toml; the token is the worker's own API token.
 CLOUDFLARE_ACCOUNT = "6e27b6853de0131bea033d235e0a1139"
