@@ -499,7 +499,7 @@ class AppDeployer(Deployer):
             bucket_name=bucket_name,
             access_key=existing_access_key,
             secret_key=existing_secret_key,
-            enable_encryption=True,
+            enable_encryption=False,
             lifecycle_days=0,
             enable_versioning=False,
             public_download=False,
