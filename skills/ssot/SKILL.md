@@ -1,57 +1,34 @@
 ---
 name: ssot
-description: SSOT 收敛与极限删除方法论。践行马斯克五步工作法之极限删除与简化原则，推进原子清理、死代码消灭、契约锁定与零漂移治理。
+description: Step 3 of the five-step flow. Delete first, then converge on one source of truth. Use for refactors, dead-code removal, contracts, projections, and drift.
 ---
 
-# 🎯 /ssot — 单一真源收敛与极限删除协议
+# ssot: delete, then keep one source
 
-本 Skill 提供从散落冗余状态收敛至单一真源（Single Source of Truth）的方法论与实战 SOP。
+Order matters (Musk's steps 2 and 3): delete the part, then simplify what remains.
+Never optimize a step that should not exist.
 
-> **核心定理：SSOT 是目标，极限删除是第一手段。**
-> 如果事后没有把至少 10% 删除的内容加回来，说明删除还不够彻底。
-> 严禁去精心优化一个根本不应该存在的流程或模块。
+## Rules
 
----
+1. **Delete before you add.** The owner asked for "is this over-designed?" and "which existing logic must be cleaned?" in several reviews.
+   For each shim, adapter, or flag, ask "what breaks if I remove it?" If nothing breaks, remove it.
+   If nothing you removed needs to come back later, you removed too little.
+2. **One fact, one source.** Name the single editable source before you write code. Close every other edit point.
+   Derived files carry `DO NOT EDIT`, come from a one-way tool, and can be deleted and rebuilt at any time.
+   Never hand-edit a derived file. A hand edit is a drift candidate: move it into the source.
+3. **Remove the predecessor in the same change.** After the new mechanism works and equivalence is proved, delete the old code,
+   old files, and old docs in the same PR. No `@deprecated`, no "delete later".
+4. **Re-aim every guard after a deletion.** A guard written for the old structure can stay green and check nothing.
+   Make the guard fail on the old shape first, then repoint it.
+5. **Read the original intent first.** An agent once changed a mapping without asking why it was split from the content source.
+   Read the issue that created the structure. Keep a split that has a reason.
+6. **Keep global configuration minimal.** Each directory reads its own rendered artifact. A tool reads only that artifact.
+   Global user directories belong to user-managed tools. A workspace script must not write there.
+7. **Check reachability.** From the entry points (main, routes, CLI commands), compute what is called.
+   Written but never read is waste: delete it. Read but never written is a defect: fix it.
+8. **Contract first.** Lock signatures, schemas, and the observable endpoint before the internals.
+   Prove equivalence with real inputs on old and new paths. Run staging first when a scheduler or alert stack changes.
 
-## 核心删除与收敛路径
+## Report
 
-### 1. 极限删除与简化 (Delete Any Part You Can)
-- 质疑每一个防御性垫片、胶水层与历史适配逻辑。
-- 凡是可以通过直接调用解决的，立即剔除中间封装层。
-- 拒绝为了消除表象告警而引入有害的复杂设计。
-
-### 2. 原子清理 (Atomic Cleanup)
-- **适用场景**：重构、依赖升级、新老机制更替。
-- **铁律**：新机制验证通过后，必须在**同一批变更中彻底删除旧代码**。
-- **判定标准**：严禁保留 `@deprecated` 或“后续再删”等拖延借口。新旧逻辑不得并存。
-
-### 3. 可达性审计 (Reachability Audit)
-- **适用场景**：定期代码卫生、消除死代码。
-- **做法**：从系统入口（`main.py`、路由入口、CLI 命令）计算静态调用图谱。
-- **判定标准**：
-  - **有写无读** = 废弃资产，立即物理删除。
-  - **有读无写** = 逻辑缺陷，必须修复。
-  - **无调用孤儿** = 立即整目录删除。
-
-### 4. 契约先行 (Contract-First)
-- **适用场景**：接口定义、跨模块通信、配置与规则分发。
-- **做法**：以 Protobuf、OpenAPI 或 JSON Schema 为单一权威源。代码从契约生成。
-- **判定标准**：
-  - 契约文件是唯一可编辑源。
-  - 生成的代码必须标注 `DO NOT EDIT`，且可随时全量删除重建。
-
-### 5. 投影机制与漂移检测 (Projection & Drift Detection)
-- **适用场景**：一份主配置向多个运行时或宿主投递。
-- **做法**：维护一份中央 SSOT，由纯函数工具单向投影到目标位置。
-- **判定标准**：
-  - 禁止在目标消费目录直接手工修改。
-  - 运行只读漂移检测命令，确保投影产物与 SSOT 零漂移。
-
----
-
-## 四步收敛通用流程
-
-1. **定位并锁定真源**：确定唯一的权威源头，关闭其他散落编辑点。
-2. **极限剪枝与删除**：物理删除未被引用的文件、无用分支与过渡兼容层。
-3. **单向派生或投影**：建立自动化派生通道，确保修改只发生在真源。
-4. **验证与漂移封锁**：运行单测与漂移探针，杜绝未来产生静默偏移。
+State what you deleted, what is now the single source, and the check that fails if a second copy appears.

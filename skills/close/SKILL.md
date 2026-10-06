@@ -1,37 +1,34 @@
 ---
 name: close
-description: 会话收尾与生命周期检查清单。核验代码入库状态、判定 Complete/Suspend 模式、沉淀 handover 断点、执行 Prod Gatekeeper 哨兵请示并清理现场。
+description: Step 6 of the flow. End a session. Choose Complete or Suspend, write the handover, update the issue, ask the production question, route lessons, and clean up.
 ---
 
-# 🏁 /close — 会话收尾与生命周期门禁
+# close: exit gate
 
-本 Skill 是智能体工作流的统一退出点。负责验证交付完整性、记录断点、阻断未授权生产上线并安全清理工作区。
+Run this when you stop, for any reason. Each rule came from a session that ended wrongly.
 
-> **核心军规：未合主干禁称完成，生产上线严禁私断。**
-> PR 未合入 main 分支时，严禁进入 Complete 模式。服务变更未获 Owner 明确授权前，严禁部署生产。
-
----
-
-## 阶段一：收尾模式判定
-
-在执行任何退出动作前，通过物理脚本判定当前状态：
+## 1. Choose the mode
 
 ```bash
 BRANCH="$(git branch --show-current)"
-PR_STATE=$(gh pr view "$BRANCH" --json state -q .state 2>/dev/null || echo "NONE")
+gh pr view "$BRANCH" --json state,mergedAt
+git status -sb
+git log --branches --not --remotes --oneline | wc -l   # commits that exist only on this machine
 ```
 
-| 条件 | 模式 | 行为要求 |
-|---|---|---|
-| 分支未合入 `main` (`PR_STATE != "MERGED"`) | **Suspend 模式** | 严禁关闭 Issue，严禁删除 Worktree，沉淀 Handover 记录。 |
-| PR 已合入 `main`，且**有服务或底层配置变更** | **Prod Gatekeeper 判定** | 未获 Owner 授权时禁止退出，必须展示三阶段状态并请示。 |
-| PR 已合入 `main`，且**无服务影响**（纯文档/测试）| **Complete 模式** | 执行完整收尾检查清单，清理 Worktree，关闭/更新 Issue。 |
+| Condition | Mode |
+|---|---|
+| PR merged on main, and no service or runtime-config impact | **Complete** |
+| PR merged, service impact, and the owner gave "deploy" or "hold" | **Complete** |
+| Anything else (unmerged, uncommitted, no disposition) | **Suspend** |
 
----
+Unmerged work is never Complete. Do not close the issue and do not delete the worktree in Suspend.
+Unpushed commits are invisible to everyone else. One log feature lived 3 days on a never-pushed branch
+while the docs described it as existing. Push the branch or write it into the handover.
 
-## 阶段二：进程时效性验证（防新代码未生效）
+## 2. Prove the running process is new
 
-核验运行进程启动时间晚于文件修改时间，防止跑在旧代码上：
+Skip this step when no process serves the change. Otherwise compare the process age with the file edit time.
 
 ```bash
 python3 - "$FILE" "$PID" <<'PROBE'
@@ -39,66 +36,98 @@ import os, re, subprocess, sys, time
 
 path, pid = sys.argv[1], sys.argv[2]
 age = time.time() - os.stat(path).st_mtime
-r = subprocess.run(["ps", "-o", "etime=", "-p", pid],
-                   capture_output=True, text=True)
+r = subprocess.run(["ps", "-o", "etime=", "-p", pid], capture_output=True, text=True)
 raw = r.stdout.strip()
 m = re.fullmatch(r"(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)", raw)
-print(f"文件改动于 {age:.0f}s 前，ps 报告 etime={raw!r}")
+print(f"file changed {age:.0f}s ago; ps reports etime={raw!r}")
 if r.returncode != 0 or not m:
-    print("无法判定：ps 没有给出可解析的 etime"
-          "（进程已退出 / 无权限 / 该平台格式不同）")
+    print("verdict: UNDETERMINED (ps gave no parseable etime: process gone, no permission, or other platform format)")
     sys.exit(2)
 d, h, mi, sec = (int(x or 0) for x in m.groups())
 elapsed = ((d * 24 + h) * 60 + mi) * 60 + sec
-print(f"进程已运行 {elapsed}s")
-print("进程比改动更老 → 跑的是旧代码" if elapsed > age
-      else "进程晚于改动 → 可能是新代码")
+print(f"process running for {elapsed}s")
+print("verdict: STALE (process is older than the edit, so it runs old code)" if elapsed > age
+      else "verdict: FRESH (process started after the edit)")
 PROBE
 ```
 
----
+Use `ps -o etime=`. The keyword `etimes` exists only in procps-ng: macOS prints its keyword list to stdout and the output looks like a measurement.
+Report "cannot measure" as UNDETERMINED. Never turn it into "not stale".
 
-## 阶段三：Suspend 模式 — Handover 沉淀
+## 3. Production gatekeeper (service changes)
 
-当任务中断、挂起或等待合流时，将现场精准沉淀进记忆库与 Issue：
+Merge, staging deploy, and production deploy are three separate stages. Report all three with evidence, then ask:
 
-```bash
-# 写入持久记忆库
-ws-bm write-note --folder memory/handover --tags handover --title "Handover: issue-<N>" --content "..."
+```text
+[PROD GATEKEEPER]
+- Stage 1 merge: commit <sha>
+- Stage 2 staging: run <url>, soak <duration>, health <result>
+- Stage 3 production: image <digest>, watchdog <state>
+Authorize production deployment? Reply "deploy" or "hold".
 ```
 
-必须按标准格式记录四要素：
-1. **做了什么 (Done)**：已提交的 Commit SHA、改动的核心文件与验证通过的单测。
-2. **卡在哪 (Blocker)**：当前阻塞原因（CI 异常、未决设计冲突、等待审批）。
-3. **关键决策 (Decisions)**：本次会话锁定的架构契约与被推翻的旧假设。
-4. **下一步行动 (Next)**：下次会话 `/init` 后应该执行的第一条物理命令。
+- Claim "deployed" only with an evidence chain: image digest, ledger entry, and a real end-to-end probe (the real browser or TUI).
+  The owner asked twice "are you sure the last version is deployed?" Find the proof, then answer.
+- No answer means Suspend. Closing in silence is forbidden.
+- After "deploy", you own the whole loop, including the physical check. Never ask the owner to run a command.
 
----
+## 4. Suspend: handover and issue
 
-## 阶段四：Prod Gatekeeper 生产哨兵（服务变更必检）
+Write the handover with four parts. Include the exact next command.
 
-若改动涉及服务容器、Docker Compose、基础设施或底层配置：
+1. **Done:** commit SHAs, changed files, tests that passed.
+2. **Blocked:** the cause (CI, open design question, waiting for approval).
+3. **Decisions:** contracts you fixed and assumptions you overturned.
+4. **Next:** the first command for the next session.
 
-1. **三阶段状态表格**：打出三阶段真实事实汇报给 Owner：
-   ```text
-   [PROD GATEKEEPER CHECKPOINT]
-   - Stage 1 (Merge): Commit SHA <sha>
-   - Stage 2 (Staging Soak): Run URL <url>, Soak Duration <duration>, Health: PASS
-   - Stage 3 (Prod Baseline): Image <digest>, Watchdog: OK
-   
-   请示：是否授权部署 Prod？（回复 "deploy" 授权部署，或回复 "hold" 暂不上线）
-   ```
-2. **fail-closed 闭环**：未收到 Owner 明确回复前，降级为 Suspend 模式，出让控制权等待响应。
+```bash
+ws-bm write-note --folder memory/handover --tags handover --title "Handover: issue-<N> <slug>" --content "..."
+```
 
----
+Also update the issue with the same four parts. Search for an existing issue first. Create one only when none matches.
+Commands for this machine are in `local.md`.
 
-## 阶段五：Complete 模式 — 现场清理 (Teardown)
+## 5. Complete: clean up
 
-所有交付条件与核验均通过后，清理物理环境：
+1. Kill every background task, watcher, and subagent bound to the worktree. Check with `lsof +D "$WORKTREE"`.
+   Removing a tree under a running task corrupts it.
+2. `git worktree remove ../<repo>_issue<N>_<slug>`.
+3. Close or update the issue with the merge proof.
+4. Delete scratch files. Record each leftover TODO in the handover.
 
-1. **终止后台残留**：检查并杀死当前 Worktree 下遗留的测试进程、Watcher 或马仔。
-2. **移除独立 Worktree**：
-   ```bash
-   git worktree remove ../<repo>_issue<N>_<slug>
-   ```
-3. **关闭或同步 Issue**：在 GitHub Issue 中附上合入证明与关闭说明。
+## 6. Route each lesson (distill)
+
+Every finding from the session has exactly one destination, or an announced discard. Use a read-only agent to decide.
+The agent that wrote the code does not judge its own lessons.
+
+Ask in order. The first YES decides:
+
+1. True only this time (one SHA, one count, one temp path)? **Discard, and say so in the report.**
+2. Can an automatic check catch it? **Build the check. Do not write a rule.** A red assertion works every time. Prose works when read.
+3. Would it change a future judgment? **Write it as a criterion.** Choose the tier by what it depends on:
+   - holds on any machine: Root rules;
+   - holds only with this environment's shared infrastructure: Workspace rules;
+   - holds only for this project's goal: Repo rules.
+
+   If you cannot name the tier, you do not yet know what it depends on. Do not write it.
+4. Unfinished work, or state for someone else? **Issue or handover.**
+5. A location of an external thing (dashboard, ticket, log path)? **Memory reference.**
+6. True only for this checkout, or tier unclear? **Put it in the local holding area** for the read-only agent to place.
+
+Red lines:
+
+- **R1** No rule without the measurement that triggered it: which session, what went wrong, what it cost.
+- **R2** Resident text holds criteria only. Move steps, lists, and templates to a skill and leave a pointer.
+- **R3** The distiller is not the executor.
+- **R4** Discard out loud.
+- **R5** One invariant lives in one tier. Copies drift. Skills may restate a criterion but must point back to the owner.
+  (2026-09-22: "the president writes no code" lived in two tiers, and one copy missed the stop condition added that day.)
+- **R6** A pointer must resolve to the same literal string in the target. A pointer to a dropped invariant disguises the loss as convergence.
+
+A finding that is both a criterion and unfinished work becomes two records. One record inside an issue dies when the issue closes.
+
+## 7. Report
+
+Report in the owner's language, in a short table. Show the mode, merge proof, verification that ran on which machine,
+the oracles you did not touch, the sample size, the data age, and the discarded findings.
+End with two answers: "Sufficient?" and "MECE?".
