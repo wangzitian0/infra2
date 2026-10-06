@@ -1,7 +1,6 @@
 """Detect crash-looping / unhealthy containers and explain *why* from their logs.
 
-SSOT for ``libs.observability``'s container breakdown triage; ``libs.observability.breakdown``
-is a backward-compatibility shim over this module.
+SSOT for ``libs.observability``'s container breakdown triage.
 
 The layered monitoring already in place catches the *symptom* but not the *cause*:
 

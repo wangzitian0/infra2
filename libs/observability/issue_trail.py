@@ -1,7 +1,6 @@
 """One GitHub issue per red ops-checks watchdog check (truealpha#876 W4).
 
-SSOT for ``libs.observability``'s watchdog issue trail; ``libs.observability.issue_trail``
-is a backward-compatibility shim over this module.
+SSOT for ``libs.observability``'s watchdog issue trail.
 
 The nightly ops-checks watchdog job paged Feishu and nothing else, so on
 2026-09-16 ``cloudflare-worker-status unhealthy`` (run 35048603264) left no

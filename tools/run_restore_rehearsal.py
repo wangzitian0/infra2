@@ -27,8 +27,10 @@ from libs.backup.rehearsal import (
     materialize_artifact,
     run_postgres_restore_rehearsal,
 )
-from libs.backup.verification import latest_manifest_path
-from libs.backup.verification import load_backup_inventory
+from libs.backup.verification import (
+    latest_manifest_path,
+    load_backup_inventory,
+)
 
 #: `--service-id all`: every Postgres service that has rehearsal invariants.
 ALL_SERVICES = ("finance_report/postgres", "truealpha/postgres")
