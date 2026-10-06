@@ -10,6 +10,8 @@ from types import SimpleNamespace
 import types
 
 
+import pytest
+
 from libs.vault_tokens import policy_name
 
 
@@ -684,17 +686,27 @@ def test_refresh_role_consumers_fails_on_a_compose_without_id(monkeypatch) -> No
 
 
 def test_refresh_role_consumers_fails_when_an_env_read_fails(monkeypatch) -> None:
-    """#1070: an unreadable env could hide a consumer."""
+    """#1070: an unreadable env could hide a consumer, even when the target reads."""
     tasks, client = _consumers_fixture(
-        monkeypatch, {"app": "VAULT_ROLE_ID=role-1\nVAULT_SECRET_ID=secret-new\n"}
+        monkeypatch,
+        {
+            "app": "VAULT_ROLE_ID=role-1\nVAULT_SECRET_ID=secret-new\n",
+            "report-pr-7": "",
+        },
     )
 
-    def broken(_compose_id):
-        raise RuntimeError("compose.one: 502")
+    client.envs["report-pr-7"] = "VAULT_ROLE_ID=role-1\nVAULT_SECRET_ID=secret-old\n"
+    read = client.get_compose_env
+
+    def broken(compose_id):
+        if compose_id == "report-pr-7":
+            raise RuntimeError("compose.one: 502")
+        return read(compose_id)
 
     monkeypatch.setattr(client, "get_compose_env", broken)
 
     assert tasks._refresh_role_consumers("role-1", "secret-new") is False
+    assert client.updated == {}
 
 
 def test_env_value_reads_quoted_and_spaced_values(monkeypatch) -> None:
@@ -705,6 +717,16 @@ def test_env_value_reads_quoted_and_spaced_values(monkeypatch) -> None:
     assert tasks._env_value(env, "VAULT_ROLE_ID") == "role-1"
     assert tasks._env_value(env, "VAULT_SECRET_ID") == "s-1"
     assert tasks._env_value(env, "MISSING") == ""
+
+
+def test_env_value_rejects_a_repeated_key(monkeypatch) -> None:
+    """#1070: Dokploy merges `VAULT_SECRET_ID=new` next to `VAULT_SECRET_ID =old`
+    and the container reads the last line. The first line cannot stand for both."""
+    tasks, _exit_cls = _load_vault_tasks(monkeypatch)
+    env = "VAULT_SECRET_ID =secret-old\nVAULT_SECRET_ID=secret-new\n"
+
+    with pytest.raises(ValueError, match="occurs 2 times"):
+        tasks._env_value(env, "VAULT_SECRET_ID")
 
 
 def test_setup_approle_handles_the_iac_runner_last(monkeypatch) -> None:

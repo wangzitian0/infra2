@@ -818,14 +818,22 @@ def _secret_id_accessors(c, venv: dict[str, str], role: str) -> list[str] | None
 
 
 def _env_value(env_str: str, key: str) -> str:
+    """The value of ``key`` in a Dokploy env string, without quotes.
+
+    A key that occurs twice has no single value: Dokploy merges by the exact name
+    and the container reads the last line, so the task cannot know what runs.
+    """
+    values = []
     for line in env_str.splitlines():
         name, _, value = line.strip().partition("=")
         if name.strip() == key:
             value = value.strip()
             if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
                 value = value[1:-1]
-            return value
-    return ""
+            values.append(value)
+    if len(values) > 1:
+        raise ValueError(f"{key} occurs {len(values)} times in one compose env")
+    return values[0] if values else ""
 
 
 def _scan_role_consumers(client: Any, role_id: str) -> list[tuple[str, str, str]]:
@@ -880,7 +888,7 @@ def _refresh_role_consumers(role_id: str, secret_id: str) -> bool:
                 blocked.append(label)
         if blocked:
             error(
-                "   These composes still hold an earlier secret id: "
+                "   These composes did not finish the switch to the new secret id: "
                 f"{', '.join(blocked)}. Repair or tear down each one (a preview: "
                 "`python -m tools.deploy_v2 ... --down`), then run the task again."
             )
