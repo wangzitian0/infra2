@@ -1,819 +1,93 @@
-"""Read-only Vault self-refresh audit helpers.
+"""Read-only Vault self-refresh audit helpers and live collection adapters.
 
-The module is intentionally split into pure classifiers and thin live collection
-adapters. Tests exercise the classifiers and inventory/static contracts without
-requiring live Vault, Dokploy, or SSH access.
-
-## Recency semantics are mandatory (#531)
-
-This module was hit FOUR separate times by the same defect class: a check
-that reads a signal without any notion of *when* it happened, so it
-eventually misreports resolved history as a current problem
-(``classify_token`` checking a static field against a since-migrated auth
-model; ``classify_rendered_env`` using file mtime -- "when did the secret
-last change" -- as an "is the agent alive" proxy; ``classify_container``
-comparing Docker's lifetime-cumulative ``RestartCount`` with no time bound;
-``_remote_container_logs`` tailing 200 lines with no ``--since``, so an
-old, resolved crash-loop's log spam can sit in the window indefinitely).
-See #531 for the full investigation.
-
-The rule going forward, for every check added to this module: state its
-recency semantics explicitly, one of --
-
-1. **Bounded by an explicit time window** -- e.g. "only flag if the most
-   recent occurrence was within N seconds of now" (see `libs/recency.py`'s
-   `is_recently_flapping`, or a `--since <window>` bound on a `docker logs`
-   read). Use this for anything that accumulates or persists across time --
-   counters, logs, on-disk file content/mtime, anything answering "how many
-   times has X happened" or "does the recent history contain Y".
-2. **Explicitly justified as safe to leave unbounded** -- reserved for
-   checks that are direct reads of *current* state with no history
-   component at all, e.g. "does the container exist right now" / "is the
-   container's Docker state currently `running`" / "is the current Health
-   status `healthy`". These have no notion of "old" to guard against: there
-   is only ever one current value, not an accumulating trail of past ones.
-
-When in doubt, treat it as case 1. The failure mode this guards against is
-silent and slow (a check working correctly right up until some accumulated
-history stops matching present reality), so it is not something a quick
-code read or test run reliably catches after the fact -- decide the recency
-story at write time, not later.
+Pure classifiers and data models are defined in ``libs.security.vault_audit``;
+this module provides live collection adapters and maintains full backward
+compatibility by re-exporting all audit interfaces and symbols.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
-from pathlib import Path
-import functools
 import json
 import os
-import re
 import shlex
 import subprocess
-import time
 from typing import Any
 
-from libs.deploy_queue import parse_epoch_seconds
-from libs.security.store import verify_vault_token
-from libs.recency import is_recently_flapping
 from libs.core.constants import REPO_ROOT
-
-
-SECRET_KEYS = ("token", "secret", "password", "key", "authorization")
-
-# (#542) The audit inventory is DERIVED from each service's Deployer
-# SecretsFacet declarations (libs/service_facets.py) — see load_inventory().
-# The formerly handwritten vault-self-refresh-inventory.yaml SSOT, the
-# OPTIONAL_INERT_FIELD_WATCHLIST (#526), and MOUNT_EXEMPT_CONTAINERS (#531)
-# constants are gone: their facts live as `secrets = (SecretsFacet(...),)`
-# fields (`optional_inert_fields` / `mount_exempt_containers`) on the OWNING
-# service's deploy.py, so the audit's expectations and the deployed vault-agent
-# wiring can no longer drift apart (#531's root cause).
-
-# (#531) Docker's RestartCount is lifetime-cumulative; the only other
-# restart-relevant signal it exposes is State.StartedAt (when the CURRENT run
-# began, i.e. the time of the most recent restart). classify_container()
-# therefore only flags a high restart count if the most recent restart was
-# itself within this window -- see libs/recency.py's module docstring for the
-# full reasoning. Sizing this window is a real tradeoff, not an arbitrary
-# pick:
-#   - Too short (e.g. minutes) risks missing a real, currently-active
-#     crash-loop whose backoff has stretched out, or simply not lining up
-#     with when this audit happens to run.
-#   - Too long (e.g. a day+) re-widens the exact bug this fixes: a container
-#     that restarted many times right at the start of a long-since-resolved
-#     incident would stay flagged for the whole window even though nothing
-#     has been wrong for most of it.
-# 1 hour is deliberately generous relative to a real crash-loop's cadence
-# (Docker's restart backoff caps at seconds-to-low-minutes, so a container
-# that is STILL actively flapping will restart well inside an hour) while
-# being short enough that "stable for 12+ days" (the verified-live
-# platform/prefect case) reliably clears it. This audit currently runs on a
-# daily CI schedule (#531/PR#532) plus ad hoc manual `invoke
-# vault-audit.self-refresh` runs; revisit this downward if the schedule ever
-# tightens to sub-hourly.
-RESTART_RECENCY_WINDOW_SECONDS = 3600
-
-# (#531) `docker logs` has no notion of "only what's relevant to a live
-# health check" -- without a `--since` bound, a long-lived, sparsely-logging
-# container's --tail window can still contain a resolved incident's crash-loop
-# spam from weeks ago, which classify_vault_agent_logs's substring matching
-# would then misattribute to the present. 1h mirrors RESTART_RECENCY_WINDOW_SECONDS's
-# reasoning: long enough that a real, currently-unfolding problem's log lines
-# are virtually guaranteed to be inside it (this audit's daily schedule means
-# a problem that started and got fixed entirely within an hour, days ago,
-# reasonably shouldn't still page today), short enough that ancient,
-# unrelated incidents fall out of the window entirely. A parameter (not a
-# hardcoded constant) since a future caller with a different polling cadence
-# (e.g. #475's tighter sidecar loop) may reasonably want a tighter window.
-DEFAULT_LOG_SINCE = "1h"
-
-ERROR_LOG_PATTERNS = (
-    "permission denied",
-    "token expired",
-    "token is expired",
-    "no handler for route",
-    "template render failed",
-    "template rendering failed",
-    "failed rendering",
-    "error rendering",
-    "vault connection",
-    "connection refused",
-    "context deadline exceeded",
-    "VAULT_APP_TOKEN is required",
-    # AppRole-auth services (#257/#259) crash-loop with this instead of the
-    # legacy VAULT_APP_TOKEN message when their role_id/secret_id are unset/wiped.
-    "VAULT_ROLE_ID and VAULT_SECRET_ID are required",
+from libs.security.store import verify_vault_token
+from libs.security.vault_audit import (
+    CheckResult,
+    DEFAULT_LOG_SINCE,
+    ERROR_LOG_PATTERNS,
+    PREVIEW_STACK_SKIPPED,
+    RESTART_RECENCY_WINDOW_SECONDS,
+    SECRET_KEYS,
+    VaultService,
+    audit_from_observations,
+    classify_container,
+    classify_deployed_template,
+    classify_optional_field_inertness,
+    classify_rendered_env,
+    classify_token,
+    classify_vault_agent_logs,
+    discover_vault_agent_compose_paths,
+    inventory_compose_paths,
+    inventory_ids_not_in_production,
+    load_inventory,
+    parse_env,
+    redact,
+    vault_path_template,
+    _is_preview_stack,
+    _is_secret_key,
+    _looks_like_vault_token,
+    _preview_stack_dirs,
+    _preview_stack_skipped,
+    _release_template_sha256,
+    _resolve_env_suffix,
+    _result,
+    _safe_excerpt,
+    _vault_addr_from_env,
+    _vault_service_from_facet,
 )
 
-
-@dataclass(frozen=True)
-class VaultService:
-    id: str
-    project: str
-    dokploy_service: str
-    compose_path: str
-    vault_agent_config_path: str
-    secret_template_path: str
-    vault_path_template: str
-    vault_agent_container: str
-    app_containers: tuple[str, ...]
-    vault_token_env_key: str = "VAULT_APP_TOKEN"
-    rendered_secret_path: str = "/vault/secrets/.env"
-    app_secret_mount_path: str = "/secrets/.env"
-    max_rendered_secret_age_seconds: int = 900
-    min_token_ttl_hours: int = 48
-    # "token" = static VAULT_APP_TOKEN; "approle" = VAULT_ROLE_ID + VAULT_SECRET_ID.
-    auth_method: str = "token"
-    # (#531/#542) app_containers that by design run WITHOUT the secrets mount
-    # (``${ENV_SUFFIX}`` placeholders, resolved per audit env) — declared on the
-    # owning service's SecretsFacet, formerly the MOUNT_EXEMPT_CONTAINERS const.
-    mount_exempt_containers: tuple[str, ...] = ()
-    # (#526/#542) optional vault:true fields reported (never failed) on
-    # populated-ness — formerly the OPTIONAL_INERT_FIELD_WATCHLIST const.
-    optional_inert_fields: tuple[str, ...] = ()
-    # A preview alias stack (libs.secrets_registry marks it ``preview``). Its containers
-    # carry a per-alias suffix (-branch-main, -pr-N) that the fixed-environment audit
-    # cannot resolve: ``${ENV_SUFFIX}`` resolved per audited env names the fixed stack's
-    # containers instead, so every check measured the wrong stack under the preview's
-    # name — trivially green until the template content check (#692) compared the
-    # preview template against the fixed agent. The live audit reports it as skipped.
-    ephemeral: bool = False
-    # Legacy compose names for backward-compatibility fallback during migration (#954, #958)
-    legacy_dokploy_services: tuple[str, ...] = ()
-
-    @property
-    def auth_env_keys(self) -> tuple[str, ...]:
-        """Env keys the vault-agent must carry for this service's auth method."""
-        if self.auth_method == "approle":
-            return ("VAULT_ROLE_ID", "VAULT_SECRET_ID")
-        return (self.vault_token_env_key,)
-
-
-@dataclass
-class CheckResult:
-    service_id: str
-    check_id: str
-    status: str
-    severity: str
-    summary: str
-    evidence: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-def vault_path_template(project: str, service: str) -> str:
-    """The audit's expected Vault KV path template for a service.
-
-    Built from the SAME (project, service) facts ``libs.env.get_secrets`` uses
-    to construct the deploy-side path (``app_vars`` →
-    ``secret/data/{project}/{env}/{service}``), so editing a Deployer's
-    ``project``/``service`` moves the deployed secret path AND this audit
-    expectation in lockstep — they cannot drift (#531/#542).
-    """
-    return f"secret/data/{project}/{{env}}/{service}"
-
-
-def load_inventory() -> list[VaultService]:
-    """DERIVE the audit inventory from the Deployer SecretsFacets (#542).
-
-    One entry per SecretsFacet across the registry scan plus the bootstrap
-    plane's facet-only deploy.py files. Deterministic: declaring services in
-    sorted id order, facets in declaration order. A duplicate derived id fails
-    closed — two facets silently claiming one inventory entry is exactly the
-    drift class the facet model exists to kill.
-    """
-    from libs.core.registry import bootstrap_facet_attrs, service_attrs
-
-    metas = {**bootstrap_facet_attrs(), **service_attrs()}
-    services: list[VaultService] = []
-    seen: dict[str, str] = {}
-    for declaring_id in sorted(metas):
-        meta = metas[declaring_id]
-        for facet in meta.secrets:
-            service = _vault_service_from_facet(meta, facet)
-            if service.id in seen:
-                raise ValueError(
-                    f"duplicate vault inventory id {service.id!r} derived from "
-                    f"both {seen[service.id]} and {declaring_id}"
-                )
-            seen[service.id] = declaring_id
-            services.append(service)
-    if not services:
-        # Fail closed (mirrors probe_specs.render_probe_spec_text): an empty
-        # derivation means the registry walk itself broke — this repo always
-        # declares vault-agent services, so "no inventory" is never valid.
-        raise ValueError(
-            "derived vault self-refresh inventory is EMPTY — the SecretsFacet "
-            "registry walk found nothing, which is never a valid state"
-        )
-    return services
-
-
-def _vault_service_from_facet(meta, facet) -> VaultService:
-    """Build one VaultService from a SecretsFacet + its declaring ServiceMeta.
-
-    Everything derivable comes from the Deployer's own deploy facts (see
-    SecretsFacet's docstring): id/project/dokploy_service from the registry
-    identity, compose/agent-config/template paths from ``compose_path``, and
-    the vault path template from the deploy-side (project, service) pair.
-    """
-    compose_path = facet.compose_path or meta.compose_path
-    if not compose_path:
-        raise ValueError(
-            f"{meta.service_id}: SecretsFacet needs a compose_path (the Deployer "
-            "declares none and the facet does not override it)"
-        )
-    compose_dir = compose_path.rsplit("/", 1)[0]
-    return VaultService(
-        id=facet.service_id or meta.service_id,
-        project=meta.project,
-        dokploy_service=meta.service,
-        legacy_dokploy_services=getattr(meta, "legacy_compose_names", ()),
-        compose_path=compose_path,
-        vault_agent_config_path=f"{compose_dir}/vault-agent.hcl",
-        secret_template_path=f"{compose_dir}/secrets.ctmpl",
-        vault_path_template=facet.vault_path_template
-        or vault_path_template(meta.project, meta.service),
-        vault_agent_container=facet.vault_agent_container,
-        app_containers=tuple(facet.app_containers),
-        vault_token_env_key=facet.vault_token_env_key,
-        rendered_secret_path=facet.rendered_secret_path,
-        app_secret_mount_path=facet.app_secret_mount_path,
-        max_rendered_secret_age_seconds=facet.max_rendered_secret_age_seconds,
-        min_token_ttl_hours=facet.min_token_ttl_hours,
-        auth_method=facet.auth_method,
-        mount_exempt_containers=tuple(facet.mount_exempt_containers),
-        optional_inert_fields=tuple(facet.optional_inert_fields),
-        ephemeral=_is_preview_stack(compose_dir),
-    )
-
-
-@functools.lru_cache(maxsize=1)
-def _preview_stack_dirs() -> frozenset[str]:
-    """The stack directories the registry declares as previews (source_env set)."""
-    from libs.security.registry import SERVICES
-
-    return frozenset(service.directory for service in SERVICES if service.preview)
-
-
-def _is_preview_stack(compose_dir: str) -> bool:
-    return compose_dir in _preview_stack_dirs()
-
-
-def inventory_ids_not_in_production() -> frozenset[str]:
-    """Inventory ids with no production deployment yet — DERIVED, not declared
-    twice (#542, replacing the hand-kept NOT_YET_IN_PRODUCTION constant).
-
-    Two sources, both deploy-side facts:
-      * a Deployer's literal ``not_yet_in_production = True`` (iac_pinned
-        services whose rollout is deliberately staging-scoped, e.g. #500);
-      * a bespoke app whose ``_APP_COMPOSE_OVERRIDES`` prod entry has
-        ``compose_id=None`` (libs.deploy_env_config — no prod compose exists).
-    A not-in-production owner's on-behalf surfaces (its ``service_id``-carrying
-    SecretsFacets, e.g. the preview alias stack) are excluded with it — an
-    alias of an app that isn't in production cannot be there either.
-    """
-    from libs.deploy_env_config import services_without_prod_compose
-    from libs.core.registry import bootstrap_facet_attrs, service_attrs
-
-    metas = {**bootstrap_facet_attrs(), **service_attrs()}
-    owners = services_without_prod_compose() | {
-        service_id for service_id, meta in metas.items() if meta.not_yet_in_production
-    }
-    excluded: set[str] = set()
-    for service_id, meta in metas.items():
-        if service_id not in owners:
-            continue
-        excluded.add(service_id)
-        excluded.update(facet.service_id for facet in meta.secrets if facet.service_id)
-    return frozenset(excluded)
-
-
-def redact(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            key: "***REDACTED***" if _is_secret_key(key) else redact(val)
-            for key, val in value.items()
-        }
-    if isinstance(value, list):
-        return [redact(item) for item in value]
-    return value
-
-
-def parse_env(env_text: str) -> dict[str, str]:
-    parsed: dict[str, str] = {}
-    for raw_line in env_text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        parsed[key.strip()] = value.strip().strip('"').strip("'")
-    return parsed
-
-
-def classify_token(
-    service: VaultService,
-    env_text: str,
-    lookup: dict[str, Any] | None,
-) -> CheckResult:
-    env = parse_env(env_text)
-    if service.auth_method == "approle":
-        # AppRole services (#264/#531) authenticate with VAULT_ROLE_ID + VAULT_SECRET_ID,
-        # not a static VAULT_APP_TOKEN -- there is no token to shape-check, look up,
-        # confirm renewable, or TTL-gate, so those sub-checks are skipped entirely
-        # (mirrors libs/deploy/promote.py::preflight_vault_token's AppRole branch).
-        missing = [key for key in service.auth_env_keys if not env.get(key)]
-        if missing:
-            return _result(
-                service,
-                "dokploy-env-approle",
-                "fail",
-                "P0",
-                f"{', '.join(missing)} missing from Dokploy env",
-                {"env_keys": sorted(env.keys()), "missing": missing},
-            )
-        return _result(
-            service,
-            "dokploy-env-approle",
-            "pass",
-            "P0",
-            f"{', '.join(service.auth_env_keys)} present in Dokploy env "
-            "(AppRole auth; no static token to look up, renew, or TTL-check)",
-            {"env_keys": sorted(env.keys())},
-        )
-    token = env.get(service.vault_token_env_key)
-    if not token:
-        return _result(
-            service,
-            "dokploy-env-token",
-            "fail",
-            "P0",
-            f"{service.vault_token_env_key} is missing from Dokploy env",
-            {"env_keys": sorted(env.keys())},
-        )
-    if not _looks_like_vault_token(token):
-        token_hint = token[:3] + "***" + token[-3:] if len(token) > 6 else "***"
-        return _result(
-            service,
-            "dokploy-env-token",
-            "fail",
-            "P0",
-            f"{service.vault_token_env_key} is malformed",
-            {"token_hint": token_hint, "token_length": len(token)},
-        )
-    if lookup is None:
-        return _result(
-            service,
-            "vault-token-lookup",
-            "fail",
-            "P0",
-            "Vault token lookup did not run",
-            {},
-        )
-    if not lookup.get("valid"):
-        return _result(
-            service,
-            "vault-token-lookup",
-            "fail",
-            "P0",
-            "Vault token lookup failed",
-            lookup,
-        )
-    if not lookup.get("renewable"):
-        return _result(
-            service,
-            "vault-token-renewable",
-            "fail",
-            "P0",
-            "Vault app token is not renewable",
-            lookup,
-        )
-    ttl = float(lookup.get("ttl_hours", -1))
-    if ttl < service.min_token_ttl_hours:
-        return _result(
-            service,
-            "vault-token-ttl",
-            "fail",
-            "P1",
-            f"Vault app token TTL is below {service.min_token_ttl_hours}h",
-            lookup,
-        )
-    return _result(
-        service,
-        "vault-token",
-        "pass",
-        "P0",
-        "Vault app token is valid, renewable, and above TTL floor",
-        lookup,
-    )
-
-
-PREVIEW_STACK_SKIPPED = (
-    "preview alias stack: its containers carry a per-alias suffix (-branch-main, -pr-N) "
-    "this fixed-environment audit cannot resolve, so it is not measured here; the preview "
-    "lifecycle verifies each alias on deploy"
-)
-
-
-def _preview_stack_skipped(service: VaultService) -> CheckResult:
-    return _result(
-        service,
-        "preview-stack",
-        "info",
-        "P3",
-        PREVIEW_STACK_SKIPPED,
-        {"compose_path": service.compose_path},
-    )
-
-
-def classify_deployed_template(
-    service: VaultService,
-    deployed_sha256: str,
-) -> CheckResult:
-    """Is the template the agent has mounted the one this release ships?
-
-    This is the check #628 needs and #658 recommendation 1 approximated with mtime. The
-    data-engine agent ran a weeks-old `secrets.ctmpl` — no S3 port, no LLM_* — because a
-    single-file bind mount kept pointing at a replaced inode. The container's view of that
-    file has stale CONTENT and a perfectly consistent mtime, so only the content answers.
-
-    An unreadable template is not a mismatch: the check reports `info` and says so, rather
-    than turning an SSH hiccup into a page.
-    """
-    release_sha256 = _release_template_sha256(service)
-    evidence = {
-        "template_path": service.secret_template_path,
-        "deployed_sha256": deployed_sha256[:12],
-        "release_sha256": release_sha256[:12],
-    }
-    if not deployed_sha256 or not release_sha256:
-        return _result(
-            service,
-            "deployed-template",
-            "info",
-            "P3",
-            f"could not compare {service.secret_template_path} "
-            f"({'deployed' if not deployed_sha256 else 'release'} copy unreadable)",
-            evidence,
-        )
-    if deployed_sha256 != release_sha256:
-        return _result(
-            service,
-            "deployed-template",
-            "fail",
-            "P1",
-            f"the mounted {service.secret_template_path} is not the one this release "
-            "ships; a template change never reached the container (#628)",
-            evidence,
-        )
-    return _result(
-        service,
-        "deployed-template",
-        "pass",
-        "P1",
-        f"the mounted /etc/vault/secrets.ctmpl matches {service.secret_template_path}",
-        evidence,
-    )
-
-
-def classify_rendered_env(
-    service: VaultService,
-    file_state: dict[str, Any],
-    now: int | None = None,
-) -> CheckResult:
-    if not file_state.get("exists"):
-        return _result(
-            service,
-            "rendered-env",
-            "fail",
-            "P0",
-            f"{service.rendered_secret_path} is missing",
-            file_state,
-        )
-    if not file_state.get("readable", True):
-        return _result(
-            service,
-            "rendered-env",
-            "fail",
-            "P0",
-            f"{service.rendered_secret_path} is not readable",
-            file_state,
-        )
-    if int(file_state.get("size", 0)) <= 0:
-        return _result(
-            service,
-            "rendered-env",
-            "fail",
-            "P0",
-            f"{service.rendered_secret_path} is empty",
-            file_state,
-        )
-    if file_state.get("has_no_value"):
-        return _result(
-            service,
-            "rendered-env-template-values",
-            "fail",
-            "P0",
-            f"{service.rendered_secret_path} contains unresolved Vault template values",
-            file_state,
-        )
-    observed_now = int(now if now is not None else time.time())
-    mtime = int(file_state.get("mtime", 0))
-    age = max(0, observed_now - mtime)
-    evidence = {**file_state, "age_seconds": age}
-    # Age alone is not a fault, and #688 measured what treating it as one costs: on
-    # 2026-09-10 this failed for five services at 65-67 days — authentik, openpanel,
-    # postgres, prefect, redis — every one of them a long-lived secret nobody had
-    # changed, each with `vault-agent-logs` passing in the same run. vault-agent only
-    # rewrites this file when the CONTENT changes, so mtime answers "when did the secret
-    # last change", never "did a change fail to arrive".
-    #
-    # The question #658 recommendation 1 was really asking is answered by
-    # `classify_deployed_template` below, which compares the template the agent has
-    # mounted against the one the release ships. That catches #628's actual shape — a
-    # single-file bind mount left pointing at a replaced inode — which mtime cannot,
-    # because the stale file's mtime is perfectly consistent with its stale content.
-    if age > service.max_rendered_secret_age_seconds:
-        # #531: vault-agent's static_secret_render_interval only rewrites this file
-        # when the underlying Vault secret's CONTENT changes, not on every poll -- a
-        # healthy, low-churn secret can legitimately go long stretches without a
-        # re-render. mtime age is therefore "when did the secret last change," not
-        # "is vault-agent alive" -- that's already covered by classify_container()'s
-        # Docker health status (itself backed by the compose's own `vault token
-        # lookup-self` healthcheck). Report informationally, never fail, matching the
-        # #526 classify_optional_field_inertness pattern -- this never gates the
-        # overall audit status (see audit_from_observations).
-        return _result(
-            service,
-            "rendered-env-freshness",
-            "info",
-            "P3",
-            f"{service.rendered_secret_path} has not been rewritten in {age}s "
-            "(secret content likely unchanged since; vault-agent health is tracked "
-            "separately by the container healthcheck)",
-            evidence,
-        )
-    return _result(
-        service,
-        "rendered-env",
-        "pass",
-        "P0",
-        f"{service.rendered_secret_path} is present and fresh",
-        evidence,
-    )
-
-
-def classify_optional_field_inertness(
-    service: VaultService,
-    field_name: str,
-    rendered_env_text: str | None,
-) -> CheckResult:
-    """Report (never fail) whether a watchlisted optional field is populated.
-
-    This is deliberately status="info" always: an empty/missing value here
-    means the field's render-wiring is fine (the retired tools/validate_required_env.py
-    already gates that) but nobody has provisioned the actual Vault secret --
-    an architectural "is this optional feature turned on?" fact, not a
-    health/drift defect worth failing the audit over. See #526.
-    """
-    populated = bool(parse_env(rendered_env_text or "").get(field_name))
-    if populated:
-        return _result(
-            service,
-            f"optional-field-inertness::{field_name}",
-            "info",
-            "P3",
-            f"{field_name} is populated (dependent feature active)",
-            {"field": field_name, "populated": True},
-        )
-    return _result(
-        service,
-        f"optional-field-inertness::{field_name}",
-        "info",
-        "P3",
-        f"{field_name} is unset/empty in the rendered secrets file "
-        "(dependent feature is inert)",
-        {"field": field_name, "populated": False},
-    )
-
-
-def classify_vault_agent_logs(service: VaultService, logs: str) -> CheckResult:
-    lower_logs = logs.lower()
-    matches = [
-        pattern for pattern in ERROR_LOG_PATTERNS if pattern.lower() in lower_logs
-    ]
-    if matches:
-        return _result(
-            service,
-            "vault-agent-logs",
-            "fail",
-            "P1",
-            "vault-agent logs contain refresh/render errors",
-            {"matched_patterns": matches, "log_excerpt": _safe_excerpt(logs)},
-        )
-    return _result(
-        service,
-        "vault-agent-logs",
-        "pass",
-        "P1",
-        "vault-agent logs have no known refresh/render error patterns",
-        {"checked_patterns": list(ERROR_LOG_PATTERNS)},
-    )
-
-
-def classify_container(
-    service: VaultService,
-    container_state: dict[str, Any],
-    *,
-    check_id: str,
-    expected_mount: str | None = None,
-    now: int | float | None = None,
-    restart_recency_window_seconds: int = RESTART_RECENCY_WINDOW_SECONDS,
-) -> CheckResult:
-    name = str(container_state.get("name") or "")
-    if not container_state.get("exists", True):
-        return _result(
-            service,
-            check_id,
-            "fail",
-            "P0",
-            f"container {name or '<unknown>'} is missing",
-            container_state,
-        )
-    if str(container_state.get("state", "")).lower() != "running":
-        return _result(
-            service,
-            check_id,
-            "fail",
-            "P0",
-            f"container {name} is not running",
-            container_state,
-        )
-    health = str(container_state.get("health", "healthy")).lower()
-    if health not in {"healthy", "none", ""}:
-        return _result(
-            service,
-            check_id,
-            "fail",
-            "P0",
-            f"container {name} health is {health}",
-            container_state,
-        )
-    restart_count = int(container_state.get("restart_count", 0))
-    max_restart_count = int(container_state.get("max_restart_count", 3))
-    # (#531) restart_count alone is Docker's lifetime-cumulative counter --
-    # flag only if it's ALSO recent (derived from State.StartedAt, the start
-    # of the current run i.e. the time of the most recent restart). See
-    # RESTART_RECENCY_WINDOW_SECONDS above and libs/recency.py for the full
-    # reasoning. `started_at` missing/unparseable is treated as "no recency
-    # evidence" (last_event_at=0.0 -> effectively infinite age), i.e. does
-    # NOT flag -- conservative by design, matching every other unbounded ->
-    # bounded fix in this module: absence of a recency signal must never be
-    # treated as "recent".
-    observed_now = float(now if now is not None else time.time())
-    started_at_epoch = parse_epoch_seconds(container_state.get("started_at"))
-    if is_recently_flapping(
-        event_count=restart_count,
-        last_event_at=started_at_epoch if started_at_epoch is not None else 0.0,
-        now=observed_now,
-        count_threshold=max_restart_count,
-        recency_window_seconds=restart_recency_window_seconds,
-    ):
-        restart_age = (
-            int(max(0.0, observed_now - started_at_epoch))
-            if started_at_epoch is not None
-            else None
-        )
-        return _result(
-            service,
-            check_id,
-            "fail",
-            "P1",
-            f"container {name} restart count is high and recent (still flapping"
-            + (
-                f"; last restart {restart_age}s ago)"
-                if restart_age is not None
-                else ")"
-            ),
-            {**container_state, "restart_age_seconds": restart_age},
-        )
-    if expected_mount:
-        mounts = container_state.get("mounts", [])
-        has_mount = expected_mount in mounts or any(
-            expected_mount.startswith(f"{str(mount).rstrip('/')}/") for mount in mounts
-        )
-        if not has_mount:
-            return _result(
-                service,
-                check_id,
-                "fail",
-                "P1",
-                f"container {name} is missing mount {expected_mount}",
-                container_state,
-            )
-    return _result(
-        service,
-        check_id,
-        "pass",
-        "P0",
-        f"container {name} is running with acceptable health",
-        container_state,
-    )
-
-
-def audit_from_observations(
-    services: list[VaultService],
-    observations: dict[str, Any],
-    *,
-    env: str,
-    now: int | None = None,
-) -> dict[str, Any]:
-    results: list[CheckResult] = []
-    observed_services = observations.get("services", {})
-    for service in services:
-        if service.ephemeral:
-            results.append(_preview_stack_skipped(service))
-            continue
-        obs = observed_services.get(service.id, {})
-        env_text = str(obs.get("dokploy_env", ""))
-        lookup = obs.get("token_lookup")
-        results.append(classify_token(service, env_text, lookup))
-        results.append(classify_rendered_env(service, obs.get("rendered_env", {}), now))
-        results.append(
-            classify_deployed_template(
-                service, str(obs.get("deployed_template_sha256", ""))
-            )
-        )
-        for field_name in service.optional_inert_fields:
-            results.append(
-                classify_optional_field_inertness(
-                    service, field_name, str(obs.get("rendered_env_text", ""))
-                )
-            )
-        results.append(
-            classify_vault_agent_logs(service, str(obs.get("vault_agent_logs", "")))
-        )
-        vault_agent_state = obs.get("vault_agent_container", {})
-        results.append(
-            classify_container(
-                service,
-                vault_agent_state,
-                check_id="vault-agent-container",
-                now=now,
-            )
-        )
-        # (#531/#542) mount exemptions come from the owning service's own
-        # SecretsFacet; the facet keeps ${ENV_SUFFIX} symbolic, so resolve it
-        # for the audited env before comparing against live container names.
-        mount_exempt = {
-            _resolve_env_suffix(name, env) for name in service.mount_exempt_containers
-        }
-        for app_state in obs.get("app_containers", []):
-            exempt = str(app_state.get("name") or "") in mount_exempt
-            results.append(
-                classify_container(
-                    service,
-                    app_state,
-                    check_id="app-container",
-                    expected_mount=None if exempt else service.app_secret_mount_path,
-                    now=now,
-                )
-            )
-    # "info" results (e.g. optional-field-inertness, #526) are report-only and
-    # never gate the audit's overall pass/fail -- only real health/drift
-    # checks do.
-    status = (
-        "pass" if all(item.status in ("pass", "info") for item in results) else "fail"
-    )
-    return {
-        "schema_version": 1,
-        "env": env,
-        "status": status,
-        "generated_at": int(now if now is not None else time.time()),
-        "results": [redact(result.to_dict()) for result in results],
-    }
+__all__ = [
+    "CheckResult",
+    "DEFAULT_LOG_SINCE",
+    "ERROR_LOG_PATTERNS",
+    "PREVIEW_STACK_SKIPPED",
+    "RESTART_RECENCY_WINDOW_SECONDS",
+    "SECRET_KEYS",
+    "VaultService",
+    "audit_from_observations",
+    "classify_container",
+    "classify_deployed_template",
+    "classify_optional_field_inertness",
+    "classify_rendered_env",
+    "classify_token",
+    "classify_vault_agent_logs",
+    "collect_live_observations",
+    "discover_vault_agent_compose_paths",
+    "inventory_compose_paths",
+    "inventory_ids_not_in_production",
+    "load_inventory",
+    "parse_env",
+    "redact",
+    "REPO_ROOT",
+    "vault_path_template",
+    "verify_vault_token",
+    "write_report",
+    "_is_preview_stack",
+    "_is_secret_key",
+    "_looks_like_vault_token",
+    "_preview_stack_dirs",
+    "_preview_stack_skipped",
+    "_release_template_sha256",
+    "_resolve_env_suffix",
+    "_result",
+    "_safe_excerpt",
+    "_vault_addr_from_env",
+    "_vault_service_from_facet",
+]
 
 
 def collect_live_observations(
@@ -827,12 +101,6 @@ def collect_live_observations(
 
     This function intentionally only reads state. It does not restart, mutate,
     renew, or rotate anything.
-
-    `log_since` (#531) bounds how far back `_remote_container_logs` looks --
-    see `DEFAULT_LOG_SINCE`'s comment for the reasoning. Exposed as a
-    parameter (not hardcoded) since a different caller/cadence may reasonably
-    want a different window; this audit's own scheduled/manual callers use
-    the default.
     """
     from libs.common import get_env
     from libs.deploy.dokploy_client import get_dokploy
@@ -865,8 +133,6 @@ def collect_live_observations(
                 if compose is not None:
                     break
         env_text = compose.get("env", "") if compose else ""
-        # AppRole services (#264/#531) have no static token to look up -- mirrors the
-        # skip in classify_token / preflight_vault_token above.
         if service.auth_method == "approle":
             token_lookup = None
         else:
@@ -920,9 +186,6 @@ def collect_live_observations(
             "deployed_template_sha256": _remote_template_sha256(
                 vps_host, vault_agent_name
             ),
-            # Only fetched for services with `optional_inert_fields` facet
-            # entries (#526/#542) -- keeps secret-content exposure scoped to
-            # the fields this audit actually needs to see are non-empty.
             "rendered_env_text": (
                 _remote_secret_file_text(vps_host, vault_agent_name)
                 if inert_fields
@@ -937,83 +200,8 @@ def collect_live_observations(
     return observations
 
 
-def inventory_compose_paths() -> set[str]:
-    return {service.compose_path for service in load_inventory()}
-
-
-def discover_vault_agent_compose_paths(root: Path = REPO_ROOT) -> set[str]:
-    paths: set[str] = set()
-    for compose_path in root.rglob("compose*.yaml"):
-        if any(part.startswith(".") for part in compose_path.relative_to(root).parts):
-            continue  # hidden dirs: .venv, .git, .claude worktrees (full repo copies)
-        text = compose_path.read_text(encoding="utf-8")
-        if re.search(r"(?m)^  vault-agent:", text):
-            paths.add(str(compose_path.relative_to(root)))
-    return paths
-
-
-def _result(
-    service: VaultService,
-    check_id: str,
-    status: str,
-    severity: str,
-    summary: str,
-    evidence: dict[str, Any],
-) -> CheckResult:
-    return CheckResult(
-        service_id=service.id,
-        check_id=check_id,
-        status=status,
-        severity=severity,
-        summary=summary,
-        evidence=evidence,
-    )
-
-
-def _is_secret_key(key: str) -> bool:
-    key_lower = key.lower()
-    return any(secret_key in key_lower for secret_key in SECRET_KEYS)
-
-
-def _looks_like_vault_token(token: str) -> bool:
-    return len(token) >= 16 and not any(ch.isspace() for ch in token)
-
-
-def _safe_excerpt(logs: str, limit: int = 500) -> str:
-    excerpt = logs[-limit:]
-    for key in SECRET_KEYS:
-        excerpt = re.sub(
-            rf'(?i)({key}[A-Z0-9_ -]*[:=]\s*["\']?)(?:Bearer\s+)?[^\s"\']+',
-            r"\1***REDACTED***",
-            excerpt,
-        )
-    return excerpt
-
-
-def _resolve_env_suffix(value: str, env: str) -> str:
-    suffix = "" if env == "production" else f"-{env}"
-    return value.replace("${ENV_SUFFIX}", suffix)
-
-
-def _vault_addr_from_env(env_vars: dict[str, str | None]) -> str | None:
-    if env_vars.get("VAULT_ADDR"):
-        return env_vars["VAULT_ADDR"]
-    if env_vars.get("INTERNAL_DOMAIN"):
-        return f"https://vault.{env_vars['INTERNAL_DOMAIN']}"
-    return None
-
-
 def _ssh(host: str, command: str) -> subprocess.CompletedProcess[str]:
-    """Run a read-only command over SSH against `host`.
-
-    Normally invoked from inside the VPS (the iac-runner container), where root's
-    default SSH identity/known_hosts already trust `host`, so no `-i`/`-p` flags are
-    needed. A GitHub Actions runner has neither (#531): when the same
-    INFRA2_WATCHDOG_SSH_KEY_PATH/_PORT/_USER env vars the watchdog jobs
-    already provision (see .github/workflows/ops-checks.yml's "Configure SSH key"
-    steps) are present, use them explicitly instead of relying on ambient SSH config.
-    Absent those env vars, behavior is byte-identical to before this change.
-    """
+    """Run a read-only command over SSH against host."""
     args = [
         "ssh",
         "-o",
@@ -1081,14 +269,6 @@ def _remote_container_state(host: str, container_name: str) -> dict[str, Any]:
         "state": state.get("Status"),
         "health": health,
         "restart_count": data.get("RestartCount", 0),
-        # (#531) Raw ISO-8601 StartedAt string -- the start of the CURRENT
-        # run, i.e. the time of the most recent restart (or creation, if
-        # never restarted). classify_container() parses this with
-        # libs.deploy_queue.parse_epoch_seconds to decide whether a high
-        # restart_count is still recent enough to matter. Kept as the raw
-        # string here (this is a thin collection adapter -- parsing belongs
-        # in the pure classifier, matching classify_rendered_env's mtime
-        # handling).
         "started_at": state.get("StartedAt"),
         "mounts": mounts,
     }
@@ -1116,13 +296,6 @@ def _remote_secret_file_state(host: str, vault_agent_container: str) -> dict[str
 
 
 def _remote_template_sha256(host: str, vault_agent_container: str) -> str:
-    """sha256 of the template the agent has mounted, computed inside the container.
-
-    The hash, not the content: this only has to answer "is the deployed template the one
-    the release ships", and hashing in place keeps the template text off the wire and out
-    of any log. Empty string when the file or the container is unreadable — an absent
-    answer must not read as a mismatch.
-    """
     command = (
         f"docker exec {shlex.quote(vault_agent_container)} "
         "sh -lc 'sha256sum /etc/vault/secrets.ctmpl 2>/dev/null | cut -d\" \" -f1'"
@@ -1131,25 +304,7 @@ def _remote_template_sha256(host: str, vault_agent_container: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
-def _release_template_sha256(service: "VaultService") -> str:
-    """sha256 of the same template as the checked-out release declares it."""
-    import hashlib
-
-    path = REPO_ROOT / service.secret_template_path
-    if not path.is_file():
-        return ""
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
 def _remote_secret_file_text(host: str, vault_agent_container: str) -> str:
-    """Read the raw rendered secrets file content (read-only `cat`).
-
-    Unlike `_remote_secret_file_state`, this returns the actual KEY=VALUE
-    content so `classify_optional_field_inertness` (#526) can check specific
-    watchlisted fields for emptiness -- `collect_live_observations` only calls
-    this for services that have an `OPTIONAL_INERT_FIELD_WATCHLIST` entry, to
-    keep secret-content exposure scoped to what the audit actually needs.
-    """
     command = (
         f"docker exec {shlex.quote(vault_agent_container)} "
         "sh -lc 'cat /vault/secrets/.env 2>/dev/null'"
@@ -1163,17 +318,6 @@ def _remote_secret_file_text(host: str, vault_agent_container: str) -> str:
 def _remote_container_logs(
     host: str, container_name: str, *, since: str = DEFAULT_LOG_SINCE
 ) -> str:
-    """Recent stdout+stderr, time-bounded by `since` (a `docker logs
-    --since`-compatible duration like "1h").
-
-    (#531) `--tail 200` alone has no notion of *when* those 200 lines were
-    written -- a long-lived, sparsely-logging container's tail window can
-    still contain a resolved incident's crash-loop spam from weeks ago, which
-    `classify_vault_agent_logs`'s substring matching would then misattribute
-    to the present. `--since` bounds that; `--tail 200` is kept as a
-    belt-and-suspenders cap on volume within the window, not the recency
-    control. See DEFAULT_LOG_SINCE's comment for how the default was picked.
-    """
     result = _ssh(
         host,
         f"docker logs --since {shlex.quote(since)} --tail 200 "
