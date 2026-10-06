@@ -17,6 +17,7 @@ import httpx
 import pytest
 
 from libs.iac_runner_client import (
+    STATUS_NOT_FOUND_GRACE_SECONDS,
     _sign,
     poll_platform_deploy_status,
     status_poll_attempts,
@@ -210,8 +211,9 @@ def test_poll_tolerates_transient_not_found_then_settles():
 
 
 def test_poll_times_out_if_only_not_found():
-    # a deploy that never becomes visible exhausts the budget as TimeoutError (the same
-    # contract as a stuck "running"), not an immediate raise.
+    # a deploy that stays invisible inside the not_found grace exhausts the budget as
+    # TimeoutError (the same contract as a stuck "running"), not an immediate raise.
+    # The clock is fixed, so no time passes and the grace cannot end the poll first.
     _calls, transport = _capture([({"status": "not_found"}, 404)])
     with pytest.raises(TimeoutError, match="did not settle"):
         poll_platform_deploy_status(
@@ -221,6 +223,7 @@ def test_poll_times_out_if_only_not_found():
             secret=SECRET,
             attempts=3,
             interval=0,
+            now=lambda: 1700000000.0,
             sleep=lambda *_: None,
             nonce_factory=lambda: "nonce123",
             transport=transport,
@@ -421,6 +424,123 @@ def test_poll_fails_naming_the_restart_when_the_gateway_stays_down_past_the_grac
             transport=transport,
             gateway_grace=180.0,
         )
+
+
+# --- #666: a not_found answer that lasts is a lost request, not a slow one ----------
+
+
+def _virtual_clock():
+    """A clock that moves only when ``sleep`` runs, so a test controls elapsed time."""
+    moment = [1700000000.0]
+
+    def now():
+        return moment[0]
+
+    def sleep(seconds):
+        moment[0] += seconds
+
+    return now, sleep
+
+
+def _poll_with_virtual_clock(responses, **kw):
+    now, sleep = _virtual_clock()
+    calls, transport = _capture(responses)
+    kw.setdefault("attempts", 335)
+    result = poll_platform_deploy_status(
+        env="staging",
+        ref=SHA,
+        base_url="u",
+        secret=SECRET,
+        interval=10.0,
+        now=now,
+        sleep=sleep,
+        nonce_factory=lambda: "nonce123",
+        transport=transport,
+        **kw,
+    )
+    return result, calls
+
+
+_NOT_FOUND = ({"status": "not_found"}, 404)
+
+
+def test_poll_fails_a_lost_request_after_the_not_found_grace_not_the_full_budget():
+    """#666, 2026-10-05: not_found for 55 minutes. The poll must fail at the grace."""
+    now, sleep = _virtual_clock()
+    calls, transport = _capture([_NOT_FOUND])
+    with pytest.raises(RuntimeError) as excinfo:
+        poll_platform_deploy_status(
+            env="staging",
+            ref=SHA,
+            base_url="u",
+            secret=SECRET,
+            attempts=335,
+            interval=10.0,
+            now=now,
+            sleep=sleep,
+            nonce_factory=lambda: "nonce123",
+            transport=transport,
+        )
+    message = str(excinfo.value)
+    assert "the runner has no record of this deployment" in message
+    assert "recreated between the request and the first poll (#666)" in message
+    assert SHA[:12] in message
+    assert "staging" in message
+    # polls at t=0,10,..,90 are inside the 90 s grace; the poll at t=100 ends it.
+    assert len(calls) == 11
+    assert "for 100s" in message
+    assert STATUS_NOT_FOUND_GRACE_SECONDS == 90.0
+
+
+def test_poll_honors_a_custom_not_found_grace():
+    calls, transport = _capture([_NOT_FOUND])
+    now, sleep = _virtual_clock()
+    with pytest.raises(RuntimeError, match="no record of this deployment"):
+        poll_platform_deploy_status(
+            env="staging",
+            ref=SHA,
+            base_url="u",
+            secret=SECRET,
+            attempts=335,
+            interval=10.0,
+            not_found_grace=25.0,
+            now=now,
+            sleep=sleep,
+            nonce_factory=lambda: "nonce123",
+            transport=transport,
+        )
+    # polls at t=0,10,20 are inside 25 s; the poll at t=30 ends it.
+    assert len(calls) == 4
+
+
+def test_poll_tolerates_not_found_that_ends_inside_the_grace():
+    """Nine not_found polls span 80 s (t=0..80), still inside the 90 s grace."""
+    result, calls = _poll_with_virtual_clock(
+        [_NOT_FOUND] * 9 + [({"status": "completed"}, 200)]
+    )
+    assert result["status"] == "completed"
+    assert len(calls) == 10
+
+
+@pytest.mark.parametrize(
+    "interruption",
+    [({"status": "running"}, 200), ({}, 502)],
+    ids=["running", "gateway-502"],
+)
+def test_poll_restarts_the_not_found_timer_after_any_other_answer(interruption):
+    """Two not_found runs of 50 s and 60 s: the sum is 110 s, each run is under 90 s.
+
+    Without the reset the poll would fail at t=100, inside the second run.
+    """
+    responses = (
+        [_NOT_FOUND] * 6  # t=0..50
+        + [interruption]  # t=60
+        + [_NOT_FOUND] * 7  # t=70..130
+        + [({"status": "completed"}, 200)]  # t=140
+    )
+    result, calls = _poll_with_virtual_clock(responses)
+    assert result["status"] == "completed"
+    assert len(calls) == len(responses)
 
 
 def test_poll_raises_on_a_404_that_carries_an_empty_json_object():
