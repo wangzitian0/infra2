@@ -11,10 +11,12 @@ same bytes a full checkout would give — into ``.cache/app-manifests/<path>`` (
 from __future__ import annotations
 
 import http.client
+import os
 import socket
 import ssl
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -127,6 +129,25 @@ def manifest_file(path: str, *, root: Path = ROOT) -> Path:
     return cached_path(path, root=root)
 
 
+def _write_atomically(target: Path, data: bytes) -> None:
+    """Write ``data`` so a reader sees no file or the whole file, never part of it.
+
+    Two xdist workers, or two deploys in the iac-runner, can fetch and read the same
+    manifest at once (#1091). A temporary file in the same directory is renamed onto
+    the target, which is atomic on one filesystem."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(
+        dir=target.parent, prefix=f".{target.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+        os.replace(temporary, target)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
 def fetch_missing(
     paths: Iterable[str], *, root: Path = ROOT, fetch: Fetcher = _github_raw
 ) -> list[str]:
@@ -142,8 +163,7 @@ def fetch_missing(
             continue
         sha = submodule_commit(root, f"{parts[0]}/{parts[1]}")
         url = f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{parts[1]}/{sha}/{'/'.join(parts[2:])}"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(fetch(url))
+        _write_atomically(target, fetch(url))
         fetched.append(f"{path} @ {sha[:7]}")
     return fetched
 
