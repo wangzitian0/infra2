@@ -98,48 +98,7 @@ def _ensure_admin_alias(c, container_name: str, e: dict) -> bool:
     return True
 
 
-@task
-def create_app_bucket(
-    c,
-    bucket_name,
-    access_key=None,
-    secret_key=None,
-    enable_encryption=False,
-    lifecycle_days=90,
-    enable_versioning=False,
-    public_download=False,
-):
-    """Create S3 bucket with security best practices for application usage.
-
-    Args:
-        bucket_name: Name of the bucket to create (e.g., 'finance-report-statements')
-        access_key: S3 access key for the application user (auto-generated if None)
-        secret_key: S3 secret key for the application user (auto-generated if None)
-        enable_encryption: Enable server-side encryption (SSE-S3) - default False
-        lifecycle_days: Auto-delete files after N days (default 90, 0 to disable)
-        enable_versioning: Enable bucket versioning - default False
-        public_download: Allow anonymous public download via direct object URLs - default False
-
-    Returns:
-        dict: {"access_key": str, "secret_key": str, "bucket": str}
-
-    Example:
-        # In downstream deploy.py pre_compose:
-        import sys
-        s3_shared = sys.modules.get("platform.03.s3.shared")
-        create_app_bucket = s3_shared.create_app_bucket
-
-        result = create_app_bucket(
-            c,
-            bucket_name="finance-report-statements",
-            lifecycle_days=90,
-        )
-        # Store result["access_key"] and result["secret_key"] in Vault
-    """
-    header("S3 Bucket Setup", f"Creating bucket: {bucket_name}")
-
-    e = get_env()
-    env_suffix = e.get("ENV_SUFFIX", "")
+def _resolve_s3_container(c, env_suffix: str) -> str:
     container_name = f"platform-s3{env_suffix}"
     probe = c.run(
         f"docker inspect --format '{{{{.State.Running}}}}' {container_name}",
@@ -148,20 +107,10 @@ def create_app_bucket(
     )
     if not probe.ok or probe.stdout.strip() != "true":
         container_name = f"platform-minio{env_suffix}"
+    return container_name
 
-    # Generate credentials if not provided
-    if not access_key:
-        access_key = bucket_name.replace("-", "_")  # e.g., finance_report_statements
-        info(f"Generated access_key: {access_key}")
 
-    if not secret_key:
-        secret_key = generate_password(32)
-        info("Generated secret_key: <hidden>")
-
-    if not _ensure_admin_alias(c, container_name, e):
-        return None
-
-    # Step 1: Create bucket
+def _create_bucket_resource(c, container_name: str, bucket_name: str) -> bool:
     info(f"Creating bucket '{bucket_name}'...")
     result = c.run(
         f"docker exec {container_name} mc mb local/{bucket_name} --ignore-existing",
@@ -170,12 +119,20 @@ def create_app_bucket(
     )
     if result.ok:
         success(f"Bucket '{bucket_name}' ready")
-    else:
-        error(f"Failed to create bucket: {result.stderr}")
-        return None
+        return True
+    error(f"Failed to create bucket: {result.stderr}")
+    return False
 
-    # Step 2: Set anonymous download policy. Application buckets default to
-    # private; external services should use short-lived presigned URLs instead.
+
+def _apply_bucket_policies(
+    c,
+    container_name: str,
+    bucket_name: str,
+    public_download: bool,
+    enable_encryption: bool,
+    lifecycle_days: int,
+    enable_versioning: bool,
+) -> bool:
     if public_download:
         info(
             "Setting bucket policy: public anonymous download (direct object URL access)..."
@@ -201,7 +158,6 @@ def create_app_bucket(
         else:
             warning(f"Failed to disable anonymous policy: {result.stderr}")
 
-    # Step 3: Enable server-side encryption
     if enable_encryption:
         info("Enabling server-side encryption (SSE-S3)...")
         result = c.run(
@@ -211,10 +167,8 @@ def create_app_bucket(
         )
         if not result.ok:
             error(f"Failed to enable encryption: {result.stderr}")
-            return None
+            return False
 
-        # Verify encryption support with PUT probe. RustFS without KMS accepts
-        # the encrypt command but rejects all PutObject operations with InvalidRequest.
         probe_key = f".probe-encryption-{bucket_name}"
         probe_put = c.run(
             f"docker exec {container_name} sh -c 'printf \"test\" | mc pipe local/{bucket_name}/{probe_key}'",
@@ -230,9 +184,8 @@ def create_app_bucket(
             error(
                 f"SSE-S3 enabled but write probe failed (backend lacks KMS support): {probe_put.stderr}"
             )
-            return None
+            return False
 
-        # Remove probe object
         c.run(
             f"docker exec {container_name} mc rm --force local/{bucket_name}/{probe_key}",
             hide=True,
@@ -240,7 +193,6 @@ def create_app_bucket(
         )
         success("Server-side encryption enabled and verified (SSE-S3)")
 
-    # Step 4: Set lifecycle policy (auto-delete old files)
     if lifecycle_days > 0:
         info(f"Setting lifecycle policy: auto-delete after {lifecycle_days} days...")
         result = c.run(
@@ -254,7 +206,6 @@ def create_app_bucket(
         else:
             warning(f"Failed to set lifecycle: {result.stderr}")
 
-    # Step 5: Enable versioning (optional)
     if enable_versioning:
         info("Enabling bucket versioning...")
         result = c.run(
@@ -267,7 +218,12 @@ def create_app_bucket(
         else:
             warning(f"Failed to enable versioning: {result.stderr}")
 
-    # Step 6: Create access key (service account)
+    return True
+
+
+def _provision_bucket_service_account(
+    c, container_name: str, bucket_name: str, access_key: str, secret_key: str
+) -> bool:
     info(f"Creating S3 service account: {access_key}...")
     result = c.run(
         f"docker exec {container_name} mc admin user add local {access_key} {secret_key}",
@@ -277,9 +233,8 @@ def create_app_bucket(
     if result.ok:
         success(f"Service account created: {access_key}")
     else:
-        # User might already exist, try to update secret
         warning("User may already exist, attempting to update...")
-        result = c.run(
+        c.run(
             f"docker exec {container_name} mc admin user remove local {access_key}",
             hide=True,
             warn=True,
@@ -293,9 +248,8 @@ def create_app_bucket(
             success(f"Service account updated: {access_key}")
         else:
             error(f"Failed to create/update user: {result.stderr}")
-            return None
+            return False
 
-    # Step 7: Attach bucket-scoped read/write policy to user
     safe_bucket_name = "".join(char if char.isalnum() else "_" for char in bucket_name)
     policy_name = f"{safe_bucket_name}_readwrite"
     policy_doc = {
@@ -354,11 +308,19 @@ def create_app_bucket(
     else:
         warning(f"Failed to attach policy: {result.stderr}")
 
-    # Verification
+    return True
+
+
+def _verify_bucket_setup(
+    c,
+    container_name: str,
+    bucket_name: str,
+    enable_encryption: bool,
+    lifecycle_days: int,
+) -> bool:
     header("Verification", f"Bucket '{bucket_name}' configuration")
     verification_ok = True
 
-    # Check bucket exists
     result = c.run(
         f"docker exec {container_name} mc ls local/{bucket_name}", hide=True, warn=True
     )
@@ -366,7 +328,6 @@ def create_app_bucket(
         warning(f"Bucket verification failed: unable to list '{bucket_name}'.")
         verification_ok = False
 
-    # Check policy
     result = c.run(
         f"docker exec {container_name} mc anonymous get local/{bucket_name}",
         hide=True,
@@ -378,7 +339,6 @@ def create_app_bucket(
         )
         verification_ok = False
 
-    # Check encryption
     if enable_encryption:
         result = c.run(
             f"docker exec {container_name} mc encrypt info local/{bucket_name}",
@@ -391,7 +351,6 @@ def create_app_bucket(
             )
             verification_ok = False
 
-    # Check lifecycle
     if lifecycle_days > 0:
         result = c.run(
             f"docker exec {container_name} mc ilm ls local/{bucket_name}",
@@ -408,6 +367,61 @@ def create_app_bucket(
         success("Bucket setup complete!")
     else:
         warning("Bucket setup completed with verification warnings")
+    return verification_ok
+
+
+@task
+def create_app_bucket(
+    c,
+    bucket_name,
+    access_key=None,
+    secret_key=None,
+    enable_encryption=False,
+    lifecycle_days=90,
+    enable_versioning=False,
+    public_download=False,
+):
+    """Create S3 bucket with security best practices for application usage."""
+    header("S3 Bucket Setup", f"Creating bucket: {bucket_name}")
+
+    e = get_env()
+    env_suffix = e.get("ENV_SUFFIX", "")
+    container_name = _resolve_s3_container(c, env_suffix)
+
+    if not access_key:
+        access_key = bucket_name.replace("-", "_")
+        info(f"Generated access_key: {access_key}")
+
+    if not secret_key:
+        secret_key = generate_password(32)
+        info("Generated secret_key: <hidden>")
+
+    if not _ensure_admin_alias(c, container_name, e):
+        return None
+
+    if not _create_bucket_resource(c, container_name, bucket_name):
+        return None
+
+    if not _apply_bucket_policies(
+        c,
+        container_name,
+        bucket_name,
+        public_download,
+        enable_encryption,
+        lifecycle_days,
+        enable_versioning,
+    ):
+        return None
+
+    if not _provision_bucket_service_account(
+        c, container_name, bucket_name, access_key, secret_key
+    ):
+        return None
+
+    _verify_bucket_setup(
+        c, container_name, bucket_name, enable_encryption, lifecycle_days
+    )
+
     info("Next steps:")
     info("  1. Store credentials in Vault (project/env/service secrets)")
     info(f"     - S3_ACCESS_KEY={access_key}")

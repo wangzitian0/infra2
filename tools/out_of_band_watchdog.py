@@ -1570,31 +1570,16 @@ def _deliver_report(
     return None
 
 
-def main(env: Mapping[str, str] | None = None) -> int:
-    """Run watchdog checks; page the owned classes, report the rest (#908)."""
-    current_env = env or os.environ
-    http_targets = parse_http_targets(
-        current_env.get("INFRA2_WATCHDOG_HTTP_TARGETS", "")
-    )
-    ssh_targets = parse_ssh_targets(current_env.get("INFRA2_WATCHDOG_SSH_TARGETS", ""))
-    timeout = _env_float(current_env, "INFRA2_WATCHDOG_HTTP_TIMEOUT", 10.0)
-    retry_max_attempts = _env_int(current_env, "INFRA2_WATCHDOG_RETRY_MAX_ATTEMPTS", 2)
-    retry_delay_seconds = _env_float(
-        current_env, "INFRA2_WATCHDOG_RETRY_DELAY_SECONDS", 60.0
-    )
-    ssh_config = load_ssh_config(current_env)
-
-    _emit_structured_log(
-        {
-            "event": "watchdog.run.start",
-            "timeout_seconds": timeout,
-            "retry_max_attempts": max(1, retry_max_attempts),
-            "retry_delay_seconds": max(0.0, retry_delay_seconds),
-            "http_target_count": len(http_targets),
-            "ssh_target_count": len(ssh_targets),
-        }
-    )
-
+def _run_all_watchdog_checks(
+    current_env: Mapping[str, str],
+    *,
+    http_targets: list[HttpTarget],
+    ssh_targets: list[SshTarget],
+    timeout: float,
+    retry_max_attempts: int,
+    retry_delay_seconds: float,
+    ssh_config: SshConfig,
+) -> list[CheckResult]:
     results = run_http_checks(
         http_targets,
         timeout,
@@ -1622,11 +1607,19 @@ def main(env: Mapping[str, str] | None = None) -> int:
             retry_delay_seconds=retry_delay_seconds,
         )
     )
-    results = [
+    return [
         replace(result, severity=_severity_for(result.name, result.failure_domain))
         for result in results
     ]
-    results, stale = split_stale_dokploy_records(results, now_ts=time.time())
+
+
+def _process_watchdog_routing(
+    current_env: Mapping[str, str],
+    results: list[CheckResult],
+    stale: list[tuple[CheckResult, str]],
+    *,
+    dry_run: bool,
+) -> tuple[list[CheckResult], list[CheckResult], frozenset[str] | None]:
     try:
         report_only: frozenset[str] | None = load_report_only_checks()
     except Exception as exc:  # noqa: BLE001 - unknown routing pages everything.
@@ -1642,7 +1635,6 @@ def main(env: Mapping[str, str] | None = None) -> int:
             )
         )
     paged, reported = route_failures(results, report_only)
-    dry_run = current_env.get("WATCHDOG_DRY_RUN") == "1"
     notes = [result.note for result in results if result.note]
     report = format_report_message(
         reported, stale, notes, run_url=_github_run_url(current_env)
@@ -1662,8 +1654,14 @@ def main(env: Mapping[str, str] | None = None) -> int:
         )
         results.append(report_failure)
         paged.append(report_failure)
+    return paged, reported, report_only
 
-    _record_issue_trail_verdicts(current_env, results, report_only)
+
+def _log_and_emit_check_results(
+    results: list[CheckResult],
+    stale: list[tuple[CheckResult, str]],
+    report_only: frozenset[str] | None,
+) -> None:
     for result in results:
         route = "" if result.ok else PAGE if pages(result, report_only) else REPORT
         _emit_structured_log(
@@ -1694,18 +1692,14 @@ def main(env: Mapping[str, str] | None = None) -> int:
         )
         print(f"STALE {result.name}: {_redact(result.detail)} [{reason}]")
 
-    if not paged:
-        resolve_code = _resolve_paged_state(current_env, dry_run=dry_run)
-        _emit_structured_log(
-            {
-                "event": "watchdog.run.complete",
-                "status": "ok" if not resolve_code else "fail",
-                "failure_count": 0,
-                "report_failure_count": len(reported),
-            }
-        )
-        return resolve_code
 
+def _handle_paged_failures(
+    current_env: Mapping[str, str],
+    paged: list[CheckResult],
+    reported: list[CheckResult],
+    *,
+    dry_run: bool,
+) -> int:
     message = format_failure_message(paged, run_url=_github_run_url(current_env))
     if dry_run:
         print(message)
@@ -1772,6 +1766,65 @@ def main(env: Mapping[str, str] | None = None) -> int:
         }
     )
     return 1
+
+
+def main(env: Mapping[str, str] | None = None) -> int:
+    """Run watchdog checks; page the owned classes, report the rest (#908)."""
+    current_env = env or os.environ
+    http_targets = parse_http_targets(
+        current_env.get("INFRA2_WATCHDOG_HTTP_TARGETS", "")
+    )
+    ssh_targets = parse_ssh_targets(current_env.get("INFRA2_WATCHDOG_SSH_TARGETS", ""))
+    timeout = _env_float(current_env, "INFRA2_WATCHDOG_HTTP_TIMEOUT", 10.0)
+    retry_max_attempts = _env_int(current_env, "INFRA2_WATCHDOG_RETRY_MAX_ATTEMPTS", 2)
+    retry_delay_seconds = _env_float(
+        current_env, "INFRA2_WATCHDOG_RETRY_DELAY_SECONDS", 60.0
+    )
+    ssh_config = load_ssh_config(current_env)
+
+    _emit_structured_log(
+        {
+            "event": "watchdog.run.start",
+            "timeout_seconds": timeout,
+            "retry_max_attempts": max(1, retry_max_attempts),
+            "retry_delay_seconds": max(0.0, retry_delay_seconds),
+            "http_target_count": len(http_targets),
+            "ssh_target_count": len(ssh_targets),
+        }
+    )
+
+    results = _run_all_watchdog_checks(
+        current_env,
+        http_targets=http_targets,
+        ssh_targets=ssh_targets,
+        timeout=timeout,
+        retry_max_attempts=retry_max_attempts,
+        retry_delay_seconds=retry_delay_seconds,
+        ssh_config=ssh_config,
+    )
+    results, stale = split_stale_dokploy_records(results, now_ts=time.time())
+
+    dry_run = current_env.get("WATCHDOG_DRY_RUN") == "1"
+    paged, reported, report_only = _process_watchdog_routing(
+        current_env, results, stale, dry_run=dry_run
+    )
+
+    _record_issue_trail_verdicts(current_env, results, report_only)
+    _log_and_emit_check_results(results, stale, report_only)
+
+    if not paged:
+        resolve_code = _resolve_paged_state(current_env, dry_run=dry_run)
+        _emit_structured_log(
+            {
+                "event": "watchdog.run.complete",
+                "status": "ok" if not resolve_code else "fail",
+                "failure_count": 0,
+                "report_failure_count": len(reported),
+            }
+        )
+        return resolve_code
+
+    return _handle_paged_failures(current_env, paged, reported, dry_run=dry_run)
 
 
 def page_findings(paged: list[CheckResult]) -> list[Finding]:

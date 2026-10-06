@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from typing import Any
 
 from libs.core.environ import infra_domain
 from libs.deploy.compose_lock import compose_write_lock
@@ -377,76 +378,16 @@ def verify_effective_config_hash(
         _sleep(max(1, interval))
 
 
-def deploy(
+def _validate_deploy_preconditions(
+    service: str,
     env: str,
-    code: str,
-    *,
     domain: str,
-    client,
-    service: str = "finance_report/app",
-    staging_validated: bool = False,
-    break_glass: bool = False,
-    repo: str | None = None,
-    image_ref: str | None = None,
-    iac_ref: str = "",
-    branch: str | None = None,
-    wait: bool = False,
-    timeout: int = 600,
-    model_overrides: dict[str, str] | None = None,
-    verify_vault: bool = False,
-    verify_config: bool = False,
-    verify_ingestion: bool = False,
-    _now=time.time,
-) -> DeployPlan:
-    """Deploy a resolved app commit to a fixed app environment.
-
-    code  -> libs.deploy.refs (main / vX.Y.Z / <sha>) -> a commit sha.
-    env   -> deploy_env_config (which compose, URL, suffix, default data).
-    data  -> derived from the env's data_default; callers cannot override it here.
-
-    Gating:
-    - The dynamic preview env has no fixed compose; bind one via the preview lifecycle.
-    - An env that requires-staging-first (prod) refuses to deploy a digest that has not
-      been validated on staging (promote-not-rebuild), unless break_glass=True — an
-      audited override (H5). staging_validated is supplied by the caller that checked a
-      staging deploy of this exact sha ran.
-
-    When wait=True, block until a new Dokploy deployment record for this compose reaches
-    a terminal-good status (raising on rollout error / timeout) — the readiness gate the
-    App-repo bash primitive used to own. Default False keeps the pure-assembly callers
-    (and the unit tests) side-effect-free beyond the env-update + deploy trigger.
-
-    Parity with the bash dokploy_deploy.sh this replaces (P2 step 4b):
-    - IAC_CONFIG_HASH=deploy-<sha>-<ts> is always set as a cache-bust so a same-digest
-      promote (staging->prod, promote-not-rebuild) is never a Dokploy no-op.
-    - the static infra keys (COMPOSE_PROFILES/TRAEFIK_ENABLE/INTERNAL_DOMAIN) are
-      re-asserted against drift.
-    - model_overrides (PRIMARY_MODEL/OCR_MODEL/VISION_MODEL, supplied by the staging-E2E
-      caller) are merged in when present.
-    - verify_vault=True gates the deploy on the compose's VAULT_APP_TOKEN TTL (>=48h).
-    - verify_config=True confirms post-deploy that the effective IAC_CONFIG_HASH advanced
-      to the one we pushed (fail-closed on a deploy that did not take).
-    The verify_* flags default False so the assembly unit tests need no live Dokploy/Vault;
-    the CLI enables them so a real workflow deploy gets the full bash-equivalent behavior.
-
-    branch (truealpha#447's root cause): the compose's OWN Dokploy github-source ref —
-    re-asserted on every call, mirroring libs.deploy.preview.up's identical re-assert
-    ("which also re-assert them on a redeploy"). Without this, a fixed compose's source
-    ref is whatever it was set to at creation and NEVER changes again — deploy_v2's
-    iac_ref is validated/recorded but never reaches the actual git source Dokploy clones.
-    finance_report's staging/prod happened to be created pointing at "main" (so it always
-    incidentally tracked HEAD); truealpha's was created pointing at a specific tag from
-    #478 (2026-07-11) and silently never advanced past it — every subsequent "successful"
-    deploy re-cloned that same 9-day-old commit, so infra2#562's secrets.ctmpl fix (and
-    this very re-assert fix) could not reach a running stack until this landed. None when
-    omitted (existing callers/tests unaffected); deploy_v2 always passes its clone_ref.
-
-    Also self-heals this service's Vault-generated runtime secrets before any mutation
-    (ensure_generated_secrets, truealpha#447's actual fix — the branch re-assert above
-    only explains why the symptom persisted after the initial code fix landed; this call
-    is what makes the fix durable rather than a one-off manual Vault seed).
-    """
-    # Explicit None checks: an empty string is a caller error, not a silent fallback.
+    code: str,
+    repo: str | None,
+    staging_validated: bool,
+    break_glass: bool,
+) -> tuple[str, Any, str, str]:
+    """Validate deploy inputs and environment requirements before mutation."""
     if not domain or any(c.isspace() for c in domain):
         raise ValueError(
             f"invalid domain {domain!r}: must be non-empty with no whitespace "
@@ -454,7 +395,6 @@ def deploy(
         )
     sha = resolve_to_sha(code, repo=repo) if repo is not None else resolve_to_sha(code)
     cfg = app_compose_env_config(service, env)
-    data_lane = cfg.data_default
 
     if cfg.dynamic:
         raise ValueError(
@@ -473,80 +413,56 @@ def deploy(
             "this exact digest, or break_glass=True as an audited override (H5)."
         )
 
-    # Computed here (not just where identity/openpanel need it below) because
-    # ensure_generated_secrets also needs it, before any mutation.
     deploy_environment = {"prod": "production"}.get(env.strip().lower(), env)
+    return sha, cfg, cfg.data_default, deploy_environment
 
-    # Fail closed BEFORE any mutation if this compose can't actually authenticate to
-    # Vault — unconditional (unlike the legacy VAULT_APP_TOKEN check below), matching
-    # the legacy Deployer.composing() path where this has always been a hard gate, not
-    # an opt-in.
-    assert_approle_creds_present(service, client, cfg.compose_id)
 
-    # Self-heal BEFORE any mutation if this service's Vault-generated runtime secrets
-    # (e.g. truealpha's SECRET_KEY, #447) are missing — a fresh/rotated env would
-    # otherwise ship a crash-looping app with no signal until it's already deployed.
+def _preflight_deploy(
+    service: str,
+    client: Any,
+    compose_id: str,
+    deploy_environment: str,
+    verify_vault: bool,
+) -> None:
+    """Fail closed on auth or token defects and ensure required secrets exist."""
+    assert_approle_creds_present(service, client, compose_id)
     ensure_generated_secrets(service, deploy_environment)
-
-    # Fail closed BEFORE any mutation if the compose's Vault token can't carry the deploy.
-    # preflight_vault_token resolves the shared Vault host itself now — no domain param
-    # to get wrong (#550/#561: this app's own routing domain must never reach it).
     if verify_vault:
-        preflight_vault_token(client, cfg.compose_id)
+        preflight_vault_token(client, compose_id)
 
-    # The registry publishes images under the 7-char short sha (`git rev-parse --short`,
-    # and the promote path's `${sha:0:7}`); pushing the full 40-char sha as IMAGE_TAG
-    # would make Dokploy pull a tag that was never published. The canonical full sha
-    # stays in DeployPlan.sha as the commit identity; only the image-addressable env
-    # carries the short form (GIT_COMMIT_SHA matches what CI bakes as a build-arg).
-    # IMAGE_TAG is whatever ref the artifact is PUBLISHED under: a release pulls its
-    # retained tag (image_ref="vX.Y.Z"), code pulls the short sha. image_ref is supplied by
-    # the resolver (resolve_image_ref); fall back to sha[:7] for direct/legacy callers.
-    image_tag = image_ref or sha[:7]
 
-    # Fail closed BEFORE any mutation: the code side's ORM/enum truth for the EXACT
-    # image about to be deployed, against the CURRENT live schema (#698, SSOT
-    # ops.standards.md Rule 7 / Infra-022 TODOWRITE:20). Runs inside the app's own
-    # published image over SSH to the VPS (libs.deploy.schema_gate) — the only place
-    # ``load_code_enums_for_service`` produces a real answer; infra2's own environment
-    # cannot import the app's ORM. A discrepancy (exit 1) and NOT EVALUATED (exit 3 —
-    # missing DB URL / a failed code-side import, #718 review) are BOTH blocking, same
-    # as an SSH/docker transport failure — there is no silent pass. Only services
-    # registered in tools.pre_deploy_schema_check.ENUM_SOURCES are gated
-    # (schema_gate.gate_applies) — a service without persistent enums registered there
-    # is unaffected by this check.
-    #
-    # rollback_class is CAPTURED (not just raised-on-block) and carried into the
-    # returned DeployPlan below: a passing deploy still records its ROLLBACK_CLASS so
-    # an operator deciding whether a LATER rollback of this exact release is safe reads
-    # it from the deploy record instead of re-running the check (Infra-022 T3.2).
-    rollback_class: str | None = None
-    if schema_gate.gate_applies(service):
-        from libs.core.registry import service_attrs
+def _evaluate_schema_gate(service: str, cfg: Any, image_tag: str) -> str | None:
+    """Run pre-deploy schema gate when applicable to the service."""
+    if not schema_gate.gate_applies(service):
+        return None
+    from libs.core.registry import service_attrs
 
-        meta = service_attrs().get(service)
-        if meta is None or not meta.compose_path:
-            raise ValueError(
-                f"{service}: pre-deploy schema gate is registered for this service but "
-                "it has no compose_path to locate its vault-agent container from"
-            )
-        rollback_class = schema_gate.run_schema_gate(
-            service,
-            compose_path=meta.compose_path,
-            env_suffix=cfg.env_suffix,
-            image_ref=image_tag,
+    meta = service_attrs().get(service)
+    if meta is None or not meta.compose_path:
+        raise ValueError(
+            f"{service}: pre-deploy schema gate is registered for this service but "
+            "it has no compose_path to locate its vault-agent container from"
         )
+    return schema_gate.run_schema_gate(
+        service,
+        compose_path=meta.compose_path,
+        env_suffix=cfg.env_suffix,
+        image_ref=image_tag,
+    )
 
-    # IAC_CONFIG_HASH cache-bust:
-    # Under standard promote, this changes on every call (ms resolution) so a same-digest
-    # promote forces a redeploy.
-    # Under fast_swap (R17, #750), a deterministic hash based on image tag and iac_ref
-    # is used so vault-agent is recreated only when code or infra configuration actually
-    # changes, eliminating container restart downtime during app swaps.
-    if cfg.fast_swap and iac_ref:
-        config_hash = f"deploy-{image_tag}-{iac_ref[:7]}"
-    else:
-        config_hash = f"deploy-{image_tag}-{int(_now() * 1000)}"
+
+def _build_deploy_env_vars(
+    service: str,
+    env: str,
+    domain: str,
+    deploy_environment: str,
+    cfg: Any,
+    image_tag: str,
+    iac_ref: str,
+    config_hash: str,
+    model_overrides: dict[str, str] | None,
+) -> tuple[dict[str, str], Any]:
+    """Assemble all environment variables for the deployment compose."""
     env_vars = {
         "IMAGE_TAG": image_tag,
         "GIT_COMMIT_SHA": image_tag,
@@ -573,26 +489,11 @@ def deploy(
     env_vars.update(identity.deploy_env())
     env_vars["OTEL_SERVICE_NAME"] = identity.service_name
     env_vars["OTEL_RESOURCE_ATTRIBUTES"] = identity.otel_resource_attributes()
-    # #372: the finance_report app frontend reads OPENPANEL_CLIENT_ID at runtime
-    # (server layout -> <Analytics>). This fixed-compose path never ran the app's
-    # pre_compose, so the per-env client id was dropped and analytics never started.
-    # Inject it here (single source: libs.observability.openpanel) for the fixed envs
-    # this path handles (staging/production); empty for any env without a project.
     env_vars.update(openpanel_env(env))
-    # #368: FE OTLP endpoint built ONCE (libs.deploy_env_config.otel_env) and injected
-    # here so the compose consumes it instead of re-constructing the otel.<domain> URL.
-    # SigNoz ingest is the shared platform instance (infra_domain), never this app's own
-    # routing domain — an app-domain override would ship the frontend an otel.<app-domain>
-    # endpoint with no collector behind it (#550/#561).
     env_vars.update(otel_env(domain=infra_domain()))
     if model_overrides:
-        # only non-empty overrides (an unset override must not blank the running model)
         env_vars.update({k: v for k, v in model_overrides.items() if v})
 
-    # Service-specific compose env vars a Deployer subclass computes itself
-    # (Deployer.compose_env_overrides, truealpha#474) — this shared assembly has no
-    # way to know about one-off app routing vars like AppDeployer's APP_HOST. Same
-    # dynamic-import pattern as ensure_generated_secrets above.
     from libs.deploy.deployer import load_deployer_class
 
     deployer_cls = load_deployer_class(service)
@@ -602,75 +503,146 @@ def deploy(
                 env=deploy_environment, domain=domain, env_suffix=cfg.env_suffix
             )
         )
+    return env_vars, identity
 
-    # infra2#525: Dokploy's compose.one has no version/etag/updatedAt to gate the write
-    # on, and its deployment records carry no caller-supplied correlation id — so the
-    # whole read-modify-write-deploy-wait-verify sequence below is serialized per
-    # compose_id via an in-process advisory lock. This closes both the lost-update race
-    # (a concurrent update_compose_env clobbering this call's env write) and rollout
-    # cross-contamination (a concurrent deploy_compose landing a record wait_for_rollout
-    # could otherwise mistake for this call's own) for any caller in this process. It
-    # does NOT serialize across separate processes/CI runners — see
-    # libs/compose_lock.py for what covers that gap today.
-    with compose_write_lock(cfg.compose_id):
-        # update_compose_env merges with the existing compose env (keeps runtime-injected
-        # secrets/AppRole creds); we only override the digest + URL + suffix + infra keys.
-        # Snapshot deployment ids BEFORE triggering so wait_for_rollout watches the new one.
+
+def _execute_dokploy_rollout(
+    client: Any,
+    compose_id: str,
+    service: str,
+    env_vars: dict[str, str],
+    branch: str | None,
+    wait: bool,
+    timeout: int,
+    config_hash: str,
+    verify_config: bool,
+    verify_ingestion: bool,
+    env_suffix: str,
+    service_name: str,
+    deploy_environment: str,
+    image_tag: str,
+) -> None:
+    """Execute Dokploy compose deployment under compose write lock."""
+    with compose_write_lock(compose_id):
         before_ids = (
-            _deployment_ids(client.get_compose_deployments(cfg.compose_id))
+            _deployment_ids(client.get_compose_deployments(compose_id))
             if wait
             else set()
         )
         if branch:
-            client.update_compose(cfg.compose_id, branch=branch)
-        client.update_compose_env(cfg.compose_id, env_vars=env_vars)
+            client.update_compose(compose_id, branch=branch)
+        client.update_compose_env(compose_id, env_vars=env_vars)
         try:
-            # Captured immediately before triggering: the earliest wall-clock instant a
-            # deployment record OUR OWN call could have produced may carry (infra2#525
-            # finding 2 — see wait_for_rollout's min_started_at).
             trigger_epoch = time.time()
-            client.deploy_compose(cfg.compose_id)
+            client.deploy_compose(compose_id)
             if wait:
                 wait_for_rollout(
                     client,
-                    cfg.compose_id,
+                    compose_id,
                     before_ids,
                     timeout=timeout,
                     min_started_at=trigger_epoch,
                 )
-            # Confirm the effective config advanced to what we pushed (deploy actually took).
             if verify_config:
                 verify_effective_config_hash(
-                    client, cfg.compose_id, config_hash, timeout=timeout
+                    client, compose_id, config_hash, timeout=timeout
                 )
-            # The record said done; now the containers (#698): a rollout whose
-            # frontend is left `Created` behind an unhealthy backend is not a deploy.
             if wait:
-                verify_in_service(client, service, cfg.env_suffix, timeout=timeout)
-            # Opt-in: prove the just-deployed service.version actually ingests into SigNoz
-            # (logs+traces), not merely that the rollout/config advanced. This is the
-            # platform-side home of the deployed-version ingestion proof — the app emits
-            # OTLP and is backend-agnostic; infra2 owns confirming it landed. Default OFF
-            # because it depends on Docker-network ClickHouse access + telemetry flush
-            # timing; enable per-workflow once validated for the env.
+                verify_in_service(client, service, env_suffix, timeout=timeout)
             if verify_ingestion:
                 from libs.deploy.ingestion_verify import verify_deploy_ingestion
 
-                # ClickHouse URL resolution lives in deploy_ingestion_smoke (single owner,
-                # reusing the round-trip canary's env) — do not re-read it here.
                 verify_deploy_ingestion(
-                    service_name=identity.service_name,
+                    service_name=service_name,
                     environment=deploy_environment,
                     expected_version=image_tag,
                 )
         except Exception:
-            # #768: on a failed rollout/verify, surface the platform-layer state (Dokploy
-            # compose status, latest deployment error, platform-vs-app failure domain) into
-            # the step summary so triage separates a platform failure from an app failure
-            # without SSH. Best-effort — emit_failure_snapshot never raises — then re-raise
-            # the original deploy error unchanged.
-            emit_failure_snapshot(client, cfg.compose_id)
+            emit_failure_snapshot(client, compose_id)
             raise
+
+
+def deploy(
+    env: str,
+    code: str,
+    *,
+    domain: str,
+    client,
+    service: str = "finance_report/app",
+    staging_validated: bool = False,
+    break_glass: bool = False,
+    repo: str | None = None,
+    image_ref: str | None = None,
+    iac_ref: str = "",
+    branch: str | None = None,
+    wait: bool = False,
+    timeout: int = 600,
+    model_overrides: dict[str, str] | None = None,
+    verify_vault: bool = False,
+    verify_config: bool = False,
+    verify_ingestion: bool = False,
+    _now=time.time,
+) -> DeployPlan:
+    """Deploy a resolved app commit to a fixed app environment.
+
+    code  -> libs.deploy.refs (main / vX.Y.Z / <sha>) -> a commit sha.
+    env   -> deploy_env_config (which compose, URL, suffix, default data).
+    data  -> derived from the env's data_default; callers cannot override it here.
+    """
+    sha, cfg, data_lane, deploy_environment = _validate_deploy_preconditions(
+        service=service,
+        env=env,
+        domain=domain,
+        code=code,
+        repo=repo,
+        staging_validated=staging_validated,
+        break_glass=break_glass,
+    )
+
+    _preflight_deploy(
+        service=service,
+        client=client,
+        compose_id=cfg.compose_id,
+        deploy_environment=deploy_environment,
+        verify_vault=verify_vault,
+    )
+
+    image_tag = image_ref or sha[:7]
+    rollback_class = _evaluate_schema_gate(service, cfg, image_tag)
+
+    if cfg.fast_swap and iac_ref:
+        config_hash = f"deploy-{image_tag}-{iac_ref[:7]}"
+    else:
+        config_hash = f"deploy-{image_tag}-{int(_now() * 1000)}"
+
+    env_vars, identity = _build_deploy_env_vars(
+        service=service,
+        env=env,
+        domain=domain,
+        deploy_environment=deploy_environment,
+        cfg=cfg,
+        image_tag=image_tag,
+        iac_ref=iac_ref,
+        config_hash=config_hash,
+        model_overrides=model_overrides,
+    )
+
+    _execute_dokploy_rollout(
+        client=client,
+        compose_id=cfg.compose_id,
+        service=service,
+        env_vars=env_vars,
+        branch=branch,
+        wait=wait,
+        timeout=timeout,
+        config_hash=config_hash,
+        verify_config=verify_config,
+        verify_ingestion=verify_ingestion,
+        env_suffix=cfg.env_suffix,
+        service_name=identity.service_name,
+        deploy_environment=deploy_environment,
+        image_tag=image_tag,
+    )
 
     return DeployPlan(
         env=env,

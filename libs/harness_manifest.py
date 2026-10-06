@@ -126,6 +126,237 @@ def _error(findings: list[Finding], code: str, message: str) -> None:
     findings.append(Finding("error", code, message))
 
 
+def _validate_workspace_section(
+    root: Path, workspace: Any, findings: list[Finding]
+) -> dict[str, Any]:
+    if not isinstance(workspace, dict):
+        _error(findings, "workspace", "workspace must be a mapping")
+        return {}
+    if not isinstance(workspace.get("id"), str) or not workspace.get("id"):
+        _error(findings, "workspace-id", "workspace.id must be a non-empty string")
+
+    preferences = workspace.get("preferences", [])
+    if not isinstance(preferences, list) or not all(
+        isinstance(item, str) for item in preferences
+    ):
+        _error(findings, "preferences", "workspace.preferences must be a string list")
+    else:
+        for relative in preferences:
+            path = _inside(root, relative)
+            if path is None or not path.is_file():
+                _error(findings, "preference-path", f"missing preference: {relative}")
+    return workspace
+
+
+def _validate_repository_entry(
+    root: Path,
+    repository: Any,
+    index: int,
+    findings: list[Finding],
+    submodules_expected: bool,
+    runner: Runner,
+) -> tuple[str, str, str, str] | None:
+    label = f"repositories[{index}]"
+    if not isinstance(repository, dict):
+        _error(findings, "repository", f"{label} must be a mapping")
+        return None
+
+    required_strings = (
+        "id",
+        "path",
+        "checkout",
+        "role",
+        "governance",
+        "source",
+        "release_identity",
+    )
+    missing = [
+        field
+        for field in required_strings
+        if not isinstance(repository.get(field), str) or not repository[field]
+    ]
+    if missing:
+        _error(findings, "repository-fields", f"{label} missing: {', '.join(missing)}")
+        return None
+
+    repository_id = repository["id"]
+    relative = repository["path"]
+    checkout = repository["checkout"]
+    role = repository["role"]
+    governance = repository["governance"]
+
+    if checkout not in ALLOWED_CHECKOUTS:
+        _error(findings, "checkout", f"{repository_id} has unsupported checkout")
+    elif checkout == "root" and relative != ".":
+        _error(
+            findings,
+            "root-checkout",
+            f"{repository_id} root checkout must use path '.'",
+        )
+    elif checkout == "submodule" and relative == ".":
+        _error(
+            findings,
+            "submodule-checkout",
+            f"{repository_id} submodule checkout cannot use path '.'",
+        )
+
+    if role not in ALLOWED_ROLES:
+        _error(findings, "role", f"{repository_id} has unsupported role: {role}")
+    if governance not in ALLOWED_GOVERNANCE:
+        _error(
+            findings,
+            "governance",
+            f"{repository_id} has unsupported governance: {governance}",
+        )
+
+    rules_layer = repository.get("rules_layer")
+    if rules_layer is not None and (
+        not isinstance(rules_layer, str) or rules_layer not in ALLOWED_RULES_LAYER
+    ):
+        _error(
+            findings,
+            "rules-layer",
+            f"{repository_id} has unsupported rules_layer: {rules_layer!r}",
+        )
+
+    contract = repository.get("contract")
+    if contract is not None:
+        if not isinstance(contract, str) or contract not in ALLOWED_CONTRACTS:
+            _error(
+                findings,
+                "contract",
+                f"{repository_id} has unsupported contract: {contract!r}",
+            )
+            contract = "snapshot" if role == "external-application" else "pinned"
+    else:
+        contract = "snapshot" if role == "external-application" else "pinned"
+
+    expected_gov = {
+        "infrastructure-control-plane": "local",
+        "cross-repository-contract": "coordinated",
+        "workspace-tooling": "coordinated",
+        "external-application": "autonomous",
+    }.get(role)
+    if expected_gov is not None and governance != expected_gov:
+        _error(
+            findings,
+            "governance-role",
+            f"{repository_id} role {role} requires governance {expected_gov}",
+        )
+
+    authority = repository.get("authority")
+    if (
+        not isinstance(authority, list)
+        or not authority
+        or not all(isinstance(item, str) for item in authority)
+    ):
+        _error(
+            findings,
+            "authority",
+            f"{repository_id} authority must be a non-empty string list",
+        )
+        authority = []
+
+    is_optional = bool(repository.get("optional", False))
+    uninitialized_level = (
+        "warning"
+        if is_optional or (checkout == "submodule" and not submodules_expected)
+        else "error"
+    )
+
+    checkout_path = _inside(root, relative)
+    if checkout_path is None:
+        _error(findings, "repository-path", f"{repository_id} escapes workspace root")
+        return repository_id, relative, checkout, role
+
+    if not checkout_path.is_dir():
+        findings.append(
+            Finding(
+                uninitialized_level,
+                "checkout-missing",
+                f"{repository_id} checkout is not initialized: {relative}",
+            )
+        )
+        return repository_id, relative, checkout, role
+
+    if checkout == "submodule" and not (checkout_path / ".git").exists():
+        findings.append(
+            Finding(
+                uninitialized_level,
+                "checkout-uninitialized",
+                f"{repository_id} submodule is not initialized: {relative}",
+            )
+        )
+        return repository_id, relative, checkout, role
+
+    if (
+        checkout == "submodule"
+        and (checkout_path / ".git").exists()
+        and submodules_expected
+    ):
+        parent_pin = _parent_pin(root, relative, runner=runner)
+        head = _value(checkout_path, "rev-parse", "HEAD^{commit}", runner=runner)
+        if parent_pin and head and parent_pin != head.lower():
+            if contract == "pinned":
+                findings.append(
+                    Finding(
+                        "error",
+                        "pin-drift",
+                        f"{repository_id} pinned submodule has drifted: checkout={head[:12]} parent={parent_pin[:12]}",
+                    )
+                )
+            elif contract == "snapshot":
+                findings.append(
+                    Finding(
+                        "warning",
+                        "pin-drift",
+                        f"{repository_id} snapshot submodule has advanced: checkout={head[:12]} parent={parent_pin[:12]}",
+                    )
+                )
+
+    for authority_path in authority:
+        resolved = _inside(checkout_path, authority_path)
+        if resolved is None or not resolved.is_file():
+            _error(
+                findings,
+                "authority-path",
+                f"{repository_id} missing authority: {authority_path}",
+            )
+
+    return repository_id, relative, checkout, role
+
+
+def _validate_workspace_focus(
+    workspace: dict[str, Any],
+    repository_ids: set[str],
+    governance_by_id: dict[str, str],
+    role_by_id: dict[str, str],
+    findings: list[Finding],
+) -> None:
+    focus = workspace.get("focus")
+    if (
+        not isinstance(focus, list)
+        or not focus
+        or not all(isinstance(item, str) for item in focus)
+    ):
+        _error(findings, "focus", "workspace.focus must be a non-empty string list")
+        return
+    if len(focus) != len(set(focus)):
+        _error(findings, "focus-duplicate", "workspace.focus contains duplicates")
+    for repository_id in focus:
+        if repository_id not in repository_ids:
+            _error(findings, "focus-id", f"unknown focus repository: {repository_id}")
+        elif (
+            governance_by_id.get(repository_id) == "autonomous"
+            or role_by_id.get(repository_id) == "external-application"
+        ):
+            _error(
+                findings,
+                "focus-autonomy",
+                f"autonomous repository cannot be workspace focus: {repository_id}",
+            )
+
+
 def validate_manifest(
     root: Path,
     manifest: dict[str, Any],
@@ -141,23 +372,7 @@ def validate_manifest(
             f"schema_version must be {SCHEMA_VERSION}",
         )
 
-    workspace = manifest.get("workspace")
-    if not isinstance(workspace, dict):
-        _error(findings, "workspace", "workspace must be a mapping")
-        workspace = {}
-    if not isinstance(workspace.get("id"), str) or not workspace.get("id"):
-        _error(findings, "workspace-id", "workspace.id must be a non-empty string")
-
-    preferences = workspace.get("preferences", [])
-    if not isinstance(preferences, list) or not all(
-        isinstance(item, str) for item in preferences
-    ):
-        _error(findings, "preferences", "workspace.preferences must be a string list")
-    else:
-        for relative in preferences:
-            path = _inside(root, relative)
-            if path is None or not path.is_file():
-                _error(findings, "preference-path", f"missing preference: {relative}")
+    workspace = _validate_workspace_section(root, manifest.get("workspace"), findings)
 
     repositories = manifest.get("repositories")
     if not isinstance(repositories, list):
@@ -171,40 +386,22 @@ def validate_manifest(
     role_by_id: dict[str, str] = {}
     root_checkouts: list[str] = []
 
-    required_strings = (
-        "id",
-        "path",
-        "checkout",
-        "role",
-        "governance",
-        "source",
-        "release_identity",
-    )
     for index, repository in enumerate(repositories):
-        label = f"repositories[{index}]"
-        if not isinstance(repository, dict):
-            _error(findings, "repository", f"{label} must be a mapping")
+        res = _validate_repository_entry(
+            root=root,
+            repository=repository,
+            index=index,
+            findings=findings,
+            submodules_expected=submodules_expected,
+            runner=runner,
+        )
+        if res is None:
             continue
-
-        missing = [
-            field
-            for field in required_strings
-            if not isinstance(repository.get(field), str) or not repository[field]
-        ]
-        if missing:
-            _error(
-                findings, "repository-fields", f"{label} missing: {', '.join(missing)}"
-            )
-            continue
-
-        repository_id = repository["id"]
-        relative = repository["path"]
-        role = repository["role"]
-        governance = repository["governance"]
+        repository_id, relative, checkout, role = res
         repository_ids.add(repository_id)
-        governance_by_id[repository_id] = governance
+        governance_by_id[repository_id] = repository.get("governance", "")
         role_by_id[repository_id] = role
-        if repository["checkout"] == "root":
+        if checkout == "root":
             root_checkouts.append(repository_id)
 
         if repository_id in seen_ids:
@@ -216,152 +413,6 @@ def validate_manifest(
         seen_ids.add(repository_id)
         seen_paths.add(relative)
 
-        if repository["checkout"] not in ALLOWED_CHECKOUTS:
-            _error(findings, "checkout", f"{repository_id} has unsupported checkout")
-        elif repository["checkout"] == "root" and relative != ".":
-            _error(
-                findings,
-                "root-checkout",
-                f"{repository_id} root checkout must use path '.'",
-            )
-        elif repository["checkout"] == "submodule" and relative == ".":
-            _error(
-                findings,
-                "submodule-checkout",
-                f"{repository_id} submodule checkout cannot use path '.'",
-            )
-        if role not in ALLOWED_ROLES:
-            _error(findings, "role", f"{repository_id} has unsupported role: {role}")
-        if governance not in ALLOWED_GOVERNANCE:
-            _error(
-                findings,
-                "governance",
-                f"{repository_id} has unsupported governance: {governance}",
-            )
-        rules_layer = repository.get("rules_layer")
-        if rules_layer is not None and (
-            not isinstance(rules_layer, str) or rules_layer not in ALLOWED_RULES_LAYER
-        ):
-            _error(
-                findings,
-                "rules-layer",
-                f"{repository_id} has unsupported rules_layer: {rules_layer!r}",
-            )
-        contract = repository.get("contract")
-        if contract is not None:
-            if not isinstance(contract, str) or contract not in ALLOWED_CONTRACTS:
-                _error(
-                    findings,
-                    "contract",
-                    f"{repository_id} has unsupported contract: {contract!r}",
-                )
-                contract = "snapshot" if role == "external-application" else "pinned"
-        else:
-            contract = "snapshot" if role == "external-application" else "pinned"
-        expected_governance = {
-            "infrastructure-control-plane": "local",
-            "cross-repository-contract": "coordinated",
-            "workspace-tooling": "coordinated",
-            "external-application": "autonomous",
-        }.get(role)
-        if expected_governance is not None and governance != expected_governance:
-            _error(
-                findings,
-                "governance-role",
-                f"{repository_id} role {role} requires governance {expected_governance}",
-            )
-
-        authority = repository.get("authority")
-        if (
-            not isinstance(authority, list)
-            or not authority
-            or not all(isinstance(item, str) for item in authority)
-        ):
-            _error(
-                findings,
-                "authority",
-                f"{repository_id} authority must be a non-empty string list",
-            )
-            authority = []
-
-        # optional: true is an explicit declaration that this repository may be
-        # legitimately uninitialized (e.g. workspace tooling not everyone needs day
-        # one). Absent/false is the default — an uninitialized checkout is then a
-        # real gap, not silently downgraded to a warning nobody reads (#506).
-        # submodules_expected=False (CI: no workflow runs `submodules: true`, by
-        # design, to keep the big app submodules out of infra CI's fetch) means NO
-        # submodule is ever checked out here — that's structural, not drift, so it
-        # can't be escalated to an error regardless of `optional`.
-        is_optional = bool(repository.get("optional", False))
-        uninitialized_level = (
-            "warning"
-            if is_optional
-            or (repository["checkout"] == "submodule" and not submodules_expected)
-            else "error"
-        )
-
-        checkout_path = _inside(root, relative)
-        if checkout_path is None:
-            _error(
-                findings, "repository-path", f"{repository_id} escapes workspace root"
-            )
-            continue
-        if not checkout_path.is_dir():
-            findings.append(
-                Finding(
-                    uninitialized_level,
-                    "checkout-missing",
-                    f"{repository_id} checkout is not initialized: {relative}",
-                )
-            )
-            continue
-        if (
-            repository["checkout"] == "submodule"
-            and not (checkout_path / ".git").exists()
-        ):
-            findings.append(
-                Finding(
-                    uninitialized_level,
-                    "checkout-uninitialized",
-                    f"{repository_id} submodule is not initialized: {relative}",
-                )
-            )
-            continue
-        if (
-            repository["checkout"] == "submodule"
-            and (checkout_path / ".git").exists()
-            and submodules_expected
-        ):
-            parent_pin = _parent_pin(root, relative, runner=runner)
-            head = _value(checkout_path, "rev-parse", "HEAD^{commit}", runner=runner)
-            if parent_pin and head and parent_pin != head.lower():
-                if contract == "pinned":
-                    findings.append(
-                        Finding(
-                            "error",
-                            "pin-drift",
-                            f"{repository_id} pinned submodule has drifted: "
-                            f"checkout={head[:12]} parent={parent_pin[:12]}",
-                        )
-                    )
-                elif contract == "snapshot":
-                    findings.append(
-                        Finding(
-                            "warning",
-                            "pin-drift",
-                            f"{repository_id} snapshot submodule has advanced: "
-                            f"checkout={head[:12]} parent={parent_pin[:12]}",
-                        )
-                    )
-        for authority_path in authority:
-            resolved = _inside(checkout_path, authority_path)
-            if resolved is None or not resolved.is_file():
-                _error(
-                    findings,
-                    "authority-path",
-                    f"{repository_id} missing authority: {authority_path}",
-                )
-
     if len(root_checkouts) != 1:
         _error(
             findings,
@@ -369,30 +420,9 @@ def validate_manifest(
             f"workspace must contain exactly one root checkout, found {len(root_checkouts)}",
         )
 
-    focus = workspace.get("focus")
-    if (
-        not isinstance(focus, list)
-        or not focus
-        or not all(isinstance(item, str) for item in focus)
-    ):
-        _error(findings, "focus", "workspace.focus must be a non-empty string list")
-    else:
-        if len(focus) != len(set(focus)):
-            _error(findings, "focus-duplicate", "workspace.focus contains duplicates")
-        for repository_id in focus:
-            if repository_id not in repository_ids:
-                _error(
-                    findings, "focus-id", f"unknown focus repository: {repository_id}"
-                )
-            elif (
-                governance_by_id.get(repository_id) == "autonomous"
-                or role_by_id.get(repository_id) == "external-application"
-            ):
-                _error(
-                    findings,
-                    "focus-autonomy",
-                    f"autonomous repository cannot be workspace focus: {repository_id}",
-                )
+    _validate_workspace_focus(
+        workspace, repository_ids, governance_by_id, role_by_id, findings
+    )
 
     return CheckResult(len(repositories), tuple(findings))
 

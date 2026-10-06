@@ -101,38 +101,223 @@ rm -f "$TMPENV"
         return False
 
 
+def _verify_authentik_auth(client, base_url: str) -> bool:
+    info("Verifying Authentik Root Token...")
+    resp = client.get(f"{base_url}/api/v3/core/users/me/")
+    if resp.status_code != 200:
+        error(f"Root token auth failed: {resp.status_code}")
+        return False
+    user_data = resp.json()
+    user = user_data.get("user", user_data)
+    success(f"Authenticated as: {user['username']}")
+    return True
+
+
+def _ensure_authentik_groups(
+    client, base_url: str, group_list: list[str]
+) -> list[str] | None:
+    info(f"Checking groups: {', '.join(group_list)}...")
+    group_pks = []
+    for group_name in group_list:
+        resp = client.get(f"{base_url}/api/v3/core/groups/?name={group_name}")
+        if resp.status_code != 200:
+            error(f"Failed to query groups: {resp.status_code}")
+            return None
+
+        results = resp.json()["results"]
+        if not results:
+            warning(f"Group '{group_name}' not found, creating...")
+            resp = client.post(
+                f"{base_url}/api/v3/core/groups/", json={"name": group_name}
+            )
+            if resp.status_code != 201:
+                error(f"Failed to create group: {resp.status_code}")
+                return None
+            group_pks.append(resp.json()["pk"])
+            success(f"Created group: {group_name}")
+        else:
+            group_pks.append(results[0]["pk"])
+            info(f"Found group: {group_name}")
+    return group_pks
+
+
+def _get_authentik_flows(client, base_url: str) -> tuple[str, str] | None:
+    resp = client.get(
+        f"{base_url}/api/v3/flows/instances/?slug=default-provider-authorization-implicit-consent"
+    )
+    if resp.status_code != 200 or not resp.json()["results"]:
+        error("Default authorization flow not found")
+        return None
+    auth_flow_uuid = resp.json()["results"][0]["pk"]
+
+    resp = client.get(
+        f"{base_url}/api/v3/flows/instances/?slug=default-provider-invalidation-flow"
+    )
+    if resp.status_code != 200 or not resp.json()["results"]:
+        resp = client.get(
+            f"{base_url}/api/v3/flows/instances/?slug=default-invalidation-flow"
+        )
+        if resp.status_code != 200 or not resp.json()["results"]:
+            error("Invalidation flow not found")
+            return None
+    invalidation_flow_uuid = resp.json()["results"][0]["pk"]
+    return auth_flow_uuid, invalidation_flow_uuid
+
+
+def _ensure_access_policies(
+    client, base_url: str, slug: str, group_list: list[str]
+) -> dict[str, str] | None:
+    info(f"Creating access policies (groups: {', '.join(group_list)})...")
+    policy_pks = {}
+
+    for group_name in group_list:
+        policy_name = f"{slug}-require-{group_name}"
+        resp = client.get(f"{base_url}/api/v3/policies/expression/?name={policy_name}")
+        if resp.status_code == 200 and resp.json()["results"]:
+            policy_pks[group_name] = resp.json()["results"][0]["pk"]
+            info(f"Policy already exists: {policy_name}")
+        else:
+            safe_group_name = group_name.replace("'", "\\'")
+            resp = client.post(
+                f"{base_url}/api/v3/policies/expression/",
+                json={
+                    "name": policy_name,
+                    "execution_logging": False,
+                    "expression": f"return ak_is_group_member(request.user, name='{safe_group_name}')",
+                },
+            )
+            if resp.status_code != 201:
+                error(
+                    f"Failed to create policy for group {group_name}: {resp.status_code} - {resp.text}"
+                )
+                return None
+            policy_pks[group_name] = resp.json()["pk"]
+            success(f"Created policy: require {group_name} membership")
+    return policy_pks
+
+
+def _ensure_proxy_provider(
+    client,
+    base_url: str,
+    slug: str,
+    external_host: str,
+    internal_url: str,
+    auth_flow_uuid: str,
+    invalidation_flow_uuid: str,
+) -> str | None:
+    provider_name = f"{slug}-proxy"
+    resp = client.get(f"{base_url}/api/v3/providers/proxy/")
+    if resp.status_code == 200:
+        for provider in resp.json()["results"]:
+            if provider["name"] == provider_name:
+                provider_id = provider["pk"]
+                info(f"Provider already exists: {provider_name} (pk: {provider_id})")
+                return provider_id
+
+    info(f"Creating proxy provider for {external_host}...")
+    resp = client.post(
+        f"{base_url}/api/v3/providers/proxy/",
+        json={
+            "name": provider_name,
+            "authorization_flow": auth_flow_uuid,
+            "invalidation_flow": invalidation_flow_uuid,
+            "mode": "forward_single",
+            "external_host": external_host,
+            "internal_host": internal_url,
+        },
+    )
+    if resp.status_code != 201:
+        error(f"Failed to create provider: {resp.status_code} - {resp.text}")
+        return None
+    provider_id = resp.json()["pk"]
+    success(f"Created proxy provider: {provider_id}")
+    return provider_id
+
+
+def _ensure_application(
+    client, base_url: str, name: str, slug: str, provider_id: str
+) -> tuple[str, str] | None:
+    resp = client.get(f"{base_url}/api/v3/core/applications/")
+    if resp.status_code == 200:
+        for app in resp.json()["results"]:
+            if app["slug"] == slug:
+                info(f"Application already exists: {name} (slug: {app['slug']})")
+                return app["slug"], app["pk"]
+
+    info(f"Creating application: {name}...")
+    resp = client.post(
+        f"{base_url}/api/v3/core/applications/",
+        json={
+            "name": name,
+            "slug": slug,
+            "provider": provider_id,
+        },
+    )
+    if resp.status_code != 201:
+        error(f"Failed to create application: {resp.status_code} - {resp.text}")
+        return None
+    app_data = resp.json()
+    success(f"Created application: {name} (slug: {app_data['slug']})")
+    return app_data["slug"], app_data["pk"]
+
+
+def _bind_policies_to_app(
+    client, base_url: str, app_pk: str, policy_pks: dict[str, str]
+) -> None:
+    info("Binding access policies to application...")
+    for group_name, policy_pk in policy_pks.items():
+        resp = client.post(
+            f"{base_url}/api/v3/policies/bindings/",
+            json={
+                "policy": policy_pk,
+                "target": app_pk,
+                "enabled": True,
+                "order": 0,
+                "timeout": 30,
+            },
+        )
+        if resp.status_code == 201:
+            success(f"Bound policy: {group_name} → application")
+        elif resp.status_code == 400 and "already exists" in resp.text.lower():
+            info(f"Policy binding already exists: {group_name}")
+        else:
+            warning(f"Failed to bind policy {group_name}: {resp.status_code}")
+
+
+def _configure_embedded_outpost(client, base_url: str, provider_id: str) -> None:
+    info("Configuring embedded outpost...")
+    resp = client.get(
+        f"{base_url}/api/v3/outposts/instances/?managed=goauthentik.io/outposts/embedded"
+    )
+    if resp.status_code == 200 and resp.json()["results"]:
+        outpost = resp.json()["results"][0]
+        outpost_pk = outpost["pk"]
+        current_providers = outpost.get("providers", [])
+
+        if provider_id not in current_providers:
+            current_providers.append(provider_id)
+            resp = client.patch(
+                f"{base_url}/api/v3/outposts/instances/{outpost_pk}/",
+                json={
+                    "providers": current_providers,
+                    "config": {"authentik_host": base_url},
+                },
+            )
+            if resp.status_code == 200:
+                success("Added provider to embedded outpost")
+            else:
+                warning(f"Failed to update outpost: {resp.status_code}")
+        else:
+            info("Provider already in outpost")
+    else:
+        warning("Embedded outpost not found - forward auth may not work")
+
+
 @task
 def create_proxy_app(
     c, name, slug, external_host, internal_host, port=None, allowed_groups="admins"
 ):
-    """Create SSO application with proxy provider and access policy
-    
-    Uses Authentik Root Token to create a forward-auth protected application.
-    By default, only users in 'admins' group can access.
-    
-    Args:
-        name: Application name (e.g., "Portal")
-        slug: Application slug (e.g., "portal")  
-        external_host: External URL (e.g., "https://home.example.com")
-        internal_host: Internal service (e.g., "platform-portal${ENV_SUFFIX}")
-        port: Internal port (default: 8080)
-        allowed_groups: Comma-separated group names (default: "admins")
-    
-    Example:
-        # Only admins can access
-        invoke authentik.shared.create-proxy-app \\
-            --name="Portal" \\
-            --slug="portal" \\
-            --external-host="https://home.example.com" \\
-            --internal-host="platform-portal${ENV_SUFFIX}"
-        
-        # Multiple groups
-        invoke authentik.shared.create-proxy-app \\
-            --name="App" --slug="app" \\
-            --external-host="https://app.example.com" \\
-            --internal-host="app" \\
-            --allowed-groups="admins,developers"
-    """
+    """Create SSO application with proxy provider and access policy."""
     import httpx
     from libs.env import get_secrets
 
@@ -141,7 +326,6 @@ def create_proxy_app(
     e = get_env()
     env_name = e.get("ENV", "production")
 
-    # Get Authentik Root Token from Vault
     authentik_secrets = get_secrets("platform", "authentik", env_name)
     root_token = authentik_secrets.get("root_token") or authentik_secrets.get(
         "api_token"
@@ -161,231 +345,48 @@ def create_proxy_app(
     internal_url = f"http://{internal_host}:{port}"
     group_list = [g.strip() for g in allowed_groups.split(",")]
 
+    client = httpx.Client(
+        verify=True, headers={"Authorization": f"Bearer {root_token}"}
+    )
     try:
-        client = httpx.Client(
-            verify=True, headers={"Authorization": f"Bearer {root_token}"}
-        )
-
-        # Test auth
-        info("Verifying Authentik Root Token...")
-        resp = client.get(f"{base_url}/api/v3/core/users/me/")
-        if resp.status_code != 200:
-            error(f"Root token auth failed: {resp.status_code}")
+        if not _verify_authentik_auth(client, base_url):
             return False
 
-        user_data = resp.json()
-        # Handle nested user object
-        user = user_data.get("user", user_data)
-        success(f"Authenticated as: {user['username']}")
-
-        # Ensure groups exist
-        info(f"Checking groups: {', '.join(group_list)}...")
-        group_pks = []
-        for group_name in group_list:
-            resp = client.get(f"{base_url}/api/v3/core/groups/?name={group_name}")
-            if resp.status_code != 200:
-                error(f"Failed to query groups: {resp.status_code}")
-                return False
-
-            results = resp.json()["results"]
-            if not results:
-                warning(f"Group '{group_name}' not found, creating...")
-                resp = client.post(
-                    f"{base_url}/api/v3/core/groups/", json={"name": group_name}
-                )
-                if resp.status_code != 201:
-                    error(f"Failed to create group: {resp.status_code}")
-                    return False
-                group_pks.append(resp.json()["pk"])
-                success(f"Created group: {group_name}")
-            else:
-                group_pks.append(results[0]["pk"])
-                info(f"Found group: {group_name}")
-
-        # Get auth flow UUID
-        resp = client.get(
-            f"{base_url}/api/v3/flows/instances/?slug=default-provider-authorization-implicit-consent"
-        )
-        if resp.status_code != 200 or not resp.json()["results"]:
-            error("Default authorization flow not found")
+        if _ensure_authentik_groups(client, base_url, group_list) is None:
             return False
 
-        auth_flow_uuid = resp.json()["results"][0]["pk"]
+        flows = _get_authentik_flows(client, base_url)
+        if not flows:
+            return False
+        auth_flow_uuid, invalidation_flow_uuid = flows
 
-        # Get invalidation flow UUID
-        resp = client.get(
-            f"{base_url}/api/v3/flows/instances/?slug=default-provider-invalidation-flow"
+        policy_pks = _ensure_access_policies(client, base_url, slug, group_list)
+        if policy_pks is None:
+            return False
+
+        provider_id = _ensure_proxy_provider(
+            client,
+            base_url,
+            slug,
+            external_host,
+            internal_url,
+            auth_flow_uuid,
+            invalidation_flow_uuid,
         )
-        if resp.status_code != 200 or not resp.json()["results"]:
-            # Try alternative flow name
-            resp = client.get(
-                f"{base_url}/api/v3/flows/instances/?slug=default-invalidation-flow"
-            )
-            if resp.status_code != 200 or not resp.json()["results"]:
-                error("Invalidation flow not found")
-                return False
-
-        invalidation_flow_uuid = resp.json()["results"][0]["pk"]
-
-        # Create group-based access policies and collect PKs for binding
-        info(f"Creating access policies (groups: {', '.join(group_list)})...")
-        policy_pks = {}  # Store policy PKs for later binding
-
-        for group_name in group_list:
-            policy_name = f"{slug}-require-{group_name}"
-
-            # Check if policy already exists
-            resp = client.get(
-                f"{base_url}/api/v3/policies/expression/?name={policy_name}"
-            )
-            if resp.status_code == 200 and resp.json()["results"]:
-                policy_pks[group_name] = resp.json()["results"][0]["pk"]
-                info(f"Policy already exists: {policy_name}")
-            else:
-                # SECURITY: Escape single quotes in group_name for Python expression
-                safe_group_name = group_name.replace("'", "\\'")
-                resp = client.post(
-                    f"{base_url}/api/v3/policies/expression/",
-                    json={
-                        "name": policy_name,
-                        "execution_logging": False,
-                        "expression": f"return ak_is_group_member(request.user, name='{safe_group_name}')",
-                    },
-                )
-
-                if resp.status_code != 201:
-                    error(
-                        f"Failed to create policy for group {group_name}: {resp.status_code} - {resp.text}"
-                    )
-                    return False
-
-                policy_pks[group_name] = resp.json()["pk"]
-                success(f"Created policy: require {group_name} membership")
-
-        # Check if provider already exists (exact name match)
-        provider_name = f"{slug}-proxy"
-        resp = client.get(f"{base_url}/api/v3/providers/proxy/")
-        provider_id = None
-        if resp.status_code == 200:
-            for provider in resp.json()["results"]:
-                if provider["name"] == provider_name:
-                    provider_id = provider["pk"]
-                    info(
-                        f"Provider already exists: {provider_name} (pk: {provider_id})"
-                    )
-                    break
-
         if not provider_id:
-            # Create proxy provider
-            info(f"Creating proxy provider for {external_host}...")
-            resp = client.post(
-                f"{base_url}/api/v3/providers/proxy/",
-                json={
-                    "name": provider_name,
-                    "authorization_flow": auth_flow_uuid,
-                    "invalidation_flow": invalidation_flow_uuid,
-                    "mode": "forward_single",
-                    "external_host": external_host,
-                    "internal_host": internal_url,
-                },
-            )
+            return False
 
-            if resp.status_code != 201:
-                error(f"Failed to create provider: {resp.status_code} - {resp.text}")
-                return False
+        app_info = _ensure_application(client, base_url, name, slug, provider_id)
+        if not app_info:
+            return False
+        app_slug, app_pk = app_info
 
-            provider_id = resp.json()["pk"]
-            success(f"Created proxy provider: {provider_id}")
-
-        # Check if application already exists (exact slug match)
-        resp = client.get(f"{base_url}/api/v3/core/applications/")
-        app_data = None
-        if resp.status_code == 200:
-            for app in resp.json()["results"]:
-                if app["slug"] == slug:
-                    app_data = app
-                    app_slug = app["slug"]
-                    app_pk = app["pk"]
-                    info(f"Application already exists: {name} (slug: {app_slug})")
-                    break
-
-        if not app_data:
-            # Create application
-            info(f"Creating application: {name}...")
-            resp = client.post(
-                f"{base_url}/api/v3/core/applications/",
-                json={
-                    "name": name,
-                    "slug": slug,
-                    "provider": provider_id,
-                },
-            )
-
-            if resp.status_code != 201:
-                error(f"Failed to create application: {resp.status_code} - {resp.text}")
-                return False
-
-            app_data = resp.json()
-            app_slug = app_data["slug"]
-            app_pk = app_data["pk"]
-            success(f"Created application: {name} (slug: {app_slug})")
-
-        # Bind policies to APPLICATION (not provider) - use app_pk UUID
-        info("Binding access policies to application...")
-        for group_name, policy_pk in policy_pks.items():
-            resp = client.post(
-                f"{base_url}/api/v3/policies/bindings/",
-                json={
-                    "policy": policy_pk,
-                    "target": app_pk,  # Application UUID, not provider ID
-                    "enabled": True,
-                    "order": 0,
-                    "timeout": 30,
-                },
-            )
-
-            if resp.status_code == 201:
-                success(f"Bound policy: {group_name} → application")
-            elif resp.status_code == 400 and "already exists" in resp.text.lower():
-                info(f"Policy binding already exists: {group_name}")
-            else:
-                warning(f"Failed to bind policy {group_name}: {resp.status_code}")
-
-        # Add provider to embedded outpost
-        info("Configuring embedded outpost...")
-        resp = client.get(
-            f"{base_url}/api/v3/outposts/instances/?managed=goauthentik.io/outposts/embedded"
-        )
-        if resp.status_code == 200 and resp.json()["results"]:
-            outpost = resp.json()["results"][0]
-            outpost_pk = outpost["pk"]
-            current_providers = outpost.get("providers", [])
-
-            if provider_id not in current_providers:
-                current_providers.append(provider_id)
-
-                # Update outpost with provider and authentik_host
-                resp = client.patch(
-                    f"{base_url}/api/v3/outposts/instances/{outpost_pk}/",
-                    json={
-                        "providers": current_providers,
-                        "config": {"authentik_host": base_url},
-                    },
-                )
-
-                if resp.status_code == 200:
-                    success("Added provider to embedded outpost")
-                else:
-                    warning(f"Failed to update outpost: {resp.status_code}")
-            else:
-                info("Provider already in outpost")
-        else:
-            warning("Embedded outpost not found - forward auth may not work")
+        _bind_policies_to_app(client, base_url, app_pk, policy_pks)
+        _configure_embedded_outpost(client, base_url, provider_id)
 
         info(f"\n✨ SSO protection enabled for {external_host}")
         info(f"Access control: Only users in [{', '.join(group_list)}] can access")
         info(f"Admin URL: {base_url}/if/admin/#/core/applications/{app_slug}")
-
         return True
 
     except Exception as exc:

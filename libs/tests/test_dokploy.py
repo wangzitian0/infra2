@@ -145,11 +145,7 @@ class TestDokployClient:
 
         monkeypatch.delenv("DOKPLOY_API_KEY", raising=False)
         monkeypatch.delenv("DOKPLOY_URL", raising=False)
-        monkeypatch.setitem(
-            __import__("sys").modules,
-            "libs.env",
-            type("FakeEnvModule", (), {"OpSecrets": FakeEmptyOpSecrets}),
-        )
+        monkeypatch.setattr("libs.security.store.OpSecrets", FakeEmptyOpSecrets)
 
         with pytest.raises(ValueError, match="DOKPLOY_API_KEY not set"):
             DokployClient(base_url="https://cloud.example.test/api")

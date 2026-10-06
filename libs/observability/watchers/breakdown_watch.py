@@ -190,147 +190,113 @@ def sweep(client: httpx.Client, log_tail: int):
     )
 
 
-def run_once(
-    client: httpx.Client,
-    log_tail: int,
+def _evaluate_broken_container(
+    name: str,
+    b: Breakdown,
     container_state: dict,
+    resolved_at: dict,
+    chronic: dict,
+    chronic_context: dict,
+    now: float,
+    wall: float,
+    failure_threshold: int,
+    recovery_threshold: int,
     renotify: int,
-    failure_threshold: int = DEFAULT_FAILURE_THRESHOLD,
-    recovery_threshold: int = DEFAULT_RECOVERY_THRESHOLD,
-    *,
-    resolved_at: dict | None = None,
-    chronic: dict | None = None,
-    chronic_context: dict | None = None,
-    stay_resolved_seconds: int = DEFAULT_STAY_RESOLVED_SECONDS,
-    chronic_digest_seconds: int = DEFAULT_CHRONIC_DIGEST_SECONDS,
-) -> int:
-    """One sweep. Flap hysteresis (#475): a container must be observed broken on
-    ``failure_threshold`` CONSECUTIVE sweeps before it fires, and healthy on
-    ``recovery_threshold`` CONSECUTIVE sweeps before it resolves -- a blip that
-    flips broken/healthy every poll must not page every time. ``container_state``
-    maps container name -> ``libs.recency.ConsecutiveObservationState`` and is
-    mutated in place; the caller keeps one dict alive for the life of the poll
-    loop (see BreakdownWatch). Returns the number of containers that fired this
-    sweep (new incidents plus any still-active incident renotified this sweep).
-
-    Stay-resolved floor (#658): ``resolved_at`` maps container name -> monotonic time
-    of its last RESOLVED. A new incident inside ``stay_resolved_seconds`` of that does
-    not page; it is counted in ``chronic`` (name -> suppressed count) and the chronic
-    set is posted once per ``chronic_digest_seconds`` under ``chronic["__digest_at__"]``.
-    ``chronic_context`` keeps each chronic container's latest breakdown, so the digest
-    still knows its environment after the container resolved and was pruned: staging
-    and preview lines go out as a report, production lines to the pager (#903). All
-    three dicts are mutated in place and owned by the caller like ``container_state``.
-    """
+    stay_resolved_seconds: int,
+) -> Breakdown | None:
+    """Evaluate one broken container against flap hysteresis and chronic floor."""
     import dataclasses
-    import time
 
-    now = time.monotonic()
-    wall = time.time()  # when a breakdown started, for the card (#905)
-    resolved_at = {} if resolved_at is None else resolved_at
-    chronic = {} if chronic is None else chronic
-    chronic_context = {} if chronic_context is None else chronic_context
-
-    def count_chronic(name: str, breakdown: Breakdown) -> None:
-        chronic[name] = int(chronic.get(name, 0)) + 1
-        chronic_context[name] = breakdown
-
-    breakdowns = sweep(client, log_tail)
-    broken_by_name = {b.container: b for b in breakdowns}
-
-    fresh: list[Breakdown] = []
-    for name, b in broken_by_name.items():
-        state = container_state.setdefault(name, ConsecutiveObservationState())
-        previous = state.context
-        # A tracked container is mid-streak or mid-incident: it broke when it first did.
-        b = dataclasses.replace(
-            b, since=previous.since if previous is not None and previous.since else wall
-        )
-        state.context = b  # latest breakdown, so a later RESOLVED reuses its labels
-        # An ongoing incident whose CAUSE changed is news again: "unhealthy" becoming
-        # "restarting", or a different reason extracted from the logs, is what an
-        # operator wants told. Everything else about a still-broken container is in the
-        # digest, not on the pager (#475, owner decision 2026-09-09).
-        escalated = bool(
-            state.active
-            and previous is not None
-            and (previous.state, previous.reason) != (b.state, b.reason)
-        )
-        action = evaluate_consecutive_hysteresis(
-            state=state,
-            is_bad_now=True,
-            now=now,
-            failure_threshold=failure_threshold,
-            recovery_threshold=recovery_threshold,
-            renotify_seconds=renotify,
-        )
-        if action == "none" and state.active:
-            if escalated:
-                logger.warning(
-                    "BREAKDOWN-ESCALATED %s: %s/%s -> %s/%s",
-                    name,
-                    previous.state,
-                    previous.reason,
-                    b.state,
-                    b.reason,
-                )
-                action = "fire"
-                # The escalation IS a page, so the renotify clock restarts here. Without
-                # this a positive renotify would measure from the previous page and could
-                # re-page moments after the escalation (review on #686).
-                state.last_alert_at = now
-            elif renotify <= 0:
-                # Still broken, still the same reason: the digest carries it. Only when
-                # periodic re-notification is OFF, though — an operator who sets a
-                # positive renotify has asked for the timer and must not also get a
-                # digest about the same incident (review on #686).
-                count_chronic(name, b)
-        if action == "fire":
-            since_resolved = now - resolved_at.get(name, float("-inf"))
-            if is_report_only(b):
-                count_chronic(name, b)
-                logger.info(
-                    "BREAKDOWN-REPORT-ONLY %s (%s): staging/preview, digest only — %s",
-                    name,
-                    b.state,
-                    b.reason,
-                )
-            elif (
-                since_resolved < stay_resolved_seconds
-                and state.bad_streak == failure_threshold
-            ):
-                # a NEW incident inside the floor: chronic, not a page — its digest
-                # line goes to the pager, it is production
-                count_chronic(name, b)
-                logger.warning(
-                    "BREAKDOWN-CHRONIC %s (%s): re-broke %ds after resolving (floor %ds); "
-                    "suppressed page #%d — %s",
-                    name,
-                    b.state,
-                    int(since_resolved),
-                    stay_resolved_seconds,
-                    chronic[name],
-                    b.reason,
-                )
-            else:
-                # An actual page resets "since it last paged", escalation included.
-                chronic.pop(name, None)
-                chronic_context.pop(name, None)
-                fresh.append(b)
-        elif not state.active:
-            logger.info(
-                "BREAKDOWN-PENDING %s (%s): bad_streak=%d/%d — not yet firing: %s",
+    state = container_state.setdefault(name, ConsecutiveObservationState())
+    previous = state.context
+    b = dataclasses.replace(
+        b, since=previous.since if previous is not None and previous.since else wall
+    )
+    state.context = b
+    escalated = bool(
+        state.active
+        and previous is not None
+        and (previous.state, previous.reason) != (b.state, b.reason)
+    )
+    action = evaluate_consecutive_hysteresis(
+        state=state,
+        is_bad_now=True,
+        now=now,
+        failure_threshold=failure_threshold,
+        recovery_threshold=recovery_threshold,
+        renotify_seconds=renotify,
+    )
+    if action == "none" and state.active:
+        if escalated:
+            logger.warning(
+                "BREAKDOWN-ESCALATED %s: %s/%s -> %s/%s",
                 name,
+                previous.state,
+                previous.reason,
                 b.state,
-                state.bad_streak,
-                failure_threshold,
                 b.reason,
             )
+            action = "fire"
+            state.last_alert_at = now
+        elif renotify <= 0:
+            chronic[name] = int(chronic.get(name, 0)) + 1
+            chronic_context[name] = b
 
-    # Recovered = previously-tracked containers no longer broken THIS sweep, evaluated
-    # against the recovery threshold. A container that flips back to broken before
-    # reaching it stays part of the SAME active incident (evaluate_consecutive_hysteresis
-    # neither resets bad_streak's incident nor the renotify clock in that case).
+    if action == "fire":
+        since_resolved = now - resolved_at.get(name, float("-inf"))
+        if is_report_only(b):
+            chronic[name] = int(chronic.get(name, 0)) + 1
+            chronic_context[name] = b
+            logger.info(
+                "BREAKDOWN-REPORT-ONLY %s (%s): staging/preview, digest only — %s",
+                name,
+                b.state,
+                b.reason,
+            )
+            return None
+        if (
+            since_resolved < stay_resolved_seconds
+            and state.bad_streak == failure_threshold
+        ):
+            chronic[name] = int(chronic.get(name, 0)) + 1
+            chronic_context[name] = b
+            logger.warning(
+                "BREAKDOWN-CHRONIC %s (%s): re-broke %ds after resolving (floor %ds); "
+                "suppressed page #%d — %s",
+                name,
+                b.state,
+                int(since_resolved),
+                stay_resolved_seconds,
+                chronic[name],
+                b.reason,
+            )
+            return None
+        chronic.pop(name, None)
+        chronic_context.pop(name, None)
+        return b
+
+    if not state.active:
+        logger.info(
+            "BREAKDOWN-PENDING %s (%s): bad_streak=%d/%d — not yet firing: %s",
+            name,
+            b.state,
+            state.bad_streak,
+            failure_threshold,
+            b.reason,
+        )
+    return None
+
+
+def _process_recovered_containers(
+    broken_by_name: dict[str, Breakdown],
+    container_state: dict,
+    resolved_at: dict,
+    now: float,
+    failure_threshold: int,
+    recovery_threshold: int,
+    renotify: int,
+) -> list[Breakdown]:
+    """Identify and record containers that have consecutively recovered."""
     recovered: list[Breakdown] = []
     for name, state in list(container_state.items()):
         if name in broken_by_name:
@@ -345,11 +311,6 @@ def run_once(
         )
         if action == "resolve":
             resolved_at[name] = now
-            # Resolve with the ORIGINAL breakdown (same state, hence same label set) so
-            # the resolved alert matches the firing instance and the page actually
-            # clears — a stub state like "recovered" forms a different label set and
-            # never resolves the original. A report-only container never paged, so
-            # there is nothing to clear.
             if not is_report_only(state.context):
                 recovered.append(state.context)
         elif state.active:
@@ -359,12 +320,138 @@ def run_once(
                 state.good_streak,
                 recovery_threshold,
             )
+    return recovered
 
-    # Prune entries with no live signal left: either never crossed the failure
-    # threshold and is healthy again, or just fully resolved above. Both leave
-    # active=False, bad_streak=0, good_streak=0 -- the same shape a brand-new
-    # entry starts in, so it's safe (and keeps memory bounded) to forget it; it is
-    # recreated via setdefault() if the container breaks again later.
+
+def _emit_chronic_digest(
+    chronic: dict,
+    chronic_context: dict,
+    container_state: dict,
+    resolved_at: dict,
+    now: float,
+    chronic_digest_seconds: int,
+    stay_resolved_seconds: int,
+) -> None:
+    """Post chronic incident digest periodically."""
+    chronic_names = sorted(n for n in chronic if n != "__digest_at__")
+    if chronic_names and "__digest_at__" not in chronic:
+        chronic["__digest_at__"] = now
+    if not (
+        chronic_names
+        and now - chronic.get("__digest_at__", float("-inf")) >= chronic_digest_seconds
+    ):
+        return
+
+    def context(name: str) -> Breakdown | None:
+        tracked = container_state.get(name)
+        return chronic_context.get(name) or (tracked.context if tracked else None)
+
+    digest = [
+        Breakdown(
+            container=name,
+            state="chronic",
+            reason=(
+                f"staging/预览容器,从不呼人:{chronic[name]} 次巡检坏着"
+                if is_report_only(context(name))
+                else f"恢复后 {stay_resolved_seconds // 3600}h 保持期内又坏了 "
+                f"{chronic[name]} 次"
+                if now - resolved_at.get(name, float("-inf")) < stay_resolved_seconds
+                else f"仍坏着:上次呼人后已 {chronic[name]} 次巡检"
+            ),
+            detail=context(name).detail if context(name) else "",
+            log_tail=context(name).log_tail if context(name) else "",
+            since=context(name).since if context(name) else 0.0,
+            service_id=context(name).service_id if context(name) else "",
+            component=context(name).component if context(name) else "container",
+            environment=(context(name).environment if context(name) else "production"),
+        )
+        for name in chronic_names
+    ]
+    logger.warning(
+        "BREAKDOWN-CHRONIC-DIGEST count=%d -> posting once per %dh: %s",
+        len(digest),
+        chronic_digest_seconds // 3600,
+        ",".join(chronic_names),
+    )
+    paging = [line for line in digest if not is_report_only(line)]
+    reports = [line for line in digest if is_report_only(line)]
+    if paging:
+        _post_alert(
+            build_breakdown_alert_payload(
+                paging, severity="warning", alertname="ContainerBreakdownChronic"
+            )
+        )
+    if reports:
+        _post_alert(
+            mark_report_payload(
+                build_breakdown_alert_payload(
+                    reports,
+                    severity="warning",
+                    alertname="ContainerBreakdownChronic",
+                )
+            )
+        )
+    chronic["__digest_at__"] = now
+    for name in chronic_names:
+        chronic.pop(name, None)
+        chronic_context.pop(name, None)
+
+
+def run_once(
+    client: httpx.Client,
+    log_tail: int,
+    container_state: dict,
+    renotify: int,
+    failure_threshold: int = DEFAULT_FAILURE_THRESHOLD,
+    recovery_threshold: int = DEFAULT_RECOVERY_THRESHOLD,
+    *,
+    resolved_at: dict | None = None,
+    chronic: dict | None = None,
+    chronic_context: dict | None = None,
+    stay_resolved_seconds: int = DEFAULT_STAY_RESOLVED_SECONDS,
+    chronic_digest_seconds: int = DEFAULT_CHRONIC_DIGEST_SECONDS,
+) -> int:
+    """One sweep over all running containers evaluating flap hysteresis."""
+    import time
+
+    now = time.monotonic()
+    wall = time.time()
+    resolved_at = {} if resolved_at is None else resolved_at
+    chronic = {} if chronic is None else chronic
+    chronic_context = {} if chronic_context is None else chronic_context
+
+    breakdowns = sweep(client, log_tail)
+    broken_by_name = {b.container: b for b in breakdowns}
+
+    fresh: list[Breakdown] = []
+    for name, b in broken_by_name.items():
+        firing = _evaluate_broken_container(
+            name=name,
+            b=b,
+            container_state=container_state,
+            resolved_at=resolved_at,
+            chronic=chronic,
+            chronic_context=chronic_context,
+            now=now,
+            wall=wall,
+            failure_threshold=failure_threshold,
+            recovery_threshold=recovery_threshold,
+            renotify=renotify,
+            stay_resolved_seconds=stay_resolved_seconds,
+        )
+        if firing is not None:
+            fresh.append(firing)
+
+    recovered = _process_recovered_containers(
+        broken_by_name=broken_by_name,
+        container_state=container_state,
+        resolved_at=resolved_at,
+        now=now,
+        failure_threshold=failure_threshold,
+        recovery_threshold=recovery_threshold,
+        renotify=renotify,
+    )
+
     for name in [
         n
         for n, s in container_state.items()
@@ -388,82 +475,17 @@ def run_once(
             ",".join(sorted(rec.container for rec in recovered)),
         )
         _post_alert(build_breakdown_alert_payload(recovered, firing=False, now=wall))
-    chronic_names = sorted(n for n in chronic if n != "__digest_at__")
-    if chronic_names and "__digest_at__" not in chronic:
-        # Start the clock on the first chronic observation instead of posting on it.
-        # Since an ongoing unchanged incident is chronic too, an unset clock would put
-        # a digest on the pager one sweep after every incident began.
-        chronic["__digest_at__"] = now
-    if (
-        chronic_names
-        and now - chronic.get("__digest_at__", float("-inf")) >= chronic_digest_seconds
-    ):
 
-        def context(name: str) -> Breakdown | None:
-            tracked = container_state.get(name)
-            return chronic_context.get(name) or (tracked.context if tracked else None)
+    _emit_chronic_digest(
+        chronic=chronic,
+        chronic_context=chronic_context,
+        container_state=container_state,
+        resolved_at=resolved_at,
+        now=now,
+        chronic_digest_seconds=chronic_digest_seconds,
+        stay_resolved_seconds=stay_resolved_seconds,
+    )
 
-        digest = [
-            Breakdown(
-                container=name,
-                state="chronic",
-                reason=(
-                    f"staging/预览容器,从不呼人:{chronic[name]} 次巡检坏着"
-                    if is_report_only(context(name))
-                    # Keyed on the floor itself, not on `active`: a floor-suppressed
-                    # re-break leaves the incident active, so keying on `active` made
-                    # this wording unreachable in exactly the case it describes
-                    # (review on #686).
-                    else f"恢复后 {stay_resolved_seconds // 3600}h 保持期内又坏了 "
-                    f"{chronic[name]} 次"
-                    if now - resolved_at.get(name, float("-inf"))
-                    < stay_resolved_seconds
-                    else f"仍坏着:上次呼人后已 {chronic[name]} 次巡检"
-                ),
-                detail=context(name).detail if context(name) else "",
-                log_tail=context(name).log_tail if context(name) else "",
-                since=context(name).since if context(name) else 0.0,
-                service_id=context(name).service_id if context(name) else "",
-                component=context(name).component if context(name) else "container",
-                # no context: production, so the line pages rather than going quiet
-                environment=(
-                    context(name).environment if context(name) else "production"
-                ),
-            )
-            for name in chronic_names
-        ]
-        logger.warning(
-            "BREAKDOWN-CHRONIC-DIGEST count=%d -> posting once per %dh: %s",
-            len(digest),
-            chronic_digest_seconds // 3600,
-            ",".join(chronic_names),
-        )
-        # Split by audience (#903 review): a production line — a floor-suppressed
-        # re-break, an incident still broken since it paged — is only ever told here,
-        # so it goes to the pager as it always did. Staging and preview lines are a
-        # report.
-        paging = [line for line in digest if not is_report_only(line)]
-        reports = [line for line in digest if is_report_only(line)]
-        if paging:
-            _post_alert(
-                build_breakdown_alert_payload(
-                    paging, severity="warning", alertname="ContainerBreakdownChronic"
-                )
-            )
-        if reports:
-            _post_alert(
-                mark_report_payload(
-                    build_breakdown_alert_payload(
-                        reports,
-                        severity="warning",
-                        alertname="ContainerBreakdownChronic",
-                    )
-                )
-            )
-        chronic["__digest_at__"] = now
-        for name in chronic_names:
-            chronic.pop(name, None)
-            chronic_context.pop(name, None)
     return len(fresh)
 
 

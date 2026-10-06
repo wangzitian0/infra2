@@ -74,6 +74,138 @@ def default_database_for_service(service_id: str) -> str:
     return "postgres"
 
 
+def _build_rehearsal_invariants(service_id: str, db: str) -> tuple[str, ...]:
+    """Define invariants for the specific service being restored."""
+    db_exists_check = (
+        f"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '{db}') "
+        f"THEN RAISE EXCEPTION 'database {db} does not exist'; END IF; END $$;"
+    )
+    if service_id == "finance_report/postgres":
+        return (
+            "SELECT 1",
+            db_exists_check,
+            "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public') < 40 THEN RAISE EXCEPTION 'table count below threshold (<40)'; END IF; END $$;",
+            "DO $$ BEGIN IF (SELECT count(*) FROM accounts) < 3 THEN RAISE EXCEPTION 'accounts count below threshold (<3)'; END IF; END $$;",
+            "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM alembic_version WHERE version_num IN ('0065_user_soft_delete', '0064_enum_drift_cleanup', '0063_enum_case_compat', '0062_bank_custody')) THEN RAISE EXCEPTION 'unexpected alembic_version'; END IF; END $$;",
+        )
+    if service_id == "truealpha/postgres":
+        return (
+            "SELECT 1",
+            db_exists_check,
+            "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema IN ('raw', 'staging', 'mart', 'app')) < 50 THEN RAISE EXCEPTION 'table count below threshold (<50)'; END IF; END $$;",
+            "DO $$ BEGIN IF (SELECT count(*) FROM mart.topt_capture_status WHERE complete = true) < 80 THEN RAISE EXCEPTION 'topt_capture_status count below threshold (<80)'; END IF; END $$;",
+            "DO $$ BEGIN IF (SELECT count(*) FROM mart.topt_gppe_results WHERE payload->>'availability' = 'available') < 1400 THEN RAISE EXCEPTION 'topt_gppe_results available below threshold (<1400)'; END IF; END $$;",
+        )
+    return (
+        "SELECT 1",
+        db_exists_check,
+        "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema')) < 1 THEN RAISE EXCEPTION 'no tables restored'; END IF; END $$;",
+        "SELECT current_database()",
+        "SELECT 1",
+    )
+
+
+def _collect_rehearsal_evidence(
+    container: str, bootstrap_user: str, db: str, service_id: str
+) -> tuple[int, int, dict[str, Any]]:
+    """Query business metrics and database size from the restored database."""
+
+    def query_val(sql: str) -> str:
+        res = subprocess.run(
+            [
+                "docker",
+                "exec",
+                container,
+                "psql",
+                "-U",
+                bootstrap_user,
+                "-d",
+                db,
+                "-Atqc",
+                sql,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return res.stdout.strip()
+
+    domain_stats: dict[str, Any] = {}
+    if service_id == "finance_report/postgres":
+        tables_count = int(
+            query_val(
+                "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
+            )
+        )
+        domain_stats = {
+            "accounts_count": int(query_val("SELECT count(*) FROM accounts")),
+            "alembic_version": query_val("SELECT version_num FROM alembic_version"),
+        }
+    elif service_id == "truealpha/postgres":
+        tables_count = int(
+            query_val(
+                "SELECT count(*) FROM information_schema.tables WHERE table_schema IN ('raw', 'staging', 'mart', 'app')"
+            )
+        )
+        domain_stats = {
+            "topt_capture_complete_count": int(
+                query_val(
+                    "SELECT count(*) FROM mart.topt_capture_status WHERE complete = true"
+                )
+            ),
+            "topt_gppe_available_count": int(
+                query_val(
+                    "SELECT count(*) FROM mart.topt_gppe_results WHERE payload->>'availability' = 'available'"
+                )
+            ),
+        }
+    else:
+        tables_count = int(
+            query_val(
+                "SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema')"
+            )
+        )
+    db_size_bytes = int(query_val("SELECT pg_database_size(current_database())"))
+    return tables_count, db_size_bytes, domain_stats
+
+
+def _teardown_rehearsal_sandbox(
+    container: str, artifact_dir: Path, safe_root: Path, started: bool
+) -> None:
+    """Tear down temporary container and artifacts with fail-closed checks."""
+    print(f"[*] Teardown: removing sandbox container and volumes {container}...")
+    cleanup = subprocess.run(
+        ["docker", "rm", "-f", "-v", container],
+        capture_output=True,
+        text=True,
+    )
+    missing_before_start = (
+        not started
+        and cleanup.returncode != 0
+        and "No such container" in cleanup.stderr
+    )
+    if missing_before_start:
+        inspect = subprocess.run(
+            ["docker", "container", "inspect", container],
+            capture_output=True,
+        )
+        missing_before_start = inspect.returncode != 0
+    if cleanup.returncode != 0 and not missing_before_start:
+        raise RuntimeError(
+            f"Could not remove restore sandbox {container} and its volumes: "
+            f"{cleanup.stderr.strip()}"
+        )
+    p_dl = artifact_dir.resolve()
+    if not p_dl.is_relative_to(safe_root):
+        raise RuntimeError(f"restore download path escaped its root: {p_dl}")
+    if p_dl.exists():
+        shutil.rmtree(p_dl)
+    if missing_before_start:
+        print("[+] No sandbox container exists; download directory cleaned.")
+    else:
+        print("[+] Teardown completed. Container and volumes removed.")
+
+
 def run_rehearsal(
     *,
     manifest_path: str,
@@ -89,8 +221,6 @@ def run_rehearsal(
         raise ValueError(f"Invalid database name: {db!r}")
 
     safe_name = service_id.replace("/", "-")
-    # Not uuid: on Linux it imports `platform`, which the repo's platform/ package
-    # shadows under the cron's PYTHONPATH=. (#892).
     container = f"{safe_name}-restore-rehearsal-{secrets.token_hex(4)}-throwaway"
     download_root = Path(download_dir)
     safe_root = download_root.resolve()
@@ -118,7 +248,6 @@ def run_rehearsal(
     )
     assert_rehearsal_target(container)
 
-    # 1. Start isolated sandbox container (hard-disable networking, enforce local trust auth)
     print(f"[*] Starting sandbox container: {container} (image: {image})...")
     run_cmd = [
         "docker",
@@ -139,46 +268,16 @@ def run_rehearsal(
     try:
         subprocess.run(run_cmd, check=True, capture_output=True)
         started = True
-        # 2. Wait for readiness
         wait_for_postgres(container, bootstrap_user)
         print("[+] Sandbox database is ready for ingestion.")
 
-        # 3. Materialize artifact (local or rclone download from Google Drive)
         print(f"[*] Materializing artifact from {artifact.get('remote_uri')}...")
         archive_path = materialize_artifact(artifact, artifact_dir)
         print(
             f"[+] Materialized archive: {archive_path} ({archive_path.stat().st_size} bytes)"
         )
 
-        # 4. Define invariants (connectivity, DB existence, table threshold, domain specific rows)
-        db_exists_check = (
-            f"DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '{db}') "
-            f"THEN RAISE EXCEPTION 'database {db} does not exist'; END IF; END $$;"
-        )
-        if service_id == "finance_report/postgres":
-            invariants = (
-                "SELECT 1",
-                db_exists_check,
-                "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public') < 40 THEN RAISE EXCEPTION 'table count below threshold (<40)'; END IF; END $$;",
-                "DO $$ BEGIN IF (SELECT count(*) FROM accounts) < 3 THEN RAISE EXCEPTION 'accounts count below threshold (<3)'; END IF; END $$;",
-                "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM alembic_version WHERE version_num IN ('0065_user_soft_delete', '0064_enum_drift_cleanup', '0063_enum_case_compat', '0062_bank_custody')) THEN RAISE EXCEPTION 'unexpected alembic_version'; END IF; END $$;",
-            )
-        elif service_id == "truealpha/postgres":
-            invariants = (
-                "SELECT 1",
-                db_exists_check,
-                "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema IN ('raw', 'staging', 'mart', 'app')) < 50 THEN RAISE EXCEPTION 'table count below threshold (<50)'; END IF; END $$;",
-                "DO $$ BEGIN IF (SELECT count(*) FROM mart.topt_capture_status WHERE complete = true) < 80 THEN RAISE EXCEPTION 'topt_capture_status count below threshold (<80)'; END IF; END $$;",
-                "DO $$ BEGIN IF (SELECT count(*) FROM mart.topt_gppe_results WHERE payload->>'availability' = 'available') < 1400 THEN RAISE EXCEPTION 'topt_gppe_results available below threshold (<1400)'; END IF; END $$;",
-            )
-        else:
-            invariants = (
-                "SELECT 1",
-                db_exists_check,
-                "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema')) < 1 THEN RAISE EXCEPTION 'no tables restored'; END IF; END $$;",
-                "SELECT current_database()",
-                "SELECT 1",
-            )
+        invariants = _build_rehearsal_invariants(service_id, db)
         plan = build_postgres_rehearsal_plan(
             entry=entries[service_id],
             artifact=artifact,
@@ -189,73 +288,21 @@ def run_rehearsal(
             invariant_sql=invariants,
         )
 
-        # 5. Execute restore & invariants
         print(
             f"[*] Restoring into {container} and running {len(invariants)} invariants..."
         )
         run_postgres_restore_rehearsal(plan)
         print("[+] Rehearsal ingestion and base invariants PASSED.")
 
-        # 6. Collect detailed business row counts for proof
-        def query_val(sql: str) -> str:
-            res = subprocess.run(
-                [
-                    "docker",
-                    "exec",
-                    container,
-                    "psql",
-                    "-U",
-                    bootstrap_user,
-                    "-d",
-                    db,
-                    "-Atqc",
-                    sql,
-                ],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            return res.stdout.strip()
-
-        domain_stats: dict[str, Any] = {}
-        if service_id == "finance_report/postgres":
-            tables_count = int(
-                query_val(
-                    "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
-                )
-            )
-            domain_stats = {
-                "accounts_count": int(query_val("SELECT count(*) FROM accounts")),
-                "alembic_version": query_val("SELECT version_num FROM alembic_version"),
-            }
-        elif service_id == "truealpha/postgres":
-            tables_count = int(
-                query_val(
-                    "SELECT count(*) FROM information_schema.tables WHERE table_schema IN ('raw', 'staging', 'mart', 'app')"
-                )
-            )
-            domain_stats = {
-                "topt_capture_complete_count": int(
-                    query_val(
-                        "SELECT count(*) FROM mart.topt_capture_status WHERE complete = true"
-                    )
-                ),
-                "topt_gppe_available_count": int(
-                    query_val(
-                        "SELECT count(*) FROM mart.topt_gppe_results WHERE payload->>'availability' = 'available'"
-                    )
-                ),
-            }
-        else:
-            tables_count = int(
-                query_val(
-                    "SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema')"
-                )
-            )
-        db_size_bytes = int(query_val("SELECT pg_database_size(current_database())"))
+        tables_count, db_size_bytes, domain_stats = _collect_rehearsal_evidence(
+            container=container,
+            bootstrap_user=bootstrap_user,
+            db=db,
+            service_id=service_id,
+        )
 
         elapsed = round(time.time() - start_time, 2)
-        evidence = {
+        return {
             "status": "PASS",
             "service_id": service_id,
             "database": db,
@@ -264,9 +311,6 @@ def run_rehearsal(
             "archive_size_bytes": archive_path.stat().st_size,
             "restored_db_size_bytes": db_size_bytes,
             "verified_tables_count": tables_count,
-            # Kept flat for the finance_report report shape. They are null for
-            # services that have no accounts/alembic: a 0 here would assert that
-            # the check ran and found nothing, which is not what happened.
             "verified_accounts_count": domain_stats.get("accounts_count"),
             "verified_alembic_version": domain_stats.get("alembic_version"),
             "domain_stats": domain_stats,
@@ -274,50 +318,17 @@ def run_rehearsal(
             "sandbox_container": container,
             "teardown": not keep_container,
         }
-        return evidence
 
     finally:
         if not keep_container:
-            print(f"[*] Teardown: removing sandbox container and volumes {container}...")
-            cleanup = subprocess.run(
-                ["docker", "rm", "-f", "-v", container],
-                capture_output=True,
-                text=True,
-            )
-            missing_before_start = (
-                not started
-                and cleanup.returncode != 0
-                and "No such container" in cleanup.stderr
-            )
-            if missing_before_start:
-                inspect = subprocess.run(
-                    ["docker", "container", "inspect", container],
-                    capture_output=True,
-                )
-                missing_before_start = inspect.returncode != 0
-            if cleanup.returncode != 0 and not missing_before_start:
-                raise RuntimeError(
-                    f"Could not remove restore sandbox {container} and its volumes: "
-                    f"{cleanup.stderr.strip()}"
-                )
-            p_dl = artifact_dir.resolve()
-            if not p_dl.is_relative_to(safe_root):
-                raise RuntimeError(f"restore download path escaped its root: {p_dl}")
-            if p_dl.exists():
-                shutil.rmtree(p_dl)
-            if missing_before_start:
-                print("[+] No sandbox container exists; download directory cleaned.")
-            else:
-                print("[+] Teardown completed. Container and volumes removed.")
+            _teardown_rehearsal_sandbox(container, artifact_dir, safe_root, started)
         else:
             print(f"[!] Sandbox container {container} preserved for inspection.")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--manifest", default=latest_manifest_path("production")
-    )
+    parser.add_argument("--manifest", default=latest_manifest_path("production"))
     parser.add_argument(
         "--environment", choices=("production", "staging"), default="production"
     )
