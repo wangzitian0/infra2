@@ -99,7 +99,7 @@ also enforces compose↔inventory equality and registry-derived `service_id` val
 - **`tools/`** — thin entry points: argv parsing, env wiring, exit codes.
   A tool that grows real logic should push it down into `libs/` so it gets
   covered by `libs/tests` (pattern: `tools/deploy_guard_audit.py` →
-  `libs/deploy_dependencies.py`). Several older scripts still carry embedded logic —
+  `libs/deploy/dependencies.py`). Several older scripts still carry embedded logic —
   treat that as debt to sink, not a pattern to copy.
 
 ## Runner (invoke namespaces)
@@ -380,7 +380,7 @@ logs, and container state for every service in the facet-derived inventory
 `libs/vault_self_refresh_audit.load_inventory`).
 
 It also reports (never fails on) whether any field in a service's
-`optional_inert_fields` SecretsFacet entry (`libs/service_facets.py`) is
+`optional_inert_fields` SecretsFacet entry (`libs/core/facets.py`) is
 actually populated in the rendered secrets file, not just wired -- e.g.
 `finance_report/app`'s `LLM_ENCRYPTION_KEYS`, which can have a valid
 `secrets.ctmpl` render line while Vault still holds no value, silently

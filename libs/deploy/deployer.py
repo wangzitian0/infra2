@@ -198,7 +198,7 @@ class Deployer:
     # declaration point for per-service operational facts; libs.core.registry
     # .service_attrs() is the single derivation function. Declarations must be
     # LITERAL constructor calls (they are read via AST, never imported) — see
-    # libs/service_facets.py for the constraint and field docs.
+    # libs/core/facets.py for the constraint and field docs.
     probes: tuple[ProbeFacet, ...] = ()
     public_routes: tuple[PublicRouteFacet, ...] = ()
     signals: tuple[SignalFacet, ...] = ()

@@ -248,7 +248,7 @@ def test_the_scan_sees_the_real_tree() -> None:
         "libs.observability",
         "libs.backup",
     } <= _domain_packages(ROOT)
-    assert {"libs.common", "libs.service_facets"} <= _flat_modules(ROOT)
+    assert {"libs.common", "libs.console"} <= _flat_modules(ROOT)
 
 
 def test_a_libs_to_tools_import_is_no_longer_present_for_the_deploy_domain() -> None:
@@ -273,7 +273,11 @@ def _edges(source: str, package: str) -> set[str]:
         ("import libs.common as c", "libs.core", {"libs.common"}),
         ("from libs.common import infra_domain", "libs.core", {"libs.common"}),
         ("from libs import common", "libs.core", {"libs.common"}),
-        ("from libs import common, console", "libs.core", {"libs.common", "libs.console"}),
+        (
+            "from libs import common, console",
+            "libs.core",
+            {"libs.common", "libs.console"},
+        ),
         # relative, resolved against the importing file's package
         ("from .. import common", "libs.core", {"libs.common"}),
         ("from ..common import infra_domain", "libs.core", {"libs.common"}),
@@ -449,6 +453,11 @@ RETIRED_FLAT_SHIMS_BATCH3 = {
     "service_registry",
 }
 
+RETIRED_FLAT_SHIMS_FINAL = {
+    "service_facets",
+    "deploy_dependencies",
+}
+
 ALL_RETIRED_FLAT_SHIMS = (
     RETIRED_FLAT_SHIMS_BATCH1
     | RETIRED_FLAT_SHIMS_BATCH2
@@ -456,6 +465,7 @@ ALL_RETIRED_FLAT_SHIMS = (
     | RETIRED_FLAT_SHIMS_DEPLOY
     | RETIRED_FLAT_SHIMS_BATCH2D
     | RETIRED_FLAT_SHIMS_BATCH3
+    | RETIRED_FLAT_SHIMS_FINAL
 )
 
 

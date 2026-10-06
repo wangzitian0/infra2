@@ -96,14 +96,19 @@ def _is_pure_reexport(path: Path) -> tuple[bool, str]:
     return True, imported_from[0]
 
 
-def test_the_shim_table_is_not_empty() -> None:
-    """A parser that silently matches nothing would pass every test below."""
-    assert len(TABLE) >= 4, TABLE
-    assert len(FROZEN) >= 2, FROZEN
-    assert NOT_FROZEN, "expected the table to still list the un-migrated modules"
+def test_all_frozen_shims_are_retired() -> None:
+    """Issue #1059: All 33 legacy compatibility shims have been retired."""
+    assert len(TABLE) >= 2, TABLE
+    assert len(FROZEN) == 0, f"Expected 0 frozen shims, found {FROZEN}"
+    assert NOT_FROZEN, "expected the table to still list the standalone modules"
 
 
-@pytest.mark.parametrize(("shim", "target"), FROZEN, ids=[s for s, _ in FROZEN])
+@pytest.mark.parametrize(
+    ("shim", "target"),
+    FROZEN
+    or [pytest.param("", "", marks=pytest.mark.skip(reason="All 33 shims retired"))],
+    ids=[s for s, _ in FROZEN] or ["zero_frozen_shims"],
+)
 def test_frozen_shim_holds_only_re_exports_of_the_module_the_table_names(
     shim: str, target: str
 ) -> None:
@@ -122,7 +127,12 @@ def test_frozen_shim_holds_only_re_exports_of_the_module_the_table_names(
     )
 
 
-@pytest.mark.parametrize(("shim", "target"), FROZEN, ids=[s for s, _ in FROZEN])
+@pytest.mark.parametrize(
+    ("shim", "target"),
+    FROZEN
+    or [pytest.param("", "", marks=pytest.mark.skip(reason="All 33 shims retired"))],
+    ids=[s for s, _ in FROZEN] or ["zero_frozen_shims"],
+)
 def test_every_re_exported_name_is_the_same_object_on_both_paths(
     shim: str, target: str
 ) -> None:
@@ -164,7 +174,7 @@ def _flat_modules() -> list[str]:
 
 def test_the_flat_module_list_is_not_empty() -> None:
     """A glob that matched nothing would make the next test pass vacuously."""
-    assert len(_flat_modules()) >= 5, _flat_modules()
+    assert len(_flat_modules()) >= 3, _flat_modules()
 
 
 @pytest.mark.parametrize("module", _flat_modules())

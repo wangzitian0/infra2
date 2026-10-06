@@ -2,7 +2,7 @@
 
 > **Purpose**: Internal domain packages, deployment backends, and platform clients used by deploy scripts, CLI tools, and background workers.
 > Stable cross-repository contracts live in [`infra2-sdk`](https://github.com/wangzitian0/infra2-sdk) and are imported directly.
-> The infra2 release pin is `v3.0.0`; adoption and equality are guarded by `libs/tests/test_sdk_contract_adoption.py`.
+> The infra2 release pin is `v2.5.0`; adoption and equality are guarded by `libs/tests/test_sdk_contract_adoption.py`.
 
 ---
 
@@ -35,27 +35,12 @@ Modules in `libs/` that provide direct integrations or operational clients:
 
 ## 🛡️ Backward-Compatibility Shims (PEP 484)
 
-Legacy flat modules in `libs/` are kept so existing CLI tools, workflows and
-`docs/ssot/` snippets keep importing the path they always did. A **Frozen Shim** holds
-**nothing but re-exports**: a docstring, one `from libs.<domain>.<module> import (...)`,
-and `__all__`.
-
-> [!IMPORTANT]
-> **Shim Boundary Policy**: **Never add new business logic to a Frozen Shim.** All new
-> features and refactorings go in the domain package (`libs.core`, `libs.security`,
-> `libs.backup`, `libs.observability`, `libs.deploy`) and are imported from there.
-
-This table is **not documentation, it is the contract**:
-`libs/tests/test_frozen_shims.py` parses it and, for every `Frozen Shim` row, asserts
-the module is structurally a re-export of exactly the module named here and that each
-re-exported name `is` the same object on both paths. A row that claims more than the
-code does fails the suite (#846: the table was written before the code moved, and for
-six modules the code never followed).
+All 33 legacy compatibility shims are retired (Issue #1059).
+Callers import domain packages directly.
+No frozen compatibility shims remain in `libs/`.
 
 | Legacy Shim | Implementation Module | Re-exported Symbols | Status |
 |-------------|-----------------------|---------------------|--------|
-| `libs/service_facets.py` | `libs.core.facets` | `ProbeFacet`, `PublicRouteFacet`, `SignalFacet`, `BackupFacet`, `Exemption` | Frozen Shim |
-| `libs/deploy_dependencies.py` | `libs.deploy.dependencies` | `extra_dependency_globs`, `service_key_from_path` | Frozen Shim |
 | `libs/common.py` | — (re-exports `libs.core.environ`, and holds `check_service`) | — | Not a shim |
 | `libs/console.py` | — (holds its own implementation) | — | Not a shim |
 

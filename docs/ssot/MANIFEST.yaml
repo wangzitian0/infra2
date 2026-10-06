@@ -139,7 +139,7 @@ entries:
     summary: ClickHouse (SigNoz Storage)
     description: ClickHouse storage for observability and analytics.
   # vault.self_refresh_inventory retired (#542): the audit inventory is DERIVED
-  # from each service Deployer's SecretsFacet declarations (libs/service_facets.py
+  # from each service Deployer's SecretsFacet declarations (libs/core/facets.py
   # -> libs/vault_self_refresh_audit.load_inventory); the former handwritten
   # docs/ssot/vault-self-refresh-inventory.yaml is deleted, its final content
   # frozen as libs/tests/fixtures/vault_self_refresh_inventory_frozen.yaml
