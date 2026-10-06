@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from infra2_sdk.release import ReleaseError, resolve_image_digest
 from infra2_sdk.secrets import vault_token_status
 
 from libs.core.constants import REPO_ROOT
@@ -28,12 +29,6 @@ _DEFAULT_IMAGE_WAIT_SECONDS = 300.0
 _DEFAULT_IMAGE_POLL_SECONDS = 10.0
 _RATE_LIMIT_MAX_WAIT_SECONDS = 120
 _RATE_LIMIT_DEFAULT_WAIT_SECONDS = 15
-_IMAGE_MANIFEST_ACCEPT = (
-    "application/vnd.docker.distribution.manifest.list.v2+json, "
-    "application/vnd.docker.distribution.manifest.v2+json, "
-    "application/vnd.oci.image.manifest.v1+json, "
-    "application/vnd.oci.image.index.v1+json"
-)
 
 
 def parse_env_var(env_text: str | None, key: str) -> str | None:
@@ -266,77 +261,28 @@ def _registry_image_parts(image: str) -> tuple[str, str]:
     return registry, repository
 
 
-def _parse_bearer_authenticate(header: str) -> dict[str, str]:
-    scheme, _, rest = header.partition(" ")
-    if scheme.lower() != "bearer":
-        raise RuntimeError("registry did not return a Bearer authentication challenge")
-    params: dict[str, str] = {}
-    for item in rest.split(","):
-        key, sep, value = item.strip().partition("=")
-        if sep:
-            params[key] = value.strip().strip('"')
-    return params
-
-
-def _registry_bearer_token(client: httpx.Client, authenticate_header: str) -> str:
-    params = _parse_bearer_authenticate(authenticate_header)
-    realm = params.get("realm")
-    if not realm:
-        raise RuntimeError("registry Bearer challenge did not include a token realm")
-    token_params = {
-        key: value for key in ("service", "scope") if (value := params.get(key))
-    }
-    response = client.get(realm, params=token_params)
-    response.raise_for_status()
-    payload = response.json()
-    token = payload.get("token") or payload.get("access_token")
-    if not token:
-        raise RuntimeError("registry token response did not include a token")
-    return str(token)
-
-
-def _image_manifest_exists(
-    image: str, image_ref: str, *, client: httpx.Client | None = None
-) -> bool:
-    """Return whether image:image_ref exists in the registry."""
+def _image_manifest_exists(image: str, image_ref: str) -> bool:
+    """Return whether image:image_ref exists in the registry using the SDK release resolver."""
     registry, repository = _registry_image_parts(image)
-    url = f"https://{registry}/v2/{repository}/manifests/{image_ref}"
-    headers = {"Accept": _IMAGE_MANIFEST_ACCEPT}
-
-    def request(c: httpx.Client, *, token: str | None = None) -> httpx.Response:
-        req_headers = dict(headers)
-        if token:
-            req_headers["Authorization"] = f"Bearer {token}"
-        return c.get(url, headers=req_headers)
-
-    if client is None:
-        with httpx.Client(timeout=10.0, follow_redirects=True) as created:
-            return _image_manifest_exists(image, image_ref, client=created)
-
-    response = request(client)
-    if response.status_code == 401:
-        token = _registry_bearer_token(
-            client, response.headers.get("www-authenticate", "")
+    try:
+        resolve_image_digest(
+            image=repository,
+            reference=image_ref,
+            registry=registry,
         )
-        response = request(client, token=token)
-    if 200 <= response.status_code < 300:
         return True
-    if response.status_code == 404:
-        return False
-    if response.status_code in (401, 403):
+    except ReleaseError as exc:
+        message = str(exc)
+        if "does not exist in the registry" in message or "404" in message:
+            return False
         raise RuntimeError(
-            f"registry refused manifest check for {image}:{image_ref} "
-            f"(status {response.status_code})"
-        )
-    if response.status_code == 429 or response.status_code >= 500:
+            f"registry refused manifest check for {image}:{image_ref} ({exc})"
+        ) from exc
+    except OSError as exc:
         raise RuntimeError(
-            f"registry manifest check for {image}:{image_ref} is temporarily unavailable "
-            f"(status {response.status_code})"
-        )
-    raise RuntimeError(
-        f"registry manifest check for {image}:{image_ref} returned status "
-        f"{response.status_code}"
-    )
+            f"registry connection failed for {image}:{image_ref} ({exc})"
+        ) from exc
+
 
 
 def _wait_for_image_dependencies(
@@ -385,7 +331,7 @@ def _wait_for_image_dependencies(
             try:
                 if not manifest_exists_fn(image, image_ref):
                     missing.append(image)
-            except (RuntimeError, httpx.HTTPError) as exc:
+            except (RuntimeError, httpx.HTTPError, OSError) as exc:
                 errors.append(f"{image}: {exc}")
         if not missing and not errors:
             return
