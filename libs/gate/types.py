@@ -151,15 +151,57 @@ class HeadFacts:
         return tuple(r for r in self.reviews if r[1] == self.head_sha)
 
 
+# Exit codes (#740). A caller acts on the code alone, never on the prose:
+# 1 means waiting will fix it, 3 means someone must act, 4 means this run could not
+# judge the PR (fix the cause and re-run; it is not a verdict on the PR).
+EXIT_READY, EXIT_WAIT, EXIT_OWNER, EXIT_ACTION, EXIT_UNEVALUABLE = 0, 1, 2, 3, 4
+OUTCOMES = {
+    EXIT_READY: "ready",
+    EXIT_WAIT: "wait",
+    EXIT_OWNER: "owner",
+    EXIT_ACTION: "action",
+    EXIT_UNEVALUABLE: "unevaluable",
+}
+
+# Reason kinds. "wait" is the default: time alone can clear it.
+WAIT, ACT, UNEVALUABLE = "wait", "act", "unevaluable"
+
+
+class Reasons(list):
+    """The reason list, with the kind of each reason kept beside it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.kinds: list[str] = []
+
+    def append(self, text: str, kind: str = WAIT) -> None:  # type: ignore[override]
+        super().append(text)
+        self.kinds.append(kind)
+
+
 @dataclass
 class Verdict:
     ready: bool
     owner_required: bool
     reasons: list[str] = field(default_factory=list)
     quiet_remaining_seconds: int = 0
+    action_required: bool = False
+    unevaluable: bool = False
 
     @property
     def exit_code(self) -> int:
+        """Ready first; then a run that could not judge (its other findings are not
+        trustworthy); then the owner; then someone must act; else wait."""
         if self.ready:
-            return 0
-        return 2 if self.owner_required else 1
+            return EXIT_READY
+        if self.unevaluable:
+            return EXIT_UNEVALUABLE
+        if self.owner_required:
+            return EXIT_OWNER
+        if self.action_required:
+            return EXIT_ACTION
+        return EXIT_WAIT
+
+    @property
+    def outcome(self) -> str:
+        return OUTCOMES[self.exit_code]

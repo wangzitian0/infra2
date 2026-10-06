@@ -10,6 +10,8 @@ from libs.gate.evaluator import (
     evaluate,
 )
 from libs.gate.types import (
+    ACT,
+    Reasons,
     HeadFacts,
 )
 
@@ -51,7 +53,7 @@ def _base_facts(**kwargs) -> HeadFacts:
 
 
 def test_step_pr_state_and_conflicts_valid():
-    reasons: list[str] = []
+    reasons = Reasons()
     facts = _base_facts()
     owner = _check_pr_state_and_conflicts(facts, reasons)
     assert not owner
@@ -59,15 +61,16 @@ def test_step_pr_state_and_conflicts_valid():
 
 
 def test_step_pr_state_and_conflicts_not_open():
-    reasons: list[str] = []
+    reasons = Reasons()
     facts = _base_facts(state="CLOSED")
     owner = _check_pr_state_and_conflicts(facts, reasons)
     assert not owner
     assert any("not OPEN" in r for r in reasons)
+    assert ACT in reasons.kinds  # a closed PR needs someone to act (#740)
 
 
 def test_step_pr_state_and_conflicts_wrong_base():
-    reasons: list[str] = []
+    reasons = Reasons()
     facts = _base_facts(base="feature")
     owner = _check_pr_state_and_conflicts(facts, reasons)
     assert owner
@@ -75,7 +78,7 @@ def test_step_pr_state_and_conflicts_wrong_base():
 
 
 def test_step_pr_state_and_conflicts_conflicting():
-    reasons: list[str] = []
+    reasons = Reasons()
     facts = _base_facts(mergeable="CONFLICTING")
     owner = _check_pr_state_and_conflicts(facts, reasons)
     assert not owner
@@ -83,21 +86,21 @@ def test_step_pr_state_and_conflicts_conflicting():
 
 
 def test_step_checks_green_and_stale():
-    reasons: list[str] = []
+    reasons = Reasons()
     facts = _base_facts(checks=(("CI", "fail"),))
     _check_checks_green_and_stale(facts, is_open=True, reasons=reasons)
     assert any("check(s) not green" in r for r in reasons)
 
 
 def test_step_reviews():
-    reasons: list[str] = []
+    reasons = Reasons()
     facts = _base_facts(unresolved_weight=1.5, unresolved_threads=2)
     _check_reviews(facts, reasons)
     assert any("unresolved review thread(s)" in r for r in reasons)
 
 
 def test_step_settling_window_clock_pending():
-    reasons: list[str] = []
+    reasons = Reasons()
     facts = _base_facts(last_push_at=1000.0)
     # now = 1000 + 5 min (quiet_minutes = 12, so remaining = 7 min = 420s)
     remaining = _check_settling_window(
@@ -113,7 +116,7 @@ def test_step_settling_window_clock_pending():
 
 
 def test_step_settling_window_clock_passed():
-    reasons: list[str] = []
+    reasons = Reasons()
     facts = _base_facts(last_push_at=1000.0)
     # now = 1000 + 15 min (> 12 min)
     remaining = _check_settling_window(
