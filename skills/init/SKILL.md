@@ -40,6 +40,8 @@ git worktree list | grep -F "_issue<N>_"
 
 A substring match is wrong: `issue12` would match `issue123`.
 
+Report the open production decisions once: issues labelled `prod-pending` in every repository of the owner. The command is in `local.md`.
+
 ## 5. Create the worktree
 
 - Name: `<repo>_issue<N>_<slug>`. Branch: `feat/issue<N>-<slug>`. Base: the latest `origin/main`.
