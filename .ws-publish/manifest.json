@@ -4,7 +4,7 @@
   "inputs": {
     "repo": "14182cd9ec2a71a0171cd540a477cdb60545c377ee60d1bde5f31c273bc84845",
     "root": "77a0f07f693247f372f94c6905d5e29e2fc30706cb3bb5221d054d202b495ba9",
-    "skills": "3ffa1235e76671ab7a86b4855b5c7151beb65be018fd5d0ab191da91ac8aa3f2"
+    "skills": "64b613ba9e3fde5381a99e447b502302af2d329187f0111c9ca64f8fe41e7306"
   },
   "language": "en",
   "outputs": {
@@ -19,15 +19,17 @@
   "schema": 2,
   "skills": {
     "files": {
-      "skills/audit/SKILL.md": "50f721df45da65f421032c7b7bc3890a7a6a25380c34684c1366dc4cfc65d39a",
-      "skills/close/SKILL.md": "39173a95b0a18473fe818c772b57ea4d369ff42722f6c0e7c751c3f0678af9d9",
+      "skills/audit/SKILL.md": "095fdfafab10d68c203c80328ce036b56937c104ae158f2d53041366af4b0747",
+      "skills/auto/SKILL.md": "b5008729fa25cbf6bd4351d51557231f2763fd27c5351a64fdd5552e53063629",
+      "skills/close/SKILL.md": "23db4507e3d67dcd8c8a89a7c0a6a362d523f77f22f0a584f17cbf5101e5fe6a",
       "skills/codegraph/SKILL.md": "846a10e24f95f87ebf4a6f8a2f9cb715476dcde4f3ac06de3bd29d0d4dda32fc",
       "skills/deploy-evidence/SKILL.md": "8c33f2324e3c1acdcf665f42101bb1454cfea05ac8c6d15ce7a39ce1692cb859",
-      "skills/prr/SKILL.md": "a07a5a27e4b4e4f72f99e18d40451aa33401b5a68d370eb808a7e343688a75b7",
+      "skills/init/SKILL.md": "8426954fc8d336e7836dfa4440959d4f1c67036f8f91c37a54f05563398415f5",
+      "skills/prr/SKILL.md": "4c18e2c6f1e185ab45844ef3b2e2dd66c33e860c2385960017fa055e4e53164e",
       "skills/recall/SKILL.md": "a5f59d1cc77831b3f848c04a426177585c1dac3e0bd8f43e2bd84a3715aeaa76",
-      "skills/smoke/SKILL.md": "88c20db19e4d7355fb3cd707515e4b312ff8e66b166fcbe9e82004af1d43da8f",
-      "skills/ssot/SKILL.md": "a6e04d3bd2dcc8a5a98e3a8b8010a99501932b3a22a5cc1532179dc8db52cac9",
-      "skills/start/SKILL.md": "d6db080443d3973c8ca9230e447e783b606ae203840c2ce2585eda5f9d5bdcf8"
+      "skills/smoke/SKILL.md": "70d0fbb867e3ba5d93ef7eced24a1da5f30a55f9460e8363daff172bda39912a",
+      "skills/ssot/SKILL.md": "9fd992e176174324637cd0f74872110353e16e19997ec481b1ec447fdb2e116b",
+      "skills/start/SKILL.md": "af5ee965e5170f5355e89e0dbe37888742cbf3389def15a88a507a95c8515cfa"
     },
     "link_dirs": [
       ".claude/skills",
@@ -35,18 +37,22 @@
     ],
     "links": {
       ".agents/skills/audit": "../../skills/audit",
+      ".agents/skills/auto": "../../skills/auto",
       ".agents/skills/close": "../../skills/close",
       ".agents/skills/codegraph": "../../skills/codegraph",
       ".agents/skills/deploy-evidence": "../../skills/deploy-evidence",
+      ".agents/skills/init": "../../skills/init",
       ".agents/skills/prr": "../../skills/prr",
       ".agents/skills/recall": "../../skills/recall",
       ".agents/skills/smoke": "../../skills/smoke",
       ".agents/skills/ssot": "../../skills/ssot",
       ".agents/skills/start": "../../skills/start",
       ".claude/skills/audit": "../../skills/audit",
+      ".claude/skills/auto": "../../skills/auto",
       ".claude/skills/close": "../../skills/close",
       ".claude/skills/codegraph": "../../skills/codegraph",
       ".claude/skills/deploy-evidence": "../../skills/deploy-evidence",
+      ".claude/skills/init": "../../skills/init",
       ".claude/skills/prr": "../../skills/prr",
       ".claude/skills/recall": "../../skills/recall",
       ".claude/skills/smoke": "../../skills/smoke",
@@ -55,7 +61,7 @@
     },
     "root": "skills"
   },
-  "source_revision": "8415c3c8268f1569da72c517a7ab80fc713d8b9d",
+  "source_revision": "ea4d3c9497b2eb6dca973746ee302f1e311c7171",
   "target": {
     "remote": "github.com/wangzitian0/infra2",
     "repo": "infra2",
