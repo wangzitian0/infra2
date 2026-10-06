@@ -10,12 +10,12 @@ it. This test looks for it.
 
 from __future__ import annotations
 
+import importlib.util
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 POLICY = ROOT / "bootstrap/06.iac_runner/vault-policy.hcl"
-SDK_SECRETS = ROOT / "repos/infra2-sdk/src/infra2_sdk/secrets.py"
 
 #: Every project whose service secrets the runner supplies during a deploy.
 WRITTEN_PREFIXES = ("platform", "finance_report", "truealpha")
@@ -26,6 +26,22 @@ def _capabilities(policy: str) -> dict[str, list[str]]:
         r'path\s+"([^"]+)"\s*\{\s*capabilities\s*=\s*\[([^\]]*)\]', policy
     )
     return {path: re.findall(r'"([a-z-]+)"', caps) for path, caps in blocks}
+
+
+def _installed_sdk_secrets_source() -> str:
+    """Source of the infra2-sdk release that pyproject.toml pins and CI installs.
+
+    The `repos/infra2-sdk` submodule is a development snapshot. CI never checks it out, so
+    the test must not read it. infra2-sdk is a hard dependency: a missing module fails here.
+    """
+    try:
+        spec = importlib.util.find_spec("infra2_sdk.secrets")
+    except ModuleNotFoundError:
+        spec = None
+    assert spec is not None and spec.origin, (
+        "infra2_sdk.secrets is not installed; infra2-sdk is a hard dependency"
+    )
+    return Path(spec.origin).read_text()
 
 
 def test_every_written_secret_path_admits_patch_as_well_as_create_and_update() -> None:
@@ -43,9 +59,10 @@ def test_the_sdk_still_writes_with_patch_so_the_capability_is_still_required() -
     """If the SDK ever stops using PATCH, this test says so instead of leaving a capability
     nobody can explain — the same reasoning that put `auth/token/renew-self` in the agent
     policies."""
-    if not SDK_SECRETS.exists():  # the submodule is not checked out in every workspace
-        return
-    source = SDK_SECRETS.read_text()
+    source = _installed_sdk_secrets_source()
+    assert "class VaultKvBackend" in source, (
+        "read a file that is not the SDK secrets module"
+    )
     assert '"PATCH"' in source and "merge-patch+json" in source, (
         "infra2-sdk no longer writes with PATCH; drop the `patch` capability in the same PR"
     )
