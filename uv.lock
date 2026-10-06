@@ -504,7 +504,7 @@ dependencies = [
     { name = "pyyaml" },
 ]
 wheels = [
-    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.0.0/infra2_sdk-3.0.0-py3-none-any.whl", hash = "sha256:4fd06e26720b0ae3bec0c1788b0a9733f1e194f12731578b5a55a9693dd4cc4b" },
+    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.0.0/infra2_sdk-3.0.0-py3-none-any.whl", hash = "sha256:e2c2a26a7b873bd7d2bd60dc5305822b8d6827376007c6530b9a294f0861231a" },
 ]
 
 [package.metadata]
