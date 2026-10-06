@@ -359,7 +359,7 @@ def classify_deployed_template(
     """Is the template the agent has mounted the one this release ships?"""
     import sys
 
-    mod = sys.modules.get("libs.vault_self_refresh_audit")
+    mod = sys.modules.get("libs.security.vault_self_refresh_audit") or sys.modules.get("libs.vault_self_refresh_audit")
     release_sha_fn = (
         getattr(mod, "_release_template_sha256", _release_template_sha256)
         if mod
