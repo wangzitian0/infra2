@@ -18,6 +18,7 @@ import pytest
 
 from libs.iac_runner_client import (
     STATUS_NOT_FOUND_GRACE_SECONDS,
+    RunnerLostDeploymentError,
     _sign,
     poll_platform_deploy_status,
     status_poll_attempts,
@@ -686,6 +687,88 @@ def test_poll_raises_on_a_404_that_carries_an_empty_json_object():
             nonce_factory=lambda: "nonce123",
             transport=transport,
         )
+
+
+def test_a_lost_request_raises_the_lost_deployment_error_a_caller_can_catch():
+    """#666: deploy_v2 re-submits on this class alone. It stays a RuntimeError, so a
+    caller that catches RuntimeError keeps working, and the message is the same text."""
+    deployment_id = "59ee11b32946abcd"
+    now, sleep = _virtual_clock()
+    _calls, transport = _capture(
+        [({"status": "not_found", "deployment_id": deployment_id}, 404)]
+    )
+    with pytest.raises(RunnerLostDeploymentError) as excinfo:
+        poll_platform_deploy_status(
+            env="staging",
+            ref=SHA,
+            deployment_id=deployment_id,
+            base_url="u",
+            secret=SECRET,
+            attempts=335,
+            interval=10.0,
+            now=now,
+            sleep=sleep,
+            nonce_factory=lambda: "nonce123",
+            transport=transport,
+        )
+    assert isinstance(excinfo.value, RuntimeError)
+    assert deployment_id in str(excinfo.value)
+    assert "the runner has no record of this deployment" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("responses", "raised"),
+    [
+        # a gateway that stays down: the runner may be back and still hold the deploy
+        ([({}, 502)], RuntimeError),
+        # a bodiless Traefik 404 while the container is recreated is a gateway error too
+        ([(None, 404)], RuntimeError),
+        # a deploy that never settles in the attempt budget
+        ([{"status": "running"}], TimeoutError),
+    ],
+    ids=["gateway-502", "gateway-bodiless-404", "never-settles"],
+)
+def test_only_a_lost_request_is_a_lost_deployment_error(responses, raised):
+    now, sleep = _virtual_clock()
+    _calls, transport = _capture(responses)
+    with pytest.raises(raised) as excinfo:
+        poll_platform_deploy_status(
+            env="staging",
+            ref=SHA,
+            base_url="u",
+            secret=SECRET,
+            attempts=50,
+            interval=10.0,
+            now=now,
+            sleep=sleep,
+            nonce_factory=lambda: "nonce123",
+            transport=transport,
+            gateway_grace=180.0,
+        )
+    assert not isinstance(excinfo.value, RunnerLostDeploymentError)
+
+
+def test_a_transport_error_that_lasts_is_not_a_lost_deployment_error():
+    now, sleep = _virtual_clock()
+
+    def down(url, *, content, headers, timeout):
+        raise httpx.ConnectError("connection refused")
+
+    with pytest.raises(RuntimeError, match="unreachable") as excinfo:
+        poll_platform_deploy_status(
+            env="staging",
+            ref=SHA,
+            base_url="u",
+            secret=SECRET,
+            attempts=50,
+            interval=10.0,
+            now=now,
+            sleep=sleep,
+            nonce_factory=lambda: "nonce123",
+            transport=down,
+            gateway_grace=180.0,
+        )
+    assert not isinstance(excinfo.value, RunnerLostDeploymentError)
 
 
 # --- truealpha#860: the /deploy/status schedule starts short and grows to the old 10 s --

@@ -104,9 +104,13 @@ SUBMODULES = None  # populated in main()
 # Skipped by NAME at any depth: build and tooling noise that is never
 # documentation.
 SKIP_NAMES = {
-    ".git", ".venv", "node_modules", "__pycache__",
+    ".git",
+    ".venv",
+    "node_modules",
+    "__pycache__",
     # Agent scratch checkouts; gitignored, not repository content.
-    ".claude", ".omo",
+    ".claude",
+    ".omo",
 }
 
 # Skipped by repo-relative PATH. Name matching was wrong here and Copilot
@@ -176,8 +180,7 @@ def iter_markdown_files(submodules: set[str]):
         rel_root = os.path.relpath(root, REPO_ROOT).replace(os.sep, "/")
         prefix = "" if rel_root == "." else rel_root + "/"
         dirs[:] = [
-            d for d in dirs
-            if d not in SKIP_NAMES and (prefix + d) not in skip_paths
+            d for d in dirs if d not in SKIP_NAMES and (prefix + d) not in skip_paths
         ]
         for name in files:
             if name.endswith(".md"):
@@ -212,7 +215,9 @@ def main() -> int:
             if os.path.exists(resolved):
                 continue
             rel_target = os.path.relpath(resolved, REPO_ROOT).replace(os.sep, "/")
-            if any(rel_target == sm or rel_target.startswith(sm + "/") for sm in SUBMODULES):
+            if any(
+                rel_target == sm or rel_target.startswith(sm + "/") for sm in SUBMODULES
+            ):
                 continue  # inside a submodule: unverifiable without a recursive checkout
             if (rel_file, target) in KNOWN_UNRESOLVED:
                 exempt.append((rel_file, target))
@@ -236,7 +241,9 @@ def main() -> int:
         print()
 
     if exempt:
-        print(f"{len(exempt)} known-unresolved link(s), each tracking a pending decision:")
+        print(
+            f"{len(exempt)} known-unresolved link(s), each tracking a pending decision:"
+        )
         for rel_file, link in exempt:
             print(f"  {rel_file} -> {link}")
             print(f"      {KNOWN_UNRESOLVED[(rel_file, link)]}")

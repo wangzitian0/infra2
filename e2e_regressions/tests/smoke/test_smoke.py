@@ -16,7 +16,7 @@ def _core_services(config: TestConfig):
         "Vault": f"{config.VAULT_URL}/v1/sys/health",
         "SSO": config.SSO_URL,
         "1Password": config.OP_URL,
-        "MinIO Console": config.MINIO_CONSOLE_URL,
+        "S3 Console": config.S3_CONSOLE_URL,
     }
     if config.PORTAL_URL:
         services["Portal"] = config.PORTAL_URL
@@ -25,20 +25,20 @@ def _core_services(config: TestConfig):
 
 @pytest.mark.smoke
 @pytest.mark.e2e
-async def test_minio_health(config: TestConfig):
-    """Verify S3/MinIO Console and S3 API are accessible."""
+async def test_s3_health(config: TestConfig):
+    """Verify the S3 Console and S3 API are accessible."""
     async with httpx.AsyncClient(verify=False, timeout=10.0, follow_redirects=True) as client:
         # Console should return 200 (HTML login page)
-        console_resp = await client.get(config.MINIO_CONSOLE_URL)
+        console_resp = await client.get(config.S3_CONSOLE_URL)
         assert console_resp.status_code == 200, (
-            f"MinIO Console returned {console_resp.status_code}"
+            f"S3 Console returned {console_resp.status_code}"
         )
 
         # S3 API health check
-        api_health_url = f"{config.MINIO_API_URL}/minio/health/live"
+        api_health_url = f"{config.S3_API_URL}/minio/health/live"
         api_resp = await client.get(api_health_url)
         assert api_resp.status_code == 200, (
-            f"MinIO API health check returned {api_resp.status_code}"
+            f"S3 API health check returned {api_resp.status_code}"
         )
 
 
