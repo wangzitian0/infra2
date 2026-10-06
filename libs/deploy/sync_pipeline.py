@@ -13,7 +13,6 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from infra2_sdk.deploy import DeployState
 from libs.core.service_identity import ServiceIdentity
 
 if TYPE_CHECKING:
@@ -29,7 +28,7 @@ class SyncAction:
     """Deployment sync action types aligned with infra2-sdk DeployState."""
 
     SKIPPED = "skipped"
-    FAILED = DeployState.FAILED.value  # "failed"
+    FAILED = "failed"
     CREATED = "created"
     UPDATED = "updated"
     SUPPLIED = "supplied"

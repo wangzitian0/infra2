@@ -40,7 +40,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github/workflows"
 # Provided by the checkout, not by pip.
-REPO_PACKAGES = ("libs", "tools", "finance_report", "truealpha")
+REPO_PACKAGES = ("libs", "tools", "finance_report", "truealpha", "tasks")
 
 # Run in the subprocess: block every top-level module the job does not install, then
 # import. `find_spec` raising ModuleNotFoundError is what a genuinely absent module
@@ -177,6 +177,8 @@ def _entry_modules(job: dict) -> set[str]:
                     candidate = tokens[index + 1]
                     if candidate.startswith(REPO_PACKAGES):
                         found.add(candidate)
+                    elif candidate == "invoke":
+                        found.add("tasks")
     expanded = set(found)
     for mod in list(found):
         expanded |= _subprocess_modules(mod)

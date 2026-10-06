@@ -873,7 +873,9 @@ def test_authentik_sync_secret_hook_repairs_bootstrap_fields(monkeypatch) -> Non
     assert stores["authentik"].values["bootstrap_email"] == "admin@example.test"
 
 
-def test_base_deployer_ensure_runtime_secrets_passes_for_service_without_secret_key() -> None:
+def test_base_deployer_ensure_runtime_secrets_passes_for_service_without_secret_key() -> (
+    None
+):
     """Services without a manifest and with secret_key = '' require no Vault secrets."""
     from libs.deploy.deployer import Deployer
 
@@ -900,7 +902,9 @@ def test_base_deployer_creates_missing_vault_secret_path(monkeypatch) -> None:
         secret_key = "jwt_secret"
 
     monkeypatch.setattr(
-        StubWithSecretDeployer, "secrets_backend", classmethod(lambda cls, env=None: secrets)
+        StubWithSecretDeployer,
+        "secrets_backend",
+        classmethod(lambda cls, env=None: secrets),
     )
 
     assert StubWithSecretDeployer.ensure_runtime_secrets() is True
@@ -1560,9 +1564,7 @@ def test_s3_compose_has_console_root_redirect() -> None:
     from pathlib import Path
     import yaml
 
-    compose_path = (
-        Path(__file__).resolve().parents[2] / "platform/03.s3/compose.yaml"
-    )
+    compose_path = Path(__file__).resolve().parents[2] / "platform/03.s3/compose.yaml"
     compose = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
     labels = compose["services"]["s3"]["labels"]
 
@@ -1570,6 +1572,13 @@ def test_s3_compose_has_console_root_redirect() -> None:
     assert any("middlewares=s3-console-redirect" in lbl for lbl in labels)
     assert any("redirectregex.regex" in lbl for lbl in labels)
     assert any(
-        "redirectregex.replacement" in lbl and "rustfs/console" in lbl
-        for lbl in labels
+        "redirectregex.replacement" in lbl and "rustfs/console" in lbl for lbl in labels
     )
+
+
+def test_sync_action_failed_matches_sdk() -> None:
+    """SyncAction.FAILED must equal DeployState.FAILED.value without runtime import (#1016)."""
+    from infra2_sdk.deploy import DeployState
+    from libs.deploy.sync_pipeline import SyncAction
+
+    assert SyncAction.FAILED == DeployState.FAILED.value
