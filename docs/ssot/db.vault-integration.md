@@ -121,6 +121,14 @@ The AppRole lifecycle is owned by infra2:
   mints a non-expiring `role_id`/`secret_id`, injects them into the matching
   Dokploy compose env as `VAULT_ROLE_ID`/`VAULT_SECRET_ID`, and waits for a new
   Dokploy runtime deployment record before reporting success.
+- A re-issue ends the earlier secret ids (#1070). `setup-approle --deploy` lists
+  the role's secret id accessors, issues a new secret id, and gives it to the
+  target compose and to every other Dokploy compose whose env holds the same
+  `VAULT_ROLE_ID` (a PR preview copies its source environment's credentials).
+  Each one needs a new `done` deployment record. Then the task destroys every
+  accessor from the list. A failed step destroys nothing and the task exits 1.
+- `setup-approle --deploy=false` writes the policy and the role only. It issues no
+  secret id, because nothing would store it.
 
 Finance Report CI/CD is only a consumer. It must not hold `VAULT_ROOT_TOKEN` or
 mutate Vault policies/roles.

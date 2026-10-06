@@ -355,6 +355,7 @@ Until the first run writes the log, any crontab edit restarts that clock. After 
 - **兜底**(Dokploy 重部署没产生新 deployment record / 高负载): 直接把 role-id +
   fresh secret-id 写进该服务 `.env`,`docker compose -p <proj> -f <compose> up -d`
   重建(creds `secret_id_ttl=0` 不过期)。
+  兜底手工签发的 secret id 不会自动失效;Dokploy 恢复后再跑一次 `setup-approle --deploy`,它会销毁这次运行前的全部 secret id(#1070)。
 - **验证**: vault-agent `healthy` → app 容器起 → `/api/health` 200 → 迁移落地。
 - **关联**: 根因 #290(provisioning 链脆弱);creds 持久化 #294;vault CLI 入镜像
   #289;policy 缺口 #287。**收尾目标(高优)**: 把这条 playbook 自动化成不依赖人肉
