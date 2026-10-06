@@ -9,6 +9,16 @@ services:
       - ${DATA_PATH}/config.json:/etc/sing-box/config.json:ro
     networks:
       - dokploy-network
+    healthcheck:
+      # The image has no HEALTHCHECK of its own. Probe the VLESS listener on 10000
+      # (config.json.tmpl listen_port) with the Alpine BusyBox nc. `sing-box version`
+      # only proves the binary exists and passes while the daemon is hung. A bare TCP
+      # connect writes no log line at log level "warn".
+      test: ["CMD", "nc", "-z", "127.0.0.1", "10000"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     logging:
       driver: json-file
       options:

@@ -14,6 +14,15 @@ services:
       - ${DATA_PATH}/config.yml:/www/assets/config.yml:ro
     networks:
       - dokploy-network
+    healthcheck:
+      # The image has no HEALTHCHECK of its own. BusyBox wget is in the Alpine base and
+      # lighttpd serves Homer on 8080. wget exits non-zero on a refused connection
+      # and on any HTTP error status.
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     logging:
       driver: json-file
       options:
