@@ -1,7 +1,6 @@
 """Backup inventory and freshness verification helpers.
 
-SSOT for ``libs.backup``'s inventory and manifest verification;
-``libs.backup.verification`` is a backward-compatibility shim over this module.
+SSOT for ``libs.backup``'s inventory and manifest verification.
 """
 
 from __future__ import annotations

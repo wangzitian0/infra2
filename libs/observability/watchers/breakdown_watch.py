@@ -1,8 +1,7 @@
 """Container-breakdown watch: alert when a container is crash-looping / unhealthy,
 *with the reason* pulled from its logs.
 
-SSOT for ``libs.observability.watchers``'s breakdown watcher plugin;
-``libs.observability.watchers.breakdown_watch`` is a backward-compatibility shim over this module.
+SSOT for ``libs.observability.watchers``'s breakdown watcher plugin.
 
 Watcher plugin in the single resident alerting sidecar (#543) — runs inside
 `tools/infra_probe_runner.py --loop` via `libs.observability.watchers.resident.build_watchers`

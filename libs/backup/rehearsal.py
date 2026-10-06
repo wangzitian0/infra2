@@ -1,7 +1,6 @@
 """Backup restore rehearsal helpers.
 
-SSOT for ``libs.backup``'s rehearsal planning and sandboxed execution;
-``libs.backup.rehearsal`` is a backward-compatibility shim over this module.
+SSOT for ``libs.backup``'s rehearsal planning and sandboxed execution.
 
 These helpers intentionally separate the durable backup proof from the
 anonymized snapshot pipeline. A rehearsal restores an encrypted real-data
