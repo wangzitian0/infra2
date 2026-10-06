@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from libs.backup_verification import (
+from libs.backup.verification import (
     BackupEntry,
     BackupManifestError,
     build_backup_alert_payload,
@@ -18,7 +18,7 @@ from libs.backup_verification import (
     _parse_timestamp,
     verify_backup_manifest,
 )
-from libs.backup_restore import (
+from libs.backup.rehearsal import (
     BackupRestoreError,
     assert_manifest_is_rehearsable,
     assert_rehearsal_target,
@@ -573,7 +573,7 @@ def test_backup_restore_rehearsal_dry_run_has_no_download_side_effect(
 def test_run_postgres_restore_rehearsal_filters_create_role_postgres(tmp_path) -> None:
     """Postgres 16 dumpall includes CREATE ROLE postgres which fails on existing superuser."""
     import gzip
-    from libs.backup_restore import RestoreRehearsalPlan, run_postgres_restore_rehearsal
+    from libs.backup.rehearsal import RestoreRehearsalPlan, run_postgres_restore_rehearsal
 
     dump_file = tmp_path / "dump.sql.gz"
     with gzip.open(dump_file, "wb") as f:
@@ -640,7 +640,7 @@ def _fake_restore(
     """Stream `payload` through the real restore path, returning what reached psql."""
     import gzip
 
-    from libs.backup_restore import RestoreRehearsalPlan, run_postgres_restore_rehearsal
+    from libs.backup.rehearsal import RestoreRehearsalPlan, run_postgres_restore_rehearsal
 
     dump_file = tmp_path / "dump.sql.gz"
     with gzip.open(dump_file, "wb") as handle:
@@ -691,7 +691,7 @@ def _fake_restore(
 
 @pytest.mark.parametrize("output", ["f\n", "0\n", "\n", "t\nf\n", "present\n"])
 def test_restore_rejects_false_or_ambiguous_select_invariant(tmp_path, output) -> None:
-    from libs.backup_restore import BackupRestoreError
+    from libs.backup.rehearsal import BackupRestoreError
 
     with pytest.raises(BackupRestoreError, match="one true scalar"):
         _fake_restore(b"SELECT 1;\n", tmp_path, invariant_stdout=output)
@@ -741,7 +741,7 @@ def test_restore_filter_resumes_after_copy_terminator(tmp_path) -> None:
 
 def test_restore_reaps_psql_when_it_exits_mid_stream(tmp_path) -> None:
     """psql runs with ON_ERROR_STOP=1, so it can close the pipe while we write."""
-    from libs.backup_restore import BackupRestoreError
+    from libs.backup.rehearsal import BackupRestoreError
 
     class EarlyExitStdin:
         def __init__(self) -> None:
@@ -768,7 +768,7 @@ def test_restore_reaps_psql_when_it_exits_mid_stream(tmp_path) -> None:
 
 def test_restore_rejects_a_psql_that_stopped_reading_but_exited_zero(tmp_path) -> None:
     """An EPIPE with exit 0 means psql quit early: the restore is incomplete."""
-    from libs.backup_restore import BackupRestoreError
+    from libs.backup.rehearsal import BackupRestoreError
 
     class EarlyExitStdin:
         def __init__(self) -> None:
@@ -796,7 +796,7 @@ def test_restore_reaps_psql_when_the_write_loop_raises_something_else(tmp_path) 
     """Any error while streaming must still reap the child, not leave it running."""
     import gzip
 
-    from libs.backup_restore import RestoreRehearsalPlan, run_postgres_restore_rehearsal
+    from libs.backup.rehearsal import RestoreRehearsalPlan, run_postgres_restore_rehearsal
 
     dump_file = tmp_path / "dump.sql.gz"
     with gzip.open(dump_file, "wb") as handle:

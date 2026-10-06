@@ -2,7 +2,7 @@
 remediate them through Dokploy's own API.
 
 Watcher plugin in the single resident alerting sidecar (#543) — runs inside
-`tools/infra_probe_runner.py --loop` via `libs.resident_watchers.build_watchers`
+`tools/infra_probe_runner.py --loop` via `libs.observability.watchers.resident.build_watchers`
 (it was a standalone compose sidecar before the merge). Two halves,
 deliberately separated:
 

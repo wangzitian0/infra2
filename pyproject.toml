@@ -26,7 +26,7 @@ dependencies = [
     "invoke>=2.2.0",
     "rich>=14.2.0",
     # tools/infra_probe_runner.py real postgres/s3 protocol probes (kind="postgres"/"s3"
-    # in libs/infra_probes.py) call infra2_sdk.runtime.postgres/s3, which need these.
+    # in libs/observability/probes.py) call infra2_sdk.runtime.postgres/s3, which need these.
     "psycopg[binary]>=3.2,<4",
     "boto3>=1.34,<2",
 ]

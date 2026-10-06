@@ -59,8 +59,8 @@ if [ -z "${LATEST_BACKUP}" ]; then
   echo "[*] No local archive found. Invoking materialize_artifact via python..."
   LATEST_BACKUP=$(python3 -c "
 from pathlib import Path
-from libs.backup_verification import load_backup_inventory
-from libs.backup_restore import assert_manifest_is_rehearsable, materialize_artifact
+from libs.backup.verification import load_backup_inventory
+from libs.backup.rehearsal import assert_manifest_is_rehearsable, materialize_artifact
 import json, time
 
 entries = {entry.service_id: entry for entry in load_backup_inventory()}

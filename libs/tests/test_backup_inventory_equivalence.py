@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from libs.backup_verification import load_backup_inventory
+from libs.backup.verification import load_backup_inventory
 
 ROOT = Path(__file__).resolve().parents[2]
 FROZEN = ROOT / "libs/tests/fixtures/backup_inventory_frozen.yaml"
