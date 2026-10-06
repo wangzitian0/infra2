@@ -66,7 +66,8 @@ chmod 700 "${OUTPUT_DIR}" "${RUN_DIR}"
 # Preserves safety invariant #618: logical dumps FIRST, busy path archives LAST.
 # Manual override via SERVICES is preserved for testing or single-service runs.
 if [ -z "${SERVICES:-}" ]; then
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  REAL_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || python3 -c "import os, sys; print(os.path.realpath(sys.argv[1]))" "${BASH_SOURCE[0]}")"
+  SCRIPT_DIR="$(cd "$(dirname "${REAL_PATH}")" && pwd)"
   REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
   SERVICES="$(PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}" python3 -m libs.backup.emitter --environment "${ENVIRONMENT}" --data-root "${DATA_ROOT}")"
 fi
