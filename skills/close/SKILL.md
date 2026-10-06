@@ -29,7 +29,36 @@ PR_STATE=$(gh pr view "$BRANCH" --json state -q .state 2>/dev/null || echo "NONE
 
 ---
 
-## 阶段二：Suspend 模式 — Handover 沉淀
+## 阶段二：进程时效性验证（防新代码未生效）
+
+核验运行进程启动时间晚于文件修改时间，防止跑在旧代码上：
+
+```bash
+python3 - "$FILE" "$PID" <<'PROBE'
+import os, re, subprocess, sys, time
+
+path, pid = sys.argv[1], sys.argv[2]
+age = time.time() - os.stat(path).st_mtime
+r = subprocess.run(["ps", "-o", "etime=", "-p", pid],
+                   capture_output=True, text=True)
+raw = r.stdout.strip()
+m = re.fullmatch(r"(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)", raw)
+print(f"文件改动于 {age:.0f}s 前，ps 报告 etime={raw!r}")
+if r.returncode != 0 or not m:
+    print("无法判定：ps 没有给出可解析的 etime"
+          "（进程已退出 / 无权限 / 该平台格式不同）")
+    sys.exit(2)
+d, h, mi, sec = (int(x or 0) for x in m.groups())
+elapsed = ((d * 24 + h) * 60 + mi) * 60 + sec
+print(f"进程已运行 {elapsed}s")
+print("进程比改动更老 → 跑的是旧代码" if elapsed > age
+      else "进程晚于改动 → 可能是新代码")
+PROBE
+```
+
+---
+
+## 阶段三：Suspend 模式 — Handover 沉淀
 
 当任务中断、挂起或等待合流时，将现场精准沉淀进记忆库与 Issue：
 
@@ -46,7 +75,7 @@ ws-bm write-note --folder memory/handover --tags handover --title "Handover: iss
 
 ---
 
-## 阶段三：Prod Gatekeeper 生产哨兵（服务变更必检）
+## 阶段四：Prod Gatekeeper 生产哨兵（服务变更必检）
 
 若改动涉及服务容器、Docker Compose、基础设施或底层配置：
 
@@ -63,7 +92,7 @@ ws-bm write-note --folder memory/handover --tags handover --title "Handover: iss
 
 ---
 
-## 阶段四：Complete 模式 — 现场清理 (Teardown)
+## 阶段五：Complete 模式 — 现场清理 (Teardown)
 
 所有交付条件与核验均通过后，清理物理环境：
 
