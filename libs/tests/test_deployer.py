@@ -108,7 +108,7 @@ def test_prepare_dirs_reasserts_subpath_ownership_after_blanket_chown(
     )
 
 
-def test_sync_skips_prod_only_service_on_non_production() -> None:
+def test_sync_skips_prod_only_service_on_non_production(monkeypatch) -> None:
     """prod_only services (observability/analytics: signoz, clickhouse, openpanel)
     are never deployed to non-production envs — sync() short-circuits to 'skipped'
     before any vault/dokploy work, so a staging copy is never created."""
@@ -154,6 +154,8 @@ def test_sync_skips_prod_only_service_on_non_production() -> None:
         def deploy_compose(cls, c, env_vars_dict=None):
             return {"action": "applied", "details": "deployed"}
 
+    # The process chooses production explicitly: get_env() has no default (#1039).
+    monkeypatch.setenv("DEPLOY_ENV", "production")
     prod = ObsDeployerProd.sync(MagicMock(), force=False)
     assert not (prod["action"] == "skipped" and "prod-only" in prod.get("details", ""))
 
@@ -744,6 +746,11 @@ def test_wait_for_new_deployment_record_accepts_our_own_record_after_unrelated_o
 class TestDeployerVaultTokenPreflight:
     """Deployment sync must fail before touching runtime when Vault tokens are bad."""
 
+    @pytest.fixture(autouse=True)
+    def _production_process_environment(self, monkeypatch):
+        # The process chooses production explicitly: get_env() has no default (#1039).
+        monkeypatch.setenv("DEPLOY_ENV", "production")
+
     def _deployer(self):
         from libs.deploy.deployer import Deployer
 
@@ -891,9 +898,9 @@ def test_authentik_sync_secret_hook_repairs_bootstrap_fields(monkeypatch) -> Non
     assert stores["authentik"].values["bootstrap_email"] == "admin@example.test"
 
 
-def test_base_deployer_ensure_runtime_secrets_passes_for_service_without_secret_key() -> (
-    None
-):
+def test_base_deployer_ensure_runtime_secrets_passes_for_service_without_secret_key(
+    monkeypatch,
+) -> None:
     """Services without a manifest and with secret_key = '' require no Vault secrets."""
     from libs.deploy.deployer import Deployer
 
@@ -901,6 +908,7 @@ def test_base_deployer_ensure_runtime_secrets_passes_for_service_without_secret_
         service = "unregistered_test_stub"
         secret_key = ""
 
+    monkeypatch.setenv("DEPLOY_ENV", "production")  # no default (#1039)
     assert StubNoSecretDeployer.ensure_runtime_secrets() is True
 
 
@@ -925,6 +933,7 @@ def test_base_deployer_creates_missing_vault_secret_path(monkeypatch) -> None:
         classmethod(lambda cls, env=None: secrets),
     )
 
+    monkeypatch.setenv("DEPLOY_ENV", "production")  # no default (#1039)
     assert StubWithSecretDeployer.ensure_runtime_secrets() is True
     assert secrets.set_calls
     assert secrets.set_calls[0][0] == "jwt_secret"
@@ -1004,6 +1013,150 @@ def test_secrets_backend_falls_back_to_process_env_when_no_override(
     DummyDeployer.secrets_backend()
 
     assert captured["env"] == "staging"
+
+
+# --- #1039: no implicit production; a named target needs no process environment ----
+
+
+class _NoOnePasswordRead:
+    def get(self, key):
+        return None
+
+
+@pytest.fixture
+def no_process_environment(monkeypatch):
+    """A CI process like promote.deploy()'s: INFRA_ENVIRONMENT and DEPLOY_ENV are unset."""
+    monkeypatch.setattr(
+        "libs.security.store.OpSecrets", lambda *a, **k: _NoOnePasswordRead()
+    )
+    for name in ("INFRA_ENVIRONMENT", "DEPLOY_ENV", "ENV_SUFFIX"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _stub_deployer(**attrs):
+    from libs.deploy.deployer import Deployer
+
+    return type(
+        "StubDeployer", (Deployer,), {"service": "widget", "project": "acme", **attrs}
+    )
+
+
+def test_secrets_backend_with_a_named_env_needs_no_process_environment(
+    monkeypatch, no_process_environment
+) -> None:
+    captured = {}
+
+    def _fake_get_secrets(project, service, env):
+        captured.update(project=project, service=service, env=env)
+        return FakeSecrets()
+
+    monkeypatch.setattr("libs.deploy.deployer.get_secrets", _fake_get_secrets)
+
+    _stub_deployer().secrets_backend(env="staging")
+
+    assert captured == {"project": "acme", "service": "widget", "env": "staging"}
+
+
+def test_secrets_backend_without_any_environment_fails_closed(
+    monkeypatch, no_process_environment
+) -> None:
+    from libs.core.environ import EnvironmentNotSetError
+
+    def _must_not_reach_vault(project, service, env):
+        raise AssertionError(f"Vault store chosen for env {env!r} without a choice")
+
+    monkeypatch.setattr("libs.deploy.deployer.get_secrets", _must_not_reach_vault)
+
+    with pytest.raises(EnvironmentNotSetError, match="DEPLOY_ENV"):
+        _stub_deployer().secrets_backend()
+
+
+def test_ensure_runtime_secrets_with_a_named_env_needs_no_process_environment(
+    no_process_environment,
+) -> None:
+    deployer = _stub_deployer(service="unregistered_test_stub", secret_key="")
+
+    assert deployer.ensure_runtime_secrets(env="staging") is True
+
+
+def test_ensure_runtime_secrets_without_any_environment_fails_closed(
+    no_process_environment,
+) -> None:
+    from libs.core.environ import EnvironmentNotSetError
+
+    deployer = _stub_deployer(service="unregistered_test_stub", secret_key="")
+
+    with pytest.raises(EnvironmentNotSetError):
+        deployer.ensure_runtime_secrets()
+
+
+def test_apply_secret_supply_with_a_named_env_needs_no_process_environment(
+    no_process_environment,
+) -> None:
+    deployer = _stub_deployer(service="unregistered_test_stub")
+
+    assert deployer.apply_secret_supply(MagicMock(), env="staging") is True
+
+
+def test_apply_secret_supply_without_any_environment_fails_closed(
+    no_process_environment,
+) -> None:
+    from libs.core.environ import EnvironmentNotSetError
+
+    deployer = _stub_deployer(service="unregistered_test_stub")
+
+    with pytest.raises(EnvironmentNotSetError):
+        deployer.apply_secret_supply(MagicMock())
+
+
+def test_env_for_prefers_the_process_environment_and_falls_back_to_the_named_one(
+    monkeypatch, no_process_environment
+) -> None:
+    from libs.core.environ import EnvironmentNotSetError, reset_env_cache
+
+    deployer = _stub_deployer()
+
+    # The process has none: the named target stands in, and its suffix follows its name.
+    assert deployer._env_for("staging")["ENV"] == "staging"
+    assert deployer._env_for("staging")["ENV_SUFFIX"] == "-staging"
+    for unnamed in (None, "", "  "):
+        with pytest.raises(EnvironmentNotSetError):
+            deployer._env_for(unnamed)
+
+    # The process has one: it wins, with the operator's ENV_SUFFIX override.
+    monkeypatch.setenv("DEPLOY_ENV", "staging")
+    monkeypatch.setenv("ENV_SUFFIX", "-override")
+    reset_env_cache()
+    assert deployer._env_for("staging")["ENV_SUFFIX"] == "-override"
+    assert deployer._env_for(None)["ENV_SUFFIX"] == "-override"
+
+
+def test_promote_secret_self_heal_needs_no_process_environment(
+    monkeypatch, no_process_environment
+) -> None:
+    """libs.deploy.promote runs from a CI process with no INFRA_ENVIRONMENT. It names its
+    target env, and the REAL truealpha deployer must provision that env's store from
+    there (#1039: get_env() has no production default to lean on)."""
+    from libs.deploy.deployer import load_deployer_class
+    from libs.deploy.promote import ensure_generated_secrets
+
+    deployer_cls = load_deployer_class("truealpha/app")
+    stores = {
+        "staging": FakeSecrets({"DATABASE_URL": "postgres://staging"}),
+        "production": FakeSecrets({"DATABASE_URL": "postgres://prod"}),
+    }
+    monkeypatch.setattr(
+        deployer_cls, "secrets_backend", classmethod(lambda cls, env=None: stores[env])
+    )
+    # load_deployer_class imports the module afresh on each call: pin the patched class.
+    monkeypatch.setattr(
+        "libs.deploy.deployer.load_deployer_class", lambda service: deployer_cls
+    )
+
+    ensure_generated_secrets("truealpha/app", "staging")
+
+    assert stores["staging"].values["SECRET_KEY"]
+    assert "SECRET_KEY" not in stores["production"].values
 
 
 def test_truealpha_ensure_runtime_secrets_provisions_the_explicit_env_not_the_process_env(

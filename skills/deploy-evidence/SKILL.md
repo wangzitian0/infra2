@@ -27,15 +27,15 @@ gh run list --workflow reconcile-iac-inputs.yml --branch vX.Y.Z --limit 1
 If owner has not provided explicit prod disposition, format the 3-stage report and ask:
 ```text
 [PROD GATEKEEPER CHECKPOINT]
-- Stage 1 (Merge): Commit SHA <sha>
+- Stage 1 (Merge): Release tag vX.Y.Z = commit SHA <sha>
 - Stage 2 (Staging Soak): Run URL <url>, Soak Duration <duration>, Health: PASS
 - Stage 3 (Prod Baseline): Image <digest>, Watchdog: OK
 
-Authorize production deployment? (Reply "deploy" to authorize, or "hold" to keep unpromoted)
+Authorize production deployment of vX.Y.Z? (Reply "deploy" to authorize, or "hold" to keep unpromoted)
 ```
 
 ### Phase 3: Prod Promote Dispatch
-Upon owner authorization, trigger official promote:
+A "deploy" covers only the tag it names. Immediately before dispatch, get a live reply from the owner in this session; an earlier or asynchronous answer is not enough. Then trigger the official promote:
 ```bash
 gh workflow run reconcile-iac-inputs.yml -f promote_prod=true -f after=vX.Y.Z
 gh run watch <run-id>

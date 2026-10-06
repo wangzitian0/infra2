@@ -274,7 +274,7 @@ invoke env.set KEY=VALUE --project=<project> --env=<env> --service=<service> --t
 invoke env.set KEY=VALUE --project=<project> --env=<env> --service=<service> --break-glass
 
 # 预览（masked，默认 Vault）
-invoke env.list-all --project=<project> --service=<service>
+invoke env.list-all --project=<project> --env=<env> --service=<service>
 
 # 查看 init/env_vars
 invoke env.init-status

@@ -29,6 +29,7 @@ __all__ = [
     "DEPLOYMENT_ENV_PRODUCTION",
     "DEPLOYMENT_ENV_STAGING",
     "DeploymentEnvironment",
+    "EnvironmentNotSetError",
     "OTEL_INGEST_SUBDOMAIN",
     "OTLP_TRACES_PATH",
     "SERVICE_SUBDOMAINS",
@@ -155,21 +156,57 @@ def infra_domain() -> str:
     return os.environ.get("INTERNAL_DOMAIN", "").strip() or "zitian.party"
 
 
-# Cache for env config (simple dict, no lru_cache to avoid OpSecrets caching issues)
+class EnvironmentNotSetError(ValueError):
+    """No deployment environment was chosen: the caller named none and the process has none."""
+
+
+_NO_ENVIRONMENT_MESSAGE = (
+    "No deployment environment is set. "
+    "Set INFRA_ENVIRONMENT or DEPLOY_ENV to choose one, for example DEPLOY_ENV=staging. "
+    "Production is never the default: choose production explicitly "
+    "with DEPLOY_ENV=production."
+)
+
+
+def _chosen_environment(explicit: str | None) -> str:
+    """Return the normalized name of the environment a call targets. Never defaults.
+
+    ``explicit`` is the name a caller passes. ``None`` means the process choice:
+    INFRA_ENVIRONMENT, then DEPLOY_ENV. A blank value counts as unset. No value at all
+    raises ``EnvironmentNotSetError``: a bare command must never reach production.
+    """
+    if explicit is not None:
+        raw = explicit.strip()
+    else:
+        raw = (os.environ.get("INFRA_ENVIRONMENT") or "").strip() or (
+            os.environ.get("DEPLOY_ENV") or ""
+        ).strip()
+    if not raw:
+        raise EnvironmentNotSetError(_NO_ENVIRONMENT_MESSAGE)
+    return normalize_env_name(raw)
+
+
+# Memoized config (simple dicts, no lru_cache, to avoid OpSecrets caching issues).
+# ``_env_cache`` holds the process environment. ``_named_env_cache`` holds one entry per
+# environment a caller named explicitly, so a named lookup never replaces the process one.
 _env_cache: dict | None = None
+_named_env_cache: dict[str, dict] = {}
 
 
 def reset_env_cache() -> None:
     """Forget the memoized deployment config (after DEPLOY_ENV changes in-process)."""
     global _env_cache
     _env_cache = None
+    _named_env_cache.clear()
 
 
 def set_deploy_env(env_name: str) -> None:
     """Point this process at ``env_name`` the way the iac-runner does for its children:
     INFRA_ENVIRONMENT and DEPLOY_ENV are synchronized; ENV_SUFFIX / ENV_DOMAIN_SUFFIX follow
-    from it (staging → ``-staging``), and the memoized config is dropped."""
-    name = normalize_env_name(env_name)
+    from it (staging → ``-staging``), and the memoized config is dropped.
+
+    A blank ``env_name`` raises ``EnvironmentNotSetError`` and changes nothing."""
+    name = _chosen_environment(env_name or "")
     suffix = "" if name == "production" else f"-{name.replace('_', '-')}"
     os.environ["INFRA_ENVIRONMENT"] = name
     os.environ["DEPLOY_ENV"] = name
@@ -178,25 +215,37 @@ def set_deploy_env(env_name: str) -> None:
     reset_env_cache()
 
 
-def get_env() -> dict[str, str | None]:
+def get_env(env_name: str | None = None) -> dict[str, str | None]:
     """Get deployment environment config.
 
     Sources: 1Password init/env_vars → os.environ fallback
+
+    ``env_name=None`` targets the process environment (INFRA_ENVIRONMENT, then
+    DEPLOY_ENV). When neither holds a value, this raises ``EnvironmentNotSetError``:
+    there is no default, and production is chosen like any other environment.
+
+    ``env_name`` targets that environment and ignores the process variables. A caller
+    that already knows its target (``libs.deploy.promote`` deploys staging and
+    production from one process) passes it here. ENV_SUFFIX then follows the name,
+    not the process ENV_SUFFIX.
     """
     global _env_cache
-    if _env_cache is not None:
+    if env_name is None:
+        if _env_cache is not None:
+            return _env_cache
+        _env_cache = _build_env(_chosen_environment(None), named=False)
         return _env_cache
+    name = _chosen_environment(env_name)
+    if name not in _named_env_cache:
+        _named_env_cache[name] = _build_env(name, named=True)
+    return _named_env_cache[name]
 
+
+def _build_env(env_name: str, *, named: bool) -> dict[str, str | None]:
     from libs.security.store import OpSecrets
 
     op = OpSecrets()
 
-    raw_env = (
-        os.environ.get("INFRA_ENVIRONMENT")
-        or os.environ.get("DEPLOY_ENV")
-        or "production"
-    )
-    env_name = normalize_env_name(raw_env)
     env_dns = env_name.replace("_", "-")
     env_domain_suffix = "" if env_name == "production" else f"-{env_dns}"
     project = (os.environ.get("PROJECT") or "platform").strip()
@@ -205,7 +254,7 @@ def get_env() -> dict[str, str | None]:
     if "-" in project or "/" in project:
         raise ValueError("PROJECT must not include '-' or '/'")
 
-    _env_cache = {
+    return {
         "VPS_HOST": op.get("VPS_HOST") or os.environ.get("VPS_HOST"),
         "VPS_SSH_USER": op.get("VPS_SSH_USER")
         or os.environ.get("VPS_SSH_USER", "root"),
@@ -214,10 +263,11 @@ def get_env() -> dict[str, str | None]:
         "PROJECT": project,
         "ENV": env_name,
         "ENV_DOMAIN_SUFFIX": env_domain_suffix,
-        "ENV_SUFFIX": os.environ.get("ENV_SUFFIX") or env_domain_suffix,
+        "ENV_SUFFIX": env_domain_suffix
+        if named
+        else (os.environ.get("ENV_SUFFIX") or env_domain_suffix),
         "DATA_PATH": os.environ.get("DATA_PATH"),
     }
-    return _env_cache
 
 
 def get_service_url(
@@ -312,7 +362,14 @@ def otel_ingest_endpoint(env: dict | None = None) -> str:
 
 
 def normalize_env_name(value: str | None) -> str:
-    """Normalize environment name for consistent behavior."""
+    """Normalize environment name for consistent behavior.
+
+    A blank name maps to ``production`` here, because some callers normalize names from
+    records that may carry none (for example a Dokploy environment with no name). It is a
+    name normalizer, not a deployment target: ``get_env`` and ``set_deploy_env`` reject a
+    blank name before they call it, so the process choice never falls back to production
+    through it.
+    """
     if not value or not value.strip():
         return "production"
     val = value.strip().lower()

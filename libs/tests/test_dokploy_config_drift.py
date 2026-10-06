@@ -96,6 +96,20 @@ def test_contents_at_ref_empty_paths_is_noop() -> None:
     assert contents_at_ref("HEAD", []) == {}
 
 
+# Captured before the autouse fixture below replaces the module attribute.
+_REAL_HASHES_WITH_REF_CODE = drift.hashes_with_ref_code
+
+
+@pytest.fixture(autouse=True)
+def _no_release_checkout(monkeypatch):
+    """Unit tests never check out a release; a test that needs one overrides this."""
+
+    def unavailable(ref, service_ids, *, root=None):
+        raise RuntimeError("no release checkout in unit tests")
+
+    monkeypatch.setattr(drift, "hashes_with_ref_code", unavailable)
+
+
 def _stub_single_service_scan(monkeypatch, identity, hashes_by_ref):
     class DummyDeployer:
         pass
@@ -384,3 +398,209 @@ def test_scan_resolves_legacy_compose_names(monkeypatch) -> None:
     assert rows[0].service == "platform/s3"
     assert rows[0].verdict == "in_sync"
     assert rows[0].deployed == "v1:src123"
+
+
+_STUB = """
+import os
+
+SOURCE_CONFIG_HASH_VERSION = "v9"
+
+
+def _set_env(name):
+    pass
+
+
+def _load_deployer(sid):
+    return object
+
+
+def _source_env_vars(dep):
+    return {}
+
+
+def expected_hash_at(dep, c, ref, env):
+    return "@@HASH@@-" + os.environ.get("DOKPLOY_API_KEY", "no-key"), []
+"""
+
+
+def _git(repo, *args):
+    return subprocess.run(
+        ["git", *args], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _two_release_repo(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "tools").mkdir(parents=True)
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@example.invalid")
+    _git(repo, "config", "user.name", "t")
+    module = repo / "tools" / "dokploy_config_drift.py"
+    module.write_text(_STUB.replace("@@HASH@@", "release-a"))
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "a")
+    commit_a = _git(repo, "rev-parse", "HEAD")
+    module.write_text(_STUB.replace("@@HASH@@", "release-b"))
+    _git(repo, "commit", "-q", "-am", "b")
+    commit_b = _git(repo, "rev-parse", "HEAD")
+    return repo, commit_a, commit_b
+
+
+def test_hashes_with_ref_code_runs_the_code_of_that_ref(tmp_path, monkeypatch) -> None:
+    """#1071: the expected identity of a release comes from that release's code.
+    Two commits carry two different formulas; each ref must answer with its own,
+    without the parent's credentials, and leave no worktree behind."""
+    repo, commit_a, commit_b = _two_release_repo(tmp_path)
+    monkeypatch.setenv("DOKPLOY_API_KEY", "secret-value")
+
+    a = _REAL_HASHES_WITH_REF_CODE(commit_a, ["platform/x"], root=repo)
+    b = _REAL_HASHES_WITH_REF_CODE(commit_b, ["platform/x"], root=repo)
+
+    assert a == {
+        "version": "v9",
+        "services": {"platform/x": {"hash": "release-a-no-key", "missing": []}},
+    }
+    assert b["services"]["platform/x"]["hash"] == "release-b-no-key"
+    assert len(_git(repo, "worktree", "list").splitlines()) == 1
+
+
+def test_hashes_with_ref_code_refuses_a_commit_off_main(tmp_path) -> None:
+    """#1071 audit: a deployed ref can name any fetched commit. Only main's code runs."""
+    repo, commit_a, _commit_b = _two_release_repo(tmp_path)
+    _git(repo, "checkout", "-q", "-b", "side", commit_a)
+    (repo / "tools" / "dokploy_config_drift.py").write_text(
+        _STUB.replace("@@HASH@@", "side")
+    )
+    _git(repo, "commit", "-q", "-am", "side")
+    side = _git(repo, "rev-parse", "HEAD")
+
+    with pytest.raises(RuntimeError, match="not on main"):
+        _REAL_HASHES_WITH_REF_CODE(side, ["platform/x"], root=repo)
+
+
+def _release_scan(
+    monkeypatch, identity, *, release_by_commit, main_formula, version="v1"
+):
+    """One service; the tag resolves to commit a*40, the deployed ref to itself."""
+
+    class DummyDeployer:
+        pass
+
+    calls = []
+
+    def release(ref, ids, *, root=None):
+        calls.append(ref)
+        run = release_by_commit[ref]
+        if isinstance(run, BaseException):
+            raise run
+        return {"version": version, "services": {"platform/example": run}}
+
+    monkeypatch.setattr(drift, "hashes_with_ref_code", release)
+    monkeypatch.setattr(
+        drift.service_registry, "all_services", lambda: ["platform/example"]
+    )
+    monkeypatch.setattr(drift, "_load_deployer", lambda _sid: DummyDeployer)
+    monkeypatch.setattr(
+        drift, "_deployed_identities", lambda: {"platform/example": identity}
+    )
+    monkeypatch.setattr(
+        drift, "_commit_at_ref", lambda ref: "a" * 40 if ref == "v1.2.3" else ref
+    )
+    monkeypatch.setattr(drift, "_source_env_vars", lambda _dep: {})
+    monkeypatch.setattr(
+        drift, "expected_hash_at", lambda _dep, _c, ref, _env: (main_formula, [])
+    )
+    return drift.scan("v1.2.3")[0], calls
+
+
+def test_scan_takes_the_release_formula_over_this_checkout(monkeypatch) -> None:
+    """#1071: main's formula disagrees with the deployed identity, the release's own
+    code agrees with it. That is not drift."""
+    row, _ = _release_scan(
+        monkeypatch,
+        DeployedIdentity(
+            runtime_hash="r", source_hash="v1:released", deploy_ref="b" * 40
+        ),
+        release_by_commit={
+            "a" * 40: {"hash": "released", "missing": []},
+            "b" * 40: {"hash": "released", "missing": []},
+        },
+        main_formula="main-formula",
+    )
+
+    assert row.verdict == "in_sync"
+    assert row.note == ""
+
+
+def test_scan_reports_drift_that_only_the_release_code_sees(monkeypatch) -> None:
+    """#1071 audit: main's formula would call this in sync; the release's own code at
+    the deployed commit does not reproduce the deployed identity."""
+    row, _ = _release_scan(
+        monkeypatch,
+        DeployedIdentity(
+            runtime_hash="r", source_hash="v1:hand-edited", deploy_ref="b" * 40
+        ),
+        release_by_commit={
+            "a" * 40: {"hash": "released", "missing": []},
+            "b" * 40: {"hash": "released", "missing": []},
+        },
+        main_formula="hand-edited",
+    )
+
+    assert row.verdict == "DRIFT"
+
+
+def test_a_service_error_in_the_release_run_falls_back_and_says_so(monkeypatch) -> None:
+    """#1071 audit: a fallback to this checkout's formula must reach the report."""
+    row, _ = _release_scan(
+        monkeypatch,
+        DeployedIdentity(
+            runtime_hash="r", source_hash="v1:released", deploy_ref="b" * 40
+        ),
+        release_by_commit={
+            "a" * 40: {"error": "ImportError: no module named x"},
+            "b" * 40: {"error": "ImportError: no module named x"},
+        },
+        main_formula="main-formula",
+    )
+
+    assert row.verdict == "DRIFT"
+    assert "this checkout's formula" in row.note and "ImportError" in row.note
+    assert "ImportError" in format_report("v1.2.3", [row])
+
+
+def test_scan_uses_the_hash_version_of_the_release(monkeypatch) -> None:
+    """#1071 audit: a version bump on main must not turn every service into an error."""
+    row, _ = _release_scan(
+        monkeypatch,
+        DeployedIdentity(
+            runtime_hash="r", source_hash="v7:released", deploy_ref="b" * 40
+        ),
+        release_by_commit={
+            "a" * 40: {"hash": "released", "missing": []},
+            "b" * 40: {"hash": "released", "missing": []},
+        },
+        main_formula="main-formula",
+        version="v7",
+    )
+
+    assert row.verdict == "in_sync"
+
+
+def test_a_timed_out_release_run_stops_further_release_runs(monkeypatch) -> None:
+    """#1071 audit: two hung runs would use the job's 15 minutes before any report."""
+    row, calls = _release_scan(
+        monkeypatch,
+        DeployedIdentity(
+            runtime_hash="r", source_hash="v1:main-formula", deploy_ref="b" * 40
+        ),
+        release_by_commit={
+            "a" * 40: subprocess.TimeoutExpired(cmd="python", timeout=120),
+            "b" * 40: {"hash": "main-formula", "missing": []},
+        },
+        main_formula="main-formula",
+    )
+
+    assert calls == ["a" * 40]
+    assert row.verdict == "in_sync"
+    assert "unavailable" in row.note

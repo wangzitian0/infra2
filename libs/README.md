@@ -132,7 +132,7 @@ from libs.core.registry import service_attrs
 
 meta = service_attrs()["platform/postgres"]  # ServiceMeta, read from its deploy.py
 print(meta.compose_path, meta.prod_only, [p.name for p in meta.probes])
-container = with_env_suffix("platform-postgres", get_env())  # "-staging" outside prod
+container = with_env_suffix("platform-postgres", get_env())  # needs DEPLOY_ENV or INFRA_ENVIRONMENT; "-staging" outside prod
 ```
 
 ### 2. Secret Supply & Vault Access (`libs.security`)
