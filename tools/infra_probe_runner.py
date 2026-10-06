@@ -38,6 +38,7 @@ from urllib.request import Request, urlopen
 from libs.alerting import is_report_only_environment, mark_report_payload
 from libs.infra_probes import (
     HTTP_PROBE_HEADERS,
+    ProbeResult,
     build_probe_alert_payload,
     failed_results,
     group_severity,
@@ -358,6 +359,121 @@ def _grace_note(result, alert_name: str, runs: int, seconds: int):
     )
 
 
+def _suppress_cascades(
+    results: list[ProbeResult], failures: list[ProbeResult]
+) -> tuple[list[ProbeResult], list[ProbeResult]]:
+    failed_names = {r.spec.name for r in failures}
+    dep_of = {r.spec.name: r.spec.depends_on for r in failures if r.spec.depends_on}
+    cascaded = [
+        r
+        for r in failures
+        if _cascades_to_failing_root(r.spec.name, dep_of, failed_names)
+    ]
+    cascaded_names = {r.spec.name for r in cascaded}
+    for r in cascaded:
+        root = _resolve_failing_root(r.spec.name, dep_of, failed_names)
+        print(
+            f"probe-runner cascade-suppressed probe={r.spec.name} "
+            f"depends_on={r.spec.depends_on} root={root} (cascade symptom)",
+            flush=True,
+        )
+    filtered_results = [r for r in results if r.spec.name not in cascaded_names]
+    filtered_failures = [r for r in failures if r.spec.name not in cascaded_names]
+    return filtered_results, filtered_failures
+
+
+def _partition_misconfigured(
+    results: list[ProbeResult],
+    failures: list[ProbeResult],
+    ever_succeeded: set[str],
+    never_green: dict,
+    group: ProbeGroup,
+    now: float,
+    escalation_failures: int,
+    escalation_seconds: int,
+) -> tuple[list[ProbeResult], list[ProbeResult]]:
+    misconfig = []
+    for r in failures:
+        if r.spec.kind != "command":
+            continue
+        if is_misconfigured(r):
+            misconfig.append(r)
+        elif r.spec.name not in ever_succeeded:
+            streak = never_green.get(r.spec.name)
+            if not _escalated(streak, now, escalation_failures, escalation_seconds):
+                misconfig.append(
+                    _grace_note(
+                        r, group.alert_name, escalation_failures, escalation_seconds
+                    )
+                )
+            elif streak is not None and not streak.get("escalated"):
+                streak["escalated"] = True
+                print(
+                    f"probe-runner escalated probe={r.spec.name} "
+                    f"stream={group.name} failed_runs={streak.get('runs')} "
+                    f"failing_for={int(now - float(streak.get('since', now)))}s "
+                    "(never passed since runner start; no longer 'misconfigured')",
+                    flush=True,
+                )
+    misconfig_names = {r.spec.name for r in misconfig}
+    regression_results = [r for r in results if r.spec.name not in misconfig_names]
+    return regression_results, misconfig
+
+
+def _dispatch_stream(
+    group: ProbeGroup,
+    stream_key: str,
+    stream_results: list[ProbeResult],
+    alert_name: str,
+    severity_override: str | None,
+    state: dict,
+    now: float,
+    dry_run: bool,
+    renotify_seconds: int,
+    failure_threshold: int,
+    recovery_threshold: int,
+) -> None:
+    payload = build_probe_alert_payload(
+        stream_results,
+        alert_name=alert_name,
+        external_url=group.external_url,
+        severity_override=severity_override,
+        now=now,
+    )
+    if dry_run:
+        if failed_results(stream_results):
+            _send_payload(payload)
+        return
+    before = copy.deepcopy(state.get("groups", {}).get(stream_key))
+    paged = _should_send(
+        stream_key,
+        stream_results,
+        state,
+        now,
+        renotify_seconds,
+        failure_threshold,
+        recovery_threshold,
+    )
+    if paged is None:
+        state.get("delivery_failures", {}).pop(stream_key, None)
+        return
+    if _maintenance_active(now):
+        return
+    payload = build_probe_alert_payload(
+        paged,
+        alert_name=alert_name,
+        external_url=group.external_url,
+        severity_override=severity_override,
+        now=now,
+        **_incident_times(paged, state, stream_key, before),
+    )
+    if not _send_payload(payload, state, now, stream_key):
+        _restore_stream(state, stream_key, before)
+        return
+    _record_sent(stream_key, paged, state, now)
+    _log_send(stream_key, paged, severity_override)
+
+
 def run_once(
     *,
     as_json: bool = False,
@@ -417,7 +533,6 @@ def run_once(
 
     # One group's run is isolated from the next (#903): a group that raises is named in
     # the heartbeat, the other group still alerts, and the state still saves. The body
-    # is a closure so it reads the loop's shared state exactly as the inline loop did.
     def _run_group(group: ProbeGroup) -> None:
         nonlocal any_failures
         specs = _host_specs_for_env(parse_probe_specs(group.raw_specs))
@@ -433,70 +548,17 @@ def run_once(
                 ever_succeeded.add(result.spec.name)
         _track_never_green(results, ever_succeeded, never_green, now)
 
-        # Cascade suppression: a probe whose declared `depends_on` chain reaches a failing
-        # ROOT is a downstream symptom — suppress its alert and page the root only (page the
-        # deepest failed node, not the cascade). E.g. signoz-roundtrip fails because the otel
-        # collector is down -> page the collector, mute the round-trip.
-        # A `depends_on` CYCLE (incl. self-dependency) has no root, so its members are NOT
-        # suppressed (fail closed -> alert) — otherwise a cycle of all-failing probes would
-        # silently swallow every page.
-        failed_names = {r.spec.name for r in failures}
-        dep_of = {r.spec.name: r.spec.depends_on for r in failures if r.spec.depends_on}
-        cascaded = [
-            r
-            for r in failures
-            if _cascades_to_failing_root(r.spec.name, dep_of, failed_names)
-        ]
-        cascaded_names = {r.spec.name for r in cascaded}
-        for r in cascaded:
-            root = _resolve_failing_root(r.spec.name, dep_of, failed_names)
-            print(
-                f"probe-runner cascade-suppressed probe={r.spec.name} "
-                f"depends_on={r.spec.depends_on} root={root} (cascade symptom)",
-                flush=True,
-            )
-        results = [r for r in results if r.spec.name not in cascaded_names]
-        failures = [r for r in failures if r.spec.name not in cascaded_names]
-
-        # Split failures into two streams. ONLY `command` probes are eligible for the
-        # misconfigured lane: they run code (the round-trips) that can be broken by a bug
-        # so they may NEVER pass even against a healthy backend (the signoz-roundtrip
-        # 500-storm). `http`/`tcp` liveness probes are NOT eligible — their failure is
-        # always a real target failure. A command failure goes to the quiet
-        # warning-severity `InfraProbeMisconfigured` lane when
-        #   - the probe reported its own configuration missing (EX_CONFIG): nothing about
-        #     the target was tested, whatever its history; or
-        #   - it has never passed since the runner started AND its failure streak is
-        #     still inside the grace period. A live /healthcheck does not prove ingestion
-        #     (#726: OpenPanel's stayed 200 through 17 h of NOSCRIPT), so after the
-        #     grace period the failure is an outage and joins the normal stream at the
-        #     probe's declared severity.
-        # Each stream dedups independently.
-        misconfig = []
-        for r in failures:
-            if r.spec.kind != "command":
-                continue
-            if is_misconfigured(r):
-                misconfig.append(r)
-            elif r.spec.name not in ever_succeeded:
-                streak = never_green.get(r.spec.name)
-                if not _escalated(streak, now, escalation_failures, escalation_seconds):
-                    misconfig.append(
-                        _grace_note(
-                            r, group.alert_name, escalation_failures, escalation_seconds
-                        )
-                    )
-                elif streak is not None and not streak.get("escalated"):
-                    streak["escalated"] = True
-                    print(
-                        f"probe-runner escalated probe={r.spec.name} "
-                        f"stream={group.name} failed_runs={streak.get('runs')} "
-                        f"failing_for={int(now - float(streak.get('since', now)))}s "
-                        "(never passed since runner start; no longer 'misconfigured')",
-                        flush=True,
-                    )
-        misconfig_names = {r.spec.name for r in misconfig}
-        regression_results = [r for r in results if r.spec.name not in misconfig_names]
+        results, failures = _suppress_cascades(results, failures)
+        regression_results, misconfig = _partition_misconfigured(
+            results,
+            failures,
+            ever_succeeded,
+            never_green,
+            group,
+            now,
+            escalation_failures,
+            escalation_seconds,
+        )
 
         streams = (
             (group.name, regression_results, group.alert_name, None),
@@ -508,49 +570,19 @@ def run_once(
             ),
         )
         for stream_key, stream_results, alert_name, severity_override in streams:
-            payload = build_probe_alert_payload(
-                stream_results,
+            _dispatch_stream(
+                group=group,
+                stream_key=stream_key,
+                stream_results=stream_results,
                 alert_name=alert_name,
-                external_url=group.external_url,
                 severity_override=severity_override,
+                state=state,
                 now=now,
+                dry_run=dry_run,
+                renotify_seconds=renotify_seconds,
+                failure_threshold=failure_threshold,
+                recovery_threshold=recovery_threshold,
             )
-            if dry_run:
-                if failed_results(stream_results):
-                    _send_payload(payload)
-                continue
-            before = copy.deepcopy(state.get("groups", {}).get(stream_key))
-            paged = _should_send(
-                stream_key,
-                stream_results,
-                state,
-                now,
-                renotify_seconds,
-                failure_threshold,
-                recovery_threshold,
-            )
-            if paged is None:
-                # Nothing pending for this stream: a delivery of it that failed earlier
-                # is moot, and must not hold the heartbeat red (#903 review).
-                state.get("delivery_failures", {}).pop(stream_key, None)
-                continue
-            if _maintenance_active(now):
-                continue
-            payload = build_probe_alert_payload(
-                paged,
-                alert_name=alert_name,
-                external_url=group.external_url,
-                severity_override=severity_override,
-                now=now,
-                **_incident_times(paged, state, stream_key, before),
-            )
-            if not _send_payload(payload, state, now, stream_key):
-                # Undelivered: roll the stream back so the next loop sends it again
-                # (a resolve included — _should_send already recorded it).
-                _restore_stream(state, stream_key, before)
-                continue
-            _record_sent(stream_key, paged, state, now)
-            _log_send(stream_key, paged, severity_override)
 
     for group in groups:
         try:

@@ -28,6 +28,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx  # Dokploy transport errors from libs.dokploy surface as httpx exceptions
 
@@ -43,6 +44,8 @@ from libs.iac_runner_client import (
 from libs.deploy_contract import (
     _SHA_RE,
     DeployTarget,
+    DeployTypeSpec,
+    ServiceSpec,
     deploy_type_spec,
     is_tag_only_iac_env,
     make_deploy_target,
@@ -60,6 +63,7 @@ from libs.deploy.preview import _validate_domain
 from libs.deploy.preview import down as _preview_down
 from libs.deploy.preview import up as _preview_up
 from tools.resolve_deploy_ref import (
+    ResolvedRef,
     classify_ref,
     resolve_branch_to_sha,
     resolve_image_ref,
@@ -777,86 +781,15 @@ def _deploy_platform_batch(
     }
 
 
-def deploy_v2(
-    *,
+def _resolve_app_refs(
     service: str,
-    deploy_type: str,
-    version_ref,
+    spec: DeployTypeSpec,
+    version_ref: str,
     iac_ref: str,
-    iac_clone_ref: str | None = None,
-    client,
-    domain: str,
-    wait: bool = True,
-    staging_validated: bool = False,
-    break_glass: bool = False,
-    code_reviewed: bool | None = None,
-    verify_vault: bool = True,
-    verify_config: bool = True,
-    verify_ingestion: bool = False,
-    timeout: int = 600,
-    expected_sha: str | None = None,
-    repo: str | None = None,
-    iac_runner_url: str | None = None,
-    iac_webhook_secret: str | None = None,
-    triggered_by: str = "deploy_v2",
-    image_wait_seconds: float | None = None,
-    image_poll_seconds: float | None = None,
-) -> DeployV2Result:
-    """Execute one deploy_v2 coordinate ``(service, type, version_ref, iac_ref)``.
-
-    The ``type`` is the discriminant: it interprets ``version_ref`` (a PR# / sha / tag /
-    branch — :func:`_resolve_for_type`), fails closed on a form it does not accept, and
-    declares its gates. ``version_ref`` resolves to the commit identity (``sha``) AND the
-    published ``image_ref`` the backend pulls (a short sha for code, a retained tag for a
-    release). ``iac_ref`` pins the exact IaC identity. Preview-only ``iac_clone_ref`` may
-    name a cloneable branch, but only when it resolves to the same exact ``iac_ref`` SHA.
-
-    Raises ``ValueError`` for any contract / form / gate / red-line / unsupported-service
-    violation BEFORE any side effect; backend errors (rollout / health) propagate.
-
-    A platform (``iac_pinned``) service routes to the iac_runner webhook instead, ignoring
-    ``version_ref`` (its artifact is the ``iac_ref``-pinned stack) — see :func:`_deploy_platform`.
-    """
-    # A service with its own dedicated domain (Deployer.domain, e.g. truealpha/app ->
-    # truealpha.club) overrides whatever shared domain the caller passed in — the same
-    # rule libs.app_deploy_request.make_plan already applies on the App-repo request
-    # path. Without this, the workflow_dispatch path's default --domain zitian.party
-    # leaked into INTERNAL_DOMAIN/APP_HOST here and staging served on
-    # truealpha-staging.zitian.party while the canonical truealpha.club host 404'd
-    # (truealpha#474's deploy_v2 head; #586 fixed the request path only, verified live
-    # 2026-07-23: a v1.1.45 staging deploy through THIS path still leaked).
-    domain = domain_for_service(service) or domain
-    svc_spec = service_spec(service)
-    normalized_expected_sha = _normalize_expected_sha(expected_sha)
-    # Fixed envs (staging/prod) pin their IaC to an immutable release tag, on BOTH the
-    # app-image axis (version_ref, gated per-type below) and the infra2-IaC axis (iac_ref,
-    # gated here BEFORE the platform/app branch so it covers both). A sha/branch iac_ref can
-    # no longer reach a fixed env — the gap that let a main-sha reconcile auto-deploy to prod.
-    # preview/canary keep an unrestricted iac_ref (they clone live refs).
-    validate_iac_ref_form(deploy_type, classify_ref(iac_ref))
-    spec = deploy_type_spec(deploy_type)
-    if iac_clone_ref is not None and not env_config(spec.env).dynamic:
-        raise ValueError("--iac-clone-ref is only supported for preview/canary deploys")
-    # #465: a fixed-env iac_ref must also be ON infra2 main (not just tag-shaped) — the app
-    # only runs reviewed, released infra. Covers both the platform and app branches below.
-    assert_iac_ref_on_main(iac_ref, deploy_type)
-    if svc_spec.iac_pinned:  # platform service -> iac_runner /deploy webhook
-        if normalized_expected_sha is not None:
-            raise ValueError("--expected-sha is only supported for app-backed deploys")
-        return _deploy_platform(
-            service,
-            svc_spec,
-            deploy_type,
-            iac_ref,
-            runner_url=iac_runner_url,
-            secret=iac_webhook_secret,
-            triggered_by=triggered_by,
-            code_reviewed=code_reviewed,
-            wait=wait,
-            timeout=timeout,
-            version_ref=version_ref,
-        )
-
+    iac_clone_ref: str | None,
+    normalized_expected_sha: str | None,
+    repo: str | None,
+) -> tuple[ResolvedRef, str, str, str]:
     resolved_repo = repo if repo is not None else _repo_for_service(service)
     resolved, alias_value = _resolve_for_type(spec, version_ref, repo=resolved_repo)
     if (
@@ -868,8 +801,6 @@ def deploy_v2(
             f"not expected sha {normalized_expected_sha!r}"
         )
 
-    # iac_ref is authoritative. A PR can separately supply its cloneable head branch, but
-    # that transport ref must resolve to the exact same SHA before Dokploy receives it.
     iac_form = classify_ref(iac_ref)
     iac_sha = resolve_to_sha(iac_ref, repo=_INFRA2_REPO)
     if iac_clone_ref is not None:
@@ -887,72 +818,72 @@ def deploy_v2(
     else:
         clone_ref = _INFRA2_DEFAULT_BRANCH if iac_form == "sha" else iac_ref.strip()
 
-    target = make_target(
-        deploy_type,
-        service=service,
-        version=resolved.sha,
-        iac_ref=iac_sha,
-        alias_value=alias_value,
-    )
-    validate_deploy_target(target, service_spec(service))  # defensive re-check
-    data_lane = enforce_data_lane_red_lines(target, code_reviewed=code_reviewed)
+    return resolved, alias_value, iac_sha, clone_ref
 
-    # Gate: prod promotes code already validated on staging. The policy is owned by the
-    # env (single source: env_config(...).requires_staging_first), not re-declared on the
-    # type; break_glass is the audited emergency bypass.
-    if env_config(spec.env).requires_staging_first and not (
-        staging_validated or break_glass
-    ):
+
+def _deploy_preview_v2(
+    target: DeployTarget,
+    svc_spec: ServiceSpec,
+    spec: DeployTypeSpec,
+    alias_value: str,
+    service: str,
+    resolved: ResolvedRef,
+    domain: str,
+    client: Any,
+    clone_ref: str,
+    wait: bool,
+    timeout: int,
+    data_lane: list[str],
+) -> DeployV2Result:
+    if not svc_spec.supports_preview:
         raise ValueError(
-            f"deploy type {deploy_type!r} requires a prior staging deploy "
-            "(pass staging_validated, or break_glass for an emergency)"
+            f"{service!r} does not support preview/canary deploys yet "
+            "(libs.deploy_contract.ServiceSpec.supports_preview=False) — register a "
+            "libs.deploy_env_config.preview_service_config entry for it first (#522)."
         )
-
-    _wait_for_image_dependencies(
-        svc_spec,
-        resolved.image_ref,
-        timeout=image_wait_seconds,
-        poll_seconds=image_poll_seconds,
+    result = _preview_up(
+        spec.alias_kind,
+        alias_value,
+        code=resolved.sha,
+        service=service,
+        image_ref=resolved.image_ref,
+        iac_ref=target.iac_ref,
+        domain=domain,
+        client=client,
+        branch=clone_ref,
+        wait=wait,
+        health_timeout=timeout,
     )
+    detail = {
+        "alias": result.alias,
+        "compose_id": result.compose_id,
+        "sha": result.sha,
+        "image_ref": resolved.image_ref,
+        "url": result.url,
+        "healthy": result.healthy,
+    }
+    return DeployV2Result(target, data_lane, "preview-lifecycle", detail)
 
-    if env_config(target.env).dynamic:  # preview (incl. canary)
-        if not svc_spec.supports_preview:
-            raise ValueError(
-                f"{service!r} does not support preview/canary deploys yet "
-                "(libs.deploy_contract.ServiceSpec.supports_preview=False) — register a "
-                "libs.deploy_env_config.preview_service_config entry for it first (#522)."
-            )
-        result = _preview_up(
-            spec.alias_kind,
-            alias_value,
-            code=resolved.sha,
-            service=service,
-            image_ref=resolved.image_ref,
-            iac_ref=target.iac_ref,
-            domain=domain,
-            client=client,
-            branch=clone_ref,
-            wait=wait,
-            health_timeout=timeout,
-        )
-        detail = {
-            "alias": result.alias,
-            "compose_id": result.compose_id,
-            "sha": result.sha,
-            "image_ref": resolved.image_ref,
-            "url": result.url,
-            "healthy": result.healthy,
-        }
-        return DeployV2Result(target, data_lane, "preview-lifecycle", detail)
 
-    # staging | prod: the fixed-compose promote path. The backend pulls image_ref (a tag
-    # for a release, the short sha for code); target.iac_ref (a resolved sha) is carried
-    # for the record, while clone_ref (branch/tag form, same value _preview_up gets) is
-    # re-asserted as the compose's OWN git source on every call — otherwise the fixed
-    # compose's source ref never advances past whatever it was at creation (truealpha#447).
-    # verify_vault / verify_config / model_overrides give the unified path PARITY with the
-    # old bash dokploy_deploy.sh — default-ON so a token-TTL/effective-config regression
-    # fails closed instead of being silently dropped on the way to prod.
+def _deploy_fixed_v2(
+    target: DeployTarget,
+    resolved: ResolvedRef,
+    service: str,
+    domain: str,
+    client: Any,
+    clone_ref: str,
+    wait: bool,
+    timeout: int,
+    staging_validated: bool,
+    break_glass: bool,
+    verify_vault: bool,
+    verify_config: bool,
+    verify_ingestion: bool,
+    iac_runner_url: str | None,
+    iac_webhook_secret: str | None,
+    triggered_by: str,
+    data_lane: list[str],
+) -> DeployV2Result:
     secret_supply = _supply_app_secrets(
         service,
         target.env,
@@ -994,23 +925,134 @@ def deploy_v2(
         "data": plan.data,
         "iac_ref": target.iac_ref,
         "secret_supply": secret_supply,
-        # The #698 pre-deploy schema gate's ROLLBACK_CLASS (Infra-022 T3.2 /
-        # TODOWRITE:20) — None when the gate doesn't apply to this service
-        # (libs.deploy.schema_gate.gate_applies). Carried here (not just computed and
-        # discarded in promote.deploy()) so it reaches this printed JSON / the GitHub
-        # Actions step summary: an operator deciding whether a later rollback of this
-        # exact release is safe must not have to re-run the check to see it.
         "rollback_class": plan.rollback_class,
     }
     return DeployV2Result(target, data_lane, "deploy-primitive", detail)
 
 
-def main(argv: list[str] | None = None) -> int:
-    """CLI entry for the unified front door — the surface deploy workflows invoke.
+def deploy_v2(
+    *,
+    service: str,
+    deploy_type: str,
+    version_ref,
+    iac_ref: str,
+    iac_clone_ref: str | None = None,
+    client,
+    domain: str,
+    wait: bool = True,
+    staging_validated: bool = False,
+    break_glass: bool = False,
+    code_reviewed: bool | None = None,
+    verify_vault: bool = True,
+    verify_config: bool = True,
+    verify_ingestion: bool = False,
+    timeout: int = 600,
+    expected_sha: str | None = None,
+    repo: str | None = None,
+    iac_runner_url: str | None = None,
+    iac_webhook_secret: str | None = None,
+    triggered_by: str = "deploy_v2",
+    image_wait_seconds: float | None = None,
+    image_poll_seconds: float | None = None,
+) -> DeployV2Result:
+    """Execute one deploy_v2 coordinate ``(service, type, version_ref, iac_ref)``."""
+    domain = domain_for_service(service) or domain
+    svc_spec = service_spec(service)
+    normalized_expected_sha = _normalize_expected_sha(expected_sha)
+    validate_iac_ref_form(deploy_type, classify_ref(iac_ref))
+    spec = deploy_type_spec(deploy_type)
+    if iac_clone_ref is not None and not env_config(spec.env).dynamic:
+        raise ValueError("--iac-clone-ref is only supported for preview/canary deploys")
+    assert_iac_ref_on_main(iac_ref, deploy_type)
+    if svc_spec.iac_pinned:  # platform service -> iac_runner /deploy webhook
+        if normalized_expected_sha is not None:
+            raise ValueError("--expected-sha is only supported for app-backed deploys")
+        return _deploy_platform(
+            service,
+            svc_spec,
+            deploy_type,
+            iac_ref,
+            runner_url=iac_runner_url,
+            secret=iac_webhook_secret,
+            triggered_by=triggered_by,
+            code_reviewed=code_reviewed,
+            wait=wait,
+            timeout=timeout,
+            version_ref=version_ref,
+        )
 
-    Builds the Dokploy client, runs ``deploy_v2`` (which resolves the version_ref/iac_ref
-    surfaces itself), and prints the result as one JSON line.
-    """
+    resolved, alias_value, iac_sha, clone_ref = _resolve_app_refs(
+        service,
+        spec,
+        version_ref,
+        iac_ref,
+        iac_clone_ref,
+        normalized_expected_sha,
+        repo,
+    )
+    target = make_target(
+        deploy_type,
+        service=service,
+        version=resolved.sha,
+        iac_ref=iac_sha,
+        alias_value=alias_value,
+    )
+    validate_deploy_target(target, service_spec(service))
+    data_lane = enforce_data_lane_red_lines(target, code_reviewed=code_reviewed)
+
+    if env_config(spec.env).requires_staging_first and not (
+        staging_validated or break_glass
+    ):
+        raise ValueError(
+            f"deploy type {deploy_type!r} requires a prior staging deploy "
+            "(pass staging_validated, or break_glass for an emergency)"
+        )
+
+    _wait_for_image_dependencies(
+        svc_spec,
+        resolved.image_ref,
+        timeout=image_wait_seconds,
+        poll_seconds=image_poll_seconds,
+    )
+
+    if env_config(target.env).dynamic:
+        return _deploy_preview_v2(
+            target,
+            svc_spec,
+            spec,
+            alias_value,
+            service,
+            resolved,
+            domain,
+            client,
+            clone_ref,
+            wait,
+            timeout,
+            data_lane,
+        )
+
+    return _deploy_fixed_v2(
+        target,
+        resolved,
+        service,
+        domain,
+        client,
+        clone_ref,
+        wait,
+        timeout,
+        staging_validated,
+        break_glass,
+        verify_vault,
+        verify_config,
+        verify_ingestion,
+        iac_runner_url,
+        iac_webhook_secret,
+        triggered_by,
+        data_lane,
+    )
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="unified deploy_v2 front door")
     parser.add_argument("--service", default=_APP_SERVICE, help="service key")
     parser.add_argument(
@@ -1102,78 +1144,76 @@ def main(argv: list[str] | None = None) -> int:
             "(default: DEPLOY_V2_IMAGE_POLL_SECONDS or 10)"
         ),
     )
+    return parser
+
+
+def _handle_teardown(args: argparse.Namespace) -> int:
+    spec = deploy_type_spec(args.deploy_type)
+    if spec.env != "preview":
+        raise ValueError(
+            f"--down only tears down preview/* aliases; type {args.deploy_type!r} "
+            f"-> env {spec.env!r} has no ephemeral alias to remove"
+        )
+    if spec.alias_kind == "branch":
+        alias_value = _default_main(args.version_ref)
+    elif spec.alias_kind == "canary":
+        alias_value = CANARY_SLOT
+    else:
+        alias_value = args.version_ref
+    from libs.deploy.dokploy_client import get_dokploy
+
+    domain = _validate_domain(args.domain)
+    down_result = _preview_down(
+        spec.alias_kind,
+        alias_value,
+        domain=domain,
+        client=get_dokploy(host=f"cloud.{infra_domain()}"),
+        service=args.service,
+    )
+    print(
+        json.dumps(
+            {
+                "action": down_result.action,
+                "alias": down_result.alias,
+                "compose_id": down_result.compose_id,
+                "url": down_result.url,
+            }
+        )
+    )
+    return 0
+
+
+def _handle_platform_batch(args: argparse.Namespace, service_names: list[str]) -> int:
+    result = _deploy_platform_batch(
+        service_names,
+        args.deploy_type,
+        args.iac_ref,
+        runner_url=os.getenv("IAC_RUNNER_URL", ""),
+        secret=os.getenv("IAC_WEBHOOK_SECRET", ""),
+        triggered_by="deploy_v2",
+        code_reviewed=True if args.code_reviewed else None,
+        wait=not args.no_wait,
+        timeout=args.timeout,
+    )
+    print(json.dumps(result))
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry for the unified front door — the surface deploy workflows invoke."""
+    parser = _build_arg_parser()
     args = parser.parse_args(argv)
 
     try:
-        # Teardown: the operator command the retired preview-lifecycle CLI exposed as
-        # its `down` subcommand, now folded into this front door.
-        # deploy_v2's coordinate covers preview UP and the staging/prod promote, but not
-        # tearing a preview alias back down — this flag closes that gap by resolving the
-        # SAME alias (alias_kind from --type, value from --version-ref, exactly as `up`
-        # reads them) and calling the preview backend's idempotent down(). Preview is always
-        # a Dokploy stack (never iac_pinned), so it builds the Dokploy client directly.
         if args.down:
-            spec = deploy_type_spec(args.deploy_type)
-            if spec.env != "preview":
-                raise ValueError(
-                    f"--down only tears down preview/* aliases; type {args.deploy_type!r} "
-                    f"-> env {spec.env!r} has no ephemeral alias to remove"
-                )
-            # Mirror `up`'s value read: branch defaults to the main tip; pr/commit/tag take
-            # --version-ref verbatim (preview_alias normalizes a commit to its short sha).
-            if spec.alias_kind == "branch":
-                alias_value = _default_main(args.version_ref)
-            elif spec.alias_kind == "canary":
-                alias_value = CANARY_SLOT
-            else:
-                alias_value = args.version_ref
-            from libs.deploy.dokploy_client import get_dokploy
-
-            # Reject a malformed domain before it reaches the Dokploy host string — the
-            # same guard the preview backend applies on `up` (whitespace/empty would
-            # corrupt cloud.<domain>).
-            domain = _validate_domain(args.domain)
-            down_result = _preview_down(
-                spec.alias_kind,
-                alias_value,
-                domain=domain,
-                client=get_dokploy(host=f"cloud.{infra_domain()}"),
-                service=args.service,
-            )
-            print(
-                json.dumps(
-                    {
-                        "action": down_result.action,
-                        "alias": down_result.alias,
-                        "compose_id": down_result.compose_id,
-                        "url": down_result.url,
-                    }
-                )
-            )
-            return 0
+            return _handle_teardown(args)
 
         service_names = [s.strip() for s in args.service.split(",") if s.strip()]
         if len(service_names) > 1:
-            result = _deploy_platform_batch(
-                service_names,
-                args.deploy_type,
-                args.iac_ref,
-                runner_url=os.getenv("IAC_RUNNER_URL", ""),
-                secret=os.getenv("IAC_WEBHOOK_SECRET", ""),
-                triggered_by="deploy_v2",
-                code_reviewed=True if args.code_reviewed else None,
-                wait=not args.no_wait,
-                timeout=args.timeout,
-            )
-            print(json.dumps(result))
-            return 0
+            return _handle_platform_batch(args, service_names)
 
-        # Platform (iac_pinned) services route to the iac_runner webhook and never touch the
-        # Dokploy client — don't build it (or require DOKPLOY_API_KEY) for them. Inside the
-        # try so an unknown service surfaces as the clean one-line error, not a traceback.
         client = None
         if not service_spec(args.service).iac_pinned:
-            # Imported lazily so importing the module needs no Dokploy creds.
             from libs.deploy.dokploy_client import get_dokploy
 
             client = get_dokploy(host=f"cloud.{infra_domain()}")
@@ -1187,8 +1227,6 @@ def main(argv: list[str] | None = None) -> int:
             wait=not args.no_wait,
             staging_validated=args.staging_validated,
             break_glass=args.break_glass,
-            # store_true yields False when omitted; pass True only when explicitly set so
-            # RL-DATA-1 stays deny-by-default for prod data.
             code_reviewed=True if args.code_reviewed else None,
             verify_vault=not args.skip_vault_check,
             verify_config=not args.no_verify_config,

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -212,6 +213,56 @@ def _find_compose(client, project: str, name: str):
     return client.find_compose_by_name(name, project, env_name=PREVIEW_ENVIRONMENT)
 
 
+def _ensure_preview_compose(
+    client,
+    config: Any,
+    alias: Any,
+    _sleep: Callable[[float], None] = time.sleep,
+) -> str:
+    """Find existing preview compose or create a new one with retry recovery."""
+    existing = _find_compose(client, config.project, alias.compose_name)
+    if existing:
+        return existing["composeId"]
+
+    try:
+        env_obj, _ = client.ensure_environment(config.project, PREVIEW_ENVIRONMENT)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"could not ensure Dokploy environment "
+            f"{config.project!r}/{PREVIEW_ENVIRONMENT!r}: {exc}"
+        ) from exc
+    environment_id = env_obj.get("environmentId")
+    if not environment_id:
+        raise RuntimeError(
+            f"could not ensure Dokploy environment "
+            f"{config.project!r}/{PREVIEW_ENVIRONMENT!r}"
+        )
+
+    try:
+        created = client.create_compose(
+            environment_id=environment_id,
+            name=alias.compose_name,
+            app_name=alias.compose_name,
+            source_type="github",
+        )
+    except httpx.HTTPError:
+        reconciled = None
+        for attempt in range(_AMBIGUOUS_CREATE_RECOVERY_ATTEMPTS):
+            try:
+                reconciled = _find_compose(client, config.project, alias.compose_name)
+            except httpx.HTTPError:
+                reconciled = None
+            if reconciled:
+                break
+            if attempt < _AMBIGUOUS_CREATE_RECOVERY_ATTEMPTS - 1:
+                _sleep(_AMBIGUOUS_CREATE_RECOVERY_INTERVAL_SECONDS)
+        if reconciled is None:
+            raise
+        return reconciled["composeId"]
+
+    return created["composeId"]
+
+
 def up(
     kind: str,
     value: int | str | None,
@@ -261,14 +312,8 @@ def up(
         iac_ref=iac_ref,
         _now=_now,
     )
-    # Inject the runtime AppRole creds the preview vault-agent logs in with — the same
-    # role the source env runs with. Without them vault-agent crash-loops and the app
-    # never becomes healthy. Merged before the compose env is pushed below.
     env_vars.update(_source_app_vault_creds(client, config.project, config.secret_env))
 
-    # Find-or-create THIS alias's compose by its deterministic name. The GitHub source
-    # fields make Dokploy pull the preview compose template (+ its mounted vault files)
-    # from infra2; autoDeploy=False so only this manual lifecycle triggers a deploy.
     gh_id = github_id if github_id is not None else client.get_github_provider_id()
     if not gh_id:
         raise RuntimeError(
@@ -286,74 +331,9 @@ def up(
         autoDeploy=False,
     )
 
-    existing = _find_compose(client, config.project, alias.compose_name)
-    if not existing:
-        # Self-provision the preview environment (idempotent). The fixed envs
-        # (staging/prod) are pre-provisioned by convention, but preview is DYNAMIC — its
-        # composes are created and destroyed per alias — so the lifecycle owns its parent
-        # environment too. This makes a fresh box / first-ever preview reproducible with
-        # no out-of-band `invoke dokploy_env.env-ensure` step (the missing-env gap that
-        # blocked the first live canary). config.project/PREVIEW_ENVIRONMENT are resolved
-        # once above, so there is no typo risk in creating-if-absent.
-        try:
-            env_obj, _ = client.ensure_environment(config.project, PREVIEW_ENVIRONMENT)
-        except ValueError as exc:
-            # ensure_environment raises ValueError when the PROJECT itself is absent —
-            # re-raise as a consistent fail-closed RuntimeError instead of leaking it.
-            raise RuntimeError(
-                f"could not ensure Dokploy environment "
-                f"{config.project!r}/{PREVIEW_ENVIRONMENT!r}: {exc}"
-            ) from exc
-        environment_id = env_obj.get("environmentId")
-        if not environment_id:
-            raise RuntimeError(
-                f"could not ensure Dokploy environment "
-                f"{config.project!r}/{PREVIEW_ENVIRONMENT!r}"
-            )
-        # Teardown-convergence invariant (#921 / D8): the stable key is the compose
-        # *record name* (alias.compose_name). `up` creates the record under it and `down`
-        # finds by it, then tears down via `delete_compose(composeId)`. Dokploy assigns the
-        # docker appName as name + a random suffix (so name != appName in reality), but
-        # teardown routes through the composeId, so it prunes the right project regardless —
-        # it never keys off a bare docker project name, which is exactly the divergence that
-        # leaked orphans in infra2#310. See libs/tests/test_preview_teardown_convergence.py.
-        # Create as github source from the start (Dokploy accepts this and keeps
-        # sourceType) so the compose is never momentarily a raw compose with an empty
-        # composeFile. The github *binding* (githubId/owner/repository/branch/composePath)
-        # still has to be re-applied below — compose.create drops everything but sourceType.
-        try:
-            created = client.create_compose(
-                environment_id=environment_id,
-                name=alias.compose_name,
-                app_name=alias.compose_name,
-                source_type="github",
-            )
-        except httpx.HTTPError:
-            # compose.create is non-idempotent, so a lost response cannot be retried: the
-            # server may already have committed the deterministic alias. Re-read the
-            # exact project/environment/name with a bounded eventual-consistency budget
-            # and adopt that record; if it remains absent, preserve the original
-            # control-plane error. This is the live 2026-08-17 canary failure where a
-            # ReadTimeout left a real compose behind.
-            reconciled = None
-            for attempt in range(_AMBIGUOUS_CREATE_RECOVERY_ATTEMPTS):
-                try:
-                    reconciled = _find_compose(
-                        client, config.project, alias.compose_name
-                    )
-                except httpx.HTTPError:
-                    reconciled = None
-                if reconciled:
-                    break
-                if attempt < _AMBIGUOUS_CREATE_RECOVERY_ATTEMPTS - 1:
-                    _sleep(_AMBIGUOUS_CREATE_RECOVERY_INTERVAL_SECONDS)
-            if reconciled is None:
-                raise
-            compose_id = reconciled["composeId"]
-        else:
-            compose_id = created["composeId"]
-    else:
-        compose_id = existing["composeId"]
+    compose_id = _ensure_preview_compose(
+        client=client, config=config, alias=alias, _sleep=_sleep
+    )
 
     healthy: bool | None = None
     url = alias.app_url(domain=domain, base_subdomain=config.base_subdomain)
