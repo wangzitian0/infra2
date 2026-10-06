@@ -8,7 +8,7 @@ import ast
 
 import pytest
 
-from libs import service_registry as reg
+from libs.core import registry as reg
 from libs.service_facets import BackupFacet, Exemption, ProbeFacet, SignalFacet
 from tools.service_facet_matrix import (
     build_matrix,

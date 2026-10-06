@@ -34,7 +34,7 @@ the service class, then ride along the generated skeleton — not scattered in y
 
 ## Scope (MECE, delivered as minimal PRs)
 - [x] **P0 — base library + collapse the cleanest duplication** (PR 1, this branch)
-  - `libs/service_registry.py`: read Deployer attrs once (AST), expose
+  - `libs/core/registry.py`: read Deployer attrs once (AST), expose
     `all_services()`, `services_in_env(env)`, `shared_services()`, `subdomains()`.
   - Audit: `sync_runner.ALL_SERVICES` must equal `all_services()` (fail-closed).
 - [ ] **P0.1 — reconcile common.py re-registries** (PR 2)
@@ -78,7 +78,7 @@ the service class, then ride along the generated skeleton — not scattered in y
 - Moving irreducible external data out of the service class into a generator.
 
 ## Deliverables
-- `libs/service_registry.py` base library (`get_*`-style accessors).
+- `libs/core/registry.py` base library (`get_*`-style accessors).
 - Fail-closed audits binding each downstream list to the registry.
 - Generated (not hand-authored) watchdog / inventory skeletons.
 

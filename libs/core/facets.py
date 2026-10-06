@@ -2,7 +2,7 @@
 
 Convergence part 1: the Deployer subclass in each service's ``deploy.py`` is the
 SINGLE declaration point for that service's operational facts, and
-``libs.service_registry.service_attrs()`` is the single derivation function.
+``libs.core.registry.service_attrs()`` is the single derivation function.
 These dataclasses are the typed vocabulary those declarations use:
 
 - :class:`ProbeFacet`     — one infra probe line (fields aligned with
@@ -251,7 +251,7 @@ class RestartAfterFacet:
     has the same failure mode (#713). The dependent declares it here, next to its own
     compose; the DEPENDENCY's Deployer reads the registry after a sync that actually
     redeployed it (never after a skip) and restarts these containers in the same
-    environment (``libs.service_registry.restart_after_containers``).
+    environment (``libs.core.registry.restart_after_containers``).
 
     ``services`` are compose service keys of the owning Deployer's ``compose_path``.
     Container names are not repeated here: they derive from that compose's

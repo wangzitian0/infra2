@@ -393,7 +393,7 @@ commit `sha`（身份）+ `image_ref`（要拉的已发布镜像）——**code 
 
 > **现状边界**：`libs.deploy.contract.SERVICES` 中注册的 bespoke app（`finance_report/app`；
 > `truealpha/app` 自 #500 起）走 app 后端（`deploy_primitive` / `preview_lifecycle`）；`iac_pinned`
-> 服务从 `libs.service_registry` 派生并走 iac_runner `/deploy` webhook。`truealpha/app` 已接入
+> 服务从 `libs.core.registry` 派生并走 iac_runner `/deploy` webhook。`truealpha/app` 已接入
 > `preview`（多别名预览栈）、`staging` 与 `prod`（已配置独立 compose ID）。完整 GitHub 评审信号
 > （供给 `code_reviewed=True`）可继续增强；snapshot-sync / anonymization / rehearsal 属于
 > finance_report#893，但 `data_lane` 已是派生值，不是 deploy_v2 输入轴。
@@ -456,7 +456,7 @@ compose、env、secret 路径、**外部镜像 tag**、Traefik 路由 label、�
 
 **结论**：坐标和当前实现均已完备，不需要第五轴：
 
-1. **registry**：app 显式登记；所有非 app 服务从 `libs.service_registry` 派生为 `iac_pinned`
+1. **registry**：app 显式登记；所有非 app 服务从 `libs.core.registry` 派生为 `iac_pinned`
    `ServiceSpec`（`prod_only` / `env_shared` / `web_facing` 不手抄）。App 的跨仓库镜像 artifact
    依赖也登记在 `ServiceSpec.image_repositories`，由 deploy 前门统一执行。
 2. **routing**：`deploy_v2` 按 `service` 分派后端——app → `deploy_primitive` / `preview_lifecycle`；

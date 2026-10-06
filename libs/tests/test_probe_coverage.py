@@ -12,7 +12,7 @@ silently regress.
 from __future__ import annotations
 
 
-from libs import service_registry
+from libs.core import registry as service_registry
 from libs.observability.probe_specs import render_probe_spec_text
 
 

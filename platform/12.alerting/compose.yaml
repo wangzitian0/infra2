@@ -200,7 +200,7 @@ services:
       # Registry-rendered (#541): the probe set is DECLARED as ProbeFacet
       # attributes on each owning service's deploy.py Deployer class and
       # aggregated by libs/observability/probe_specs.py::render_probe_spec_text() via
-      # libs/service_registry.py::service_attrs(). AlertingDeployer.
+      # libs/core/registry.py::service_attrs(). AlertingDeployer.
       # compose_env_base() resolves ${ENV_SUFFIX} and injects the encoded
       # value into the Dokploy compose env — this reference is the ONLY probe
       # source here. The pre-migration literal is frozen field-by-field in

@@ -111,7 +111,7 @@ class ServiceSpec:
 # lifecycle via libs.deploy.preview — truealpha/app does not yet, #500). EVERY OTHER
 # service is ``iac_pinned`` and routes to the iac_runner /deploy webhook — and its facts
 # (subdomain, prod_only) are DERIVED from its deploy.py Deployer class via
-# libs.service_registry, the single source of truth (Infra-013: never hand-copy service
+# libs.core.registry, the single source of truth (Infra-013: never hand-copy service
 # facts into a parallel list).
 _APP_KEY = "finance_report/app"
 _TRUEALPHA_APP_KEY = "truealpha/app"
@@ -204,7 +204,7 @@ def all_service_keys() -> list[str]:
 def service_spec(service: str) -> ServiceSpec:
     """Return the ServiceSpec for a service key. Raises ValueError if unknown.
 
-    The app is explicit; every other service is derived from libs.service_registry (its
+    The app is explicit; every other service is derived from libs.core.registry (its
     deploy.py), so the registry is never a hand-maintained copy.
     """
     if service in SERVICES:

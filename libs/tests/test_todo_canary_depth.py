@@ -32,7 +32,7 @@ from urllib.parse import unquote, urlsplit
 import pytest
 
 from libs.security import registry as secrets_registry
-from libs import service_registry as reg
+from libs.core import registry as reg
 from libs.observability.probe_specs import render_probe_spec_text
 from libs.tests.compose_env import compose_services, container_env, resolve
 from libs.tests.docker_host import DockerHost
