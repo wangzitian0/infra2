@@ -338,10 +338,11 @@ def _run_deployment(
     version_ref: str | None = None,
     action: str = "sync",
 ) -> None:
-    from sync_runner import sync_services_by_version
-
     key = _deployment_key(env, ref, services, version_ref, action)
+    response: dict | None = None
     try:
+        from sync_runner import sync_services_by_version
+
         extra = {**_version_kwargs(version_ref), **_action_kwargs(action)}
         result = (
             sync_services_by_version(env, ref, triggered_by, services, **extra)
@@ -359,18 +360,41 @@ def _run_deployment(
         )
     except Exception as exc:
         logger.exception("Deployment failed before producing a sync result")
-        response = {
-            "status": "failed",
-            "deployment_id": _deployment_id(key),
-            "env": env,
-            "ref": ref,
-            "triggered_by": triggered_by,
-            "error": str(exc),
-            "requested_services": list(key[2]),
-        }
-    with _deploy_state_lock:
-        _recent_deploys[key] = (time.monotonic(), response)
-        _in_flight_deploys.discard(key)
+        response = _failed_response(key, env, ref, triggered_by, str(exc))
+    except BaseException as exc:
+        # SystemExit or KeyboardInterrupt also ends this run. Record it as a failure,
+        # let the finally block discard the key, and then let the exception propagate.
+        logger.exception("Deployment interrupted before producing a sync result")
+        response = _failed_response(
+            key,
+            env,
+            ref,
+            triggered_by,
+            f"Deployment interrupted by {type(exc).__name__} before it produced a result",
+        )
+        raise
+    finally:
+        # Every exit path stores its result and discards the key in one locked step. A
+        # poll never sees the key gone before its result exists, and no key stays in
+        # flight until a restart (the bootstrap idle wait reads this set, #666).
+        with _deploy_state_lock:
+            if response is not None:
+                _recent_deploys[key] = (time.monotonic(), response)
+            _in_flight_deploys.discard(key)
+
+
+def _failed_response(
+    key: DeploymentKey, env: str, ref: str, triggered_by: str, error: str
+) -> dict:
+    return {
+        "status": "failed",
+        "deployment_id": _deployment_id(key),
+        "env": env,
+        "ref": ref,
+        "triggered_by": triggered_by,
+        "error": error,
+        "requested_services": list(key[2]),
+    }
 
 
 def _dependency_checks() -> dict[str, bool]:
@@ -432,8 +456,18 @@ def health():
     all_healthy = all(checks.values())
     status_code = 200 if all_healthy else 503
 
+    # The bootstrap self-update reads this count and waits for zero before it recreates
+    # the container, because a recreate drops this in-memory state (#666). It stays out
+    # of `checks`: a count of 0 is falsy and would make the runner report "degraded".
+    with _deploy_state_lock:
+        in_flight_deploys = len(_in_flight_deploys)
+
     return jsonify(
-        {"status": "healthy" if all_healthy else "degraded", "checks": checks}
+        {
+            "status": "healthy" if all_healthy else "degraded",
+            "checks": checks,
+            "in_flight_deploys": in_flight_deploys,
+        }
     ), status_code
 
 

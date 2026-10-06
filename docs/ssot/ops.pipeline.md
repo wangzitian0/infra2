@@ -268,6 +268,13 @@ A `not_found` answer that lasts longer than 90 seconds is a lost request; the cl
 **为什么 runner bootstrap 走带外**:IaC Runner 不能在自己正被 Actions 轮询的 `/deploy` 请求里重启自己;Actions
 从容器外拥有自更新步骤(更新 Dokploy compose checkout → 重建 runner 镜像 → 等 health → 再 `/deploy`)。
 
+**Idle wait before the recreate (#666):** A recreate drops the runner's in-memory deploy state.
+The script builds the image first. Then it reads `in_flight_deploys` from `/health` every 10 seconds.
+It recreates the runner immediately after the count is 0. The wait has a limit of 900 seconds
+(`IAC_RUNNER_IDLE_WAIT_SECONDS`). At the limit, the script prints a warning and recreates the runner.
+If the count is unknown, the script does not wait. An older runner image does not report the field.
+A deploy that starts between the last poll and the recreate is not protected.
+
 ### 5.3 两平面配置身份 + 幂等性保证
 
 配置身份拆成两个正交平面,禁止再用一个 hash 同时回答两个问题:
