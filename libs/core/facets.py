@@ -6,7 +6,7 @@ SINGLE declaration point for that service's operational facts, and
 These dataclasses are the typed vocabulary those declarations use:
 
 - :class:`ProbeFacet`     — one infra probe line (fields aligned with
-                            ``libs.infra_probes.ProbeSpec``); the alerting stack
+                            ``libs.observability.probes.ProbeSpec``); the alerting stack
                             renders the aggregate ``INFRA_PROBE_SPECS`` from them.
 - :class:`PublicRouteFacet` — a public HTTP surface probed from inside (#543);
                             declared as the plural ``public_routes`` tuple.
@@ -14,7 +14,7 @@ These dataclasses are the typed vocabulary those declarations use:
                             #425 T5's ``docs/ssot/watchdog-signals.yaml``:
                             tier / type / consecutive_failures / renotify_window_sec).
 - :class:`BackupFacet`    — backup method facts (fields aligned with
-                            ``libs.backup_verification.BackupEntry``; ``service_id``
+                            ``libs.backup.verification.BackupEntry``; ``service_id``
                             and ``data_path`` stay on the Deployer itself).
 - :class:`SecretsFacet`   — Vault self-refresh facts (fields aligned with
                             ``libs.vault_self_refresh_audit.VaultService``); the
@@ -69,7 +69,7 @@ class ProbeFacet:
 
     Renders to one ``INFRA_PROBE_SPECS`` line:
     ``name|kind|target|expected|severity|timeout_seconds|depends_on|service_id``
-    (field semantics == ``libs.infra_probes.ProbeSpec``).
+    (field semantics == ``libs.observability.probes.ProbeSpec``).
 
     ``service_id`` is normally left empty and derived from the DECLARING
     service's registry id. It is set explicitly only for probes a service
@@ -112,7 +112,7 @@ class PublicRouteFacet:
     other). The alerting deployer derives the per-environment probe line —
     ``https://{subdomain}{ENV_DOMAIN_SUFFIX}.{INTERNAL_DOMAIN}{path}`` with
     probe name ``{service}-public-route`` — into ``PUBLIC_ROUTE_PROBE_SPECS``
-    (see ``libs.probe_specs.render_public_route_spec_text``). Environment
+    (see ``libs.observability.probe_specs.render_public_route_spec_text``). Environment
     rules come from registry facts, not repetition: ``prod_only`` services
     render for production only (their staging host never exists — infra2#307),
     and non-production renders downgrade to ``warning`` severity (a broken
@@ -167,7 +167,7 @@ class SignalFacet:
 @dataclass(frozen=True)
 class BackupFacet:
     """Backup facts for the service's ``data_path`` (aligned with
-    ``libs.backup_verification.BackupEntry``; service_id/data_path derive from
+    ``libs.backup.verification.BackupEntry``; service_id/data_path derive from
     the owning Deployer, so they are usually not repeated here).
 
     ``service_id``/``data_path`` overrides follow SecretsFacet's convention:
@@ -178,7 +178,7 @@ class BackupFacet:
 
     ``retention_days``/``rpo_hours``/``remote`` left at their zero-values mean
     "use the inventory defaults" (30d / 24h / r2 — see
-    ``libs.backup_verification.INVENTORY_DEFAULTS``), mirroring how the deleted
+    ``libs.backup.verification.INVENTORY_DEFAULTS``), mirroring how the deleted
     handwritten YAML's ``defaults:`` block worked.
     """
 

@@ -20,7 +20,7 @@ stay registry-derived, not hand-vigilance.
 from __future__ import annotations
 
 from libs import service_registry
-from libs.probe_specs import render_probe_spec_text
+from libs.observability.probe_specs import render_probe_spec_text
 
 _SUFFIX = "${ENV_SUFFIX}"
 

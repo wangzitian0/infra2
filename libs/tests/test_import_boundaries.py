@@ -398,3 +398,83 @@ def test_deploy_console_code_equals_flat_console_code() -> None:
     flat = _code_without_docstrings(ROOT / "libs" / "console.py")
     deploy = _code_without_docstrings(ROOT / "libs" / "deploy" / "console.py")
     assert deploy == flat, "libs/deploy/console.py drifted from libs/console.py"
+
+
+RETIRED_FLAT_SHIMS_BATCH1 = {
+    "availability_ledger",
+    "backup_restore",
+    "backup_verification",
+    "container_breakdown",
+    "container_breakdown_watch",
+    "deploy_queue_guard",
+    "infra_probes",
+    "page_dedup",
+    "probe_specs",
+    "resident_watchers",
+    "scheduler_peer_liveness",
+    "watchdog_issue_trail",
+    "watchdog_signal_entries",
+}
+
+
+def test_retired_batch1_flat_shim_files_stay_deleted() -> None:
+    """The 13 retired observability & backup flat shims must never be recreated."""
+    resurrected = [
+        name
+        for name in sorted(RETIRED_FLAT_SHIMS_BATCH1)
+        if (ROOT / "libs" / f"{name}.py").exists()
+    ]
+    assert not resurrected, (
+        f"Retired flat shim files recreated under libs/: {resurrected}. Use the domain "
+        "packages directly (libs.observability.*, libs.backup.*)."
+    )
+
+
+def test_no_tracked_python_file_uses_a_retired_batch1_flat_shim() -> None:
+    """Every tracked python file must import domain packages rather than retired shims."""
+    import subprocess
+
+    repo = ROOT
+    tracked = subprocess.run(
+        ["git", "ls-files", "*.py"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+
+    violations: list[str] = []
+    retired_dotted = {f"libs.{s}" for s in RETIRED_FLAT_SHIMS_BATCH1}
+
+    for rel in tracked:
+        if rel == "libs/tests/test_import_boundaries.py":
+            continue
+        path = repo / rel
+        if not path.exists():
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in retired_dotted:
+                        violations.append(
+                            f"{rel}:{node.lineno} imports retired {alias.name}"
+                        )
+            elif isinstance(node, ast.ImportFrom):
+                mod = node.module or ""
+                if mod == "libs":
+                    for alias in node.names:
+                        if alias.name in RETIRED_FLAT_SHIMS_BATCH1:
+                            violations.append(
+                                f"{rel}:{node.lineno} imports retired libs.{alias.name}"
+                            )
+                elif mod in retired_dotted:
+                    violations.append(f"{rel}:{node.lineno} imports from retired {mod}")
+
+    assert not violations, (
+        "Tracked python files still import retired flat shims:\n"
+        + "\n".join(f"  - {v}" for v in violations)
+    )

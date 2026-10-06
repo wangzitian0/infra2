@@ -16,9 +16,9 @@ from pathlib import Path, PurePosixPath
 
 import yaml
 
-from libs.container_breakdown_watch import BreakdownWatch
-from libs.deploy_queue_guard import DeployQueueGuard
-from libs.resident_watchers import ResidentWatcher, build_watchers
+from libs.observability.watchers.breakdown_watch import BreakdownWatch
+from libs.observability.watchers.deploy_queue_guard import DeployQueueGuard
+from libs.observability.watchers.resident import ResidentWatcher, build_watchers
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "platform/12.alerting/compose.yaml"

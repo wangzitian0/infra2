@@ -1,7 +1,7 @@
 # FROZEN pre-#543 handwritten `primary_owner: internal` section of
 # docs/ssot/watchdog-signals.yaml, captured verbatim (parsed form) the moment
 # the handwritten mirror was deleted in favor of derivation from ProbeFacet +
-# SignalFacet declarations (libs/watchdog_signal_entries.py).
+# SignalFacet declarations (libs/observability/signal_entries.py).
 #
 # PERMANENT regression anchor: libs/tests/test_watchdog_signal_entries.py
 # proves the derived entries stay field-level equivalent to this snapshot

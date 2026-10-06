@@ -552,7 +552,7 @@ def state_body(
         "",
         f"- Paged by: {run_url or '(no run URL)'}",
         "",
-        "Page-dedup state (`libs/page_dedup.py`, #962): the job pages the "
+        "Page-dedup state (`libs/observability/page_dedup.py`, #962): the job pages the "
         "pager chat only when this set changes (a finding appears or disappears, or "
         "everything resolves) and reports `仍未恢复` to the reports chat while it stays "
         "the same. One open issue per job; the next clean scheduled run closes it. "
@@ -624,7 +624,7 @@ def _close(
     body = (
         f"**`{job}` is clear**{duration}: every paged finding is gone in "
         f"{run_url or 'the latest run'}. Closed by the page-dedup state "
-        "(`libs/page_dedup.py`, #962). A later red run opens a new issue."
+        "(`libs/observability/page_dedup.py`, #962). A later red run opens a new issue."
     )
     cleared = f"{body}\n\n{encode_cleared_marker(job)}"
     failures: list[str] = []

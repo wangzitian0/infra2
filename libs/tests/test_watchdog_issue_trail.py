@@ -16,7 +16,7 @@ import pytest
 import yaml
 
 from libs.observability import issue_trail as trail_lib
-from libs.watchdog_issue_trail import (
+from libs.observability.issue_trail import (
     FULL,
     OFF,
     OPEN_ONLY,

@@ -1,13 +1,13 @@
 """Detect crash-looping / unhealthy containers and explain *why* from their logs.
 
-SSOT for ``libs.observability``'s container breakdown triage; ``libs.container_breakdown``
+SSOT for ``libs.observability``'s container breakdown triage; ``libs.observability.breakdown``
 is a backward-compatibility shim over this module.
 
 The layered monitoring already in place catches the *symptom* but not the *cause*:
 
   * cloudflare/infra-watchdog (black-box HTTP) — "public route down"
   * tools/infra_probe_runner.py — "service probe failed"
-  * libs/deploy_queue_guard.py — "deploy stuck in the queue"
+  * libs/observability/watchers/deploy_queue_guard.py — "deploy stuck in the queue"
 
 None of them says *"container X is restart-looping because <reason>"*. So when an
 internal sidecar (e.g. a vault-agent) crash-loops on missing creds, the only
@@ -18,7 +18,7 @@ breakdown reason from their logs, so the alert reads "down **because** Vault cre
 missing" instead of "down, unknown".
 
 Pure/dependency-free on purpose — the I/O (Docker socket, alert bridge) lives in
-libs/container_breakdown_watch.py (a watcher plugin in the single
+libs/observability/watchers/breakdown_watch.py (a watcher plugin in the single
 resident sidecar since #543) so this stays unit-testable.
 """
 

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from libs.backup_verification import load_backup_inventory
+from libs.backup.verification import load_backup_inventory
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools/host_backup.sh"

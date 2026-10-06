@@ -1,6 +1,6 @@
 """Infra service probe helpers for code-owned alert checks.
 
-SSOT for ``libs.observability``'s in-band health probes; ``libs.infra_probes`` is a
+SSOT for ``libs.observability``'s in-band health probes; ``libs.observability.probes`` is a
 backward-compatibility shim over this module.
 """
 

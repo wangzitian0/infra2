@@ -4,7 +4,7 @@ Thin runner. It reads each environment's ledger file from the VPS over SSH (the
 way ``tools/out_of_band_watchdog.py`` reads backup manifests), fetches the
 production outage intervals the Cloudflare Worker recorded (``GET /outages``;
 the VPS cannot count its own downtime), and delegates the math and the text to
-``libs.availability_ledger``. It runs weekly from GitHub Actions, outside the
+``libs.observability.ledger``. It runs weekly from GitHub Actions, outside the
 VPS, and sends Lark a positive-proof summary. See ops.observability.md §6.
 
 A missing, empty or stale production ledger, or an unreadable outage list, fails
@@ -37,7 +37,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from libs.alerting import as_report, deliver_out_of_band_text  # noqa: E402
-from libs.availability_ledger import (  # noqa: E402
+from libs.observability.ledger import (  # noqa: E402
     apply_unavailability,
     build_environment_line,
     build_report_message,
