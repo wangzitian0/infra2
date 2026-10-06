@@ -522,25 +522,152 @@ def test_poll_tolerates_not_found_that_ends_inside_the_grace():
     assert len(calls) == 10
 
 
-@pytest.mark.parametrize(
-    "interruption",
-    [({"status": "running"}, 200), ({}, 502)],
-    ids=["running", "gateway-502"],
-)
-def test_poll_restarts_the_not_found_timer_after_any_other_answer(interruption):
+def test_poll_restarts_the_not_found_timer_after_a_real_status():
     """Two not_found runs of 50 s and 60 s: the sum is 110 s, each run is under 90 s.
 
     Without the reset the poll would fail at t=100, inside the second run.
     """
     responses = (
         [_NOT_FOUND] * 6  # t=0..50
-        + [interruption]  # t=60
+        + [({"status": "running"}, 200)]  # t=60
         + [_NOT_FOUND] * 7  # t=70..130
         + [({"status": "completed"}, 200)]  # t=140
     )
     result, calls = _poll_with_virtual_clock(responses)
     assert result["status"] == "completed"
     assert len(calls) == len(responses)
+
+
+@pytest.mark.parametrize(
+    "blip",
+    [({}, 502), ({"error": "gateway"}, 504), ("404 page not found", 404)],
+    ids=["502", "504", "bodiless-404"],
+)
+def test_poll_keeps_the_not_found_timer_across_a_gateway_error(blip):
+    """A gateway error is not a real status, so it does not give a lost deployment a new
+    90 s window. not_found runs t=0..50, a gateway error at t=60, not_found again from
+    t=70: the poll must fail at t=100 (11 polls), not at t=170 (18 polls)."""
+    now, sleep = _virtual_clock()
+    calls, transport = _capture([_NOT_FOUND] * 6 + [blip] + [_NOT_FOUND])
+    with pytest.raises(RuntimeError, match="no record of this deployment") as excinfo:
+        poll_platform_deploy_status(
+            env="staging",
+            ref=SHA,
+            base_url="u",
+            secret=SECRET,
+            attempts=335,
+            interval=10.0,
+            now=now,
+            sleep=sleep,
+            nonce_factory=lambda: "nonce123",
+            transport=transport,
+        )
+    assert "for 100s" in str(excinfo.value)
+    assert len(calls) == 11
+
+
+def test_poll_keeps_the_not_found_timer_across_a_transport_error():
+    """A dropped connection is not a real status either: same schedule as above."""
+    now, sleep = _virtual_clock()
+    answers = iter([_NOT_FOUND] * 6 + [httpx.ConnectError("connection refused")])
+    calls = []
+
+    def transport(url, *, content, headers, timeout):
+        calls.append(url)
+        answer = next(answers, _NOT_FOUND)
+        if isinstance(answer, Exception):
+            raise answer
+        payload, code = answer
+        return _FakeResp(payload, status_code=code)
+
+    with pytest.raises(RuntimeError, match="no record of this deployment") as excinfo:
+        poll_platform_deploy_status(
+            env="staging",
+            ref=SHA,
+            base_url="u",
+            secret=SECRET,
+            attempts=335,
+            interval=10.0,
+            now=now,
+            sleep=sleep,
+            nonce_factory=lambda: "nonce123",
+            transport=transport,
+        )
+    assert "for 100s" in str(excinfo.value)
+    assert len(calls) == 11
+
+
+def test_poll_fails_a_deployment_that_flaps_between_not_found_and_a_gateway_error():
+    """After a runner recreation the gateway can flap: not_found, 502, not_found, 502, ...
+    Each answer reset the other's timer, so neither the 90 s not_found grace nor the 180 s
+    gateway grace ever ended the poll and it ran the full 55-minute budget (#666)."""
+    now, sleep = _virtual_clock()
+    flap = itertools.cycle([_NOT_FOUND, ({}, 502)])
+
+    def transport(url, *, content, headers, timeout):
+        payload, code = next(flap)
+        return _FakeResp(payload, status_code=code)
+
+    with pytest.raises(RuntimeError, match="no record of this deployment"):
+        poll_platform_deploy_status(
+            env="staging",
+            ref=SHA,
+            base_url="u",
+            secret=SECRET,
+            attempts=335,
+            interval=10.0,
+            now=now,
+            sleep=sleep,
+            nonce_factory=lambda: "nonce123",
+            transport=transport,
+        )
+    assert now() - 1700000000.0 <= 120.0
+
+
+def test_poll_names_the_deployment_id_it_lost():
+    """The runner's log has no line for a lost request, so the failing step must carry
+    the deployment id: it is the key to look up on the runner (#666, 2026-10-05)."""
+    deployment_id = "59ee11b32946abcd"
+    now, sleep = _virtual_clock()
+    _calls, transport = _capture(
+        [({"status": "not_found", "deployment_id": deployment_id}, 404)]
+    )
+    with pytest.raises(RuntimeError, match=deployment_id):
+        poll_platform_deploy_status(
+            env="staging",
+            ref=SHA,
+            services=["platform/alerting"],
+            deployment_id=deployment_id,
+            base_url="u",
+            secret=SECRET,
+            attempts=335,
+            interval=10.0,
+            now=now,
+            sleep=sleep,
+            nonce_factory=lambda: "nonce123",
+            transport=transport,
+        )
+
+
+def test_poll_names_the_deployment_id_from_the_answer_when_none_was_passed():
+    deployment_id = "59ee11b32946abcd"
+    now, sleep = _virtual_clock()
+    _calls, transport = _capture(
+        [({"status": "not_found", "deployment_id": deployment_id}, 404)]
+    )
+    with pytest.raises(RuntimeError, match=deployment_id):
+        poll_platform_deploy_status(
+            env="staging",
+            ref=SHA,
+            base_url="u",
+            secret=SECRET,
+            attempts=335,
+            interval=10.0,
+            now=now,
+            sleep=sleep,
+            nonce_factory=lambda: "nonce123",
+            transport=transport,
+        )
 
 
 def test_poll_raises_on_a_404_that_carries_an_empty_json_object():

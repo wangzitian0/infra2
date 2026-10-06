@@ -261,7 +261,9 @@ def poll_platform_deploy_status(
 
     A ``not_found`` answer is tolerated for ``not_found_grace`` seconds. A longer run of
     ``not_found`` answers means the runner has no record of the deploy: the poll fails
-    and names that cause (#666). Any other answer resets this timer.
+    and names the deployment and that cause (#666). Only a real status resets this timer.
+    A gateway or transport error does not: after a runner recreation the gateway can flap
+    between not_found and 502, and each answer would otherwise reset the other's timer.
 
     Returns the final status dict. A terminal status is anything other than ``running`` /
     ``pending`` / ``in_progress``. Raises ``ValueError`` for a bad env/ref/secret/base_url
@@ -316,7 +318,6 @@ def poll_platform_deploy_status(
             )
         except (httpx.TimeoutException, httpx.RequestError) as exc:
             moment = float(now())
-            not_found_since = None
             gateway_down_since = (
                 gateway_down_since if gateway_down_since is not None else moment
             )
@@ -335,7 +336,8 @@ def poll_platform_deploy_status(
         # reconcile, so we treat it as non-terminal and keep polling. A genuine routing
         # 404 (no JSON body / different status) still surfaces via raise_for_status().
         # The tolerance has a bound: after `not_found_grace` seconds of consecutive
-        # not_found answers the request is lost, so the poll fails (#666).
+        # not_found answers the request is lost, so the poll fails (#666). Only a real
+        # status resets the timer; a gateway error does not (the gateway can flap).
         code = getattr(resp, "status_code", None)
         body = _json_object_or_none(resp) if code == 404 else None
         if code == 404 and body is not None:
@@ -347,11 +349,12 @@ def poll_platform_deploy_status(
                     not_found_since if not_found_since is not None else moment
                 )
                 if moment - not_found_since > not_found_grace:
+                    lost_id = deployment_id or body.get("deployment_id") or "unknown"
                     raise RuntimeError(
                         f"iac_runner answered not_found for {int(moment - not_found_since)}s "
-                        f"while polling deploy {ref[:12]} to {env}: the runner has no record "
-                        "of this deployment; it was probably recreated between the request "
-                        "and the first poll (#666)"
+                        f"while polling deploy {ref[:12]} to {env} (deployment {lost_id}): "
+                        "the runner has no record of this deployment; it was probably "
+                        "recreated between the request and the first poll (#666)"
                     )
                 sleep(next(delays))
                 continue
@@ -362,7 +365,6 @@ def poll_platform_deploy_status(
         # one — is a genuine routing error and still raises below.
         if code in gateway_codes or (code == 404 and body is None):
             moment = float(now())
-            not_found_since = None
             gateway_down_since = (
                 gateway_down_since if gateway_down_since is not None else moment
             )
