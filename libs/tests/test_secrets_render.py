@@ -133,46 +133,54 @@ def test_fetch_app_manifests_reads_the_pinned_commit_and_only_fills_gaps(
     subprocess.run(
         ["git", "-C", str(tmp_path), "commit", "-q", "-m", "pin"], check=True
     )
-    (tmp_path / "repos/truealpha/present.json").parent.mkdir(parents=True)
-    (tmp_path / "repos/truealpha/present.json").write_text("{}", encoding="utf-8")
+    # A loose file under the gitlink path is not a checkout (#1109): the iac-runner
+    # held such copies from 2026-09-08 and read them after the pin moved.
+    (tmp_path / "repos/truealpha/loose.json").parent.mkdir(parents=True)
+    (tmp_path / "repos/truealpha/loose.json").write_text("{}", encoding="utf-8")
     urls: list[str] = []
 
     def fake(url: str) -> bytes:
         urls.append(url)
         return b'{"contract_version": 2}'
 
-    fetched = fetch_app_manifests.fetch_missing(
-        [
-            "repos/truealpha/present.json",
-            "repos/truealpha/apps/x/required-env.generated.json",
-            "platform/x.json",
-        ],
-        root=tmp_path,
-        fetch=fake,
-    )
+    paths = [
+        "repos/truealpha/loose.json",
+        "repos/truealpha/apps/x/required-env.generated.json",
+        "platform/x.json",
+    ]
+    fetched = fetch_app_manifests.fetch_missing(paths, root=tmp_path, fetch=fake)
     assert fetched == [
-        f"repos/truealpha/apps/x/required-env.generated.json @ {sha[:7]}"
+        f"repos/truealpha/loose.json @ {sha[:7]}",
+        f"repos/truealpha/apps/x/required-env.generated.json @ {sha[:7]}",
     ]
     assert urls == [
-        f"https://raw.githubusercontent.com/wangzitian0/truealpha/{sha}/apps/x/required-env.generated.json"
+        f"https://raw.githubusercontent.com/wangzitian0/truealpha/{sha}/loose.json",
+        f"https://raw.githubusercontent.com/wangzitian0/truealpha/{sha}/apps/x/required-env.generated.json",
     ]
     cached = (
         tmp_path
-        / ".cache/app-manifests/repos/truealpha/apps/x/required-env.generated.json"
+        / f".cache/app-manifests/{sha}/repos/truealpha/apps/x/required-env.generated.json"
     )
     assert cached.read_text() == '{"contract_version": 2}'
     assert not (
         tmp_path / "repos/truealpha/apps/x"
     ).exists()  # never inside the gitlink path
-    # a second pass is a no-op: the cache counts as present
+    # a second pass is a no-op: the pinned cache counts as present
+    assert fetch_app_manifests.fetch_missing(paths, root=tmp_path, fetch=fake) == []
+    # a real checkout (its own .git) is the source for what it holds: nothing fetched
+    (tmp_path / "repos/truealpha/.git").write_text("gitdir: x", encoding="utf-8")
     assert (
         fetch_app_manifests.fetch_missing(
-            ["repos/truealpha/apps/x/required-env.generated.json"],
-            root=tmp_path,
-            fetch=fake,
+            ["repos/truealpha/loose.json"], root=tmp_path, fetch=fake
         )
         == []
     )
+    # ...and a file the checkout lacks is still fetched at the pin
+    assert fetch_app_manifests.fetch_missing(
+        ["repos/truealpha/apps/y/required-env.generated.json"],
+        root=tmp_path,
+        fetch=fake,
+    ) == [f"repos/truealpha/apps/y/required-env.generated.json @ {sha[:7]}"]
 
 
 def test_optional_keys_never_use_a_direct_map_access() -> None:
