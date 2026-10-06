@@ -36,11 +36,12 @@ from libs.core.environ import DeploymentEnvironment, get_env, with_env_suffix
 staging = DeploymentEnvironment(name="staging", env_suffix="-staging")
 assert staging.is_staging and not staging.is_production
 assert with_env_suffix("platform-redis", staging) == "platform-redis-staging"
-with_env_suffix("platform-redis", get_env())  # this process's environment
+with_env_suffix("platform-redis", get_env())  # this process's environment: DEPLOY_ENV or INFRA_ENVIRONMENT, required
 ```
 
 ## Invariants & Design Principles
 
 - **Single Source of Truth**: `ServiceMeta` is read by AST from each Deployer in `deploy.py`. The hand-written service tables (`libs.security.registry.SERVICES`, the app rows of `libs.deploy.contract.SERVICES`) are checked against it by `libs/tests/test_service_entity_projections.py` (#1023).
 - **Immutability**: `ServiceMeta` and `DeploymentEnvironment` are `@dataclass(frozen=True)`.
+- **No default environment** (#1039): `get_env()` raises `EnvironmentNotSetError` when neither `INFRA_ENVIRONMENT` nor `DEPLOY_ENV` holds a value. Production is chosen explicitly like any other environment. A caller that names its target passes it: `get_env("staging")`.
 - **Guards & Tests**: Covered by `libs/tests/test_service_registry.py` and `libs/tests/test_common.py`.

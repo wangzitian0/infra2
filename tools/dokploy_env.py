@@ -97,7 +97,7 @@ def logs(c, name, project: str = "platform", env: str | None = None, deployment:
     Otherwise, shows container runtime logs.
     """
     header("Dokploy Logs", f"{project}/{env or 'default'}/{name}")
-    e = get_env()
+    e = get_env(env)
     
     # Derive host from INTERNAL_DOMAIN if not provided
     if not host:

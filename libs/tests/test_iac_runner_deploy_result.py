@@ -854,6 +854,51 @@ def test_run_invoke_task_materializes_production_without_suffix(
     assert invoke_env["ENV_DOMAIN_SUFFIX"] == ""
 
 
+@pytest.mark.parametrize(
+    ("env_name", "suffix"), [("staging", "-staging"), ("production", "")]
+)
+def test_run_invoke_task_child_env_resolves_through_get_env(
+    monkeypatch, tmp_path, env_name: str, suffix: str
+) -> None:
+    """#1039: get_env() has no default, so an iac-runner child must carry its environment.
+
+    The child gets exactly the variables run_invoke_task builds. With only those, the
+    child's get_env() must name the deploy environment the webhook asked for.
+    """
+    from libs.core import environ
+
+    sync_runner = _load_module(
+        f"sync_runner_get_env_{env_name}_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+    captured = {}
+
+    def fake_run(args, **kwargs):
+        captured["env"] = kwargs["env"]
+        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
+    sync_runner.run_invoke_task("postgres.sync", tmp_path, env_name)
+
+    class _NoOnePasswordRead:
+        def get(self, key):
+            return None
+
+    monkeypatch.setattr(
+        "libs.security.store.OpSecrets", lambda *a, **k: _NoOnePasswordRead()
+    )
+    for key in ("INFRA_ENVIRONMENT", "DEPLOY_ENV", "ENV_SUFFIX", "ENV_DOMAIN_SUFFIX"):
+        monkeypatch.delenv(key, raising=False)
+        if key in captured["env"]:
+            monkeypatch.setenv(key, captured["env"][key])
+    environ.reset_env_cache()
+
+    resolved = environ.get_env()
+    assert resolved["ENV"] == env_name
+    assert resolved["ENV_SUFFIX"] == suffix
+
+
 def test_deploy_env_overrides_rejects_empty_env(monkeypatch) -> None:
     """#161: empty env must not silently become production."""
     sync_runner = _load_module(

@@ -1032,7 +1032,10 @@ def test_collect_live_observations_skips_token_lookup_for_approle_service(
                 )
             }
 
-    def fake_get_env():
+    requested_envs: list[str | None] = []
+
+    def fake_get_env(env_name=None):
+        requested_envs.append(env_name)
         return {"VPS_HOST": "vps.example", "INTERNAL_DOMAIN": "example.test"}
 
     def fake_get_dokploy(host=None):
@@ -1064,6 +1067,8 @@ def test_collect_live_observations_skips_token_lookup_for_approle_service(
     observations = collect_live_observations([service], env="production")
 
     assert observations["services"][service.id]["token_lookup"] is None
+    # The audit names its environment: it never relies on a process default (#1039).
+    assert requested_envs == ["production"]
 
 
 def test_collect_live_observations_falls_back_to_legacy_dokploy_services(
@@ -1104,7 +1109,10 @@ def test_collect_live_observations_falls_back_to_legacy_dokploy_services(
                 }
             return None
 
-    def fake_get_env():
+    requested_envs: list[str | None] = []
+
+    def fake_get_env(env_name=None):
+        requested_envs.append(env_name)
         return {"VPS_HOST": "vps.example", "INTERNAL_DOMAIN": "example.test"}
 
     def fake_ssh(host, command):
@@ -1137,6 +1145,7 @@ def test_collect_live_observations_falls_back_to_legacy_dokploy_services(
     observations = collect_live_observations([service], env="production")
 
     assert searched_names == ["s3", "minio"]
+    assert requested_envs == ["production"]
     assert (
         "VAULT_ROLE_ID=test-role-id-legacy"
         in observations["services"][service.id]["dokploy_env"]
