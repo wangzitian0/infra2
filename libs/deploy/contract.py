@@ -33,7 +33,7 @@ SSOT: docs/ssot/core.environments.md §4.7.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 
 from libs.core import registry as service_registry
@@ -177,6 +177,25 @@ def _iac_pinned_specs() -> dict[str, ServiceSpec]:
     return out
 
 
+def _with_deployer_rollout_state(spec: ServiceSpec) -> ServiceSpec:
+    """An app spec with ``prod_only`` / ``not_yet_in_production`` read from its Deployer.
+
+    The bespoke app rows hand-write only what the Deployer does not declare (images,
+    preview support, companions). Their rollout state is the Deployer's, so a
+    ``not_yet_in_production`` set on the app's deploy.py reaches deploy_v2 without a
+    second edit here (#1023). Without the app's deploy.py in this checkout, the row is
+    returned as written.
+    """
+    meta = service_registry.service_attrs().get(spec.key)
+    if meta is None:
+        return spec
+    return replace(
+        spec,
+        prod_only=meta.prod_only,
+        not_yet_in_production=meta.not_yet_in_production,
+    )
+
+
 def all_service_keys() -> list[str]:
     """Every deployable service deploy_v2 knows — the app + every iac_runner-synced service."""
     return sorted({*SERVICES, *_iac_pinned_specs()})
@@ -189,7 +208,7 @@ def service_spec(service: str) -> ServiceSpec:
     deploy.py), so the registry is never a hand-maintained copy.
     """
     if service in SERVICES:
-        return SERVICES[service]
+        return _with_deployer_rollout_state(SERVICES[service])
     spec = _iac_pinned_specs().get(service)
     if spec is None:
         raise ValueError(

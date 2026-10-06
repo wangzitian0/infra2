@@ -20,11 +20,6 @@ from libs.core.environ import (
     get_environment,
     with_env_suffix,
 )
-from libs.core.service import (
-    Service,
-    get_service,
-    load_service_registry,
-)
 
 __all__ = [
     "DEPLOYMENT_ENV_PREVIEW",
@@ -39,9 +34,6 @@ __all__ = [
     "REPO_ROOT",
     "STAGING",
     "STATEFUL_DEPLOY_ENVIRONMENTS",
-    "Service",
     "get_environment",
-    "get_service",
-    "load_service_registry",
     "with_env_suffix",
 ]

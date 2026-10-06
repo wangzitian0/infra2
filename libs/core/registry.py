@@ -22,10 +22,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from libs.core.constants import REPO_ROOT
-from libs.core.service import (
-    Service as Service,
-    load_service_registry as load_service_registry,
-)
 from libs.core.facets import (
     FACET_CLASSES,
     BackupFacet,

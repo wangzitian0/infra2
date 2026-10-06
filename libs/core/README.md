@@ -13,7 +13,6 @@
 
 | Module | Role | Key Exports |
 |--------|------|-------------|
-| `service.py` | Immutable service specification & registry loader | `Service`, `load_service_registry()`, `get_service()` |
 | `environ.py` | Deployment environment of this process, suffixes, platform hosts (was `libs/common.py`, #955) | `get_env()`, `set_deploy_env()`, `with_env_suffix()`, `infra_domain()`, `service_domain()`, `DeploymentEnvironment` |
 | `registry.py` | Service registry read from each Deployer by AST (was `libs/service_registry.py`) | `service_attrs()`, `ServiceMeta`, `all_services()`, `resolve_container_host()` |
 | `facets.py` | Typed per-service facets a Deployer declares (was `libs/service_facets.py`) | `ProbeFacet`, `PublicRouteFacet`, `SignalFacet`, `BackupFacet`, `SecretsFacet`, `Exemption` |
@@ -22,35 +21,26 @@
 
 ## Usage Examples
 
-### Loading Services from Registry
+### Reading the Service Registry
 ```python
-from libs.core import get_service, load_service_registry
+from libs.core.registry import service_attrs
 
-# Retrieve a specific service by ID
-service = get_service("platform/postgres")
-print(service.id, service.subdomain, service.compose_file)
-
-# Iterate across all registered services
-registry = load_service_registry()
-for s in registry:
-    print(s.id, s.deployer_class)
+for service_id, meta in service_attrs().items():  # one ServiceMeta per deploy.py
+    print(service_id, meta.subdomain, meta.prod_only)
 ```
 
-### Working with Deployment Environments
+### Working with the Deployment Environment
 ```python
-from libs.core import DeploymentEnvironment, with_env_suffix
+from libs.core.environ import DeploymentEnvironment, get_env, with_env_suffix
 
-env = DeploymentEnvironment.from_str("staging")
-assert env.is_staging
-assert not env.is_production
-
-# Compute container/domain suffix
-suffix = with_env_suffix(env)  # "-staging" for staging, "" for production
+staging = DeploymentEnvironment(name="staging", env_suffix="-staging")
+assert staging.is_staging and not staging.is_production
+assert with_env_suffix("platform-redis", staging) == "platform-redis-staging"
+with_env_suffix("platform-redis", get_env())  # this process's environment
 ```
 
 ## Invariants & Design Principles
 
-- **Immutability**: `Service` is a `@dataclass(frozen=True)` to prevent runtime attribute mutation.
-- **Fail-Closed Resolution**: `get_service()` raises `KeyError` when an unregistered service ID is requested.
-- **Single Source of Truth**: Service definitions are parsed from compose configurations and facets, not hardcoded across multiple files.
+- **Single Source of Truth**: `ServiceMeta` is read by AST from each Deployer in `deploy.py`. The hand-written service tables (`libs.security.registry.SERVICES`, the app rows of `libs.deploy.contract.SERVICES`) are checked against it by `libs/tests/test_service_entity_projections.py` (#1023).
+- **Immutability**: `ServiceMeta` and `DeploymentEnvironment` are `@dataclass(frozen=True)`.
 - **Guards & Tests**: Covered by `libs/tests/test_service_registry.py` and `libs/tests/test_common.py`.
