@@ -508,6 +508,7 @@ def _github_signal_names() -> set[str]:
     names.add(module.WORKER_STATUS_CHECK)
     names.add(module.DOKPLOY_STATUS_CHECK)
     names.add(module.PEER_SCHEDULER_LIVENESS_CHECK)
+    names.add(module.SCHEDULED_JOB_START_CHECK)
     names.update(name for name, _ in module.BACKUP_CHECKS)
     names.add(module.RESTORE_REHEARSAL_CHECK)
     return names

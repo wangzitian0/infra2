@@ -104,6 +104,9 @@ failure_classes:
   peer-scheduler:
     pager: github
     covers: a peer repository's scheduler that cannot report its own death
+  scheduled-job-start:
+    pager: github
+    covers: a scheduled ops-checks job that GitHub failed before it started, so its own alert never ran
 
 # Paging signals still in the wrong layer. Each entry names the #901 phase
 # issue that moves or retires it; the audit fails once an entry stops being a
@@ -501,6 +504,23 @@ signals:
     signal: truealpha-scheduler-liveness
     primary_owner: github
     failure_class: peer-scheduler
+    severity: critical
+    cadence: 1d
+
+  # Scheduled ops-checks jobs that GitHub failed before they started (#1101). Such a
+  # job has no runner and no step, so its own `Alert on failure` step never runs,
+  # and truealpha's scheduler-liveness counts the run as a tick. #1086: the
+  # deploy_v2 canary waited on its own run's concurrency group on 2026-10-06 and
+  # nothing paged. tools/out_of_band_watchdog.py run_scheduled_job_start_check
+  # (libs/observability/scheduled_job_start.py) lists the scheduled runs of the last
+  # 26 h; a job that started and failed alerts itself and is not a finding. A failed
+  # read is red. Daily, so detection lags the failed job by up to 26 h.
+  - signal_id: global.infra2-scheduled-job-start.github
+    environment: global
+    component: github
+    signal: infra2-scheduled-job-start
+    primary_owner: github
+    failure_class: scheduled-job-start
     severity: critical
     cadence: 1d
 
