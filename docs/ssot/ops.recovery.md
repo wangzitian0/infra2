@@ -182,9 +182,18 @@ Failure contract (#618, found by the truealpha#650 restore drill):
   prod run stopped at `platform/minio` and never dumped the finance_report or
   truealpha databases.
 
-It writes a `tools/backup_verification.py`-compatible manifest and, when
-`BACKUP_REMOTE` (an rclone target) is set, uploads each archive off-host into
-the tier/environment directory (`${REMOTE}/${BACKUP_TIER}/${ENVIRONMENT}/${TS}`). Local retention keeps the
+It writes a `tools/backup_verification.py`-compatible manifest and uploads each
+archive off-host to `BACKUP_REMOTE` (an rclone target), into the tier/environment
+directory (`${REMOTE}/${BACKUP_TIER}/${ENVIRONMENT}/${TS}`).
+
+A run must name its target (#1030):
+
+- An unset `BACKUP_REMOTE` exits 2 before any archive work.
+- `BACKUP_LOCAL_ONLY=1` makes a local-only run (manual tests). It writes only its own run directory. It never replaces `<env>-manifest.json`, which is the off-host record the watchdog reads, and it deletes no earlier run.
+- An emitter that prints no services fails the run; it does not write an empty manifest.
+- On 2026-10-05, a manual run without the remote replaced both canonical manifests with `local:` URIs, and the watchdog paged on all 17 artifacts (#1013, #1014).
+
+Local retention keeps the
 most recent `BACKUP_KEEP` (default 7) run directories **per environment** and is
 skipped on a failed run. Run directories are named `production-<timestamp>` or
 `staging-<timestamp>` under `/data/backups/infra2`; each run's manifest records
@@ -208,12 +217,16 @@ Bootstrap paths are shared by both environments; environment-scoped paths take
 change, reinstall the host copy, verify its checksum, and inspect a fresh
 off-host manifest and restored artifact for every required entry.
 
-The host copy is installed by hand from `main` (script-deploy drift belongs to
-the reconcile lane). After a change merges, reinstall it and compare checksums:
+The host runs the script from the `/opt/infra2` checkout through a symlink:
+`/usr/local/sbin/infra2-host-backup.sh -> /opt/infra2/tools/host_backup.sh`. The
+script resolves the link to find `libs.backup.emitter` in that checkout. Keep the
+checkout clean: a local edit blocks the Sunday `git pull` of the restore rehearsal
+cron. After a change merges, update the checkout and confirm it is clean:
 
 ```bash
-install -m 0755 tools/host_backup.sh /usr/local/sbin/infra2-host-backup.sh
-sha256sum tools/host_backup.sh /usr/local/sbin/infra2-host-backup.sh
+git -C /opt/infra2 status --short   # must print nothing
+git -C /opt/infra2 pull -q origin main
+readlink -f /usr/local/sbin/infra2-host-backup.sh   # /opt/infra2/tools/host_backup.sh
 ```
 
 Scheduled on the host via crontab:

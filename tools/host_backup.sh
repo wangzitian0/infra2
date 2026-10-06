@@ -15,13 +15,20 @@
 # skipped on a failed run, so older good runs are not rotated away.
 #
 # Usage (on the VPS, where /data and the docker socket live):
-#   tools/host_backup.sh                                              # archive locally to /data/backups/infra2
 #   BACKUP_REMOTE=gdrive-backup:infra2 tools/host_backup.sh           # archive + upload off-host (weekly)
 #   BACKUP_REMOTE=gdrive-backup:infra2 BACKUP_TIER=quarterly tools/host_backup.sh # quarterly snapshot
+#   BACKUP_LOCAL_ONLY=1 tools/host_backup.sh                          # local archives only (manual test)
+#
+# A run must name its target (#1030). An unset BACKUP_REMOTE exits 2 before any work:
+# on 2026-10-05 a manual run without it replaced the off-host manifest with local
+# URIs, and the watchdog paged on all 17 artifacts. A BACKUP_LOCAL_ONLY=1 run writes
+# only its own run directory: it never replaces <env>-manifest.json (the off-host
+# record the watchdog reads) and deletes no earlier run.
 #
 # Environment:
 #   BACKUP_OUTPUT_DIR  default /data/backups/infra2
-#   BACKUP_REMOTE      optional rclone remote prefix (e.g. gdrive-backup:infra2); off-host upload
+#   BACKUP_REMOTE      rclone remote prefix (e.g. gdrive-backup:infra2); required unless BACKUP_LOCAL_ONLY=1
+#   BACKUP_LOCAL_ONLY  1 = archive locally only; mutually exclusive with BACKUP_REMOTE
 #   BACKUP_TIER        optional retention tier: weekly (default) | quarterly
 #   BACKUP_DATA_ROOT   host data root holding the service data paths (default /data)
 #   BACKUP_KEEP        local run directories to keep per environment (default 7)
@@ -32,6 +39,19 @@ umask 077  # Local archives include Vault and 1Password Connect state.
 
 OUTPUT_DIR="${BACKUP_OUTPUT_DIR:-/data/backups/infra2}"
 REMOTE="${BACKUP_REMOTE:-}"
+LOCAL_ONLY="${BACKUP_LOCAL_ONLY:-}"
+case "${LOCAL_ONLY}" in
+  ""|0|1) ;;
+  *) echo "BACKUP_LOCAL_ONLY must be 1, 0 or unset (got '${LOCAL_ONLY}')" >&2; exit 2 ;;
+esac
+if [ -n "${REMOTE}" ] && [ "${LOCAL_ONLY}" = "1" ]; then
+  echo "BACKUP_REMOTE and BACKUP_LOCAL_ONLY are mutually exclusive" >&2
+  exit 2
+fi
+if [ -z "${REMOTE}" ] && [ "${LOCAL_ONLY}" != "1" ]; then
+  echo "BACKUP_REMOTE is not set: set it to the off-host rclone target, or set BACKUP_LOCAL_ONLY=1 for a local-only run that never replaces the off-host manifest (#1030)" >&2
+  exit 2
+fi
 TIER="${BACKUP_TIER:-weekly}"
 if [ "${TIER}" != "weekly" ] && [ "${TIER}" != "quarterly" ]; then
   echo "invalid BACKUP_TIER '${TIER}': must be 'weekly' or 'quarterly'" >&2
@@ -66,10 +86,20 @@ chmod 700 "${OUTPUT_DIR}" "${RUN_DIR}"
 # Preserves safety invariant #618: logical dumps FIRST, busy path archives LAST.
 # Manual override via SERVICES is preserved for testing or single-service runs.
 if [ -z "${SERVICES:-}" ]; then
+  # The host installs this script as a symlink (/usr/local/sbin/infra2-host-backup.sh
+  # -> /opt/infra2/tools/host_backup.sh). Resolve the link first, or the repo root
+  # is /usr/local and the emitter import fails (#1030).
   REAL_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || python3 -c "import os, sys; print(os.path.realpath(sys.argv[1]))" "${BASH_SOURCE[0]}")"
   SCRIPT_DIR="$(cd "$(dirname "${REAL_PATH}")" && pwd)"
   REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
   SERVICES="$(PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}" python3 -m libs.backup.emitter --environment "${ENVIRONMENT}" --data-root "${DATA_ROOT}")"
+fi
+if [ -z "${SERVICES//[[:space:]]/}" ]; then
+  # An empty list would write a manifest with 0 artifacts and exit 0.
+  echo "host_backup: no services to back up (libs.backup.emitter printed nothing)" >&2
+  rm -f "${ARTIFACTS_FILE}"
+  rmdir "${RUN_DIR}" 2>/dev/null || true
+  exit 1
 fi
 
 sha256_of() { sha256sum "$1" | awk '{print $1}'; }
@@ -183,7 +213,11 @@ done <<< "${SERVICES}"
   echo "}"
 } > "${MANIFEST}"
 rm -f "${ARTIFACTS_FILE}"
-install -m 0600 "${MANIFEST}" "${LATEST_MANIFEST}"
+if [ -n "${REMOTE}" ]; then
+  install -m 0600 "${MANIFEST}" "${LATEST_MANIFEST}"
+else
+  echo "host_backup: local-only run; ${LATEST_MANIFEST} (the off-host record) is unchanged" >&2
+fi
 
 if [ -n "${RUN_REMOTE}" ]; then
   rclone copyto "${MANIFEST}" "${RUN_REMOTE}/manifest.json"
@@ -196,6 +230,13 @@ if [ "${#failures[@]}" -gt 0 ]; then
   echo "host_backup: ${#failures[@]} service(s) FAILED: ${failures[*]}; local retention skipped" >&2
   echo "${MANIFEST}"
   exit 1
+fi
+
+if [ -z "${REMOTE}" ]; then
+  # A local-only run deletes nothing: the runs it would rotate away can be the
+  # local copies of off-host runs.
+  echo "${MANIFEST}"
+  exit 0
 fi
 
 # Local Retention: keep BACKUP_KEEP runs per environment. Legacy unsuffixed
