@@ -13,8 +13,17 @@ from libs.secrets_registry import SERVICES, Service
 
 
 def test_every_registered_manifest_is_resolvable() -> None:
+    """Each registered manifest loads: from the checkout, the cache, or a fetch at the
+    submodule's pinned commit (#1085).
+
+    Checking only ``manifest_file(path).exists()`` made the result depend on another
+    test having fetched the file first: in a worktree without the app submodules it
+    failed whenever its xdist worker ran first. ``load_manifest`` fetches on a miss and
+    parses the file, so the test proves what its name says on its own."""
     for service in SERVICES:
         for path in service.manifests:
+            manifest = secrets_registry.load_manifest(path)
+            assert manifest.fields, f"{service.id}: {path} has no fields"
             assert secrets_registry.manifest_file(path).exists(), (
                 f"{service.id}: {path}"
             )
