@@ -219,7 +219,7 @@ def test_an_alert_facet_must_declare_its_renotify_window() -> None:
     timer"), so a default of 0 made a forgotten window indistinguishable from a
     declared one. Left out, it stays None and the derived entry fails the audit;
     declared as 0 it passes."""
-    from libs.service_facets import ProbeFacet, SignalFacet
+    from libs.core.facets import ProbeFacet, SignalFacet
     from libs.core.registry import ServiceMeta
 
     spec = importlib.util.spec_from_file_location("watchdog_audit_for_facets", AUDIT)

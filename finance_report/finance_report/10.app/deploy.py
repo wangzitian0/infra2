@@ -2,7 +2,7 @@ import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.console import header, success, info, warning, error
-from libs.service_facets import (
+from libs.core.facets import (
     ProbeFacet,
     PublicRouteFacet,
     SecretsFacet,

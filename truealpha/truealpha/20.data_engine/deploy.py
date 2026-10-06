@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from invoke.exceptions import CommandTimedOut
 from libs.console import error, success
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import BackupFacet, Exemption, SecretsFacet
+from libs.core.facets import BackupFacet, Exemption, SecretsFacet
 
 shared_tasks = sys.modules.get("truealpha.20.data_engine.shared")
 

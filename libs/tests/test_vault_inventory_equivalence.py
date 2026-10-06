@@ -183,7 +183,7 @@ def test_duplicate_derived_inventory_ids_fail_closed() -> None:
 
 _COUNTERFACTUAL_DEPLOY = """
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import SecretsFacet
+from libs.core.facets import SecretsFacet
 
 
 class ExampleDeployer(Deployer):

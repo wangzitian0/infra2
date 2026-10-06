@@ -28,7 +28,7 @@ def audit_autodeploy(c, host: str | None = None):
     """
     from invoke.exceptions import Exit
 
-    from libs.deploy_dependencies import autodeploy_violations
+    from libs.deploy.dependencies import autodeploy_violations
 
     header("Dokploy autoDeploy audit", "IaC must be the single deploy trigger")
     client = get_dokploy(host=host)

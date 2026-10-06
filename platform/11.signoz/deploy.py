@@ -13,7 +13,7 @@ from libs.common import (
     otel_ingest_endpoint,
     service_domain,
 )
-from libs.service_facets import PublicRouteFacet, BackupFacet, ProbeFacet, SignalFacet
+from libs.core.facets import PublicRouteFacet, BackupFacet, ProbeFacet, SignalFacet
 
 shared_tasks = sys.modules.get("platform.11.signoz.shared")
 
