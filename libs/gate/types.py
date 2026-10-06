@@ -14,7 +14,9 @@ ABSENT = "ABSENT"
 DEFAULT_REPO = "wangzitian0/infra2"
 
 QUIET_MINUTES = 12
-SETTLE_MINUTES = 3  # event policy: after the review of the head, not after the push
+# Event policy: after the review of the head (or, for a bot-opened PR, its
+# independent verification comment), not after the push (#1075).
+SETTLE_SECONDS = 60
 COPILOT_BOT_ID = "BOT_kgDOCnlnWA"
 AUTOMATED_REVIEWERS = frozenset({"copilot-pull-request-reviewer"})
 
@@ -52,6 +54,7 @@ GREEN_BUCKETS = frozenset({"pass", "skipping"})
 GREEN_STATES = frozenset({"SUCCESS", "SKIPPED", "NEUTRAL"})
 MAX_REVIEW_THREADS = 100
 MAX_THREAD_COMMENTS = 20
+MAX_PR_COMMENTS = 100  # newest PR conversation comments read for verification
 NO_CHECKS_REPORTED = "no checks reported"
 GH_TIMEOUT_S = 200
 
@@ -146,6 +149,10 @@ class HeadFacts:
     absent_fields: tuple[str, ...] = ()
     reviews: tuple[tuple[str, str, float], ...] = ()
     body: str = ""
+    author: tuple[str, str] = ("", "")  # (GraphQL __typename, login); empty if unread
+    # PR conversation comments: (body, epoch of the current text, i.e. the last edit
+    # or else the creation). Empty when the list is missing or unreadable.
+    comments: tuple[tuple[str, float], ...] = ()
 
     def reviews_on_head(self) -> tuple[tuple[str, str, float], ...]:
         return tuple(r for r in self.reviews if r[1] == self.head_sha)

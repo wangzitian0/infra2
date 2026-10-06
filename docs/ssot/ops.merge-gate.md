@@ -22,9 +22,15 @@
 - **必需检查必须在场**：`blocks_merge: true` 的检查不仅要绿，还必须**确实报告过**。
   `detect-changes` 失败时其下游 job 是 skipped 而非 run，GitHub 仍接受为已满足——
   因此必需集须以 `ci-gate-inventory.yaml` 为准逐个核对在场与结论，而不是只看已报告的检查是否为绿。
-- **静置**：自动 review（Copilot）已对**当前 head SHA** 提交且距该 review ≥ 3 分钟；
-  自动 review 迟迟不来时以距最后一次 push 12 分钟为上限（先到者为准）。
-  fix-up push 不会自动触发 Copilot 复审，需显式请求。
+- **静置 (settle)**：An automated review (Copilot) of the **current head SHA** starts a settle time of 60 seconds.
+  Copilot does not review a pull request that an app or bot account opens (#1075).
+  For such a pull request, an independent verification comment replaces the review.
+  Its heading is `### Independent verification of head <sha7>`, where `<sha7>` is the first 7 characters of the current head SHA.
+  A later line of the comment names at least one test, as `test_...` or `path::name`.
+  The settle time starts at the creation of the comment, or at its last edit if it has one. The newest matching comment counts.
+  For a pull request that a user opens, a comment does not replace the review.
+  The limit is always 12 minutes after the last push. Without a review or a verification comment, that limit applies.
+  The earlier of the two times decides. A fix-up push does not start a new Copilot review. Request it explicitly.
 - **变更契约完整**：PR description checklist 完整；代码、测试、SSOT、Project、Layer README / Onboarding 按影响同步；无未解释的 scope drift；PR description 显式引用其推进/关闭的 issue 编号（无则写明 None）——避免 PR 实质推进了某 issue 的 scope 却不留痕迹，导致 issue 可见状态滞后仓库实际进度（#508）。
 - **安全与运维门禁**：无敏感文件；已说明风险、回滚与 0 宕机影响；涉及 state discrepancy、密钥或生产数据时已按对应 SSOT 执行并留证。
 **仍需 owner 的两类，判据各不相同，分别列**：
