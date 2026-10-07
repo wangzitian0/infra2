@@ -8,8 +8,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from infra2_sdk.runtime.probes import DependencyStatus
-from infra2_sdk.runtime.probes import ProbeResult as SdkProbeResult
+from infra2_sdk.runtime.health import DependencyStatus
+from infra2_sdk.runtime.health import ProbeResult as SdkProbeResult
 
 import libs.observability.probes as probes
 from libs.observability.probes import (

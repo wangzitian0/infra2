@@ -1928,7 +1928,7 @@ def test_image_manifest_exists_success(monkeypatch):
 
 
 def test_image_manifest_exists_not_found(monkeypatch):
-    from infra2_sdk.release import ReleaseError
+    from infra2_sdk.refs import ReleaseError
     import libs.deploy.preflight as preflight
 
     def fake_resolve(*, image, reference, registry):
@@ -1941,7 +1941,7 @@ def test_image_manifest_exists_not_found(monkeypatch):
 
 
 def test_image_manifest_exists_error_raises_runtime_error(monkeypatch):
-    from infra2_sdk.release import ReleaseError
+    from infra2_sdk.refs import ReleaseError
     import libs.deploy.preflight as preflight
 
     def fake_resolve(*, image, reference, registry):

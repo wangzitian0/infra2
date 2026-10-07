@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from infra2_sdk.release import ReleaseError, resolve_image_digest
+from infra2_sdk.refs import ReleaseError, resolve_image_digest
 from infra2_sdk.secrets import vault_token_status
 
 from libs.core.constants import REPO_ROOT
