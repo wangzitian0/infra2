@@ -45,8 +45,16 @@ _DATA_SUFFIXES = (".json", ".yaml", ".yml", ".md")
 
 # Tests whose file name does not follow libs/tests/test_<module stem>.py, by module.
 _TESTS_BY_MODULE = {
-    "libs/gate/production_contract.py": "libs/tests/test_production_environment_gate.py",
+    "libs/gate/production_contract.py": (
+        "libs/tests/test_production_environment_gate.py",
+    ),
+    "libs/gate/evaluator.py": ("libs/tests/test_gate_pipeline.py",),
+    "libs/gate/self_governance.py": ("libs/tests/test_gate_self_governance.py",),
 }
+
+# Package files that Python runs before the gate code. They are in the closure even
+# when they do not exist: a PR can add one, and `python -m tools.pr_merge_gate` runs it.
+PACKAGE_FILES = ("libs/__init__.py", "tools/__init__.py")
 
 
 def _repo_deps(rel: str) -> set[str]:
@@ -124,10 +132,18 @@ def self_governing_files() -> frozenset[str]:
         if member.endswith(".py"):
             for test in (
                 f"libs/tests/test_{PurePosixPath(member).stem}.py",
-                _TESTS_BY_MODULE.get(member),
+                *_TESTS_BY_MODULE.get(member, ()),
             ):
-                if test and (root / test).is_file():
+                if (root / test).is_file():
                     closure.add(test)
+    # Python runs the __init__.py of each parent package before a module (#1138).
+    for member in list(closure):
+        if member.endswith(".py"):
+            for parent in PurePosixPath(member).parents:
+                package_file = f"{parent}/__init__.py"
+                if parent != PurePosixPath(".") and (root / package_file).is_file():
+                    closure.add(package_file)
+    closure |= set(PACKAGE_FILES)
     closure |= set(RULE_TEXT_FILES)
     closure |= set(_all_workflow_files())
     if seed not in closure:
@@ -198,7 +214,9 @@ def _working_tree_rule_drift(
     drift: list[str] = []
     for path in sorted(self_governing_files()):
         try:
-            local = _blob_sha((root / path).read_bytes())
+            local: str | None = _blob_sha((root / path).read_bytes())
+        except FileNotFoundError:
+            local = None  # absent here: drift only when the base branch has it
         except OSError:
             drift.append(path)
             continue

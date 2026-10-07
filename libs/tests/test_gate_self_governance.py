@@ -13,8 +13,13 @@ it implements. Hence the historical list is pinned here.
 
 from __future__ import annotations
 
+import json
 import pathlib
 
+import pytest
+
+from libs.gate.self_governance import PACKAGE_FILES
+from libs.gate.types import DEFAULT_REPO
 from tools import pr_merge_gate as gate
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -85,9 +90,11 @@ def test_the_set_is_never_empty() -> None:
 
 
 def test_every_member_exists() -> None:
-    """A stale entry protects nothing and reads as though it does."""
+    """A stale entry protects nothing and reads as though it does. The one exception
+    is a package file that a PR could add: it is protected before it exists."""
     missing = sorted(f for f in gate.self_governing_files() if not (ROOT / f).is_file())
-    assert not missing, f"protected paths that do not exist: {missing}"
+    stale = sorted(set(missing) - set(PACKAGE_FILES))
+    assert not stale, f"protected paths that do not exist: {stale}"
 
 
 def test_the_guard_of_the_production_lock_is_in_the_closure() -> None:
@@ -103,3 +110,51 @@ def test_the_guard_of_the_production_lock_is_in_the_closure() -> None:
         "libs/tests/test_production_environment_gate.py",
     ):
         assert path in found, path
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "libs/__init__.py",
+        "libs/gate/__init__.py",
+        "tools/__init__.py",
+        "libs/tests/test_gate_pipeline.py",
+        "libs/tests/test_gate_self_governance.py",
+    ],
+)
+def test_package_files_and_the_gate_tests_are_in_the_closure(path) -> None:
+    """Python runs each parent `__init__.py` before the gate code (#1138)."""
+    assert path in gate.self_governing_files()
+    assert gate.is_self_governing(path)
+
+
+def test_a_package_file_that_does_not_exist_yet_is_still_protected() -> None:
+    """`python -m tools.pr_merge_gate` would run a `tools/__init__.py` that a PR adds."""
+    assert not (ROOT / "tools/__init__.py").exists(), "premise: no tools/__init__.py"
+    assert gate.is_self_governing("tools/__init__.py")
+
+
+def _base_tree(skip: str = "", extra: dict[str, str] | None = None):
+    tree = [
+        {"path": f, "sha": gate._blob_sha((ROOT / f).read_bytes())}
+        for f in sorted(gate.self_governing_files())
+        if (ROOT / f).is_file() and f != skip
+    ] + [{"path": k, "sha": v} for k, v in (extra or {}).items()]
+    payload = json.dumps({"truncated": False, "tree": tree})
+    return lambda argv: payload
+
+
+def test_a_package_file_absent_here_and_in_the_base_is_no_drift() -> None:
+    assert gate._working_tree_rule_drift(DEFAULT_REPO, "main", gh=_base_tree()) == ()
+
+
+def test_a_package_file_the_base_has_and_this_checkout_lacks_is_drift() -> None:
+    gh = _base_tree(extra={"tools/__init__.py": "0" * 40})
+    drift = gate._working_tree_rule_drift(DEFAULT_REPO, "main", gh=gh)
+    assert drift == ("tools/__init__.py",)
+
+
+def test_an_existing_member_missing_from_the_base_is_still_drift() -> None:
+    gh = _base_tree(skip="libs/gate/__init__.py")
+    drift = gate._working_tree_rule_drift(DEFAULT_REPO, "main", gh=gh)
+    assert drift == ("libs/gate/__init__.py",)

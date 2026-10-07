@@ -1711,6 +1711,8 @@ def test_hand_built_facts_prove_nothing_by_default():
 def _tree_payload(overrides: dict[str, str] | None = None, *, truncated=False) -> str:
     tree = []
     for path in sorted(gate.self_governing_files()):
+        if not (gate.ROOT / path).is_file():
+            continue  # a package file the closure protects before it exists
         sha = gate._blob_sha((gate.ROOT / path).read_bytes())
         tree.append({"path": path, "sha": (overrides or {}).get(path, sha)})
     return json.dumps({"truncated": truncated, "tree": tree})
