@@ -287,10 +287,30 @@ def test_fanout_coverage_ignores_a_glob_declared_for_another_service(tmp_path):
         "FROM x\nCOPY uv.lock /tmp/uv.lock\n",
         files=("uv.lock",),
     )
-    manifest = {"platform/other": ["uv.lock"]}
+    # ghost declares a glob too, so a leak of "any glob hit selects every service in
+    # the manifest" would still cover uv.lock for ghost and hide the violation.
+    manifest = {"platform/other": ["uv.lock"], "platform/ghost": ["docs/unrelated.md"]}
     assert fanout_coverage_violations(composes, manifest=manifest, root=tmp_path) == [
         "platform/ghost: uv.lock"
     ]
+
+
+def test_fanout_coverage_follows_a_symlink_to_its_target(tmp_path):
+    """The config hash reads the bytes behind a symlink and labels the input by the
+    target. A link under a declared tree must not hide a target that no glob covers."""
+    composes = _service(
+        tmp_path,
+        _REPO_ROOT_CONTEXT,
+        "FROM x\nCOPY libs /app/libs\n",
+        files=("docs/other.md", "libs/a.py"),
+    )
+    (tmp_path / "libs" / "link.md").symlink_to(tmp_path / "docs" / "other.md")
+    declared = {"platform/ghost": ["libs/**"]}
+    assert fanout_coverage_violations(composes, manifest=declared, root=tmp_path) == [
+        "platform/ghost: docs/other.md"
+    ]
+    covered = {"platform/ghost": ["libs/**", "docs/other.md"]}
+    assert fanout_coverage_violations(composes, manifest=covered, root=tmp_path) == []
 
 
 def test_fanout_coverage_refuses_a_compose_outside_a_service_directory(tmp_path):

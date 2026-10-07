@@ -189,7 +189,10 @@ def _config_hash_inputs(compose_paths, root: Path):
         text = compose.read_text(encoding="utf-8")
         yaml.safe_load(text)
         for path in _compose_artifact_files(str(compose), text):
-            yield key, path
+            # The hash reads through a symlink and labels the input by its target, so
+            # the audit checks the target too: a link under a declared tree can point
+            # at a file that no glob fans out.
+            yield key, Path(path).resolve()
 
 
 def config_hash_input_count(compose_paths, root: Path = _ROOT) -> int:
