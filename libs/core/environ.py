@@ -72,8 +72,6 @@ SERVICE_SUBDOMAINS = {
     "signoz": "signoz",  # signoz.{domain}
     "s3": "s3",  # s3.{domain} -> S3 API (9000)
     "s3_console": "s3-console",  # s3-console.{domain} -> Console (9001)
-    "minio_console": "minio",  # minio.{domain} -> Console (9001, legacy)
-    "minio_api": "s3",  # s3.{domain} -> S3 API (9000, legacy)
     "portal": "portal",  # portal.{domain}
 }
 
@@ -91,8 +89,6 @@ _REGISTRY_BACKED_SHORT_NAMES = {
     "signoz": "platform/signoz",
     "s3": "platform/s3",
     "s3_console": "platform/s3",
-    "minio_api": "platform/s3",
-    "minio_console": "platform/s3",
     "portal": "platform/portal",
 }
 
@@ -110,8 +106,8 @@ def SHARED_PLATFORM_SERVICES() -> set[str]:
     there is no staging instance to ever need a suffix against).
 
     This used to be a hand-maintained literal that had silently drifted from
-    reality: `sso`/`minio_api`/`minio_console` were hardcoded in even though
-    authentik/minio are actually `prod_only=False` — real, separate staging
+    reality: `sso`/`s3`/`s3_console` were hardcoded in even though
+    authentik/s3 are actually `prod_only=False` — real, separate staging
     instances exist and always have (`sso-staging.zitian.party`,
     `s3-staging.zitian.party`). A function, not a module-level constant, so it
     stays fresh (and importing this module never performs a filesystem scan as
