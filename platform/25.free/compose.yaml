@@ -5,6 +5,7 @@ services:
     restart: always
     user: "0:0"
     command: ["run", "-c", "/etc/sing-box/config.json"]
+    mem_limit: 256m
     volumes:
       - ${DATA_PATH}/config.json:/etc/sing-box/config.json:ro
     networks:
