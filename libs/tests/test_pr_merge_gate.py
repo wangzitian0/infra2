@@ -374,7 +374,7 @@ class _Gh:
         if argv[:2] == ["pr", "merge"]:
             return ""
         if argv[:1] == ["api"] and (
-            "/environments/" in argv[-1] or "/contents/.github/workflows" in argv[-1]
+            "/environments/" in argv[-1] or "/contents/" in argv[-1]
         ):
             return self._lock_answer(argv[-1])
         raise AssertionError(argv)
@@ -409,8 +409,10 @@ class _Gh:
             return json.dumps(
                 [{"name": f.name, "type": "file"} for f in workflows.glob("*.y*ml")]
             )
-        name = path.split("/contents/.github/workflows/", 1)[1].split("?", 1)[0]
-        return (workflows / name).read_text(encoding="utf-8")
+        # Any other contents read (a workflow file, or the base and head of a file
+        # with a direction proof) answers with this checkout's copy.
+        rel = path.split("/contents/", 1)[1].split("?", 1)[0]
+        return (ROOT / rel).read_text(encoding="utf-8")
 
 
 def test_collect_reads_the_newest_commit_as_the_last_push():
@@ -2450,28 +2452,57 @@ def test_the_json_verdict_carries_the_lock(capsys):
     assert doc["lock_verified"] is False and len(doc["lock_failures"]) == 2
 
 
-def test_the_gh_calls_of_one_run_are_bounded():
-    """Each run reads the lock: 3 calls plus one per workflow file. Nothing else may
-    grow with the tree, so a future loop over an unbounded list fails here."""
+# The gh calls of one run: 9 + N + 2k, where N is the number of workflow files and k
+# the changed files in the closure that have a direction proof (a base and a head read
+# each). --request-review adds up to 2 and --merge adds 1. Inside `_gh`, each call can
+# try up to 3 times. Nothing else may grow with the tree or the PR (#1138).
+WORKFLOW_COUNT = len(list((ROOT / ".github" / "workflows").glob("*.y*ml")))
+
+
+def _counted_run(argv, gh) -> list[list[str]]:
     calls: list[list[str]] = []
-    inner = _Gh(files=RELEASE_CODE)
 
-    def counting(argv):
-        calls.append(list(argv))
-        return inner(argv)
+    def counting(call):
+        calls.append(list(call))
+        return gh(call)
 
-    assert gate.main(["704"], gh=counting, now=lambda: READY_AT) == 0
-    workflows = len(list((ROOT / ".github" / "workflows").glob("*.y*ml")))
-    lock_calls = [
-        c for c in calls if "/environments/" in c[-1] or "/contents/" in c[-1]
-    ]
-    assert len(lock_calls) == 3 + workflows
-    # preflight tree, PR view, checks, threads, compare, rule-drift tree, and the lock
-    assert len(calls) <= 6 + 3 + workflows, [c[:2] for c in calls]
+    assert gate.main(argv, gh=counting, now=lambda: READY_AT) == 0
     trees = [c for c in calls if "/git/trees/" in c[1]]
-    assert len(trees) == 2
-    others = [tuple(c) for c in calls if c not in trees]
-    assert len(others) == len(set(others)), "a gh call repeated within one run"
+    assert len(trees) == 2  # the preflight and the rule-drift read
+    # One repeat is allowed: the head copy of a changed workflow file, read once by the
+    # direction proof and once by the lock check. It is one of the 2k reads.
+    changed = {
+        f for f in getattr(gh, "files", ()) if f.startswith(gate.WORKFLOW_PREFIX)
+    }
+    for call in {tuple(c) for c in calls if c not in trees}:
+        count = calls.count(list(call))
+        path = call[-1].split("/contents/", 1)[-1].split("?", 1)[0]
+        allowed = 2 if path in changed and "?ref=main" not in call[-1] else 1
+        assert count <= allowed, f"{count} identical gh calls: {call}"
+    return calls
+
+
+def _lock_reads(calls) -> int:
+    return sum(
+        1
+        for c in calls
+        if "/environments/" in c[-1] or "/contents/.github/workflows" in c[-1]
+    )
+
+
+def test_the_gh_calls_of_one_run_are_bounded():
+    calls = _counted_run(["704"], _Gh(files=RELEASE_CODE))
+    assert _lock_reads(calls) == 3 + WORKFLOW_COUNT
+    assert len(calls) <= 9 + WORKFLOW_COUNT, [c[:2] for c in calls]
+
+
+def test_each_proven_file_adds_two_reads_to_the_bound():
+    files = (f"{gate.WORKFLOW_PREFIX}docs.yml", "docs/ssot/ci-gate-inventory.yaml")
+    calls = _counted_run(["704", "--merge"], _Gh(files=files))
+    proof_reads = [c for c in calls if c[-1].endswith("?ref=main")]
+    k = len(files)
+    assert len(proof_reads) == k  # the base reads; the head reads use the head SHA
+    assert len(calls) <= 9 + WORKFLOW_COUNT + 2 * k + 1, [c[:2] for c in calls]
 
 
 def test_the_lock_line_names_each_state():

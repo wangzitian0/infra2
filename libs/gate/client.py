@@ -238,7 +238,13 @@ def _pr_comments(block: object) -> tuple[tuple[str, float], ...]:
 def collect(
     number: int, *, repo: str = DEFAULT_REPO, gh: Runner | None = None
 ) -> HeadFacts:
-    """Read the head's facts through `gh`; nothing here decides."""
+    """Read the head's facts through `gh`; nothing here decides.
+
+    One run of the gate makes at most 9 + N + 2k calls: N workflow files for the lock
+    check, and two reads for each of k changed gate files with a direction proof
+    (#1138). `--request-review` adds up to 2 and `--merge` adds 1. `_gh` tries each call
+    up to 3 times.
+    """
     if gh is None:
         gh = _gh
 

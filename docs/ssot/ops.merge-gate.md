@@ -104,7 +104,9 @@
 ## Production lock
 
 The gate reads the production lock (#1138) on every run for an open PR in this repository.
+It does not read the lock for a closed PR, for another repository, or when the run stops at exit 4 first.
 The verdict prints one lock line: `production lock verified (...)` or `production lock NOT verified: <failures>`.
+A run that did not read the lock prints `production lock NOT verified: not read`.
 The JSON verdict has the same fact in `lock_verified` and `lock_failures`. The line alone never changes the exit code.
 The lock is the GitHub environment `production`. The gate reads four facts from GitHub:
 
@@ -122,10 +124,14 @@ The lock holds when the four facts are true and the head satisfies the contract.
   The gate derives these workflows from the `blocks_merge: true` gates in `ci-gate-inventory.yaml`.
   When the gate cannot read such a gate, the lock releases no workflow file.
   A file on `OWNER_HELD_WORKFLOWS` in `libs/gate/production_contract.py` is also held. That list is empty by decision of 2026-10-08.
-- A deploy-triggering path does not need the owner. Each production job waits for the environment reviewer.
+- A deploy-triggering path does not need the owner. Each job named as production waits for the environment reviewer.
 
 Fail closed: when a fact is false or unreadable, the earlier rules apply. The verdict names each failure.
 When the lock holds, these changes still need the owner: the gate code and data, their tests, the rule-text files, and the contract tables.
+Two exits stay open. A rule-text file clears with a quoted owner instruction in the PR body.
+A change to `ci-gate-inventory.yaml` clears when the direction proof shows it is tighter.
+A file that Python or pytest runs before gate code also needs the owner.
+Examples: a root module such as `yaml.py`, a package that replaces a gate module, and a `conftest.py` in `libs/tests`.
 
 The contract is strict in two ways.
 A conditional job must use the exact condition in its table entry. A condition that only contains it fails.
@@ -134,11 +140,15 @@ A job that reads any secret outside `NON_PRODUCTION_SECRETS` holds a production 
 Limits of the lock:
 
 - The lock reader counts reviewers; it does not check who they are.
+- One run makes at most 9 + N + 2k `gh` calls. N is the number of workflow files.
+  k is the number of changed gate files with a direction proof. `--request-review` adds up to 2, and `--merge` adds 1.
+  Each call can try up to 3 times.
 - The gate checks that a gated job declares the right environment.
   It does not check that the job body keeps using the input that selects the environment.
   Example: a body edit hard-codes `--type prod`, and the environment condition still reads `inputs.type`.
 - The lock does not cover the production credentials that ungated jobs read.
 - The bodies of ungated jobs and the code they run are outside the gate (#1147). An agent can merge a change to them.
+- The pytest settings in `pyproject.toml` are outside the gate (#1147).
 - The real fix is to scope those credentials to the `production` environment (#1147).
 
 ## 授权沿革
