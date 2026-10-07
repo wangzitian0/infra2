@@ -242,6 +242,24 @@ def test_fanout_coverage_refuses_an_unreadable_compose(tmp_path):
         fanout_coverage_violations(composes, manifest={}, root=tmp_path)
 
 
+def test_the_audit_refuses_a_tree_with_no_service_compose(monkeypatch, capsys):
+    """A scan that finds no compose file reads no input. It must fail, not pass."""
+    from tools import deploy_guard_audit
+
+    monkeypatch.setattr(deploy_guard_audit, "find_service_composes", lambda: [])
+    assert deploy_guard_audit.main() == 1
+    assert "checked nothing" in capsys.readouterr().out
+
+
+def test_the_audit_reports_how_many_compose_files_it_read(capsys):
+    from tools import deploy_guard_audit
+
+    count = len(deploy_guard_audit.find_service_composes())
+    assert count > 0
+    assert deploy_guard_audit.main() == 0
+    assert f"({count} compose files)" in capsys.readouterr().out
+
+
 def test_shipped_manifest_has_no_fanout_coverage_violations():
     from tools.deploy_guard_audit import audit, find_service_composes
 
