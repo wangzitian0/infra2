@@ -7,6 +7,7 @@ must flag non-allowlisted Dokploy-native triggers.
 
 from libs.deploy.dependencies import (
     autodeploy_violations,
+    config_hash_input_count,
     explain_fanout,
     fanout_coverage_violations,
     load_dependency_manifest,
@@ -261,16 +262,32 @@ def test_fanout_coverage_flags_an_input_outside_the_repository(tmp_path):
     assert violations[0].endswith("(outside the repository)")
 
 
-def test_the_audit_scans_platform_and_bootstrap_services():
-    """The runner image (bootstrap/) and the platform images are separate service
-    roots. A scan that drops one leaves its Dockerfile inputs unguarded."""
+def test_the_audit_scans_every_service_root():
+    """Each service root holds deployed composes (platform, the runner under
+    bootstrap, and the two apps). A scan that drops one leaves its inputs unguarded."""
     from tools import deploy_guard_audit
 
     roots = {
         compose.relative_to(deploy_guard_audit.ROOT).parts[0]
         for compose in deploy_guard_audit.find_service_composes()
     }
-    assert {"platform", "bootstrap"} <= roots
+    assert {"platform", "bootstrap", "finance_report", "truealpha"} <= roots
+
+
+def test_config_hash_input_count_counts_every_file_the_hash_reads(tmp_path):
+    """Dockerfile, compose file, own-directory source and a repo-root COPY."""
+    composes = _service(
+        tmp_path,
+        _REPO_ROOT_CONTEXT,
+        "FROM x\nCOPY uv.lock /tmp/uv.lock\nCOPY platform/99.ghost /app/\n",
+        files=("uv.lock", "platform/99.ghost/app.py"),
+    )
+    assert config_hash_input_count(composes, root=tmp_path) == 4
+
+
+def test_config_hash_input_count_is_zero_for_a_service_that_reads_no_file(tmp_path):
+    composes = _service(tmp_path, "services:\n  ghost:\n    image: x\n")
+    assert config_hash_input_count(composes, root=tmp_path) == 0
 
 
 def test_the_audit_exits_1_and_names_each_violation(monkeypatch, capsys):
@@ -295,13 +312,25 @@ def test_the_audit_refuses_a_tree_with_no_service_compose(monkeypatch, capsys):
     assert "checked nothing" in capsys.readouterr().out
 
 
-def test_the_audit_reports_how_many_compose_files_it_read(capsys):
+def test_the_audit_refuses_compose_files_that_yield_no_input(monkeypatch, capsys):
+    """Composes that exist but yield no config-hash input leave nothing to check."""
     from tools import deploy_guard_audit
 
-    count = len(deploy_guard_audit.find_service_composes())
-    assert count > 0
+    monkeypatch.setattr(deploy_guard_audit, "config_hash_input_count", lambda c: 0)
+    assert deploy_guard_audit.main() == 1
+    assert "checked nothing" in capsys.readouterr().out
+
+
+def test_the_audit_reports_how_many_files_it_read(capsys):
+    from tools import deploy_guard_audit
+
+    composes = deploy_guard_audit.find_service_composes()
+    inputs = config_hash_input_count(composes)
+    assert len(composes) > 0 and inputs > 0
     assert deploy_guard_audit.main() == 0
-    assert f"({count} compose files)" in capsys.readouterr().out
+    assert f"({len(composes)} compose files, {inputs} inputs)" in (
+        capsys.readouterr().out
+    )
 
 
 def test_shipped_manifest_has_no_fanout_coverage_violations():

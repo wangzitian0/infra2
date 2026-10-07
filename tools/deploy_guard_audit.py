@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from libs.deploy.dependencies import (  # noqa: E402
+    config_hash_input_count,
     fanout_coverage_violations,
     service_key_from_path,
 )
@@ -55,9 +56,17 @@ def main() -> int:
         # A scan that finds no service reads no input. Reporting "passed" would hide it.
         print("ERROR: no service compose file found; the audit checked nothing.")
         return 1
+    inputs = config_hash_input_count(composes)
+    if inputs == 0:
+        # Compose files that yield no config-hash input leave nothing to check.
+        print("ERROR: the compose files yield no config-hash input; checked nothing.")
+        return 1
     violations = fanout_coverage_violations(composes)
     if not violations:
-        print(f"deploy fan-out coverage audit passed ({len(composes)} compose files)")
+        print(
+            "deploy fan-out coverage audit passed "
+            f"({len(composes)} compose files, {inputs} inputs)"
+        )
         return 0
 
     print("ERROR: config-hash inputs that fan out to no service (under-fan-out risk):")
