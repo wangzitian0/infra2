@@ -242,6 +242,50 @@ def test_fanout_coverage_refuses_an_unreadable_compose(tmp_path):
         fanout_coverage_violations(composes, manifest={}, root=tmp_path)
 
 
+def test_fanout_coverage_flags_an_input_outside_the_repository(tmp_path):
+    """A bind mount that leaves the repository changes the hash, yet no changed-file
+    path can name it, so nothing fans out to the service."""
+    repo = tmp_path / "repo"
+    (tmp_path / "outside.yaml").write_text("x\n", encoding="utf-8")
+    composes = _service(
+        repo,
+        "services:\n"
+        "  ghost:\n"
+        "    image: x\n"
+        "    volumes:\n"
+        "      - ../../../outside.yaml:/etc/outside.yaml:ro\n",
+    )
+    violations = fanout_coverage_violations(composes, manifest={}, root=repo)
+    assert len(violations) == 1
+    assert violations[0].startswith("platform/ghost: ")
+    assert violations[0].endswith("(outside the repository)")
+
+
+def test_the_audit_scans_platform_and_bootstrap_services():
+    """The runner image (bootstrap/) and the platform images are separate service
+    roots. A scan that drops one leaves its Dockerfile inputs unguarded."""
+    from tools import deploy_guard_audit
+
+    roots = {
+        compose.relative_to(deploy_guard_audit.ROOT).parts[0]
+        for compose in deploy_guard_audit.find_service_composes()
+    }
+    assert {"platform", "bootstrap"} <= roots
+
+
+def test_the_audit_exits_1_and_names_each_violation(monkeypatch, capsys):
+    """This exit code is the infra-ci gate and the ops-checks monitor signal."""
+    from tools import deploy_guard_audit
+
+    monkeypatch.setattr(
+        deploy_guard_audit,
+        "fanout_coverage_violations",
+        lambda composes: ["platform/ghost: uv.lock"],
+    )
+    assert deploy_guard_audit.main() == 1
+    assert "platform/ghost: uv.lock" in capsys.readouterr().out
+
+
 def test_the_audit_refuses_a_tree_with_no_service_compose(monkeypatch, capsys):
     """A scan that finds no compose file reads no input. It must fail, not pass."""
     from tools import deploy_guard_audit
