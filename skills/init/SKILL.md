@@ -56,3 +56,4 @@ Report the open production decisions once: issues labelled `prod-pending` in eve
 ## 6. Report the baseline
 
 Reply in the owner's language with four lines: the goal, the tools you reuse, the facts you recalled, the worktree path.
+Do not execute test suites during baseline reporting. The baseline report is task metadata only.

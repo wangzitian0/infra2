@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=7bfa6c6da3353d7ce3d089b39e40a9b2cf85168d3de69fbf6e09e529554b43dd -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=09870e55411bbf6fba516257648c138c4cbecbdf64b396c79c6d35414c5a636b -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -14,6 +14,7 @@
 - **Worktree self-sufficiency:** Every worktree must resolve its dependencies, toolchain, skills, and configuration internally. Tools and tests must not navigate upward with `../..` to locate files in parent checkouts.
 - **Physical context verification:** Static file existence does not prove host runtime context injection. Junior runs non-interactive probes (`-p` or headless exec) using low-cost models. Probe assertions must check visible specification text, not markup comments. Junior tests both repository root and deep subdirectories.
 - **Host verification scope:** Official host CLIs remain the primary execution environment. Regular testing includes Antigravity 2.0 project workspaces (`.agents/skills/` and project rules). Standalone desktop chat applications without directory awareness are excluded.
+- **Local and remote test segregation:** Inner-loop verification (Senior, Junior, Intern) executes only focused tests affecting changed files (`pytest <file>::<test> -x`). Monolithic regression verification belongs to remote CI parallel runners. Local full-suite execution is permitted at most once immediately prior to merge, and never in iteration loops.
 
 ## Delivery and merge
 

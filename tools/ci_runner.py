@@ -594,9 +594,14 @@ def run_lint(verbose: bool = False) -> int:
     return 0
 
 
-def run_unit_tests(verbose: bool = False, timeout: float = 600.0) -> int:
-    """Run full unit test suite with coverage and isolation."""
-    print("▶ Running infra unit test suite...")
+def run_unit_tests(
+    targets: Sequence[str] | None = None,
+    verbose: bool = False,
+    timeout: float = 600.0,
+) -> int:
+    """Run unit test suite with coverage and isolation."""
+    test_paths = list(targets) if targets else ["libs/tests"]
+    print(f"▶ Running infra unit test suite ({', '.join(test_paths)})...")
     start_time = time.monotonic()
 
     # 1. Fetch manifests
@@ -607,11 +612,11 @@ def run_unit_tests(verbose: bool = False, timeout: float = 600.0) -> int:
         sys.executable,
         "-m",
         "pytest",
-        "libs/tests",
+        *test_paths,
         "-q",
-        "-n",
-        "auto",
     ]
+    if not targets:
+        cmd.extend(["-n", "auto"])
     env = {"PYTHONSAFEPATH": "1"}
     try:
         _run_cmd(cmd, env=env, set_pythonpath=False, timeout=timeout)
@@ -721,6 +726,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--list", action="store_true", help="List all available targets and exit."
     )
+    parser.add_argument(
+        "test_targets",
+        nargs="*",
+        help="Optional test files or directories when running unit-tests.",
+    )
 
     args = parser.parse_args(argv)
 
@@ -744,6 +754,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             policy_only=args.policy_only,
             verbose=args.verbose,
         )
+
+    if args.target == "unit-tests":
+        return run_unit_tests(targets=args.test_targets, verbose=args.verbose)
 
     _, fn = GATES[args.target]
     return fn(verbose=args.verbose)
