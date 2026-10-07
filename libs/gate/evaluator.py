@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import math
 import re
+from pathlib import PurePosixPath
 
 from libs.gate.inventory import (
     _declared_deploy_globs,
     _deploy_triggering,
     _required_checks,
 )
+from libs.gate.production_contract import exposed_workflows
 from libs.gate.self_governance import (
     _owner_instruction_quoted,
     is_self_governing,
@@ -28,6 +30,7 @@ from libs.gate.types import (
     SETTLE_SECONDS,
     UNEVALUABLE,
     WAIT,
+    WORKFLOW_PREFIX,
     HeadFacts,
     Reasons,
     Verdict,
@@ -136,8 +139,25 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
             UNEVALUABLE,
         )
 
+    # The production lock (#1138) replaces the owner for a workflow file whose jobs
+    # cannot hold a production credential outside the production environment. Every
+    # other self-governing path stays with the owner.
+    lock_holds = facts.lock_failures == ()
+    exposed = exposed_workflows()
+    uncovered = sorted(
+        f
+        for f in facts.files
+        if f.startswith(WORKFLOW_PREFIX) and PurePosixPath(f).name in exposed
+    )
+    lock_covered = {
+        f
+        for f in facts.files
+        if lock_holds and f.startswith(WORKFLOW_PREFIX) and f not in uncovered
+    }
     quoted_instruction = _owner_instruction_quoted(facts.body)
-    governing = sorted(f for f in facts.files if is_self_governing(f))
+    governing = sorted(
+        f for f in facts.files if is_self_governing(f) and f not in lock_covered
+    )
     unproven = [
         f
         for f in governing
@@ -169,7 +189,9 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
 
     fired = {f: _deploy_triggering(f) for f in facts.files}
     deploying = sorted(f for f, w in fired.items() if w)
-    if deploying:
+    # With the lock, a production job that the merge starts waits for the reviewer of
+    # the production environment. Reasons cannot carry a note that does not block.
+    if deploying and not lock_holds:
         workflows = sorted({fired[f] for f in deploying if fired[f] != "on merge"})
         via = f" via {', '.join(workflows)}" if workflows else ""
         reasons.append(
@@ -177,6 +199,18 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
             f"approval of head {facts.head_sha[:7]} required"
         )
         owner = True
+
+    # Each line below explains an owner verdict that is already set; neither adds one.
+    held_workflows = [f for f in unproven if f.startswith(WORKFLOW_PREFIX)]
+    if facts.lock_failures and (deploying or held_workflows):
+        reasons.append(
+            f"production lock not verified: {'; '.join(facts.lock_failures)}"
+        )
+    elif lock_holds and (held := [f for f in held_workflows if f in uncovered]):
+        reasons.append(
+            f"the production lock does not cover {', '.join(held)}: a job in it can "
+            "hold a production credential outside the production environment"
+        )
 
     required, inventory_read = _required_checks()
     if not inventory_read:
@@ -423,7 +457,7 @@ def render(facts: HeadFacts, verdict: Verdict) -> str:
         return (
             f"{head}: mergeable under session authority — checks green "
             f"({len(facts.checks)}), threads resolved, settled, "
-            "no protected or deploy-triggering paths"
+            "no path that needs the owner"
         )
     kind = {
         "unevaluable": "could not evaluate (not a verdict on the PR)",

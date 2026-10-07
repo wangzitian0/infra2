@@ -153,6 +153,9 @@ class HeadFacts:
     # PR conversation comments: (body, epoch of the current text, i.e. the last edit
     # or else the creation). Empty when the list is missing or unreadable.
     comments: tuple[tuple[str, float], ...] = ()
+    # Production lock (#1138). None: not read. (): the lock holds and the head's
+    # workflows satisfy the production contract. Otherwise one reason per failure.
+    lock_failures: tuple[str, ...] | None = None
 
     def reviews_on_head(self) -> tuple[tuple[str, str, float], ...]:
         return tuple(r for r in self.reviews if r[1] == self.head_sha)

@@ -7,6 +7,9 @@ import subprocess
 import time
 from collections.abc import Sequence
 
+from libs.gate.inventory import _deploy_triggering
+from libs.gate.production_contract import workflow_contract_failures
+from libs.gate.production_lock import lock_failures, read_lock_facts
 from libs.gate.review import thread_weight
 from libs.gate.types import (
     DEFAULT_REPO,
@@ -15,6 +18,7 @@ from libs.gate.types import (
     MAX_REVIEW_THREADS,
     MAX_THREAD_COMMENTS,
     NO_CHECKS_REPORTED,
+    WORKFLOW_PREFIX,
     HeadFacts,
     Runner,
     _epoch,
@@ -88,6 +92,59 @@ def _file_at(repo: str, ref: str, path: str, *, gh: Runner | None = None) -> str
         )
     except RuntimeError:
         return None
+
+
+def _workflow_names_at(
+    repo: str, ref: str, *, gh: Runner | None = None
+) -> tuple[str, ...] | None:
+    """Names of the workflow files at a ref, or None if the list cannot be read."""
+    if gh is None:
+        gh = _gh
+    try:
+        entries = json.loads(
+            gh(
+                [
+                    "api",
+                    f"repos/{repo}/contents/{WORKFLOW_PREFIX.rstrip('/')}?ref={ref}",
+                ]
+            )
+        )
+        return tuple(
+            sorted(
+                str(entry["name"])
+                for entry in entries
+                if entry["type"] == "file"
+                and str(entry["name"]).endswith((".yml", ".yaml"))
+            )
+        )
+    except (RuntimeError, json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
+def _production_lock_failures(
+    repo: str, head_sha: str, *, gh: Runner | None = None
+) -> tuple[str, ...]:
+    """Why the production lock does not cover this head; empty when it does (#1138).
+
+    The lock facts come from GitHub. The production contract runs on the head's
+    workflows. A list or a file that cannot be read is a failure.
+    """
+    if gh is None:
+        gh = _gh
+    failures = lock_failures(read_lock_facts(repo, gh=gh))
+    names = _workflow_names_at(repo, head_sha, gh=gh)
+    if not names:
+        return (*failures, f"cannot list the workflow files at {head_sha[:7]}")
+    texts: dict[str, str] = {}
+    for name in names:
+        text = _file_at(repo, head_sha, f"{WORKFLOW_PREFIX}{name}", gh=gh)
+        if text is None:
+            failures.append(f"cannot read {WORKFLOW_PREFIX}{name} at {head_sha[:7]}")
+        else:
+            texts[name] = text
+    if len(texts) < len(names):
+        return tuple(failures)
+    return (*failures, *workflow_contract_failures(texts))
 
 
 def _read_checks(number: int, *, repo: str, gh: Runner | None = None) -> str:
@@ -249,9 +306,21 @@ def collect(
         if (str(view.get("state") or "") == "OPEN" and _is_local_root_repo(repo))
         else ()
     )
+    lock = (
+        _production_lock_failures(repo, head_sha, gh=gh)
+        if (
+            str(view.get("state") or "") == "OPEN"
+            and _is_local_root_repo(repo)
+            and any(
+                f.startswith(WORKFLOW_PREFIX) or _deploy_triggering(f) for f in changed
+            )
+        )
+        else None
+    )
     return HeadFacts(
         repo=repo,
         rule_drift=drift,
+        lock_failures=lock,
         number=int(view["number"]),
         state=str(view.get("state") or ""),
         draft=bool(view.get("isDraft")),

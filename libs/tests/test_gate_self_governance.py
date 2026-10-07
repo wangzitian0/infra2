@@ -88,3 +88,18 @@ def test_every_member_exists() -> None:
     """A stale entry protects nothing and reads as though it does."""
     missing = sorted(f for f in gate.self_governing_files() if not (ROOT / f).is_file())
     assert not missing, f"protected paths that do not exist: {missing}"
+
+
+def test_the_guard_of_the_production_lock_is_in_the_closure() -> None:
+    """With the lock, the gate stops sending workflow changes to the owner (#1138).
+    The code that reads the lock, the contract tables and their tests then decide
+    that, so a change to them must stay with the owner."""
+    found = gate.self_governing_files()
+    for path in (
+        "libs/gate/production_lock.py",
+        "libs/gate/production_contract.py",
+        "libs/tests/test_production_lock.py",
+        # Outside the test_<stem>.py rule; the closure names it explicitly.
+        "libs/tests/test_production_environment_gate.py",
+    ):
+        assert path in found, path

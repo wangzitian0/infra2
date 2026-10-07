@@ -2150,3 +2150,112 @@ def test_a_deploy_path_still_needs_the_owner_even_with_a_red_check():
         now=NOW,
     )
     assert verdict.exit_code == 2 and verdict.action_required
+
+
+# --- #1138: the production lock replaces the owner for covered workflow changes -----
+
+HOLDS: tuple[str, ...] = ()
+CI_WORKFLOW = f"{gate.WORKFLOW_PREFIX}infra-ci.yml"
+
+
+def test_a_workflow_change_merges_without_the_owner_when_the_lock_holds():
+    verdict = gate.evaluate(_green(files=(CI_WORKFLOW,), lock_failures=HOLDS), now=NOW)
+    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+
+
+def test_a_workflow_change_needs_the_owner_when_the_lock_was_not_read():
+    verdict = gate.evaluate(_green(files=(CI_WORKFLOW,), lock_failures=None), now=NOW)
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert any("what decides merges" in r for r in verdict.reasons)
+    assert not any("production lock" in r for r in verdict.reasons)
+
+
+def test_a_workflow_change_needs_the_owner_and_says_why_when_the_lock_fails():
+    failures = ("no required reviewer", "admins can bypass")
+    verdict = gate.evaluate(
+        _green(files=(CI_WORKFLOW,), lock_failures=failures), now=NOW
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert (
+        "production lock not verified: no required reviewer; admins can bypass"
+        in verdict.reasons
+    )
+
+
+def test_a_new_workflow_merges_without_the_owner_when_the_lock_holds():
+    # The contract read the head's copy of the new file; the lock covers it.
+    new = f"{gate.WORKFLOW_PREFIX}brand-new.yml"
+    verdict = gate.evaluate(_green(files=(new,), lock_failures=HOLDS), now=NOW)
+    assert verdict.ready, verdict.reasons
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "libs/gate/production_contract.py",
+        "libs/gate/production_lock.py",
+        "libs/gate/evaluator.py",
+        "libs/tests/test_production_lock.py",
+        "libs/tests/test_production_environment_gate.py",
+        "tools/pr_merge_gate.py",
+        "docs/ssot/ci-gate-inventory.yaml",
+        "AGENTS.md",
+        "docs/ssot/ops.merge-gate.md",
+    ],
+)
+def test_the_guard_of_the_lock_stays_with_the_owner_when_the_lock_holds(path):
+    verdict = gate.evaluate(
+        _green(files=(CI_WORKFLOW, path), lock_failures=HOLDS), now=NOW
+    )
+    assert verdict.owner_required and verdict.exit_code == 2, path
+    reason = next(r for r in verdict.reasons if "what decides merges" in r)
+    assert path in reason and CI_WORKFLOW not in reason
+
+
+@pytest.mark.parametrize("name", ["ops-checks.yml", "deploy.yml"])
+def test_a_workflow_with_a_job_outside_the_environment_stays_with_the_owner(name):
+    path = f"{gate.WORKFLOW_PREFIX}{name}"
+    verdict = gate.evaluate(_green(files=(path,), lock_failures=HOLDS), now=NOW)
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert any(
+        r.startswith(f"the production lock does not cover {path}")
+        for r in verdict.reasons
+    )
+
+
+def test_a_proven_tighter_change_gets_no_new_blocker_from_the_lock():
+    path = f"{gate.WORKFLOW_PREFIX}ops-checks.yml"
+    for lock in (None, HOLDS, ("no required reviewer",)):
+        verdict = gate.evaluate(
+            _green(files=(path,), proven_tighter=(path,), lock_failures=lock),
+            now=NOW,
+        )
+        assert verdict.ready, (lock, verdict.reasons)
+
+
+def test_a_deploy_path_merges_without_the_owner_when_the_lock_holds():
+    verdict = gate.evaluate(
+        _green(files=("libs/alerting.py",), lock_failures=HOLDS), now=NOW
+    )
+    assert verdict.ready and not verdict.owner_required, verdict.reasons
+
+
+def test_a_deploy_path_needs_the_owner_when_the_lock_was_not_read():
+    verdict = gate.evaluate(
+        _green(files=("libs/alerting.py",), lock_failures=None), now=NOW
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert any("trigger a deploy" in r for r in verdict.reasons)
+
+
+def test_a_deploy_path_needs_the_owner_and_says_why_when_the_lock_fails():
+    verdict = gate.evaluate(
+        _green(files=("libs/alerting.py",), lock_failures=("x",)), now=NOW
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert "production lock not verified: x" in verdict.reasons
+
+
+def test_a_lock_failure_on_an_ordinary_pr_adds_nothing():
+    verdict = gate.evaluate(_green(files=("libs/x.py",), lock_failures=("x",)), now=NOW)
+    assert verdict.ready, verdict.reasons

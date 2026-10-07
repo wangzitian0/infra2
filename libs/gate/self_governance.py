@@ -43,6 +43,11 @@ def _owner_instruction_quoted(body: str) -> bool:
 
 _DATA_SUFFIXES = (".json", ".yaml", ".yml", ".md")
 
+# Tests whose file name does not follow libs/tests/test_<module stem>.py, by module.
+_TESTS_BY_MODULE = {
+    "libs/gate/production_contract.py": "libs/tests/test_production_environment_gate.py",
+}
+
 
 def _repo_deps(rel: str) -> set[str]:
     """Repository files this module imports or reads, one level deep."""
@@ -117,9 +122,12 @@ def self_governing_files() -> frozenset[str]:
         frontier = nxt
     for member in list(closure):
         if member.endswith(".py"):
-            test = f"libs/tests/test_{PurePosixPath(member).stem}.py"
-            if (root / test).is_file():
-                closure.add(test)
+            for test in (
+                f"libs/tests/test_{PurePosixPath(member).stem}.py",
+                _TESTS_BY_MODULE.get(member),
+            ):
+                if test and (root / test).is_file():
+                    closure.add(test)
     closure |= set(RULE_TEXT_FILES)
     closure |= set(_all_workflow_files())
     if seed not in closure:

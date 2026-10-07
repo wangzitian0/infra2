@@ -98,6 +98,27 @@
   推断（2026-09-23 实测：#815 合入后 run 报 cancelled，实为 #827 数秒后合入顶替，最新主干头三条
   检查全绿）。
 
+## Production lock
+
+The gate reads the production lock (#1138) when a PR changes a workflow file or a deploy-triggering path.
+The lock is the GitHub environment `production`. The gate reads four facts from GitHub:
+
+1. The environment has a required reviewer.
+2. `can_admins_bypass` is false.
+3. The environment accepts deployments only through custom branch and tag policies.
+4. The policies are exactly branch `main` and tag `v*`.
+
+The gate also applies the production contract to every workflow file of the head.
+The contract tables are in `libs/gate/production_contract.py`.
+The lock holds when the four facts are true and the head satisfies the contract. Then:
+
+- A workflow change does not need the owner, except in a file with an ungated or conditional production job.
+  Such a job can hold a production credential outside the environment.
+- A deploy-triggering path does not need the owner. Each production job waits for the environment reviewer.
+
+Fail closed: when a fact is false or unreadable, the earlier rules apply. The verdict names each failure.
+When the lock holds, these changes still need the owner: the gate code and data, their tests, the rule-text files, and the contract tables.
+
 ## 授权沿革
 
 2026-09-08 引入会话级合流授权，以绕开逐-head 批准的等待；2026-09-21 owner 以
