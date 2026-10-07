@@ -15,24 +15,34 @@ from collections.abc import Mapping
 
 import yaml
 
-# A job that reads one of these secrets can reach a production host or API.
-PRODUCTION_SECRETS = (
-    "CF_API_TOKEN",
-    "CF_WORKER_API_TOKEN",
-    "DOKPLOY_API_KEY",
-    "IAC_WEBHOOK_SECRET",
-    "INFRA2_WATCHDOG_SSH_HOST",
-    "INFRA2_WATCHDOG_SSH_PRIVATE_KEY",
-    "SIGNOZ_API_KEY",
+# Default deny (#1138): a job that reads any secret not named here holds a production
+# credential. These secrets reach only alert and report channels, a model API, or the
+# job's own GitHub token.
+NON_PRODUCTION_SECRETS = (
+    "GITHUB_TOKEN",
+    "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE",
+    "INFRA2_OUT_OF_BAND_FEISHU_API_BASE",
+    "INFRA2_OUT_OF_BAND_FEISHU_APP_ID",
+    "INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET",
+    "INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID",
+    "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL",
+    "INFRA2_REPORTS_FEISHU_APP_ID",
+    "INFRA2_REPORTS_FEISHU_APP_SECRET",
+    "INFRA2_REPORTS_FEISHU_CHAT_ID",
+    "ZAI_CODING_CN_API_KEY",
 )
 
-# Jobs that can change production. Value: the text that the production condition must
-# contain, or None when the job always runs against production.
+# Jobs that can change production. Value: the full production condition, or None when
+# the job always runs against production. The environment condition must equal it after
+# whitespace normalization (#1138): a condition that only contains it can be negated.
 GATED_JOBS: dict[tuple[str, str], str | None] = {
     ("deploy.yml", "deploy"): "inputs.type == 'prod'",
     ("deploy.yml", "bootstrap"): None,
     ("reconcile-iac-inputs.yml", "reconcile"): "inputs.promote_prod",
-    ("app-deploy-request.yml", "deploy"): "client_payload.deploy_type == 'prod'",
+    (
+        "app-deploy-request.yml",
+        "deploy",
+    ): "github.event.client_payload.deploy_type == 'prod'",
     ("apply-observability.yml", "apply"): None,
     ("deploy-cloudflare-watchdog.yml", "deploy"): None,
 }
@@ -76,10 +86,17 @@ _GATED_EXPRESSION = re.compile(
 )
 
 
+_SECRET_NAME = re.compile(r"(?<![\w.-])(?i:secrets)\.([A-Za-z0-9_]+)")
+
+
 def _secrets_read(job: dict) -> set[str]:
+    """Production secrets that `job` reads: every named secret not in the benign list.
+    GitHub secret names are not case sensitive, so names compare in upper case."""
     text = yaml.dump(job)
     return {
-        name for name in PRODUCTION_SECRETS if re.search(rf"secrets\.{name}\b", text)
+        match.group(1).upper()
+        for match in _SECRET_NAME.finditer(text)
+        if match.group(1).upper() not in NON_PRODUCTION_SECRETS
     }
 
 
@@ -121,9 +138,15 @@ def _environment_error(
     match = _GATED_EXPRESSION.match(environment)
     if match is None:
         return f"{label} environment must be '${{{{ <condition> && 'production' || 'staging' }}}}'"
-    if selector not in match.group("condition"):
-        return f"{label} environment condition lacks {selector!r}"
+    condition = _normalized(match.group("condition"))
+    if not selector.strip() or condition != _normalized(selector):
+        return f"{label} environment condition must be exactly {selector!r}, not {condition!r}"
     return None
+
+
+def _normalized(expression: str) -> str:
+    """The expression with each run of white space replaced by one space."""
+    return " ".join(expression.split())
 
 
 def contract_errors(
