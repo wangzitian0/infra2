@@ -11,7 +11,7 @@ Run this before the first edit. Each rule exists because an agent skipped it and
 
 The owner repeatedly found new scripts that duplicated existing ones. Follow the **Key List Protocol**:
 
-1. **Check the Key List**: Read the repository's SSOT index (`docs/ssot/MANIFEST.yaml`, or the App's contracts index).
+1. **Check the Key List**: Read the repository's SSOT index (`common/meta/data/MANIFEST.yaml`, `docs/ssot/MANIFEST.yaml`, or the App's contracts index).
    - Scan the capability keys (e.g., `deploy_v2`, `infra2-sdk`, `vault`, `signoz`, `pr_merge_gate`).
 2. **Reuse if present**: If an existing component covers the need, reuse it directly. Do not build private alternatives.
 3. **Append when new**: If no entry fits and a new capability is necessary:
