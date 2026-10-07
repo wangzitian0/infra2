@@ -309,7 +309,7 @@ def test_the_audit_refuses_a_tree_with_no_service_compose(monkeypatch, capsys):
 
     monkeypatch.setattr(deploy_guard_audit, "find_service_composes", lambda: [])
     assert deploy_guard_audit.main() == 1
-    assert "checked nothing" in capsys.readouterr().out
+    assert "no service compose file found" in capsys.readouterr().out
 
 
 def test_the_audit_refuses_compose_files_that_yield_no_input(monkeypatch, capsys):
@@ -318,7 +318,7 @@ def test_the_audit_refuses_compose_files_that_yield_no_input(monkeypatch, capsys
 
     monkeypatch.setattr(deploy_guard_audit, "config_hash_input_count", lambda c: 0)
     assert deploy_guard_audit.main() == 1
-    assert "checked nothing" in capsys.readouterr().out
+    assert "yield no config-hash input" in capsys.readouterr().out
 
 
 def test_the_audit_reports_how_many_files_it_read(capsys):
