@@ -5,10 +5,11 @@ from __future__ import annotations
 import ast
 import functools
 import hashlib
+import importlib.machinery
 import json
 import re
 from collections.abc import Sequence
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from libs.gate.inventory import DIRECTION_PROOFS, _workflow_only_gained_authority
 from libs.gate.types import (
@@ -55,6 +56,13 @@ _TESTS_BY_MODULE = {
 # Package files that Python runs before the gate code. They are in the closure even
 # when they do not exist: a PR can add one, and `python -m tools.pr_merge_gate` runs it.
 PACKAGE_FILES = ("libs/__init__.py", "tools/__init__.py")
+
+# pytest runs each conftest.py on the way to a test. One in libs/tests can switch off
+# the gate tests, for example with `collect_ignore_glob` (#1138).
+GATE_TESTS_DIR = "libs/tests"
+
+# File name endings that Python imports from a directory on its path.
+_IMPORT_SUFFIXES = tuple(importlib.machinery.all_suffixes())
 
 
 def _repo_deps(rel: str) -> set[str]:
@@ -144,6 +152,7 @@ def self_governing_files() -> frozenset[str]:
                 if parent != PurePosixPath(".") and (root / package_file).is_file():
                     closure.add(package_file)
     closure |= set(PACKAGE_FILES)
+    closure |= {f for f in (f"{GATE_TESTS_DIR}/conftest.py",) if (root / f).is_file()}
     closure |= set(RULE_TEXT_FILES)
     closure |= set(_all_workflow_files())
     if seed not in closure:
@@ -153,7 +162,61 @@ def self_governing_files() -> frozenset[str]:
 
 def is_self_governing(path: str) -> bool:
     """True when changes to path would evaluate under self-adjudication rules."""
-    return path.startswith(WORKFLOW_PREFIX) or path in self_governing_files()
+    return (
+        path.startswith(WORKFLOW_PREFIX)
+        or path in self_governing_files()
+        or _shadows_the_gate(path)
+    )
+
+
+@functools.lru_cache(maxsize=4)
+def _closure_shape(
+    root: str, closure: frozenset[str]
+) -> tuple[frozenset[str], frozenset[str]]:
+    """The directories of the closure's Python files, and the top-level names that
+    those files import. Keyed by its inputs, so a test with another root cannot leave
+    a stale answer."""
+    directories: set[str] = set()
+    imported: set[str] = set()
+    for member in closure:
+        if not member.endswith(".py"):
+            continue
+        directories.add(str(PurePosixPath(member).parent))
+        try:
+            tree = ast.parse((Path(root) / member).read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                imported.add(node.module.split(".")[0])
+    return frozenset(directories), frozenset(imported)
+
+
+def _shadows_the_gate(path: str) -> bool:
+    """True for a file that Python or pytest would run instead of, or before, a part of
+    the gate (#1138). A rule over the path, so a file a PR adds is caught before it
+    exists."""
+    pure = PurePosixPath(path)
+    importable = pure.name.endswith(_IMPORT_SUFFIXES)
+    import_name = pure.name.split(".")[0]
+    if len(pure.parts) == 1 and importable:
+        return True  # a module at the repository root, such as yaml.py or setup.py
+    if len(pure.parts) == 2 and pure.name == "__init__.py":
+        return True  # a package at the repository root, such as tools/__init__.py
+    if pure.name == "conftest.py" and (
+        path.startswith(f"{GATE_TESTS_DIR}/")
+        or PurePosixPath(GATE_TESTS_DIR).is_relative_to(pure.parent)
+    ):
+        return True
+    closure = self_governing_files()
+    if pure.name in ("__init__.py", "__main__.py") and f"{pure.parent}.py" in closure:
+        return True  # a package that replaces a closure module
+    if importable and f"{pure.parent}/{import_name}.py" in closure:
+        return True  # another form of a closure module, such as types.abi3.so
+    directories, imported = _closure_shape(str(_get_root()), closure)
+    return importable and str(pure.parent) in directories and import_name in imported
 
 
 def _all_workflow_files() -> list[str]:

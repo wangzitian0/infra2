@@ -1006,8 +1006,10 @@ def test_a_truncated_file_list_cannot_be_trusted_for_the_owner_gates():
     # deploy-triggering checks read that list, so a larger PR would silently
     # drop the owner gate. Real shape: finance_report#2042, 163 changed, 100
     # returned, with every deploy-triggering path past the cut.
+    # Under libs/, not at the root: a root-level module shadows imports (#1138).
     verdict = gate.evaluate(
-        _green(files=tuple(f"f{i}.py" for i in range(100)), changed_files=163), now=NOW
+        _green(files=tuple(f"libs/f{i}.py" for i in range(100)), changed_files=163),
+        now=NOW,
     )
     assert not verdict.ready
     # It cannot be judged at all (#740): exit 4, not an owner verdict.
@@ -2066,6 +2068,40 @@ def test_the_closure_adds_every_parent_package_of_a_module(tmp_path, monkeypatch
     closure = gate.self_governing_files()
     assert "pkg/sub/mod.py" in closure
     assert {"pkg/__init__.py", "pkg/sub/__init__.py", "tools/__init__.py"} <= closure
+
+
+def test_a_package_file_that_does_not_exist_is_still_in_the_closure(
+    tmp_path, monkeypatch
+):
+    """Without libs/__init__.py, libs is a namespace package and the parent walk adds
+    nothing. PACKAGE_FILES keeps the path in the closure, so the rule-drift check
+    compares it with the base branch (#1138)."""
+    monkeypatch.setattr(gate, "ROOT", tmp_path)
+    monkeypatch.setattr(gate, "WORKFLOW_DIR", tmp_path / "no-workflows")
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "pr_merge_gate.py").write_text("import libs.x\n")
+    (tmp_path / "libs").mkdir()
+    (tmp_path / "libs" / "x.py").write_text("")
+    closure = gate.self_governing_files()
+    assert "libs/x.py" in closure and not (tmp_path / "libs/__init__.py").exists()
+    assert "libs/__init__.py" in closure
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tools/pr_merge_gate/__init__.py",
+        "tools/pr_merge_gate/__main__.py",
+        "yaml.py",
+        "libs/gate/types/__init__.py",
+        "libs/gate/yaml.py",
+        "libs/tests/conftest.py",
+    ],
+)
+def test_a_shadow_of_the_gate_goes_to_the_owner_when_the_lock_holds(path):
+    verdict = gate.evaluate(_green(files=(path,), lock_failures=()), now=NOW)
+    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
+    assert any("what decides merges" in r and path in r for r in verdict.reasons)
 
 
 def test_gh_retries_transient_failures(monkeypatch):

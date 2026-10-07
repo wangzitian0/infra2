@@ -159,3 +159,44 @@ def test_an_existing_member_missing_from_the_base_is_still_drift() -> None:
     gh = _base_tree(skip="libs/gate/__init__.py")
     drift = gate._working_tree_rule_drift(DEFAULT_REPO, "main", gh=gh)
     assert drift == ("libs/gate/__init__.py",)
+
+
+SHADOWS = (
+    "tools/pr_merge_gate/__init__.py",  # a package beats tools/pr_merge_gate.py
+    "tools/pr_merge_gate/__main__.py",
+    "yaml.py",  # a root module beats the installed PyYAML
+    "libs/gate/types/__init__.py",
+    "libs/gate/yaml.py",  # a module next to gate code, named like an import
+    "libs/gate/types.abi3.so",  # an extension module beats types.py
+    "setup.py",
+    "conftest.py",
+    "libs/tests/conftest.py",
+    "libs/tests/fixtures/conftest.py",
+    "libs/conftest.py",
+)
+
+
+@pytest.mark.parametrize("path", SHADOWS)
+def test_a_file_that_shadows_the_gate_is_self_governing(path) -> None:
+    """#1138 re-audit H2 and M3: each of these runs instead of, or before, gate code."""
+    assert gate.is_self_governing(path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tools/new_tool.py",
+        "libs/probe_specs.py",
+        "docs/x.py",
+        "e2e_regressions/conftest.py",
+        "tools/deploy_v2.py",
+    ],
+)
+def test_an_unrelated_file_is_not_self_governing(path) -> None:
+    assert not gate.is_self_governing(path)
+
+
+def test_the_gate_tests_conftest_is_in_the_closure() -> None:
+    """`collect_ignore_glob` in it would switch off the gate tests (#1138 M3)."""
+    assert (ROOT / "libs/tests/conftest.py").is_file()
+    assert "libs/tests/conftest.py" in gate.self_governing_files()
