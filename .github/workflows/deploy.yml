@@ -123,7 +123,14 @@ jobs:
         # deploy_v2_canary imports infra2_sdk.delivery (#498) — install the package
         # itself (as app-deploy-request.yml's canary step already does) instead of a
         # manually maintained subset that silently drifts out of sync with its imports.
-        run: python -m pip install -e .
+        # The SDK comes first, hash-verified from uv.lock (#1115). pyproject.toml names
+        # its URL with no hash, and pip keeps the installed wheel while that URL equals
+        # the one in uv.lock (a test holds it). A swapped release asset fails the first
+        # command, and bash -e stops the step before the project install.
+        run: |
+          sdk="$(python tools/sdk_requirement.py)"
+          python -m pip install --no-deps "$sdk"
+          python -m pip install -e .
       - name: Canary the artifact before the real deploy
         env:
           VERSION_REF_INPUT: ${{ github.event.inputs.version_ref || 'main' }}
