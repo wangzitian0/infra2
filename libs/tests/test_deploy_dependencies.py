@@ -262,6 +262,32 @@ def test_fanout_coverage_flags_an_input_outside_the_repository(tmp_path):
     assert violations[0].endswith("(outside the repository)")
 
 
+def test_fanout_coverage_flags_an_input_in_another_service_directory(tmp_path):
+    """A COPY from a file under another service's directory is not own-directory
+    input: a change to it selects the other service, not this one."""
+    composes = _service(
+        tmp_path,
+        _REPO_ROOT_CONTEXT,
+        "FROM x\nCOPY platform/98.other/shared.hcl /app/shared.hcl\n",
+        files=("platform/98.other/shared.hcl",),
+    )
+    assert fanout_coverage_violations(composes, manifest={}, root=tmp_path) == [
+        "platform/ghost: platform/98.other/shared.hcl"
+    ]
+    declared = {"platform/ghost": ["platform/98.other/**"]}
+    assert fanout_coverage_violations(composes, manifest=declared, root=tmp_path) == []
+
+
+def test_fanout_coverage_refuses_a_compose_outside_a_service_directory(tmp_path):
+    import pytest
+
+    compose = tmp_path / "docs" / "compose.yaml"
+    compose.parent.mkdir()
+    compose.write_text("services:\n  x:\n    image: y\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="not in a service directory"):
+        fanout_coverage_violations([compose], manifest={}, root=tmp_path)
+
+
 def test_the_audit_scans_every_service_root():
     """Each service root holds deployed composes (platform, the runner under
     bootstrap, and the two apps). A scan that drops one leaves its inputs unguarded."""
