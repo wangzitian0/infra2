@@ -7,6 +7,7 @@ import hmac
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -1260,7 +1261,8 @@ def test_iac_runner_public_health_check_retries_with_diagnostics() -> None:
 
 
 def test_iac_runner_bootstrap_deploy_script_is_scoped_to_runner_source() -> None:
-    """Infra-011.8: self-update preserves Dokploy drift outside runner source."""
+    """Infra-011.8: self-update preserves Dokploy drift outside the runner source and
+    the files its image bakes (uv.lock; #1115)."""
     script = BOOTSTRAP_DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
     assert "docker inspect iac-runner" in script
@@ -1274,6 +1276,105 @@ def test_iac_runner_bootstrap_deploy_script_is_scoped_to_runner_source() -> None
     assert "--force-recreate" in script
     assert "Health check timed out for iac-runner" in script
     assert "cat /secrets/.env" not in script
+
+
+def _checked_out_paths(script: str) -> list[str]:
+    """Paths of the one `git -C "$code_dir" checkout -f "$INFRA2_DEPLOY_SHA" -- <paths>`.
+
+    shlex reads the shell quoting and drops a trailing comment. A comment line, or a
+    line that is not a command, never counts. The script may not check out twice or
+    rewrite the clone afterwards (reset, clean, restore, stash, switch): either could
+    put the old files back.
+    """
+    prefix = ["git", "-C", "$code_dir", "checkout", "-f", "$INFRA2_DEPLOY_SHA", "--"]
+    commands: list[list[str]] = []
+    for line in script.replace("\\\n", " ").splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        try:
+            words = shlex.split(line, comments=True)
+        except ValueError:  # part of a heredoc or an unbalanced quote: not our command
+            continue
+        if words[:3] == ["git", "-C", "$code_dir"]:
+            commands.append(words)
+    checkouts = [words for words in commands if words[3:4] == ["checkout"]]
+    assert len(checkouts) == 1, f"expected one checkout in the clone: {checkouts}"
+    rewrites = [
+        words
+        for words in commands
+        if words[3:4] and words[3] in {"reset", "clean", "restore", "stash", "switch"}
+    ]
+    assert not rewrites, f"the script rewrites the clone after the checkout: {rewrites}"
+    words = checkouts[0]
+    assert words[: len(prefix)] == prefix, f"unexpected checkout command: {words}"
+    return [word.rstrip("/") for word in words[len(prefix) :]]
+
+
+def _copy_sources(dockerfile: str) -> list[str]:
+    """COPY/ADD sources from the build context, as written (plain or JSON form)."""
+    sources: list[str] = []
+    for line in dockerfile.replace("\\\n", " ").splitlines():
+        instruction, _, rest = line.strip().partition(" ")
+        if instruction.upper() not in {"COPY", "ADD"} or "--from=" in rest:
+            continue
+        words = (
+            [str(word) for word in json.loads(rest)]
+            if rest.startswith("[")
+            else [word for word in shlex.split(rest) if not word.startswith("--")]
+        )
+        sources += words[:-1]
+    return sources
+
+
+def _service_builds(compose: dict) -> list[tuple[str, dict]]:
+    """(service name, build mapping) for every compose service that builds an image."""
+    builds = []
+    for name, service in (compose.get("services") or {}).items():
+        build = service.get("build") if isinstance(service, dict) else None
+        if isinstance(build, str):
+            build = {"context": build}
+        if build:
+            builds.append((name, build))
+    return builds
+
+
+def test_the_bootstrap_checkout_covers_every_path_the_runner_image_copies() -> None:
+    """The VPS builds from the Dokploy clone, and the checkout above never moves its
+    HEAD. A COPY source outside the checked-out paths is read from the clone's old
+    working tree. On 2026-10-07 that tree was at 2026-06-17, and its uv.lock had no
+    infra2-sdk entry, so the build of the #1116 image would have failed (#1115).
+    `docker compose build` builds every service that has a `build:`, so the test reads
+    all of them."""
+    from libs.deploy.config_hash import _dockerfile_copy_sources
+
+    compose = yaml.safe_load((IAC_RUNNER / "compose.yaml").read_text(encoding="utf-8"))
+    builds = _service_builds(compose)
+    assert builds, "the compose file builds no image: the scan reads nothing"
+    checked = _checked_out_paths(BOOTSTRAP_DEPLOY_SCRIPT.read_text(encoding="utf-8"))
+    for name, build in builds:
+        context = (IAC_RUNNER / build["context"]).resolve()
+        dockerfile_path = context / build.get("dockerfile", "Dockerfile")
+        dockerfile = dockerfile_path.read_text(encoding="utf-8")
+        # A bind mount reads context files that neither parser models: fail closed.
+        assert "--mount" not in dockerfile, (
+            f"{name}: RUN --mount reads files this test cannot see"
+        )
+        # The parser that the config hash uses. It reads the JSON form and skips --from.
+        files = _dockerfile_copy_sources(dockerfile_path, context)
+        assert files, f"{name}: no COPY source found: the scan reads nothing"
+        for path in files:
+            rel = path.relative_to(ROOT).as_posix()
+            assert any(rel == item or rel.startswith(item + "/") for item in checked), (
+                f"{rel} is COPYed by the {name} image but the bootstrap script does "
+                f"not check it out at the deploy SHA (checked out: {checked})"
+            )
+        # `git checkout <sha> -- <dir>` leaves files that the SHA deleted. A directory
+        # or a glob in a COPY would bake them in, so every source names one file.
+        for source in _copy_sources(dockerfile):
+            assert (context / source).is_file(), (
+                f"{name}: COPY source {source!r} must name one file, not a directory "
+                "or a glob"
+            )
 
 
 def test_iac_runner_bootstrap_deploy_script_persists_dokploy_ownership() -> None:
