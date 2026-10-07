@@ -8,7 +8,6 @@ import time
 from collections.abc import Sequence
 from urllib.parse import quote
 
-from libs.gate.inventory import _deploy_triggering
 from libs.gate.production_contract import workflow_contract_failures
 from libs.gate.production_lock import lock_failures, read_lock_facts
 from libs.gate.review import thread_weight
@@ -138,6 +137,13 @@ def _production_lock_failures(
     """
     if gh is None:
         gh = _gh
+    try:
+        return _read_production_lock(repo, head_sha, gh=gh)
+    except Exception as exc:  # noqa: BLE001 - a lock read must not crash the verdict
+        return (f"the lock check failed: {type(exc).__name__}: {exc}"[:200],)
+
+
+def _read_production_lock(repo: str, head_sha: str, *, gh: Runner) -> tuple[str, ...]:
     failures = lock_failures(read_lock_facts(repo, gh=gh))
     names = _workflow_names_at(repo, head_sha, gh=gh)
     if not names:
@@ -313,15 +319,11 @@ def collect(
         if (str(view.get("state") or "") == "OPEN" and _is_local_root_repo(repo))
         else ()
     )
+    # Read on every run of an open PR (#1138): the agent decides from the verdict
+    # whether the lock holds, also for a PR that changes no workflow or deploy path.
     lock = (
         _production_lock_failures(repo, head_sha, gh=gh)
-        if (
-            str(view.get("state") or "") == "OPEN"
-            and _is_local_root_repo(repo)
-            and any(
-                f.startswith(WORKFLOW_PREFIX) or _deploy_triggering(f) for f in changed
-            )
-        )
+        if (str(view.get("state") or "") == "OPEN" and _is_local_root_repo(repo))
         else None
     )
     return HeadFacts(

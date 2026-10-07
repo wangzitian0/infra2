@@ -280,12 +280,16 @@ class _Gh:
         states=("pass",),
         pushed_iso="2026-09-15T06:55:22Z",
         body="",
+        files=("libs/probe_specs.py",),
+        lock="holds",
     ):
         self.calls: list[list[str]] = []
         self.unresolved = unresolved
         self.states = states
         self.pushed_iso = pushed_iso
         self.body = body
+        self.files = files
+        self.lock = lock  # "holds", or "unreadable" for every lock read
 
     def __call__(self, argv):
         if argv[:1] == ["api"] and "/git/trees/" in argv[1]:
@@ -310,8 +314,8 @@ class _Gh:
                             "submittedAt": "2026-09-15T06:58:00Z",
                         }
                     ],
-                    "files": [{"path": "libs/probe_specs.py"}],
-                    "changedFiles": 1,
+                    "files": [{"path": f} for f in self.files],
+                    "changedFiles": len(self.files),
                     "mergeable": getattr(self, "mergeable", "MERGEABLE"),
                     "mergeStateStatus": getattr(self, "merge_state", "CLEAN"),
                     "body": self.body,
@@ -366,7 +370,44 @@ class _Gh:
             return json.dumps({"files": list(getattr(self, "base_changed", ()))})
         if argv[:2] == ["pr", "merge"]:
             return ""
+        if argv[:1] == ["api"] and (
+            "/environments/" in argv[-1] or "/contents/.github/workflows" in argv[-1]
+        ):
+            return self._lock_answer(argv[-1])
         raise AssertionError(argv)
+
+    def _lock_answer(self, path: str) -> str:
+        """The production lock as GitHub showed it on 2026-10-08, and the head's
+        workflows as this checkout has them (#1138)."""
+        if self.lock == "unreadable":
+            raise RuntimeError(f"gh api {path}: HTTP 502")
+        if path.endswith("/deployment-branch-policies?per_page=100"):
+            return json.dumps(
+                {
+                    "total_count": 2,
+                    "branch_policies": [
+                        {"name": "main", "type": "branch"},
+                        {"name": "v*", "type": "tag"},
+                    ],
+                }
+            )
+        if path.endswith("/environments/production"):
+            return json.dumps(
+                {
+                    "can_admins_bypass": False,
+                    "protection_rules": [
+                        {"type": "required_reviewers", "reviewers": [{"type": "User"}]}
+                    ],
+                    "deployment_branch_policy": {"custom_branch_policies": True},
+                }
+            )
+        workflows = ROOT / ".github" / "workflows"
+        if "/contents/.github/workflows?ref=" in path:
+            return json.dumps(
+                [{"name": f.name, "type": "file"} for f in workflows.glob("*.y*ml")]
+            )
+        name = path.split("/contents/.github/workflows/", 1)[1].split("?", 1)[0]
+        return (workflows / name).read_text(encoding="utf-8")
 
 
 def test_collect_reads_the_newest_commit_as_the_last_push():
@@ -2315,3 +2356,95 @@ def test_a_deploy_path_needs_the_owner_and_says_why_when_the_lock_fails():
 def test_a_lock_failure_on_an_ordinary_pr_adds_nothing():
     verdict = gate.evaluate(_green(files=("libs/x.py",), lock_failures=("x",)), now=NOW)
     assert verdict.ready, verdict.reasons
+
+
+# --- #1138 F10: the gate reads the production lock on every run ----------------------
+
+RELEASE_CODE = ("tools/deploy_v2.py",)
+LOCK_VERIFIED_LINE = (
+    "production lock verified (reviewer, admin bypass off, policies main and v*, "
+    "contract holds)"
+)
+READY_AT = gate._epoch("2026-09-15T06:55:22Z") + 12 * 60
+
+
+def _printed(capsys) -> str:
+    """Captured output with white space collapsed: the console wraps long lines."""
+    return " ".join(capsys.readouterr().out.split())
+
+
+def test_a_release_code_pr_reports_a_verified_lock(capsys):
+    gh = _Gh(files=RELEASE_CODE)
+    assert gate.main(["704"], gh=gh, now=lambda: READY_AT - 1) == 1
+    waiting = _printed(capsys)
+    assert waiting.endswith(LOCK_VERIFIED_LINE), waiting
+    assert gate.main(["704"], gh=gh, now=lambda: READY_AT) == 0
+    ready = _printed(capsys)
+    assert "mergeable under session authority" in ready
+    assert f"no path that needs the owner; {LOCK_VERIFIED_LINE}" in ready
+
+
+def test_a_release_code_pr_reports_an_unverified_lock_and_keeps_its_exit_code(capsys):
+    for lock in ("holds", "unreadable"):
+        gh = _Gh(files=RELEASE_CODE, lock=lock)
+        assert gate.main(["704"], gh=gh, now=lambda: READY_AT) == 0, lock
+    out = _printed(capsys)
+    assert (
+        "production lock NOT verified: the production environment could not be " in out
+    )
+    assert "cannot list the workflow files at feedfac" in out
+    assert out.count(LOCK_VERIFIED_LINE) == 1  # from the "holds" run only
+
+
+def test_the_json_verdict_carries_the_lock(capsys):
+    assert (
+        gate.main(["704", "--json"], gh=_Gh(files=RELEASE_CODE), now=lambda: READY_AT)
+        == 0
+    )
+    doc = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert doc["lock_verified"] is True and doc["lock_failures"] == []
+    gh = _Gh(files=RELEASE_CODE, lock="unreadable")
+    assert gate.main(["704", "--json"], gh=gh, now=lambda: READY_AT) == 0
+    doc = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert doc["lock_verified"] is False and len(doc["lock_failures"]) == 2
+
+
+def test_the_gh_calls_of_one_run_are_bounded():
+    """Each run reads the lock: 3 calls plus one per workflow file. Nothing else may
+    grow with the tree, so a future loop over an unbounded list fails here."""
+    calls: list[list[str]] = []
+    inner = _Gh(files=RELEASE_CODE)
+
+    def counting(argv):
+        calls.append(list(argv))
+        return inner(argv)
+
+    assert gate.main(["704"], gh=counting, now=lambda: READY_AT) == 0
+    workflows = len(list((ROOT / ".github" / "workflows").glob("*.y*ml")))
+    lock_calls = [
+        c for c in calls if "/environments/" in c[-1] or "/contents/" in c[-1]
+    ]
+    assert len(lock_calls) == 3 + workflows
+    # preflight tree, PR view, checks, threads, compare, rule-drift tree, and the lock
+    assert len(calls) <= 6 + 3 + workflows, [c[:2] for c in calls]
+    trees = [c for c in calls if "/git/trees/" in c[1]]
+    assert len(trees) == 2
+    others = [tuple(c) for c in calls if c not in trees]
+    assert len(others) == len(set(others)), "a gh call repeated within one run"
+
+
+def test_the_lock_line_names_each_state():
+    assert gate.lock_status(_facts(lock_failures=())) == LOCK_VERIFIED_LINE
+    assert (
+        gate.lock_status(_facts(lock_failures=("a", "b")))
+        == "production lock NOT verified: a; b"
+    )
+    assert gate.lock_status(_facts(lock_failures=None)).startswith(
+        "production lock NOT verified: not read"
+    )
+
+
+def test_an_unverified_lock_alone_changes_no_verdict():
+    for lock in (None, (), ("no required reviewer",)):
+        verdict = gate.evaluate(_green(files=RELEASE_CODE, lock_failures=lock), now=NOW)
+        assert verdict.ready and verdict.exit_code == 0, (lock, verdict.reasons)

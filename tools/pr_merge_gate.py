@@ -99,6 +99,7 @@ from libs.gate import (
     collect,
     evaluate,
     is_self_governing,
+    lock_status,
     render,
     request_copilot_review,
     self_governing_files,
@@ -158,6 +159,7 @@ __all__ = [
     "collect",
     "evaluate",
     "is_self_governing",
+    "lock_status",
     "main",
     "render",
     "request_copilot_review",
@@ -293,6 +295,13 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
                     "reasons": verdict.reasons,
                     "quiet_remaining_seconds": verdict.quiet_remaining_seconds,
                     "policy": args.policy,
+                    # Informational (#1138): the lock never changes the exit code alone.
+                    "lock_verified": facts.lock_failures == (),
+                    "lock_failures": (
+                        None
+                        if facts.lock_failures is None
+                        else list(facts.lock_failures)
+                    ),
                 }
             )
         )

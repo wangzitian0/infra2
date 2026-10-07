@@ -453,6 +453,23 @@ def evaluate(
     )
 
 
+LOCK_VERIFIED = (
+    "production lock verified (reviewer, admin bypass off, policies main and v*, "
+    "contract holds)"
+)
+
+
+def lock_status(facts: HeadFacts) -> str:
+    """One line on the production lock (#1138). It informs; it never decides."""
+    if facts.lock_failures is None:
+        return (
+            "production lock NOT verified: not read (closed PR or another repository)"
+        )
+    if not facts.lock_failures:
+        return LOCK_VERIFIED
+    return f"production lock NOT verified: {'; '.join(facts.lock_failures)}"
+
+
 def render(facts: HeadFacts, verdict: Verdict) -> str:
     """Render a human-readable verdict description."""
     head = f"#{facts.number} @ {facts.head_sha[:7]}"
@@ -460,7 +477,7 @@ def render(facts: HeadFacts, verdict: Verdict) -> str:
         return (
             f"{head}: mergeable under session authority — checks green "
             f"({len(facts.checks)}), threads resolved, settled, "
-            "no path that needs the owner"
+            f"no path that needs the owner; {lock_status(facts)}"
         )
     kind = {
         "unevaluable": "could not evaluate (not a verdict on the PR)",
@@ -468,4 +485,5 @@ def render(facts: HeadFacts, verdict: Verdict) -> str:
         "action": "action required (waiting will not fix it)",
         "wait": "not yet",
     }[verdict.outcome]
-    return f"{head}: {kind}\n" + "\n".join(f"  - {r}" for r in verdict.reasons)
+    lines = [f"{head}: {kind}", *(f"  - {r}" for r in verdict.reasons)]
+    return "\n".join([*lines, f"  {lock_status(facts)}"])

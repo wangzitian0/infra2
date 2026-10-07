@@ -323,11 +323,24 @@ def _no_tables(monkeypatch):
     monkeypatch.setattr(production_contract, "UNGATED_JOBS", {})
 
 
-def test_collect_reads_no_lock_for_a_pr_without_workflow_or_deploy_paths():
-    gh = _CollectGh(["libs/probe_specs.py"])
+@pytest.mark.usefixtures("_no_tables")
+def test_collect_reads_the_lock_for_a_pr_without_workflow_or_deploy_paths():
+    """The gate reads the lock on every run of an open PR (#1138 F10)."""
+    gh = _CollectGh(["tools/deploy_v2.py"])
     facts = client.collect(9, repo=REPO, gh=gh)
-    assert facts.lock_failures is None
-    assert ENVIRONMENT_PATH not in gh.paths
+    assert facts.lock_failures == ()
+    assert ENVIRONMENT_PATH in gh.paths and _content("ci.yml") in gh.paths
+
+
+def test_a_lock_read_that_raises_is_a_failure_not_a_crash(monkeypatch):
+    def broken(*args, **kwargs):
+        raise ValueError("unexpected shape")
+
+    monkeypatch.setattr(client, "workflow_contract_failures", broken)
+    facts = client.collect(9, repo=REPO, gh=_CollectGh(["tools/deploy_v2.py"]))
+    assert facts.lock_failures == (
+        "the lock check failed: ValueError: unexpected shape",
+    )
 
 
 @pytest.mark.usefixtures("_no_tables")

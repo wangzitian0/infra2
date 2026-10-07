@@ -103,7 +103,9 @@
 
 ## Production lock
 
-The gate reads the production lock (#1138) when a PR changes a workflow file or a deploy-triggering path.
+The gate reads the production lock (#1138) on every run for an open PR in this repository.
+The verdict prints one lock line: `production lock verified (...)` or `production lock NOT verified: <failures>`.
+The JSON verdict has the same fact in `lock_verified` and `lock_failures`. The line alone never changes the exit code.
 The lock is the GitHub environment `production`. The gate reads four facts from GitHub:
 
 1. The environment has a required reviewer.

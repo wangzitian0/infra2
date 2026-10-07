@@ -12,6 +12,7 @@ from libs.gate.client import (
 )
 from libs.gate.evaluator import (
     evaluate,
+    lock_status,
     render,
 )
 from libs.gate.inventory import (
@@ -124,6 +125,7 @@ __all__ = [
     "collect",
     "evaluate",
     "is_self_governing",
+    "lock_status",
     "render",
     "request_copilot_review",
     "self_governing_files",
