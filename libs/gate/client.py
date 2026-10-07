@@ -6,6 +6,7 @@ import json
 import subprocess
 import time
 from collections.abc import Sequence
+from urllib.parse import quote
 
 from libs.gate.inventory import _deploy_triggering
 from libs.gate.production_contract import workflow_contract_failures
@@ -75,6 +76,12 @@ def _gh(
     raise RuntimeError(f"gh {' '.join(argv)}: failed after {max_retries} attempts")
 
 
+def _contents_url(repo: str, path: str, ref: str) -> str:
+    """The contents API path for `path` at `ref`. Both are quoted: a `?` or `#` in a
+    file name must not end the path and drop the ref (#1138)."""
+    return f"repos/{repo}/contents/{quote(path, safe='/')}?ref={quote(ref, safe='')}"
+
+
 def _file_at(repo: str, ref: str, path: str, *, gh: Runner | None = None) -> str | None:
     """A file's contents at a ref, or None if it cannot be read."""
     if gh is None:
@@ -87,7 +94,7 @@ def _file_at(repo: str, ref: str, path: str, *, gh: Runner | None = None) -> str
                 "api",
                 "-H",
                 "Accept: application/vnd.github.raw",
-                f"repos/{repo}/contents/{path}?ref={ref}",
+                _contents_url(repo, path, ref),
             ]
         )
     except RuntimeError:
@@ -105,7 +112,7 @@ def _workflow_names_at(
             gh(
                 [
                     "api",
-                    f"repos/{repo}/contents/{WORKFLOW_PREFIX.rstrip('/')}?ref={ref}",
+                    _contents_url(repo, WORKFLOW_PREFIX.rstrip("/"), ref),
                 ]
             )
         )

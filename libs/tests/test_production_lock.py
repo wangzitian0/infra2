@@ -381,3 +381,103 @@ def test_collect_reads_no_lock_for_another_repository():
     facts = client.collect(9, repo="wangzitian0/truealpha", gh=gh)
     assert facts.lock_failures is None
     assert not any("environments" in p for p in gh.paths)
+
+
+# --- #1138 audit: contents URLs are quoted, the listing filter is exact -------------
+
+
+class _Recorder:
+    """Records the argv of each call and answers with a fixed text."""
+
+    def __init__(self, answer: str = "text"):
+        self.answer = answer
+        self.argv: list[list[str]] = []
+
+    def __call__(self, argv):
+        self.argv.append(list(argv))
+        return self.answer
+
+
+@pytest.mark.parametrize(
+    ("name", "quoted"),
+    [
+        ("infra-ci.yml?x.yml", "infra-ci.yml%3Fx.yml"),
+        ("a#b.yml", "a%23b.yml"),
+        ("100%.yml", "100%25.yml"),
+        ("a b.yml", "a%20b.yml"),
+        ("部署.yml", "%E9%83%A8%E7%BD%B2.yml"),
+    ],
+    ids=["question-mark", "hash", "percent", "space", "unicode"],
+)
+def test_a_file_name_cannot_end_the_path_and_drop_the_ref(name, quoted):
+    runner = _Recorder()
+    assert client._file_at(REPO, HEAD, f"{WORKFLOW_PREFIX}{name}", gh=runner) == "text"
+    assert runner.argv == [
+        [
+            "api",
+            "-H",
+            "Accept: application/vnd.github.raw",
+            f"repos/{REPO}/contents/{WORKFLOW_PREFIX}{quoted}?ref={HEAD}",
+        ]
+    ]
+
+
+def test_the_ref_is_quoted_too():
+    runner = _Recorder()
+    client._file_at(REPO, "feat/x?y#z", "README.md", gh=runner)
+    assert runner.argv[0][-1] == f"repos/{REPO}/contents/README.md?ref=feat%2Fx%3Fy%23z"
+
+
+def test_the_workflow_list_url_is_quoted():
+    runner = _Recorder("[]")
+    client._workflow_names_at(REPO, "feat/x", gh=runner)
+    assert runner.argv == [
+        ["api", f"repos/{REPO}/contents/.github/workflows?ref=feat%2Fx"]
+    ]
+
+
+def test_the_lock_check_reads_a_listed_name_through_a_quoted_url():
+    name = "infra-ci.yml?x.yml"
+    gh = _CollectGh([CI_WORKFLOW], workflows={})
+    gh.answers[f"repos/{REPO}/contents/.github/workflows?ref={HEAD}"] = [
+        {"name": name, "type": "file"}
+    ]
+    gh.answers[_content("infra-ci.yml%3Fx.yml")] = WORKFLOW
+    client._production_lock_failures(REPO, HEAD, gh=gh)
+    assert _content("infra-ci.yml%3Fx.yml") in gh.paths
+    assert _content(name) not in gh.paths
+
+
+def test_the_listing_keeps_yml_and_yaml_files_only():
+    listing = [
+        {"name": "a.yml", "type": "file"},
+        {"name": "b.yaml", "type": "file"},
+        {"name": "c.json", "type": "file"},
+        {"name": "x.yml", "type": "dir"},
+        {"name": "templates", "type": "dir"},
+    ]
+    names = client._workflow_names_at(REPO, HEAD, gh=_Recorder(json.dumps(listing)))
+    assert names == ("a.yml", "b.yaml")
+
+
+@pytest.mark.usefixtures("_no_tables")
+def test_the_lock_check_reads_a_yaml_workflow_of_the_head():
+    secret_job = (
+        "on: push\njobs:\n  ship:\n    steps:\n"
+        "      - run: x\n        env:\n          K: ${{ secrets.DOKPLOY_API_KEY }}\n"
+    )
+    gh = _CollectGh([CI_WORKFLOW], workflows={"ship.yaml": secret_job})
+    failures = client.collect(9, repo=REPO, gh=gh).lock_failures
+    assert failures == (
+        "ship.yaml:ship holds production credentials ['DOKPLOY_API_KEY'] and is in "
+        "neither GATED_JOBS nor UNGATED_JOBS",
+    )
+
+
+def test_a_directory_named_like_a_workflow_is_not_read_as_one():
+    gh = _CollectGh([CI_WORKFLOW])
+    gh.answers[f"repos/{REPO}/contents/.github/workflows?ref={HEAD}"].append(
+        {"name": "x.yml", "type": "dir"}
+    )
+    client._production_lock_failures(REPO, HEAD, gh=gh)
+    assert _content("x.yml") not in gh.paths
