@@ -36,10 +36,9 @@ A system's own tests, CI, and issue states are claims written by the system. A t
 
 Each gate came from a measured failure.
 
-1. **The auditor must read code.** Use a read-only native agent. Never use tool-less `subagent_batch` for judgment.
-   Six of eight false findings came from agents without code access.
-2. **See each new test fail first.** Run it on the unfixed code and confirm RED.
-   This caught a fake `assertIn(role, text)` assertion that prose satisfied.
+1. **The auditor must read code.** Use a read-only native agent, or provide complete source code and diff in the prompt for `subagent_batch` workers. Never ask an auditor to judge code that the auditor cannot see. Six of eight false findings came from agents without code access.
+2. **See each new test fail first.** Run only the target test case on unfixed code and confirm RED (`pytest <file>::<test> -x`).
+   Never run full suites during Gate 2. This caught a fake `assertIn(role, text)` assertion that prose satisfied.
 3. **Re-review every fix independently.** The reviewer gets only the new code, not the defect story.
    For a security fix, ask for "the second chain from the same entry".
    On 2026-09-22 removing `eval` moved the value into an existing `python -c` string concatenation,
@@ -51,7 +50,8 @@ Each gate came from a measured failure.
 
 **Default (Lean Mode, < 60s):**
 - Run a single-pass read-only falsification covering M2 (design promise vs reality), G3 (fake tests / empty greens), and T1 (goal completeness).
-- Execute focused checks, cite physical commands and exit codes.
+- Execute focused checks on target test cases only (`pytest <file>::<test> -x`). Cite physical commands and exit codes.
+- Never run full test suites during review rounds.
 - Do not spin up multiple subagents for routine PRs.
 
 **High-Risk Escalation (Full Scouts 4+3+2):** Use all nine only for cross-cutting platform refactors or high-blast-radius changes.
@@ -79,11 +79,12 @@ A completeness claim (T1) against empty-run tests (G3) is false prosperity.
 **On-Demand Escalation Only:** Never use swarm mode for routine bugs or small features. Trigger ONLY when:
 (a) confidence is low after round 1, (b) SHZP recovery activates, or (c) owner explicitly requests `/audit swarm`.
 
-1. **Round 1 (Propose):** 10 parallel Interns inspect the system across distinct dimensions. Each Intern writes sharp defect hypotheses.
+1. **Round 1 (Propose - Massive Read, Concise Output):** The Director injects the complete source code, diff, and contracts into each task prompt. 10 parallel Interns inspect the system across distinct dimensions. Interns output dense, structured defect findings (500–1200 tokens) with exact anchors `file#Lxx-Lyy` and counterexamples. Conversational filler is prohibited.
 2. **Rounds 2 to 4 (Cross-Falsify):** Interns cross-examine each other's claims. Interns take opposing hypotheses and attempt to disprove them using verbatim source code and physical facts. They mark hypotheses as DISPROVEN or CONFIRMED.
 3. **Final Round (Director Triangulation):** The Director reviews surviving claims, verifies physical anchors (Touch Reality), and rejects false positives.
 
 A round with zero HIGH and zero new middle findings converges. Stop after round 5 at most. The last round is audit-only: it edits nothing.
+During review rounds, run focused tests only. Never run full test suites during audit rounds.
 
 ## Scout liveness
 
