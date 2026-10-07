@@ -156,7 +156,7 @@ class AppDeployer(Deployer):
             return None
 
         # Auto-configure S3 Public Endpoint using standardized infrastructure lib
-        # This ensures we respect the central SERVICE_SUBDOMAINS definition (minio_api -> s3)
+        # This ensures we respect the central SERVICE_SUBDOMAINS definition ("s3")
         # and handle environment suffixes automatically.
         from libs.common import get_service_url
 

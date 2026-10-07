@@ -66,8 +66,8 @@ def test_every_registry_backed_short_name_maps_to_a_real_registered_service():
 def test_shared_platform_services_registry_portion_matches_prod_only():
     # The whole point of deriving instead of hand-maintaining: every member beyond the
     # bootstrap-plane pair must correspond to a REAL prod_only=True service. This is
-    # exactly the assertion that would have caught sso/minio_api/minio_console being
-    # wrongly hardcoded in as "shared" when authentik/minio are actually prod_only=False
+    # exactly the assertion that would have caught sso/s3/s3_console being
+    # wrongly hardcoded in as "shared" when authentik/s3 are actually prod_only=False
     # (real, separate staging instances exist: sso-staging.zitian.party,
     # s3-staging.zitian.party).
     attrs = service_registry.service_attrs()
@@ -118,3 +118,32 @@ def test_check_service_quotes_nested_health_command(monkeypatch):
     assert "root@host.example" in context.command
     assert "docker exec truealpha-llm sh -lc" in context.command
     assert "http://127.0.0.1:8000/health" in context.command
+
+
+def test_service_subdomains_contains_no_retired_minio_keys():
+    from libs.core.environ import SERVICE_SUBDOMAINS, _REGISTRY_BACKED_SHORT_NAMES
+
+    assert "minio_console" not in SERVICE_SUBDOMAINS
+    assert "minio_api" not in SERVICE_SUBDOMAINS
+    assert "minio_console" not in _REGISTRY_BACKED_SHORT_NAMES
+    assert "minio_api" not in _REGISTRY_BACKED_SHORT_NAMES
+
+
+def test_service_subdomains_hosts_are_served_by_backend_services():
+    """Every host in SERVICE_SUBDOMAINS mapped to platform/s3 must be served by S3."""
+    import re
+    from pathlib import Path
+    from libs.core.environ import SERVICE_SUBDOMAINS, _REGISTRY_BACKED_SHORT_NAMES
+
+    s3_compose = Path(__file__).resolve().parents[2] / "platform/03.s3/compose.yaml"
+    content = s3_compose.read_text(encoding="utf-8")
+    s3_hosts = set(re.findall(r"Host\(`([a-z0-9-]+)\$\{ENV_DOMAIN_SUFFIX\}", content))
+
+    for key, service in _REGISTRY_BACKED_SHORT_NAMES.items():
+        if service == "platform/s3":
+            subdomain = SERVICE_SUBDOMAINS[key]
+            assert subdomain in s3_hosts, (
+                f"SERVICE_SUBDOMAINS[{key!r}] = {subdomain!r} is not served by {service} "
+                f"(served hosts: {sorted(s3_hosts)})"
+            )
+
