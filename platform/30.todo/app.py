@@ -167,7 +167,7 @@ def _probe_postgres(
         )
     try:
         from infra2_sdk.runtime.postgres import PostgresSettings, probe_postgres
-        from infra2_sdk.runtime.probes import DependencyStatus
+        from infra2_sdk.runtime.health import DependencyStatus
 
         dsn = (
             f"postgresql://{urllib.parse.quote(user, safe='')}"
