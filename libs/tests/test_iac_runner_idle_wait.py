@@ -531,7 +531,8 @@ def test_the_bootstrap_script_builds_then_waits_then_recreates() -> None:
 
     checkout_line, _ = _only(
         commands,
-        r'git -C "\$code_dir" checkout -f "\$INFRA2_DEPLOY_SHA" -- bootstrap/06\.iac_runner',
+        r'git -C "\$code_dir" checkout -f "\$INFRA2_DEPLOY_SHA" -- bootstrap/06\.iac_runner'
+        r"( [\w./-]+)*",
     )
     source_line, _ = _only(
         commands, r'\. "\$code_dir/bootstrap/06\.iac_runner/wait_for_idle\.sh"'
