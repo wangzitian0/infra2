@@ -2011,6 +2011,21 @@ def test_repo_deps_resolves_relative_imports(tmp_path, monkeypatch):
     assert "pkg/b.py" in deps
 
 
+def test_the_closure_adds_every_parent_package_of_a_module(tmp_path, monkeypatch):
+    """Python runs `pkg/__init__.py` and `pkg/sub/__init__.py` before `pkg.sub.mod`.
+    The import walk finds only the module, so the closure adds its parents (#1138)."""
+    monkeypatch.setattr(gate, "ROOT", tmp_path)
+    monkeypatch.setattr(gate, "WORKFLOW_DIR", tmp_path / "no-workflows")
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "pr_merge_gate.py").write_text("import pkg.sub.mod\n")
+    (tmp_path / "pkg" / "sub").mkdir(parents=True)
+    for rel in ("pkg/__init__.py", "pkg/sub/__init__.py", "pkg/sub/mod.py"):
+        (tmp_path / rel).write_text("")
+    closure = gate.self_governing_files()
+    assert "pkg/sub/mod.py" in closure
+    assert {"pkg/__init__.py", "pkg/sub/__init__.py", "tools/__init__.py"} <= closure
+
+
 def test_gh_retries_transient_failures(monkeypatch):
     """_gh 遇到限流或暂时性错误时应执行指数退避重试并在恢复后成功返回。"""
     attempts = 0

@@ -407,5 +407,9 @@ def test_any_other_secret_makes_a_new_job_credentialed(name):
 
 
 def test_a_secret_name_in_another_case_is_the_same_secret():
-    assert len(contract_errors(_reads("dokploy_api_key"), {}, {})) == 1
+    # GitHub secret names are not case sensitive: both reads name one secret.
+    assert contract_errors(_reads("dokploy_api_key"), {}, {}) == [
+        "w.yml:j holds production credentials ['DOKPLOY_API_KEY'] and is in neither "
+        "GATED_JOBS nor UNGATED_JOBS"
+    ]
     assert contract_errors(_reads("github_token"), {}, {}) == []

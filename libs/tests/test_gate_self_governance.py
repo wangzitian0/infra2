@@ -117,6 +117,7 @@ def test_the_guard_of_the_production_lock_is_in_the_closure() -> None:
     [
         "libs/__init__.py",
         "libs/gate/__init__.py",
+        "libs/tests/__init__.py",
         "tools/__init__.py",
         "libs/tests/test_gate_pipeline.py",
         "libs/tests/test_gate_self_governance.py",
