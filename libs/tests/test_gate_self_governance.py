@@ -165,6 +165,7 @@ SHADOWS = (
     "tools/pr_merge_gate/__init__.py",  # a package beats tools/pr_merge_gate.py
     "tools/pr_merge_gate/__main__.py",
     "yaml.py",  # a root module beats the installed PyYAML
+    "yaml/__init__.py",  # so does a root package
     "libs/gate/types/__init__.py",
     "libs/gate/yaml.py",  # a module next to gate code, named like an import
     "libs/gate/types.abi3.so",  # an extension module beats types.py

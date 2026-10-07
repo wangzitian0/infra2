@@ -2097,6 +2097,7 @@ def test_a_package_file_that_does_not_exist_is_still_in_the_closure(
         "tools/pr_merge_gate/__init__.py",
         "tools/pr_merge_gate/__main__.py",
         "yaml.py",
+        "yaml/__init__.py",
         "libs/gate/types/__init__.py",
         "libs/gate/yaml.py",
         "libs/tests/conftest.py",
