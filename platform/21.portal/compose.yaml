@@ -6,6 +6,7 @@ services:
     container_name: platform-portal${ENV_SUFFIX}
     restart: always
     user: "1000:1000"
+    mem_limit: 128m
     environment:
       # Disable Homer asset initialization to avoid overwriting mounted config.yml.
       INIT_ASSETS: "0"
