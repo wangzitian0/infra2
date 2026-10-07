@@ -45,14 +45,21 @@ def find_service_composes(root: Path = ROOT) -> list[Path]:
     return found
 
 
-def audit() -> list[str]:
-    return fanout_coverage_violations(find_service_composes())
+def audit(composes: list[Path] | None = None) -> list[str]:
+    if composes is None:
+        composes = find_service_composes()
+    return fanout_coverage_violations(composes)
 
 
 def main() -> int:
-    violations = audit()
+    composes = find_service_composes()
+    if not composes:
+        # A scan that finds no service reads no input. Reporting "passed" would hide it.
+        print("ERROR: no service compose file found; the audit checked nothing.")
+        return 1
+    violations = audit(composes)
     if not violations:
-        print("deploy fan-out coverage audit passed")
+        print(f"deploy fan-out coverage audit passed ({len(composes)} compose files)")
         return 0
 
     print("ERROR: config-hash inputs that fan out to no service (under-fan-out risk):")
