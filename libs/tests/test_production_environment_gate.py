@@ -21,7 +21,6 @@ from libs.gate.production_contract import (
     UNGATED_JOBS,
     _production_credentials,
     contract_errors,
-    exposed_workflows,
     workflow_contract_failures,
 )
 
@@ -258,23 +257,7 @@ def test_passing_every_secret_to_a_called_workflow_is_reported():
     ]
 
 
-def test_the_exposed_workflows_are_the_files_of_ungated_or_conditional_jobs():
-    assert exposed_workflows() == {
-        "app-deploy-request.yml",
-        "deploy-report-main.yml",
-        "deploy.yml",
-        "ops-checks.yml",
-        "preview-teardown.yml",
-        "reconcile-iac-inputs.yml",
-    }
-    # Files whose every production job always waits for the reviewer are covered.
-    assert "apply-observability.yml" not in exposed_workflows()
-    assert "deploy-cloudflare-watchdog.yml" not in exposed_workflows()
-
-
-def test_the_exposed_workflows_follow_the_tables(monkeypatch):
-    monkeypatch.setattr(
-        production_contract, "GATED_JOBS", {("a.yml", "j"): None, ("b.yml", "j"): "x"}
-    )
-    monkeypatch.setattr(production_contract, "UNGATED_JOBS", {("c.yml", "j"): "why"})
-    assert exposed_workflows() == {"b.yml", "c.yml"}
+def test_no_workflow_file_is_held_with_the_owner_by_decision_of_2026_10_08():
+    """The lock covers every workflow file (#1138). The credentials that ungated jobs
+    read are the open risk; scoping them is tracked in #1147."""
+    assert production_contract.OWNER_HELD_WORKFLOWS == frozenset()

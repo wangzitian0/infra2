@@ -11,7 +11,10 @@ from libs.gate.inventory import (
     _deploy_triggering,
     _required_checks,
 )
-from libs.gate.production_contract import exposed_workflows
+
+# A module import, so a test can change OWNER_HELD_WORKFLOWS, and the closure walk
+# of self_governance.py sees the module from this file.
+import libs.gate.production_contract as production_contract
 from libs.gate.self_governance import (
     _owner_instruction_quoted,
     is_self_governing,
@@ -139,15 +142,15 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
             UNEVALUABLE,
         )
 
-    # The production lock (#1138) replaces the owner for a workflow file whose jobs
-    # cannot hold a production credential outside the production environment. Every
-    # other self-governing path stays with the owner.
+    # The production lock (#1138) replaces the owner for a workflow file, unless the
+    # file is on OWNER_HELD_WORKFLOWS. Every other self-governing path stays with the
+    # owner.
     lock_holds = facts.lock_failures == ()
-    exposed = exposed_workflows()
+    owner_held = production_contract.OWNER_HELD_WORKFLOWS
     uncovered = sorted(
         f
         for f in facts.files
-        if f.startswith(WORKFLOW_PREFIX) and PurePosixPath(f).name in exposed
+        if f.startswith(WORKFLOW_PREFIX) and PurePosixPath(f).name in owner_held
     )
     lock_covered = {
         f
@@ -208,8 +211,8 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
         )
     elif lock_holds and (held := [f for f in held_workflows if f in uncovered]):
         reasons.append(
-            f"the production lock does not cover {', '.join(held)}: a job in it can "
-            "hold a production credential outside the production environment"
+            f"the production lock does not cover {', '.join(held)}: the file is on "
+            "OWNER_HELD_WORKFLOWS in libs/gate/production_contract.py"
         )
 
     required, inventory_read = _required_checks()

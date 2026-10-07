@@ -112,12 +112,18 @@ The gate also applies the production contract to every workflow file of the head
 The contract tables are in `libs/gate/production_contract.py`.
 The lock holds when the four facts are true and the head satisfies the contract. Then:
 
-- A workflow change does not need the owner, except in a file with an ungated or conditional production job.
-  Such a job can hold a production credential outside the environment.
+- A workflow change does not need the owner, except for a file on `OWNER_HELD_WORKFLOWS`.
+  The held list is in `libs/gate/production_contract.py`. It is empty by decision of 2026-10-08.
 - A deploy-triggering path does not need the owner. Each production job waits for the environment reviewer.
 
 Fail closed: when a fact is false or unreadable, the earlier rules apply. The verdict names each failure.
 When the lock holds, these changes still need the owner: the gate code and data, their tests, the rule-text files, and the contract tables.
+
+Limits of the lock:
+
+- The lock does not cover the production credentials that ungated jobs read.
+- The code that those jobs run is outside the gate. An agent can merge a change to it.
+- The real fix is to scope those credentials to the `production` environment (#1147).
 
 ## 授权沿革
 

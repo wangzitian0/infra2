@@ -162,20 +162,10 @@ def contract_errors(
     return errors
 
 
-def exposed_workflows() -> frozenset[str]:
-    """Workflow file names with a job that can hold a production credential outside
-    the `production` environment: an ungated job, or a gated job with a condition.
-
-    The environment reviewer does not stop such a job. A change to its body can reach
-    production, so the merge gate keeps these files with the owner (#1138).
-    """
-    ungated = {workflow for workflow, _ in UNGATED_JOBS}
-    conditional = {
-        workflow
-        for (workflow, _), selector in GATED_JOBS.items()
-        if selector is not None
-    }
-    return frozenset(ungated | conditional)
+# Workflow file names that stay with the owner when the production lock holds (#1138).
+# Empty by decision of 2026-10-08. Adding a file name holds that file with the owner.
+# This constant is in the gate closure, so a change to it goes to the owner.
+OWNER_HELD_WORKFLOWS: frozenset[str] = frozenset()
 
 
 # A `secrets` reference in an expression that is not the literal `secrets.NAME` form.

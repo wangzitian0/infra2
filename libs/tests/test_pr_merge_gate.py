@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from libs.gate import production_contract
 from tools import pr_merge_gate as gate
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -2212,18 +2213,56 @@ def test_the_guard_of_the_lock_stays_with_the_owner_when_the_lock_holds(path):
     assert path in reason and CI_WORKFLOW not in reason
 
 
-@pytest.mark.parametrize("name", ["ops-checks.yml", "deploy.yml"])
-def test_a_workflow_with_a_job_outside_the_environment_stays_with_the_owner(name):
+# The six files with an ungated or conditional production job. The owner-held list is
+# empty by decision of 2026-10-08 (#1138), so the lock covers them too.
+FILES_WITH_JOBS_OUTSIDE_THE_ENVIRONMENT = (
+    "app-deploy-request.yml",
+    "deploy-report-main.yml",
+    "deploy.yml",
+    "ops-checks.yml",
+    "preview-teardown.yml",
+    "reconcile-iac-inputs.yml",
+)
+
+
+@pytest.mark.parametrize("name", FILES_WITH_JOBS_OUTSIDE_THE_ENVIRONMENT)
+def test_a_workflow_with_a_job_outside_the_environment_merges_when_the_lock_holds(
+    name,
+):
     path = f"{gate.WORKFLOW_PREFIX}{name}"
+    assert (ROOT / path).is_file(), path  # a real file, not a name the gate never sees
     verdict = gate.evaluate(_green(files=(path,), lock_failures=HOLDS), now=NOW)
+    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+
+
+def _hold(monkeypatch, *names: str) -> None:
+    monkeypatch.setattr(production_contract, "OWNER_HELD_WORKFLOWS", frozenset(names))
+
+
+def test_a_held_workflow_stays_with_the_owner_when_the_lock_holds(monkeypatch):
+    _hold(monkeypatch, "ops-checks.yml")
+    held = f"{gate.WORKFLOW_PREFIX}ops-checks.yml"
+    verdict = gate.evaluate(
+        _green(files=(held, CI_WORKFLOW), lock_failures=HOLDS), now=NOW
+    )
     assert verdict.owner_required and verdict.exit_code == 2
+    reason = next(r for r in verdict.reasons if "what decides merges" in r)
+    assert held in reason and CI_WORKFLOW not in reason
     assert any(
-        r.startswith(f"the production lock does not cover {path}")
+        r.startswith(f"the production lock does not cover {held}:")
         for r in verdict.reasons
     )
 
 
-def test_a_proven_tighter_change_gets_no_new_blocker_from_the_lock():
+def test_holding_one_workflow_leaves_the_others_covered(monkeypatch):
+    _hold(monkeypatch, "ops-checks.yml")
+    path = f"{gate.WORKFLOW_PREFIX}deploy.yml"
+    verdict = gate.evaluate(_green(files=(path,), lock_failures=HOLDS), now=NOW)
+    assert verdict.ready, verdict.reasons
+
+
+def test_a_proven_tighter_change_gets_no_new_blocker_from_the_lock(monkeypatch):
+    _hold(monkeypatch, "ops-checks.yml")
     path = f"{gate.WORKFLOW_PREFIX}ops-checks.yml"
     for lock in (None, HOLDS, ("no required reviewer",)):
         verdict = gate.evaluate(
