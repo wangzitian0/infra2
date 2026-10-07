@@ -30,11 +30,15 @@ RUN curl -sSfLo /tmp/vault.zip https://releases.hashicorp.com/vault/1.15.4/vault
     && vault version
 
 WORKDIR /app
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Build context = repo root, so the image can read uv.lock, the only infra2-sdk pin.
+# The inline lock reader turns it into a requirement whose sha256 pip verifies (#1115).
+COPY bootstrap/06.iac_runner/requirements.txt .
+COPY uv.lock /tmp/uv.lock
+RUN sdk="$(python -c "import tomllib, pathlib; doc = tomllib.loads(pathlib.Path('/tmp/uv.lock').read_text()); w = next(p for p in doc['package'] if p['name'] == 'infra2-sdk')['wheels'][0]; url = w['url']; h = w['hash'].replace(':', '='); print(f'infra2-sdk @ {url}#{h}')")" \
+    && pip install --no-cache-dir -r requirements.txt "$sdk"
 
-COPY webhook_server.py .
-COPY sync_runner.py .
+COPY bootstrap/06.iac_runner/webhook_server.py .
+COPY bootstrap/06.iac_runner/sync_runner.py .
 
 RUN mkdir -p /workspace && \
     git config --global --add safe.directory /workspace/infra2 && \

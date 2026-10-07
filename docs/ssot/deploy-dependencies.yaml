@@ -46,3 +46,12 @@ services:
       - platform/*/deploy.py
       - finance_report/finance_report/*/deploy.py
       - truealpha/truealpha/*/deploy.py
+      - uv.lock
+
+  platform/todo:
+    depends_on:
+      - uv.lock
+
+  bootstrap/iac-runner:
+    depends_on:
+      - uv.lock

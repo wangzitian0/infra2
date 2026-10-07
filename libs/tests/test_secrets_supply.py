@@ -215,8 +215,11 @@ def test_workflow_deploy_jobs_install_the_pinned_sdk() -> None:
     root = Path(__file__).resolve().parents[2]
     for wf in ("deploy.yml", "deploy-report-main.yml", "preview-teardown.yml"):
         text = (root / ".github/workflows" / wf).read_text(encoding="utf-8")
+        # tools/sdk_requirement.py reads the hash-verified wheel from uv.lock (#1115).
         assert re.search(
-            r"pip install invoke httpx python-dotenv rich .*infra2-sdk @ https://", text
+            r'sdk="\$\(python tools/sdk_requirement\.py\)"\n\s+'
+            r'python -m pip install invoke httpx python-dotenv rich "\$sdk"',
+            text,
         ), wf
 
 
@@ -397,7 +400,9 @@ def test_retrying_transport_fails_closed_past_the_retry_budget(monkeypatch) -> N
             "GET", "https://vault.test/v1/secret/data/truealpha/staging/app", {}, None
         )
 
-    assert len(calls) == 3  # 1 initial + 2 retries, same budget as libs/deploy/dokploy_client.py
+    assert (
+        len(calls) == 3
+    )  # 1 initial + 2 retries, same budget as libs/deploy/dokploy_client.py
     assert sleeps == [2, 4]
 
 
