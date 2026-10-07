@@ -213,7 +213,9 @@ def test_workflow_deploy_jobs_install_the_pinned_sdk() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
-    for wf in ("deploy.yml", "deploy-report-main.yml", "preview-teardown.yml"):
+    # The other deploy workflows read the pin through tools/sdk_requirement.py
+    # (libs/tests/test_sdk_requirement.py). deploy.yml follows in the bootstrap PR.
+    for wf in ("deploy.yml",):
         text = (root / ".github/workflows" / wf).read_text(encoding="utf-8")
         assert re.search(
             r"pip install invoke httpx python-dotenv rich .*infra2-sdk @ https://", text

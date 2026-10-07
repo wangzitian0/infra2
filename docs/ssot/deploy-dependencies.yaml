@@ -49,3 +49,12 @@ services:
       - platform/*/deploy.py
       - finance_report/finance_report/*/deploy.py
       - truealpha/truealpha/*/deploy.py
+      - uv.lock
+
+  # The alerting and todo images install infra2-sdk from uv.lock, the only pin,
+  # through tools/sdk_requirement.py (#1115): an SDK bump edits uv.lock and must
+  # rebuild them. alerting already declares tools/**.
+  platform/todo:
+    depends_on:
+      - uv.lock
+      - tools/sdk_requirement.py

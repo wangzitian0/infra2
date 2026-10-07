@@ -73,7 +73,10 @@ jobs:
           python-version: "3.11"
 
       - name: Install runtime dependencies
-        run: python -m pip install invoke httpx python-dotenv pyyaml rich "$(grep -oE 'infra2-sdk @ https://[^"]+' pyproject.toml)"
+        # tools/sdk_requirement.py reads the infra2-sdk wheel and sha256 from uv.lock (#1115).
+        run: |
+          sdk="$(python tools/sdk_requirement.py)"
+          python -m pip install invoke httpx python-dotenv pyyaml rich "$sdk"
 
       # A tag-push checkout has the full history (fetch-depth: 0) but no origin/main
       # remote-tracking ref. The reconcile guard (assert_after_on_main) refuses any tag

@@ -5,13 +5,10 @@ description = "Infrastructure as Code for self-hosted services"
 requires-python = ">=3.11"
 dependencies = [
     # Cross-repository wire/data contracts. Pin the immutable release artifact;
-    # workspace submodules are never runtime dependencies. NOTE: keep this exact
-    # "infra2-sdk @ " prefix — ops-checks.yml's deploy-v2-canary job and
-    # test_deploy_canary_installs_the_declared_sdk_requirement extract this
-    # entry by an exact startswith("infra2-sdk @ ") match; an extras suffix
-    # (e.g. "infra2-sdk[foo] @ ") would silently stop matching and crash that
-    # job's dependency install. psycopg/boto3 are declared as their own plain
-    # entries below instead of via SDK extras for exactly this reason.
+    # workspace submodules are never runtime dependencies. uv.lock records this
+    # URL with the wheel's sha256 and is the only pin: the images and workflows
+    # read it through tools/sdk_requirement.py (#1115), so a release bump edits
+    # this line and uv.lock only.
     "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v3.0.0/infra2_sdk-3.0.0-py3-none-any.whl",
     # libs/tests unit testing
     "pytest>=7.4.0",
