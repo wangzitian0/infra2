@@ -278,6 +278,21 @@ def test_fanout_coverage_flags_an_input_in_another_service_directory(tmp_path):
     assert fanout_coverage_violations(composes, manifest=declared, root=tmp_path) == []
 
 
+def test_fanout_coverage_ignores_a_glob_declared_for_another_service(tmp_path):
+    """A depends_on glob fans out to the service that declares it, not to every
+    service: a COPY of uv.lock stays unguarded when only another service lists it."""
+    composes = _service(
+        tmp_path,
+        _REPO_ROOT_CONTEXT,
+        "FROM x\nCOPY uv.lock /tmp/uv.lock\n",
+        files=("uv.lock",),
+    )
+    manifest = {"platform/other": ["uv.lock"]}
+    assert fanout_coverage_violations(composes, manifest=manifest, root=tmp_path) == [
+        "platform/ghost: uv.lock"
+    ]
+
+
 def test_fanout_coverage_refuses_a_compose_outside_a_service_directory(tmp_path):
     import pytest
 
