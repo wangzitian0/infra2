@@ -3,77 +3,30 @@
 A GitHub environment with a required reviewer is the only mechanism that stops a
 production job before it runs. A job that reads a production credential must declare
 `environment:`, or the contract must name it as not production, with a reason.
+
+The tables and the check live in `libs/gate/production_contract.py`, because the merge
+gate reads them too (#1138).
 """
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
+import pytest
 import yaml
+
+from libs.gate import production_contract
+from libs.gate.production_contract import (
+    GATED_JOBS,
+    UNGATED_JOBS,
+    _production_credentials,
+    contract_errors,
+    exposed_workflows,
+    workflow_contract_failures,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
-
-# A job that reads one of these secrets can reach a production host or API.
-PRODUCTION_SECRETS = (
-    "CF_API_TOKEN",
-    "CF_WORKER_API_TOKEN",
-    "DOKPLOY_API_KEY",
-    "IAC_WEBHOOK_SECRET",
-    "INFRA2_WATCHDOG_SSH_HOST",
-    "INFRA2_WATCHDOG_SSH_PRIVATE_KEY",
-    "SIGNOZ_API_KEY",
-)
-
-# Jobs that can change production. Value: the text that the production condition must
-# contain, or None when the job always runs against production.
-GATED_JOBS: dict[tuple[str, str], str | None] = {
-    ("deploy.yml", "deploy"): "inputs.type == 'prod'",
-    ("deploy.yml", "bootstrap"): None,
-    ("reconcile-iac-inputs.yml", "reconcile"): "inputs.promote_prod",
-    ("app-deploy-request.yml", "deploy"): "client_payload.deploy_type == 'prod'",
-    ("apply-observability.yml", "apply"): None,
-    ("deploy-cloudflare-watchdog.yml", "deploy"): None,
-}
-
-# Jobs that read a production credential and do not need owner approval, with the reason.
-UNGATED_JOBS: dict[tuple[str, str], str] = {
-    ("deploy.yml", "preflight_canary"): "canary on the throwaway slot, not production",
-    (
-        "app-deploy-request.yml",
-        "preflight_canary",
-    ): "canary on the throwaway slot, not production",
-    ("deploy-report-main.yml", "deploy"): "deploys the preview slot, not production",
-    ("preview-teardown.yml", "teardown"): "removes a preview slot, not production",
-    ("ops-checks.yml", "audit"): "scheduled read-only audit",
-    ("ops-checks.yml", "watchdog"): "scheduled read-only probe",
-    ("ops-checks.yml", "digest"): "scheduled read-only report",
-    (
-        "ops-checks.yml",
-        "deploy-v2-canary",
-    ): "canary on the throwaway slot, not production",
-    (
-        "ops-checks.yml",
-        "preview-leak-check",
-    ): "scheduled read-only check of preview slots",
-    ("ops-checks.yml", "vault-self-refresh-audit"): "scheduled read-only audit",
-    ("ops-checks.yml", "secrets-reconcile"): "scheduled check that reports drift",
-    # These two jobs write to the production host on a schedule. A review gate would stall
-    # the schedule. The owner decides their class in the follow-up issue of #1125.
-    (
-        "ops-checks.yml",
-        "host-hygiene-schedule",
-    ): "scheduled standing automation, class pending",
-    (
-        "ops-checks.yml",
-        "facet-reconcile",
-    ): "scheduled standing automation, class pending",
-}
-
-_GATED_EXPRESSION = re.compile(
-    r"^\$\{\{\s*(?P<condition>.+?)\s*&&\s*'production'\s*\|\|\s*'staging'\s*\}\}$"
-)
 
 
 def _load_workflows(directory: Path) -> dict[str, dict]:
@@ -81,92 +34,6 @@ def _load_workflows(directory: Path) -> dict[str, dict]:
     for path in sorted(directory.glob("*.y*ml")):
         workflows[path.name] = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     return workflows
-
-
-def _secrets_read(job: dict) -> set[str]:
-    text = yaml.dump(job)
-    return {
-        name for name in PRODUCTION_SECRETS if re.search(rf"secrets\.{name}\b", text)
-    }
-
-
-def _writes_contents(workflow: dict, job: dict) -> bool:
-    """A token with `contents: write` can push a tag, such as a production marker."""
-    permissions = (
-        job["permissions"] if "permissions" in job else workflow.get("permissions")
-    )
-    if permissions == "write-all":
-        return True
-    return isinstance(permissions, dict) and permissions.get("contents") == "write"
-
-
-def _production_credentials(workflow: dict, job: dict) -> list[str]:
-    credentials = sorted(_secrets_read(job))
-    if _writes_contents(workflow, job):
-        credentials.append("permission contents: write")
-    return credentials
-
-
-def _environment_name(job: dict) -> str | None:
-    environment = job.get("environment")
-    if isinstance(environment, dict):
-        environment = environment.get("name")
-    return environment if isinstance(environment, str) else None
-
-
-def _environment_error(
-    key: tuple[str, str], job: dict, selector: str | None
-) -> str | None:
-    label = f"{key[0]}:{key[1]}"
-    environment = _environment_name(job)
-    if environment is None:
-        return f"{label} can change production and declares no environment"
-    if selector is None:
-        if environment != "production":
-            return f"{label} always runs against production; environment is {environment!r}"
-        return None
-    match = _GATED_EXPRESSION.match(environment)
-    if match is None:
-        return f"{label} environment must be '${{{{ <condition> && 'production' || 'staging' }}}}'"
-    if selector not in match.group("condition"):
-        return f"{label} environment condition lacks {selector!r}"
-    return None
-
-
-def contract_errors(
-    workflows: dict[str, dict],
-    gated: dict[tuple[str, str], str | None],
-    ungated: dict[tuple[str, str], str],
-) -> list[str]:
-    errors: list[str] = []
-    seen: set[tuple[str, str]] = set()
-    for workflow_name, workflow in workflows.items():
-        for job_name, job in (workflow.get("jobs") or {}).items():
-            key = (workflow_name, job_name)
-            seen.add(key)
-            if key in gated:
-                error = _environment_error(key, job, gated[key])
-                if error:
-                    errors.append(error)
-            elif key in ungated:
-                if not ungated[key].strip():
-                    errors.append(
-                        f"{workflow_name}:{job_name} is ungated without a reason"
-                    )
-                if _writes_contents(workflow, job):
-                    errors.append(
-                        f"{workflow_name}:{job_name} is ungated and holds permission contents: write"
-                    )
-            elif credentials := _production_credentials(workflow, job):
-                errors.append(
-                    f"{workflow_name}:{job_name} holds production credentials "
-                    f"{credentials} and is in neither GATED_JOBS nor UNGATED_JOBS"
-                )
-    for key in sorted((set(gated) | set(ungated)) - seen):
-        errors.append(f"{key[0]}:{key[1]} is named in the contract and does not exist")
-    for key in sorted(set(gated) & set(ungated)):
-        errors.append(f"{key[0]}:{key[1]} is both gated and ungated")
-    return errors
 
 
 def test_repository_workflows_satisfy_the_production_environment_contract():
@@ -282,3 +149,132 @@ def test_an_ungated_job_must_not_hold_contents_write():
     job = {**_READS_SECRET, "permissions": {"contents": "write"}}
     errors = contract_errors(_workflow(job), {}, {_KEY: "scheduled read-only audit"})
     assert errors == ["w.yml:j is ungated and holds permission contents: write"]
+
+
+# --- the gate's entry point: YAML texts of the pull request head (#1138) -------------
+
+
+@pytest.fixture
+def _no_tables(monkeypatch):
+    """Empty tables, so a one-file tree can satisfy the contract."""
+    monkeypatch.setattr(production_contract, "GATED_JOBS", {})
+    monkeypatch.setattr(production_contract, "UNGATED_JOBS", {})
+
+
+_SECRET_JOB = (
+    "on: push\njobs:\n  j:\n    steps:\n"
+    "      - run: x\n        env:\n          K: ${{ secrets.DOKPLOY_API_KEY }}\n"
+)
+
+
+@pytest.mark.usefixtures("_no_tables")
+def test_texts_without_production_credentials_satisfy_the_contract():
+    text = "on: push\njobs:\n  j:\n    steps:\n      - run: echo ${{ secrets.GITHUB_TOKEN }}\n"
+    assert workflow_contract_failures({"w.yml": text}) == []
+
+
+@pytest.mark.usefixtures("_no_tables")
+def test_texts_report_the_same_errors_as_parsed_workflows():
+    texts = {"w.yml": _SECRET_JOB}
+    parsed = {"w.yml": yaml.safe_load(_SECRET_JOB)}
+    assert workflow_contract_failures(texts) == contract_errors(parsed, {}, {})
+    assert len(workflow_contract_failures(texts)) == 1
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("on: [", "w.yml does not parse as YAML"),
+        ("- a\n- b\n", "w.yml is not a YAML mapping"),
+        ("jobs: [a, b]\n", "w.yml has a jobs section that is not a mapping of jobs"),
+        (
+            "jobs:\n  a: text\n",
+            "w.yml has a jobs section that is not a mapping of jobs",
+        ),
+    ],
+    ids=["broken-yaml", "a-list", "jobs-a-list", "job-not-a-mapping"],
+)
+def test_an_unreadable_file_is_the_only_failure(text, expected):
+    # The real tables are in force: the contract must not run on a partial tree and
+    # blame every job of the unreadable file as missing.
+    assert workflow_contract_failures({"w.yml": text}) == [expected]
+
+
+@pytest.mark.usefixtures("_no_tables")
+def test_a_production_secret_read_outside_a_job_is_reported():
+    text = (
+        "on: push\nenv:\n  K: ${{ secrets.DOKPLOY_API_KEY }}\n"
+        "jobs:\n  j:\n    steps:\n      - run: x\n"
+    )
+    assert workflow_contract_failures({"w.yml": text}) == [
+        "w.yml reads production credentials ['DOKPLOY_API_KEY'] outside a job"
+    ]
+
+
+@pytest.mark.usefixtures("_no_tables")
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "${{ toJSON(secrets) }}",
+        "${{ secrets['DOKPLOY_API_KEY'] }}",
+        "${{ secrets[format('{0}', 'X')] }}",
+        "${{ secrets.dokploy_api_key }}",
+        "${{ SECRETS.DOKPLOY_API_KEY }}",
+        "${{ secrets.* }}",
+        "${{\n  secrets\n}}",
+    ],
+)
+def test_a_secret_read_by_a_name_that_is_not_literal_is_reported(expression):
+    block = expression.replace("\n", "\n          ")
+    text = (
+        f"on: push\njobs:\n  j:\n    steps:\n      - run: |\n          echo {block}\n"
+    )
+    assert workflow_contract_failures({"w.yml": text}) == [
+        "w.yml reads a secret by a name that is not literal"
+    ]
+
+
+@pytest.mark.usefixtures("_no_tables")
+@pytest.mark.parametrize(
+    "line",
+    [
+        "# read secrets from the vault, not secrets[0]",
+        "if: ${{ inputs.task == 'secrets-reconcile' }}",
+        "group: ${{ format('infra2-secrets-{0}', github.sha) }}",
+        "token: ${{ secrets.PREVIEW_LEAK_GH_TOKEN || github.token }}",
+    ],
+)
+def test_prose_and_string_literals_are_not_secret_reads(line):
+    text = f"on: push\njobs:\n  j:\n    {line}\n    steps:\n      - run: x\n"
+    assert workflow_contract_failures({"w.yml": text}) == []
+
+
+@pytest.mark.usefixtures("_no_tables")
+def test_passing_every_secret_to_a_called_workflow_is_reported():
+    called = "o/r/.github/workflows/" + "x.yml@v1"
+    text = f"on: push\njobs:\n  call:\n    uses: {called}\n    secrets: inherit\n"
+    assert workflow_contract_failures({"w.yml": text}) == [
+        "w.yml:call passes every secret to a called workflow"
+    ]
+
+
+def test_the_exposed_workflows_are_the_files_of_ungated_or_conditional_jobs():
+    assert exposed_workflows() == {
+        "app-deploy-request.yml",
+        "deploy-report-main.yml",
+        "deploy.yml",
+        "ops-checks.yml",
+        "preview-teardown.yml",
+        "reconcile-iac-inputs.yml",
+    }
+    # Files whose every production job always waits for the reviewer are covered.
+    assert "apply-observability.yml" not in exposed_workflows()
+    assert "deploy-cloudflare-watchdog.yml" not in exposed_workflows()
+
+
+def test_the_exposed_workflows_follow_the_tables(monkeypatch):
+    monkeypatch.setattr(
+        production_contract, "GATED_JOBS", {("a.yml", "j"): None, ("b.yml", "j"): "x"}
+    )
+    monkeypatch.setattr(production_contract, "UNGATED_JOBS", {("c.yml", "j"): "why"})
+    assert exposed_workflows() == {"b.yml", "c.yml"}
