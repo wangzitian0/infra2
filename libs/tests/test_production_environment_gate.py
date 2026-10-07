@@ -413,3 +413,117 @@ def test_a_secret_name_in_another_case_is_the_same_secret():
         "GATED_JOBS nor UNGATED_JOBS"
     ]
     assert contract_errors(_reads("github_token"), {}, {}) == []
+
+
+# --- #1138 re-audit: the contract reads parsed expressions only ---------------------
+
+_OPAQUE = "w.yml reads a secret by a name that is not literal"
+
+
+def _job_env(value_yaml: str) -> str:
+    """A workflow whose one job sets K to `value_yaml`, a YAML scalar as written."""
+    return f"on: push\njobs:\n  j:\n    runs-on: x\n    env:\n      K: {value_yaml}\n"
+
+
+@pytest.mark.usefixtures("_no_tables")
+def test_a_yaml_escape_cannot_hide_a_computed_secret_read():
+    # The raw text has no "secrets"; the value GitHub reads has secrets['CF_API_TOKEN'].
+    text = _job_env("\"${{ s\\x65crets['CF_API_TOKEN'] }}\"")
+    assert "secrets" not in text
+    assert workflow_contract_failures({"w.yml": text}) == [_OPAQUE]
+
+
+@pytest.mark.usefixtures("_no_tables")
+def test_a_yaml_escape_cannot_hide_a_named_secret_read():
+    text = _job_env('"${{ s\\x65crets.CF_API_TOKEN }}"')
+    assert workflow_contract_failures({"w.yml": text}) == [
+        "w.yml:j holds production credentials ['CF_API_TOKEN'] and is in neither "
+        "GATED_JOBS nor UNGATED_JOBS"
+    ]
+
+
+@pytest.mark.usefixtures("_no_tables")
+def test_a_closing_brace_pair_in_a_string_literal_does_not_end_the_scan():
+    text = _job_env("${{ format('}}', secrets['CF_API_TOKEN']) }}")
+    assert workflow_contract_failures({"w.yml": text}) == [_OPAQUE]
+
+
+@pytest.mark.usefixtures("_no_tables")
+def test_a_reader_that_ends_at_the_first_closing_pair_is_covered_too():
+    # Read literal-aware, this is one string. Read to the first }}, it reads a secret.
+    text = _job_env("\"${{ 'a }} ${{ secrets.CF_API_TOKEN }}' }}\"")
+    failures = workflow_contract_failures({"w.yml": text})
+    assert failures == [
+        "w.yml:j holds production credentials ['CF_API_TOKEN'] and is in neither "
+        "GATED_JOBS nor UNGATED_JOBS"
+    ]
+
+
+@pytest.mark.usefixtures("_no_tables")
+def test_an_if_condition_is_an_expression_without_braces():
+    text = (
+        "on: push\njobs:\n  j:\n    runs-on: x\n"
+        "    if: contains(toJSON(secrets), 'x')\n    steps: []\n"
+    )
+    assert workflow_contract_failures({"w.yml": text}) == [_OPAQUE]
+
+
+@pytest.mark.usefixtures("_no_tables")
+def test_an_expression_in_a_mapping_key_is_read():
+    text = 'on: push\njobs:\n  j:\n    env:\n      "${{ secrets.CF_API_TOKEN }}": x\n'
+    assert len(workflow_contract_failures({"w.yml": text})) == 1
+
+
+@pytest.mark.usefixtures("_no_tables")
+def test_a_yaml_comment_is_not_a_secret_read():
+    text = "on: push\n# ${{ secrets['CF_API_TOKEN'] }}\njobs:\n  j:\n    steps: []\n"
+    assert workflow_contract_failures({"w.yml": text}) == []
+
+
+@pytest.mark.usefixtures("_no_tables")
+@pytest.mark.parametrize(
+    "text",
+    [
+        "on: push\njobs:\n  j:\n    steps:\n      - run: cat docs/ssot/secrets.md\n",
+        "on:\n  push:\n    paths: ['**/secrets.ctmpl']\njobs:\n  j:\n    steps: []\n",
+    ],
+    ids=["file-name-in-run", "file-name-in-paths"],
+)
+def test_a_file_name_that_contains_secrets_is_not_a_credential(text):
+    assert workflow_contract_failures({"w.yml": text}) == []
+
+
+@pytest.mark.usefixtures("_no_tables")
+def test_a_new_secret_in_an_expression_is_still_a_credential():
+    assert workflow_contract_failures(
+        {"w.yml": _job_env("${{ secrets.NEW_NAME }}")}
+    ) == [
+        "w.yml:j holds production credentials ['NEW_NAME'] and is in neither "
+        "GATED_JOBS nor UNGATED_JOBS"
+    ]
+
+
+def _environment_scalar(block: str) -> dict[str, dict]:
+    text = (
+        "jobs:\n  j:\n    steps:\n      - run: x\n        env:\n"
+        "          K: ${{ secrets.DOKPLOY_API_KEY }}\n"
+        f"    environment: {block}\n"
+        "      ${{ inputs.type == 'prod' && 'production' || 'staging' }}\n"
+    )
+    return {"w.yml": yaml.safe_load(text)}
+
+
+@pytest.mark.parametrize("block", ["|", ">"])
+def test_a_block_scalar_environment_with_a_final_newline_is_rejected(block):
+    errors = contract_errors(
+        _environment_scalar(block), {_KEY: "inputs.type == 'prod'"}, {}
+    )
+    assert len(errors) == 1 and "environment must be" in errors[0]
+
+
+@pytest.mark.parametrize("block", ["|-", ">-"])
+def test_a_block_scalar_without_the_final_newline_is_the_plain_form(block):
+    errors = contract_errors(
+        _environment_scalar(block), {_KEY: "inputs.type == 'prod'"}, {}
+    )
+    assert errors == []

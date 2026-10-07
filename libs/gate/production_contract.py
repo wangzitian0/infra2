@@ -11,7 +11,7 @@ to the workflows of the pull request head.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 
 import yaml
 
@@ -81,23 +81,81 @@ UNGATED_JOBS: dict[tuple[str, str], str] = {
     ): "scheduled standing automation, class pending",
 }
 
+# Used with fullmatch: a block scalar adds a final newline, and that form fails (#1138).
 _GATED_EXPRESSION = re.compile(
-    r"^\$\{\{\s*(?P<condition>.+?)\s*&&\s*'production'\s*\|\|\s*'staging'\s*\}\}$"
+    r"\$\{\{\s*(?P<condition>.+?)\s*&&\s*'production'\s*\|\|\s*'staging'\s*\}\}"
 )
 
-
+# The contract reads parsed values only, never raw file text: a YAML escape such as
+# `s\x65crets` changes the raw text but not the value that GitHub reads (#1138).
+# String literals ('...', with '' as the escape) are removed before each scan.
+_NAIVE_EXPRESSION = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
+_STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
 _SECRET_NAME = re.compile(r"(?<![\w.-])(?i:secrets)\.([A-Za-z0-9_]+)")
+# A `secrets` reference that is not the literal `secrets.NAME` form hides the name.
+_OPAQUE_SECRETS = re.compile(r"(?<![\w.-])(?i:secrets)\b(?!\.[A-Z0-9_]+\b)")
+_ANY_SECRETS = re.compile(r"(?<![\w.-])(?i:secrets)\b")
 
 
-def _secrets_read(job: dict) -> set[str]:
-    """Production secrets that `job` reads: every named secret not in the benign list.
-    GitHub secret names are not case sensitive, so names compare in upper case."""
-    text = yaml.dump(job)
+def _expression_bodies(text: str) -> list[str]:
+    """The body of each `${{ ... }}` in `text`, read two ways. One way ends at the
+    first `}}` outside a string literal; the other ends at the first `}}`. Both are
+    scanned, so the result fails closed whichever way GitHub reads it."""
+    bodies = [match.group(1) for match in _NAIVE_EXPRESSION.finditer(text)]
+    start = text.find("${{")
+    while start != -1:
+        index, quoted = start + 3, False
+        while index < len(text):
+            if text[index] == "'":
+                if quoted and text.startswith("''", index):
+                    index += 2
+                    continue
+                quoted = not quoted
+            elif not quoted and text.startswith("}}", index):
+                break
+            index += 1
+        bodies.append(text[start + 3 : index])
+        start = text.find("${{", index + 2)
+    return [_STRING_LITERAL.sub("''", body) for body in bodies]
+
+
+def _expressions(node: object) -> Iterator[str]:
+    """Each expression body in a parsed workflow, from every string key and value at
+    any depth. The value of an `if:` key is an expression even without `${{ }}`."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield from _expressions(key)
+            if key == "if" and isinstance(value, str) and "${{" not in value:
+                yield _STRING_LITERAL.sub("''", value)
+            else:
+                yield from _expressions(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _expressions(item)
+    elif isinstance(node, str):
+        yield from _expression_bodies(node)
+
+
+def _secrets_read(node: object) -> set[str]:
+    """Production secrets that `node` reads in its expressions: every named secret not
+    in the benign list. Secret names are not case sensitive, so they compare in upper
+    case."""
     return {
         match.group(1).upper()
-        for match in _SECRET_NAME.finditer(text)
+        for body in _expressions(node)
+        for match in _SECRET_NAME.finditer(body)
         if match.group(1).upper() not in NON_PRODUCTION_SECRETS
     }
+
+
+def _opaque_secret_reads(node: object) -> bool:
+    """True when an expression of `node` reads `secrets` other than as `secrets.NAME`."""
+    for body in _expressions(node):
+        if _OPAQUE_SECRETS.search(body):
+            return True
+        if any(match.group(0) != "secrets" for match in _ANY_SECRETS.finditer(body)):
+            return True
+    return False
 
 
 def _writes_contents(workflow: dict, job: dict) -> bool:
@@ -135,7 +193,7 @@ def _environment_error(
         if environment != "production":
             return f"{label} always runs against production; environment is {environment!r}"
         return None
-    match = _GATED_EXPRESSION.match(environment)
+    match = _GATED_EXPRESSION.fullmatch(environment)
     if match is None:
         return f"{label} environment must be '${{{{ <condition> && 'production' || 'staging' }}}}'"
     condition = _normalized(match.group("condition"))
@@ -191,25 +249,6 @@ def contract_errors(
 OWNER_HELD_WORKFLOWS: frozenset[str] = frozenset()
 
 
-# A `secrets` reference in an expression that is not the literal `secrets.NAME` form.
-# The name scan of `_secrets_read` cannot see which secret such a reference reads.
-# String literals ('...', with '' as the escape) are removed first: they are not reads.
-_EXPRESSION = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
-_STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
-_OPAQUE_SECRETS = re.compile(r"(?<![\w.-])(?i:secrets)\b(?!\.[A-Z0-9_]+\b)")
-_ANY_SECRETS = re.compile(r"(?<![\w.-])(?i:secrets)\b")
-
-
-def _opaque_secret_reads(text: str) -> bool:
-    for expression in _EXPRESSION.finditer(text):
-        body = _STRING_LITERAL.sub("''", expression.group(1))
-        if _OPAQUE_SECRETS.search(body):
-            return True
-        if any(match.group(0) != "secrets" for match in _ANY_SECRETS.finditer(body)):
-            return True
-    return False
-
-
 def workflow_contract_failures(texts: Mapping[str, str]) -> list[str]:
     """Contract failures for workflow file name -> YAML text. Empty means satisfied.
 
@@ -242,7 +281,7 @@ def workflow_contract_failures(texts: Mapping[str, str]) -> list[str]:
             failures.append(
                 f"{name} reads production credentials {sorted(outside)} outside a job"
             )
-        if _opaque_secret_reads(text):
+        if _opaque_secret_reads(document):
             failures.append(f"{name} reads a secret by a name that is not literal")
         for job_name, job in jobs.items():
             if job.get("secrets") == "inherit":
