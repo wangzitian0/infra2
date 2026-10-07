@@ -482,12 +482,13 @@ LOCK_VERIFIED = (
 )
 
 
+LOCK_NOT_READ = "production lock NOT verified: not read"
+
+
 def lock_status(facts: HeadFacts) -> str:
     """One line on the production lock (#1138). It informs; it never decides."""
     if facts.lock_failures is None:
-        return (
-            "production lock NOT verified: not read (closed PR or another repository)"
-        )
+        return f"{LOCK_NOT_READ} (closed PR or another repository)"
     if not facts.lock_failures:
         return LOCK_VERIFIED
     return f"production lock NOT verified: {'; '.join(facts.lock_failures)}"

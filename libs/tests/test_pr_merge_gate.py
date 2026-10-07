@@ -283,6 +283,7 @@ class _Gh:
         body="",
         files=("libs/probe_specs.py",),
         lock="holds",
+        state="OPEN",
     ):
         self.calls: list[list[str]] = []
         self.unresolved = unresolved
@@ -291,6 +292,7 @@ class _Gh:
         self.body = body
         self.files = files
         self.lock = lock  # "holds", or "unreadable" for every lock read
+        self.state = state
 
     def __call__(self, argv):
         if argv[:1] == ["api"] and "/git/trees/" in argv[1]:
@@ -303,7 +305,7 @@ class _Gh:
                 {
                     "number": 704,
                     "id": "PR_node",
-                    "state": "OPEN",
+                    "state": self.state,
                     "isDraft": False,
                     "baseRefName": "main",
                     "headRefOid": "feedfacefeedface",
@@ -2588,3 +2590,62 @@ def test_a_new_blocking_gate_holds_its_workflow(tmp_path, monkeypatch):
     assert _required_check_workflows() == frozenset({INFRA_CI, deploy})
     verdict = gate.evaluate(_green(files=(deploy,), lock_failures=HOLDS), now=NOW)
     assert verdict.owner_required and _required_line(deploy) in verdict.reasons
+
+
+# --- #1138 re-audit L7 and L8: the lock line and keys on every exit ------------------
+
+
+def _json_verdict(capsys) -> dict:
+    return json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+
+
+@pytest.mark.parametrize("gh", [_StaleCheckoutGh, _BrokenGh], ids=["stale", "broken"])
+def test_an_unevaluable_run_reports_an_unread_lock(gh, capsys):
+    assert gate.main(["704", "--json"], gh=gh(), now=lambda: NOW) == 4
+    doc = _json_verdict(capsys)
+    assert doc["lock_verified"] is False and doc["lock_failures"] is None
+    assert gate.main(["704"], gh=gh(), now=lambda: NOW) == 4
+    assert "production lock NOT verified: not read" in _printed(capsys)
+
+
+@pytest.mark.parametrize(
+    "argv, gh",
+    [
+        (["704", "--json"], lambda: _Gh(files=RELEASE_CODE, state="MERGED")),
+        (["704", "--json", "--repo", "wangzitian0/truealpha"], lambda: _Gh()),
+    ],
+    ids=["closed-pr", "another-repository"],
+)
+def test_an_unread_lock_is_not_reported_as_verified(argv, gh, capsys):
+    gate.main(argv, gh=gh(), now=lambda: READY_AT)
+    doc = _json_verdict(capsys)
+    assert doc["lock_verified"] is False and doc["lock_failures"] is None
+
+
+@pytest.mark.parametrize(
+    "overrides, outcome",
+    [
+        ({"files": ("AGENTS.md",)}, "owner"),
+        ({"draft": True}, "action"),
+        ({"rule_drift": ("AGENTS.md",)}, "unevaluable"),
+        ({"last_push_at": NOW - 60}, "wait"),
+    ],
+)
+def test_every_outcome_ends_with_the_lock_line(overrides, outcome):
+    for lock in ((), ("no required reviewer",), None):
+        facts = _green(lock_failures=lock, **overrides)
+        verdict = gate.evaluate(facts, now=NOW)
+        assert verdict.outcome == outcome, verdict.reasons
+        last = gate.render(facts, verdict).splitlines()[-1]
+        assert last == f"  {gate.lock_status(facts)}", last
+
+
+@pytest.mark.parametrize("error", [OSError("gh not found"), RuntimeError("HTTP 502")])
+def test_a_runner_error_in_the_lock_read_is_a_failure_not_a_crash(error):
+    def broken(argv):
+        raise error
+
+    failures = gate._production_lock_failures("wangzitian0/infra2", "abc", gh=broken)
+    assert failures and all(isinstance(f, str) for f in failures)
+    if isinstance(error, OSError):
+        assert failures == ("the lock check failed: OSError: gh not found",)
