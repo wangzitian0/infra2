@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 import types
 from pathlib import Path
 
@@ -454,18 +453,6 @@ def test_ops_checks_schedules_the_reconcile_and_alerts_out_of_band() -> None:
     )
     assert (
         "'27 8 * * *' && 'infra2-secrets-reconcile'" in workflow["concurrency"]["group"]
-    )
-
-
-def test_runner_image_pins_the_same_sdk_wheel_as_pyproject() -> None:
-    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    requirements = (ROOT / "bootstrap/06.iac_runner/requirements.txt").read_text(
-        encoding="utf-8"
-    )
-    wanted = re.search(r'"infra2-sdk @ (https://\S+?)"', pyproject).group(1)
-    pinned = re.search(r"^infra2-sdk @ (https://\S+)$", requirements, re.M)
-    assert pinned and pinned.group(1) == wanted, (
-        "runner image and workspace must run the same SDK"
     )
 
 

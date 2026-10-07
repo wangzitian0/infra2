@@ -29,8 +29,8 @@ EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 
 REPO_NAME = Path(urlparse(GIT_REPO_URL).path).stem
 
-# The iac-runner image bakes only this directory (build context = here), so
-# `libs/` is NOT importable from /app. The dependency matcher + manifest live in
+# The iac-runner image bakes only webhook_server.py, sync_runner.py and the pinned
+# infra2-sdk, so `libs/` is NOT importable from /app. The dependency matcher + manifest live in
 # the checked-out repo; put it on the path so the lazy
 # `from libs.deploy.dependencies import ...` calls resolve (after update_repo()).
 _CHECKOUT_PATH = str(WORKSPACE / REPO_NAME)

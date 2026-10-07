@@ -1,8 +1,8 @@
 """uv.lock is the only infra2-sdk pin (#1115).
 
 infra2-sdk re-uploaded v3.0.0 under the same URL on 2026-10-06 (#1113,
-infra2-sdk#70). uv.lock caught it in CI. The alerting and todo images and the
-deploy workflows installed `infra2-sdk @ <url>` with no hash and would have taken
+infra2-sdk#70). uv.lock caught it in CI. The runner, the alerting and todo images and
+the deploy workflows installed `infra2-sdk @ <url>` with no hash and would have taken
 the new bytes. Several files also spelled the URL out, and a test kept each copy
 equal to pyproject.toml.
 
@@ -10,8 +10,7 @@ Every install outside uv now reads tools/sdk_requirement.py, which turns the
 locked URL and sha256 into a requirement that pip verifies. These tests hold
 that: the lock is read correctly, a bad lock fails closed, each image and each
 workflow step feeds the script's output to pip whole, and no other file names the
-wheel. The iac-runner image and deploy.yml keep their pin until the bootstrap PR
-(BOOTSTRAP_PINS_UNTIL_THEIR_PR).
+wheel.
 """
 
 from __future__ import annotations
@@ -37,21 +36,14 @@ WORKFLOWS = ROOT / ".github/workflows"
 WHEEL = re.compile(r"infra2[-_]sdk/releases/download/v\d|infra2_sdk-\d+\.\d+\.\d+-py3")
 #: Image builds that install infra2-sdk through the script.
 IMAGES = (
+    "bootstrap/06.iac_runner/Dockerfile",
     "platform/12.alerting/Dockerfile",
     "platform/30.todo/Dockerfile",
 )
-#: Files that still name the wheel because their install is not on the script yet.
-#: A push to main that changes bootstrap/06.iac_runner/** or .github/workflows/deploy.yml
-#: runs the bootstrap job of deploy.yml, which rebuilds and restarts the production
-#: iac-runner. That is a production change that needs the owner present, so these
-#: files have their own PR. deploy.yml has the same gap in another shape: it greps the
-#: URL out of pyproject.toml and installs it with no hash. That PR fixes both and
-#: empties this set; test_each_bootstrap_pin_exception_is_still_needed fails until it does.
-BOOTSTRAP_PINS_UNTIL_THEIR_PR = frozenset({"bootstrap/06.iac_runner/requirements.txt"})
 #: The fewest script call sites each workflow keeps. A scan that finds fewer reads
 #: nothing, and the whole-requirement test would pass on an empty set.
-#: deploy.yml joins this table in the bootstrap PR.
 MIN_WORKFLOW_SITES = {
+    "deploy.yml": 1,
     "deploy-report-main.yml": 1,
     "infra-ci.yml": 3,
     "ops-checks.yml": 1,
@@ -216,11 +208,7 @@ def test_the_expected_workflows_install_the_sdk_through_the_script() -> None:
 def test_only_pyproject_and_the_lock_name_the_wheel() -> None:
     offenders = []
     for rel in _tracked_files():
-        if (
-            rel in ("pyproject.toml", "uv.lock")
-            or rel in BOOTSTRAP_PINS_UNTIL_THEIR_PR
-            or rel.startswith("docs/project/")
-        ):
+        if rel in ("pyproject.toml", "uv.lock") or rel.startswith("docs/project/"):
             continue
         try:
             text = (ROOT / rel).read_text(encoding="utf-8")
@@ -229,10 +217,3 @@ def test_only_pyproject_and_the_lock_name_the_wheel() -> None:
         if WHEEL.search(text):
             offenders.append(rel)
     assert offenders == [], "read the pin through tools/sdk_requirement.py"
-
-
-def test_each_bootstrap_pin_exception_is_still_needed() -> None:
-    for rel in sorted(BOOTSTRAP_PINS_UNTIL_THEIR_PR):
-        assert WHEEL.search((ROOT / rel).read_text(encoding="utf-8")), (
-            f"{rel} no longer names the wheel: delete it from BOOTSTRAP_PINS_UNTIL_THEIR_PR"
-        )

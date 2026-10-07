@@ -58,3 +58,11 @@ services:
     depends_on:
       - uv.lock
       - tools/sdk_requirement.py
+  # The iac-runner image does the same. bootstrap/iac-runner is not in the deploy_v2
+  # registry: its rebuild is the bootstrap job of deploy.yml, which runs when
+  # bootstrap/06.iac_runner/** changes, or by dispatch with service=bootstrap/iac-runner.
+  # An SDK bump alone does not trigger it. This entry keeps its config hash honest.
+  bootstrap/iac-runner:
+    depends_on:
+      - uv.lock
+      - tools/sdk_requirement.py

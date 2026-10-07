@@ -198,9 +198,11 @@ jobs:
           python-version: "3.11"
 
       - name: Install runtime dependencies
-        # libs/env.py reads secret stores through infra2-sdk; install the exact wheel
-        # pyproject pins so this job runs the same code as the runner (#649).
-        run: python -m pip install invoke httpx python-dotenv rich "$(grep -oE 'infra2-sdk @ https://[^"]+' pyproject.toml)"
+        # libs/env.py reads secret stores through infra2-sdk; install the wheel uv.lock
+        # pins, hash-verified, so this job runs the same code as the runner (#649, #1115).
+        run: |
+          sdk="$(python tools/sdk_requirement.py)"
+          python -m pip install invoke httpx python-dotenv rich "$sdk"
 
       - name: Configure SSH key for the pre-deploy schema gate
         # Same optional-provisioning shape as ops-checks.yml's watchdog jobs: a

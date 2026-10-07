@@ -62,8 +62,8 @@ services:
 
   iac-runner:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ../..
+      dockerfile: bootstrap/06.iac_runner/Dockerfile
       args:
         - GIT_SHA=${GIT_SHA:-latest}
     # Always rebuild from source when deploying (no image caching)

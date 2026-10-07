@@ -208,20 +208,6 @@ def test_vault_writes_use_update_not_patch(monkeypatch) -> None:
     )  # no-op write
 
 
-def test_workflow_deploy_jobs_install_the_pinned_sdk() -> None:
-    import re
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parents[2]
-    # The other deploy workflows read the pin through tools/sdk_requirement.py
-    # (libs/tests/test_sdk_requirement.py). deploy.yml follows in the bootstrap PR.
-    for wf in ("deploy.yml",):
-        text = (root / ".github/workflows" / wf).read_text(encoding="utf-8")
-        assert re.search(
-            r"pip install invoke httpx python-dotenv rich .*infra2-sdk @ https://", text
-        ), wf
-
-
 def test_deployer_sync_under_secrets_supply_action_stops_after_the_supply(
     monkeypatch,
 ) -> None:

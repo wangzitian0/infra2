@@ -7,6 +7,7 @@ import hmac
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -1260,7 +1261,8 @@ def test_iac_runner_public_health_check_retries_with_diagnostics() -> None:
 
 
 def test_iac_runner_bootstrap_deploy_script_is_scoped_to_runner_source() -> None:
-    """Infra-011.8: self-update preserves Dokploy drift outside runner source."""
+    """Infra-011.8: self-update preserves Dokploy drift outside the runner source and
+    the two files its image bakes (uv.lock, tools/sdk_requirement.py; #1115)."""
     script = BOOTSTRAP_DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
     assert "docker inspect iac-runner" in script
@@ -1274,6 +1276,54 @@ def test_iac_runner_bootstrap_deploy_script_is_scoped_to_runner_source() -> None
     assert "--force-recreate" in script
     assert "Health check timed out for iac-runner" in script
     assert "cat /secrets/.env" not in script
+
+
+def _checked_out_paths(script: str) -> list[str]:
+    """Paths of `git checkout -f "$INFRA2_DEPLOY_SHA" -- <paths>` in the script."""
+    match = re.search(
+        r'git -C "\$code_dir" checkout -f "\$INFRA2_DEPLOY_SHA" -- ([^\n]+)\n', script
+    )
+    assert match, "the bootstrap script has no checkout of the deploy SHA"
+    return match.group(1).split()
+
+
+def _copy_sources(dockerfile: str) -> list[str]:
+    """COPY/ADD sources that come from the build context, not from another stage."""
+    sources: list[str] = []
+    for line in dockerfile.replace("\\\n", " ").splitlines():
+        parts = line.split()
+        if not parts or parts[0].upper() not in {"COPY", "ADD"}:
+            continue
+        if any(part.startswith("--from") for part in parts[1:]):
+            continue
+        operands = [part for part in parts[1:] if not part.startswith("--")]
+        sources += operands[:-1]
+    return sources
+
+
+def test_the_bootstrap_checkout_covers_every_path_the_runner_image_copies() -> None:
+    """The VPS builds from the Dokploy clone, and the checkout above never moves its
+    HEAD. A COPY source outside the checked-out paths is read from the clone's old
+    working tree. On 2026-10-07 that tree was at 2026-06-17 and had no
+    tools/sdk_requirement.py, so the first build would have failed (#1115)."""
+    compose = yaml.safe_load((IAC_RUNNER / "compose.yaml").read_text(encoding="utf-8"))
+    build = compose["services"]["iac-runner"]["build"]
+    context = (IAC_RUNNER / build["context"]).resolve()
+    dockerfile = (context / build["dockerfile"]).read_text(encoding="utf-8")
+    checked = [
+        path.rstrip("/")
+        for path in _checked_out_paths(
+            BOOTSTRAP_DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        )
+    ]
+    sources = _copy_sources(dockerfile)
+    assert sources, "no COPY source found: the scan reads nothing"
+    for source in sources:
+        rel = (context / source).relative_to(ROOT).as_posix()
+        assert any(rel == path or rel.startswith(path + "/") for path in checked), (
+            f"{rel} is COPYed by the runner image but the bootstrap script does not "
+            f"check it out at the deploy SHA (checked out: {checked})"
+        )
 
 
 def test_iac_runner_bootstrap_deploy_script_persists_dokploy_ownership() -> None:
