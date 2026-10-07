@@ -484,7 +484,7 @@ def test_a_yaml_comment_is_not_a_secret_read():
 @pytest.mark.parametrize(
     "text",
     [
-        "on: push\njobs:\n  j:\n    steps:\n      - run: cat docs/ssot/secrets.md\n",
+        "on: push\njobs:\n  j:\n    steps:\n      - run: cat runbook/secrets.md\n",
         "on:\n  push:\n    paths: ['**/secrets.ctmpl']\njobs:\n  j:\n    steps: []\n",
     ],
     ids=["file-name-in-run", "file-name-in-paths"],
