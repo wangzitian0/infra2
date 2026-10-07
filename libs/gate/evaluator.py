@@ -9,6 +9,7 @@ from pathlib import PurePosixPath
 from libs.gate.inventory import (
     _declared_deploy_globs,
     _deploy_triggering,
+    _required_check_workflows,
     _required_checks,
 )
 
@@ -143,14 +144,21 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
         )
 
     # The production lock (#1138) replaces the owner for a workflow file, unless the
-    # file is on OWNER_HELD_WORKFLOWS. Every other self-governing path stays with the
-    # owner.
+    # file defines a required check or is on OWNER_HELD_WORKFLOWS. A held file follows
+    # the direction proof or goes to the owner. An unreadable inventory holds every
+    # workflow file. Every other self-governing path stays with the owner.
     lock_holds = facts.lock_failures == ()
     owner_held = production_contract.OWNER_HELD_WORKFLOWS
+    required_workflows = _required_check_workflows()
     uncovered = sorted(
         f
         for f in facts.files
-        if f.startswith(WORKFLOW_PREFIX) and PurePosixPath(f).name in owner_held
+        if f.startswith(WORKFLOW_PREFIX)
+        and (
+            required_workflows is None
+            or f in required_workflows
+            or PurePosixPath(f).name in owner_held
+        )
     )
     lock_covered = {
         f
@@ -210,10 +218,25 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
             f"production lock not verified: {'; '.join(facts.lock_failures)}"
         )
     elif lock_holds and (held := [f for f in held_workflows if f in uncovered]):
-        reasons.append(
-            f"the production lock does not cover {', '.join(held)}: the file is on "
-            "OWNER_HELD_WORKFLOWS in libs/gate/production_contract.py"
-        )
+        if required_workflows is None:
+            reasons.append(
+                "cannot read a blocking gate with a workflow from "
+                "docs/ssot/ci-gate-inventory.yaml: the production lock releases no "
+                f"workflow file ({', '.join(held)})"
+            )
+        else:
+            for f in held:
+                if f in required_workflows:
+                    reasons.append(
+                        f"{f} defines a required check: the owner approves head "
+                        f"{facts.head_sha[:7]} unless the change is proven tighter"
+                    )
+            listed = [f for f in held if f not in required_workflows]
+            if listed:
+                reasons.append(
+                    f"the production lock does not cover {', '.join(listed)}: the "
+                    "file is on OWNER_HELD_WORKFLOWS in libs/gate/production_contract.py"
+                )
 
     required, inventory_read = _required_checks()
     if not inventory_read:

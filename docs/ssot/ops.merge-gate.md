@@ -117,8 +117,11 @@ The gate also applies the production contract to every workflow file of the head
 The contract tables are in `libs/gate/production_contract.py`.
 The lock holds when the four facts are true and the head satisfies the contract. Then:
 
-- A workflow change does not need the owner, except for a file on `OWNER_HELD_WORKFLOWS`.
-  The held list is in `libs/gate/production_contract.py`. It is empty by decision of 2026-10-08.
+- The agent merges a workflow edit, except in a workflow that defines a required check.
+  That workflow follows the direction proof, or it goes to the owner.
+  The gate derives these workflows from the `blocks_merge: true` gates in `ci-gate-inventory.yaml`.
+  When the gate cannot read such a gate, the lock releases no workflow file.
+  A file on `OWNER_HELD_WORKFLOWS` in `libs/gate/production_contract.py` is also held. That list is empty by decision of 2026-10-08.
 - A deploy-triggering path does not need the owner. Each production job waits for the environment reviewer.
 
 Fail closed: when a fact is false or unreadable, the earlier rules apply. The verdict names each failure.

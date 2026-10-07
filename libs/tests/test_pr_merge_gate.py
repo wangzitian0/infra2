@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from libs.gate import production_contract
+from libs.gate.inventory import _required_check_workflows
 from tools import pr_merge_gate as gate
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -2214,7 +2215,9 @@ def test_a_deploy_path_still_needs_the_owner_even_with_a_red_check():
 # --- #1138: the production lock replaces the owner for covered workflow changes -----
 
 HOLDS: tuple[str, ...] = ()
-CI_WORKFLOW = f"{gate.WORKFLOW_PREFIX}infra-ci.yml"
+# A workflow that defines no required check and starts no deploy. infra-ci.yml defines
+# the required checks, so the lock does not release it (#1138 F11).
+CI_WORKFLOW = f"{gate.WORKFLOW_PREFIX}docs.yml"
 
 
 def test_a_workflow_change_merges_without_the_owner_when_the_lock_holds():
@@ -2448,3 +2451,104 @@ def test_an_unverified_lock_alone_changes_no_verdict():
     for lock in (None, (), ("no required reviewer",)):
         verdict = gate.evaluate(_green(files=RELEASE_CODE, lock_failures=lock), now=NOW)
         assert verdict.ready and verdict.exit_code == 0, (lock, verdict.reasons)
+
+
+# --- #1138 F11: a workflow that defines a required check stays held -----------------
+
+INFRA_CI = f"{gate.WORKFLOW_PREFIX}infra-ci.yml"
+
+
+def _required_line(path: str) -> str:
+    return (
+        f"{path} defines a required check: the owner approves head abcdef0 unless "
+        "the change is proven tighter"
+    )
+
+
+def test_the_required_check_workflows_are_derived_from_the_inventory():
+    assert _required_check_workflows() == frozenset({INFRA_CI})
+
+
+def test_a_required_check_workflow_needs_the_owner_when_the_lock_holds():
+    verdict = gate.evaluate(_green(files=(INFRA_CI,), lock_failures=HOLDS), now=NOW)
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert _required_line(INFRA_CI) in verdict.reasons
+
+
+def test_a_proven_tighter_required_check_workflow_needs_no_owner():
+    verdict = gate.evaluate(
+        _green(files=(INFRA_CI,), proven_tighter=(INFRA_CI,), lock_failures=HOLDS),
+        now=NOW,
+    )
+    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+
+
+def test_a_workflow_without_a_required_check_is_the_agents_when_the_lock_holds():
+    path = f"{gate.WORKFLOW_PREFIX}ops-checks.yml"
+    verdict = gate.evaluate(_green(files=(path,), lock_failures=HOLDS), now=NOW)
+    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+
+
+def test_a_mixed_pr_names_only_the_required_check_workflow():
+    deploy = f"{gate.WORKFLOW_PREFIX}deploy.yml"
+    verdict = gate.evaluate(
+        _green(files=(INFRA_CI, deploy), lock_failures=HOLDS), now=NOW
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
+    decides = next(r for r in verdict.reasons if "what decides merges" in r)
+    assert INFRA_CI in decides and deploy not in decides
+    assert _required_line(INFRA_CI) in verdict.reasons
+    assert not any(deploy in r for r in verdict.reasons), verdict.reasons
+
+
+def _inventory_at(tmp_path, monkeypatch, gates) -> None:
+    """A checkout whose inventory holds `gates` (None: no inventory file)."""
+    import yaml
+
+    if gates is not None:
+        (tmp_path / "docs" / "ssot").mkdir(parents=True)
+        (tmp_path / "docs" / "ssot" / "ci-gate-inventory.yaml").write_text(
+            yaml.safe_dump({"version": 1, "gates": gates})
+        )
+    monkeypatch.setattr(gate, "ROOT", tmp_path)
+
+
+@pytest.mark.parametrize(
+    "gates",
+    [
+        None,
+        [],
+        [{"id": "x", "workflow": INFRA_CI, "job": "j", "blocks_merge": False}],
+        [{"id": "x", "job": "j", "blocks_merge": True}],
+    ],
+    ids=[
+        "no-inventory",
+        "no-gates",
+        "no-blocking-gate",
+        "blocking-gate-without-workflow",
+    ],
+)
+def test_an_unreadable_inventory_releases_no_workflow(tmp_path, monkeypatch, gates):
+    _inventory_at(tmp_path, monkeypatch, gates)
+    assert _required_check_workflows() is None
+    verdict = gate.evaluate(_green(files=(CI_WORKFLOW,), lock_failures=HOLDS), now=NOW)
+    assert verdict.owner_required
+    assert any(
+        r.startswith("cannot read a blocking gate with a workflow from ")
+        and CI_WORKFLOW in r
+        for r in verdict.reasons
+    ), verdict.reasons
+
+
+def test_a_new_blocking_gate_holds_its_workflow(tmp_path, monkeypatch):
+    import yaml
+
+    gates = yaml.safe_load((ROOT / "docs/ssot/ci-gate-inventory.yaml").read_text())[
+        "gates"
+    ]
+    deploy = f"{gate.WORKFLOW_PREFIX}deploy.yml"
+    new_gate = {"id": "infra_ci.new", "workflow": deploy, "job": "deploy"}
+    _inventory_at(tmp_path, monkeypatch, [*gates, {**new_gate, "blocks_merge": True}])
+    assert _required_check_workflows() == frozenset({INFRA_CI, deploy})
+    verdict = gate.evaluate(_green(files=(deploy,), lock_failures=HOLDS), now=NOW)
+    assert verdict.owner_required and _required_line(deploy) in verdict.reasons

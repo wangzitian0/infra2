@@ -155,6 +155,24 @@ def _deploy_triggering(path: str) -> str:
     return ""
 
 
+INVENTORY = "docs/ssot/ci-gate-inventory.yaml"
+
+
+def _required_check_workflows() -> frozenset[str] | None:
+    """Workflow paths that define a `blocks_merge: true` gate (#1138), derived from
+    the inventory through `_blocking_coordinates`. None when the inventory cannot be
+    read or parsed, has no blocking gate, or has a blocking gate without a workflow."""
+    try:
+        text = (_get_root() / INVENTORY).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    coordinates = _blocking_coordinates(text)
+    if not coordinates:
+        return None
+    workflows = frozenset(workflow for _, workflow, _ in coordinates)
+    return None if "" in workflows else workflows
+
+
 @functools.lru_cache(maxsize=1)
 def _required_checks() -> tuple[frozenset[str], bool]:
     """Display names of the `blocks_merge: true` gates, and whether they read."""
