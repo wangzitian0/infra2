@@ -35,13 +35,16 @@
 - **安全与运维门禁**：无敏感文件；已说明风险、回滚与 0 宕机影响；涉及 state discrepancy、密钥或生产数据时已按对应 SSOT 执行并留证。
 **仍需 owner 的两类，判据各不相同，分别列**：
 
-- **其一，按环境划线：staging 可自行部署，prod 不可**（2026-09-21 owner 批准）。
-  合流触发 staging 部署、临时槽 canary（`ops-checks.yml` 的 `deploy-v2-canary`，目标是保留的
-  `pr-0`）、`report-branch-main` 预览重部署——**均属 AI 自行合流范围**，不需要逐次批准。
-  触及 **prod** 的则必须取得 owner 对**当前 `head SHA`** 的明确批准，对旧 head 的批准不顺延：
-  prod apply、prod promote、L1 bootstrap self-update、`bootstrap/06.iac_runner/**` 触发的
-  runner 重建、尚未解耦的 observability apply（它直接打 live SigNoz）。
-  判据是**打到哪个环境**，其次才是可逆性；两者冲突时以环境为准。
+- **First class: the target environment decides. Staging is the agent's; production is the owner's** (owner approval, 2026-09-21).
+  The agent merges a change that starts a staging deploy, the canary on the reserved slot `pr-0`, or the `report-branch-main` preview.
+  The canary is the `deploy-v2-canary` job of `ops-checks.yml`. These merges need no approval.
+  These production jobs need the owner: prod apply, prod promote, L1 bootstrap self-update, and the observability apply.
+  The runner rebuild that `bootstrap/06.iac_runner/**` starts also needs the owner.
+  When the production lock holds, a merge that starts one of these jobs only creates a run.
+  That run waits until the owner approves it in the `production` environment. The merge itself needs no approval.
+  When the lock does not hold or cannot be read, the merge needs the owner's approval of the current head SHA.
+  An approval of an older head does not apply. See [Production lock](#production-lock).
+  The target environment decides first, then reversibility. When the two disagree, the environment decides.
 - **其二，改动"决定合流的东西"（判据与环境、可逆性均无关，是自我裁决问题）**：门禁从工作树读取规则，而 AI 合流自己的 PR
   时那就是该 PR 的分支——改动因此由它自己引入的版本审判。这是自我裁决问题，不是不可逆问题，
   所以单列。
@@ -119,10 +122,18 @@ The lock holds when the four facts are true and the head satisfies the contract.
 Fail closed: when a fact is false or unreadable, the earlier rules apply. The verdict names each failure.
 When the lock holds, these changes still need the owner: the gate code and data, their tests, the rule-text files, and the contract tables.
 
+The contract is strict in two ways.
+A conditional job must use the exact condition in its table entry. A condition that only contains it fails.
+A job that reads any secret outside `NON_PRODUCTION_SECRETS` holds a production credential and must be in a table.
+
 Limits of the lock:
 
+- The lock reader counts reviewers; it does not check who they are.
+- The gate checks that a gated job declares the right environment.
+  It does not check that the job body keeps using the input that selects the environment.
+  Example: a body edit hard-codes `--type prod`, and the environment condition still reads `inputs.type`.
 - The lock does not cover the production credentials that ungated jobs read.
-- The code that those jobs run is outside the gate. An agent can merge a change to it.
+- The bodies of ungated jobs and the code they run are outside the gate (#1147). An agent can merge a change to them.
 - The real fix is to scope those credentials to the `production` environment (#1147).
 
 ## 授权沿革
