@@ -154,6 +154,9 @@ jobs:
           && inputs.service != 'bootstrap/iac-runner'
           && (needs.preflight_canary.result == 'success'
               || needs.preflight_canary.result == 'skipped') }}
+    # A prod deploy waits here for the owner (#1125). The canary above runs first, so the
+    # owner approves a deploy whose canary is already green.
+    environment: ${{ inputs.type == 'prod' && 'production' || 'staging' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -278,6 +281,8 @@ jobs:
   bootstrap:
     name: update iac_runner bootstrap
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.service == 'bootstrap/iac-runner') }}
+    # L1 bootstrap self-update and runner rebuild are production changes (#1125).
+    environment: production
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
