@@ -166,29 +166,21 @@ def explain_fanout(
     return FanoutDecision(selected=selected, dropped=dropped)
 
 
-def fanout_coverage_violations(
-    compose_paths, manifest: dict[str, list[str]] | None = None, root: Path = _ROOT
-) -> list[str]:
-    """Config-hash inputs that would not fan out to their service (#1117).
+def _config_hash_inputs(compose_paths, root: Path):
+    """Yield (service key, input path) for every file the config hash reads (#1117).
 
     The config hash reads every file a service's compose builds from or mounts:
     the Dockerfile, its COPY/ADD sources resolved against the build context, and
-    each relative bind mount (`config_hash._compose_artifact_files`). An input
-    outside the service directory that no manifest glob matches changes the
-    hash, yet a change to it selects no service, so a release leaves the
-    service on stale input. Returns sorted "service_key: repo-relative path".
+    each relative bind mount (`config_hash._compose_artifact_files`).
 
-    Raises on a compose file that is not valid YAML: an unread compose has no
-    inputs, and a guard that reads none passes while it checks nothing.
+    Raises on a compose file that is not valid YAML or not in a service
+    directory: an unread compose has no inputs, and a guard that reads none
+    passes while it checks nothing.
     """
     import yaml
 
     from libs.deploy.config_hash import _compose_artifact_files
 
-    root = root.resolve()
-    if manifest is None:
-        manifest = load_dependency_manifest()
-    violations: set[str] = set()
     for compose in compose_paths:
         compose = Path(compose).resolve()
         key = service_key_from_path(compose.relative_to(root).as_posix())
@@ -197,11 +189,36 @@ def fanout_coverage_violations(
         text = compose.read_text(encoding="utf-8")
         yaml.safe_load(text)
         for path in _compose_artifact_files(str(compose), text):
-            try:
-                rel = path.relative_to(root).as_posix()
-            except ValueError:
-                violations.add(f"{key}: {path} (outside the repository)")
-                continue
-            if key not in match_changed_services([rel], manifest=manifest):
-                violations.add(f"{key}: {rel}")
+            yield key, path
+
+
+def config_hash_input_count(compose_paths, root: Path = _ROOT) -> int:
+    """How many files the config hash reads across `compose_paths`.
+
+    Zero means the audit read nothing, so a pass would prove nothing.
+    """
+    return sum(1 for _ in _config_hash_inputs(compose_paths, root.resolve()))
+
+
+def fanout_coverage_violations(
+    compose_paths, manifest: dict[str, list[str]] | None = None, root: Path = _ROOT
+) -> list[str]:
+    """Config-hash inputs that would not fan out to their service (#1117).
+
+    An input outside the service directory that no manifest glob matches changes
+    the hash, yet a change to it selects no service, so a release leaves the
+    service on stale input. Returns sorted "service_key: repo-relative path".
+    """
+    root = root.resolve()
+    if manifest is None:
+        manifest = load_dependency_manifest()
+    violations: set[str] = set()
+    for key, path in _config_hash_inputs(compose_paths, root):
+        try:
+            rel = path.relative_to(root).as_posix()
+        except ValueError:
+            violations.add(f"{key}: {path} (outside the repository)")
+            continue
+        if key not in match_changed_services([rel], manifest=manifest):
+            violations.add(f"{key}: {rel}")
     return sorted(violations)

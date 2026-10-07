@@ -23,8 +23,9 @@
 #
 # Globs are fnmatch-style against repo-relative changed-file paths.
 #
-# Enforcement: `tools/deploy_guard_audit.py` (infra-ci "Gate deploy fan-out
-# coverage" + the scheduled ops-checks deploy-guard-audit task) fails if any file
+# Enforcement: `tools/deploy_guard_audit.py` (the infra-ci `ci_runner preflight`
+# gate "Deploy guard audit" + the scheduled ops-checks step "Audit deploy fan-out
+# coverage (sufficiency)") fails if any file
 # the config hash reads for a service (Dockerfile COPY/ADD source resolved against
 # the build context, or bind mount) is outside the service directory and matches
 # no glob here (#1117). Examples: `COPY libs /app/libs`, `COPY uv.lock /tmp/`.
