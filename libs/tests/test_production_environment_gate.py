@@ -17,6 +17,7 @@ WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 
 # A job that reads one of these secrets can reach a production host or API.
 PRODUCTION_SECRETS = (
+    "CF_API_TOKEN",
     "CF_WORKER_API_TOKEN",
     "DOKPLOY_API_KEY",
     "IAC_WEBHOOK_SECRET",
@@ -89,6 +90,23 @@ def _secrets_read(job: dict) -> set[str]:
     }
 
 
+def _writes_contents(workflow: dict, job: dict) -> bool:
+    """A token with `contents: write` can push a tag, such as a production marker."""
+    permissions = (
+        job["permissions"] if "permissions" in job else workflow.get("permissions")
+    )
+    if permissions == "write-all":
+        return True
+    return isinstance(permissions, dict) and permissions.get("contents") == "write"
+
+
+def _production_credentials(workflow: dict, job: dict) -> list[str]:
+    credentials = sorted(_secrets_read(job))
+    if _writes_contents(workflow, job):
+        credentials.append("permission contents: write")
+    return credentials
+
+
 def _environment_name(job: dict) -> str | None:
     environment = job.get("environment")
     if isinstance(environment, dict):
@@ -135,10 +153,14 @@ def contract_errors(
                     errors.append(
                         f"{workflow_name}:{job_name} is ungated without a reason"
                     )
-            elif _secrets_read(job):
+                if _writes_contents(workflow, job):
+                    errors.append(
+                        f"{workflow_name}:{job_name} is ungated and holds permission contents: write"
+                    )
+            elif credentials := _production_credentials(workflow, job):
                 errors.append(
-                    f"{workflow_name}:{job_name} reads production secrets "
-                    f"{sorted(_secrets_read(job))} and is in neither GATED_JOBS nor UNGATED_JOBS"
+                    f"{workflow_name}:{job_name} holds production credentials "
+                    f"{credentials} and is in neither GATED_JOBS nor UNGATED_JOBS"
                 )
     for key in sorted((set(gated) | set(ungated)) - seen):
         errors.append(f"{key[0]}:{key[1]} is named in the contract and does not exist")
@@ -153,15 +175,15 @@ def test_repository_workflows_satisfy_the_production_environment_contract():
     assert contract_errors(workflows, GATED_JOBS, UNGATED_JOBS) == []
 
 
-def test_the_contract_governs_every_production_secret_job_in_the_tree():
+def test_the_contract_governs_every_production_credential_job_in_the_tree():
     workflows = _load_workflows(WORKFLOWS_DIR)
     reading = {
         (name, job_name)
         for name, workflow in workflows.items()
         for job_name, job in (workflow.get("jobs") or {}).items()
-        if _secrets_read(job)
+        if _production_credentials(workflow, job)
     }
-    assert reading, "no job reads a production secret; the secret list is stale"
+    assert reading, "no job holds a production credential; the credential list is stale"
     assert reading <= set(GATED_JOBS) | set(UNGATED_JOBS)
 
 
@@ -178,7 +200,7 @@ _KEY = ("w.yml", "j")
 def test_a_new_job_that_reads_a_production_secret_is_reported():
     errors = contract_errors(_workflow(_READS_SECRET), {}, {})
     assert len(errors) == 1
-    assert "w.yml:j reads production secrets ['DOKPLOY_API_KEY']" in errors[0]
+    assert "w.yml:j holds production credentials ['DOKPLOY_API_KEY']" in errors[0]
 
 
 def test_a_gated_job_without_an_environment_is_reported():
@@ -225,3 +247,38 @@ def test_a_contract_entry_for_a_missing_job_is_reported():
 def test_an_ungated_job_needs_a_reason():
     errors = contract_errors(_workflow(_READS_SECRET), {}, {_KEY: "  "})
     assert errors == ["w.yml:j is ungated without a reason"]
+
+
+def test_a_new_job_that_reads_only_a_cloudflare_dns_token_is_reported():
+    job = {"steps": [{"run": "x", "env": {"K": "${{ secrets.CF_API_TOKEN }}"}}]}
+    errors = contract_errors(_workflow(job), {}, {})
+    assert len(errors) == 1 and "['CF_API_TOKEN']" in errors[0]
+
+
+def test_a_job_with_workflow_level_contents_write_is_reported():
+    workflows = {
+        "w.yml": {"permissions": {"contents": "write"}, "jobs": {"j": {"steps": []}}}
+    }
+    errors = contract_errors(workflows, {}, {})
+    assert len(errors) == 1 and "permission contents: write" in errors[0]
+
+
+def test_a_job_level_permission_overrides_the_workflow_level_write():
+    workflows = {
+        "w.yml": {
+            "permissions": {"contents": "write"},
+            "jobs": {"j": {"permissions": {"contents": "read"}, "steps": []}},
+        }
+    }
+    assert contract_errors(workflows, {}, {}) == []
+
+
+def test_a_job_with_write_all_permissions_is_reported():
+    workflows = {"w.yml": {"jobs": {"j": {"permissions": "write-all", "steps": []}}}}
+    assert len(contract_errors(workflows, {}, {})) == 1
+
+
+def test_an_ungated_job_must_not_hold_contents_write():
+    job = {**_READS_SECRET, "permissions": {"contents": "write"}}
+    errors = contract_errors(_workflow(job), {}, {_KEY: "scheduled read-only audit"})
+    assert errors == ["w.yml:j is ungated and holds permission contents: write"]
