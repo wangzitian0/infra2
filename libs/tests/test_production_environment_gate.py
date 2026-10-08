@@ -10,6 +10,7 @@ gate reads them too (#1138).
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -527,3 +528,74 @@ def test_a_block_scalar_without_the_final_newline_is_the_plain_form(block):
         _environment_scalar(block), {_KEY: "inputs.type == 'prod'"}, {}
     )
     assert errors == []
+
+
+# --- #1138 round 3 R3-3 and R3-6: tags hide nothing; the scan is linear ---------------
+
+_NAMED = (
+    "w.yml:j holds production credentials ['CF_API_TOKEN'] and is in neither "
+    "GATED_JOBS nor UNGATED_JOBS"
+)
+
+
+def _b64(text: str) -> str:
+    import base64
+
+    return base64.b64encode(text.encode()).decode()
+
+
+@pytest.mark.usefixtures("_no_tables")
+@pytest.mark.parametrize(
+    "value",
+    [
+        '!!null "${{ secrets.CF_API_TOKEN }}"',
+        '!!int "${{ secrets.CF_API_TOKEN }}"',
+        '!!set {"${{ secrets.CF_API_TOKEN }}": null}',
+        '!!omap [{a: "${{ secrets.CF_API_TOKEN }}"}]',
+        f"!!binary {_b64('${{ secrets.CF_API_TOKEN }}')}",
+    ],
+    ids=["null", "int", "set", "omap", "binary"],
+)
+def test_a_yaml_tag_cannot_hide_an_expression(value):
+    assert workflow_contract_failures({"w.yml": _job_env(value)}) == [_NAMED]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "jobs: {}\n---\njobs: {}\n",
+        "jobs: &a\n  j: [*a]\n",
+    ],
+    ids=["two-documents", "recursive-alias"],
+)
+def test_a_yaml_shape_without_one_tree_is_a_failure(text):
+    assert workflow_contract_failures({"w.yml": text}) == [
+        "w.yml does not parse as YAML"
+    ]
+
+
+@pytest.mark.usefixtures("_no_tables")
+def test_shared_aliases_are_read_once():
+    """Nine levels of ten aliases expand to 10**9 strings; each is read once."""
+    import time
+
+    levels = ["a0: &a0 ['${{ github.sha }}']"]
+    for n in range(1, 10):
+        refs = ", ".join([f"*a{n - 1}"] * 10)
+        levels.append(f"a{n}: &a{n} [{refs}]")
+    text = "x:\n" + "".join(f"  {line}\n" for line in levels) + "jobs: {}\n"
+    started = time.perf_counter()
+    assert workflow_contract_failures({"w.yml": text}) == []
+    assert time.perf_counter() - started < 1.0
+
+
+@pytest.mark.usefixtures("_no_tables")
+@pytest.mark.parametrize("unit", ["${{ ", "${{ '", "${{ }"])
+def test_the_scan_of_128_kib_takes_under_one_second(unit):
+    import time
+
+    payload = unit * (128 * 1024 // len(unit))
+    text = "jobs:\n  j:\n    env:\n      K: " + json.dumps(payload) + "\n"
+    started = time.perf_counter()
+    workflow_contract_failures({"w.yml": text})
+    assert time.perf_counter() - started < 1.0

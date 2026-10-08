@@ -10,6 +10,8 @@ to the workflows of the pull request head.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 from collections.abc import Iterator, Mapping
 
@@ -89,7 +91,6 @@ _GATED_EXPRESSION = re.compile(
 # The contract reads parsed values only, never raw file text: a YAML escape such as
 # `s\x65crets` changes the raw text but not the value that GitHub reads (#1138).
 # String literals ('...', with '' as the escape) are removed before each scan.
-_NAIVE_EXPRESSION = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
 _STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
 _SECRET_NAME = re.compile(r"(?<![\w.-])(?i:secrets)\.([A-Za-z0-9_]+)")
 # A `secrets` reference that is not the literal `secrets.NAME` form hides the name.
@@ -100,8 +101,19 @@ _ANY_SECRETS = re.compile(r"(?<![\w.-])(?i:secrets)\b")
 def _expression_bodies(text: str) -> list[str]:
     """The body of each `${{ ... }}` in `text`, read two ways. One way ends at the
     first `}}` outside a string literal; the other ends at the first `}}`. Both are
-    scanned, so the result fails closed whichever way GitHub reads it."""
-    bodies = [match.group(1) for match in _NAIVE_EXPRESSION.finditer(text)]
+    scanned, so the result fails closed whichever way GitHub reads it.
+
+    Both reads move forward only, so the time is linear in the text (#1138): an
+    expression without an end runs to the end of the text, and the scan stops."""
+    bodies: list[str] = []
+    position = 0
+    while (start := text.find("${{", position)) != -1:
+        end = text.find("}}", start + 3)
+        if end == -1:
+            bodies.append(text[start + 3 :])
+            break
+        bodies.append(text[start + 3 : end])
+        position = end + 2
     start = text.find("${{")
     while start != -1:
         index, quoted = start + 3, False
@@ -119,21 +131,75 @@ def _expression_bodies(text: str) -> list[str]:
     return [_STRING_LITERAL.sub("''", body) for body in bodies]
 
 
-def _expressions(node: object) -> Iterator[str]:
+def _expressions(node: object, seen: set[int] | None = None) -> Iterator[str]:
     """Each expression body in a parsed workflow, from every string key and value at
-    any depth. The value of an `if:` key is an expression even without `${{ }}`."""
+    any depth. The value of an `if:` key is an expression even without `${{ }}`.
+    A mapping or list that a YAML alias shares is read once."""
+    seen = set() if seen is None else seen
+    if isinstance(node, (dict, list)):
+        if id(node) in seen:
+            return
+        seen.add(id(node))
     if isinstance(node, dict):
         for key, value in node.items():
-            yield from _expressions(key)
+            yield from _expressions(key, seen)
             if key == "if" and isinstance(value, str) and "${{" not in value:
                 yield _STRING_LITERAL.sub("''", value)
             else:
-                yield from _expressions(value)
+                yield from _expressions(value, seen)
     elif isinstance(node, list):
         for item in node:
-            yield from _expressions(item)
+            yield from _expressions(item, seen)
     elif isinstance(node, str):
         yield from _expression_bodies(node)
+
+
+class _UnreadableYaml(Exception):
+    """A YAML shape that the contract cannot read as one tree."""
+
+
+_BINARY_TAG = "tag:yaml.org,2002:binary"
+
+
+def _scalar_text(node: yaml.ScalarNode) -> str:
+    """The source text of a scalar. A `!!binary` scalar adds its decoded text."""
+    text = str(node.value)
+    if node.tag == _BINARY_TAG:
+        try:
+            text += "\n" + base64.b64decode(text, validate=False).decode(
+                "utf-8", "replace"
+            )
+        except (ValueError, binascii.Error):
+            pass
+    return text
+
+
+def _plain(node: yaml.Node | None, active: set[int], done: dict[int, object]) -> object:
+    """The composed YAML node as plain data. Every scalar is its source text and every
+    tag is ignored, so `!!null "${{ x }}"`, `!!set` and `!!omap` cannot hide an
+    expression (#1138 round 3). A recursive alias is unreadable."""
+    if node is None:
+        return {}
+    if id(node) in done:
+        return done[id(node)]
+    if isinstance(node, yaml.ScalarNode):
+        result: object = _scalar_text(node)
+    elif id(node) in active:
+        raise _UnreadableYaml("a recursive YAML alias")
+    else:
+        active.add(id(node))
+        if isinstance(node, yaml.SequenceNode):
+            result = [_plain(item, active, done) for item in node.value]
+        else:
+            result = {}
+            for key_node, value_node in node.value:
+                key = _plain(key_node, active, done)
+                if not isinstance(key, str):
+                    key = " ".join(_expressions(key)) or repr(key)
+                result[key] = _plain(value_node, active, done)
+        active.discard(id(node))
+    done[id(node)] = result
+    return result
 
 
 def _secrets_read(node: object) -> set[str]:
@@ -262,11 +328,10 @@ def workflow_contract_failures(texts: Mapping[str, str]) -> list[str]:
     workflows: dict[str, dict] = {}
     for name, text in sorted(texts.items()):
         try:
-            document = yaml.safe_load(text)
-        except yaml.YAMLError:
+            document = _plain(yaml.compose(text), set(), {})
+        except (yaml.YAMLError, RecursionError, _UnreadableYaml):
             failures.append(f"{name} does not parse as YAML")
             continue
-        document = {} if document is None else document
         if not isinstance(document, dict):
             failures.append(f"{name} is not a YAML mapping")
             continue
