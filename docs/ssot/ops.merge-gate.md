@@ -107,6 +107,7 @@ The gate reads the production lock (#1138) on every run for an open PR in this r
 It does not read the lock for a closed PR, for another repository, or when the run stops at exit 4 first.
 The verdict prints one lock line: `production lock verified (...)` or `production lock NOT verified: <failures>`.
 A run that did not read the lock prints `production lock NOT verified: not read`.
+A run that stops after the lock read prints `production lock NOT verified: the run stopped before a verdict`.
 The JSON verdict has the same fact in `lock_verified` and `lock_failures`. The line alone never changes the exit code.
 The lock is the GitHub environment `production`. The gate reads four facts from GitHub:
 
@@ -120,7 +121,9 @@ The contract tables are in `libs/gate/production_contract.py`.
 The lock holds when the four facts are true and the head satisfies the contract. Then:
 
 - The agent merges a workflow edit, except in a workflow that defines a required check.
-  That workflow follows the direction proof, or it goes to the owner.
+  That workflow always goes to the owner, even when the direction proof calls the edit tighter.
+  The workflow proof reads only push paths and job names, not job bodies.
+  So it cannot show that a required job still checks the same thing.
   The gate derives these workflows from the `blocks_merge: true` gates in `ci-gate-inventory.yaml`.
   When the gate cannot read such a gate, the lock releases no workflow file.
   A file on `OWNER_HELD_WORKFLOWS` in `libs/gate/production_contract.py` is also held. That list is empty by decision of 2026-10-08.
@@ -132,10 +135,19 @@ Two exits stay open. A rule-text file clears with a quoted owner instruction in 
 A change to `ci-gate-inventory.yaml` clears when the direction proof shows it is tighter.
 A file that Python or pytest runs before gate code also needs the owner.
 Examples: a root module such as `yaml.py`, a package that replaces a gate module, and a `conftest.py` in `libs/tests`.
+Bytecode, `.so` and `.pth` files, virtual environments, `pytest.ini`, `setup.cfg` and `sitecustomize.py` also need the owner, at any depth.
+The gate compares paths case-folded, because the disk of the gate host does not tell case apart.
+`pyproject.toml` stays outside the gate, because dependency edits are common.
 
-The contract is strict in two ways.
+The contract is strict in three ways.
 A conditional job must use the exact condition in its table entry. A condition that only contains it fails.
 A job that reads any secret outside `NON_PRODUCTION_SECRETS` holds a production credential and must be in a table.
+The contract reads the composed YAML nodes, so a YAML tag or escape does not hide an expression.
+
+Threat model.
+The gate defends against mistakes and process shortcuts of an honest agent and its tools.
+It is not a sandbox against a PR that is built to run code on the gate host.
+That boundary is the GitHub ruleset and the reviewer of the `production` environment.
 
 Limits of the lock:
 
@@ -143,12 +155,17 @@ Limits of the lock:
 - One run makes at most 9 + N + 2k `gh` calls. N is the number of workflow files.
   k is the number of changed gate files with a direction proof. `--request-review` adds up to 2, and `--merge` adds 1.
   Each call can try up to 3 times.
+
+Residual risks:
+
+- The lock does not cover the production credentials that ungated jobs read.
+- The bodies of ungated jobs and the code they run are outside the gate (#1147). An agent can merge a change to them.
 - The gate checks that a gated job declares the right environment.
   It does not check that the job body keeps using the input that selects the environment.
   Example: a body edit hard-codes `--type prod`, and the environment condition still reads `inputs.type`.
-- The lock does not cover the production credentials that ungated jobs read.
-- The bodies of ungated jobs and the code they run are outside the gate (#1147). An agent can merge a change to them.
+- A renamed workflow file is not held. The changed-file list holds only the new path.
 - The pytest settings in `pyproject.toml` are outside the gate (#1147).
+- Two scheduled jobs of `ops-checks.yml` write to the production host without the environment reviewer (#1127).
 - The real fix is to scope those credentials to the `production` environment (#1147).
 
 ## 授权沿革
