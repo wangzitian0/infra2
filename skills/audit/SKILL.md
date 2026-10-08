@@ -1,6 +1,6 @@
 ---
 name: audit
-description: Step 2 of the five-step flow. Falsify a result against two independent external sources, then run a read-only adversarial review in three categories. Use before you call work done or correct.
+description: Step 2 of the five-step flow. Falsify a result against two independent external sources, then run the 10-Intern adversarial swarm audit. Use before you call work done or correct.
 ---
 
 # audit: try to prove it wrong
@@ -46,49 +46,44 @@ Each gate came from a measured failure.
 4. **Screening output carries anchors.** Each fact cites `file#Lxx-Lyy` or a note id.
    The Director reads 1 to 2 anchors before a decision. Lossy small-model summaries hide facts.
 
-## Scouts (owner design: three categories, 4+3+2 = 9)
+## The 10-Intern Scout Matrix
 
-**Default (Lean Mode, < 60s):**
-- Run a single-pass read-only falsification covering M2 (design promise vs reality), G3 (fake tests / empty greens), and T1 (goal completeness).
-- Execute focused checks on target test cases only (`pytest <file>::<test> -x`). Cite physical commands and exit codes.
-- Never run full test suites during review rounds.
-- Do not spin up multiple subagents for routine PRs.
+The 10 parallel Interns in Round 1 are allocated to specific, non-overlapping audit dimensions across four categories:
 
-**High-Risk Escalation (Full Scouts 4+3+2):** Use all nine only for cross-cutting platform refactors or high-blast-radius changes.
+**Category M: Contract and impact (reads docs and code).**
+- M1 breaking changes (Intern 1): Renamed fields, new required parameters, breaking protobuf/schema contracts.
+- M2 design promises (Intern 2): Does code do what the README and architecture specify, or stub it with `pass` and TODO?
+- M3 blast radius (Intern 3): Shared state, events, or middleware that break downstream consumers or callers.
+- M4 semantic drift (Intern 4): Config names, default values, environment variable names, error codes.
 
-**Category M: contract and impact (reads docs and code).**
-- M1 API breaking changes: renamed fields, new required fields, incompatible types.
-- M2 design promises: does code do what the README and design say, or stub it with `pass` and TODO?
-- M3 blast radius: shared state, events, or middleware that break downstream consumers.
-- M4 semantic drift: config names, defaults, environment variables, error codes.
+**Category G: General engineering (doc-blind).** Give these scouts source code and tests only. Withhold `*.md` and `docs/`. They must not guess business intent.
+- G1 SRE defense (Intern 5): Leaks, missing locks, child processes not killed as a group, timeouts, shutdown signals.
+- G2 hygiene (Intern 6): Swallowed errors (`except: pass`, ignored error objects), dead code, empty stubs, hidden hardcodes.
+- G3 fake tests (Intern 7): GREEN-WHILE-EMPTY, `assert True`, `assert len(x) >= 0`, over-mocking, shadowed test functions.
 
-**Category G: general engineering (doc-blind).** Give these scouts source code and tests only. Withhold `*.md` and `docs/`. They must not guess business intent.
-- G1 SRE defense: leaks, missing locks, child processes not killed as a group, timeouts, shutdown.
-- G2 hygiene: swallowed errors (`except: pass`, ignored `err`), dead code, empty stubs, hidden hardcodes.
-- G3 fake tests: GREEN-WHILE-EMPTY, `assert True`, `assert len(x) >= 0`, over-mocking.
+**Category T: Goal and side effects (reads issue, PR text, and code).**
+- T1 completeness (Intern 8): Did the change finish the stated goal, or only the happy path?
+- T2 side effects (Intern 9): Latency, rate limits, lock contention, broken global invariants.
 
-**Category T: goal and side effects (reads the issue and the PR text).**
-- T1 completeness: did the change finish the stated goal, or only the happy path?
-- T2 side effects: latency, rate limits, lock contention, broken global invariants.
+**Category S: Single source of truth & rules (reads SSOT, MANIFEST, and rules).**
+- S1 SSOT and drift (Intern 10): Mismatches between implementation, MANIFEST.yaml keys, and rule boundaries.
 
-The Director cross-checks scouts. A doc claim (M2) that a doc-blind scout (G1) cannot find in code is a false feature.
-A completeness claim (T1) against empty-run tests (G3) is false prosperity.
+The Director cross-checks scouts: a doc claim (M2) that a doc-blind scout (G1) cannot find in code is a false feature; a completeness claim (T1) against empty-run tests (G3) is false prosperity.
 
-## Swarm mode (10 Interns, 3 to 5 rounds)
+## Swarm execution workflow
 
-**On-Demand Escalation Only:** Never use swarm mode for routine bugs or small features. Trigger ONLY when:
-(a) confidence is low after round 1, (b) SHZP recovery activates, or (c) owner explicitly requests `/audit swarm`.
+Audit executes via the `swarm` skill state machine:
 
-1. **Round 1 (Propose - Massive Read, Concise Output):** The Director injects the complete source code, diff, and contracts into each task prompt. 10 parallel Interns inspect the system across distinct dimensions. Interns output dense, structured defect findings (500–1200 tokens) with exact anchors `file#Lxx-Lyy` and counterexamples. Conversational filler is prohibited.
-2. **Rounds 2 to 4 (Cross-Falsify):** Interns cross-examine each other's claims. Interns take opposing hypotheses and attempt to disprove them using verbatim source code and physical facts. They mark hypotheses as DISPROVEN or CONFIRMED.
-3. **Final Round (Director Triangulation):** The Director reviews surviving claims, verifies physical anchors (Touch Reality), and rejects false positives.
+1. **Round 1 (Propose)**: The Director dispatches the 10-Intern Scout Matrix concurrently via `subagent_batch`. Each Intern outputs structured defect hypotheses with exact `file#Lxx-Lyy` anchors and counterexamples.
+2. **Round 2 (Cross-Falsify)**: Interns cross-examine opposing claims. Opponents must actively seek counterexamples in code to disprove hypotheses. Hypotheses are marked strictly as `[DISPROVEN]` or `[CONFIRMED]`.
+3. **Round 3 (Director Triangulation)**: The Director reviews surviving `[CONFIRMED]` claims, runs targeted physical reality checks (Touch Reality), and rejects false positives.
 
-A round with zero HIGH and zero new middle findings converges. Stop after round 5 at most. The last round is audit-only: it edits nothing.
-During review rounds, run focused tests only. Never run full test suites during audit rounds.
+A round with zero HIGH and zero new MIDDLE findings converges. Stop after round 5 at most. The last round is audit-only: it edits nothing.
+During review rounds, run focused tests only (`pytest <file>::<test> -x`). Never run full test suites during audit rounds.
 
 ## Scout liveness
 
-Scouts are Interns with read-only tools. The Director never waits blind: read each running scout's tool-call output
-about every two minutes. No tool call for about two minutes means stalled. Prove the old process stopped before you start
-a replacement. The host rules ("Observation and liveness") hold the full rule.
-Accept `exit=0` plus a real diff or commit as completion. Prose is not evidence.
+Scouts are Interns dispatched via `subagent_batch`. The Director monitors task progression:
+- Child processes have OS-level timeouts (50s default).
+- The Director checks task outputs and worker logs (`~/.local/state/subagent-worker/worker.log`).
+- Accept exit code zero plus a real diff or commit as completion. Prose is not evidence.

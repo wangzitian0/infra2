@@ -75,6 +75,7 @@ Authorize production deployment of vX.Y.Z? Reply "deploy" or "hold".
 - Without an answer, keep the issue open. Reopen it if the merge closed it. Create the label `prod-pending` if it is missing.
   Comment `prod disposition: pending` with the release tag or commit SHA, and add the label.
 - A "deploy" covers only the release it names. Immediately before dispatch, the owner must answer you live in this session; an earlier or relayed answer is not enough. Without approval, do not deploy production.
+- Refuse bare "deploy" keywords without release tags or commits. If the owner replies only "deploy", request explicit disambiguation naming the target: "Please confirm release target: deploy vX.Y.Z". Without explicit approval, do not deploy production.
 - After "deploy", you own the whole loop, including the physical check. Never ask the owner to run a command.
 
 ## 4. Suspend: handover and issue
@@ -101,9 +102,28 @@ Commands for this machine are in `local.md`.
 
 ## 5. Complete: clean up
 
-1. Kill every background task, watcher, and subagent bound to the worktree. Check with `lsof +D "$WORKTREE"`.
+1. Kill every background task, watcher, and subagent bound to the worktree.
+   Check for busy files with a 15-second timeout guard:
+   ```bash
+   python3 - "$WORKTREE" <<'EOF'
+   import subprocess, sys
+   wt = sys.argv[1]
+   try:
+       r = subprocess.run(["lsof", "+D", wt], capture_output=True, text=True, timeout=15)
+       if r.returncode == 0 and r.stdout.strip():
+           print("WARNING: Worktree has active processes:\n" + r.stdout.strip())
+   except subprocess.TimeoutExpired:
+       print("WARNING: lsof timed out after 15s (filesystem may be remote/virtual); skipping busy check.")
+   except Exception as e:
+       print(f"WARNING: lsof check failed ({e}); skipping.")
+   EOF
+   ```
    Removing a tree under a running task corrupts it.
-2. `git worktree remove ../<repo>_issue<N>_<slug>`.
+2. Remove the worktree safely with unlock and force fallbacks:
+   ```bash
+   git worktree unlock "../<repo>_issue<N>_<slug>" 2>/dev/null || true
+   git worktree remove --force "../<repo>_issue<N>_<slug>" || git worktree prune
+   ```
 3. Close the issue with the merge proof when the production disposition is `none`, `deployed`, or `hold`.
    With `pending`, keep it open (section 3).
 4. Delete scratch files. Record each leftover TODO in the handover.
