@@ -62,13 +62,13 @@ Stop only for one of these:
   A release workflow deploys, promotes or applies to a production environment.
   The release code is the code that a release workflow runs.
   The owner also approves each edit to merge-gate code or data, even when the gate proves it tighter.
-  Only a proven tightening of `docs/ssot/ci-gate-inventory.yaml`, with a verified run as defined below, changes this.
+  Only a proven tightening of the infra2 gate inventory, with a verified run as defined below, changes this.
   A workflow that defines a required check is part of the gate, so this rule covers its edits too.
   In a repository with a release workflow, the owner also approves workflow edits and edits to the release code.
   A verified run is a run of this repository's merge gate that gives exit 0 and prints `production lock verified`.
   With a verified run, the agent merges an edit to the release code.
   With a verified run, the agent merges a workflow edit, except in a workflow that defines a required check.
-  With a verified run, the agent merges a proven tightening of `docs/ssot/ci-gate-inventory.yaml`.
+  With a verified run, the agent merges a proven tightening of the infra2 gate inventory.
   In a repository whose gate does not print `production lock verified`, these edits stay with the owner.
   A Repo tier may record an owner decision that replaces this rule for that repository.
 - **Irreversible action**: data deletion, or an external publication that cannot be recalled.
