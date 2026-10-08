@@ -145,10 +145,10 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
         )
 
     # The production lock (#1138) replaces the owner for a workflow file, unless the
-    # file defines a required check or is on OWNER_HELD_WORKFLOWS. While the lock
-    # holds, a held file goes to the owner: the workflow direction proof reads only
-    # push paths and job names, not job bodies, so it cannot clear a file that runs
-    # a required check. An unreadable inventory holds every workflow file. Every other
+    # file defines a required check or is on OWNER_HELD_WORKFLOWS. A held file goes to
+    # the owner in every lock state: the workflow direction proof reads only push paths
+    # and job names, not job bodies, so it cannot clear a file that runs a required
+    # check. An unreadable inventory holds every workflow file. Every other
     # self-governing path stays with the owner.
     lock_holds = facts.lock_failures == ()
     owner_held = {name.casefold() for name in production_contract.OWNER_HELD_WORKFLOWS}
@@ -178,20 +178,47 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
     governing = sorted(
         f for f in facts.files if is_self_governing(f) and f not in lock_covered
     )
+    # A held file never clears through the direction proof, in any lock state.
     unproven = [
         f
         for f in governing
-        if (f not in facts.proven_tighter or (lock_holds and f in uncovered))
+        if (f not in facts.proven_tighter or f in uncovered)
         and not (f in RULE_TEXT_FILES and quoted_instruction)
     ]
-    if unproven:
+    # The reason for a held file comes first. The "without a proof" line names only
+    # the files that have no proof (#1138 round 4).
+    held = [f for f in unproven if f in uncovered]
+    if held:
+        if required_workflows is None:
+            reasons.append(
+                "cannot read a blocking gate with a workflow from "
+                "docs/ssot/ci-gate-inventory.yaml: no workflow file clears through "
+                f"the lock or the direction proof ({', '.join(held)})"
+            )
+        else:
+            for f in held:
+                if _requires(f):
+                    reasons.append(
+                        f"{f} defines a required check: the owner approves head "
+                        f"{facts.head_sha[:7]}; the workflow proof does not read job "
+                        "bodies, so it cannot clear this file"
+                    )
+            listed = [f for f in held if not _requires(f)]
+            if listed:
+                reasons.append(
+                    f"the production lock does not cover {', '.join(listed)}: the "
+                    "file is on OWNER_HELD_WORKFLOWS in libs/gate/production_contract.py"
+                )
+        owner = True
+    proofless = [f for f in unproven if f not in facts.proven_tighter]
+    if proofless:
         reasons.append(
-            f"changes what decides merges ({', '.join(unproven)}) without a mechanical "
+            f"changes what decides merges ({', '.join(proofless)}) without a mechanical "
             f"proof that the change can only make this gate say no more often: the "
             f"working-tree copy is what judged this PR, so owner approval of head "
             f"{facts.head_sha[:7]} is required"
         )
-        if any(f in RULE_TEXT_FILES for f in unproven):
+        if any(f in RULE_TEXT_FILES for f in proofless):
             reasons.append(
                 "rule-text files (AGENTS.md / docs/ssot/ops.merge-gate.md) can clear "
                 "this instead by citing the owner instruction that authorised the "
@@ -220,7 +247,7 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
         )
         owner = True
 
-    # Each line below explains an owner verdict that is already set; neither adds one.
+    # This line explains an owner verdict that is already set; it does not add one.
     held_workflows = [
         f for f in unproven if _normalized_path(f).startswith(WORKFLOW_PREFIX)
     ]
@@ -228,27 +255,6 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
         reasons.append(
             f"production lock not verified: {'; '.join(facts.lock_failures)}"
         )
-    elif lock_holds and (held := [f for f in held_workflows if f in uncovered]):
-        if required_workflows is None:
-            reasons.append(
-                "cannot read a blocking gate with a workflow from "
-                "docs/ssot/ci-gate-inventory.yaml: the production lock releases no "
-                f"workflow file ({', '.join(held)})"
-            )
-        else:
-            for f in held:
-                if _requires(f):
-                    reasons.append(
-                        f"{f} defines a required check: the owner approves head "
-                        f"{facts.head_sha[:7]}; the workflow proof does not read job "
-                        "bodies, so it cannot clear this file"
-                    )
-            listed = [f for f in held if not _requires(f)]
-            if listed:
-                reasons.append(
-                    f"the production lock does not cover {', '.join(listed)}: the "
-                    "file is on OWNER_HELD_WORKFLOWS in libs/gate/production_contract.py"
-                )
 
     required, inventory_read = _required_checks()
     if not inventory_read:

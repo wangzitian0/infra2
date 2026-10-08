@@ -121,7 +121,7 @@ The contract tables are in `libs/gate/production_contract.py`.
 The lock holds when the four facts are true and the head satisfies the contract. Then:
 
 - The agent merges a workflow edit, except in a workflow that defines a required check.
-  That workflow always goes to the owner, even when the direction proof calls the edit tighter.
+  That workflow goes to the owner in every lock state, even when the direction proof calls the edit tighter.
   The workflow proof reads only push paths and job names, not job bodies.
   So it cannot show that a required job still checks the same thing.
   The gate derives these workflows from the `blocks_merge: true` gates in `ci-gate-inventory.yaml`.
@@ -129,7 +129,7 @@ The lock holds when the four facts are true and the head satisfies the contract.
   A file on `OWNER_HELD_WORKFLOWS` in `libs/gate/production_contract.py` is also held. That list is empty by decision of 2026-10-08.
 - A deploy-triggering path does not need the owner. Each job named as production waits for the environment reviewer.
 
-Fail closed: when a fact is false or unreadable, the earlier rules apply. The verdict names each failure.
+Fail closed: when a fact is false or unreadable, the earlier rules apply to every other file. The verdict names each failure.
 When the lock holds, these changes still need the owner: the gate code and data, their tests, the rule-text files, and the contract tables.
 Two exits stay open. A rule-text file clears with a quoted owner instruction in the PR body.
 A change to `ci-gate-inventory.yaml` clears when the direction proof shows it is tighter.

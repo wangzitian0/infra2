@@ -2565,14 +2565,48 @@ def test_a_proven_tighter_required_check_workflow_still_needs_the_owner():
     assert _required_line(INFRA_CI) in verdict.reasons
 
 
-def test_without_the_lock_the_proof_still_clears_as_before():
-    """Fail closed keeps the earlier verdict when the lock is not verified."""
-    for lock in (None, ("no required reviewer",)):
-        verdict = gate.evaluate(
-            _green(files=(INFRA_CI,), proven_tighter=(INFRA_CI,), lock_failures=lock),
-            now=NOW,
-        )
-        assert verdict.ready and verdict.exit_code == 0, (lock, verdict.reasons)
+@pytest.mark.parametrize(
+    "lock", [None, ("no required reviewer",)], ids=["unread", "fails"]
+)
+def test_without_the_lock_the_proof_does_not_clear_a_required_check_workflow(lock):
+    """#1138 round 4: a held file never clears through the proof, in any lock state."""
+    verdict = gate.evaluate(
+        _green(files=(INFRA_CI,), proven_tighter=(INFRA_CI,), lock_failures=lock),
+        now=NOW,
+    )
+    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
+    assert _required_line(INFRA_CI) in verdict.reasons
+
+
+@pytest.mark.parametrize(
+    "path",
+    [f"{gate.WORKFLOW_PREFIX}docs.yml", "docs/ssot/ci-gate-inventory.yaml"],
+)
+@pytest.mark.parametrize(
+    "lock", [None, ("no required reviewer",)], ids=["unread", "fails"]
+)
+def test_without_the_lock_the_proof_still_clears_every_other_file(path, lock):
+    verdict = gate.evaluate(
+        _green(files=(path,), proven_tighter=(path,), lock_failures=lock), now=NOW
+    )
+    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+
+
+def test_a_held_file_with_a_proof_gets_the_held_reason_first_and_no_proof_reason():
+    verdict = gate.evaluate(
+        _green(files=(INFRA_CI,), proven_tighter=(INFRA_CI,), lock_failures=HOLDS),
+        now=NOW,
+    )
+    assert verdict.reasons[0] == _required_line(INFRA_CI)
+    assert not any("without a mechanical proof" in r for r in verdict.reasons)
+
+
+def test_a_held_file_without_a_proof_is_named_in_both_lines():
+    verdict = gate.evaluate(_green(files=(INFRA_CI,), lock_failures=HOLDS), now=NOW)
+    assert verdict.reasons[0] == _required_line(INFRA_CI)
+    assert any(
+        "without a mechanical proof" in r and INFRA_CI in r for r in verdict.reasons
+    )
 
 
 def test_a_workflow_without_a_required_check_is_the_agents_when_the_lock_holds():

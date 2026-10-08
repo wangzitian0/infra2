@@ -3,8 +3,9 @@
 
 An agent merging under session authority must see, for one head, that every blocking
 check is green, every review thread is resolved, the head has been quiet for twelve
-minutes since its last push, and that the change neither touches a protected file nor
-triggers a deploy on merge — the last two need the owner's approval of that exact head.
+minutes since its last push, and that the change touches no protected file. A protected
+file needs the owner's approval of that exact head. A deploy on merge needs it too, but
+only while the production lock is not verified (#1138).
 On 2026-09-15 three of five merges landed 21–95 s before the quiet period had elapsed,
 each time because the timing was judged by eye between other work. This tool judges it.
 
@@ -15,8 +16,9 @@ Exit codes (#740), so a caller never reads the prose to decide:
 
     0  ready (or merged with --merge)
     1  wait: time alone fixes it (check pending, no check yet, head still settling)
-    2  needs the owner (deploy-triggering path, unproven self-governing change, base
-       is not main)
+    2  needs the owner (unproven self-governing change, a workflow that defines a
+       required check, base is not main, or a deploy-triggering path while the
+       production lock is not verified)
     3  action required: waiting will not fix it (red check, open thread, conflict,
        draft, PR not open, base changed under green checks)
     4  could not evaluate: not a verdict on the PR. This checkout's merge rules are
