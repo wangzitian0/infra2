@@ -10,10 +10,17 @@ python file. It fails on each of these uses of ``libs.common``:
 * ``getattr(c, "get_env")``, ``hasattr(c, "get_env")``, ``monkeypatch.setattr(c, "get_env", f)``
   and ``patch.object(c, "get_env")``;
 * a string target such as ``"libs.common.get_env"`` for ``mock.patch`` or
-  ``monkeypatch.setattr``. The module has no such attribute, so the patch fails at once.
+  ``monkeypatch.setattr``. The module has no such attribute, so the patch fails at once;
+* a name bound at module level in ``libs/common.py`` that is not in ``ALLOWED_MODULE_NAMES``.
+  The AST of the file gives these names, so private names such as
+  ``_REGISTRY_BACKED_SHORT_NAMES`` count too.
 
 Relative imports inside ``libs/`` count. Imports inside functions count. Source text is
 parsed, never executed, so a module that needs a secret is still checked.
+
+Known residual, accepted: the guard does not read these forms. Each raises at first run.
+They are ``importlib.import_module("libs.common")``, ``sys.modules["libs.common"]``,
+``patch.multiple`` and a string target that an f-string builds.
 """
 
 from __future__ import annotations
@@ -27,6 +34,12 @@ ROOT = Path(__file__).resolve().parents[2]
 
 COMMON = "libs.common"
 ALLOWED = frozenset({"check_service"})
+
+# Every name that libs/common.py binds at module level, except dunder names.
+# ``check_service`` is the function. The rest are the imports that the file needs.
+ALLOWED_MODULE_NAMES = frozenset(
+    {"TYPE_CHECKING", "annotations", "check_service", "environ", "Context", "shlex"}
+)
 
 # A string that names one attribute of libs.common, for example a mock.patch target.
 _DOTTED_TARGET = re.compile(r"libs\.common\.(?P<name>\w+)(?:\..*)?")
@@ -114,6 +127,70 @@ def libs_common_violations(source: str, rel_path: str = "<memory>.py") -> list[s
     return [message for _line, message in sorted(found)]
 
 
+def _bound_names(target: ast.AST) -> set[str]:
+    """Return the names that an assignment, ``for`` or ``with`` target binds."""
+    if isinstance(target, ast.Name):
+        return {target.id}
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return set().union(*(_bound_names(item) for item in target.elts))
+    if isinstance(target, ast.Starred):
+        return _bound_names(target.value)
+    return set()
+
+
+def module_level_names(source: str) -> set[str]:
+    """Return the names that the module binds at its top level, without dunder names.
+
+    The walk enters ``if``, ``try``, ``with``, ``for`` and ``while`` blocks. It does not enter
+    a function or a class body, because their names are not module attributes.
+    """
+    names: set[str] = set()
+
+    def visit(statements: list[ast.stmt]) -> None:
+        for node in statements:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, ast.Import):
+                names.update(
+                    item.asname or item.name.split(".")[0] for item in node.names
+                )
+            elif isinstance(node, ast.ImportFrom):
+                names.update(item.asname or item.name for item in node.names)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    names.update(_bound_names(target))
+            elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+                names.update(_bound_names(node.target))
+            elif isinstance(node, (ast.For, ast.AsyncFor)):
+                names.update(_bound_names(node.target))
+            elif isinstance(node, (ast.With, ast.AsyncWith)):
+                for item in node.items:
+                    if item.optional_vars is not None:
+                        names.update(_bound_names(item.optional_vars))
+            for field in ("body", "orelse", "finalbody"):
+                inner = getattr(node, field, None)
+                if inner and not isinstance(
+                    node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                ):
+                    visit(inner)
+            if isinstance(node, ast.Try):
+                for handler in node.handlers:
+                    if handler.name:
+                        names.add(handler.name)
+                    visit(handler.body)
+
+    visit(ast.parse(source).body)
+    return {name for name in names if not (name.startswith("__") and name.endswith("__"))}
+
+
+def module_name_drift(source: str) -> list[str]:
+    """Return one line per difference between the module-level names and the allowlist."""
+    names = module_level_names(source)
+    return [f"binds {name}" for name in sorted(names - ALLOWED_MODULE_NAMES)] + [
+        f"no longer binds {name}" for name in sorted(ALLOWED_MODULE_NAMES - names)
+    ]
+
+
 def _tracked_python_files() -> list[str]:
     tracked = subprocess.run(
         ["git", "-C", str(ROOT), "ls-files", "-z", "--", "*.py"],
@@ -140,17 +217,87 @@ def test_no_tracked_python_file_uses_a_former_libs_common_export() -> None:
     )
 
 
+def test_libs_common_binds_only_the_allowed_module_names() -> None:
+    """The AST of libs/common.py must give exactly ``ALLOWED_MODULE_NAMES``."""
+    source = (ROOT / "libs" / "common.py").read_text(encoding="utf-8")
+    assert module_name_drift(source) == []
+
+
 def test_libs_common_offers_check_service_only() -> None:
     import libs.common as common
-    from libs.core import environ
 
     assert common.__all__ == ["check_service"]
-    bound = set(vars(common)) & set(environ.__all__)
-    assert bound == set(), f"libs.common binds names of libs.core.environ: {sorted(bound)}"
     assert callable(common.check_service)
 
 
 # --- Self-tests: the guard must fail on a violation and pass on compliant code. ---------
+
+_COMPLIANT_COMMON = (
+    "from __future__ import annotations\n"
+    "import shlex\n"
+    "from typing import TYPE_CHECKING\n"
+    "from libs.core import environ\n"
+    "if TYPE_CHECKING:\n"
+    "    from invoke import Context\n"
+    "__all__ = ['check_service']\n"
+    "def check_service(c, service, health_cmd):\n"
+    "    env = environ.get_env()\n"
+    "    container = shlex.quote(service)\n"
+    "    return env, container\n"
+)
+
+
+def test_name_check_passes_a_module_with_the_allowed_names_only() -> None:
+    assert module_name_drift(_COMPLIANT_COMMON) == []
+
+
+def test_name_check_flags_a_private_name_that_environ_does_not_export() -> None:
+    # environ.__all__ omits this name, so a check on that list cannot see it.
+    imported = _COMPLIANT_COMMON + (
+        "from libs.core.environ import _REGISTRY_BACKED_SHORT_NAMES\n"
+    )
+    assert module_name_drift(imported) == ["binds _REGISTRY_BACKED_SHORT_NAMES"]
+    assigned = _COMPLIANT_COMMON + "_BOOTSTRAP_ONLY_SHARED_SERVICES = frozenset()\n"
+    assert module_name_drift(assigned) == ["binds _BOOTSTRAP_ONLY_SHARED_SERVICES"]
+
+
+def test_name_check_flags_a_name_that_leaves_the_allowlist() -> None:
+    source = _COMPLIANT_COMMON.replace("import shlex\n", "")
+    assert module_name_drift(source) == ["no longer binds shlex"]
+
+
+def test_name_check_reads_every_binding_form_at_module_level() -> None:
+    source = (
+        "import os.path\n"
+        "import numpy as np\n"
+        "from a import b as c, d\n"
+        "from a import *\n"
+        "x, (y, *z) = 1, (2, 3)\n"
+        "w: int = 1\n"
+        "n += 1\n"
+        "for i in []:\n"
+        "    pass\n"
+        "with open('f') as fh:\n"
+        "    pass\n"
+        "try:\n"
+        "    import q\n"
+        "except ImportError as err:\n"
+        "    r = 1\n"
+        "else:\n"
+        "    s = 1\n"
+        "finally:\n"
+        "    t = 1\n"
+        "if x:\n"
+        "    def f(): inner = 1\n"
+        "    class K:\n"
+        "        attr = 1\n"
+        "async def g(): pass\n"
+        "__all__ = []\n"
+    )
+    assert module_level_names(source) == {
+        "os", "np", "c", "d", "*", "x", "y", "z", "w", "n", "i", "fh", "q", "err",
+        "r", "s", "t", "f", "K", "g",
+    }  # fmt: skip
 
 
 def test_guard_flags_a_from_import_of_an_environment_helper() -> None:
