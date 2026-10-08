@@ -2,13 +2,13 @@
   "adapter": "rules-v2",
   "dirty_inputs": [],
   "inputs": {
-    "repo": "09aaba0c2db4bda0f1db5dadc616aa3e5b4334c82a0f81a994658e6ebb738422",
-    "root": "1cd5eb99c9ca834cd1d5194f102461a043adfe392d7e924b3a017ec30624ab6e",
+    "repo": "7057f78512f490de8be244252960fba5b92e04910c8b1029802a962286f90c15",
+    "root": "c401f5c7985a0feaeff1e3453a212cba5fb43cca6e2c2537f9725475382a0fb2",
     "skills": "9e2583cce0d13679ae756ab9f214e8dfa06ee864217750e2f3f75b9db4acee9c"
   },
   "language": "en",
   "outputs": {
-    "AGENTS.md": "6aa41e1d6682d85b88f7be13a516a8342e699442ddf8ab6667335c16726d7ed4",
+    "AGENTS.md": "3f0d91f1de2c86129ffc3ce9e25cadb210a01770d046a2bca731f19f709c0c1e",
     "CLAUDE.md": "a54ff182c7e8acf56acfd6e4b9c3ff41e2c41a31c9b211b2deb9df75d9a478f9"
   },
   "profiles": [
@@ -61,7 +61,7 @@
     },
     "root": "skills"
   },
-  "source_revision": "5fe8001de87bd6e6e7d198750644ab83e7edc94b",
+  "source_revision": "528fd824be6eb50b3da50dd1ed2c1ca730dab024",
   "target": {
     "remote": "github.com/wangzitian0/infra2",
     "repo": "infra2",
