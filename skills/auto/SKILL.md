@@ -21,27 +21,32 @@ Run this after `smoke` passes. Use `prr` for the review and gate mechanics.
    Under the quote, list each agent decision that the quote does not cover. A quote above agent decisions reads as owner approval of all of them.
    A change to rule text also carries the section `Owner touchpoints` (dev_env Repo tier, rule-text checklist item 8).
 2. Run the `prr` gate. Fix each finding in the issue worktree. Do not touch unrelated files.
-3. Run focused checks on every fix. Read the decision from the gate exit code.
+3. Run focused checks on every fix. Read the decision from the gate exit code:
+   - Exit 0: Merge directly with `--merge`.
+   - Exit 1 (Wait): Poll with exponential backoff (`30s * 1.5^n`, capped at 120s). Apply a client-side deadline of 45 minutes (maximum 30 iterations). If checks remain pending after 45 minutes, transition to `Suspend`, record the CI snapshot in the issue, and report `In review`. Do not spin indefinitely.
+   - Exit 2 (Needs owner): Stop immediately. Do not spin. Label `needs-owner` and record the holding reason in the issue.
+   - Exit 3 (Action required): Resolve findings or fix conflicts, push, and re-run. If unresolved after two rounds, escalate to Senior or Suspend.
+   - Exit 4 (Could not evaluate): Pull main or retry after rate limits settle.
 4. A change with no side effect needs no question to the owner. Fix it and merge it.
 5. Merge. Verify with `ws-delivery-status` that the commit is merged on `origin/main` (exit code 0).
 6. Execute the post-delivery retrospective checks before closing the delivery.
 
-## Post-delivery retrospective (three principles)
+## Post-delivery retrospective (three principles via Retrospective Swarm)
 
-Do not stop immediately after `git merge`. Execute three physical retrospective checks before concluding the delivery:
+Do not stop immediately after `git merge`. Execute three physical retrospective checks before concluding the delivery, optionally dispatching a quick 3-Intern batch via `subagent_batch`:
 
-1. **Recurring mistake and harness constraint check**:
+1. **Intern 1: Recurring mistake and harness constraint check**:
    - Check if any review comment, gate rejection, or CI retry occurred during this delivery.
    - If an error occurred, identify the mechanical guard (pre-commit check, linter, or local gate assertion) that catches it locally in under one second.
    - Do not resolve a problem only through repeated human or agent rework. Convert the lesson into a physical check or register an issue to reinforce harness constraints.
 
-2. **Harness loading and context footprint audit**:
+2. **Intern 2: Harness loading and context footprint audit**:
    - Inspect the size of always-loaded rules (`AGENTS.md`) and projected files.
    - Verify that always-loaded rules contain only decision invariants (boundaries, prohibitions, thresholds).
    - Verify that prompt context contains no duplicate clauses between host rules and repository projections.
    - Move operational instructions, historical incident narratives, and procedures to on-demand skills or SSOT documents.
 
-3. **Delivery pipeline telemetry and acceleration**:
+3. **Intern 3: Delivery pipeline telemetry and acceleration**:
    - Record the runtime of each delivery phase: local tests, gate evaluation, and remote CI jobs.
    - Flag any remote CI job that exceeds 60 seconds (such as un-cached Docker builds or slow test shards).
    - Identify whether the slow job can be short-circuited by file path filters or accelerated with dependency caching.
