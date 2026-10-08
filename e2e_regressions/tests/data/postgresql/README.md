@@ -4,7 +4,7 @@
 
 ## Scope
 
-This suite connects to one PostgreSQL server. The environment variables below select the server. Both tests skip when `DB_HOST` or `DB_PASSWORD` is unset.
+This suite connects to one PostgreSQL server. The environment variables below select the server. Both tests skip when the host or the password is missing. `PG_HOST` and `PG_PASS` take precedence over `DB_HOST` and `DB_PASSWORD`.
 
 ## 测试矩阵
 
