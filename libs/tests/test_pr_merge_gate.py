@@ -2804,7 +2804,7 @@ def test_an_inventory_path_in_another_spelling_still_holds_its_workflow(
 
 
 def test_a_changed_path_in_another_case_is_held_too():
-    variant = ".github/workflows/Infra-CI.yml"
+    variant = f"{gate.WORKFLOW_PREFIX}Infra-CI.yml"
     verdict = gate.evaluate(_green(files=(variant,), lock_failures=HOLDS), now=NOW)
     assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
 

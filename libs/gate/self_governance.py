@@ -18,6 +18,7 @@ from libs.gate.types import (
     Runner,
     _get_root,
     _get_workflow_dir,
+    _normalized_path,
 )
 
 _OWNER_INSTRUCTION_HEADER_RE = re.compile(
@@ -161,12 +162,37 @@ def self_governing_files() -> frozenset[str]:
 
 
 def is_self_governing(path: str) -> bool:
-    """True when changes to path would evaluate under self-adjudication rules."""
+    """True when changes to path would evaluate under self-adjudication rules.
+
+    The path compares in one form (`_normalized_path`): the gate host's disk does not
+    tell `Tools/pr_merge_gate.py` from `tools/pr_merge_gate.py` (#1138)."""
+    normal = _normalized_path(path)
     return (
-        path.startswith(WORKFLOW_PREFIX)
-        or path in self_governing_files()
-        or _shadows_the_gate(path)
+        normal.startswith(WORKFLOW_PREFIX)
+        or normal in _folded(self_governing_files())
+        or _shadows_the_gate(normal)
     )
+
+
+@functools.lru_cache(maxsize=4)
+def _folded(paths: frozenset[str]) -> frozenset[str]:
+    return frozenset(_normalized_path(p) for p in paths)
+
+
+# Paths that Python loads without an import statement in the gate, or that change
+# how pytest runs the gate tests, at any depth (#1138 round 3).
+_TOOLING_PARTS = frozenset({"__pycache__", ".venv", "venv", "site-packages"})
+_COMPILED_SUFFIXES = (".pyc", ".pyd", ".pth", ".so")
+_TOOL_CONFIG_NAMES = frozenset(
+    {
+        "pytest.ini",
+        "tox.ini",
+        "setup.cfg",
+        ".coveragerc",
+        "sitecustomize.py",
+        "usercustomize.py",
+    }
+)
 
 
 @functools.lru_cache(maxsize=4)
@@ -181,16 +207,18 @@ def _closure_shape(
     for member in closure:
         if not member.endswith(".py"):
             continue
-        directories.add(str(PurePosixPath(member).parent))
+        directories.add(_normalized_path(str(PurePosixPath(member).parent)))
         try:
             tree = ast.parse((Path(root) / member).read_text(encoding="utf-8"))
         except (OSError, SyntaxError, UnicodeDecodeError):
             continue
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                imported.update(alias.name.split(".")[0] for alias in node.names)
+                imported.update(
+                    alias.name.split(".")[0].casefold() for alias in node.names
+                )
             elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
-                imported.add(node.module.split(".")[0])
+                imported.add(node.module.split(".")[0].casefold())
     return frozenset(directories), frozenset(imported)
 
 
@@ -198,7 +226,14 @@ def _shadows_the_gate(path: str) -> bool:
     """True for a file that Python or pytest would run instead of, or before, a part of
     the gate (#1138). A rule over the path, so a file a PR adds is caught before it
     exists."""
+    path = _normalized_path(path)
     pure = PurePosixPath(path)
+    if not pure.parts:
+        return False
+    if _TOOLING_PARTS & set(pure.parts) or pure.name.endswith(_COMPILED_SUFFIXES):
+        return True  # bytecode, an extension, a .pth file, or a virtual environment
+    if pure.name in _TOOL_CONFIG_NAMES:
+        return True  # pytest or site configuration
     importable = pure.name.endswith(_IMPORT_SUFFIXES)
     import_name = pure.name.split(".")[0]
     if len(pure.parts) == 1 and importable:
@@ -210,12 +245,12 @@ def _shadows_the_gate(path: str) -> bool:
         or PurePosixPath(GATE_TESTS_DIR).is_relative_to(pure.parent)
     ):
         return True
-    closure = self_governing_files()
+    closure = _folded(self_governing_files())
     if pure.name in ("__init__.py", "__main__.py") and f"{pure.parent}.py" in closure:
         return True  # a package that replaces a closure module
     if importable and f"{pure.parent}/{import_name}.py" in closure:
         return True  # another form of a closure module, such as types.abi3.so
-    directories, imported = _closure_shape(str(_get_root()), closure)
+    directories, imported = _closure_shape(str(_get_root()), self_governing_files())
     return importable and str(pure.parent) in directories and import_name in imported
 
 

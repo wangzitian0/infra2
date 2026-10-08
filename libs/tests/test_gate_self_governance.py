@@ -201,3 +201,108 @@ def test_the_gate_tests_conftest_is_in_the_closure() -> None:
     """`collect_ignore_glob` in it would switch off the gate tests (#1138 M3)."""
     assert (ROOT / "libs/tests/conftest.py").is_file()
     assert "libs/tests/conftest.py" in gate.self_governing_files()
+
+
+# --- #1138 round 3 R3-2: case variants, tooling paths, and tool configuration --------
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "Tools/pr_merge_gate.py",
+        "LIBS/Gate/Evaluator.py",
+        ".github/Workflows/infra-ci.yml",
+        "tools\\pr_merge_gate.py",
+        "./tools/pr_merge_gate.py",
+        "libs/gate/../gate/evaluator.py",
+        "Tools/PR_Merge_Gate/__init__.py",
+    ],
+)
+def test_another_spelling_of_a_gate_path_is_self_governing(path) -> None:
+    """The gate host's disk does not tell case apart (#1138 round 3)."""
+    assert gate.is_self_governing(path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "libs/gate/__pycache__/evaluator.cpython-312.pyc",
+        ".venv/lib/python3.12/site-packages/yaml/__init__.py",
+        "venv/lib/x.py",
+        "docs/site-packages/x.txt",
+        "libs/deploy/x.pyc",
+        "libs/deploy/x.pyd",
+        "libs/deploy/x.pth",
+        "libs/deploy/x.so",
+        "libs/deploy/x.abi3.so",
+        "libs/deploy/x.cpython-312-darwin.so",
+    ],
+)
+def test_compiled_files_and_virtual_environments_are_self_governing(path) -> None:
+    assert gate.is_self_governing(path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "pytest.ini",
+        "libs/tests/pytest.ini",
+        "tox.ini",
+        "setup.cfg",
+        "docs/setup.cfg",
+        ".coveragerc",
+        "libs/sitecustomize.py",
+        "tools/usercustomize.py",
+    ],
+)
+def test_pytest_and_site_configuration_is_self_governing(path) -> None:
+    assert gate.is_self_governing(path)
+
+
+def test_pyproject_toml_stays_outside_the_gate() -> None:
+    """Dependency edits are common; the docs name this residual (#1147)."""
+    assert not gate.is_self_governing("pyproject.toml")
+
+
+# Thirty tracked paths, chosen across docs, tools, libs, platform and bootstrap.
+ORDINARY_PATHS = (
+    "docs/onboarding/01.quick-start.md",
+    "docs/project/Infra-006.TODOWRITE.md",
+    "docs/project/Infra-020.TODOWRITE.md",
+    "docs/ssot/bootstrap.dns_and_cert.md",
+    "docs/ssot/db.clickhouse.md",
+    "docs/ssot/ops.pipeline.md",
+    "tools/app_compose_id_drift.py",
+    "tools/ci_gate_ruleset_audit.py",
+    "tools/env_tool.py",
+    "tools/lint_compose_resource_limits.py",
+    "tools/promotion_soak_guard.py",
+    "tools/service_identity_audit.py",
+    "libs/alerting/__init__.py",
+    "libs/common.py",
+    "libs/core/harness/sweep.py",
+    "libs/deploy/dependencies.py",
+    "libs/deploy/git_provenance.py",
+    "libs/deploy/release_markers.py",
+    "libs/observability/openpanel.py",
+    "libs/observability/watchers/__init__.py",
+    "platform/01.postgres/.env.example",
+    "platform/03.clickhouse/config.xml",
+    "platform/10.authentik/shared_tasks.py",
+    "platform/21.portal/compose.yaml",
+    "platform/24.openpanel/shared_tasks.py",
+    "bootstrap/.env.production.example",
+    "bootstrap/01.dokploy_install/host_guard/infra2-host-heartbeat.timer",
+    "bootstrap/03.dokploy_setup/README.md",
+    "bootstrap/05.vault/README.md",
+    "bootstrap/06.iac_runner/env.manifest.json",
+)
+
+
+def test_ordinary_tracked_paths_are_not_self_governing() -> None:
+    """The rules must not send every PR to the owner."""
+    assert len(ORDINARY_PATHS) == 30
+    missing = [p for p in ORDINARY_PATHS if not (ROOT / p).is_file()]
+    assert not missing, f"pick other tracked paths: {missing}"
+    governed = [p for p in ORDINARY_PATHS if gate.is_self_governing(p)]
+    assert not governed, governed
