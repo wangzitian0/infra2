@@ -2823,3 +2823,31 @@ def test_a_changed_path_in_another_case_is_held_too():
 )
 def test_a_path_has_one_comparable_form(path, normal):
     assert _normalized_path(path) == normal
+
+
+# --- #1138 round 3 R3-5: an exit 4 after the lock read does not say "not read" -------
+
+
+class _BadNumberGh(_Gh):
+    """gh answers every read, but the PR number is not a number: `collect` fails
+    while it builds the facts, after the lock read."""
+
+    def __call__(self, argv):
+        out = super().__call__(argv)
+        if list(argv)[:2] == ["pr", "view"]:
+            doc = json.loads(out)
+            doc["number"] = "not-a-number"
+            return json.dumps(doc)
+        return out
+
+
+def test_a_failure_after_the_lock_read_says_the_run_stopped(capsys):
+    gh = _BadNumberGh(files=RELEASE_CODE)
+    assert gate.main(["704"], gh=gh, now=lambda: READY_AT) == 4
+    assert any("/environments/production" in c[-1] for c in gh.calls)
+    printed = _printed(capsys)
+    assert "production lock NOT verified: the run stopped before a verdict" in printed
+    assert "not read" not in printed
+    assert gate.main(["704", "--json"], gh=_BadNumberGh(), now=lambda: READY_AT) == 4
+    doc = _json_verdict(capsys)
+    assert doc["lock_verified"] is False and doc["lock_failures"] is None

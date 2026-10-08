@@ -203,10 +203,10 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
     args = parser.parse_args(argv)
 
     from libs.console import error, success, warning
-    from libs.gate.evaluator import LOCK_NOT_READ
+    from libs.gate.evaluator import LOCK_NOT_READ, LOCK_STOPPED
     from libs.gate.types import EXIT_UNEVALUABLE
 
-    def unevaluable(why: str) -> int:
+    def unevaluable(why: str, *, lock_read: bool = False) -> int:
         if args.json:
             print(
                 json.dumps(
@@ -216,16 +216,21 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
                         "outcome": "unevaluable",
                         "exit_code": EXIT_UNEVALUABLE,
                         "reasons": [why],
-                        # The run stopped before it read the lock (#1138).
+                        # No verdict, so no verified lock (#1138).
                         "lock_verified": False,
                         "lock_failures": None,
                     }
                 )
             )
         else:
+            lock_line = (
+                LOCK_STOPPED
+                if lock_read
+                else f"{LOCK_NOT_READ} (the run stopped before the lock read)"
+            )
             warning(
                 f"#{args.number}: could not evaluate (not a verdict): {why}\n"
-                f"  {LOCK_NOT_READ} (the run stopped before the lock read)"
+                f"  {lock_line}"
             )
         return EXIT_UNEVALUABLE
 
@@ -243,7 +248,10 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
     try:
         facts = collect(args.number, repo=args.repo, gh=gh)
     except Exception as exc:  # noqa: BLE001 - any read failure is "could not evaluate"
-        return unevaluable(f"reading the PR failed: {type(exc).__name__}: {exc}")
+        return unevaluable(
+            f"reading the PR failed: {type(exc).__name__}: {exc}",
+            lock_read=bool(getattr(exc, "lock_read", False)),
+        )
     if args.request_review and not any(
         r[0] in AUTOMATED_REVIEWERS and r[2] > 0 for r in facts.reviews_on_head()
     ):

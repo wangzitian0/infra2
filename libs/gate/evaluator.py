@@ -495,6 +495,7 @@ LOCK_VERIFIED = (
 
 
 LOCK_NOT_READ = "production lock NOT verified: not read"
+LOCK_STOPPED = "production lock NOT verified: the run stopped before a verdict"
 
 
 def lock_status(facts: HeadFacts) -> str:

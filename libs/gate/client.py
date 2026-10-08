@@ -332,60 +332,69 @@ def collect(
         if (str(view.get("state") or "") == "OPEN" and _is_local_root_repo(repo))
         else None
     )
-    return HeadFacts(
-        repo=repo,
-        rule_drift=drift,
-        lock_failures=lock,
-        number=int(view["number"]),
-        state=str(view.get("state") or ""),
-        draft=bool(view.get("isDraft")),
-        base=str(view.get("baseRefName") or ""),
-        head_sha=str(view.get("headRefOid") or ""),
-        files=changed,
-        proven_tighter=proven,
-        changed_files=int(view.get("changedFiles") or 0),
-        review_decision=str(view.get("reviewDecision") or ""),
-        absent_fields=tuple(
-            name
-            for name in (
-                "files",
-                "changedFiles",
-                "commits",
-                "mergeable",
-                "mergeStateStatus",
-            )
-            if not view.get(name)
-        ),
-        last_push_at=last_push if head_seen else 0.0,
-        checks=tuple(
-            (str(c["name"]), str(c.get("bucket") or c.get("state") or ""))
-            for c in checks
-        ),
-        unresolved_threads=sum(1 for n in nodes if not n.get("isResolved")),
-        unresolved_weight=sum(
-            thread_weight(
-                [
-                    c.get("body") or ""
-                    for c in ((n.get("comments") or {}).get("nodes") or [])
-                ]
-            )
-            for n in nodes
-            if not n.get("isResolved")
-        ),
-        review_threads_total=int(review_threads.get("totalCount") or len(nodes)),
-        node_id=str(view.get("id") or ""),
-        mergeable=_field(view, "mergeable"),
-        merge_state=_field(view, "mergeStateStatus"),
-        base_changed_files=base_changed,
-        body=str(view.get("body") or ""),
-        author=(str(author.get("__typename") or ""), str(author.get("login") or "")),
-        comments=_pr_comments(pull.get("comments")),
-        reviews=tuple(
-            (
-                str((r.get("author") or {}).get("login") or ""),
-                str((r.get("commit") or {}).get("oid") or ""),
-                _epoch(r["submittedAt"]) if r.get("submittedAt") else 0.0,
-            )
-            for r in view.get("reviews") or []
-        ),
-    )
+    # A failure after the lock read is reported as such (#1138 round 3): the run
+    # stopped before a verdict, and the lock was read, so "not read" is false.
+    try:
+        return HeadFacts(
+            repo=repo,
+            rule_drift=drift,
+            lock_failures=lock,
+            number=int(view["number"]),
+            state=str(view.get("state") or ""),
+            draft=bool(view.get("isDraft")),
+            base=str(view.get("baseRefName") or ""),
+            head_sha=str(view.get("headRefOid") or ""),
+            files=changed,
+            proven_tighter=proven,
+            changed_files=int(view.get("changedFiles") or 0),
+            review_decision=str(view.get("reviewDecision") or ""),
+            absent_fields=tuple(
+                name
+                for name in (
+                    "files",
+                    "changedFiles",
+                    "commits",
+                    "mergeable",
+                    "mergeStateStatus",
+                )
+                if not view.get(name)
+            ),
+            last_push_at=last_push if head_seen else 0.0,
+            checks=tuple(
+                (str(c["name"]), str(c.get("bucket") or c.get("state") or ""))
+                for c in checks
+            ),
+            unresolved_threads=sum(1 for n in nodes if not n.get("isResolved")),
+            unresolved_weight=sum(
+                thread_weight(
+                    [
+                        c.get("body") or ""
+                        for c in ((n.get("comments") or {}).get("nodes") or [])
+                    ]
+                )
+                for n in nodes
+                if not n.get("isResolved")
+            ),
+            review_threads_total=int(review_threads.get("totalCount") or len(nodes)),
+            node_id=str(view.get("id") or ""),
+            mergeable=_field(view, "mergeable"),
+            merge_state=_field(view, "mergeStateStatus"),
+            base_changed_files=base_changed,
+            body=str(view.get("body") or ""),
+            author=(
+                str(author.get("__typename") or ""),
+                str(author.get("login") or ""),
+            ),
+            comments=_pr_comments(pull.get("comments")),
+            reviews=tuple(
+                (
+                    str((r.get("author") or {}).get("login") or ""),
+                    str((r.get("commit") or {}).get("oid") or ""),
+                    _epoch(r["submittedAt"]) if r.get("submittedAt") else 0.0,
+                )
+                for r in view.get("reviews") or []
+            ),
+        )
+    except Exception as exc:
+        exc.lock_read = lock is not None  # type: ignore[attr-defined]
+        raise
