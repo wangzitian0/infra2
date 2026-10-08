@@ -223,7 +223,7 @@ def test_configure_dokploy_approle_injects_creds_and_redeploys(monkeypatch) -> N
     )
     _install_fake_dokploy(monkeypatch, client)
     monkeypatch.setattr(
-        "libs.common.get_env",
+        "libs.core.environ.get_env",
         lambda: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"},
     )
     monkeypatch.setenv("DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS", "0")
@@ -254,7 +254,7 @@ def test_configure_dokploy_approle_returns_false_when_service_absent(
 
     _install_fake_dokploy(monkeypatch, _NoCompose())
     monkeypatch.setattr(
-        "libs.common.get_env",
+        "libs.core.environ.get_env",
         lambda: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"},
     )
 

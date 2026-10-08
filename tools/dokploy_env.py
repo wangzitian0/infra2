@@ -4,7 +4,7 @@ from __future__ import annotations
 from invoke import task
 from rich.table import Table
 
-from libs.common import normalize_env_name, get_env, get_service_url
+from libs.core.environ import normalize_env_name, get_env, get_service_url
 from libs.console import header, success, error, info, console, warning
 from libs.deploy.dokploy_client import get_dokploy
 

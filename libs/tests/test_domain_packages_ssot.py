@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 
-from libs import common
 from libs.backup import (
     RehearsalSpecification,
     create_rehearsal_plan,
@@ -163,11 +162,12 @@ def test_observability_watcher_and_trail_aliases() -> None:
 # ==========================================
 
 
-def test_backward_compatibility_shims() -> None:
-    """Verify all re-exports in legacy modules work identically."""
-    # common shims
-    assert hasattr(common, "DeploymentEnvironment")
-    assert hasattr(common, "get_environment")
+def test_core_package_exports_the_objects_of_core_environ() -> None:
+    """Each ``libs.core`` environment name is the object defined in ``libs.core.environ``."""
+    from libs.core import environ
+
+    assert DeploymentEnvironment is environ.DeploymentEnvironment
+    assert get_environment is environ.get_environment
 
 
 def test_rehearsal_timeout_guard(monkeypatch) -> None:

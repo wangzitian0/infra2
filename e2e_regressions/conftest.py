@@ -136,7 +136,7 @@ URL_SUBDOMAIN_KEYS = {
 
 def _service_host(url_name: str, env_suffix: str, internal_domain: str) -> str:
     """Return the canonical host for a URL name in URL_SUBDOMAIN_KEYS."""
-    from libs.common import SERVICE_SUBDOMAINS
+    from libs.core.environ import SERVICE_SUBDOMAINS
 
     key = URL_SUBDOMAIN_KEYS[url_name]
     return f"{SERVICE_SUBDOMAINS[key]}{env_suffix}.{internal_domain}"

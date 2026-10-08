@@ -1,9 +1,10 @@
-"""Operator helpers for deploy tasks, over ``libs.core.environ``.
+"""Operator task helper for deploy tasks: ``check_service``.
 
-The environment, domain and routing helpers live in ``libs.core.environ`` and are
-re-exported here for the many task modules that import ``libs.common`` (#955).
-``check_service`` stays here: it is an operator task helper that runs a health command
-over SSH and prints through ``libs.console``, which domain packages must not import.
+``check_service`` runs a health command over SSH and prints through ``libs.console``.
+A domain package must not import ``libs.console``, so the helper stays in this flat module.
+
+This module offers nothing else. The environment helpers live in ``libs.core.environ``.
+Import them from there (#1164).
 """
 
 from __future__ import annotations
@@ -11,63 +12,12 @@ from __future__ import annotations
 import shlex
 from typing import TYPE_CHECKING
 
-from libs.core.environ import (
-    CONTAINERS,
-    DEPLOYMENT_ENV_PREVIEW,
-    DEPLOYMENT_ENV_PRODUCTION,
-    DEPLOYMENT_ENV_STAGING,
-    DeploymentEnvironment,
-    OTEL_INGEST_SUBDOMAIN,
-    OTLP_TRACES_PATH,
-    SERVICE_SUBDOMAINS,
-    SHARED_PLATFORM_SERVICES,
-    STATEFUL_DEPLOY_ENVIRONMENTS,
-    _BOOTSTRAP_ONLY_SHARED_SERVICES,
-    _REGISTRY_BACKED_SHORT_NAMES,
-    get_env,
-    get_environment,
-    get_service_url,
-    infra_domain,
-    is_stateful_deploy_env,
-    normalize_env_name,
-    otel_ingest_endpoint,
-    reset_env_cache,
-    service_domain,
-    set_deploy_env,
-    validate_env,
-    with_env_suffix,
-)
+from libs.core import environ
 
 if TYPE_CHECKING:
     from invoke import Context
 
-__all__ = [
-    "CONTAINERS",
-    "DEPLOYMENT_ENV_PREVIEW",
-    "DEPLOYMENT_ENV_PRODUCTION",
-    "DEPLOYMENT_ENV_STAGING",
-    "DeploymentEnvironment",
-    "OTEL_INGEST_SUBDOMAIN",
-    "OTLP_TRACES_PATH",
-    "SERVICE_SUBDOMAINS",
-    "SHARED_PLATFORM_SERVICES",
-    "STATEFUL_DEPLOY_ENVIRONMENTS",
-    "_BOOTSTRAP_ONLY_SHARED_SERVICES",
-    "_REGISTRY_BACKED_SHORT_NAMES",
-    "check_service",
-    "get_env",
-    "get_environment",
-    "get_service_url",
-    "infra_domain",
-    "is_stateful_deploy_env",
-    "normalize_env_name",
-    "otel_ingest_endpoint",
-    "reset_env_cache",
-    "service_domain",
-    "set_deploy_env",
-    "validate_env",
-    "with_env_suffix",
-]
+__all__ = ["check_service"]
 
 
 def check_service(c: "Context", service: str, health_cmd: str) -> dict:
@@ -82,16 +32,16 @@ def check_service(c: "Context", service: str, health_cmd: str) -> dict:
     """
     from libs.console import error, success
 
-    env = get_env()
+    env = environ.get_env()
 
-    if service in CONTAINERS:
-        container = CONTAINERS[service]
+    if service in environ.CONTAINERS:
+        container = environ.CONTAINERS[service]
     elif "-" in service:
         container = service
     else:
         container = f"platform-{service}"
 
-    container = with_env_suffix(container, env)
+    container = environ.with_env_suffix(container, env)
 
     # Build the local and remote shells independently.  Health commands often
     # contain their own quotes (python -c + URLs); interpolating them inside one

@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from libs.common import SERVICE_SUBDOMAINS
+from libs.core.environ import SERVICE_SUBDOMAINS
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFTEST = ROOT / "e2e_regressions" / "conftest.py"

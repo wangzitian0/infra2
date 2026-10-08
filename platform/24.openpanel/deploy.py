@@ -2,7 +2,7 @@
 
 import sys
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.common import with_env_suffix
+from libs.core.environ import with_env_suffix
 from libs.security.store import get_secrets, vault_token
 from libs.console import success, warning, info, error
 from libs.core.facets import (
