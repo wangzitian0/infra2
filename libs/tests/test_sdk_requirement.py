@@ -296,6 +296,28 @@ def test_only_pyproject_and_the_lock_name_the_wheel() -> None:
     )
 
 
+#: The locked version written as text (`infra2-sdk`, two equal signs, a digit).
+_VERSION_COPY = re.compile(r"infra2[-_.]sdk\s*==\s*\d", re.I)
+
+
+def test_no_file_repeats_the_locked_sdk_version() -> None:
+    """A version in prose is a second pin. It goes stale at the next release bump."""
+    scanned = 0
+    offenders = []
+    for rel in _tracked_files():
+        if rel in ("pyproject.toml", "uv.lock") or rel.startswith("docs/project/"):
+            continue
+        try:
+            text = (ROOT / rel).read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        scanned += 1
+        if _VERSION_COPY.search(text):
+            offenders.append(rel)
+    assert scanned > 100, f"the scan read only {scanned} files"
+    assert offenders == [], f"{offenders} repeat the SDK version; point to uv.lock"
+
+
 GITHUB = ROOT / ".github"
 #: The call, whole and quoted. Text after the script path inside the `$( )`, such as
 #: `| sed 's/#.*//'`, would cut the hash off the requirement.
