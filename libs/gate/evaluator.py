@@ -502,15 +502,42 @@ LOCK_VERIFIED = (
 
 LOCK_NOT_READ = "production lock NOT verified: not read"
 LOCK_STOPPED = "production lock NOT verified: the run stopped before a verdict"
+# Why a lock was not read: skipped by design, or the run stopped before the read.
+LOCK_SKIPPED = "the lock is read only for an open PR of this repository"
+LOCK_NOT_REACHED = "the run stopped before the lock read"
+LOCK_STATES = ("verified", "not_verified", "not_read", "stopped_before_verdict")
+
+
+def lock_state(facts: HeadFacts) -> str:
+    """The lock state of a verdict (#1138). `stopped_before_verdict` has no facts, so
+    only the exit-4 path of the gate reports it."""
+    if facts.lock_failures is None:
+        return "not_read"
+    return "not_verified" if facts.lock_failures else "verified"
+
+
+def lock_line(state: str, detail: str = "") -> str:
+    """The one lock line of every output. It ends with the state that the JSON verdict
+    carries in `lock_state`. It informs; it never decides."""
+    text = {
+        "verified": LOCK_VERIFIED,
+        "not_verified": f"production lock NOT verified: {detail}",
+        "not_read": f"{LOCK_NOT_READ} ({detail})",
+        "stopped_before_verdict": LOCK_STOPPED,
+    }[state]
+    # Not "[...]": the console reads square brackets as markup and drops them.
+    return f"{text} | lock_state={state}"
 
 
 def lock_status(facts: HeadFacts) -> str:
-    """One line on the production lock (#1138). It informs; it never decides."""
-    if facts.lock_failures is None:
-        return f"{LOCK_NOT_READ} (closed PR or another repository)"
-    if not facts.lock_failures:
-        return LOCK_VERIFIED
-    return f"production lock NOT verified: {'; '.join(facts.lock_failures)}"
+    """The lock line for a verdict with facts."""
+    state = lock_state(facts)
+    detail = (
+        "; ".join(facts.lock_failures or ())
+        if state == "not_verified"
+        else LOCK_SKIPPED
+    )
+    return lock_line(state, detail)
 
 
 def render(facts: HeadFacts, verdict: Verdict) -> str:

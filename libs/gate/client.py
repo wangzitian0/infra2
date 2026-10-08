@@ -397,4 +397,6 @@ def collect(
         )
     except Exception as exc:
         exc.lock_read = lock is not None  # type: ignore[attr-defined]
+        # No lock read for a closed PR or another repository: skipped by design.
+        exc.lock_skipped = lock is None  # type: ignore[attr-defined]
         raise

@@ -106,9 +106,10 @@
 The gate reads the production lock (#1138) on every run for an open PR in this repository.
 It does not read the lock for a closed PR, for another repository, or when the run stops at exit 4 first.
 The verdict prints one lock line: `production lock verified (...)` or `production lock NOT verified: <failures>`.
-A run that did not read the lock prints `production lock NOT verified: not read`.
+A run that did not read the lock prints `production lock NOT verified: not read`, with the reason.
 A run that stops after the lock read prints `production lock NOT verified: the run stopped before a verdict`.
-The JSON verdict has the same fact in `lock_verified` and `lock_failures`. The line alone never changes the exit code.
+Each lock line ends with `| lock_state=<state>`. The state is `verified`, `not_verified`, `not_read` or `stopped_before_verdict`.
+The JSON verdict has the same facts in `lock_state`, `lock_verified` and `lock_failures`. The line alone never changes the exit code.
 The lock is the GitHub environment `production`. The gate reads four facts from GitHub:
 
 1. The environment has a required reviewer.

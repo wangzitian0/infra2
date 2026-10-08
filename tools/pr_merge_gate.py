@@ -101,7 +101,9 @@ from libs.gate import (
     _working_tree_rule_drift,
     collect,
     evaluate,
+    LOCK_STATES,
     is_self_governing,
+    lock_line,
     lock_status,
     render,
     request_copilot_review,
@@ -163,6 +165,8 @@ __all__ = [
     "collect",
     "evaluate",
     "is_self_governing",
+    "LOCK_STATES",
+    "lock_line",
     "lock_status",
     "main",
     "render",
@@ -205,10 +209,17 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
     args = parser.parse_args(argv)
 
     from libs.console import error, success, warning
-    from libs.gate.evaluator import LOCK_NOT_READ, LOCK_STOPPED
+    from libs.gate.evaluator import (
+        LOCK_NOT_REACHED,
+        LOCK_SKIPPED,
+        lock_line,
+        lock_state,
+    )
     from libs.gate.types import EXIT_UNEVALUABLE
 
-    def unevaluable(why: str, *, lock_read: bool = False) -> int:
+    def unevaluable(
+        why: str, *, state: str = "not_read", detail: str = LOCK_NOT_REACHED
+    ) -> int:
         if args.json:
             print(
                 json.dumps(
@@ -221,18 +232,14 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
                         # No verdict, so no verified lock (#1138).
                         "lock_verified": False,
                         "lock_failures": None,
+                        "lock_state": state,
                     }
                 )
             )
         else:
-            lock_line = (
-                LOCK_STOPPED
-                if lock_read
-                else f"{LOCK_NOT_READ} (the run stopped before the lock read)"
-            )
             warning(
                 f"#{args.number}: could not evaluate (not a verdict): {why}\n"
-                f"  {lock_line}"
+                f"  {lock_line(state, detail)}"
             )
         return EXIT_UNEVALUABLE
 
@@ -250,9 +257,16 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
     try:
         facts = collect(args.number, repo=args.repo, gh=gh)
     except Exception as exc:  # noqa: BLE001 - any read failure is "could not evaluate"
+        if getattr(exc, "lock_read", False):
+            state, detail = "stopped_before_verdict", ""
+        elif getattr(exc, "lock_skipped", False):
+            state, detail = "not_read", LOCK_SKIPPED
+        else:
+            state, detail = "not_read", LOCK_NOT_REACHED
         return unevaluable(
             f"reading the PR failed: {type(exc).__name__}: {exc}",
-            lock_read=bool(getattr(exc, "lock_read", False)),
+            state=state,
+            detail=detail,
         )
     if args.request_review and not any(
         r[0] in AUTOMATED_REVIEWERS and r[2] > 0 for r in facts.reviews_on_head()
@@ -315,6 +329,7 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
                     "quiet_remaining_seconds": verdict.quiet_remaining_seconds,
                     "policy": args.policy,
                     # Informational (#1138): the lock never changes the exit code alone.
+                    "lock_state": lock_state(facts),
                     "lock_verified": facts.lock_failures == (),
                     "lock_failures": (
                         None

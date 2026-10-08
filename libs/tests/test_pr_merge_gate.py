@@ -2430,11 +2430,14 @@ def test_a_release_code_pr_reports_a_verified_lock(capsys):
     gh = _Gh(files=RELEASE_CODE)
     assert gate.main(["704"], gh=gh, now=lambda: READY_AT - 1) == 1
     waiting = _printed(capsys)
-    assert waiting.endswith(LOCK_VERIFIED_LINE), waiting
+    assert waiting.endswith(f"{LOCK_VERIFIED_LINE} | lock_state=verified"), waiting
     assert gate.main(["704"], gh=gh, now=lambda: READY_AT) == 0
     ready = _printed(capsys)
     assert "mergeable under session authority" in ready
-    assert f"no path that needs the owner; {LOCK_VERIFIED_LINE}" in ready
+    assert (
+        f"no path that needs the owner; {LOCK_VERIFIED_LINE} | lock_state=verified"
+        in ready
+    )
 
 
 def test_a_release_code_pr_reports_an_unverified_lock_and_keeps_its_exit_code(capsys):
@@ -2516,13 +2519,17 @@ def test_each_proven_file_adds_two_reads_to_the_bound():
 
 
 def test_the_lock_line_names_each_state():
-    assert gate.lock_status(_facts(lock_failures=())) == LOCK_VERIFIED_LINE
+    assert (
+        gate.lock_status(_facts(lock_failures=()))
+        == f"{LOCK_VERIFIED_LINE} | lock_state=verified"
+    )
     assert (
         gate.lock_status(_facts(lock_failures=("a", "b")))
-        == "production lock NOT verified: a; b"
+        == "production lock NOT verified: a; b | lock_state=not_verified"
     )
-    assert gate.lock_status(_facts(lock_failures=None)).startswith(
-        "production lock NOT verified: not read"
+    assert gate.lock_status(_facts(lock_failures=None)) == (
+        "production lock NOT verified: not read (the lock is read only for an open "
+        "PR of this repository) | lock_state=not_read"
     )
 
 
@@ -2885,3 +2892,86 @@ def test_a_failure_after_the_lock_read_says_the_run_stopped(capsys):
     assert gate.main(["704", "--json"], gh=_BadNumberGh(), now=lambda: READY_AT) == 4
     doc = _json_verdict(capsys)
     assert doc["lock_verified"] is False and doc["lock_failures"] is None
+
+
+# --- #1138 round 4 R4-2: one lock state in every output ------------------------------
+
+
+def _states(argv, gh, capsys) -> tuple[int, str, str]:
+    """Exit code, JSON lock_state, and the text line of one PR read twice."""
+    code = gate.main([*argv, "--json"], gh=gh(), now=lambda: READY_AT)
+    state = _json_verdict(capsys)["lock_state"]
+    assert gate.main(argv, gh=gh(), now=lambda: READY_AT) == code
+    return code, state, _printed(capsys)
+
+
+@pytest.mark.parametrize(
+    "argv, gh, code, state, detail",
+    [
+        (["704"], lambda: _Gh(files=RELEASE_CODE), 0, "verified", "contract holds"),
+        (
+            ["704"],
+            lambda: _Gh(files=RELEASE_CODE, lock="unreadable"),
+            0,
+            "not_verified",
+            "could not be read",
+        ),
+        (
+            ["704"],
+            lambda: _Gh(files=RELEASE_CODE, state="MERGED"),
+            3,
+            "not_read",
+            "the lock is read only for an open PR of this repository",
+        ),
+        (
+            ["704", "--repo", "wangzitian0/truealpha"],
+            lambda: _Gh(),
+            None,
+            "not_read",
+            "the lock is read only for an open PR of this repository",
+        ),
+        (
+            ["704"],
+            _StaleCheckoutGh,
+            4,
+            "not_read",
+            "the run stopped before the lock read",
+        ),
+        (["704"], _BrokenGh, 4, "not_read", "the run stopped before the lock read"),
+        (
+            ["704"],
+            lambda: _BadNumberGh(files=RELEASE_CODE),
+            4,
+            "stopped_before_verdict",
+            "the run stopped before a verdict",
+        ),
+        (
+            ["704"],
+            lambda: _BadNumberGh(files=RELEASE_CODE, state="MERGED"),
+            4,
+            "not_read",
+            "the lock is read only for an open PR of this repository",
+        ),
+    ],
+    ids=[
+        "verified",
+        "not-verified",
+        "closed-pr",
+        "another-repository",
+        "stale-checkout",
+        "pr-read-fails",
+        "fails-after-the-lock-read",
+        "closed-pr-fails-later",
+    ],
+)
+def test_each_output_names_its_lock_state(argv, gh, code, state, detail, capsys):
+    exit_code, json_state, text = _states(argv, gh, capsys)
+    if code is not None:
+        assert exit_code == code
+    assert json_state == state
+    assert f"| lock_state={state}" in text and detail in text, text
+
+
+def test_every_lock_state_has_a_line():
+    for state in gate.LOCK_STATES:
+        assert gate.lock_line(state, "x").endswith(f" | lock_state={state}")
