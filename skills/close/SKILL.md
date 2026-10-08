@@ -9,22 +9,22 @@ Run this when you stop, for any reason. Each rule came from a session that ended
 
 ## 1. Choose the mode
 
+Run `ws-delivery-status` to verify physical delivery state before ending:
+
 ```bash
-BRANCH="$(git branch --show-current)"
-gh pr view "$BRANCH" --json state,mergedAt
-git status -sb
-git log --branches --not --remotes --oneline | wc -l   # commits that exist only on this machine
+ws-delivery-status
 ```
 
 | Condition | Mode |
 |---|---|
-| PR merged on main, and no service or runtime-config impact (a workflow change is an impact) | **Complete**, production disposition `none` |
-| PR merged, but the repository has no production release pipeline or production already runs the merged SHA | **Complete**, production disposition `none` |
-| PR merged, service impact, and the owner gave "deploy" or "hold" | **Complete** |
-| PR merged, service impact, no answer yet | **Complete** after the production question; the issue stays open (section 3) |
-| Anything else (unmerged, uncommitted) | **Suspend** |
+| `ws-delivery-status` exit 0 (merged on main), no service impact | **Complete**, production disposition `none` |
+| `ws-delivery-status` exit 0, service impact, owner gave "deploy" or "hold" | **Complete** |
+| `ws-delivery-status` exit 0, service impact, no answer yet | **Complete** after production question; issue stays open |
+| `ws-delivery-status` exit 1 (PR in review) | **Suspend**, report state strictly as `In review` with PR URL |
+| `ws-delivery-status` exit 2 (unmerged branch, draft changes) | **Suspend**, run `auto` to merge or write handover |
 
 Unmerged work is never Complete. Do not close the issue and do not delete the worktree in Suspend.
+Never declare complete or done when `ws-delivery-status` exits non-zero.
 Unpushed commits are invisible to everyone else. One log feature lived 3 days on a never-pushed branch
 while the docs described it as existing. Push the branch or write it into the handover.
 
@@ -82,7 +82,13 @@ Authorize production deployment of vX.Y.Z? Reply "deploy" or "hold".
 Write the handover with four parts. Include the exact next command.
 
 1. **Done:** commit SHAs, changed files, tests that passed.
-2. **Blocked:** the cause (CI, open design question, waiting for approval).
+2. **Blocked:** the cause (CI, open design question, a fact only the owner can supply).
+   List an owner action only when it needs the owner's hands or presence.
+   Examples: a production deploy, a setting that the agent token cannot change, a credential root.
+   A merge, a head approval, or a review of non-production work is never an owner action. If a gate demands one, the gate is the defect.
+   The exception is an edit that the production reservation keeps with the owner permanently.
+   Only three such holds exist: the reservation's self-guard, infra2's owner-held set (rule 6) and dev_env's `ci.yml` hold.
+   Name the missing physical fact, then do the agent work that supplies it.
 3. **Decisions:** contracts you fixed and assumptions you overturned.
 4. **Next:** the first command for the next session.
 

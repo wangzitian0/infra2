@@ -2,13 +2,13 @@
   "adapter": "rules-v2",
   "dirty_inputs": [],
   "inputs": {
-    "repo": "ce1055ae9a82d9a5c12edc7b14b853184d8bffe6c6bf3a02d7b6938821ad93e0",
+    "repo": "ef5ffc6e83b1b7dd728b408ef3caef85e0cc932968c620763e0f1dfff608d41d",
     "root": "1cd5eb99c9ca834cd1d5194f102461a043adfe392d7e924b3a017ec30624ab6e",
-    "skills": "977d3144dfc084a2ad88e4be70d99d4c791ecfe5c2ca91db5c9a48e728c4a6d8"
+    "skills": "4fc209bd63f128acaeb02a46ba2205313886a8ee8db5eaf8623fc78843c403e3"
   },
   "language": "en",
   "outputs": {
-    "AGENTS.md": "ba045e8905a35631a74a2f625b63b0484eb01e6d69ea9e00cfb00d264c7769ab",
+    "AGENTS.md": "e0dc9ed6fd7ac59a03f566a9e3c98fdbbd0fdc148304c2961175976dfec2e0c5",
     "CLAUDE.md": "a54ff182c7e8acf56acfd6e4b9c3ff41e2c41a31c9b211b2deb9df75d9a478f9"
   },
   "profiles": [
@@ -20,11 +20,11 @@
   "skills": {
     "files": {
       "skills/audit/SKILL.md": "f32f1dd3174202892bd70890f84295a638c2432ae065676e614c4ae3b94379c5",
-      "skills/auto/SKILL.md": "7448a07fe2313fc05bdaa2456411ccce089075f398701dfdd9639e3e411fb121",
-      "skills/close/SKILL.md": "f8dfd0ad608df0ce60212aa53572d7778b2109aa6085d17cdd43b73021428534",
+      "skills/auto/SKILL.md": "c8811943cfdf80d5d049273e8982af414f67b6d4415cf2401bfc067916cef2bd",
+      "skills/close/SKILL.md": "e53572243b2c7eaaa6223bfbd69b207f61c321b67535db6f3a47b371a0f088bb",
       "skills/codegraph/SKILL.md": "ab6e81a61e7efb60ff9897c058e668c120ce282ea918b1364ca2b1fb353e7d0f",
       "skills/deploy-evidence/SKILL.md": "668b5f2832680b37eefa3cceddc68a62baf92594ee5916c99898718c7d42d2e1",
-      "skills/init/SKILL.md": "417d5f584b2ef406a31c63d5de7a5505ccf7acb9e1d122402fb02f614c76463a",
+      "skills/init/SKILL.md": "436868f1816c7cd7ccf575472ba825ff8cb08a1e3b70eae7a59a06e3ffb2effd",
       "skills/prr/SKILL.md": "402e84b362610e044e7a18113ce245f40e437c01362967e47d1e96a31d1ba4e4",
       "skills/recall/SKILL.md": "aca4bdbd0d78c56665f92de0fc6d5c8be7a850c6013cb0849beb876f97a23f3e",
       "skills/smoke/SKILL.md": "b8d6c1f868edf776c395a13fc3e4f86e1ce8eb2e745d313b690f42fff7a3959a",
@@ -58,7 +58,7 @@
     },
     "root": "skills"
   },
-  "source_revision": "69697b411030534e9a7aef8221fe307026eb2b9b",
+  "source_revision": "813e2b59207362ee4f55ee723b16209cca3dd8be",
   "target": {
     "remote": "github.com/wangzitian0/infra2",
     "repo": "infra2",
