@@ -87,7 +87,7 @@ an autonomous App is an App decision, not a harness synchronization task.
 
 `skills/` is a **rendered artifact, not a source**. Each `skills/<name>/SKILL.md` is
 copied byte-for-byte from the workspace source of truth (`dev_env/skills/common/<name>/`)
-by `ws-skills-sync`, which also runs `--check` to prove the copy is identical by SHA-256.
+by `ws-publish`, which also runs `--check-files` to prove the copy is identical by SHA-256.
 Editing a file under `skills/` here does not reach the source: the next sync overwrites
 it, and until then every other repository disagrees with this one. Fix the source, then
 re-sync every repository.
