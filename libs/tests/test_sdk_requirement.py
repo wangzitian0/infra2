@@ -80,10 +80,24 @@ def _with_two_wheels(text: str) -> str:
     return text.replace(entry, entry * 2, 1)
 
 
+def _with_digest(digest: str):
+    """A lock whose infra2-sdk wheel carries `sha256:<digest>`."""
+
+    def mutate(text: str) -> str:
+        start = text.index('name = "infra2-sdk"')
+        return text[:start] + re.sub(
+            r"sha256:[0-9a-f]{64}", f"sha256:{digest}", text[start:], count=1
+        )
+
+    return mutate
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
         (lambda text: text.replace('hash = "sha256:', 'hash = "md5:'), "no sha256"),
+        (_with_digest(""), "no sha256"),
+        (_with_digest("ab" * 31), "no sha256"),
         (_with_two_wheels, "one direct wheel"),
         (
             lambda text: text.replace('name = "infra2-sdk"', 'name = "other-sdk"'),
@@ -96,7 +110,14 @@ def _with_two_wheels(text: str) -> str:
             "one direct wheel",
         ),
     ],
-    ids=["unhashed", "two-wheels", "absent", "url-mismatch"],
+    ids=[
+        "unhashed",
+        "empty-digest",
+        "short-digest",
+        "two-wheels",
+        "absent",
+        "url-mismatch",
+    ],
 )
 def test_a_lock_without_one_hashed_wheel_is_refused(tmp_path, mutate, message) -> None:
     lock = tmp_path / "uv.lock"
@@ -124,7 +145,7 @@ def _run_instruction(text: str, first_line: str) -> str:
     lines = text.splitlines()
     start = next(i for i, line in enumerate(lines) if line.startswith(first_line))
     end = start
-    while lines[end].endswith("\\"):
+    while lines[end].rstrip().endswith("\\"):
         end += 1
     return " ".join(" ".join(lines[start : end + 1]).replace("\\", " ").split())
 
@@ -148,7 +169,13 @@ def test_each_image_installs_the_locked_requirement(rel: str) -> None:
     # `shlex` drops the quotes, so test them in the text. An unquoted `$sdk` splits at
     # the blanks of `infra2-sdk @ <url>`: pip gets three arguments, the first without a hash.
     assert args.count('"$sdk"') == 1, f"{rel}: $sdk is not quoted: {args}"
-    assert shlex.split(args).count("$sdk") == 1, f"{rel}: $sdk is not one pip argument"
+    words = shlex.split(args)
+    assert words.count("$sdk") == 1, f"{rel}: $sdk is not one pip argument"
+    # A pip option such as `--src "$sdk"` would take the requirement as its value, and
+    # pip would install a requirement that is placed after it, with no hash.
+    assert words[-1] == "$sdk" and not words[-2].startswith("-"), (
+        f"{rel}: $sdk must be the last pip argument and no option may take it: {args}"
+    )
     # Run the script as the image does (script, then lock path) and compare with the
     # lock read independently, so the command line is tested and not only the function.
     package = _locked()
@@ -162,6 +189,42 @@ def test_each_image_installs_the_locked_requirement(rel: str) -> None:
     assert res.stdout.strip() == (
         f"infra2-sdk @ {package['source']['url']}#sha256={digest}"
     )
+
+
+#: The SDK by name (any case, `-`, `_`, `.` or `%5F`), the script, or its directory.
+_NAMES_THE_SDK = re.compile(r"infra2(?:%5f|[-_.])?sdk|sdk_requirement|/tmp/sdk", re.I)
+
+
+@pytest.mark.parametrize("rel", sorted(IMAGES))
+def test_each_image_names_the_sdk_only_in_its_two_checked_lines(rel: str) -> None:
+    """A later `RUN` that installs the SDK again, a second `COPY` over the script, and a
+    `sed` on the script all leave the checked `RUN` intact and drop the hash."""
+    named = [
+        line.rstrip(" \t\\")
+        for line in (ROOT / rel).read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#") and _NAMES_THE_SDK.search(line)
+    ]
+    assert named == [
+        "COPY uv.lock tools/sdk_requirement.py /tmp/sdk/",
+        _IMAGE_ASSIGN,
+    ], f"{rel}: only the COPY and the checked RUN may name the SDK or the script"
+
+
+def test_the_bootstrap_script_names_the_lock_and_the_script_only_in_its_checkout() -> (
+    None
+):
+    """The clone is the build context. A `sed` on the script after the checkout would
+    drop the hash from the image of the production runner."""
+    script = ROOT / "scripts/deploy_iac_runner_bootstrap.sh"
+    named = [
+        line.strip()
+        for line in script.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+        and ("sdk_requirement" in line or "uv.lock" in line)
+    ]
+    assert len(named) == 1 and named[0].startswith(
+        'git -C "$code_dir" checkout -f "$INFRA2_DEPLOY_SHA" -- '
+    ), named
 
 
 def test_every_image_that_installs_the_sdk_is_checked() -> None:
