@@ -1,7 +1,8 @@
-# Compatibility mirror of infra2-sdk v3.0.2 `infra2_sdk/data/stages.yaml`.
+# Compatibility mirror of `infra2_sdk/data/stages.yaml` in the infra2-sdk release that uv.lock pins.
 # The released SDK is the cross-repository machine contract. This local copy keeps infra
 # manifests reviewable and is equality-guarded by test_sdk_contract_adoption.py; do not edit
 # one without releasing/adopting a new SDK version.
+# The key `sdk_version` must equal the version in uv.lock. The same test checks it.
 version: 1
 sdk_version: 3.0.2
 stages:

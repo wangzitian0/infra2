@@ -2,10 +2,9 @@
 
 验证业务 PostgreSQL 数据库的连接和基本操作。
 
-## 📚 SSOT References
+## Scope
 
-本测试套件是以下文档的 **Test Anchor**：
-> [**Business PostgreSQL SSOT**](../../../../docs/ssot/db.business_pg.md#5-验证与测试-the-proof)
+This suite connects to one PostgreSQL server. The environment variables below select the server. Both tests skip when `DB_HOST` or `DB_PASSWORD` is unset.
 
 ## 测试矩阵
 
