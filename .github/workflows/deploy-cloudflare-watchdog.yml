@@ -21,6 +21,8 @@ concurrency:
 jobs:
   deploy:
     name: Deploy Cloudflare Watchdog
+    # The environment review comes before the checks below. Both must pass (#1125).
+    environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

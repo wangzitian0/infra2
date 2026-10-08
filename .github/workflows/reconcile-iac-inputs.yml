@@ -38,12 +38,17 @@ permissions:
   actions: read
 
 concurrency:
-  group: iac-input-reconcile-main
+  # A run that waits for the owner holds its group. A production promotion has its own
+  # group, so a staging soak after a tag push never waits for a production approval (#1125).
+  # The iac-runner serializes deploys per deployment key, so the two groups cannot race.
+  group: iac-input-reconcile-${{ inputs.promote_prod && 'prod' || 'main' }}
   cancel-in-progress: false
 
 jobs:
   reconcile:
     name: reconcile iac-pinned inputs
+    # A production promotion waits for the owner. A tag push reconciles staging only (#1125).
+    environment: ${{ inputs.promote_prod && 'production' || 'staging' }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
