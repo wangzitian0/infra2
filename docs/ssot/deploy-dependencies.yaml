@@ -54,7 +54,9 @@ services:
   platform/todo:
     depends_on:
       - uv.lock
+      - tools/sdk_requirement.py
 
   bootstrap/iac-runner:
     depends_on:
       - uv.lock
+      - tools/sdk_requirement.py
