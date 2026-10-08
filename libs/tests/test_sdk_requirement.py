@@ -15,6 +15,7 @@ locked requirement to pip, and no other file names the wheel.
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 import sys
 import tomllib
@@ -115,19 +116,36 @@ def test_the_cli_prints_nothing_and_fails_on_a_bad_lock(tmp_path) -> None:
     assert (result.returncode, result.stdout) == (1, "")
 
 
+_IMAGE_ASSIGN = 'RUN sdk="$(python /tmp/sdk/sdk_requirement.py /tmp/sdk/uv.lock)"'
+
+
+def _run_instruction(text: str, first_line: str) -> str:
+    """The Dockerfile instruction that starts with `first_line`, on one line."""
+    lines = text.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith(first_line))
+    end = start
+    while lines[end].endswith("\\"):
+        end += 1
+    return " ".join(" ".join(lines[start : end + 1]).replace("\\", " ").split())
+
+
 @pytest.mark.parametrize("rel", sorted(IMAGES))
 def test_each_image_installs_the_locked_requirement(rel: str) -> None:
     text = (ROOT / rel).read_text(encoding="utf-8")
     # One reader: the image copies the script and the lock, and holds no reader of its own.
     assert "COPY uv.lock tools/sdk_requirement.py /tmp/sdk/\n" in text
     assert "tomllib" not in text, f"{rel} holds its own copy of the lock reader"
-    run = re.search(
-        r'RUN sdk="\$\(python (/tmp/sdk/sdk_requirement\.py) (/tmp/sdk/uv\.lock)\)"'
-        r'\s*\\\s*&&\s*pip install .*?"\$sdk"',
-        text,
-        re.DOTALL,
+    run = _run_instruction(text, _IMAGE_ASSIGN)
+    assert run.startswith(f"{_IMAGE_ASSIGN} && pip install "), run
+    # Everything after `pip install` is pip arguments: no second command, no comment,
+    # and the requirement is passed whole, once, and quoted. `${sdk%%#*}` would cut off
+    # the hash, and a trailing `# "$sdk"` or `&& echo "$sdk"` would not install it.
+    args = run.split(" && pip install ", 1)[1]
+    assert not set(args) & set(";|&#`"), (
+        f"{rel}: pip line holds a shell operator: {args}"
     )
-    assert run, f"{rel} does not pass the script's output to pip with &&"
+    assert args.count("$") == 1, f"{rel}: pip line expands more than $sdk: {args}"
+    assert shlex.split(args).count("$sdk") == 1, f"{rel}: $sdk is not one pip argument"
     # Run the script as the image does (script, then lock path) and compare with the
     # lock read independently, so the command line is tested and not only the function.
     package = _locked()
@@ -151,6 +169,49 @@ def test_every_image_that_installs_the_sdk_is_checked() -> None:
         and "infra2-sdk" in (ROOT / rel).read_text(encoding="utf-8")
     }
     assert installers == set(IMAGES)
+
+
+def test_the_script_needs_only_the_standard_library() -> None:
+    """The image builds run it before pip installs anything, on a bare interpreter."""
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", str(SCRIPT), str(LOCK)],
+        capture_output=True,
+        text=True,
+    )
+    assert (result.returncode, result.stderr) == (0, "")
+
+
+#: A word that reads a file's contents. On a line with `uv.lock` it makes a second reader.
+_READS_A_FILE = re.compile(
+    r"\b(?:grep|sed|awk|jq|yq|cut|head|tail|tr|cat|tomllib|tomli|read_text)\b|python3? -c|open\("
+)
+#: Docs, tests and comments only describe the lock. The script is its one reader.
+_MAY_NAME_THE_LOCK = ("uv.lock", "tools/sdk_requirement.py")
+
+
+def test_only_the_script_reads_the_lock() -> None:
+    offenders: list[str] = []
+    lines_naming_the_lock = 0
+    for rel in _tracked_files():
+        if rel in _MAY_NAME_THE_LOCK or rel.startswith(("libs/tests/", "docs/")):
+            continue
+        if rel.endswith(".md"):
+            continue
+        try:
+            lines = (ROOT / rel).read_text(encoding="utf-8").splitlines()
+        except UnicodeDecodeError:
+            continue
+        for number, line in enumerate(lines, start=1):
+            if "uv.lock" not in line or line.lstrip().startswith("#"):
+                continue
+            lines_naming_the_lock += 1
+            if _READS_A_FILE.search(line):
+                offenders.append(f"{rel}:{number}: {line.strip()[:100]}")
+    # The scan must see the COPY lines and path filters that name the lock.
+    assert lines_naming_the_lock >= 8, lines_naming_the_lock
+    assert offenders == [], (
+        f"read uv.lock through tools/sdk_requirement.py: {offenders}"
+    )
 
 
 def test_only_pyproject_and_the_lock_name_the_wheel() -> None:

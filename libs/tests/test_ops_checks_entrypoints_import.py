@@ -25,7 +25,7 @@ from packaging.requirements import Requirement
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/ops-checks.yml"
-#: Shell tokens the workflow uses for the SDK pin (read from pyproject.toml).
+#: Shell tokens the workflow uses for the SDK pin (read from uv.lock by tools/sdk_requirement.py).
 SDK_TOKENS = ("$sdk_requirement", "infra2-sdk @")
 
 
