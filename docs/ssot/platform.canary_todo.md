@@ -11,7 +11,7 @@
 |-----------|----------|------|
 | Service code and probes | `platform/30.todo/app.py` | Probes, status document, telemetry bootstrap |
 | Container topology | `platform/30.todo/compose.yaml` | App container, vault-agent sidecar, Traefik routers |
-| Image | `platform/30.todo/Dockerfile` | Python 3.11 image. The `infra2-sdk` pin matches `pyproject.toml`. |
+| Image | `platform/30.todo/Dockerfile` | Python 3.11 image. It installs the `infra2-sdk` wheel that `uv.lock` pins, with its hash. |
 | Deployer and facets | `platform/30.todo/deploy.py` | `TodoDeployer`: probe, signal, secrets, telemetry identity, Postgres role |
 | Secret contract | `platform/30.todo/env.manifest.json` | Generates `secrets.ctmpl` and `vault-policy.hcl` |
 | Tests | `libs/tests/test_todo_service.py`, `libs/tests/test_todo_canary_depth.py` | Behaviour, routing, and deployer contracts |
@@ -113,7 +113,7 @@ Each run emits one `canary.run` span with one `canary.check.<name>` child span p
 ### Do
 - Add a new platform capability as a new check in `app.py`. Prove a real write or login, not liveness.
 - Keep the probe target, the compose container name, and the app route equal. `test_probe_target_matches_the_compose_container_port_and_app_route` guards this.
-- Keep the Dockerfile `infra2-sdk` pin equal to `pyproject.toml`, and its OpenTelemetry pins equal to the SDK `otel` extra.
+- Keep the Dockerfile reading the `infra2-sdk` wheel from `uv.lock` (`test_each_image_installs_the_locked_requirement` guards this), and its OpenTelemetry pins equal to the SDK `otel` extra.
 
 ### Do not
 - Do not route `/api/canary/status` without SSO. `test_only_the_health_path_is_served_without_sso` evaluates the real Traefik rules.
