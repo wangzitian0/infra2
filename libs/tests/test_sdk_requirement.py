@@ -15,6 +15,7 @@ locked requirement to pip, and no other file names the wheel.
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 import sys
 import tomllib
@@ -68,19 +69,36 @@ def test_the_installed_sdk_is_the_locked_release() -> None:
     assert version("infra2-sdk") == _locked()["version"]
 
 
-def test_extras_are_checked_against_the_locked_release() -> None:
-    assert sdk_requirement(LOCK, ("s3", "postgres")).startswith(
-        "infra2-sdk[postgres,s3] @ https://"
+def _with_two_wheels(text: str) -> str:
+    """Repeat the infra2-sdk wheel entry: pip must not get a choice of two files."""
+    block = text[text.index('name = "infra2-sdk"') :]
+    entry = next(
+        line
+        for line in block.splitlines(keepends=True)
+        if line.lstrip().startswith("{ url =") and "infra2_sdk" in line
     )
-    # pip only warns about an unknown extra and installs without it.
-    with pytest.raises(ValueError, match="declares no extra"):
-        sdk_requirement(LOCK, ("otle",))
+    return text.replace(entry, entry * 2, 1)
+
+
+def _with_digest(digest: str):
+    """A lock whose infra2-sdk wheel carries `sha256:<digest>`."""
+
+    def mutate(text: str) -> str:
+        start = text.index('name = "infra2-sdk"')
+        return text[:start] + re.sub(
+            r"sha256:[0-9a-f]{64}", f"sha256:{digest}", text[start:], count=1
+        )
+
+    return mutate
 
 
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
         (lambda text: text.replace('hash = "sha256:', 'hash = "md5:'), "no sha256"),
+        (_with_digest(""), "no sha256"),
+        (_with_digest("ab" * 31), "no sha256"),
+        (_with_two_wheels, "one direct wheel"),
         (
             lambda text: text.replace('name = "infra2-sdk"', 'name = "other-sdk"'),
             "expected one",
@@ -92,7 +110,14 @@ def test_extras_are_checked_against_the_locked_release() -> None:
             "one direct wheel",
         ),
     ],
-    ids=["unhashed", "absent", "url-mismatch"],
+    ids=[
+        "unhashed",
+        "empty-digest",
+        "short-digest",
+        "two-wheels",
+        "absent",
+        "url-mismatch",
+    ],
 )
 def test_a_lock_without_one_hashed_wheel_is_refused(tmp_path, mutate, message) -> None:
     lock = tmp_path / "uv.lock"
@@ -112,19 +137,94 @@ def test_the_cli_prints_nothing_and_fails_on_a_bad_lock(tmp_path) -> None:
     assert (result.returncode, result.stdout) == (1, "")
 
 
+_IMAGE_ASSIGN = 'RUN sdk="$(python /tmp/sdk/sdk_requirement.py /tmp/sdk/uv.lock)"'
+
+
+def _run_instruction(text: str, first_line: str) -> str:
+    """The Dockerfile instruction that starts with `first_line`, on one line."""
+    lines = text.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith(first_line))
+    end = start
+    while lines[end].rstrip().endswith("\\"):
+        end += 1
+    return " ".join(" ".join(lines[start : end + 1]).replace("\\", " ").split())
+
+
 @pytest.mark.parametrize("rel", sorted(IMAGES))
 def test_each_image_installs_the_locked_requirement(rel: str) -> None:
     text = (ROOT / rel).read_text(encoding="utf-8")
-    assert "COPY uv.lock /tmp/uv.lock" in text
-    run = re.search(
-        r'RUN sdk="\$\((python -c ".*?")\)"\s*\\\s*&&\s*pip install .*?"\$sdk"',
-        text,
-        re.DOTALL,
+    # One reader: the image copies the script and the lock, and holds no reader of its own.
+    assert "COPY uv.lock tools/sdk_requirement.py /tmp/sdk/\n" in text
+    assert "tomllib" not in text, f"{rel} holds its own copy of the lock reader"
+    run = _run_instruction(text, _IMAGE_ASSIGN)
+    assert run.startswith(f"{_IMAGE_ASSIGN} && pip install "), run
+    # Everything after `pip install` is pip arguments: no second command, no comment,
+    # and the requirement is passed whole, once, and quoted. `${sdk%%#*}` would cut off
+    # the hash, and a trailing `# "$sdk"` or `&& echo "$sdk"` would not install it.
+    args = run.split(" && pip install ", 1)[1]
+    assert not set(args) & set(";|&#`"), (
+        f"{rel}: pip line holds a shell operator: {args}"
     )
-    assert run, f"{rel} does not pass inline lock reader output to pip with &&"
-    cmd = run.group(1).replace("/tmp/uv.lock", str(LOCK))
-    res = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=True)
-    assert res.stdout.strip() == sdk_requirement(LOCK)
+    assert args.count("$") == 1, f"{rel}: pip line expands more than $sdk: {args}"
+    # `shlex` drops the quotes, so test them in the text. An unquoted `$sdk` splits at
+    # the blanks of `infra2-sdk @ <url>`: pip gets three arguments, the first without a hash.
+    assert args.count('"$sdk"') == 1, f"{rel}: $sdk is not quoted: {args}"
+    words = shlex.split(args)
+    assert words.count("$sdk") == 1, f"{rel}: $sdk is not one pip argument"
+    # A pip option such as `--src "$sdk"` would take the requirement as its value, and
+    # pip would install a requirement that is placed after it, with no hash.
+    assert words[-1] == "$sdk" and not words[-2].startswith("-"), (
+        f"{rel}: $sdk must be the last pip argument and no option may take it: {args}"
+    )
+    # Run the script as the image does (script, then lock path) and compare with the
+    # lock read independently, so the command line is tested and not only the function.
+    package = _locked()
+    digest = package["wheels"][0]["hash"].removeprefix("sha256:")
+    res = subprocess.run(
+        [sys.executable, str(SCRIPT), str(LOCK)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert res.stdout.strip() == (
+        f"infra2-sdk @ {package['source']['url']}#sha256={digest}"
+    )
+
+
+#: The SDK by name (any case, `-`, `_`, `.` or `%5F`), the script, or its directory.
+_NAMES_THE_SDK = re.compile(r"infra2(?:%5f|[-_.])?sdk|sdk_requirement|/tmp/sdk", re.I)
+
+
+@pytest.mark.parametrize("rel", sorted(IMAGES))
+def test_each_image_names_the_sdk_only_in_its_two_checked_lines(rel: str) -> None:
+    """A later `RUN` that installs the SDK again, a second `COPY` over the script, and a
+    `sed` on the script all leave the checked `RUN` intact and drop the hash."""
+    named = [
+        line.rstrip(" \t\\")
+        for line in (ROOT / rel).read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#") and _NAMES_THE_SDK.search(line)
+    ]
+    assert named == [
+        "COPY uv.lock tools/sdk_requirement.py /tmp/sdk/",
+        _IMAGE_ASSIGN,
+    ], f"{rel}: only the COPY and the checked RUN may name the SDK or the script"
+
+
+def test_the_bootstrap_script_names_the_lock_and_the_script_only_in_its_checkout() -> (
+    None
+):
+    """The clone is the build context. A `sed` on the script after the checkout would
+    drop the hash from the image of the production runner."""
+    script = ROOT / "scripts/deploy_iac_runner_bootstrap.sh"
+    named = [
+        line.strip()
+        for line in script.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+        and ("sdk_requirement" in line or "uv.lock" in line)
+    ]
+    assert len(named) == 1 and named[0].startswith(
+        'git -C "$code_dir" checkout -f "$INFRA2_DEPLOY_SHA" -- '
+    ), named
 
 
 def test_every_image_that_installs_the_sdk_is_checked() -> None:
@@ -135,6 +235,49 @@ def test_every_image_that_installs_the_sdk_is_checked() -> None:
         and "infra2-sdk" in (ROOT / rel).read_text(encoding="utf-8")
     }
     assert installers == set(IMAGES)
+
+
+def test_the_script_needs_only_the_standard_library() -> None:
+    """The image builds run it before pip installs anything, on a bare interpreter."""
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", str(SCRIPT), str(LOCK)],
+        capture_output=True,
+        text=True,
+    )
+    assert (result.returncode, result.stderr) == (0, "")
+
+
+#: A word that reads a file's contents. On a line with `uv.lock` it makes a second reader.
+_READS_A_FILE = re.compile(
+    r"\b(?:grep|sed|awk|jq|yq|cut|head|tail|tr|cat|tomllib|tomli|read_text)\b|python3? -c|open\("
+)
+#: Docs, tests and comments only describe the lock. The script is its one reader.
+_MAY_NAME_THE_LOCK = ("uv.lock", "tools/sdk_requirement.py")
+
+
+def test_only_the_script_reads_the_lock() -> None:
+    offenders: list[str] = []
+    lines_naming_the_lock = 0
+    for rel in _tracked_files():
+        if rel in _MAY_NAME_THE_LOCK or rel.startswith(("libs/tests/", "docs/")):
+            continue
+        if rel.endswith(".md"):
+            continue
+        try:
+            lines = (ROOT / rel).read_text(encoding="utf-8").splitlines()
+        except UnicodeDecodeError:
+            continue
+        for number, line in enumerate(lines, start=1):
+            if "uv.lock" not in line or line.lstrip().startswith("#"):
+                continue
+            lines_naming_the_lock += 1
+            if _READS_A_FILE.search(line):
+                offenders.append(f"{rel}:{number}: {line.strip()[:100]}")
+    # The scan must see the COPY lines and path filters that name the lock.
+    assert lines_naming_the_lock >= 8, lines_naming_the_lock
+    assert offenders == [], (
+        f"read uv.lock through tools/sdk_requirement.py: {offenders}"
+    )
 
 
 def test_only_pyproject_and_the_lock_name_the_wheel() -> None:
@@ -156,7 +299,7 @@ def test_only_pyproject_and_the_lock_name_the_wheel() -> None:
 GITHUB = ROOT / ".github"
 #: The call, whole and quoted. Text after the script path inside the `$( )`, such as
 #: `| sed 's/#.*//'`, would cut the hash off the requirement.
-_CALL_SOURCE = r'"\$\(python3? tools/sdk_requirement\.py(?: --extra \w+)*\)"'
+_CALL_SOURCE = r'"\$\(python3? tools/sdk_requirement\.py\)"'
 _CALL = re.compile(_CALL_SOURCE)
 #: `<var>="$(python tools/sdk_requirement.py)"`, alone on its line or chained with
 #: `&&`, `;` or `||`.

@@ -7,7 +7,7 @@ builds, the deploy workflows) reads the requirement here. pip then verifies the
 same hash that CI verifies, and a release bump edits pyproject.toml and uv.lock
 only.
 
-Usage: python tools/sdk_requirement.py [LOCK] [--extra NAME ...]
+Usage: python tools/sdk_requirement.py [LOCK]
 
 Stdlib only: the image builds run it before pip installs anything.
 """
@@ -21,15 +21,13 @@ import tomllib
 from pathlib import Path
 
 PACKAGE = "infra2-sdk"
-_EXTRA = re.compile(r"""extra == ['"]([^'"]+)['"]""")
 
 
-def sdk_requirement(lock: Path, extras: tuple[str, ...] = ()) -> str:
-    """`infra2-sdk[extras] @ <wheel url>#sha256=<digest>` from the lock.
+def sdk_requirement(lock: Path) -> str:
+    """`infra2-sdk @ <wheel url>#sha256=<digest>` from the lock.
 
     Raises ValueError when the lock does not pin exactly one direct wheel with a
-    sha256 hash, or when the locked release declares no such extra (pip only
-    warns about an unknown extra and installs without it).
+    sha256 hash.
     """
     packages = [
         package
@@ -50,28 +48,15 @@ def sdk_requirement(lock: Path, extras: tuple[str, ...] = ()) -> str:
     algorithm, _, digest = str(wheels[0].get("hash", "")).partition(":")
     if algorithm != "sha256" or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise ValueError(f"{lock}: the {PACKAGE} wheel has no sha256 hash")
-    declared = {
-        match.group(1)
-        for requirement in package.get("metadata", {}).get("requires-dist", [])
-        for match in [_EXTRA.search(requirement.get("marker", ""))]
-        if match
-    }
-    unknown = sorted(set(extras) - declared)
-    if unknown:
-        raise ValueError(
-            f"{PACKAGE} {package.get('version')} declares no extra {unknown}"
-        )
-    name = f"{PACKAGE}[{','.join(sorted(set(extras)))}]" if extras else PACKAGE
-    return f"{name} @ {url}#sha256={digest}"
+    return f"{PACKAGE} @ {url}#sha256={digest}"
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("lock", nargs="?", default="uv.lock", type=Path)
-    parser.add_argument("--extra", action="append", default=[])
     args = parser.parse_args(argv)
     try:
-        print(sdk_requirement(args.lock, tuple(args.extra)))
+        print(sdk_requirement(args.lock))
     except (OSError, ValueError, tomllib.TOMLDecodeError) as error:
         print(f"sdk_requirement: {error}", file=sys.stderr)
         return 1

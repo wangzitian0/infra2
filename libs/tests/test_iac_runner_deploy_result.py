@@ -1262,7 +1262,7 @@ def test_iac_runner_public_health_check_retries_with_diagnostics() -> None:
 
 def test_iac_runner_bootstrap_deploy_script_is_scoped_to_runner_source() -> None:
     """Infra-011.8: self-update preserves Dokploy drift outside the runner source and
-    the files its image bakes (uv.lock; #1115)."""
+    the files its image bakes (uv.lock and tools/sdk_requirement.py; #1115)."""
     script = BOOTSTRAP_DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
     assert "docker inspect iac-runner" in script

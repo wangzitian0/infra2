@@ -456,21 +456,18 @@ def test_ops_checks_schedules_the_reconcile_and_alerts_out_of_band() -> None:
     )
 
 
-def test_runner_image_pins_the_same_sdk_wheel_as_pyproject() -> None:
-    """The runner image installs the locked SDK wheel from uv.lock."""
-    dockerfile = (ROOT / "bootstrap/06.iac_runner/Dockerfile").read_text(
-        encoding="utf-8"
-    )
+def test_runner_requirements_hold_no_unhashed_sdk_wheel() -> None:
+    """The runner image installs the locked SDK wheel through tools/sdk_requirement.py.
+
+    test_sdk_requirement.py holds the Dockerfile side. Here only requirements.txt is
+    checked: a wheel URL in it would install the SDK with no hash.
+    """
     requirements = (ROOT / "bootstrap/06.iac_runner/requirements.txt").read_text(
         encoding="utf-8"
     )
     assert "infra2-sdk @" not in requirements, (
         "requirements.txt must not contain an unhashed wheel URL"
     )
-    assert "COPY uv.lock /tmp/uv.lock" in dockerfile, (
-        "runner Dockerfile must copy uv.lock for verified install"
-    )
-    assert "pip install" in dockerfile and '"$sdk"' in dockerfile
 
 
 def test_unclassified_leftovers_are_reported_but_never_page() -> None:
