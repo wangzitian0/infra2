@@ -18,10 +18,12 @@ import re
 import subprocess
 import sys
 import tomllib
+from collections import Counter
 from importlib.metadata import version
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tools.sdk_requirement import sdk_requirement
 
@@ -149,3 +151,208 @@ def test_only_pyproject_and_the_lock_name_the_wheel() -> None:
     assert offenders == [], (
         f"Found hardcoded wheel in {offenders}; read through uv.lock"
     )
+
+
+GITHUB = ROOT / ".github"
+#: The call, whole and quoted. Text after the script path inside the `$( )`, such as
+#: `| sed 's/#.*//'`, would cut the hash off the requirement.
+_CALL_SOURCE = r'"\$\(python3? tools/sdk_requirement\.py(?: --extra \w+)*\)"'
+_CALL = re.compile(_CALL_SOURCE)
+#: `<var>="$(python tools/sdk_requirement.py)"`, alone on its line or chained with
+#: `&&`, `;` or `||`.
+_ASSIGNED = re.compile(r"(?<![\w$.-])(\w+)=" + _CALL_SOURCE)
+_PIPE = re.compile(r"(?<!\|)\|(?!\|)")
+#: `pip install`, `pip3 install`, `python -m pip -q install`, `uv pip install`.
+_INSTALL = re.compile(r"\bpip3?\s+(?:-{1,2}[\w-]+(?:=\S+)?\s+)*install\b")
+#: An argument that names this repository: `.`, `./`, `..`, `.[dev]`, `./[dev]`, the
+#: workspace variable.
+_PROJECT = re.compile(
+    r"\.{1,2}/?(?:\[[^\]]*\])?|\$\{?GITHUB_WORKSPACE\}?/?|\$\{\{\s*github\.workspace\s*\}\}/?"
+)
+#: Words that stop the hashed install from reaching the interpreter that runs the job.
+_INEFFECTIVE = (
+    "--dry-run",
+    "--target",
+    "--prefix",
+    "--root",
+    "uninstall",
+    "venv",
+    "virtualenv",
+    "set +e",
+)
+_SHELL_FLOW = re.compile(r"^\s*(?:if|elif|case|for|while)\b")
+#: Every way to turn hash checking off, in text, env blocks included.
+_SKIP_VERIFY = re.compile(r"NO_VERIFY_HASHES|--no-verify-hashes", re.I)
+#: The fewest steps that call the script, per file. A scan that finds fewer reads
+#: nothing, and the shape tests would pass on an empty set.
+MIN_STEPS_CALLING_THE_SCRIPT = {
+    "workflows/app-deploy-request.yml": 2,
+    "workflows/deploy-report-main.yml": 1,
+    "workflows/deploy.yml": 2,
+    "workflows/infra-ci.yml": 3,
+    "workflows/ops-checks.yml": 1,
+    "workflows/preview-teardown.yml": 1,
+    "workflows/reconcile-iac-inputs.yml": 1,
+}
+
+
+def _steps() -> list[tuple[str, str]]:
+    """(file, shell code) of every `run` step under .github.
+
+    That is workflows, templates and composite actions. Continuation lines are joined,
+    runs of blanks collapse, and comment lines are dropped.
+    """
+    found = []
+    for path in sorted(GITHUB.rglob("*.y*ml")):
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(document, dict):
+            continue
+        groups = [
+            job.get("steps")
+            for job in (document.get("jobs") or {}).values()
+            if isinstance(job, dict)
+        ]
+        if isinstance(document.get("runs"), dict):
+            groups.append(document["runs"].get("steps"))
+        for steps in groups:
+            for step in steps or []:
+                run = step.get("run") if isinstance(step, dict) else None
+                if not run:
+                    continue
+                lines = run.replace("\\\n", " ").splitlines()
+                code = "\n".join(
+                    re.sub(r"[ \t]+", " ", line)
+                    for line in lines
+                    if not line.lstrip().startswith("#")
+                )
+                found.append((path.relative_to(GITHUB).as_posix(), code))
+    return found
+
+
+def _carries(line: str, variables) -> bool:
+    return bool(_CALL.search(line)) or any(f'"${var}"' in line for var in variables)
+
+
+def test_every_call_of_the_script_is_whole_and_reaches_pip() -> None:
+    """pip checks the `#sha256=` fragment of the requirement it is given. It is the
+    only protection of the wheel at install time, so a step may not cut it off."""
+    sites = [
+        (name, code) for name, code in _steps() if "tools/sdk_requirement.py" in code
+    ]
+    assert sites, "no step calls tools/sdk_requirement.py"
+    for name, code in sites:
+        lines = code.splitlines()
+        assert len(_CALL.findall(code)) == code.count("tools/sdk_requirement.py"), (
+            f"{name}: every call must be the whole quoted "
+            f'"$(python tools/sdk_requirement.py)": {code!r}'
+        )
+        variables = sorted(set(_ASSIGNED.findall(code)))
+        for var in variables:
+            assigned = re.findall(rf"(?<![\w$.-]){var}=", code)
+            assert len(assigned) == 1, (
+                f"{name}: ${var} is assigned {len(assigned)} times; a second "
+                f"assignment can cut the hash off: {code!r}"
+            )
+            uses = [line for line in lines if f"${var}" in line or f"${{{var}" in line]
+            assert uses and all(
+                f'"${var}"' in line and f"${{{var}" not in line for line in uses
+            ), f"{name}: ${var} must reach pip whole and quoted: {uses!r}"
+        carriers = [line for line in lines if _carries(line, variables)]
+        assert not [line for line in carriers if _PIPE.search(line)], (
+            f"{name}: a pipe on a line that carries the requirement can cut the hash "
+            f"off: {carriers!r}"
+        )
+        installs = [line for line in carriers if _INSTALL.search(line)]
+        assert installs, f"{name}: no `pip install` line receives the requirement"
+        for line in installs:
+            assert "||" not in line and not any(w in line for w in _INEFFECTIVE), (
+                f"{name}: the hashed install may not fail silently or install "
+                f"elsewhere: {line.strip()!r}"
+            )
+        for line in lines:
+            assert not _SHELL_FLOW.match(line) and not any(
+                w in line for w in ("uninstall", "venv", "virtualenv", "set +e")
+            ), (
+                f"{name}: a step that installs the SDK may not branch or undo it: {line!r}"
+            )
+
+
+def test_no_step_skips_the_hash_or_names_the_sdk_on_a_pip_line() -> None:
+    steps = _steps()
+    assert len(steps) > 50, f"the scan read only {len(steps)} run steps"
+    for name, code in steps:
+        for line in code.splitlines():
+            assert not (
+                _INSTALL.search(line) and re.search(r"infra2[-_.]sdk", line, re.I)
+            ), (
+                f"{name}: a pip line names the SDK; install it through "
+                f"tools/sdk_requirement.py: {line.strip()!r}"
+            )
+    for path in sorted(GITHUB.rglob("*.y*ml")):
+        text = path.read_text(encoding="utf-8")
+        assert not _SKIP_VERIFY.search(text), f"{path.name}: turns hash checking off"
+
+
+def _installs_the_project(line: str) -> bool:
+    """True for a pip install of this repository, in any spelling."""
+    if not _INSTALL.search(line):
+        return False
+    line = re.sub(r"\[[^\]]*\]", lambda m: m.group(0).replace(" ", ""), line)
+    for token in line.split():
+        token = token.strip("\"'")
+        if token.startswith(("--editable=", "-e=")):
+            token = token.split("=", 1)[1].strip("\"'")
+        if _PROJECT.fullmatch(token):
+            return True
+    return False
+
+
+def test_a_step_that_installs_the_project_installs_the_hashed_sdk_first() -> None:
+    """`pip install -e .` pulls infra2-sdk from the URL in pyproject.toml, which has no
+    hash. With the hashed wheel installed first, pip keeps it while pyproject.toml and
+    uv.lock name the same URL (test_pyproject_and_the_lock_name_the_same_sdk_url). A
+    swapped release asset fails the first command, and `bash -e` stops the step."""
+    project_installs = 0
+    for name, code in _steps():
+        lines = code.splitlines()
+        variables = set(_ASSIGNED.findall(code))
+        for index, line in enumerate(lines):
+            if not _installs_the_project(line):
+                continue
+            project_installs += 1
+            assert not re.search(
+                r"--force-reinstall|--ignore-installed|\s-I\s", line
+            ), f"{name}: {line.strip()!r} would replace the hashed wheel"
+            assert any(
+                _INSTALL.search(earlier) and _carries(earlier, variables)
+                for earlier in lines[:index]
+            ), (
+                f"{name}: `{line.strip()}` installs the project, and with it the SDK "
+                "from the unhashed URL in pyproject.toml. Install the hashed "
+                'requirement first: `pip install --no-deps "$(python '
+                'tools/sdk_requirement.py)"`'
+            )
+    assert project_installs >= 1, "the scan found no project install: it reads nothing"
+
+
+def test_pyproject_and_the_lock_name_the_same_sdk_url() -> None:
+    """The hashed wheel stays only if pip later reads the same URL. A pyproject.toml
+    URL that differs from uv.lock would make `pip install -e .` fetch another wheel
+    and replace the verified one."""
+    dependencies = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]["dependencies"]
+    (entry,) = [d for d in dependencies if d.lower().startswith("infra2-sdk")]
+    url = entry.split("@", 1)[1].strip().split("#", 1)[0]
+    assert url == _locked()["source"]["url"]
+
+
+def test_the_expected_files_call_the_script() -> None:
+    found = Counter(
+        name for name, code in _steps() if "tools/sdk_requirement.py" in code
+    )
+    for name, minimum in MIN_STEPS_CALLING_THE_SCRIPT.items():
+        assert found[name] >= minimum, (
+            f"{name}: {found[name]} step(s) call tools/sdk_requirement.py, "
+            f"expected at least {minimum}"
+        )
