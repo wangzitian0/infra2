@@ -561,17 +561,15 @@ def test_a_yaml_tag_cannot_hide_an_expression(value):
 
 
 @pytest.mark.parametrize(
-    "text",
+    "text, failure",
     [
-        "jobs: {}\n---\njobs: {}\n",
-        "jobs: &a\n  j: [*a]\n",
+        ("jobs: {}\n---\njobs: {}\n", "w.yml does not parse as YAML"),
+        ("jobs: &a\n  j: [*a]\n", "w.yml has a recursive YAML alias"),
     ],
     ids=["two-documents", "recursive-alias"],
 )
-def test_a_yaml_shape_without_one_tree_is_a_failure(text):
-    assert workflow_contract_failures({"w.yml": text}) == [
-        "w.yml does not parse as YAML"
-    ]
+def test_a_yaml_shape_without_one_tree_is_a_failure(text, failure):
+    assert workflow_contract_failures({"w.yml": text}) == [failure]
 
 
 @pytest.mark.usefixtures("_no_tables")
