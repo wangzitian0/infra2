@@ -13,7 +13,7 @@
 | SDK 公共契约 | 已发布的 `infra2-sdk` SemVer artifact |
 | Coding-agent tooling | `oh-my-code-agent` 自己的 `init.md`、`AGENTS.md`、文档地图与 release/commit |
 | App 开发与领域规则 | 各 App 自己的 `AGENTS.md`、架构文档、代码和 CI |
-| Agent 规则内容（Root / Workspace 层）、skill、MCP spec 与其渲染函数 | `dev_env/workspace-iac`（git 单源；投影由 `ws-apply` / `ws-render` 单向生成） |
+| Agent 规则内容（Root / Workspace 层）、skill、MCP spec 与其渲染函数 | `dev_env/workspace-iac`（git 单源；投影由 `ws-apply` / `ws-publish` 单向生成） |
 | 本机常驻运行时（hub、受管 HOME、watcher、TUI） | `oh-my-code-agent`，只消费 dev_env 渲染的配置，不持有内容真源 |
 
 ## 2. Goal And Non-Goals
@@ -80,12 +80,12 @@ Harness 只拥有这些仓库之间的协作视图与边界定义。
 
 | 方 | 持有 | 绝不做 |
 |---|---|---|
-| `dev_env`（单源） | Root / Workspace 规则真源、skill / command / MCP spec / secrets 模板、纯函数工具（`ws-render`、`ws-check-drift`、`ws-agents-lint`、`ws-doctor`、`ws-mem-distill`），全部 `--json`，CI | 常驻进程、机器状态、UI |
+| `dev_env`（单源） | Root / Workspace 规则真源、skill / command / MCP spec / secrets 模板、纯函数工具（`ws-publish`、`ws-check-drift`、`ws-agents-lint`、`ws-doctor`、`ws-mem-distill`），全部 `--json`，CI | 常驻进程、机器状态、UI |
 | `oh-my-code-agent`（运行时） | hub（每 OS user 一个，profile = workspace，一个 (workspace, server) 一份进程，宿主经 bridge 接入）、受管 HOME、定时器与 watcher、drift / report / TUI | 持有内容真源；重实现 render / drift 判定（只调用 dev_env 工具并展示）；写回 dev_env 或渲染产物；调度任务；超出 Knowledge Pack 证据级的写权限 |
 | checkout（消费者） | 自己的 `AGENTS.md`（Repo 层，入库）；`harness/repos.yaml` 的 `rules_layer` 声明；`skills/`（从 `dev_env` 1:1 渲染，入库） | 跟踪文件里出现 Root / Workspace 内容；**手写或就地修改**渲染产物 |
 
 渲染产物入库不违反单向流动：**入库的是副本，不是真源**。判据是可计算的——
-`ws-skills-sync --check` 按 `sha256` 比对每个 `skills/<name>/SKILL.md` 与 `dev_env`
+`ws-publish --check-files` 按 `sha256` 比对每个 `skills/<name>/SKILL.md` 与 `dev_env`
 的对应文件，不等即 drift。就地改一个 repo 的副本不会传播，只会让它与其余 repo 不一致，
 而下一次同步把它覆盖掉——所以「改副本」是静默失败，不是局部定制。
 只有 `SKILL.md` 随渲染出仓；`local.md` 留在 `dev_env`，承载 vault 名、绝对家目录路径
@@ -99,6 +99,15 @@ OMCA Knowledge Pack 为准，未收录前引用 dev_env#44 的实测记录。
 
 这一边界延续 [`core.md` §3.1](./core.md#31-repository-dependency-boundary) 与已归档
 [`Infra-018`](../project/archive/Infra-018.repository_boundary_decoupling.md) 的源码解耦结论。
+
+### 5.2 交付生命周期与发布边界（三阶段契约）
+
+Harness 与 infra2 的变更严格执行三阶段物理隔离生命周期（`AGENTS.md` §5 与 [`ops.pipeline.md`](./ops.pipeline.md)）：
+
+- **Stage 1 —— Code Merge（代码合并到 main）**：PR 通过 `tools.pr_merge_gate` 门禁（Exit Code 0）后，Agent 拥有 Standing Merge Authority 自主合并权限。物理特征为零容器重启、零线上服务影响；**合入 main 绝不等于交付完成（Merge ≠ Deploy）**。
+- **Stage 2 —— Staging Deploy & Soak（发布 Tag 触发 Staging 部署与浸润）**：由语义化版本发布 Tag（`vX.Y.Z`）推送触发。流水线针对 Staging 环境进行部署 Reconcile，强制执行至少 10 分钟浸润（Soak >= 10m）并通过 Canary Todo 四支柱物理探针校验（`tools.canary_verify --env staging`）。Tag 推送绝不触碰 Prod。
+- **Stage 3 —— Production Deploy & Promote（Owner 授权生产发布与物理验收）**：生产环境部署与变更属于全系统唯一的人工审批硬性卡点（Sole human approval gate）。发布前必须由 Agent 提交 Prod Gatekeeper 三阶段状态报告并获得 Owner 在当前会话的显式授权（`deploy`），随后由 Agent 自主闭环推进 Promote 并执行 Touch Reality 物理验收（真实容器 digest、Ledger JSON 轮转、Cloudflare Watchdog 状态及 `tools.canary_verify --env production`）。
+- **交付状态不变量（Delivery State Invariant）**：触碰 `platform/`、`bootstrap/`、Compose 配置或线上运行时的任务，在完成 Stage 2 浸润与 Stage 3 生产验收（或获得明确 `hold` 处置）前，必须保持开启并标记 `prod-pending`，严禁在 Stage 1 代码合并后直接宣称完成或静默关闭 Issue。
 
 ## 6. Workspace Operation
 
