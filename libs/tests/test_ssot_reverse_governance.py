@@ -6,7 +6,8 @@ proof, governed by nobody. Without this, a new SSOT doc added without a MANIFEST
 silently ungoverned (it caught ops.standards.md + deploy-dependencies.yaml, now governed).
 
 Only explicit, non-topic files are allowed to be absent from MANIFEST: the human index, the
-template, the manifest itself, and the redirect stubs left by topic merges.
+template, and the manifest itself. A topic merge deletes the old file. A redirect stub
+left behind fails the test below.
 """
 
 from __future__ import annotations
@@ -25,8 +26,6 @@ _ALLOWED_NON_TOPICS = {
     "README.md",  # the generated human index (tools/gen_ssot_index.py)
     "template.md",  # the authoring template
     "MANIFEST.yaml",  # the registry itself
-    "ops.alerting.md",  # redirect stub -> ops.obs (topic merged)
-    "ops.availability-ledger.md",  # redirect stub -> ops.obs (topic merged)
 }
 
 
