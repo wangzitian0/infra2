@@ -3,9 +3,9 @@
 import re
 import json
 from invoke import task
-from libs.common import (
+from libs.common import check_service
+from libs.core.environ import (
     OTLP_TRACES_PATH,
-    check_service,
     get_env,
     service_domain,
     with_env_suffix,

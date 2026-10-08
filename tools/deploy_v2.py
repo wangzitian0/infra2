@@ -31,7 +31,7 @@ from typing import Any
 
 import httpx  # Dokploy transport errors from libs.deploy.dokploy_client surface as httpx exceptions
 
-from libs.common import infra_domain
+from libs.core.environ import infra_domain
 from libs.deploy.iac_runner_client import (
     STATUS_POLL_BACKOFF,
     STATUS_POLL_INITIAL_SECONDS,

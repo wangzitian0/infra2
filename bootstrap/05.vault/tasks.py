@@ -10,7 +10,7 @@ import time
 
 from invoke import task
 from libs.deploy.deployer import Deployer
-from libs.common import get_env
+from libs.core.environ import get_env
 from libs.console import (
     header,
     success,
@@ -498,7 +498,7 @@ def _redeploy_with_vault_creds(
 def _dokploy_client() -> tuple[Any, str]:
     """The Dokploy client for this environment, and the environment name."""
     from libs.deploy.dokploy_client import get_dokploy
-    from libs.common import get_env
+    from libs.core.environ import get_env
 
     e = get_env()
     domain = e.get("INTERNAL_DOMAIN")

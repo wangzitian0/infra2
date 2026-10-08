@@ -32,6 +32,11 @@ ALLOWED = frozenset({"check_service"})
 _DOTTED_TARGET = re.compile(r"libs\.common\.(?P<name>\w+)(?:\..*)?")
 
 
+def _is_allowed(name: str) -> bool:
+    """Return True for ``check_service`` and for module metadata such as ``__all__``."""
+    return name in ALLOWED or (name.startswith("__") and name.endswith("__"))
+
+
 def _package_parts(rel_path: str) -> list[str]:
     """Return the package that holds the file, as dotted-name parts."""
     return list(Path(rel_path).parts[:-1])
@@ -75,7 +80,7 @@ def libs_common_violations(source: str, rel_path: str = "<memory>.py") -> list[s
             target = _absolute_module(node.module, node.level, package)
             if target == COMMON:
                 for item in node.names:
-                    if item.name not in ALLOWED:
+                    if not _is_allowed(item.name):
                         report(node, f"imports {item.name} from libs.common")
             elif target == "libs":
                 aliases.update(
@@ -90,7 +95,7 @@ def libs_common_violations(source: str, rel_path: str = "<memory>.py") -> list[s
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Attribute):
-            if _is_common_module(node.value, aliases) and node.attr not in ALLOWED:
+            if _is_common_module(node.value, aliases) and not _is_allowed(node.attr):
                 report(node, f"reads libs.common.{node.attr}")
         elif isinstance(node, ast.Call) and len(node.args) >= 2:
             first, second = node.args[0], node.args[1]
@@ -98,12 +103,12 @@ def libs_common_violations(source: str, rel_path: str = "<memory>.py") -> list[s
                 _is_common_module(first, aliases)
                 and isinstance(second, ast.Constant)
                 and isinstance(second.value, str)
-                and second.value not in ALLOWED
+                and not _is_allowed(second.value)
             ):
                 report(node, f"names libs.common.{second.value} in a call")
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             match = _DOTTED_TARGET.fullmatch(node.value)
-            if match and match["name"] not in ALLOWED:
+            if match and not _is_allowed(match["name"]):
                 report(node, f"string target {node.value!r}")
 
     return [message for _line, message in sorted(found)]
@@ -188,6 +193,7 @@ def test_guard_flags_attribute_reads_through_every_alias_form() -> None:
         "m.SERVICE_SUBDOMAINS\n"
         "libs.common.validate_env()\n"
         "c.check_service\n"
+        "c.__all__\n"
     )
     assert libs_common_violations(source) == [
         "<memory>.py:5: reads libs.common.get_env",

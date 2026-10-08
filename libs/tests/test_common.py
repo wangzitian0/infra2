@@ -1,14 +1,14 @@
-"""Tests for libs/common.py's shared, domain-independent helpers."""
+"""Tests for the shared, domain-independent helpers of ``libs.core.environ`` and ``check_service``."""
 
 from __future__ import annotations
 
+from libs.common import check_service
 from libs.core import registry as service_registry
-from libs.common import (
+from libs.core.environ import (
     _BOOTSTRAP_ONLY_SHARED_SERVICES,
     _REGISTRY_BACKED_SHORT_NAMES,
     SHARED_PLATFORM_SERVICES,
     infra_domain,
-    check_service,
 )
 
 
@@ -103,7 +103,7 @@ def test_check_service_quotes_nested_health_command(monkeypatch):
             return _Result()
 
     monkeypatch.setattr(
-        "libs.common.get_env",
+        "libs.core.environ.get_env",
         lambda: {"VPS_HOST": "host.example", "ENV": "production"},
     )
     context = _Context()

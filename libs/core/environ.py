@@ -2,9 +2,11 @@
 
 The deployment environment of this process: its name, suffixes and domains
 (``get_env``), the public host of each shared platform service, and the typed
-``DeploymentEnvironment`` view. ``libs.common`` is a frozen shim over this module
-(#955 moved the implementation here, which removed the ``common`` <-> ``core.environ``
-import cycle).
+``DeploymentEnvironment`` view.
+
+Import every environment helper from this module. ``libs.common`` re-exports none of
+them (#1164). It holds ``check_service`` only. #955 moved the implementation here from
+``libs.common``, which removed the ``common`` <-> ``core.environ`` import cycle.
 """
 
 from __future__ import annotations

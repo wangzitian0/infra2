@@ -10,7 +10,8 @@ Storage in Vault:
 """
 
 from invoke import task
-from libs.common import check_service, get_env, service_domain
+from libs.common import check_service
+from libs.core.environ import get_env, service_domain
 from libs.security.store import vault_token
 from libs.console import header, success, error, warning, info
 

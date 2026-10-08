@@ -43,7 +43,7 @@ flowchart TB
 
 某些 App 有自己独立于 `INTERNAL_DOMAIN` 的公开域名（例如 truealpha/app 的
 `truealpha.club`，见 infra2#550），路由到**同一台 VPS**，但和共享控制面
-（`cloud.`/`vault.`/`otel.` 等，见 `libs.common.infra_domain()`）是两个不同的
+（`cloud.`/`vault.`/`otel.` 等，见 `libs.core.environ.infra_domain()`）是两个不同的
 Cloudflare zone。这些域名的 A 记录（wildcard `*` + apex `@`）不在
 `bootstrap/02.dns_and_cert` 默认管理范围（`CF_RECORDS` 仍只描述
 `INTERNAL_DOMAIN` 下的记录），改用 `invoke dns-and-cert.apply --domain=<zone> --records=<...>`
