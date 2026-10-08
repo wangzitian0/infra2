@@ -329,7 +329,10 @@ def workflow_contract_failures(texts: Mapping[str, str]) -> list[str]:
     for name, text in sorted(texts.items()):
         try:
             document = _plain(yaml.compose(text), set(), {})
-        except (yaml.YAMLError, RecursionError, _UnreadableYaml):
+        except _UnreadableYaml as exc:
+            failures.append(f"{name} has {exc}")
+            continue
+        except (yaml.YAMLError, RecursionError):
             failures.append(f"{name} does not parse as YAML")
             continue
         if not isinstance(document, dict):
