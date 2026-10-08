@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import math
 import re
+from pathlib import PurePosixPath
 
 from libs.gate.inventory import (
     _declared_deploy_globs,
     _deploy_triggering,
+    _required_check_workflows,
     _required_checks,
 )
+
+# A module import, so a test can change OWNER_HELD_WORKFLOWS, and the closure walk
+# of self_governance.py sees the module from this file.
+import libs.gate.production_contract as production_contract
 from libs.gate.self_governance import (
     _owner_instruction_quoted,
     is_self_governing,
@@ -28,10 +34,12 @@ from libs.gate.types import (
     SETTLE_SECONDS,
     UNEVALUABLE,
     WAIT,
+    WORKFLOW_PREFIX,
     HeadFacts,
     Reasons,
     Verdict,
     _is_local_root_repo,
+    _normalized_path,
 )
 
 # Check states GitHub reports while a check has not finished yet.
@@ -136,22 +144,81 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
             UNEVALUABLE,
         )
 
+    # The production lock (#1138) replaces the owner for a workflow file, unless the
+    # file defines a required check or is on OWNER_HELD_WORKFLOWS. A held file goes to
+    # the owner in every lock state: the workflow direction proof reads only push paths
+    # and job names, not job bodies, so it cannot clear a file that runs a required
+    # check. An unreadable inventory holds every workflow file. Every other
+    # self-governing path stays with the owner.
+    lock_holds = facts.lock_failures == ()
+    owner_held = {name.casefold() for name in production_contract.OWNER_HELD_WORKFLOWS}
+    required_workflows = _required_check_workflows()
+
+    def _requires(path: str) -> bool:
+        return required_workflows is not None and _normalized_path(path) in (
+            required_workflows
+        )
+
+    uncovered = sorted(
+        f
+        for f in facts.files
+        if _normalized_path(f).startswith(WORKFLOW_PREFIX)
+        and (
+            required_workflows is None
+            or _requires(f)
+            or PurePosixPath(_normalized_path(f)).name in owner_held
+        )
+    )
+    lock_covered = {
+        f
+        for f in facts.files
+        if lock_holds and f.startswith(WORKFLOW_PREFIX) and f not in uncovered
+    }
     quoted_instruction = _owner_instruction_quoted(facts.body)
-    governing = sorted(f for f in facts.files if is_self_governing(f))
+    governing = sorted(
+        f for f in facts.files if is_self_governing(f) and f not in lock_covered
+    )
+    # A held file never clears through the direction proof, in any lock state.
     unproven = [
         f
         for f in governing
-        if f not in facts.proven_tighter
+        if (f not in facts.proven_tighter or f in uncovered)
         and not (f in RULE_TEXT_FILES and quoted_instruction)
     ]
-    if unproven:
+    # The reason for a held file comes first. The "without a proof" line names only
+    # the files that have no proof (#1138 round 4).
+    held = [f for f in unproven if f in uncovered]
+    if held:
+        if required_workflows is None:
+            reasons.append(
+                "cannot read a blocking gate with a workflow from "
+                "docs/ssot/ci-gate-inventory.yaml: no workflow file clears through "
+                f"the lock or the direction proof ({', '.join(held)})"
+            )
+        else:
+            for f in held:
+                if _requires(f):
+                    reasons.append(
+                        f"{f} defines a required check: the owner approves head "
+                        f"{facts.head_sha[:7]}; the workflow proof does not read job "
+                        "bodies, so it cannot clear this file"
+                    )
+            listed = [f for f in held if not _requires(f)]
+            if listed:
+                reasons.append(
+                    f"the production lock does not cover {', '.join(listed)}: the "
+                    "file is on OWNER_HELD_WORKFLOWS in libs/gate/production_contract.py"
+                )
+        owner = True
+    proofless = [f for f in unproven if f not in facts.proven_tighter]
+    if proofless:
         reasons.append(
-            f"changes what decides merges ({', '.join(unproven)}) without a mechanical "
+            f"changes what decides merges ({', '.join(proofless)}) without a mechanical "
             f"proof that the change can only make this gate say no more often: the "
             f"working-tree copy is what judged this PR, so owner approval of head "
             f"{facts.head_sha[:7]} is required"
         )
-        if any(f in RULE_TEXT_FILES for f in unproven):
+        if any(f in RULE_TEXT_FILES for f in proofless):
             reasons.append(
                 "rule-text files (AGENTS.md / docs/ssot/ops.merge-gate.md) can clear "
                 "this instead by citing the owner instruction that authorised the "
@@ -169,7 +236,9 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
 
     fired = {f: _deploy_triggering(f) for f in facts.files}
     deploying = sorted(f for f, w in fired.items() if w)
-    if deploying:
+    # With the lock, a production job that the merge starts waits for the reviewer of
+    # the production environment. Reasons cannot carry a note that does not block.
+    if deploying and not lock_holds:
         workflows = sorted({fired[f] for f in deploying if fired[f] != "on merge"})
         via = f" via {', '.join(workflows)}" if workflows else ""
         reasons.append(
@@ -177,6 +246,15 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
             f"approval of head {facts.head_sha[:7]} required"
         )
         owner = True
+
+    # This line explains an owner verdict that is already set; it does not add one.
+    held_workflows = [
+        f for f in unproven if _normalized_path(f).startswith(WORKFLOW_PREFIX)
+    ]
+    if facts.lock_failures and (deploying or held_workflows):
+        reasons.append(
+            f"production lock not verified: {'; '.join(facts.lock_failures)}"
+        )
 
     required, inventory_read = _required_checks()
     if not inventory_read:
@@ -416,6 +494,52 @@ def evaluate(
     )
 
 
+LOCK_VERIFIED = (
+    "production lock verified (reviewer, admin bypass off, policies main and v*, "
+    "contract holds)"
+)
+
+
+LOCK_NOT_READ = "production lock NOT verified: not read"
+LOCK_STOPPED = "production lock NOT verified: the run stopped before a verdict"
+# Why a lock was not read: skipped by design, or the run stopped before the read.
+LOCK_SKIPPED = "the lock is read only for an open PR of this repository"
+LOCK_NOT_REACHED = "the run stopped before the lock read"
+LOCK_STATES = ("verified", "not_verified", "not_read", "stopped_before_verdict")
+
+
+def lock_state(facts: HeadFacts) -> str:
+    """The lock state of a verdict (#1138). `stopped_before_verdict` has no facts, so
+    only the exit-4 path of the gate reports it."""
+    if facts.lock_failures is None:
+        return "not_read"
+    return "not_verified" if facts.lock_failures else "verified"
+
+
+def lock_line(state: str, detail: str = "") -> str:
+    """The one lock line of every output. It ends with the state that the JSON verdict
+    carries in `lock_state`. It informs; it never decides."""
+    text = {
+        "verified": LOCK_VERIFIED,
+        "not_verified": f"production lock NOT verified: {detail}",
+        "not_read": f"{LOCK_NOT_READ} ({detail})",
+        "stopped_before_verdict": LOCK_STOPPED,
+    }[state]
+    # Not "[...]": the console reads square brackets as markup and drops them.
+    return f"{text} | lock_state={state}"
+
+
+def lock_status(facts: HeadFacts) -> str:
+    """The lock line for a verdict with facts."""
+    state = lock_state(facts)
+    detail = (
+        "; ".join(facts.lock_failures or ())
+        if state == "not_verified"
+        else LOCK_SKIPPED
+    )
+    return lock_line(state, detail)
+
+
 def render(facts: HeadFacts, verdict: Verdict) -> str:
     """Render a human-readable verdict description."""
     head = f"#{facts.number} @ {facts.head_sha[:7]}"
@@ -423,7 +547,7 @@ def render(facts: HeadFacts, verdict: Verdict) -> str:
         return (
             f"{head}: mergeable under session authority — checks green "
             f"({len(facts.checks)}), threads resolved, settled, "
-            "no protected or deploy-triggering paths"
+            f"no path that needs the owner; {lock_status(facts)}"
         )
     kind = {
         "unevaluable": "could not evaluate (not a verdict on the PR)",
@@ -431,4 +555,5 @@ def render(facts: HeadFacts, verdict: Verdict) -> str:
         "action": "action required (waiting will not fix it)",
         "wait": "not yet",
     }[verdict.outcome]
-    return f"{head}: {kind}\n" + "\n".join(f"  - {r}" for r in verdict.reasons)
+    lines = [f"{head}: {kind}", *(f"  - {r}" for r in verdict.reasons)]
+    return "\n".join([*lines, f"  {lock_status(facts)}"])

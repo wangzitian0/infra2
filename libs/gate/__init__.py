@@ -7,11 +7,15 @@ from libs.gate.client import (
     _field,
     _file_at,
     _gh,
+    _production_lock_failures,
     _read_checks,
     collect,
 )
 from libs.gate.evaluator import (
+    LOCK_STATES,
     evaluate,
+    lock_line,
+    lock_status,
     render,
 )
 from libs.gate.inventory import (
@@ -114,6 +118,7 @@ __all__ = [
     "_inventory_only_gained_authority",
     "_is_local_root_repo",
     "_owner_instruction_quoted",
+    "_production_lock_failures",
     "_proven_tighter",
     "_read_checks",
     "_repo_deps",
@@ -124,6 +129,9 @@ __all__ = [
     "collect",
     "evaluate",
     "is_self_governing",
+    "LOCK_STATES",
+    "lock_line",
+    "lock_status",
     "render",
     "request_copilot_review",
     "self_governing_files",
