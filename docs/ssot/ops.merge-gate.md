@@ -136,7 +136,8 @@ Two exits stay open. A rule-text file clears with a quoted owner instruction in 
 A change to `ci-gate-inventory.yaml` clears when the direction proof shows it is tighter.
 A file that Python or pytest runs before gate code also needs the owner.
 Examples: a root module such as `yaml.py`, a package that replaces a gate module, and a `conftest.py` in `libs/tests`.
-Bytecode, `.so` and `.pth` files, virtual environments, `pytest.ini`, `setup.cfg` and `sitecustomize.py` also need the owner, at any depth.
+Bytecode, `.so` and `.pth` files, virtual environments and `sitecustomize.py` also need the owner, at any depth.
+`pytest.ini`, `tox.ini`, `setup.cfg` and `.coveragerc` need the owner at the root, in `libs/` and in `libs/tests/`.
 The gate compares paths case-folded, because the disk of the gate host does not tell case apart.
 `pyproject.toml` stays outside the gate, because dependency edits are common.
 

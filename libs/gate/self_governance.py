@@ -51,6 +51,8 @@ _TESTS_BY_MODULE = {
         "libs/tests/test_production_environment_gate.py",
     ),
     "libs/gate/evaluator.py": ("libs/tests/test_gate_pipeline.py",),
+    # It proves that each required check can report on any PR (#1138 round 4).
+    "libs/gate/inventory.py": ("libs/tests/test_required_checks_can_report.py",),
     "libs/gate/self_governance.py": ("libs/tests/test_gate_self_governance.py",),
 }
 
@@ -183,16 +185,11 @@ def _folded(paths: frozenset[str]) -> frozenset[str]:
 # how pytest runs the gate tests, at any depth (#1138 round 3).
 _TOOLING_PARTS = frozenset({"__pycache__", ".venv", "venv", "site-packages"})
 _COMPILED_SUFFIXES = (".pyc", ".pyd", ".pth", ".so")
-_TOOL_CONFIG_NAMES = frozenset(
-    {
-        "pytest.ini",
-        "tox.ini",
-        "setup.cfg",
-        ".coveragerc",
-        "sitecustomize.py",
-        "usercustomize.py",
-    }
-)
+# Python runs a site hook from any directory on its path.
+_SITE_HOOK_NAMES = frozenset({"sitecustomize.py", "usercustomize.py"})
+# pytest reads its settings for libs/tests only from the root, libs/ or libs/tests/.
+_TOOL_CONFIG_NAMES = frozenset({"pytest.ini", "tox.ini", "setup.cfg", ".coveragerc"})
+_TOOL_CONFIG_DIRS = frozenset({".", "libs", GATE_TESTS_DIR})
 
 
 @functools.lru_cache(maxsize=4)
@@ -232,8 +229,10 @@ def _shadows_the_gate(path: str) -> bool:
         return False
     if _TOOLING_PARTS & set(pure.parts) or pure.name.endswith(_COMPILED_SUFFIXES):
         return True  # bytecode, an extension, a .pth file, or a virtual environment
-    if pure.name in _TOOL_CONFIG_NAMES:
-        return True  # pytest or site configuration
+    if pure.name in _SITE_HOOK_NAMES:
+        return True  # a site hook
+    if pure.name in _TOOL_CONFIG_NAMES and str(pure.parent) in _TOOL_CONFIG_DIRS:
+        return True  # pytest configuration on the way to the gate tests
     importable = pure.name.endswith(_IMPORT_SUFFIXES)
     import_name = pure.name.split(".")[0]
     if len(pure.parts) == 1 and importable:

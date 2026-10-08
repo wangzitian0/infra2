@@ -246,13 +246,16 @@ def test_compiled_files_and_virtual_environments_are_self_governing(path) -> Non
     "path",
     [
         "pytest.ini",
+        "libs/pytest.ini",
         "libs/tests/pytest.ini",
         "tox.ini",
+        "libs/tests/tox.ini",
         "setup.cfg",
-        "docs/setup.cfg",
+        "LIBS/Setup.cfg",
         ".coveragerc",
         "libs/sitecustomize.py",
         "tools/usercustomize.py",
+        "docs/deep/sitecustomize.py",
     ],
 )
 def test_pytest_and_site_configuration_is_self_governing(path) -> None:
@@ -306,3 +309,35 @@ def test_ordinary_tracked_paths_are_not_self_governing() -> None:
     assert not missing, f"pick other tracked paths: {missing}"
     governed = [p for p in ORDINARY_PATHS if gate.is_self_governing(p)]
     assert not governed, governed
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "e2e_regressions/pytest.ini",
+        "docs/setup.cfg",
+        "libs/deploy/tox.ini",
+        "libs/tests/fixtures/.coveragerc",
+    ],
+)
+def test_pytest_settings_off_the_way_to_the_gate_tests_are_not_held(path) -> None:
+    """#1138 round 4: pytest reads settings for libs/tests only from the root,
+    libs/ and libs/tests/."""
+    assert not gate.is_self_governing(path)
+
+
+@pytest.mark.parametrize(
+    "path", [".venv/pyvenv.cfg", "libs/gate/__pycache__/note.txt", "venv/x.txt"]
+)
+def test_each_tooling_directory_name_counts(path) -> None:
+    """#1138 round 4: each name in the rule has a path that only it catches."""
+    assert gate.is_self_governing(path)
+
+
+def test_the_required_check_report_test_is_in_the_closure() -> None:
+    """It proves that a required check can report on any PR, so a change to it
+    changes what the gate trusts (#1138 round 4)."""
+    path = "libs/tests/test_required_checks_can_report.py"
+    assert (ROOT / path).is_file()
+    assert path in gate.self_governing_files()
+    assert gate.is_self_governing(path)
