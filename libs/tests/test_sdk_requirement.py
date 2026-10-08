@@ -145,6 +145,9 @@ def test_each_image_installs_the_locked_requirement(rel: str) -> None:
         f"{rel}: pip line holds a shell operator: {args}"
     )
     assert args.count("$") == 1, f"{rel}: pip line expands more than $sdk: {args}"
+    # `shlex` drops the quotes, so test them in the text. An unquoted `$sdk` splits at
+    # the blanks of `infra2-sdk @ <url>`: pip gets three arguments, the first without a hash.
+    assert args.count('"$sdk"') == 1, f"{rel}: $sdk is not quoted: {args}"
     assert shlex.split(args).count("$sdk") == 1, f"{rel}: $sdk is not one pip argument"
     # Run the script as the image does (script, then lock path) and compare with the
     # lock read independently, so the command line is tested and not only the function.
