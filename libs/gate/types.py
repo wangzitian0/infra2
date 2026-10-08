@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import posixpath
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
@@ -107,6 +108,17 @@ def _repo_slug(repo: str) -> str:
 def _is_local_root_repo(repo: str) -> bool:
     """True when `repo` is the repository rooted at `ROOT` (infra2)."""
     return _repo_slug(repo).lower() == _repo_slug(DEFAULT_REPO).lower()
+
+
+def _normalized_path(path: str) -> str:
+    """A repository path in one comparable form (#1138): white space stripped, `/`
+    separators, no `.`, `..` or empty parts, no leading `./` or `/`, and case folded.
+    The gate host's disk does not tell `Tools/x.py` from `tools/x.py`."""
+    text = path.strip().replace("\\", "/")
+    if not text:
+        return ""
+    normal = posixpath.normpath(text).lstrip("/")
+    return "" if normal == "." else normal.casefold()
 
 
 def _as_list(value: object) -> list[str]:

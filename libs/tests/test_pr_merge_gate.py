@@ -9,6 +9,7 @@ import pytest
 
 from libs.gate import production_contract
 from libs.gate.inventory import _required_check_workflows
+from libs.gate.types import _normalized_path
 from tools import pr_merge_gate as gate
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -2363,8 +2364,7 @@ def test_holding_one_workflow_leaves_the_others_covered(monkeypatch):
     assert verdict.ready, verdict.reasons
 
 
-def test_a_proven_tighter_change_gets_no_new_blocker_from_the_lock(monkeypatch):
-    _hold(monkeypatch, "ops-checks.yml")
+def test_a_proven_tighter_change_gets_no_new_blocker_from_the_lock():
     path = f"{gate.WORKFLOW_PREFIX}ops-checks.yml"
     for lock in (None, HOLDS, ("no required reviewer",)):
         verdict = gate.evaluate(
@@ -2372,6 +2372,15 @@ def test_a_proven_tighter_change_gets_no_new_blocker_from_the_lock(monkeypatch):
             now=NOW,
         )
         assert verdict.ready, (lock, verdict.reasons)
+
+
+def test_a_held_file_is_not_cleared_by_the_proof_while_the_lock_holds(monkeypatch):
+    _hold(monkeypatch, "ops-checks.yml")
+    path = f"{gate.WORKFLOW_PREFIX}ops-checks.yml"
+    verdict = gate.evaluate(
+        _green(files=(path,), proven_tighter=(path,), lock_failures=HOLDS), now=NOW
+    )
+    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
 
 
 def test_a_deploy_path_merges_without_the_owner_when_the_lock_holds():
@@ -2530,8 +2539,8 @@ INFRA_CI = f"{gate.WORKFLOW_PREFIX}infra-ci.yml"
 
 def _required_line(path: str) -> str:
     return (
-        f"{path} defines a required check: the owner approves head abcdef0 unless "
-        "the change is proven tighter"
+        f"{path} defines a required check: the owner approves head abcdef0; the "
+        "workflow proof does not read job bodies, so it cannot clear this file"
     )
 
 
@@ -2545,12 +2554,25 @@ def test_a_required_check_workflow_needs_the_owner_when_the_lock_holds():
     assert _required_line(INFRA_CI) in verdict.reasons
 
 
-def test_a_proven_tighter_required_check_workflow_needs_no_owner():
+def test_a_proven_tighter_required_check_workflow_still_needs_the_owner():
+    """#1138 round 3: the workflow proof reads no job bodies, so it does not clear a
+    required-check workflow while the lock holds."""
     verdict = gate.evaluate(
         _green(files=(INFRA_CI,), proven_tighter=(INFRA_CI,), lock_failures=HOLDS),
         now=NOW,
     )
-    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
+    assert _required_line(INFRA_CI) in verdict.reasons
+
+
+def test_without_the_lock_the_proof_still_clears_as_before():
+    """Fail closed keeps the earlier verdict when the lock is not verified."""
+    for lock in (None, ("no required reviewer",)):
+        verdict = gate.evaluate(
+            _green(files=(INFRA_CI,), proven_tighter=(INFRA_CI,), lock_failures=lock),
+            now=NOW,
+        )
+        assert verdict.ready and verdict.exit_code == 0, (lock, verdict.reasons)
 
 
 def test_a_workflow_without_a_required_check_is_the_agents_when_the_lock_holds():
@@ -2681,3 +2703,123 @@ def test_a_runner_error_in_the_lock_read_is_a_failure_not_a_crash(error):
     assert failures and all(isinstance(f, str) for f in failures)
     if isinstance(error, OSError):
         assert failures == ("the lock check failed: OSError: gh not found",)
+
+
+# --- #1138 round 3 R3-1: the proof cannot clear a required-check workflow ------------
+
+WEAKENINGS = (
+    "run-true",
+    "continue-on-error",
+    "self-hosted",
+    "paths-ignore",
+    "pull-request-target",
+    "env-secret",
+)
+
+
+def _weakened(path: str, kind: str, job: str) -> str:
+    """The workflow at `path` with one edit that weakens what the job proves."""
+    import yaml
+
+    doc = yaml.safe_load((ROOT / path).read_text(encoding="utf-8"))
+    target = doc["jobs"][job]
+    on = doc.get(True, doc.get("on"))
+    if kind == "run-true":
+        for step in target.get("steps", []):
+            if "run" in step:
+                step["run"] = "true"
+    elif kind == "continue-on-error":
+        target["continue-on-error"] = True
+    elif kind == "self-hosted":
+        target["runs-on"] = "self-hosted"
+    elif kind == "paths-ignore":
+        on["pull_request"] = {"paths-ignore": ["**"]}
+    elif kind == "pull-request-target":
+        on["pull_request_target"] = on.pop("pull_request", None) or {}
+    elif kind == "env-secret":
+        target["env"] = {"X": "${{ secrets.K }}"}
+    return yaml.safe_dump(doc, sort_keys=False)
+
+
+def _verdict_through_the_proof(path: str, head_text: str):
+    """Run the real direction proof with gh serving the base and the head, then
+    evaluate with the lock holding."""
+    base_text = (ROOT / path).read_text(encoding="utf-8")
+    assert head_text != base_text
+
+    def serve(argv):
+        return base_text if argv[-1].endswith("?ref=main") else head_text
+
+    proven = gate._proven_tighter(
+        "wangzitian0/infra2", "main", "abcdef0123456789", (path,), gh=serve
+    )
+    facts = _green(files=(path,), proven_tighter=proven, lock_failures=HOLDS)
+    return proven, gate.evaluate(facts, now=NOW)
+
+
+@pytest.mark.parametrize("kind", WEAKENINGS)
+def test_a_weakened_required_check_workflow_goes_to_the_owner(kind):
+    proven, verdict = _verdict_through_the_proof(
+        INFRA_CI, _weakened(INFRA_CI, kind, "validate-compose")
+    )
+    # The proof reads only push paths and job names: it calls each of these tighter.
+    assert proven == (INFRA_CI,), kind
+    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
+    assert _required_line(INFRA_CI) in verdict.reasons
+
+
+@pytest.mark.parametrize("kind", WEAKENINGS)
+@pytest.mark.parametrize(
+    "name, job", [("docs.yml", "build"), ("deploy.yml", "preflight_canary")]
+)
+def test_the_same_edit_to_a_workflow_without_a_required_check_is_the_agents(
+    kind, name, job
+):
+    path = f"{gate.WORKFLOW_PREFIX}{name}"
+    _, verdict = _verdict_through_the_proof(path, _weakened(path, kind, job))
+    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+
+
+# --- #1138 round 3 R3-4: one form for an inventory workflow path ---------------------
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        "./.github/workflows/infra-ci.yml",
+        ".github//workflows/infra-ci.yml",
+        ".github/workflows/infra-ci.yml ",
+        ".GitHub/Workflows/Infra-CI.yml",
+    ],
+    ids=["dot-slash", "double-slash", "trailing-space", "case"],
+)
+def test_an_inventory_path_in_another_spelling_still_holds_its_workflow(
+    tmp_path, monkeypatch, written
+):
+    gates = [{"id": "x", "workflow": written, "job": "j", "blocks_merge": True}]
+    _inventory_at(tmp_path, monkeypatch, gates)
+    assert _required_check_workflows() == frozenset({INFRA_CI})
+    verdict = gate.evaluate(_green(files=(INFRA_CI,), lock_failures=HOLDS), now=NOW)
+    assert verdict.owner_required and _required_line(INFRA_CI) in verdict.reasons
+
+
+def test_a_changed_path_in_another_case_is_held_too():
+    variant = ".github/workflows/Infra-CI.yml"
+    verdict = gate.evaluate(_green(files=(variant,), lock_failures=HOLDS), now=NOW)
+    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
+
+
+@pytest.mark.parametrize(
+    "path, normal",
+    [
+        ("./a/b.py", "a/b.py"),
+        ("a//b.py", "a/b.py"),
+        (" a/b.py ", "a/b.py"),
+        ("A\\B.py", "a/b.py"),
+        ("/a/./c/../b.py", "a/b.py"),
+        ("", ""),
+        (".", ""),
+    ],
+)
+def test_a_path_has_one_comparable_form(path, normal):
+    assert _normalized_path(path) == normal

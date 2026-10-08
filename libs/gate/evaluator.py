@@ -39,6 +39,7 @@ from libs.gate.types import (
     Reasons,
     Verdict,
     _is_local_root_repo,
+    _normalized_path,
 )
 
 # Check states GitHub reports while a check has not finished yet.
@@ -144,20 +145,28 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
         )
 
     # The production lock (#1138) replaces the owner for a workflow file, unless the
-    # file defines a required check or is on OWNER_HELD_WORKFLOWS. A held file follows
-    # the direction proof or goes to the owner. An unreadable inventory holds every
-    # workflow file. Every other self-governing path stays with the owner.
+    # file defines a required check or is on OWNER_HELD_WORKFLOWS. While the lock
+    # holds, a held file goes to the owner: the workflow direction proof reads only
+    # push paths and job names, not job bodies, so it cannot clear a file that runs
+    # a required check. An unreadable inventory holds every workflow file. Every other
+    # self-governing path stays with the owner.
     lock_holds = facts.lock_failures == ()
-    owner_held = production_contract.OWNER_HELD_WORKFLOWS
+    owner_held = {name.casefold() for name in production_contract.OWNER_HELD_WORKFLOWS}
     required_workflows = _required_check_workflows()
+
+    def _requires(path: str) -> bool:
+        return required_workflows is not None and _normalized_path(path) in (
+            required_workflows
+        )
+
     uncovered = sorted(
         f
         for f in facts.files
-        if f.startswith(WORKFLOW_PREFIX)
+        if _normalized_path(f).startswith(WORKFLOW_PREFIX)
         and (
             required_workflows is None
-            or f in required_workflows
-            or PurePosixPath(f).name in owner_held
+            or _requires(f)
+            or PurePosixPath(_normalized_path(f)).name in owner_held
         )
     )
     lock_covered = {
@@ -172,7 +181,7 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
     unproven = [
         f
         for f in governing
-        if f not in facts.proven_tighter
+        if (f not in facts.proven_tighter or (lock_holds and f in uncovered))
         and not (f in RULE_TEXT_FILES and quoted_instruction)
     ]
     if unproven:
@@ -212,7 +221,9 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
         owner = True
 
     # Each line below explains an owner verdict that is already set; neither adds one.
-    held_workflows = [f for f in unproven if f.startswith(WORKFLOW_PREFIX)]
+    held_workflows = [
+        f for f in unproven if _normalized_path(f).startswith(WORKFLOW_PREFIX)
+    ]
     if facts.lock_failures and (deploying or held_workflows):
         reasons.append(
             f"production lock not verified: {'; '.join(facts.lock_failures)}"
@@ -226,12 +237,13 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
             )
         else:
             for f in held:
-                if f in required_workflows:
+                if _requires(f):
                     reasons.append(
                         f"{f} defines a required check: the owner approves head "
-                        f"{facts.head_sha[:7]} unless the change is proven tighter"
+                        f"{facts.head_sha[:7]}; the workflow proof does not read job "
+                        "bodies, so it cannot clear this file"
                     )
-            listed = [f for f in held if f not in required_workflows]
+            listed = [f for f in held if not _requires(f)]
             if listed:
                 reasons.append(
                     f"the production lock does not cover {', '.join(listed)}: the "

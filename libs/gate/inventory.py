@@ -14,6 +14,7 @@ from libs.gate.types import (
     _get_root,
     _get_workflow_dir,
     _get_yaml,
+    _normalized_path,
 )
 
 
@@ -169,7 +170,9 @@ def _required_check_workflows() -> frozenset[str] | None:
     coordinates = _blocking_coordinates(text)
     if not coordinates:
         return None
-    workflows = frozenset(workflow for _, workflow, _ in coordinates)
+    # One form for matching a changed file: `./x`, `a//b`, a space or a case variant
+    # names the same file (#1138).
+    workflows = frozenset(_normalized_path(w) for _, w, _ in coordinates)
     return None if "" in workflows else workflows
 
 
