@@ -551,6 +551,8 @@ _IMPORT_TO_PIP_NAME = {
     "infra2_sdk": "infra2-sdk",
     "psycopg": "psycopg",
     "boto3": "boto3",
+    "fastapi": "fastapi",
+    "uvicorn": "uvicorn",
 }
 
 
@@ -913,3 +915,61 @@ def test_the_bridge_budgets_the_card_for_its_delivery_mode(monkeypatch) -> None:
     assert (
         card_budget("feishu_webhook") < sizes["feishu_app"] <= card_budget("feishu_app")
     )
+
+
+def test_alerting_fastapi_endpoints_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify alerting service FastAPI endpoints (/livez, /readyz, /health, /signoz/webhook)."""
+    import importlib.util
+    from starlette.testclient import TestClient
+
+    path = ROOT / "platform/12.alerting/app.py"
+    spec = importlib.util.spec_from_file_location("alerting_fastapi_test", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    monkeypatch.setenv("ALERT_DELIVERY_MODE", "feishu_app")
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_test")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "app-secret")
+    monkeypatch.setenv("FEISHU_CHAT_ID", "oc_pager")
+    monkeypatch.delenv("BRIDGE_BASIC_AUTH_USERNAME", raising=False)
+    monkeypatch.delenv("BRIDGE_BASIC_AUTH_PASSWORD", raising=False)
+
+    monkeypatch.setattr(module, "_feishu_reachable", lambda: True)
+    monkeypatch.setattr(
+        module, "deliver_feishu_app_card", lambda **kwargs: {"code": 0}
+    )
+
+    client = TestClient(module.fastapi_app)
+
+    # 1. /livez
+    live_res = client.get("/livez")
+    assert live_res.status_code == 200
+    assert live_res.json() == {"status": "alive", "service": "platform-alerting"}
+
+    # 2. /readyz
+    ready_res = client.get("/readyz")
+    assert ready_res.status_code == 200
+    assert ready_res.json()["status"] == "ready"
+
+    # 3. /health
+    health_res = client.get("/health")
+    assert health_res.status_code == 200
+    assert health_res.json()["status"] == "ok"
+    assert health_res.json()["mode"] == "feishu_app"
+
+    # 4. /health/feishu
+    feishu_res = client.get("/health/feishu")
+    assert feishu_res.status_code == 200
+    assert feishu_res.json()["status"] == "ok"
+    assert feishu_res.json()["reachable"] is True
+
+    # 5. POST /signoz/webhook
+    payload = {
+        "status": "firing",
+        "commonLabels": {"alertname": "TestAlert", "severity": "warning"},
+        "alerts": [{"status": "firing", "labels": {"alertname": "TestAlert"}}],
+    }
+    hook_res = client.post("/signoz/webhook", json=payload)
+    assert hook_res.status_code == 202
+    assert hook_res.json()["status"] == "accepted"

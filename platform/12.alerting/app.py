@@ -9,6 +9,10 @@ import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from infra2_sdk.fastapi import init_service
+
 from libs.alerting import (
     AlertingError,
     build_feishu_alert_card,
@@ -142,10 +146,138 @@ class AlertBridgeHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def _alerting_readiness_checker() -> tuple[bool, str]:
+    try:
+        _ = _validate_delivery_config()
+        return True, "delivery config valid"
+    except Exception as exc:
+        return False, str(exc)
+
+
+# FastAPI Service with infra2_sdk standard runtime
+fastapi_app = FastAPI(title="platform-alerting")
+init_service(
+    fastapi_app,
+    name="platform-alerting",
+    db_checker=_alerting_readiness_checker,
+    enable_otel=True,
+)
+# Retain /livez and /readyz from init_service, but override /health with alerting contract
+fastapi_app.router.routes = [
+    r for r in fastapi_app.router.routes if getattr(r, "path", None) != "/health"
+]
+
+
+@fastapi_app.get("/health", include_in_schema=True)
+def health() -> JSONResponse:
+    try:
+        metadata = _validate_delivery_config()
+    except AlertingError as exc:
+        return JSONResponse(
+            status_code=503, content={"status": "degraded", "error": str(exc)}
+        )
+    return JSONResponse(status_code=200, content={"status": "ok", **metadata})
+
+
+@fastapi_app.get("/health/feishu", include_in_schema=True)
+def health_feishu() -> JSONResponse:
+    try:
+        metadata = _validate_delivery_config()
+    except AlertingError as exc:
+        return JSONResponse(
+            status_code=503, content={"status": "degraded", "error": str(exc)}
+        )
+    if not _feishu_reachable():
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unreachable",
+                "detail": "feishu host TCP 443",
+                **metadata,
+            },
+        )
+    return JSONResponse(
+        status_code=200, content={"status": "ok", "reachable": True, **metadata}
+    )
+
+
+@fastapi_app.post("/signoz/webhook", include_in_schema=True)
+async def signoz_webhook(request: Request) -> JSONResponse:
+    username = os.getenv("BRIDGE_BASIC_AUTH_USERNAME", "")
+    password = os.getenv("BRIDGE_BASIC_AUTH_PASSWORD", "")
+    if username or password:
+        header = request.headers.get("authorization", "")
+        expected = "Basic " + base64.b64encode(
+            f"{username}:{password}".encode("utf-8")
+        ).decode("ascii")
+        if not secrets.compare_digest(header, expected):
+            return JSONResponse(status_code=401, content={"status": "unauthorized"})
+
+    cl_header = request.headers.get("content-length")
+    try:
+        _ = _parse_content_length(cl_header)
+    except RequestBodyError as exc:
+        return JSONResponse(status_code=exc.status_code, content=exc.payload)
+
+    raw_body = await request.body()
+    if not raw_body:
+        return JSONResponse(status_code=400, content={"status": "empty_payload"})
+    if len(raw_body) > MAX_BODY_BYTES:
+        return JSONResponse(status_code=413, content={"status": "payload_too_large"})
+
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return JSONResponse(status_code=400, content={"status": "invalid_json"})
+
+    if not isinstance(payload, dict):
+        return JSONResponse(status_code=400, content={"status": "invalid_payload"})
+
+    report = is_report_payload(payload)
+    try:
+        card = build_feishu_alert_card(payload, delivery_mode=_delivery_mode())
+        response = _deliver(card, report=report)
+    except AlertingError as exc:
+        return JSONResponse(
+            status_code=502,
+            content={"status": "delivery_failed", "error": str(exc)},
+        )
+
+    labels = payload.get("commonLabels")
+    labels = labels if isinstance(labels, dict) else {}
+    alerts = payload.get("alerts")
+    alert_count = len(alerts) if isinstance(alerts, list) else 0
+    print(
+        f"alert-bridge delivered status={payload.get('status', '?')} "
+        f"alertname={labels.get('alertname', '?')} "
+        f"severity={labels.get('severity', '?')} "
+        f"alerts={alert_count} "
+        f"delivery={_route(report)}",
+        flush=True,
+    )
+    return JSONResponse(
+        status_code=202, content={"status": "accepted", "feishu": response}
+    )
+
+
+# Standard ASGI entrypoint
+app = fastapi_app
+
+
 def main() -> None:
-    server = ThreadingHTTPServer((HOST, PORT), AlertBridgeHandler)
-    print(f"alert bridge listening on {HOST}:{PORT}", flush=True)
-    server.serve_forever()
+    port = int(os.getenv("PORT", "8080"))
+    try:
+        import uvicorn
+
+        print(
+            f"alert bridge starting on {HOST}:{port} with FastAPI and infra2_sdk",
+            flush=True,
+        )
+        uvicorn.run(fastapi_app, host=HOST, port=port, log_level="info")
+    except ImportError:
+        server = ThreadingHTTPServer((HOST, port), AlertBridgeHandler)
+        print(f"alert bridge fallback listening on {HOST}:{port}", flush=True)
+        server.serve_forever()
 
 
 def _delivery_mode() -> str:
