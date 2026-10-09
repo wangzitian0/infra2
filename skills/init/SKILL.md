@@ -55,9 +55,18 @@ Report the open PRs labelled `needs-owner` once. A non-production PR that waits 
 gh pr list --search "label:needs-owner" --json repository,number,title
 ```
 
-## 5. Init Swarm (Optional 4-Intern parallel discovery)
+- **Scan stale leftovers**:
+Run these in bash or zsh, in the repository you work in. The three counts are: branches whose upstream is gone, stashes older than 30 days, and local branches whose name is the head of a merged PR. Put each count above zero in the "facts you recalled" line. A count above zero shows a cleanup that nothing triggered. Do not delete what another session owns. A `gh` error is a failed scan, not a zero.
+```bash
+git fetch --prune --no-tags --no-write-fetch-head --no-auto-gc origin || echo "fetch failed: the counts can be stale"
+LC_ALL=C git for-each-ref --format='%(upstream:track)' refs/heads | awk '/\[gone\]/ {n++} END {print n+0}'
+git stash list --format=%ct | awk -v c=$(( $(date +%s) - 2592000 )) '$1 < c {n++} END {print n+0}'
+gh pr list --state merged --limit 300 --json headRefName --jq '.[].headRefName' | sort -u | comm -12 - <(git for-each-ref --format='%(refname:short)' refs/heads | sort) | awk 'END {print NR}'
+```
 
-For complex tasks or large repositories, dispatch a quick 4-Intern discovery batch via `subagent_batch`:
+## 5. Init Swarm (M=4)
+
+For complex tasks or large repositories, dispatch 1 Init Swarm (M=4 Interns via `subagent_batch`):
 - **Intern 1 (Key List)**: Scans `MANIFEST.yaml` and `tools/` for reusable components.
 - **Intern 2 (Intent & History)**: Runs git log search for past PRs touching the target subsystem.
 - **Intern 3 (Memory Recall)**: Executes global `search_notes` across all projects.
