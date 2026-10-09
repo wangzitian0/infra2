@@ -103,7 +103,9 @@ def libs_common_violations(source: str, rel_path: str = "<memory>.py") -> list[s
                 )
         elif isinstance(node, ast.Import):
             aliases.update(
-                item.asname for item in node.names if item.name == COMMON and item.asname
+                item.asname
+                for item in node.names
+                if item.name == COMMON and item.asname
             )
 
     for node in ast.walk(tree):
@@ -180,7 +182,9 @@ def module_level_names(source: str) -> set[str]:
                     visit(handler.body)
 
     visit(ast.parse(source).body)
-    return {name for name in names if not (name.startswith("__") and name.endswith("__"))}
+    return {
+        name for name in names if not (name.startswith("__") and name.endswith("__"))
+    }
 
 
 def module_name_drift(source: str) -> list[str]:
@@ -375,11 +379,7 @@ def test_guard_flags_a_string_patch_target() -> None:
 
 
 def test_guard_flags_relative_imports_that_reach_libs_common() -> None:
-    source = (
-        "from . import common\n"
-        "from .common import get_env\n"
-        "common.get_env\n"
-    )
+    source = "from . import common\nfrom .common import get_env\ncommon.get_env\n"
     assert libs_common_violations(source, "libs/x.py") == [
         "libs/x.py:2: imports get_env from libs.common",
         "libs/x.py:3: reads libs.common.get_env",

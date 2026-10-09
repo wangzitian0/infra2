@@ -328,7 +328,10 @@ class AlertingDeployer(Deployer):
         import time
 
         from libs.console import warning
-        from libs.observability.probe_specs import missing_probe_names, normalize_specs_text
+        from libs.observability.probe_specs import (
+            missing_probe_names,
+            normalize_specs_text,
+        )
 
         e = cls.env()
         host = e.get("VPS_HOST")
