@@ -512,3 +512,44 @@ def test_portal_config_template_contains_canary_todo() -> None:
     assert todo_item is not None, "Canary Todo item not found in Homer config"
     assert todo_item["url"] == "https://todo{{ENV_DOMAIN_SUFFIX}}.{{INTERNAL_DOMAIN}}"
     assert todo_item["tag"] == "canary"
+
+
+def test_todo_fastapi_endpoints_contract() -> None:
+    """Verify Canary Todo exposes FastAPI endpoints via infra2_sdk.fastapi."""
+    from starlette.testclient import TestClient
+
+    spec = importlib.util.spec_from_file_location(
+        "todo_app_fastapi", REPO_ROOT / "platform/30.todo/app.py"
+    )
+    assert spec is not None and spec.loader is not None
+    todo_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(todo_mod)
+
+    client = TestClient(todo_mod.fastapi_app)
+
+    # 1. Standard /livez probe from infra2_sdk.fastapi.init_service
+    resp_livez = client.get("/livez")
+    assert resp_livez.status_code == 200
+    assert resp_livez.json() == {"status": "alive", "service": "platform-todo"}
+
+    # 2. Standard /readyz probe from infra2_sdk.fastapi.init_service
+    resp_readyz = client.get("/readyz")
+    assert resp_readyz.status_code in (200, 503)
+
+    # 3. Standard /health probe from infra2_sdk.fastapi.init_service
+    resp_health = client.get("/health")
+    assert resp_health.status_code in (200, 503)
+    health_data = resp_health.json()
+    assert "status" in health_data
+    assert health_data["service"] == "platform-todo"
+
+    # 4. Backwards-compatible /api/health
+    resp_api_health = client.get("/api/health")
+    assert resp_api_health.status_code == 200
+    assert resp_api_health.json()["service"] == "platform/todo"
+
+    # 5. Todo REST API
+    resp_todos = client.get("/api/todos")
+    assert resp_todos.status_code == 200
+    assert isinstance(resp_todos.json(), list)
+

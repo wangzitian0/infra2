@@ -12,6 +12,7 @@ RUN sdk="$(python /tmp/sdk/sdk_requirement.py /tmp/sdk/uv.lock)" \
        "opentelemetry-api>=1.24,<2" "opentelemetry-sdk>=1.24,<2" \
        "opentelemetry-exporter-otlp-proto-http>=1.24,<2" \
        "opentelemetry-instrumentation-logging>=0.45b0,<1" \
+       "fastapi>=0.110,<1" "uvicorn[standard]>=0.28,<1" \
        "$sdk"
 
 COPY platform/30.todo /app/
