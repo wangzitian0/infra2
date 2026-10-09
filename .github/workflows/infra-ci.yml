@@ -486,21 +486,8 @@ jobs:
       - name: Run ruff check
         run: ruff check libs/ bootstrap/ platform/ finance_report/ truealpha/ tools/
 
-      - name: Determine changed Python files
-        id: changed-python
-        run: |
-          base_ref="${{ github.base_ref }}"
-          if [ -z "$base_ref" ]; then
-            base_ref="main"
-          fi
-          git fetch origin "$base_ref" --depth=1
-          files=$(git diff --name-only "origin/$base_ref...HEAD" -- libs bootstrap platform finance_report truealpha tools | grep -E '\.py$' || true)
-          files="${files//$'\n'/ }"
-          echo "files=$files" >> "$GITHUB_OUTPUT"
-
       - name: Run ruff format check
-        if: steps.changed-python.outputs.files != ''
-        run: ruff format --check ${{ steps.changed-python.outputs.files }}
+        run: ruff format --check libs/ bootstrap/ platform/ finance_report/ truealpha/ tools/
 
       - name: Run anti-tautology test linter
         run: |

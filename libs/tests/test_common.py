@@ -146,4 +146,3 @@ def test_service_subdomains_hosts_are_served_by_backend_services():
                 f"SERVICE_SUBDOMAINS[{key!r}] = {subdomain!r} is not served by {service} "
                 f"(served hosts: {sorted(s3_hosts)})"
             )
-

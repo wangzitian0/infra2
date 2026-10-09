@@ -462,9 +462,7 @@ def test_ensure_runtime_secrets_pins_from_the_process_environment(monkeypatch):
     monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.47")
     from infra2_sdk import refs
 
-    monkeypatch.setattr(
-        refs, "resolve_image_digest", lambda **kw: "sha256:" + "9" * 64
-    )
+    monkeypatch.setattr(refs, "resolve_image_digest", lambda **kw: "sha256:" + "9" * 64)
     monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)
     assert deployer.ensure_runtime_secrets() is True
     assert ("GIT_COMMIT_SHA", "v0.0.47") in secrets.writes
@@ -511,9 +509,7 @@ def test_ensure_runtime_secrets_accepts_env_parameter(monkeypatch):
     monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.48")
     from infra2_sdk import refs
 
-    monkeypatch.setattr(
-        refs, "resolve_image_digest", lambda **kw: "sha256:" + "8" * 64
-    )
+    monkeypatch.setattr(refs, "resolve_image_digest", lambda **kw: "sha256:" + "8" * 64)
     monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)
 
     # Calling with env="staging" must succeed and not raise TypeError

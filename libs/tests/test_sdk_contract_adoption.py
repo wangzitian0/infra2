@@ -58,11 +58,15 @@ def _sdk_contract_violations(source: str) -> list[str]:
             if any(part.startswith("_") for part in parts[1:]):
                 violations.append(f"private module {module}")
             for shim_name, shim_desc in DEPRECATED_SDK_MODULES.items():
-                if parts[1:2] == [shim_name] or (len(parts) == 1 and shim_name in names):
+                if parts[1:2] == [shim_name] or (
+                    len(parts) == 1 and shim_name in names
+                ):
                     violations.append(f"deprecated module {shim_desc}")
             if len(parts) >= 2 and parts[1] == "runtime":
                 for shim_name, shim_desc in DEPRECATED_RUNTIME_MODULES.items():
-                    if parts[2:3] == [shim_name] or (len(parts) == 2 and shim_name in names):
+                    if parts[2:3] == [shim_name] or (
+                        len(parts) == 2 and shim_name in names
+                    ):
                         violations.append(f"deprecated module {shim_desc}")
             violations.extend(
                 f"private name {module}.{name}"
@@ -116,15 +120,15 @@ def test_the_sdk_contract_scan_flags_private_and_deprecated_use() -> None:
     assert _sdk_contract_violations("identity.to_otel_resource_attributes()\n") == [
         "deprecated attribute to_otel_resource_attributes"
     ]
-    assert _sdk_contract_violations("from infra2_sdk.deploy_health import poll_until_healthy\n") == [
-        "deprecated module infra2_sdk.deploy_health (use infra2_sdk.deploy)"
-    ]
-    assert _sdk_contract_violations("from infra2_sdk.release import ReleaseError\n") == [
-        "deprecated module infra2_sdk.release (use infra2_sdk.refs)"
-    ]
-    assert _sdk_contract_violations("from infra2_sdk.runtime.probes import DependencyStatus\n") == [
-        "deprecated module infra2_sdk.runtime.probes (use infra2_sdk.runtime.health)"
-    ]
+    assert _sdk_contract_violations(
+        "from infra2_sdk.deploy_health import poll_until_healthy\n"
+    ) == ["deprecated module infra2_sdk.deploy_health (use infra2_sdk.deploy)"]
+    assert _sdk_contract_violations(
+        "from infra2_sdk.release import ReleaseError\n"
+    ) == ["deprecated module infra2_sdk.release (use infra2_sdk.refs)"]
+    assert _sdk_contract_violations(
+        "from infra2_sdk.runtime.probes import DependencyStatus\n"
+    ) == ["deprecated module infra2_sdk.runtime.probes (use infra2_sdk.runtime.health)"]
     assert (
         _sdk_contract_violations(
             "from infra2_sdk.refs import ls_remote_rows, redact_repo\n"

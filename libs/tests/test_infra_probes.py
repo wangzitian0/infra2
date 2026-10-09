@@ -388,7 +388,10 @@ def test_public_route_probes_derive_from_facets_and_registered_signals() -> None
     an unregistered public probe cannot ship."""
     import yaml
 
-    from libs.observability.probe_specs import parse_probe_names, render_public_route_spec_text
+    from libs.observability.probe_specs import (
+        parse_probe_names,
+        render_public_route_spec_text,
+    )
 
     compose = (ROOT / "platform/12.alerting/compose.yaml").read_text(encoding="utf-8")
     assert "PUBLIC_ROUTE_PROBE_SPECS: ${PUBLIC_ROUTE_PROBE_SPECS:-}" in compose
@@ -1748,7 +1751,10 @@ def test_truealpha_app_is_probed_inside_and_on_its_product_domain() -> None:
     truealpha#474), which the public-route renderer could not express."""
     import importlib.util
 
-    from libs.observability.probe_specs import render_probe_spec_text, render_public_route_spec_text
+    from libs.observability.probe_specs import (
+        render_probe_spec_text,
+        render_public_route_spec_text,
+    )
 
     internal = render_probe_spec_text()
     assert (
