@@ -365,70 +365,121 @@ def status(c):
 
 
 def _vault_token_targets(root_dir: str) -> list[VaultTokenTarget]:
-    """Return all services that should receive a Vault app token."""
-    projects = [
-        (
-            "bootstrap",
-            os.path.join(root_dir, "bootstrap"),
-            {
-                "iac_runner": "06.iac_runner",
-            },
-            "bootstrap",
-        ),
-        (
-            "platform",
-            os.path.join(root_dir, "platform"),
-            {
-                "postgres": "01.postgres",
-                "redis": "02.redis",
-                "minio": "03.s3",
-                "authentik": "10.authentik",
-                "alerting": "12.alerting",
-                "prefect": "23.prefect",
-                "openpanel": "24.openpanel",
-                "todo": "30.todo",
-            },
-            "platform",
-        ),
+    """Return all services that should receive a Vault app token.
+
+    Dynamically discovered from filesystem layers so newly added services
+    do not require manual registration in this file (SSOT convergence).
+    """
+    candidate_layers = [
+        ("bootstrap", os.path.join(root_dir, "bootstrap"), "bootstrap"),
+        ("platform", os.path.join(root_dir, "platform"), "platform"),
         (
             "finance_report",
             os.path.join(root_dir, "finance_report", "finance_report"),
-            {
-                "postgres": "01.postgres",
-                "redis": "02.redis",
-                "app": "10.app",
-            },
             "finance_report",
         ),
         (
             "truealpha",
             os.path.join(root_dir, "truealpha", "truealpha"),
-            {
-                "postgres": "01.postgres",
-                "app": "10.app",
-                # data_engine was missing from this map, so `invoke
-                # vault.setup-approle --project=truealpha --service=data_engine`
-                # answered "No matching AppRole targets" — found during the
-                # 2026-07-27 production graduation; its SecretsFacet has always
-                # declared approle auth for all three dagster containers.
-                "data_engine": "20.data_engine",
-            },
             "truealpha",
         ),
     ]
 
+    # Also discover any top-level application projects not in standard layers
+    excluded_dirs = {
+        ".git",
+        ".github",
+        ".agents",
+        ".claude",
+        ".venv",
+        "bootstrap",
+        "platform",
+        "finance_report",
+        "truealpha",
+        "docs",
+        "libs",
+        "tools",
+        "scripts",
+        "e2e_regressions",
+        "harness",
+        "repos",
+        "cloudflare",
+        "playground",
+        "skills",
+        "preview",
+    }
+    try:
+        for entry in os.scandir(root_dir):
+            if (
+                entry.is_dir()
+                and entry.name not in excluded_dirs
+                and not entry.name.startswith(".")
+            ):
+                candidate_layers.append((entry.name, entry.path, entry.name))
+    except (OSError, PermissionError):
+        pass
+
     targets: list[VaultTokenTarget] = []
-    for project_name, project_dir, service_map, dokploy_project in projects:
-        for service, service_dir in service_map.items():
-            targets.append(
-                VaultTokenTarget(
-                    project=project_name,
-                    service=service,
-                    service_dir=service_dir,
-                    project_dir=project_dir,
-                    dokploy_project=dokploy_project,
-                )
+    seen: set[tuple[str, str]] = set()
+
+    for project_name, project_dir, dokploy_project in candidate_layers:
+        if not os.path.isdir(project_dir):
+            continue
+        try:
+            subdirs = sorted(os.scandir(project_dir), key=lambda e: e.name)
+        except (OSError, PermissionError):
+            continue
+
+        for entry in subdirs:
+            if not entry.is_dir() or entry.name.startswith("."):
+                continue
+
+            parts = entry.name.split(".", 1)
+            service_name = parts[1] if len(parts) == 2 else entry.name
+
+            # Exclude bootstrap infrastructure layers and ephemeral preview directories
+            if project_name == "bootstrap" and service_name in {"vault", "1password"}:
+                continue
+            if service_name == "preview":
+                continue
+
+            has_vault_config = (
+                os.path.exists(os.path.join(entry.path, "vault-agent.hcl"))
+                or os.path.exists(os.path.join(entry.path, "vault-policy.hcl"))
+                or os.path.exists(os.path.join(entry.path, "secrets.ctmpl"))
             )
+            if not has_vault_config:
+                continue
+
+            if (project_name, service_name) not in seen:
+                seen.add((project_name, service_name))
+                targets.append(
+                    VaultTokenTarget(
+                        project=project_name,
+                        service=service_name,
+                        service_dir=entry.name,
+                        project_dir=project_dir,
+                        dokploy_project=dokploy_project,
+                    )
+                )
+
+            # Legacy alias compatibility for platform/s3 -> minio
+            if (
+                project_name == "platform"
+                and service_name == "s3"
+                and (project_name, "minio") not in seen
+            ):
+                seen.add((project_name, "minio"))
+                targets.append(
+                    VaultTokenTarget(
+                        project=project_name,
+                        service="minio",
+                        service_dir=entry.name,
+                        project_dir=project_dir,
+                        dokploy_project=dokploy_project,
+                    )
+                )
+
     return targets
 
 

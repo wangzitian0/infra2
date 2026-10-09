@@ -18,31 +18,69 @@ def _validate_identifier(value: str, label: str) -> str:
 
 
 @task
-def status(c):
+def status(c, env=None):
     """Check PostgreSQL status"""
     return check_service(c, "postgres", "pg_isready")
 
 
 @task
-def create_database(c, name):
-    """Create a database"""
+def ensure_database(c, name, owner=None, env=None):
+    """Idempotently create a database if it does not already exist."""
     _validate_identifier(name, "database name")
-    e = get_env()
+    if owner:
+        _validate_identifier(owner, "owner name")
+    e = get_env(env)
     container = with_env_suffix("platform-postgres", e)
-    cmd = f"ssh root@{e['VPS_HOST']} \"docker exec {container} psql -U postgres -c 'CREATE DATABASE {name};'\""
-    run_with_status(c, cmd, f"Create database {name}")
+    owner_clause = f"OWNER {owner}" if owner else ""
+    cmd = (
+        f'ssh root@{e["VPS_HOST"]} "docker exec {container} psql -U postgres -tc '
+        f"\\\"SELECT 1 FROM pg_database WHERE datname = '{name}'\\\" | grep -q 1 || "
+        f"docker exec {container} psql -U postgres -c "
+        f'\\"CREATE DATABASE {name} {owner_clause};\\""'
+    )
+    run_with_status(c, cmd, f"Ensure database {name}")
 
 
 @task
-def create_user(c, username, database, password):
-    """Create a user with database access"""
+def grant_database(c, username, database, env=None):
+    """Grant all privileges on database to user."""
     _validate_identifier(username, "username")
     _validate_identifier(database, "database name")
-    e = get_env()
+    e = get_env(env)
     container = with_env_suffix("platform-postgres", e)
-    # SECURITY: Escape single quotes in password for PostgreSQL
-    escaped_password = password.replace("'", "''")
-    cmd_create = f'ssh root@{e["VPS_HOST"]} "docker exec {container} psql -U postgres -c \\"CREATE USER {username} WITH PASSWORD \'{escaped_password}\';\\""'
     cmd_grant = f"ssh root@{e['VPS_HOST']} \"docker exec {container} psql -U postgres -c 'GRANT ALL PRIVILEGES ON DATABASE {database} TO {username};'\""
-    run_with_status(c, cmd_create, f"Create user {username}")
     run_with_status(c, cmd_grant, f"Grant {database} to {username}")
+
+
+@task
+def ensure_user(c, username, database=None, password="", connection_limit=8, env=None):
+    """Idempotently create or update a user with connection limits and timeout guards."""
+    _validate_identifier(username, "username")
+    if database:
+        _validate_identifier(database, "database name")
+    e = get_env(env)
+    container = with_env_suffix("platform-postgres", e)
+    escaped_password = password.replace("'", "''")
+    cmd = (
+        f'ssh root@{e["VPS_HOST"]} "docker exec {container} psql -U postgres -c \\"'
+        f"DO \\$\\$ BEGIN "
+        f"  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{username}') THEN "
+        f"    CREATE USER {username} WITH PASSWORD '{escaped_password}' CONNECTION LIMIT {connection_limit}; "
+        f"  ELSE "
+        f"    ALTER ROLE {username} WITH CONNECTION LIMIT {connection_limit}; "
+        f"  END IF; "
+        f"  ALTER ROLE {username} SET idle_in_transaction_session_timeout = '60s'; "
+        f"  ALTER ROLE {username} SET statement_timeout = '30s'; "
+        f'END \\$\\$;\\""'
+    )
+    run_with_status(c, cmd, f"Ensure user {username} with limits")
+    if database:
+        cmd_grant = (
+            f'ssh root@{e["VPS_HOST"]} "docker exec {container} psql -U postgres -c \\"'
+            f"DO \\$\\$ BEGIN "
+            f"  IF EXISTS (SELECT 1 FROM pg_database WHERE datname = '{database}') THEN "
+            f"    GRANT ALL PRIVILEGES ON DATABASE {database} TO {username}; "
+            f"  END IF; "
+            f'END \\$\\$;\\""'
+        )
+        run_with_status(c, cmd_grant, f"Grant {database} to {username}")
