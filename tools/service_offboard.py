@@ -20,7 +20,7 @@ from typing import Any
 
 from invoke import Context, task
 
-from libs.core.environ import get_env, with_env_suffix
+from libs.core.environ import get_env, infra_domain, with_env_suffix
 from libs.console import error, header, info, success, warning
 from libs.deploy.dokploy_client import get_dokploy
 from libs.security.vault_tokens import policy_name
@@ -67,9 +67,8 @@ def offboard_service(
         or "production"
     )
     e = get_env(env_name)
-    vault_addr = e.get(
-        "VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"
-    )
+    domain = e.get("INTERNAL_DOMAIN") or infra_domain()
+    vault_addr = e.get("VAULT_ADDR") or f"https://vault.{domain}"
     token = (
         vault_token
         or os.getenv("VAULT_ROOT_TOKEN")
