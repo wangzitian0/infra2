@@ -20,7 +20,7 @@ from typing import Any
 
 from invoke import Context, task
 
-from libs.common import get_env, with_env_suffix
+from libs.core.environ import get_env, with_env_suffix
 from libs.console import error, header, info, success, warning
 from libs.deploy.dokploy_client import get_dokploy
 from libs.security.vault_tokens import policy_name
