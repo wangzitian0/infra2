@@ -298,6 +298,14 @@ jobs:
           INFRA2_REPORTS_FEISHU_CHAT_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_CHAT_ID }}
         run: python tools/out_of_band_watchdog.py
 
+      - name: Build and send daily positive stability report
+        if: env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != ''
+        env:
+          INFRA2_STABILITY_REPORT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+          INFRA2_WATCHDOG_OUTAGES_URL: ${{ vars.INFRA2_WATCHDOG_OUTAGES_URL }}
+          INFRA2_WATCHDOG_WORKER_STATUS_TOKEN: ${{ secrets.INFRA2_WATCHDOG_WORKER_STATUS_TOKEN }}
+        run: python tools/stability_report.py --daily
+
       # #625 item 2 / #658 recommendation 8: the runner's /health already carries the
       # `op whoami` verdict (op_service_account_token); nothing scheduled read it while the
       # 1Password service account was dead from 09-04 to 09-07. This pages the same night.
