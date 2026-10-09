@@ -406,6 +406,7 @@ def _vault_token_targets(root_dir: str) -> list[VaultTokenTarget]:
         "cloudflare",
         "playground",
         "skills",
+        "preview",
     }
     try:
         for entry in os.scandir(root_dir):

@@ -18,18 +18,18 @@ def _validate_identifier(value: str, label: str) -> str:
 
 
 @task
-def status(c):
+def status(c, env=None):
     """Check PostgreSQL status"""
     return check_service(c, "postgres", "pg_isready")
 
 
 @task
-def ensure_database(c, name, owner=None):
+def ensure_database(c, name, owner=None, env=None):
     """Idempotently create a database if it does not already exist."""
     _validate_identifier(name, "database name")
     if owner:
         _validate_identifier(owner, "owner name")
-    e = get_env()
+    e = get_env(env)
     container = with_env_suffix("platform-postgres", e)
     owner_clause = f"OWNER {owner}" if owner else ""
     cmd = (
@@ -42,23 +42,23 @@ def ensure_database(c, name, owner=None):
 
 
 @task
-def grant_database(c, username, database):
+def grant_database(c, username, database, env=None):
     """Grant all privileges on database to user."""
     _validate_identifier(username, "username")
     _validate_identifier(database, "database name")
-    e = get_env()
+    e = get_env(env)
     container = with_env_suffix("platform-postgres", e)
     cmd_grant = f"ssh root@{e['VPS_HOST']} \"docker exec {container} psql -U postgres -c 'GRANT ALL PRIVILEGES ON DATABASE {database} TO {username};'\""
     run_with_status(c, cmd_grant, f"Grant {database} to {username}")
 
 
 @task
-def ensure_user(c, username, database=None, password="", connection_limit=8):
+def ensure_user(c, username, database=None, password="", connection_limit=8, env=None):
     """Idempotently create or update a user with connection limits and timeout guards."""
     _validate_identifier(username, "username")
     if database:
         _validate_identifier(database, "database name")
-    e = get_env()
+    e = get_env(env)
     container = with_env_suffix("platform-postgres", e)
     escaped_password = password.replace("'", "''")
     cmd = (

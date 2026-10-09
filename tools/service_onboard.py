@@ -23,7 +23,7 @@ from typing import Any, Mapping
 
 from invoke import Context, task
 
-from libs.core.environ import get_env, infra_domain
+from libs.core.environ import get_env, infra_domain, with_env_suffix
 from libs.console import error, header, info, success, warning
 from libs.deploy.dokploy_client import get_dokploy
 from libs.security.vault_tokens import policy_name
@@ -194,7 +194,33 @@ path "auth/token/lookup-self" {{
         raise RuntimeError(
             f"Failed to issue secret-id for {role_name}: {secret_id_res.stderr}"
         )
-    secret_id = json.loads(secret_id_res.stdout)["data"]["secret_id"]
+    secret_data = json.loads(secret_id_res.stdout)["data"]
+    secret_id = secret_data["secret_id"]
+    new_accessor = secret_data.get("secret_id_accessor")
+
+    # 5. Clean up stale secret-ids for role (defense-in-depth against credential accumulation)
+    if new_accessor:
+        list_res = c.run(
+            f"vault list -format=json auth/approle/role/{role_name}/secret-id",
+            env=venv,
+            hide=True,
+            warn=True,
+        )
+        if list_res.ok and list_res.stdout:
+            try:
+                accessors = json.loads(list_res.stdout)
+                if isinstance(accessors, list):
+                    for acc in accessors:
+                        if acc != new_accessor and isinstance(acc, str):
+                            c.run(
+                                f"vault write auth/approle/role/{role_name}/secret-id-accessor/destroy "
+                                f"secret_id_accessor={acc}",
+                                env=venv,
+                                hide=True,
+                                warn=True,
+                            )
+            except (ValueError, TypeError):
+                pass
 
     return role_name, role_id, secret_id
 
@@ -334,8 +360,9 @@ def onboard_service(
             else:
                 info("Reusing existing credentials from 1Password SSOT")
 
+        postgres_host = with_env_suffix("platform-postgres", e)
         database_url = (
-            f"postgresql://{db_user}:{db_password}@platform-postgres:5432/{db_name}"
+            f"postgresql://{db_user}:{db_password}@{postgres_host}:5432/{db_name}"
         )
         result_summary["db"] = {
             "database": db_name,
@@ -353,16 +380,20 @@ def onboard_service(
                 database=db_name,
                 password=db_password,
                 connection_limit=db_connection_limit,
+                env=env_name,
             )
-            pg.ensure_database(c, name=db_name, owner=db_user)
+            pg.ensure_database(c, name=db_name, owner=db_user, env=env_name)
             if hasattr(pg, "grant_database"):
-                pg.grant_database(c, username=db_user, database=db_name)
+                pg.grant_database(
+                    c, username=db_user, database=db_name, env=env_name
+                )
             success(
-                f"PostgreSQL user '{db_user}' (limit {db_connection_limit}) and DB '{db_name}' ready"
+                f"PostgreSQL user '{db_user}' (limit {db_connection_limit}) and DB '{db_name}' ready on {postgres_host}"
             )
 
     # Step 3: Vault Secrets Sync
     info("Step 3: Syncing runtime secrets into Vault KV v2...")
+    redis_host = with_env_suffix("platform-redis", e)
     vault_secrets: dict[str, str] = {
         "SERVICE_NAME": clean_service,
         "ENV": env_name,
@@ -374,15 +405,15 @@ def onboard_service(
                 "POSTGRES_DB": db_name,
                 "POSTGRES_USER": db_user,
                 "POSTGRES_PASSWORD": db_password,
-                "POSTGRES_HOST": "platform-postgres",
+                "POSTGRES_HOST": postgres_host,
                 "POSTGRES_PORT": "5432",
             }
         )
     if redis:
         vault_secrets.update(
             {
-                "REDIS_URL": "redis://platform-redis:6379/0",
-                "REDIS_HOST": "platform-redis",
+                "REDIS_URL": f"redis://{redis_host}:6379/0",
+                "REDIS_HOST": redis_host,
                 "REDIS_PORT": "6379",
             }
         )

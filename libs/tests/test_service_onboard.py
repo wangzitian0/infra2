@@ -114,6 +114,56 @@ def test_provision_vault_approle():
     assert mock_c.run.call_count == 4
 
 
+def test_provision_vault_approle_destroys_stale_accessors():
+    mock_c = MagicMock()
+    res_ok = MagicMock(ok=True)
+    res_role_id = MagicMock(
+        ok=True, stdout=json.dumps({"data": {"role_id": "mock-role-uuid"}})
+    )
+    res_secret_id = MagicMock(
+        ok=True,
+        stdout=json.dumps({
+            "data": {
+                "secret_id": "new-secret-uuid",
+                "secret_id_accessor": "acc-new",
+            }
+        }),
+    )
+    res_list = MagicMock(
+        ok=True,
+        stdout=json.dumps(["acc-stale-1", "acc-new", "acc-stale-2"]),
+    )
+    mock_c.run.side_effect = [
+        res_ok,
+        res_ok,
+        res_role_id,
+        res_secret_id,
+        res_list,
+        res_ok,
+        res_ok,
+    ]
+
+    role_name, role_id, secret_id = provision_vault_approle(
+        mock_c,
+        "apps",
+        "production",
+        "my_app",
+        "https://vault.test",
+        "root-token-xyz",
+    )
+
+    assert secret_id == "new-secret-uuid"
+    assert mock_c.run.call_count == 7
+    destroyed = [
+        call_args[0][0]
+        for call_args in mock_c.run.call_args_list
+        if "destroy" in call_args[0][0]
+    ]
+    assert len(destroyed) == 2
+    assert any("acc-stale-1" in cmd for cmd in destroyed)
+    assert any("acc-stale-2" in cmd for cmd in destroyed)
+
+
 def test_sync_vault_secrets():
     mock_vault_backend = MagicMock()
     sync_vault_secrets(
@@ -185,11 +235,18 @@ def test_onboard_service_end_to_end():
         assert kwargs["username"] == "apps_demo_app_user"
         assert kwargs["database"] == "apps_demo_app_db"
         assert kwargs["connection_limit"] == 8
+        assert kwargs["env"] == "production"
         mock_pg.ensure_database.assert_called_once_with(
-            mock_c, name="apps_demo_app_db", owner="apps_demo_app_user"
+            mock_c,
+            name="apps_demo_app_db",
+            owner="apps_demo_app_user",
+            env="production",
         )
         mock_pg.grant_database.assert_called_once_with(
-            mock_c, username="apps_demo_app_user", database="apps_demo_app_db"
+            mock_c,
+            username="apps_demo_app_user",
+            database="apps_demo_app_db",
+            env="production",
         )
 
         # Check dokploy env update was invoked
