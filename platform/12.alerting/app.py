@@ -6,7 +6,6 @@ import base64
 import json
 import os
 import secrets
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -49,106 +48,6 @@ def _is_basic_auth_valid(header: str | None) -> bool:
         f"{username}:{password}".encode("utf-8")
     ).decode("ascii")
     return secrets.compare_digest(header, expected)
-
-
-class AlertBridgeHandler(BaseHTTPRequestHandler):
-    server_version = "Infra2FeishuAlertBridge/1.0"
-
-    def do_GET(self) -> None:
-        if self.path == "/health":
-            try:
-                metadata = _validate_delivery_config()
-            except AlertingError as exc:
-                self._json(503, {"status": "degraded", "error": str(exc)})
-                return
-            self._json(200, {"status": "ok", **metadata})
-            return
-        if self.path == "/health/feishu":
-            # "lark 畅通" readiness: config valid AND the Feishu host is reachable over
-            # the network — WITHOUT posting to the real alert channel, so an automated
-            # probe can run every minute without spamming. The actual error→alert→message
-            # delivery is exercised once, manually.
-            try:
-                metadata = _validate_delivery_config()
-            except AlertingError as exc:
-                self._json(503, {"status": "degraded", "error": str(exc)})
-                return
-            if not _feishu_reachable():
-                self._json(
-                    503,
-                    {
-                        "status": "unreachable",
-                        "detail": "feishu host TCP 443",
-                        **metadata,
-                    },
-                )
-                return
-            self._json(200, {"status": "ok", "reachable": True, **metadata})
-            return
-        self._json(404, {"status": "not_found"})
-
-    def do_POST(self) -> None:
-        if self.path != "/signoz/webhook":
-            self._json(404, {"status": "not_found"})
-            return
-        if not self._authorized():
-            self._json(401, {"status": "unauthorized"})
-            return
-
-        try:
-            content_length = _parse_content_length(self.headers.get("Content-Length"))
-        except RequestBodyError as exc:
-            self._json(exc.status_code, exc.payload)
-            return
-
-        try:
-            payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            self._json(400, {"status": "invalid_json"})
-            return
-        if not isinstance(payload, dict):
-            self._json(400, {"status": "invalid_payload"})
-            return
-
-        report = is_report_payload(payload)
-        try:
-            # Never raises: a payload it cannot render goes out as the minimal card.
-            card = build_feishu_alert_card(payload, delivery_mode=_delivery_mode())
-            response = _deliver(card, report=report)
-        except AlertingError as exc:
-            self._json(502, {"status": "delivery_failed", "error": str(exc)})
-            return
-
-        # Record WHAT was delivered, not just that a POST arrived — so "what did the bridge
-        # forward to Feishu at <time>?" is one grep, not a forensic dig (the 07:33 case).
-        # Defensive: a malformed payload must never crash the request while logging it.
-        labels = payload.get("commonLabels")
-        labels = labels if isinstance(labels, dict) else {}
-        alerts = payload.get("alerts")
-        alert_count = len(alerts) if isinstance(alerts, list) else 0
-        print(
-            f"alert-bridge delivered status={payload.get('status', '?')} "
-            f"alertname={labels.get('alertname', '?')} "
-            f"severity={labels.get('severity', '?')} "
-            f"alerts={alert_count} "
-            f"delivery={_route(report)}",
-            flush=True,
-        )
-        self._json(202, {"status": "accepted", "feishu": response})
-
-    def log_message(self, fmt: str, *args: Any) -> None:
-        print(f"{self.address_string()} - {fmt % args}", flush=True)
-
-    def _authorized(self) -> bool:
-        return _is_basic_auth_valid(self.headers.get("Authorization", ""))
-
-    def _json(self, status: int, payload: dict[str, Any]) -> None:
-        body = json.dumps(payload).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
 
 
 def _alerting_readiness_checker() -> tuple[bool, str]:
@@ -263,18 +162,13 @@ app = fastapi_app
 
 
 def main() -> None:
-    try:
-        import uvicorn
+    import uvicorn
 
-        print(
-            f"alert bridge starting on {HOST}:{PORT} with FastAPI and infra2_sdk",
-            flush=True,
-        )
-        uvicorn.run(fastapi_app, host=HOST, port=PORT, log_level="info")
-    except ImportError:
-        server = ThreadingHTTPServer((HOST, PORT), AlertBridgeHandler)
-        print(f"alert bridge fallback listening on {HOST}:{PORT}", flush=True)
-        server.serve_forever()
+    print(
+        f"alert bridge starting on {HOST}:{PORT} with FastAPI and infra2_sdk",
+        flush=True,
+    )
+    uvicorn.run(fastapi_app, host=HOST, port=PORT, log_level="info")
 
 
 def _delivery_mode() -> str:
