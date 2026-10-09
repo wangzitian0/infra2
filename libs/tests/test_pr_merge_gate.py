@@ -797,7 +797,9 @@ def test_a_prod_reaching_deploy_needs_the_owner_and_a_canary_does_not():
     # agent's to merge; prod is not. apply-observability writes to live SigNoz,
     # so it stays owner-required; ops-checks' canary targets the reserved
     # ephemeral slot, so it does not.
-    assert gate._deploy_triggering("libs/alerting.py") == "apply-observability.yml"
+    assert (
+        gate._deploy_triggering("libs/alerting/signoz.py") == "apply-observability.yml"
+    )
     # deploy.yml is in the written list, which reports "on merge" -- it has no
     # workflow to cite because the merge itself is the trigger.
     assert gate._deploy_triggering(".github/workflows/deploy.yml") == "on merge"
@@ -822,10 +824,10 @@ def test_the_written_globs_survive_derivation():
 
 
 def test_a_deploy_triggering_path_routes_to_the_owner():
-    # libs/alerting.py, not tools/deploy_v2.py: the latter only starts the
+    # libs/alerting/signoz.py, not tools/deploy_v2.py: the latter only starts the
     # reserved-slot canary, which is the agent's to merge since the owner
     # scoped approval by environment.
-    verdict = gate.evaluate(_facts(files=("libs/alerting.py",)), now=NOW)
+    verdict = gate.evaluate(_facts(files=("libs/alerting/signoz.py",)), now=NOW)
     assert not verdict.ready
     assert verdict.owner_required
     assert any("trigger a deploy" in r for r in verdict.reasons)
@@ -853,10 +855,10 @@ def test_a_missing_workflow_directory_is_a_broken_read_not_an_empty_repo(monkeyp
 def test_the_deploy_reason_names_the_workflow_that_fires():
     # "tools/deploy_v2.py triggers a deploy" makes an owner go and find out
     # which one. Naming it makes the line a judgement they can act on.
-    verdict = gate.evaluate(_facts(files=("libs/alerting.py",)), now=NOW)
+    verdict = gate.evaluate(_facts(files=("libs/alerting/signoz.py",)), now=NOW)
     reason = next(r for r in verdict.reasons if "trigger a deploy" in r)
     assert "apply-observability.yml" in reason
-    assert "libs/alerting.py" in reason
+    assert "libs/alerting/signoz.py" in reason
 
 
 def test_a_merge_triggered_path_needs_no_workflow_to_name():
@@ -879,7 +881,9 @@ def test_the_observability_apply_is_deploy_triggering():
         gate._deploy_triggering("finance_report/finance_report/observability/x.yaml")
         == "apply-observability.yml"
     )
-    assert gate._deploy_triggering("libs/alerting.py") == "apply-observability.yml"
+    assert (
+        gate._deploy_triggering("libs/alerting/signoz.py") == "apply-observability.yml"
+    )
 
 
 def test_a_trigger_field_may_be_a_string_or_omitted():
@@ -2385,14 +2389,14 @@ def test_a_held_file_is_not_cleared_by_the_proof_while_the_lock_holds(monkeypatc
 
 def test_a_deploy_path_merges_without_the_owner_when_the_lock_holds():
     verdict = gate.evaluate(
-        _green(files=("libs/alerting.py",), lock_failures=HOLDS), now=NOW
+        _green(files=("libs/alerting/signoz.py",), lock_failures=HOLDS), now=NOW
     )
     assert verdict.ready and not verdict.owner_required, verdict.reasons
 
 
 def test_a_deploy_path_needs_the_owner_when_the_lock_was_not_read():
     verdict = gate.evaluate(
-        _green(files=("libs/alerting.py",), lock_failures=None), now=NOW
+        _green(files=("libs/alerting/signoz.py",), lock_failures=None), now=NOW
     )
     assert verdict.owner_required and verdict.exit_code == 2
     assert any("trigger a deploy" in r for r in verdict.reasons)
@@ -2400,7 +2404,7 @@ def test_a_deploy_path_needs_the_owner_when_the_lock_was_not_read():
 
 def test_a_deploy_path_needs_the_owner_and_says_why_when_the_lock_fails():
     verdict = gate.evaluate(
-        _green(files=("libs/alerting.py",), lock_failures=("x",)), now=NOW
+        _green(files=("libs/alerting/signoz.py",), lock_failures=("x",)), now=NOW
     )
     assert verdict.owner_required and verdict.exit_code == 2
     assert "production lock not verified: x" in verdict.reasons

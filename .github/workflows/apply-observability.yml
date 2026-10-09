@@ -13,7 +13,7 @@ on:
     branches: ["main"]
     paths:
       - "finance_report/finance_report/observability/**"
-      - "libs/alerting.py"
+      - "libs/alerting/**"
       - "libs/observability_dashboards.py"
       - "tools/signoz_alert_rule_probe.py"
       - ".github/workflows/apply-observability.yml"
