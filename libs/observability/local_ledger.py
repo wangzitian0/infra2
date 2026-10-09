@@ -264,14 +264,19 @@ def record_probe_round(
         )
 
 
-def to_report_days(ledger: Mapping[str, Any]) -> list[dict[str, Any]]:
+def to_report_days(
+    ledger: Mapping[str, Any], *, limit_days: int | None = None
+) -> list[dict[str, Any]]:
     """The ledger's days in the ``libs.observability.ledger`` report shape."""
     days = ledger.get("days") if isinstance(ledger, Mapping) else None
     if not isinstance(days, Mapping):
         return []
+    items = sorted(days.items())
+    if limit_days is not None and limit_days > 0:
+        items = items[-limit_days:]
     return [
         {"date": date, "runs": day.get("runs", 0), "signals": day.get("signals", {})}
-        for date, day in sorted(days.items())
+        for date, day in items
         if isinstance(day, Mapping)
     ]
 

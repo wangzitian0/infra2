@@ -375,3 +375,51 @@ def test_the_cli_parses_one_ledger_per_environment(tmp_path, capsys) -> None:
     with pytest.raises(SystemExit):
         report.main(["--ledger", f"qa={paths['production']}"], env={})
     assert "expected ENV=PATH" in capsys.readouterr().err
+
+
+def test_daily_flag_and_days_slice_reports_daily_cadence(tmp_path, capsys) -> None:
+    report = _load_module()
+    prod = _ledger("production")
+    staging = _ledger("staging")
+    paths = _files(tmp_path, prod, staging, OUTAGES)
+    exit_code = report.main(
+        [
+            "--ledger",
+            f"production={paths['production']}",
+            "--ledger",
+            f"staging={paths['staging']}",
+            "--outages",
+            paths["outages"],
+            "--daily",
+        ],
+        env={"INFRA2_STABILITY_REPORT_DRY_RUN": "1"},
+        now=NOW,
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "Infra2 daily availability — positive proof" in out
+    assert "window 1d" in out
+
+
+def test_custom_title_override(tmp_path, capsys) -> None:
+    report = _load_module()
+    prod = _ledger("production")
+    staging = _ledger("staging")
+    paths = _files(tmp_path, prod, staging, OUTAGES)
+    exit_code = report.main(
+        [
+            "--ledger",
+            f"production={paths['production']}",
+            "--ledger",
+            f"staging={paths['staging']}",
+            "--outages",
+            paths["outages"],
+            "--title",
+            "[HEALTH] Custom Daily Health Check",
+        ],
+        env={"INFRA2_STABILITY_REPORT_DRY_RUN": "1"},
+        now=NOW,
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "[HEALTH] Custom Daily Health Check" in out

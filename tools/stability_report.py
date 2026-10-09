@@ -141,10 +141,15 @@ def _ledger_document(text: str, source: str) -> dict:
 
 
 def environment_report(
-    environment: str, ledger: Mapping[str, Any], outages: list[Any], now: datetime
+    environment: str,
+    ledger: Mapping[str, Any],
+    outages: list[Any],
+    now: datetime,
+    *,
+    limit_days: int | None = None,
 ) -> dict[str, Any]:
     """One environment's ledger with its unavailability counted as failures."""
-    days = to_report_days(ledger)
+    days = to_report_days(ledger, limit_days=limit_days)
     if not any(day["signals"] for day in days):
         raise RuntimeError(f"{environment} ledger has no recorded signals")
     age = now.timestamp() - float(ledger.get("updated_at") or 0)
@@ -169,7 +174,12 @@ def environment_report(
 
 
 def build_report(
-    ledgers: Mapping[str, Mapping[str, Any] | str], outages: list[Any], now: datetime
+    ledgers: Mapping[str, Mapping[str, Any] | str],
+    outages: list[Any],
+    now: datetime,
+    *,
+    limit_days: int | None = None,
+    title: str | None = None,
 ) -> str:
     """The production report, then one line per optional environment. A value in
     ``ledgers`` that is a string is the reason that environment could not be read."""
@@ -181,8 +191,15 @@ def build_report(
     lines = [
         build_report_message(
             summarize_ledger(
-                environment_report(REQUIRED_ENVIRONMENT, production, outages, now)
-            )
+                environment_report(
+                    REQUIRED_ENVIRONMENT,
+                    production,
+                    outages,
+                    now,
+                    limit_days=limit_days,
+                )
+            ),
+            title=title,
         )
     ]
     for environment in OPTIONAL_ENVIRONMENTS:
@@ -192,7 +209,11 @@ def build_report(
             lines.append(f"{label}: ledger unavailable: {ledger or 'not read'}")
             continue
         try:
-            summary = summarize_ledger(environment_report(environment, ledger, [], now))
+            summary = summarize_ledger(
+                environment_report(
+                    environment, ledger, [], now, limit_days=limit_days
+                )
+            )
         except RuntimeError as exc:
             lines.append(f"{label}: ledger unusable: {exc}")
             continue
@@ -206,6 +227,8 @@ def run(
     ledger_files: Mapping[str, str] | None = None,
     outages_file: str | None = None,
     now: datetime | None = None,
+    limit_days: int | None = None,
+    title: str | None = None,
 ) -> int:
     now = now or datetime.now(UTC)
     if ledger_files:
@@ -238,7 +261,11 @@ def run(
                 ledgers[environment] = str(exc)
         outages = fetch_outages(outages_url, token)
 
-    message = as_report(build_report(ledgers, outages, now))
+    message = as_report(
+        build_report(
+            ledgers, outages, now, limit_days=limit_days, title=title
+        )
+    )
     if env.get("INFRA2_STABILITY_REPORT_DRY_RUN") == "1":
         print(message)
         return 0
@@ -256,7 +283,12 @@ def _ledger_arg(value: str) -> tuple[str, str]:
     return environment, path
 
 
-def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    env: Mapping[str, str] | None = None,
+    *,
+    now: datetime | None = None,
+) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--ledger",
@@ -268,11 +300,30 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
     parser.add_argument(
         "--outages", help="A local /outages JSON response (with --ledger)."
     )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="Number of trailing ledger days to include (e.g. 1 for daily report).",
+    )
+    parser.add_argument(
+        "--daily",
+        action="store_true",
+        help="Shortcut for --days 1 daily health proof report.",
+    )
+    parser.add_argument(
+        "--title",
+        help="Custom report title header (defaults to daily/weekly availability title).",
+    )
     args = parser.parse_args(argv)
+    limit_days = 1 if args.daily and args.days is None else args.days
     return run(
         env or os.environ,
         ledger_files=dict(args.ledger) or None,
         outages_file=args.outages,
+        now=now,
+        limit_days=limit_days,
+        title=args.title,
     )
 
 

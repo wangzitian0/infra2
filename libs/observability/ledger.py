@@ -88,7 +88,11 @@ def summarize_ledger(ledger: Mapping[str, Any]) -> dict[str, Any]:
         )
 
     per_signal.sort(key=lambda item: (item["uptime_pct"], -item["fail"]))
-    perfect = [signal for signal in per_signal if signal["fail"] == 0]
+    perfect = [
+        signal
+        for signal in per_signal
+        if signal["fail"] == 0 and (signal["ok"] + signal["fail"]) > 0
+    ]
     summary = {
         "as_of": ledger.get("as_of", "latest"),
         "window_days": _coerce_count(ledger.get("window_days"))
@@ -97,6 +101,7 @@ def summarize_ledger(ledger: Mapping[str, Any]) -> dict[str, Any]:
         "signal_count": len(per_signal),
         "perfect_count": len(perfect),
         "overall_uptime_pct": _uptime_pct(total_ok, total_checks),
+        "has_data": total_checks > 0,
         "signals": per_signal,
     }
     if isinstance(ledger.get("unavailability"), Mapping):
@@ -229,10 +234,14 @@ def _uptime_pct(ok: int, checks: int) -> float:
     return round((ok / checks) * 100.0, 3)
 
 
-def build_report_message(summary: Mapping[str, Any]) -> str:
-    """Render the weekly positive-proof report for Lark."""
+def build_report_message(
+    summary: Mapping[str, Any], *, title: str | None = None
+) -> str:
+    """Render the positive-proof availability report for Lark."""
+    cadence = "daily" if summary.get("window_days") == 1 else "weekly"
+    header = title or f"[STABILITY] Infra2 {cadence} availability — positive proof"
     lines = [
-        "[STABILITY] Infra2 weekly availability — positive proof",
+        header,
         f"As of {summary['as_of']} | window {summary['window_days']}d | "
         f"{summary['total_runs']} probe runs",
         f"Overall availability: {summary['overall_uptime_pct']}%",
