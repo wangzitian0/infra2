@@ -89,6 +89,8 @@ def _infra_python_sources() -> list[Path]:
 def test_infra_imports_only_the_published_sdk_contract() -> None:
     sources = _infra_python_sources()
     assert len(sources) > 100, "the tracked-file scan found almost nothing"
+    assert any(p.is_relative_to(ROOT / "platform") for p in sources), "platform/ not covered"
+    assert any(p.is_relative_to(ROOT / "bootstrap") for p in sources), "bootstrap/ not covered"
     found = {
         str(path.relative_to(ROOT)): violations
         for path in sources

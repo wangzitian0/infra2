@@ -679,9 +679,6 @@ def test_alerting_app_request_guards_are_explicit() -> None:
 def _bridge_under_test(monkeypatch, *, mode: str = "feishu_app", report_chat: str = ""):
     """The real bridge handler on an ephemeral local port, with Feishu delivery
     captured instead of sent. Returns (post, sent, stop)."""
-    import threading
-    from http.server import ThreadingHTTPServer
-    from urllib.request import Request, urlopen
 
     path = ROOT / "platform/12.alerting/app.py"
     spec = importlib.util.spec_from_file_location("alerting_app_routing", path)
@@ -723,24 +720,24 @@ def _bridge_under_test(monkeypatch, *, mode: str = "feishu_app", report_chat: st
 
     monkeypatch.setattr(module, "deliver_feishu_app_card", app_card)
     monkeypatch.setattr(module, "deliver_feishu_card", webhook_card)
-    server = ThreadingHTTPServer(("localhost", 0), module.AlertBridgeHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    from starlette.testclient import TestClient
+
+    client = TestClient(module.fastapi_app)
 
     def post(payload: dict) -> int:
         body = json.dumps(payload).encode("utf-8")
-        request = Request(
-            f"http://localhost:{server.server_address[1]}/signoz/webhook",
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+        response = client.post(
+            "/signoz/webhook",
+            content=body,
+            headers={
+                "Content-Type": "application/json",
+                "Content-Length": str(len(body)),
+            },
         )
-        with urlopen(request, timeout=5) as response:
-            return response.status
+        return response.status_code
 
     def stop() -> None:
-        server.shutdown()
-        server.server_close()
+        pass
 
     return post, sent, stop
 
