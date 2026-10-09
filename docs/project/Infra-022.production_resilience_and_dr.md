@@ -23,21 +23,29 @@
 ## Scope
 
 ### L1: 宿主机防爆与安全底座 (Host & Engine)
-- [ ] **T1.1 Docker 全局日志限额**：在 `/etc/docker/daemon.json` 配置 `max-size: 50m`, `max-file: 3`，配合 `live-restore: true` 实现平滑热重载。代码与校验脚本在 `bootstrap/01.dokploy_install/host_guard/`；待 owner 批准当前 head 后安装并验证新建容器。旧容器不会自动继承全局默认值。
+- [ ] **T1.1 Docker 全局日志限额**：在 `/etc/docker/daemon.json` 配置 `max-size: 50m`, `max-file: 3`，配合 `live-restore: true` 实现平滑热重载。代码与校验脚本在 `bootstrap/01.dokploy_install/host_guard/`。2026-09-24 将 main `a6f29e5` 的配置和检查脚本临时送到 VPS，`configure_docker.sh --check` 返回 `configuration OK`，未改变 daemon；现场 `docker info` 仍显示 `live-restore=false`。待 owner 批准当前 head 后安装并验证新建容器。旧容器不会自动继承全局默认值。
 - [ ] **T1.2 磁盘双水位自愈守护**：部署 `disk-guardian`（systemd timer）：≥80% 触发自动清理 dangling 镜像与构建缓存并发 P1 告警；≥85% 升级为 P0 告警并截断超大日志。代码与模拟测试已准备；待真实 timer 和外部通知验收。
 - [ ] **T1.3 宿主机安全加固（#724）**：SSH 禁用密码认证、仅密钥登录；UFW 仅开放 80/443/SSH；Docker daemon 严禁暴露 TCP 端口。
   - 2026-09-17 进展：SSH 仅密钥 + fail2ban 已在主机生效（2026-09-15，手工）；公网只开放 80/443/SSH 已由 `bootstrap/01.dokploy_install/hostfw/`（nftables，替代 UFW）落地并持久化；Docker daemon 未监听 TCP 2375/2376。剩余：SSH 加固代码化、80/443 仅放行 Cloudflare 段。
 
 ### L2: 生产数据备份与带外容灾 (Platform & Data)
-- [ ] **T2.1 全状态服务自动化异地备份至 Google Drive（#721）**：`rclone crypt` 与分级保留已打通；源代码的定时脚本现覆盖 17/17 个 `BackupFacet` 声明。2026-09-23 在 VPS 以 `tools/host_backup.sh` 文件 SHA256 `e2a897cf2d583e5b612946834c9d80b176339ebcc32c56c5e23da0df3c9cea83` 对 Staging 做独立本机 canary：17/17 项、总归档 282,318,058 字节，逐项 SHA256、字节数和 gzip/tar 可读性通过，目录 `0700`、manifest `0600`（`/data/backups/infra2-validation-staging-20260923T164904Z/staging-manifest.json`）。2026-09-24 将其中两个数据库归档分别还原至网络隔离、内存/CPU 限额的一次性 Postgres 容器：Finance Report 52 张表、5,327 条账户记录，TrueAlpha 144 张表、354 条完整抓取记录及 4,560 条可用结果；两次均退出 0、通过 3 项 SQL 不变量，容器已销毁。这证明新版**本机数据库归档**可恢复；其余 15 项未做功能恢复，也未证明异地上传/下载。现场异地最新可读清单（2026-09-18）仍只有 9/17 项，安装的宿主机脚本 SHA256 仍为 `b8f9b117a7bf426bb12c89cd307a7c89f91d25edf309c4852e1c4524404fc0a7`。仍须安装同 SHA 新脚本、取得生产和 Staging 各一轮 17/17 的异地 manifest 与字节校验，并完成新增归档的隔离恢复，才能称为全状态交付。
-  - 2026-09-24 又用同一新源码在独立 root-only 目录 `/data/backups/infra2-validation-production-20260924T0200Z/` 运行 Production 本机 canary（`BACKUP_REMOTE` 显式 unset）：退出 0，17/17 项、2,726,743,453 字节；逐项重算 SHA256/大小，gzip/tar 读取全部通过，目录 `0700`、manifest `0600`。Finance Report 及 TrueAlpha 的生产归档分别在网络隔离的一次性容器中通过 5 项 SQL 不变量；还原库与当时在线库分别同为 52 张表/9 个账户、118 张表/178 条完整抓取/3,131 条可用结果。两容器均销毁。OpenPanel 和 ClickHouse 的在线 tar 有文件变化 WARN，故仅证明归档结构可读，尚未证明其功能恢复。**本次也未上传异地**。
-- [ ] **T2.2 备份自动恢复演练（Recovery Proof）**：沙箱工具和五项业务不变量已落地，历史手动运行在 10.62 秒内通过。但旧的默认 manifest 选择会取到周日较晚生成的 Staging 备份；代码现按环境分离并默认验证 Production manifest。仍须在 VPS 上用新脚本完成两次连续周周期的 Production `--service-id all` 演练，并保留期间的并行兜底。
+- [ ] **T2.1 全状态服务自动化异地备份至 Google Drive（#721）**：`rclone crypt` 与分级保留已打通；源代码的定时脚本现覆盖 17/17 个 `BackupFacet` 声明。2026-09-23 在 VPS 以 `tools/host_backup.sh` 文件 SHA256 `e2a897cf2d583e5b612946834c9d80b176339ebcc32c56c5e23da0df3c9cea83` 对 Staging 做独立本机 canary：17/17 项、总归档 282,318,058 字节，逐项 SHA256、字节数和 gzip/tar 可读性通过，目录 `0700`、manifest `0600`（`/data/backups/infra2-validation-staging-20260923T164904Z/staging-manifest.json`）。2026-09-24 将其中两个数据库归档分别还原至网络隔离、内存/CPU 限额的一次性 Postgres 容器：Finance Report 52 张表、5,327 条账户记录，TrueAlpha 144 张表、354 条完整抓取记录及 4,560 条可用结果；两次均退出 0、通过 3 项 SQL 不变量，容器已销毁。这证明新版**本机数据库归档**可恢复；当时尚未证明异地上传/下载。旧版异地根清单曾只有 9/17 项且无环境标记，不能作为当前 Production/Staging 的恢复入口。
+  - 2026-09-24 owner 授权后，VPS 安装 main `a6f29e58df44e5b9c1a9ddffd8cac65447b18c83` 的脚本，安装 SHA256 `e2a897cf2d583e5b612946834c9d80b176339ebcc32c56c5e23da0df3c9cea83`，保留旧版回滚副本。Production run `20260924T034246Z` 成功生成并加密上传 17/17 项，总计 2,559,250,821 字节；远端 Production latest/run manifest 一致且带环境标记。从 `rclone crypt` 远端逐项重新下载 17 个归档，大小、SHA256、gzip 与 tar 读取全部通过，总计 2,559,250,821 字节。ClickHouse 在线文件变化产生 tar exit 1 WARN，但该归档仍通过远端 SHA 和 tar 检查。
+  - 上述**同一批远端 Production 数据库归档**由当前 `tools/run_restore_rehearsal.py` 拉取并在网络隔离的一次性 Postgres 容器中恢复：Finance Report 52 张表、9 个账户，通过 5 项不变量；TrueAlpha 118 张表、181 条完整抓取、3,224 条可用结果，通过 5 项不变量。实测各用时 17.55 秒与 200.07 秒，容器、匿名卷和下载文件全部清理。仍未功能恢复其余状态服务，也未证明 Staging 异地 17/17；针对 Staging 的远端上传执行在自动审批阶段被拦截，命令未运行，未产生 Staging 上传。
+  - 2026-09-24 又用同一新源码在独立 root-only 目录 `/data/backups/infra2-validation-production-20260924T0200Z/` 运行 Production 本机 canary（`BACKUP_REMOTE` 显式 unset）：退出 0，17/17 项、2,726,743,453 字节；逐项重算 SHA256/大小，gzip/tar 读取全部通过，目录 `0700`、manifest `0600`。Finance Report 及 TrueAlpha 的生产归档分别在网络隔离的一次性容器中通过 5 项 SQL 不变量；还原库与当时在线库分别同为 52 张表/9 个账户、118 张表/178 条完整抓取/3,131 条可用结果。两容器均销毁。OpenPanel 和 ClickHouse 的在线 tar 有文件变化 WARN；两者后续均做了隔离查询验证。**本次也未上传异地**。
+  - 同一 Production canary 的两份 Redis RDB 在网络隔离的一次性实例中通过 `redis-check-rdb` 并启动：platform 还原 1,313 键，在线检查时 1,333 键（热数据变化）；finance_report 还原及在线均为 0 键。MinIO 归档在同版本隔离实例中启动并列出 6 个 bucket、11,306 个对象，抽取其中一个 405,214 字节对象成功读回并计算 SHA256。上述只证明选定状态可恢复；未验全部对象或异地包。临时容器与提取数据均已删除。
+  - 同一 Production canary 的 ClickHouse 归档在同版本、网络隔离的一次性实例中启动，非系统表与在线同为 104 张；强制扫描后，SigNoz 日志还原 463,395 行（在线检查时 464,263），trace summary 还原 8,502,704 行（在线检查时 8,517,914）。这证明两个关键表可查询；在线写入持续发生，且未逐表验证一致性。临时容器及提取数据均已删除。
+  - 同一 Production canary 的 OpenPanel 归档（75,435,503 字节）在同版本 ClickHouse 25.10.2.65 的无网络、受内存/CPU 限制的一次性实例中启动；18 张表与在线一致，实际 `SELECT count()` 读回 `events` 53,864 行、`sessions` 199 行。在线当时的 part 元数据分别为 54,069 / 199 行；持续写入可解释事件差额，但未逐行对账。演练容器和临时数据目录均确认为 0 残留；这仍是本机归档，不是异地恢复证明。
+  - 同一 Production canary 的 Vault 归档在同版本 Vault 1.15.4 的无网络、受内存/CPU 限制的一次性实例中启动，`vault status` 返回 `initialized=true`、`sealed=true`、`storage_type=file`；容器和提取出的临时数据目录均确认为 0 残留。这只证明文件存储可识别，不证明解封、密钥读回或异地可恢复。
+  - 同一 Production canary 的 1Password Connect 归档（23,826,342 字节）在 root-only 临时目录中解包；凭证 JSON 可解析，108,589,056 字节的 `1password.sqlite` 通过 `PRAGMA integrity_check=ok`，含 9 张表，临时目录确认为 0 残留。未启动 Connect 同步服务，也未读出任何凭证值；这不证明密钥服务可恢复或异地归档可读。
+  - 同一 Production canary 的 platform Postgres 归档在网络隔离的一次性实例中还原，5 个数据库与在线实例名称、各库表数均一致：activepieces 64、authentik 314、openpanel 31、postgres 0、prefect 36。临时容器及其匿名数据卷已删除。
+- [ ] **T2.2 备份自动恢复演练（Recovery Proof）**：沙箱工具和五项业务不变量已落地，历史手动运行在 10.62 秒内通过。2026-09-24 又从旧版异地根清单恢复 Finance Report/TrueAlpha，但该清单只有 9 项、没有环境标记，不能作为正式 Production/Staging 证明。2026-09-24 新增：从本轮带环境标记的 Production 远端 17 项清单，实际下载并恢复 Finance Report 与 TrueAlpha 两个数据库，均通过 5 项不变量且容器、匿名卷、下载文件已清理。仍须完成 VPS 上两个连续周周期的自动 Production `--service-id all` 演练，并保留期间的并行兜底。
 - [ ] **T2.3 带外死人开关（Dead Man's Switch）**：宿主机 systemd timer 定时向外部 Healthchecks.io 上报心跳与磁盘 P1/P0 状态，Cloudflare Worker 的 30 分钟 cron 向第四个独立检查上报；主机失联与 Worker 停摆分别由外部通知。代码准备不等于现场验收，须配置四条真实检查 URL、生产安装并验证外部通知送达。
 - [ ] **T2.4 整机故障恢复与 RTO 证明**：在隔离的新 VPS 上按 `ops.recovery` 的整机演练步骤重建信任根、控制面和数据，记录从故障宣告到公开服务及业务不变量恢复的耗时。现有 10.62 秒数据仅是单库沙箱还原耗时，不能作为整机 RTO。
 
 ### L3: 发布门禁闭环与告警降噪 (Deploy & Observability)
 - [ ] **T3.1 发布三段式门禁与 Schema 防御（#698）**：
-  - [ ] Stage 1: Ephemeral Smoke（构建后启动临时容器冒烟校验）
+  - [ ] Stage 1: Ephemeral Smoke（构建后启动临时容器冒烟校验）。`app-deploy-request.yml` 的 Production 请求与手动 `deploy.yml` 的 Finance Report staging/prod 请求已有同坐标 preflight canary；receiver 的 staging 请求按 SSOT 直接部署。另有定时 `deploy_v2` canary 在保留的 `pr-999` 临时槽验证当时 main 的部署、公开健康/版本与清理；2026-09-23 06:54 UTC 的 [运行记录](https://github.com/wangzitian0/infra2/actions/runs/35829000829) 实际通过，耗时约 112 秒，`healthy=true`、`torn_down=true`。该定时记录只证明当时 main；尚缺每条正式发布路径对候选版本的现场覆盖证明，Stage 1 保持未完成。
   - [x] Stage 2: Pre-flight Gate（`tools/pre_deploy_schema_check.py` 双向严格比对 + fail-closed；缺 DB URL / 代码侧枚举载入失败 = `NOT EVALUATED` 退出码 3 阻断，#718 review 修复；已接入 `deploy_v2`——`libs/deploy/promote.py:deploy()` 在任何 Dokploy 变更前调用 `libs/deploy/schema_gate.py`，SSH 到 VPS 用即将部署的应用镜像跑检查，退出码 1/3 及任何传输失败均阻断，详见 TODOWRITE 第 20 条）
   - [ ] Stage 3: Deploy + Synthetic Probes（部署后打真实业务探针，设 10 分钟观察烘焙期 T_Bake）
 - [ ] **T3.2 安全回滚守则与人工刹车（#722）**：
@@ -67,6 +75,19 @@
 
 | Date | Change |
 |---|---|
+| 2026-09-24 | owner 授权后安装 main `a6f29e5` 的 `host_backup.sh`（SHA256 `e2a897cf2d583e5b612946834c9d80b176339ebcc32c56c5e23da0df3c9cea83`）并运行 Production 异地备份。run `20260924T034246Z` 17/17，2,559,250,821 字节；远端逐项重新下载的大小、SHA256、gzip/tar 校验全过。Finance Report 与 TrueAlpha 这两份实际远端归档在隔离 Postgres 中分别通过 5 项不变量，清理 0 残留。Staging 上传被自动审批拒绝，仍未完成。 |
+| 2026-09-24 | 备份 runner 的 run ID 改为 UTC 秒级时间戳加进程 ID，避免同秒并发运行共用本地目录、artifact 路径或远端前缀。新增并发屏障回归测试：修复前失败，修复后两个独立 17 项 manifest 均通过；`libs/tests/test_host_backup_script.py` 13 项通过。 |
+| 2026-09-24 | Production 1Password Connect 本机归档解包后通过凭证 JSON 解析和 SQLite 完整性检查（9 张表）；没有打印凭证内容，临时数据清理完成。Connect 同步及异地恢复仍待验证。 |
+| 2026-09-24 | Production Vault 本机归档在无网络的一次性 Vault 1.15.4 实例中启动并返回已初始化、待解封的文件存储状态；未使用解封密钥，不能据此声称密钥可读或整机 DR 通过。临时容器与数据目录清理完成。 |
+| 2026-09-24 | Production OpenPanel 本机归档在无网络的一次性同版本 ClickHouse 中恢复：18 张表，`events` 53,864 行、`sessions` 199 行可实际查询；在线同期 part 元数据为 54,069 / 199，临时容器与数据目录清理完成。异地包仍待验证。 |
+| 2026-09-24 | 再次只读核验 VPS：安装脚本仍为旧 SHA256 `b8f9b117a7bf426bb12c89cd307a7c89f91d25edf309c4852e1c4524404fc0a7`，crontab 有 3 条指向该脚本的备份任务；远端 `production/manifest.json` 与 `staging/manifest.json` 均不存在，旧根清单仍为无环境标记的 9 项。因此即使定时任务存在，不能判定新版分环境 17/17 已运行。 |
+| 2026-09-24 | 核对 GitHub Actions 现场记录：2026-09-23 的 `deploy_v2 live canary` job 成功，`finance_report/app` 的临时 `pr-999` 槽公开健康与版本证明通过，并完成销毁；该定时检查不等于正式发布候选版本的 Stage 1 烟测。 |
+| 2026-09-24 | VPS 对 `gdrive-backup:infra2/weekly/validation/` 执行不含生产数据的加密远端探针：上传小型文本标记、远端读回逐字节匹配、删除后列表确认不存在。证明新周备份路径可写、可读、可清理；不证明 17/17 生产数据已异地上传。 |
+| 2026-09-24 | 旧版异地根 `manifest.json` 无环境字段、仅 9 项，指向 2026-09-20 03:45 的归档；当前恢复工具会拒绝其原始清单。只在临时副本标 `legacy-unknown` 后，从远端下载 Finance Report/TrueAlpha 数据库归档（10,796,771 / 62,604,288 字节），校验大小、SHA256、gzip，并各自在网络隔离容器中恢复、通过 5 项不变量；临时数据与容器已清除。不据此判定 Production 17/17 或 T2.1/T2.2 完成。 |
+| 2026-09-24 | VPS 只读核验：`infra2-disk-guardian.timer` 和 `infra2-host-heartbeat.timer` 均不存在，`/etc/infra2/host-guard.env` 及安装脚本均不存在；Docker `live-restore=false`，磁盘使用 70%。用 main `a6f29e5` 的脚本运行 `configure_docker.sh --check`，daemon 候选配置校验通过，未应用。T1.1/T1.2/T2.3 仍未完成。 |
+| 2026-09-24 | Production platform Postgres 归档在隔离实例中还原，5 个数据库及各库表数与在线一致；匿名数据卷已删除。 |
+| 2026-09-24 | Production ClickHouse 归档在隔离实例中启动，104 张非系统表可见，SigNoz 日志与 trace summary 实际扫描查询成功；仍待其他表、异地包与整机恢复验证。 |
+| 2026-09-24 | Production canary 的 Redis RDB 与 MinIO 归档通过隔离实例实际加载；MinIO 列出 11,306 个对象并读回一个对象，临时数据清理。异地恢复仍待验证。 |
 | 2026-09-24 | 生产 TrueAlpha 首次隔离恢复撞到官方 Postgres 镜像临时服务器的就绪竞态；恢复工具改为等初始化完成标记和最终服务器就绪，重跑 5 项不变量通过。独立复审又发现 `docker rm -f` 会留下含恢复数据的匿名卷；本次演练留下的 5 个卷按创建时间、Postgres 内容和 dangling 状态核对后逐个删除，恢复工具改为清理容器及匿名卷，并隔离每次下载目录。 |
 | 2026-09-24 | Production 新脚本本机 canary 17/17，17 个文件哈希与读取均通过；Finance Report 和 TrueAlpha 从该归档恢复后通过 5 项不变量且行数与在线库相同。仍待异地 17/17。 |
 | 2026-09-24 | Staging 新归档中 Finance Report 和 TrueAlpha 的 Postgres 数据在 VPS 一次性网络隔离容器中实际恢复并通过 SQL 检查；两个容器均清理。异地最新清单仍只有 9/17，T2.1 保持未完成。 |
@@ -85,7 +106,7 @@
 |---|---|---|---|
 | 1 | Docker 日志限额 | 所有容器日志受限 ≤ 150MB | `docker inspect -f '{{json .HostConfig.LogConfig.Config}}' <c>` 包含 `max-size: 50m` |
 | 2 | 磁盘自愈机制 | 模拟使用率超标触发清理与通知 | `fallocate` 触发 `disk_guardian.sh`，确认 dangling 缓存清除且告警送达 |
-| 3 | 异地备份就绪 | Google Drive 存在加密备份包且 SHA256 吻合 | `rclone lsd gdrive-backup:infra2/` 验证目录存在且可读写 |
+| 3 | 异地备份就绪 | Production 与 Staging 各有最新的 17/17 环境专属清单；每项远端归档可重新下载并通过字节数与 SHA256 校验，关键状态可在隔离实例恢复 | 分别从 `gdrive-backup:infra2/{production,staging}/manifest.json` 下载清单；用 `tools/backup_verification.py` 校验覆盖与时效，逐项从清单的 `remote_uri` 下载重算大小和 SHA256，再执行隔离恢复；仅列出远端目录不构成验收 |
 | 4 | 恢复演练闭环 | 自动化还原 Production 异地备份到临时库并通过 SQL 抽样 | `tools/run_restore_rehearsal.py --service-id all` 在新环境标记与最新指针上连续两个周周期跑通，每个服务各输出 `RESTORE_PROOF: PASS`，退出码 0；旧路径曾单次 10.62s 通过，不能代替此项 |
 | 5 | 死人开关兜底 | 宿主机断网 10 分钟外部独立告警 | 停止心跳上报，Healthchecks.io 外部通道（飞书/邮件）在 10 分钟内报警 |
 | 6 | Schema Gate 门禁 | 数据库与代码 Enum/Schema 不一致即阻断；缺输入（无 DB URL / 枚举载入失败）同样阻断；且真的接在 `deploy_v2` 的部署路径上，不只是模块自证 | `pytest libs/tests/test_pre_deploy_schema_check.py libs/tests/test_schema_gate.py libs/tests/test_deploy_primitive.py -k schema_gate` 全绿；实机验证见 TODOWRITE 第 20 条 |
