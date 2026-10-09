@@ -38,6 +38,19 @@ class RequestBodyError(ValueError):
         self.payload = payload
 
 
+def _is_basic_auth_valid(header: str | None) -> bool:
+    username = os.getenv("BRIDGE_BASIC_AUTH_USERNAME", "")
+    password = os.getenv("BRIDGE_BASIC_AUTH_PASSWORD", "")
+    if not username and not password:
+        return True
+    if not header:
+        return False
+    expected = "Basic " + base64.b64encode(
+        f"{username}:{password}".encode("utf-8")
+    ).decode("ascii")
+    return secrets.compare_digest(header, expected)
+
+
 class AlertBridgeHandler(BaseHTTPRequestHandler):
     server_version = "Infra2FeishuAlertBridge/1.0"
 
@@ -127,15 +140,7 @@ class AlertBridgeHandler(BaseHTTPRequestHandler):
         print(f"{self.address_string()} - {fmt % args}", flush=True)
 
     def _authorized(self) -> bool:
-        username = os.getenv("BRIDGE_BASIC_AUTH_USERNAME", "")
-        password = os.getenv("BRIDGE_BASIC_AUTH_PASSWORD", "")
-        if not username and not password:
-            return True
-        header = self.headers.get("Authorization", "")
-        expected = "Basic " + base64.b64encode(
-            f"{username}:{password}".encode("utf-8")
-        ).decode("ascii")
-        return secrets.compare_digest(header, expected)
+        return _is_basic_auth_valid(self.headers.get("Authorization", ""))
 
     def _json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload).encode("utf-8")
@@ -203,15 +208,8 @@ def health_feishu() -> JSONResponse:
 
 @fastapi_app.post("/signoz/webhook", include_in_schema=True)
 async def signoz_webhook(request: Request) -> JSONResponse:
-    username = os.getenv("BRIDGE_BASIC_AUTH_USERNAME", "")
-    password = os.getenv("BRIDGE_BASIC_AUTH_PASSWORD", "")
-    if username or password:
-        header = request.headers.get("authorization", "")
-        expected = "Basic " + base64.b64encode(
-            f"{username}:{password}".encode("utf-8")
-        ).decode("ascii")
-        if not secrets.compare_digest(header, expected):
-            return JSONResponse(status_code=401, content={"status": "unauthorized"})
+    if not _is_basic_auth_valid(request.headers.get("authorization")):
+        return JSONResponse(status_code=401, content={"status": "unauthorized"})
 
     cl_header = request.headers.get("content-length")
     try:
@@ -265,18 +263,17 @@ app = fastapi_app
 
 
 def main() -> None:
-    port = int(os.getenv("PORT", "8080"))
     try:
         import uvicorn
 
         print(
-            f"alert bridge starting on {HOST}:{port} with FastAPI and infra2_sdk",
+            f"alert bridge starting on {HOST}:{PORT} with FastAPI and infra2_sdk",
             flush=True,
         )
-        uvicorn.run(fastapi_app, host=HOST, port=port, log_level="info")
+        uvicorn.run(fastapi_app, host=HOST, port=PORT, log_level="info")
     except ImportError:
-        server = ThreadingHTTPServer((HOST, port), AlertBridgeHandler)
-        print(f"alert bridge fallback listening on {HOST}:{port}", flush=True)
+        server = ThreadingHTTPServer((HOST, PORT), AlertBridgeHandler)
+        print(f"alert bridge fallback listening on {HOST}:{PORT}", flush=True)
         server.serve_forever()
 
 

@@ -973,3 +973,58 @@ def test_alerting_fastapi_endpoints_contract(monkeypatch: pytest.MonkeyPatch) ->
     hook_res = client.post("/signoz/webhook", json=payload)
     assert hook_res.status_code == 202
     assert hook_res.json()["status"] == "accepted"
+
+    # 6. Basic-Auth rejection on POST /signoz/webhook (401)
+    monkeypatch.setenv("BRIDGE_BASIC_AUTH_USERNAME", "test_u")
+    monkeypatch.setenv("BRIDGE_BASIC_AUTH_PASSWORD", "test_p")
+    unauth_res = client.post("/signoz/webhook", json=payload)
+    assert unauth_res.status_code == 401
+    assert unauth_res.json() == {"status": "unauthorized"}
+
+    # With valid basic auth header (202)
+    import base64
+
+    valid_auth = "Basic " + base64.b64encode(b"test_u:test_p").decode("ascii")
+    auth_ok_res = client.post(
+        "/signoz/webhook",
+        json=payload,
+        headers={"Authorization": valid_auth},
+    )
+    assert auth_ok_res.status_code == 202
+
+    monkeypatch.delenv("BRIDGE_BASIC_AUTH_USERNAME", raising=False)
+    monkeypatch.delenv("BRIDGE_BASIC_AUTH_PASSWORD", raising=False)
+
+    # 7. Empty payload (400)
+    empty_res = client.post("/signoz/webhook", content=b"")
+    assert empty_res.status_code == 400
+    assert empty_res.json()["status"] == "empty_payload"
+
+    # 8. Payload too large (413)
+    huge_res = client.post(
+        "/signoz/webhook",
+        content=b"x" * (module.MAX_BODY_BYTES + 1),
+        headers={"Content-Length": str(module.MAX_BODY_BYTES + 1)},
+    )
+    assert huge_res.status_code == 413
+    assert huge_res.json()["status"] == "payload_too_large"
+
+    # 9. Invalid JSON (400)
+    invalid_json_res = client.post("/signoz/webhook", content=b"not valid json")
+    assert invalid_json_res.status_code == 400
+    assert invalid_json_res.json()["status"] == "invalid_json"
+
+    # 10. Non-dict JSON payload (400)
+    non_dict_res = client.post("/signoz/webhook", content=b'["array", "not", "dict"]')
+    assert non_dict_res.status_code == 400
+    assert non_dict_res.json()["status"] == "invalid_payload"
+
+    # 11. Delivery failure (502)
+    def _fail_deliver(**kwargs: object) -> object:
+        raise module.AlertingError("mock delivery failure")
+
+    monkeypatch.setattr(module, "deliver_feishu_app_card", _fail_deliver)
+    fail_res = client.post("/signoz/webhook", json=payload)
+    assert fail_res.status_code == 502
+    assert fail_res.json()["status"] == "delivery_failed"
+
