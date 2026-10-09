@@ -5,10 +5,11 @@ from __future__ import annotations
 import ast
 import functools
 import hashlib
+import importlib.machinery
 import json
 import re
 from collections.abc import Sequence
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from libs.gate.inventory import DIRECTION_PROOFS, _workflow_only_gained_authority
 from libs.gate.types import (
@@ -17,6 +18,7 @@ from libs.gate.types import (
     Runner,
     _get_root,
     _get_workflow_dir,
+    _normalized_path,
 )
 
 _OWNER_INSTRUCTION_HEADER_RE = re.compile(
@@ -42,6 +44,28 @@ def _owner_instruction_quoted(body: str) -> bool:
 
 
 _DATA_SUFFIXES = (".json", ".yaml", ".yml", ".md")
+
+# Tests whose file name does not follow libs/tests/test_<module stem>.py, by module.
+_TESTS_BY_MODULE = {
+    "libs/gate/production_contract.py": (
+        "libs/tests/test_production_environment_gate.py",
+    ),
+    "libs/gate/evaluator.py": ("libs/tests/test_gate_pipeline.py",),
+    # It proves that each required check can report on any PR (#1138 round 4).
+    "libs/gate/inventory.py": ("libs/tests/test_required_checks_can_report.py",),
+    "libs/gate/self_governance.py": ("libs/tests/test_gate_self_governance.py",),
+}
+
+# Package files that Python runs before the gate code. They are in the closure even
+# when they do not exist: a PR can add one, and `python -m tools.pr_merge_gate` runs it.
+PACKAGE_FILES = ("libs/__init__.py", "tools/__init__.py")
+
+# pytest runs each conftest.py on the way to a test. One in libs/tests can switch off
+# the gate tests, for example with `collect_ignore_glob` (#1138).
+GATE_TESTS_DIR = "libs/tests"
+
+# File name endings that Python imports from a directory on its path.
+_IMPORT_SUFFIXES = tuple(importlib.machinery.all_suffixes())
 
 
 def _repo_deps(rel: str) -> set[str]:
@@ -117,9 +141,21 @@ def self_governing_files() -> frozenset[str]:
         frontier = nxt
     for member in list(closure):
         if member.endswith(".py"):
-            test = f"libs/tests/test_{PurePosixPath(member).stem}.py"
-            if (root / test).is_file():
-                closure.add(test)
+            for test in (
+                f"libs/tests/test_{PurePosixPath(member).stem}.py",
+                *_TESTS_BY_MODULE.get(member, ()),
+            ):
+                if (root / test).is_file():
+                    closure.add(test)
+    # Python runs the __init__.py of each parent package before a module (#1138).
+    for member in list(closure):
+        if member.endswith(".py"):
+            for parent in PurePosixPath(member).parents:
+                package_file = f"{parent}/__init__.py"
+                if parent != PurePosixPath(".") and (root / package_file).is_file():
+                    closure.add(package_file)
+    closure |= set(PACKAGE_FILES)
+    closure |= {f for f in (f"{GATE_TESTS_DIR}/conftest.py",) if (root / f).is_file()}
     closure |= set(RULE_TEXT_FILES)
     closure |= set(_all_workflow_files())
     if seed not in closure:
@@ -128,8 +164,93 @@ def self_governing_files() -> frozenset[str]:
 
 
 def is_self_governing(path: str) -> bool:
-    """True when changes to path would evaluate under self-adjudication rules."""
-    return path.startswith(WORKFLOW_PREFIX) or path in self_governing_files()
+    """True when changes to path would evaluate under self-adjudication rules.
+
+    The path compares in one form (`_normalized_path`): the gate host's disk does not
+    tell `Tools/pr_merge_gate.py` from `tools/pr_merge_gate.py` (#1138)."""
+    normal = _normalized_path(path)
+    return (
+        normal.startswith(WORKFLOW_PREFIX)
+        or normal in _folded(self_governing_files())
+        or _shadows_the_gate(normal)
+    )
+
+
+@functools.lru_cache(maxsize=4)
+def _folded(paths: frozenset[str]) -> frozenset[str]:
+    return frozenset(_normalized_path(p) for p in paths)
+
+
+# Paths that Python loads without an import statement in the gate, or that change
+# how pytest runs the gate tests, at any depth (#1138 round 3).
+_TOOLING_PARTS = frozenset({"__pycache__", ".venv", "venv", "site-packages"})
+_COMPILED_SUFFIXES = (".pyc", ".pyd", ".pth", ".so")
+# Python runs a site hook from any directory on its path.
+_SITE_HOOK_NAMES = frozenset({"sitecustomize.py", "usercustomize.py"})
+# pytest reads its settings for libs/tests only from the root, libs/ or libs/tests/.
+_TOOL_CONFIG_NAMES = frozenset({"pytest.ini", "tox.ini", "setup.cfg", ".coveragerc"})
+_TOOL_CONFIG_DIRS = frozenset({".", "libs", GATE_TESTS_DIR})
+
+
+@functools.lru_cache(maxsize=4)
+def _closure_shape(
+    root: str, closure: frozenset[str]
+) -> tuple[frozenset[str], frozenset[str]]:
+    """The directories of the closure's Python files, and the top-level names that
+    those files import. Keyed by its inputs, so a test with another root cannot leave
+    a stale answer."""
+    directories: set[str] = set()
+    imported: set[str] = set()
+    for member in closure:
+        if not member.endswith(".py"):
+            continue
+        directories.add(_normalized_path(str(PurePosixPath(member).parent)))
+        try:
+            tree = ast.parse((Path(root) / member).read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported.update(
+                    alias.name.split(".")[0].casefold() for alias in node.names
+                )
+            elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+                imported.add(node.module.split(".")[0].casefold())
+    return frozenset(directories), frozenset(imported)
+
+
+def _shadows_the_gate(path: str) -> bool:
+    """True for a file that Python or pytest would run instead of, or before, a part of
+    the gate (#1138). A rule over the path, so a file a PR adds is caught before it
+    exists."""
+    path = _normalized_path(path)
+    pure = PurePosixPath(path)
+    if not pure.parts:
+        return False
+    if _TOOLING_PARTS & set(pure.parts) or pure.name.endswith(_COMPILED_SUFFIXES):
+        return True  # bytecode, an extension, a .pth file, or a virtual environment
+    if pure.name in _SITE_HOOK_NAMES:
+        return True  # a site hook
+    if pure.name in _TOOL_CONFIG_NAMES and str(pure.parent) in _TOOL_CONFIG_DIRS:
+        return True  # pytest configuration on the way to the gate tests
+    importable = pure.name.endswith(_IMPORT_SUFFIXES)
+    import_name = pure.name.split(".")[0]
+    if len(pure.parts) == 1 and importable:
+        return True  # a module at the repository root, such as yaml.py or setup.py
+    if len(pure.parts) == 2 and pure.name == "__init__.py":
+        return True  # a package at the repository root, such as tools/__init__.py
+    if pure.name == "conftest.py" and (
+        path.startswith(f"{GATE_TESTS_DIR}/")
+        or PurePosixPath(GATE_TESTS_DIR).is_relative_to(pure.parent)
+    ):
+        return True
+    closure = _folded(self_governing_files())
+    if pure.name in ("__init__.py", "__main__.py") and f"{pure.parent}.py" in closure:
+        return True  # a package that replaces a closure module
+    if importable and f"{pure.parent}/{import_name}.py" in closure:
+        return True  # another form of a closure module, such as types.abi3.so
+    directories, imported = _closure_shape(str(_get_root()), self_governing_files())
+    return importable and str(pure.parent) in directories and import_name in imported
 
 
 def _all_workflow_files() -> list[str]:
@@ -190,7 +311,9 @@ def _working_tree_rule_drift(
     drift: list[str] = []
     for path in sorted(self_governing_files()):
         try:
-            local = _blob_sha((root / path).read_bytes())
+            local: str | None = _blob_sha((root / path).read_bytes())
+        except FileNotFoundError:
+            local = None  # absent here: drift only when the base branch has it
         except OSError:
             drift.append(path)
             continue

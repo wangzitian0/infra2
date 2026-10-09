@@ -41,14 +41,16 @@ No frozen compatibility shims remain in `libs/`.
 
 | Legacy Shim | Implementation Module | Re-exported Symbols | Status |
 |-------------|-----------------------|---------------------|--------|
-| `libs/common.py` | — (re-exports `libs.core.environ`, and holds `check_service`) | — | Not a shim |
+| `libs/common.py` | — (holds its own function, `check_service`) | — | Not a shim |
 | `libs/console.py` | — (holds its own implementation) | — | Not a shim |
 
 ### The two that are not shims
 
-- `libs/common.py` re-exports `libs.core.environ` and keeps one function of its own,
-  `check_service`. That function is an operator task helper: it runs a health command
+- `libs/common.py` holds one function, `check_service`. It re-exports nothing (#1164).
+  Import the environment helpers from `libs.core.environ`.
+  `check_service` is an operator task helper: it runs a health command
   over SSH and prints through `libs.console`, which a domain package must not import.
+  `test_no_libs_common_env_reexports.py` fails on any other use of `libs.common`.
 - `libs/console.py` holds its own implementation. `tools/pr_merge_gate.py` imports it, so
   it is in the merge gate's self-governing closure; moving it is a separate,
   owner-approved change. `libs/deploy/deployer.py` and `libs/deploy/promote.py` import

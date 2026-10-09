@@ -5,14 +5,12 @@ description = "Infrastructure as Code for self-hosted services"
 requires-python = ">=3.11"
 dependencies = [
     # Cross-repository wire/data contracts. Pin the immutable release artifact;
-    # workspace submodules are never runtime dependencies. NOTE: keep this exact
-    # "infra2-sdk @ " prefix — ops-checks.yml's deploy-v2-canary job and
-    # test_deploy_canary_installs_the_declared_sdk_requirement extract this
-    # entry by an exact startswith("infra2-sdk @ ") match; an extras suffix
-    # (e.g. "infra2-sdk[foo] @ ") would silently stop matching and crash that
-    # job's dependency install. psycopg/boto3 are declared as their own plain
-    # entries below instead of via SDK extras for exactly this reason.
-    "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v3.0.0/infra2_sdk-3.0.0-py3-none-any.whl",
+    # workspace submodules are never runtime dependencies. Production installs
+    # take the wheel and its sha256 from uv.lock through tools/sdk_requirement.py,
+    # not from this line. Keep this line on the same URL as uv.lock, because
+    # `pip install -e .` reads it (#1115). psycopg/boto3 are declared as their
+    # own plain entries below instead of via SDK extras.
+    "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v3.0.2/infra2_sdk-3.0.2-py3-none-any.whl",
     # libs/tests unit testing
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
@@ -42,7 +40,7 @@ e2e = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["libs/tests", "e2e_regressions/tests"]
+testpaths = ["libs/tests"]
 markers = [
     "smoke: quick smoke tests",
     "sso: SSO/Portal tests",

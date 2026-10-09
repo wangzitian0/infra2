@@ -981,8 +981,8 @@ def test_todo_declares_a_probe_on_the_internal_canary_status(deploy) -> None:
     probe = by_name["todo-canary-status"]
     assert probe.kind == "http"
     assert probe.expected == "200"
-    assert probe.severity == "warning", (
-        "P2 until staging and production acceptance; raise to `error` only then"
+    assert probe.severity == "error", (
+        "P1 since the staging drill and a full green production day (#991)"
     )
     assert probe.depends_on == ""
     assert probe.service_id == ""
@@ -1009,7 +1009,7 @@ def test_probe_renders_into_the_probe_runner_specs() -> None:
     ]
     assert lines == [
         "todo-canary-status|http|http://platform-todo${ENV_SUFFIX}:8000/api/canary/status"
-        "|200|warning|15||platform/todo"
+        "|200|error|15||platform/todo"
     ]
 
 
@@ -1025,7 +1025,7 @@ def test_todo_signal_is_a_debounced_minute_alert() -> None:
     for entry in entries:
         assert entry["service_id"] == "platform/todo"
         assert entry["component"] == "todo"
-        assert entry["severity"] == "warning"
+        assert entry["severity"] == "error"
         assert entry["tier"] == "minute" and entry["type"] == "alert"
         assert entry["consecutive_failures"] == 3
         assert entry["renotify_window_sec"] == 0

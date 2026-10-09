@@ -72,7 +72,7 @@ def test_identity_rejects_ambiguous_or_unserializable_coordinates(
 
 
 def test_canonical_stateful_deployment_environments():
-    from libs.common import (
+    from libs.core.environ import (
         DEPLOYMENT_ENV_PREVIEW,
         DEPLOYMENT_ENV_PRODUCTION,
         DEPLOYMENT_ENV_STAGING,
@@ -168,7 +168,7 @@ STRICT_MODE_STATEFUL_ENVS = [
 
 @pytest.mark.parametrize("env_name", VALID_DOKPLOY_DYNAMIC_ALIASES)
 def test_dokploy_dynamic_aliases_are_stateful_in_non_strict(env_name: str) -> None:
-    from libs.common import is_stateful_deploy_env
+    from libs.core.environ import is_stateful_deploy_env
     from libs.core.service_identity import is_stateful_deploy_env as si_is_stateful
 
     assert is_stateful_deploy_env(env_name, strict=False) is True
@@ -177,7 +177,7 @@ def test_dokploy_dynamic_aliases_are_stateful_in_non_strict(env_name: str) -> No
 
 @pytest.mark.parametrize("bad_env", INVALID_DIRTY_ENV_INPUTS)
 def test_invalid_and_dirty_env_inputs_rejected(bad_env) -> None:
-    from libs.common import is_stateful_deploy_env
+    from libs.core.environ import is_stateful_deploy_env
     from libs.core.service_identity import is_stateful_deploy_env as si_is_stateful
 
     assert is_stateful_deploy_env(bad_env, strict=False) is False
@@ -186,7 +186,7 @@ def test_invalid_and_dirty_env_inputs_rejected(bad_env) -> None:
 
 @pytest.mark.parametrize("env_name", STRICT_MODE_STATEFUL_ENVS)
 def test_strict_mode_accepts_only_canonical_stateful_envs(env_name: str) -> None:
-    from libs.common import is_stateful_deploy_env
+    from libs.core.environ import is_stateful_deploy_env
     from libs.core.service_identity import is_stateful_deploy_env as si_is_stateful
 
     assert is_stateful_deploy_env(env_name, strict=True) is True
@@ -195,7 +195,7 @@ def test_strict_mode_accepts_only_canonical_stateful_envs(env_name: str) -> None
 
 @pytest.mark.parametrize("alias", VALID_DOKPLOY_DYNAMIC_ALIASES)
 def test_strict_mode_rejects_all_dynamic_aliases(alias: str) -> None:
-    from libs.common import is_stateful_deploy_env
+    from libs.core.environ import is_stateful_deploy_env
     from libs.core.service_identity import is_stateful_deploy_env as si_is_stateful
 
     assert is_stateful_deploy_env(alias, strict=True) is False
@@ -204,7 +204,7 @@ def test_strict_mode_rejects_all_dynamic_aliases(alias: str) -> None:
 
 def test_service_identity_and_common_env_convergence(monkeypatch) -> None:
     import os
-    from libs.common import get_env, set_deploy_env, reset_env_cache
+    from libs.core.environ import get_env, set_deploy_env, reset_env_cache
 
     monkeypatch.setenv("INFRA_ENVIRONMENT", "staging")
     monkeypatch.delenv("DEPLOY_ENV", raising=False)

@@ -331,7 +331,7 @@ promote tier(`libs.deploy.promote.deploy`,app + staging|prod,跑在 GitHub Actio
 `infra2_sdk.delivery` 拥有 CI/CD、route canary、watchdog、probe 共享的稀疏 Env×Stage 证据 schema；
 infra2 与 App producer 都直接从各自固定版本的 SDK 导入，不保留源码级 compatibility re-export。
 当 stage 结果用于部署决策/告警路由/加速时,producer 必须发可比记录而非一次性日志。
-infra2 当前固定 `infra2-sdk==1.0.0` 的不可变 release wheel；`deploy_v2_canary` 是首个
+infra2 固定一个不可变的 `infra2-sdk` release wheel，版本与 sha256 只在 `uv.lock`；`deploy_v2_canary` 是首个
 真实 producer：健康路径把 `StageResult` 写入 job summary JSON，失败路径把同一记录放入
 带外告警，并将控制面/配置/运行时/清理故障映射为 SDK 标准 failure domain。成功证据的
 `target` 必须记录已解析 code/IaC SHA；禁用健康检查的 `--no-wait` 只能记录带原因的 `skip`。
@@ -362,6 +362,22 @@ infra2 当前固定 `infra2-sdk==1.0.0` 的不可变 release wheel；`deploy_v2_
   app 侧 `deploy_v2` 的 `assert_iac_ref_on_main` 以 GitHub compare API 为准;API 无法作答(HTTP 错误、传输失败、限流耗尽)时,回落本地 `git merge-base --is-ancestor <tag> origin/main`(与 `assert_after_on_main` 同一实现,#616)。本地 commit 或 `origin/main` 缺失(如 depth-1 克隆)、或非祖先,一律拒绝,报错同时写明 API 与本地 git 两个失败原因;API 已作答时本地 git 不推翻其结论。
 - **禁止 tag 推送自动部署 prod**:prod 必须经**显式 promote**(`promote_prod=true` / `--promote-prod`);
   tag 只自动晋升 staging。「打 tag」与「动 prod」必须解耦。
+- **A production job waits for the owner (#1125, #1035).** Each job that can change production declares
+  `environment: production`. The job stops at `waiting` until a required reviewer approves the run.
+  - Conditional jobs use `environment: ${{ <production condition> && 'production' || 'staging' }}`.
+    The jobs are `deploy.yml` `deploy` (`inputs.type == 'prod'`), `reconcile-iac-inputs.yml` `reconcile`
+    (`inputs.promote_prod`), and `app-deploy-request.yml` `deploy` (`deploy_type == 'prod'`).
+  - These jobs always use `production`: `deploy.yml` `bootstrap`, `apply-observability.yml` `apply`,
+    and `deploy-cloudflare-watchdog.yml` `deploy`.
+  - A run that waits holds its concurrency group. A production run therefore has its own group, so a
+    staging run never waits for a production approval.
+  - `libs/tests/test_production_environment_gate.py` is the contract. A job that reads a production
+    secret must be gated or must be named as ungated with a reason.
+  - The owner sets the GitHub environment: required reviewer, no admin bypass, deployment branches `main`
+    and `v*` tags. `prevent_self_review` stays off, so the owner can dispatch and approve a run.
+    The agent token has no admin right on the repository and cannot approve a deployment.
+  - Open: the iac-runner webhook accepts a request signed with `IAC_WEBHOOK_SECRET` for any environment.
+    A production request needs a proof from a run in the `production` environment (follow-up of #1125).
 - 禁止跳过 staging 直接 prod。
 - 禁止手改 production 服务配置(必须经 GitOps)。
 - 禁止手推 `gh-pages`(统一 Actions 发布)。

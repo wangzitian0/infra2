@@ -40,7 +40,7 @@ INFRA2_REPORTS_ENV = (
 def is_report_only_environment(value: str | None) -> bool:
     """True only for an environment known to have no pager: staging or a preview slot.
 
-    The value is normalized first (``libs.common.normalize_env_name``: ``stg`` is
+    The value is normalized first (``libs.core.environ.normalize_env_name``: ``stg`` is
     staging, ``PRODUCTION `` and unset are production). Preview slots are ``preview``
     or ``<kind>-<value>`` for the preview kinds (``pr-5``, ``branch-main``, ...).
     Anything else — production, an unknown name, garbage — pages: an environment

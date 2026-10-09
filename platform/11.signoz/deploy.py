@@ -8,7 +8,7 @@ from tempfile import NamedTemporaryFile
 
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.console import success, info, run_with_status, error, warning
-from libs.common import (
+from libs.core.environ import (
     OTEL_INGEST_SUBDOMAIN,
     otel_ingest_endpoint,
     service_domain,
@@ -55,7 +55,7 @@ class SigNozDeployer(Deployer):
     service_name = "signoz"
 
     # Public browser-OTLP ingest domain: otel.<domain> → otel-collector:4318.
-    # The subdomain + the FE endpoint live in libs.common (#368, ONE source).
+    # The subdomain + the FE endpoint live in libs.core.environ (#368, ONE source).
     otel_ingest_subdomain = OTEL_INGEST_SUBDOMAIN
     otel_ingest_service_name = "otel-collector"
 

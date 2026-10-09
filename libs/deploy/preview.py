@@ -41,7 +41,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import httpx
-from infra2_sdk.deploy_health import poll_until_healthy
+from infra2_sdk.deploy import poll_until_healthy
 
 from libs.core.environ import infra_domain
 from libs.deploy.compose_lock import compose_write_lock

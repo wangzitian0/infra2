@@ -50,7 +50,7 @@ from infra2_sdk.delivery import (
     make_stage_result,
 )
 
-from libs.common import infra_domain
+from libs.core.environ import infra_domain
 from libs.deploy.preview import check_containers_absent, down
 from libs.deploy.contract import DeployTarget
 from libs.deploy.env_config import CANARY_SLOT

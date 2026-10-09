@@ -404,7 +404,7 @@ def test_pin_release_gives_up_after_the_last_transport_failure(monkeypatch):
 def test_pin_release_never_retries_a_registry_answer(monkeypatch):
     """A 404 or a refusal is an answer: retrying cannot change it, so it fails at once."""
     import pytest
-    from infra2_sdk import release
+    from infra2_sdk import refs
 
     deploy = _load_deploy_module()
     deployer = deploy.DataEngineDeployer
@@ -413,9 +413,9 @@ def test_pin_release_never_retries_a_registry_answer(monkeypatch):
 
     def resolve(image, ref):
         calls.append(ref)
-        raise release.ReleaseError("does not exist in the registry")
+        raise refs.ReleaseError("does not exist in the registry")
 
-    with pytest.raises(release.ReleaseError):
+    with pytest.raises(refs.ReleaseError):
         deployer.pin_release(
             "v9.9.9", secrets=secrets, resolve=resolve, sleep=lambda _s: None
         )
@@ -435,12 +435,12 @@ def test_ensure_runtime_secrets_refuses_the_deploy_when_the_pin_fails(monkeypatc
     monkeypatch.setattr(deployer, "env", classmethod(lambda cls: {"ENV": "staging"}))
     monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.46")
     monkeypatch.setattr(deploy, "error", lambda *_a, **_k: None)
-    from infra2_sdk import release
+    from infra2_sdk import refs
 
     monkeypatch.setattr(
-        release,
+        refs,
         "resolve_image_digest",
-        lambda **kw: (_ for _ in ()).throw(release.ReleaseError("does not exist")),
+        lambda **kw: (_ for _ in ()).throw(refs.ReleaseError("does not exist")),
     )
     assert deployer.ensure_runtime_secrets() is False
     assert secrets.writes == []
@@ -460,10 +460,10 @@ def test_ensure_runtime_secrets_pins_from_the_process_environment(monkeypatch):
     )
     monkeypatch.setattr(deployer, "env", classmethod(lambda cls: {"ENV": "staging"}))
     monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.47")
-    from infra2_sdk import release
+    from infra2_sdk import refs
 
     monkeypatch.setattr(
-        release, "resolve_image_digest", lambda **kw: "sha256:" + "9" * 64
+        refs, "resolve_image_digest", lambda **kw: "sha256:" + "9" * 64
     )
     monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)
     assert deployer.ensure_runtime_secrets() is True
@@ -509,10 +509,10 @@ def test_ensure_runtime_secrets_accepts_env_parameter(monkeypatch):
         classmethod(lambda cls, env=None: mock_secrets_backend(env)),
     )
     monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.48")
-    from infra2_sdk import release
+    from infra2_sdk import refs
 
     monkeypatch.setattr(
-        release, "resolve_image_digest", lambda **kw: "sha256:" + "8" * 64
+        refs, "resolve_image_digest", lambda **kw: "sha256:" + "8" * 64
     )
     monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)
 

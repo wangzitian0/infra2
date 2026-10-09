@@ -312,7 +312,7 @@ class _ReleaseHashes:
 def _set_env(env_name: str) -> None:
     # get_env() reads DEPLOY_ENV (not ENV) and memoizes: setting ENV here computed
     # production hashes for every non-production scan (review on #663).
-    from libs.common import set_deploy_env
+    from libs.core.environ import set_deploy_env
 
     set_deploy_env(env_name)
 

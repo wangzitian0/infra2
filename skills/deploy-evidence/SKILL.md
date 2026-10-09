@@ -56,6 +56,16 @@ Verify container health, network reachability, and alerting bridge status using 
 INFRA_PROBE_DRY_RUN=1 python -m tools.infra_probe_runner --once
 ```
 
+#### 3. Canary Todo 4-Pillar Physical Verification
+Verify Canary Todo runtime across all four observability pillars (HTTP route, SigNoz logs, ClickHouse traces, and availability ledger):
+```bash
+# Verify staging environment
+python -m tools.canary_verify --env staging
+
+# Verify production environment
+python -m tools.canary_verify --env prod
+```
+
 ## 3. Red Lines (Instant Rejection)
 - [REJECT] Merge commit on main without tag or promote: **DO NOT CLOSE ISSUE**.
 - [REJECT] GitHub Action green but VPS container digest unchanged: **REJECT EVIDENCE (GREEN-WHILE-STALE)**.

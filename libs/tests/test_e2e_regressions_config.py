@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from libs.common import SERVICE_SUBDOMAINS
+from libs.core.environ import SERVICE_SUBDOMAINS
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFTEST = ROOT / "e2e_regressions" / "conftest.py"
@@ -56,8 +56,7 @@ ENVIRONMENTS = [
 ]
 
 # URL name -> SERVICE_SUBDOMAINS key that the default URL must use.
-# The keys are the current names. The legacy keys `minio_console` and `minio_api`
-# name the old host `minio`, and they must not decide a default host.
+# The keys are canonical names; retired legacy keys are eliminated.
 VALIDATED_URLS = {
     "DOKPLOY_URL": "dokploy",
     "OP_URL": "1password",

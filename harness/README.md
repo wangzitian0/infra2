@@ -40,7 +40,7 @@ navigation pointers to local authority, not a second copy of its policy.
 
 | Repository | Architecture and work entry | Local verification entry |
 |---|---|---|
-| infra2 | `docs/ssot/` and `docs/project/Infra-019.*` | `uv run python -m tools.harness check`; relevant SSOT's The Proof |
+| infra2 | `docs/ssot/` and `docs/project/Infra-019.*` | `uv run python -m tools.harness check`; `uv run python tools/test_affected.py`; relevant SSOT's The Proof |
 | infra2-sdk | `README.md`, `pyproject.toml`, module contracts | `uv run --extra dev pytest`; `uv run ruff check .` |
 | OMCA | `init.md`, `docs/README.md`, `docs/project/roadmap.md` | `make build`, `make test`, `make standalone`; host/version-specific qualification |
 | Finance Report | `vision.md`, `common/<pkg>/contract.py`, `common/meta/data/MANIFEST.yaml` | `tools/preflight.py --tier=static` through its documented Python environment |
@@ -87,7 +87,7 @@ an autonomous App is an App decision, not a harness synchronization task.
 
 `skills/` is a **rendered artifact, not a source**. Each `skills/<name>/SKILL.md` is
 copied byte-for-byte from the workspace source of truth (`dev_env/skills/common/<name>/`)
-by `ws-skills-sync`, which also runs `--check` to prove the copy is identical by SHA-256.
+by `ws-publish`, which also runs `--check-files` to prove the copy is identical by SHA-256.
 Editing a file under `skills/` here does not reach the source: the next sync overwrites
 it, and until then every other repository disagrees with this one. Fix the source, then
 re-sync every repository.

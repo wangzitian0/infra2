@@ -147,31 +147,7 @@ CODE_SPAN_RE = re.compile(r"`+[^`\n]*`+")
 # Links that are known-dead and deliberately not guessed at, each with the
 # decision that is actually pending. An entry here is a tracked question, not
 # a silenced failure: if the answer were mechanical it would be a fix instead.
-KNOWN_UNRESOLVED = {
-    (
-        "e2e_regressions/tests/data/postgresql/README.md",
-        "../../../../docs/ssot/db.business_pg.md",
-    ): (
-        "Answered, but the answer is a missing document rather than a wrong "
-        "path. db.business_pg.md existed: at 8c1bce8 it and db.platform_pg.md "
-        "excluded each other in their blacklists (business forbade apps from "
-        "connecting to Platform PG; platform forbade business data on it, "
-        "whitelisting only Vault and Casdoor), and its Proof section really was "
-        "numbered 5, with this suite as its Test Anchor and a reciprocal Used-by "
-        "entry. So the #5 anchor was correct and later rotted. It was deleted in "
-        "a3e546e (#435) as a 'never built' planned doc on a scan for the string "
-        "db.business_pg, which missed that finance_report/01.postgres already "
-        "existed. Three Postgres instances exist today, two subjects: platform "
-        "(no POSTGRES_DB) and per-app (POSTGRES_DB: finance_report, truealpha). "
-        "Retargeting to db.platform_pg.md would assert business data lives on "
-        "the platform instance and give it a second test anchor alongside "
-        "ops.storage.md#5. Reviving the old document verbatim would also be "
-        "wrong: business PG is now per-app, not one shared instance. The "
-        "remaining question is the shape -- one harness SSOT, one per app, or "
-        "app-repo owned -- which is an owner decision, so the link stays "
-        "tracked rather than guessed."
-    ),
-}
+KNOWN_UNRESOLVED: dict[tuple[str, str], str] = {}
 
 
 def iter_markdown_files(submodules: set[str]):

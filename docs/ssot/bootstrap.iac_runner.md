@@ -733,8 +733,10 @@ INFRA2_DEPLOY_SHA=$(git rev-parse HEAD) bash scripts/deploy_iac_runner_bootstrap
 When `bootstrap/06.iac_runner/**` changes on `main`, GitHub Actions runs
 `scripts/deploy_iac_runner_bootstrap.sh` on the VPS before the normal
 `/deploy` call. The script resolves the live Dokploy compose project from the
-`iac-runner` container label, checks out only `bootstrap/06.iac_runner` at the
-merged SHA in the Dokploy code checkout, rebuilds the compose project with
+`iac-runner` container label, checks out only the paths the runner image
+`COPY`s at the merged SHA in the Dokploy code checkout (the script's one
+`git checkout` line lists them; `test_the_bootstrap_checkout_covers_every_path_the_runner_image_copies`
+fails when the Dockerfile and that line disagree), rebuilds the compose project with
 `GIT_SHA=<short_sha>`, recreates the runner with the confirmed Dokploy compose
 env instead of the previous container env, and waits for Docker health.
 

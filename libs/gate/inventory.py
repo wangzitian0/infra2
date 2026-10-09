@@ -14,6 +14,7 @@ from libs.gate.types import (
     _get_root,
     _get_workflow_dir,
     _get_yaml,
+    _normalized_path,
 )
 
 
@@ -153,6 +154,26 @@ def _deploy_triggering(path: str) -> str:
         if fnmatch.fnmatch(path, glob) and workflow not in NON_PROD_DEPLOY_WORKFLOWS:
             return workflow
     return ""
+
+
+INVENTORY = "docs/ssot/ci-gate-inventory.yaml"
+
+
+def _required_check_workflows() -> frozenset[str] | None:
+    """Workflow paths that define a `blocks_merge: true` gate (#1138), derived from
+    the inventory through `_blocking_coordinates`. None when the inventory cannot be
+    read or parsed, has no blocking gate, or has a blocking gate without a workflow."""
+    try:
+        text = (_get_root() / INVENTORY).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    coordinates = _blocking_coordinates(text)
+    if not coordinates:
+        return None
+    # One form for matching a changed file: `./x`, `a//b`, a space or a case variant
+    # names the same file (#1138).
+    workflows = frozenset(_normalized_path(w) for _, w, _ in coordinates)
+    return None if "" in workflows else workflows
 
 
 @functools.lru_cache(maxsize=1)

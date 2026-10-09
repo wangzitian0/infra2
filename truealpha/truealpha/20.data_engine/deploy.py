@@ -27,11 +27,11 @@ _TRANSPORT_ERRORS = (OSError, http.client.HTTPException)
 
 
 def _registry_digest(image: str, ref: str) -> str:
-    """``registry/owner/name`` + tag (or digest) → ``sha256:…`` via infra2-sdk (1.5.0)."""
-    from infra2_sdk import release
+    """``registry/owner/name`` + tag (or digest) → ``sha256:…`` via infra2-sdk."""
+    from infra2_sdk.refs import resolve_image_digest
 
     registry, _, name = image.partition("/")
-    return release.resolve_image_digest(image=name, reference=ref, registry=registry)
+    return resolve_image_digest(image=name, reference=ref, registry=registry)
 
 
 _RELEASE_ID = re.compile(r"^release-manifest:[0-9a-f]{64}$")

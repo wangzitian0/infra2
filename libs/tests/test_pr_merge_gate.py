@@ -7,6 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from libs.gate import production_contract
+from libs.gate.inventory import _required_check_workflows
+from libs.gate.types import _normalized_path
 from tools import pr_merge_gate as gate
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -279,12 +282,18 @@ class _Gh:
         states=("pass",),
         pushed_iso="2026-09-15T06:55:22Z",
         body="",
+        files=("libs/probe_specs.py",),
+        lock="holds",
+        state="OPEN",
     ):
         self.calls: list[list[str]] = []
         self.unresolved = unresolved
         self.states = states
         self.pushed_iso = pushed_iso
         self.body = body
+        self.files = files
+        self.lock = lock  # "holds", or "unreadable" for every lock read
+        self.state = state
 
     def __call__(self, argv):
         if argv[:1] == ["api"] and "/git/trees/" in argv[1]:
@@ -297,7 +306,7 @@ class _Gh:
                 {
                     "number": 704,
                     "id": "PR_node",
-                    "state": "OPEN",
+                    "state": self.state,
                     "isDraft": False,
                     "baseRefName": "main",
                     "headRefOid": "feedfacefeedface",
@@ -309,8 +318,8 @@ class _Gh:
                             "submittedAt": "2026-09-15T06:58:00Z",
                         }
                     ],
-                    "files": [{"path": "libs/probe_specs.py"}],
-                    "changedFiles": 1,
+                    "files": [{"path": f} for f in self.files],
+                    "changedFiles": len(self.files),
                     "mergeable": getattr(self, "mergeable", "MERGEABLE"),
                     "mergeStateStatus": getattr(self, "merge_state", "CLEAN"),
                     "body": self.body,
@@ -365,7 +374,46 @@ class _Gh:
             return json.dumps({"files": list(getattr(self, "base_changed", ()))})
         if argv[:2] == ["pr", "merge"]:
             return ""
+        if argv[:1] == ["api"] and (
+            "/environments/" in argv[-1] or "/contents/" in argv[-1]
+        ):
+            return self._lock_answer(argv[-1])
         raise AssertionError(argv)
+
+    def _lock_answer(self, path: str) -> str:
+        """The production lock as GitHub showed it on 2026-10-08, and the head's
+        workflows as this checkout has them (#1138)."""
+        if self.lock == "unreadable":
+            raise RuntimeError(f"gh api {path}: HTTP 502")
+        if path.endswith("/deployment-branch-policies?per_page=100"):
+            return json.dumps(
+                {
+                    "total_count": 2,
+                    "branch_policies": [
+                        {"name": "main", "type": "branch"},
+                        {"name": "v*", "type": "tag"},
+                    ],
+                }
+            )
+        if path.endswith("/environments/production"):
+            return json.dumps(
+                {
+                    "can_admins_bypass": False,
+                    "protection_rules": [
+                        {"type": "required_reviewers", "reviewers": [{"type": "User"}]}
+                    ],
+                    "deployment_branch_policy": {"custom_branch_policies": True},
+                }
+            )
+        workflows = ROOT / ".github" / "workflows"
+        if "/contents/.github/workflows?ref=" in path:
+            return json.dumps(
+                [{"name": f.name, "type": "file"} for f in workflows.glob("*.y*ml")]
+            )
+        # Any other contents read (a workflow file, or the base and head of a file
+        # with a direction proof) answers with this checkout's copy.
+        rel = path.split("/contents/", 1)[1].split("?", 1)[0]
+        return (ROOT / rel).read_text(encoding="utf-8")
 
 
 def test_collect_reads_the_newest_commit_as_the_last_push():
@@ -967,8 +1015,10 @@ def test_a_truncated_file_list_cannot_be_trusted_for_the_owner_gates():
     # deploy-triggering checks read that list, so a larger PR would silently
     # drop the owner gate. Real shape: finance_report#2042, 163 changed, 100
     # returned, with every deploy-triggering path past the cut.
+    # Under libs/, not at the root: a root-level module shadows imports (#1138).
     verdict = gate.evaluate(
-        _green(files=tuple(f"f{i}.py" for i in range(100)), changed_files=163), now=NOW
+        _green(files=tuple(f"libs/f{i}.py" for i in range(100)), changed_files=163),
+        now=NOW,
     )
     assert not verdict.ready
     # It cannot be judged at all (#740): exit 4, not an owner verdict.
@@ -1714,6 +1764,8 @@ def test_hand_built_facts_prove_nothing_by_default():
 def _tree_payload(overrides: dict[str, str] | None = None, *, truncated=False) -> str:
     tree = []
     for path in sorted(gate.self_governing_files()):
+        if not (gate.ROOT / path).is_file():
+            continue  # a package file the closure protects before it exists
         sha = gate._blob_sha((gate.ROOT / path).read_bytes())
         tree.append({"path": path, "sha": (overrides or {}).get(path, sha)})
     return json.dumps({"truncated": truncated, "tree": tree})
@@ -2012,6 +2064,56 @@ def test_repo_deps_resolves_relative_imports(tmp_path, monkeypatch):
     assert "pkg/b.py" in deps
 
 
+def test_the_closure_adds_every_parent_package_of_a_module(tmp_path, monkeypatch):
+    """Python runs `pkg/__init__.py` and `pkg/sub/__init__.py` before `pkg.sub.mod`.
+    The import walk finds only the module, so the closure adds its parents (#1138)."""
+    monkeypatch.setattr(gate, "ROOT", tmp_path)
+    monkeypatch.setattr(gate, "WORKFLOW_DIR", tmp_path / "no-workflows")
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "pr_merge_gate.py").write_text("import pkg.sub.mod\n")
+    (tmp_path / "pkg" / "sub").mkdir(parents=True)
+    for rel in ("pkg/__init__.py", "pkg/sub/__init__.py", "pkg/sub/mod.py"):
+        (tmp_path / rel).write_text("")
+    closure = gate.self_governing_files()
+    assert "pkg/sub/mod.py" in closure
+    assert {"pkg/__init__.py", "pkg/sub/__init__.py", "tools/__init__.py"} <= closure
+
+
+def test_a_package_file_that_does_not_exist_is_still_in_the_closure(
+    tmp_path, monkeypatch
+):
+    """Without libs/__init__.py, libs is a namespace package and the parent walk adds
+    nothing. PACKAGE_FILES keeps the path in the closure, so the rule-drift check
+    compares it with the base branch (#1138)."""
+    monkeypatch.setattr(gate, "ROOT", tmp_path)
+    monkeypatch.setattr(gate, "WORKFLOW_DIR", tmp_path / "no-workflows")
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "pr_merge_gate.py").write_text("import libs.x\n")
+    (tmp_path / "libs").mkdir()
+    (tmp_path / "libs" / "x.py").write_text("")
+    closure = gate.self_governing_files()
+    assert "libs/x.py" in closure and not (tmp_path / "libs/__init__.py").exists()
+    assert "libs/__init__.py" in closure
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "tools/pr_merge_gate/__init__.py",
+        "tools/pr_merge_gate/__main__.py",
+        "yaml.py",
+        "yaml/__init__.py",
+        "libs/gate/types/__init__.py",
+        "libs/gate/yaml.py",
+        "libs/tests/conftest.py",
+    ],
+)
+def test_a_shadow_of_the_gate_goes_to_the_owner_when_the_lock_holds(path):
+    verdict = gate.evaluate(_green(files=(path,), lock_failures=()), now=NOW)
+    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
+    assert any("what decides merges" in r and path in r for r in verdict.reasons)
+
+
 def test_gh_retries_transient_failures(monkeypatch):
     """_gh 遇到限流或暂时性错误时应执行指数退避重试并在恢复后成功返回。"""
     attempts = 0
@@ -2154,3 +2256,726 @@ def test_a_deploy_path_still_needs_the_owner_even_with_a_red_check():
         now=NOW,
     )
     assert verdict.exit_code == 2 and verdict.action_required
+
+
+# --- #1138: the production lock replaces the owner for covered workflow changes -----
+
+HOLDS: tuple[str, ...] = ()
+# A workflow that defines no required check and starts no deploy. infra-ci.yml defines
+# the required checks, so the lock does not release it (#1138 F11).
+CI_WORKFLOW = f"{gate.WORKFLOW_PREFIX}docs.yml"
+
+
+def test_a_workflow_change_merges_without_the_owner_when_the_lock_holds():
+    verdict = gate.evaluate(_green(files=(CI_WORKFLOW,), lock_failures=HOLDS), now=NOW)
+    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+
+
+def test_a_workflow_change_needs_the_owner_when_the_lock_was_not_read():
+    verdict = gate.evaluate(_green(files=(CI_WORKFLOW,), lock_failures=None), now=NOW)
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert any("what decides merges" in r for r in verdict.reasons)
+    assert not any("production lock" in r for r in verdict.reasons)
+
+
+def test_a_workflow_change_needs_the_owner_and_says_why_when_the_lock_fails():
+    failures = ("no required reviewer", "admins can bypass")
+    verdict = gate.evaluate(
+        _green(files=(CI_WORKFLOW,), lock_failures=failures), now=NOW
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert (
+        "production lock not verified: no required reviewer; admins can bypass"
+        in verdict.reasons
+    )
+
+
+def test_a_new_workflow_merges_without_the_owner_when_the_lock_holds():
+    # The contract read the head's copy of the new file; the lock covers it.
+    new = f"{gate.WORKFLOW_PREFIX}brand-new.yml"
+    verdict = gate.evaluate(_green(files=(new,), lock_failures=HOLDS), now=NOW)
+    assert verdict.ready, verdict.reasons
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "libs/gate/production_contract.py",
+        "libs/gate/production_lock.py",
+        "libs/gate/evaluator.py",
+        "libs/tests/test_production_lock.py",
+        "libs/tests/test_production_environment_gate.py",
+        "tools/pr_merge_gate.py",
+        "docs/ssot/ci-gate-inventory.yaml",
+        "AGENTS.md",
+        "docs/ssot/ops.merge-gate.md",
+    ],
+)
+def test_the_guard_of_the_lock_stays_with_the_owner_when_the_lock_holds(path):
+    verdict = gate.evaluate(
+        _green(files=(CI_WORKFLOW, path), lock_failures=HOLDS), now=NOW
+    )
+    assert verdict.owner_required and verdict.exit_code == 2, path
+    reason = next(r for r in verdict.reasons if "what decides merges" in r)
+    assert path in reason and CI_WORKFLOW not in reason
+
+
+# The six files with an ungated or conditional production job. The owner-held list is
+# empty by decision of 2026-10-08 (#1138), so the lock covers them too.
+FILES_WITH_JOBS_OUTSIDE_THE_ENVIRONMENT = (
+    "app-deploy-request.yml",
+    "deploy-report-main.yml",
+    "deploy.yml",
+    "ops-checks.yml",
+    "preview-teardown.yml",
+    "reconcile-iac-inputs.yml",
+)
+
+
+@pytest.mark.parametrize("name", FILES_WITH_JOBS_OUTSIDE_THE_ENVIRONMENT)
+def test_a_workflow_with_a_job_outside_the_environment_merges_when_the_lock_holds(
+    name,
+):
+    path = f"{gate.WORKFLOW_PREFIX}{name}"
+    assert (ROOT / path).is_file(), path  # a real file, not a name the gate never sees
+    verdict = gate.evaluate(_green(files=(path,), lock_failures=HOLDS), now=NOW)
+    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+
+
+def _hold(monkeypatch, *names: str) -> None:
+    monkeypatch.setattr(production_contract, "OWNER_HELD_WORKFLOWS", frozenset(names))
+
+
+def test_a_held_workflow_stays_with_the_owner_when_the_lock_holds(monkeypatch):
+    _hold(monkeypatch, "ops-checks.yml")
+    held = f"{gate.WORKFLOW_PREFIX}ops-checks.yml"
+    verdict = gate.evaluate(
+        _green(files=(held, CI_WORKFLOW), lock_failures=HOLDS), now=NOW
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
+    reason = next(r for r in verdict.reasons if "what decides merges" in r)
+    assert held in reason and CI_WORKFLOW not in reason
+    assert any(
+        r.startswith(f"the production lock does not cover {held}:")
+        for r in verdict.reasons
+    )
+
+
+def test_holding_one_workflow_leaves_the_others_covered(monkeypatch):
+    _hold(monkeypatch, "ops-checks.yml")
+    path = f"{gate.WORKFLOW_PREFIX}deploy.yml"
+    verdict = gate.evaluate(_green(files=(path,), lock_failures=HOLDS), now=NOW)
+    assert verdict.ready, verdict.reasons
+
+
+def test_a_proven_tighter_change_gets_no_new_blocker_from_the_lock():
+    path = f"{gate.WORKFLOW_PREFIX}ops-checks.yml"
+    for lock in (None, HOLDS, ("no required reviewer",)):
+        verdict = gate.evaluate(
+            _green(files=(path,), proven_tighter=(path,), lock_failures=lock),
+            now=NOW,
+        )
+        assert verdict.ready, (lock, verdict.reasons)
+
+
+def test_a_held_file_is_not_cleared_by_the_proof_while_the_lock_holds(monkeypatch):
+    _hold(monkeypatch, "ops-checks.yml")
+    path = f"{gate.WORKFLOW_PREFIX}ops-checks.yml"
+    verdict = gate.evaluate(
+        _green(files=(path,), proven_tighter=(path,), lock_failures=HOLDS), now=NOW
+    )
+    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
+
+
+def test_a_deploy_path_merges_without_the_owner_when_the_lock_holds():
+    verdict = gate.evaluate(
+        _green(files=("libs/alerting/signoz.py",), lock_failures=HOLDS), now=NOW
+    )
+    assert verdict.ready and not verdict.owner_required, verdict.reasons
+
+
+def test_a_deploy_path_needs_the_owner_when_the_lock_was_not_read():
+    verdict = gate.evaluate(
+        _green(files=("libs/alerting/signoz.py",), lock_failures=None), now=NOW
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert any("trigger a deploy" in r for r in verdict.reasons)
+
+
+def test_a_deploy_path_needs_the_owner_and_says_why_when_the_lock_fails():
+    verdict = gate.evaluate(
+        _green(files=("libs/alerting/signoz.py",), lock_failures=("x",)), now=NOW
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert "production lock not verified: x" in verdict.reasons
+
+
+def test_a_lock_failure_on_an_ordinary_pr_adds_nothing():
+    verdict = gate.evaluate(_green(files=("libs/x.py",), lock_failures=("x",)), now=NOW)
+    assert verdict.ready, verdict.reasons
+
+
+# --- #1138 F10: the gate reads the production lock on every run ----------------------
+
+RELEASE_CODE = ("tools/deploy_v2.py",)
+LOCK_VERIFIED_LINE = (
+    "production lock verified (reviewer, admin bypass off, policies main and v*, "
+    "contract holds)"
+)
+READY_AT = gate._epoch("2026-09-15T06:55:22Z") + 12 * 60
+
+
+def _printed(capsys) -> str:
+    """Captured output with white space collapsed: the console wraps long lines."""
+    return " ".join(capsys.readouterr().out.split())
+
+
+def test_a_release_code_pr_reports_a_verified_lock(capsys):
+    gh = _Gh(files=RELEASE_CODE)
+    assert gate.main(["704"], gh=gh, now=lambda: READY_AT - 1) == 1
+    waiting = _printed(capsys)
+    assert waiting.endswith(f"{LOCK_VERIFIED_LINE} | lock_state=verified"), waiting
+    assert gate.main(["704"], gh=gh, now=lambda: READY_AT) == 0
+    ready = _printed(capsys)
+    assert "mergeable under session authority" in ready
+    assert (
+        f"no path that needs the owner; {LOCK_VERIFIED_LINE} | lock_state=verified"
+        in ready
+    )
+
+
+def test_a_release_code_pr_reports_an_unverified_lock_and_keeps_its_exit_code(capsys):
+    for lock in ("holds", "unreadable"):
+        gh = _Gh(files=RELEASE_CODE, lock=lock)
+        assert gate.main(["704"], gh=gh, now=lambda: READY_AT) == 0, lock
+    out = _printed(capsys)
+    assert (
+        "production lock NOT verified: the production environment could not be " in out
+    )
+    assert "cannot list the workflow files at feedfac" in out
+    assert out.count(LOCK_VERIFIED_LINE) == 1  # from the "holds" run only
+
+
+def test_the_json_verdict_carries_the_lock(capsys):
+    assert (
+        gate.main(["704", "--json"], gh=_Gh(files=RELEASE_CODE), now=lambda: READY_AT)
+        == 0
+    )
+    doc = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert doc["lock_verified"] is True and doc["lock_failures"] == []
+    gh = _Gh(files=RELEASE_CODE, lock="unreadable")
+    assert gate.main(["704", "--json"], gh=gh, now=lambda: READY_AT) == 0
+    doc = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert doc["lock_verified"] is False and len(doc["lock_failures"]) == 2
+
+
+# The gh calls of one run: 9 + N + 2k, where N is the number of workflow files and k
+# the changed files in the closure that have a direction proof (a base and a head read
+# each). --request-review adds up to 2 and --merge adds 1. Inside `_gh`, each call can
+# try up to 3 times. Nothing else may grow with the tree or the PR (#1138).
+WORKFLOW_COUNT = len(list((ROOT / ".github" / "workflows").glob("*.y*ml")))
+
+
+def _counted_run(argv, gh) -> list[list[str]]:
+    calls: list[list[str]] = []
+
+    def counting(call):
+        calls.append(list(call))
+        return gh(call)
+
+    assert gate.main(argv, gh=counting, now=lambda: READY_AT) == 0
+    trees = [c for c in calls if "/git/trees/" in c[1]]
+    assert len(trees) == 2  # the preflight and the rule-drift read
+    # One repeat is allowed: the head copy of a changed workflow file, read once by the
+    # direction proof and once by the lock check. It is one of the 2k reads.
+    changed = {
+        f for f in getattr(gh, "files", ()) if f.startswith(gate.WORKFLOW_PREFIX)
+    }
+    for call in {tuple(c) for c in calls if c not in trees}:
+        count = calls.count(list(call))
+        path = call[-1].split("/contents/", 1)[-1].split("?", 1)[0]
+        allowed = 2 if path in changed and "?ref=main" not in call[-1] else 1
+        assert count <= allowed, f"{count} identical gh calls: {call}"
+    return calls
+
+
+def _lock_reads(calls) -> int:
+    return sum(
+        1
+        for c in calls
+        if "/environments/" in c[-1] or "/contents/.github/workflows" in c[-1]
+    )
+
+
+def test_the_gh_calls_of_one_run_are_bounded():
+    calls = _counted_run(["704"], _Gh(files=RELEASE_CODE))
+    assert _lock_reads(calls) == 3 + WORKFLOW_COUNT
+    assert len(calls) <= 9 + WORKFLOW_COUNT, [c[:2] for c in calls]
+
+
+def test_each_proven_file_adds_two_reads_to_the_bound():
+    files = (f"{gate.WORKFLOW_PREFIX}docs.yml", "docs/ssot/ci-gate-inventory.yaml")
+    calls = _counted_run(["704", "--merge"], _Gh(files=files))
+    proof_reads = [c for c in calls if c[-1].endswith("?ref=main")]
+    k = len(files)
+    assert len(proof_reads) == k  # the base reads; the head reads use the head SHA
+    assert len(calls) <= 9 + WORKFLOW_COUNT + 2 * k + 1, [c[:2] for c in calls]
+
+
+def test_the_lock_line_names_each_state():
+    assert (
+        gate.lock_status(_facts(lock_failures=()))
+        == f"{LOCK_VERIFIED_LINE} | lock_state=verified"
+    )
+    assert (
+        gate.lock_status(_facts(lock_failures=("a", "b")))
+        == "production lock NOT verified: a; b | lock_state=not_verified"
+    )
+    assert gate.lock_status(_facts(lock_failures=None)) == (
+        "production lock NOT verified: not read (the lock is read only for an open "
+        "PR of this repository) | lock_state=not_read"
+    )
+
+
+def test_an_unverified_lock_alone_changes_no_verdict():
+    for lock in (None, (), ("no required reviewer",)):
+        verdict = gate.evaluate(_green(files=RELEASE_CODE, lock_failures=lock), now=NOW)
+        assert verdict.ready and verdict.exit_code == 0, (lock, verdict.reasons)
+
+
+# --- #1138 F11: a workflow that defines a required check stays held -----------------
+
+INFRA_CI = f"{gate.WORKFLOW_PREFIX}infra-ci.yml"
+
+
+def _required_line(path: str) -> str:
+    return (
+        f"{path} defines a required check: the owner approves head abcdef0; the "
+        "workflow proof does not read job bodies, so it cannot clear this file"
+    )
+
+
+def test_the_required_check_workflows_are_derived_from_the_inventory():
+    assert _required_check_workflows() == frozenset({INFRA_CI})
+
+
+def test_a_required_check_workflow_needs_the_owner_when_the_lock_holds():
+    verdict = gate.evaluate(_green(files=(INFRA_CI,), lock_failures=HOLDS), now=NOW)
+    assert verdict.owner_required and verdict.exit_code == 2
+    assert _required_line(INFRA_CI) in verdict.reasons
+
+
+def test_a_proven_tighter_required_check_workflow_still_needs_the_owner():
+    """#1138 round 3: the workflow proof reads no job bodies, so it does not clear a
+    required-check workflow while the lock holds."""
+    verdict = gate.evaluate(
+        _green(files=(INFRA_CI,), proven_tighter=(INFRA_CI,), lock_failures=HOLDS),
+        now=NOW,
+    )
+    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
+    assert _required_line(INFRA_CI) in verdict.reasons
+
+
+@pytest.mark.parametrize(
+    "lock", [None, ("no required reviewer",)], ids=["unread", "fails"]
+)
+def test_without_the_lock_the_proof_does_not_clear_a_required_check_workflow(lock):
+    """#1138 round 4: a held file never clears through the proof, in any lock state."""
+    verdict = gate.evaluate(
+        _green(files=(INFRA_CI,), proven_tighter=(INFRA_CI,), lock_failures=lock),
+        now=NOW,
+    )
+    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
+    assert _required_line(INFRA_CI) in verdict.reasons
+
+
+@pytest.mark.parametrize(
+    "path",
+    [f"{gate.WORKFLOW_PREFIX}docs.yml", "docs/ssot/ci-gate-inventory.yaml"],
+)
+@pytest.mark.parametrize(
+    "lock", [None, ("no required reviewer",)], ids=["unread", "fails"]
+)
+def test_without_the_lock_the_proof_still_clears_every_other_file(path, lock):
+    verdict = gate.evaluate(
+        _green(files=(path,), proven_tighter=(path,), lock_failures=lock), now=NOW
+    )
+    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+
+
+def test_a_held_file_with_a_proof_gets_the_held_reason_first_and_no_proof_reason():
+    verdict = gate.evaluate(
+        _green(files=(INFRA_CI,), proven_tighter=(INFRA_CI,), lock_failures=HOLDS),
+        now=NOW,
+    )
+    assert verdict.reasons[0] == _required_line(INFRA_CI)
+    assert not any("without a mechanical proof" in r for r in verdict.reasons)
+
+
+def test_a_held_file_without_a_proof_is_named_in_both_lines():
+    verdict = gate.evaluate(_green(files=(INFRA_CI,), lock_failures=HOLDS), now=NOW)
+    assert verdict.reasons[0] == _required_line(INFRA_CI)
+    assert any(
+        "without a mechanical proof" in r and INFRA_CI in r for r in verdict.reasons
+    )
+
+
+def test_a_workflow_without_a_required_check_is_the_agents_when_the_lock_holds():
+    path = f"{gate.WORKFLOW_PREFIX}ops-checks.yml"
+    verdict = gate.evaluate(_green(files=(path,), lock_failures=HOLDS), now=NOW)
+    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+
+
+def test_a_mixed_pr_names_only_the_required_check_workflow():
+    deploy = f"{gate.WORKFLOW_PREFIX}deploy.yml"
+    verdict = gate.evaluate(
+        _green(files=(INFRA_CI, deploy), lock_failures=HOLDS), now=NOW
+    )
+    assert verdict.owner_required and verdict.exit_code == 2
+    decides = next(r for r in verdict.reasons if "what decides merges" in r)
+    assert INFRA_CI in decides and deploy not in decides
+    assert _required_line(INFRA_CI) in verdict.reasons
+    assert not any(deploy in r for r in verdict.reasons), verdict.reasons
+
+
+def _inventory_at(tmp_path, monkeypatch, gates) -> None:
+    """A checkout whose inventory holds `gates` (None: no inventory file)."""
+    import yaml
+
+    if gates is not None:
+        (tmp_path / "docs" / "ssot").mkdir(parents=True)
+        (tmp_path / "docs" / "ssot" / "ci-gate-inventory.yaml").write_text(
+            yaml.safe_dump({"version": 1, "gates": gates})
+        )
+    monkeypatch.setattr(gate, "ROOT", tmp_path)
+
+
+@pytest.mark.parametrize(
+    "gates",
+    [
+        None,
+        [],
+        [{"id": "x", "workflow": INFRA_CI, "job": "j", "blocks_merge": False}],
+        [{"id": "x", "job": "j", "blocks_merge": True}],
+    ],
+    ids=[
+        "no-inventory",
+        "no-gates",
+        "no-blocking-gate",
+        "blocking-gate-without-workflow",
+    ],
+)
+def test_an_unreadable_inventory_releases_no_workflow(tmp_path, monkeypatch, gates):
+    _inventory_at(tmp_path, monkeypatch, gates)
+    assert _required_check_workflows() is None
+    verdict = gate.evaluate(_green(files=(CI_WORKFLOW,), lock_failures=HOLDS), now=NOW)
+    assert verdict.owner_required
+    assert any(
+        r.startswith("cannot read a blocking gate with a workflow from ")
+        and CI_WORKFLOW in r
+        for r in verdict.reasons
+    ), verdict.reasons
+
+
+def test_a_new_blocking_gate_holds_its_workflow(tmp_path, monkeypatch):
+    import yaml
+
+    gates = yaml.safe_load((ROOT / "docs/ssot/ci-gate-inventory.yaml").read_text())[
+        "gates"
+    ]
+    deploy = f"{gate.WORKFLOW_PREFIX}deploy.yml"
+    new_gate = {"id": "infra_ci.new", "workflow": deploy, "job": "deploy"}
+    _inventory_at(tmp_path, monkeypatch, [*gates, {**new_gate, "blocks_merge": True}])
+    assert _required_check_workflows() == frozenset({INFRA_CI, deploy})
+    verdict = gate.evaluate(_green(files=(deploy,), lock_failures=HOLDS), now=NOW)
+    assert verdict.owner_required and _required_line(deploy) in verdict.reasons
+
+
+# --- #1138 re-audit L7 and L8: the lock line and keys on every exit ------------------
+
+
+def _json_verdict(capsys) -> dict:
+    return json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+
+
+@pytest.mark.parametrize("gh", [_StaleCheckoutGh, _BrokenGh], ids=["stale", "broken"])
+def test_an_unevaluable_run_reports_an_unread_lock(gh, capsys):
+    assert gate.main(["704", "--json"], gh=gh(), now=lambda: NOW) == 4
+    doc = _json_verdict(capsys)
+    assert doc["lock_verified"] is False and doc["lock_failures"] is None
+    assert gate.main(["704"], gh=gh(), now=lambda: NOW) == 4
+    assert "production lock NOT verified: not read" in _printed(capsys)
+
+
+@pytest.mark.parametrize(
+    "argv, gh",
+    [
+        (["704", "--json"], lambda: _Gh(files=RELEASE_CODE, state="MERGED")),
+        (["704", "--json", "--repo", "wangzitian0/truealpha"], lambda: _Gh()),
+    ],
+    ids=["closed-pr", "another-repository"],
+)
+def test_an_unread_lock_is_not_reported_as_verified(argv, gh, capsys):
+    gate.main(argv, gh=gh(), now=lambda: READY_AT)
+    doc = _json_verdict(capsys)
+    assert doc["lock_verified"] is False and doc["lock_failures"] is None
+
+
+@pytest.mark.parametrize(
+    "overrides, outcome",
+    [
+        ({"files": ("AGENTS.md",)}, "owner"),
+        ({"draft": True}, "action"),
+        ({"rule_drift": ("AGENTS.md",)}, "unevaluable"),
+        ({"last_push_at": NOW - 60}, "wait"),
+    ],
+)
+def test_every_outcome_ends_with_the_lock_line(overrides, outcome):
+    for lock in ((), ("no required reviewer",), None):
+        facts = _green(lock_failures=lock, **overrides)
+        verdict = gate.evaluate(facts, now=NOW)
+        assert verdict.outcome == outcome, verdict.reasons
+        last = gate.render(facts, verdict).splitlines()[-1]
+        assert last == f"  {gate.lock_status(facts)}", last
+
+
+@pytest.mark.parametrize("error", [OSError("gh not found"), RuntimeError("HTTP 502")])
+def test_a_runner_error_in_the_lock_read_is_a_failure_not_a_crash(error):
+    def broken(argv):
+        raise error
+
+    failures = gate._production_lock_failures("wangzitian0/infra2", "abc", gh=broken)
+    assert failures and all(isinstance(f, str) for f in failures)
+    if isinstance(error, OSError):
+        assert failures == ("the lock check failed: OSError: gh not found",)
+
+
+# --- #1138 round 3 R3-1: the proof cannot clear a required-check workflow ------------
+
+WEAKENINGS = (
+    "run-true",
+    "continue-on-error",
+    "self-hosted",
+    "paths-ignore",
+    "pull-request-target",
+    "env-secret",
+)
+
+
+def _weakened(path: str, kind: str, job: str) -> str:
+    """The workflow at `path` with one edit that weakens what the job proves."""
+    import yaml
+
+    doc = yaml.safe_load((ROOT / path).read_text(encoding="utf-8"))
+    target = doc["jobs"][job]
+    on = doc.get(True, doc.get("on"))
+    if kind == "run-true":
+        for step in target.get("steps", []):
+            if "run" in step:
+                step["run"] = "true"
+    elif kind == "continue-on-error":
+        target["continue-on-error"] = True
+    elif kind == "self-hosted":
+        target["runs-on"] = "self-hosted"
+    elif kind == "paths-ignore":
+        on["pull_request"] = {"paths-ignore": ["**"]}
+    elif kind == "pull-request-target":
+        on["pull_request_target"] = on.pop("pull_request", None) or {}
+    elif kind == "env-secret":
+        target["env"] = {"X": "${{ secrets.K }}"}
+    return yaml.safe_dump(doc, sort_keys=False)
+
+
+def _verdict_through_the_proof(path: str, head_text: str):
+    """Run the real direction proof with gh serving the base and the head, then
+    evaluate with the lock holding."""
+    base_text = (ROOT / path).read_text(encoding="utf-8")
+    assert head_text != base_text
+
+    def serve(argv):
+        return base_text if argv[-1].endswith("?ref=main") else head_text
+
+    proven = gate._proven_tighter(
+        "wangzitian0/infra2", "main", "abcdef0123456789", (path,), gh=serve
+    )
+    facts = _green(files=(path,), proven_tighter=proven, lock_failures=HOLDS)
+    return proven, gate.evaluate(facts, now=NOW)
+
+
+@pytest.mark.parametrize("kind", WEAKENINGS)
+def test_a_weakened_required_check_workflow_goes_to_the_owner(kind):
+    proven, verdict = _verdict_through_the_proof(
+        INFRA_CI, _weakened(INFRA_CI, kind, "validate-compose")
+    )
+    # The proof reads only push paths and job names: it calls each of these tighter.
+    assert proven == (INFRA_CI,), kind
+    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
+    assert _required_line(INFRA_CI) in verdict.reasons
+
+
+@pytest.mark.parametrize("kind", WEAKENINGS)
+@pytest.mark.parametrize(
+    "name, job", [("docs.yml", "build"), ("deploy.yml", "preflight_canary")]
+)
+def test_the_same_edit_to_a_workflow_without_a_required_check_is_the_agents(
+    kind, name, job
+):
+    path = f"{gate.WORKFLOW_PREFIX}{name}"
+    _, verdict = _verdict_through_the_proof(path, _weakened(path, kind, job))
+    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+
+
+# --- #1138 round 3 R3-4: one form for an inventory workflow path ---------------------
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
+        "./.github/workflows/infra-ci.yml",
+        ".github//workflows/infra-ci.yml",
+        ".github/workflows/infra-ci.yml ",
+        ".GitHub/Workflows/Infra-CI.yml",
+    ],
+    ids=["dot-slash", "double-slash", "trailing-space", "case"],
+)
+def test_an_inventory_path_in_another_spelling_still_holds_its_workflow(
+    tmp_path, monkeypatch, written
+):
+    gates = [{"id": "x", "workflow": written, "job": "j", "blocks_merge": True}]
+    _inventory_at(tmp_path, monkeypatch, gates)
+    assert _required_check_workflows() == frozenset({INFRA_CI})
+    verdict = gate.evaluate(_green(files=(INFRA_CI,), lock_failures=HOLDS), now=NOW)
+    assert verdict.owner_required and _required_line(INFRA_CI) in verdict.reasons
+
+
+def test_a_changed_path_in_another_case_is_held_too():
+    variant = f"{gate.WORKFLOW_PREFIX}Infra-CI.yml"
+    verdict = gate.evaluate(_green(files=(variant,), lock_failures=HOLDS), now=NOW)
+    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
+
+
+@pytest.mark.parametrize(
+    "path, normal",
+    [
+        ("./a/b.py", "a/b.py"),
+        ("a//b.py", "a/b.py"),
+        (" a/b.py ", "a/b.py"),
+        ("A\\B.py", "a/b.py"),
+        ("/a/./c/../b.py", "a/b.py"),
+        ("", ""),
+        (".", ""),
+    ],
+)
+def test_a_path_has_one_comparable_form(path, normal):
+    assert _normalized_path(path) == normal
+
+
+# --- #1138 round 3 R3-5: an exit 4 after the lock read does not say "not read" -------
+
+
+class _BadNumberGh(_Gh):
+    """gh answers every read, but the PR number is not a number: `collect` fails
+    while it builds the facts, after the lock read."""
+
+    def __call__(self, argv):
+        out = super().__call__(argv)
+        if list(argv)[:2] == ["pr", "view"]:
+            doc = json.loads(out)
+            doc["number"] = "not-a-number"
+            return json.dumps(doc)
+        return out
+
+
+def test_a_failure_after_the_lock_read_says_the_run_stopped(capsys):
+    gh = _BadNumberGh(files=RELEASE_CODE)
+    assert gate.main(["704"], gh=gh, now=lambda: READY_AT) == 4
+    assert any("/environments/production" in c[-1] for c in gh.calls)
+    printed = _printed(capsys)
+    assert "production lock NOT verified: the run stopped before a verdict" in printed
+    assert "not read" not in printed
+    assert gate.main(["704", "--json"], gh=_BadNumberGh(), now=lambda: READY_AT) == 4
+    doc = _json_verdict(capsys)
+    assert doc["lock_verified"] is False and doc["lock_failures"] is None
+
+
+# --- #1138 round 4 R4-2: one lock state in every output ------------------------------
+
+
+def _states(argv, gh, capsys) -> tuple[int, str, str]:
+    """Exit code, JSON lock_state, and the text line of one PR read twice."""
+    code = gate.main([*argv, "--json"], gh=gh(), now=lambda: READY_AT)
+    state = _json_verdict(capsys)["lock_state"]
+    assert gate.main(argv, gh=gh(), now=lambda: READY_AT) == code
+    return code, state, _printed(capsys)
+
+
+@pytest.mark.parametrize(
+    "argv, gh, code, state, detail",
+    [
+        (["704"], lambda: _Gh(files=RELEASE_CODE), 0, "verified", "contract holds"),
+        (
+            ["704"],
+            lambda: _Gh(files=RELEASE_CODE, lock="unreadable"),
+            0,
+            "not_verified",
+            "could not be read",
+        ),
+        (
+            ["704"],
+            lambda: _Gh(files=RELEASE_CODE, state="MERGED"),
+            3,
+            "not_read",
+            "the lock is read only for an open PR of this repository",
+        ),
+        (
+            ["704", "--repo", "wangzitian0/truealpha"],
+            lambda: _Gh(),
+            None,
+            "not_read",
+            "the lock is read only for an open PR of this repository",
+        ),
+        (
+            ["704"],
+            _StaleCheckoutGh,
+            4,
+            "not_read",
+            "the run stopped before the lock read",
+        ),
+        (["704"], _BrokenGh, 4, "not_read", "the run stopped before the lock read"),
+        (
+            ["704"],
+            lambda: _BadNumberGh(files=RELEASE_CODE),
+            4,
+            "stopped_before_verdict",
+            "the run stopped before a verdict",
+        ),
+        (
+            ["704"],
+            lambda: _BadNumberGh(files=RELEASE_CODE, state="MERGED"),
+            4,
+            "not_read",
+            "the lock is read only for an open PR of this repository",
+        ),
+    ],
+    ids=[
+        "verified",
+        "not-verified",
+        "closed-pr",
+        "another-repository",
+        "stale-checkout",
+        "pr-read-fails",
+        "fails-after-the-lock-read",
+        "closed-pr-fails-later",
+    ],
+)
+def test_each_output_names_its_lock_state(argv, gh, code, state, detail, capsys):
+    exit_code, json_state, text = _states(argv, gh, capsys)
+    if code is not None:
+        assert exit_code == code
+    assert json_state == state
+    assert f"| lock_state={state}" in text and detail in text, text
+
+
+def test_every_lock_state_has_a_line():
+    for state in gate.LOCK_STATES:
+        assert gate.lock_line(state, "x").endswith(f" | lock_state={state}")

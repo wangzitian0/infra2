@@ -8,7 +8,7 @@ import json
 import sys
 import time
 from invoke import task
-from libs.common import get_env
+from libs.core.environ import get_env
 from libs.console import (
     header,
     success,
@@ -153,7 +153,7 @@ class OnePasswordDeployer(Deployer):
     def composing(cls, c, env_vars: dict = None) -> bool:
         """Deploy in Dokploy (automated)"""
         if not isinstance(env_vars, dict):
-            from libs.common import get_env
+            from libs.core.environ import get_env
 
             env_vars = get_env()
 

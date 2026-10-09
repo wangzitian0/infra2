@@ -3,8 +3,9 @@
 
 An agent merging under session authority must see, for one head, that every blocking
 check is green, every review thread is resolved, the head has been quiet for twelve
-minutes since its last push, and that the change neither touches a protected file nor
-triggers a deploy on merge — the last two need the owner's approval of that exact head.
+minutes since its last push, and that the change touches no protected file. A protected
+file needs the owner's approval of that exact head. A deploy on merge needs it too, but
+only while the production lock is not verified (#1138).
 On 2026-09-15 three of five merges landed 21–95 s before the quiet period had elapsed,
 each time because the timing was judged by eye between other work. This tool judges it.
 
@@ -15,8 +16,9 @@ Exit codes (#740), so a caller never reads the prose to decide:
 
     0  ready (or merged with --merge)
     1  wait: time alone fixes it (check pending, no check yet, head still settling)
-    2  needs the owner (deploy-triggering path, unproven self-governing change, base
-       is not main)
+    2  needs the owner (unproven self-governing change, a workflow that defines a
+       required check, base is not main, or a deploy-triggering path while the
+       production lock is not verified)
     3  action required: waiting will not fix it (red check, open thread, conflict,
        draft, PR not open, base changed under green checks)
     4  could not evaluate: not a verdict on the PR. This checkout's merge rules are
@@ -89,6 +91,7 @@ from libs.gate import (
     _inventory_only_gained_authority,
     _is_local_root_repo,
     _owner_instruction_quoted,
+    _production_lock_failures,
     _proven_tighter,
     _read_checks,
     _repo_deps,
@@ -98,7 +101,10 @@ from libs.gate import (
     _working_tree_rule_drift,
     collect,
     evaluate,
+    LOCK_STATES,
     is_self_governing,
+    lock_line,
+    lock_status,
     render,
     request_copilot_review,
     self_governing_files,
@@ -148,6 +154,7 @@ __all__ = [
     "_inventory_only_gained_authority",
     "_is_local_root_repo",
     "_owner_instruction_quoted",
+    "_production_lock_failures",
     "_proven_tighter",
     "_read_checks",
     "_repo_deps",
@@ -158,6 +165,9 @@ __all__ = [
     "collect",
     "evaluate",
     "is_self_governing",
+    "LOCK_STATES",
+    "lock_line",
+    "lock_status",
     "main",
     "render",
     "request_copilot_review",
@@ -199,9 +209,17 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
     args = parser.parse_args(argv)
 
     from libs.console import error, success, warning
+    from libs.gate.evaluator import (
+        LOCK_NOT_REACHED,
+        LOCK_SKIPPED,
+        lock_line,
+        lock_state,
+    )
     from libs.gate.types import EXIT_UNEVALUABLE
 
-    def unevaluable(why: str) -> int:
+    def unevaluable(
+        why: str, *, state: str = "not_read", detail: str = LOCK_NOT_REACHED
+    ) -> int:
         if args.json:
             print(
                 json.dumps(
@@ -211,11 +229,18 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
                         "outcome": "unevaluable",
                         "exit_code": EXIT_UNEVALUABLE,
                         "reasons": [why],
+                        # No verdict, so no verified lock (#1138).
+                        "lock_verified": False,
+                        "lock_failures": None,
+                        "lock_state": state,
                     }
                 )
             )
         else:
-            warning(f"#{args.number}: could not evaluate (not a verdict): {why}")
+            warning(
+                f"#{args.number}: could not evaluate (not a verdict): {why}\n"
+                f"  {lock_line(state, detail)}"
+            )
         return EXIT_UNEVALUABLE
 
     # Preflight (#873): judge only with main's rules, and know it before reading any
@@ -232,7 +257,17 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
     try:
         facts = collect(args.number, repo=args.repo, gh=gh)
     except Exception as exc:  # noqa: BLE001 - any read failure is "could not evaluate"
-        return unevaluable(f"reading the PR failed: {type(exc).__name__}: {exc}")
+        if getattr(exc, "lock_read", False):
+            state, detail = "stopped_before_verdict", ""
+        elif getattr(exc, "lock_skipped", False):
+            state, detail = "not_read", LOCK_SKIPPED
+        else:
+            state, detail = "not_read", LOCK_NOT_REACHED
+        return unevaluable(
+            f"reading the PR failed: {type(exc).__name__}: {exc}",
+            state=state,
+            detail=detail,
+        )
     if args.request_review and not any(
         r[0] in AUTOMATED_REVIEWERS and r[2] > 0 for r in facts.reviews_on_head()
     ):
@@ -293,6 +328,14 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
                     "reasons": verdict.reasons,
                     "quiet_remaining_seconds": verdict.quiet_remaining_seconds,
                     "policy": args.policy,
+                    # Informational (#1138): the lock never changes the exit code alone.
+                    "lock_state": lock_state(facts),
+                    "lock_verified": facts.lock_failures == (),
+                    "lock_failures": (
+                        None
+                        if facts.lock_failures is None
+                        else list(facts.lock_failures)
+                    ),
                 }
             )
         )

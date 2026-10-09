@@ -147,7 +147,7 @@ def _load_tools(ns, root):
 
 def load_all():
     """Load all modules from all projects"""
-    from libs.common import validate_env
+    from libs.core.environ import validate_env
     from invoke import task
 
     @task

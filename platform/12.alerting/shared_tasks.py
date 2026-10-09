@@ -16,7 +16,7 @@ from libs.alerting import (
     find_signoz_rule_id,
     signoz_feishu_channel_name,
 )
-from libs.common import get_env, service_domain, with_env_suffix
+from libs.core.environ import get_env, service_domain, with_env_suffix
 
 
 def _bridge_url(env: dict[str, str | None]) -> str:

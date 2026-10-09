@@ -123,7 +123,14 @@ jobs:
         # deploy_v2_canary imports infra2_sdk.delivery (#498) — install the package
         # itself (as app-deploy-request.yml's canary step already does) instead of a
         # manually maintained subset that silently drifts out of sync with its imports.
-        run: python -m pip install -e .
+        # The SDK comes first, hash-verified from uv.lock (#1115). pyproject.toml names
+        # its URL with no hash, and pip keeps the installed wheel while that URL equals
+        # the one in uv.lock (a test holds it). A swapped release asset fails the first
+        # command, and bash -e stops the step before the project install.
+        run: |
+          sdk="$(python tools/sdk_requirement.py)"
+          python -m pip install --no-deps "$sdk"
+          python -m pip install -e .
       - name: Canary the artifact before the real deploy
         env:
           VERSION_REF_INPUT: ${{ github.event.inputs.version_ref || 'main' }}
@@ -154,6 +161,9 @@ jobs:
           && inputs.service != 'bootstrap/iac-runner'
           && (needs.preflight_canary.result == 'success'
               || needs.preflight_canary.result == 'skipped') }}
+    # A prod deploy waits here for the owner (#1125). The canary above runs first, so the
+    # owner approves a deploy whose canary is already green.
+    environment: ${{ inputs.type == 'prod' && 'production' || 'staging' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
@@ -198,9 +208,11 @@ jobs:
           python-version: "3.11"
 
       - name: Install runtime dependencies
-        # libs/env.py reads secret stores through infra2-sdk; install the exact wheel
-        # pyproject pins so this job runs the same code as the runner (#649).
-        run: python -m pip install invoke httpx python-dotenv rich "$(grep -oE 'infra2-sdk @ https://[^"]+' pyproject.toml)"
+        # libs/env.py reads secret stores through infra2-sdk; install the wheel uv.lock
+        # pins, hash-verified, so this job runs the same code as the runner (#649, #1115).
+        run: |
+          sdk="$(python tools/sdk_requirement.py)"
+          python -m pip install invoke httpx python-dotenv rich "$sdk"
 
       - name: Configure SSH key for the pre-deploy schema gate
         # Same optional-provisioning shape as ops-checks.yml's watchdog jobs: a
@@ -276,6 +288,8 @@ jobs:
   bootstrap:
     name: update iac_runner bootstrap
     if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.service == 'bootstrap/iac-runner') }}
+    # L1 bootstrap self-update and runner rebuild are production changes (#1125).
+    environment: production
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

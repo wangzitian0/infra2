@@ -29,17 +29,14 @@ name: Ops Checks
       - "libs/deploy/rollout.py"
       - "libs/deploy/contract.py"
       - "libs/deploy/env_config.py"
-      - "libs/deploy/contract.py"
-      - "libs/deploy/env_config.py"
       - "tools/resolve_deploy_ref.py"
       - "libs/deploy/refs.py"
       - "libs/deploy/dokploy_client.py"
-      - "libs/deploy/dokploy_client.py"
       - "pyproject.toml"
       - "uv.lock"
+      - "tools/sdk_requirement.py"
       - "finance_report/finance_report/preview/**"
       - ".github/workflows/ops-checks.yml"
-      - "docs/ssot/ops.alerting.md"
   pull_request:
     paths:
       - "tools/deploy_v2.py"
@@ -48,14 +45,12 @@ name: Ops Checks
       - "libs/deploy/rollout.py"
       - "libs/deploy/contract.py"
       - "libs/deploy/env_config.py"
-      - "libs/deploy/contract.py"
-      - "libs/deploy/env_config.py"
       - "tools/resolve_deploy_ref.py"
       - "libs/deploy/refs.py"
       - "libs/deploy/dokploy_client.py"
-      - "libs/deploy/dokploy_client.py"
       - "pyproject.toml"
       - "uv.lock"
+      - "tools/sdk_requirement.py"
       - "finance_report/finance_report/preview/**"
       - ".github/workflows/ops-checks.yml"
   schedule:
@@ -502,7 +497,7 @@ jobs:
 
       - name: Install runtime dependencies
         run: |
-          sdk_requirement="$(python -c 'import tomllib; print(next(value for value in tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"] if value.startswith("infra2-sdk @ ")))')"
+          sdk_requirement="$(python tools/sdk_requirement.py)"
           python -m pip install httpx python-dotenv rich "$sdk_requirement"
 
       - name: Run deploy_v2 canary

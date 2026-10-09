@@ -23,11 +23,14 @@
 #
 # Globs are fnmatch-style against repo-relative changed-file paths.
 #
-# Enforcement: `tools/deploy_guard_audit.py` (infra-ci "Gate deploy fan-out
-# coverage" + the scheduled ops-checks deploy-guard-audit task) fails if any service
-# COPYs a shared tree (libs/tools/common) into its image without declaring it
-# here. The iac-runner logs the per-run fan-out decision (selected services +
-# reasons + changed files that fanned out to nothing).
+# Enforcement: `tools/deploy_guard_audit.py` (the infra-ci `ci_runner preflight`
+# gate "Deploy guard audit" + the scheduled ops-checks step "Audit deploy fan-out
+# coverage (sufficiency)") fails if any file
+# the config hash reads for a service (Dockerfile COPY/ADD source resolved against
+# the build context, or bind mount) is outside the service directory and matches
+# no glob here (#1117). Examples: `COPY libs /app/libs`, `COPY uv.lock /tmp/`.
+# The iac-runner logs the per-run fan-out decision (selected services + reasons +
+# changed files that fanned out to nothing).
 version: 1
 services:
   # platform/alerting's Dockerfile does `COPY libs /app/libs` and
@@ -46,3 +49,14 @@ services:
       - platform/*/deploy.py
       - finance_report/finance_report/*/deploy.py
       - truealpha/truealpha/*/deploy.py
+      - uv.lock
+
+  platform/todo:
+    depends_on:
+      - uv.lock
+      - tools/sdk_requirement.py
+
+  bootstrap/iac-runner:
+    depends_on:
+      - uv.lock
+      - tools/sdk_requirement.py
