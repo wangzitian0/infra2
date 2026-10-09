@@ -29,6 +29,9 @@
          CPU lever; background-merge tuning needs the free-entries setting lowered
          in tandem and is intentionally left at default. -->
 
+    <!-- Bound lightweight background thread pool size (default 512 is excessive for single-node) -->
+    <background_schedule_pool_size>32</background_schedule_pool_size>
+
     <!-- Hard server-wide memory cap (absolute bytes). Without this, ClickHouse
          defaults max_server_memory_usage to ~90% of TOTAL host RAM — i.e. op-ch
          believes it owns almost the whole shared 8-core box. With no swap (by
