@@ -320,7 +320,7 @@ def test_missing_contract_file_fails_closed_naming_app_and_path() -> None:
         ({"content": 42}, "did not return file content"),
         (
             {"content": base64.b64encode(b"not json").decode()},
-            "is not valid JSON",
+            "not valid JSON",
         ),
         (
             policy_contents({"contract_version": 1, "service": "finance_report/app"}),
