@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=94a08bf603479f216eee06e554f3c54cd6d6b4139d50a60d7ca9712e9452c509 -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=eedd599d09f1e1eb32d17565bab20ceeaee436bf1ff1eff0818bfc2499f3d5c5 -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -24,7 +24,8 @@
 - **Review standing authorization:** Resolve a review thread directly after independently verifying it is fixed or obsolete. Do not resolve actionable, ambiguous, or unverified feedback. Automated reviewers may read a redacted GitHub diff rather than source: GitHub can show `"Authorization": f"Bearer ******"` where source has `"Authorization": f"Bearer {token}"`. Check source before judging a report. When a report is false, turn the concern into a falsifiable invariant test rather than merely dismissing it.
 - **Weighted review gates:** Each repository defines its own severity weights and blocking thresholds. Read literal `severity: <level>` tags; do not infer severity from prose.
 - **Merge when ready:** Once all merge conditions pass, merge and continue from the latest main rather than piling up divergent branches.
-- **Delivery state invariant:** Never declare complete, done, or finished while a PR is unmerged or uncommitted. If a PR is open, report state strictly as 'In review' with the PR URL. If uncommitted or local only, report 'Draft' or 'Local verified'.
+- **Delivery state invariant:** Never declare complete, done, or finished while a PR is unmerged or uncommitted. Never declare complete when Stage 1 (Merge to main) has landed without a verified Business Reality Probe. Code landing on main is strictly 'Code Landed'. If a PR is open, report state strictly as 'In review' with the PR URL. If uncommitted or local only, report 'Draft' or 'Local verified'. If merged without a reality probe, report 'Stage 1 Landed'.
+- **Anti-exclusion and reality invariant:** Exclusion is not resolution. Marking failing entities as excluded, adding expiring exemptions, or filtering out edge cases to manufacture green checks is a defect. A task is complete only when a physical reality probe confirms non-empty real-world execution.
 - **Three-stage deployment prerequisite:** Stage 1 (Merge to main) is a non-bypassable physical prerequisite for Stage 2 and Stage 3. If HEAD is not on main, fail closed and refuse any deployment request.
 - **Deploy provenance invariant:** Before dispatching any deploy workflow, physically verify that the target ref or tag contains current branch commits (`git merge-base --is-ancestor HEAD <target>`). Never deploy an older tag as completion evidence for current work.
 
