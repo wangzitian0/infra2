@@ -77,7 +77,7 @@ class VaultService:
     # (#526/#542) optional vault:true fields reported (never failed) on
     # populated-ness -- formerly the OPTIONAL_INERT_FIELD_WATCHLIST const.
     optional_inert_fields: tuple[str, ...] = ()
-    # A preview alias stack (libs.secrets_registry marks it preview).
+    # A preview alias stack (libs.security.registry marks it preview).
     ephemeral: bool = False
     # Legacy compose names for backward-compatibility fallback during migration (#954, #958)
     legacy_dokploy_services: tuple[str, ...] = ()
@@ -359,7 +359,7 @@ def classify_deployed_template(
     """Is the template the agent has mounted the one this release ships?"""
     import sys
 
-    mod = sys.modules.get("libs.vault_self_refresh_audit")
+    mod = sys.modules.get("libs.security.vault_self_refresh_audit")
     release_sha_fn = (
         getattr(mod, "_release_template_sha256", _release_template_sha256)
         if mod

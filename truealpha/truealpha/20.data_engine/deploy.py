@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from invoke.exceptions import CommandTimedOut
 from libs.console import error, success
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import BackupFacet, Exemption, SecretsFacet
+from libs.core.facets import BackupFacet, Exemption, SecretsFacet
 
 shared_tasks = sys.modules.get("truealpha.20.data_engine.shared")
 
@@ -27,11 +27,11 @@ _TRANSPORT_ERRORS = (OSError, http.client.HTTPException)
 
 
 def _registry_digest(image: str, ref: str) -> str:
-    """``registry/owner/name`` + tag (or digest) → ``sha256:…`` via infra2-sdk (1.5.0)."""
-    from infra2_sdk import release
+    """``registry/owner/name`` + tag (or digest) → ``sha256:…`` via infra2-sdk."""
+    from infra2_sdk.refs import resolve_image_digest
 
     registry, _, name = image.partition("/")
-    return release.resolve_image_digest(image=name, reference=ref, registry=registry)
+    return resolve_image_digest(image=name, reference=ref, registry=registry)
 
 
 _RELEASE_ID = re.compile(r"^release-manifest:[0-9a-f]{64}$")

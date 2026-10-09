@@ -84,7 +84,7 @@ def world(monkeypatch: pytest.MonkeyPatch):
 
 
 def _target(tmp_path: Path) -> Path:
-    return tmp_path / ".cache/app-manifests" / PATH
+    return tmp_path / ".cache/app-manifests" / SHA / PATH
 
 
 def test_the_818_reset_is_retried_once_and_the_fetch_succeeds(
@@ -229,3 +229,55 @@ def test_the_backoff_is_injectable_for_callers_and_tests(world, tmp_path: Path) 
     with pytest.raises(app_manifests.ManifestFetchError, match="1 attempt"):
         app_manifests._github_raw(URL, _retries=0, _sleep=sleeps.append)
     assert len(world.urls) == 1
+
+
+# --- #1091: a reader never sees a partly written manifest ------------------------
+
+
+def test_a_fetched_manifest_appears_only_when_complete(tmp_path, monkeypatch) -> None:
+    """While the bytes are written, the target does not exist: a reader finds no
+    file (and fetches or waits) or the whole file, never a partial JSON."""
+    monkeypatch.setattr(app_manifests, "submodule_commit", lambda root, sub: SHA)
+    target = _target(tmp_path)
+    seen_during_write: list[bool] = []
+    real_fdopen = app_manifests.os.fdopen
+
+    def watching_fdopen(fd, mode):
+        handle = real_fdopen(fd, mode)
+        real_write = handle.write
+
+        def write(data):
+            seen_during_write.append(target.exists())
+            return real_write(data)
+
+        handle.write = write
+        return handle
+
+    monkeypatch.setattr(app_manifests.os, "fdopen", watching_fdopen)
+    body = b'{"fields": []}'
+
+    app_manifests.fetch_missing([PATH], root=tmp_path, fetch=lambda _url: body)
+
+    assert seen_during_write == [False]
+    assert target.read_bytes() == body
+    # mkstemp creates 0600; the cached manifest keeps the 0644 a plain write gave
+    assert target.stat().st_mode & 0o777 == 0o644
+    assert [p.name for p in target.parent.iterdir()] == [target.name]
+
+
+def test_a_failed_write_leaves_no_target_and_no_temporary_file(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(app_manifests, "submodule_commit", lambda root, sub: SHA)
+    target = _target(tmp_path)
+
+    def failing_replace(_src, _dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(app_manifests.os, "replace", failing_replace)
+
+    with pytest.raises(OSError, match="disk full"):
+        app_manifests.fetch_missing([PATH], root=tmp_path, fetch=lambda _url: b"{}")
+
+    assert not target.exists()
+    assert list(target.parent.iterdir()) == []

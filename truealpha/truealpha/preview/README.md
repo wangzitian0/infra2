@@ -6,7 +6,7 @@ staging/prod (one fixed Dokploy compose each), preview is a **family of aliases*
 Dokploy compose stack with its OWN ephemeral database. Any number coexist; they outlive
 a CI run until torn down. Mirrors `finance_report/finance_report/preview/` (#522
 generalized `libs/deploy/preview.py` off a per-service registry — see
-`libs/deploy_env_config.py::preview_service_config`).
+`libs/deploy/env_config.py::preview_service_config`).
 
 ## Files
 

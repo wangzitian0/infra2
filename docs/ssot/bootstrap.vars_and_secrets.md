@@ -274,7 +274,7 @@ invoke env.set KEY=VALUE --project=<project> --env=<env> --service=<service> --t
 invoke env.set KEY=VALUE --project=<project> --env=<env> --service=<service> --break-glass
 
 # 预览（masked，默认 Vault）
-invoke env.list-all --project=<project> --service=<service>
+invoke env.list-all --project=<project> --env=<env> --service=<service>
 
 # 查看 init/env_vars
 invoke env.init-status
@@ -304,8 +304,7 @@ invoke env.get POSTGRES_PASSWORD --project=platform --env=production --service=p
 
 ## 6. Python API
 
-密钥与机密供给能力的**实现真源**位于 [`libs/security/`](../../libs/security/README.md)（`libs/security/store.py`, `libs/security/supply.py`, `libs/security/prune.py`）。
-`libs/env.py` 和 `libs/secrets_supply.py` 保留作为向下兼容 PEP 484 门面薄壳；Vault token 取 `VAULT_TOKEN`（`VAULT_ROOT_TOKEN` 仅过渡别名）。
+密钥与机密供给能力的**实现真源**位于 [`libs/security/`](../../libs/security/README.md)（`libs/security/store.py`, `libs/security/supply.py`, `libs/security/prune.py`）。Vault token 取 `VAULT_TOKEN`（`VAULT_ROOT_TOKEN` 仅过渡别名）。
 
 ```python
 from libs.security import VaultSecrets, apply_secret_supply, resolve_vault_token
@@ -322,10 +321,10 @@ report = apply_secret_supply(service, "staging")  # 复制 / 生成 / 回写 / �
 # report.ok, report.changed, report.missing (只有名字，绝不泄露值)
 ```
 
-兼容导入（存量脚本）：
+直接从 `libs.security.store` 导入：
 ```python
-from libs.env import OpSecrets, get_secrets, generate_password
-from libs.secrets_supply import apply
+from libs.security.store import OpSecrets, get_secrets, generate_password
+from libs.security.supply import apply
 ```
 
 `Deployer.apply_secret_supply` 在 `pre_compose` 里对每个注册过的服务调用它；新服务只需把

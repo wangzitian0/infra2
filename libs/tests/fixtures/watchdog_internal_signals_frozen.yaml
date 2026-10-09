@@ -1,7 +1,7 @@
 # FROZEN pre-#543 handwritten `primary_owner: internal` section of
 # docs/ssot/watchdog-signals.yaml, captured verbatim (parsed form) the moment
 # the handwritten mirror was deleted in favor of derivation from ProbeFacet +
-# SignalFacet declarations (libs/watchdog_signal_entries.py).
+# SignalFacet declarations (libs/observability/signal_entries.py).
 #
 # PERMANENT regression anchor: libs/tests/test_watchdog_signal_entries.py
 # proves the derived entries stay field-level equivalent to this snapshot
@@ -500,7 +500,7 @@ signals:
   component: todo
   signal: todo-canary-status
   primary_owner: internal
-  severity: warning
+  severity: error
   cadence: 60s
   alert_threshold: 3 consecutive failures
 - signal_id: staging.todo-canary-status
@@ -508,6 +508,6 @@ signals:
   component: todo
   signal: todo-canary-status
   primary_owner: internal
-  severity: warning
+  severity: error
   cadence: 60s
   alert_threshold: 3 consecutive failures

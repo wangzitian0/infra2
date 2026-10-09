@@ -38,9 +38,12 @@ concurrency:
 jobs:
   apply:
     name: reconcile SigNoz alerts + dashboard
+    # The observability apply is a production change. Every run waits for the owner (#1125).
+    environment: production
     runs-on: ubuntu-latest
     env:
       ENV: production
+      DEPLOY_ENV: production
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
       SIGNOZ_API_KEY: ${{ secrets.SIGNOZ_API_KEY }}
     steps:

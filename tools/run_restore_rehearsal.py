@@ -20,15 +20,17 @@ import time
 from pathlib import Path
 from typing import Any
 
-from libs.backup_restore import (
+from libs.backup.rehearsal import (
     assert_manifest_is_rehearsable,
     assert_rehearsal_target,
     build_postgres_rehearsal_plan,
     materialize_artifact,
     run_postgres_restore_rehearsal,
 )
-from libs.backup.verification import latest_manifest_path
-from libs.backup_verification import load_backup_inventory
+from libs.backup.verification import (
+    latest_manifest_path,
+    load_backup_inventory,
+)
 
 #: `--service-id all`: every Postgres service that has rehearsal invariants.
 ALL_SERVICES = ("finance_report/postgres", "truealpha/postgres")

@@ -10,7 +10,7 @@ import pytest
 
 from infra2_sdk.secrets import SecretsError, WriteResult, vault_path
 
-from libs.secrets_registry import SERVICES, Service
+from libs.security.registry import SERVICES, Service
 from tools import secrets_prune
 
 
@@ -223,7 +223,7 @@ DEPLOYER_READS = {
 
 @pytest.mark.parametrize("service_id", sorted(DEPLOYER_READS))
 def test_the_prune_never_removes_a_key_a_deployer_reads(service_id):
-    from libs import secrets_registry
+    from libs.security import registry as secrets_registry
 
     project, _, name = service_id.partition("/")
     service = secrets_registry.lookup(project, name)

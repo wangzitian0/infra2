@@ -1,65 +1,34 @@
 ---
 name: smoke
-description: 30 秒极速冒烟验证。按从左到右快速失败原则，依次执行静态编译、核心单测与基础设施健康检查。改动代码后快速确认系统稳定。
+description: Step 4 of the five-step flow. Run a fast check in about 30 seconds after an edit. Compile, focused tests, then connectivity. Not a deep audit.
 ---
 
-# ⚡ /smoke — 30 秒快速冒烟验证协议
+# smoke: fast, cheap, honest
 
-本 Skill 提供极速反馈回路。在修改代码后 30 秒内跑通核心验证，确认变更未破坏系统基线。
+Smoke is the first guard after an edit. Use `audit` for depth and `close` for the exit gate.
 
-> **核心军规：从左到右快速失败 — "Fail fast left to right."**
-> 把成本最低、最容易失败的检查放最前面。严禁在常规修改中反复跑数分钟的全量慢测试。
+## Order (left to right, fail fast)
 
----
+1. **Compile or syntax** on the changed files only (`python -m py_compile`, `ruff check --select E,F`, `go build ./...`, `tsc --noEmit`).
+2. **Focused tests** that touch the change, with `-x`. Never run the full suite per round.
+   The owner stopped agents that waited minutes on slow CI. Cut slow tests and report what you cut.
+   Never invoke whole-repository test runners (`ci_runner.py all`, `check_suite_coverage.py`) during smoke.
+3. **Connectivity** of what the code depends on: credentials, services, MCP servers. Commands are in `local.md`.
 
-## 阶段矩阵（按序执行，遇错立停）
+Stop at the first red. Smoke reports the problem. It does not fix it, and it changes no file.
 
-### Phase 1: 静态检查与快速编译 (< 5 秒)
+## Rules that came from failures
 
-在启动任何运行时测试前，首先验证语法与类型完整性：
+- **Existence is not validity.** "The variable is set" and "the process is alive" prove nothing.
+  Call a read-only endpoint, or do not claim green.
+- **No `grep PONG` probes.** A string match hides truncation, token overflow, and silent downgrade.
+  A probe must check three things: exit code 0, wall time, and a non-empty payload of the expected shape.
+- **Skipped is not passed.** Report a check that did not run as `SKIPPED`. Do not count it green.
+- **Use the small model tier.** A smoke run with a large model or deep reasoning burns the rolling quota.
+  Put concrete model names and flags in `local.md`. They change often.
+- **Do not wait on slow CI.** When a run exceeds the budget, run the focused checks yourself and report the CI status separately.
 
-```bash
-# Python
-ruff check . && mypy <modified_module>
+## Report
 
-# TypeScript / Go
-npm run typecheck || go build ./...
-```
-
-- **判据**：退出码必须为 0。有编译报错或类型阻断立即修复，不进入下阶段。
-
----
-
-### Phase 2: 改动局部核心单测 (< 15 秒)
-
-仅运行直接覆盖修改文件或核心路径的关键测试：
-
-```bash
-# 仅针对受影响的模块运行聚焦测试
-pytest <path/to/focused_test.py> -v
-```
-
-1. **拒绝全量慢跑**：严禁在单轮循环中执行耗时数分钟的完整矩阵测试。
-2. **保护外部环境**：单元测试严禁向真实生产端口发写请求，严禁清空共享开发数据库。
-3. **测试必须可证伪**：杜绝无断言测试、恒真断言（`assert result is not None`）或被条件语句跳过的空测试。
-
----
-
-### Phase 3: 基础设施与运行时健康探针 (< 10 秒)
-
-验证服务进程、核心端口与依赖组件的连通性：
-
-```bash
-# 检查本地守护进程与 Socket 连通性
-curl -fsS http://localhost:<port>/health || true
-```
-
-- **判据**：依赖的服务必须响应有效健康状态，无拒绝连接或死锁超时。
-
----
-
-## 收尾与耗时判定
-
-- **总耗时上限**：全套流程必须在 **30 秒** 内完成并返回明确信号。
-- **通过信号**：静态检查 PASS、核心单测 PASS、连通性探针 PASS。
-- **失败处置**：立即利用最小重现样本修复问题，重新触发本 Skill。
+One table, one row per check: result (`PASS`, `FAIL`, `SKIPPED`), seconds, and the count (`N passed`).
+Add the total time and one sentence: which row is red.

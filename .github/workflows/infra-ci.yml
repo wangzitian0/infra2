@@ -169,7 +169,7 @@ jobs:
 
       - name: Install lint dependencies
         # Install PyYAML and infra2-sdk for compose resource and image pin validation.
-        run: python3 -m pip install --quiet pyyaml "$(grep -oE 'infra2-sdk @ https://[^"]+' pyproject.toml)"
+        run: python3 -m pip install --quiet pyyaml "$(python3 tools/sdk_requirement.py)"
 
       - name: Lint compose resource limits and image pins
         # ops.standards.md §5 and §6: memory ceilings and no bare :latest tags across all compose files.
@@ -223,10 +223,10 @@ jobs:
       - name: Install dependencies
         run: |
           cd ${{ github.workspace }}
-          # libs/env.py and libs/secrets_supply.py import infra2-sdk; install the exact
-          # wheel pyproject pins so this job validates what the runner runs.
+          # libs/env.py and libs/secrets_supply.py import infra2-sdk; install the wheel
+          # uv.lock pins, hash-verified, so this job validates what the runner runs (#1115).
           uv pip install --system invoke httpx python-dotenv rich \
-            "$(grep -oE 'infra2-sdk @ https://[^"]+' pyproject.toml)"
+            "$(python tools/sdk_requirement.py)"
 
       # Fail fast left to right: run sub-second static, SSOT and drift gates first
       # so documentation/contract drift fails in <5 seconds rather than waiting for
@@ -456,10 +456,10 @@ jobs:
       - name: Install dependencies
         run: |
           cd ${{ github.workspace }}
-          # libs/env.py and libs/secrets_supply.py import infra2-sdk; install the exact
-          # wheel pyproject pins so this job validates what the runner runs.
+          # libs/env.py and libs/secrets_supply.py import infra2-sdk; install the wheel
+          # uv.lock pins, hash-verified, so this job validates what the runner runs (#1115).
           uv pip install --system invoke httpx python-dotenv rich \
-            "$(grep -oE 'infra2-sdk @ https://[^"]+' pyproject.toml)"
+            "$(python tools/sdk_requirement.py)"
 
       - name: Validate Deployer classes and service facet matrix
         run: |

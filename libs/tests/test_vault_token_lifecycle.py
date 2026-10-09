@@ -10,7 +10,9 @@ from types import SimpleNamespace
 import types
 
 
-from libs.vault_tokens import policy_name
+import pytest
+
+from libs.security.vault_tokens import policy_name
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -147,9 +149,9 @@ class FakeDokployTokenDeploy:
 
 
 def _install_fake_dokploy(monkeypatch, client: FakeDokployTokenDeploy) -> None:
-    dokploy_module = types.ModuleType("libs.dokploy")
+    dokploy_module = types.ModuleType("libs.deploy.dokploy_client")
     dokploy_module.get_dokploy = lambda *_, **__: client
-    monkeypatch.setitem(sys.modules, "libs.dokploy", dokploy_module)
+    monkeypatch.setitem(sys.modules, "libs.deploy.dokploy_client", dokploy_module)
 
 
 def test_policy_names_are_env_scoped() -> None:
@@ -221,7 +223,7 @@ def test_configure_dokploy_approle_injects_creds_and_redeploys(monkeypatch) -> N
     )
     _install_fake_dokploy(monkeypatch, client)
     monkeypatch.setattr(
-        "libs.common.get_env",
+        "libs.core.environ.get_env",
         lambda: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"},
     )
     monkeypatch.setenv("DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS", "0")
@@ -252,12 +254,310 @@ def test_configure_dokploy_approle_returns_false_when_service_absent(
 
     _install_fake_dokploy(monkeypatch, _NoCompose())
     monkeypatch.setattr(
-        "libs.common.get_env",
+        "libs.core.environ.get_env",
         lambda: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"},
     )
 
     ok = tasks._configure_dokploy_approle(FakeContext(), "ghost", "r", "s", "platform")
     assert ok is False
+
+
+class FakeApproleVault:
+    """A `c` for setup_approle. It records each Vault step in a shared event list."""
+
+    ROLE = "platform-production-todo"
+
+    def __init__(
+        self,
+        events: list[str],
+        *,
+        prior: str = '["acc-old-1", "acc-old-2"]',
+        prior_ok: bool = True,
+        destroy_ok: bool = True,
+    ) -> None:
+        self.events = events
+        self.prior = prior
+        self.prior_ok = prior_ok
+        self.destroy_ok = destroy_ok
+
+    def run(self, cmd, **_kwargs):
+        def res(ok=True, stdout=""):
+            return SimpleNamespace(ok=ok, stdout=stdout, stderr="")
+
+        if cmd == "vault auth list -format=json":
+            return res(stdout=json.dumps({"approle/": {}}))
+        if cmd == f"vault list -format=json auth/approle/role/{self.ROLE}/secret-id":
+            self.events.append("list")
+            return res(ok=self.prior_ok, stdout=self.prior)
+        if cmd == f"vault read -format=json auth/approle/role/{self.ROLE}/role-id":
+            return res(stdout=json.dumps({"data": {"role_id": "role-1"}}))
+        if (
+            cmd
+            == f"vault write -f -format=json auth/approle/role/{self.ROLE}/secret-id"
+        ):
+            self.events.append("issue")
+            return res(
+                stdout=json.dumps(
+                    {
+                        "data": {
+                            "secret_id": "secret-new",
+                            "secret_id_accessor": "acc-new",
+                        }
+                    }
+                )
+            )
+        prefix = (
+            f"vault write auth/approle/role/{self.ROLE}/secret-id-accessor/destroy "
+        )
+        if cmd.startswith(prefix):
+            self.events.append("destroy:" + cmd.removeprefix(prefix))
+            return res(ok=self.destroy_ok)
+        return res()
+
+
+def _run_setup_approle(
+    monkeypatch,
+    vault: FakeApproleVault,
+    *,
+    configure_ok: bool = True,
+    refresh_ok: bool = True,
+    deploy: bool = True,
+):
+    """Run setup_approle for platform/todo against the fakes. Returns the Exit or None."""
+    tasks, exit_cls = _load_vault_tasks(monkeypatch)
+    monkeypatch.setenv("VAULT_ROOT_TOKEN", "root-token")
+    monkeypatch.setattr(
+        tasks,
+        "get_env",
+        lambda: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"},
+    )
+
+    def configure(_c, service, role_id, secret_id, project):
+        vault.events.append(f"configure:{service}:{role_id}:{secret_id}:{project}")
+        return configure_ok
+
+    def refresh(role_id, secret_id):
+        vault.events.append(f"refresh:{role_id}:{secret_id}")
+        return refresh_ok
+
+    monkeypatch.setattr(tasks, "_configure_dokploy_approle", configure)
+    monkeypatch.setattr(tasks, "_refresh_role_consumers", refresh)
+    try:
+        tasks.setup_approle.body(
+            vault, project="platform", service="todo", deploy=deploy
+        )
+    except exit_cls as exc:
+        return exc
+    return None
+
+
+def test_reissue_destroys_earlier_secret_ids_after_every_consumer_runs_the_new_one(
+    monkeypatch,
+) -> None:
+    """#1070: a re-issue ends the earlier secret ids. The destroy comes only after the
+    target compose and every other consumer of the role run the new secret id, and
+    it never touches the new one."""
+    events: list[str] = []
+    failure = _run_setup_approle(monkeypatch, FakeApproleVault(events))
+
+    assert failure is None
+    assert events == [
+        "list",
+        "issue",
+        "configure:todo:role-1:secret-new:platform",
+        "refresh:role-1:secret-new",
+        "destroy:secret_id_accessor=acc-old-1",
+        "destroy:secret_id_accessor=acc-old-2",
+    ]
+
+
+def test_reissue_lists_the_earlier_secret_ids_before_it_issues_the_new_one(
+    monkeypatch,
+) -> None:
+    """#1070: a list taken after the issue would contain the new accessor. The list of
+    accessors to destroy must exclude the new one even then."""
+    events: list[str] = []
+    vault = FakeApproleVault(events, prior='["acc-old-1", "acc-new"]')
+    failure = _run_setup_approle(monkeypatch, vault)
+
+    assert failure is None
+    assert events.index("list") < events.index("issue")
+    assert "destroy:secret_id_accessor=acc-new" not in events
+    assert "destroy:secret_id_accessor=acc-old-1" in events
+
+
+def test_reissue_of_a_role_with_no_secret_id_destroys_nothing(monkeypatch) -> None:
+    """#1070: `vault list -format=json` prints `{}` and exits 2 for a role with no
+    secret id. That is an empty list, not a failure."""
+    events: list[str] = []
+    vault = FakeApproleVault(events, prior="{}", prior_ok=False)
+    failure = _run_setup_approle(monkeypatch, vault)
+
+    assert failure is None
+    assert events[:2] == ["list", "issue"]
+    assert not [e for e in events if e.startswith("destroy:")]
+
+
+def test_a_failed_target_deploy_destroys_nothing(monkeypatch) -> None:
+    """#1070: when the target compose does not run the new secret id, its containers
+    still log in with an earlier one. The task destroys nothing and exits 1."""
+    events: list[str] = []
+    failure = _run_setup_approle(
+        monkeypatch, FakeApproleVault(events), configure_ok=False
+    )
+
+    assert failure is not None and failure.code == 1
+    assert not [e for e in events if e.startswith(("destroy:", "refresh:"))]
+
+
+def test_a_failed_consumer_refresh_destroys_nothing(monkeypatch) -> None:
+    """#1070: a PR preview copies the AppRole credentials of its source environment.
+    When one consumer keeps an earlier secret id, the task destroys nothing."""
+    events: list[str] = []
+    failure = _run_setup_approle(
+        monkeypatch, FakeApproleVault(events), refresh_ok=False
+    )
+
+    assert failure is not None and failure.code == 1
+    assert not [e for e in events if e.startswith("destroy:")]
+
+
+def test_a_failed_destroy_exits_one_and_names_the_role(monkeypatch, capsys) -> None:
+    """#1070: an earlier secret id that stays valid is a failed re-issue, not a warning."""
+    events: list[str] = []
+    failure = _run_setup_approle(
+        monkeypatch, FakeApproleVault(events, destroy_ok=False)
+    )
+
+    assert failure is not None and failure.code == 1
+    assert "destroy:secret_id_accessor=acc-old-1" in events
+    out = capsys.readouterr().out
+    assert "platform/todo: secret_id_destroy_failed" in out
+    assert (
+        f"{FakeApproleVault.ROLE}: failed to destroy secret id accessor acc-old-1"
+        in out
+    )
+
+
+def test_an_unreadable_secret_id_list_issues_nothing(monkeypatch) -> None:
+    """#1070: without the earlier accessors the task cannot end them later, so it
+    issues no new secret id and exits 1."""
+    events: list[str] = []
+    vault = FakeApproleVault(events, prior="", prior_ok=False)
+    failure = _run_setup_approle(monkeypatch, vault)
+
+    assert failure is not None and failure.code == 1
+    assert events == ["list"]
+
+
+def test_no_deploy_issues_no_secret_id(monkeypatch) -> None:
+    """#1070: with deploy=False nothing stores or prints a secret id, so issuing one
+    only adds a valid credential that no service uses."""
+    events: list[str] = []
+    failure = _run_setup_approle(monkeypatch, FakeApproleVault(events), deploy=False)
+
+    assert failure is None
+    assert events == []
+
+
+def test_secret_id_accessors_rejects_a_value_unsafe_for_the_shell(monkeypatch) -> None:
+    """#1070: an accessor goes into a shell command, so only the UUID shape passes."""
+    tasks, _exit_cls = _load_vault_tasks(monkeypatch)
+    vault = FakeApproleVault([], prior='["acc-1; rm -rf /"]')
+
+    assert tasks._secret_id_accessors(vault, {}, FakeApproleVault.ROLE) is None
+    vault.prior = '["2c9c-41f7-a1d0"]'
+    assert tasks._secret_id_accessors(vault, {}, FakeApproleVault.ROLE) == [
+        "2c9c-41f7-a1d0"
+    ]
+
+
+class FakeDokployConsumers:
+    """Dokploy with one target compose, one preview of the same role, one other role."""
+
+    def __init__(self, composes: dict[str, str]) -> None:
+        self.envs = dict(composes)
+        self.updated: dict[str, dict[str, str]] = {}
+        self.deployed: list[str] = []
+
+    def list_projects(self) -> list[dict]:
+        return [
+            {
+                "name": "finance_report",
+                "environments": [
+                    {
+                        "name": "staging",
+                        "compose": [{"composeId": "app", "name": "app"}],
+                    },
+                    {
+                        "name": "preview",
+                        "compose": [
+                            {"composeId": cid, "name": cid}
+                            for cid in self.envs
+                            if cid != "app"
+                        ],
+                    },
+                ],
+            }
+        ]
+
+    def get_compose_env(self, compose_id: str) -> str:
+        return self.envs[compose_id]
+
+    def update_compose_env(self, compose_id, *, env_vars=None, env_str=None):
+        self.updated[compose_id] = dict(env_vars or {})
+        lines = [
+            line
+            for line in self.envs[compose_id].splitlines()
+            if line.partition("=")[0] not in (env_vars or {})
+        ]
+        lines += [f"{k}={v}" for k, v in (env_vars or {}).items()]
+        self.envs[compose_id] = "\n".join(lines) + "\n"
+
+
+def test_refresh_role_consumers_redeploys_each_compose_on_an_earlier_secret_id(
+    monkeypatch,
+) -> None:
+    """#1070: every compose that logs in as the role and holds another secret id gets
+    the new one and a redeploy. Composes of other roles stay untouched."""
+    tasks, _exit_cls = _load_vault_tasks(monkeypatch)
+    client = FakeDokployConsumers(
+        {
+            "app": "VAULT_ROLE_ID=role-1\nVAULT_SECRET_ID=secret-new\n",
+            "report-pr-7": "ENV=pr-7\nVAULT_ROLE_ID=role-1\nVAULT_SECRET_ID=secret-old\n",
+            "other": "VAULT_ROLE_ID=role-2\nVAULT_SECRET_ID=secret-old\n",
+        }
+    )
+    monkeypatch.setattr(tasks, "_dokploy_client", lambda: (client, "staging"))
+    monkeypatch.setattr(
+        tasks,
+        "_deploy_compose_with_record_check",
+        lambda _client, compose_id: client.deployed.append(compose_id),
+    )
+
+    assert tasks._refresh_role_consumers("role-1", "secret-new") is True
+    assert client.updated == {"report-pr-7": {"VAULT_SECRET_ID": "secret-new"}}
+    assert client.deployed == ["report-pr-7"]
+
+
+def test_refresh_role_consumers_fails_when_a_redeploy_fails(monkeypatch) -> None:
+    """#1070: a consumer without a new `done` deployment record still runs the earlier
+    secret id, so the refresh reports failure."""
+    tasks, _exit_cls = _load_vault_tasks(monkeypatch)
+    client = FakeDokployConsumers(
+        {
+            "app": "VAULT_ROLE_ID=role-1\nVAULT_SECRET_ID=secret-new\n",
+            "report-pr-7": "VAULT_ROLE_ID=role-1\nVAULT_SECRET_ID=secret-old\n",
+        }
+    )
+    monkeypatch.setattr(tasks, "_dokploy_client", lambda: (client, "staging"))
+
+    def stale(_client, _compose_id):
+        raise RuntimeError("no new deployment record")
+
+    monkeypatch.setattr(tasks, "_deploy_compose_with_record_check", stale)
+
+    assert tasks._refresh_role_consumers("role-1", "secret-new") is False
 
 
 def _policy_paths() -> set[str]:
@@ -294,3 +594,177 @@ def test_policy_grants_metadata_list_for_service_secrets():
         assert any(_policy_matches(g, svc) for g in paths), (
             f"no metadata list grant for {svc}"
         )
+
+
+def _consumers_fixture(monkeypatch, envs: dict[str, str], deploy=None):
+    tasks, _exit_cls = _load_vault_tasks(monkeypatch)
+    client = FakeDokployConsumers(envs)
+    monkeypatch.setattr(tasks, "_dokploy_client", lambda: (client, "staging"))
+    monkeypatch.setattr(
+        tasks,
+        "_deploy_compose_with_record_check",
+        deploy or (lambda _client, compose_id: client.deployed.append(compose_id)),
+    )
+    return tasks, client
+
+
+def test_refresh_role_consumers_reports_every_blocked_consumer(
+    monkeypatch, capsys
+) -> None:
+    """#1070: one failed preview must not hide the others. The task tries every
+    consumer and names each one that still holds an earlier secret id."""
+    attempted: list[str] = []
+
+    def deploy(_client, compose_id):
+        attempted.append(compose_id)
+        raise RuntimeError("no new deployment record")
+
+    tasks, _client = _consumers_fixture(
+        monkeypatch,
+        {
+            "app": "VAULT_ROLE_ID=role-1\nVAULT_SECRET_ID=secret-new\n",
+            "report-pr-7": "VAULT_ROLE_ID=role-1\nVAULT_SECRET_ID=secret-old\n",
+            "report-pr-8": "VAULT_ROLE_ID=role-1\nVAULT_SECRET_ID=secret-old\n",
+        },
+        deploy,
+    )
+
+    assert tasks._refresh_role_consumers("role-1", "secret-new") is False
+    assert attempted == ["report-pr-7", "report-pr-8"]
+    out = capsys.readouterr().out
+    assert (
+        "finance_report/preview/report-pr-7, finance_report/preview/report-pr-8" in out
+    )
+
+
+def test_refresh_role_consumers_fails_when_an_earlier_secret_id_comes_back(
+    monkeypatch,
+) -> None:
+    """#1070: a deploy that read the earlier env can write it back after the scan.
+    The second read before the destroy must catch it."""
+
+    def deploy(client, compose_id):
+        client.deployed.append(compose_id)
+        client.envs[compose_id] = "VAULT_ROLE_ID=role-1\nVAULT_SECRET_ID=secret-old\n"
+
+    tasks, client = _consumers_fixture(
+        monkeypatch,
+        {
+            "app": "VAULT_ROLE_ID=role-1\nVAULT_SECRET_ID=secret-new\n",
+            "report-pr-7": "VAULT_ROLE_ID=role-1\nVAULT_SECRET_ID=secret-old\n",
+        },
+    )
+    monkeypatch.setattr(tasks, "_deploy_compose_with_record_check", deploy)
+
+    assert tasks._refresh_role_consumers("role-1", "secret-new") is False
+    assert client.deployed == ["report-pr-7"]
+
+
+def test_refresh_role_consumers_fails_when_the_scan_misses_the_target(
+    monkeypatch,
+) -> None:
+    """#1070: the target already holds the new secret id. A scan that does not see
+    it is incomplete, so the refresh fails instead of reporting zero consumers."""
+    tasks, client = _consumers_fixture(
+        monkeypatch, {"app": "VAULT_ROLE_ID=role-2\nVAULT_SECRET_ID=secret-x\n"}
+    )
+
+    assert tasks._refresh_role_consumers("role-1", "secret-new") is False
+    assert client.updated == {}
+
+
+def test_refresh_role_consumers_fails_on_a_compose_without_id(monkeypatch) -> None:
+    """#1070: a compose the scan cannot read could be a consumer."""
+    tasks, client = _consumers_fixture(
+        monkeypatch, {"app": "VAULT_ROLE_ID=role-1\nVAULT_SECRET_ID=secret-new\n"}
+    )
+    projects = client.list_projects()
+    projects[0]["environments"][0]["compose"].append({"name": "no-id"})
+    monkeypatch.setattr(client, "list_projects", lambda: projects)
+
+    assert tasks._refresh_role_consumers("role-1", "secret-new") is False
+
+
+def test_refresh_role_consumers_fails_when_an_env_read_fails(monkeypatch) -> None:
+    """#1070: an unreadable env could hide a consumer, even when the target reads."""
+    tasks, client = _consumers_fixture(
+        monkeypatch,
+        {
+            "app": "VAULT_ROLE_ID=role-1\nVAULT_SECRET_ID=secret-new\n",
+            "report-pr-7": "",
+        },
+    )
+
+    client.envs["report-pr-7"] = "VAULT_ROLE_ID=role-1\nVAULT_SECRET_ID=secret-old\n"
+    read = client.get_compose_env
+
+    def broken(compose_id):
+        if compose_id == "report-pr-7":
+            raise RuntimeError("compose.one: 502")
+        return read(compose_id)
+
+    monkeypatch.setattr(client, "get_compose_env", broken)
+
+    assert tasks._refresh_role_consumers("role-1", "secret-new") is False
+    assert client.updated == {}
+
+
+def test_env_value_reads_quoted_and_spaced_values(monkeypatch) -> None:
+    """#1070: a quoted value must compare equal to the bare role id."""
+    tasks, _exit_cls = _load_vault_tasks(monkeypatch)
+    env = "A=1\nVAULT_ROLE_ID=\"role-1\"\n VAULT_SECRET_ID = 's-1'\n"
+
+    assert tasks._env_value(env, "VAULT_ROLE_ID") == "role-1"
+    assert tasks._env_value(env, "VAULT_SECRET_ID") == "s-1"
+    assert tasks._env_value(env, "MISSING") == ""
+
+
+def test_env_value_rejects_a_repeated_key(monkeypatch) -> None:
+    """#1070: Dokploy merges `VAULT_SECRET_ID=new` next to `VAULT_SECRET_ID =old`
+    and the container reads the last line. The first line cannot stand for both."""
+    tasks, _exit_cls = _load_vault_tasks(monkeypatch)
+    env = "VAULT_SECRET_ID =secret-old\nVAULT_SECRET_ID=secret-new\n"
+
+    with pytest.raises(ValueError, match="occurs 2 times"):
+        tasks._env_value(env, "VAULT_SECRET_ID")
+
+
+def test_setup_approle_handles_the_iac_runner_last(monkeypatch) -> None:
+    """#1070: a run inside the runner (SOP-007) stops when the runner redeploys, so
+    every other role completes first."""
+    tasks, exit_cls = _load_vault_tasks(monkeypatch)
+    monkeypatch.setenv("VAULT_ROOT_TOKEN", "root-token")
+    monkeypatch.setattr(
+        tasks,
+        "get_env",
+        lambda: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"},
+    )
+    order: list[str] = []
+    monkeypatch.setattr(
+        tasks,
+        "_configure_dokploy_approle",
+        lambda _c, service, *_a: order.append(service) or False,
+    )
+
+    monkeypatch.setattr(tasks, "_secret_id_accessors", lambda *_a: [])
+
+    class AnyRoleVault:
+        def run(self, cmd, **_kwargs):
+            out = ""
+            if cmd == "vault auth list -format=json":
+                out = json.dumps({"approle/": {}})
+            elif cmd.endswith("/role-id"):
+                out = json.dumps({"data": {"role_id": "r"}})
+            elif cmd.endswith("/secret-id"):
+                out = json.dumps(
+                    {"data": {"secret_id": "s", "secret_id_accessor": "a"}}
+                )
+            return SimpleNamespace(ok=True, stdout=out, stderr="")
+
+    try:
+        tasks.setup_approle.body(AnyRoleVault(), deploy=True)
+    except exit_cls:
+        pass
+
+    assert "iac_runner" in order and len(order) > 1
+    assert order[-1] == "iac_runner"

@@ -31,14 +31,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # runnable as a
 from infra2_sdk.ci import validate_manifest_offline  # noqa: E402
 from infra2_sdk.secrets import render_agent_policy, render_agent_template  # noqa: E402
 
-from libs.secrets_registry import (  # noqa: E402
+from libs.security.registry import (  # noqa: E402
     SERVICES,
     Service,
     load_manifest,
     manifest_file,
 )
-from libs.secrets_registry import ROOT as _REGISTRY_ROOT  # noqa: E402
-from libs.secrets_registry import merged_manifest as _merged_manifest  # noqa: E402
+from libs.security.registry import ROOT as _REGISTRY_ROOT  # noqa: E402
+from libs.security.registry import merged_manifest as _merged_manifest  # noqa: E402
 
 ROOT = _REGISTRY_ROOT
 

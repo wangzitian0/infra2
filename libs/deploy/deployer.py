@@ -13,8 +13,13 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from invoke import task
 
-from libs.core.environ import get_env, service_domain, validate_env
-from libs.console import (
+from libs.core.environ import (
+    EnvironmentNotSetError,
+    get_env,
+    service_domain,
+    validate_env,
+)
+from libs.deploy.console import (
     env_vars,
     error,
     header,
@@ -170,7 +175,7 @@ class Deployer:
     # Override the shared INTERNAL_DOMAIN entirely for this service (e.g. a dedicated
     # product domain instead of the platform's shared one). None = use whatever domain
     # the deploy request/caller passes in (today's behavior for every existing service).
-    # Read by libs.service_registry / libs.app_deploy_request, not by this class itself —
+    # Read by libs.core.registry / libs.deploy.app_deploy_request, not by this class itself —
     # a service with its own compose-level Traefik Host() rules (like subdomain=None
     # above) still needs its INTERNAL_DOMAIN substitution to resolve to the right zone.
     domain: str = None
@@ -190,10 +195,10 @@ class Deployer:
     runtime_only_config_keys: frozenset[str] = frozenset()
 
     # --- Service facets (#541 convergence): the Deployer subclass is the SINGLE
-    # declaration point for per-service operational facts; libs.service_registry
+    # declaration point for per-service operational facts; libs.core.registry
     # .service_attrs() is the single derivation function. Declarations must be
     # LITERAL constructor calls (they are read via AST, never imported) — see
-    # libs/service_facets.py for the constraint and field docs.
+    # libs/core/facets.py for the constraint and field docs.
     probes: tuple[ProbeFacet, ...] = ()
     public_routes: tuple[PublicRouteFacet, ...] = ()
     signals: tuple[SignalFacet, ...] = ()
@@ -209,7 +214,29 @@ class Deployer:
 
     @classmethod
     def env(cls) -> dict[str, str | None]:
+        """The deployment config of the process environment.
+
+        Raises ``EnvironmentNotSetError`` when the process has none: production is
+        never the default (#1039).
+        """
         return get_env()
+
+    @classmethod
+    def _env_for(cls, env_name: str | None) -> dict[str, str | None]:
+        """The deployment config for a call that may name its target environment.
+
+        The process environment wins when it exists: it carries the operator's
+        ENV_SUFFIX and DATA_PATH overrides. A caller that names its target, such as
+        ``libs.deploy.promote`` (it deploys staging and production from a CI process
+        that has no INFRA_ENVIRONMENT), then needs no process environment: the named
+        target stands in. With neither, ``EnvironmentNotSetError`` rises (#1039).
+        """
+        try:
+            return cls.env()
+        except EnvironmentNotSetError:
+            if not env_name:
+                raise
+            return get_env(env_name)
 
     @classmethod
     def project_name(cls, env: dict | str | None = None) -> str:
@@ -319,7 +346,7 @@ class Deployer:
         (unlike the legacy invoke <service>.sync subprocess, which always runs
         with ENV pre-set for its whole lifetime). None keeps today's behavior.
         """
-        e = cls.env()
+        e = cls._env_for(env)
         # Use cls.project if PROJECT env not set
         project = cls.project_name(e)
         service = getattr(cls, "vault_service_name", None) or cls.service
@@ -346,7 +373,7 @@ class Deployer:
         """
         from libs.security import registry as secrets_registry
 
-        e = cls.env()
+        e = cls._env_for(env)
         effective_env = env or e.get("ENV", "production")
         project = cls.project_name(e)
 
@@ -393,7 +420,7 @@ class Deployer:
         from libs.security import registry as secrets_registry
         from libs.security import supply as secrets_supply
 
-        e = cls.env()
+        e = cls._env_for(env)
         env_name = env or e.get("ENV", "production")
         service = secrets_registry.lookup(cls.project_name(e), cls.service)
         if service is None:
@@ -1139,16 +1166,16 @@ class Deployer:
         compose_text = Path(cls.compose_path).read_text(encoding="utf-8")
         missing = check_approle_creds(compose_text, effective_env)
         if missing:
-            e = cls.env()
             cred_missing = [
                 key for key in ("VAULT_ROLE_ID", "VAULT_SECRET_ID") if key in missing
             ]
             if cred_missing:
+                e = cls.env()
                 raise ValueError(
                     f"{cls.service}: compose uses Vault AppRole auth but "
                     f"{', '.join(cred_missing)} is missing from the deploy env — the vault-agent "
                     "would crash-loop on 'VAULT_ROLE_ID and VAULT_SECRET_ID are required'. "
-                    f"Run `DEPLOY_ENV={e.get('ENV', 'production')} invoke vault.setup-approle "
+                    f"Run `DEPLOY_ENV={e['ENV']} invoke vault.setup-approle "
                     f"--project {cls.project_name(e)} --service {cls.service} --deploy` before "
                     "deploying."
                 )

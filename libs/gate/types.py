@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import posixpath
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
@@ -14,7 +15,9 @@ ABSENT = "ABSENT"
 DEFAULT_REPO = "wangzitian0/infra2"
 
 QUIET_MINUTES = 12
-SETTLE_MINUTES = 3  # event policy: after the review of the head, not after the push
+# Event policy: after the review of the head (or, for a bot-opened PR, its
+# independent verification comment), not after the push (#1075).
+SETTLE_SECONDS = 60
 COPILOT_BOT_ID = "BOT_kgDOCnlnWA"
 AUTOMATED_REVIEWERS = frozenset({"copilot-pull-request-reviewer"})
 
@@ -52,6 +55,7 @@ GREEN_BUCKETS = frozenset({"pass", "skipping"})
 GREEN_STATES = frozenset({"SUCCESS", "SKIPPED", "NEUTRAL"})
 MAX_REVIEW_THREADS = 100
 MAX_THREAD_COMMENTS = 20
+MAX_PR_COMMENTS = 100  # newest PR conversation comments read for verification
 NO_CHECKS_REPORTED = "no checks reported"
 GH_TIMEOUT_S = 200
 
@@ -106,6 +110,17 @@ def _is_local_root_repo(repo: str) -> bool:
     return _repo_slug(repo).lower() == _repo_slug(DEFAULT_REPO).lower()
 
 
+def _normalized_path(path: str) -> str:
+    """A repository path in one comparable form (#1138): white space stripped, `/`
+    separators, no `.`, `..` or empty parts, no leading `./` or `/`, and case folded.
+    The gate host's disk does not tell `Tools/x.py` from `tools/x.py`."""
+    text = path.strip().replace("\\", "/")
+    if not text:
+        return ""
+    normal = posixpath.normpath(text).lstrip("/")
+    return "" if normal == "." else normal.casefold()
+
+
 def _as_list(value: object) -> list[str]:
     """A YAML field that accepts a string or a list, read as a list either way."""
     if value is None:
@@ -146,6 +161,13 @@ class HeadFacts:
     absent_fields: tuple[str, ...] = ()
     reviews: tuple[tuple[str, str, float], ...] = ()
     body: str = ""
+    author: tuple[str, str] = ("", "")  # (GraphQL __typename, login); empty if unread
+    # PR conversation comments: (body, epoch of the current text, i.e. the last edit
+    # or else the creation). Empty when the list is missing or unreadable.
+    comments: tuple[tuple[str, float], ...] = ()
+    # Production lock (#1138). None: not read. (): the lock holds and the head's
+    # workflows satisfy the production contract. Otherwise one reason per failure.
+    lock_failures: tuple[str, ...] | None = None
 
     def reviews_on_head(self) -> tuple[tuple[str, str, float], ...]:
         return tuple(r for r in self.reviews if r[1] == self.head_sha)

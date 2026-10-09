@@ -19,7 +19,7 @@ Docker-network endpoint to SigNoz.
 
 ```bash
 uv run invoke env.set FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/<token> --project=platform --env=production --service=alerting
-uv run invoke vault.setup-approle --project=platform --service=alerting
+DEPLOY_ENV=<env> uv run invoke vault.setup-approle --project=platform --service=alerting
 uv run python -m tools.deploy_v2 --service platform/alerting --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 uv run invoke alerting.status
 ```
@@ -31,7 +31,7 @@ uv run invoke env.set ALERT_DELIVERY_MODE=feishu_app --project=platform --env=pr
 uv run invoke env.set FEISHU_APP_ID=cli_xxx --project=platform --env=production --service=alerting --credential-type=root_vars
 uv run invoke env.set FEISHU_APP_SECRET=<secret> --project=platform --env=production --service=alerting --credential-type=root_vars
 uv run invoke env.set FEISHU_CHAT_ID=<chat_id> --project=platform --env=production --service=alerting --credential-type=root_vars
-uv run invoke vault.setup-approle --project=platform --service=alerting
+DEPLOY_ENV=<env> uv run invoke vault.setup-approle --project=platform --service=alerting
 uv run python -m tools.deploy_v2 --service platform/alerting --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 uv run invoke alerting.status
 ```
@@ -464,7 +464,7 @@ into one of two streams per probe group:
   `error` (P1), as is its cascade root `openpanel-api-http`: those failures lose
   data (`docs/ssot/ops.observability.md` §3/§5). A payload that covers several
   failing probes carries the most severe of their severities
-  (`libs.infra_probes.group_severity`), not the first one's. A round-trip that
+  (`libs.observability.probes.group_severity`), not the first one's. A round-trip that
   has passed at least once since the runner started goes here as soon as it fails. One that has **never** passed goes here after
   `INFRA_PROBE_NEVER_GREEN_ESCALATION_FAILURES` (3) consecutive failed runs spanning
   `INFRA_PROBE_NEVER_GREEN_ESCALATION_SECONDS` (900). A failing round-trip re-runs

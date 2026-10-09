@@ -32,19 +32,19 @@ reusable logic belongs in `libs/` (see the division-of-labor note below):
 (container `platform-alerting-probes`). Everything resident runs inside its
 loop: the minute-tier service probes (`INFRA_PROBE_SPECS`), the public-route
 probes (`PUBLIC_ROUTE_PROBE_SPECS`), and the `ResidentWatcher` plugins
-(`libs/resident_watchers.py` — container-breakdown watch and the deploy-queue
+(`libs/observability/watchers/resident.py` — container-breakdown watch and the deploy-queue
 guard, each self-paced on its own interval, failure-isolated, and covered by
 the runner's healthcheck/heartbeat).
 
 Adding resident behavior means adding a watcher plugin in `libs/` and
-registering it in `libs/resident_watchers.py::build_watchers` — NOT a new
+registering it in `libs/observability/watchers/resident.py::build_watchers` — NOT a new
 sidecar, compose service, or standalone loop. A new alert path must register
 its signal in `docs/ssot/watchdog-signals.yaml` (internal probe signals derive
 automatically from the service's `ProbeFacet`/`SignalFacet` declarations);
 `tools/no_new_wheels_lint.py` blocks CI otherwise.
 
 `app_deploy_request.py` is the thin cross-repository adapter in front of `deploy_v2`.
-`libs/app_deploy_request.py` deserializes `infra2_sdk.deploy.DeployRequest`, validates
+`libs/deploy/app_deploy_request.py` deserializes `infra2_sdk.deploy.DeployRequest`, validates
 source authority and immutable coordinates, remotely verifies Production run/review evidence,
 and selects the released IaC ref; the tool only wires argv/env and invokes the existing deploy
 front door. There is no CLI bypass for Production evidence. Dokploy/Vault mutation stays in
@@ -99,7 +99,7 @@ also enforces compose↔inventory equality and registry-derived `service_id` val
 - **`tools/`** — thin entry points: argv parsing, env wiring, exit codes.
   A tool that grows real logic should push it down into `libs/` so it gets
   covered by `libs/tests` (pattern: `tools/deploy_guard_audit.py` →
-  `libs/deploy_dependencies.py`). Several older scripts still carry embedded logic —
+  `libs/deploy/dependencies.py`). Several older scripts still carry embedded logic —
   treat that as debt to sink, not a pattern to copy.
 
 ## Runner (invoke namespaces)
@@ -303,7 +303,7 @@ uv run python tools/backup_restore_rehearsal.py \
 The daily out-of-band audit, run from GitHub Actions outside the infra2 host
 (ops.observability.md SOP-005B). It pages Feishu directly only for the failure
 classes the GitHub layer owns (#908), and only when the set of paged checks changes
-(#962, `libs/page_dedup.py`; the same set later is a `[报告] 仍未恢复`
+(#962, `libs/observability/page_dedup.py`; the same set later is a `[报告] 仍未恢复`
 in the reports chat, an emptied set one RESOLVED page): Cloudflare Worker liveness (`/status`
 freshness against the Worker's own `WATCHDOG_STATUS_MAX_AGE_SECONDS`), the
 production backup and the restore rehearsal, the peer scheduler, and failures of
@@ -320,7 +320,7 @@ current `IAC_CONFIG_HASH`; otherwise it stays a failure, labelled with its age
 past 72 h. A missing or rejected (401/403) `DOKPLOY_API_KEY`, or a missing report
 secret, is a `configuration` failure and pages.
 It is also the peer for truealpha's `scheduler-liveness` workflow
-(`truealpha-scheduler-liveness`, logic in `libs/scheduler_peer_liveness.py`,
+(`truealpha-scheduler-liveness`, logic in `libs/observability/scheduler_peer_liveness.py`,
 truealpha#876): red when that workflow is not active, has not ticked on schedule
 within 2 x its largest cron gap + 1 h, never ticked while its file is older than
 that bound, or cannot be read. `INFRA2_PEER_LIVENESS_BOUND_CAP_HOURS` only
@@ -341,7 +341,7 @@ step recorded completely, closes issues of checks nobody records any more), titl
 close when green in a scheduled run (or a plain dispatch on main). Drills and
 branch dispatches never close; dry runs and SSH-override runs write nothing. A
 failed listing never falls through to create; a failed write exits 1. Logic in
-`libs/watchdog_issue_trail.py`.
+`libs/observability/issue_trail.py`.
 
 ```bash
 GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/feature \
@@ -380,7 +380,7 @@ logs, and container state for every service in the facet-derived inventory
 `libs/vault_self_refresh_audit.load_inventory`).
 
 It also reports (never fails on) whether any field in a service's
-`optional_inert_fields` SecretsFacet entry (`libs/service_facets.py`) is
+`optional_inert_fields` SecretsFacet entry (`libs/core/facets.py`) is
 actually populated in the rendered secrets file, not just wired -- e.g.
 `finance_report/app`'s `LLM_ENCRYPTION_KEYS`, which can have a valid
 `secrets.ctmpl` render line while Vault still holds no value, silently

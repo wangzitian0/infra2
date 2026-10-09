@@ -3,9 +3,9 @@
 import re
 import json
 from invoke import task
-from libs.common import (
+from libs.common import check_service
+from libs.core.environ import (
     OTLP_TRACES_PATH,
-    check_service,
     get_env,
     service_domain,
     with_env_suffix,
@@ -330,10 +330,13 @@ def create_api_key(
 
     Requires admin credentials from 1Password: platform/signoz/admin
 
+    The key is stored under the environment the process names (DEPLOY_ENV or
+    INFRA_ENVIRONMENT, required).
+
     Usage:
-        invoke signoz.shared.create-api-key
-        invoke signoz.shared.create-api-key --name=custom-key --expiry-days=30
-        invoke signoz.shared.create-api-key --no-store-vault
+        DEPLOY_ENV=staging invoke signoz.shared.create-api-key
+        DEPLOY_ENV=staging invoke signoz.shared.create-api-key --name=custom-key --expiry-days=30
+        DEPLOY_ENV=staging invoke signoz.shared.create-api-key --no-store-vault
     """
     from libs.console import success, error, info, warning
     import subprocess
@@ -436,9 +439,9 @@ def create_api_key(
     success(f"Created API key: {name} (id: {api_key_id})")
 
     if store_vault:
-        from libs.env import get_secrets
+        from libs.security.store import get_secrets
 
-        deploy_env = env.get("DEPLOY_ENV") or "production"
+        deploy_env = env["ENV"]
         secrets = get_secrets("platform", "signoz", deploy_env)
 
         vault_data = {

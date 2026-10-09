@@ -5,7 +5,7 @@
 
 ## Purpose
 Track the duplication sites that must be derived-from / audited-against the
-`libs/service_registry.py` registry, discovered during the Infra-013 review.
+`libs/core/registry.py` registry, discovered during the Infra-013 review.
 
 ## Top Issues
 - [x] `bootstrap/06.iac_runner/sync_runner.py`: `ALL_SERVICES` hand-copied — now audited == registry (PR 1)

@@ -26,78 +26,37 @@ Modules in `libs/` that provide direct integrations or operational clients:
 
 | Module | Purpose | Key Exports |
 |--------|---------|-------------|
-| [`deploy/dokploy_client.py`](./deploy/dokploy_client.py) | Dokploy REST API wrapper (`libs/dokploy.py` is its shim) | `DokployClient`, `get_dokploy()` |
-| [`iac_runner_client.py`](./iac_runner_client.py) | Signed HMAC operation client for IaC Runner | `trigger_platform_deploy()`, `poll_platform_deploy_status()` |
-| [`app_deploy_request.py`](./app_deploy_request.py) | Fail-closed App deploy request validation | `verify_production_evidence()`, `validate_request_authority()` |
-| [`harness_manifest.py`](./harness_manifest.py) | Workspace inventory & autonomy boundary audit | `load_manifest()`, `validate_manifest()`, `check_workspace()` |
-| [`harness_status.py`](./harness_status.py) | Git checkout pin/remote/release observation | `workspace_status()`, `repository_status()` |
-| [`harness_sweep.py`](./harness_sweep.py) | Read-only orchestrator sweep for PRs & gates | `sweep()`, `sweep_once()`, `watch()` |
+| [`deploy/dokploy_client.py`](./deploy/dokploy_client.py) | Dokploy REST API wrapper (`libs/deploy/dokploy_client.py` is its shim) | `DokployClient`, `get_dokploy()` |
+| [`observability_dashboards.py`](./observability_dashboards.py) | SigNoz alert rules and dashboards loader. It stays here: moving it triggers apply-observability.yml, which needs owner approval (#1059 phase 2). | `load_alert_definitions()`, `render_alert_payloads()`, `require_rule_channel()` |
 | [`console.py`](./console.py) | Rich CLI formatting and header blocks | `header()`, `success()`, `error()`, `prompt_action()` |
-| [`page_dedup.py`](./page_dedup.py) | Cross-run page dedup for the GitHub-plane daily jobs (#962): page only when the finding identity changes, report `仍未恢复 · 第 N 天` while unchanged, RESOLVED once; state = one issue per job (client reused from `observability.issue_trail`) | `dedup_page()`, `resolve_page_state()`, `decide()`, `make_identity()`, `Finding` |
-| [`availability_ledger.py`](./availability_ledger.py) | Pure availability ledger aggregation & uptime math | `aggregate_ledger()`, `calculate_uptime()` |
-| [`observability_dashboards.py`](./observability_dashboards.py) | Load and validate the checked-in SigNoz alert rules and dashboards; render apply payloads | `load_alert_definitions()`, `render_alert_payloads()`, `require_rule_channel()` |
-| [`vault_self_refresh_audit.py`](./vault_self_refresh_audit.py) | Read-only Vault self-refresh audit (inventory from `SecretsFacet`, live checks) | `load_inventory()`, `VaultService`, `CheckResult` |
-| [`vault_tokens.py`](./vault_tokens.py) | Vault per-service policy and AppRole naming | `VaultTokenTarget`, `policy_name()`, `normalize_selector()` |
-| [`release_markers.py`](./release_markers.py) | The release tag and the production marker, read from git | `newest_release_tag()`, `production_marker()`, `marker_status()` |
-| [`watchdog_signal_entries.py`](./watchdog_signal_entries.py) | Watchdog signal entries derived from each Deployer's facets (#543) | `render_internal_signal_entries()` |
-| [`coverage_regression.py`](./coverage_regression.py) | Line-coverage no-regression check against a committed baseline | `check_no_regression()`, `load_baseline()`, `read_coverage_summary()` |
+| [`common.py`](./common.py) | Environment derivation re-export and operator health check helper | `get_env()`, `check_service()` |
 
 ---
 
 ## 🛡️ Backward-Compatibility Shims (PEP 484)
 
-Legacy flat modules in `libs/` are kept so existing CLI tools, workflows and
-`docs/ssot/` snippets keep importing the path they always did. A **Frozen Shim** holds
-**nothing but re-exports**: a docstring, one `from libs.<domain>.<module> import (...)`,
-and `__all__`.
-
-> [!IMPORTANT]
-> **Shim Boundary Policy**: **Never add new business logic to a Frozen Shim.** All new
-> features and refactorings go in the domain package (`libs.core`, `libs.security`,
-> `libs.backup`, `libs.observability`, `libs.deploy`) and are imported from there.
-
-This table is **not documentation, it is the contract**:
-`libs/tests/test_frozen_shims.py` parses it and, for every `Frozen Shim` row, asserts
-the module is structurally a re-export of exactly the module named here and that each
-re-exported name `is` the same object on both paths. A row that claims more than the
-code does fails the suite (#846: the table was written before the code moved, and for
-six modules the code never followed).
+All 33 legacy compatibility shims are retired (Issue #1059).
+Callers import domain packages directly.
+No frozen compatibility shims remain in `libs/`.
 
 | Legacy Shim | Implementation Module | Re-exported Symbols | Status |
 |-------------|-----------------------|---------------------|--------|
-| `libs/secrets_supply.py` | `libs.security.supply` | `apply`, `resolver_for`, `vault_backend`, `retrying_transport` | Frozen Shim |
-| `libs/infra_probes.py` | `libs.observability.probes` | `execute_probe`, `run_probes`, `ProbeSpec`, `post_alert_bridge_payload` | Frozen Shim |
-| `libs/watchdog_issue_trail.py` | `libs.observability.issue_trail` | `reconcile`, `record_verdicts`, `load_trail` | Frozen Shim |
-| `libs/container_breakdown.py` | `libs.observability.breakdown` | `analyze_container_logs`, `build_breakdown_alert_payload` | Frozen Shim |
-| `libs/container_breakdown_watch.py` | `libs.observability.watchers.breakdown_watch` | `BreakdownWatch`, `sweep`, `run_once` | Frozen Shim |
-| `libs/backup_verification.py` | `libs.backup.verification` | `load_backup_inventory`, `verify_backup_manifest` | Frozen Shim |
-| `libs/backup_restore.py` | `libs.backup.rehearsal` | `build_postgres_rehearsal_plan`, `run_postgres_restore_rehearsal` | Frozen Shim |
-| `libs/service_identity.py` | `libs.core.service_identity` | `ServiceIdentity`, `DOCKER_LABEL_PREFIX`, `MANAGED_BY` | Frozen Shim |
-| `libs/env.py` | `libs.security.store` | `OpSecrets`, `VaultSecrets`, `get_secrets`, `generate_password`, `verify_vault_token` | Frozen Shim |
-| `libs/service_registry.py` | `libs.core.registry` | `service_attrs`, `ServiceMeta`, `all_services`, `resolve_container_host` | Frozen Shim |
-| `libs/service_facets.py` | `libs.core.facets` | `ProbeFacet`, `PublicRouteFacet`, `SignalFacet`, `BackupFacet`, `Exemption` | Frozen Shim |
-| `libs/secrets_registry.py` | `libs.security.registry` | `SERVICES`, `Service`, `lookup`, `merged_manifest`, `store_keys` | Frozen Shim |
-| `libs/deploy_dependencies.py` | `libs.deploy.dependencies` | `extra_dependency_globs`, `service_key_from_path` | Frozen Shim |
-| `libs/deploy_queue.py` | `libs.deploy.queue` | `deployment_start_epoch`, `find_stuck_deploys` | Frozen Shim |
-| `libs/deploy_env_config.py` | `libs.deploy.env_config` | `app_compose_env_config`, `preview_service_config`, `otel_env` | Frozen Shim |
-| `libs/deploy_contract.py` | `libs.deploy.contract` | `service_spec`, `ServiceSpec`, `deploy_type_spec` | Frozen Shim |
-| `libs/dokploy.py` | `libs.deploy.dokploy_client` | `DokployClient`, `get_dokploy`, `ensure_project` | Frozen Shim |
-| `libs/probe_specs.py` | `libs.observability.probe_specs` | `render_probe_spec_text`, `normalize_specs_text` | Frozen Shim |
-| `libs/scheduler_peer_liveness.py` | `libs.observability.scheduler_peer_liveness` | `BOUND_CAP_ENV`, `evaluate` | Frozen Shim |
-| `libs/resident_watchers.py` | `libs.observability.watchers.resident` | `ResidentWatcher`, `build_watchers` | Frozen Shim |
-| `libs/deploy_queue_guard.py` | `libs.observability.watchers.deploy_queue_guard` | `DeployQueueGuard`, `run_once` | Frozen Shim |
-| `libs/common.py` | — (re-exports `libs.core.environ`, and holds `check_service`) | — | Not a shim |
+| `libs/common.py` | — (holds its own function, `check_service`) | — | Not a shim |
 | `libs/console.py` | — (holds its own implementation) | — | Not a shim |
 
 ### The two that are not shims
 
-- `libs/common.py` re-exports `libs.core.environ` and keeps one function of its own,
-  `check_service`. That function is an operator task helper: it runs a health command
+- `libs/common.py` holds one function, `check_service`. It re-exports nothing (#1164).
+  Import the environment helpers from `libs.core.environ`.
+  `check_service` is an operator task helper: it runs a health command
   over SSH and prints through `libs.console`, which a domain package must not import.
+  `test_no_libs_common_env_reexports.py` fails on any other use of `libs.common`.
 - `libs/console.py` holds its own implementation. `tools/pr_merge_gate.py` imports it, so
   it is in the merge gate's self-governing closure; moving it is a separate,
   owner-approved change. `libs/deploy/deployer.py` and `libs/deploy/promote.py` import
-  it, and those two edges are the last rows of the import-boundary debt ledger.
+  the decoupled copy `libs/deploy/console.py`, so the import-boundary debt ledger is
+  empty. `test_deploy_console_code_equals_flat_console_code` fails when the two copies
+  differ in code.
 
 The guard asserts that both are *not* structurally shims: migrate one and the table must
 move with it.
@@ -130,7 +89,7 @@ from libs.core.registry import service_attrs
 
 meta = service_attrs()["platform/postgres"]  # ServiceMeta, read from its deploy.py
 print(meta.compose_path, meta.prod_only, [p.name for p in meta.probes])
-container = with_env_suffix("platform-postgres", get_env())  # "-staging" outside prod
+container = with_env_suffix("platform-postgres", get_env())  # needs DEPLOY_ENV or INFRA_ENVIRONMENT; "-staging" outside prod
 ```
 
 ### 2. Secret Supply & Vault Access (`libs.security`)

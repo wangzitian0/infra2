@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from libs.backup_verification import load_backup_inventory
+from libs.backup.verification import load_backup_inventory
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "tools/host_backup.sh"
@@ -111,6 +111,15 @@ def host(tmp_path: Path):
         "BACKUP_REMOTE": "fake-remote:infra2",
         "RCLONE_LOG": str(rclone_log),
     }
+    tool_versions = Path.home() / ".tool-versions"
+    if tool_versions.exists():
+        (tmp_path / ".tool-versions").write_text(
+            tool_versions.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    asdf_dir = Path.home() / ".asdf"
+    if asdf_dir.exists():
+        env["ASDF_DATA_DIR"] = os.environ.get("ASDF_DATA_DIR", str(asdf_dir))
+        env["ASDF_DIR"] = os.environ.get("ASDF_DIR", str(asdf_dir))
     return {"env": env, "out": out, "log": log, "rclone_log": rclone_log}
 
 

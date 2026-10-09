@@ -403,7 +403,7 @@ invoke env.set GIT_REPO_URL=https://github.com/wangzitian0/infra2.git \
 **生成 / 注入命令**:
 ```bash
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
-invoke vault.setup-approle --project=bootstrap --service=iac_runner
+DEPLOY_ENV=production invoke vault.setup-approle --project=bootstrap --service=iac_runner
 ```
 
 **凭证注入与使用**:
@@ -615,7 +615,7 @@ invoke env.set GIT_REPO_URL=https://github.com/wangzitian0/infra2.git \
 
 # 2. 生成并注入 AppRole 凭证（role_id/secret_id → Dokploy env）
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
-invoke vault.setup-approle --project=bootstrap --service=iac_runner
+DEPLOY_ENV=production invoke vault.setup-approle --project=bootstrap --service=iac_runner
 
 # 3. 部署服务
 invoke iac-runner.setup
@@ -720,7 +720,7 @@ docker exec iac-runner-vault-agent sh -c 'test -s /vault/.token && echo token-pr
 
 # 3. 重新注入 AppRole 凭证；该命令必须看到 Dokploy runtime deployment record
 export VAULT_ROOT_TOKEN=$(op read 'op://Infra2/dexluuvzg5paff3cltmtnlnosm/Token')
-invoke vault.setup-approle --project=bootstrap --service=iac_runner
+DEPLOY_ENV=production invoke vault.setup-approle --project=bootstrap --service=iac_runner
 
 # 4. 如果 Dokploy 接受请求但没有重建 runtime，用外部 bootstrap 重建
 INFRA2_DEPLOY_SHA=$(git rev-parse HEAD) bash scripts/deploy_iac_runner_bootstrap.sh
@@ -733,8 +733,10 @@ INFRA2_DEPLOY_SHA=$(git rev-parse HEAD) bash scripts/deploy_iac_runner_bootstrap
 When `bootstrap/06.iac_runner/**` changes on `main`, GitHub Actions runs
 `scripts/deploy_iac_runner_bootstrap.sh` on the VPS before the normal
 `/deploy` call. The script resolves the live Dokploy compose project from the
-`iac-runner` container label, checks out only `bootstrap/06.iac_runner` at the
-merged SHA in the Dokploy code checkout, rebuilds the compose project with
+`iac-runner` container label, checks out only the paths the runner image
+`COPY`s at the merged SHA in the Dokploy code checkout (the script's one
+`git checkout` line lists them; `test_the_bootstrap_checkout_covers_every_path_the_runner_image_copies`
+fails when the Dockerfile and that line disagree), rebuilds the compose project with
 `GIT_SHA=<short_sha>`, recreates the runner with the confirmed Dokploy compose
 env instead of the previous container env, and waits for Docker health.
 

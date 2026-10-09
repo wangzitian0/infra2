@@ -2,7 +2,8 @@
 
 import re
 from invoke import task
-from libs.common import check_service, get_env, with_env_suffix
+from libs.common import check_service
+from libs.core.environ import get_env, with_env_suffix
 from libs.console import run_with_status, error
 
 

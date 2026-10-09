@@ -24,7 +24,7 @@ from typing import cast
 from invoke import task
 
 from libs.console import console, error, header, success
-from libs.env import CredentialType, OpSecrets, get_secrets
+from libs.security.store import CredentialType, OpSecrets, get_secrets
 
 
 VALID_TYPES: tuple[CredentialType, ...] = ("bootstrap", "root_vars", "app_vars")

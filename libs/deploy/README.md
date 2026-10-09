@@ -21,12 +21,12 @@
 | `in_service.py` | Container health & liveness verification | `assert_in_service()`, `wait_for_containers()` |
 | `rollout.py` | Terminal rollout hooks & post-deploy checks | `verify_rollout()`, `terminal_summary()` |
 | `failure_snapshot.py` | Dokploy failure diagnosis & GitHub summary snapshot | `emit_failure_snapshot()`, `build_snapshot()`, `classify()` |
-| `contract.py` | Deploy target contract per service (was `libs/deploy_contract.py`, #955) | `service_spec()`, `ServiceSpec`, `validate_deploy_target()` |
-| `env_config.py` | Compose environment for fixed and preview stacks (was `libs/deploy_env_config.py`) | `app_compose_env_config()`, `preview_service_config()`, `otel_env()` |
+| `contract.py` | Deploy target contract per service (was `libs/deploy/contract.py`, #955) | `service_spec()`, `ServiceSpec`, `validate_deploy_target()` |
+| `env_config.py` | Compose environment for fixed and preview stacks (was `libs/deploy/env_config.py`) | `app_compose_env_config()`, `preview_service_config()`, `otel_env()` |
 | `queue.py` | Dokploy deploy-queue facts (was `libs/deploy_queue.py`) | `deployment_start_epoch()`, `find_stuck_deploys()` |
-| `dependencies.py` | Deploy fan-out from `docs/ssot/deploy-dependencies.yaml` (was `libs/deploy_dependencies.py`) | `extra_dependency_globs()`, `service_key_from_path()` |
+| `dependencies.py` | Deploy fan-out from `docs/ssot/deploy-dependencies.yaml` (was `libs/deploy/dependencies.py`) | `extra_dependency_globs()`, `service_key_from_path()` |
 | `compose_lock.py` | In-process compose env write lock (was `libs/compose_lock.py`) | `compose_write_lock()` |
-| `dokploy_client.py` | Dokploy REST API client (was `libs/dokploy.py`) | `DokployClient`, `get_dokploy()`, `ensure_project()` |
+| `dokploy_client.py` | Dokploy REST API client (was `libs/deploy/dokploy_client.py`) | `DokployClient`, `get_dokploy()`, `ensure_project()` |
 | `refs.py` | `version_ref` -> commit sha / image ref resolution (the CLI front door is `tools/resolve_deploy_ref.py`) | `resolve_to_sha()`, `resolve_image_ref()`, `resolve_pr()`, `resolve_branch_to_sha()` |
 
 ## Usage Examples

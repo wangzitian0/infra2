@@ -18,7 +18,7 @@ from pathlib import Path
 
 import yaml
 
-from libs import service_registry
+from libs.core import registry as service_registry
 
 ROOT = Path(__file__).resolve().parents[2]
 SIGNALS = ROOT / "docs/ssot/watchdog-signals.yaml"

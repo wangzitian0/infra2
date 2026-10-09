@@ -121,6 +121,20 @@ The AppRole lifecycle is owned by infra2:
   mints a non-expiring `role_id`/`secret_id`, injects them into the matching
   Dokploy compose env as `VAULT_ROLE_ID`/`VAULT_SECRET_ID`, and waits for a new
   Dokploy runtime deployment record before reporting success.
+- A re-issue ends the earlier secret ids (#1070). `setup-approle --deploy` lists
+  the role's secret id accessors, issues a new secret id, and gives it to the
+  target compose and to every other Dokploy compose whose env holds the same
+  `VAULT_ROLE_ID` (a PR preview copies its source environment's credentials).
+  Each one needs a new `done` deployment record, and a second read of every
+  compose must find no earlier secret id. Then the task destroys every accessor
+  from the list. A failed step destroys nothing and the task exits 1.
+- A destroy ends new logins with an earlier secret id. Tokens already issued from
+  it stay valid until `token_max_ttl` (168h); revoking them is #1074.
+- Run the re-issue when no deploy or preview run is in flight: a run that read
+  the earlier env can write it back. The task targets `bootstrap/iac_runner` last,
+  because the runner's redeploy stops a run inside the runner.
+- `setup-approle --deploy=false` writes the policy and the role only. It issues no
+  secret id, because nothing would store it.
 
 Finance Report CI/CD is only a consumer. It must not hold `VAULT_ROOT_TOKEN` or
 mutate Vault policies/roles.
@@ -165,7 +179,7 @@ The runtime proof for this contract is `invoke vault-audit.self-refresh`.
 It is read-only and must not rotate, renew, restart, or redeploy services.
 
 The authoritative inventory is DERIVED (#542) from each service Deployer's
-`SecretsFacet` declarations (`libs/service_facets.py` →
+`SecretsFacet` declarations (`libs/core/facets.py` →
 `libs/vault_self_refresh_audit.load_inventory`); the former handwritten
 `vault-self-refresh-inventory.yaml` is deleted (equivalence frozen as
 `libs/tests/fixtures/vault_self_refresh_inventory_frozen.yaml`). Each active

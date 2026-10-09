@@ -6,7 +6,7 @@ from dataclasses import replace
 
 import pytest
 
-from libs.container_breakdown import (
+from libs.observability.breakdown import (
     Breakdown,
     broken_state,
     build_breakdown_alert_payload,

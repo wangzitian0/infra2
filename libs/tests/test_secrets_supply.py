@@ -14,7 +14,7 @@ import pytest
 import libs.deploy.deployer as deployer_module
 from libs.security import supply as secrets_supply
 from libs.deploy.deployer import Deployer
-from libs.secrets_supply import SupplyReport, TransientTransportError
+from libs.security.supply import SupplyReport, TransientTransportError
 from libs.tests.docker_host import DockerHost
 
 ENV = {"ENV": "staging", "ENV_SUFFIX": "-staging", "VPS_HOST": "vps.test"}
@@ -215,8 +215,11 @@ def test_workflow_deploy_jobs_install_the_pinned_sdk() -> None:
     root = Path(__file__).resolve().parents[2]
     for wf in ("deploy.yml", "deploy-report-main.yml", "preview-teardown.yml"):
         text = (root / ".github/workflows" / wf).read_text(encoding="utf-8")
+        # tools/sdk_requirement.py reads the hash-verified wheel from uv.lock (#1115).
         assert re.search(
-            r"pip install invoke httpx python-dotenv rich .*infra2-sdk @ https://", text
+            r'sdk="\$\(python tools/sdk_requirement\.py\)"\n\s+'
+            r'python -m pip install invoke httpx python-dotenv rich "\$sdk"',
+            text,
         ), wf
 
 
@@ -397,7 +400,9 @@ def test_retrying_transport_fails_closed_past_the_retry_budget(monkeypatch) -> N
             "GET", "https://vault.test/v1/secret/data/truealpha/staging/app", {}, None
         )
 
-    assert len(calls) == 3  # 1 initial + 2 retries, same budget as libs/dokploy.py
+    assert (
+        len(calls) == 3
+    )  # 1 initial + 2 retries, same budget as libs/deploy/dokploy_client.py
     assert sleeps == [2, 4]
 
 

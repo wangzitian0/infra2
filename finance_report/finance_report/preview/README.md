@@ -20,7 +20,7 @@ OWN ephemeral database. Any number coexist; they outlive a CI run until torn dow
 ## Lifecycle (manual)
 
 Driven by the `tools/deploy_v2.py` front door, which routes preview to the
-`libs/deploy/preview.py` backend (over the existing `libs/dokploy.py` client):
+`libs/deploy/preview.py` backend (over the existing `libs/deploy/dokploy_client.py` client):
 
 ```bash
 # Stand up / update + deploy an alias, then prove the triggered rollout and both versions
@@ -33,7 +33,7 @@ python -m tools.deploy_v2 --type preview/pr --version-ref 5 --iac-ref main --dom
 ```
 
 The alias → {env_suffix, domain, compose slug, telemetry label} mapping is the pure,
-unit-tested `libs/deploy_env_config.py::preview_alias(kind, value)`.
+unit-tested `libs/deploy/env_config.py::preview_alias(kind, value)`.
 The same preview backend signs `ServiceIdentity v1` (`service_id=finance_report/app`,
 environment=alias, version=image tag, iac_ref=exact infra2 SHA) and passes it through
 Vault Agent to OTEL; application secrets cannot redefine those coordinates.

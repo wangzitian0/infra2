@@ -87,9 +87,20 @@ def _install_lines(job: dict) -> list[str]:
     return out
 
 
-# `name @ url` inside a shell assignment, e.g.
-# `sdk_requirement="$(... value.startswith("infra2-sdk @ ") ...)"`.
+# `name @ url` inside a shell substitution or assignment.
 _PINNED_IN_SHELL = re.compile(r"([A-Za-z][A-Za-z0-9._-]*)\s+@\s")
+# `sdk="$(python tools/sdk_requirement.py)"` prints the infra2-sdk requirement that
+# uv.lock pins (#1115).
+_SDK_REQUIREMENT = "tools/sdk_requirement.py"
+
+
+def _named_in_shell(text: str) -> set[str]:
+    found = set(_PINNED_IN_SHELL.findall(text))
+    if _SDK_REQUIREMENT in text:
+        found.add("infra2-sdk")
+    return found
+
+
 # `$( ... )`, with one level of nested parentheses -- enough for the shapes here.
 _CMD_SUBST = re.compile(r"\$\((?:[^()]|\([^()]*\))*\)")
 
@@ -110,12 +121,12 @@ def _declared_distributions(job: dict) -> set[str] | None:
     found: set[str] = set()
     for line in lines:
         tail = line.split("pip install", 1)[1]
-        # `"$(grep -oE 'infra2-sdk @ https://...' pyproject.toml)"` names a
-        # distribution only a shell can resolve. Read the name out of it and take
-        # the substitution off the line: splitting on whitespace first turned the
-        # grep's own arguments into package names (`https://`, `pyproject.toml)`).
+        # `"$(python tools/sdk_requirement.py)"` names a distribution only a shell
+        # can resolve. Read the name out of it and take the substitution off the
+        # line: splitting on whitespace first turned a substitution's own
+        # arguments into package names (`https://`, `pyproject.toml)`).
         for subst in _CMD_SUBST.findall(tail):
-            found |= set(_PINNED_IN_SHELL.findall(subst))
+            found |= _named_in_shell(subst)
             tail = tail.replace(subst, " ")
         for token in tail.split():
             token = token.strip("\"'")
@@ -132,7 +143,7 @@ def _declared_distributions(job: dict) -> set[str] | None:
                 name = token.lstrip("${").rstrip("}")
                 for assignment in run_text.splitlines():
                     if assignment.strip().startswith(f"{name}="):
-                        found |= set(_PINNED_IN_SHELL.findall(assignment))
+                        found |= _named_in_shell(assignment)
                 continue
             spec = token.split("@")[0].split("==")[0].split(">")[0].split("[")[0]
             if spec.strip():

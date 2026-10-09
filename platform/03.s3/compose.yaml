@@ -144,8 +144,8 @@ services:
       - "traefik.http.routers.platform-s3-api${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
       - "traefik.http.routers.platform-s3-api${ENV_DOMAIN_SUFFIX}.service=platform-s3-api${ENV_DOMAIN_SUFFIX}"
       - "traefik.http.services.platform-s3-api${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=9000"
-      # S3 Console Router -> Port 9001 (fixes #941: supports s3-console, rustfs, and legacy minio domains)
-      - "traefik.http.routers.platform-s3-console${ENV_DOMAIN_SUFFIX}.rule=Host(`s3-console${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) || Host(`rustfs${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) || Host(`minio${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
+      # S3 Console Router -> Port 9001 (supports s3-console and rustfs domains)
+      - "traefik.http.routers.platform-s3-console${ENV_DOMAIN_SUFFIX}.rule=Host(`s3-console${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) || Host(`rustfs${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
       - "traefik.http.routers.platform-s3-console${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
       - "traefik.http.routers.platform-s3-console${ENV_DOMAIN_SUFFIX}.tls=true"
       - "traefik.http.routers.platform-s3-console${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"

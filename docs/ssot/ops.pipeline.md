@@ -23,7 +23,7 @@
 |------|----------------|------|
 | **IaC Input Reconcile** | [`reconcile-iac-inputs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/reconcile-iac-inputs.yml) | **Release-tag** 触发(`push: tags: v*.*.*`):diff 上一 tag→本 tag,把 changed `iac_pinned` 服务以**该 tag** 为 `iac_ref` fan-out 给 `deploy_v2 → iac_runner`;config-hash gate 决定 no-op vs 重启。**不是 main-push、不是 sha。** |
 | **Deploy 前门 (`deploy_v2`)** | [`tools/deploy_v2.py`](https://github.com/wangzitian0/infra2/blob/main/tools/deploy_v2.py) · [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) | 统一部署坐标 `(service, type, version_ref, iac_ref)`;app + 平台、staging/prod、pinned ref。底层调用 [`libs/deploy/`](https://github.com/wangzitian0/infra2/blob/main/libs/deploy/) 领域包驱动执行。 |
-| **App Deploy Request Receiver** | [`app-deploy-request.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/app-deploy-request.yml) · [`libs/app_deploy_request.py`](https://github.com/wangzitian0/infra2/blob/main/libs/app_deploy_request.py) | SDK `DeployRequest v1` 的跨仓库部署入口；验证 sender/repo/ref/SHA/evidence，prod 额外远端验证 run/review 状态。App staging 选最新 on-main infra release candidate；App prod 只选最新 `production/v*` marker 指向的 release；无 marker 时 production desired state 未知并 fail-closed。**marker 早于 `MINIMUM_PRODUCTION_MARKER`（`v1.1.59`，release pin #632 首次发布的 tag）时同样 fail-closed**：更旧的 deployer 会用运维手写进 Vault 的 digest 重建 data engine，而不是被晋升的那个 release（#650）。plan 输出同时给出 `iac_ref` 与 `newest_iac_tag`，晋升滞后在部署前就可见。 |
+| **App Deploy Request Receiver** | [`app-deploy-request.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/app-deploy-request.yml) · [`libs/deploy/app_deploy_request.py`](https://github.com/wangzitian0/infra2/blob/main/libs/app_deploy_request.py) | SDK `DeployRequest v1` 的跨仓库部署入口；验证 sender/repo/ref/SHA/evidence，prod 额外远端验证 run/review 状态。App staging 选最新 on-main infra release candidate；App prod 只选最新 `production/v*` marker 指向的 release；无 marker 时 production desired state 未知并 fail-closed。**marker 早于 `MINIMUM_PRODUCTION_MARKER`（`v1.1.59`，release pin #632 首次发布的 tag）时同样 fail-closed**：更旧的 deployer 会用运维手写进 Vault 的 digest 重建 data engine，而不是被晋升的那个 release（#650）。plan 输出同时给出 `iac_ref` 与 `newest_iac_tag`，晋升滞后在部署前就可见。 |
 | **IaC Runner Bootstrap (L1)** | [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) · [`scripts/deploy_iac_runner_bootstrap.sh`](https://github.com/wangzitian0/infra2/blob/main/scripts/deploy_iac_runner_bootstrap.sh) | **带外**自更新:`bootstrap/06.iac_runner/**` 变更时,Actions 在 VPS 上重建 runner 自身(跟 merged SHA),**独立 cadence**。 |
 | **Auto-deploy report-branch-main** | [`deploy-report-main.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-report-main.yml) | **唯一**自动目标:app main push → main 预览重部署。 |
 | **Observability config apply** | [`apply-observability.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/apply-observability.yml) | 告警规则 / 看板,声明式 reconcile。**当前 merge 即 apply**(见 §3.4 未收口项)。 |
@@ -331,7 +331,7 @@ promote tier(`libs.deploy.promote.deploy`,app + staging|prod,跑在 GitHub Actio
 `infra2_sdk.delivery` 拥有 CI/CD、route canary、watchdog、probe 共享的稀疏 Env×Stage 证据 schema；
 infra2 与 App producer 都直接从各自固定版本的 SDK 导入，不保留源码级 compatibility re-export。
 当 stage 结果用于部署决策/告警路由/加速时,producer 必须发可比记录而非一次性日志。
-infra2 当前固定 `infra2-sdk==1.0.0` 的不可变 release wheel；`deploy_v2_canary` 是首个
+infra2 固定一个不可变的 `infra2-sdk` release wheel，版本与 sha256 只在 `uv.lock`；`deploy_v2_canary` 是首个
 真实 producer：健康路径把 `StageResult` 写入 job summary JSON，失败路径把同一记录放入
 带外告警，并将控制面/配置/运行时/清理故障映射为 SDK 标准 failure domain。成功证据的
 `target` 必须记录已解析 code/IaC SHA；禁用健康检查的 `--no-wait` 只能记录带原因的 `skip`。
@@ -362,6 +362,22 @@ infra2 当前固定 `infra2-sdk==1.0.0` 的不可变 release wheel；`deploy_v2_
   app 侧 `deploy_v2` 的 `assert_iac_ref_on_main` 以 GitHub compare API 为准;API 无法作答(HTTP 错误、传输失败、限流耗尽)时,回落本地 `git merge-base --is-ancestor <tag> origin/main`(与 `assert_after_on_main` 同一实现,#616)。本地 commit 或 `origin/main` 缺失(如 depth-1 克隆)、或非祖先,一律拒绝,报错同时写明 API 与本地 git 两个失败原因;API 已作答时本地 git 不推翻其结论。
 - **禁止 tag 推送自动部署 prod**:prod 必须经**显式 promote**(`promote_prod=true` / `--promote-prod`);
   tag 只自动晋升 staging。「打 tag」与「动 prod」必须解耦。
+- **A production job waits for the owner (#1125, #1035).** Each job that can change production declares
+  `environment: production`. The job stops at `waiting` until a required reviewer approves the run.
+  - Conditional jobs use `environment: ${{ <production condition> && 'production' || 'staging' }}`.
+    The jobs are `deploy.yml` `deploy` (`inputs.type == 'prod'`), `reconcile-iac-inputs.yml` `reconcile`
+    (`inputs.promote_prod`), and `app-deploy-request.yml` `deploy` (`deploy_type == 'prod'`).
+  - These jobs always use `production`: `deploy.yml` `bootstrap`, `apply-observability.yml` `apply`,
+    and `deploy-cloudflare-watchdog.yml` `deploy`.
+  - A run that waits holds its concurrency group. A production run therefore has its own group, so a
+    staging run never waits for a production approval.
+  - `libs/tests/test_production_environment_gate.py` is the contract. A job that reads a production
+    secret must be gated or must be named as ungated with a reason.
+  - The owner sets the GitHub environment: required reviewer, no admin bypass, deployment branches `main`
+    and `v*` tags. `prevent_self_review` stays off, so the owner can dispatch and approve a run.
+    The agent token has no admin right on the repository and cannot approve a deployment.
+  - Open: the iac-runner webhook accepts a request signed with `IAC_WEBHOOK_SECRET` for any environment.
+    A production request needs a proof from a run in the `production` environment (follow-up of #1125).
 - 禁止跳过 staging 直接 prod。
 - 禁止手改 production 服务配置(必须经 GitOps)。
 - 禁止手推 `gh-pages`(统一 Actions 发布)。
@@ -505,7 +521,10 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 - **机制**:`tools/dokploy_config_drift.py` 对每个 iac_pinned 服务先证明线上
   `IAC_SOURCE_CONFIG_HASH` 能由其 `IAC_DEPLOY_REF` 重算,再与最新 `production/v*` marker 的
   expected source hash
-  比较(`contents_at_ref` 直接 `git cat-file` 读 revision 内容,不做 checkout)。服务在新 release 中输入
+  比较。两个期望 hash 都由**该 revision 自己的代码**计算(#1071):在该 commit 的临时 detached
+  worktree 里运行它的 `tools/dokploy_config_drift.py`(不带任何凭据、只跑 main 上的 commit、单次 120s),
+  用完即删;main 的代码在 release 之后改过输入枚举或 env plane 时会算出不同的 hash。release 代码
+  跑不起来时退回本 checkout 的公式,并在该行 note 里写明原因。服务在新 release 中输入
   未变化时允许保留旧 deploy ref,避免无意义重启;ref 不是“必须等于最新 tag”的重部署开关。runtime secret 只进入
   `IAC_CONFIG_HASH`,不参与 release fidelity。旧部署缺 source identity 时分类为 `legacy_identity`,
   不伪装成 DRIFT;下次正常 release/reconcile 会迁移。

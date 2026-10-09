@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """Bespoke-app compose_id drift detector (#524).
 
-``libs/deploy_env_config.py`` hardcodes each bespoke app's Dokploy ``compose_id`` as a
+``libs/deploy/env_config.py`` hardcodes each bespoke app's Dokploy ``compose_id`` as a
 literal string, read once from the live API and never re-verified. If the underlying
 Dokploy compose is ever deleted and recreated (e.g. someone recreates the "app" compose
 in the Dokploy UI), it gets a fresh internal ``composeId`` and the literal here goes
 stale. ``libs/deploy/promote.py``'s first Dokploy call already fails loud (a 404) when
 that happens — but only AT deploy time, with no proactive signal beforehand.
 
-This is that proactive signal: for every ``libs.deploy_env_config.bespoke_app_compose_
+This is that proactive signal: for every ``libs.deploy.env_config.bespoke_app_compose_
 targets()`` entry, re-resolve the compose by (project, env, name) via ``DokployClient.
 find_compose_by_name`` — the same call ``libs/vault_self_refresh_audit.py`` and
 ``libs/deploy/preview.py`` already use — and assert the live ``composeId`` still matches
 the hardcoded literal.
 
 READ-ONLY (Dokploy GETs only; no deploy, no writes). Recovery path when this fails: see
-the module docstring in ``libs/deploy_env_config.py``.
+the module docstring in ``libs/deploy/env_config.py``.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.deploy_env_config import (  # noqa: E402
+from libs.deploy.env_config import (  # noqa: E402
     ComposeTarget,
     bespoke_app_compose_targets,
 )
@@ -67,7 +67,7 @@ def check_target(client, target: ComposeTarget) -> Row:
             "DRIFT",
             live_compose_id=live_id,
             note=(
-                f"libs/deploy_env_config.py hardcodes compose_id={target.compose_id!r} "
+                f"libs/deploy/env_config.py hardcodes compose_id={target.compose_id!r} "
                 f"for {target.service} env={target.env!r}, but the live Dokploy compose "
                 f"{target.project_name}/{target.dokploy_env_name}/{target.compose_name} "
                 f"now has composeId={live_id!r}. Update the hardcoded literal to "
@@ -118,7 +118,7 @@ def confirmed_drift(rows: list[Row]) -> list[Row]:
 
 
 def main() -> int:
-    from libs.dokploy import get_dokploy
+    from libs.deploy.dokploy_client import get_dokploy
 
     client = get_dokploy()
     rows = scan(client)

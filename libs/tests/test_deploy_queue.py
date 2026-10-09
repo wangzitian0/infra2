@@ -1,6 +1,6 @@
 """Tests for deploy-queue stuck detection (Dokploy-API observability layer)."""
 
-from libs.deploy_queue import (
+from libs.deploy.queue import (
     ComposeDeployments,
     build_deploy_guard_alert_payload,
     deployment_start_epoch,

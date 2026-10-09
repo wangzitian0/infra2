@@ -29,8 +29,8 @@ import pytest
 import yaml
 
 from libs.core import registry as reg
-from libs.service_facets import SecretsFacet
-from libs.vault_self_refresh_audit import (
+from libs.core.facets import SecretsFacet
+from libs.security.vault_self_refresh_audit import (
     VaultService,
     _vault_service_from_facet,
     inventory_ids_not_in_production,
@@ -97,7 +97,7 @@ def test_absorbed_constants_equivalence() -> None:
         those two names across the audit's production/staging runs;
       OPTIONAL_INERT_FIELD_WATCHLIST == (finance_report/app,
         LLM_ENCRYPTION_KEYS)."""
-    from libs.vault_self_refresh_audit import _resolve_env_suffix
+    from libs.security.vault_self_refresh_audit import _resolve_env_suffix
 
     by_id = {service.id: service for service in load_inventory()}
     assert by_id["platform/prefect"].mount_exempt_containers == (
@@ -167,7 +167,7 @@ def test_duplicate_derived_inventory_ids_fail_closed() -> None:
         attrs["platform/postgres"] = clashing
         return attrs
 
-    import libs.vault_self_refresh_audit as audit_module
+    from libs.security import vault_self_refresh_audit as audit_module
 
     original = reg.service_attrs
     try:
@@ -183,7 +183,7 @@ def test_duplicate_derived_inventory_ids_fail_closed() -> None:
 
 _COUNTERFACTUAL_DEPLOY = """
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import SecretsFacet
+from libs.core.facets import SecretsFacet
 
 
 class ExampleDeployer(Deployer):
@@ -223,7 +223,7 @@ def _derived_service(source: str) -> VaultService:
 def _deploy_side_vault_path(meta_project: str, meta_service: str) -> str:
     """The path the DEPLOY side actually uses: libs.env.get_secrets(app_vars)
     stores at secret/data/{project}/{env}/{service} (VaultSecrets.path)."""
-    from libs.env import get_secrets
+    from libs.security.store import get_secrets
 
     secrets = get_secrets(
         project=meta_project,

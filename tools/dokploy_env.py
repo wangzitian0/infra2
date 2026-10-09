@@ -5,9 +5,9 @@ from __future__ import annotations
 from invoke import task
 from rich.table import Table
 
-from libs.common import normalize_env_name, get_env, get_service_url
+from libs.core.environ import normalize_env_name, get_env, get_service_url
 from libs.console import header, success, error, info, console, warning
-from libs.dokploy import get_dokploy
+from libs.deploy.dokploy_client import get_dokploy
 
 
 # Services intentionally left on Dokploy-native autoDeploy because they are NOT
@@ -29,7 +29,7 @@ def audit_autodeploy(c, host: str | None = None):
     """
     from invoke.exceptions import Exit
 
-    from libs.deploy_dependencies import autodeploy_violations
+    from libs.deploy.dependencies import autodeploy_violations
 
     header("Dokploy autoDeploy audit", "IaC must be the single deploy trigger")
     client = get_dokploy(host=host)
@@ -116,7 +116,7 @@ def logs(
     Otherwise, shows container runtime logs.
     """
     header("Dokploy Logs", f"{project}/{env or 'default'}/{name}")
-    e = get_env()
+    e = get_env(env)
 
     # Derive host from INTERNAL_DOMAIN if not provided
     if not host:

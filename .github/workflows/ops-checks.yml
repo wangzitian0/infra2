@@ -37,9 +37,9 @@ name: Ops Checks
       - "libs/deploy/dokploy_client.py"
       - "pyproject.toml"
       - "uv.lock"
+      - "tools/sdk_requirement.py"
       - "finance_report/finance_report/preview/**"
       - ".github/workflows/ops-checks.yml"
-      - "docs/ssot/ops.alerting.md"
       - "docs/project/Infra-011.reliability_hardening.md"
   pull_request:
     paths:
@@ -57,6 +57,7 @@ name: Ops Checks
       - "libs/deploy/dokploy_client.py"
       - "pyproject.toml"
       - "uv.lock"
+      - "tools/sdk_requirement.py"
       - "finance_report/finance_report/preview/**"
       - ".github/workflows/ops-checks.yml"
   schedule:
@@ -119,7 +120,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && github.event.schedule == '27 8 * * *' && 'infra2-secrets-reconcile' || github.event_name == 'schedule' && github.event.schedule == '57 3 * * *' && 'pi-chain-smoke' || github.event_name == 'schedule' && github.event.schedule == '13 5 * * *' && 'e2e-regressions-smoke' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || format('ops-checks-push-{0}', github.sha) }}
+  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'infra2-deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && github.event.schedule == '27 8 * * *' && 'infra2-secrets-reconcile' || github.event_name == 'schedule' && github.event.schedule == '57 3 * * *' && 'pi-chain-smoke' || github.event_name == 'schedule' && github.event.schedule == '13 5 * * *' && 'e2e-regressions-smoke' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || format('ops-checks-push-{0}', github.sha) }}
   cancel-in-progress: false
 
 env:
@@ -307,7 +308,7 @@ jobs:
         run: |
           python - <<'PY'
           import json, os, sys, urllib.request
-          from libs.watchdog_issue_trail import RUNNER_HEALTH_SOURCE, CheckVerdict, record_verdicts
+          from libs.observability.issue_trail import RUNNER_HEALTH_SOURCE, CheckVerdict, record_verdicts
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
 
           def record(ok, detail):
@@ -366,7 +367,7 @@ jobs:
       # One issue per red check (exact title; comment while it stays red), closed by the
       # next green scheduled run — in addition to Feishu, never instead. A step above
       # that recorded no verdict is itself red. Mode (schedule / drill / dry run) is
-      # decided by libs/watchdog_issue_trail.py::issue_trail_mode from the env above.
+      # decided by libs/observability/issue_trail.py::issue_trail_mode from the env above.
       - name: Record the verdicts as GitHub issues
         if: ${{ !cancelled() }}
         run: python tools/watchdog_issue_trail.py
@@ -503,7 +504,7 @@ jobs:
 
       - name: Install runtime dependencies
         run: |
-          sdk_requirement="$(python -c 'import tomllib; print(next(value for value in tomllib.load(open("pyproject.toml", "rb"))["project"]["dependencies"] if value.startswith("infra2-sdk @ ")))')"
+          sdk_requirement="$(python tools/sdk_requirement.py)"
           python -m pip install httpx python-dotenv rich "$sdk_requirement"
 
       - name: Run deploy_v2 canary
@@ -718,7 +719,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-      # #962: the page-dedup state, one issue per job (libs/page_dedup.py).
+      # #962: the page-dedup state, one issue per job (libs/observability/page_dedup.py).
       issues: write
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
@@ -775,7 +776,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.page_dedup import dedup_page, run_url_from_env
+          from libs.observability.page_dedup import dedup_page, run_url_from_env
           from tools.facet_reconcile import (
               confirmed_finding_pairs,
               run_all,
@@ -817,7 +818,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.page_dedup import resolve_page_state
+          from libs.observability.page_dedup import resolve_page_state
           from tools.facet_reconcile import read_unevaluated
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
 
@@ -847,7 +848,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-      # #962: the page-dedup state, one issue per job (libs/page_dedup.py).
+      # #962: the page-dedup state, one issue per job (libs/observability/page_dedup.py).
       issues: write
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
@@ -927,7 +928,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.page_dedup import dedup_page, run_url_from_env
+          from libs.observability.page_dedup import dedup_page, run_url_from_env
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from tools.vault_self_refresh_audit_check import (
               confirmed_finding_pairs,
@@ -975,7 +976,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.page_dedup import resolve_page_state
+          from libs.observability.page_dedup import resolve_page_state
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from tools.vault_self_refresh_audit_check import read_unevaluated
 
@@ -1005,7 +1006,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-      # #962: the page-dedup state, one issue per job (libs/page_dedup.py).
+      # #962: the page-dedup state, one issue per job (libs/observability/page_dedup.py).
       issues: write
     env:
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
@@ -1068,7 +1069,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.page_dedup import dedup_page, run_url_from_env
+          from libs.observability.page_dedup import dedup_page, run_url_from_env
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from tools.secrets_reconcile_check import (
               load_report,
@@ -1109,7 +1110,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from libs.page_dedup import resolve_page_state
+          from libs.observability.page_dedup import resolve_page_state
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from tools.secrets_reconcile_check import load_report, unevaluated_prefixes
 

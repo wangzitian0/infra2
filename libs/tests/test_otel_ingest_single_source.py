@@ -5,8 +5,8 @@ collector CORS allow-list were hardcoded/duplicated across two compose files,
 ``platform/11.signoz/deploy.py`` (a second literal separate from ``service_domain``),
 and ``otel-collector-config.yaml`` (a hand-maintained list). These tests pin that:
 
-  * the endpoint is built once (libs.common) and reused by deploy.py + both deploy paths,
-  * the CORS allow-list is DERIVED from the FE origins (libs.deploy_env_config),
+  * the endpoint is built once (libs.core.environ) and reused by deploy.py + both deploy paths,
+  * the CORS allow-list is DERIVED from the FE origins (libs.deploy.env_config),
   * the rendered collector config + both compose files stay byte-for-behaviour identical
     to the pre-#368 effective values (endpoint + CORS origins unchanged).
 """
@@ -18,12 +18,12 @@ from pathlib import Path
 
 import yaml
 
-from libs.common import (
+from libs.core.environ import (
     OTEL_INGEST_SUBDOMAIN,
     OTLP_TRACES_PATH,
     otel_ingest_endpoint,
 )
-from libs.deploy_env_config import (
+from libs.deploy.env_config import (
     cors_allowed_origins,
     otel_env,
     otel_ingest_endpoint as cfg_otel_ingest_endpoint,
@@ -75,7 +75,7 @@ def test_endpoint_empty_without_domain():
 
 
 def test_config_endpoint_helper_matches_common_source():
-    # libs.deploy_env_config builds from the SAME libs.common constants.
+    # libs.deploy.env_config builds from the SAME libs.core.environ constants.
     assert cfg_otel_ingest_endpoint(domain=DOMAIN) == _LEGACY_ENDPOINT
 
 
@@ -138,12 +138,12 @@ def test_compose_files_parse_and_consume_injected_endpoint():
         assert doc, f"{path} did not parse"
         env = doc["services"]["frontend"]["environment"]
         value = env["NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT"]
-        # Consumes ONLY the injected var (single source: libs.common via otel_env).
+        # Consumes ONLY the injected var (single source: libs.core.environ via otel_env).
         assert value == "${NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT:-}", (
             f"{path} must consume the injected endpoint with an empty default, not "
             "re-construct an otel.<domain>/v1/traces literal"
         )
-        # No inline reconstruction of the subdomain/path that libs.common owns.
+        # No inline reconstruction of the subdomain/path that libs.core.environ owns.
         assert "otel." not in value and "/v1/traces" not in value
 
 

@@ -8,16 +8,22 @@ from collections import Counter
 
 import pytest
 
-from libs import secrets_registry
-from libs.secrets_registry import SERVICES, Service
+from libs.security import registry as secrets_registry
+from libs.security.registry import SERVICES, Service
 
 
 def test_every_registered_manifest_is_resolvable() -> None:
+    """Each registered manifest loads: from the checkout, the cache, or a fetch at the
+    submodule's pinned commit (#1085).
+
+    Checking only ``manifest_file(path).exists()`` made the result depend on another
+    test having fetched the file first: in a worktree without the app submodules it
+    failed whenever its xdist worker ran first. ``load_manifest`` fetches on a miss and
+    parses the file, so the test proves what its name says on its own."""
     for service in SERVICES:
         for path in service.manifests:
-            assert secrets_registry.manifest_file(path).exists(), (
-                f"{service.id}: {path}"
-            )
+            manifest = secrets_registry.load_manifest(path)
+            assert manifest.fields, f"{service.id}: {path} has no fields"
 
 
 def test_service_ids_are_unique_per_preview_flavour() -> None:
@@ -66,16 +72,57 @@ def test_merged_manifest_rejects_conflicting_render_attributes(tmp_path) -> None
         secrets_registry.merged_manifest(service, root=tmp_path)
 
 
-def test_app_manifests_fall_back_to_the_ci_cache(tmp_path) -> None:
+def test_app_manifests_resolve_to_the_pinned_cache(tmp_path, monkeypatch) -> None:
+    """#1109: without a real checkout, an app manifest is read from the cache of the
+    pinned commit; a loose copy under repos/ is ignored, and a pin bump moves the path."""
+    from libs.security import app_manifests
+
+    pins = {"repos/truealpha": "a" * 40}
+    monkeypatch.setattr(app_manifests, "submodule_commit", lambda _root, sub: pins[sub])
     rel = "repos/truealpha/apps/x/required-env.generated.json"
-    _write(tmp_path, f"{secrets_registry.CACHE_DIR}/{rel}", [])
-    assert (
-        secrets_registry.manifest_file(rel, root=tmp_path)
-        == tmp_path / secrets_registry.CACHE_DIR / rel
+    _write(tmp_path, rel, [])  # a loose copy, as the iac-runner held since 2026-09-08
+    _write(tmp_path, f"{secrets_registry.CACHE_DIR}/{'a' * 40}/{rel}", [])
+
+    assert secrets_registry.manifest_file(rel, root=tmp_path) == (
+        tmp_path / secrets_registry.CACHE_DIR / ("a" * 40) / rel
+    )
+    pins["repos/truealpha"] = "b" * 40
+    assert secrets_registry.manifest_file(rel, root=tmp_path) == (
+        tmp_path / secrets_registry.CACHE_DIR / ("b" * 40) / rel
     )
     assert (
         secrets_registry.manifest_file("platform/x.json", root=tmp_path)
         == tmp_path / "platform/x.json"
+    )
+
+
+def test_a_real_submodule_checkout_is_read_in_place(tmp_path, monkeypatch) -> None:
+    from libs.security import app_manifests
+
+    monkeypatch.setattr(
+        app_manifests, "submodule_commit", lambda *_a: pytest.fail("no pin needed")
+    )
+    rel = "repos/truealpha/apps/x/required-env.generated.json"
+    _write(tmp_path, rel, [])
+    (tmp_path / "repos/truealpha/.git").write_text("gitdir: x", encoding="utf-8")
+
+    assert secrets_registry.manifest_file(rel, root=tmp_path) == tmp_path / rel
+
+
+def test_a_checkout_without_the_file_falls_back_to_the_pinned_cache(
+    tmp_path, monkeypatch
+) -> None:
+    """#1108 audit: a submodule checked out before a manifest was added still resolves
+    it at the pin, as before."""
+    from libs.security import app_manifests
+
+    monkeypatch.setattr(app_manifests, "submodule_commit", lambda *_a: "c" * 40)
+    (tmp_path / "repos/truealpha").mkdir(parents=True)
+    (tmp_path / "repos/truealpha/.git").write_text("gitdir: x", encoding="utf-8")
+    rel = "repos/truealpha/apps/new/required-env.generated.json"
+
+    assert secrets_registry.manifest_file(rel, root=tmp_path) == (
+        tmp_path / secrets_registry.CACHE_DIR / ("c" * 40) / rel
     )
 
 
@@ -165,8 +212,8 @@ def test_the_registry_table_is_readable_without_the_sdk() -> None:
         "import sys\n"
         "for name in ('infra2_sdk', 'infra2_sdk.runtime', 'infra2_sdk.runtime.config_schema'):\n"
         "    sys.modules[name] = None\n"
-        "from libs.secrets_registry import SERVICES\n"
-        "from libs.vault_self_refresh_audit import load_inventory\n"
+        "from libs.security.registry import SERVICES\n"
+        "from libs.security.vault_self_refresh_audit import load_inventory\n"
         "print(len(SERVICES), sum(s.ephemeral for s in load_inventory()))\n"
     )
     result = subprocess.run(

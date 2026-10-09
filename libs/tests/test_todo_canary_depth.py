@@ -31,9 +31,9 @@ from urllib.parse import unquote, urlsplit
 
 import pytest
 
-from libs import secrets_registry
-from libs import service_registry as reg
-from libs.probe_specs import render_probe_spec_text
+from libs.security import registry as secrets_registry
+from libs.core import registry as reg
+from libs.observability.probe_specs import render_probe_spec_text
 from libs.tests.compose_env import compose_services, container_env, resolve
 from libs.tests.docker_host import DockerHost
 from libs.tests.traefik_rules import routers_from_labels, serving_router
@@ -936,7 +936,11 @@ def test_parallel_http_requests_run_the_probes_once(app, monkeypatch) -> None:
 
     _patch_probes(app, monkeypatch)
     monkeypatch.setattr(app, "_probe_postgres", counting_postgres)
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), app.TodoHandler)
+
+    class QueuedServer(http.server.ThreadingHTTPServer):
+        request_queue_size = 16
+
+    server = QueuedServer(("127.0.0.1", 0), app.TodoHandler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     codes: list[int] = []
     try:
@@ -977,8 +981,8 @@ def test_todo_declares_a_probe_on_the_internal_canary_status(deploy) -> None:
     probe = by_name["todo-canary-status"]
     assert probe.kind == "http"
     assert probe.expected == "200"
-    assert probe.severity == "warning", (
-        "P2 until staging and production acceptance; raise to `error` only then"
+    assert probe.severity == "error", (
+        "P1 since the staging drill and a full green production day (#991)"
     )
     assert probe.depends_on == ""
     assert probe.service_id == ""
@@ -1005,12 +1009,12 @@ def test_probe_renders_into_the_probe_runner_specs() -> None:
     ]
     assert lines == [
         "todo-canary-status|http|http://platform-todo${ENV_SUFFIX}:8000/api/canary/status"
-        "|200|warning|15||platform/todo"
+        "|200|error|15||platform/todo"
     ]
 
 
 def test_todo_signal_is_a_debounced_minute_alert() -> None:
-    from libs.watchdog_signal_entries import render_internal_signal_entries
+    from libs.observability.signal_entries import render_internal_signal_entries
 
     entries = [
         entry
@@ -1021,7 +1025,7 @@ def test_todo_signal_is_a_debounced_minute_alert() -> None:
     for entry in entries:
         assert entry["service_id"] == "platform/todo"
         assert entry["component"] == "todo"
-        assert entry["severity"] == "warning"
+        assert entry["severity"] == "error"
         assert entry["tier"] == "minute" and entry["type"] == "alert"
         assert entry["consecutive_failures"] == 3
         assert entry["renotify_window_sec"] == 0
@@ -1112,7 +1116,7 @@ def test_public_router_does_not_name_the_canary_status() -> None:
 
 
 def _issued_telemetry_env(environment: str) -> dict[str, str]:
-    from libs.service_identity import ServiceIdentity
+    from libs.core.service_identity import ServiceIdentity
 
     identity = ServiceIdentity.build(
         "platform/todo",

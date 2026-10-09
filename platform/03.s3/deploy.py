@@ -12,9 +12,9 @@ import subprocess
 import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.env import generate_password
+from libs.security.store import generate_password
 from libs.console import header, success, error, warning, info, env_vars
-from libs.service_facets import (
+from libs.core.facets import (
     PublicRouteFacet,
     BackupFacet,
     ProbeFacet,
@@ -60,7 +60,7 @@ class S3Deployer(Deployer):
 
     # Infra probes (#541): rendered into INFRA_PROBE_SPECS by platform/alerting.
     # The http probe proves the S3 process answers its liveness endpoint.
-    # kind="s3" (infra2_sdk.runtime.s3, via libs/infra_probes.py) does a real `head_bucket`
+    # kind="s3" (infra2_sdk.runtime.s3, via libs/observability/probes.py) does a real `head_bucket`
     # through a dedicated, minimal-privilege monitoring key against one small
     # healthcheck bucket — proves the S3 API path actually works.
     probes = (
@@ -208,13 +208,12 @@ class S3Deployer(Deployer):
         info(f"S3 API: https://s3{domain_suffix}.{domain}")
         info(f"S3 Console: https://s3-console{domain_suffix}.{domain}")
         info(f"RustFS Console: https://rustfs{domain_suffix}.{domain}")
-        info(f"MinIO Console (legacy): https://minio{domain_suffix}.{domain}")
         info(f"Login: {root_user} / (password in 1Password)")
         return result
 
     @classmethod
     def ensure_compose_domains(cls, client, compose_id: str, e: dict) -> dict:
-        """Ensure domains exist BEFORE deploy: rustfs/minio.{domain}=Console, s3.{domain}=API."""
+        """Ensure domains exist BEFORE deploy: rustfs.{domain}=Console, s3.{domain}=API."""
         domain = e.get("INTERNAL_DOMAIN")
         if not domain:
             warning("INTERNAL_DOMAIN not set, skipping domain sync")
@@ -238,11 +237,6 @@ class S3Deployer(Deployer):
                 "port": 9001,
                 "https": True,
             },  # RustFS Console alias
-            {
-                "host": f"minio{domain_suffix}.{domain}",
-                "port": 9001,
-                "https": True,
-            },  # Legacy MinIO Console alias
         ]
 
         info(

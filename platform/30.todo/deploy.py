@@ -10,7 +10,7 @@ from invoke import task
 
 from libs.console import error, header, info, run_with_status, success
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import ProbeFacet, SecretsFacet, SignalFacet
+from libs.core.facets import ProbeFacet, SecretsFacet, SignalFacet
 
 shared_tasks = sys.modules.get("platform.30.todo.shared")
 
@@ -34,10 +34,10 @@ class TodoDeployer(Deployer):
 
     # The probe runner reads the status document over the Docker network (#991). The old
     # `Exemption(probes)` called the service "self-proving"; nothing read the status, and
-    # staging answered 503 for hours unnoticed. Severity is `warning` (P2) for now: a probe
-    # that is new, and that stays red while an operator step is open, must not page. Raise
-    # it to `error` (P1) only after staging and production acceptance. The platform's own
-    # probes carry P0 for the core services. The 15 s timeout exceeds the 8 s per-check
+    # staging answered 503 for hours unnoticed. Severity is `error` (P1): it shipped at
+    # `warning` and was raised after the staging fault drill and a full green production
+    # day (#991). The platform's own probes carry P0 for the core services, so an outage
+    # of a dependency pages there first. The 15 s timeout exceeds the 8 s per-check
     # deadline in app.py.
     probes = (
         ProbeFacet(
@@ -45,7 +45,7 @@ class TodoDeployer(Deployer):
             kind="http",
             target="http://platform-todo${ENV_SUFFIX}:8000/api/canary/status",
             expected="200",
-            severity="warning",
+            severity="error",
             timeout_seconds=15,
         ),
     )

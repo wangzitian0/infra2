@@ -1,30 +1,32 @@
 ---
 name: prr
-description: PR Review and Response 自动化闭环协议。按加权严重度过滤评论、定向分派修复、先回复后 Resolve 并在门禁全绿后自动合流（已被 /auto 全面纳管）。
+description: PR review mechanics. Weigh unresolved review findings by severity, verify each against source, reply before you resolve, and check the merge gate on one head SHA.
 ---
 
-# 📬 /prr — PR 审查意见闭环协议
+# prr: review threads and the merge gate
 
-> **状态指引**：本 Skill 的加权评审与门禁合流能力已被 **`/auto`** 完整纳管。直接执行 `/auto` 可获得端到端合流闭环。
+`auto` calls this skill. Use it alone when only the review loop is needed.
 
----
+## Weighted score
 
-## 核心判据（保留供定向调用）
+| Severity tag | Weight |
+|---|---|
+| `severity: high` | 1.0 |
+| `severity: middle` | 0.5 (also the weight of an untagged finding) |
+| `severity: low` | 0.25 |
 
-### 1. 加权审查分清零原则
-- `HIGH`：1.0 分（阻断合并）
-- `MIDDLE`：0.5 分
-- `LOW`：0.25 分
-- **阻断阈值**：未解决评审总分 **>= 1.0** 时，禁止合并。
+A total of 1.0 or more blocks the merge. Two middle findings block it. Read the literal tag. Do not infer severity from tone.
 
-### 2. 查验与闭环规则
-- **直读源码**：必须直接查看本地代码文件，禁止仅看 GitHub 网页端脱敏文本。
-- **回复先行**：必须在线程中提供具体证据（Commit SHA / 测试通过输出）后，方可 Resolve。
-- **误报转测试**：对评审误报必须补充可证伪的单测作为防护网。
+## Thread rules
 
-### 3. 合并门禁命令
-```bash
-ws-pr-gate                      # 检测加权分数与 CI
-ws-pr-gate --resolve-copilot    # 自动解决已核验的机器人线程
-ws-pr-gate --merge              # 门禁全绿后合入 main
-```
+1. **Read the source.** The GitHub diff can redact text: `Bearer {token}` appears as `Bearer ******`. Check the local file before you judge a report.
+2. **Reply, then resolve.** The reply cites evidence: a commit SHA, a test command, or a line link. "Fixed" alone is not a reply.
+3. **Resolve only what you verified** as fixed or obsolete. Never resolve an actionable, ambiguous, or unverified thread.
+4. **Turn a false report into a test.** Add a falsifiable invariant test that guards the concern. Do not only dismiss it.
+
+## Merge gate
+
+- Checks, review, and merge refer to the same head SHA. A result from an older head does not count.
+- Every check marked `blocks_merge: true` ends in success. Pending, skipped, cancelled, and unreadable all count as unmet.
+- Let the gate tool compute the decision. Do not read a check table by eye.
+- Commands are in `local.md`. Use the exit code only. Do not grep the output text.

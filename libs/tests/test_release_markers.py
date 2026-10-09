@@ -41,7 +41,7 @@ def _repo_with_releases(path: Path, *, marker: str, releases: tuple[str, ...]) -
 
 
 def test_the_report_reads_both_coordinates_out_of_a_real_repository(tmp_path):
-    from libs import release_markers
+    from libs.deploy import release_markers
 
     repo = _repo_with_releases(
         tmp_path / "infra2", marker="v1.1.76", releases=("v1.1.76", "v1.1.77")
@@ -56,7 +56,7 @@ def test_the_report_reads_both_coordinates_out_of_a_real_repository(tmp_path):
 
 
 def test_a_marker_older_than_the_release_pin_reads_as_stale(tmp_path):
-    from libs import release_markers
+    from libs.deploy import release_markers
 
     repo = _repo_with_releases(
         tmp_path / "infra2", marker="v1.1.52", releases=("v1.1.52", "v1.1.76")
@@ -79,7 +79,7 @@ def test_the_markers_action_runs_without_the_deploy_sdk(tmp_path, capsys, monkey
     for name in [
         n
         for n in sys.modules
-        if n.startswith(("infra2_sdk", "libs.app_deploy_request"))
+        if n.startswith(("infra2_sdk", "libs.deploy.app_deploy_request"))
     ]:
         monkeypatch.delitem(sys.modules, name, raising=False)
     monkeypatch.setitem(sys.modules, "infra2_sdk", None)  # import -> ImportError

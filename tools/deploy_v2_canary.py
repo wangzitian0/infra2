@@ -15,7 +15,7 @@ Deployer (#541 — today ``finance_report/app`` only; see :func:`canary_services
 (``pr-<CANARY_PR>`` — a number no real PR will reuse), so it never touches staging/prod
 or a real PR's stack. ``--service`` overrides the registry set with ONE explicit
 preview-capable service (#522/#538) — anything registered in
-``libs.deploy_env_config.preview_service_config`` works (e.g. ``truealpha/app``), even if
+``libs.deploy.env_config.preview_service_config`` works (e.g. ``truealpha/app``), even if
 it has not opted into the scheduled canary via the Deployer flag.
 
     run_canary(...)  -> deploy_v2(type=canary, version_ref) -> health 200 -> down (delete volumes)
@@ -42,7 +42,7 @@ import sys
 import time
 from dataclasses import dataclass
 
-import httpx  # transport errors from libs.dokploy surface as httpx exceptions
+import httpx  # transport errors from libs.deploy.dokploy_client surface as httpx exceptions
 from infra2_sdk.delivery import (
     FailureDomain,
     StageResult,
@@ -50,10 +50,10 @@ from infra2_sdk.delivery import (
     make_stage_result,
 )
 
-from libs.common import infra_domain
+from libs.core.environ import infra_domain
 from libs.deploy.preview import check_containers_absent, down
-from libs.deploy_contract import DeployTarget
-from libs.deploy_env_config import CANARY_SLOT
+from libs.deploy.contract import DeployTarget
+from libs.deploy.env_config import CANARY_SLOT
 from tools.deploy_v2 import deploy_v2
 
 _DEFAULT_SERVICE = "finance_report/app"
@@ -186,7 +186,7 @@ def run_canary(
 
     ``service`` selects the preview-capable service under test (default
     ``finance_report/app``; any service registered in
-    ``libs.deploy_env_config.preview_service_config`` works, e.g. ``truealpha/app``).
+    ``libs.deploy.env_config.preview_service_config`` works, e.g. ``truealpha/app``).
     ``version_ref`` is any code surface (main | vX.Y.Z | <sha>); ``iac_ref`` pins the
     authoritative infra2 commit. ``iac_clone_ref`` is an optional preview-only transport
     branch that must resolve to that commit. deploy_v2 resolves both. Raises whatever
@@ -341,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
         "--service",
         default=None,
         help="explicit preview-capable service to canary (any service registered in "
-        "libs.deploy_env_config.preview_service_config, e.g. truealpha/app — #522/#538). "
+        "libs.deploy.env_config.preview_service_config, e.g. truealpha/app — #522/#538). "
         "Default: every registry service declaring deploy_v2_canary=True (#541), "
         "today finance_report/app only.",
     )
@@ -411,7 +411,7 @@ def _canary_one(client, args, service: str) -> int:
             timeout=args.timeout,
         )
     except (ValueError, RuntimeError, TimeoutError, httpx.HTTPError) as exc:
-        # httpx.HTTPError covers Dokploy transport/auth/API failures from libs.dokploy —
+        # httpx.HTTPError covers Dokploy transport/auth/API failures from libs.deploy.dokploy_client —
         # the probe must exit cleanly (code 1 + one line), not dump a traceback.
         domain, detail, rc = failure_domain(exc), str(exc), 1
         torn_down = bool(getattr(exc, "torn_down", False))

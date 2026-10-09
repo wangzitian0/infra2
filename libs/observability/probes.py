@@ -1,7 +1,6 @@
 """Infra service probe helpers for code-owned alert checks.
 
-SSOT for ``libs.observability``'s in-band health probes; ``libs.infra_probes`` is a
-backward-compatibility shim over this module.
+SSOT for ``libs.observability``'s in-band health probes.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from infra2_sdk.runtime.postgres import PostgresSettings, probe_postgres
-from infra2_sdk.runtime.probes import DependencyStatus
+from infra2_sdk.runtime.health import DependencyStatus
 from infra2_sdk.runtime.s3 import S3Settings, probe_s3
 
 DEFAULT_TIMEOUT_SECONDS = 5.0

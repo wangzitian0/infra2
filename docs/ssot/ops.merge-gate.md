@@ -22,20 +22,29 @@
 - **必需检查必须在场**：`blocks_merge: true` 的检查不仅要绿，还必须**确实报告过**。
   `detect-changes` 失败时其下游 job 是 skipped 而非 run，GitHub 仍接受为已满足——
   因此必需集须以 `ci-gate-inventory.yaml` 为准逐个核对在场与结论，而不是只看已报告的检查是否为绿。
-- **静置**：自动 review（Copilot）已对**当前 head SHA** 提交且距该 review ≥ 3 分钟；
-  自动 review 迟迟不来时以距最后一次 push 12 分钟为上限（先到者为准）。
-  fix-up push 不会自动触发 Copilot 复审，需显式请求。
+- **静置 (settle)**：An automated review (Copilot) of the **current head SHA** starts a settle time of 60 seconds.
+  Copilot does not review a pull request that an app or bot account opens (#1075).
+  For such a pull request, an independent verification comment replaces the review.
+  Its heading is `### Independent verification of head <sha7>`, where `<sha7>` is the first 7 characters of the current head SHA.
+  A later line of the comment names at least one test, as `test_...` or `path::name`.
+  The settle time starts at the creation of the comment, or at its last edit if it has one. The newest matching comment counts.
+  For a pull request that a user opens, a comment does not replace the review.
+  The limit is always 12 minutes after the last push. Without a review or a verification comment, that limit applies.
+  The earlier of the two times decides. A fix-up push does not start a new Copilot review. Request it explicitly.
 - **变更契约完整**：PR description checklist 完整；代码、测试、SSOT、Project、Layer README / Onboarding 按影响同步；无未解释的 scope drift；PR description 显式引用其推进/关闭的 issue 编号（无则写明 None）——避免 PR 实质推进了某 issue 的 scope 却不留痕迹，导致 issue 可见状态滞后仓库实际进度（#508）。
 - **安全与运维门禁**：无敏感文件；已说明风险、回滚与 0 宕机影响；涉及 state discrepancy、密钥或生产数据时已按对应 SSOT 执行并留证。
 **仍需 owner 的两类，判据各不相同，分别列**：
 
-- **其一，按环境划线：staging 可自行部署，prod 不可**（2026-09-21 owner 批准）。
-  合流触发 staging 部署、临时槽 canary（`ops-checks.yml` 的 `deploy-v2-canary`，目标是保留的
-  `pr-0`）、`report-branch-main` 预览重部署——**均属 AI 自行合流范围**，不需要逐次批准。
-  触及 **prod** 的则必须取得 owner 对**当前 `head SHA`** 的明确批准，对旧 head 的批准不顺延：
-  prod apply、prod promote、L1 bootstrap self-update、`bootstrap/06.iac_runner/**` 触发的
-  runner 重建、尚未解耦的 observability apply（它直接打 live SigNoz）。
-  判据是**打到哪个环境**，其次才是可逆性；两者冲突时以环境为准。
+- **First class: the target environment decides. Staging is the agent's; production is the owner's** (owner approval, 2026-09-21).
+  The agent merges a change that starts a staging deploy, the canary on the reserved slot `pr-0`, or the `report-branch-main` preview.
+  The canary is the `deploy-v2-canary` job of `ops-checks.yml`. These merges need no approval.
+  These production jobs need the owner: prod apply, prod promote, L1 bootstrap self-update, and the observability apply.
+  The runner rebuild that `bootstrap/06.iac_runner/**` starts also needs the owner.
+  When the production lock holds, a merge that starts one of these jobs only creates a run.
+  That run waits until the owner approves it in the `production` environment. The merge itself needs no approval.
+  When the lock does not hold or cannot be read, the merge needs the owner's approval of the current head SHA.
+  An approval of an older head does not apply. See [Production lock](#production-lock).
+  The target environment decides first, then reversibility. When the two disagree, the environment decides.
 - **其二，改动"决定合流的东西"（判据与环境、可逆性均无关，是自我裁决问题）**：门禁从工作树读取规则，而 AI 合流自己的 PR
   时那就是该 PR 的分支——改动因此由它自己引入的版本审判。这是自我裁决问题，不是不可逆问题，
   所以单列。
@@ -91,6 +100,75 @@
   判据是**回去读该 workflow 的 `concurrency` 配置、确认它是否被更晚的 push 顶替**，不从状态字面
   推断（2026-09-23 实测：#815 合入后 run 报 cancelled，实为 #827 数秒后合入顶替，最新主干头三条
   检查全绿）。
+
+## Production lock
+
+The gate reads the production lock (#1138) on every run for an open PR in this repository.
+It does not read the lock for a closed PR, for another repository, or when the run stops at exit 4 first.
+The verdict prints one lock line: `production lock verified (...)` or `production lock NOT verified: <failures>`.
+A run that did not read the lock prints `production lock NOT verified: not read`, with the reason.
+A run that stops after the lock read prints `production lock NOT verified: the run stopped before a verdict`.
+Each lock line ends with `| lock_state=<state>`. The state is `verified`, `not_verified`, `not_read` or `stopped_before_verdict`.
+The JSON verdict has the same facts in `lock_state`, `lock_verified` and `lock_failures`. The line alone never changes the exit code.
+The lock is the GitHub environment `production`. The gate reads four facts from GitHub:
+
+1. The environment has a required reviewer.
+2. `can_admins_bypass` is false.
+3. The environment accepts deployments only through custom branch and tag policies.
+4. The policies are exactly branch `main` and tag `v*`.
+
+The gate also applies the production contract to every workflow file of the head.
+The contract tables are in `libs/gate/production_contract.py`.
+The lock holds when the four facts are true and the head satisfies the contract. Then:
+
+- The agent merges a workflow edit, except in a workflow that defines a required check.
+  That workflow goes to the owner in every lock state, even when the direction proof calls the edit tighter.
+  The workflow proof reads only push paths and job names, not job bodies.
+  So it cannot show that a required job still checks the same thing.
+  The gate derives these workflows from the `blocks_merge: true` gates in `ci-gate-inventory.yaml`.
+  When the gate cannot read such a gate, the lock releases no workflow file.
+  A file on `OWNER_HELD_WORKFLOWS` in `libs/gate/production_contract.py` is also held. That list is empty by decision of 2026-10-08.
+- A deploy-triggering path does not need the owner. Each job named as production waits for the environment reviewer.
+
+Fail closed: when a fact is false or unreadable, the earlier rules apply to every other file. The verdict names each failure.
+When the lock holds, these changes still need the owner: the gate code and data, their tests, the rule-text files, and the contract tables.
+Two exits stay open. A rule-text file clears with a quoted owner instruction in the PR body.
+A change to `ci-gate-inventory.yaml` clears when the direction proof shows it is tighter.
+A file that Python or pytest runs before gate code also needs the owner.
+Examples: a root module such as `yaml.py`, a package that replaces a gate module, and a `conftest.py` in `libs/tests`.
+Bytecode, `.so` and `.pth` files, virtual environments and `sitecustomize.py` also need the owner, at any depth.
+`pytest.ini`, `tox.ini`, `setup.cfg` and `.coveragerc` need the owner at the root, in `libs/` and in `libs/tests/`.
+The gate compares paths case-folded, because the disk of the gate host does not tell case apart.
+`pyproject.toml` stays outside the gate, because dependency edits are common.
+
+The contract is strict in three ways.
+A conditional job must use the exact condition in its table entry. A condition that only contains it fails.
+A job that reads any secret outside `NON_PRODUCTION_SECRETS` holds a production credential and must be in a table.
+The contract reads the composed YAML nodes, so a YAML tag or escape does not hide an expression.
+
+Threat model.
+The gate defends against mistakes and process shortcuts of an honest agent and its tools.
+It is not a sandbox against a PR that is built to run code on the gate host.
+That boundary is the GitHub ruleset and the reviewer of the `production` environment.
+
+Limits of the lock:
+
+- The lock reader counts reviewers; it does not check who they are.
+- One run makes at most 9 + N + 2k `gh` calls. N is the number of workflow files.
+  k is the number of changed gate files with a direction proof. `--request-review` adds up to 2, and `--merge` adds 1.
+  Each call can try up to 3 times.
+
+Residual risks:
+
+- The lock does not cover the production credentials that ungated jobs read.
+- The bodies of ungated jobs and the code they run are outside the gate (#1147). An agent can merge a change to them.
+- The gate checks that a gated job declares the right environment.
+  It does not check that the job body keeps using the input that selects the environment.
+  Example: a body edit hard-codes `--type prod`, and the environment condition still reads `inputs.type`.
+- A renamed workflow file is not held. The changed-file list holds only the new path.
+- The pytest settings in `pyproject.toml` are outside the gate (#1147).
+- Two scheduled jobs of `ops-checks.yml` write to the production host without the environment reviewer (#1127).
+- The real fix is to scope those credentials to the `production` environment (#1147).
 
 ## 授权沿革
 

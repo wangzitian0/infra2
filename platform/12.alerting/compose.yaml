@@ -128,7 +128,7 @@ services:
   # The SINGLE resident sidecar (#543): probe loop + ALL watcher plugins
   # (container-breakdown watch, deploy-queue guard — formerly two separate
   # services below, deleted in the #543 merge) in one low-footprint process.
-  # See tools/infra_probe_runner.py + libs/resident_watchers.py.
+  # See tools/infra_probe_runner.py + libs/observability/watchers/resident.py.
   infra-probe-runner:
     image: platform-alerting-feishu-bridge:${IAC_CONFIG_HASH:-latest}
     container_name: platform-alerting-probes${ENV_SUFFIX}
@@ -199,8 +199,8 @@ services:
       OBS_ROUNDTRIP_QUERY_WAIT_SECONDS: ${OBS_ROUNDTRIP_QUERY_WAIT_SECONDS:-30}
       # Registry-rendered (#541): the probe set is DECLARED as ProbeFacet
       # attributes on each owning service's deploy.py Deployer class and
-      # aggregated by libs/probe_specs.py::render_probe_spec_text() via
-      # libs/service_registry.py::service_attrs(). AlertingDeployer.
+      # aggregated by libs/observability/probe_specs.py::render_probe_spec_text() via
+      # libs/core/registry.py::service_attrs(). AlertingDeployer.
       # compose_env_base() resolves ${ENV_SUFFIX} and injects the encoded
       # value into the Dokploy compose env — this reference is the ONLY probe
       # source here. The pre-migration literal is frozen field-by-field in
@@ -229,7 +229,7 @@ services:
       # Alerts when ANY container is crash-looping/unhealthy WITH the cause
       # pulled from its logs. prod-only singleton: the watcher reads the whole
       # shared Docker engine, so only the prod runner's plugin sweeps (the
-      # staging plugin idles — see libs/container_breakdown_watch.py). Staging
+      # staging plugin idles — see libs/observability/watchers/breakdown_watch.py). Staging
       # and preview containers go to its daily digest only, never the pager (#903).
       # Flap hysteresis (#475): consecutive-poll thresholds before
       # firing/resolving.

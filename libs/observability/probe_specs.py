@@ -1,7 +1,7 @@
 """INFRA_PROBE_SPECS: registry-derived rendering + live-runner verification.
 
 Rendering (#541): the probe lines are DERIVED from the ProbeFacet declarations
-on each service's Deployer class via ``libs.service_registry.service_attrs()``
+on each service's Deployer class via ``libs.core.registry.service_attrs()``
 — :func:`render_probe_spec_text` is the single aggregation point the alerting
 deployer feeds into Dokploy's compose env (``compose_env_base``, NOT
 ``pre_compose`` — the iac-runner's sync path skips pre_compose entirely).

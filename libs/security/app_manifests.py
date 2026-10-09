@@ -3,18 +3,24 @@
 Neither infra-ci (#506) nor the iac-runner checks out the app submodules: they are large
 and only a few small files are needed from them. The git index records the exact commit
 each submodule is pinned to, so those files are fetched from GitHub at that commit — the
-same bytes a full checkout would give — into ``.cache/app-manifests/<path>`` (never under
-``repos/<sub>/``: writing inside an un-checked-out submodule path makes every later
-``git diff`` fail with "Could not access submodule").
+same bytes a full checkout would give — into ``.cache/app-manifests/<commit>/<path>``
+(never under ``repos/<sub>/``: writing inside an un-checked-out submodule path makes every
+later ``git diff`` fail with "Could not access submodule").
+
+The cache is keyed by the pinned commit, and a file under ``repos/<sub>/`` counts only when
+that submodule is a real checkout (it has its own ``.git``). The iac-runner held loose
+copies there from 2026-09-08, and every deploy read them after the pins moved (#1109).
 """
 
 from __future__ import annotations
 
 import http.client
+import os
 import socket
 import ssl
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -115,35 +121,78 @@ def submodule_commit(root: Path, submodule: str) -> str:
     return out[2]
 
 
-def cached_path(path: str, *, root: Path = ROOT) -> Path:
-    return root / CACHE_DIR / path
+def _submodule(path: str) -> str | None:
+    parts = Path(path).parts
+    if len(parts) < 3 or parts[0] != "repos":
+        return None
+    return f"{parts[0]}/{parts[1]}"
+
+
+def is_checkout(root: Path, submodule: str) -> bool:
+    """A real submodule checkout has its own ``.git``; loose files under ``repos/`` do not."""
+    return (root / submodule / ".git").exists()
+
+
+def cached_path(path: str, *, root: Path = ROOT, commit: str | None = None) -> Path:
+    """The cache location of ``path`` at its submodule's pinned commit."""
+    submodule = _submodule(path)
+    if submodule is None:
+        raise ValueError(f"{path} is not a repos/<submodule>/<file> path")
+    return root / CACHE_DIR / (commit or submodule_commit(root, submodule)) / path
 
 
 def manifest_file(path: str, *, root: Path = ROOT) -> Path:
-    """The checkout when present, else the cache location for a ``repos/`` path."""
-    candidate = root / path
-    if candidate.exists() or not path.startswith("repos/"):
-        return candidate
+    """The file to read for ``path``: a real submodule checkout that holds it, else the
+    cache at the pinned commit (a checkout from before the file existed falls back)."""
+    submodule = _submodule(path)
+    if submodule is None or (is_checkout(root, submodule) and (root / path).exists()):
+        return root / path
     return cached_path(path, root=root)
+
+
+def _write_atomically(target: Path, data: bytes) -> None:
+    """Write ``data`` so a reader sees no file or the whole file, never part of it.
+
+    Two xdist workers, or two deploys in the iac-runner, can fetch and read the same
+    manifest at once (#1091). A temporary file in the same directory is renamed onto
+    the target, which is atomic on one filesystem."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(
+        dir=target.parent, prefix=f".{target.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            # A crash after the rename must not leave an empty file that later runs
+            # skip as present; mkstemp's 0600 would also differ from the old 0644.
+            os.fsync(handle.fileno())
+            os.fchmod(handle.fileno(), 0o644)
+        os.replace(temporary, target)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
 def fetch_missing(
     paths: Iterable[str], *, root: Path = ROOT, fetch: Fetcher = _github_raw
 ) -> list[str]:
-    """Download every ``repos/<sub>/<file>`` in ``paths`` that neither the checkout nor
-    the cache holds; returns ``"<path> @ <sha7>"`` for each file fetched."""
+    """Download every ``repos/<sub>/<file>`` in ``paths`` that neither a real checkout nor
+    the pinned cache holds; returns ``"<path> @ <sha7>"`` for each file fetched."""
     fetched: list[str] = []
     for path in paths:
-        parts = Path(path).parts
-        if len(parts) < 3 or parts[0] != "repos" or (root / path).exists():
+        submodule = _submodule(path)
+        if submodule is None or (
+            is_checkout(root, submodule) and (root / path).exists()
+        ):
             continue
-        target = cached_path(path, root=root)
+        sha = submodule_commit(root, submodule)
+        target = cached_path(path, root=root, commit=sha)
         if target.exists():
             continue
-        sha = submodule_commit(root, f"{parts[0]}/{parts[1]}")
+        parts = Path(path).parts
         url = f"https://raw.githubusercontent.com/{GITHUB_OWNER}/{parts[1]}/{sha}/{'/'.join(parts[2:])}"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(fetch(url))
+        _write_atomically(target, fetch(url))
         fetched.append(f"{path} @ {sha[:7]}")
     return fetched
 

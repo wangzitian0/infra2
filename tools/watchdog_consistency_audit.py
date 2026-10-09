@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.service_registry import service_id_for_component  # noqa: E402
+from libs.core.registry import service_id_for_component  # noqa: E402
 
 INVENTORY = ROOT / "docs/ssot/watchdog-signals.yaml"
 WRANGLER = ROOT / "cloudflare/infra-watchdog/wrangler.toml"
@@ -302,7 +302,7 @@ def _vps_public_route_errors(signals: list[dict[str, Any]]) -> list[str]:
         if not name.endswith("-public-route"):
             errors.append(
                 f"public-route probe {name} ({environment}) must be named "
-                f"'*-public-route' (libs/probe_specs.py naming contract)"
+                f"'*-public-route' (libs/observability/probe_specs.py naming contract)"
             )
     for signal in signals:
         if signal.get("primary_owner") != "self" or signal.get("layer") != "vps":
@@ -327,7 +327,7 @@ def _vps_public_route_errors(signals: list[dict[str, Any]]) -> list[str]:
 
 def _vps_public_routes() -> dict[tuple[str, str], str]:
     """(environment, probe name) -> severity of every in-band public-route probe."""
-    from libs.probe_specs import render_public_route_spec_text
+    from libs.observability.probe_specs import render_public_route_spec_text
 
     routes: dict[tuple[str, str], str] = {}
     for environment in ("production", "staging"):
@@ -447,7 +447,7 @@ def _load_inventory() -> dict[str, Any]:
     enforcement over the DERIVED entries — a deploy.py declaring a bad
     SignalFacet fails CI here.
     """
-    from libs.watchdog_signal_entries import render_internal_signal_entries
+    from libs.observability.signal_entries import render_internal_signal_entries
 
     inventory = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
     handwritten = inventory.get("signals", [])
@@ -470,7 +470,7 @@ def _compose_probe_specs() -> dict[str, str]:
     #541 cutover: the specs are no longer a compose.yaml literal — they are
     rendered from each service's ProbeFacet declarations via the registry, so
     this audit reads the same single derivation the deploy renders from."""
-    from libs.probe_specs import render_probe_spec_text
+    from libs.observability.probe_specs import render_probe_spec_text
 
     specs: dict[str, str] = {}
     for line in render_probe_spec_text().splitlines():
@@ -508,6 +508,7 @@ def _github_signal_names() -> set[str]:
     names.add(module.WORKER_STATUS_CHECK)
     names.add(module.DOKPLOY_STATUS_CHECK)
     names.add(module.PEER_SCHEDULER_LIVENESS_CHECK)
+    names.add(module.SCHEDULED_JOB_START_CHECK)
     names.update(name for name, _ in module.BACKUP_CHECKS)
     names.add(module.RESTORE_REHEARSAL_CHECK)
     return names

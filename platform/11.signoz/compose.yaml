@@ -3,6 +3,7 @@ services:
     image: signoz/signoz-schema-migrator:v0.129.12
     container_name: platform-signoz-schema-migrator${ENV_SUFFIX}
     restart: "no"
+    mem_limit: 512m
     command: ["sync", "--dsn", "tcp://default@platform-clickhouse${ENV_SUFFIX}:9000"]
     networks:
       - dokploy-network

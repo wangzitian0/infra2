@@ -52,14 +52,10 @@ _FORBIDDEN_ROOTS = ("tools", "bootstrap")
 # libs.security, libs.deploy and libs.observability (the flat files are now frozen
 # shims, see libs/README.md).
 #
-# The two that remain point at libs.console. tools/pr_merge_gate.py imports it, so it
-# is in the gate's self-governing closure (tools.pr_merge_gate.self_governing_files()):
-# moving it changes what decides whether that very PR may merge, which is the owner's
-# call (AGENTS.md, merge gate rule 5). Retire these two rows in that owner-approved PR.
-_DEBT_ROWS: tuple[tuple[str, str], ...] = (
-    ("libs/deploy/deployer.py", "libs.console"),
-    ("libs/deploy/promote.py", "libs.console"),
-)
+# The previous entries pointing at libs.console were retired by introducing
+# libs.deploy.console, which cleanly decouples domain packages from flat modules.
+# Boundary debt is now zero.
+_DEBT_ROWS: tuple[tuple[str, str], ...] = ()
 
 DEBT: frozenset[tuple[str, str]] = frozenset(_DEBT_ROWS)
 
@@ -252,7 +248,7 @@ def test_the_scan_sees_the_real_tree() -> None:
         "libs.observability",
         "libs.backup",
     } <= _domain_packages(ROOT)
-    assert {"libs.common", "libs.env", "libs.service_registry"} <= _flat_modules(ROOT)
+    assert {"libs.common", "libs.console"} <= _flat_modules(ROOT)
 
 
 def test_a_libs_to_tools_import_is_no_longer_present_for_the_deploy_domain() -> None:
@@ -277,7 +273,11 @@ def _edges(source: str, package: str) -> set[str]:
         ("import libs.common as c", "libs.core", {"libs.common"}),
         ("from libs.common import infra_domain", "libs.core", {"libs.common"}),
         ("from libs import common", "libs.core", {"libs.common"}),
-        ("from libs import common, env", "libs.core", {"libs.common", "libs.env"}),
+        (
+            "from libs import common, console",
+            "libs.core",
+            {"libs.common", "libs.console"},
+        ),
         # relative, resolved against the importing file's package
         ("from .. import common", "libs.core", {"libs.common"}),
         ("from ..common import infra_domain", "libs.core", {"libs.common"}),
@@ -288,9 +288,9 @@ def _edges(source: str, package: str) -> set[str]:
         ("from . import common", "libs", {"libs.common"}),
         # inside a function and under TYPE_CHECKING
         (
-            "def f():\n    from libs.env import VaultSecrets\n",
+            "def f():\n    from libs.console import console\n",
             "libs.security",
-            {"libs.env"},
+            {"libs.console"},
         ),
         (
             "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    import libs.common\n",
@@ -375,3 +375,158 @@ def test_collect_violations_on_a_synthetic_tree(tmp_path: Path) -> None:
         ("libs/dom/bad.py", "bootstrap.thing"),
         ("libs/other.py", "tools"),
     }
+
+
+def _code_without_docstrings(path: Path) -> str:
+    """AST dump of a module with every docstring removed."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)):
+            body = node.body
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                node.body = body[1:] or [ast.Pass()]
+    return ast.dump(tree)
+
+
+def test_deploy_console_code_equals_flat_console_code() -> None:
+    """``libs.deploy.console`` is a decoupled copy of ``libs.console``.
+
+    ``libs.console`` is in the merge gate closure, so it cannot become a re-export.
+    Two copies need a guard: the code (not the docstrings) must stay equal.
+    """
+    flat = _code_without_docstrings(ROOT / "libs" / "console.py")
+    deploy = _code_without_docstrings(ROOT / "libs" / "deploy" / "console.py")
+    assert deploy == flat, "libs/deploy/console.py drifted from libs/console.py"
+
+
+RETIRED_FLAT_SHIMS_BATCH1 = {
+    "availability_ledger",
+    "backup_restore",
+    "backup_verification",
+    "container_breakdown",
+    "container_breakdown_watch",
+    "deploy_queue_guard",
+    "infra_probes",
+    "page_dedup",
+    "probe_specs",
+    "resident_watchers",
+    "scheduler_peer_liveness",
+    "watchdog_issue_trail",
+    "watchdog_signal_entries",
+}
+
+RETIRED_FLAT_SHIMS_BATCH2 = {
+    "coverage_regression",
+    "deploy_queue",
+    "harness_manifest",
+    "harness_status",
+    "harness_sweep",
+    "release_markers",
+    "service_identity",
+}
+
+RETIRED_FLAT_SHIMS_BATCH2C = {
+    "secrets_registry",
+    "secrets_supply",
+    "vault_self_refresh_audit",
+    "vault_tokens",
+}
+
+RETIRED_FLAT_SHIMS_DEPLOY = {
+    "app_deploy_request",
+    "deploy_contract",
+    "deploy_env_config",
+    "dokploy",
+    "iac_runner_client",
+}
+
+RETIRED_FLAT_SHIMS_BATCH2D = {
+    "env",
+}
+
+RETIRED_FLAT_SHIMS_BATCH3 = {
+    "service_registry",
+}
+
+RETIRED_FLAT_SHIMS_FINAL = {
+    "service_facets",
+    "deploy_dependencies",
+}
+
+ALL_RETIRED_FLAT_SHIMS = (
+    RETIRED_FLAT_SHIMS_BATCH1
+    | RETIRED_FLAT_SHIMS_BATCH2
+    | RETIRED_FLAT_SHIMS_BATCH2C
+    | RETIRED_FLAT_SHIMS_DEPLOY
+    | RETIRED_FLAT_SHIMS_BATCH2D
+    | RETIRED_FLAT_SHIMS_BATCH3
+    | RETIRED_FLAT_SHIMS_FINAL
+)
+
+
+def test_retired_flat_shim_files_stay_deleted() -> None:
+    """The retired flat shims must never be recreated."""
+    resurrected = [
+        name
+        for name in sorted(ALL_RETIRED_FLAT_SHIMS)
+        if (ROOT / "libs" / f"{name}.py").exists()
+    ]
+    assert not resurrected, (
+        f"Retired flat shim files recreated under libs/: {resurrected}. Use the domain "
+        "packages directly."
+    )
+
+
+def test_no_tracked_python_file_uses_a_retired_flat_shim() -> None:
+    """Every tracked python file must import domain packages rather than retired shims."""
+    import subprocess
+
+    repo = ROOT
+    tracked = subprocess.run(
+        ["git", "ls-files", "*.py"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+
+    violations: list[str] = []
+    retired_dotted = {f"libs.{s}" for s in ALL_RETIRED_FLAT_SHIMS}
+
+    for rel in tracked:
+        if rel == "libs/tests/test_import_boundaries.py":
+            continue
+        path = repo / rel
+        if not path.exists():
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name in retired_dotted:
+                        violations.append(
+                            f"{rel}:{node.lineno} imports retired {alias.name}"
+                        )
+            elif isinstance(node, ast.ImportFrom):
+                mod = node.module or ""
+                if mod == "libs":
+                    for alias in node.names:
+                        if alias.name in ALL_RETIRED_FLAT_SHIMS:
+                            violations.append(
+                                f"{rel}:{node.lineno} imports retired libs.{alias.name}"
+                            )
+                elif mod in retired_dotted:
+                    violations.append(f"{rel}:{node.lineno} imports from retired {mod}")
+
+    assert not violations, (
+        "Tracked python files still import retired flat shims:\n"
+        + "\n".join(f"  - {v}" for v in violations)
+    )

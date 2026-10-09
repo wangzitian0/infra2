@@ -25,9 +25,9 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
-from libs import page_dedup as pd
+from libs.observability import page_dedup as pd
 from libs.observability.issue_trail import FULL, OFF, OPEN_ONLY, ListingFailed
-from libs.page_dedup import (
+from libs.observability.page_dedup import (
     ABSENT,
     CORRUPT,
     FOUND,
@@ -296,7 +296,7 @@ def test_marker_round_trips_and_a_forged_or_torn_one_is_rejected() -> None:
 def test_facet_keys_ignore_ids_hashes_and_notes(monkeypatch) -> None:
     """compose-id / config-hash / dns findings carry live ids and hashes: a key built
     from them would be a new identity every time the reading moved."""
-    import libs.dokploy
+    import libs.deploy.dokploy_client
     import tools.app_compose_id_drift as compose
     import tools.dokploy_config_drift as config
     import tools.dns_drift_report as dns
@@ -304,7 +304,7 @@ def test_facet_keys_ignore_ids_hashes_and_notes(monkeypatch) -> None:
 
     def keys(live_id: str, deployed: str, note: str) -> list[str]:
         target = SimpleNamespace(service="finance_report/app", env="production")
-        monkeypatch.setattr(libs.dokploy, "get_dokploy", lambda: object())
+        monkeypatch.setattr(libs.deploy.dokploy_client, "get_dokploy", lambda: object())
         monkeypatch.setattr(
             compose,
             "scan",
@@ -473,7 +473,7 @@ def test_a_secrets_report_proves_only_what_it_observed() -> None:
 
 
 def test_facet_and_vault_name_what_they_did_not_evaluate(tmp_path) -> None:
-    from libs.vault_self_refresh_audit import classify_deployed_template
+    from libs.security.vault_self_refresh_audit import classify_deployed_template
     from tools import facet_reconcile as fr
     from tools import vault_self_refresh_audit_check as vault
 

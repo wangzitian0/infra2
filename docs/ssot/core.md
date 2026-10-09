@@ -271,7 +271,7 @@ libs/
 
 ### 部署环境选择
 
-- **DEPLOY_ENV**: 目标环境（默认 `production`）
+- **DEPLOY_ENV**: 目标环境。必须显式设置，没有默认值；未设置时任务报错 `EnvironmentNotSetError`。生产环境写 `DEPLOY_ENV=production`
 - **ENV_DOMAIN_SUFFIX**: 生产为空，非生产为 `-<env>`（如 `-staging`；内部 `_` 会转为 `-`）
 - **ENV_SUFFIX**: 可选，仅在需要容器/数据路径隔离时显式设置
 - **数据路径**: 非生产必须配置 `DATA_PATH` 或 `ENV_SUFFIX`（除非 `ALLOW_SHARED_DATA_PATH=1`）

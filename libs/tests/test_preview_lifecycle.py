@@ -381,7 +381,7 @@ def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
 def test_up_app_domain_override_does_not_leak_into_the_otel_endpoint():
     # truealpha/app routes its own public preview traffic under truealpha.club
     # (Deployer.domain, #550), but SigNoz/OTel is the ONE shared collector
-    # (libs.common.SHARED_PLATFORM_SERVICES) and must never follow that override —
+    # (libs.core.environ.SHARED_PLATFORM_SERVICES) and must never follow that override —
     # promote.deploy() had this exact leak fixed already; preview.up() carried the same
     # bug (silently no-op telemetry on a throwaway preview, never observed like
     # promote's crash-looping prod symptom).

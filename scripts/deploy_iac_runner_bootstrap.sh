@@ -44,7 +44,12 @@ done
 
 echo "Updating IaC Runner bootstrap source to $INFRA2_DEPLOY_SHA"
 git -C "$code_dir" fetch --tags --prune origin '+refs/heads/*:refs/remotes/origin/*'
-git -C "$code_dir" checkout -f "$INFRA2_DEPLOY_SHA" -- bootstrap/06.iac_runner
+# The image builds from the repo root (compose context ../..) and its Dockerfile COPYs
+# uv.lock and tools/sdk_requirement.py from outside bootstrap/06.iac_runner. This checkout does not move HEAD, and the
+# clone can be months behind the deploy SHA (it was at 2026-06-17 on 2026-10-07, and its
+# uv.lock had no infra2-sdk entry). List here every path the Dockerfile COPYs from outside
+# bootstrap/06.iac_runner, or the build reads an old copy.
+git -C "$code_dir" checkout -f "$INFRA2_DEPLOY_SHA" -- bootstrap/06.iac_runner uv.lock tools/sdk_requirement.py
 echo "IaC Runner bootstrap source HEAD: $(git -C "$code_dir" rev-parse --short HEAD)"
 
 # The checkout above pins this helper to INFRA2_DEPLOY_SHA, the commit of this script.

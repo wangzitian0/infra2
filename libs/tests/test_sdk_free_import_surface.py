@@ -1,6 +1,6 @@
 """哪些模块必须在**没有 infra2-sdk** 的情况下可导入（审计 A1/A2，2026-09-23）。
 
-**这条守卫的缺席造成过一次静默回归。** `libs/watchdog_issue_trail.py` 搬进 domain
+**这条守卫的缺席造成过一次静默回归。** `libs/observability/issue_trail.py` 搬进 domain
 package 之后，从纯 stdlib 变成了需要 SDK——因为它改为经 `libs.observability` 取符号，
 而那个包当时 eager 导入 `probes.py`，后者无条件 `from infra2_sdk.runtime import ...`。
 
@@ -28,15 +28,15 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 # 这些模块被**不装 infra2-sdk 的 CI job** 直接执行或导入。
 # 增删此表前先去 .github/workflows/ 核对那个 job 的 pip install 清单。
 MUST_IMPORT_WITHOUT_SDK = [
-    "libs.watchdog_issue_trail",
-    "libs.page_dedup",
+    "libs.observability.issue_trail",
+    "libs.observability.page_dedup",
     "tools.out_of_band_watchdog",
-    "libs.container_breakdown",
-    "libs.secrets_registry",
+    "libs.observability.breakdown",
+    "libs.security.registry",
     # #847：最小 GitHub Actions job 用 `verify_vault_token` / `generate_password` /
     # `VaultSecrets`，所以 `libs.env` 与 `libs.security`（它的 domain 归宿）都必须无 SDK 可导入。
     # `libs.security.__init__` 对 `supply` / `prune` 做惰性导出，才让后者成立。
-    "libs.env",
+    "libs.security.store",
     "libs.security",
 ]
 

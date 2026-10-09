@@ -2,11 +2,10 @@
 
 import sys
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.common import with_env_suffix
-from libs.env import vault_token
+from libs.core.environ import with_env_suffix
+from libs.security.store import generate_password, get_secrets, vault_token
 from libs.console import success, warning, info, error, run_with_status
-from libs.env import generate_password, get_secrets
-from libs.service_facets import (
+from libs.core.facets import (
     PublicRouteFacet,
     BackupFacet,
     ProbeFacet,
@@ -64,7 +63,7 @@ class AuthentikDeployer(Deployer):
     # minute-tier alert debounced by the probe runner's shared loop —
     # DEFAULT_FAILURE_THRESHOLD=3 / DEFAULT_RENOTIFY_SECONDS=0 (#903: no timer)
     # (tools/infra_probe_runner.py). watchdog-signals entries derive from this
-    # (libs/watchdog_signal_entries.py); the values here must state what the
+    # (libs/observability/signal_entries.py); the values here must state what the
     # runner actually does, not an aspiration.
     signals = (
         SignalFacet(

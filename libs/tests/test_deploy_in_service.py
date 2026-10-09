@@ -464,7 +464,7 @@ def _redis_sync(
     """A platform/redis sync in `env` at RELEASE_SHA against a stack last deployed from
     LAST_DEPLOY_SHA; `remote_hash` "h1" means its config did not change. Returns the
     deployer and the list `composing` appends to when a (re)deploy is triggered."""
-    from libs.service_identity import ServiceIdentity
+    from libs.core.service_identity import ServiceIdentity
 
     d = deployer_module
     identity = ServiceIdentity.build(

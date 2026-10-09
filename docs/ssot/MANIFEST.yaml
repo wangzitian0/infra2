@@ -114,6 +114,8 @@ entries:
     proofs:
       - platform/30.todo/compose.yaml
       - platform/30.todo/deploy.py
+      - tools/canary_verify.py
+      - libs/tests/test_canary_verify.py
 
   db.overview:
     owner: docs/ssot/db.overview.md
@@ -139,7 +141,7 @@ entries:
     summary: ClickHouse (SigNoz Storage)
     description: ClickHouse storage for observability and analytics.
   # vault.self_refresh_inventory retired (#542): the audit inventory is DERIVED
-  # from each service Deployer's SecretsFacet declarations (libs/service_facets.py
+  # from each service Deployer's SecretsFacet declarations (libs/core/facets.py
   # -> libs/vault_self_refresh_audit.load_inventory); the former handwritten
   # docs/ssot/vault-self-refresh-inventory.yaml is deleted, its final content
   # frozen as libs/tests/fixtures/vault_self_refresh_inventory_frozen.yaml
@@ -204,6 +206,8 @@ entries:
       build/config artifacts a service bakes in (shared code, contracts, pinned files).
     proofs:
       - libs/tests/test_deploy_dependencies.py
+      - tools/sdk_requirement.py
+      - libs/tests/test_sdk_requirement.py
   ops.delivery_stages:
     owner: docs/ssot/delivery-stages.yaml
     summary: SDK 版本化交付管线 stage 词汇（app+infra CI 共享）

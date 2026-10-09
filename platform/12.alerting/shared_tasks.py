@@ -16,7 +16,7 @@ from libs.alerting import (
     find_signoz_rule_id,
     signoz_feishu_channel_name,
 )
-from libs.common import get_env, service_domain, with_env_suffix
+from libs.core.environ import get_env, service_domain, with_env_suffix
 
 
 def _bridge_url(env: dict[str, str | None]) -> str:
@@ -37,7 +37,7 @@ def _signoz_context():
     import os
 
     from libs.console import error
-    from libs.env import get_secrets
+    from libs.security.store import get_secrets
 
     env = get_env()
     deploy_env = _deploy_env(env)
@@ -132,7 +132,7 @@ def _ensure_signoz_channel(c) -> str | None:
         return channel_name
 
     auth = None
-    from libs.env import get_secrets
+    from libs.security.store import get_secrets
 
     alerting_secrets = get_secrets("platform", "alerting", _deploy_env(env))
     username = alerting_secrets.get("BRIDGE_BASIC_AUTH_USERNAME") or ""
@@ -220,7 +220,7 @@ def print_channel_payload(c, username="", password=""):
 def create_signoz_channel(c, username="", password=""):
     """Create the SigNoz webhook notification channel that targets the bridge."""
     from libs.console import error, success, warning
-    from libs.env import get_secrets
+    from libs.security.store import get_secrets
 
     env = get_env()
     deploy_env = env.get("ENV") or "production"

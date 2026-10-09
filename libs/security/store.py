@@ -1,6 +1,6 @@
 """Secret-store access for infra2 tasks, over the infra2-sdk adapters (plan PR-E).
 
-The implementation behind the ``libs.env`` shim and ``libs.security`` (#955).
+The secret store implementation for ``libs.security`` (#955).
 
 Three credential types, two stores:
 
@@ -39,8 +39,8 @@ except ImportError:  # pragma: no cover - environment, not logic
 
 
 _SDK_MISSING = (
-    "infra2-sdk is required to read or write secret stores: it is pinned in pyproject.toml "
-    "and in bootstrap/06.iac_runner/requirements.txt; install the project dependencies "
+    "infra2-sdk is required to read or write secret stores: it is pinned in uv.lock "
+    "and installed by the iac-runner image from there; install the project dependencies "
     "(uv sync) or rebuild the iac-runner image (deploy.yml does so on the next main push)."
 )
 

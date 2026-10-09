@@ -8,8 +8,8 @@ import ast
 
 import pytest
 
-from libs import service_registry as reg
-from libs.service_facets import BackupFacet, Exemption, ProbeFacet, SignalFacet
+from libs.core import registry as reg
+from libs.core.facets import BackupFacet, Exemption, ProbeFacet, SignalFacet
 from tools.service_facet_matrix import (
     build_matrix,
     cell_state,
@@ -41,7 +41,7 @@ def _meta(service_id: str = "platform/example", **overrides) -> reg.ServiceMeta:
 
 _DEPLOY_SOURCE = """
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import BackupFacet, Exemption, ProbeFacet, SignalFacet
+from libs.core.facets import BackupFacet, Exemption, ProbeFacet, SignalFacet
 
 
 class ExampleDeployer(Deployer):
@@ -142,8 +142,8 @@ def test_facet_reader_fails_closed_on_wrong_constructor_or_shape() -> None:
 
 def test_probe_facet_spec_line_matches_probe_specs_format() -> None:
     """spec_line renders the exact 8-field `name|kind|target|expected|severity|
-    timeout|depends_on|service_id` line libs.infra_probes.parse_probe_specs reads."""
-    from libs.infra_probes import parse_probe_specs
+    timeout|depends_on|service_id` line libs.observability.probes.parse_probe_specs reads."""
+    from libs.observability.probes import parse_probe_specs
 
     facet = ProbeFacet(
         name="minio-internal-http",

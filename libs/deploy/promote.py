@@ -3,7 +3,7 @@
 
 This module is not the public deploy surface. ``deploy_v2(service, type, version_ref,
 iac_ref)`` resolves the coordinate, enforces the data-lane red lines, and then calls this
-backend for a bespoke app's fixed staging/prod composes (``libs.deploy_contract.SERVICES``
+backend for a bespoke app's fixed staging/prod composes (``libs.deploy.contract.SERVICES``
 — finance_report and, since #500, truealpha/app). The only deploy identity this backend
 accepts directly is ``service`` + ``env`` plus a resolved app commit/image ref; the data
 lane is derived from ``deploy_env_config.EnvConfig.data_default`` for observability and is
@@ -24,7 +24,7 @@ from typing import Any
 
 from libs.core.environ import infra_domain
 from libs.deploy.compose_lock import compose_write_lock
-from libs.console import warning
+from libs.deploy.console import warning
 from libs.deploy import schema_gate
 from libs.deploy.env_config import app_compose_env_config, otel_env
 from libs.deploy.queue import deployment_start_epoch
@@ -160,7 +160,7 @@ def assert_approle_creds_present(service: str, client, compose_id: str) -> None:
             f"{'is' if len(missing) == 1 else 'are'} missing from the deploy env — the "
             "vault-agent would crash-loop (missing role/secret) or hang reaching an "
             "empty address (missing VAULT_ADDR) and deadlock on its healthcheck (~6 "
-            f"min) instead of starting. Run `invoke vault.setup-approle "
+            f"min) instead of starting. Run `DEPLOY_ENV=<env> invoke vault.setup-approle "
             f"--service={service} --deploy` (or set VAULT_ADDR, e.g. "
             "https://vault.<INTERNAL_DOMAIN>) on the compose/project env before "
             "deploying."
@@ -394,7 +394,7 @@ def _validate_deploy_preconditions(
     if cfg.compose_id is None:
         raise ValueError(
             f"{service!r} has no Dokploy compose registered for env {env!r} "
-            "(libs.deploy_env_config._APP_COMPOSE_OVERRIDES) — nothing to deploy to."
+            "(libs.deploy.env_config._APP_COMPOSE_OVERRIDES) — nothing to deploy to."
         )
     if cfg.requires_staging_first and not staging_validated and not break_glass:
         raise ValueError(

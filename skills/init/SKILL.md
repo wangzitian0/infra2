@@ -1,88 +1,75 @@
 ---
 name: init
-description: 工作流入口与需求基准初始化。盘点存量武器库（严禁盲造轮子）、检索历史记忆与决策、校验并认领 Issue、创建独立隔离 Worktree。
+description: Step 1 of the five-step flow. Run before any change. Inventory existing tools, read the original design intent, recall memory, claim the issue, and create an isolated worktree.
 ---
 
-# 🚀 /init — 工作流初始化与基准确立
+# init: question the requirement, inventory, isolate
 
-本 Skill 是智能体工作流的统一进入点。它在执行修改前质疑需求、盘点存量资产、检索记忆并建立物理隔离。
+Run this before the first edit. Each rule exists because an agent skipped it and the owner had to correct it.
 
-> **核心军规：存量优先，质疑前提，物理隔离。**
-> 严禁在未盘点存量资产前重复编写脚本。严禁在共享主目录中直接修改代码。
+## 1. Inventory before you build
 
----
+The owner repeatedly found new scripts that duplicated existing ones. Follow the **Key List Protocol**:
 
-## 触发时机
+1. **Check the Key List**: Read the repository's SSOT index (`docs/ssot/MANIFEST.yaml`, `common/meta/data/MANIFEST.yaml`, or the App's contracts index).
+   - Scan the capability keys (e.g., `deploy_v2`, `infra2-sdk`, `vault`, `signoz`, `pr_merge_gate`).
+2. **Reuse if present**: If an existing component covers the need, reuse it directly. Do not build private alternatives.
+3. **Append when new**: If no entry fits and a new capability is necessary:
+   - Build the minimal implementation.
+   - **Register the new key and summary into `MANIFEST.yaml` in the same PR.**
+4. **First-turn contract**: State in your opening response:
+   - `"Reusing existing component: <key>"` OR `"New capability: will register <key> in MANIFEST.yaml"`.
 
-- 用户输入 `/init`、`/start`、“开始”、“接手” 或给出新任务。
-- 接到新 Issue 编号要求开工。
+## 2. Read the original intent before you change a mechanism
 
----
+Agents reversed or "fixed" a design without knowing why it existed. Example: skill content is one source, the mapping to hosts is another source.
 
-## 执行步骤
+- Find the issue, PR, or SSOT page that created the mechanism. Read it first.
+- Write one sentence: "This exists because ...". If you cannot, you are not ready to change it.
+- A fix that "does not take effect" needs the deep cause. Check that the host really loads the file. Do not retry the same edit.
 
-### Step 1: 存量武器库检视 (Inventory First)
+## 3. Recall
 
-开工前必须先盘点既有资产，杜绝重复制造工具：
+Use the `recall` skill for the four-level search. Read hits as claims, not facts: check current code.
+
+## 4. Scan issue and claim the lock
+
+- Read the latest issue discussion (`gh issue view <N> --comments`).
+- Search for an existing issue before you create one. Update it when it exists.
+- Another worktree or running process for the same issue is an active lock. Do not take over. Match the full token:
 
 ```bash
-ls tools/                           # 查看已有 CLI、探针与门禁工具
-ls libs/                            # 查看公共库与领域契约
-```
-
-1. **优先复用成熟工具**：
-   - 部署与容器探测优先复用 `tools/infra_probe_runner.py`。
-   - PR 门禁与加权验证优先复用 `tools/pr_merge_gate.py`。
-   - 稳定性报告优先复用 `tools/stability_report.py`。
-2. **严禁硬编码裸脚本**：
-   - 禁止在 Skill 中硬编码未经测试的复杂单行脚本。
-   - 检查 `docs/ssot/`，确认已注册的契约与信号定义。
-
----
-
-### Step 2: 历史记忆与前人决策召回 (Recall)
-
-在开始设计前，检索跨会话持久记忆库，避免重复踩坑：
-
-```bash
-# 检索关于该模块或相关技术点的历史踩坑与决策
-ws-mem search "<keyword_or_module>"
-# 查看本仓库近期黄金事实
-ws-mem recent
-```
-
-1. **质疑历史假设**：
-   - 区分客观物理事实与历史阶段性妥协。
-   - 验证前人决策的前提条件在当前是否依然成立。
-2. **扫描交接断点**：
-   - 若存在未结 Issue，检索是否存在历史 handover 记录。
-
----
-
-### Step 3: 工作区物理隔离与凭据预热
-
-严格执行独立 Worktree 隔离，防止共享 index 污染：
-
-```bash
-# 1. 检查是否存在同名 Issue 目录或后台活跃进程
 git worktree list | grep -F "_issue<N>_"
-
-# 2. 创建独立 Issue 分支与 Worktree
-git worktree add ../<repo>_issue<N>_<slug> -b feat/issue<N>-<slug>
 ```
 
-1. **命名规范**：目录名与分支名必须包含严格的 `issue<N>` 标识。
-2. **凭据隔离**：进入 Worktree 后加载 direnv，确保环境变量在 1 秒内就绪。
-3. **自包含约束**：工具与单测必须在 Worktree 内部闭环运行，严禁使用 `../..` 向上越界引用。
+A substring match is wrong: `issue12` would match `issue123`.
 
----
-
-### Step 4: Issue 状态认领与基线输出
-
-向协作总线同步状态并输出初始基线：
-
+- **Scan open production decisions**: Check open issues labelled `prod-pending`:
 ```bash
-gh issue view <N> --json title,body,state
+gh issue list --search "label:prod-pending" --json repository,number,title
 ```
 
-- 输出开工摘要：确认接手的 Issue 目标、复用的工具链、召回的历史要点与 Worktree 物理路径。
+- **Scan open PRs needing owner**:
+Report the open PRs labelled `needs-owner` once. A non-production PR that waits more than 12 hours shows a defect in the rule that holds it.
+```bash
+gh pr list --search "label:needs-owner" --json repository,number,title
+```
+
+## 5. Init Swarm (Optional 4-Intern parallel discovery)
+
+For complex tasks or large repositories, dispatch a quick 4-Intern discovery batch via `subagent_batch`:
+- **Intern 1 (Key List)**: Scans `MANIFEST.yaml` and `tools/` for reusable components.
+- **Intern 2 (Intent & History)**: Runs git log search for past PRs touching the target subsystem.
+- **Intern 3 (Memory Recall)**: Executes global `search_notes` across all projects.
+- **Intern 4 (Worktree Locks)**: Checks active worktrees and process locks across repositories.
+
+## 6. Create the worktree
+
+- Name: `<repo>_issue<N>_<slug>`. Branch: `feat/issue<N>-<slug>`. Base: the latest `origin/main`.
+- Never edit in a shared checkout. One `git add` in a shared index can commit another worker's files.
+- The worktree must work alone. Tools and tests must not use `../..` to find files outside it.
+
+## 7. Report the baseline
+
+Reply in the owner's language with four lines: the goal, the tools you reuse, the facts you recalled, the worktree path.
+Do not execute test suites during baseline reporting. The baseline report is task metadata only.

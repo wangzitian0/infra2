@@ -3,7 +3,7 @@
 # config that actually implements it:
 #   primary_owner=internal  -> INFRA_PROBE_SPECS rendered from each service's
 #                                deploy.py ProbeFacet declarations (#541;
-#                                libs/probe_specs.py::render_probe_spec_text)
+#                                libs/observability/probe_specs.py::render_probe_spec_text)
 #   primary_owner=cloudflare -> cloudflare/infra-watchdog/wrangler.toml
 #   primary_owner=github     -> tools/out_of_band_watchdog.py
 #   primary_owner=excluded   -> intentionally unwatched; requires exclusion_reason
@@ -14,7 +14,7 @@
 #                                test suite rather than one of the three shared
 #                                config sources above -- so it is exempt from
 #                                this audit's owner-specific existence checks
-#                                (see libs/container_breakdown_watch.py,
+#                                (see libs/observability/watchers/breakdown_watch.py,
 #                                tools/vault_self_refresh_audit_check.py).
 #                                Exception: a `layer: vps` *-public-route entry
 #                                must be rendered by a PublicRouteFacet in its
@@ -41,7 +41,7 @@
 # what distinguishes a real failure from a transient blip. That makes
 # slow!=dead a structural rule, not per-check luck." It exists because this
 # codebase shipped that exact bug TWICE independently before the rule existed
-# -- libs/container_breakdown_watch.py (#475, 333 firing/resolved pairs in
+# -- libs/observability/watchers/breakdown_watch.py (#475, 333 firing/resolved pairs in
 # 48h from un-debounced flapping) and libs/vault_self_refresh_audit.py (#531,
 # four separate instances of a check with no time-window semantics). The
 # pre-existing free-text `alert_threshold: "3 consecutive failures"` field on
@@ -104,6 +104,9 @@ failure_classes:
   peer-scheduler:
     pager: github
     covers: a peer repository's scheduler that cannot report its own death
+  scheduled-job-start:
+    pager: github
+    covers: a scheduled ops-checks job that GitHub failed before it started, so its own alert never ran
 
 # Paging signals still in the wrong layer. Each entry names the #901 phase
 # issue that moves or retires it; the audit fails once an entry stops being a
@@ -115,7 +118,7 @@ signals:
   # ── internal plane: GENERATED, do not hand-write entries here (#543) ──
   # Every `primary_owner: internal` entry is DERIVED from the ProbeFacet +
   # SignalFacet declarations on each service's deploy.py Deployer by
-  # libs/watchdog_signal_entries.py::render_internal_signal_entries();
+  # libs/observability/signal_entries.py::render_internal_signal_entries();
   # tools/watchdog_consistency_audit.py merges the derived entries into this
   # inventory at load time. Declaring a probe registers its signal — there is
   # no second list to keep in sync. The pre-#543 handwritten section is frozen
@@ -489,7 +492,7 @@ signals:
   # Peer liveness for truealpha's scheduler-liveness workflow (truealpha#876 W5).
   # That workflow watches every scheduled workflow in the estate but cannot report
   # its own dead scheduler; tools/out_of_band_watchdog.py
-  # run_peer_scheduler_liveness_check (libs/scheduler_peer_liveness.py) is the peer.
+  # run_peer_scheduler_liveness_check (libs/observability/scheduler_peer_liveness.py) is the peer.
   # Red when the workflow is not active, its newest scheduled run is older than the
   # bound measured from its crons (2 x largest gap + 1 h; 13 h today), it never ran
   # and its file is older than that bound, or the read fails. component=github: the
@@ -501,6 +504,23 @@ signals:
     signal: truealpha-scheduler-liveness
     primary_owner: github
     failure_class: peer-scheduler
+    severity: critical
+    cadence: 1d
+
+  # Scheduled ops-checks jobs that GitHub failed before they started (#1101). Such a
+  # job has no runner and no step, so its own `Alert on failure` step never runs,
+  # and truealpha's scheduler-liveness counts the run as a tick. #1086: the
+  # deploy_v2 canary waited on its own run's concurrency group on 2026-10-06 and
+  # nothing paged. tools/out_of_band_watchdog.py run_scheduled_job_start_check
+  # (libs/observability/scheduled_job_start.py) lists the scheduled runs of the last
+  # 26 h; a job that started and failed alerts itself and is not a finding. A failed
+  # read is red. Daily, so detection lags the failed job by up to 26 h.
+  - signal_id: global.infra2-scheduled-job-start.github
+    environment: global
+    component: github
+    signal: infra2-scheduled-job-start
+    primary_owner: github
+    failure_class: scheduled-job-start
     severity: critical
     cadence: 1d
 
@@ -544,7 +564,7 @@ signals:
 
   # Container-breakdown watch (#425 T5 registration; #475 is the debounce this
   # entry declares). Watcher PLUGIN inside the single resident alerting sidecar
-  # (#543): libs/container_breakdown_watch.py running inside
+  # (#543): libs/observability/watchers/breakdown_watch.py running inside
   # tools/infra_probe_runner.py --loop (compose service `infra-probe-runner`,
   # container platform-alerting-probes) -- polling the Docker socket every
   # BREAKDOWN_INTERVAL_SECONDS=60s and paging Feishu directly (no separate
@@ -577,7 +597,7 @@ signals:
 
   # Deploy-queue guard (#543 single-sidecar merge — this registration redeems
   # the #542 lint exemption that deferred it). Watcher PLUGIN inside the same
-  # resident sidecar: libs/deploy_queue_guard.py inside
+  # resident sidecar: libs/observability/watchers/deploy_queue_guard.py inside
   # tools/infra_probe_runner.py --loop, sweeping Dokploy's deployment records
   # every DEPLOY_GUARD_INTERVAL_SECONDS=60s and paging Feishu directly
   # (primary_owner=self). environment=global: the guard watches the whole
@@ -611,7 +631,7 @@ signals:
   # vault-agent/app-container self-refresh state. primary_owner=self: it pages
   # Feishu directly from its own workflow step (see ops-checks.yml's "Alert on
   # confirmed failure" step), not via a separate out-of-band watchdog. #962: that
-  # page is cross-run deduplicated (libs/page_dedup.py): it fires
+  # page is cross-run deduplicated (libs/observability/page_dedup.py): it fires
   # only when the set of failing service::check identities changes (first
   # appearance, added, removed, all resolved -> RESOLVED); the same set on a later
   # day is "[报告] 仍未恢复 · 第 N 天" in the reports chat, not the pager.

@@ -46,7 +46,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.vault_self_refresh_audit import (  # noqa: E402
+from libs.security.vault_self_refresh_audit import (  # noqa: E402
     audit_from_observations,
     collect_live_observations,
     inventory_ids_not_in_production,

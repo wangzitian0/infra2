@@ -56,6 +56,27 @@ def _page_blocks(message: str) -> list[dict[str, str]]:
     return blocks
 
 
+# Captured at import, before the autouse fixture below replaces it in each test.
+from libs.observability.scheduled_job_start import (  # noqa: E402
+    evaluate as _REAL_SCHEDULED_EVALUATE,
+)
+
+
+@pytest.fixture(autouse=True)
+def _scheduled_jobs_all_started(monkeypatch):
+    """#1101: no test reaches the GitHub API for the scheduled-job-start check; a
+    test that needs a red verdict patches ``evaluate`` itself."""
+    from libs.observability import scheduled_job_start
+
+    monkeypatch.setattr(
+        scheduled_job_start,
+        "evaluate",
+        lambda _get, **_kwargs: scheduled_job_start.StartVerdict(
+            scheduled_job_start.OK, "0 scheduled run(s); every failed job started"
+        ),
+    )
+
+
 def _load_watchdog():
     spec = importlib.util.spec_from_file_location("out_of_band_watchdog", WATCHDOG)
     module = importlib.util.module_from_spec(spec)
@@ -619,6 +640,9 @@ def test_main_structured_check_logs_include_attempt_count(monkeypatch) -> None:
         watchdog,
         "run_peer_scheduler_liveness_check",
         lambda _env, _timeout, **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        watchdog, "run_scheduled_job_start_check", lambda _env, _timeout, **_kwargs: []
     )
     monkeypatch.setattr(
         watchdog, "_emit_structured_log", lambda payload: emitted.append(dict(payload))
@@ -1420,7 +1444,7 @@ def test_main_records_the_paging_verdicts_for_the_issue_trail(
     monkeypatch, tmp_path
 ) -> None:
     """truealpha#876 W4 / #908: paging verdicts reach the trail, green included."""
-    from libs.watchdog_issue_trail import load_trail
+    from libs.observability.issue_trail import load_trail
 
     watchdog = _load_watchdog()
     peer = watchdog.CheckResult(
@@ -1451,8 +1475,8 @@ def test_main_records_the_paging_verdicts_for_the_issue_trail(
     assert trail.failing[watchdog.PEER_SCHEDULER_LIVENESS_CHECK].severity == "P1"
     # the watchdog's own redaction runs before anything leaves the step
     assert "abc" not in trail.failing["cloudflare-worker-status"].detail
-    # a report-only check (green here) never reaches the trail
-    assert trail.green == {"out-of-band-watchdog"}
+    # a report-only check (green here) never reaches the trail; a paging one does
+    assert trail.green == {"out-of-band-watchdog", "infra2-scheduled-job-start"}
 
 
 def test_a_configuration_failure_on_a_report_only_check_pages_as_the_watchdog(
@@ -1463,7 +1487,7 @@ def test_a_configuration_failure_on_a_report_only_check_pages_as_the_watchdog(
     The next run that records cleanly closes that issue, which a report-only
     check's own name never would (it is never recorded again).
     """
-    from libs.watchdog_issue_trail import load_trail
+    from libs.observability.issue_trail import load_trail
 
     watchdog = _load_watchdog()
     missing_key = watchdog.CheckResult(
@@ -1520,7 +1544,7 @@ def test_main_runs_the_peer_check_with_the_watchdog_retry_settings(monkeypatch) 
 
 
 def _peer_factory(verdicts, seen):
-    from libs.scheduler_peer_liveness import PeerVerdict
+    from libs.observability.scheduler_peer_liveness import PeerVerdict
 
     answers = iter(verdicts)
 
@@ -1635,6 +1659,7 @@ PAGING = {
     "infra2-backup-production",
     "infra2-restore-rehearsal",
     "truealpha-scheduler-liveness",
+    "infra2-scheduled-job-start",
 }
 _FAILURE_LINE = re.compile(r"^- \[P\d\] (?:\[[^\]]+\] )?(\S+): ", re.MULTILINE)
 _PAGE_OBJECT = re.compile(r"^对象：(\S+)$", re.MULTILINE)
@@ -1769,6 +1794,13 @@ def _run_day(
             result("truealpha-scheduler-liveness", "peer-scheduler-liveness")
         ],
     )
+    monkeypatch.setattr(
+        watchdog,
+        "run_scheduled_job_start_check",
+        lambda _env, _timeout, **_kwargs: [
+            result("infra2-scheduled-job-start", "scheduled-job-start")
+        ],
+    )
     pages: list[str] = []
     reports: list[str] = []
     events: list[dict] = []
@@ -1797,7 +1829,7 @@ def _run_day(
     code = watchdog.main(
         {key: value for key, value in env.items() if value is not None}
     )
-    from libs.watchdog_issue_trail import load_trail
+    from libs.observability.issue_trail import load_trail
 
     trail = load_trail(verdicts, expected_sources=["out-of-band-watchdog"])
     return code, pages, reports, trail, events
@@ -1876,6 +1908,7 @@ def test_main_pages_only_the_owned_classes_and_reports_the_rest(
         "cloudflare-worker-status",
         "infra2-restore-rehearsal",
         "truealpha-scheduler-liveness",
+        "infra2-scheduled-job-start",
     }
     routes = {
         event["name"]: event["route"]
@@ -1982,7 +2015,7 @@ def test_main_pages_when_the_report_cannot_be_delivered(monkeypatch, tmp_path) -
 
 def _dedup_env(monkeypatch, api, **extra):
     """A scheduled run whose page-dedup state lives in the fake issues `api`."""
-    from libs import page_dedup
+    from libs.observability import page_dedup
 
     monkeypatch.setattr(page_dedup, "_api_from_env", lambda _env: api)
     return {
@@ -2555,6 +2588,7 @@ def test_a_github_page_shows_every_field_of_the_shared_layout() -> None:
         ("infra2-restore-rehearsal", "restore-rehearsal", "production"),
         ("watchdog-signal-registry", "configuration", "global"),
         ("truealpha-scheduler-liveness", "peer-scheduler-liveness", "global"),
+        ("infra2-scheduled-job-start", "scheduled-job-start", "global"),
     ],
 )
 def test_a_github_check_names_its_environment(name, domain, environment) -> None:
@@ -2641,3 +2675,113 @@ def test_the_github_redaction_also_cuts_credentials() -> None:
     assert redacted == (
         "psql postgresql://***:***@db:5432/x failed; Bearer ***; token=***"
     )
+
+
+# --- #1101: scheduled jobs that never started ----------------------------------------
+
+
+def test_a_never_started_scheduled_job_pages_at_p1(monkeypatch) -> None:
+    from libs.observability import scheduled_job_start
+
+    watchdog = _load_watchdog()
+    monkeypatch.setattr(
+        scheduled_job_start,
+        "evaluate",
+        lambda _get, **_kwargs: scheduled_job_start.StartVerdict(
+            scheduled_job_start.NEVER_STARTED,
+            "1 scheduled job(s): deploy_v2 live canary",
+        ),
+    )
+
+    (result,) = watchdog.run_scheduled_job_start_check(
+        {}, getter_factory=lambda _token, **_kwargs: None
+    )
+
+    assert not result.ok
+    assert result.name == "infra2-scheduled-job-start"
+    assert result.failure_domain == "scheduled-job-start"
+    assert watchdog._severity_for(result.name, result.failure_domain) == "P1"
+    assert "deploy_v2 live canary" in result.detail
+    assert watchdog.registry_signal(result.name) == "infra2-scheduled-job-start"
+
+
+def test_an_unreadable_scheduled_job_answer_is_red(monkeypatch) -> None:
+    """The real evaluate with a getter that fails: never a pass."""
+    from libs.observability import scheduled_job_start
+
+    watchdog = _load_watchdog()
+    monkeypatch.setattr(scheduled_job_start, "evaluate", _REAL_SCHEDULED_EVALUATE)
+
+    def failing(_path):
+        raise RuntimeError("GET answered HTTP 502")
+
+    (result,) = watchdog.run_scheduled_job_start_check(
+        {}, retry_delay_seconds=0, getter_factory=lambda _token, **_kwargs: failing
+    )
+
+    assert not result.ok
+    assert result.failure_domain == "scheduled-job-start"
+    assert result.detail.startswith("UNVERIFIABLE: ") and "HTTP 502" in result.detail
+    assert result.attempt_count == 2
+    assert result.units == ("read:unverifiable",)
+
+
+def test_one_failed_read_is_retried_before_the_check_turns_red(monkeypatch) -> None:
+    """#1105 audit: a single HTTP 502 must not page at P1."""
+    from libs.observability import scheduled_job_start
+
+    watchdog = _load_watchdog()
+    answers = iter(
+        [
+            scheduled_job_start.StartVerdict(scheduled_job_start.UNVERIFIABLE, "502"),
+            scheduled_job_start.StartVerdict(scheduled_job_start.OK, "0 runs"),
+        ]
+    )
+    monkeypatch.setattr(
+        scheduled_job_start, "evaluate", lambda _get, **_k: next(answers)
+    )
+
+    (result,) = watchdog.run_scheduled_job_start_check(
+        {}, retry_delay_seconds=0, getter_factory=lambda _token, **_kwargs: None
+    )
+
+    assert result.ok and result.attempt_count == 2
+
+
+def test_a_never_started_job_carries_its_name_as_the_dedup_unit(monkeypatch) -> None:
+    """#1105 audit: the page identity is the set of job names, so a second job that
+    fails to start pages again; run ids and times stay out of it."""
+    from libs.observability import scheduled_job_start
+
+    watchdog = _load_watchdog()
+    monkeypatch.setattr(
+        scheduled_job_start,
+        "evaluate",
+        lambda _get, **_k: scheduled_job_start.StartVerdict(
+            scheduled_job_start.NEVER_STARTED,
+            "2 job(s)",
+            ("job:Secrets reconcile + capacity", "job:deploy_v2 live canary"),
+        ),
+    )
+
+    (result,) = watchdog.run_scheduled_job_start_check(
+        {}, getter_factory=lambda _token, **_kwargs: None
+    )
+
+    assert result.units == (
+        "job:Secrets reconcile + capacity",
+        "job:deploy_v2 live canary",
+    )
+
+
+def test_main_pages_a_scheduled_job_that_never_started(monkeypatch, tmp_path) -> None:
+    code, pages, _reports, trail, _events = _run_day(
+        monkeypatch,
+        tmp_path,
+        worker_last_run=FRESH_CLEAN_RUN,
+        failing={"infra2-scheduled-job-start"},
+    )
+
+    assert code == 1
+    assert [_failure_names(page) for page in pages] == [{"infra2-scheduled-job-start"}]
+    assert set(trail.failing) == {"infra2-scheduled-job-start"}

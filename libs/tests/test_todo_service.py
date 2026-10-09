@@ -12,7 +12,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 
-from libs import service_registry as reg
+from libs.core import registry as reg
 from libs.deploy.deployer import discover_services
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

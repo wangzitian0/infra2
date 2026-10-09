@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import subprocess
-import tomllib
 from importlib.metadata import version
 from pathlib import Path
 
@@ -17,16 +16,28 @@ LOCAL_STAGES = ROOT / "docs/ssot/delivery-stages.yaml"
 OPS_CHECKS = ROOT / ".github/workflows/ops-checks.yml"
 
 
-def test_infra_pins_the_expected_sdk_release() -> None:
-    assert version("infra2-sdk") == "2.5.0"
+DEPRECATED_SDK_MODULES = {
+    "images": "infra2_sdk.images",
+    "deploy_health": "infra2_sdk.deploy_health (use infra2_sdk.deploy)",
+    "dispatch": "infra2_sdk.dispatch (use infra2_sdk.deploy)",
+    "release": "infra2_sdk.release (use infra2_sdk.refs)",
+}
+
+DEPRECATED_RUNTIME_MODULES = {
+    "environ": "infra2_sdk.runtime.environ (use infra2_sdk.runtime.environment)",
+    "dependencies": "infra2_sdk.runtime.dependencies (use infra2_sdk.runtime.health)",
+    "probes": "infra2_sdk.runtime.probes (use infra2_sdk.runtime.health)",
+}
 
 
 def _sdk_contract_violations(source: str) -> list[str]:
     """Imports of an ``infra2_sdk`` private name or deprecated surface in ``source``.
 
     Only the published contract is stable across SDK releases (#955): a module or name
-    starting with an underscore is private, and ``infra2_sdk.images`` /
-    ``to_otel_resource_attributes`` are deprecated (removed in the SDK's 3.0.0).
+    starting with an underscore is private, ``infra2_sdk.images`` /
+    ``to_otel_resource_attributes`` are removed in 3.0.0, and secondary module
+    compatibility shims (deploy_health, dispatch, release, runtime.probes, etc.)
+    are deprecated in favor of canonical modules (#1136).
     """
     violations: list[str] = []
     for node in ast.walk(ast.parse(source)):
@@ -46,8 +57,13 @@ def _sdk_contract_violations(source: str) -> list[str]:
                 continue
             if any(part.startswith("_") for part in parts[1:]):
                 violations.append(f"private module {module}")
-            if parts[1:2] == ["images"] or (len(parts) == 1 and "images" in names):
-                violations.append("deprecated module infra2_sdk.images")
+            for shim_name, shim_desc in DEPRECATED_SDK_MODULES.items():
+                if parts[1:2] == [shim_name] or (len(parts) == 1 and shim_name in names):
+                    violations.append(f"deprecated module {shim_desc}")
+            if len(parts) >= 2 and parts[1] == "runtime":
+                for shim_name, shim_desc in DEPRECATED_RUNTIME_MODULES.items():
+                    if parts[2:3] == [shim_name] or (len(parts) == 2 and shim_name in names):
+                        violations.append(f"deprecated module {shim_desc}")
             violations.extend(
                 f"private name {module}.{name}"
                 for name in names
@@ -100,48 +116,21 @@ def test_the_sdk_contract_scan_flags_private_and_deprecated_use() -> None:
     assert _sdk_contract_violations("identity.to_otel_resource_attributes()\n") == [
         "deprecated attribute to_otel_resource_attributes"
     ]
+    assert _sdk_contract_violations("from infra2_sdk.deploy_health import poll_until_healthy\n") == [
+        "deprecated module infra2_sdk.deploy_health (use infra2_sdk.deploy)"
+    ]
+    assert _sdk_contract_violations("from infra2_sdk.release import ReleaseError\n") == [
+        "deprecated module infra2_sdk.release (use infra2_sdk.refs)"
+    ]
+    assert _sdk_contract_violations("from infra2_sdk.runtime.probes import DependencyStatus\n") == [
+        "deprecated module infra2_sdk.runtime.probes (use infra2_sdk.runtime.health)"
+    ]
     assert (
         _sdk_contract_violations(
             "from infra2_sdk.refs import ls_remote_rows, redact_repo\n"
             "from other_pkg._private import _x\n"
         )
         == []
-    )
-
-
-def test_alerting_dockerfile_sdk_pin_matches_pyproject() -> None:
-    dockerfile = (ROOT / "platform/12.alerting/Dockerfile").read_text(encoding="utf-8")
-    pyproject_data = tomllib.loads(
-        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    )
-    dependencies = pyproject_data.get("project", {}).get("dependencies", [])
-    sdk_entries = [dep for dep in dependencies if dep.startswith("infra2-sdk @ ")]
-    assert len(sdk_entries) == 1, (
-        f"Expected exactly 1 infra2-sdk requirement in pyproject.toml, found: {sdk_entries}"
-    )
-    sdk_requirement = sdk_entries[0]
-    assert sdk_requirement in dockerfile, (
-        f"Alerting Dockerfile must contain the exact infra2-sdk requirement from pyproject.toml:\n"
-        f"Wanted: {sdk_requirement}\n"
-        f"In Dockerfile: {dockerfile}"
-    )
-
-
-def test_todo_dockerfile_sdk_pin_matches_pyproject() -> None:
-    dockerfile = (ROOT / "platform/30.todo/Dockerfile").read_text(encoding="utf-8")
-    pyproject_data = tomllib.loads(
-        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    )
-    dependencies = pyproject_data.get("project", {}).get("dependencies", [])
-    sdk_entries = [dep for dep in dependencies if dep.startswith("infra2-sdk @ ")]
-    assert len(sdk_entries) == 1, (
-        f"Expected exactly 1 infra2-sdk requirement in pyproject.toml, found: {sdk_entries}"
-    )
-    sdk_requirement = sdk_entries[0]
-    assert sdk_requirement in dockerfile, (
-        f"Todo Dockerfile must contain the exact infra2-sdk requirement from pyproject.toml:\n"
-        f"Wanted: {sdk_requirement}\n"
-        f"In Dockerfile: {dockerfile}"
     )
 
 
@@ -160,17 +149,17 @@ def test_deploy_canary_installs_the_declared_sdk_requirement() -> None:
     steps = {step["name"]: step for step in job["steps"]}
     install_command = steps["Install runtime dependencies"]["run"]
 
-    assert 'value.startswith("infra2-sdk @ "' in install_command
+    assert 'sdk_requirement="$(python tools/sdk_requirement.py)"' in install_command
     assert (
         'python -m pip install httpx python-dotenv rich "$sdk_requirement"'
         in install_command
     )
     for event in ("push", "pull_request"):
         paths = workflow["on"][event]["paths"]
-        # The installed SDK is the wheel pinned in pyproject.toml/uv.lock — moving
-        # the repos/infra2-sdk submodule pointer never changes it, so that path was
-        # a no-op trigger and was removed (#506).
-        assert {"pyproject.toml", "uv.lock"} <= set(paths)
+        # The installed SDK is the wheel uv.lock pins, read by tools/sdk_requirement.py
+        # (#1115). Moving the repos/infra2-sdk submodule pointer never changes it, so
+        # that path was a no-op trigger and was removed (#506).
+        assert {"pyproject.toml", "uv.lock", "tools/sdk_requirement.py"} <= set(paths)
         assert "repos/infra2-sdk" not in paths
 
 

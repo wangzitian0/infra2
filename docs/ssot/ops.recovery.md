@@ -134,7 +134,7 @@ uv run python tools/backup_verification.py --manifest /path/to/manifest.json --j
 
 ### SOP-005: 生成并上传 off-host 备份
 
-备份 runner 读取各服务 `BackupFacet` 声明派生的清单（[`libs/backup/`](../../libs/backup/README.md) `libs/backup/verification.py::load_backup_inventory` / 兼容门面 `libs/backup_verification.py`，#542），
+备份 runner 读取各服务 `BackupFacet` 声明派生的清单（[`libs/backup/`](../../libs/backup/README.md) `libs/backup/verification.py::load_backup_inventory`，#542），
 为每个登记的 `data_path` 创建 archive、计算 SHA256，并通过主机上的 `rclone`
 remote 上传到 off-host storage。
 
@@ -355,6 +355,7 @@ Until the first run writes the log, any crontab edit restarts that clock. After 
 - **兜底**(Dokploy 重部署没产生新 deployment record / 高负载): 直接把 role-id +
   fresh secret-id 写进该服务 `.env`,`docker compose -p <proj> -f <compose> up -d`
   重建(creds `secret_id_ttl=0` 不过期)。
+  兜底手工签发的 secret id 不会自动失效;Dokploy 恢复后,在没有部署和 preview 运行时,用同样的 `--project <project> --service <service>` 再跑一次 `setup-approle --deploy`。只有该 role 的全部 consumer 都换上新 secret id,它才销毁这次运行前的全部 secret id;否则退出 1,什么都不销毁(#1070)。已签发的 token 仍有效到 168h(#1074)。
 - **验证**: vault-agent `healthy` → app 容器起 → `/api/health` 200 → 迁移落地。
 - **关联**: 根因 #290(provisioning 链脆弱);creds 持久化 #294;vault CLI 入镜像
   #289;policy 缺口 #287。**收尾目标(高优)**: 把这条 playbook 自动化成不依赖人肉

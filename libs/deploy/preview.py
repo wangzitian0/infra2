@@ -41,7 +41,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import httpx
-from infra2_sdk.deploy_health import poll_until_healthy
+from infra2_sdk.deploy import poll_until_healthy
 
 from libs.core.environ import infra_domain
 from libs.deploy.compose_lock import compose_write_lock
@@ -289,7 +289,7 @@ def up(
     """Stand up (or update) the preview stack for one alias and deploy ``code``.
 
     ``service`` (default ``finance_report/app``, the original preview-capable service)
-    selects the :func:`~libs.deploy_env_config.preview_service_config` — which Dokploy
+    selects the :func:`~libs.deploy.env_config.preview_service_config` — which Dokploy
     project, compose template, and ephemeral-DB name this alias uses.
 
     Resolves code->sha, computes the alias identity, finds-or-creates this alias's own

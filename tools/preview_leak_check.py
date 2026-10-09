@@ -41,9 +41,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.common import normalize_env_name  # noqa: E402
+from libs.core.environ import normalize_env_name  # noqa: E402
 from libs.core.constants import PROJECT_REPOS  # noqa: E402
-from libs.deploy_env_config import (  # noqa: E402
+from libs.deploy.env_config import (  # noqa: E402
     CANARY_SLOT,
     PREVIEW_ENVIRONMENT,
     PREVIEW_KINDS,
@@ -74,7 +74,7 @@ def collect_preview_composes(projects: list[dict]) -> list[PreviewCompose]:
     """Flatten registered preview environments into preview composes."""
     found: list[PreviewCompose] = []
     preview_env = normalize_env_name(PREVIEW_ENVIRONMENT)
-    from libs.deploy_env_config import _PREVIEW_SERVICE_CONFIGS
+    from libs.deploy.env_config import _PREVIEW_SERVICE_CONFIGS
 
     registered_projects = {
         cfg.project: f"{cfg.slug_prefix}-" for cfg in _PREVIEW_SERVICE_CONFIGS.values()

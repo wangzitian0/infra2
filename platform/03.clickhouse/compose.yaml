@@ -3,6 +3,7 @@ services:
     image: clickhouse/clickhouse-server:25.5.6
     container_name: platform-clickhouse-init${ENV_SUFFIX}
     restart: on-failure
+    mem_limit: 256m
     command:
       - bash
       - -c

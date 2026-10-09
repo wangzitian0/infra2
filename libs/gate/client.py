@@ -6,14 +6,19 @@ import json
 import subprocess
 import time
 from collections.abc import Sequence
+from urllib.parse import quote
 
+from libs.gate.production_contract import workflow_contract_failures
+from libs.gate.production_lock import lock_failures, read_lock_facts
 from libs.gate.review import thread_weight
 from libs.gate.types import (
     DEFAULT_REPO,
     GH_TIMEOUT_S,
+    MAX_PR_COMMENTS,
     MAX_REVIEW_THREADS,
     MAX_THREAD_COMMENTS,
     NO_CHECKS_REPORTED,
+    WORKFLOW_PREFIX,
     HeadFacts,
     Runner,
     _epoch,
@@ -70,6 +75,12 @@ def _gh(
     raise RuntimeError(f"gh {' '.join(argv)}: failed after {max_retries} attempts")
 
 
+def _contents_url(repo: str, path: str, ref: str) -> str:
+    """The contents API path for `path` at `ref`. Both are quoted: a `?` or `#` in a
+    file name must not end the path and drop the ref (#1138)."""
+    return f"repos/{repo}/contents/{quote(path, safe='/')}?ref={quote(ref, safe='')}"
+
+
 def _file_at(repo: str, ref: str, path: str, *, gh: Runner | None = None) -> str | None:
     """A file's contents at a ref, or None if it cannot be read."""
     if gh is None:
@@ -82,11 +93,71 @@ def _file_at(repo: str, ref: str, path: str, *, gh: Runner | None = None) -> str
                 "api",
                 "-H",
                 "Accept: application/vnd.github.raw",
-                f"repos/{repo}/contents/{path}?ref={ref}",
+                _contents_url(repo, path, ref),
             ]
         )
     except RuntimeError:
         return None
+
+
+def _workflow_names_at(
+    repo: str, ref: str, *, gh: Runner | None = None
+) -> tuple[str, ...] | None:
+    """Names of the workflow files at a ref, or None if the list cannot be read."""
+    if gh is None:
+        gh = _gh
+    try:
+        entries = json.loads(
+            gh(
+                [
+                    "api",
+                    _contents_url(repo, WORKFLOW_PREFIX.rstrip("/"), ref),
+                ]
+            )
+        )
+        return tuple(
+            sorted(
+                str(entry["name"])
+                for entry in entries
+                if entry["type"] == "file"
+                and str(entry["name"]).endswith((".yml", ".yaml"))
+            )
+        )
+    except (RuntimeError, json.JSONDecodeError, KeyError, TypeError):
+        return None
+
+
+def _production_lock_failures(
+    repo: str, head_sha: str, *, gh: Runner | None = None
+) -> tuple[str, ...]:
+    """Why the production lock does not cover this head; empty when it does (#1138).
+
+    The lock facts come from GitHub. The production contract runs on the head's
+    workflows. A list or a file that cannot be read is a failure.
+    """
+    if gh is None:
+        gh = _gh
+    try:
+        return _read_production_lock(repo, head_sha, gh=gh)
+    except Exception as exc:  # noqa: BLE001 - a lock read must not crash the verdict
+        return (f"the lock check failed: {type(exc).__name__}: {exc}"[:200],)
+
+
+def _read_production_lock(repo: str, head_sha: str, *, gh: Runner) -> tuple[str, ...]:
+    failures = lock_failures(read_lock_facts(repo, gh=gh))
+    names = _workflow_names_at(repo, head_sha, gh=gh)
+    if not names:
+        return (*failures, f"cannot list the workflow files at {head_sha[:7]}")
+    texts: dict[str, str] = {}
+    for name in names:
+        text = _file_at(repo, head_sha, f"{WORKFLOW_PREFIX}{name}", gh=gh)
+        if text is None:
+            failures.append(f"cannot read {WORKFLOW_PREFIX}{name} at {head_sha[:7]}")
+        else:
+            texts[name] = text
+    if len(texts) < len(names):
+        return tuple(failures)
+    return (*failures, *workflow_contract_failures(texts))
 
 
 def _read_checks(number: int, *, repo: str, gh: Runner | None = None) -> str:
@@ -143,10 +214,37 @@ def _field(view: dict, name: str) -> str:
     return str(value) if value else ABSENT
 
 
+def _pr_comments(block: object) -> tuple[tuple[str, float], ...]:
+    """PR conversation comments as (body, epoch of the current text).
+
+    The time is the last edit when there is one, else the creation: an edit that
+    makes an old comment name a new head does not date the claim back (#1075).
+    A missing or unreadable list, or an unreadable comment, reads as no comment.
+    """
+    nodes = block.get("nodes") if isinstance(block, dict) else None
+    found: list[tuple[str, float]] = []
+    for node in nodes if isinstance(nodes, list) else []:
+        if not isinstance(node, dict) or not isinstance(node.get("body"), str):
+            continue
+        try:
+            created = _epoch(node["createdAt"])
+            edited = _epoch(node["lastEditedAt"]) if node.get("lastEditedAt") else 0.0
+        except (KeyError, TypeError, ValueError, AttributeError):
+            continue
+        found.append((node["body"], max(created, edited)))
+    return tuple(found)
+
+
 def collect(
     number: int, *, repo: str = DEFAULT_REPO, gh: Runner | None = None
 ) -> HeadFacts:
-    """Read the head's facts through `gh`; nothing here decides."""
+    """Read the head's facts through `gh`; nothing here decides.
+
+    One run of the gate makes at most 9 + N + 2k calls: N workflow files for the lock
+    check, and two reads for each of k changed gate files with a direction proof
+    (#1138). `--request-review` adds up to 2 and `--merge` adds 1. `_gh` tries each call
+    up to 3 times.
+    """
     if gh is None:
         gh = _gh
 
@@ -176,20 +274,26 @@ def collect(
                 "graphql",
                 "-f",
                 "query=query{repository(owner:%s,name:%s){pullRequest(number:%d)"
-                "{reviewThreads(first:%d){totalCount nodes{isResolved "
+                "{author{__typename login} "
+                "comments(last:%d){nodes{body createdAt lastEditedAt}} "
+                "reviewThreads(first:%d){totalCount nodes{isResolved "
                 "comments(first:%d){nodes{body}}}}}}}"
                 % (
                     json.dumps(owner),
                     json.dumps(name),
                     number,
+                    MAX_PR_COMMENTS,
                     MAX_REVIEW_THREADS,
                     MAX_THREAD_COMMENTS,
                 ),
             ]
         )
     )
-    review_threads = threads["data"]["repository"]["pullRequest"]["reviewThreads"]
+    pull = threads["data"]["repository"]["pullRequest"]
+    review_threads = pull["reviewThreads"]
     nodes = review_threads["nodes"]
+    # null for a deleted account: read as unknown, which keeps the user rule.
+    author = pull.get("author") if isinstance(pull.get("author"), dict) else {}
     commits = view.get("commits") or []
     last_push = max((_epoch(c["committedDate"]) for c in commits), default=0.0)
     head_sha = str(view.get("headRefOid") or "")
@@ -221,57 +325,78 @@ def collect(
         if (str(view.get("state") or "") == "OPEN" and _is_local_root_repo(repo))
         else ()
     )
-    return HeadFacts(
-        repo=repo,
-        rule_drift=drift,
-        number=int(view["number"]),
-        state=str(view.get("state") or ""),
-        draft=bool(view.get("isDraft")),
-        base=str(view.get("baseRefName") or ""),
-        head_sha=str(view.get("headRefOid") or ""),
-        files=changed,
-        proven_tighter=proven,
-        changed_files=int(view.get("changedFiles") or 0),
-        review_decision=str(view.get("reviewDecision") or ""),
-        absent_fields=tuple(
-            name
-            for name in (
-                "files",
-                "changedFiles",
-                "commits",
-                "mergeable",
-                "mergeStateStatus",
-            )
-            if not view.get(name)
-        ),
-        last_push_at=last_push if head_seen else 0.0,
-        checks=tuple(
-            (str(c["name"]), str(c.get("bucket") or c.get("state") or ""))
-            for c in checks
-        ),
-        unresolved_threads=sum(1 for n in nodes if not n.get("isResolved")),
-        unresolved_weight=sum(
-            thread_weight(
-                [
-                    c.get("body") or ""
-                    for c in ((n.get("comments") or {}).get("nodes") or [])
-                ]
-            )
-            for n in nodes
-            if not n.get("isResolved")
-        ),
-        review_threads_total=int(review_threads.get("totalCount") or len(nodes)),
-        node_id=str(view.get("id") or ""),
-        mergeable=_field(view, "mergeable"),
-        merge_state=_field(view, "mergeStateStatus"),
-        base_changed_files=base_changed,
-        body=str(view.get("body") or ""),
-        reviews=tuple(
-            (
-                str((r.get("author") or {}).get("login") or ""),
-                str((r.get("commit") or {}).get("oid") or ""),
-                _epoch(r["submittedAt"]) if r.get("submittedAt") else 0.0,
-            )
-            for r in view.get("reviews") or []
-        ),
+    # Read on every run of an open PR (#1138): the agent decides from the verdict
+    # whether the lock holds, also for a PR that changes no workflow or deploy path.
+    lock = (
+        _production_lock_failures(repo, head_sha, gh=gh)
+        if (str(view.get("state") or "") == "OPEN" and _is_local_root_repo(repo))
+        else None
     )
+    # A failure after the lock read is reported as such (#1138 round 3): the run
+    # stopped before a verdict, and the lock was read, so "not read" is false.
+    try:
+        return HeadFacts(
+            repo=repo,
+            rule_drift=drift,
+            lock_failures=lock,
+            number=int(view["number"]),
+            state=str(view.get("state") or ""),
+            draft=bool(view.get("isDraft")),
+            base=str(view.get("baseRefName") or ""),
+            head_sha=str(view.get("headRefOid") or ""),
+            files=changed,
+            proven_tighter=proven,
+            changed_files=int(view.get("changedFiles") or 0),
+            review_decision=str(view.get("reviewDecision") or ""),
+            absent_fields=tuple(
+                name
+                for name in (
+                    "files",
+                    "changedFiles",
+                    "commits",
+                    "mergeable",
+                    "mergeStateStatus",
+                )
+                if not view.get(name)
+            ),
+            last_push_at=last_push if head_seen else 0.0,
+            checks=tuple(
+                (str(c["name"]), str(c.get("bucket") or c.get("state") or ""))
+                for c in checks
+            ),
+            unresolved_threads=sum(1 for n in nodes if not n.get("isResolved")),
+            unresolved_weight=sum(
+                thread_weight(
+                    [
+                        c.get("body") or ""
+                        for c in ((n.get("comments") or {}).get("nodes") or [])
+                    ]
+                )
+                for n in nodes
+                if not n.get("isResolved")
+            ),
+            review_threads_total=int(review_threads.get("totalCount") or len(nodes)),
+            node_id=str(view.get("id") or ""),
+            mergeable=_field(view, "mergeable"),
+            merge_state=_field(view, "mergeStateStatus"),
+            base_changed_files=base_changed,
+            body=str(view.get("body") or ""),
+            author=(
+                str(author.get("__typename") or ""),
+                str(author.get("login") or ""),
+            ),
+            comments=_pr_comments(pull.get("comments")),
+            reviews=tuple(
+                (
+                    str((r.get("author") or {}).get("login") or ""),
+                    str((r.get("commit") or {}).get("oid") or ""),
+                    _epoch(r["submittedAt"]) if r.get("submittedAt") else 0.0,
+                )
+                for r in view.get("reviews") or []
+            ),
+        )
+    except Exception as exc:
+        exc.lock_read = lock is not None  # type: ignore[attr-defined]
+        # No lock read for a closed PR or another repository: skipped by design.
+        exc.lock_skipped = lock is None  # type: ignore[attr-defined]
+        raise

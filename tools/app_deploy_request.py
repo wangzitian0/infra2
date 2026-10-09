@@ -10,25 +10,25 @@ import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-# libs.release_markers is pure git; libs.app_deploy_request pulls in infra2_sdk and is
+# libs.deploy.release_markers is pure git; libs.deploy.app_deploy_request pulls in infra2_sdk and is
 # imported lazily, so `markers` runs in an ops job that installs neither (#650).
-from libs.release_markers import marker_status
+from libs.deploy.release_markers import marker_status
 
 if TYPE_CHECKING:  # the annotation must not drag infra2_sdk into the markers path
-    from libs.app_deploy_request import DeployPlan
+    from libs.deploy.app_deploy_request import DeployPlan
 
 
 def execute_plan(plan: "DeployPlan", *, run=None) -> int:
     """Execute the primary service, then each companion the service spec declares.
 
-    A companion (``libs.deploy_contract.ServiceSpec.companions``) is promoted at the
+    A companion (``libs.deploy.contract.ServiceSpec.companions``) is promoted at the
     same version_ref / iac_ref / type by the same request — truealpha/app carries
     truealpha/data_engine (truealpha#712). Companions are platform (iac_pinned)
     services, so ``--expected-sha`` — an app-image assertion — is dropped for them;
     the runner pins the release's image digest from ``version_ref`` instead. The
     first non-zero exit stops the sequence and is the request's exit code.
     """
-    from libs.deploy_contract import service_spec
+    from libs.deploy.contract import service_spec
 
     if run is None:
         from tools.deploy_v2 import main as deploy_v2_main
@@ -135,7 +135,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(status.line())
             return 1 if status.stale else 0
 
-        from libs.app_deploy_request import make_plan
+        from libs.deploy.app_deploy_request import make_plan
 
         if not args.sender or not args.domain:
             raise ValueError("--sender and --domain are required for plan and execute")

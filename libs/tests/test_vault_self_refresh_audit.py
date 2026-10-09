@@ -6,8 +6,8 @@ from pathlib import Path
 
 import yaml
 
-from libs import vault_self_refresh_audit as vault_self_refresh_audit_module
-from libs.vault_self_refresh_audit import (
+from libs.security import vault_self_refresh_audit as vault_self_refresh_audit_module
+from libs.security.vault_self_refresh_audit import (
     classify_deployed_template,
     VaultService,
     _remote_container_logs,
@@ -778,7 +778,7 @@ def test_remote_container_state_captures_started_at(monkeypatch) -> None:
 
         return Result()
 
-    monkeypatch.setattr("libs.vault_self_refresh_audit._ssh", fake_ssh)
+    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
 
     result = _remote_container_state("vps.example", "platform-prefect-services")
 
@@ -806,7 +806,7 @@ def test_remote_container_logs_bounds_with_since_flag(monkeypatch) -> None:
 
         return Result()
 
-    monkeypatch.setattr("libs.vault_self_refresh_audit._ssh", fake_ssh)
+    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
 
     result = _remote_container_logs("vps.example", "platform-prefect-services")
 
@@ -837,7 +837,7 @@ def test_remote_secret_file_state_parses_stat_json(monkeypatch) -> None:
 
         return Result()
 
-    monkeypatch.setattr("libs.vault_self_refresh_audit._ssh", fake_ssh)
+    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
 
     result = _remote_secret_file_state("vps.example", "platform-postgres-vault-agent")
 
@@ -868,7 +868,7 @@ def test_remote_secret_file_text_returns_raw_cat_output(monkeypatch) -> None:
 
         return Result()
 
-    monkeypatch.setattr("libs.vault_self_refresh_audit._ssh", fake_ssh)
+    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
 
     result = _remote_secret_file_text("vps.example", "finance_report-app-vault-agent")
 
@@ -887,7 +887,7 @@ def test_remote_secret_file_text_returns_empty_on_ssh_failure(monkeypatch) -> No
 
         return Result()
 
-    monkeypatch.setattr("libs.vault_self_refresh_audit._ssh", fake_ssh)
+    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
 
     assert _remote_secret_file_text("vps.example", "some-vault-agent") == ""
 
@@ -1032,7 +1032,10 @@ def test_collect_live_observations_skips_token_lookup_for_approle_service(
                 )
             }
 
-    def fake_get_env():
+    requested_envs: list[str | None] = []
+
+    def fake_get_env(env_name=None):
+        requested_envs.append(env_name)
         return {"VPS_HOST": "vps.example", "INTERNAL_DOMAIN": "example.test"}
 
     def fake_get_dokploy(host=None):
@@ -1054,7 +1057,7 @@ def test_collect_live_observations_skips_token_lookup_for_approle_service(
 
         return Result()
 
-    monkeypatch.setattr("libs.common.get_env", fake_get_env)
+    monkeypatch.setattr("libs.core.environ.get_env", fake_get_env)
     monkeypatch.setattr("libs.deploy.dokploy_client.get_dokploy", fake_get_dokploy)
     monkeypatch.setattr(
         vault_self_refresh_audit_module, "verify_vault_token", fail_if_called
@@ -1064,6 +1067,8 @@ def test_collect_live_observations_skips_token_lookup_for_approle_service(
     observations = collect_live_observations([service], env="production")
 
     assert observations["services"][service.id]["token_lookup"] is None
+    # The audit names its environment: it never relies on a process default (#1039).
+    assert requested_envs == ["production"]
 
 
 def test_collect_live_observations_falls_back_to_legacy_dokploy_services(
@@ -1104,7 +1109,10 @@ def test_collect_live_observations_falls_back_to_legacy_dokploy_services(
                 }
             return None
 
-    def fake_get_env():
+    requested_envs: list[str | None] = []
+
+    def fake_get_env(env_name=None):
+        requested_envs.append(env_name)
         return {"VPS_HOST": "vps.example", "INTERNAL_DOMAIN": "example.test"}
 
     def fake_ssh(host, command):
@@ -1123,7 +1131,7 @@ def test_collect_live_observations_falls_back_to_legacy_dokploy_services(
             return {"status": "running", "healthy": True, "container": container_name}
         return {"status": "missing", "healthy": False, "container": container_name}
 
-    monkeypatch.setattr("libs.common.get_env", fake_get_env)
+    monkeypatch.setattr("libs.core.environ.get_env", fake_get_env)
     monkeypatch.setattr(
         "libs.deploy.dokploy_client.get_dokploy", lambda host=None: FakeDokployClient()
     )
@@ -1137,6 +1145,7 @@ def test_collect_live_observations_falls_back_to_legacy_dokploy_services(
     observations = collect_live_observations([service], env="production")
 
     assert searched_names == ["s3", "minio"]
+    assert requested_envs == ["production"]
     assert (
         "VAULT_ROLE_ID=test-role-id-legacy"
         in observations["services"][service.id]["dokploy_env"]

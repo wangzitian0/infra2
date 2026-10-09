@@ -6,7 +6,7 @@ so the check is exercised without any live Dokploy/network access.
 
 from __future__ import annotations
 
-from libs.deploy_env_config import ComposeTarget
+from libs.deploy.env_config import ComposeTarget
 from tools import app_compose_id_drift as drift
 
 
@@ -76,7 +76,7 @@ def test_mismatched_compose_id_fails_naming_stale_and_correct_value():
     assert row.verdict == "DRIFT"
     assert row.live_compose_id == "FRESH_ID_AFTER_RECREATE"
     # The message must name BOTH the stale literal and the correct value, so an
-    # operator can fix libs/deploy_env_config.py without re-deriving anything.
+    # operator can fix libs/deploy/env_config.py without re-deriving anything.
     assert "A6V-hbJlgHMwgPDoTDnhH" in row.note  # the stale literal
     assert "FRESH_ID_AFTER_RECREATE" in row.note  # the correct value
     assert "finance_report/app" in row.note
@@ -149,7 +149,7 @@ def test_confirmed_drift_includes_only_drift_and_missing():
 
 def test_scan_checks_every_registered_target():
     # scan() must not silently skip a bespoke app's compose_id — cover all of them.
-    from libs.deploy_env_config import bespoke_app_compose_targets
+    from libs.deploy.env_config import bespoke_app_compose_targets
 
     expected_keys = {
         (t.compose_name, t.project_name, t.dokploy_env_name)

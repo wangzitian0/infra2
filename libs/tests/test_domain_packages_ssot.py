@@ -14,7 +14,6 @@ from pathlib import Path
 
 import pytest
 
-from libs import common, env, secrets_supply
 from libs.backup import (
     RehearsalSpecification,
     create_rehearsal_plan,
@@ -45,7 +44,7 @@ from libs.security import (
 # ==========================================
 
 
-def test_core_environment_handling() -> None:
+def test_core_environment_handling(monkeypatch) -> None:
     """C-03 & C-04: Test DeploymentEnvironment and with_env_suffix."""
     deploy_env = DeploymentEnvironment(
         name="staging",
@@ -64,8 +63,11 @@ def test_core_environment_handling() -> None:
     assert prod_env.is_production is True
     assert with_env_suffix("platform-redis", prod_env) == "platform-redis"
 
+    monkeypatch.setenv("DEPLOY_ENV", "staging")  # get_environment() has no default
     curr = get_environment()
     assert isinstance(curr, DeploymentEnvironment)
+    assert curr.name == "staging"
+    assert curr.env_suffix == "-staging"
 
 
 # ==========================================
@@ -160,19 +162,12 @@ def test_observability_watcher_and_trail_aliases() -> None:
 # ==========================================
 
 
-def test_backward_compatibility_shims() -> None:
-    """Verify all re-exports in legacy modules work identically."""
-    # common shims
-    assert hasattr(common, "DeploymentEnvironment")
-    assert hasattr(common, "get_environment")
+def test_core_package_exports_the_objects_of_core_environ() -> None:
+    """Each ``libs.core`` environment name is the object defined in ``libs.core.environ``."""
+    from libs.core import environ
 
-    # env shims
-    assert hasattr(env, "generate_secret_token")
-    assert hasattr(env, "resolve_vault_token")
-
-    # secrets_supply shims
-    assert hasattr(secrets_supply, "apply_secret_supply")
-    assert hasattr(secrets_supply, "create_secrets_resolver")
+    assert DeploymentEnvironment is environ.DeploymentEnvironment
+    assert get_environment is environ.get_environment
 
 
 def test_rehearsal_timeout_guard(monkeypatch) -> None:

@@ -1,7 +1,7 @@
 import sys
 
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.service_facets import BackupFacet, ProbeFacet, SecretsFacet, SignalFacet
+from libs.core.facets import BackupFacet, ProbeFacet, SecretsFacet, SignalFacet
 
 shared_tasks = sys.modules.get("truealpha.01.postgres.shared")
 
