@@ -45,6 +45,30 @@ class CanaryRealityReport:
     monitoring: PillarResult
     alerts: PillarResult
     installed_sdk: str
+    expected_sdk: str = ""
+    sdk: PillarResult = field(default_factory=lambda: PillarResult(ok=True, summary=""))
+
+
+def _resolve_locked_sdk_version(lock_path: Path | None = None) -> str:
+    """Read the infra2-sdk package version pinned in uv.lock."""
+    import tomllib
+
+    if lock_path is None:
+        lock_path = Path(__file__).resolve().parents[1] / "uv.lock"
+    if lock_path.exists():
+        try:
+            doc = tomllib.loads(lock_path.read_text(encoding="utf-8"))
+            for pkg in doc.get("package", []):
+                if pkg.get("name") == "infra2-sdk":
+                    return str(pkg.get("version", ""))
+        except Exception:
+            pass
+    try:
+        from importlib.metadata import version
+
+        return version("infra2-sdk")
+    except Exception:
+        return ""
 
 
 def _ssh_cmd(
@@ -81,7 +105,14 @@ def _resolve_ssh_credentials() -> tuple[str, str, str, int]:
     return host, user, key_path, port
 
 
-def verify_canary(environment: str = "production") -> CanaryRealityReport:
+def verify_canary(
+    environment: str = "production",
+    expected_sdk: str | None = None,
+    check_sdk: bool = True,
+) -> CanaryRealityReport:
+    if expected_sdk is None:
+        expected_sdk = _resolve_locked_sdk_version()
+
     host, user, key_path, port = _resolve_ssh_credentials()
     container = (
         "platform-todo" if environment == "production" else "platform-todo-staging"
@@ -140,6 +171,8 @@ def verify_canary(environment: str = "production") -> CanaryRealityReport:
             monitoring=fail,
             alerts=fail,
             installed_sdk="unknown",
+            expected_sdk=expected_sdk or "",
+            sdk=fail,
         )
 
     sections: dict[str, str] = {}
@@ -234,11 +267,24 @@ def verify_canary(environment: str = "production") -> CanaryRealityReport:
         details={"bridge_response": sections.get("ALERT_BRIDGE", "")},
     )
 
+    # Parse SDK Version against locked requirement
+    sdk_ok = True
+    if check_sdk and expected_sdk:
+        sdk_ok = bool(installed_sdk == expected_sdk)
+    sdk_pillar = PillarResult(
+        ok=sdk_ok,
+        summary=f"Installed SDK {installed_sdk} matches locked release {expected_sdk}"
+        if sdk_ok
+        else f"Installed SDK {installed_sdk} does not match locked release {expected_sdk}",
+        details={"installed_sdk": installed_sdk, "expected_sdk": expected_sdk},
+    )
+
     all_ok = (
         tracking_pillar.ok
         and logs_pillar.ok
         and monitoring_pillar.ok
         and alerts_pillar.ok
+        and sdk_pillar.ok
     )
 
     return CanaryRealityReport(
@@ -249,6 +295,8 @@ def verify_canary(environment: str = "production") -> CanaryRealityReport:
         monitoring=monitoring_pillar,
         alerts=alerts_pillar,
         installed_sdk=installed_sdk,
+        expected_sdk=expected_sdk or "",
+        sdk=sdk_pillar,
     )
 
 
@@ -257,28 +305,47 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--env", choices=("production", "staging"), default="production"
     )
+    parser.add_argument(
+        "--expected-sdk",
+        default=None,
+        help="Override expected SDK version (default: from uv.lock)",
+    )
+    parser.add_argument(
+        "--skip-sdk-check",
+        action="store_true",
+        help="Do not fail verification on SDK version mismatch",
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
-    report = verify_canary(args.env)
+    report = verify_canary(
+        args.env,
+        expected_sdk=args.expected_sdk,
+        check_sdk=not args.skip_sdk_check,
+    )
 
     if args.json:
         print(json.dumps(asdict(report), indent=2))
     else:
         print(f"=== Canary Todo Reality Verification [{report.environment}] ===")
         print(f"Overall Status: {'PASS' if report.all_ok else 'FAIL'}")
-        print(f"Installed SDK:  {report.installed_sdk}")
         print(
-            f"1. Tracking:    {'[OK]' if report.tracking.ok else '[FAIL]'} {report.tracking.summary}"
+            f"Installed SDK:  {report.installed_sdk} (expected: {report.expected_sdk or 'any'})"
         )
         print(
-            f"2. Logs:        {'[OK]' if report.logs.ok else '[FAIL]'} {report.logs.summary}"
+            f"1. SDK:         {'[OK]' if report.sdk.ok else '[FAIL]'} {report.sdk.summary}"
         )
         print(
-            f"3. Monitoring:  {'[OK]' if report.monitoring.ok else '[FAIL]'} {report.monitoring.summary}"
+            f"2. Tracking:    {'[OK]' if report.tracking.ok else '[FAIL]'} {report.tracking.summary}"
         )
         print(
-            f"4. Alerts:      {'[OK]' if report.alerts.ok else '[FAIL]'} {report.alerts.summary}"
+            f"3. Logs:        {'[OK]' if report.logs.ok else '[FAIL]'} {report.logs.summary}"
+        )
+        print(
+            f"4. Monitoring:  {'[OK]' if report.monitoring.ok else '[FAIL]'} {report.monitoring.summary}"
+        )
+        print(
+            f"5. Alerts:      {'[OK]' if report.alerts.ok else '[FAIL]'} {report.alerts.summary}"
         )
 
     return 0 if report.all_ok else 1
