@@ -162,8 +162,12 @@ def offboard_service(
             success(
                 f"Purged secret/data/{clean_project}/{env_name}/{clean_service} in Vault"
             )
-    else:
+    elif dry_run:
         info(f"[DRY RUN] Would remove Vault AppRole & Policy '{role_name}'")
+    else:
+        warning(
+            f"VAULT_TOKEN not provided; skipping Vault AppRole teardown for '{role_name}'"
+        )
 
     # Step 3: PostgreSQL Lockdown or Purge
     info("Step 3: Managing PostgreSQL database & user...")

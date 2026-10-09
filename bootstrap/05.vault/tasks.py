@@ -433,17 +433,20 @@ def _vault_token_targets(root_dir: str) -> list[VaultTokenTarget]:
             if not entry.is_dir() or entry.name.startswith("."):
                 continue
 
+            parts = entry.name.split(".", 1)
+            service_name = parts[1] if len(parts) == 2 else entry.name
+
+            # Exclude bootstrap infrastructure layers
+            if project_name == "bootstrap" and service_name in {"vault", "1password"}:
+                continue
+
             has_vault_config = (
-                os.path.exists(os.path.join(entry.path, "compose.yaml"))
-                or os.path.exists(os.path.join(entry.path, "deploy.py"))
-                or os.path.exists(os.path.join(entry.path, "vault-agent.hcl"))
+                os.path.exists(os.path.join(entry.path, "vault-agent.hcl"))
                 or os.path.exists(os.path.join(entry.path, "vault-policy.hcl"))
+                or os.path.exists(os.path.join(entry.path, "secrets.ctmpl"))
             )
             if not has_vault_config:
                 continue
-
-            parts = entry.name.split(".", 1)
-            service_name = parts[1] if len(parts) == 2 else entry.name
 
             if (project_name, service_name) not in seen:
                 seen.add((project_name, service_name))

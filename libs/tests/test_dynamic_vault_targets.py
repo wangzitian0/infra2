@@ -40,7 +40,7 @@ def test_vault_token_targets_dynamically_discovers_new_service(monkeypatch, tmp_
     # Create a mock repo structure
     apps_dir = tmp_path / "apps" / "payment_gateway"
     apps_dir.mkdir(parents=True)
-    (apps_dir / "compose.yaml").write_text("services: {}\n")
+    (apps_dir / "vault-agent.hcl").write_text("vault {}\n")
 
     targets = tasks._vault_token_targets(str(tmp_path))
     assert any(

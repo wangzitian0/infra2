@@ -230,10 +230,9 @@ def sync_vault_secrets(
         venv = dict(os.environ)
         venv["VAULT_ADDR"] = vault_addr
         venv["VAULT_TOKEN"] = token
-        kv_pairs = " ".join(f"{k}='{v}'" for k, v in secrets.items())
+        kv_pairs = [f"{k}={v}" for k, v in secrets.items()]
         subprocess.run(
-            f"vault kv put secret/{path} {kv_pairs}",
-            shell=True,
+            ["vault", "kv", "put", f"secret/{path}", *kv_pairs],
             env=venv,
             check=True,
             capture_output=True,
