@@ -27,6 +27,7 @@ dependencies = [
     # in libs/observability/probes.py) call infra2_sdk.runtime.postgres/s3, which need these.
     "psycopg[binary]>=3.2,<4",
     "boto3>=1.34,<2",
+    "fastapi>=0.110.0,<1",
 ]
 
 [dependency-groups]

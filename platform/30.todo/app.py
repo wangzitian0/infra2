@@ -34,6 +34,10 @@ import urllib.request
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from typing import Any, Callable, Dict, List
 
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse
+from infra2_sdk.fastapi import init_service
+
 LOGGER = logging.getLogger("platform-todo")
 SERVICE_TRACER_NAME = "platform-todo"
 
@@ -821,28 +825,224 @@ class TodoHandler(BaseHTTPRequestHandler):
 SERVER_START_TIME = time.time()
 
 
+def _canary_readiness_checker() -> tuple[bool, str]:
+    """Check readiness of Canary write paths for /readyz and /health."""
+    try:
+        report = cached_canary_status()
+        if report.get("ok"):
+            return True, "canary write paths passed"
+        failed = report.get("failed") or []
+        unconfigured = report.get("unconfigured") or []
+        reasons = []
+        if failed:
+            reasons.append(f"failed={','.join(failed)}")
+        if unconfigured:
+            reasons.append(f"unconfigured={','.join(unconfigured)}")
+        return False, "; ".join(reasons) or "canary checks not ok"
+    except Exception as exc:
+        return False, f"canary status check failed: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# FastAPI runtime with turnkey infra2-sdk observability and lifecycle hooks
+# ---------------------------------------------------------------------------
+
+fastapi_app = FastAPI(
+    title="Canary Todo",
+    description="Canary Infrastructure Validation Service",
+    docs_url="/docs",
+    redoc_url=None,
+)
+
+# Single-line platform standard integration: mounts /livez, /readyz, /health, SigNoz OTel
+init_service(
+    fastapi_app,
+    name="platform-todo",
+    db_checker=_canary_readiness_checker,
+    enable_otel=True,
+)
+
+
+@fastapi_app.get("/api/health", tags=["Observability"])
+def fastapi_api_health() -> Response:
+    return JSONResponse(
+        status_code=200,
+        content={
+            "ok": True,
+            "status": "healthy",
+            "service": "platform/todo",
+            "domain": "todo.zitian.party",
+            "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
+        },
+    )
+
+
+@fastapi_app.get("/api/canary/status", tags=["Observability"])
+def fastapi_api_canary_status() -> Response:
+    result = cached_canary_status()
+    status_code = 200 if result.get("ok") else 503
+    return JSONResponse(status_code=status_code, content=result)
+
+
+@fastapi_app.get("/api/todos", tags=["Todos"])
+def fastapi_get_todos() -> Response:
+    with _todos_lock:
+        items = [dict(t) for t in _FALLBACK_TODOS]
+    return JSONResponse(status_code=200, content=items)
+
+
+@fastapi_app.post("/api/todos", tags=["Todos"], status_code=201)
+async def fastapi_create_todo(request: Request) -> Response:
+    try:
+        payload = await request.json()
+    except Exception as err:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Invalid JSON body", "detail": str(err)},
+        )
+    if not isinstance(payload, dict):
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON body"})
+    if "completed" in payload and not isinstance(payload["completed"], bool):
+        return JSONResponse(
+            status_code=400, content={"error": "Field 'completed' must be a boolean"}
+        )
+    if "title" in payload and not isinstance(payload["title"], str):
+        return JSONResponse(
+            status_code=400, content={"error": "Field 'title' must be a string"}
+        )
+    with _todos_lock:
+        new_id = max((t["id"] for t in _FALLBACK_TODOS), default=0) + 1
+        title = (
+            str(payload["title"]).strip()
+            if "title" in payload
+            else f"Todo #{new_id}"
+        )
+        item = {
+            "id": new_id,
+            "title": title,
+            "completed": payload.get("completed", False),
+            "capability": str(payload.get("capability", "general")),
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        _FALLBACK_TODOS.append(item)
+        item_copy = dict(item)
+    return JSONResponse(status_code=201, content=item_copy)
+
+
+@fastapi_app.put("/api/todos/{todo_id}/toggle", tags=["Todos"])
+def fastapi_toggle_todo(todo_id: int) -> Response:
+    item_copy = None
+    with _todos_lock:
+        for t in _FALLBACK_TODOS:
+            if t["id"] == todo_id:
+                t["completed"] = not t["completed"]
+                item_copy = dict(t)
+                break
+    if item_copy is not None:
+        return JSONResponse(status_code=200, content=item_copy)
+    return JSONResponse(status_code=404, content={"error": "Todo not found"})
+
+
+@fastapi_app.delete("/api/todos/{todo_id}", tags=["Todos"])
+def fastapi_delete_todo(todo_id: int) -> Response:
+    removed_copy = None
+    with _todos_lock:
+        for idx, t in enumerate(_FALLBACK_TODOS):
+            if t["id"] == todo_id:
+                removed = _FALLBACK_TODOS.pop(idx)
+                removed_copy = dict(removed)
+                break
+    if removed_copy is not None:
+        return JSONResponse(
+            status_code=200,
+            content={"ok": True, "deleted_id": todo_id, "item": removed_copy},
+        )
+    return JSONResponse(status_code=404, content={"error": "Todo not found"})
+
+
+@fastapi_app.get("/api/auth/me", tags=["Auth"])
+def fastapi_auth_me(request: Request) -> Response:
+    username = request.headers.get("X-authentik-username", "")
+    groups = [
+        g.strip()
+        for g in request.headers.get("X-authentik-groups", "").split(",")
+        if g.strip()
+    ]
+    return JSONResponse(
+        status_code=200,
+        content={
+            "authenticated": bool(username),
+            "username": username or None,
+            "name": request.headers.get("X-authentik-name") or None,
+            "email": request.headers.get("X-authentik-email") or None,
+            "groups": groups,
+        },
+    )
+
+
+@fastapi_app.get("/", tags=["UI"], response_class=HTMLResponse)
+@fastapi_app.get("/index.html", tags=["UI"], response_class=HTMLResponse)
+def fastapi_ui_index(request: Request) -> HTMLResponse:
+    username = request.headers.get("X-authentik-username", "")
+    name = request.headers.get("X-authentik-name", "")
+    email = request.headers.get("X-authentik-email", "")
+    user_display = name or username or email
+    if username:
+        safe_display = html.escape(user_display)
+        auth_badge = (
+            f'<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">'
+            f'<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>'
+            f"SSO 认证通过: {safe_display}"
+            f"</span>"
+        )
+    else:
+        auth_badge = (
+            '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-slate-800 text-slate-400 border border-slate-700">'
+            '<span class="w-2 h-2 rounded-full bg-slate-500"></span>'
+            "未检测到 ForwardAuth 头 (开发/直连模式)"
+            "</span>"
+        )
+    sha = os.environ.get("GIT_COMMIT_SHA", "dev-local")[:7]
+    rendered = (
+        HTML_TEMPLATE.replace("${GIT_COMMIT_SHA}", sha)
+        .replace("${AUTH_BADGE}", auth_badge)
+    )
+    return HTMLResponse(content=rendered, status_code=200)
+
+
+# Standard ASGI entrypoint
+app = fastapi_app
+
+
 def main():
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
     )
-    providers = configure_service_telemetry()
-    # PID 1 ignores SIGTERM without a handler. Exit cleanly so telemetry flushes.
-    signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(0))
     port = int(os.environ.get("PORT", "8000"))
-    server = ThreadingHTTPServer(("0.0.0.0", port), TodoHandler)
     LOGGER.info(
-        "Canary Todo service running at http://0.0.0.0:%d (telemetry %s)",
-        port,
-        "on" if providers is not None else "off",
+        "Canary Todo service starting on port %d with FastAPI and infra2_sdk", port
     )
+    signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(0))
     try:
-        server.serve_forever()
-    except (KeyboardInterrupt, SystemExit):
-        pass
-    finally:
-        server.server_close()
-        if providers is not None:
-            providers.shutdown()
+        import uvicorn
+
+        uvicorn.run(fastapi_app, host="0.0.0.0", port=port, log_level="info")
+    except ImportError:
+        providers = configure_service_telemetry()
+        server = ThreadingHTTPServer(("0.0.0.0", port), TodoHandler)
+        LOGGER.info(
+            "Fallback HTTP server running at http://0.0.0.0:%d (telemetry %s)",
+            port,
+            "on" if providers is not None else "off",
+        )
+        try:
+            server.serve_forever()
+        except (KeyboardInterrupt, SystemExit):
+            pass
+        finally:
+            server.server_close()
+            if providers is not None:
+                providers.shutdown()
 
 
 if __name__ == "__main__":
