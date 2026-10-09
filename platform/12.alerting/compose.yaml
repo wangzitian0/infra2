@@ -169,6 +169,7 @@ services:
       ALERT_BRIDGE_URL: http://platform-alerting${ENV_SUFFIX}:8080/signoz/webhook
       ALERTING_ENV_FILE: /secrets/.env
       INFRA_PROBE_INTERVAL_SECONDS: ${INFRA_PROBE_INTERVAL_SECONDS:-60}
+      INFRA_PROBE_CPU_SAMPLE_SECONDS: ${INFRA_PROBE_CPU_SAMPLE_SECONDS:-3.0}
       INFRA_PROBE_FAILURE_THRESHOLD: ${INFRA_PROBE_FAILURE_THRESHOLD:-3}
       INFRA_PROBE_RECOVERY_THRESHOLD: ${INFRA_PROBE_RECOVERY_THRESHOLD:-2}
       # 0 = an unchanged failing set is never re-sent on a timer; a change in the set

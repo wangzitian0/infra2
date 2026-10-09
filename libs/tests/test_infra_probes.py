@@ -1628,10 +1628,56 @@ def test_cpu_and_mem_percent_when_proc_available() -> None:
 
     if not os.path.exists("/proc/stat") or not os.path.exists("/proc/meminfo"):
         return  # /proc not available (e.g. macOS dev box) — covered on Linux CI
-    cpu = float(probes._run_resource(parse_probe_specs("c|resource|cpu|80")[0]))
+    # Fast 0.05s sample ensures Linux CI runs instantaneously without 3s sleep
+    cpu = float(
+        probes._run_resource(
+            parse_probe_specs("c|resource|cpu|80")[0], sample_seconds=0.05
+        )
+    )
     mem = float(probes._run_resource(parse_probe_specs("m|resource|mem|80")[0]))
-    assert 0.0 <= cpu <= 100.0
+    assert 0.0 <= cpu <= 100.0 and cpu == cpu
     assert 0.0 <= mem <= 100.0
+
+
+def test_cpu_sample_seconds_env_fallback(monkeypatch) -> None:
+    """Verify sample_seconds env variable parsing and defensive clamping."""
+    spec = parse_probe_specs("c|resource|cpu|80")[0]
+    recorded_samples = []
+
+    def mock_cpu(s: float) -> float:
+        recorded_samples.append(s)
+        return 42.0
+
+    monkeypatch.setattr(probes, "_cpu_percent", mock_cpu)
+
+    # Default fallback when env is unset
+    monkeypatch.delenv("INFRA_PROBE_CPU_SAMPLE_SECONDS", raising=False)
+    assert probes._run_resource(spec) == "42.0"
+    assert recorded_samples[-1] == 3.0
+
+    # Custom valid env
+    monkeypatch.setenv("INFRA_PROBE_CPU_SAMPLE_SECONDS", "1.5")
+    assert probes._run_resource(spec) == "42.0"
+    assert recorded_samples[-1] == 1.5
+
+    # Defensive clamping on negative or too low value
+    monkeypatch.setenv("INFRA_PROBE_CPU_SAMPLE_SECONDS", "-10.0")
+    assert probes._run_resource(spec) == "42.0"
+    assert recorded_samples[-1] == 0.05
+
+    # Defensive clamping on too high value (> 30s)
+    monkeypatch.setenv("INFRA_PROBE_CPU_SAMPLE_SECONDS", "999.0")
+    assert probes._run_resource(spec) == "42.0"
+    assert recorded_samples[-1] == 30.0
+
+    # Fallback on non-numeric garbage
+    monkeypatch.setenv("INFRA_PROBE_CPU_SAMPLE_SECONDS", "invalid_number")
+    assert probes._run_resource(spec) == "42.0"
+    assert recorded_samples[-1] == 3.0
+
+    # Explicit parameter overrides env var
+    assert probes._run_resource(spec, sample_seconds=0.2) == "42.0"
+    assert recorded_samples[-1] == 0.2
 
 
 def test_host_resource_specs_gated_to_production(monkeypatch) -> None:

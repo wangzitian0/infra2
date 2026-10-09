@@ -75,7 +75,7 @@ services:
         - "clickhouse-client -n -q 'CREATE TABLE IF NOT EXISTS default.__hc (t DateTime)
           ENGINE=MergeTree ORDER BY t TTL t + INTERVAL 10 MINUTE; INSERT INTO
           default.__hc VALUES (now()); SELECT 1 FROM default.__hc LIMIT 1'"
-      interval: 30s
+      interval: 60s
       timeout: 5s
       retries: 3
     labels:

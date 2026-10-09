@@ -456,7 +456,7 @@ def _run_s3(
     return result.detail
 
 
-def _run_resource(spec: ProbeSpec, *, sample_seconds: float = 0.4) -> str:
+def _run_resource(spec: ProbeSpec, *, sample_seconds: float | None = None) -> str:
     """Return host resource usage as a percentage string for cpu | mem | disk:<path>.
 
     Reads host-global /proc (/proc/stat and /proc/meminfo are not namespaced, so
@@ -467,7 +467,14 @@ def _run_resource(spec: ProbeSpec, *, sample_seconds: float = 0.4) -> str:
     """
     target = spec.target.strip()
     if target == "cpu":
-        usage = _cpu_percent(sample_seconds)
+        if sample_seconds is None:
+            raw = os.getenv("INFRA_PROBE_CPU_SAMPLE_SECONDS", "3.0").strip()
+            try:
+                sample_seconds = float(raw)
+            except ValueError:
+                sample_seconds = 3.0
+        clamped_sample = max(0.05, min(30.0, sample_seconds))
+        usage = _cpu_percent(clamped_sample)
     elif target == "mem":
         usage = _mem_percent()
     elif target.startswith("disk:"):
