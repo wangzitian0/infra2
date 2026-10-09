@@ -53,7 +53,7 @@ flowchart TD
 ## 3. 动态 Vault 目标发现契约 (Dynamic Discovery Contract)
 
 - **去重与 SSOT 消除漂移**：`bootstrap/05.vault/tasks.py` 不再维护任何硬编码项目与服务元组。
-- **单一来源**：Vault AppRole 扫描目标统一通过 `libs.core.registry.all_services()` 与物理文件系统层级（`platform`、`finance_report`、`truealpha`、`apps`）动态发现，凡包含 `compose.yaml` / `deploy.py` / `vault-agent.hcl` 的服务均自动纳入 AppRole 管理。
+- **单一来源**：Vault AppRole 扫描目标统一由 `bootstrap/05.vault/tasks.py` 经物理文件系统层级（`platform`、`finance_report`、`truealpha`、`apps`）动态发现，凡包含 Vault 配置标记（`vault-agent.hcl` / `vault-policy.hcl` / `secrets.ctmpl`）的服务均自动纳入 AppRole 管理（排除 bootstrap vault 与 1password）。
 - **基础配置模板**：提供 `bootstrap/05.vault/templates/vault-agent.base.hcl` 作为标准化 Vault Agent 配置底座。
 
 ---

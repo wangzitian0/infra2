@@ -42,10 +42,22 @@ def ensure_database(c, name, owner=None):
 
 
 @task
-def ensure_user(c, username, database, password, connection_limit=8):
-    """Idempotently create or update a user with connection limits and timeout guards."""
+def grant_database(c, username, database):
+    """Grant all privileges on database to user."""
     _validate_identifier(username, "username")
     _validate_identifier(database, "database name")
+    e = get_env()
+    container = with_env_suffix("platform-postgres", e)
+    cmd_grant = f"ssh root@{e['VPS_HOST']} \"docker exec {container} psql -U postgres -c 'GRANT ALL PRIVILEGES ON DATABASE {database} TO {username};'\""
+    run_with_status(c, cmd_grant, f"Grant {database} to {username}")
+
+
+@task
+def ensure_user(c, username, database=None, password="", connection_limit=8):
+    """Idempotently create or update a user with connection limits and timeout guards."""
+    _validate_identifier(username, "username")
+    if database:
+        _validate_identifier(database, "database name")
     e = get_env()
     container = with_env_suffix("platform-postgres", e)
     escaped_password = password.replace("'", "''")
@@ -61,6 +73,14 @@ def ensure_user(c, username, database, password, connection_limit=8):
         f"  ALTER ROLE {username} SET statement_timeout = '30s'; "
         f'END \\$\\$;\\""'
     )
-    cmd_grant = f"ssh root@{e['VPS_HOST']} \"docker exec {container} psql -U postgres -c 'GRANT ALL PRIVILEGES ON DATABASE {database} TO {username};'\""
     run_with_status(c, cmd, f"Ensure user {username} with limits")
-    run_with_status(c, cmd_grant, f"Grant {database} to {username}")
+    if database:
+        cmd_grant = (
+            f'ssh root@{e["VPS_HOST"]} "docker exec {container} psql -U postgres -c \\"'
+            f"DO \\$\\$ BEGIN "
+            f"  IF EXISTS (SELECT 1 FROM pg_database WHERE datname = '{database}') THEN "
+            f"    GRANT ALL PRIVILEGES ON DATABASE {database} TO {username}; "
+            f"  END IF; "
+            f'END \\$\\$;\\""'
+        )
+        run_with_status(c, cmd_grant, f"Grant {database} to {username}")

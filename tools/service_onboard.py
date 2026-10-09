@@ -355,6 +355,8 @@ def onboard_service(
                 connection_limit=db_connection_limit,
             )
             pg.ensure_database(c, name=db_name, owner=db_user)
+            if hasattr(pg, "grant_database"):
+                pg.grant_database(c, username=db_user, database=db_name)
             success(
                 f"PostgreSQL user '{db_user}' (limit {db_connection_limit}) and DB '{db_name}' ready"
             )

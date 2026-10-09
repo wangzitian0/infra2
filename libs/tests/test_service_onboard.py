@@ -188,6 +188,9 @@ def test_onboard_service_end_to_end():
         mock_pg.ensure_database.assert_called_once_with(
             mock_c, name="apps_demo_app_db", owner="apps_demo_app_user"
         )
+        mock_pg.grant_database.assert_called_once_with(
+            mock_c, username="apps_demo_app_user", database="apps_demo_app_db"
+        )
 
         # Check dokploy env update was invoked
         mock_dokploy.update_compose_env.assert_called_once_with(
