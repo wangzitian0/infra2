@@ -267,3 +267,14 @@ entries:
     description: Active watchdog signal inventory and ownership.
     proofs:
       - libs/tests/test_watchdog_consistency_audit.py
+  ops.service_lifecycle:
+    owner: docs/onboarding/07.new-service-sop.md
+    summary: 服务准入与退役原子 Saga（1Password + Postgres + Vault + Dokploy）
+    description: >-
+      Service lifecycle automation — atomic zero-compromise onboarding and symmetrical offboarding
+      via tools/service_onboard.py and tools/service_offboard.py, managing 1Password root SSOT,
+      PostgreSQL connection-capped user isolation, Vault AppRole synthesis, and Dokploy env injection.
+    proofs:
+      - libs/tests/test_service_onboard.py
+      - libs/tests/test_dynamic_vault_targets.py
+

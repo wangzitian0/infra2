@@ -20,6 +20,8 @@ load_dotenv(".env.local", override=True)
 
 def _load_module(file_path, module_name):
     """Load a Python file as a module"""
+    if module_name in sys.modules:
+        return sys.modules[module_name]
     spec = importlib.util.spec_from_file_location(module_name, file_path)
     if spec and spec.loader:
         module = importlib.util.module_from_spec(spec)
@@ -143,6 +145,17 @@ def _load_tools(ns, root):
     ):
         ns.add_collection(coll, name="vault-audit")
         success("tools/vault-audit")
+
+    coll = Collection()
+    _load_tasks_into_collection(
+        tools_dir / "service_onboard.py", "tools.service_onboard", coll
+    )
+    _load_tasks_into_collection(
+        tools_dir / "service_offboard.py", "tools.service_offboard", coll
+    )
+    if coll.tasks:
+        ns.add_collection(coll, name="service")
+        success("tools/service")
 
 
 def load_all():

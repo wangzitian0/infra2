@@ -46,3 +46,46 @@ def create_user(c, username, database, password):
     cmd_grant = f"ssh root@{e['VPS_HOST']} \"docker exec {container} psql -U postgres -c 'GRANT ALL PRIVILEGES ON DATABASE {database} TO {username};'\""
     run_with_status(c, cmd_create, f"Create user {username}")
     run_with_status(c, cmd_grant, f"Grant {database} to {username}")
+
+
+@task
+def ensure_database(c, name, owner=None):
+    """Idempotently create a database if it does not already exist."""
+    _validate_identifier(name, "database name")
+    if owner:
+        _validate_identifier(owner, "owner name")
+    e = get_env()
+    container = with_env_suffix("platform-postgres", e)
+    owner_clause = f"OWNER {owner}" if owner else ""
+    cmd = (
+        f'ssh root@{e["VPS_HOST"]} "docker exec {container} psql -U postgres -tc '
+        f"\\\"SELECT 1 FROM pg_database WHERE datname = '{name}'\\\" | grep -q 1 || "
+        f"docker exec {container} psql -U postgres -c "
+        f'\\"CREATE DATABASE {name} {owner_clause};\\""'
+    )
+    run_with_status(c, cmd, f"Ensure database {name}")
+
+
+@task
+def ensure_user(c, username, database, password, connection_limit=8):
+    """Idempotently create or update a user with connection limits and timeout guards."""
+    _validate_identifier(username, "username")
+    _validate_identifier(database, "database name")
+    e = get_env()
+    container = with_env_suffix("platform-postgres", e)
+    escaped_password = password.replace("'", "''")
+    cmd = (
+        f'ssh root@{e["VPS_HOST"]} "docker exec {container} psql -U postgres -c \\"'
+        f"DO \\$\\$ BEGIN "
+        f"  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{username}') THEN "
+        f"    CREATE USER {username} WITH PASSWORD '{escaped_password}' CONNECTION LIMIT {connection_limit}; "
+        f"  ELSE "
+        f"    ALTER ROLE {username} WITH CONNECTION LIMIT {connection_limit}; "
+        f"  END IF; "
+        f"  ALTER ROLE {username} SET idle_in_transaction_session_timeout = '60s'; "
+        f"  ALTER ROLE {username} SET statement_timeout = '30s'; "
+        f'END \\$\\$;\\""'
+    )
+    cmd_grant = f"ssh root@{e['VPS_HOST']} \"docker exec {container} psql -U postgres -c 'GRANT ALL PRIVILEGES ON DATABASE {database} TO {username};'\""
+    run_with_status(c, cmd, f"Ensure user {username} with limits")
+    run_with_status(c, cmd_grant, f"Grant {database} to {username}")
