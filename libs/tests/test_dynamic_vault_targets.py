@@ -32,6 +32,12 @@ def test_vault_token_targets_contains_all_core_services(monkeypatch):
     for expected in expected_services:
         assert expected in found, f"Missing target: {expected}"
 
+    # Preview and bootstrap services must never be standalone AppRole targets
+    assert ("finance_report", "preview") not in found
+    assert ("truealpha", "preview") not in found
+    assert ("bootstrap", "vault") not in found
+    assert ("bootstrap", "1password") not in found
+
 
 def test_vault_token_targets_dynamically_discovers_new_service(monkeypatch, tmp_path):
     """Verify that adding a new service directory automatically registers as a Vault target without code edits."""
