@@ -268,7 +268,7 @@ entries:
     proofs:
       - libs/tests/test_watchdog_consistency_audit.py
   ops.service_lifecycle:
-    owner: docs/onboarding/07.new-service-sop.md
+    owner: docs/ssot/ops.service-lifecycle.md
     summary: 服务准入与退役原子 Saga（1Password + Postgres + Vault + Dokploy）
     description: >-
       Service lifecycle automation — atomic zero-compromise onboarding and symmetrical offboarding

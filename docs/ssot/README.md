@@ -103,7 +103,7 @@
 | [ops.merge-gate.md](./ops.merge-gate.md) | `ops.merge_gate` | 可合流条件逐条、常设合流权及其 owner 保留项、PR 准则、发布晋升 |
 | [ops.observability.md](./ops.observability.md) | `ops.obs` | 可观测性单一 owner：采集(SigNoz/日志/链路)+ 告警(规则/分级/watchdog)+ 报告(可用率账本)+ 时间尺度分层 |
 | [watchdog-signals.yaml](./watchdog-signals.yaml) | `watchdog.signals` | Active watchdog signal inventory and ownership |
-| [07.new-service-sop.md](./07.new-service-sop.md) | `ops.service_lifecycle` | 服务准入与退役原子 Saga（1Password + Postgres + Vault + Dokploy） |
+| [ops.service-lifecycle.md](./ops.service-lifecycle.md) | `ops.service_lifecycle` | 服务准入与退役原子 Saga（1Password + Postgres + Vault + Dokploy） |
 
 ---
 
