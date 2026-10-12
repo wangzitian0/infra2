@@ -171,7 +171,6 @@ class Deployer:
 
     # Domain configuration (optional)
     subdomain: str = None  # e.g., "sso" for sso.{INTERNAL_DOMAIN}
-    route_preference: Any = None  # Optional infra2_sdk.routing.AppRoutePreference
     # Override the shared INTERNAL_DOMAIN entirely for this service (e.g. a dedicated
     # product domain instead of the platform's shared one). None = use whatever domain
     # the deploy request/caller passes in (today's behavior for every existing service).
@@ -726,7 +725,6 @@ class Deployer:
             client,
             compose_id,
             env=e,
-            route_pref=getattr(cls, "route_preference", None),
             subdomain=cls.subdomain,
             service_port=cls.service_port,
             service_name=cls.service_name,

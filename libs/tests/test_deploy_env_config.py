@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
+import infra2_sdk
 import pytest
 
 from libs.deploy import env_config as ec
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_staging_config():
@@ -244,3 +251,32 @@ def test_is_stateful_deploy_env_strict_and_lenient():
     assert is_stateful_deploy_env("prod", strict=True) is False
     assert is_stateful_deploy_env("stg", strict=True) is False
     assert is_stateful_deploy_env("pr-123", strict=True) is False
+
+
+def test_canary_slot_is_the_sdk_constant() -> None:
+    """With the SDK installed, env_config re-exports the SDK object."""
+    assert ec.CANARY_SLOT is infra2_sdk.CANARY_SLOT
+
+
+def test_canary_slot_fallback_equals_the_sdk_value() -> None:
+    """Without the SDK, the fallback must still equal the SDK value.
+
+    CI jobs that do not install the SDK import env_config. The fallback never runs in
+    this process, so a subprocess with the SDK blocked reads it.
+    """
+    from libs.tests.test_sdk_free_import_surface import _BLOCKER
+
+    script = (
+        _BLOCKER.format(module="libs.deploy.env_config", root=str(ROOT))
+        + "\nimport libs.deploy.env_config as m\nprint(m.CANARY_SLOT)\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        stdin=subprocess.DEVNULL,
+    )
+    assert proc.returncode == 0, proc.stderr[-800:]
+    assert proc.stdout.strip() == infra2_sdk.CANARY_SLOT

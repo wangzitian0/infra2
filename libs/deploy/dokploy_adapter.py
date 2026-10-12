@@ -9,10 +9,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import asdict
 from typing import Any
-
-from infra2_sdk.routing import resolve_dokploy_domains
 
 from libs.deploy.rollout import (
     TERMINAL_SUCCESS_STATUSES,
@@ -369,7 +366,6 @@ def ensure_compose_domains(
     compose_id: str,
     *,
     env: dict[str, str],
-    route_pref: Any = None,
     subdomain: str | None = None,
     service_port: int | str | None = None,
     service_name: str | None = None,
@@ -382,32 +378,6 @@ def ensure_compose_domains(
     info_log = log_info or logger.info
     warn_log = log_warning or logger.warning
     ok_log = log_success or logger.info
-
-    if route_pref is not None:
-        domain = env.get("INTERNAL_DOMAIN")
-        if not domain:
-            warn_log("Domain configuration skipped: INTERNAL_DOMAIN missing")
-            return {"created": 0, "skipped": 0, "conflicts": [], "errors": []}
-        effective_env = env.get("ENV", "production")
-        specs = resolve_dokploy_domains(
-            route_pref, tier=effective_env, base_domain=domain
-        )
-        desired_domains = [asdict(s) for s in specs]
-        if desired_domains:
-            for d in desired_domains:
-                info_log(f"Ensuring domain: https://{d['host']}{d.get('path', '')}")
-            result = client.ensure_domains(
-                compose_id=compose_id,
-                desired_domains=desired_domains,
-            )
-            if result.get("created", 0) > 0:
-                ok_log(f"Configured {result['created']} domain(s) in Dokploy")
-            if result.get("conflicts"):
-                for c in result["conflicts"]:
-                    warn_log(
-                        f"Domain conflict: {c['host']} exists with port {c['existing_port']}, need {c['desired_port']}"
-                    )
-            return result
 
     if subdomain and service_port:
         domain_host = (

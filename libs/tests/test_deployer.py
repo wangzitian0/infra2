@@ -1602,51 +1602,17 @@ def test_ensure_compose_domains_configures_subdomain_before_deploy():
     )
 
 
-def test_ensure_compose_domains_with_route_preference():
+def test_route_preference_path_is_removed() -> None:
+    """No deployer sets a route preference, so the base class and the adapter must not carry one."""
+    import inspect
+
+    from libs.deploy import dokploy_adapter
     from libs.deploy.deployer import Deployer
-    from infra2_sdk.routing import AppRoutePreference, RouteEndpoint
 
-    class AppDeployerWithPref(Deployer):
-        service = "my-app"
-        route_preference = AppRoutePreference(
-            slug="my-app",
-            endpoints=[
-                RouteEndpoint(service_name="frontend", port=3000),
-                RouteEndpoint(service_name="backend", port=8000, path="/api"),
-            ],
-        )
-
-    client = MagicMock()
-    client.ensure_domains.return_value = {
-        "created": 2,
-        "skipped": 0,
-        "conflicts": [],
-        "errors": [],
-    }
-
-    env_map = {"INTERNAL_DOMAIN": "test.party", "ENV": "prod"}
-    res = AppDeployerWithPref.ensure_compose_domains(client, "cmp-456", env_map)
-
-    assert res["created"] == 2
-    client.ensure_domains.assert_called_once_with(
-        compose_id="cmp-456",
-        desired_domains=[
-            {
-                "host": "my-app.test.party",
-                "port": 3000,
-                "path": "/",
-                "service_name": "frontend",
-                "https": True,
-            },
-            {
-                "host": "my-app.test.party",
-                "port": 8000,
-                "path": "/api",
-                "service_name": "backend",
-                "https": True,
-            },
-        ],
-    )
+    assert not hasattr(Deployer, "route_preference")
+    parameters = inspect.signature(dokploy_adapter.ensure_compose_domains).parameters
+    assert "route_pref" not in parameters
+    assert not hasattr(dokploy_adapter, "resolve_dokploy_domains")
 
 
 def test_composing_ensures_domains_before_single_deploy(monkeypatch):
