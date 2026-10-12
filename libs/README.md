@@ -2,7 +2,7 @@
 
 > **Purpose**: Internal domain packages, deployment backends, and platform clients used by deploy scripts, CLI tools, and background workers.
 > Stable cross-repository contracts live in [`infra2-sdk`](https://github.com/wangzitian0/infra2-sdk) and are imported directly.
-> The infra2 release pin is `v2.5.0`; adoption and equality are guarded by `libs/tests/test_sdk_contract_adoption.py`.
+> The `infra2-sdk` wheel that `uv.lock` locks is the release pin. `libs/tests/test_sdk_contract_adoption.py` guards adoption.
 
 ---
 
@@ -63,9 +63,8 @@ move with it.
 
 `libs.security` imports without infra2-sdk (#847): `libs/security/__init__.py` loads
 `supply` / `prune` lazily (PEP 562), so only touching an SDK-backed name needs the wheel;
-`libs/tests/test_sdk_free_import_surface.py` pins it. `libs/security/store.py` (behind
-the `libs/env.py` shim) guards its own SDK import so minimal GitHub Actions jobs can
-use `verify_vault_token` / `generate_password`; its guards (`libs/tests/test_env.py::TestWithoutTheSdk`,
+`libs/tests/test_sdk_free_import_surface.py` pins it. `libs/security/store.py` guards
+its own SDK import so minimal GitHub Actions jobs can use `verify_vault_token` / `generate_password`; its guards (`libs/tests/test_env.py::TestWithoutTheSdk`,
 `test_secrets_registry.py::test_the_registry_table_is_readable_without_the_sdk` and
 `test_workflow_runtime_deps.py::test_a_job_can_import_what_it_runs`) must keep passing
 unchanged.

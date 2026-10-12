@@ -31,9 +31,9 @@ repositories:
     contract: pinned
     source: https://github.com/wangzitian0/infra2-sdk
     release_identity: sdk-semver
-    # Nested submodule. It carries its own Repo-layer AGENTS.md (since the
-    # pinned commit 7eb451f), so no rules_layer declaration applies. Its
-    # public contract still travels through the published SDK artifact, per
+    # Nested submodule. It carries its own Repo-layer AGENTS.md, so no
+    # rules_layer declaration applies. Its public contract still travels
+    # through the published SDK artifact, per
     # core.harness.md §1 ("SDK 公共契约 | 已发布的 infra2-sdk SemVer artifact").
     authority:
       - README.md
