@@ -43,6 +43,10 @@ def test_signoz_roundtrip_posts_otlp_log_and_queries_nonce(monkeypatch) -> None:
         "key": "deployment.environment",
         "value": {"stringValue": "staging"},
     } in resource_attrs
+    assert {
+        "key": "deployment.environment.name",
+        "value": {"stringValue": "staging"},
+    } in resource_attrs
     log_record = posted[0]["payload"]["resourceLogs"][0]["scopeLogs"][0]["logRecords"][
         0
     ]
