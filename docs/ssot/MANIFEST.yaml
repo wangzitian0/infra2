@@ -27,10 +27,12 @@ entries:
     summary: 环境分类、隔离与命名
     description: >-
       Environment DEFINITIONS — taxonomy, isolation, naming, preview-alias model,
-      telemetry identity, and the deploy_v2 four-axis coordinate contract (§4.7).
+      telemetry identity, the commit identity contract (§4.5.1), and the deploy_v2
+      four-axis coordinate contract (§4.7).
       Deploy TRIGGERS / what-is-live / release model are owned by ops.pipeline.
     proofs:
       - libs/tests/test_deploy_contract.py
+      - libs/tests/test_identity_contract.py
       - libs/tests/test_reconcile_iac_inputs.py
   core.harness:
     owner: docs/ssot/core.harness.md
