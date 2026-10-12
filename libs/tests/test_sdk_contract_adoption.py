@@ -438,10 +438,8 @@ def test_python_in_workflow_run_blocks_is_scanned(tmp_path, monkeypatch) -> None
         encoding="utf-8",
     )
     monkeypatch.setattr(sdk_requirement_tests, "GITHUB", tmp_path)
-    assert _scan_workflow_python() == (
-        1,
-        {".github/workflows/demo.yml run 1": [_RELEASE]},
-    )
+    label = f".github/{workflow.relative_to(tmp_path).as_posix()} run 1"
+    assert _scan_workflow_python() == (1, {label: [_RELEASE]})
 
 
 def test_python_in_shell_files_is_scanned(tmp_path) -> None:
