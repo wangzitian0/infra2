@@ -515,7 +515,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=41.0.0" },
     { name = "fastapi", specifier = ">=0.110.0,<1" },
     { name = "httpx", specifier = ">=0.25.0" },
-    { name = "infra2-sdk", url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.1.1/infra2_sdk-3.1.1-py3-none-any.whl" },
+    { name = "infra2-sdk", url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.1.2/infra2_sdk-3.1.2-py3-none-any.whl" },
     { name = "invoke", specifier = ">=2.2.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2,<4" },
     { name = "pytest", specifier = ">=7.4.0" },
@@ -535,13 +535,13 @@ e2e = [
 
 [[package]]
 name = "infra2-sdk"
-version = "3.1.1"
-source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.1.1/infra2_sdk-3.1.1-py3-none-any.whl" }
+version = "3.1.2"
+source = { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.1.2/infra2_sdk-3.1.2-py3-none-any.whl" }
 dependencies = [
     { name = "pyyaml" },
 ]
 wheels = [
-    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.1.1/infra2_sdk-3.1.1-py3-none-any.whl", hash = "sha256:d11c834c5e21214591a26f0ea351a5ae43d9c232154c33256e56c818f3371dc0" },
+    { url = "https://github.com/wangzitian0/infra2-sdk/releases/download/v3.1.2/infra2_sdk-3.1.2-py3-none-any.whl", hash = "sha256:c4f934f5b58d964e5b8a7e36bc87f7f443c9c2ee9e9a5ce4de2ae38bfbebcd6d" },
 ]
 
 [package.metadata]
