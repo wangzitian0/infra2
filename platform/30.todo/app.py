@@ -19,7 +19,6 @@ import concurrent.futures
 import contextlib
 import contextvars
 import html
-import json
 import logging
 import math
 import os
@@ -31,7 +30,6 @@ import time
 import threading
 import urllib.parse
 import urllib.request
-from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from typing import Any, Callable, Dict, List
 
 from fastapi import FastAPI, Request, Response
@@ -583,245 +581,6 @@ def configure_service_telemetry() -> Any | None:
     return providers
 
 
-class TodoHandler(BaseHTTPRequestHandler):
-    def _send_json(self, status: int, data: Any, send_body: bool = True):
-        body = json.dumps(data).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header(
-            "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD"
-        )
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        self.end_headers()
-        if send_body:
-            self.wfile.write(body)
-
-    def do_OPTIONS(self):
-        self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header(
-            "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD"
-        )
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-        self.end_headers()
-
-    def do_HEAD(self):
-        self._handle_get(send_body=False)
-
-    def do_GET(self):
-        self._handle_get(send_body=True)
-
-    def _handle_get(self, send_body: bool = True):
-        parsed = urllib.parse.urlparse(self.path)
-        path = parsed.path
-
-        if path == "/" or path == "/index.html":
-            username = self.headers.get("X-authentik-username", "")
-            name = self.headers.get("X-authentik-name", "")
-            email = self.headers.get("X-authentik-email", "")
-            user_display = name or username or email
-            if username:
-                safe_display = html.escape(user_display)
-                auth_badge = (
-                    f'<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">'
-                    f'<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>'
-                    f"SSO 认证通过: {safe_display}"
-                    f"</span>"
-                )
-            else:
-                auth_badge = (
-                    '<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium bg-slate-800 text-slate-400 border border-slate-700">'
-                    '<span class="w-2 h-2 rounded-full bg-slate-500"></span>'
-                    "未检测到 ForwardAuth 头 (开发/直连模式)"
-                    "</span>"
-                )
-            sha = os.environ.get("GIT_COMMIT_SHA", "dev-local")[:7]
-            rendered = (
-                HTML_TEMPLATE.replace("${GIT_COMMIT_SHA}", sha)
-                .replace("${AUTH_BADGE}", auth_badge)
-                .encode("utf-8")
-            )
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(rendered)))
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header(
-                "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD"
-            )
-            self.send_header(
-                "Access-Control-Allow-Headers", "Content-Type, Authorization"
-            )
-            self.end_headers()
-            if send_body:
-                self.wfile.write(rendered)
-            return
-
-        if path == "/api/auth/me":
-            username = self.headers.get("X-authentik-username", "")
-            groups = [
-                g.strip()
-                for g in self.headers.get("X-authentik-groups", "").split(",")
-                if g.strip()
-            ]
-            self._send_json(
-                200,
-                {
-                    "authenticated": bool(username),
-                    "username": username or None,
-                    "name": self.headers.get("X-authentik-name") or None,
-                    "email": self.headers.get("X-authentik-email") or None,
-                    "groups": groups,
-                },
-                send_body=send_body,
-            )
-            return
-
-        if path == "/api/health":
-            self._send_json(
-                200,
-                {
-                    "ok": True,
-                    "status": "healthy",
-                    "service": "platform/todo",
-                    "domain": "todo.zitian.party",
-                    "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
-                },
-                send_body=send_body,
-            )
-            return
-
-        if path == "/api/canary/status":
-            result = cached_canary_status()
-            status_code = 200 if result["ok"] else 503
-            self._send_json(status_code, result, send_body=send_body)
-            return
-
-        if path == "/api/todos":
-            with _todos_lock:
-                items = [dict(t) for t in _FALLBACK_TODOS]
-            self._send_json(200, items, send_body=send_body)
-            return
-
-        self._send_json(404, {"error": "Not Found"}, send_body=send_body)
-
-    def do_POST(self):
-        parsed = urllib.parse.urlparse(self.path)
-        if parsed.path == "/api/todos":
-            length = int(self.headers.get("Content-Length", 0))
-            if length > 0:
-                try:
-                    payload = json.loads(self.rfile.read(length).decode("utf-8"))
-                except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as err:
-                    self._send_json(
-                        400, {"error": "Invalid JSON body", "detail": str(err)}
-                    )
-                    return
-            else:
-                payload = {}
-
-            if "completed" in payload:
-                if not isinstance(payload["completed"], bool):
-                    self._send_json(
-                        400, {"error": "Field 'completed' must be a boolean"}
-                    )
-                    return
-                completed_val = payload["completed"]
-            else:
-                completed_val = False
-
-            if "title" in payload and not isinstance(payload["title"], str):
-                self._send_json(400, {"error": "Field 'title' must be a string"})
-                return
-
-            with _todos_lock:
-                new_id = max((t["id"] for t in _FALLBACK_TODOS), default=0) + 1
-                title = (
-                    str(payload["title"]).strip()
-                    if "title" in payload
-                    else f"Todo #{new_id}"
-                )
-                item = {
-                    "id": new_id,
-                    "title": title,
-                    "completed": completed_val,
-                    "capability": str(payload.get("capability", "general")),
-                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                }
-                _FALLBACK_TODOS.append(item)
-                item_copy = dict(item)
-
-            self._send_json(201, item_copy)
-            return
-
-        self._send_json(404, {"error": "Not Found"})
-
-    def do_PUT(self):
-        parsed = urllib.parse.urlparse(self.path)
-        parts = parsed.path.strip("/").split("/")
-        if (
-            len(parts) == 4
-            and parts[0] == "api"
-            and parts[1] == "todos"
-            and parts[3] == "toggle"
-        ):
-            try:
-                todo_id = int(parts[2])
-            except ValueError:
-                self._send_json(400, {"error": "Invalid todo ID"})
-                return
-
-            item_copy = None
-            with _todos_lock:
-                for t in _FALLBACK_TODOS:
-                    if t["id"] == todo_id:
-                        t["completed"] = not t["completed"]
-                        item_copy = dict(t)
-                        break
-
-            if item_copy is not None:
-                self._send_json(200, item_copy)
-            else:
-                self._send_json(404, {"error": "Todo not found"})
-            return
-
-        self._send_json(404, {"error": "Not Found"})
-
-    def do_DELETE(self):
-        parsed = urllib.parse.urlparse(self.path)
-        parts = parsed.path.strip("/").split("/")
-        if len(parts) == 3 and parts[0] == "api" and parts[1] == "todos":
-            try:
-                todo_id = int(parts[2])
-            except ValueError:
-                self._send_json(400, {"error": "Invalid todo ID"})
-                return
-
-            removed_copy = None
-            with _todos_lock:
-                for idx, t in enumerate(_FALLBACK_TODOS):
-                    if t["id"] == todo_id:
-                        removed = _FALLBACK_TODOS.pop(idx)
-                        removed_copy = dict(removed)
-                        break
-
-            if removed_copy is not None:
-                self._send_json(
-                    200,
-                    {
-                        "ok": True,
-                        "deleted_id": todo_id,
-                        "item": removed_copy,
-                    },
-                )
-            else:
-                self._send_json(404, {"error": "Todo not found"})
-            return
-
-        self._send_json(404, {"error": "Not Found"})
-
-
 SERVER_START_TIME = time.time()
 
 
@@ -863,7 +622,32 @@ init_service(
 )
 
 
-@fastapi_app.get("/api/health", tags=["Observability"])
+@fastapi_app.middleware("http")
+async def add_cors_headers(request: Request, call_next: Any) -> Response:
+    if request.method == "OPTIONS":
+        return Response(
+            status_code=204,
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": (
+                    "GET, POST, PUT, DELETE, OPTIONS, HEAD"
+                ),
+                "Access-Control-Allow-Headers": (
+                    "Content-Type, Authorization"
+                ),
+                "Content-Length": "0",
+            },
+        )
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = (
+        "GET, POST, PUT, DELETE, OPTIONS, HEAD"
+    )
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    return response
+
+
+@fastapi_app.api_route("/api/health", methods=["GET", "HEAD"], tags=["Observability"])
 def fastapi_api_health() -> Response:
     return JSONResponse(
         status_code=200,
@@ -877,14 +661,14 @@ def fastapi_api_health() -> Response:
     )
 
 
-@fastapi_app.get("/api/canary/status", tags=["Observability"])
+@fastapi_app.api_route("/api/canary/status", methods=["GET", "HEAD"], tags=["Observability"])
 def fastapi_api_canary_status() -> Response:
     result = cached_canary_status()
     status_code = 200 if result.get("ok") else 503
     return JSONResponse(status_code=status_code, content=result)
 
 
-@fastapi_app.get("/api/todos", tags=["Todos"])
+@fastapi_app.api_route("/api/todos", methods=["GET", "HEAD"], tags=["Todos"])
 def fastapi_get_todos() -> Response:
     with _todos_lock:
         items = [dict(t) for t in _FALLBACK_TODOS]
@@ -960,7 +744,7 @@ def fastapi_delete_todo(todo_id: int) -> Response:
     return JSONResponse(status_code=404, content={"error": "Todo not found"})
 
 
-@fastapi_app.get("/api/auth/me", tags=["Auth"])
+@fastapi_app.api_route("/api/auth/me", methods=["GET", "HEAD"], tags=["Auth"])
 def fastapi_auth_me(request: Request) -> Response:
     username = request.headers.get("X-authentik-username", "")
     groups = [
@@ -980,8 +764,8 @@ def fastapi_auth_me(request: Request) -> Response:
     )
 
 
-@fastapi_app.get("/", tags=["UI"], response_class=HTMLResponse)
-@fastapi_app.get("/index.html", tags=["UI"], response_class=HTMLResponse)
+@fastapi_app.api_route("/", methods=["GET", "HEAD"], tags=["UI"], response_class=HTMLResponse)
+@fastapi_app.api_route("/index.html", methods=["GET", "HEAD"], tags=["UI"], response_class=HTMLResponse)
 def fastapi_ui_index(request: Request) -> HTMLResponse:
     username = request.headers.get("X-authentik-username", "")
     name = request.headers.get("X-authentik-name", "")
@@ -1014,7 +798,7 @@ def fastapi_ui_index(request: Request) -> HTMLResponse:
 app = fastapi_app
 
 
-def main():
+def main() -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
     )
@@ -1023,26 +807,10 @@ def main():
         "Canary Todo service starting on port %d with FastAPI and infra2_sdk", port
     )
     signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(0))
-    try:
-        import uvicorn
+    configure_service_telemetry()
+    import uvicorn
 
-        uvicorn.run(fastapi_app, host="0.0.0.0", port=port, log_level="info")
-    except ImportError:
-        providers = configure_service_telemetry()
-        server = ThreadingHTTPServer(("0.0.0.0", port), TodoHandler)
-        LOGGER.info(
-            "Fallback HTTP server running at http://0.0.0.0:%d (telemetry %s)",
-            port,
-            "on" if providers is not None else "off",
-        )
-        try:
-            server.serve_forever()
-        except (KeyboardInterrupt, SystemExit):
-            pass
-        finally:
-            server.server_close()
-            if providers is not None:
-                providers.shutdown()
+    uvicorn.run(fastapi_app, host="0.0.0.0", port=port, log_level="info")
 
 
 if __name__ == "__main__":
