@@ -22,6 +22,7 @@ import subprocess
 import urllib.error
 import urllib.request
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -105,10 +106,78 @@ def _resolve_ssh_credentials() -> tuple[str, str, str, int]:
     return host, user, key_path, port
 
 
+def _evaluate_freshness(
+    count: int,
+    latest_str: str,
+    pillar_name: str,
+    max_age_seconds: int = 3600,
+    now: datetime | None = None,
+) -> tuple[bool, str, dict[str, Any]]:
+    """Fail-closed freshness evaluator for Canary telemetry.
+
+    Validates that:
+    1. count > 0
+    2. latest_str is non-empty and parses as UTC datetime
+    3. age <= max_age_seconds
+    4. clock skew is within tolerance (age >= -60s)
+    """
+    details: dict[str, Any] = {
+        "count": count,
+        "latest_timestamp": latest_str,
+        "max_age_seconds": max_age_seconds,
+    }
+    if count is None or count <= 0:
+        return False, f"0 {pillar_name} recorded", details
+
+    if not latest_str or not str(latest_str).strip():
+        return False, f"Missing timestamp for {pillar_name}", details
+
+    raw_ts = str(latest_str).strip()
+    clean_ts = raw_ts.split(".")[0]
+
+    try:
+        latest = datetime.strptime(clean_ts, "%Y-%m-%d %H:%M:%S").replace(
+            tzinfo=timezone.utc
+        )
+    except Exception as err:
+        details["parse_error"] = str(err)
+        return False, f"Malformed timestamp '{raw_ts}': {err}", details
+
+    now_utc = now if now is not None else datetime.now(timezone.utc)
+    if now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+
+    age_seconds = (now_utc - latest).total_seconds()
+    details["age_seconds"] = age_seconds
+
+    if age_seconds < -60:
+        return (
+            False,
+            f"Clock skew detected for {pillar_name}: timestamp {raw_ts} is {int(-age_seconds)}s in future",
+            details,
+        )
+
+    if age_seconds > max_age_seconds:
+        return (
+            False,
+            f"Stale {pillar_name}: latest entry was at {raw_ts} (age: {int(age_seconds)}s > {max_age_seconds}s)",
+            details,
+        )
+
+    fresh_label = f"{int(max(0.0, age_seconds))}s ago"
+    return (
+        True,
+        f"{count} {pillar_name} recorded, latest: {raw_ts} (fresh: {fresh_label})",
+        details,
+    )
+
+
 def verify_canary(
     environment: str = "production",
     expected_sdk: str | None = None,
     check_sdk: bool = True,
+    max_age_seconds: int = 3600,
+    now: datetime | None = None,
 ) -> CanaryRealityReport:
     if expected_sdk is None:
         expected_sdk = _resolve_locked_sdk_version()
@@ -151,9 +220,9 @@ def verify_canary(
         f'echo "=== SDK ===" && '
         f"docker exec {container} python3 -c \"import importlib.metadata; print(importlib.metadata.version('infra2-sdk'))\" && "
         f'echo "=== TRACES ===" && '
-        f"docker exec platform-clickhouse clickhouse-client --query \"SELECT count(), max(timestamp) FROM signoz_traces.signoz_index_v3 WHERE serviceName='platform-todo'\" && "
+        f"docker exec platform-clickhouse clickhouse-client --query \"SELECT count(), toDateTime(max(timestamp), 'UTC') FROM signoz_traces.signoz_index_v3 WHERE serviceName='platform-todo'\" && "
         f'echo "=== LOGS ===" && '
-        f"docker exec platform-clickhouse clickhouse-client --query \"SELECT count(), toDateTime(max(timestamp)/1000000000) FROM signoz_logs.logs_v2 WHERE resources_string['service.name']='platform-todo'\" && "
+        f"docker exec platform-clickhouse clickhouse-client --query \"SELECT count(), toDateTime(intDiv(max(timestamp), 1000000000), 'UTC') FROM signoz_logs.logs_v2 WHERE resources_string['service.name']='platform-todo'\" && "
         f'echo "=== LEDGER ===" && '
         f'jq -c ".days | to_entries[-1] | {{day: .key, runs: .value.runs, signal: .value.signals[\\"{signal_id}\\"]}}" {ledger_path} && '
         f'echo "=== ALERT_BRIDGE ===" && '
@@ -202,24 +271,36 @@ def verify_canary(
     traces_out = sections.get("TRACES", "").strip().split("\t")
     trace_count = int(traces_out[0]) if traces_out and traces_out[0].isdigit() else 0
     trace_latest = traces_out[1] if len(traces_out) > 1 else ""
-    tracking_ok = trace_count > 0
-
+    tracking_ok, tracking_summary, tracking_details = _evaluate_freshness(
+        trace_count,
+        trace_latest,
+        pillar_name="spans",
+        max_age_seconds=max_age_seconds,
+        now=now,
+    )
+    tracking_details["span_count"] = trace_count
     tracking_pillar = PillarResult(
         ok=tracking_ok,
-        summary=f"{trace_count} spans recorded, latest: {trace_latest}",
-        details={"span_count": trace_count, "latest_timestamp": trace_latest},
+        summary=tracking_summary,
+        details=tracking_details,
     )
 
     # Parse Logs
     logs_out = sections.get("LOGS", "").strip().split("\t")
     log_count = int(logs_out[0]) if logs_out and logs_out[0].isdigit() else 0
     log_latest = logs_out[1] if len(logs_out) > 1 else ""
-    logs_ok = log_count > 0
-
+    logs_ok, logs_summary, logs_details = _evaluate_freshness(
+        log_count,
+        log_latest,
+        pillar_name="log entries",
+        max_age_seconds=max_age_seconds,
+        now=now,
+    )
+    logs_details["log_count"] = log_count
     logs_pillar = PillarResult(
         ok=logs_ok,
-        summary=f"{log_count} log entries, latest: {log_latest}",
-        details={"log_count": log_count, "latest_timestamp": log_latest},
+        summary=logs_summary,
+        details=logs_details,
     )
 
     # Parse Monitoring (Ledger)
@@ -315,6 +396,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Do not fail verification on SDK version mismatch",
     )
+    parser.add_argument(
+        "--max-age-seconds",
+        type=int,
+        default=3600,
+        help="Maximum allowed age of latest traces and logs in seconds (default: 3600)",
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
@@ -322,6 +409,7 @@ def main(argv: list[str] | None = None) -> int:
         args.env,
         expected_sdk=args.expected_sdk,
         check_sdk=not args.skip_sdk_check,
+        max_age_seconds=args.max_age_seconds,
     )
 
     if args.json:
