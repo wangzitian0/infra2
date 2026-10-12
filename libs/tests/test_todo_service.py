@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 import threading
 import time
-import urllib.error
-import urllib.request
-from http.server import ThreadingHTTPServer
 from pathlib import Path
+
+from starlette.testclient import TestClient
 
 
 from libs.core import registry as reg
@@ -85,144 +83,97 @@ def test_todo_app_endpoints_contract(monkeypatch) -> None:
         },
     )
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), todo_mod.TodoHandler)
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever)
-    thread.daemon = True
-    thread.start()
+    client = TestClient(todo_mod.fastapi_app, raise_server_exceptions=False)
 
-    try:
-        # 1. /api/health
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/api/health", timeout=3
-        ) as resp:
-            assert resp.getcode() == 200
-            data = json.loads(resp.read().decode())
-            assert data["ok"] is True
-            assert data["service"] == "platform/todo"
-            assert data["domain"] == "todo.zitian.party"
+    # 1. /api/health
+    resp = client.get("/api/health")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["ok"] is True
+    assert data["service"] == "platform/todo"
+    assert data["domain"] == "todo.zitian.party"
 
-        # 2. /api/canary/status
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/api/canary/status", timeout=3
-        ) as resp:
-            assert resp.getcode() == 200
-            status_report = json.loads(resp.read().decode())
-            assert status_report["ok"] is True
-            assert "checks" in status_report
-            checks = status_report["checks"]
-            assert set(checks.keys()) == {
-                "postgres",
-                "redis",
-                "s3",
-                "minio",
-                "signoz",
-                "openpanel",
-                "authentik",
-            }
-            for name, c in checks.items():
-                assert c["status"] == "pass"
+    # 2. /api/canary/status
+    resp = client.get("/api/canary/status")
+    assert resp.status_code == 200
+    status_report = resp.json()
+    assert status_report["ok"] is True
+    assert "checks" in status_report
+    checks = status_report["checks"]
+    assert set(checks.keys()) == {
+        "postgres",
+        "redis",
+        "s3",
+        "minio",
+        "signoz",
+        "openpanel",
+        "authentik",
+    }
+    for name, c in checks.items():
+        assert c["status"] == "pass"
 
-        # 3. /api/todos (GET)
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/api/todos", timeout=3
-        ) as resp:
-            assert resp.getcode() == 200
-            todos = json.loads(resp.read().decode())
-            assert isinstance(todos, list)
-            assert len(todos) >= 5
+    # 3. /api/todos (GET)
+    resp = client.get("/api/todos")
+    assert resp.status_code == 200
+    todos = resp.json()
+    assert isinstance(todos, list)
+    assert len(todos) >= 5
 
-        # 4. /api/todos (POST valid item)
-        post_payload = json.dumps(
-            {"title": "Canary Automated Task", "capability": "redis"}
-        ).encode()
-        post_req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/todos",
-            data=post_payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(post_req, timeout=3) as resp:
-            assert resp.getcode() == 201
-            created = json.loads(resp.read().decode())
-            assert created["title"] == "Canary Automated Task"
-            assert created["capability"] == "redis"
-            assert created["completed"] is False
-            created_id = created["id"]
+    # 4. /api/todos (POST valid item)
+    resp = client.post(
+        "/api/todos",
+        json={"title": "Canary Automated Task", "capability": "redis"},
+    )
+    assert resp.status_code == 201
+    created = resp.json()
+    assert created["title"] == "Canary Automated Task"
+    assert created["capability"] == "redis"
+    assert created["completed"] is False
+    created_id = created["id"]
 
-        # 5. /api/todos (POST invalid JSON -> 400 Bad Request)
-        bad_req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/todos",
-            data=b"invalid-json{",
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            urllib.request.urlopen(bad_req, timeout=3)
-            assert False, "Expected HTTPError 400 on malformed JSON"
-        except urllib.error.HTTPError as err:
-            assert err.code == 400
-            err_body = json.loads(err.read().decode())
-            assert "error" in err_body
+    # 5. /api/todos (POST invalid JSON -> 400 Bad Request)
+    resp = client.post(
+        "/api/todos",
+        content=b"invalid-json{",
+        headers={"Content-Type": "application/json"},
+    )
+    assert resp.status_code == 400
+    err_body = resp.json()
+    assert "error" in err_body
 
-        # 5b. /api/todos (POST non-boolean completed -> 400 Bad Request)
-        invalid_type_req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/todos",
-            data=json.dumps({"title": "bad", "completed": "false"}).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            urllib.request.urlopen(invalid_type_req, timeout=3)
-            assert False, "Expected HTTPError 400 on string completed field"
-        except urllib.error.HTTPError as err:
-            assert err.code == 400
-            err_body = json.loads(err.read().decode())
-            assert "completed" in err_body.get("error", "")
+    # 5b. /api/todos (POST non-boolean completed -> 400 Bad Request)
+    resp = client.post(
+        "/api/todos",
+        json={"title": "bad", "completed": "false"},
+    )
+    assert resp.status_code == 400
+    err_body = resp.json()
+    assert "completed" in err_body.get("error", "")
 
-        # 6. /api/todos/{id}/toggle (PUT)
-        toggle_req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/todos/{created_id}/toggle",
-            data=b"",
-            method="PUT",
-        )
-        with urllib.request.urlopen(toggle_req, timeout=3) as resp:
-            assert resp.getcode() == 200
-            toggled = json.loads(resp.read().decode())
-            assert toggled["id"] == created_id
-            assert toggled["completed"] is True
+    # 6. /api/todos/{id}/toggle (PUT)
+    resp = client.put(f"/api/todos/{created_id}/toggle")
+    assert resp.status_code == 200
+    toggled = resp.json()
+    assert toggled["id"] == created_id
+    assert toggled["completed"] is True
 
-        # 7. /api/todos/{id} (DELETE)
-        del_req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/todos/{created_id}",
-            method="DELETE",
-        )
-        with urllib.request.urlopen(del_req, timeout=3) as resp:
-            assert resp.getcode() == 200
-            del_result = json.loads(resp.read().decode())
-            assert del_result["ok"] is True
-            assert del_result["deleted_id"] == created_id
+    # 7. /api/todos/{id} (DELETE)
+    resp = client.delete(f"/api/todos/{created_id}")
+    assert resp.status_code == 200
+    del_result = resp.json()
+    assert del_result["ok"] is True
+    assert del_result["deleted_id"] == created_id
 
-        # 8. /api/todos/{id} (DELETE non-existent -> 404)
-        del_404_req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/todos/{created_id}",
-            method="DELETE",
-        )
-        try:
-            urllib.request.urlopen(del_404_req, timeout=3)
-            assert False, "Expected HTTPError 404 on deleting deleted item"
-        except urllib.error.HTTPError as err:
-            assert err.code == 404
+    # 8. /api/todos/{id} (DELETE non-existent -> 404)
+    resp = client.delete(f"/api/todos/{created_id}")
+    assert resp.status_code == 404
 
-        # 9. Web UI (/)
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=3) as resp:
-            assert resp.getcode() == 200
-            html = resp.read().decode()
-            assert "todo.zitian.party" in html
-            assert "Canary Todo List" in html
-    finally:
-        server.shutdown()
-        server.server_close()
+    # 9. Web UI (/)
+    resp = client.get("/")
+    assert resp.status_code == 200
+    html = resp.text
+    assert "todo.zitian.party" in html
+    assert "Canary Todo List" in html
 
 
 def test_todo_app_concurrency_nonblocking(monkeypatch) -> None:
@@ -247,51 +198,40 @@ def test_todo_app_concurrency_nonblocking(monkeypatch) -> None:
     monkeypatch.setattr(todo_mod, "_probe_http", _slow_probe)
     monkeypatch.setattr(todo_mod, "_probe_s3", _slow_probe)
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), todo_mod.TodoHandler)
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever)
-    thread.daemon = True
-    thread.start()
-
     canary_result = {}
 
     def _fetch_canary():
         try:
-            req = urllib.request.Request(f"http://127.0.0.1:{port}/api/canary/status")
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                canary_result["code"] = resp.getcode()
-                canary_result["data"] = json.loads(resp.read().decode())
+            client = TestClient(todo_mod.fastapi_app)
+            resp = client.get("/api/canary/status")
+            canary_result["code"] = resp.status_code
+            canary_result["data"] = resp.json()
         except Exception as exc:
             canary_result["error"] = exc
 
-    try:
-        # Start slow canary probe in background thread
-        t_canary = threading.Thread(target=_fetch_canary)
-        t_canary.start()
+    # Start slow canary probe in background thread
+    t_canary = threading.Thread(target=_fetch_canary)
+    t_canary.start()
 
-        # Wait deterministically until the server actually enters the slow probe
-        assert probe_started.wait(timeout=2.0), "Slow probe never started executing"
+    # Wait deterministically until the server actually enters the slow probe
+    assert probe_started.wait(timeout=2.0), "Slow probe never started executing"
 
-        # Health probe must return quickly (< 0.25s) even while canary probe is sleeping
-        health_start = time.perf_counter()
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/api/health", timeout=1
-        ) as resp:
-            health_elapsed = time.perf_counter() - health_start
-            assert resp.getcode() == 200
-            assert health_elapsed < 0.25, (
-                f"Health check was blocked by slow probe! elapsed={health_elapsed}s"
-            )
+    # Health probe must return quickly (< 0.25s) even while canary probe is sleeping
+    client = TestClient(todo_mod.fastapi_app)
+    health_start = time.perf_counter()
+    resp = client.get("/api/health")
+    health_elapsed = time.perf_counter() - health_start
+    assert resp.status_code == 200
+    assert health_elapsed < 0.25, (
+        f"Health check was blocked by slow probe! elapsed={health_elapsed}s"
+    )
 
-        t_canary.join(timeout=5)
-        assert not t_canary.is_alive(), "Background canary probe timed out or hung"
-        assert canary_result.get("code") == 200, (
-            f"Background canary probe failed: {canary_result}"
-        )
-        assert "checks" in canary_result.get("data", {})
-    finally:
-        server.shutdown()
-        server.server_close()
+    t_canary.join(timeout=5)
+    assert not t_canary.is_alive(), "Background canary probe timed out or hung"
+    assert canary_result.get("code") == 200, (
+        f"Background canary probe failed: {canary_result}"
+    )
+    assert "checks" in canary_result.get("data", {})
 
 
 def test_prepare_dirs_noop_on_empty_data_path(monkeypatch) -> None:
@@ -399,92 +339,66 @@ def test_todo_app_authentik_identity_and_me_endpoint() -> None:
     todo_mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(todo_mod)
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), todo_mod.TodoHandler)
-    port = server.server_address[1]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    client = TestClient(todo_mod.fastapi_app)
 
-    try:
-        # Unauthenticated /api/auth/me
-        with urllib.request.urlopen(
-            f"http://127.0.0.1:{port}/api/auth/me", timeout=3
-        ) as resp:
-            assert resp.getcode() == 200
-            data = json.loads(resp.read().decode())
-            assert data["authenticated"] is False
-            assert data["username"] is None
-            assert data["groups"] == []
+    # Unauthenticated /api/auth/me
+    resp = client.get("/api/auth/me")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["authenticated"] is False
+    assert data["username"] is None
+    assert data["groups"] == []
 
-        # Authenticated /api/auth/me with ForwardAuth headers
-        auth_req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/auth/me",
-            headers={
-                "X-authentik-username": "wangzitian0",
-                "X-authentik-name": "Zitian Wang",
-                "X-authentik-email": "wangzitian0@gmail.com",
-                "X-authentik-groups": "admins,developers",
-            },
-        )
-        with urllib.request.urlopen(auth_req, timeout=3) as resp:
-            assert resp.getcode() == 200
-            auth_data = json.loads(resp.read().decode())
-            assert auth_data["authenticated"] is True
-            assert auth_data["username"] == "wangzitian0"
-            assert auth_data["name"] == "Zitian Wang"
-            assert auth_data["email"] == "wangzitian0@gmail.com"
-            assert auth_data["groups"] == ["admins", "developers"]
+    # Authenticated /api/auth/me with ForwardAuth headers
+    auth_headers = {
+        "X-authentik-username": "wangzitian0",
+        "X-authentik-name": "Zitian Wang",
+        "X-authentik-email": "wangzitian0@gmail.com",
+        "X-authentik-groups": "admins,developers",
+    }
+    resp = client.get("/api/auth/me", headers=auth_headers)
+    assert resp.status_code == 200
+    auth_data = resp.json()
+    assert auth_data["authenticated"] is True
+    assert auth_data["username"] == "wangzitian0"
+    assert auth_data["name"] == "Zitian Wang"
+    assert auth_data["email"] == "wangzitian0@gmail.com"
+    assert auth_data["groups"] == ["admins", "developers"]
 
-        # UI renders authenticated badge with name
-        ui_req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/",
-            headers={
-                "X-authentik-username": "wangzitian0",
-                "X-authentik-name": "Zitian Wang",
-            },
-        )
-        with urllib.request.urlopen(ui_req, timeout=3) as resp:
-            assert resp.getcode() == 200
-            html = resp.read().decode()
-            assert "SSO 认证通过: Zitian Wang" in html
+    # UI renders authenticated badge with name
+    ui_headers = {
+        "X-authentik-username": "wangzitian0",
+        "X-authentik-name": "Zitian Wang",
+    }
+    resp = client.get("/", headers=ui_headers)
+    assert resp.status_code == 200
+    html = resp.text
+    assert "SSO 认证通过: Zitian Wang" in html
 
-        # UI escapes HTML entities in user header to prevent XSS
-        xss_req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/",
-            headers={
-                "X-authentik-username": "attacker",
-                "X-authentik-name": "<script>alert('xss')</script>",
-            },
-        )
-        with urllib.request.urlopen(xss_req, timeout=3) as resp:
-            assert resp.getcode() == 200
-            html_xss = resp.read().decode()
-            assert "<script>alert('xss')</script>" not in html_xss
-            assert "&lt;script&gt;" in html_xss
+    # UI escapes HTML entities in user header to prevent XSS
+    xss_headers = {
+        "X-authentik-username": "attacker",
+        "X-authentik-name": "<script>alert('xss')</script>",
+    }
+    resp = client.get("/", headers=xss_headers)
+    assert resp.status_code == 200
+    html_xss = resp.text
+    assert "<script>alert('xss')</script>" not in html_xss
+    assert "&lt;script&gt;" in html_xss
 
-        # HTTP HEAD requests supported without 501 error and return no body
-        head_req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/api/health",
-            method="HEAD",
-        )
-        with urllib.request.urlopen(head_req, timeout=3) as resp:
-            assert resp.getcode() == 200
-            assert resp.headers.get("Content-Type") == "application/json"
-            assert "HEAD" in (resp.headers.get("Access-Control-Allow-Methods") or "")
-            assert resp.read() == b""
+    # HTTP HEAD requests supported without 501 error and return no body
+    resp_head = client.head("/api/health")
+    assert resp_head.status_code == 200
+    assert resp_head.headers.get("Content-Type") == "application/json"
+    assert "HEAD" in (resp_head.headers.get("Access-Control-Allow-Methods") or "")
+    assert resp_head.text == ""
 
-        # HEAD request on HTML UI root returns headers but no body
-        head_ui_req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/",
-            method="HEAD",
-        )
-        with urllib.request.urlopen(head_ui_req, timeout=3) as resp:
-            assert resp.getcode() == 200
-            assert "text/html" in (resp.headers.get("Content-Type") or "")
-            assert "HEAD" in (resp.headers.get("Access-Control-Allow-Methods") or "")
-            assert resp.read() == b""
-    finally:
-        server.shutdown()
-        server.server_close()
+    # HEAD request on HTML UI root returns headers but no body
+    resp_ui_head = client.head("/")
+    assert resp_ui_head.status_code == 200
+    assert "text/html" in (resp_ui_head.headers.get("Content-Type") or "")
+    assert "HEAD" in (resp_ui_head.headers.get("Access-Control-Allow-Methods") or "")
+    assert resp_ui_head.text == ""
 
 
 def test_portal_config_template_contains_canary_todo() -> None:
@@ -516,8 +430,6 @@ def test_portal_config_template_contains_canary_todo() -> None:
 
 def test_todo_fastapi_endpoints_contract() -> None:
     """Verify Canary Todo exposes FastAPI endpoints via infra2_sdk.fastapi."""
-    from starlette.testclient import TestClient
-
     spec = importlib.util.spec_from_file_location(
         "todo_app_fastapi", REPO_ROOT / "platform/30.todo/app.py"
     )

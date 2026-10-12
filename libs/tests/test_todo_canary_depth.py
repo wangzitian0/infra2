@@ -666,21 +666,11 @@ def _patch_probes(app, monkeypatch, **overrides) -> None:
 
 def _get_status(app) -> tuple[int, str]:
     """The raw status response as the probe runner receives it: (HTTP code, body)."""
-    import urllib.error
-    import urllib.request
+    from starlette.testclient import TestClient
 
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), app.TodoHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        url = f"http://127.0.0.1:{server.server_address[1]}/api/canary/status"
-        try:
-            with urllib.request.urlopen(url, timeout=5) as response:
-                return response.status, response.read().decode()
-        except urllib.error.HTTPError as error:
-            return error.code, error.read().decode()
-    finally:
-        server.shutdown()
-        server.server_close()
+    client = TestClient(app.fastapi_app, raise_server_exceptions=False)
+    response = client.get("/api/canary/status")
+    return response.status_code, response.text
 
 
 def test_a_failed_write_path_turns_the_document_red_as_503(app, monkeypatch) -> None:
@@ -744,26 +734,24 @@ def test_the_probe_runner_sees_the_gap_in_its_observed_text(app, monkeypatch) ->
     _env(monkeypatch)
     gap = {"status": "unconfigured", "latency_ms": 0.1, "detail": "CANARY_S3 gap"}
     _patch_probes(app, monkeypatch, s3=gap)
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), app.TodoHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    try:
-        spec = ProbeSpec(
-            name="todo-canary-status",
-            kind="http",
-            target=f"http://127.0.0.1:{server.server_address[1]}/api/canary/status",
-            expected="200",
-            severity="warning",
-            timeout_seconds=5,
-        )
-        result = run_probe(spec)
-    finally:
-        server.shutdown()
-        server.server_close()
+    code, body = _get_status(app)
+    spec = ProbeSpec(
+        name="todo-canary-status",
+        kind="http",
+        target="http://127.0.0.1/api/canary/status",
+        expected="200",
+        severity="warning",
+        timeout_seconds=5,
+    )
+    result = run_probe(spec, http_get=lambda _url, _timeout: (code, body[:128]))
 
     assert result.ok is False, "the gap keeps the probe red"
-    assert '"unconfigured": ["s3"]' in result.observed
-    assert '"failed": []' in result.observed
-    assert '"ok": false' in result.observed
+    assert (
+        '"unconfigured":["s3"]' in result.observed
+        or '"unconfigured": ["s3"]' in result.observed
+    )
+    assert '"failed":[]' in result.observed or '"failed": []' in result.observed
+    assert '"ok":false' in result.observed or '"ok": false' in result.observed
 
 
 @pytest.mark.parametrize("dependency", ["signoz", "openpanel", "authentik"])
@@ -924,7 +912,6 @@ def test_the_ttl_is_shorter_than_the_probe_interval(app) -> None:
 
 
 def test_parallel_http_requests_run_the_probes_once(app, monkeypatch) -> None:
-    import urllib.request
 
     _env(monkeypatch)
     calls: list[int] = []
@@ -937,27 +924,20 @@ def test_parallel_http_requests_run_the_probes_once(app, monkeypatch) -> None:
     _patch_probes(app, monkeypatch)
     monkeypatch.setattr(app, "_probe_postgres", counting_postgres)
 
-    class QueuedServer(http.server.ThreadingHTTPServer):
-        request_queue_size = 16
-
-    server = QueuedServer(("127.0.0.1", 0), app.TodoHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
     codes: list[int] = []
-    try:
-        url = f"http://127.0.0.1:{server.server_address[1]}/api/canary/status"
 
-        def fetch():
-            with urllib.request.urlopen(url, timeout=10) as response:
-                codes.append(response.status)
+    def fetch():
+        from starlette.testclient import TestClient
 
-        threads = [threading.Thread(target=fetch) for _ in range(6)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=15)
-    finally:
-        server.shutdown()
-        server.server_close()
+        client = TestClient(app.fastapi_app)
+        response = client.get("/api/canary/status")
+        codes.append(response.status_code)
+
+    threads = [threading.Thread(target=fetch) for _ in range(6)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=15)
     assert codes == [200] * 6
     assert len(calls) == 1, "six page loads must open one Postgres connection"
 
@@ -1035,9 +1015,13 @@ def test_todo_signal_is_a_debounced_minute_alert() -> None:
 
 
 def _served_paths() -> set[str]:
-    """Every exact path the handler compares against, read from the app source."""
+    """Every exact path the service serves, read from the app source."""
     source = (SERVICE_DIR / "app.py").read_text(encoding="utf-8")
-    return set(re.findall(r'path == "(/[^"]*)"', source))
+    return set(
+        re.findall(
+            r'fastapi_app\.(?:api_route|get|post|put|delete)\("(/[^"]*)"', source
+        )
+    )
 
 
 @pytest.mark.parametrize(
