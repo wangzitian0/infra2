@@ -400,6 +400,13 @@ def test_todo_app_authentik_identity_and_me_endpoint() -> None:
     assert "HEAD" in (resp_ui_head.headers.get("Access-Control-Allow-Methods") or "")
     assert resp_ui_head.text == ""
 
+    # OPTIONS preflight request returns 204 with CORS headers
+    resp_options = client.options("/api/todos")
+    assert resp_options.status_code == 204
+    assert resp_options.headers.get("Access-Control-Allow-Origin") == "*"
+    assert "OPTIONS" in (resp_options.headers.get("Access-Control-Allow-Methods") or "")
+    assert resp_options.headers.get("Content-Length") == "0"
+
 
 def test_portal_config_template_contains_canary_todo() -> None:
     """Verify platform/21.portal/config.yml.tmpl includes Canary Todo card."""
