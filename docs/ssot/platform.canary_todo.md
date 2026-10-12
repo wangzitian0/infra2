@@ -67,6 +67,15 @@ The document returns HTTP 200 only when every gating check passes. It returns HT
 
 A change to the severity changes `ProbeFacet.severity` and the two frozen fixtures in the same PR.
 
+**Monitoring pillar (#1223).** `tools.canary_verify` reads the last UTC day of the availability ledger for `<env>:todo-canary-status`. A deploy restarts the service, and the ledger counts that failed run until the day ends. The pillar judges failures by age, with the window of the trace and log checks (`--max-age-seconds`, default `DEFAULT_WINDOW_SECONDS`):
+
+- No failed run: the pillar passes when the signal has an ok run.
+- Failed runs: the pillar passes only when `lastFailAt` is older than the window and `lastOkAt` is inside it.
+- `lastFailAt` or `lastOkAt` missing or malformed (a ledger written before #1223): the pillar fails. The ledger does not say how old the failures are.
+- The public health check and the internal canary status keep their veto. Old failures never hide a service that fails now.
+
+A deploy therefore turns the pillar red for one window, not for the rest of the day. The ledger fields are in `libs/observability/local_ledger.py`. The first UTC day after the writer change keeps a failure that the old writer counted: that day has no `lastFailAt`.
+
 ## 4. Credentials
 
 The vault-agent sidecar renders `/secrets/.env` from Vault. The app container sources it at start. Compose environment never carries these values.

@@ -42,14 +42,126 @@ def test_a_round_counts_one_ok_or_fail_per_probe_and_one_run() -> None:
         "fail": 0,
         "severity": "critical",
         "lastDomain": "",
+        "lastOkAt": int(T0 + 60),
     }
     assert day["signals"]["production:minio-public-route"] == {
         "ok": 1,
         "fail": 1,
         "severity": "warning",
         "lastDomain": "public-route",
+        "lastOkAt": int(T0),
+        "lastFailAt": int(T0 + 60),
     }
     assert ledger["updated_at"] == int(T0 + 60)
+
+
+def _vault_http(ledger: dict, date: str = "2026-09-24") -> dict:
+    return ledger["days"][date]["signals"]["production:vault-http"]
+
+
+def test_a_failed_run_sets_last_fail_at_and_an_ok_run_keeps_it() -> None:
+    """#1223: the canary verifier needs the time of the last failure, not only a count."""
+    ledger = local_ledger.new_ledger("production")
+    local_ledger.record_round(ledger, _round(), "production", T0)
+    assert "lastFailAt" not in _vault_http(ledger)
+
+    local_ledger.record_round(ledger, _round(vault_ok=False), "production", T0 + 60)
+    local_ledger.record_round(ledger, _round(), "production", T0 + 120)
+    entry = _vault_http(ledger)
+
+    assert entry["lastFailAt"] == int(T0 + 60)  # the later ok run did not erase it
+    assert entry["lastOkAt"] == int(T0 + 120)  # and the failed run did not erase this
+    assert (entry["ok"], entry["fail"]) == (2, 1)
+
+    local_ledger.record_round(ledger, _round(vault_ok=False), "production", T0 + 180)
+    entry = _vault_http(ledger)
+    assert entry["lastFailAt"] == int(T0 + 180)
+    assert entry["lastOkAt"] == int(T0 + 120)
+    assert (entry["ok"], entry["fail"]) == (2, 2)
+
+
+def test_a_result_without_a_verdict_sets_last_fail_at_not_last_ok_at() -> None:
+    ledger = local_ledger.new_ledger("staging")
+    local_ledger.record_round(ledger, {"g": [{"spec": {"name": "x"}}]}, "staging", T0)
+
+    entry = ledger["days"]["2026-09-24"]["signals"]["staging:x"]
+    assert entry["lastFailAt"] == int(T0)
+    assert "lastOkAt" not in entry
+
+
+def test_the_times_are_per_day_and_a_new_day_starts_without_a_last_failure() -> None:
+    late = datetime(2026, 9, 24, 23, 59, 30, tzinfo=UTC).timestamp()
+    ledger = local_ledger.new_ledger("production")
+    local_ledger.record_round(ledger, _round(vault_ok=False), "production", late)
+    local_ledger.record_round(ledger, _round(), "production", late + 60)
+
+    first, second = _vault_http(ledger), _vault_http(ledger, "2026-09-25")
+    assert first["lastFailAt"] == int(late)
+    assert "lastOkAt" not in first
+    assert (first["ok"], first["fail"]) == (0, 1)
+    assert "lastFailAt" not in second
+    assert second["lastOkAt"] == int(late + 60)
+    assert (second["ok"], second["fail"]) == (1, 0)
+
+
+def test_an_ok_run_does_not_invent_a_failure_time_for_an_old_ledger_entry() -> None:
+    """A day counted before #1223 holds failures without a time. The writer adds the
+    ok time and counts, and it leaves `lastFailAt` out: the reader then fails closed."""
+    ledger = local_ledger.new_ledger("production")
+    local_ledger.record_round(ledger, _round(), "production", T0)
+    entry = _vault_http(ledger)
+    entry.pop("lastOkAt")
+    entry["fail"] = 2
+
+    local_ledger.record_round(ledger, _round(), "production", T0 + 60)
+
+    assert "lastFailAt" not in entry
+    assert entry["lastOkAt"] == int(T0 + 60)
+    assert (entry["ok"], entry["fail"]) == (2, 2)
+
+
+def test_the_times_survive_the_file_and_an_old_file_stays_valid(tmp_path) -> None:
+    state = tmp_path / "s.json"
+    local_ledger.record_probe_round(_round(vault_ok=False), "production", state, T0)
+    local_ledger.record_probe_round(_round(), "production", state, T0 + 60)
+    path = tmp_path / local_ledger.LEDGER_FILE_NAME
+    entry = _vault_http(json.loads(path.read_text()))
+    assert entry["lastFailAt"] == int(T0)
+    assert entry["lastOkAt"] == int(T0 + 60)
+    assert type(entry["lastFailAt"]) is int and type(entry["lastOkAt"]) is int
+
+    # A file written before #1223 has no times. It still loads and keeps counting.
+    old = json.loads(path.read_text())
+    for signal in old["days"]["2026-09-24"]["signals"].values():
+        signal.pop("lastFailAt", None)
+        signal.pop("lastOkAt", None)
+    path.write_text(json.dumps(old))
+    local_ledger.validate(old)
+    local_ledger.record_probe_round(_round(), "production", state, T0 + 120)
+    after = json.loads(path.read_text())
+    assert _vault_http(after)["ok"] == 2 and _vault_http(after)["fail"] == 1
+    assert _vault_http(after)["lastOkAt"] == int(T0 + 120)
+    assert "lastFailAt" not in _vault_http(after)
+    assert not (tmp_path / "availability-ledger.corrupt.json").exists()
+
+
+@pytest.mark.parametrize("field", ["lastFailAt", "lastOkAt"])
+@pytest.mark.parametrize("bad", ["yesterday", True, -1, 1.5, None])
+def test_a_malformed_time_never_costs_the_counts(tmp_path, field, bad) -> None:
+    """The writer never reads the times, so a bad one must not make the file corrupt:
+    that would drop 21 days of counts. The verifier rejects a bad time itself."""
+    state = tmp_path / "s.json"
+    local_ledger.record_probe_round(_round(vault_ok=False), "production", state, T0)
+    path = tmp_path / local_ledger.LEDGER_FILE_NAME
+    document = json.loads(path.read_text())
+    _vault_http(document)[field] = bad
+    path.write_text(json.dumps(document))
+
+    local_ledger.record_probe_round(_round(), "production", state, T0 + 60)
+
+    entry = _vault_http(json.loads(path.read_text()))
+    assert (entry["ok"], entry["fail"]) == (1, 1)
+    assert not (tmp_path / "availability-ledger.corrupt.json").exists()
 
 
 def test_anything_but_ok_true_is_a_failure() -> None:
