@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from libs.observability import signoz_queries
+from libs.observability import local_ledger, signoz_queries
 from libs.tests.ambient_env import clear_telemetry_env
 from tools.canary_verify import (
     CanaryRealityReport,
@@ -50,15 +50,23 @@ def _relative_ts(offset_seconds: float, now: datetime) -> str:
     return target.strftime("%Y-%m-%d %H:%M:%S")
 
 
+DEFAULT_LEDGER_LINE = (
+    '{"day": "2026-10-12", "runs": 10, "signal": {"ok": 10, "fail": 0}}'
+)
+HEALTHY_STATUS_LINE = '{"ok": true, "failed": []}'
+
+
 def _canned_stdout(
     *,
     traces: str,
     logs: str,
     bridge: str = BRIDGE_HEALTHY,
+    ledger: str = DEFAULT_LEDGER_LINE,
+    status: str = HEALTHY_STATUS_LINE,
 ) -> str:
     return (
         "=== STATUS ===\n"
-        '{"ok": true, "failed": []}\n'
+        f"{status}\n"
         "=== SDK ===\n"
         f"{_resolve_locked_sdk_version()}\n"
         "=== TRACES ===\n"
@@ -66,14 +74,17 @@ def _canned_stdout(
         "=== LOGS ===\n"
         f"{logs}\n"
         "=== LEDGER ===\n"
-        '{"day": "2026-10-12", "runs": 10, "signal": {"ok": 10, "fail": 0}}\n'
+        f"{ledger}\n"
         "=== ALERT_BRIDGE ===\n"
         f"{bridge}\n"
     )
 
 
 def _verify_with_canned_ssh(
-    environment: str, stdout: str, **kwargs: object
+    environment: str,
+    stdout: str,
+    health_body: dict[str, object] | None = None,
+    **kwargs: object,
 ) -> tuple[CanaryRealityReport, list[str]]:
     """Run verify_canary with canned SSH output.
 
@@ -91,7 +102,9 @@ def _verify_with_canned_ssh(
     ):
         mock_resp = MagicMock()
         mock_resp.status = 200
-        mock_resp.read.return_value = json.dumps({"ok": True}).encode()
+        mock_resp.read.return_value = json.dumps(
+            {"ok": True} if health_body is None else health_body
+        ).encode()
         mock_resp.__enter__.return_value = mock_resp
         mock_url.return_value = mock_resp
         report = verify_canary(environment, now=FIXED_NOW, **kwargs)  # type: ignore[arg-type]
@@ -820,3 +833,230 @@ def test_cli_rejects_non_positive_window(bad: str) -> None:
             main(["--env", "staging", "--max-age-seconds", bad])
     assert excinfo.value.code == 2
     mock_verify.assert_not_called()
+
+
+# --- Monitoring pillar judges recent failures (issue #1223) -----------------
+
+NOW_TS = int(FIXED_NOW.timestamp())
+WINDOW = signoz_queries.DEFAULT_WINDOW_SECONDS
+
+
+def _monitoring_report(
+    signal: dict[str, object] | None,
+    *,
+    environment: str = "staging",
+    status: str = HEALTHY_STATUS_LINE,
+    health_body: dict[str, object] | None = None,
+    **kwargs: object,
+) -> CanaryRealityReport:
+    """Run the verifier on a ledger line that holds `signal`, with fresh telemetry."""
+    ledger = json.dumps({"day": "2026-10-12", "runs": 700, "signal": signal})
+    stdout = _canned_stdout(
+        traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
+        logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
+        ledger=ledger,
+        status=status,
+    )
+    report, _commands = _verify_with_canned_ssh(
+        environment, stdout, health_body=health_body, **kwargs
+    )
+    return report
+
+
+def _signal(
+    *,
+    ok: int = 560,
+    fail: int = 2,
+    fail_age: object = None,
+    ok_age: object = 60,
+) -> dict[str, object]:
+    """A ledger signal whose last failed / ok run is `*_age` seconds before now.
+
+    `None` leaves the field out, as the writer did before #1223.
+    """
+    signal: dict[str, object] = {"ok": ok, "fail": fail}
+    if isinstance(fail_age, int) and not isinstance(fail_age, bool):
+        signal["lastFailAt"] = NOW_TS - fail_age
+    elif fail_age is not None:
+        signal["lastFailAt"] = fail_age
+    if isinstance(ok_age, int) and not isinstance(ok_age, bool):
+        signal["lastOkAt"] = NOW_TS - ok_age
+    elif ok_age is not None:
+        signal["lastOkAt"] = ok_age
+    return signal
+
+
+def test_failures_older_than_the_window_do_not_fail_the_pillar() -> None:
+    """The #1223 case: a redeploy restart logged 2 failed runs hours ago."""
+    report = _monitoring_report(_signal(fail=2, fail_age=2 * WINDOW, ok_age=60))
+
+    assert report.monitoring.ok is True
+    assert report.all_ok is True
+    assert report.monitoring.summary.startswith("Ledger ok=560 fail=2")
+    assert f"last fail {2 * WINDOW}s ago" in report.monitoring.summary
+    assert "last ok 60s ago" in report.monitoring.summary
+    assert report.monitoring.details["ledger"]["signal"]["fail"] == 2
+
+
+@pytest.mark.parametrize(
+    ("fail_age", "expected_ok"),
+    [
+        (0, False),
+        (-30, False),  # a failure time in the future is never old
+        (600, False),
+        (WINDOW - 1, False),
+        (WINDOW, False),  # the window is inclusive, as for traces and logs
+        (WINDOW + 1, True),
+        (86400, True),
+    ],
+)
+def test_last_failure_is_compared_with_the_window(
+    fail_age: int, expected_ok: bool
+) -> None:
+    report = _monitoring_report(_signal(fail_age=fail_age, ok_age=30))
+
+    assert report.monitoring.ok is expected_ok
+    assert report.all_ok is expected_ok
+
+
+@pytest.mark.parametrize(
+    ("ok_age", "expected_ok"),
+    [
+        (-60, True),  # clock skew within tolerance
+        (-61, False),  # the last ok run is in the future
+        (0, True),
+        (WINDOW, True),
+        (WINDOW + 1, False),  # no ok run for a window: the writer stopped
+        (86400, False),
+    ],
+)
+def test_last_ok_run_must_be_recent_when_failures_are_old(
+    ok_age: int, expected_ok: bool
+) -> None:
+    report = _monitoring_report(_signal(fail_age=2 * WINDOW, ok_age=ok_age))
+
+    assert report.monitoring.ok is expected_ok
+
+
+@pytest.mark.parametrize(
+    "signal",
+    [
+        pytest.param(_signal(fail=2, fail_age=None, ok_age=None), id="old-format"),
+        pytest.param(
+            _signal(fail=2, fail_age=None, ok_age=60), id="no-lastFailAt-with-lastOkAt"
+        ),
+        pytest.param(
+            _signal(fail=2, fail_age=2 * WINDOW, ok_age=None), id="no-lastOkAt"
+        ),
+    ],
+)
+def test_missing_timestamps_with_failures_fail_closed(
+    signal: dict[str, object],
+) -> None:
+    """A ledger written before #1223 has counters only: any failure stays red."""
+    report = _monitoring_report(signal)
+
+    assert report.monitoring.ok is False
+    assert report.all_ok is False
+    assert "fail=2" in report.monitoring.summary
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["2026-10-12", True, False, -5, 1.5, None, [], {}],
+    ids=["str", "true", "false", "negative", "float", "null", "list", "object"],
+)
+@pytest.mark.parametrize("field", ["lastFailAt", "lastOkAt"])
+def test_malformed_timestamps_fail_closed(field: str, bad: object) -> None:
+    signal = _signal(fail_age=2 * WINDOW, ok_age=60)
+    signal[field] = bad
+
+    report = _monitoring_report(signal)
+
+    assert report.monitoring.ok is False
+
+
+@pytest.mark.parametrize(
+    "signal",
+    [
+        pytest.param({"ok": 10, "fail": 0}, id="no-timestamps"),
+        pytest.param(
+            {"ok": 10, "fail": 0, "lastOkAt": NOW_TS - 60}, id="with-lastOkAt"
+        ),
+        pytest.param(
+            {"ok": 10, "fail": 0, "lastOkAt": NOW_TS - 5 * WINDOW}, id="stale-ok"
+        ),
+    ],
+)
+def test_no_failures_still_pass(signal: dict[str, object]) -> None:
+    report = _monitoring_report(signal)
+
+    assert report.monitoring.ok is True
+    assert report.all_ok is True
+
+
+@pytest.mark.parametrize(
+    "signal",
+    [
+        pytest.param(None, id="signal-missing"),
+        pytest.param({"ok": 0, "fail": 0}, id="no-runs"),
+        pytest.param(
+            {"ok": 0, "fail": 2, "lastFailAt": NOW_TS - 2 * WINDOW, "lastOkAt": NOW_TS},
+            id="old-failures-but-no-ok-run",
+        ),
+        pytest.param({"ok": "10", "fail": 0}, id="counter-is-a-string"),
+        pytest.param({"ok": True, "fail": 0}, id="counter-is-a-bool"),
+    ],
+)
+def test_a_ledger_without_a_positive_signal_stays_red(
+    signal: dict[str, object] | None,
+) -> None:
+    report = _monitoring_report(signal)
+
+    assert report.monitoring.ok is False
+
+
+def test_old_failures_do_not_hide_a_service_that_fails_now() -> None:
+    """The ledger tolerates old failures only; the live checks keep their veto."""
+    old_failures = _signal(fail_age=2 * WINDOW, ok_age=60)
+
+    internal = _monitoring_report(
+        old_failures, status='{"ok": false, "failed": ["s3"]}'
+    )
+    public = _monitoring_report(old_failures, health_body={"ok": False})
+
+    assert internal.monitoring.ok is False
+    assert "internal_status=fail" in internal.monitoring.summary
+    assert public.monitoring.ok is False
+    assert "public_health=fail" in public.monitoring.summary
+
+
+def test_the_failure_window_follows_max_age_seconds() -> None:
+    """One window scopes traces, logs and the ledger failure time."""
+    signal = _signal(fail_age=5000, ok_age=60)
+
+    assert _monitoring_report(signal).monitoring.ok is True
+    assert _monitoring_report(signal, max_age_seconds=7200).monitoring.ok is False
+    assert _monitoring_report(signal, max_age_seconds=4999).monitoring.ok is True
+
+
+def test_the_pillar_reads_the_fields_the_writer_writes() -> None:
+    """Drive the real writer, then the verifier: a renamed field on one side fails."""
+    probe = {"g": [{"spec": {"name": "todo-canary-status"}, "ok": False}]}
+    healthy = {"g": [{"spec": {"name": "todo-canary-status"}, "ok": True}]}
+
+    def entry_after_restart_at(restart_age: int) -> dict[str, object]:
+        ledger = local_ledger.new_ledger("staging")
+        local_ledger.record_round(ledger, healthy, "staging", NOW_TS - 5 * WINDOW)
+        local_ledger.record_round(ledger, probe, "staging", NOW_TS - restart_age)
+        local_ledger.record_round(ledger, healthy, "staging", NOW_TS - restart_age + 60)
+        local_ledger.record_round(ledger, healthy, "staging", NOW_TS - 30)
+        day = ledger["days"][local_ledger.utc_day(NOW_TS)]
+        return day["signals"]["staging:todo-canary-status"]
+
+    old_restart = entry_after_restart_at(3 * WINDOW)
+    recent_restart = entry_after_restart_at(WINDOW // 2)
+
+    assert old_restart["fail"] == recent_restart["fail"] == 1
+    assert _monitoring_report(old_restart).monitoring.ok is True
+    assert _monitoring_report(recent_restart).monitoring.ok is False

@@ -14,6 +14,12 @@ Usage:
 
 The trace and log queries come from `libs.observability.signoz_queries`. They
 filter on the service, on the environment and on the freshness window.
+
+The monitoring pillar judges the ledger on recent failures (#1223). A deploy
+restarts the service, and the ledger counts that failed run for the rest of the
+UTC day. The pillar therefore passes with failures only when the last failed run
+is older than the window and an ok run is inside it. A ledger without the times
+(written before #1223) keeps the old rule: any failure fails the pillar.
 """
 
 from __future__ import annotations
@@ -41,6 +47,8 @@ TELEMETRY_SERVICE_NAME = "platform-todo"
 # The bridge said "ok" before. A production bridge with the old image still says "ok".
 # Both count until the release that carries #1209 reaches production. Then drop "ok".
 BRIDGE_HEALTHY_STATUSES = frozenset({"healthy", "ok"})
+# A timestamp may run ahead of the local clock by this much before it counts as skew.
+CLOCK_SKEW_TOLERANCE_SECONDS = 60
 DEFAULT_VPS_HOST = "103.214.23.41"
 DEFAULT_SSH_KEY = Path.home() / ".ssh" / "id_ed25519_infra"
 
@@ -121,6 +129,12 @@ def _resolve_ssh_credentials() -> tuple[str, str, str, int]:
     return host, user, key_path, port
 
 
+def _as_utc(now: datetime | None) -> datetime:
+    """The injected clock, or the real one, as an aware UTC datetime."""
+    value = now if now is not None else datetime.now(timezone.utc)
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
 def _evaluate_freshness(
     count: int,
     latest_str: str,
@@ -162,14 +176,12 @@ def _evaluate_freshness(
         details["parse_error"] = str(err)
         return False, f"Malformed timestamp '{raw_ts}': {err}", details
 
-    now_utc = now if now is not None else datetime.now(timezone.utc)
-    if now_utc.tzinfo is None:
-        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    now_utc = _as_utc(now)
 
     age_seconds = (now_utc - latest).total_seconds()
     details["age_seconds"] = age_seconds
 
-    if age_seconds < -60:
+    if age_seconds < -CLOCK_SKEW_TOLERANCE_SECONDS:
         return (
             False,
             f"Clock skew detected for {pillar_name}: timestamp {raw_ts} is {int(-age_seconds)}s in future",
@@ -189,6 +201,70 @@ def _evaluate_freshness(
         f"{count} {pillar_name} recorded, latest: {raw_ts} (fresh: {fresh_label})",
         details,
     )
+
+
+def _ledger_count(value: object) -> int | None:
+    """A ledger counter or epoch time: a non-negative integer, else None."""
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def _evaluate_ledger_signal(
+    signal: object,
+    now: datetime,
+    window_seconds: int = DEFAULT_WINDOW_SECONDS,
+) -> tuple[bool, str, dict[str, Any]]:
+    """Fail-closed judgement of one ledger signal (#1223).
+
+    The signal passes when it has at least one ok run and either:
+    1. it has no failed run, or
+    2. the last failed run is older than the window and the last ok run is inside it.
+
+    `lastFailAt` and `lastOkAt` are the epoch seconds that the probe runner writes
+    (`libs.observability.local_ledger`). A signal with failures and a missing or
+    malformed time fails the check: the ledger then does not say how old they are.
+    """
+    details: dict[str, Any] = {"window_seconds": window_seconds}
+    if not isinstance(signal, dict):
+        return False, "entry missing for the signal today", details
+    ok_count = _ledger_count(signal.get("ok"))
+    fail_count = _ledger_count(signal.get("fail", 0))
+    if ok_count is None or fail_count is None:
+        return False, "counters are not non-negative integers", details
+    counts = f"ok={ok_count} fail={fail_count}"
+    if ok_count == 0:
+        return False, f"{counts}: no ok run recorded", details
+    if fail_count == 0:
+        return True, counts, details
+
+    last_fail = _ledger_count(signal.get("lastFailAt"))
+    last_ok = _ledger_count(signal.get("lastOkAt"))
+    if last_fail is None or last_ok is None:
+        return (
+            False,
+            f"{counts}: no valid last fail and last ok time to age the failures",
+            details,
+        )
+    now_ts = now.timestamp()
+    fail_age = int(now_ts - last_fail)
+    ok_age = int(now_ts - last_ok)
+    details["last_fail_age_seconds"] = fail_age
+    details["last_ok_age_seconds"] = ok_age
+    ages = f"last fail {fail_age}s ago, last ok {ok_age}s ago"
+    if fail_age <= window_seconds:
+        return (
+            False,
+            f"{counts}: a run failed within the last {window_seconds}s ({ages})",
+            details,
+        )
+    if not -CLOCK_SKEW_TOLERANCE_SECONDS <= ok_age <= window_seconds:
+        return (
+            False,
+            f"{counts}: no ok run within the last {window_seconds}s ({ages})",
+            details,
+        )
+    return True, f"{counts} ({ages})", details
 
 
 def verify_canary(
@@ -349,30 +425,28 @@ def verify_canary(
     )
 
     # Parse Monitoring (Ledger)
-    ledger_data = {}
-    monitoring_ok = False
+    ledger_data: dict[str, Any] = {}
     try:
-        ledger_data = json.loads(sections.get("LEDGER", "{}"))
-        signal = ledger_data.get("signal") or {}
-        monitoring_ok = (
-            signal.get("ok", 0) > 0
-            and signal.get("fail", 0) == 0
-            and gating_ok
-            and health_ok
-        )
-    except Exception:
+        parsed_ledger = json.loads(sections.get("LEDGER", "{}"))
+        if isinstance(parsed_ledger, dict):
+            ledger_data = parsed_ledger
+    except ValueError:
         pass
+    ledger_ok, ledger_summary, ledger_check = _evaluate_ledger_signal(
+        ledger_data.get("signal"), _as_utc(now), window_seconds=max_age_seconds
+    )
+    monitoring_ok = ledger_ok and gating_ok and health_ok
 
     monitoring_pillar = PillarResult(
         ok=monitoring_ok,
         summary=(
-            f"Ledger ok={ledger_data.get('signal', {}).get('ok', 0)} "
-            f"fail={ledger_data.get('signal', {}).get('fail', 0)}, "
+            f"Ledger {ledger_summary}, "
             f"public_health={'pass' if health_ok else 'fail'}, "
             f"internal_status={'pass' if gating_ok else 'fail'}"
         ),
         details={
             "ledger": ledger_data,
+            "ledger_check": ledger_check,
             "health": health_data,
             "canary_status": canary_status,
         },

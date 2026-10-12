@@ -23,11 +23,20 @@ File (one per environment, on the host under :data:`HOST_LEDGER_DIR`)::
           "presence": "ffff...",         # 288 bits, one per 5-minute slot, hex
           "signals": {
             "production:vault-public-route":
-              {"ok": 1308, "fail": 1, "severity": "critical", "lastDomain": "public-route"}
+              {"ok": 1308, "fail": 1, "severity": "critical", "lastDomain": "public-route",
+               "lastOkAt": 1790207940, "lastFailAt": 1790150600}
           }
         }
       }
     }
+
+``lastOkAt`` and ``lastFailAt`` (#1223) are the epoch seconds of the round that last
+recorded an ok or a failed result for the signal on that day. A round sets only the
+field of its own result and never clears the other. A field is absent until the
+first such result: a day counted before #1223 has failures and no ``lastFailAt``, and
+a reader must treat that as "time unknown", not as "long ago". The counters mean what
+they meant before. Both fields are optional, so ``schema`` stays 2. :func:`validate`
+does not check them: a bad time must not drop the counts. A reader checks them.
 """
 
 from __future__ import annotations
@@ -141,9 +150,11 @@ def record_round(
             )
             if result.get("ok") is True:
                 entry["ok"] += 1
+                entry["lastOkAt"] = int(now)
             else:
                 entry["fail"] += 1
                 entry["lastDomain"] = group
+                entry["lastFailAt"] = int(now)
             entry["severity"] = str(spec.get("severity") or entry.get("severity") or "")
     if not ledger.get("started_at"):
         ledger["started_at"] = int(now)
