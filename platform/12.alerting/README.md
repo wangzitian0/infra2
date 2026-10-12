@@ -127,6 +127,22 @@ uv run python -m invoke alerting.shared.ensure-log-error-rule \
 `test-feishu` sends a synthetic SigNoz-style alert through the bridge and should
 result in a Feishu group message.
 
+### Health and telemetry (#1209)
+
+`init_service` of `infra2-sdk` serves `/livez`, `/readyz` and `/health`. The bridge adds
+no `/health` of its own. `/health` answers with the SDK report
+(`{"status": "healthy", "checks": {...}, "reasons": [], "service": "platform-alerting"}`)
+and 200 when the delivery config is valid. It answers 503 with `"status": "unhealthy"` and
+the reason when the config is not valid. Readers of the status code are the container
+healthcheck, the probe runner (`alert-bridge-http`), `invoke alerting.status` and the
+out-of-band watchdog. `tools/canary_verify.py` also reads `status`. `/health/feishu` keeps
+the delivery mode and the Feishu reachability.
+
+`AlertingDeployer.telemetry_service_name = "platform-alerting"` makes the deploy issue
+`OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`. The compose passes them to the bridge
+with `OTEL_EXPORTER_OTLP_ENDPOINT` and `ENV`, and the image installs the OpenTelemetry
+packages. The bridge pages people, so a bad `OTEL_*` value is logged and never stops it.
+
 ## Reading an alert
 
 Every page on the three converted surfaces — this bridge's card, the Cloudflare

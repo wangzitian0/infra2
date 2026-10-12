@@ -5,12 +5,18 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import os
+import re
+import subprocess
 import sys
+import textwrap
 import types
 from pathlib import Path
 
 import pytest
 
+from libs.tests.ambient_env import clear_telemetry_env
+from libs.tests.compose_env import compose_services
 from libs.alerting import (
     AlertingError,
     BasicAuth,
@@ -639,8 +645,11 @@ def test_alerting_shared_tasks_are_invoke_tasks() -> None:
     assert "FinanceReport" not in source
 
 
-def test_alerting_app_request_guards_are_explicit() -> None:
+def test_alerting_app_request_guards_are_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Infra-007 alerting: HTTP auth/body guards match review feedback."""
+    clear_telemetry_env(monkeypatch)
     path = ROOT / "platform/12.alerting/app.py"
     spec = importlib.util.spec_from_file_location("alerting_app_under_test", path)
     assert spec and spec.loader
@@ -680,6 +689,7 @@ def _bridge_under_test(monkeypatch, *, mode: str = "feishu_app", report_chat: st
     """The real bridge handler on an ephemeral local port, with Feishu delivery
     captured instead of sent. Returns (post, sent, stop)."""
 
+    clear_telemetry_env(monkeypatch)
     path = ROOT / "platform/12.alerting/app.py"
     spec = importlib.util.spec_from_file_location("alerting_app_routing", path)
     assert spec and spec.loader
@@ -919,6 +929,7 @@ def test_alerting_fastapi_endpoints_contract(monkeypatch: pytest.MonkeyPatch) ->
     import importlib.util
     from starlette.testclient import TestClient
 
+    clear_telemetry_env(monkeypatch)
     path = ROOT / "platform/12.alerting/app.py"
     spec = importlib.util.spec_from_file_location("alerting_fastapi_test", path)
     assert spec and spec.loader
@@ -933,9 +944,7 @@ def test_alerting_fastapi_endpoints_contract(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.delenv("BRIDGE_BASIC_AUTH_PASSWORD", raising=False)
 
     monkeypatch.setattr(module, "_feishu_reachable", lambda: True)
-    monkeypatch.setattr(
-        module, "deliver_feishu_app_card", lambda **kwargs: {"code": 0}
-    )
+    monkeypatch.setattr(module, "deliver_feishu_app_card", lambda **kwargs: {"code": 0})
 
     client = TestClient(module.fastapi_app)
 
@@ -949,11 +958,15 @@ def test_alerting_fastapi_endpoints_contract(monkeypatch: pytest.MonkeyPatch) ->
     assert ready_res.status_code == 200
     assert ready_res.json()["status"] == "ready"
 
-    # 3. /health
+    # 3. /health is the SDK report (#1209); the delivery config is its one check
     health_res = client.get("/health")
     assert health_res.status_code == 200
-    assert health_res.json()["status"] == "ok"
-    assert health_res.json()["mode"] == "feishu_app"
+    health = health_res.json()
+    assert health["status"] == "healthy"
+    assert health["service"] == "platform-alerting"
+    assert health["reasons"] == []
+    assert health["checks"]["database"]["status"] == "present"
+    assert health["checks"]["database"]["detail"] == "delivery config valid"
 
     # 4. /health/feishu
     feishu_res = client.get("/health/feishu")
@@ -1025,3 +1038,180 @@ def test_alerting_fastapi_endpoints_contract(monkeypatch: pytest.MonkeyPatch) ->
     assert fail_res.status_code == 502
     assert fail_res.json()["status"] == "delivery_failed"
 
+
+def _load_alerting_app(name: str, monkeypatch: pytest.MonkeyPatch):
+    import importlib.util
+
+    clear_telemetry_env(monkeypatch)
+
+    spec = importlib.util.spec_from_file_location(
+        name, ROOT / "platform/12.alerting/app.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_alerting_health_and_readyz_fail_on_a_bad_delivery_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bad delivery config must stop the bridge from reporting healthy (#1209).
+
+    The probe runner, the container healthcheck and the out-of-band watchdog read only the
+    status code of /health. The SDK report gives 503 and names the reason.
+    """
+    from starlette.testclient import TestClient
+
+    module = _load_alerting_app("alerting_health_failure_test", monkeypatch)
+    client = TestClient(module.fastapi_app)
+    monkeypatch.setenv("ALERT_DELIVERY_MODE", "no-such-mode")
+
+    health_res = client.get("/health")
+    assert health_res.status_code == 503
+    health = health_res.json()
+    assert health["status"] == "unhealthy"
+    assert health["checks"]["database"]["status"] == "absent"
+    assert health["reasons"] == [
+        "database: Unsupported ALERT_DELIVERY_MODE: no-such-mode"
+    ]
+
+    ready_res = client.get("/readyz")
+    assert ready_res.status_code == 503
+    assert ready_res.json()["status"] == "not_ready"
+
+
+def test_alerting_health_route_is_the_sdk_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bridge keeps the SDK /health and holds no copy of its own (#1209)."""
+    module = _load_alerting_app("alerting_one_health_route_test", monkeypatch)
+    (route,) = [
+        route
+        for route in module.fastapi_app.router.routes
+        if getattr(route, "path", None) == "/health"
+    ]
+    assert route.endpoint.__module__ == "infra2_sdk.fastapi"
+
+
+# The bridge pages people. A bad OTEL value must be logged and must never stop it (#1209).
+# `strict_otel=True` would raise while the module loads, so the test loads it in a child
+# process, the way the container does, with values the SDK refuses in strict mode.
+_FAIL_OPEN_SCRIPT = textwrap.dedent(
+    """
+    import importlib.util, json, os, sys
+
+    sys.path.append(sys.argv[1])
+    from starlette.testclient import TestClient
+
+    spec = importlib.util.spec_from_file_location("alerting_fail_open", sys.argv[2])
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module._feishu_reachable = lambda: True
+    client = TestClient(module.fastapi_app)
+    answers = {
+        path: client.get(path).status_code
+        for path in ("/livez", "/health", "/health/feishu")
+    }
+    sys.stdout.write(json.dumps(answers) + "\\n")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # the OTLP exporter points at a closed port: a normal exit would wait on its flush
+    os._exit(0)
+    """
+)
+
+
+@pytest.mark.parametrize(
+    ("environment", "attributes", "logged"),
+    [
+        ("bogus", "service.name=platform-alerting", True),
+        ("staging", "this-is-not-a-pair", False),
+        ("bogus", "this-is-not-a-pair", True),
+    ],
+    ids=["unknown-env", "malformed-attributes", "both"],
+)
+def test_alerting_bridge_serves_with_a_bad_otel_value(
+    environment: str, attributes: str, logged: bool
+) -> None:
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("OTEL_") and key not in ("ENV", "ENVIRONMENT")
+    }
+    env.update(
+        {
+            "ENV": environment,
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:1",
+            "OTEL_SERVICE_NAME": "platform-alerting",
+            "OTEL_RESOURCE_ATTRIBUTES": attributes,
+            "ALERT_DELIVERY_MODE": "feishu_app",
+            "FEISHU_APP_ID": "cli_test",
+            "FEISHU_APP_SECRET": "app-secret",
+            "FEISHU_CHAT_ID": "oc_pager",
+        }
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _FAIL_OPEN_SCRIPT,
+            str(ROOT),
+            str(ROOT / "platform/12.alerting/app.py"),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        stdin=subprocess.DEVNULL,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"the bridge stopped on a bad OTEL value\nstdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    lines = [line for line in result.stdout.splitlines() if line.startswith("{")]
+    assert json.loads(lines[-1]) == {
+        "/livez": 200,
+        "/health": 200,
+        "/health/feishu": 200,
+    }
+    if logged:
+        assert "Could not initialize OpenTelemetry" in result.stderr, result.stderr
+
+
+def test_alerting_bridge_health_timeout_is_below_the_container_healthcheck(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The SDK default of 10 s is above the 3 s the container healthcheck waits. A slow
+    check would then make the healthcheck fail on its own timeout, with no reason (#1209)."""
+    import infra2_sdk.fastapi as sdk_fastapi
+
+    seen: list[dict] = []
+    original = sdk_fastapi.init_service
+
+    def recording(app, name, **kwargs):
+        seen.append(kwargs)
+        return original(app, name, **kwargs)
+
+    monkeypatch.setattr(sdk_fastapi, "init_service", recording)
+    _load_alerting_app("alerting_health_timeout_test", monkeypatch)
+
+    (kwargs,) = seen
+    timeout = kwargs.get("check_timeout_seconds")
+    assert isinstance(timeout, (int, float)), (
+        "the bridge must pass check_timeout_seconds"
+    )
+    healthcheck = compose_services(ROOT / "platform/12.alerting/compose.yaml")[
+        "feishu-alert-bridge"
+    ]["healthcheck"]
+    command = " ".join(healthcheck["test"])
+    (urlopen_timeout,) = re.findall(
+        r"urlopen\('http://127\.0\.0\.1:8080/health', timeout=(\d+)\)", command
+    )
+    docker_timeout = float(healthcheck["timeout"].removesuffix("s"))
+    assert 0 < timeout < float(urlopen_timeout) <= docker_timeout, (
+        timeout,
+        urlopen_timeout,
+        docker_timeout,
+    )

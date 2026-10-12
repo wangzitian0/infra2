@@ -7,7 +7,7 @@ Verifies the physical execution state of Canary Todo (platform/30.todo) across:
   3. Telemetry (Tracking): SigNoz ClickHouse traces, scoped to the environment
   4. Logs: SigNoz ClickHouse structured logs, scoped to the environment
   5. Monitoring: VPS availability ledger (availability-ledger.json)
-  6. Alert Bridge: platform-alerting health status and delivery mode
+  6. Alert Bridge: platform-alerting health status
 
 Usage:
   python -m tools.canary_verify [--env production|staging] [--json]
@@ -37,6 +37,10 @@ from libs.observability.signoz_queries import (
 )
 
 TELEMETRY_SERVICE_NAME = "platform-todo"
+# The bridge /health status that means healthy. The SDK report says "healthy" (#1209).
+# The bridge said "ok" before. A production bridge with the old image still says "ok".
+# Both count until the release that carries #1209 reaches production. Then drop "ok".
+BRIDGE_HEALTHY_STATUSES = frozenset({"healthy", "ok"})
 DEFAULT_VPS_HOST = "103.214.23.41"
 DEFAULT_SSH_KEY = Path.home() / ".ssh" / "id_ed25519_infra"
 
@@ -201,6 +205,12 @@ def verify_canary(
     container = (
         "platform-todo" if environment == "production" else "platform-todo-staging"
     )
+    # compose container_name: platform-alerting${ENV_SUFFIX}
+    bridge_container = (
+        "platform-alerting"
+        if environment == "production"
+        else "platform-alerting-staging"
+    )
     domain = (
         "todo.zitian.party"
         if environment == "production"
@@ -257,7 +267,7 @@ def verify_canary(
         f'echo "=== LEDGER ===" && '
         f'jq -c ".days | to_entries[-1] | {{day: .key, runs: .value.runs, signal: .value.signals[\\"{signal_id}\\"]}}" {ledger_path} && '
         f'echo "=== ALERT_BRIDGE ===" && '
-        f"docker exec platform-alerting python3 -c \"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/health').read().decode())\""
+        f"docker exec {bridge_container} python3 -c \"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/health').read().decode())\""
     )
 
     code, stdout, stderr = _ssh_cmd(remote_script, host, user, key_path, port)
@@ -371,18 +381,15 @@ def verify_canary(
     # Parse Alert Bridge
     bridge_ok = False
     bridge_status = "missing"
-    bridge_mode = ""
     bridge_summary = "Bridge response is not valid JSON"
     try:
         bridge_data = json.loads(sections.get("ALERT_BRIDGE", "{}"))
         if isinstance(bridge_data, dict):
             bridge_status = str(bridge_data.get("status", "missing"))
-            bridge_mode = str(bridge_data.get("mode", ""))
-            bridge_ok = bridge_status == "ok"
+            bridge_ok = bridge_status in BRIDGE_HEALTHY_STATUSES
             bridge_summary = (
                 f"Bridge {'healthy' if bridge_ok else 'unhealthy'}: "
                 f"status={bridge_status}"
-                + (f", mode={bridge_mode}" if bridge_mode else "")
             )
         else:
             bridge_summary = "Bridge response is not a JSON object"
@@ -394,7 +401,6 @@ def verify_canary(
         details={
             "bridge_response": sections.get("ALERT_BRIDGE", ""),
             "status": bridge_status,
-            "mode": bridge_mode,
         },
     )
 

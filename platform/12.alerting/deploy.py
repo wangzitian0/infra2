@@ -33,6 +33,11 @@ class AlertingDeployer(Deployer):
     subdomain = None
     service_port = 8080
     service_name = "feishu-alert-bridge"
+
+    # The deploy issues OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES under this name
+    # (Deployer.sync). The compose passes them to the bridge. The name equals the name= of
+    # init_service in app.py. libs/tests/test_platform_otel_adoption.py keeps them equal.
+    telemetry_service_name = "platform-alerting"
     runtime_only_config_keys = frozenset(
         {"INFRA_PROBE_HEARTBEAT_URL", "INFRA_PROBE_HEARTBEAT_TOKEN"}
     )
@@ -328,7 +333,10 @@ class AlertingDeployer(Deployer):
         import time
 
         from libs.console import warning
-        from libs.observability.probe_specs import missing_probe_names, normalize_specs_text
+        from libs.observability.probe_specs import (
+            missing_probe_names,
+            normalize_specs_text,
+        )
 
         e = cls.env()
         host = e.get("VPS_HOST")

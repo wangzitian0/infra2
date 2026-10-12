@@ -3,17 +3,25 @@
 from __future__ import annotations
 
 import importlib.util
-import threading
 import time
 from pathlib import Path
 
+import pytest
 from starlette.testclient import TestClient
 
 
 from libs.core import registry as reg
 from libs.deploy.deployer import discover_services
+from libs.tests.ambient_env import clear_telemetry_env
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_telemetry_env(monkeypatch):
+    """The app starts telemetry while it loads. The shell of a developer must not decide
+    whether it loads (#1209)."""
+    clear_telemetry_env(monkeypatch)
 
 
 def test_todo_service_registered_in_service_registry() -> None:
@@ -177,61 +185,59 @@ def test_todo_app_endpoints_contract(monkeypatch) -> None:
 
 
 def test_todo_app_concurrency_nonblocking(monkeypatch) -> None:
-    """AC-canary.concurrency: Verify ThreadingHTTPServer does not block healthchecks during slow probe."""
-    spec = importlib.util.spec_from_file_location(
-        "todo_app", REPO_ROOT / "platform/30.todo/app.py"
-    )
-    assert spec is not None and spec.loader is not None
-    todo_mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(todo_mod)
+    """AC-canary.concurrency: a slow canary run must not block a health call.
 
-    probe_started = threading.Event()
+    Both requests go through ONE ASGI client on ONE event loop. A `TestClient` per request
+    gives each request its own loop in its own thread, so a blocked loop would go unseen.
+    The canary endpoint is a sync `def`: FastAPI runs it in a worker thread and the loop
+    stays free. An `async def` endpoint that blocks would hold the loop, the canary call
+    would finish first, and this test would fail.
+    """
+    import asyncio
 
-    # Simulate slow probes: each of the 6 checks sleeps 0.2s
+    import httpx
+
+    todo_mod = _load_todo_module("todo_app_concurrency")
+
+    # Simulate slow probes: each check sleeps 0.5 s inside its worker thread
     def _slow_probe(*args, **kwargs):
-        probe_started.set()
-        time.sleep(0.2)
-        return {"status": "pass", "latency_ms": 200.0, "detail": "slow mock"}
+        time.sleep(0.5)
+        return {"status": "pass", "latency_ms": 500.0, "detail": "slow mock"}
 
     monkeypatch.setattr(todo_mod, "_probe_postgres", _slow_probe)
     monkeypatch.setattr(todo_mod, "_probe_redis", _slow_probe)
     monkeypatch.setattr(todo_mod, "_probe_http", _slow_probe)
     monkeypatch.setattr(todo_mod, "_probe_s3", _slow_probe)
 
-    canary_result = {}
+    finished: list[str] = []
 
-    def _fetch_canary():
-        try:
-            client = TestClient(todo_mod.fastapi_app)
-            resp = client.get("/api/canary/status")
-            canary_result["code"] = resp.status_code
-            canary_result["data"] = resp.json()
-        except Exception as exc:
-            canary_result["error"] = exc
+    async def scenario():
+        transport = httpx.ASGITransport(app=todo_mod.fastapi_app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://todo.test"
+        ) as client:
 
-    # Start slow canary probe in background thread
-    t_canary = threading.Thread(target=_fetch_canary)
-    t_canary.start()
+            async def canary():
+                response = await client.get("/api/canary/status")
+                finished.append("canary")
+                return response
 
-    # Wait deterministically until the server actually enters the slow probe
-    assert probe_started.wait(timeout=2.0), "Slow probe never started executing"
+            async def health():
+                await asyncio.sleep(0.05)  # the canary request is in flight by now
+                response = await client.get("/api/health")
+                finished.append("health")
+                return response
 
-    # Health probe must return quickly (< 0.25s) even while canary probe is sleeping
-    client = TestClient(todo_mod.fastapi_app)
-    health_start = time.perf_counter()
-    resp = client.get("/api/health")
-    health_elapsed = time.perf_counter() - health_start
-    assert resp.status_code == 200
-    assert health_elapsed < 0.25, (
-        f"Health check was blocked by slow probe! elapsed={health_elapsed}s"
+            return await asyncio.gather(canary(), health())
+
+    canary_resp, health_resp = asyncio.run(scenario())
+
+    assert health_resp.status_code == 200
+    assert finished == ["health", "canary"], (
+        "the health call must finish while the slow canary run is still going"
     )
-
-    t_canary.join(timeout=5)
-    assert not t_canary.is_alive(), "Background canary probe timed out or hung"
-    assert canary_result.get("code") == 200, (
-        f"Background canary probe failed: {canary_result}"
-    )
-    assert "checks" in canary_result.get("data", {})
+    assert canary_resp.status_code == 200, canary_resp.text
+    assert "checks" in canary_resp.json()
 
 
 def test_prepare_dirs_noop_on_empty_data_path(monkeypatch) -> None:
@@ -435,6 +441,112 @@ def test_portal_config_template_contains_canary_todo() -> None:
     assert todo_item["tag"] == "canary"
 
 
+def _load_todo_module(name: str):
+    spec = importlib.util.spec_from_file_location(
+        name, REPO_ROOT / "platform/30.todo/app.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_todo_readyz_and_health_follow_the_canary_status(monkeypatch) -> None:
+    """/readyz and /health answer from the canary status: 200 when every write path
+    passes, 503 with the failed checks as the reason when one fails (#1209)."""
+    todo_mod = _load_todo_module("todo_app_readiness")
+    client = TestClient(todo_mod.fastapi_app)
+
+    # `_canary_readiness_checker` looks `cached_canary_status` up at call time
+    monkeypatch.setattr(todo_mod, "cached_canary_status", lambda: {"ok": True})
+    ready = client.get("/readyz")
+    assert ready.status_code == 200
+    assert ready.json() == {"status": "ready", "service": "platform-todo"}
+    healthy = client.get("/health")
+    assert healthy.status_code == 200
+    assert healthy.json()["status"] == "healthy"
+    assert healthy.json()["service"] == "platform-todo"
+    assert healthy.json()["reasons"] == []
+    assert healthy.json()["checks"]["database"]["detail"] == (
+        "canary write paths passed"
+    )
+
+    monkeypatch.setattr(
+        todo_mod,
+        "cached_canary_status",
+        lambda: {"ok": False, "failed": ["redis"]},
+    )
+    not_ready = client.get("/readyz")
+    assert not_ready.status_code == 503
+    assert not_ready.json() == {
+        "status": "not_ready",
+        "service": "platform-todo",
+        "reasons": ["database: failed=redis"],
+    }
+    unhealthy = client.get("/health")
+    assert unhealthy.status_code == 503
+    assert unhealthy.json()["status"] == "unhealthy"
+    assert unhealthy.json()["service"] == "platform-todo"
+    assert unhealthy.json()["reasons"] == ["database: failed=redis"]
+    assert unhealthy.json()["checks"]["database"]["status"] == "absent"
+
+
+def _raise_boom() -> dict:
+    raise RuntimeError("boom")
+
+
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [
+        ({"ok": False, "unconfigured": ["s3"]}, "database: unconfigured=s3"),
+        ({"ok": False, "failed": ["redis"]}, "database: failed=redis"),
+        (
+            {"ok": False, "failed": ["redis"], "unconfigured": ["s3"]},
+            "database: failed=redis; unconfigured=s3",
+        ),
+        ({"ok": False}, "database: canary checks not ok"),
+        ({}, "database: canary checks not ok"),
+        (_raise_boom, "database: canary status check failed: boom"),
+    ],
+    ids=[
+        "unconfigured",
+        "failed",
+        "failed-and-unconfigured",
+        "not-ok-without-a-list",
+        "empty-document",
+        "status-call-raises",
+    ],
+)
+@pytest.mark.parametrize("path", ["/readyz", "/health"])
+def test_todo_readiness_fails_closed_and_names_the_reason(
+    monkeypatch, path: str, status, reason: str
+) -> None:
+    """A red, unconfigured or unreadable canary status is never ready. `ok` is the verdict:
+    an empty `failed` list does not clear a document that says `ok: false`, and a status
+    call that raises is not ready (#1209)."""
+    todo_mod = _load_todo_module("todo_app_fail_closed")
+    client = TestClient(todo_mod.fastapi_app)
+    monkeypatch.setattr(
+        todo_mod,
+        "cached_canary_status",
+        status if callable(status) else (lambda: dict(status)),
+    )
+
+    response = client.get(path)
+
+    assert response.status_code == 503
+    assert response.json()["reasons"] == [reason]
+    assert response.json()["status"] in ("not_ready", "unhealthy")
+
+
+@pytest.mark.parametrize("path", ["/readyz", "/health"])
+def test_todo_readiness_passes_only_on_an_ok_document(monkeypatch, path: str) -> None:
+    todo_mod = _load_todo_module("todo_app_ready")
+    client = TestClient(todo_mod.fastapi_app)
+    monkeypatch.setattr(todo_mod, "cached_canary_status", lambda: {"ok": True})
+    assert client.get(path).status_code == 200
+
+
 def test_todo_fastapi_endpoints_contract() -> None:
     """Verify Canary Todo exposes FastAPI endpoints via infra2_sdk.fastapi."""
     spec = importlib.util.spec_from_file_location(
@@ -451,16 +563,7 @@ def test_todo_fastapi_endpoints_contract() -> None:
     assert resp_livez.status_code == 200
     assert resp_livez.json() == {"status": "alive", "service": "platform-todo"}
 
-    # 2. Standard /readyz probe from infra2_sdk.fastapi.init_service
-    resp_readyz = client.get("/readyz")
-    assert resp_readyz.status_code in (200, 503)
-
-    # 3. Standard /health probe from infra2_sdk.fastapi.init_service
-    resp_health = client.get("/health")
-    assert resp_health.status_code in (200, 503)
-    health_data = resp_health.json()
-    assert "status" in health_data
-    assert health_data["service"] == "platform-todo"
+    # 2. /readyz and 3. /health follow the canary status; the next test pins both answers
 
     # 4. Backwards-compatible /api/health
     resp_api_health = client.get("/api/health")
@@ -471,4 +574,3 @@ def test_todo_fastapi_endpoints_contract() -> None:
     resp_todos = client.get("/api/todos")
     assert resp_todos.status_code == 200
     assert isinstance(resp_todos.json(), list)
-
