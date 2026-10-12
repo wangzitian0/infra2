@@ -9,6 +9,7 @@ import secrets
 from typing import Any
 
 from fastapi import FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from infra2_sdk.fastapi import init_service
 
@@ -127,7 +128,10 @@ async def signoz_webhook(request: Request) -> JSONResponse:
     report = is_report_payload(payload)
     try:
         card = build_feishu_alert_card(payload, delivery_mode=_delivery_mode())
-        response = _deliver(card, report=report)
+        # _deliver blocks on the Feishu HTTP call (10 s timeout). Run it in a worker
+        # thread: a blocked event loop would hold /health and the container
+        # healthcheck could restart the bridge while it sends a page (#1222).
+        response = await run_in_threadpool(_deliver, card, report=report)
     except AlertingError as exc:
         return JSONResponse(
             status_code=502,
