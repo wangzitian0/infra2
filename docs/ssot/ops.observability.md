@@ -66,6 +66,25 @@ owner 批准的当前 head SHA，才能满足 `AGENTS.md` 的生产权限边界�
 - **可用率(#904 起为现状)**:成功计数与每 5 分钟的在场由 VPS 探针记录(重活,空槽即不可用);VPS 失联区间由 Worker 只在心跳过期/恢复两个边沿各写一次
   KV(每次事故 2 次写);二者合算可用率。VPS 无法记录自己宕机期间的状态,这部分仍必须在带外——但只记边沿,不做累加。见 §6。
 
+### 1.2 宏观全局看板与门禁治理原则 (Macro Dashboard & Gate Rationalization) (#1195)
+
+> 核心准则：**重看板、轻门禁；重跑通、轻反复扣细节**。以全局高维视角解决系统健康可视性问题，避免无意义的微观告警疲劳与阻塞性门禁摩擦。
+
+1. **重看板 (Macro Status Single-Pane-of-Glass)**:
+   - 生产环境统一入口由 Homer Portal (`platform/21.portal`) 提供，清晰分层：
+     - **Platform Services**：底层控制面与鉴权（Dokploy、Vault、Authentik、1Password、Canary Todo）。
+     - **Observability & Dashboards**：遥测与看板中心（SigNoz APM、SigNoz Dashboards、OpenPanel、Prefect、S3 Console）。
+     - **Out-of-Band & Health**：带外与边缘防线（Cloudflare Edge Watchdog status）。
+   - 离线批处理与周期性任务状态（如数据处理、周同步流水线）聚合至每日健康正向证明与周报，不升级为夜间 P0/P1 呼叫。
+
+2. **轻门禁 (De-escalation of Pedantic Gates)**:
+   - 门禁守卫核心代码安全契约、关键路径连通性与数据完整性，不阻断瞬态网络波动或无害的冷启动延迟抖动。
+   - 稳定性周报（`tools/stability_report.py`）严格遵循 7 天滚动窗口（默认 `--days 7`），彻底杜绝把 21 天历史已恢复故障计入当前周可用率的统计漂移。
+
+3. **重跑通 (End-to-End Viability over Detail Grinding)**:
+   - 严禁将 97 个容器的全部 stdout 日志未经筛选倾泻至 ClickHouse，防止单机线程池与磁盘 I/O 恶化。
+   - 以端到端合成金丝雀（如 `infra_observability_roundtrip_canary` 与 Canary Todo）的物理通畅自证整条链路（API → Redis → Worker → DB/ClickHouse），跑通即通过。
+
 ---
 
 ## 2. 信号模型与时间尺度分层 (Signal model & cadence tiers)
