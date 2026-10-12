@@ -14,7 +14,7 @@
 | Image | `platform/30.todo/Dockerfile` | Python 3.11 image. It installs the `infra2-sdk` wheel that `uv.lock` pins, with its hash. |
 | Deployer and facets | `platform/30.todo/deploy.py` | `TodoDeployer`: probe, signal, secrets, telemetry identity, Postgres role |
 | Secret contract | `platform/30.todo/env.manifest.json` | Generates `secrets.ctmpl` and `vault-policy.hcl` |
-| Tests | `libs/tests/test_todo_service.py`, `libs/tests/test_todo_canary_depth.py` | Behaviour, routing, and deployer contracts |
+| Tests | `libs/tests/test_todo_service.py`, `libs/tests/test_todo_canary_depth.py`, `libs/tests/test_platform_otel_adoption.py` | Behaviour, routing, deployer contracts, and the telemetry links of every `init_service` caller |
 
 ## 2. What Each Check Proves
 
@@ -104,7 +104,9 @@ Without step 3 the `s3` check reports `unconfigured`, with the names of the miss
 
 `TodoDeployer.telemetry_service_name = "platform-todo"`. `Deployer.sync` issues `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`, the same way it does for `truealpha/app`. The compose adds `OTEL_EXPORTER_OTLP_ENDPOINT=http://platform-signoz-otel-collector:4318` and `ENV`.
 
-At start, `configure_service_telemetry()` calls `infra2_sdk.runtime.otel.configure_telemetry(..., set_global=True)` when the endpoint is set. The service refuses to start when the endpoint is set without `OTEL_SERVICE_NAME` or `ENV`. Otherwise the data would land under `unknown_service`.
+`init_service(..., strict_otel=True)` is the only OpenTelemetry bootstrap. It runs when `app.py` loads and starts traces, metrics and logs when the endpoint is set. The SDK stops the providers with the application lifespan. The service refuses to start when the endpoint is set without `OTEL_SERVICE_NAME` (a check in `app.py`: the SDK would use its `name` instead) or with an unknown `ENV` (SDK strict mode). `init_service` also sets the root logger to INFO. `GIT_COMMIT_SHA` comes from `INFRA_IAC_REF`, the full infra2 SHA that the deploy issues. The page shows its first 7 characters.
+
+`/readyz` and `/health` call the canary status through `init_service`. A cold call waits for one run. A run ends at the 8 s check deadline, so `READINESS_TIMEOUT_SECONDS` is 10 s (8.006 s measured with every check hung, #1209).
 
 Each run emits one `canary.run` span with one `canary.check.<name>` child span per check, and logs the outcome. SigNoz separates the environments by `deployment.environment.name`.
 

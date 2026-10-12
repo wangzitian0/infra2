@@ -44,6 +44,10 @@ CANARY_S3_PREFIX = "canary/"
 # The probe runner waits ProbeFacet.timeout_seconds (15 s). One hung dependency must not
 # hold the status document past it, so each check gets this hard deadline.
 CHECK_DEADLINE_SECONDS = 8.0
+# /readyz and /health run one canary status call. A cold call waits for one full run.
+# A run ends at CHECK_DEADLINE_SECONDS at the latest. The SDK counts a longer call as a
+# failure and gives no reason. The timeout stays above the deadline, so the reasons show.
+READINESS_TIMEOUT_SECONDS = CHECK_DEADLINE_SECONDS + 2.0
 
 # Check states. `unconfigured` means a credential the check needs is missing: the check
 # is red (a gap is never green) but it is not a failure of the path it would prove.
@@ -62,9 +66,6 @@ INFORMATIONAL_CHECKS = ("signoz", "openpanel", "authentik")
 STATUS_CACHE_TTL_SECONDS = 30.0
 _STATUS_LOCK = threading.Lock()
 _STATUS_CACHE: tuple[float, Dict[str, Any]] | None = None
-
-# Set by configure_service_telemetry(). None means no OTLP endpoint was issued.
-_TRACER: Any | None = None
 
 _todos_lock = threading.Lock()
 
@@ -376,11 +377,17 @@ class _NullSpan:
 
 
 def _span(name: str, **attributes: Any):
-    """A span context manager. It is a no-op when no OTLP endpoint was issued."""
-    tracer = _acquire_tracer()
-    if tracer is None:
+    """A span context manager. It is a no-op when no OTLP endpoint was issued.
+
+    The tracer comes from the global provider that `init_service` installs at import.
+    """
+    if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip():
         return contextlib.nullcontext(_NullSpan())
-    return tracer.start_as_current_span(name, attributes=attributes or None)
+    from opentelemetry import trace
+
+    return trace.get_tracer(SERVICE_TRACER_NAME).start_as_current_span(
+        name, attributes=attributes or None
+    )
 
 
 def _traced_check(name: str, probe: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
@@ -553,44 +560,6 @@ def cached_canary_status() -> Dict[str, Any]:
         return document
 
 
-def _acquire_tracer() -> Any:
-    global _TRACER
-    if _TRACER is not None:
-        return _TRACER
-    if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip():
-        return None
-    try:
-        from opentelemetry import trace
-
-        _TRACER = trace.get_tracer(SERVICE_TRACER_NAME)
-        return _TRACER
-    except Exception:
-        return None
-
-
-def configure_service_telemetry() -> Any | None:
-    """Configure OTLP traces, metrics and logs when the deploy issued an endpoint.
-
-    The deploy issues OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_SERVICE_NAME and
-    OTEL_RESOURCE_ATTRIBUTES. The endpoint turns export on. Without the issued identity
-    the data would land under `unknown_service`, so the service refuses to start.
-    """
-    global _TRACER
-    if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip():
-        return None
-    if not os.environ.get("OTEL_SERVICE_NAME", "").strip():
-        raise RuntimeError(
-            "OTEL_SERVICE_NAME is required when OTEL_EXPORTER_OTLP_ENDPOINT is set; "
-            "the deploy issues the telemetry identity"
-        )
-    from infra2_sdk.runtime import otel as sdk_otel
-
-    settings = sdk_otel.OtelSettings.from_env(os.environ, strict=True)
-    providers = sdk_otel.configure_telemetry(settings, set_global=True)
-    _TRACER = _acquire_tracer()
-    return providers
-
-
 SERVER_START_TIME = time.time()
 
 
@@ -623,18 +592,37 @@ fastapi_app = FastAPI(
     redoc_url=None,
 )
 
-# Run basicConfig before init_service, because init_service adds a root handler and
-# basicConfig then does nothing.
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-)
 
-# Single-line platform standard integration: mounts /livez, /readyz, /health, SigNoz OTel
+def _require_issued_telemetry_identity() -> None:
+    """Refuse to start on an OTLP endpoint without the identity the deploy issues.
+
+    The endpoint turns export on. `init_service` uses its `name` when OTEL_SERVICE_NAME is
+    empty. It cannot catch a deploy that issued no identity. The deploy issues
+    OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES together (#991).
+    """
+    if (
+        os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
+        and not os.environ.get("OTEL_SERVICE_NAME", "").strip()
+    ):
+        raise RuntimeError(
+            "OTEL_SERVICE_NAME is required when OTEL_EXPORTER_OTLP_ENDPOINT is set; "
+            "the deploy issues the telemetry identity"
+        )
+
+
+_require_issued_telemetry_identity()
+
+# The one OpenTelemetry bootstrap (#1209). init_service mounts /livez, /readyz and /health.
+# It sets the root logger to INFO before the OpenTelemetry handler attaches.
+# It starts traces, metrics and logs when the deploy issued the endpoint.
+# strict_otel stops the service on an unknown ENV or a malformed OTEL_* value.
 init_service(
     fastapi_app,
     name="platform-todo",
     db_checker=_canary_readiness_checker,
     enable_otel=True,
+    strict_otel=True,
+    check_timeout_seconds=READINESS_TIMEOUT_SECONDS,
 )
 
 
@@ -821,7 +809,6 @@ def main() -> None:
         "Canary Todo service starting on port %d with FastAPI and infra2_sdk", port
     )
     signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(0))
-    configure_service_telemetry()
     import uvicorn
 
     uvicorn.run(fastapi_app, host="0.0.0.0", port=port, log_level="info")

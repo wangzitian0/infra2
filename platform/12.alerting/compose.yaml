@@ -106,7 +106,17 @@ services:
         exec python /app/app.py
     environment:
       PORT: "8080"
+      # The SDK resolves the environment tier from ENV when it configures telemetry.
+      ENV: ${ENV}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      # The deploy issues the full infra2 SHA as INFRA_IAC_REF.
+      GIT_COMMIT_SHA: ${INFRA_IAC_REF:-unknown}
+      # Telemetry (#1209). The endpoint turns export on. Both identity variables come
+      # verbatim from the deploy (AlertingDeployer.telemetry_service_name), never hardcoded
+      # or defaulted.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).read()\""]
       interval: 30s

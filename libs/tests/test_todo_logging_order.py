@@ -1,9 +1,10 @@
-"""Logging order test for platform/30.todo (#1213).
+"""Logging order test for platform/30.todo (#1213, #1209).
 
 `init_service(..., enable_otel=True)` runs at import time. With a real OTLP endpoint it adds
 an OpenTelemetry `LoggingHandler` to the root logger. `logging.basicConfig` does nothing when
-the root logger already has a handler. If `main()` calls `basicConfig` after import, the root
-level stays WARNING and every app INFO line is lost.
+the root logger already has a handler. `init_service` calls `basicConfig` at INFO before it
+attaches that handler, so the app holds no `basicConfig` call of its own. If the order broke,
+the root level would stay WARNING and every app INFO line would be lost.
 
 Root logger state is global, so each case loads the app in a fresh subprocess.
 This test needs the real OpenTelemetry packages from the `dev` dependency group.
@@ -23,7 +24,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TODO_APP = REPO_ROOT / "platform/30.todo/app.py"
 
-# The script imports the app, stubs the two calls that start real services, and runs main().
+# The script imports the app, stubs the call that starts the real server, and runs main().
 # It prints one JSON line with the root logger state, then exits without atexit hooks.
 # The OTLP exporter points at a closed port, so a normal exit would wait on the flush.
 _PROBE_SCRIPT = textwrap.dedent(
@@ -42,7 +43,6 @@ _PROBE_SCRIPT = textwrap.dedent(
     spec = importlib.util.spec_from_file_location("todo_app_logging_order", sys.argv[1])
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    module.configure_service_telemetry = lambda: None
     module.main()
 
     root = logging.getLogger()
@@ -64,6 +64,7 @@ def _run_probe(app_path: Path) -> tuple[dict, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("OTEL_")}
     env["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://127.0.0.1:1"
     env["OTEL_SERVICE_NAME"] = "platform-todo"
+    env["ENV"] = "staging"
     env["PORT"] = "8000"
     result = subprocess.run(
         [sys.executable, "-c", _PROBE_SCRIPT, str(app_path)],

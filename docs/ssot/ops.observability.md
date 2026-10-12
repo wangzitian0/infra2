@@ -228,6 +228,7 @@ graph LR
 | `truealpha/app` | llm | `truealpha-app` | 签发(app 与 preview 两份 compose) | `ta-app.sync`(`AppDeployer.telemetry_service_name`)、固定 compose promote、preview 三入口同名;`component=app` |
 | `truealpha/app` | web | — | 不签发 | Node/Next.js,无 OTel SDK;且一个 compose 的 `OTEL_SERVICE_NAME` 不能同时命名两个服务 |
 | `platform/todo` | todo | `platform-todo` | 签发 | `TodoDeployer.telemetry_service_name` makes `Deployer.sync` issue the identity; the compose adds `ENV`. The service refuses to start on the endpoint without `OTEL_SERVICE_NAME` or `ENV` (#991) |
+| `platform/alerting` | feishu-alert-bridge | `platform-alerting` | 签发 | `AlertingDeployer.telemetry_service_name` makes `Deployer.sync` issue the identity; the compose passes it with the endpoint and `ENV`; the image installs the OpenTelemetry packages (#1209). The probe runner container shares the image and gets no endpoint |
 | `truealpha/data_engine` | dagster-* | — | **不签发** | 三个角色全是 `network_mode: host`(为 OpenD),Docker DNS 名 `platform-signoz-otel-collector` 在宿主网络解析不了;§4.4 规定 collector 永不 publish,故不另开端口,等有宿主可达的 ingest 再接。没有端点就不会触发应用侧"缺身份即 fast-fail" |
 
 compose 里 `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` 只写成 `${…:-}`(不硬编码、不给默认):身份只有部署一个签发方。`libs/tests/compose_env.py` 把 compose 对着各入口真实推送的 env 解析一遍,证明**容器**拿到的是签发值,而不只是"部署签发了"或"compose 引用了"。
@@ -545,6 +546,7 @@ Feishu page，且告警携带同一结构化记录。不得通过破坏 producti
 | IaC/runtime/telemetry/alert 身份契约 | `tools/service_identity_audit.py`, `libs/tests/test_service_identity*.py` | ✅ |
 | truealpha 端点与身份签发(llm 容器拿到 collector 端点 + 各入口签发的身份;端点不无身份出现、不进 host 网络、不进 web;sync 与 promote/preview 同名)(#906) | `libs/tests/test_truealpha_app.py`, `test_deploy_primitive.py`, `test_preview_lifecycle.py` | ✅ |
 | Canary Todo depth: real Redis/Postgres/S3 write paths fail on NOAUTH, `E`, denied write; the probe consumer, the SSO-only routing, the telemetry bootstrap and the issued identity (#991) | `libs/tests/test_todo_canary_depth.py`, `libs/tests/test_todo_service.py` | ✅ |
+| Every `init_service` caller under `platform/` ships OpenTelemetry end to end: the Deployer issues the identity, the compose passes it with the endpoint, the image installs the packages, the app has one bootstrap (#1209) | `libs/tests/test_platform_otel_adoption.py` | ✅ |
 | 告警通道手动连通 | `uv run invoke alerting.test-feishu` | Manual gate |
 
 ---

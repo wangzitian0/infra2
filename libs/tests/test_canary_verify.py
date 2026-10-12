@@ -23,6 +23,25 @@ from tools.canary_verify import (
 
 FIXED_NOW = datetime(2026, 10, 12, 12, 0, 0, tzinfo=timezone.utc)
 
+#: The /health document of the bridge since #1209: the `infra2_sdk.fastapi.init_service`
+#: report. `test_alert_bridge_accepts_the_health_body_the_alerting_app_serves` proves that
+#: the real app serves this shape.
+BRIDGE_HEALTHY = json.dumps(
+    {
+        "status": "healthy",
+        "checks": {
+            "database": {
+                "status": "present",
+                "detail": "delivery config valid",
+                "duration_ms": 0.03,
+                "required": True,
+            }
+        },
+        "reasons": [],
+        "service": "platform-alerting",
+    }
+)
+
 
 def _relative_ts(offset_seconds: float, now: datetime) -> str:
     """Return a timestamp string `offset_seconds` before the injected `now`."""
@@ -34,7 +53,7 @@ def _canned_stdout(
     *,
     traces: str,
     logs: str,
-    bridge: str = '{"status": "ok", "mode": "feishu_app"}',
+    bridge: str = BRIDGE_HEALTHY,
 ) -> str:
     return (
         "=== STATUS ===\n"
@@ -120,7 +139,7 @@ def test_verify_canary_happy_path() -> None:
         "=== LEDGER ===\n"
         '{"day": "2026-10-12", "runs": 10, "signal": {"ok": 10, "fail": 0}}\n'
         "=== ALERT_BRIDGE ===\n"
-        '{"status": "ok", "mode": "feishu_app"}\n'
+        f"{BRIDGE_HEALTHY}\n"
     )
 
     with (
@@ -165,7 +184,7 @@ def test_verify_canary_stale_logs_rejected() -> None:
         "=== LEDGER ===\n"
         '{"day": "2026-10-12", "runs": 10, "signal": {"ok": 10, "fail": 0}}\n'
         "=== ALERT_BRIDGE ===\n"
-        '{"status": "ok", "mode": "feishu_app"}\n'
+        f"{BRIDGE_HEALTHY}\n"
     )
 
     with (
@@ -205,7 +224,7 @@ def test_verify_canary_stale_traces_rejected() -> None:
         "=== LEDGER ===\n"
         '{"day": "2026-10-12", "runs": 10, "signal": {"ok": 10, "fail": 0}}\n'
         "=== ALERT_BRIDGE ===\n"
-        '{"status": "ok", "mode": "feishu_app"}\n'
+        f"{BRIDGE_HEALTHY}\n"
     )
 
     with (
@@ -243,7 +262,7 @@ def test_verify_canary_zero_count_rejected() -> None:
         "=== LEDGER ===\n"
         '{"day": "2026-10-12", "runs": 10, "signal": {"ok": 10, "fail": 0}}\n'
         "=== ALERT_BRIDGE ===\n"
-        '{"status": "ok", "mode": "feishu_app"}\n'
+        f"{BRIDGE_HEALTHY}\n"
     )
 
     with (
@@ -281,7 +300,7 @@ def test_verify_canary_malformed_timestamp_rejected() -> None:
         "=== LEDGER ===\n"
         '{"day": "2026-10-12", "runs": 10, "signal": {"ok": 10, "fail": 0}}\n'
         "=== ALERT_BRIDGE ===\n"
-        '{"status": "ok", "mode": "feishu_app"}\n'
+        f"{BRIDGE_HEALTHY}\n"
     )
 
     with (
@@ -320,7 +339,7 @@ def test_verify_canary_sdk_mismatch() -> None:
         "=== LEDGER ===\n"
         '{"day": "2026-10-12", "runs": 10, "signal": {"ok": 10, "fail": 0}}\n'
         "=== ALERT_BRIDGE ===\n"
-        '{"status": "ok", "mode": "feishu_app"}\n'
+        f"{BRIDGE_HEALTHY}\n"
     )
 
     with (
@@ -600,27 +619,73 @@ def test_empty_window_rejected_with_epoch_timestamp(pillar: str) -> None:
     assert result.summary.startswith("0 ")
 
 
-def test_alert_bridge_summary_reports_real_status_and_mode() -> None:
+def test_alert_bridge_summary_reports_the_real_status() -> None:
     fresh_traces = _relative_ts(60, now=FIXED_NOW)
     fresh_logs = _relative_ts(120, now=FIXED_NOW)
     stdout = _canned_stdout(
         traces=f"500\t{fresh_traces}",
         logs=f"100\t{fresh_logs}",
-        bridge='{"status": "ok", "mode": "log_only"}',
     )
 
     report, _commands = _verify_with_canned_ssh("production", stdout)
 
     assert report.alerts.ok is True
-    assert "status=ok" in report.alerts.summary
-    assert "mode=log_only" in report.alerts.summary
+    assert report.alerts.summary == "Bridge healthy: status=healthy"
+    assert report.alerts.details["status"] == "healthy"
     assert "debounce" not in report.alerts.summary
     assert "firing" not in report.alerts.summary
+
+
+def test_alert_bridge_accepts_the_health_body_the_alerting_app_serves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Read the status from the document the real app serves, not from a canned copy."""
+    import importlib.util
+    from pathlib import Path
+
+    from starlette.testclient import TestClient
+
+    path = Path(__file__).resolve().parents[2] / "platform/12.alerting/app.py"
+    spec = importlib.util.spec_from_file_location("alerting_for_canary_verify", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setenv("ALERT_DELIVERY_MODE", "feishu_app")
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_test")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "app-secret")
+    monkeypatch.setenv("FEISHU_CHAT_ID", "oc_pager")
+    served = TestClient(module.fastapi_app).get("/health")
+    assert served.status_code == 200
+
+    stdout = _canned_stdout(
+        traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
+        logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
+        bridge=served.text,
+    )
+    report, _commands = _verify_with_canned_ssh("production", stdout)
+
+    assert report.alerts.ok is True
+    assert report.alerts.details["status"] == "healthy"
+
+
+def test_alert_bridge_still_accepts_the_status_of_the_previous_image() -> None:
+    """A production bridge that runs the image before #1209 answers `ok` with a mode."""
+    stdout = _canned_stdout(
+        traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
+        logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
+        bridge='{"status": "ok", "mode": "feishu_app"}',
+    )
+
+    report, _commands = _verify_with_canned_ssh("production", stdout)
+
+    assert report.alerts.ok is True
+    assert report.alerts.summary == "Bridge healthy: status=ok"
 
 
 @pytest.mark.parametrize(
     ("bridge", "expected"),
     [
+        ('{"status": "unhealthy", "reasons": ["database: bad"]}', "status=unhealthy"),
         ('{"status": "degraded", "mode": "log_only"}', "status=degraded"),
         ('{"mode": "log_only"}', "status=missing"),
         ("not-json", "not valid JSON"),

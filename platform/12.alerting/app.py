@@ -58,7 +58,12 @@ def _alerting_readiness_checker() -> tuple[bool, str]:
         return False, str(exc)
 
 
-# FastAPI Service with infra2_sdk standard runtime
+# FastAPI service with the infra2_sdk standard runtime.
+# init_service mounts /livez, /readyz and /health. /health is the SDK report.
+# _alerting_readiness_checker is its one check: a bad delivery config gives 503.
+# init_service starts OpenTelemetry when the deploy issued the endpoint (#1209).
+# The bridge pages people. A bad OTEL_* value is logged and never stops it.
+# For that reason strict_otel stays off.
 fastapi_app = FastAPI(title="platform-alerting")
 init_service(
     fastapi_app,
@@ -66,21 +71,6 @@ init_service(
     db_checker=_alerting_readiness_checker,
     enable_otel=True,
 )
-# Retain /livez and /readyz from init_service, but override /health with alerting contract
-fastapi_app.router.routes = [
-    r for r in fastapi_app.router.routes if getattr(r, "path", None) != "/health"
-]
-
-
-@fastapi_app.get("/health", include_in_schema=True)
-def health() -> JSONResponse:
-    try:
-        metadata = _validate_delivery_config()
-    except AlertingError as exc:
-        return JSONResponse(
-            status_code=503, content={"status": "degraded", "error": str(exc)}
-        )
-    return JSONResponse(status_code=200, content={"status": "ok", **metadata})
 
 
 @fastapi_app.get("/health/feishu", include_in_schema=True)

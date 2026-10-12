@@ -18,12 +18,12 @@ import contextlib
 import contextvars
 import http.server
 import json
-import importlib.metadata
 import importlib.util
 import re
 import secrets
 import socket
 import struct
+import sys
 import threading
 import time
 from pathlib import Path
@@ -34,7 +34,7 @@ import pytest
 from libs.security import registry as secrets_registry
 from libs.core import registry as reg
 from libs.observability.probe_specs import render_probe_spec_text
-from libs.tests.compose_env import compose_services, container_env, resolve
+from libs.tests.compose_env import compose_services, resolve
 from libs.tests.docker_host import DockerHost
 from libs.tests.traefik_rules import routers_from_labels, serving_router
 
@@ -1097,6 +1097,9 @@ def test_public_router_does_not_name_the_canary_status() -> None:
 
 
 # ---------------------------------------------------------------------- 6. telemetry
+# The links from the deploy to the container (the issued identity, the compose and the
+# image) hold for every `init_service` caller. libs/tests/test_platform_otel_adoption.py
+# checks them. This section checks what the todo app does at start and while it runs.
 
 
 def _issued_telemetry_env(environment: str) -> dict[str, str]:
@@ -1118,12 +1121,15 @@ def _issued_telemetry_env(environment: str) -> dict[str, str]:
     }
 
 
-@pytest.fixture()
-def telemetry_calls(app, monkeypatch):
-    """Replace the SDK exporter bootstrap so the test needs no OpenTelemetry install."""
-    import infra2_sdk.runtime.otel as sdk_otel
+def _load_todo_app():
+    """Load the app as the container does: the telemetry starts while the module loads."""
+    return _load("todo_app_telemetry", SERVICE_DIR / "app.py")
 
-    monkeypatch.setattr(app, "_acquire_tracer", lambda: "tracer")
+
+@pytest.fixture()
+def telemetry_calls(monkeypatch):
+    """Replace the SDK exporter bootstrap so the test needs no collector."""
+    import infra2_sdk.runtime.otel as sdk_otel
 
     calls: list[dict] = []
 
@@ -1149,16 +1155,14 @@ def telemetry_calls(app, monkeypatch):
 
 
 @pytest.mark.parametrize("environment", ["staging", "production"])
-def test_startup_configures_telemetry_from_the_issued_identity(
-    app, monkeypatch, telemetry_calls, environment
+def test_startup_configures_telemetry_once_from_the_issued_identity(
+    monkeypatch, telemetry_calls, environment
 ) -> None:
     for key, value in _issued_telemetry_env(environment).items():
         monkeypatch.setenv(key, value)
 
-    providers = app.configure_service_telemetry()
+    module = _load_todo_app()
 
-    assert providers is not None
-    assert app._TRACER == "tracer", "spans start only after the providers exist"
     (call,) = telemetry_calls
     settings = call["settings"]
     assert call["set_global"] is True
@@ -1167,35 +1171,127 @@ def test_startup_configures_telemetry_from_the_issued_identity(
     assert settings.deployment_environment == environment
     assert settings.resource_attributes["infra.service.id"] == "platform/todo"
     assert settings.enabled is True
+    assert module.fastapi_app.state.telemetry_providers is not None
 
 
-def test_startup_skips_telemetry_without_an_endpoint(app, telemetry_calls) -> None:
-    assert app.configure_service_telemetry() is None
+def test_main_starts_no_second_telemetry_bootstrap(
+    monkeypatch, telemetry_calls
+) -> None:
+    """`main()` once called a second bootstrap, which logged a RuntimeWarning at every start."""
+    import signal
+    import types
+
+    for key, value in _issued_telemetry_env("staging").items():
+        monkeypatch.setenv(key, value)
+    # main() installs a SIGTERM handler and starts the server: do neither in the test run
+    monkeypatch.setattr(signal, "signal", lambda *args: None)
+    server = types.ModuleType("uvicorn")
+    server.run = lambda *args, **kwargs: None
+    monkeypatch.setitem(sys.modules, "uvicorn", server)
+    module = _load_todo_app()
+    assert len(telemetry_calls) == 1
+
+    module.main()
+
+    assert len(telemetry_calls) == 1, "main() must not start OpenTelemetry again"
+    assert not hasattr(module, "configure_service_telemetry")
+
+
+def test_the_providers_shut_down_with_the_app(monkeypatch, telemetry_calls) -> None:
+    from starlette.testclient import TestClient
+
+    for key, value in _issued_telemetry_env("staging").items():
+        monkeypatch.setenv(key, value)
+    module = _load_todo_app()
+    assert {"shutdown": True} not in telemetry_calls
+
+    with TestClient(module.fastapi_app):
+        assert {"shutdown": True} not in telemetry_calls
+
+    assert telemetry_calls.count({"shutdown": True}) == 1
+
+
+def test_startup_skips_telemetry_without_an_endpoint(telemetry_calls) -> None:
+    module = _load_todo_app()
     assert telemetry_calls == []
-    assert app._TRACER is None
+    assert not hasattr(module.fastapi_app.state, "telemetry_providers")
 
 
 def test_startup_fails_fast_when_the_endpoint_comes_without_an_identity(
-    app, monkeypatch, telemetry_calls
+    monkeypatch, telemetry_calls
 ) -> None:
-    """The endpoint turns export on. Without the issued identity the data would land under
-    `unknown_service`, so the service refuses to start (finance_report's contract)."""
+    """The endpoint turns export on. `init_service` would name the data `platform-todo` on
+    its own, so the app checks that the deploy issued the identity (finance_report's
+    contract)."""
     monkeypatch.setenv("ENV", "staging")
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", COLLECTOR_OTLP_HTTP)
     with pytest.raises(RuntimeError, match="OTEL_SERVICE_NAME"):
-        app.configure_service_telemetry()
+        _load_todo_app()
     assert telemetry_calls == []
 
 
 def test_startup_fails_fast_when_the_environment_is_unknown(
-    app, monkeypatch, telemetry_calls
+    monkeypatch, telemetry_calls
 ) -> None:
     env = _issued_telemetry_env("staging")
     env.pop("ENV")
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     with pytest.raises(ValueError, match="ENVIRONMENT"):
-        app.configure_service_telemetry()
+        _load_todo_app()
+    assert telemetry_calls == []
+
+
+def test_init_service_gets_the_strict_flag_and_the_readiness_timeout(
+    monkeypatch,
+) -> None:
+    import infra2_sdk.fastapi as sdk_fastapi
+
+    seen: list[dict] = []
+    original = sdk_fastapi.init_service
+
+    def recording(app, name, **kwargs):
+        seen.append({"name": name, **kwargs})
+        return original(app, name, **kwargs)
+
+    monkeypatch.setattr(sdk_fastapi, "init_service", recording)
+
+    module = _load_todo_app()
+
+    (call,) = seen
+    assert call["name"] == "platform-todo"
+    assert call["enable_otel"] is True
+    assert call["strict_otel"] is True
+    assert call["check_timeout_seconds"] == module.READINESS_TIMEOUT_SECONDS
+    assert "log_level" not in call, "init_service owns the logging baseline"
+
+
+def test_the_readiness_timeout_is_above_the_check_deadline(app) -> None:
+    """A cold /readyz call waits for one full run. A run ends at the check deadline."""
+    assert app.READINESS_TIMEOUT_SECONDS > app.CHECK_DEADLINE_SECONDS
+
+
+def test_a_cold_readiness_call_ends_with_the_check_deadline(app, monkeypatch) -> None:
+    """Every check hangs. The call still returns at the deadline with the reasons, which
+    is why the timeout only has to exceed the deadline."""
+    hang = threading.Event()
+
+    def hung_probe(*args, **kwargs):
+        hang.wait(timeout=5)
+        return {"status": "pass", "latency_ms": 0.0, "detail": "late"}
+
+    for probe in ("_probe_postgres", "_probe_redis", "_probe_http", "_probe_s3"):
+        monkeypatch.setattr(app, probe, hung_probe)
+    monkeypatch.setattr(app, "CHECK_DEADLINE_SECONDS", 0.3)
+    monkeypatch.setattr(app, "_STATUS_CACHE", None)
+
+    started = time.perf_counter()
+    ok, detail = app._canary_readiness_checker()
+    elapsed = time.perf_counter() - started
+    hang.set()
+
+    assert ok is False and detail == "failed=postgres,redis,s3"
+    assert 0.3 <= elapsed < 0.3 + 1.0, elapsed
 
 
 class _FakeSpan:
@@ -1234,9 +1330,18 @@ class _FakeTracer:
 
 
 def test_canary_run_emits_a_root_span_and_one_span_per_check(app, monkeypatch) -> None:
+    import opentelemetry.trace as otel_trace
+
     _env(monkeypatch)
     tracer = _FakeTracer()
-    monkeypatch.setattr(app, "_TRACER", tracer)
+    requested: list[str] = []
+
+    def get_tracer(name, *args, **kwargs):
+        requested.append(name)
+        return tracer
+
+    monkeypatch.setattr(otel_trace, "get_tracer", get_tracer)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", COLLECTOR_OTLP_HTTP)
     ok = {"status": "pass", "latency_ms": 1.0, "detail": "ok"}
     monkeypatch.setattr(app, "_probe_redis", lambda *a, **k: dict(ok))
     monkeypatch.setattr(app, "_probe_postgres", lambda *a, **k: dict(ok))
@@ -1249,6 +1354,7 @@ def test_canary_run_emits_a_root_span_and_one_span_per_check(app, monkeypatch) -
 
     app.run_all_checks()
 
+    assert set(requested) == {"platform-todo"}
     by_name = {span.name: span for span in tracer.spans}
     assert "canary.run" in by_name
     checks = {n for n in by_name if n.startswith("canary.check.")}
@@ -1270,139 +1376,22 @@ def test_canary_run_emits_a_root_span_and_one_span_per_check(app, monkeypatch) -
 
 
 def test_canary_run_works_without_a_tracer(app, monkeypatch) -> None:
+    """No OTLP endpoint means no span and no tracer lookup."""
+    import opentelemetry.trace as otel_trace
+
     _env(monkeypatch)
-    monkeypatch.setattr(app, "_TRACER", None)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+
+    def no_tracer(*args, **kwargs):
+        raise AssertionError("a tracer was requested without an OTLP endpoint")
+
+    monkeypatch.setattr(otel_trace, "get_tracer", no_tracer)
     ok = {"status": "pass", "latency_ms": 1.0, "detail": "ok"}
     monkeypatch.setattr(app, "_probe_redis", lambda *a, **k: dict(ok))
     monkeypatch.setattr(app, "_probe_postgres", lambda *a, **k: dict(ok))
     monkeypatch.setattr(app, "_probe_http", lambda *a, **k: dict(ok))
     monkeypatch.setattr(app, "_probe_s3", lambda **k: dict(ok))
     assert app.run_all_checks()["ok"] is True
-
-
-def test_deployer_issues_the_telemetry_identity_and_compose_hands_it_to_the_container(
-    deploy, monkeypatch
-) -> None:
-    """Run the real `Deployer.sync` and resolve the compose against the env it pushes.
-
-    Asserting the deploy-side value alone proves nothing reaches the container, and
-    asserting the compose text alone proves a reference. Only the join does.
-    """
-    from unittest.mock import MagicMock
-
-    import libs.deploy.deployer as d
-
-    deployer = deploy.TodoDeployer
-    pushed: dict[str, str] = {}
-    release = "c" * 40
-
-    class _Matches:
-        def __eq__(self, other):
-            return True
-
-        def __ne__(self, other):
-            return False
-
-        __hash__ = object.__hash__
-
-    class _Remote(dict):
-        def __getitem__(self, key):
-            return {"runtime_hash": "old", "deploy_ref": release}.get(key, _Matches())
-
-        def get(self, key, default=None):
-            return self[key]
-
-    def composing(cls, c, env_vars):
-        pushed.update(env_vars)
-        return "compose-1"
-
-    for name, value in {
-        "env": classmethod(
-            lambda cls: {
-                "ENV": "staging",
-                "ENV_SUFFIX": "-staging",
-                "ENV_DOMAIN_SUFFIX": "-staging",
-                "INTERNAL_DOMAIN": "zitian.party",
-                "VPS_HOST": "vps",
-            }
-        ),
-        "verify_vault_app_token": classmethod(lambda cls: {"valid": True}),
-        "ensure_runtime_secrets": classmethod(lambda cls, c, env=None: True),
-        "apply_secret_supply": classmethod(lambda cls, c, env=None: True),
-        "compute_local_config_hash": classmethod(lambda cls, c, env: "new"),
-        "get_remote_config_identity": classmethod(lambda cls: _Remote()),
-        "_await_effective_config_hash": classmethod(lambda cls, h: "new"),
-        "composing": classmethod(composing),
-        "verify_runtime_applied": classmethod(lambda cls, c, env: None),
-        "verify_in_service": classmethod(lambda cls, c, cid: None),
-        "restart_dependents": classmethod(lambda cls, c, e: []),
-    }.items():
-        monkeypatch.setattr(deployer, name, value)
-    monkeypatch.setattr(d, "validate_env", lambda: [])
-    monkeypatch.setenv("IAC_DEPLOY_REF", release)
-
-    result = deployer.sync(MagicMock())
-    assert result["action"] in ("created", "updated"), result
-
-    container = container_env(COMPOSE, "todo", pushed)
-    assert container["OTEL_EXPORTER_OTLP_ENDPOINT"] == COLLECTOR_OTLP_HTTP
-    assert container["OTEL_SERVICE_NAME"] == "platform-todo"
-    attributes = dict(
-        pair.split("=", 1) for pair in container["OTEL_RESOURCE_ATTRIBUTES"].split(",")
-    )
-    assert attributes["deployment.environment.name"] == "staging"
-    assert attributes["service.name"] == "platform-todo"
-    assert attributes["infra.service.id"] == "platform/todo"
-    assert attributes["infra.iac.ref"] == release
-    assert container["ENV"] == "staging", "the SDK resolves the tier from ENV"
-    # export turns on with the endpoint: the vault-agent sidecar has no SDK and gets none
-    vault_agent = container_env(COMPOSE, "vault-agent", pushed)
-    assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in vault_agent
-
-
-def test_compose_hands_the_container_whatever_identity_the_deploy_issues() -> None:
-    """The deploy is the only issuer. A hardcoded or defaulted name would pass the test
-    above while the container ignored what the deploy issued."""
-    issued = {
-        "ENV": "staging",
-        "OTEL_SERVICE_NAME": "issued-by-the-deploy",
-        "OTEL_RESOURCE_ATTRIBUTES": "service.name=issued-by-the-deploy,k=v",
-    }
-    container = container_env(COMPOSE, "todo", issued)
-    assert container["OTEL_SERVICE_NAME"] == "issued-by-the-deploy"
-    assert container["OTEL_RESOURCE_ATTRIBUTES"] == issued["OTEL_RESOURCE_ATTRIBUTES"]
-    bare = container_env(COMPOSE, "todo", {"ENV": "staging"})
-    assert bare["OTEL_SERVICE_NAME"] == "" and bare["OTEL_RESOURCE_ATTRIBUTES"] == "", (
-        "with no issued identity the container must get none, so the service fails fast"
-    )
-
-
-def test_registry_names_the_telemetry_service() -> None:
-    assert (
-        reg.service_attrs()["platform/todo"].telemetry_service_name == "platform-todo"
-    )
-
-
-def test_dockerfile_installs_the_sdk_otel_extra_requirements_as_plain_pins() -> None:
-    """pyproject keeps `infra2-sdk @ <wheel>` extras-free, so the Dockerfile lists the
-    `otel` extra's requirements itself. They must equal what the SDK declares."""
-    dockerfile = (SERVICE_DIR / "Dockerfile").read_text(encoding="utf-8")
-    declared = [
-        requirement.split(";")[0].strip()
-        for requirement in (importlib.metadata.requires("infra2-sdk") or [])
-        if 'extra == "otel"' in requirement
-    ]
-    assert declared, "the installed SDK declares no otel extra"
-    from packaging.requirements import Requirement
-
-    for requirement in declared:
-        parsed = Requirement(requirement)
-        pins = re.findall(rf'"({re.escape(parsed.name)}[^"\s]*)"', dockerfile)
-        assert pins, f"Dockerfile lacks {parsed.name}"
-        installed_spec = Requirement(pins[0]).specifier
-        assert installed_spec == parsed.specifier, (
-            f"{parsed.name}: Dockerfile pins {installed_spec}, SDK needs {parsed.specifier}"
-        )
 
 
 # ------------------------------------------------------------- secrets and the role

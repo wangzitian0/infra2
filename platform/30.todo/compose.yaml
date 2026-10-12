@@ -108,7 +108,8 @@ services:
       SIGNOZ_OTEL_COLLECTOR: http://platform-signoz-otel-collector:13133
       OPENPANEL_API_URL: http://platform-openpanel-api:3000/healthcheck
       AUTHENTIK_ENDPOINT: http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/
-      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      # The deploy issues the full infra2 SHA as INFRA_IAC_REF. The page shows its first 7 characters.
+      GIT_COMMIT_SHA: ${INFRA_IAC_REF:-unknown}
       # Telemetry (#991). The endpoint turns export on and the service refuses to start
       # on it without the identity, so both identity variables come verbatim from the
       # deploy (TodoDeployer.telemetry_service_name), never hardcoded or defaulted.

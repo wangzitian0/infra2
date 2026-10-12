@@ -933,9 +933,7 @@ def test_alerting_fastapi_endpoints_contract(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.delenv("BRIDGE_BASIC_AUTH_PASSWORD", raising=False)
 
     monkeypatch.setattr(module, "_feishu_reachable", lambda: True)
-    monkeypatch.setattr(
-        module, "deliver_feishu_app_card", lambda **kwargs: {"code": 0}
-    )
+    monkeypatch.setattr(module, "deliver_feishu_app_card", lambda **kwargs: {"code": 0})
 
     client = TestClient(module.fastapi_app)
 
@@ -949,11 +947,15 @@ def test_alerting_fastapi_endpoints_contract(monkeypatch: pytest.MonkeyPatch) ->
     assert ready_res.status_code == 200
     assert ready_res.json()["status"] == "ready"
 
-    # 3. /health
+    # 3. /health is the SDK report (#1209); the delivery config is its one check
     health_res = client.get("/health")
     assert health_res.status_code == 200
-    assert health_res.json()["status"] == "ok"
-    assert health_res.json()["mode"] == "feishu_app"
+    health = health_res.json()
+    assert health["status"] == "healthy"
+    assert health["service"] == "platform-alerting"
+    assert health["reasons"] == []
+    assert health["checks"]["database"]["status"] == "present"
+    assert health["checks"]["database"]["detail"] == "delivery config valid"
 
     # 4. /health/feishu
     feishu_res = client.get("/health/feishu")
@@ -1025,3 +1027,53 @@ def test_alerting_fastapi_endpoints_contract(monkeypatch: pytest.MonkeyPatch) ->
     assert fail_res.status_code == 502
     assert fail_res.json()["status"] == "delivery_failed"
 
+
+def _load_alerting_app(name: str):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        name, ROOT / "platform/12.alerting/app.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_alerting_health_and_readyz_fail_on_a_bad_delivery_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bad delivery config must stop the bridge from reporting healthy (#1209).
+
+    The probe runner, the container healthcheck and the out-of-band watchdog read only the
+    status code of /health. The SDK report gives 503 and names the reason.
+    """
+    from starlette.testclient import TestClient
+
+    module = _load_alerting_app("alerting_health_failure_test")
+    client = TestClient(module.fastapi_app)
+    monkeypatch.setenv("ALERT_DELIVERY_MODE", "no-such-mode")
+
+    health_res = client.get("/health")
+    assert health_res.status_code == 503
+    health = health_res.json()
+    assert health["status"] == "unhealthy"
+    assert health["checks"]["database"]["status"] == "absent"
+    assert health["reasons"] == [
+        "database: Unsupported ALERT_DELIVERY_MODE: no-such-mode"
+    ]
+
+    ready_res = client.get("/readyz")
+    assert ready_res.status_code == 503
+    assert ready_res.json()["status"] == "not_ready"
+
+
+def test_alerting_health_route_is_the_sdk_route() -> None:
+    """The bridge keeps the SDK /health and holds no copy of its own (#1209)."""
+    module = _load_alerting_app("alerting_one_health_route_test")
+    (route,) = [
+        route
+        for route in module.fastapi_app.router.routes
+        if getattr(route, "path", None) == "/health"
+    ]
+    assert route.endpoint.__module__ == "infra2_sdk.fastapi"
