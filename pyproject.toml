@@ -31,6 +31,13 @@ dependencies = [
 ]
 
 [dependency-groups]
+# Default group for `uv sync` and `uv run`. libs/tests/test_todo_logging_order.py needs the
+# real OpenTelemetry packages. Same specifiers as the platform/30.todo/Dockerfile (#1213).
+dev = [
+    "opentelemetry-sdk>=1.24,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.24,<2",
+    "opentelemetry-instrumentation-logging>=0.45b0,<1",
+]
 # e2e_regressions/ is a manual/local-only suite (no CI workflow runs it) — kept out
 # of the default `uv sync`/`uv run` install so the infra-ci unit-test job doesn't pay
 # for deps it never imports. Run with `uv run --group e2e pytest e2e_regressions`.
