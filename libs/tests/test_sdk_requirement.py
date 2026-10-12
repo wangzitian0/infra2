@@ -413,11 +413,12 @@ MIN_STEPS_CALLING_THE_SCRIPT = {
 }
 
 
-def _steps() -> list[tuple[str, str]]:
+def _steps(*, normalize: bool = True) -> list[tuple[str, str]]:
     """(file, shell code) of every `run` step under .github.
 
     That is workflows, templates and composite actions. Continuation lines are joined,
-    runs of blanks collapse, and comment lines are dropped.
+    runs of blanks collapse, and comment lines are dropped. With `normalize=False` the
+    step text is returned as written, so embedded Python keeps its indentation.
     """
     found = []
     for path in sorted(GITHUB.rglob("*.y*ml")):
@@ -435,6 +436,9 @@ def _steps() -> list[tuple[str, str]]:
             for step in steps or []:
                 run = step.get("run") if isinstance(step, dict) else None
                 if not run:
+                    continue
+                if not normalize:
+                    found.append((path.relative_to(GITHUB).as_posix(), run))
                     continue
                 lines = run.replace("\\\n", " ").splitlines()
                 code = "\n".join(
