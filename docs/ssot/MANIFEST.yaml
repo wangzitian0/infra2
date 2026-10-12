@@ -262,6 +262,7 @@ entries:
       - libs/tests/test_deploy_queue.py
       - libs/tests/test_deploy_queue_guard.py
       - libs/tests/test_pager_format.py
+      - libs/observability/probe_environment.py
       - libs/tests/test_probe_environment.py
       - libs/tests/test_probe_environment_callers.py
   watchdog.signals:
