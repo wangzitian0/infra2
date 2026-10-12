@@ -316,10 +316,6 @@ def analyze_container_logs(container: Any, log_chunk: str) -> BreakdownVerdict:
     return BreakdownVerdict(cause=cause, detail=detail, raw_logs=log_chunk)
 
 
-# Compatibility alias
-find_breakdown_reason = classify_reason
-
-
 __all__ = [
     "BREAKDOWN_PATTERNS",
     "Breakdown",
@@ -331,6 +327,5 @@ __all__ = [
     "container_identity",
     "container_name",
     "find_breakdown_containers",
-    "find_breakdown_reason",
     "log_tail",
 ]
