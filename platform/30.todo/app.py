@@ -623,6 +623,12 @@ fastapi_app = FastAPI(
     redoc_url=None,
 )
 
+# Run basicConfig before init_service, because init_service adds a root handler and
+# basicConfig then does nothing.
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
+)
+
 # Single-line platform standard integration: mounts /livez, /readyz, /health, SigNoz OTel
 init_service(
     fastapi_app,
@@ -810,9 +816,6 @@ app = fastapi_app
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
-    )
     port = int(os.environ.get("PORT", "8000"))
     LOGGER.info(
         "Canary Todo service starting on port %d with FastAPI and infra2_sdk", port
