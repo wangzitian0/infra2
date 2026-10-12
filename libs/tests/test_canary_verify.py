@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import shlex
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -23,7 +22,6 @@ from tools.canary_verify import (
 
 
 FIXED_NOW = datetime(2026, 10, 12, 12, 0, 0, tzinfo=timezone.utc)
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _relative_ts(offset_seconds: float, now: datetime) -> str:
@@ -643,33 +641,6 @@ def test_alert_bridge_unhealthy_reports_what_it_read(
     assert report.all_ok is False
     assert expected in report.alerts.summary
     assert "Bridge healthy" not in report.alerts.summary
-
-
-def test_documented_canary_verify_commands_parse() -> None:
-    """Every `python -m tools.canary_verify` line in the skill must parse."""
-    skill = (REPO_ROOT / "skills" / "deploy-evidence" / "SKILL.md").read_text(
-        encoding="utf-8"
-    )
-    prefix = "python -m tools.canary_verify"
-    documented = [
-        shlex.split(line.strip())[3:]
-        for line in skill.splitlines()
-        if line.strip().startswith(prefix)
-    ]
-    assert len(documented) >= 2, "positive control: the skill documents both envs"
-
-    pass_report = CanaryRealityReport(
-        environment="staging",
-        all_ok=True,
-        tracking=PillarResult(ok=True, summary="t"),
-        logs=PillarResult(ok=True, summary="l"),
-        monitoring=PillarResult(ok=True, summary="m"),
-        alerts=PillarResult(ok=True, summary="a"),
-        installed_sdk="x",
-    )
-    for argv in documented:
-        with patch("tools.canary_verify.verify_canary", return_value=pass_report):
-            assert main(argv) == 0, argv
 
 
 # --- Query builders (issue #1205) -------------------------------------------

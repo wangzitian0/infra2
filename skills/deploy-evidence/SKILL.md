@@ -63,7 +63,7 @@ Verify Canary Todo runtime across all four observability pillars (HTTP route, Si
 python -m tools.canary_verify --env staging
 
 # Verify production environment
-python -m tools.canary_verify --env production
+python -m tools.canary_verify --env prod
 ```
 
 ## 3. Red Lines (Instant Rejection)
