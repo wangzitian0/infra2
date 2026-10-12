@@ -17,24 +17,47 @@ package 之后，从纯 stdlib 变成了需要 SDK——因为它改为经 `libs
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+import yaml
+
+from libs.tests.test_sdk_contract_adoption import _embedded_python
 
 ROOT = Path(__file__).resolve().parent.parent.parent
+OPS_CHECKS = ROOT / ".github/workflows/ops-checks.yml"
 
 # 这些模块被**不装 infra2-sdk 的 CI job** 直接执行或导入。
-# 增删此表前先去 .github/workflows/ 核对那个 job 的 pip install 清单。
+# `ops-checks.yml` 里不装 SDK 的 job 所跑的模块，由
+# `test_the_list_covers_every_module_the_sdk_free_ops_checks_jobs_run` 从 workflow 派生并要求
+# 全部在此表内；表内可以比派生集合多，不能少。增删此表前先核对那个 job 的 pip install 清单。
 MUST_IMPORT_WITHOUT_SDK = [
     "libs.observability.issue_trail",
     "libs.observability.page_dedup",
     "tools.out_of_band_watchdog",
     "libs.observability.breakdown",
     "libs.security.registry",
+    # ops-checks.yml 的 audit / watchdog / digest / preview-leak-check / host-hygiene-schedule /
+    # facet-reconcile / vault-self-refresh-audit / secrets-reconcile / pi-chain-smoke
+    # job 不装 SDK，下列模块在这些 job 里直接执行（`invoke` 加载 `tasks`）。
+    "tasks",
+    "tools.app_deploy_request",
+    "tools.deploy_guard_audit",
+    "tools.webhook_delivery_audit",
+    "tools.stability_report",
+    "tools.watchdog_issue_trail",
+    "tools.watchdog_weekly_digest",
+    "tools.preview_leak_check",
+    "tools.host_hygiene_schedule",
+    "tools.facet_reconcile",
+    "tools.vault_self_refresh_audit_check",
+    "tools.secrets_reconcile_check",
+    "tools.pi_chain_smoke",
     # #847：最小 GitHub Actions job 用 `verify_vault_token` / `generate_password` /
-    # `VaultSecrets`，所以 `libs.env` 与 `libs.security`（它的 domain 归宿）都必须无 SDK 可导入。
+    # `VaultSecrets`，所以 `libs.security.store` 与 `libs.security`（它的 domain 归宿）都必须无 SDK 可导入。
     # `libs.security.__init__` 对 `supply` / `prune` 做惰性导出，才让后者成立。
     "libs.security.store",
     "libs.security",
@@ -48,7 +71,7 @@ SDK_BACKED_SECURITY_NAMES = [
     "create_secrets_resolver",
     "prune_orphan_secrets",
 ]
-# 不需要 SDK、必须在屏蔽 SDK 时仍可取用的名字（`store.py`，经 `libs.env` 的受保护导入）。
+# 不需要 SDK、必须在屏蔽 SDK 时仍可取用的名字（`store.py` 对 SDK 的导入有保护）。
 SDK_FREE_SECURITY_NAMES = [
     "VaultSecrets",
     "generate_secret_token",
@@ -100,6 +123,112 @@ def test_module_imports_without_infra2_sdk(module: str) -> None:
 def test_the_list_is_not_empty() -> None:
     """空表上参数化会零条通过，那是 GREEN-WHILE-EMPTY 不是通过。"""
     assert len(MUST_IMPORT_WITHOUT_SDK) >= 4
+
+
+#: A step that installs the SDK: the locked requirement, a name, or a project install.
+_INSTALLS_THE_SDK = re.compile(
+    r"sdk_requirement|infra2[-_]sdk|\buv\s+(?:sync|pip\s+install)\b"
+    r"|\bpip3?\s+install\b[^\n]*\s(?:-e\s+)?\.(?:\[[^\]]*\])?(?:\s|$)"
+)
+_PYTHON = r"\bpython3?(?:\s+-[A-Za-z]+)*"
+#: ``python -m tools.x`` and ``python tools/x.py``.
+_RUNS_MODULE = re.compile(_PYTHON + r"\s+-m\s+(?P<module>[A-Za-z_][\w.]*)")
+_RUNS_SCRIPT = re.compile(_PYTHON + r"\s+(?P<path>(?:libs|tools)/[\w/]+)\.py\b")
+#: ``from tools.x import y`` and ``import tools.x`` inside a heredoc or ``-c`` program.
+_IMPORTS_MODULE = re.compile(
+    r"^[ \t]*(?:from|import)[ \t]+(?P<module>(?:libs|tools)(?:\.\w+)*)", re.MULTILINE
+)
+
+
+def _sdk_free_job_modules(workflow: dict) -> dict[str, set[str]]:
+    """job -> first-party modules its ``run`` steps execute, for the jobs without the SDK.
+
+    The CI install list decides which jobs are in scope. A job whose steps install no
+    SDK runs its modules on a bare interpreter, so each of them must import without it.
+    ``invoke`` loads the ``tasks`` collection.
+    """
+    jobs: dict[str, set[str]] = {}
+    for name, job in (workflow.get("jobs") or {}).items():
+        runs = [
+            step["run"]
+            for step in job.get("steps") or []
+            if isinstance(step, dict) and step.get("run")
+        ]
+        if any(_INSTALLS_THE_SDK.search(run) for run in runs):
+            continue
+        modules: set[str] = set()
+        for run in runs:
+            for match in _RUNS_MODULE.finditer(run):
+                module = match["module"]
+                if module == "invoke":
+                    modules.add("tasks")
+                elif module.split(".")[0] in ("libs", "tools"):
+                    modules.add(module)
+            for match in _RUNS_SCRIPT.finditer(run):
+                modules.add(match["path"].replace("/", "."))
+            for snippet in _embedded_python(run):
+                modules.update(m["module"] for m in _IMPORTS_MODULE.finditer(snippet))
+        jobs[name] = modules
+    return jobs
+
+
+def test_the_job_to_module_derivation_follows_the_install_step() -> None:
+    workflow = yaml.safe_load(
+        """
+jobs:
+  bare:
+    steps:
+      - run: python -m pip install httpx rich
+      - run: |
+          python -m tools.alpha --flag
+          python3 tools/beta.py
+          python -m invoke deploy.audit
+          python -m pytest
+      - run: |
+          python - <<'PY'
+          from libs.gamma.delta import thing
+          import tools.epsilon
+          import json
+          PY
+  with_the_sdk:
+    steps:
+      - run: |
+          requirement="$(python tools/sdk_requirement.py)"
+          python -m pip install "$requirement"
+      - run: python -m tools.zeta
+  project_install:
+    steps:
+      - run: python -m pip install -e .[dev]
+      - run: python -m tools.eta
+"""
+    )
+    assert _sdk_free_job_modules(workflow) == {
+        "bare": {
+            "tools.alpha",
+            "tools.beta",
+            "tasks",
+            "libs.gamma.delta",
+            "tools.epsilon",
+        }
+    }
+
+
+def test_the_list_covers_every_module_the_sdk_free_ops_checks_jobs_run() -> None:
+    """The list follows the workflow, not the other way round.
+
+    ops-checks.yml installs the SDK in `deploy-v2-canary` and the e2e job only. Every
+    other job runs on a bare interpreter, and the modules it runs must be in the list.
+    """
+    jobs = _sdk_free_job_modules(yaml.safe_load(OPS_CHECKS.read_text(encoding="utf-8")))
+    assert len(jobs) >= 8, f"the scan found {len(jobs)} SDK-free jobs"
+    assert "deploy-v2-canary" not in jobs and "e2e-regressions-smoke" not in jobs
+    assert sum(len(modules) for modules in jobs.values()) >= 15
+    missing = {
+        job: sorted(modules - set(MUST_IMPORT_WITHOUT_SDK))
+        for job, modules in jobs.items()
+        if modules - set(MUST_IMPORT_WITHOUT_SDK)
+    }
+    assert missing == {}, f"add these to MUST_IMPORT_WITHOUT_SDK: {missing}"
 
 
 def test_a_module_that_genuinely_needs_the_sdk_still_fails() -> None:
