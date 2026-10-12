@@ -240,7 +240,8 @@ environment variables are configured:
 
 - `INFRA_PROBE_HEARTBEAT_URL`
 - `INFRA_PROBE_HEARTBEAT_TOKEN`
-- `INFRA_PROBE_HEARTBEAT_ENV`: defaults to `ENV` or `production`
+- `INFRA_PROBE_HEARTBEAT_ENV`: the compose file sets it from `ENV`. The runner has no
+  default environment (#1208). See "Probe environment" below.
 - `INFRA_PROBE_HEARTBEAT_NAME`: defaults to
   `platform-alerting-probes${ENV_SUFFIX}`
 
@@ -419,8 +420,22 @@ name|kind|target|expected|severity|timeout_seconds
 Dry-run:
 
 ```bash
-INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json
+ENV=staging INFRA_PROBE_DRY_RUN=1 uv run python tools/infra_probe_runner.py --once --json
 ```
+
+### Probe environment
+
+Every probe module takes its environment from `resolve_probe_environment()` in
+`libs/observability/probe_environment.py` (#1208). There is no default. The first
+variable with a value decides, in this order:
+
+`OBS_ROUNDTRIP_ENV` (round-trip probe only), `INFRA_ENVIRONMENT`,
+`INFRA_PROBE_HEARTBEAT_ENV`, `ENV`, `DEPLOY_ENV`.
+
+The value must name `production`, `staging`, `preview` or a preview slot such as
+`pr-5`. `prod` means `production`. When no variable has a value, or the value is
+unknown, the runner exits with `EX_CONFIG` and the round-trip probe reports
+`roundtrip-misconfigured`. Neither one pages as production.
 
 Heartbeat dry-run is intentionally disabled: `INFRA_PROBE_DRY_RUN=1` does not
 write alert state or post heartbeat.

@@ -20,6 +20,8 @@ from infra2_sdk.runtime.postgres import PostgresSettings, probe_postgres
 from infra2_sdk.runtime.health import DependencyStatus
 from infra2_sdk.runtime.s3 import S3Settings, probe_s3
 
+from libs.observability.probe_environment import resolve_probe_environment
+
 DEFAULT_TIMEOUT_SECONDS = 5.0
 HTTP_PROBE_HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; infra2-probe/1.0; +https://zitian.party)",
@@ -209,7 +211,7 @@ def build_probe_alert_payload(
     """
     failures = failed_results(results)
     status = "firing" if failures else "resolved"
-    environment = os.getenv("INFRA_ENVIRONMENT") or os.getenv("ENV") or "production"
+    environment = resolve_probe_environment()
     started_at = started_at or {}
 
     def labels_for(result: ProbeResult) -> dict[str, str]:

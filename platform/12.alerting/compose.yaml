@@ -164,7 +164,8 @@ services:
       # ENV gates the prod-only breakdown watcher and deploy-queue guard, labels
       # probe alert payloads with the runner's real environment, and makes a
       # staging/preview runner's alerts REPORTS (delivery=report, never the pager;
-      # #903). Only that allowlist reports: `prod`, a typo or no ENV pages.
+      # #903). Only that allowlist reports: `prod` pages. A typo or a missing ENV
+      # stops the runner with EX_CONFIG (#1208).
       ENV: ${ENV:-production}
       ALERT_BRIDGE_URL: http://platform-alerting${ENV_SUFFIX}:8080/signoz/webhook
       ALERTING_ENV_FILE: /secrets/.env

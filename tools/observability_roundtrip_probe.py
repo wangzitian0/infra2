@@ -15,6 +15,7 @@ import urllib.request
 import uuid
 
 from libs.observability.openpanel import openpanel_env
+from libs.observability.probe_environment import resolve_probe_environment
 
 
 DEFAULT_INTERVAL_SECONDS = 5 * 60
@@ -305,14 +306,14 @@ def _ch_string(value: str) -> str:
 
 
 def _deploy_env() -> str:
-    raw = (
-        os.getenv("OBS_ROUNDTRIP_ENV")
-        or os.getenv("INFRA_PROBE_HEARTBEAT_ENV")
-        or os.getenv("ENV")
-        or os.getenv("DEPLOY_ENV")
-        or "production"
-    )
-    return {"prod": "production"}.get(raw.strip().lower(), raw.strip().lower())
+    """The environment this round-trip writes to, from the one resolver (#1208).
+
+    A missing or unknown environment is a configuration error. The round-trip tested
+    nothing, so it exits EX_CONFIG and the runner keeps it out of the failing stream."""
+    try:
+        return resolve_probe_environment("OBS_ROUNDTRIP_ENV")
+    except ValueError as exc:
+        raise ProbeConfigError(str(exc)) from exc
 
 
 def _due(state: dict, backend: str, now: float, interval_seconds: int) -> bool:

@@ -206,6 +206,7 @@ def test_main_exits_ex_config_when_the_openpanel_client_id_is_missing(
 def test_main_exits_ex_config_on_an_invalid_backend_url(
     monkeypatch, tmp_path, capsys
 ) -> None:
+    monkeypatch.setenv("OBS_ROUNDTRIP_ENV", "staging")
     monkeypatch.setenv("SIGNOZ_OTLP_LOGS_URL", "platform-signoz-otel-collector/v1/logs")
 
     assert _run_main(monkeypatch, tmp_path, "signoz") == os.EX_CONFIG

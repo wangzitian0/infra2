@@ -22,6 +22,19 @@ from libs.observability.probes import (
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(autouse=True)
+def _production_probe_environment(monkeypatch):
+    """Most tests here exercise probe logic, and the environment is incidental.
+
+    The probe modules have no default environment (#1208), so those tests choose
+    production on purpose. A test about the environment itself deletes this variable.
+    The other variables the resolver reads start unset, whatever the shell holds.
+    """
+    for name in ("INFRA_PROBE_HEARTBEAT_ENV", "OBS_ROUNDTRIP_ENV"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ENV", "production")
+
+
 def _load_probe_runner():
     path = ROOT / "tools/infra_probe_runner.py"
     spec = importlib.util.spec_from_file_location("infra_probe_runner_under_test", path)
@@ -2296,10 +2309,27 @@ def test_only_a_recognised_non_production_runner_reports(monkeypatch, tmp_path) 
         assert len(posted) == 1, env
         return posted[0]["commonLabels"].get("delivery")
 
-    for pages in ("prod", "PRODUCTION ", None, "garbage"):
+    for pages in ("prod", "PRODUCTION "):
         assert delivery_of_first_page(pages) is None, pages
     for reports in ("staging", "STG", "pr-5"):
         assert delivery_of_first_page(reports) == "report", reports
+
+
+def test_a_runner_without_a_known_environment_stops_instead_of_paging(
+    monkeypatch, tmp_path
+) -> None:
+    """#1208: no environment, or a typo, used to page as production. A runner that
+    cannot tell its environment now stops. It sends no page and no heartbeat."""
+    monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+
+    for env in (None, "garbage"):
+        runner, posted, beats, script, _bridge = _scripted_runner(monkeypatch, env=env)
+        script["results"] = {"vault": "503:sealed"}
+        with pytest.raises(ValueError, match="ENV"):
+            runner.run_once(state_path=tmp_path / f"{env!r}.json", failure_threshold=1)
+        assert posted == [], env
+        assert beats == [], env
 
 
 def test_host_probes_stay_on_unless_the_runner_is_recognisably_non_production(
@@ -2307,18 +2337,23 @@ def test_host_probes_stay_on_unless_the_runner_is_recognisably_non_production(
 ) -> None:
     """#903 review: the host-probe gate compared exactly too, so a production runner
     told `prod` stopped watching the host. Only a recognised non-production runner
-    drops the shared-host probes."""
+    drops the shared-host probes. #1208: an unknown or missing environment no longer
+    counts as production. The gate raises."""
     runner = _load_probe_runner()
     specs = parse_probe_specs("vault|http|http://vault|200\nhost-cpu|resource|cpu|80")
     for name in ("ENV", "DEPLOY_ENV"):
         monkeypatch.delenv(name, raising=False)
 
-    for env in ("prod", "PRODUCTION ", "garbage"):
+    for env in ("prod", "PRODUCTION "):
         monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", env)
         kinds = {spec.kind for spec in runner._host_specs_for_env(specs)}
         assert kinds == {"http", "resource"}, env
+    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", "garbage")
+    with pytest.raises(ValueError, match="garbage"):
+        runner._host_specs_for_env(specs)
     monkeypatch.delenv("INFRA_PROBE_HEARTBEAT_ENV")
-    assert {s.kind for s in runner._host_specs_for_env(specs)} == {"http", "resource"}
+    with pytest.raises(ValueError, match="INFRA_PROBE_HEARTBEAT_ENV"):
+        runner._host_specs_for_env(specs)
     monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", "stg")
     assert {s.kind for s in runner._host_specs_for_env(specs)} == {"http"}
 
