@@ -1094,6 +1094,91 @@ def test_alerting_health_route_is_the_sdk_route(
     assert route.endpoint.__module__ == "infra2_sdk.fastapi"
 
 
+def test_alerting_webhook_delivery_does_not_block_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A page in flight must not stop /health from answering (#1222).
+
+    The webhook handler is `async def`. A direct call to the sync `_deliver` holds the event
+    loop for the whole Feishu call (10 s timeout). The container healthcheck (interval 30 s,
+    timeout 5 s, retries 3) can then restart the bridge while it delivers a page.
+
+    Both requests go through ONE ASGI client on ONE event loop. A `TestClient` per request
+    gives each request its own loop in its own thread, so a blocked loop would go unseen.
+
+    The fake delivery blocks its thread until /health has answered, as `urlopen` blocks on
+    a socket. It gives up after `block_seconds`. With a blocked loop /health cannot answer
+    in that time, so the delivery sees no answer and the test fails. The wait uses an event
+    and not a fixed sleep: the result does not depend on how fast the machine is.
+    """
+    import asyncio
+    import threading
+
+    import httpx
+
+    module = _load_alerting_app("alerting_event_loop_test", monkeypatch)
+    for key in ("BRIDGE_BASIC_AUTH_USERNAME", "BRIDGE_BASIC_AUTH_PASSWORD"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ALERT_DELIVERY_MODE", "feishu_webhook")
+    monkeypatch.setenv(
+        "FEISHU_WEBHOOK_URL", "https://open.feishu.cn/open-apis/bot/v2/hook/abc"
+    )
+
+    block_seconds = 3.0
+    delivery_started = threading.Event()
+    health_answered = threading.Event()
+    seen: dict[str, object] = {}
+
+    def blocking_deliver(card, *, report=False):
+        delivery_started.set()
+        seen["health_answered_during_delivery"] = health_answered.wait(block_seconds)
+        return {"code": 0}
+
+    monkeypatch.setattr(module, "_deliver", blocking_deliver)
+
+    payload = {
+        "status": "firing",
+        "commonLabels": {"alertname": "HighCPU", "severity": "critical"},
+        "alerts": [{"status": "firing", "labels": {"alertname": "HighCPU"}}],
+    }
+    body = json.dumps(payload).encode("utf-8")
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=module.fastapi_app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://alerting.test"
+        ) as client:
+
+            async def webhook():
+                return await client.post(
+                    "/signoz/webhook",
+                    content=body,
+                    headers={"Content-Type": "application/json"},
+                )
+
+            async def health():
+                # Ask only after the delivery is in flight. A blocked loop cannot run
+                # this poll, so a delivery that holds the loop is seen at its latest.
+                deadline = asyncio.get_running_loop().time() + 30
+                while not delivery_started.is_set():
+                    assert asyncio.get_running_loop().time() < deadline
+                    await asyncio.sleep(0.01)
+                response = await client.get("/health")
+                health_answered.set()
+                return response
+
+            return await asyncio.gather(webhook(), health())
+
+    webhook_response, health_response = asyncio.run(scenario())
+
+    assert health_response.status_code == 200, health_response.text
+    assert seen["health_answered_during_delivery"] is True, (
+        "the delivery held the event loop: /health answered only after the delivery ended"
+    )
+    assert webhook_response.status_code == 202, webhook_response.text
+    assert webhook_response.json() == {"status": "accepted", "feishu": {"code": 0}}
+
+
 # The bridge pages people. A bad OTEL value must be logged and must never stop it (#1209).
 # `strict_otel=True` would raise while the module loads, so the test loads it in a child
 # process, the way the container does, with values the SDK refuses in strict mode.
