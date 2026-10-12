@@ -68,8 +68,29 @@ curl -sSL https://dokploy.com/install.sh | DOKPLOY_VERSION=v0.29.8 sh
 echo ""
 echo "✅ Dokploy 安装完成"
 echo ""
-echo "📊 验证安装..."
-docker ps | grep dokploy
+echo "⚙️  配置 Dokploy 运行时参数 (Node 堆内存上限 2048MB 防止 OOM)..."
+docker service update --env-add NODE_OPTIONS="--max-old-space-size=2048" dokploy
+
+echo ""
+echo "⏳ 等待 Dokploy 服务重新就绪..."
+READY=0
+for i in $(seq 1 30); do
+  if curl -sf --max-time 2 --connect-timeout 1 http://localhost:3000 >/dev/null; then
+    READY=1
+    break
+  fi
+  sleep 1
+done
+
+if [ "$READY" -ne 1 ]; then
+  echo "❌ 错误: Dokploy 在 30 秒内未就绪" >&2
+  docker service ps dokploy 2>&1 || true
+  exit 1
+fi
+
+echo ""
+echo "📊 验证安装与环境变量..."
+docker service inspect dokploy --format '{{json .Spec.TaskTemplate.ContainerSpec.Env}}'
 
 echo ""
 echo "🌐 测试 HTTP 访问..."

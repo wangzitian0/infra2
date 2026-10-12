@@ -377,9 +377,10 @@ class _NullSpan:
 
 def _span(name: str, **attributes: Any):
     """A span context manager. It is a no-op when no OTLP endpoint was issued."""
-    if _TRACER is None:
+    tracer = _acquire_tracer()
+    if tracer is None:
         return contextlib.nullcontext(_NullSpan())
-    return _TRACER.start_as_current_span(name, attributes=attributes or None)
+    return tracer.start_as_current_span(name, attributes=attributes or None)
 
 
 def _traced_check(name: str, probe: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
@@ -553,9 +554,18 @@ def cached_canary_status() -> Dict[str, Any]:
 
 
 def _acquire_tracer() -> Any:
-    from opentelemetry import trace
+    global _TRACER
+    if _TRACER is not None:
+        return _TRACER
+    if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip():
+        return None
+    try:
+        from opentelemetry import trace
 
-    return trace.get_tracer(SERVICE_TRACER_NAME)
+        _TRACER = trace.get_tracer(SERVICE_TRACER_NAME)
+        return _TRACER
+    except Exception:
+        return None
 
 
 def configure_service_telemetry() -> Any | None:
@@ -632,9 +642,7 @@ async def add_cors_headers(request: Request, call_next: Any) -> Response:
                 "Access-Control-Allow-Methods": (
                     "GET, POST, PUT, DELETE, OPTIONS, HEAD"
                 ),
-                "Access-Control-Allow-Headers": (
-                    "Content-Type, Authorization"
-                ),
+                "Access-Control-Allow-Headers": ("Content-Type, Authorization"),
                 "Content-Length": "0",
             },
         )
@@ -661,7 +669,9 @@ def fastapi_api_health() -> Response:
     )
 
 
-@fastapi_app.api_route("/api/canary/status", methods=["GET", "HEAD"], tags=["Observability"])
+@fastapi_app.api_route(
+    "/api/canary/status", methods=["GET", "HEAD"], tags=["Observability"]
+)
 def fastapi_api_canary_status() -> Response:
     result = cached_canary_status()
     status_code = 200 if result.get("ok") else 503
@@ -697,9 +707,7 @@ async def fastapi_create_todo(request: Request) -> Response:
     with _todos_lock:
         new_id = max((t["id"] for t in _FALLBACK_TODOS), default=0) + 1
         title = (
-            str(payload["title"]).strip()
-            if "title" in payload
-            else f"Todo #{new_id}"
+            str(payload["title"]).strip() if "title" in payload else f"Todo #{new_id}"
         )
         item = {
             "id": new_id,
@@ -764,8 +772,12 @@ def fastapi_auth_me(request: Request) -> Response:
     )
 
 
-@fastapi_app.api_route("/", methods=["GET", "HEAD"], tags=["UI"], response_class=HTMLResponse)
-@fastapi_app.api_route("/index.html", methods=["GET", "HEAD"], tags=["UI"], response_class=HTMLResponse)
+@fastapi_app.api_route(
+    "/", methods=["GET", "HEAD"], tags=["UI"], response_class=HTMLResponse
+)
+@fastapi_app.api_route(
+    "/index.html", methods=["GET", "HEAD"], tags=["UI"], response_class=HTMLResponse
+)
 def fastapi_ui_index(request: Request) -> HTMLResponse:
     username = request.headers.get("X-authentik-username", "")
     name = request.headers.get("X-authentik-name", "")
@@ -787,9 +799,8 @@ def fastapi_ui_index(request: Request) -> HTMLResponse:
             "</span>"
         )
     sha = os.environ.get("GIT_COMMIT_SHA", "dev-local")[:7]
-    rendered = (
-        HTML_TEMPLATE.replace("${GIT_COMMIT_SHA}", sha)
-        .replace("${AUTH_BADGE}", auth_badge)
+    rendered = HTML_TEMPLATE.replace("${GIT_COMMIT_SHA}", sha).replace(
+        "${AUTH_BADGE}", auth_badge
     )
     return HTMLResponse(content=rendered, status_code=200)
 

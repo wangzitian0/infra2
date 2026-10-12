@@ -1019,7 +1019,7 @@ def _served_paths() -> set[str]:
     source = (SERVICE_DIR / "app.py").read_text(encoding="utf-8")
     return set(
         re.findall(
-            r'fastapi_app\.(?:api_route|get|post|put|delete)\("(/[^"]*)"', source
+            r'fastapi_app\.(?:api_route|get|post|put|delete)\(\s*"(/[^"]*)"', source
         )
     )
 
