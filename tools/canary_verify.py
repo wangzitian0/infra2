@@ -4,13 +4,16 @@
 Verifies the physical execution state of Canary Todo (platform/30.todo) across:
   1. Public & Internal Endpoints: /api/health and /api/canary/status
   2. Installed SDK Version: inside container matches locked release
-  3. Telemetry (Tracking): SigNoz ClickHouse traces (signoz_traces.signoz_index_v3)
-  4. Logs: SigNoz ClickHouse structured logs (signoz_logs.logs_v2) & container logs
+  3. Telemetry (Tracking): SigNoz ClickHouse traces, scoped to the environment
+  4. Logs: SigNoz ClickHouse structured logs, scoped to the environment
   5. Monitoring: VPS availability ledger (availability-ledger.json)
-  6. Alert Bridge: platform-alerting health and debounce status
+  6. Alert Bridge: platform-alerting health status and delivery mode
 
 Usage:
   python -m tools.canary_verify [--env production|staging] [--json]
+
+The trace and log queries come from `libs.observability.signoz_queries`. They
+filter on the service, on the environment and on the freshness window.
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import urllib.error
 import urllib.request
@@ -26,6 +30,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from libs.observability.signoz_queries import (
+    DEFAULT_WINDOW_SECONDS,
+    logs_query,
+    traces_query,
+)
+
+TELEMETRY_SERVICE_NAME = "platform-todo"
 DEFAULT_VPS_HOST = "103.214.23.41"
 DEFAULT_SSH_KEY = Path.home() / ".ssh" / "id_ed25519_infra"
 
@@ -110,7 +121,7 @@ def _evaluate_freshness(
     count: int,
     latest_str: str,
     pillar_name: str,
-    max_age_seconds: int = 3600,
+    max_age_seconds: int = DEFAULT_WINDOW_SECONDS,
     now: datetime | None = None,
 ) -> tuple[bool, str, dict[str, Any]]:
     """Fail-closed freshness evaluator for Canary telemetry.
@@ -127,7 +138,11 @@ def _evaluate_freshness(
         "max_age_seconds": max_age_seconds,
     }
     if count is None or count <= 0:
-        return False, f"0 {pillar_name} recorded", details
+        return (
+            False,
+            f"0 {pillar_name} recorded in the last {max_age_seconds}s",
+            details,
+        )
 
     if not latest_str or not str(latest_str).strip():
         return False, f"Missing timestamp for {pillar_name}", details
@@ -176,7 +191,7 @@ def verify_canary(
     environment: str = "production",
     expected_sdk: str | None = None,
     check_sdk: bool = True,
-    max_age_seconds: int = 3600,
+    max_age_seconds: int = DEFAULT_WINDOW_SECONDS,
     now: datetime | None = None,
 ) -> CanaryRealityReport:
     if expected_sdk is None:
@@ -197,6 +212,22 @@ def verify_canary(
         else "/var/lib/infra2-availability-ledger-staging/availability-ledger.json"
     )
     signal_id = f"{environment}:todo-canary-status"
+    # The same environment and the same window scope both telemetry queries.
+    # shlex.quote protects the SQL at the remote shell boundary.
+    traces_sql = shlex.quote(
+        traces_query(
+            service_name=TELEMETRY_SERVICE_NAME,
+            environment=environment,
+            window_seconds=max_age_seconds,
+        )
+    )
+    logs_sql = shlex.quote(
+        logs_query(
+            service_name=TELEMETRY_SERVICE_NAME,
+            environment=environment,
+            window_seconds=max_age_seconds,
+        )
+    )
 
     # 1. Public Health Check
     health_ok = False
@@ -220,9 +251,9 @@ def verify_canary(
         f'echo "=== SDK ===" && '
         f"docker exec {container} python3 -c \"import importlib.metadata; print(importlib.metadata.version('infra2-sdk'))\" && "
         f'echo "=== TRACES ===" && '
-        f"docker exec platform-clickhouse clickhouse-client --query \"SELECT count(), toDateTime(max(timestamp), 'UTC') FROM signoz_traces.signoz_index_v3 WHERE serviceName='platform-todo'\" && "
+        f"docker exec platform-clickhouse clickhouse-client --query {traces_sql} && "
         f'echo "=== LOGS ===" && '
-        f"docker exec platform-clickhouse clickhouse-client --query \"SELECT count(), toDateTime(intDiv(max(timestamp), 1000000000), 'UTC') FROM signoz_logs.logs_v2 WHERE resources_string['service.name']='platform-todo'\" && "
+        f"docker exec platform-clickhouse clickhouse-client --query {logs_sql} && "
         f'echo "=== LEDGER ===" && '
         f'jq -c ".days | to_entries[-1] | {{day: .key, runs: .value.runs, signal: .value.signals[\\"{signal_id}\\"]}}" {ledger_path} && '
         f'echo "=== ALERT_BRIDGE ===" && '
@@ -279,6 +310,8 @@ def verify_canary(
         now=now,
     )
     tracking_details["span_count"] = trace_count
+    tracking_details["environment"] = environment
+    tracking_details["window_seconds"] = max_age_seconds
     tracking_pillar = PillarResult(
         ok=tracking_ok,
         summary=tracking_summary,
@@ -297,6 +330,8 @@ def verify_canary(
         now=now,
     )
     logs_details["log_count"] = log_count
+    logs_details["environment"] = environment
+    logs_details["window_seconds"] = max_age_seconds
     logs_pillar = PillarResult(
         ok=logs_ok,
         summary=logs_summary,
@@ -335,17 +370,32 @@ def verify_canary(
 
     # Parse Alert Bridge
     bridge_ok = False
+    bridge_status = "missing"
+    bridge_mode = ""
+    bridge_summary = "Bridge response is not valid JSON"
     try:
         bridge_data = json.loads(sections.get("ALERT_BRIDGE", "{}"))
-        bridge_ok = bridge_data.get("status") == "ok"
-    except Exception:
+        if isinstance(bridge_data, dict):
+            bridge_status = str(bridge_data.get("status", "missing"))
+            bridge_mode = str(bridge_data.get("mode", ""))
+            bridge_ok = bridge_status == "ok"
+            bridge_summary = (
+                f"Bridge {'healthy' if bridge_ok else 'unhealthy'}: "
+                f"status={bridge_status}"
+                + (f", mode={bridge_mode}" if bridge_mode else "")
+            )
+        else:
+            bridge_summary = "Bridge response is not a JSON object"
+    except ValueError:
         pass
     alerts_pillar = PillarResult(
         ok=bridge_ok,
-        summary="Bridge healthy, 3-round debounce active, 0 active firing alerts"
-        if bridge_ok
-        else "Bridge unhealthy",
-        details={"bridge_response": sections.get("ALERT_BRIDGE", "")},
+        summary=bridge_summary,
+        details={
+            "bridge_response": sections.get("ALERT_BRIDGE", ""),
+            "status": bridge_status,
+            "mode": bridge_mode,
+        },
     )
 
     # Parse SDK Version against locked requirement
@@ -381,6 +431,16 @@ def verify_canary(
     )
 
 
+def _positive_int(raw: str) -> int:
+    try:
+        value = int(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not an integer: {raw!r}") from None
+    if value <= 0:
+        raise argparse.ArgumentTypeError(f"must be greater than 0: {raw!r}")
+    return value
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -398,9 +458,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--max-age-seconds",
-        type=int,
-        default=3600,
-        help="Maximum allowed age of latest traces and logs in seconds (default: 3600)",
+        type=_positive_int,
+        default=DEFAULT_WINDOW_SECONDS,
+        help=(
+            "Query window and maximum age of the latest traces and logs, in "
+            f"seconds (default: {DEFAULT_WINDOW_SECONDS})"
+        ),
     )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
