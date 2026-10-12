@@ -43,7 +43,6 @@ from libs.core import ci_spec
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = "docs/ssot/ci-gate-inventory.yaml"
-STAGES = "docs/ssot/delivery-stages.yaml"
 WORKFLOWS_DIR = ".github/workflows"
 # A workflow is in scope exactly when it can put a check on a pull request. Both spellings:
 # `pull_request_target` runs on PRs too (with base-repo permissions), so excluding it would
@@ -96,7 +95,7 @@ def covered_workflows(root: Path = ROOT) -> tuple[str, ...]:
 def audit_gates(
     gates: list[dict], *, root: Path, prefix: str | None, known_ci_workflows
 ) -> dict:
-    stage_ids = set(load_delivery_stages(root / STAGES))
+    stage_ids = set(load_delivery_stages())
     schema = validate_inventory(gates, stage_ids=stage_ids, id_prefix=prefix)
 
     covered: dict[str, set[str]] = {}

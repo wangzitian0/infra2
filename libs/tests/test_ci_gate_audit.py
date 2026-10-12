@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
+from infra2_sdk.ci import load_delivery_stages
 
 from tools.ci_gate_audit import (
     PR_TRIGGERS,
@@ -74,6 +75,28 @@ def test_unknown_stage_is_schema_error() -> None:
         known_ci_workflows=(),
     )
     assert any("unknown stage" in e for e in r["schema_errors"])
+
+
+SDK_STAGE_IDS = sorted(load_delivery_stages())
+
+
+def _unknown_stage_errors(stage: str) -> list[str]:
+    result = audit_gates(
+        [_gate(stage=stage)],
+        root=ROOT,
+        prefix="infra_ci.",
+        known_ci_workflows=(),
+    )
+    return [e for e in result["schema_errors"] if "unknown stage" in e]
+
+
+def test_the_audit_knows_every_stage_id_of_the_installed_sdk() -> None:
+    # The audit reads the vocabulary from the installed SDK (#1206). It has no local copy.
+    # Every SDK stage id is known to the audit. An id that the SDK does not list is unknown to it.
+    assert len(SDK_STAGE_IDS) >= 8, f"the SDK lists only {SDK_STAGE_IDS}"
+    rejected = [sid for sid in SDK_STAGE_IDS if _unknown_stage_errors(sid)]
+    assert rejected == []
+    assert _unknown_stage_errors("bogus.not_an_sdk_stage")
 
 
 def test_wrong_prefix_is_schema_error() -> None:
