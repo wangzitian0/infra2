@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import shlex
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from libs.observability import signoz_queries
 from tools.canary_verify import (
     CanaryRealityReport,
     PillarResult,
@@ -19,10 +22,71 @@ from tools.canary_verify import (
 )
 
 
-def _relative_ts(offset_seconds: float, now: datetime | None = None) -> str:
-    base = now or datetime.now(timezone.utc)
-    target = base - timedelta(seconds=offset_seconds)
+FIXED_NOW = datetime(2026, 10, 12, 12, 0, 0, tzinfo=timezone.utc)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _relative_ts(offset_seconds: float, now: datetime) -> str:
+    """Return a timestamp string `offset_seconds` before the injected `now`."""
+    target = now - timedelta(seconds=offset_seconds)
     return target.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _canned_stdout(
+    *,
+    traces: str,
+    logs: str,
+    bridge: str = '{"status": "ok", "mode": "feishu_app"}',
+) -> str:
+    return (
+        "=== STATUS ===\n"
+        '{"ok": true, "failed": []}\n'
+        "=== SDK ===\n"
+        f"{_resolve_locked_sdk_version()}\n"
+        "=== TRACES ===\n"
+        f"{traces}\n"
+        "=== LOGS ===\n"
+        f"{logs}\n"
+        "=== LEDGER ===\n"
+        '{"day": "2026-10-12", "runs": 10, "signal": {"ok": 10, "fail": 0}}\n'
+        "=== ALERT_BRIDGE ===\n"
+        f"{bridge}\n"
+    )
+
+
+def _verify_with_canned_ssh(
+    environment: str, stdout: str, **kwargs: object
+) -> tuple[CanaryRealityReport, list[str]]:
+    """Run verify_canary with canned SSH output.
+
+    Return the report and every remote command passed to `_ssh_cmd`.
+    """
+    commands: list[str] = []
+
+    def fake_ssh(command: str, *_args: object, **_kwargs: object):
+        commands.append(command)
+        return 0, stdout, ""
+
+    with (
+        patch("urllib.request.urlopen") as mock_url,
+        patch("tools.canary_verify._ssh_cmd", side_effect=fake_ssh),
+    ):
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.read.return_value = json.dumps({"ok": True}).encode()
+        mock_resp.__enter__.return_value = mock_resp
+        mock_url.return_value = mock_resp
+        report = verify_canary(environment, now=FIXED_NOW, **kwargs)  # type: ignore[arg-type]
+    return report, commands
+
+
+def _remote_query(command: str, marker: str, next_marker: str) -> str:
+    """Return the ClickHouse SQL the remote shell would receive for one section."""
+    start_token = f'echo "=== {marker} ===" && '
+    start = command.index(start_token) + len(start_token)
+    end = command.index(f'echo "=== {next_marker} ==="')
+    words = shlex.split(command[start:end])
+    return words[words.index("--query") + 1]
 
 
 def test_resolve_ssh_credentials_custom(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -438,3 +502,257 @@ def test_main_cli_output(capsys: pytest.CaptureFixture[str]) -> None:
     with patch("tools.canary_verify.verify_canary", return_value=fake_report_fail):
         code_fail = main(["--env", "staging"])
         assert code_fail == 1
+
+
+# --- Environment scoping (issue #1205) -------------------------------------
+
+
+@pytest.mark.parametrize("environment", ["staging", "production"])
+def test_remote_queries_filter_on_environment_and_window(environment: str) -> None:
+    """Trace and log SQL must carry the environment predicate and the time window."""
+    stdout = _canned_stdout(
+        traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
+        logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
+    )
+    _report, commands = _verify_with_canned_ssh(environment, stdout)
+    assert len(commands) == 1
+
+    traces_sql = _remote_query(commands[0], "TRACES", "LOGS")
+    logs_sql = _remote_query(commands[0], "LOGS", "LEDGER")
+    predicate = f"resources_string['deployment.environment.name'] = '{environment}'"
+
+    assert predicate in traces_sql
+    assert predicate in logs_sql
+    assert "'platform-todo'" in traces_sql
+    assert "'platform-todo'" in logs_sql
+    assert "INTERVAL 3600 SECOND" in traces_sql
+    assert "INTERVAL 3600 SECOND" in logs_sql
+    assert traces_sql.startswith("SELECT count(), ")
+    assert logs_sql.startswith("SELECT count(), ")
+
+
+def test_remote_queries_differ_only_in_environment_value() -> None:
+    """Staging and production must not share one query (the #1205 defect)."""
+    stdout = _canned_stdout(
+        traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
+        logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
+    )
+    _r1, staging_cmds = _verify_with_canned_ssh("staging", stdout)
+    _r2, production_cmds = _verify_with_canned_ssh("production", stdout)
+
+    for marker, next_marker in (("TRACES", "LOGS"), ("LOGS", "LEDGER")):
+        staging_sql = _remote_query(staging_cmds[0], marker, next_marker)
+        production_sql = _remote_query(production_cmds[0], marker, next_marker)
+        assert staging_sql != production_sql
+        assert "'staging'" in staging_sql
+        assert "'production'" not in staging_sql
+        assert staging_sql.replace("'staging'", "'production'") == production_sql
+
+
+def test_query_window_follows_max_age_seconds() -> None:
+    """The SQL window and the freshness limit must use one value."""
+    stdout = _canned_stdout(
+        traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
+        logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
+    )
+    _report, commands = _verify_with_canned_ssh(
+        "production", stdout, max_age_seconds=7200
+    )
+    for marker, next_marker in (("TRACES", "LOGS"), ("LOGS", "LEDGER")):
+        sql = _remote_query(commands[0], marker, next_marker)
+        assert "INTERVAL 7200 SECOND" in sql
+        assert "INTERVAL 3600 SECOND" not in sql
+
+
+@pytest.mark.parametrize("environment", ["staging", "production"])
+def test_fresh_scoped_output_passes_and_prints_latest_timestamp(
+    environment: str,
+) -> None:
+    fresh_traces = _relative_ts(60, now=FIXED_NOW)
+    fresh_logs = _relative_ts(120, now=FIXED_NOW)
+    stdout = _canned_stdout(traces=f"1238\t{fresh_traces}", logs=f"48\t{fresh_logs}")
+
+    report, _commands = _verify_with_canned_ssh(environment, stdout)
+
+    assert report.all_ok is True
+    assert report.tracking.ok is True
+    assert report.logs.ok is True
+    assert f"latest: {fresh_traces}" in report.tracking.summary
+    assert f"latest: {fresh_logs}" in report.logs.summary
+    assert report.tracking.details["count"] == 1238
+    assert report.logs.details["count"] == 48
+
+
+@pytest.mark.parametrize("pillar", ["tracking", "logs"])
+def test_empty_window_rejected_with_epoch_timestamp(pillar: str) -> None:
+    """ClickHouse returns epoch for max() over zero rows; zero count must fail."""
+    fresh = _relative_ts(60, now=FIXED_NOW)
+    empty = "0\t1970-01-01 00:00:00"
+    stdout = _canned_stdout(
+        traces=empty if pillar == "tracking" else f"500\t{fresh}",
+        logs=empty if pillar == "logs" else f"100\t{fresh}",
+    )
+
+    report, _commands = _verify_with_canned_ssh("staging", stdout)
+
+    assert report.all_ok is False
+    result = getattr(report, pillar)
+    assert result.ok is False
+    assert " recorded in the last 3600s" in result.summary
+    assert result.summary.startswith("0 ")
+
+
+def test_alert_bridge_summary_reports_real_status_and_mode() -> None:
+    fresh_traces = _relative_ts(60, now=FIXED_NOW)
+    fresh_logs = _relative_ts(120, now=FIXED_NOW)
+    stdout = _canned_stdout(
+        traces=f"500\t{fresh_traces}",
+        logs=f"100\t{fresh_logs}",
+        bridge='{"status": "ok", "mode": "log_only"}',
+    )
+
+    report, _commands = _verify_with_canned_ssh("production", stdout)
+
+    assert report.alerts.ok is True
+    assert "status=ok" in report.alerts.summary
+    assert "mode=log_only" in report.alerts.summary
+    assert "debounce" not in report.alerts.summary
+    assert "firing" not in report.alerts.summary
+
+
+@pytest.mark.parametrize(
+    ("bridge", "expected"),
+    [
+        ('{"status": "degraded", "mode": "log_only"}', "status=degraded"),
+        ('{"mode": "log_only"}', "status=missing"),
+        ("not-json", "not valid JSON"),
+    ],
+)
+def test_alert_bridge_unhealthy_reports_what_it_read(
+    bridge: str, expected: str
+) -> None:
+    stdout = _canned_stdout(
+        traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
+        logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
+        bridge=bridge,
+    )
+
+    report, _commands = _verify_with_canned_ssh("production", stdout)
+
+    assert report.alerts.ok is False
+    assert report.all_ok is False
+    assert expected in report.alerts.summary
+    assert "Bridge healthy" not in report.alerts.summary
+
+
+def test_documented_canary_verify_commands_parse() -> None:
+    """Every `python -m tools.canary_verify` line in the skill must parse."""
+    skill = (REPO_ROOT / "skills" / "deploy-evidence" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+    prefix = "python -m tools.canary_verify"
+    documented = [
+        shlex.split(line.strip())[3:]
+        for line in skill.splitlines()
+        if line.strip().startswith(prefix)
+    ]
+    assert len(documented) >= 2, "positive control: the skill documents both envs"
+
+    pass_report = CanaryRealityReport(
+        environment="staging",
+        all_ok=True,
+        tracking=PillarResult(ok=True, summary="t"),
+        logs=PillarResult(ok=True, summary="l"),
+        monitoring=PillarResult(ok=True, summary="m"),
+        alerts=PillarResult(ok=True, summary="a"),
+        installed_sdk="x",
+    )
+    for argv in documented:
+        with patch("tools.canary_verify.verify_canary", return_value=pass_report):
+            assert main(argv) == 0, argv
+
+
+# --- Query builders (issue #1205) -------------------------------------------
+
+
+def test_traces_query_exact_contract() -> None:
+    assert signoz_queries.traces_query(
+        service_name="platform-todo", environment="staging", window_seconds=3600
+    ) == (
+        "SELECT count(), toDateTime(max(timestamp), 'UTC') "
+        "FROM signoz_traces.distributed_signoz_index_v3 "
+        "WHERE serviceName = 'platform-todo' "
+        "AND resources_string['deployment.environment.name'] = 'staging' "
+        "AND timestamp >= now() - INTERVAL 3600 SECOND"
+    )
+
+
+def test_logs_query_exact_contract() -> None:
+    assert signoz_queries.logs_query(
+        service_name="platform-todo", environment="production", window_seconds=900
+    ) == (
+        "SELECT count(), toDateTime(intDiv(max(timestamp), 1000000000), 'UTC') "
+        "FROM signoz_logs.distributed_logs_v2 "
+        "WHERE resources_string['service.name'] = 'platform-todo' "
+        "AND resources_string['deployment.environment.name'] = 'production' "
+        "AND timestamp >= toUnixTimestamp64Nano(now64(3) - INTERVAL 900 SECOND)"
+    )
+
+
+@pytest.mark.parametrize("builder", ["traces_query", "logs_query"])
+@pytest.mark.parametrize(
+    "bad_value", ["x' OR 1=1 --", "a b", "", "prod;DROP", "a\\b", "x'"]
+)
+def test_query_builders_reject_unsafe_values(builder: str, bad_value: str) -> None:
+    build = getattr(signoz_queries, builder)
+    with pytest.raises(ValueError):
+        build(service_name="platform-todo", environment=bad_value, window_seconds=60)
+    with pytest.raises(ValueError):
+        build(service_name=bad_value, environment="staging", window_seconds=60)
+
+
+@pytest.mark.parametrize("builder", ["traces_query", "logs_query"])
+@pytest.mark.parametrize("bad_window", [0, -1, True, 1.5, "60"])
+def test_query_builders_reject_bad_window(builder: str, bad_window: object) -> None:
+    build = getattr(signoz_queries, builder)
+    with pytest.raises(ValueError):
+        build(
+            service_name="platform-todo",
+            environment="staging",
+            window_seconds=bad_window,
+        )
+
+
+def test_window_default_is_shared_by_function_and_cli() -> None:
+    import inspect
+
+    assert (
+        inspect.signature(verify_canary).parameters["max_age_seconds"].default
+        == signoz_queries.DEFAULT_WINDOW_SECONDS
+    )
+    pass_report = CanaryRealityReport(
+        environment="staging",
+        all_ok=True,
+        tracking=PillarResult(ok=True, summary="t"),
+        logs=PillarResult(ok=True, summary="l"),
+        monitoring=PillarResult(ok=True, summary="m"),
+        alerts=PillarResult(ok=True, summary="a"),
+        installed_sdk="x",
+    )
+    with patch(
+        "tools.canary_verify.verify_canary", return_value=pass_report
+    ) as mock_verify:
+        assert main(["--env", "staging"]) == 0
+    assert (
+        mock_verify.call_args.kwargs["max_age_seconds"]
+        == signoz_queries.DEFAULT_WINDOW_SECONDS
+    )
+
+
+@pytest.mark.parametrize("bad", ["0", "-5", "abc"])
+def test_cli_rejects_non_positive_window(bad: str) -> None:
+    with patch("tools.canary_verify.verify_canary") as mock_verify:
+        with pytest.raises(SystemExit) as excinfo:
+            main(["--env", "staging", "--max-age-seconds", bad])
+    assert excinfo.value.code == 2
+    mock_verify.assert_not_called()

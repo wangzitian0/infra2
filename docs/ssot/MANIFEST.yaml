@@ -115,6 +115,7 @@ entries:
       - platform/30.todo/compose.yaml
       - platform/30.todo/deploy.py
       - tools/canary_verify.py
+      - libs/observability/signoz_queries.py
       - libs/tests/test_canary_verify.py
 
   db.overview:
