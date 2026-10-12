@@ -1,5 +1,8 @@
 import importlib.util
+import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -604,3 +607,177 @@ def test_verify_runtime_applied_retries_on_command_timed_out(monkeypatch):
     assert err is not None
     assert "promoted image digest was not applied" in err
     assert "unavailable" in err
+
+
+# --- boot validation in dagster-entrypoint.sh (#1210) ---------------------------------
+#
+# These tests run the real entrypoint with `sh`. A fake `truealpha_runtime.boot` module
+# replaces the validator, so the tests need no image. The fake has the same signature as
+# the real `assert_environment` (keyword-only `require_injected`) and records what the
+# entrypoint passed and which variables the process could see at that moment.
+
+ENTRYPOINT = SERVICE_DIR / "dagster-entrypoint.sh"
+
+# The manifest path that the image reads. Source of truth: `ENV_MANIFEST_PATH` in
+# `apps/data-engine/src/data_engine/release_identity.py` of the truealpha submodule
+# (pinned commit 0203431d). Its Dockerfile copies the file to the same path under
+# WORKDIR /app. This test cannot read the submodule: infra-ci does not check it out.
+EXPECTED_MANIFEST_PATH = "apps/data-engine/required-env.generated.json"
+
+# Names that the fake secrets file defines. The values are fake.
+SECRET_VALUES = {
+    "DATABASE_URL": "postgresql://fake-user:fake-db-secret@127.0.0.1:5432/truealpha",
+    "SEC_USER_AGENT": "fake-sec-user-agent-secret",
+    "LLM_MODEL": "fake-llm-model-secret",
+}
+
+FAKE_BOOT_MODULE = """\
+import json
+import os
+
+
+def assert_environment(manifest_path, *, environ=None, require_injected):
+    watched = json.loads(os.environ["VALIDATOR_WATCH"])
+    with open(os.environ["VALIDATOR_LOG"], "w", encoding="utf-8") as log:
+        json.dump(
+            {
+                "manifest_path": str(manifest_path),
+                "require_injected": require_injected,
+                "environ_argument_is_none": environ is None,
+                "visible": {name: os.environ.get(name) for name in watched},
+            },
+            log,
+        )
+    failure = os.environ.get("VALIDATOR_FAIL")
+    if failure:
+        raise RuntimeError(failure)
+"""
+
+TARGET_SCRIPT = """\
+#!/bin/sh
+{
+  printf 'ran\\n'
+  printf 'arg=%s\\n' "$@"
+  printf 'DAGSTER_POSTGRES_URL=%s\\n' "${DAGSTER_POSTGRES_URL-unset}"
+} > "$TARGET_LOG"
+"""
+
+
+def _run_entrypoint(tmp_path, *, validator_failure=None):
+    """Run dagster-entrypoint.sh with a fake validator and a recording exec target."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    # `python` on PATH is the interpreter that runs the tests, as the image's venv is.
+    python_shim = bin_dir / "python"
+    python_shim.write_text(
+        f'#!/bin/sh\nexec "{sys.executable}" "$@"\n', encoding="utf-8"
+    )
+    python_shim.chmod(0o755)
+    target = bin_dir / "target"
+    target.write_text(TARGET_SCRIPT, encoding="utf-8")
+    target.chmod(0o755)
+
+    fake_packages = tmp_path / "fake_packages"
+    package = fake_packages / "truealpha_runtime"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "boot.py").write_text(FAKE_BOOT_MODULE, encoding="utf-8")
+
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text(
+        "".join(f"{name}={value}\n" for name, value in SECRET_VALUES.items()),
+        encoding="utf-8",
+    )
+    validator_log = tmp_path / "validator.json"
+    target_log = tmp_path / "target.log"
+
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "PYTHONPATH": str(fake_packages),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "SECRETS_ENV_FILE": str(secrets_file),
+        "VALIDATOR_LOG": str(validator_log),
+        "VALIDATOR_WATCH": json.dumps([*SECRET_VALUES, "DAGSTER_POSTGRES_URL"]),
+        "TARGET_LOG": str(target_log),
+    }
+    if validator_failure is not None:
+        env["VALIDATOR_FAIL"] = validator_failure
+    result = subprocess.run(
+        ["sh", str(ENTRYPOINT), str(target), "dagster-daemon", "run"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    return result, validator_log, target_log
+
+
+def test_entrypoint_refuses_to_start_when_the_validator_fails(tmp_path):
+    message = (
+        "environment lacks 1 value(s) apps/data-engine/required-env.generated.json "
+        "declares: SEC_USER_AGENT -- names only"
+    )
+    result, validator_log, target_log = _run_entrypoint(
+        tmp_path, validator_failure=message
+    )
+
+    # The validator ran. Without this line, a failure before the validator would pass.
+    assert validator_log.is_file(), result.stderr
+    assert result.returncode != 0
+    assert message in result.stderr
+    assert not target_log.exists(), "exec ran after the validator failed"
+    for value in SECRET_VALUES.values():
+        assert value not in result.stdout + result.stderr
+
+
+def test_entrypoint_execs_the_command_when_the_validator_passes(tmp_path):
+    result, validator_log, target_log = _run_entrypoint(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert validator_log.is_file()
+    ran = target_log.read_text(encoding="utf-8").splitlines()
+    assert ran[0] == "ran"
+    assert ran[1:3] == ["arg=dagster-daemon", "arg=run"]
+    # The unchanged Postgres export still reaches the command.
+    expected_url = SECRET_VALUES["DATABASE_URL"] + "?options=-csearch_path%3Ddagster"
+    assert ran[3] == f"DAGSTER_POSTGRES_URL={expected_url}"
+
+
+def test_entrypoint_validates_after_the_secrets_are_sourced_and_exported(tmp_path):
+    result, validator_log, _ = _run_entrypoint(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    visible = json.loads(validator_log.read_text(encoding="utf-8"))["visible"]
+    # Each value must be in the validator's process environment: sourced AND exported.
+    for name, value in SECRET_VALUES.items():
+        assert visible[name] == value, f"{name} was not visible to the validator"
+    assert visible["DAGSTER_POSTGRES_URL"] == (
+        SECRET_VALUES["DATABASE_URL"] + "?options=-csearch_path%3Ddagster"
+    )
+
+
+def test_entrypoint_validates_the_manifest_the_image_ships_as_deployed(tmp_path):
+    result, validator_log, _ = _run_entrypoint(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    call = json.loads(validator_log.read_text(encoding="utf-8"))
+    assert call["manifest_path"] == EXPECTED_MANIFEST_PATH
+    assert call["require_injected"] is True
+    # `environ=None` makes the validator read the real process environment.
+    assert call["environ_argument_is_none"] is True
+
+
+def test_entrypoint_keeps_the_vault_mount_as_default_and_compose_does_not_override_it():
+    entrypoint = ENTRYPOINT.read_text(encoding="utf-8")
+    compose_text = (SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8")
+    compose = yaml.safe_load(compose_text)
+
+    assert "${SECRETS_ENV_FILE:-/secrets/.env}" in entrypoint
+    assert "SECRETS_ENV_FILE" not in compose_text
+    for name in ("dagster-webserver", "dagster-daemon", "dagster-code-server"):
+        service = compose["services"][name]
+        assert "secrets:/secrets:ro" in service["volumes"]
+        # The manifest path is relative. It resolves against the image WORKDIR (/app).
+        assert "working_dir" not in service
