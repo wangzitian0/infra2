@@ -32,6 +32,13 @@ loopback (`13001` in Staging, `13002` in Production), has no Traefik route, and 
 reached through an SSH tunnel when needed. Postgres uses its existing loopback ports
 (`15432` Staging, `15433` Production).
 
+## Boot Validation
+
+`dagster-entrypoint.sh` sources the Vault-rendered `/secrets/.env`. Then it runs
+`truealpha_runtime.boot.assert_environment` against `apps/data-engine/required-env.generated.json`
+in the image. If the process lacks a declared variable, the container exits with code 1 and
+names the missing variables. It never prints values. The deploy health check then fails.
+
 ## Required Vault Fields
 
 The Vault KV v2 API/template path is
