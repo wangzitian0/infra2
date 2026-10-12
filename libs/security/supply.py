@@ -156,7 +156,7 @@ def vault_backend(environ: Mapping[str, str] | None = None) -> VaultKvBackend:
         # version said "removed with #640", and that is how it went stale.
         env["VAULT_TOKEN"] = env["VAULT_ROOT_TOKEN"]
     # update mode: read → merge → POST — the only write the deploy identities' policies allow
-    # (create/read/update/list, no patch) — infra2-sdk 1.5.0.
+    # (create/read/update/list, no patch).
     return VaultKvBackend.from_environ(
         env, write_mode="update", transport=retrying_transport()
     )

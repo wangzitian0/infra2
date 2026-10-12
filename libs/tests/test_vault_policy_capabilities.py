@@ -1,6 +1,6 @@
 """The IaC Runner's Vault policy must admit every verb its writers use (#649, #629).
 
-infra2-sdk >= 1.5.0 writes secrets with an HTTP PATCH (`application/merge-patch+json`) when
+The infra2-sdk secret writer sends an HTTP PATCH (`application/merge-patch+json`) when
 the path already exists, so only changed keys travel. KV v2 gates PATCH on its own `patch`
 capability, which `create/read/update/list` does not imply: on 2026-09-08 every existing
 truealpha service re-deploy failed `vault_permission_denied` for exactly that reason, and
