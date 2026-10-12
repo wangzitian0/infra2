@@ -296,7 +296,7 @@ an explicit per-environment Vault value.
 <a id="telemetry-identity"></a>
 ### 4.5 遥测标识隔离 (Telemetry identity)
 
-可观测性是**单一全局实例**（SigNoz / OpenPanel，`prod_only`）：所有环境都打到同一套，**靠标识区分**，不靠 per-env 实例。身份由 `libs/service_identity.py` 一次签发并映射到 IaC、运行时、遥测和告警：
+可观测性是**单一全局实例**（SigNoz / OpenPanel，`prod_only`）：所有环境都打到同一套，**靠标识区分**，不靠 per-env 实例。身份由 `libs/core/service_identity.py` 一次签发并映射到 IaC、运行时、遥测和告警：
 
 | 语义 | canonical 字段 | 示例 |
 |------|----------------|------|
@@ -310,6 +310,27 @@ an explicit per-environment Vault value.
 **签发归 infra2**：Deployer / fixed promote / preview 三个入口从 registry 和已验证部署坐标构建 `ServiceIdentity`；应用与 Vault Agent 只消费签发值，不得从 secret 或自身默认值重定义身份。标准字段是 `deployment.environment.name`；迁移期双写旧 `deployment.environment`，查询和新告警必须使用 `.name`。身份 metadata 不进入运行配置 hash，远端缺失/错误则触发一次 reconcile；部署后校验关键 `INFRA_*` 字段，避免永久重启抖动。OTLP 端点见 [ops.observability.md](ops.observability.md#41-应用接入-otlp)。
 
 对 **preview** 多别名而言，`deployment.environment.name` 的取值就是 alias token（见 §4.6）。同一份签发逻辑由 `libs/deploy/preview` 后端（经 `tools/deploy_v2 --type preview/*` 触发，非直接调用）注入 compose（vault-agent 与遥测共同消费），与 `libs/deploy/env_config.py::preview_alias` 派生的 `env_suffix` 保持同源。
+
+<a id="commit-identity"></a>
+#### 4.5.1 Commit identity contract (#1211)
+
+`GIT_COMMIT_SHA` is the commit identifier that a running service reports. Its value depends on the service class. The table below is the contract. `libs/tests/test_identity_contract.py` parses the table. It compares the table with the registry, the compose files and the pinned SDK.
+
+| Class | Services | Compose value | Value in the container | Issued by | Reader |
+|---|---|---|---|---|---|
+| `platform` | `platform/alerting`, `platform/todo` | `${INFRA_IAC_REF:-unknown}` | The full 40-hex infra2 SHA of the deploy. It is `unknown` when the deploy issues no ref. | `libs/deploy/sync_pipeline.py`, `libs/core/service_identity.py` | `platform/30.todo/app.py` shows the first 7 characters. `platform/alerting` has no reader. |
+| `app` | `finance_report/app`, `truealpha/app` | `${GIT_COMMIT_SHA:-unknown}` | The image tag. It is a release tag such as `v0.1.74`, or a 7-hex short SHA for a preview from a commit, branch or pull request. | `libs/deploy/promote.py`, `libs/deploy/preview.py` | The `git_sha` and `version` fields of the app health payload. The `finance_report/app` preview readiness probe compares them with the image tag (`libs/deploy/preview.py`, `libs/deploy/env_config.py`). |
+
+An `app` service never receives a 40-hex SHA in `GIT_COMMIT_SHA`. The deploy sets `GIT_COMMIT_SHA` and `IMAGE_TAG` to the same value.
+
+**Decision: the SDK `RuntimeIdentity` is not adopted.** No service in this repository calls it. `libs/tests/test_identity_contract.py` counts its users and expects zero.
+
+- `infra2_sdk.runtime.identity.RuntimeIdentity` accepts only `unknown` or a lowercase 40-hex SHA as `commit_sha`. This rule holds in every mode. A release tag fails it.
+- In strict mode, staging and production also need `IMAGE_DIGEST`, `CONFIGURATION_SHA256` and `RELEASE_ID`. The `platform` class meets the commit rule. It lacks these three values.
+- A service may adopt strict mode only when both conditions hold. First, the app keeps its release tag in `IMAGE_TAG` only, and `GIT_COMMIT_SHA` holds a 40-hex SHA. The SDK reads `service_version` from `IMAGE_TAG`. Second, the deploy issues the image digest, the configuration SHA-256 and the release id.
+- The change that adopts it updates this table and the guard `test_runtime_identity_has_no_non_test_user` in the same pull request.
+
+**Decision: `ServiceIdentity` stays the source of the SigNoz resource attributes.** `Deployer.sync`, fixed promote and preview render `OTEL_RESOURCE_ATTRIBUTES` with `ServiceIdentity.otel_resource_attributes()`. The keys `infra.service.id`, `infra.component`, `infra.iac.ref`, `infra.identity.schema` and `infra.managed_by` exist only there. `RuntimeIdentity.to_standard_otel_resource_attributes()` emits other keys, such as `vcs.ref.head.revision` and `container.image.id`. No code calls it.
 
 ---
 
