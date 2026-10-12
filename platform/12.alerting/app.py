@@ -28,6 +28,9 @@ from libs.alerting import (
 HOST = "0.0.0.0"
 PORT = int(os.getenv("PORT", "8080"))
 MAX_BODY_BYTES = 512 * 1024
+# The container healthcheck waits 3 s for /health (compose.yaml). The SDK default of 10 s is
+# above that. The delivery config check is local, so 2 s is long enough.
+READINESS_TIMEOUT_SECONDS = 2.0
 
 
 class RequestBodyError(ValueError):
@@ -70,6 +73,7 @@ init_service(
     name="platform-alerting",
     db_checker=_alerting_readiness_checker,
     enable_otel=True,
+    check_timeout_seconds=READINESS_TIMEOUT_SECONDS,
 )
 
 

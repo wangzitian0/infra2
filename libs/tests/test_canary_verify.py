@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from libs.observability import signoz_queries
+from libs.tests.ambient_env import clear_telemetry_env
 from tools.canary_verify import (
     CanaryRealityReport,
     PillarResult,
@@ -636,6 +637,32 @@ def test_alert_bridge_summary_reports_the_real_status() -> None:
     assert "firing" not in report.alerts.summary
 
 
+@pytest.mark.parametrize(
+    ("environment", "bridge", "todo"),
+    [
+        ("production", "platform-alerting", "platform-todo"),
+        ("staging", "platform-alerting-staging", "platform-todo-staging"),
+    ],
+)
+def test_the_ssh_command_asks_the_bridge_of_the_same_environment(
+    environment: str, bridge: str, todo: str
+) -> None:
+    """The container suffix is `-staging` outside production (compose `container_name:
+    platform-alerting${ENV_SUFFIX}`). A staging run once asked the production bridge."""
+    stdout = _canned_stdout(
+        traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
+        logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
+    )
+
+    _report, commands = _verify_with_canned_ssh(environment, stdout)
+
+    (command,) = commands
+    bridge_part = command.split('echo "=== ALERT_BRIDGE ===" && ')[1]
+    assert bridge_part.startswith(f"docker exec {bridge} python3 -c "), bridge_part
+    status_part = command.split('echo "=== STATUS ===" && ')[1]
+    assert status_part.startswith(f"docker exec {todo} python3 -c "), status_part
+
+
 def test_alert_bridge_accepts_the_health_body_the_alerting_app_serves(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -645,6 +672,7 @@ def test_alert_bridge_accepts_the_health_body_the_alerting_app_serves(
 
     from starlette.testclient import TestClient
 
+    clear_telemetry_env(monkeypatch)
     path = Path(__file__).resolve().parents[2] / "platform/12.alerting/app.py"
     spec = importlib.util.spec_from_file_location("alerting_for_canary_verify", path)
     assert spec and spec.loader

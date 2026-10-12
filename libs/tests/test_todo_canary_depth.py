@@ -34,6 +34,7 @@ import pytest
 from libs.security import registry as secrets_registry
 from libs.core import registry as reg
 from libs.observability.probe_specs import render_probe_spec_text
+from libs.tests.ambient_env import clear_telemetry_env
 from libs.tests.compose_env import compose_services, resolve
 from libs.tests.docker_host import DockerHost
 from libs.tests.traefik_rules import routers_from_labels, serving_router
@@ -57,6 +58,13 @@ def _load(name: str, path: Path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_telemetry_env(monkeypatch):
+    """The app starts telemetry while it loads. The shell of a developer must not decide
+    whether it loads (#1209)."""
+    clear_telemetry_env(monkeypatch)
 
 
 @pytest.fixture()
@@ -1142,15 +1150,6 @@ def telemetry_calls(monkeypatch):
         return _Providers()
 
     monkeypatch.setattr(sdk_otel, "configure_telemetry", fake_configure)
-    for key in (
-        "ENV",
-        "ENVIRONMENT",
-        "OTEL_EXPORTER_OTLP_ENDPOINT",
-        "OTEL_SERVICE_NAME",
-        "OTEL_RESOURCE_ATTRIBUTES",
-        "OTEL_SDK_DISABLED",
-    ):
-        monkeypatch.delenv(key, raising=False)
     return calls
 
 

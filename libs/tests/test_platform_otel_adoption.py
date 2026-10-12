@@ -29,6 +29,7 @@ from packaging.requirements import Requirement
 
 from libs.core import registry as reg
 from libs.deploy.deployer import Deployer
+from libs.tests.ambient_env import clear_telemetry_env
 from libs.tests.compose_env import compose_services, container_env, raw_environment
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -38,20 +39,63 @@ COLLECTOR_OTLP_HTTP = "http://platform-signoz-otel-collector:4318"
 KNOWN_CALLERS = {"platform/12.alerting/app.py", "platform/30.todo/app.py"}
 
 
-def _callee_name(call: ast.Call) -> str:
-    if isinstance(call.func, ast.Name):
-        return call.func.id
-    if isinstance(call.func, ast.Attribute):
-        return call.func.attr
+def _last_name(node: ast.expr) -> str:
+    """`boot` for `boot`, `init_service` for `sdk.init_service`, else an empty string."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
     return ""
 
 
+def _names_bound_to(tree: ast.AST, names: set[str]) -> set[str]:
+    """Every local name that stands for one of `names`.
+
+    That is the names themselves, the `as` name of an import, and every name assigned from
+    one of them (`boot = init_service`, `run = boot`, `boot = sdk.init_service`).
+    """
+    bound = set(names)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            bound |= {a.asname for a in node.names if a.name in names and a.asname}
+    grown = True
+    while grown:
+        grown = False
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and _last_name(node.value) in bound:
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id not in bound:
+                        bound.add(target.id)
+                        grown = True
+    return bound
+
+
+def _is_call_to(call: ast.Call, names: set[str], bound: set[str]) -> bool:
+    if _last_name(call.func) in bound:
+        return True
+    # getattr(module, "init_service")(...)
+    inner = call.func
+    return (
+        isinstance(inner, ast.Call)
+        and _last_name(inner.func) == "getattr"
+        and len(inner.args) >= 2
+        and isinstance(inner.args[1], ast.Constant)
+        and inner.args[1].value in names
+    )
+
+
 def calls_named(source: str, names: set[str]) -> list[ast.Call]:
-    """The calls in `source` to one of `names`. A comment or a string is not a call."""
+    """The calls in `source` to one of `names`, under any name the source gives them.
+
+    A comment or a string is not a call. An alias is: `from x import init_service as boot`
+    followed by `boot(...)` is a call to `init_service`.
+    """
+    tree = ast.parse(source)
+    bound = _names_bound_to(tree, names)
     return [
         node
-        for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.Call) and _callee_name(node) in names
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and _is_call_to(node, names, bound)
     ]
 
 
@@ -124,6 +168,62 @@ def test_the_scanner_tells_a_call_from_a_mention() -> None:
     assert init_service_calls("from infra2_sdk.fastapi import init_service") == []
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from infra2_sdk.fastapi import init_service as boot\nboot(app, name='a')",
+        "from infra2_sdk.fastapi import init_service\nboot = init_service\n"
+        "run = boot\nrun(app, name='a')",
+        "import infra2_sdk.fastapi as sdk\nsdk.init_service(app, name='a')",
+        "import infra2_sdk.fastapi as sdk\nboot = sdk.init_service\nboot(app, name='a')",
+        "import infra2_sdk.fastapi as sdk\ngetattr(sdk, 'init_service')(app, name='a')",
+        "def start():\n    from infra2_sdk.fastapi import init_service as boot\n"
+        "    boot(app, name='a')",
+    ],
+    ids=[
+        "from-import-alias",
+        "assigned-alias",
+        "module-alias",
+        "attribute-alias",
+        "getattr",
+        "alias-in-function",
+    ],
+)
+def test_the_scanner_follows_every_name_of_init_service(source: str) -> None:
+    """An aliased call is still a call. A scanner that misses it passes a service whose
+    deploy, compose and image links nothing checks."""
+    assert len(init_service_calls(source)) == 1
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from infra2_sdk.fastapi import init_service as boot",
+        "from elsewhere import other as boot\nboot(app)",
+        "boot = print\nboot(app)",
+        "import infra2_sdk.fastapi as sdk\nx = sdk.init_service",
+    ],
+    ids=["alias-not-called", "other-function", "other-assignment", "not-called"],
+)
+def test_the_scanner_ignores_a_name_that_does_not_call_init_service(
+    source: str,
+) -> None:
+    assert init_service_calls(source) == []
+
+
+def test_the_second_bootstrap_scan_follows_an_alias_too() -> None:
+    source = (
+        "from infra2_sdk.runtime.otel import configure_telemetry as start\n"
+        "start(settings, set_global=True)"
+    )
+    assert len(calls_named(source, OWN_BOOTSTRAPS)) == 1
+
+
+def test_the_scan_finds_at_least_one_caller() -> None:
+    """An empty list would run every parametrized test zero times and still pass."""
+    assert CALLERS
+
+
 #: Each of these starts a second OpenTelemetry bootstrap next to the one in `init_service`.
 OWN_BOOTSTRAPS = {"configure_telemetry", "configure_service_telemetry"}
 
@@ -146,6 +246,54 @@ def test_the_app_starts_telemetry_only_through_init_service(app: Path) -> None:
     `main()`. The second call logged a RuntimeWarning at every start (#1209)."""
     own = calls_named(app.read_text(encoding="utf-8"), OWN_BOOTSTRAPS)
     assert own == [], f"{app}: lines {[call.lineno for call in own]}"
+
+
+@pytest.mark.parametrize("app", CALLERS, ids=CALLER_IDS)
+def test_the_app_starts_telemetry_when_the_deploy_issued_the_endpoint(
+    app: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With the issued identity and a valid endpoint, loading the app starts the one
+    bootstrap and keeps its providers. `enable_otel=False` would leave both out."""
+    import infra2_sdk.runtime.otel as sdk_otel
+
+    from libs.core.service_identity import ServiceIdentity
+
+    started: list[object] = []
+
+    class _Providers:
+        def shutdown(self):
+            return None
+
+    def fake_configure(settings, **kwargs):
+        started.append(settings)
+        return _Providers()
+
+    monkeypatch.setattr(sdk_otel, "configure_telemetry", fake_configure)
+    clear_telemetry_env(monkeypatch)
+    meta = _meta(app)
+    identity = ServiceIdentity.build(
+        meta.service_id,
+        "staging",
+        component=meta.service,
+        service_name=_passed_name(app),
+        version="a" * 40,
+        iac_ref="a" * 40,
+    )
+    issued = {
+        "ENV": "staging",
+        "OTEL_EXPORTER_OTLP_ENDPOINT": COLLECTOR_OTLP_HTTP,
+        "OTEL_SERVICE_NAME": identity.service_name,
+        "OTEL_RESOURCE_ATTRIBUTES": identity.otel_resource_attributes(),
+    }
+    for key, value in issued.items():
+        monkeypatch.setenv(key, value)
+
+    module = _load(f"adoption_app_{app.parent.name.replace('.', '_')}", app)
+
+    (settings,) = started
+    assert settings.service_name == _passed_name(app)
+    assert settings.endpoint == COLLECTOR_OTLP_HTTP
+    assert module.fastapi_app.state.telemetry_providers is not None
 
 
 # ------------------------------------------------------------------ link 1: the deploy

@@ -6,13 +6,22 @@ import importlib.util
 import time
 from pathlib import Path
 
+import pytest
 from starlette.testclient import TestClient
 
 
 from libs.core import registry as reg
 from libs.deploy.deployer import discover_services
+from libs.tests.ambient_env import clear_telemetry_env
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_telemetry_env(monkeypatch):
+    """The app starts telemetry while it loads. The shell of a developer must not decide
+    whether it loads (#1209)."""
+    clear_telemetry_env(monkeypatch)
 
 
 def test_todo_service_registered_in_service_registry() -> None:
@@ -480,6 +489,62 @@ def test_todo_readyz_and_health_follow_the_canary_status(monkeypatch) -> None:
     assert unhealthy.json()["service"] == "platform-todo"
     assert unhealthy.json()["reasons"] == ["database: failed=redis"]
     assert unhealthy.json()["checks"]["database"]["status"] == "absent"
+
+
+def _raise_boom() -> dict:
+    raise RuntimeError("boom")
+
+
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [
+        ({"ok": False, "unconfigured": ["s3"]}, "database: unconfigured=s3"),
+        ({"ok": False, "failed": ["redis"]}, "database: failed=redis"),
+        (
+            {"ok": False, "failed": ["redis"], "unconfigured": ["s3"]},
+            "database: failed=redis; unconfigured=s3",
+        ),
+        ({"ok": False}, "database: canary checks not ok"),
+        ({}, "database: canary checks not ok"),
+        (_raise_boom, "database: canary status check failed: boom"),
+    ],
+    ids=[
+        "unconfigured",
+        "failed",
+        "failed-and-unconfigured",
+        "not-ok-without-a-list",
+        "empty-document",
+        "status-call-raises",
+    ],
+)
+@pytest.mark.parametrize("path", ["/readyz", "/health"])
+def test_todo_readiness_fails_closed_and_names_the_reason(
+    monkeypatch, path: str, status, reason: str
+) -> None:
+    """A red, unconfigured or unreadable canary status is never ready. `ok` is the verdict:
+    an empty `failed` list does not clear a document that says `ok: false`, and a status
+    call that raises is not ready (#1209)."""
+    todo_mod = _load_todo_module("todo_app_fail_closed")
+    client = TestClient(todo_mod.fastapi_app)
+    monkeypatch.setattr(
+        todo_mod,
+        "cached_canary_status",
+        status if callable(status) else (lambda: dict(status)),
+    )
+
+    response = client.get(path)
+
+    assert response.status_code == 503
+    assert response.json()["reasons"] == [reason]
+    assert response.json()["status"] in ("not_ready", "unhealthy")
+
+
+@pytest.mark.parametrize("path", ["/readyz", "/health"])
+def test_todo_readiness_passes_only_on_an_ok_document(monkeypatch, path: str) -> None:
+    todo_mod = _load_todo_module("todo_app_ready")
+    client = TestClient(todo_mod.fastapi_app)
+    monkeypatch.setattr(todo_mod, "cached_canary_status", lambda: {"ok": True})
+    assert client.get(path).status_code == 200
 
 
 def test_todo_fastapi_endpoints_contract() -> None:

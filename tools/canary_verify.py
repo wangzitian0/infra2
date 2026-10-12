@@ -205,6 +205,12 @@ def verify_canary(
     container = (
         "platform-todo" if environment == "production" else "platform-todo-staging"
     )
+    # compose container_name: platform-alerting${ENV_SUFFIX}
+    bridge_container = (
+        "platform-alerting"
+        if environment == "production"
+        else "platform-alerting-staging"
+    )
     domain = (
         "todo.zitian.party"
         if environment == "production"
@@ -261,7 +267,7 @@ def verify_canary(
         f'echo "=== LEDGER ===" && '
         f'jq -c ".days | to_entries[-1] | {{day: .key, runs: .value.runs, signal: .value.signals[\\"{signal_id}\\"]}}" {ledger_path} && '
         f'echo "=== ALERT_BRIDGE ===" && '
-        f"docker exec platform-alerting python3 -c \"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/health').read().decode())\""
+        f"docker exec {bridge_container} python3 -c \"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/health').read().decode())\""
     )
 
     code, stdout, stderr = _ssh_cmd(remote_script, host, user, key_path, port)

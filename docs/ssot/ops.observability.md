@@ -218,7 +218,7 @@ graph LR
 | `OTEL_SERVICE_NAME` | 服务名 | `finance-report-backend` |
 | `OTEL_RESOURCE_ATTRIBUTES` | `ServiceIdentity` 渲染的完整资源身份 | `deployment.environment.name=production,infra.service.id=finance_report/app,service.version=<version>,infra.iac.ref=<sha>` |
 
-> 表层别名与底层 commit 由 infra2 部署时签发,应用只消费、对缺失 fast-fail。
+> 表层别名与底层 commit 由 infra2 部署时签发,应用只消费、对缺失 fast-fail。The alert bridge (`platform/alerting`) is the one exception: it pages people, so it keeps running and logs a bad OTEL value (todo refuses to start).
 
 **签发范围(#906)**:端点与身份只给"进程里真有 OTel SDK 的 Python 服务";`OTEL_SERVICE_NAME` 是**整个 compose 一个值**(由部署签发),所以一个 compose 里只有一个服务能用它。
 
