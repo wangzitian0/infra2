@@ -280,41 +280,93 @@ def test_only_the_script_reads_the_lock() -> None:
     )
 
 
-def test_only_pyproject_and_the_lock_name_the_wheel() -> None:
-    offenders = []
+#: The two files that define the pin. They are the only files that may carry it.
+_PIN_OWNERS = ("pyproject.toml", "uv.lock")
+#: Archived project records describe the past, so they may name old versions.
+_HISTORY = "docs/project/archive/"
+
+
+def _pin_scan_texts() -> list[tuple[str, str]]:
+    """(path, text) of every tracked text file that must not repeat the pin.
+
+    Live project notes under docs/project/ are in scope. A scan that reads 100 files or
+    fewer reads nothing, and both pin tests would pass on an empty set.
+    """
+    texts = []
     for rel in _tracked_files():
-        if rel in ("pyproject.toml", "uv.lock") or rel.startswith("docs/project/"):
+        if rel in _PIN_OWNERS or rel.startswith(_HISTORY):
             continue
         try:
-            text = (ROOT / rel).read_text(encoding="utf-8")
+            texts.append((rel, (ROOT / rel).read_text(encoding="utf-8")))
         except UnicodeDecodeError:
             continue
-        if WHEEL.search(text):
-            offenders.append(rel)
+    assert len(texts) > 100, f"the scan read only {len(texts)} files"
+    return texts
+
+
+def test_the_pin_scan_fails_when_it_reads_nothing(monkeypatch) -> None:
+    monkeypatch.setitem(globals(), "_tracked_files", lambda: [])
+    with pytest.raises(AssertionError, match="the scan read only 0 files"):
+        _pin_scan_texts()
+
+
+def test_the_pin_scan_reads_live_project_notes_but_not_the_archive() -> None:
+    paths = {rel for rel, _ in _pin_scan_texts()}
+    assert "docs/project/README.md" in paths
+    assert not any(rel.startswith(_HISTORY) for rel in paths)
+
+
+def test_only_pyproject_and_the_lock_name_the_wheel() -> None:
+    offenders = [rel for rel, text in _pin_scan_texts() if WHEEL.search(text)]
     assert offenders == [], (
         f"Found hardcoded wheel in {offenders}; read through uv.lock"
     )
 
 
-#: The locked version written as text (`infra2-sdk`, two equal signs, a digit).
-_VERSION_COPY = re.compile(r"infra2[-_.]sdk\s*==\s*\d", re.I)
+#: The locked version written as text. Three shapes count:
+#: - `infra2-sdk`, two equal signs, a digit;
+#: - `infra2-sdk`, up to four marks (space, backtick, bracket, `>=`), then `1.5` or `v1.0.0`;
+#: - the word pin, then a three-part version that starts with v, in the same sentence.
+_VERSION_COPY = re.compile(
+    r"infra2[-_.]sdk\s*==\s*\d"
+    r"|infra2[-_.]sdk[^\w\n]{1,4}v?\d+\.\d+"
+    r"|\bpin(?:ned)?\b[^\n.]{0,30}\bv\d+\.\d+\.\d+",
+    re.I,
+)
+
+#: Lines that repeat the pin in prose. The parts are joined here, so this file does not
+#: match the pattern it tests.
+_PINS_IN_PROSE = (
+    "infra2-sdk" + "==" + "3.1.3",
+    "infra2-sdk" + " v" + "1.0.0",
+    "`infra2-sdk" + " 1.5" + ".0`",
+    "(infra2_sdk" + " v" + "3.1)",
+    "The infra2 release pin is `v" + "2.5.0`.",
+    "pinned to v" + "2.5.0 until the next bump",
+)
+#: Lines that name the SDK or a pin without a version number.
+_NO_PIN_IN_PROSE = (
+    "infra2-sdk is locked by uv.lock",
+    "the infra2-sdk 3.x line",
+    "release pin: see uv.lock",
+    "pinned commit 7eb451f",
+    "python 3.12 is pinned in CI",
+)
+
+
+def test_the_version_copy_pattern_catches_pins_written_in_prose() -> None:
+    missed = [line for line in _PINS_IN_PROSE if not _VERSION_COPY.search(line)]
+    assert missed == [], f"the pattern misses these pins: {missed}"
+
+
+def test_the_version_copy_pattern_ignores_text_without_a_version() -> None:
+    flagged = [line for line in _NO_PIN_IN_PROSE if _VERSION_COPY.search(line)]
+    assert flagged == [], f"the pattern flags these lines: {flagged}"
 
 
 def test_no_file_repeats_the_locked_sdk_version() -> None:
     """A version in prose is a second pin. It goes stale at the next release bump."""
-    scanned = 0
-    offenders = []
-    for rel in _tracked_files():
-        if rel in ("pyproject.toml", "uv.lock") or rel.startswith("docs/project/"):
-            continue
-        try:
-            text = (ROOT / rel).read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-        scanned += 1
-        if _VERSION_COPY.search(text):
-            offenders.append(rel)
-    assert scanned > 100, f"the scan read only {scanned} files"
+    offenders = [rel for rel, text in _pin_scan_texts() if _VERSION_COPY.search(text)]
     assert offenders == [], f"{offenders} repeat the SDK version; point to uv.lock"
 
 
