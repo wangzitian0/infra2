@@ -27,6 +27,7 @@ import dataclasses
 import json
 import logging
 import os
+import sys
 import time
 import traceback
 from pathlib import Path
@@ -46,6 +47,7 @@ from libs.observability.probes import (
     run_probes,
 )
 from libs.observability.local_ledger import record_probe_round
+from libs.observability.probe_environment import resolve_probe_environment
 from libs.observability.probe_dispatch import (
     CHRONIC_AFTER_SECONDS,
     CHRONIC_DIGEST_ALERT_NAME,
@@ -195,6 +197,13 @@ def main() -> int:
     _configure_logging()
     env_file = Path(os.getenv("ALERTING_ENV_FILE", "/secrets/.env"))
     _load_env_file(env_file)
+    # Stop now, with one clear line, instead of failing in every loop iteration (#1208).
+    # A runner that cannot tell its environment must not probe, page or heartbeat.
+    try:
+        _deploy_env()
+    except ValueError as exc:
+        print(f"infra probe runner cannot start: {exc}", file=sys.stderr, flush=True)
+        return os.EX_CONFIG
     interval = int(
         os.getenv("INFRA_PROBE_INTERVAL_SECONDS", str(DEFAULT_PROBE_INTERVAL_SECONDS))
     )
@@ -288,18 +297,11 @@ def _touch_state(state_path: Path) -> None:
 
 
 def _deploy_env() -> str:
-    """Resolve the deploy environment with the same precedence the heartbeat uses
-    (the runner sets INFRA_PROBE_HEARTBEAT_ENV, not always ENV), normalized."""
-    return (
-        (
-            os.getenv("INFRA_PROBE_HEARTBEAT_ENV")
-            or os.getenv("ENV")
-            or os.getenv("DEPLOY_ENV")
-            or "production"
-        )
-        .strip()
-        .lower()
-    )
+    """The environment of this runner, from the one probe-environment resolver (#1208).
+
+    It raises when the runner has no environment. The deployed container always has
+    one: compose.yaml sets ENV and INFRA_PROBE_HEARTBEAT_ENV."""
+    return resolve_probe_environment()
 
 
 def _host_specs_for_env(specs: list) -> list:

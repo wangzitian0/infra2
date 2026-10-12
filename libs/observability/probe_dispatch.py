@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 
 from libs.alerting.card import mark_report_payload
+from libs.observability.probe_environment import resolve_probe_environment
 from libs.observability.probes import failed_results, failure_domain
 
 PUBLIC_ROUTE_GROUP = "public-route"
@@ -91,11 +92,7 @@ def _chronic_digest_payload(
     now: float,
     environment: str | None = None,
 ) -> dict:
-    env = (
-        environment
-        if environment is not None
-        else os.getenv("DEPLOY_ENV", "prod").strip().lower()
-    )
+    env = environment if environment is not None else resolve_probe_environment()
     alerts = []
     for stream_key, since, probe_names in chronic:
         failing_for = int(now - since)

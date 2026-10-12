@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path, PurePosixPath
 
+import pytest
 import yaml
 
 from libs.observability.watchers.breakdown_watch import BreakdownWatch
@@ -22,6 +23,14 @@ from libs.observability.watchers.resident import ResidentWatcher, build_watchers
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "platform/12.alerting/compose.yaml"
+
+
+@pytest.fixture(autouse=True)
+def _production_probe_environment(monkeypatch):
+    """The runner has no default environment (#1208). The runner-loop tests choose one."""
+    for name in ("INFRA_PROBE_HEARTBEAT_ENV", "OBS_ROUNDTRIP_ENV"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("ENV", "production")
 
 
 def _load_probe_runner():
