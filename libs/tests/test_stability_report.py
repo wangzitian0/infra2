@@ -7,7 +7,7 @@ import io
 import json
 import subprocess
 import urllib.error
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -423,3 +423,88 @@ def test_custom_title_override(tmp_path, capsys) -> None:
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "[HEALTH] Custom Daily Health Check" in out
+
+
+def test_cli_defaults_to_seven_days_for_weekly_report(tmp_path, capsys) -> None:
+    """Verify CLI defaults to a 7-day reporting window for weekly report (#1195)."""
+    report = _load_module()
+
+    def _days_ledger(env: str, count: int) -> dict:
+        doc = local_ledger.new_ledger(env)
+        for i in range(count):
+            day_dt = datetime(2026, 9, 24, tzinfo=UTC) - timedelta(days=count - 1 - i)
+            ts = NOW.timestamp() - 60 if i == count - 1 else day_dt.timestamp() + 3600
+            local_ledger.record_round(
+                doc,
+                {
+                    "public-route": [
+                        {"spec": {"name": "minio-public-route"}, "ok": True}
+                    ]
+                },
+                env,
+                ts,
+            )
+        return doc
+
+    paths = _files(
+        tmp_path,
+        _days_ledger("production", 14),
+        _days_ledger("staging", 14),
+        {"ok": True, "outages": []},
+    )
+
+    # 1. Default without --days or --daily -> 7 days
+    exit_code = report.main(
+        [
+            "--ledger",
+            f"production={paths['production']}",
+            "--ledger",
+            f"staging={paths['staging']}",
+            "--outages",
+            paths["outages"],
+        ],
+        env={"INFRA2_STABILITY_REPORT_DRY_RUN": "1"},
+        now=NOW,
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "Infra2 weekly availability — positive proof" in out
+    assert "window 7d" in out
+
+    # 2. Explicit --days 3 -> 3 days
+    exit_code = report.main(
+        [
+            "--ledger",
+            f"production={paths['production']}",
+            "--ledger",
+            f"staging={paths['staging']}",
+            "--outages",
+            paths["outages"],
+            "--days",
+            "3",
+        ],
+        env={"INFRA2_STABILITY_REPORT_DRY_RUN": "1"},
+        now=NOW,
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "window 3d" in out
+
+    # 3. Explicit --days 0 -> all 14 days
+    exit_code = report.main(
+        [
+            "--ledger",
+            f"production={paths['production']}",
+            "--ledger",
+            f"staging={paths['staging']}",
+            "--outages",
+            paths["outages"],
+            "--days",
+            "0",
+        ],
+        env={"INFRA2_STABILITY_REPORT_DRY_RUN": "1"},
+        now=NOW,
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out
+    assert "window 14d" in out

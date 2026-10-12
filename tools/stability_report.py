@@ -66,6 +66,8 @@ MAX_LEDGER_AGE_SECONDS = 6 * 3600
 DEFAULT_OUTAGES_URL = (
     "https://infra2-cloudflare-watchdog.wangzitian-ai.workers.dev/outages"
 )
+DEFAULT_DAILY_DAYS = 1
+DEFAULT_WEEKLY_DAYS = 7
 
 
 def fetch_outages(url: str, token: str, *, timeout: float = 20.0) -> list[Any]:
@@ -210,9 +212,7 @@ def build_report(
             continue
         try:
             summary = summarize_ledger(
-                environment_report(
-                    environment, ledger, [], now, limit_days=limit_days
-                )
+                environment_report(environment, ledger, [], now, limit_days=limit_days)
             )
         except RuntimeError as exc:
             lines.append(f"{label}: ledger unusable: {exc}")
@@ -262,9 +262,7 @@ def run(
         outages = fetch_outages(outages_url, token)
 
     message = as_report(
-        build_report(
-            ledgers, outages, now, limit_days=limit_days, title=title
-        )
+        build_report(ledgers, outages, now, limit_days=limit_days, title=title)
     )
     if env.get("INFRA2_STABILITY_REPORT_DRY_RUN") == "1":
         print(message)
@@ -304,7 +302,7 @@ def main(
         "--days",
         type=int,
         default=None,
-        help="Number of trailing ledger days to include (e.g. 1 for daily report).",
+        help="Number of trailing ledger days to include (defaults to 7 for weekly, 1 for daily; 0 for all).",
     )
     parser.add_argument(
         "--daily",
@@ -316,7 +314,12 @@ def main(
         help="Custom report title header (defaults to daily/weekly availability title).",
     )
     args = parser.parse_args(argv)
-    limit_days = 1 if args.daily and args.days is None else args.days
+    if args.days is not None:
+        limit_days = None if args.days <= 0 else args.days
+    elif args.daily:
+        limit_days = DEFAULT_DAILY_DAYS
+    else:
+        limit_days = DEFAULT_WEEKLY_DAYS
     return run(
         env or os.environ,
         ledger_files=dict(args.ledger) or None,
