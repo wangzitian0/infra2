@@ -508,3 +508,31 @@ def test_cli_defaults_to_seven_days_for_weekly_report(tmp_path, capsys) -> None:
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "window 14d" in out
+
+
+def test_negative_days_below_zero_is_rejected(tmp_path, capsys) -> None:
+    """Verify negative --days values are rejected by CLI validation (#1203)."""
+    report = _load_module()
+    paths = _files(
+        tmp_path,
+        _ledger("production"),
+        _ledger("staging"),
+        {"ok": True, "outages": []},
+    )
+    with pytest.raises(SystemExit) as exc:
+        report.main(
+            [
+                "--ledger",
+                f"production={paths['production']}",
+                "--ledger",
+                f"staging={paths['staging']}",
+                "--outages",
+                paths["outages"],
+                "--days",
+                "-5",
+            ],
+            env={"INFRA2_STABILITY_REPORT_DRY_RUN": "1"},
+            now=NOW,
+        )
+    assert exc.value.code == 2
+    assert "--days must be >= 0" in capsys.readouterr().err

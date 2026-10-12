@@ -882,3 +882,14 @@ def test_docker_log_frames_are_removed_from_the_log_tail():
 
     assert demux_docker_logs(raw) == "booting\npermission denied\n" + line
     assert demux_docker_logs(b"tty output, no frames\n") == "tty output, no frames\n"
+
+
+def test_dead_shim_find_breakdown_reason_is_removed():
+    """Verify dead compatibility alias find_breakdown_reason cannot be imported (#1203)."""
+    import libs.observability
+    import libs.observability.breakdown
+
+    assert not hasattr(libs.observability.breakdown, "find_breakdown_reason")
+    assert "find_breakdown_reason" not in libs.observability.breakdown.__all__
+    with pytest.raises(AttributeError):
+        _ = libs.observability.find_breakdown_reason

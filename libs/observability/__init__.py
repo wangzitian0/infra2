@@ -38,7 +38,6 @@ _LAZY: "dict[str, str]" = {
     "classify_reason": "libs.observability.breakdown",
     "execute_probe": "libs.observability.probes",
     "find_breakdown_containers": "libs.observability.breakdown",
-    "find_breakdown_reason": "libs.observability.breakdown",
     "load_trail": "libs.observability.issue_trail",
     "openpanel_env": "libs.observability.openpanel",
     "parse_probe_specs": "libs.observability.probes",

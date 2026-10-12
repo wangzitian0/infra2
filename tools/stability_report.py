@@ -44,6 +44,7 @@ from libs.observability.ledger import (  # noqa: E402
     summarize_ledger,
 )
 from libs.observability.local_ledger import (  # noqa: E402
+    RETENTION_DAYS,
     gap_intervals,
     host_ledger_path,
     to_report_days,
@@ -68,6 +69,9 @@ DEFAULT_OUTAGES_URL = (
 )
 DEFAULT_DAILY_DAYS = 1
 DEFAULT_WEEKLY_DAYS = 7
+assert RETENTION_DAYS >= DEFAULT_WEEKLY_DAYS, (
+    f"RETENTION_DAYS ({RETENTION_DAYS}) must cover DEFAULT_WEEKLY_DAYS ({DEFAULT_WEEKLY_DAYS})"
+)
 
 
 def fetch_outages(url: str, token: str, *, timeout: float = 20.0) -> list[Any]:
@@ -314,8 +318,10 @@ def main(
         help="Custom report title header (defaults to daily/weekly availability title).",
     )
     args = parser.parse_args(argv)
+    if args.days is not None and args.days < 0:
+        parser.error("--days must be >= 0")
     if args.days is not None:
-        limit_days = None if args.days <= 0 else args.days
+        limit_days = None if args.days == 0 else args.days
     elif args.daily:
         limit_days = DEFAULT_DAILY_DAYS
     else:
