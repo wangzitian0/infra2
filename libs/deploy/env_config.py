@@ -40,6 +40,8 @@ from libs.core.constants import PREVIEW_KINDS
 
 # The canary runs arbitrary code on a fixed throwaway preview slot no real PR reuses.
 # Canonical SSOT slot is CANARY_SLOT ("canary-preview") defined in infra2-sdk.
+# Keep the fallback. CI jobs that do not install the SDK import this module
+# (libs/tests/test_sdk_free_import_surface.py). A test pins the fallback to the SDK value.
 try:
     from infra2_sdk import CANARY_SLOT
 except ImportError:
