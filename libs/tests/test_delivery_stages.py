@@ -5,10 +5,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import infra2_sdk
+import yaml
 from infra2_sdk.ci import load_delivery_stages
 
 ROOT = Path(__file__).resolve().parents[2]
-STAGES = load_delivery_stages(ROOT / "docs/ssot/delivery-stages.yaml")
+SSOT = ROOT / "docs/ssot"
+# The installed infra2-sdk release (the wheel that uv.lock pins) owns the vocabulary.
+STAGES = load_delivery_stages()
 # multi-segment ids allowed (e.g. github_ci.merge_authority, and future a.b.c) — aligns
 # with infra2_sdk.ci.GATE_ID_RE so the stage vocab and gate ids share one grammar.
 _ID = re.compile(r"\A[a-z][a-z_]*(?:\.[a-z_]+)+\Z")
@@ -29,3 +33,29 @@ def test_stage_orders_total_and_unique() -> None:
 
 def test_every_stage_has_a_definition() -> None:
     assert all(str(s.get("definition", "")).strip() for s in STAGES.values())
+
+
+def _defines_stage_vocabulary(text: str) -> bool:
+    document = yaml.safe_load(text)
+    return isinstance(document, dict) and isinstance(document.get("stages"), dict)
+
+
+def test_infra2_keeps_no_copy_of_the_stage_vocabulary() -> None:
+    # The mirror file delivery-stages.yaml of the SSOT directory was removed (#1206). The
+    # vocabulary lives in infra2_sdk/data/stages.yaml of the pinned SDK only. A copy can drift.
+    assert not (SSOT / "delivery-stages.yaml").exists()
+    files = sorted([*SSOT.glob("*.yaml"), *SSOT.glob("*.yml")])
+    assert len(files) >= 3, f"the scan found only {files}"
+    copies = [
+        path.name
+        for path in files
+        if _defines_stage_vocabulary(path.read_text(encoding="utf-8"))
+    ]
+    assert copies == []
+
+
+def test_the_copy_scan_flags_a_file_shaped_like_the_stage_vocabulary() -> None:
+    # Positive control: the predicate must flag the real SDK file, or the scan above is empty.
+    sdk_file = Path(infra2_sdk.__file__).parent / "data" / "stages.yaml"
+    assert _defines_stage_vocabulary(sdk_file.read_text(encoding="utf-8"))
+    assert not _defines_stage_vocabulary("gates: []\n")

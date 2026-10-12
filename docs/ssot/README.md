@@ -98,7 +98,6 @@
 | [ops.recovery.md](./ops.recovery.md) | `ops.recovery` | 故障恢复、Vault Unseal |
 | [ops.storage.md](./ops.storage.md) | `ops.storage` | 备份策略、Google Drive 加密同步与还原演练 |
 | [deploy-dependencies.yaml](./deploy-dependencies.yaml) | `ops.deploy_dependencies` | 部署扇出 + content-hash 依赖清单 |
-| [delivery-stages.yaml](./delivery-stages.yaml) | `ops.delivery_stages` | SDK 版本化交付管线 stage 词汇（app+infra CI 共享） |
 | [ci-gate-inventory.yaml](./ci-gate-inventory.yaml) | `ops.ci_gate_inventory` | infra CI gate 坐标清单（(stage,task_category)→workflow:job） |
 | [ops.merge-gate.md](./ops.merge-gate.md) | `ops.merge_gate` | 可合流条件逐条、常设合流权及其 owner 保留项、PR 准则、发布晋升 |
 | [ops.observability.md](./ops.observability.md) | `ops.obs` | 可观测性单一 owner：采集(SigNoz/日志/链路)+ 告警(规则/分级/watchdog)+ 报告(可用率账本)+ 时间尺度分层 |

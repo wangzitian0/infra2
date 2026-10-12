@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from infra2_sdk.ci import load_delivery_stages, validate_gate, validate_inventory
 
-ROOT = Path(__file__).resolve().parents[2]
-STAGES = set(load_delivery_stages(ROOT / "docs/ssot/delivery-stages.yaml"))
+STAGES = set(load_delivery_stages())
 
 
 def _gate(**over):

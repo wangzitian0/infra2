@@ -6,18 +6,15 @@ import ast
 import re
 import subprocess
 import textwrap
-from importlib.metadata import version
 from pathlib import Path
 
 import yaml
-from infra2_sdk.ci import load_delivery_stages
 from infra2_sdk.delivery import DisagreementKind, detect_disagreement
 
 from libs.tests import test_sdk_requirement as sdk_requirement_tests
 from libs.tests.test_sdk_requirement import _steps
 
 ROOT = Path(__file__).resolve().parents[2]
-LOCAL_STAGES = ROOT / "docs/ssot/delivery-stages.yaml"
 OPS_CHECKS = ROOT / ".github/workflows/ops-checks.yml"
 
 
@@ -465,15 +462,6 @@ def test_python_embedded_in_workflows_and_shell_uses_only_the_published_contract
     assert workflow_blocks >= 12, f"the scan found {workflow_blocks} workflow blocks"
     assert shell_blocks >= 2, f"the scan found {shell_blocks} shell blocks"
     assert {**workflow_found, **shell_found} == {}
-
-
-def test_local_stage_mirror_matches_the_released_sdk() -> None:
-    document = yaml.safe_load(LOCAL_STAGES.read_text(encoding="utf-8"))
-    local_stages = load_delivery_stages(LOCAL_STAGES)
-    released_stages = load_delivery_stages()
-
-    assert str(document["sdk_version"]) == version("infra2-sdk")
-    assert local_stages == released_stages
 
 
 def test_deploy_canary_installs_the_declared_sdk_requirement() -> None:

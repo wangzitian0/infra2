@@ -15,7 +15,7 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **阶段定义与词汇** | [`docs/ssot/delivery-stages.yaml`](./delivery-stages.yaml) | 从左到右的统一交付阶段语义 |
+| **阶段定义与词汇** | 已安装的 infra2-sdk 发布件：`infra2_sdk/data/stages.yaml`（经 `infra2_sdk.ci.load_delivery_stages()` 读取，版本以 `uv.lock` 为准） | 从左到右的统一交付阶段语义；infra2 不保留本地副本 |
 | **门禁清单** | [`docs/ssot/ci-gate-inventory.yaml`](./ci-gate-inventory.yaml) | 七寸 1 (Merge Authority) 的所有阻断门禁 |
 | **环境配置与部署** | Dokploy Project/Environment + `deploy_v2` | 远端环境变量和发布前门 |
 | **数据与域名隔离** | `DATA_PATH` / `ENV_SUFFIX` / `ENV_DOMAIN_SUFFIX` | 有状态部署环境间的数据与网络隔离 |
