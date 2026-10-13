@@ -184,7 +184,6 @@ def _signoz_log_payload(nonce: str, deploy_env: str) -> dict:
                 "resource": {
                     "attributes": [
                         _string_attr("service.name", SIGNOZ_SERVICE_NAME),
-                        _string_attr("deployment.environment", deploy_env),
                         _string_attr("deployment.environment.name", deploy_env),
                         _string_attr("infra.canary.nonce", nonce),
                     ]

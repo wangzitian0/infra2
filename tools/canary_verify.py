@@ -44,9 +44,7 @@ from libs.observability.signoz_queries import (
 
 TELEMETRY_SERVICE_NAME = "platform-todo"
 # The bridge /health status that means healthy. The SDK report says "healthy" (#1209).
-# The bridge said "ok" before. A production bridge with the old image still says "ok".
-# Both count until the release that carries #1209 reaches production. Then drop "ok".
-BRIDGE_HEALTHY_STATUSES = frozenset({"healthy", "ok"})
+BRIDGE_HEALTHY_STATUSES = frozenset({"healthy"})
 # A timestamp may run ahead of the local clock by this much before it counts as skew.
 CLOCK_SKEW_TOLERANCE_SECONDS = 60
 DEFAULT_VPS_HOST = "103.214.23.41"

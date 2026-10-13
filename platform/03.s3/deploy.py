@@ -320,9 +320,6 @@ class S3Deployer(Deployer):
             return False
 
 
-# Backward compatibility class alias
-MinioDeployer = S3Deployer
-
 if shared_tasks:
     _tasks = make_tasks(S3Deployer, shared_tasks)
     status = _tasks["status"]
