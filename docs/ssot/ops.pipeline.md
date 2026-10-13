@@ -224,6 +224,23 @@ App 不再 checkout/执行 infra2。发送 `repository_dispatch` type `app-deplo
    不覆盖 promote；`deploy` job 断言自己的 checkout 仍选出 canary 证明过的 `iac_ref`。canary job 的 `if:` 在任何
    plan 之前求值，只能读 payload，它镜像 `DeployPlan.requires_preflight_canary`：workflow 测试把两者钉在一起，
    运行时两边再对 plan 复核（`--require-preflight-canary` / `--preflight-canary-result`），漂移即 fail-closed。
+7. **A production request expires (#1232).** Each sender waits 1800 s for its receiver run. truealpha
+   `deploy-release.yml` and finance_report `deploy.yml` and `release.yml` give `--timeout 1800` to the
+   infra2-sdk transport (`infra2_sdk.deploy.dispatch_and_wait`). After the sender stops, nothing verifies
+   the deploy. The `deploy` job therefore refuses a production request that is older than
+   `PRODUCTION_REQUEST_MAX_AGE_SECONDS` in `libs/deploy/app_deploy_request.py`. The value is 1800 s plus a
+   margin of 300 s, so 2100 s. The margin is for the time of the sender's API calls. Receiver run
+   38344114882 was 2178 s old when its sender stopped.
+   - The age is the time from the `created_at` of the receiver run to the check. A re-run does not change
+     `created_at`, so a re-run cannot make an old request new.
+   - The credential-free `plan` step reads `created_at` with `gh api` and gives it as
+     `--request-created-at`. The check runs before the `iac_ref` comparison and before all steps that
+     hold a secret. A negative age or a missing time also stops a production request.
+   - A staging request has no age limit, because it can wait in the queue. The step reads no time for it.
+   - The refusal is `request expired: created <iso>, now <iso>, limit 2100 s. The sender has stopped
+     waiting. Dispatch the release again.`
+   - The check runs once, when the `deploy` job starts. A deploy that starts near the limit can end after
+     its sender stopped. #1232 records a sender-side cancel for this case.
 
 Finance Report 的 staging/prod/rollback 已全部 cut over 到 receiver，App 仓库不再
 checkout 或执行 infra2 源码。Production 没有 CLI bypass；receiver 通过只读 GitHub API

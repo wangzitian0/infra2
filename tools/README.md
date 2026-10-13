@@ -53,8 +53,10 @@ newest release and exits non-zero once the marker is too old to pin the data eng
 release being promoted (#650) — the ops-checks deploy-guard-audit job runs it daily.
 `--require-preflight-canary` and `--preflight-canary-result` re-check the workflow's canary
 pre-filter against the validated plan (only production requests are canaried, truealpha#860);
-a disagreement in either direction fails before any credential is used. `deploy_v2` prints one
-`deploy_v2 progress:` line per finished phase (secret supply, Dokploy promote, iac-runner sync)
+a disagreement in either direction fails before any credential is used. `--request-created-at`
+gives the receiver run's `created_at`; a production request older than
+`PRODUCTION_REQUEST_MAX_AGE_SECONDS` fails before the `iac_ref` check (#1232). `deploy_v2` prints
+one `deploy_v2 progress:` line per finished phase (secret supply, Dokploy promote, iac-runner sync)
 on stderr, so the receiver log shows where a deploy's time went.
 
 `webhook_delivery_audit.py` reads a repository's hook delivery list and fails only when
