@@ -319,8 +319,9 @@ def test_receiver_run_name_matches_what_senders_poll_for() -> None:
 
 
 # Request expiry (#1232). The deploy job reads the first creation time of its run and
-# gives it to the receiver, which refuses a production request older than its sender's
-# wait. A re-run keeps created_at; run_started_at changes on each attempt.
+# gives it to the receiver, which refuses a production request that cannot end before
+# its sender stops waiting. A re-run keeps created_at; run_started_at changes on each
+# attempt.
 _ENVIRONMENT_CONDITION = re.compile(
     r"\$\{\{\s*(?P<condition>.+?)\s*&&\s*'production'\s*\|\|\s*'staging'\s*\}\}"
 )

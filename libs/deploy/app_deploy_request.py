@@ -57,14 +57,14 @@ FIXED_DEPLOY_TYPES = frozenset({DeployType.STAGING, DeployType.PRODUCTION})
 #: libs/tests/test_app_deploy_request_workflow.py pins the two to each other and the
 #: receiver re-checks it at run time, so they cannot drift apart silently.
 PREFLIGHT_CANARY_DEPLOY_TYPES = frozenset({DeployType.PRODUCTION})
-#: The maximum age of a production request that the receiver executes, in seconds
+#: The maximum age of a production request when the deploy job starts, in seconds
 #: (#1232). Each sender waits 1800 s for its receiver run: truealpha deploy-release.yml
 #: and finance_report deploy.yml and release.yml give `--timeout 1800` to the infra2-sdk
-#: transport (infra2_sdk.deploy.dispatch_and_wait). Each poll also makes a GitHub API
-#: call, so a sender stops some time after 1800 s. The 300 s margin is for that time.
-#: Receiver run 38344114882 was 2178 s old when its sender stopped. After the sender
-#: stops, nothing verifies the deploy, so the receiver refuses an older request.
-PRODUCTION_REQUEST_MAX_AGE_SECONDS = 1800 + 300
+#: transport (infra2_sdk.deploy.dispatch_and_wait). The deploy job needs up to 249 s
+#: (the longest of 7 recent production runs), rounded up to 300 s. A request older than
+#: 1800 s - 300 s when the deploy job starts would end after its sender stopped. Then
+#: nothing verifies the deploy, so the receiver refuses the request.
+PRODUCTION_REQUEST_MAX_AGE_SECONDS = 1800 - 300
 
 
 @dataclass(frozen=True)
@@ -262,7 +262,7 @@ def make_plan(
 def check_request_age(
     request: DeployRequest, *, created_at: str, now: datetime
 ) -> float | None:
-    """Refuse a production request that its sender no longer waits for (#1232).
+    """Refuse a production request whose deploy would end after its sender stopped (#1232).
 
     ``created_at`` is the first creation time of the receiver run, from the GitHub API.
     A re-run does not change it, so a re-run cannot make an old request new. Returns

@@ -1079,7 +1079,7 @@ INCIDENT_SENDER_STOPPED = datetime(2026, 10, 13, 4, 33, 30, tzinfo=timezone.utc)
 INCIDENT_APPROVED = datetime(2026, 10, 13, 5, 53, 7, tzinfo=timezone.utc)
 INCIDENT_REFUSAL = (
     "request expired: created 2026-10-13T03:57:12Z, now 2026-10-13T05:53:07Z, "
-    "limit 2100 s. The sender has stopped waiting. Dispatch the release again."
+    "limit 1500 s. The sender has stopped waiting. Dispatch the release again."
 )
 
 
@@ -1091,17 +1091,17 @@ def _age(
     )
 
 
-@pytest.mark.parametrize("seconds", [0, 1, 1390, 2099, 2100])
+@pytest.mark.parametrize("seconds", [0, 1, 1390, 1499, 1500])
 def test_a_production_request_inside_the_limit_is_accepted(seconds) -> None:
     """The limit is inclusive: a request exactly at the limit still executes."""
-    assert receiver.PRODUCTION_REQUEST_MAX_AGE_SECONDS == 2100
+    assert receiver.PRODUCTION_REQUEST_MAX_AGE_SECONDS == 1500
     age = _age(production_payload(), now=CREATED + timedelta(seconds=seconds))
     assert age == seconds
 
 
 def test_a_production_request_one_second_past_the_limit_is_refused() -> None:
     limit = receiver.PRODUCTION_REQUEST_MAX_AGE_SECONDS
-    with pytest.raises(ValueError, match=r"^request expired: .* limit 2100 s\. "):
+    with pytest.raises(ValueError, match=r"^request expired: .* limit 1500 s\. "):
         _age(production_payload(), now=CREATED + timedelta(seconds=limit + 1))
 
 
@@ -1206,7 +1206,7 @@ def test_the_deploy_job_executes_a_production_request_inside_the_window(
     captured = capsys.readouterr()
     assert result == 0, captured.err
     assert json.loads(captured.out)["iac_ref"] == "v1.1.74"
-    assert "request age 1390 s, limit 2100 s" in captured.err
+    assert "request age 1390 s, limit 1500 s" in captured.err
 
 
 @pytest.mark.parametrize("created_at", [INCIDENT_CREATED_AT, ""])

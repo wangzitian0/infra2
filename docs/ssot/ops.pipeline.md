@@ -227,20 +227,25 @@ App 不再 checkout/执行 infra2。发送 `repository_dispatch` type `app-deplo
 7. **A production request expires (#1232).** Each sender waits 1800 s for its receiver run. truealpha
    `deploy-release.yml` and finance_report `deploy.yml` and `release.yml` give `--timeout 1800` to the
    infra2-sdk transport (`infra2_sdk.deploy.dispatch_and_wait`). After the sender stops, nothing verifies
-   the deploy. The `deploy` job therefore refuses a production request that is older than
-   `PRODUCTION_REQUEST_MAX_AGE_SECONDS` in `libs/deploy/app_deploy_request.py`. The value is 1800 s plus a
-   margin of 300 s, so 2100 s. The margin is for the time of the sender's API calls. Receiver run
-   38344114882 was 2178 s old when its sender stopped.
+   the deploy. The deploy must therefore end while the sender still waits.
+   - The `deploy` job needs up to 249 s, the longest of 7 recent production runs. The limit rounds this
+     up to 300 s.
+   - When the `deploy` job starts, it refuses a production request that is older than
+     `PRODUCTION_REQUEST_MAX_AGE_SECONDS` (`libs/deploy/app_deploy_request.py`). The value is 1800 s minus
+     300 s, so 1500 s. An older request would end after its sender stopped.
+   - Observed: the oldest normal approval came 1390 s after the run was created (receiver run
+     37776291342). It still passes. Receiver run 38344114882 waited 1 h 52 min for approval and was
+     6955 s old then. The check refuses it.
    - The age is the time from the `created_at` of the receiver run to the check. A re-run does not change
      `created_at`, so a re-run cannot make an old request new.
    - The credential-free `plan` step reads `created_at` with `gh api` and gives it as
      `--request-created-at`. The check runs before the `iac_ref` comparison and before all steps that
      hold a secret. A negative age or a missing time also stops a production request.
    - A staging request has no age limit, because it can wait in the queue. The step reads no time for it.
-   - The refusal is `request expired: created <iso>, now <iso>, limit 2100 s. The sender has stopped
+   - The refusal is `request expired: created <iso>, now <iso>, limit 1500 s. The sender has stopped
      waiting. Dispatch the release again.`
-   - The check runs once, when the `deploy` job starts. A deploy that starts near the limit can end after
-     its sender stopped. #1232 records a sender-side cancel for this case.
+   - The check runs once, when the `deploy` job starts. A `deploy` job longer than 300 s can still end
+     after its sender stopped. #1232 records a sender-side cancel for this case.
 
 Finance Report 的 staging/prod/rollback 已全部 cut over 到 receiver，App 仓库不再
 checkout 或执行 infra2 源码。Production 没有 CLI bypass；receiver 通过只读 GitHub API

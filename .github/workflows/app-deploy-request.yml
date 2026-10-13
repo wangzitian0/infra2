@@ -155,7 +155,7 @@ jobs:
           # the canary proved (a tag cut between the two checkouts fails here).
           CANARIED_IAC_REF: ${{ needs.preflight_canary.outputs.iac_ref }}
           # The condition of this job's environment (#1232). The receiver refuses a
-          # production request that is older than its sender's wait.
+          # production request that cannot end before its sender stops waiting.
           REQUEST_IS_PRODUCTION: ${{ github.event.client_payload.deploy_type == 'prod' }}
         run: |
           set -euo pipefail
