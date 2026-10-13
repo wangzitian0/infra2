@@ -8,7 +8,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -319,38 +319,44 @@ def test_receiver_run_name_matches_what_senders_poll_for() -> None:
 
 
 # Request expiry (#1232). The deploy job reads the first creation time of its run and
-# gives it to the receiver, which refuses a production request that cannot end before
-# its sender stops waiting. A re-run keeps created_at; run_started_at changes on each
-# attempt.
+# its run attempt, and gives both to the receiver. A re-run keeps created_at, and
+# GITHUB_RUN_ATTEMPT counts the re-runs. Every request reads and parses the time, so
+# staging deploys use the read before production does. Only a production request has
+# the age limit and the re-run rule.
 _ENVIRONMENT_CONDITION = re.compile(
     r"\$\{\{\s*(?P<condition>.+?)\s*&&\s*'production'\s*\|\|\s*'staging'\s*\}\}"
 )
-_AGE_PRE_FILTER = re.compile(
-    r"\$\{\{\s*github\.event\.client_payload\.deploy_type\s*==\s*'(?P<value>[^']*)'"
-    r"\s*\}\}"
+_DEPLOY_TYPE_CONDITION = re.compile(
+    r"github\.event\.client_payload\.deploy_type\s*==\s*'(?P<value>[^']*)'"
 )
 _RUN_CREATED_AT = "2026-10-13T03:57:12Z"
 _RECORD = 'import json, sys; open(sys.argv[1], "w").write(json.dumps(sys.argv[2:]))'
 
 
 def test_the_deploy_job_reads_the_request_age_before_any_secret() -> None:
-    """The age check is in the credential-free plan step of the deploy job. Its
-    production pre-filter is the condition of the job's environment, so the time is
-    read for exactly the requests that wait for the owner."""
+    """The age check is in the credential-free plan step of the deploy job, before
+    every step that holds a secret."""
     job = workflow()["jobs"]["deploy"]
     steps = job["steps"]
     plan_index = next(
         i for i, item in enumerate(steps) if item.get("name") == DEPLOY_PLAN_STEP
     )
     plan = steps[plan_index]
-    environment = _ENVIRONMENT_CONDITION.fullmatch(job["environment"])
-    assert environment, job["environment"]
-    assert plan["env"]["REQUEST_IS_PRODUCTION"] == (
-        "${{ " + environment["condition"] + " }}"
-    )
+    assert "--request-created-at" in plan["run"] and "--run-attempt" in plan["run"]
     assert not SECRET_REF.search(str(plan))
     secret_steps = [i for i, item in enumerate(steps) if SECRET_REF.search(str(item))]
     assert secret_steps and min(secret_steps) > plan_index
+
+
+def test_a_failed_plan_step_stops_the_deploy_job() -> None:
+    """A refusal or a failed read must stop the job. continue-on-error on the step or
+    on the job would let the deploy step run after the refusal; an if: on the step
+    could skip the check."""
+    job = workflow()["jobs"]["deploy"]
+    plan = step(job, DEPLOY_PLAN_STEP)
+    assert "continue-on-error" not in plan
+    assert "continue-on-error" not in job
+    assert "if" not in plan
 
 
 def _executable(path: Path, body: str) -> None:
@@ -373,7 +379,8 @@ def _run_deploy_plan_step(
 
     The fakes record their arguments. The fake receiver prints a minimal plan; every
     other `python` call goes to the real interpreter. Returns the process, the `gh`
-    arguments and the receiver arguments (None when the program did not run)."""
+    arguments and the receiver arguments (None when the program did not run).
+    `production` sets the canary facts that a production request has."""
     definition = workflow()
     job = definition["jobs"]["deploy"]
     plan = step(job, DEPLOY_PLAN_STEP)
@@ -408,7 +415,6 @@ def _run_deploy_plan_step(
     step_env = {
         "PREFLIGHT_CANARY_RESULT": "success" if production else "skipped",
         "CANARIED_IAC_REF": "v1.1.74" if production else "",
-        "REQUEST_IS_PRODUCTION": "true" if production else "false",
     }
     assert set(plan["env"]) == set(step_env), "the harness must set every step env"
     env = {
@@ -441,10 +447,13 @@ def _run_deploy_plan_step(
     return proc, _recorded(tmp_path / "gh.json"), _recorded(tmp_path / "receiver.json")
 
 
-def test_a_production_request_gives_the_run_creation_time_to_the_receiver(
-    tmp_path,
+@pytest.mark.parametrize("production", [True, False])
+def test_every_request_gives_the_run_creation_time_to_the_receiver(
+    tmp_path, production
 ) -> None:
-    proc, gh, receiver = _run_deploy_plan_step(tmp_path, production=True)
+    """A staging deploy runs the same read and parse as a production deploy, so the
+    first production deploy is not the first run of the read."""
+    proc, gh, receiver = _run_deploy_plan_step(tmp_path, production=production)
     assert proc.returncode == 0, proc.stderr
     assert gh == [
         "api",
@@ -466,15 +475,6 @@ def test_a_production_request_gives_the_run_creation_time_to_the_receiver(
     )
 
 
-def test_a_staging_request_reads_no_creation_time(tmp_path) -> None:
-    """Staging behavior does not change: no API read, and no age limit."""
-    proc, gh, receiver = _run_deploy_plan_step(tmp_path, production=False)
-    assert proc.returncode == 0, proc.stderr
-    assert gh is None, f"gh ran for a staging request: {gh}"
-    assert receiver is not None and "--request-created-at" in receiver
-    assert receiver[receiver.index("--request-created-at") + 1] == ""
-
-
 @pytest.mark.parametrize("production", [True, False])
 def test_the_plan_step_gives_the_run_attempt_to_the_receiver(
     tmp_path, production
@@ -489,18 +489,27 @@ def test_the_plan_step_gives_the_run_attempt_to_the_receiver(
     assert receiver[receiver.index("--run-attempt") + 1] == "2"
 
 
-def test_an_unreadable_creation_time_stops_a_production_request(tmp_path) -> None:
-    proc, gh, receiver = _run_deploy_plan_step(tmp_path, production=True, gh_fails=True)
+@pytest.mark.parametrize("production", [True, False])
+def test_an_unreadable_creation_time_stops_every_request(tmp_path, production) -> None:
+    """A failed read fails closed, with no retry. The sender reports the failure, and
+    the release is dispatched again."""
+    proc, gh, receiver = _run_deploy_plan_step(
+        tmp_path, production=production, gh_fails=True
+    )
     assert gh is not None, "the step did not try to read the creation time"
     assert proc.returncode != 0
     assert receiver is None, "the receiver ran without the creation time"
 
 
-def _needs_creation_time(plan: DeployPlan) -> bool:
-    """True when the receiver refuses this request without a creation time."""
+def _refused(plan: DeployPlan, *, created_at: str, run_attempt: str) -> bool:
+    """True when the receiver refuses this request with these run facts."""
+    created = datetime(2026, 10, 13, 3, 57, 12, tzinfo=timezone.utc)
     try:
         check_request_age(
-            plan.request, created_at="", run_attempt="1", now=datetime.now(timezone.utc)
+            plan.request,
+            created_at=created_at,
+            run_attempt=run_attempt,
+            now=created + timedelta(hours=2),
         )
     except ValueError:
         return True
@@ -511,17 +520,31 @@ def _needs_creation_time(plan: DeployPlan) -> bool:
     "deploy_type,operation,plan",
     [pytest.param(*shape, id=f"{shape[0]}-{shape[1]}") for shape in _request_shapes()],
 )
-def test_the_age_pre_filter_mirrors_the_receiver_for_every_request_shape(
+def test_every_request_shape_parses_the_time_and_only_production_is_limited(
     deploy_type, operation, plan
 ) -> None:
-    """The step reads the time only when the payload says production. The receiver
-    must ask for the time for exactly those requests, or a request fails closed."""
-    plan_step = step(workflow()["jobs"]["deploy"], DEPLOY_PLAN_STEP)
-    pre_filter = _AGE_PRE_FILTER.fullmatch(plan_step["env"]["REQUEST_IS_PRODUCTION"])
-    assert pre_filter, plan_step["env"]["REQUEST_IS_PRODUCTION"]
-    assert (deploy_type == pre_filter["value"]) is _needs_creation_time(plan)
+    """Each request needs a valid creation time. The age limit and the re-run rule
+    apply to exactly the requests that wait for the owner: the condition of the
+    deploy job's environment."""
+    environment = _ENVIRONMENT_CONDITION.fullmatch(
+        workflow()["jobs"]["deploy"]["environment"]
+    )
+    assert environment, workflow()["jobs"]["deploy"]["environment"]
+    condition = _DEPLOY_TYPE_CONDITION.fullmatch(environment["condition"])
+    assert condition, environment["condition"]
+    waits_for_the_owner = deploy_type == condition["value"]
+    assert _refused(plan, created_at="", run_attempt="1")
+    assert _refused(plan, created_at=_RUN_CREATED_AT, run_attempt="1") is (
+        waits_for_the_owner
+    )
+    assert _refused(plan, created_at=_RUN_CREATED_AT, run_attempt="2") is (
+        waits_for_the_owner
+    )
 
 
-def test_the_age_pre_filter_mirror_covers_both_outcomes() -> None:
-    outcomes = {_needs_creation_time(plan) for *_shape, plan in _request_shapes()}
+def test_the_request_shapes_cover_both_outcomes() -> None:
+    outcomes = {
+        _refused(plan, created_at=_RUN_CREATED_AT, run_attempt="1")
+        for *_shape, plan in _request_shapes()
+    }
     assert outcomes == {True, False}

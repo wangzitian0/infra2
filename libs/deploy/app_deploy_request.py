@@ -272,13 +272,15 @@ def check_request_age(
 
     ``created_at`` is the first creation time of the receiver run, from the GitHub API.
     A re-run does not change it. ``run_attempt`` is GITHUB_RUN_ATTEMPT: the sender
-    stops when the first attempt ends, so a production re-run is refused. Returns
-    the age in seconds. Returns None for a request that is not production: a staging
-    request can wait in the queue, and it has no age limit and no re-run rule.
+    stops when the first attempt ends, so a production re-run is refused. Every
+    request parses ``created_at``, so staging deploys use the read and the parse
+    before the first production deploy does. Returns the age in seconds. Returns
+    None for a request that is not production: a staging request can wait in the
+    queue, and it has no age limit and no re-run rule.
     """
+    created = _utc_time(created_at)
     if request.deploy_type != DeployType.PRODUCTION:
         return None
-    created = _utc_time(created_at)
     attempt = _run_attempt(run_attempt)
     if attempt != 1:
         raise ValueError(
@@ -312,7 +314,7 @@ def _utc_time(text: str) -> datetime:
     if parsed is None or parsed.tzinfo is None:
         raise ValueError(
             f"request creation time {text!r} is not an ISO 8601 time with a time zone. "
-            "A production request needs the created_at of its receiver run."
+            "Every request needs the created_at of its receiver run."
         )
     return parsed.astimezone(timezone.utc)
 

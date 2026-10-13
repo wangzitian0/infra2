@@ -1152,11 +1152,28 @@ def test_every_production_operation_expires(operation) -> None:
         _age(production_payload(operation=operation), now=INCIDENT_APPROVED)
 
 
-@pytest.mark.parametrize("created_at", [INCIDENT_CREATED_AT, "", "not a time"])
+@pytest.mark.parametrize(
+    "created_at", [INCIDENT_CREATED_AT, "2026-10-13T03:57:12+00:00"]
+)
 def test_a_staging_request_has_no_age_limit(created_at) -> None:
     """A staging request can wait in the queue (#1232 scope: production only)."""
     later = INCIDENT_APPROVED + timedelta(days=1)
     assert _age(payload(), created_at=created_at, now=later) is None
+
+
+@pytest.mark.parametrize(
+    "request_payload",
+    [payload(), payload(deploy_type="preview/pr", version_ref="42")],
+    ids=["staging", "preview"],
+)
+@pytest.mark.parametrize(
+    "created_at", ["", "null", "not a time", "2026-10-13T03:57:12"]
+)
+def test_every_request_needs_a_valid_creation_time(request_payload, created_at) -> None:
+    """Every request parses the time, so staging deploys use the read and the parse
+    before the first production deploy does. Only production has the limits."""
+    with pytest.raises(ValueError, match="^request creation time "):
+        _age(request_payload, created_at=created_at, now=INCIDENT_APPROVED)
 
 
 @pytest.mark.parametrize(
@@ -1222,15 +1239,18 @@ def test_the_deploy_job_executes_a_production_request_inside_the_window(
     assert "request age 1411 s, limit 1440 s" in captured.err
 
 
-@pytest.mark.parametrize("created_at", [INCIDENT_CREATED_AT, ""])
+@pytest.mark.parametrize("run_attempt", ["1", "2"])
 def test_the_deploy_job_does_not_age_a_staging_request(
-    monkeypatch, capsys, created_at
+    monkeypatch, capsys, run_attempt
 ) -> None:
+    """No age limit and no re-run rule for staging: it can wait in the queue."""
     result = _expiry_cli(
         monkeypatch,
         payload(),
         "--request-created-at",
-        created_at,
+        INCIDENT_CREATED_AT,
+        "--run-attempt",
+        run_attempt,
         "--preflight-canary-result",
         "skipped",
         now=INCIDENT_APPROVED + timedelta(days=1),
@@ -1353,6 +1373,28 @@ def test_a_run_attempt_without_a_creation_time_is_refused(monkeypatch, capsys) -
         "--preflight-canary-result",
         "success",
         now=CREATED + timedelta(seconds=600),
+    )
+    assert result == 1
+    assert "app deploy request failed: request creation time ''" in (
+        capsys.readouterr().err
+    )
+
+
+def test_the_deploy_job_refuses_a_staging_request_without_its_creation_time(
+    monkeypatch, capsys
+) -> None:
+    """A staging deploy runs the same read and parse, so a broken read shows on
+    staging first."""
+    result = _expiry_cli(
+        monkeypatch,
+        payload(),
+        "--request-created-at",
+        "",
+        "--run-attempt",
+        "1",
+        "--preflight-canary-result",
+        "skipped",
+        now=INCIDENT_APPROVED,
     )
     assert result == 1
     assert "app deploy request failed: request creation time ''" in (
