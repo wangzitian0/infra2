@@ -57,14 +57,19 @@ FIXED_DEPLOY_TYPES = frozenset({DeployType.STAGING, DeployType.PRODUCTION})
 #: libs/tests/test_app_deploy_request_workflow.py pins the two to each other and the
 #: receiver re-checks it at run time, so they cannot drift apart silently.
 PREFLIGHT_CANARY_DEPLOY_TYPES = frozenset({DeployType.PRODUCTION})
-#: The maximum age of a production request when the deploy job starts, in seconds
-#: (#1232). Each sender waits 1800 s for its receiver run: truealpha deploy-release.yml
-#: and finance_report deploy.yml and release.yml give `--timeout 1800` to the infra2-sdk
-#: transport (infra2_sdk.deploy.dispatch_and_wait). The deploy job needs up to 249 s
-#: (the longest of 7 recent production runs), rounded up to 300 s. A request older than
-#: 1800 s - 300 s when the deploy job starts would end after its sender stopped. Then
-#: nothing verifies the deploy, so the receiver refuses the request.
-PRODUCTION_REQUEST_MAX_AGE_SECONDS = 1800 - 300
+#: The maximum age of a production request when the receiver checks it: 24 min (#1232).
+#: Two senders wait for a receiver run. The receiver cannot read their deadlines, so
+#: one limit serves both, and it is set for the sender that stops first:
+#: - finance_report release.yml: a 30 min job limit stops the sender 1739 s to 1761 s
+#:   after the receiver run is created (13 runs), so about 1740 s.
+#: - truealpha deploy-release.yml: 360 polls at 5 s intervals. Its sender stopped 2178 s
+#:   after the receiver run was created (run 38344114882).
+#: The deploy job then needs up to 293 s (the longest of 25 production runs), so the
+#: limit keeps 300 s for it: about 1740 s minus 300 s is 24 min. For truealpha, the
+#: limit is conservative. A request that starts near the limit can still end after the
+#: finance_report sender stops. docs/ssot/ops.pipeline.md section 4.1 item 7 has the
+#: details and the gap that remains.
+PRODUCTION_REQUEST_MAX_AGE_SECONDS = 24 * 60
 
 
 @dataclass(frozen=True)
@@ -262,7 +267,7 @@ def make_plan(
 def check_request_age(
     request: DeployRequest, *, created_at: str, now: datetime
 ) -> float | None:
-    """Refuse a production request whose deploy would end after its sender stopped (#1232).
+    """Refuse a production request whose deploy can end after its sender stops (#1232).
 
     ``created_at`` is the first creation time of the receiver run, from the GitHub API.
     A re-run does not change it, so a re-run cannot make an old request new. Returns
@@ -284,8 +289,9 @@ def check_request_age(
     if age > PRODUCTION_REQUEST_MAX_AGE_SECONDS:
         raise ValueError(
             f"request expired: created {_iso(created)}, now {_iso(current)}, "
-            f"limit {PRODUCTION_REQUEST_MAX_AGE_SECONDS} s. The sender will stop waiting "
-            "before this deploy ends. Dispatch the release again."
+            f"limit {PRODUCTION_REQUEST_MAX_AGE_SECONDS} s. A sender may stop waiting "
+            "before this deploy ends, and nothing would verify the deploy. Dispatch the "
+            "release again."
         )
     return age
 
