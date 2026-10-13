@@ -1079,7 +1079,8 @@ INCIDENT_SENDER_STOPPED = datetime(2026, 10, 13, 4, 33, 30, tzinfo=timezone.utc)
 INCIDENT_APPROVED = datetime(2026, 10, 13, 5, 53, 7, tzinfo=timezone.utc)
 INCIDENT_REFUSAL = (
     "request expired: created 2026-10-13T03:57:12Z, now 2026-10-13T05:53:07Z, "
-    "limit 1500 s. The sender has stopped waiting. Dispatch the release again."
+    "limit 1500 s. The sender will stop waiting before this deploy ends. "
+    "Dispatch the release again."
 )
 
 

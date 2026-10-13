@@ -284,8 +284,8 @@ def check_request_age(
     if age > PRODUCTION_REQUEST_MAX_AGE_SECONDS:
         raise ValueError(
             f"request expired: created {_iso(created)}, now {_iso(current)}, "
-            f"limit {PRODUCTION_REQUEST_MAX_AGE_SECONDS} s. The sender has stopped "
-            "waiting. Dispatch the release again."
+            f"limit {PRODUCTION_REQUEST_MAX_AGE_SECONDS} s. The sender will stop waiting "
+            "before this deploy ends. Dispatch the release again."
         )
     return age
 

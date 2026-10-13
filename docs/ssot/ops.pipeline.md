@@ -242,8 +242,8 @@ App 不再 checkout/执行 infra2。发送 `repository_dispatch` type `app-deplo
      `--request-created-at`. The check runs before the `iac_ref` comparison and before all steps that
      hold a secret. A negative age or a missing time also stops a production request.
    - A staging request has no age limit, because it can wait in the queue. The step reads no time for it.
-   - The refusal is `request expired: created <iso>, now <iso>, limit 1500 s. The sender has stopped
-     waiting. Dispatch the release again.`
+   - The refusal is `request expired: created <iso>, now <iso>, limit 1500 s. The sender will stop
+     waiting before this deploy ends. Dispatch the release again.`
    - The check runs once, when the `deploy` job starts. A `deploy` job longer than 300 s can still end
      after its sender stopped. #1232 records a sender-side cancel for this case.
 
