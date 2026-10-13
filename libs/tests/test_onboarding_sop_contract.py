@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-import pytest
 
 from infra2_sdk.scaffold import main
 
 
 def _get_sop_text() -> str:
-    sop_path = Path(__file__).resolve().parent.parent.parent / "docs" / "onboarding" / "07.new-service-sop.md"
+    sop_path = (
+        Path(__file__).resolve().parent.parent.parent
+        / "docs"
+        / "onboarding"
+        / "07.new-service-sop.md"
+    )
     assert sop_path.is_file(), f"SOP file missing: {sop_path}"
     return sop_path.read_text(encoding="utf-8")
 
@@ -21,7 +25,9 @@ def test_onboarding_sop_does_not_mention_deleted_generic_template() -> None:
     The SOP must not advertise `generic` as a valid template option.
     """
     text = _get_sop_text()
-    assert "generic" not in text, "07.new-service-sop.md still references deleted 'generic' template"
+    assert "generic" not in text, (
+        "07.new-service-sop.md still references deleted 'generic' template"
+    )
 
 
 def test_onboarding_sop_scaffold_command_flags_are_valid() -> None:
@@ -29,8 +35,14 @@ def test_onboarding_sop_scaffold_command_flags_are_valid() -> None:
     text = _get_sop_text()
 
     # Extract the scaffold command block
-    match = re.search(r"```bash\s*\n\s*uv run python -m infra2_sdk\.scaffold\s+(.*?)\n\s*```", text, re.DOTALL)
-    assert match is not None, "Could not locate scaffold command block in 07.new-service-sop.md"
+    match = re.search(
+        r"```bash\s*\n\s*uv run python -m infra2_sdk\.scaffold\s+(.*?)\n\s*```",
+        text,
+        re.DOTALL,
+    )
+    assert match is not None, (
+        "Could not locate scaffold command block in 07.new-service-sop.md"
+    )
 
     raw_command = match.group(1)
     # Tokenize arguments, replacing line-continuation backslashes
@@ -54,4 +66,3 @@ def test_onboarding_sop_scaffold_command_flags_are_valid() -> None:
         ret = main(cleaned_tokens)
         assert ret == 0, f"scaffold CLI returned non-zero code {ret}"
         mock_scaffold.assert_called_once()
-
