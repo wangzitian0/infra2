@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -37,6 +39,8 @@ __all__ = [
     "FIXED_DEPLOY_TYPES",
     "MINIMUM_PRODUCTION_MARKER",
     "PREFLIGHT_CANARY_DEPLOY_TYPES",
+    "PRODUCTION_REQUEST_MAX_AGE_SECONDS",
+    "check_request_age",
     "make_plan",
     "marker_status",
     "newest_release_tag",
@@ -54,6 +58,19 @@ FIXED_DEPLOY_TYPES = frozenset({DeployType.STAGING, DeployType.PRODUCTION})
 #: libs/tests/test_app_deploy_request_workflow.py pins the two to each other and the
 #: receiver re-checks it at run time, so they cannot drift apart silently.
 PREFLIGHT_CANARY_DEPLOY_TYPES = frozenset({DeployType.PRODUCTION})
+#: The maximum age of a production request when the receiver checks it: 24 min (#1232).
+#: Two senders wait for a receiver run. The receiver cannot read their deadlines, so
+#: one limit serves both, and it is set for the sender that stops first:
+#: - finance_report release.yml: a 30 min job limit stops the sender 1739 s to 1761 s
+#:   after the receiver run is created (13 runs), so about 1740 s.
+#: - truealpha deploy-release.yml: 360 polls at 5 s intervals. Its sender stopped 2178 s
+#:   after the receiver run was created (run 38344114882).
+#: The deploy job then needs up to 293 s (the longest of 25 production runs), so the
+#: limit keeps 300 s for it: about 1740 s minus 300 s is 24 min. For truealpha, the
+#: limit is conservative. A request that starts near the limit can still end after the
+#: finance_report sender stops. docs/ssot/ops.pipeline.md section 4.1 item 7 has the
+#: details and the gap that remains.
+PRODUCTION_REQUEST_MAX_AGE_SECONDS = 24 * 60
 
 
 @dataclass(frozen=True)
@@ -246,6 +263,73 @@ def make_plan(
             else ""
         ),
     )
+
+
+def check_request_age(
+    request: DeployRequest, *, created_at: str, run_attempt: str, now: datetime
+) -> float | None:
+    """Refuse a production request whose deploy can end after its sender stops (#1232).
+
+    ``created_at`` is the first creation time of the receiver run, from the GitHub API.
+    A re-run does not change it. ``run_attempt`` is GITHUB_RUN_ATTEMPT: the sender
+    stops when the first attempt ends, so a production re-run is refused. Every
+    request parses ``created_at``, so staging deploys use the read and the parse
+    before the first production deploy does. Returns the age in seconds. Returns
+    None for a request that is not production: a staging request can wait in the
+    queue, and it has no age limit and no re-run rule.
+    """
+    created = _utc_time(created_at)
+    if request.deploy_type != DeployType.PRODUCTION:
+        return None
+    attempt = _run_attempt(run_attempt)
+    if attempt != 1:
+        raise ValueError(
+            f"request is a re-run (attempt {attempt}). The sender does not wait for a "
+            "re-run, and nothing would verify the deploy. Dispatch the release again."
+        )
+    if now.tzinfo is None:
+        raise ValueError("the current time must have a time zone")
+    current = now.astimezone(timezone.utc)
+    age = (current - created).total_seconds()
+    if age < 0:
+        raise ValueError(
+            f"request age is negative: created {_iso(created)}, now {_iso(current)}. "
+            "The runner clock or the creation time is wrong. Dispatch the release again."
+        )
+    if age > PRODUCTION_REQUEST_MAX_AGE_SECONDS:
+        raise ValueError(
+            f"request expired: created {_iso(created)}, now {_iso(current)}, "
+            f"limit {PRODUCTION_REQUEST_MAX_AGE_SECONDS} s. A sender may stop waiting "
+            "before this deploy ends, and nothing would verify the deploy. Dispatch the "
+            "release again."
+        )
+    return age
+
+
+def _utc_time(text: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        parsed = None
+    if parsed is None or parsed.tzinfo is None:
+        raise ValueError(
+            f"request creation time {text!r} is not an ISO 8601 time with a time zone. "
+            "Every request needs the created_at of its receiver run."
+        )
+    return parsed.astimezone(timezone.utc)
+
+
+def _run_attempt(text: str) -> int:
+    if not re.fullmatch(r"[1-9][0-9]*", text):
+        raise ValueError(
+            f"run attempt {text!r} is not a positive integer. A production request "
+            "needs the GITHUB_RUN_ATTEMPT of its receiver run."
+        )
+    return int(text)
+
+
+def _iso(moment: datetime) -> str:
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _validate_evidence_urls(request: DeployRequest) -> None:

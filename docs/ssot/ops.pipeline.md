@@ -224,6 +224,42 @@ App 不再 checkout/执行 infra2。发送 `repository_dispatch` type `app-deplo
    不覆盖 promote；`deploy` job 断言自己的 checkout 仍选出 canary 证明过的 `iac_ref`。canary job 的 `if:` 在任何
    plan 之前求值，只能读 payload，它镜像 `DeployPlan.requires_preflight_canary`：workflow 测试把两者钉在一起，
    运行时两边再对 plan 复核（`--require-preflight-canary` / `--preflight-canary-result`），漂移即 fail-closed。
+7. **A production request expires (#1232).** The sender of a request waits for the receiver run, and then it
+   verifies the deploy. After the sender stops, nothing verifies the deploy, so the deploy must end while the
+   sender waits. The receiver cannot read the deadline of a sender. So one limit serves all senders, and it is
+   set for the sender that stops first.
+   - finance_report `release.yml` runs its sender in a job with a 30 min limit. The transport starts 35 s to
+     58 s into the job. So the job stops 1739 s to 1761 s after the receiver run is created (13 runs), about
+     1740 s.
+   - truealpha `deploy-release.yml` polls 360 times at 5 s intervals (`--timeout 1800`). Its API calls add
+     time: its sender stopped 2178 s after the receiver run was created (run 38344114882).
+   - The `deploy` job needs up to 228 s in the last 7 production runs, 255 s in the last 12, and 293 s in the
+     last 25 (run 37603192925). The limit keeps 300 s for it, 7 s more than the longest.
+   - So the receiver refuses a production request that is older than `PRODUCTION_REQUEST_MAX_AGE_SECONDS`
+     (`libs/deploy/app_deploy_request.py`): about 1740 s minus 300 s, which is 24 min (1440 s). For
+     truealpha, the limit is conservative.
+   - The age is the time from the `created_at` of the receiver run to the check in the `plan` step. The oldest
+     normal approval was 1411 s old at the check (receiver run 37776291342), 29 s inside the limit. An approval
+     more than 29 s later is refused, and the release must then be dispatched again.
+   - A re-run keeps `created_at`, but the sender stops when the first attempt ends. So the receiver refuses a
+     production request whose `GITHUB_RUN_ATTEMPT` is not 1. A missing or non-integer attempt also stops it.
+   - The credential-free `plan` step of the `deploy` job reads `created_at` with `gh api` for every request. It
+     gives the time as `--request-created-at` and the attempt as `--run-attempt`. The receiver parses the time
+     for every request, so staging deploys use the read before production does. A failed read stops the step,
+     with no retry: the sender reports the failure, and the release is dispatched again.
+   - Only a production request has the age limit and the re-run rule. A staging request can wait in the queue.
+   - These checks run before the `iac_ref` comparison and before all steps that hold a secret. A missing or
+     unparsable time stops every request. A negative age also stops a production request.
+   - The refusals are `request expired: created <iso>, now <iso>, limit 1440 s. A sender may stop waiting
+     before this deploy ends, and nothing would verify the deploy. Dispatch the release again.` and `request is
+     a re-run (attempt N). The sender does not wait for a re-run, and nothing would verify the deploy. Dispatch
+     the release again.`
+   - The main purpose of the check is to stop a late approval. The owner approved receiver run 38344114882 after
+     it waited 1 h 52 min, when the request was 6955 s old.
+   - Gap that remains: the check runs once, when the plan step runs. A request that starts near the limit can
+     still end after the finance_report sender stops. finance_report also needs 36 s to 62 s after the deploy
+     for its post-deploy checks (255 s once, with a cold E2E setup), inside the same 30 min job. To close the
+     gap, the request must carry the deadline of its sender. That is an infra2-sdk change.
 
 Finance Report 的 staging/prod/rollback 已全部 cut over 到 receiver，App 仓库不再
 checkout 或执行 infra2 源码。Production 没有 CLI bypass；receiver 通过只读 GitHub API

@@ -1,18 +1,31 @@
-"""Static contract for the app-deploy-request repository_dispatch receiver."""
+"""Contract for the app-deploy-request repository_dispatch receiver.
 
+Most tests read the workflow. The request-expiry tests (#1232) also run the plan step
+of the deploy job with a fake `gh` and a fake receiver."""
+
+import json
+import os
 import re
+import subprocess
+import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 import yaml
 from infra2_sdk.deploy import DeployOperation, DeployRequest, DeployType
 
-from libs.deploy.app_deploy_request import PREFLIGHT_CANARY_DEPLOY_TYPES, DeployPlan
+from libs.deploy.app_deploy_request import (
+    PREFLIGHT_CANARY_DEPLOY_TYPES,
+    DeployPlan,
+    check_request_age,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/app-deploy-request.yml"
 SECRET_REF = re.compile(r"\$\{\{\s*secrets\.")
 RECEIVER_CLI = "python -m tools.app_deploy_request"
+DEPLOY_PLAN_STEP = "Validate and display the side-effect-free plan"
 
 
 def workflow() -> dict:
@@ -303,3 +316,235 @@ def test_receiver_run_name_matches_what_senders_poll_for() -> None:
         "${{ github.event.client_payload.source_sha }} "
         "[${{ github.event.client_payload.request_id }}]"
     )
+
+
+# Request expiry (#1232). The deploy job reads the first creation time of its run and
+# its run attempt, and gives both to the receiver. A re-run keeps created_at, and
+# GITHUB_RUN_ATTEMPT counts the re-runs. Every request reads and parses the time, so
+# staging deploys use the read before production does. Only a production request has
+# the age limit and the re-run rule.
+_ENVIRONMENT_CONDITION = re.compile(
+    r"\$\{\{\s*(?P<condition>.+?)\s*&&\s*'production'\s*\|\|\s*'staging'\s*\}\}"
+)
+_DEPLOY_TYPE_CONDITION = re.compile(
+    r"github\.event\.client_payload\.deploy_type\s*==\s*'(?P<value>[^']*)'"
+)
+_RUN_CREATED_AT = "2026-10-13T03:57:12Z"
+_RECORD = 'import json, sys; open(sys.argv[1], "w").write(json.dumps(sys.argv[2:]))'
+
+
+def test_the_deploy_job_reads_the_request_age_before_any_secret() -> None:
+    """The age check is in the credential-free plan step of the deploy job, before
+    every step that holds a secret."""
+    job = workflow()["jobs"]["deploy"]
+    steps = job["steps"]
+    plan_index = next(
+        i for i, item in enumerate(steps) if item.get("name") == DEPLOY_PLAN_STEP
+    )
+    plan = steps[plan_index]
+    assert "--request-created-at" in plan["run"] and "--run-attempt" in plan["run"]
+    assert not SECRET_REF.search(str(plan))
+    secret_steps = [i for i, item in enumerate(steps) if SECRET_REF.search(str(item))]
+    assert secret_steps and min(secret_steps) > plan_index
+
+
+def test_a_failed_plan_step_stops_the_deploy_job() -> None:
+    """A refusal or a failed read must stop the job. continue-on-error on the step or
+    on the job would let the deploy step run after the refusal; an if: on the step
+    could skip the check."""
+    job = workflow()["jobs"]["deploy"]
+    plan = step(job, DEPLOY_PLAN_STEP)
+    assert "continue-on-error" not in plan
+    assert "continue-on-error" not in job
+    assert "if" not in plan
+
+
+def _executable(path: Path, body: str) -> None:
+    path.write_text(body, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _recorded(path: Path) -> list[str] | None:
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
+
+
+def _run_deploy_plan_step(
+    tmp_path: Path,
+    *,
+    production: bool,
+    gh_fails: bool = False,
+    run_attempt: str = "1",
+) -> tuple[subprocess.CompletedProcess[str], list[str] | None, list[str] | None]:
+    """Run the plan step's own script with a fake `gh` and a fake receiver.
+
+    The fakes record their arguments. The fake receiver prints a minimal plan; every
+    other `python` call goes to the real interpreter. Returns the process, the `gh`
+    arguments and the receiver arguments (None when the program did not run).
+    `production` sets the canary facts that a production request has."""
+    definition = workflow()
+    job = definition["jobs"]["deploy"]
+    plan = step(job, DEPLOY_PLAN_STEP)
+    run = plan["run"]
+    assert "${{" not in run, "the harness cannot run a workflow expression"
+    declared = [
+        plan.get("shell"),
+        ((job.get("defaults") or {}).get("run") or {}).get("shell"),
+        ((definition.get("defaults") or {}).get("run") or {}).get("shell"),
+    ]
+    assert not any(declared), f"a `shell:` override is in play ({declared})"
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _executable(
+        bin_dir / "gh",
+        "#!/bin/bash\n"
+        f'"$REAL_PYTHON" -c \'{_RECORD}\' "$RECORD_DIR/gh.json" "$@"\n'
+        'if [ -n "${GH_FAILS:-}" ]; then echo "HTTP 502" >&2; exit 1; fi\n'
+        f"echo '{_RUN_CREATED_AT}'\n",
+    )
+    _executable(
+        bin_dir / "python",
+        "#!/bin/bash\n"
+        'if [ "${1:-}" = "-m" ] && [ "${2:-}" = "tools.app_deploy_request" ]; then\n'
+        f'  "$REAL_PYTHON" -c \'{_RECORD}\' "$RECORD_DIR/receiver.json" "$@"\n'
+        """  echo '{"iac_ref": "v1.1.74"}'\n"""
+        "  exit 0\n"
+        "fi\n"
+        'exec "$REAL_PYTHON" "$@"\n',
+    )
+    step_env = {
+        "PREFLIGHT_CANARY_RESULT": "success" if production else "skipped",
+        "CANARIED_IAC_REF": "v1.1.74" if production else "",
+    }
+    assert set(plan["env"]) == set(step_env), "the harness must set every step env"
+    env = {
+        **os.environ,
+        **step_env,
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "REAL_PYTHON": sys.executable,
+        "RECORD_DIR": str(tmp_path),
+        "GITHUB_REPOSITORY": "wangzitian0/infra2",
+        "GITHUB_RUN_ID": "38344114882",
+        "GITHUB_RUN_ATTEMPT": run_attempt,
+        "GITHUB_OUTPUT": str(tmp_path / "github_output"),
+        "APP_DEPLOY_REQUEST_SENDER": "wangzitian0",
+        "INTERNAL_DOMAIN": "zitian.party",
+    }
+    env.pop("GH_FAILS", None)
+    if gh_fails:
+        env["GH_FAILS"] = "1"
+    script = tmp_path / "step.sh"
+    script.write_text(run, encoding="utf-8")
+    proc = subprocess.run(
+        # GitHub's default shell for `run:` on Linux is `bash -e {0}`.
+        ["bash", "-e", str(script)],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+    )
+    return proc, _recorded(tmp_path / "gh.json"), _recorded(tmp_path / "receiver.json")
+
+
+@pytest.mark.parametrize("production", [True, False])
+def test_every_request_gives_the_run_creation_time_to_the_receiver(
+    tmp_path, production
+) -> None:
+    """A staging deploy runs the same read and parse as a production deploy, so the
+    first production deploy is not the first run of the read."""
+    proc, gh, receiver = _run_deploy_plan_step(tmp_path, production=production)
+    assert proc.returncode == 0, proc.stderr
+    assert gh == [
+        "api",
+        "repos/wangzitian0/infra2/actions/runs/38344114882",
+        "--jq",
+        ".created_at",
+    ]
+    assert receiver is not None and receiver[:3] == [
+        "-m",
+        "tools.app_deploy_request",
+        "plan",
+    ]
+    assert "--request-created-at" in receiver
+    assert receiver[receiver.index("--request-created-at") + 1] == _RUN_CREATED_AT
+    assert "--run-attempt" in receiver
+    assert receiver[receiver.index("--run-attempt") + 1] == "1"
+    assert (tmp_path / "github_output").read_text(encoding="utf-8") == (
+        "iac_ref=v1.1.74\n"
+    )
+
+
+@pytest.mark.parametrize("production", [True, False])
+def test_the_plan_step_gives_the_run_attempt_to_the_receiver(
+    tmp_path, production
+) -> None:
+    """GITHUB_RUN_ATTEMPT counts the re-runs of this run. The receiver refuses a
+    production re-run, because its sender stopped when the first attempt ended."""
+    proc, _gh, receiver = _run_deploy_plan_step(
+        tmp_path, production=production, run_attempt="2"
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert receiver is not None and "--run-attempt" in receiver
+    assert receiver[receiver.index("--run-attempt") + 1] == "2"
+
+
+@pytest.mark.parametrize("production", [True, False])
+def test_an_unreadable_creation_time_stops_every_request(tmp_path, production) -> None:
+    """A failed read fails closed, with no retry. The sender reports the failure, and
+    the release is dispatched again."""
+    proc, gh, receiver = _run_deploy_plan_step(
+        tmp_path, production=production, gh_fails=True
+    )
+    assert gh is not None, "the step did not try to read the creation time"
+    assert proc.returncode != 0
+    assert receiver is None, "the receiver ran without the creation time"
+
+
+def _refused(plan: DeployPlan, *, created_at: str, run_attempt: str) -> bool:
+    """True when the receiver refuses this request with these run facts."""
+    created = datetime(2026, 10, 13, 3, 57, 12, tzinfo=timezone.utc)
+    try:
+        check_request_age(
+            plan.request,
+            created_at=created_at,
+            run_attempt=run_attempt,
+            now=created + timedelta(hours=2),
+        )
+    except ValueError:
+        return True
+    return False
+
+
+@pytest.mark.parametrize(
+    "deploy_type,operation,plan",
+    [pytest.param(*shape, id=f"{shape[0]}-{shape[1]}") for shape in _request_shapes()],
+)
+def test_every_request_shape_parses_the_time_and_only_production_is_limited(
+    deploy_type, operation, plan
+) -> None:
+    """Each request needs a valid creation time. The age limit and the re-run rule
+    apply to exactly the requests that wait for the owner: the condition of the
+    deploy job's environment."""
+    environment = _ENVIRONMENT_CONDITION.fullmatch(
+        workflow()["jobs"]["deploy"]["environment"]
+    )
+    assert environment, workflow()["jobs"]["deploy"]["environment"]
+    condition = _DEPLOY_TYPE_CONDITION.fullmatch(environment["condition"])
+    assert condition, environment["condition"]
+    waits_for_the_owner = deploy_type == condition["value"]
+    assert _refused(plan, created_at="", run_attempt="1")
+    assert _refused(plan, created_at=_RUN_CREATED_AT, run_attempt="1") is (
+        waits_for_the_owner
+    )
+    assert _refused(plan, created_at=_RUN_CREATED_AT, run_attempt="2") is (
+        waits_for_the_owner
+    )
+
+
+def test_the_request_shapes_cover_both_outcomes() -> None:
+    outcomes = {
+        _refused(plan, created_at=_RUN_CREATED_AT, run_attempt="1")
+        for *_shape, plan in _request_shapes()
+    }
+    assert outcomes == {True, False}

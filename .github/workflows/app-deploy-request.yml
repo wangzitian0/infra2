@@ -156,10 +156,18 @@ jobs:
           CANARIED_IAC_REF: ${{ needs.preflight_canary.outputs.iac_ref }}
         run: |
           set -euo pipefail
+          # The request age check (#1232). created_at is the first creation time of this
+          # run: a re-run keeps it, and GITHUB_RUN_ATTEMPT counts the re-runs. Every
+          # request reads and parses the time, so staging deploys use this read before
+          # production does. Only a production request has the age limit and the re-run
+          # rule. A failed read stops the step; the sender reports the failure.
+          request_created_at="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)"
           plan="$(python -m tools.app_deploy_request plan \
             --sender "$APP_DEPLOY_REQUEST_SENDER" \
             --domain "$INTERNAL_DOMAIN" \
             --repo-root . \
+            --request-created-at "$request_created_at" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --expected-iac-ref "$CANARIED_IAC_REF" \
             --preflight-canary-result "$PREFLIGHT_CANARY_RESULT")"
           printf '%s\n' "$plan" | python -m json.tool
