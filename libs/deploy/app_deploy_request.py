@@ -6,6 +6,7 @@ import json
 import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -37,6 +38,8 @@ __all__ = [
     "FIXED_DEPLOY_TYPES",
     "MINIMUM_PRODUCTION_MARKER",
     "PREFLIGHT_CANARY_DEPLOY_TYPES",
+    "PRODUCTION_REQUEST_MAX_AGE_SECONDS",
+    "check_request_age",
     "make_plan",
     "marker_status",
     "newest_release_tag",
@@ -54,6 +57,14 @@ FIXED_DEPLOY_TYPES = frozenset({DeployType.STAGING, DeployType.PRODUCTION})
 #: libs/tests/test_app_deploy_request_workflow.py pins the two to each other and the
 #: receiver re-checks it at run time, so they cannot drift apart silently.
 PREFLIGHT_CANARY_DEPLOY_TYPES = frozenset({DeployType.PRODUCTION})
+#: The maximum age of a production request that the receiver executes, in seconds
+#: (#1232). Each sender waits 1800 s for its receiver run: truealpha deploy-release.yml
+#: and finance_report deploy.yml and release.yml give `--timeout 1800` to the infra2-sdk
+#: transport (infra2_sdk.deploy.dispatch_and_wait). Each poll also makes a GitHub API
+#: call, so a sender stops some time after 1800 s. The 300 s margin is for that time.
+#: Receiver run 38344114882 was 2178 s old when its sender stopped. After the sender
+#: stops, nothing verifies the deploy, so the receiver refuses an older request.
+PRODUCTION_REQUEST_MAX_AGE_SECONDS = 1800 + 300
 
 
 @dataclass(frozen=True)
@@ -246,6 +257,54 @@ def make_plan(
             else ""
         ),
     )
+
+
+def check_request_age(
+    request: DeployRequest, *, created_at: str, now: datetime
+) -> float | None:
+    """Refuse a production request that its sender no longer waits for (#1232).
+
+    ``created_at`` is the first creation time of the receiver run, from the GitHub API.
+    A re-run does not change it, so a re-run cannot make an old request new. Returns
+    the age in seconds. Returns None for a request that is not production: a staging
+    request can wait in the queue, and it has no age limit.
+    """
+    if request.deploy_type != DeployType.PRODUCTION:
+        return None
+    created = _utc_time(created_at)
+    if now.tzinfo is None:
+        raise ValueError("the current time must have a time zone")
+    current = now.astimezone(timezone.utc)
+    age = (current - created).total_seconds()
+    if age < 0:
+        raise ValueError(
+            f"request age is negative: created {_iso(created)}, now {_iso(current)}. "
+            "The runner clock or the creation time is wrong. Dispatch the release again."
+        )
+    if age > PRODUCTION_REQUEST_MAX_AGE_SECONDS:
+        raise ValueError(
+            f"request expired: created {_iso(created)}, now {_iso(current)}, "
+            f"limit {PRODUCTION_REQUEST_MAX_AGE_SECONDS} s. The sender has stopped "
+            "waiting. Dispatch the release again."
+        )
+    return age
+
+
+def _utc_time(text: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        parsed = None
+    if parsed is None or parsed.tzinfo is None:
+        raise ValueError(
+            f"request creation time {text!r} is not an ISO 8601 time with a time zone. "
+            "A production request needs the created_at of its receiver run."
+        )
+    return parsed.astimezone(timezone.utc)
+
+
+def _iso(moment: datetime) -> str:
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _validate_evidence_urls(request: DeployRequest) -> None:

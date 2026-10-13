@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Sequence
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 # libs.deploy.release_markers is pure git; libs.deploy.app_deploy_request pulls in infra2_sdk and is
@@ -91,6 +92,11 @@ def check_preflight_canary_gate(
         )
 
 
+def _utc_now() -> datetime:
+    """The runner clock. A test replaces it."""
+    return datetime.now(timezone.utc)
+
+
 def _payload_from_env(name: str) -> str:
     payload = os.getenv(name, "")
     if not payload:
@@ -110,6 +116,13 @@ def _parser() -> argparse.ArgumentParser:
         "--expected-iac-ref",
         default="",
         help="fail if the freshly validated plan no longer matches this prior coordinate",
+    )
+    parser.add_argument(
+        "--request-created-at",
+        default=None,
+        help="the receiver run's created_at; a production request older than "
+        "PRODUCTION_REQUEST_MAX_AGE_SECONDS is refused before the iac_ref check "
+        "(an empty value refuses a production request; not given: no age check)",
     )
     parser.add_argument(
         "--require-preflight-canary",
@@ -135,7 +148,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(status.line())
             return 1 if status.stale else 0
 
-        from libs.deploy.app_deploy_request import make_plan
+        from libs.deploy.app_deploy_request import (
+            PRODUCTION_REQUEST_MAX_AGE_SECONDS,
+            check_request_age,
+            make_plan,
+        )
 
         if not args.sender or not args.domain:
             raise ValueError("--sender and --domain are required for plan and execute")
@@ -146,6 +163,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             timeout=args.timeout,
             repo_root=args.repo_root,
         )
+        # The age goes first (#1232): an expired request is refused for its age, even
+        # when a newer production marker also changed its iac_ref.
+        if args.request_created_at is not None:
+            age = check_request_age(
+                plan.request, created_at=args.request_created_at, now=_utc_now()
+            )
+            if age is not None:
+                print(
+                    f"request age {age:.0f} s, limit "
+                    f"{PRODUCTION_REQUEST_MAX_AGE_SECONDS} s",
+                    file=sys.stderr,
+                )
         if args.expected_iac_ref and plan.iac_ref != args.expected_iac_ref:
             raise ValueError(
                 "validated iac_ref changed during the receiver run: "

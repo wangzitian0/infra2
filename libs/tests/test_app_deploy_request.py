@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -1066,4 +1067,180 @@ def test_gate_is_not_checked_for_an_operator_run_without_the_flags(tmp_path) -> 
         receiver_cli.check_preflight_canary_gate(plan, canary_result="skipped")
     receiver_cli.check_preflight_canary_gate(
         plan, canary_job_ran=True, canary_result="success"
+    )
+
+
+# Request expiry (#1232). Facts from the GitHub API, read on 2026-10-13: receiver run
+# 38344114882 was created at 03:57:12Z. Its sender (truealpha run 38344073277) stopped
+# waiting at 04:33:30Z. The owner approved the deploy job at 05:53:07Z.
+INCIDENT_CREATED_AT = "2026-10-13T03:57:12Z"
+CREATED = datetime(2026, 10, 13, 3, 57, 12, tzinfo=timezone.utc)
+INCIDENT_SENDER_STOPPED = datetime(2026, 10, 13, 4, 33, 30, tzinfo=timezone.utc)
+INCIDENT_APPROVED = datetime(2026, 10, 13, 5, 53, 7, tzinfo=timezone.utc)
+INCIDENT_REFUSAL = (
+    "request expired: created 2026-10-13T03:57:12Z, now 2026-10-13T05:53:07Z, "
+    "limit 2100 s. The sender has stopped waiting. Dispatch the release again."
+)
+
+
+def _age(
+    request_payload: dict, *, now: datetime, created_at: str = INCIDENT_CREATED_AT
+) -> float | None:
+    return receiver.check_request_age(
+        receiver.parse_request(request_payload), created_at=created_at, now=now
+    )
+
+
+@pytest.mark.parametrize("seconds", [0, 1, 1390, 2099, 2100])
+def test_a_production_request_inside_the_limit_is_accepted(seconds) -> None:
+    """The limit is inclusive: a request exactly at the limit still executes."""
+    assert receiver.PRODUCTION_REQUEST_MAX_AGE_SECONDS == 2100
+    age = _age(production_payload(), now=CREATED + timedelta(seconds=seconds))
+    assert age == seconds
+
+
+def test_a_production_request_one_second_past_the_limit_is_refused() -> None:
+    limit = receiver.PRODUCTION_REQUEST_MAX_AGE_SECONDS
+    with pytest.raises(ValueError, match=r"^request expired: .* limit 2100 s\. "):
+        _age(production_payload(), now=CREATED + timedelta(seconds=limit + 1))
+
+
+def test_the_refusal_names_both_times_the_limit_and_the_remedy() -> None:
+    with pytest.raises(ValueError) as refused:
+        _age(production_payload(), now=INCIDENT_APPROVED)
+    assert str(refused.value) == INCIDENT_REFUSAL
+
+
+def test_a_negative_request_age_is_refused_as_a_clock_error() -> None:
+    """The deploy job starts after the canary job, so a real age is never negative.
+    A negative age means that the runner clock or the creation time is wrong."""
+    with pytest.raises(
+        ValueError,
+        match=r"^request age is negative: created 2026-10-13T03:57:12Z, "
+        r"now 2026-10-13T03:57:11Z\. ",
+    ):
+        _age(production_payload(), now=CREATED - timedelta(seconds=1))
+
+
+def test_the_limit_refuses_the_incident_request_when_its_sender_stopped() -> None:
+    """Receiver run 38344114882 was 2178 s old when its sender stopped waiting."""
+    with pytest.raises(ValueError, match="^request expired: "):
+        _age(production_payload(), now=INCIDENT_SENDER_STOPPED)
+
+
+def test_the_limit_accepts_the_oldest_observed_legitimate_approval() -> None:
+    """Receiver run 37776291342 started its deploy job 1390 s after its creation, and
+    its sender confirmed the deploy (2026-10-08)."""
+    started = datetime(2026, 10, 8, 12, 44, 44, tzinfo=timezone.utc)
+    age = _age(production_payload(), created_at="2026-10-08T12:21:34Z", now=started)
+    assert age == 1390
+
+
+@pytest.mark.parametrize("operation", ["deploy", "rollback"])
+def test_every_production_operation_expires(operation) -> None:
+    """The SDK limits remove to preview and canary targets, so these are all of them."""
+    with pytest.raises(ValueError, match="^request expired: "):
+        _age(production_payload(operation=operation), now=INCIDENT_APPROVED)
+
+
+@pytest.mark.parametrize("created_at", [INCIDENT_CREATED_AT, "", "not a time"])
+def test_a_staging_request_has_no_age_limit(created_at) -> None:
+    """A staging request can wait in the queue (#1232 scope: production only)."""
+    later = INCIDENT_APPROVED + timedelta(days=1)
+    assert _age(payload(), created_at=created_at, now=later) is None
+
+
+@pytest.mark.parametrize(
+    "created_at",
+    ["", "null", "2026-10-13", "2026-10-13T03:57:12", "13 Oct 2026 03:57:12 UTC"],
+)
+def test_a_production_request_without_a_valid_creation_time_is_refused(
+    created_at,
+) -> None:
+    """An empty, unparsable or zoneless time cannot give an age: fail closed."""
+    with pytest.raises(ValueError, match="^request creation time "):
+        _age(production_payload(), created_at=created_at, now=INCIDENT_APPROVED)
+
+
+def _expiry_cli(monkeypatch, request: dict, *extra: str, now: datetime) -> int:
+    monkeypatch.setattr(receiver_cli, "_utc_now", lambda: now)
+    return _gate_cli(monkeypatch, request, *extra)
+
+
+def test_the_deploy_job_refuses_an_expired_request_before_the_iac_check(
+    monkeypatch, capsys
+) -> None:
+    """The #1232 replay. A newer production marker landed while the run waited, so the
+    iac_ref check also fails. The age check runs first and names the real reason."""
+    result = _expiry_cli(
+        monkeypatch,
+        production_payload(),
+        "--request-created-at",
+        INCIDENT_CREATED_AT,
+        "--expected-iac-ref",
+        "v1.2.30",
+        "--preflight-canary-result",
+        "success",
+        now=INCIDENT_APPROVED,
+    )
+    err = capsys.readouterr().err
+    assert result == 1
+    assert f"app deploy request failed: {INCIDENT_REFUSAL}\n" in err
+    assert "iac_ref changed" not in err
+
+
+def test_the_deploy_job_executes_a_production_request_inside_the_window(
+    monkeypatch, capsys
+) -> None:
+    result = _expiry_cli(
+        monkeypatch,
+        production_payload(),
+        "--request-created-at",
+        INCIDENT_CREATED_AT,
+        "--expected-iac-ref",
+        "v1.1.74",
+        "--preflight-canary-result",
+        "success",
+        now=CREATED + timedelta(seconds=1390),
+    )
+    captured = capsys.readouterr()
+    assert result == 0, captured.err
+    assert json.loads(captured.out)["iac_ref"] == "v1.1.74"
+    assert "request age 1390 s, limit 2100 s" in captured.err
+
+
+@pytest.mark.parametrize("created_at", [INCIDENT_CREATED_AT, ""])
+def test_the_deploy_job_does_not_age_a_staging_request(
+    monkeypatch, capsys, created_at
+) -> None:
+    result = _expiry_cli(
+        monkeypatch,
+        payload(),
+        "--request-created-at",
+        created_at,
+        "--preflight-canary-result",
+        "skipped",
+        now=INCIDENT_APPROVED + timedelta(days=1),
+    )
+    captured = capsys.readouterr()
+    assert result == 0, captured.err
+    assert "request age" not in captured.err
+
+
+def test_the_deploy_job_refuses_a_production_request_without_its_creation_time(
+    monkeypatch, capsys
+) -> None:
+    """The workflow gives an empty value when it did not read the time."""
+    result = _expiry_cli(
+        monkeypatch,
+        production_payload(),
+        "--request-created-at",
+        "",
+        "--preflight-canary-result",
+        "success",
+        now=INCIDENT_APPROVED,
+    )
+    assert result == 1
+    assert "app deploy request failed: request creation time ''" in (
+        capsys.readouterr().err
     )
