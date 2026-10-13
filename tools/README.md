@@ -54,8 +54,9 @@ release being promoted (#650) — the ops-checks deploy-guard-audit job runs it 
 `--require-preflight-canary` and `--preflight-canary-result` re-check the workflow's canary
 pre-filter against the validated plan (only production requests are canaried, truealpha#860);
 a disagreement in either direction fails before any credential is used. `--request-created-at`
-gives the receiver run's `created_at`; a production request older than
-`PRODUCTION_REQUEST_MAX_AGE_SECONDS` fails before the `iac_ref` check (#1232). `deploy_v2` prints
+and `--run-attempt` give the receiver run's `created_at` and `GITHUB_RUN_ATTEMPT`. Every request
+needs a valid time; a production request that is older than `PRODUCTION_REQUEST_MAX_AGE_SECONDS`,
+or is a re-run, fails before the `iac_ref` check (#1232). `deploy_v2` prints
 one `deploy_v2 progress:` line per finished phase (secret supply, Dokploy promote, iac-runner sync)
 on stderr, so the receiver log shows where a deploy's time went.
 
