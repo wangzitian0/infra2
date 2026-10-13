@@ -709,8 +709,8 @@ def test_alert_bridge_accepts_the_health_body_the_alerting_app_serves(
     assert report.alerts.details["status"] == "healthy"
 
 
-def test_alert_bridge_still_accepts_the_status_of_the_previous_image() -> None:
-    """A production bridge that runs the image before #1209 answers `ok` with a mode."""
+def test_alert_bridge_rejects_legacy_ok_status() -> None:
+    """The bridge must report status=healthy; the legacy ok status is rejected."""
     stdout = _canned_stdout(
         traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
         logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
@@ -719,8 +719,8 @@ def test_alert_bridge_still_accepts_the_status_of_the_previous_image() -> None:
 
     report, _commands = _verify_with_canned_ssh("production", stdout)
 
-    assert report.alerts.ok is True
-    assert report.alerts.summary == "Bridge healthy: status=ok"
+    assert report.alerts.ok is False
+    assert report.alerts.summary == "Bridge unhealthy: status=ok"
 
 
 @pytest.mark.parametrize(

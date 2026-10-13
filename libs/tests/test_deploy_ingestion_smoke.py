@@ -115,5 +115,5 @@ def test_logs_query_uses_nanosecond_bound_and_resource_filters() -> None:
     assert "distributed_logs_v2" in q
     assert "toUnixTimestamp64Nano(" in q  # avoids the DateTime64 overflow
     assert "resources_string['service.name'] = 'finance-report-backend'" in q
-    assert "resources_string['deployment.environment'] = 'staging'" in q
+    assert "resources_string['deployment.environment.name'] = 'staging'" in q
     assert "resources_string['service.version'] = 'v0.1.20'" in q

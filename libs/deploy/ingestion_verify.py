@@ -7,6 +7,8 @@ import time
 import urllib.parse
 import urllib.request
 
+from libs.observability.signoz_queries import ENVIRONMENT_ATTRIBUTE
+
 DEFAULT_CLICKHOUSE_URL = "http://platform-clickhouse:8123"
 DEFAULT_WINDOW_MINUTES = 15
 DEFAULT_POLL_ATTEMPTS = 6
@@ -45,7 +47,7 @@ def _logs_count_query(
 ) -> str:
     where = [
         f"resources_string['service.name'] = {_ch_string(service_name)}",
-        f"resources_string['deployment.environment'] = {_ch_string(environment)}",
+        f"resources_string['{ENVIRONMENT_ATTRIBUTE}'] = {_ch_string(environment)}",
         f"timestamp >= toUnixTimestamp64Nano(now64(3) - INTERVAL {int(window_minutes)} MINUTE)",
     ]
     if version:
@@ -60,7 +62,7 @@ def _traces_count_query(
 ) -> str:
     where = [
         f"serviceName = {_ch_string(service_name)}",
-        f"resources_string['deployment.environment'] = {_ch_string(environment)}",
+        f"resources_string['{ENVIRONMENT_ATTRIBUTE}'] = {_ch_string(environment)}",
         f"timestamp >= now() - INTERVAL {int(window_minutes)} MINUTE",
     ]
     if version:
