@@ -154,12 +154,22 @@ jobs:
           # Empty when no canary ran; otherwise this checkout must still select the ref
           # the canary proved (a tag cut between the two checkouts fails here).
           CANARIED_IAC_REF: ${{ needs.preflight_canary.outputs.iac_ref }}
+          # The condition of this job's environment (#1232). The receiver refuses a
+          # production request that is older than its sender's wait.
+          REQUEST_IS_PRODUCTION: ${{ github.event.client_payload.deploy_type == 'prod' }}
         run: |
           set -euo pipefail
+          # created_at is the first creation time of this run. A re-run does not change
+          # it. A staging request has no age limit, so the step reads no time for it.
+          request_created_at=""
+          if [[ "$REQUEST_IS_PRODUCTION" == "true" ]]; then
+            request_created_at="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .created_at)"
+          fi
           plan="$(python -m tools.app_deploy_request plan \
             --sender "$APP_DEPLOY_REQUEST_SENDER" \
             --domain "$INTERNAL_DOMAIN" \
             --repo-root . \
+            --request-created-at "$request_created_at" \
             --expected-iac-ref "$CANARIED_IAC_REF" \
             --preflight-canary-result "$PREFLIGHT_CANARY_RESULT")"
           printf '%s\n' "$plan" | python -m json.tool
