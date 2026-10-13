@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -265,18 +266,25 @@ def make_plan(
 
 
 def check_request_age(
-    request: DeployRequest, *, created_at: str, now: datetime
+    request: DeployRequest, *, created_at: str, run_attempt: str, now: datetime
 ) -> float | None:
     """Refuse a production request whose deploy can end after its sender stops (#1232).
 
     ``created_at`` is the first creation time of the receiver run, from the GitHub API.
-    A re-run does not change it, so a re-run cannot make an old request new. Returns
+    A re-run does not change it. ``run_attempt`` is GITHUB_RUN_ATTEMPT: the sender
+    stops when the first attempt ends, so a production re-run is refused. Returns
     the age in seconds. Returns None for a request that is not production: a staging
-    request can wait in the queue, and it has no age limit.
+    request can wait in the queue, and it has no age limit and no re-run rule.
     """
     if request.deploy_type != DeployType.PRODUCTION:
         return None
     created = _utc_time(created_at)
+    attempt = _run_attempt(run_attempt)
+    if attempt != 1:
+        raise ValueError(
+            f"request is a re-run (attempt {attempt}). The sender does not wait for a "
+            "re-run, and nothing would verify the deploy. Dispatch the release again."
+        )
     if now.tzinfo is None:
         raise ValueError("the current time must have a time zone")
     current = now.astimezone(timezone.utc)
@@ -307,6 +315,15 @@ def _utc_time(text: str) -> datetime:
             "A production request needs the created_at of its receiver run."
         )
     return parsed.astimezone(timezone.utc)
+
+
+def _run_attempt(text: str) -> int:
+    if not re.fullmatch(r"[1-9][0-9]*", text):
+        raise ValueError(
+            f"run attempt {text!r} is not a positive integer. A production request "
+            "needs the GITHUB_RUN_ATTEMPT of its receiver run."
+        )
+    return int(text)
 
 
 def _iso(moment: datetime) -> str:

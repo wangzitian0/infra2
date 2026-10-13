@@ -363,7 +363,11 @@ def _recorded(path: Path) -> list[str] | None:
 
 
 def _run_deploy_plan_step(
-    tmp_path: Path, *, production: bool, gh_fails: bool = False
+    tmp_path: Path,
+    *,
+    production: bool,
+    gh_fails: bool = False,
+    run_attempt: str = "1",
 ) -> tuple[subprocess.CompletedProcess[str], list[str] | None, list[str] | None]:
     """Run the plan step's own script with a fake `gh` and a fake receiver.
 
@@ -415,6 +419,7 @@ def _run_deploy_plan_step(
         "RECORD_DIR": str(tmp_path),
         "GITHUB_REPOSITORY": "wangzitian0/infra2",
         "GITHUB_RUN_ID": "38344114882",
+        "GITHUB_RUN_ATTEMPT": run_attempt,
         "GITHUB_OUTPUT": str(tmp_path / "github_output"),
         "APP_DEPLOY_REQUEST_SENDER": "wangzitian0",
         "INTERNAL_DOMAIN": "zitian.party",
@@ -454,6 +459,8 @@ def test_a_production_request_gives_the_run_creation_time_to_the_receiver(
     ]
     assert "--request-created-at" in receiver
     assert receiver[receiver.index("--request-created-at") + 1] == _RUN_CREATED_AT
+    assert "--run-attempt" in receiver
+    assert receiver[receiver.index("--run-attempt") + 1] == "1"
     assert (tmp_path / "github_output").read_text(encoding="utf-8") == (
         "iac_ref=v1.1.74\n"
     )
@@ -468,6 +475,20 @@ def test_a_staging_request_reads_no_creation_time(tmp_path) -> None:
     assert receiver[receiver.index("--request-created-at") + 1] == ""
 
 
+@pytest.mark.parametrize("production", [True, False])
+def test_the_plan_step_gives_the_run_attempt_to_the_receiver(
+    tmp_path, production
+) -> None:
+    """GITHUB_RUN_ATTEMPT counts the re-runs of this run. The receiver refuses a
+    production re-run, because its sender stopped when the first attempt ended."""
+    proc, _gh, receiver = _run_deploy_plan_step(
+        tmp_path, production=production, run_attempt="2"
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert receiver is not None and "--run-attempt" in receiver
+    assert receiver[receiver.index("--run-attempt") + 1] == "2"
+
+
 def test_an_unreadable_creation_time_stops_a_production_request(tmp_path) -> None:
     proc, gh, receiver = _run_deploy_plan_step(tmp_path, production=True, gh_fails=True)
     assert gh is not None, "the step did not try to read the creation time"
@@ -478,7 +499,9 @@ def test_an_unreadable_creation_time_stops_a_production_request(tmp_path) -> Non
 def _needs_creation_time(plan: DeployPlan) -> bool:
     """True when the receiver refuses this request without a creation time."""
     try:
-        check_request_age(plan.request, created_at="", now=datetime.now(timezone.utc))
+        check_request_age(
+            plan.request, created_at="", run_attempt="1", now=datetime.now(timezone.utc)
+        )
     except ValueError:
         return True
     return False

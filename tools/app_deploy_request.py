@@ -121,8 +121,13 @@ def _parser() -> argparse.ArgumentParser:
         "--request-created-at",
         default=None,
         help="the receiver run's created_at; a production request older than "
-        "PRODUCTION_REQUEST_MAX_AGE_SECONDS is refused before the iac_ref check "
-        "(an empty value refuses a production request; not given: no age check)",
+        "PRODUCTION_REQUEST_MAX_AGE_SECONDS is refused before the iac_ref check. "
+        "Give it with --run-attempt; give neither for an operator run (no check)",
+    )
+    parser.add_argument(
+        "--run-attempt",
+        default=None,
+        help="the receiver run's GITHUB_RUN_ATTEMPT; a production re-run is refused",
     )
     parser.add_argument(
         "--require-preflight-canary",
@@ -163,11 +168,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             timeout=args.timeout,
             repo_root=args.repo_root,
         )
-        # The age goes first (#1232): an expired request is refused for its age, even
-        # when a newer production marker also changed its iac_ref.
-        if args.request_created_at is not None:
+        # The age and the re-run rule go first (#1232): an expired request is refused
+        # for its age, even when a newer production marker also changed its iac_ref.
+        # The two flags go together, so one of them alone fails closed.
+        if args.request_created_at is not None or args.run_attempt is not None:
             age = check_request_age(
-                plan.request, created_at=args.request_created_at, now=_utc_now()
+                plan.request,
+                created_at=args.request_created_at or "",
+                run_attempt=args.run_attempt or "",
+                now=_utc_now(),
             )
             if age is not None:
                 print(

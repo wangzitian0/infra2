@@ -170,6 +170,7 @@ jobs:
             --domain "$INTERNAL_DOMAIN" \
             --repo-root . \
             --request-created-at "$request_created_at" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --expected-iac-ref "$CANARIED_IAC_REF" \
             --preflight-canary-result "$PREFLIGHT_CANARY_RESULT")"
           printf '%s\n' "$plan" | python -m json.tool

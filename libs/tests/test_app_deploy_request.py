@@ -1085,10 +1085,17 @@ INCIDENT_REFUSAL = (
 
 
 def _age(
-    request_payload: dict, *, now: datetime, created_at: str = INCIDENT_CREATED_AT
+    request_payload: dict,
+    *,
+    now: datetime,
+    created_at: str = INCIDENT_CREATED_AT,
+    run_attempt: str = "1",
 ) -> float | None:
     return receiver.check_request_age(
-        receiver.parse_request(request_payload), created_at=created_at, now=now
+        receiver.parse_request(request_payload),
+        created_at=created_at,
+        run_attempt=run_attempt,
+        now=now,
     )
 
 
@@ -1179,6 +1186,8 @@ def test_the_deploy_job_refuses_an_expired_request_before_the_iac_check(
         production_payload(),
         "--request-created-at",
         INCIDENT_CREATED_AT,
+        "--run-attempt",
+        "1",
         "--expected-iac-ref",
         "v1.2.30",
         "--preflight-canary-result",
@@ -1199,6 +1208,8 @@ def test_the_deploy_job_executes_a_production_request_inside_the_window(
         production_payload(),
         "--request-created-at",
         INCIDENT_CREATED_AT,
+        "--run-attempt",
+        "1",
         "--expected-iac-ref",
         "v1.1.74",
         "--preflight-canary-result",
@@ -1238,9 +1249,110 @@ def test_the_deploy_job_refuses_a_production_request_without_its_creation_time(
         production_payload(),
         "--request-created-at",
         "",
+        "--run-attempt",
+        "1",
         "--preflight-canary-result",
         "success",
         now=INCIDENT_APPROVED,
+    )
+    assert result == 1
+    assert "app deploy request failed: request creation time ''" in (
+        capsys.readouterr().err
+    )
+
+
+# Re-run rule (#1232). The sender stops when the first attempt of its receiver run ends
+# (infra2_sdk.deploy.dispatch_and_wait raises on the first conclusion that is not
+# success). A re-run keeps created_at, so the age alone does not stop it.
+RE_RUN_REFUSAL = (
+    "request is a re-run (attempt {attempt}). The sender does not wait for a re-run, "
+    "and nothing would verify the deploy. Dispatch the release again."
+)
+
+
+@pytest.mark.parametrize("attempt", ["2", "3", "10"])
+def test_a_production_re_run_is_refused_even_when_it_is_young(attempt) -> None:
+    """Job 2 failed, then the owner re-ran it and approved it at 1250 s."""
+    with pytest.raises(ValueError) as refused:
+        _age(
+            production_payload(),
+            now=CREATED + timedelta(seconds=1250),
+            run_attempt=attempt,
+        )
+    assert str(refused.value) == RE_RUN_REFUSAL.format(attempt=attempt)
+
+
+def test_the_re_run_rule_comes_before_the_age_limit() -> None:
+    with pytest.raises(ValueError, match=r"^request is a re-run \(attempt 2\)\. "):
+        _age(production_payload(), now=INCIDENT_APPROVED, run_attempt="2")
+
+
+@pytest.mark.parametrize("attempt", ["", "0", "-1", "1.0", "one", " 1", "\uff11"])
+def test_a_production_request_without_a_valid_run_attempt_is_refused(attempt) -> None:
+    """GITHUB_RUN_ATTEMPT is a positive ASCII integer. Anything else fails closed."""
+    with pytest.raises(ValueError, match="^run attempt "):
+        _age(
+            production_payload(),
+            now=CREATED + timedelta(seconds=10),
+            run_attempt=attempt,
+        )
+
+
+@pytest.mark.parametrize("attempt", ["2", "", "x"])
+def test_a_staging_request_has_no_re_run_rule(attempt) -> None:
+    assert _age(
+        payload(), now=CREATED + timedelta(seconds=10), run_attempt=attempt
+    ) is (None)
+
+
+def test_the_deploy_job_refuses_a_re_run_before_the_iac_check(
+    monkeypatch, capsys
+) -> None:
+    result = _expiry_cli(
+        monkeypatch,
+        production_payload(),
+        "--request-created-at",
+        INCIDENT_CREATED_AT,
+        "--run-attempt",
+        "2",
+        "--expected-iac-ref",
+        "v1.2.30",
+        "--preflight-canary-result",
+        "success",
+        now=CREATED + timedelta(seconds=600),
+    )
+    err = capsys.readouterr().err
+    assert result == 1
+    assert f"app deploy request failed: {RE_RUN_REFUSAL.format(attempt=2)}\n" in err
+    assert "iac_ref changed" not in err
+
+
+def test_the_deploy_job_refuses_a_production_request_without_its_run_attempt(
+    monkeypatch, capsys
+) -> None:
+    """The two flags go together. One of them alone fails closed."""
+    result = _expiry_cli(
+        monkeypatch,
+        production_payload(),
+        "--request-created-at",
+        INCIDENT_CREATED_AT,
+        "--preflight-canary-result",
+        "success",
+        now=CREATED + timedelta(seconds=600),
+    )
+    assert result == 1
+    assert "app deploy request failed: run attempt ''" in capsys.readouterr().err
+
+
+def test_a_run_attempt_without_a_creation_time_is_refused(monkeypatch, capsys) -> None:
+    result = _expiry_cli(
+        monkeypatch,
+        production_payload(),
+        "--run-attempt",
+        "1",
+        "--preflight-canary-result",
+        "success",
+        now=CREATED + timedelta(seconds=600),
     )
     assert result == 1
     assert "app deploy request failed: request creation time ''" in (
