@@ -227,7 +227,7 @@ graph LR
 | `finance_report/app` | backend | `finance-report-backend` | 签发 | worker 不给:端点开着而没有环境标签会拒绝启动(2026-09-10 staging crash-loop) |
 | `truealpha/app` | llm | `truealpha-app` | 签发(app 与 preview 两份 compose) | `ta-app.sync`(`AppDeployer.telemetry_service_name`)、固定 compose promote、preview 三入口同名;`component=app` |
 | `truealpha/app` | web | — | 不签发 | Node/Next.js,无 OTel SDK;且一个 compose 的 `OTEL_SERVICE_NAME` 不能同时命名两个服务 |
-| `platform/todo` | todo | `platform-todo` | 签发 | `TodoDeployer.telemetry_service_name` makes `Deployer.sync` issue the identity; the compose adds `ENV`. The service refuses to start on the endpoint without `OTEL_SERVICE_NAME` or `ENV` (#991) |
+| `platform/todo` | todo | `platform-todo` | 签发 | `TodoDeployer.telemetry_service_name` makes `Deployer.sync` issue the identity; the compose adds `ENV`. The service refuses to start without a known `ENV`, also when no endpoint is set. It also refuses to start on the endpoint without `OTEL_SERVICE_NAME` (#991, #1238) |
 | `platform/alerting` | feishu-alert-bridge | `platform-alerting` | 签发 | `AlertingDeployer.telemetry_service_name` makes `Deployer.sync` issue the identity; the compose passes it with the endpoint and `ENV`; the image installs the OpenTelemetry packages (#1209). The probe runner container shares the image and gets no endpoint |
 | `truealpha/data_engine` | dagster-* | — | **不签发** | 三个角色全是 `network_mode: host`(为 OpenD),Docker DNS 名 `platform-signoz-otel-collector` 在宿主网络解析不了;§4.4 规定 collector 永不 publish,故不另开端口,等有宿主可达的 ingest 再接。没有端点就不会触发应用侧"缺身份即 fast-fail" |
 
