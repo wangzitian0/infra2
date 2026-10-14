@@ -384,9 +384,7 @@ def onboard_service(
             )
             pg.ensure_database(c, name=db_name, owner=db_user, env=env_name)
             if hasattr(pg, "grant_database"):
-                pg.grant_database(
-                    c, username=db_user, database=db_name, env=env_name
-                )
+                pg.grant_database(c, username=db_user, database=db_name, env=env_name)
             success(
                 f"PostgreSQL user '{db_user}' (limit {db_connection_limit}) and DB '{db_name}' ready on {postgres_host}"
             )
@@ -395,7 +393,6 @@ def onboard_service(
     info("Step 3: Syncing runtime secrets into Vault KV v2...")
     redis_host = with_env_suffix("platform-redis", e)
     vault_secrets: dict[str, str] = {
-        "SERVICE_NAME": clean_service,
         "ENV": env_name,
     }
     if db == "postgres":

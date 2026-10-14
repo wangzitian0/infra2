@@ -122,12 +122,14 @@ def test_provision_vault_approle_destroys_stale_accessors():
     )
     res_secret_id = MagicMock(
         ok=True,
-        stdout=json.dumps({
-            "data": {
-                "secret_id": "new-secret-uuid",
-                "secret_id_accessor": "acc-new",
+        stdout=json.dumps(
+            {
+                "data": {
+                    "secret_id": "new-secret-uuid",
+                    "secret_id_accessor": "acc-new",
+                }
             }
-        }),
+        ),
     )
     res_list = MagicMock(
         ok=True,
@@ -248,6 +250,14 @@ def test_onboard_service_end_to_end():
             database="apps_demo_app_db",
             env="production",
         )
+
+        # Check Vault KV secrets omit retired SERVICE_NAME alias (#1246)
+        mock_vault_backend.write.assert_called_once()
+        vault_path, written_secrets = mock_vault_backend.write.call_args[0]
+        assert vault_path == "apps/production/demo_app"
+        assert "SERVICE_NAME" not in written_secrets
+        assert written_secrets["ENV"] == "production"
+        assert written_secrets["POSTGRES_DB"] == "apps_demo_app_db"
 
         # Check dokploy env update was invoked
         mock_dokploy.update_compose_env.assert_called_once_with(

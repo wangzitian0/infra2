@@ -2880,22 +2880,11 @@ SDK_EXTRA = {
     "INFRA2_PAT": "tool-token",
     "ENV_SUFFIX": "template",
 }
-SDK_READ_OTEL = {
-    "APP_ENV",
-    "ENV",
-    "ENVIRONMENT",
-    "GITHUB_ACTIONS",
-    "IMAGE_TAG",
-    "INSTANCE_ID",
-    "OTEL_EXPORTER_OTLP_ENDPOINT",
-    "OTEL_METRIC_EXPORT_INTERVAL",
-    "OTEL_RESOURCE_ATTRIBUTES",
-    "OTEL_SDK_DISABLED",
-    "OTEL_SERVICE_NAME",
-    "OTEL_TRACES_SAMPLER",
-    "OTEL_TRACES_SAMPLER_ARG",
-    "SERVICE_NAME",
-    "SERVICE_VERSION",
+SDK_IDENTITY_ONLY = {
+    "CONFIGURATION_SHA256",
+    "GIT_COMMIT_SHA",
+    "IMAGE_DIGEST",
+    "RELEASE_ID",
 }
 SDK_READ_VAULT = {"VAULT_ADDR", "VAULT_TOKEN", "VAULT_ROLE_ID", "VAULT_SECRET_ID"}
 
@@ -2921,6 +2910,24 @@ def sdk_vocabulary() -> dict[str, dict]:
     for name, kind in SDK_EXTRA.items():
         vocab.setdefault(name, {"kind": kind, "canonical": name})
     return vocab
+
+
+def _sdk_read_otel(vocab: dict[str, dict] | None = None) -> set[str]:
+    """Return the SDK vocabulary names that ``OtelSettings.from_env`` looks up."""
+    if vocab is None:
+        try:
+            vocab = sdk_vocabulary()
+        except (ImportError, AttributeError):
+            vocab = {}
+    return {
+        name
+        for name, meta in vocab.items()
+        if meta.get("kind") in ("canonical", "alias")
+        and meta.get("canonical") not in SDK_IDENTITY_ONLY
+    } | {"GITHUB_ACTIONS"}
+
+
+SDK_READ_OTEL = _sdk_read_otel()
 
 
 def base_layer(layer: str) -> str:
@@ -2980,6 +2987,7 @@ def analyze(inv, groups=None, vocab=None):
             vocab = sdk_vocabulary()
         except Exception:  # noqa: BLE001
             vocab = {}
+    sdk_read_otel = _sdk_read_otel(vocab) if vocab else SDK_READ_OTEL
     keys: dict[str, K] = {}
     for o in inv.occ:
         if o.ns != "env" or o.key == "<env_file>":
@@ -3258,7 +3266,7 @@ def analyze(inv, groups=None, vocab=None):
             flags.append("UNDOCUMENTED")
 
         in_vocab = k.key in vocab
-        sdk_called = k.key in SDK_READ_OTEL or k.key in SDK_READ_VAULT
+        sdk_called = k.key in sdk_read_otel or k.key in SDK_READ_VAULT
         consumer_reads = [
             o for o in prod if o.role == "read" and o.repo != "infra2-sdk"
         ]
@@ -3500,10 +3508,15 @@ MEANING = {
 }
 
 
-def doc_only(inv, repos):
+def doc_only(inv, repos, vocab=None):
     """UPPER_SNAKE names in docs/ssot that appear in no code or config file of the repositories."""
+    if vocab is None:
+        try:
+            vocab = sdk_vocabulary()
+        except (ImportError, AttributeError):
+            vocab = {}
     tok = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")
-    code_tokens = set()
+    code_tokens = set(vocab)
     for _, root in repos.items():
         for f in list_files(root):
             if route(f) in (None, "docs") or f in (
