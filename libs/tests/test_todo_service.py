@@ -24,6 +24,20 @@ def _no_ambient_telemetry_env(monkeypatch):
     clear_telemetry_env(monkeypatch)
 
 
+def _load_todo_module(name: str):
+    """Load the app as the container does. The app is strict: without a known tier,
+    `init_service` stops the import (#1238). The tier is set for the load only."""
+    spec = importlib.util.spec_from_file_location(
+        name, REPO_ROOT / "platform/30.todo/app.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("ENV", "local_test")
+        spec.loader.exec_module(module)
+    return module
+
+
 def test_todo_service_registered_in_service_registry() -> None:
     attrs = reg.service_attrs()
     assert "platform/todo" in attrs
@@ -46,12 +60,7 @@ def test_todo_service_discovered_by_deployer() -> None:
 
 def test_todo_app_endpoints_contract(monkeypatch) -> None:
     """Verify Todo app HTTP endpoints respond per the platform contract."""
-    spec = importlib.util.spec_from_file_location(
-        "todo_app", REPO_ROOT / "platform/30.todo/app.py"
-    )
-    assert spec is not None and spec.loader is not None
-    todo_mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(todo_mod)
+    todo_mod = _load_todo_module("todo_app")
 
     # Mock probes to run deterministically in unit test
     monkeypatch.setattr(
@@ -338,12 +347,7 @@ def test_todo_traefik_dual_router_auth_contract() -> None:
 
 def test_todo_app_authentik_identity_and_me_endpoint() -> None:
     """Verify /api/auth/me and UI rendering under Authentik ForwardAuth headers."""
-    spec = importlib.util.spec_from_file_location(
-        "todo_app", REPO_ROOT / "platform/30.todo/app.py"
-    )
-    assert spec is not None and spec.loader is not None
-    todo_mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(todo_mod)
+    todo_mod = _load_todo_module("todo_app")
 
     client = TestClient(todo_mod.fastapi_app)
 
@@ -439,16 +443,6 @@ def test_portal_config_template_contains_canary_todo() -> None:
     assert todo_item is not None, "Canary Todo item not found in Homer config"
     assert todo_item["url"] == "https://todo{{ENV_DOMAIN_SUFFIX}}.{{INTERNAL_DOMAIN}}"
     assert todo_item["tag"] == "canary"
-
-
-def _load_todo_module(name: str):
-    spec = importlib.util.spec_from_file_location(
-        name, REPO_ROOT / "platform/30.todo/app.py"
-    )
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def test_todo_readyz_and_health_follow_the_canary_status(monkeypatch) -> None:
@@ -549,12 +543,7 @@ def test_todo_readiness_passes_only_on_an_ok_document(monkeypatch, path: str) ->
 
 def test_todo_fastapi_endpoints_contract() -> None:
     """Verify Canary Todo exposes FastAPI endpoints via infra2_sdk.fastapi."""
-    spec = importlib.util.spec_from_file_location(
-        "todo_app_fastapi", REPO_ROOT / "platform/30.todo/app.py"
-    )
-    assert spec is not None and spec.loader is not None
-    todo_mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(todo_mod)
+    todo_mod = _load_todo_module("todo_app_fastapi")
 
     client = TestClient(todo_mod.fastapi_app)
 

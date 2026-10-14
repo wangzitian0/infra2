@@ -69,7 +69,11 @@ def _no_ambient_telemetry_env(monkeypatch):
 
 @pytest.fixture()
 def app():
-    return _load("todo_app_depth", SERVICE_DIR / "app.py")
+    """The app is strict: without a known tier, `init_service` stops the import (#1238).
+    The tier is set for the load only."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("ENV", "local_test")
+        return _load("todo_app_depth", SERVICE_DIR / "app.py")
 
 
 @pytest.fixture()
@@ -1210,7 +1214,12 @@ def test_the_providers_shut_down_with_the_app(monkeypatch, telemetry_calls) -> N
     assert telemetry_calls.count({"shutdown": True}) == 1
 
 
-def test_startup_skips_telemetry_without_an_endpoint(telemetry_calls) -> None:
+def test_startup_skips_telemetry_without_an_endpoint(
+    monkeypatch, telemetry_calls
+) -> None:
+    """A strict start needs a tier (#1238). It does not need an endpoint: without one the
+    app starts and exports nothing."""
+    monkeypatch.setenv("ENV", "local_test")
     module = _load_todo_app()
     assert telemetry_calls == []
     assert not hasattr(module.fastapi_app.state, "telemetry_providers")
@@ -1254,13 +1263,16 @@ def test_init_service_gets_the_strict_flag_and_the_readiness_timeout(
         return original(app, name, **kwargs)
 
     monkeypatch.setattr(sdk_fastapi, "init_service", recording)
+    monkeypatch.setenv("ENV", "local_test")
 
     module = _load_todo_app()
 
     (call,) = seen
     assert call["name"] == "platform-todo"
     assert call["enable_otel"] is True
-    assert call["strict_otel"] is True
+    assert call.get("strict_otel") is True, (
+        "the Canary states strict_otel=True; it does not rely on the SDK default"
+    )
     assert call["check_timeout_seconds"] == module.READINESS_TIMEOUT_SECONDS
     assert "log_level" not in call, "init_service owns the logging baseline"
 
