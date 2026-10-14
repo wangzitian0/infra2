@@ -145,8 +145,8 @@ def _passed_name(app: Path) -> str:
 def _passed_strict_otel(call: ast.Call) -> bool | None:
     """The bool literal of the `strict_otel=` keyword, or `None`.
 
-    `None` means that the keyword is missing, so the call relies on the SDK default, or
-    that its value is not a bool literal, so this scan cannot read it.
+    `None` has two causes. The keyword is missing, so the call relies on the SDK default.
+    The value is not a bool literal, so this scan cannot read it.
     """
     value = _keyword(call, "strict_otel")
     if isinstance(value, ast.Constant) and isinstance(value.value, bool):
@@ -414,7 +414,7 @@ def test_the_compose_passes_the_endpoint_and_the_tier_to_the_app(app: Path) -> N
     service = compose_services(app.parent / "compose.yaml")[_app_service(app)]
     environment = raw_environment(service)
     assert environment.get("OTEL_EXPORTER_OTLP_ENDPOINT") == COLLECTOR_OTLP_HTTP
-    # the SDK resolves the environment tier from ENV when it configures telemetry
+    # the alerting app reads the tier from ENV; the todo app does not (identity mode, #1246)
     assert environment.get("ENV") == "${ENV}"
 
 
