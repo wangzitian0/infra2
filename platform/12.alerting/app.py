@@ -172,7 +172,7 @@ def main() -> None:
 
 
 def _delivery_mode() -> str:
-    return os.getenv("ALERT_DELIVERY_MODE", "feishu_webhook").strip()
+    return (os.getenv("ALERT_DELIVERY_MODE") or "feishu_webhook").strip()
 
 
 def _feishu_reachable() -> bool:

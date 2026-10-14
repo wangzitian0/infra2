@@ -13,6 +13,7 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from libs.core.environ import get_env
 from libs.core.service_identity import ServiceIdentity
 
 if TYPE_CHECKING:
@@ -161,7 +162,7 @@ class SyncPipeline:
         e = deployer.env()
         self.ctx.env = e
 
-        if deployer.prod_only and e.get("ENV", "production") != "production":
+        if deployer.prod_only and get_env(e) != "production":
             log.log_info(
                 f"{deployer.service} is prod-only; skipping {e.get('ENV')} sync"
             )
@@ -289,7 +290,7 @@ class SyncPipeline:
 
         runtime_identity = ServiceIdentity.build(
             service_id,
-            e.get("ENV", "production"),
+            get_env(e),
             component=deployer.service,
             service_name=deployer.telemetry_service_name or deployer.service,
             version=deploy_ref,
@@ -419,7 +420,7 @@ class SyncPipeline:
         if deployer.telemetry_service_name:
             telemetry_identity = ServiceIdentity.build(
                 self.ctx.service_id,
-                e.get("ENV", "production"),
+                get_env(e),
                 component=deployer.telemetry_component or deployer.service,
                 service_name=deployer.telemetry_service_name,
                 version=deploy_ref,

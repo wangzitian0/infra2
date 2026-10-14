@@ -33,8 +33,6 @@ DUMMY_COMPOSE_ENV: dict[str, str] = {
     "VAULT_ADDR": "http://vault.example.test:8200",
     "FEISHU_APP_ID": "dummy-feishu-app-id",
     "FEISHU_APP_SECRET": "dummy-feishu-app-secret",
-    "FEISHU_VERIFICATION_TOKEN": "dummy-feishu-verification-token",
-    "FEISHU_ENCRYPT_KEY": "dummy-feishu-encrypt-key",
     "LLM_API_KEY": "dummy-llm-api-key",
     "DATA_ENGINE_IMAGE_DIGEST": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
     "RELEASE_MANIFEST_ID": "release-manifest:0000000000000000000000000000000000000000000000000000000000000000",

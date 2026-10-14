@@ -270,7 +270,7 @@ services:
         - CMD-SHELL
         - |
           tr '\0' ' ' < /proc/1/cmdline | grep -q 'prefect worker start' || exit 1
-      start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-60s}
+      start_period: 60s
       interval: 30s
       retries: 3
       timeout: 5s

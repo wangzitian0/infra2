@@ -158,7 +158,7 @@ class AppDeployer(Deployer):
         # Auto-configure S3 Public Endpoint using standardized infrastructure lib
         # This ensures we respect the central SERVICE_SUBDOMAINS definition ("s3")
         # and handle environment suffixes automatically.
-        from libs.core.environ import get_service_url
+        from libs.core.environ import get_env, get_service_url
 
         try:
             # "s3" is the canonical key in SERVICE_SUBDOMAINS for the S3 interface
@@ -178,7 +178,7 @@ class AppDeployer(Deployer):
         # Analytics no-op. #372: the map is the single source in tools.openpanel_clients
         # so the live deploy_v2 path (libs/deploy/promote) injects the same values
         # — this legacy pre_compose path no longer owns a duplicate literal.
-        env_vars.update(openpanel_env(env_vars.get("ENV", "production")))
+        env_vars.update(openpanel_env(get_env(env_vars)))
 
         return env_vars
 

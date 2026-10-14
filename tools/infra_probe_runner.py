@@ -47,7 +47,10 @@ from libs.observability.probes import (
     run_probes,
 )
 from libs.observability.local_ledger import record_probe_round
-from libs.observability.probe_environment import resolve_probe_environment
+from libs.observability.probe_environment import (
+    DEFAULT_ALERTING_ENV_FILE,
+    resolve_probe_environment,
+)
 from libs.observability.probe_dispatch import (
     CHRONIC_AFTER_SECONDS,
     CHRONIC_DIGEST_ALERT_NAME,
@@ -195,7 +198,7 @@ def main() -> int:
     args = parser.parse_args()
 
     _configure_logging()
-    env_file = Path(os.getenv("ALERTING_ENV_FILE", "/secrets/.env"))
+    env_file = Path(os.getenv("ALERTING_ENV_FILE") or DEFAULT_ALERTING_ENV_FILE)
     _load_env_file(env_file)
     # Stop now, with one clear line, instead of failing in every loop iteration (#1208).
     # A runner that cannot tell its environment must not probe, page or heartbeat.

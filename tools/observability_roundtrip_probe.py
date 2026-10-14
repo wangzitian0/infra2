@@ -15,7 +15,10 @@ import urllib.request
 import uuid
 
 from libs.observability.openpanel import openpanel_env
-from libs.observability.probe_environment import resolve_probe_environment
+from libs.observability.probe_environment import (
+    DEFAULT_ALERTING_ENV_FILE,
+    resolve_probe_environment,
+)
 
 
 DEFAULT_INTERVAL_SECONDS = 5 * 60
@@ -57,7 +60,7 @@ def main() -> int:
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
-    _load_env_file(Path(os.getenv("ALERTING_ENV_FILE", "/secrets/.env")))
+    _load_env_file(Path(os.getenv("ALERTING_ENV_FILE") or DEFAULT_ALERTING_ENV_FILE))
     state_path = Path(os.getenv("OBS_ROUNDTRIP_STATE_FILE", DEFAULT_STATE_FILE))
     interval_seconds = int(
         os.getenv("OBS_ROUNDTRIP_INTERVAL_SECONDS", str(DEFAULT_INTERVAL_SECONDS))

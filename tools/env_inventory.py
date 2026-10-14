@@ -149,8 +149,6 @@ def list_files(root: Path) -> list[str]:
                 str(root),
                 "ls-files",
                 "--cached",
-                "--others",
-                "--exclude-standard",
                 "-z",
             ],
             capture_output=True,
@@ -2826,7 +2824,10 @@ NOT_A_SECRET = re.compile(
     r"(_FILE|_PATH|_DIR|_REPORT|_ENABLED|_URL_FILE|^FREE_SHOW_|_SHOW_|MAX_TOKENS|_TOKENS$|_SECONDS$|_SECRETS_WAIT|_MODE$)"
 )
 PLACEHOLDER = re.compile(
-    r"^(<.*>|\$\{.*\}|\*+|(change[_-]?me|example|sample|xxx+|your[_-].*|password|secret|test|dummy|fake|mock|placeholder|none|null|todo|local|dev|ci|e2e|minioadmin|postgres|admin|root|guest)([-_.a-z0-9]*))$",
+    r"^(<.*>|\$\{.*\}|\*+|xxx+"
+    r"|change[_-]?me|replace[_-]?me|your[_-][a-z_-]+|ci-placeholder[-a-z]*"
+    r"|(dummy|fake|mock|placeholder|example|sample)(?:[_-][a-z]+)*"
+    r"|(password|secret|test|none|null|todo|local|dev|ci|e2e|minioadmin|postgres|admin|root|guest))$",
     re.I,
 )
 
@@ -3176,7 +3177,7 @@ def analyze(inv, groups=None, vocab=None):
         if req_reads and any_read_default and not platform:
             flags.append("REQUIRED_VS_DEFAULT")
         if (
-            w_strong
+            any(not CI_FILE.search(o.path) for o in w_strong)
             and not (r_strong or r_weak or refs or man_primary or test_reads)
             and not platform
             and not third

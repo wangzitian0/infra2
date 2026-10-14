@@ -31,7 +31,7 @@ services:
       VAULT_ADDR: ${VAULT_ADDR}
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
-      ENV: ${ENV}
+      ENV: ${ENV:?ENV must be explicitly set}
       # Cache-bust (#628): secrets.ctmpl is a single-file bind mount, so a checkout that
       # rewrites it leaves the running agent on the old inode, and Compose only recreates
       # a service whose resolved config changed. The hash covers the template, so a
@@ -149,7 +149,7 @@ services:
       - DOKPLOY_API_KEY=${DOKPLOY_API_KEY:-}
       - INTERNAL_DOMAIN=${INTERNAL_DOMAIN}
       - VPS_HOST=${VPS_HOST:-}
-      - ENV=${ENV}
+      - ENV=${ENV:?ENV must be explicitly set}
       - PROJECT=${PROJECT:-platform}
       - DEPLOY_TIMEOUT=${DEPLOY_TIMEOUT:-900}
       - ALLOW_SHARED_DATA_PATH=${ALLOW_SHARED_DATA_PATH:-0}
