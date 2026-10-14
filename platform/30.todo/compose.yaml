@@ -92,7 +92,7 @@ services:
         exec python /app/app.py
     environment:
       PORT: "8000"
-      # The SDK resolves the environment tier from ENV when it configures telemetry.
+      # Neither the app nor the SDK in identity mode reads ENV (#1246).
       ENV: ${ENV}
       INTERNAL_DOMAIN: ${INTERNAL_DOMAIN:-zitian.party}
       ENV_SUFFIX: ${ENV_SUFFIX:-}
