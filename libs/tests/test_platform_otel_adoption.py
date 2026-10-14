@@ -415,7 +415,10 @@ def test_the_compose_passes_the_endpoint_and_the_tier_to_the_app(app: Path) -> N
     environment = raw_environment(service)
     assert environment.get("OTEL_EXPORTER_OTLP_ENDPOINT") == COLLECTOR_OTLP_HTTP
     # the alerting app reads the tier from ENV; the todo app does not (identity mode, #1246)
-    assert environment.get("ENV") == "${ENV}"
+    if app.relative_to(ROOT).as_posix() == "platform/12.alerting/app.py":
+        assert environment.get("ENV") == "${ENV}"
+    else:
+        assert "ENV" not in environment
 
 
 @pytest.mark.parametrize("app", CALLERS, ids=CALLER_IDS)
@@ -540,7 +543,12 @@ def test_the_deployer_issues_the_identity_and_the_compose_hands_it_to_the_contai
     assert attributes["service.name"] == _passed_name(app)
     assert attributes["infra.service.id"] == meta.service_id
     assert attributes["infra.iac.ref"] == release
-    assert container["ENV"] == "staging", "the SDK resolves the tier from ENV"
+    if app.relative_to(ROOT).as_posix() == "platform/12.alerting/app.py":
+        assert container["ENV"] == "staging", "the SDK resolves the tier from ENV"
+    else:
+        assert "ENV" not in container, (
+            "identity mode takes the tier from deployment.environment.name (#1246)"
+        )
     assert container["GIT_COMMIT_SHA"] == release, (
         "the SDK RuntimeIdentity reads the commit from GIT_COMMIT_SHA: 40 hex or unknown"
     )
