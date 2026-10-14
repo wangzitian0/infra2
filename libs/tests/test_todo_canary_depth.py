@@ -19,11 +19,14 @@ import contextvars
 import http.server
 import json
 import importlib.util
+import os
 import re
 import secrets
 import socket
 import struct
+import subprocess
 import sys
+import textwrap
 import threading
 import time
 from pathlib import Path
@@ -34,7 +37,7 @@ import pytest
 from libs.security import registry as secrets_registry
 from libs.core import registry as reg
 from libs.observability.probe_specs import render_probe_spec_text
-from libs.tests.ambient_env import clear_telemetry_env
+from libs.tests.ambient_env import TIER_VARIABLES, clear_telemetry_env
 from libs.tests.compose_env import compose_services, resolve
 from libs.tests.docker_host import DockerHost
 from libs.tests.traefik_rules import routers_from_labels, serving_router
@@ -1225,6 +1228,26 @@ def test_startup_skips_telemetry_without_an_endpoint(
     assert not hasattr(module.fastapi_app.state, "telemetry_providers")
 
 
+@pytest.mark.parametrize(
+    ("env", "message"),
+    [
+        ({}, "ENVIRONMENT is required"),
+        ({"ENV": "bogus"}, "unknown environment: 'bogus'"),
+    ],
+    ids=["no-tier", "unknown-tier"],
+)
+def test_startup_fails_fast_on_a_bad_tier_without_an_endpoint(
+    monkeypatch, telemetry_calls, env, message
+) -> None:
+    """Strict mode checks the tier before it looks for the endpoint (#1238). With no
+    telemetry setting at all, a missing or unknown tier still stops the start."""
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    with pytest.raises(ValueError, match=message):
+        _load_todo_app()
+    assert telemetry_calls == []
+
+
 def test_startup_fails_fast_when_the_endpoint_comes_without_an_identity(
     monkeypatch, telemetry_calls
 ) -> None:
@@ -1275,6 +1298,87 @@ def test_init_service_gets_the_strict_flag_and_the_readiness_timeout(
     )
     assert call["check_timeout_seconds"] == module.READINESS_TIMEOUT_SECONDS
     assert "log_level" not in call, "init_service owns the logging baseline"
+
+
+# The tests above replace or record parts of the SDK. The two tests below run the real SDK and
+# the real exporter packages in a child process, the way the container loads the app (#1238).
+# The exporter points at a closed port, so the child leaves with `os._exit` and skips the flush.
+_STRICT_START_SCRIPT = textwrap.dedent(
+    """
+    import importlib.util, json, os, sys
+
+    from starlette.testclient import TestClient
+
+    spec = importlib.util.spec_from_file_location("todo_strict_start", sys.argv[1])
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    client = TestClient(module.fastapi_app)
+    answers = {
+        "livez": client.get("/livez").status_code,
+        "api_health": client.get("/api/health").status_code,
+        "telemetry": hasattr(module.fastapi_app.state, "telemetry_providers"),
+    }
+    sys.stdout.write(json.dumps(answers) + "\\n")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
+    """
+)
+
+
+def _load_the_app_in_a_child(
+    settings: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    """Load `platform/30.todo/app.py` in a new interpreter. The child gets the shell
+    environment without the tier and OpenTelemetry variables, plus exactly `settings`."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in TIER_VARIABLES and not key.startswith("OTEL_")
+    }
+    env.update(settings)
+    return subprocess.run(
+        [sys.executable, "-c", _STRICT_START_SCRIPT, str(SERVICE_DIR / "app.py")],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        stdin=subprocess.DEVNULL,
+        check=False,
+    )
+
+
+def test_the_canary_starts_on_the_real_sdk_with_the_staging_identity() -> None:
+    """The environment the staging deploy issues: the Canary starts, serves its probe
+    routes and holds real telemetry providers (#1238)."""
+    settings = {
+        **_issued_telemetry_env("staging"),
+        "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:1",
+    }
+
+    result = _load_the_app_in_a_child(settings)
+
+    assert result.returncode == 0, (
+        f"the Canary stopped\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    answers = [line for line in result.stdout.splitlines() if line.startswith("{")]
+    assert len(answers) == 1, result.stdout
+    assert json.loads(answers[0]) == {
+        "livez": 200,
+        "api_health": 200,
+        "telemetry": True,
+    }
+
+
+def test_the_canary_stops_at_import_on_the_real_sdk_without_a_tier() -> None:
+    """The Canary must be strict. No tier and no endpoint: the SDK before 3.4.0 skipped the
+    tier check without an endpoint, so the Canary started. Now it stops (#1238)."""
+    result = _load_the_app_in_a_child({})
+
+    assert result.returncode != 0, (
+        f"the Canary started without a tier\nstdout:\n{result.stdout}"
+    )
+    assert "ValueError: ENVIRONMENT is required" in result.stderr, result.stderr
 
 
 def test_the_readiness_timeout_is_above_the_check_deadline(app) -> None:
