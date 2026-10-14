@@ -595,8 +595,10 @@ fastapi_app = FastAPI(
 
 # The one OpenTelemetry bootstrap (#1209). init_service mounts /livez, /readyz and /health.
 # It sets the root logger to INFO before the OpenTelemetry handler attaches.
-# It starts traces, metrics and logs when the deploy issued the endpoint.
-# strict_otel stops the service on an unknown ENV or a malformed OTEL_* value.
+# It starts traces, metrics and logs when the endpoint is set and the SDK is not disabled.
+# strict_otel stops the service on a malformed OTEL_* value.
+# require_issued_identity stops it on such an endpoint without the issued identity.
+# The tier is the issued deployment.environment.name. The SDK does not read ENV.
 init_service(
     fastapi_app,
     name="platform-todo",
