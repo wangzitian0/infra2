@@ -145,8 +145,8 @@ def _passed_name(app: Path) -> str:
 def _passed_strict_otel(call: ast.Call) -> bool | None:
     """The bool literal of the `strict_otel=` keyword, or `None`.
 
-    `None` means that the keyword is missing, so the call relies on the SDK default, or
-    that its value is not a bool literal, so this scan cannot read it.
+    `None` has two causes. The keyword is missing, so the call relies on the SDK default.
+    The value is not a bool literal, so this scan cannot read it.
     """
     value = _keyword(call, "strict_otel")
     if isinstance(value, ast.Constant) and isinstance(value.value, bool):
