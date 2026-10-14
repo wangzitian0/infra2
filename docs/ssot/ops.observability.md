@@ -548,6 +548,7 @@ Feishu page，且告警携带同一结构化记录。不得通过破坏 producti
 | truealpha 端点与身份签发(llm 容器拿到 collector 端点 + 各入口签发的身份;端点不无身份出现、不进 host 网络、不进 web;sync 与 promote/preview 同名)(#906) | `libs/tests/test_truealpha_app.py`, `test_deploy_primitive.py`, `test_preview_lifecycle.py` | ✅ |
 | Canary Todo depth: real Redis/Postgres/S3 write paths fail on NOAUTH, `E`, denied write; the probe consumer, the SSO-only routing, the telemetry bootstrap and the issued identity (#991) | `libs/tests/test_todo_canary_depth.py`, `libs/tests/test_todo_service.py` | ✅ |
 | Every `init_service` caller under `platform/` ships OpenTelemetry end to end: the Deployer issues the identity, the compose passes it with the endpoint, the image installs the packages, the app has one bootstrap (#1209) | `libs/tests/test_platform_otel_adoption.py` | ✅ |
+| Every `init_service` caller passes the literal `strict_otel` value its service needs: alerting `False`, todo `True` (#1238) | `libs/tests/test_platform_otel_adoption.py` | ✅ |
 | 告警通道手动连通 | `uv run invoke alerting.test-feishu` | Manual gate |
 
 ---
