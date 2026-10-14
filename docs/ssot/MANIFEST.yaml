@@ -46,6 +46,8 @@ entries:
     proofs:
       - libs/tests/test_harness_manifest.py
       - libs/tests/test_harness_sweep.py
+      - libs/tests/test_sdk_usage_census.py
+      - tools/sdk_usage_census.py
   core.truealpha_runtime:
     owner: docs/ssot/core.truealpha_runtime.md
     summary: TrueAlpha Dagster artifact binding, environment isolation, and host-only OpenD boundary
