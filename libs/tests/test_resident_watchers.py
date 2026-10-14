@@ -28,7 +28,7 @@ COMPOSE = ROOT / "platform/12.alerting/compose.yaml"
 @pytest.fixture(autouse=True)
 def _production_probe_environment(monkeypatch):
     """The runner has no default environment (#1208). The runner-loop tests choose one."""
-    for name in ("INFRA_PROBE_HEARTBEAT_ENV", "OBS_ROUNDTRIP_ENV"):
+    for name in ("INFRA_ENVIRONMENT", "OBS_ROUNDTRIP_ENV"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("ENV", "production")
 
@@ -320,7 +320,7 @@ def test_compose_has_single_resident_sidecar_with_watcher_env() -> None:
     runner = services["infra-probe-runner"]
     env = runner["environment"]
     for key, default in {
-        "ENV": "${ENV:-production}",
+        "ENV": "${ENV}",
         "DEPLOY_GUARD_CEILING_SECONDS": "${DEPLOY_GUARD_CEILING_SECONDS:-1800}",
         "DEPLOY_GUARD_REMEDIATE": "${DEPLOY_GUARD_REMEDIATE:-0}",
         "DEPLOY_GUARD_RENOTIFY_SECONDS": "${DEPLOY_GUARD_RENOTIFY_SECONDS:-1800}",

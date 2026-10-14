@@ -577,7 +577,7 @@ jobs:
             --service finance_report/app \
             --type preview/pr \
             --version-ref "${PR_NUMBER}" \
-            --iac-ref "${INFRA2_REF}" \
+            --iac-ref main \
             --domain zitian.party
 ```
 

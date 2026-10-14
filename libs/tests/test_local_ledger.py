@@ -289,7 +289,7 @@ def test_every_probe_round_of_the_runner_lands_in_the_ledger(
     runner = _load_runner()
     ledger_file = tmp_path / "host" / "ledger.json"
     monkeypatch.setenv(local_ledger.LEDGER_FILE_ENV, str(ledger_file))
-    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", "staging")
+    monkeypatch.setenv("ENV", "staging")
     monkeypatch.delenv("INFRA_PROBE_HEARTBEAT_URL", raising=False)
     monkeypatch.delenv("INFRA_PROBE_DRY_RUN", raising=False)
     monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200|critical|5")

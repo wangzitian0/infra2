@@ -58,7 +58,6 @@ def _runner_beat(
     for name in ("INFRA_PROBE_DRY_RUN", "INFRA_PROBE_RENOTIFY_SECONDS", "DEPLOY_ENV"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("ENV", "production")
-    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", "production")
     monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_NAME", "platform-alerting-probes")
     monkeypatch.setenv(
         "INFRA_PROBE_HEARTBEAT_URL", "https://watchdog.example/heartbeat"

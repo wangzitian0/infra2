@@ -176,7 +176,7 @@ services:
       # staging/preview runner's alerts REPORTS (delivery=report, never the pager;
       # #903). Only that allowlist reports: `prod` pages. A typo or a missing ENV
       # stops the runner with EX_CONFIG (#1208).
-      ENV: ${ENV:-production}
+      ENV: ${ENV}
       ALERT_BRIDGE_URL: http://platform-alerting${ENV_SUFFIX}:8080/signoz/webhook
       ALERTING_ENV_FILE: /secrets/.env
       INFRA_PROBE_INTERVAL_SECONDS: ${INFRA_PROBE_INTERVAL_SECONDS:-60}
@@ -204,7 +204,6 @@ services:
       INFRA_PROBE_LEDGER_FILE: /var/lib/infra2-availability-ledger/availability-ledger.json
       INFRA_PROBE_HEARTBEAT_URL: ${INFRA_PROBE_HEARTBEAT_URL:-}
       INFRA_PROBE_HEARTBEAT_TOKEN: ${INFRA_PROBE_HEARTBEAT_TOKEN:-}
-      INFRA_PROBE_HEARTBEAT_ENV: ${ENV:-production}
       INFRA_PROBE_HEARTBEAT_NAME: platform-alerting-probes${ENV_SUFFIX}
       OBS_ROUNDTRIP_STATE_FILE: /var/lib/infra-probe-state/observability_roundtrip_probe_state.json
       OBS_ROUNDTRIP_INTERVAL_SECONDS: ${OBS_ROUNDTRIP_INTERVAL_SECONDS:-300}

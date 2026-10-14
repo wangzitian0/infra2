@@ -15,7 +15,7 @@
 #      at teardown removes that volume, so the database is genuinely ephemeral.
 #   2. The rendered DATABASE_URL is OVERRIDDEN to point at that local `db` service, AFTER
 #      sourcing the Vault-rendered /secrets/.env (so Vault still supplies the OTHER app
-#      secrets — ANTHROPIC_API_KEY, S3 — and only the DB is local/ephemeral).
+#      secrets — SEC_USER_AGENT, S3 — and only the DB is local/ephemeral).
 #   3. Everything else (vault-agent, llm, web, Traefik labels, healthchecks) mirrors the
 #      staging/prod template so a preview is a faithful, functional copy of the app.
 #
@@ -149,7 +149,7 @@ services:
         # PREVIEW OVERRIDE: Vault rendered a DATABASE_URL for the shared truealpha-postgres;
         # replace it with this stack's OWN ephemeral DB so preview never reads/writes the
         # shared staging/prod database. Done AFTER sourcing /secrets/.env so the override
-        # always wins; the rest of the Vault secrets (ANTHROPIC_API_KEY, S3) are kept.
+        # always wins; the rest of the Vault secrets (S3) are kept.
         export DATABASE_URL="$$PREVIEW_DATABASE_URL"
         # Apply db/migrations/*.sql + db/roles.sql (baked into the image, #428) against
         # the fresh ephemeral DB — this is exactly what closes the "boots with no schema"
