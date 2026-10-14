@@ -13,6 +13,11 @@ missing. OpenTelemetry stayed off without an error: 0 spans and 0 logs in SigNoz
 
 These tests find each caller in the source and check all four links for each one. A new
 caller needs no new test.
+
+One more check covers the failure policy. `strict_otel` decides whether a bad `OTEL_*`
+value stops the service. The SDK default turns strict in 3.4.0 (#1238). Each caller
+passes the literal value, so no caller relies on the default. A new caller needs one
+row in `STRICT_OTEL_POLICY`.
 """
 
 from __future__ import annotations
@@ -37,6 +42,14 @@ PLATFORM = ROOT / "platform"
 COLLECTOR_OTLP_HTTP = "http://platform-signoz-otel-collector:4318"
 #: The callers that exist today. They prove that the scanner finds something.
 KNOWN_CALLERS = {"platform/12.alerting/app.py", "platform/30.todo/app.py"}
+#: The `strict_otel` value each caller passes (#1238).
+#: The SDK default turns strict in 3.4.0. A caller that states no value follows it.
+#: The bridge pages people: a bad `OTEL_*` value is logged and never stops it.
+#: The Canary Todo is strict: a bad `OTEL_*` value stops it.
+STRICT_OTEL_POLICY = {
+    "platform/12.alerting/app.py": False,
+    "platform/30.todo/app.py": True,
+}
 
 
 def _last_name(node: ast.expr) -> str:
@@ -127,6 +140,18 @@ def _passed_name(app: Path) -> str:
         f"{app}: init_service needs a literal name= keyword"
     )
     return value.value
+
+
+def _passed_strict_otel(call: ast.Call) -> bool | None:
+    """The bool literal of the `strict_otel=` keyword, or `None`.
+
+    `None` means that the keyword is missing, so the call relies on the SDK default, or
+    that its value is not a bool literal, so this scan cannot read it.
+    """
+    value = _keyword(call, "strict_otel")
+    if isinstance(value, ast.Constant) and isinstance(value.value, bool):
+        return value.value
+    return None
 
 
 def _meta(app: Path):
@@ -294,6 +319,49 @@ def test_the_app_starts_telemetry_when_the_deploy_issued_the_endpoint(
     assert settings.service_name == _passed_name(app)
     assert settings.endpoint == COLLECTOR_OTLP_HTTP
     assert module.fastapi_app.state.telemetry_providers is not None
+
+
+# ------------------------------------------------------------------ the failure policy
+
+
+@pytest.mark.parametrize(
+    ("source", "passed"),
+    [
+        ("init_service(app, name='a', strict_otel=False)", False),
+        ("init_service(app, name='a', strict_otel=True)", True),
+        ("init_service(app, name='a')", None),
+        ("init_service(app, name='a', strict_otel=STRICT)", None),
+        ("init_service(app, name='a', strict_otel=1)", None),
+        ("init_service(app, name='a', **options)", None),
+        ("init_service(app, 'a', None, True, False)", None),
+    ],
+    ids=["false", "true", "missing", "variable", "integer", "unpacked", "positional"],
+)
+def test_the_scanner_reads_only_a_literal_strict_otel_keyword(
+    source: str, passed: bool | None
+) -> None:
+    """A missing keyword relies on the SDK default. A value that is not a bool literal
+    hides the policy from the scan. Both give `None`. The policy test fails on `None`."""
+    (call,) = init_service_calls(source)
+    assert _passed_strict_otel(call) is passed
+
+
+def test_the_policy_table_lists_every_caller_and_only_the_callers() -> None:
+    """A caller without a row states no policy. A row without a caller is stale."""
+    assert set(CALLER_IDS) == set(STRICT_OTEL_POLICY), CALLER_IDS
+
+
+@pytest.mark.parametrize(("caller", "strict"), sorted(STRICT_OTEL_POLICY.items()))
+def test_the_caller_passes_the_strict_otel_value_the_service_needs(
+    caller: str, strict: bool
+) -> None:
+    """A call that relies on the SDK default behaves like a call that states it, until
+    the SDK changes the default. Only the source shows the difference."""
+    (call,) = init_service_calls((ROOT / caller).read_text(encoding="utf-8"))
+    assert _passed_strict_otel(call) is strict, (
+        f"{caller}: init_service must pass the literal strict_otel={strict}. "
+        "The SDK default turns strict in 3.4.0."
+    )
 
 
 # ------------------------------------------------------------------ link 1: the deploy
