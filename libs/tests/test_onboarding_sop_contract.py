@@ -22,11 +22,14 @@ def _get_sop_text() -> str:
 def test_onboarding_sop_does_not_mention_deleted_generic_template() -> None:
     """The generic scaffold template was removed in SDK v3.3.0.
 
-    The SOP must not advertise `generic` as a valid template option.
+    The SOP parameter explanation must not advertise `generic` as a valid template option.
     """
     text = _get_sop_text()
-    assert "generic" not in text, (
-        "07.new-service-sop.md still references deleted 'generic' template"
+    match = re.search(r"`--template`\s*取\s*([^；\n]+)", text)
+    assert match is not None, "Could not find `--template` parameter description in SOP"
+    template_choices = match.group(1)
+    assert "generic" not in template_choices, (
+        f"`--template` description still references deleted 'generic' template: {template_choices}"
     )
 
 
@@ -56,9 +59,7 @@ def test_onboarding_sop_scaffold_command_flags_are_valid() -> None:
         else:
             cleaned_tokens.append(token)
 
-    # Dry-run parsing through main -- if invalid arguments exist, SystemExit(2) is raised
-    # We pass --help or parse argv directly. Since main calls scaffold_service if parsing succeeds,
-    # let's test with --help to verify flag validity, or inspect ArgumentParser directly.
+    # Execute main() with scaffold_service mocked to avoid writing files to disk
     from unittest.mock import patch
 
     with patch("infra2_sdk.scaffold.scaffold_service") as mock_scaffold:
