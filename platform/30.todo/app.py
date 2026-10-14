@@ -593,25 +593,6 @@ fastapi_app = FastAPI(
 )
 
 
-def _require_issued_telemetry_identity() -> None:
-    """Refuse to start on an OTLP endpoint without the identity the deploy issues.
-
-    The endpoint turns export on. `init_service` uses its `name` when OTEL_SERVICE_NAME is
-    empty. It cannot catch a deploy that issued no identity. The deploy issues
-    OTEL_SERVICE_NAME and OTEL_RESOURCE_ATTRIBUTES together (#991).
-    """
-    if (
-        os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
-        and not os.environ.get("OTEL_SERVICE_NAME", "").strip()
-    ):
-        raise RuntimeError(
-            "OTEL_SERVICE_NAME is required when OTEL_EXPORTER_OTLP_ENDPOINT is set; "
-            "the deploy issues the telemetry identity"
-        )
-
-
-_require_issued_telemetry_identity()
-
 # The one OpenTelemetry bootstrap (#1209). init_service mounts /livez, /readyz and /health.
 # It sets the root logger to INFO before the OpenTelemetry handler attaches.
 # It starts traces, metrics and logs when the deploy issued the endpoint.
@@ -622,6 +603,7 @@ init_service(
     db_checker=_canary_readiness_checker,
     enable_otel=True,
     strict_otel=True,
+    require_issued_identity=True,
     check_timeout_seconds=READINESS_TIMEOUT_SECONDS,
 )
 
