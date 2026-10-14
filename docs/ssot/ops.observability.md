@@ -227,7 +227,7 @@ graph LR
 | `finance_report/app` | backend | `finance-report-backend` | 签发 | worker 不给:端点开着而没有环境标签会拒绝启动(2026-09-10 staging crash-loop) |
 | `truealpha/app` | llm | `truealpha-app` | 签发(app 与 preview 两份 compose) | `ta-app.sync`(`AppDeployer.telemetry_service_name`)、固定 compose promote、preview 三入口同名;`component=app` |
 | `truealpha/app` | web | — | 不签发 | Node/Next.js,无 OTel SDK;且一个 compose 的 `OTEL_SERVICE_NAME` 不能同时命名两个服务 |
-| `platform/todo` | todo | `platform-todo` | 签发 | `TodoDeployer.telemetry_service_name` makes `Deployer.sync` issue the identity; the compose adds `ENV`. The service refuses to start on the endpoint without `OTEL_SERVICE_NAME` or `ENV` (#991) |
+| `platform/todo` | todo | `platform-todo` | 签发 | `TodoDeployer.telemetry_service_name` makes `Deployer.sync` issue the identity; the compose adds `ENV`. The app passes `require_issued_identity=True`, so the service refuses to start on an active endpoint without `OTEL_SERVICE_NAME` and the four issued attributes. [platform.canary_todo.md](platform.canary_todo.md#5-telemetry) defines an active endpoint. The SDK takes the tier from `deployment.environment.name`, not from `ENV` (#991, #1242) |
 | `platform/alerting` | feishu-alert-bridge | `platform-alerting` | 签发 | `AlertingDeployer.telemetry_service_name` makes `Deployer.sync` issue the identity; the compose passes it with the endpoint and `ENV`; the image installs the OpenTelemetry packages (#1209). The probe runner container shares the image and gets no endpoint |
 | `truealpha/data_engine` | dagster-* | — | **不签发** | 三个角色全是 `network_mode: host`(为 OpenD),Docker DNS 名 `platform-signoz-otel-collector` 在宿主网络解析不了;§4.4 规定 collector 永不 publish,故不另开端口,等有宿主可达的 ingest 再接。没有端点就不会触发应用侧"缺身份即 fast-fail" |
 
@@ -546,8 +546,10 @@ Feishu page，且告警携带同一结构化记录。不得通过破坏 producti
 | synthetic round-trip(配置缺失 → `EX_CONFIG`,后端失败 → 1) | `test_observability_roundtrip_probe.py` | ✅ |
 | IaC/runtime/telemetry/alert 身份契约 | `tools/service_identity_audit.py`, `libs/tests/test_service_identity*.py` | ✅ |
 | truealpha 端点与身份签发(llm 容器拿到 collector 端点 + 各入口签发的身份;端点不无身份出现、不进 host 网络、不进 web;sync 与 promote/preview 同名)(#906) | `libs/tests/test_truealpha_app.py`, `test_deploy_primitive.py`, `test_preview_lifecycle.py` | ✅ |
-| Canary Todo depth: real Redis/Postgres/S3 write paths fail on NOAUTH, `E`, denied write; the probe consumer, the SSO-only routing, the telemetry bootstrap and the issued identity (#991) | `libs/tests/test_todo_canary_depth.py`, `libs/tests/test_todo_service.py` | ✅ |
+| Canary Todo depth: real Redis/Postgres/S3 write paths fail on NOAUTH, `E`, denied write; the probe consumer, the SSO-only routing, the telemetry bootstrap and the issued identity (#991, #1242) | `libs/tests/test_todo_canary_depth.py`, `libs/tests/test_todo_service.py`, `libs/tests/test_todo_issued_identity.py` | ✅ |
 | Every `init_service` caller under `platform/` ships OpenTelemetry end to end: the Deployer issues the identity, the compose passes it with the endpoint, the image installs the packages, the app has one bootstrap (#1209) | `libs/tests/test_platform_otel_adoption.py` | ✅ |
+| Every `init_service` caller passes the literal `strict_otel` value its service needs: alerting `False`, todo `True` (#1238) | `libs/tests/test_platform_otel_adoption.py` | ✅ |
+| `clear_telemetry_env` removes every SDK contract variable, every alias and every `OTEL_*` name from the environment of a test (#1238) | `libs/tests/test_ambient_env.py`, `libs/tests/test_todo_logging_order.py` | ✅ |
 | 告警通道手动连通 | `uv run invoke alerting.test-feishu` | Manual gate |
 
 ---
