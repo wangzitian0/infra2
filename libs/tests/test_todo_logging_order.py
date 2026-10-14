@@ -21,6 +21,10 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
+from libs.tests.ambient_env import clear_telemetry_env
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TODO_APP = REPO_ROOT / "platform/30.todo/app.py"
 
@@ -35,6 +39,11 @@ _PROBE_SCRIPT = textwrap.dedent(
     import os
     import sys
     import types
+
+    # The names that the shell must not hand to the child (#1238).
+    inherited = sorted(
+        name for name in ("APP_ENV", "IMAGE_TAG", "SERVICE_VERSION") if name in os.environ
+    )
 
     uvicorn_stub = types.ModuleType("uvicorn")
     uvicorn_stub.run = lambda *args, **kwargs: None
@@ -51,6 +60,7 @@ _PROBE_SCRIPT = textwrap.dedent(
         "handlers": [
             type(h).__module__ + "." + type(h).__qualname__ for h in root.handlers
         ],
+        "inherited": inherited,
     }
     sys.stdout.write(json.dumps(state) + "\\n")
     sys.stdout.flush()
@@ -61,7 +71,10 @@ _PROBE_SCRIPT = textwrap.dedent(
 
 
 def _run_probe(app_path: Path) -> tuple[dict, str]:
-    env = {k: v for k, v in os.environ.items() if not k.startswith("OTEL_")}
+    # The child gets the shell environment without the SDK variables and aliases (#1238).
+    with pytest.MonkeyPatch.context() as patch:
+        clear_telemetry_env(patch)
+        env = dict(os.environ)
     env["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://127.0.0.1:1"
     env["OTEL_SERVICE_NAME"] = "platform-todo"
     env["OTEL_RESOURCE_ATTRIBUTES"] = (
@@ -106,3 +119,19 @@ def test_todo_main_leaves_root_logger_at_info_with_otel_handler() -> None:
     assert "INFO platform-todo Canary Todo service starting on port 8000" in stderr, (
         stderr
     )
+
+
+def test_the_probe_child_does_not_inherit_conflicting_version_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shell with `SERVICE_VERSION` and `IMAGE_TAG` set to different values stops a strict
+    start with `EnvironmentConflictError`. The child must not inherit them, and the probe
+    reports which of these names it inherited. It must not inherit `APP_ENV` either (#1238)."""
+    monkeypatch.setenv("SERVICE_VERSION", "1.0.0")
+    monkeypatch.setenv("IMAGE_TAG", "2.0.0")
+    monkeypatch.setenv("APP_ENV", "production")
+
+    state, _stderr = _run_probe(TODO_APP)
+
+    assert state["inherited"] == [], state
+    assert state["level"] == logging.INFO, state
