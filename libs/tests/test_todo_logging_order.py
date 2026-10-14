@@ -64,6 +64,10 @@ def _run_probe(app_path: Path) -> tuple[dict, str]:
     env = {k: v for k, v in os.environ.items() if not k.startswith("OTEL_")}
     env["OTEL_EXPORTER_OTLP_ENDPOINT"] = "http://127.0.0.1:1"
     env["OTEL_SERVICE_NAME"] = "platform-todo"
+    env["OTEL_RESOURCE_ATTRIBUTES"] = (
+        "deployment.environment.name=staging,infra.service.id=platform/todo,"
+        f"service.version={'a' * 40},infra.iac.ref={'a' * 40}"
+    )
     env["ENV"] = "staging"
     env["PORT"] = "8000"
     result = subprocess.run(
