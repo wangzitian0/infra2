@@ -268,6 +268,21 @@ def _build_env(env_name: str, *, named: bool) -> dict[str, str | None]:
     }
 
 
+def _routing_tier(norm: str) -> str:
+    """Return the routing tier for a normalized env name.
+
+    A preview alias (``pr_5``, ``branch_main``, ``canary_preview``) keeps its slot token,
+    so ``resolve_app_hostname`` builds ``{slug}-pr-5`` and not ``{slug}-preview``.
+    """
+    from infra2_sdk.runtime.environment import is_preview_alias
+
+    if norm in ("production", "staging"):
+        return norm
+    if is_preview_alias(norm):
+        return norm
+    return "preview"
+
+
 def get_service_url(
     service: str, domain: str | None = None, env: dict | None = None
 ) -> str:
@@ -294,10 +309,8 @@ def get_service_url(
     norm = normalize_env_name(e.get("ENV"))
     if service in SHARED_PLATFORM_SERVICES():
         tier = "production"
-    elif norm in ("production", "staging"):
-        tier = norm
     else:
-        tier = "preview"
+        tier = _routing_tier(norm)
 
     from infra2_sdk.routing import resolve_service_url
 
@@ -317,8 +330,7 @@ def service_domain(subdomain: str, env: dict | None = None) -> str:
     domain = e.get("INTERNAL_DOMAIN")
     if not subdomain or not domain:
         return ""
-    norm = normalize_env_name(e.get("ENV"))
-    tier = norm if norm in ("production", "staging") else "preview"
+    tier = _routing_tier(normalize_env_name(e.get("ENV")))
     from infra2_sdk.routing import resolve_app_hostname
 
     return resolve_app_hostname(subdomain, tier=tier, base_domain=domain)

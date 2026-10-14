@@ -1400,3 +1400,23 @@ def test_the_deploy_job_refuses_a_staging_request_without_its_creation_time(
     assert "app deploy request failed: request creation time ''" in (
         capsys.readouterr().err
     )
+
+
+def test_authority_uses_the_sdk_evidence_url_validator() -> None:
+    """The receiver has no local copy of the URL check (infra2-sdk#105)."""
+    assert not hasattr(receiver, "_validate_evidence_urls")
+    assert not hasattr(receiver, "_require_github_path")
+    foreign_repo_url = payload(
+        evidence={
+            "source_run_url": "https://github.com/other-owner/other-repo/actions/runs/100",
+            "source_run_id": "100",
+            "staging_run_url": "",
+            "reviewed_change_url": "",
+        }
+    )
+    with pytest.raises(ValueError, match="source_run_url"):
+        receiver.validate_request_authority(
+            receiver.parse_request(foreign_repo_url),
+            sender="wangzitian0",
+            resolve_image=resolved,
+        )

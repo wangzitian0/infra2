@@ -9,12 +9,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlparse
 
 from infra2_sdk.deploy import (
     DeployOperation,
     DeployRequest,
     DeployType,
+    validate_evidence_urls,
     verify_production_evidence,
 )
 from infra2_sdk.refs import ResolvedRef, resolve_image_ref, resolve_pr
@@ -182,7 +182,7 @@ def validate_request_authority(
             f"service {request.service!r} requires source_repository {expected_source!r}"
         )
 
-    _validate_evidence_urls(request)
+    validate_evidence_urls(request, expected_repository=expected_source)
     if request.deploy_type == DeployType.PRODUCTION:
         verifier = production_evidence_verifier or verify_production_evidence
         verifier(request)
@@ -330,36 +330,6 @@ def _run_attempt(text: str) -> int:
 
 def _iso(moment: datetime) -> str:
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _validate_evidence_urls(request: DeployRequest) -> None:
-    repository_path = f"/{request.source_repository}/"
-    _require_github_path(
-        request.evidence.source_run_url,
-        prefix=f"{repository_path}actions/runs/",
-        field="source_run_url",
-    )
-    if request.deploy_type == DeployType.PRODUCTION:
-        _require_github_path(
-            request.evidence.staging_run_url,
-            prefix=f"{repository_path}actions/runs/",
-            field="staging_run_url",
-        )
-        _require_github_path(
-            request.evidence.reviewed_change_url,
-            prefix=f"{repository_path}pull/",
-            field="reviewed_change_url",
-        )
-
-
-def _require_github_path(url: str, *, prefix: str, field: str) -> None:
-    parsed = urlparse(url)
-    if (
-        parsed.scheme != "https"
-        or parsed.netloc != "github.com"
-        or not parsed.path.startswith(prefix)
-    ):
-        raise ValueError(f"evidence.{field} must point to {prefix} on github.com")
 
 
 def _git_url(repository: str) -> str:

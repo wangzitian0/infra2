@@ -1220,23 +1220,34 @@ def test_startup_fails_fast_when_the_endpoint_comes_without_an_identity(
     monkeypatch, telemetry_calls
 ) -> None:
     """The endpoint turns export on. `init_service` would name the data `platform-todo` on
-    its own, so the app checks that the deploy issued the identity (finance_report's
-    contract)."""
+    its own, so it runs with `require_issued_identity=True` and refuses a deploy that issued
+    no identity. The error names every missing key and no value."""
     monkeypatch.setenv("ENV", "staging")
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", COLLECTOR_OTLP_HTTP)
-    with pytest.raises(RuntimeError, match="OTEL_SERVICE_NAME"):
+    with pytest.raises(ValueError, match="OTEL_SERVICE_NAME") as failure:
         _load_todo_app()
+    for key in (
+        "deployment.environment.name",
+        "infra.service.id",
+        "service.version",
+        "infra.iac.ref",
+    ):
+        assert key in str(failure.value)
     assert telemetry_calls == []
 
 
-def test_startup_fails_fast_when_the_environment_is_unknown(
+def test_startup_fails_fast_when_the_issued_environment_is_unknown(
     monkeypatch, telemetry_calls
 ) -> None:
+    """The telemetry tier is the issued `deployment.environment.name`, not `ENV`."""
     env = _issued_telemetry_env("staging")
-    env.pop("ENV")
+    env["OTEL_RESOURCE_ATTRIBUTES"] = env["OTEL_RESOURCE_ATTRIBUTES"].replace(
+        "deployment.environment.name=staging", "deployment.environment.name=bogus-tier"
+    )
+    assert "bogus-tier" in env["OTEL_RESOURCE_ATTRIBUTES"]
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    with pytest.raises(ValueError, match="ENVIRONMENT"):
+    with pytest.raises(ValueError, match=r"deployment\.environment\.name"):
         _load_todo_app()
     assert telemetry_calls == []
 
