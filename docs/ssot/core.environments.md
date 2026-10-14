@@ -323,9 +323,9 @@ an explicit per-environment Vault value.
 
 An `app` service never receives a 40-hex SHA in `GIT_COMMIT_SHA`. The deploy sets `GIT_COMMIT_SHA` and `IMAGE_TAG` to the same value.
 
-**Decision: the SDK `RuntimeIdentity` is not adopted.** No service or test in this repository calls `RuntimeIdentity`. `libs/tests/test_identity_contract.py` scans the repository and expects zero references.
+**Decision: the SDK `RuntimeIdentity` is not adopted.** No non-test code in this repository calls `RuntimeIdentity`. `libs/tests/test_identity_contract.py` scans non-test Python files and expects zero references.
 
-**Decision: `ServiceIdentity` stays the source of the SigNoz resource attributes.** `Deployer.sync`, fixed promote and preview render `OTEL_RESOURCE_ATTRIBUTES` with `ServiceIdentity.otel_resource_attributes()`. The keys `infra.service.id`, `infra.component`, `infra.iac.ref`, `infra.identity.schema` and `infra.managed_by` exist only there. Services validate issued telemetry coordinates through `OtelSettings.from_env(..., require_issued_identity=True)`.
+**Decision: `ServiceIdentity` stays the source of the SigNoz resource attributes.** `Deployer.sync`, fixed promote and preview render `OTEL_RESOURCE_ATTRIBUTES` with `ServiceIdentity.otel_resource_attributes()`. The keys `infra.service.id`, `infra.component`, `infra.iac.ref`, `infra.identity.schema` and `infra.managed_by` exist only there. Services validate issued telemetry coordinates through `init_service(..., require_issued_identity=True)`.
 
 ---
 
