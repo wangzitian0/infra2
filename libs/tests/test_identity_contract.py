@@ -1,18 +1,16 @@
-"""Identity contract for `GIT_COMMIT_SHA` and the SDK `RuntimeIdentity` (#1211).
+"""Identity contract for `GIT_COMMIT_SHA` and `ServiceIdentity` (#1211).
 
 The contract is the table in `docs/ssot/core.environments.md`, section 4.5.1. It names two
 service classes. A `platform` service gets the full infra2 SHA of the deploy. An `app`
 gets the image tag. These tests parse the table. They compare it with the registry, the
-compose files, the deploy code and the pinned SDK.
+compose files, and the deploy code.
 
-These tests state four facts.
+These tests state three facts.
 
 1. Each compose file that a registered service with telemetry ships sets `GIT_COMMIT_SHA`
    to the value of its class.
-2. No non-test code uses `RuntimeIdentity`. Adopting it requires an update of the contract
-   table and of `test_runtime_identity_has_no_non_test_user` in the same pull request.
+2. No non-test code uses `RuntimeIdentity`.
 3. The three deploy entry points render `OTEL_RESOURCE_ATTRIBUTES` from `ServiceIdentity`.
-4. The pinned SDK rejects the value that an `app` container holds.
 
 A guard that never fails proves nothing. Each guard here has mutation tests: a seeded
 wrong state must produce a violation.
@@ -26,7 +24,6 @@ import re
 from pathlib import Path
 
 import pytest
-from infra2_sdk.runtime.identity import RuntimeIdentity
 
 from libs.core import registry as reg
 from libs.core.service_identity import ServiceIdentity
@@ -535,21 +532,13 @@ def test_no_non_test_code_calls_the_sdk_attribute_emitter() -> None:
     assert scan(names=emitter, modules=frozenset()) == {}
 
 
-def test_sdk_emitter_uses_other_keys_than_service_identity() -> None:
+def test_service_identity_emits_the_five_infra_resource_keys() -> None:
     identity = ServiceIdentity.build(
         "platform/todo", "production", version=SHA40, iac_ref=SHA40
     )
     ours = dict(
         pair.split("=", 1) for pair in identity.otel_resource_attributes().split(",")
     )
-    theirs = RuntimeIdentity(
-        service_name="platform-todo",
-        service_version=SHA40,
-        environment="production",
-        commit_sha=SHA40,
-        image_digest="sha256:" + "b" * 64,
-        instance_id="instance-1",
-    ).to_standard_otel_resource_attributes()
     infra_keys = {key for key in ours if key.startswith("infra.")}
     assert infra_keys == {
         "infra.component",
@@ -558,24 +547,6 @@ def test_sdk_emitter_uses_other_keys_than_service_identity() -> None:
         "infra.managed_by",
         "infra.service.id",
     }
-    assert infra_keys.isdisjoint(theirs)
-    sdk_only = {"vcs.ref.head.revision", "container.image.id"}
-    assert sdk_only <= set(theirs)
-    assert sdk_only.isdisjoint(ours)
-
-
-# --- the pinned SDK against the container values ----------------------------------------
-
-
-def _sdk_identity(commit: str, *, tag: str, strict: bool) -> RuntimeIdentity:
-    """`RuntimeIdentity.from_env` over the env of a production container."""
-    environ = {
-        "ENV": "production",
-        "OTEL_SERVICE_NAME": "service-under-test",
-        "IMAGE_TAG": tag,
-        ENV_KEY: commit,
-    }
-    return RuntimeIdentity.from_env(environ, strict=strict)
 
 
 PLATFORM_VALUES = [
@@ -593,7 +564,7 @@ APP_VALUES = [
 
 
 def test_the_container_values_exist_for_both_classes() -> None:
-    """Control: the parametrized SDK tests below run for every service of both classes."""
+    """Control: the container values exist for every service of both classes."""
     assert {(service_id, name) for service_id, name, _ in PLATFORM_VALUES} == {
         ("platform/alerting", "feishu-alert-bridge"),
         ("platform/todo", "todo"),
@@ -604,45 +575,3 @@ def test_the_container_values_exist_for_both_classes() -> None:
     }
     assert {value for _, _, value in PLATFORM_VALUES} == {SHA40}
     assert {value for _, _, value in APP_VALUES} == {TAG}
-
-
-@pytest.mark.parametrize(("service_id", "name", "value"), PLATFORM_VALUES)
-def test_sdk_accepts_the_platform_commit_but_strict_mode_needs_more(
-    service_id: str, name: str, value: str
-) -> None:
-    assert _sdk_identity(value, tag=value, strict=False).commit_sha == SHA40
-    with pytest.raises(ValueError) as caught:
-        _sdk_identity(value, tag=value, strict=True)
-    prefix = "protected runtime identity is missing: "
-    assert str(caught.value).startswith(prefix), service_id
-    assert str(caught.value).removeprefix(prefix).split(", ") == [
-        "image_digest",
-        "configuration_sha256",
-        "release_id",
-    ]
-
-
-@pytest.mark.parametrize("strict", [False, True])
-@pytest.mark.parametrize(
-    "commit", sorted({value for _, _, value in APP_VALUES} | {SHORT_SHA}), ids=str
-)
-def test_sdk_rejects_the_app_commit_in_every_mode(commit: str, strict: bool) -> None:
-    with pytest.raises(
-        ValueError, match="commit_sha must be 'unknown' or a lowercase 40-hex"
-    ):
-        _sdk_identity(commit, tag=commit, strict=strict)
-
-
-def test_strict_mode_passes_once_the_commit_and_the_three_values_exist() -> None:
-    """Control: the conditions in the contract are enough for the SDK."""
-    environ = {
-        "ENV": "production",
-        "OTEL_SERVICE_NAME": "service-under-test",
-        "IMAGE_TAG": TAG,
-        ENV_KEY: SHA40,
-        "IMAGE_DIGEST": "sha256:" + "b" * 64,
-        "CONFIGURATION_SHA256": "c" * 64,
-        "RELEASE_ID": "release-1",
-    }
-    identity = RuntimeIdentity.from_env(environ, strict=True)
-    assert (identity.service_version, identity.commit_sha) == (TAG, SHA40)

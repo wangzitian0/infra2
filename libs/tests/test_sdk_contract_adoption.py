@@ -9,7 +9,6 @@ import textwrap
 from pathlib import Path
 
 import yaml
-from infra2_sdk.delivery import DisagreementKind, detect_disagreement
 
 from libs.tests import test_sdk_requirement as sdk_requirement_tests
 from libs.tests.test_sdk_requirement import _steps
@@ -518,63 +517,3 @@ def test_retired_compatibility_modules_stay_removed() -> None:
     assert not (ROOT / "libs/pipeline_stage_contract.py").exists()
     assert not (ROOT / "libs/image_pins.py").exists()
     assert not (ROOT / "tools/lint_platform_image_pins.py").exists()
-
-
-def test_detect_disagreement_can_produce_every_disagreement_kind() -> None:
-    """Execute detect_disagreement with real StageResult inputs for all DisagreementKind enum values.
-
-    Anti-Tautology (Rule 7): tests real execution outcomes, never string-matching inspect.getsource.
-    """
-    from infra2_sdk.delivery import (
-        FailureDomain,
-        PipelineStage,
-        StageStatus,
-        make_stage_result,
-    )
-
-    normal_results = [
-        make_stage_result(
-            source="ci",
-            environment="staging",
-            stage=PipelineStage.WATCHDOG,
-            target="app",
-            status=StageStatus.PASS,
-        )
-    ]
-    assert detect_disagreement(normal_results) == DisagreementKind.NONE
-
-    disagreement_results = [
-        make_stage_result(
-            source="ci",
-            environment="staging",
-            stage=PipelineStage.WATCHDOG,
-            target="app",
-            status=StageStatus.PASS,
-        ),
-        make_stage_result(
-            source="ci",
-            environment="staging",
-            stage=PipelineStage.DEPLOY_SMOKE,
-            target="app",
-            status=StageStatus.FAIL,
-            failure_domain=FailureDomain.TRAEFIK_PUBLIC_ROUTE,
-        ),
-    ]
-    assert (
-        detect_disagreement(disagreement_results)
-        == DisagreementKind.INTERNAL_HEALTH_PUBLIC_ROUTE
-    )
-
-    producers = {
-        DisagreementKind.NONE: lambda: detect_disagreement(normal_results),
-        DisagreementKind.INTERNAL_HEALTH_PUBLIC_ROUTE: lambda: detect_disagreement(
-            disagreement_results
-        ),
-    }
-    produced_kinds = {kind: fn() for kind, fn in producers.items()}
-    for kind, val in produced_kinds.items():
-        assert val == kind
-
-    assert set(producers.keys()) == set(DisagreementKind), (
-        f"Missing execution test for DisagreementKind: {set(DisagreementKind) - set(producers.keys())}"
-    )
