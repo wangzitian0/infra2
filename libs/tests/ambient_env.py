@@ -1,11 +1,14 @@
 """Clear the telemetry variables of the developer shell before a test loads an app.
 
 `platform/30.todo/app.py` and `platform/12.alerting/app.py` call `init_service` when the module
-loads. `init_service` reads the tier variables and every `OTEL_*` variable. A shell that exports
-an endpoint but no `OTEL_SERVICE_NAME` made the todo app raise while a test only loaded it.
-A shell that exports `APP_ENV` makes the SDK raise `EnvironmentConflictError` when a test sets
-`ENV` to another value (#1238).
-A test that needs a variable sets it after this call.
+loads. `init_service` reads the tier, the service name, the version and every `OTEL_*` variable.
+It checks each alias pair: two names of one pair with different values stop a strict start with
+`EnvironmentConflictError` (#1238). A shell that exports an endpoint but no `OTEL_SERVICE_NAME`
+made the todo app raise while a test only loaded it.
+
+The helper removes every variable and alias that the SDK contract declares, and every name that
+starts with `OTEL_`. It reads the contract from the SDK, so it keeps no list of its own and
+follows each SDK release. A test that needs a variable sets it after this call.
 """
 
 from __future__ import annotations
@@ -13,13 +16,20 @@ from __future__ import annotations
 import os
 
 import pytest
+from infra2_sdk.runtime.environment import runtime_env_contract
 
-#: The tier variables. The SDK reads `ENVIRONMENT`, and `ENV` and `APP_ENV` are its aliases.
-#: `libs/tests/test_ambient_env.py` checks that the helper removes every name the SDK declares.
-TIER_VARIABLES = ("ENV", "ENVIRONMENT", "APP_ENV")
+
+def _contract_names() -> set[str]:
+    """Every variable and every alias that the SDK contract declares."""
+    names: set[str] = set()
+    for variable in runtime_env_contract()["variables"]:
+        names.add(variable["name"])
+        names.update(variable["aliases"])
+    return names
 
 
 def clear_telemetry_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in [*os.environ, *TIER_VARIABLES]:
-        if key in TIER_VARIABLES or key.startswith("OTEL_"):
+    declared = _contract_names()
+    for key in list(os.environ):
+        if key in declared or key.startswith("OTEL_"):
             monkeypatch.delenv(key, raising=False)

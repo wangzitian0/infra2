@@ -1,8 +1,11 @@
 """`clear_telemetry_env` keeps the shell of a developer out of the app tests (#1209, #1238).
 
-`init_service` reads the tier from `ENVIRONMENT`, `ENV` and `APP_ENV`. Two of them with
-different values stop a strict start with `EnvironmentConflictError`. The helper must
-remove all three, or a shell that exports `APP_ENV` breaks every test that sets `ENV`.
+`init_service` reads the tier, the service name and the version. It checks each alias pair.
+Two names of one pair with different values stop a strict start with
+`EnvironmentConflictError`, with or without an endpoint. The helper removes every variable and
+alias that the SDK contract declares, and every name that starts with `OTEL_`.
+These tests take the names from the contract. An SDK release that adds or drops a name needs
+no edit here.
 """
 
 from __future__ import annotations
@@ -10,39 +13,79 @@ from __future__ import annotations
 import os
 
 import pytest
+from fastapi import FastAPI
+from infra2_sdk.fastapi import init_service
 from infra2_sdk.runtime.environment import (
     EnvironmentTier,
-    RuntimeEnvKey,
-    runtime_env_spec,
+    runtime_env_contract,
     strict_environment_from_env,
 )
 
+from libs.tests import ambient_env
 from libs.tests.ambient_env import clear_telemetry_env
 
 
-def _tier_variables() -> tuple[str, ...]:
-    """The tier variables as the SDK declares them: the key, then its aliases."""
-    spec = runtime_env_spec(RuntimeEnvKey.ENVIRONMENT)
-    return (spec.key.value, *spec.aliases)
+def _declared() -> dict[str, tuple[str, ...]]:
+    """Each variable of the SDK contract with its aliases."""
+    return {
+        variable["name"]: tuple(variable["aliases"])
+        for variable in runtime_env_contract()["variables"]
+    }
 
 
-def test_the_sdk_reads_app_env_as_an_alias_of_the_tier() -> None:
-    """The premise of the next tests, taken from the SDK and not from this repository."""
-    assert "APP_ENV" in _tier_variables()
+def _declared_names() -> list[str]:
+    """Every variable and every alias of the SDK contract."""
+    declared = _declared()
+    aliases = {alias for names in declared.values() for alias in names}
+    return sorted({*declared, *aliases})
 
 
-def test_the_helper_removes_every_tier_variable_the_sdk_reads(
-    monkeypatch: pytest.MonkeyPatch,
+def test_the_contract_declares_the_names_these_tests_rely_on() -> None:
+    """The cases below come from the contract. A read that gave no name would leave them
+    with nothing to check."""
+    declared = _declared()
+    assert {"ENV", "APP_ENV"} <= set(declared["ENVIRONMENT"])
+    assert "IMAGE_TAG" in declared["SERVICE_VERSION"]
+
+
+@pytest.mark.parametrize("name", [*_declared_names(), "OTEL_NOT_IN_THE_CONTRACT"])
+def test_the_helper_removes_the_name(
+    monkeypatch: pytest.MonkeyPatch, name: str
 ) -> None:
-    names = _tier_variables()
-    for name in names:
-        monkeypatch.setenv(name, "staging")
-    monkeypatch.setenv("OTEL_SERVICE_NAME", "from-the-shell")
+    monkeypatch.setenv(name, "from-the-shell")
 
     clear_telemetry_env(monkeypatch)
 
-    assert [name for name in names if name in os.environ] == []
-    assert "OTEL_SERVICE_NAME" not in os.environ
+    assert name not in os.environ
+
+
+def test_the_helper_reads_the_contract_and_keeps_no_list_of_its_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An SDK release can add or drop names. The helper must follow the contract it gets.
+    A name that this contract does not declare stays."""
+    contract = {
+        "contract_version": 1,
+        "variables": [
+            {
+                "name": "INFRA2_TEST_VARIABLE",
+                "aliases": ["INFRA2_TEST_ALIAS"],
+                "sensitive": False,
+            }
+        ],
+    }
+    others = [name for name in _declared_names() if not name.startswith("OTEL_")]
+    monkeypatch.setattr(ambient_env, "runtime_env_contract", lambda: contract)
+    monkeypatch.setenv("INFRA2_TEST_VARIABLE", "one")
+    monkeypatch.setenv("INFRA2_TEST_ALIAS", "two")
+    for name in others:
+        monkeypatch.setenv(name, "kept")
+
+    clear_telemetry_env(monkeypatch)
+
+    assert "INFRA2_TEST_VARIABLE" not in os.environ
+    assert "INFRA2_TEST_ALIAS" not in os.environ
+    assert [name for name in others if os.environ.get(name) != "kept"] == []
 
 
 def test_a_shell_alias_cannot_conflict_with_the_tier_a_test_sets(
@@ -58,3 +101,36 @@ def test_a_shell_alias_cannot_conflict_with_the_tier_a_test_sets(
     # GitHub Actions maps `local_test` to `github_ci`; the test states the mapping it checks.
     environment = strict_environment_from_env(github_actions=False)
     assert environment.tier is EnvironmentTier.LOCAL_TEST
+
+
+class _Providers:
+    def shutdown(self) -> None:
+        return None
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [{}, {"OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:1"}],
+    ids=["no-endpoint", "endpoint"],
+)
+def test_a_shell_version_alias_cannot_stop_a_strict_start(
+    monkeypatch: pytest.MonkeyPatch, settings: dict[str, str]
+) -> None:
+    """`SERVICE_VERSION` and `IMAGE_TAG` with different values stop a strict start with
+    `EnvironmentConflictError`. SDK 3.4.0 checks them also when no endpoint is set."""
+    import infra2_sdk.runtime.otel as sdk_otel
+
+    monkeypatch.setattr(
+        sdk_otel, "configure_telemetry", lambda _settings, **kw: _Providers()
+    )
+    monkeypatch.setenv("SERVICE_VERSION", "1.0.0")
+    monkeypatch.setenv("IMAGE_TAG", "2.0.0")
+
+    clear_telemetry_env(monkeypatch)
+    monkeypatch.setenv("ENV", "local_test")
+    for key, value in settings.items():
+        monkeypatch.setenv(key, value)
+    app = FastAPI()
+    init_service(app, "ambient-env-test", strict_otel=True)
+
+    assert {"/livez", "/readyz", "/health"} <= {route.path for route in app.routes}

@@ -37,7 +37,7 @@ import pytest
 from libs.security import registry as secrets_registry
 from libs.core import registry as reg
 from libs.observability.probe_specs import render_probe_spec_text
-from libs.tests.ambient_env import TIER_VARIABLES, clear_telemetry_env
+from libs.tests.ambient_env import clear_telemetry_env
 from libs.tests.compose_env import compose_services, resolve
 from libs.tests.docker_host import DockerHost
 from libs.tests.traefik_rules import routers_from_labels, serving_router
@@ -1300,9 +1300,9 @@ def test_init_service_gets_the_strict_flag_and_the_readiness_timeout(
     assert "log_level" not in call, "init_service owns the logging baseline"
 
 
-# The tests above replace or record parts of the SDK. The two tests below run the real SDK and
-# the real exporter packages in a child process, the way the container loads the app (#1238).
-# The exporter points at a closed port, so the child leaves with `os._exit` and skips the flush.
+# The tests above replace or record parts of the SDK. The two tests below run the real SDK
+# in a child process (#1238). The child loads the app the way the container does.
+# The exporter points at a closed port, so the child ends with `os._exit` and skips the flush.
 _STRICT_START_SCRIPT = textwrap.dedent(
     """
     import importlib.util, json, os, sys
@@ -1329,14 +1329,11 @@ _STRICT_START_SCRIPT = textwrap.dedent(
 def _load_the_app_in_a_child(
     settings: dict[str, str],
 ) -> subprocess.CompletedProcess[str]:
-    """Load `platform/30.todo/app.py` in a new interpreter. The child gets the shell
-    environment without the tier and OpenTelemetry variables, plus exactly `settings`."""
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in TIER_VARIABLES and not key.startswith("OTEL_")
-    }
-    env.update(settings)
+    """Load `platform/30.todo/app.py` in a new interpreter. The child gets the environment
+    that `clear_telemetry_env` leaves, plus exactly `settings`."""
+    with pytest.MonkeyPatch.context() as patch:
+        clear_telemetry_env(patch)
+        env = {**os.environ, **settings}
     return subprocess.run(
         [sys.executable, "-c", _STRICT_START_SCRIPT, str(SERVICE_DIR / "app.py")],
         env=env,
