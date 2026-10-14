@@ -30,7 +30,7 @@ def _production_probe_environment(monkeypatch):
     production on purpose. A test about the environment itself deletes this variable.
     The other variables the resolver reads start unset, whatever the shell holds.
     """
-    for name in ("INFRA_PROBE_HEARTBEAT_ENV", "OBS_ROUNDTRIP_ENV"):
+    for name in ("INFRA_ENVIRONMENT", "OBS_ROUNDTRIP_ENV"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("ENV", "production")
 
@@ -401,7 +401,10 @@ def test_public_route_probes_derive_from_facets_and_registered_signals() -> None
     an unregistered public probe cannot ship."""
     import yaml
 
-    from libs.observability.probe_specs import parse_probe_names, render_public_route_spec_text
+    from libs.observability.probe_specs import (
+        parse_probe_names,
+        render_public_route_spec_text,
+    )
 
     compose = (ROOT / "platform/12.alerting/compose.yaml").read_text(encoding="utf-8")
     assert "PUBLIC_ROUTE_PROBE_SPECS: ${PUBLIC_ROUTE_PROBE_SPECS:-}" in compose
@@ -1343,7 +1346,7 @@ def test_probe_runner_posts_cloudflare_watchdog_heartbeat(
         "INFRA_PROBE_HEARTBEAT_URL", "https://watchdog.example/heartbeat"
     )
     monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_TOKEN", "heartbeat-token")
-    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", "staging")
+    monkeypatch.setenv("ENV", "staging")
     monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_NAME", "platform-alerting-probes-staging")
     monkeypatch.setattr(
         runner,
@@ -1417,7 +1420,8 @@ def test_probe_runner_heartbeat_is_configured_in_alerting_compose() -> None:
 
     assert "INFRA_PROBE_HEARTBEAT_URL: ${INFRA_PROBE_HEARTBEAT_URL:-}" in compose
     assert "INFRA_PROBE_HEARTBEAT_TOKEN: ${INFRA_PROBE_HEARTBEAT_TOKEN:-}" in compose
-    assert "INFRA_PROBE_HEARTBEAT_ENV: ${ENV:-production}" in compose
+    assert "ENV: ${ENV}" in compose
+    assert "INFRA_PROBE_HEARTBEAT_ENV" not in compose
     assert (
         "INFRA_PROBE_HEARTBEAT_NAME: platform-alerting-probes${ENV_SUFFIX}" in compose
     )
@@ -1698,18 +1702,17 @@ def test_host_resource_specs_gated_to_production(monkeypatch) -> None:
     runner = _load_probe_runner()
     specs = parse_probe_specs("vault|http|http://vault|200\nhost-cpu|resource|cpu|80")
 
-    # the runner sets INFRA_PROBE_HEARTBEAT_ENV (not always ENV) — gate on it.
     monkeypatch.delenv("ENV", raising=False)
     monkeypatch.delenv("DEPLOY_ENV", raising=False)
 
-    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", "production")
+    monkeypatch.setenv("INFRA_ENVIRONMENT", "production")
     assert {s.kind for s in runner._host_specs_for_env(specs)} == {"http", "resource"}
 
-    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", "staging")
+    monkeypatch.setenv("INFRA_ENVIRONMENT", "staging")
     assert {s.kind for s in runner._host_specs_for_env(specs)} == {"http"}
 
-    # case-insensitive + ENV fallback when the heartbeat var is unset
-    monkeypatch.delenv("INFRA_PROBE_HEARTBEAT_ENV", raising=False)
+    # case-insensitive + ENV fallback when INFRA_ENVIRONMENT is unset
+    monkeypatch.delenv("INFRA_ENVIRONMENT", raising=False)
     monkeypatch.setenv("ENV", "Staging")
     assert {s.kind for s in runner._host_specs_for_env(specs)} == {"http"}
 
@@ -1807,7 +1810,10 @@ def test_truealpha_app_is_probed_inside_and_on_its_product_domain() -> None:
     truealpha#474), which the public-route renderer could not express."""
     import importlib.util
 
-    from libs.observability.probe_specs import render_probe_spec_text, render_public_route_spec_text
+    from libs.observability.probe_specs import (
+        render_probe_spec_text,
+        render_public_route_spec_text,
+    )
 
     internal = render_probe_spec_text()
     assert (
@@ -1899,11 +1905,10 @@ def _scripted_runner(monkeypatch, *, env: str | None = "production", clock=None)
         "DEPLOY_ENV",
     ):
         monkeypatch.delenv(name, raising=False)
-    for name in ("ENV", "INFRA_PROBE_HEARTBEAT_ENV"):
-        if env is None:  # a runner that was never told its environment
-            monkeypatch.delenv(name, raising=False)
-        else:
-            monkeypatch.setenv(name, env)
+    if env is None:  # a runner that was never told its environment
+        monkeypatch.delenv("ENV", raising=False)
+    else:
+        monkeypatch.setenv("ENV", env)
     monkeypatch.setenv(
         "INFRA_PROBE_HEARTBEAT_URL", "https://watchdog.example/heartbeat"
     )
@@ -2341,20 +2346,20 @@ def test_host_probes_stay_on_unless_the_runner_is_recognisably_non_production(
     counts as production. The gate raises."""
     runner = _load_probe_runner()
     specs = parse_probe_specs("vault|http|http://vault|200\nhost-cpu|resource|cpu|80")
-    for name in ("ENV", "DEPLOY_ENV"):
+    for name in ("INFRA_ENVIRONMENT", "ENV", "DEPLOY_ENV"):
         monkeypatch.delenv(name, raising=False)
 
     for env in ("prod", "PRODUCTION "):
-        monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", env)
+        monkeypatch.setenv("ENV", env)
         kinds = {spec.kind for spec in runner._host_specs_for_env(specs)}
         assert kinds == {"http", "resource"}, env
-    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", "garbage")
+    monkeypatch.setenv("ENV", "garbage")
     with pytest.raises(ValueError, match="garbage"):
         runner._host_specs_for_env(specs)
-    monkeypatch.delenv("INFRA_PROBE_HEARTBEAT_ENV")
-    with pytest.raises(ValueError, match="INFRA_PROBE_HEARTBEAT_ENV"):
+    monkeypatch.delenv("ENV")
+    with pytest.raises(ValueError, match="ENV"):
         runner._host_specs_for_env(specs)
-    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", "stg")
+    monkeypatch.setenv("ENV", "stg")
     assert {s.kind for s in runner._host_specs_for_env(specs)} == {"http"}
 
 

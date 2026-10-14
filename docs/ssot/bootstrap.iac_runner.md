@@ -435,7 +435,6 @@ DEPLOY_ENV=production invoke vault.setup-approle --project=bootstrap --service=i
 | `WEBHOOK_SECRET` | Vault | GitHub webhook 验证密钥 |
 | `GIT_REPO_URL` | Vault | Git 仓库地址 |
 | `OP_SERVICE_ACCOUNT_TOKEN` | Vault | Required 1Password service account token used by IaC Runner subprocesses to read Infra2 through `op` CLI |
-| `VAULT_ROOT_TOKEN_OP_REF` | — | **Not implemented / removed by the §6.4 AppRole migration.** `resolve_vault_token` never read it; the deploy credential now comes from an in-container AppRole login (Dokploy-env `VAULT_ROLE_ID`/`VAULT_SECRET_ID`), not from 1Password. |
 
 No Vault token is stored in GitHub Actions. IaC Runner logs in with its AppRole
 inside the container for each sync and passes the bounded token as `VAULT_TOKEN`
@@ -473,13 +472,13 @@ AppRole** 同时满足，无需两个角色）：
 #### 6.4.2 目标设计（SSOT 正解：单一有界 AppRole + Dokploy env 注入）
 
 > **设计修正（2026-06-17，本次）**：本节早先草案把 deployer 登录材料**存入 1Password
-> 并在运行时 `op read`**（并声称复用 `VAULT_ROOT_TOKEN_OP_REF`）。这**违反 secrets SSOT**：
+> 并在运行时 `op read`**。这**违反 secrets SSOT**：
 > **1Password 只装两类东西——①0 依赖启动根（Vault root/unseal、OP Connect token、Dokploy
 > API key、Cloudflare token）；②web 登录才能产出的 admin 密码（如 signoz admin）**。deployer
 > 凭证两者都不是——它是"进 Vault 的钥匙"，归宿与其余 11 个服务的 AppRole 凭证**完全一致**：
-> **Dokploy compose env**（由 `setup-approle` 注入，既不进 OP 也不进 Vault）。另外
-> `VAULT_ROOT_TOKEN_OP_REF` 解析路径**从未实现**（`resolve_vault_token` 只读 env），
-> 故不存在"复用"；本次按正解实现，且**全程不引入 OP 运行时读**。
+> **Dokploy compose env**（由 `setup-approle` 注入，既不进 OP 也不进 Vault）。此外
+> `resolve_vault_token` 只读进程环境变量（从未解析过 1Password 引用），
+> 故本次按正解实现，且**全程不引入 OP 运行时读**。
 
 **一个有界 AppRole，两处使用**：IaC Runner 复用其余 11 个服务的既有模式——
 `invoke vault.setup-approle --project=bootstrap --service=iac_runner` 把
@@ -795,10 +794,10 @@ def verify_signature(payload: bytes, signature: str) -> bool:
 **定期轮换 WEBHOOK_SECRET**:
 ```bash
 # 1. 生成新密钥
-NEW_SECRET=$(openssl rand -hex 32)
+new_secret=$(openssl rand -hex 32)
 
 # 2. 更新 Vault
-invoke env.set WEBHOOK_SECRET=$NEW_SECRET \
+invoke env.set WEBHOOK_SECRET=$new_secret \
   --project=bootstrap --service=iac_runner
 
 # 3. 更新 GitHub webhook 配置

@@ -21,7 +21,6 @@ ALERTING_COMPOSE = ROOT / "platform/12.alerting/compose.yaml"
 # for each. The values differ, so a test sees which variable won.
 _ORDERED_VALUES = (
     ("INFRA_ENVIRONMENT", "pr-1", "pr_1"),
-    ("INFRA_PROBE_HEARTBEAT_ENV", "preview", "preview"),
     ("ENV", "staging", "staging"),
     ("DEPLOY_ENV", "production", "production"),
 )
@@ -90,7 +89,7 @@ def test_a_value_is_normalized_to_the_name_the_estate_uses(monkeypatch, raw, exp
 
 def test_a_blank_variable_counts_as_unset(monkeypatch):
     monkeypatch.setenv("INFRA_ENVIRONMENT", "   ")
-    monkeypatch.setenv("INFRA_PROBE_HEARTBEAT_ENV", "")
+    monkeypatch.setenv("ENV", "")
     monkeypatch.setenv("DEPLOY_ENV", "staging")
 
     assert resolve_probe_environment() == "staging"

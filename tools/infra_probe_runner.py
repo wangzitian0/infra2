@@ -300,7 +300,7 @@ def _deploy_env() -> str:
     """The environment of this runner, from the one probe-environment resolver (#1208).
 
     It raises when the runner has no environment. The deployed container always has
-    one: compose.yaml sets ENV and INFRA_PROBE_HEARTBEAT_ENV."""
+    one: compose.yaml sets ENV."""
     return resolve_probe_environment()
 
 

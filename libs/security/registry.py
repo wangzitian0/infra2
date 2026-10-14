@@ -148,7 +148,10 @@ SERVICES: tuple[Service, ...] = (
         "finance_report/finance_report/10.app",
         "finance_report",
         "app",
-        ("repos/finance_report/common/runtime/required-env.generated.json",),
+        (
+            "repos/finance_report/common/runtime/required-env.generated.json",
+            "finance_report/finance_report/10.app/env.manifest.json",
+        ),
         # _ensure_minio_bucket reads the bucket name back to decide whether the scoped
         # user already exists; the compose supplies the same name to the container.
         store_only_keys=("S3_BUCKET",),
@@ -157,9 +160,12 @@ SERVICES: tuple[Service, ...] = (
         "finance_report/finance_report/preview",
         "finance_report",
         "app",
-        ("repos/finance_report/common/runtime/required-env.generated.json",),
+        (
+            "repos/finance_report/common/runtime/required-env.generated.json",
+            "finance_report/finance_report/10.app/env.manifest.json",
+        ),
         source_env="staging",
-        exclude_envs=("DATABASE_URL", "REDIS_URL"),
+        exclude_envs=("DATABASE_URL", "REDIS_URL", "PREVIEW_DATABASE_URL"),
     ),
     Service(
         "truealpha/truealpha/10.app",
@@ -183,13 +189,20 @@ SERVICES: tuple[Service, ...] = (
             "truealpha/truealpha/10.app/env.manifest.json",
         ),
         source_env="staging",
-        exclude_envs=("DATABASE_URL", "MIGRATIONS_DATABASE_URL"),
+        exclude_envs=(
+            "DATABASE_URL",
+            "MIGRATIONS_DATABASE_URL",
+            "PREVIEW_DATABASE_URL",
+        ),
     ),
     Service(
         "truealpha/truealpha/20.data_engine",
         "truealpha",
         "data_engine",
-        ("repos/truealpha/apps/data-engine/required-env.generated.json",),
+        (
+            "repos/truealpha/apps/data-engine/required-env.generated.json",
+            "truealpha/truealpha/20.data_engine/env.manifest.json",
+        ),
         # The deploy identity the Deployer reads at compose time (pin_release writes the
         # digest; the release id and the capture approval are governance values). They
         # move to the release/decision plane with truealpha#781 and this line goes away.

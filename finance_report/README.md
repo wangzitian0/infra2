@@ -70,12 +70,10 @@ secret/data/finance_report/<env>/app
   - AI_BASE_URL
   - AI_CHAT_COMPLETIONS_PATH
   - AI_LAYOUT_PARSING_PATH
-  - AI_MODEL_CATALOG_SOURCE
   - PRIMARY_MODEL
   - OCR_MODEL
   - VISION_MODEL
   - FALLBACK_MODELS
-  - AI_DAILY_LIMIT_USD
 ```
 
 ## References

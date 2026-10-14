@@ -70,6 +70,8 @@ entries:
     description: Variable and secret source-of-truth contract.
     proofs:
       - libs/tests/test_env.py
+      - libs/tests/test_env_inventory.py
+      - tools/env_inventory.py
   bootstrap.dns_and_cert:
     owner: docs/ssot/bootstrap.dns_and_cert.md
     summary: DNS 与证书自动化

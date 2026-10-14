@@ -24,7 +24,7 @@
 # #677 scoped the staging credential to its own bucket. Production only worked because
 # the default happened to be the right name there.
 x-app-runtime-env: &app_runtime_env
-  ENVIRONMENT: ${ENV:-production}
+  ENVIRONMENT: ${ENV}
   S3_ENDPOINT: http://platform-s3:9000
   S3_BUCKET: ${S3_BUCKET:-statements}
   S3_PUBLIC_BUCKET: ${S3_PUBLIC_BUCKET:-}
@@ -81,7 +81,7 @@ services:
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finance-report-backend}
       OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
       INFRA_SERVICE_ID: ${INFRA_SERVICE_ID:-finance_report/app}
-      INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV:-production}}
+      INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV}}
       INFRA_IAC_REF: ${INFRA_IAC_REF:-}
       # secrets.ctmpl is generated from the app manifest; DATABASE_URL / REDIS_URL are
       # composed with the service suffix read from this variable.
@@ -176,8 +176,7 @@ services:
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://s3.${INTERNAL_DOMAIN}}
       IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
       INFRA_SERVICE_ID: ${INFRA_SERVICE_ID:-finance_report/app}
-      INFRA_COMPONENT: backend
-      INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV:-production}}
+      INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV}}
       INFRA_SERVICE_VERSION: ${INFRA_SERVICE_VERSION:-${GIT_COMMIT_SHA:-unknown}}
       INFRA_IAC_REF: ${INFRA_IAC_REF:-}
       # BE->OpenPanel (server-side product analytics). Same non-secret per-env

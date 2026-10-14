@@ -23,7 +23,6 @@ ROOT = Path(__file__).resolve().parents[2]
 # Every variable that any of the four modules read before #1208.
 _PROBE_ENVIRONMENT_VARIABLES = (
     "INFRA_ENVIRONMENT",
-    "INFRA_PROBE_HEARTBEAT_ENV",
     "ENV",
     "DEPLOY_ENV",
     "OBS_ROUNDTRIP_ENV",
@@ -110,7 +109,7 @@ def test_chronic_digest_keeps_an_explicit_environment_argument(monkeypatch):
 def test_runner_without_an_environment_raises_and_does_not_say_production():
     runner = _load_probe_runner()
 
-    with pytest.raises(ValueError, match="INFRA_PROBE_HEARTBEAT_ENV"):
+    with pytest.raises(ValueError, match="ENV"):
         runner._deploy_env()
 
 

@@ -22,14 +22,13 @@ __all__ = ["PROBE_ENVIRONMENT_VARIABLES", "resolve_probe_environment"]
 
 # The variables that choose the environment, in precedence order. The first variable
 # with a non-blank value decides. Real deployments set these:
-#   ENV and INFRA_PROBE_HEARTBEAT_ENV  the alerting probe container (compose.yaml)
-#   DEPLOY_ENV                          workflows and the iac-runner child environment
-#   INFRA_ENVIRONMENT                   the signed service identity, and the iac-runner
+#   ENV                the alerting probe container (compose.yaml)
+#   DEPLOY_ENV         workflows and the iac-runner child environment
+#   INFRA_ENVIRONMENT  the signed service identity, and the iac-runner
 # All of them hold the same value in one process, so their order only decides a
 # conflict that no deployment creates.
 PROBE_ENVIRONMENT_VARIABLES = (
     "INFRA_ENVIRONMENT",
-    "INFRA_PROBE_HEARTBEAT_ENV",
     "ENV",
     "DEPLOY_ENV",
 )
