@@ -67,13 +67,15 @@ def _alerting_readiness_checker() -> tuple[bool, str]:
 # _alerting_readiness_checker is its one check: a bad delivery config gives 503.
 # init_service starts OpenTelemetry when the deploy issued the endpoint (#1209).
 # The bridge pages people. A bad OTEL_* value is logged and never stops it.
-# For that reason strict_otel stays off.
+# For that reason the call passes strict_otel=False.
+# The SDK default is strict from 3.4.0, so the call must not rely on the default.
 fastapi_app = FastAPI(title="platform-alerting")
 init_service(
     fastapi_app,
     name="platform-alerting",
     db_checker=_alerting_readiness_checker,
     enable_otel=True,
+    strict_otel=False,
     check_timeout_seconds=READINESS_TIMEOUT_SECONDS,
 )
 
