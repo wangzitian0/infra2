@@ -185,6 +185,18 @@ release、以及是否已旧到会破坏下一次 prod 发布。
 一条 check 显示 `L1-Boot=sha_x | L2-服务=v1.1.10 | L2-配置=sha_y` vs `main` —— 任何版本错位**永远可见**,
 主动判断「要不要发布」,而不是被动追平或靠手查。
 
+`harness status --online` implements the release part of this view (#1259). Run it from the infra2 root:
+
+```bash
+uv run python -m tools.harness status --fetch --online
+```
+
+For each App, the command shows the release that the health endpoint serves in staging and in production.
+For infra2, it shows the newest release tag (staging) and the production marker, with the number of releases between them.
+`--online` only reads. `--fetch` refreshes the `origin` refs and tags, and never changes a checkout.
+The command does not show the L1-Boot sha or the L2 config hash yet. Those two stay open.
+Details and value meanings: [`core.harness.md` §6](./core.harness.md#6-workspace-operation).
+
 ---
 
 ## 4. `deploy_v2` 坐标(部署前门 SSOT)

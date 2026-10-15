@@ -16,7 +16,13 @@ if str(ROOT) not in sys.path:
 
 from libs.core.harness import sweep as harness_sweep  # noqa: E402
 from libs.core.harness.manifest import check_workspace, load_manifest  # noqa: E402
-from libs.core.harness.status import WorkspaceStatus, workspace_status  # noqa: E402
+from libs.core.harness.status import (  # noqa: E402
+    WorkspaceStatus,
+    fetch_json,
+    observe_online,
+    render_online_table,
+    workspace_status,
+)
 
 SWEEP_DESCRIPTION = """Classify every watched agent, PR, release log, workflow run and
 worktree into one state: WAITING, DONE, ACTION, STALL or UNKNOWN. Read-only; merge
@@ -149,6 +155,10 @@ def _print_status(result: WorkspaceStatus) -> None:
         )
         if item.error:
             print(f"        error: {item.error}")
+    online = render_online_table(result)
+    if online:
+        print()
+        print("\n".join(online))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -175,6 +185,12 @@ def main(argv: list[str] | None = None) -> int:
         "--fetch",
         action="store_true",
         help="refresh origin refs/tags before observation; never changes a checkout",
+    )
+    status.add_argument(
+        "--online",
+        action="store_true",
+        help="also read the release served in staging and production: one read-only "
+        "HTTPS GET per `health:` URL, plus the infra2 release tags",
     )
     status.add_argument(
         "--require-current",
@@ -212,7 +228,10 @@ def main(argv: list[str] | None = None) -> int:
             for finding in manifest_check.errors:
                 print(f"error: [{finding.code}] {finding.message}")
         return 1
-    result = workspace_status(root, load_manifest(manifest_path), fetch=args.fetch)
+    manifest = load_manifest(manifest_path)
+    result = workspace_status(root, manifest, fetch=args.fetch)
+    if args.online:
+        result = observe_online(result, root, manifest, fetcher=fetch_json)
     if args.json_output:
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
     else:

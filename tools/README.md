@@ -147,6 +147,10 @@ uv run python -m tools.harness status --fetch
 # Same observation, but fail when any checkout is ahead/behind/dirty/off-pin
 uv run python -m tools.harness status --fetch --require-current
 
+# Also read the release each App serves in staging and production (read-only HTTPS GET)
+# and the infra2 release tags. `unreachable` marks a failed read. `unknown` marks an empty one.
+uv run python -m tools.harness status --fetch --online
+
 # One line per watched item, then `sweep: exit N`
 uv run python -m tools.harness sweep /abs/path/watch.json
 
