@@ -547,7 +547,7 @@ Rollback: revert the PR. Nothing is deployed, applied or wired; no secret is rea
   检查在本地绿、干净 checkout 红。这和 #757 里 Copilot 抓到的「未展开 submodule 被当死链」是同一个
   错误类——**判定依赖于 checkout 形态**。#760 加 `git check-ignore` 归类，降级为信息行而非失败。
 - **`tools/README.md` 从来没有 `doc_link_check.py` 的条目**，是 #757 自身留下的缺口，#760 一并补上。
-- **submodule pin 推进已可测量**，见下。新增 `tools/submodule_pin_impact.py`（#762；#761 在 #760 合流删基分支时被 GitHub 连带关闭，已重建）。
+- **submodule pin 推进已可测量**，见下。新增 `tools/submodule_pin_impact.py`（#762；#761 在 #760 合流删基分支时被 GitHub 连带关闭，已重建）。Issue #1258 deletes this tool.
 
 ### 三个 subrepo 的死链审计：结论是审计错了，不是仓库错了
 
@@ -561,7 +561,7 @@ finance_report 那 13 条全指向 `docs/reference/db-schema.md`：由
 `tools/generate_db_schema_reference.py` 生成、`.gitignore:13` 忽略、其 CI 每次重建并用 `--check`
 卡漂移。**13 条链接全是对的。** 记在这里是因为「审计报了一堆红」比「审计器有假阳性」更容易被当成结论。
 
-### 需要 owner：`AGENTS.md` 关于 submodule pin 的断言被代码证伪
+### 已解决（2026-10-15，#1258）：`AGENTS.md` 关于 submodule pin 的断言曾被代码证伪
 
 `AGENTS.md`「Harness 作用域与优先级」第 5 条写：
 
@@ -587,8 +587,13 @@ repos/truealpha/apps/llm-service/required-env.generated.json
 决策**。#761 把这条写成了检查，两个分支都在真实历史上验过（truealpha `fbf5eb4` 确实改过
 `apps/data-engine/required-env.generated.json`，检查会报）。
 
-**但矛盾本身没消除**：`AGENTS.md` 是 owner 保护文件，那句话仍然是错的。需要 owner 改写第 5 条，
+**[Superseded on 2026-10-15 by issue #1258: see the update below.]** **但矛盾本身没消除**：`AGENTS.md` 是 owner 保护文件，那句话仍然是错的。需要 owner 改写第 5 条，
 或者明确裁定「manifest 解析不算 deployment 依赖」——后者我认为站不住，因为它确实在部署路径上。
+
+> **2026-10-15 update (issue #1258).** A deploy no longer reads the pinned commit. infra2 keeps its own
+> copy of the four manifests in `contracts/`, and `contracts/apps.lock.json` records their source.
+> The sentence in `AGENTS.md` is true again. Issue #1258 deletes `app_manifests.py` and
+> `submodule_pin_impact.py`. No owner decision remains.
 
 ### 需要 owner：`AGENTS.md` 两处命名与实际不符
 
@@ -771,7 +776,8 @@ worktree 的每个 generation 触及，所以 `generation-local` 描述的是一
       ④真实 home 全部 json/jsonl 文件的前后 SHA-256 digest 集合不变），pack
       knownUnknowns 第 6 条可关（随 T2 PR-B 固化为可重复 fixture 并正式关闭）。剩余：
       PR-A 机械接入 8 处 switch；ADR 分支合流
-      （3 处冲突）；omca pin 推进归 owner 的 submodule_pin_impact 决策流程。
+      （3 处冲突）。omca pin advance: issue #1258 deletes `submodule_pin_impact`. An omca pin
+      feeds no deploy input, so the advance needs no owner gate. `harness check` reports pin drift.
 - [x] T3 pi 0.86.1 knowledge pack：**已合流 omca#120（0c56d78）**。capability 逐字
       继承 0.85（发现面零变化），evidence artifact 钉 digest，回归门禁断言全 6
       concept；重建二进制后 `omca drift`=no drift、`omca context` pi qualified。

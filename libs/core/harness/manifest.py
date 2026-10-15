@@ -6,6 +6,7 @@ import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -27,6 +28,8 @@ ALLOWED_CONTRACTS = {"pinned", "snapshot"}
 # instead (core.harness.md §1; dev_env #51). Absent the key, the default stays
 # "a Repo layer exists", so this is opt-out, not opt-in.
 ALLOWED_RULES_LAYER = {"none"}
+# `health` maps an environment to the https URL of an App health endpoint (`status --online`).
+HEALTH_ENVIRONMENTS = ("staging", "production")
 
 
 def _git(
@@ -124,6 +127,35 @@ def _inside(base: Path, relative: str) -> Path | None:
 
 def _error(findings: list[Finding], code: str, message: str) -> None:
     findings.append(Finding("error", code, message))
+
+
+def _is_https_url(url: Any) -> bool:
+    """True for an https URL with a host, a valid port and no user information."""
+    if not isinstance(url, str):
+        return False
+    try:
+        u = urlsplit(url)
+        _ = u.port  # raises ValueError for a port that is not a number in 0-65535
+    except ValueError:
+        return False
+    return url.startswith("https://") and bool(u.hostname) and "@" not in u.netloc
+
+
+def _validate_health(repository_id: str, health: Any, findings: list[Finding]) -> None:
+    if health is None:
+        return
+    if (
+        not isinstance(health, dict)
+        or set(health) - set(HEALTH_ENVIRONMENTS)
+        or not health
+    ):
+        message = f"{repository_id} health must map staging and/or production to a URL"
+        _error(findings, "health", message)
+        return
+    for environment, url in health.items():
+        if not _is_https_url(url):
+            message = f"{repository_id} health.{environment} must be an https URL"
+            _error(findings, "health-url", message)
 
 
 def _validate_workspace_section(
@@ -230,6 +262,8 @@ def _validate_repository_entry(
             contract = "snapshot" if role == "external-application" else "pinned"
     else:
         contract = "snapshot" if role == "external-application" else "pinned"
+
+    _validate_health(repository_id, repository.get("health"), findings)
 
     expected_gov = {
         "infrastructure-control-plane": "local",
@@ -452,6 +486,7 @@ __all__ = [
     "ALLOWED_RULES_LAYER",
     "CheckResult",
     "Finding",
+    "HEALTH_ENVIRONMENTS",
     "HarnessManifestError",
     "Runner",
     "SCHEMA_VERSION",

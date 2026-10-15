@@ -604,7 +604,7 @@ def run_unit_tests(
     print(f"▶ Running infra unit test suite ({', '.join(test_paths)})...")
     start_time = time.monotonic()
 
-    # 1. Fetch manifests
+    # 1. Check the App manifest copies in contracts/ against contracts/apps.lock.json
     _run_cmd([sys.executable, "tools/fetch_app_manifests.py"])
 
     # 2. Pytest execution

@@ -58,6 +58,9 @@ SKIP_NAMES = {
     "bun.lock",
     "bun.lockb",
 }
+# `run` scans infra2's copies of the App manifests under the App's name (see
+# contracts/apps.lock.json), so the scan of infra2 itself skips them.
+VENDORED_CONTRACTS = "contracts/"
 MAX_BYTES = 1_500_000
 
 ENV_MAP_NAMES = {
@@ -2653,7 +2656,11 @@ def scan_docs(inv: Inventory, repo: str, path: str, text: str) -> None:
 # driver
 # ---------------------------------------------------------------------------------------------
 def scan_repo(inv: Inventory, repo: str, root: Path) -> None:
-    files = list_files(root)
+    files = [
+        f
+        for f in list_files(root)
+        if not (repo == "infra2" and f.startswith(VENDORED_CONTRACTS))
+    ]
     consts = build_consts(repo, root, files)
     for f in files:
         kind = route(f)
@@ -2766,30 +2773,19 @@ def run(repos: dict[str, Path], *, include_app_manifests: bool = False) -> Inven
     for name, root in repos.items():
         scan_repo(inv, name, root)
     if include_app_manifests and "infra2" in repos:
-        root = repos["infra2"]
         from libs.security import registry as sreg
+        from tools import fetch_app_manifests
 
-        seen: set[str] = set()
-        for s in sreg.SERVICES:
-            for mp in s.manifests:
-                if not mp.startswith("repos/") or mp in seen:
-                    continue
-                seen.add(mp)
-                _, sub_repo, rest = mp.split("/", 2)
-                if sub_repo in repos and (repos[sub_repo] / ".git").exists():
-                    continue
-                mf = sreg.manifest_file(mp, root=root)
-                if not mf.exists():
-                    sreg.load_manifest(mp, root=root)
-                    mf = sreg.manifest_file(mp, root=root)
-                if mf.exists():
-                    scan_manifest(
-                        inv,
-                        sub_repo,
-                        rest,
-                        mf.read_text("utf-8", "replace"),
-                        synthetic_code_read=True,
-                    )
+        root = repos["infra2"]
+        origin = fetch_app_manifests.origins(root)
+        for mp in dict.fromkeys(m for s in sreg.SERVICES for m in s.manifests):
+            if mp not in origin:
+                continue
+            app, upstream = origin[mp]
+            if app in repos and (repos[app] / ".git").exists():
+                continue
+            text = sreg.manifest_file(mp, root=root).read_text("utf-8", "replace")
+            scan_manifest(inv, app, upstream, text, synthetic_code_read=True)
     resolve_weak_refs(inv)
     return inv
 
@@ -3406,14 +3402,14 @@ CODE_UNITS = {
 def contract(inv, keys, services, comp_of=None, comps=None):
     comp_of = comp_of or {}
     comps = comps or {}
+    from tools import fetch_app_manifests
+
+    origin = fetch_app_manifests.origins(REPO_ROOT)
     rows = []
     for s in services:
         mkeys, msrc = set(), {}
         for mp in s.manifests:
-            if mp.startswith("repos/"):
-                _, repo, rest = mp.split("/", 2)
-            else:
-                repo, rest = "infra2", mp
+            repo, rest = origin.get(mp, ("infra2", mp))
             for o in inv.occ:
                 if (
                     o.layer == "manifest"
