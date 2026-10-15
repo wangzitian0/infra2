@@ -126,6 +126,24 @@ class DataEngineDeployer(Deployer):
         "CAPTURE_APPROVED_BY",
     )
 
+    # Migration alias (#1260): the canonical Vault names are IMAGE_DIGEST and RELEASE_ID.
+    # The truealpha release tooling and the live Vault paths still hold the legacy names
+    # until the next release rewrites them. The canonical name wins when both exist, so
+    # `pin_release` (which writes IMAGE_DIGEST) always overrides a stale legacy value.
+    _LEGACY_SECRET_ALIASES = {
+        "IMAGE_DIGEST": "DATA_ENGINE_IMAGE_DIGEST",
+        "RELEASE_ID": "RELEASE_MANIFEST_ID",
+    }
+
+    @classmethod
+    def _secret(cls, secrets, key: str) -> str:
+        """Read ``key``; fall back to its legacy name only when ``key`` is empty."""
+        value = secrets.get(key) or ""
+        legacy = cls._LEGACY_SECRET_ALIASES.get(key)
+        if not value and legacy:
+            value = secrets.get(legacy) or ""
+        return value
+
     @classmethod
     def pin_release(
         cls, version_ref: str, *, secrets=None, resolve=None, sleep=time.sleep
@@ -195,12 +213,14 @@ class DataEngineDeployer(Deployer):
             except Exception as exc:  # noqa: BLE001 - every failure here must stop the deploy
                 error(f"{cls.service}: could not pin release {version_ref!r}: {exc}")
                 return False
-        missing = [key for key in cls._REQUIRED_SECRET_KEYS if not secrets.get(key)]
+        missing = [
+            key for key in cls._REQUIRED_SECRET_KEYS if not cls._secret(secrets, key)
+        ]
         if missing:
             error(f"Missing TrueAlpha data-engine Vault fields: {', '.join(missing)}")
             return False
-        image_digest = secrets.get("IMAGE_DIGEST") or ""
-        release_id = secrets.get("RELEASE_ID") or ""
+        image_digest = cls._secret(secrets, "IMAGE_DIGEST")
+        release_id = cls._secret(secrets, "RELEASE_ID")
         if not _IMAGE_DIGEST.fullmatch(image_digest):
             error("IMAGE_DIGEST must be a full sha256 OCI digest")
             return False
@@ -214,8 +234,8 @@ class DataEngineDeployer(Deployer):
         base = super().compose_env_base(env)
         secrets = cls.secrets_backend()
         environment = base.get("ENV", "production")
-        image_digest = secrets.get("IMAGE_DIGEST") or ""
-        release_id = secrets.get("RELEASE_ID") or ""
+        image_digest = cls._secret(secrets, "IMAGE_DIGEST")
+        release_id = cls._secret(secrets, "RELEASE_ID")
         approved_by = secrets.get("CAPTURE_APPROVED_BY") or ""
         if not _IMAGE_DIGEST.fullmatch(image_digest):
             raise ValueError(

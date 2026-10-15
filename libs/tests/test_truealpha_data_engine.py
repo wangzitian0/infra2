@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from libs.core import registry as service_registry
@@ -782,3 +783,63 @@ def test_entrypoint_keeps_the_vault_mount_as_default_and_compose_does_not_overri
         assert "secrets:/secrets:ro" in service["volumes"]
         # The manifest path is relative. It resolves against the image WORKDIR (/app).
         assert "working_dir" not in service
+
+
+def _legacy_only_values():
+    """The live Vault shape before the rename: legacy names, no canonical names."""
+    values = _secret_values("a")
+    values["DATA_ENGINE_IMAGE_DIGEST"] = values.pop("IMAGE_DIGEST")
+    values["RELEASE_MANIFEST_ID"] = values.pop("RELEASE_ID")
+    return values
+
+
+def _deployer_with(monkeypatch, values):
+    deploy = _load_deploy_module()
+    deployer = deploy.DataEngineDeployer
+    secrets = _Secrets(values)
+    monkeypatch.setattr(
+        deployer, "secrets_backend", classmethod(lambda cls, env=None: secrets)
+    )
+    monkeypatch.setattr(
+        deployer,
+        "env",
+        classmethod(lambda cls: {"ENV": "staging", "DATA_PATH": "/tmp/infra2-data"}),
+    )
+    monkeypatch.delenv("DEPLOY_VERSION_REF", raising=False)
+    monkeypatch.setattr(deploy, "error", lambda *_a, **_k: None)
+    return deployer
+
+
+def test_legacy_vault_names_still_deploy_and_reach_compose_under_canonical_names(
+    monkeypatch,
+):
+    """The release tooling and live Vault still write the legacy names. The deploy must
+    accept them and hand compose the canonical names, or the next release fails."""
+    deployer = _deployer_with(monkeypatch, _legacy_only_values())
+    assert deployer.ensure_runtime_secrets() is True
+    base = deployer.compose_env_base({})
+    assert base["IMAGE_DIGEST"] == "sha256:" + "a" * 64
+    assert base["RELEASE_ID"] == "release-manifest:" + "b" * 64
+    assert "DATA_ENGINE_IMAGE_DIGEST" not in base
+    assert "RELEASE_MANIFEST_ID" not in base
+
+
+def test_canonical_vault_name_wins_over_a_stale_legacy_value(monkeypatch):
+    """`pin_release` writes IMAGE_DIGEST. A stale legacy digest must never override it."""
+    values = _secret_values("a")
+    values["DATA_ENGINE_IMAGE_DIGEST"] = "sha256:" + "f" * 64
+    values["RELEASE_MANIFEST_ID"] = "release-manifest:" + "e" * 64
+    deployer = _deployer_with(monkeypatch, values)
+    base = deployer.compose_env_base({})
+    assert base["IMAGE_DIGEST"] == "sha256:" + "a" * 64
+    assert base["RELEASE_ID"] == "release-manifest:" + "b" * 64
+
+
+def test_deploy_still_fails_closed_when_neither_vault_name_exists(monkeypatch):
+    values = _legacy_only_values()
+    del values["DATA_ENGINE_IMAGE_DIGEST"]
+    del values["RELEASE_MANIFEST_ID"]
+    deployer = _deployer_with(monkeypatch, values)
+    assert deployer.ensure_runtime_secrets() is False
+    with pytest.raises(ValueError, match="IMAGE_DIGEST must be configured"):
+        deployer.compose_env_base({})
