@@ -13,7 +13,7 @@ Shared Redis cache for all platform applications using vault-init pattern.
 | `shared_tasks.py` | Health check status() |
 | `vault-agent.hcl` | Vault agent configuration |
 | `vault-policy.hcl` | Read-only policy for redis secrets |
-| `secrets.ctmpl` | Template rendering `REDIS_PASSWORD` |
+| `secrets.ctmpl` | Template rendering `PASSWORD` |
 
 ## Architecture
 

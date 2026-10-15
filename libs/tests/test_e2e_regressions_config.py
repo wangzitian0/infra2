@@ -46,6 +46,21 @@ CLEARED_ENV = (
     "FINANCE_REPORT_URL",
     "FINANCE_REPORT_API_URL",
     "PORTAL_URL",
+    "PLATFORM_DB_HOST",
+    "PLATFORM_DB_PORT",
+    "PLATFORM_DB_USER",
+    "PLATFORM_DB_PASSWORD",
+    "PLATFORM_DB_NAME",
+    "DB_HOST",
+    "DB_PORT",
+    "DB_USER",
+    "DB_PASSWORD",
+    "DB_NAME",
+    "PG_HOST",
+    "PG_PORT",
+    "PG_USER",
+    "PG_PASS",
+    "PG_DB",
 )
 
 # (DEPLOY_ENV, PR_NUMBER, host suffix of the environment)
@@ -161,3 +176,51 @@ def test_custom_domain_flag_skips_the_host_check(load_test_config):
 
     assert config.validate() is None
     assert config.S3_CONSOLE_URL == f"https://{FOREIGN_HOST}"
+
+
+def test_platform_db_reads_canonical_keys_and_ignores_legacy_aliases(load_test_config):
+    config = load_test_config(
+        "production",
+        DB_HOST="legacy-db.internal",
+        DB_PORT="15432",
+        DB_USER="legacy_user",
+        DB_PASSWORD="legacy_password",
+        PG_PASS="legacy_pg_pass",
+    )
+    assert config.PLATFORM_DB_HOST is None
+    assert config.PLATFORM_DB_PORT == "5432"
+    assert config.PLATFORM_DB_USER == "postgres"
+    assert config.PLATFORM_DB_PASSWORD == ""
+    assert config.PLATFORM_DB_NAME == "postgres"
+
+    configured = load_test_config(
+        "production",
+        PLATFORM_DB_HOST="pg.internal",
+        PLATFORM_DB_PORT="6432",
+        PLATFORM_DB_USER="admin",
+        PLATFORM_DB_PASSWORD="secret",
+        PLATFORM_DB_NAME="authentik",
+    )
+    assert configured.PLATFORM_DB_HOST == "pg.internal"
+    assert configured.PLATFORM_DB_PORT == "6432"
+    assert configured.PLATFORM_DB_USER == "admin"
+    assert configured.PLATFORM_DB_PASSWORD == "secret"
+    assert configured.PLATFORM_DB_NAME == "authentik"
+
+
+def test_e2e_env_example_keys_are_all_read_in_e2e_suite():
+    env_example = ROOT / "e2e_regressions" / ".env.example"
+    declared = set()
+    for raw in env_example.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        declared.add(line.split("=", 1)[0].strip())
+
+    assert declared
+    py_sources = "\n".join(
+        p.read_text(encoding="utf-8")
+        for p in sorted((ROOT / "e2e_regressions").rglob("*.py"))
+    )
+    unread = sorted(key for key in declared if f'"{key}"' not in py_sources and f"'{key}'" not in py_sources)
+    assert unread == []

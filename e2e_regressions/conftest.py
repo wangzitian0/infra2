@@ -134,12 +134,24 @@ URL_SUBDOMAIN_KEYS = {
 }
 
 
+def _host_for_subdomain(subdomain: str, env_suffix: str, internal_domain: str) -> str:
+    """Return the canonical host for a subdomain via infra2_sdk.routing."""
+    from infra2_sdk.routing import resolve_app_hostname
+
+    tier_or_alias = env_suffix.lstrip("-") or "production"
+    return resolve_app_hostname(
+        subdomain,
+        tier_or_alias,
+        base_domain=internal_domain,
+    )
+
+
 def _service_host(url_name: str, env_suffix: str, internal_domain: str) -> str:
     """Return the canonical host for a URL name in URL_SUBDOMAIN_KEYS."""
     from libs.core.environ import SERVICE_SUBDOMAINS
 
     key = URL_SUBDOMAIN_KEYS[url_name]
-    return f"{SERVICE_SUBDOMAINS[key]}{env_suffix}.{internal_domain}"
+    return _host_for_subdomain(SERVICE_SUBDOMAINS[key], env_suffix, internal_domain)
 
 
 def _default_url(url_name: str, env_suffix: str, internal_domain: str) -> str:
@@ -187,7 +199,7 @@ class TestConfig:
     # App domain (e.g., report.zitian.party, report-pr-47.zitian.party, report-staging.zitian.party)
     FINANCE_REPORT_BASE = os.getenv(
         "FINANCE_REPORT_BASE",
-        f"report{ENV_SUFFIX}.{INTERNAL_DOMAIN}",
+        _host_for_subdomain("report", ENV_SUFFIX, INTERNAL_DOMAIN),
     )
     FINANCE_REPORT_URL = os.getenv(
         "FINANCE_REPORT_URL", f"https://{FINANCE_REPORT_BASE}"
@@ -205,15 +217,11 @@ class TestConfig:
     E2E_PASSWORD = os.getenv("E2E_PASSWORD")
 
     # Platform DB (optional)
-    PLATFORM_DB_HOST = os.getenv("PLATFORM_DB_HOST") or os.getenv("DB_HOST")
-    PLATFORM_DB_PORT = os.getenv("PLATFORM_DB_PORT") or os.getenv("DB_PORT", "5432")
-    PLATFORM_DB_USER = os.getenv("PLATFORM_DB_USER") or os.getenv("DB_USER", "postgres")
-    PLATFORM_DB_PASSWORD = (
-        os.getenv("PLATFORM_DB_PASSWORD")
-        or os.getenv("DB_PASSWORD")
-        or os.getenv("PG_PASS")
-        or ""
-    )
+    PLATFORM_DB_HOST = os.getenv("PLATFORM_DB_HOST")
+    PLATFORM_DB_PORT = os.getenv("PLATFORM_DB_PORT", "5432")
+    PLATFORM_DB_USER = os.getenv("PLATFORM_DB_USER", "postgres")
+    PLATFORM_DB_PASSWORD = os.getenv("PLATFORM_DB_PASSWORD", "")
+    PLATFORM_DB_NAME = os.getenv("PLATFORM_DB_NAME", "postgres")
 
     # Test Configuration (Sensible defaults for execution)
     HEADLESS = os.getenv("HEADLESS", "true").lower() == "true"
@@ -267,8 +275,8 @@ class TestConfig:
                     "S3_API_URL",
                 )
             }
-            expected_domains["FINANCE_REPORT_URL"] = (
-                f"report{cls.ENV_SUFFIX}.{cls.INTERNAL_DOMAIN}"
+            expected_domains["FINANCE_REPORT_URL"] = _host_for_subdomain(
+                "report", cls.ENV_SUFFIX, cls.INTERNAL_DOMAIN
             )
             for name, expected_host in expected_domains.items():
                 actual_host = urlparse(required_urls[name]).hostname
@@ -352,7 +360,7 @@ async def platform_pg_connection():
             port=int(config.PLATFORM_DB_PORT),
             user=config.PLATFORM_DB_USER,
             password=config.PLATFORM_DB_PASSWORD,
-            database="postgres",
+            database=config.PLATFORM_DB_NAME,
             timeout=10,
         )
         yield conn
