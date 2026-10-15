@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import subprocess
 
+import pytest
 import yaml
 
 from libs.core.harness.manifest import (
@@ -428,3 +429,59 @@ def test_committed_inventory_specifies_contract_tiering() -> None:
     }
     actual = {repo["id"]: repo.get("contract") for repo in manifest["repositories"]}
     assert actual == expected
+
+
+GOOD = {
+    "staging": "https://app-staging.example.test/x",
+    "production": "https://app.test/x",
+}
+HEALTH_CASES = [  # (health value, codes of the errors it must give)
+    (GOOD, []),
+    ({"production": "https://app.test/x?full=1"}, []),
+    ([GOOD["production"]], ["health"]),
+    ({}, ["health"]),
+    ({**GOOD, "canary": GOOD["staging"]}, ["health"]),
+    ({"production": "http://app.test/x"}, ["health-url"]),
+    ({"production": 7}, ["health-url"]),
+    ({"production": "https://u:p@app.test/x"}, ["health-url"]),
+    ({"production": "https://app.test:abc/x"}, ["health-url"]),
+    ({"production": "https://:/x"}, ["health-url"]),
+    ({"production": "https://[::1/x"}, ["health-url"]),
+]
+HEALTH_IDS = "good query list empty extra-key not-https not-str userinfo port no-host ipv6".split()
+
+
+@pytest.mark.parametrize(("health", "codes"), HEALTH_CASES, ids=HEALTH_IDS)
+def test_health_mapping_is_validated(
+    tmp_path: Path, health: object, codes: list
+) -> None:
+    manifest = _workspace(tmp_path)
+    manifest["repositories"][1]["health"] = health
+
+    result = validate_manifest(tmp_path, manifest)
+
+    assert [error.code for error in result.errors] == codes
+
+
+def test_committed_health_urls_equal_the_registry_health_routes(monkeypatch) -> None:
+    """`status --online` reads the same public routes that the alerting probes render."""
+    from libs.core.environ import infra_domain
+    from libs.core.registry import domain_for_service
+    from libs.observability.probe_specs import render_public_route_spec_text
+
+    monkeypatch.delenv("INTERNAL_DOMAIN", raising=False)
+    apps = {"finance-report": "finance_report/app", "truealpha": "truealpha/app"}
+    repositories = load_manifest(ROOT / "harness" / "repos.yaml")["repositories"]
+    health = {repo["id"]: repo["health"] for repo in repositories if "health" in repo}
+    assert set(health) == set(apps)
+    for environment in ("staging", "production"):
+        rendered = render_public_route_spec_text(environment, infra_domain())
+        routes = [line.split("|") for line in rendered.splitlines()]
+        for repository_id, service_id in apps.items():
+            url = health[repository_id][environment]
+            assert url.startswith("https://")
+            assert url.endswith("/api/health")
+            assert [r[2] for r in routes if r[7] == service_id and r[2] == url] == [url]
+    # An App with its own domain is served on the bare domain in production.
+    assert domain_for_service("truealpha/app") == "truealpha.club"
+    assert health["truealpha"]["production"] == "https://truealpha.club/api/health"
