@@ -314,7 +314,7 @@ an explicit per-environment Vault value.
 <a id="commit-identity"></a>
 #### 4.5.1 Commit identity contract (#1211)
 
-`GIT_COMMIT_SHA` is the commit identifier that a running service reports. Its value depends on the service class. The table below is the contract. `libs/tests/test_identity_contract.py` parses the table. It compares the table with the registry, the compose files and the pinned SDK.
+`GIT_COMMIT_SHA` is the commit identifier that a running service reports. Its value depends on the service class. The table below is the contract. `libs/tests/test_identity_contract.py` parses the table and compares it with the registry, the compose files, and the deploy entry points.
 
 | Class | Services | Compose value | Value in the container | Issued by | Reader |
 |---|---|---|---|---|---|
@@ -323,14 +323,9 @@ an explicit per-environment Vault value.
 
 An `app` service never receives a 40-hex SHA in `GIT_COMMIT_SHA`. The deploy sets `GIT_COMMIT_SHA` and `IMAGE_TAG` to the same value.
 
-**Decision: the SDK `RuntimeIdentity` is not adopted.** No service in this repository calls it. `libs/tests/test_identity_contract.py` counts its users and expects zero.
+**Decision: the SDK `RuntimeIdentity` is not adopted.** No non-test code in this repository calls `RuntimeIdentity`. `libs/tests/test_identity_contract.py` scans non-test Python files and expects zero references.
 
-- `infra2_sdk.runtime.identity.RuntimeIdentity` accepts only `unknown` or a lowercase 40-hex SHA as `commit_sha`. This rule holds in every mode. A release tag fails it.
-- In strict mode, staging and production also need `IMAGE_DIGEST`, `CONFIGURATION_SHA256` and `RELEASE_ID`. The `platform` class meets the commit rule. It lacks these three values.
-- A service may adopt strict mode only when both conditions hold. First, the app keeps its release tag in `IMAGE_TAG` only, and `GIT_COMMIT_SHA` holds a 40-hex SHA. The SDK reads `service_version` from `IMAGE_TAG`. Second, the deploy issues the image digest, the configuration SHA-256 and the release id.
-- The change that adopts it updates this table and the guard `test_runtime_identity_has_no_non_test_user` in the same pull request.
-
-**Decision: `ServiceIdentity` stays the source of the SigNoz resource attributes.** `Deployer.sync`, fixed promote and preview render `OTEL_RESOURCE_ATTRIBUTES` with `ServiceIdentity.otel_resource_attributes()`. The keys `infra.service.id`, `infra.component`, `infra.iac.ref`, `infra.identity.schema` and `infra.managed_by` exist only there. `RuntimeIdentity.to_standard_otel_resource_attributes()` emits other keys, such as `vcs.ref.head.revision` and `container.image.id`. No code calls it.
+**Decision: `ServiceIdentity` stays the source of the SigNoz resource attributes.** `Deployer.sync`, fixed promote and preview render `OTEL_RESOURCE_ATTRIBUTES` with `ServiceIdentity.otel_resource_attributes()`. The keys `infra.service.id`, `infra.component`, `infra.iac.ref`, `infra.identity.schema` and `infra.managed_by` exist only there. Services validate issued telemetry coordinates through `init_service(..., require_issued_identity=True)`.
 
 ---
 

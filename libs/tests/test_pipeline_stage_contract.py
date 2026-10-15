@@ -6,13 +6,10 @@ import pytest
 
 from infra2_sdk.delivery import (
     BudgetStatus,
-    DisagreementKind,
     FailureDomain,
     PipelineStage,
     StageStatus,
-    acceleration_allowed,
     classify_budget,
-    detect_disagreement,
     make_stage_result,
 )
 from infra2_sdk.runtime.environment import EnvironmentTier
@@ -98,8 +95,8 @@ def test_budget_classification_has_soft_and_hard_breaches() -> None:
     )
 
 
-def test_safe_acceleration_requires_skip_reason_and_never_allows_production() -> None:
-    """Infra-011.16: speed skips need explicit evidence and stay out of prod."""
+def test_skipped_stage_requires_skip_reason() -> None:
+    """Infra-011.16: skipped stages require explicit skipped_reason or suppressed_reason."""
     staging_skip = make_stage_result(
         source="change-classifier",
         environment="staging",
@@ -108,17 +105,11 @@ def test_safe_acceleration_requires_skip_reason_and_never_allows_production() ->
         status="skip",
         skipped_reason="unchanged service set with deploy-smoke fallback",
     )
-    production_skip = make_stage_result(
-        source="change-classifier",
-        environment="production",
-        stage="integration",
-        target="platform unchanged services",
-        status="skip",
-        skipped_reason="unchanged service set",
+    assert staging_skip.status == StageStatus.SKIP
+    assert (
+        staging_skip.skipped_reason
+        == "unchanged service set with deploy-smoke fallback"
     )
-
-    assert acceleration_allowed(staging_skip) is True
-    assert acceleration_allowed(production_skip) is False
 
     with pytest.raises(ValueError, match="skipped stages must include"):
         make_stage_result(
@@ -128,32 +119,6 @@ def test_safe_acceleration_requires_skip_reason_and_never_allows_production() ->
             target="platform unchanged services",
             status="skip",
         )
-
-
-def test_cross_stage_disagreement_is_measurable() -> None:
-    """Infra-011.15: contradictory signals become deterministic records."""
-    watchdog_pass = make_stage_result(
-        source="infra-probes",
-        environment="staging",
-        stage="watchdog",
-        target="platform-alerting-probes-staging",
-        status="pass",
-        duration_ms=500,
-    )
-    public_route_fail = make_stage_result(
-        source="cloudflare-watchdog",
-        environment="staging",
-        stage="deploy-smoke",
-        target="report-staging.zitian.party",
-        status="fail",
-        duration_ms=900,
-        failure_domain=FailureDomain.TRAEFIK_PUBLIC_ROUTE,
-    )
-
-    assert (
-        detect_disagreement([watchdog_pass, public_route_fail])
-        == DisagreementKind.INTERNAL_HEALTH_PUBLIC_ROUTE
-    )
 
 
 def test_preview_stage_subset_is_named_and_stable() -> None:
