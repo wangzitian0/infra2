@@ -30,8 +30,8 @@ python -m tools.deploy_v2 --service platform/free --type staging --iac-ref vX.Y.
 ## Client Connection Information
 
 Client connection details (VLESS URL, UUID, and path) are printed during deployment (`post_compose`).
-Set `FREE_SHOW_SECRETS=1` in your environment during deploy:
+Set `FREE_SHOW_SECRETS=1` (and optionally `FREE_CLIENT_INFO_PATH`) in your environment during deploy:
 ```bash
-FREE_SHOW_SECRETS=1 python -m tools.deploy_v2 --service platform/free --type prod ...
+FREE_SHOW_SECRETS=1 FREE_CLIENT_INFO_PATH=/tmp/free-client.md python -m tools.deploy_v2 --service platform/free --type prod ...
 ```
 To inspect the running service without secret exposure, run `invoke free.status`.

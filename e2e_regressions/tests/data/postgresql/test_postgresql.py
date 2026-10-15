@@ -4,33 +4,22 @@ PostgreSQL database tests.
 Tests PostgreSQL connectivity when credentials are provided.
 """
 import pytest
-import os
-
-
-def _get_db_env():
-    host = os.getenv("PG_HOST") or os.getenv("DB_HOST")
-    password = os.getenv("PG_PASS") or os.getenv("DB_PASSWORD")
-    port = os.getenv("PG_PORT") or os.getenv("DB_PORT", "5432")
-    user = os.getenv("PG_USER") or os.getenv("DB_USER", "postgres")
-    database = os.getenv("PG_DB") or os.getenv("DB_NAME", "postgres")
-    return host, password, port, user, database
+from conftest import TestConfig
 
 
 @pytest.mark.database
-async def test_postgresql_connect():
+async def test_postgresql_connect(config: TestConfig):
     """Test basic PostgreSQL connection."""
-    db_host, db_password, db_port, db_user, db_name = _get_db_env()
-
-    if not all([db_host, db_password]):
-        pytest.skip("DB credentials not configured")
+    if not config.PLATFORM_DB_HOST or not config.PLATFORM_DB_PASSWORD:
+        pytest.skip("Platform DB credentials not configured")
 
     import asyncpg
     conn = await asyncpg.connect(
-        host=db_host,
-        port=int(db_port),
-        user=db_user,
-        password=db_password,
-        database=db_name,
+        host=config.PLATFORM_DB_HOST,
+        port=int(config.PLATFORM_DB_PORT),
+        user=config.PLATFORM_DB_USER,
+        password=config.PLATFORM_DB_PASSWORD,
+        database=config.PLATFORM_DB_NAME,
         timeout=10.0,
     )
 
@@ -40,20 +29,18 @@ async def test_postgresql_connect():
 
 
 @pytest.mark.database
-async def test_postgresql_version():
+async def test_postgresql_version(config: TestConfig):
     """Verify PostgreSQL version."""
-    db_host, db_password, db_port, db_user, db_name = _get_db_env()
-
-    if not all([db_host, db_password]):
-        pytest.skip("DB credentials not configured")
+    if not config.PLATFORM_DB_HOST or not config.PLATFORM_DB_PASSWORD:
+        pytest.skip("Platform DB credentials not configured")
 
     import asyncpg
     conn = await asyncpg.connect(
-        host=db_host,
-        port=int(db_port),
-        user=db_user,
-        password=db_password,
-        database=db_name,
+        host=config.PLATFORM_DB_HOST,
+        port=int(config.PLATFORM_DB_PORT),
+        user=config.PLATFORM_DB_USER,
+        password=config.PLATFORM_DB_PASSWORD,
+        database=config.PLATFORM_DB_NAME,
     )
 
     version = await conn.fetchval("SELECT version()")

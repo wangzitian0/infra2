@@ -4,7 +4,7 @@
 
 ## Scope
 
-This suite connects to one PostgreSQL server. The environment variables below select the server. Both tests skip when the host or the password is missing. `PG_HOST` and `PG_PASS` take precedence over `DB_HOST` and `DB_PASSWORD`.
+This suite connects to one PostgreSQL server. The environment variables below select the server through `TestConfig`. Both tests skip when `PLATFORM_DB_HOST` or `PLATFORM_DB_PASSWORD` is missing.
 
 ## 测试矩阵
 
@@ -23,7 +23,8 @@ uv run pytest tests/data/postgresql/ -v
 
 | 变量 | 必需 | 说明 |
 |------|------|------|
-| `DB_HOST` | ✅ | 数据库地址 |
-| `DB_PORT` | ❌ | 端口 (默认 5432) |
-| `DB_USER` | ❌ | 用户名 (默认 postgres) |
-| `DB_PASSWORD` | ✅ | 密码 |
+| `PLATFORM_DB_HOST` | ✅ | 数据库地址 |
+| `PLATFORM_DB_PORT` | ❌ | 端口 (默认 5432) |
+| `PLATFORM_DB_USER` | ❌ | 用户名 (默认 postgres) |
+| `PLATFORM_DB_PASSWORD` | ✅ | 密码 |
+| `PLATFORM_DB_NAME` | ❌ | 数据库名 (默认 postgres) |
