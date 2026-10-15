@@ -380,6 +380,26 @@ def test_m3_missing_pin_detection(tmp_path: Path) -> None:
     assert m3["lagging_repos"] == ["no_pin"]
 
 
+def test_m1_ignores_module_dunder_attributes_with_uninstalled_sdk_src(
+    synthetic_workspace: tuple[Path, dict[str, Path]],
+) -> None:
+    pkg_root, consumers = synthetic_workspace
+    _write(
+        consumers["consumer_a"],
+        "app/dunder_access.py",
+        f"""
+        import {PKG_UNDER}
+        from {PKG_UNDER} import __version__
+
+        def locate_pkg() -> str:
+            return f"{{getattr({PKG_UNDER}, '__file__', '')}}:{{{PKG_UNDER}.__file__}}:{{{PKG_UNDER}.__name__}}:{{__version__}}"
+        """,
+    )
+    report = census.run_census(pkg_root=pkg_root, consumers=consumers)
+    assert report["metrics"]["M1"]["missing_imports"] == {"prod": [], "test": []}
+    assert census.evaluate_checks(report, check_test_imports=True) == []
+
+
 def test_m4_mutation_fails_when_consumer_references_left_the_packages_symbol(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
@@ -409,6 +429,62 @@ def test_m4_mutation_fails_when_consumer_references_left_the_packages_symbol(
     assert m4["by_repo"] == {"consumer_a": 2, "consumer_b": 1}
     failures = census.evaluate_checks(report)
     assert any("M4:" in f and "ENV_FALLBACK_KEYS" in f for f in failures)
+
+
+def test_m4_dict_left_the_packages_and_wheel_smoke_removed_names(
+    synthetic_workspace: tuple[Path, dict[str, Path]],
+) -> None:
+    pkg_root, consumers = synthetic_workspace
+    sdk_root = pkg_root.parent.parent
+    _write(
+        sdk_root,
+        "tests/test_readme_claims.py",
+        f"""
+        LEFT_THE_PACKAGES = {{
+            "{PKG_UNDER}": {{
+                "alpha": ["ProdService"],
+            }},
+        }}
+        REMOVED_IN_3_5_1 = (
+            ("{PKG_UNDER}.alpha", "removed_351_helper"),
+            ("{PKG_UNDER}.alpha", "main"),
+        )
+        """,
+    )
+    _write(
+        sdk_root,
+        "tests/wheel_smoke.py",
+        f"""
+        REMOVED_NAMES = (
+            ("{PKG_UNDER}.alpha", "removed_340_helper"),
+            ("{PKG_UNDER}.alpha", "ProdService.from_env"),
+        )
+        """,
+    )
+
+    # Submodule import of ProdService (from infra2_sdk.alpha import ProdService) is valid:
+    clean_report = census.run_census(pkg_root=pkg_root, consumers=consumers)
+    assert clean_report["metrics"]["M4"]["total_violations"] == 0
+
+    # Package-level import of ProdService and imports of REMOVED_NAMES / REMOVED_IN_3_5_1 fail M4:
+    _write(
+        consumers["consumer_a"],
+        "tests/test_dict_left.py",
+        f"""
+        from {PKG_UNDER} import ProdService
+        from {PKG_UNDER}.alpha import removed_340_helper, removed_351_helper, main
+        """,
+    )
+    report = census.run_census(pkg_root=pkg_root, consumers=consumers)
+    m4 = report["metrics"]["M4"]
+    assert m4["total_violations"] == 4
+    flagged_names = {v["name"] for v in m4["violations"]}
+    assert flagged_names == {
+        "ProdService",
+        "removed_340_helper",
+        "removed_351_helper",
+        "main",
+    }
 
 
 def test_m5_mutation_fails_on_hardcoded_service_name_collection_dict_lookup_and_manifest(
