@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from infra2_sdk.deploy import (
+    PRODUCTION_REQUEST_MAX_AGE_SECONDS,
     DeployOperation,
     DeployRequest,
     DeployType,
@@ -58,19 +59,6 @@ FIXED_DEPLOY_TYPES = frozenset({DeployType.STAGING, DeployType.PRODUCTION})
 #: libs/tests/test_app_deploy_request_workflow.py pins the two to each other and the
 #: receiver re-checks it at run time, so they cannot drift apart silently.
 PREFLIGHT_CANARY_DEPLOY_TYPES = frozenset({DeployType.PRODUCTION})
-#: The maximum age of a production request when the receiver checks it: 24 min (#1232).
-#: Two senders wait for a receiver run. The receiver cannot read their deadlines, so
-#: one limit serves both, and it is set for the sender that stops first:
-#: - finance_report release.yml: a 30 min job limit stops the sender 1739 s to 1761 s
-#:   after the receiver run is created (13 runs), so about 1740 s.
-#: - truealpha deploy-release.yml: 360 polls at 5 s intervals. Its sender stopped 2178 s
-#:   after the receiver run was created (run 38344114882).
-#: The deploy job then needs up to 293 s (the longest of 25 production runs), so the
-#: limit keeps 300 s for it: about 1740 s minus 300 s is 24 min. For truealpha, the
-#: limit is conservative. A request that starts near the limit can still end after the
-#: finance_report sender stops. docs/ssot/ops.pipeline.md section 4.1 item 7 has the
-#: details and the gap that remains.
-PRODUCTION_REQUEST_MAX_AGE_SECONDS = 24 * 60
 
 
 @dataclass(frozen=True)
