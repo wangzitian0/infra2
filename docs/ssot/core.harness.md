@@ -8,6 +8,7 @@
 | 事实 | 唯一来源 |
 |---|---|
 | Workspace 成员、角色、治理模式与契约分级 | `harness/repos.yaml` |
+| App health endpoint addresses (staging and production) | `harness/repos.yaml`, key `health:` |
 | Workspace 通用偏好 | `harness/workspace/` |
 | Infra2 架构与运维规则 | [`docs/ssot/core.md`](./core.md) 与相关 SSOT |
 | SDK 公共契约 | 已发布的 `infra2-sdk` SemVer artifact |
@@ -128,6 +129,54 @@ remote HEAD、ahead/behind、dirty path 数和 checkout release identity。默�
 source。`--require-current` 在任一 checkout 落后/领先/脏、或 pinned checkout 脱离 parent pin 时返回非零（snapshot 仓库的 pin drift 不会破坏 current 判定）。
 观察与 fetch 前必须确认路径是独立 Git root；空 submodule 不能回退成父仓库。
 
+`harness status --online` adds the release that each repository serves in staging and production.
+The option is explicit, like `--fetch`. Without `--online`, `status` sends no HTTP request, and `check` never uses the network.
+`--fetch` runs `git fetch`, which does use the network.
+
+```bash
+uv run python -m tools.harness status --fetch --online
+uv run python -m tools.harness status --online --json
+```
+
+The `--online` option is read-only. It reads two kinds of facts:
+
+- App rows. The command sends one HTTPS GET to each URL under `health:` in `harness/repos.yaml`, one after the other.
+  The timeout is 8 seconds for each connect and each read, not for the whole request.
+  The served release is the `version` field of the JSON body. If `version` is absent, the command uses `git_sha`.
+  The Apps put their release tag in `git_sha`.
+- The `infra2` row. The command reads local git tags with `libs/deploy/release_markers.py`.
+  Staging shows the newest `vX.Y.Z` tag that HEAD contains. Production shows the `production/vX.Y.Z` marker.
+  The note gives the number of releases between them. Add `--fetch` to refresh the tags first.
+
+After the checkout lines, the command prints a table. Its columns are `repo`, `pin`, `checkout`, `contract(lock)`, `staging` and `production`.
+
+| Value in a cell | Meaning |
+|---|---|
+| A release, for example `v0.2.0` | The endpoint answered and named this release. |
+| `unreachable` | The request failed: connection error, timeout, or HTTP error status. The note gives the reason. |
+| `unknown` | The endpoint answered, but the answer is unusable (see below). For `infra2`, git tags are missing. The note gives the reason. |
+| `-` | The repository has no `health:` URL (or, for `contract(lock)`, no lock entry). |
+
+The command reports `unknown` for an App in these cases:
+
+- The body is not JSON, or it is larger than 1 MiB.
+- The body has no `version` or `git_sha` text, or the text has a character that is not printable.
+- A redirect ends on a URL that is not https.
+
+`contract(lock)` shows the tag of `apps.<app>` in `contracts/apps.lock.json`. It shows the first 8 characters of the commit when the tag is null.
+`<app>` is the directory name under `repos/`. The column shows `unknown` when the command cannot read a printable tag or commit from the lock.
+`harness check` rejects a `health:` URL that is not https, has no host, has a bad port, or has user information.
+
+The command never prints a cached or guessed value. The header of the table carries the UTC time of the reads.
+Online values never change the exit code.
+
+With `--json`, the output adds `observed_at` and, for each repository, the keys `served` and `contract_lock`.
+`served` has the keys `staging`, `production` and `note`.
+`note` names the error type behind `unreachable` and `unknown`. For the `infra2` row, it gives the marker lag.
+A `null` value means that the row has no observation.
+`contract_lock` equals the `contract(lock)` column, with `null` for `-`.
+Without `--online`, none of these keys appears.
+
 `harness sweep <watch.json>` 是 workspace orchestrator（启动 subagent、盯 PR/发布/CI、
 合流的主会话）的时钟，规则见
 [`coordination.md` Orchestrator Liveness](../../harness/workspace/coordination.md#orchestrator-liveness)。
@@ -153,6 +202,7 @@ uv run pytest -q libs/tests/test_harness_sweep.py libs/tests/test_orchestrator_g
 uv run python -m tools.harness sweep /abs/path/to/watch.json
 uv run python -m tools.harness check --json
 uv run python -m tools.harness status --fetch --json
+uv run python -m tools.harness status --fetch --online --json
 uv run pytest -q libs/tests/test_sdk_contract_adoption.py
 ```
 
@@ -163,6 +213,8 @@ uv run pytest -q libs/tests/test_sdk_contract_adoption.py
 - 所有 `external-application` 必须是 `autonomous`，且不能进入 focus。
 - authority 与 preference 路径可读且不能逃逸 workspace root。
 - 现有 SDK 采用测试继续证明消费者使用发布 artifact，而不是 submodule 源码。
+- `status --online` reads the release from the `version` field, else `git_sha`. It reports `unreachable` and `unknown` instead of a guess. Without `--online`, `status` and `check` open no socket (`libs/tests/test_harness_status.py`).
+- Each `health:` URL is an https URL. It equals the public health route of the same App in the service registry (`libs/tests/test_harness_manifest.py`).
 - `sweep` 对未 resolved review thread、红色 check、未知值与失败的 probe 从不报告
   `WAITING`；gate 文本不参与判定；带变更 flag 的 gate 命令在执行前被拒绝。
 

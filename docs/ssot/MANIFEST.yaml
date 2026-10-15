@@ -42,9 +42,11 @@ entries:
       application repositories remain autonomous checkouts; common GitHub, coordination,
       and software-design guidance is preference-level rather than cross-repository policy.
       The read-only orchestrator sweep classifies watched work by allow-listed facts
-      and gate exit codes.
+      and gate exit codes. `harness status --online` reads the release that each App
+      serves in staging and production from the health URLs in harness/repos.yaml.
     proofs:
       - libs/tests/test_harness_manifest.py
+      - libs/tests/test_harness_status.py
       - libs/tests/test_harness_sweep.py
       - libs/tests/test_sdk_usage_census.py
       - tools/sdk_usage_census.py
