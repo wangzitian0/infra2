@@ -109,3 +109,22 @@ def test_create_app_bucket_fails_loud_and_clears_on_probe_failure(
     assert any(
         "mc encrypt clear local/test-bucket" in cmd for cmd in ctx.command_history
     )
+
+
+def test_s3_compose_root_user_fallback_matches_the_control_plane_default():
+    """If Vault has no root_user, the server and the `mc admin` tooling must use the
+    same name. The control plane defaults to "admin"; a different compose fallback
+    would boot the server under one name and authenticate the tooling under another."""
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "platform" / "03.s3"
+    compose = (root / "compose.yaml").read_text(encoding="utf-8")
+    compose_default = re.search(
+        r'ROOT_USER="\$\$\{MINIO_ROOT_USER:-([^}]+)\}"', compose
+    )
+    assert compose_default, "compose no longer sets a ROOT_USER fallback"
+    for name in ("deploy.py", "shared_tasks.py"):
+        source = (root / name).read_text(encoding="utf-8")
+        defaults = set(re.findall(r'root_user"\)[^\n]*or "([^"]+)"', source))
+        assert defaults == {compose_default.group(1)}, (name, defaults)

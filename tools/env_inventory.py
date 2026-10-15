@@ -218,7 +218,12 @@ def route(path: str) -> str | None:
 
 
 def scope_of(path: str) -> str:
-    parts = path.lower().split("/")
+    norm = path.replace("\\", "/").lower()
+    if norm.endswith("apps/app-web/scripts/seed-e2e-fixture.ts") or norm.endswith(
+        "libs/runtime/src/truealpha_runtime/testing.py"
+    ):
+        return "test"
+    parts = norm.split("/")
     name = parts[-1]
     if any(
         p in ("tests", "test", "__tests__", "e2e", "e2e_regressions", "fixtures")
@@ -493,6 +498,7 @@ class PyScan(ast.NodeVisitor):
         self.ctxmap: dict[int, str] = {}
         self.dictvals: dict[int, str | None] = {}
         self.loop_vars: dict[str, list] = {}
+        self.discarded_calls: set[int] = set()
 
     # ----- helpers
     def line(self, node) -> int:
@@ -788,6 +794,15 @@ class PyScan(ast.NodeVisitor):
                 self.write(node, k, v, via, layer, conf)
 
     # ----- visitors
+    def visit_Expr(self, node: ast.Expr) -> None:
+        if (
+            isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Attribute)
+            and node.value.func.attr == "pop"
+        ):
+            self.discarded_calls.add(id(node.value))
+        self.generic_visit(node)
+
     def visit_Call(self, node: ast.Call) -> None:
         if (
             isinstance(node.func, ast.Attribute)
@@ -835,6 +850,8 @@ class PyScan(ast.NodeVisitor):
                     )
                 return
             if kind and attr == "pop":
+                if id(node) in self.discarded_calls:
+                    return
                 if args:
                     self.read(
                         node,
@@ -1203,12 +1220,18 @@ class PyScan(ast.NodeVisitor):
         out = []
         if isinstance(v, ast.Constant) and isinstance(v.value, str):
             out.append(v.value)
+        elif isinstance(v, ast.Attribute):
+            d = dotted(v) or ""
+            if "RuntimeEnvKey." in d:
+                parts = d.split(".")
+                idx = parts.index("RuntimeEnvKey")
+                if len(parts) > idx + 1:
+                    out.append(parts[idx + 1])
         elif isinstance(v, ast.Call):
             d = (dotted(v.func) or "").split(".")[-1]
             if d == "AliasChoices":
                 for a in v.args:
-                    if isinstance(a, ast.Constant) and isinstance(a.value, str):
-                        out.append(a.value)
+                    out.extend(PyScan.alias_strings(a))
         return out
 
     def settings(self, node: ast.ClassDef) -> None:
@@ -2281,7 +2304,11 @@ def scan_manifest(
             unit=unit,
             extra=extra,
         )
-        if synthetic_code_read:
+        is_app_stack_code = extra.get("source") == "code" and (
+            path.startswith("finance_report/finance_report/10.app")
+            or path.startswith("truealpha/truealpha/10.app")
+        )
+        if synthetic_code_read or is_app_stack_code:
             inv.add(
                 key=key,
                 role="read",
@@ -2830,8 +2857,8 @@ PLACEHOLDER = re.compile(
 
 def _is_ephemeral_preview_db_password(key: str, val: str, path: str) -> bool:
     return (
-        key == "PREVIEW_DB_PASSWORD"
-        and str(val).strip().lower() == "preview"
+        key in ("PREVIEW_DB_PASSWORD", "POSTGRES_PASSWORD")
+        and str(val).strip().lower() in ("preview", "ephemeral")
         and ("/preview/" in path or path.endswith("preview.py"))
     )
 
@@ -3005,11 +3032,22 @@ def analyze(inv, groups=None, vocab=None):
     for a, b, kind, _repo, _path, _line in edges:
         if kind in link_kinds:
             uf.union(a, b)
+    for a, meta in (vocab or {}).items():
+        if meta.get("kind") == "alias" and meta.get("canonical"):
+            b = meta["canonical"]
+            if keyname.match(a) and keyname.match(b):
+                uf.union(a, b)
     comps = collections.defaultdict(set)
     for a, b, kind, *_ in edges:
         if kind in link_kinds:
             comps[uf.find(a)].add(a)
             comps[uf.find(a)].add(b)
+    for a, meta in (vocab or {}).items():
+        if meta.get("kind") == "alias" and meta.get("canonical"):
+            b = meta["canonical"]
+            if keyname.match(a) and keyname.match(b):
+                comps[uf.find(a)].add(a)
+                comps[uf.find(a)].add(b)
     comp_of = {}
     for r, members in comps.items():
         for m in members:
@@ -3452,6 +3490,10 @@ def contract(inv, keys, services, comp_of=None, comps=None):
                     if k not in mkeys
                     and k not in comp
                     and k not in ctm
+                    and not any(
+                        m in mkeys or m in comp or m in ctm
+                        for m in comps.get(comp_of.get(k), ())
+                    )
                     and any(o.has_default for o in os_)
                     and not PLATFORM.match(k)
                     and not THIRD_PARTY.match(k)
@@ -3756,8 +3798,40 @@ def main(argv: list[str] | None = None) -> int:
         default=REPO_ROOT / ".agents" / "runs" / "env-inventory",
         help="Output directory for CSV/JSON/Markdown reports (never inside tracked files).",
     )
+    parser.add_argument(
+        "--sdk",
+        type=Path,
+        default=None,
+        help="Path to infra2-sdk repository root.",
+    )
+    parser.add_argument(
+        "--infra2",
+        type=Path,
+        default=None,
+        help="Path to infra2 repository root.",
+    )
+    parser.add_argument(
+        "--finance-report",
+        type=Path,
+        default=None,
+        help="Path to finance_report repository root.",
+    )
+    parser.add_argument(
+        "--truealpha",
+        type=Path,
+        default=None,
+        help="Path to truealpha repository root.",
+    )
     args = parser.parse_args(argv)
-    repos = default_repos(REPO_ROOT)
+    repos = default_repos((args.infra2 or REPO_ROOT).resolve())
+    if args.infra2:
+        repos["infra2"] = args.infra2.resolve()
+    if args.sdk:
+        repos["infra2-sdk"] = args.sdk.resolve()
+    if args.finance_report:
+        repos["finance_report"] = args.finance_report.resolve()
+    if args.truealpha:
+        repos["truealpha"] = args.truealpha.resolve()
     inv = run(repos, include_app_manifests=True)
     heads = {
         n: subprocess.run(

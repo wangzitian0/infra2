@@ -21,8 +21,7 @@
 #
 # Env vars supplied by libs.deploy.preview (see libs.deploy.promote for the shared set):
 # IMAGE_TAG, GIT_COMMIT_SHA, ENV_SUFFIX, ENV_DOMAIN_SUFFIX, NEXT_PUBLIC_APP_URL,
-# INTERNAL_DOMAIN, IAC_CONFIG_HASH, VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID, plus the
-# ephemeral-DB knobs PREVIEW_DB_USER / PREVIEW_DB_PASSWORD / PREVIEW_DB_NAME.
+# INTERNAL_DOMAIN, CONFIGURATION_SHA256, VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID.
 services:
   vault-agent:
     init: true  # tini as PID1 reaps healthcheck ssl_client zombies
@@ -61,7 +60,7 @@ services:
       # without a var this container's own config reads, Compose can leave a stale
       # vault-agent (and stale rendered secrets.ctmpl) running across a redeploy.
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
-      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
     healthcheck:
       test:
         - CMD-SHELL
@@ -98,9 +97,9 @@ services:
         max-size: "5m"
         max-file: "2"
     environment:
-      POSTGRES_USER: ${PREVIEW_DB_USER:-preview}
-      POSTGRES_PASSWORD: ${PREVIEW_DB_PASSWORD:-preview}
-      POSTGRES_DB: ${PREVIEW_DB_NAME:-truealpha}
+      POSTGRES_USER: ephemeral
+      POSTGRES_PASSWORD: ephemeral
+      POSTGRES_DB: preview
       PGDATA: /var/lib/postgresql/data/pgdata
     healthcheck:
       test:
@@ -150,7 +149,7 @@ services:
         # replace it with this stack's OWN ephemeral DB so preview never reads/writes the
         # shared staging/prod database. Done AFTER sourcing /secrets/.env so the override
         # always wins; the rest of the Vault secrets (S3) are kept.
-        export DATABASE_URL="$$PREVIEW_DATABASE_URL"
+        export DATABASE_URL="$$DATABASE_URL"
         # Apply db/migrations/*.sql + db/roles.sql (baked into the image, #428) against
         # the fresh ephemeral DB — this is exactly what closes the "boots with no schema"
         # gap the README used to flag; every alias now starts migrated from empty.
@@ -160,7 +159,7 @@ services:
         exec uvicorn llm_service.main:app --host 0.0.0.0 --port 8000
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
-      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       # A preview reads staging's secrets (the generated template is fixed to that
       # environment) and, since truealpha#780, llm-service validates its injected
       # environment at boot: S3_ENDPOINT must be present — the staging MinIO, the
@@ -173,9 +172,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-}
       OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
-      # The ephemeral-DB DSN the entrypoint forces AFTER sourcing Vault secrets, pointing
-      # at the local `db` service (NOT truealpha-postgres*).
-      PREVIEW_DATABASE_URL: postgresql://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@truealpha-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-truealpha}
+      DATABASE_URL: postgresql://ephemeral:ephemeral@truealpha-preview-db${ENV_SUFFIX}:5432/preview
     healthcheck:
       # python stdlib probe: the uv-based slim image ships no curl/wget.
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)" ]
@@ -229,11 +226,11 @@ services:
         . /secrets/.env
         set +a
         # PREVIEW OVERRIDE — see the llm service above for the rationale.
-        export DATABASE_URL="$$PREVIEW_DATABASE_URL"
+        export DATABASE_URL="$$DATABASE_URL"
         exec node server.js
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
-      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       # A preview reads staging's secrets (the generated template is fixed to that
       # environment) and, since truealpha#780, llm-service validates its injected
       # environment at boot: S3_ENDPOINT must be present — the staging MinIO, the
@@ -242,7 +239,7 @@ services:
       S3_ENDPOINT: http://platform-s3-staging:9000
       HOSTNAME: 0.0.0.0
       PORT: "3000"
-      PREVIEW_DATABASE_URL: postgresql://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@truealpha-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-truealpha}
+      DATABASE_URL: postgresql://ephemeral:ephemeral@truealpha-preview-db${ENV_SUFFIX}:5432/preview
     healthcheck:
       # busybox wget ships with the alpine runtime image. 127.0.0.1, not localhost:
       # busybox wget doesn't fall back across address families, and alpine resolves

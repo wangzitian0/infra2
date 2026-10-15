@@ -86,7 +86,7 @@ def _load_cloudflare_secrets() -> dict[str, str]:
     secrets = OpSecrets(item=CLOUDFLARE_ITEM)
     result: dict[str, str] = {}
     for key in ("CF_API_TOKEN", "CF_ZONE_ID", "CF_ZONE_NAME"):
-        env_val = os.getenv(key) or os.getenv(key.replace("CF_", "CLOUDFLARE_"))
+        env_val = os.getenv(key)
         if env_val:
             result[key] = env_val
             continue

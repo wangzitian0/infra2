@@ -181,16 +181,21 @@ class TodoDeployer(Deployer):
 @task
 def sso_setup(c):
     """Register Canary Todo in Authentik SSO (One-time or idempotent)"""
+    from infra2_sdk.routing import derive_preview_coordinates
+
     env = TodoDeployer.env()
-    suffix = env.get("ENV_SUFFIX") or ""
-    domain_suffix = env.get("ENV_DOMAIN_SUFFIX") or ""
     internal_domain = env.get("INTERNAL_DOMAIN")
 
     if not internal_domain:
         error("Missing INTERNAL_DOMAIN")
         return
 
-    todo_url = f"https://todo{domain_suffix}.{internal_domain}"
+    coords = derive_preview_coordinates(
+        "todo", env.get("ENV") or "production", base_domain=internal_domain
+    )
+    suffix = coords.env_suffix
+    domain_suffix = coords.env_domain_suffix
+    todo_url = coords.preview_url
     internal_host = f"platform-todo{suffix}"
     app_name = f"Canary Todo{(' (' + domain_suffix.lstrip('-') + ')') if domain_suffix else ''}"
     app_slug = f"canary-todo{domain_suffix}"

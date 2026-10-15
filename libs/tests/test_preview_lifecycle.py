@@ -362,9 +362,9 @@ def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
     assert env["INTERNAL_DOMAIN"] == "zitian.party"
     # cache-bust is keyed on the RESOLVED sha (short form), not the alias token
     assert env["IAC_CONFIG_HASH"] == f"preview-{SHORT_SHA}-1000000"
-    # ephemeral DB knobs the compose template reads to override DATABASE_URL
-    assert env["PREVIEW_DB_USER"] == "preview"
-    assert env["PREVIEW_DB_NAME"] == "finance_report"
+    assert env["CONFIGURATION_SHA256"] == f"preview-{SHORT_SHA}-1000000"
+    assert "PREVIEW_DB_USER" not in env
+    assert "PREVIEW_DB_NAME" not in env
     # app secrets come from staging's Vault path, fixed in the generated secrets.ctmpl and
     # policy (#637): no knob is injected any more
     assert "PREVIEW_SECRET_ENV" not in env
@@ -751,7 +751,7 @@ def test_preview_entrypoint_overrides_environment_to_match_otel_tag():
         "ENVIRONMENT with it"
     )
     database_url_idx = backend_block.index(
-        'export DATABASE_URL="$$PREVIEW_DATABASE_URL"'
+        'export DATABASE_URL="$$DATABASE_URL"'
     )
     environment_idx = backend_block.index('export ENVIRONMENT="$$ENV"')
     assert environment_idx > database_url_idx, (

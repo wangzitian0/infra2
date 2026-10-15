@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from libs.core import registry as service_registry
@@ -48,8 +49,8 @@ def _secret_values(digest_char="a"):
         "S3_ACCESS_KEY": "test-access",
         "S3_SECRET_KEY": "test-secret",
         "S3_BUCKET": "truealpha-raw-staging",
-        "DATA_ENGINE_IMAGE_DIGEST": "sha256:" + digest_char * 64,
-        "RELEASE_MANIFEST_ID": "release-manifest:" + "b" * 64,
+        "IMAGE_DIGEST": "sha256:" + digest_char * 64,
+        "RELEASE_ID": "release-manifest:" + "b" * 64,
         "CAPTURE_APPROVED_BY": "review:test",
         "GIT_COMMIT_SHA": "c" * 40,
     }
@@ -76,7 +77,10 @@ def test_status_health_commands_are_safe_for_remote_single_quote_wrapper():
 def test_compose_pins_one_digest_and_keeps_dagster_on_host_loopback():
     compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
     services = compose["services"]
-    expected_image = "ghcr.io/wangzitian0/truealpha-data-engine@${DATA_ENGINE_IMAGE_DIGEST:?DATA_ENGINE_IMAGE_DIGEST is required}"
+    expected_image = (
+        "ghcr.io/wangzitian0/truealpha-data-engine@"
+        "${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?IMAGE_DIGEST is required}}"
+    )
     for name in ("dagster-webserver", "dagster-daemon", "dagster-code-server"):
         service = services[name]
         assert service["image"] == expected_image
@@ -85,6 +89,11 @@ def test_compose_pins_one_digest_and_keeps_dagster_on_host_loopback():
         assert service["mem_limit"]
         assert service["cpu_shares"]
         assert "traefik.enable=false" in service["labels"]
+    # Fail-closed: a missing release identity must stop compose. A zero-value default
+    # would let a deploy run an unpinned or fake release.
+    raw = (SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8")
+    assert "sha256:" + "0" * 64 not in raw
+    assert "release-manifest:" + "0" * 64 not in raw
     web_command = services["dagster-webserver"]["command"]
     assert "127.0.0.1" in web_command
     assert "${DAGSTER_WEBSERVER_PORT}" in web_command
@@ -130,10 +139,10 @@ def test_deployer_derives_isolated_ports_and_full_configuration_hash(monkeypatch
     assert config["DATA_PATH"] == "/data/truealpha/dagster-staging"
     assert config["TA_POSTGRES_PORT"] == "15432"
     assert config["DAGSTER_WEBSERVER_PORT"] == "13001"
-    assert config["DATA_ENGINE_IMAGE_DIGEST"] == values["DATA_ENGINE_IMAGE_DIGEST"]
+    assert config["IMAGE_DIGEST"] == values["IMAGE_DIGEST"]
     assert len(config["CONFIGURATION_SHA256"]) == 64
 
-    values["DATA_ENGINE_IMAGE_DIGEST"] = "sha256:" + "d" * 64
+    values["IMAGE_DIGEST"] = "sha256:" + "d" * 64
     changed = deployer.compose_env_base(environment)
     assert changed["CONFIGURATION_SHA256"] != config["CONFIGURATION_SHA256"]
 
@@ -189,7 +198,7 @@ def test_deployer_fails_closed_on_missing_or_malformed_release_inputs(monkeypatc
     module = _load_deploy_module()
     deployer = module.DataEngineDeployer
     values = _secret_values()
-    values["DATA_ENGINE_IMAGE_DIGEST"] = "latest"
+    values["IMAGE_DIGEST"] = "latest"
     monkeypatch.setattr(
         deployer,
         "secrets_backend",
@@ -255,7 +264,7 @@ def test_vault_agent_is_recreated_when_its_templates_change():
     services — otherwise template edits ship without ever rendering (#604, #626).
     """
     environment = _vault_agent_environment()
-    assert environment.get("TRUEALPHA_CONFIGURATION_SHA256", "").startswith(
+    assert environment.get("CONFIGURATION_SHA256", "").startswith(
         "${CONFIGURATION_SHA256"
     ), "vault-agent must carry CONFIGURATION_SHA256 so template changes recreate it"
     hashed = _load_deploy_module().DataEngineDeployer
@@ -316,17 +325,14 @@ def test_a_release_request_pins_the_tag_digest_in_vault_before_reading_it(monkey
     )
     assert asked == [("ghcr.io/wangzitian0/truealpha-data-engine", "v0.0.46")]
     assert secrets.writes == [
-        ("DATA_ENGINE_IMAGE_DIGEST", new_digest),
+        ("IMAGE_DIGEST", new_digest),
         ("GIT_COMMIT_SHA", "v0.0.46"),
     ]
     # compose_env_base now reads the pinned values, not the ones Vault held before
     env = deployer.compose_env_base(
         {"ENV": "staging", "DATA_PATH": "/tmp/x", "ENV_SUFFIX": "-staging"}
     )
-    assert (
-        env["DATA_ENGINE_IMAGE_DIGEST"] == new_digest
-        and env["GIT_COMMIT_SHA"] == "v0.0.46"
-    )
+    assert env["IMAGE_DIGEST"] == new_digest and env["GIT_COMMIT_SHA"] == "v0.0.46"
 
 
 def test_pin_release_fails_closed_on_a_bad_ref_or_an_unresolvable_tag(monkeypatch):
@@ -380,7 +386,7 @@ def test_pin_release_retries_a_lookup_that_got_no_answer(monkeypatch):
         == digest
     )
     assert slept == list(deploy._PIN_RESOLVE_BACKOFF_SECONDS)
-    assert ("DATA_ENGINE_IMAGE_DIGEST", digest) in secrets.writes
+    assert ("IMAGE_DIGEST", digest) in secrets.writes
 
 
 def test_pin_release_gives_up_after_the_last_transport_failure(monkeypatch):
@@ -465,9 +471,7 @@ def test_ensure_runtime_secrets_pins_from_the_process_environment(monkeypatch):
     monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.47")
     from infra2_sdk import refs
 
-    monkeypatch.setattr(
-        refs, "resolve_image_digest", lambda **kw: "sha256:" + "9" * 64
-    )
+    monkeypatch.setattr(refs, "resolve_image_digest", lambda **kw: "sha256:" + "9" * 64)
     monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)
     assert deployer.ensure_runtime_secrets() is True
     assert ("GIT_COMMIT_SHA", "v0.0.47") in secrets.writes
@@ -514,9 +518,7 @@ def test_ensure_runtime_secrets_accepts_env_parameter(monkeypatch):
     monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.48")
     from infra2_sdk import refs
 
-    monkeypatch.setattr(
-        refs, "resolve_image_digest", lambda **kw: "sha256:" + "8" * 64
-    )
+    monkeypatch.setattr(refs, "resolve_image_digest", lambda **kw: "sha256:" + "8" * 64)
     monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)
 
     # Calling with env="staging" must succeed and not raise TypeError
@@ -553,7 +555,7 @@ def test_verify_runtime_applied_passes_timeout_to_inspect(monkeypatch):
 
     mock_c = MockContext()
     digest = "sha256:" + "a" * 64
-    err = deployer.verify_runtime_applied(mock_c, {"DATA_ENGINE_IMAGE_DIGEST": digest})
+    err = deployer.verify_runtime_applied(mock_c, {"IMAGE_DIGEST": digest})
     assert err is None
 
     # remote() commands must include ssh hardening flags
@@ -603,7 +605,7 @@ def test_verify_runtime_applied_retries_on_command_timed_out(monkeypatch):
 
     mock_c = MockContext()
     digest = "sha256:" + "a" * 64
-    err = deployer.verify_runtime_applied(mock_c, {"DATA_ENGINE_IMAGE_DIGEST": digest})
+    err = deployer.verify_runtime_applied(mock_c, {"IMAGE_DIGEST": digest})
     assert err is not None
     assert "promoted image digest was not applied" in err
     assert "unavailable" in err
@@ -781,3 +783,63 @@ def test_entrypoint_keeps_the_vault_mount_as_default_and_compose_does_not_overri
         assert "secrets:/secrets:ro" in service["volumes"]
         # The manifest path is relative. It resolves against the image WORKDIR (/app).
         assert "working_dir" not in service
+
+
+def _legacy_only_values():
+    """The live Vault shape before the rename: legacy names, no canonical names."""
+    values = _secret_values("a")
+    values["DATA_ENGINE_IMAGE_DIGEST"] = values.pop("IMAGE_DIGEST")
+    values["RELEASE_MANIFEST_ID"] = values.pop("RELEASE_ID")
+    return values
+
+
+def _deployer_with(monkeypatch, values):
+    deploy = _load_deploy_module()
+    deployer = deploy.DataEngineDeployer
+    secrets = _Secrets(values)
+    monkeypatch.setattr(
+        deployer, "secrets_backend", classmethod(lambda cls, env=None: secrets)
+    )
+    monkeypatch.setattr(
+        deployer,
+        "env",
+        classmethod(lambda cls: {"ENV": "staging", "DATA_PATH": "/tmp/infra2-data"}),
+    )
+    monkeypatch.delenv("DEPLOY_VERSION_REF", raising=False)
+    monkeypatch.setattr(deploy, "error", lambda *_a, **_k: None)
+    return deployer
+
+
+def test_legacy_vault_names_still_deploy_and_reach_compose_under_canonical_names(
+    monkeypatch,
+):
+    """The release tooling and live Vault still write the legacy names. The deploy must
+    accept them and hand compose the canonical names, or the next release fails."""
+    deployer = _deployer_with(monkeypatch, _legacy_only_values())
+    assert deployer.ensure_runtime_secrets() is True
+    base = deployer.compose_env_base({})
+    assert base["IMAGE_DIGEST"] == "sha256:" + "a" * 64
+    assert base["RELEASE_ID"] == "release-manifest:" + "b" * 64
+    assert "DATA_ENGINE_IMAGE_DIGEST" not in base
+    assert "RELEASE_MANIFEST_ID" not in base
+
+
+def test_canonical_vault_name_wins_over_a_stale_legacy_value(monkeypatch):
+    """`pin_release` writes IMAGE_DIGEST. A stale legacy digest must never override it."""
+    values = _secret_values("a")
+    values["DATA_ENGINE_IMAGE_DIGEST"] = "sha256:" + "f" * 64
+    values["RELEASE_MANIFEST_ID"] = "release-manifest:" + "e" * 64
+    deployer = _deployer_with(monkeypatch, values)
+    base = deployer.compose_env_base({})
+    assert base["IMAGE_DIGEST"] == "sha256:" + "a" * 64
+    assert base["RELEASE_ID"] == "release-manifest:" + "b" * 64
+
+
+def test_deploy_still_fails_closed_when_neither_vault_name_exists(monkeypatch):
+    values = _legacy_only_values()
+    del values["DATA_ENGINE_IMAGE_DIGEST"]
+    del values["RELEASE_MANIFEST_ID"]
+    deployer = _deployer_with(monkeypatch, values)
+    assert deployer.ensure_runtime_secrets() is False
+    with pytest.raises(ValueError, match="IMAGE_DIGEST must be configured"):
+        deployer.compose_env_base({})
