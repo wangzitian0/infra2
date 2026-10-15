@@ -191,7 +191,7 @@ invoke env.set POSTGRES_PASSWORD=$(openssl rand -base64 24) --project=finance_re
 invoke env.set PASSWORD=$(openssl rand -base64 24) --project=finance_report --env=production --service=redis
 
 # 3. 配置应用密钥
-# DATABASE_URL, REDIS_URL, S3_*, OPENROUTER_API_KEY
+# DATABASE_URL, REDIS_URL, S3_*, AI_API_KEY
 # 见 docs/project/Infra-009.finance_report_deploy.md
 
 # 4. 生成 Vault AppRole 凭证（role_id/secret_id → Dokploy env），显式给出环境

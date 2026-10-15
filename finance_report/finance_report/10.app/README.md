@@ -42,8 +42,7 @@ Stored at: `secret/data/finance_report/<env>/app`
 | `S3_PUBLIC_ENDPOINT` | Externally reachable S3 API endpoint for short-lived presigned URLs |
 | `S3_PUBLIC_BUCKET` | Public-endpoint bucket alias; defaults to `S3_BUCKET` |
 | `AI_PROVIDER` | AI provider identifier; defaults to `zai` |
-| `ZAI_API_KEY` | Z.AI API key for GLM models |
-| `AI_API_KEY` | Provider-neutral API key alias for non-Z.AI providers |
+| `ZAI_API_KEY` | AI provider API key. The template renders it as the container variable `AI_API_KEY` |
 | `AI_BASE_URL` | Provider base URL; defaults to Z.AI |
 | `AI_CHAT_COMPLETIONS_PATH` | Chat completions API path |
 | `AI_LAYOUT_PARSING_PATH` | OCR/layout parsing API path |
