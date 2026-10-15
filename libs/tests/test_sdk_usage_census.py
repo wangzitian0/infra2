@@ -171,7 +171,7 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
     )
     _write(
         consumer_a,
-        ".github/workflows/ci.yml",
+        ".github/workflows/infra-ci.yml",
         f"""
         name: ci
         jobs:

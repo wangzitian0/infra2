@@ -780,7 +780,7 @@ def consumer_pinned_version(root: Path) -> str | None:
                 ver = _extract_sdk_version(req)
                 if ver:
                     return ver
-            except (SystemExit, Exception):  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 pass
 
     for rel in ("pyproject.toml", "apps/backend/pyproject.toml"):
