@@ -93,7 +93,7 @@ services:
         . /secrets/.env
         set +a
         # Root credentials exported for generic S3, RustFS, and MinIO backends
-        ROOT_USER="$${MINIO_ROOT_USER:-minioadmin}"
+        ROOT_USER="$${MINIO_ROOT_USER:-admin}"
         ROOT_PASSWORD="$${MINIO_ROOT_PASSWORD}"
         export MINIO_ROOT_USER="$$ROOT_USER"
         export MINIO_ROOT_PASSWORD="$$ROOT_PASSWORD"
