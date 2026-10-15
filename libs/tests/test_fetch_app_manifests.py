@@ -5,6 +5,7 @@ The offline check proves that the copies match contracts/apps.lock.json. Only --
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import http.client
 import io
@@ -276,3 +277,28 @@ def test_registered_contract_paths_are_all_in_the_real_lock_and_exist() -> None:
     assert copies and copies == set(contracts.origins(ROOT))
     assert [p for p in sorted(copies) if not (ROOT / p).is_file()] == []
     assert [p for p in paths if p.startswith("repos/")] == []
+
+
+def _imports_app_manifests(source: str) -> bool:
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            names = [a.name for a in node.names] + [getattr(node, "module", None) or ""]
+            if any("app_manifests" in name.split(".") for name in names):
+                return True
+    return False
+
+
+def test_no_tracked_file_under_libs_or_tools_imports_app_manifests() -> None:
+    assert _imports_app_manifests("from libs.security import app_manifests")
+    assert _imports_app_manifests("import libs.security.app_manifests as m")
+    assert not _imports_app_manifests("from tools import fetch_app_manifests")
+    listing = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "-z", "--", "libs", "tools"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split("\0")
+    files = [n for n in listing if n.endswith(".py") and (ROOT / n).is_file()]
+
+    assert "libs/security/registry.py" in files  # git listed the tree
+    assert [n for n in files if _imports_app_manifests((ROOT / n).read_text())] == []
