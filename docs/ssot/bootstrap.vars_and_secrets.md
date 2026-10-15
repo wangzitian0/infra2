@@ -55,6 +55,8 @@ contract v2）里声明一个 **source class**；部署时 `Deployer.apply_secre
 （`libs/security/`，由 `libs/security/supply.py` 实现，兼容门面 `libs/secrets_supply.py`，经 infra2-sdk `SecretsResolver`）按声明把 store 填齐——
 **Vault 只有这一个写入者，没有人手工往 Vault 里敲值。**
 
+> An App manifest is infra2's copy in `contracts/`, not a submodule file. See §1.5 and §1.6.
+
 | source | 谁产生 | 同步方向 | 何时 | 示例 |
 |--------|--------|---------|------|------|
 | `bootstrap` | 人（装机前） | 只在 1Password `bootstrap/<service>` | 手动一次 | Dokploy API key、`op` service-account token |
@@ -99,8 +101,13 @@ Vault 历史里，`vault kv rollback` 可回退）。**不要**手工 `env.set` 
 ### 1.5 模板由 manifest 生成（infra2-sdk contract v2）
 
 每个服务的 `secrets.ctmpl` 与 `vault-policy.hcl` 不再手写，而是由 `tools/secrets_render.py`
-从环境 manifest 生成：app 的 manifest 来自其仓库（通过 git submodule 固定在已部署的提交），
-平台服务的 manifest 放在服务目录的 `env.manifest.json`。manifest 里每个变量都声明了"谁产生它"
+从环境 manifest 生成。
+
+An App manifest is a copy in `contracts/`. The file `contracts/apps.lock.json` records the source commit,
+the tag and the sha256 of each copy. A platform service keeps its manifest in `env.manifest.json` in its
+directory. A deploy reads only these files. `tools/fetch_app_manifests.py` checks the copies offline.
+
+manifest 里每个变量都声明了"谁产生它"
 （`human` / `runtime` / `release` / `decision` / `code`），模板只渲染 `human`、`runtime`、
 `provided_by`、`composed_from` 四类；`code` 类默认值留在应用里，`release` / `decision` 由部署
 写进 compose 环境，不进 Vault。`empty_ok` 的变量在 Vault 没有值时整行省略，模板里不再出现
@@ -110,6 +117,26 @@ create/update），不由 manifest 描述，仍然手写。app 栈（truealpha a
 模板里原来的环境默认值（S3 端点、限流阈值、Prefect 与 OTel 地址等）改由 compose 文件与
 Deployer 的 `compose_env_overrides` 提供，manifest 只描述"谁产生这个值"。
 `tools/validate_required_env.py` 随之退役，一致性由生成测试保证。
+
+### 1.6 Change an App contract
+
+1. The App merges the manifest change to its `main` branch.
+2. Run `uv run python tools/fetch_app_manifests.py --sync <app> <ref>`. The `<ref>` is a tag, a branch name
+   or a full commit sha. The command rewrites the copies and `contracts/apps.lock.json`.
+   After a sync, and any time you doubt a copy, run `uv run python tools/fetch_app_manifests.py --verify`
+   to compare every copy with upstream.
+3. Run `uv run python tools/secrets_render.py --write`, then `--check`. The pull request shows the template diff.
+   It shows the manifest diff line by line only when the App keeps its JSON layout. A layout change marks the
+   whole file as changed. On 2026-10-15, the `main` file of finance_report has 1 line, and the copy has 1240 lines.
+4. The owner creates each new human value in 1Password. A deploy stops, and names the key, when a required value is missing.
+5. Release infra2 first, then the App. If the App goes first, its staging start check can fail,
+   because the App asks for a field that nobody supplies.
+
+To add a file, add an entry (`app`, `path`, `upstream`, `"sha256": ""`) to the lock and its path to
+`libs/security/registry.py`. Then run step 2. Do not sync a version that drops a field.
+First wait until the last 3 production releases and the pinned data-engine digest no longer need that field.
+
+---
 
 ## 2. 1Password Vault 结构
 

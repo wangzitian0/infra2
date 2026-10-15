@@ -224,7 +224,9 @@ App 不再 checkout/执行 infra2。发送 `repository_dispatch` type `app-deplo
    合入批准的 base branch，且 `merge_commit_sha == source_sha`。任一 GitHub API 请求或字段
    校验失败即 fail-closed。
 3. `version_ref` 必须在源仓库解析到 payload 的完整 `source_sha`。
-4. staging/prod 的 `iac_ref` 由 infra2 选择为 `HEAD` 已包含的最新 `vX.Y.Z`，App 不再钉 infra submodule。
+4. The receiver selects `iac_ref`: for staging, the newest `vX.Y.Z` tag that `HEAD` contains; for production,
+   the newest `production/v*` marker that `HEAD` contains. It fails closed when the marker is missing or
+   older than `MINIMUM_PRODUCTION_MARKER`. An App does not pin an infra submodule.
 5. **只有 prod 先跑同坐标 canary**；通过后才调用既有 `deploy_v2`，Dokploy/Vault 凭据只存在于 infra2。
    staging 不再 canary（truealpha#860）：staging 部署本身就证明了该坐标——`--expected-sha` 钉住
    `version_ref`、只接受 on-main release tag、等镜像发布、promote 后等新 rollout 记录 / 推送的 config hash /
@@ -274,9 +276,16 @@ App 不再 checkout/执行 infra2。发送 `repository_dispatch` type `app-deplo
      gap, the request must carry the deadline of its sender. That is an infra2-sdk change.
 
 Finance Report 的 staging/prod/rollback 已全部 cut over 到 receiver，App 仓库不再
-checkout 或执行 infra2 源码。Production 没有 CLI bypass；receiver 通过只读 GitHub API
+checkout 或执行 infra2 源码。receiver 通过只读 GitHub API
 取得远端事实后，才可附加既有 `--staging-validated --code-reviewed` red-line
 acknowledgements。URL 形状本身不构成 evidence。
+
+The receiver is not the only path to production. The workflow `deploy.yml` with `type=prod` takes a typed `iac_ref`.
+That run bypasses the receiver: the receiver checks no evidence and selects no marker for it.
+The person who starts the run sets `staging_validated` and `code_reviewed`, and nothing verifies them.
+That person can also set `break_glass` (skips the staging-first rule) and `skip_canary` (skips the pre-deploy canary).
+`deploy_v2` still requires `iac_ref` to be a release tag on main. The run waits for the owner in the `production`
+environment. Record its coordinate (`service`, `version_ref`, `iac_ref`) in the issue.
 
 ---
 
