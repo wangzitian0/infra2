@@ -34,6 +34,20 @@ from tools import env_inventory as envinv  # noqa: E402
 from tools.sdk_requirement import sdk_requirement  # noqa: E402
 
 SKIP_SYMBOL_NAMES = {"main", "build_parser", "__version__", "__all__"}
+MODULE_DUNDER_ATTRS = frozenset(
+    {
+        "__all__",
+        "__cached__",
+        "__doc__",
+        "__file__",
+        "__loader__",
+        "__name__",
+        "__package__",
+        "__path__",
+        "__spec__",
+        "__version__",
+    }
+)
 
 SKIP_DIR_PARTS = {
     ".git",
@@ -336,6 +350,7 @@ def sdk_module_exports(pkg_root: Path) -> dict[str, set[str]]:
 def consumer_symbol_refs(
     consumers: dict[str, Path],
     left_the_packages: tuple[str, ...] = DEFAULT_LEFT_THE_PACKAGES,
+    package_scoped_left: dict[str, set[str]] | None = None,
 ) -> tuple[
     dict[str, Counter[str]],
     dict[str, Counter[str]],
@@ -346,6 +361,7 @@ def consumer_symbol_refs(
     test: dict[str, Counter[str]] = defaultdict(Counter)
     seen_imports: dict[tuple[str, str], list[str]] = defaultdict(list)
     retired_set = set(left_the_packages)
+    pkg_left = package_scoped_left or {}
 
     for repo, root in sorted(consumers.items()):
         for rel in list_repo_files(root, suffix=".py"):
@@ -367,6 +383,8 @@ def consumer_symbol_refs(
                         if alias.name == "*":
                             star_modules.append(node.module)
                             continue
+                        if alias.name in MODULE_DUNDER_ATTRS:
+                            continue
                         bucket[alias.name][repo] += 1
                         seen_imports[(node.module, alias.name)].append(
                             f"{repo}:{rel}:{node.lineno}"
@@ -379,12 +397,17 @@ def consumer_symbol_refs(
                         if alias.name.split(".")[0] == "infra2_sdk":
                             bound = alias.asname or alias.name.split(".")[0]
                             mod_alias[bound] = alias.name
+            star_retired_for_file = set(retired_set)
+            for smod in star_modules:
+                star_retired_for_file |= pkg_left.get(smod, set())
             for node in ast.walk(tree):
                 if (
                     isinstance(node, ast.Attribute)
                     and isinstance(node.value, ast.Name)
                     and node.value.id in mod_alias
                 ):
+                    if node.attr in MODULE_DUNDER_ATTRS:
+                        continue
                     target_base = mod_alias[node.value.id]
                     bucket[node.attr][repo] += 1
                     seen_imports[(target_base, node.attr)].append(
@@ -394,7 +417,7 @@ def consumer_symbol_refs(
                     star_modules
                     and isinstance(node, ast.Name)
                     and isinstance(node.ctx, ast.Load)
-                    and node.id in retired_set
+                    and node.id in star_retired_for_file
                 ):
                     bucket[node.id][repo] += 1
                     seen_imports[(star_modules[0], node.id)].append(
@@ -479,6 +502,8 @@ def check_consumer_imports(
     missing_test: list[dict[str, Any]] = []
 
     for (base, name), sites in sorted(seen_imports.items()):
+        if name in MODULE_DUNDER_ATTRS:
+            continue
         ok = exists_in_ast(base, name)
         problem = "name missing"
         if not ok and use_importlib:
@@ -507,11 +532,14 @@ def compute_m1(
     pkg_root: Path,
     consumers: dict[str, Path],
     left_the_packages: tuple[str, ...] = DEFAULT_LEFT_THE_PACKAGES,
+    package_scoped_left: dict[str, set[str]] | None = None,
 ) -> tuple[dict[str, Any], dict[tuple[str, str], list[str]]]:
     """Compute M1: public symbol reachability and consumer import verification."""
     defs = public_defs(pkg_root)
     internal = sdk_internal_refs(pkg_root)
-    prod, test, seen_imports = consumer_symbol_refs(consumers, left_the_packages)
+    prod, test, seen_imports = consumer_symbol_refs(
+        consumers, left_the_packages, package_scoped_left
+    )
     missing_prod, missing_test = check_consumer_imports(seen_imports, pkg_root)
 
     rows: list[dict[str, Any]] = []
@@ -840,11 +868,39 @@ def compute_m3(
     }
 
 
+def _iter_removed_name_pairs(tree: ast.Module) -> list[tuple[str, str]]:
+    """Extract (module, dotted_name) string pairs from REMOVED_* tuple/list assignments."""
+    pairs: list[tuple[str, str]] = []
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(t, ast.Name)
+            and (t.id == "REMOVED_NAMES" or t.id.startswith("REMOVED_IN_"))
+            for t in node.targets
+        ):
+            continue
+        if not isinstance(node.value, (ast.Tuple, ast.List, ast.Set)):
+            continue
+        for elt in node.value.elts:
+            if (
+                isinstance(elt, (ast.Tuple, ast.List))
+                and len(elt.elts) == 2
+                and isinstance(elt.elts[0], ast.Constant)
+                and isinstance(elt.elts[0].value, str)
+                and isinstance(elt.elts[1], ast.Constant)
+                and isinstance(elt.elts[1].value, str)
+            ):
+                pairs.append((elt.elts[0].value, elt.elts[1].value))
+    return pairs
+
+
 def load_left_the_packages(pkg_root: Path | None = None) -> tuple[str, ...]:
-    """Return the tuple of retired SDK symbols from LEFT_THE_PACKAGES."""
+    """Return the tuple of unconditionally retired SDK symbols."""
     names = list(DEFAULT_LEFT_THE_PACKAGES)
     if pkg_root is not None:
-        readme_test = pkg_root.parent.parent / "tests" / "test_readme_claims.py"
+        tests_dir = pkg_root.parent.parent / "tests"
+        readme_test = tests_dir / "test_readme_claims.py"
         if readme_test.is_file():
             try:
                 tree = ast.parse(readme_test.read_text("utf-8", "replace"))
@@ -861,22 +917,104 @@ def load_left_the_packages(pkg_root: Path | None = None) -> tuple[str, ...]:
                                     and elt.value not in names
                                 ):
                                     names.append(elt.value)
+                for _mod, dotted in _iter_removed_name_pairs(tree):
+                    if (
+                        "." not in dotted
+                        and dotted not in SKIP_SYMBOL_NAMES
+                        and dotted not in names
+                    ):
+                        names.append(dotted)
+            except (SyntaxError, OSError):
+                pass
+        wheel_smoke = tests_dir / "wheel_smoke.py"
+        if wheel_smoke.is_file():
+            try:
+                tree = ast.parse(wheel_smoke.read_text("utf-8", "replace"))
+                for _mod, dotted in _iter_removed_name_pairs(tree):
+                    if (
+                        "." not in dotted
+                        and dotted not in SKIP_SYMBOL_NAMES
+                        and dotted not in names
+                    ):
+                        names.append(dotted)
             except (SyntaxError, OSError):
                 pass
     return tuple(names)
 
 
+def load_package_scoped_left_names(
+    pkg_root: Path | None = None,
+) -> dict[str, set[str]]:
+    """Return module-scoped retired symbol names from dict LEFT_THE_PACKAGES and REMOVED_* tables."""
+    scoped: dict[str, set[str]] = defaultdict(set)
+    if pkg_root is None:
+        return {}
+    tests_dir = pkg_root.parent.parent / "tests"
+    readme_test = tests_dir / "test_readme_claims.py"
+    if readme_test.is_file():
+        try:
+            tree = ast.parse(readme_test.read_text("utf-8", "replace"))
+            for node in tree.body:
+                if isinstance(node, ast.Assign) and any(
+                    getattr(t, "id", "") == "LEFT_THE_PACKAGES" for t in node.targets
+                ):
+                    if isinstance(node.value, ast.Dict):
+                        for pkg_key, mod_dict in zip(
+                            node.value.keys, node.value.values, strict=False
+                        ):
+                            if not (
+                                isinstance(pkg_key, ast.Constant)
+                                and isinstance(pkg_key.value, str)
+                                and isinstance(mod_dict, ast.Dict)
+                            ):
+                                continue
+                            pkg_name = pkg_key.value
+                            for sym_list in mod_dict.values:
+                                if not isinstance(
+                                    sym_list, (ast.List, ast.Tuple, ast.Set)
+                                ):
+                                    continue
+                                for elt in sym_list.elts:
+                                    if isinstance(elt, ast.Constant) and isinstance(
+                                        elt.value, str
+                                    ):
+                                        scoped[pkg_name].add(elt.value)
+            for mod_name, dotted in _iter_removed_name_pairs(tree):
+                if "." in dotted:
+                    parent, attr = dotted.rsplit(".", 1)
+                    scoped[f"{mod_name}.{parent}"].add(attr)
+                else:
+                    scoped[mod_name].add(dotted)
+        except (SyntaxError, OSError):
+            pass
+    wheel_smoke = tests_dir / "wheel_smoke.py"
+    if wheel_smoke.is_file():
+        try:
+            tree = ast.parse(wheel_smoke.read_text("utf-8", "replace"))
+            for mod_name, dotted in _iter_removed_name_pairs(tree):
+                if "." in dotted:
+                    parent, attr = dotted.rsplit(".", 1)
+                    scoped[f"{mod_name}.{parent}"].add(attr)
+                else:
+                    scoped[mod_name].add(dotted)
+        except (SyntaxError, OSError):
+            pass
+    return {k: set(v) for k, v in scoped.items()}
+
+
 def compute_m4(
     seen_imports: dict[tuple[str, str], list[str]],
     left_the_packages: tuple[str, ...],
+    package_scoped_left: dict[str, set[str]] | None = None,
 ) -> dict[str, Any]:
-    """Compute M4: consumer references to symbols in LEFT_THE_PACKAGES."""
+    """Compute M4: consumer references to symbols in LEFT_THE_PACKAGES or REMOVED_NAMES."""
     retired = set(left_the_packages)
+    pkg_left = package_scoped_left or {}
     by_repo: dict[str, list[dict[str, str]]] = defaultdict(list)
     sites_all: list[dict[str, str]] = []
 
     for (module, name), sites in sorted(seen_imports.items()):
-        if name not in retired:
+        if name not in retired and name not in pkg_left.get(module, set()):
             continue
         for site in sorted(set(sites)):
             repo = site.split(":", 1)[0]
@@ -1028,11 +1166,17 @@ def run_census(
     )
     target_version = resolve_latest_sdk_version(resolved_pkg, latest_version)
     left_the_packages = load_left_the_packages(resolved_pkg)
+    package_scoped_left = load_package_scoped_left_names(resolved_pkg)
 
-    m1, seen_imports = compute_m1(resolved_pkg, resolved_consumers, left_the_packages)
+    m1, seen_imports = compute_m1(
+        resolved_pkg,
+        resolved_consumers,
+        left_the_packages,
+        package_scoped_left,
+    )
     m2 = compute_m2(resolved_pkg, resolved_consumers)
     m3 = compute_m3(resolved_consumers, target_version)
-    m4 = compute_m4(seen_imports, left_the_packages)
+    m4 = compute_m4(seen_imports, left_the_packages, package_scoped_left)
     m5 = compute_m5(resolved_consumers)
 
     report: dict[str, Any] = {
