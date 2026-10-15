@@ -124,6 +124,17 @@ def _validate_domain(domain: str) -> str:
     return domain
 
 
+def _preview_coordinates(
+    service: str, alias: PreviewAlias, domain: str | None = None
+) -> PreviewStackCoordinates:
+    config = preview_service_config(service)
+    return derive_preview_coordinates(
+        config.base_subdomain or service.split("/")[-1],
+        alias.deployment_environment,
+        base_domain=domain,
+    )
+
+
 def _preview_env_vars(
     alias: PreviewAlias,
     *,
@@ -149,11 +160,7 @@ def _preview_env_vars(
     Keeping them out of this pure assembler means it never logs or embeds the creds.
     """
     config = preview_service_config(service)
-    coords = derive_preview_coordinates(
-        config.base_subdomain or service.split("/")[-1],
-        alias.deployment_environment,
-        base_domain=domain,
-    )
+    coords = _preview_coordinates(service, alias, domain=domain)
     # IMAGE_TAG is the published ref: a release tag (image_ref="vX.Y.Z") or the short sha.
     image_tag = image_ref or sha[:7]
     config_hash = f"preview-{image_tag}-{int(_now() * 1000)}"  # per-deploy cache-bust
@@ -177,8 +184,9 @@ def _preview_env_vars(
         # the missing path — without it OPENPANEL_CLIENT_ID stayed empty and analytics
         # silently no-op'd on every preview.
         **openpanel_env("preview"),
-        "ENV_SUFFIX": alias.env_suffix,
-        "ENV_DOMAIN_SUFFIX": alias.domain_suffix,
+        "TIER_CPU_SHARES": str(coords.cpu_shares),
+        "ENV_SUFFIX": coords.env_suffix,
+        "ENV_DOMAIN_SUFFIX": coords.env_domain_suffix,
         # ENV is the alias display label so the telemetry identity contract
         # (core.environments §4.5: deployment.environment = pr-<N>/commit-<sha>/main)
         # is carried into the running stack.

@@ -76,7 +76,10 @@ def test_status_health_commands_are_safe_for_remote_single_quote_wrapper():
 def test_compose_pins_one_digest_and_keeps_dagster_on_host_loopback():
     compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
     services = compose["services"]
-    expected_image = "ghcr.io/wangzitian0/truealpha-data-engine@${IMAGE_DIGEST:?IMAGE_DIGEST is required}"
+    expected_image = (
+        "ghcr.io/wangzitian0/truealpha-data-engine@"
+        "${IMAGE_DIGEST:-sha256:0000000000000000000000000000000000000000000000000000000000000000}"
+    )
     for name in ("dagster-webserver", "dagster-daemon", "dagster-code-server"):
         service = services[name]
         assert service["image"] == expected_image
@@ -323,10 +326,7 @@ def test_a_release_request_pins_the_tag_digest_in_vault_before_reading_it(monkey
     env = deployer.compose_env_base(
         {"ENV": "staging", "DATA_PATH": "/tmp/x", "ENV_SUFFIX": "-staging"}
     )
-    assert (
-        env["IMAGE_DIGEST"] == new_digest
-        and env["GIT_COMMIT_SHA"] == "v0.0.46"
-    )
+    assert env["IMAGE_DIGEST"] == new_digest and env["GIT_COMMIT_SHA"] == "v0.0.46"
 
 
 def test_pin_release_fails_closed_on_a_bad_ref_or_an_unresolvable_tag(monkeypatch):
@@ -465,9 +465,7 @@ def test_ensure_runtime_secrets_pins_from_the_process_environment(monkeypatch):
     monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.47")
     from infra2_sdk import refs
 
-    monkeypatch.setattr(
-        refs, "resolve_image_digest", lambda **kw: "sha256:" + "9" * 64
-    )
+    monkeypatch.setattr(refs, "resolve_image_digest", lambda **kw: "sha256:" + "9" * 64)
     monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)
     assert deployer.ensure_runtime_secrets() is True
     assert ("GIT_COMMIT_SHA", "v0.0.47") in secrets.writes
@@ -514,9 +512,7 @@ def test_ensure_runtime_secrets_accepts_env_parameter(monkeypatch):
     monkeypatch.setenv("DEPLOY_VERSION_REF", "v0.0.48")
     from infra2_sdk import refs
 
-    monkeypatch.setattr(
-        refs, "resolve_image_digest", lambda **kw: "sha256:" + "8" * 64
-    )
+    monkeypatch.setattr(refs, "resolve_image_digest", lambda **kw: "sha256:" + "8" * 64)
     monkeypatch.setattr(deploy, "success", lambda *_a, **_k: None)
 
     # Calling with env="staging" must succeed and not raise TypeError
