@@ -155,9 +155,9 @@ def test_every_registered_service_declares_where_its_operator_keys_are_read():
         "truealpha/app": ("S3_BUCKET",),
         "truealpha/data_engine": (
             "CAPTURE_APPROVED_BY",
-            "DATA_ENGINE_IMAGE_DIGEST",
             "GIT_COMMIT_SHA",
-            "RELEASE_MANIFEST_ID",
+            "IMAGE_DIGEST",
+            "RELEASE_ID",
             "S3_BUCKET",
         ),
     }

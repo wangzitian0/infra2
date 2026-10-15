@@ -614,6 +614,8 @@ def test_typescript(inv):
 
 def test_test_scope(inv):
     assert find(inv, "TEST_ONLY", "write")[0].scope == "test"
+    assert envinv.scope_of("apps/app-web/scripts/seed-e2e-fixture.ts") == "test"
+    assert envinv.scope_of("libs/runtime/src/truealpha_runtime/testing.py") == "test"
 
 
 def test_docs_mentions_only_for_known_keys(inv):
@@ -1296,6 +1298,44 @@ def test_g2_no_failopen_environment_tier_defaults_or_retired_heartbeat_env(repo_
 def test_g3_no_dead_writes_or_stale_declarations_or_phantom_ssot_names(repo_scan):
     _inv, keys_map, _rows, docs_only = repo_scan
     assert g3_violations(keys_map, docs_only) == {}
+
+
+def test_all_sdk_keys_used_and_code_reads_declared(repo_scan):
+    _inv, keys_map, rows, _docs_only = repo_scan
+    c3_keys = [
+        k.key
+        for k in keys_map.values()
+        if k.info.get("sdk_class") == "C3 SDK names it, nobody uses it"
+    ]
+    assert len(c3_keys) == 0, f"C3 keys found: {c3_keys}"
+    for r in rows:
+        assert r["code_reads_not_declared"] == [], (
+            f"Undeclared code reads in {r['service']}: {r['code_reads_not_declared']}"
+        )
+        assert r["code_reads_default_only_not_declared"] == [], (
+            f"Undeclared default-only code reads in {r['service']}: {r['code_reads_default_only_not_declared']}"
+        )
+
+
+def test_all_sdk_keys_used_and_code_reads_declared_mutation():
+    fake_k = envinv.K(
+        key="MUTATED_C3_KEY",
+        flags=[],
+        info={"sdk_class": "C3 SDK names it, nobody uses it"},
+    )
+    c3_keys = [
+        k.key
+        for k in {"MUTATED_C3_KEY": fake_k}.values()
+        if k.info.get("sdk_class") == "C3 SDK names it, nobody uses it"
+    ]
+    assert len(c3_keys) == 1
+    fake_row = {
+        "service": "platform/mutated",
+        "code_reads_not_declared": ["MUTATED_UNDECLARED_READ"],
+        "code_reads_default_only_not_declared": ["MUTATED_DEFAULT_ONLY"],
+    }
+    assert fake_row["code_reads_not_declared"] != []
+    assert fake_row["code_reads_default_only_not_declared"] != []
 
 
 def test_g1_mutation_rejects_undeclared_compose_or_ctmpl_or_unrendered_store_key():

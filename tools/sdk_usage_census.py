@@ -68,7 +68,6 @@ DEFAULT_LEFT_THE_PACKAGES: tuple[str, ...] = (
     "ENV_FALLBACK_KEYS",
     "CanonicalEnv",
     "EnvVarSpec",
-    "RuntimeEnvKey",
     "RUNTIME_ENV_SPECS",
     "resolve_runtime_env_value",
     "is_canonical_env",
@@ -1292,9 +1291,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--sdk-src",
+        "--sdk",
         type=Path,
+        dest="sdk_src",
         default=None,
         help="Path to the infra2_sdk package or repository root.",
+    )
+    parser.add_argument(
+        "--infra2",
+        type=Path,
+        default=None,
+        help="Path to infra2 repository root.",
+    )
+    parser.add_argument(
+        "--finance-report",
+        type=Path,
+        default=None,
+        help="Path to finance_report repository root.",
+    )
+    parser.add_argument(
+        "--truealpha",
+        type=Path,
+        default=None,
+        help="Path to truealpha repository root.",
     )
     parser.add_argument(
         "--repo",
@@ -1355,11 +1374,21 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     consumers: dict[str, Path] | None = None
-    if args.repo:
-        try:
-            consumers = dict(_parse_repo_arg(item) for item in args.repo)
-        except argparse.ArgumentTypeError as exc:
-            parser.error(str(exc))
+    named_repos = {
+        "infra2": args.infra2,
+        "finance_report": args.finance_report,
+        "truealpha": args.truealpha,
+    }
+    if args.repo or any(named_repos.values()):
+        consumers = {}
+        for k, v in named_repos.items():
+            if v:
+                consumers[k] = v.resolve()
+        if args.repo:
+            try:
+                consumers.update(dict(_parse_repo_arg(item) for item in args.repo))
+            except argparse.ArgumentTypeError as exc:
+                parser.error(str(exc))
 
     try:
         report = run_census(

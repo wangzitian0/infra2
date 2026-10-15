@@ -77,8 +77,8 @@ class DataEngineDeployer(Deployer):
     # source identity instead of letting the drift runner read Vault.
     runtime_only_config_keys = frozenset(
         {
-            "DATA_ENGINE_IMAGE_DIGEST",
-            "RELEASE_MANIFEST_ID",
+            "IMAGE_DIGEST",
+            "RELEASE_ID",
             "CAPTURE_APPROVED_BY",
             "GIT_COMMIT_SHA",
             "CONFIGURATION_SHA256",
@@ -121,8 +121,8 @@ class DataEngineDeployer(Deployer):
         "S3_ACCESS_KEY",
         "S3_SECRET_KEY",
         "S3_BUCKET",
-        "DATA_ENGINE_IMAGE_DIGEST",
-        "RELEASE_MANIFEST_ID",
+        "IMAGE_DIGEST",
+        "RELEASE_ID",
         "CAPTURE_APPROVED_BY",
     )
 
@@ -135,7 +135,7 @@ class DataEngineDeployer(Deployer):
         The stack is digest-pinned; a release request carries a tag. The runner — the
         one deploy context with the AppRole that may update this env's data_engine
         path — resolves ``truealpha-data-engine:<tag>`` to its registry digest and
-        writes ``DATA_ENGINE_IMAGE_DIGEST`` plus ``GIT_COMMIT_SHA`` (the tag, the same
+        writes ``IMAGE_DIGEST`` plus ``GIT_COMMIT_SHA`` (the tag, the same
         identifier the app images stamp) before ``compose_env_base`` reads them. The
         existing ``verify_runtime_applied`` then proves the three containers run that
         digest — the post-deploy assertion the issue asked for, unchanged.
@@ -170,7 +170,7 @@ class DataEngineDeployer(Deployer):
             )
         backend = secrets if secrets is not None else cls.secrets_backend()
         for key, value in (
-            ("DATA_ENGINE_IMAGE_DIGEST", digest),
+            ("IMAGE_DIGEST", digest),
             ("GIT_COMMIT_SHA", candidate),
         ):
             if not backend.set(key, value):
@@ -199,13 +199,13 @@ class DataEngineDeployer(Deployer):
         if missing:
             error(f"Missing TrueAlpha data-engine Vault fields: {', '.join(missing)}")
             return False
-        image_digest = secrets.get("DATA_ENGINE_IMAGE_DIGEST") or ""
-        release_id = secrets.get("RELEASE_MANIFEST_ID") or ""
+        image_digest = secrets.get("IMAGE_DIGEST") or ""
+        release_id = secrets.get("RELEASE_ID") or ""
         if not _IMAGE_DIGEST.fullmatch(image_digest):
-            error("DATA_ENGINE_IMAGE_DIGEST must be a full sha256 OCI digest")
+            error("IMAGE_DIGEST must be a full sha256 OCI digest")
             return False
         if not _RELEASE_ID.fullmatch(release_id):
-            error("RELEASE_MANIFEST_ID must be a content-addressed release-manifest ID")
+            error("RELEASE_ID must be a content-addressed release-manifest ID")
             return False
         return True
 
@@ -214,23 +214,23 @@ class DataEngineDeployer(Deployer):
         base = super().compose_env_base(env)
         secrets = cls.secrets_backend()
         environment = base.get("ENV", "production")
-        image_digest = secrets.get("DATA_ENGINE_IMAGE_DIGEST") or ""
-        release_id = secrets.get("RELEASE_MANIFEST_ID") or ""
+        image_digest = secrets.get("IMAGE_DIGEST") or ""
+        release_id = secrets.get("RELEASE_ID") or ""
         approved_by = secrets.get("CAPTURE_APPROVED_BY") or ""
         if not _IMAGE_DIGEST.fullmatch(image_digest):
             raise ValueError(
-                "DATA_ENGINE_IMAGE_DIGEST must be configured before deployment"
+                "IMAGE_DIGEST must be configured before deployment"
             )
         if not _RELEASE_ID.fullmatch(release_id):
-            raise ValueError("RELEASE_MANIFEST_ID must be configured before deployment")
+            raise ValueError("RELEASE_ID must be configured before deployment")
         if not approved_by:
             raise ValueError("CAPTURE_APPROVED_BY must be configured before deployment")
 
         base.update(cls._release_recomputable_env(environment))
         base.update(
             {
-                "DATA_ENGINE_IMAGE_DIGEST": image_digest,
-                "RELEASE_MANIFEST_ID": release_id,
+                "IMAGE_DIGEST": image_digest,
+                "RELEASE_ID": release_id,
                 "CAPTURE_APPROVED_BY": approved_by,
                 "GIT_COMMIT_SHA": secrets.get("GIT_COMMIT_SHA") or "unknown",
             }
@@ -306,7 +306,7 @@ class DataEngineDeployer(Deployer):
 
     @classmethod
     def verify_runtime_applied(cls, c, env_vars: dict[str, str]) -> str | None:
-        expected_digest = env_vars["DATA_ENGINE_IMAGE_DIGEST"]
+        expected_digest = env_vars["IMAGE_DIGEST"]
         expected_image = f"ghcr.io/wangzitian0/truealpha-data-engine@{expected_digest}"
         e = cls.env()
         host = e.get("VPS_HOST")

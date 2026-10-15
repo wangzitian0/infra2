@@ -22,7 +22,13 @@ def test_identity_renders_same_coordinates_into_every_plane() -> None:
         "INFRA_ENVIRONMENT": "production",
         "INFRA_SERVICE_VERSION": "abc1234",
         "INFRA_IAC_REF": "a" * 40,
+        "GIT_COMMIT_SHA": "abc1234",
     }
+    runtime_id = identity.to_runtime_identity()
+    assert runtime_id.service_name == "finance-report-backend"
+    assert runtime_id.service_version == "abc1234"
+    assert runtime_id.commit_sha == "a" * 40
+    assert len(runtime_id.configuration_sha256) == 64
     otel = identity.otel_resource_attributes()
     assert "service.namespace=finance-report" in otel
     assert "service.name=finance-report-backend" in otel

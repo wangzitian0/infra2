@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from infra2_sdk.runtime.identity import RuntimeIdentity, canonical_sha256
+
 from libs.core.constants import (
     DEPLOYMENT_ENV_PREVIEW,
     DEPLOYMENT_ENV_PRODUCTION,
@@ -23,8 +25,10 @@ __all__ = [
     "DOCKER_LABEL_PREFIX",
     "IDENTITY_SCHEMA_VERSION",
     "MANAGED_BY",
+    "RuntimeIdentity",
     "STATEFUL_DEPLOY_ENVIRONMENTS",
     "ServiceIdentity",
+    "canonical_sha256",
     "is_stateful_deploy_env",
 ]
 
@@ -94,12 +98,42 @@ class ServiceIdentity:
             "INFRA_MANAGED_BY": MANAGED_BY,
             "INFRA_SERVICE_ID": self.service_id,
             "INFRA_ENVIRONMENT": self.environment,
+            "GIT_COMMIT_SHA": self.version or self.iac_ref or "unknown",
         }
         if self.version:
             values["INFRA_SERVICE_VERSION"] = self.version
         if self.iac_ref:
             values["INFRA_IAC_REF"] = self.iac_ref
         return values
+
+    def to_runtime_identity(
+        self,
+        *,
+        image_digest: str = "",
+        configuration_sha256: str = "",
+        release_id: str = "",
+        instance_id: str = "",
+        provenance_uri: str = "",
+        sbom_uri: str = "",
+    ) -> RuntimeIdentity:
+        """Convert this deployment identity to a runtime identity."""
+        commit = self.iac_ref if _SHA40_RE.fullmatch(self.iac_ref) else (
+            self.version if _SHA40_RE.fullmatch(self.version) else "unknown"
+        )
+        config_hash = configuration_sha256 or canonical_sha256(self.deploy_env())
+        return RuntimeIdentity(
+            service_name=self.service_name,
+            service_version=self.version or "unknown",
+            environment=self.environment,
+            commit_sha=commit,
+            deployment_environment=self.environment,
+            image_digest=image_digest,
+            configuration_sha256=config_hash,
+            release_id=release_id,
+            instance_id=instance_id,
+            provenance_uri=provenance_uri,
+            sbom_uri=sbom_uri,
+        )
 
     def otel_resource_attributes(
         self, *, include_legacy_environment: bool = True

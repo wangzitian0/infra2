@@ -315,6 +315,7 @@ def parse_remote_config_identity(existing: dict | None) -> dict[str, str | None]
     for line in env_str.split("\n"):
         key, separator, value = line.partition("=")
         if separator and key in {
+            "CONFIGURATION_SHA256",
             "IAC_CONFIG_HASH",
             "IAC_SOURCE_CONFIG_HASH",
             "IAC_DEPLOY_REF",
@@ -325,7 +326,8 @@ def parse_remote_config_identity(existing: dict | None) -> dict[str, str | None]
         }:
             values[key] = value.strip()
     return {
-        "runtime_hash": values.get("IAC_CONFIG_HASH"),
+        "runtime_hash": values.get("CONFIGURATION_SHA256")
+        or values.get("IAC_CONFIG_HASH"),
         "source_hash": values.get("IAC_SOURCE_CONFIG_HASH"),
         "deploy_ref": values.get("IAC_DEPLOY_REF"),
         "identity_schema": values.get("INFRA_IDENTITY_SCHEMA"),

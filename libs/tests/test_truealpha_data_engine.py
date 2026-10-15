@@ -48,8 +48,8 @@ def _secret_values(digest_char="a"):
         "S3_ACCESS_KEY": "test-access",
         "S3_SECRET_KEY": "test-secret",
         "S3_BUCKET": "truealpha-raw-staging",
-        "DATA_ENGINE_IMAGE_DIGEST": "sha256:" + digest_char * 64,
-        "RELEASE_MANIFEST_ID": "release-manifest:" + "b" * 64,
+        "IMAGE_DIGEST": "sha256:" + digest_char * 64,
+        "RELEASE_ID": "release-manifest:" + "b" * 64,
         "CAPTURE_APPROVED_BY": "review:test",
         "GIT_COMMIT_SHA": "c" * 40,
     }
@@ -76,7 +76,7 @@ def test_status_health_commands_are_safe_for_remote_single_quote_wrapper():
 def test_compose_pins_one_digest_and_keeps_dagster_on_host_loopback():
     compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
     services = compose["services"]
-    expected_image = "ghcr.io/wangzitian0/truealpha-data-engine@${DATA_ENGINE_IMAGE_DIGEST:?DATA_ENGINE_IMAGE_DIGEST is required}"
+    expected_image = "ghcr.io/wangzitian0/truealpha-data-engine@${IMAGE_DIGEST:?IMAGE_DIGEST is required}"
     for name in ("dagster-webserver", "dagster-daemon", "dagster-code-server"):
         service = services[name]
         assert service["image"] == expected_image
@@ -130,10 +130,10 @@ def test_deployer_derives_isolated_ports_and_full_configuration_hash(monkeypatch
     assert config["DATA_PATH"] == "/data/truealpha/dagster-staging"
     assert config["TA_POSTGRES_PORT"] == "15432"
     assert config["DAGSTER_WEBSERVER_PORT"] == "13001"
-    assert config["DATA_ENGINE_IMAGE_DIGEST"] == values["DATA_ENGINE_IMAGE_DIGEST"]
+    assert config["IMAGE_DIGEST"] == values["IMAGE_DIGEST"]
     assert len(config["CONFIGURATION_SHA256"]) == 64
 
-    values["DATA_ENGINE_IMAGE_DIGEST"] = "sha256:" + "d" * 64
+    values["IMAGE_DIGEST"] = "sha256:" + "d" * 64
     changed = deployer.compose_env_base(environment)
     assert changed["CONFIGURATION_SHA256"] != config["CONFIGURATION_SHA256"]
 
@@ -189,7 +189,7 @@ def test_deployer_fails_closed_on_missing_or_malformed_release_inputs(monkeypatc
     module = _load_deploy_module()
     deployer = module.DataEngineDeployer
     values = _secret_values()
-    values["DATA_ENGINE_IMAGE_DIGEST"] = "latest"
+    values["IMAGE_DIGEST"] = "latest"
     monkeypatch.setattr(
         deployer,
         "secrets_backend",
@@ -255,7 +255,7 @@ def test_vault_agent_is_recreated_when_its_templates_change():
     services — otherwise template edits ship without ever rendering (#604, #626).
     """
     environment = _vault_agent_environment()
-    assert environment.get("TRUEALPHA_CONFIGURATION_SHA256", "").startswith(
+    assert environment.get("CONFIGURATION_SHA256", "").startswith(
         "${CONFIGURATION_SHA256"
     ), "vault-agent must carry CONFIGURATION_SHA256 so template changes recreate it"
     hashed = _load_deploy_module().DataEngineDeployer
@@ -316,7 +316,7 @@ def test_a_release_request_pins_the_tag_digest_in_vault_before_reading_it(monkey
     )
     assert asked == [("ghcr.io/wangzitian0/truealpha-data-engine", "v0.0.46")]
     assert secrets.writes == [
-        ("DATA_ENGINE_IMAGE_DIGEST", new_digest),
+        ("IMAGE_DIGEST", new_digest),
         ("GIT_COMMIT_SHA", "v0.0.46"),
     ]
     # compose_env_base now reads the pinned values, not the ones Vault held before
@@ -324,7 +324,7 @@ def test_a_release_request_pins_the_tag_digest_in_vault_before_reading_it(monkey
         {"ENV": "staging", "DATA_PATH": "/tmp/x", "ENV_SUFFIX": "-staging"}
     )
     assert (
-        env["DATA_ENGINE_IMAGE_DIGEST"] == new_digest
+        env["IMAGE_DIGEST"] == new_digest
         and env["GIT_COMMIT_SHA"] == "v0.0.46"
     )
 
@@ -380,7 +380,7 @@ def test_pin_release_retries_a_lookup_that_got_no_answer(monkeypatch):
         == digest
     )
     assert slept == list(deploy._PIN_RESOLVE_BACKOFF_SECONDS)
-    assert ("DATA_ENGINE_IMAGE_DIGEST", digest) in secrets.writes
+    assert ("IMAGE_DIGEST", digest) in secrets.writes
 
 
 def test_pin_release_gives_up_after_the_last_transport_failure(monkeypatch):
@@ -553,7 +553,7 @@ def test_verify_runtime_applied_passes_timeout_to_inspect(monkeypatch):
 
     mock_c = MockContext()
     digest = "sha256:" + "a" * 64
-    err = deployer.verify_runtime_applied(mock_c, {"DATA_ENGINE_IMAGE_DIGEST": digest})
+    err = deployer.verify_runtime_applied(mock_c, {"IMAGE_DIGEST": digest})
     assert err is None
 
     # remote() commands must include ssh hardening flags
@@ -603,7 +603,7 @@ def test_verify_runtime_applied_retries_on_command_timed_out(monkeypatch):
 
     mock_c = MockContext()
     digest = "sha256:" + "a" * 64
-    err = deployer.verify_runtime_applied(mock_c, {"DATA_ENGINE_IMAGE_DIGEST": digest})
+    err = deployer.verify_runtime_applied(mock_c, {"IMAGE_DIGEST": digest})
     assert err is not None
     assert "promoted image digest was not applied" in err
     assert "unavailable" in err

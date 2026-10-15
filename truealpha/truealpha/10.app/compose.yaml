@@ -48,7 +48,7 @@ services:
       # recreates the agent on a same-tag redeploy and re-renders /vault/secrets/.env.
       # Under fast_swap (R17, e.g. on staging), this uses a deterministic tag/iac_ref hash
       # to prevent unnecessary recreate when neither code nor secrets have changed.
-      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
     healthcheck:
       test:
         - CMD-SHELL
@@ -106,7 +106,7 @@ services:
         exec uvicorn llm_service.main:app --host 0.0.0.0 --port 8000
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
-      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       # Was defaulted by the hand-written secrets.ctmpl; the generated template renders
       # only human / runtime values, so the deployment states these here.
       APP_ENV: ${ENV}
@@ -187,10 +187,10 @@ services:
         exec node server.js
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
-      # Cache-bust — see vault-agent's IAC_CONFIG_HASH comment above: without this,
+      # Cache-bust — see vault-agent's CONFIGURATION_SHA256 comment above: without this,
       # web is never recreated on a same-tag promote deploy (GIT_COMMIT_SHA alone
       # doesn't change between two deploys of the same release).
-      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       # Was defaulted by the hand-written secrets.ctmpl; the generated template renders
       # only human / runtime values, so the deployment states these here.
       APP_ENV: ${ENV}

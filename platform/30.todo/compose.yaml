@@ -33,7 +33,7 @@ services:
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
       ENV: ${ENV}
-      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
     healthcheck:
       test:
         - CMD-SHELL
@@ -61,7 +61,7 @@ services:
     build:
       context: ../..
       dockerfile: platform/30.todo/Dockerfile
-    image: platform-todo:${IAC_CONFIG_HASH:-}
+    image: platform-todo:${CONFIGURATION_SHA256:-}
     container_name: platform-todo${ENV_SUFFIX}
     restart: always
     mem_limit: 256m
@@ -106,8 +106,8 @@ services:
       SIGNOZ_OTEL_COLLECTOR: http://platform-signoz-otel-collector:13133
       OPENPANEL_API_URL: http://platform-openpanel-api:3000/healthcheck
       AUTHENTIK_ENDPOINT: http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/
-      # The deploy issues the full infra2 SHA as INFRA_IAC_REF. The page shows its first 7 characters.
-      GIT_COMMIT_SHA: ${INFRA_IAC_REF:-unknown}
+      # The deploy issues the full commit SHA as GIT_COMMIT_SHA. The page shows its first 7 characters.
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       # Telemetry (#991). The endpoint turns export on and the service refuses to start
       # on it without the identity, so both identity variables come verbatim from the
       # deploy (TodoDeployer.telemetry_service_name), never hardcoded or defaulted.

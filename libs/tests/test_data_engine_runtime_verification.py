@@ -104,7 +104,7 @@ def test_the_promoted_digest_is_pulled_before_the_containers_are_inspected(
         health=[["healthy", "healthy", "starting"], ["healthy", "healthy", "healthy"]],
     )
     assert (
-        deployer.verify_runtime_applied(context, {"DATA_ENGINE_IMAGE_DIGEST": DIGEST})
+        deployer.verify_runtime_applied(context, {"IMAGE_DIGEST": DIGEST})
         is None
     )
     first, timeout = context.calls[0]
@@ -129,7 +129,7 @@ def test_a_pull_that_does_not_finish_names_the_digest_and_the_deadline(
         health=[["healthy"] * 3],
     )
     error = deployer.verify_runtime_applied(
-        context, {"DATA_ENGINE_IMAGE_DIGEST": DIGEST}
+        context, {"IMAGE_DIGEST": DIGEST}
     )
     assert error and "could not be pulled" in error and "manifest unknown" in error
     assert DIGEST[:19] in error and str(deployer.PULL_DEADLINE_SECONDS) in error
@@ -141,7 +141,7 @@ def test_containers_that_never_switch_still_fail_with_the_stale_image(deployer) 
         pull=_Result(DIGEST), images=[[OLD, IMAGE, IMAGE]], health=[["healthy"] * 3]
     )
     error = deployer.verify_runtime_applied(
-        context, {"DATA_ENGINE_IMAGE_DIGEST": DIGEST}
+        context, {"IMAGE_DIGEST": DIGEST}
     )
     assert error and error.startswith("promoted image digest was not applied")
     assert "truealpha-dagster-webserver-staging=" + OLD in error
@@ -155,7 +155,7 @@ def test_a_running_but_unhealthy_promoted_build_is_not_applied(deployer) -> None
         health=[["healthy", "unhealthy", "healthy"]],
     )
     error = deployer.verify_runtime_applied(
-        context, {"DATA_ENGINE_IMAGE_DIGEST": DIGEST}
+        context, {"IMAGE_DIGEST": DIGEST}
     )
     assert error and "running but not healthy" in error
     assert "truealpha-dagster-daemon-staging=unhealthy" in error
@@ -170,7 +170,7 @@ def test_a_container_without_a_healthcheck_counts_as_healthy_when_running(
         health=[["running", "healthy", "healthy"]],
     )
     assert (
-        deployer.verify_runtime_applied(context, {"DATA_ENGINE_IMAGE_DIGEST": DIGEST})
+        deployer.verify_runtime_applied(context, {"IMAGE_DIGEST": DIGEST})
         is None
     )
 
@@ -189,7 +189,7 @@ def test_a_pull_that_times_out_fails_closed_with_the_same_message(deployer) -> N
         pull=_Result(DIGEST), images=[[IMAGE] * 3], health=[["healthy"] * 3]
     )
     error = deployer.verify_runtime_applied(
-        context, {"DATA_ENGINE_IMAGE_DIGEST": DIGEST}
+        context, {"IMAGE_DIGEST": DIGEST}
     )
     assert error and "could not be pulled" in error
     assert f"timed out after {deployer.PULL_DEADLINE_SECONDS}s" in error

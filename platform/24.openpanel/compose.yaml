@@ -47,7 +47,7 @@ services:
       # rewrites it leaves the running agent on the old inode, and Compose only recreates
       # a service whose resolved config changed. The hash covers the template, so a
       # template edit recreates the agent instead of shipping as a silent no-op.
-      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       # Required by secrets.ctmpl to render environment-suffixed dependency hostnames
       ENV_SUFFIX: ${ENV_SUFFIX:-}
     volumes:

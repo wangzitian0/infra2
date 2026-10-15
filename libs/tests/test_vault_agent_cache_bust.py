@@ -28,7 +28,11 @@ ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_ROOTS = ("bootstrap", "platform", "finance_report", "truealpha")
 
 # Either the Deployer's hash or a service's own configuration digest recreates the agent.
-CACHE_BUST_VARIABLES = ("IAC_CONFIG_HASH", "TRUEALPHA_CONFIGURATION_SHA256")
+CACHE_BUST_VARIABLES = (
+    "CONFIGURATION_SHA256",
+    "IAC_CONFIG_HASH",
+    "TRUEALPHA_CONFIGURATION_SHA256",
+)
 
 # Promote-tier app compose files: the ones libs.deploy.promote.deploy() governs for
 # finance_report/app and truealpha/app, fixed envs and preview alike. Their app services
@@ -118,13 +122,13 @@ def test_promote_tier_secret_consumers_carry_iac_config_hash(relative_path):
     missing = sorted(
         name
         for name, spec in consumers.items()
-        if "IAC_CONFIG_HASH" not in (spec.get("environment") or {})
+        if not any(k in (spec.get("environment") or {}) for k in CACHE_BUST_VARIABLES)
     )
     assert not missing, (
         f"{relative_path}: service(s) {missing} render/consume Vault-templated "
-        "secrets but don't read IAC_CONFIG_HASH, so libs.deploy.promote.deploy()'s "
+        f"secrets but don't read any of {CACHE_BUST_VARIABLES}, so libs.deploy.promote.deploy()'s "
         "per-call cache-bust can't force Compose to recreate them on a same-tag "
         "redeploy — a secrets.ctmpl change can silently never reach a running "
         "staging/prod stack (truealpha#447). Add "
-        "`IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}` to its `environment:` block."
+        "`CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}` to its `environment:` block."
     )

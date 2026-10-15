@@ -32,7 +32,7 @@ services:
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
       ENV: ${ENV}
-      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
     healthcheck:
       test:
         - CMD-SHELL
@@ -61,7 +61,7 @@ services:
       context: ../..
       dockerfile: platform/12.alerting/Dockerfile
     pull_policy: build
-    image: platform-alerting-feishu-bridge:${IAC_CONFIG_HASH:-}
+    image: platform-alerting-feishu-bridge:${CONFIGURATION_SHA256:-}
     container_name: platform-alerting${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:
@@ -108,9 +108,9 @@ services:
       PORT: "8080"
       # The SDK resolves the environment tier from ENV when it configures telemetry.
       ENV: ${ENV}
-      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
-      # The deploy issues the full infra2 SHA as INFRA_IAC_REF.
-      GIT_COMMIT_SHA: ${INFRA_IAC_REF:-unknown}
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
+      # The deploy issues the full commit SHA as GIT_COMMIT_SHA.
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       # Telemetry (#1209). The endpoint turns export on. Both identity variables come
       # verbatim from the deploy (AlertingDeployer.telemetry_service_name), never hardcoded
       # or defaulted.
@@ -140,7 +140,7 @@ services:
   # services below, deleted in the #543 merge) in one low-footprint process.
   # See tools/infra_probe_runner.py + libs/observability/watchers/resident.py.
   infra-probe-runner:
-    image: platform-alerting-feishu-bridge:${IAC_CONFIG_HASH:-}
+    image: platform-alerting-feishu-bridge:${CONFIGURATION_SHA256:-}
     container_name: platform-alerting-probes${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:

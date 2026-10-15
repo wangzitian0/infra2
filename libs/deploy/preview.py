@@ -42,6 +42,7 @@ from urllib.request import Request, urlopen
 
 import httpx
 from infra2_sdk.deploy import poll_until_healthy
+from infra2_sdk.routing import PreviewStackCoordinates, derive_preview_coordinates
 
 from libs.core.environ import infra_domain
 from libs.deploy.compose_lock import compose_write_lock
@@ -148,6 +149,11 @@ def _preview_env_vars(
     Keeping them out of this pure assembler means it never logs or embeds the creds.
     """
     config = preview_service_config(service)
+    coords = derive_preview_coordinates(
+        config.base_subdomain or service.split("/")[-1],
+        alias.deployment_environment,
+        base_domain=domain,
+    )
     # IMAGE_TAG is the published ref: a release tag (image_ref="vX.Y.Z") or the short sha.
     image_tag = image_ref or sha[:7]
     config_hash = f"preview-{image_tag}-{int(_now() * 1000)}"  # per-deploy cache-bust
@@ -181,14 +187,8 @@ def _preview_env_vars(
         "COMPOSE_PROFILES": "app",
         "TRAEFIK_ENABLE": "true",
         "INTERNAL_DOMAIN": domain,
+        "CONFIGURATION_SHA256": config_hash,
         "IAC_CONFIG_HASH": config_hash,
-        # Ephemeral DB knobs — the compose template builds PREVIEW_DATABASE_URL from
-        # these and overrides DATABASE_URL to the local `db` service (never the shared
-        # staging/prod postgres for this service). Per-alias name keeps the DSN unambiguous
-        # in logs.
-        "PREVIEW_DB_USER": "preview",
-        "PREVIEW_DB_PASSWORD": "preview",
-        "PREVIEW_DB_NAME": config.db_name,
     }
     from libs.deploy.contract import service_spec
     from libs.core.service_identity import ServiceIdentity

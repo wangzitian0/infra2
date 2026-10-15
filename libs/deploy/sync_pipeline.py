@@ -412,6 +412,7 @@ class SyncPipeline:
                 action=SyncAction.FAILED, details="Failed to prepare directories"
             )
 
+        env_vars_dict["CONFIGURATION_SHA256"] = local_hash or ""
         env_vars_dict["IAC_CONFIG_HASH"] = local_hash or ""
         env_vars_dict["IAC_SOURCE_CONFIG_HASH"] = source_hash or ""
         env_vars_dict["IAC_DEPLOY_REF"] = deploy_ref

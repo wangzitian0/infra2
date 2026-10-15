@@ -346,9 +346,10 @@ def verify_effective_config_hash(
     last_error: Exception | None = None
     while True:
         try:
+            compose_env = client.get_compose_env(compose_id)
             last_value = _env_value(
-                client.get_compose_env(compose_id), "IAC_CONFIG_HASH"
-            )
+                compose_env, "CONFIGURATION_SHA256"
+            ) or _env_value(compose_env, "IAC_CONFIG_HASH")
             last_error = None
         except Exception as exc:  # transient Dokploy read; tolerate within window
             last_error = exc
@@ -462,6 +463,7 @@ def _build_deploy_env_vars(
         "COMPOSE_PROFILES": "app",
         "TRAEFIK_ENABLE": "true",
         "INTERNAL_DOMAIN": domain,
+        "CONFIGURATION_SHA256": config_hash,
         "IAC_CONFIG_HASH": config_hash,
     }
     from libs.deploy.contract import service_spec

@@ -22,8 +22,7 @@
 #
 # Env vars supplied by libs.deploy.preview (see libs.deploy.promote for the shared
 # set): IMAGE_TAG, GIT_COMMIT_SHA, ENV_SUFFIX, ENV_DOMAIN_SUFFIX, NEXT_PUBLIC_APP_URL,
-# INTERNAL_DOMAIN, IAC_CONFIG_HASH, VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID, plus
-# the ephemeral-DB knobs PREVIEW_DB_USER / PREVIEW_DB_PASSWORD / PREVIEW_DB_NAME.
+# INTERNAL_DOMAIN, CONFIGURATION_SHA256, VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID.
 services:
   vault-agent:
     init: true  # tini as PID1 reaps healthcheck ssl_client zombies
@@ -59,12 +58,10 @@ services:
       # Consumed by this dir's secrets.ctmpl to render this alias's
       # OTEL_RESOURCE_ATTRIBUTES service.version=<sha> (Infra-014).
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
-      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finance-report-backend}
       OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
-      INFRA_SERVICE_ID: ${INFRA_SERVICE_ID:-finance_report/app}
       INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV:-preview}}
-      INFRA_IAC_REF: ${INFRA_IAC_REF:-}
     healthcheck:
       test:
         - CMD-SHELL
@@ -100,9 +97,9 @@ services:
         max-size: "5m"
         max-file: "2"
     environment:
-      POSTGRES_USER: ${PREVIEW_DB_USER:-preview}
-      POSTGRES_PASSWORD: ${PREVIEW_DB_PASSWORD:-preview}
-      POSTGRES_DB: ${PREVIEW_DB_NAME:-finance_report}
+      POSTGRES_USER: ephemeral
+      POSTGRES_PASSWORD: ephemeral
+      POSTGRES_DB: preview
       PGDATA: /var/lib/postgresql/data/pgdata
     healthcheck:
       test:
@@ -140,11 +137,8 @@ services:
       DEBUG: ${DEBUG:-false}
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
-      IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}
-      INFRA_SERVICE_ID: ${INFRA_SERVICE_ID:-finance_report/app}
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV:-preview}}
-      INFRA_SERVICE_VERSION: ${INFRA_SERVICE_VERSION:-${GIT_COMMIT_SHA:-unknown}}
-      INFRA_IAC_REF: ${INFRA_IAC_REF:-}
       # This alias's ENV token (main / pr-<N> / commit-<sha7>); the entrypoint uses
       # it to override ENVIRONMENT AFTER sourcing Vault secrets (see CHECKPOINT-1c) —
       # mirrors the existing DATABASE_URL override for the same reason.
@@ -168,9 +162,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finance-report-backend}
       OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
-      # The ephemeral-DB DSN the entrypoint forces AFTER sourcing Vault secrets.
-      # asyncpg driver, pointing at the local `db` service (NOT finance_report-postgres*).
-      PREVIEW_DATABASE_URL: postgresql+asyncpg://${PREVIEW_DB_USER:-preview}:${PREVIEW_DB_PASSWORD:-preview}@finance_report-preview-db${ENV_SUFFIX}:5432/${PREVIEW_DB_NAME:-finance_report}
+      DATABASE_URL: postgresql+asyncpg://ephemeral:ephemeral@finance_report-preview-db${ENV_SUFFIX}:5432/preview
     entrypoint:
       - sh
       - -c
@@ -194,7 +186,7 @@ services:
         # preview never reads/writes the shared staging/prod database. Done AFTER
         # sourcing /secrets/.env so the override always wins; the rest of the Vault
         # secrets (AI keys, S3) are kept so the app is fully functional.
-        export DATABASE_URL="$$PREVIEW_DATABASE_URL"
+        export DATABASE_URL="$$DATABASE_URL"
         echo "✅ [CHECKPOINT-1b] DATABASE_URL overridden to the ephemeral preview DB"
 
         # PREVIEW OVERRIDE: Vault rendered ENVIRONMENT from the borrowed

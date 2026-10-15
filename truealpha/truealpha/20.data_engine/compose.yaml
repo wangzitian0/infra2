@@ -1,5 +1,5 @@
 x-dagster-service: &dagster-service
-  image: ghcr.io/wangzitian0/truealpha-data-engine@${DATA_ENGINE_IMAGE_DIGEST:?DATA_ENGINE_IMAGE_DIGEST is required}
+  image: ghcr.io/wangzitian0/truealpha-data-engine@${IMAGE_DIGEST:?IMAGE_DIGEST is required}
   pull_policy: always
   restart: always
   mem_limit: ${DATA_ENGINE_MEM_LIMIT:-768m}
@@ -23,9 +23,9 @@ x-dagster-service: &dagster-service
     # Any other environment name stays off.
     MOOMOO_KLINE_ORIGIN_ENABLED: ${MOOMOO_KLINE_ORIGIN_ENABLED:-false}
     MOOMOO_FINANCIALS_ORIGIN_ENABLED: ${MOOMOO_FINANCIALS_ORIGIN_ENABLED:-false}
-    TRUEALPHA_RELEASE_MANIFEST_ID: ${RELEASE_MANIFEST_ID:?RELEASE_MANIFEST_ID is required}
-    TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST: ${DATA_ENGINE_IMAGE_DIGEST:?DATA_ENGINE_IMAGE_DIGEST is required}
-    TRUEALPHA_CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
+    RELEASE_ID: ${RELEASE_ID:?RELEASE_ID is required}
+    IMAGE_DIGEST: ${IMAGE_DIGEST:?IMAGE_DIGEST is required}
+    CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
     TRUEALPHA_CAPTURE_APPROVED_BY: ${CAPTURE_APPROVED_BY:?CAPTURE_APPROVED_BY is required}
   volumes:
     - ./dagster-entrypoint.sh:/opt/truealpha/dagster-entrypoint.sh:ro
@@ -82,7 +82,7 @@ services:
       # changes. Without this, #604's endpoint line and #626's LLM_* lines stayed
       # unrendered on running staging/prod for weeks. CONFIGURATION_SHA256 covers
       # compose.yaml + secrets.ctmpl + vault-agent.hcl + vault-policy.hcl + public env.
-      TRUEALPHA_CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
     healthcheck:
       test:
         - CMD-SHELL
@@ -192,9 +192,9 @@ services:
       MOOMOO_LEDGER_BACKEND: postgres
       MOOMOO_KLINE_ORIGIN_ENABLED: ${MOOMOO_KLINE_ORIGIN_ENABLED:-false}
       MOOMOO_FINANCIALS_ORIGIN_ENABLED: ${MOOMOO_FINANCIALS_ORIGIN_ENABLED:-false}
-      TRUEALPHA_RELEASE_MANIFEST_ID: ${RELEASE_MANIFEST_ID:?RELEASE_MANIFEST_ID is required}
-      TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST: ${DATA_ENGINE_IMAGE_DIGEST:?DATA_ENGINE_IMAGE_DIGEST is required}
-      TRUEALPHA_CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
+      RELEASE_ID: ${RELEASE_ID:?RELEASE_ID is required}
+      IMAGE_DIGEST: ${IMAGE_DIGEST:?IMAGE_DIGEST is required}
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
       TRUEALPHA_CAPTURE_APPROVED_BY: ${CAPTURE_APPROVED_BY:?CAPTURE_APPROVED_BY is required}
 
   dagster-daemon:
