@@ -12,7 +12,7 @@
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
 | **API Key** | **Vault** (`secret/platform/<env>/ai`) | 规划中的 Key 存储路径 |
-| **接入地址** | **环境变量** | `OPENROUTER_BASE_URL` |
+| **接入地址** | **环境变量** | `AI_BASE_URL` |
 
 ---
 
@@ -20,7 +20,7 @@
 
 ```mermaid
 flowchart TB
-    Vault[(Vault KV<br/>OPENROUTER_API_KEY)]
+    Vault[(Vault KV<br/>AI_API_KEY)]
     App[Application]
     External[OpenRouter API]
 
@@ -38,7 +38,7 @@ flowchart TB
 
 ### ⛔ 禁止模式 (Blacklist)
 
-- **反模式 A**: **严禁** 将 `OPENROUTER_API_KEY` 硬编码在代码或镜像中。
+- **反模式 A**: **严禁** 将 `AI_API_KEY` 硬编码在代码或镜像中。
 
 ---
 

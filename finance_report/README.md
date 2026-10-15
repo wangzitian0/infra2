@@ -66,7 +66,6 @@ secret/data/finance_report/<env>/app
   - S3_BUCKET
   - AI_PROVIDER
   - ZAI_API_KEY
-  - AI_API_KEY
   - AI_BASE_URL
   - AI_CHAT_COMPLETIONS_PATH
   - AI_LAYOUT_PARSING_PATH

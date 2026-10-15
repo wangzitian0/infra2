@@ -1,9 +1,9 @@
 {
   "apps": {
     "finance_report": {
-      "commit": "c3fde3596416c622af66c7202ef7ed2203bcf9a1",
+      "commit": "17e472d242b65234a1889ae7aa44f3a23e9960be",
       "repository": "wangzitian0/finance_report",
-      "tag": null
+      "tag": "v0.2.3"
     },
     "truealpha": {
       "commit": "0203431d89ff60d050075712f70e889061e79799",
@@ -15,7 +15,7 @@
     {
       "app": "finance_report",
       "path": "contracts/finance_report/required-env.generated.json",
-      "sha256": "56bf868c914370f5d686f2b7a2d16c17a6430257840f5c98f279a3a36e11f026",
+      "sha256": "63d491cb39f904120c8cd65295ae12b05f0a8fc25b101ed4b14a3543d5af4841",
       "upstream": "common/runtime/required-env.generated.json"
     },
     {
