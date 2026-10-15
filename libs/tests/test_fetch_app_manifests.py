@@ -265,3 +265,14 @@ def test_lock_apps_are_the_directory_names_of_the_external_applications() -> Non
     for path in paths:  # the tag, else the first 8 characters of the commit
         app = apps[Path(path).name]
         assert _contract_lock(ROOT, path) == (app["tag"] or app["commit"][:8])
+
+
+def test_registered_contract_paths_are_all_in_the_real_lock_and_exist() -> None:
+    from libs.security.registry import SERVICES
+
+    paths = {p for service in SERVICES for p in service.manifests}
+    copies = {p for p in paths if p.startswith("contracts/")}
+
+    assert copies and copies == set(contracts.origins(ROOT))
+    assert [p for p in sorted(copies) if not (ROOT / p).is_file()] == []
+    assert [p for p in paths if p.startswith("repos/")] == []
