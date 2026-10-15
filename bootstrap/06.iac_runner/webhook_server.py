@@ -28,9 +28,9 @@ WORKSPACE = Path("/workspace")
 GIT_REPO_URL = os.environ.get("GIT_REPO_URL")
 GIT_BRANCH = os.environ.get("GIT_BRANCH") or "main"
 SECRETS_FILE = Path("/secrets/.env")
-RECENT_DEPLOY_TTL_SECONDS = int(os.environ.get("RECENT_DEPLOY_TTL_SECONDS", "600"))
-SIGNATURE_TTL_SECONDS = int(os.environ.get("SIGNATURE_TTL_SECONDS", "300"))
-MAX_REQUEST_BODY_BYTES = int(os.environ.get("MAX_REQUEST_BODY_BYTES", "65536"))
+RECENT_DEPLOY_TTL_SECONDS = 600
+SIGNATURE_TTL_SECONDS = 300
+MAX_REQUEST_BODY_BYTES = 65536
 EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 DEPLOYMENT_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 REQUIRED_PYTHON_MODULES = {
@@ -48,7 +48,7 @@ REQUIRED_BINARIES = ("git", "op")
 # SA, the real incident), without assuming vault-access semantics. Throttled (token validity
 # is slow-changing; don't call the 1Password API on every /health hit — same reasoning as
 # the vault-agent lookup throttle, #292).
-OP_HEALTHCHECK_TTL_SECONDS = int(os.environ.get("OP_HEALTHCHECK_TTL_SECONDS", "300"))
+OP_HEALTHCHECK_TTL_SECONDS = 300
 _op_health_lock = threading.Lock()
 # `at` starts at -inf (always stale under monotonic time) so the FIRST /health after process
 # start runs the real op check instead of serving the default ok=False — otherwise a fresh

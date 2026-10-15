@@ -14,7 +14,7 @@ OP_CONNECT_TOKEN = os.environ.get("OP_CONNECT_TOKEN")
 # 1Password identifiers from environment
 OP_VAULT_ID = os.environ.get("OP_VAULT_ID")
 OP_ITEM_ID = os.environ.get("OP_ITEM_ID")
-VERIFY_TLS = os.environ.get("VAULT_VERIFY", "true").lower() not in {"false", "0", "no"}
+VERIFY_TLS = True
 
 CHECK_INTERVAL = 30  # seconds
 
@@ -89,10 +89,6 @@ def unseal():
     try:
         # Check health
         # 200 = unsealed, 429 = unsealed (standby), 503 = sealed, 501 = not initialized
-        if not VERIFY_TLS:
-            logger.warning(
-                "TLS verification disabled (set VAULT_VERIFY=true to enable)."
-            )
         with httpx.Client(verify=VERIFY_TLS) as client:
             resp = client.get(f"{VAULT_ADDR}/v1/sys/health")
             data = resp.json()

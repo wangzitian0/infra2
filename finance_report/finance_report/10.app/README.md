@@ -47,7 +47,7 @@ Stored at: `secret/data/finance_report/<env>/app`
 | `AI_BASE_URL` | Provider base URL; defaults to Z.AI |
 | `AI_CHAT_COMPLETIONS_PATH` | Chat completions API path |
 | `AI_LAYOUT_PARSING_PATH` | OCR/layout parsing API path |
-| `PRIMARY_MODEL` | Primary text model; defaults to `glm-5.1` |
+| `PRIMARY_MODEL` | Primary text model; defaults to `glm-5.3-flash` |
 | `OCR_MODEL` | OCR-capable model; defaults to `glm-4.6v` |
 | `VISION_MODEL` | Vision-capable model; defaults to `glm-4.6v` |
 | `AI_JSON_TIMEOUT_SECONDS` | Provider JSON extraction timeout; defaults to `360` |

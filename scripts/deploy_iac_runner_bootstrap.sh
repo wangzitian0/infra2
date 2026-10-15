@@ -97,7 +97,6 @@ def unique(items):
 
 base_urls = unique(
     [
-        os.environ.get("DOKPLOY_INTERNAL_URL"),
         "http://dokploy:3000/api",
         os.environ.get("DOKPLOY_URL"),
         f"https://cloud.{internal_domain}/api" if internal_domain else None,

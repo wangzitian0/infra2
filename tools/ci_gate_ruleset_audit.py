@@ -222,8 +222,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--branch", default=DEFAULT_BRANCH)
     ap.add_argument(
         "--token",
-        default=os.getenv("GITHUB_TOKEN") or os.getenv("GH_PAT"),
-        help="GitHub token to read the branch ruleset (default: env GITHUB_TOKEN / GH_PAT). "
+        default=os.getenv("GITHUB_TOKEN"),
+        help="GitHub token to read the branch ruleset (default: env GITHUB_TOKEN). "
         "Absent -> drift undetermined, fail-safe (not treated as in_sync).",
     )
     ap.add_argument(

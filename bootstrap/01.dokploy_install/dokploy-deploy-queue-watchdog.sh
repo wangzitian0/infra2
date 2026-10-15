@@ -26,7 +26,7 @@ RED="$(docker ps --format '{{.Names}}' | grep -m1 dokploy-redis || true)"
 [ -n "$RED" ] || exit 0
 rc() { docker exec "$RED" redis-cli "$@" 2>/dev/null; }
 
-LOG="${DEPLOY_WATCHDOG_LOG:-/var/log/dokploy-deploy-watchdog.log}"
+LOG="/var/log/dokploy-deploy-watchdog.log"
 
 for id in $(rc LRANGE bull:deployments:active 0 -1); do
   [ -n "$id" ] || continue

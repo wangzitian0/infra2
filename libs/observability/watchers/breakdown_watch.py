@@ -533,12 +533,8 @@ class BreakdownWatch(ResidentWatcher):
         self.resolved_at: dict = {}
         self.chronic: dict = {}
         self.chronic_context: dict = {}
-        self.stay_resolved_seconds = int(
-            env.get("BREAKDOWN_STAY_RESOLVED_SECONDS", DEFAULT_STAY_RESOLVED_SECONDS)
-        )
-        self.chronic_digest_seconds = int(
-            env.get("BREAKDOWN_CHRONIC_DIGEST_SECONDS", DEFAULT_CHRONIC_DIGEST_SECONDS)
-        )
+        self.stay_resolved_seconds = DEFAULT_STAY_RESOLVED_SECONDS
+        self.chronic_digest_seconds = DEFAULT_CHRONIC_DIGEST_SECONDS
         self._client: httpx.Client | None = None
 
     def _sweep(self) -> None:

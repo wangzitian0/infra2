@@ -296,7 +296,7 @@ def _wait_for_image_dependencies(
     if not repositories:
         return
     max_wait = _env_number("DEPLOY_V2_IMAGE_WAIT_SECONDS", _DEFAULT_IMAGE_WAIT_SECONDS)
-    interval = _env_number("DEPLOY_V2_IMAGE_POLL_SECONDS", _DEFAULT_IMAGE_POLL_SECONDS)
+    interval = _DEFAULT_IMAGE_POLL_SECONDS
     if timeout is not None:
         max_wait = float(timeout)
     if poll_seconds is not None:

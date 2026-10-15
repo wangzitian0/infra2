@@ -830,7 +830,7 @@ def _post_heartbeat(
     try:
         with urlopen(  # noqa: S310 - operator-configured watchdog endpoint.
             request,
-            timeout=float(os.getenv("INFRA_PROBE_HEARTBEAT_TIMEOUT", "5")),
+            timeout=5.0,
         ) as response:
             response.read(1024)
     except OSError as exc:

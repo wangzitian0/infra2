@@ -645,16 +645,9 @@ def deploy(
 
 
 def model_overrides_from_env() -> dict[str, str]:
-    """Model overrides supplied via ``DEPLOY_*_MODEL_OVERRIDE`` env vars.
-
-    The staging-E2E promotion path sets these to pin which models prod runs; empty values
-    are dropped by ``deploy`` (only non-empty overrides are applied). Consumed by the
-    unified ``deploy_v2`` front door so the promote path threads them identically.
-    """
-    import os
-
+    """Model overrides for the promote path (empty by default; Vault secrets govern)."""
     return {
-        "PRIMARY_MODEL": os.getenv("DEPLOY_PRIMARY_MODEL_OVERRIDE", ""),
-        "OCR_MODEL": os.getenv("DEPLOY_OCR_MODEL_OVERRIDE", ""),
-        "VISION_MODEL": os.getenv("DEPLOY_VISION_MODEL_OVERRIDE", ""),
+        "PRIMARY_MODEL": "",
+        "OCR_MODEL": "",
+        "VISION_MODEL": "",
     }

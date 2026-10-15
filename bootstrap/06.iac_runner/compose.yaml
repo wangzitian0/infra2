@@ -65,11 +65,11 @@ services:
       context: ../..
       dockerfile: bootstrap/06.iac_runner/Dockerfile
       args:
-        - GIT_SHA=${GIT_SHA:-latest}
+        - GIT_SHA=${GIT_SHA:-}
     # Always rebuild from source when deploying (no image caching)
     # This ensures webhook_server.py and other source files are always up-to-date
     pull_policy: build
-    image: bootstrap-iac_runner-bkewyn-iac-runner:${GIT_SHA:-latest}
+    image: bootstrap-iac_runner-bkewyn-iac-runner:${GIT_SHA:-}
     container_name: iac-runner
     restart: unless-stopped
     logging:

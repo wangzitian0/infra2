@@ -171,7 +171,7 @@ def test_fixed_finance_report_backend_health_budget_covers_cold_start():
     backend_start = source.index("\n  backend:")
     worker_start = source.index("\n  prefect-worker:")
     backend_block = source[backend_start:worker_start]
-    match = re.search(r"BACKEND_HEALTHCHECK_START_PERIOD:-([0-9]+)s", backend_block)
+    match = re.search(r"start_period:\s*([0-9]+)s", backend_block)
 
     assert match is not None
     assert int(match.group(1)) >= 450

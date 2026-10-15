@@ -124,7 +124,7 @@ services:
     pull_policy: always
     container_name: finance_report-backend${ENV_SUFFIX}
     restart: always
-    mem_limit: ${APP_BACKEND_MEM_LIMIT:-768m}
+    mem_limit: 768m
     cpu_shares: ${TIER_CPU_SHARES:-1024}
     logging:
       driver: json-file
@@ -163,7 +163,7 @@ services:
       S3_PRESIGN_EXPIRY_SECONDS: "900"
       CORS_ORIGINS: ${NEXT_PUBLIC_APP_URL:-}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
-      PRIMARY_MODEL: ${PRIMARY_MODEL:-glm-5.2}
+      PRIMARY_MODEL: ${PRIMARY_MODEL:-glm-5.3-flash}
       FALLBACK_MODELS: ${FALLBACK_MODELS:-glm-5-turbo,glm-5}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-finance-report-backend}
@@ -231,7 +231,7 @@ services:
       # exact-head canary needed 293.6s for its complete operation. A bounded 450s grace
       # leaves room for first-run host and migration variance while the outer canary
       # retains its independent 600s fail-closed deadline.
-      start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-450s}
+      start_period: 450s
       interval: 10s
       retries: 3
       timeout: 5s
@@ -254,7 +254,7 @@ services:
     pull_policy: always
     container_name: finance_report-frontend${ENV_SUFFIX}
     restart: always
-    mem_limit: ${APP_FRONTEND_MEM_LIMIT:-768m}
+    mem_limit: 768m
     cpu_shares: ${TIER_CPU_SHARES:-1024}
     logging:
       driver: json-file

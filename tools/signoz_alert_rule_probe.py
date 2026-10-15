@@ -101,17 +101,12 @@ def main(env: dict[str, str] | None = None) -> int:
 
 
 def _signoz_base_url(env: dict[str, str]) -> str:
-    explicit = env.get("SIGNOZ_BASE_URL", "").strip().rstrip("/")
-    if explicit:
-        return explicit
     internal_domain = env.get("INTERNAL_DOMAIN", "").strip() or "zitian.party"
     return f"https://signoz.{internal_domain}"
 
 
 def _canary_alert_name(env: dict[str, str]) -> str:
-    suffix = (
-        env.get("GITHUB_RUN_ID") or env.get("SIGNOZ_CANARY_ID") or str(int(time.time()))
-    )
+    suffix = env.get("GITHUB_RUN_ID") or str(int(time.time()))
     return f"CanarySigNozPromqlPayload-{suffix}"
 
 

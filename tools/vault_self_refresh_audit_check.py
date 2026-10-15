@@ -126,7 +126,7 @@ def read_unevaluated(env: Mapping[str, str]) -> list[str]:
 
 
 def main() -> int:
-    env = os.environ.get("VAULT_SELF_REFRESH_AUDIT_ENV", "production")
+    env = "production"
     report = run(env)
     print(write_report(report))
     if path := os.environ.get(REPORT_ENV, "").strip():

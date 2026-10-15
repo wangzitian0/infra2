@@ -12,7 +12,7 @@
 # Migration Safety:
 # - Failed migrations prevent container startup (fail-fast)
 # - Retry logic handles transient PostgreSQL connection issues
-# - Healthcheck grants a bounded 450s for migration + cold startup (configurable via BACKEND_HEALTHCHECK_START_PERIOD)
+# - Healthcheck grants a bounded 450s for migration + cold startup
 #
 # Runtime configuration BOTH processes that run the backend image need. The worker
 # parses statements: it reads the same object store, talks to the same models, and must
@@ -29,7 +29,7 @@ x-app-runtime-env: &app_runtime_env
   S3_BUCKET: ${S3_BUCKET:-statements}
   S3_PUBLIC_BUCKET: ${S3_PUBLIC_BUCKET:-}
   S3_PRESIGN_EXPIRY_SECONDS: "900"
-  PRIMARY_MODEL: ${PRIMARY_MODEL:-glm-5.2}
+  PRIMARY_MODEL: ${PRIMARY_MODEL:-glm-5.3-flash}
   FALLBACK_MODELS: ${FALLBACK_MODELS:-glm-5-turbo,glm-5}
   PREFECT_API_URL: http://platform-prefect-server${ENV_SUFFIX}:4200/api
 # OTEL_EXPORTER_OTLP_ENDPOINT is deliberately NOT here. It turns export ON, and this
@@ -113,8 +113,8 @@ services:
     pull_policy: always
     container_name: finance_report-backend${ENV_SUFFIX}
     restart: always
-    # ops.standards §5: preview/staging deploys override these lower via env.
-    mem_limit: ${APP_BACKEND_MEM_LIMIT:-768m}
+    # ops.standards §5: fixed memory ceiling per service.
+    mem_limit: 768m
     cpu_shares: ${TIER_CPU_SHARES:-1024}
     logging:
       driver: json-file
@@ -201,7 +201,7 @@ services:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       # Keep the fixed stack aligned with preview. A live staging cold start on
       # 2026-08-18 needed 177s before the first successful /health response.
-      start_period: ${BACKEND_HEALTHCHECK_START_PERIOD:-450s}
+      start_period: 450s
       interval: 10s
       retries: 3
       timeout: 5s
@@ -230,7 +230,7 @@ services:
     pull_policy: always
     container_name: finance_report-prefect-worker${ENV_SUFFIX}
     restart: always
-    mem_limit: ${APP_WORKER_MEM_LIMIT:-512m}
+    mem_limit: 512m
     cpu_shares: ${TIER_CPU_SHARES:-1024}
     logging:
       driver: json-file
@@ -280,7 +280,7 @@ services:
     pull_policy: always
     container_name: finance_report-frontend${ENV_SUFFIX}
     restart: always
-    mem_limit: ${APP_FRONTEND_MEM_LIMIT:-768m}
+    mem_limit: 768m
     cpu_shares: ${TIER_CPU_SHARES:-1024}
     logging:
       driver: json-file

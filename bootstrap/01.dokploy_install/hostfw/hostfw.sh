@@ -20,7 +20,7 @@ TABLE="infra2_hostfw"
 INSTALLED_RULES="/etc/infra2/hostfw.nft"
 INSTALLED_UNIT="/etc/systemd/system/infra2-hostfw.service"
 REVERT_UNIT="infra2-hostfw-revert"
-REVERT_SECONDS="${HOSTFW_REVERT_SECONDS:-300}"
+REVERT_SECONDS="300"
 
 die() { echo "hostfw: $*" >&2; exit 1; }
 
