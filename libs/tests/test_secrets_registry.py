@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import urllib.request
 from pathlib import Path
 from collections import Counter
 
@@ -13,13 +15,10 @@ from libs.security.registry import SERVICES, Service
 
 
 def test_every_registered_manifest_is_resolvable() -> None:
-    """Each registered manifest loads: from the checkout, the cache, or a fetch at the
-    submodule's pinned commit (#1085).
+    """Each registered manifest loads from the checkout and declares fields.
 
-    Checking only ``manifest_file(path).exists()`` made the result depend on another
-    test having fetched the file first: in a worktree without the app submodules it
-    failed whenever its xdist worker ran first. ``load_manifest`` fetches on a miss and
-    parses the file, so the test proves what its name says on its own."""
+    An App manifest is infra2's copy in ``contracts/`` (#1258). The test needs no
+    network, no submodule and no cache."""
     for service in SERVICES:
         for path in service.manifests:
             manifest = secrets_registry.load_manifest(path)
@@ -72,109 +71,23 @@ def test_merged_manifest_rejects_conflicting_render_attributes(tmp_path) -> None
         secrets_registry.merged_manifest(service, root=tmp_path)
 
 
-def test_app_manifests_resolve_to_the_pinned_cache(tmp_path, monkeypatch) -> None:
-    """#1109: without a real checkout, an app manifest is read from the cache of the
-    pinned commit; a loose copy under repos/ is ignored, and a pin bump moves the path."""
-    from libs.security import app_manifests
-
-    pins = {"repos/truealpha": "a" * 40}
-    monkeypatch.setattr(app_manifests, "submodule_commit", lambda _root, sub: pins[sub])
-    rel = "repos/truealpha/apps/x/required-env.generated.json"
-    _write(tmp_path, rel, [])  # a loose copy, as the iac-runner held since 2026-09-08
-    _write(tmp_path, f"{secrets_registry.CACHE_DIR}/{'a' * 40}/{rel}", [])
-
-    assert secrets_registry.manifest_file(rel, root=tmp_path) == (
-        tmp_path / secrets_registry.CACHE_DIR / ("a" * 40) / rel
-    )
-    pins["repos/truealpha"] = "b" * 40
-    assert secrets_registry.manifest_file(rel, root=tmp_path) == (
-        tmp_path / secrets_registry.CACHE_DIR / ("b" * 40) / rel
-    )
-    assert (
-        secrets_registry.manifest_file("platform/x.json", root=tmp_path)
-        == tmp_path / "platform/x.json"
-    )
-
-
-def test_a_real_submodule_checkout_is_read_in_place(tmp_path, monkeypatch) -> None:
-    from libs.security import app_manifests
-
-    monkeypatch.setattr(
-        app_manifests, "submodule_commit", lambda *_a: pytest.fail("no pin needed")
-    )
-    rel = "repos/truealpha/apps/x/required-env.generated.json"
-    _write(tmp_path, rel, [])
-    (tmp_path / "repos/truealpha/.git").write_text("gitdir: x", encoding="utf-8")
-
-    assert secrets_registry.manifest_file(rel, root=tmp_path) == tmp_path / rel
-
-
-def test_a_checkout_without_the_file_falls_back_to_the_pinned_cache(
+def test_load_manifest_reads_the_local_file_and_never_uses_the_network(
     tmp_path, monkeypatch
 ) -> None:
-    """#1108 audit: a submodule checked out before a manifest was added still resolves
-    it at the pin, as before."""
-    from libs.security import app_manifests
+    """A deploy reads infra2's copies (#1258). It once fetched an absent one (#824, #1109)."""
+    rel = "contracts/truealpha/x.required-env.generated.json"
+    _write(tmp_path, rel, [{"field": "k", "env": "K", "source": "runtime"}])
+    assert secrets_registry.manifest_file(rel, root=tmp_path) == tmp_path / rel
+    loaded = secrets_registry.load_manifest(rel, root=tmp_path)
+    assert [f.env for f in loaded.fields] == ["K"]
 
-    monkeypatch.setattr(app_manifests, "submodule_commit", lambda *_a: "c" * 40)
-    (tmp_path / "repos/truealpha").mkdir(parents=True)
-    (tmp_path / "repos/truealpha/.git").write_text("gitdir: x", encoding="utf-8")
-    rel = "repos/truealpha/apps/new/required-env.generated.json"
+    def refuse(*_args, **_kwargs):
+        pytest.fail("load_manifest fetched a file or asked git")
 
-    assert secrets_registry.manifest_file(rel, root=tmp_path) == (
-        tmp_path / secrets_registry.CACHE_DIR / ("c" * 40) / rel
-    )
-
-
-def test_load_manifest_fetches_an_absent_app_manifest_at_the_pinned_commit(
-    tmp_path,
-) -> None:
-    """The iac-runner and CI have no submodule checkout; the registry must still resolve
-    app manifests at deploy time (the supply reads them) by fetching at the gitlink sha."""
-    import subprocess
-
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    subprocess.run(
-        ["git", "-C", str(tmp_path), "config", "user.email", "t@example"], check=True
-    )
-    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True)
-    sha = "0123456789abcdef0123456789abcdef01234567"
-    subprocess.run(
-        [
-            "git",
-            "-C",
-            str(tmp_path),
-            "update-index",
-            "--add",
-            "--cacheinfo",
-            f"160000,{sha},repos/truealpha",
-        ],
-        check=True,
-    )
-    subprocess.run(
-        ["git", "-C", str(tmp_path), "commit", "-q", "-m", "pin"], check=True
-    )
-    urls: list[str] = []
-
-    def fake(url: str) -> bytes:
-        urls.append(url)
-        return json.dumps(
-            {
-                "contract_version": 2,
-                "source": "t",
-                "fields": [{"field": "k", "env": "K", "source": "runtime"}],
-            }
-        ).encode()
-
-    rel = "repos/truealpha/apps/x/required-env.generated.json"
-    manifest = secrets_registry.load_manifest(rel, root=tmp_path, fetch=fake)
-    assert [f.env for f in manifest.fields] == ["K"]
-    assert urls == [
-        f"https://raw.githubusercontent.com/wangzitian0/truealpha/{sha}/apps/x/required-env.generated.json"
-    ]
-    # cached: the next read makes no request
-    secrets_registry.load_manifest(rel, root=tmp_path, fetch=fake)
-    assert len(urls) == 1
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    monkeypatch.setattr(subprocess, "run", refuse)
+    with pytest.raises(FileNotFoundError):
+        secrets_registry.load_manifest("contracts/absent.json", root=tmp_path)
 
 
 def test_every_provided_by_names_a_store_backed_field_of_that_provider() -> None:

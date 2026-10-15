@@ -10,19 +10,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-
-from libs.core.constants import REPO_ROOT
 from typing import TYPE_CHECKING
 
-from libs.security import app_manifests
-
-if TYPE_CHECKING:
-    from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
+from libs.core.constants import REPO_ROOT
 
 # The SERVICES table is plain data and is read by contexts without the SDK (the ops-checks
 # vault audit installs neither the SDK nor a manifest loader); only manifest loading needs
 # infra2_sdk, so it is imported where it is used.
-from libs.security.app_manifests import CACHE_DIR  # noqa: F401  (re-exported)
+if TYPE_CHECKING:
+    from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
 
 ROOT = REPO_ROOT
 ENVIRONMENTS = ("production", "staging")
@@ -140,16 +136,16 @@ SERVICES: tuple[Service, ...] = (
         "postgres",
         ("truealpha/truealpha/01.postgres/env.manifest.json",),
     ),
-    # App stacks: the application's own manifest (checked out through the submodule at the
-    # deployed commit) plus stack-only additions kept here. Environment-specific config
-    # (S3 endpoint, rate limits, telemetry) lives in the compose file / Deployer, not in
-    # the template.
+    # App stacks: the application's own manifest (infra2's copy in contracts/, recorded in
+    # contracts/apps.lock.json) plus stack-only additions kept here. Environment-specific
+    # config (S3 endpoint, rate limits, telemetry) lives in the compose file / Deployer,
+    # not in the template.
     Service(
         "finance_report/finance_report/10.app",
         "finance_report",
         "app",
         (
-            "repos/finance_report/common/runtime/required-env.generated.json",
+            "contracts/finance_report/required-env.generated.json",
             "finance_report/finance_report/10.app/env.manifest.json",
         ),
         # _ensure_minio_bucket reads the bucket name back to decide whether the scoped
@@ -161,7 +157,7 @@ SERVICES: tuple[Service, ...] = (
         "finance_report",
         "app",
         (
-            "repos/finance_report/common/runtime/required-env.generated.json",
+            "contracts/finance_report/required-env.generated.json",
             "finance_report/finance_report/10.app/env.manifest.json",
         ),
         source_env="staging",
@@ -172,8 +168,8 @@ SERVICES: tuple[Service, ...] = (
         "truealpha",
         "app",
         (
-            "repos/truealpha/apps/app-web/required-env.manifest.json",
-            "repos/truealpha/apps/llm-service/required-env.generated.json",
+            "contracts/truealpha/app-web.required-env.manifest.json",
+            "contracts/truealpha/llm-service.required-env.generated.json",
             "truealpha/truealpha/10.app/env.manifest.json",
         ),
         # same bucket-provisioning read as finance_report/app
@@ -184,8 +180,8 @@ SERVICES: tuple[Service, ...] = (
         "truealpha",
         "app",
         (
-            "repos/truealpha/apps/app-web/required-env.manifest.json",
-            "repos/truealpha/apps/llm-service/required-env.generated.json",
+            "contracts/truealpha/app-web.required-env.manifest.json",
+            "contracts/truealpha/llm-service.required-env.generated.json",
             "truealpha/truealpha/10.app/env.manifest.json",
         ),
         source_env="staging",
@@ -200,7 +196,7 @@ SERVICES: tuple[Service, ...] = (
         "truealpha",
         "data_engine",
         (
-            "repos/truealpha/apps/data-engine/required-env.generated.json",
+            "contracts/truealpha/data-engine.required-env.generated.json",
             "truealpha/truealpha/20.data_engine/env.manifest.json",
         ),
         # The deploy identity the Deployer reads at compose time (pin_release writes the
@@ -223,22 +219,17 @@ SERVICES: tuple[Service, ...] = (
 
 
 def manifest_file(path: str, *, root: Path = ROOT) -> Path:
-    """The submodule checkout when present, else the cache libs/app_manifests fills."""
-    return app_manifests.manifest_file(path, root=root)
+    """The file that holds the manifest ``path`` names, under ``root``."""
+    return root / path
 
 
-def load_manifest(path: str, *, root: Path = ROOT, fetch=None) -> EnvironmentManifest:
-    """Read one manifest; an app manifest absent from both checkout and cache is fetched
-    at the submodule's pinned commit first (CI and the iac-runner have no submodules)."""
+def load_manifest(path: str, *, root: Path = ROOT) -> EnvironmentManifest:
+    """Read one manifest. An App manifest is infra2's copy under ``contracts/``."""
     from infra2_sdk.runtime.config_schema import EnvironmentManifest
 
-    file = manifest_file(path, root=root)
-    if not file.exists() and path.startswith("repos/"):
-        app_manifests.ensure_present(
-            [path], root=root, **({"fetch": fetch} if fetch else {})
-        )
-        file = manifest_file(path, root=root)
-    return EnvironmentManifest.from_dict(json.loads(file.read_text(encoding="utf-8")))
+    return EnvironmentManifest.from_dict(
+        json.loads(manifest_file(path, root=root).read_text(encoding="utf-8"))
+    )
 
 
 _RENDER_KEYS = (

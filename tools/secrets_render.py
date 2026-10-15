@@ -3,8 +3,8 @@
 
 Every migrated service's ``secrets.ctmpl`` (and, except for the IaC runner, its
 ``vault-policy.hcl``) is derived from the manifest(s) that say who produces each
-variable (infra2-sdk contract v2): the application's own manifest (checked out through
-the git submodule at the deployed commit) plus, for platform services and stack-only
+variable (infra2-sdk contract v2): the application's own manifest (infra2's copy in
+contracts/, see contracts/apps.lock.json) plus, for platform services and stack-only
 additions, a manifest kept in this repository next to the service. The runner's policy
 is its *writer* identity across projects, a bootstrap concern no manifest describes,
 so it stays hand-written. Nothing else in a template is written by hand.

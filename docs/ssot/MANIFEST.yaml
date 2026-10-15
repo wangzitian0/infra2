@@ -75,7 +75,9 @@ entries:
     proofs:
       - libs/tests/test_env.py
       - libs/tests/test_env_inventory.py
+      - libs/tests/test_fetch_app_manifests.py
       - tools/env_inventory.py
+      - tools/fetch_app_manifests.py
   bootstrap.dns_and_cert:
     owner: docs/ssot/bootstrap.dns_and_cert.md
     summary: DNS 与证书自动化
