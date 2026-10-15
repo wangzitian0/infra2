@@ -1194,6 +1194,19 @@ def test_the_unit_runtime_command_runs_under_sh_against_a_fake_docker(
     assert run("other") == (0, "")
 
 
+def test_unit_runtime_format_reads_both_config_hash_keys() -> None:
+    """A container made after the rename carries CONFIGURATION_SHA256; an older one
+    carries IAC_CONFIG_HASH. If the format drops either key, every unit of that kind
+    reads as "no container carries a config hash" and the watchdog pages falsely."""
+    watchdog = _load_watchdog()
+    fmt = watchdog.UNIT_RUNTIME_FORMAT
+    assert '"CONFIGURATION_SHA256"' in fmt
+    assert '"IAC_CONFIG_HASH"' in fmt
+    # only the hash may leave the host: no other variable name appears in the format
+    names = set(re.findall(r'"([A-Z][A-Z0-9_]{3,})"', fmt))
+    assert names == {"CONFIGURATION_SHA256", "IAC_CONFIG_HASH"}
+
+
 def _evidence_client(*, env_text: str, created_at: str = "2026-09-24T00:00:00Z"):
     class FakeClient:
         def list_projects(self):

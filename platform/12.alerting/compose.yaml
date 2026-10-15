@@ -109,8 +109,8 @@ services:
       # The SDK resolves the environment tier from ENV when it configures telemetry.
       ENV: ${ENV}
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
-      # The deploy issues the full commit SHA as GIT_COMMIT_SHA.
-      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      # The deploy issues the full infra2 SHA as INFRA_IAC_REF.
+      GIT_COMMIT_SHA: ${INFRA_IAC_REF:-unknown}
       # Telemetry (#1209). The endpoint turns export on. Both identity variables come
       # verbatim from the deploy (AlertingDeployer.telemetry_service_name), never hardcoded
       # or defaulted.

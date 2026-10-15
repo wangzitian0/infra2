@@ -1,5 +1,9 @@
+# Migration alias (#1260): RELEASE_ID and IMAGE_DIGEST are the canonical names.
+# RELEASE_MANIFEST_ID and DATA_ENGINE_IMAGE_DIGEST stay accepted until infra-ci.yml
+# sets the canonical names for compose validation (owner-held workflow). If both
+# names are missing, compose fails. No zero-value default exists.
 x-dagster-service: &dagster-service
-  image: ghcr.io/wangzitian0/truealpha-data-engine@${IMAGE_DIGEST:-sha256:0000000000000000000000000000000000000000000000000000000000000000}
+  image: ghcr.io/wangzitian0/truealpha-data-engine@${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?IMAGE_DIGEST is required}}
   pull_policy: always
   restart: always
   mem_limit: ${DATA_ENGINE_MEM_LIMIT:-768m}
@@ -23,8 +27,8 @@ x-dagster-service: &dagster-service
     # Any other environment name stays off.
     MOOMOO_KLINE_ORIGIN_ENABLED: ${MOOMOO_KLINE_ORIGIN_ENABLED:-false}
     MOOMOO_FINANCIALS_ORIGIN_ENABLED: ${MOOMOO_FINANCIALS_ORIGIN_ENABLED:-false}
-    RELEASE_ID: ${RELEASE_ID:-release-manifest:0000000000000000000000000000000000000000000000000000000000000000}
-    IMAGE_DIGEST: ${IMAGE_DIGEST:-sha256:0000000000000000000000000000000000000000000000000000000000000000}
+    RELEASE_ID: ${RELEASE_ID:-${RELEASE_MANIFEST_ID:?RELEASE_ID is required}}
+    IMAGE_DIGEST: ${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?IMAGE_DIGEST is required}}
     CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
     TRUEALPHA_CAPTURE_APPROVED_BY: ${CAPTURE_APPROVED_BY:?CAPTURE_APPROVED_BY is required}
   volumes:
@@ -192,8 +196,8 @@ services:
       MOOMOO_LEDGER_BACKEND: postgres
       MOOMOO_KLINE_ORIGIN_ENABLED: ${MOOMOO_KLINE_ORIGIN_ENABLED:-false}
       MOOMOO_FINANCIALS_ORIGIN_ENABLED: ${MOOMOO_FINANCIALS_ORIGIN_ENABLED:-false}
-      RELEASE_ID: ${RELEASE_ID:?RELEASE_ID is required}
-      IMAGE_DIGEST: ${IMAGE_DIGEST:?IMAGE_DIGEST is required}
+      RELEASE_ID: ${RELEASE_ID:-${RELEASE_MANIFEST_ID:?RELEASE_ID is required}}
+      IMAGE_DIGEST: ${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?IMAGE_DIGEST is required}}
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
       TRUEALPHA_CAPTURE_APPROVED_BY: ${CAPTURE_APPROVED_BY:?CAPTURE_APPROVED_BY is required}
 

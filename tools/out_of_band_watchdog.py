@@ -122,12 +122,15 @@ DOKPLOY_RECORD_MAX_AGE_HOURS = 72
 #: Every config-bound app container carries the IAC_CONFIG_HASH it was created
 #: with, and Dokploy's compose env holds the current one (ops.pipeline.md).
 CONFIG_HASH_KEY = "IAC_CONFIG_HASH"
-#: `docker inspect` line per container of one unit. Only IAC_CONFIG_HASH is taken
-#: from the environment; no other variable leaves the host.
+#: `docker inspect` line per container of one unit. Only the config hash is taken
+#: from the environment; no other variable leaves the host. A container created
+#: after the CONFIGURATION_SHA256 rename carries that key; an older container
+#: still carries IAC_CONFIG_HASH until its next deploy. The format accepts both.
 UNIT_RUNTIME_FORMAT = (
     "{{.Name}}|{{.State.Status}}|{{.State.ExitCode}}|"
     "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|"
-    '{{range .Config.Env}}{{if eq (index (split . "=") 0) "IAC_CONFIG_HASH"}}'
+    '{{range .Config.Env}}{{if or (eq (index (split . "=") 0) "CONFIGURATION_SHA256") '
+    '(eq (index (split . "=") 0) "IAC_CONFIG_HASH")}}'
     '{{index (split . "=") 1}}{{end}}{{end}}'
 )
 STATE_DISCREPANCY_RUNBOOK = (

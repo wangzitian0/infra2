@@ -78,7 +78,7 @@ def test_compose_pins_one_digest_and_keeps_dagster_on_host_loopback():
     services = compose["services"]
     expected_image = (
         "ghcr.io/wangzitian0/truealpha-data-engine@"
-        "${IMAGE_DIGEST:-sha256:0000000000000000000000000000000000000000000000000000000000000000}"
+        "${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?IMAGE_DIGEST is required}}"
     )
     for name in ("dagster-webserver", "dagster-daemon", "dagster-code-server"):
         service = services[name]
@@ -88,6 +88,11 @@ def test_compose_pins_one_digest_and_keeps_dagster_on_host_loopback():
         assert service["mem_limit"]
         assert service["cpu_shares"]
         assert "traefik.enable=false" in service["labels"]
+    # Fail-closed: a missing release identity must stop compose. A zero-value default
+    # would let a deploy run an unpinned or fake release.
+    raw = (SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8")
+    assert "sha256:" + "0" * 64 not in raw
+    assert "release-manifest:" + "0" * 64 not in raw
     web_command = services["dagster-webserver"]["command"]
     assert "127.0.0.1" in web_command
     assert "${DAGSTER_WEBSERVER_PORT}" in web_command
