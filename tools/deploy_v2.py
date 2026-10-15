@@ -881,10 +881,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--image-poll-seconds",
         type=float,
         default=None,
-        help=(
-            "seconds between image artifact readiness checks "
-            "(default: DEPLOY_V2_IMAGE_POLL_SECONDS or 10)"
-        ),
+        help="seconds between image artifact readiness checks (default: 10)",
     )
     return parser
 

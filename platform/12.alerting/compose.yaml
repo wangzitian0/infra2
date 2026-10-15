@@ -61,7 +61,7 @@ services:
       context: ../..
       dockerfile: platform/12.alerting/Dockerfile
     pull_policy: build
-    image: platform-alerting-feishu-bridge:${IAC_CONFIG_HASH:-latest}
+    image: platform-alerting-feishu-bridge:${IAC_CONFIG_HASH:-}
     container_name: platform-alerting${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:
@@ -72,7 +72,7 @@ services:
       - |
         set -e
         waited=0
-        max_wait="$${ALERTING_SECRETS_WAIT_SECONDS:-300}"
+        max_wait="300"
         while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
           echo "Waiting for alerting secrets file..."
           sleep 2
@@ -140,7 +140,7 @@ services:
   # services below, deleted in the #543 merge) in one low-footprint process.
   # See tools/infra_probe_runner.py + libs/observability/watchers/resident.py.
   infra-probe-runner:
-    image: platform-alerting-feishu-bridge:${IAC_CONFIG_HASH:-latest}
+    image: platform-alerting-feishu-bridge:${IAC_CONFIG_HASH:-}
     container_name: platform-alerting-probes${ENV_SUFFIX}
     restart: unless-stopped
     depends_on:
@@ -151,7 +151,7 @@ services:
     # ~36, 2026-07-20 docker stats); 256m is a ceiling comfortably above the
     # observed peak (never set it below peak — OOM loops are worse than no
     # limit). cpu_shares 512: the monitor competes below prod workloads.
-    mem_limit: ${PROBE_RUNNER_MEM_LIMIT:-256m}
+    mem_limit: 256m
     cpu_shares: 512
     healthcheck:
       # The loop refreshes the state file every cycle (liveness-first touch at

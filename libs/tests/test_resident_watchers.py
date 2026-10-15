@@ -335,7 +335,7 @@ def test_compose_has_single_resident_sidecar_with_watcher_env() -> None:
 
     assert "/var/run/docker.sock:/var/run/docker.sock:ro" in runner["volumes"]
     # §5.2 resource budget on the merged service
-    assert runner["mem_limit"] == "${PROBE_RUNNER_MEM_LIMIT:-256m}"
+    assert runner["mem_limit"] == "256m"
     assert runner["cpu_shares"] == 512
     # the functional healthcheck (state-file freshness) survives the merge
     assert "infra_probe_runner_state.json" in runner["healthcheck"]["test"][1]

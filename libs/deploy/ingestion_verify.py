@@ -37,7 +37,7 @@ def _clickhouse_query(base_url: str, query: str) -> str:
     )
     with urllib.request.urlopen(  # noqa: S310
         request,
-        timeout=float(os.getenv("OBS_ROUNDTRIP_HTTP_TIMEOUT_SECONDS", "10")),
+        timeout=10.0,
     ) as response:
         return response.read().decode("utf-8", errors="replace")
 

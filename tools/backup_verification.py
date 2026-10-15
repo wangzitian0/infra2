@@ -38,10 +38,6 @@ def main() -> int:
     if report["status"] == "pass":
         return 0
 
-    if os.getenv("BACKUP_VERIFY_DRY_RUN", "0") == "1":
-        print(json.dumps(build_backup_alert_payload(report), indent=2, sort_keys=True))
-        return 1
-
     bridge_url = os.getenv("ALERT_BRIDGE_URL")
     if bridge_url:
         post_alert_bridge_payload(bridge_url, build_backup_alert_payload(report))

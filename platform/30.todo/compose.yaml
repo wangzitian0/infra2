@@ -61,7 +61,7 @@ services:
     build:
       context: ../..
       dockerfile: platform/30.todo/Dockerfile
-    image: platform-todo:${IAC_CONFIG_HASH:-latest}
+    image: platform-todo:${IAC_CONFIG_HASH:-}
     container_name: platform-todo${ENV_SUFFIX}
     restart: always
     mem_limit: 256m
@@ -76,7 +76,7 @@ services:
       - |
         set -e
         waited=0
-        max_wait="$${TODO_SECRETS_WAIT_SECONDS:-300}"
+        max_wait="300"
         while [ ! -s /secrets/.env ] && [ "$$waited" -lt "$$max_wait" ]; do
           echo "Waiting for todo secrets file..."
           sleep 2

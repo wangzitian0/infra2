@@ -65,7 +65,7 @@ def main() -> int:
     interval_seconds = int(
         os.getenv("OBS_ROUNDTRIP_INTERVAL_SECONDS", str(DEFAULT_INTERVAL_SECONDS))
     )
-    force = args.force or os.getenv("OBS_ROUNDTRIP_FORCE", "0") == "1"
+    force = args.force
     now = time.time()
     state = _load_state(state_path)
 
@@ -152,7 +152,7 @@ def run_openpanel_roundtrip(nonce: str) -> ProbeResult:
     client_secret = os.getenv("OPENPANEL_CLIENT_SECRET", "").strip()
     if client_secret:
         headers["openpanel-client-secret"] = client_secret
-    event_name = os.getenv("OPENPANEL_ROUNDTRIP_EVENT_NAME", OPENPANEL_EVENT_NAME)
+    event_name = OPENPANEL_EVENT_NAME
     _post_json(
         f"{api_url}/track",
         {
@@ -231,9 +231,7 @@ def _wait_for_count(clickhouse_url: str, query: str) -> int:
     deadline = time.monotonic() + float(
         os.getenv("OBS_ROUNDTRIP_QUERY_WAIT_SECONDS", str(DEFAULT_QUERY_WAIT_SECONDS))
     )
-    poll_seconds = float(
-        os.getenv("OBS_ROUNDTRIP_QUERY_POLL_SECONDS", str(DEFAULT_QUERY_POLL_SECONDS))
-    )
+    poll_seconds = float(DEFAULT_QUERY_POLL_SECONDS)
     last_count = 0
     while True:
         last_count = _clickhouse_count(clickhouse_url, query)
@@ -267,7 +265,7 @@ def _clickhouse_query(base_url: str, query: str) -> str:
     )
     with urllib.request.urlopen(  # noqa: S310 - internal Docker-network probe URL.
         request,
-        timeout=float(os.getenv("OBS_ROUNDTRIP_HTTP_TIMEOUT_SECONDS", "10")),
+        timeout=10.0,
     ) as response:
         return response.read().decode("utf-8", errors="replace")
 
@@ -285,7 +283,7 @@ def _post_json(
     )
     with urllib.request.urlopen(  # noqa: S310 - internal Docker-network probe URL.
         request,
-        timeout=float(os.getenv("OBS_ROUNDTRIP_HTTP_TIMEOUT_SECONDS", "10")),
+        timeout=10.0,
     ) as response:
         response_body = response.read().decode("utf-8", errors="replace")
     if not response_body:

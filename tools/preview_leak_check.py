@@ -231,9 +231,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--token",
-        default=os.getenv("PREVIEW_LEAK_GH_TOKEN") or os.getenv("GH_PAT"),
+        default=os.getenv("PREVIEW_LEAK_GH_TOKEN"),
         help="GitHub token to read the app repo's open PRs (default: env "
-        "PREVIEW_LEAK_GH_TOKEN / GH_PAT). Absent -> PR leaks not flagged, fail-safe.",
+        "PREVIEW_LEAK_GH_TOKEN). Absent -> PR leaks not flagged, fail-safe.",
     )
     args = parser.parse_args(argv)
 

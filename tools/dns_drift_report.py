@@ -137,9 +137,7 @@ def deliver(text: str) -> None:
             app_secret=os.environ["DNS_DRIFT_FEISHU_APP_SECRET"],
             chat_id=os.environ["DNS_DRIFT_FEISHU_CHAT_ID"],
             text=text,
-            api_base=os.environ.get(
-                "DNS_DRIFT_FEISHU_API_BASE", "https://open.feishu.cn"
-            ),
+            api_base="https://open.feishu.cn",
         )
     elif mode == "webhook":
         _post_to_webhook(os.environ["DNS_DRIFT_FEISHU_WEBHOOK_URL"].strip(), text)

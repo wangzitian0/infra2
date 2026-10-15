@@ -776,7 +776,7 @@ def fastapi_ui_index(request: Request) -> HTMLResponse:
             "未检测到 ForwardAuth 头 (开发/直连模式)"
             "</span>"
         )
-    sha = os.environ.get("GIT_COMMIT_SHA", "dev-local")[:7]
+    sha = os.environ.get("GIT_COMMIT_SHA", "")[:7] or "unknown"
     rendered = HTML_TEMPLATE.replace("${GIT_COMMIT_SHA}", sha).replace(
         "${AUTH_BADGE}", auth_badge
     )

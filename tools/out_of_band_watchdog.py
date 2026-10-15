@@ -954,7 +954,7 @@ def run_dokploy_status_check(
             )
         ]
 
-    host = env.get("DOKPLOY_STATUS_HOST", "").strip() or "cloud.zitian.party"
+    host = "cloud.zitian.party"
     try:
         client = client_factory(host=host)
         projects = client.list_projects()

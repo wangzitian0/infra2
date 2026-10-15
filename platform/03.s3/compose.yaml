@@ -70,7 +70,7 @@ services:
       context: ../..
       dockerfile: platform/03.s3/Dockerfile
     pull_policy: build
-    image: platform-s3:${IAC_CONFIG_HASH:-latest}
+    image: platform-s3:${IAC_CONFIG_HASH:-}
     container_name: platform-s3${ENV_SUFFIX}
     restart: always
     mem_limit: 2g

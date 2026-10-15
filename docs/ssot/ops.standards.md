@@ -128,9 +128,9 @@ platform compose 中的镜像禁止浮动 tag——上游静默漂移且不可�
 
 ### 5.3 落地约定
 
-- 限额写进 **compose 字段**(`mem_limit`/`mem_reservation`/`cpu_shares`),由 env 变量驱动、prod 默认 baked、staging/preview 部署时 override 到更低:
+- 限额写进 **compose 字段**(`mem_limit`/`mem_reservation`/`cpu_shares`),`mem_limit` 按观测峰值设固定天花板,`cpu_shares` 由 env 变量按 tier 驱动:
   ```yaml
-  mem_limit: ${APP_BACKEND_MEM_LIMIT:-<prod天花板>}
+  mem_limit: 768m
   cpu_shares: ${TIER_CPU_SHARES:-1024}   # staging 部署设 512, preview 256
   ```
 - **白名单**: 新增服务的 compose **必须**带 `mem_limit` + `cpu_shares`。

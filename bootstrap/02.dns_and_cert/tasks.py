@@ -100,19 +100,14 @@ def _load_record_list(records: str | None) -> list[str]:
     if records:
         return _split_records(records)
 
-    env_val = (
-        os.getenv(RECORDS_KEY)
-        or os.getenv("CLOUDFLARE_RECORDS")
-        or os.getenv("DNS_RECORDS")
-    )
+    env_val = os.getenv(RECORDS_KEY)
     if env_val:
         return _split_records(env_val)
 
     secrets = OpSecrets(item=CLOUDFLARE_ITEM)
-    for key in (RECORDS_KEY, "CLOUDFLARE_RECORDS", "DNS_RECORDS"):
-        val = secrets.get(key)
-        if val:
-            return _split_records(val)
+    val = secrets.get(RECORDS_KEY)
+    if val:
+        return _split_records(val)
 
     return list(DEFAULT_RECORDS)
 
