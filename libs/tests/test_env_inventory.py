@@ -1189,8 +1189,15 @@ def _is_failopen_env_default(val: object) -> bool:
     return bool(_NESTED_FAILOPEN_RE.search(text))
 
 
+def _is_deployed_site(o: envinv.Occ) -> bool:
+    base = envinv.base_layer(o.layer)
+    return base in envinv.DEPLOYED_LAYERS or (
+        base == "py-env-read" and bool(envinv.DEPLOYED_CODE.match(o.path))
+    )
+
+
 def g2_violations(keys_map: dict[str, envinv.K]) -> dict[str, list[str]]:
-    """G2: No deployed compose default makes an environment-tier key fail open to production/prod, and INFRA_PROBE_HEARTBEAT_ENV is retired."""
+    """G2: No deployed site makes an environment-tier key fail open to production/prod, and INFRA_PROBE_HEARTBEAT_ENV is retired."""
     violations: dict[str, list[str]] = {}
     env_tier_seen = 0
     for name, k in sorted(keys_map.items()):
@@ -1202,7 +1209,7 @@ def g2_violations(keys_map: dict[str, envinv.K]) -> dict[str, list[str]]:
             for o in k.occ
             if o.scope == "prod"
             and o.role == "read"
-            and envinv.base_layer(o.layer) == "compose-interp"
+            and _is_deployed_site(o)
             and o.has_default
             and _is_failopen_env_default(o.default)
         ]
@@ -1224,7 +1231,7 @@ def g2_violations(keys_map: dict[str, envinv.K]) -> dict[str, list[str]]:
 def g3_violations(
     keys_map: dict[str, envinv.K], docs_only: dict[str, list[str]]
 ) -> dict[str, object]:
-    """G3: No unread compose/workflow write, dead manifest entry, stale .env.example entry, hardcoded secret literal/default, or phantom SSOT token."""
+    """G3: No unread write, conflicting/copied defaults, dead manifest entry, stale .env.example entry, hardcoded secret literal/default, or phantom SSOT token."""
     violations: dict[str, object] = {}
     if not keys_map or not any(
         k.info.get("w_layers") for k in keys_map.values() if isinstance(k.info, dict)
@@ -1235,15 +1242,10 @@ def g3_violations(
         for k in keys_map.values()
         if "WRITE_NO_READER" in k.flags
         and (
-            {"compose", "workflow-env"}
-            & set((k.info.get("w_layers") or ()) if isinstance(k.info, dict) else ())
-        )
-        and (
             not k.occ
             or any(
                 o.scope == "prod"
                 and o.role == "write"
-                and o.layer in ("compose", "workflow-env")
                 and not envinv.CI_FILE.search(o.path)
                 for o in k.occ
             )
@@ -1252,6 +1254,8 @@ def g3_violations(
     if dead_writes:
         violations["WRITE_NO_READER"] = dead_writes
     for flag in (
+        "DEFAULT_CONFLICT",
+        "DEFAULT_COPIED",
         "DEAD_MANIFEST_ENTRY",
         "STALE_ENV_EXAMPLE",
         "SECRET_LITERAL",
@@ -1401,6 +1405,68 @@ def test_g2_mutation_rejects_failopen_env_default_and_retired_heartbeat_env():
         }
     )
     assert "ENV" in v and "INFRA_ENVIRONMENT" in v and "INFRA_PROBE_HEARTBEAT_ENV" in v
+
+
+def test_placeholder_regex_and_expanded_g2_g3_mutations():
+    for leaked in (
+        "admin-s3cr3t9fQ",
+        "postgres8xKd02",
+        "testA1b2C3d4E5",
+        "local-prod-key-7d1a",
+        "dummy-12345678",
+    ):
+        assert not envinv.PLACEHOLDER.match(leaked), leaked
+    for valid_placeholder in (
+        "dummy-op-connect-token",
+        "ci-placeholder-do-not-use-in-production",
+        "changeme",
+        "postgres",
+        "minioadmin",
+        "${SECRET_REF}",
+    ):
+        assert envinv.PLACEHOLDER.match(valid_placeholder), valid_placeholder
+
+    py_failopen_env = envinv.K(
+        key="ENV",
+        occ=[
+            envinv.Occ(
+                key="ENV",
+                role="read",
+                layer="py-env-read",
+                repo="infra2",
+                path="libs/deploy/sync_pipeline.py",
+                line=164,
+                scope="prod",
+                default="production",
+                has_default=True,
+                required=False,
+            )
+        ],
+    )
+    assert "ENV" in g2_violations({"ENV": py_failopen_env})
+
+    py_dead_write = envinv.K(
+        key="INFRA_COMPONENT",
+        flags=["WRITE_NO_READER"],
+        info={"w_layers": ["py-deploy-env"]},
+    )
+    conflict_k = envinv.K(
+        key="DEPLOY_TIMEOUT",
+        flags=["DEFAULT_CONFLICT"],
+        info={"w_layers": ["compose"]},
+    )
+    copied_k = envinv.K(
+        key="GIT_BRANCH",
+        flags=["DEFAULT_COPIED"],
+        info={"w_layers": ["compose"]},
+    )
+    g3 = g3_violations(
+        {k.key: k for k in (py_dead_write, conflict_k, copied_k)},
+        {},
+    )
+    assert g3["WRITE_NO_READER"] == ["INFRA_COMPONENT"]
+    assert g3["DEFAULT_CONFLICT"] == ["DEPLOY_TIMEOUT"]
+    assert g3["DEFAULT_COPIED"] == ["GIT_BRANCH"]
 
 
 def test_g3_mutation_rejects_dead_writes_and_stale_declarations_and_doc_only():

@@ -22,8 +22,8 @@ logger = logging.getLogger(__name__)
 
 WORKSPACE = Path("/workspace")
 GIT_REPO_URL = os.environ["GIT_REPO_URL"]
-GIT_BRANCH = os.environ.get("GIT_BRANCH", "main")
-DEPLOY_TIMEOUT = int(os.environ.get("DEPLOY_TIMEOUT", "600"))
+GIT_BRANCH = os.environ.get("GIT_BRANCH") or "main"
+DEPLOY_TIMEOUT = int(os.environ.get("DEPLOY_TIMEOUT") or "900")
 MAX_RESULT_OUTPUT_CHARS = int(os.environ.get("MAX_RESULT_OUTPUT_CHARS", "4000"))
 EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 

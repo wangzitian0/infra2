@@ -18,7 +18,13 @@ import os
 
 from libs.core.environ import EnvironmentNotSetError, normalize_env_name
 
-__all__ = ["PROBE_ENVIRONMENT_VARIABLES", "resolve_probe_environment"]
+DEFAULT_ALERTING_ENV_FILE = "/secrets/.env"
+
+__all__ = [
+    "DEFAULT_ALERTING_ENV_FILE",
+    "PROBE_ENVIRONMENT_VARIABLES",
+    "resolve_probe_environment",
+]
 
 # The variables that choose the environment, in precedence order. The first variable
 # with a non-blank value decides. Real deployments set these:

@@ -93,9 +93,6 @@ class ServiceIdentity:
             "INFRA_IDENTITY_SCHEMA": IDENTITY_SCHEMA_VERSION,
             "INFRA_MANAGED_BY": MANAGED_BY,
             "INFRA_SERVICE_ID": self.service_id,
-            "INFRA_SERVICE_NAMESPACE": self.namespace,
-            "INFRA_SERVICE_NAME": self.service_name,
-            "INFRA_COMPONENT": self.component,
             "INFRA_ENVIRONMENT": self.environment,
         }
         if self.version:

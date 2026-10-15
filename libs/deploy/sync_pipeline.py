@@ -161,7 +161,7 @@ class SyncPipeline:
         e = deployer.env()
         self.ctx.env = e
 
-        if deployer.prod_only and e.get("ENV", "production") != "production":
+        if deployer.prod_only and e.get("ENV") != "production":
             log.log_info(
                 f"{deployer.service} is prod-only; skipping {e.get('ENV')} sync"
             )
@@ -289,7 +289,7 @@ class SyncPipeline:
 
         runtime_identity = ServiceIdentity.build(
             service_id,
-            e.get("ENV", "production"),
+            str(e.get("ENV") or ""),
             component=deployer.service,
             service_name=deployer.telemetry_service_name or deployer.service,
             version=deploy_ref,
@@ -419,7 +419,7 @@ class SyncPipeline:
         if deployer.telemetry_service_name:
             telemetry_identity = ServiceIdentity.build(
                 self.ctx.service_id,
-                e.get("ENV", "production"),
+                str(e.get("ENV") or ""),
                 component=deployer.telemetry_component or deployer.service,
                 service_name=deployer.telemetry_service_name,
                 version=deploy_ref,

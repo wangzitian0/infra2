@@ -178,7 +178,7 @@ class AppDeployer(Deployer):
         # Analytics no-op. #372: the map is the single source in tools.openpanel_clients
         # so the live deploy_v2 path (libs/deploy/promote) injects the same values
         # — this legacy pre_compose path no longer owns a duplicate literal.
-        env_vars.update(openpanel_env(env_vars.get("ENV", "production")))
+        env_vars.update(openpanel_env(str(env_vars.get("ENV") or "")))
 
         return env_vars
 
