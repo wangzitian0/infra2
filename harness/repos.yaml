@@ -64,6 +64,11 @@ repositories:
     contract: snapshot
     source: https://github.com/wangzitian0/finance_report
     release_identity: app-image-ref-or-digest
+    # Public health endpoints. `harness status --online` reads the served release from
+    # `version`, else `git_sha`, of each JSON body. Keys: staging, production.
+    health:
+      staging: https://report-staging.zitian.party/api/health
+      production: https://report.zitian.party/api/health
     authority:
       - AGENTS.md
       - README.md
@@ -79,6 +84,10 @@ repositories:
     contract: snapshot
     source: https://github.com/wangzitian0/truealpha
     release_identity: app-image-ref-or-digest
+    # The production host is the bare product domain (Deployer.domain of truealpha/app).
+    health:
+      staging: https://truealpha-staging.truealpha.club/api/health
+      production: https://truealpha.club/api/health
     authority:
       - AGENTS.md
       - init.md
