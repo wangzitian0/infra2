@@ -58,6 +58,9 @@ SKIP_NAMES = {
     "bun.lock",
     "bun.lockb",
 }
+# `run` scans infra2's copies of the App manifests under the App's name (see
+# contracts/apps.lock.json), so the scan of infra2 itself skips them.
+VENDORED_CONTRACTS = "contracts/"
 MAX_BYTES = 1_500_000
 
 ENV_MAP_NAMES = {
@@ -2626,7 +2629,11 @@ def scan_docs(inv: Inventory, repo: str, path: str, text: str) -> None:
 # driver
 # ---------------------------------------------------------------------------------------------
 def scan_repo(inv: Inventory, repo: str, root: Path) -> None:
-    files = list_files(root)
+    files = [
+        f
+        for f in list_files(root)
+        if not (repo == "infra2" and f.startswith(VENDORED_CONTRACTS))
+    ]
     consts = build_consts(repo, root, files)
     for f in files:
         kind = route(f)

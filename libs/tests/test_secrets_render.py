@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -105,82 +104,6 @@ def test_every_generated_service_fails_the_render_on_a_missing_required_key() ->
             encoding="utf-8"
         )
         assert "error_on_missing_key = true" in agent, service.directory
-
-
-def test_fetch_app_manifests_reads_the_pinned_commit_and_only_fills_gaps(
-    tmp_path: Path,
-) -> None:
-    from tools import fetch_app_manifests
-
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
-    subprocess.run(
-        ["git", "-C", str(tmp_path), "config", "user.email", "t@example"], check=True
-    )
-    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True)
-    sha = "0123456789abcdef0123456789abcdef01234567"
-    subprocess.run(
-        [
-            "git",
-            "-C",
-            str(tmp_path),
-            "update-index",
-            "--add",
-            "--cacheinfo",
-            f"160000,{sha},repos/truealpha",
-        ],
-        check=True,
-    )
-    subprocess.run(
-        ["git", "-C", str(tmp_path), "commit", "-q", "-m", "pin"], check=True
-    )
-    # A loose file under the gitlink path is not a checkout (#1109): the iac-runner
-    # held such copies from 2026-09-08 and read them after the pin moved.
-    (tmp_path / "repos/truealpha/loose.json").parent.mkdir(parents=True)
-    (tmp_path / "repos/truealpha/loose.json").write_text("{}", encoding="utf-8")
-    urls: list[str] = []
-
-    def fake(url: str) -> bytes:
-        urls.append(url)
-        return b'{"contract_version": 2}'
-
-    paths = [
-        "repos/truealpha/loose.json",
-        "repos/truealpha/apps/x/required-env.generated.json",
-        "platform/x.json",
-    ]
-    fetched = fetch_app_manifests.fetch_missing(paths, root=tmp_path, fetch=fake)
-    assert fetched == [
-        f"repos/truealpha/loose.json @ {sha[:7]}",
-        f"repos/truealpha/apps/x/required-env.generated.json @ {sha[:7]}",
-    ]
-    assert urls == [
-        f"https://raw.githubusercontent.com/wangzitian0/truealpha/{sha}/loose.json",
-        f"https://raw.githubusercontent.com/wangzitian0/truealpha/{sha}/apps/x/required-env.generated.json",
-    ]
-    cached = (
-        tmp_path
-        / f".cache/app-manifests/{sha}/repos/truealpha/apps/x/required-env.generated.json"
-    )
-    assert cached.read_text() == '{"contract_version": 2}'
-    assert not (
-        tmp_path / "repos/truealpha/apps/x"
-    ).exists()  # never inside the gitlink path
-    # a second pass is a no-op: the pinned cache counts as present
-    assert fetch_app_manifests.fetch_missing(paths, root=tmp_path, fetch=fake) == []
-    # a real checkout (its own .git) is the source for what it holds: nothing fetched
-    (tmp_path / "repos/truealpha/.git").write_text("gitdir: x", encoding="utf-8")
-    assert (
-        fetch_app_manifests.fetch_missing(
-            ["repos/truealpha/loose.json"], root=tmp_path, fetch=fake
-        )
-        == []
-    )
-    # ...and a file the checkout lacks is still fetched at the pin
-    assert fetch_app_manifests.fetch_missing(
-        ["repos/truealpha/apps/y/required-env.generated.json"],
-        root=tmp_path,
-        fetch=fake,
-    ) == [f"repos/truealpha/apps/y/required-env.generated.json @ {sha[:7]}"]
 
 
 def test_optional_keys_never_use_a_direct_map_access() -> None:

@@ -1298,6 +1298,17 @@ def test_g3_no_dead_writes_or_stale_declarations_or_phantom_ssot_names(repo_scan
     assert g3_violations(keys_map, docs_only) == {}
 
 
+def test_the_app_manifests_are_counted_once_under_the_app_name(repo_scan):
+    """The infra2 scan skips contracts/: `run` files the copies under their Apps (#1258)."""
+    occ = repo_scan[0].occ
+
+    assert not [
+        o for o in occ if o.repo == "infra2" and o.path.startswith("contracts/")
+    ]
+    declared = {o.repo for o in occ if o.layer == "manifest" and o.repo != "infra2"}
+    assert declared == {"finance_report", "truealpha"}
+
+
 def test_g1_mutation_rejects_undeclared_compose_or_ctmpl_or_unrendered_store_key():
     assert "_EMPTY_ROWS" in g1_violations([])
     clean_row = {

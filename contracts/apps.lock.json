@@ -1,0 +1,42 @@
+{
+  "apps": {
+    "finance_report": {
+      "commit": "c3fde3596416c622af66c7202ef7ed2203bcf9a1",
+      "repository": "wangzitian0/finance_report",
+      "tag": null
+    },
+    "truealpha": {
+      "commit": "0203431d89ff60d050075712f70e889061e79799",
+      "repository": "wangzitian0/truealpha",
+      "tag": null
+    }
+  },
+  "files": [
+    {
+      "app": "finance_report",
+      "path": "contracts/finance_report/required-env.generated.json",
+      "sha256": "56bf868c914370f5d686f2b7a2d16c17a6430257840f5c98f279a3a36e11f026",
+      "upstream": "common/runtime/required-env.generated.json"
+    },
+    {
+      "app": "truealpha",
+      "path": "contracts/truealpha/app-web.required-env.manifest.json",
+      "sha256": "aac3e60b13ede883bdb819725901bd7f83324387498d2635897dfaa6b431de5f",
+      "upstream": "apps/app-web/required-env.manifest.json"
+    },
+    {
+      "app": "truealpha",
+      "path": "contracts/truealpha/data-engine.required-env.generated.json",
+      "sha256": "13487fd1fd4dc3165a7ffe0922a562b252b33f2a33f40765332be1d2b9f4c5be",
+      "upstream": "apps/data-engine/required-env.generated.json"
+    },
+    {
+      "app": "truealpha",
+      "path": "contracts/truealpha/llm-service.required-env.generated.json",
+      "sha256": "67082dd430f25d7e515c0d48b57328dc94f21a93987f8ca42aaaa3025f249f72",
+      "upstream": "apps/llm-service/required-env.generated.json"
+    }
+  ],
+  "generated_by": "tools/fetch_app_manifests.py --sync",
+  "lock_version": 1
+}
