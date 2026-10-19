@@ -40,7 +40,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github/workflows"
 # Provided by the checkout, not by pip.
-REPO_PACKAGES = ("libs", "tools", "finance_report", "truealpha")
+REPO_PACKAGES = ("common", "libs", "tools", "finance_report", "truealpha")
 # The module `python -m invoke` imports from the repo root (see `_entry_modules`).
 INVOKE_ENTRY = "tasks"
 

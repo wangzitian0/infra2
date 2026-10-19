@@ -1,12 +1,13 @@
-"""Infra2 Core Domain Package."""
+"""Infra2 Core Domain Package (re-exports from canonical ``common`` package, #1270)."""
 
 from __future__ import annotations
 
-from libs.core.constants import (
+from common import (
     DEPLOYMENT_ENV_PREVIEW,
     DEPLOYMENT_ENV_PRODUCTION,
     DEPLOYMENT_ENV_STAGING,
     DOCKER_LABEL_PREFIX,
+    DeploymentEnvironment,
     IDENTITY_SCHEMA_VERSION,
     MANAGED_BY,
     PREVIEW,
@@ -14,9 +15,6 @@ from libs.core.constants import (
     REPO_ROOT,
     STAGING,
     STATEFUL_DEPLOY_ENVIRONMENTS,
-)
-from libs.core.environ import (
-    DeploymentEnvironment,
     get_environment,
     with_env_suffix,
 )
