@@ -9,11 +9,14 @@ import pytest
 from tools.ci_runner import (
     DUMMY_COMPOSE_ENV,
     GATES,
+    _default_pytest_workers,
+    _resolve_changed_test_targets,
     main,
     run_compose,
     run_deployers,
     run_harness,
     run_preflight,
+    run_unit_tests,
     run_vault,
 )
 
@@ -64,6 +67,7 @@ def test_ci_runner_cli_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert exc_info.value.code == 0
     captured = capsys.readouterr()
     assert "Unified SSOT runner for CI gate checks" in captured.out
+    assert "--changed" in captured.out
 
 
 def test_ci_runner_cli_unknown_target() -> None:
@@ -146,7 +150,6 @@ def test_ci_runner_unit_tests_timeout_fails(
 ) -> None:
     # Falsifiability test: run_unit_tests handles TimeoutExpired gracefully
     import subprocess
-    from tools.ci_runner import run_unit_tests
 
     def mock_run_cmd(*args: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
         if "pytest" in args[0]:
@@ -158,3 +161,56 @@ def test_ci_runner_unit_tests_timeout_fails(
     assert ret == 1
     captured = capsys.readouterr()
     assert "timed out after 0.01s" in captured.out
+
+
+def test_resolve_changed_test_targets_maps_source_and_service_paths() -> None:
+    targets = _resolve_changed_test_targets(
+        [
+            "tools/ci_runner.py",
+            "truealpha/truealpha/20.data_engine/compose.yaml",
+            "docs/project/README.md",
+        ]
+    )
+    assert "libs/tests/test_ci_runner.py" in targets
+    assert "libs/tests/test_truealpha_data_engine.py" in targets
+    assert "libs/tests/test_deployer_contract_light.py" in targets
+    assert _resolve_changed_test_targets(["docs/project/README.md"]) == []
+
+
+def test_default_pytest_workers_caps_local_and_uses_auto_in_ci(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("CI", "true")
+    assert _default_pytest_workers() == "auto"
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr("os.cpu_count", lambda: 14)
+    assert _default_pytest_workers() == "4"
+
+    monkeypatch.setattr("os.cpu_count", lambda: 2)
+    assert _default_pytest_workers() == "2"
+
+
+def test_run_unit_tests_changed_only_executes_fail_fast_subset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+
+    recorded_cmds: list[list[str]] = []
+
+    def mock_run_cmd(cmd: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        recorded_cmds.append(list(cmd))
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    monkeypatch.setattr("tools.ci_runner._run_cmd", mock_run_cmd)
+    monkeypatch.setattr(
+        "tools.ci_runner._resolve_changed_test_targets",
+        lambda: ["libs/tests/test_ci_runner.py"],
+    )
+    ret = main(["unit-tests", "--changed"])
+    assert ret == 0
+    pytest_cmds = [cmd for cmd in recorded_cmds if "pytest" in cmd]
+    assert len(pytest_cmds) == 1
+    assert "libs/tests/test_ci_runner.py" in pytest_cmds[0]
+    assert "-x" in pytest_cmds[0]
+    assert "-n" not in pytest_cmds[0]
