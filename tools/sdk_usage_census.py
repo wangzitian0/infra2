@@ -177,6 +177,16 @@ def module_name(path: Path, pkg_root: Path) -> str:
     return ".".join(parts)
 
 
+def _is_overload_stub(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Return True when a function definition is decorated with @overload or @typing.overload."""
+    for dec in node.decorator_list:
+        if isinstance(dec, ast.Name) and dec.id == "overload":
+            return True
+        if isinstance(dec, ast.Attribute) and dec.attr == "overload":
+            return True
+    return False
+
+
 def public_defs(pkg_root: Path) -> list[dict[str, Any]]:
     """Collect public module-level functions, classes, and constants in infra2_sdk."""
     defs: list[dict[str, Any]] = []
@@ -208,6 +218,8 @@ def public_defs(pkg_root: Path) -> list[dict[str, Any]]:
             kind: str | None = None
             name: str | None = None
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                if _is_overload_stub(node):
+                    continue
                 kind, name = "function", node.name
             elif isinstance(node, ast.ClassDef):
                 kind, name = "class", node.name
