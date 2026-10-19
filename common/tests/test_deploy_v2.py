@@ -20,20 +20,20 @@ from dataclasses import dataclass
 import httpx
 import pytest
 
-import tools.deploy_v2 as dv2
+import common.deploy.v2 as dv2
 from common.deploy.iac_runner_client import (
     RunnerLostDeploymentError,
     status_poll_attempts,
     status_poll_delays,
 )
-from tools.deploy_v2 import (
+from common.deploy.refs import ResolvedRef, classify_ref
+from common.deploy.v2 import (
     DeployV2Result,
     assert_iac_ref_on_main,
     deploy_v2,
     enforce_data_lane_red_lines,
     resolve_data_lane,
 )
-from tools.resolve_deploy_ref import ResolvedRef, classify_ref
 
 SHA_CODE = "c" * 40
 SHA_IAC = "d" * 40
@@ -895,7 +895,7 @@ def test_enforce_data_lane_snapshot_freshness_warning(monkeypatch, tmp_path, cap
     import logging
     from datetime import datetime, timezone, timedelta
     from common.deploy.contract import make_deploy_target
-    import tools.deploy_v2 as dv2_mod
+    import common.deploy.v2 as dv2_mod
 
     old_time = (datetime.now(timezone.utc) - timedelta(days=8)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"

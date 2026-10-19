@@ -2705,7 +2705,7 @@ def scan_repo(inv: Inventory, repo: str, root: Path) -> None:
 
 
 DEPLOY_CODE = re.compile(
-    r"(^|/)(common/deploy/|tools/_lib/dev/pr_preview_lifecycle/|common/core/environ\.py|common/core/service_identity\.py|bootstrap/[^/]+/(sync_runner|tasks)\.py|platform/[^/]+/deploy\.py|"
+    r"(^|/)(common/deploy/|common/runtime/dev/pr_preview_lifecycle/|common/core/environ\.py|common/core/service_identity\.py|bootstrap/[^/]+/(sync_runner|tasks)\.py|platform/[^/]+/deploy\.py|"
     r"[^/]*/[^/]*/[^/]+/deploy\.py|shared_tasks\.py|tools/deploy_v2[a-z_]*\.py|common/security/)"
 )
 

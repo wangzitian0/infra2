@@ -3,12 +3,7 @@
 
 from __future__ import annotations
 
-import sys
-
-from common.deploy import v2 as _v2
-from common.deploy.v2 import *  # noqa: F401,F403
+from common.deploy.v2 import main
 
 if __name__ == "__main__":
-    raise SystemExit(_v2.main())
-else:
-    sys.modules[__name__] = _v2
+    raise SystemExit(main())

@@ -16,12 +16,11 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from infra2_sdk.refs import ReleaseError, resolve_image_digest
+from infra2_sdk.refs import ReleaseError, assert_after_on_main, resolve_image_digest
 from infra2_sdk.secrets import vault_token_status
 
 from common.core.constants import REPO_ROOT
 from common.deploy.contract import DeployTarget, is_tag_only_iac_env
-from common.deploy.git_provenance import assert_after_on_main
 from common.deploy.env_config import env_config
 
 _INFRA2_REPO = "https://github.com/wangzitian0/infra2"
@@ -310,7 +309,7 @@ def _wait_for_image_dependencies(
             "image poll interval must be positive when image wait is enabled"
         )
 
-    mod = sys.modules.get("tools.deploy_v2")
+    mod = sys.modules.get("common.deploy.v2")
     manifest_exists_fn = (
         getattr(mod, "_image_manifest_exists", _image_manifest_exists)
         if mod
@@ -370,7 +369,7 @@ def enforce_data_lane_red_lines(
             f"got code_reviewed={code_reviewed!r}"
         )
     if target.service == "finance_report/app" and target.env in ("staging", "prod"):
-        mod = sys.modules.get("tools.deploy_v2")
+        mod = sys.modules.get("common.deploy.v2")
         path_cls = getattr(mod, "Path", Path) if mod else Path
         manifest_path = path_cls("/data/backups/anonymized/manifest.json")
         if manifest_path.exists():

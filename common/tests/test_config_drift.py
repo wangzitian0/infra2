@@ -7,7 +7,6 @@ tested offline here.
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 
 from common.deploy.deployer import config_hash_from_items
@@ -45,15 +44,9 @@ def test_config_hash_is_pure_and_path_independent() -> None:
 
 
 def _drift_mod():
-    spec = importlib.util.spec_from_file_location(
-        "dokploy_config_drift", ROOT / "tools/dokploy_config_drift.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    import sys
+    from common.deploy import config_drift
 
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return config_drift
 
 
 def test_format_report_flags_drift_and_confirms_in_sync() -> None:

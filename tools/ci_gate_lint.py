@@ -15,8 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from common.core import ci_spec
-from common.core.ci_spec import (
+from infra2_sdk import ci as ci_spec
+from infra2_sdk.ci import (
     BANNED_IN_GATE_PATTERNS,
     SHARD_MAX,
     SHARD_MIN,

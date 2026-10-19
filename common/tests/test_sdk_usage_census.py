@@ -577,6 +577,29 @@ def test_m5_mutation_fails_on_hardcoded_service_name_collection_dict_lookup_and_
     assert any("M5:" in f and "hardcoded SERVICE_NAME/OTEL" in f for f in failures)
 
 
+def test_m4_mutation_fails_on_pure_reexport_shim_in_common(
+    synthetic_workspace: tuple[Path, dict[str, Path]],
+) -> None:
+    pkg_root, consumers = synthetic_workspace
+    _write(
+        consumers["consumer_a"],
+        "common/deploy/git_provenance.py",
+        f"""
+        from __future__ import annotations
+        from {PKG_UNDER}.alpha import used_in_prod
+
+        __all__ = ["used_in_prod"]
+        """,
+    )
+    report = census.run_census(pkg_root=pkg_root, consumers=consumers)
+    m4 = report["metrics"]["M4"]
+    assert m4["total_violations"] == 1
+    assert m4["violations"][0]["name"] == "pure_reexport_shim"
+    assert m4["violations"][0]["site"] == "consumer_a:common/deploy/git_provenance.py:1"
+    failures = census.evaluate_checks(report)
+    assert any("M4:" in f and "pure_reexport_shim" in f for f in failures)
+
+
 def test_m6_mutation_fails_when_tools_script_imports_from_tools(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
@@ -598,6 +621,44 @@ def test_m6_mutation_fails_when_tools_script_imports_from_tools(
     assert m6["total_violations"] == 2
     failures = census.evaluate_checks(report)
     assert any("M6:" in f and "tools.cli_b" in f for f in failures)
+
+
+def test_m6_mutation_fails_on_wildcard_reexport_sys_modules_hijack_and_reverse_common_to_tools(
+    synthetic_workspace: tuple[Path, dict[str, Path]],
+) -> None:
+    pkg_root, consumers = synthetic_workspace
+    _write(
+        consumers["consumer_a"],
+        "tools/hijack_cli.py",
+        """
+        import sys
+        from .local_helper import run
+        from common.deploy import v2 as _v2
+        from common.deploy.v2 import *
+
+        if __name__ == "__main__":
+            raise SystemExit(_v2.main())
+        else:
+            sys.modules[__name__] = _v2
+        """,
+    )
+    _write(
+        consumers["consumer_b"],
+        "common/deploy/bad_reverse.py",
+        """
+        from tools import deploy_v2
+        """,
+    )
+    report = census.run_census(pkg_root=pkg_root, consumers=consumers)
+    m6 = report["metrics"]["M6"]
+    assert m6["passed"] is False
+    imported = {v["import"] for v in m6["violations"]}
+    assert ".local_helper" in imported
+    assert "common.deploy.v2.*" in imported
+    assert "sys.modules[__name__]" in imported
+    assert "tools" in imported
+    failures = census.evaluate_checks(report)
+    assert any("M6:" in f for f in failures)
 
 
 def test_cli_invalid_repo_or_sdk_src_exits_with_code_2(tmp_path: Path) -> None:

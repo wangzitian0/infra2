@@ -296,10 +296,10 @@ def test_marker_round_trips_and_a_forged_or_torn_one_is_rejected() -> None:
 def test_facet_keys_ignore_ids_hashes_and_notes(monkeypatch) -> None:
     """compose-id / config-hash / dns findings carry live ids and hashes: a key built
     from them would be a new identity every time the reading moved."""
+    import common.deploy.compose_id_drift as compose
+    import common.deploy.config_drift as config
+    import common.deploy.dns_drift as dns
     import common.deploy.dokploy_client
-    import tools.app_compose_id_drift as compose
-    import tools.dokploy_config_drift as config
-    import tools.dns_drift_report as dns
     from tools import facet_reconcile as fr
 
     def keys(live_id: str, deployed: str, note: str) -> list[str]:

@@ -17,8 +17,8 @@ from pathlib import Path
 
 import pytest
 
-from tools import env_inventory as envinv
-from tools import env_inventory as envreport
+from common.core import env_inventory as envinv
+from common.core import env_inventory as envreport
 
 
 def w(root: Path, rel: str, body: str) -> None:
