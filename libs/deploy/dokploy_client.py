@@ -518,14 +518,21 @@ class DokployClient:
         return compose.get("env") or ""
 
     def update_compose_env(
-        self, compose_id: str, env_vars: dict[str, str] = None, env_str: str = None
+        self,
+        compose_id: str,
+        env_vars: dict[str, str] = None,
+        env_str: str = None,
+        *,
+        replace: bool = False,
     ) -> dict:
-        """Update environment variables for a compose service
+        """Update environment variables for a compose service.
 
         Args:
             compose_id: ID of the compose application
-            env_vars: Dict of key-value pairs (will be merged with existing)
-            env_str: Raw env string (will replace existing if provided)
+            env_vars: Dict of key-value pairs
+            env_str: Raw env string (replaces existing if provided)
+            replace: When True, replace existing env wholesale with env_vars while
+                preserving RUNTIME_ENV_KEYS_TO_PRESERVE from existing env.
         Note:
             This parser expects simple KEY=VALUE lines and does not handle quoted,
             escaped, or multiline values.
@@ -540,26 +547,33 @@ class DokployClient:
             not cover.
         """
         from libs.deploy.compose_lock import compose_write_lock
+        from libs.deploy.env_util import _preserve_runtime_env
 
         with compose_write_lock(compose_id):
             if env_str is None:
-                # Merge with existing
                 existing_env = self.get_compose_env(compose_id)
-                env_dict = {}
+                if replace:
+                    desired_str = "\n".join(
+                        f"{k}={v}" for k, v in (env_vars or {}).items()
+                    )
+                    env_str = _preserve_runtime_env(desired_str, existing_env)
+                else:
+                    # Merge with existing
+                    env_dict = {}
 
-                # Parse existing
-                for line in existing_env.split("\n"):
-                    line = line.strip()
-                    if line and "=" in line and not line.startswith("#"):
-                        key, value = line.split("=", 1)
-                        env_dict[key] = value
+                    # Parse existing
+                    for line in existing_env.split("\n"):
+                        line = line.strip()
+                        if line and "=" in line and not line.startswith("#"):
+                            key, value = line.split("=", 1)
+                            env_dict[key] = value
 
-                # Update with new values
-                if env_vars:
-                    env_dict.update(env_vars)
+                    # Update with new values
+                    if env_vars:
+                        env_dict.update(env_vars)
 
-                # Convert back to string
-                env_str = "\n".join(f"{k}={v}" for k, v in env_dict.items())
+                    # Convert back to string
+                    env_str = "\n".join(f"{k}={v}" for k, v in env_dict.items())
 
             return self.update_compose(compose_id, env=env_str)
 

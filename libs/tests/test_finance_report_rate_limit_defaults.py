@@ -54,3 +54,30 @@ def test_rate_limit_is_deployment_configuration_not_a_vault_value() -> None:
     """The generated template renders human / runtime values only; a rate limit is neither."""
     template = TEMPLATE.read_text(encoding="utf-8")
     assert "API_RATE_LIMIT_REQUESTS" not in template
+
+
+def test_finance_report_compose_env_base_merges_overrides() -> None:
+    """#1279: AppDeployer.compose_env_base must forward to compose_env_overrides so
+    the sync path and promote path produce consistent staging overrides."""
+    deployer = _deployer()
+    staging_base = deployer.compose_env_base(
+        {
+            "ENV": "staging",
+            "INTERNAL_DOMAIN": "zitian.party",
+            "ENV_DOMAIN_SUFFIX": "-staging",
+            "ENV_SUFFIX": "-staging",
+        }
+    )
+    assert staging_base["S3_BUCKET"] == "finance-report-staging"
+    assert staging_base["S3_PUBLIC_BUCKET"] == "finance-report-staging"
+    assert staging_base["API_RATE_LIMIT_REQUESTS"] == "2000"
+
+    prod_base = deployer.compose_env_base(
+        {
+            "ENV": "production",
+            "INTERNAL_DOMAIN": "zitian.party",
+            "ENV_DOMAIN_SUFFIX": "",
+        }
+    )
+    assert "S3_BUCKET" not in prod_base
+    assert "API_RATE_LIMIT_REQUESTS" not in prod_base

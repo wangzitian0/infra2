@@ -98,7 +98,9 @@ class ConvergenceFakeDokploy:
     def update_compose(self, compose_id, **kwargs):
         return {}
 
-    def update_compose_env(self, compose_id, env_vars=None, env_str=None):
+    def update_compose_env(
+        self, compose_id, env_vars=None, env_str=None, *, replace=False
+    ):
         return {}
 
     def deploy_compose(self, compose_id):

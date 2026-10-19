@@ -223,16 +223,23 @@ def _load_deploy_module(relative_path: str, module_name: str):
 
 
 def test_preserve_runtime_env_keeps_existing_approle_creds() -> None:
-    """Infra-011.3 / #369: AppRole creds (VAULT_ROLE_ID / VAULT_SECRET_ID) injected
-    out-of-band must survive a redeploy that regenerates the git-derived env, or the
-    migrated vault-agent loses them and crash-loops. The legacy static VAULT_APP_TOKEN
-    is no longer preserved (it is cleaned up on the next redeploy)."""
-    from libs.deploy.deployer import _preserve_runtime_env
+    """Infra-011.3 / #369 / #1279: AppRole creds (VAULT_ROLE_ID / VAULT_SECRET_ID /
+    VAULT_ADDR) injected out-of-band must survive a redeploy that regenerates the
+    git-derived env, or the migrated vault-agent loses them and crash-loops. Empty
+    placeholders in desired env must not clobber existing runtime values. The legacy
+    static VAULT_APP_TOKEN is no longer preserved."""
+    from libs.deploy.deployer import RUNTIME_ENV_KEYS_TO_PRESERVE, _preserve_runtime_env
+
+    assert RUNTIME_ENV_KEYS_TO_PRESERVE == (
+        "VAULT_ROLE_ID",
+        "VAULT_SECRET_ID",
+        "VAULT_ADDR",
+    )
 
     result = _preserve_runtime_env(
-        "ENV=production\nINTERNAL_DOMAIN=zitian.party",
+        "ENV=production\nINTERNAL_DOMAIN=zitian.party\nVAULT_ROLE_ID=",
         "ENV=old\nVAULT_ROLE_ID=role-abc\nVAULT_SECRET_ID=secret-xyz\n"
-        "VAULT_APP_TOKEN=hvs.legacy\nSTALE=value",
+        "VAULT_ADDR=https://vault.zitian.party\nVAULT_APP_TOKEN=hvs.legacy\nSTALE=value",
     )
 
     assert result.splitlines() == [
@@ -240,8 +247,36 @@ def test_preserve_runtime_env_keeps_existing_approle_creds() -> None:
         "INTERNAL_DOMAIN=zitian.party",
         "VAULT_ROLE_ID=role-abc",
         "VAULT_SECRET_ID=secret-xyz",
+        "VAULT_ADDR=https://vault.zitian.party",
     ]
     assert "VAULT_APP_TOKEN" not in result
+
+
+def test_deployer_methods_fail_closed_when_env_key_missing(monkeypatch) -> None:
+    """#1279: Deployer methods must raise EnvironmentNotSetError instead of defaulting
+    to production when the env mapping omits ENV."""
+    from common.environ import EnvironmentNotSetError
+    from libs.deploy.deployer import Deployer
+
+    class DummyDeployer(Deployer):
+        service = "demo"
+        data_path = "/data/demo"
+
+        @classmethod
+        def env(cls):
+            return {"INTERNAL_DOMAIN": "zitian.party"}
+
+    with pytest.raises(EnvironmentNotSetError):
+        DummyDeployer.data_path_for_env({"INTERNAL_DOMAIN": "zitian.party"})
+
+    with pytest.raises(EnvironmentNotSetError):
+        DummyDeployer.compose_env_base({"INTERNAL_DOMAIN": "zitian.party"})
+
+    with pytest.raises(EnvironmentNotSetError):
+        DummyDeployer.secrets_backend()
+
+    with pytest.raises(EnvironmentNotSetError):
+        DummyDeployer.composing(MagicMock(), {"INTERNAL_DOMAIN": "zitian.party"})
 
 
 def test_parse_env_text_ignores_comments_blanks_and_malformed_lines() -> None:
@@ -1640,7 +1675,7 @@ def test_composing_ensures_domains_before_single_deploy(monkeypatch):
 
         @classmethod
         def env(cls):
-            return {"INTERNAL_DOMAIN": "test.party"}
+            return {"ENV": "production", "INTERNAL_DOMAIN": "test.party"}
 
         @classmethod
         def _assert_approle_creds_present(cls, env):

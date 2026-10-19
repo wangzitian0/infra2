@@ -18,6 +18,7 @@ effective-config verification.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -27,6 +28,7 @@ from libs.deploy.compose_lock import compose_write_lock
 from libs.deploy.console import warning
 from libs.deploy import schema_gate
 from libs.deploy.env_config import app_compose_env_config, otel_env
+from libs.deploy.env_util import RUNTIME_ENV_KEYS_TO_PRESERVE, _parse_env_text
 from libs.deploy.queue import deployment_start_epoch
 from libs.core import REPO_ROOT
 from libs.deploy.failure_snapshot import emit_failure_snapshot
@@ -142,9 +144,9 @@ def assert_approle_creds_present(service: str, client, compose_id: str) -> None:
     and libs.deploy.preview's own copy. This promote path (what deploy_v2 actually
     routes every app staging/prod deploy through) never carried it over, so a fixed
     compose missing AppRole creds deployed a crash-looping vault-agent with no
-    preflight signal. update_compose_env merges into the EXISTING compose env and this
-    function's caller never sets these keys, so reading the compose's current env here
-    reflects exactly what will still be true after this deploy.
+    preflight signal. update_compose_env preserves RUNTIME_ENV_KEYS_TO_PRESERVE from the
+    existing compose env, so reading the compose's current env here reflects whether
+    VAULT_ROLE_ID and VAULT_SECRET_ID will be present after this deploy.
     """
     from libs.core.registry import service_attrs
 
@@ -324,6 +326,7 @@ def verify_effective_config_hash(
     compose_id: str,
     expected_hash: str,
     *,
+    expected_keys: Collection[str] | None = None,
     timeout: int = 600,
     interval: int = 5,
     _sleep=time.sleep,
@@ -333,27 +336,32 @@ def verify_effective_config_hash(
     return it; raise RuntimeError if it never advances within the window. Always returns
     the matched hash on success (never None) — a non-advance is an error, not a value.
 
-    This is the post-deploy "did the config actually roll out" gate. Dokploy applies the
-    env update asynchronously, so the effective hash can briefly lag the deploy call;
-    polling avoids a false-stale verdict on that settling delay while still failing
-    closed if it never advances. A transient read error is tolerated like a non-match and
-    retried — polling gives each read an independent chance to clear a Dokploy blip; only
-    if no clean read ever lands is the last error surfaced. Mirrors
-    libs.deploy.deployer._await_effective_config_hash (compose-id-based rather than by service).
+    When expected_keys is provided, also verify that the effective compose env contains
+    no unexpected stale keys once the hash matches.
     """
     deadline = _now() + max(0, timeout)
     last_value: str | None = None
     last_error: Exception | None = None
+    compose_env = ""
     while True:
         try:
             compose_env = client.get_compose_env(compose_id)
-            last_value = _env_value(
-                compose_env, "CONFIGURATION_SHA256"
-            ) or _env_value(compose_env, "IAC_CONFIG_HASH")
+            last_value = _env_value(compose_env, "CONFIGURATION_SHA256") or _env_value(
+                compose_env, "IAC_CONFIG_HASH"
+            )
             last_error = None
         except Exception as exc:  # transient Dokploy read; tolerate within window
             last_error = exc
         if last_value == expected_hash:
+            if expected_keys is not None:
+                effective_keys = set(_parse_env_text(compose_env))
+                unexpected = sorted(effective_keys - set(expected_keys))
+                if unexpected:
+                    raise RuntimeError(
+                        f"post-deploy config verify failed: effective config for "
+                        f"compose {compose_id} contains unexpected stale keys: "
+                        f"{', '.join(unexpected)}"
+                    )
             return last_value
         if _now() >= deadline:
             if last_error is not None and last_value is None:
@@ -451,10 +459,11 @@ def _build_deploy_env_vars(
     image_tag: str,
     iac_ref: str,
     config_hash: str,
-    model_overrides: dict[str, str] | None,
 ) -> tuple[dict[str, str], Any]:
     """Assemble all environment variables for the deployment compose."""
     env_vars = {
+        "ENV": deploy_environment,
+        "VAULT_ADDR": f"https://vault.{infra_domain()}",
         "IMAGE_TAG": image_tag,
         "GIT_COMMIT_SHA": image_tag,
         "NEXT_PUBLIC_APP_URL": cfg.app_url(domain=domain),
@@ -483,8 +492,6 @@ def _build_deploy_env_vars(
     env_vars["OTEL_RESOURCE_ATTRIBUTES"] = identity.otel_resource_attributes()
     env_vars.update(openpanel_env(env))
     env_vars.update(otel_env(domain=infra_domain()))
-    if model_overrides:
-        env_vars.update({k: v for k, v in model_overrides.items() if v})
 
     from libs.deploy.deployer import load_deployer_class
 
@@ -523,7 +530,7 @@ def _execute_dokploy_rollout(
         )
         if branch:
             client.update_compose(compose_id, branch=branch)
-        client.update_compose_env(compose_id, env_vars=env_vars)
+        client.update_compose_env(compose_id, env_vars=env_vars, replace=True)
         try:
             trigger_epoch = time.time()
             client.deploy_compose(compose_id)
@@ -537,7 +544,11 @@ def _execute_dokploy_rollout(
                 )
             if verify_config:
                 verify_effective_config_hash(
-                    client, compose_id, config_hash, timeout=timeout
+                    client,
+                    compose_id,
+                    config_hash,
+                    expected_keys=set(env_vars) | set(RUNTIME_ENV_KEYS_TO_PRESERVE),
+                    timeout=timeout,
                 )
             if wait:
                 verify_in_service(client, service, env_suffix, timeout=timeout)
@@ -569,7 +580,6 @@ def deploy(
     branch: str | None = None,
     wait: bool = False,
     timeout: int = 600,
-    model_overrides: dict[str, str] | None = None,
     verify_vault: bool = False,
     verify_config: bool = False,
     verify_ingestion: bool = False,
@@ -616,7 +626,6 @@ def deploy(
         image_tag=image_tag,
         iac_ref=iac_ref,
         config_hash=config_hash,
-        model_overrides=model_overrides,
     )
 
     _execute_dokploy_rollout(
@@ -644,12 +653,3 @@ def deploy(
         env_vars=env_vars,
         rollback_class=rollback_class,
     )
-
-
-def model_overrides_from_env() -> dict[str, str]:
-    """Model overrides for the promote path (empty by default; Vault secrets govern)."""
-    return {
-        "PRIMARY_MODEL": "",
-        "OCR_MODEL": "",
-        "VISION_MODEL": "",
-    }

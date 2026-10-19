@@ -104,8 +104,11 @@ class FakeDokploy:
         self.updated.append({"composeId": compose_id, **kwargs})
         return {}
 
-    def update_compose_env(self, compose_id, env_vars=None, env_str=None):
+    def update_compose_env(
+        self, compose_id, env_vars=None, env_str=None, *, replace=False
+    ):
         self.env_updates.append((compose_id, dict(env_vars or {})))
+        self.replace_flags = getattr(self, "replace_flags", []) + [replace]
         return {}
 
     def deploy_compose(self, compose_id):
@@ -249,6 +252,7 @@ def test_up_creates_compose_when_absent_and_deploys():
     assert upd["autoDeploy"] is False
     # env applied via update_compose_env (also dropped by compose.create)
     assert len(client.env_updates) == 1 and client.env_updates[0][0] == "cmp-new"
+    assert client.replace_flags == [True]
     # then deployed
     assert client.deployed == ["cmp-new"]
     # result identity
@@ -750,9 +754,7 @@ def test_preview_entrypoint_overrides_environment_to_match_otel_tag():
         "backend service must receive ENV so the entrypoint can override "
         "ENVIRONMENT with it"
     )
-    database_url_idx = backend_block.index(
-        'export DATABASE_URL="$$DATABASE_URL"'
-    )
+    database_url_idx = backend_block.index('export DATABASE_URL="$$DATABASE_URL"')
     environment_idx = backend_block.index('export ENVIRONMENT="$$ENV"')
     assert environment_idx > database_url_idx, (
         "ENVIRONMENT override must come AFTER `. /secrets/.env` is sourced "

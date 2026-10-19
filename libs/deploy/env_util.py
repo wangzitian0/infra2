@@ -14,6 +14,7 @@ from collections.abc import Iterable
 RUNTIME_ENV_KEYS_TO_PRESERVE: tuple[str, ...] = (
     "VAULT_ROLE_ID",
     "VAULT_SECRET_ID",
+    "VAULT_ADDR",
 )
 
 
@@ -38,7 +39,7 @@ def _preserve_runtime_env(
     desired = _parse_env_text(env_str)
     existing = _parse_env_text(existing_env or "")
     for key in keys:
-        if key not in desired and key in existing:
+        if (key not in desired or not desired[key]) and key in existing:
             desired[key] = existing[key]
     return "\n".join(f"{key}={value}" for key, value in desired.items())
 

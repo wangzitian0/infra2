@@ -1,12 +1,12 @@
 {
   "apps": {
     "finance_report": {
-      "commit": "17e472d242b65234a1889ae7aa44f3a23e9960be",
+      "commit": "4baf85dc274af91b15073463f2b85b97da5f4e28",
       "repository": "wangzitian0/finance_report",
-      "tag": "v0.2.3"
+      "tag": null
     },
     "truealpha": {
-      "commit": "0203431d89ff60d050075712f70e889061e79799",
+      "commit": "5a6d5893226cce47dfcfaf0f97276c74edd95d37",
       "repository": "wangzitian0/truealpha",
       "tag": null
     }
@@ -15,25 +15,25 @@
     {
       "app": "finance_report",
       "path": "contracts/finance_report/required-env.generated.json",
-      "sha256": "63d491cb39f904120c8cd65295ae12b05f0a8fc25b101ed4b14a3543d5af4841",
+      "sha256": "d6749cb9d820ab22aa50872ac47ccf232413d59fb4a07aa49f5449b597cd2508",
       "upstream": "common/runtime/required-env.generated.json"
     },
     {
       "app": "truealpha",
       "path": "contracts/truealpha/app-web.required-env.manifest.json",
-      "sha256": "aac3e60b13ede883bdb819725901bd7f83324387498d2635897dfaa6b431de5f",
+      "sha256": "c6b32506dbedaa8b7d03e2aa69eecf3b0429a055c5300508dfe3c1e1da1f00f6",
       "upstream": "apps/app-web/required-env.manifest.json"
     },
     {
       "app": "truealpha",
       "path": "contracts/truealpha/data-engine.required-env.generated.json",
-      "sha256": "13487fd1fd4dc3165a7ffe0922a562b252b33f2a33f40765332be1d2b9f4c5be",
+      "sha256": "d7f9c2dce7e45575983f5130130be9ab3b798e06dc48f8c0d35791ff44533253",
       "upstream": "apps/data-engine/required-env.generated.json"
     },
     {
       "app": "truealpha",
       "path": "contracts/truealpha/llm-service.required-env.generated.json",
-      "sha256": "67082dd430f25d7e515c0d48b57328dc94f21a93987f8ca42aaaa3025f249f72",
+      "sha256": "3cce4b8b7b983a0668a1b059432cdc1995ec1fe27bfdd238942c9966d9c8582b",
       "upstream": "apps/llm-service/required-env.generated.json"
     }
   ],

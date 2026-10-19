@@ -113,11 +113,10 @@ class DataEngineDeployer(Deployer):
     # constant would imply an ordering that does not exist. A test asserts they agree.
     _MINIO_S3_PORTS = {"staging": "19000", "production": "19001"}
     _WEBSERVER_PORTS = {"staging": "13001", "production": "13002"}
-    # S3_ENDPOINT is deliberately absent: the template no longer reads it. Requiring
-    # a Vault key nothing consumes is worse than not requiring it — it invites
-    # someone to "fix" the endpoint there and observe no effect.
+    # S3_ENDPOINT and SEC_USER_AGENT are deliberately absent: the template no longer
+    # reads them (#637, #1279). Requiring a Vault key nothing consumes is worse than
+    # not requiring it — it invites someone to "fix" the value there and observe no effect.
     _REQUIRED_SECRET_KEYS = (
-        "SEC_USER_AGENT",
         "S3_ACCESS_KEY",
         "S3_SECRET_KEY",
         "S3_BUCKET",
@@ -238,9 +237,7 @@ class DataEngineDeployer(Deployer):
         release_id = cls._secret(secrets, "RELEASE_ID")
         approved_by = secrets.get("CAPTURE_APPROVED_BY") or ""
         if not _IMAGE_DIGEST.fullmatch(image_digest):
-            raise ValueError(
-                "IMAGE_DIGEST must be configured before deployment"
-            )
+            raise ValueError("IMAGE_DIGEST must be configured before deployment")
         if not _RELEASE_ID.fullmatch(release_id):
             raise ValueError("RELEASE_ID must be configured before deployment")
         if not approved_by:
