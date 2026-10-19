@@ -133,6 +133,8 @@ def _is_https_url(url: Any) -> bool:
     """True for an https URL with a host, a valid port and no user information."""
     if not isinstance(url, str):
         return False
+    if any(ch.isspace() or not ch.isprintable() for ch in url):
+        return False
     try:
         u = urlsplit(url)
         _ = u.port  # raises ValueError for a port that is not a number in 0-65535
@@ -141,8 +143,17 @@ def _is_https_url(url: Any) -> bool:
     return url.startswith("https://") and bool(u.hostname) and "@" not in u.netloc
 
 
-def _validate_health(repository_id: str, health: Any, findings: list[Finding]) -> None:
+def _validate_health(
+    repository_id: str, checkout: str, health: Any, findings: list[Finding]
+) -> None:
     if health is None:
+        return
+    if checkout == "root":
+        _error(
+            findings,
+            "health",
+            f"{repository_id} root checkout cannot declare health URLs",
+        )
         return
     if (
         not isinstance(health, dict)
@@ -263,7 +274,7 @@ def _validate_repository_entry(
     else:
         contract = "snapshot" if role == "external-application" else "pinned"
 
-    _validate_health(repository_id, repository.get("health"), findings)
+    _validate_health(repository_id, checkout, repository.get("health"), findings)
 
     expected_gov = {
         "infrastructure-control-plane": "local",

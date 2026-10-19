@@ -447,8 +447,10 @@ HEALTH_CASES = [  # (health value, codes of the errors it must give)
     ({"production": "https://app.test:abc/x"}, ["health-url"]),
     ({"production": "https://:/x"}, ["health-url"]),
     ({"production": "https://[::1/x"}, ["health-url"]),
+    ({"production": "https://app.test/x y"}, ["health-url"]),
+    ({"production": "https://app.test/x\n"}, ["health-url"]),
 ]
-HEALTH_IDS = "good query list empty extra-key not-https not-str userinfo port no-host ipv6".split()
+HEALTH_IDS = "good query list empty extra-key not-https not-str userinfo port no-host ipv6 space newline".split()
 
 
 @pytest.mark.parametrize(("health", "codes"), HEALTH_CASES, ids=HEALTH_IDS)
@@ -461,6 +463,16 @@ def test_health_mapping_is_validated(
     result = validate_manifest(tmp_path, manifest)
 
     assert [error.code for error in result.errors] == codes
+
+
+def test_root_checkout_cannot_declare_health_urls(tmp_path: Path) -> None:
+    manifest = _workspace(tmp_path)
+    manifest["repositories"][0]["health"] = GOOD
+
+    result = validate_manifest(tmp_path, manifest)
+
+    assert [error.code for error in result.errors] == ["health"]
+    assert "root checkout cannot declare health URLs" in result.errors[0].message
 
 
 def test_committed_health_urls_equal_the_registry_health_routes(monkeypatch) -> None:
