@@ -41,9 +41,54 @@ def test_service_discovery() -> None:
     print("✅ Service discovery working")
 
 
+def test_ensure_runner_sdk_compat_backfills_pre_v3_8_symbols() -> None:
+    import importlib
+    from tools.loader import _ensure_runner_sdk_compat
+
+    secrets_mod = importlib.import_module("infra2_sdk.secrets")
+    refs_mod = importlib.import_module("infra2_sdk.refs")
+    saved_secrets = {
+        name: getattr(secrets_mod, name)
+        for name in ("VaultTokenTarget", "normalize_selector", "policy_name")
+        if hasattr(secrets_mod, name)
+    }
+    saved_refs = {
+        name: getattr(refs_mod, name)
+        for name in ("assert_after_on_main", "resolve_branch_to_sha")
+        if hasattr(refs_mod, name)
+    }
+    try:
+        for name in saved_secrets:
+            delattr(secrets_mod, name)
+        for name in saved_refs:
+            delattr(refs_mod, name)
+        _ensure_runner_sdk_compat()
+        target = secrets_mod.VaultTokenTarget(
+            project="truealpha",
+            service="data_engine",
+            service_dir="truealpha/truealpha/20.data_engine",
+            project_dir="truealpha/truealpha",
+            dokploy_project="truealpha",
+        )
+        assert target.service == "data_engine"
+        assert secrets_mod.normalize_selector("staging", label="env") == "staging"
+        assert (
+            secrets_mod.policy_name("truealpha", "staging", "data_engine")
+            == "truealpha-staging-data_engine"
+        )
+        assert callable(refs_mod.assert_after_on_main)
+        assert callable(refs_mod.resolve_branch_to_sha)
+    finally:
+        for name, val in saved_secrets.items():
+            setattr(secrets_mod, name, val)
+        for name, val in saved_refs.items():
+            setattr(refs_mod, name, val)
+
+
 def main() -> int:
     test_config_hash_idempotency()
     test_service_discovery()
+    test_ensure_runner_sdk_compat_backfills_pre_v3_8_symbols()
     return 0
 
 
