@@ -11,6 +11,7 @@ from tools.ci_runner import (
     GATES,
     _default_pytest_workers,
     _resolve_changed_test_targets,
+    _select_changed_compose_targets,
     main,
     run_compose,
     run_deployers,
@@ -167,11 +168,14 @@ def test_resolve_changed_test_targets_maps_source_and_service_paths() -> None:
     targets = _resolve_changed_test_targets(
         [
             "tools/ci_runner.py",
+            "common/coverage_regression.py",
             "truealpha/truealpha/20.data_engine/compose.yaml",
             "docs/project/README.md",
         ]
     )
     assert "common/tests/test_ci_runner.py" in targets
+    assert "common/tests/test_coverage_regression.py" in targets
+    assert "common/tests/test_coverage_regression_audit_cli.py" in targets
     assert "common/tests/test_truealpha_data_engine.py" in targets
     assert "common/tests/test_deployer_contract_light.py" in targets
     assert _resolve_changed_test_targets(["docs/project/README.md"]) == []
@@ -214,3 +218,63 @@ def test_run_unit_tests_changed_only_executes_fail_fast_subset(
     assert "common/tests/test_ci_runner.py" in pytest_cmds[0]
     assert "-x" in pytest_cmds[0]
     assert "-n" not in pytest_cmds[0]
+
+
+def test_select_changed_compose_targets_scopes_services_and_contracts() -> None:
+    redis_compose = ROOT / "platform/02.redis/compose.yaml"
+    ta_compose = ROOT / "truealpha/truealpha/20.data_engine/compose.yaml"
+    fr_compose = ROOT / "finance_report/finance_report/10.app/compose.yaml"
+    all_compose = [redis_compose, ta_compose, fr_compose]
+
+    assert _select_changed_compose_targets(
+        all_compose, ["platform/02.redis/compose.yaml"]
+    ) == [redis_compose]
+    assert _select_changed_compose_targets(
+        all_compose, ["contracts/truealpha/data-engine.required-env.generated.json"]
+    ) == [ta_compose]
+    assert _select_changed_compose_targets(
+        all_compose, ["contracts/finance_report/required-env.generated.json"]
+    ) == [fr_compose]
+    assert (
+        _select_changed_compose_targets(all_compose, ["tools/ci_runner.py"])
+        == all_compose
+    )
+    assert _select_changed_compose_targets(all_compose, ["docs/README.md"]) == []
+
+
+def test_test_affected_delegates_to_ci_runner_and_caps_workers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import subprocess
+    from tools import test_affected
+
+    assert test_affected.resolve_affected_tests(["tools/ci_runner.py"]) == [
+        "common/tests/test_ci_runner.py"
+    ]
+
+    recorded: list[list[str]] = []
+
+    def fake_run(cmd: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        recorded.append(list(cmd))
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    monkeypatch.setattr(
+        test_affected,
+        "get_changed_files",
+        lambda base_ref="origin/main": [
+            "common/coverage_regression.py",
+            "tools/ci_runner.py",
+        ],
+    )
+    monkeypatch.setattr(test_affected, "_default_pytest_workers", lambda: "4")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    rc = test_affected.main([])
+    assert rc == 0
+    assert len(recorded) == 1
+    cmd = recorded[0]
+    assert "-x" in cmd
+    assert "-n" in cmd and cmd[cmd.index("-n") + 1] == "4"
+    assert "common/tests/test_ci_runner.py" in cmd
+    assert "common/tests/test_coverage_regression.py" in cmd
+    assert "common/tests/test_coverage_regression_audit_cli.py" in cmd
