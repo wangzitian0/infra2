@@ -209,11 +209,12 @@ def public_defs(pkg_root: Path) -> list[dict[str, Any]]:
                 getattr(t, "id", "") == "__all__" for t in node.targets
             ):
                 if isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
-                    exported = {
+                    elts = {
                         elt.value
                         for elt in node.value.elts
                         if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
                     }
+                    exported = elts if elts else None
         for node in tree.body:
             kind: str | None = None
             name: str | None = None
@@ -358,6 +359,68 @@ def sdk_module_exports(pkg_root: Path) -> dict[str, set[str]]:
     return exports
 
 
+def _consumer_repo_tokens(trees: list[tuple[str, bool, ast.AST]]) -> tuple[set[str], set[str]]:
+    """Collect loaded identifier and attribute names across prod and test ASTs in one consumer repo."""
+    prod_tokens: set[str] = set()
+    test_tokens: set[str] = set()
+    for _rel, is_test, tree in trees:
+        target = test_tokens if is_test else prod_tokens
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                target.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                target.add(node.attr)
+    return prod_tokens, test_tokens
+
+
+def _enclosing_method_is_dead_or_test_only(
+    tree: ast.AST,
+    sdk_local_names: set[str],
+    prod_tokens: set[str],
+    test_tokens: set[str],
+) -> tuple[set[str], set[str]]:
+    """Return (downgraded_to_test_only, downgraded_to_dead) for SDK names referenced only inside uncalled class methods."""
+    active_by_local: dict[str, list[str | None]] = defaultdict(list)
+
+    def _visit_block(
+        stmts: list[ast.stmt], enclosing_method: str | None
+    ) -> None:
+        for stmt in stmts:
+            if isinstance(stmt, ast.ClassDef):
+                for item in stmt.body:
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        mname = None if item.name.startswith("__") else item.name
+                        _visit_block(item.body, mname)
+                    else:
+                        _visit_block([item], None)
+                continue
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and enclosing_method is None:
+                _visit_block(stmt.body, None)
+                continue
+            for sub in ast.walk(stmt):
+                if isinstance(sub, (ast.Import, ast.ImportFrom)):
+                    continue
+                if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load) and sub.id in sdk_local_names:
+                    active_by_local[sub.id].append(enclosing_method)
+
+    if isinstance(tree, ast.Module):
+        _visit_block(tree.body, None)
+
+    to_test: set[str] = set()
+    to_dead: set[str] = set()
+    for local_name in sdk_local_names:
+        contexts = active_by_local.get(local_name)
+        if not contexts:
+            continue
+        if any(ctx is None or ctx in prod_tokens for ctx in contexts):
+            continue
+        if any(ctx in test_tokens for ctx in contexts if ctx is not None):
+            to_test.add(local_name)
+        else:
+            to_dead.add(local_name)
+    return to_test, to_dead
+
+
 def consumer_symbol_refs(
     consumers: dict[str, Path],
     left_the_packages: tuple[str, ...] = DEFAULT_LEFT_THE_PACKAGES,
@@ -375,14 +438,21 @@ def consumer_symbol_refs(
     pkg_left = package_scoped_left or {}
 
     for repo, root in sorted(consumers.items()):
+        parsed_files: list[tuple[str, bool, ast.AST]] = []
         for rel in list_repo_files(root, suffix=".py"):
             try:
                 source = (root / rel).read_text("utf-8", "replace")
                 tree = ast.parse(source)
             except (SyntaxError, UnicodeDecodeError, OSError):
                 continue
-            bucket = test if is_test_path(rel) else prod
+            parsed_files.append((rel, is_test_path(rel), tree))
+
+        prod_tokens, test_tokens = _consumer_repo_tokens(parsed_files)
+
+        for rel, is_test, tree in parsed_files:
+            bucket = test if is_test else prod
             mod_alias: dict[str, str] = {}
+            local_to_sdk: dict[str, str] = {}
             star_modules: list[str] = []
             for node in ast.walk(tree):
                 if (
@@ -396,18 +466,33 @@ def consumer_symbol_refs(
                             continue
                         if alias.name in MODULE_DUNDER_ATTRS:
                             continue
-                        bucket[alias.name][repo] += 1
+                        local_bound = alias.asname or alias.name
+                        local_to_sdk[local_bound] = alias.name
                         seen_imports[(node.module, alias.name)].append(
                             f"{repo}:{rel}:{node.lineno}"
                         )
-                        mod_alias[alias.asname or alias.name] = (
-                            f"{node.module}.{alias.name}"
-                        )
+                        mod_alias[local_bound] = f"{node.module}.{alias.name}"
                 elif isinstance(node, ast.Import):
                     for alias in node.names:
                         if alias.name.split(".")[0] == "infra2_sdk":
                             bound = alias.asname or alias.name.split(".")[0]
                             mod_alias[bound] = alias.name
+
+            if not is_test and local_to_sdk:
+                to_test_locals, to_dead_locals = _enclosing_method_is_dead_or_test_only(
+                    tree, set(local_to_sdk), prod_tokens, test_tokens
+                )
+            else:
+                to_test_locals, to_dead_locals = set(), set()
+
+            for local_bound, sdk_name in local_to_sdk.items():
+                if local_bound in to_dead_locals:
+                    continue
+                if local_bound in to_test_locals:
+                    test[sdk_name][repo] += 1
+                else:
+                    bucket[sdk_name][repo] += 1
+
             star_retired_for_file = set(retired_set)
             for smod in star_modules:
                 star_retired_for_file |= pkg_left.get(smod, set())
@@ -420,7 +505,12 @@ def consumer_symbol_refs(
                     if node.attr in MODULE_DUNDER_ATTRS:
                         continue
                     target_base = mod_alias[node.value.id]
-                    bucket[node.attr][repo] += 1
+                    if node.value.id in to_dead_locals:
+                        pass
+                    elif node.value.id in to_test_locals:
+                        test[node.attr][repo] += 1
+                    else:
+                        bucket[node.attr][repo] += 1
                     seen_imports[(target_base, node.attr)].append(
                         f"{repo}:{rel}:{node.lineno}"
                     )
@@ -440,8 +530,8 @@ def consumer_symbol_refs(
 def cli_uses(consumers: dict[str, Path]) -> dict[str, int]:
     """Count `-m infra2_sdk.<module>` CLI invocations across consumer files."""
     uses: Counter[str] = Counter()
-    pattern = re.compile(r"-m\s+(infra2_sdk(?:[._a-z0-9]+)?)")
-    exts = (".yml", ".yaml", ".sh", ".toml", ".py")
+    pattern = re.compile(r"-m\s+(infra2_sdk(?:\.[_a-z0-9]+)*)")
+    exts = (".yml", ".yaml", ".sh", ".toml", ".py", ".md")
     for repo, root in sorted(consumers.items()):
         for rel in list_repo_files(root):
             if not (rel.endswith(exts) or rel.endswith("Makefile")):
@@ -539,6 +629,21 @@ def check_consumer_imports(
     return missing_prod, missing_test
 
 
+def _main_called_symbols(path: str) -> set[str]:
+    """Return top-level symbol names loaded inside `def main` of `path`."""
+    try:
+        tree = ast.parse(Path(path).read_text("utf-8", "replace"))
+    except (SyntaxError, OSError):
+        return set()
+    called: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "main":
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
+                    called.add(sub.id)
+    return called
+
+
 def compute_m1(
     pkg_root: Path,
     consumers: dict[str, Path],
@@ -551,13 +656,28 @@ def compute_m1(
     prod, test, seen_imports = consumer_symbol_refs(
         consumers, left_the_packages, package_scoped_left
     )
+    cli_map = cli_uses(consumers)
+    cli_modules: dict[str, Counter[str]] = defaultdict(Counter)
+    for repo_mod, count in cli_map.items():
+        repo_name, mod_target = repo_mod.split(":", 1)
+        cli_modules[mod_target][repo_name] += count
+    main_calls_by_path: dict[str, set[str]] = {}
+
     missing_prod, missing_test = check_consumer_imports(seen_imports, pkg_root)
 
     rows: list[dict[str, Any]] = []
     counts: Counter[str] = Counter()
     for d in defs:
         name = d["name"]
+        mod = d["module"]
         prod_repos = dict(prod.get(name, {}))
+        if mod in cli_modules:
+            called_in_main = main_calls_by_path.setdefault(
+                d["path"], _main_called_symbols(d["path"])
+            )
+            if name in called_in_main:
+                for r_name, r_cnt in cli_modules[mod].items():
+                    prod_repos[r_name] = prod_repos.get(r_name, 0) + r_cnt
         test_repos = dict(test.get(name, {}))
         internal_n = sum(
             1
@@ -597,7 +717,7 @@ def compute_m1(
             "prod": missing_prod,
             "test": missing_test,
         },
-        "cli_uses": cli_uses(consumers),
+        "cli_uses": cli_map,
         "symbols": rows,
     }
     return m1, seen_imports
@@ -688,6 +808,22 @@ def compute_m2(pkg_root: Path, consumers: dict[str, Path]) -> dict[str, Any]:
         vocab=full_vocab,
     )
 
+    aliases_by_canonical: dict[str, list[str]] = defaultdict(list)
+    for k_name, meta in contract_vocab.items():
+        if meta["kind"] == "alias":
+            aliases_by_canonical[meta["canonical"]].append(k_name)
+
+    def _key_occs(target_key: str, scope: str) -> list[Any]:
+        k_obj = keys_map.get(target_key)
+        occs = k_obj.occ if k_obj and k_obj.occ else []
+        return [
+            o
+            for o in occs
+            if o.scope == scope
+            and o.repo != SELF_REPO
+            and o.role in ("read", "write", "declare")
+        ]
+
     prod_used = 0
     test_only = 0
     unused = 0
@@ -696,22 +832,13 @@ def compute_m2(pkg_root: Path, consumers: dict[str, Path]) -> dict[str, Any]:
     for name in sorted(contract_vocab):
         meta = contract_vocab[name]
         k_obj = keys_map.get(name)
-        occs = k_obj.occ if k_obj and k_obj.occ else []
-        prod_occs = [
-            o
-            for o in occs
-            if o.scope == "prod"
-            and o.repo != SELF_REPO
-            and o.role in ("read", "write", "declare")
-        ]
-        test_occs = [
-            o
-            for o in occs
-            if o.scope == "test"
-            and o.repo != SELF_REPO
-            and o.role in ("read", "write", "declare")
-        ]
-        if prod_occs:
+        prod_occs = _key_occs(name, "prod")
+        test_occs = _key_occs(name, "test")
+        alias_prod_occs: list[Any] = []
+        if meta["kind"] == "canonical":
+            for alias_name in aliases_by_canonical.get(name, []):
+                alias_prod_occs.extend(_key_occs(alias_name, "prod"))
+        if prod_occs or alias_prod_occs:
             reach = "prod_used"
             prod_used += 1
         elif test_occs:
@@ -732,7 +859,7 @@ def compute_m2(pkg_root: Path, consumers: dict[str, Path]) -> dict[str, Any]:
                 "canonical": meta["canonical"],
                 "reach": reach,
                 "sdk_class": sdk_class,
-                "prod_occurrences": len(prod_occs),
+                "prod_occurrences": len(prod_occs) or len(alias_prod_occs),
                 "test_occurrences": len(test_occs),
             }
         )
