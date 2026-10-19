@@ -30,7 +30,18 @@ x-dagster-service: &dagster-service
     RELEASE_ID: ${RELEASE_ID:-${RELEASE_MANIFEST_ID:?RELEASE_ID is required}}
     IMAGE_DIGEST: ${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?IMAGE_DIGEST is required}}
     CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
+    # Expand-phase container compatibility (#1271): truealpha releases before v0.2.4
+    # (and v0.2.5) read the legacy TRUEALPHA_* container variable names.
+    TRUEALPHA_RELEASE_MANIFEST_ID: ${RELEASE_ID:-${RELEASE_MANIFEST_ID:?RELEASE_ID is required}}
+    TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST: ${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?IMAGE_DIGEST is required}}
+    TRUEALPHA_CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
     TRUEALPHA_CAPTURE_APPROVED_BY: ${CAPTURE_APPROVED_BY:?CAPTURE_APPROVED_BY is required}
+    # Host-loopback OTLP HTTP collector (#1231): network_mode: host cannot resolve
+    # platform-signoz-otel-collector on dokploy-network, so platform/11.signoz
+    # publishes 127.0.0.1:14318 -> 4318 on the host loopback.
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:14318
+    OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-}
+    OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
   volumes:
     - ./dagster-entrypoint.sh:/opt/truealpha/dagster-entrypoint.sh:ro
     - secrets:/secrets:ro
@@ -199,7 +210,13 @@ services:
       RELEASE_ID: ${RELEASE_ID:-${RELEASE_MANIFEST_ID:?RELEASE_ID is required}}
       IMAGE_DIGEST: ${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?IMAGE_DIGEST is required}}
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
+      TRUEALPHA_RELEASE_MANIFEST_ID: ${RELEASE_ID:-${RELEASE_MANIFEST_ID:?RELEASE_ID is required}}
+      TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST: ${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?IMAGE_DIGEST is required}}
+      TRUEALPHA_CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
       TRUEALPHA_CAPTURE_APPROVED_BY: ${CAPTURE_APPROVED_BY:?CAPTURE_APPROVED_BY is required}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:14318
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
 
   dagster-daemon:
     <<: *dagster-service

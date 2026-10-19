@@ -229,7 +229,7 @@ graph LR
 | `truealpha/app` | web | — | 不签发 | Node/Next.js,无 OTel SDK;且一个 compose 的 `OTEL_SERVICE_NAME` 不能同时命名两个服务 |
 | `platform/todo` | todo | `platform-todo` | 签发 | `TodoDeployer.telemetry_service_name` makes `Deployer.sync` issue the identity; the compose adds the endpoint. The app passes `require_issued_identity=True`, so the service refuses to start on an active endpoint without `OTEL_SERVICE_NAME` and the four issued attributes. [platform.canary_todo.md](platform.canary_todo.md#5-telemetry) defines an active endpoint. The SDK takes the tier from `deployment.environment.name`, not from `ENV` (#991, #1242, #1246) |
 | `platform/alerting` | feishu-alert-bridge | `platform-alerting` | 签发 | `AlertingDeployer.telemetry_service_name` makes `Deployer.sync` issue the identity; the compose passes it with the endpoint and `ENV`; the image installs the OpenTelemetry packages (#1209). The probe runner container shares the image and gets no endpoint |
-| `truealpha/data_engine` | dagster-* | — | **不签发** | 三个角色全是 `network_mode: host`(为 OpenD),Docker DNS 名 `platform-signoz-otel-collector` 在宿主网络解析不了;§4.4 规定 collector 永不 publish,故不另开端口,等有宿主可达的 ingest 再接。没有端点就不会触发应用侧"缺身份即 fast-fail" |
+| `truealpha/data_engine` | `dagster-webserver`, `dagster-daemon`, `dagster-code-server` | `truealpha-data-engine` | 签发 (`http://127.0.0.1:14318`) | 三个角色使用 `network_mode: host`(为 OpenD)，无法解析 Docker DNS 名 `platform-signoz-otel-collector`；collector 仅在宿主机回环绑定 `127.0.0.1:14318:4318`(#1231)，供 host-network 容器上报 OTLP HTTP，不暴露公网网卡 |
 
 compose 里 `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` 只写成 `${…:-}`(不硬编码、不给默认):身份只有部署一个签发方。`libs/tests/compose_env.py` 把 compose 对着各入口真实推送的 env 解析一遍,证明**容器**拿到的是签发值,而不只是"部署签发了"或"compose 引用了"。
 
@@ -243,7 +243,7 @@ compose 里 `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES` 只写成 `${…:-}
 
 ### 4.4 公网浏览器 OTLP ingest:`otel.${INTERNAL_DOMAIN}`(Infra-014)
 
-collector 4317/4318 仅 `expose` 于 Docker 网络、**永不 publish**。唯一公网面是 **Dokploy 托管**域名 `otel.${INTERNAL_DOMAIN}` → `:4318`(`SigNozDeployer.composing()` 通过 `ensure_domains(..., service_name="otel-collector")` 注册,无手写 Traefik 标签)。
+collector 4317/4318 在 Docker 网络内 `expose`，另将 4318 仅绑定宿主机回环 `127.0.0.1:14318:4318`(#1231，供 `network_mode: host` 服务上报)，**永不绑定 `0.0.0.0` 或公网网卡**。唯一公网面是 **Dokploy 托管**域名 `otel.${INTERNAL_DOMAIN}` → `:4318`(`SigNozDeployer.composing()` 通过 `ensure_domains(..., service_name="otel-collector")` 注册,无手写 Traefik 标签)。
 
 **没有 bearer token**:浏览器无法保管秘密,下发到页面的静态 token 不是凭据。决策记录:
 

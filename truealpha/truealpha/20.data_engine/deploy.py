@@ -70,6 +70,7 @@ class DataEngineDeployer(Deployer):
         ),
     )
     service_name = "dagster-webserver"
+    telemetry_service_name = "truealpha-data-engine"
 
     # Values sourced from the independently released TrueAlpha artifact/runtime
     # approval plane affect deployment idempotence, but cannot be reconstructed
