@@ -877,3 +877,85 @@ def test_compose_injects_both_canonical_and_legacy_release_variable_names():
         assert env["RELEASE_ID"] == env["TRUEALPHA_RELEASE_MANIFEST_ID"]
         assert env["IMAGE_DIGEST"] == env["TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST"]
         assert env["CONFIGURATION_SHA256"] == env["TRUEALPHA_CONFIGURATION_SHA256"]
+
+
+def _missing_injected_contract_vars(
+    contract_data: dict,
+    compose_data: dict,
+    service_names: tuple[str, ...],
+) -> dict[str, list[str]]:
+    """Return missing injected contract variable names per compose service."""
+    injected_fields = [
+        (field["env"], tuple(field.get("aliases", ())))
+        for field in contract_data.get("fields", ())
+        if field.get("injected") is True
+    ]
+    missing_by_service: dict[str, list[str]] = {}
+    services = compose_data.get("services", {})
+    for svc_name in service_names:
+        env_map = services.get(svc_name, {}).get("environment", {}) or {}
+        provided = set(env_map.keys())
+        missing = [
+            env_name
+            for env_name, aliases in injected_fields
+            if not ({env_name, *aliases} & provided)
+        ]
+        if missing:
+            missing_by_service[svc_name] = sorted(missing)
+    return missing_by_service
+
+
+def test_truealpha_compose_services_provide_every_injected_contract_variable():
+    """#1287: Every variable marked injected=true in truealpha generated contracts
+    must exist in the target service compose environment dict so boot validation
+    cannot fail on contract-to-compose variable drift."""
+    checks = (
+        (
+            ROOT / "contracts/truealpha/data-engine.required-env.generated.json",
+            SERVICE_DIR / "compose.yaml",
+            ("dagster-code-server", "dagster-webserver", "dagster-daemon"),
+        ),
+        (
+            ROOT / "contracts/truealpha/llm-service.required-env.generated.json",
+            ROOT / "truealpha/truealpha/10.app/compose.yaml",
+            ("llm",),
+        ),
+        (
+            ROOT / "contracts/truealpha/llm-service.required-env.generated.json",
+            ROOT / "truealpha/truealpha/preview/compose.yaml",
+            ("llm",),
+        ),
+    )
+    for contract_path, compose_path, roles in checks:
+        contract_data = json.loads(contract_path.read_text(encoding="utf-8"))
+        compose_data = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+        missing = _missing_injected_contract_vars(contract_data, compose_data, roles)
+        assert not missing, (
+            f"{compose_path.relative_to(ROOT)} misses injected contract vars "
+            f"from {contract_path.relative_to(ROOT)}: {missing}"
+        )
+
+
+def test_missing_injected_contract_variable_in_compose_is_detected():
+    """Falsifiability test: removing an injected=true variable from compose fails."""
+    contract_data = json.loads(
+        (
+            ROOT / "contracts/truealpha/data-engine.required-env.generated.json"
+        ).read_text(encoding="utf-8")
+    )
+    compose_data = yaml.safe_load(
+        (SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8")
+    )
+    code_server_env = dict(
+        compose_data["services"]["dagster-code-server"]["environment"]
+    )
+    del code_server_env["RELEASE_ID"]
+    del code_server_env["TRUEALPHA_RELEASE_MANIFEST_ID"]
+    compose_data["services"]["dagster-code-server"]["environment"] = code_server_env
+
+    missing = _missing_injected_contract_vars(
+        contract_data,
+        compose_data,
+        ("dagster-code-server", "dagster-webserver", "dagster-daemon"),
+    )
+    assert missing == {"dagster-code-server": ["RELEASE_ID"]}

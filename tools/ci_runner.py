@@ -149,8 +149,127 @@ def run_preflight(verbose: bool = False) -> int:
     return 0
 
 
-def run_compose(verbose: bool = False) -> int:
-    """Validate all compose files syntax, resource limits, and image pins."""
+def _collect_changed_files(base_ref: str | None = None) -> list[str]:
+    """Return sorted repository-relative paths modified in the working tree or branch diff."""
+    resolved_base = base_ref or os.environ.get("GITHUB_BASE_REF", "main")
+    changed: set[str] = set()
+
+    diff_cmds: list[list[str]] = [
+        ["git", "diff", "--name-only", "HEAD"],
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        ["git", "diff", "--name-only", f"origin/{resolved_base}...HEAD"],
+    ]
+    for cmd in diff_cmds:
+        try:
+            proc = subprocess.run(
+                cmd,
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+                stdin=subprocess.DEVNULL,
+            )
+            if proc.returncode == 0:
+                for raw_line in proc.stdout.splitlines():
+                    rel = raw_line.strip()
+                    if rel and (ROOT / rel).exists():
+                        changed.add(rel)
+        except (subprocess.SubprocessError, OSError):
+            continue
+
+    return sorted(changed)
+
+
+def _resolve_changed_test_targets(
+    changed_files: Sequence[str] | None = None,
+) -> list[str]:
+    """Map changed repository-relative paths to affected pytest targets under libs/tests."""
+    files = (
+        list(changed_files) if changed_files is not None else _collect_changed_files()
+    )
+    if not files:
+        return []
+
+    tests_dir = ROOT / "libs/tests"
+    if not tests_dir.is_dir():
+        return []
+
+    all_tests = sorted(
+        str(p.relative_to(ROOT)) for p in tests_dir.glob("test_*.py") if p.is_file()
+    )
+    all_tests_set = set(all_tests)
+    selected: set[str] = set()
+    non_doc_changed = False
+
+    for rel in files:
+        if rel.endswith(".md") or rel.startswith("docs/project/"):
+            continue
+        non_doc_changed = True
+
+        if rel in all_tests_set:
+            selected.add(rel)
+            continue
+
+        path_obj = Path(rel)
+        stem = path_obj.stem
+        direct_test = f"libs/tests/test_{stem}.py"
+        if direct_test in all_tests_set:
+            selected.add(direct_test)
+
+        if rel.startswith(("truealpha/", "contracts/truealpha/")):
+            for candidate in all_tests:
+                if "truealpha" in Path(candidate).name:
+                    selected.add(candidate)
+            if "libs/tests/test_deployer_contract_light.py" in all_tests_set:
+                selected.add("libs/tests/test_deployer_contract_light.py")
+        elif rel.startswith(("finance_report/", "contracts/finance_report/")):
+            for candidate in all_tests:
+                if "finance_report" in Path(candidate).name:
+                    selected.add(candidate)
+            if "libs/tests/test_deployer_contract_light.py" in all_tests_set:
+                selected.add("libs/tests/test_deployer_contract_light.py")
+        elif rel.startswith(("platform/", "bootstrap/")):
+            if "libs/tests/test_deployer_contract_light.py" in all_tests_set:
+                selected.add("libs/tests/test_deployer_contract_light.py")
+            parts = path_obj.parts
+            if len(parts) >= 2:
+                slug = re.sub(r"^\d+\.", "", parts[1]).replace("-", "_")
+                for candidate in all_tests:
+                    if slug and slug in Path(candidate).name:
+                        selected.add(candidate)
+        elif rel.startswith("libs/deploy/"):
+            for candidate in all_tests:
+                name = Path(candidate).name
+                if "deploy" in name or "promote" in name or "canary" in name:
+                    selected.add(candidate)
+        elif rel.startswith("libs/gate/"):
+            for candidate in all_tests:
+                name = Path(candidate).name
+                if "gate" in name or "production_contract" in name:
+                    selected.add(candidate)
+
+    if non_doc_changed and not selected:
+        if "libs/tests/test_deployer_contract_light.py" in all_tests_set:
+            selected.add("libs/tests/test_deployer_contract_light.py")
+
+    return sorted(selected)
+
+
+def _default_pytest_workers() -> str:
+    """Return pytest-xdist worker count.
+
+    Remote CI runners use all cores ('auto'). Local workstations cap workers at 4
+    to prevent thermal throttling while leaving cores for IDE and host services.
+    """
+    if os.environ.get("CI") == "true":
+        return "auto"
+    cpu_total = os.cpu_count() or 4
+    return str(min(4, max(2, cpu_total // 2)))
+
+
+def run_compose(verbose: bool = False, changed_only: bool = False) -> int:
+    """Validate compose files syntax, resource limits, and image pins."""
     print("▶ Validating compose files and resource limits...")
     start_time = time.monotonic()
 
@@ -183,7 +302,19 @@ def run_compose(verbose: bool = False) -> int:
         return 1
 
     # 3. Check docker compose config if docker is available
-    has_docker = shutil.which("docker") is not None
+    docker_targets = compose_files
+    if changed_only:
+        changed_set = set(_collect_changed_files())
+        docker_targets = [
+            file
+            for file in compose_files
+            if str(file.relative_to(ROOT)) in changed_set
+            or any(
+                c.startswith(f"{file.relative_to(ROOT).parent}/") for c in changed_set
+            )
+        ]
+
+    has_docker = bool(docker_targets) and shutil.which("docker") is not None
     if has_docker:
         try:
             probe = subprocess.run(
@@ -199,9 +330,11 @@ def run_compose(verbose: bool = False) -> int:
             has_docker = False
 
     if has_docker:
-        print("  Docker compose is available. Validating configurations with docker...")
+        print(
+            f"  Docker compose is available. Validating {len(docker_targets)} configuration(s) with docker..."
+        )
         failed_compose: list[Path] = []
-        for file in compose_files:
+        for file in docker_targets:
             rel = file.relative_to(ROOT)
             cmd = ["docker", "compose", "-f", str(rel), "config"]
             res = _run_cmd(
@@ -221,6 +354,10 @@ def run_compose(verbose: bool = False) -> int:
         if failed_compose:
             print(f"❌ {len(failed_compose)} compose file(s) failed validation.")
             return 1
+    elif changed_only and not docker_targets:
+        print(
+            "  ℹ️ No compose directories changed in current diff; skipped live docker compose config."
+        )
     else:
         print(
             "  ℹ️ Docker daemon not running. Verified YAML syntax; skipped live docker compose config."
@@ -506,66 +643,19 @@ def run_lint(verbose: bool = False) -> int:
 
     # 2. ruff format check on changed files
     base_ref = os.environ.get("GITHUB_BASE_REF", "main")
-    changed_py_files: set[str] = set()
-
-    # Check working tree changes (both unstaged and staged)
-    try:
-        wt_diff = subprocess.run(
-            [
-                "git",
-                "diff",
-                "--name-only",
-                "HEAD",
-                "--",
-                "libs",
-                "bootstrap",
-                "platform",
-                "finance_report",
-                "truealpha",
-                "tools",
-            ],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=30,
-        )
-        for line in wt_diff.stdout.splitlines():
-            if line.endswith(".py") and (ROOT / line).exists():
-                changed_py_files.add(line)
-    except Exception as exc:
-        print(f"  ⚠️ Warning: git diff HEAD check failed: {exc}")
-
-    # Check committed branch changes against base
-    try:
-        branch_diff = subprocess.run(
-            [
-                "git",
-                "diff",
-                "--name-only",
-                f"origin/{base_ref}...HEAD",
-                "--",
-                "libs",
-                "bootstrap",
-                "platform",
-                "finance_report",
-                "truealpha",
-                "tools",
-            ],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=30,
-        )
-        if branch_diff.returncode == 0:
-            for line in branch_diff.stdout.splitlines():
-                if line.endswith(".py") and (ROOT / line).exists():
-                    changed_py_files.add(line)
-    except Exception as exc:
-        print(f"  ⚠️ Warning: git diff origin/{base_ref}...HEAD check failed: {exc}")
-
-    sorted_files = sorted(changed_py_files)
+    lint_roots = (
+        "libs/",
+        "bootstrap/",
+        "platform/",
+        "finance_report/",
+        "truealpha/",
+        "tools/",
+    )
+    sorted_files = [
+        rel
+        for rel in _collect_changed_files(base_ref=base_ref)
+        if rel.endswith(".py") and rel.startswith(lint_roots)
+    ]
     if sorted_files:
         print(f"  Checking format on {len(sorted_files)} changed Python file(s)...")
         try:
@@ -598,9 +688,24 @@ def run_unit_tests(
     targets: Sequence[str] | None = None,
     verbose: bool = False,
     timeout: float = 600.0,
+    changed_only: bool = False,
 ) -> int:
     """Run unit test suite with coverage and isolation."""
-    test_paths = list(targets) if targets else ["libs/tests"]
+    explicit_targets = list(targets) if targets else []
+    if explicit_targets:
+        test_paths = explicit_targets
+    elif changed_only:
+        resolved = _resolve_changed_test_targets()
+        if resolved:
+            test_paths = resolved
+        else:
+            print(
+                "ℹ️ No affected unit test targets detected for current diff; running fast contract preflight."
+            )
+            test_paths = ["libs/tests/test_deployer_contract_light.py"]
+    else:
+        test_paths = ["libs/tests"]
+
     print(f"▶ Running infra unit test suite ({', '.join(test_paths)})...")
     start_time = time.monotonic()
 
@@ -619,8 +724,13 @@ def run_unit_tests(
         *test_paths,
         "-q",
     ]
-    if not targets:
-        cmd.extend(["-n", "auto"])
+    if changed_only or explicit_targets:
+        cmd.append("-x")
+        if len(test_paths) > 1:
+            cmd.extend(["-n", _default_pytest_workers()])
+    else:
+        cmd.extend(["-n", _default_pytest_workers()])
+
     env = {"PYTHONSAFEPATH": "1"}
     try:
         _run_cmd(cmd, env=env, set_pythonpath=False, timeout=timeout)
@@ -665,6 +775,7 @@ def run_all(
     verbose: bool = False,
     fail_fast: bool = True,
     with_unit_tests: bool = False,
+    changed_only: bool = False,
 ) -> int:
     """Run all primary gate targets sequentially."""
     print("🚀 Running all CI gate targets...")
@@ -675,7 +786,10 @@ def run_all(
     failed = False
     for target in suite:
         _, fn = GATES[target]
-        ret = fn(verbose=verbose)
+        if target in ("compose", "unit-tests"):
+            ret = fn(verbose=verbose, changed_only=changed_only)
+        else:
+            ret = fn(verbose=verbose)
         if ret != 0:
             failed = True
             if fail_fast:
@@ -715,7 +829,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--with-unit-tests",
         action="store_true",
-        help="When running all targets, also execute the full unit test suite.",
+        help="When running all targets, also execute the unit test suite.",
+    )
+    parser.add_argument(
+        "--changed",
+        action="store_true",
+        help="Scope unit-tests and compose checks to files modified in the current diff.",
     )
     parser.add_argument(
         "--agents-only",
@@ -750,6 +869,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             verbose=args.verbose,
             fail_fast=args.fail_fast,
             with_unit_tests=args.with_unit_tests,
+            changed_only=args.changed,
         )
 
     if args.target == "vault":
@@ -759,8 +879,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             verbose=args.verbose,
         )
 
+    if args.target == "compose":
+        return run_compose(verbose=args.verbose, changed_only=args.changed)
+
     if args.target == "unit-tests":
-        return run_unit_tests(targets=args.test_targets, verbose=args.verbose)
+        return run_unit_tests(
+            targets=args.test_targets,
+            verbose=args.verbose,
+            changed_only=args.changed,
+        )
 
     _, fn = GATES[args.target]
     return fn(verbose=args.verbose)

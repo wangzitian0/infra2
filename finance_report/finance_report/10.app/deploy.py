@@ -94,11 +94,12 @@ class AppDeployer(Deployer):
     telemetry_service_name = "finance-report-backend"
     telemetry_component = "backend"
 
-    # deploy_v2 acceptance canary support (#541): tools/deploy_v2_canary.py
-    # iterates registry services declaring this flag (was a hardcoded service
-    # id there). Requires a working preview lane (the canary deploys the
-    # reserved pr-<CANARY_PR> slot); truealpha flips its own flag when its
-    # preview lands — no canary code change needed then.
+    # deploy_v2 acceptance canary support (#541, #1287): app-deploy-request.yml
+    # passes --service explicitly for every app's prod preflight canary
+    # (including truealpha/app). Declaring deploy_v2_canary = True here marks
+    # finance_report/app as the single representative service for ops-checks.yml's
+    # default engine canary, avoiding duplicate sequential canary runs on the
+    # shared lock.
     deploy_v2_canary = True
 
     # Vault self-refresh facts (#542): the audit inventory derives from these
