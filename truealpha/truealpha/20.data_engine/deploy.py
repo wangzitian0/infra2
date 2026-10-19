@@ -114,11 +114,10 @@ class DataEngineDeployer(Deployer):
     # constant would imply an ordering that does not exist. A test asserts they agree.
     _MINIO_S3_PORTS = {"staging": "19000", "production": "19001"}
     _WEBSERVER_PORTS = {"staging": "13001", "production": "13002"}
-    # S3_ENDPOINT is deliberately absent: the template no longer reads it. Requiring
-    # a Vault key nothing consumes is worse than not requiring it — it invites
-    # someone to "fix" the endpoint there and observe no effect.
+    # S3_ENDPOINT and SEC_USER_AGENT are deliberately absent: the template no longer
+    # reads them (#637, #1279). Requiring a Vault key nothing consumes is worse than
+    # not requiring it — it invites someone to "fix" the value there and observe no effect.
     _REQUIRED_SECRET_KEYS = (
-        "SEC_USER_AGENT",
         "S3_ACCESS_KEY",
         "S3_SECRET_KEY",
         "S3_BUCKET",

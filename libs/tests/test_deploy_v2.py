@@ -1119,7 +1119,7 @@ def test_fixed_deploy_verifies_vault_and_config_by_default(calls):
     _deploy(deploy_type="staging", version_ref="v1.2.3")
     assert calls["fixed"]["verify_vault"] is True
     assert calls["fixed"]["verify_config"] is True
-    assert "model_overrides" in calls["fixed"]  # threaded through (env-sourced)
+    assert "model_overrides" not in calls["fixed"]
 
 
 def test_fixed_deploy_verify_can_be_disabled(calls):

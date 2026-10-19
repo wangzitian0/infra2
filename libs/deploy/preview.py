@@ -363,9 +363,9 @@ def up(
 
         # Configure source + env on BOTH paths. Dokploy's compose.create persists ONLY
         # basic fields, so github binding and env must be re-applied before every deploy.
-        # update_compose_env merges, preserving runtime AppRole credentials.
+        # update_compose_env with replace=True replaces stale keys while preserving runtime AppRole credentials.
         client.update_compose(compose_id, **source_fields)
-        client.update_compose_env(compose_id, env_vars=env_vars)
+        client.update_compose_env(compose_id, env_vars=env_vars, replace=True)
 
         # A public 200 may still come from the old stack. Snapshot before this trigger and
         # require a new deployment record to reach terminal-good before probing routes.

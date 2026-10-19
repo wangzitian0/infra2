@@ -42,7 +42,7 @@ def origins(root: Path = ROOT) -> dict[str, tuple[str, str]]:
     return {f["path"]: (f["app"], f["upstream"]) for f in _lock(root)["files"]}
 
 
-def check(root: Path = ROOT, fetch=None) -> list[str]:
+def check(root: Path = ROOT, fetch=None, ls_remote=None) -> list[str]:
     """One line per problem. An empty list means the copies match the lock.
 
     With ``fetch``, a clean check also compares every file with the upstream bytes at the locked commit.
@@ -51,8 +51,25 @@ def check(root: Path = ROOT, fetch=None) -> list[str]:
     try:
         lock = _lock(root)
         for name, app in lock["apps"].items():
-            if not re.fullmatch(r"[0-9a-f]{40}", app["commit"]):
+            if not isinstance(app.get("commit"), str) or not re.fullmatch(
+                r"[0-9a-f]{40}", app["commit"]
+            ):
                 problems.append(f"{LOCK}: apps.{name}.commit is not 40 lowercase hex")
+            repository = app.get("repository")
+            if not isinstance(repository, str) or not re.fullmatch(
+                r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository
+            ):
+                problems.append(f"{LOCK}: apps.{name}.repository is not owner/name")
+            tag = app.get("tag")
+            if tag is not None and (
+                not isinstance(tag, str)
+                or not tag.strip()
+                or tag != tag.strip()
+                or not tag.isprintable()
+            ):
+                problems.append(
+                    f"{LOCK}: apps.{name}.tag must be null or a non-empty printable string"
+                )
         for f in lock["files"]:
             path, sha256, up = f["path"], f["sha256"], PurePosixPath(f["upstream"])
             if f["app"] not in lock["apps"]:
@@ -75,6 +92,22 @@ def check(root: Path = ROOT, fetch=None) -> list[str]:
             elif p.suffix == ".json" and rel not in listed:
                 problems.append(f"{rel}: not listed in {LOCK}")
         if fetch and not problems:  # the copies equal the lock: now ask upstream
+            if ls_remote:
+                for name, app in lock["apps"].items():
+                    repo_url = f"https://github.com/{app['repository']}.git"
+                    tag = app.get("tag")
+                    if tag:
+                        tag_sha, _ = resolve(app["repository"], tag, ls_remote)
+                        if tag_sha != app["commit"]:
+                            problems.append(
+                                f"{LOCK}: apps.{name}.tag {tag!r} resolves to {tag_sha[:12]}, not {app['commit'][:12]}"
+                            )
+                    else:
+                        main_lines = ls_remote(repo_url, "refs/heads/main").splitlines()
+                        if not main_lines:
+                            problems.append(
+                                f"{LOCK}: apps.{name}.repository {app['repository']} has no refs/heads/main"
+                            )
             for f in lock["files"]:
                 app = lock["apps"][f["app"]]
                 url = f"https://raw.githubusercontent.com/{app['repository']}/{app['commit']}/{f['upstream']}"
@@ -155,8 +188,13 @@ def main(argv=None, root=ROOT, **network) -> int:
     args = parser.parse_args(argv)
     if args.sync:
         sync(*args.sync, root=root, **network)
-        return 0
-    errors = check(root, (network.get("fetch") or http_get) if args.verify else None)
+        if not args.verify:
+            return 0
+    errors = check(
+        root,
+        (network.get("fetch") or http_get) if args.verify else None,
+        (network.get("ls_remote") or git_ls_remote) if args.verify else None,
+    )
     print("\n".join(errors) or f"app manifest copies: ok ({len(origins(root))} files)")
     return 1 if errors else 0
 

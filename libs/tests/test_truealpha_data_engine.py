@@ -44,7 +44,6 @@ class _Secrets:
 
 def _secret_values(digest_char="a"):
     return {
-        "SEC_USER_AGENT": "TrueAlpha test test@example.com",
         "S3_ENDPOINT": "https://s3-staging.example.test",
         "S3_ACCESS_KEY": "test-access",
         "S3_SECRET_KEY": "test-secret",
