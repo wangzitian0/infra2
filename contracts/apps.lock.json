@@ -6,7 +6,7 @@
       "tag": null
     },
     "truealpha": {
-      "commit": "5a6d5893226cce47dfcfaf0f97276c74edd95d37",
+      "commit": "d4ca6e1b35594b132a8e475023786b2912f6c3cc",
       "repository": "wangzitian0/truealpha",
       "tag": null
     }
@@ -21,19 +21,19 @@
     {
       "app": "truealpha",
       "path": "contracts/truealpha/app-web.required-env.manifest.json",
-      "sha256": "c6b32506dbedaa8b7d03e2aa69eecf3b0429a055c5300508dfe3c1e1da1f00f6",
+      "sha256": "24beed8e3ac997bd3ba5b6b93dae66209eb693766883200a80737f7f019f9013",
       "upstream": "apps/app-web/required-env.manifest.json"
     },
     {
       "app": "truealpha",
       "path": "contracts/truealpha/data-engine.required-env.generated.json",
-      "sha256": "d7f9c2dce7e45575983f5130130be9ab3b798e06dc48f8c0d35791ff44533253",
+      "sha256": "796f95d9baf8df6eb1822ce0082e4374a876b7696b4adac5367ef68fdf0c4255",
       "upstream": "apps/data-engine/required-env.generated.json"
     },
     {
       "app": "truealpha",
       "path": "contracts/truealpha/llm-service.required-env.generated.json",
-      "sha256": "3cce4b8b7b983a0668a1b059432cdc1995ec1fe27bfdd238942c9966d9c8582b",
+      "sha256": "1393e781840069608d1373e07eac6e83802efe3d58e1c4ca4c614a412ef34a32",
       "upstream": "apps/llm-service/required-env.generated.json"
     }
   ],

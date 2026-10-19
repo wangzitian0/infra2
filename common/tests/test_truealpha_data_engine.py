@@ -879,14 +879,31 @@ def test_compose_injects_both_canonical_and_legacy_release_variable_names():
         assert env["CONFIGURATION_SHA256"] == env["TRUEALPHA_CONFIGURATION_SHA256"]
 
 
+#: A field of these sources reaches the container through the Vault template. The entrypoint
+#: sources the rendered `.env`. Any other injected field must be in the compose environment.
+_STORE_BACKED_SOURCES = frozenset({"human", "runtime"})
+
+
+def _template_renders(template_text: str, env_name: str) -> bool:
+    """True when the Vault template has a line for `env_name`, bare or inside `with index`."""
+    pattern = rf'(?m)^(?:\{{\{{ with index \.Data\.data "[A-Z0-9_]+" \}}\}})?{re.escape(env_name)}='
+    return re.search(pattern, template_text) is not None
+
+
 def _missing_injected_contract_vars(
     contract_data: dict,
     compose_data: dict,
     service_names: tuple[str, ...],
+    template_text: str,
 ) -> dict[str, list[str]]:
-    """Return missing injected contract variable names per compose service."""
+    """Return missing injected contract variable names per compose service.
+
+    A store-backed field (source human or runtime) is provided when the Vault template of the
+    stack renders it (#1296). Every other injected field is provided when the compose
+    environment of the service has it or one of its aliases.
+    """
     injected_fields = [
-        (field["env"], tuple(field.get("aliases", ())))
+        (field["env"], tuple(field.get("aliases", ())), field.get("source"))
         for field in contract_data.get("fields", ())
         if field.get("injected") is True
     ]
@@ -897,8 +914,12 @@ def _missing_injected_contract_vars(
         provided = set(env_map.keys())
         missing = [
             env_name
-            for env_name, aliases in injected_fields
-            if not ({env_name, *aliases} & provided)
+            for env_name, aliases, source in injected_fields
+            if not (
+                _template_renders(template_text, env_name)
+                if source in _STORE_BACKED_SOURCES
+                else {env_name, *aliases} & provided
+            )
         ]
         if missing:
             missing_by_service[svc_name] = sorted(missing)
@@ -913,26 +934,32 @@ def test_truealpha_compose_services_provide_every_injected_contract_variable():
         (
             ROOT / "contracts/truealpha/data-engine.required-env.generated.json",
             SERVICE_DIR / "compose.yaml",
+            SERVICE_DIR / "secrets.ctmpl",
             ("dagster-code-server", "dagster-webserver", "dagster-daemon"),
         ),
         (
             ROOT / "contracts/truealpha/llm-service.required-env.generated.json",
             ROOT / "truealpha/truealpha/10.app/compose.yaml",
+            ROOT / "truealpha/truealpha/10.app/secrets.ctmpl",
             ("llm",),
         ),
         (
             ROOT / "contracts/truealpha/llm-service.required-env.generated.json",
             ROOT / "truealpha/truealpha/preview/compose.yaml",
+            ROOT / "truealpha/truealpha/preview/secrets.ctmpl",
             ("llm",),
         ),
     )
-    for contract_path, compose_path, roles in checks:
+    for contract_path, compose_path, template_path, roles in checks:
         contract_data = json.loads(contract_path.read_text(encoding="utf-8"))
         compose_data = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
-        missing = _missing_injected_contract_vars(contract_data, compose_data, roles)
+        template_text = template_path.read_text(encoding="utf-8")
+        missing = _missing_injected_contract_vars(
+            contract_data, compose_data, roles, template_text
+        )
         assert not missing, (
-            f"{compose_path.relative_to(ROOT)} misses injected contract vars "
-            f"from {contract_path.relative_to(ROOT)}: {missing}"
+            f"{compose_path.relative_to(ROOT)} and {template_path.relative_to(ROOT)} miss injected "
+            f"contract vars from {contract_path.relative_to(ROOT)}: {missing}"
         )
 
 
@@ -957,5 +984,37 @@ def test_missing_injected_contract_variable_in_compose_is_detected():
         contract_data,
         compose_data,
         ("dagster-code-server", "dagster-webserver", "dagster-daemon"),
+        (SERVICE_DIR / "secrets.ctmpl").read_text(encoding="utf-8"),
     )
     assert missing == {"dagster-code-server": ["RELEASE_ID"]}
+
+
+def test_store_backed_injected_variable_missing_from_the_template_is_detected():
+    """#1296: a human or runtime field that the image requires must be rendered by the Vault template.
+
+    The manifest copy can lag the image. Then the template has no line for the variable, the
+    container boot check stops the code server, and the compose environment is not involved.
+    Falsifiability: remove the SEC_USER_AGENT line and the guard names it for every service."""
+    contract_data = json.loads(
+        (
+            ROOT / "contracts/truealpha/data-engine.required-env.generated.json"
+        ).read_text(encoding="utf-8")
+    )
+    compose_data = yaml.safe_load(
+        (SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8")
+    )
+    template = (SERVICE_DIR / "secrets.ctmpl").read_text(encoding="utf-8")
+    assert _template_renders(template, "SEC_USER_AGENT"), (
+        "the template lost the line the contract needs"
+    )
+    stale = "\n".join(
+        line for line in template.splitlines() if "SEC_USER_AGENT" not in line
+    )
+    roles = ("dagster-code-server", "dagster-webserver", "dagster-daemon")
+    assert (
+        _missing_injected_contract_vars(contract_data, compose_data, roles, template)
+        == {}
+    )
+    assert _missing_injected_contract_vars(
+        contract_data, compose_data, roles, stale
+    ) == {role: ["SEC_USER_AGENT"] for role in roles}
