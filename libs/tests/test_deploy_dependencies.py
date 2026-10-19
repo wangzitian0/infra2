@@ -399,8 +399,23 @@ def test_shipped_manifest_has_no_fanout_coverage_violations():
 
     composes = find_service_composes()
     alerting = [c for c in composes if c.parent.name == "12.alerting"]
-    # The audit reads repo-root inputs: alerting COPYs libs/ and tools/ (#267).
+    # The audit reads repo-root inputs: alerting COPYs common/, libs/, and tools/ (#267, #1270).
     assert fanout_coverage_violations(alerting, manifest={}), (
         "the audit found no repo-root input for alerting, so it checks nothing"
     )
     assert audit() == []
+
+
+def test_alerting_dockerfile_copies_common_libs_and_tools():
+    """#1270: libs/core/* delegates to common/*, so alerting's image must COPY common, libs, and tools."""
+    from pathlib import Path
+
+    dockerfile = (
+        Path(__file__).resolve().parents[2] / "platform/12.alerting/Dockerfile"
+    ).read_text(encoding="utf-8")
+    for required in (
+        "COPY common /app/common",
+        "COPY libs /app/libs",
+        "COPY tools /app/tools",
+    ):
+        assert required in dockerfile

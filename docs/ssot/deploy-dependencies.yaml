@@ -33,10 +33,10 @@
 # changed files that fanned out to nothing).
 version: 1
 services:
-  # platform/alerting's Dockerfile does `COPY libs /app/libs` and
-  # `COPY tools /app/tools` with build context = repo root, so it bakes both
-  # trees into its image. A change to either must redeploy it; without this
-  # entry alerting would silently run stale tooling.
+  # platform/alerting's Dockerfile does `COPY common /app/common`,
+  # `COPY libs /app/libs`, and `COPY tools /app/tools` with build context =
+  # repo root, so it bakes those trees into its image. A change to any must
+  # redeploy it; without this entry alerting would silently run stale tooling.
   #
   # The deploy.py globs (#541): alerting's INFRA_PROBE_SPECS env is RENDERED
   # from every service's ProbeFacet declarations (deploy.py Deployer attrs),
@@ -44,6 +44,7 @@ services:
   # config hash — otherwise the runner keeps probing the previous set.
   platform/alerting:
     depends_on:
+      - common/**
       - libs/**
       - tools/**
       - platform/*/deploy.py
