@@ -256,6 +256,31 @@ def test_clean_fixture_passes_all_metrics_and_cli_check(
     assert (out_dir / "sdk_usage_census.json").is_file()
 
 
+def test_public_defs_skips_overload_stubs(tmp_path: Path) -> None:
+    pkg_root = tmp_path / "src" / PKG_UNDER
+    _write(
+        pkg_root,
+        "http.py",
+        """
+        import typing
+        from typing import overload
+
+        @overload
+        def create_client(flag: bool = False) -> str: ...
+
+        @typing.overload
+        def create_client(flag: bool = True) -> int: ...
+
+        def create_client(flag: bool = False) -> str | int:
+            return 1 if flag else "ok"
+        """,
+    )
+    defs = census.public_defs(pkg_root)
+    assert len(defs) == 1
+    assert defs[0]["name"] == "create_client"
+    assert defs[0]["line"] == 10
+
+
 def test_m1_mutation_fails_when_consumer_imports_missing_sdk_symbol(
     synthetic_workspace: tuple[Path, dict[str, Path]],
 ) -> None:
