@@ -155,9 +155,11 @@ def test_every_registered_service_declares_where_its_operator_keys_are_read():
         "truealpha/app": ("S3_BUCKET",),
         "truealpha/data_engine": (
             "CAPTURE_APPROVED_BY",
+            "DATA_ENGINE_IMAGE_DIGEST",
             "GIT_COMMIT_SHA",
             "IMAGE_DIGEST",
             "RELEASE_ID",
+            "RELEASE_MANIFEST_ID",
             "S3_BUCKET",
         ),
     }
@@ -204,6 +206,7 @@ DEPLOYER_READS = {
     "truealpha/data_engine": tuple(
         sorted(
             set(_data_engine_deployer()._REQUIRED_SECRET_KEYS)
+            | set(_data_engine_deployer()._LEGACY_SECRET_ALIASES.values())
             # Not required (an unpinned deploy reports "unknown"), but read from this
             # path by compose_env_base all the same.
             | {"GIT_COMMIT_SHA"}

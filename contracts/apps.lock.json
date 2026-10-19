@@ -1,7 +1,7 @@
 {
   "apps": {
     "finance_report": {
-      "commit": "4baf85dc274af91b15073463f2b85b97da5f4e28",
+      "commit": "d185ec8a728b171ffc3614ad333a422299ef6adb",
       "repository": "wangzitian0/finance_report",
       "tag": null
     },

@@ -451,6 +451,7 @@ def onboard_service(
                     "VAULT_ADDR": vault_addr,
                     "ENV": env_name,
                 },
+                replace=False,
             )
             result_summary["dokploy_env_updated"] = True
             success(f"Injected AppRole into Dokploy compose '{compose.get('name')}'")
