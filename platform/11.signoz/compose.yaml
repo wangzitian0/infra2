@@ -83,6 +83,11 @@ services:
     expose:
       - "4317"
       - "4318"
+    # Host-loopback OTLP HTTP publish (#1231) so network_mode: host services
+    # (truealpha/data_engine) can export spans and logs without exposing 4318
+    # on any public interface.
+    ports:
+      - "127.0.0.1:14318:4318"
     networks:
       - dokploy-network
     logging:

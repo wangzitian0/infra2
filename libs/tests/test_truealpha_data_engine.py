@@ -843,3 +843,38 @@ def test_deploy_still_fails_closed_when_neither_vault_name_exists(monkeypatch):
     assert deployer.ensure_runtime_secrets() is False
     with pytest.raises(ValueError, match="IMAGE_DIGEST must be configured"):
         deployer.compose_env_base({})
+
+
+def test_data_engine_exports_otel_over_host_loopback_matching_signoz_collector():
+    """#1231: data-engine runs with network_mode: host and cannot resolve
+    platform-signoz-otel-collector on dokploy-network. SigNoz publishes OTLP HTTP
+    4318 on 127.0.0.1:14318 only, and every Dagster role exports to that loopback."""
+    signoz_compose = yaml.safe_load(
+        (ROOT / "platform/11.signoz/compose.yaml").read_text(encoding="utf-8")
+    )
+    collector_ports = signoz_compose["services"]["otel-collector"]["ports"]
+    assert collector_ports == ["127.0.0.1:14318:4318"]
+
+    compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
+    for role in ("dagster-code-server", "dagster-webserver", "dagster-daemon"):
+        env = compose["services"][role]["environment"]
+        assert env.get("OTEL_EXPORTER_OTLP_ENDPOINT") == "http://127.0.0.1:14318", role
+        assert env.get("OTEL_SERVICE_NAME") == "${OTEL_SERVICE_NAME:-}", role
+        assert env.get("OTEL_RESOURCE_ATTRIBUTES") == "${OTEL_RESOURCE_ATTRIBUTES:-}", (
+            role
+        )
+
+    deployer = _load_deploy_module().DataEngineDeployer
+    assert deployer.telemetry_service_name == "truealpha-data-engine"
+
+
+def test_compose_injects_both_canonical_and_legacy_release_variable_names():
+    """#1271 expand phase: truealpha releases before v0.2.4 (and v0.2.5) read the
+    legacy TRUEALPHA_* container variable names, while v0.2.4+ read the canonical
+    names. Injecting both in compose allows both image generations to boot."""
+    compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
+    for role in ("dagster-code-server", "dagster-webserver", "dagster-daemon"):
+        env = compose["services"][role]["environment"]
+        assert env["RELEASE_ID"] == env["TRUEALPHA_RELEASE_MANIFEST_ID"]
+        assert env["IMAGE_DIGEST"] == env["TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST"]
+        assert env["CONFIGURATION_SHA256"] == env["TRUEALPHA_CONFIGURATION_SHA256"]

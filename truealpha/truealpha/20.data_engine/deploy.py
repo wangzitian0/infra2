@@ -70,6 +70,7 @@ class DataEngineDeployer(Deployer):
         ),
     )
     service_name = "dagster-webserver"
+    telemetry_service_name = "truealpha-data-engine"
 
     # Values sourced from the independently released TrueAlpha artifact/runtime
     # approval plane affect deployment idempotence, but cannot be reconstructed
@@ -238,9 +239,7 @@ class DataEngineDeployer(Deployer):
         release_id = cls._secret(secrets, "RELEASE_ID")
         approved_by = secrets.get("CAPTURE_APPROVED_BY") or ""
         if not _IMAGE_DIGEST.fullmatch(image_digest):
-            raise ValueError(
-                "IMAGE_DIGEST must be configured before deployment"
-            )
+            raise ValueError("IMAGE_DIGEST must be configured before deployment")
         if not _RELEASE_ID.fullmatch(release_id):
             raise ValueError("RELEASE_ID must be configured before deployment")
         if not approved_by:
