@@ -178,7 +178,7 @@ def test_legacy_backup_aliases_derived_from_registry(monkeypatch) -> None:
     mock_meta = MagicMock()
     mock_meta.legacy_compose_names = ("legacy_name",)
     monkeypatch.setattr(
-        "libs.core.registry.service_attrs",
+        "common.registry.service_attrs",
         lambda: {"test_layer/test_service": mock_meta},
     )
     assert legacy_backup_aliases() == {
@@ -573,7 +573,10 @@ def test_backup_restore_rehearsal_dry_run_has_no_download_side_effect(
 def test_run_postgres_restore_rehearsal_filters_create_role_postgres(tmp_path) -> None:
     """Postgres 16 dumpall includes CREATE ROLE postgres which fails on existing superuser."""
     import gzip
-    from libs.backup.rehearsal import RestoreRehearsalPlan, run_postgres_restore_rehearsal
+    from libs.backup.rehearsal import (
+        RestoreRehearsalPlan,
+        run_postgres_restore_rehearsal,
+    )
 
     dump_file = tmp_path / "dump.sql.gz"
     with gzip.open(dump_file, "wb") as f:
@@ -640,7 +643,10 @@ def _fake_restore(
     """Stream `payload` through the real restore path, returning what reached psql."""
     import gzip
 
-    from libs.backup.rehearsal import RestoreRehearsalPlan, run_postgres_restore_rehearsal
+    from libs.backup.rehearsal import (
+        RestoreRehearsalPlan,
+        run_postgres_restore_rehearsal,
+    )
 
     dump_file = tmp_path / "dump.sql.gz"
     with gzip.open(dump_file, "wb") as handle:
@@ -796,7 +802,10 @@ def test_restore_reaps_psql_when_the_write_loop_raises_something_else(tmp_path) 
     """Any error while streaming must still reap the child, not leave it running."""
     import gzip
 
-    from libs.backup.rehearsal import RestoreRehearsalPlan, run_postgres_restore_rehearsal
+    from libs.backup.rehearsal import (
+        RestoreRehearsalPlan,
+        run_postgres_restore_rehearsal,
+    )
 
     dump_file = tmp_path / "dump.sql.gz"
     with gzip.open(dump_file, "wb") as handle:

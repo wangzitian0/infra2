@@ -120,7 +120,7 @@ def _list_composes(client):
     (2026-09-09), 99.8% of the probe container's entire log, and it buried the only
     other thing in there — the breakdown alerts that were firing at the time.
     """
-    from libs.core.registry import service_id_for_dokploy
+    from common.registry import service_id_for_dokploy
 
     out = []
     unknown: set[str] = set()

@@ -1,6 +1,6 @@
 """Tests for dynamic Vault token targets discovery (SSOT convergence)."""
 
-from libs.core.constants import REPO_ROOT
+from common.constants import REPO_ROOT
 from libs.tests.test_vault_token_lifecycle import _load_vault_tasks
 
 

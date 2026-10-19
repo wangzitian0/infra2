@@ -46,7 +46,7 @@ def is_report_only_environment(value: str | None) -> bool:
     Anything else — production, an unknown name, garbage — pages: an environment
     that cannot be recognised must fail loud, not quiet.
     """
-    from libs.core.constants import PREVIEW_KINDS
+    from common.constants import PREVIEW_KINDS
     from libs.core.environ import normalize_env_name
 
     raw = (value or "").strip().lower().replace("-", "_")

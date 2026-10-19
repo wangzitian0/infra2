@@ -66,14 +66,22 @@ DEBT: frozenset[tuple[str, str]] = frozenset(_DEBT_ROWS)
 
 
 def _libs_files(root: Path) -> list[Path]:
-    """Every ``.py`` under ``libs/`` except the test suite."""
+    """Every ``.py`` under ``common/`` and ``libs/`` except the test suite."""
+    files: list[Path] = []
+    common_dir = root / "common"
+    if common_dir.is_dir():
+        files.extend(
+            path for path in common_dir.rglob("*.py") if "__pycache__" not in path.parts
+        )
     libs = root / "libs"
-    return sorted(
-        path
-        for path in libs.rglob("*.py")
-        if "__pycache__" not in path.parts
-        and "tests" not in path.relative_to(libs).parts[:1]
-    )
+    if libs.is_dir():
+        files.extend(
+            path
+            for path in libs.rglob("*.py")
+            if "__pycache__" not in path.parts
+            and "tests" not in path.relative_to(libs).parts[:1]
+        )
+    return sorted(files)
 
 
 def _flat_modules(root: Path) -> set[str]:
@@ -86,12 +94,15 @@ def _flat_modules(root: Path) -> set[str]:
 
 
 def _domain_packages(root: Path) -> set[str]:
-    """``libs.<name>`` for every ``libs/<name>/`` package other than the test suite."""
-    return {
+    """``common`` and ``libs.<name>`` for every ``libs/<name>/`` package other than the test suite."""
+    pkgs = {
         f"libs.{path.name}"
         for path in (root / "libs").iterdir()
         if path.is_dir() and path.name != "tests" and (path / "__init__.py").exists()
     }
+    if (root / "common" / "__init__.py").exists():
+        pkgs.add("common")
+    return pkgs
 
 
 def _is_repo_module(dotted: str, root: Path) -> bool:
@@ -128,8 +139,8 @@ def _absolute_base(node: ast.ImportFrom, package: str) -> str | None:
 def _imported_modules(source: str, package: str, root: Path) -> set[str]:
     """Every module a source text imports, as an absolute dotted name.
 
-    ``package`` is the file's own package (``libs.core`` for ``libs/core/environ.py`` and
-    for ``libs/core/__init__.py``; ``libs`` for ``libs/common.py``), which is what relative
+    ``package`` is the file's own package (``common`` for ``common/environ.py`` and
+    ``libs.core`` for ``libs/core/__init__.py``; ``libs`` for ``libs/common.py``), which is what relative
     imports resolve against. ``from X import y`` yields ``X.y`` when that names a module in
     the repo and ``X`` otherwise (``y`` is then a name, not a module).
     """
@@ -195,7 +206,9 @@ def collect_violations(root: Path = ROOT) -> set[tuple[str, str]]:
     for path in _libs_files(root):
         relative = path.relative_to(root)
         package = ".".join(relative.parent.parts)
-        in_domain = ".".join(relative.parts[:2]) in domains
+        in_domain = (
+            relative.parts[0] == "common" or ".".join(relative.parts[:2]) in domains
+        )
         source = path.read_text(encoding="utf-8")
         for module in _imported_modules(source, package, root):
             if _violates(module, in_domain, root):
@@ -215,9 +228,9 @@ def _render(pairs: set[tuple[str, str]]) -> str:
 def test_no_import_boundary_violation_outside_the_debt_ledger() -> None:
     new = collect_violations() - DEBT
     assert not new, (
-        "libs/ has import-boundary violations that are not in DEBT (infra2#955). Fix the "
+        "libs/ or common/ has import-boundary violations that are not in DEBT (infra2#955). Fix the "
         "import instead of adding a ledger entry: a domain package imports "
-        "libs.<domain>.* (never a flat libs/<name>.py), and nothing under libs/ imports "
+        "common.* or libs.<domain>.* (never a flat libs/<name>.py), and nothing under common/ or libs/ imports "
         "tools, platform or bootstrap.\n" + _render(new)
     )
 
@@ -239,9 +252,11 @@ def test_the_scan_sees_the_real_tree() -> None:
     """GREEN-WHILE-EMPTY: a walk that finds no files or packages passes both rules."""
     files = {path.relative_to(ROOT).as_posix() for path in _libs_files(ROOT)}
     assert len(files) >= 50, files
+    assert "common/environ.py" in files
     assert "libs/deploy/preview.py" in files
     assert not any(name.startswith("libs/tests/") for name in files)
     assert {
+        "common",
         "libs.core",
         "libs.security",
         "libs.deploy",
@@ -355,6 +370,11 @@ def test_violation_rules(module: str, in_domain: bool, expected: bool) -> None:
 
 def test_collect_violations_on_a_synthetic_tree(tmp_path: Path) -> None:
     """End to end on a throwaway tree: each rule fires, and only where it applies."""
+    common_dir = tmp_path / "common"
+    common_dir.mkdir(parents=True)
+    (common_dir / "__init__.py").write_text("")
+    (common_dir / "bad_common.py").write_text("import tools.z\n")
+
     libs = tmp_path / "libs"
     (libs / "dom").mkdir(parents=True)
     (libs / "tests").mkdir()
@@ -371,6 +391,7 @@ def test_collect_violations_on_a_synthetic_tree(tmp_path: Path) -> None:
     (libs / "tests" / "test_x.py").write_text("import libs.flat\nimport tools.y\n")
 
     assert collect_violations(tmp_path) == {
+        ("common/bad_common.py", "tools.z"),
         ("libs/dom/bad.py", "libs.flat"),
         ("libs/dom/bad.py", "bootstrap.thing"),
         ("libs/other.py", "tools"),
@@ -468,6 +489,13 @@ ALL_RETIRED_FLAT_SHIMS = (
     | RETIRED_FLAT_SHIMS_FINAL
 )
 
+RETIRED_CORE_SHIMS = {
+    "constants",
+    "facets",
+    "registry",
+    "service_identity",
+}
+
 
 def test_retired_flat_shim_files_stay_deleted() -> None:
     """The retired flat shims must never be recreated."""
@@ -479,6 +507,19 @@ def test_retired_flat_shim_files_stay_deleted() -> None:
     assert not resurrected, (
         f"Retired flat shim files recreated under libs/: {resurrected}. Use the domain "
         "packages directly."
+    )
+
+
+def test_retired_core_shim_files_stay_deleted() -> None:
+    """The retired libs/core/<name>.py shims (#1270, #1290) must stay deleted."""
+    resurrected = [
+        name
+        for name in sorted(RETIRED_CORE_SHIMS)
+        if (ROOT / "libs" / "core" / f"{name}.py").exists()
+    ]
+    assert not resurrected, (
+        f"Retired libs/core shim files recreated: {resurrected}. Import from "
+        "common.<name> directly (#1290)."
     )
 
 
@@ -497,6 +538,7 @@ def test_no_tracked_python_file_uses_a_retired_flat_shim() -> None:
 
     violations: list[str] = []
     retired_dotted = {f"libs.{s}" for s in ALL_RETIRED_FLAT_SHIMS}
+    retired_core_dotted = {f"libs.core.{s}" for s in RETIRED_CORE_SHIMS}
 
     for rel in tracked:
         if rel == "libs/tests/test_import_boundaries.py":
@@ -511,7 +553,10 @@ def test_no_tracked_python_file_uses_a_retired_flat_shim() -> None:
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name in retired_dotted:
+                    if (
+                        alias.name in retired_dotted
+                        or alias.name in retired_core_dotted
+                    ):
                         violations.append(
                             f"{rel}:{node.lineno} imports retired {alias.name}"
                         )
@@ -523,10 +568,16 @@ def test_no_tracked_python_file_uses_a_retired_flat_shim() -> None:
                             violations.append(
                                 f"{rel}:{node.lineno} imports retired libs.{alias.name}"
                             )
-                elif mod in retired_dotted:
+                elif mod == "libs.core":
+                    for alias in node.names:
+                        if alias.name in RETIRED_CORE_SHIMS:
+                            violations.append(
+                                f"{rel}:{node.lineno} imports retired libs.core.{alias.name}"
+                            )
+                elif mod in retired_dotted or mod in retired_core_dotted:
                     violations.append(f"{rel}:{node.lineno} imports from retired {mod}")
 
     assert not violations, (
-        "Tracked python files still import retired flat shims:\n"
+        "Tracked python files still import retired shims:\n"
         + "\n".join(f"  - {v}" for v in violations)
     )

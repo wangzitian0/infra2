@@ -20,8 +20,8 @@ from infra2_sdk.deploy import (
 )
 from infra2_sdk.refs import ResolvedRef, resolve_image_ref, resolve_pr
 
-from libs.core.constants import APP_SOURCES
-from libs.core.registry import domain_for_service
+from common.constants import APP_SOURCES
+from common.registry import domain_for_service
 from libs.deploy.release_markers import (
     MINIMUM_PRODUCTION_MARKER,
     PRODUCTION_MARKER_PREFIX,

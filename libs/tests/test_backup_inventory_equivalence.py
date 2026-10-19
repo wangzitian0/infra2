@@ -35,8 +35,8 @@ def test_handwritten_yaml_stays_deleted() -> None:
 def test_duplicate_backup_ids_fail_closed(monkeypatch) -> None:
     import dataclasses
 
-    import libs.core.registry as reg
-    from libs.core.facets import BackupFacet
+    import common.registry as reg
+    from common.facets import BackupFacet
 
     real_attrs = dict(reg.service_attrs())
     donor = real_attrs["platform/postgres"]
@@ -56,8 +56,8 @@ def test_duplicate_backup_ids_fail_closed(monkeypatch) -> None:
 def test_missing_data_path_fails_closed(monkeypatch) -> None:
     import dataclasses
 
-    import libs.core.registry as reg
-    from libs.core.facets import BackupFacet
+    import common.registry as reg
+    from common.facets import BackupFacet
 
     real_attrs = dict(reg.service_attrs())
     donor = real_attrs["platform/postgres"]

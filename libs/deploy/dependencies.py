@@ -21,7 +21,7 @@ import fnmatch
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from libs.core.constants import REPO_ROOT
+from common.constants import REPO_ROOT
 
 _ROOT = REPO_ROOT
 DEFAULT_MANIFEST = _ROOT / "docs" / "ssot" / "deploy-dependencies.yaml"

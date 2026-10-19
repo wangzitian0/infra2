@@ -65,7 +65,7 @@ def lint_python_callsites(
 ) -> list[str]:
     signals = signals if signals is not None else registered_signal_names()
     errors: list[str] = []
-    for folder in ("tools", "libs"):
+    for folder in ("common", "tools", "libs"):
         # rglob, not glob: the #846 domain packages (libs/observability/, libs/deploy/,
         # ...) hold implementations that a flat-only scan would stop covering the moment
         # a file moves into one -- silently, with the lint still green.

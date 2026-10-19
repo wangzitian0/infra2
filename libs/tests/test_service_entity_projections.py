@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from libs.core import registry
+from common import registry
 from libs.deploy import contract
 from libs.security.registry import SERVICES as SECRET_ROWS
 

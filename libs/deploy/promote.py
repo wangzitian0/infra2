@@ -148,7 +148,7 @@ def assert_approle_creds_present(service: str, client, compose_id: str) -> None:
     existing compose env, so reading the compose's current env here reflects whether
     VAULT_ROLE_ID and VAULT_SECRET_ID will be present after this deploy.
     """
-    from libs.core.registry import service_attrs
+    from common.registry import service_attrs
 
     meta = service_attrs().get(service)
     if not meta or not meta.compose_path:
@@ -291,7 +291,7 @@ def verify_in_service(
         in_service_verdict,
         observe_containers,
     )
-    from libs.core.registry import service_attrs
+    from common.registry import service_attrs
 
     meta = service_attrs().get(service)
     if not meta or not meta.compose_path:
@@ -434,7 +434,7 @@ def _evaluate_schema_gate(service: str, cfg: Any, image_tag: str) -> str | None:
     """Run pre-deploy schema gate when applicable to the service."""
     if not schema_gate.gate_applies(service):
         return None
-    from libs.core.registry import service_attrs
+    from common.registry import service_attrs
 
     meta = service_attrs().get(service)
     if meta is None or not meta.compose_path:
@@ -476,7 +476,7 @@ def _build_deploy_env_vars(
         "IAC_CONFIG_HASH": config_hash,
     }
     from libs.deploy.contract import service_spec
-    from libs.core.service_identity import ServiceIdentity
+    from common.service_identity import ServiceIdentity
 
     svc_spec = service_spec(service)
     identity = ServiceIdentity.build(

@@ -36,7 +36,7 @@ import re
 from dataclasses import dataclass, replace
 from functools import lru_cache
 
-from libs.core import registry as service_registry
+from common import registry as service_registry
 from libs.deploy.env_config import env_config, preview_alias
 
 _SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")  # a resolved, image-addressable commit sha

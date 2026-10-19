@@ -59,7 +59,7 @@ from libs.deploy.sync_pipeline import (
     SyncResult,
 )
 from libs.security.store import get_secrets, verify_vault_token
-from libs.core.facets import (
+from common.facets import (
     BackupFacet,
     Exemption,
     ProbeFacet,
@@ -119,13 +119,13 @@ class _StackUnobservable(RuntimeError):
 
 
 def discover_services() -> dict[str, str]:
-    from libs.core.registry import _LAYERS as layers
+    from common.registry import _LAYERS as layers
 
     return _discover_services_pure(layers)
 
 
 def load_deployer_class(service_id: str) -> type[Deployer] | None:
-    from libs.core.registry import _LAYERS as layers
+    from common.registry import _LAYERS as layers
 
     return _load_deployer_class_pure(service_id, layers=layers, base_class=Deployer)
 
@@ -594,7 +594,7 @@ class Deployer:
     def composing(cls, c: "Context", env_vars: dict[str, str]) -> str:
         """Deploy via Dokploy API using GitHub provider. Returns composeId."""
         from libs.deploy.dokploy_client import get_dokploy, ensure_project
-        from libs.core.constants import GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH
+        from common.constants import GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH
 
         # Resolve branch dynamically to support deploying non-main commits/tags
         branch = cls._checkout_ref() or GITHUB_BRANCH
@@ -947,7 +947,7 @@ class Deployer:
         the caller fails the sync, since a retry skips the now-unchanged stack.
         """
         from libs.deploy.dependencies import service_key_from_path
-        from libs.core.registry import restart_after_containers
+        from common.registry import restart_after_containers
 
         service_id = service_key_from_path(cls.compose_path or "")
         if not service_id:
@@ -1316,7 +1316,7 @@ class Deployer:
     @classmethod
     def build_service_identity(cls, service_id: str, env: str, deploy_ref: str) -> Any:
         """Construct ServiceIdentity for deployment boundary."""
-        from libs.core.service_identity import ServiceIdentity
+        from common.service_identity import ServiceIdentity
 
         identity = ServiceIdentity.build(
             service_id,

@@ -28,8 +28,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from libs.core import registry as reg
-from libs.core.facets import SecretsFacet
+from common import registry as reg
+from common.facets import SecretsFacet
 from libs.security.vault_self_refresh_audit import (
     VaultService,
     _vault_service_from_facet,
@@ -183,7 +183,7 @@ def test_duplicate_derived_inventory_ids_fail_closed() -> None:
 
 _COUNTERFACTUAL_DEPLOY = """
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.core.facets import SecretsFacet
+from common.facets import SecretsFacet
 
 
 class ExampleDeployer(Deployer):

@@ -62,7 +62,7 @@ from libs.deploy.preflight import (
     resolve_data_lane,
 )
 from libs.deploy.env_config import CANARY_SLOT, env_config
-from libs.core.registry import domain_for_service
+from common.registry import domain_for_service
 from libs.deploy.promote import deploy as _deploy_fixed
 from libs.deploy.preview import _validate_domain
 from libs.deploy.preview import down as _preview_down
@@ -76,7 +76,7 @@ from tools.resolve_deploy_ref import (
     resolve_to_sha,
 )
 
-from libs.core.constants import APP_SOURCES
+from common.constants import APP_SOURCES
 
 _APP_SERVICE = "finance_report/app"
 _SERVICE_REPOS: dict[str, str] = {

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from libs.core.constants import REPO_ROOT
+from common.constants import REPO_ROOT
 
 # The SERVICES table is plain data and is read by contexts without the SDK (the ops-checks
 # vault audit installs neither the SDK nor a manifest loader); only manifest loading needs

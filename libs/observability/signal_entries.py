@@ -37,7 +37,7 @@ def _component_for(service_id: str, meta_service: str) -> str:
     plane, the host), invert ``_EXTERNAL_COMPONENT_IDS`` — sorted-first alias
     wins on collision so the choice is deterministic.
     """
-    from libs.core.registry import _EXTERNAL_COMPONENT_IDS
+    from common.registry import _EXTERNAL_COMPONENT_IDS
 
     for alias in sorted(_EXTERNAL_COMPONENT_IDS):
         if _EXTERNAL_COMPONENT_IDS[alias] == service_id:
@@ -61,7 +61,7 @@ def render_internal_signal_entries(attrs=None) -> list[dict[str, Any]]:
     without the classification only exist while that backlog does.
     """
     if attrs is None:
-        from libs.core.registry import service_attrs
+        from common.registry import service_attrs
 
         attrs = service_attrs()
     entries: list[dict[str, Any]] = []

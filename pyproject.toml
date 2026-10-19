@@ -59,7 +59,7 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["libs", "tools"]
+source = ["common", "libs", "tools"]
 omit = [
     "libs/tests/**",
     "e2e_regressions/tests/**",

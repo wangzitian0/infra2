@@ -2703,7 +2703,7 @@ def scan_repo(inv: Inventory, repo: str, root: Path) -> None:
 
 
 DEPLOY_CODE = re.compile(
-    r"(^|/)(libs/deploy/|tools/_lib/dev/pr_preview_lifecycle/|libs/core/environ\.py|libs/core/service_identity\.py|bootstrap/[^/]+/(sync_runner|tasks)\.py|platform/[^/]+/deploy\.py|"
+    r"(^|/)(libs/deploy/|tools/_lib/dev/pr_preview_lifecycle/|common/environ\.py|common/service_identity\.py|libs/core/environ\.py|bootstrap/[^/]+/(sync_runner|tasks)\.py|platform/[^/]+/deploy\.py|"
     r"[^/]*/[^/]*/[^/]+/deploy\.py|shared_tasks\.py|tools/deploy_v2[a-z_]*\.py|libs/security/)"
 )
 
@@ -2866,7 +2866,7 @@ def _is_ephemeral_preview_db_password(key: str, val: str, path: str) -> bool:
 DEV_COMPOSE = re.compile(r"(^|/)docker-compose[^/]*\.ya?ml$")
 DEPLOYED_LAYERS = {"compose-interp", "dockerfile", "dockerfile-run", "py-settings"}
 DEPLOYED_CODE = re.compile(
-    r"^(platform|bootstrap|apps|truealpha|finance_report|libs/deploy|libs/observability|libs/core)/"
+    r"^(platform|bootstrap|apps|truealpha|finance_report|common|libs/deploy|libs/observability|libs/core)/"
 )
 DEV_URL = re.compile(
     r"(localhost|127\.0\.0\.1|@postgres|@db[:/]|@redis|@minio|@host\.docker\.internal)"

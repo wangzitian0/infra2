@@ -10,7 +10,7 @@ import pytest
 from starlette.testclient import TestClient
 
 
-from libs.core import registry as reg
+from common import registry as reg
 from libs.deploy.deployer import discover_services
 from libs.tests.ambient_env import clear_telemetry_env
 

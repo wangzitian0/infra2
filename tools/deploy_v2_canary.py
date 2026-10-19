@@ -69,7 +69,7 @@ def canary_services() -> list[str]:
     closed on an empty set: a scheduled canary that silently probes nothing is
     worse than a red one.
     """
-    from libs.core.registry import service_attrs
+    from common.registry import service_attrs
 
     services = sorted(
         service_id

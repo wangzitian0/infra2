@@ -199,7 +199,7 @@ def _preview_env_vars(
         "IAC_CONFIG_HASH": config_hash,
     }
     from libs.deploy.contract import service_spec
-    from libs.core.service_identity import ServiceIdentity
+    from common.service_identity import ServiceIdentity
 
     spec = service_spec(service)
     identity = ServiceIdentity.build(

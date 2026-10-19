@@ -32,7 +32,7 @@ from unittest.mock import MagicMock
 import pytest
 from packaging.requirements import Requirement
 
-from libs.core import registry as reg
+from common import registry as reg
 from libs.deploy.deployer import Deployer
 from libs.tests.ambient_env import clear_telemetry_env
 from libs.tests.compose_env import compose_services, container_env, raw_environment
@@ -281,7 +281,7 @@ def test_the_app_starts_telemetry_when_the_deploy_issued_the_endpoint(
     bootstrap and keeps its providers. `enable_otel=False` would leave both out."""
     import infra2_sdk.runtime.otel as sdk_otel
 
-    from libs.core.service_identity import ServiceIdentity
+    from common.service_identity import ServiceIdentity
 
     started: list[object] = []
 

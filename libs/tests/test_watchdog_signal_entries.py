@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from libs.core.registry import service_attrs, service_id_for_component
+from common.registry import service_attrs, service_id_for_component
 from libs.observability.signal_entries import render_internal_signal_entries
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -219,8 +219,8 @@ def test_an_alert_facet_must_declare_its_renotify_window() -> None:
     timer"), so a default of 0 made a forgotten window indistinguishable from a
     declared one. Left out, it stays None and the derived entry fails the audit;
     declared as 0 it passes."""
-    from libs.core.facets import ProbeFacet, SignalFacet
-    from libs.core.registry import ServiceMeta
+    from common.facets import ProbeFacet, SignalFacet
+    from common.registry import ServiceMeta
 
     spec = importlib.util.spec_from_file_location("watchdog_audit_for_facets", AUDIT)
     assert spec and spec.loader

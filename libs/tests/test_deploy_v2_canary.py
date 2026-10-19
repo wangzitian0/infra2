@@ -630,7 +630,7 @@ def test_canary_services_derive_from_registry():
 
 
 def test_canary_services_fail_closed_when_none_declared(monkeypatch):
-    import libs.core.registry as reg
+    import common.registry as reg
 
     monkeypatch.setattr(reg, "service_attrs", lambda: {})
     with pytest.raises(RuntimeError, match="deploy_v2_canary"):

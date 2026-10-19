@@ -32,7 +32,7 @@ from urllib.parse import unquote, urlsplit
 import pytest
 
 from libs.security import registry as secrets_registry
-from libs.core import registry as reg
+from common import registry as reg
 from libs.observability.probe_specs import render_probe_spec_text
 from libs.tests.ambient_env import clear_telemetry_env
 from libs.tests.compose_env import compose_services, resolve
@@ -1111,7 +1111,7 @@ def test_public_router_does_not_name_the_canary_status() -> None:
 
 
 def _issued_telemetry_env(environment: str) -> dict[str, str]:
-    from libs.core.service_identity import ServiceIdentity
+    from common.service_identity import ServiceIdentity
 
     identity = ServiceIdentity.build(
         "platform/todo",

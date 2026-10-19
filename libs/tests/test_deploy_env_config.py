@@ -231,7 +231,7 @@ def test_cors_allowed_origins_includes_truealpha():
 
 
 def test_is_stateful_deploy_env_strict_and_lenient():
-    from libs.core.constants import is_stateful_deploy_env
+    from common.constants import is_stateful_deploy_env
 
     # Lenient (strict=False) accepts aliases and dynamic preview patterns
     assert is_stateful_deploy_env("production") is True

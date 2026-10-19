@@ -296,7 +296,7 @@ an explicit per-environment Vault value.
 <a id="telemetry-identity"></a>
 ### 4.5 遥测标识隔离 (Telemetry identity)
 
-可观测性是**单一全局实例**（SigNoz / OpenPanel，`prod_only`）：所有环境都打到同一套，**靠标识区分**，不靠 per-env 实例。身份由 `libs/core/service_identity.py` 一次签发并映射到 IaC、运行时、遥测和告警：
+可观测性是**单一全局实例**（SigNoz / OpenPanel，`prod_only`）：所有环境都打到同一套，**靠标识区分**，不靠 per-env 实例。身份由 `common/service_identity.py` 一次签发并映射到 IaC、运行时、遥测和告警：
 
 | 语义 | canonical 字段 | 示例 |
 |------|----------------|------|
@@ -318,7 +318,7 @@ an explicit per-environment Vault value.
 
 | Class | Services | Compose value | Value in the container | Issued by | Reader |
 |---|---|---|---|---|---|
-| `platform` | `platform/alerting`, `platform/todo` | `${INFRA_IAC_REF:-unknown}` | The full 40-hex infra2 SHA of the deploy. It is `unknown` when the deploy issues no ref. | `libs/deploy/sync_pipeline.py`, `libs/core/service_identity.py` | `platform/30.todo/app.py` shows the first 7 characters. `platform/alerting` has no reader. |
+| `platform` | `platform/alerting`, `platform/todo` | `${INFRA_IAC_REF:-unknown}` | The full 40-hex infra2 SHA of the deploy. It is `unknown` when the deploy issues no ref. | `libs/deploy/sync_pipeline.py`, `common/service_identity.py` | `platform/30.todo/app.py` shows the first 7 characters. `platform/alerting` has no reader. |
 | `app` | `finance_report/app`, `truealpha/app`, `truealpha/data_engine` | `${GIT_COMMIT_SHA:-unknown}` | The image tag. It is a release tag such as `v0.1.74`, or a 7-hex short SHA for a preview from a commit, branch or pull request. | `libs/deploy/promote.py`, `libs/deploy/preview.py` | The `git_sha` and `version` fields of the app health payload. The `finance_report/app` preview readiness probe compares them with the image tag (`libs/deploy/preview.py`, `libs/deploy/env_config.py`). |
 
 An `app` service never receives a 40-hex SHA in `GIT_COMMIT_SHA`. The deploy sets `GIT_COMMIT_SHA` and `IMAGE_TAG` to the same value.

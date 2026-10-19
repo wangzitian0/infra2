@@ -570,7 +570,7 @@ def _third_party_import_roots(source: str) -> set[str]:
             roots.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
             roots.add(node.module.split(".")[0])
-    first_party = {"libs", "tools", "__future__"}
+    first_party = {"common", "libs", "tools", "__future__"}
     return {
         r for r in roots if r not in first_party and r not in sys.stdlib_module_names
     }

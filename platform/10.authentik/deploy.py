@@ -5,7 +5,7 @@ from libs.deploy.deployer import Deployer, make_tasks
 from libs.core.environ import with_env_suffix
 from libs.security.store import generate_password, get_secrets, vault_token
 from libs.console import success, warning, info, error, run_with_status
-from libs.core.facets import (
+from common.facets import (
     PublicRouteFacet,
     BackupFacet,
     ProbeFacet,

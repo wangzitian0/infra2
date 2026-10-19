@@ -21,7 +21,7 @@ import json
 import pytest
 
 
-from libs.core import registry as service_registry
+from common import registry as service_registry
 from tools import gen_dokploy_identity_map
 
 

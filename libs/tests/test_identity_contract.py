@@ -25,8 +25,8 @@ from pathlib import Path
 
 import pytest
 
-from libs.core import registry as reg
-from libs.core.service_identity import ServiceIdentity
+from common import registry as reg
+from common.service_identity import ServiceIdentity
 from libs.deploy.env_config import preview_service_config
 from libs.tests.compose_env import compose_services, raw_environment, resolve
 from libs.tests.test_sdk_contract_adoption import _tracked_sources

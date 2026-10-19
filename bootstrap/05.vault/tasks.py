@@ -147,7 +147,7 @@ class VaultDeployer(Deployer):
     def composing(cls, c, env_vars: dict) -> str:
         """Deploy Vault via Dokploy API (using GitHub provider)"""
         from libs.deploy.dokploy_client import ensure_project, get_dokploy
-        from libs.core.constants import GITHUB_BRANCH, GITHUB_OWNER, GITHUB_REPO
+        from common.constants import GITHUB_BRANCH, GITHUB_OWNER, GITHUB_REPO
 
         e = cls.env()
         header(f"{cls.service} composing", "Deploying via Dokploy API")

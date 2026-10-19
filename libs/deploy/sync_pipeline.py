@@ -13,7 +13,7 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from libs.core.service_identity import ServiceIdentity
+from common.service_identity import ServiceIdentity
 
 if TYPE_CHECKING:
     from invoke import Context

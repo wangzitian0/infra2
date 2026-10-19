@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.console import error, run_with_status, success, header, info, warning
-from libs.core.facets import BackupFacet, Exemption
+from common.facets import BackupFacet, Exemption
 
 
 def _generate_uuid() -> str:

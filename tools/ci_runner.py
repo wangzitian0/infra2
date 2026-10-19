@@ -628,6 +628,7 @@ def run_lint(verbose: bool = False) -> int:
             [
                 "ruff",
                 "check",
+                "common/",
                 "libs/",
                 "bootstrap/",
                 "platform/",
@@ -644,6 +645,7 @@ def run_lint(verbose: bool = False) -> int:
     # 2. ruff format check on changed files
     base_ref = os.environ.get("GITHUB_BASE_REF", "main")
     lint_roots = (
+        "common/",
         "libs/",
         "bootstrap/",
         "platform/",

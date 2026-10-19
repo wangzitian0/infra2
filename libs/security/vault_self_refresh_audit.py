@@ -13,7 +13,7 @@ import shlex
 import subprocess
 from typing import Any
 
-from libs.core.constants import REPO_ROOT
+from common.constants import REPO_ROOT
 from libs.security.store import verify_vault_token
 from libs.security.vault_audit import (
     CheckResult,

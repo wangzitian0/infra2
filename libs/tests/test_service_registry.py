@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from libs.core import registry as reg
+from common import registry as reg
 from libs.deploy.deployer import discover_services
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

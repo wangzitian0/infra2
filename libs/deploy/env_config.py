@@ -36,7 +36,7 @@ import re
 from dataclasses import dataclass, replace
 
 from libs.core.environ import normalize_env_name
-from libs.core.constants import PREVIEW_KINDS
+from common.constants import PREVIEW_KINDS
 
 # The canary runs arbitrary code on a fixed throwaway preview slot no real PR reuses.
 # Canonical SSOT slot is CANARY_SLOT ("canary-preview") defined in infra2-sdk.

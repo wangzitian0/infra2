@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from libs.core import registry as service_registry
+from common import registry as service_registry
 from libs.observability.probe_specs import (
     ENV_SUFFIX_PLACEHOLDER,
     encode_specs_env_value,

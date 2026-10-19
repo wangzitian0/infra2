@@ -478,7 +478,7 @@ def test_root_checkout_cannot_declare_health_urls(tmp_path: Path) -> None:
 def test_committed_health_urls_equal_the_registry_health_routes(monkeypatch) -> None:
     """`status --online` reads the same public routes that the alerting probes render."""
     from libs.core.environ import infra_domain
-    from libs.core.registry import domain_for_service
+    from common.registry import domain_for_service
     from libs.observability.probe_specs import render_public_route_spec_text
 
     monkeypatch.delenv("INTERNAL_DOMAIN", raising=False)

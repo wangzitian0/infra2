@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from libs.core.service_identity import ServiceIdentity
+from common.service_identity import ServiceIdentity
 
 RUNNING_STATUS = "running"
 QUEUE_IMPACT = "部署队列单并发 FIFO:它阻塞之后的所有部署"

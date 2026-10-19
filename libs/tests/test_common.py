@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from libs.common import check_service
-from libs.core import registry as service_registry
+from common import registry as service_registry
 from libs.core.environ import (
     _BOOTSTRAP_ONLY_SHARED_SERVICES,
     _REGISTRY_BACKED_SHORT_NAMES,
@@ -146,4 +146,3 @@ def test_service_subdomains_hosts_are_served_by_backend_services():
                 f"SERVICE_SUBDOMAINS[{key!r}] = {subdomain!r} is not served by {service} "
                 f"(served hosts: {sorted(s3_hosts)})"
             )
-

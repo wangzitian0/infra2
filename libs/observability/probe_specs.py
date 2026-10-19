@@ -32,7 +32,7 @@ def render_probe_spec_text(attrs=None) -> str:
     drift class #541 exists to kill.
     """
     if attrs is None:
-        from libs.core.registry import service_attrs
+        from common.registry import service_attrs
 
         attrs = service_attrs()
     lines: list[str] = []
@@ -164,7 +164,7 @@ def render_public_route_spec_text(env: str, domain: str, attrs=None) -> str:
     test, so an unregistered public probe cannot ship.
     """
     if attrs is None:
-        from libs.core.registry import service_attrs
+        from common.registry import service_attrs
 
         attrs = service_attrs()
     is_production = env == "production"

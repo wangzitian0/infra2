@@ -5,7 +5,7 @@ import sys
 from libs.deploy.deployer import Deployer, make_tasks
 from libs.security.store import VaultSecrets, get_secrets
 from libs.console import success
-from libs.core.facets import (
+from common.facets import (
     PublicRouteFacet,
     BackupFacet,
     ProbeFacet,

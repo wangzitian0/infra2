@@ -15,7 +15,7 @@ import pytest
 from libs.security import registry as secrets_registry
 from libs.deploy.deployer import Deployer
 from libs.security import supply as supply_module
-from libs.core.facets import SecretsFacet
+from common.facets import SecretsFacet
 from libs.tests.docker_host import DockerHost
 
 AGENT = "platform-dummy-vault-agent-staging"

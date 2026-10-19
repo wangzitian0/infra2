@@ -8,8 +8,8 @@ import ast
 
 import pytest
 
-from libs.core import registry as reg
-from libs.core.facets import BackupFacet, Exemption, ProbeFacet, SignalFacet
+from common import registry as reg
+from common.facets import BackupFacet, Exemption, ProbeFacet, SignalFacet
 from tools.service_facet_matrix import (
     build_matrix,
     cell_state,
@@ -41,7 +41,7 @@ def _meta(service_id: str = "platform/example", **overrides) -> reg.ServiceMeta:
 
 _DEPLOY_SOURCE = """
 from libs.deploy.deployer import Deployer, make_tasks
-from libs.core.facets import BackupFacet, Exemption, ProbeFacet, SignalFacet
+from common.facets import BackupFacet, Exemption, ProbeFacet, SignalFacet
 
 
 class ExampleDeployer(Deployer):

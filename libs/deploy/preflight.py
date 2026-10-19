@@ -19,7 +19,7 @@ import httpx
 from infra2_sdk.refs import ReleaseError, resolve_image_digest
 from infra2_sdk.secrets import vault_token_status
 
-from libs.core.constants import REPO_ROOT
+from common.constants import REPO_ROOT
 from libs.deploy.contract import DeployTarget, is_tag_only_iac_env
 from libs.deploy.git_provenance import assert_after_on_main
 from libs.deploy.env_config import env_config

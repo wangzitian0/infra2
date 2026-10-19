@@ -158,7 +158,7 @@ class OnePasswordDeployer(Deployer):
             env_vars = get_env()
 
         # Import shared constants
-        from libs.core.constants import GITHUB_BRANCH, GITHUB_OWNER, GITHUB_REPO
+        from common.constants import GITHUB_BRANCH, GITHUB_OWNER, GITHUB_REPO
 
         e = cls.env()
         header("1Password composing", "Deploy in Dokploy (automated)")

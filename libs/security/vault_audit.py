@@ -15,7 +15,7 @@ from typing import Any
 
 from libs.deploy.queue import parse_epoch_seconds
 from libs.observability.recency import is_recently_flapping
-from libs.core.constants import REPO_ROOT
+from common.constants import REPO_ROOT
 
 
 SECRET_KEYS = ("token", "secret", "password", "key", "authorization")
@@ -124,7 +124,7 @@ def load_inventory() -> list[VaultService]:
     closed -- two facets silently claiming one inventory entry is exactly the
     drift class the facet model exists to kill.
     """
-    from libs.core.registry import bootstrap_facet_attrs, service_attrs
+    from common.registry import bootstrap_facet_attrs, service_attrs
 
     metas = {**bootstrap_facet_attrs(), **service_attrs()}
     services: list[VaultService] = []
@@ -204,7 +204,7 @@ def inventory_ids_not_in_production() -> frozenset[str]:
     twice (#542, replacing the hand-kept NOT_YET_IN_PRODUCTION constant).
     """
     from libs.deploy.env_config import services_without_prod_compose
-    from libs.core.registry import bootstrap_facet_attrs, service_attrs
+    from common.registry import bootstrap_facet_attrs, service_attrs
 
     metas = {**bootstrap_facet_attrs(), **service_attrs()}
     owners = services_without_prod_compose() | {

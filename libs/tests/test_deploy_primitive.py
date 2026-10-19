@@ -95,7 +95,7 @@ def healthy_host() -> list[dict]:
     from pathlib import Path
 
     from libs.deploy.in_service import expected_running_containers
-    from libs.core.registry import service_attrs
+    from common.registry import service_attrs
 
     rows = []
     for meta in service_attrs().values():
@@ -739,7 +739,7 @@ def test_assert_approle_creds_present_skips_a_non_approle_service(
     compose.write_text("services:\n  app:\n    image: example\n")
     fake_meta = SimpleNamespace(compose_path=str(compose))
     monkeypatch.setattr(
-        "libs.core.registry.service_attrs",
+        "common.registry.service_attrs",
         lambda: {"some/service": fake_meta},
     )
     # Empty env would fail closed if this service used AppRole auth — it doesn't.
