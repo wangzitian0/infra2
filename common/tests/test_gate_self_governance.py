@@ -285,7 +285,7 @@ ORDINARY_PATHS = (
     "common/common.py",
     "common/core/harness/sweep.py",
     "common/deploy/dependencies.py",
-    "common/deploy/git_provenance.py",
+    "common/deploy/v2.py",
     "common/deploy/refs.py",
     "common/observability/openpanel.py",
     "common/observability/watchers/__init__.py",

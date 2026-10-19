@@ -12,7 +12,6 @@ signal cannot pass.
 from __future__ import annotations
 
 import importlib.util
-import sys
 from pathlib import Path
 
 import pytest
@@ -173,11 +172,7 @@ def test_signal_id_stays_unique_against_cross_plane_entries() -> None:
 def test_audit_rejects_handwritten_internal_entries(tmp_path, monkeypatch) -> None:
     """The audit fails closed if someone hand-writes an internal entry back
     into the YAML instead of declaring facets on the service's deploy.py."""
-    spec = importlib.util.spec_from_file_location("watchdog_consistency_audit", AUDIT)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["watchdog_consistency_audit"] = module
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
+    from common.observability import watchdog_audit as module
 
     stray = tmp_path / "watchdog-signals.yaml"
     stray.write_text(

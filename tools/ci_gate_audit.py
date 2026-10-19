@@ -37,9 +37,8 @@ import sys
 from pathlib import Path
 
 import yaml
+from infra2_sdk import ci as ci_spec
 from infra2_sdk.ci import load_delivery_stages, validate_inventory
-
-from common.core import ci_spec
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = "docs/ssot/ci-gate-inventory.yaml"

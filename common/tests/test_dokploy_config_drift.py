@@ -13,8 +13,8 @@ import subprocess
 
 import pytest
 
-import tools.dokploy_config_drift as drift
-from tools.dokploy_config_drift import (
+import common.deploy.config_drift as drift
+from common.deploy.config_drift import (
     DeployedIdentity,
     Row,
     contents_at_ref,

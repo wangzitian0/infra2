@@ -6,8 +6,8 @@ so the check is exercised without any live Dokploy/network access.
 
 from __future__ import annotations
 
+from common.deploy import compose_id_drift as drift
 from common.deploy.env_config import ComposeTarget
-from tools import app_compose_id_drift as drift
 
 
 class FakeDokployLookup:

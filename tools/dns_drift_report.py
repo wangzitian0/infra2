@@ -3,12 +3,7 @@
 
 from __future__ import annotations
 
-import sys
-
-from common.deploy import dns_drift as _dns_drift
-from common.deploy.dns_drift import *  # noqa: F401,F403
+from common.deploy.dns_drift import main
 
 if __name__ == "__main__":
-    raise SystemExit(_dns_drift.main())
-else:
-    sys.modules[__name__] = _dns_drift
+    raise SystemExit(main())

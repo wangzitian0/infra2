@@ -6,8 +6,7 @@
     <sha>         -> itself (used verbatim)
 
 The resolution logic is library code and lives in :mod:`common.deploy.refs` (#955: common/
-must not import tools/). This module is only the CLI plus a re-export of the public
-names that ``tools/deploy_v2.py`` and the tests still import from here.
+must not import tools/).
 """
 
 from __future__ import annotations
@@ -22,26 +21,10 @@ if str(ROOT) not in sys.path:
 
 from common.deploy.refs import (  # noqa: E402
     FINANCE_REPORT_REPO,
-    CommandRunner,
-    ResolvedRef,
-    classify_ref,
-    resolve_branch_to_sha,
-    resolve_image_ref,
-    resolve_pr,
     resolve_to_sha,
 )
 
-__all__ = [
-    "CommandRunner",
-    "FINANCE_REPORT_REPO",
-    "ResolvedRef",
-    "classify_ref",
-    "main",
-    "resolve_branch_to_sha",
-    "resolve_image_ref",
-    "resolve_pr",
-    "resolve_to_sha",
-]
+__all__ = ["main"]
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 
 from tools.ci_gate_lint import lint_workflow
-from common.core.ci_spec import (
+from infra2_sdk.ci import (
     GATE_WALL_CLOCK_BUDGET_S,
     MAX_SINGLE_TEST_S,
     SHARD_MAX,

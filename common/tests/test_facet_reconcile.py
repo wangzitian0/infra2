@@ -97,7 +97,7 @@ def test_section_systemexit_degrades_to_blocker(monkeypatch):
     release tag found') on a tagless checkout — SystemExit is not an Exception,
     so it escaped the section isolation and crashed the runner before the
     report went out. Sections must catch it as a blocker."""
-    import tools.dokploy_config_drift as cd
+    import common.deploy.config_drift as cd
 
     monkeypatch.setattr(
         cd,
@@ -128,7 +128,7 @@ def test_dns_section_degrades_to_blocked_on_cloudflare_api_auth_error(
     monkeypatch.setenv("CF_ZONE_ID", "dummy-zone")
     monkeypatch.setenv("INTERNAL_DOMAIN", "example.test")
 
-    import tools.dns_drift_report as ddr
+    import common.deploy.dns_drift as ddr
 
     monkeypatch.setattr(ddr, "_dns_tasks", lambda: "dummy")
     monkeypatch.setattr(ddr, "_expected_records", lambda dns: ["rec-a"])
@@ -151,7 +151,7 @@ def test_dns_section_fails_job_on_confirmed_drift(monkeypatch):
     monkeypatch.setenv("CF_ZONE_ID", "dummy-zone")
     monkeypatch.setenv("INTERNAL_DOMAIN", "example.test")
 
-    import tools.dns_drift_report as ddr
+    import common.deploy.dns_drift as ddr
 
     monkeypatch.setattr(ddr, "_dns_tasks", lambda: "dummy")
     monkeypatch.setattr(ddr, "_expected_records", lambda dns: ["rec-a", "rec-b"])

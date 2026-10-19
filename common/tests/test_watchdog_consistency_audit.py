@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 
 import yaml
@@ -14,12 +12,9 @@ INVENTORY = ROOT / "docs/ssot/watchdog-signals.yaml"
 
 
 def _load_audit():
-    spec = importlib.util.spec_from_file_location("watchdog_consistency_audit", AUDIT)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["watchdog_consistency_audit"] = module
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+    from common.observability import watchdog_audit
+
+    return watchdog_audit
 
 
 def test_watchdog_signal_inventory_has_required_ownership_fields() -> None:

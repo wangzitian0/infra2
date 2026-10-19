@@ -1255,12 +1255,49 @@ def compute_m4(
                         }
                         by_repo[repo].append(rec)
                         sites_all.append(rec)
+                if (
+                    rel.startswith("common/")
+                    and not rel.endswith("/__init__.py")
+                    and rel
+                    not in {
+                        "common/__init__.py",
+                        "common/runtime/src/truealpha_runtime/boot.py",
+                        "common/meta/package_contract.py",
+                    }
+                    and _is_pure_reexport_shim(tree)
+                ):
+                    rec = {
+                        "module": "common",
+                        "name": "pure_reexport_shim",
+                        "site": f"{repo}:{rel}:1",
+                    }
+                    by_repo[repo].append(rec)
+                    sites_all.append(rec)
 
     return {
         "total_violations": len(sites_all),
         "by_repo": {repo: len(items) for repo, items in sorted(by_repo.items())},
         "violations": sites_all,
     }
+
+
+def _is_pure_reexport_shim(tree: ast.Module) -> bool:
+    """True when a non-__init__ module only imports and defines __all__ without any def/class/constants."""
+    has_import = False
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
+            continue
+        if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            if isinstance(stmt, ast.ImportFrom) and stmt.module == "__future__":
+                continue
+            has_import = True
+            continue
+        if isinstance(stmt, ast.Assign) and all(
+            isinstance(t, ast.Name) and t.id == "__all__" for t in stmt.targets
+        ):
+            continue
+        return False
+    return has_import
 
 
 def compute_m5(consumers: dict[str, Path]) -> dict[str, Any]:
@@ -1363,31 +1400,48 @@ def compute_m5(consumers: dict[str, Path]) -> dict[str, Any]:
 
 
 def compute_m6(consumers: dict[str, Path]) -> dict[str, Any]:
-    """Compute M6: consumer tools/*.py cross-imports (from tools... or import tools...)."""
+    """Compute M6: consumer tools/*.py cross-imports, hijacks, and reverse common->tools imports."""
     by_repo: dict[str, list[dict[str, str]]] = defaultdict(list)
     violations: list[dict[str, str]] = []
 
     for repo, root in sorted(consumers.items()):
         for rel in list_repo_files(root, suffix=".py"):
-            if not rel.startswith("tools/") or is_test_path(rel):
+            if is_test_path(rel) or rel == "tools/sdk_usage_census.py":
+                continue
+            in_tools = rel.startswith("tools/")
+            in_prod = rel.startswith(("common/", "apps/", "platform/"))
+            if not (in_tools or in_prod):
                 continue
             try:
                 tree = ast.parse((root / rel).read_text("utf-8", "replace"))
             except (SyntaxError, UnicodeDecodeError, OSError):
                 continue
             for node in ast.walk(tree):
-                if (
-                    isinstance(node, ast.ImportFrom)
-                    and node.module
-                    and node.module.split(".")[0] == "tools"
-                ):
-                    rec = {
-                        "repo": repo,
-                        "site": f"{repo}:{rel}:{node.lineno}",
-                        "import": node.module,
-                    }
-                    by_repo[repo].append(rec)
-                    violations.append(rec)
+                if isinstance(node, ast.ImportFrom):
+                    if in_tools and (node.level or 0) > 0:
+                        rec = {
+                            "repo": repo,
+                            "site": f"{repo}:{rel}:{node.lineno}",
+                            "import": f"{'.' * (node.level or 1)}{node.module or ''}",
+                        }
+                        by_repo[repo].append(rec)
+                        violations.append(rec)
+                    elif node.module and node.module.split(".")[0] == "tools":
+                        rec = {
+                            "repo": repo,
+                            "site": f"{repo}:{rel}:{node.lineno}",
+                            "import": node.module,
+                        }
+                        by_repo[repo].append(rec)
+                        violations.append(rec)
+                    elif in_tools and any(alias.name == "*" for alias in node.names):
+                        rec = {
+                            "repo": repo,
+                            "site": f"{repo}:{rel}:{node.lineno}",
+                            "import": f"{node.module or ''}.*",
+                        }
+                        by_repo[repo].append(rec)
+                        violations.append(rec)
                 elif isinstance(node, ast.Import):
                     for alias in node.names:
                         if alias.name.split(".")[0] == "tools":
@@ -1395,6 +1449,24 @@ def compute_m6(consumers: dict[str, Path]) -> dict[str, Any]:
                                 "repo": repo,
                                 "site": f"{repo}:{rel}:{node.lineno}",
                                 "import": alias.name,
+                            }
+                            by_repo[repo].append(rec)
+                            violations.append(rec)
+                elif in_tools and isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if (
+                            isinstance(target, ast.Subscript)
+                            and isinstance(target.value, ast.Attribute)
+                            and isinstance(target.value.value, ast.Name)
+                            and target.value.value.id == "sys"
+                            and target.value.attr == "modules"
+                            and isinstance(target.slice, ast.Name)
+                            and target.slice.id == "__name__"
+                        ):
+                            rec = {
+                                "repo": repo,
+                                "site": f"{repo}:{rel}:{node.lineno}",
+                                "import": "sys.modules[__name__]",
                             }
                             by_repo[repo].append(rec)
                             violations.append(rec)

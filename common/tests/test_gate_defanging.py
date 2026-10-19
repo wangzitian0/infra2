@@ -26,7 +26,7 @@ import pathlib
 import pytest
 import yaml
 
-from common.core import ci_spec
+from infra2_sdk import ci as ci_spec
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 INFRA_CI = ROOT / ".github" / "workflows" / "infra-ci.yml"

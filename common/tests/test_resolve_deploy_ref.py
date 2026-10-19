@@ -7,7 +7,8 @@ import subprocess
 import pytest
 
 from common.deploy import refs
-from tools import resolve_deploy_ref as r
+from common.deploy import refs as r
+from tools import resolve_deploy_ref as cli_r
 
 
 class FakeRunner:
@@ -290,29 +291,15 @@ def test_resolve_pr_rejects_bad_number():
         r.resolve_pr(0, runner=FakeRunner())
 
 
-def test_the_cli_module_reexports_the_library_objects_unchanged():
-    """#955: resolution moved to `common.deploy.refs`; `tools.resolve_deploy_ref` is the CLI.
-
-    Callers that still import from the tools path (`tools/deploy_v2.py`, tests that
-    monkeypatch `dv2.resolve_to_sha`) must get the very same objects, not copies that
-    can drift from the library the backends use.
-    """
-    for name in (
-        "FINANCE_REPORT_REPO",
-        "CommandRunner",
-        "ResolvedRef",
-        "classify_ref",
-        "resolve_branch_to_sha",
-        "resolve_image_ref",
-        "resolve_pr",
-        "resolve_to_sha",
-    ):
-        assert getattr(r, name) is getattr(refs, name), name
+def test_the_cli_module_exposes_only_main_front_door():
+    """#955, #1270: resolution lives in `common.deploy.refs`; `tools.resolve_deploy_ref` is a pure CLI."""
+    assert cli_r.__all__ == ["main"]
+    assert callable(cli_r.main)
 
 
 def test_cli_main_prints_the_resolved_sha(capsys):
     # A bare sha is used verbatim, so this exercises the CLI without a network call.
-    assert r.main(["abc1234"]) == 0
+    assert cli_r.main(["abc1234"]) == 0
     assert capsys.readouterr().out.strip() == "abc1234"
 
 
@@ -320,6 +307,6 @@ def test_cli_main_reports_resolution_failure_with_exit_2(monkeypatch, capsys):
     def boom(ref, *, repo):
         raise ValueError("tag 'v9.9.9' not found")
 
-    monkeypatch.setattr(r, "resolve_to_sha", boom)
-    assert r.main(["v9.9.9"]) == 2
+    monkeypatch.setattr(cli_r, "resolve_to_sha", boom)
+    assert cli_r.main(["v9.9.9"]) == 2
     assert "error: tag 'v9.9.9' not found" in capsys.readouterr().err

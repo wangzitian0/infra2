@@ -165,7 +165,10 @@ _REF_HASH_SCRIPT = r"""
 import json, sys
 sys.path.insert(0, ".")
 from invoke import Context
-from tools import dokploy_config_drift as d
+try:
+    from common.deploy import config_drift as d
+except ImportError:
+    from tools import dokploy_config_drift as d
 d._set_env("production")
 out = {}
 for sid in json.loads(sys.argv[1]):
