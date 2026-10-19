@@ -605,7 +605,9 @@ class TestDokployClient:
             calls.append((compose_id, env)) or {"composeId": compose_id}
         )
 
-        result = client.update_compose_env("compose-1", env_vars={"B": "new", "C": "3"})
+        result = client.update_compose_env(
+            "compose-1", env_vars={"B": "new", "C": "3"}, replace=False
+        )
 
         assert result == {"composeId": "compose-1"}
         assert calls == [("compose-1", "A=1\nB=new\nC=3")]
@@ -629,7 +631,6 @@ class TestDokployClient:
         result = client.update_compose_env(
             "compose-1",
             env_vars={"ENV": "staging", "IMAGE_TAG": "abc1234"},
-            replace=True,
         )
 
         assert result == {"composeId": "compose-1"}
@@ -684,7 +685,7 @@ class TestDokployClient:
         client.update_compose = fake_update_compose
 
         def worker(key, value):
-            client.update_compose_env("compose-1", env_vars={key: value})
+            client.update_compose_env("compose-1", env_vars={key: value}, replace=False)
 
         t1 = threading.Thread(target=worker, args=("B", "1"))
         t1.start()

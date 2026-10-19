@@ -268,6 +268,7 @@ def test_onboard_service_end_to_end():
                 "VAULT_ADDR": "https://vault.zitian.party",
                 "ENV": "production",
             },
+            replace=False,
         )
 
 

@@ -541,7 +541,7 @@ def _redeploy_with_vault_creds(
     if not compose:
         return None
     compose_id = compose["composeId"]
-    client.update_compose_env(compose_id, env_vars=env_vars)
+    client.update_compose_env(compose_id, env_vars=env_vars, replace=False)
     info("   Triggering redeploy and waiting for runtime deployment record...")
     _deploy_compose_with_record_check(client, compose_id)
     return compose
@@ -932,7 +932,9 @@ def _refresh_role_consumers(role_id: str, secret_id: str) -> bool:
             info(f"   Consumer {label}: new secret id, redeploying")
             try:
                 client.update_compose_env(
-                    compose_id, env_vars={"VAULT_SECRET_ID": secret_id}
+                    compose_id,
+                    env_vars={"VAULT_SECRET_ID": secret_id},
+                    replace=False,
                 )
                 _deploy_compose_with_record_check(client, compose_id)
             except Exception as exc:  # noqa: BLE001 - collect every blocked consumer.

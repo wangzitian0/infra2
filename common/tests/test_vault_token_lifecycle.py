@@ -125,9 +125,12 @@ class FakeDokployTokenDeploy:
             "env": "VAULT_APP_TOKEN=hvs.old-token\nENV=production\n",
         }
 
-    def update_compose_env(self, compose_id, *, env_vars=None, env_str=None):
+    def update_compose_env(
+        self, compose_id, *, env_vars=None, env_str=None, replace=True
+    ):
         assert compose_id == self.compose_id
         assert env_str is None
+        assert replace is False
         self.updated_env.update(env_vars or {})
         return {"ok": True}
 
@@ -504,7 +507,10 @@ class FakeDokployConsumers:
     def get_compose_env(self, compose_id: str) -> str:
         return self.envs[compose_id]
 
-    def update_compose_env(self, compose_id, *, env_vars=None, env_str=None):
+    def update_compose_env(
+        self, compose_id, *, env_vars=None, env_str=None, replace=True
+    ):
+        assert replace is False
         self.updated[compose_id] = dict(env_vars or {})
         lines = [
             line

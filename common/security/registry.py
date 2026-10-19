@@ -209,9 +209,11 @@ SERVICES: tuple[Service, ...] = (
         # the next data-engine deploy, not the running one.
         store_only_keys=(
             "CAPTURE_APPROVED_BY",
+            "DATA_ENGINE_IMAGE_DIGEST",
             "GIT_COMMIT_SHA",
             "IMAGE_DIGEST",
             "RELEASE_ID",
+            "RELEASE_MANIFEST_ID",
             "S3_BUCKET",
         ),
     ),

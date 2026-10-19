@@ -523,7 +523,7 @@ class DokployClient:
         env_vars: dict[str, str] = None,
         env_str: str = None,
         *,
-        replace: bool = False,
+        replace: bool = True,
     ) -> dict:
         """Update environment variables for a compose service.
 
@@ -531,8 +531,8 @@ class DokployClient:
             compose_id: ID of the compose application
             env_vars: Dict of key-value pairs
             env_str: Raw env string (replaces existing if provided)
-            replace: When True, replace existing env wholesale with env_vars while
-                preserving RUNTIME_ENV_KEYS_TO_PRESERVE from existing env.
+            replace: When True (default), replace existing env wholesale with env_vars
+                while preserving RUNTIME_ENV_KEYS_TO_PRESERVE from existing env.
         Note:
             This parser expects simple KEY=VALUE lines and does not handle quoted,
             escaped, or multiline values.
