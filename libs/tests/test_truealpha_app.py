@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SERVICE_DIR = ROOT / "truealpha/truealpha/10.app"
 TRUEALPHA_COMPOSES = sorted((ROOT / "truealpha/truealpha").glob("*/compose.yaml"))
 COLLECTOR_OTLP_HTTP = "http://platform-signoz-otel-collector:4318"
+COLLECTOR_HOST_LOOPBACK_OTLP_HTTP = "http://127.0.0.1:14318"
 
 
 def _load_deploy_module():
@@ -195,8 +196,9 @@ def test_otlp_export_is_only_ever_enabled_with_the_issued_identity(
     """The endpoint turns export on, and truealpha's services refuse to start when it is
     on without the deployment-issued identity (infra2#906 / truealpha#1034). So a
     container naming the endpoint must take BOTH identity variables verbatim from the
-    deploy-issued env -- not hardcoded and not defaulted -- and must be able to reach the
-    collector, which is Docker-network-only (never published, never on the host network).
+    deploy-issued env -- not hardcoded and not defaulted -- and must use the Docker
+    collector URL on bridge networks or the host-loopback collector URL on host
+    networks (#1231).
     """
     for name, service in compose_services(compose).items():
         env = raw_environment(service)
@@ -211,8 +213,12 @@ def test_otlp_export_is_only_ever_enabled_with_the_issued_identity(
         if "OTEL_EXPORTER_OTLP_ENDPOINT" not in env:
             continue
         where = f"{compose.parent.name}/{name}"
-        assert env["OTEL_EXPORTER_OTLP_ENDPOINT"] == COLLECTOR_OTLP_HTTP, where
-        assert service.get("network_mode") != "host", where
+        expected_endpoint = (
+            COLLECTOR_HOST_LOOPBACK_OTLP_HTTP
+            if service.get("network_mode") == "host"
+            else COLLECTOR_OTLP_HTTP
+        )
+        assert env["OTEL_EXPORTER_OTLP_ENDPOINT"] == expected_endpoint, where
         assert env.get("OTEL_SERVICE_NAME") == "${OTEL_SERVICE_NAME:-}", where
         assert env.get("OTEL_RESOURCE_ATTRIBUTES") == "${OTEL_RESOURCE_ATTRIBUTES:-}", (
             where
@@ -228,24 +234,32 @@ def test_only_the_llm_service_exports_telemetry(stack: str) -> None:
     assert _services_exporting_otlp(compose) == {"llm"}
 
 
-def test_data_engine_stays_off_the_collector_while_it_runs_on_the_host_network() -> (
-    None
-):
-    """The collector is Docker-network-only (ops.observability.md 4.2) and all three Dagster
-    roles run with network_mode: host for OpenD, so the Docker DNS name cannot resolve
-    from them and publishing the collector port is not this stack's call. Until a
-    host-reachable ingest exists, the data engine exports nothing -- and is handed no
-    identity either, so the SDK's endpoint-gated fail-fast never engages."""
+def test_data_engine_exports_telemetry_via_host_loopback_collector() -> None:
+    """All three Dagster roles run with network_mode: host for OpenD, so the Docker DNS
+    name cannot resolve from them. Issue #1231 publishes the collector OTLP HTTP port on
+    host loopback 127.0.0.1:14318 and wires all three roles to export via that loopback
+    endpoint with deployment-issued identity."""
     compose = ROOT / "truealpha/truealpha/20.data_engine/compose.yaml"
     services = compose_services(compose)
-    assert {n for n, s in services.items() if s.get("network_mode") == "host"} == {
+    expected_roles = {
         "dagster-webserver",
         "dagster-daemon",
         "dagster-code-server",
     }
-    assert _services_exporting_otlp(compose) == set()
-    for service in services.values():
-        assert not any(key.startswith("OTEL_") for key in raw_environment(service))
+    assert {
+        n for n, s in services.items() if s.get("network_mode") == "host"
+    } == expected_roles
+    assert _services_exporting_otlp(compose) == expected_roles
+    for name in expected_roles:
+        env = raw_environment(services[name])
+        assert (
+            env.get("OTEL_EXPORTER_OTLP_ENDPOINT") == COLLECTOR_HOST_LOOPBACK_OTLP_HTTP
+        )
+        assert env.get("OTEL_SERVICE_NAME") == "${OTEL_SERVICE_NAME:-}"
+        assert env.get("OTEL_RESOURCE_ATTRIBUTES") == "${OTEL_RESOURCE_ATTRIBUTES:-}"
+    assert not any(
+        key.startswith("OTEL_") for key in raw_environment(services["vault-agent"])
+    )
 
 
 def test_both_issuing_paths_name_the_app_service_alike() -> None:

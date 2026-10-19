@@ -199,6 +199,7 @@ def test_guard_covers_both_classes_and_all_four_services() -> None:
         "platform/todo",
         "finance_report/app",
         "truealpha/app",
+        "truealpha/data_engine",
     }
 
 
@@ -572,6 +573,7 @@ def test_the_container_values_exist_for_both_classes() -> None:
     assert {service_id for service_id, _, _ in APP_VALUES} == {
         "finance_report/app",
         "truealpha/app",
+        "truealpha/data_engine",
     }
     assert {value for _, _, value in PLATFORM_VALUES} == {SHA40}
     assert {value for _, _, value in APP_VALUES} == {TAG}

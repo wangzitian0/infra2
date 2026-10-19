@@ -319,7 +319,7 @@ an explicit per-environment Vault value.
 | Class | Services | Compose value | Value in the container | Issued by | Reader |
 |---|---|---|---|---|---|
 | `platform` | `platform/alerting`, `platform/todo` | `${INFRA_IAC_REF:-unknown}` | The full 40-hex infra2 SHA of the deploy. It is `unknown` when the deploy issues no ref. | `libs/deploy/sync_pipeline.py`, `libs/core/service_identity.py` | `platform/30.todo/app.py` shows the first 7 characters. `platform/alerting` has no reader. |
-| `app` | `finance_report/app`, `truealpha/app` | `${GIT_COMMIT_SHA:-unknown}` | The image tag. It is a release tag such as `v0.1.74`, or a 7-hex short SHA for a preview from a commit, branch or pull request. | `libs/deploy/promote.py`, `libs/deploy/preview.py` | The `git_sha` and `version` fields of the app health payload. The `finance_report/app` preview readiness probe compares them with the image tag (`libs/deploy/preview.py`, `libs/deploy/env_config.py`). |
+| `app` | `finance_report/app`, `truealpha/app`, `truealpha/data_engine` | `${GIT_COMMIT_SHA:-unknown}` | The image tag. It is a release tag such as `v0.1.74`, or a 7-hex short SHA for a preview from a commit, branch or pull request. | `libs/deploy/promote.py`, `libs/deploy/preview.py` | The `git_sha` and `version` fields of the app health payload. The `finance_report/app` preview readiness probe compares them with the image tag (`libs/deploy/preview.py`, `libs/deploy/env_config.py`). |
 
 An `app` service never receives a 40-hex SHA in `GIT_COMMIT_SHA`. The deploy sets `GIT_COMMIT_SHA` and `IMAGE_TAG` to the same value.
 
