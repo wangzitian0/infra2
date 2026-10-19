@@ -9,6 +9,7 @@ and ``python -m tools.ci_runner unit-tests --changed`` share one source of truth
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -78,9 +79,10 @@ def main(argv: list[str] | None = None) -> int:
     ):
         worker_args = ["-n", _default_pytest_workers()]
 
-    cmd = ["uv", "run", "pytest", *affected, "-x", *worker_args, *extra_args]
+    cmd = [sys.executable, "-m", "pytest", *affected, "-x", *worker_args, *extra_args]
+    run_env = {**os.environ, "PYTHONSAFEPATH": "1"}
     print(f"▶ Executing: {' '.join(cmd)}")
-    result = subprocess.run(cmd, cwd=ROOT_DIR, check=False)
+    result = subprocess.run(cmd, cwd=ROOT_DIR, env=run_env, check=False)
     return result.returncode
 
 

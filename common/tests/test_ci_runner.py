@@ -252,10 +252,10 @@ def test_test_affected_delegates_to_ci_runner_and_caps_workers(
         "common/tests/test_ci_runner.py"
     ]
 
-    recorded: list[list[str]] = []
+    recorded: list[tuple[list[str], dict[str, str]]] = []
 
     def fake_run(cmd: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        recorded.append(list(cmd))
+        recorded.append((list(cmd), dict(kwargs.get("env") or {})))
         return subprocess.CompletedProcess(args=cmd, returncode=0)
 
     monkeypatch.setattr(
@@ -272,7 +272,8 @@ def test_test_affected_delegates_to_ci_runner_and_caps_workers(
     rc = test_affected.main([])
     assert rc == 0
     assert len(recorded) == 1
-    cmd = recorded[0]
+    cmd, env = recorded[0]
+    assert env.get("PYTHONSAFEPATH") == "1"
     assert "-x" in cmd
     assert "-n" in cmd and cmd[cmd.index("-n") + 1] == "4"
     assert "common/tests/test_ci_runner.py" in cmd
