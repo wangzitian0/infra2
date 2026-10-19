@@ -57,8 +57,8 @@
   判据：**如果这个集合能从它真正依赖的东西算出来，就算；算不出来的才写清单，并给清单配一条
   会红的守卫。** 剩余欠账见 #800。
 - **本地与远端测试分工（Local vs Remote Test Segregation）**：
-  - **本地开发与修复循环**：严格运行改动点相关的聚焦测试（`pytest <file>::<test> -x` 或 `python tools/test_affected.py`），反馈控制在秒级。严禁在开发返修与多轮审计中重跑全量套件。
-  - **Smoke 预检**：预算约 30 秒，仅验证语法与受影响测试，不触发全仓深度扫描。
+  - **本地开发与修复循环**：严格运行改动点相关的聚焦测试（`pytest <file>::<test> -x`、`python tools/test_affected.py` 或 `python -m tools.ci_runner unit-tests --changed`；`test_affected.py` 直接委托 `tools.ci_runner` 共享同一套变更映射与本地 `<= 4` worker 限流逻辑），反馈控制在秒级。严禁在开发返修与多轮审计中重跑全量套件。
+  - **Smoke 预检**：预算约 30 秒，仅验证语法与受影响测试（`python -m tools.ci_runner all --changed`），不触发全仓深度扫描。
   - **远端 CI 矩阵**：全量用例与多环境矩阵回归完全委派给 GitHub Actions 并行 runner，充分利用云端算力。
 
 ## 文档准则

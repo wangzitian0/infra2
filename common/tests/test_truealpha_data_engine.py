@@ -884,17 +884,32 @@ def _missing_injected_contract_vars(
     compose_data: dict,
     service_names: tuple[str, ...],
 ) -> dict[str, list[str]]:
-    """Return missing injected contract variable names per compose service."""
+    """Return missing or blank injected contract variable names per compose service."""
     injected_fields = [
         (field["env"], tuple(field.get("aliases", ())))
         for field in contract_data.get("fields", ())
         if field.get("injected") is True
     ]
+    assert injected_fields, "Contract must declare at least one injected=true field"
     missing_by_service: dict[str, list[str]] = {}
     services = compose_data.get("services", {})
     for svc_name in service_names:
-        env_map = services.get(svc_name, {}).get("environment", {}) or {}
-        provided = set(env_map.keys())
+        assert svc_name in services, (
+            f"Service {svc_name!r} missing from compose services"
+        )
+        raw_env = services[svc_name].get("environment", {}) or {}
+        if isinstance(raw_env, dict):
+            provided = {
+                str(k)
+                for k, v in raw_env.items()
+                if v is not None and str(v).strip() != ""
+            }
+        else:
+            provided = {
+                str(entry).split("=", 1)[0].strip()
+                for entry in raw_env
+                if "=" in str(entry) and str(entry).split("=", 1)[1].strip() != ""
+            }
         missing = [
             env_name
             for env_name, aliases in injected_fields
@@ -907,8 +922,8 @@ def _missing_injected_contract_vars(
 
 def test_truealpha_compose_services_provide_every_injected_contract_variable():
     """#1287: Every variable marked injected=true in truealpha generated contracts
-    must exist in the target service compose environment dict so boot validation
-    cannot fail on contract-to-compose variable drift."""
+    must exist with a non-empty value in the target service compose environment dict
+    so boot validation cannot fail on contract-to-compose variable drift."""
     checks = (
         (
             ROOT / "contracts/truealpha/data-engine.required-env.generated.json",
@@ -937,7 +952,7 @@ def test_truealpha_compose_services_provide_every_injected_contract_variable():
 
 
 def test_missing_injected_contract_variable_in_compose_is_detected():
-    """Falsifiability test: removing an injected=true variable from compose fails."""
+    """Falsifiability test: removing or blanking an injected=true variable fails."""
     contract_data = json.loads(
         (
             ROOT / "contracts/truealpha/data-engine.required-env.generated.json"
@@ -953,9 +968,17 @@ def test_missing_injected_contract_variable_in_compose_is_detected():
     del code_server_env["TRUEALPHA_RELEASE_MANIFEST_ID"]
     compose_data["services"]["dagster-code-server"]["environment"] = code_server_env
 
+    webserver_env = dict(compose_data["services"]["dagster-webserver"]["environment"])
+    webserver_env["RELEASE_ID"] = ""
+    webserver_env["TRUEALPHA_RELEASE_MANIFEST_ID"] = None
+    compose_data["services"]["dagster-webserver"]["environment"] = webserver_env
+
     missing = _missing_injected_contract_vars(
         contract_data,
         compose_data,
         ("dagster-code-server", "dagster-webserver", "dagster-daemon"),
     )
-    assert missing == {"dagster-code-server": ["RELEASE_ID"]}
+    assert missing == {
+        "dagster-code-server": ["RELEASE_ID"],
+        "dagster-webserver": ["RELEASE_ID"],
+    }

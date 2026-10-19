@@ -217,6 +217,17 @@ def _resolve_changed_test_targets(
         if direct_test in all_tests_set:
             selected.add(direct_test)
 
+        parent_name = path_obj.parent.name
+        if parent_name and parent_name not in (".", "common", "tools", "src"):
+            prefixed_test = f"common/tests/test_{parent_name}_{stem}.py"
+            if prefixed_test in all_tests_set:
+                selected.add(prefixed_test)
+
+        if stem != "__init__":
+            for candidate in all_tests:
+                if Path(candidate).name.startswith(f"test_{stem}_"):
+                    selected.add(candidate)
+
         if rel.startswith(("truealpha/", "contracts/truealpha/")):
             for candidate in all_tests:
                 if "truealpha" in Path(candidate).name:
@@ -256,16 +267,52 @@ def _resolve_changed_test_targets(
     return sorted(selected)
 
 
+DEFAULT_LOCAL_PYTEST_MAX_WORKERS: int = 4
+
+
 def _default_pytest_workers() -> str:
     """Return pytest-xdist worker count.
 
-    Remote CI runners use all cores ('auto'). Local workstations cap workers at 4
-    to prevent thermal throttling while leaving cores for IDE and host services.
+    Remote CI runners use all cores ('auto'). Local workstations cap workers at
+    DEFAULT_LOCAL_PYTEST_MAX_WORKERS (4) to prevent thermal throttling while
+    leaving cores for IDE and host services.
     """
     if os.environ.get("CI") == "true":
         return "auto"
-    cpu_total = os.cpu_count() or 4
-    return str(min(4, max(2, cpu_total // 2)))
+    cpu_total = os.cpu_count() or DEFAULT_LOCAL_PYTEST_MAX_WORKERS
+    return str(min(DEFAULT_LOCAL_PYTEST_MAX_WORKERS, max(2, cpu_total // 2)))
+
+
+def _select_changed_compose_targets(
+    compose_files: Sequence[Path],
+    changed_files: Sequence[str] | None = None,
+) -> list[Path]:
+    """Filter compose files to those affected by the current git diff."""
+    changed_set = set(
+        changed_files if changed_files is not None else _collect_changed_files()
+    )
+    if not changed_set:
+        return []
+    if "tools/ci_runner.py" in changed_set:
+        return list(compose_files)
+
+    include_truealpha = any(c.startswith("contracts/truealpha/") for c in changed_set)
+    include_finance_report = any(
+        c.startswith("contracts/finance_report/") for c in changed_set
+    )
+
+    selected: list[Path] = []
+    for file in compose_files:
+        rel_str = str(file.relative_to(ROOT))
+        parent_prefix = f"{file.relative_to(ROOT).parent}/"
+        if (
+            rel_str in changed_set
+            or any(c.startswith(parent_prefix) for c in changed_set)
+            or (include_truealpha and rel_str.startswith("truealpha/"))
+            or (include_finance_report and rel_str.startswith("finance_report/"))
+        ):
+            selected.append(file)
+    return selected
 
 
 def run_compose(verbose: bool = False, changed_only: bool = False) -> int:
@@ -302,17 +349,11 @@ def run_compose(verbose: bool = False, changed_only: bool = False) -> int:
         return 1
 
     # 3. Check docker compose config if docker is available
-    docker_targets = compose_files
-    if changed_only:
-        changed_set = set(_collect_changed_files())
-        docker_targets = [
-            file
-            for file in compose_files
-            if str(file.relative_to(ROOT)) in changed_set
-            or any(
-                c.startswith(f"{file.relative_to(ROOT).parent}/") for c in changed_set
-            )
-        ]
+    docker_targets = (
+        _select_changed_compose_targets(compose_files)
+        if changed_only
+        else compose_files
+    )
 
     has_docker = bool(docker_targets) and shutil.which("docker") is not None
     if has_docker:
