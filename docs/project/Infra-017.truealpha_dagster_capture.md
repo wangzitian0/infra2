@@ -45,8 +45,8 @@ OpenD's loopback binding also prevents a normal overlay-network container from r
 
 ## Verification
 
-- [ ] `uv run pytest libs/tests/test_truealpha_data_engine.py`
-- [ ] `uv run pytest libs/tests/test_vault_self_refresh_audit.py libs/tests/test_backup_verification.py`
+- [ ] `uv run pytest common/tests/test_truealpha_data_engine.py`
+- [ ] `uv run pytest common/tests/test_vault_self_refresh_audit.py common/tests/test_backup_verification.py`
 - [ ] `docker compose config` succeeds with synthetic non-secret coordinates.
 - [ ] Staging runtime image, daemon heartbeat, schema placement, and loopback boundaries pass.
 

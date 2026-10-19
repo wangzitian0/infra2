@@ -26,7 +26,7 @@ The rules route to the shared bridge channel, not to Feishu directly. Each rule
 binds to the channel by **name** (`condition.thresholds.spec[].channels`): SigNoz
 uses those strings as alertmanager receiver names, so a channel id there is never
 delivered (#973). The name is defined once, in
-`libs/alerting.py::signoz_feishu_channel_name`:
+`common/alerting.py::signoz_feishu_channel_name`:
 
 ```text
 finance-report-backend OTEL logs/metrics

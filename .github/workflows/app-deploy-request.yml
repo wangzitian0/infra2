@@ -45,7 +45,7 @@ jobs:
     name: preflight requested artifact
     # Whether to canary is decided before any plan exists, so this pre-filter mirrors
     # DeployPlan.requires_preflight_canary (PREFLIGHT_CANARY_DEPLOY_TYPES) on the raw
-    # payload. libs/tests/test_app_deploy_request_workflow.py pins the two to each other,
+    # payload. common/tests/test_app_deploy_request_workflow.py pins the two to each other,
     # and both jobs re-check it against the validated plan (--require-preflight-canary
     # here, --preflight-canary-result in deploy), so a drift fails closed either way.
     if: >-
@@ -174,7 +174,7 @@ jobs:
           iac_ref="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["iac_ref"])')"
           echo "iac_ref=$iac_ref" >> "$GITHUB_OUTPUT"
       - name: Configure SSH key for the pre-deploy schema gate
-        # libs.deploy.schema_gate SSHes to the VPS to run pre_deploy_schema_check inside
+        # common.deploy.schema_gate SSHes to the VPS to run pre_deploy_schema_check inside
         # the app's published image. Reuses INFRA2_WATCHDOG_SSH_* secrets (#802).
         env:
           INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}

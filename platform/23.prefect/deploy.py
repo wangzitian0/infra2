@@ -1,11 +1,11 @@
 """Prefect deployment with vault-init"""
 
 import sys
-from libs.deploy.deployer import Deployer, make_tasks
-from libs.core.environ import with_env_suffix
-from libs.security.store import get_secrets, vault_token
-from libs.console import success, info, fatal
-from libs.core.facets import ProbeFacet, SecretsFacet, SignalFacet
+from common.deploy.deployer import Deployer, make_tasks
+from common.core.environ import with_env_suffix
+from common.security.store import get_secrets, vault_token
+from common.console import success, info, fatal
+from common.core.facets import ProbeFacet, SecretsFacet, SignalFacet
 
 shared_tasks = sys.modules.get("platform.23.prefect.shared")
 
@@ -38,7 +38,7 @@ class PrefectDeployer(Deployer):
     # minute-tier alert debounced by the probe runner's shared loop —
     # DEFAULT_FAILURE_THRESHOLD=3 / DEFAULT_RENOTIFY_SECONDS=0 (#903: no timer)
     # (tools/infra_probe_runner.py). watchdog-signals entries derive from this
-    # (libs/observability/signal_entries.py); the values here must state what the
+    # (common/observability/signal_entries.py); the values here must state what the
     # runner actually does, not an aspiration.
     signals = (
         SignalFacet(
@@ -133,7 +133,7 @@ class PrefectDeployer(Deployer):
     @classmethod
     def post_compose(cls, c, shared_tasks):
         """Verify deployment and setup SSO protection"""
-        from libs.console import header, success, info
+        from common.console import header, success, info
 
         header(f"{cls.service} post_compose", "Verifying")
         result = shared_tasks.status(c)

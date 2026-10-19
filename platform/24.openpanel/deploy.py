@@ -1,11 +1,11 @@
 """OpenPanel deployment with vault-init"""
 
 import sys
-from libs.deploy.deployer import Deployer, make_tasks
-from libs.core.environ import with_env_suffix
-from libs.security.store import get_secrets, vault_token
-from libs.console import success, warning, info, error
-from libs.core.facets import (
+from common.deploy.deployer import Deployer, make_tasks
+from common.core.environ import with_env_suffix
+from common.security.store import get_secrets, vault_token
+from common.console import success, warning, info, error
+from common.core.facets import (
     BackupFacet,
     ProbeFacet,
     RestartAfterFacet,
@@ -100,7 +100,7 @@ class OpenPanelDeployer(Deployer):
     # minute-tier alert debounced by the probe runner's shared loop —
     # DEFAULT_FAILURE_THRESHOLD=3 / DEFAULT_RENOTIFY_SECONDS=0 (#903: no timer)
     # (tools/infra_probe_runner.py). watchdog-signals entries derive from this
-    # (libs/observability/signal_entries.py); the values here must state what the
+    # (common/observability/signal_entries.py); the values here must state what the
     # runner actually does, not an aspiration.
     signals = (
         SignalFacet(
@@ -191,7 +191,7 @@ class OpenPanelDeployer(Deployer):
     @classmethod
     def pre_compose(cls, c):
         """Prepare directories, check dependencies, ensure secrets exist in Vault."""
-        from libs.console import fatal
+        from common.console import fatal
 
         if not cls._prepare_dirs(c):
             return None
@@ -280,7 +280,7 @@ class OpenPanelDeployer(Deployer):
     @classmethod
     def post_compose(cls, c, shared_tasks):
         """Verify deployment"""
-        from libs.console import header, success, error
+        from common.console import header, success, error
 
         header(f"{cls.service} post_compose", "Verifying")
         result = shared_tasks.status(c)

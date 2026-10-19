@@ -1,0 +1,634 @@
+#!/usr/bin/env python3
+"""Manual lifecycle for the multi-alias PREVIEW environment.
+
+The preview env (deploy_env_config.py) is a *family* of throwaway stacks, one per
+alias — ``main`` / ``pr-<N>`` / ``commit-<sha7>`` — each its OWN Dokploy compose with
+its OWN ephemeral database. This module is the importable library that creates, deploys,
+health-checks, and tears those stacks down, for every service registered in
+``deploy_env_config.preview_service_config`` (finance_report/app, truealpha/app — #522).
+Unlike staging/prod (a fixed compose driven by common.deploy.promote.deploy), preview is
+dynamic: the compose for an alias is found-or-created here by a deterministic name, so
+any number of aliases coexist and outlive a CI run until explicitly torn down.
+
+Design seams (mirroring common.deploy.promote / common.deploy.refs):
+- code -> sha           : common.deploy.refs.resolve_to_sha (the App image tag to pull)
+- service -> config     : deploy_env_config.preview_service_config (project / compose
+                          path / db name / base_subdomain — the per-service knobs)
+- (kind, value) -> ids  : deploy_env_config.preview_alias (suffix / url / slug / label)
+- side effects          : the injected Dokploy client (create/update/deploy/delete)
+- readiness             : this trigger's terminal deployment record, then injected HTTP
+                          probes for every configured public version surface
+
+Everything with side effects takes an injected client/getter so the orchestration is
+unit-testable with a mock — NO live Dokploy/HTTP call happens in tests. The compose
+template is pulled from infra2 via Dokploy's GitHub source (sourceType="github",
+composePath=...), the same mechanism common.deploy.deployer uses, so the relative vault-agent
+files the template mounts (vault-agent.hcl / secrets.ctmpl) exist on the Dokploy host.
+
+This is a pure importable backend — the operator surface is the deploy_v2 CLI:
+    python -m tools.deploy_v2 --type preview/pr --version-ref 5 --iac-ref main --domain zitian.party
+    python -m tools.deploy_v2 --type preview/pr --version-ref 5 --iac-ref main --domain zitian.party --down
+``--service`` selects the target (default finance_report/app); truealpha/app previews use
+    python -m tools.deploy_v2 --service truealpha/app --type preview/pr --version-ref 5 --iac-ref main --domain zitian.party
+"""
+
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+from typing import Any, Callable
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+import httpx
+from infra2_sdk.deploy import poll_until_healthy
+from infra2_sdk.routing import PreviewStackCoordinates, derive_preview_coordinates
+
+from common.core.environ import infra_domain
+from common.deploy.compose_lock import compose_write_lock
+from common.deploy.promote import _deployment_ids, wait_for_rollout
+from common.deploy.env_config import (
+    PREVIEW_ENVIRONMENT,
+    PreviewAlias,
+    PreviewReadinessProbe,
+    otel_env,
+    preview_alias,
+    preview_service_config,
+)
+from common.observability.openpanel import openpanel_env
+from common.deploy.refs import resolve_to_sha
+
+
+@dataclass(frozen=True)
+class PreviewResult:
+    action: str  # "up" | "down"
+    alias: str
+    compose_id: str | None
+    sha: str | None
+    url: str
+    healthy: bool | None  # None when no health check was performed (down / --no-wait)
+    containers_cleared: bool | None = None
+
+
+# The source env's app compose to read AppRole creds from (its name in Dokploy).
+_SOURCE_APP_COMPOSE = "app"
+# The runtime AppRole creds the preview vault-agent logs in with. Preview reads the source
+# env's secret path, so it reuses that env's role verbatim — the same creds staging itself
+# runs with (injected once by `invoke setup-approle`); see _source_app_vault_creds.
+_VAULT_CRED_KEYS = ("VAULT_ADDR", "VAULT_ROLE_ID", "VAULT_SECRET_ID")
+_AMBIGUOUS_CREATE_RECOVERY_ATTEMPTS = 4
+_AMBIGUOUS_CREATE_RECOVERY_INTERVAL_SECONDS = 2
+
+
+def _source_app_vault_creds(client, project: str, source_env: str) -> dict[str, str]:
+    """Read the AppRole creds the ``source_env`` app compose runs with, in ``project``.
+
+    Previews reuse the source env's AppRole (they read its secret path via the service's
+    ``PreviewServiceConfig.secret_env``), exactly the creds staging runs with — set once on
+    the source compose by ``invoke setup-approle``. We copy them onto the preview compose at
+    deploy time because a throwaway alias is recreated each ``up`` (and deleted on ``down``),
+    so it can never rely on a manual one-time injection persisting the way a fixed env does.
+    """
+    comp = client.find_compose_by_name(
+        _SOURCE_APP_COMPOSE, project, env_name=source_env
+    )
+    if not comp:
+        raise RuntimeError(
+            f"cannot source preview Vault creds: no {_SOURCE_APP_COMPOSE!r} compose in "
+            f"{project}/{source_env}"
+        )
+    env = client.get_compose_env(comp["composeId"]) or ""
+    creds = {}
+    for line in env.splitlines():
+        key, _, value = line.partition("=")
+        if key in _VAULT_CRED_KEYS and value:
+            creds[key] = value
+    missing = [k for k in _VAULT_CRED_KEYS if k not in creds]
+    if missing:
+        raise RuntimeError(
+            f"{source_env} {_SOURCE_APP_COMPOSE!r} compose is missing Vault creds "
+            f"{missing}; run `invoke setup-approle --project {project}` first"
+        )
+    return creds
+
+
+def _validate_domain(domain: str) -> str:
+    """Reject a malformed domain (empty or containing whitespace).
+
+    Whitespace in the domain would corrupt the Dokploy host (cloud.<domain>) and the
+    Traefik Host() rules / env blob, so it is rejected up front for BOTH up and down.
+    Returns the validated domain unchanged so callers can use the result inline.
+    """
+    if not domain or any(c.isspace() for c in domain):
+        raise ValueError(f"invalid domain {domain!r}: non-empty, no whitespace")
+    return domain
+
+
+def _preview_coordinates(
+    service: str, alias: PreviewAlias, domain: str | None = None
+) -> PreviewStackCoordinates:
+    config = preview_service_config(service)
+    return derive_preview_coordinates(
+        config.base_subdomain or service.split("/")[-1],
+        alias.deployment_environment,
+        base_domain=domain,
+    )
+
+
+def _preview_env_vars(
+    alias: PreviewAlias,
+    *,
+    service: str,
+    sha: str,
+    domain: str,
+    image_ref: str | None = None,
+    iac_ref: str = "",
+    _now=time.time,
+) -> dict[str, str]:
+    """Assemble the Dokploy compose env for one preview alias.
+
+    Mirrors common.deploy.promote.deploy's shared keys (IMAGE_TAG/GIT_COMMIT_SHA short-sha,
+    NEXT_PUBLIC_APP_URL, ENV_SUFFIX/ENV_DOMAIN_SUFFIX, COMPOSE_PROFILES, TRAEFIK_ENABLE,
+    INTERNAL_DOMAIN, IAC_CONFIG_HASH cache-bust) and adds the preview-only bits: ENV is
+    the alias display label (telemetry consumes it); the generated secrets.ctmpl reads the
+    Vault app secrets to render, and the ephemeral-DB knobs point DATABASE_URL at the
+    stack's own local postgres.
+
+    NOTE: VAULT_ADDR / VAULT_ROLE_ID / VAULT_SECRET_ID are NOT set here — ``up`` injects
+    them separately via ``_source_app_vault_creds`` (read from the source env's app compose
+    each deploy, since a throwaway alias can't rely on a one-time injection persisting).
+    Keeping them out of this pure assembler means it never logs or embeds the creds.
+    """
+    config = preview_service_config(service)
+    coords = _preview_coordinates(service, alias, domain=domain)
+    # IMAGE_TAG is the published ref: a release tag (image_ref="vX.Y.Z") or the short sha.
+    image_tag = image_ref or sha[:7]
+    config_hash = f"preview-{image_tag}-{int(_now() * 1000)}"  # per-deploy cache-bust
+    env_vars = {
+        "IMAGE_TAG": image_tag,
+        "GIT_COMMIT_SHA": image_tag,
+        "NEXT_PUBLIC_APP_URL": alias.app_url(
+            domain=domain, base_subdomain=config.base_subdomain
+        ),
+        # #368: FE OTLP endpoint from the ONE source (consumed, not re-built in compose).
+        # infra_domain(), not this app's own `domain` — SigNoz/OTel is the ONE shared
+        # collector (SHARED_PLATFORM_SERVICES), never per-service-domain-overridden;
+        # promote.deploy() had this exact bug fixed already (#561's general form) —
+        # preview.up() carried the same bug, just never observed (a throwaway preview's
+        # telemetry silently no-ops rather than crash-looping like #561's prod symptom).
+        **otel_env(domain=infra_domain()),
+        # #375: every preview alias (main / pr-<N> / commit-<sha7>) shares the single
+        # "preview" OpenPanel project; inject its client-id at runtime so preview
+        # analytics actually emits (alias granularity rides deployment.environment, not
+        # a per-alias project). staging/prod get this via common.deploy.promote; preview was
+        # the missing path — without it OPENPANEL_CLIENT_ID stayed empty and analytics
+        # silently no-op'd on every preview.
+        **openpanel_env("preview"),
+        "TIER_CPU_SHARES": str(coords.cpu_shares),
+        "ENV_SUFFIX": coords.env_suffix,
+        "ENV_DOMAIN_SUFFIX": coords.env_domain_suffix,
+        # ENV is the alias display label so the telemetry identity contract
+        # (core.environments §4.5: deployment.environment = pr-<N>/commit-<sha>/main)
+        # is carried into the running stack.
+        "ENV": alias.deployment_environment,
+        # Vault app-secrets source env (preview has no per-alias Vault path).
+        "COMPOSE_PROFILES": "app",
+        "TRAEFIK_ENABLE": "true",
+        "INTERNAL_DOMAIN": domain,
+        "CONFIGURATION_SHA256": config_hash,
+        "IAC_CONFIG_HASH": config_hash,
+    }
+    from common.deploy.contract import service_spec
+    from common.core.service_identity import ServiceIdentity
+
+    spec = service_spec(service)
+    identity = ServiceIdentity.build(
+        service,
+        alias.deployment_environment,
+        component=spec.identity_component,
+        service_name=spec.resolved_identity_service_name(),
+        version=image_tag,
+        iac_ref=iac_ref,
+    )
+    env_vars.update(identity.deploy_env())
+    env_vars["OTEL_SERVICE_NAME"] = identity.service_name
+    env_vars["OTEL_RESOURCE_ATTRIBUTES"] = identity.otel_resource_attributes()
+    return env_vars
+
+
+def _find_compose(client, project: str, name: str):
+    """Return the existing preview compose dict for ``name`` in ``project``, or None."""
+    return client.find_compose_by_name(name, project, env_name=PREVIEW_ENVIRONMENT)
+
+
+def _ensure_preview_compose(
+    client,
+    config: Any,
+    alias: Any,
+    _sleep: Callable[[float], None] = time.sleep,
+) -> str:
+    """Find existing preview compose or create a new one with retry recovery."""
+    existing = _find_compose(client, config.project, alias.compose_name)
+    if existing:
+        return existing["composeId"]
+
+    try:
+        env_obj, _ = client.ensure_environment(config.project, PREVIEW_ENVIRONMENT)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"could not ensure Dokploy environment "
+            f"{config.project!r}/{PREVIEW_ENVIRONMENT!r}: {exc}"
+        ) from exc
+    environment_id = env_obj.get("environmentId")
+    if not environment_id:
+        raise RuntimeError(
+            f"could not ensure Dokploy environment "
+            f"{config.project!r}/{PREVIEW_ENVIRONMENT!r}"
+        )
+
+    try:
+        created = client.create_compose(
+            environment_id=environment_id,
+            name=alias.compose_name,
+            app_name=alias.compose_name,
+            source_type="github",
+        )
+    except httpx.HTTPError:
+        reconciled = None
+        for attempt in range(_AMBIGUOUS_CREATE_RECOVERY_ATTEMPTS):
+            try:
+                reconciled = _find_compose(client, config.project, alias.compose_name)
+            except httpx.HTTPError:
+                reconciled = None
+            if reconciled:
+                break
+            if attempt < _AMBIGUOUS_CREATE_RECOVERY_ATTEMPTS - 1:
+                _sleep(_AMBIGUOUS_CREATE_RECOVERY_INTERVAL_SECONDS)
+        if reconciled is None:
+            raise
+        return reconciled["composeId"]
+
+    return created["composeId"]
+
+
+def up(
+    kind: str,
+    value: int | str | None,
+    *,
+    code: str,
+    domain: str,
+    client,
+    service: str = "finance_report/app",
+    image_ref: str | None = None,
+    iac_ref: str = "",
+    github_id: str | None = None,
+    repo_owner: str = "wangzitian0",
+    repo_name: str = "infra2",
+    branch: str = "main",
+    wait: bool = True,
+    health_timeout: int = 600,
+    health_interval: int = 10,
+    repo: str | None = None,
+    http_get=None,
+    _now=time.time,
+    _sleep=time.sleep,
+    _monotonic=time.monotonic,
+) -> PreviewResult:
+    """Stand up (or update) the preview stack for one alias and deploy ``code``.
+
+    ``service`` (default ``finance_report/app``, the original preview-capable service)
+    selects the :func:`~common.deploy.env_config.preview_service_config` — which Dokploy
+    project, compose template, and ephemeral-DB name this alias uses.
+
+    Resolves code->sha, computes the alias identity, finds-or-creates this alias's own
+    Dokploy compose (GitHub-sourced preview template), pushes the env, triggers a deploy,
+    and — when wait=True — waits for this trigger's terminal-good deployment record,
+    then proves every configured public surface serves the requested version. Idempotent:
+    re-running an alias updates and redeploys the same compose in place.
+    """
+    _validate_domain(domain)
+    config = preview_service_config(service)
+
+    alias = preview_alias(kind, value, slug_prefix=config.slug_prefix)
+    sha = resolve_to_sha(code, repo=repo) if repo is not None else resolve_to_sha(code)
+    env_vars = _preview_env_vars(
+        alias,
+        service=service,
+        sha=sha,
+        domain=domain,
+        image_ref=image_ref,
+        iac_ref=iac_ref,
+        _now=_now,
+    )
+    env_vars.update(_source_app_vault_creds(client, config.project, config.secret_env))
+
+    gh_id = github_id if github_id is not None else client.get_github_provider_id()
+    if not gh_id:
+        raise RuntimeError(
+            "no GitHub provider configured in Dokploy; add one in Settings -> Git "
+            "Providers before deploying a preview (the compose template is pulled from "
+            "the infra2 repo, not uploaded raw)."
+        )
+    source_fields = dict(
+        source_type="github",
+        githubId=gh_id,
+        repository=repo_name,
+        owner=repo_owner,
+        branch=branch,
+        composePath=config.compose_path,
+        autoDeploy=False,
+    )
+
+    had_existing_compose = (
+        _find_compose(client, config.project, alias.compose_name) is not None
+    )
+    compose_id = _ensure_preview_compose(
+        client=client, config=config, alias=alias, _sleep=_sleep
+    )
+
+    healthy: bool | None = None
+    url = alias.app_url(domain=domain, base_subdomain=config.base_subdomain)
+    expected_versions = {
+        "runtime": image_ref or sha[:7],
+        "source": sha[:7],
+    }
+
+    # Serialize the full read-modify-write-trigger-observe sequence for this compose.
+    # The workflow concurrency group covers separate CI runners; this lock also protects
+    # direct/in-process callers from losing an env update or accepting another trigger's
+    # deployment record (same boundary as fixed-compose promotion, infra2#525).
+    with compose_write_lock(compose_id):
+        before_ids = (
+            _deployment_ids(client.get_compose_deployments(compose_id))
+            if wait
+            else set()
+        )
+
+        # Configure source + env on BOTH paths. Dokploy's compose.create persists ONLY
+        # basic fields, so github binding and env must be re-applied before every deploy.
+        # update_compose_env with replace=True replaces stale keys while preserving runtime AppRole credentials.
+        client.update_compose(compose_id, **source_fields)
+        client.update_compose_env(compose_id, env_vars=env_vars, replace=True)
+
+        # A public 200 may still come from the old stack. Snapshot before this trigger and
+        # require a new deployment record to reach terminal-good before probing routes.
+        trigger_epoch = _now()
+        client.deploy_compose(compose_id)
+        if wait:
+            try:
+                wait_for_rollout(
+                    client,
+                    compose_id,
+                    before_ids,
+                    timeout=health_timeout,
+                    interval=health_interval,
+                    _sleep=_sleep,
+                    min_started_at=trigger_epoch,
+                )
+            except RuntimeError as exc:
+                if (
+                    not had_existing_compose
+                    or "deploy rollout entered error" not in str(exc)
+                ):
+                    raise
+                client.delete_compose(compose_id, delete_volumes=True)
+                if callable(getattr(client, "get_containers", None)):
+                    wait_for_containers_absent(
+                        client,
+                        service,
+                        alias.env_suffix,
+                        _sleep=_sleep,
+                    )
+                compose_id = _ensure_preview_compose(
+                    client=client, config=config, alias=alias, _sleep=_sleep
+                )
+                before_ids = _deployment_ids(client.get_compose_deployments(compose_id))
+                client.update_compose(compose_id, **source_fields)
+                client.update_compose_env(compose_id, env_vars=env_vars, replace=True)
+                trigger_epoch = _now()
+                client.deploy_compose(compose_id)
+                wait_for_rollout(
+                    client,
+                    compose_id,
+                    before_ids,
+                    timeout=health_timeout,
+                    interval=health_interval,
+                    _sleep=_sleep,
+                    min_started_at=trigger_epoch,
+                )
+            healthy = _wait_for_readiness(
+                url,
+                config.readiness_probes,
+                expected_versions=expected_versions,
+                timeout=health_timeout,
+                interval=health_interval,
+                http_get=http_get,
+                _sleep=_sleep,
+                _now=_monotonic,
+            )
+            if not healthy:
+                raise TimeoutError(
+                    f"preview {alias.alias} did not serve the requested deployment "
+                    f"identity on every public surface within {health_timeout}s"
+                )
+
+    return PreviewResult(
+        action="up",
+        alias=alias.alias,
+        compose_id=compose_id,
+        sha=sha,
+        url=url,
+        healthy=healthy,
+    )
+
+
+def check_containers_absent(
+    client, service: str, slot_suffix: str
+) -> tuple[bool, list[str]]:
+    """Inspect Dokploy container inventory for surviving containers matching slot_suffix.
+
+    Returns:
+        (True, []) if no matching containers exist, or (False, survivors) if
+        matching containers remain.
+    """
+    service_project = service.split("/", 1)[0]
+    project_hyphen = service_project.replace("_", "-")
+    containers = client.get_containers()
+    if not isinstance(containers, list) or not all(
+        isinstance(row, dict) and isinstance(row.get("name"), str) for row in containers
+    ):
+        raise RuntimeError("Dokploy container inventory is not readable")
+    survivors = sorted(
+        row["name"]
+        for row in containers
+        if (
+            row["name"].lstrip("/").startswith(f"{service_project}-")
+            or row["name"].lstrip("/").startswith(f"{project_hyphen}-")
+        )
+        and row["name"].endswith(slot_suffix)
+    )
+    return (not bool(survivors), survivors)
+
+
+def wait_for_containers_absent(
+    client,
+    service: str,
+    slot_suffix: str,
+    *,
+    attempts: int = 6,
+    _sleep=None,
+) -> bool:
+    """Poll container absence until two consecutive clean reads occur."""
+    sleep = _sleep or time.sleep
+    consecutive_absent = 0
+    for i in range(attempts):
+        try:
+            absent, _ = check_containers_absent(client, service, slot_suffix)
+            if absent:
+                consecutive_absent += 1
+                if consecutive_absent >= 2:
+                    return True
+            else:
+                consecutive_absent = 0
+        except Exception:
+            consecutive_absent = 0
+        if i < attempts - 1:
+            sleep(min(2 ** (i + 1), 8))
+    return False
+
+
+def down(
+    kind: str,
+    value: int | str | None,
+    *,
+    domain: str,
+    client,
+    service: str = "finance_report/app",
+    wait: bool = False,
+    attempts: int = 6,
+    _sleep=None,
+) -> PreviewResult:
+    """Tear down the preview stack for one alias, destroying its ephemeral DB volume.
+
+    ``service`` must match the one passed to the corresponding ``up`` (it selects the
+    Dokploy project + compose-name prefix the alias was created under).
+
+    Finds the alias's compose by its deterministic name and deletes it with
+    delete_volumes=True so the throwaway `preview_db` named volume is removed too —
+    nothing the preview wrote survives teardown. A no-op (compose_id=None) if the
+    alias was already gone, so teardown is safely idempotent.
+    """
+    config = preview_service_config(service)
+    alias = preview_alias(kind, value, slug_prefix=config.slug_prefix)
+    existing = _find_compose(client, config.project, alias.compose_name)
+    url = alias.app_url(domain=domain, base_subdomain=config.base_subdomain)
+    slot_suffix = f"-{alias.alias}"
+    if not existing:
+        cleared = (
+            wait_for_containers_absent(
+                client, service, slot_suffix, attempts=attempts, _sleep=_sleep
+            )
+            if wait
+            else None
+        )
+        return PreviewResult(
+            action="down",
+            alias=alias.alias,
+            compose_id=None,
+            sha=None,
+            url=url,
+            healthy=None,
+            containers_cleared=cleared,
+        )
+    compose_id = existing["composeId"]
+    client.delete_compose(compose_id, delete_volumes=True)
+    cleared = (
+        wait_for_containers_absent(
+            client, service, slot_suffix, attempts=attempts, _sleep=_sleep
+        )
+        if wait
+        else None
+    )
+    return PreviewResult(
+        action="down",
+        alias=alias.alias,
+        compose_id=compose_id,
+        sha=None,
+        url=url,
+        healthy=None,
+        containers_cleared=cleared,
+    )
+
+
+def _http_get(url: str, timeout: float) -> tuple[int, str]:
+    """Minimal GET returning (status, body-head). 0 status on a connection error.
+
+    Same follow-redirects/timeout discipline the retired route-canary used (#543), so preview readiness keeps the same
+    stdlib-only probe; an injected getter replaces it in tests (no real HTTP).
+    """
+    request = Request(url, headers={"User-Agent": "infra2-preview-lifecycle/1.0"})
+    try:
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310
+            return response.status, response.read(4096).decode(
+                "utf-8", errors="replace"
+            )
+    except HTTPError as exc:
+        return exc.code, exc.read(4096).decode("utf-8", errors="replace")
+    except (URLError, TimeoutError) as exc:
+        return 0, str(getattr(exc, "reason", exc))
+
+
+def _wait_for_readiness(
+    base_url: str,
+    probes: tuple[PreviewReadinessProbe, ...],
+    *,
+    expected_versions: dict[str, str],
+    timeout: int,
+    interval: int,
+    http_get=None,
+    _sleep=time.sleep,
+    _now=time.monotonic,
+) -> bool:
+    """Require every configured public surface and its exact deploy version via SDK."""
+    raw_getter = http_get or _http_get
+
+    def sdk_getter(u: str) -> tuple[int, str]:
+        try:
+            return raw_getter(u, 10)
+        except TypeError:
+            return raw_getter(u)
+
+    # Validate version sources first (fail-closed on unknown source)
+    for probe in probes:
+        if probe.version_fields and probe.version_source not in expected_versions:
+            raise ValueError(
+                f"no expected preview version for source {probe.version_source!r}"
+            )
+
+    deadline = _now() + max(0, timeout)
+    while True:
+        all_ready = bool(probes)
+        for probe in probes:
+            expected_ver = (
+                expected_versions.get(probe.version_source, "")
+                if probe.version_fields
+                else ""
+            )
+            url = f"{base_url.rstrip('/')}{probe.path}"
+            try:
+                poll_until_healthy(
+                    url,
+                    http_get=sdk_getter,
+                    expected_version=expected_ver,
+                    version_json_keys=probe.version_fields or ("git_sha", "version"),
+                    max_attempts=1,
+                    interval_seconds=0,
+                    sleep=lambda _: None,
+                )
+            except RuntimeError:
+                all_ready = False
+        if all_ready:
+            return True
+        if _now() >= deadline:
+            return False
+        _sleep(max(1, interval))

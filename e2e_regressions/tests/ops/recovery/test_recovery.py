@@ -3,6 +3,7 @@ Disaster recovery tests.
 
 Tests backup paths and recovery documentation.
 """
+
 import pathlib
 import pytest
 
@@ -19,7 +20,11 @@ def _assert_contains(path: pathlib.Path, needle: str, label: str):
 @pytest.mark.ops
 async def test_recovery_data_paths_defined():
     """Verify recovery-critical data paths are mounted."""
-    _assert_contains(ROOT / "bootstrap" / "05.vault" / "compose.yaml", "/data/bootstrap/vault", "Vault compose")
+    _assert_contains(
+        ROOT / "bootstrap" / "05.vault" / "compose.yaml",
+        "/data/bootstrap/vault",
+        "Vault compose",
+    )
     _assert_contains(
         ROOT / "platform" / "01.postgres" / "compose.yaml",
         "${DATA_PATH}:/var/lib/postgresql/data",
@@ -34,4 +39,6 @@ async def test_recovery_docs_exist():
 
     assert recovery_doc.exists(), "Disaster recovery documentation should exist"
     content = recovery_doc.read_text()
-    assert "恢复" in content or "Recovery" in content, "Documentation should contain recovery steps"
+    assert "恢复" in content or "Recovery" in content, (
+        "Documentation should contain recovery steps"
+    )

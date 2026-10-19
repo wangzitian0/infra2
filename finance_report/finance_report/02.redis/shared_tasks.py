@@ -1,6 +1,6 @@
 from invoke import task
 
-from libs.common import check_service
+from common.common import check_service
 
 # Authenticated, like the compose healthcheck: the server runs --requirepass and a
 # bare `redis-cli ping` answers NOAUTH with exit 0, which check_service reads as

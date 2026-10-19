@@ -5,7 +5,7 @@
     vX.Y.Z        -> that tag
     <sha>         -> itself (used verbatim)
 
-The resolution logic is library code and lives in :mod:`libs.deploy.refs` (#955: libs/
+The resolution logic is library code and lives in :mod:`common.deploy.refs` (#955: common/
 must not import tools/). This module is only the CLI plus a re-export of the public
 names that ``tools/deploy_v2.py`` and the tests still import from here.
 """
@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.deploy.refs import (  # noqa: E402
+from common.deploy.refs import (  # noqa: E402
     FINANCE_REPORT_REPO,
     CommandRunner,
     ResolvedRef,

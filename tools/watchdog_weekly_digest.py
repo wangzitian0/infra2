@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.alerting import REPORT_TITLE_PREFIX, deliver_out_of_band_text  # noqa: E402
+from common.alerting import REPORT_TITLE_PREFIX, deliver_out_of_band_text  # noqa: E402
 
 WORKFLOW_FILE = "ops-checks.yml"
 WATCHDOG_JOB_NAME = "Check infra2 host and alert bridge"

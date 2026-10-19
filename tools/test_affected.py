@@ -52,16 +52,16 @@ def get_changed_files(base_ref: str = "origin/main") -> list[str]:
 
 
 def resolve_affected_tests(changed_files: list[str]) -> list[str]:
-    """Map changed python files to test files in libs/tests/."""
+    """Map changed python files to test files in common/tests/."""
     tests: set[str] = set()
-    test_dir = ROOT_DIR / "libs" / "tests"
+    test_dir = ROOT_DIR / "common" / "tests"
 
     for file_rel in changed_files:
         path = Path(file_rel)
         # If the file is itself a test file
         if (
             path.parts
-            and path.parts[0] == "libs"
+            and path.parts[0] == "common"
             and len(path.parts) > 1
             and path.parts[1] == "tests"
         ):
@@ -78,7 +78,7 @@ def resolve_affected_tests(changed_files: list[str]) -> list[str]:
 
         # Prefix pattern match: test_<parent>_<stem>.py
         parent_name = path.parent.name
-        if parent_name and parent_name not in (".", "libs", "src"):
+        if parent_name and parent_name not in (".", "common", "src"):
             prefixed_match = test_dir / f"test_{parent_name}_{stem}.py"
             if prefixed_match.is_file():
                 tests.add(str(prefixed_match.relative_to(ROOT_DIR)))
@@ -110,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
     affected = resolve_affected_tests(changed)
     if not affected:
         print(
-            f"ℹ Found {len(changed)} changed file(s), but no matching unit tests in libs/tests/."
+            f"ℹ Found {len(changed)} changed file(s), but no matching unit tests in common/tests/."
         )
         return 0
 

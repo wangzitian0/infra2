@@ -4,7 +4,7 @@ Thin runner. It reads each environment's ledger file from the VPS over SSH (the
 way ``tools/out_of_band_watchdog.py`` reads backup manifests), fetches the
 production outage intervals the Cloudflare Worker recorded (``GET /outages``;
 the VPS cannot count its own downtime), and delegates the math and the text to
-``libs.observability.ledger``. It runs weekly from GitHub Actions, outside the
+``common.observability.ledger``. It runs weekly from GitHub Actions, outside the
 VPS, and sends Lark a positive-proof summary. See ops.observability.md §6.
 
 A missing, empty or stale production ledger, or an unreadable outage list, fails
@@ -36,14 +36,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.alerting import as_report, deliver_out_of_band_text  # noqa: E402
-from libs.observability.ledger import (  # noqa: E402
+from common.alerting import as_report, deliver_out_of_band_text  # noqa: E402
+from common.observability.ledger import (  # noqa: E402
     apply_unavailability,
     build_environment_line,
     build_report_message,
     summarize_ledger,
 )
-from libs.observability.local_ledger import (  # noqa: E402
+from common.observability.local_ledger import (  # noqa: E402
     RETENTION_DAYS,
     gap_intervals,
     host_ledger_path,
@@ -111,7 +111,7 @@ def read_vps_ledger(
     """``environment``'s ledger file, read from the VPS over SSH."""
     # Imported here: the module pulls in the Dokploy client, which the offline
     # (--ledger) path does not need.
-    from tools.out_of_band_watchdog import _ssh_argv, load_ssh_config
+    from common.observability.watchdog import _ssh_argv, load_ssh_config
 
     config = load_ssh_config(env)
     if config is None:

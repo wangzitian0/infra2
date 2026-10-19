@@ -21,11 +21,11 @@
 
 ### Code as SSOT 索引
 
-- **服务实体与环境真源**：参见 [`libs/core/`](https://github.com/wangzitian0/infra2/blob/main/libs/core/)
-- **安全与机密供给**：参见 [`libs/security/`](https://github.com/wangzitian0/infra2/blob/main/libs/security/)
-- **灾备与恢复演练**：参见 [`libs/backup/`](https://github.com/wangzitian0/infra2/blob/main/libs/backup/)
-- **可观测性与探针诊断**：参见 [`libs/observability/`](https://github.com/wangzitian0/infra2/blob/main/libs/observability/)
-- **部署引擎与流水线**：参见 [`libs/deploy/`](https://github.com/wangzitian0/infra2/blob/main/libs/deploy/)
+- **服务实体与环境真源**：参见 [`common/core/`](https://github.com/wangzitian0/infra2/blob/main/common/core/)
+- **安全与机密供给**：参见 [`common/security/`](https://github.com/wangzitian0/infra2/blob/main/common/security/)
+- **灾备与恢复演练**：参见 [`common/backup/`](https://github.com/wangzitian0/infra2/blob/main/common/backup/)
+- **可观测性与探针诊断**：参见 [`common/observability/`](https://github.com/wangzitian0/infra2/blob/main/common/observability/)
+- **部署引擎与流水线**：参见 [`common/deploy/`](https://github.com/wangzitian0/infra2/blob/main/common/deploy/)
 - **任务加载器**：参见 [`tasks.py`](https://github.com/wangzitian0/infra2/blob/main/tasks.py)
 
 ---
@@ -203,7 +203,7 @@ platform/
 ### Libs 内部库目录结构（领域驱动包）
 
 ```
-libs/
+common/
 ├── core/             # SSOT 实体 Service、环境 DeploymentEnvironment、常量
 │   └── README.md
 ├── security/         # Vault/1Password 密钥供给、Token 生成、孤儿清理
@@ -219,8 +219,8 @@ libs/
 
 **规则**：
 - ✅ 每个领域包包含专属 `README.md`，定义其领域模型、API 与安全守卫
-- ✅ 外部仅通过领域包顶层导出（`from libs.<domain> import ...`）消费其能力
-- ✅ 平铺兼容 Shim 已全部退役（见 [`libs/README.md`](../../libs/README.md)）；新增能力进领域包，不再新增平铺模块
+- ✅ 外部仅通过领域包顶层导出（`from common.<domain> import ...`）消费其能力
+- ✅ 平铺兼容 Shim 已全部退役（见 [`common/README.md`](../../common/README.md)）；新增能力进领域包，不再新增平铺模块
 
 ### Volume 路径规范
 
@@ -325,8 +325,8 @@ libs/
 |----------|-----------------------|--------|
 | **目录结构完整性** | `test_structure.py` (Backlog) | ⏳ Backlog |
 | **DNS 规则一致性** | [`test_network.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/bootstrap/network_layer/test_network.py) | ✅ Critical |
-| **SDK 契约采用** | `libs/tests/test_sdk_contract_adoption.py` | ✅ Critical |
-| **App 请求边界** | `libs/tests/test_app_deploy_request.py` | ✅ Critical |
+| **SDK 契约采用** | `common/tests/test_sdk_contract_adoption.py` | ✅ Critical |
+| **App 请求边界** | `common/tests/test_app_deploy_request.py` | ✅ Critical |
 
 ---
 

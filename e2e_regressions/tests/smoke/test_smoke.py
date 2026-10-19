@@ -27,7 +27,9 @@ def _core_services(config: TestConfig):
 @pytest.mark.e2e
 async def test_s3_health(config: TestConfig):
     """Verify the S3 Console and S3 API are accessible."""
-    async with httpx.AsyncClient(verify=False, timeout=10.0, follow_redirects=True) as client:
+    async with httpx.AsyncClient(
+        verify=False, timeout=10.0, follow_redirects=True
+    ) as client:
         # Console should return 200 (HTML login page)
         console_resp = await client.get(config.S3_CONSOLE_URL)
         assert console_resp.status_code == 200, (

@@ -109,7 +109,7 @@ Simple public HTTP services such as IaC Runner and Wealthfolio should use
 Dokploy Domains. Compose Traefik labels are reserved for routes that need
 code-owned middleware or non-standard routing behavior.
 
-**Verification**: `libs/tests/test_domain_routing_policy.py` rejects deployers that set
+**Verification**: `common/tests/test_domain_routing_policy.py` rejects deployers that set
 `subdomain` while their compose file owns explicit `traefik.http.routers.*` or
 `traefik.http.services.*` labels.
 

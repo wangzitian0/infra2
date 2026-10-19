@@ -6,7 +6,7 @@ resident/continuous watching:
 
   1. the probe loop (INFRA_PROBE_SPECS / PUBLIC_ROUTE_PROBE_SPECS), alerting
      through the internal bridge;
-  2. registered watcher plugins (libs/observability/watchers/resident.py) — the container
+  2. registered watcher plugins (common/observability/watchers/resident.py) — the container
      breakdown watch and the deploy-queue guard, formerly two separate compose
      sidecars — invoked once per loop iteration with their own per-watcher
      state and self-paced intervals.
@@ -15,7 +15,7 @@ The compose healthcheck (state-file freshness) covers the WHOLE loop: a hung
 probe cycle OR a hung watcher stalls the next state write, the file goes
 stale, and the container flips unhealthy -> Dokploy restarts it (#163/#475
 monitor-the-monitor; the standalone sidecars had no healthcheck at all).
-See libs/observability/watchers/resident.py for the plugin surface + timing budget.
+See common/observability/watchers/resident.py for the plugin surface + timing budget.
 """
 # alert-delivery-exempt: the probe ENGINE — delivers on behalf of every registered internal probe signal (per-spec, not per-module)
 
@@ -34,8 +34,8 @@ from pathlib import Path
 from typing import NamedTuple
 from urllib.request import Request, urlopen
 
-from libs.alerting import is_report_only_environment, mark_report_payload
-from libs.observability.probes import (
+from common.alerting import is_report_only_environment, mark_report_payload
+from common.observability.probes import (
     HTTP_PROBE_HEADERS,
     ProbeResult,
     build_probe_alert_payload,
@@ -46,12 +46,12 @@ from libs.observability.probes import (
     post_alert_bridge_payload,
     run_probes,
 )
-from libs.observability.local_ledger import record_probe_round
-from libs.observability.probe_environment import (
+from common.observability.local_ledger import record_probe_round
+from common.observability.probe_environment import (
     DEFAULT_ALERTING_ENV_FILE,
     resolve_probe_environment,
 )
-from libs.observability.probe_dispatch import (
+from common.observability.probe_dispatch import (
     CHRONIC_AFTER_SECONDS,
     CHRONIC_DIGEST_ALERT_NAME,
     PUBLIC_ROUTE_GROUP,
@@ -175,7 +175,7 @@ def _configure_logging() -> None:
 
     The root stays at WARNING so nothing else in the process becomes chatty; the two
     watcher loggers are raised to INFO explicitly. httpx/httpcore are pinned to WARNING
-    in libs.observability.watchers.breakdown_watch, which polls the Docker socket every minute.
+    in common.observability.watchers.breakdown_watch, which polls the Docker socket every minute.
     """
     # force=True: basicConfig is a no-op once the root logger has any handler, so
     # without it a library that configured logging first would leave the root level and
@@ -284,8 +284,8 @@ def _build_watchers() -> list:
     """Construct the registered resident watcher plugins (#543).
 
     A module-level seam so tests can stub the watcher set; the real registry
-    lives in libs/observability/watchers/resident.build_watchers."""
-    from libs.observability.watchers.resident import build_watchers
+    lives in common/observability/watchers/resident.build_watchers."""
+    from common.observability.watchers.resident import build_watchers
 
     return build_watchers()
 

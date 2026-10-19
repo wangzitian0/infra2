@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Write the (project, compose) -> service_id map so it can travel without the tree.
 
-`libs.core.registry` derives service identity by walking the deploy.py tree. The
-alerting image does not ship that tree — it COPYs `libs` and `tools` and nothing else —
+`common.core.registry` derives service identity by walking the deploy.py tree. The
+alerting image does not ship that tree — it COPYs `common` and `tools` and nothing else —
 so inside `platform-alerting-probes` the registry is empty and every Dokploy compose
 resolves to None: 32,236 "unregistered" log lines in 24 h, and every alert the watcher
 raises labelled `infra/unregistered` instead of a real service (#608).
 
 Baking the derivation (not the tree) keeps the image small and the identity real.
 
-    python3 tools/gen_dokploy_identity_map.py            # rewrite libs/dokploy_identity_map.json
+    python3 tools/gen_dokploy_identity_map.py            # rewrite common/dokploy_identity_map.json
     python3 tools/gen_dokploy_identity_map.py --check    # fail if it has drifted (CI)
 """
 
@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.core.registry import (  # noqa: E402
+from common.core.registry import (  # noqa: E402
     DOKPLOY_IDENTITY_MAP_PATH,
     _BOOTSTRAP_COMPOSE_IDS,
     service_attrs,

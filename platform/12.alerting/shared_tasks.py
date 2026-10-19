@@ -8,7 +8,7 @@ from io import StringIO
 
 from invoke import task
 
-from libs.alerting import (
+from common.alerting import (
     BasicAuth,
     build_signoz_channel_payload,
     build_signoz_log_alert_rule_payload,
@@ -16,7 +16,7 @@ from libs.alerting import (
     find_signoz_rule_id,
     signoz_feishu_channel_name,
 )
-from libs.core.environ import get_env, service_domain, with_env_suffix
+from common.core.environ import get_env, service_domain, with_env_suffix
 
 
 def _bridge_url(env: dict[str, str | None]) -> str:
@@ -24,7 +24,7 @@ def _bridge_url(env: dict[str, str | None]) -> str:
 
 
 def _channel_name(env: dict[str, str | None]) -> str:
-    # One definition (libs.alerting) for the channel this module creates and the name
+    # One definition (common.alerting) for the channel this module creates and the name
     # every alert rule binds to: SigNoz routes a rule to a channel by NAME (#973).
     return signoz_feishu_channel_name(env.get("ENV"))
 
@@ -36,8 +36,8 @@ def _deploy_env(env: dict[str, str | None]) -> str:
 def _signoz_context():
     import os
 
-    from libs.console import error
-    from libs.security.store import get_secrets
+    from common.console import error
+    from common.security.store import get_secrets
 
     env = get_env()
     deploy_env = _deploy_env(env)
@@ -120,7 +120,7 @@ def _ensure_signoz_channel(c) -> str | None:
     channel id is undeliverable (``stage for receiver missing``, #973). The id is only
     used here to prove the channel exists.
     """
-    from libs.console import success, warning
+    from common.console import success, warning
 
     env = get_env()
     channel_name = _channel_name(env)
@@ -132,7 +132,7 @@ def _ensure_signoz_channel(c) -> str | None:
         return channel_name
 
     auth = None
-    from libs.security.store import get_secrets
+    from common.security.store import get_secrets
 
     alerting_secrets = get_secrets("platform", "alerting", _deploy_env(env))
     username = alerting_secrets.get("BRIDGE_BASIC_AUTH_USERNAME") or ""
@@ -174,7 +174,7 @@ def _find_rule(c, alert_name: str) -> str | None:
 @task
 def status(c):
     """Check the internal Feishu alert bridge health."""
-    from libs.console import error, success
+    from common.console import error, success
 
     env = get_env()
     host = env["VPS_HOST"]
@@ -219,8 +219,8 @@ def print_channel_payload(c, username="", password=""):
 @task
 def create_signoz_channel(c, username="", password=""):
     """Create the SigNoz webhook notification channel that targets the bridge."""
-    from libs.console import error, success, warning
-    from libs.security.store import get_secrets
+    from common.console import error, success, warning
+    from common.security.store import get_secrets
 
     env = get_env()
     deploy_env = env.get("ENV") or "production"
@@ -306,7 +306,7 @@ def ensure_log_error_rule(
     dry_run=False,
 ):
     """Ensure a reusable SigNoz OTEL log error alert rule routes to Feishu."""
-    from libs.console import error, success
+    from common.console import error, success
 
     channel_name = _ensure_signoz_channel(c)
     if not channel_name:
@@ -352,7 +352,7 @@ def ensure_log_error_rule(
 @task
 def test_feishu(c, message="Infra2 Feishu alert bridge test"):
     """Send a test message through the deployed bridge."""
-    from libs.console import error, success
+    from common.console import error, success
 
     env = get_env()
     host = env["VPS_HOST"]

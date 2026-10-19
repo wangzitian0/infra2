@@ -22,7 +22,7 @@
 
 2. **IaC Runner 修复 - PR #101: 添加 op CLI**
    - **问题**: `FileNotFoundError: [Errno 2] No such file or directory: 'op'`
-   - **原因**: `libs/common.py::get_env()` 调用 `OpSecrets()` 需要 op CLI，但容器中未安装
+   - **原因**: `common/common.py::get_env()` 调用 `OpSecrets()` 需要 op CLI，但容器中未安装
    - **解决**: 在 Dockerfile 中添加 1Password CLI v2.30.0 安装脚本
    - **验证**: `docker exec iac-runner which op` → `/usr/local/bin/op`
 
@@ -152,7 +152,7 @@ read-only audit instead of relying on ad hoc SSH checks.
 - Keep live collection read-only: no token renewal, restart, redeploy, or secret
   mutation.
 - Add offline/unit tests for inventory drift, classifier behavior, report schema,
-  and redaction in `libs/tests/test_vault_self_refresh_audit.py`.
+  and redaction in `common/tests/test_vault_self_refresh_audit.py`.
 
 **Acceptance criteria**:
 - P0: missing/malformed/invalid/non-renewable `VAULT_APP_TOKEN` fails the audit.
@@ -166,7 +166,7 @@ read-only audit instead of relying on ad hoc SSH checks.
   the inventory.
 
 **Verification**:
-- `pytest libs/tests/test_vault_self_refresh_audit.py -q`
+- `pytest common/tests/test_vault_self_refresh_audit.py -q`
 - `invoke --list` includes `vault-audit.self-refresh`.
 - Live `invoke vault-audit.self-refresh` reaches Dokploy, Vault, and VPS; on
   2026-05-25 it found valid renewable tokens but stale rendered env files and
@@ -186,7 +186,7 @@ FileNotFoundError: [Errno 2] No such file or directory: 'op'
 
 **根因分析**:
 1. **第一层问题**: Dockerfile 缺少 1Password CLI 安装
-   - `libs/common.py::get_env()` 调用 `OpSecrets()` fallback 逻辑
+   - `common/common.py::get_env()` 调用 `OpSecrets()` fallback 逻辑
    - `OpSecrets()` 需要 op CLI 来读取 bootstrap secrets
    - 容器中未安装 op CLI 导致 FileNotFoundError
 
@@ -198,7 +198,7 @@ FileNotFoundError: [Errno 2] No such file or directory: 'op'
 **解决方案**:
 - **PR #101**: 添加 1Password CLI v2.30.0 安装脚本
   ```dockerfile
-  # Install 1Password CLI (required by libs/common.py::OpSecrets)
+  # Install 1Password CLI (required by common/common.py::OpSecrets)
   RUN curl -sSfLo op.zip https://cache.agilebits.com/dist/1P/op2/pkg/v2.30.0/op_linux_amd64_v2.30.0.zip && \
       unzip -od /usr/local/bin/ op.zip && \
       rm op.zip && \
@@ -235,7 +235,7 @@ curl https://iac.zitian.party/health
 
 ### 服务发现机制
 
-`libs/deploy/deployer.py` 中的 `discover_services()` 基于文件系统：
+`common/deploy/deployer.py` 中的 `discover_services()` 基于文件系统：
 ```python
 # 扫描规则
 platform/**/deploy.py → <service>.sync

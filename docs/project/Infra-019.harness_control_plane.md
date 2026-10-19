@@ -43,10 +43,10 @@ App 后的治理优先级。两个 App 已形成各自成熟但不同的工作�
 ## Verification (The Proof)
 
 ```bash
-uv run pytest -q libs/tests/test_harness_manifest.py
+uv run pytest -q common/tests/test_harness_manifest.py
 uv run python -m tools.harness check --json
-uv run pytest -q libs/tests/test_sdk_contract_adoption.py
-uv run pytest -q libs/tests/test_harness_sweep.py libs/tests/test_orchestrator_guard_hook.py
+uv run pytest -q common/tests/test_sdk_contract_adoption.py
+uv run pytest -q common/tests/test_harness_sweep.py common/tests/test_orchestrator_guard_hook.py
 mkdocs build --config-file docs/mkdocs.yml
 ```
 

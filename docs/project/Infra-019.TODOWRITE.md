@@ -9,7 +9,7 @@
 - [x] Add machine-readable `harness/repos.yaml`.
 - [x] Add workspace coordination, GitHub, and software-design preferences.
 - [x] Add read-only `tools.harness check` with unit tests.
-- [x] Route root README, AGENTS, repos, libs, and tools documentation.
+- [x] Route root README, AGENTS, repos, common, and tools documentation.
 
 ## Follow-Ups
 
@@ -487,7 +487,7 @@ foreground wait is deaf for its whole length. `pr_merge_gate` exit 1 covers pend
 and red checks, open threads, drafts and merged PRs alike, and `gh pr checks --json`
 exits 1 with "no checks reported" before any check exists, which crashed the gate.
 
-- [x] `libs/harness_sweep.py` + `python -m tools.harness sweep`: WAITING / DONE / ACTION /
+- [x] `common/harness_sweep.py` + `python -m tools.harness sweep`: WAITING / DONE / ACTION /
       STALL / UNKNOWN per item, gates by exit code only, mutating gate flags (and argparse
       abbreviations of them) refused, `--watch` prints transitions and a heartbeat and
       exits when an item leaves WAITING. Usage and watch-list errors exit 4, never 2.
@@ -567,9 +567,9 @@ finance_report 那 13 条全指向 `docs/reference/db-schema.md`：由
 
 > submodule 只表示开发快照，不是 package、runtime、deployment 或 config-hash 依赖。
 
-实测不成立。`libs/app_manifests.py` 的 `ensure_present` 从
+实测不成立。`common/app_manifests.py` 的 `ensure_present` 从
 `raw.githubusercontent.com/<owner>/<repo>/<pinned-sha>/<path>` 取 app manifest（因为 infra-ci 和
-iac-runner 都不 checkout submodule），而 `libs/secrets_registry.load_manifest` **在部署时**调用它。
+iac-runner 都不 checkout submodule），而 `common/secrets_registry.load_manifest` **在部署时**调用它。
 pin SHA 因此决定部署校验哪份 `required-env` 契约。
 
 允许的故障：pin 跨过一个新增必需变量的 App 提交，下次部署就会索要一个 1Password 里还不存在的密钥。
@@ -659,7 +659,7 @@ harness 发现的缺口该由 harness 去提，还是记给 App 自己排期。
   其 Test Anchor 正是 `test_postgresql.py`，`Used by` 正是这个 e2e README。链接是对的，是锚点后来烂了。
 - 实际存在三个 Postgres 实例、两类主体：`platform-postgres`（无 `POSTGRES_DB`）、
   `finance_report-postgres`（`POSTGRES_DB: finance_report`）、`truealpha-postgres`（`POSTGRES_DB: truealpha`），
-  在 `libs/core/registry.py:54-57` 注册为不同服务。
+  在 `common/core/registry.py:54-57` 注册为不同服务。
 - 删除发生在 `a3e546e`（PR #435），理由是「never built，0 code references」。该理由对**文档键**成立，
   对**主体**不成立——删除当时 `finance_report/finance_report/01.postgres/` 已经存在。那次扫描找的是
   字符串 `db.business_pg`，因此完全漏掉了基础设施本身。
@@ -759,7 +759,7 @@ worktree 的每个 generation 触及，所以 `generation-local` 描述的是一
       infra error（退出码 2），而步骤里一段 shell 预检抢在它前面 `exit 0`，
       **让 `--strict` 永远到不了**——一个以「组件门禁全绿而真链路是坏的」为立项
       前提的证明，自己每天报绿却从未启动过 pi。首次 cron 是 2026-09-22 03:57Z，
-      在它产出第一个假绿之前改掉。守卫 `libs/tests/test_pi_chain_smoke_ci_wiring.py`
+      在它产出第一个假绿之前改掉。守卫 `common/tests/test_pi_chain_smoke_ci_wiring.py`
       **执行**该步骤的脚本本身（喂一个必定拒绝的 stub），断言的是物理退出码而不是
       shell 文本——文本匹配枚举不完通往 `exit 0` 的写法（`|| true`、`set +e`、
       `case`、函数、提前 `return`）。修复前实测两参数化用例全红，修复后全绿。

@@ -13,7 +13,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from infra2_sdk.fastapi import init_service
 
-from libs.alerting import (
+from common.alerting import (
     AlertingError,
     build_feishu_alert_card,
     deliver_feishu_app_card,

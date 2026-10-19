@@ -21,9 +21,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
 
-from libs.deploy.dependencies import explain_fanout
-from libs.deploy.contract import all_service_keys, service_spec
-from libs.deploy.git_provenance import assert_after_on_main  # noqa: F401  (re-exported; #616)
+from common.deploy.dependencies import explain_fanout
+from common.deploy.contract import all_service_keys, service_spec
+from common.deploy.git_provenance import assert_after_on_main  # noqa: F401  (re-exported; #616)
 
 MANIFEST_PATH = "docs/ssot/deploy-dependencies.yaml"
 PRODUCTION_MARKER_PREFIX = "production/"

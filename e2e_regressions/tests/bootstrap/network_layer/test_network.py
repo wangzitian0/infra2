@@ -3,6 +3,7 @@ Bootstrap Network Layer E2E Tests.
 
 Tests DNS resolution and TLS certificate configuration.
 """
+
 import pytest
 import httpx
 import ssl
@@ -50,8 +51,9 @@ async def test_dns_wildcard_subdomain(config: TestConfig):
         except socket.gaierror:
             pass
 
-    assert resolved_count >= 2, \
+    assert resolved_count >= 2, (
         f"Wildcard DNS may not be configured (only {resolved_count} subdomains resolved)"
+    )
 
 
 @pytest.mark.smoke
@@ -72,8 +74,9 @@ async def test_certificates_valid_or_self_signed(config: TestConfig):
             except httpx.SSLError:
                 async with httpx.AsyncClient(verify=False) as client_no_verify:
                     response = await client_no_verify.get(url, timeout=10.0)
-                    assert response.status_code < 500, \
+                    assert response.status_code < 500, (
                         f"Service should respond with self-signed cert: {url}"
+                    )
 
 
 @pytest.mark.bootstrap

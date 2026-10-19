@@ -20,7 +20,7 @@ import json
 import sys
 from urllib.parse import quote
 
-from libs.deploy.env_config import PREVIEW_KINDS
+from common.deploy.env_config import PREVIEW_KINDS
 
 DEFAULT_SCHEDULE_NAME = "finance-report-vps-host-hygiene"
 DEFAULT_CRON_EXPRESSION = "17 3,9,15,21 * * *"
@@ -385,7 +385,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     if args.ensure:
-        from libs.deploy.dokploy_client import get_dokploy
+        from common.deploy.dokploy_client import get_dokploy
 
         ensure_host_hygiene_schedule(
             get_dokploy(),

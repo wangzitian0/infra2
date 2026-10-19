@@ -82,7 +82,7 @@ chmod 700 "${OUTPUT_DIR}" "${RUN_DIR}"
 : > "${ARTIFACTS_FILE}"
 
 # service_id | kind | source (container or data_path)
-# Derived dynamically from declared BackupFacet inventory (libs.backup.emitter).
+# Derived dynamically from declared BackupFacet inventory (common.backup.emitter).
 # Preserves safety invariant #618: logical dumps FIRST, busy path archives LAST.
 # Manual override via SERVICES is preserved for testing or single-service runs.
 if [ -z "${SERVICES:-}" ]; then
@@ -92,11 +92,11 @@ if [ -z "${SERVICES:-}" ]; then
   REAL_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || python3 -c "import os, sys; print(os.path.realpath(sys.argv[1]))" "${BASH_SOURCE[0]}")"
   SCRIPT_DIR="$(cd "$(dirname "${REAL_PATH}")" && pwd)"
   REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-  SERVICES="$(PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}" python3 -m libs.backup.emitter --environment "${ENVIRONMENT}" --data-root "${DATA_ROOT}")"
+  SERVICES="$(PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}" python3 -m common.backup.emitter --environment "${ENVIRONMENT}" --data-root "${DATA_ROOT}")"
 fi
 if [ -z "${SERVICES//[[:space:]]/}" ]; then
   # An empty list would write a manifest with 0 artifacts and exit 0.
-  echo "host_backup: no services to back up (libs.backup.emitter printed nothing)" >&2
+  echo "host_backup: no services to back up (common.backup.emitter printed nothing)" >&2
   rm -f "${ARTIFACTS_FILE}"
   rmdir "${RUN_DIR}" 2>/dev/null || true
   exit 1

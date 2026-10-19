@@ -1,0 +1,728 @@
+"""Infra-009: deploy_v2 canary orchestration proof.
+
+Tests the canary's orchestration (deploy the reserved preview slot -> health -> teardown)
+with deploy_v2 + down monkeypatched — NO live Dokploy/HTTP. The LIVE run is the acceptance
+gate and is operator-driven (see the module docstring).
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from types import SimpleNamespace
+
+import httpx
+import pytest
+from infra2_sdk.delivery import FailureDomain, PipelineStage, StageStatus
+
+import tools.deploy_v2_canary as canary
+from common.deploy.contract import make_target
+from tools.deploy_v2_canary import CANARY_SLOT, run_canary
+
+SHA_CODE = "e" * 40
+SHA_IAC = "f" * 40
+
+
+class _NoContainersClient:
+    def get_containers(self):
+        return []
+
+
+@pytest.fixture(autouse=True)
+def _no_real_teardown_sleep(monkeypatch):
+    monkeypatch.setattr(canary.time, "sleep", lambda *_: None)
+
+
+def _fake_target():
+    return make_target(
+        "canary",
+        service="finance_report/app",
+        version=SHA_CODE,
+        iac_ref=SHA_IAC,
+        alias_value=CANARY_SLOT,
+    )
+
+
+@dataclass
+class _DV2Result:
+    target: object
+    data_lane: str
+    backend: str
+    detail: dict
+
+
+@pytest.fixture
+def spies(monkeypatch):
+    rec = {"deploy": None, "down": None}
+
+    def fake_deploy_v2(**kw):
+        rec["deploy"] = kw
+        # Mirror the real backend: preview_lifecycle.up(wait=False) returns healthy=None,
+        # so the spy must too — otherwise the wait=False path can't be exercised.
+        healthy = True if kw.get("wait", True) else None
+        return _DV2Result(
+            target=_fake_target(),
+            data_lane="staging",
+            backend="preview-lifecycle",
+            detail={
+                "alias": CANARY_SLOT,
+                "compose_id": "cmp",
+                "sha": SHA_CODE,
+                "url": f"https://report-{CANARY_SLOT}.{kw['domain']}",
+                "healthy": healthy,
+            },
+        )
+
+    def fake_down(kind, value, **kw):
+        rec["down"] = {"kind": kind, "value": value, **kw}
+        return SimpleNamespace(compose_id=None)
+
+    monkeypatch.setattr(canary, "deploy_v2", fake_deploy_v2)
+    monkeypatch.setattr(canary, "down", fake_down)
+    return rec
+
+
+def test_canary_deploys_reserved_slot_then_tears_down(spies):
+    res = run_canary(
+        client=_NoContainersClient(),
+        service="finance_report/app",
+        domain="zitian.party",
+        version_ref="main",
+    )
+    assert res.ok is True
+    assert res.alias == CANARY_SLOT
+    assert res.torn_down is True
+    # deployed via the unified front door with the canary type...
+    assert spies["deploy"]["deploy_type"] == "canary"
+    assert spies["deploy"]["version_ref"] == "main"
+    # ...then tore the reserved slot down.
+    assert spies["down"]["kind"] == "canary"
+    assert spies["down"]["value"] == "preview"
+    assert spies["down"]["domain"] == "zitian.party"
+
+
+def test_keep_skips_teardown(spies):
+    res = run_canary(
+        client=_NoContainersClient(),
+        service="finance_report/app",
+        domain="zitian.party",
+        version_ref="main",
+        teardown=False,
+    )
+    assert res.torn_down is False
+    assert spies["down"] is None
+
+
+def test_teardown_runs_even_when_deploy_raises(monkeypatch):
+    rec = {"down": None}
+
+    def boom(**kw):
+        raise TimeoutError("never went healthy")
+
+    def fake_down(kind, value, **kw):
+        rec["down"] = (kind, value)
+        return SimpleNamespace(compose_id=None)
+
+    monkeypatch.setattr(canary, "deploy_v2", boom)
+    monkeypatch.setattr(canary, "down", fake_down)
+
+    with pytest.raises(TimeoutError):
+        run_canary(
+            client=_NoContainersClient(),
+            service="finance_report/app",
+            domain="zitian.party",
+            version_ref="main",
+        )
+    assert rec["down"] == ("canary", "preview")  # cleanup still ran
+
+
+def test_no_wait_reports_unknown_health_but_still_tears_down(spies):
+    # --no-wait: the deploy is fire-and-forget, so health is unknown (ok/healthy None),
+    # but teardown still runs by default so the canary never leaks its ephemeral stack.
+    res = run_canary(
+        client=_NoContainersClient(),
+        service="finance_report/app",
+        domain="zitian.party",
+        version_ref="main",
+        wait=False,
+    )
+    assert res.ok is None
+    assert res.healthy is None
+    assert res.torn_down is True
+    assert spies["deploy"]["wait"] is False
+    assert spies["down"]["value"] == "preview"
+
+
+def test_version_ref_forwarded(spies):
+    run_canary(
+        client=_NoContainersClient(),
+        service="finance_report/app",
+        domain="zitian.party",
+        version_ref="v2.0.0",
+    )
+    assert spies["deploy"]["version_ref"] == "v2.0.0"
+    assert spies["down"]["value"] == "preview"  # slot stays fixed regardless of code
+
+
+def test_service_defaults_to_finance_report_but_is_overridable(spies):
+    # #522: --service selects which preview-capable service the canary probes; the
+    # default stays finance_report/app so every pre-#522 caller is unaffected.
+    run_canary(client=_NoContainersClient(), domain="zitian.party", version_ref="main")
+    assert spies["deploy"]["service"] == "finance_report/app"
+    assert spies["down"]["service"] == "finance_report/app"
+
+    run_canary(
+        client=_NoContainersClient(),
+        domain="zitian.party",
+        service="truealpha/app",
+        version_ref="main",
+    )
+    assert spies["deploy"]["service"] == "truealpha/app"
+    assert spies["down"]["service"] == "truealpha/app"
+
+
+# --- best-effort teardown (resilience to a flaky control plane) -------------
+
+
+def test_best_effort_down_retries_then_succeeds(monkeypatch):
+    calls = {"n": 0}
+
+    def flaky(kind, value, **kw):
+        calls["n"] += 1
+        if calls["n"] < 2:
+            raise httpx.HTTPError("transient 502")
+        return SimpleNamespace(compose_id=None)
+
+    monkeypatch.setattr(canary, "down", flaky)
+    ok = canary._best_effort_down(
+        domain="z.p",
+        client=_NoContainersClient(),
+        service="finance_report/app",
+        _sleep=lambda *_: None,
+    )
+    assert ok is True and calls["n"] == 3
+
+
+def test_best_effort_down_rechecks_until_delete_converges(monkeypatch):
+    calls = {"n": 0}
+
+    def asynchronous_delete(kind, value, **kw):
+        calls["n"] += 1
+        return SimpleNamespace(compose_id="cmp" if calls["n"] == 1 else None)
+
+    monkeypatch.setattr(canary, "down", asynchronous_delete)
+    ok = canary._best_effort_down(
+        domain="z.p",
+        client=_NoContainersClient(),
+        service="finance_report/app",
+        attempts=4,
+        _sleep=lambda *_: None,
+    )
+
+    assert ok is True
+    assert calls["n"] == 3
+
+
+def test_best_effort_down_rejects_record_only_false_pass(monkeypatch, capsys):
+    monkeypatch.setattr(
+        canary, "down", lambda *args, **kwargs: SimpleNamespace(compose_id=None)
+    )
+
+    class OrphanedClient:
+        def get_containers(self):
+            return [
+                {"name": f"finance_report-frontend-{CANARY_SLOT}", "state": "created"},
+                {
+                    "name": f"finance_report-preview-db-{CANARY_SLOT}",
+                    "state": "running",
+                },
+                {
+                    "name": f"finance_report-app-vault-agent-{CANARY_SLOT}",
+                    "state": "restarting",
+                },
+                {"name": f"truealpha-app-{CANARY_SLOT}", "state": "running"},
+            ]
+
+    ok = canary._best_effort_down(
+        domain="z.p",
+        client=OrphanedClient(),
+        service="finance_report/app",
+        attempts=3,
+        _sleep=lambda *_: None,
+    )
+
+    assert ok is False
+    assert f"finance_report-preview-db-{CANARY_SLOT}" in capsys.readouterr().err
+
+
+def test_best_effort_down_waits_for_container_disappearance(monkeypatch):
+    monkeypatch.setattr(
+        canary, "down", lambda *args, **kwargs: SimpleNamespace(compose_id=None)
+    )
+
+    class EventuallyCleanClient:
+        reads = 0
+
+        def get_containers(self):
+            self.reads += 1
+            if self.reads < 3:
+                return [{"name": f"finance_report-preview-db-{CANARY_SLOT}"}]
+            return [{"name": f"truealpha-preview-db-{CANARY_SLOT}"}]
+
+    client = EventuallyCleanClient()
+    ok = canary._best_effort_down(
+        domain="z.p",
+        client=client,
+        service="finance_report/app",
+        attempts=4,
+        _sleep=lambda *_: None,
+    )
+
+    assert ok is True
+    assert client.reads == 4
+
+
+def test_best_effort_down_rejects_delete_response_without_convergence(
+    monkeypatch, capsys
+):
+    calls = {"n": 0}
+
+    def never_disappears(kind, value, **kw):
+        calls["n"] += 1
+        return SimpleNamespace(compose_id="cmp")
+
+    monkeypatch.setattr(canary, "down", never_disappears)
+    ok = canary._best_effort_down(
+        domain="z.p",
+        client=_NoContainersClient(),
+        service="finance_report/app",
+        attempts=3,
+        _sleep=lambda *_: None,
+    )
+
+    assert ok is False
+    assert calls["n"] == 3
+    assert "still present" in capsys.readouterr().err
+
+
+def test_best_effort_down_warns_and_returns_false_on_persistent_failure(
+    monkeypatch, capsys
+):
+    calls = {"n": 0}
+
+    def boom(kind, value, **kw):
+        calls["n"] += 1
+        raise httpx.HTTPError("502 persists")
+
+    monkeypatch.setattr(canary, "down", boom)
+    ok = canary._best_effort_down(
+        domain="z.p",
+        client=_NoContainersClient(),
+        service="finance_report/app",
+        attempts=3,
+        _sleep=lambda *_: None,
+    )
+    assert ok is False
+    assert calls["n"] == 3  # exhausted retries
+    err = capsys.readouterr().err
+    assert "teardown failed" in err and CANARY_SLOT in err  # loud leak warning
+
+
+def test_run_canary_teardown_failure_does_not_mask_deploy_error(monkeypatch, capsys):
+    # deploy fast-fails (e.g. composeStatus=error) AND teardown can't clean up: the canary
+    # must surface the DEPLOY error (the real cause), not the teardown error, and warn.
+    def boom_deploy(**kw):
+        raise RuntimeError("deploy failed (composeStatus=error)")
+
+    def boom_down(kind, value, **kw):
+        raise httpx.HTTPError("502")
+
+    monkeypatch.setattr(canary, "deploy_v2", boom_deploy)
+    monkeypatch.setattr(canary, "down", boom_down)
+    monkeypatch.setattr(canary.time, "sleep", lambda *_: None)
+
+    with pytest.raises(RuntimeError, match="composeStatus=error"):
+        run_canary(
+            client=_NoContainersClient(),
+            service="finance_report/app",
+            domain="z.p",
+            version_ref="main",
+        )
+    assert "teardown failed" in capsys.readouterr().err
+
+
+def test_run_canary_attaches_cleanup_evidence_to_deploy_error(monkeypatch):
+    def boom_deploy(**kw):
+        raise RuntimeError("deployment record entered error")
+
+    def converged_down(kind, value, **kw):
+        return SimpleNamespace(compose_id=None)
+
+    monkeypatch.setattr(canary, "deploy_v2", boom_deploy)
+    monkeypatch.setattr(canary, "down", converged_down)
+
+    with pytest.raises(RuntimeError, match="deployment record entered error") as caught:
+        run_canary(
+            client=_NoContainersClient(),
+            service="finance_report/app",
+            domain="z.p",
+            version_ref="main",
+        )
+
+    assert caught.value.torn_down is True
+
+
+# --- probe alerting: failure classification + out-of-band delivery ----------
+
+
+def test_failure_domain_classification():
+    assert canary.failure_domain(httpx.HTTPError("x")) == "deploy-v2-control-plane"
+    assert canary.failure_domain(TimeoutError()) == "deploy-v2-health"
+    assert (
+        canary.failure_domain(RuntimeError("composeStatus=error")) == "deploy-v2-health"
+    )
+    assert canary.failure_domain(ValueError("bad ref")) == "deploy-v2-configuration"
+
+
+def test_run_url_requires_complete_github_identity():
+    assert canary._run_url({}) == ""
+    assert canary._run_url({"GITHUB_SERVER_URL": "https://github.com"}) == ""
+    assert (
+        canary._run_url(
+            {
+                "GITHUB_SERVER_URL": "https://github.com",
+                "GITHUB_REPOSITORY": "owner/repo",
+                "GITHUB_RUN_ID": "123",
+            }
+        )
+        == "https://github.com/owner/repo/actions/runs/123"
+    )
+
+
+@pytest.mark.parametrize(
+    ("domain", "expected", "external_dependency"),
+    [
+        ("deploy-v2-control-plane", FailureDomain.DOKPLOY_CONTROL_PLANE, True),
+        ("deploy-v2-health", FailureDomain.DOCKER_RUNTIME, False),
+        ("deploy-v2-configuration", FailureDomain.CONFIGURATION, True),
+        ("deploy-v2-cleanup", FailureDomain.RESOURCE, False),
+    ],
+)
+def test_failure_stage_result_uses_sdk_contract(domain, expected, external_dependency):
+    result = canary.make_canary_stage_result(
+        domain=domain,
+        status=StageStatus.FAIL,
+        args=_Args(),
+        duration_ms=123,
+        evidence_url="https://github.com/example/actions/runs/1",
+    )
+
+    assert result.stage == PipelineStage.DEPLOY_SMOKE
+    assert result.failure_domain == expected
+    assert result.external_dependency is external_dependency
+    assert result.duration_ms == 123
+    assert result.evidence_url.endswith("/1")
+
+
+def test_stage_result_uses_resolved_deployment_coordinate():
+    result = canary.make_canary_stage_result(
+        domain=None,
+        status=StageStatus.PASS,
+        args=_Args(),
+        duration_ms=123,
+        resolved_target=_fake_target(),
+    )
+
+    assert result.target == f"finance_report/app@{SHA_CODE};iac@{SHA_IAC}"
+    assert result.deadline_ms == 600_000
+    assert result.budget_status.value == "within-budget"
+
+
+class _Args:
+    service = "finance_report/app"
+    version_ref = "main"
+    iac_ref = "main"
+    domain = "z.p"
+    timeout = 600
+
+
+def test_alert_failure_is_best_effort(monkeypatch, capsys):
+    import common.alerting as al
+
+    def boom(env, text, **kw):
+        raise RuntimeError("no webhook configured")
+
+    monkeypatch.setattr(al, "deliver_out_of_band_text", boom)
+    # must NOT raise — alerting can never crash the probe
+    canary.alert_failure({}, domain="deploy-v2-health", detail="x", args=_Args())
+    assert "alert delivery failed" in capsys.readouterr().err
+
+
+def _main_with(monkeypatch, run_impl):
+    import common.alerting as al
+    import common.deploy.dokploy_client as dk
+
+    monkeypatch.setattr(dk, "get_dokploy", lambda host: object())
+    monkeypatch.setattr(canary, "run_canary", run_impl)
+    sent = {}
+    monkeypatch.setattr(
+        al, "deliver_out_of_band_text", lambda env, text, **kw: sent.update(text=text)
+    )
+    return sent
+
+
+def test_main_alerts_out_of_band_on_failure(monkeypatch):
+    def boom(**kw):
+        raise httpx.HTTPError("502 Bad Gateway")
+
+    sent = _main_with(monkeypatch, boom)
+    rc = canary.main(
+        [
+            "--version-ref",
+            "main",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "z.p",
+            "--alert-on-failure",
+        ]
+    )
+    assert rc == 1
+    assert "deploy-v2-control-plane" in sent["text"]  # classified + paged
+    marker = "stage_result: "
+    payload = json.loads(sent["text"].split(marker, 1)[1].splitlines()[0])
+    assert payload["status"] == "fail"
+    assert payload["failure_domain"] == "dokploy-control-plane"
+
+
+def test_main_no_alert_without_flag(monkeypatch):
+    def boom(**kw):
+        raise httpx.HTTPError("502")
+
+    sent = _main_with(monkeypatch, boom)
+    rc = canary.main(["--version-ref", "main", "--iac-ref", "main", "--domain", "z.p"])
+    assert rc == 1 and "text" not in sent  # PR-style run: no out-of-band page
+
+
+def test_main_failure_prints_structured_cleanup_evidence(monkeypatch, capsys):
+    def boom(**kw):
+        exc = RuntimeError("deployment record entered error")
+        exc.torn_down = True
+        raise exc
+
+    _main_with(monkeypatch, boom)
+    rc = canary.main(["--version-ref", "main", "--iac-ref", "main", "--domain", "z.p"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 1
+    assert payload["ok"] is False
+    assert payload["torn_down"] is True
+    assert payload["stage_result"]["status"] == "fail"
+
+
+def test_main_rejects_healthy_result_that_breaches_configured_deadline(
+    monkeypatch, capsys
+):
+    def healthy(**kw):
+        return canary.CanaryResult(
+            ok=True,
+            target=_fake_target(),
+            alias=canary.CANARY_SLOT,
+            url="u",
+            healthy=True,
+            torn_down=True,
+        )
+
+    _main_with(monkeypatch, healthy)
+    ticks = iter([0.0, 601.0])
+    monkeypatch.setattr(canary.time, "monotonic", ticks.__next__)
+
+    rc = canary.main(
+        [
+            "--version-ref",
+            "main",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "z.p",
+            "--timeout",
+            "600",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 1
+    assert payload["ok"] is False
+    assert payload["healthy"] is True
+    assert payload["stage_result"]["status"] == "fail"
+    assert payload["stage_result"]["deadline_ms"] == 600_000
+    assert payload["stage_result"]["budget_status"] == "hard-breach"
+    assert payload["stage_result"]["failure_domain"] == "time-budget"
+
+
+def test_main_no_wait_emits_skip_evidence(monkeypatch, capsys):
+    import common.deploy.dokploy_client as dk
+
+    monkeypatch.setattr(dk, "get_dokploy", lambda host: object())
+    monkeypatch.setattr(
+        canary,
+        "run_canary",
+        lambda **kw: canary.CanaryResult(
+            ok=None,
+            target=_fake_target(),
+            alias=canary.CANARY_SLOT,
+            url="u",
+            healthy=None,
+            torn_down=True,
+        ),
+    )
+
+    rc = canary.main(
+        ["--version-ref", "main", "--iac-ref", "main", "--domain", "z.p", "--no-wait"]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert rc == 0
+    assert payload["stage_result"]["status"] == "skip"
+    assert (
+        payload["stage_result"]["skipped_reason"]
+        == "health check disabled by --no-wait"
+    )
+
+
+def test_main_treats_leak_as_cleanup_failure(monkeypatch):
+    from tools.deploy_v2_canary import CanaryResult
+
+    def leaked(**kw):
+        return CanaryResult(
+            ok=True,
+            target=_fake_target(),
+            alias=canary.CANARY_SLOT,
+            url="u",
+            healthy=True,
+            torn_down=False,
+        )
+
+    sent = _main_with(monkeypatch, leaked)
+    rc = canary.main(
+        [
+            "--version-ref",
+            "main",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "z.p",
+            "--alert-on-failure",
+        ]
+    )
+    assert rc == 1
+    assert "deploy-v2-cleanup" in sent["text"]  # healthy but leaked -> still a failure
+
+
+# --- registry-driven service selection (#541) --------------------------------
+
+
+def test_canary_services_derive_from_registry():
+    """The probed set comes from Deployer `deploy_v2_canary` flags via the
+    registry — today exactly finance_report/app (behavior unchanged); truealpha
+    joins by flipping its own flag, with no canary code change."""
+    assert canary.canary_services() == ["finance_report/app"]
+
+
+def test_canary_services_fail_closed_when_none_declared(monkeypatch):
+    import common.core.registry as reg
+
+    monkeypatch.setattr(reg, "service_attrs", lambda: {})
+    with pytest.raises(RuntimeError, match="deploy_v2_canary"):
+        canary.canary_services()
+
+
+def test_run_canary_forwards_service_to_deploy_v2(spies):
+    run_canary(
+        client=_NoContainersClient(),
+        service="finance_report/app",
+        domain="zitian.party",
+        version_ref="main",
+    )
+    assert spies["deploy"]["service"] == "finance_report/app"
+
+
+def test_run_canary_forwards_exact_iac_authority_and_clone_ref(spies):
+    run_canary(
+        client=_NoContainersClient(),
+        service="finance_report/app",
+        domain="zitian.party",
+        version_ref="main",
+        iac_ref=SHA_IAC,
+        iac_clone_ref="fix/preview-proof",
+    )
+    assert spies["deploy"]["iac_ref"] == SHA_IAC
+    assert spies["deploy"]["iac_clone_ref"] == "fix/preview-proof"
+
+
+def test_main_iterates_registry_canary_services(monkeypatch, capsys):
+    import common.deploy.dokploy_client as dk
+
+    monkeypatch.setattr(dk, "get_dokploy", lambda host: object())
+    seen = []
+
+    def fake_run(**kw):
+        seen.append(kw["service"])
+        return canary.CanaryResult(
+            ok=True,
+            target=_fake_target(),
+            alias=canary.CANARY_SLOT,
+            url="u",
+            healthy=True,
+            torn_down=True,
+        )
+
+    monkeypatch.setattr(canary, "run_canary", fake_run)
+    rc = canary.main(["--version-ref", "main", "--iac-ref", "main", "--domain", "z.p"])
+    assert rc == 0
+    assert seen == canary.canary_services() == ["finance_report/app"]
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["torn_down"] is True
+
+
+def test_best_effort_down_converges_after_initial_delete_dispatch(monkeypatch):
+    calls = {"n": 0}
+
+    def down_sequence(kind, value, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return SimpleNamespace(compose_id="cmp-123")
+        return SimpleNamespace(compose_id=None)
+
+    monkeypatch.setattr(canary, "down", down_sequence)
+    ok = canary._best_effort_down(
+        domain="z.p",
+        client=_NoContainersClient(),
+        service="finance_report/app",
+        attempts=3,
+        _sleep=lambda *_: None,
+    )
+    assert ok is True
+    assert calls["n"] == 3  # 1 dispatch + 2 consecutive absent reads
+
+
+def test_best_effort_down_detects_hyphenated_container_survivors(monkeypatch):
+    calls = {"n": 0}
+
+    def down_sequence(kind, value, **kw):
+        calls["n"] += 1
+        return SimpleNamespace(compose_id=None)
+
+    class HyphenContainersClient:
+        def get_containers(self):
+            return [{"name": f"/finance-report-db-{canary.CANARY_SLOT}"}]
+
+    monkeypatch.setattr(canary, "down", down_sequence)
+    ok = canary._best_effort_down(
+        domain="z.p",
+        client=HyphenContainersClient(),
+        service="finance_report/app",
+        attempts=2,
+        _sleep=lambda *_: None,
+    )
+    assert ok is False

@@ -10,10 +10,10 @@ Storage in Vault:
 """
 
 from invoke import task
-from libs.common import check_service
-from libs.core.environ import get_env, service_domain
-from libs.security.store import vault_token
-from libs.console import header, success, error, warning, info
+from common.common import check_service
+from common.core.environ import get_env, service_domain
+from common.security.store import vault_token
+from common.console import header, success, error, warning, info
 
 
 @task
@@ -38,7 +38,7 @@ def create_root_token(c):
         export VAULT_TOKEN=<deploy or break-glass token>
         invoke authentik.shared.create-root-token
     """
-    from libs.security.store import get_secrets
+    from common.security.store import get_secrets
 
     header("Creating Authentik Root Token", "SSO Admin Setup")
 
@@ -320,7 +320,7 @@ def create_proxy_app(
 ):
     """Create SSO application with proxy provider and access policy."""
     import httpx
-    from libs.security.store import get_secrets
+    from common.security.store import get_secrets
 
     header(f"Creating SSO App: {name}", "Proxy Provider + Access Policy")
 
@@ -404,7 +404,7 @@ def create_proxy_app(
 def list_apps(c):
     """List all Authentik applications"""
     import httpx
-    from libs.security.store import get_secrets
+    from common.security.store import get_secrets
 
     header("Listing SSO Applications", "")
 
@@ -464,7 +464,7 @@ def setup_admin_group(c):
         invoke authentik.shared.setup-admin-group
     """
     import httpx
-    from libs.security.store import get_secrets
+    from common.security.store import get_secrets
 
     header("Setting up Admin Group", "Access Control")
 

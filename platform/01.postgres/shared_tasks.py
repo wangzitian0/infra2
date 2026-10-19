@@ -2,9 +2,9 @@
 
 import re
 from invoke import task
-from libs.common import check_service
-from libs.core.environ import get_env, with_env_suffix
-from libs.console import run_with_status, error
+from common.common import check_service
+from common.core.environ import get_env, with_env_suffix
+from common.console import run_with_status, error
 
 
 def _validate_identifier(value: str, label: str) -> str:

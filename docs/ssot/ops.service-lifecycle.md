@@ -96,6 +96,6 @@ invoke service.offboard --service=<service> --project=<project> --purge-data
 
 ## 6. 证据与防漂移守卫 (Proofs & Guards)
 
-- `libs/tests/test_service_onboard.py`: 校验开通 Saga、PostgreSQL 角色配额、Vault AppRole 合成与对称注销。
-- `libs/tests/test_dynamic_vault_targets.py`: 校验 Vault AppRole 目标动态发现机制与目录扫描覆盖。
+- `common/tests/test_service_onboard.py`: 校验开通 Saga、PostgreSQL 角色配额、Vault AppRole 合成与对称注销。
+- `common/tests/test_dynamic_vault_targets.py`: 校验 Vault AppRole 目标动态发现机制与目录扫描覆盖。
 - `docs/onboarding/07.new-service-sop.md`: 面向开发者的 Sub-3-Minute 极速上线操作规程。

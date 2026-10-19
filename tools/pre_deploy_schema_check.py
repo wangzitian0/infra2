@@ -49,9 +49,9 @@ class GateNotEvaluated(Exception):
 
 
 try:
-    from libs.deploy.enum_sources import EnumSource, ENUM_SOURCES
+    from common.deploy.enum_sources import EnumSource, ENUM_SOURCES
 except ImportError:
-    # Standalone container fallback when libs package is not available
+    # Standalone container fallback when common package is not available
     @dataclass(frozen=True)
     class EnumSource:  # type: ignore[no-redef]
         """Where a service's code-side enum truth lives."""
@@ -430,9 +430,9 @@ def main(argv: list[str] | None = None) -> int:
     # Printed on stdout (never stderr) in both branches below, as a stable-format line a
     # caller can grep for, regardless of whether the gate itself passed or blocked. This
     # process normally runs remotely, over SSH inside the app's own container
-    # (libs/deploy/schema_gate.py's module docstring) -- it is THAT module's
+    # (common/deploy/schema_gate.py's module docstring) -- it is THAT module's
     # run_schema_gate() that parses this exact line back out of the captured stdout and
-    # returns/reports it; libs/deploy/promote.py's deploy() then carries the value into
+    # returns/reports it; common/deploy/promote.py's deploy() then carries the value into
     # DeployPlan.rollback_class, and tools/deploy_v2.py exposes it in its own JSON
     # result as detail["rollback_class"]. This script itself has no caller here — it
     # only has to keep emitting a predictable line for schema_gate.py to find.

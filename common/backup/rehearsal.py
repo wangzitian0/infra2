@@ -1,0 +1,403 @@
+"""Backup restore rehearsal helpers.
+
+SSOT for ``common.backup``'s rehearsal planning and sandboxed execution.
+
+These helpers intentionally separate the durable backup proof from the
+anonymized snapshot pipeline. A rehearsal restores an encrypted real-data
+disaster-recovery artifact into an explicitly throwaway target and validates
+basic database invariants.
+"""
+
+from __future__ import annotations
+
+import concurrent.futures
+import gzip
+import hashlib
+import re
+import subprocess
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+from common.backup.verification import (
+    BackupEntry,
+    _parse_timestamp,
+    verify_backup_manifest,
+)
+
+#: `--service-id all`: every Postgres service that has rehearsal invariants.
+ALL_SERVICES = ("finance_report/postgres", "truealpha/postgres")
+#: The last line of a run in which every service passed. The out-of-band watchdog
+#: reads it from the weekly cron's log (#895), so it is a contract, not prose.
+PASS_SUMMARY_PREFIX = "[+] restore rehearsal passed for: "
+
+
+# pg_dumpall emits the source cluster's own superuser role, but the rehearsal
+# sandbox already bootstraps as `postgres`, so re-creating it aborts the restore
+# under ON_ERROR_STOP=1. Only these exact statement prefixes are dropped.
+_REDUNDANT_ROLE_STMTS = (b"CREATE ROLE postgres;", b"CREATE ROLE postgres ")
+
+# `COPY <table> (...) FROM stdin;` opens a raw-data block terminated by `\.`.
+# Every line in between is table data, not SQL.
+_COPY_FROM_STDIN = re.compile(rb"^COPY\s.*\sFROM\s+stdin;", re.IGNORECASE)
+
+
+class BackupRestoreError(RuntimeError):
+    """Raised when a restore rehearsal cannot run safely."""
+
+
+@dataclass(frozen=True)
+class RestoreRehearsalPlan:
+    service_id: str
+    source_uri: str
+    archive_path: str
+    target_container: str
+    pg_user: str
+    database: str
+    invariant_sql: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def latest_artifact_for_service(
+    manifest: dict[str, Any], service_id: str
+) -> dict[str, Any]:
+    """Return the newest manifest artifact for one service."""
+    from common.backup.verification import legacy_backup_aliases
+
+    aliases = legacy_backup_aliases().get(service_id, ())
+    accepted_ids = {service_id, *aliases}
+    candidates = [
+        item
+        for item in manifest.get("artifacts", [])
+        if isinstance(item, dict) and item.get("service_id") in accepted_ids
+    ]
+    if not candidates:
+        raise BackupRestoreError(f"manifest has no artifact for {service_id}")
+    return max(candidates, key=lambda item: _parse_timestamp(item.get("created_at")))
+
+
+def assert_manifest_is_rehearsable(
+    entry: BackupEntry,
+    manifest: dict[str, Any],
+    *,
+    now: int,
+) -> dict[str, Any]:
+    """Verify freshness/off-host constraints before any restore attempt."""
+    report = verify_backup_manifest([entry], manifest, now=now)
+    if report["status"] != "pass":
+        failures = [
+            check["summary"] for check in report["checks"] if check["status"] != "pass"
+        ]
+        raise BackupRestoreError(
+            "; ".join(failures) or "backup manifest verification failed"
+        )
+    return latest_artifact_for_service(manifest, entry.service_id)
+
+
+def assert_rehearsal_target(
+    target_container: str, *, allow_non_rehearsal_target: bool = False
+) -> None:
+    """Refuse to restore real backup data into an ambiguous live-looking target."""
+    if allow_non_rehearsal_target:
+        return
+    lowered = target_container.lower()
+    if (
+        "rehearsal" not in lowered
+        and "restore" not in lowered
+        and "throwaway" not in lowered
+    ):
+        raise BackupRestoreError(
+            "target container must look disposable (contains rehearsal, restore, or throwaway)"
+        )
+
+
+def materialize_artifact(
+    artifact: dict[str, Any],
+    download_dir: Path,
+    *,
+    runner=subprocess.run,
+) -> Path:
+    """Resolve a local artifact path, downloading remote artifacts with rclone."""
+    remote_uri = str(artifact.get("remote_uri") or "")
+    if remote_uri.startswith("local:"):
+        destination = Path(remote_uri.removeprefix("local:"))
+        if not destination.exists():
+            raise BackupRestoreError(f"local backup artifact not found: {destination}")
+    elif ":" not in remote_uri:
+        raise BackupRestoreError(f"unsupported backup artifact URI: {remote_uri}")
+    else:
+        download_dir.mkdir(parents=True, exist_ok=True)
+        destination = planned_artifact_path(artifact, download_dir)
+        result = runner(
+            ["rclone", "copyto", remote_uri, str(destination)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            destination.unlink(missing_ok=True)
+            raise BackupRestoreError(
+                result.stderr.strip() or f"rclone download failed: {remote_uri}"
+            )
+
+    expected_sha256 = artifact.get("sha256")
+    if expected_sha256:
+        h = hashlib.sha256()
+        with destination.open("rb") as f:
+            while chunk := f.read(65536):
+                h.update(chunk)
+        actual_sha256 = h.hexdigest()
+        if actual_sha256.lower() != str(expected_sha256).lower():
+            if not remote_uri.startswith("local:"):
+                destination.unlink(missing_ok=True)
+            raise BackupRestoreError(
+                f"backup artifact checksum mismatch for {destination.name}: "
+                f"expected {expected_sha256}, got {actual_sha256}"
+            )
+    return destination
+
+
+def planned_artifact_path(artifact: dict[str, Any], download_dir: Path) -> Path:
+    """Return where an artifact would be read from or downloaded to."""
+    remote_uri = str(artifact.get("remote_uri") or "")
+    if remote_uri.startswith("local:"):
+        return Path(remote_uri.removeprefix("local:"))
+    if ":" not in remote_uri:
+        raise BackupRestoreError(f"unsupported backup artifact URI: {remote_uri}")
+    return download_dir / remote_uri.rsplit("/", 1)[-1]
+
+
+def build_postgres_rehearsal_plan(
+    *,
+    entry: BackupEntry,
+    artifact: dict[str, Any],
+    archive_path: Path,
+    target_container: str,
+    pg_user: str = "postgres",
+    database: str = "postgres",
+    invariant_sql: tuple[str, ...] = (
+        "SELECT 1",
+        "SELECT count(*) >= 1 FROM pg_database",
+    ),
+) -> RestoreRehearsalPlan:
+    if "pg" not in entry.method and "pg" not in str(artifact.get("method") or ""):
+        raise BackupRestoreError(
+            f"restore rehearsal currently supports postgres backups, got {entry.method}"
+        )
+    assert_rehearsal_target(target_container)
+    return RestoreRehearsalPlan(
+        service_id=entry.service_id,
+        source_uri=str(artifact.get("remote_uri") or ""),
+        archive_path=str(archive_path),
+        target_container=target_container,
+        pg_user=pg_user,
+        database=database,
+        invariant_sql=invariant_sql,
+    )
+
+
+def _detect_dump_target_db(archive_path: Path, default_db: str) -> str:
+    """Inspect archive header to detect if cluster-wide dumps require restoring to postgres db."""
+    try:
+        with gzip.open(archive_path, "rt", errors="ignore") as f:
+            header_sample = f.read(2048)
+            if any(
+                marker in header_sample
+                for marker in ("pg_dumpall", "CREATE ROLE", "CREATE DATABASE")
+            ):
+                return "postgres"
+    except (gzip.BadGzipFile, OSError):
+        pass
+    return default_db
+
+
+def run_postgres_restore_rehearsal(
+    plan: RestoreRehearsalPlan,
+    *,
+    popen=subprocess.Popen,
+    runner=subprocess.run,
+) -> dict[str, Any]:
+    """Restore a gzipped pg dump into the target and run invariant checks."""
+    assert_rehearsal_target(plan.target_container)
+    archive_path = Path(plan.archive_path)
+    if not archive_path.exists():
+        raise BackupRestoreError(f"backup archive is missing: {archive_path}")
+
+    restore_target_db = _detect_dump_target_db(archive_path, plan.database)
+
+    restore_cmd = [
+        "docker",
+        "exec",
+        "-i",
+        plan.target_container,
+        "psql",
+        "-U",
+        plan.pg_user,
+        "-v",
+        "ON_ERROR_STOP=1",
+        restore_target_db,
+    ]
+    filtered_roles = 0
+    stopped_reading = False
+    with gzip.open(archive_path, "rb") as dump:
+        proc = popen(restore_cmd, stdin=subprocess.PIPE)
+        if proc.stdin is None:  # pragma: no cover - stdin=PIPE always gives a pipe
+            proc.kill()
+            proc.wait()
+            raise BackupRestoreError("restore subprocess exposed no stdin pipe")
+        try:
+            with proc.stdin:
+                in_copy_data = False
+                for line in dump:
+                    # Inside a COPY block every line is raw table data, so the
+                    # role filter must not inspect it: a row whose first column
+                    # starts with the prefix would be dropped and the restore
+                    # would silently lose data while still reporting a pass.
+                    if in_copy_data:
+                        if line.rstrip(b"\r\n") == b"\\.":
+                            in_copy_data = False
+                        proc.stdin.write(line)
+                        continue
+                    if line.startswith(_REDUNDANT_ROLE_STMTS):
+                        filtered_roles += 1
+                        continue
+                    if _COPY_FROM_STDIN.match(line):
+                        in_copy_data = True
+                    proc.stdin.write(line)
+        except BrokenPipeError:
+            # psql runs with ON_ERROR_STOP=1, so it can exit while we are still
+            # streaming. Its own exit code and stderr are the real diagnosis,
+            # so fall through and reap it instead of surfacing the pipe error.
+            stopped_reading = True
+        finally:
+            # Reap on every path. Any other exception from the write loop (a
+            # corrupt gzip member, an OSError) would otherwise propagate past
+            # wait() and leave psql running with nothing to read.
+            rc = proc.wait()
+    if rc != 0:
+        raise BackupRestoreError(f"postgres restore command failed with exit code {rc}")
+    if stopped_reading:
+        # psql stopped reading before the dump was fully streamed but still
+        # exited 0. The restore is incomplete, so this must not pass as success.
+        raise BackupRestoreError(
+            "postgres restore command stopped reading before the dump was "
+            "fully streamed, yet exited 0: the restore is incomplete"
+        )
+
+    for sql in plan.invariant_sql:
+        result = runner(
+            [
+                "docker",
+                "exec",
+                plan.target_container,
+                "psql",
+                "-U",
+                plan.pg_user,
+                "-d",
+                plan.database,
+                "-Atqc",
+                sql,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise BackupRestoreError(
+                result.stderr.strip() or f"restore invariant failed: {sql}"
+            )
+        # psql exits successfully when a SELECT returns false, zero, or no row.
+        # A query used as an invariant must produce a true/nonzero scalar;
+        # statements such as DO assert through RAISE EXCEPTION and have no output.
+        if re.match(r"\s*(SELECT|WITH|VALUES|TABLE)\b", sql, re.IGNORECASE):
+            values = [value.strip().lower() for value in result.stdout.splitlines()]
+            if len(values) != 1:
+                raise BackupRestoreError(
+                    f"restore invariant did not return one true scalar: {sql}"
+                )
+            value = values[0]
+            is_nonzero_integer = (
+                bool(re.fullmatch(r"[+-]?\d+", value)) and int(value) != 0
+            )
+            if value not in {"t", "true"} and not is_nonzero_integer:
+                raise BackupRestoreError(
+                    f"restore invariant did not return one true scalar: {sql}"
+                )
+
+    return {
+        "status": "pass",
+        "service_id": plan.service_id,
+        "target_container": plan.target_container,
+        "invariants_checked": len(plan.invariant_sql),
+        "filtered_role_statements": filtered_roles,
+    }
+
+
+@dataclass(frozen=True)
+class RehearsalSpecification:
+    """Consolidated specification for a disaster-recovery rehearsal (B-01)."""
+
+    entry: BackupEntry
+    artifact: dict[str, Any]
+    archive_path: Path
+    target_container: str
+    pg_user: str
+    database: str
+    invariant_sql: tuple[str, ...]
+    allow_non_rehearsal_target: bool = False
+
+
+def create_rehearsal_plan(
+    spec: RehearsalSpecification | None = None,
+    **kwargs: Any,
+) -> RestoreRehearsalPlan:
+    """B-01: Build a rehearsal plan from a specification or kwargs."""
+    if spec is not None:
+        return build_postgres_rehearsal_plan(
+            entry=spec.entry,
+            artifact=spec.artifact,
+            archive_path=spec.archive_path,
+            target_container=spec.target_container,
+            pg_user=spec.pg_user,
+            database=spec.database,
+            invariant_sql=spec.invariant_sql,
+        )
+    return build_postgres_rehearsal_plan(**kwargs)
+
+
+def execute_rehearsal(
+    plan: RestoreRehearsalPlan,
+    *,
+    timeout_seconds: int = 300,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """B-02: Execute restore rehearsal with timeout guard."""
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    try:
+        future = executor.submit(run_postgres_restore_rehearsal, plan, **kwargs)
+        return future.result(timeout=timeout_seconds)
+    except concurrent.futures.TimeoutError as exc:
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise BackupRestoreError(
+            f"postgres restore rehearsal timed out after {timeout_seconds}s"
+        ) from exc
+    finally:
+        executor.shutdown(wait=False)
+
+
+__all__ = [
+    "BackupRestoreError",
+    "RehearsalSpecification",
+    "RestoreRehearsalPlan",
+    "assert_manifest_is_rehearsable",
+    "assert_rehearsal_target",
+    "build_postgres_rehearsal_plan",
+    "create_rehearsal_plan",
+    "execute_rehearsal",
+    "latest_artifact_for_service",
+    "materialize_artifact",
+    "planned_artifact_path",
+    "run_postgres_restore_rehearsal",
+]

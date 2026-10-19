@@ -54,7 +54,7 @@ nav:
       - SigNoz Deployment Guide: onboarding/signoz.md
       - New Service SOP: onboarding/07.new-service-sop.md
   # SSOT nav must list every MANIFEST topic — locked by
-  # libs/tests/test_mkdocs_nav_manifest.py. Add a topic here when you add it to MANIFEST.
+  # common/tests/test_mkdocs_nav_manifest.py. Add a topic here when you add it to MANIFEST.
   - SSOT:
       - Index: ssot/README.md
       - Core:

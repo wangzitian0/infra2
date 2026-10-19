@@ -5,9 +5,9 @@ import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from libs.deploy.deployer import Deployer, make_tasks
-from libs.console import success, info, run_with_status, error
-from libs.core.facets import BackupFacet, Exemption
+from common.deploy.deployer import Deployer, make_tasks
+from common.console import success, info, run_with_status, error
+from common.core.facets import BackupFacet, Exemption
 
 shared_tasks = sys.modules.get("platform.03.clickhouse.shared")
 

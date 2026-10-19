@@ -275,7 +275,7 @@ services:
       # flapped the container unhealthy and burned ~70% of a core per run. The
       # urllib read answers in ~0.3s. Keep the urlopen timeout (3s) below the
       # docker `timeout` (10s). The pool name must stay equal to `--pool` in
-      # `command` above (pinned by libs/tests/test_prefect_worker_healthcheck.py).
+      # `command` above (pinned by common/tests/test_prefect_worker_healthcheck.py).
       # Any error, timeout, non-JSON body, or status other than READY exits 1.
       test:
         - CMD-SHELL

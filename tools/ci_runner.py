@@ -118,7 +118,7 @@ def run_preflight(verbose: bool = False) -> int:
         ),
         (
             "Deployer contract light preflight",
-            [sys.executable, "libs/tests/test_deployer_contract_light.py"],
+            [sys.executable, "common/tests/test_deployer_contract_light.py"],
         ),
     ]
 
@@ -184,14 +184,14 @@ def _collect_changed_files(base_ref: str | None = None) -> list[str]:
 def _resolve_changed_test_targets(
     changed_files: Sequence[str] | None = None,
 ) -> list[str]:
-    """Map changed repository-relative paths to affected pytest targets under libs/tests."""
+    """Map changed repository-relative paths to affected pytest targets under common/tests."""
     files = (
         list(changed_files) if changed_files is not None else _collect_changed_files()
     )
     if not files:
         return []
 
-    tests_dir = ROOT / "libs/tests"
+    tests_dir = ROOT / "common/tests"
     if not tests_dir.is_dir():
         return []
 
@@ -213,7 +213,7 @@ def _resolve_changed_test_targets(
 
         path_obj = Path(rel)
         stem = path_obj.stem
-        direct_test = f"libs/tests/test_{stem}.py"
+        direct_test = f"common/tests/test_{stem}.py"
         if direct_test in all_tests_set:
             selected.add(direct_test)
 
@@ -221,37 +221,37 @@ def _resolve_changed_test_targets(
             for candidate in all_tests:
                 if "truealpha" in Path(candidate).name:
                     selected.add(candidate)
-            if "libs/tests/test_deployer_contract_light.py" in all_tests_set:
-                selected.add("libs/tests/test_deployer_contract_light.py")
+            if "common/tests/test_deployer_contract_light.py" in all_tests_set:
+                selected.add("common/tests/test_deployer_contract_light.py")
         elif rel.startswith(("finance_report/", "contracts/finance_report/")):
             for candidate in all_tests:
                 if "finance_report" in Path(candidate).name:
                     selected.add(candidate)
-            if "libs/tests/test_deployer_contract_light.py" in all_tests_set:
-                selected.add("libs/tests/test_deployer_contract_light.py")
+            if "common/tests/test_deployer_contract_light.py" in all_tests_set:
+                selected.add("common/tests/test_deployer_contract_light.py")
         elif rel.startswith(("platform/", "bootstrap/")):
-            if "libs/tests/test_deployer_contract_light.py" in all_tests_set:
-                selected.add("libs/tests/test_deployer_contract_light.py")
+            if "common/tests/test_deployer_contract_light.py" in all_tests_set:
+                selected.add("common/tests/test_deployer_contract_light.py")
             parts = path_obj.parts
             if len(parts) >= 2:
                 slug = re.sub(r"^\d+\.", "", parts[1]).replace("-", "_")
                 for candidate in all_tests:
                     if slug and slug in Path(candidate).name:
                         selected.add(candidate)
-        elif rel.startswith("libs/deploy/"):
+        elif rel.startswith("common/deploy/"):
             for candidate in all_tests:
                 name = Path(candidate).name
                 if "deploy" in name or "promote" in name or "canary" in name:
                     selected.add(candidate)
-        elif rel.startswith("libs/gate/"):
+        elif rel.startswith("common/gate/"):
             for candidate in all_tests:
                 name = Path(candidate).name
                 if "gate" in name or "production_contract" in name:
                     selected.add(candidate)
 
     if non_doc_changed and not selected:
-        if "libs/tests/test_deployer_contract_light.py" in all_tests_set:
-            selected.add("libs/tests/test_deployer_contract_light.py")
+        if "common/tests/test_deployer_contract_light.py" in all_tests_set:
+            selected.add("common/tests/test_deployer_contract_light.py")
 
     return sorted(selected)
 
@@ -628,7 +628,7 @@ def run_lint(verbose: bool = False) -> int:
             [
                 "ruff",
                 "check",
-                "libs/",
+                "common/",
                 "bootstrap/",
                 "platform/",
                 "finance_report/",
@@ -644,7 +644,7 @@ def run_lint(verbose: bool = False) -> int:
     # 2. ruff format check on changed files
     base_ref = os.environ.get("GITHUB_BASE_REF", "main")
     lint_roots = (
-        "libs/",
+        "common/",
         "bootstrap/",
         "platform/",
         "finance_report/",
@@ -669,7 +669,7 @@ def run_lint(verbose: bool = False) -> int:
 
     # 3. anti-tautology test linter
     print("  Running anti-tautology test linter...")
-    targets = ["libs/tests"]
+    targets = ["common/tests"]
     if (ROOT / "repos/infra2-sdk/tests").is_dir():
         targets.append("repos/infra2-sdk/tests")
     try:
@@ -702,9 +702,9 @@ def run_unit_tests(
             print(
                 "ℹ️ No affected unit test targets detected for current diff; running fast contract preflight."
             )
-            test_paths = ["libs/tests/test_deployer_contract_light.py"]
+            test_paths = ["common/tests/test_deployer_contract_light.py"]
     else:
-        test_paths = ["libs/tests"]
+        test_paths = ["common/tests"]
 
     print(f"▶ Running infra unit test suite ({', '.join(test_paths)})...")
     start_time = time.monotonic()

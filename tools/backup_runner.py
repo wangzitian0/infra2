@@ -12,7 +12,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from libs.backup.verification import BackupEntry, load_backup_inventory
+from common.backup.verification import BackupEntry, load_backup_inventory
 
 
 def main() -> int:

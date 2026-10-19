@@ -3,6 +3,7 @@ Bootstrap Compute Layer E2E Tests.
 
 Tests Dokploy availability and basic bootstrap service routing.
 """
+
 import pytest
 import httpx
 from urllib.parse import urlparse
@@ -15,8 +16,9 @@ async def test_dokploy_ui_accessible(config: TestConfig):
     """Verify Dokploy UI is accessible."""
     async with httpx.AsyncClient(verify=False) as client:
         response = await client.get(config.DOKPLOY_URL, timeout=10.0)
-        assert response.status_code < 500, \
+        assert response.status_code < 500, (
             f"Dokploy should be accessible, got {response.status_code}"
+        )
 
 
 @pytest.mark.bootstrap

@@ -204,7 +204,7 @@ GitHub 仍配置了 push webhook（[README §3](../../bootstrap/06.iac_runner/RE
 响应是 `{"status":"ignored","reason":"a push to main is not a deploy trigger; staging follows a release tag","commit":"<sha8>"}`；
 非 `push` 事件与非 `main` 分支同样 `ignored`（§4.3）。
 
-此前该端点会解析 changed files 并用**未打 tag 的 main HEAD** 部署 staging（对每个声明了 `libs/**`/`tools/**`
+此前该端点会解析 changed files 并用**未打 tag 的 main HEAD** 部署 staging（对每个声明了 `common/**`/`tools/**`
 依赖的服务等于「合并即部署」）。该路径已移除（#585）：它与上面的三条路全部矛盾，且从 2026-07-20 到
 2026-09-09 静默失效期间没有任何服务可见地过期——这是「没有东西需要它」最有力的证据。
 
@@ -345,12 +345,12 @@ curl -X POST https://iac.{domain}/deploy \
 ### 5.1 变更文件 → 服务映射（fan-out）
 
 fan-out **不在本文维护**（此前这里手抄了一张表，其中 `platform/11.minio/*` 这个目录从未存在过）。规则的唯一权威是
-[ops.pipeline.md](./ops.pipeline.md) §5.2；服务额外 bake 进镜像的 build/config 依赖（如 alerting 把 `libs/**`、`tools/**`
+[ops.pipeline.md](./ops.pipeline.md) §5.2；服务额外 bake 进镜像的 build/config 依赖（如 alerting 把 `common/**`、`tools/**`
 COPY 进镜像）声明在 [`deploy-dependencies.yaml`](./deploy-dependencies.yaml)。`reconcile-iac-inputs.yml` 据此把
 changed files 换算成 `services` 传给 `/deploy`。要点：
 
 - `platform/<nn>.<svc>/*` → 只部署该服务；服务名来自 `discover_services()`（registry 派生，无手抄映射）
-- `libs/*` / `tools/*` → **仅声明了依赖的服务**；纯工具变化不部署
+- `common/*` / `tools/*` → **仅声明了依赖的服务**；纯工具变化不部署
 - `bootstrap/06.iac_runner/*` → 带外 bootstrap 更新（§5.2）；其余 `bootstrap/*` 与 app 目录 → 跳过
 
 ### 5.2 排除规则
@@ -413,7 +413,7 @@ DEPLOY_ENV=production invoke vault.setup-approle --project=bootstrap --service=i
 - Vault Agent sidecar 以 AppRole 登录并原生续期，拉取 `bootstrap/{env}/iac_runner` 密钥。
 - Sync subprocesses get `VAULT_TOKEN` from an in-container
   `auth/approle/login` (`resolve_vault_token`) — a short-TTL bounded token so the
-  deploy-time secret supply (`libs/secrets_supply.py`) can read and fill
+  deploy-time secret supply (`common/secrets_supply.py`) can read and fill
   `{project}/{env}/*` runtime secret fields before deployment. The token must not
   grant `delete`, and it must not mutate bootstrap root credentials. The same value is
   still passed as `VAULT_ROOT_TOKEN` for one release so tasks pinned to the old name
@@ -502,7 +502,7 @@ AppRole** 同时满足，无需两个角色）：
 
 > **为何不用两个角色（窄 sidecar + 宽 deployer）？** 两角色能把 sidecar 的 sink token 也收
 > 窄（只读自身），是更强的最小权限；但它需扩展 `setup-approle` 注入第二对 env、给
-> `RUNTIME_ENV_KEYS_TO_PRESERVE`（`libs/deploy/deployer.py`）加 `VAULT_DEPLOYER_*`，**否则每次重部署
+> `RUNTIME_ENV_KEYS_TO_PRESERVE`（`common/deploy/deployer.py`）加 `VAULT_DEPLOYER_*`，**否则每次重部署
 > 会丢失 deployer 凭证、致部署中断**（见 §6.4.5 场景 ③），并新增一份窄 policy 文件。单角色与
 > 今天的单一 `VAULT_APP_TOKEN` **同构、blast radius 持平**（今天那枚静态 token 同样是宽的），
 > 却额外获得 AppRole 的"不衰减 + 每次部署现签子 token"。故 **v1 采用单角色**；若日后要把 sink
@@ -522,7 +522,7 @@ path "auth/token/lookup-self"          { capabilities = ["read"] }
 
 **v2（#369）已砍掉**以下两条（上面的 policy 块即收敛后的最终形态）：
 - `secret/data/bootstrap/+/vault_token_accessors/*`（CRUD）——曾是**追踪/轮换旧静态
-  token 的账本**（`libs/vault_tokens.py`，仅旧 `setup-tokens` 任务用，**`.sync` 部署路径从不调用它**）。
+  token 的账本**（`common/vault_tokens.py`，仅旧 `setup-tokens` 任务用，**`.sync` 部署路径从不调用它**）。
   全员 AppRole 后无静态 token 可追踪 → 已连同 `setup-tokens` 任务一并删除。
 - `auth/token/renew-self`（update）——AppRole 由 agent 原生续期/重登录，app 不需自 renew。
 
@@ -555,16 +555,16 @@ path "auth/token/lookup-self"          { capabilities = ["read"] }
 |---|-----------|----------------------|
 | ① | **0 帧冷启动**（全新 VPS、Vault 未初始化） | ✅ 操作员带外：装 Dokploy（OP 里 Dokploy key）→ bootstrap Vault（root/unseal 入 OP）→ 装 OP Connect → `setup-approle --service=iac_runner` 注入 `VAULT_ROLE_ID/SECRET_ID` 到 Dokploy env → `env.set` 写 runner 自身 secret → 部署 runner。**任何一步都不需要 runner 已在运行** |
 | ② | **Vault 全擦/重 bootstrap**（secret_id 失效） | ✅ 操作员持 OP root 重 bootstrap Vault，再跑 `setup-approle --service=iac_runner` 重注入。`SERVICE_TASK_MAP["bootstrap/iac-runner"]=None` + deploy.yml 把 `bootstrap/06.iac_runner/**` 路由到外部重建脚本 → **runner 永不自部署/自轮换**，重建者是操作员，不是 runner |
-| ③ | **Dokploy 重部署丢 env** | ✅ 单角色只用 `VAULT_ROLE_ID/SECRET_ID`，已在 `RUNTIME_ENV_KEYS_TO_PRESERVE`（`libs/deploy/deployer.py:44`）内、跨重部署保留；万一丢失，操作员 `setup-approle` 带外重注入，非死锁。**⚠️ 若改两角色，必须把 `VAULT_DEPLOYER_*` 也加入该列表，否则丢凭证致部署中断——这是放弃两角色的关键原因** |
+| ③ | **Dokploy 重部署丢 env** | ✅ 单角色只用 `VAULT_ROLE_ID/SECRET_ID`，已在 `RUNTIME_ENV_KEYS_TO_PRESERVE`（`common/deploy/deployer.py:44`）内、跨重部署保留；万一丢失，操作员 `setup-approle` 带外重注入，非死锁。**⚠️ 若改两角色，必须把 `VAULT_DEPLOYER_*` 也加入该列表，否则丢凭证致部署中断——这是放弃两角色的关键原因** |
 | ④ | **secret_id 衰减 / kill-token**（#257 验收项） | ✅ `secret_id_ttl=0` 永不过期；sidecar agent 被 revoke 后凭 role_id/secret_id 自动重登录；deploy 凭证**每次部署现场新登录** → 杀 token 后下一次部署自愈，比 token_file 更强 |
 | ⑤ | **Vault 封存时走登录路径** | ✅ 优雅降级：`auth/approle/login` 失败 → `resolve_vault_token` 返回 None、该次 `.sync` 以明确 `vault_login_failed` 诊断失败，webhook server 进程不崩；sidecar 维持今天 `exit_on_err` 的重启语义，非新循环 |
 | ⑥ | **deployer 登录是否需要只有 runner 自己 `.sync` 才能 provision 的东西？** | ✅ **否**：role 与 secret_id 由操作员 `setup-approle` 带外建；`auth/approle/login` 是免认证端点，不需任何 runner 写入的 secret。deployer 角色的存在**不**依赖任何一次部署 |
-| ⑦ | **`.sync` 需要 root（铸 token / 写 policy）** | ✅ **否**：`ensure_runtime_secrets`（`libs/deploy/deployer.py`）仅 KV `get/set`（缺失则 `generate_password` 写回），有界 policy 足够 |
+| ⑦ | **`.sync` 需要 root（铸 token / 写 policy）** | ✅ **否**：`ensure_runtime_secrets`（`common/deploy/deployer.py`）仅 KV `get/set`（缺失则 `generate_password` 写回），有界 policy 足够 |
 | ⑧ | **`setup-approle` 自身是否经 runner webhook？** | ✅ **否**：它是操作员机器上的 invoke 任务，`_configure_dokploy_approle` 直连 Dokploy API，不 POST runner `/webhook` 或 `/deploy` → 被迁移的服务自身无环 |
 | ⑨ | **`deploy_iac_runner_bootstrap.sh` 是否自部署 / 依赖被迁移破坏的读？** | ✅ 外部重建（SSH 直建 compose，不走 `/deploy`）。**⚠️ 但脚本现在预检 `VAULT_APP_TOKEN`（约 line 241），迁移后该 env 消失 → 必须改成预检 `VAULT_ROLE_ID/VAULT_SECRET_ID`，否则部署 runner 的工具本身被卡死** |
 | ⑩ | **`OP_SERVICE_ACCOUNT_TOKEN` 成 SPOF** | ✅ 不变甚至更轻：今天 `.sync` 已用它读 signoz admin（category②）；本设计 deploy 凭证**不再**经 OP，反而比草案的 `op read` 方案减少了一处 OP 运行时依赖 |
 | ⑪ | app 拿不到 agent 的 token（共享卷问题） | ✅ **消解**：deploy 凭证由 `resolve_vault_token` 独立 approle 登录现签，**不**复用 sidecar 的 sink token，无需共享卷 |
-| ⑫ | accessor grant 砍掉后 sync 失败 | ✅ **v2（#369）已砍**：accessor 仅 root bootstrap 用，`.sync` 不碰；砍后全套 libs 测试 + 一次 staging `.sync` 通过验证 |
+| ⑫ | accessor grant 砍掉后 sync 失败 | ✅ **v2（#369）已砍**：accessor 仅 root bootstrap 用，`.sync` 不碰；砍后全套 common 测试 + 一次 staging `.sync` 通过验证 |
 
 #### 6.4.6 两阶段灰度
 
@@ -580,7 +580,7 @@ path "auth/token/lookup-self"          { capabilities = ["read"] }
      的 `SecretsFacet`，audit inventory 由此派生，#542）；
   7. 保留现有 policy（含 accessors）。先在 staging 验证完整发布链路（release tag → reconcile → `/deploy` → `.sync` → 服务 healthy）。
 - **v2（权限收敛）—— 已完成（#369）**：砍掉 `vault_token_accessors` grant 与 `renew-self`，删除
-  `setup-tokens` 任务与 `libs/vault_tokens.py` 静态 token 账本代码（仅保留 AppRole 复用的
+  `setup-tokens` 任务与 `common/vault_tokens.py` 静态 token 账本代码（仅保留 AppRole 复用的
   `policy_name`/`normalize_selector`/`VaultTokenTarget`），并从 `RUNTIME_ENV_KEYS_TO_PRESERVE` 移除
   `VAULT_APP_TOKEN`。**这些后续现已完成 / 定型**：其它服务 policy 的 `renew-self` 已全部清理；ClickHouse 旧
   token_file 变体（含 `compose-with-vault.yaml`）已在 #384 删除；`VAULT_APP_TOKEN` 部署预检有意保留为残留 token 的安全网。
@@ -660,7 +660,7 @@ FileNotFoundError: [Errno 2] No such file or directory: 'op'
 
 **解决方案**: 已在 Dockerfile 中添加 op CLI 安装（见 PR #101）
 ```dockerfile
-# Install 1Password CLI (required by libs/common.py::OpSecrets)
+# Install 1Password CLI (required by common/common.py::OpSecrets)
 RUN curl -sSfLo op.zip https://cache.agilebits.com/dist/1P/op2/pkg/v2.30.0/op_linux_amd64_v2.30.0.zip && \
     unzip -od /usr/local/bin/ op.zip && \
     rm op.zip && \

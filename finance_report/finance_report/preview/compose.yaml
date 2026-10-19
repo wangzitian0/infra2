@@ -1,6 +1,6 @@
 # Finance Report — PREVIEW (multi-alias, ephemeral) compose template
 #
-# Used by `python -m tools.deploy_v2 --type preview/*` (backend: libs/deploy/preview.py)
+# Used by `python -m tools.deploy_v2 --type preview/*` (backend: common/deploy/preview.py)
 # to stand up ONE throwaway preview
 # stack per alias (main / pr-<N> / commit-<sha7>). Each alias gets its OWN copy of
 # this compose as a distinct Dokploy compose, with a unique ENV_SUFFIX so container
@@ -20,7 +20,7 @@
 # Everything else (vault-agent, frontend, Traefik labels, healthchecks) mirrors the
 # staging/prod template so a preview is a faithful, functional copy of the app.
 #
-# Env vars supplied by libs.deploy.preview (see libs.deploy.promote for the shared
+# Env vars supplied by common.deploy.preview (see common.deploy.promote for the shared
 # set): IMAGE_TAG, GIT_COMMIT_SHA, ENV_SUFFIX, ENV_DOMAIN_SUFFIX, NEXT_PUBLIC_APP_URL,
 # INTERNAL_DOMAIN, CONFIGURATION_SHA256, VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID.
 services:
@@ -265,8 +265,8 @@ services:
       # Browser → SigNoz traces (Infra-014). Same public ingest path as staging/prod
       # (otel.${INTERNAL_DOMAIN}); deployment.environment carries this alias's ENV
       # token (main / pr-<N> / commit-<sha7>) so preview FE spans are filterable.
-      # #368: endpoint built ONCE in libs.deploy.env_config.otel_env (single source:
-      # libs.common.otel_ingest_endpoint) and injected by preview_lifecycle — consumed
+      # #368: endpoint built ONCE in common.deploy.env_config.otel_env (single source:
+      # common.common.otel_ingest_endpoint) and injected by preview_lifecycle — consumed
       # here, never re-constructed. Empty when unset → FE OTel SDK config-gates to no-op.
       NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT: ${NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT:-}
       NEXT_PUBLIC_DEPLOYMENT_ENVIRONMENT: ${ENV}

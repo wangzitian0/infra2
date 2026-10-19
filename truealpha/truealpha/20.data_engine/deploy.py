@@ -9,9 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from invoke.exceptions import CommandTimedOut
-from libs.console import error, success
-from libs.deploy.deployer import Deployer, make_tasks
-from libs.core.facets import BackupFacet, Exemption, SecretsFacet
+from common.console import error, success
+from common.deploy.deployer import Deployer, make_tasks
+from common.core.facets import BackupFacet, Exemption, SecretsFacet
 
 shared_tasks = sys.modules.get("truealpha.20.data_engine.shared")
 
@@ -202,7 +202,7 @@ class DataEngineDeployer(Deployer):
     def ensure_runtime_secrets(cls, c=None, *, env: str | None = None) -> bool:
         secrets = cls.secrets_backend(env=env)
         # From the PROCESS environment, not cls.env(): Deployer.env() is the curated
-        # deployment config (libs.common.get_env — 1Password init vars plus a fixed set
+        # deployment config (common.common.get_env — 1Password init vars plus a fixed set
         # of os.environ keys), and the runner's per-deploy DEPLOY_VERSION_REF is not in
         # that set. The first live run of #630 (2026-09-07, infra2 run 34107133379)
         # reported success with the pin silently skipped for exactly this reason.

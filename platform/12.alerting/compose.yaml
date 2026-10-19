@@ -138,7 +138,7 @@ services:
   # The SINGLE resident sidecar (#543): probe loop + ALL watcher plugins
   # (container-breakdown watch, deploy-queue guard — formerly two separate
   # services below, deleted in the #543 merge) in one low-footprint process.
-  # See tools/infra_probe_runner.py + libs/observability/watchers/resident.py.
+  # See tools/infra_probe_runner.py + common/observability/watchers/resident.py.
   infra-probe-runner:
     image: platform-alerting-feishu-bridge:${CONFIGURATION_SHA256:-}
     container_name: platform-alerting-probes${ENV_SUFFIX}
@@ -196,11 +196,11 @@ services:
       # recreation — a deploy is exactly when a transient failure is paged, and a
       # recreated runner with empty state never sends that page's RESOLVED. Both
       # state files therefore live on the `probe-state` named volume, never /tmp
-      # (libs/tests/test_resident_watchers.py guards this).
+      # (common/tests/test_resident_watchers.py guards this).
       INFRA_PROBE_STATE_FILE: /var/lib/infra-probe-state/infra_probe_runner_state.json
-      # #904: per-signal daily ok/fail counts (libs/observability/local_ledger.py),
+      # #904: per-signal daily ok/fail counts (common/observability/local_ledger.py),
       # on a host directory so they survive redeploys; the weekly stability report
-      # reads it over SSH at libs.observability.local_ledger.host_ledger_path().
+      # reads it over SSH at common.observability.local_ledger.host_ledger_path().
       INFRA_PROBE_LEDGER_FILE: /var/lib/infra2-availability-ledger/availability-ledger.json
       INFRA_PROBE_HEARTBEAT_URL: ${INFRA_PROBE_HEARTBEAT_URL:-}
       INFRA_PROBE_HEARTBEAT_TOKEN: ${INFRA_PROBE_HEARTBEAT_TOKEN:-}
@@ -210,13 +210,13 @@ services:
       OBS_ROUNDTRIP_QUERY_WAIT_SECONDS: ${OBS_ROUNDTRIP_QUERY_WAIT_SECONDS:-30}
       # Registry-rendered (#541): the probe set is DECLARED as ProbeFacet
       # attributes on each owning service's deploy.py Deployer class and
-      # aggregated by libs/observability/probe_specs.py::render_probe_spec_text() via
-      # libs/core/registry.py::service_attrs(). AlertingDeployer.
+      # aggregated by common/observability/probe_specs.py::render_probe_spec_text() via
+      # common/core/registry.py::service_attrs(). AlertingDeployer.
       # compose_env_base() resolves ${ENV_SUFFIX} and injects the encoded
       # value into the Dokploy compose env — this reference is the ONLY probe
       # source here. The pre-migration literal is frozen field-by-field in
-      # libs/tests/fixtures/infra_probe_specs_frozen.txt (permanent
-      # equivalence regression, libs/tests/test_probe_specs_equivalence.py).
+      # common/tests/fixtures/infra_probe_specs_frozen.txt (permanent
+      # equivalence regression, common/tests/test_probe_specs_equivalence.py).
       INFRA_PROBE_SPECS: ${INFRA_PROBE_SPECS:-}
       # #543 (#209 reversed): registry-rendered public-route probes; empty only
       # when no service declares one
@@ -240,7 +240,7 @@ services:
       # Alerts when ANY container is crash-looping/unhealthy WITH the cause
       # pulled from its logs. prod-only singleton: the watcher reads the whole
       # shared Docker engine, so only the prod runner's plugin sweeps (the
-      # staging plugin idles — see libs/observability/watchers/breakdown_watch.py). Staging
+      # staging plugin idles — see common/observability/watchers/breakdown_watch.py). Staging
       # and preview containers go to its daily digest only, never the pager (#903).
       # Flap hysteresis (#475): consecutive-poll thresholds before
       # firing/resolving.

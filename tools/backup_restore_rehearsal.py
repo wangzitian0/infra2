@@ -8,7 +8,7 @@ import json
 import time
 from pathlib import Path
 
-from libs.backup.rehearsal import (
+from common.backup.rehearsal import (
     assert_manifest_is_rehearsable,
     assert_rehearsal_target,
     build_postgres_rehearsal_plan,
@@ -16,7 +16,7 @@ from libs.backup.rehearsal import (
     planned_artifact_path,
     run_postgres_restore_rehearsal,
 )
-from libs.backup.verification import load_backup_inventory
+from common.backup.verification import load_backup_inventory
 
 
 def main(argv: list[str] | None = None) -> int:

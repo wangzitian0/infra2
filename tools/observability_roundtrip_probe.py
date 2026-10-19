@@ -14,8 +14,8 @@ import urllib.parse
 import urllib.request
 import uuid
 
-from libs.observability.openpanel import openpanel_env
-from libs.observability.probe_environment import (
+from common.observability.openpanel import openpanel_env
+from common.observability.probe_environment import (
     DEFAULT_ALERTING_ENV_FILE,
     resolve_probe_environment,
 )

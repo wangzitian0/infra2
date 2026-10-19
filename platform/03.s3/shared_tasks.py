@@ -4,10 +4,10 @@ import shlex
 
 from invoke import task
 
-from libs.common import check_service
-from libs.core.environ import get_env, service_domain
-from libs.security.store import generate_password
-from libs.console import header, success, error, warning, info
+from common.common import check_service
+from common.core.environ import get_env, service_domain
+from common.security.store import generate_password
+from common.console import header, success, error, warning, info
 
 
 @task
@@ -59,7 +59,7 @@ def _ensure_admin_alias(c, container_name: str, e: dict) -> bool:
     credential as JSON on stdin, so it appears in no command line: not in this host's
     process list, and not in the container's.
     """
-    from libs.security.store import get_secrets
+    from common.security.store import get_secrets
 
     env_name = e.get("ENV", "production")
     s3_secrets = None

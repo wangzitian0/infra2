@@ -30,8 +30,8 @@ from urllib.parse import quote
 
 from invoke import task
 
-from libs.alerting import AlertingError
-from libs.observability_dashboards import (
+from common.alerting import AlertingError
+from common.observability_dashboards import (
     ROUTING_PROBLEM_KINDS,
     ObservabilityDefinitionError,
     build_dashboard_import_payload,
@@ -127,8 +127,8 @@ def apply_alerts(c, dry_run=False, prune=False):
     """
     from invoke.exceptions import Exit
 
-    from libs.console import error, info, success
-    from libs.alerting import find_signoz_rule_id, _iter_signoz_items
+    from common.console import error, info, success
+    from common.alerting import find_signoz_rule_id, _iter_signoz_items
 
     alerting = _alerting_shared()
     definitions = load_alert_definitions()
@@ -234,7 +234,7 @@ def _delete_signoz_rule(alerting, c, rule_id: str) -> bool:
     status code is exactly how the canary leaked rules. Try both API versions, then
     confirm the id is actually absent.
     """
-    from libs.alerting import _iter_signoz_items
+    from common.alerting import _iter_signoz_items
 
     # Guard against a missing/placeholder id: without it the absence-check below would
     # "verify" the deletion of a non-existent id and falsely report success.
@@ -269,7 +269,7 @@ def apply_dashboard(c, delete_duplicates=False):
     """
     from invoke.exceptions import Exit
 
-    from libs.console import error, info, success, warning
+    from common.console import error, info, success, warning
 
     alerting = _alerting_shared()
     payload = build_dashboard_import_payload()
@@ -345,7 +345,7 @@ def verify_dashboard(c):
     """Read-only: SigNoz holds exactly one correct copy of the checked-in dashboard."""
     from invoke.exceptions import Exit
 
-    from libs.console import error, success
+    from common.console import error, success
 
     alerting = _alerting_shared()
     dashboard = load_dashboard()
@@ -379,7 +379,7 @@ def verify_alert_routing(c):
     """
     from invoke.exceptions import Exit
 
-    from libs.console import error, success
+    from common.console import error, success
 
     alerting = _alerting_shared()
     channel_name = _channel_name()
@@ -436,8 +436,8 @@ def test_alert_channel(c):
     """
     from invoke.exceptions import Exit
 
-    from libs.alerting import _iter_signoz_items
-    from libs.console import error, success
+    from common.alerting import _iter_signoz_items
+    from common.console import error, success
 
     alerting = _alerting_shared()
     channel_name = _channel_name()

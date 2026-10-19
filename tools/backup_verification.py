@@ -10,12 +10,12 @@ import os
 import time
 from pathlib import Path
 
-from libs.backup.verification import (
+from common.backup.verification import (
     build_backup_alert_payload,
     load_backup_inventory,
     verify_backup_manifest,
 )
-from libs.observability.probes import post_alert_bridge_payload
+from common.observability.probes import post_alert_bridge_payload
 
 
 def main() -> int:

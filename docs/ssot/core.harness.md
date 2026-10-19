@@ -144,7 +144,7 @@ The `--online` option is read-only. It reads two kinds of facts:
   The timeout is 8 seconds for each connect and each read, not for the whole request.
   The served release is the `version` field of the JSON body. If `version` is absent, the command uses `git_sha`.
   The Apps put their release tag in `git_sha`.
-- The `infra2` row. The command reads local git tags with `libs/deploy/release_markers.py`.
+- The `infra2` row. The command reads local git tags with `common/deploy/release_markers.py`.
   Staging shows the newest `vX.Y.Z` tag that HEAD contains. Production shows the `production/vX.Y.Z` marker.
   The note gives the number of releases between them. Add `--fetch` to refresh the tags first.
 
@@ -196,14 +196,14 @@ subagent（hook 输入含 `agent_id`）豁免。`.claude/settings.json` 需 owne
 ## 7. The Proof
 
 ```bash
-uv run pytest -q libs/tests/test_harness_manifest.py
-uv run pytest -q libs/tests/test_harness_status.py
-uv run pytest -q libs/tests/test_harness_sweep.py libs/tests/test_orchestrator_guard_hook.py
+uv run pytest -q common/tests/test_harness_manifest.py
+uv run pytest -q common/tests/test_harness_status.py
+uv run pytest -q common/tests/test_harness_sweep.py common/tests/test_orchestrator_guard_hook.py
 uv run python -m tools.harness sweep /abs/path/to/watch.json
 uv run python -m tools.harness check --json
 uv run python -m tools.harness status --fetch --json
 uv run python -m tools.harness status --fetch --online --json
-uv run pytest -q libs/tests/test_sdk_contract_adoption.py
+uv run pytest -q common/tests/test_sdk_contract_adoption.py
 ```
 
 证明标准：
@@ -213,8 +213,8 @@ uv run pytest -q libs/tests/test_sdk_contract_adoption.py
 - 所有 `external-application` 必须是 `autonomous`，且不能进入 focus。
 - authority 与 preference 路径可读且不能逃逸 workspace root。
 - 现有 SDK 采用测试继续证明消费者使用发布 artifact，而不是 submodule 源码。
-- `status --online` reads the release from the `version` field, else `git_sha`. It reports `unreachable` and `unknown` instead of a guess. Without `--online`, `status` and `check` open no socket (`libs/tests/test_harness_status.py`).
-- Each `health:` URL is an https URL. It equals the public health route of the same App in the service registry (`libs/tests/test_harness_manifest.py`).
+- `status --online` reads the release from the `version` field, else `git_sha`. It reports `unreachable` and `unknown` instead of a guess. Without `--online`, `status` and `check` open no socket (`common/tests/test_harness_status.py`).
+- Each `health:` URL is an https URL. It equals the public health route of the same App in the service registry (`common/tests/test_harness_manifest.py`).
 - `sweep` 对未 resolved review thread、红色 check、未知值与失败的 probe 从不报告
   `WAITING`；gate 文本不参与判定；带变更 flag 的 gate 命令在执行前被拒绝。
 

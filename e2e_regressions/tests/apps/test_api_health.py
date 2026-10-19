@@ -3,6 +3,7 @@ API endpoint health and availability tests.
 
 Tests service health for core endpoints.
 """
+
 import pytest
 import httpx
 from conftest import TestConfig
@@ -27,8 +28,9 @@ async def test_http_connectivity(config: TestConfig):
     async with httpx.AsyncClient(verify=False, timeout=10.0) as client:
         for name, url in _service_list(config):
             response = await client.get(url)
-            assert response.status_code < 500, \
+            assert response.status_code < 500, (
                 f"{name} ({url}) returned {response.status_code}"
+            )
 
 
 @pytest.mark.api
@@ -42,12 +44,12 @@ async def test_service_response_time(config: TestConfig):
     async with httpx.AsyncClient(verify=False, timeout=30.0) as client:
         for name, url in services:
             import time
+
             start = time.time()
             response = await client.get(url)
             elapsed = time.time() - start
 
-            assert elapsed < 10.0, \
-                f"{name} took {elapsed:.2f}s (should be < 10s)"
+            assert elapsed < 10.0, f"{name} took {elapsed:.2f}s (should be < 10s)"
             assert response.status_code < 500
 
 
@@ -76,8 +78,9 @@ async def test_api_error_responses(config: TestConfig):
     """Verify services return proper error responses for nonexistent paths."""
     async with httpx.AsyncClient(verify=False) as client:
         response = await client.get(f"{config.DOKPLOY_URL}/nonexistent", timeout=10.0)
-        assert response.status_code in [302, 404], \
+        assert response.status_code in [302, 404], (
             f"Expected 302 or 404, got {response.status_code}"
+        )
 
 
 @pytest.mark.api
@@ -95,8 +98,9 @@ async def test_service_headers(config: TestConfig):
     async with httpx.AsyncClient(verify=False) as client:
         response = await client.get(config.DOKPLOY_URL, timeout=10.0)
         headers = response.headers
-        assert "content-type" in headers or "Content-Type" in headers, \
+        assert "content-type" in headers or "Content-Type" in headers, (
             "Response should include Content-Type header"
+        )
 
 
 @pytest.mark.api
@@ -119,5 +123,6 @@ async def test_api_version_endpoints(config: TestConfig):
     async with httpx.AsyncClient(verify=False) as client:
         for endpoint in endpoints:
             response = await client.get(endpoint, timeout=10.0)
-            assert response.status_code < 500, \
+            assert response.status_code < 500, (
                 f"Endpoint {endpoint} should not error: {response.status_code}"
+            )

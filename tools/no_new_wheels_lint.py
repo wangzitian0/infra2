@@ -6,7 +6,7 @@ failure shape: someone adds a NEW check/watcher/cron with its own hand-rolled
 alerting, outside the signal registry, and it drifts unnoticed. This lint makes
 that structurally impossible going forward:
 
-1. Every Python module under ``tools/``/``libs/`` that CALLS an alert-delivery
+1. Every Python module under ``tools/``/``common/`` that CALLS an alert-delivery
    primitive (``deliver_out_of_band_alert`` / ``post_alert_bridge_payload`` /
    ``deliver_infra2_report``) must carry either
    ``# alerts-as: <signal>`` (a ``signal:`` value registered in
@@ -42,8 +42,8 @@ PRIMITIVES = (
 # not callsites; tests exercise callsites by design.
 SCAN_EXEMPT_FILES = {
     "tools/out_of_band_watchdog.py",  # defines deliver_out_of_band_alert
-    "libs/alerting/delivery.py",  # defines deliver_infra2_report + the shared engine
-    "libs/observability/probes.py",  # defines post_alert_bridge_payload
+    "common/alerting/delivery.py",  # defines deliver_infra2_report + the shared engine
+    "common/observability/probes.py",  # defines post_alert_bridge_payload
     "tools/no_new_wheels_lint.py",
 }
 
@@ -65,8 +65,8 @@ def lint_python_callsites(
 ) -> list[str]:
     signals = signals if signals is not None else registered_signal_names()
     errors: list[str] = []
-    for folder in ("tools", "libs"):
-        # rglob, not glob: the #846 domain packages (libs/observability/, libs/deploy/,
+    for folder in ("tools", "common"):
+        # rglob, not glob: the #846 domain packages (common/observability/, common/deploy/,
         # ...) hold implementations that a flat-only scan would stop covering the moment
         # a file moves into one -- silently, with the lint still green.
         for path in sorted((root / folder).rglob("*.py")):

@@ -179,10 +179,10 @@ The runtime proof for this contract is `invoke vault-audit.self-refresh`.
 It is read-only and must not rotate, renew, restart, or redeploy services.
 
 The authoritative inventory is DERIVED (#542) from each service Deployer's
-`SecretsFacet` declarations (`libs/core/facets.py` →
-`libs/vault_self_refresh_audit.load_inventory`); the former handwritten
+`SecretsFacet` declarations (`common/core/facets.py` →
+`common/vault_self_refresh_audit.load_inventory`); the former handwritten
 `vault-self-refresh-inventory.yaml` is deleted (equivalence frozen as
-`libs/tests/fixtures/vault_self_refresh_inventory_frozen.yaml`). Each active
+`common/tests/fixtures/vault_self_refresh_inventory_frozen.yaml`). Each active
 compose file with a `vault-agent` service must have exactly one derived entry
 unless the compose file is explicitly a non-deployed alternate.
 
@@ -211,7 +211,7 @@ printing or serializing results.
 
 ### Test contract
 
-`libs/tests/test_vault_self_refresh_audit.py` is the regression suite for the
+`common/tests/test_vault_self_refresh_audit.py` is the regression suite for the
 self-refresh audit. It covers inventory/static drift, token classifier outcomes,
 rendered env freshness, unresolved template values, log error detection,
 container checks, report schema, and redaction. New vault-agent services must

@@ -91,7 +91,7 @@ Project closed on 2025-12-30; list retained for record.
 - [x] `docs/ssot/ops.recovery.md`: 改为 Docker/VPS 侧恢复流程。
 - [x] `e2e_regressions/**`: 移除 Terraform/K8s/Casdoor/Kubero 依赖，改为 Dokploy/Vault/Authentik。
 - [x] `e2e_regressions/.env.example`: 更新为新环境变量清单。
-- [x] `docs/project/Infra-004.authentik_install.md`: 修复 MkDocs 外链警告（指向 libs/platform README）。
+- [x] `docs/project/Infra-004.authentik_install.md`: 修复 MkDocs 外链警告（指向 common/platform README）。
 - [x] `docs/ssot/bootstrap.vars_and_secrets.md`: 修复 MkDocs 外链警告（指向 bootstrap README）。
 - [x] `docs/README.md`: Tools 入口恢复链接并更新日期。
 - [x] `README.md`: 环境变量 SSOT 链接与 tools 说明对齐代码。
@@ -113,10 +113,10 @@ Project closed on 2025-12-30; list retained for record.
 - [x] `docs/onboarding/04.secrets.md`: 权限提示用语对齐。
 - [x] `e2e_regressions/README.md`: 测试命令位置说明更清晰（去掉 cd ..）。
 - [x] `docs/ssot/ops.recovery.md`: 统一占位符格式。
-- [x] `libs/README.md` + `tools/README.md`: 增补 libs/tools 总览与 env/local CLI 一致性说明。
-- [x] `tools/loader.py` + `bootstrap/05.vault/*` + `platform/01.postgres/shared_tasks.py`: CLI 日志统一改为 `libs.console` 输出。
-- [x] `tools/local_init.py`: CLI 安装/提示输出统一改为 `libs.console` 风格。
+- [x] `common/README.md` + `tools/README.md`: 增补 common/tools 总览与 env/local CLI 一致性说明。
+- [x] `tools/loader.py` + `bootstrap/05.vault/*` + `platform/01.postgres/shared_tasks.py`: CLI 日志统一改为 `common.console` 输出。
+- [x] `tools/local_init.py`: CLI 安装/提示输出统一改为 `common.console` 风格。
 - [x] `README.md` + `docs/README.md` + `docs/onboarding/README.md` + `docs/ssot/README.md`: 统一命令示例为 `invoke` 并提示 `uv run invoke` 备用。
 - [x] `docs/ssot/bootstrap.vars_and_secrets.md` + `README.md`: env CLI 示例补齐 `--service` 与说明。
-- [x] `libs/deploy/deployer.py` + `bootstrap/04.1password/tasks.py` + `bootstrap/05.vault/tasks.py` + `platform/10.authentik/deploy.py`: CLI 日志文案统一为 pre/post-compose。
+- [x] `common/deploy/deployer.py` + `bootstrap/04.1password/tasks.py` + `bootstrap/05.vault/tasks.py` + `platform/10.authentik/deploy.py`: CLI 日志文案统一为 pre/post-compose。
 - [x] `docs/ssot/platform.automation.md` + `docs/ssot/platform.sso.md` + `platform/*/README.md`: 统一 pre/post-compose 命名展示。

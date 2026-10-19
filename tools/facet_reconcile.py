@@ -61,8 +61,8 @@ def run_compose_id_section() -> Section:
         # imports inside the try (live lesson from the first run: a missing
         # dependency in one section must degrade to THAT section's blocker,
         # not crash the whole runner before the report is even delivered)
-        from libs.deploy.dokploy_client import get_dokploy
-        from tools.app_compose_id_drift import confirmed_drift, format_report, scan
+        from common.deploy.compose_id_drift import confirmed_drift, format_report, scan
+        from common.deploy.dokploy_client import get_dokploy
 
         rows = scan(get_dokploy())
     except (Exception, SystemExit) as exc:  # noqa: BLE001 — blocker, not a crash
@@ -84,7 +84,7 @@ def run_compose_id_section() -> Section:
 def run_config_drift_section() -> Section:
     section = Section("config-hash")
     try:
-        from tools.dokploy_config_drift import (
+        from common.deploy.config_drift import (
             _production_target_tag,
             format_report,
             scan,
@@ -137,7 +137,7 @@ def run_dns_section() -> Section:
         section.report = "dns: skipped (Cloudflare credentials not configured)"
         return section
     try:
-        from tools.dns_drift_report import (
+        from common.deploy.dns_drift import (
             _actual_records,
             _dns_tasks,
             _expected_records,
@@ -266,7 +266,7 @@ def main() -> int:
     report = combined_report(sections)
     print(report)
 
-    from libs.alerting import deliver_infra2_report
+    from common.alerting import deliver_infra2_report
 
     # Delivered EVERY run (#425): the report's own arrival self-proves the path.
     delivered = deliver_infra2_report(report)

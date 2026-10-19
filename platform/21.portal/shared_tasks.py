@@ -1,7 +1,7 @@
 """Portal shared tasks"""
 
 from invoke import task
-from libs.common import check_service
+from common.common import check_service
 
 
 @task

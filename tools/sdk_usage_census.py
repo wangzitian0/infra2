@@ -2,14 +2,16 @@
 """Measure infra2-sdk public symbol and environment-key usage across consumer repositories.
 
 This CLI tool promotes the census scripts into one tested command that computes
-five metrics (M1 through M5):
+six metrics (M1 through M6):
   M1: Public symbol reachability across consumers (prod_used, test_only, internal_only, unused)
       and missing consumer imports.
   M2: runtime_env_contract() key reachability across consumers (prod_used, test_only, unused)
       and C1 through C6 classifications.
   M3: Consumer infra2-sdk version pin lag relative to the latest SDK release version.
-  M4: Consumer references to symbols listed in LEFT_THE_PACKAGES (must equal 0).
+  M4: Consumer references to symbols listed in LEFT_THE_PACKAGES, residual libs/ or tools/_lib/
+      directories, and except ImportError SDK fallback copies (must equal 0).
   M5: Consumer hardcoded SERVICE_NAME or OTEL key lists outside sdk_vocabulary() (must equal 0).
+  M6: Consumer tools/*.py cross-imports (from tools... or import tools... inside tools/, must equal 0).
 """
 
 from __future__ import annotations
@@ -30,8 +32,17 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from tools import env_inventory as envinv  # noqa: E402
-from tools.sdk_requirement import sdk_requirement  # noqa: E402
+from common.core import env_inventory as envinv  # noqa: E402
+
+
+def sdk_requirement(path: Path = REPO_ROOT / "uv.lock") -> str:
+    return subprocess.run(
+        [sys.executable, str(REPO_ROOT / "tools/sdk_requirement.py"), str(path)],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
 
 SKIP_SYMBOL_NAMES = {"main", "build_parser", "__version__", "__all__"}
 MODULE_DUNDER_ATTRS = frozenset(
@@ -359,7 +370,9 @@ def sdk_module_exports(pkg_root: Path) -> dict[str, set[str]]:
     return exports
 
 
-def _consumer_repo_tokens(trees: list[tuple[str, bool, ast.AST]]) -> tuple[set[str], set[str]]:
+def _consumer_repo_tokens(
+    trees: list[tuple[str, bool, ast.AST]],
+) -> tuple[set[str], set[str]]:
     """Collect loaded identifier and attribute names across prod and test ASTs in one consumer repo."""
     prod_tokens: set[str] = set()
     test_tokens: set[str] = set()
@@ -382,9 +395,7 @@ def _enclosing_method_is_dead_or_test_only(
     """Return (downgraded_to_test_only, downgraded_to_dead) for SDK names referenced only inside uncalled class methods."""
     active_by_local: dict[str, list[str | None]] = defaultdict(list)
 
-    def _visit_block(
-        stmts: list[ast.stmt], enclosing_method: str | None
-    ) -> None:
+    def _visit_block(stmts: list[ast.stmt], enclosing_method: str | None) -> None:
         for stmt in stmts:
             if isinstance(stmt, ast.ClassDef):
                 for item in stmt.body:
@@ -394,13 +405,20 @@ def _enclosing_method_is_dead_or_test_only(
                     else:
                         _visit_block([item], None)
                 continue
-            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)) and enclosing_method is None:
+            if (
+                isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and enclosing_method is None
+            ):
                 _visit_block(stmt.body, None)
                 continue
             for sub in ast.walk(stmt):
                 if isinstance(sub, (ast.Import, ast.ImportFrom)):
                     continue
-                if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load) and sub.id in sdk_local_names:
+                if (
+                    isinstance(sub, ast.Name)
+                    and isinstance(sub.ctx, ast.Load)
+                    and sub.id in sdk_local_names
+                ):
                     active_by_local[sub.id].append(enclosing_method)
 
     if isinstance(tree, ast.Module):
@@ -637,7 +655,10 @@ def _main_called_symbols(path: str) -> set[str]:
         return set()
     called: set[str] = set()
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "main":
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "main"
+        ):
             for sub in ast.walk(node):
                 if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
                     called.add(sub.id)
@@ -1140,12 +1161,47 @@ def load_package_scoped_left_names(
     return {k: set(v) for k, v in scoped.items()}
 
 
+def _try_imports_sdk(node: ast.Try) -> bool:
+    """Return True when a try block imports infra2_sdk and catches ImportError/ModuleNotFoundError."""
+    catches_import_error = False
+    for handler in node.handlers:
+        if handler.type is None:
+            continue
+        names: list[str] = []
+        if isinstance(handler.type, ast.Name):
+            names.append(handler.type.id)
+        elif isinstance(handler.type, ast.Tuple):
+            names.extend(
+                elt.id for elt in handler.type.elts if isinstance(elt, ast.Name)
+            )
+        if any(n in ("ImportError", "ModuleNotFoundError") for n in names):
+            catches_import_error = True
+            break
+    if not catches_import_error:
+        return False
+
+    for stmt in node.body:
+        for sub in ast.walk(stmt):
+            if (
+                isinstance(sub, ast.ImportFrom)
+                and sub.module
+                and sub.module.split(".")[0] == "infra2_sdk"
+            ):
+                return True
+            if isinstance(sub, ast.Import) and any(
+                alias.name.split(".")[0] == "infra2_sdk" for alias in sub.names
+            ):
+                return True
+    return False
+
+
 def compute_m4(
     seen_imports: dict[tuple[str, str], list[str]],
     left_the_packages: tuple[str, ...],
     package_scoped_left: dict[str, set[str]] | None = None,
+    consumers: dict[str, Path] | None = None,
 ) -> dict[str, Any]:
-    """Compute M4: consumer references to symbols in LEFT_THE_PACKAGES or REMOVED_NAMES."""
+    """Compute M4: consumer references to retired symbols, residual libs/ or tools/_lib/ dirs, and SDK ImportError fallbacks."""
     retired = set(left_the_packages)
     pkg_left = package_scoped_left or {}
     by_repo: dict[str, list[dict[str, str]]] = defaultdict(list)
@@ -1159,6 +1215,46 @@ def compute_m4(
             rec = {"module": module, "name": name, "site": site}
             by_repo[repo].append(rec)
             sites_all.append(rec)
+
+    if consumers:
+        for repo, root in sorted(consumers.items()):
+            repo_files = list_repo_files(root)
+            if any(rel.startswith("libs/") for rel in repo_files):
+                rec = {
+                    "module": "libs",
+                    "name": "libs/",
+                    "site": f"{repo}:libs",
+                }
+                by_repo[repo].append(rec)
+                sites_all.append(rec)
+            if any(rel.startswith("tools/_lib/") for rel in repo_files):
+                rec = {
+                    "module": "tools._lib",
+                    "name": "tools/_lib/",
+                    "site": f"{repo}:tools/_lib",
+                }
+                by_repo[repo].append(rec)
+                sites_all.append(rec)
+            for rel in repo_files:
+                if (
+                    not rel.endswith(".py")
+                    or is_test_path(rel)
+                    or rel == "tools/sdk_usage_census.py"
+                ):
+                    continue
+                try:
+                    tree = ast.parse((root / rel).read_text("utf-8", "replace"))
+                except (SyntaxError, UnicodeDecodeError, OSError):
+                    continue
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Try) and _try_imports_sdk(node):
+                        rec = {
+                            "module": "infra2_sdk",
+                            "name": "except_ImportError_fallback",
+                            "site": f"{repo}:{rel}:{node.lineno}",
+                        }
+                        by_repo[repo].append(rec)
+                        sites_all.append(rec)
 
     return {
         "total_violations": len(sites_all),
@@ -1266,6 +1362,51 @@ def compute_m5(consumers: dict[str, Path]) -> dict[str, Any]:
     }
 
 
+def compute_m6(consumers: dict[str, Path]) -> dict[str, Any]:
+    """Compute M6: consumer tools/*.py cross-imports (from tools... or import tools...)."""
+    by_repo: dict[str, list[dict[str, str]]] = defaultdict(list)
+    violations: list[dict[str, str]] = []
+
+    for repo, root in sorted(consumers.items()):
+        for rel in list_repo_files(root, suffix=".py"):
+            if not rel.startswith("tools/") or is_test_path(rel):
+                continue
+            try:
+                tree = ast.parse((root / rel).read_text("utf-8", "replace"))
+            except (SyntaxError, UnicodeDecodeError, OSError):
+                continue
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.ImportFrom)
+                    and node.module
+                    and node.module.split(".")[0] == "tools"
+                ):
+                    rec = {
+                        "repo": repo,
+                        "site": f"{repo}:{rel}:{node.lineno}",
+                        "import": node.module,
+                    }
+                    by_repo[repo].append(rec)
+                    violations.append(rec)
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.split(".")[0] == "tools":
+                            rec = {
+                                "repo": repo,
+                                "site": f"{repo}:{rel}:{node.lineno}",
+                                "import": alias.name,
+                            }
+                            by_repo[repo].append(rec)
+                            violations.append(rec)
+
+    return {
+        "total_violations": len(violations),
+        "passed": len(violations) == 0,
+        "by_repo": {repo: len(items) for repo, items in sorted(by_repo.items())},
+        "violations": violations,
+    }
+
+
 def write_artifacts(out_dir: Path, report: dict[str, Any]) -> None:
     """Write CSV and JSON census artifacts when --out is specified."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1297,7 +1438,7 @@ def run_census(
     latest_version: str | None = None,
     out_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Execute the full M1 through M5 usage census and return the structured report."""
+    """Execute the full M1 through M6 usage census and return the structured report."""
     resolved_pkg = resolve_sdk_pkg_root(pkg_root)
     resolved_consumers = (
         dict(consumers) if consumers is not None else default_consumers(REPO_ROOT)
@@ -1314,8 +1455,14 @@ def run_census(
     )
     m2 = compute_m2(resolved_pkg, resolved_consumers)
     m3 = compute_m3(resolved_consumers, target_version)
-    m4 = compute_m4(seen_imports, left_the_packages, package_scoped_left)
+    m4 = compute_m4(
+        seen_imports,
+        left_the_packages,
+        package_scoped_left,
+        resolved_consumers,
+    )
     m5 = compute_m5(resolved_consumers)
+    m6 = compute_m6(resolved_consumers)
 
     report: dict[str, Any] = {
         "sdk_package": str(resolved_pkg),
@@ -1327,6 +1474,7 @@ def run_census(
             "M3": m3,
             "M4": m4,
             "M5": m5,
+            "M6": m6,
         },
     }
     if out_dir is not None:
@@ -1339,7 +1487,7 @@ def evaluate_checks(
     *,
     check_test_imports: bool = False,
 ) -> list[str]:
-    """Evaluate census guard conditions across M1 through M5 and return failure messages."""
+    """Evaluate census guard conditions across M1 through M6 and return failure messages."""
     failures: list[str] = []
     metrics = report["metrics"]
 
@@ -1379,7 +1527,7 @@ def evaluate_checks(
     if m4["total_violations"] > 0:
         samples = ", ".join(f"{v['name']}@{v['site']}" for v in m4["violations"][:5])
         failures.append(
-            f"M4: {m4['total_violations']} reference(s) to LEFT_THE_PACKAGES: {samples}"
+            f"M4: {m4['total_violations']} reference(s) to LEFT_THE_PACKAGES or residual shims: {samples}"
         )
 
     m5 = metrics["M5"]
@@ -1387,6 +1535,15 @@ def evaluate_checks(
         samples = ", ".join(f"{v['site']} ({v['kind']})" for v in m5["violations"][:5])
         failures.append(
             f"M5: {m5['total_violations']} hardcoded SERVICE_NAME/OTEL list(s) outside sdk_vocabulary(): {samples}"
+        )
+
+    m6 = metrics.get("M6")
+    if m6 and m6["total_violations"] > 0:
+        samples = ", ".join(
+            f"{v['site']} ({v['import']})" for v in m6["violations"][:5]
+        )
+        failures.append(
+            f"M6: {m6['total_violations']} tools/*.py cross-import violation(s): {samples}"
         )
 
     return failures
@@ -1410,7 +1567,7 @@ def _parse_repo_arg(raw: str) -> tuple[str, Path]:
 def build_parser() -> argparse.ArgumentParser:
     """Create the argument parser for sdk_usage_census."""
     parser = argparse.ArgumentParser(
-        description="Compute infra2-sdk usage census metrics M1 through M5."
+        description="Compute infra2-sdk usage census metrics M1 through M6."
     )
     parser.add_argument(
         "--json",
@@ -1421,7 +1578,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Fail with exit code 1 when any census guard (M1 through M5) fails.",
+        help="Fail with exit code 1 when any census guard (M1 through M6) fails.",
     )
     parser.add_argument(
         "--tests",
@@ -1478,6 +1635,7 @@ def build_parser() -> argparse.ArgumentParser:
 def _format_human_summary(report: dict[str, Any], failures: list[str]) -> str:
     m = report["metrics"]
     m1, m2, m3, m4, m5 = m["M1"], m["M2"], m["M3"], m["M4"], m["M5"]
+    m6 = m.get("M6", {"total_violations": 0})
     lines = [
         f"SDK package: {report['sdk_package']} (target v{report['latest_version']})",
         f"Consumers:   {', '.join(report['consumers'])}",
@@ -1497,8 +1655,9 @@ def _format_human_summary(report: dict[str, Any], failures: list[str]) -> str:
             f"{repo}={info['pinned_version']} (lag={info['lag']})"
             for repo, info in sorted(m3["consumers"].items())
         ),
-        f"M4 LEFT_THE_PACKAGES references: {m4['total_violations']}",
+        f"M4 LEFT_THE_PACKAGES / shim references: {m4['total_violations']}",
         f"M5 hardcoded SERVICE_NAME/OTEL lists: {m5['total_violations']}",
+        f"M6 tools/*.py cross-imports: {m6['total_violations']}",
     ]
     if failures:
         lines.append("CHECK FAILURES:")
