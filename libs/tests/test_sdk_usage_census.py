@@ -590,13 +590,123 @@ def test_human_summary_and_nonzero_exit_on_check_failure(
     assert "M5:" in out
 
 
+def test_m1_downgrades_uncalled_or_test_only_consumer_class_method_sdk_use(
+    synthetic_workspace: tuple[Path, dict[str, Path]],
+) -> None:
+    pkg_root, consumers = synthetic_workspace
+    _write(
+        pkg_root,
+        "zombie.py",
+        """
+        def dead_method_sym() -> str:
+            return "dead"
+
+        def test_method_sym() -> str:
+            return "test"
+        """,
+    )
+    _write(
+        consumers["consumer_a"],
+        "app/model.py",
+        f"""
+        from {PKG_UNDER}.zombie import dead_method_sym, test_method_sym
+
+        class SettingsModel:
+            def never_called_anywhere(self) -> str:
+                return dead_method_sym()
+
+            def only_called_in_test(self) -> str:
+                return test_method_sym()
+        """,
+    )
+    _write(
+        consumers["consumer_a"],
+        "tests/test_model.py",
+        """
+        from app.model import SettingsModel
+
+        def test_it() -> None:
+            assert SettingsModel().only_called_in_test() == "test"
+        """,
+    )
+    report = census.run_census(pkg_root=pkg_root, consumers=consumers)
+    by_name = {s["name"]: s["reach"] for s in report["metrics"]["M1"]["symbols"]}
+    assert by_name["dead_method_sym"] == "unused"
+    assert by_name["test_method_sym"] == "test_only"
+
+
+def test_m1_ignores_empty_dunder_all_and_credits_cli_main_call_sites(
+    synthetic_workspace: tuple[Path, dict[str, Path]],
+) -> None:
+    pkg_root, consumers = synthetic_workspace
+    _write(
+        pkg_root,
+        "cli_tool.py",
+        """
+        __all__ = ()
+
+        def cli_entry_helper() -> str:
+            return "ran"
+
+        def unreferenced_in_main() -> str:
+            return "idle"
+
+        def main() -> int:
+            cli_entry_helper()
+            return 0
+        """,
+    )
+    _write(
+        consumers["consumer_a"],
+        ".github/workflows/cli.yml",
+        f"""
+        name: cli
+        jobs:
+          run:
+            runs-on: ubuntu-latest
+            steps:
+              - run: python -m {PKG_UNDER}.cli_tool
+        """,
+    )
+    report = census.run_census(pkg_root=pkg_root, consumers=consumers)
+    by_name = {s["name"]: s["reach"] for s in report["metrics"]["M1"]["symbols"]}
+    assert by_name["cli_entry_helper"] == "prod_used"
+    assert by_name["unreferenced_in_main"] == "unused"
+
+
+def test_m2_credits_canonical_key_when_registered_alias_is_used_in_prod(
+    synthetic_workspace: tuple[Path, dict[str, Path]],
+    tmp_path: Path,
+) -> None:
+    pkg_root, _consumers = synthetic_workspace
+    alias_consumer = tmp_path / "alias_consumer"
+    _write(alias_consumer, "uv.lock", _make_uv_lock(VER_LATEST))
+    _write(
+        alias_consumer,
+        "app/worker.py",
+        """
+        import os
+
+        def tag() -> str:
+            return os.environ.get("IMAGE_TAG", "dev")
+        """,
+    )
+    report = census.run_census(
+        pkg_root=pkg_root,
+        consumers={"alias_consumer": alias_consumer},
+    )
+    by_key = {k["key"]: k["reach"] for k in report["metrics"]["M2"]["keys"]}
+    assert by_key["IMAGE_TAG"] == "prod_used"
+    assert by_key["SERVICE_VERSION"] == "prod_used"
+
+
 def test_live_infra2_repository_census_contract() -> None:
     report = census.run_census(consumers={"infra2": census.REPO_ROOT})
     metrics = report["metrics"]
     assert metrics["M1"]["total_public"] >= 50
     assert metrics["M1"]["prod_used"] >= 20
     assert metrics["M1"]["missing_imports"]["prod"] == []
-    assert metrics["M2"]["total_keys"] >= 14
+    assert metrics["M2"]["total_keys"] >= 12
     assert metrics["M2"]["prod_used"] >= 8
     assert metrics["M3"]["consumers"]["infra2"]["up_to_date"] is True
     assert metrics["M3"]["consumers"]["infra2"]["lag"] == 0

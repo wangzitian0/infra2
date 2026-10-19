@@ -26,6 +26,7 @@ from infra2_sdk.refs import (
     classify_ref,
     ls_remote_rows,
     redact_repo,
+    resolve_branch_to_sha as _sdk_resolve_branch_to_sha,
     resolve_image_ref as _sdk_resolve_image_ref,
     resolve_pr as _sdk_resolve_pr,
     resolve_to_sha as _sdk_resolve_to_sha,
@@ -38,6 +39,8 @@ __all__ = [
     "FINANCE_REPORT_REPO",
     "ResolvedRef",
     "classify_ref",
+    "ls_remote_rows",
+    "redact_repo",
     "resolve_branch_to_sha",
     "resolve_image_ref",
     "resolve_pr",
@@ -75,29 +78,5 @@ def resolve_branch_to_sha(
     repo: str = FINANCE_REPORT_REPO,
     runner: CommandRunner = subprocess.run,
 ) -> str:
-    """Resolve a clone-only branch without broadening the deploy authority grammar.
-
-    Preview PRs need a branch name because Dokploy cannot clone a raw commit SHA. The
-    exact SHA remains authoritative; callers use this resolver only to prove the transport
-    branch points at that same commit before handing it to Dokploy.
-    """
-    cleaned = branch.strip()
-    invalid_chars = " ~^:?*[\x5c"
-    if (
-        not cleaned
-        or cleaned.startswith(("-", ".", "/", "refs/"))
-        or cleaned.endswith((".", "/", ".lock"))
-        or ".." in cleaned
-        or "@{" in cleaned
-        or "//" in cleaned
-        or any(ord(char) < 32 or char in invalid_chars for char in cleaned)
-    ):
-        raise ValueError(f"invalid clone branch {branch!r}")
-
-    remote_ref = f"refs/heads/{cleaned}"
-    for sha, name in ls_remote_rows(repo, remote_ref, runner=runner):
-        if name == remote_ref:
-            return sha
-    raise ValueError(
-        f"clone branch {branch!r} ({remote_ref}) not found in {redact_repo(repo)}"
-    )
+    """Resolve a clone-only branch without broadening the deploy authority grammar."""
+    return _sdk_resolve_branch_to_sha(branch, repo=repo, runner=runner)

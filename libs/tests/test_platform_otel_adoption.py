@@ -550,7 +550,7 @@ def test_the_deployer_issues_the_identity_and_the_compose_hands_it_to_the_contai
             "identity mode takes the tier from deployment.environment.name (#1246)"
         )
     assert container["GIT_COMMIT_SHA"] == release, (
-        "the SDK RuntimeIdentity reads the commit from GIT_COMMIT_SHA: 40 hex or unknown"
+        "the SDK _resolve_service_identity reads the commit from GIT_COMMIT_SHA: 40 hex or unknown"
     )
     # export turns on with the endpoint: the vault-agent sidecar has no SDK and gets none
     vault_agent = container_env(app.parent / "compose.yaml", "vault-agent", pushed)
