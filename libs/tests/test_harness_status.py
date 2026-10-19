@@ -440,7 +440,8 @@ RELEASE_CASES = [  # (what the fetcher returns or raises, (release, note))
     ({"version": None, "git_sha": "v0.1.16"}, ("v0.1.16", "")),
     ({"version": " ", "git_sha": "v0.1.16"}, ("v0.1.16", "")),
     ({"status": "ok"}, NO_FIELD),
-    ({"version": 7}, NO_FIELD),
+    ({"version": 7}, ("unknown", "non-string version")),
+    ({"version": 7, "git_sha": "v0.1.16"}, ("unknown", "non-string version")),
     (["v0.2.0"], NO_FIELD),
     ({"version": "v1\x1b[31m"}, ("unknown", "unprintable version")),
     (json.JSONDecodeError("bad", "<html>", 0), ("unknown", "JSONDecodeError")),
@@ -449,7 +450,7 @@ RELEASE_CASES = [  # (what the fetcher returns or raises, (release, note))
     (TimeoutError("timed out"), ("unreachable", "TimeoutError")),
     (http.client.IncompleteRead(b"{"), ("unreachable", "IncompleteRead")),
 ]
-RELEASE_IDS = "version-wins git-sha-only version-null version-blank no-field version-int list escape not-json refused http-503 timeout cut-off".split()
+RELEASE_IDS = "version-wins git-sha-only version-null version-blank no-field version-int version-int-no-fallback list escape not-json refused http-503 timeout cut-off".split()
 
 
 @pytest.mark.parametrize(("outcome", "expected"), RELEASE_CASES, ids=RELEASE_IDS)
@@ -620,16 +621,41 @@ def _response(body: bytes, final_url: str = URL) -> io.BytesIO:
 
 HOSTILE = [  # (final URL of the response, body): the body names a release, but fetch_json must refuse it
     ("http://app.example.test/api/health", b'{"version": "v9.9.9"}'),
+    ("https://evil.example.test/api/health", b'{"version": "v9.9.9"}'),
     (URL, b'{"version": "v9.9.9"}' + b" " * 1_048_576),  # valid JSON, then padding
     (URL, b"[" * 100_000 + b"]" * 100_000),
 ]
 
 
-@pytest.mark.parametrize("url, body", HOSTILE, ids=["redirect", "1-mib", "nesting"])
+@pytest.mark.parametrize(
+    "url, body",
+    HOSTILE,
+    ids=["redirect", "cross-host-redirect", "1-mib", "nesting"],
+)
 def test_fetch_json_refusals_give_unknown(monkeypatch, url, body) -> None:
     monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _response(body, url))
 
     assert served_release(URL, fetch_json)[0] == "unknown"
+
+
+def test_observe_online_fetches_endpoints_concurrently(tmp_path: Path) -> None:
+    import threading
+
+    barrier = threading.Barrier(len(BODIES), timeout=2.0)
+
+    def concurrent_fetcher(url: str, timeout: float):
+        barrier.wait()  # blocks unless all 4 endpoints are fetched concurrently
+        return BODIES[url]
+
+    result = observe_online(
+        _status(),
+        tmp_path,
+        _manifest(),
+        fetcher=concurrent_fetcher,
+        marker_status=_markers(BEHIND),
+    )
+    assert result.repositories[2].served["staging"] == "v0.2.2"
+    assert result.repositories[3].served["production"] == "v0.1.12"
 
 
 def test_fetch_json_request_and_https_only(monkeypatch) -> None:

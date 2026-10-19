@@ -6,10 +6,12 @@ import http.client
 import json
 import subprocess
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from libs.core.harness.manifest import HEALTH_ENVIRONMENTS
 
@@ -292,10 +294,15 @@ def fetch_json(url: str, timeout: float = HEALTH_TIMEOUT_SECONDS) -> Any:
     """GET an https URL and decode the JSON body. The only network call of `status`."""
     if not url.startswith("https://"):
         raise ValueError(f"not an https URL: {url!r}")
+    origin = urlsplit(url)
     request = urllib.request.Request(url, headers={"User-Agent": HEALTH_USER_AGENT})
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        if not response.geturl().startswith("https://"):  # urllib follows redirects
+        final_url = response.geturl()
+        if not final_url.startswith("https://"):  # urllib follows redirects
             raise ValueError("redirected to a URL that is not https")
+        final = urlsplit(final_url)
+        if (final.hostname, final.port) != (origin.hostname, origin.port):
+            raise ValueError(f"redirected to another host: {final.netloc!r}")
         body = response.read(MAX_BODY_BYTES + 1)
     if len(body) > MAX_BODY_BYTES:
         raise ValueError("response body is larger than 1 MiB")
@@ -311,10 +318,16 @@ def served_release(url: str, fetcher: Fetcher) -> tuple[str, str]:
         return "unreachable", type(exc).__name__
     except (ValueError, RecursionError) as exc:  # the body is not usable JSON
         return "unknown", type(exc).__name__
+    if not isinstance(body, dict):
+        return "unknown", "no version or git_sha"
     for field in ("version", "git_sha"):
-        value = body.get(field) if isinstance(body, dict) else None
-        if isinstance(value, str) and value.strip():
-            value = value.strip()
+        value = body.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            return "unknown", f"non-string {field}"
+        value = value.strip()
+        if value:
             return (
                 (value[:80], "")
                 if value.isprintable()
@@ -328,6 +341,7 @@ def _served(
     root: Path,
     fetcher: Fetcher,
     marker_status: Callable[..., Any] | None,
+    precomputed: dict[str, tuple[str, str]] | None = None,
 ) -> dict[str, str | None]:
     health = entry.get("health")
     if isinstance(health, dict):  # an App: read its health URLs
@@ -335,7 +349,11 @@ def _served(
         notes = []
         for environment in HEALTH_ENVIRONMENTS:
             if environment in health:
-                row[environment], note = served_release(health[environment], fetcher)
+                url = health[environment]
+                if precomputed is not None and url in precomputed:
+                    row[environment], note = precomputed[url]
+                else:
+                    row[environment], note = served_release(url, fetcher)
                 if note:
                     notes.append(f"{environment}: {note}")
         return {**row, "note": "; ".join(notes)}
@@ -390,9 +408,26 @@ def observe_online(
     The network is read only through `fetcher`. infra2 is read from local git tags.
     """
     entries = {entry["id"]: entry for entry in manifest["repositories"]}
+    urls: list[str] = []
+    for item in status.repositories:
+        health = entries[item.repository_id].get("health")
+        if isinstance(health, dict):
+            for environment in HEALTH_ENVIRONMENTS:
+                if environment in health and health[environment] not in urls:
+                    urls.append(health[environment])
+    precomputed: dict[str, tuple[str, str]] = {}
+    if len(urls) > 1:
+        with ThreadPoolExecutor(max_workers=len(urls)) as pool:
+            futures = {url: pool.submit(served_release, url, fetcher) for url in urls}
+            for url, future in futures.items():
+                precomputed[url] = future.result()
+    elif urls:
+        precomputed[urls[0]] = served_release(urls[0], fetcher)
     items = []
     for item in status.repositories:
-        served = _served(entries[item.repository_id], root, fetcher, marker_status)
+        served = _served(
+            entries[item.repository_id], root, fetcher, marker_status, precomputed
+        )
         lock = _contract_lock(root, item.path)
         items.append(replace(item, served=served, contract_lock=lock))
     observed_at = now().astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

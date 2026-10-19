@@ -57,9 +57,16 @@ def test_check_passes_on_a_consistent_tree(tmp_path: Path, capsys) -> None:
     assert "ok (2 files)" in capsys.readouterr().out
 
 
-def _lock_of(path="contracts/alpha/one.json", head="a" * 40, **file) -> bytes:
+def _lock_of(
+    path="contracts/alpha/one.json",
+    head="a" * 40,
+    repository="owner/alpha",
+    tag=None,
+    **file,
+) -> bytes:
     entry = {"app": "alpha", "path": path, "sha256": "0" * 64, "upstream": "x", **file}
-    return json.dumps({"apps": {"alpha": {"commit": head}}, "files": [entry]}).encode()
+    app = {"commit": head, "repository": repository, "tag": tag}
+    return json.dumps({"apps": {"alpha": app}, "files": [entry]}).encode()
 
 
 @pytest.mark.parametrize(
@@ -71,6 +78,27 @@ def _lock_of(path="contracts/alpha/one.json", head="a" * 40, **file) -> bytes:
         (contracts.LOCK, _lock_of("../x.json"), "../x.json: outside contracts/"),
         (contracts.LOCK, _lock_of("/tmp/x.json"), "/tmp/x.json: outside contracts/"),
         (contracts.LOCK, _lock_of(head="g" * 40), "apps.alpha.commit is not 40"),
+        (
+            contracts.LOCK,
+            _lock_of(repository="bad"),
+            "apps.alpha.repository is not owner/name",
+        ),
+        (
+            contracts.LOCK,
+            _lock_of(repository=5),
+            "apps.alpha.repository is not owner/name",
+        ),
+        (contracts.LOCK, _lock_of(tag=5), "apps.alpha.tag must be null or a non-empty"),
+        (
+            contracts.LOCK,
+            _lock_of(tag=" "),
+            "apps.alpha.tag must be null or a non-empty",
+        ),
+        (
+            contracts.LOCK,
+            _lock_of(tag="v1\n"),
+            "apps.alpha.tag must be null or a non-empty",
+        ),
         (contracts.LOCK, _lock_of(app="beta"), "app 'beta' is not in apps"),
         (contracts.LOCK, _lock_of(upstream="../x"), "upstream is not a relative"),
         (contracts.LOCK, _lock_of(upstream="/x"), "upstream is not a relative"),
@@ -120,10 +148,58 @@ def test_verify_compares_with_the_upstream_bytes(tmp_path, copy, upstream, bad) 
     # a body per exact URL: a wrong repository, commit or path raises KeyError and fails the test
     served = {f"{url}/{n}.json": b for n, b in {**BODIES, **upstream}.items()}
     fetch = served.__getitem__
-    got = contracts.check(tmp_path, fetch)
+    ls_remote = Mock(return_value=f"{'a' * 40}\trefs/heads/main\n")
+    got = contracts.check(tmp_path, fetch, ls_remote)
     assert [x.split(":")[0] for x in got] == [f"contracts/alpha/{b}.json" for b in bad]
     assert contracts.check(tmp_path) == []  # the offline check passes in every case
-    assert contracts.main(["--verify"], root=tmp_path, fetch=fetch) == (1 if bad else 0)
+    assert contracts.main(
+        ["--verify"], root=tmp_path, fetch=fetch, ls_remote=ls_remote
+    ) == (1 if bad else 0)
+
+
+def test_verify_checks_locked_tag_and_main_branch(tmp_path: Path) -> None:
+    lock = _tree(tmp_path)
+    url = "https://raw.githubusercontent.com/owner/alpha/" + "a" * 40
+    served = {f"{url}/{n}.json": b for n, b in BODIES.items()}
+    fetch = served.__getitem__
+
+    # Missing refs/heads/main when tag is None
+    assert any(
+        "has no refs/heads/main" in line
+        for line in contracts.check(tmp_path, fetch, Mock(return_value=""))
+    )
+
+    # Locked tag resolves to a different commit
+    data = json.loads(lock.read_text())
+    data["apps"]["alpha"]["tag"] = "v1.0.0"
+    lock.write_text(json.dumps(data))
+    ls_remote_mismatch = Mock(return_value=f"{'b' * 40}\trefs/tags/v1.0.0\n")
+    assert any(
+        "tag 'v1.0.0' resolves to bbbbbbbbbbbb, not aaaaaaaaaaaa" in line
+        for line in contracts.check(tmp_path, fetch, ls_remote_mismatch)
+    )
+
+
+def test_sync_with_verify_runs_verification(tmp_path: Path) -> None:
+    _tree(tmp_path)
+    ls_remote = Mock(return_value=f"{SHA}\trefs/heads/main\n")
+    calls = []
+
+    def fetch(url: str) -> bytes:
+        calls.append(url)
+        # First 2 calls are sync, next 2 calls are verify; make verify see a Tampered upstream
+        if len(calls) > 2:
+            return b"tampered"
+        return b'{"ok": true}\n'
+
+    rc = contracts.main(
+        ["--sync", "alpha", "main", "--verify"],
+        root=tmp_path,
+        ls_remote=ls_remote,
+        fetch=fetch,
+    )
+    assert rc == 1
+    assert len(calls) == 4
 
 
 @pytest.mark.parametrize(

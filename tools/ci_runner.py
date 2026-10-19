@@ -605,7 +605,11 @@ def run_unit_tests(
     start_time = time.monotonic()
 
     # 1. Check the App manifest copies in contracts/ against contracts/apps.lock.json
-    _run_cmd([sys.executable, "tools/fetch_app_manifests.py"])
+    try:
+        _run_cmd([sys.executable, "tools/fetch_app_manifests.py"])
+    except subprocess.CalledProcessError:
+        print("❌ App manifest copies check failed.")
+        return 1
 
     # 2. Pytest execution
     cmd = [
