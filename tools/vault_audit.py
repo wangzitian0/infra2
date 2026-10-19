@@ -7,8 +7,8 @@ from pathlib import Path
 
 from invoke import Exit, task
 
-from libs.console import console, error, header, success
-from libs.security.vault_self_refresh_audit import (
+from common.console import console, error, header, success
+from common.security.vault_self_refresh_audit import (
     audit_from_observations,
     collect_live_observations,
     load_inventory,

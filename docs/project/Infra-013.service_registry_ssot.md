@@ -19,7 +19,7 @@ layers** of parallel lists with little or no audit linking them.
 
 ```
 ① truth:   platform/*/deploy.py attrs (subdomain / service_port / prod_only / data_path)
-② re-registries (libs/common.py, NO audit): SERVICE_SUBDOMAINS, CONTAINERS,
+② re-registries (common/common.py, NO audit): SERVICE_SUBDOMAINS, CONTAINERS,
             SHARED_PLATFORM_SERVICES; sync_runner.py ALL_SERVICES / SERVICE_TASK_MAP
 ③ downstream (hand-copied): watchdog-signals.yaml, INFRA_PROBE_SPECS, wrangler
             targets, the backup inventory (BackupFacet-derived, #542), the vault self-refresh inventory (SecretsFacet-derived, #542),
@@ -34,7 +34,7 @@ the service class, then ride along the generated skeleton — not scattered in y
 
 ## Scope (MECE, delivered as minimal PRs)
 - [x] **P0 — base library + collapse the cleanest duplication** (PR 1, this branch)
-  - `libs/core/registry.py`: read Deployer attrs once (AST), expose
+  - `common/core/registry.py`: read Deployer attrs once (AST), expose
     `all_services()`, `services_in_env(env)`, `shared_services()`, `subdomains()`.
   - Audit: `sync_runner.ALL_SERVICES` must equal `all_services()` (fail-closed).
 - [ ] **P0.1 — reconcile common.py re-registries** (PR 2)
@@ -61,7 +61,7 @@ the service class, then ride along the generated skeleton — not scattered in y
   - Lint: any `platform-<svc>` compose reference that should carry `${ENV_SUFFIX}`
     but does not → CI fails.
   - [x] First slice landed: `INFRA_PROBE_SPECS` env-suffix is now registry-derived —
-    `libs/tests/test_service_registry_downstream.py` fails CI if a `prod_only` service's
+    `common/tests/test_service_registry_downstream.py` fails CI if a `prod_only` service's
     probe carries `${ENV_SUFFIX}` (the documented permanent-false-positive trap) or a
     per-env service's probe omits it. (prefect compose fix + the general compose-ref lint
     still pending.)
@@ -78,7 +78,7 @@ the service class, then ride along the generated skeleton — not scattered in y
 - Moving irreducible external data out of the service class into a generator.
 
 ## Deliverables
-- `libs/core/registry.py` base library (`get_*`-style accessors).
+- `common/core/registry.py` base library (`get_*`-style accessors).
 - Fail-closed audits binding each downstream list to the registry.
 - Generated (not hand-authored) watchdog / inventory skeletons.
 
@@ -93,11 +93,11 @@ the service class, then ride along the generated skeleton — not scattered in y
 | 2026-07-17 | Added versioned cross-plane `ServiceIdentity`; deployment entry points sign it, runtime monitoring resolves it, telemetry and alerts use it, and CI audits registry/alert/watchdog agreement. The bidirectional watchdog audit exposed and registered 16 previously untracked internal env×signal entries. |
 
 ## Verification ("The Proof")
-- [x] `pytest libs/tests/test_service_registry.py` — registry derives, ALL_SERVICES matches
+- [x] `pytest common/tests/test_service_registry.py` — registry derives, ALL_SERVICES matches
 - [x] `python tools/watchdog_consistency_audit.py` — bidirectional signal coverage + registry-derived service identity
 - [x] `python tools/service_identity_audit.py` — deploy/runtime/telemetry/alert boundary contract
-- [x] `pytest libs/tests/test_service_identity.py libs/tests/test_service_identity_audit.py`
-- [x] `pytest libs/tests/test_service_registry_downstream.py` — INFRA_PROBE_SPECS env-suffix == registry `prod_only` (first fail-closed audit binding a downstream list to the registry)
+- [x] `pytest common/tests/test_service_identity.py common/tests/test_service_identity_audit.py`
+- [x] `pytest common/tests/test_service_registry_downstream.py` — INFRA_PROBE_SPECS env-suffix == registry `prod_only` (first fail-closed audit binding a downstream list to the registry)
 - [ ] Each later PR adds a fail-closed audit proving its list == registry-derived
 
 ## References

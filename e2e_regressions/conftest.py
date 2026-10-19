@@ -13,7 +13,7 @@ import pytest
 import httpx
 from playwright.async_api import async_playwright, Browser, BrowserContext, Page
 
-# Ensure repo root is on sys.path for libs imports when running from e2e_regressions/.
+# Ensure repo root is on sys.path for common imports when running from e2e_regressions/.
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -47,7 +47,7 @@ def _require_env(name: str) -> str:
 def _load_init_vars() -> dict[str, str]:
     """Load init/env_vars from 1Password when env vars are missing."""
     try:
-        from libs.security.store import OpSecrets
+        from common.security.store import OpSecrets
     except Exception:
         return {}
     try:
@@ -148,7 +148,7 @@ def _host_for_subdomain(subdomain: str, env_suffix: str, internal_domain: str) -
 
 def _service_host(url_name: str, env_suffix: str, internal_domain: str) -> str:
     """Return the canonical host for a URL name in URL_SUBDOMAIN_KEYS."""
-    from libs.core.environ import SERVICE_SUBDOMAINS
+    from common.core.environ import SERVICE_SUBDOMAINS
 
     key = URL_SUBDOMAIN_KEYS[url_name]
     return _host_for_subdomain(SERVICE_SUBDOMAINS[key], env_suffix, internal_domain)

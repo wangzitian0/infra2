@@ -52,7 +52,7 @@ CLI 命令 `invoke env.*` 和 `get_secrets()` 函数通过 `--type` 参数区分
 
 每个服务读到的每个变量都在它的 manifest（`env.manifest.json` / app 的 `required-env.generated.json`，
 contract v2）里声明一个 **source class**；部署时 `Deployer.apply_secret_supply`
-（`libs/security/`，由 `libs/security/supply.py` 实现，兼容门面 `libs/secrets_supply.py`，经 infra2-sdk `SecretsResolver`）按声明把 store 填齐——
+（`common/security/`，由 `common/security/supply.py` 实现，兼容门面 `common/secrets_supply.py`，经 infra2-sdk `SecretsResolver`）按声明把 store 填齐——
 **Vault 只有这一个写入者，没有人手工往 Vault 里敲值。**
 
 > An App manifest is infra2's copy in `contracts/`, not a submodule file. See §1.5 and §1.6.
@@ -66,7 +66,7 @@ contract v2）里声明一个 **source class**；部署时 `Deployer.apply_secre
 | `release` / `decision` | 部署流程 / 治理审批 | 注入部署 env，不进 store | 每次部署 | `GIT_COMMIT_SHA`、`governance/approvals/<env>.yaml` 里的批准 |
 | `code` | compose / manifest 默认值 | 不进 store | — | `PROBE_POSTGRES_USER`、`FEISHU_API_BASE` |
 
-**部署时的规则**（`libs/security/supply.py::apply_secret_supply` / `libs/secrets_supply.apply`）：
+**部署时的规则**（`common/security/supply.py::apply_secret_supply` / `common/secrets_supply.apply`）：
 
 1. `human`：从 1Password 复制到 Vault（值相同不写）；1Password **不可达**时按 Vault 现有值部署并留 note（#625），只有 Vault 也缺必填值才让部署失败。
 2. `runtime`：Vault 没有的生成一次；标了 `mirror_to_1password` 的回写 1Password。
@@ -81,7 +81,7 @@ Cloudflare 免费额度（KV 写入 1,000/天等；以昨日判定，并附 `clo
 
 **存储卫生**：一个服务的 Vault 路径只允许存两类值——(1) 它的 Vault Agent 模板会渲染进容器的
 值（manifest 里 `human` / `runtime` 的 store-backed 字段），(2) 运维任务直接读、且**故意不渲染**
-进容器的值（`libs/core/service.py` / `libs/secrets_registry.py` 的 `Service.store_only_keys`，每条都写明读它的代码）。
+进容器的值（`common/core/service.py` / `common/secrets_registry.py` 的 `Service.store_only_keys`，每条都写明读它的代码）。
 其余都是孤儿：退役代码路径写下的、或已经搬进 compose 的配置。孤儿危险在于它看起来仍然权威——
 finance_report 生产库里留着应用早已不读的 `PRIMARY_MODEL`，模板停止渲染它的那天，Dokploy 里的
 陈旧副本顶替了上去（#649）。
@@ -111,7 +111,7 @@ manifest 里每个变量都声明了"谁产生它"
 （`human` / `runtime` / `release` / `decision` / `code`），模板只渲染 `human`、`runtime`、
 `provided_by`、`composed_from` 四类；`code` 类默认值留在应用里，`release` / `decision` 由部署
 写进 compose 环境，不进 Vault。`empty_ok` 的变量在 Vault 没有值时整行省略，模板里不再出现
-`{{ else }}""`。`libs/tests/test_secrets_render.py` 断言提交的文件与生成结果一致；改 manifest 后
+`{{ else }}""`。`common/tests/test_secrets_render.py` 断言提交的文件与生成结果一致；改 manifest 后
 运行 `uv run python tools/secrets_render.py --write`。iac-runner 的 policy 是写身份（跨项目
 create/update），不由 manifest 描述，仍然手写。app 栈（truealpha app / data_engine / preview，finance_report app / preview）也已迁移：
 模板里原来的环境默认值（S3 端点、限流阈值、Prefect 与 OTel 地址等）改由 compose 文件与
@@ -133,7 +133,7 @@ Deployer 的 `compose_env_overrides` 提供，manifest 只描述"谁产生这个
    because the App asks for a field that nobody supplies.
 
 To add a file, add an entry (`app`, `path`, `upstream`, `"sha256": ""`) to the lock and its path to
-`libs/security/registry.py`. Then run step 2. Do not sync a version that drops a field.
+`common/security/registry.py`. Then run step 2. Do not sync a version that drops a field.
 First wait until the last 3 production releases and the pinned data-engine digest no longer need that field.
 
 ---
@@ -331,11 +331,11 @@ invoke env.get POSTGRES_PASSWORD --project=platform --env=production --service=p
 
 ## 6. Python API
 
-密钥与机密供给能力的**实现真源**位于 [`libs/security/`](../../libs/security/README.md)（`libs/security/store.py`, `libs/security/supply.py`, `libs/security/prune.py`）。Vault token 取 `VAULT_TOKEN`（`VAULT_ROOT_TOKEN` 仅过渡别名）。
+密钥与机密供给能力的**实现真源**位于 [`common/security/`](../../common/security/README.md)（`common/security/store.py`, `common/security/supply.py`, `common/security/prune.py`）。Vault token 取 `VAULT_TOKEN`（`VAULT_ROOT_TOKEN` 仅过渡别名）。
 
 ```python
-from libs.security import VaultSecrets, apply_secret_supply, resolve_vault_token
-from libs.security.registry import lookup
+from common.security import VaultSecrets, apply_secret_supply, resolve_vault_token
+from common.security.registry import lookup
 
 # 1. 运行时值 (Vault, 默认) —— 只读访问
 token = resolve_vault_token()
@@ -348,10 +348,10 @@ report = apply_secret_supply(service, "staging")  # 复制 / 生成 / 回写 / �
 # report.ok, report.changed, report.missing (只有名字，绝不泄露值)
 ```
 
-直接从 `libs.security.store` 导入：
+直接从 `common.security.store` 导入：
 ```python
-from libs.security.store import OpSecrets, get_secrets, generate_password
-from libs.security.supply import apply
+from common.security.store import OpSecrets, get_secrets, generate_password
+from common.security.supply import apply
 ```
 
 `Deployer.apply_secret_supply` 在 `pre_compose` 里对每个注册过的服务调用它；新服务只需把
@@ -372,7 +372,7 @@ from libs.security.supply import apply
 
 ### ✅ 推荐模式
 - 使用 `invoke env.*` 命令读写远端
-- 使用 `get_secrets()`/`OpSecrets` 在代码中**读**配置；写入由 `libs/secrets_supply.py` 按 manifest 完成
+- 使用 `get_secrets()`/`OpSecrets` 在代码中**读**配置；写入由 `common/secrets_supply.py` 按 manifest 完成
 - **默认不指定 `--type`**，走 Vault（读）
 - 需要 1Password 时**显式声明** `--type=bootstrap` 或 `--type=root_vars`
 - `.env.example` 仅作为 KEY 清单（用于 `Deployer` 校验）

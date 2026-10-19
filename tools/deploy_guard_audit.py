@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.deploy.dependencies import (  # noqa: E402
+from common.deploy.dependencies import (  # noqa: E402
     config_hash_input_count,
     fanout_coverage_violations,
     service_key_from_path,
@@ -74,7 +74,7 @@ def main() -> int:
         print(f"  - {violation}")
     print(
         "\nFix: add a glob that matches the file to the service's depends_on in "
-        "docs/ssot/deploy-dependencies.yaml (e.g. `- libs/**` or `- uv.lock`)."
+        "docs/ssot/deploy-dependencies.yaml (e.g. `- common/**` or `- uv.lock`)."
     )
     return 1
 

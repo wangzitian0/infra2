@@ -6,9 +6,9 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from invoke import task
 
-from libs.deploy.deployer import Deployer, make_tasks
-from libs.console import env_vars, error, run_with_status, success, header
-from libs.core.facets import BackupFacet, Exemption
+from common.deploy.deployer import Deployer, make_tasks
+from common.console import env_vars, error, run_with_status, success, header
+from common.core.facets import BackupFacet, Exemption
 
 # Get shared_tasks from sys.modules (loaded by tools/loader.py)
 shared_tasks = sys.modules.get("platform.21.portal.shared")

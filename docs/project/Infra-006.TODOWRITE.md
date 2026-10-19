@@ -81,14 +81,14 @@ Track top issues discovered during documentation engineering.
     也不会跑——**不是「跑了并抓到」，是「根本没跑」**。它仍然合不进去，但靠的是七个
     required check **一个都没报告**：`pr_merge_gate` 实测给出
     `required check(s) never reported: <七个全部>`，GitHub ruleset 侧则永远停在 Expected。
-  - **PR 同时动了 infra-ci 允许清单里的东西**（`libs/**`、`tools/**`、`docs/**`…，
+  - **PR 同时动了 infra-ci 允许清单里的东西**（`common/**`、`tools/**`、`docs/**`…，
     历史上每一次改 docs.yml 都是这种形状）：infra-ci 触发，`Test Deployer Hash Logic`
-    跑 `libs/tests`，`test_docs_only_prs_run_their_own_gates` 在步骤被删/`|| true`/
+    跑 `common/tests`，`test_docs_only_prs_run_their_own_gates` 在步骤被删/`|| true`/
     `continue-on-error` 时都红（实测 3/3/4 红）。这一种才是**被测试抓到**。
   - 我原来的说法把第一种形状也归给了测试。**错法正是同一段文字在另一处刚警告过的那条**：
     带 `paths:` 过滤的 required check，在不匹配的 PR 上永远停在 Expected。
     写下这个陷阱，然后在下一段掉进去。
-  - 顺带一条：`libs/tests/test_docs_only_prs_run_their_own_gates.py`（**本 PR 已删除**，见本节开头的结论） 的**代码**是对的——
+  - 顺带一条：`common/tests/test_docs_only_prs_run_their_own_gates.py`（**本 PR 已删除**，见本节开头的结论） 的**代码**是对的——
     它在问 `has_non_doc` 之前先问 `_workflow_fires(INFRA_CI, files)`（实测该文件下为
     `False`）。错的只有散文：我把分类器**单独**拿来推论，而测试没有。
 - 剩余敞口只有一种：**纯文档 PR 索引真的过期、`build` 真的红了，而有人不走

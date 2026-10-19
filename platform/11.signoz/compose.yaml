@@ -57,7 +57,7 @@ services:
     # signoz.${INTERNAL_DOMAIN} → :8080 is registered by SigNozDeployer
     # (subdomain="signoz", service_port=8080, service_name="signoz") via the base
     # deployer flow. No hand-written Traefik router/service labels here — see
-    # docs/ssot/platform.domain.md and libs/tests/test_domain_routing_policy.py.
+    # docs/ssot/platform.domain.md and common/tests/test_domain_routing_policy.py.
 
   otel-collector:
     image: signoz/signoz-otel-collector:v0.129.12
@@ -114,7 +114,7 @@ services:
     # registers this second domain (otel.${INTERNAL_DOMAIN} → otel-collector:4318) via
     # an extra client.ensure_domains(..., service_name="otel-collector") call in
     # platform/11.signoz/deploy.py, per docs/ssot/platform.domain.md and
-    # libs/tests/test_domain_routing_policy.py.
+    # common/tests/test_domain_routing_policy.py.
     #
     # There is NO bearer token: a browser cannot hold a secret, so a static token in
     # the page is not a credential. Public ingest is instead gated by the CORS

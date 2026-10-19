@@ -211,7 +211,7 @@ IaC Runner manages deployer-discovered, explicitly selected services. Bootstrap 
 |--------------|-------------|-------|
 | `platform/01.postgres/*` | `postgres.sync` | Auto-sync |
 | `platform/10.authentik/*` | `authentik.sync` | Auto-sync |
-| `libs/*`, `tools/*` | Declared dependents only | `deploy-dependencies.yaml`; unrelated tooling is no-op |
+| `common/*`, `tools/*` | Declared dependents only | `deploy-dependencies.yaml`; unrelated tooling is no-op |
 | `bootstrap/*` | Skipped | Manual only |
 | `finance_report/*` | Skipped | Use finance_report CI |
 | `finance/*` | Skipped | Use app-specific CI |
@@ -240,7 +240,7 @@ FileNotFoundError: [Errno 2] No such file or directory: 'op'
 
 **Solution**: Dockerfile now includes op CLI installation:
 ```dockerfile
-# Install 1Password CLI (required by libs/common.py::OpSecrets)
+# Install 1Password CLI (required by common/common.py::OpSecrets)
 RUN curl -sSfLo op.zip https://cache.agilebits.com/dist/1P/op2/pkg/v2.30.0/op_linux_amd64_v2.30.0.zip && \
     unzip -od /usr/local/bin/ op.zip && \
     rm op.zip && \

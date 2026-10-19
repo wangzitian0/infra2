@@ -8,9 +8,9 @@ import sys
 
 from invoke import task
 
-from libs.console import error, header, info, run_with_status, success
-from libs.deploy.deployer import Deployer, make_tasks
-from libs.core.facets import ProbeFacet, SecretsFacet, SignalFacet
+from common.console import error, header, info, run_with_status, success
+from common.deploy.deployer import Deployer, make_tasks
+from common.core.facets import ProbeFacet, SecretsFacet, SignalFacet
 
 shared_tasks = sys.modules.get("platform.30.todo.shared")
 
@@ -71,7 +71,7 @@ class TodoDeployer(Deployer):
     )
 
     # The dedicated Postgres login of the canary. The compose names the same role in
-    # CANARY_POSTGRES_USER (libs/tests/test_todo_canary_depth.py keeps them equal).
+    # CANARY_POSTGRES_USER (common/tests/test_todo_canary_depth.py keeps them equal).
     CANARY_PG_ROLE = "canary_ro"
     CANARY_PG_CONNECTION_LIMIT = 5
     # token_urlsafe(32), the SDK's generator for runtime secrets, yields only these characters.

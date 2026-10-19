@@ -43,7 +43,7 @@
 
 - **Bootstrap**：[local](../bootstrap/README.md) · [GitHub](https://github.com/wangzitian0/infra2/blob/main/bootstrap/README.md)
 - **Platform**：[local](../platform/README.md) · [GitHub](https://github.com/wangzitian0/infra2/blob/main/platform/README.md)
-- **Libs**：[local](../libs/README.md) · [GitHub](https://github.com/wangzitian0/infra2/blob/main/libs/README.md)
+- **Libs**：[local](../common/README.md) · [GitHub](https://github.com/wangzitian0/infra2/blob/main/common/README.md)
 - **Tools**：[local](../tools/README.md) · [GitHub](https://github.com/wangzitian0/infra2/blob/main/tools/README.md)
 - **E2E Regression**：[local](../e2e_regressions/README.md) · [GitHub](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/README.md)
 

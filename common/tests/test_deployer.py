@@ -1,0 +1,1787 @@
+"""Unit tests for deployer safety checks."""
+
+from unittest.mock import MagicMock
+import importlib.util
+import re
+from pathlib import Path
+
+import pytest
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_discovered_service_tasks_exist_in_root_invoke_collection() -> None:
+    """Every GitOps task name must match Invoke's normalized CLI namespace."""
+    from common.deploy.deployer import discover_services
+    from tools.loader import ns
+
+    task_names = ns.task_names
+    invoke_task_names = set(task_names() if callable(task_names) else task_names)
+    missing = {
+        service: task_name
+        for service, task_name in discover_services().items()
+        if task_name not in invoke_task_names
+    }
+
+    assert missing == {}
+
+
+def test_make_tasks_sync_surfaces_failed_action_as_nonzero_exit() -> None:
+    """A 'failed' action must raise (non-zero exit) so the iac-runner sees a real
+    failure instead of a green '✅ sync completed' — the silent-deploy root cause."""
+    from invoke.exceptions import Exit
+    from common.deploy.deployer import Deployer, make_tasks
+
+    class FailingDeployer(Deployer):
+        service = "demo"
+
+        @classmethod
+        def sync(cls, c, force=False):
+            return {"action": "failed", "details": "1Password to Vault sync failed"}
+
+    tasks = make_tasks(FailingDeployer, MagicMock())
+    with pytest.raises(Exit):
+        tasks["sync"].body(MagicMock(), force=False)
+
+
+def test_make_tasks_sync_keeps_skipped_action_as_success() -> None:
+    """'skipped' — including the deliberate fail-closed skip — stays a success
+    (no raise), preserving the load-shedding safety net unchanged."""
+    from common.deploy.deployer import Deployer, make_tasks
+
+    class SkippingDeployer(Deployer):
+        service = "demo"
+
+        @classmethod
+        def sync(cls, c, force=False):
+            return {
+                "action": "skipped",
+                "details": "Remote config unreadable; fail-closed",
+            }
+
+    tasks = make_tasks(SkippingDeployer, MagicMock())
+    result = tasks["sync"].body(MagicMock())
+    assert result["action"] == "skipped"
+
+
+def test_prepare_dirs_reasserts_subpath_ownership_after_blanket_chown(
+    monkeypatch,
+) -> None:
+    """A `data_subpath_uids` island (e.g. op-ch ClickHouse = 101) must be chowned AFTER
+    the blanket `chown -R {uid}`, so a uid-1000 service tree never clobbers its embedded
+    uid-101 ClickHouse back to 1000 — the silent openpanel ingestion outage."""
+    import common.deploy.deployer as d
+
+    cmds: list[str] = []
+    monkeypatch.setattr(d, "validate_env", lambda: [])
+    monkeypatch.setattr(d, "run_with_status", lambda c, cmd, label: cmds.append(cmd))
+
+    class OPDeployer(d.Deployer):
+        service = "openpanel"
+        uid = "1000"
+        gid = "1000"
+        data_subpath_uids = {"op-ch": ("101", "101")}
+
+        @classmethod
+        def env(cls):
+            return {"ENV": "production", "VPS_HOST": "vps"}
+
+        @classmethod
+        def data_path_for_env(cls, e):
+            return "/data/platform/openpanel"
+
+    assert OPDeployer._prepare_dirs(MagicMock()) is True
+
+    blanket = next(
+        i
+        for i, cmd in enumerate(cmds)
+        if "chown -R 1000:1000 /data/platform/openpanel'" in cmd
+    )
+    opch = next(
+        i
+        for i, cmd in enumerate(cmds)
+        if "chown -R 101:101 /data/platform/openpanel/op-ch" in cmd
+    )
+    assert opch > blanket, (
+        "op-ch (uid 101) chown must run AFTER the blanket uid-1000 chown"
+    )
+
+
+def test_sync_skips_prod_only_service_on_non_production(monkeypatch) -> None:
+    """prod_only services (observability/analytics: signoz, clickhouse, openpanel)
+    are never deployed to non-production envs — sync() short-circuits to 'skipped'
+    before any vault/dokploy work, so a staging copy is never created."""
+    from common.deploy.deployer import Deployer
+
+    class ObsDeployer(Deployer):
+        service = "signoz"
+        prod_only = True
+
+        @classmethod
+        def env(cls):
+            return {"ENV": "staging"}
+
+    skipped = ObsDeployer.sync(MagicMock(), force=False)
+    assert skipped["action"] == "skipped"
+    assert "prod-only" in skipped["details"]
+
+    # On production the prod-only short-circuit must NOT fire (it deploys normally;
+    # here it proceeds past the check and fails later on missing test env, proving
+    # the skip is non-production-only — not a blanket skip).
+    class ObsDeployerProd(ObsDeployer):
+        @classmethod
+        def env(cls):
+            return {"ENV": "production"}
+
+        @classmethod
+        def ensure_runtime_secrets(cls, c):
+            return True
+
+        @classmethod
+        def apply_secret_supply(cls, c, env=None):
+            return True
+
+        @classmethod
+        def get_compose_content(cls, c):
+            return "version: '3.8'\nservices: {}\n"
+
+        @classmethod
+        def get_remote_config_hash(cls, c):
+            return "different_hash"
+
+        @classmethod
+        def deploy_compose(cls, c, env_vars_dict=None):
+            return {"action": "applied", "details": "deployed"}
+
+    # The process chooses production explicitly: get_env() has no default (#1039).
+    monkeypatch.setenv("DEPLOY_ENV", "production")
+    prod = ObsDeployerProd.sync(MagicMock(), force=False)
+    assert not (prod["action"] == "skipped" and "prod-only" in prod.get("details", ""))
+
+
+class FakeSecrets:
+    def __init__(self, values=None):
+        self.values = dict(values or {})
+        self.set_calls = []
+
+    def get(self, key):
+        return self.values.get(key)
+
+    def set(self, key, value):
+        self.values[key] = value
+        self.set_calls.append((key, value))
+        return True
+
+
+class FakeDokployDeployments:
+    def __init__(self, deployment_snapshots):
+        self.deployment_snapshots = list(deployment_snapshots)
+        self.deploy_calls = 0
+        self.redeploy_calls = 0
+
+    def deploy_compose(self, compose_id):
+        assert compose_id == "compose-1"
+        self.deploy_calls += 1
+
+    def redeploy_compose(self, compose_id):
+        assert compose_id == "compose-1"
+        self.redeploy_calls += 1
+
+    def get_compose(self, compose_id):
+        assert compose_id == "compose-1"
+        if self.deployment_snapshots:
+            return {"deployments": self.deployment_snapshots.pop(0)}
+        return {"deployments": []}
+
+
+class FakeDokployDeploymentApi(FakeDokployDeployments):
+    def __init__(self, compose_snapshots, deployment_api_snapshots):
+        super().__init__(compose_snapshots)
+        self.deployment_api_snapshots = list(deployment_api_snapshots)
+
+    def get_compose_deployments(self, compose_id):
+        assert compose_id == "compose-1"
+        if self.deployment_api_snapshots:
+            return self.deployment_api_snapshots.pop(0)
+        return []
+
+
+class FakeDokployDeploymentApiFailure(FakeDokployDeployments):
+    def get_compose_deployments(self, compose_id):
+        assert compose_id == "compose-1"
+        raise RuntimeError("deployment endpoint unavailable")
+
+
+def _load_deploy_module(relative_path: str, module_name: str):
+    path = ROOT / relative_path
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_preserve_runtime_env_keeps_existing_approle_creds() -> None:
+    """Infra-011.3 / #369 / #1279: AppRole creds (VAULT_ROLE_ID / VAULT_SECRET_ID /
+    VAULT_ADDR) injected out-of-band must survive a redeploy that regenerates the
+    git-derived env, or the migrated vault-agent loses them and crash-loops. Empty
+    placeholders in desired env must not clobber existing runtime values. The legacy
+    static VAULT_APP_TOKEN is no longer preserved."""
+    from common.deploy.deployer import (
+        RUNTIME_ENV_KEYS_TO_PRESERVE,
+        _preserve_runtime_env,
+    )
+
+    assert RUNTIME_ENV_KEYS_TO_PRESERVE == (
+        "VAULT_ROLE_ID",
+        "VAULT_SECRET_ID",
+        "VAULT_ADDR",
+    )
+
+    result = _preserve_runtime_env(
+        "ENV=production\nINTERNAL_DOMAIN=zitian.party\nVAULT_ROLE_ID=",
+        "ENV=old\nVAULT_ROLE_ID=role-abc\nVAULT_SECRET_ID=secret-xyz\n"
+        "VAULT_ADDR=https://vault.zitian.party\nVAULT_APP_TOKEN=hvs.legacy\nSTALE=value",
+    )
+
+    assert result.splitlines() == [
+        "ENV=production",
+        "INTERNAL_DOMAIN=zitian.party",
+        "VAULT_ROLE_ID=role-abc",
+        "VAULT_SECRET_ID=secret-xyz",
+        "VAULT_ADDR=https://vault.zitian.party",
+    ]
+    assert "VAULT_APP_TOKEN" not in result
+
+
+def test_deployer_methods_fail_closed_when_env_key_missing(monkeypatch) -> None:
+    """#1279: Deployer methods must raise EnvironmentNotSetError instead of defaulting
+    to production when the env mapping omits ENV."""
+    from common.core.environ import EnvironmentNotSetError
+    from common.deploy.deployer import Deployer
+
+    class DummyDeployer(Deployer):
+        service = "demo"
+        data_path = "/data/demo"
+
+        @classmethod
+        def env(cls):
+            return {"INTERNAL_DOMAIN": "zitian.party"}
+
+    with pytest.raises(EnvironmentNotSetError):
+        DummyDeployer.data_path_for_env({"INTERNAL_DOMAIN": "zitian.party"})
+
+    with pytest.raises(EnvironmentNotSetError):
+        DummyDeployer.compose_env_base({"INTERNAL_DOMAIN": "zitian.party"})
+
+    with pytest.raises(EnvironmentNotSetError):
+        DummyDeployer.secrets_backend()
+
+    with pytest.raises(EnvironmentNotSetError):
+        DummyDeployer.composing(MagicMock(), {"INTERNAL_DOMAIN": "zitian.party"})
+
+
+def test_parse_env_text_ignores_comments_blanks_and_malformed_lines() -> None:
+    from common.deploy.deployer import _parse_env_text
+
+    assert _parse_env_text("\n# comment\nA=1\nINVALID\nB=two=parts\n") == {
+        "A": "1",
+        "B": "two=parts",
+    }
+
+
+def test_data_path_for_env_requires_isolation_for_non_production(monkeypatch) -> None:
+    from common.deploy.deployer import Deployer
+
+    class DummyDeployer(Deployer):
+        data_path = "/data/app"
+
+    monkeypatch.delenv("ALLOW_SHARED_DATA_PATH", raising=False)
+
+    with pytest.raises(ValueError, match="Non-production requires DATA_PATH"):
+        DummyDeployer.data_path_for_env({"ENV": "staging", "PROJECT": "platform"})
+
+
+def test_data_path_for_env_allows_explicit_suffix_and_override(monkeypatch) -> None:
+    from common.deploy.deployer import Deployer
+
+    class DummyDeployer(Deployer):
+        data_path = "/data/app"
+
+    monkeypatch.delenv("ALLOW_SHARED_DATA_PATH", raising=False)
+
+    assert (
+        DummyDeployer.data_path_for_env(
+            {"ENV": "staging", "PROJECT": "platform", "ENV_SUFFIX": "-staging"}
+        )
+        == "/data/app-staging"
+    )
+    assert (
+        DummyDeployer.data_path_for_env(
+            {"ENV": "staging", "PROJECT": "platform", "DATA_PATH": "/data/custom"}
+        )
+        == "/data/custom"
+    )
+
+
+def test_compose_env_base_filters_empty_optional_values() -> None:
+    from common.deploy.deployer import Deployer
+
+    class DummyDeployer(Deployer):
+        data_path = "/data/app"
+
+    result = DummyDeployer.compose_env_base(
+        {
+            "ENV": "production",
+            "INTERNAL_DOMAIN": "zitian.party",
+            "ENV_DOMAIN_SUFFIX": None,
+        }
+    )
+
+    assert result == {
+        "ENV": "production",
+        "INTERNAL_DOMAIN": "zitian.party",
+        "DATA_PATH": "/data/app",
+    }
+
+
+def test_config_hash_includes_compose_local_mounts_and_docker_copy_sources(
+    tmp_path, monkeypatch
+) -> None:
+    """Infra-011.8: local image/template source changes must force redeploy."""
+    from common.deploy.deployer import Deployer
+
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    app_file = app_dir / "app.py"
+    app_file.write_text("print('v1')\n", encoding="utf-8")
+    mounted_file = tmp_path / "secrets.ctmpl"
+    mounted_file.write_text("TOKEN=v1\n", encoding="utf-8")
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM python:3.11-slim\nCOPY app /app\n", encoding="utf-8")
+    compose = tmp_path / "compose.yaml"
+    compose.write_text(
+        """
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - ./secrets.ctmpl:/etc/secrets.ctmpl:ro
+""",
+        encoding="utf-8",
+    )
+
+    class DummyDeployer(Deployer):
+        compose_path = str(compose)
+
+    before = DummyDeployer.compute_local_config_hash(MagicMock(), {"ENV": "staging"})
+    app_file.write_text("print('v2')\n", encoding="utf-8")
+    after_app_change = DummyDeployer.compute_local_config_hash(
+        MagicMock(), {"ENV": "staging"}
+    )
+    mounted_file.write_text("TOKEN=v2\n", encoding="utf-8")
+    after_mount_change = DummyDeployer.compute_local_config_hash(
+        MagicMock(), {"ENV": "staging"}
+    )
+
+    assert before != after_app_change
+    assert after_app_change != after_mount_change
+
+
+def test_compose_artifact_files_handles_json_copy_and_bind_mounts(tmp_path) -> None:
+    from common.deploy.deployer import _compose_artifact_files
+
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    (app_dir / "main.py").write_text("print('hello')\n", encoding="utf-8")
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text("enabled: true\n", encoding="utf-8")
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(
+        'FROM python:3.12-slim\nCOPY ["app/main.py", "/app/main.py"]\n',
+        encoding="utf-8",
+    )
+    compose = tmp_path / "compose.yaml"
+    compose_content = """
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - type: bind
+        source: ./config.yaml
+        target: /etc/app/config.yaml
+      - type: volume
+        source: named-volume
+        target: /data
+"""
+    compose.write_text(compose_content, encoding="utf-8")
+
+    files = _compose_artifact_files(str(compose), compose_content)
+
+    assert files == sorted({dockerfile, app_dir / "main.py", config_file})
+
+
+def test_compose_artifact_files_ignores_invalid_yaml(tmp_path) -> None:
+    from common.deploy.deployer import _compose_artifact_files
+
+    compose = tmp_path / "compose.yaml"
+
+    assert _compose_artifact_files(str(compose), "services: [") == []
+
+
+def test_deploy_compose_redeploys_when_dokploy_accepts_noop_deploy(monkeypatch):
+    """Infra-011.11: deploy sync must fail fast on missing runtime deployment records."""
+    import common.deploy.deployer as deployer
+    from common.deploy.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _seconds: None)
+    client = FakeDokployDeployments(
+        [
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+            [
+                {"deploymentId": "new", "status": "done"},
+                {"deploymentId": "old", "status": "done"},
+            ],
+        ]
+    )
+
+    Deployer._deploy_compose_with_record_check(
+        client,
+        "compose-1",
+        timeout_seconds=0,
+        interval_seconds=1,
+    )
+
+    assert client.deploy_calls == 1
+    assert client.redeploy_calls == 1
+
+
+def test_deploy_compose_uses_deployment_api_when_compose_snapshot_is_stale(monkeypatch):
+    """Infra-011.11: deploy proof must use deployment.allByCompose when available —
+    and (#629) `running` is not a result: the wait continues until the record is done."""
+    import common.deploy.deployer as deployer
+    from common.deploy.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _seconds: None)
+    client = FakeDokployDeploymentApi(
+        compose_snapshots=[
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+        ],
+        deployment_api_snapshots=[
+            [{"deploymentId": "old", "status": "done"}],
+            [
+                {"deploymentId": "old", "status": "done"},
+                {"deploymentId": "new", "status": "running"},
+            ],
+            [
+                {"deploymentId": "old", "status": "done"},
+                {"deploymentId": "new", "status": "done"},
+            ],
+        ],
+    )
+    Deployer._deploy_compose_with_record_check(
+        client,
+        "compose-1",
+        timeout_seconds=5,
+        interval_seconds=1,
+    )
+    assert client.deploy_calls == 1
+    assert client.redeploy_calls == 0
+
+
+def test_deploy_compose_falls_back_when_deployment_api_fails(monkeypatch):
+    """Infra-011.11: deploy proof keeps compose snapshot as compatibility fallback."""
+    import common.deploy.deployer as deployer
+    from common.deploy.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _seconds: None)
+    client = FakeDokployDeploymentApiFailure(
+        [
+            [{"deploymentId": "old", "status": "done"}],
+            [
+                {"deploymentId": "old", "status": "done"},
+                {"deploymentId": "new", "status": "running"},
+            ],
+            [
+                {"deploymentId": "old", "status": "done"},
+                {"deploymentId": "new", "status": "done"},
+            ],
+        ]
+    )
+    Deployer._deploy_compose_with_record_check(
+        client,
+        "compose-1",
+        timeout_seconds=5,
+        interval_seconds=1,
+    )
+    assert client.deploy_calls == 1
+    assert client.redeploy_calls == 0
+
+
+def test_deploy_compose_never_retriggers_a_deployment_that_is_still_running(
+    monkeypatch,
+):
+    """#629: on 2026-09-07/08 the record appeared 45–200 s after `compose.deploy` (Dokploy
+    clones infra2 first) and the 60 s wait fell back to `compose.redeploy`, queueing a
+    second deployment while the first went on. A record of ours that exists is never
+    re-triggered: the deadline raises instead."""
+    import pytest
+
+    import common.deploy.deployer as deployer
+    from common.deploy.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _seconds: None)
+    client = FakeDokployDeployments(
+        [
+            [{"deploymentId": "old", "status": "done"}],
+            [
+                {"deploymentId": "old", "status": "done"},
+                {"deploymentId": "new", "status": "running"},
+            ],
+        ]
+    )
+    with pytest.raises(RuntimeError, match="still 'running'.*not re-triggering"):
+        Deployer._deploy_compose_with_record_check(
+            client,
+            "compose-1",
+            timeout_seconds=0,
+            interval_seconds=1,
+        )
+    assert client.deploy_calls == 1
+    assert client.redeploy_calls == 0
+
+
+def test_deploy_compose_fails_when_redeploy_has_no_runtime_record(monkeypatch):
+    """Infra-011.11: deploy sync fails instead of reporting success on stale runtime."""
+    import pytest
+    import common.deploy.deployer as deployer
+    from common.deploy.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _seconds: None)
+    client = FakeDokployDeployments(
+        [
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+            [{"deploymentId": "old", "status": "done"}],
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="did not produce a new deployment record"):
+        Deployer._deploy_compose_with_record_check(
+            client,
+            "compose-1",
+            timeout_seconds=0,
+            interval_seconds=1,
+        )
+
+    assert client.deploy_calls == 1
+    assert client.redeploy_calls == 1
+
+
+def test_deployment_ids_accepts_id_or_deployment_id() -> None:
+    from common.deploy.deployer import Deployer
+
+    assert Deployer._deployment_ids(
+        [{"deploymentId": "deploy-1"}, {"id": "deploy-2"}, {"deploymentId": ""}, {}]
+    ) == {"deploy-1", "deploy-2"}
+
+
+def test_get_compose_deployments_filters_malformed_records() -> None:
+    from common.deploy.deployer import Deployer
+
+    class Client:
+        def get_compose_deployments(self, compose_id):
+            assert compose_id == "compose-1"
+            return [{"deploymentId": "ok"}, "bad", None]
+
+    assert Deployer._get_compose_deployments(Client(), "compose-1") == [
+        {"deploymentId": "ok"}
+    ]
+
+
+def test_wait_for_new_deployment_record_fails_on_error_status(monkeypatch) -> None:
+    import common.deploy.deployer as deployer
+    from common.deploy.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
+
+    class Client:
+        def get_compose_deployments(self, compose_id):
+            return [{"deploymentId": "new", "status": "error"}]
+
+    with pytest.raises(RuntimeError, match="entered error"):
+        Deployer._wait_for_new_deployment_record(
+            Client(), "compose-1", {"old"}, timeout_seconds=0, interval_seconds=1
+        )
+
+
+def test_wait_for_new_deployment_record_accepts_success_status(monkeypatch) -> None:
+    import common.deploy.deployer as deployer
+    from common.deploy.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
+
+    class Client:
+        def get_compose_deployments(self, compose_id):
+            return [{"id": "new", "status": "successful"}]
+
+    assert (
+        Deployer._wait_for_new_deployment_record(
+            Client(), "compose-1", {"old"}, timeout_seconds=0, interval_seconds=1
+        )
+        is True
+    )
+
+
+def test_wait_for_new_deployment_record_raises_when_ours_is_still_in_progress(
+    monkeypatch,
+) -> None:
+    """`queued`/`running` at the deadline is neither "no record" (which would let the
+    caller re-trigger) nor success: it raises, naming the state and the env override."""
+    import pytest
+
+    import common.deploy.deployer as deployer
+    from common.deploy.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
+
+    class Client:
+        def get_compose_deployments(self, compose_id):
+            return [{"deploymentId": "new", "status": "queued"}]
+
+    with pytest.raises(RuntimeError, match="still 'queued' after 0s"):
+        Deployer._wait_for_new_deployment_record(
+            Client(), "compose-1", {"old"}, timeout_seconds=0, interval_seconds=1
+        )
+
+
+def test_wait_for_new_deployment_record_raises_when_record_status_is_empty_or_none(
+    monkeypatch,
+) -> None:
+    import common.deploy.deployer as deployer
+    from common.deploy.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
+
+    class Client:
+        def get_compose_deployments(self, compose_id):
+            return [{"deploymentId": "new", "status": ""}]
+
+    with pytest.raises(RuntimeError, match="still 'unknown' after 0s"):
+        Deployer._wait_for_new_deployment_record(
+            Client(), "compose-1", {"old"}, timeout_seconds=0, interval_seconds=1
+        )
+
+
+def test_wait_for_new_deployment_record_waits_through_running_to_done(
+    monkeypatch,
+) -> None:
+    import common.deploy.deployer as deployer
+    from common.deploy.deployer import Deployer
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _seconds: None)
+    statuses = iter(["running", "running", "done"])
+
+    class Client:
+        def get_compose_deployments(self, compose_id):
+            return [{"deploymentId": "new", "status": next(statuses)}]
+
+    assert (
+        Deployer._wait_for_new_deployment_record(
+            Client(), "compose-1", {"old"}, timeout_seconds=5, interval_seconds=1
+        )
+        is True
+    )
+
+
+def test_wait_for_new_deployment_record_ignores_an_unrelated_concurrent_deploy(
+    monkeypatch,
+) -> None:
+    """infra2#525 finding 2: identical pattern to
+    common.deploy.promote.wait_for_rollout -- "not in previous_ids" alone can't tell an
+    unrelated deploy's record apart from our own. A record with a start timestamp
+    before min_started_at (the epoch just before WE called deploy/redeploy_compose)
+    cannot be ours and must be skipped rather than reported as our own success."""
+    import common.deploy.deployer as deployer
+    from common.deploy.deployer import Deployer
+    from common.deploy.queue import parse_epoch_seconds
+
+    monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
+
+    unrelated = {
+        "deploymentId": "unrelated",
+        "status": "done",
+        "createdAt": "2026-07-18T00:00:00.000Z",
+    }
+    trigger_epoch = parse_epoch_seconds("2026-07-18T00:04:00.000Z")
+
+    class Client:
+        def get_compose_deployments(self, compose_id):
+            return [unrelated]
+
+    assert (
+        Deployer._wait_for_new_deployment_record(
+            Client(),
+            "compose-1",
+            {"old"},
+            timeout_seconds=0,
+            interval_seconds=1,
+            min_started_at=trigger_epoch,
+        )
+        is False
+    )
+
+
+def test_wait_for_new_deployment_record_accepts_our_own_record_after_unrelated_one(
+    monkeypatch,
+) -> None:
+    """Complements the ignore test: once OUR record (started at/after
+    min_started_at) shows up alongside the earlier unrelated one, it is accepted."""
+    import common.deploy.deployer as deployer
+    from common.deploy.deployer import Deployer
+    from common.deploy.queue import parse_epoch_seconds
+
+    monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
+
+    unrelated = {
+        "deploymentId": "unrelated",
+        "status": "done",
+        "createdAt": "2026-07-18T00:00:00.000Z",
+    }
+    ours = {
+        "deploymentId": "ours",
+        "status": "done",
+        "createdAt": "2026-07-18T00:05:00.000Z",
+    }
+    trigger_epoch = parse_epoch_seconds("2026-07-18T00:04:00.000Z")
+
+    class Client:
+        def get_compose_deployments(self, compose_id):
+            return [unrelated, ours]
+
+    assert (
+        Deployer._wait_for_new_deployment_record(
+            Client(),
+            "compose-1",
+            {"old"},
+            timeout_seconds=0,
+            interval_seconds=1,
+            min_started_at=trigger_epoch,
+        )
+        is True
+    )
+
+
+class TestDeployerVaultTokenPreflight:
+    """Deployment sync must fail before touching runtime when Vault tokens are bad."""
+
+    @pytest.fixture(autouse=True)
+    def _production_process_environment(self, monkeypatch):
+        # The process chooses production explicitly: get_env() has no default (#1039).
+        monkeypatch.setenv("DEPLOY_ENV", "production")
+
+    def _deployer(self):
+        from common.deploy.deployer import Deployer
+
+        class DummyDeployer(Deployer):
+            service = "app"
+            project = "finance_report"
+            compose_path = "finance_report/finance_report/10.app/compose.yaml"
+            data_path = ""
+            secret_key = ""
+
+        return DummyDeployer
+
+    def test_sync_fails_when_vault_token_is_invalid(self, monkeypatch):
+        import common.deploy.deployer as deployer
+
+        dummy = self._deployer()
+        monkeypatch.setattr(deployer, "validate_env", lambda: [])
+        monkeypatch.setattr(
+            dummy,
+            "verify_vault_app_token",
+            classmethod(lambda cls: {"valid": False, "details": "Token invalid"}),
+        )
+
+        result = dummy.sync(MagicMock())
+
+        assert result["action"] == "failed"
+        assert "VAULT_APP_TOKEN issue" in result["details"]
+        assert "Token invalid" in result["details"]
+
+    def test_sync_fails_when_vault_token_ttl_is_low(self, monkeypatch):
+        import common.deploy.deployer as deployer
+
+        dummy = self._deployer()
+        monkeypatch.setattr(deployer, "validate_env", lambda: [])
+        monkeypatch.setattr(
+            dummy,
+            "verify_vault_app_token",
+            classmethod(lambda cls: {"valid": True, "ttl_hours": 12}),
+        )
+
+        result = dummy.sync(MagicMock())
+
+        assert result["action"] == "failed"
+        assert "expires in 12h" in result["details"]
+
+    def test_sync_fails_when_vault_token_cannot_be_verified(self, monkeypatch):
+        import common.deploy.deployer as deployer
+
+        dummy = self._deployer()
+        monkeypatch.setattr(deployer, "validate_env", lambda: [])
+
+        def raise_error():
+            raise RuntimeError("Vault unavailable")
+
+        monkeypatch.setattr(
+            dummy, "verify_vault_app_token", classmethod(lambda cls: raise_error())
+        )
+
+        result = dummy.sync(MagicMock())
+
+        assert result["action"] == "failed"
+        assert "Could not verify VAULT_APP_TOKEN" in result["details"]
+        assert "Vault unavailable" in result["details"]
+
+    def test_verify_vault_app_token_skips_for_approle_service(self, monkeypatch):
+        """#369: a vestigial VAULT_APP_TOKEN on an AppRole service must not gate deploys —
+        it would expire un-renewed and hard-block a redeploy that would clean it up."""
+        import common.deploy.deployer as deployer
+        import common.deploy.dokploy_client as dokploy
+
+        dummy = self._deployer()
+
+        class _Client:
+            def find_compose_by_name(self, *_a, **_k):
+                return {
+                    "env": "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\nVAULT_APP_TOKEN=hvs.stale"
+                }
+
+        monkeypatch.setattr(dokploy, "get_dokploy", lambda **_k: _Client())
+        monkeypatch.setattr(
+            dummy,
+            "env",
+            classmethod(
+                lambda cls: {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"}
+            ),
+        )
+
+        def _boom(*_a, **_k):
+            raise AssertionError("AppRole service must not hit verify_vault_token")
+
+        monkeypatch.setattr(deployer, "verify_vault_token", _boom)
+
+        status = dummy.verify_vault_app_token()
+        assert status["valid"] is True
+        assert "AppRole" in status["details"]
+
+
+def test_s3_sync_secret_hook_repairs_root_user(monkeypatch) -> None:
+    """Infra-011: sync must ensure all S3 template fields, not only password."""
+    module = _load_deploy_module("platform/03.s3/deploy.py", "s3_deploy_test")
+    secrets = FakeSecrets({"root_password": "existing"})
+
+    monkeypatch.setattr(
+        module.S3Deployer, "secrets_backend", classmethod(lambda cls: secrets)
+    )
+
+    assert module.S3Deployer.ensure_runtime_secrets() is True
+
+    assert secrets.values["root_user"] == "admin"
+    assert secrets.values["root_password"] == "existing"
+
+
+def test_authentik_sync_secret_hook_repairs_bootstrap_fields(monkeypatch) -> None:
+    """Infra-011: sync must keep Authentik bootstrap template fields complete."""
+    module = _load_deploy_module(
+        "platform/10.authentik/deploy.py", "authentik_deploy_test"
+    )
+    stores = {
+        "postgres": FakeSecrets({"root_password": "pg"}),
+        "redis": FakeSecrets({"password": "redis"}),
+        "authentik": FakeSecrets({}),
+    }
+
+    monkeypatch.setattr(
+        module.AuthentikDeployer,
+        "env",
+        classmethod(
+            lambda cls: {
+                "ENV": "staging",
+                "PROJECT": "platform",
+                "ADMIN_EMAIL": "admin@example.test",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "get_secrets",
+        lambda _project, service, _env: stores[service],
+    )
+
+    assert module.AuthentikDeployer.ensure_runtime_secrets() is True
+
+    assert stores["authentik"].values["secret_key"]
+    assert stores["authentik"].values["bootstrap_password"]
+    assert stores["authentik"].values["bootstrap_email"] == "admin@example.test"
+
+
+def test_base_deployer_ensure_runtime_secrets_passes_for_service_without_secret_key(
+    monkeypatch,
+) -> None:
+    """Services without a manifest and with secret_key = '' require no Vault secrets."""
+    from common.deploy.deployer import Deployer
+
+    class StubNoSecretDeployer(Deployer):
+        service = "unregistered_test_stub"
+        secret_key = ""
+
+    monkeypatch.setenv("DEPLOY_ENV", "production")  # no default (#1039)
+    assert StubNoSecretDeployer.ensure_runtime_secrets() is True
+
+
+def test_base_deployer_creates_missing_vault_secret_path(monkeypatch) -> None:
+    """Infra-011.6: sync repairs an absent Vault path for unmanifested service with secret_key."""
+    from common.deploy.deployer import Deployer
+    from common.security.store import VaultSecrets
+
+    class MissingPathSecrets(FakeSecrets):
+        def get(self, key):
+            raise VaultSecrets.VaultSecretNotFoundError("missing path")
+
+    secrets = MissingPathSecrets()
+
+    class StubWithSecretDeployer(Deployer):
+        service = "unregistered_test_stub"
+        secret_key = "jwt_secret"
+
+    monkeypatch.setattr(
+        StubWithSecretDeployer,
+        "secrets_backend",
+        classmethod(lambda cls, env=None: secrets),
+    )
+
+    monkeypatch.setenv("DEPLOY_ENV", "production")  # no default (#1039)
+    assert StubWithSecretDeployer.ensure_runtime_secrets() is True
+    assert secrets.set_calls
+    assert secrets.set_calls[0][0] == "jwt_secret"
+
+
+# --- truealpha#447: promote.deploy() self-heals via a real Deployer import ------
+
+
+def test_load_deployer_class_returns_the_real_truealpha_app_deployer() -> None:
+    from common.deploy.deployer import load_deployer_class
+
+    cls = load_deployer_class("truealpha/app")
+    assert cls is not None
+    assert cls.__name__ == "AppDeployer"
+    assert cls.service == "app"
+    assert cls.project == "truealpha"
+
+
+def test_load_deployer_class_returns_none_for_an_unknown_service() -> None:
+    from common.deploy.deployer import load_deployer_class
+
+    assert load_deployer_class("nonexistent/service") is None
+    assert load_deployer_class("no-slash-in-this-id") is None
+    assert load_deployer_class("platform/nope") is None
+
+
+def test_secrets_backend_env_override_takes_precedence_over_process_env(
+    monkeypatch,
+) -> None:
+    """truealpha#447: common.deploy.promote.deploy() calls this across staging AND
+    prod within one process — it must not depend on os.environ["ENV"], which
+    nothing sets for that in-process path (unlike the legacy invoke
+    <service>.sync subprocess, which always runs with ENV pre-set)."""
+    from common.deploy.deployer import Deployer
+
+    captured = {}
+
+    class DummyDeployer(Deployer):
+        service = "widget"
+        project = "acme"
+
+        @classmethod
+        def env(cls):
+            return {"ENV": "production"}  # deliberately the WRONG env
+
+    def _fake_get_secrets(project, service, env):
+        captured.update(project=project, service=service, env=env)
+        return FakeSecrets()
+
+    monkeypatch.setattr("common.deploy.deployer.get_secrets", _fake_get_secrets)
+
+    DummyDeployer.secrets_backend(env="staging")
+
+    assert captured == {"project": "acme", "service": "widget", "env": "staging"}
+
+
+def test_secrets_backend_falls_back_to_process_env_when_no_override(
+    monkeypatch,
+) -> None:
+    from common.deploy.deployer import Deployer
+
+    captured = {}
+
+    class DummyDeployer(Deployer):
+        service = "widget"
+        project = "acme"
+
+        @classmethod
+        def env(cls):
+            return {"ENV": "staging"}
+
+    monkeypatch.setattr(
+        "common.deploy.deployer.get_secrets",
+        lambda project, service, env: captured.setdefault("env", env) or FakeSecrets(),
+    )
+
+    DummyDeployer.secrets_backend()
+
+    assert captured["env"] == "staging"
+
+
+# --- #1039: no implicit production; a named target needs no process environment ----
+
+
+class _NoOnePasswordRead:
+    def get(self, key):
+        return None
+
+
+@pytest.fixture
+def no_process_environment(monkeypatch):
+    """A CI process like promote.deploy()'s: INFRA_ENVIRONMENT and DEPLOY_ENV are unset."""
+    monkeypatch.setattr(
+        "common.security.store.OpSecrets", lambda *a, **k: _NoOnePasswordRead()
+    )
+    for name in ("INFRA_ENVIRONMENT", "DEPLOY_ENV", "ENV_SUFFIX"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _stub_deployer(**attrs):
+    from common.deploy.deployer import Deployer
+
+    return type(
+        "StubDeployer", (Deployer,), {"service": "widget", "project": "acme", **attrs}
+    )
+
+
+def test_secrets_backend_with_a_named_env_needs_no_process_environment(
+    monkeypatch, no_process_environment
+) -> None:
+    captured = {}
+
+    def _fake_get_secrets(project, service, env):
+        captured.update(project=project, service=service, env=env)
+        return FakeSecrets()
+
+    monkeypatch.setattr("common.deploy.deployer.get_secrets", _fake_get_secrets)
+
+    _stub_deployer().secrets_backend(env="staging")
+
+    assert captured == {"project": "acme", "service": "widget", "env": "staging"}
+
+
+def test_secrets_backend_without_any_environment_fails_closed(
+    monkeypatch, no_process_environment
+) -> None:
+    from common.core.environ import EnvironmentNotSetError
+
+    def _must_not_reach_vault(project, service, env):
+        raise AssertionError(f"Vault store chosen for env {env!r} without a choice")
+
+    monkeypatch.setattr("common.deploy.deployer.get_secrets", _must_not_reach_vault)
+
+    with pytest.raises(EnvironmentNotSetError, match="DEPLOY_ENV"):
+        _stub_deployer().secrets_backend()
+
+
+def test_ensure_runtime_secrets_with_a_named_env_needs_no_process_environment(
+    no_process_environment,
+) -> None:
+    deployer = _stub_deployer(service="unregistered_test_stub", secret_key="")
+
+    assert deployer.ensure_runtime_secrets(env="staging") is True
+
+
+def test_ensure_runtime_secrets_without_any_environment_fails_closed(
+    no_process_environment,
+) -> None:
+    from common.core.environ import EnvironmentNotSetError
+
+    deployer = _stub_deployer(service="unregistered_test_stub", secret_key="")
+
+    with pytest.raises(EnvironmentNotSetError):
+        deployer.ensure_runtime_secrets()
+
+
+def test_apply_secret_supply_with_a_named_env_needs_no_process_environment(
+    no_process_environment,
+) -> None:
+    deployer = _stub_deployer(service="unregistered_test_stub")
+
+    assert deployer.apply_secret_supply(MagicMock(), env="staging") is True
+
+
+def test_apply_secret_supply_without_any_environment_fails_closed(
+    no_process_environment,
+) -> None:
+    from common.core.environ import EnvironmentNotSetError
+
+    deployer = _stub_deployer(service="unregistered_test_stub")
+
+    with pytest.raises(EnvironmentNotSetError):
+        deployer.apply_secret_supply(MagicMock())
+
+
+def test_env_for_prefers_the_process_environment_and_falls_back_to_the_named_one(
+    monkeypatch, no_process_environment
+) -> None:
+    from common.core.environ import EnvironmentNotSetError, reset_env_cache
+
+    deployer = _stub_deployer()
+
+    # The process has none: the named target stands in, and its suffix follows its name.
+    assert deployer._env_for("staging")["ENV"] == "staging"
+    assert deployer._env_for("staging")["ENV_SUFFIX"] == "-staging"
+    for unnamed in (None, "", "  "):
+        with pytest.raises(EnvironmentNotSetError):
+            deployer._env_for(unnamed)
+
+    # The process has one: it wins, with the operator's ENV_SUFFIX override.
+    monkeypatch.setenv("DEPLOY_ENV", "staging")
+    monkeypatch.setenv("ENV_SUFFIX", "-override")
+    reset_env_cache()
+    assert deployer._env_for("staging")["ENV_SUFFIX"] == "-override"
+    assert deployer._env_for(None)["ENV_SUFFIX"] == "-override"
+
+
+def test_promote_secret_self_heal_needs_no_process_environment(
+    monkeypatch, no_process_environment
+) -> None:
+    """common.deploy.promote runs from a CI process with no INFRA_ENVIRONMENT. It names its
+    target env, and the REAL truealpha deployer must provision that env's store from
+    there (#1039: get_env() has no production default to lean on)."""
+    from common.deploy.deployer import load_deployer_class
+    from common.deploy.promote import ensure_generated_secrets
+
+    deployer_cls = load_deployer_class("truealpha/app")
+    stores = {
+        "staging": FakeSecrets({"DATABASE_URL": "postgres://staging"}),
+        "production": FakeSecrets({"DATABASE_URL": "postgres://prod"}),
+    }
+    monkeypatch.setattr(
+        deployer_cls, "secrets_backend", classmethod(lambda cls, env=None: stores[env])
+    )
+    # load_deployer_class imports the module afresh on each call: pin the patched class.
+    monkeypatch.setattr(
+        "common.deploy.deployer.load_deployer_class", lambda service: deployer_cls
+    )
+
+    ensure_generated_secrets("truealpha/app", "staging")
+
+    assert stores["staging"].values["SECRET_KEY"]
+    assert "SECRET_KEY" not in stores["production"].values
+
+
+def test_truealpha_ensure_runtime_secrets_provisions_the_explicit_env_not_the_process_env(
+    monkeypatch,
+) -> None:
+    """End-to-end against the REAL truealpha AppDeployer: promote.deploy() passes
+    env= explicitly (via ensure_generated_secrets), so this must write to THAT
+    env's Vault store even though nothing sets os.environ["ENV"] for it."""
+    module = _load_deploy_module(
+        "truealpha/truealpha/10.app/deploy.py", "app_deploy_env_test"
+    )
+    stores = {
+        "staging": FakeSecrets({"DATABASE_URL": "postgres://staging"}),
+        "production": FakeSecrets({"DATABASE_URL": "postgres://prod"}),
+    }
+
+    monkeypatch.setattr(
+        module.AppDeployer,
+        "secrets_backend",
+        classmethod(lambda cls, env=None: stores[env]),
+    )
+
+    assert module.AppDeployer.ensure_runtime_secrets(env="staging") is True
+
+    assert stores["staging"].values["SECRET_KEY"]
+    assert stores["staging"].values["APP_SERVICE_DB_PASSWORD"]
+    assert "SECRET_KEY" not in stores["production"].values
+    assert "APP_SERVICE_DB_PASSWORD" not in stores["production"].values
+
+
+def test_portal_deployer_declares_no_runtime_secret_path() -> None:
+    """Infra-011.6: portal sync must not read a Vault path it does not consume."""
+    module = _load_deploy_module("platform/21.portal/deploy.py", "portal_deploy_test")
+
+    assert module.PortalDeployer.secret_key == ""
+
+
+def test_alerting_source_identity_does_not_read_runtime_secrets(monkeypatch) -> None:
+    """Infra-011.19: release drift must be reproducible without 1Password access."""
+    module = _load_deploy_module(
+        "platform/12.alerting/deploy.py", "alerting_source_identity_test"
+    )
+    monkeypatch.setattr(
+        module,
+        "get_secrets",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("source identity must not fetch runtime secrets")
+        ),
+    )
+    env = {
+        "ENV": "production",
+        "INTERNAL_DOMAIN": "example.test",
+        "DATA_PATH": "/data/platform/alerting",
+    }
+
+    source_env = module.AlertingDeployer.source_config_env_base(env)
+
+    assert source_env["ENV"] == "production"
+    assert "INFRA_PROBE_HEARTBEAT_URL" not in source_env
+    assert "INFRA_PROBE_HEARTBEAT_TOKEN" not in source_env
+
+
+def test_alerting_template_fields_are_all_declared_in_its_manifest() -> None:
+    """Lineage: #600 found secrets.ctmpl documenting PROBE_POSTGRES_*/PROBE_S3_* and
+    DOKPLOY_API_KEY while the bespoke 1Password → Vault sync never requested them, so
+    an operator could seed 1Password exactly as told and the probes stayed fail-closed.
+    PR-E replaced that sync with the manifest-driven supply (common/secrets_supply.py):
+    the template is rendered from the same manifest the supply applies, so a field can
+    no longer sit in the template without a declared source. This guards hand edits
+    to the generated template."""
+    from common.security import registry as secrets_registry
+
+    service = secrets_registry.lookup("platform", "alerting")
+    assert service is not None
+    declared = {field.env for field in secrets_registry.merged_manifest(service).fields}
+    ctmpl = (ROOT / "platform/12.alerting/secrets.ctmpl").read_text(encoding="utf-8")
+    referenced = set(re.findall(r"\.Data\.data\.([A-Z_0-9]+)", ctmpl)) | set(
+        re.findall(r'index \.Data\.data "([A-Z_0-9]+)"', ctmpl)
+    )
+    assert referenced, "expected secrets.ctmpl to read at least one Vault field"
+    assert referenced <= declared, sorted(referenced - declared)
+    for key in ("PROBE_POSTGRES_PASSWORD", "PROBE_S3_SECRET_KEY", "DOKPLOY_API_KEY"):
+        assert key in referenced and key in declared
+
+
+def test_alerting_heartbeat_coordinates_only_tolerate_an_absent_vault_path(
+    monkeypatch,
+) -> None:
+    """Review on #648: a missing path (first deploy) renders a heartbeat-less stack,
+    but auth / connectivity errors must surface instead of silently dropping the
+    heartbeat coordinates."""
+    from common.security.store import VaultSecrets
+
+    module = _load_deploy_module(
+        "platform/12.alerting/deploy.py", "alerting_heartbeat_errors_test"
+    )
+    staging = {
+        "ENV": "production",
+        "INTERNAL_DOMAIN": "x.io",
+        "DATA_PATH": "/data/platform/alerting",
+    }
+    monkeypatch.setattr(
+        module.AlertingDeployer, "env", classmethod(lambda cls: dict(staging))
+    )
+
+    class Absent:
+        def get(self, key):
+            raise VaultSecrets.VaultSecretNotFoundError("missing")
+
+    class Denied:
+        def get(self, key):
+            raise VaultSecrets.VaultAuthError("403")
+
+    monkeypatch.setattr(module, "get_secrets", lambda **kwargs: Absent())
+    env = module.AlertingDeployer.compose_env_base(dict(staging))
+    assert "INFRA_PROBE_HEARTBEAT_URL" not in env
+
+    monkeypatch.setattr(module, "get_secrets", lambda **kwargs: Denied())
+    with pytest.raises(VaultSecrets.VaultAuthError):
+        module.AlertingDeployer.compose_env_base(dict(staging))
+
+
+def test_remote_config_identity_reads_cross_plane_service_coordinates(
+    monkeypatch,
+) -> None:
+    from common.deploy.deployer import Deployer
+    import common.deploy.dokploy_client as dokploy
+
+    class DummyDeployer(Deployer):
+        service = "alerting"
+
+    class Client:
+        def find_compose_by_name(self, *_args, **_kwargs):
+            return {
+                "env": "\n".join(
+                    (
+                        "IAC_CONFIG_HASH=runtime",
+                        "IAC_SOURCE_CONFIG_HASH=v1:source",
+                        f"IAC_DEPLOY_REF={'a' * 40}",
+                        "INFRA_IDENTITY_SCHEMA=v1",
+                        "INFRA_MANAGED_BY=infra2",
+                        "INFRA_SERVICE_ID=platform/alerting",
+                        "INFRA_ENVIRONMENT=staging",
+                    )
+                )
+            }
+
+    monkeypatch.setattr(dokploy, "get_dokploy", lambda **_kwargs: Client())
+    monkeypatch.setattr(
+        DummyDeployer,
+        "env",
+        classmethod(lambda cls: {"ENV": "staging", "INTERNAL_DOMAIN": "example.test"}),
+    )
+
+    assert DummyDeployer.get_remote_config_identity() == {
+        "runtime_hash": "runtime",
+        "source_hash": "v1:source",
+        "deploy_ref": "a" * 40,
+        "identity_schema": "v1",
+        "managed_by": "infra2",
+        "service_id": "platform/alerting",
+        "environment": "staging",
+    }
+
+
+def test_runtime_only_config_requires_explicit_secret_free_source_builder() -> None:
+    """Future secret-bearing deployers must not silently fetch secrets in drift CI."""
+    from common.deploy.deployer import Deployer
+
+    class UnsafeDeployer(Deployer):
+        runtime_only_config_keys = frozenset({"TOKEN"})
+
+    with pytest.raises(NotImplementedError, match="source_config_env_base"):
+        UnsafeDeployer.source_config_env_base({"ENV": "production"})
+
+
+def test_await_effective_config_hash_retries_until_settled(monkeypatch):
+    """Async Dokploy settling: a stale/none first read must be retried, not
+    treated as a failure, once the effective hash advances."""
+    import common.deploy.deployer as deployer
+    from common.deploy.deployer import Deployer
+
+    class D(Deployer):
+        service = "x"
+        compose_path = "x/compose.yaml"
+        data_path = "/data/x"
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _s: None)
+    reads = iter([None, "stale", "expected"])
+    monkeypatch.setattr(
+        D, "get_remote_config_hash", classmethod(lambda cls: next(reads))
+    )
+
+    assert D._await_effective_config_hash("expected") == "expected"
+
+
+def test_await_effective_config_hash_times_out_when_unadvanced(monkeypatch):
+    """Fails closed: if the effective hash never advances within the window, the
+    last (stale) value is returned so the caller reports failure."""
+    import common.deploy.deployer as deployer
+    from common.deploy.deployer import Deployer
+
+    class D(Deployer):
+        service = "x"
+        compose_path = "x/compose.yaml"
+        data_path = "/data/x"
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _s: None)
+    clock = iter([0.0, 999.0])  # deadline=60; next check is past it
+    monkeypatch.setattr(deployer.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(D, "get_remote_config_hash", classmethod(lambda cls: "stale"))
+
+    assert D._await_effective_config_hash("expected") == "stale"
+
+
+def test_approle_preflight_passes_for_non_approle_compose(tmp_path):
+    from common.deploy.deployer import Deployer
+
+    cf = tmp_path / "compose.yaml"
+    cf.write_text("services:\n  x:\n    image: foo\n")
+
+    class D(Deployer):
+        service = "x"
+        compose_path = str(cf)
+        data_path = "/data/x"
+
+    D._assert_approle_creds_present("FOO=1")  # no raise
+
+
+def test_approle_preflight_passes_when_creds_present(tmp_path):
+    from common.deploy.deployer import Deployer
+
+    cf = tmp_path / "compose.yaml"
+    cf.write_text("environment:\n  - VAULT_ROLE_ID=${VAULT_ROLE_ID:-}\n")
+
+    class D(Deployer):
+        service = "x"
+        compose_path = str(cf)
+        data_path = "/data/x"
+
+    # VAULT_ADDR is required too (see test below); include it so this stays a happy path.
+    D._assert_approle_creds_present(
+        "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\nVAULT_ADDR=https://vault.example"
+    )  # no raise
+
+
+def test_approle_preflight_requires_vault_addr(tmp_path):
+    """#257 follow-up: an AppRole service with role/secret but NO VAULT_ADDR must fail
+    fast at deploy time — otherwise the vault-agent hangs on an empty address and the
+    service deadlocks on its healthcheck (the compose has no `${VAULT_ADDR:-}` default and
+    the entrypoint guards only role/secret)."""
+    import pytest
+    from common.deploy.deployer import Deployer
+
+    cf = tmp_path / "compose.yaml"
+    cf.write_text(
+        "environment:\n  - VAULT_ROLE_ID=${VAULT_ROLE_ID:-}\n"
+        "  - VAULT_SECRET_ID=${VAULT_SECRET_ID:-}\n  - VAULT_ADDR=${VAULT_ADDR}\n"
+    )
+
+    class D(Deployer):
+        service = "x"
+        compose_path = str(cf)
+        data_path = "/data/x"
+
+    with pytest.raises(ValueError, match="VAULT_ADDR"):
+        D._assert_approle_creds_present(
+            "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s"
+        )  # addr absent
+
+
+def test_approle_preflight_fails_closed_when_creds_missing(tmp_path, monkeypatch):
+    import pytest
+    from common.deploy.deployer import Deployer
+
+    cf = tmp_path / "compose.yaml"
+    cf.write_text(
+        "environment:\n  - VAULT_ROLE_ID=${VAULT_ROLE_ID:-}\n"
+        "  - VAULT_SECRET_ID=${VAULT_SECRET_ID:-}\n"
+    )
+
+    class D(Deployer):
+        service = "app"
+        compose_path = str(cf)
+        data_path = "/data/x"
+        project = "finance_report"
+
+    monkeypatch.setattr(D, "env", classmethod(lambda cls: {"ENV": "staging"}))
+
+    with pytest.raises(ValueError, match="VAULT_ROLE_ID"):
+        D._assert_approle_creds_present("VAULT_ROLE_ID=\nVAULT_SECRET_ID=")
+
+    try:
+        D._assert_approle_creds_present("")
+    except ValueError as exc:
+        assert "vault.setup-approle" in str(exc)
+        assert "finance_report" in str(exc)
+
+
+def test_approle_preflight_propagates_unreadable_compose(tmp_path):
+    """An unreadable compose must NOT silently skip the preflight (fail closed)."""
+    import pytest
+    from common.deploy.deployer import Deployer
+
+    class D(Deployer):
+        service = "x"
+        compose_path = str(tmp_path / "missing.yaml")
+        data_path = "/data/x"
+
+    with pytest.raises(OSError):
+        D._assert_approle_creds_present("FOO=1")
+
+
+def test_approle_preflight_detects_secret_id_only_compose(tmp_path, monkeypatch):
+    """A compose that references only VAULT_SECRET_ID is still an AppRole service."""
+    import pytest
+    from common.deploy.deployer import Deployer
+
+    cf = tmp_path / "compose.yaml"
+    cf.write_text("environment:\n  - VAULT_SECRET_ID=${VAULT_SECRET_ID:-}\n")
+
+    class D(Deployer):
+        service = "app"
+        compose_path = str(cf)
+        data_path = "/data/x"
+
+    monkeypatch.setattr(D, "env", classmethod(lambda cls: {"ENV": "staging"}))
+    with pytest.raises(ValueError, match="VAULT_ROLE_ID|VAULT_SECRET_ID"):
+        D._assert_approle_creds_present("")
+
+
+def test_await_effective_config_hash_tolerates_a_transient_read(monkeypatch):
+    """A single flaky Dokploy read must NOT abort an otherwise-good deploy: the poll
+    multiplies reads, so it retries past a blip and matches once the hash settles."""
+    import common.deploy.deployer as deployer
+    from common.deploy.deployer import Deployer
+
+    class D(Deployer):
+        service = "x"
+        compose_path = "x/compose.yaml"
+        data_path = "/data/x"
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _s: None)
+    calls = {"n": 0}
+
+    def flaky(_cls):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("compose.one 503")  # transient blip
+        return "expected"
+
+    monkeypatch.setattr(D, "get_remote_config_hash", classmethod(flaky))
+    assert D._await_effective_config_hash("expected") == "expected"
+    assert calls["n"] == 2  # blip tolerated, retried, then matched
+
+
+def test_await_effective_config_hash_raises_only_if_whole_window_failed(monkeypatch):
+    """If no clean read EVER lands in the window, surface the last error (don't
+    silently pass) — but only at the deadline, never on a single read."""
+    import common.deploy.deployer as deployer
+    from common.deploy.deployer import Deployer
+
+    class D(Deployer):
+        service = "x"
+        compose_path = "x/compose.yaml"
+        data_path = "/data/x"
+
+    monkeypatch.setattr(deployer.time, "sleep", lambda _s: None)
+    clock = iter([0.0, 0.0, 999.0])  # deadline=60; second check is past it
+    monkeypatch.setattr(deployer.time, "monotonic", lambda: next(clock))
+
+    def always_boom(_cls):
+        raise RuntimeError("compose.one down")
+
+    monkeypatch.setattr(D, "get_remote_config_hash", classmethod(always_boom))
+    with pytest.raises(RuntimeError, match="compose.one down"):
+        D._await_effective_config_hash("expected")
+
+
+def test_record_timeout_and_interval_honor_env_overrides(monkeypatch):
+    """Operator knobs widen BOTH the deploy-record wait and the hash poll (they used
+    to diverge: the poll ignored the env override)."""
+    from common.deploy.deployer import Deployer
+
+    class D(Deployer):
+        service = "x"
+        compose_path = "x/compose.yaml"
+        data_path = "/data/x"
+        deployment_record_timeout_seconds = 60
+        deployment_record_interval_seconds = 3
+
+    monkeypatch.delenv("DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.delenv("DOKPLOY_DEPLOYMENT_RECORD_INTERVAL_SECONDS", raising=False)
+    assert D._resolve_record_timeout() == 60
+    assert D._resolve_record_interval() == 3
+
+    monkeypatch.setenv("DOKPLOY_DEPLOYMENT_RECORD_TIMEOUT_SECONDS", "240")
+    monkeypatch.setenv("DOKPLOY_DEPLOYMENT_RECORD_INTERVAL_SECONDS", "9")
+    assert D._resolve_record_timeout() == 240
+    assert D._resolve_record_interval() == 9
+
+
+def test_config_hash_counts_a_value_that_became_empty() -> None:
+    """A variable flipping from a value to "" changes the container env; the hash must move."""
+    from common.deploy.deployer import _compute_config_hash
+
+    with_value = _compute_config_hash("x: 1", {"A": "1", "B": "2"})
+    emptied = _compute_config_hash("x: 1", {"A": "1", "B": ""})
+    absent = _compute_config_hash("x: 1", {"A": "1"})
+    assert len({with_value, emptied, absent}) == 3
+    assert (
+        _compute_config_hash("x: 1", {"B": "2", "A": "1"}) == with_value
+    )  # order-blind
+
+
+def test_ensure_compose_domains_configures_subdomain_before_deploy():
+    from common.deploy.deployer import Deployer
+
+    class DemoDeployer(Deployer):
+        service = "demo"
+        subdomain = "demo"
+        service_port = 8080
+        service_name = "web"
+
+    client = MagicMock()
+    client.ensure_domains.return_value = {
+        "created": 1,
+        "skipped": 0,
+        "conflicts": [],
+        "errors": [],
+    }
+
+    env_map = {"INTERNAL_DOMAIN": "test.party", "ENV": "staging"}
+    res = DemoDeployer.ensure_compose_domains(client, "cmp-123", env_map)
+
+    assert res["created"] == 1
+    client.ensure_domains.assert_called_once_with(
+        compose_id="cmp-123",
+        desired_domains=[
+            {"host": "demo-staging.test.party", "port": 8080, "https": True}
+        ],
+        service_name="web",
+    )
+
+
+def test_route_preference_path_is_removed() -> None:
+    """No deployer sets a route preference, so the base class and the adapter must not carry one."""
+    import inspect
+
+    from common.deploy import dokploy_adapter
+    from common.deploy.deployer import Deployer
+
+    assert not hasattr(Deployer, "route_preference")
+    parameters = inspect.signature(dokploy_adapter.ensure_compose_domains).parameters
+    assert "route_pref" not in parameters
+    assert not hasattr(dokploy_adapter, "resolve_dokploy_domains")
+
+
+def test_composing_ensures_domains_before_single_deploy(monkeypatch):
+    from common.deploy.deployer import Deployer
+
+    order = []
+
+    class OrderDeployer(Deployer):
+        service = "order-test"
+        subdomain = "order"
+        service_port = 8080
+
+        @classmethod
+        def ensure_compose_domains(cls, client, compose_id, e):
+            order.append("ensure_domains")
+            return {"created": 1, "skipped": 0, "conflicts": [], "errors": []}
+
+        @classmethod
+        def _deploy_compose_with_record_check(cls, client, compose_id):
+            order.append("deploy_compose")
+
+        @classmethod
+        def effective_env_name(cls, e):
+            return "prod"
+
+        @classmethod
+        def env(cls):
+            return {"ENV": "production", "INTERNAL_DOMAIN": "test.party"}
+
+        @classmethod
+        def _assert_approle_creds_present(cls, env):
+            pass
+
+    client = MagicMock()
+    client.find_compose_by_name.return_value = {"composeId": "cmp-order"}
+    client.get_compose_env.return_value = ""
+
+    monkeypatch.setattr(
+        "common.deploy.dokploy_client.ensure_project",
+        lambda *args, **kwargs: ("proj-1", "env-1"),
+    )
+    monkeypatch.setattr(
+        "common.deploy.dokploy_client.get_dokploy",
+        lambda *args, **kwargs: client,
+    )
+
+    OrderDeployer.composing(MagicMock(), {"INTERNAL_DOMAIN": "test.party"})
+
+    assert order == ["ensure_domains", "deploy_compose"]
+
+
+def test_prune_stale_dokploy_domains_when_subdomain_none() -> None:
+    """Issue #942/#953: composes with subdomain=None must prune stale attached Dokploy domains."""
+    from common.deploy.deployer import Deployer
+
+    deleted = []
+
+    class FakeClient:
+        def _request(self, method, endpoint, **kwargs):
+            if endpoint == "domain.byComposeId?composeId=comp-1":
+                return [
+                    {
+                        "domainId": "d-1",
+                        "host": "minio-staging.zitian.party",
+                        "serviceName": "minio",
+                    },
+                    {
+                        "domainId": "d-2",
+                        "host": "s3-staging.zitian.party",
+                        "serviceName": "minio",
+                    },
+                ]
+            return []
+
+        def delete_domain(self, domain_id):
+            deleted.append(domain_id)
+            return {"domainId": domain_id}
+
+    client = FakeClient()
+    Deployer._prune_stale_dokploy_domains(client, "comp-1")
+    assert deleted == ["d-1", "d-2"]
+
+
+def test_s3_compose_has_console_root_redirect() -> None:
+    """Issue #941/#953: console router must redirect root / to /rustfs/console/."""
+    from pathlib import Path
+    import yaml
+
+    compose_path = Path(__file__).resolve().parents[2] / "platform/03.s3/compose.yaml"
+    compose = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+    labels = compose["services"]["s3"]["labels"]
+
+    # Traefik labels must define redirectregex middleware on console router
+    assert any("middlewares=s3-console-redirect" in lbl for lbl in labels)
+    assert any("redirectregex.regex" in lbl for lbl in labels)
+    assert any(
+        "redirectregex.replacement" in lbl and "rustfs/console" in lbl for lbl in labels
+    )
+
+
+def test_sync_pipeline_logs_error_on_preflight_failures(monkeypatch) -> None:
+    """Preflight failures in SyncPipeline must emit Error: via ConsoleLogger so sync_runner captures them."""
+    from common.deploy.deployer import Deployer
+    from common.deploy.sync_pipeline import ConsoleLogger, SyncPipeline
+
+    class DummyDeployer(Deployer):
+        service = "dummy"
+        compose_path = "platform/07.alerting/compose.yaml"
+
+        @classmethod
+        def env(cls):
+            return {"ENV": "staging", "INTERNAL_DOMAIN": "zitian.party"}
+
+        @classmethod
+        def validate_preflight_env(cls):
+            return []
+
+        @classmethod
+        def verify_vault_app_token(cls):
+            raise ImportError(
+                "cannot import name 'assert_after_on_main' from 'infra2_sdk.refs'"
+            )
+
+    errors: list[str] = []
+    logger = ConsoleLogger(error=lambda msg, *_a: errors.append(msg))
+    pipeline = SyncPipeline(
+        deployer=DummyDeployer, context=MagicMock(), force=False, logger=logger
+    )
+    res = pipeline.run()
+    assert res["action"] == "failed"
+    assert any(
+        "Error: Could not verify VAULT_APP_TOKEN:" in e and "assert_after_on_main" in e
+        for e in errors
+    )

@@ -13,7 +13,7 @@
 | **服务定义** | `platform/{nn}.{service}/compose.yaml` | Docker Compose 配置 |
 | **部署任务** | `platform/{nn}.{service}/deploy.py` | pre-compose, composing, post-compose |
 | **状态检查** | `platform/{nn}.{service}/shared_tasks.py` | status() 返回 {is_ready, details} |
-| **公共库** | `libs/` | libs/core, libs/security, libs/backup, libs/observability, libs/deploy |
+| **公共库** | `common/` | common/core, common/security, common/backup, common/observability, common/deploy |
 | **CLI 工具** | `tools/` | env_tool.py, dokploy_env.py, local_init.py |
 
 > **Note**: 服务部署通过 Dokploy API 完成（需要 `DOKPLOY_API_KEY` 或 1Password 中的对应字段）。`env_tool` 仅管理 1Password/Vault secrets。
@@ -21,8 +21,8 @@
 ### Code as SSOT 索引
 
 - **任务加载器**: [`tasks.py`](https://github.com/wangzitian0/infra2/blob/main/tasks.py)
-- **基类与部署引擎**: [`libs/deploy/`](https://github.com/wangzitian0/infra2/blob/main/libs/deploy/) · [`libs/deploy/deployer.py`](https://github.com/wangzitian0/infra2/blob/main/libs/deploy/deployer.py)
-- **领域核心与公共函数**: [`libs/core/`](https://github.com/wangzitian0/infra2/blob/main/libs/core/) · [`libs/common.py`](https://github.com/wangzitian0/infra2/blob/main/libs/common.py)
+- **基类与部署引擎**: [`common/deploy/`](https://github.com/wangzitian0/infra2/blob/main/common/deploy/) · [`common/deploy/deployer.py`](https://github.com/wangzitian0/infra2/blob/main/common/deploy/deployer.py)
+- **领域核心与公共函数**: [`common/core/`](https://github.com/wangzitian0/infra2/blob/main/common/core/) · [`common/common.py`](https://github.com/wangzitian0/infra2/blob/main/common/common.py)
 
 ---
 
@@ -30,7 +30,7 @@
 
 ```mermaid
 flowchart TB
-    subgraph Libs["libs/ (领域开发库)"]
+    subgraph Libs["common/ (领域开发库)"]
         Core[core/]
         Security[security/]
         Backup[backup/]
@@ -208,4 +208,4 @@ DEPLOY_ENV=staging invoke vault.setup-approle --project=finance_report
 ## Used by
 
 - [platform/README.md](https://github.com/wangzitian0/infra2/blob/main/platform/README.md)
-- [libs/README.md](https://github.com/wangzitian0/infra2/blob/main/libs/README.md)
+- [common/README.md](https://github.com/wangzitian0/infra2/blob/main/common/README.md)

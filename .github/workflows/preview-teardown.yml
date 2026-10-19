@@ -58,7 +58,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install runtime dependencies
-        # libs/env.py reads secret stores through infra2-sdk; install the wheel uv.lock
+        # common/env.py reads secret stores through infra2-sdk; install the wheel uv.lock
         # pins, hash-verified, so this job runs the same code as the runner (#649, #1115).
         run: |
           sdk="$(python tools/sdk_requirement.py)"

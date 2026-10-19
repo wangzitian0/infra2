@@ -174,7 +174,7 @@ as completed; see each issue's linked PRs. The epic infra2#459 was closed as **n
 coordinate-ize/inventory/generate approach converged into boundary governance (finance_report#876, #1435, #465),
 so phases 3–4 (app alignment, cross-repo chain view — finance_report#1491/#1492) were not pursued and #460/#461
 stay frozen, not expanded. Live proofs of what shipped: `docs/ssot/ci-gate-inventory.yaml`,
-`docs/ssot/delivery-stages.yaml`, `tools/ci_gate_audit.py`, `libs/tests/test_ci_gate_audit.py`.
+`docs/ssot/delivery-stages.yaml`, `tools/ci_gate_audit.py`, `common/tests/test_ci_gate_audit.py`.
 
 ## Change Log
 

@@ -15,7 +15,7 @@ Deployer (#541 — today ``finance_report/app`` only; see :func:`canary_services
 (``pr-<CANARY_PR>`` — a number no real PR will reuse), so it never touches staging/prod
 or a real PR's stack. ``--service`` overrides the registry set with ONE explicit
 preview-capable service (#522/#538) — anything registered in
-``libs.deploy.env_config.preview_service_config`` works (e.g. ``truealpha/app``), even if
+``common.deploy.env_config.preview_service_config`` works (e.g. ``truealpha/app``), even if
 it has not opted into the scheduled canary via the Deployer flag.
 
     run_canary(...)  -> deploy_v2(type=canary, version_ref) -> health 200 -> down (delete volumes)
@@ -42,7 +42,7 @@ import sys
 import time
 from dataclasses import dataclass
 
-import httpx  # transport errors from libs.deploy.dokploy_client surface as httpx exceptions
+import httpx  # transport errors from common.deploy.dokploy_client surface as httpx exceptions
 from infra2_sdk.delivery import (
     FailureDomain,
     StageResult,
@@ -50,11 +50,11 @@ from infra2_sdk.delivery import (
     make_stage_result,
 )
 
-from libs.core.environ import infra_domain
-from libs.deploy.preview import check_containers_absent, down
-from libs.deploy.contract import DeployTarget
-from libs.deploy.env_config import CANARY_SLOT
-from tools.deploy_v2 import deploy_v2
+from common.core.environ import infra_domain
+from common.deploy.preview import check_containers_absent, down
+from common.deploy.contract import DeployTarget
+from common.deploy.env_config import CANARY_SLOT
+from common.deploy.v2 import deploy_v2
 
 _DEFAULT_SERVICE = "finance_report/app"
 
@@ -69,7 +69,7 @@ def canary_services() -> list[str]:
     closed on an empty set: a scheduled canary that silently probes nothing is
     worse than a red one.
     """
-    from libs.core.registry import service_attrs
+    from common.core.registry import service_attrs
 
     services = sorted(
         service_id
@@ -186,7 +186,7 @@ def run_canary(
 
     ``service`` selects the preview-capable service under test (default
     ``finance_report/app``; any service registered in
-    ``libs.deploy.env_config.preview_service_config`` works, e.g. ``truealpha/app``).
+    ``common.deploy.env_config.preview_service_config`` works, e.g. ``truealpha/app``).
     ``version_ref`` is any code surface (main | vX.Y.Z | <sha>); ``iac_ref`` pins the
     authoritative infra2 commit. ``iac_clone_ref`` is an optional preview-only transport
     branch that must resolve to that commit. deploy_v2 resolves both. Raises whatever
@@ -310,7 +310,7 @@ def alert_failure(env, *, domain: str, detail: str, args, duration_ms: int = 0) 
     code. A red deploy canary means the shared deploy_v2 path is broken, so a real
     staging/prod deploy would likely fail the same way.
     """
-    from libs.alerting import deliver_out_of_band_text
+    from common.alerting import deliver_out_of_band_text
 
     evidence = make_canary_stage_result(
         domain=domain,
@@ -341,7 +341,7 @@ def main(argv: list[str] | None = None) -> int:
         "--service",
         default=None,
         help="explicit preview-capable service to canary (any service registered in "
-        "libs.deploy.env_config.preview_service_config, e.g. truealpha/app — #522/#538). "
+        "common.deploy.env_config.preview_service_config, e.g. truealpha/app — #522/#538). "
         "Default: every registry service declaring deploy_v2_canary=True (#541), "
         "today finance_report/app only.",
     )
@@ -378,7 +378,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     # Imported lazily so importing the module (and its unit tests) needs no Dokploy creds.
-    from libs.deploy.dokploy_client import get_dokploy
+    from common.deploy.dokploy_client import get_dokploy
 
     client = get_dokploy(host=f"cloud.{infra_domain()}")
     # --service = explicit single-service override (#538); default = every
@@ -411,7 +411,7 @@ def _canary_one(client, args, service: str) -> int:
             timeout=args.timeout,
         )
     except (ValueError, RuntimeError, TimeoutError, httpx.HTTPError) as exc:
-        # httpx.HTTPError covers Dokploy transport/auth/API failures from libs.deploy.dokploy_client —
+        # httpx.HTTPError covers Dokploy transport/auth/API failures from common.deploy.dokploy_client —
         # the probe must exit cleanly (code 1 + one line), not dump a traceback.
         domain, detail, rc = failure_domain(exc), str(exc), 1
         torn_down = bool(getattr(exc, "torn_down", False))

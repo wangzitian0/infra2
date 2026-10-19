@@ -11,7 +11,7 @@ import importlib.util
 import sys
 from typing import Optional
 from dotenv import load_dotenv
-from libs.console import success, error, warning
+from common.console import success, error, warning
 
 # Load optional local overrides if present.
 load_dotenv()
@@ -75,7 +75,7 @@ def _load_project(ns, root, project_name, prefix=""):
         root: Root directory path
         project_name: Name of the project (e.g., 'platform', 'finance_report')
         prefix: Optional task-name prefix (e.g. 'fr-') to avoid conflicts with
-            platform services. Must match discover_services() in libs/deploy/deployer.py.
+            platform services. Must match discover_services() in common/deploy/deployer.py.
     """
     project_dir = root / project_name
     if not project_dir.exists():
@@ -160,7 +160,7 @@ def _load_tools(ns, root):
 
 def load_all():
     """Load all modules from all projects"""
-    from libs.core.environ import validate_env
+    from common.core.environ import validate_env
     from invoke import task
 
     @task

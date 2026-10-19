@@ -12,7 +12,7 @@ Verifies the physical execution state of Canary Todo (platform/30.todo) across:
 Usage:
   python -m tools.canary_verify [--env production|staging] [--json]
 
-The trace and log queries come from `libs.observability.signoz_queries`. They
+The trace and log queries come from `common.observability.signoz_queries`. They
 filter on the service, on the environment and on the freshness window.
 
 The monitoring pillar judges the ledger on recent failures (#1223). A deploy
@@ -36,7 +36,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from libs.observability.signoz_queries import (
+from common.observability.signoz_queries import (
     DEFAULT_WINDOW_SECONDS,
     logs_query,
     traces_query,
@@ -220,7 +220,7 @@ def _evaluate_ledger_signal(
     2. the last failed run is older than the window and the last ok run is inside it.
 
     `lastFailAt` and `lastOkAt` are the epoch seconds that the probe runner writes
-    (`libs.observability.local_ledger`). A signal with failures and a missing or
+    (`common.observability.local_ledger`). A signal with failures and a missing or
     malformed time fails the check: the ledger then does not say how old they are.
     """
     details: dict[str, Any] = {"window_seconds": window_seconds}

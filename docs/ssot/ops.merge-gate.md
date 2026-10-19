@@ -118,7 +118,7 @@ The lock is the GitHub environment `production`. The gate reads four facts from 
 4. The policies are exactly branch `main` and tag `v*`.
 
 The gate also applies the production contract to every workflow file of the head.
-The contract tables are in `libs/gate/production_contract.py`.
+The contract tables are in `common/gate/production_contract.py`.
 The lock holds when the four facts are true and the head satisfies the contract. Then:
 
 - The agent merges a workflow edit, except in a workflow that defines a required check.
@@ -127,7 +127,7 @@ The lock holds when the four facts are true and the head satisfies the contract.
   So it cannot show that a required job still checks the same thing.
   The gate derives these workflows from the `blocks_merge: true` gates in `ci-gate-inventory.yaml`.
   When the gate cannot read such a gate, the lock releases no workflow file.
-  A file on `OWNER_HELD_WORKFLOWS` in `libs/gate/production_contract.py` is also held. That list is empty by decision of 2026-10-08.
+  A file on `OWNER_HELD_WORKFLOWS` in `common/gate/production_contract.py` is also held. That list is empty by decision of 2026-10-08.
 - A deploy-triggering path does not need the owner. Each job named as production waits for the environment reviewer.
 
 Fail closed: when a fact is false or unreadable, the earlier rules apply to every other file. The verdict names each failure.
@@ -135,9 +135,9 @@ When the lock holds, these changes still need the owner: the gate code and data,
 Two exits stay open. A rule-text file clears with a quoted owner instruction in the PR body.
 A change to `ci-gate-inventory.yaml` clears when the direction proof shows it is tighter.
 A file that Python or pytest runs before gate code also needs the owner.
-Examples: a root module such as `yaml.py`, a package that replaces a gate module, and a `conftest.py` in `libs/tests`.
+Examples: a root module such as `yaml.py`, a package that replaces a gate module, and a `conftest.py` in `common/tests`.
 Bytecode, `.so` and `.pth` files, virtual environments and `sitecustomize.py` also need the owner, at any depth.
-`pytest.ini`, `tox.ini`, `setup.cfg` and `.coveragerc` need the owner at the root, in `libs/` and in `libs/tests/`.
+`pytest.ini`, `tox.ini`, `setup.cfg` and `.coveragerc` need the owner at the root, in `common/` and in `common/tests/`.
 The gate compares paths case-folded, because the disk of the gate host does not tell case apart.
 `pyproject.toml` stays outside the gate, because dependency edits are common.
 

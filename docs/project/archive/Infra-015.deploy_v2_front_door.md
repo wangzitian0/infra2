@@ -40,9 +40,9 @@ The four axes are orthogonal; completeness is proven in
 |---------------|---------|-------|
 | app, fixed env | `deploy_primitive` | staging / prod |
 | app, preview | `preview_lifecycle` | the `preview/*` types |
-| **`iac_pinned`** (all non-app) | **`iac_runner` `/deploy` webhook** | via `libs/deploy/iac_runner_client`, HMAC-SHA256 signed; `version_ref` unused |
+| **`iac_pinned`** (all non-app) | **`iac_runner` `/deploy` webhook** | via `common/deploy/iac_runner_client`, HMAC-SHA256 signed; `version_ref` unused |
 
-`iac_pinned` is **derived** from `libs/core/registry` (Infra-013), never a
+`iac_pinned` is **derived** from `common/core/registry` (Infra-013), never a
 hand-copied list — adding a platform service cannot drift the deploy registry.
 
 ## Trigger model (SSOT §4.6 — the corrected model)
@@ -87,10 +87,10 @@ input-drift trigger and still enters through `deploy_v2`.
   across them; the path is verified across service classes (below), not per-service.
 
 ## Verification ("The Proof")
-- [x] `pytest libs/tests/test_iac_runner_deploy_result.py` — signed webhook
+- [x] `pytest common/tests/test_iac_runner_deploy_result.py` — signed webhook
   formula, wait/gate on terminal status, cutover assertions (old "Trigger IaC
   Runner" step + `platform/**` push paths gone).
-- [x] `pytest libs/tests/test_service_registry.py` — sync_runner service set is
+- [x] `pytest common/tests/test_service_registry.py` — sync_runner service set is
   derived, not hand-listed (AST drift guard).
 - [x] **Live, post-cutover on `main`** — verified across classes:
   - backing store: `platform/redis` (#361), `platform/postgres` (wait/gate
@@ -102,7 +102,7 @@ input-drift trigger and still enters through `deploy_v2`.
 ## References
 - [SSOT: core.environments §4.6 / §4.7.2](../../ssot/core.environments.md)
 - [SSOT: ops.pipeline](../../ssot/ops.pipeline.md)
-- `libs/deploy/iac_runner_client.py`, `tools/deploy_v2.py`, `tools/deploy_contract.py`
+- `common/deploy/iac_runner_client.py`, `tools/deploy_v2.py`, `tools/deploy_contract.py`
 - Root: finance_report#1072 · cutover issue #370
 - [[Infra-013]] service registry SSOT (the registry deploy_v2 derives from)
 

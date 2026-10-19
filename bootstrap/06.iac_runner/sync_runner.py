@@ -30,9 +30,9 @@ EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 REPO_NAME = Path(urlparse(GIT_REPO_URL).path).stem
 
 # The iac-runner image bakes only this directory (build context = here), so
-# `libs/` is NOT importable from /app. The dependency matcher + manifest live in
+# `common/` is NOT importable from /app. The dependency matcher + manifest live in
 # the checked-out repo; put it on the path so the lazy
-# `from libs.deploy.dependencies import ...` calls resolve (after update_repo()).
+# `from common.deploy.dependencies import ...` calls resolve (after update_repo()).
 _CHECKOUT_PATH = str(WORKSPACE / REPO_NAME)
 if _CHECKOUT_PATH not in sys.path:
     sys.path.insert(0, _CHECKOUT_PATH)
@@ -55,20 +55,20 @@ _BOOTSTRAP_TASKS = {
 
 
 def _service_task_map() -> dict[str, "str | None"]:
-    """service_id -> invoke sync task, DERIVED from libs.deploy.deployer.discover_services (the single
+    """service_id -> invoke sync task, DERIVED from common.deploy.deployer.discover_services (the single
     source) instead of a hand-maintained parallel list (Infra-013, same as deploy_contract).
 
-    Lazy import: in the iac-runner image `libs/` is on sys.path only AFTER update_repo() checks
+    Lazy import: in the iac-runner image `common/` is on sys.path only AFTER update_repo() checks
     the repo out, and every caller runs post-checkout, so this resolves at call time.
     """
-    from libs.deploy.deployer import discover_services
+    from common.deploy.deployer import discover_services
 
     return {**discover_services(), **_BOOTSTRAP_TASKS}
 
 
 def _all_services() -> list[str]:
-    """Every deployable service_id (= libs.deploy.deployer.discover_services keys), sorted."""
-    from libs.deploy.deployer import discover_services
+    """Every deployable service_id (= common.deploy.deployer.discover_services keys), sorted."""
+    from common.deploy.deployer import discover_services
 
     return sorted(discover_services())
 
@@ -186,7 +186,7 @@ def diagnose_failure(stderr: str, stdout: str = "") -> dict[str, str]:
         }
 
     # #810: a TLS/connection blip mid a secrets-supply Vault call (SSL EOF, a reset or
-    # aborted connection) -- libs/secrets_supply.py's retrying_transport already retried
+    # aborted connection) -- common/secrets_supply.py's retrying_transport already retried
     # this with #759's backoff before giving up, so an operator does not need to open a
     # container to see "it failed once"; they need to know it's a network blip, not a
     # config problem, and how many times it already retried.
@@ -248,7 +248,7 @@ MAX_VERDICT_LINES = 12
 
 
 def verdict_lines(stdout: str, limit: int = MAX_VERDICT_LINES) -> list[str]:
-    """The deployer's own verdict lines — what libs.console prints as ✅ / ❌ / ⚠️
+    """The deployer's own verdict lines — what common.console prints as ✅ / ❌ / ⚠️
     (`in service — 2 service(s) running and healthy`, `deployed with hash …`,
     `not in service after deploy: …`). A green sync used to carry none of them
     anywhere: the record said done and the runner said "sync completed", and the
@@ -708,7 +708,7 @@ def run_invoke_task(
         # after apply_secret_supply — no compose (#649).
         env_vars["DEPLOY_ACTION"] = action
     if vault_root_token := resolve_vault_token(env_vars):
-        # The bounded AppRole token travels as VAULT_TOKEN (libs.env, infra2-sdk); the old
+        # The bounded AppRole token travels as VAULT_TOKEN (common.env, infra2-sdk); the old
         # name is kept for one release so a child at an older iac_ref still finds it.
         env_vars["VAULT_TOKEN"] = vault_root_token
         env_vars["VAULT_ROOT_TOKEN"] = vault_root_token
@@ -747,24 +747,24 @@ def get_changed_services_from_files(changed_files: list[str]) -> set[str]:
 
     Affected = a changed file is under the service's own directory OR matches a
     declared extra dependency (docs/ssot/deploy-dependencies.yaml). Deploy
-    tooling such as libs/ and tools/ fans out to NOTHING — this replaces the old
-    `libs/ -> __all__` catch-all that redeployed every service on any
+    tooling such as common/ and tools/ fans out to NOTHING — this replaces the old
+    `common/ -> __all__` catch-all that redeployed every service on any
     shared-tooling change (the over-fan-out behind the recurring mass redeploys).
     """
     try:
-        from libs.deploy.dependencies import match_changed_services
+        from common.deploy.dependencies import match_changed_services
 
         return match_changed_services(changed_files)
-    except Exception as exc:  # checked-out libs/ not importable yet
+    except Exception as exc:  # checked-out common/ not importable yet
         logger.warning(
-            "libs.deploy.dependencies unavailable (%s); own-dir-only fan-out", exc
+            "common.deploy.dependencies unavailable (%s); own-dir-only fan-out", exc
         )
         return _own_dir_services(changed_files)
 
 
 def _own_dir_services(changed_files: list[str]) -> set[str]:
     """Self-contained own-directory fan-out (no manifest, no catch-all) used as a
-    safe fallback when the checked-out libs/ is not importable. libs/ and tools/
+    safe fallback when the checked-out common/ is not importable. common/ and tools/
     map to nothing."""
     services: set[str] = set()
     for file_path in changed_files:
@@ -783,7 +783,7 @@ def _log_fanout_decision(changed_files: list[str], services: set[str]) -> None:
     nothing, so a no-op deploy is debuggable (correctly-skipped vs under-deployed).
     """
     try:
-        from libs.deploy.dependencies import explain_fanout
+        from common.deploy.dependencies import explain_fanout
 
         decision = explain_fanout(changed_files)
     except Exception as exc:  # logging is best-effort; never fail the sync
@@ -852,7 +852,7 @@ def sync_services(
 
         if "__all__" in services:
             services = set(_all_services())
-            logger.info("Syncing all services due to libs/ change")
+            logger.info("Syncing all services due to common/ change")
         elif not services:
             # If services set is empty, determine changes dynamically via git diff
             if current_head and resolved_head and current_head != resolved_head:

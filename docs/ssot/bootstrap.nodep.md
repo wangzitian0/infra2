@@ -30,7 +30,7 @@
 - **Dokploy 官方文档**：[docs.dokploy.com](https://docs.dokploy.com)
 - **1Password Connect 配置**：[`bootstrap/04.1password/compose.yaml`](https://github.com/wangzitian0/infra2/blob/main/bootstrap/04.1password/compose.yaml)
 - **Vault 配置**：[`bootstrap/05.vault/compose.yaml`](https://github.com/wangzitian0/infra2/blob/main/bootstrap/05.vault/compose.yaml)
-- **主机防火墙**：[`bootstrap/01.dokploy_install/hostfw/`](https://github.com/wangzitian0/infra2/blob/main/bootstrap/01.dokploy_install/hostfw/)（规则 `hostfw.nft`、单元 `infra2-hostfw.service`、操作脚本 `hostfw.sh`；约束由 `libs/tests/test_host_firewall.py` 固定）
+- **主机防火墙**：[`bootstrap/01.dokploy_install/hostfw/`](https://github.com/wangzitian0/infra2/blob/main/bootstrap/01.dokploy_install/hostfw/)（规则 `hostfw.nft`、单元 `infra2-hostfw.service`、操作脚本 `hostfw.sh`；约束由 `common/tests/test_host_firewall.py` 固定）
 
 ---
 
@@ -77,7 +77,7 @@ flowchart LR
 
 - **模式 A**：使用官方安装脚本或官方镜像。
 - **模式 B**：安装后立即更新版本追踪表。
-- **模式 C**：使用 `libs` 系统全量注入环境变量到 Dokploy Compose，避免使用 local `.env` 文件。
+- **模式 C**：使用 `common` 系统全量注入环境变量到 Dokploy Compose，避免使用 local `.env` 文件。
 
 ### ⛔ 禁止模式 (Blacklist)
 
@@ -93,7 +93,7 @@ Infra-022 T1.3 / #724。2026-09-17 审计发现：Dokploy UI（3000/tcp）和单
 - **只动自己的表**：规则只加载 `table inet infra2_hostfw`，绝不 `flush ruleset`。Docker（iptables-nft 的 `ip filter`/`ip nat`）与 fail2ban（`inet f2b-table`）各管各的表；同一 hook 上一个包必须通过所有 base chain，所以本表的 drop 是最终结果，本表的 accept 不会绕过它们。
 - **不用 UFW**：Docker 发布的 IPv4 端口在 prerouting 被 DNAT，走 FORWARD 而不是 INPUT，UFW 挡不住。本表另设 `forward` 链（priority `filter - 1`，先于 Docker 的 FORWARD），按原始目的端口丢弃来自公网的 3000。IPv6 发布端口由主机上的 docker-proxy 提供，归 input 链管。
 - **不要启用系统自带的 `nftables.service`**：Ubuntu 默认 `/etc/nftables.conf` 以 `flush ruleset` 开头，开机会清掉 Docker 与 fail2ban 的规则。`hostfw.sh check` 发现它被启用会拒绝继续。
-- **Dokploy UI**：只经 `https://cloud.<INTERNAL_DOMAIN>`（Cloudflare → 443 → Traefik → overlay 上的 `dokploy:3000`）或 SSH 隧道（`ssh -L 3000:localhost:3000 root@<VPS>`）访问。部署路径不受影响：`libs/deploy/dokploy_client.py` 走 `https://cloud.<domain>/api` 或 overlay 上的 `http://dokploy:3000/api`，没有任何代码用 `<公网 IP>:3000`。
+- **Dokploy UI**：只经 `https://cloud.<INTERNAL_DOMAIN>`（Cloudflare → 443 → Traefik → overlay 上的 `dokploy:3000`）或 SSH 隧道（`ssh -L 3000:localhost:3000 root@<VPS>`）访问。部署路径不受影响：`common/deploy/dokploy_client.py` 走 `https://cloud.<domain>/api` 或 overlay 上的 `http://dokploy:3000/api`，没有任何代码用 `<公网 IP>:3000`。
 - **Swarm 端口**：单节点 swarm 不需要从外部访问 2377/7946/4789。将来加节点时，只对节点 IP 放行这三个端口，不要整体开放。
 - **变更 SOP（防锁死）**：`hostfw.sh check` → `hostfw.sh apply`（先用 `systemd-run` 挂 5 分钟自动回滚，再加载）→ 另开一个**新的** SSH 登录验证 → `hostfw.sh confirm` → `hostfw.sh install`。回滚触发后主机回到"没有 infra2 表"的状态，也就是首次上线前的状态。VNC 控制台是最后兜底。
 - **漂移**：规则改动合入 main 后，从 main 的副本执行一次 `hostfw.sh install`，再用 `hostfw.sh status` 确认已安装规则与仓库副本 sha256 一致。

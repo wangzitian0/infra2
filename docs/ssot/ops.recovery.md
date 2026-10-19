@@ -12,7 +12,7 @@
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
 | **Master Keys** | **1Password** | Root Token, Unseal Keys, SSH Keys |
-| **数据备份** | `/data` + 各服务 `deploy.py` 的 `BackupFacet` 声明（派生：[`libs/backup/`](../../libs/backup/README.md) [`libs/backup/verification.py::load_backup_inventory`]，#542）+ off-host manifest | DB dumps and persistent data archives |
+| **数据备份** | `/data` + 各服务 `deploy.py` 的 `BackupFacet` 声明（派生：[`common/backup/`](../../common/backup/README.md) [`common/backup/verification.py::load_backup_inventory`]，#542）+ off-host manifest | DB dumps and persistent data archives |
 | **代码仓库** | **GitHub** | 部署代码、Compose 定义 |
 
 ---
@@ -134,7 +134,7 @@ uv run python tools/backup_verification.py --manifest /path/to/manifest.json --j
 
 ### SOP-005: 生成并上传 off-host 备份
 
-备份 runner 读取各服务 `BackupFacet` 声明派生的清单（[`libs/backup/`](../../libs/backup/README.md) `libs/backup/verification.py::load_backup_inventory`，#542），
+备份 runner 读取各服务 `BackupFacet` 声明派生的清单（[`common/backup/`](../../common/backup/README.md) `common/backup/verification.py::load_backup_inventory`，#542），
 为每个登记的 `data_path` 创建 archive、计算 SHA256，并通过主机上的 `rclone`
 remote 上传到 off-host storage。
 
@@ -210,7 +210,7 @@ Remote retention automatically prunes expired snapshots (`weekly` > 60d; `quarte
 
 The script's service list must equal the `BackupFacet` inventory. The list is
 currently hand-kept because the installed host copy runs without a repo Python
-environment; `libs/tests/test_host_backup_script.py` checks both directions and
+environment; `common/tests/test_host_backup_script.py` checks both directions and
 the declared data paths. A new facet without a scheduled backup entry fails CI.
 Bootstrap paths are shared by both environments; environment-scoped paths take
 `ENV_SUFFIX`. Source coverage alone is not runtime proof: after merging a script
@@ -219,7 +219,7 @@ off-host manifest and restored artifact for every required entry.
 
 The host runs the script from the `/opt/infra2` checkout through a symlink:
 `/usr/local/sbin/infra2-host-backup.sh -> /opt/infra2/tools/host_backup.sh`. The
-script resolves the link to find `libs.backup.emitter` in that checkout. Keep the
+script resolves the link to find `common.backup.emitter` in that checkout. Keep the
 checkout clean: a local edit blocks the Sunday `git pull` of the restore rehearsal
 cron. After a change merges, update the checkout and confirm it is clean:
 
@@ -368,12 +368,12 @@ Until the first run writes the log, any crontab edit restarts that clock. After 
 
 | 行为描述 | 验证方式 | 覆盖率 |
 |----------|----------|--------|
-| **Backup inventory covers DATA_PATH** | `libs/tests/test_backup_verification.py` | ✅ Implemented |
+| **Backup inventory covers DATA_PATH** | `common/tests/test_backup_verification.py` | ✅ Implemented |
 | **Backup archive + checksum runner** | `tools/backup_runner.py` | ✅ Implemented |
 | **Backup freshness/checksum manifest** | `tools/backup_verification.py` | ✅ Implemented |
-| **On-host backup runner (SOP-006): dumps first, one failure never stops the rest, tar exit 1 is a WARN, authenticated redis SAVE** | `libs/tests/test_host_backup_script.py` | ✅ Implemented |
-| **Off-host restore rehearsal** | `tools/run_restore_rehearsal.py` + `libs/backup/` (`libs/tests/test_backup_verification.py`) | ✅ Implemented & Live Verified (10.62s PASS) |
-| **Vault Unseal 流程（自动）** | `bootstrap/05.vault/unsealer.py` 常驻自动解封;契约由 `libs/tests/test_vault_unsealer.py`(过期 Connect token 拒绝 / sync 非 ACTIVE / sealed 报不健康 / key 不足中止)+ `libs/tests/test_bootstrap_health.py`(healthcheck 接线)覆盖 | ✅ Automated |
+| **On-host backup runner (SOP-006): dumps first, one failure never stops the rest, tar exit 1 is a WARN, authenticated redis SAVE** | `common/tests/test_host_backup_script.py` | ✅ Implemented |
+| **Off-host restore rehearsal** | `tools/run_restore_rehearsal.py` + `common/backup/` (`common/tests/test_backup_verification.py`) | ✅ Implemented & Live Verified (10.62s PASS) |
+| **Vault Unseal 流程（自动）** | `bootstrap/05.vault/unsealer.py` 常驻自动解封;契约由 `common/tests/test_vault_unsealer.py`(过期 Connect token 拒绝 / sync 非 ACTIVE / sealed 报不健康 / key 不足中止)+ `common/tests/test_bootstrap_health.py`(healthcheck 接线)覆盖 | ✅ Automated |
 | **Vault Unseal 流程（手动兜底,SOP-001）** | `vault status` + `vault operator unseal` | ✅ Manual |
 | **vault-agent 凭证 re-provision (SOP-007)** | `vault.setup-approle --deploy` | ✅ Manual |
 

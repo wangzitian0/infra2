@@ -76,7 +76,7 @@ Track top issues discovered during the Homer portal and SSO protection project.
 - [ ] **Test denial flow** - Verify non-admin users get access denied
 
 #### Code Quality
-- [ ] Authentik API client could be extracted to `libs/authentik.py` for reuse
+- [ ] Authentik API client could be extracted to `common/authentik.py` for reuse
 - [ ] Policy binding logic may need refinement (currently creates per-group policies)
 - [ ] Error handling for existing applications (handle 409 conflict)
 

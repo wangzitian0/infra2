@@ -296,7 +296,7 @@ an explicit per-environment Vault value.
 <a id="telemetry-identity"></a>
 ### 4.5 遥测标识隔离 (Telemetry identity)
 
-可观测性是**单一全局实例**（SigNoz / OpenPanel，`prod_only`）：所有环境都打到同一套，**靠标识区分**，不靠 per-env 实例。身份由 `libs/core/service_identity.py` 一次签发并映射到 IaC、运行时、遥测和告警：
+可观测性是**单一全局实例**（SigNoz / OpenPanel，`prod_only`）：所有环境都打到同一套，**靠标识区分**，不靠 per-env 实例。身份由 `common/core/service_identity.py` 一次签发并映射到 IaC、运行时、遥测和告警：
 
 | 语义 | canonical 字段 | 示例 |
 |------|----------------|------|
@@ -309,21 +309,21 @@ an explicit per-environment Vault value.
 
 **签发归 infra2**：Deployer / fixed promote / preview 三个入口从 registry 和已验证部署坐标构建 `ServiceIdentity`；应用与 Vault Agent 只消费签发值，不得从 secret 或自身默认值重定义身份。标准字段是 `deployment.environment.name`；迁移期双写旧 `deployment.environment`，查询和新告警必须使用 `.name`。身份 metadata 不进入运行配置 hash，远端缺失/错误则触发一次 reconcile；部署后校验关键 `INFRA_*` 字段，避免永久重启抖动。OTLP 端点见 [ops.observability.md](ops.observability.md#41-应用接入-otlp)。
 
-对 **preview** 多别名而言，`deployment.environment.name` 的取值就是 alias token（见 §4.6）。同一份签发逻辑由 `libs/deploy/preview` 后端（经 `tools/deploy_v2 --type preview/*` 触发，非直接调用）注入 compose（vault-agent 与遥测共同消费），与 `libs/deploy/env_config.py::preview_alias` 派生的 `env_suffix` 保持同源。
+对 **preview** 多别名而言，`deployment.environment.name` 的取值就是 alias token（见 §4.6）。同一份签发逻辑由 `common/deploy/preview` 后端（经 `tools/deploy_v2 --type preview/*` 触发，非直接调用）注入 compose（vault-agent 与遥测共同消费），与 `common/deploy/env_config.py::preview_alias` 派生的 `env_suffix` 保持同源。
 
 <a id="commit-identity"></a>
 #### 4.5.1 Commit identity contract (#1211)
 
-`GIT_COMMIT_SHA` is the commit identifier that a running service reports. Its value depends on the service class. The table below is the contract. `libs/tests/test_identity_contract.py` parses the table and compares it with the registry, the compose files, and the deploy entry points.
+`GIT_COMMIT_SHA` is the commit identifier that a running service reports. Its value depends on the service class. The table below is the contract. `common/tests/test_identity_contract.py` parses the table and compares it with the registry, the compose files, and the deploy entry points.
 
 | Class | Services | Compose value | Value in the container | Issued by | Reader |
 |---|---|---|---|---|---|
-| `platform` | `platform/alerting`, `platform/todo` | `${INFRA_IAC_REF:-unknown}` | The full 40-hex infra2 SHA of the deploy. It is `unknown` when the deploy issues no ref. | `libs/deploy/sync_pipeline.py`, `libs/core/service_identity.py` | `platform/30.todo/app.py` shows the first 7 characters. `platform/alerting` has no reader. |
-| `app` | `finance_report/app`, `truealpha/app`, `truealpha/data_engine` | `${GIT_COMMIT_SHA:-unknown}` | The image tag. It is a release tag such as `v0.1.74`, or a 7-hex short SHA for a preview from a commit, branch or pull request. | `libs/deploy/promote.py`, `libs/deploy/preview.py` | The `git_sha` and `version` fields of the app health payload. The `finance_report/app` preview readiness probe compares them with the image tag (`libs/deploy/preview.py`, `libs/deploy/env_config.py`). |
+| `platform` | `platform/alerting`, `platform/todo` | `${INFRA_IAC_REF:-unknown}` | The full 40-hex infra2 SHA of the deploy. It is `unknown` when the deploy issues no ref. | `common/deploy/sync_pipeline.py`, `common/core/service_identity.py` | `platform/30.todo/app.py` shows the first 7 characters. `platform/alerting` has no reader. |
+| `app` | `finance_report/app`, `truealpha/app`, `truealpha/data_engine` | `${GIT_COMMIT_SHA:-unknown}` | The image tag. It is a release tag such as `v0.1.74`, or a 7-hex short SHA for a preview from a commit, branch or pull request. | `common/deploy/promote.py`, `common/deploy/preview.py` | The `git_sha` and `version` fields of the app health payload. The `finance_report/app` preview readiness probe compares them with the image tag (`common/deploy/preview.py`, `common/deploy/env_config.py`). |
 
 An `app` service never receives a 40-hex SHA in `GIT_COMMIT_SHA`. The deploy sets `GIT_COMMIT_SHA` and `IMAGE_TAG` to the same value.
 
-**Decision: the SDK `RuntimeIdentity` is not adopted.** No non-test code in this repository calls `RuntimeIdentity`. `libs/tests/test_identity_contract.py` scans non-test Python files and expects zero references.
+**Decision: the SDK `RuntimeIdentity` is not adopted.** No non-test code in this repository calls `RuntimeIdentity`. `common/tests/test_identity_contract.py` scans non-test Python files and expects zero references.
 
 **Decision: `ServiceIdentity` stays the source of the SigNoz resource attributes.** `Deployer.sync`, fixed promote and preview render `OTEL_RESOURCE_ATTRIBUTES` with `ServiceIdentity.otel_resource_attributes()`. The keys `infra.service.id`, `infra.component`, `infra.iac.ref`, `infra.identity.schema` and `infra.managed_by` exist only there. Services validate issued telemetry coordinates through `init_service(..., require_issued_identity=True)`.
 
@@ -349,7 +349,7 @@ An `app` service never receives a 40-hex SHA in `GIT_COMMIT_SHA`. The deploy set
 | `commit` | `commit-<sha7>` | `-commit-<sha7>` | `report-commit-<sha7>.<domain>` | `finance-report-preview-commit-<sha7>` | `commit-<sha7>` |
 | `tag` | `tag-<v1-2-3>` | `-tag-<v1-2-3>` | `report-tag-<v1-2-3>.<domain>` | `finance-report-preview-tag-<v1-2-3>` | `tag-<v1-2-3>` |
 
-`branch` 默认 `main`（→ `branch-main`，取代旧的裸 `main` 槽）；`tag` 的点变横线做 DNS-safe slug（`v1.2.3` → `tag-v1-2-3`）。注意区分：**镜像** `IMAGE_TAG` 用规范值 `v1.2.3`（`preview_alias.value`），而 **URL / 遥测 `deployment.environment`** 用 slug `tag-v1-2-3`（即上表那一列）——过滤遥测时按 `tag-v1-2-3`。真源：`libs/deploy/env_config.py::preview_alias(kind, value)`（纯函数，确定性，单测覆盖）。
+`branch` 默认 `main`（→ `branch-main`，取代旧的裸 `main` 槽）；`tag` 的点变横线做 DNS-safe slug（`v1.2.3` → `tag-v1-2-3`）。注意区分：**镜像** `IMAGE_TAG` 用规范值 `v1.2.3`（`preview_alias.value`），而 **URL / 遥测 `deployment.environment`** 用 slug `tag-v1-2-3`（即上表那一列）——过滤遥测时按 `tag-v1-2-3`。真源：`common/deploy/env_config.py::preview_alias(kind, value)`（纯函数，确定性，单测覆盖）。
 
 **preview 关键特性**：
 1. **多别名共存**：`branch-<name>` / `pr-<N>` / `commit-<sha7>` / `tag-<v>` 各自一套独立 compose 栈，互不冲突，也不与 staging/prod 撞容器名或 Host() 规则（靠唯一的 `ENV_SUFFIX`）。
@@ -364,7 +364,7 @@ An `app` service never receives a 40-hex SHA in `GIT_COMMIT_SHA`. The deploy set
 
 一次部署的**身份**由且仅由**四个正交轴**确定——每个轴独立（谁也推不出谁），合起来对
 `preview / staging / prod` 各类目标都充分。`type` 是判别式，`env` / `sub_domain` 由它**派生**，不是输入轴。
-契约/校验层 `libs/deploy/contract.py` 是**纯函数**（无副作用，单测覆盖）；`tools/deploy_v2.py` 是**执行前门**
+契约/校验层 `common/deploy/contract.py` 是**纯函数**（无副作用，单测覆盖）；`tools/deploy_v2.py` 是**执行前门**
 （解析 + 分派到 `preview_lifecycle` / `deploy_primitive`，有副作用），两者都有单测。
 
 ```
@@ -407,9 +407,9 @@ commit `sha`（身份）+ `image_ref`（要拉的已发布镜像）——**code 
 - **RL-DATA-1**（§5 data-lane，执行层 `deploy_v2.enforce_data_lane_red_lines`）：`env=prod ⇒ data_lane=prod`；
   未评审代码不上 prod 数据——deny-by-default：`code_reviewed` 必须显式为 `True`，缺省(`None`)与 `False` 均 fail-closed。
 
-> **现状边界**：`libs.deploy.contract.SERVICES` 中注册的 bespoke app（`finance_report/app`；
+> **现状边界**：`common.deploy.contract.SERVICES` 中注册的 bespoke app（`finance_report/app`；
 > `truealpha/app` 自 #500 起）走 app 后端（`deploy_primitive` / `preview_lifecycle`）；`iac_pinned`
-> 服务从 `libs.core.registry` 派生并走 iac_runner `/deploy` webhook。`truealpha/app` 已接入
+> 服务从 `common.core.registry` 派生并走 iac_runner `/deploy` webhook。`truealpha/app` 已接入
 > `preview`（多别名预览栈）、`staging` 与 `prod`（已配置独立 compose ID）。完整 GitHub 评审信号
 > （供给 `code_reviewed=True`）可继续增强；snapshot-sync / anonymization / rehearsal 属于
 > finance_report#893，但 `data_lane` 已是派生值，不是 deploy_v2 输入轴。
@@ -472,7 +472,7 @@ compose、env、secret 路径、**外部镜像 tag**、Traefik 路由 label、�
 
 **结论**：坐标和当前实现均已完备，不需要第五轴：
 
-1. **registry**：app 显式登记；所有非 app 服务从 `libs.core.registry` 派生为 `iac_pinned`
+1. **registry**：app 显式登记；所有非 app 服务从 `common.core.registry` 派生为 `iac_pinned`
    `ServiceSpec`（`prod_only` / `env_shared` / `web_facing` 不手抄）。App 的跨仓库镜像 artifact
    依赖也登记在 `ServiceSpec.image_repositories`，由 deploy 前门统一执行。
 2. **routing**：`deploy_v2` 按 `service` 分派后端——app → `deploy_primitive` / `preview_lifecycle`；
@@ -690,7 +690,7 @@ time python -m tools.deploy_v2 \
 ### 11.2 Preview Environments
 
 多别名 preview 已落地（§4.6）：`main` / `pr-<N>` / `commit-<sha7>` 三类别名各自一套
-带临时数据库的独立 compose 栈，经 `tools/deploy_v2` 操作（`--type preview/*` 拉起、`--down` 拆除，路由到 `libs/deploy/preview` 后端）。未来可在此
+带临时数据库的独立 compose 栈，经 `tools/deploy_v2` 操作（`--type preview/*` 拉起、`--down` 拆除，路由到 `common/deploy/preview` 后端）。未来可在此
 基础上扩展 feature-branch 别名（如 `report-feature-dark-mode.zitian.party`）。
 
 ---

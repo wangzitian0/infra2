@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Guard libs/tools line coverage against silent regression.
+"""Guard common/tools line coverage against silent regression.
 
-Compares the Cobertura XML from `pytest --cov=libs --cov=tools
+Compares the Cobertura XML from `pytest --cov=common --cov=tools
 --cov-report=xml:coverage/infra2-coverage.xml` against the committed baseline
 (docs/ssot/coverage-baseline.json). Exits non-zero on a drop, so it serves as
 a PR gate (infra-ci) run on every push/PR — independent of the Coveralls
@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.gate.coverage_regression import (  # noqa: E402
+from infra2_sdk.ci import (  # noqa: E402
     CoverageArtifactMissing,
     CoverageBaselineInvalid,
     check_no_regression,

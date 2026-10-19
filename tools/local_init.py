@@ -10,7 +10,7 @@ from invoke import task
 import subprocess
 import shutil
 import shlex
-from libs.console import console, success, error, warning, info, header
+from common.console import console, success, error, warning, info, header
 
 
 CLI_DEPS = {
@@ -178,7 +178,7 @@ def bootstrap(c):
     """Verify 1Password is ready for bootstrap (zero-frame init)
 
     Validates init/env_vars exists in 1Password Infra2 vault.
-    No local .env file needed - libs/common.py reads directly from 1Password.
+    No local .env file needed - common/common.py reads directly from 1Password.
 
     Dependency chain:
     1. local.bootstrap (this) -> validates config
@@ -186,7 +186,7 @@ def bootstrap(c):
     3. vault.setup -> deploys Vault
     4. platform services -> uses Vault
     """
-    from libs.security.store import OpSecrets
+    from common.security.store import OpSecrets
 
     header("Bootstrap Check", "Validating 1Password config")
 
@@ -232,7 +232,7 @@ def bootstrap(c):
     console.print(table)
 
     success("Bootstrap config validated!")
-    info("No local .env needed - libs/common.py reads directly from 1Password")
+    info("No local .env needed - common/common.py reads directly from 1Password")
     info("Next steps:")
     console.print("  1. invoke 1password.setup - Deploy 1Password Connect")
     console.print("  2. invoke vault.setup - Deploy Vault")
@@ -254,7 +254,7 @@ def phase(c):
     Each phase reads from its respective 1Password item.
     """
     from rich.table import Table
-    from libs.security.store import OpSecrets
+    from common.security.store import OpSecrets
 
     header("Bootstrap Phase Detection")
 

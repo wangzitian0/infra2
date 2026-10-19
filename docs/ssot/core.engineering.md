@@ -31,7 +31,7 @@
 - 要找规范/权威定义 → [SSOT](README.md)；工程与文档准则在本文，合流门禁在
   [ops.merge-gate.md](ops.merge-gate.md)
 - 要找当前任务 → [Project](../project/README.md)
-- 要改监控/告警目标 → 派生自服务注册表（`libs/core/registry.py` + 各 `deploy.py` 的
+- 要改监控/告警目标 → 派生自服务注册表（`common/core/registry.py` + 各 `deploy.py` 的
   `prod_only`），**禁止**手维护与 IaC 平行的服务清单。一致性校验见
   [`tools/watchdog_consistency_audit.py`](../../tools/watchdog_consistency_audit.py)；
   信号真源 [`watchdog-signals.yaml`](watchdog-signals.yaml)。
@@ -48,8 +48,8 @@
 
 - **DRY**：避免重复代码，使用函数/类/模块/组件等抽象。
 - **避免魔法数字**：使用常量/枚举/配置文件等替代。
-- **尽可能复用已有的库**：动手前永远先检查 libs 目录 [README.md](../../libs/README.md)。
-- **不造新轮子（收敛红线，#542/#543）**：新增告警路径必须注册 signal（`tools/no_new_wheels_lint.py` 阻断 CI）；新增常驻监视 = probe-runner 的 `ResidentWatcher` 插件（`libs/observability/watchers/resident.py`），不新建 sidecar/compose 服务；新增定时 ops 检查挂 `ops-checks.yml` 并声明 `# signal:`；服务级运维事实（探针/信号/备份/密钥）只声明在该服务 `deploy.py` 的 Facet 上，由注册表派生，不另开清单。入口全景见 [tools/README.md](../../tools/README.md)。
+- **尽可能复用已有的库**：动手前永远先检查 common 目录 [README.md](../../common/README.md)。
+- **不造新轮子（收敛红线，#542/#543）**：新增告警路径必须注册 signal（`tools/no_new_wheels_lint.py` 阻断 CI）；新增常驻监视 = probe-runner 的 `ResidentWatcher` 插件（`common/observability/watchers/resident.py`），不新建 sidecar/compose 服务；新增定时 ops 检查挂 `ops-checks.yml` 并声明 `# signal:`；服务级运维事实（探针/信号/备份/密钥）只声明在该服务 `deploy.py` 的 Facet 上，由注册表派生，不另开清单。入口全景见 [tools/README.md](../../tools/README.md)。
 - **能算出来的集合不要手写（#787/#791/#794）**：一份手写清单分不清「有意排除」和「上周二
   加的没人注意」。2026-09-22 同一形状在四处同时成立：`pr_merge_gate` 的自治文件清单、
   `ci_gate_audit.KNOWN_CI_WORKFLOWS`、`infra-ci.yml` 的 `paths`、`ops-checks.yml` 各 job 的
@@ -100,7 +100,7 @@ CI；精规则一旦跟不上就少认一个真输入，门禁直接哑掉。实
 `on.pull_request.types`、`outputs:` 里一个拼错的 step id……因为它的输入是 **GitHub Actions 的
 schema**，那是个枚举不完的开集。**守卫的输入面比守卫的断言强度更决定成败**：
 把问题缩成「一个布尔分类器对四条路径模式的真值表」，才是可判定的。
-证明见 `libs/tests/test_generated_doc_indexes_are_guarded.py`——它执行 `detect-changes`
+证明见 `common/tests/test_generated_doc_indexes_are_guarded.py`——它执行 `detect-changes`
 自己的 shell，并带一条对照（普通散文仍是 doc-only，否则规则宽到失去意义）。
 
 ## STAR 问题解决框架
@@ -111,7 +111,7 @@ schema**，那是个枚举不完的开集。**守卫的输入面比守卫的断�
 - **锚定 Project**：在 `docs/project/` 中绑定一个 project。
 - **现状分析**：描述当前系统状态及问题影响。
 - **真理检查（Step 0）**：搜索并阅读 `docs/ssot/` 中相关话题，明确"现状"与"理想真理"的差距。
-- **工具发现**：编写新代码前**必须**先搜 `libs/` 与 `tools/` 是否已有实现（如 `grep -r "dokploy" libs/ tools/`）。已有库存在时禁止重复造轮子。
+- **工具发现**：编写新代码前**必须**先搜 `common/` 与 `tools/` 是否已有实现（如 `grep -r "dokploy" common/ tools/`）。已有库存在时禁止重复造轮子。
 
 **2. Tasks（多维任务拆解）**
 - **目标分拆**：根据 Situation 拆出多个子任务。

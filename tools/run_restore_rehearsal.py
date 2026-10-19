@@ -20,23 +20,19 @@ import time
 from pathlib import Path
 from typing import Any
 
-from libs.backup.rehearsal import (
+from common.backup.rehearsal import (
+    ALL_SERVICES,
+    PASS_SUMMARY_PREFIX,
     assert_manifest_is_rehearsable,
     assert_rehearsal_target,
     build_postgres_rehearsal_plan,
     materialize_artifact,
     run_postgres_restore_rehearsal,
 )
-from libs.backup.verification import (
+from common.backup.verification import (
     latest_manifest_path,
     load_backup_inventory,
 )
-
-#: `--service-id all`: every Postgres service that has rehearsal invariants.
-ALL_SERVICES = ("finance_report/postgres", "truealpha/postgres")
-#: The last line of a run in which every service passed. The out-of-band watchdog
-#: reads it from the weekly cron's log (#895), so it is a contract, not prose.
-PASS_SUMMARY_PREFIX = "[+] restore rehearsal passed for: "
 
 
 def wait_for_postgres(container: str, user: str, timeout: int = 30) -> None:

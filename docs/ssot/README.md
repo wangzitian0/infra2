@@ -94,7 +94,7 @@
 | [ops.standards.md](./ops.standards.md) | `ops.standards` | 命名/标签规范、资源评估、防御性运维守则 |
 | [ops.pipeline.md](./ops.pipeline.md) | `ops.pipeline` | CI/CD 流程、GitOps |
 | [ops.e2e-regressions.md](./ops.e2e-regressions.md) | `ops.e2e` | 部署验证、E2E 测试 |
-| [ops.test_coverage.md](./ops.test_coverage.md) | `ops.test_coverage` | libs/tools 单测覆盖率 no-regression 门禁 |
+| [ops.test_coverage.md](./ops.test_coverage.md) | `ops.test_coverage` | common/tools 单测覆盖率 no-regression 门禁 |
 | [ops.recovery.md](./ops.recovery.md) | `ops.recovery` | 故障恢复、Vault Unseal |
 | [ops.storage.md](./ops.storage.md) | `ops.storage` | 备份策略、Google Drive 加密同步与还原演练 |
 | [deploy-dependencies.yaml](./deploy-dependencies.yaml) | `ops.deploy_dependencies` | 部署扇出 + content-hash 依赖清单 |

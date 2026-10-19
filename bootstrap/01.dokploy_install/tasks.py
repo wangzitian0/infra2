@@ -7,8 +7,8 @@ import io
 from pathlib import Path
 
 from invoke import task
-from libs.core.environ import get_env
-from libs.console import (
+from common.core.environ import get_env
+from common.console import (
     header,
     success,
     error,

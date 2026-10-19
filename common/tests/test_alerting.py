@@ -1,0 +1,1302 @@
+"""Offline tests for SigNoz to Feishu alerting."""
+
+from __future__ import annotations
+
+import ast
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+import textwrap
+import types
+from pathlib import Path
+
+import pytest
+
+from common.tests.ambient_env import clear_telemetry_env
+from common.tests.compose_env import compose_services
+from common.alerting import (
+    AlertingError,
+    BasicAuth,
+    InvalidWebhookUrl,
+    MAX_MESSAGE_CHARS,
+    _signoz_filter_literal,
+    build_feishu_alert_card,
+    build_feishu_app_card_payload,
+    build_feishu_app_message_payload,
+    build_feishu_card_payload,
+    build_feishu_text_payload,
+    build_signoz_channel_payload,
+    build_signoz_log_alert_rule_payload,
+    build_signoz_metric_alert_rule_payload,
+    deliver_feishu_app_text,
+    feishu_host_reachable,
+    find_signoz_channel_id,
+    find_signoz_rule_id,
+    format_signoz_alert,
+    redacted_url,
+    signoz_feishu_channel_name,
+    signoz_rule_channels,
+    validate_feishu_webhook_url,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_feishu_host_reachable_false_on_empty_or_unparseable_url() -> None:
+    """'lark 畅通' probe helper: empty / hostless URL is never reachable, never raises."""
+    assert feishu_host_reachable("") is False
+    assert feishu_host_reachable("   ") is False
+    assert feishu_host_reachable("not a url") is False
+
+
+def test_feishu_host_reachable_does_a_tcp_connect_no_message(monkeypatch) -> None:
+    """It proves reachability via a plain TCP connect to (host, 443) — it never POSTs
+    (so the probe can run every minute without spamming the real Lark channel)."""
+    import socket
+
+    calls = []
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def _fake_create_connection(addr, timeout=None):
+        calls.append(addr)
+        return _Conn()
+
+    monkeypatch.setattr(socket, "create_connection", _fake_create_connection)
+    assert (
+        feishu_host_reachable("https://open.feishu.cn/open-apis/bot/v2/hook/x") is True
+    )
+    assert calls == [("open.feishu.cn", 443)]
+
+    def _boom(addr, timeout=None):
+        raise OSError("refused")
+
+    monkeypatch.setattr(socket, "create_connection", _boom)
+    assert (
+        feishu_host_reachable("https://open.feishu.cn/open-apis/bot/v2/hook/x") is False
+    )
+
+
+def test_feishu_webhook_validation_is_https_and_host_scoped() -> None:
+    """Infra-007 alerting: Feishu webhook secrets stay host-scoped and hidden."""
+    valid = "https://open.feishu.cn/open-apis/bot/v2/hook/token"
+    assert validate_feishu_webhook_url(valid) == valid
+    assert redacted_url(valid).endswith("/open-apis/bot/v2/hook/***")
+
+    with pytest.raises(InvalidWebhookUrl):
+        validate_feishu_webhook_url("http://open.feishu.cn/open-apis/bot/v2/hook/token")
+    with pytest.raises(InvalidWebhookUrl):
+        validate_feishu_webhook_url("https://example.com/open-apis/bot/v2/hook/token")
+    with pytest.raises(InvalidWebhookUrl):
+        validate_feishu_webhook_url("https://open.feishu.cn/open-apis/bot/v2/hook/")
+
+
+def test_feishu_message_truncation_respects_max_length() -> None:
+    """Infra-007 alerting: truncation suffix must not exceed Feishu limit."""
+    text = "x" * (MAX_MESSAGE_CHARS + 100)
+
+    webhook_payload = build_feishu_text_payload(text)
+    assert len(webhook_payload["content"]["text"]) <= MAX_MESSAGE_CHARS
+    assert webhook_payload["content"]["text"].endswith("\n...[truncated]")
+
+    app_payload = build_feishu_app_message_payload("oc_test", text)
+    app_text = json.loads(app_payload["content"])["text"]
+    assert len(app_text) <= MAX_MESSAGE_CHARS
+    assert app_text.endswith("\n...[truncated]")
+
+
+def test_alertmanager_payload_is_rendered_as_feishu_text() -> None:
+    """Infra-007 alerting: SigNoz webhook payloads become Feishu text messages."""
+    payload = {
+        "status": "firing",
+        "commonLabels": {"alertname": "ExampleBackendDown", "severity": "critical"},
+        "commonAnnotations": {"summary": "Production API health check failed"},
+        "externalURL": "https://signoz.zitian.party",
+        "alerts": [
+            {
+                "labels": {
+                    "alertname": "ExampleBackendDown",
+                    "instance": "example-backend",
+                },
+                "annotations": {"summary": "GET /api/health returned 503"},
+            }
+        ],
+    }
+
+    text = format_signoz_alert(payload)
+    assert text.splitlines()[0] == "🔴 [P0 告警] ExampleBackendDown · 1 项"
+    assert "级别：P0" in text.splitlines()
+    assert "对象：example-backend" in text.splitlines()
+    assert "现象：GET /api/health returned 503" in text.splitlines()
+
+    feishu_payload = build_feishu_text_payload(text)
+    assert feishu_payload == {"msg_type": "text", "content": {"text": text}}
+
+
+@pytest.mark.parametrize(
+    ("alert_name", "anchor"),
+    [
+        ("ContainerBreakdown", "#container-killed"),
+        ("DeployQueueStuck", "#deployment-failed"),
+    ],
+)
+def test_p0_alerts_link_to_existing_runbook_in_text_and_card(
+    alert_name: str, anchor: str
+) -> None:
+    payload = _sample_alert_payload(
+        commonLabels={"alertname": alert_name, "severity": "critical"}
+    )
+    payload["alerts"][0]["labels"]["alertname"] = alert_name
+    text = format_signoz_alert(payload)
+    card = build_feishu_alert_card(payload)
+    url = f"https://github.com/wangzitian0/infra2/blob/main/docs/runbooks/infra022-p0.md{anchor}"
+    assert f"Runbook：{url}" in text.splitlines()
+    assert f"]({url})" in json.dumps(card, ensure_ascii=False)
+    heading = anchor.removeprefix("#").replace("-", " ")
+    headings = (ROOT / "docs/runbooks/infra022-p0.md").read_text(encoding="utf-8")
+    assert f"## {heading}" in headings.lower()
+
+
+def _sample_alert_payload(**over) -> dict:
+    payload = {
+        "status": "firing",
+        "commonLabels": {"alertname": "ExampleBackendDown", "severity": "critical"},
+        "commonAnnotations": {"summary": "Production API health check failed"},
+        "externalURL": "https://signoz.zitian.party",
+        "alerts": [
+            {
+                "labels": {
+                    "alertname": "ExampleBackendDown",
+                    "instance": "example-backend",
+                },
+                "annotations": {"summary": "GET /api/health returned 503"},
+            }
+        ],
+    }
+    payload.update(over)
+    return payload
+
+
+def test_alert_card_has_severity_colored_header_fields_and_signoz_button() -> None:
+    """A firing critical alert renders a red-headed interactive card with a SigNoz button."""
+    card = build_feishu_alert_card(_sample_alert_payload())
+
+    assert card["header"]["template"] == "red"
+    title = card["header"]["title"]["content"]
+    assert title == "🔴 [P0 告警] ExampleBackendDown · 1 项"
+
+    (fields,) = [e["fields"] for e in card["elements"] if "fields" in e]
+    contents = [field["text"]["content"] for field in fields]
+    assert contents[:4] == [
+        "级别：P0",
+        "对象：example-backend",  # the per-alert instance
+        "现象：GET /api/health returned 503",
+        "开始于：未知",
+    ]
+
+    # the only action button links to SigNoz
+    (action,) = [e for e in card["elements"] if e.get("tag") == "action"]
+    assert [button["url"] for button in action["actions"]] == [
+        "https://signoz.zitian.party"
+    ]
+
+
+def test_alert_card_resolved_is_green_and_nonhttp_url_has_no_button() -> None:
+    """Resolved → green header + ✅; a non-http externalURL (e.g. infra2://) drops the button."""
+    card = build_feishu_alert_card(
+        _sample_alert_payload(
+            status="resolved", externalURL="infra2://platform/12.alerting"
+        )
+    )
+
+    assert card["header"]["template"] == "green"
+    assert card["header"]["title"]["content"] == "✅ [已恢复] ExampleBackendDown · 1 项"
+    assert not [e for e in card["elements"] if e.get("tag") == "action"]
+
+
+def test_card_payloads_use_interactive_msg_type() -> None:
+    card = build_feishu_alert_card(_sample_alert_payload())
+
+    webhook = build_feishu_card_payload(card)
+    assert webhook == {"msg_type": "interactive", "card": card}
+
+    app = build_feishu_app_card_payload("oc_test", card)
+    assert app["receive_id"] == "oc_test"
+    assert app["msg_type"] == "interactive"
+    assert json.loads(app["content"]) == card  # content is a JSON string
+
+
+def test_signoz_channel_payload_targets_internal_bridge_with_optional_basic_auth() -> (
+    None
+):
+    """Infra-007 alerting: SigNoz channel points to bridge, not the Feishu secret."""
+    payload = build_signoz_channel_payload(
+        channel_name="infra2-feishu-alerts-production",
+        bridge_url="http://platform-alerting:8080/signoz/webhook",
+        basic_auth=BasicAuth(username="signoz", password="secret"),
+    )
+
+    webhook = payload["webhook_configs"][0]
+    assert payload["name"] == "infra2-feishu-alerts-production"
+    assert webhook["url"] == "http://platform-alerting:8080/signoz/webhook"
+    assert webhook["send_resolved"] is True
+    assert webhook["http_config"]["basic_auth"]["username"] == "signoz"
+    assert webhook["http_config"]["basic_auth"]["password"] == "secret"
+
+
+def test_log_error_alert_rule_uses_signoz_v2_threshold_schema() -> None:
+    """Infra-007 alerting: shared app alerts are SigNoz rule payloads."""
+    payload = build_signoz_log_alert_rule_payload(
+        alert_name="ExampleBackendErrorLogs",
+        service_name="example-backend",
+        channel_names=["channel-1"],
+        summary="example backend emitted error logs",
+    )
+
+    assert payload["schemaVersion"] == "v2alpha1"
+    assert payload["version"] == "v5"
+    assert payload["alertType"] == "LOGS_BASED_ALERT"
+    assert payload["ruleType"] == "threshold_rule"
+    assert payload["condition"]["selectedQueryName"] == "A"
+    threshold = payload["condition"]["thresholds"]["spec"][0]
+    assert threshold["op"] == "1"
+    assert threshold["matchType"] == "1"
+    assert threshold["channels"] == ["channel-1"]
+    assert payload["labels"]["service_id"] == "infra/example-backend"
+    assert payload["labels"]["environment"] == "production"
+
+
+def test_log_error_alert_rule_carries_its_query_in_the_v5_queries_envelope() -> None:
+    """#906: a rule marked version v5 is evaluated only from compositeQuery.queries[].
+
+    SigNoz v0.105 copies `queries` into the query-range request and skips its v3->v5
+    migration for rules already marked v5, so the old `builderQueries` map made this
+    rule run no query at all: it could never fire.
+    """
+    payload = build_signoz_log_alert_rule_payload(
+        alert_name="ExampleBackendErrorLogs",
+        service_name="example-backend",
+        channel_names=["channel-1"],
+        summary="example backend emitted error logs",
+        environment="staging",
+    )
+
+    composite = payload["condition"]["compositeQuery"]
+    assert composite["queryType"] == "builder"
+    assert "builderQueries" not in composite
+    assert composite["queries"] == [
+        {
+            "type": "builder_query",
+            "spec": {
+                "name": "A",
+                "signal": "logs",
+                "stepInterval": 60,
+                "aggregations": [{"expression": "count()"}],
+                "filter": {
+                    "expression": (
+                        "resource.service.name = 'example-backend' AND "
+                        "resource.deployment.environment.name = 'staging' AND "
+                        "severity_text IN ['ERROR', 'CRITICAL', 'FATAL']"
+                    )
+                },
+                "disabled": False,
+            },
+        }
+    ]
+    assert payload["condition"]["alertOnAbsent"] is False
+
+
+def test_signoz_filter_literals_escape_quotes_and_backslashes() -> None:
+    """#906: a value cannot close the filter literal early and inject a condition."""
+    assert (
+        _signoz_filter_literal("finance-report-backend") == "'finance-report-backend'"
+    )
+    assert _signoz_filter_literal("o'brien") == "'o\\'brien'"
+    assert _signoz_filter_literal("a\\' OR 1=1") == "'a\\\\\\' OR 1=1'"
+
+
+def test_log_error_alert_rule_threshold_semantics_are_configurable() -> None:
+    """#906: the error-log rule counts a burst (in_total over the window), not any error."""
+    payload = build_signoz_log_alert_rule_payload(
+        alert_name="BurstErrorLogs",
+        service_name="example-backend",
+        channel_names=["channel-1"],
+        summary="burst",
+        threshold=10,
+        match_type="in_total",
+        eval_window="15m0s",
+    )
+
+    threshold = payload["condition"]["thresholds"]["spec"][0]
+    assert threshold["target"] == 10
+    assert threshold["matchType"] == "4"
+    assert payload["evaluation"]["spec"]["evalWindow"] == "15m0s"
+    with pytest.raises(AlertingError, match="match type"):
+        build_signoz_log_alert_rule_payload(
+            alert_name="BadMatch",
+            service_name="example-backend",
+            channel_names=["channel-1"],
+            summary="bad",
+            match_type="sometiems",
+        )
+
+
+def test_metric_alert_rule_uses_signoz_v5_promql_schema() -> None:
+    """#1106: finance_report metric alerts render as SigNoz v5 PromQL rules."""
+    payload = build_signoz_metric_alert_rule_payload(
+        alert_name="FinanceReportHigh5xxRate",
+        promql="sum(rate(http_server_request_count[5m]))",
+        channel_names=["channel-1"],
+        summary="backend 5xx rate high",
+        severity="critical",
+        threshold=0.05,
+        threshold_unit="%",
+        match_type="all_times",
+    )
+
+    assert payload["schemaVersion"] == "v2alpha1"
+    assert payload["version"] == "v5"
+    assert payload["alertType"] == "METRIC_BASED_ALERT"
+    assert payload["ruleType"] == "promql_rule"
+    assert payload["condition"]["selectedQueryName"] == "A"
+    composite = payload["condition"]["compositeQuery"]
+    assert composite["queryType"] == "promql"
+    assert "builderQueries" not in composite
+    assert "promQueries" not in composite
+    assert composite["queries"] == [
+        {
+            "type": "promql",
+            "spec": {
+                "name": "A",
+                "query": "sum(rate(http_server_request_count[5m]))",
+                "legend": "",
+                "disabled": False,
+            },
+        }
+    ]
+    threshold = payload["condition"]["thresholds"]["spec"][0]
+    assert threshold["op"] == "1"
+    assert threshold["matchType"] == "2"
+    assert threshold["target"] == 0.05
+    assert threshold["targetUnit"] == "%"
+    assert threshold["channels"] == ["channel-1"]
+
+
+def test_metric_alert_rule_rejects_unknown_threshold_semantics() -> None:
+    """#1106 review: typos in SigNoz threshold semantics fail closed."""
+    with pytest.raises(AlertingError, match="threshold op"):
+        build_signoz_metric_alert_rule_payload(
+            alert_name="BadOp",
+            promql="sum(up)",
+            channel_names=["channel-1"],
+            summary="bad op",
+            op="abvoe",
+        )
+
+    with pytest.raises(AlertingError, match="match type"):
+        build_signoz_metric_alert_rule_payload(
+            alert_name="BadMatch",
+            promql="sum(up)",
+            channel_names=["channel-1"],
+            summary="bad match type",
+            match_type="sometiems",
+        )
+
+
+def test_signoz_feishu_channel_name_is_per_environment_and_defaults_to_production() -> (
+    None
+):
+    """#973: the one name the channel is created under and every rule binds to."""
+    assert signoz_feishu_channel_name() == "infra2-feishu-alerts-production"
+    assert signoz_feishu_channel_name(None) == "infra2-feishu-alerts-production"
+    assert signoz_feishu_channel_name("  ") == "infra2-feishu-alerts-production"
+    assert signoz_feishu_channel_name("staging") == "infra2-feishu-alerts-staging"
+    payload = build_signoz_channel_payload(
+        channel_name=signoz_feishu_channel_name("staging"),
+        bridge_url="http://platform-alerting:8080/signoz/webhook",
+    )
+    assert payload["name"] == "infra2-feishu-alerts-staging"
+
+
+def test_signoz_rule_channels_normalises_names_and_refuses_none() -> None:
+    """#973: names are stripped and de-duplicated; no usable name is an error, because
+    SigNoz rejects a rule with no channel and never delivers one bound to a non-name."""
+    assert signoz_rule_channels([" a ", "b", "a", ""]) == ["a", "b"]
+    for bad in ([], [""], [None], [1], "a"):
+        with pytest.raises(AlertingError):
+            signoz_rule_channels(bad)
+
+
+def test_signoz_api_response_helpers_find_channel_and_rule_ids() -> None:
+    """Infra-007 alerting: SigNoz API parsing tolerates common envelopes."""
+    channels_response = {
+        "status": "success",
+        "data": {"channels": [{"name": "infra2-feishu-alerts-production", "id": "c1"}]},
+    }
+    rules_response = {
+        "data": {"rules": [{"alert": "ExampleBackendErrorLogs", "id": "r1"}]}
+    }
+
+    assert (
+        find_signoz_channel_id(channels_response, "infra2-feishu-alerts-production")
+        == "c1"
+    )
+    assert find_signoz_rule_id(rules_response, "ExampleBackendErrorLogs") == "r1"
+    assert find_signoz_channel_id({"data": []}, "missing") is None
+
+
+def test_feishu_app_message_payload_stringifies_content() -> None:
+    """Infra-007 alerting: Feishu app bot payload follows OpenAPI contract."""
+    payload = build_feishu_app_message_payload("oc_test", "hello")
+    assert payload["receive_id"] == "oc_test"
+    assert payload["msg_type"] == "text"
+    assert payload["content"] == '{"text": "hello"}'
+
+
+def test_feishu_app_delivery_fetches_token_then_sends_message(monkeypatch) -> None:
+    """Infra-007 alerting: app bot mode uses tenant token and chat_id."""
+    requests = []
+
+    class FakeResponse:
+        def __init__(self, payload: dict):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            import json
+
+            return json.dumps(self.payload).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        requests.append((request, timeout))
+        if request.full_url.endswith("/tenant_access_token/internal"):
+            return FakeResponse({"code": 0, "tenant_access_token": "tenant-token"})
+        return FakeResponse({"code": 0, "data": {"message_id": "om_test"}})
+
+    monkeypatch.setattr("common.alerting.urlopen", fake_urlopen)
+
+    result = deliver_feishu_app_text(
+        app_id="cli_test",
+        app_secret="secret",
+        chat_id="oc_test",
+        text="hello",
+    )
+
+    assert result["data"]["message_id"] == "om_test"
+    assert len(requests) == 2
+    send_request, _timeout = requests[1]
+    assert "receive_id_type=chat_id" in send_request.full_url
+    assert send_request.headers["Authorization"] == "Bearer tenant-token"
+
+
+def test_alerting_platform_service_contract_files_exist() -> None:
+    """Infra-007 alerting: bridge service has deploy, Vault, and docs surfaces."""
+    base = ROOT / "platform/12.alerting"
+    required = [
+        "Dockerfile",
+        "README.md",
+        "app.py",
+        "compose.yaml",
+        "deploy.py",
+        "secrets.ctmpl",
+        "shared_tasks.py",
+        "vault-agent.hcl",
+        "vault-policy.hcl",
+    ]
+    for name in required:
+        assert (base / name).exists(), name
+
+    compose = (base / "compose.yaml").read_text(encoding="utf-8")
+    assert "platform-alerting-vault-agent${ENV_SUFFIX}" in compose
+    assert "platform-alerting${ENV_SUFFIX}" in compose
+    assert "while [ ! -s /secrets/.env ]" in compose
+    assert 'max_wait="300"' in compose
+    assert "condition: service_healthy" not in compose
+    assert "open-apis/bot/v2/hook" not in compose
+    assert "secrets:/secrets:ro" in compose
+
+    deploy = (base / "deploy.py").read_text(encoding="utf-8")
+    # PR-E: the manifest-driven supply (common/security/supply.py) replaced the bespoke
+    # 1Password → Vault copy; the Deployer hook is what pre_compose calls.
+    assert "apply_secret_supply" in deploy
+    assert "_sync_1password_to_vault" not in deploy
+    assert 'credential_type="root_vars"' not in deploy
+    assert "INFRA_PROBE_HEARTBEAT_URL" in deploy
+    assert "INFRA_PROBE_HEARTBEAT_TOKEN" in deploy
+
+    ctmpl = (base / "secrets.ctmpl").read_text(encoding="utf-8")
+    assert "INFRA_PROBE_HEARTBEAT_URL" in ctmpl
+    assert "INFRA_PROBE_HEARTBEAT_TOKEN" in ctmpl
+
+
+# import root -> the pip-installable name the Dockerfile must list. common.observability.probes
+# gained real infra2_sdk.runtime.postgres/s3 imports in #600 (psycopg/boto3-backed
+# probes) without anyone updating this Dockerfile's now-false "stdlib-only" comment —
+# the image shipped, and the probe-runner crash-looped on the first postgres/s3
+# ProbeSpec dispatch in staging. Scanning actual imports (not a hardcoded list of
+# "known" third-party names) is the point: a NEW import here must be added to this
+# map or the test fails, so the Dockerfile can never again silently drift stale.
+_IMPORT_TO_PIP_NAME = {
+    "httpx": "httpx",
+    "dotenv": "python-dotenv",
+    "rich": "rich",
+    "invoke": "invoke",
+    "infra2_sdk": "infra2-sdk",
+    "psycopg": "psycopg",
+    "boto3": "boto3",
+    "fastapi": "fastapi",
+    "uvicorn": "uvicorn",
+}
+
+
+def _third_party_import_roots(source: str) -> set[str]:
+    tree = ast.parse(source)
+    roots: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            roots.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            roots.add(node.module.split(".")[0])
+    first_party = {"common", "tools", "__future__"}
+    return {
+        r for r in roots if r not in first_party and r not in sys.stdlib_module_names
+    }
+
+
+def test_alerting_dockerfile_installs_every_import_the_packaged_code_needs() -> None:
+    """Infra-007 alerting / #600 regression: the image's pip install line must cover
+    every third-party import reachable from what it actually COPYs and runs
+    (app.py's entrypoint, and infra_probe_runner.py's import of common.observability.probes) —
+    caught live via a staging ModuleNotFoundError crash loop, not by any test."""
+    base = ROOT / "platform/12.alerting"
+    dockerfile = (base / "Dockerfile").read_text(encoding="utf-8")
+    assert "pip install" in dockerfile, "expected a pip install step in the Dockerfile"
+
+    required_roots: set[str] = set()
+    for path in (
+        base / "app.py",
+        ROOT / "common/observability/probes.py",
+        ROOT / "tools/infra_probe_runner.py",
+    ):
+        required_roots |= _third_party_import_roots(path.read_text(encoding="utf-8"))
+
+    missing_mapping = required_roots - set(_IMPORT_TO_PIP_NAME)
+    assert not missing_mapping, (
+        f"unmapped third-party import(s) {missing_mapping} in platform/12.alerting's "
+        "packaged code — add each to _IMPORT_TO_PIP_NAME above with its pip package name"
+    )
+
+    unsatisfied = {
+        root for root in required_roots if _IMPORT_TO_PIP_NAME[root] not in dockerfile
+    }
+    assert not unsatisfied, (
+        f"platform/12.alerting/Dockerfile's pip install does not cover: "
+        f"{[_IMPORT_TO_PIP_NAME[r] for r in sorted(unsatisfied)]} — "
+        f"required by an import in app.py / common/observability/probes.py / "
+        f"tools/infra_probe_runner.py"
+    )
+
+
+def test_alerting_ssot_catalog_includes_dokploy_control_plane() -> None:
+    """Infra-007 alerting: Dokploy control-plane alerts are explicitly cataloged."""
+    ssot = (ROOT / "docs/ssot/ops.observability.md").read_text(encoding="utf-8")
+
+    assert "Dokploy" in ssot
+    assert "deployment control-plane" in ssot
+    assert "app health alerts remain app-owned" in ssot
+
+
+def test_alerting_shared_tasks_are_invoke_tasks() -> None:
+    """Infra-007 alerting: invoke exposes channel payload and test-send tasks."""
+    fake_invoke = types.ModuleType("invoke")
+    fake_invoke.task = lambda func=None, **_kwargs: func if func else (lambda f: f)
+    sys.modules.setdefault("invoke", fake_invoke)
+
+    path = ROOT / "platform/12.alerting/shared_tasks.py"
+    spec = importlib.util.spec_from_file_location("alerting_shared_under_test", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert hasattr(module, "status")
+    assert hasattr(module, "print_channel_payload")
+    assert hasattr(module, "ensure_log_error_rule")
+    assert hasattr(module, "print_log_error_rule_payload")
+    assert hasattr(module, "test_feishu")
+
+    source = path.read_text(encoding="utf-8")
+    assert 'shlex.quote(f"SIGNOZ-API-KEY: {api_key}")' in source
+    assert "-H {api_key_header}" in source
+    assert '"is_ready": result.ok' in source
+    assert "finance_report" not in source
+    assert "FinanceReport" not in source
+
+
+def test_alerting_app_request_guards_are_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Infra-007 alerting: HTTP auth/body guards match review feedback."""
+    clear_telemetry_env(monkeypatch)
+    path = ROOT / "platform/12.alerting/app.py"
+    spec = importlib.util.spec_from_file_location("alerting_app_under_test", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module._parse_content_length("1") == 1
+    with pytest.raises(module.RequestBodyError) as missing:
+        module._parse_content_length(None)
+    assert missing.value.status_code == 411
+    assert missing.value.payload == {"status": "length_required"}
+
+    with pytest.raises(module.RequestBodyError) as invalid:
+        module._parse_content_length("abc")
+    assert invalid.value.status_code == 400
+    assert invalid.value.payload == {"status": "invalid_content_length"}
+
+    with pytest.raises(module.RequestBodyError) as empty:
+        module._parse_content_length("0")
+    assert empty.value.status_code == 400
+    assert empty.value.payload == {"status": "empty_payload"}
+
+    with pytest.raises(module.RequestBodyError) as oversized:
+        module._parse_content_length(str(module.MAX_BODY_BYTES + 1))
+    assert oversized.value.status_code == 413
+    assert oversized.value.payload == {"status": "payload_too_large"}
+
+    source = path.read_text(encoding="utf-8")
+    assert "secrets.compare_digest(header, expected)" in source
+
+
+# ---------------------------------------------------------------------------
+# #903: delivery=report routing through the bridge
+
+
+def _bridge_under_test(monkeypatch, *, mode: str = "feishu_app", report_chat: str = ""):
+    """The real bridge handler on an ephemeral local port, with Feishu delivery
+    captured instead of sent. Returns (post, sent, stop)."""
+
+    clear_telemetry_env(monkeypatch)
+    path = ROOT / "platform/12.alerting/app.py"
+    spec = importlib.util.spec_from_file_location("alerting_app_routing", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    for key in ("BRIDGE_BASIC_AUTH_USERNAME", "BRIDGE_BASIC_AUTH_PASSWORD"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ALERT_DELIVERY_MODE", mode)
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_test")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "app-secret")
+    monkeypatch.setenv("FEISHU_CHAT_ID", "oc_pager")
+    monkeypatch.setenv(
+        "FEISHU_WEBHOOK_URL", "https://open.feishu.cn/open-apis/bot/v2/hook/abc"
+    )
+    if report_chat:
+        monkeypatch.setenv("FEISHU_REPORT_CHAT_ID", report_chat)
+    else:
+        monkeypatch.delenv("FEISHU_REPORT_CHAT_ID", raising=False)
+
+    sent: list[dict] = []
+
+    def app_card(*, chat_id, card, **_kwargs):
+        sent.append(
+            {"chat": chat_id, "title": card["header"]["title"]["content"], "card": card}
+        )
+        return {"code": 0}
+
+    def webhook_card(url, card, **_kwargs):
+        sent.append(
+            {
+                "chat": "webhook",
+                "title": card["header"]["title"]["content"],
+                "card": card,
+            }
+        )
+        return {"code": 0}
+
+    monkeypatch.setattr(module, "deliver_feishu_app_card", app_card)
+    monkeypatch.setattr(module, "deliver_feishu_card", webhook_card)
+    from starlette.testclient import TestClient
+
+    client = TestClient(module.fastapi_app)
+
+    def post(payload: dict) -> int:
+        body = json.dumps(payload).encode("utf-8")
+        response = client.post(
+            "/signoz/webhook",
+            content=body,
+            headers={
+                "Content-Type": "application/json",
+                "Content-Length": str(len(body)),
+            },
+        )
+        return response.status_code
+
+    def stop() -> None:
+        pass
+
+    return post, sent, stop
+
+
+def _payload(alertname: str, *, report: bool) -> dict:
+    from common.alerting import mark_report_payload
+
+    payload = {
+        "status": "firing",
+        "commonLabels": {"alertname": alertname, "severity": "warning"},
+        "alerts": [{"status": "firing", "labels": {"alertname": alertname}}],
+    }
+    return mark_report_payload(payload) if report else payload
+
+
+def test_bridge_sends_a_report_to_the_report_chat_and_a_page_to_the_pager(
+    monkeypatch,
+) -> None:
+    """#903: `delivery=report` goes to FEISHU_REPORT_CHAT_ID; everything else still
+    reaches the pager chat. #905: the report is titled `[报告]` there too, the page is
+    not."""
+    post, sent, stop = _bridge_under_test(monkeypatch, report_chat="oc_reports")
+    try:
+        assert post(_payload("InfraProbeChronic", report=True)) == 202
+        assert post(_payload("InfraServiceProbeFailed", report=False)) == 202
+    finally:
+        stop()
+
+    assert [s["chat"] for s in sent] == ["oc_reports", "oc_pager"]
+    assert [s["title"] for s in sent] == [
+        "[报告] InfraProbeChronic · 1 项",
+        "🟡 [P2 告警] InfraServiceProbeFailed · 1 项",
+    ]
+
+
+def test_bridge_without_a_report_chat_marks_reports_in_the_pager_chat(
+    monkeypatch,
+) -> None:
+    """#903: with FEISHU_REPORT_CHAT_ID unset nothing is lost — the report lands in the
+    pager chat, titled [报告] so it does not read as a page. A webhook is bound to
+    one chat, so webhook mode always takes this fallback."""
+    for mode, pager in (("feishu_app", "oc_pager"), ("feishu_webhook", "webhook")):
+        post, sent, stop = _bridge_under_test(monkeypatch, mode=mode)
+        try:
+            assert post(_payload("ContainerBreakdownChronic", report=True)) == 202
+            assert post(_payload("ContainerBreakdown", report=False)) == 202
+        finally:
+            stop()
+
+        assert [s["chat"] for s in sent] == [pager, pager], mode
+        assert sent[0]["title"] == "[报告] ContainerBreakdownChronic · 1 项", mode
+        assert sent[1]["title"] == "🟡 [P2 告警] ContainerBreakdown · 1 项", mode
+
+
+def test_only_staging_and_preview_environments_are_report_only() -> None:
+    """#903 review: the report-only decision is an allowlist over the normalized
+    environment. `prod`, `PRODUCTION `, unset and garbage page; staging and the
+    preview slots report."""
+    from common.alerting import is_report_only_environment
+
+    pages = [None, "", "production", "PRODUCTION ", "prod", "garbage", "x/y", "pr"]
+    reports = [
+        "staging",
+        " STAGING",
+        "stg",
+        "preview",
+        "pr-5",
+        "branch-main",
+        "commit-1ab32d5",
+        "tag-v1-2-3",
+    ]
+    assert [v for v in pages if is_report_only_environment(v)] == []
+    assert [v for v in reports if not is_report_only_environment(v)] == []
+
+
+# ---------------------------------------------------------------------------
+# #905 review: the bridge never drops a page, and budgets for its delivery mode
+
+
+def _unrenderable(starts_at) -> dict:
+    return {
+        "status": "firing",
+        "commonLabels": {
+            "alertname": "InfraServiceProbeFailed",
+            "severity": "critical",
+        },
+        "alerts": [
+            {
+                "status": "firing",
+                "labels": {
+                    "service_id": "platform/vault",
+                    "component": "vault-http",
+                    "environment": "production",
+                },
+                "annotations": {"summary": "vault-http probe failed"},
+                "startsAt": starts_at,
+            }
+        ],
+    }
+
+
+def test_the_bridge_delivers_a_page_with_a_malformed_time(monkeypatch) -> None:
+    """Epoch milliseconds, a far-future time and JSON Infinity used to raise in the
+    renderer, and the bridge only caught AlertingError: the page was lost."""
+    post, sent, stop = _bridge_under_test(monkeypatch)
+    try:
+        for starts_at in (1_790_236_800_000, "9999-12-31T23:59:59Z", float("inf")):
+            assert post(_unrenderable(starts_at)) == 202
+    finally:
+        stop()
+
+    assert [s["title"] for s in sent] == [
+        "🔴 [P0 告警] InfraServiceProbeFailed · production · 1 项"
+    ] * 3
+
+
+def test_the_bridge_delivers_a_page_it_cannot_render(monkeypatch) -> None:
+    """Any renderer failure still pages, as the minimal card."""
+    import common.alerting as alerting
+
+    def broken(*_args, **_kwargs):
+        raise KeyError("renderer bug")
+
+    monkeypatch.setattr(alerting, "pager_message_from_payload", broken)
+    post, sent, stop = _bridge_under_test(monkeypatch)
+    try:
+        assert post(_unrenderable("2026-09-24T08:00:00Z")) == 202
+    finally:
+        stop()
+
+    (page,) = sent
+    assert page["title"] == "🔴 [P0 告警] InfraServiceProbeFailed · 简化卡片"
+    body = "\n".join(e["text"]["content"] for e in page["card"]["elements"])
+    assert (
+        "P0 · production · platform/vault · vault-http · vault-http probe failed"
+        in body
+    )
+
+
+def test_the_bridge_budgets_the_card_for_its_delivery_mode(monkeypatch) -> None:
+    """Production and staging run the app bot (30 KB); the webhook takes 20 KB. The
+    bridge sizes each card for the mode it sends through."""
+    from common.alerting import card_body_bytes, card_budget
+
+    chinese = "服务不可用" * 200
+    payload = {
+        "status": "firing",
+        "commonLabels": {"alertname": "ContainerBreakdown", "severity": "critical"},
+        "alerts": [
+            {
+                "labels": {
+                    "service_id": f"infra/s{index}",
+                    "environment": "production",
+                },
+                "annotations": {"symptom": chinese, "log_tail": chinese},
+            }
+            for index in range(40)
+        ],
+    }
+    sizes = {}
+    for mode in ("feishu_app", "feishu_webhook"):
+        post, sent, stop = _bridge_under_test(monkeypatch, mode=mode)
+        try:
+            assert post(payload) == 202
+        finally:
+            stop()
+        (page,) = sent
+        sizes[mode] = card_body_bytes(page["card"], mode)
+
+    assert sizes["feishu_webhook"] <= card_budget("feishu_webhook")
+    # the app bot's card uses the room it has, which a webhook would not take
+    assert (
+        card_budget("feishu_webhook") < sizes["feishu_app"] <= card_budget("feishu_app")
+    )
+
+
+def test_alerting_fastapi_endpoints_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify alerting service FastAPI endpoints (/livez, /readyz, /health, /signoz/webhook)."""
+    import importlib.util
+    from starlette.testclient import TestClient
+
+    clear_telemetry_env(monkeypatch)
+    path = ROOT / "platform/12.alerting/app.py"
+    spec = importlib.util.spec_from_file_location("alerting_fastapi_test", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    monkeypatch.setenv("ALERT_DELIVERY_MODE", "feishu_app")
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_test")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "app-secret")
+    monkeypatch.setenv("FEISHU_CHAT_ID", "oc_pager")
+    monkeypatch.delenv("BRIDGE_BASIC_AUTH_USERNAME", raising=False)
+    monkeypatch.delenv("BRIDGE_BASIC_AUTH_PASSWORD", raising=False)
+
+    monkeypatch.setattr(module, "_feishu_reachable", lambda: True)
+    monkeypatch.setattr(module, "deliver_feishu_app_card", lambda **kwargs: {"code": 0})
+
+    client = TestClient(module.fastapi_app)
+
+    # 1. /livez
+    live_res = client.get("/livez")
+    assert live_res.status_code == 200
+    assert live_res.json() == {"status": "alive", "service": "platform-alerting"}
+
+    # 2. /readyz
+    ready_res = client.get("/readyz")
+    assert ready_res.status_code == 200
+    assert ready_res.json()["status"] == "ready"
+
+    # 3. /health is the SDK report (#1209); the delivery config is its one check
+    health_res = client.get("/health")
+    assert health_res.status_code == 200
+    health = health_res.json()
+    assert health["status"] == "healthy"
+    assert health["service"] == "platform-alerting"
+    assert health["reasons"] == []
+    assert health["checks"]["database"]["status"] == "present"
+    assert health["checks"]["database"]["detail"] == "delivery config valid"
+
+    # 4. /health/feishu
+    feishu_res = client.get("/health/feishu")
+    assert feishu_res.status_code == 200
+    assert feishu_res.json()["status"] == "ok"
+    assert feishu_res.json()["reachable"] is True
+
+    # 5. POST /signoz/webhook
+    payload = {
+        "status": "firing",
+        "commonLabels": {"alertname": "TestAlert", "severity": "warning"},
+        "alerts": [{"status": "firing", "labels": {"alertname": "TestAlert"}}],
+    }
+    hook_res = client.post("/signoz/webhook", json=payload)
+    assert hook_res.status_code == 202
+    assert hook_res.json()["status"] == "accepted"
+
+    # 6. Basic-Auth rejection on POST /signoz/webhook (401)
+    monkeypatch.setenv("BRIDGE_BASIC_AUTH_USERNAME", "test_u")
+    monkeypatch.setenv("BRIDGE_BASIC_AUTH_PASSWORD", "test_p")
+    unauth_res = client.post("/signoz/webhook", json=payload)
+    assert unauth_res.status_code == 401
+    assert unauth_res.json() == {"status": "unauthorized"}
+
+    # With valid basic auth header (202)
+    import base64
+
+    valid_auth = "Basic " + base64.b64encode(b"test_u:test_p").decode("ascii")
+    auth_ok_res = client.post(
+        "/signoz/webhook",
+        json=payload,
+        headers={"Authorization": valid_auth},
+    )
+    assert auth_ok_res.status_code == 202
+
+    monkeypatch.delenv("BRIDGE_BASIC_AUTH_USERNAME", raising=False)
+    monkeypatch.delenv("BRIDGE_BASIC_AUTH_PASSWORD", raising=False)
+
+    # 7. Empty payload (400)
+    empty_res = client.post("/signoz/webhook", content=b"")
+    assert empty_res.status_code == 400
+    assert empty_res.json()["status"] == "empty_payload"
+
+    # 8. Payload too large (413)
+    huge_res = client.post(
+        "/signoz/webhook",
+        content=b"x" * (module.MAX_BODY_BYTES + 1),
+        headers={"Content-Length": str(module.MAX_BODY_BYTES + 1)},
+    )
+    assert huge_res.status_code == 413
+    assert huge_res.json()["status"] == "payload_too_large"
+
+    # 9. Invalid JSON (400)
+    invalid_json_res = client.post("/signoz/webhook", content=b"not valid json")
+    assert invalid_json_res.status_code == 400
+    assert invalid_json_res.json()["status"] == "invalid_json"
+
+    # 10. Non-dict JSON payload (400)
+    non_dict_res = client.post("/signoz/webhook", content=b'["array", "not", "dict"]')
+    assert non_dict_res.status_code == 400
+    assert non_dict_res.json()["status"] == "invalid_payload"
+
+    # 11. Delivery failure (502)
+    def _fail_deliver(**kwargs: object) -> object:
+        raise module.AlertingError("mock delivery failure")
+
+    monkeypatch.setattr(module, "deliver_feishu_app_card", _fail_deliver)
+    fail_res = client.post("/signoz/webhook", json=payload)
+    assert fail_res.status_code == 502
+    assert fail_res.json()["status"] == "delivery_failed"
+
+
+def _load_alerting_app(name: str, monkeypatch: pytest.MonkeyPatch):
+    import importlib.util
+
+    clear_telemetry_env(monkeypatch)
+
+    spec = importlib.util.spec_from_file_location(
+        name, ROOT / "platform/12.alerting/app.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_alerting_health_and_readyz_fail_on_a_bad_delivery_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bad delivery config must stop the bridge from reporting healthy (#1209).
+
+    The probe runner, the container healthcheck and the out-of-band watchdog read only the
+    status code of /health. The SDK report gives 503 and names the reason.
+    """
+    from starlette.testclient import TestClient
+
+    module = _load_alerting_app("alerting_health_failure_test", monkeypatch)
+    client = TestClient(module.fastapi_app)
+    monkeypatch.setenv("ALERT_DELIVERY_MODE", "no-such-mode")
+
+    health_res = client.get("/health")
+    assert health_res.status_code == 503
+    health = health_res.json()
+    assert health["status"] == "unhealthy"
+    assert health["checks"]["database"]["status"] == "absent"
+    assert health["reasons"] == [
+        "database: Unsupported ALERT_DELIVERY_MODE: no-such-mode"
+    ]
+
+    ready_res = client.get("/readyz")
+    assert ready_res.status_code == 503
+    assert ready_res.json()["status"] == "not_ready"
+
+
+def test_alerting_health_route_is_the_sdk_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bridge keeps the SDK /health and holds no copy of its own (#1209)."""
+    module = _load_alerting_app("alerting_one_health_route_test", monkeypatch)
+    (route,) = [
+        route
+        for route in module.fastapi_app.router.routes
+        if getattr(route, "path", None) == "/health"
+    ]
+    assert route.endpoint.__module__ == "infra2_sdk.fastapi"
+
+
+def test_alerting_webhook_delivery_does_not_block_the_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A page in flight must not stop /health from answering (#1222).
+
+    The webhook handler is `async def`. A direct call to the sync `_deliver` holds the event
+    loop for the whole Feishu call (10 s timeout). The container healthcheck (interval 30 s,
+    timeout 5 s, retries 3) can then restart the bridge while it delivers a page.
+
+    Both requests go through ONE ASGI client on ONE event loop. A `TestClient` per request
+    gives each request its own loop in its own thread, so a blocked loop would go unseen.
+
+    The fake delivery blocks its thread until /health has answered, as `urlopen` blocks on
+    a socket. It gives up after `block_seconds`. With a blocked loop /health cannot answer
+    in that time, so the delivery sees no answer and the test fails. The wait uses an event
+    and not a fixed sleep: the result does not depend on how fast the machine is.
+    """
+    import asyncio
+    import threading
+
+    import httpx
+
+    module = _load_alerting_app("alerting_event_loop_test", monkeypatch)
+    for key in ("BRIDGE_BASIC_AUTH_USERNAME", "BRIDGE_BASIC_AUTH_PASSWORD"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("ALERT_DELIVERY_MODE", "feishu_webhook")
+    monkeypatch.setenv(
+        "FEISHU_WEBHOOK_URL", "https://open.feishu.cn/open-apis/bot/v2/hook/abc"
+    )
+
+    block_seconds = 3.0
+    delivery_started = threading.Event()
+    health_answered = threading.Event()
+    seen: dict[str, object] = {}
+
+    def blocking_deliver(card, *, report=False):
+        delivery_started.set()
+        seen["health_answered_during_delivery"] = health_answered.wait(block_seconds)
+        return {"code": 0}
+
+    monkeypatch.setattr(module, "_deliver", blocking_deliver)
+
+    payload = {
+        "status": "firing",
+        "commonLabels": {"alertname": "HighCPU", "severity": "critical"},
+        "alerts": [{"status": "firing", "labels": {"alertname": "HighCPU"}}],
+    }
+    body = json.dumps(payload).encode("utf-8")
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=module.fastapi_app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://alerting.test"
+        ) as client:
+
+            async def webhook():
+                return await client.post(
+                    "/signoz/webhook",
+                    content=body,
+                    headers={"Content-Type": "application/json"},
+                )
+
+            async def health():
+                # Ask only after the delivery is in flight. A blocked loop cannot run
+                # this poll, so a delivery that holds the loop is seen at its latest.
+                deadline = asyncio.get_running_loop().time() + 30
+                while not delivery_started.is_set():
+                    assert asyncio.get_running_loop().time() < deadline
+                    await asyncio.sleep(0.01)
+                response = await client.get("/health")
+                health_answered.set()
+                return response
+
+            return await asyncio.gather(webhook(), health())
+
+    webhook_response, health_response = asyncio.run(scenario())
+
+    assert health_response.status_code == 200, health_response.text
+    assert seen["health_answered_during_delivery"] is True, (
+        "the delivery held the event loop: /health answered only after the delivery ended"
+    )
+    assert webhook_response.status_code == 202, webhook_response.text
+    assert webhook_response.json() == {"status": "accepted", "feishu": {"code": 0}}
+
+
+# The bridge pages people. A bad OTEL value must be logged and must never stop it (#1209).
+# `strict_otel=True` would raise while the module loads, so the test loads it in a child
+# process, the way the container does, with values the SDK refuses in strict mode.
+_FAIL_OPEN_SCRIPT = textwrap.dedent(
+    """
+    import importlib.util, json, os, sys
+
+    sys.path.append(sys.argv[1])
+    from starlette.testclient import TestClient
+
+    spec = importlib.util.spec_from_file_location("alerting_fail_open", sys.argv[2])
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module._feishu_reachable = lambda: True
+    client = TestClient(module.fastapi_app)
+    answers = {
+        path: client.get(path).status_code
+        for path in ("/livez", "/health", "/health/feishu")
+    }
+    sys.stdout.write(json.dumps(answers) + "\\n")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # the OTLP exporter points at a closed port: a normal exit would wait on its flush
+    os._exit(0)
+    """
+)
+
+
+@pytest.mark.parametrize(
+    ("environment", "attributes", "logged"),
+    [
+        ("bogus", "service.name=platform-alerting", True),
+        ("staging", "this-is-not-a-pair", False),
+        ("bogus", "this-is-not-a-pair", True),
+    ],
+    ids=["unknown-env", "malformed-attributes", "both"],
+)
+def test_alerting_bridge_serves_with_a_bad_otel_value(
+    environment: str, attributes: str, logged: bool
+) -> None:
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("OTEL_") and key not in ("ENV", "ENVIRONMENT")
+    }
+    env.update(
+        {
+            "ENV": environment,
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:1",
+            "OTEL_SERVICE_NAME": "platform-alerting",
+            "OTEL_RESOURCE_ATTRIBUTES": attributes,
+            "ALERT_DELIVERY_MODE": "feishu_app",
+            "FEISHU_APP_ID": "cli_test",
+            "FEISHU_APP_SECRET": "app-secret",
+            "FEISHU_CHAT_ID": "oc_pager",
+        }
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _FAIL_OPEN_SCRIPT,
+            str(ROOT),
+            str(ROOT / "platform/12.alerting/app.py"),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        stdin=subprocess.DEVNULL,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        f"the bridge stopped on a bad OTEL value\nstdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    lines = [line for line in result.stdout.splitlines() if line.startswith("{")]
+    assert json.loads(lines[-1]) == {
+        "/livez": 200,
+        "/health": 200,
+        "/health/feishu": 200,
+    }
+    if logged:
+        assert "Could not initialize OpenTelemetry" in result.stderr, result.stderr
+
+
+def test_alerting_bridge_health_timeout_is_below_the_container_healthcheck(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The SDK default of 10 s is above the 3 s the container healthcheck waits. A slow
+    check would then make the healthcheck fail on its own timeout, with no reason (#1209)."""
+    import infra2_sdk.fastapi as sdk_fastapi
+
+    seen: list[dict] = []
+    original = sdk_fastapi.init_service
+
+    def recording(app, name, **kwargs):
+        seen.append(kwargs)
+        return original(app, name, **kwargs)
+
+    monkeypatch.setattr(sdk_fastapi, "init_service", recording)
+    _load_alerting_app("alerting_health_timeout_test", monkeypatch)
+
+    (kwargs,) = seen
+    timeout = kwargs.get("check_timeout_seconds")
+    assert isinstance(timeout, (int, float)), (
+        "the bridge must pass check_timeout_seconds"
+    )
+    healthcheck = compose_services(ROOT / "platform/12.alerting/compose.yaml")[
+        "feishu-alert-bridge"
+    ]["healthcheck"]
+    command = " ".join(healthcheck["test"])
+    (urlopen_timeout,) = re.findall(
+        r"urlopen\('http://127\.0\.0\.1:8080/health', timeout=(\d+)\)", command
+    )
+    docker_timeout = float(healthcheck["timeout"].removesuffix("s"))
+    assert 0 < timeout < float(urlopen_timeout) <= docker_timeout, (
+        timeout,
+        urlopen_timeout,
+        docker_timeout,
+    )

@@ -1,7 +1,7 @@
 # 单测覆盖率不退化 SSOT
 
 > **SSOT Key**: `ops.test_coverage`
-> **核心定义**: `libs`/`tools` 单元测试行覆盖率的 no-regression 门禁；与 `ops.e2e`（活环境验证）是两个不同的层。
+> **核心定义**: `common`/`tools` 单元测试行覆盖率的 no-regression 门禁；与 `ops.e2e`（活环境验证）是两个不同的层。
 
 ---
 
@@ -10,9 +10,9 @@
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
 | **覆盖率地板** | [`docs/ssot/coverage-baseline.json`](./coverage-baseline.json) | 提交在仓库里的 no-regression 基线 |
-| **门禁逻辑** | [`libs/coverage_regression.py`](https://github.com/wangzitian0/infra2/blob/main/libs/coverage_regression.py) | 解析 Cobertura XML、加载/写入基线、判定是否退化 |
+| **门禁逻辑** | [`common/coverage_regression.py`](https://github.com/wangzitian0/infra2/blob/main/common/coverage_regression.py) | 解析 Cobertura XML、加载/写入基线、判定是否退化 |
 | **CLI 入口** | [`tools/coverage_regression_audit.py`](https://github.com/wangzitian0/infra2/blob/main/tools/coverage_regression_audit.py) | PR 门禁调用的命令 |
-| **生成命令** | `infra-ci.yml`「Run infra unit tests」步骤 | `pytest --cov=libs --cov=tools --cov-report=xml:coverage/infra2-coverage.xml` |
+| **生成命令** | `infra-ci.yml`「Run infra unit tests」步骤 | `pytest --cov=common --cov=tools --cov-report=xml:coverage/infra2-coverage.xml` |
 
 ---
 
@@ -36,7 +36,7 @@
 ### SOP-001: 本地验证覆盖率门禁
 
 ```bash
-uv run python -P -m pytest libs/tests -q --cov=libs --cov=tools \
+uv run python -P -m pytest common/tests -q --cov=common --cov=tools \
   --cov-report=xml:coverage/infra2-coverage.xml --cov-fail-under=0
 uv run python tools/coverage_regression_audit.py
 ```
@@ -54,8 +54,8 @@ git add docs/ssot/coverage-baseline.json
 
 | 行为描述 | 测试文件 | 状态 |
 |----------|----------|------|
-| 覆盖率比对逻辑（解析/加载/写入/判定退化） | `libs/tests/test_coverage_regression.py` | ✅ Implemented |
-| CLI 接线（缺基线即失败、`--update-baseline` 复用同一判定） | `libs/tests/test_coverage_regression_audit_cli.py` | ✅ Implemented |
+| 覆盖率比对逻辑（解析/加载/写入/判定退化） | `common/tests/test_coverage_regression.py` | ✅ Implemented |
+| CLI 接线（缺基线即失败、`--update-baseline` 复用同一判定） | `common/tests/test_coverage_regression_audit_cli.py` | ✅ Implemented |
 | CI 门禁接线 | `.github/workflows/infra-ci.yml`「Gate coverage regression」 | ✅ Implemented |
 
 ---

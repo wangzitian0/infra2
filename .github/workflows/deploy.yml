@@ -171,7 +171,7 @@ jobs:
       # deploy_v2's on-main guard asks GitHub's compare API; without a token the call is
       # anonymous and shares a 60/hour budget per runner IP (#635: `403 rate limit exceeded`).
       GITHUB_TOKEN: ${{ github.token }}
-      # The ONE shared control-plane domain (libs.common.infra_domain, #561) --
+      # The ONE shared control-plane domain (common.common.infra_domain, #561) --
       # cloud./vault./otel. host builds must NEVER follow a per-service app-routing
       # override (inputs.domain, e.g. truealpha.club), or they produce a nonexistent
       # hostname with no Traefik router or cert (a Cloudflare 526). app-deploy-
@@ -186,11 +186,11 @@ jobs:
       # platform (iac_pinned) services trigger the iac_runner webhook instead of Dokploy.
       IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
       IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
-      # libs.deploy.schema_gate's #698 pre-deploy schema gate (finance_report/app
+      # common.deploy.schema_gate's #698 pre-deploy schema gate (finance_report/app
       # staging/prod only, TODOWRITE:20): it SSHes to the VPS to run the check inside
       # the app's own published image — the only place both a docker daemon and the
       # app's docker network are reachable from (neither this job nor iac-runner has
-      # both; see libs/deploy/schema_gate.py's module docstring for the physical
+      # both; see common/deploy/schema_gate.py's module docstring for the physical
       # probe). Reuses the SAME INFRA2_WATCHDOG_SSH_* credentials the watchdog jobs in
       # ops-checks.yml already provision — no new secret.
       VPS_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
@@ -208,7 +208,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install runtime dependencies
-        # libs/env.py reads secret stores through infra2-sdk; install the wheel uv.lock
+        # common/env.py reads secret stores through infra2-sdk; install the wheel uv.lock
         # pins, hash-verified, so this job runs the same code as the runner (#649, #1115).
         run: |
           sdk="$(python tools/sdk_requirement.py)"
@@ -216,7 +216,7 @@ jobs:
 
       - name: Configure SSH key for the pre-deploy schema gate
         # Same optional-provisioning shape as ops-checks.yml's watchdog jobs: a
-        # platform (iac_pinned) deploy never needs this (libs.deploy.schema_gate only
+        # platform (iac_pinned) deploy never needs this (common.deploy.schema_gate only
         # runs for finance_report/app), so a missing key must not hard-fail those.
         # finance_report/app staging/prod WITHOUT it fails closed later, loudly, from
         # schema_gate._ssh_host() itself -- never silently skipped.

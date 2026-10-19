@@ -24,7 +24,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path, PurePosixPath
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[1]
 LOCK = "contracts/apps.lock.json"
 
 

@@ -5,11 +5,11 @@ import time
 import urllib.error
 import urllib.request
 
-from libs.core.environ import get_env
-from libs.console import error, header, info, success, warning
-from libs.deploy.deployer import Deployer, make_tasks
-from libs.security.store import VaultSecrets, generate_password
-from libs.core.facets import (
+from common.core.environ import get_env
+from common.console import error, header, info, success, warning
+from common.deploy.deployer import Deployer, make_tasks
+from common.security.store import VaultSecrets, generate_password
+from common.core.facets import (
     ProbeFacet,
     PublicRouteFacet,
     SecretsFacet,
@@ -36,12 +36,12 @@ class AppDeployer(Deployer):
     # shared-platform service — override the shared INTERNAL_DOMAIN entirely so
     # its compose's ${INTERNAL_DOMAIN} Traefik Host() rules resolve under
     # truealpha.club instead of zitian.party. Read by
-    # libs.deploy.app_deploy_request.make_plan via libs.core.registry.domain_for_service.
+    # common.deploy.app_deploy_request.make_plan via common.core.registry.domain_for_service.
     domain = "truealpha.club"
     service_port = 3000
     service_name = "web"
     # Telemetry identity (infra2#906). The `ta-app.sync` path (this Deployer) and the
-    # fixed-compose promote / preview paths (libs.deploy.contract.SERVICES["truealpha/app"])
+    # fixed-compose promote / preview paths (common.deploy.contract.SERVICES["truealpha/app"])
     # each issue OTEL_SERVICE_NAME / OTEL_RESOURCE_ATTRIBUTES into the one compose; both
     # must name the same service or the compose flips identity depending on who deployed
     # it last. The llm container consumes it (compose.yaml); component stays "app" in both.
@@ -105,7 +105,7 @@ class AppDeployer(Deployer):
     #      service_id, borrowing the SOURCE env's app secrets
     #      (staging's, fixed in the generated template).
     # NOTE: production rollout is _APP_COMPOSE_OVERRIDES-gated (see
-    # libs/deploy/env_config.py). The prod compose_id is registered (live since
+    # common/deploy/env_config.py). The prod compose_id is registered (live since
     # #547), so the vault audit covers this app AND its preview surface in
     # production — the "not yet in production" derivation dropped both
     # automatically when the compose_id landed.
@@ -174,7 +174,7 @@ class AppDeployer(Deployer):
         hypothetical) builds its Dokploy env push from this method, and REPLACES the
         compose's entire env wholesale (only VAULT_ROLE_ID/VAULT_SECRET_ID survive via
         _preserve_runtime_env) -- omitting APP_HOST here would silently wipe it on the
-        next auto-sync, reproducing truealpha#474's outage. libs.deploy.promote.deploy
+        next auto-sync, reproducing truealpha#474's outage. common.deploy.promote.deploy
         (the staging/prod deploy_v2 path) never calls this method at all -- it calls
         compose_env_overrides directly instead (see promote.py) -- so both paths must
         independently end up with APP_HOST; this just forwards to the same formula.
@@ -335,7 +335,7 @@ class AppDeployer(Deployer):
         app with no S3 credentials. This hook IS called by sync; it cannot
         provision (no docker CLI in the runner) but it can refuse to be silent.
 
-        Also called directly by libs.deploy.promote.deploy() (truealpha#447):
+        Also called directly by common.deploy.promote.deploy() (truealpha#447):
         that fixed-compose path never ran pre_compose/sync either, so SECRET_KEY
         was never auto-provisioned there and a fresh/rotated Vault environment
         would crash-loop app-web with no self-healing. ``env`` is required by

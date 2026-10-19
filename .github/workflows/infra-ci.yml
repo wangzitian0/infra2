@@ -23,7 +23,7 @@ on:
   # saving the path list was there for, without the deadlock. What it costs is
   # one ~20s detect-changes run on pull requests that previously started nothing.
   #
-  # libs/tests/test_required_checks_can_report.py locks this, computing its scope
+  # common/tests/test_required_checks_can_report.py locks this, computing its scope
   # from ci-gate-inventory.yaml's blocks_merge gates rather than naming this file,
   # so promoting any future check to blocks_merge: true extends the guard with it.
   pull_request:
@@ -223,7 +223,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd ${{ github.workspace }}
-          # libs/env.py and libs/secrets_supply.py import infra2-sdk; install the wheel
+          # common/env.py and common/secrets_supply.py import infra2-sdk; install the wheel
           # uv.lock pins, hash-verified, so this job validates what the runner runs (#1115).
           uv pip install --system invoke httpx python-dotenv rich \
             "$(python tools/sdk_requirement.py)"
@@ -252,9 +252,9 @@ jobs:
           # never checks those out (#506), so fetch the few files at the pinned commits.
           # (script path, not -m: the job runs with PYTHONSAFEPATH=1, so `tools` is not a package on sys.path)
           uv run python tools/fetch_app_manifests.py
-          uv run python tools/lint_anti_tautology.py libs/tests
-          uv run python -m pytest libs/tests -q -n auto \
-            --cov=libs \
+          uv run python tools/lint_anti_tautology.py common/tests
+          uv run python -m pytest common/tests -q -n auto \
+            --cov=common \
             --cov=tools \
             --cov-report=term-missing \
             --cov-report=xml:coverage/infra2-coverage.xml \
@@ -456,7 +456,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd ${{ github.workspace }}
-          # libs/env.py and libs/secrets_supply.py import infra2-sdk; install the wheel
+          # common/env.py and common/secrets_supply.py import infra2-sdk; install the wheel
           # uv.lock pins, hash-verified, so this job validates what the runner runs (#1115).
           uv pip install --system invoke httpx python-dotenv rich \
             "$(python tools/sdk_requirement.py)"
@@ -484,7 +484,7 @@ jobs:
         run: pip install "ruff==0.15.22"  # pinned: 0.16 added rules that fail the estate repo-wide (2026-07-27); bump deliberately with the fixes
 
       - name: Run ruff check
-        run: ruff check libs/ bootstrap/ platform/ finance_report/ truealpha/ tools/
+        run: ruff check common/ bootstrap/ platform/ finance_report/ truealpha/ tools/
 
       - name: Determine changed Python files
         id: changed-python
@@ -494,7 +494,7 @@ jobs:
             base_ref="main"
           fi
           git fetch origin "$base_ref" --depth=1
-          files=$(git diff --name-only "origin/$base_ref...HEAD" -- libs bootstrap platform finance_report truealpha tools | grep -E '\.py$' || true)
+          files=$(git diff --name-only "origin/$base_ref...HEAD" -- common bootstrap platform finance_report truealpha tools | grep -E '\.py$' || true)
           files="${files//$'\n'/ }"
           echo "files=$files" >> "$GITHUB_OUTPUT"
 
@@ -504,7 +504,7 @@ jobs:
 
       - name: Run anti-tautology test linter
         run: |
-          targets=("libs/tests")
+          targets=("common/tests")
           if [ -d repos/infra2-sdk/tests ]; then
             targets+=("repos/infra2-sdk/tests")
           fi

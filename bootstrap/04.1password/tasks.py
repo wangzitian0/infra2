@@ -1,6 +1,6 @@
 """
 1Password Connect deployment automation tasks
-Uses libs/ system for consistent environment and console utilities.
+Uses common/ system for consistent environment and console utilities.
 Bootstrap layer uses 1Password for secrets, not Vault.
 """
 
@@ -8,8 +8,8 @@ import json
 import sys
 import time
 from invoke import task
-from libs.core.environ import get_env
-from libs.console import (
+from common.core.environ import get_env
+from common.console import (
     header,
     success,
     error,
@@ -18,7 +18,7 @@ from libs.console import (
     prompt_action,
     run_with_status,
 )
-from libs.deploy.deployer import Deployer, make_tasks
+from common.deploy.deployer import Deployer, make_tasks
 
 shared_tasks = sys.modules.get("bootstrap.04.1password.shared")
 
@@ -27,7 +27,7 @@ CONNECT_TOKEN_ITEM = "infra2.0 Access Token: infra2.0"
 
 
 class OnePasswordDeployer(Deployer):
-    """1Password Connect deployer using libs/ system"""
+    """1Password Connect deployer using common/ system"""
 
     service = "1password"
     compose_path = "bootstrap/04.1password/compose.yaml"
@@ -153,18 +153,18 @@ class OnePasswordDeployer(Deployer):
     def composing(cls, c, env_vars: dict = None) -> bool:
         """Deploy in Dokploy (automated)"""
         if not isinstance(env_vars, dict):
-            from libs.core.environ import get_env
+            from common.core.environ import get_env
 
             env_vars = get_env()
 
         # Import shared constants
-        from libs.core.constants import GITHUB_BRANCH, GITHUB_OWNER, GITHUB_REPO
+        from common.core.constants import GITHUB_BRANCH, GITHUB_OWNER, GITHUB_REPO
 
         e = cls.env()
         header("1Password composing", "Deploy in Dokploy (automated)")
 
         try:
-            from libs.deploy.dokploy_client import ensure_project, get_dokploy
+            from common.deploy.dokploy_client import ensure_project, get_dokploy
 
             # Ensure project exists
             domain = env_vars.get("INTERNAL_DOMAIN")
@@ -223,7 +223,7 @@ class OnePasswordDeployer(Deployer):
                 compose_id = result["composeId"]
 
             # Update environment variables
-            info("Updating environment variables (from libs)")
+            info("Updating environment variables (from common)")
             env_content = "\n".join(
                 [f"{k}={v}" for k, v in env_vars.items() if v is not None]
             )

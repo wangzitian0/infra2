@@ -21,12 +21,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.alerting import (  # noqa: E402
+from common.alerting import (  # noqa: E402
     find_signoz_channel_id,
     find_signoz_rule_id,
     signoz_feishu_channel_name,
 )
-from libs.observability_dashboards import load_alert_definitions  # noqa: E402
+from common.observability_dashboards import load_alert_definitions  # noqa: E402
 
 
 def main(env: dict[str, str] | None = None) -> int:

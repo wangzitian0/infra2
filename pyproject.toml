@@ -11,7 +11,7 @@ dependencies = [
     # `pip install -e .` reads it (#1115). psycopg/boto3 are declared as their
     # own plain entries below instead of via SDK extras.
     "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v3.8.2/infra2_sdk-3.8.2-py3-none-any.whl",
-    # libs/tests unit testing
+    # common/tests unit testing
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=7.0.0",
@@ -24,14 +24,14 @@ dependencies = [
     "invoke>=2.2.0",
     "rich>=14.2.0",
     # tools/infra_probe_runner.py real postgres/s3 protocol probes (kind="postgres"/"s3"
-    # in libs/observability/probes.py) call infra2_sdk.runtime.postgres/s3, which need these.
+    # in common/observability/probes.py) call infra2_sdk.runtime.postgres/s3, which need these.
     "psycopg[binary]>=3.2,<4",
     "boto3>=1.34,<2",
     "fastapi>=0.110.0,<1",
 ]
 
 [dependency-groups]
-# Default group for `uv sync` and `uv run`. libs/tests/test_todo_logging_order.py needs the
+# Default group for `uv sync` and `uv run`. common/tests/test_todo_logging_order.py needs the
 # real OpenTelemetry packages. Same specifiers as the platform/30.todo/Dockerfile (#1213).
 dev = [
     "opentelemetry-sdk>=1.24,<2",
@@ -48,7 +48,7 @@ e2e = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["libs/tests"]
+testpaths = ["common/tests"]
 markers = [
     "smoke: quick smoke tests",
     "sso: SSO/Portal tests",
@@ -59,9 +59,9 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["libs", "tools"]
+source = ["common", "tools"]
 omit = [
-    "libs/tests/**",
+    "common/tests/**",
     "e2e_regressions/tests/**",
 ]
 

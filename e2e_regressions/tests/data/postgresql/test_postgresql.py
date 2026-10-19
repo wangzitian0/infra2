@@ -3,6 +3,7 @@ PostgreSQL database tests.
 
 Tests PostgreSQL connectivity when credentials are provided.
 """
+
 import pytest
 from conftest import TestConfig
 
@@ -14,6 +15,7 @@ async def test_postgresql_connect(config: TestConfig):
         pytest.skip("Platform DB credentials not configured")
 
     import asyncpg
+
     conn = await asyncpg.connect(
         host=config.PLATFORM_DB_HOST,
         port=int(config.PLATFORM_DB_PORT),
@@ -35,6 +37,7 @@ async def test_postgresql_version(config: TestConfig):
         pytest.skip("Platform DB credentials not configured")
 
     import asyncpg
+
     conn = await asyncpg.connect(
         host=config.PLATFORM_DB_HOST,
         port=int(config.PLATFORM_DB_PORT),

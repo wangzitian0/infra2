@@ -11,7 +11,7 @@ Types:
     app_vars   - Vault: what services read at runtime (default)
 
 Nobody types into Vault (docs/ssot/bootstrap.vars_and_secrets.md §1.4): the deploy-time
-supply (libs/secrets_supply.py) fills it from the manifest — human values are copied
+supply (common/secrets_supply.py) fills it from the manifest — human values are copied
 from 1Password, runtime values are generated. ``env.set --type=app_vars`` therefore
 refuses unless ``--break-glass`` is given, and the daily reconcile reports the drift.
 """
@@ -23,8 +23,8 @@ from typing import cast
 
 from invoke import task
 
-from libs.console import console, error, header, success
-from libs.security.store import CredentialType, OpSecrets, get_secrets
+from common.console import console, error, header, success
+from common.security.store import CredentialType, OpSecrets, get_secrets
 
 
 VALID_TYPES: tuple[CredentialType, ...] = ("bootstrap", "root_vars", "app_vars")

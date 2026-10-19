@@ -1,15 +1,15 @@
 import sys
 
-from libs.deploy.deployer import Deployer, make_tasks
-from libs.console import header, success, info, warning, error
-from libs.core.facets import (
+from common.deploy.deployer import Deployer, make_tasks
+from common.console import header, success, info, warning, error
+from common.core.facets import (
     ProbeFacet,
     PublicRouteFacet,
     SecretsFacet,
     SignalFacet,
     StorageFacet,
 )
-from libs.observability.openpanel import openpanel_env
+from common.observability.openpanel import openpanel_env
 
 shared_tasks = sys.modules.get("finance_report.10.app.shared")
 
@@ -153,7 +153,7 @@ class AppDeployer(Deployer):
 
         Deployer.composing() builds its Dokploy env payload from compose_env_base and
         replaces the compose env wholesale. Forwarding to compose_env_overrides keeps
-        both deploy_v2 (libs.deploy.promote) and iac-runner sync aligned on S3_BUCKET,
+        both deploy_v2 (common.deploy.promote) and iac-runner sync aligned on S3_BUCKET,
         S3_PUBLIC_BUCKET, and API_RATE_LIMIT_REQUESTS.
         """
         base = super().compose_env_base(env)
@@ -178,13 +178,13 @@ class AppDeployer(Deployer):
         # Auto-configure S3 Public Endpoint using standardized infrastructure lib
         # This ensures we respect the central SERVICE_SUBDOMAINS definition ("s3")
         # and handle environment suffixes automatically.
-        from libs.core.environ import get_service_url
+        from common.core.environ import get_service_url
 
         try:
             # "s3" is the canonical key in SERVICE_SUBDOMAINS for the S3 interface
             env_vars["S3_PUBLIC_ENDPOINT"] = get_service_url("s3", env=env_vars)
         except Exception as e:
-            from libs.console import error
+            from common.console import error
 
             error(f"Could not resolve Public S3 URL: {e}")
             # Halt deployment when S3 endpoint cannot be resolved to avoid incomplete configuration
@@ -196,7 +196,7 @@ class AppDeployer(Deployer):
         # OpenPanel PV tracking (model B: one project per environment). Client ids
         # are PUBLIC web client ids (config, not secret); unknown env => empty =>
         # Analytics no-op. #372: the map is the single source in tools.openpanel_clients
-        # so the live deploy_v2 path (libs/deploy/promote) injects the same values
+        # so the live deploy_v2 path (common/deploy/promote) injects the same values
         # — this legacy pre_compose path no longer owns a duplicate literal.
         env_vars.update(openpanel_env(str(env_vars.get("ENV") or "")))
 

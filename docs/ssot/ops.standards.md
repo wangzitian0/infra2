@@ -17,7 +17,7 @@
 ### 标准标签 (Tagging)
 - 对外服务必须配置 Traefik labels（`traefik.enable`, router rule, entrypoints, tls）。
 - 内部服务必须显式 `traefik.enable=false`，避免误暴露。
-- 服务身份只有一个版本化契约：`libs/service_identity.py` 的 `v1`。canonical
+- 服务身份只有一个版本化契约：`common/service_identity.py` 的 `v1`。canonical
   坐标为 `service_id=<namespace>/<service>`、`environment`、`component`，发布
   坐标为 `service.version` / `iac_ref`；`managed_by=infra2` 标识签发者。
 - IaC/Dokploy 使用 `INFRA_*`，OpenTelemetry 使用 semantic conventions
@@ -53,7 +53,7 @@
 
 ### Rule 2: 逻辑白盒化 (Whitebox Logic)
 任何动态拼接的字符串（URL、ID、路径）必须在任务输出中可见。
-- **手段**：使用 `libs.console.env_vars` 或在 README 中显式列出。
+- **手段**：使用 `common.console.env_vars` 或在 README 中显式列出。
 
 ### Rule 3: 漂移检测优先 (Drift Detection First)
 针对外部服务（Vault, Authentik），优先在部署前执行 `invoke <service>.shared.status` 或 Dokploy 健康检查，避免在运行期才暴露问题。
@@ -74,7 +74,7 @@
 
 ### Rule 6: 镜像必须钉版本 (Pin Images)
 platform compose 中的镜像禁止浮动 tag——上游静默漂移且不可复现。事故先例：#253/#255 的 prefect 卡死源于浮动的 `:3-latest` tag 漂移。规范要求钉到不随上游移动的引用：至少钉具体版本，推荐钉 digest（`image: repo:tag@sha256:...`）。
-- **机械守卫**（范围小于规范本身）：`tools/lint_compose_resource_limits.py` 与 SDK `infra2_sdk.rules.compose`（infra-ci 阻断）拦截字面量裸 `:latest` 并校验内存上限；其它浮动 tag（如 `:3-latest`、`:stable`）靠 review 把关。proof `libs/tests/test_image_pins.py`。
+- **机械守卫**（范围小于规范本身）：`tools/lint_compose_resource_limits.py` 与 SDK `infra2_sdk.rules.compose`（infra-ci 阻断）拦截字面量裸 `:latest` 并校验内存上限；其它浮动 tag（如 `:3-latest`、`:stable`）靠 review 把关。proof `common/tests/test_image_pins.py`。
 
 ### Rule 7: 发布前 Schema 与枚举双向校验 (Pre-Deploy Schema Gate, #698)
 在任何涉及持久化存储的应用部署销毁或重启容器前，必须执行 Pre-Deploy Schema Gate（`tools/pre_deploy_schema_check.py`）：
@@ -97,8 +97,8 @@ platform compose 中的镜像禁止浮动 tag——上游静默漂移且不可�
 - **Vault 是运行时真理**：服务部署必须从 Vault 读写或显式填写。
 - **滚动重启生效（Rolling Restart）**：密钥轮转不具备进程内存级零停机热加载能力，密码/凭据更新必须通过触发容器重建（`reconcile-iac-inputs.yml` 或 `deploy_v2` 重建）生效。
 - **契约对齐**：调整环境变量时，更新 `.env.example` 与对应服务 README。
-- **环境变量静态清点与三道机械守卫（`tools/env_inventory.py`，proof `libs/tests/test_env_inventory.py`，#1236）**：
-  - **G1（Manifest ↔ Compose ↔ Template 对齐）**：注册服务（`libs.security.registry.SERVICES`）在 `compose.yaml` 与 `secrets.ctmpl` 中消费的每一个第一方变量必须在对应 `env.manifest.json` 中声明；禁止出现 `ctmpl_not_in_manifest`、`compose_first_party_not_in_manifest` 或 `store_key_not_rendered`。
+- **环境变量静态清点与三道机械守卫（`tools/env_inventory.py`，proof `common/tests/test_env_inventory.py`，#1236）**：
+  - **G1（Manifest ↔ Compose ↔ Template 对齐）**：注册服务（`common.security.registry.SERVICES`）在 `compose.yaml` 与 `secrets.ctmpl` 中消费的每一个第一方变量必须在对应 `env.manifest.json` 中声明；禁止出现 `ctmpl_not_in_manifest`、`compose_first_party_not_in_manifest` 或 `store_key_not_rendered`。
   - **G2（禁止环境层级 Fail-Open 默认值）**：在任何已部署配置或代码路径中，环境层级变量（`ENV`、`ENVIRONMENT`、`APP_ENV`、`INFRA_ENVIRONMENT` 等）禁止默认回退至 `production` 或 `prod`；已废弃的 `INFRA_PROBE_HEARTBEAT_ENV` 禁止在生产范围重现。
   - **G3（禁止死写、冲突/复制默认值、字面量密钥与幽灵文档变量）**：全仓强制拦截只写不读（`write_no_reader`）、同仓默认值冲突（`default_conflict`）、多文件重复硬编码默认值（`default_copied`）、Manifest 死条目（`dead_manifest_entry`）、过期示例声明（`stale_env_example`）、非占位符密钥字面量或默认值（`secret_literal`、`secret_default`）以及仅出现在 `docs/ssot/` 中的幽灵变量名。
 

@@ -14,7 +14,7 @@
 | Image | `platform/30.todo/Dockerfile` | Python 3.11 image. It installs the `infra2-sdk` wheel that `uv.lock` pins, with its hash. |
 | Deployer and facets | `platform/30.todo/deploy.py` | `TodoDeployer`: probe, signal, secrets, telemetry identity, Postgres role |
 | Secret contract | `platform/30.todo/env.manifest.json` | Generates `secrets.ctmpl` and `vault-policy.hcl` |
-| Tests | `libs/tests/test_todo_service.py`, `libs/tests/test_todo_canary_depth.py`, `libs/tests/test_platform_otel_adoption.py` | Behaviour, routing, deployer contracts, and the telemetry links of every `init_service` caller |
+| Tests | `common/tests/test_todo_service.py`, `common/tests/test_todo_canary_depth.py`, `common/tests/test_platform_otel_adoption.py` | Behaviour, routing, deployer contracts, and the telemetry links of every `init_service` caller |
 
 ## 2. What Each Check Proves
 
@@ -74,7 +74,7 @@ A change to the severity changes `ProbeFacet.severity` and the two frozen fixtur
 - `lastFailAt` or `lastOkAt` missing or malformed (a ledger written before #1223): the pillar fails. The ledger does not say how old the failures are.
 - The public health check and the internal canary status keep their veto. Old failures never hide a service that fails now.
 
-A deploy therefore turns the pillar red for one window, not for the rest of the day. The ledger fields are in `libs/observability/local_ledger.py`. The first UTC day after the writer change keeps a failure that the old writer counted: that day has no `lastFailAt`.
+A deploy therefore turns the pillar red for one window, not for the rest of the day. The ledger fields are in `common/observability/local_ledger.py`. The first UTC day after the writer change keeps a failure that the old writer counted: that day has no `lastFailAt`.
 
 ## 4. Credentials
 

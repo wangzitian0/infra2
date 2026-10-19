@@ -20,10 +20,11 @@ from typing import Any
 
 from invoke import Context, task
 
-from libs.core.environ import get_env, infra_domain, with_env_suffix
-from libs.console import error, header, info, success, warning
-from libs.deploy.dokploy_client import get_dokploy
-from libs.security.vault_tokens import policy_name
+from infra2_sdk.secrets import policy_name
+
+from common.console import error, header, info, success, warning
+from common.core.environ import get_env, infra_domain, with_env_suffix
+from common.deploy.dokploy_client import get_dokploy
 
 
 def _clean_ident(value: str) -> str:

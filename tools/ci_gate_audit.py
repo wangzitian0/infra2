@@ -26,7 +26,7 @@ reports", and shipped only the ``infra-ci`` half; the ``ops.scheduled_cleanup`` 
 other half and sat unused. Registering the PR-triggered remainder finishes Phase 1 as
 written; it does not reopen what was closed. The ``blocks_merge: true`` set is unchanged by
 that backfill, which is what makes the widening provably non-loosening
-(``libs/tests/test_ci_gate_audit.py`` locks the set).
+(``common/tests/test_ci_gate_audit.py`` locks the set).
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from pathlib import Path
 import yaml
 from infra2_sdk.ci import load_delivery_stages, validate_inventory
 
-from libs.core import ci_spec
+from common.core import ci_spec
 
 ROOT = Path(__file__).resolve().parents[1]
 INVENTORY = "docs/ssot/ci-gate-inventory.yaml"

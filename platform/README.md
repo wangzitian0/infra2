@@ -126,7 +126,7 @@ clickhouse ──► signoz ──► alerting
 2. Create `deploy.py`:
    ```python
    import sys
-   from libs.deploy.deployer import Deployer, make_tasks
+   from common.deploy.deployer import Deployer, make_tasks
    
    shared_tasks = sys.modules.get("platform.XX.new.shared")
    
@@ -155,7 +155,7 @@ clickhouse ──► signoz ──► alerting
 3. Create `shared_tasks.py`:
    ```python
    from invoke import task
-   from libs.common import check_service
+   from common.common import check_service
    
    @task
    def status(c):
@@ -191,5 +191,5 @@ See [docs/ssot/platform.sso.md](../docs/ssot/platform.sso.md) for details.
 - **AI 行为准则**: [AGENTS.md](../AGENTS.md)
 - **SSOT**: [docs/ssot/platform.automation.md](../docs/ssot/platform.automation.md)
 - **Vault SSOT**: [docs/ssot/db.vault-integration.md](../docs/ssot/db.vault-integration.md)
-- **Libs**: [libs/README.md](../libs/README.md)
+- **Libs**: [common/README.md](../common/README.md)
 - **Tools**: [tools/README.md](../tools/README.md)

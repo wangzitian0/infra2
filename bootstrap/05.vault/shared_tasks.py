@@ -1,9 +1,9 @@
-"""Vault shared tasks - uses libs/ system"""
+"""Vault shared tasks - uses common/ system"""
 
 from __future__ import annotations
 import json
 from invoke import task
-from libs.console import console, success, error
+from common.console import console, success, error
 
 
 @task

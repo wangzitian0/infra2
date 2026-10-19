@@ -8,7 +8,7 @@ bridge, Dokploy status, staging backups) still run, and their failures go to one
 daily report because another layer pages them (#908).
 
 A page is delivered only when the set of paged checks changes (#962,
-``libs/observability/page_dedup.py``): the same set on a later day is a
+``common/observability/page_dedup.py``): the same set on a later day is a
 `[报告] 仍未恢复` in the reports chat, and a day on which the set empties sends a
 RESOLVED page. Unreadable state pages as before.
 """
@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.alerting import (  # noqa: E402
+from common.alerting import (  # noqa: E402
     INFRA2_REPORTS_ENV,
     REPORT_TITLE_PREFIX,
     PagerItem,
@@ -49,17 +49,17 @@ from libs.alerting import (  # noqa: E402
     redact_credentials,
     render_pager_text,
 )
-from libs.deploy.queue import deployment_start_epoch  # noqa: E402
-from libs.deploy.dokploy_client import get_dokploy  # noqa: E402
-from libs.observability.page_dedup import (  # noqa: E402
+from common.deploy.queue import deployment_start_epoch  # noqa: E402
+from common.deploy.dokploy_client import get_dokploy  # noqa: E402
+from common.observability.page_dedup import (  # noqa: E402
     REPORT as DEDUP_REPORT,
     RESOLVED as DEDUP_RESOLVED,
     Finding,
     dedup_page,
     resolve_page_state,
 )
-from libs.observability import scheduled_job_start  # noqa: E402
-from libs.observability.scheduler_peer_liveness import (  # noqa: E402
+from common.observability import scheduled_job_start  # noqa: E402
+from common.observability.scheduler_peer_liveness import (  # noqa: E402
     BOUND_CAP_ENV,
     OK as PEER_OK,
     UNVERIFIABLE,
@@ -67,7 +67,7 @@ from libs.observability.scheduler_peer_liveness import (  # noqa: E402
     github_getter,
     parse_bound_cap_hours,
 )
-from libs.observability.issue_trail import (  # noqa: E402
+from common.observability.issue_trail import (  # noqa: E402
     VERDICTS_ENV,
     WATCHDOG_SOURCE,
     CheckVerdict,
@@ -178,12 +178,7 @@ class SshTarget:
     expected_text: str
 
 
-@dataclass(frozen=True)
-class SshConfig:
-    host: str
-    user: str
-    port: int
-    key_path: str
+from common.observability.watchdog import SshConfig, _ssh_argv, load_ssh_config  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -240,21 +235,6 @@ def parse_ssh_targets(raw: str) -> list[SshTarget]:
             name=parts[0], command=parts[1], expected_text=parts[2]
         )
     return [target_by_name[name] for name in ordered_names]
-
-
-def load_ssh_config(env: Mapping[str, str]) -> SshConfig | None:
-    """Return SSH config when every required field is present."""
-    host = env.get("INFRA2_WATCHDOG_SSH_HOST", "").strip()
-    user = env.get("INFRA2_WATCHDOG_SSH_USER", "").strip()
-    key_path = env.get("INFRA2_WATCHDOG_SSH_KEY_PATH", "").strip()
-    if not host or not user or not key_path:
-        return None
-    return SshConfig(
-        host=host,
-        user=user,
-        port=int(env.get("INFRA2_WATCHDOG_SSH_PORT", "") or "22"),
-        key_path=key_path,
-    )
 
 
 def run_http_checks(
@@ -564,26 +544,6 @@ def run_ssh_checks(
     return results
 
 
-def _ssh_argv(config: SshConfig, remote_command: str) -> list[str]:
-    return [
-        "ssh",
-        "-i",
-        config.key_path,
-        "-p",
-        str(config.port),
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "ConnectTimeout=10",
-        "-o",
-        "StrictHostKeyChecking=no",
-        "-o",
-        "UserKnownHostsFile=/dev/null",
-        f"{config.user}@{config.host}",
-        remote_command,
-    ]
-
-
 def run_backup_checks(
     config: SshConfig | None,
     timeout: float = 20.0,
@@ -607,14 +567,14 @@ def run_backup_checks(
             for name in names
         ]
     try:
-        from libs.backup.verification import (
+        from common.backup.verification import (
             FUTURE_TOLERANCE_HOURS,
             INVENTORY_DEFAULTS,
             latest_manifest_path,
             load_backup_inventory,
             verify_backup_manifest,
         )
-        from tools.run_restore_rehearsal import ALL_SERVICES, PASS_SUMMARY_PREFIX
+        from common.backup.rehearsal import ALL_SERVICES, PASS_SUMMARY_PREFIX
 
         inventory = load_backup_inventory()
     except Exception as exc:  # noqa: BLE001 - a broken verifier is red, never a pass.
@@ -1408,7 +1368,7 @@ def format_failure_message(
 ) -> str:
     """Build the Feishu page for failed paging checks (see route_failures).
 
-    #905: the pager layout every source shares (``libs.alerting.PAGER_FIELDS``).
+    #905: the pager layout every source shares (``common.alerting.PAGER_FIELDS``).
     """
     now = time.time() if now is None else now
     failures = sorted(

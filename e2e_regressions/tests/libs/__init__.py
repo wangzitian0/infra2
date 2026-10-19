@@ -1,1 +1,1 @@
-"""E2E tests for libs package - tests against real services"""
+"""E2E tests for common package - tests against real services"""

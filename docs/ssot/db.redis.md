@@ -56,7 +56,7 @@ invoke redis.shared.status
 | 行为描述 | 验证方式 | 状态 |
 |----------|----------|------|
 | **服务可达** | `invoke redis.shared.status` | ✅ Manual |
-| **重建后重启依赖方,跳过时不重启**(#726) | `libs/tests/test_deploy_in_service.py`, `libs/tests/test_service_registry.py` | ✅ |
+| **重建后重启依赖方,跳过时不重启**(#726) | `common/tests/test_deploy_in_service.py`, `common/tests/test_service_registry.py` | ✅ |
 
 ---
 

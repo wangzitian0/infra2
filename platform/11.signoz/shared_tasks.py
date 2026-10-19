@@ -3,8 +3,8 @@
 import re
 import json
 from invoke import task
-from libs.common import check_service
-from libs.core.environ import (
+from common.common import check_service
+from common.core.environ import (
     OTLP_TRACES_PATH,
     get_env,
     service_domain,
@@ -29,7 +29,7 @@ def _sanitize_service_name(name: str) -> str:
 @task
 def status(c):
     """Check SigNoz and OTEL collector health."""
-    from libs.console import success, error
+    from common.console import success, error
 
     env = get_env()
     host = env["VPS_HOST"]
@@ -63,7 +63,7 @@ def test_trace(c, service_name="test"):
         invoke signoz.shared.test-trace
         invoke signoz.shared.test_trace --service-name=myapp
     """
-    from libs.console import success, error, info
+    from common.console import success, error, info
     import base64
     import time
 
@@ -151,7 +151,7 @@ def test_log(c, service_name="test-log-service", message="Test log from OTEL"):
         invoke signoz.shared.test-log
         invoke signoz.shared.test-log --service-name=myapp --message="Hello SigNoz"
     """
-    from libs.console import success, error, info
+    from common.console import success, error, info
     import base64
     import time
 
@@ -259,7 +259,7 @@ def query_logs(c, service_name=None, limit=10):
         invoke signoz.shared.query-logs
         invoke signoz.shared.query-logs --service-name=finance-report-backend --limit=20
     """
-    from libs.console import error, info
+    from common.console import error, info
 
     env = get_env()
     host = env["VPS_HOST"]
@@ -299,7 +299,7 @@ def list_services(c):
     Usage:
         invoke signoz.shared.list-services
     """
-    from libs.console import info
+    from common.console import info
 
     env = get_env()
     host = env["VPS_HOST"]
@@ -338,7 +338,7 @@ def create_api_key(
         DEPLOY_ENV=staging invoke signoz.shared.create-api-key --name=custom-key --expiry-days=30
         DEPLOY_ENV=staging invoke signoz.shared.create-api-key --no-store-vault
     """
-    from libs.console import success, error, info, warning
+    from common.console import success, error, info, warning
     import subprocess
 
     env = get_env()
@@ -439,7 +439,7 @@ def create_api_key(
     success(f"Created API key: {name} (id: {api_key_id})")
 
     if store_vault:
-        from libs.security.store import get_secrets
+        from common.security.store import get_secrets
 
         deploy_env = env["ENV"]
         secrets = get_secrets("platform", "signoz", deploy_env)

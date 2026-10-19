@@ -214,8 +214,8 @@ problems add `watchdog.delivery.*` events and heartbeat storage failures a
 ### Budget (#904)
 
 The Worker stays on the Workers Free plan. Measured by
-`libs/tests/test_cloudflare_watchdog_kv_budget.py` and
-`libs/tests/test_cloudflare_watchdog.py` (node, in-memory KV, fake network):
+`common/tests/test_cloudflare_watchdog_kv_budget.py` and
+`common/tests/test_cloudflare_watchdog.py` (node, in-memory KV, fake network):
 
 | Per cron run | Subrequests |
 |---|---|

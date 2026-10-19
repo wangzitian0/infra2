@@ -23,10 +23,11 @@ from typing import Any, Mapping
 
 from invoke import Context, task
 
-from libs.core.environ import get_env, infra_domain, with_env_suffix
-from libs.console import error, header, info, success, warning
-from libs.deploy.dokploy_client import get_dokploy
-from libs.security.vault_tokens import policy_name
+from infra2_sdk.secrets import policy_name
+
+from common.console import error, header, info, success, warning
+from common.core.environ import get_env, infra_domain, with_env_suffix
+from common.deploy.dokploy_client import get_dokploy
 
 
 def _clean_ident(value: str) -> str:
@@ -72,17 +73,11 @@ def get_or_create_db_credentials(
 
     Returns (password, is_created).
     """
-    from libs.security.store import generate_password
-
-    try:
-        from infra2_sdk.secrets import OnePasswordBackend
-    except ImportError:
-        OnePasswordBackend = None
+    from common.security.store import generate_password
+    from infra2_sdk.secrets import OnePasswordBackend
 
     item_title = f"{project}/{env_name}/{service}/db"
-    backend = op_backend or (
-        OnePasswordBackend("Infra2") if OnePasswordBackend else None
-    )
+    backend = op_backend or OnePasswordBackend("Infra2")
 
     if backend is not None:
         try:
@@ -236,33 +231,11 @@ def sync_vault_secrets(
     vault_backend: Any = None,
 ) -> None:
     """Idempotently sync secrets dictionary into Vault KV v2."""
-    try:
-        from infra2_sdk.secrets import VaultKvBackend, vault_path
-    except ImportError:
-        VaultKvBackend = None
+    from infra2_sdk.secrets import VaultKvBackend, vault_path
 
-        def vault_path(p: str, e: str, s: str) -> str:
-            return f"{p}/{e}/{s}"
-
-    backend = vault_backend or (
-        VaultKvBackend(vault_addr, token=token) if VaultKvBackend else None
-    )
+    backend = vault_backend or VaultKvBackend(vault_addr, token=token)
     path = vault_path(project, env_name, service)
-
-    if backend is not None:
-        backend.write(path, secrets)
-    else:
-        # Fallback to direct Vault CLI command
-        venv = dict(os.environ)
-        venv["VAULT_ADDR"] = vault_addr
-        venv["VAULT_TOKEN"] = token
-        kv_pairs = [f"{k}={v}" for k, v in secrets.items()]
-        subprocess.run(
-            ["vault", "kv", "put", f"secret/{path}", *kv_pairs],
-            env=venv,
-            check=True,
-            capture_output=True,
-        )
+    backend.write(path, secrets)
 
 
 def onboard_service(

@@ -11,28 +11,26 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-# libs.deploy.release_markers is pure git; libs.deploy.app_deploy_request pulls in infra2_sdk and is
-# imported lazily, so `markers` runs in an ops job that installs neither (#650).
-from libs.deploy.release_markers import marker_status
+from common.deploy.release_markers import marker_status
 
-if TYPE_CHECKING:  # the annotation must not drag infra2_sdk into the markers path
-    from libs.deploy.app_deploy_request import DeployPlan
+if TYPE_CHECKING:
+    from common.deploy.app_deploy_request import DeployPlan
 
 
 def execute_plan(plan: "DeployPlan", *, run=None) -> int:
     """Execute the primary service, then each companion the service spec declares.
 
-    A companion (``libs.deploy.contract.ServiceSpec.companions``) is promoted at the
+    A companion (``common.deploy.contract.ServiceSpec.companions``) is promoted at the
     same version_ref / iac_ref / type by the same request — truealpha/app carries
     truealpha/data_engine (truealpha#712). Companions are platform (iac_pinned)
     services, so ``--expected-sha`` — an app-image assertion — is dropped for them;
     the runner pins the release's image digest from ``version_ref`` instead. The
     first non-zero exit stops the sequence and is the request's exit code.
     """
-    from libs.deploy.contract import service_spec
+    from common.deploy.contract import service_spec
 
     if run is None:
-        from tools.deploy_v2 import main as deploy_v2_main
+        from common.deploy.v2 import main as deploy_v2_main
 
         run = deploy_v2_main
     primary = plan.deploy_v2_args()
@@ -153,7 +151,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(status.line())
             return 1 if status.stale else 0
 
-        from libs.deploy.app_deploy_request import (
+        from common.deploy.app_deploy_request import (
             PRODUCTION_REQUEST_MAX_AGE_SECONDS,
             check_request_age,
             make_plan,

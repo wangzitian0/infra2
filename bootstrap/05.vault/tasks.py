@@ -1,6 +1,6 @@
 """
 Vault deployment automation tasks
-Uses libs/ system for consistent environment and console utilities.
+Uses common/ system for consistent environment and console utilities.
 """
 
 import json
@@ -9,29 +9,30 @@ import re
 import time
 
 from invoke import task
-from libs.deploy.deployer import Deployer
-from libs.core.environ import get_env
-from libs.console import (
-    header,
-    success,
-    error,
-    warning,
-    info,
-    prompt_action,
-    run_with_status,
-)
-from libs.security.vault_tokens import (
+from infra2_sdk.secrets import (
     VaultTokenTarget,
     normalize_selector,
     policy_name as vault_policy_name,
 )
+
+from common.console import (
+    error,
+    header,
+    info,
+    prompt_action,
+    run_with_status,
+    success,
+    warning,
+)
+from common.core.environ import get_env
+from common.deploy.deployer import Deployer
 from typing import Any
 
 CONNECT_TOKEN_ITEM = "infra2.0 Access Token: infra2.0"
 
 
 class VaultDeployer(Deployer):
-    """Vault deployer using libs/ system"""
+    """Vault deployer using common/ system"""
 
     service = "vault"
     project = "bootstrap"
@@ -76,7 +77,7 @@ class VaultDeployer(Deployer):
         }
 
         try:
-            from libs.security.store import OpSecrets
+            from common.security.store import OpSecrets
 
             vault_result = c.run(
                 "op vault get Infra2 --format json", hide=True, warn=True
@@ -119,7 +120,7 @@ class VaultDeployer(Deployer):
                 env_vars["OP_ITEM_ID"] = ""
 
         except ImportError:
-            error("Missing libs.env dependencies")
+            error("Missing common.env dependencies")
             return None
         except Exception as ex:
             error(f"Failed to fetch secrets: {ex}")
@@ -146,8 +147,8 @@ class VaultDeployer(Deployer):
     @classmethod
     def composing(cls, c, env_vars: dict) -> str:
         """Deploy Vault via Dokploy API (using GitHub provider)"""
-        from libs.deploy.dokploy_client import ensure_project, get_dokploy
-        from libs.core.constants import GITHUB_BRANCH, GITHUB_OWNER, GITHUB_REPO
+        from common.deploy.dokploy_client import ensure_project, get_dokploy
+        from common.core.constants import GITHUB_BRANCH, GITHUB_OWNER, GITHUB_REPO
 
         e = cls.env()
         header(f"{cls.service} composing", "Deploying via Dokploy API")
@@ -214,7 +215,7 @@ class VaultDeployer(Deployer):
             compose_id = result["composeId"]
 
         # Update environment variables
-        info("Updating environment variables (from libs)")
+        info("Updating environment variables (from common)")
         # Filter out internal keys or empty values
         env_content = "\n".join(
             [f"{k}={v}" for k, v in env_vars.items() if v is not None]
@@ -397,7 +398,7 @@ def _vault_token_targets(root_dir: str) -> list[VaultTokenTarget]:
         "finance_report",
         "truealpha",
         "docs",
-        "libs",
+        "common",
         "tools",
         "scripts",
         "e2e_regressions",
@@ -548,8 +549,8 @@ def _redeploy_with_vault_creds(
 
 def _dokploy_client() -> tuple[Any, str]:
     """The Dokploy client for this environment, and the environment name."""
-    from libs.deploy.dokploy_client import get_dokploy
-    from libs.core.environ import get_env
+    from common.deploy.dokploy_client import get_dokploy
+    from common.core.environ import get_env
 
     e = get_env()
     domain = e.get("INTERNAL_DOMAIN")
@@ -912,7 +913,7 @@ def _refresh_role_consumers(role_id: str, secret_id: str) -> bool:
     """Give the new secret id to every Dokploy compose that logs in as ``role_id``.
 
     A PR preview copies the AppRole credentials of its source environment
-    (``libs/deploy/preview.py``), so the target compose is not the only consumer of a
+    (``common/deploy/preview.py``), so the target compose is not the only consumer of a
     role. A consumer that keeps a destroyed secret id fails its next login. Returns
     True only when every consumer has the new secret id and a new ``done``
     deployment record, and a second read finds no earlier secret id.

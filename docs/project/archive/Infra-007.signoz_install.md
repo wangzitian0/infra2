@@ -142,8 +142,8 @@ open https://signoz.${INTERNAL_DOMAIN}
 
 | AC | Description | Proof |
 |----|-------------|-------|
-| Infra-007.1 | Out-of-band watchdog runs on a daily GitHub Actions schedule and can be manually dispatched. | `.github/workflows/ops-checks.yml`, `libs/tests/test_out_of_band_watchdog.py` |
-| Infra-007.2 | Host-level checks execute outside infra2 and alert through a direct Feishu webhook rather than the infra2 bridge. | `tools/out_of_band_watchdog.py`, `libs/tests/test_out_of_band_watchdog.py` |
+| Infra-007.1 | Out-of-band watchdog runs on a daily GitHub Actions schedule and can be manually dispatched. | `.github/workflows/ops-checks.yml`, `common/tests/test_out_of_band_watchdog.py` |
+| Infra-007.2 | Host-level checks execute outside infra2 and alert through a direct Feishu webhook rather than the infra2 bridge. | `tools/out_of_band_watchdog.py`, `common/tests/test_out_of_band_watchdog.py` |
 | Infra-007.3 | Alert bridge health is checked from the external workflow via SSH without exposing the bridge publicly. | `.github/workflows/ops-checks.yml`, `tools/out_of_band_watchdog.py` |
 
 ### Official Compose Analysis

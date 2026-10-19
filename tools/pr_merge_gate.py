@@ -48,7 +48,7 @@ import time
 
 import yaml
 
-from libs.gate import (
+from common.gate import (
     ABSENT,
     AUTOMATED_REVIEWERS,
     BLOCKING_SEVERITY_TOTAL,
@@ -208,14 +208,14 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
     parser.add_argument("--json", action="store_true", help="machine-readable verdict")
     args = parser.parse_args(argv)
 
-    from libs.console import error, success, warning
-    from libs.gate.evaluator import (
+    from common.console import error, success, warning
+    from common.gate.evaluator import (
         LOCK_NOT_REACHED,
         LOCK_SKIPPED,
         lock_line,
         lock_state,
     )
-    from libs.gate.types import EXIT_UNEVALUABLE
+    from common.gate.types import EXIT_UNEVALUABLE
 
     def unevaluable(
         why: str, *, state: str = "not_read", detail: str = LOCK_NOT_REACHED
@@ -285,7 +285,7 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
     )
     if args.audit:
         try:
-            from tools.omca_gate_policy import evaluate_audit_report
+            from common.gate.omca_policy import evaluate_audit_report
 
             audit_proc = subprocess.run(
                 ["omca", "audit", "--json", "--mode", "fast"],

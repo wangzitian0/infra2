@@ -64,7 +64,7 @@ infra2/
 ├── scripts/          # 一次性/引导 shell 脚本
 ├── playground/       # 探索性验证脚本 (非生产)
 ├── e2e_regressions/  # E2E 测试
-├── libs/             # infra 内部库 (env, deployer, console)
+├── common/             # infra 内部库 (env, deployer, console)
 ├── tools/            # CLI 工具 (env, local)
 └── docs/             # 文档
     ├── ssot/         # SSOT 真理源

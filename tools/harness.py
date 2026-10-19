@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from libs.core.harness import sweep as harness_sweep  # noqa: E402
-from libs.core.harness.manifest import check_workspace, load_manifest  # noqa: E402
-from libs.core.harness.status import (  # noqa: E402
+from common.core.harness import sweep as harness_sweep  # noqa: E402
+from common.core.harness.manifest import check_workspace, load_manifest  # noqa: E402
+from common.core.harness.status import (  # noqa: E402
     WorkspaceStatus,
     fetch_json,
     observe_online,
