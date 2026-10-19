@@ -15,6 +15,7 @@ RUN sdk="$(python /tmp/sdk/sdk_requirement.py /tmp/sdk/uv.lock)" \
        "$sdk"
 
 COPY platform/12.alerting/app.py /app/app.py
+COPY common /app/common
 COPY libs /app/libs
 COPY tools /app/tools
 
