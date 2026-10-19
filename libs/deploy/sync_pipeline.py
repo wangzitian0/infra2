@@ -172,9 +172,11 @@ class SyncPipeline:
 
         missing = deployer.validate_preflight_env()
         if missing:
+            details = f"Missing env: {', '.join(missing)}"
+            log.log_error(f"Error: {details}")
             return SyncResult(
                 action=SyncAction.FAILED,
-                details=f"Missing env: {', '.join(missing)}",
+                details=details,
             )
 
         if os.environ.get("DEPLOY_ACTION") == "secrets-supply":
@@ -195,31 +197,38 @@ class SyncPipeline:
         deployer = self.ctx.deployer
         c = self.ctx.context
         e = self.ctx.env
+        log = self.ctx.logger
 
         try:
             token_status = deployer.verify_vault_app_token()
             if not token_status["valid"]:
+                details = (
+                    f"VAULT_APP_TOKEN issue: {token_status.get('details', 'unknown')}. "
+                    "This is a legacy static token; remove it from the service's Dokploy "
+                    "env (services authenticate via AppRole now — `invoke vault.setup-approle`)."
+                )
+                log.log_error(f"Error: {details}")
                 return SyncResult(
                     action=SyncAction.FAILED,
-                    details=(
-                        f"VAULT_APP_TOKEN issue: {token_status.get('details', 'unknown')}. "
-                        "This is a legacy static token; remove it from the service's Dokploy "
-                        "env (services authenticate via AppRole now — `invoke vault.setup-approle`)."
-                    ),
+                    details=details,
                 )
             if token_status.get("ttl_hours", 999) < 48:
+                details = (
+                    f"VAULT_APP_TOKEN expires in {token_status['ttl_hours']}h. "
+                    "It is a legacy static token; remove it from the Dokploy env "
+                    "(AppRole services don't use it)."
+                )
+                log.log_error(f"Error: {details}")
                 return SyncResult(
                     action=SyncAction.FAILED,
-                    details=(
-                        f"VAULT_APP_TOKEN expires in {token_status['ttl_hours']}h. "
-                        "It is a legacy static token; remove it from the Dokploy env "
-                        "(AppRole services don't use it)."
-                    ),
+                    details=details,
                 )
         except Exception as exc:  # noqa: BLE001
+            details = f"Could not verify VAULT_APP_TOKEN: {exc}"
+            log.log_error(f"Error: {details}")
             return SyncResult(
                 action=SyncAction.FAILED,
-                details=f"Could not verify VAULT_APP_TOKEN: {exc}",
+                details=details,
             )
 
         if not deployer.ensure_runtime_secrets(c):

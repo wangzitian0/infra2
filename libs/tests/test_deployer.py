@@ -1746,3 +1746,56 @@ def test_s3_compose_has_console_root_redirect() -> None:
     assert any(
         "redirectregex.replacement" in lbl and "rustfs/console" in lbl for lbl in labels
     )
+
+
+def test_git_provenance_stdlib_fallback_when_sdk_lacks_assert_after_on_main(
+    monkeypatch,
+) -> None:
+    """#1270: iac-runner container built with pre-v3.7.0 infra2-sdk must not fail importing git_provenance."""
+    import importlib
+    import sys
+    import types
+    import libs.deploy.git_provenance as gp
+
+    fake_refs = types.ModuleType("infra2_sdk.refs")
+    with monkeypatch.context() as m:
+        m.setitem(sys.modules, "infra2_sdk.refs", fake_refs)
+        reloaded = importlib.reload(gp)
+        assert callable(reloaded.assert_after_on_main)
+    importlib.reload(gp)
+
+
+def test_sync_pipeline_logs_error_on_preflight_failures(monkeypatch) -> None:
+    """Preflight failures in SyncPipeline must emit Error: via ConsoleLogger so sync_runner captures them."""
+    from libs.deploy.deployer import Deployer
+    from libs.deploy.sync_pipeline import ConsoleLogger, SyncPipeline
+
+    class DummyDeployer(Deployer):
+        service = "dummy"
+        compose_path = "platform/07.alerting/compose.yaml"
+
+        @classmethod
+        def env(cls):
+            return {"ENV": "staging", "INTERNAL_DOMAIN": "zitian.party"}
+
+        @classmethod
+        def validate_preflight_env(cls):
+            return []
+
+        @classmethod
+        def verify_vault_app_token(cls):
+            raise ImportError(
+                "cannot import name 'assert_after_on_main' from 'infra2_sdk.refs'"
+            )
+
+    errors: list[str] = []
+    logger = ConsoleLogger(error=lambda msg, *_a: errors.append(msg))
+    pipeline = SyncPipeline(
+        deployer=DummyDeployer, context=MagicMock(), force=False, logger=logger
+    )
+    res = pipeline.run()
+    assert res["action"] == "failed"
+    assert any(
+        "Error: Could not verify VAULT_APP_TOKEN:" in e and "assert_after_on_main" in e
+        for e in errors
+    )
