@@ -696,28 +696,40 @@ class Deployer:
             log_info=info,
         )
 
-        # Deploy
-        # Fail closed BEFORE any deployment if an AppRole compose would ship
-        # without its role/secret — the #257/#290 foot-gun where the
-        # vault-agent crash-loops on "VAULT_ROLE_ID and VAULT_SECRET_ID are
-        # required". The compose record now exists either way, so
-        # `vault.setup-approle` has a target to inject into and its
-        cls._assert_approle_creds_present(effective_env)
+        try:
+            # Deploy
+            # Fail closed BEFORE any deployment if an AppRole compose would ship
+            # without its role/secret — the #257/#290 foot-gun where the
+            # vault-agent crash-loops on "VAULT_ROLE_ID and VAULT_SECRET_ID are
+            # required". The compose record now exists either way, so
+            # `vault.setup-approle` has a target to inject into and its
+            cls._assert_approle_creds_present(effective_env)
 
-        # Prune stale Dokploy-attached domains before deployment.
-        # If cls.subdomain is None (the service manages its own routing via compose.yaml Traefik labels, Infra-011.5)
-        # or if the compose was adopted from a legacy name (e.g. minio -> s3), Dokploy DB may have domains
-        # attached with a serviceName that no longer exists in compose.yaml. Dokploy validates domain attachments
-        # during compose deployment and immediately aborts if any domain references a non-existent service.
-        if cls.subdomain is None:
-            cls._prune_stale_dokploy_domains(client, compose_id)
+            # Prune stale Dokploy-attached domains before deployment.
+            # If cls.subdomain is None (the service manages its own routing via compose.yaml Traefik labels, Infra-011.5)
+            # or if the compose was adopted from a legacy name (e.g. minio -> s3), Dokploy DB may have domains
+            # attached with a serviceName that no longer exists in compose.yaml. Dokploy validates domain attachments
+            # during compose deployment and immediately aborts if any domain references a non-existent service.
+            if cls.subdomain is None:
+                cls._prune_stale_dokploy_domains(client, compose_id)
 
-        # Configure domains BEFORE deploying compose so Dokploy includes domain
-        # labels in a single pass (avoiding an expensive second redeploy).
-        cls.ensure_compose_domains(client, compose_id, e)
+            # Configure domains BEFORE deploying compose so Dokploy includes domain
+            # labels in a single pass (avoiding an expensive second redeploy).
+            cls.ensure_compose_domains(client, compose_id, e)
 
-        info(f"Deploying compose {compose_id}...")
-        cls._deploy_compose_with_record_check(client, compose_id)
+            info(f"Deploying compose {compose_id}...")
+            cls._deploy_compose_with_record_check(client, compose_id)
+        except Exception:
+            if existing and existing_env is not None:
+                try:
+                    client.update_compose(
+                        compose_id, env=existing_env, autoDeploy=False
+                    )
+                except Exception as restore_exc:  # noqa: BLE001
+                    warning(
+                        f"Failed to restore previous compose env on {compose_id}: {restore_exc}"
+                    )
+            raise
 
         success(f"Deployed {cls.service} (composeId: {compose_id})")
         return compose_id
@@ -828,7 +840,9 @@ class Deployer:
         every unchanged service on every release (#718). The config hash already covers
         the compose file, its build context and declared dependencies, so the older
         checkout holds the same inputs; what a skip still has to prove is that the
-        containers are up (#691, #698).
+        containers are up (#691, #698) and that if the compose env records an
+        `IAC_DEPLOY_REF` from a prior failed/interrupted sync, the on-disk checkout
+        actually matches that recorded `IAC_DEPLOY_REF` (#1247).
 
         Returns an error string when the stack is not in service (sync redeploys it),
         None when it is. Raises when the host cannot be asked (no appName, `docker ps`
@@ -837,7 +851,49 @@ class Deployer:
         stack = cls._stack_on_host(c, compose_id)
         if stack is None:
             return None
-        return cls._verify_containers_in_service(c, stack)
+        container_error = cls._verify_containers_in_service(c, stack)
+        if container_error:
+            return container_error
+        return cls._verify_recorded_deploy_ref_checkout(stack)
+
+    @classmethod
+    def _verify_recorded_deploy_ref_checkout(cls, stack: _HostStack) -> str | None:
+        """Verify that on-disk checkout matches the compose's recorded IAC_DEPLOY_REF (#1247).
+
+        Unlike `_verify_checkout_identity` (which compares against THIS runner's HEAD),
+        this compares against the compose's own recorded `IAC_DEPLOY_REF` only when one
+        is recorded on the remote compose env, catching half-applied syncs where
+        `upsert_github_compose` updated `IAC_DEPLOY_REF` in Dokploy DB before git clone
+        completed.
+        """
+        from libs.deploy.dokploy_adapter import parse_remote_config_identity
+
+        e = cls.env()
+        try:
+            existing = cls._find_remote_compose(e)
+        except Exception:  # noqa: BLE001
+            existing = None
+        if not existing:
+            return None
+        recorded_ref = (
+            parse_remote_config_identity(existing).get("deploy_ref") or ""
+        ).strip()
+        if not EXACT_COMMIT_RE.fullmatch(recorded_ref):
+            return None
+        code_dir = shlex.quote(f"/etc/dokploy/compose/{stack.project}/code")
+        head = stack.run(f"git -C {code_dir} rev-parse HEAD")
+        if not getattr(head, "ok", False):
+            return None
+        deployed_sha = (head.stdout or "").strip().lower()
+        if (
+            EXACT_COMMIT_RE.fullmatch(deployed_sha)
+            and deployed_sha != recorded_ref.lower()
+        ):
+            return (
+                f"Dokploy's checkout for {cls.service} is at {deployed_sha[:12]} "
+                f"but compose env records IAC_DEPLOY_REF={recorded_ref[:12]} (#1247)"
+            )
+        return None
 
     @staticmethod
     def _on_host(c: "Context", e: dict) -> Callable[[str], Any] | None:

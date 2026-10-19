@@ -126,6 +126,8 @@ class FakeDokploy:
 
     def delete_compose(self, compose_id, *, delete_volumes=False):
         self.deleted.append((compose_id, delete_volumes))
+        if self._existing and self._existing.get("composeId") == compose_id:
+            self._existing = None
         return {}
 
 
@@ -157,6 +159,39 @@ def test_up_fast_fails_when_dokploy_reports_deploy_error():
             _monotonic=iter([0, 700]).__next__,
         )
     assert polls["n"] == 0  # failed before the first HTTP health poll — no 600s wait
+
+
+def test_up_recreates_existing_compose_with_delete_volumes_on_rollout_error():
+    # #1273: when an existing preview compose fails rollout (e.g. stale ephemeral DB
+    # volume credentials from before #1266), up() tears down the compose with
+    # delete_volumes=True, recreates it cleanly, and retries once.
+    class WedgedVolumeDokploy(FakeDokploy):
+        def get_compose_deployments(self, compose_id):
+            self.deployment_queries += 1
+            records = [{"deploymentId": "dep-old", "status": "done"}]
+            if compose_id in self.deployed:
+                status = "error" if compose_id == "cmp-wedged" else "done"
+                records.append(
+                    {"deploymentId": f"dep-{compose_id}", "status": status}
+                )
+            return records
+
+    client = WedgedVolumeDokploy(existing={"composeId": "cmp-wedged"})
+    result = pl.up(
+        "branch",
+        "main",
+        code="main",
+        domain="zitian.party",
+        client=client,
+        http_get=_ok_get,
+        _sleep=lambda _s: None,
+    )
+
+    assert client.deleted == [("cmp-wedged", True)]
+    assert len(client.created) == 1
+    assert client.deployed == ["cmp-wedged", "cmp-new"]
+    assert result.compose_id == "cmp-new"
+    assert result.healthy is True
 
 
 def test_up_waits_for_own_terminal_rollout_before_public_readiness():
