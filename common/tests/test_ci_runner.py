@@ -242,40 +242,15 @@ def test_select_changed_compose_targets_scopes_services_and_contracts() -> None:
     assert _select_changed_compose_targets(all_compose, ["docs/README.md"]) == []
 
 
-def test_test_affected_delegates_to_ci_runner_and_caps_workers(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import subprocess
-    from tools import test_affected
-
-    assert test_affected.resolve_affected_tests(["tools/ci_runner.py"]) == [
-        "common/tests/test_ci_runner.py"
-    ]
-
-    recorded: list[tuple[list[str], dict[str, str]]] = []
-
-    def fake_run(cmd: Any, **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        recorded.append((list(cmd), dict(kwargs.get("env") or {})))
-        return subprocess.CompletedProcess(args=cmd, returncode=0)
-
-    monkeypatch.setattr(
-        test_affected,
-        "get_changed_files",
-        lambda base_ref="origin/main": [
-            "common/coverage_regression.py",
-            "tools/ci_runner.py",
-        ],
-    )
-    monkeypatch.setattr(test_affected, "_default_pytest_workers", lambda: "4")
-    monkeypatch.setattr(subprocess, "run", fake_run)
-
-    rc = test_affected.main([])
-    assert rc == 0
-    assert len(recorded) == 1
-    cmd, env = recorded[0]
-    assert env.get("PYTHONSAFEPATH") == "1"
-    assert "-x" in cmd
-    assert "-n" in cmd and cmd[cmd.index("-n") + 1] == "4"
-    assert "common/tests/test_ci_runner.py" in cmd
-    assert "common/tests/test_coverage_regression.py" in cmd
-    assert "common/tests/test_coverage_regression_audit_cli.py" in cmd
+def test_legacy_test_affected_wrapper_is_retired() -> None:
+    """Enforce one diff-scoped test runner (tools.ci_runner) with no duplicate CLI wrapper."""
+    assert not (ROOT / "tools/test_affected.py").exists()
+    for doc_rel in (
+        "docs/ssot/core.engineering.md",
+        "harness/README.md",
+        "tools/README.md",
+    ):
+        text = (ROOT / doc_rel).read_text(encoding="utf-8")
+        assert "test_affected.py" not in text, (
+            f"{doc_rel} still references retired tools/test_affected.py"
+        )
