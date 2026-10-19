@@ -610,6 +610,40 @@ class TestDokployClient:
         assert result == {"composeId": "compose-1"}
         assert calls == [("compose-1", "A=1\nB=new\nC=3")]
 
+    def test_update_compose_env_replace_removes_stale_keys_and_preserves_runtime_creds(
+        self, dokploy_env
+    ):
+        client = DokployClient()
+        client.get_compose_env = lambda compose_id: (
+            "PRIMARY_MODEL=glm-5.2\n"
+            "STALE=old\n"
+            "VAULT_ROLE_ID=role-1\n"
+            "VAULT_SECRET_ID=sec-1\n"
+            "VAULT_ADDR=https://vault.zitian.party\n"
+        )
+        calls = []
+        client.update_compose = lambda compose_id, env: (
+            calls.append((compose_id, env)) or {"composeId": compose_id}
+        )
+
+        result = client.update_compose_env(
+            "compose-1",
+            env_vars={"ENV": "staging", "IMAGE_TAG": "abc1234"},
+            replace=True,
+        )
+
+        assert result == {"composeId": "compose-1"}
+        assert calls == [
+            (
+                "compose-1",
+                "ENV=staging\n"
+                "IMAGE_TAG=abc1234\n"
+                "VAULT_ROLE_ID=role-1\n"
+                "VAULT_SECRET_ID=sec-1\n"
+                "VAULT_ADDR=https://vault.zitian.party",
+            )
+        ]
+
     def test_update_compose_env_serializes_concurrent_read_modify_write(
         self, dokploy_env
     ):

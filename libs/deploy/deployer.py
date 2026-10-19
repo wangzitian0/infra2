@@ -250,13 +250,22 @@ class Deployer:
         e = env if isinstance(env, dict) else cls.env()
         return e.get("PROJECT") or cls.project
 
+    @staticmethod
+    def _require_env_name(env_map: dict[str, Any]) -> str:
+        env_name = str(env_map.get("ENV") or "").strip()
+        if not env_name:
+            raise EnvironmentNotSetError(
+                "Deployment config requires a non-empty 'ENV' key; production is never the default."
+            )
+        return env_name
+
     @classmethod
     def data_path_for_env(cls, env: dict | None = None) -> str:
         e = env or cls.env()
         explicit_path = e.get("DATA_PATH")
         if explicit_path:
             return explicit_path
-        env_name = e.get("ENV", "production")
+        env_name = cls._require_env_name(e)
         project = cls.project_name(e)
         if env_name == "production" or project == "bootstrap":
             return cls.data_path
@@ -273,8 +282,9 @@ class Deployer:
     @classmethod
     def compose_env_base(cls, env: dict | None = None) -> dict[str, str]:
         e = env or cls.env()
+        env_name = cls._require_env_name(e)
         base = {
-            "ENV": e.get("ENV", "production"),
+            "ENV": env_name,
             "ENV_DOMAIN_SUFFIX": e.get("ENV_DOMAIN_SUFFIX"),
             "INTERNAL_DOMAIN": e.get("INTERNAL_DOMAIN"),
         }
@@ -350,7 +360,7 @@ class Deployer:
         project = cls.project_name(e)
         service = getattr(cls, "vault_service_name", None) or cls.service
         return get_secrets(
-            project=project, service=service, env=env or e.get("ENV", "production")
+            project=project, service=service, env=env or cls._require_env_name(e)
         )
 
     @classmethod
@@ -593,7 +603,7 @@ class Deployer:
         header(f"{cls.service} composing", "Deploying via Dokploy API (GitHub)")
         # Deploy via API
         # Priority: ENV > Class Attribute > Default "platform"
-        env_name = e.get("ENV", "production")
+        env_name = cls._require_env_name(e)
         project_name = cls.project_name(e)
         domain = e.get("INTERNAL_DOMAIN")
         host = f"cloud.{domain}" if domain else None

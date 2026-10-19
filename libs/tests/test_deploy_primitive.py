@@ -33,6 +33,7 @@ class FakeDokploy:
 
     def __init__(self, deployments=None, env_str=None):
         self.updated: list[tuple[str, dict]] = []
+        self.replace_flags: list[bool] = []
         self.deployed: list[str] = []
         self.branch_updates: list[tuple[str, str]] = []
         # list, or callable(self) -> list, used by wait_for_rollout's rollout poll.
@@ -45,8 +46,11 @@ class FakeDokploy:
             self.branch_updates.append((compose_id, kwargs["branch"]))
         return {}
 
-    def update_compose_env(self, compose_id, env_vars=None, env_str=None):
+    def update_compose_env(
+        self, compose_id, env_vars=None, env_str=None, *, replace=False
+    ):
         self.updated.append((compose_id, dict(env_vars or {})))
+        self.replace_flags.append(replace)
         return {}
 
     def deploy_compose(self, compose_id):
@@ -643,21 +647,26 @@ def test_cache_bust_differs_for_two_deploys_in_the_same_second():
     assert h1["IAC_CONFIG_HASH"] != h2["IAC_CONFIG_HASH"]
 
 
-def test_model_overrides_merged_only_when_non_empty():
+def test_deploy_replaces_compose_env_and_removes_model_overrides():
+    import inspect
+
+    assert not hasattr(dp, "model_overrides_from_env")
+    assert "model_overrides" not in inspect.signature(dp.deploy).parameters
+    assert (
+        "model_overrides" not in inspect.signature(dp._build_deploy_env_vars).parameters
+    )
+
     client = FakeDokploy()
     plan = dp.deploy(
         "staging",
         "deadbeef",
         domain="zitian.party",
         client=client,
-        model_overrides={
-            "PRIMARY_MODEL": "gpt-x",
-            "OCR_MODEL": "",
-            "VISION_MODEL": None,
-        },
     )
-    assert plan.env_vars["PRIMARY_MODEL"] == "gpt-x"
-    # empty/None overrides must not blank the running model
+    assert client.replace_flags == [True]
+    assert plan.env_vars["ENV"] == "staging"
+    assert plan.env_vars["VAULT_ADDR"] == "https://vault.zitian.party"
+    assert "PRIMARY_MODEL" not in plan.env_vars
     assert "OCR_MODEL" not in plan.env_vars
     assert "VISION_MODEL" not in plan.env_vars
 
@@ -1065,6 +1074,21 @@ def test_deploy_verify_config_confirms_pushed_hash_rolled_out():
     )
     assert plan.env_vars["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1000000"
     assert client.deployed == ["A6V-hbJlgHMwgPDoTDnhH"]
+
+
+def test_verify_effective_config_hash_rejects_unexpected_stale_keys():
+    client = FakeDokploy(
+        env_str="IAC_CONFIG_HASH=deploy-abc-1\nVAULT_ROLE_ID=r\nPRIMARY_MODEL=glm-5.2"
+    )
+    with pytest.raises(RuntimeError, match="PRIMARY_MODEL"):
+        dp.verify_effective_config_hash(
+            client,
+            "cmp",
+            "deploy-abc-1",
+            expected_keys={"IAC_CONFIG_HASH", "VAULT_ROLE_ID"},
+            _sleep=lambda _s: None,
+            _now=_clock(0),
+        )
 
 
 def test_staging_deploy_injects_openpanel_client_id():

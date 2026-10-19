@@ -147,6 +147,25 @@ class AppDeployer(Deployer):
         return {}
 
     @classmethod
+    def compose_env_base(cls, env: dict | None = None) -> dict[str, str]:
+        """Include compose_env_overrides in the sync pipeline's compose env (#1279).
+
+        Deployer.composing() builds its Dokploy env payload from compose_env_base and
+        replaces the compose env wholesale. Forwarding to compose_env_overrides keeps
+        both deploy_v2 (libs.deploy.promote) and iac-runner sync aligned on S3_BUCKET,
+        S3_PUBLIC_BUCKET, and API_RATE_LIMIT_REQUESTS.
+        """
+        base = super().compose_env_base(env)
+        base.update(
+            cls.compose_env_overrides(
+                env=base["ENV"],
+                domain=base.get("INTERNAL_DOMAIN") or "",
+                env_suffix=base.get("ENV_DOMAIN_SUFFIX") or "",
+            )
+        )
+        return base
+
+    @classmethod
     def pre_compose(cls, c) -> dict | None:
         """Prepare environment and ensure MinIO bucket is configured."""
         header(f"{cls.service} pre_compose", "Setting up application dependencies")

@@ -44,12 +44,12 @@ def test_the_template_no_longer_carries_the_value_so_compose_is_the_only_source(
 #: statements: same object store, same models, same environment identity.
 SHARED_RUNTIME_KEYS = (
     "ENVIRONMENT",
+    "INFRA_ENVIRONMENT",
     "S3_ENDPOINT",
+    "S3_PUBLIC_ENDPOINT",
     "S3_BUCKET",
     "S3_PUBLIC_BUCKET",
     "S3_PRESIGN_EXPIRY_SECONDS",
-    "PRIMARY_MODEL",
-    "FALLBACK_MODELS",
     "PREFECT_API_URL",
 )
 #: Backend-only, and must stay that way. The OTLP endpoint is the sharp case — it turns
@@ -81,6 +81,25 @@ def test_the_worker_gets_the_same_runtime_configuration_as_the_backend() -> None
             f"prefect-worker's {key} differs from backend's — both run the same image "
             "and parse the same statements"
         )
+
+
+def test_compose_files_do_not_redeclare_model_defaults_and_frontend_uses_app_url_override() -> (
+    None
+):
+    """#1279: model defaults live in Python Settings only; frontend NEXT_PUBLIC_APP_URL
+    respects the deployer-supplied NEXT_PUBLIC_APP_URL variable."""
+    preview_compose = ROOT / "finance_report/finance_report/preview/compose.yaml"
+    for path in (COMPOSE, preview_compose):
+        text = path.read_text(encoding="utf-8")
+        assert "PRIMARY_MODEL" not in text, path.name
+        assert "FALLBACK_MODELS" not in text, path.name
+
+    services = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]
+    frontend = _environment(services["frontend"])
+    assert (
+        frontend["NEXT_PUBLIC_APP_URL"]
+        == "${NEXT_PUBLIC_APP_URL:-https://report${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}}"
+    )
 
 
 def test_backend_only_configuration_stays_off_the_worker() -> None:

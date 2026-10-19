@@ -64,7 +64,6 @@ from libs.deploy.preflight import (
 from libs.deploy.env_config import CANARY_SLOT, env_config
 from libs.core.registry import domain_for_service
 from libs.deploy.promote import deploy as _deploy_fixed
-from libs.deploy.promote import model_overrides_from_env
 from libs.deploy.preview import _validate_domain
 from libs.deploy.preview import down as _preview_down
 from libs.deploy.preview import up as _preview_up
@@ -652,7 +651,6 @@ def _deploy_fixed_v2(
         verify_vault=verify_vault,
         verify_config=verify_config,
         verify_ingestion=verify_ingestion,
-        model_overrides=model_overrides_from_env(),
     )
     _progress(
         f"Dokploy promote of {service} to {target.env}",
