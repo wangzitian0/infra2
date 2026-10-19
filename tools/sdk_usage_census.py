@@ -380,7 +380,7 @@ def _enclosing_method_is_dead_or_test_only(
     test_tokens: set[str],
 ) -> tuple[set[str], set[str]]:
     """Return (downgraded_to_test_only, downgraded_to_dead) for SDK names referenced only inside uncalled class methods."""
-    active_By_local: dict[str, list[str | None]] = defaultdict(list)
+    active_by_local: dict[str, list[str | None]] = defaultdict(list)
 
     def _visit_block(
         stmts: list[ast.stmt], enclosing_method: str | None
@@ -401,7 +401,7 @@ def _enclosing_method_is_dead_or_test_only(
                 if isinstance(sub, (ast.Import, ast.ImportFrom)):
                     continue
                 if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load) and sub.id in sdk_local_names:
-                    active_By_local[sub.id].append(enclosing_method)
+                    active_by_local[sub.id].append(enclosing_method)
 
     if isinstance(tree, ast.Module):
         _visit_block(tree.body, None)
@@ -409,7 +409,7 @@ def _enclosing_method_is_dead_or_test_only(
     to_test: set[str] = set()
     to_dead: set[str] = set()
     for local_name in sdk_local_names:
-        contexts = active_By_local.get(local_name)
+        contexts = active_by_local.get(local_name)
         if not contexts:
             continue
         if any(ctx is None or ctx in prod_tokens for ctx in contexts):

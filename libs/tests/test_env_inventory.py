@@ -1567,7 +1567,7 @@ def test_sdk_read_otel_is_derived_from_sdk_vocabulary():
     assert "SERVICE_NAME" not in vocab
     assert "SERVICE_NAME" not in envinv.SDK_READ_OTEL
     assert "OTEL_SERVICE_NAME" in envinv.SDK_READ_OTEL
-    assert "OTEL_SDK_DISABLED" in envinv.SDK_READ_OTEL
+    assert "OTEL_EXPORTER_OTLP_ENDPOINT" in envinv.SDK_READ_OTEL
     assert "GITHUB_ACTIONS" in envinv.SDK_READ_OTEL
     assert "GIT_COMMIT_SHA" not in envinv.SDK_READ_OTEL
     mutated = dict(
@@ -1582,21 +1582,23 @@ def test_doc_only_treats_sdk_vocabulary_as_known_and_mutation_fails(tmp_path):
         tmp_path,
         "docs/ssot/ops.observability.md",
         """
-        Set `OTEL_SDK_DISABLED=true` to disable export.
+        Set `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel:4318` to configure export.
         `SERVICE_NAME` was removed in SDK 3.4.0.
     """,
     )
     inv_ = envinv.run({"fx": tmp_path})
-    # Default vocabulary knows OTEL_SDK_DISABLED and rejects retired SERVICE_NAME.
+    # Default vocabulary knows OTEL_EXPORTER_OTLP_ENDPOINT and rejects retired SERVICE_NAME.
     result = envinv.doc_only(inv_, {"fx": tmp_path})
-    assert "OTEL_SDK_DISABLED" not in result
+    assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in result
     assert result == {"SERVICE_NAME": ["fx:docs/ssot/ops.observability.md:2"]}
-    # Mutation: dropping OTEL_SDK_DISABLED from the vocabulary makes doc_only report it.
+    # Mutation: dropping OTEL_EXPORTER_OTLP_ENDPOINT from the vocabulary makes doc_only report it.
     stripped_vocab = {
-        k: v for k, v in envinv.sdk_vocabulary().items() if k != "OTEL_SDK_DISABLED"
+        k: v
+        for k, v in envinv.sdk_vocabulary().items()
+        if k != "OTEL_EXPORTER_OTLP_ENDPOINT"
     }
     mutated_result = envinv.doc_only(inv_, {"fx": tmp_path}, vocab=stripped_vocab)
     assert mutated_result == {
-        "OTEL_SDK_DISABLED": ["fx:docs/ssot/ops.observability.md:1"],
+        "OTEL_EXPORTER_OTLP_ENDPOINT": ["fx:docs/ssot/ops.observability.md:1"],
         "SERVICE_NAME": ["fx:docs/ssot/ops.observability.md:2"],
     }

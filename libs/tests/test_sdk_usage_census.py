@@ -658,7 +658,7 @@ def test_m1_ignores_empty_dunder_all_and_credits_cli_main_call_sites(
     )
     _write(
         consumers["consumer_a"],
-        ".github/workflows/cli.yml",
+        ".github/workflows/infra-ci.yml",
         f"""
         name: cli
         jobs:
