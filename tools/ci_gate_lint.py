@@ -17,9 +17,29 @@ from typing import Any
 
 from infra2_sdk import ci as ci_spec
 from infra2_sdk.ci import (
+    BANNED_GATE_MARKERS,
     BANNED_IN_GATE_PATTERNS,
+    GATE_EXEMPT_RE,
+    GATE_WALL_CLOCK_BUDGET_S,
+    MAX_SINGLE_TEST_S,
     SHARD_MAX,
     SHARD_MIN,
+    SOFT_WARN_S,
+    SPEC_VERSION,
+    TARGET_PER_SHARD_S,
+)
+
+CI_GATE_SPEC_CONSTANTS = (
+    SPEC_VERSION,
+    GATE_WALL_CLOCK_BUDGET_S,
+    TARGET_PER_SHARD_S,
+    SOFT_WARN_S,
+    MAX_SINGLE_TEST_S,
+    SHARD_MIN,
+    SHARD_MAX,
+    BANNED_GATE_MARKERS,
+    BANNED_IN_GATE_PATTERNS,
+    GATE_EXEMPT_RE,
 )
 
 HARDCODED_N_WORKERS_RE = re.compile(r"(?:^|\s)-n\s+(\d+)(?:\s|$)")

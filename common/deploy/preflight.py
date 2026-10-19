@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import math
 import os
-import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -309,16 +308,6 @@ def _wait_for_image_dependencies(
             "image poll interval must be positive when image wait is enabled"
         )
 
-    mod = sys.modules.get("common.deploy.v2")
-    manifest_exists_fn = (
-        getattr(mod, "_image_manifest_exists", _image_manifest_exists)
-        if mod
-        else _image_manifest_exists
-    )
-    sleep_fn = (
-        getattr(getattr(mod, "time", None), "sleep", time.sleep) if mod else time.sleep
-    )
-
     deadline = time.monotonic() + max_wait
     last_missing: list[str] = []
     last_errors: list[str] = []
@@ -327,7 +316,7 @@ def _wait_for_image_dependencies(
         errors: list[str] = []
         for image in repositories:
             try:
-                if not manifest_exists_fn(image, image_ref):
+                if not _image_manifest_exists(image, image_ref):
                     missing.append(image)
             except (RuntimeError, httpx.HTTPError, OSError) as exc:
                 errors.append(f"{image}: {exc}")
@@ -348,7 +337,7 @@ def _wait_for_image_dependencies(
                 f"required image artifacts for {spec.key} image_ref {image_ref!r} "
                 f"not published after {max_wait:g}s: {detail}"
             )
-        sleep_fn(min(interval, max(0.0, deadline - time.monotonic())))
+        time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
 
 
 def resolve_data_lane(target: DeployTarget) -> str:
@@ -369,9 +358,7 @@ def enforce_data_lane_red_lines(
             f"got code_reviewed={code_reviewed!r}"
         )
     if target.service == "finance_report/app" and target.env in ("staging", "prod"):
-        mod = sys.modules.get("common.deploy.v2")
-        path_cls = getattr(mod, "Path", Path) if mod else Path
-        manifest_path = path_cls("/data/backups/anonymized/manifest.json")
+        manifest_path = Path("/data/backups/anonymized/manifest.json")
         if manifest_path.exists():
             try:
                 import json

@@ -216,11 +216,7 @@ def test_an_alert_facet_must_declare_its_renotify_window() -> None:
     declared as 0 it passes."""
     from common.core.facets import ProbeFacet, SignalFacet
     from common.core.registry import ServiceMeta
-
-    spec = importlib.util.spec_from_file_location("watchdog_audit_for_facets", AUDIT)
-    assert spec and spec.loader
-    audit = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(audit)
+    from common.observability import watchdog_audit as audit
 
     def derived_errors(signal: SignalFacet) -> list[str]:
         meta = ServiceMeta(

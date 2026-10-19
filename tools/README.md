@@ -79,7 +79,7 @@ autonomous App boundary. `status` reports parent pin, checkout/remote heads,
 ahead/behind, dirty paths, and release identity; optional `--fetch` refreshes origin
 metadata but never checks out/pulls submodules or changes application policy. `sweep`
 classifies every item on the orchestrator's watch list (agents, PRs, release logs,
-workflow runs, worktrees) into one state; logic in `common/harness_sweep.py`. It only
+workflow runs, worktrees) into one state; logic in `common/core/harness/sweep.py`. It only
 prints, so it registers no alert signal (`tools/no_new_wheels_lint.py` scans for
 alert-delivery calls; it makes none).
 
@@ -322,7 +322,7 @@ and delivered its alerts. Which checks only report is read from
 other check pages, including targets added only through repository variables.
 The report-only checks — host reachability, SSH, Docker, container health, the
 alert bridge, the staging backup, Dokploy per-compose/application status — still
-run and go into one daily report via `common/alerting.py::deliver_infra2_report`. A
+run and go into one daily report via `common/alerting/delivery.py::deliver_infra2_report`. A
 Dokploy `error` is listed there as a stale record only when that unit's own
 containers (compose project = `appName`, read over SSH) run healthy on the
 current `IAC_CONFIG_HASH`; otherwise it stays a failure, labelled with its age
@@ -386,7 +386,7 @@ Read-only audit for the Vault app-token self-refresh chain. It checks Dokploy
 env, Vault token lookup, rendered `/vault/secrets/.env` freshness, vault-agent
 logs, and container state for every service in the facet-derived inventory
 (#542: each service Deployer's `SecretsFacet` declarations ->
-`common/vault_self_refresh_audit.load_inventory`).
+`common/security/vault_audit.load_inventory`).
 
 It also reports (never fails on) whether any field in a service's
 `optional_inert_fields` SecretsFacet entry (`common/core/facets.py`) is
