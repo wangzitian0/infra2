@@ -838,3 +838,96 @@ def test_dokploy_container_listing_is_keyed_by_service_and_omits_the_absent():
     assert list(observed) == ["backend"] and observed["backend"].health == "unhealthy"
     verdict = in_service_verdict(("backend", "frontend"), observed)
     assert not verdict.ok and "no container for frontend" in verdict.message
+
+
+def test_verify_still_in_service_detects_mismatched_recorded_deploy_ref_checkout(
+    monkeypatch,
+):
+    """#1247: when a prior sync updated IAC_DEPLOY_REF in Dokploy DB but Dokploy's
+    on-disk git checkout stayed at an older SHA, verify_still_in_service returns an
+    error string so SyncPipeline forces a redeploy instead of skipping."""
+    redis, deployed = _redis_sync(monkeypatch, remote_hash="h1")
+    monkeypatch.setattr(
+        redis,
+        "_find_remote_compose",
+        classmethod(
+            lambda cls, e: {
+                "composeId": "cid",
+                "appName": "platform-redis-x1",
+                "env": f"IAC_DEPLOY_REF={LAST_DEPLOY_SHA}\n",
+            }
+        ),
+    )
+    stale_on_disk_sha = "c" * 40
+    host = _Host(checkout=stale_on_disk_sha, containers=REDIS_UP)
+
+    err = redis.verify_still_in_service(host, "cid")
+    assert err is not None
+    assert stale_on_disk_sha[:12] in err
+    assert LAST_DEPLOY_SHA[:12] in err
+
+
+def test_composing_restores_existing_env_when_deploy_fails(monkeypatch):
+    """#1247: if _deploy_compose_with_record_check raises after upsert_github_compose
+    wrote the new env to Dokploy DB, composing() restores existing_env so the DB does
+    not falsely claim the failed IAC_DEPLOY_REF / IAC_CONFIG_HASH."""
+    d = deployer_module
+
+    class FailingDeployer(d.Deployer):
+        service = "authentik"
+        compose_path = "platform/10.authentik/compose.yaml"
+
+        @classmethod
+        def env(cls):
+            return {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"}
+
+        @classmethod
+        def _assert_approle_creds_present(cls, effective_env):
+            return None
+
+        @classmethod
+        def _prune_stale_dokploy_domains(cls, client, compose_id):
+            return None
+
+        @classmethod
+        def ensure_compose_domains(cls, client, compose_id, e):
+            return {}
+
+        @classmethod
+        def _deploy_compose_with_record_check(cls, client, compose_id):
+            raise RuntimeError("Dokploy deployment record entered error")
+
+    updates: list[dict] = []
+
+    class FakeClient:
+        def get_github_provider_id(self):
+            return "gh-1"
+
+        def find_compose_by_name(self, name, project_name, env_name=None):
+            return {"composeId": "cmp-auth"}
+
+        def get_compose(self, compose_id):
+            return {"composeId": compose_id, "env": "IAC_DEPLOY_REF=old_sha\n"}
+
+        def update_compose(self, compose_id, **kwargs):
+            updates.append({"compose_id": compose_id, **kwargs})
+            return {}
+
+    monkeypatch.setattr(
+        "libs.deploy.dokploy_client.get_dokploy", lambda host=None: FakeClient()
+    )
+    monkeypatch.setattr(
+        "libs.deploy.dokploy_client.ensure_project",
+        lambda *args, **kwargs: ("proj-1", "env-1"),
+    )
+
+    with pytest.raises(RuntimeError, match="Dokploy deployment record entered error"):
+        FailingDeployer.composing(object(), {"IAC_DEPLOY_REF": "new_sha"})
+
+    assert len(updates) == 2
+    assert updates[0]["env"] == "IAC_DEPLOY_REF=new_sha"
+    assert updates[1] == {
+        "compose_id": "cmp-auth",
+        "env": "IAC_DEPLOY_REF=old_sha\n",
+        "autoDeploy": False,
+    }

@@ -339,6 +339,9 @@ def up(
         autoDeploy=False,
     )
 
+    had_existing_compose = (
+        _find_compose(client, config.project, alias.compose_name) is not None
+    )
     compose_id = _ensure_preview_compose(
         client=client, config=config, alias=alias, _sleep=_sleep
     )
@@ -372,15 +375,47 @@ def up(
         trigger_epoch = _now()
         client.deploy_compose(compose_id)
         if wait:
-            wait_for_rollout(
-                client,
-                compose_id,
-                before_ids,
-                timeout=health_timeout,
-                interval=health_interval,
-                _sleep=_sleep,
-                min_started_at=trigger_epoch,
-            )
+            try:
+                wait_for_rollout(
+                    client,
+                    compose_id,
+                    before_ids,
+                    timeout=health_timeout,
+                    interval=health_interval,
+                    _sleep=_sleep,
+                    min_started_at=trigger_epoch,
+                )
+            except RuntimeError as exc:
+                if (
+                    not had_existing_compose
+                    or "deploy rollout entered error" not in str(exc)
+                ):
+                    raise
+                client.delete_compose(compose_id, delete_volumes=True)
+                if callable(getattr(client, "get_containers", None)):
+                    wait_for_containers_absent(
+                        client,
+                        service,
+                        alias.env_suffix,
+                        _sleep=_sleep,
+                    )
+                compose_id = _ensure_preview_compose(
+                    client=client, config=config, alias=alias, _sleep=_sleep
+                )
+                before_ids = _deployment_ids(client.get_compose_deployments(compose_id))
+                client.update_compose(compose_id, **source_fields)
+                client.update_compose_env(compose_id, env_vars=env_vars, replace=True)
+                trigger_epoch = _now()
+                client.deploy_compose(compose_id)
+                wait_for_rollout(
+                    client,
+                    compose_id,
+                    before_ids,
+                    timeout=health_timeout,
+                    interval=health_interval,
+                    _sleep=_sleep,
+                    min_started_at=trigger_epoch,
+                )
             healthy = _wait_for_readiness(
                 url,
                 config.readiness_probes,
