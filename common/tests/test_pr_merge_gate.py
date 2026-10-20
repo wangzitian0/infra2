@@ -3034,6 +3034,16 @@ def test_tree_identity_preserves_approval_across_mechanical_rebase():
     assert gate.evaluate(changed_tree, now=NOW).owner_required
 
 
+def test_collect_requires_owner_approved_review_for_cited_tree_sha():
+    """#924: citing a SHA without an owner APPROVED review on a prior commit never populates approved_tree_shas."""
+    unverified_gh = _Gh(
+        body="approved: feedfacefeedface",
+        files=(INFRA_CI,),
+    )
+    facts = gate.collect(704, gh=unverified_gh)
+    assert facts.approved_tree_shas == ()
+
+
 def test_scope_flag_classifies_files_and_outputs_json(capsys):
     """#1104: --scope --json classifies autonomous, gate_closure, and owner_held paths."""
     assert (

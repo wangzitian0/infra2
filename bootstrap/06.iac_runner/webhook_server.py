@@ -140,6 +140,7 @@ def verify_iac_request() -> bool:
 GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 GITHUB_OIDC_JWKS_URL = f"{GITHUB_OIDC_ISSUER}/.well-known/jwks"
 OIDC_ALLOWED_REPO = "wangzitian0/infra2"
+OIDC_ALLOWED_AUDIENCE = "iac-runner"
 OIDC_REF_RE = re.compile(r"\A(refs/heads/main|refs/tags/v.+)\Z")
 OIDC_JWKS_TTL_SECONDS = 3600
 _jwks_lock = threading.Lock()
@@ -241,6 +242,21 @@ def verify_github_oidc_token(
         return False, "OIDC token is not yet valid", {}
     if claims.get("iss") != GITHUB_OIDC_ISSUER:
         return False, f"Unexpected OIDC issuer: {claims.get('iss')!r}", {}
+    aud_claim = claims.get("aud")
+    aud_ok = (
+        aud_claim == OIDC_ALLOWED_AUDIENCE
+        if isinstance(aud_claim, str)
+        else (
+            isinstance(aud_claim, list)
+            and OIDC_ALLOWED_AUDIENCE in [str(a) for a in aud_claim]
+        )
+    )
+    if not aud_ok:
+        return (
+            False,
+            f"Unexpected OIDC audience: {aud_claim!r} (expected {OIDC_ALLOWED_AUDIENCE!r})",
+            {},
+        )
     if claims.get("repository") != OIDC_ALLOWED_REPO:
         return False, f"Unexpected OIDC repository: {claims.get('repository')!r}", {}
     if claims.get("environment") != "production":

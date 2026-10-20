@@ -362,13 +362,27 @@ def collect(
     comments = _pr_comments(pull.get("comments"))
     body_text = str(view.get("body") or "")
     cited_shas = _cited_approved_shas(body_text, comments)
+    owner_login = owner.casefold()
+    owner_approved_oids = tuple(
+        str((r.get("commit") or {}).get("oid") or "").lower()
+        for r in (view.get("reviews") or [])
+        if str(r.get("state") or "").upper() == "APPROVED"
+        and str((r.get("author") or {}).get("login") or "").casefold() == owner_login
+        and str((r.get("commit") or {}).get("oid") or "")
+    )
+    verified_cited_shas = tuple(
+        full_oid
+        for cited in cited_shas
+        for full_oid in owner_approved_oids
+        if full_oid.startswith(cited) and full_oid != head_sha.lower()
+    )
     head_tree_sha = (
         _tree_sha_at(repo, head_sha, gh=gh)
-        if (cited_shas and str(view.get("state") or "") == "OPEN")
+        if (verified_cited_shas and str(view.get("state") or "") == "OPEN")
         else ""
     )
     approved_tree_shas = (
-        tuple(t for sha in cited_shas if (t := _tree_sha_at(repo, sha, gh=gh)))
+        tuple(t for sha in verified_cited_shas if (t := _tree_sha_at(repo, sha, gh=gh)))
         if head_tree_sha
         else ()
     )

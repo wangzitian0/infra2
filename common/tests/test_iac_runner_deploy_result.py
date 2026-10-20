@@ -2245,6 +2245,7 @@ def test_production_deploy_requires_valid_github_oidc_token(monkeypatch) -> None
     bad_token, jwk = _mint_rs256_jwt(
         {
             "iss": "https://token.actions.githubusercontent.com",
+            "aud": "iac-runner",
             "repository": "wangzitian0/infra2",
             "environment": "staging",
             "ref": "refs/tags/v1.2.3",
@@ -2261,10 +2262,32 @@ def test_production_deploy_requires_valid_github_oidc_token(monkeypatch) -> None
     assert status_code == 403
     assert "environment must be 'production'" in body["error"]
 
+    # 2b. OIDC token with wrong audience -> 403
+    wrong_aud_token, jwk_aud = _mint_rs256_jwt(
+        {
+            "iss": "https://token.actions.githubusercontent.com",
+            "aud": "https://github.com/wangzitian0",
+            "repository": "wangzitian0/infra2",
+            "environment": "production",
+            "ref": "refs/tags/v1.2.3",
+            "actor": "wangzitian0",
+            "exp": now_ts + 300,
+        }
+    )
+    monkeypatch.setattr(webhook_server, "_fetch_github_jwks", lambda: [jwk_aud])
+    fake_flask.request.headers = {
+        **_signed_headers(monkeypatch),
+        "Authorization": f"Bearer {wrong_aud_token}",
+    }
+    body, status_code = webhook_server.version_deploy()
+    assert status_code == 403
+    assert "Unexpected OIDC audience" in body["error"]
+
     # 3. Valid production OIDC token -> 202 and triggered_by bound to github-oidc:<actor>
     good_token, jwk2 = _mint_rs256_jwt(
         {
             "iss": "https://token.actions.githubusercontent.com",
+            "aud": "iac-runner",
             "repository": "wangzitian0/infra2",
             "environment": "production",
             "ref": "refs/tags/v1.2.3",

@@ -430,7 +430,12 @@ def test_promote_prod_refuses_a_tag_without_a_green_staging_soak() -> None:
     assert "inputs.promote_prod" in guard["if"] and "workflow_dispatch" in guard["if"]
     assert guard["env"]["GH_TOKEN"] == "${{ github.token }}"
     # gh run list needs actions: read on the workflow token (review on #641)
-    assert workflow["permissions"] == {"contents": "write", "actions": "read"}
+    # and Layer 2 GitHub OIDC requires id-token: write (#1126)
+    assert workflow["permissions"] == {
+        "contents": "write",
+        "actions": "read",
+        "id-token": "write",
+    }
     script = guard["run"]
     # the soak lookup is the tested tool (common/tests/test_promotion_soak_guard.py), which
     # finds the run by commit and owns the "has no green staging soak" refusal (#970).
