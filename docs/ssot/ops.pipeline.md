@@ -156,11 +156,11 @@ production 的权威 live 版本**;L1 Bootstrap 与 L2·配置 的版本错位**
 ### 3.3 晋升与 soak(promotion)
 
 release tag 推送**自动晋升 staging**(promote-not-rebuild);**prod 是显式的、单独触发的晋升**
-(`workflow_dispatch promote_prod=true` / `reconcile --promote-prod`),**绝不随 tag 自动**。安全垫由此成为
+(`workflow_dispatch target_env=prod` / `promote_prod=true` / `reconcile --env prod` / `reconcile --promote-prod`, #940),**绝不随 tag 自动**。安全垫由此成为
 强制时序而非约定:**staging 先收敛 → soak → 人为放行 prod**(同一 tag)。高 MAJOR/风险发布 soak 更久。
 这把「打 tag」和「能动 prod」解耦——在未合并 feature 分支打 tag 既被来源守卫拒(§6),即便在 main 上也只自动到
 staging。(RC tag `v*.*.*-rc.N` + soak 窗口仍为目标态,见 §3.4。)
-只有 prod deploy 全部成功才记录 `production/<release-tag>` marker；该 marker 是 prod desired
+只有 prod deploy 全部成功才记录 `docs/ssot/prod-marker.json` (#939) 与 `production/<release-tag>` marker；该 marker 是 prod desired
 state 的唯一可版本化指针，不是新的部署触发器。prod promotion 从上一个 marker 对应 release
 做累计 diff，而不是从前一个 staging candidate 开始，确保中间仅进 staging 的 release 不被跳过。
 首次迁移尚无 marker 时必须显式给出已知 production `before`；config drift 与 App production
@@ -168,7 +168,7 @@ request 在 marker 建立前都 fail-closed，不用 latest release 猜生产事
 marker 不动就是 prod 用旧 deployer:2026-07-30 的 `production/v1.1.52` 让 truealpha v0.0.48 在
 2026-09-08 带着一个七月的 deployer 上了 prod(#650)。因此 marker 滞后每天由 ops-checks 的
 deploy-guard-audit 报一行(`python -m tools.app_deploy_request markers`),内容是 marker、落后几个
-release、以及是否已旧到会破坏下一次 prod 发布。
+release、以及是否已旧到会破坏下一次 prod 发布。App 仓库发布工作流通过 `python -m tools.app_deploy_request serving --service <svc> --env prod` 直接查询 infra2 权威部署态 `(source_sha, image_tag, iac_ref)`，不再从 App 自身 GitHub Actions 历史重推导 (#588)。
 
 ### 3.4 未收口项(open / 目标态)
 
@@ -381,7 +381,8 @@ sync 结果带 `restarted_dependents`。列不出或重启失败则 sync 失败�
 `container_name` 的服务名都直接报错。现有声明:`platform/openpanel`(`op-api`、`op-worker`)、`platform/authentik`(`worker`)。
 promote tier(`common.deploy.promote.deploy`,app + staging|prod,跑在 GitHub Actions、无 ssh)用 Dokploy 的
 `docker.getContainers` 做同一个证明(按 `container_name` 匹配;Dokploy 只列运行中的容器,`Created`/exited
-即为缺失);`wait=True` 时默认开启,失败走同一条 failure snapshot 路径。
+即为缺失),并在其后通过公网 `/api/health` 校验 HTTP 200、`status == "ok"` 与版本身份(`version`/`git_sha`
+匹配目标 `image_tag`,#569);`wait=True` 时默认开启,失败走同一条 failure snapshot 路径。
 
 ### 5.4 Env × Stage Result Contract
 
@@ -458,6 +459,21 @@ gh workflow run reconcile-iac-inputs.yml -f after=v1.3.1 -f promote_prod=true
 # app 走统一前门、钉同一 tag(prod 仍 deny-by-default):
 gh workflow run deploy.yml -f service="finance_report/app" -f type="prod" \
   -f version_ref="v1.3.1" -f iac_ref="v1.3.1" -f staging_validated=true -f code_reviewed=true
+```
+
+### 7.1 单命令回滚 SOP (#569)
+
+当固定环境部署后需要立即回滚到上一个已知正常版本(`v<prev>`)时,执行单命令重新晋升该历史 release tag(无需重建镜像):
+
+```bash
+# 统一前门单命令回滚(将 <service>、<type>、v<prev> 替换为目标服务、环境与上一正常 tag):
+gh workflow run deploy.yml \
+  -f service="truealpha/app" \
+  -f type="prod" \
+  -f version_ref="v<prev>" \
+  -f iac_ref="v<prev>" \
+  -f staging_validated=true \
+  -f code_reviewed=true
 ```
 
 ---

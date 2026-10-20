@@ -397,7 +397,7 @@ commit `sha`（身份）+ `image_ref`（要拉的已发布镜像）——**code 
    只收 `tag`（`validate_iac_ref_form`）——branch/sha 的 IaC ref 进不了 staging/prod。
 3. 固定 env（staging/prod）`sub_domain` = `base` + env 后缀；preview `sub_domain` 统一为 `base-<kind>-<value>`
    （`branch-<name>` / `pr-<N>` / `commit-<sha7>` / `tag-<slug>`），且不等于任何 staging/prod 规范域。
-4. `service.prod_only ∧ env ≠ prod` ⇒ 非法；`service.env_shared` ⇒ 无 preview、无后缀。
+4. `service.prod_only ∧ env ≠ prod` ⇒ 非法（prod_only 服务无 preview 且不部署非 prod）。
 5. `version_ref` 解析出的 `sha` 与 `iac_ref` 必须为 40 位小写 hex（短 sha 解析不成完整 commit 会带 surface 级报错）。
 6. App-backed 服务在任何 Dokploy side effect 前必须满足声明的镜像 artifact readiness：
    `ServiceSpec.image_repositories[*]:image_ref` 都能通过 registry manifest API 解析。
@@ -452,7 +452,7 @@ compose、env、secret 路径、**外部镜像 tag**、Traefik 路由 label、�
 |----|------|-----|----------|
 | `iac_ref` | **HOW**（IaC：compose/env/secret/镜像 pin/路由，全部）| infra2 commit | infra2 commit |
 | `service` | **WHICH**（部署哪个已注册服务）| `finance_report/app` | `platform/redis` … |
-| `type` | **哪种 env 制度**（派生 env + preview 槽 + 门控）| 7 种 | `staging` / `prod`（env_shared/prod_only 无 preview）|
+| `type` | **哪种 env 制度**（派生 env + preview 槽 + 门控）| 7 种 | `staging` / `prod`（prod_only 无 preview）|
 | `version_ref` | **哪个 app-code 制品** | 代码面（PR/sha/tag/branch）| **空**——平台制品 = `iac_ref` 钉的栈，无独立代码版本 |
 
 **∴ 任一次部署 = 这个四元组里的一个点。** `version_ref` 对平台服务**优雅退化为空**（坐标不需要新增轴）。
@@ -473,7 +473,7 @@ compose、env、secret 路径、**外部镜像 tag**、Traefik 路由 label、�
 **结论**：坐标和当前实现均已完备，不需要第五轴：
 
 1. **registry**：app 显式登记；所有非 app 服务从 `common.core.registry` 派生为 `iac_pinned`
-   `ServiceSpec`（`prod_only` / `env_shared` / `web_facing` 不手抄）。App 的跨仓库镜像 artifact
+   `ServiceSpec`（`prod_only` / `web_facing` 不手抄）。App 的跨仓库镜像 artifact
    依赖也登记在 `ServiceSpec.image_repositories`，由 deploy 前门统一执行。
 2. **routing**：`deploy_v2` 按 `service` 分派后端——app → `deploy_primitive` / `preview_lifecycle`；
    `iac_pinned` → iac_runner `/deploy`。

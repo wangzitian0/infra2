@@ -334,3 +334,22 @@ def test_run_schema_gate_sanitizes_db_credentials_in_error() -> None:
     err_msg = str(exc_info.value)
     assert "sensitive_pw" not in err_msg
     assert "postgresql://user:******@db:5432/app" in err_msg
+
+
+def test_run_schema_gate_sanitizes_db_credentials_on_missing_rollback_class() -> None:
+    """#569-R4: exit 0 without a ROLLBACK_CLASS line must also sanitize DB URLs in the
+    captured output before raising SchemaGateError."""
+    runner = FakeRunner(
+        [
+            _ok(stdout='DATABASE_URL="postgresql://u:p@h:5432/db"\n'),
+            _ok(
+                stdout="connected to postgresql://user:leak_secret_pw@db.internal:5432/app without class\n"
+            ),
+        ]
+    )
+    with pytest.raises(sg.SchemaGateError, match="no ROLLBACK_CLASS") as exc_info:
+        sg.run_schema_gate(**_gate_kwargs(runner=runner, timeout=5))
+    err_msg = str(exc_info.value)
+    assert "leak_secret_pw" not in err_msg
+    assert "postgresql://user:******@db.internal:5432/app" in err_msg
+

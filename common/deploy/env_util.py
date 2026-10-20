@@ -7,14 +7,17 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-# Runtime-only AppRole credentials injected into Dokploy env out-of-band (by
-# bootstrap/05.vault setup-approle), not present in the git-derived desired env.
-# They must survive a redeploy that regenerates the env, otherwise the
-# vault-agent loses its credentials and crash-loops (#257/#259/#369).
+# Runtime-only AppRole credentials and the promoted image tag injected into
+# Dokploy env out-of-band (by bootstrap/05.vault setup-approle and
+# common.deploy.promote.deploy), not present in the git-derived desired env
+# from Deployer.compose_env_base. They must survive a Deployer.composing()
+# sync that regenerates the env, otherwise vault-agent loses its credentials
+# (#257/#259/#369) or app composes lose their pinned IMAGE_TAG (#569).
 RUNTIME_ENV_KEYS_TO_PRESERVE: tuple[str, ...] = (
     "VAULT_ROLE_ID",
     "VAULT_SECRET_ID",
     "VAULT_ADDR",
+    "IMAGE_TAG",
 )
 
 

@@ -18,7 +18,9 @@ effective-config verification.
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Callable, Collection
+import os
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -41,6 +43,7 @@ from common.deploy.preflight import (
     verify_token_status,
 )
 from common.deploy.rollout import RolloutError, wait_for_deployment
+from infra2_sdk.deploy import default_http_get, poll_until_healthy
 
 # infra2#525: Dokploy deployment records carry no caller-supplied correlation id, so a
 # start-timestamp floor (captured just before OUR OWN deploy_compose() call) is the only
@@ -63,6 +66,9 @@ class DeployPlan:
     # result / the GitHub Actions step summary — an operator deciding whether a later
     # rollback is safe must not have to re-run the check to see this.
     rollback_class: str | None = None
+    force_promote: bool = False
+    pause_rollback: bool = False
+    max_rollback_attempts: int = 2
 
 
 def _dep_id(deployment: dict) -> str:
@@ -262,6 +268,33 @@ def preflight_vault_token(client, compose_id: str, *, min_ttl_hours: int = 48):
 
 
 IN_SERVICE_SETTLE_SECONDS = 180
+SMOKE_POLL_INTERVAL_SECONDS = 5.0
+
+
+def verify_public_health(
+    url: str,
+    *,
+    expected_version: str,
+    timeout: int = IN_SERVICE_SETTLE_SECONDS,
+    interval: float = SMOKE_POLL_INTERVAL_SECONDS,
+    http_get=None,
+    _sleep=None,
+) -> None:
+    """Poll the public /api/health endpoint until HTTP 200, status=='ok', and version matches (#569)."""
+    getter = http_get or default_http_get()
+    sleep_fn = _sleep if _sleep is not None else time.sleep
+    step = max(1.0, float(interval))
+    max_attempts = max(1, int(max(0, timeout) // step) + 1)
+    poll_until_healthy(
+        url,
+        http_get=getter,
+        expected_version=expected_version,
+        version_json_keys=("git_sha", "version"),
+        require_status="ok",
+        max_attempts=max_attempts,
+        interval_seconds=step,
+        sleep=sleep_fn,
+    )
 
 
 def verify_in_service(
@@ -430,7 +463,13 @@ def _preflight_deploy(
         preflight_vault_token(client, compose_id)
 
 
-def _evaluate_schema_gate(service: str, cfg: Any, image_tag: str) -> str | None:
+def _evaluate_schema_gate(
+    service: str,
+    cfg: Any,
+    image_tag: str,
+    *,
+    force_promote: bool = False,
+) -> str | None:
     """Run pre-deploy schema gate when applicable to the service."""
     if not schema_gate.gate_applies(service):
         return None
@@ -442,12 +481,60 @@ def _evaluate_schema_gate(service: str, cfg: Any, image_tag: str) -> str | None:
             f"{service}: pre-deploy schema gate is registered for this service but "
             "it has no compose_path to locate its vault-agent container from"
         )
-    return schema_gate.run_schema_gate(
-        service,
-        compose_path=meta.compose_path,
-        env_suffix=cfg.env_suffix,
-        image_ref=image_tag,
+    try:
+        return schema_gate.run_schema_gate(
+            service,
+            compose_path=meta.compose_path,
+            env_suffix=cfg.env_suffix,
+            image_ref=image_tag,
+        )
+    except schema_gate.SchemaGateError as exc:
+        if not force_promote:
+            raise
+        print(
+            f"[AUDIT] force_promote=True: bypassing pre-deploy schema gate for "
+            f"{service} ({image_tag}): {exc}",
+            file=sys.stderr,
+        )
+        return "FORCE_PROMOTED"
+
+
+def _notify_rollback_event(
+    event: dict[str, Any],
+    *,
+    rollback_notifier: Callable[[dict[str, Any]], None] | None = None,
+) -> None:
+    """Deliver an immediate rollback notification and never mask the deploy error (#722)."""
+    severity = "P0" if event.get("circuit_breaker_tripped") or event.get("manual_intervention_required") else "WARN"
+    text = (
+        f"[{severity}] Deploy rollback event for {event.get('service')} ({event.get('environment')})\n"
+        f"- Reason: {event.get('reason')}\n"
+        f"- Version: {event.get('from_version')} -> {event.get('to_version') or 'none'}\n"
+        f"- Action: {event.get('action')}\n"
+        f"- Manual intervention required: {bool(event.get('manual_intervention_required'))}"
     )
+    print(f"[AUDIT] rollback notification: {text.replace(chr(10), ' | ')}", file=sys.stderr)
+    if rollback_notifier is not None:
+        try:
+            rollback_notifier(event)
+        except Exception as exc:  # noqa: BLE001
+            warning(f"rollback_notifier callback failed: {exc}")
+        return
+    try:
+        from common.alerting.delivery import deliver_out_of_band_text
+
+        if any(
+            os.environ.get(key)
+            for key in (
+                "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL",
+                "FEISHU_WEBHOOK_URL",
+                "INFRA2_OUT_OF_BAND_FEISHU_APP_ID",
+                "FEISHU_APP_ID",
+            )
+        ):
+            deliver_out_of_band_text(os.environ, text)
+    except Exception as exc:  # noqa: BLE001
+        warning(f"out-of-band rollback alert delivery skipped/failed: {exc}")
 
 
 def _build_deploy_env_vars(
@@ -505,6 +592,119 @@ def _build_deploy_env_vars(
     return env_vars, identity
 
 
+def _handle_post_deploy_failure(
+    *,
+    exc: Exception,
+    client: Any,
+    compose_id: str,
+    service: str,
+    deploy_environment: str,
+    image_tag: str,
+    previous_image_tag: str | None,
+    previous_rollback_attempts: int,
+    env_vars: dict[str, str],
+    rollback_class: str | None,
+    pause_rollback: bool,
+    max_rollback_attempts: int,
+    rollback_notifier: Callable[[dict[str, Any]], None] | None,
+) -> None:
+    """Apply rollback safety brake, circuit breaker, automatic rollback, and notification (#722)."""
+    reason = str(exc)
+    if pause_rollback:
+        print(
+            f"[AUDIT] pause_rollback=True: suppressing automatic rollback for "
+            f"{service} ({deploy_environment}) after failure: {reason}",
+            file=sys.stderr,
+        )
+        _notify_rollback_event(
+            {
+                "service": service,
+                "environment": deploy_environment,
+                "reason": reason,
+                "from_version": image_tag,
+                "to_version": previous_image_tag,
+                "action": "paused",
+                "pause_rollback": True,
+                "circuit_breaker_tripped": False,
+                "manual_intervention_required": True,
+            },
+            rollback_notifier=rollback_notifier,
+        )
+        return
+    if rollback_class == "C":
+        _notify_rollback_event(
+            {
+                "service": service,
+                "environment": deploy_environment,
+                "reason": f"ROLLBACK_CLASS C forbids automatic rollback: {reason}",
+                "from_version": image_tag,
+                "to_version": previous_image_tag,
+                "action": "blocked_by_schema_class_c",
+                "circuit_breaker_tripped": True,
+                "manual_intervention_required": True,
+            },
+            rollback_notifier=rollback_notifier,
+        )
+        return
+    if not previous_image_tag or previous_image_tag == image_tag:
+        return
+    attempt = previous_rollback_attempts + 1
+    if attempt > max_rollback_attempts:
+        _notify_rollback_event(
+            {
+                "service": service,
+                "environment": deploy_environment,
+                "reason": (
+                    f"rollback circuit breaker tripped (attempt {attempt} > "
+                    f"max_rollback_attempts {max_rollback_attempts}): {reason}"
+                ),
+                "from_version": image_tag,
+                "to_version": previous_image_tag,
+                "action": "circuit_breaker_tripped",
+                "attempt": attempt,
+                "max_rollback_attempts": max_rollback_attempts,
+                "circuit_breaker_tripped": True,
+                "manual_intervention_required": True,
+                "severity": "P0",
+            },
+            rollback_notifier=rollback_notifier,
+        )
+        raise RuntimeError(
+            f"automatic rollback circuit breaker tripped for {service} ({deploy_environment}): "
+            f"attempt {attempt} exceeds max_rollback_attempts={max_rollback_attempts}; "
+            f"manual intervention required (P0 alert emitted): {reason}"
+        ) from exc
+
+    rollback_env = dict(env_vars)
+    rollback_env["IMAGE_TAG"] = previous_image_tag
+    rollback_env["GIT_COMMIT_SHA"] = previous_image_tag
+    rollback_env["INFRA_SERVICE_VERSION"] = previous_image_tag
+    rollback_env["ROLLBACK_ATTEMPTS"] = str(attempt)
+    rollback_action = "rolled_back"
+    manual_required = False
+    try:
+        client.update_compose_env(compose_id, env_vars=rollback_env, replace=True)
+        client.deploy_compose(compose_id)
+    except Exception as rb_exc:  # noqa: BLE001
+        rollback_action = f"rollback_failed: {rb_exc}"
+        manual_required = True
+    _notify_rollback_event(
+        {
+            "service": service,
+            "environment": deploy_environment,
+            "reason": reason,
+            "from_version": image_tag,
+            "to_version": previous_image_tag,
+            "action": rollback_action,
+            "attempt": attempt,
+            "max_rollback_attempts": max_rollback_attempts,
+            "circuit_breaker_tripped": False,
+            "manual_intervention_required": manual_required,
+        },
+        rollback_notifier=rollback_notifier,
+    )
+
+
 def _execute_dokploy_rollout(
     client: Any,
     compose_id: str,
@@ -515,14 +715,34 @@ def _execute_dokploy_rollout(
     timeout: int,
     config_hash: str,
     verify_config: bool,
+    verify_smoke: bool,
     verify_ingestion: bool,
     env_suffix: str,
     service_name: str,
     deploy_environment: str,
     image_tag: str,
+    app_url: str,
+    http_get: Any = None,
+    *,
+    rollback_class: str | None = None,
+    force_promote: bool = False,
+    pause_rollback: bool = False,
+    max_rollback_attempts: int = 2,
+    rollback_notifier: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
     """Execute Dokploy compose deployment under compose write lock."""
     with compose_write_lock(compose_id):
+        existing_env: dict[str, str] = {}
+        try:
+            existing_env = _parse_env_text(client.get_compose_env(compose_id) or "")
+        except Exception:  # noqa: BLE001
+            existing_env = {}
+        previous_image_tag = existing_env.get("IMAGE_TAG")
+        try:
+            previous_rollback_attempts = int(existing_env.get("ROLLBACK_ATTEMPTS") or "0")
+        except ValueError:
+            previous_rollback_attempts = 0
+
         before_ids = (
             _deployment_ids(client.get_compose_deployments(compose_id))
             if wait
@@ -552,6 +772,22 @@ def _execute_dokploy_rollout(
                 )
             if wait:
                 verify_in_service(client, service, env_suffix, timeout=timeout)
+                if verify_smoke:
+                    try:
+                        verify_public_health(
+                            f"{app_url.rstrip('/')}/api/health",
+                            expected_version=image_tag,
+                            timeout=timeout,
+                            http_get=http_get,
+                        )
+                    except Exception as smoke_exc:
+                        if not force_promote:
+                            raise
+                        print(
+                            f"[AUDIT] force_promote=True: bypassing public /api/health "
+                            f"gate for {service} ({image_tag}): {smoke_exc}",
+                            file=sys.stderr,
+                        )
             if verify_ingestion:
                 from common.deploy.ingestion_verify import verify_deploy_ingestion
 
@@ -560,8 +796,23 @@ def _execute_dokploy_rollout(
                     environment=deploy_environment,
                     expected_version=image_tag,
                 )
-        except Exception:
+        except Exception as exc:
             emit_failure_snapshot(client, compose_id)
+            _handle_post_deploy_failure(
+                exc=exc,
+                client=client,
+                compose_id=compose_id,
+                service=service,
+                deploy_environment=deploy_environment,
+                image_tag=image_tag,
+                previous_image_tag=previous_image_tag,
+                previous_rollback_attempts=previous_rollback_attempts,
+                env_vars=env_vars,
+                rollback_class=rollback_class,
+                pause_rollback=pause_rollback,
+                max_rollback_attempts=max_rollback_attempts,
+                rollback_notifier=rollback_notifier,
+            )
             raise
 
 
@@ -574,6 +825,10 @@ def deploy(
     service: str = "finance_report/app",
     staging_validated: bool = False,
     break_glass: bool = False,
+    force_promote: bool = False,
+    pause_rollback: bool = False,
+    max_rollback_attempts: int = 2,
+    rollback_notifier: Callable[[dict[str, Any]], None] | None = None,
     repo: str | None = None,
     image_ref: str | None = None,
     iac_ref: str = "",
@@ -582,7 +837,9 @@ def deploy(
     timeout: int = 600,
     verify_vault: bool = False,
     verify_config: bool = False,
+    verify_smoke: bool = True,
     verify_ingestion: bool = False,
+    http_get: Any = None,
     _now=time.time,
 ) -> DeployPlan:
     """Deploy a resolved app commit to a fixed app environment.
@@ -591,6 +848,16 @@ def deploy(
     env   -> deploy_env_config (which compose, URL, suffix, default data).
     data  -> derived from the env's data_default; callers cannot override it here.
     """
+    if force_promote:
+        print(
+            f"[AUDIT] force_promote=True requested for {service} -> {env} (code={code!r})",
+            file=sys.stderr,
+        )
+    if pause_rollback:
+        print(
+            f"[AUDIT] pause_rollback=True requested for {service} -> {env} (code={code!r})",
+            file=sys.stderr,
+        )
     sha, cfg, data_lane, deploy_environment = _validate_deploy_preconditions(
         service=service,
         env=env,
@@ -598,7 +865,7 @@ def deploy(
         code=code,
         repo=repo,
         staging_validated=staging_validated,
-        break_glass=break_glass,
+        break_glass=break_glass or force_promote,
     )
 
     _preflight_deploy(
@@ -610,7 +877,12 @@ def deploy(
     )
 
     image_tag = image_ref or sha[:7]
-    rollback_class = _evaluate_schema_gate(service, cfg, image_tag)
+    rollback_class = _evaluate_schema_gate(
+        service,
+        cfg,
+        image_tag,
+        force_promote=force_promote,
+    )
 
     if cfg.fast_swap and iac_ref:
         config_hash = f"deploy-{image_tag}-{iac_ref[:7]}"
@@ -638,11 +910,19 @@ def deploy(
         timeout=timeout,
         config_hash=config_hash,
         verify_config=verify_config,
+        verify_smoke=verify_smoke,
         verify_ingestion=verify_ingestion,
         env_suffix=cfg.env_suffix,
         service_name=identity.service_name,
         deploy_environment=deploy_environment,
         image_tag=image_tag,
+        app_url=cfg.app_url(domain=domain),
+        http_get=http_get,
+        rollback_class=rollback_class,
+        force_promote=force_promote,
+        pause_rollback=pause_rollback,
+        max_rollback_attempts=max_rollback_attempts,
+        rollback_notifier=rollback_notifier,
     )
 
     return DeployPlan(
@@ -652,4 +932,7 @@ def deploy(
         data=data_lane,
         env_vars=env_vars,
         rollback_class=rollback_class,
+        force_promote=force_promote,
+        pause_rollback=pause_rollback,
+        max_rollback_attempts=max_rollback_attempts,
     )

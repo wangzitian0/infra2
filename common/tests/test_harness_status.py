@@ -677,3 +677,77 @@ def test_fetch_json_request_and_https_only(monkeypatch) -> None:
     assert seen["request"].get_method() == "GET"
     assert agent.startswith("Mozilla/5.0 (compatible; infra2-")
     assert seen["timeout"] == 8.0
+
+
+def test_infra2_row_sees_remote_tags_not_merged_into_local_head(tmp_path: Path) -> None:
+    """#1289: a checkout with HEAD at v1.2.41 and remote tags through v1.2.44 shows
+    staging v1.2.44 and marker 3 releases behind."""
+    remote = tmp_path / "origin.git"
+    checkout = tmp_path / "checkout"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(["git", "init", str(checkout)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(checkout), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(checkout), "config", "user.name", "Test"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(checkout), "remote", "add", "origin", str(remote)],
+        check=True,
+    )
+    commits: dict[str, str] = {}
+    for ver in ("v1.2.41", "v1.2.42", "v1.2.43", "v1.2.44"):
+        (checkout / "VERSION").write_text(ver, encoding="utf-8")
+        subprocess.run(["git", "-C", str(checkout), "add", "VERSION"], check=True)
+        subprocess.run(
+            ["git", "-C", str(checkout), "commit", "-m", ver],
+            check=True,
+            capture_output=True,
+        )
+        sha = subprocess.run(
+            ["git", "-C", str(checkout), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        commits[ver] = sha
+        subprocess.run(["git", "-C", str(checkout), "tag", ver], check=True)
+        if ver == "v1.2.41":
+            subprocess.run(
+                ["git", "-C", str(checkout), "tag", "production/v1.2.41"],
+                check=True,
+            )
+    subprocess.run(
+        ["git", "-C", str(checkout), "push", "origin", "HEAD", "--tags"],
+        check=True,
+        capture_output=True,
+    )
+    # Move local HEAD back to v1.2.41 and delete local newer tags so local --merged HEAD only sees v1.2.41.
+    subprocess.run(
+        ["git", "-C", str(checkout), "checkout", "--detach", commits["v1.2.41"]],
+        check=True,
+        capture_output=True,
+    )
+    for newer in ("v1.2.42", "v1.2.43", "v1.2.44"):
+        subprocess.run(
+            ["git", "-C", str(checkout), "tag", "-d", newer],
+            check=True,
+            capture_output=True,
+        )
+
+    result = observe_online(
+        _status(),
+        checkout,
+        _manifest(),
+        fetcher=FakeFetcher(BODIES),
+    )
+    infra2_served = result.repositories[0].served
+    assert infra2_served == {
+        "staging": "v1.2.44",
+        "production": "v1.2.41",
+        "note": "marker 3 releases behind",
+    }
+

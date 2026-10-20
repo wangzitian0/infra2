@@ -25,6 +25,14 @@ name: Reconcile IaC Inputs
         required: false
         type: boolean
         default: false
+      target_env:
+        description: "Target environment to reconcile ('staging' or 'prod'). A tag push never auto-deploys prod — only staging soaks automatically."
+        required: false
+        type: choice
+        options:
+          - staging
+          - prod
+        default: staging
       promote_prod:
         description: "Explicitly promote PROD (production deploys). A tag push never auto-deploys prod — only staging soaks automatically."
         required: false
@@ -135,6 +143,7 @@ jobs:
           INPUT_AFTER: ${{ inputs.after || '' }}
           INPUT_DRY_RUN: ${{ inputs.dry_run || false }}
           INPUT_PROMOTE_PROD: ${{ inputs.promote_prod || false }}
+          INPUT_TARGET_ENV: ${{ inputs.target_env || 'staging' }}
         run: |
           set -euo pipefail
 
@@ -143,13 +152,15 @@ jobs:
           after="$REF_NAME"
           dry_run="false"
           # Release decoupling: a tag push auto-applies STAGING only (soak). Prod is an
-          # explicit, deliberate promotion via workflow_dispatch (promote_prod=true) —
+          # explicit, deliberate promotion via workflow_dispatch (promote_prod=true or target_env=prod) —
           # a tag push NEVER auto-deploys prod.
           promote_prod="false"
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             after="${INPUT_AFTER:-$REF_NAME}"
             dry_run="$INPUT_DRY_RUN"
-            promote_prod="$INPUT_PROMOTE_PROD"
+            if [[ "$INPUT_PROMOTE_PROD" == "true" || "$INPUT_TARGET_ENV" == "prod" ]]; then
+              promote_prod="true"
+            fi
           fi
 
           before="${INPUT_BEFORE:-}"
@@ -190,7 +201,11 @@ jobs:
                 --output-json reconcile-result.json)
           [[ -n "$before" ]] && args+=(--before "$before")
           [[ "$dry_run" == "true" ]] && args+=(--dry-run)
-          [[ "$promote_prod" == "true" ]] && args+=(--promote-prod)
+          if [[ "$promote_prod" == "true" ]]; then
+            args+=(--promote-prod --env prod)
+          else
+            args+=(--env staging)
+          fi
 
           python -m tools.reconcile_iac_inputs "${args[@]}"
 

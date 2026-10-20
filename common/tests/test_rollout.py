@@ -81,8 +81,10 @@ def test_require_terminal_polls_past_running_to_done():
 
 
 def test_error_status_raises_when_raise_on_error():
-    deployments = _Deployments([[{"id": "d2", "status": "error"}]])
-    with pytest.raises(RolloutError):
+    deployments = _Deployments(
+        [[{"id": "d2", "status": "error", "createdAt": "2026-09-01T00:00:00Z"}]]
+    )
+    with pytest.raises(RolloutError) as exc_info:
         wait_for_deployment(
             deployments,
             before_ids=set(),
@@ -91,6 +93,11 @@ def test_error_status_raises_when_raise_on_error():
             raise_on_error=True,
             _sleep=_no_sleep,
         )
+    msg = str(exc_info.value)
+    assert "id=d2" in msg
+    assert "status=error" in msg
+    assert "createdAt=2026-09-01T00:00:00Z" in msg
+    assert "new_ids=['d2']" in msg
 
 
 def test_error_status_classified_when_not_raising():
@@ -111,17 +118,26 @@ def test_error_status_classified_when_not_raising():
 
 
 def test_timeout_raises_when_raise_on_timeout():
-    deployments = _Deployments([[]])  # no new record ever appears
-    with pytest.raises(TimeoutError):
+    deployments = _Deployments(
+        [[{"id": "d3", "status": "running", "createdAt": "2026-09-01T01:00:00Z"}]]
+    )
+    with pytest.raises(TimeoutError) as exc_info:
         wait_for_deployment(
             deployments,
             before_ids=set(),
             timeout_seconds=0,
             interval_seconds=1,
+            require_terminal=True,
             raise_on_timeout=True,
             _sleep=_no_sleep,
             _now=_clock([0.0, 1.0]),
         )
+    msg = str(exc_info.value)
+    assert "latest_id=d3" in msg
+    assert "status=running" in msg
+    assert "createdAt=2026-09-01T01:00:00Z" in msg
+    assert "new_ids=['d3']" in msg
+    assert "attempts=1" in msg
 
 
 def test_timeout_classified_when_not_raising():

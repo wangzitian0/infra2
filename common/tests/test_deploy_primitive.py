@@ -139,6 +139,19 @@ def _stub_schema_gate(monkeypatch):
     monkeypatch.setattr(dp.schema_gate, "run_schema_gate", lambda *a, **k: "A")
 
 
+@pytest.fixture(autouse=True)
+def _stub_public_health(monkeypatch):
+    """deploy() with wait=True now polls public /api/health (#569). Neutralize the default
+    network HTTP getter so unit tests without an explicit http_get do not hit live DNS;
+    dedicated smoke tests pass an explicit http_get or override default_http_get."""
+
+    monkeypatch.setattr(
+        dp,
+        "default_http_get",
+        lambda **_kw: lambda _url: (200, '{"status": "ok", "version": "deadbeef", "git_sha": "deadbeef"}'),
+    )
+
+
 def test_staging_deploy_assembles_axes_and_triggers():
     client = FakeDokploy()
     plan = dp.deploy(
@@ -1252,3 +1265,268 @@ def test_deploy_fast_swap_falls_back_to_ms_hash_when_iac_ref_missing():
         _now=lambda: 1000,
     )
     assert plan.env_vars["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1000000"
+
+
+# --- public /api/health version-identity smoke gate (#569) ------------------------
+
+
+def test_deploy_with_wait_verifies_public_health_version_identity(monkeypatch):
+    """#569: when wait=True, promote.deploy polls the public /api/health endpoint and
+    verifies HTTP 200, status=='ok', and the promoted version identity."""
+    monkeypatch.setattr(dp.time, "sleep", lambda _s: None)
+    probed_urls: list[str] = []
+
+    def fake_http_get(url: str) -> tuple[int, str]:
+        probed_urls.append(url)
+        return 200, '{"status": "ok", "git_sha": "v0.0.42"}'
+
+    client = FakeDokploy(deployments=_rollout_done)
+    dp.deploy(
+        "staging",
+        FULL_SHA,
+        image_ref="v0.0.42",
+        domain="zitian.party",
+        client=client,
+        service="truealpha/app",
+        wait=True,
+        http_get=fake_http_get,
+    )
+    assert probed_urls == ["https://truealpha-staging.zitian.party/api/health"]
+
+
+def test_deploy_with_wait_fails_closed_and_emits_snapshot_when_public_health_serves_stale_version(
+    monkeypatch,
+):
+    """#569: a receiver run whose promoted container keeps serving the previous version
+    must fail closed and trigger emit_failure_snapshot."""
+    monkeypatch.setattr(dp.time, "sleep", lambda _s: None)
+    emitted: list[str] = []
+    monkeypatch.setattr(
+        dp,
+        "emit_failure_snapshot",
+        lambda client, compose_id: emitted.append(compose_id),
+    )
+
+    def stale_http_get(_url: str) -> tuple[int, str]:
+        return 200, '{"status": "ok", "version": "v0.0.41"}'
+
+    client = FakeDokploy(deployments=_rollout_done)
+    with pytest.raises(RuntimeError, match="still reporting version 'v0.0.41'") as excinfo:
+        dp.deploy(
+            "staging",
+            FULL_SHA,
+            image_ref="v0.0.42",
+            domain="zitian.party",
+            client=client,
+            service="truealpha/app",
+            wait=True,
+            timeout=10,
+            http_get=stale_http_get,
+        )
+    assert "v0.0.42" in str(excinfo.value)
+    assert emitted == ["w4zo_fm9d2PnUY8ULzNO7"]
+
+
+def test_deploy_with_wait_skips_public_health_when_verify_smoke_false():
+    """#569: verify_smoke=False bypasses the public /api/health poll."""
+    client = FakeDokploy(deployments=_rollout_done)
+    dp.deploy(
+        "staging",
+        "deadbeef",
+        domain="zitian.party",
+        client=client,
+        wait=True,
+        verify_smoke=False,
+        http_get=lambda _u: (_ for _ in ()).throw(AssertionError("smoke should not run")),
+    )
+
+
+# --- #722: manual safety brake, circuit breaker, and rollback notifications -------
+
+
+def test_force_promote_bypasses_false_positive_schema_and_smoke_gates_with_audit_trail(
+    monkeypatch, capsys
+):
+    """#722 AC1: --force-promote bypasses false-positive schema and smoke gates and logs an audit trail."""
+    monkeypatch.setattr(dp.time, "sleep", lambda _s: None)
+
+    def failing_schema_gate(*_a, **_kw):
+        raise dp.schema_gate.SchemaGateError("simulated false-positive schema block")
+
+    monkeypatch.setattr(dp.schema_gate, "run_schema_gate", failing_schema_gate)
+
+    def failing_smoke(_url: str) -> tuple[int, str]:
+        return 503, '{"status": "starting"}'
+
+    client = FakeDokploy(deployments=_rollout_done)
+    plan = dp.deploy(
+        "staging",
+        FULL_SHA,
+        image_ref="v0.1.99",
+        domain="zitian.party",
+        client=client,
+        wait=True,
+        timeout=5,
+        force_promote=True,
+        http_get=failing_smoke,
+    )
+    err = capsys.readouterr().err
+    assert plan.force_promote is True
+    assert plan.rollback_class == "FORCE_PROMOTED"
+    assert "[AUDIT] force_promote=True" in err
+    assert "bypassing pre-deploy schema gate" in err
+    assert "bypassing public /api/health gate" in err
+
+
+def test_automatic_rollback_restores_previous_version_and_notifies(monkeypatch):
+    """#722 AC3: when a post-deploy gate fails and a previous IMAGE_TAG exists with Class A,
+    deploy() rolls back to the previous version and emits an immediate notification."""
+    monkeypatch.setattr(dp.time, "sleep", lambda _s: None)
+    notifications: list[dict] = []
+
+    client = FakeDokploy(
+        deployments=_rollout_done,
+        env_str=(
+            "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\n"
+            "VAULT_ADDR=https://vault.zitian.party\nIMAGE_TAG=v0.1.40\n"
+        ),
+    )
+    with pytest.raises(RuntimeError, match="still reporting version 'v0.1.40'"):
+        dp.deploy(
+            "staging",
+            FULL_SHA,
+            image_ref="v0.1.41",
+            domain="zitian.party",
+            client=client,
+            wait=True,
+            timeout=5,
+            http_get=lambda _u: (200, '{"status": "ok", "version": "v0.1.40"}'),
+            rollback_notifier=notifications.append,
+        )
+
+    assert len(client.updated) == 2
+    assert client.updated[0][1]["IMAGE_TAG"] == "v0.1.41"
+    assert client.updated[1][1]["IMAGE_TAG"] == "v0.1.40"
+    assert client.updated[1][1]["ROLLBACK_ATTEMPTS"] == "1"
+    assert len(client.deployed) == 2
+    assert len(notifications) == 1
+    event = notifications[0]
+    assert event["service"] == "finance_report/app"
+    assert event["environment"] == "staging"
+    assert event["from_version"] == "v0.1.41"
+    assert event["to_version"] == "v0.1.40"
+    assert event["action"] == "rolled_back"
+    assert event["manual_intervention_required"] is False
+
+
+def test_pause_rollback_suppresses_automatic_rollback_with_audit_trail(
+    monkeypatch, capsys
+):
+    """#722 AC1: --pause-rollback prevents automatic rollback when rollback would be worse."""
+    monkeypatch.setattr(dp.time, "sleep", lambda _s: None)
+    notifications: list[dict] = []
+    client = FakeDokploy(
+        deployments=_rollout_done,
+        env_str=(
+            "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\n"
+            "VAULT_ADDR=https://vault.zitian.party\nIMAGE_TAG=v0.1.40\n"
+        ),
+    )
+    with pytest.raises(RuntimeError, match="still reporting version 'v0.1.40'"):
+        dp.deploy(
+            "staging",
+            FULL_SHA,
+            image_ref="v0.1.41",
+            domain="zitian.party",
+            client=client,
+            wait=True,
+            timeout=5,
+            pause_rollback=True,
+            http_get=lambda _u: (200, '{"status": "ok", "version": "v0.1.40"}'),
+            rollback_notifier=notifications.append,
+        )
+
+    err = capsys.readouterr().err
+    assert "[AUDIT] pause_rollback=True" in err
+    assert len(client.updated) == 1
+    assert len(client.deployed) == 1
+    assert len(notifications) == 1
+    assert notifications[0]["action"] == "paused"
+    assert notifications[0]["manual_intervention_required"] is True
+
+
+def test_rollback_circuit_breaker_trips_on_third_consecutive_rollback(monkeypatch):
+    """#722 AC2: 3 consecutive rollbacks -> the 3rd attempt (exceeding max_rollback_attempts=2)
+    trips the circuit breaker, escalates to manual intervention, and emits a P0 alert."""
+    monkeypatch.setattr(dp.time, "sleep", lambda _s: None)
+    notifications: list[dict] = []
+    state = {
+        "env_str": (
+            "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\n"
+            "VAULT_ADDR=https://vault.zitian.party\nIMAGE_TAG=v0.1.40\n"
+        )
+    }
+
+    class StatefulDokploy(FakeDokploy):
+        def update_compose_env(
+            self, compose_id, env_vars=None, env_str=None, *, replace=False
+        ):
+            super().update_compose_env(
+                compose_id, env_vars=env_vars, env_str=env_str, replace=replace
+            )
+            merged = dict(env_vars or {})
+            merged.setdefault("VAULT_ROLE_ID", "r")
+            merged.setdefault("VAULT_SECRET_ID", "s")
+            merged.setdefault("VAULT_ADDR", "https://vault.zitian.party")
+            state["env_str"] = "\n".join(f"{k}={v}" for k, v in merged.items())
+            return {}
+
+    client = StatefulDokploy(
+        deployments=lambda self: [
+            {"deploymentId": f"dep-{i}", "status": "done"}
+            for i in range(len(self.deployed))
+        ],
+        env_str=lambda _self: state["env_str"],
+    )
+
+    for attempt_idx in (1, 2):
+        with pytest.raises(RuntimeError, match="still reporting version 'v0.1.40'"):
+            dp.deploy(
+                "staging",
+                FULL_SHA,
+                image_ref=f"v0.1.4{attempt_idx}",
+                domain="zitian.party",
+                client=client,
+                wait=True,
+                timeout=5,
+                max_rollback_attempts=2,
+                http_get=lambda _u: (200, '{"status": "ok", "version": "v0.1.40"}'),
+                rollback_notifier=notifications.append,
+            )
+        assert notifications[-1]["action"] == "rolled_back"
+        assert notifications[-1]["attempt"] == attempt_idx
+
+    with pytest.raises(
+        RuntimeError, match="automatic rollback circuit breaker tripped"
+    ):
+        dp.deploy(
+            "staging",
+            FULL_SHA,
+            image_ref="v0.1.43",
+            domain="zitian.party",
+            client=client,
+            wait=True,
+            timeout=5,
+            max_rollback_attempts=2,
+            http_get=lambda _u: (200, '{"status": "ok", "version": "v0.1.40"}'),
+            rollback_notifier=notifications.append,
+        )
+
+    assert len(notifications) == 3
+    third = notifications[2]
+    assert third["action"] == "circuit_breaker_tripped"
+    assert third["circuit_breaker_tripped"] is True
+    assert third["manual_intervention_required"] is True
+    assert third["severity"] == "P0"
+
+

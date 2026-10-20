@@ -104,8 +104,10 @@ def _payload_from_env(name: str) -> str:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("plan", "execute", "markers"))
+    parser.add_argument("action", choices=("plan", "execute", "markers", "serving"))
     parser.add_argument("--payload-env", default="APP_DEPLOY_REQUEST_JSON")
+    parser.add_argument("--service", default="finance_report/app")
+    parser.add_argument("--env", default="prod", dest="environment")
     parser.add_argument("--sender", default="")
     parser.add_argument("--domain", default="")
     parser.add_argument("--timeout", type=int, default=600)
@@ -150,6 +152,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             status = marker_status(repo_root=args.repo_root)
             print(status.line())
             return 1 if status.stale else 0
+
+        if args.action == "serving":
+            from common.core.environ import infra_domain
+            from common.deploy.app_deploy_request import query_serving_release
+
+            domain = args.domain or infra_domain()
+            dokploy_client = None
+            if os.getenv("DOKPLOY_API_KEY"):
+                from common.deploy.dokploy_client import get_dokploy
+
+                dokploy_client = get_dokploy(host=f"cloud.{infra_domain()}")
+            serving = query_serving_release(
+                args.service,
+                args.environment,
+                domain=domain,
+                client=dokploy_client,
+            )
+            print(json.dumps(serving.to_dict(), sort_keys=True))
+            return 0 if serving.healthy else 1
 
         from common.deploy.app_deploy_request import (
             PRODUCTION_REQUEST_MAX_AGE_SECONDS,

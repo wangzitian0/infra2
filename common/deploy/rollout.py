@@ -104,7 +104,13 @@ def wait_for_deployment(
                 status = str(d.get("status") or "").lower()
                 if status == "error":
                     if raise_on_error:
-                        raise RolloutError("Dokploy deployment record entered error")
+                        dep_id = _deployment_id(d) or "unknown"
+                        created = d.get("createdAt") or d.get("startedAt") or "unknown"
+                        raise RolloutError(
+                            f"Dokploy deployment record entered error "
+                            f"(id={dep_id}, status={status}, createdAt={created}, "
+                            f"new_ids={sorted(new_ids)})"
+                        )
                     return RolloutResult("error", d, tuple(sorted(new_ids)), attempts)
 
             terminal_records = [
@@ -129,13 +135,23 @@ def wait_for_deployment(
                     )
 
         if _now() >= deadline:
+            latest_new = _newest(deployments, new_ids) if new_ids else {}
             if raise_on_timeout:
+                dep_id = _deployment_id(latest_new) or "none"
+                last_status = str(latest_new.get("status") or "none")
+                created = (
+                    latest_new.get("createdAt")
+                    or latest_new.get("startedAt")
+                    or "none"
+                )
                 raise TimeoutError(
-                    "no new deployment reached a terminal status in the window"
+                    "no new deployment reached a terminal status in the window "
+                    f"(latest_id={dep_id}, status={last_status}, createdAt={created}, "
+                    f"new_ids={sorted(new_ids)}, attempts={attempts})"
                 )
             return RolloutResult(
                 "timeout",
-                _newest(deployments, new_ids) if new_ids else {},
+                latest_new,
                 tuple(sorted(new_ids)),
                 attempts,
             )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import subprocess
@@ -25,6 +26,7 @@ from infra2_sdk.refs import (
 )
 
 from common.core.constants import APP_SOURCES
+from common.core.fetch_app_manifests import LOCK as APP_MANIFEST_LOCK, http_get
 from common.core.registry import domain_for_service
 from common.deploy.release_markers import (
     MINIMUM_PRODUCTION_MARKER,
@@ -45,14 +47,17 @@ __all__ = [
     "MINIMUM_PRODUCTION_MARKER",
     "PREFLIGHT_CANARY_DEPLOY_TYPES",
     "PRODUCTION_REQUEST_MAX_AGE_SECONDS",
+    "ServingRelease",
     "check_request_age",
     "make_plan",
     "marker_status",
     "newest_release_tag",
     "parse_request",
     "production_marker",
+    "query_serving_release",
     "select_iac_ref",
     "validate_request_authority",
+    "verify_app_manifests",
     "verify_production_evidence",
 ]
 
@@ -214,6 +219,81 @@ def select_iac_ref(
     return marker
 
 
+def _load_app_manifest_lock(
+    *,
+    repo_root: str | Path,
+    iac_ref: str,
+    runner=subprocess.run,
+) -> dict[str, object] | None:
+    root = Path(repo_root)
+    lock_file = root / APP_MANIFEST_LOCK
+    if iac_ref and iac_ref != "main":
+        try:
+            proc = runner(
+                ["git", "-C", str(root), "show", f"{iac_ref}:{APP_MANIFEST_LOCK}"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            if isinstance(proc.stdout, str) and proc.stdout.strip().startswith("{"):
+                return json.loads(proc.stdout)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+    if lock_file.is_file():
+        return json.loads(lock_file.read_text(encoding="utf-8"))
+    return None
+
+
+def verify_app_manifests(
+    request: DeployRequest,
+    *,
+    repo_root: str | Path,
+    iac_ref: str = "main",
+    manifest_fetcher: Callable[[str], bytes] | None = None,
+    runner=subprocess.run,
+) -> None:
+    """Compare the sha256 of each manifest of the requested release SHA with the lock (#1297)."""
+    if request.operation == DeployOperation.REMOVE:
+        return
+    lock = _load_app_manifest_lock(repo_root=repo_root, iac_ref=iac_ref, runner=runner)
+    if lock is None:
+        if manifest_fetcher is None:
+            return
+        raise ValueError(f"{APP_MANIFEST_LOCK} is missing under {repo_root}")
+    app_name = request.service.split("/", 1)[0]
+    files = [
+        f
+        for f in lock.get("files", [])  # type: ignore[union-attr]
+        if isinstance(f, Mapping) and f.get("app") == app_name
+    ]
+    if not files:
+        return
+    fetch = manifest_fetcher or http_get
+    differing: list[str] = []
+    for entry in files:
+        path = str(entry["path"])
+        upstream = str(entry["upstream"])
+        expected_sha256 = str(entry["sha256"])
+        url = (
+            f"https://raw.githubusercontent.com/"
+            f"{request.source_repository}/{request.source_sha}/{upstream}"
+        )
+        try:
+            body = fetch(url)
+        except SystemExit as exc:
+            raise ValueError(f"failed to fetch manifest {upstream} from {url}: {exc}") from None
+        actual_sha256 = hashlib.sha256(body).hexdigest() if body else ""
+        if not body or actual_sha256 != expected_sha256:
+            differing.append(path)
+    if differing:
+        joined = ", ".join(differing)
+        raise ValueError(
+            f"release manifests at {request.source_sha[:12]} differ from {APP_MANIFEST_LOCK} "
+            f"({joined}): run `tools/fetch_app_manifests.py --sync {app_name} {request.version_ref}` "
+            "and `tools/secrets_render.py --write`, merge, then deploy again"
+        )
+
+
 def make_plan(
     payload: str | Mapping[str, object],
     *,
@@ -224,6 +304,7 @@ def make_plan(
     production_evidence_verifier: Callable[[DeployRequest], None] | None = None,
     resolve_image: Callable[..., ResolvedRef] = resolve_image_ref,
     resolve_pull: Callable[..., ResolvedRef] = resolve_pr,
+    manifest_fetcher: Callable[[str], bytes] | None = None,
     runner=subprocess.run,
 ) -> DeployPlan:
     request = parse_request(payload)
@@ -244,9 +325,17 @@ def make_plan(
         raise ValueError("domain must be non-empty and contain no whitespace")
     if timeout <= 0:
         raise ValueError("timeout must be positive")
+    iac_ref = select_iac_ref(request.deploy_type, repo_root=repo_root, runner=runner)
+    verify_app_manifests(
+        request,
+        repo_root=repo_root,
+        iac_ref=iac_ref,
+        manifest_fetcher=manifest_fetcher,
+        runner=runner,
+    )
     return DeployPlan(
         request=request,
-        iac_ref=select_iac_ref(request.deploy_type, repo_root=repo_root, runner=runner),
+        iac_ref=iac_ref,
         domain=effective_domain,
         timeout=timeout,
         newest_iac_tag=(
@@ -326,3 +415,123 @@ def _iso(moment: datetime) -> str:
 
 def _git_url(repository: str) -> str:
     return f"https://github.com/{repository}.git"
+
+
+@dataclass(frozen=True)
+class ServingRelease:
+    """Authoritative deployed/serving state for a fixed app environment (#588)."""
+
+    service: str
+    environment: str
+    compose_id: str
+    image_tag: str
+    source_sha: str
+    iac_ref: str
+    public_url: str
+    public_version: str
+    healthy: bool
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "service": self.service,
+            "environment": self.environment,
+            "compose_id": self.compose_id,
+            "image_tag": self.image_tag,
+            "source_sha": self.source_sha,
+            "iac_ref": self.iac_ref,
+            "public_url": self.public_url,
+            "public_version": self.public_version,
+            "healthy": self.healthy,
+        }
+
+
+def query_serving_release(
+    service: str,
+    environment: str,
+    *,
+    domain: str,
+    client: object | None = None,
+    http_get_fn: Callable[[str], tuple[int, str]] | None = None,
+    resolve_image: Callable[..., ResolvedRef] = resolve_image_ref,
+) -> ServingRelease:
+    """Query infra2's authoritative serving state for ``(service, environment)`` (#588).
+
+    App release workflows consume this instead of re-deriving deployment/rollback state
+    from their own GitHub Actions run history. Reads Dokploy compose env (`IMAGE_TAG`,
+    `GIT_COMMIT_SHA`, `INFRA_IAC_REF`) when a Dokploy client is available and cross-checks
+    the live `/api/health` endpoint, then resolves the serving release ref against the
+    service's repository to return both `image_tag` and 40-hex `source_sha`.
+    """
+    from common.deploy.env_config import app_compose_env_config
+    from common.deploy.env_util import _parse_env_text
+    from infra2_sdk.deploy import default_http_get
+
+    expected_source = APP_SOURCES.get(service)
+    if expected_source is None:
+        raise ValueError(f"service {service!r} is not an app service with serving state")
+    norm_env = "prod" if environment in ("prod", "production") else environment
+    if norm_env not in ("staging", "prod"):
+        raise ValueError(
+            f"serving state query supports fixed environments ('staging' or 'prod'), got {environment!r}"
+        )
+    effective_domain = domain_for_service(service) or domain
+    if not effective_domain or any(c.isspace() for c in effective_domain):
+        raise ValueError("domain must be non-empty and contain no whitespace")
+    cfg = app_compose_env_config(service, norm_env)
+    compose_id = cfg.compose_id or ""
+    public_url = f"{cfg.app_url(domain=effective_domain).rstrip('/')}/api/health"
+
+    env_map: dict[str, str] = {}
+    if client is not None and compose_id and hasattr(client, "get_compose_env"):
+        env_text = client.get_compose_env(compose_id) or ""
+        env_map = _parse_env_text(env_text)
+
+    getter = http_get_fn or default_http_get()
+    public_version = ""
+    healthy = False
+    try:
+        status_code, body = getter(public_url)
+        if status_code == 200 and body:
+            parsed = json.loads(body)
+            if isinstance(parsed, Mapping):
+                healthy = str(parsed.get("status") or "ok").lower() == "ok"
+                for key in ("version", "git_sha"):
+                    val = parsed.get(key)
+                    if isinstance(val, str) and val.strip():
+                        public_version = val.strip()
+                        break
+    except (OSError, ValueError):
+        healthy = False
+
+    image_tag = (
+        env_map.get("IMAGE_TAG")
+        or env_map.get("INFRA_SERVICE_VERSION")
+        or public_version
+    )
+    if not image_tag:
+        raise RuntimeError(
+            f"cannot determine serving release for {service} ({norm_env}): "
+            f"neither Dokploy compose {compose_id!r} nor {public_url} reported a version"
+        )
+    iac_ref = env_map.get("INFRA_IAC_REF", "")
+    source_sha = ""
+    raw_sha = env_map.get("GIT_COMMIT_SHA", "")
+    if re.fullmatch(r"[0-9a-f]{40}", raw_sha):
+        source_sha = raw_sha
+    else:
+        try:
+            resolved = resolve_image(image_tag, repo=_git_url(expected_source))
+            source_sha = resolved.sha.lower()
+        except Exception:  # noqa: BLE001
+            source_sha = raw_sha
+    return ServingRelease(
+        service=service,
+        environment="production" if norm_env == "prod" else "staging",
+        compose_id=compose_id,
+        image_tag=image_tag,
+        source_sha=source_sha,
+        iac_ref=iac_ref,
+        public_url=public_url,
+        public_version=public_version or image_tag,
+        healthy=healthy or bool(env_map.get("IMAGE_TAG")),
+    )

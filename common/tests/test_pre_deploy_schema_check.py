@@ -552,3 +552,181 @@ def test_main_prints_no_rollback_class_when_not_evaluated(
     rc = gate.main(["--service", fake_app])
     assert rc == gate.EXIT_NOT_EVALUATED
     assert "ROLLBACK_CLASS" not in capsys.readouterr().out
+
+
+# --- Declarative data preconditions & migration floor (#609) ---
+
+
+def test_data_precondition_aborts_before_replacement_naming_failed_predicate_and_remedy(
+    monkeypatch, capsys
+) -> None:
+    """#609 AC1: a release declaring an unsatisfiable precondition aborts before replacing
+    any container, naming the predicate that failed and its remediation runbook."""
+    module = ModuleType("schema_gate_precond_app")
+    module.Base = SimpleNamespace(metadata=FR_LIKE_METADATA)
+    monkeypatch.setitem(sys.modules, "schema_gate_precond_app", module)
+    monkeypatch.setattr(
+        gate,
+        "ENUM_SOURCES",
+        {
+            "truealpha/app": gate.EnumSource(
+                metadata="schema_gate_precond_app:Base.metadata",
+                requires_migration="0037",
+                preconditions=(
+                    (
+                        "issuer_headcount_facts_seeded",
+                        "SELECT count(*) > 0 FROM staging.issuer_headcount_facts",
+                        "run apps/data-engine/scripts/seed_issuer_headcounts.py",
+                    ),
+                ),
+            )
+        },
+    )
+
+    class _PrecondCursor:
+        def __init__(self):
+            self._last_sql = ""
+
+        def execute(self, sql):
+            self._last_sql = sql
+
+        def fetchall(self):
+            if "pg_enum" in self._last_sql:
+                return [
+                    ("account_type_enum", "ASSET"),
+                    ("account_type_enum", "LIABILITY"),
+                    ("journal_entry_status_enum", "draft"),
+                    ("journal_entry_status_enum", "posted"),
+                    ("tag_enum", "x"),
+                ]
+            if "alembic_version" in self._last_sql:
+                return [("0037",)]
+            if "issuer_headcount_facts" in self._last_sql:
+                return [(False,)]
+            return []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    class _Conn:
+        def cursor(self):
+            return _PrecondCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    monkeypatch.setitem(
+        sys.modules, "psycopg", SimpleNamespace(connect=lambda _u: _Conn())
+    )
+    rc = gate.main(["--service", "truealpha/app", "--db-url", "postgresql://db/app"])
+    assert rc == gate.EXIT_BLOCKED
+    captured = capsys.readouterr()
+    assert "APPLIED_MIGRATION: 0037" in captured.out
+    assert "issuer_headcount_facts_seeded" in captured.err
+    assert "seed_issuer_headcounts.py" in captured.err
+
+
+def test_data_precondition_and_migration_floor_pass_once_satisfied(
+    monkeypatch, capsys
+) -> None:
+    """#609 AC2 & AC3: the same release passes once preconditions and migration floor hold,
+    and applied migration state is reported on stdout."""
+    module = ModuleType("schema_gate_precond_pass_app")
+    module.Base = SimpleNamespace(metadata=FR_LIKE_METADATA)
+    monkeypatch.setitem(sys.modules, "schema_gate_precond_pass_app", module)
+    monkeypatch.setattr(
+        gate,
+        "ENUM_SOURCES",
+        {
+            "truealpha/app": gate.EnumSource(
+                metadata="schema_gate_precond_pass_app:Base.metadata",
+                requires_migration="0037",
+                preconditions=(
+                    (
+                        "issuer_headcount_facts_seeded",
+                        "SELECT count(*) > 0 FROM staging.issuer_headcount_facts",
+                        "run apps/data-engine/scripts/seed_issuer_headcounts.py",
+                    ),
+                ),
+            )
+        },
+    )
+
+    class _PrecondCursor:
+        def __init__(self):
+            self._last_sql = ""
+
+        def execute(self, sql):
+            self._last_sql = sql
+
+        def fetchall(self):
+            if "pg_enum" in self._last_sql:
+                return [
+                    ("account_type_enum", "ASSET"),
+                    ("account_type_enum", "LIABILITY"),
+                    ("journal_entry_status_enum", "draft"),
+                    ("journal_entry_status_enum", "posted"),
+                    ("tag_enum", "x"),
+                ]
+            if "alembic_version" in self._last_sql:
+                return [("0038",)]
+            if "issuer_headcount_facts" in self._last_sql:
+                return [(True,)]
+            return []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    class _Conn:
+        def cursor(self):
+            return _PrecondCursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    monkeypatch.setitem(
+        sys.modules, "psycopg", SimpleNamespace(connect=lambda _u: _Conn())
+    )
+    rc = gate.main(["--service", "truealpha/app", "--db-url", "postgresql://db/app"])
+    assert rc == gate.EXIT_OK
+    captured = capsys.readouterr()
+    assert "APPLIED_MIGRATION: 0038" in captured.out
+    assert "ROLLBACK_CLASS: A" in captured.out
+
+
+def test_migration_floor_blocks_when_applied_migration_is_older_than_required() -> None:
+    """#609 AC1 & AC3: requires_migration blocks when applied version < floor or non-SELECT SQL is used."""
+
+    class _Cursor:
+        def __init__(self):
+            self.sql = ""
+
+        def execute(self, sql):
+            self.sql = sql
+
+        def fetchall(self):
+            return [("0035",)]
+
+    applied, failures = gate.check_data_preconditions(
+        _Cursor(),
+        requires_migration="0037",
+        preconditions=(("unsafe_mutation", "DELETE FROM staging.facts", "none"),),
+    )
+    assert applied == ("0035",)
+    assert len(failures) == 2
+    assert "migration_floor (0037)" in failures[0]
+    assert "0035" in failures[0]
+    assert "read-only SELECT statement" in failures[1]
+

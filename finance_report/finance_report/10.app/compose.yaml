@@ -107,7 +107,7 @@ services:
       - dokploy-network
 
   backend:
-    image: ghcr.io/wangzitian0/finance_report-backend:${IMAGE_TAG:-latest}
+    image: ghcr.io/wangzitian0/finance_report-backend:${IMAGE_TAG:-${RELEASE_MANIFEST_ID:?IMAGE_TAG must be set}}
     pull_policy: always
     container_name: finance_report-backend${ENV_SUFFIX}
     restart: always
@@ -215,7 +215,7 @@ services:
     # work pool is process-type (flow runs execute as plain OS processes
     # inside whichever container the worker is), so this image already has
     # the flow's code and dependencies — no separate worker image/build.
-    image: ghcr.io/wangzitian0/finance_report-backend:${IMAGE_TAG:-latest}
+    image: ghcr.io/wangzitian0/finance_report-backend:${IMAGE_TAG:-${RELEASE_MANIFEST_ID:?IMAGE_TAG must be set}}
     pull_policy: always
     container_name: finance_report-prefect-worker${ENV_SUFFIX}
     restart: always
@@ -265,7 +265,7 @@ services:
       timeout: 5s
 
   frontend:
-    image: ghcr.io/wangzitian0/finance_report-frontend:${IMAGE_TAG:-latest}
+    image: ghcr.io/wangzitian0/finance_report-frontend:${IMAGE_TAG:-${RELEASE_MANIFEST_ID:?IMAGE_TAG must be set}}
     pull_policy: always
     container_name: finance_report-frontend${ENV_SUFFIX}
     restart: always

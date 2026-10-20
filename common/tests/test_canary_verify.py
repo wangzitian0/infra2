@@ -63,12 +63,19 @@ def _canned_stdout(
     bridge: str = BRIDGE_HEALTHY,
     ledger: str = DEFAULT_LEDGER_LINE,
     status: str = HEALTHY_STATUS_LINE,
+    sdk: str | None = None,
+    environment: str = "production",
 ) -> str:
+    sdk_version = (
+        sdk
+        if sdk is not None
+        else _resolve_locked_sdk_version(environment=environment)
+    )
     return (
         "=== STATUS ===\n"
         f"{status}\n"
         "=== SDK ===\n"
-        f"{_resolve_locked_sdk_version()}\n"
+        f"{sdk_version}\n"
         "=== TRACES ===\n"
         f"{traces}\n"
         "=== LOGS ===\n"
@@ -136,7 +143,7 @@ def test_resolve_ssh_credentials_custom(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_verify_canary_happy_path() -> None:
     """Verify happy path where all pillars return healthy status."""
-    locked_version = _resolve_locked_sdk_version()
+    locked_version = _resolve_locked_sdk_version(environment="staging")
     fixed_now = datetime(2026, 10, 12, 12, 0, 0, tzinfo=timezone.utc)
     fresh_traces = _relative_ts(60, now=fixed_now)
     fresh_logs = _relative_ts(120, now=fixed_now)
@@ -336,7 +343,7 @@ def test_verify_canary_malformed_timestamp_rejected() -> None:
 
 def test_verify_canary_sdk_mismatch() -> None:
     """Report failure when installed SDK does not match the locked release."""
-    locked_version = _resolve_locked_sdk_version()
+    locked_version = _resolve_locked_sdk_version(environment="staging")
     fixed_now = datetime(2026, 10, 12, 12, 0, 0, tzinfo=timezone.utc)
     fresh_traces = _relative_ts(60, now=fixed_now)
     fresh_logs = _relative_ts(120, now=fixed_now)
@@ -601,7 +608,11 @@ def test_fresh_scoped_output_passes_and_prints_latest_timestamp(
 ) -> None:
     fresh_traces = _relative_ts(60, now=FIXED_NOW)
     fresh_logs = _relative_ts(120, now=FIXED_NOW)
-    stdout = _canned_stdout(traces=f"1238\t{fresh_traces}", logs=f"48\t{fresh_logs}")
+    stdout = _canned_stdout(
+        traces=f"1238\t{fresh_traces}",
+        logs=f"48\t{fresh_logs}",
+        environment=environment,
+    )
 
     report, _commands = _verify_with_canned_ssh(environment, stdout)
 
@@ -856,6 +867,7 @@ def _monitoring_report(
         logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
         ledger=ledger,
         status=status,
+        environment=environment,
     )
     report, _commands = _verify_with_canned_ssh(
         environment, stdout, health_body=health_body, **kwargs
@@ -1060,3 +1072,88 @@ def test_the_pillar_reads_the_fields_the_writer_writes() -> None:
     assert old_restart["fail"] == recent_restart["fail"] == 1
     assert _monitoring_report(old_restart).monitoring.ok is True
     assert _monitoring_report(recent_restart).monitoring.ok is False
+
+
+# --- SDK version resolved from release ref's uv.lock (issue #1289) -----------
+
+
+def test_canary_verify_reads_expected_sdk_from_release_ref_uv_lock(tmp_path) -> None:
+    """#1289: production runs v1.2.41 with SDK 3.6.0 while main locks SDK 3.7.3.
+    canary_verify --env production reads expected_sdk from git show v1.2.41:uv.lock
+    and exits 0; mutating the marker's locked SDK fails the SDK check."""
+    import subprocess
+
+    repo = tmp_path / "repo"
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.name", "Test"],
+        check=True,
+    )
+
+    def _lock_with(ver: str) -> str:
+        return f'version = 1\n\n[[package]]\nname = "infra2-sdk"\nversion = "{ver}"\n'
+
+    # v1.2.41 (production marker): SDK 3.6.0
+    (repo / "uv.lock").write_text(_lock_with("3.6.0"), encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "uv.lock"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-m", "v1.2.41"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "-C", str(repo), "tag", "v1.2.41"], check=True)
+    subprocess.run(["git", "-C", str(repo), "tag", "production/v1.2.41"], check=True)
+
+    # v1.2.44 (newest release tag): SDK 3.7.1
+    (repo / "uv.lock").write_text(_lock_with("3.7.1"), encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "uv.lock"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-m", "v1.2.44"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "-C", str(repo), "tag", "v1.2.44"], check=True)
+
+    # main (unreleased HEAD): SDK 3.7.3
+    (repo / "uv.lock").write_text(_lock_with("3.7.3"), encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "uv.lock"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-m", "main"],
+        check=True,
+        capture_output=True,
+    )
+
+    assert (
+        _resolve_locked_sdk_version(environment="production", repo_root=repo) == "3.6.0"
+    )
+    assert (
+        _resolve_locked_sdk_version(environment="staging", repo_root=repo) == "3.7.1"
+    )
+
+    # Production container serves 3.6.0 -> passes even though checkout uv.lock is 3.7.3
+    prod_stdout = _canned_stdout(
+        traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
+        logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
+        sdk="3.6.0",
+    )
+    prod_report, _ = _verify_with_canned_ssh("production", prod_stdout, repo_root=repo)
+    assert prod_report.sdk.ok is True
+    assert prod_report.expected_sdk == "3.6.0"
+    assert prod_report.all_ok is True
+
+    # Mutation: change production marker's locked SDK to 3.6.1 -> SDK check fails
+    subprocess.run(
+        ["git", "-C", str(repo), "tag", "-f", "production/v1.2.44"],
+        check=True,
+    )
+    mutated_report, _ = _verify_with_canned_ssh(
+        "production", prod_stdout, repo_root=repo
+    )
+    assert mutated_report.sdk.ok is False
+    assert mutated_report.expected_sdk == "3.7.1"
+    assert mutated_report.all_ok is False
+

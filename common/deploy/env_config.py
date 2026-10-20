@@ -134,8 +134,7 @@ _BASELINE_APP_SERVICE = "finance_report/app"
 # prod compose_id verified live 2026-07-19 (project "truealpha", env "production", compose
 # "app" -> j-gIAk0GfF0bGOitZN-og) — first go-live: Vault AppRole + app secret (SEC_USER_AGENT,
 # S3_*) + MinIO bucket provisioned, postgres deployed, app deployed and health-checked at
-# https://truealpha.zitian.party (PRODUCTION_EVIDENCE_POLICIES for the automated cross-repo
-# request flow is still unwired — this compose_id only unblocks the manual deploy_v2 path).
+# https://truealpha.zitian.party, and promoted via the automated cross-repo receiver (#569).
 _APP_COMPOSE_OVERRIDES: dict[str, dict[str, _ComposeOverride]] = {
     "truealpha/app": {
         "staging": _ComposeOverride(
