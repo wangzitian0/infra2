@@ -435,7 +435,7 @@
     {
       "id": "statement-parse-outcomes",
       "title": "Statement parse outcomes (success vs failure)",
-      "description": "Count of finance.statement_parse.outcome grouped by outcome andinstitution.",
+      "description": "Count of finance.statement_parse.outcome grouped by outcome.",
       "panelTypes": "graph",
       "query": {
         "builder": {

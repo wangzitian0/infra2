@@ -628,8 +628,9 @@ def build_digest_card(summary: Mapping[str, Any], repository: str) -> dict[str, 
     )
     is_healthy = failure_count == 0 and missing_recall == 0
     template = "green" if is_healthy else ("orange" if missing_recall == 0 else "red")
+    icon = "🟢" if is_healthy else ("🟡" if missing_recall == 0 else "🔴")
     header_title = (
-        f"{'🟢' if is_healthy else '🟡'} {REPORT_TITLE_PREFIX}[WATCHDOG DIGEST] "
+        f"{icon} {REPORT_TITLE_PREFIX}[WATCHDOG DIGEST] "
         f"Infra2 out-of-band {cadence} summary"
     )
 
@@ -892,4 +893,4 @@ def _one_line(value: str) -> str:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(argv=sys.argv[1:]))

@@ -303,7 +303,7 @@ def run(
         ledgers, outages, now, limit_days=limit_days
     )
     message = as_report(
-        "\n".join([build_report_message(prod_summary, title=title), *staging_lines])
+        build_report(ledgers, outages, now, limit_days=limit_days, title=title)
     )
     if env.get("INFRA2_STABILITY_REPORT_DRY_RUN") == "1":
         print(message)
