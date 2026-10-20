@@ -494,7 +494,10 @@ def query_serving_release(
         if status_code == 200 and body:
             parsed = json.loads(body)
             if isinstance(parsed, Mapping):
-                healthy = str(parsed.get("status") or "ok").lower() == "ok"
+                healthy = str(parsed.get("status") or "ok").lower() in (
+                    "ok",
+                    "healthy",
+                )
                 for key in ("version", "git_sha"):
                     val = parsed.get(key)
                     if isinstance(val, str) and val.strip():
