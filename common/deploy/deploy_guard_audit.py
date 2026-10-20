@@ -31,9 +31,10 @@ from common.deploy.dependencies import (  # noqa: E402
     service_key_from_path,
 )
 
-# Service roots whose layout service_key_from_path understands.
-_SERVICE_ROOTS = ("platform", "finance_report", "truealpha", "bootstrap")
-_REQUIRED_SERVICE_ROOTS = ("platform", "finance_report", "truealpha", "bootstrap")
+# Canonical service roots whose layout service_key_from_path understands.
+_CANONICAL_SERVICE_ROOTS = ("platform", "finance_report", "truealpha", "bootstrap")
+_SERVICE_ROOTS = _CANONICAL_SERVICE_ROOTS
+_REQUIRED_SERVICE_ROOTS = _CANONICAL_SERVICE_ROOTS
 
 # Minimum (compose_count, input_count) per service root (#1123).
 # Prevents silent drop when a service directory is renamed without a dot,
@@ -108,14 +109,15 @@ def dockerfile_canary_violations(composes: list[Path], root: Path = ROOT) -> lis
         resolved_compose = Path(compose).resolve()
         by_dir.setdefault(resolved_compose.parent, []).append(resolved_compose)
     for service_dir, dir_composes in sorted(by_dir.items()):
+        texts = [c.read_text(encoding="utf-8") for c in dir_composes]
         has_dockerfile_or_build = (service_dir / "Dockerfile").is_file() or any(
-            _compose_has_build(c.read_text(encoding="utf-8")) for c in dir_composes
+            _compose_has_build(text) for text in texts
         )
         if not has_dockerfile_or_build:
             continue
         total_inputs = sum(
-            len(_compose_artifact_files(str(c), c.read_text(encoding="utf-8")))
-            for c in dir_composes
+            len(_compose_artifact_files(str(c), text))
+            for c, text in zip(dir_composes, texts, strict=True)
         )
         if total_inputs < 1:
             rel_dir = service_dir.relative_to(resolved_root).as_posix()
@@ -125,20 +127,26 @@ def dockerfile_canary_violations(composes: list[Path], root: Path = ROOT) -> lis
     return violations
 
 
-def floor_violations(composes: list[Path], root: Path = ROOT) -> list[str]:
+def floor_violations(
+    composes: list[Path],
+    root: Path = ROOT,
+    *,
+    counts: dict[str, tuple[int, int]] | None = None,
+) -> list[str]:
     """Check unmapped composes, `_SERVICE_ROOTS` completeness, per-root floors, and Dockerfile canary."""
     violations: list[str] = []
-    canonical_roots = ("platform", "finance_report", "truealpha", "bootstrap")
-    if tuple(_REQUIRED_SERVICE_ROOTS) != canonical_roots:
+    if tuple(_REQUIRED_SERVICE_ROOTS) != _CANONICAL_SERVICE_ROOTS:
         violations.append(
             f"_REQUIRED_SERVICE_ROOTS is missing canonical roots: {list(_REQUIRED_SERVICE_ROOTS)}"
         )
-    missing_roots = [sr for sr in canonical_roots if sr not in _SERVICE_ROOTS]
+    missing_roots = [sr for sr in _CANONICAL_SERVICE_ROOTS if sr not in _SERVICE_ROOTS]
     if missing_roots:
         violations.append(
             f"_SERVICE_ROOTS is missing required service roots: {', '.join(missing_roots)}"
         )
-    missing_floors = [sr for sr in canonical_roots if sr not in _SERVICE_ROOT_FLOORS]
+    missing_floors = [
+        sr for sr in _CANONICAL_SERVICE_ROOTS if sr not in _SERVICE_ROOT_FLOORS
+    ]
     if missing_floors:
         violations.append(
             f"_SERVICE_ROOT_FLOORS is missing required service roots: {', '.join(missing_floors)}"
@@ -156,9 +164,11 @@ def floor_violations(composes: list[Path], root: Path = ROOT) -> list[str]:
         violations.append(
             f"{rel}: compose file does not map to a service key in service_key_from_path"
         )
-    counts = service_root_counts(composes, root=root)
+    resolved_counts = (
+        service_root_counts(composes, root=root) if counts is None else counts
+    )
     for sr, (min_composes, min_inputs) in _SERVICE_ROOT_FLOORS.items():
-        actual_composes, actual_inputs = counts.get(sr, (0, 0))
+        actual_composes, actual_inputs = resolved_counts.get(sr, (0, 0))
         if actual_composes < min_composes:
             violations.append(
                 f"{sr}: found {actual_composes} compose files, below floor {min_composes}"
@@ -171,18 +181,30 @@ def floor_violations(composes: list[Path], root: Path = ROOT) -> list[str]:
     return violations
 
 
-def audit(root: Path = ROOT) -> list[str]:
-    composes = find_service_composes(root=root)
+def _collect_violations(
+    composes: list[Path],
+    root: Path = ROOT,
+    *,
+    counts: dict[str, tuple[int, int]] | None = None,
+) -> list[str]:
+    """Single violation collection pipeline shared by `audit()` and `main()`."""
     try:
         coverage = (
             fanout_coverage_violations(composes)
             if root == ROOT
             else fanout_coverage_violations(composes, root=root)
         )
-        structural = floor_violations(composes, root=root)
+        structural = floor_violations(composes, root=root, counts=counts)
     except (FileNotFoundError, ValueError) as exc:
         return [str(exc)]
     return sorted(set(coverage) | set(structural))
+
+
+def audit(root: Path = ROOT) -> list[str]:
+    composes = (
+        find_service_composes() if root == ROOT else find_service_composes(root=root)
+    )
+    return _collect_violations(composes, root=root)
 
 
 def main(root: Path = ROOT) -> int:
@@ -206,18 +228,8 @@ def main(root: Path = ROOT) -> int:
         # Compose files that yield no config-hash input leave nothing to check.
         print("ERROR: the compose files yield no config-hash input; checked nothing.")
         return 1
-    try:
-        violations = (
-            fanout_coverage_violations(composes)
-            if root == ROOT
-            else fanout_coverage_violations(composes, root=root)
-        )
-        structural = floor_violations(composes, root=root)
-    except (FileNotFoundError, ValueError) as exc:
-        violations = [str(exc)]
-        structural = []
-    all_violations = violations + [v for v in structural if v not in violations]
     counts = service_root_counts(composes, root=root)
+    all_violations = _collect_violations(composes, root=root, counts=counts)
     breakdown = ", ".join(
         f"{sr}: {c} compose files / {i} inputs" for sr, (c, i) in counts.items()
     )

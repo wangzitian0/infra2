@@ -206,18 +206,17 @@ def _entry_modules(job: dict) -> set[str]:
     return expanded
 
 
-_REQ_NAME = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)")
-
-
 def _dependency_closure(distributions: set[str]) -> set[str]:
     """`pip install httpx` also installs idna, certifi, httpcore, anyio, sniffio.
 
     Read from installed metadata rather than listed here, for the same reason the
     workflows' own lists are the thing under test. Requirements carrying an
-    environment marker are skipped: an `extra ==` requirement is not installed by a
-    bare `pip install <dist>`, and counting it would let a job declare less than it
-    needs -- the failure direction this file exists to prevent.
+    `extra ==` marker are skipped by evaluating with `extra: ""`: an optional extra
+    is not installed by a bare `pip install <dist>`, whereas unconditional platform
+    or python_version markers that evaluate true in the active interpreter are included.
     """
+    from packaging.requirements import Requirement
+
     seen: set[str] = set()
     frontier = {d.lower().replace("_", "-") for d in distributions}
     while frontier:
@@ -230,11 +229,10 @@ def _dependency_closure(distributions: set[str]) -> set[str]:
         except PackageNotFoundError:
             continue
         for req in reqs:
-            if ";" in req:
+            parsed = Requirement(req)
+            if parsed.marker is not None and not parsed.marker.evaluate({"extra": ""}):
                 continue
-            match = _REQ_NAME.match(req)
-            if match:
-                frontier.add(match.group(1).lower().replace("_", "-"))
+            frontier.add(parsed.name.lower().replace("_", "-"))
     return seen
 
 

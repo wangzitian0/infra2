@@ -127,10 +127,7 @@ def _resolve_compose_relative(compose_dir: Path, source: str) -> Path | None:
 def _resolve_build_relative(context_dir: Path, source: str) -> Path | None:
     if not source or source.startswith("--"):
         return None
-    expanded = _expand_compose_env_defaults(source)
-    if not expanded or expanded.startswith("/"):
-        return None
-    return (context_dir / expanded).resolve()
+    return _resolve_compose_relative(context_dir, source)
 
 
 def _resolve_build_sources(context_dir: Path, source: str) -> list[Path]:
