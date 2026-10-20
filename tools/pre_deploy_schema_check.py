@@ -490,7 +490,8 @@ def check_data_preconditions(
     return applied, failures
 
 
-def fetch_db_enums(db_url: str) -> dict[str, list[str]]:
+def _with_libpq_cursor(db_url: str, fn: Any) -> Any:
+    """Open one libpq (psycopg/psycopg2) connection and pass a cursor to ``fn``."""
     url = libpq_url(db_url)
     try:
         import psycopg  # type: ignore[import-not-found]
@@ -499,10 +500,14 @@ def fetch_db_enums(db_url: str) -> dict[str, list[str]]:
 
         with psycopg2.connect(url) as conn:
             with conn.cursor() as cur:
-                return query_db_enums(cur)
+                return fn(cur)
     with psycopg.connect(url) as conn:
         with conn.cursor() as cur:
-            return query_db_enums(cur)
+            return fn(cur)
+
+
+def fetch_db_enums(db_url: str) -> dict[str, list[str]]:
+    return _with_libpq_cursor(db_url, query_db_enums)
 
 
 def evaluate_db_preconditions(
@@ -511,30 +516,16 @@ def evaluate_db_preconditions(
     """Run declarative migration-floor and SQL data preconditions when configured (#609)."""
     if source.requires_migration is None and not source.preconditions:
         return (), []
-    url = libpq_url(db_url)
-    try:
-        import psycopg  # type: ignore[import-not-found]
-    except ImportError:
-        import psycopg2  # type: ignore[import-not-found]
-
-        with psycopg2.connect(url) as conn:
-            with conn.cursor() as cur:
-                return check_data_preconditions(
-                    cur,
-                    requires_migration=source.requires_migration,
-                    migration_table=source.migration_table,
-                    migration_column=source.migration_column,
-                    preconditions=source.preconditions,
-                )
-    with psycopg.connect(url) as conn:
-        with conn.cursor() as cur:
-            return check_data_preconditions(
-                cur,
-                requires_migration=source.requires_migration,
-                migration_table=source.migration_table,
-                migration_column=source.migration_column,
-                preconditions=source.preconditions,
-            )
+    return _with_libpq_cursor(
+        db_url,
+        lambda cur: check_data_preconditions(
+            cur,
+            requires_migration=source.requires_migration,
+            migration_table=source.migration_table,
+            migration_column=source.migration_column,
+            preconditions=source.preconditions,
+        ),
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

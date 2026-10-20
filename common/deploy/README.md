@@ -7,7 +7,7 @@
 `common/deploy` contains the centralized deployment engines behind the `deploy_v2` interface (`tools.deploy_v2`):
 1. **`Deployer` Base Abstraction**: The core engine driving service deploy tasks (`pre_compose`, `compose`, `post_compose`, `restart_dependents`), wired to Dokploy REST endpoints.
 2. **Fixed-Environment Promotion (`promote.py`)**: Authoritative backend for `staging` and `production` rollouts with strict change-set auditing, provenance guards, and production safety gates (RL-DATA-1: `staging_validated` + `code_reviewed`).
-3. **Dynamic Preview Lifecycle (`preview.py`)**: Manages isolated multi-alias preview deployments (`preview-main`, `preview-pr`, `preview-commit`, `preview-tag`) with trigger-bound terminal teardown.
+3. **Dynamic Preview Lifecycle (`preview.py`)**: Manages isolated multi-alias preview deployments (`branch-<name>`, `pr-<N>`, `commit-<sha7>`, `tag-<slug>`) with trigger-bound terminal teardown.
 4. **Pre-Deploy Schema Gate (`schema_gate.py`)**: Validates compose YAML syntax, environment mappings, and variable substitution completeness prior to applying changes.
 
 ## Module Map

@@ -596,12 +596,20 @@ def test_env_flag_selects_staging_or_prod_commands(monkeypatch, capsys) -> None:
     assert out["promote_prod"] is True
 
 
-def test_prod_marker_file_roundtrip_and_precedence(tmp_path: Path) -> None:
-    """#939: write_prod_marker_file and read_prod_marker_file persist the explicit prod pointer
-    in docs/ssot/prod-marker.json and production_marker() reads it first."""
-    from common.deploy.release_markers import production_marker, read_prod_marker_file
+def test_release_markers_ssot_no_prod_marker_file_duplication() -> None:
+    """#939 SSOT guard: production marker uses git tag production/vX.Y.Z as its single source
+    of truth; neither release_markers nor reconcile_iac_inputs defines PROD_MARKER_FILE or
+    duplicates RELEASE_TAG_RE / PRODUCTION_MARKER_PREFIX."""
+    from common.deploy import release_markers
 
-    marker_path = reconcile.write_prod_marker_file("v1.2.9", "c" * 40, tmp_path)
-    assert marker_path == tmp_path / "docs/ssot/prod-marker.json"
-    assert read_prod_marker_file(repo_root=tmp_path) == "v1.2.9"
-    assert production_marker(repo_root=tmp_path) == "v1.2.9"
+    assert not hasattr(release_markers, "PROD_MARKER_FILE")
+    assert not hasattr(release_markers, "read_prod_marker_file")
+    assert not hasattr(reconcile, "write_prod_marker_file")
+    assert reconcile.PRODUCTION_MARKER_PREFIX is release_markers.PRODUCTION_MARKER_PREFIX
+    assert reconcile.RELEASE_TAG_RE is release_markers.RELEASE_TAG_RE
+    status = release_markers.marker_status_from_tags(
+        ("v1.2.8", "v1.2.9"), ("production/v1.2.8",)
+    )
+    assert status.production_marker == "v1.2.8"
+    assert status.newest_tag == "v1.2.9"
+    assert status.releases_behind == 1

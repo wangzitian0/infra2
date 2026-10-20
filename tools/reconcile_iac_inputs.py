@@ -23,12 +23,14 @@ from typing import Callable, Sequence
 
 from common.deploy.dependencies import explain_fanout
 from common.deploy.contract import all_service_keys, service_spec
-from common.deploy.release_markers import PROD_MARKER_FILE, read_prod_marker_file
+from common.deploy.release_markers import (
+    PRODUCTION_MARKER_PREFIX,
+    RELEASE_TAG_RE,
+    version_key,
+)
 from infra2_sdk.refs import assert_after_on_main  # noqa: F401  (re-exported; #616)
 
 MANIFEST_PATH = "docs/ssot/deploy-dependencies.yaml"
-PRODUCTION_MARKER_PREFIX = "production/"
-RELEASE_TAG_RE = re.compile(r"v\d+\.\d+\.\d+")
 
 
 @dataclass(frozen=True)
@@ -121,18 +123,12 @@ def assert_production_marker_advances(
     ]
     if invalid:
         raise SystemExit(f"::error::invalid production marker(s): {', '.join(invalid)}")
-    file_marker = read_prod_marker_file(repo_root=repo_root)
     candidates = [m.removeprefix(PRODUCTION_MARKER_PREFIX) for m in markers]
-    if file_marker:
-        candidates.append(file_marker)
     if not candidates:
         return None
 
-    def version(tag: str) -> tuple[int, ...]:
-        return tuple(int(part) for part in tag.removeprefix("v").split("."))
-
-    current = max(candidates, key=version)
-    if version(release_tag) < version(current):
+    current = max(candidates, key=version_key)
+    if version_key(release_tag) < version_key(current):
         raise SystemExit(
             f"::error::production promotion cannot move backward from {current} "
             f"to {release_tag}; publish a newer revert release instead"
@@ -140,32 +136,11 @@ def assert_production_marker_advances(
     return current
 
 
-def write_prod_marker_file(
-    release_tag: str,
-    target_sha: str,
-    repo_root: Path,
-) -> Path:
-    """Write ``docs/ssot/prod-marker.json`` as the explicit prod pointer (#939)."""
-    production_marker_tag(release_tag)
-    marker_path = repo_root / PROD_MARKER_FILE
-    marker_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "production_marker": f"{PRODUCTION_MARKER_PREFIX}{release_tag}",
-        "release_tag": release_tag,
-        "commit": target_sha,
-    }
-    marker_path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    return marker_path
-
-
 def record_production_marker(
     release_tag: str,
     repo_root: Path,
     *,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-    write_file: bool = False,
 ) -> str:
     """Record a successful explicit production promotion as an immutable tag.
 
@@ -183,8 +158,6 @@ def record_production_marker(
     if resolved.returncode != 0:
         raise SystemExit(f"::error::cannot resolve production release {release_tag!r}")
     target_sha = resolved.stdout.strip().lower()
-    if write_file:
-        write_prod_marker_file(release_tag, target_sha, repo_root)
 
     existing = runner(
         ["git", "rev-parse", "--verify", f"refs/tags/{marker}^{{commit}}"],

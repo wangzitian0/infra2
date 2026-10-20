@@ -536,5 +536,5 @@ def query_serving_release(
         iac_ref=iac_ref,
         public_url=public_url,
         public_version=public_version or image_tag,
-        healthy=healthy or bool(env_map.get("IMAGE_TAG")),
+        healthy=healthy,
     )

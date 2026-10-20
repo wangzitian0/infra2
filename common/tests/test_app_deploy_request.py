@@ -1650,6 +1650,19 @@ def test_query_serving_release_returns_authoritative_dokploy_and_health_state(
     assert serving.public_version == "v0.1.45"
     assert serving.healthy is True
 
+    # Guard against GREEN-WHILE-BROKEN: when /api/health returns 502 or status='unhealthy',
+    # healthy must be False even if Dokploy compose env has IMAGE_TAG set.
+    broken = receiver.query_serving_release(
+        "finance_report/app",
+        "prod",
+        domain="zitian.party",
+        client=_FakeDokploy(),
+        http_get_fn=lambda _u: (502, "bad gateway"),
+        resolve_image=lambda tag, **_k: ResolvedRef(sha=SHA, image_ref=tag, form="tag"),
+    )
+    assert broken.image_tag == "v0.1.45"
+    assert broken.healthy is False
+
     monkeypatch.setattr(
         receiver,
         "query_serving_release",
