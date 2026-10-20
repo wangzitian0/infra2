@@ -194,3 +194,4 @@ def test_trivy_workflow_scans_vulnerabilities_and_misconfigs() -> None:
     assert "misconfig" in str(with_args.get("scanners", ""))
     assert "CRITICAL" in str(with_args.get("severity", ""))
     assert "HIGH" in str(with_args.get("severity", ""))
+    assert str(with_args.get("exit-code", "")) == "1"
