@@ -553,3 +553,49 @@ def test_github_run_url_is_real_or_clearly_absent() -> None:
     assert "actions/runs" not in reconcile.github_run_url(
         {"GITHUB_SERVER_URL": "https://github.com"}
     )
+
+
+def test_env_flag_selects_staging_or_prod_commands(monkeypatch, capsys) -> None:
+    """#940: --env prod|staging selects the target environment explicitly alongside --promote-prod."""
+    commands = _alerting_commands()
+    assert [
+        c.deploy_type
+        for c in commands_to_apply(commands, dry_run=False, target_env="staging")
+    ] == ["staging"]
+    assert [
+        c.deploy_type
+        for c in commands_to_apply(commands, dry_run=False, target_env="prod")
+    ] == ["prod"]
+
+    monkeypatch.setattr(
+        reconcile, "assert_production_marker_advances", lambda *_a, **_k: "v1.2.2"
+    )
+    rc = main(
+        [
+            "--after",
+            "v1.2.3",
+            "--before",
+            "v1.2.2",
+            "--env",
+            "prod",
+            "--dry-run",
+            "--changed-file",
+            "platform/12.alerting/compose.yaml",
+        ]
+    )
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out["target_env"] == "prod"
+    assert out["promote_prod"] is True
+
+
+def test_prod_marker_file_roundtrip_and_precedence(tmp_path: Path) -> None:
+    """#939: write_prod_marker_file and read_prod_marker_file persist the explicit prod pointer
+    in docs/ssot/prod-marker.json and production_marker() reads it first."""
+    from common.deploy.release_markers import production_marker, read_prod_marker_file
+
+    marker_path = reconcile.write_prod_marker_file("v1.2.9", "c" * 40, tmp_path)
+    assert marker_path == tmp_path / "docs/ssot/prod-marker.json"
+    assert read_prod_marker_file(repo_root=tmp_path) == "v1.2.9"
+    assert production_marker(repo_root=tmp_path) == "v1.2.9"
+

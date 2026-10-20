@@ -23,6 +23,7 @@ from typing import Callable, Sequence
 
 from common.deploy.dependencies import explain_fanout
 from common.deploy.contract import all_service_keys, service_spec
+from common.deploy.release_markers import PROD_MARKER_FILE, read_prod_marker_file
 from infra2_sdk.refs import assert_after_on_main  # noqa: F401  (re-exported; #616)
 
 MANIFEST_PATH = "docs/ssot/deploy-dependencies.yaml"
@@ -120,13 +121,17 @@ def assert_production_marker_advances(
     ]
     if invalid:
         raise SystemExit(f"::error::invalid production marker(s): {', '.join(invalid)}")
-    if not markers:
+    file_marker = read_prod_marker_file(repo_root=repo_root)
+    candidates = [m.removeprefix(PRODUCTION_MARKER_PREFIX) for m in markers]
+    if file_marker:
+        candidates.append(file_marker)
+    if not candidates:
         return None
-    current = markers[0].removeprefix(PRODUCTION_MARKER_PREFIX)
 
     def version(tag: str) -> tuple[int, ...]:
         return tuple(int(part) for part in tag.removeprefix("v").split("."))
 
+    current = max(candidates, key=version)
     if version(release_tag) < version(current):
         raise SystemExit(
             f"::error::production promotion cannot move backward from {current} "
@@ -135,11 +140,32 @@ def assert_production_marker_advances(
     return current
 
 
+def write_prod_marker_file(
+    release_tag: str,
+    target_sha: str,
+    repo_root: Path,
+) -> Path:
+    """Write ``docs/ssot/prod-marker.json`` as the explicit prod pointer (#939)."""
+    production_marker_tag(release_tag)
+    marker_path = repo_root / PROD_MARKER_FILE
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "production_marker": f"{PRODUCTION_MARKER_PREFIX}{release_tag}",
+        "release_tag": release_tag,
+        "commit": target_sha,
+    }
+    marker_path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return marker_path
+
+
 def record_production_marker(
     release_tag: str,
     repo_root: Path,
     *,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    write_file: bool = False,
 ) -> str:
     """Record a successful explicit production promotion as an immutable tag.
 
@@ -157,6 +183,8 @@ def record_production_marker(
     if resolved.returncode != 0:
         raise SystemExit(f"::error::cannot resolve production release {release_tag!r}")
     target_sha = resolved.stdout.strip().lower()
+    if write_file:
+        write_prod_marker_file(release_tag, target_sha, repo_root)
 
     existing = runner(
         ["git", "rev-parse", "--verify", f"refs/tags/{marker}^{{commit}}"],
@@ -334,19 +362,21 @@ def commands_to_apply(
     commands: Sequence[DeployCommand],
     *,
     dry_run: bool,
-    promote_prod: bool,
+    promote_prod: bool = False,
+    target_env: str | None = None,
 ) -> list[DeployCommand]:
-    """Pick which deploy commands actually run, per the release-decoupling闸门.
+    """Pick which deploy commands actually run, per the release-decoupling gate (#940).
 
     A release tag push **auto-applies staging** (soak); **prod is an explicit,
-    separately-triggered promotion** (``--promote-prod``), never automatic — so
+    separately-triggered promotion** (``--env prod`` / ``--promote-prod``), never automatic — so
     'cutting a tag' stops meaning 'touch prod'. ``--dry-run`` applies nothing
     (plan only). The complement (commands NOT selected) is surfaced as a plan so
     operators see the deferred prod promotion.
     """
     if dry_run:
         return []
-    wanted = "prod" if promote_prod else "staging"
+    is_prod = promote_prod or (target_env in ("prod", "production"))
+    wanted = "prod" if is_prod else "staging"
     return [command for command in commands if command.deploy_type == wanted]
 
 
@@ -537,6 +567,13 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run", action="store_true", help="plan only; do not deploy"
     )
     parser.add_argument(
+        "--env",
+        dest="target_env",
+        choices=("staging", "prod", "production"),
+        default=None,
+        help="target environment to reconcile ('staging' or 'prod'); default is staging (#940)",
+    )
+    parser.add_argument(
         "--promote-prod",
         action="store_true",
         help=(
@@ -553,13 +590,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output-json", default="", help="optional output JSON path")
     args = parser.parse_args(argv)
+    promote_prod = bool(args.promote_prod or args.target_env in ("prod", "production"))
+    target_env = "prod" if promote_prod else "staging"
 
     repo_root = Path(args.repo_root).resolve()
     # Validate the durable desired-state coordinate before any production side
     # effect.  A branch, SHA, or pre-release must never deploy successfully and
     # only then fail while trying to record its marker.
     effective_before = args.before
-    if args.promote_prod:
+    if promote_prod:
         current_production = assert_production_marker_advances(args.after, repo_root)
         if current_production:
             if effective_before and effective_before != current_production:
@@ -591,7 +630,10 @@ def main(argv: list[str] | None = None) -> int:
         timeout=args.timeout,
     )
     applied = commands_to_apply(
-        commands, dry_run=args.dry_run, promote_prod=args.promote_prod
+        commands,
+        dry_run=args.dry_run,
+        promote_prod=promote_prod,
+        target_env=target_env,
     )
     deferred = [command for command in commands if command not in applied]
     results: list[dict] = []
@@ -599,7 +641,7 @@ def main(argv: list[str] | None = None) -> int:
         results = run_deploy_commands(applied)
     production_marker = ""
     if (
-        args.promote_prod
+        promote_prod
         and not args.dry_run
         and not any(result.get("returncode") != 0 for result in results)
     ):
@@ -611,7 +653,7 @@ def main(argv: list[str] | None = None) -> int:
             after=args.after,
             results=results,
             run_url=run_url,
-            promote_prod=args.promote_prod,
+            promote_prod=promote_prod,
         ),
         "plan": plan.to_dict(),
         "commands": [command.to_dict() for command in commands],
@@ -619,7 +661,8 @@ def main(argv: list[str] | None = None) -> int:
         # (prod promotion, or — in dry-run — everything is just a plan).
         "applied": [command.to_dict() for command in applied],
         "deferred": [command.to_dict() for command in deferred],
-        "promote_prod": args.promote_prod,
+        "promote_prod": promote_prod,
+        "target_env": target_env,
         "production_marker": production_marker,
         "results": results,
         "dry_run": args.dry_run,

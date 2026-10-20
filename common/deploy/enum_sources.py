@@ -5,18 +5,26 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class EnumSource:
-    """Where a service's code-side enum truth lives.
+    """Where a service's code-side enum truth and declarative data preconditions live.
 
     ``metadata`` names a SQLAlchemy ``MetaData`` as ``module:attribute.path``; every
     native enum column type registered on it is one Postgres enum type (its ``name``)
     with its labels (``enums``). ``imports`` are imported first, for their side effect
     of registering every mapped class on that metadata. ``app_path`` says which
     directory of the service's checkout has to be on ``sys.path``.
+    ``requires_migration`` sets an optional minimum migration version floor checked
+    against ``migration_table`` (default ``alembic_version.version_num``) (#609).
+    ``preconditions`` declares named read-only SQL predicates ``(name, sql, remedy)``
+    that must all hold before any container is replaced (#609).
     """
 
     metadata: str
     imports: tuple[str, ...] = ()
     app_path: str = ""
+    requires_migration: str | None = None
+    migration_table: str = "alembic_version"
+    migration_column: str = "version_num"
+    preconditions: tuple[tuple[str, str, str], ...] = ()
 
 
 # finance_report's backend is the ``src`` package under apps/backend of the

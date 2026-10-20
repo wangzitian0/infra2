@@ -617,8 +617,12 @@ def _deploy_fixed_v2(
     timeout: int,
     staging_validated: bool,
     break_glass: bool,
+    force_promote: bool,
+    pause_rollback: bool,
+    max_rollback_attempts: int,
     verify_vault: bool,
     verify_config: bool,
+    verify_smoke: bool,
     verify_ingestion: bool,
     iac_runner_url: str | None,
     iac_webhook_secret: str | None,
@@ -648,8 +652,12 @@ def _deploy_fixed_v2(
         timeout=timeout,
         staging_validated=staging_validated,
         break_glass=break_glass,
+        force_promote=force_promote,
+        pause_rollback=pause_rollback,
+        max_rollback_attempts=max_rollback_attempts,
         verify_vault=verify_vault,
         verify_config=verify_config,
+        verify_smoke=verify_smoke,
         verify_ingestion=verify_ingestion,
     )
     _progress(
@@ -666,6 +674,9 @@ def _deploy_fixed_v2(
         "iac_ref": target.iac_ref,
         "secret_supply": secret_supply,
         "rollback_class": plan.rollback_class,
+        "force_promote": force_promote,
+        "pause_rollback": pause_rollback,
+        "max_rollback_attempts": max_rollback_attempts,
     }
     return DeployV2Result(target, data_lane, "deploy-primitive", detail)
 
@@ -682,9 +693,13 @@ def deploy_v2(
     wait: bool = True,
     staging_validated: bool = False,
     break_glass: bool = False,
+    force_promote: bool = False,
+    pause_rollback: bool = False,
+    max_rollback_attempts: int = 2,
     code_reviewed: bool | None = None,
     verify_vault: bool = True,
     verify_config: bool = True,
+    verify_smoke: bool = True,
     verify_ingestion: bool = False,
     timeout: int = 600,
     expected_sha: str | None = None,
@@ -696,6 +711,16 @@ def deploy_v2(
     image_poll_seconds: float | None = None,
 ) -> DeployV2Result:
     """Execute one deploy_v2 coordinate ``(service, type, version_ref, iac_ref)``."""
+    if force_promote:
+        print(
+            f"[AUDIT] deploy_v2 force_promote=True for {service} ({deploy_type}, {version_ref!r})",
+            file=sys.stderr,
+        )
+    if pause_rollback:
+        print(
+            f"[AUDIT] deploy_v2 pause_rollback=True for {service} ({deploy_type}, {version_ref!r})",
+            file=sys.stderr,
+        )
     domain = domain_for_service(service) or domain
     svc_spec = service_spec(service)
     normalized_expected_sha = _normalize_expected_sha(expected_sha)
@@ -741,7 +766,7 @@ def deploy_v2(
     data_lane = enforce_data_lane_red_lines(target, code_reviewed=code_reviewed)
 
     if env_config(spec.env).requires_staging_first and not (
-        staging_validated or break_glass
+        staging_validated or break_glass or force_promote
     ):
         raise ValueError(
             f"deploy type {deploy_type!r} requires a prior staging deploy "
@@ -782,8 +807,12 @@ def deploy_v2(
         timeout,
         staging_validated,
         break_glass,
+        force_promote,
+        pause_rollback,
+        max_rollback_attempts,
         verify_vault,
         verify_config,
+        verify_smoke,
         verify_ingestion,
         iac_runner_url,
         iac_webhook_secret,
@@ -833,6 +862,22 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--break-glass", action="store_true", help="bypass staging-first (emergency)"
     )
     parser.add_argument(
+        "--force-promote",
+        action="store_true",
+        help="bypass false-positive schema/smoke gates and promote with audit trail (#722)",
+    )
+    parser.add_argument(
+        "--pause-rollback",
+        action="store_true",
+        help="suppress automatic rollback on post-deploy gate failure with audit trail (#722)",
+    )
+    parser.add_argument(
+        "--max-rollback-attempts",
+        type=int,
+        default=2,
+        help="maximum automatic rollback attempts before circuit breaker trips (default: 2)",
+    )
+    parser.add_argument(
         "--code-reviewed",
         action="store_true",
         help="positive RL-DATA-1 signal — required for any prod-data deploy",
@@ -846,6 +891,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--no-verify-config",
         action="store_true",
         help="skip the post-deploy effective IAC_CONFIG_HASH check (default: verify)",
+    )
+    parser.add_argument(
+        "--no-verify-smoke",
+        action="store_true",
+        help="skip the post-swap public /api/health version-identity check (default: verify)",
     )
     parser.add_argument(
         "--verify-ingestion",
@@ -964,9 +1014,13 @@ def main(argv: list[str] | None = None) -> int:
             wait=not args.no_wait,
             staging_validated=args.staging_validated,
             break_glass=args.break_glass,
+            force_promote=args.force_promote,
+            pause_rollback=args.pause_rollback,
+            max_rollback_attempts=args.max_rollback_attempts,
             code_reviewed=True if args.code_reviewed else None,
             verify_vault=not args.skip_vault_check,
             verify_config=not args.no_verify_config,
+            verify_smoke=not args.no_verify_smoke,
             verify_ingestion=args.verify_ingestion,
             timeout=args.timeout,
             expected_sha=args.expected_sha,

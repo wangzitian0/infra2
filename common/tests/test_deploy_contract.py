@@ -2,7 +2,7 @@
 
 Proves the SSOT core.environments §4.7 predicates over the existing Infra-009 axes:
 the five axes, sub_domain pinning for staging/prod, preview multi-instance addressing
-(reusing preview_alias), and the prod_only / env_shared rules.
+(reusing preview_alias), and the prod_only rules.
 """
 
 from __future__ import annotations
@@ -25,10 +25,9 @@ SHA_A = "a" * 40
 SHA_B = "b" * 40
 
 REPORT = SERVICES["finance_report/app"]
-# Synthetic specs to exercise the prod_only / env_shared / backing branches that the
+# Synthetic specs to exercise the prod_only / backing branches that the
 # seed registry does not yet contain (those services join when the front door unifies).
 SIGNOZ = ServiceSpec("platform/signoz", "signoz", web_facing=True, prod_only=True)
-VAULT = ServiceSpec("bootstrap/vault", "vault", web_facing=True, env_shared=True)
 REPORT_PG = ServiceSpec("finance_report/postgres", "report-pg", web_facing=False)
 
 
@@ -61,11 +60,6 @@ def test_sub_domain_for_reuses_env_config_and_preview_alias():
         sub_domain_for(REPORT, "preview", alias_kind="commit", alias_value="1ab32d5e")
         == "report-commit-1ab32d5"
     )
-
-
-def test_env_shared_carries_no_suffix():
-    assert sub_domain_for(VAULT, "staging") == "vault"
-    assert sub_domain_for(VAULT, "prod") == "vault"
 
 
 # --- preview multi-instance addressing ------------------------------------
@@ -140,7 +134,7 @@ def test_app_service_declares_image_artifact_dependencies():
     )
 
 
-# --- prod_only / env_shared (validate_deploy_target directly) --------------
+# --- prod_only (validate_deploy_target directly) ---------------------------
 
 
 def test_prod_only_rejects_non_prod():
@@ -154,24 +148,17 @@ def test_prod_only_rejects_non_prod():
         )
 
 
-def test_env_shared_no_preview_and_no_suffix():
-    validate_deploy_target(
-        DeployTarget("bootstrap/vault", "staging", "vault", SHA_A, SHA_B), VAULT
-    )
-    with pytest.raises(ValueError, match="no preview instances"):
-        validate_deploy_target(
-            DeployTarget("bootstrap/vault", "preview", "vault-pr-1", SHA_A, SHA_B),
-            VAULT,
-        )
-
-
-@pytest.mark.parametrize("spec", [SIGNOZ, VAULT])
-def test_no_preview_instance_error_not_masked_by_missing_alias(spec):
-    # A prod_only / env_shared service has no preview slot at all. sub_domain_for must
+def test_no_preview_instance_error_not_masked_by_missing_alias():
+    # A prod_only service has no preview slot at all. sub_domain_for must
     # report THAT (the real, unfixable reason) rather than failing first on a missing
     # alias_kind — which a caller could never satisfy anyway.
     with pytest.raises(ValueError, match="no preview instances"):
-        sub_domain_for(spec, "preview")  # alias_kind omitted on purpose
+        sub_domain_for(SIGNOZ, "preview")  # alias_kind omitted on purpose
+    with pytest.raises(ValueError, match="is prod-only"):
+        validate_deploy_target(
+            DeployTarget("platform/signoz", "preview", "signoz-pr-1", SHA_A, SHA_B),
+            SIGNOZ,
+        )
 
 
 def test_backing_service_pins_like_stack_not_routed():

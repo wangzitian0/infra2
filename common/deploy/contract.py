@@ -60,8 +60,6 @@ class ServiceSpec:
             ``tools/reconcile_iac_inputs.py`` so a release-tag prod promotion
             never fans out to a service with nothing to deploy to (the v1.1.34
             2/14 prod-promote failure).
-        env_shared: One endpoint shared across envs — no env suffix, no preview
-            instances (e.g. vault/sso/signoz/minio).
         iac_pinned: A platform service whose artifact is the IaC-pinned stack at
             ``iac_ref`` (no app code version). ``deploy_v2`` routes these to the iac_runner
             ``/deploy`` webhook instead of the app backends, and ``version_ref`` is unused —
@@ -92,7 +90,6 @@ class ServiceSpec:
     web_facing: bool
     prod_only: bool = False
     not_yet_in_production: bool = False
-    env_shared: bool = False
     iac_pinned: bool = False
     image_repositories: tuple[str, ...] = ()
     identity_service_name: str = ""
@@ -128,17 +125,13 @@ SERVICES: dict[str, ServiceSpec] = {
         identity_service_name="finance-report-backend",
     ),
     # #500: version-pinned staging promotion (finance_report's fixed-compose path,
-    # generalized). #522: preview/canary now wired too (common.deploy.preview generalized
+    # generalized). #522: preview/canary wired via common.deploy.preview (generalized
     # off a per-service registry — deploy_env_config.preview_service_config; truealpha's
     # own ephemeral-DB template is truealpha/truealpha/preview/compose.yaml). Production
-    # went live manually 2026-07-19 (AppRole + secrets + MinIO bucket provisioned,
-    # postgres + app deployed, health-checked at https://truealpha.zitian.party —
-    # compose_id registered in deploy_env_config._APP_COMPOSE_OVERRIDES). The AUTOMATED
-    # cross-repo path is still NOT wired: infra2 has no PRODUCTION_EVIDENCE_POLICIES
-    # entry for this service (verify_production_evidence assumes finance_report's
-    # single-repo/single-workflow model, which does not fit truealpha's delegated-
-    # dispatch architecture) — a manual deploy_v2 invocation is the only supported
-    # path to prod today. See infra2#522.
+    # went live 2026-07-19 (AppRole + secrets + MinIO bucket provisioned, postgres + app
+    # deployed, health-checked at https://truealpha.zitian.party — compose_id registered
+    # in deploy_env_config._APP_COMPOSE_OVERRIDES) and runs through the automated
+    # cross-repo app-deploy-request receiver (#569).
     _TRUEALPHA_APP_KEY: ServiceSpec(
         key=_TRUEALPHA_APP_KEY,
         base_subdomain="truealpha",
@@ -223,17 +216,15 @@ def sub_domain_for(
     """The canonical ``sub_domain`` label for a target.
 
     staging/prod are pinned by ``env`` (``base`` + the env suffix); preview takes the
-    alias (``branch-<name>`` / ``pr-<N>`` / ``commit-<sha7>`` / ``tag-<slug>``). ``env_shared`` services carry no
-    suffix on any env.
+    alias (``branch-<name>`` / ``pr-<N>`` / ``commit-<sha7>`` / ``tag-<slug>``).
     """
     cfg = env_config(env)
     if cfg.dynamic:  # preview
-        # Surface the structural reason first: a prod-only / env-shared service has no
+        # Surface the structural reason first: a prod-only service has no
         # preview slot at all, so report that rather than masking it behind a missing
         # alias_kind (which a caller cannot satisfy anyway).
-        if spec.prod_only or spec.env_shared:
-            kind = "prod_only" if spec.prod_only else "env_shared"
-            raise ValueError(f"{spec.key} has no preview instances ({kind})")
+        if spec.prod_only:
+            raise ValueError(f"{spec.key} has no preview instances (prod_only)")
         if alias_kind is None:
             raise ValueError(
                 "preview requires an alias_kind (branch | pr | commit | tag | canary)"
@@ -241,8 +232,6 @@ def sub_domain_for(
         return (
             f"{spec.base_subdomain}{preview_alias(alias_kind, alias_value).env_suffix}"
         )
-    if spec.env_shared:
-        return spec.base_subdomain
     return f"{spec.base_subdomain}{cfg.env_suffix}"
 
 
@@ -322,9 +311,8 @@ def validate_deploy_target(target: DeployTarget, spec: ServiceSpec) -> None:
         raise ValueError(f"{spec.key} is prod-only; cannot deploy to {target.env}")
 
     if cfg.dynamic:  # preview
-        if spec.prod_only or spec.env_shared:
-            kind = "prod_only" if spec.prod_only else "env_shared"
-            raise ValueError(f"{spec.key} has no preview instances ({kind})")
+        if spec.prod_only:
+            raise ValueError(f"{spec.key} has no preview instances (prod_only)")
         # sub_domain must be base + a valid preview alias suffix, and must not collide
         # with a real env's domain.
         if not _is_valid_preview_sub_domain(spec, target.sub_domain):
@@ -350,8 +338,6 @@ def validate_deploy_target(target: DeployTarget, spec: ServiceSpec) -> None:
 
 def _pinned_sub_domain(spec: ServiceSpec, env: str) -> str:
     cfg = env_config(env)
-    if spec.env_shared:
-        return spec.base_subdomain
     return f"{spec.base_subdomain}{cfg.env_suffix}"
 
 

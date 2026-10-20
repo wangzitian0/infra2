@@ -54,11 +54,15 @@ except ImportError:
     # Standalone container fallback when common package is not available
     @dataclass(frozen=True)
     class EnumSource:  # type: ignore[no-redef]
-        """Where a service's code-side enum truth lives."""
+        """Where a service's code-side enum truth and declarative data preconditions live."""
 
         metadata: str
         imports: tuple[str, ...] = ()
         app_path: str = ""
+        requires_migration: str | None = None
+        migration_table: str = "alembic_version"
+        migration_column: str = "version_num"
+        preconditions: tuple[tuple[str, str, str], ...] = ()
 
     ENUM_SOURCES: dict[str, EnumSource] = {  # type: ignore[no-redef]
         "finance_report/app": EnumSource(
@@ -363,6 +367,129 @@ def libpq_url(db_url: str) -> str:
     return re.sub(r"^(postgres(?:ql)?)\+[A-Za-z0-9_]+://", r"\1://", db_url)
 
 
+_SAFE_SQL_IDENTIFIER_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_.]*\Z")
+_READ_ONLY_SQL_RE = re.compile(r"\A\s*SELECT\b", re.IGNORECASE)
+_FORBIDDEN_SQL_RE = re.compile(
+    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|CREATE|GRANT|REVOKE)\b",
+    re.IGNORECASE,
+)
+
+
+def query_applied_migrations(
+    connection_or_cursor: Any,
+    *,
+    migration_table: str = "alembic_version",
+    migration_column: str = "version_num",
+) -> tuple[str, ...]:
+    """Query the applied migration versions recorded in the target database (#609)."""
+    if not _SAFE_SQL_IDENTIFIER_RE.match(migration_table) or not _SAFE_SQL_IDENTIFIER_RE.match(
+        migration_column
+    ):
+        raise ValueError(
+            f"invalid migration table/column identifier: {migration_table}.{migration_column}"
+        )
+    cursor = (
+        connection_or_cursor.cursor()
+        if hasattr(connection_or_cursor, "cursor")
+        else connection_or_cursor
+    )
+    cursor.execute(
+        f"SELECT {migration_column} FROM {migration_table} ORDER BY {migration_column};"
+    )
+    rows = cursor.fetchall()
+    versions: list[str] = []
+    for row in rows or ():
+        val = row[0] if isinstance(row, (tuple, list)) else row.get(migration_column)
+        if val is not None and str(val).strip():
+            versions.append(str(val).strip())
+    return tuple(versions)
+
+
+def check_data_preconditions(
+    connection_or_cursor: Any,
+    *,
+    requires_migration: str | None = None,
+    migration_table: str = "alembic_version",
+    migration_column: str = "version_num",
+    preconditions: Sequence[tuple[str, str, str]] = (),
+) -> tuple[tuple[str, ...], list[str]]:
+    """Verify migration floor and named read-only SQL data preconditions (#609).
+
+    Returns ``(applied_migrations, failures)``. Fails closed when ``requires_migration``
+    is unmet or any read-only SQL predicate returns false/0/None or errors.
+    """
+    applied: tuple[str, ...] = ()
+    failures: list[str] = []
+    cursor = (
+        connection_or_cursor.cursor()
+        if hasattr(connection_or_cursor, "cursor")
+        else connection_or_cursor
+    )
+    if requires_migration is not None:
+        try:
+            applied = query_applied_migrations(
+                cursor,
+                migration_table=migration_table,
+                migration_column=migration_column,
+            )
+        except Exception as exc:  # noqa: BLE001
+            failures.append(
+                f"migration_floor ({requires_migration}): could not query "
+                f"{migration_table}.{migration_column}: {exc}"
+            )
+        else:
+            if not applied:
+                failures.append(
+                    f"migration_floor ({requires_migration}): {migration_table} is empty "
+                    f"(required >= {requires_migration})"
+                )
+            elif max(applied) < str(requires_migration).strip():
+                failures.append(
+                    f"migration_floor ({requires_migration}): applied migration "
+                    f"{max(applied)!r} is older than required floor {requires_migration!r}"
+                )
+
+    for name, sql_predicate, remedy in preconditions:
+        if (
+            not _READ_ONLY_SQL_RE.match(sql_predicate or "")
+            or _FORBIDDEN_SQL_RE.search(sql_predicate or "")
+        ):
+            failures.append(
+                f"{name}: precondition query must be a read-only SELECT statement"
+            )
+            continue
+        try:
+            cursor.execute(sql_predicate)
+            rows = cursor.fetchall()
+            scalar = (
+                rows[0][0]
+                if rows and isinstance(rows[0], (tuple, list)) and rows[0]
+                else (
+                    next(iter(rows[0].values()))
+                    if rows and isinstance(rows[0], Mapping) and rows[0]
+                    else None
+                )
+            )
+            satisfied = bool(scalar) and str(scalar).strip().lower() not in (
+                "false",
+                "f",
+                "0",
+                "no",
+                "none",
+                "",
+            )
+            if not satisfied:
+                remedy_suffix = f" — remediation: {remedy}" if remedy else ""
+                failures.append(
+                    f"{name}: predicate ({sql_predicate}) returned {scalar!r}{remedy_suffix}"
+                )
+        except Exception as exc:  # noqa: BLE001
+            remedy_suffix = f" — remediation: {remedy}" if remedy else ""
+            failures.append(f"{name}: query failed ({exc}){remedy_suffix}")
+
+    return applied, failures
+
+
 def fetch_db_enums(db_url: str) -> dict[str, list[str]]:
     url = libpq_url(db_url)
     try:
@@ -376,6 +503,38 @@ def fetch_db_enums(db_url: str) -> dict[str, list[str]]:
     with psycopg.connect(url) as conn:
         with conn.cursor() as cur:
             return query_db_enums(cur)
+
+
+def evaluate_db_preconditions(
+    db_url: str, source: EnumSource
+) -> tuple[tuple[str, ...], list[str]]:
+    """Run declarative migration-floor and SQL data preconditions when configured (#609)."""
+    if source.requires_migration is None and not source.preconditions:
+        return (), []
+    url = libpq_url(db_url)
+    try:
+        import psycopg  # type: ignore[import-not-found]
+    except ImportError:
+        import psycopg2  # type: ignore[import-not-found]
+
+        with psycopg2.connect(url) as conn:
+            with conn.cursor() as cur:
+                return check_data_preconditions(
+                    cur,
+                    requires_migration=source.requires_migration,
+                    migration_table=source.migration_table,
+                    migration_column=source.migration_column,
+                    preconditions=source.preconditions,
+                )
+    with psycopg.connect(url) as conn:
+        with conn.cursor() as cur:
+            return check_data_preconditions(
+                cur,
+                requires_migration=source.requires_migration,
+                migration_table=source.migration_table,
+                migration_column=source.migration_column,
+                preconditions=source.preconditions,
+            )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -419,12 +578,22 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         db_enums = fetch_db_enums(db_url)
+        source = ENUM_SOURCES.get(args.service)
+        applied_migrations: tuple[str, ...] = ()
+        precondition_failures: list[str] = []
+        if source is not None:
+            applied_migrations, precondition_failures = evaluate_db_preconditions(
+                db_url, source
+            )
     except Exception as exc:
         print(
             f"ERROR: Failed to connect to DB for pre-deploy schema check: {exc}",
             file=sys.stderr,
         )
         return EXIT_BLOCKED
+
+    if applied_migrations:
+        print(f"APPLIED_MIGRATION: {','.join(applied_migrations)}")
 
     discrepancies = check_enums(code_enums, db_enums)
     # Printed on stdout (never stderr) in both branches below, as a stable-format line a
@@ -437,14 +606,22 @@ def main(argv: list[str] | None = None) -> int:
     # result as detail["rollback_class"]. This script itself has no caller here — it
     # only has to keep emitting a predictable line for schema_gate.py to find.
     rollback_class = classify_rollback(discrepancies)
-    if discrepancies:
-        print(f"ERROR: Schema discrepancies found for {args.service}:", file=sys.stderr)
-        for disc in discrepancies:
+    if discrepancies or precondition_failures:
+        if discrepancies:
+            print(f"ERROR: Schema discrepancies found for {args.service}:", file=sys.stderr)
+            for disc in discrepancies:
+                print(
+                    f"  - {disc.enum_name}: missing_in_db={disc.missing_in_db}, "
+                    f"missing_in_code={disc.missing_in_code}, casing={disc.casing_mismatches}",
+                    file=sys.stderr,
+                )
+        if precondition_failures:
             print(
-                f"  - {disc.enum_name}: missing_in_db={disc.missing_in_db}, "
-                f"missing_in_code={disc.missing_in_code}, casing={disc.casing_mismatches}",
+                f"ERROR: Data preconditions failed for {args.service}:",
                 file=sys.stderr,
             )
+            for failure in precondition_failures:
+                print(f"  - {failure}", file=sys.stderr)
         print(f"ROLLBACK_CLASS: {rollback_class}")
         return EXIT_BLOCKED
 

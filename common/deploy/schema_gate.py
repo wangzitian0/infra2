@@ -280,8 +280,9 @@ def run_schema_gate(
         # exit 0 with no parseable ROLLBACK_CLASS is not a real answer -- treat an
         # unparseable pass as blocking rather than trusting it (Rule 7's "never a
         # silent pass" applies to OUR parsing failures too, not only the script's own).
+        sanitized_output = _sanitize_db_url(output.strip()[-2000:])
         raise SchemaGateError(
             f"pre-deploy schema gate: {service} exited 0 but printed no ROLLBACK_CLASS "
-            f"line: {output.strip()[-2000:]}"
+            f"line: {sanitized_output}"
         )
     return rollback_class

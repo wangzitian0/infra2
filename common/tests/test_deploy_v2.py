@@ -1116,10 +1116,11 @@ def test_cli_reports_deploy_failure(monkeypatch, capsys):
 
 def test_fixed_deploy_verifies_vault_and_config_by_default(calls):
     # parity with the retired bash dokploy_deploy.sh: the unified path must KEEP the
-    # VAULT_APP_TOKEN TTL preflight + post-deploy IAC_CONFIG_HASH check (default-ON).
+    # VAULT_APP_TOKEN TTL preflight + post-deploy IAC_CONFIG_HASH check + #569 smoke check (default-ON).
     _deploy(deploy_type="staging", version_ref="v1.2.3")
     assert calls["fixed"]["verify_vault"] is True
     assert calls["fixed"]["verify_config"] is True
+    assert calls["fixed"]["verify_smoke"] is True
     assert "model_overrides" not in calls["fixed"]
 
 
@@ -1129,9 +1130,11 @@ def test_fixed_deploy_verify_can_be_disabled(calls):
         version_ref="v1.2.3",
         verify_vault=False,
         verify_config=False,
+        verify_smoke=False,
     )
     assert calls["fixed"]["verify_vault"] is False
     assert calls["fixed"]["verify_config"] is False
+    assert calls["fixed"]["verify_smoke"] is False
 
 
 # --- teardown: the --down flag folds in the retired preview-lifecycle `down` ------
@@ -1266,7 +1269,11 @@ def test_cli_verify_flags_default_on_and_flip(cli):
             "zp.io",
         ]
     )
-    assert rec["verify_vault"] is True and rec["verify_config"] is True
+    assert (
+        rec["verify_vault"] is True
+        and rec["verify_config"] is True
+        and rec["verify_smoke"] is True
+    )
     dv2.main(
         [
             "--type",
@@ -1279,9 +1286,14 @@ def test_cli_verify_flags_default_on_and_flip(cli):
             "zp.io",
             "--skip-vault-check",
             "--no-verify-config",
+            "--no-verify-smoke",
         ]
     )
-    assert rec["verify_vault"] is False and rec["verify_config"] is False
+    assert (
+        rec["verify_vault"] is False
+        and rec["verify_config"] is False
+        and rec["verify_smoke"] is False
+    )
 
 
 # --- platform services route to the iac_runner webhook (iac_pinned) ---------
@@ -1966,3 +1978,44 @@ def test_image_manifest_exists_os_error_raises_runtime_error(monkeypatch):
     monkeypatch.setattr(preflight, "resolve_image_digest", fake_resolve)
     with pytest.raises(RuntimeError, match="registry connection failed"):
         preflight._image_manifest_exists("ghcr.io/org/repo", "v1.0.0")
+
+
+def test_cli_threads_force_promote_pause_rollback_and_max_rollback_attempts(
+    monkeypatch, calls, capsys
+):
+    """#722: CLI flags --force-promote, --pause-rollback, and --max-rollback-attempts thread
+    through deploy_v2 into promote.deploy and leave an audit trail."""
+    monkeypatch.setattr(
+        "common.deploy.dokploy_client.get_dokploy", lambda **_kw: object()
+    )
+    rc = dv2.main(
+        [
+            "--service",
+            "finance_report/app",
+            "--type",
+            "prod",
+            "--version-ref",
+            "v0.1.99",
+            "--iac-ref",
+            "v1.2.3",
+            "--domain",
+            "zitian.party",
+            "--code-reviewed",
+            "--force-promote",
+            "--pause-rollback",
+            "--max-rollback-attempts",
+            "3",
+        ]
+    )
+    assert rc == 0
+    captured = capsys.readouterr()
+    assert "[AUDIT] deploy_v2 force_promote=True" in captured.err
+    assert "[AUDIT] deploy_v2 pause_rollback=True" in captured.err
+    assert calls["fixed"]["force_promote"] is True
+    assert calls["fixed"]["pause_rollback"] is True
+    assert calls["fixed"]["max_rollback_attempts"] == 3
+    payload = json.loads(captured.out)
+    assert payload["detail"]["force_promote"] is True
+    assert payload["detail"]["pause_rollback"] is True
+    assert payload["detail"]["max_rollback_attempts"] == 3
+

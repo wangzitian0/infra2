@@ -237,12 +237,14 @@ def test_preserve_runtime_env_keeps_existing_approle_creds() -> None:
         "VAULT_ROLE_ID",
         "VAULT_SECRET_ID",
         "VAULT_ADDR",
+        "IMAGE_TAG",
     )
 
     result = _preserve_runtime_env(
         "ENV=production\nINTERNAL_DOMAIN=zitian.party\nVAULT_ROLE_ID=",
         "ENV=old\nVAULT_ROLE_ID=role-abc\nVAULT_SECRET_ID=secret-xyz\n"
-        "VAULT_ADDR=https://vault.zitian.party\nVAULT_APP_TOKEN=hvs.legacy\nSTALE=value",
+        "VAULT_ADDR=https://vault.zitian.party\nIMAGE_TAG=v0.0.42\n"
+        "VAULT_APP_TOKEN=hvs.legacy\nSTALE=value",
     )
 
     assert result.splitlines() == [
@@ -251,8 +253,21 @@ def test_preserve_runtime_env_keeps_existing_approle_creds() -> None:
         "VAULT_ROLE_ID=role-abc",
         "VAULT_SECRET_ID=secret-xyz",
         "VAULT_ADDR=https://vault.zitian.party",
+        "IMAGE_TAG=v0.0.42",
     ]
     assert "VAULT_APP_TOKEN" not in result
+
+    # When the caller explicitly passes a new IMAGE_TAG (e.g. promote.deploy),
+    # _preserve_runtime_env keeps the caller's value rather than the old one (#569).
+    overwritten = _preserve_runtime_env(
+        "ENV=production\nIMAGE_TAG=v0.0.43",
+        "ENV=production\nIMAGE_TAG=v0.0.42\nVAULT_ROLE_ID=role-abc",
+    )
+    assert overwritten.splitlines() == [
+        "ENV=production",
+        "IMAGE_TAG=v0.0.43",
+        "VAULT_ROLE_ID=role-abc",
+    ]
 
 
 def test_deployer_methods_fail_closed_when_env_key_missing(monkeypatch) -> None:

@@ -154,3 +154,33 @@ def test_every_compose_spelling_is_discovered():
 def test_the_real_repository_is_compliant_against_its_baseline():
     # The end-to-end contract: whatever the tree holds, main must be green.
     assert lint.main() == 0
+
+
+def test_default_tag_expansion_in_image_is_rejected():
+    """#569: app composes must require ${IMAGE_TAG:?...}; a ${IMAGE_TAG:-latest} default
+    silently pulls :latest when Deployer.composing() omits IMAGE_TAG."""
+    bad = (
+        "services:\n"
+        "  llm:\n"
+        "    image: ghcr.io/wangzitian0/truealpha-llm-service:${IMAGE_TAG:-latest}\n"
+        "    mem_limit: 512m\n"
+    )
+    assert lint.find_default_tag_violations(bad) == [
+        "ghcr.io/wangzitian0/truealpha-llm-service:${IMAGE_TAG:-latest}"
+    ]
+
+
+def test_required_tag_and_empty_local_build_tag_are_allowed():
+    """#569: ${IMAGE_TAG:?...}, empty local build tag ${GIT_SHA:-}, and nested required
+    digest ${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?...}} are compliant."""
+    good = (
+        "services:\n"
+        "  llm:\n"
+        "    image: ghcr.io/wangzitian0/truealpha-llm-service:${IMAGE_TAG:?IMAGE_TAG must be set}\n"
+        "  runner:\n"
+        "    image: bootstrap-iac_runner:${GIT_SHA:-}\n"
+        "  engine:\n"
+        "    image: ghcr.io/wangzitian0/truealpha-data-engine@${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?IMAGE_DIGEST is required}}\n"
+    )
+    assert lint.find_default_tag_violations(good) == []
+

@@ -25,6 +25,7 @@ mutations to it survived. Three findings shaped what it does now:
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -39,6 +40,29 @@ COMPOSE_NAMES = (
     "docker-compose.yaml",
     "docker-compose.yml",
 )
+_IMAGE_LINE_RE = re.compile(r"^\s*image:\s*(\S+)\s*$")
+_DEFAULT_TAG_EXPANSION_RE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*:-([^}]*)\}")
+
+
+def find_default_tag_violations(compose_text: str) -> list[str]:
+    """Find image refs that declare a non-empty fallback tag via ${VAR:-default}.
+
+    Allowed: empty build-tag fallbacks (${GIT_SHA:-} / ${CONFIGURATION_SHA256:-}) and
+    nested fail-closed fallbacks (${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?...}}).
+    """
+    violations: list[str] = []
+    for line in compose_text.splitlines():
+        match = _IMAGE_LINE_RE.match(line)
+        if not match:
+            continue
+        ref = match.group(1).strip("\"'")
+        for exp in _DEFAULT_TAG_EXPANSION_RE.finditer(ref):
+            fallback = exp.group(1)
+            if not fallback or ":?" in fallback:
+                continue
+            violations.append(ref)
+            break
+    return violations
 
 
 def _git(*args: str) -> str:
@@ -73,13 +97,17 @@ def main() -> int:
     unlimited: set[str] = set()
     unreadable: list[str] = []
     bare_latest: list[tuple[str, str]] = []
+    default_tags: list[tuple[str, str]] = []
     for rel in _tracked_composes():
-        report = inspect_compose(ROOT / rel)
+        compose_path = ROOT / rel
+        report = inspect_compose(compose_path)
         for ref in report.bare_latest_violations:
             bare_latest.append((rel, ref))
         if report.errors:
             unreadable.append(f"{rel} ({'; '.join(report.errors)})")
             continue
+        for ref in find_default_tag_violations(compose_path.read_text(encoding="utf-8")):
+            default_tags.append((rel, ref))
         unlimited.update(f"{rel}::{svc}" for svc in report.unlimited_services)
 
     if unreadable:
@@ -95,6 +123,16 @@ def main() -> int:
         print(
             "\nPin with `image: <repo>:<tag>@sha256:<digest>` "
             "(get it via `docker inspect <image> --format '{{index .RepoDigests 0}}'`)."
+        )
+        return 1
+
+    if default_tags:
+        print("❌ Default ':-<tag>' image expansions are not allowed (#569):")
+        for rel, ref in default_tags:
+            print(f"   {rel}: image: {ref}")
+        print(
+            "\nRequire an explicit tag with `image: <repo>:${IMAGE_TAG:?IMAGE_TAG must be set}` "
+            "so an unset variable fails closed instead of silently pulling a default tag."
         )
         return 1
 

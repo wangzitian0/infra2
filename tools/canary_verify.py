@@ -71,20 +71,65 @@ class CanaryRealityReport:
     sdk: PillarResult = field(default_factory=lambda: PillarResult(ok=True, summary=""))
 
 
-def _resolve_locked_sdk_version(lock_path: Path | None = None) -> str:
-    """Read the infra2-sdk package version pinned in uv.lock."""
+def _parse_sdk_version_from_lock_text(lock_text: str) -> str:
     import tomllib
 
-    if lock_path is None:
-        lock_path = Path(__file__).resolve().parents[1] / "uv.lock"
-    if lock_path.exists():
+    try:
+        doc = tomllib.loads(lock_text)
+        for pkg in doc.get("package", []):
+            if pkg.get("name") == "infra2-sdk":
+                return str(pkg.get("version", ""))
+    except Exception:
+        pass
+    return ""
+
+
+def _resolve_locked_sdk_version(
+    lock_path: Path | None = None,
+    *,
+    environment: str = "production",
+    repo_root: Path | None = None,
+    runner=subprocess.run,
+) -> str:
+    """Read the infra2-sdk package version pinned in the release's uv.lock (#1289)."""
+    if lock_path is not None:
+        if lock_path.exists():
+            version_str = _parse_sdk_version_from_lock_text(
+                lock_path.read_text(encoding="utf-8")
+            )
+            if version_str:
+                return version_str
+    else:
+        root = repo_root or Path(__file__).resolve().parents[1]
         try:
-            doc = tomllib.loads(lock_path.read_text(encoding="utf-8"))
-            for pkg in doc.get("package", []):
-                if pkg.get("name") == "infra2-sdk":
-                    return str(pkg.get("version", ""))
+            from common.deploy.release_markers import (
+                newest_release_tag,
+                production_marker,
+            )
+
+            ref = (
+                production_marker(repo_root=root, runner=runner)
+                if environment == "production"
+                else newest_release_tag(repo_root=root, runner=runner)
+            )
+            proc = runner(
+                ["git", "-C", str(root), "show", f"{ref}:uv.lock"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            version_str = _parse_sdk_version_from_lock_text(proc.stdout)
+            if version_str:
+                return version_str
         except Exception:
             pass
+        fallback_lock = root / "uv.lock"
+        if fallback_lock.exists():
+            version_str = _parse_sdk_version_from_lock_text(
+                fallback_lock.read_text(encoding="utf-8")
+            )
+            if version_str:
+                return version_str
     try:
         from importlib.metadata import version
 
@@ -271,9 +316,12 @@ def verify_canary(
     check_sdk: bool = True,
     max_age_seconds: int = DEFAULT_WINDOW_SECONDS,
     now: datetime | None = None,
+    repo_root: Path | None = None,
 ) -> CanaryRealityReport:
     if expected_sdk is None:
-        expected_sdk = _resolve_locked_sdk_version()
+        expected_sdk = _resolve_locked_sdk_version(
+            environment=environment, repo_root=repo_root
+        )
 
     host, user, key_path, port = _resolve_ssh_credentials()
     container = (

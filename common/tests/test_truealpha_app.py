@@ -276,3 +276,80 @@ def test_both_issuing_paths_name_the_app_service_alike() -> None:
     assert deployer.telemetry_service_name == spec.resolved_identity_service_name()
     assert (deployer.telemetry_component or deployer.service) == spec.identity_component
     assert service_attrs()["truealpha/app"].telemetry_service_name == "truealpha-app"
+
+
+def test_composing_preserves_last_promoted_image_tag_without_resetting_to_latest(
+    monkeypatch,
+) -> None:
+    """#569: Deployer.composing() for truealpha/app must retain the IMAGE_TAG written by
+    the last promote.deploy run when compose_env_base omits IMAGE_TAG, while an explicit
+    IMAGE_TAG in desired env overwrites the previous value."""
+    from unittest.mock import MagicMock
+    from common.deploy import dokploy_adapter
+    from common.deploy.env_util import _parse_env_text
+
+    deployer = _load_deploy_module().AppDeployer
+    captured: list[str] = []
+
+    client = MagicMock()
+    client.get_default_github_provider_id.return_value = "gh-1"
+    client.find_compose_by_name.return_value = {"composeId": "cmp-ta"}
+    client.get_compose.return_value = {
+        "env": (
+            "VAULT_ROLE_ID=role-1\n"
+            "VAULT_SECRET_ID=sec-1\n"
+            "VAULT_ADDR=https://vault.zitian.party\n"
+            "IMAGE_TAG=v0.0.42\n"
+        )
+    }
+
+    def fake_upsert(c, **kwargs):
+        captured.append(kwargs["effective_env"])
+        return "cmp-ta"
+
+    monkeypatch.setattr(
+        "common.deploy.dokploy_client.ensure_project",
+        lambda *a, **kw: ("proj-ta", "env-prod"),
+    )
+    monkeypatch.setattr(
+        "common.deploy.dokploy_client.get_dokploy",
+        lambda *a, **kw: client,
+    )
+    monkeypatch.setattr(dokploy_adapter, "upsert_github_compose", fake_upsert)
+    monkeypatch.setattr(deployer, "_assert_approle_creds_present", classmethod(lambda cls, e: None))
+    monkeypatch.setattr(deployer, "_prune_stale_dokploy_domains", classmethod(lambda cls, c, cid: None))
+    monkeypatch.setattr(
+        deployer,
+        "ensure_compose_domains",
+        classmethod(lambda cls, c, cid, e: {"created": 0, "skipped": 0, "conflicts": [], "errors": []}),
+    )
+    monkeypatch.setattr(deployer, "_deploy_compose_with_record_check", classmethod(lambda cls, c, cid: None))
+    monkeypatch.setattr(deployer, "verify_in_service", classmethod(lambda cls, c, cid: None))
+    monkeypatch.setattr(deployer, "restart_dependents", classmethod(lambda cls, c, e: []))
+    monkeypatch.setattr(
+        deployer,
+        "env",
+        classmethod(
+            lambda cls: {
+                "ENV": "production",
+                "ENV_SUFFIX": "",
+                "ENV_DOMAIN_SUFFIX": "",
+                "INTERNAL_DOMAIN": "truealpha.club",
+            }
+        ),
+    )
+
+    base_env = deployer.compose_env_base(deployer.env())
+    assert "IMAGE_TAG" not in base_env
+    deployer.composing(MagicMock(), base_env)
+
+    assert len(captured) == 1
+    effective = _parse_env_text(captured[0])
+    assert effective["IMAGE_TAG"] == "v0.0.42"
+    assert effective["VAULT_ROLE_ID"] == "role-1"
+
+    # When caller passes a new IMAGE_TAG, it overwrites the preserved tag.
+    explicit_env = dict(base_env, IMAGE_TAG="v0.0.43")
+    deployer.composing(MagicMock(), explicit_env)
+    assert _parse_env_text(captured[1])["IMAGE_TAG"] == "v0.0.43"
+

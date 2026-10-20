@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import re
 import subprocess
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -336,6 +337,64 @@ def served_release(url: str, fetcher: Fetcher) -> tuple[str, str]:
     return "unknown", "no version or git_sha"
 
 
+def _remote_marker_status(
+    *, repo_root: Path, runner: Runner = subprocess.run
+) -> Any:
+    """Read remote tags (`git ls-remote --tags origin`) for the infra2 row (#1289)."""
+    from common.deploy.release_markers import (
+        PRODUCTION_MARKER_PREFIX,
+        MarkerStatus,
+        marker_status as read_markers,
+        version_key,
+    )
+
+    def _fallback():
+        if runner is subprocess.run:
+            return read_markers(repo_root=repo_root)
+        return read_markers(repo_root=repo_root, runner=runner)
+
+    result = runner(
+        [
+            "git",
+            "ls-remote",
+            "--tags",
+            "--refs",
+            "origin",
+            "refs/tags/v*.*.*",
+            f"refs/tags/{PRODUCTION_MARKER_PREFIX}v*.*.*",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=15,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return _fallback()
+    semver_re = re.compile(r"\Av[0-9]+\.[0-9]+\.[0-9]+\Z")
+    releases: list[str] = []
+    markers: list[str] = []
+    for line in result.stdout.splitlines():
+        parts = line.strip().split("\t")
+        if len(parts) != 2:
+            continue
+        ref = parts[1].removeprefix("refs/tags/")
+        if ref.startswith(PRODUCTION_MARKER_PREFIX):
+            cleaned = ref.removeprefix(PRODUCTION_MARKER_PREFIX)
+            if semver_re.fullmatch(cleaned):
+                markers.append(cleaned)
+        elif semver_re.fullmatch(ref):
+            releases.append(ref)
+    if not releases or not markers:
+        return _fallback()
+    releases.sort(key=version_key, reverse=True)
+    markers.sort(key=version_key, reverse=True)
+    marker = markers[0]
+    marker_key = version_key(marker)
+    behind = sum(1 for tag in releases if version_key(tag) > marker_key)
+    return MarkerStatus(marker, releases[0], behind)
+
+
 def _served(
     entry: dict[str, Any],
     root: Path,
@@ -359,10 +418,9 @@ def _served(
         return {**row, "note": "; ".join(notes)}
     if entry.get("checkout") != "root":
         return {"staging": None, "production": None, "note": ""}
-    from common.deploy.release_markers import marker_status as read_markers
 
     try:
-        marker = (marker_status or read_markers)(repo_root=root)
+        marker = (marker_status or _remote_marker_status)(repo_root=root)
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         note = f"markers: {type(exc).__name__}: {exc}"[:100]
         return {"staging": "unknown", "production": "unknown", "note": note}

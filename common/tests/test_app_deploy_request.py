@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -977,6 +978,9 @@ def _gate_cli(monkeypatch, request: dict, *extra: str) -> int:
             **kwargs,
             production_evidence_verifier=lambda request: None,
             resolve_image=resolved,
+            manifest_fetcher=lambda _url: Path(
+                "contracts/finance_report/required-env.generated.json"
+            ).read_bytes(),
             runner=tags,
         )
 
@@ -1420,3 +1424,248 @@ def test_authority_uses_the_sdk_evidence_url_validator() -> None:
             sender="wangzitian0",
             resolve_image=resolved,
         )
+
+
+# --- Manifest sha256 lock check (#1297) ------------------------------------------
+
+
+def _write_manifest_lock(root: Path, files: list[dict]) -> None:
+    contracts = root / "contracts"
+    contracts.mkdir(parents=True, exist_ok=True)
+    lock = {
+        "apps": {
+            "truealpha": {
+                "commit": "5a6d5893" + "0" * 32,
+                "repository": "wangzitian0/truealpha",
+                "tag": None,
+            }
+        },
+        "files": files,
+        "generated_by": "tools/fetch_app_manifests.py --sync",
+        "lock_version": 1,
+    }
+    (contracts / "apps.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+
+
+def test_manifest_check_passes_when_release_manifests_match_lock_even_if_commit_moved(
+    tmp_path: Path,
+) -> None:
+    """#1297 AC1 & AC3: equal hashes pass even when the release SHA is newer than the
+    locked commit (manifests did not change between locked commit and release)."""
+    import hashlib
+
+    web_bytes = b'{"vars": ["APP_URL"]}\n'
+    llm_bytes = b'{"vars": ["OPENAI_API_KEY"]}\n'
+    _write_manifest_lock(
+        tmp_path,
+        [
+            {
+                "app": "truealpha",
+                "path": "contracts/truealpha/app-web.required-env.manifest.json",
+                "sha256": hashlib.sha256(web_bytes).hexdigest(),
+                "upstream": "apps/app-web/required-env.manifest.json",
+            },
+            {
+                "app": "truealpha",
+                "path": "contracts/truealpha/llm-service.required-env.generated.json",
+                "sha256": hashlib.sha256(llm_bytes).hexdigest(),
+                "upstream": "apps/llm-service/required-env.generated.json",
+            },
+        ],
+    )
+    release_sha = "dd066f62" + "0" * 32
+    ta_repo = "wangzitian0/truealpha"
+    upstream_bodies = {
+        f"https://raw.githubusercontent.com/{ta_repo}/{release_sha}/apps/app-web/required-env.manifest.json": web_bytes,
+        f"https://raw.githubusercontent.com/{ta_repo}/{release_sha}/apps/llm-service/required-env.generated.json": llm_bytes,
+    }
+    req = payload(
+        service="truealpha/app",
+        source_repository=ta_repo,
+        version_ref="v0.2.13",
+        source_sha=release_sha,
+        evidence={
+            "source_run_url": f"https://github.com/{ta_repo}/actions/runs/100",
+            "source_run_id": "100",
+            "staging_run_url": "",
+            "reviewed_change_url": "",
+        },
+    )
+    plan = receiver.make_plan(
+        req,
+        sender="wangzitian0",
+        domain="zitian.party",
+        timeout=600,
+        repo_root=tmp_path,
+        resolve_image=lambda *_a, **_k: ResolvedRef(
+            sha=release_sha, image_ref="v0.2.13", form="tag"
+        ),
+        manifest_fetcher=upstream_bodies.__getitem__,
+        runner=tags,
+    )
+    assert plan.request.version_ref == "v0.2.13"
+
+
+def test_manifest_check_refuses_deploy_when_a_release_manifest_differs_from_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#1297 AC1 & AC2: when one manifest at source_sha differs from contracts/apps.lock.json,
+    make_plan and the CLI plan/execute step fail in seconds naming the differing manifest and
+    the exact sync + render remediation before deploy_v2 starts."""
+    import hashlib
+
+    web_bytes = b'{"vars": ["APP_URL"]}\n'
+    locked_de_bytes = b'{"vars": ["DATABASE_URL"]}\n'
+    release_de_bytes = b'{"vars": ["DATABASE_URL", "SEC_USER_AGENT"]}\n'
+    _write_manifest_lock(
+        tmp_path,
+        [
+            {
+                "app": "truealpha",
+                "path": "contracts/truealpha/app-web.required-env.manifest.json",
+                "sha256": hashlib.sha256(web_bytes).hexdigest(),
+                "upstream": "apps/app-web/required-env.manifest.json",
+            },
+            {
+                "app": "truealpha",
+                "path": "contracts/truealpha/data-engine.required-env.generated.json",
+                "sha256": hashlib.sha256(locked_de_bytes).hexdigest(),
+                "upstream": "apps/data-engine/required-env.generated.json",
+            },
+        ],
+    )
+    release_sha = "dd066f62" + "0" * 32
+    ta_repo = "wangzitian0/truealpha"
+    upstream_bodies = {
+        f"https://raw.githubusercontent.com/{ta_repo}/{release_sha}/apps/app-web/required-env.manifest.json": web_bytes,
+        f"https://raw.githubusercontent.com/{ta_repo}/{release_sha}/apps/data-engine/required-env.generated.json": release_de_bytes,
+    }
+    req = production_payload(
+        service="truealpha/app",
+        source_repository=ta_repo,
+        version_ref="v0.2.13",
+        source_sha=release_sha,
+        evidence={
+            "source_run_url": f"https://github.com/{ta_repo}/actions/runs/100",
+            "source_run_id": "100",
+            "staging_run_url": f"https://github.com/{ta_repo}/actions/runs/101",
+            "reviewed_change_url": f"https://github.com/{ta_repo}/pull/10",
+        },
+    )
+    with pytest.raises(ValueError) as exc_info:
+        receiver.make_plan(
+            req,
+            sender="wangzitian0",
+            domain="zitian.party",
+            timeout=600,
+            repo_root=tmp_path,
+            production_evidence_verifier=lambda _r: None,
+            resolve_image=lambda *_a, **_k: ResolvedRef(
+                sha=release_sha, image_ref="v0.2.13", form="tag"
+            ),
+            manifest_fetcher=upstream_bodies.__getitem__,
+            runner=tags,
+        )
+    msg = str(exc_info.value)
+    assert "contracts/truealpha/data-engine.required-env.generated.json" in msg
+    assert "contracts/truealpha/app-web.required-env.manifest.json" not in msg
+    assert "tools/fetch_app_manifests.py --sync truealpha v0.2.13" in msg
+    assert "tools/secrets_render.py --write" in msg
+    assert "merge, then deploy again" in msg
+
+    # Verify CLI execute fails in make_plan before execute_plan / deploy_v2 is ever called
+    monkeypatch.setenv("APP_DEPLOY_REQUEST_JSON", json.dumps(req))
+    real_make_plan = receiver.make_plan
+
+    def fake_make_plan(payload_json, **kwargs):
+        return real_make_plan(
+            payload_json,
+            **kwargs,
+            production_evidence_verifier=lambda _r: None,
+            resolve_image=lambda *_a, **_k: ResolvedRef(
+                sha=release_sha, image_ref="v0.2.13", form="tag"
+            ),
+            manifest_fetcher=upstream_bodies.__getitem__,
+            runner=tags,
+        )
+
+    monkeypatch.setattr(receiver, "make_plan", fake_make_plan)
+    deploy_called = []
+    monkeypatch.setattr(
+        receiver_cli, "execute_plan", lambda _p: deploy_called.append(1) or 0
+    )
+
+    rc = receiver_cli.main(
+        [
+            "execute",
+            "--sender",
+            "wangzitian0",
+            "--domain",
+            "zitian.party",
+            "--repo-root",
+            str(tmp_path),
+        ]
+    )
+    assert rc == 1
+    assert deploy_called == []
+    err = capsys.readouterr().err
+    assert "contracts/truealpha/data-engine.required-env.generated.json" in err
+    assert "tools/fetch_app_manifests.py --sync truealpha v0.2.13" in err
+
+
+def test_query_serving_release_returns_authoritative_dokploy_and_health_state(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#588: query_serving_release and CLI `serving` action return the authoritative
+    serving (source_sha, image_tag, iac_ref) from infra2 instead of app-repo CI history."""
+
+    class _FakeDokploy:
+        def get_compose_env(self, compose_id: str) -> str:
+            assert compose_id == "lNn9gVS1Zyw79Jzw5dlbu"
+            return (
+                "IMAGE_TAG=v0.1.45\n"
+                "GIT_COMMIT_SHA=v0.1.45\n"
+                f"INFRA_IAC_REF={'b' * 40}\n"
+            )
+
+    serving = receiver.query_serving_release(
+        "finance_report/app",
+        "prod",
+        domain="zitian.party",
+        client=_FakeDokploy(),
+        http_get_fn=lambda _u: (200, '{"status": "ok", "version": "v0.1.45"}'),
+        resolve_image=lambda tag, **_k: ResolvedRef(
+            sha=SHA, image_ref=tag, form="tag"
+        ),
+    )
+    assert serving.service == "finance_report/app"
+    assert serving.environment == "production"
+    assert serving.image_tag == "v0.1.45"
+    assert serving.source_sha == SHA
+    assert serving.iac_ref == "b" * 40
+    assert serving.public_version == "v0.1.45"
+    assert serving.healthy is True
+
+    monkeypatch.setattr(
+        receiver,
+        "query_serving_release",
+        lambda service, env, **_kw: serving,
+    )
+    rc = receiver_cli.main(
+        [
+            "serving",
+            "--service",
+            "finance_report/app",
+            "--env",
+            "prod",
+            "--domain",
+            "zitian.party",
+        ]
+    )
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["image_tag"] == "v0.1.45"
+    assert out["source_sha"] == SHA
+    assert out["healthy"] is True
+
+
