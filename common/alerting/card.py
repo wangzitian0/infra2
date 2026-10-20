@@ -249,6 +249,9 @@ def _pager_card(
     }
 
 
+_SHORT_FIELD_LABELS = frozenset({"级别", "环境", "对象", "开始于"})
+
+
 def _card_blocks(
     items: tuple[PagerItem, ...], full: int, summaries: int
 ) -> list[dict[str, Any]]:
@@ -261,7 +264,10 @@ def _card_blocks(
             {
                 "tag": "div",
                 "fields": [
-                    {"is_short": False, "text": _card_field(label, value)}
+                    {
+                        "is_short": label in _SHORT_FIELD_LABELS,
+                        "text": _card_field(label, value),
+                    }
                     for label, value in item.fields()
                 ],
             }

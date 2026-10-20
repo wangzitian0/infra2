@@ -201,6 +201,14 @@ def test_alert_card_has_severity_colored_header_fields_and_signoz_button() -> No
         "现象：GET /api/health returned 503",
         "开始于：未知",
     ]
+    short_flags = {
+        field["text"]["content"].split("：", 1)[0]: field["is_short"]
+        for field in fields
+    }
+    assert short_flags["级别"] is True
+    assert short_flags["对象"] is True
+    assert short_flags["开始于"] is True
+    assert short_flags["现象"] is False
 
     # the only action button links to SigNoz
     (action,) = [e for e in card["elements"] if e.get("tag") == "action"]
@@ -232,6 +240,76 @@ def test_card_payloads_use_interactive_msg_type() -> None:
     assert app["receive_id"] == "oc_test"
     assert app["msg_type"] == "interactive"
     assert json.loads(app["content"]) == card  # content is a JSON string
+
+
+def test_deliver_out_of_band_card_supports_app_webhook_and_fallback(
+    monkeypatch,
+) -> None:
+    import common.alerting as alerting
+    from common.alerting import (
+        FeishuDeliveryError,
+        InvalidFeishuAppConfig,
+        deliver_out_of_band_card,
+    )
+
+    calls: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        alerting,
+        "deliver_feishu_app_card",
+        lambda **kw: (calls.append(("app_card", kw["chat_id"])) or {"code": 0}),
+    )
+    monkeypatch.setattr(
+        alerting,
+        "deliver_feishu_card",
+        lambda url, card, **kw: (calls.append(("webhook_card", url)) or {"code": 0}),
+    )
+    monkeypatch.setattr(
+        alerting,
+        "deliver_feishu_text",
+        lambda url, text, **kw: (calls.append(("webhook_text", text)) or {"code": 0}),
+    )
+
+    res_app = deliver_out_of_band_card(
+        {
+            "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE": "feishu_app",
+            "INFRA2_OUT_OF_BAND_FEISHU_APP_ID": "cli_x",
+            "INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET": "sec",
+            "INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID": "oc_123",
+        },
+        {"header": {}},
+    )
+    assert res_app == {"code": 0}
+    assert calls[-1] == ("app_card", "oc_123")
+
+    res_wh = deliver_out_of_band_card(
+        {"FEISHU_WEBHOOK_URL": "https://open.feishu.cn/open-apis/bot/v2/hook/tok"},
+        {"header": {}},
+    )
+    assert res_wh == {"code": 0}
+    assert calls[-1] == (
+        "webhook_card",
+        "https://open.feishu.cn/open-apis/bot/v2/hook/tok",
+    )
+
+    with pytest.raises(InvalidFeishuAppConfig):
+        deliver_out_of_band_card({}, {"header": {}})
+
+    def fail_card(*_a, **_k):
+        raise FeishuDeliveryError("card rejected")
+
+    monkeypatch.setattr(alerting, "deliver_feishu_card", fail_card)
+    res_fb = deliver_out_of_band_card(
+        {"FEISHU_WEBHOOK_URL": "https://open.feishu.cn/open-apis/bot/v2/hook/tok"},
+        {"header": {}},
+        fallback_text="fallback summary",
+    )
+    assert res_fb == {"code": 0}
+    assert calls[-1] == ("webhook_text", "fallback summary")
+    with pytest.raises(FeishuDeliveryError):
+        deliver_out_of_band_card(
+            {"FEISHU_WEBHOOK_URL": "https://open.feishu.cn/open-apis/bot/v2/hook/tok"},
+            {"header": {}},
+        )
 
 
 def test_signoz_channel_payload_targets_internal_bridge_with_optional_basic_auth() -> (
