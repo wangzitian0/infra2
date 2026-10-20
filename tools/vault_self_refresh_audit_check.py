@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Scheduled CI wrapper for the Vault self-refresh audit (#531).
 
-``common/security/vault_audit.py`` was a manual-only operator tool (``invoke
+``common/security/vault_self_refresh_audit.py`` was a manual-only operator tool (``invoke
 vault-audit.self-refresh``) since it was built in #166/#526 -- nothing ever forced it
 to run, which is exactly how both of #531's structural bugs (``classify_token``
 hardcoding the legacy ``vault_token_env_key`` a month after the fleet finished

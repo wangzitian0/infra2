@@ -37,8 +37,6 @@ FULL = "full"
 OPEN_ONLY = "open-only"
 OFF = "off"
 
-PER_PAGE = 100
-MAX_PAGES = 10
 API_BASE = "https://api.github.com"
 API_TIMEOUT_SECONDS = 20.0
 MAX_DETAIL_CHARS = 1000
@@ -60,10 +58,8 @@ __all__ = [
     "IssueApi",
     "ListingFailed",
     "MAX_DETAIL_CHARS",
-    "MAX_PAGES",
     "OFF",
     "OPEN_ONLY",
-    "PER_PAGE",
     "RUNNER_HEALTH_SOURCE",
     "SSH_OVERRIDE_ENV",
     "TITLE_PREFIX",

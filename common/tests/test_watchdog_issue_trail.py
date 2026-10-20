@@ -496,7 +496,6 @@ class _Response(io.BytesIO):
 def test_the_listing_skips_pull_requests_and_reads_every_page(monkeypatch) -> None:
     import infra2_sdk.observability as sdk_obs
 
-    monkeypatch.setattr(trail_lib, "PER_PAGE", 2)
     monkeypatch.setattr(sdk_obs, "_PER_PAGE", 2)
     pages = {
         1: [
@@ -552,8 +551,6 @@ def test_an_unreadable_listing_is_a_listing_failure(answer) -> None:
 def test_a_listing_longer_than_the_page_cap_is_not_trusted(monkeypatch) -> None:
     import infra2_sdk.observability as sdk_obs
 
-    monkeypatch.setattr(trail_lib, "PER_PAGE", 1)
-    monkeypatch.setattr(trail_lib, "MAX_PAGES", 2)
     monkeypatch.setattr(sdk_obs, "_PER_PAGE", 1)
     monkeypatch.setattr(sdk_obs, "_MAX_PAGES", 2)
     opener = lambda _request, timeout: _Response(b'[{"number": 1, "title": "x"}]')  # noqa: E731
