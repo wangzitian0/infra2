@@ -68,9 +68,13 @@ class EnvConfig:
 
     def app_url(self, *, domain: str, number: int | str | None = None) -> str:
         """Concrete public URL: fill {domain} (always) and {number} (preview only)."""
-        return self.app_url_pattern.format(
+        url = self.app_url_pattern.format(
             domain=domain, number="" if number is None else number
         )
+        prefix = domain.split(".", 1)[0]
+        if prefix and url == f"https://{prefix}.{domain}":
+            return f"https://{domain}"
+        return url
 
 
 _ENVIRONMENTS: dict[str, EnvConfig] = {

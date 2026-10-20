@@ -604,3 +604,47 @@ def test_a_timed_out_release_run_stops_further_release_runs(monkeypatch) -> None
     assert calls == ["a" * 40]
     assert row.verdict == "in_sync"
     assert "unavailable" in row.note
+
+
+def test_scan_accepts_unchanged_service_across_hash_formula_evolution(
+    monkeypatch,
+) -> None:
+    """#1321: when a service was not redeployed at tag because its inputs did not
+    change, a hash-formula change between deploy_ref and tag must not report DRIFT."""
+    row_same, _ = _release_scan(
+        monkeypatch,
+        DeployedIdentity(
+            runtime_hash="r",
+            source_hash="v1:old-formula-hash",
+            deploy_ref="b" * 40,
+        ),
+        release_by_commit={
+            "a" * 40: {"hash": "new-formula-hash", "missing": []},
+            "b" * 40: {"hash": "old-formula-hash", "missing": []},
+        },
+        main_formula="same-inputs",
+    )
+    assert row_same.verdict == "in_sync"
+
+    row_changed, _ = _release_scan(
+        monkeypatch,
+        DeployedIdentity(
+            runtime_hash="r",
+            source_hash="v1:old-formula-hash",
+            deploy_ref="b" * 40,
+        ),
+        release_by_commit={
+            "a" * 40: {"hash": "new-formula-hash", "missing": []},
+            "b" * 40: {"hash": "old-formula-hash", "missing": []},
+        },
+        main_formula="unused",
+    )
+    monkeypatch.setattr(
+        drift,
+        "expected_hash_at",
+        lambda _dep, _c, ref, _env: (
+            ("inputs-at-tag", []) if ref == "v1.2.3" else ("inputs-at-deployed", [])
+        ),
+    )
+    row_changed = drift.scan("v1.2.3")[0]
+    assert row_changed.verdict == "DRIFT"

@@ -381,7 +381,14 @@ def test_truealpha_staging_deploy_sets_app_host():
 def test_truealpha_prod_deploy_sets_app_host_to_the_bare_domain():
     """truealpha#474: production has no ENV_SUFFIX to disambiguate, so it must be the
     bare domain, not truealpha.<domain> (the truealpha.truealpha.club bug)."""
-    client = FakeDokploy()
+    polled_urls: list[str] = []
+    client = FakeDokploy(
+        deployments=lambda self: (
+            [{"id": "old", "status": "done"}, {"id": "new", "status": "done"}]
+            if self.deployed
+            else [{"id": "old", "status": "done"}]
+        )
+    )
     dp.deploy(
         "prod",
         FULL_SHA,
@@ -390,9 +397,16 @@ def test_truealpha_prod_deploy_sets_app_host_to_the_bare_domain():
         service="truealpha/app",
         staging_validated=True,
         iac_ref="b" * 40,
+        wait=True,
+        http_get=lambda url: (
+            polled_urls.append(url)
+            or (200, f'{{"status": "healthy", "version": "{SHORT_SHA}"}}')
+        ),
     )
     _, env = client.updated[0]
     assert env["APP_HOST"] == "truealpha.club"
+    assert env["NEXT_PUBLIC_APP_URL"] == "https://truealpha.club"
+    assert polled_urls == ["https://truealpha.club/api/health"]
 
 
 def test_finance_report_deploy_has_no_app_host_override():

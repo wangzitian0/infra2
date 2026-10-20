@@ -41,6 +41,18 @@ def test_production_alias_is_normalized_to_prod():
     assert app_cfg.compose_id == "j-gIAk0GfF0bGOitZN-og"
 
 
+def test_truealpha_prod_app_url_collapses_duplicate_domain_prefix():
+    prod_cfg = ec.app_compose_env_config("truealpha/app", "prod")
+    assert prod_cfg.app_url(domain="truealpha.club") == "https://truealpha.club"
+    assert prod_cfg.app_url(domain="zitian.party") == "https://truealpha.zitian.party"
+
+    staging_cfg = ec.app_compose_env_config("truealpha/app", "staging")
+    assert (
+        staging_cfg.app_url(domain="truealpha.club")
+        == "https://truealpha-staging.truealpha.club"
+    )
+
+
 def test_preview_is_dynamic_and_defaults_to_staging_data():
     cfg = ec.env_config("preview")
     assert cfg.dynamic is True

@@ -590,7 +590,25 @@ def scan(tag: str) -> list[Row]:
                 )
             )
             continue
-        if identity.source_hash == versioned_expected:
+        unchanged_since_deploy = False
+        if (
+            identity.source_hash != versioned_expected
+            and identity.deploy_ref != expected_ref
+        ):
+            try:
+                cur_at_deployed, cur_missing = expected_hash_at(
+                    dep, c, identity.deploy_ref, env_vars
+                )
+                cur_at_tag, tag_missing = expected_hash_at(dep, c, tag, env_vars)
+                unchanged_since_deploy = (
+                    not cur_missing
+                    and not tag_missing
+                    and cur_at_deployed is not None
+                    and cur_at_deployed == cur_at_tag
+                )
+            except Exception:  # noqa: BLE001
+                unchanged_since_deploy = False
+        if identity.source_hash == versioned_expected or unchanged_since_deploy:
             rows.append(
                 Row(
                     sid,
