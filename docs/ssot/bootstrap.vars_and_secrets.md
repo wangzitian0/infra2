@@ -120,16 +120,20 @@ Deployer 的 `compose_env_overrides` 提供，manifest 只描述"谁产生这个
 
 ### 1.6 Change an App contract
 
-The receiver refuses an App release only for a variable that infra2 must supply (#1320).
-It compares the deploy contract of the release manifests with the deploy contract in
-`contracts/` of the infra2 release that the deploy runs at. Staging runs at the newest
-release tag. Production runs at the `production/vX.Y.Z` marker, so a sync on `main` does
-not help a production deploy until infra2 is released and promoted.
+The receiver refuses an App release only when it asks for something that infra2 does not supply (#1320).
+It compares the deploy contract of the release manifests with the deploy contract of the infra2
+release that the deploy runs at. Staging runs at the newest release tag. Production runs at the
+`production/vX.Y.Z` marker, so a sync on `main` does not help a production deploy until infra2 is
+released and promoted.
 
-The deploy contract is every field whose `source` is not `code`, or that the template renders,
-with the attributes that `common/deploy/app_contract.py` lists as contract attributes. A change to
-a `code` field, a description or an attribute that the module lists as ignored needs no sync.
-A release that needs less than infra2 supplies passes. A refusal names the variable and the file.
+The deploy contract is every field that infra2 must supply: its `source` is not `code`, or the template
+renders it, or the image stops at start without it (`required`, or `injected` under the start check).
+`common/deploy/app_contract.py` lists the attributes that count. infra2 supplies a variable from the copy
+or from a stack-only manifest of the same stack (`env.manifest.json`); either one meets the release.
+A plain `code` field (a default inside the image), a description, `has_default`, `sensitive` and `ci`
+need no sync. A release that needs less than infra2 supplies passes. A release that moves a variable to
+`code` also passes: infra2 keeps rendering the old value until a sync drops it, and that value then
+overrides the new default. A refusal names the variable, the attribute and the file.
 
 1. The App merges the manifest change to its `main` branch.
 2. Sync only when the receiver names a variable that infra2 does not supply on `main` either.

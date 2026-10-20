@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -159,25 +158,64 @@ def resolved(*args, **kwargs) -> ResolvedRef:
     return ResolvedRef(sha=SHA, image_ref="v1.2.3", form="tag")
 
 
-# An infra2 release whose App contract lists no manifest. Tests that are not about the
-# manifest preflight read it through ``git show``; the preflight tests use a real checkout.
-NO_MANIFEST_LOCK = json.dumps(
-    {"apps": {}, "files": [], "generated_by": "test", "lock_version": 1}
+# A world for the tests that are not about the manifest preflight: every infra2 release
+# lists one manifest per App, and the release image asks for what that manifest holds.
+# The preflight still parses and compares in these tests; the preflight tests use a
+# real git checkout.
+WORLD_FIELD = EnvironmentField(field="a", env="A", source="human")
+WORLD_MANIFEST = json.dumps(
+    EnvironmentManifest(source="test", fields=(WORLD_FIELD,)).to_dict()
+)
+WORLD_LOCK_FILES = [
+    {
+        "app": "finance_report",
+        "path": "contracts/finance_report/required-env.generated.json",
+        "sha256": "0" * 64,
+        "upstream": "common/runtime/required-env.generated.json",
+    },
+    {
+        "app": "truealpha",
+        "path": "contracts/truealpha/data-engine.required-env.generated.json",
+        "sha256": "0" * 64,
+        "upstream": "apps/data-engine/required-env.generated.json",
+    },
+]
+WORLD_LOCK = json.dumps(
+    {
+        "apps": {},
+        "files": WORLD_LOCK_FILES,
+        "generated_by": "test",
+        "lock_version": 1,
+    }
 )
 
 
-def checkout_without_manifests(root: Path) -> Path:
+def world_read(_ref: str, path: str) -> str:
+    return WORLD_LOCK if path == "contracts/apps.lock.json" else WORLD_MANIFEST
+
+
+@pytest.fixture(autouse=True)
+def _release_asks_for_what_the_world_holds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(receiver, "http_get", lambda _url: WORLD_MANIFEST.encode())
+
+
+def checkout_with_world(root: Path) -> Path:
     """The receiver's main checkout, for a deploy that runs at main (a preview)."""
-    (root / "contracts").mkdir(exist_ok=True)
-    (root / "contracts" / "apps.lock.json").write_text(
-        NO_MANIFEST_LOCK, encoding="utf-8"
-    )
+    for path in ("contracts/apps.lock.json", *(f["path"] for f in WORLD_LOCK_FILES)):
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(world_read("main", path), encoding="utf-8")
+    from common.deploy.app_contract import stack_manifests
+
+    for entry in WORLD_LOCK_FILES:
+        for path in stack_manifests(entry["path"]):
+            (root / path).parent.mkdir(parents=True, exist_ok=True)
+            (root / path).write_text(WORLD_MANIFEST, encoding="utf-8")
     return root
 
 
 def tags(args, **kwargs):
     if "show" in args:
-        return SimpleNamespace(stdout=NO_MANIFEST_LOCK)
+        return SimpleNamespace(stdout=world_read("", args[-1].partition(":")[2]))
     if "production/v*.*.*" in args:
         return SimpleNamespace(stdout="production/v1.1.74\n")
     return SimpleNamespace(stdout="v1.1.76\nv1.1.75\n")
@@ -654,7 +692,7 @@ def test_iac_ref_refuses_a_marker_that_predates_the_release_pin(tmp_path) -> Non
 
 def test_plan_names_the_newest_release_next_to_the_ref_it_runs_at(tmp_path) -> None:
     """The promotion lag is on screen in the plan, before anything is deployed."""
-    checkout_without_manifests(tmp_path)
+    checkout_with_world(tmp_path)
     production = receiver.make_plan(
         production_payload(),
         sender="wangzitian0",
@@ -838,7 +876,7 @@ def test_requires_preflight_canary_is_the_single_source_the_workflow_reads(
     build_payload = (
         production_payload if overrides.get("deploy_type") == "prod" else payload
     )
-    checkout_without_manifests(tmp_path)
+    checkout_with_world(tmp_path)
     plan = receiver.make_plan(
         build_payload(**overrides),
         sender="wangzitian0",
@@ -1472,6 +1510,7 @@ TA_REPO = "wangzitian0/truealpha"
 RELEASE_SHA = "dd066f62" + "0" * 32
 COPY_PATH = "contracts/truealpha/data-engine.required-env.generated.json"
 UPSTREAM_PATH = "apps/data-engine/required-env.generated.json"
+STACK_PATH = "truealpha/truealpha/20.data_engine/env.manifest.json"
 RELEASE_URL = (
     f"https://raw.githubusercontent.com/{TA_REPO}/{RELEASE_SHA}/{UPSTREAM_PATH}"
 )
@@ -1486,61 +1525,77 @@ def _manifest(*fields: EnvironmentField) -> bytes:
     return (json.dumps(manifest.to_dict(), indent=2) + "\n").encode()
 
 
+STACK_ONLY = _manifest(_field("STACK_ONLY_KEY", "human"))
+
+
 def _git(root: Path, *args: str) -> None:
     command = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t"]
     subprocess.run([*command, *args], check=True, capture_output=True)
 
 
-def _infra2_checkout(root: Path, releases: list[tuple[bytes | None, tuple[str, ...]]]):
+def _lock(copy_paths: dict[str, str], *, files: list[dict] | None = None) -> str:
+    """A lock for truealpha: ``copy path -> upstream path``."""
+    entries = files or [
+        {"app": "truealpha", "path": path, "sha256": "0" * 64, "upstream": upstream}
+        for path, upstream in copy_paths.items()
+    ]
+    return json.dumps(
+        {
+            "apps": {
+                "truealpha": {
+                    "commit": "5a6d5893" + "0" * 32,
+                    "repository": TA_REPO,
+                    "tag": None,
+                }
+            },
+            "files": entries,
+            "generated_by": "tools/fetch_app_manifests.py --sync",
+            "lock_version": 1,
+        }
+    )
+
+
+def _infra2_checkout(
+    root: Path,
+    releases: list[tuple[bytes | None, tuple[str, ...]]],
+    *,
+    stack: bytes = STACK_ONLY,
+    annotated: tuple[str, ...] = (),
+):
     """A git checkout whose commits carry the App contract: ``(copy, tags)`` per commit.
 
     A copy of ``None`` is a commit that predates the vendored contract. The last commit
-    is HEAD, which is what the receiver checks out.
+    is HEAD, which is what the receiver checks out. ``stack`` is the stack-only manifest.
     """
     _git(root, "init", "-q", "-b", "main")
     for index, (copy, tags_here) in enumerate(releases):
-        contracts = root / "contracts"
         if copy is not None:
-            (contracts / "truealpha").mkdir(parents=True, exist_ok=True)
+            (root / "contracts" / "truealpha").mkdir(parents=True, exist_ok=True)
             (root / COPY_PATH).write_bytes(copy)
-            lock = {
-                "apps": {
-                    "truealpha": {
-                        "commit": "5a6d5893" + "0" * 32,
-                        "repository": TA_REPO,
-                        "tag": None,
-                    }
-                },
-                "files": [
-                    {
-                        "app": "truealpha",
-                        "path": COPY_PATH,
-                        "sha256": hashlib.sha256(copy).hexdigest(),
-                        "upstream": UPSTREAM_PATH,
-                    }
-                ],
-                "generated_by": "tools/fetch_app_manifests.py --sync",
-                "lock_version": 1,
-            }
-            (contracts / "apps.lock.json").write_text(
-                json.dumps(lock), encoding="utf-8"
+            (root / STACK_PATH).parent.mkdir(parents=True, exist_ok=True)
+            (root / STACK_PATH).write_bytes(stack)
+            (root / "contracts" / "apps.lock.json").write_text(
+                _lock({COPY_PATH: UPSTREAM_PATH}), encoding="utf-8"
             )
         (root / "marker.txt").write_text(str(index), encoding="utf-8")
         _git(root, "add", "-A")
         _git(root, "commit", "-q", "-m", f"release {index}")
         for tag in tags_here:
-            _git(root, "tag", tag)
+            _git(
+                root,
+                *(("tag", "-a", tag, "-m", tag) if tag in annotated else ("tag", tag)),
+            )
     return root
 
 
-def _request(*, production: bool = False) -> dict:
+def _request(*, production: bool = False, **overrides) -> dict:
     build = production_payload if production else payload
-    return build(
-        service="truealpha/app",
-        source_repository=TA_REPO,
-        version_ref="v0.2.13",
-        source_sha=RELEASE_SHA,
-        evidence={
+    fields = {
+        "service": "truealpha/app",
+        "source_repository": TA_REPO,
+        "version_ref": "v0.2.13",
+        "source_sha": RELEASE_SHA,
+        "evidence": {
             "source_run_url": f"https://github.com/{TA_REPO}/actions/runs/100",
             "source_run_id": "100",
             "staging_run_url": f"https://github.com/{TA_REPO}/actions/runs/101"
@@ -1550,22 +1605,26 @@ def _request(*, production: bool = False) -> dict:
             if production
             else "",
         },
-    )
+    }
+    return build(**{**fields, **overrides})
 
 
 def _release_image(*_args, **_kwargs) -> ResolvedRef:
     return ResolvedRef(sha=RELEASE_SHA, image_ref="v0.2.13", form="tag")
 
 
-def _preflight(root: Path, release: bytes, *, production: bool = False):
+def _preflight(root: Path, release: bytes, *, production: bool = False, **overrides):
     return receiver.make_plan(
-        _request(production=production),
+        _request(production=production, **overrides),
         sender="wangzitian0",
         domain="zitian.party",
         timeout=600,
         repo_root=root,
         production_evidence_verifier=lambda _r: None,
         resolve_image=_release_image,
+        resolve_pull=lambda *_a, **_k: ResolvedRef(
+            sha=RELEASE_SHA, image_ref="42", form="pr"
+        ),
         manifest_fetcher={RELEASE_URL: release}.__getitem__,
     )
 
@@ -1609,6 +1668,25 @@ def test_preflight_refuses_a_field_that_infra2_does_not_supply(tmp_path: Path) -
     assert "tools/secrets_render.py --write" in message
 
 
+def test_preflight_counts_a_variable_that_a_stack_only_manifest_supplies(
+    tmp_path: Path,
+) -> None:
+    """The release fields of the data engine come from env.manifest.json, not from the
+    copy. A rollback to a release that still declares them must not be refused."""
+    wanted = _field("RELEASE_MANIFEST_ID", "release", injected=True)
+    (tmp_path / "with").mkdir()
+    (tmp_path / "bare").mkdir()
+    supplied = _infra2_checkout(
+        tmp_path / "with",
+        [(_manifest(DATABASE), ("v1.0.0",))],
+        stack=_manifest(_field("RELEASE_MANIFEST_ID", "release", injected=True)),
+    )
+    assert _preflight(supplied, _manifest(DATABASE, wanted)).iac_ref == "v1.0.0"
+    bare = _infra2_checkout(tmp_path / "bare", [(_manifest(DATABASE), ("v1.0.0",))])
+    with pytest.raises(ValueError, match="RELEASE_MANIFEST_ID"):
+        _preflight(bare, _manifest(DATABASE, wanted))
+
+
 @pytest.mark.parametrize(
     "attribute, theirs, ours",
     [
@@ -1617,20 +1695,21 @@ def test_preflight_refuses_a_field_that_infra2_does_not_supply(tmp_path: Path) -
         ("store_key", "OTHER", ""),
         ("scope", "project", "env"),
         ("group", "Other", "Application"),
+        ("injected", True, False),
+        ("aliases", ("OLD_NAME",), ()),
     ],
 )
 def test_preflight_refuses_a_field_whose_supply_attribute_differs(
     tmp_path: Path, attribute: str, theirs: object, ours: object
 ) -> None:
-    """Each attribute that changes the template or the supply is part of the contract."""
+    """Each attribute that changes the template, the supply or the start check is part of
+    the contract."""
     kept = _field(
-        "API_KEY", "human", **{attribute: ours} if attribute != "source" else {}
+        "API_KEY", "human", **({} if attribute == "source" else {attribute: ours})
     )
-    changed = _field(
-        "API_KEY", "human", **{attribute: theirs} if attribute != "source" else {}
-    )
-    if attribute == "source":
-        changed = _field("API_KEY", "runtime")
+    changed = _field("API_KEY", "runtime" if attribute == "source" else "human")
+    if attribute != "source":
+        changed = _field("API_KEY", "human", **{attribute: theirs})
     root = _infra2_checkout(tmp_path, [(_manifest(kept), ("v1.0.0",))])
     with pytest.raises(ValueError, match=f"API_KEY.*{attribute}"):
         _preflight(root, _manifest(changed))
@@ -1642,8 +1721,6 @@ def test_preflight_refuses_a_field_whose_supply_attribute_differs(
         ("description", "now documented"),
         ("sensitive", True),
         ("has_default", False),
-        ("injected", True),
-        ("aliases", ("OLD_NAME",)),
         ("ci", "allowed"),
     ],
 )
@@ -1655,6 +1732,20 @@ def test_preflight_ignores_attributes_infra2_never_reads(
     )
     release = _manifest(_field("API_KEY", "human", **{attribute: theirs}))
     assert _preflight(root, release).iac_ref == "v1.0.0"
+
+
+@pytest.mark.parametrize("attribute", ["injected", "required"])
+def test_preflight_refuses_a_code_field_that_the_image_cannot_start_without(
+    tmp_path: Path, attribute: str
+) -> None:
+    """``assert_environment(require_injected=True)`` stops the image when the compose does
+    not supply a ``required`` or ``injected`` field, whatever its source (#1287)."""
+    root = _infra2_checkout(tmp_path, [(_manifest(DATABASE), ("v1.0.0",))])
+    release = _manifest(DATABASE, _field("NEW_ENDPOINT", **{attribute: True}))
+    with pytest.raises(ValueError, match="NEW_ENDPOINT"):
+        _preflight(root, release)
+    plain = _manifest(DATABASE, _field("NEW_ENDPOINT"))
+    assert _preflight(root, plain).iac_ref == "v1.0.0"
 
 
 def test_a_lagging_production_marker_asks_for_a_promotion_not_a_sync(
@@ -1674,6 +1765,7 @@ def test_a_lagging_production_marker_asks_for_a_promotion_not_a_sync(
     assert "MCP_BEARER_TOKEN" in message
     assert "v1.2.46" in message
     assert "promote infra2 to production" in message
+    assert "Reconcile IaC Inputs with promote_prod" in message
     assert "--sync" not in message
     assert "secrets_render" not in message
 
@@ -1694,16 +1786,99 @@ def test_a_lagging_staging_release_asks_for_a_release_not_a_sync(
 
 
 def test_preflight_runs_at_the_marker_not_at_main(tmp_path: Path) -> None:
-    """A release that main satisfies but the marker does not is refused (and the reverse)."""
+    """A release that the marker satisfies but main does not passes: the deploy runs at
+    the marker. Annotated release tags and lightweight marker tags both resolve."""
     root = _infra2_checkout(
         tmp_path,
         [
             (_manifest(DATABASE, BEARER), ("v1.2.46", "production/v1.2.46")),
             (_manifest(DATABASE), ("v1.2.47",)),
         ],
+        annotated=("v1.2.46",),
     )
     plan = _preflight(root, _manifest(DATABASE, BEARER), production=True)
     assert plan.iac_ref == "v1.2.46"
+    staging = _preflight(root, _manifest(DATABASE))
+    assert staging.iac_ref == "v1.2.47"
+
+
+def test_preflight_at_main_reads_the_checkout(tmp_path: Path) -> None:
+    """A preview runs at main: the contract is the checked-out working tree."""
+    root = _infra2_checkout(tmp_path, [(_manifest(DATABASE), ("v1.0.0",))])
+    preview = {"deploy_type": "preview/pr", "version_ref": "42"}
+    assert _preflight(root, _manifest(DATABASE), **preview).iac_ref == "main"
+    with pytest.raises(ValueError, match="SEC_USER_AGENT"):
+        _preflight(
+            root, _manifest(DATABASE, _field("SEC_USER_AGENT", "human")), **preview
+        )
+
+
+def test_a_rollback_is_checked_and_a_removal_is_not(tmp_path: Path) -> None:
+    root = _infra2_checkout(tmp_path, [(_manifest(DATABASE), ("v1.0.0",))])
+    unmet = _manifest(DATABASE, _field("SEC_USER_AGENT", "human"))
+    with pytest.raises(ValueError, match="SEC_USER_AGENT"):
+        _preflight(root, unmet, operation="rollback")
+    removal = {"operation": "remove", "deploy_type": "preview/pr", "version_ref": "42"}
+    assert _preflight(root, b"never fetched", **removal).iac_ref == "main"
+
+
+def test_preflight_checks_every_manifest_of_the_app(tmp_path: Path) -> None:
+    """truealpha has several manifests. A gap in the second one is found and named."""
+    second_copy = "contracts/truealpha/llm-service.required-env.generated.json"
+    second_upstream = "apps/llm-service/required-env.generated.json"
+    root = _infra2_checkout(tmp_path, [(_manifest(DATABASE), ("v1.0.0",))])
+    (root / second_copy).write_bytes(_manifest(DATABASE))
+    # The 10.app stack takes the app-web manifest too (common/security/registry.py).
+    (root / "contracts/truealpha/app-web.required-env.manifest.json").write_bytes(
+        _manifest(DATABASE)
+    )
+    lock = _lock({COPY_PATH: UPSTREAM_PATH, second_copy: second_upstream})
+    (root / "contracts/apps.lock.json").write_text(lock, encoding="utf-8")
+    for path in ("truealpha/truealpha/10.app/env.manifest.json",):
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_bytes(STACK_ONLY)
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "second manifest")
+    _git(root, "tag", "-f", "v1.0.0")
+    bodies = {
+        RELEASE_URL: _manifest(DATABASE),
+        RELEASE_URL.replace(UPSTREAM_PATH, second_upstream): _manifest(
+            DATABASE, _field("LLM_KEY", "human")
+        ),
+    }
+    with pytest.raises(ValueError) as refusal:
+        receiver.make_plan(
+            _request(),
+            sender="wangzitian0",
+            domain="zitian.party",
+            timeout=600,
+            repo_root=root,
+            resolve_image=_release_image,
+            manifest_fetcher=bodies.__getitem__,
+        )
+    message = str(refusal.value)
+    assert second_copy in message and "LLM_KEY" in message
+    assert COPY_PATH not in message
+
+
+def test_preflight_refuses_a_release_manifest_that_cannot_be_fetched(
+    tmp_path: Path,
+) -> None:
+    root = _infra2_checkout(tmp_path, [(_manifest(DATABASE), ("v1.0.0",))])
+
+    def unreachable(url: str) -> bytes:
+        raise SystemExit(f"fetching {url} failed: HTTP 404")
+
+    with pytest.raises(ValueError, match="failed to fetch manifest"):
+        receiver.make_plan(
+            _request(),
+            sender="wangzitian0",
+            domain="zitian.party",
+            timeout=600,
+            repo_root=root,
+            resolve_image=_release_image,
+            manifest_fetcher=unreachable,
+        )
 
 
 def test_preflight_fails_closed_when_the_infra2_release_has_no_app_contract(
@@ -1717,12 +1892,32 @@ def test_preflight_fails_closed_when_the_infra2_release_has_no_app_contract(
         _preflight(root, _manifest(DATABASE))
 
 
-@pytest.mark.parametrize("lock", ["not json", "{}", "[]", "null"])
+@pytest.mark.parametrize("lock", ["not json", "{}", "[]", "null", '{"files": "abc"}'])
 def test_preflight_fails_closed_when_the_lock_is_not_a_lock(lock: str) -> None:
     """A lock without ``files`` lists no manifest. That must not read as nothing to check."""
     with pytest.raises(
         ValueError, match=r"apps\.lock\.json of infra2 release v1\.0\.0"
     ):
+        receiver.verify_app_manifests(
+            receiver.parse_request(_request()),
+            repo_root=".",
+            iac_ref="v1.0.0",
+            manifest_fetcher={RELEASE_URL: _manifest(DATABASE)}.__getitem__,
+            contract_reader=lambda _ref, _path: lock,
+        )
+
+
+@pytest.mark.parametrize(
+    "files",
+    [[], [{"app": "finance_report", "path": "x", "sha256": "0", "upstream": "y"}]],
+    ids=["no-files", "only-the-other-app"],
+)
+def test_preflight_fails_closed_when_the_lock_lists_no_manifest_of_the_app(
+    files: list[dict],
+) -> None:
+    """Every App has manifests. A lock that lists none must not read as nothing to check."""
+    lock = _lock({}, files=files) if files else _lock({}, files=[])
+    with pytest.raises(ValueError, match="lists no manifest of 'truealpha'"):
         receiver.verify_app_manifests(
             receiver.parse_request(_request()),
             repo_root=".",

@@ -27,7 +27,13 @@ from infra2_sdk.refs import (
 from common.core.constants import APP_SOURCES
 from common.core.fetch_app_manifests import LOCK as APP_MANIFEST_LOCK, http_get
 from common.core.registry import domain_for_service
-from common.deploy.app_contract import Contract, Gap, parse_contract, unmet
+from common.deploy.app_contract import (
+    Contract,
+    Gap,
+    parse_contract,
+    stack_manifests,
+    unmet,
+)
 from common.deploy.release_markers import (
     MINIMUM_PRODUCTION_MARKER,
     PRODUCTION_MARKER_PREFIX,
@@ -240,14 +246,15 @@ def _git_contract_reader(
                 ["git", "-C", str(root), "show", f"{ref}:{path}"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 check=True,
             )
         except (OSError, subprocess.SubprocessError):
             shown = None
         if shown is None or not isinstance(shown.stdout, str) or not shown.stdout:
             raise ValueError(
-                f"infra2 release {ref} has no {path}: the release predates the vendored "
-                "App contract (#1258), or its tag is not fetched"
+                f"infra2 release {ref} has no {path}: the release predates the file "
+                "(the vendored App contract is from #1258), or its tag is not fetched"
             )
         return shown.stdout
 
@@ -260,7 +267,10 @@ def _contract_gaps(
     """What the release needs and the infra2 release ``ref`` does not supply, by copy path."""
     gaps = []
     for path, wanted in release.items():
-        provided = parse_contract(read(ref, path), label=f"{path} at infra2 {ref}")
+        provided = [
+            parse_contract(read(ref, source), label=f"{source} at infra2 {ref}")
+            for source in (path, *stack_manifests(path))
+        ]
         gaps.extend((path, gap) for gap in unmet(wanted, provided))
     return gaps
 
@@ -289,7 +299,8 @@ def _gap_remedy(
                     f"infra2 main already supplies it, so no sync is needed: production runs at "
                     f"{PRODUCTION_MARKER_PREFIX}{iac_ref}, which predates main. Cut an infra2 "
                     "release from main if none is newer than that, then promote infra2 to "
-                    "production (owner-reserved), then deploy again"
+                    "production (Reconcile IaC Inputs with promote_prod, owner-reserved), "
+                    "then deploy again"
                 )
             return (
                 f"infra2 main already supplies it, so no sync is needed: staging runs at {iac_ref}, "
@@ -336,7 +347,10 @@ def verify_app_manifests(
             f"{APP_MANIFEST_LOCK} of infra2 release {iac_ref} is not a lock: {exc!r}"
         ) from None
     if not files:
-        return
+        raise ValueError(
+            f"{APP_MANIFEST_LOCK} of infra2 release {iac_ref} lists no manifest of "
+            f"{app_name!r}: the release cannot say what it supplies"
+        )
     fetch = manifest_fetcher or http_get
     release: dict[str, Contract] = {}
     for entry in files:
