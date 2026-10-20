@@ -181,10 +181,17 @@ def test_authority_accepts_matching_sender_repo_and_ref() -> None:
 
 def test_authority_rejects_sender_service_and_repository() -> None:
     request = receiver.parse_request(payload())
-    with pytest.raises(ValueError, match="sender"):
-        receiver.validate_request_authority(
-            request, sender="someone", resolve_image=resolved
-        )
+    for bad_sender in (
+        "someone",
+        "evil/infra-flash",
+        "infra-flash[bot]-evil",
+        "wangzitian0[bot]",
+        "app/wangzitian0",
+    ):
+        with pytest.raises(ValueError, match="sender"):
+            receiver.validate_request_authority(
+                request, sender=bad_sender, resolve_image=resolved
+            )
     with pytest.raises(ValueError, match="not enabled"):
         receiver.validate_request_authority(
             receiver.parse_request(payload(service="unregistered_app/app")),
@@ -1624,9 +1631,7 @@ def test_query_serving_release_returns_authoritative_dokploy_and_health_state(
         def get_compose_env(self, compose_id: str) -> str:
             assert compose_id == "lNn9gVS1Zyw79Jzw5dlbu"
             return (
-                "IMAGE_TAG=v0.1.45\n"
-                "GIT_COMMIT_SHA=v0.1.45\n"
-                f"INFRA_IAC_REF={'b' * 40}\n"
+                f"IMAGE_TAG=v0.1.45\nGIT_COMMIT_SHA=v0.1.45\nINFRA_IAC_REF={'b' * 40}\n"
             )
 
     serving = receiver.query_serving_release(
@@ -1635,9 +1640,7 @@ def test_query_serving_release_returns_authoritative_dokploy_and_health_state(
         domain="zitian.party",
         client=_FakeDokploy(),
         http_get_fn=lambda _u: (200, '{"status": "ok", "version": "v0.1.45"}'),
-        resolve_image=lambda tag, **_k: ResolvedRef(
-            sha=SHA, image_ref=tag, form="tag"
-        ),
+        resolve_image=lambda tag, **_k: ResolvedRef(sha=SHA, image_ref=tag, form="tag"),
     )
     assert serving.service == "finance_report/app"
     assert serving.environment == "production"
@@ -1668,5 +1671,3 @@ def test_query_serving_release_returns_authoritative_dokploy_and_health_state(
     assert out["image_tag"] == "v0.1.45"
     assert out["source_sha"] == SHA
     assert out["healthy"] is True
-
-

@@ -573,11 +573,18 @@ def op_service_account_works() -> bool:
         return ok
 
 
+def _file_has_bytes(path: Path) -> bool:
+    try:
+        return path.stat().st_size > 0
+    except OSError:
+        return False
+
+
 @app.route("/health", methods=["GET"])
 def health():
     checks = {
         "http": True,
-        "vault_secrets": SECRETS_FILE.exists() and SECRETS_FILE.stat().st_size > 0,
+        "vault_secrets": _file_has_bytes(SECRETS_FILE),
         "git_repo_url": bool(GIT_REPO_URL),
         "webhook_secret": bool(WEBHOOK_SECRET),
         "op_service_account_token": op_service_account_works(),
