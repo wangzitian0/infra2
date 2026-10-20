@@ -382,9 +382,9 @@ def query_applied_migrations(
     migration_column: str = "version_num",
 ) -> tuple[str, ...]:
     """Query the applied migration versions recorded in the target database (#609)."""
-    if not _SAFE_SQL_IDENTIFIER_RE.match(migration_table) or not _SAFE_SQL_IDENTIFIER_RE.match(
-        migration_column
-    ):
+    if not _SAFE_SQL_IDENTIFIER_RE.match(
+        migration_table
+    ) or not _SAFE_SQL_IDENTIFIER_RE.match(migration_column):
         raise ValueError(
             f"invalid migration table/column identifier: {migration_table}.{migration_column}"
         )
@@ -450,9 +450,8 @@ def check_data_preconditions(
                 )
 
     for name, sql_predicate, remedy in preconditions:
-        if (
-            not _READ_ONLY_SQL_RE.match(sql_predicate or "")
-            or _FORBIDDEN_SQL_RE.search(sql_predicate or "")
+        if not _READ_ONLY_SQL_RE.match(sql_predicate or "") or _FORBIDDEN_SQL_RE.search(
+            sql_predicate or ""
         ):
             failures.append(
                 f"{name}: precondition query must be a read-only SELECT statement"
@@ -608,7 +607,10 @@ def main(argv: list[str] | None = None) -> int:
     rollback_class = classify_rollback(discrepancies)
     if discrepancies or precondition_failures:
         if discrepancies:
-            print(f"ERROR: Schema discrepancies found for {args.service}:", file=sys.stderr)
+            print(
+                f"ERROR: Schema discrepancies found for {args.service}:",
+                file=sys.stderr,
+            )
             for disc in discrepancies:
                 print(
                     f"  - {disc.enum_name}: missing_in_db={disc.missing_in_db}, "

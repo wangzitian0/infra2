@@ -78,7 +78,9 @@ def read_prod_marker_file(*, repo_root: str | Path) -> str | None:
         raise ValueError(f"invalid {PROD_MARKER_FILE}: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError(f"invalid {PROD_MARKER_FILE}: expected JSON object")
-    release = str(payload.get("release_tag") or payload.get("production_marker") or "").strip()
+    release = str(
+        payload.get("release_tag") or payload.get("production_marker") or ""
+    ).strip()
     if not release:
         return None
     cleaned = release.removeprefix(PRODUCTION_MARKER_PREFIX)

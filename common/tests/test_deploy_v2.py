@@ -2018,4 +2018,3 @@ def test_cli_threads_force_promote_pause_rollback_and_max_rollback_attempts(
     assert payload["detail"]["force_promote"] is True
     assert payload["detail"]["pause_rollback"] is True
     assert payload["detail"]["max_rollback_attempts"] == 3
-

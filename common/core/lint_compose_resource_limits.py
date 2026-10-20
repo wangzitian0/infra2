@@ -106,7 +106,9 @@ def main() -> int:
         if report.errors:
             unreadable.append(f"{rel} ({'; '.join(report.errors)})")
             continue
-        for ref in find_default_tag_violations(compose_path.read_text(encoding="utf-8")):
+        for ref in find_default_tag_violations(
+            compose_path.read_text(encoding="utf-8")
+        ):
             default_tags.append((rel, ref))
         unlimited.update(f"{rel}::{svc}" for svc in report.unlimited_services)
 
