@@ -171,7 +171,9 @@ def _subprocess_modules(module: str) -> set[str]:
             for i, val in enumerate(elements):
                 if val == "-m" and i + 1 < len(elements):
                     target = elements[i + 1]
-                    if target.startswith(REPO_PACKAGES):
+                    if target in REPO_PACKAGES or target.startswith(
+                        tuple(f"{pkg}." for pkg in REPO_PACKAGES)
+                    ):
                         found.add(target)
     return found
 
@@ -194,7 +196,9 @@ def _entry_modules(job: dict) -> set[str]:
                         # task. #1016: a task module gained an SDK import and the
                         # job that only runs `python -m invoke` died at import.
                         found.add(INVOKE_ENTRY)
-                    elif candidate.startswith(REPO_PACKAGES):
+                    elif candidate in REPO_PACKAGES or candidate.startswith(
+                        tuple(f"{pkg}." for pkg in REPO_PACKAGES)
+                    ):
                         found.add(candidate)
     expanded = set(found)
     for mod in list(found):
@@ -311,14 +315,10 @@ def test_ops_checks_jobs_do_not_hand_maintain_pip_install_lists() -> None:
     assert offenders == [], "\n".join(offenders)
 
 
-def _unlocked_uv_invocations(
-    workflows_dir: Path, skip_files: set[str] = frozenset()
-) -> list[str]:
+def _unlocked_uv_invocations(workflows_dir: Path) -> list[str]:
     """Return `workflow:job:step:line` for any `uv run` or `uv sync` missing `--locked`/`--frozen`."""
     violations: list[str] = []
     for path in sorted(workflows_dir.glob("*.y*ml")):
-        if path.name in skip_files:
-            continue
         workflow = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         for job_id, job in (workflow.get("jobs") or {}).items():
             if not isinstance(job, dict):
@@ -335,10 +335,10 @@ def _unlocked_uv_invocations(
     return violations
 
 
-def test_workflows_outside_infra_ci_use_locked_or_frozen_on_uv_run_and_sync(
+def test_workflows_use_locked_or_frozen_on_uv_run_and_sync(
     tmp_path: Path,
 ) -> None:
-    """#1145: `uv run` and `uv sync` in workflows must carry `--locked` or `--frozen`
+    """#1145: `uv run` and `uv sync` across all workflows must carry `--locked` or `--frozen`
     so a stale `uv.lock` fails loudly instead of silently re-resolving."""
     violations = _unlocked_uv_invocations(WORKFLOWS)
     assert violations == [], "Unlocked uv invocations:\n" + "\n".join(violations)

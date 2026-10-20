@@ -38,10 +38,14 @@ def _project_dependencies() -> set[str]:
 
 
 def _job_packages(runs: list[str]) -> set[str] | None:
-    """The distributions a job's `pip install` lines name; None when it has none."""
+    """The distributions a job's `pip install` or `uv sync` lines name; None when it has none."""
     names: set[str] = set()
     found = False
     for line in (line for run in runs for line in run.splitlines()):
+        if re.search(r"\buv\s+sync\b", line):
+            found = True
+            names |= _project_dependencies() | {"infra2-sdk"}
+            continue
         if "pip install" not in line:
             continue
         found = True
@@ -128,14 +132,23 @@ sys.exit(1 if failed else 0)
 
 
 def test_the_workflow_declares_jobs_to_check() -> None:
-    """Parsing must find the jobs, or the parametrized test below runs nothing."""
+    """Parsing must find all 9 Python entrypoint jobs in ops-checks.yml, or the parametrized test below runs nothing."""
     entries = {name: entry for name, _, entry in _jobs()}
 
-    assert {"watchdog", "digest", "facet-reconcile", "preview-leak-check"} <= set(
-        entries
-    )
+    assert {
+        "audit",
+        "watchdog",
+        "digest",
+        "deploy-v2-canary",
+        "preview-leak-check",
+        "host-hygiene-schedule",
+        "facet-reconcile",
+        "vault-self-refresh-audit",
+        "secrets-reconcile",
+    } <= set(entries)
     assert "tools.stability_report" in entries["digest"]
     assert "tools.out_of_band_watchdog" in entries["watchdog"]
+    assert "tools.deploy_guard_audit" in entries["audit"]
 
 
 @pytest.mark.parametrize(

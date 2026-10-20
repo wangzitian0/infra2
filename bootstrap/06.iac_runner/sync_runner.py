@@ -774,12 +774,21 @@ def _own_dir_services(changed_files: list[str]) -> set[str]:
         parts = file_path.split("/")
         if parts[0] == "platform" and len(parts) >= 2 and "." in parts[1]:
             services.add(f"platform/{parts[1].split('.', 1)[1]}")
-        elif parts[0] == "finance_report" and len(parts) >= 3 and "." in parts[2]:
-            services.add(f"finance_report/{parts[2].split('.', 1)[1]}")
-        elif parts[0] == "truealpha" and len(parts) >= 3 and "." in parts[2]:
-            services.add(f"truealpha/{parts[2].split('.', 1)[1]}")
-        elif parts[0] == "bootstrap" and len(parts) >= 2 and "." in parts[1]:
-            services.add(f"bootstrap/{parts[1].split('.', 1)[1].replace('_', '-')}")
+        elif parts[0] == "finance_report" and len(parts) >= 3:
+            if "." in parts[2]:
+                services.add(f"finance_report/{parts[2].split('.', 1)[1]}")
+            elif parts[2] == "preview":
+                services.add("finance_report/preview")
+        elif parts[0] == "truealpha" and len(parts) >= 3:
+            if "." in parts[2]:
+                services.add(f"truealpha/{parts[2].split('.', 1)[1]}")
+            elif parts[2] == "preview":
+                services.add("truealpha/preview")
+        elif parts[0] == "bootstrap" and len(parts) >= 2:
+            if "." in parts[1]:
+                services.add(f"bootstrap/{parts[1].split('.', 1)[1].replace('_', '-')}")
+            elif parts[1] == "templates":
+                services.add("bootstrap/templates")
     return services
 
 

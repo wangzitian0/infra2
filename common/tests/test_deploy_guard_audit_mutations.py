@@ -199,6 +199,40 @@ def test_truncating_service_roots_fails_audit(
     )
     assert deploy_guard_audit.main() == 1
 
+    # Zeroed floor values `(0, 0)` are also rejected so the guard cannot be vacuously neutralized.
+    monkeypatch.setattr(
+        deploy_guard_audit,
+        "_SERVICE_ROOT_FLOORS",
+        {
+            "platform": (0, 0),
+            "finance_report": (4, 8),
+            "truealpha": (4, 9),
+            "bootstrap": (4, 12),
+        },
+    )
+    zero_floor_errs = deploy_guard_audit.audit()
+    assert any(
+        "_SERVICE_ROOT_FLOORS has non-positive floors: platform" in v
+        for v in zero_floor_errs
+    )
+
+    # Truncating `_REQUIRED_SERVICE_ROOTS` itself is also caught.
+    monkeypatch.setattr(
+        deploy_guard_audit,
+        "_SERVICE_ROOT_FLOORS",
+        {
+            "platform": (13, 350),
+            "finance_report": (4, 8),
+            "truealpha": (4, 9),
+            "bootstrap": (4, 12),
+        },
+    )
+    monkeypatch.setattr(deploy_guard_audit, "_REQUIRED_SERVICE_ROOTS", ("bootstrap",))
+    req_errs = deploy_guard_audit.audit()
+    assert any(
+        "_REQUIRED_SERVICE_ROOTS is missing canonical roots" in v for v in req_errs
+    )
+
 
 def test_rewriting_mounts_and_contexts_to_bare_var_fails_dockerfile_canary_and_floors(
     tmp_path: Path,

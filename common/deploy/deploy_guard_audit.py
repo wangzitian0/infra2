@@ -21,7 +21,10 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from common.deploy.config_hash import _compose_artifact_files  # noqa: E402
+from common.deploy.config_hash import (  # noqa: E402
+    _compose_artifact_files,
+    _compose_has_build,
+)
 from common.deploy.dependencies import (  # noqa: E402
     config_hash_input_count,
     fanout_coverage_violations,
@@ -98,8 +101,6 @@ def service_root_counts(
 
 def dockerfile_canary_violations(composes: list[Path], root: Path = ROOT) -> list[str]:
     """Ensure every deployed service with a `Dockerfile` or `build:` section reads at least one config-hash input (#1123)."""
-    import yaml
-
     resolved_root = root.resolve()
     violations: list[str] = []
     by_dir: dict[Path, list[Path]] = {}
@@ -107,20 +108,9 @@ def dockerfile_canary_violations(composes: list[Path], root: Path = ROOT) -> lis
         resolved_compose = Path(compose).resolve()
         by_dir.setdefault(resolved_compose.parent, []).append(resolved_compose)
     for service_dir, dir_composes in sorted(by_dir.items()):
-        has_dockerfile_or_build = (service_dir / "Dockerfile").is_file()
-        if not has_dockerfile_or_build:
-            for c in dir_composes:
-                try:
-                    doc = yaml.safe_load(c.read_text(encoding="utf-8")) or {}
-                except yaml.YAMLError:
-                    doc = {}
-                services = doc.get("services") if isinstance(doc, dict) else None
-                if isinstance(services, dict) and any(
-                    isinstance(svc, dict) and svc.get("build")
-                    for svc in services.values()
-                ):
-                    has_dockerfile_or_build = True
-                    break
+        has_dockerfile_or_build = (service_dir / "Dockerfile").is_file() or any(
+            _compose_has_build(c.read_text(encoding="utf-8")) for c in dir_composes
+        )
         if not has_dockerfile_or_build:
             continue
         total_inputs = sum(
@@ -138,17 +128,29 @@ def dockerfile_canary_violations(composes: list[Path], root: Path = ROOT) -> lis
 def floor_violations(composes: list[Path], root: Path = ROOT) -> list[str]:
     """Check unmapped composes, `_SERVICE_ROOTS` completeness, per-root floors, and Dockerfile canary."""
     violations: list[str] = []
-    missing_roots = [sr for sr in _REQUIRED_SERVICE_ROOTS if sr not in _SERVICE_ROOTS]
+    canonical_roots = ("platform", "finance_report", "truealpha", "bootstrap")
+    if tuple(_REQUIRED_SERVICE_ROOTS) != canonical_roots:
+        violations.append(
+            f"_REQUIRED_SERVICE_ROOTS is missing canonical roots: {list(_REQUIRED_SERVICE_ROOTS)}"
+        )
+    missing_roots = [sr for sr in canonical_roots if sr not in _SERVICE_ROOTS]
     if missing_roots:
         violations.append(
             f"_SERVICE_ROOTS is missing required service roots: {', '.join(missing_roots)}"
         )
-    missing_floors = [
-        sr for sr in _REQUIRED_SERVICE_ROOTS if sr not in _SERVICE_ROOT_FLOORS
-    ]
+    missing_floors = [sr for sr in canonical_roots if sr not in _SERVICE_ROOT_FLOORS]
     if missing_floors:
         violations.append(
             f"_SERVICE_ROOT_FLOORS is missing required service roots: {', '.join(missing_floors)}"
+        )
+    non_positive_floors = [
+        sr
+        for sr, (min_c, min_i) in _SERVICE_ROOT_FLOORS.items()
+        if min_c < 1 or min_i < 1
+    ]
+    if non_positive_floors:
+        violations.append(
+            f"_SERVICE_ROOT_FLOORS has non-positive floors: {', '.join(sorted(non_positive_floors))}"
         )
     for rel in find_unmapped_composes(root=root):
         violations.append(
@@ -177,9 +179,10 @@ def audit(root: Path = ROOT) -> list[str]:
             if root == ROOT
             else fanout_coverage_violations(composes, root=root)
         )
+        structural = floor_violations(composes, root=root)
     except (FileNotFoundError, ValueError) as exc:
         return [str(exc)]
-    return sorted(set(coverage) | set(floor_violations(composes, root=root)))
+    return sorted(set(coverage) | set(structural))
 
 
 def main(root: Path = ROOT) -> int:
@@ -209,9 +212,10 @@ def main(root: Path = ROOT) -> int:
             if root == ROOT
             else fanout_coverage_violations(composes, root=root)
         )
+        structural = floor_violations(composes, root=root)
     except (FileNotFoundError, ValueError) as exc:
         violations = [str(exc)]
-    structural = floor_violations(composes, root=root)
+        structural = []
     all_violations = violations + [v for v in structural if v not in violations]
     counts = service_root_counts(composes, root=root)
     breakdown = ", ".join(

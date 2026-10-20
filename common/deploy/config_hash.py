@@ -193,6 +193,24 @@ def _dockerfile_copy_sources(dockerfile: Path, context_dir: Path) -> list[Path]:
     return sources
 
 
+def _compose_has_build(compose_content: str) -> bool:
+    """Return True when a compose YAML document declares at least one service `build` section."""
+    try:
+        import yaml
+    except ModuleNotFoundError:
+        return False
+    try:
+        compose = yaml.safe_load(compose_content) or {}
+    except yaml.YAMLError:
+        return False
+    services = compose.get("services", {}) if isinstance(compose, dict) else {}
+    if not isinstance(services, dict):
+        return False
+    return any(
+        isinstance(svc, dict) and bool(svc.get("build")) for svc in services.values()
+    )
+
+
 def _compose_artifact_files(compose_path: str, compose_content: str) -> list[Path]:
     try:
         import yaml
@@ -332,6 +350,7 @@ def _dependency_items_from_globs(
 __all__ = [
     "_artifact_items_from_disk",
     "_compose_artifact_files",
+    "_compose_has_build",
     "_compute_config_hash",
     "_dependency_items_from_globs",
     "_dockerfile_copy_sources",
