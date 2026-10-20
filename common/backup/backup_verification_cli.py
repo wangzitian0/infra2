@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Verify backup freshness manifests and alert through the bridge."""
-# alert-delivery-exempt: manual SOP tool (Infra-011 SOP-004/005), not scheduled; alert path fires only under operator invocation
+# alert-delivery-exempt: manual SOP tool (Infra-011 SOP-004/005), not scheduled; alert path fires only under operator invocation; review=2027-04-01
 
 from __future__ import annotations
 
