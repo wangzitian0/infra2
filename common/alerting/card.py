@@ -676,6 +676,58 @@ def is_report_payload(payload: dict[str, Any]) -> bool:
     return str(label).strip().lower() == REPORT_DELIVERY
 
 
+def build_feishu_report_card(
+    *,
+    title: str,
+    template: str,
+    kpi_fields: Iterable[tuple[str, str]],
+    sections: Iterable[str] = (),
+    actions: Iterable[tuple[str, str, str]] = (),
+    hr_after_sections: set[int] | None = None,
+) -> dict[str, Any]:
+    """Build a standard Feishu interactive report card with KPI fields, sections, and actions."""
+    elements: list[dict[str, Any]] = [
+        {
+            "tag": "div",
+            "fields": [
+                {
+                    "is_short": True,
+                    "text": {"tag": "lark_md", "content": f"**{label}**\n{value}"},
+                }
+                for label, value in kpi_fields
+            ],
+        },
+        {"tag": "hr"},
+    ]
+    divider_indices = hr_after_sections or set()
+    for idx, section in enumerate(sections):
+        if not section:
+            continue
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": section}})
+        if idx in divider_indices:
+            elements.append({"tag": "hr"})
+    action_buttons = [
+        {
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": label},
+            "url": url,
+            "type": btn_type,
+        }
+        for label, url, btn_type in actions
+        if url
+    ]
+    if action_buttons:
+        elements.append({"tag": "action", "actions": action_buttons})
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": template,
+            "title": {"tag": "plain_text", "content": title},
+        },
+        "elements": elements,
+    }
+
+
 def build_feishu_card_payload(card: dict[str, Any]) -> dict[str, Any]:
     """Build a Feishu custom-bot interactive-card payload."""
     return {"msg_type": "interactive", "card": card}
