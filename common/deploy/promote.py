@@ -19,6 +19,7 @@ effective-config verification.
 from __future__ import annotations
 
 from collections.abc import Callable, Collection
+import json
 import os
 import sys
 import time
@@ -271,6 +272,27 @@ IN_SERVICE_SETTLE_SECONDS = 180
 SMOKE_POLL_INTERVAL_SECONDS = 5.0
 
 
+def _normalize_health_get(getter):
+    """Normalize HTTP 200 JSON payloads with status='healthy' to 'ok' for poll_until_healthy."""
+
+    def _wrapped(url: str) -> tuple[int, str]:
+        status_code, body = getter(url)
+        if status_code == 200 and body:
+            try:
+                parsed = json.loads(body)
+                if (
+                    isinstance(parsed, dict)
+                    and str(parsed.get("status", "")).lower() == "healthy"
+                ):
+                    parsed = dict(parsed, status="ok")
+                    body = json.dumps(parsed)
+            except (ValueError, TypeError):
+                pass
+        return status_code, body
+
+    return _wrapped
+
+
 def verify_public_health(
     url: str,
     *,
@@ -280,8 +302,8 @@ def verify_public_health(
     http_get=None,
     _sleep=None,
 ) -> None:
-    """Poll the public /api/health endpoint until HTTP 200, status=='ok', and version matches (#569)."""
-    getter = http_get or default_http_get()
+    """Poll the public /api/health endpoint until HTTP 200, status in ('ok', 'healthy'), and version matches (#569)."""
+    getter = _normalize_health_get(http_get or default_http_get())
     sleep_fn = _sleep if _sleep is not None else time.sleep
     step = max(1.0, float(interval))
     max_attempts = max(1, int(max(0, timeout) // step) + 1)

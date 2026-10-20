@@ -1530,3 +1530,32 @@ def test_rollback_circuit_breaker_trips_on_third_consecutive_rollback(monkeypatc
     assert third["severity"] == "P0"
 
 
+def test_verify_public_health_accepts_healthy_status_from_fastapi_init_service():
+    """#569: FastAPI init_service /api/health returns status='healthy'; verify_public_health
+    must accept both 'ok' and 'healthy' while still rejecting 'unhealthy'."""
+    dp.verify_public_health(
+        "https://report-staging.zitian.party/api/health",
+        expected_version="v0.2.11",
+        timeout=1,
+        interval=1,
+        http_get=lambda _u: (
+            200,
+            '{"status": "healthy", "version": "v0.2.11", "git_sha": "v0.2.11"}',
+        ),
+        _sleep=lambda _s: None,
+    )
+    with pytest.raises(RuntimeError, match="did not become healthy"):
+        dp.verify_public_health(
+            "https://report-staging.zitian.party/api/health",
+            expected_version="v0.2.11",
+            timeout=1,
+            interval=1,
+            http_get=lambda _u: (
+                200,
+                '{"status": "unhealthy", "version": "v0.2.11"}',
+            ),
+            _sleep=lambda _s: None,
+        )
+
+
+
