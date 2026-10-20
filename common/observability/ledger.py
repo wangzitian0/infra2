@@ -290,11 +290,158 @@ def build_environment_line(label: str, summary: Mapping[str, Any]) -> str:
     return line
 
 
+def build_stability_card(
+    summary: Mapping[str, Any],
+    *,
+    staging_lines: Iterable[str] = (),
+    title: str | None = None,
+    signoz_url: str = "https://signoz.zitian.party",
+    runbook_url: str = (
+        "https://github.com/wangzitian0/infra2/blob/main/docs/ssot/ops.observability.md"
+    ),
+) -> dict[str, Any]:
+    """Build a Feishu interactive card for the positive-proof availability report."""
+    cadence = "daily" if summary.get("window_days") == 1 else "weekly"
+    degraded = [s for s in summary.get("signals", []) if s.get("fail", 0) > 0][
+        :WORST_SIGNALS_SHOWN
+    ]
+    overall = float(summary.get("overall_uptime_pct", 100.0))
+    is_clean = not degraded and overall >= 99.9
+    header_title = title or (
+        f"{'🟢' if is_clean else '🟡'} [报告] [STABILITY] Infra2 {cadence} availability — positive proof"
+    )
+    elements: list[dict[str, Any]] = [
+        {
+            "tag": "div",
+            "fields": [
+                {
+                    "is_short": True,
+                    "text": {
+                        "tag": "lark_md",
+                        "content": f"**Overall Availability**\n{overall}%",
+                    },
+                },
+                {
+                    "is_short": True,
+                    "text": {
+                        "tag": "lark_md",
+                        "content": (
+                            "**Signals at 100%**\n"
+                            f"{summary['perfect_count']}/{summary['signal_count']}"
+                        ),
+                    },
+                },
+                {
+                    "is_short": True,
+                    "text": {
+                        "tag": "lark_md",
+                        "content": f"**Window**\n{summary['window_days']}d (as of {summary['as_of']})",
+                    },
+                },
+                {
+                    "is_short": True,
+                    "text": {
+                        "tag": "lark_md",
+                        "content": f"**Probe Runs**\n{summary['total_runs']}",
+                    },
+                },
+            ],
+        },
+        {"tag": "hr"},
+    ]
+    unavailable = summary.get("unavailability")
+    if isinstance(unavailable, Mapping):
+        unavail_text = (
+            f"**Unavailability ({unavailable['environment']})**: "
+            f"{unavailable['minutes']} min counted as failures "
+            f"({unavailable['gap_minutes']} min gap, "
+            f"{unavailable['outage_minutes']} min Cloudflare outage in "
+            f"{unavailable['outage_count']} incident(s))"
+        )
+        if unavailable.get("unreadable"):
+            unavail_text += (
+                f"; {unavailable['unreadable']} unreadable record(s) NOT counted"
+            )
+        elements.append(
+            {
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": unavail_text},
+            }
+        )
+    if degraded:
+        lines = ["**Lowest availability signals**"]
+        for signal in degraded:
+            domain = f" `[{signal['last_domain']}]`" if signal.get("last_domain") else ""
+            checks = signal["ok"] + signal["fail"]
+            lines.append(
+                f"• `{signal['id']}`: **{signal['uptime_pct']}%** "
+                f"({signal['fail']} fail/{checks} checks){domain}"
+            )
+        elements.append(
+            {
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": "\n".join(lines)},
+            }
+        )
+    else:
+        elements.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": "✅ **All monitored signals held 100% availability this window.**",
+                },
+            }
+        )
+    staging_items = [line for line in staging_lines if line]
+    if staging_items:
+        elements.append({"tag": "hr"})
+        elements.append(
+            {
+                "tag": "div",
+                "text": {
+                    "tag": "lark_md",
+                    "content": "\n".join(f"**Secondary Env**: {line}" for line in staging_items),
+                },
+            }
+        )
+    actions = []
+    if signoz_url:
+        actions.append(
+            {
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": "打开 SigNoz"},
+                "url": signoz_url,
+                "type": "primary",
+            }
+        )
+    if runbook_url:
+        actions.append(
+            {
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": "查看 Runbook"},
+                "url": runbook_url,
+                "type": "default",
+            }
+        )
+    if actions:
+        elements.append({"tag": "action", "actions": actions})
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": "green" if is_clean else "orange",
+            "title": {"tag": "plain_text", "content": header_title},
+        },
+        "elements": elements,
+    }
+
+
 __all__ = [
     "WORST_SIGNALS_SHOWN",
     "apply_unavailability",
     "build_environment_line",
     "build_report_message",
+    "build_stability_card",
     "outage_intervals",
     "summarize_ledger",
 ]

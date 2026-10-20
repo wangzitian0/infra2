@@ -48,6 +48,14 @@ def test_openpanel_analytics_spec_is_valid_and_funnel_is_well_formed() -> None:
     funnel = spec["funnels"][0]
     assert funnel["name"] == "Upload → Report"
     assert funnel["steps"] == ["upload_started", "upload_succeeded", "report_generated"]
+    north_star = spec["funnels"][1]
+    assert north_star["name"] == "Upload → Review → Report (North Star)"
+    assert north_star["steps"] == [
+        "upload_started",
+        "upload_succeeded",
+        "review_approved",
+        "report_generated",
+    ]
     assert spec["events_board"]["events"]
 
 
@@ -65,7 +73,8 @@ def test_openpanel_funnel_steps_match_the_fe_event_taxonomy() -> None:
         "review_approved",
     }
     spec = load_openpanel_analytics()
-    used = set(spec["funnels"][0]["steps"]) | set(spec["events_board"]["events"])
+    funnel_steps = {step for f in spec["funnels"] for step in f["steps"]}
+    used = funnel_steps | set(spec["events_board"]["events"])
     assert used <= canonical, f"unknown event name(s): {used - canonical}"
 
 
@@ -474,6 +483,26 @@ def test_dashboard_has_full_backend_red_and_fe_page_load() -> None:
     err_filter = _filter("be-error-rate-5xx", widgets)
     assert "kind_string = 'Server'" in err_filter
     assert "hasError = true" in err_filter
+
+    # #1307: AI/OCR and core business telemetry widgets are present and query metrics
+    for wid in (
+        "ai-provider-latency-p95",
+        "statement-parse-outcomes",
+        "confidence-north-star",
+        "reconciliation-match-outcomes",
+        "financial-invariant-violations",
+    ):
+        assert wid in widgets, f"missing AI/business telemetry widget {wid}"
+        qdata = widgets[wid]["query"]["builder"]["queryData"][0]
+        assert qdata["dataSource"] == "metrics"
+    assert _agg("ai-provider-latency-p95") == "p95(finance.ai_provider.latency)"
+    assert _agg("statement-parse-outcomes") == "sum(finance.statement_parse.outcome)"
+    assert _agg("confidence-north-star") == "p50(finance.confidence_north_star)"
+    assert (
+        _agg("reconciliation-match-outcomes")
+        == "sum(finance.reconciliation.match.outcome)"
+    )
+    assert _agg("financial-invariant-violations") == "sum(finance.invariant.violation)"
 
 
 def _filter(widget_id: str, widgets: dict[str, dict]) -> str:

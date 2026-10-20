@@ -36,11 +36,16 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from common.alerting import as_report, deliver_out_of_band_text  # noqa: E402
+from common.alerting import (  # noqa: E402
+    as_report,
+    deliver_out_of_band_card,
+    deliver_out_of_band_text,
+)
 from common.observability.ledger import (  # noqa: E402
     apply_unavailability,
     build_environment_line,
     build_report_message,
+    build_stability_card,
     summarize_ledger,
 )
 from common.observability.local_ledger import (  # noqa: E402
@@ -179,6 +184,47 @@ def environment_report(
     return report
 
 
+def _summarize_all_environments(
+    ledgers: Mapping[str, Mapping[str, Any] | str],
+    outages: list[Any],
+    now: datetime,
+    *,
+    limit_days: int | None = None,
+) -> tuple[dict[str, Any], list[str]]:
+    production = ledgers.get(REQUIRED_ENVIRONMENT)
+    if not isinstance(production, Mapping):
+        raise RuntimeError(
+            f"{REQUIRED_ENVIRONMENT} ledger is missing: {production or 'not read'}"
+        )
+    prod_summary = summarize_ledger(
+        environment_report(
+            REQUIRED_ENVIRONMENT,
+            production,
+            outages,
+            now,
+            limit_days=limit_days,
+        )
+    )
+    staging_lines: list[str] = []
+    for environment in OPTIONAL_ENVIRONMENTS:
+        label = f"{environment} (reported, never paged)"
+        ledger = ledgers.get(environment)
+        if not isinstance(ledger, Mapping):
+            staging_lines.append(
+                f"{label}: ledger unavailable: {ledger or 'not read'}"
+            )
+            continue
+        try:
+            summary = summarize_ledger(
+                environment_report(environment, ledger, [], now, limit_days=limit_days)
+            )
+        except RuntimeError as exc:
+            staging_lines.append(f"{label}: ledger unusable: {exc}")
+            continue
+        staging_lines.append(build_environment_line(label, summary))
+    return prod_summary, staging_lines
+
+
 def build_report(
     ledgers: Mapping[str, Mapping[str, Any] | str],
     outages: list[Any],
@@ -189,40 +235,28 @@ def build_report(
 ) -> str:
     """The production report, then one line per optional environment. A value in
     ``ledgers`` that is a string is the reason that environment could not be read."""
-    production = ledgers.get(REQUIRED_ENVIRONMENT)
-    if not isinstance(production, Mapping):
-        raise RuntimeError(
-            f"{REQUIRED_ENVIRONMENT} ledger is missing: {production or 'not read'}"
-        )
-    lines = [
-        build_report_message(
-            summarize_ledger(
-                environment_report(
-                    REQUIRED_ENVIRONMENT,
-                    production,
-                    outages,
-                    now,
-                    limit_days=limit_days,
-                )
-            ),
-            title=title,
-        )
-    ]
-    for environment in OPTIONAL_ENVIRONMENTS:
-        label = f"{environment} (reported, never paged)"
-        ledger = ledgers.get(environment)
-        if not isinstance(ledger, Mapping):
-            lines.append(f"{label}: ledger unavailable: {ledger or 'not read'}")
-            continue
-        try:
-            summary = summarize_ledger(
-                environment_report(environment, ledger, [], now, limit_days=limit_days)
-            )
-        except RuntimeError as exc:
-            lines.append(f"{label}: ledger unusable: {exc}")
-            continue
-        lines.append(build_environment_line(label, summary))
+    prod_summary, staging_lines = _summarize_all_environments(
+        ledgers, outages, now, limit_days=limit_days
+    )
+    lines = [build_report_message(prod_summary, title=title), *staging_lines]
     return "\n".join(lines)
+
+
+def build_report_card(
+    ledgers: Mapping[str, Mapping[str, Any] | str],
+    outages: list[Any],
+    now: datetime,
+    *,
+    limit_days: int | None = None,
+    title: str | None = None,
+) -> dict[str, Any]:
+    """Render the production report and optional environments as an interactive card."""
+    prod_summary, staging_lines = _summarize_all_environments(
+        ledgers, outages, now, limit_days=limit_days
+    )
+    return build_stability_card(
+        prod_summary, staging_lines=staging_lines, title=title
+    )
 
 
 def run(
@@ -265,13 +299,22 @@ def run(
                 ledgers[environment] = str(exc)
         outages = fetch_outages(outages_url, token)
 
+    prod_summary, staging_lines = _summarize_all_environments(
+        ledgers, outages, now, limit_days=limit_days
+    )
     message = as_report(
         build_report(ledgers, outages, now, limit_days=limit_days, title=title)
     )
     if env.get("INFRA2_STABILITY_REPORT_DRY_RUN") == "1":
         print(message)
         return 0
-    deliver_out_of_band_text(env, message)
+    if env.get("INFRA2_STABILITY_REPORT_FORMAT", "card").strip().lower() == "text":
+        deliver_out_of_band_text(env, message)
+    else:
+        card = build_stability_card(
+            prod_summary, staging_lines=staging_lines, title=title
+        )
+        deliver_out_of_band_card(env, card, fallback_text=message)
     print(message)
     return 0
 

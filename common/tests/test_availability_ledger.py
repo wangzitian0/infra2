@@ -13,6 +13,7 @@ from common.observability.ledger import (
     apply_unavailability,
     build_environment_line,
     build_report_message,
+    build_stability_card,
     summarize_ledger,
 )
 
@@ -334,3 +335,34 @@ def test_a_secondary_environment_is_one_line() -> None:
     assert line.startswith("staging (reported, never paged): ")
     assert "10.0 min with no probe round" in line
     assert "lowest staging:vault-http" in line
+
+
+def test_build_stability_card_renders_green_for_clean_and_orange_for_degraded() -> None:
+    clean_ledger = {
+        "as_of": "2026-06-10",
+        "window_days": 1,
+        "ledger": [
+            {"date": "2026-06-10", "runs": 48, "signals": {"a": {"ok": 48, "fail": 0}}}
+        ],
+    }
+    clean_card = build_stability_card(
+        summarize_ledger(clean_ledger),
+        staging_lines=["staging (reported, never paged): 100.0% · 1/1 signals at 100%"],
+    )
+    assert clean_card["header"]["template"] == "green"
+    assert "Infra2 daily availability" in clean_card["header"]["title"]["content"]
+
+    degraded_card = build_stability_card(summarize_ledger(HEALTHY_AND_DEGRADED))
+    assert degraded_card["header"]["template"] == "orange"
+    card_text = str(degraded_card)
+    assert "production:minio-public-route" in card_text
+    assert "打开 SigNoz" in card_text
+
+    applied = _apply(
+        [
+            {"environment": "production", "start": _ms(23, 10), "end": _ms(23, 10, 30)},
+            {"environment": "production", "start": "bad", "end": None},
+        ]
+    )
+    unavail_card = build_stability_card(summarize_ledger(applied))
+    assert "unreadable record(s) NOT counted" in str(unavail_card)

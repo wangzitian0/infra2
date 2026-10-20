@@ -354,3 +354,51 @@ def deliver_out_of_band_text(
             "Feishu webhook URL or app credentials are required for out-of-band delivery"
         )
     return common.alerting.deliver_feishu_text(webhook_url, text, timeout=timeout)
+
+
+def deliver_out_of_band_card(
+    env: Mapping[str, str],
+    card: dict[str, Any],
+    *,
+    fallback_text: str | None = None,
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    """Deliver an interactive card through the out-of-band Feishu webhook/app path.
+
+    Uses the same ``INFRA2_OUT_OF_BAND_*`` / ``FEISHU_*`` environment resolution as
+    :func:`deliver_out_of_band_text`. When ``fallback_text`` is provided and card
+    delivery fails with :class:`FeishuDeliveryError`, falls back to plain-text delivery.
+    """
+    mode = (
+        env.get("INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE")
+        or env.get("ALERT_DELIVERY_MODE")
+        or "feishu_webhook"
+    ).strip()
+    try:
+        if mode == "feishu_app":
+            return common.alerting.deliver_feishu_app_card(
+                app_id=env.get("INFRA2_OUT_OF_BAND_FEISHU_APP_ID")
+                or env.get("FEISHU_APP_ID", ""),
+                app_secret=env.get("INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET")
+                or env.get("FEISHU_APP_SECRET", ""),
+                chat_id=env.get("INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID")
+                or env.get("FEISHU_CHAT_ID", ""),
+                api_base=env.get("INFRA2_OUT_OF_BAND_FEISHU_API_BASE")
+                or env.get("FEISHU_API_BASE", "https://open.feishu.cn"),
+                card=card,
+                timeout=timeout,
+            )
+        webhook_url = (
+            env.get("INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL")
+            or env.get("FEISHU_WEBHOOK_URL")
+            or ""
+        ).strip()
+        if not webhook_url:
+            raise InvalidFeishuAppConfig(
+                "Feishu webhook URL or app credentials are required for out-of-band delivery"
+            )
+        return common.alerting.deliver_feishu_card(webhook_url, card, timeout=timeout)
+    except FeishuDeliveryError:
+        if fallback_text is not None:
+            return deliver_out_of_band_text(env, fallback_text, timeout=timeout)
+        raise
