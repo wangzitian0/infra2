@@ -240,9 +240,14 @@ def test_rewriting_mounts_and_contexts_to_bare_var_fails_dockerfile_canary_and_f
     """Case 6: Rewriting `./` bind mounts and `context:` to bare `${VAR}` (no default) drops inputs
     to 0 and triggers both `dockerfile_canary_violations` and per-root input floor failures."""
     for sr in ("platform", "finance_report", "truealpha", "bootstrap"):
-        shutil.copytree(deploy_guard_audit.ROOT / sr, tmp_path / sr)
+        shutil.copytree(
+            deploy_guard_audit.ROOT / sr,
+            tmp_path / sr,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+        )
 
-    for compose in deploy_guard_audit.find_service_composes(root=tmp_path):
+    composes = deploy_guard_audit.find_service_composes(root=tmp_path)
+    for compose in composes:
         text = compose.read_text(encoding="utf-8")
         mutated = (
             text.replace("context: ../..", "context: ${UNSET_CTX}")
@@ -252,7 +257,6 @@ def test_rewriting_mounts_and_contexts_to_bare_var_fails_dockerfile_canary_and_f
         )
         compose.write_text(mutated, encoding="utf-8")
 
-    composes = deploy_guard_audit.find_service_composes(root=tmp_path)
     canary_hits = deploy_guard_audit.dockerfile_canary_violations(
         composes, root=tmp_path
     )

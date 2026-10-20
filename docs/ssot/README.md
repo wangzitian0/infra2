@@ -122,11 +122,9 @@
 ```mermaid
 flowchart TB
     B["Bootstrap<br/>Trust Anchor<br/>• Dokploy<br/>• 1Password<br/>• Vault"]
-    P["Platform<br/>(Postgres, Redis, Authentik)<br/>依赖: Bootstrap"]
-    D["Data<br/>(业务数据库)<br/>规划中"]
+    P["Platform<br/>(SSO, Gateway, Observability, Alerting)<br/>依赖: Bootstrap"]
+    D["Data<br/>(PostgreSQL, Redis, ClickHouse)<br/>依赖: Platform"]
 
     B --> P
     P --> D
 ```
-
-*Last updated: 2026-07-18*

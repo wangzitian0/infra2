@@ -131,9 +131,12 @@ sys.exit(1 if failed else 0)
 """
 
 
+_JOBS = _jobs()
+
+
 def test_the_workflow_declares_jobs_to_check() -> None:
     """Parsing must find all 9 Python entrypoint jobs in ops-checks.yml, or the parametrized test below runs nothing."""
-    entries = {name: entry for name, _, entry in _jobs()}
+    entries = {name: entry for name, _, entry in _JOBS}
 
     assert {
         "audit",
@@ -152,7 +155,7 @@ def test_the_workflow_declares_jobs_to_check() -> None:
 
 
 @pytest.mark.parametrize(
-    ("job", "packages", "entries"), _jobs(), ids=[name for name, _, _ in _jobs()]
+    ("job", "packages", "entries"), _JOBS, ids=[name for name, _, _ in _JOBS]
 )
 def test_job_entrypoints_import_with_only_the_jobs_packages(
     job: str, packages: set[str], entries: set[str]
