@@ -17,6 +17,7 @@ from common.gate.inventory import (
 # of self_governance.py sees the module from this file.
 import common.gate.production_contract as production_contract
 from common.gate.self_governance import (
+    _mutation_evidence_listed,
     _owner_instruction_quoted,
     is_self_governing,
 )
@@ -175,6 +176,15 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
         if lock_holds and f.startswith(WORKFLOW_PREFIX) and f not in uncovered
     }
     quoted_instruction = _owner_instruction_quoted(facts.body)
+    tree_approved = bool(
+        facts.head_tree_sha and facts.head_tree_sha in set(facts.approved_tree_shas)
+    )
+    checklist_review_ready = any(
+        r[0] in AUTOMATED_REVIEWERS and r[2] > 0 for r in facts.reviews_on_head()
+    ) or (_opened_by_bot(facts) and _verified_at(facts) is not None)
+    checklist_clears = (
+        lock_holds and _mutation_evidence_listed(facts.body) and checklist_review_ready
+    )
     governing = sorted(
         f for f in facts.files if is_self_governing(f) and f not in lock_covered
     )
@@ -184,6 +194,8 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
         for f in governing
         if (f not in facts.proven_tighter or f in uncovered)
         and not (f in RULE_TEXT_FILES and quoted_instruction)
+        and not (f not in uncovered and checklist_clears)
+        and not tree_approved
     ]
     # The reason for a held file comes first. The "without a proof" line names only
     # the files that have no proof (#1138 round 4).
@@ -238,7 +250,7 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
     deploying = sorted(f for f, w in fired.items() if w)
     # With the lock, a production job that the merge starts waits for the reviewer of
     # the production environment. Reasons cannot carry a note that does not block.
-    if deploying and not lock_holds:
+    if deploying and not lock_holds and not tree_approved:
         workflows = sorted({fired[f] for f in deploying if fired[f] != "on merge"})
         via = f" via {', '.join(workflows)}" if workflows else ""
         reasons.append(
@@ -386,6 +398,8 @@ def _check_settling_window(
     """Evaluate quiet period or event settling policy; return remaining seconds."""
     if policy not in ("clock", "event", "either"):
         raise ValueError(f"unknown policy {policy!r}")
+    if not facts.last_push_at:
+        return 0
 
     clock_remaining = math.ceil(facts.last_push_at + quiet_minutes * 60 - now)
     clock_reason = (
@@ -538,6 +552,69 @@ def lock_status(facts: HeadFacts) -> str:
         else LOCK_SKIPPED
     )
     return lock_line(state, detail)
+
+
+def evaluate_scope(
+    files: tuple[str, ...],
+    *,
+    lock_failures: tuple[str, ...] | None = None,
+) -> dict[str, object]:
+    """Classify changed paths before or after PR creation (#1104)."""
+    lock_holds = lock_failures == ()
+    owner_held = {name.casefold() for name in production_contract.OWNER_HELD_WORKFLOWS}
+    required_workflows = _required_check_workflows()
+
+    def _requires(path: str) -> bool:
+        return required_workflows is not None and _normalized_path(path) in (
+            required_workflows
+        )
+
+    uncovered = sorted(
+        f
+        for f in files
+        if _normalized_path(f).startswith(WORKFLOW_PREFIX)
+        and (
+            required_workflows is None
+            or _requires(f)
+            or PurePosixPath(_normalized_path(f)).name in owner_held
+        )
+    )
+    lock_covered = {
+        f
+        for f in files
+        if lock_holds
+        and _normalized_path(f).startswith(WORKFLOW_PREFIX)
+        and f not in uncovered
+    }
+    governing = sorted(
+        f for f in files if is_self_governing(f) and f not in lock_covered
+    )
+    fired = {f: _deploy_triggering(f) for f in files}
+    deploying = sorted(f for f, w in fired.items() if w)
+
+    blocking_files = sorted(
+        set(uncovered) | set(governing) | (set() if lock_holds else set(deploying))
+    )
+    if uncovered:
+        scope_class = "owner_held"
+    elif governing:
+        scope_class = "gate_closure"
+    elif deploying and not lock_holds:
+        scope_class = "deploy_unverified"
+    else:
+        scope_class = "autonomous"
+
+    state = (
+        "not_read"
+        if lock_failures is None
+        else ("not_verified" if lock_failures else "verified")
+    )
+    return {
+        "lock_state": state,
+        "scope_class": scope_class,
+        "blocking_files": blocking_files,
+        "deploy_triggering_files": deploying,
+    }
 
 
 def render(facts: HeadFacts, verdict: Verdict) -> str:

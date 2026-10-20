@@ -262,9 +262,19 @@ def test_pytest_and_site_configuration_is_self_governing(path) -> None:
     assert gate.is_self_governing(path)
 
 
-def test_pyproject_toml_stays_outside_the_gate() -> None:
-    """Dependency edits are common; the docs name this residual (#1147)."""
-    assert not gate.is_self_governing("pyproject.toml")
+def test_pyproject_toml_is_self_governing() -> None:
+    """1035-R4 / #1147: pyproject.toml carries pytest settings and is in the gate closure."""
+    assert gate.is_self_governing("pyproject.toml")
+    assert not gate.is_self_governing("docs/pyproject.toml")
+
+
+def test_scheduled_automation_scripts_are_in_the_closure() -> None:
+    """#1127 / #1147: scheduled automation scripts run by ops-checks.yml are in the closure."""
+    found = gate.self_governing_files()
+    assert "tools/host_hygiene_schedule.py" in found
+    assert "tools/facet_reconcile.py" in found
+    assert "common/tests/test_host_hygiene_schedule.py" in found
+    assert "common/tests/test_facet_reconcile.py" in found
 
 
 # Thirty tracked paths, chosen across docs, tools, common, platform and bootstrap.

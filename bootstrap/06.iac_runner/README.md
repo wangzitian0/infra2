@@ -181,19 +181,9 @@ curl -X POST https://iac.{domain}/deploy \
   -H "X-IAC-Timestamp: $TIMESTAMP" \
   -H "X-IAC-Nonce: $NONCE" \
   -d "$PAYLOAD"
-
-# Deploy a resolved commit to production
-PAYLOAD='{"env":"production","ref":"0123456789abcdef0123456789abcdef01234567","source_ref":"v1.3.0","triggered_by":"manual-promotion","wait":false}'
-TIMESTAMP="$(date +%s)"
-NONCE="$(openssl rand -hex 16)"
-SIGNATURE=$(printf '%s' "${TIMESTAMP}.${NONCE}.${PAYLOAD}" | openssl dgst -sha256 -hmac 'YOUR_SECRET' | awk '{print $2}')
-curl -X POST https://iac.{domain}/deploy \
-  -H "Content-Type: application/json" \
-  -H "X-Hub-Signature-256: sha256=$SIGNATURE" \
-  -H "X-IAC-Timestamp: $TIMESTAMP" \
-  -H "X-IAC-Nonce: $NONCE" \
-  -d "$PAYLOAD"
 ```
+
+Production deployments (`env="production"`) require a GitHub Actions OIDC Bearer token from the `production` environment (`refs/heads/main` or `refs/tags/v*`) in addition to the HMAC signature (#1126). Manual production `curl` calls without an OIDC token are rejected with HTTP 403.
 
 ## Scope
 

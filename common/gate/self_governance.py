@@ -25,6 +25,11 @@ _OWNER_INSTRUCTION_HEADER_RE = re.compile(
     r"(?im)^(##+\s*)?(owner instruction|owner 指示)\b.*$"
 )
 _QUOTE_LINE_RE = re.compile(r"^>.*[^\W_]|「[^」]*[^\W_][^」]*」")
+_MUTATION_EVIDENCE_HEADER_RE = re.compile(r"(?im)^##+\s*mutation evidence\b.*$")
+_MUTATION_TEST_NAME_RE = re.compile(r"\btest_\w+|[\w./-]+::\w+")
+_APPROVED_SHA_RE = re.compile(
+    r"(?i)(?:approved(?:\s+head)?|owner\s+approved(?:\s+head)?)\s*[:=]?\s*`?([0-9a-f]{7,40})`?"
+)
 
 
 def _owner_instruction_quoted(body: str) -> bool:
@@ -43,6 +48,35 @@ def _owner_instruction_quoted(body: str) -> bool:
     return False
 
 
+def _mutation_evidence_listed(body: str) -> bool:
+    """True when the PR body contains a Mutation evidence section naming at least one test (#1040)."""
+    lines = (body or "").splitlines()
+    for i, line in enumerate(lines):
+        if not _MUTATION_EVIDENCE_HEADER_RE.match(line):
+            continue
+        for later in lines[i + 1 :]:
+            stripped = later.strip()
+            if stripped.startswith("#"):
+                break
+            if _MUTATION_TEST_NAME_RE.search(stripped):
+                return True
+    return False
+
+
+def _cited_approved_shas(
+    body: str, comments: Sequence[tuple[str, float]] = ()
+) -> tuple[str, ...]:
+    """Commit SHAs cited as owner-approved in the PR body or comments (#924)."""
+    texts = [body or "", *(c[0] for c in comments if c and c[0])]
+    found: list[str] = []
+    for text in texts:
+        for match in _APPROVED_SHA_RE.finditer(text):
+            sha = match.group(1).lower()
+            if sha not in found:
+                found.append(sha)
+    return tuple(found)
+
+
 _DATA_SUFFIXES = (".json", ".yaml", ".yml", ".md")
 
 # Tests whose file name does not follow common/tests/test_<module stem>.py, by module.
@@ -59,6 +93,12 @@ _TESTS_BY_MODULE = {
 # Package files that Python runs before the gate code. They are in the closure even
 # when they do not exist: a PR can add one, and `python -m tools.pr_merge_gate` runs it.
 PACKAGE_FILES = ("common/__init__.py", "tools/__init__.py")
+
+# Code run by ungated scheduled jobs in ops-checks.yml (#1127, #1147).
+SCHEDULED_AUTOMATION_FILES = (
+    "tools/host_hygiene_schedule.py",
+    "tools/facet_reconcile.py",
+)
 
 # pytest runs each conftest.py on the way to a test. One in common/tests can switch off
 # the gate tests, for example with `collect_ignore_glob` (#1138).
@@ -139,6 +179,7 @@ def self_governing_files() -> frozenset[str]:
         nxt -= closure
         closure |= nxt
         frontier = nxt
+    closure |= {f for f in SCHEDULED_AUTOMATION_FILES if (root / f).is_file()}
     for member in list(closure):
         if member.endswith(".py"):
             for test in (
@@ -188,7 +229,9 @@ _COMPILED_SUFFIXES = (".pyc", ".pyd", ".pth", ".so")
 # Python runs a site hook from any directory on its path.
 _SITE_HOOK_NAMES = frozenset({"sitecustomize.py", "usercustomize.py"})
 # pytest reads its settings for common/tests only from the root, common/ or common/tests/.
-_TOOL_CONFIG_NAMES = frozenset({"pytest.ini", "tox.ini", "setup.cfg", ".coveragerc"})
+_TOOL_CONFIG_NAMES = frozenset(
+    {"pytest.ini", "tox.ini", "setup.cfg", ".coveragerc", "pyproject.toml"}
+)
 _TOOL_CONFIG_DIRS = frozenset({".", "common", GATE_TESTS_DIR})
 
 

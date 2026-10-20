@@ -214,6 +214,29 @@ def _field(view: dict, name: str) -> str:
     return str(value) if value else ABSENT
 
 
+def _tree_sha_at(repo: str, ref: str, *, gh: Runner | None = None) -> str:
+    """Git tree SHA of `ref`, or empty string when unreadable (#924)."""
+    if gh is None:
+        gh = _gh
+    if not (repo and ref):
+        return ""
+    try:
+        out = gh(
+            [
+                "api",
+                f"repos/{repo}/commits/{quote(ref, safe='')}",
+                "--jq",
+                ".commit.tree.sha",
+            ]
+        ).strip()
+        if out.startswith("{"):
+            doc = json.loads(out)
+            out = str(((doc.get("commit") or {}).get("tree") or {}).get("sha") or "")
+        return out if len(out) == 40 else ""
+    except (RuntimeError, json.JSONDecodeError, AttributeError, TypeError):
+        return ""
+
+
 def _pr_comments(block: object) -> tuple[tuple[str, float], ...]:
     """PR conversation comments as (body, epoch of the current text).
 
@@ -248,7 +271,11 @@ def collect(
     if gh is None:
         gh = _gh
 
-    from common.gate.self_governance import _proven_tighter, _working_tree_rule_drift
+    from common.gate.self_governance import (
+        _cited_approved_shas,
+        _proven_tighter,
+        _working_tree_rule_drift,
+    )
 
     view = json.loads(
         gh(
@@ -332,6 +359,33 @@ def collect(
         if (str(view.get("state") or "") == "OPEN" and _is_local_root_repo(repo))
         else None
     )
+    comments = _pr_comments(pull.get("comments"))
+    body_text = str(view.get("body") or "")
+    cited_shas = _cited_approved_shas(body_text, comments)
+    owner_login = owner.casefold()
+    owner_approved_oids = tuple(
+        str((r.get("commit") or {}).get("oid") or "").lower()
+        for r in (view.get("reviews") or [])
+        if str(r.get("state") or "").upper() == "APPROVED"
+        and str((r.get("author") or {}).get("login") or "").casefold() == owner_login
+        and str((r.get("commit") or {}).get("oid") or "")
+    )
+    verified_cited_shas = tuple(
+        full_oid
+        for cited in cited_shas
+        for full_oid in owner_approved_oids
+        if full_oid.startswith(cited) and full_oid != head_sha.lower()
+    )
+    head_tree_sha = (
+        _tree_sha_at(repo, head_sha, gh=gh)
+        if (verified_cited_shas and str(view.get("state") or "") == "OPEN")
+        else ""
+    )
+    approved_tree_shas = (
+        tuple(t for sha in verified_cited_shas if (t := _tree_sha_at(repo, sha, gh=gh)))
+        if head_tree_sha
+        else ()
+    )
     # A failure after the lock read is reported as such (#1138 round 3): the run
     # stopped before a verdict, and the lock was read, so "not read" is false.
     try:
@@ -339,6 +393,8 @@ def collect(
             repo=repo,
             rule_drift=drift,
             lock_failures=lock,
+            head_tree_sha=head_tree_sha,
+            approved_tree_shas=approved_tree_shas,
             number=int(view["number"]),
             state=str(view.get("state") or ""),
             draft=bool(view.get("isDraft")),
@@ -380,12 +436,12 @@ def collect(
             mergeable=_field(view, "mergeable"),
             merge_state=_field(view, "mergeStateStatus"),
             base_changed_files=base_changed,
-            body=str(view.get("body") or ""),
+            body=body_text,
             author=(
                 str(author.get("__typename") or ""),
                 str(author.get("login") or ""),
             ),
-            comments=_pr_comments(pull.get("comments")),
+            comments=comments,
             reviews=tuple(
                 (
                     str((r.get("author") or {}).get("login") or ""),

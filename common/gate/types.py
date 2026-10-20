@@ -35,8 +35,6 @@ DEPLOY_TRIGGERING_GLOBS = (
     "bootstrap/06.iac_runner/**/*",
     "scripts/deploy_iac_runner_bootstrap.sh",
     ".github/workflows/deploy.yml",
-    "cloudflare/infra-watchdog/*",
-    "cloudflare/infra-watchdog/**/*",
 )
 
 NON_PROD_DEPLOY_WORKFLOWS = frozenset({"ops-checks.yml"})
@@ -144,7 +142,7 @@ class HeadFacts:
     base: str
     head_sha: str
     files: tuple[str, ...]
-    last_push_at: float  # epoch seconds of the newest commit on the head
+    last_push_at: float | None  # epoch seconds of the newest commit on the head
     checks: tuple[tuple[str, str], ...]  # (name, gh bucket or state)
     unresolved_threads: int
     unresolved_weight: float = 0.0
@@ -168,6 +166,9 @@ class HeadFacts:
     # Production lock (#1138). None: not read. (): the lock holds and the head's
     # workflows satisfy the production contract. Otherwise one reason per failure.
     lock_failures: tuple[str, ...] | None = None
+    # Tree SHA of the current head and tree SHAs approved before a mechanical rebase (#924).
+    head_tree_sha: str = ""
+    approved_tree_shas: tuple[str, ...] = ()
 
     def reviews_on_head(self) -> tuple[tuple[str, str, float], ...]:
         return tuple(r for r in self.reviews if r[1] == self.head_sha)

@@ -818,7 +818,7 @@ def test_the_written_globs_survive_derivation():
     # and a bootstrap self-update are triggered by the merge itself.
     assert gate._deploy_triggering("bootstrap/06.iac_runner/main.tf")
     assert gate._deploy_triggering("scripts/deploy_iac_runner_bootstrap.sh")
-    assert gate._deploy_triggering("cloudflare/infra-watchdog/src/index.ts")
+    assert not gate._deploy_triggering("cloudflare/infra-watchdog/src/index.ts")
 
 
 def test_a_deploy_triggering_path_routes_to_the_owner():
@@ -897,7 +897,7 @@ def test_double_star_globs_match_without_translation():
     # A helper that claimed to translate them was a no-op -- worse than
     # nothing, because it read as though the case were handled.
     assert gate._deploy_triggering("bootstrap/06.iac_runner/deep/nested/main.tf")
-    assert gate._deploy_triggering("cloudflare/infra-watchdog/a/b/index.ts")
+    assert gate._deploy_triggering("bootstrap/06.iac_runner/a/b/index.ts")
 
 
 def test_an_unreadable_workflow_set_blocks_instead_of_quietly_under_detecting(
@@ -2977,3 +2977,111 @@ def test_each_output_names_its_lock_state(argv, gh, code, state, detail, capsys)
 def test_every_lock_state_has_a_line():
     for state in gate.LOCK_STATES:
         assert gate.lock_line(state, "x").endswith(f" | lock_state={state}")
+
+
+def test_last_push_at_none_returns_unevaluable_without_type_error():
+    """1035-R3: last_push_at=None must not raise TypeError in _check_settling_window."""
+    verdict = gate.evaluate(_facts(last_push_at=None), now=NOW)
+    assert verdict.unevaluable and verdict.exit_code == 4
+    assert any("no timestamp for the head commit" in r for r in verdict.reasons)
+
+
+def test_gate_change_checklist_clears_closure_file_when_lock_and_evidence_and_review_hold():
+    """#1040: a non-workflow closure file clears when lock_holds, ### Mutation evidence, and review hold."""
+    head = "abcdef0123456789"
+    body = "## Summary\n\n### Mutation evidence\n\n- `test_pr_merge_gate.py::test_x`\n"
+    facts = _green(
+        head_sha=head,
+        files=("common/gate/evaluator.py",),
+        lock_failures=HOLDS,
+        body=body,
+        reviews=(("copilot-pull-request-reviewer", head, NOW - 120),),
+    )
+    verdict = gate.evaluate(facts, now=NOW)
+    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+
+    # Required-check workflow (infra-ci.yml) remains owner-held even with checklist
+    held_facts = _green(
+        head_sha=head,
+        files=(INFRA_CI,),
+        lock_failures=HOLDS,
+        body=body,
+        reviews=(("copilot-pull-request-reviewer", head, NOW - 120),),
+    )
+    held_verdict = gate.evaluate(held_facts, now=NOW)
+    assert held_verdict.owner_required and held_verdict.exit_code == 2
+
+
+def test_tree_identity_preserves_approval_across_mechanical_rebase():
+    """#924: an owner-approved tree SHA preserves approval when HEAD^{tree} is unchanged."""
+    tree_sha = "1" * 40
+    facts = _green(
+        files=(INFRA_CI,),
+        lock_failures=HOLDS,
+        head_tree_sha=tree_sha,
+        approved_tree_shas=(tree_sha,),
+    )
+    verdict = gate.evaluate(facts, now=NOW)
+    assert verdict.ready and verdict.exit_code == 0, verdict.reasons
+
+    # A different tree SHA does not clear owner_required
+    changed_tree = _green(
+        files=(INFRA_CI,),
+        lock_failures=HOLDS,
+        head_tree_sha="2" * 40,
+        approved_tree_shas=(tree_sha,),
+    )
+    assert gate.evaluate(changed_tree, now=NOW).owner_required
+
+
+def test_collect_requires_owner_approved_review_for_cited_tree_sha():
+    """#924: citing a SHA without an owner APPROVED review on a prior commit never populates approved_tree_shas."""
+    unverified_gh = _Gh(
+        body="approved: feedfacefeedface",
+        files=(INFRA_CI,),
+    )
+    facts = gate.collect(704, gh=unverified_gh)
+    assert facts.approved_tree_shas == ()
+
+
+def test_scope_flag_classifies_files_and_outputs_json(capsys):
+    """#1104: --scope --json classifies autonomous, gate_closure, and owner_held paths."""
+    assert (
+        gate.main(
+            ["--scope", "--json", "common/probe_specs.py"],
+            gh=_Gh(),
+            now=lambda: READY_AT,
+        )
+        == 0
+    )
+    doc = _json_verdict(capsys)
+    assert doc["lock_state"] == "verified"
+    assert doc["scope_class"] == "autonomous"
+    assert doc["blocking_files"] == []
+
+    assert (
+        gate.main(
+            ["--scope", "--json", INFRA_CI],
+            gh=_Gh(),
+            now=lambda: READY_AT,
+        )
+        == 2
+    )
+    doc_held = _json_verdict(capsys)
+    assert doc_held["scope_class"] == "owner_held"
+    assert doc_held["blocking_files"] == [INFRA_CI]
+
+
+def test_wait_flag_polls_until_ready(monkeypatch):
+    """#1103: --wait sleeps when exit_code == 1 and re-evaluates until ready."""
+    monkeypatch.setenv("INFRA2_GATE_CAFFEINATED", "1")
+    sleeps: list[int] = []
+    times = iter([READY_AT - 5, READY_AT])
+    rc = gate.main(
+        ["704", "--wait"],
+        gh=_Gh(files=RELEASE_CODE),
+        now=lambda: next(times),
+        sleep=lambda s: sleeps.append(s),
+    )
+    assert rc == 0
+    assert sleeps == [5]

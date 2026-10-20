@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
@@ -81,6 +82,7 @@ from common.gate import (
     _base_changed_files,
     _blob_sha,
     _blocking_coordinates,
+    _cited_approved_shas,
     _declared_deploy_globs,
     _deploy_triggering,
     _direction_proof_for,
@@ -90,6 +92,7 @@ from common.gate import (
     _gh,
     _inventory_only_gained_authority,
     _is_local_root_repo,
+    _mutation_evidence_listed,
     _owner_instruction_quoted,
     _production_lock_failures,
     _proven_tighter,
@@ -101,6 +104,7 @@ from common.gate import (
     _working_tree_rule_drift,
     collect,
     evaluate,
+    evaluate_scope,
     LOCK_STATES,
     is_self_governing,
     lock_line,
@@ -144,6 +148,7 @@ __all__ = [
     "_base_changed_files",
     "_blob_sha",
     "_blocking_coordinates",
+    "_cited_approved_shas",
     "_declared_deploy_globs",
     "_deploy_triggering",
     "_direction_proof_for",
@@ -153,6 +158,7 @@ __all__ = [
     "_gh",
     "_inventory_only_gained_authority",
     "_is_local_root_repo",
+    "_mutation_evidence_listed",
     "_owner_instruction_quoted",
     "_production_lock_failures",
     "_proven_tighter",
@@ -164,6 +170,7 @@ __all__ = [
     "_working_tree_rule_drift",
     "collect",
     "evaluate",
+    "evaluate_scope",
     "is_self_governing",
     "LOCK_STATES",
     "lock_line",
@@ -178,13 +185,27 @@ __all__ = [
 ]
 
 
-def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> int:
+def main(
+    argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time, sleep=time.sleep
+) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
-    parser.add_argument("number", type=int)
+    parser.add_argument(
+        "targets", nargs="*", help="PR number or file paths for --scope"
+    )
     parser.add_argument("--repo", default=DEFAULT_REPO)
     parser.add_argument("--quiet-minutes", type=int, default=QUIET_MINUTES)
     parser.add_argument(
         "--merge", action="store_true", help="squash-merge when the verdict is ready"
+    )
+    parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="wait for pending checks or quiet window with caffeinate -i (#1103)",
+    )
+    parser.add_argument(
+        "--scope",
+        action="store_true",
+        help="report scope classification and lock state for a PR or file paths (#1104)",
     )
     parser.add_argument(
         "--policy",
@@ -215,7 +236,66 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
         lock_line,
         lock_state,
     )
-    from common.gate.types import EXIT_UNEVALUABLE
+    from common.gate.types import EXIT_OWNER, EXIT_READY, EXIT_UNEVALUABLE, EXIT_WAIT
+
+    if args.scope:
+        if len(args.targets) == 1 and args.targets[0].isdigit():
+            try:
+                facts = collect(int(args.targets[0]), repo=args.repo, gh=gh)
+            except Exception as exc:  # noqa: BLE001
+                if args.json:
+                    print(
+                        json.dumps(
+                            {
+                                "lock_state": "not_read",
+                                "scope_class": "unevaluable",
+                                "blocking_files": [],
+                                "error": f"{type(exc).__name__}: {exc}",
+                            }
+                        )
+                    )
+                else:
+                    warning(f"could not read PR #{args.targets[0]}: {exc}")
+                return EXIT_UNEVALUABLE
+            scope_files = facts.files
+            lock_failures = facts.lock_failures
+        else:
+            scope_files = tuple(args.targets)
+            lock_failures = (
+                _production_lock_failures(args.repo, "main", gh=gh)
+                if _is_local_root_repo(args.repo)
+                else None
+            )
+        report = evaluate_scope(scope_files, lock_failures=lock_failures)
+        if args.json:
+            print(json.dumps(report))
+        else:
+            print(
+                f"scope_class={report['scope_class']} "
+                f"blocking_files={report['blocking_files']} | "
+                f"lock_state={report['lock_state']}"
+            )
+        return EXIT_READY if report["scope_class"] == "autonomous" else EXIT_OWNER
+
+    if len(args.targets) != 1 or not args.targets[0].isdigit():
+        parser.error("a single integer PR number is required")
+    args.number = int(args.targets[0])
+
+    if args.wait and os.environ.get("INFRA2_GATE_CAFFEINATED") != "1":
+        import shutil as _shutil
+
+        caffeinate = _shutil.which("caffeinate")
+        if caffeinate:
+            env = {**os.environ, "INFRA2_GATE_CAFFEINATED": "1"}
+            cmd = [
+                caffeinate,
+                "-i",
+                sys.executable,
+                "-m",
+                "tools.pr_merge_gate",
+                *(argv if argv is not None else sys.argv[1:]),
+            ]
+            return subprocess.run(cmd, env=env, check=False).returncode
 
     def unevaluable(
         why: str, *, state: str = "not_read", detail: str = LOCK_NOT_REACHED
@@ -254,35 +334,43 @@ def main(argv: list[str] | None = None, *, gh: Runner = _gh, now=time.time) -> i
                 f"({', '.join(drift)}): pull main and re-run"
             )
 
-    try:
-        facts = collect(args.number, repo=args.repo, gh=gh)
-    except Exception as exc:  # noqa: BLE001 - any read failure is "could not evaluate"
-        if getattr(exc, "lock_read", False):
-            state, detail = "stopped_before_verdict", ""
-        elif getattr(exc, "lock_skipped", False):
-            state, detail = "not_read", LOCK_SKIPPED
-        else:
-            state, detail = "not_read", LOCK_NOT_REACHED
-        return unevaluable(
-            f"reading the PR failed: {type(exc).__name__}: {exc}",
-            state=state,
-            detail=detail,
+    while True:
+        try:
+            facts = collect(args.number, repo=args.repo, gh=gh)
+        except Exception as exc:  # noqa: BLE001 - any read failure is "could not evaluate"
+            if getattr(exc, "lock_read", False):
+                state, detail = "stopped_before_verdict", ""
+            elif getattr(exc, "lock_skipped", False):
+                state, detail = "not_read", LOCK_SKIPPED
+            else:
+                state, detail = "not_read", LOCK_NOT_REACHED
+            return unevaluable(
+                f"reading the PR failed: {type(exc).__name__}: {exc}",
+                state=state,
+                detail=detail,
+            )
+        if args.request_review and not any(
+            r[0] in AUTOMATED_REVIEWERS and r[2] > 0 for r in facts.reviews_on_head()
+        ):
+            if request_copilot_review(facts, gh=gh):
+                warning(
+                    f"#{facts.number}: Copilot review requested on {facts.head_sha[:7]}"
+                )
+            else:
+                warning(
+                    f"#{facts.number}: the Copilot review request was not registered; "
+                    "no automated review will come"
+                )
+        verdict = evaluate(
+            facts, now=now(), quiet_minutes=args.quiet_minutes, policy=args.policy
         )
-    if args.request_review and not any(
-        r[0] in AUTOMATED_REVIEWERS and r[2] > 0 for r in facts.reviews_on_head()
-    ):
-        if request_copilot_review(facts, gh=gh):
-            warning(
-                f"#{facts.number}: Copilot review requested on {facts.head_sha[:7]}"
-            )
-        else:
-            warning(
-                f"#{facts.number}: the Copilot review request was not registered; "
-                "no automated review will come"
-            )
-    verdict = evaluate(
-        facts, now=now(), quiet_minutes=args.quiet_minutes, policy=args.policy
-    )
+        if args.wait and verdict.exit_code == EXIT_WAIT:
+            delay = max(1, min(verdict.quiet_remaining_seconds or 30, 60))
+            if not args.json:
+                warning(f"#{facts.number}: waiting {delay}s before re-evaluating...")
+            sleep(delay)
+            continue
+        break
     if args.audit:
         try:
             from common.gate.omca_policy import evaluate_audit_report
