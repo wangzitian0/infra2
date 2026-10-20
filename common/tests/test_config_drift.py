@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from common.deploy.deployer import config_hash_from_items
+from common.deploy.config_hash import config_hash_from_items
 
 ROOT = Path(__file__).resolve().parents[2]
 

@@ -290,6 +290,9 @@ def test_rewriting_mounts_and_contexts_to_bare_var_fails_dockerfile_canary_and_f
     assert deploy_guard_audit.dockerfile_canary_violations(
         [custom_compose], root=tmp_path
     ) == ["platform/98.custom_build: has Dockerfile but config hash reads 0 inputs"]
+    assert deploy_guard_audit.dockerfile_canary_violations([], root=tmp_path) == [
+        "dockerfile canary checked 0 composes; nothing to scan"
+    ]
 
 
 def test_audit_cli_includes_vault_agent_template_and_prints_per_root_breakdown(

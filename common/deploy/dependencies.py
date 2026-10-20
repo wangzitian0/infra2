@@ -25,6 +25,12 @@ from common.core.constants import REPO_ROOT
 
 _ROOT = REPO_ROOT
 DEFAULT_MANIFEST = _ROOT / "docs" / "ssot" / "deploy-dependencies.yaml"
+CANONICAL_SERVICE_ROOTS: tuple[str, ...] = (
+    "platform",
+    "finance_report",
+    "truealpha",
+    "bootstrap",
+)
 
 
 def service_key_from_path(file_path: str) -> str | None:

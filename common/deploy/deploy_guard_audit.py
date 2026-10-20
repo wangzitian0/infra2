@@ -26,15 +26,17 @@ from common.deploy.config_hash import (  # noqa: E402
     _compose_has_build,
 )
 from common.deploy.dependencies import (  # noqa: E402
+    CANONICAL_SERVICE_ROOTS,
     config_hash_input_count,
     fanout_coverage_violations,
     service_key_from_path,
 )
 
 # Canonical service roots whose layout service_key_from_path understands.
-_CANONICAL_SERVICE_ROOTS = ("platform", "finance_report", "truealpha", "bootstrap")
+_CANONICAL_SERVICE_ROOTS = CANONICAL_SERVICE_ROOTS
 _SERVICE_ROOTS = _CANONICAL_SERVICE_ROOTS
 _REQUIRED_SERVICE_ROOTS = _CANONICAL_SERVICE_ROOTS
+_COMPOSE_GLOB = "*compose*.y*ml"
 
 # Minimum (compose_count, input_count) per service root (#1123).
 # Prevents silent drop when a service directory is renamed without a dot,
@@ -47,35 +49,34 @@ _SERVICE_ROOT_FLOORS: dict[str, tuple[int, int]] = {
 }
 
 
-def find_service_composes(root: Path = ROOT) -> list[Path]:
-    """Every compose file in a service directory (including `*compose*.y*ml` templates)."""
+def _iter_compose_files(root: Path, service_roots: tuple[str, ...]) -> list[Path]:
     found: list[Path] = []
-    for service_root in _SERVICE_ROOTS:
+    for service_root in service_roots:
         base = root / service_root
         if not base.is_dir():
             continue
-        for compose in sorted(base.rglob("*compose*.y*ml")):
-            if compose.is_file() and service_key_from_path(
-                compose.relative_to(root).as_posix()
-            ):
+        for compose in sorted(base.rglob(_COMPOSE_GLOB)):
+            if compose.is_file():
                 found.append(compose)
     return found
 
 
+def find_service_composes(root: Path = ROOT) -> list[Path]:
+    """Every compose file in a service directory (including `*compose*.y*ml` templates)."""
+    return [
+        compose
+        for compose in _iter_compose_files(root, _SERVICE_ROOTS)
+        if service_key_from_path(compose.relative_to(root).as_posix())
+    ]
+
+
 def find_unmapped_composes(root: Path = ROOT) -> list[str]:
     """Compose files under `_REQUIRED_SERVICE_ROOTS` that `service_key_from_path` maps to None."""
-    unmapped: list[str] = []
-    for service_root in _REQUIRED_SERVICE_ROOTS:
-        base = root / service_root
-        if not base.is_dir():
-            continue
-        for compose in sorted(base.rglob("*compose*.y*ml")):
-            if not compose.is_file():
-                continue
-            rel = compose.relative_to(root).as_posix()
-            if service_key_from_path(rel) is None:
-                unmapped.append(rel)
-    return unmapped
+    return [
+        compose.relative_to(root).as_posix()
+        for compose in _iter_compose_files(root, _REQUIRED_SERVICE_ROOTS)
+        if service_key_from_path(compose.relative_to(root).as_posix()) is None
+    ]
 
 
 def service_root_counts(
@@ -102,6 +103,8 @@ def service_root_counts(
 
 def dockerfile_canary_violations(composes: list[Path], root: Path = ROOT) -> list[str]:
     """Ensure every deployed service with a `Dockerfile` or `build:` section reads at least one config-hash input (#1123)."""
+    if not composes:
+        return ["dockerfile canary checked 0 composes; nothing to scan"]
     resolved_root = root.resolve()
     violations: list[str] = []
     by_dir: dict[Path, list[Path]] = {}
