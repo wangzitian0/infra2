@@ -8,25 +8,7 @@ from __future__ import annotations
 
 from common.deploy import compose_id_drift as drift
 from common.deploy.env_config import ComposeTarget
-
-
-class FakeDokployLookup:
-    """Records find_compose_by_name calls and returns a scripted composeId."""
-
-    def __init__(self, compose_ids: dict[tuple[str, str, str], str | None]):
-        # {(compose_name, project_name, env_name): composeId-or-None-if-missing}
-        self._compose_ids = compose_ids
-        self.calls: list[tuple[str, str, str]] = []
-
-    def find_compose_by_name(self, name, project_name=None, env_name=None):
-        key = (name, project_name, env_name)
-        self.calls.append(key)
-        if key not in self._compose_ids:
-            raise AssertionError(f"unscripted find_compose_by_name call: {key}")
-        live_id = self._compose_ids[key]
-        if live_id is None:
-            return None
-        return {"composeId": live_id, "name": name}
+from common.tests.fakes import FakeDokployLookup
 
 
 def _target(

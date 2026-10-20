@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from common.tests.fakes import FakeDokployDeployments, FakeSecrets
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -158,41 +160,6 @@ def test_sync_skips_prod_only_service_on_non_production(monkeypatch) -> None:
     monkeypatch.setenv("DEPLOY_ENV", "production")
     prod = ObsDeployerProd.sync(MagicMock(), force=False)
     assert not (prod["action"] == "skipped" and "prod-only" in prod.get("details", ""))
-
-
-class FakeSecrets:
-    def __init__(self, values=None):
-        self.values = dict(values or {})
-        self.set_calls = []
-
-    def get(self, key):
-        return self.values.get(key)
-
-    def set(self, key, value):
-        self.values[key] = value
-        self.set_calls.append((key, value))
-        return True
-
-
-class FakeDokployDeployments:
-    def __init__(self, deployment_snapshots):
-        self.deployment_snapshots = list(deployment_snapshots)
-        self.deploy_calls = 0
-        self.redeploy_calls = 0
-
-    def deploy_compose(self, compose_id):
-        assert compose_id == "compose-1"
-        self.deploy_calls += 1
-
-    def redeploy_compose(self, compose_id):
-        assert compose_id == "compose-1"
-        self.redeploy_calls += 1
-
-    def get_compose(self, compose_id):
-        assert compose_id == "compose-1"
-        if self.deployment_snapshots:
-            return {"deployments": self.deployment_snapshots.pop(0)}
-        return {"deployments": []}
 
 
 class FakeDokployDeploymentApi(FakeDokployDeployments):
