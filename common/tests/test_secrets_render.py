@@ -91,7 +91,7 @@ def test_check_reports_a_stale_file(
     monkeypatch.setattr(secrets_render, "ROOT", tmp_path)
     service = secrets_render.Service("svc", "proj", "svc", ("m.json",))
     problems = secrets_render.check((service,))
-    assert len(problems) == 2 and "svc/secrets.ctmpl" in problems[0]
+    assert len(problems) == 3 and "svc/secrets.ctmpl" in problems[0]
     secrets_render.write((service,))
     assert secrets_render.check((service,)) == []
 

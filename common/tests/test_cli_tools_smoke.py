@@ -7,24 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from common.tests.fakes import FakeSecrets
 from tools import dokploy_env, env_tool, local_init
-
-
-class FakeSecrets:
-    def __init__(self, values=None, set_result=True):
-        self.values = dict(values or {})
-        self.set_result = set_result
-        self.set_calls = []
-
-    def get(self, key):
-        return self.values.get(key)
-
-    def set(self, key, value):
-        self.set_calls.append((key, value))
-        return self.set_result
-
-    def get_all(self):
-        return self.values
 
 
 class FakeDokployClient:
