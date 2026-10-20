@@ -117,7 +117,7 @@ docker compose up  # 包括 backend + frontend
 **位置**: VPS (Dokploy 临时隔离项目)  
 **用途**: PR 预览、功能验证、临时冒烟测试、0-downtime 验证  
 **特点**:
-- ✅ **临时部署** - PR 创建时自动部署，PR 合并后自动销毁
+- ✅ **临时部署** - PR 创建/更新时部署，合并或关闭后通过 `--down` 销毁
 - ✅ **独立域名** - `report-pr-123.zitian.party`
 - ✅ **独立数据** - `ENV_SUFFIX=-pr-123` 确保数据隔离
 - ✅ **0帧起手** - 验证从零开始部署的完整流程
@@ -135,13 +135,13 @@ python -m tools.deploy_v2 \
   --domain zitian.party
 ```
 
-**数据**: `/data/test/finance_report-pr-{PR_NUMBER}/` (自动清理)
+**数据**: 独立临时 PostgreSQL volume (`preview_db`，随 `--down` 清理)
 
 **域名**: `report-pr-{PR_NUMBER}.zitian.party`
 
 **生命周期**:
-- 创建: PR 提交时
-- 销毁: PR 合并或关闭后 7 天
+- 创建: PR 提交/手动触发 `--type preview/*`
+- 销毁: PR 关闭或手动触发 `--type preview/* --down` (`delete_volumes=True`)
 
 **测试点**:
 - ✅ 功能正确性
@@ -689,9 +689,8 @@ time python -m tools.deploy_v2 \
 
 ### 11.2 Preview Environments
 
-多别名 preview 已落地（§4.6）：`main` / `pr-<N>` / `commit-<sha7>` 三类别名各自一套
-带临时数据库的独立 compose 栈，经 `tools/deploy_v2` 操作（`--type preview/*` 拉起、`--down` 拆除，路由到 `common/deploy/preview` 后端）。未来可在此
-基础上扩展 feature-branch 别名（如 `report-feature-dark-mode.zitian.party`）。
+多别名 preview 已落地（§4.6）：`branch-<name>` / `pr-<N>` / `commit-<sha7>` / `tag-<slug>` 四类别名各自一套
+带临时数据库的独立 compose 栈，经 `tools/deploy_v2` 操作（`--type preview/*` 拉起、`--down` 拆除，路由到 `common/deploy/preview` 后端）。
 
 ---
 

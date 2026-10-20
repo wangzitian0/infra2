@@ -160,7 +160,7 @@ release tag 推送**自动晋升 staging**(promote-not-rebuild);**prod 是显式
 强制时序而非约定:**staging 先收敛 → soak → 人为放行 prod**(同一 tag)。高 MAJOR/风险发布 soak 更久。
 这把「打 tag」和「能动 prod」解耦——在未合并 feature 分支打 tag 既被来源守卫拒(§6),即便在 main 上也只自动到
 staging。(RC tag `v*.*.*-rc.N` + soak 窗口仍为目标态,见 §3.4。)
-只有 prod deploy 全部成功才记录 `docs/ssot/prod-marker.json` (#939) 与 `production/<release-tag>` marker；该 marker 是 prod desired
+只有 prod deploy 全部成功才记录 `production/<release-tag>` marker（`common/deploy/release_markers.py`，#939）；该 marker 是 prod desired
 state 的唯一可版本化指针，不是新的部署触发器。prod promotion 从上一个 marker 对应 release
 做累计 diff，而不是从前一个 staging candidate 开始，确保中间仅进 staging 的 release 不被跳过。
 首次迁移尚无 marker 时必须显式给出已知 production `before`；config drift 与 App production

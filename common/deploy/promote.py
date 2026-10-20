@@ -43,15 +43,12 @@ from common.deploy.preflight import (
     parse_env_var as _env_value,
     verify_token_status,
 )
+from common.deploy.dokploy_adapter import (
+    deployment_ids as _deployment_ids,
+    started_before_trigger,
+)
 from common.deploy.rollout import RolloutError, wait_for_deployment
 from infra2_sdk.deploy import default_http_get, poll_until_healthy
-
-# infra2#525: Dokploy deployment records carry no caller-supplied correlation id, so a
-# start-timestamp floor (captured just before OUR OWN deploy_compose() call) is the only
-# available signal that a "new" record belongs to a DIFFERENT, unrelated trigger rather
-# than to us. Allow a small margin for clock skew between this process and Dokploy's
-# server rather than excluding on an exact instant.
-_CLOCK_SKEW_TOLERANCE_SECONDS = 5
 
 
 @dataclass(frozen=True)
@@ -72,28 +69,11 @@ class DeployPlan:
     max_rollback_attempts: int = 2
 
 
-def _dep_id(deployment: dict) -> str:
-    return str(deployment.get("deploymentId") or deployment.get("id") or "")
-
-
-def _deployment_ids(deployments) -> set[str]:
-    return {_dep_id(d) for d in (deployments or []) if _dep_id(d)}
-
-
 def _started_before(deployment: dict, floor_epoch: float) -> bool:
-    """True if `deployment` has a parseable start timestamp that is clearly before
-    `floor_epoch` (beyond the clock-skew tolerance) — i.e. it cannot be the record our
-    own deploy_compose() call produced, because it started before we even called it.
-
-    A record with no parseable startedAt/createdAt/updatedAt is treated as AMBIGUOUS,
-    not excluded (returns False) — we only ever use this to rule a record OUT, never to
-    rule one in, so an unparseable timestamp preserves prior (pre-infra2#525) behavior
-    instead of introducing a new false-negative.
-    """
-    started = deployment_start_epoch(deployment)
-    if started is None:
-        return False
-    return started < floor_epoch - _CLOCK_SKEW_TOLERANCE_SECONDS
+    """Delegate start-timestamp floor filtering to dokploy_adapter.started_before_trigger."""
+    return started_before_trigger(
+        deployment, floor_epoch, start_epoch_fn=deployment_start_epoch
+    )
 
 
 def wait_for_rollout(
@@ -250,8 +230,6 @@ def preflight_vault_token(client, compose_id: str, *, min_ttl_hours: int = 48):
     form; this call site was the one #561 didn't cover, since it's phrased as a
     positional caller-supplied param rather than a URL built inline).
     """
-    from common.core.environ import infra_domain
-
     env_text = client.get_compose_env(compose_id)
     is_approle, token = extract_vault_token_from_env(env_text)
     if is_approle or not token:

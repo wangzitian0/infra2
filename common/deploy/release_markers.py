@@ -12,17 +12,17 @@ named 'infra2_sdk'` (run 34430724977, 2026-09-10).
 
 from __future__ import annotations
 
-import json
 import re
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-_SEMVER_TAG_RE = re.compile(r"\Av[0-9]+\.[0-9]+\.[0-9]+\Z")
+RELEASE_TAG_RE = re.compile(r"\Av[0-9]+\.[0-9]+\.[0-9]+\Z")
+_SEMVER_TAG_RE = RELEASE_TAG_RE
 #: Public: infra2_sdk.deploy builds its refusal message from both of these, so
 #: they are part of this module's surface rather than its internals (review on #684).
 PRODUCTION_MARKER_PREFIX = "production/"
-PROD_MARKER_FILE = "docs/ssot/prod-marker.json"
 # A production release also promotes the platform leg — truealpha/app carries
 # truealpha/data_engine — from the marker's checkout, and only v1.1.59 and later resolve
 # that image from the release's own DEPLOY_VERSION_REF (#632). Run against an older
@@ -62,42 +62,17 @@ def version_key(tag: str) -> tuple[int, ...]:
 def newest_release_tag(*, repo_root: str | Path, runner=subprocess.run) -> str:
     """The newest infra2 release merged into HEAD — the ref a staging deploy runs at."""
     for tag in _merged_release_tags("v*.*.*", repo_root=repo_root, runner=runner):
-        if _SEMVER_TAG_RE.fullmatch(tag):
+        if RELEASE_TAG_RE.fullmatch(tag):
             return tag
     raise ValueError("no released infra2 vX.Y.Z tag is merged into HEAD")
 
 
-def read_prod_marker_file(*, repo_root: str | Path) -> str | None:
-    """Read the explicit production marker from ``docs/ssot/prod-marker.json`` (#939)."""
-    path = Path(repo_root) / PROD_MARKER_FILE
-    if not path.is_file():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise ValueError(f"invalid {PROD_MARKER_FILE}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ValueError(f"invalid {PROD_MARKER_FILE}: expected JSON object")
-    release = str(
-        payload.get("release_tag") or payload.get("production_marker") or ""
-    ).strip()
-    if not release:
-        return None
-    cleaned = release.removeprefix(PRODUCTION_MARKER_PREFIX)
-    if not _SEMVER_TAG_RE.fullmatch(cleaned):
-        raise ValueError(f"invalid production marker {release!r} in {PROD_MARKER_FILE}")
-    return cleaned
-
-
 def production_marker(*, repo_root: str | Path, runner=subprocess.run) -> str:
-    """The release production is pinned to — the ref a production deploy runs at (#939)."""
-    file_marker = read_prod_marker_file(repo_root=repo_root)
-    if file_marker is not None:
-        return file_marker
+    """The release production is pinned to — the ref a production deploy runs at."""
     pattern = f"{PRODUCTION_MARKER_PREFIX}v*.*.*"
     for tag in _merged_release_tags(pattern, repo_root=repo_root, runner=runner):
         cleaned = tag.removeprefix(PRODUCTION_MARKER_PREFIX)
-        if _SEMVER_TAG_RE.fullmatch(cleaned):
+        if RELEASE_TAG_RE.fullmatch(cleaned):
             return cleaned
         raise ValueError(f"invalid production marker {tag!r}")
     raise ValueError(
@@ -139,29 +114,51 @@ class MarkerStatus:
         )
 
 
+def marker_status_from_tags(
+    releases: Sequence[str], markers: Sequence[str]
+) -> MarkerStatus:
+    """Compute MarkerStatus from candidate release tags and bare marker versions."""
+    valid_releases = sorted(
+        (tag for tag in releases if RELEASE_TAG_RE.fullmatch(tag)),
+        key=version_key,
+        reverse=True,
+    )
+    if not valid_releases:
+        raise ValueError("no released infra2 vX.Y.Z tag is merged into HEAD")
+    valid_markers = sorted(
+        (
+            m.removeprefix(PRODUCTION_MARKER_PREFIX)
+            for m in markers
+            if RELEASE_TAG_RE.fullmatch(m.removeprefix(PRODUCTION_MARKER_PREFIX))
+        ),
+        key=version_key,
+        reverse=True,
+    )
+    if not valid_markers:
+        raise ValueError(
+            "no production/vX.Y.Z marker is merged into HEAD; production IaC state is unknown"
+        )
+    marker = valid_markers[0]
+    marker_key = version_key(marker)
+    behind = sum(1 for tag in valid_releases if version_key(tag) > marker_key)
+    return MarkerStatus(marker, valid_releases[0], behind)
+
+
 def marker_status(*, repo_root: str | Path, runner=subprocess.run) -> MarkerStatus:
     """Both coordinates and the gap between them — the daily #650 lag report."""
     marker = production_marker(repo_root=repo_root, runner=runner)
-    releases = [
-        tag
-        for tag in _merged_release_tags("v*.*.*", repo_root=repo_root, runner=runner)
-        if _SEMVER_TAG_RE.fullmatch(tag)
-    ]
-    if not releases:
-        raise ValueError("no released infra2 vX.Y.Z tag is merged into HEAD")
-    marker_key = version_key(marker)
-    behind = sum(1 for tag in releases if version_key(tag) > marker_key)
-    return MarkerStatus(marker, releases[0], behind)
+    releases = _merged_release_tags("v*.*.*", repo_root=repo_root, runner=runner)
+    return marker_status_from_tags(releases, (marker,))
 
 
 __all__ = [
     "MINIMUM_PRODUCTION_MARKER",
     "MarkerStatus",
     "PRODUCTION_MARKER_PREFIX",
-    "PROD_MARKER_FILE",
+    "RELEASE_TAG_RE",
     "marker_status",
+    "marker_status_from_tags",
     "newest_release_tag",
     "production_marker",
-    "read_prod_marker_file",
     "version_key",
 ]

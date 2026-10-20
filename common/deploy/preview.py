@@ -46,7 +46,8 @@ from infra2_sdk.routing import PreviewStackCoordinates, derive_preview_coordinat
 
 from common.core.environ import infra_domain
 from common.deploy.compose_lock import compose_write_lock
-from common.deploy.promote import _deployment_ids, wait_for_rollout
+from common.deploy.dokploy_adapter import deployment_ids as _deployment_ids
+from common.deploy.promote import wait_for_rollout
 from common.deploy.env_config import (
     PREVIEW_ENVIRONMENT,
     PreviewAlias,

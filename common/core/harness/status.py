@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import http.client
 import json
-import re
 import subprocess
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -341,9 +340,9 @@ def _remote_marker_status(*, repo_root: Path, runner: Runner = subprocess.run) -
     """Read remote tags (`git ls-remote --tags origin`) for the infra2 row (#1289)."""
     from common.deploy.release_markers import (
         PRODUCTION_MARKER_PREFIX,
-        MarkerStatus,
+        RELEASE_TAG_RE,
         marker_status as read_markers,
-        version_key,
+        marker_status_from_tags,
     )
 
     def _fallback():
@@ -369,7 +368,6 @@ def _remote_marker_status(*, repo_root: Path, runner: Runner = subprocess.run) -
     )
     if result.returncode != 0 or not result.stdout.strip():
         return _fallback()
-    semver_re = re.compile(r"\Av[0-9]+\.[0-9]+\.[0-9]+\Z")
     releases: list[str] = []
     markers: list[str] = []
     for line in result.stdout.splitlines():
@@ -379,18 +377,13 @@ def _remote_marker_status(*, repo_root: Path, runner: Runner = subprocess.run) -
         ref = parts[1].removeprefix("refs/tags/")
         if ref.startswith(PRODUCTION_MARKER_PREFIX):
             cleaned = ref.removeprefix(PRODUCTION_MARKER_PREFIX)
-            if semver_re.fullmatch(cleaned):
+            if RELEASE_TAG_RE.fullmatch(cleaned):
                 markers.append(cleaned)
-        elif semver_re.fullmatch(ref):
+        elif RELEASE_TAG_RE.fullmatch(ref):
             releases.append(ref)
     if not releases or not markers:
         return _fallback()
-    releases.sort(key=version_key, reverse=True)
-    markers.sort(key=version_key, reverse=True)
-    marker = markers[0]
-    marker_key = version_key(marker)
-    behind = sum(1 for tag in releases if version_key(tag) > marker_key)
-    return MarkerStatus(marker, releases[0], behind)
+    return marker_status_from_tags(releases, markers)
 
 
 def _served(
@@ -461,7 +454,8 @@ def observe_online(
 ) -> WorkspaceStatus:
     """`status` plus what each repository serves online and its contract lock.
 
-    The network is read only through `fetcher`. infra2 is read from local git tags.
+    The network is read only through `fetcher`. infra2 is read from origin git tags
+    (falling back to local git tags when origin is unavailable).
     """
     entries = {entry["id"]: entry for entry in manifest["repositories"]}
     urls: list[str] = []

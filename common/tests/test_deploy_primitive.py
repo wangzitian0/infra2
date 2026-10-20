@@ -1565,3 +1565,13 @@ def test_verify_public_health_accepts_healthy_status_from_fastapi_init_service()
             ),
             _sleep=lambda _s: None,
         )
+
+
+def test_promote_reuses_dokploy_adapter_deployment_ids_ssot():
+    """SSOT guard: promote and preview share dokploy_adapter.deployment_ids rather than
+    maintaining duplicate _dep_id / _deployment_ids helpers."""
+    from common.deploy import dokploy_adapter, preview
+
+    assert dp._deployment_ids is dokploy_adapter.deployment_ids
+    assert preview._deployment_ids is dokploy_adapter.deployment_ids
+    assert not hasattr(dp, "_dep_id")
