@@ -25,6 +25,7 @@ from common.observability.scheduler_peer_liveness import BOUND_CAP_ENV
 
 ISSUE_LABELS = ("incident",)
 VERDICTS_ENV = "INFRA2_WATCHDOG_VERDICTS_PATH"
+SSH_OVERRIDE_ENV = "INFRA2_WATCHDOG_SSH_TARGETS_OVERRIDDEN"
 DRY_RUN_ENV = "WATCHDOG_DRY_RUN"
 
 WATCHDOG_SOURCE = "out-of-band-watchdog"
@@ -50,6 +51,7 @@ __all__ = [
     "OFF",
     "OPEN_ONLY",
     "RUNNER_HEALTH_SOURCE",
+    "SSH_OVERRIDE_ENV",
     "Trail",
     "VERDICTS_ENV",
     "WATCHDOG_SOURCE",
