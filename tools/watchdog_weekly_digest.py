@@ -7,11 +7,10 @@ operate identically.
 
 from __future__ import annotations
 
-import os
-import sys
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
+import sys
 from typing import Any
 from urllib.request import urlopen
 
@@ -37,10 +36,10 @@ from common.observability.digest import (  # noqa: E402
     WATCHDOG_JOB_NAME,
     WATCHDOG_RUNBOOK_URL,
     WORKFLOW_FILE,
-    _as_int,
     build_digest_card,
     build_digest_message,
     recent_weekly_runs,
+    run_digest_cli,
     summarize_stale_issues,
     summarize_watchdog_log_events,
     summarize_weekly_runs,
@@ -156,81 +155,15 @@ def main(
     env: Mapping[str, str] | None = None,
     argv: list[str] | None = None,
 ) -> int:
-    import argparse
-
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--daily",
-        action="store_true",
-        help="Generate a 1-day daily digest instead of a 7-day weekly digest.",
+    return run_digest_cli(
+        env,
+        argv,
+        runs_fetcher=fetch_recent_runs,
+        logs_fetcher=fetch_recent_run_logs,
+        health_fetcher=fetch_estate_app_health,
+        stale_fetcher=fetch_stale_open_issues,
+        deliverer=deliver_digest,
     )
-    parser.add_argument(
-        "--days",
-        type=int,
-        default=None,
-        help="Custom window in days (overrides --daily and WATCHDOG_DIGEST_WINDOW_DAYS).",
-    )
-    args = parser.parse_args(argv if argv is not None else [])
-
-    current_env = env or os.environ
-    repository = (current_env.get("GITHUB_REPOSITORY") or DEFAULT_REPOSITORY).strip()
-    token = current_env.get("GITHUB_TOKEN", "").strip()
-    if not token:
-        print("GITHUB_TOKEN is required for weekly digest generation")
-        return 1
-
-    window_days = (
-        args.days
-        or (DAILY_WINDOW_DAYS if args.daily else None)
-        or _as_int(current_env.get("WATCHDOG_DIGEST_WINDOW_DAYS"))
-        or DIGEST_WINDOW_DAYS
-    )
-    now = datetime.now(UTC)
-    runs = fetch_recent_runs(repository, token, now=now, window_days=window_days)
-    summary = summarize_weekly_runs(runs, now=now, window_days=window_days)
-    if current_env.get("WATCHDOG_DIGEST_REVIEW_LOGS", "1").strip().lower() not in {
-        "0",
-        "false",
-        "no",
-    }:
-        max_logs = _as_int(current_env.get("WATCHDOG_DIGEST_LOG_LIMIT")) or 25
-        logs = fetch_recent_run_logs(
-            repository,
-            token,
-            recent_weekly_runs(runs, now=now, window_days=window_days),
-            max_logs=max_logs,
-        )
-        summary["log_audit"] = summarize_watchdog_log_events(logs)
-    if current_env.get("WATCHDOG_DIGEST_ESTATE_HEALTH", "0").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-    }:
-        domain = (
-            current_env.get("INTERNAL_DOMAIN") or DEFAULT_INTERNAL_DOMAIN
-        ).strip()
-        summary["estate_apps"] = fetch_estate_app_health(domain)
-    if current_env.get("WATCHDOG_DIGEST_STALE_ISSUES", "1").strip().lower() not in {
-        "0",
-        "false",
-        "no",
-    }:
-        stale_days = (
-            _as_int(current_env.get("WATCHDOG_DIGEST_STALE_ISSUE_DAYS"))
-            or STALE_ISSUE_DAYS
-        )
-        stale = fetch_stale_open_issues(
-            repository, token, stale_days=stale_days, now=now
-        )
-        summary["stale_issues"] = summarize_stale_issues(stale)
-    message = build_digest_message(summary, repository)
-    card = build_digest_card(summary, repository)
-    if current_env.get("WATCHDOG_DIGEST_DRY_RUN") == "1":
-        print(message)
-        return 0
-    deliver_digest(current_env, message, card=card)
-    print(message)
-    return 0
 
 
 __all__ = [
