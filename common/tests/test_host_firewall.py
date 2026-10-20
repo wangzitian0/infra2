@@ -11,10 +11,15 @@ UNIT = (HOSTFW / "infra2-hostfw.service").read_text()
 SCRIPT = (HOSTFW / "hostfw.sh").read_text()
 
 
-def _set_elements(name: str) -> set[int]:
-    match = re.search(r"set %s \{[^}]*elements = \{([^}]*)\}" % name, RULES)
-    assert match, f"set {name} not found"
-    return {int(item) for item in match.group(1).replace(",", " ").split()}
+def _input_accepted_ports(proto: str) -> set[int]:
+    body = _chain("input")
+    ports: set[int] = set()
+    for match in re.finditer(
+        rf"\b{proto}\s+dport\s+(?:\{{([^}}]+)\}}|(\d+))\s+accept", body
+    ):
+        raw = match.group(1) or match.group(2)
+        ports.update(int(item) for item in raw.replace(",", " ").split())
+    return ports
 
 
 def _chain(name: str) -> str:
@@ -24,13 +29,15 @@ def _chain(name: str) -> str:
 
 
 def test_public_allow_list_is_ssh_and_traefik_only() -> None:
-    assert _set_elements("public_tcp") == {22, 80, 443}
+    assert "set public_tcp" not in RULES
+    assert "set public_udp" not in RULES
+    assert _input_accepted_ports("tcp") == {22, 80, 443}
     # 443: HTTP/3; 68/546: DHCP client replies.
-    assert _set_elements("public_udp") == {68, 443, 546}
+    assert _input_accepted_ports("udp") == {68, 443, 546}
 
 
 def test_admin_and_swarm_ports_are_not_public() -> None:
-    public = _set_elements("public_tcp") | _set_elements("public_udp")
+    public = _input_accepted_ports("tcp") | _input_accepted_ports("udp")
     # Dokploy UI, swarm control plane, gossip, VXLAN: all were reachable from the internet on 2026-09-17.
     assert not public & {3000, 2377, 7946, 4789}
 
@@ -55,6 +62,91 @@ def test_dokploy_port_is_dropped_before_dockers_forward_chain() -> None:
     )
     assert "iifname $PUBLIC_IF meta l4proto tcp ct original proto-dst 3000" in body
     assert "policy accept" in body, "the forward chain drops only the Dokploy port"
+
+
+def test_cloudflare_sets_gate_http_and_https_in_input_and_forward() -> None:
+    """#724-R1: 80/443 TCP and 443 UDP only allow @cf_ipv4/@cf_ipv6 in input and forward; 22 stays open."""
+    assert "set cf_ipv4 {" in RULES and "flags interval" in RULES
+    assert "set cf_ipv6 {" in RULES
+    assert "173.245.48.0/20" in RULES
+    assert "2400:cb00::/32" in RULES
+
+    input_body = _chain("input")
+    assert "tcp dport 22 accept" in input_body
+    assert "tcp dport @public_tcp accept" not in input_body
+    assert "ip saddr @cf_ipv4 tcp dport { 80, 443 } accept" in input_body
+    assert "ip6 saddr @cf_ipv6 tcp dport { 80, 443 } accept" in input_body
+    assert "ip saddr @cf_ipv4 udp dport 443 accept" in input_body
+    assert "ip6 saddr @cf_ipv6 udp dport 443 accept" in input_body
+
+    forward_body = _chain("forward")
+    assert (
+        "iifname $PUBLIC_IF ip saddr != @cf_ipv4 meta l4proto tcp ct original proto-dst { 80, 443 } counter drop"
+        in forward_body
+    )
+    assert (
+        "iifname $PUBLIC_IF ip6 saddr != @cf_ipv6 meta l4proto tcp ct original proto-dst { 80, 443 } counter drop"
+        in forward_body
+    )
+    assert (
+        "iifname $PUBLIC_IF ip saddr != @cf_ipv4 meta l4proto udp ct original proto-dst 443 counter drop"
+        in forward_body
+    )
+    assert (
+        "iifname $PUBLIC_IF ip6 saddr != @cf_ipv6 meta l4proto udp ct original proto-dst 443 counter drop"
+        in forward_body
+    )
+
+
+def test_refresh_cf_validates_and_updates_sets_atomically(tmp_path: Path) -> None:
+    """#724-R1: hostfw.sh refresh-cf supports --check and --apply with count and CIDR validation."""
+    import subprocess
+
+    v4_file = tmp_path / "ips-v4.txt"
+    v6_file = tmp_path / "ips-v6.txt"
+    v4_file.write_text(
+        "\n".join(
+            [
+                "173.245.48.0/20",
+                "103.21.244.0/22",
+                "103.22.200.0/22",
+                "103.31.4.0/22",
+                "141.101.64.0/18",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    v6_file.write_text(
+        "\n".join(["2400:cb00::/32", "2606:4700::/32", "2803:f800::/32"]) + "\n",
+        encoding="utf-8",
+    )
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "CF_IPS_V4_URL": f"file://{v4_file}",
+        "CF_IPS_V6_URL": f"file://{v6_file}",
+    }
+    res = subprocess.run(
+        ["bash", str(HOSTFW / "hostfw.sh"), "refresh-cf", "--check"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "Cloudflare IP sets verified (v4=5, v6=3)" in res.stdout
+
+    # Reject truncated list
+    v4_file.write_text("173.245.48.0/20\n", encoding="utf-8")
+    res_short = subprocess.run(
+        ["bash", str(HOSTFW / "hostfw.sh"), "refresh-cf", "--check"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res_short.returncode == 1
+    assert "too few entries" in res_short.stderr
 
 
 def test_rules_touch_only_their_own_table() -> None:

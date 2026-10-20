@@ -776,8 +776,10 @@ def setup_approle(c, project=None, service=None, deploy=True):
             hide=True,
             warn=True,
         )
+        issue_tag = str(time.time_ns())
         secret_id_res = c.run(
-            f"vault write -f -format=json auth/approle/role/{role}/secret-id",
+            f"vault write -format=json auth/approle/role/{role}/secret-id "
+            f'metadata=\'{{"secret_id_issue":"{issue_tag}"}}\'',
             env=venv,
             hide=True,
             warn=True,
@@ -805,6 +807,9 @@ def setup_approle(c, project=None, service=None, deploy=True):
         stale = [a for a in prior_accessors if a != new_accessor]
         if not _destroy_secret_ids(c, venv, role, stale):
             failed.append((target.project, target.service, "secret_id_destroy_failed"))
+            continue
+        if not _revoke_earlier_role_tokens(c, venv, role, issue_tag):
+            failed.append((target.project, target.service, "token_revoke_failed"))
 
     if failed:
         error("Some services failed:")
@@ -824,7 +829,11 @@ def _configure_dokploy_approle(
     try:
         compose = _redeploy_with_vault_creds(
             service,
-            {"VAULT_ROLE_ID": role_id, "VAULT_SECRET_ID": secret_id},
+            {
+                "VAULT_ROLE_ID": role_id,
+                "VAULT_SECRET_ID": secret_id,
+                "VAULT_ADDR": "http://vault:8200",
+            },
             project,
         )
         if compose is None:
@@ -983,4 +992,77 @@ def _destroy_secret_ids(
             ok = False
     if ok:
         success(f"   {role}: destroyed {len(accessors)} earlier secret id(s)")
+    return ok
+
+
+def _token_accessors(c, venv: dict[str, str]) -> list[str] | None:
+    """Return every token accessor from Vault, or None when Vault fails."""
+    res = c.run(
+        "vault list -format=json auth/token/accessors",
+        env=venv,
+        hide=True,
+        warn=True,
+    )
+    try:
+        data = json.loads(res.stdout or "")
+    except ValueError:
+        return None
+    if data == {}:
+        return []
+    if (
+        res.ok
+        and isinstance(data, list)
+        and all(isinstance(a, str) and _ACCESSOR_RE.match(a) for a in data)
+    ):
+        return data
+    return None
+
+
+def _revoke_earlier_role_tokens(
+    c, venv: dict[str, str], role: str, issue_tag: str
+) -> bool:
+    """Revoke every token of ``role`` whose ``secret_id_issue`` metadata tag differs."""
+    accessors = _token_accessors(c, venv)
+    if accessors is None:
+        error(f"   {role}: failed to list token accessors")
+        return False
+    ok = True
+    revoked = 0
+    for accessor in accessors:
+        lookup = c.run(
+            f"vault write -format=json auth/token/lookup-accessor accessor={accessor}",
+            env=venv,
+            hide=True,
+            warn=True,
+        )
+        if not lookup.ok:
+            # A token that expired between list and lookup is already gone.
+            if "invalid accessor" in (lookup.stderr or "").lower():
+                continue
+            error(f"   {role}: failed to inspect token accessor {accessor}")
+            ok = False
+            continue
+        try:
+            data = json.loads(lookup.stdout or "")["data"]
+        except (ValueError, KeyError, TypeError):
+            error(f"   {role}: unreadable token lookup for accessor {accessor}")
+            ok = False
+            continue
+        meta = data.get("meta")
+        if not isinstance(meta, dict) or meta.get("role_name") != role:
+            continue
+        if meta.get("secret_id_issue") == issue_tag:
+            continue
+        if not c.run(
+            f"vault write auth/token/revoke-accessor accessor={accessor}",
+            env=venv,
+            hide=True,
+            warn=True,
+        ).ok:
+            error(f"   {role}: failed to revoke token accessor {accessor}")
+            ok = False
+        else:
+            revoked += 1
+    if ok:
+        success(f"   {role}: revoked {revoked} earlier token(s)")
     return ok

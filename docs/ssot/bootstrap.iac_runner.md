@@ -806,6 +806,22 @@ invoke env.set WEBHOOK_SECRET=$new_secret \
 docker restart iac-runner
 ```
 
+**Rotate `OP_SERVICE_ACCOUNT_TOKEN` (#284)**:
+The `iac-runner` uses a dedicated 1Password Service Account scoped to read-only access on the `Infra2` vault. The token is stored in Vault at `secret/data/bootstrap/production/iac_runner` (`OP_SERVICE_ACCOUNT_TOKEN`) and rendered into `/vault/secrets/.env` by `iac-runner-vault-agent`.
+```bash
+# 1. Create a dedicated read-only service account for Infra2 in 1Password CLI/UI.
+# 2. Patch the token into Vault while preserving existing keys:
+vault kv patch secret/bootstrap/production/iac_runner \
+  OP_SERVICE_ACCOUNT_TOKEN="<new-service-account-token>"
+
+# 3. Restart the vault-agent sidecar and iac-runner container:
+docker restart iac-runner-vault-agent iac-runner
+
+# 4. Verify functional 1Password authentication:
+docker exec iac-runner op whoami
+curl -fsS https://iac.${INTERNAL_DOMAIN}/health | jq '.checks.op_service_account_token'
+```
+
 ---
 
 ## 9. 监控与告警

@@ -118,3 +118,34 @@ def test_op_health_first_call_after_init_runs_op_not_default_cache(monkeypatch):
     )
     assert ws.op_service_account_works() is True
     assert calls  # op actually ran on the first call (not the default cached False)
+
+
+def test_op_health_single_flights_concurrent_calls_on_stale_cache(monkeypatch):
+    """#284: concurrent /health hits on an expired cache run `op whoami` once."""
+    import threading
+
+    monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "sa-token")
+    ws = _load(monkeypatch, "ws_op_concurrent")
+    ws._op_health_cache.update({"ok": False, "at": float("-inf")})
+    barrier = threading.Barrier(4)
+    calls = []
+
+    def fake_run(cmd, **_k):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, b"{}", b"")
+
+    monkeypatch.setattr(ws.subprocess, "run", fake_run)
+    results = []
+
+    def worker():
+        barrier.wait(timeout=5)
+        results.append(ws.op_service_account_works())
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=5)
+
+    assert results == [True, True, True, True]
+    assert len(calls) == 1

@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly Cloudflare edge IP set refresh for infra2 hostfw
+
+[Timer]
+OnCalendar=Sun *-*-* 04:15:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

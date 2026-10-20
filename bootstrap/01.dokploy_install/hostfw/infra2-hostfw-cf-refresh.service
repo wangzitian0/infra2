@@ -1,0 +1,9 @@
+[Unit]
+Description=infra2 Cloudflare edge IP set refresh for hostfw
+After=network-online.target infra2-hostfw.service
+Wants=network-online.target
+Requires=infra2-hostfw.service
+
+[Service]
+Type=oneshot
+ExecStart=/etc/infra2/hostfw.sh refresh-cf --apply

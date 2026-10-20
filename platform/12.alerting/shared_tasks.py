@@ -350,6 +350,25 @@ def ensure_log_error_rule(
 
 
 @task
+def ensure_ssh_auth_alert_rule(c, dry_run=False):
+    """Ensure the SigNoz alert rule for SSH auth.log failure spikes routes to Feishu (#724-R2)."""
+    return ensure_log_error_rule.body(
+        c,
+        alert_name="HostSshAuthFailureSpike",
+        service_name="infra-host-ssh",
+        summary=(
+            "VPS /var/log/auth.log recorded at least 5 SSH authentication failures "
+            "(fail2ban threshold reached). Severity P1."
+        ),
+        severity="error",
+        threshold=0,
+        eval_window="5m0s",
+        frequency="1m",
+        dry_run=dry_run,
+    )
+
+
+@task
 def test_feishu(c, message="Infra2 Feishu alert bridge test"):
     """Send a test message through the deployed bridge."""
     from common.console import error, success
