@@ -256,17 +256,17 @@ def test_deliver_out_of_band_card_supports_app_webhook_and_fallback(
     monkeypatch.setattr(
         alerting,
         "deliver_feishu_app_card",
-        lambda **kw: (calls.append(("app_card", kw["chat_id"])) or {"code": 0}),
+        lambda **kw: calls.append(("app_card", kw["chat_id"])) or {"code": 0},
     )
     monkeypatch.setattr(
         alerting,
         "deliver_feishu_card",
-        lambda url, card, **kw: (calls.append(("webhook_card", url)) or {"code": 0}),
+        lambda url, card, **kw: calls.append(("webhook_card", url)) or {"code": 0},
     )
     monkeypatch.setattr(
         alerting,
         "deliver_feishu_text",
-        lambda url, text, **kw: (calls.append(("webhook_text", text)) or {"code": 0}),
+        lambda url, text, **kw: calls.append(("webhook_text", text)) or {"code": 0},
     )
 
     res_app = deliver_out_of_band_card(

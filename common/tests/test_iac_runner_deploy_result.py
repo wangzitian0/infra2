@@ -1278,13 +1278,17 @@ def test_iac_runner_bootstrap_deploy_script_is_scoped_to_runner_source() -> None
     assert "cat /secrets/.env" not in script
 
 
+_ALLOWED_CODE_DIR_GIT_VERBS = {"fetch", "checkout", "rev-parse"}
+_SHELL_OPERATOR_TOKENS = {"||", "&&", "|", ";", "&"}
+
+
 def _checked_out_paths(script: str) -> list[str]:
     """Paths of the one `git -C "$code_dir" checkout -f "$INFRA2_DEPLOY_SHA" -- <paths>`.
 
     shlex reads the shell quoting and drops a trailing comment. A comment line, or a
-    line that is not a command, never counts. The script may not check out twice or
-    rewrite the clone afterwards (reset, clean, restore, stash, switch): either could
-    put the old files back.
+    line that is not a command, never counts. The script may not check out twice, run
+    any git verb on `$code_dir` outside `_ALLOWED_CODE_DIR_GIT_VERBS`, `cd` into
+    `$code_dir`, or append shell operators to the checkout line (#1155).
     """
     prefix = ["git", "-C", "$code_dir", "checkout", "-f", "$INFRA2_DEPLOY_SHA", "--"]
     commands: list[list[str]] = []
@@ -1295,19 +1299,36 @@ def _checked_out_paths(script: str) -> list[str]:
             words = shlex.split(line, comments=True)
         except ValueError:  # part of a heredoc or an unbalanced quote: not our command
             continue
+        for index, word in enumerate(words):
+            cleaned = word.lstrip("(").rstrip(");")
+            if cleaned == "cd" and index + 1 < len(words):
+                target = words[index + 1].rstrip(");")
+                assert "$code_dir" not in target and "$compose_root" not in target, (
+                    f"the script must not cd into the clone: {words}"
+                )
         if words[:3] == ["git", "-C", "$code_dir"]:
             commands.append(words)
     checkouts = [words for words in commands if words[3:4] == ["checkout"]]
     assert len(checkouts) == 1, f"expected one checkout in the clone: {checkouts}"
-    rewrites = [
+    disallowed = [
         words
         for words in commands
-        if words[3:4] and words[3] in {"reset", "clean", "restore", "stash", "switch"}
+        if not words[3:4] or words[3] not in _ALLOWED_CODE_DIR_GIT_VERBS
     ]
-    assert not rewrites, f"the script rewrites the clone after the checkout: {rewrites}"
+    assert not disallowed, (
+        f"the script runs disallowed git verb(s) on the clone: {disallowed}"
+    )
     words = checkouts[0]
     assert words[: len(prefix)] == prefix, f"unexpected checkout command: {words}"
-    return [word.rstrip("/") for word in words[len(prefix) :]]
+    paths = [word.rstrip("/") for word in words[len(prefix) :]]
+    assert paths, "checkout command names no paths"
+    for path in paths:
+        assert (
+            path not in _SHELL_OPERATOR_TOKENS
+            and not any(op in path for op in _SHELL_OPERATOR_TOKENS)
+            and not path.startswith("-")
+        ), f"checkout line contains shell operator or flag in path list: {words}"
+    return paths
 
 
 def _copy_sources(dockerfile: str) -> list[str]:
@@ -1375,6 +1396,66 @@ def test_the_bootstrap_checkout_covers_every_path_the_runner_image_copies() -> N
                 f"{name}: COPY source {source!r} must name one file, not a directory "
                 "or a glob"
             )
+
+
+def _push_path_matches(rel: str, pattern: str) -> bool:
+    """True when repository-relative `rel` matches a GitHub Actions `on.push.paths` pattern."""
+    clean = pattern.rstrip("/")
+    if clean.endswith("/**"):
+        prefix = clean[:-3]
+        return rel == prefix or rel.startswith(prefix + "/")
+    return rel == clean
+
+
+def test_deploy_workflow_push_paths_cover_every_runner_dockerfile_copy_source() -> None:
+    """#1155: every file the runner image COPYs must match `deploy.yml` `on.push.paths`
+    so a change to `uv.lock` or `tools/sdk_requirement.py` triggers the bootstrap update."""
+    from common.deploy.config_hash import _dockerfile_copy_sources
+
+    spec = yaml.safe_load(DEPLOY_PLATFORM_WORKFLOW.read_text(encoding="utf-8"))
+    triggers = spec.get("on", spec.get(True)) or {}
+    push_paths = (triggers.get("push") or {}).get("paths") or []
+    assert push_paths, "deploy.yml declares no on.push.paths"
+
+    compose = yaml.safe_load((IAC_RUNNER / "compose.yaml").read_text(encoding="utf-8"))
+    builds = _service_builds(compose)
+    assert builds, "the compose file builds no image"
+    for name, build in builds:
+        context = (IAC_RUNNER / build["context"]).resolve()
+        dockerfile_path = context / build.get("dockerfile", "Dockerfile")
+        files = _dockerfile_copy_sources(dockerfile_path, context)
+        assert files, f"{name}: no COPY source found"
+        for path in files:
+            rel = path.relative_to(ROOT).as_posix()
+            assert any(_push_path_matches(rel, pat) for pat in push_paths), (
+                f"{rel} is COPYed by the {name} image but matches no on.push.paths "
+                f"entry in deploy.yml ({push_paths})"
+            )
+
+
+@pytest.mark.parametrize(
+    "mutated_script",
+    [
+        # 1. Subshell cd + git reset after checkout
+        BOOTSTRAP_DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        + '\n(cd "$code_dir" && git reset --hard HEAD)\n',
+        # 2. Disallowed git verb `read-tree` on $code_dir
+        BOOTSTRAP_DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        + '\ngit -C "$code_dir" read-tree --reset -u HEAD\n',
+        # 3. Appending `|| true` to the checkout line
+        BOOTSTRAP_DEPLOY_SCRIPT.read_text(encoding="utf-8").replace(
+            'git -C "$code_dir" checkout -f "$INFRA2_DEPLOY_SHA" -- bootstrap/06.iac_runner uv.lock tools/sdk_requirement.py',
+            'git -C "$code_dir" checkout -f "$INFRA2_DEPLOY_SHA" -- bootstrap/06.iac_runner uv.lock tools/sdk_requirement.py || true',
+        ),
+    ],
+    ids=["subshell_cd_reset", "git_read_tree", "checkout_or_true"],
+)
+def test_checked_out_paths_rejects_all_three_checkout_bypasses(
+    mutated_script: str,
+) -> None:
+    """#1155: all 3 checkout test bypasses must fail `_checked_out_paths`."""
+    with pytest.raises(AssertionError):
+        _checked_out_paths(mutated_script)
 
 
 def test_iac_runner_bootstrap_deploy_script_persists_dokploy_ownership() -> None:

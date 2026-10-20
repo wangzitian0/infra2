@@ -558,7 +558,8 @@ def test_the_watchdog_job_installs_what_the_backup_checks_import() -> None:
     installs = " ".join(
         step["run"] for step in job["steps"] if "pip install" in step.get("run", "")
     )
-    assert "PyYAML" in installs.split()
+    tokens = installs.split()
+    assert "PyYAML" in tokens or "." in tokens
 
 
 #: Top-level modules the watchdog job's `pip install httpx python-dotenv rich PyYAML`

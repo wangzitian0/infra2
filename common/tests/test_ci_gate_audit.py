@@ -401,3 +401,52 @@ def test_a_jobs_node_that_is_not_a_mapping_is_not_a_crash(tmp_path) -> None:
     path = tmp_path / "ok.yml"
     path.write_text("jobs:\n  build: {}\n", encoding="utf-8")
     assert _workflow_jobs(path) == ["build"], "the working case must still work"
+
+
+def test_merge_group_and_transitive_workflow_call_are_covered(tmp_path) -> None:
+    """#811: A workflow triggered by `merge_group` or called via local `uses: ./.github/workflows/...`
+    from a covered workflow enters `covered_workflows()` and fails `audit_gates` on unregistered jobs."""
+    assert "merge_group" in PR_TRIGGERS
+    root = _repo(
+        tmp_path,
+        {
+            "caller.yml": (
+                "on: pull_request\n"
+                "jobs:\n"
+                "  delegate:\n"
+                f"    uses: ./{WORKFLOWS_DIR}/reusable.yml\n"
+            ),
+            "reusable.yml": (
+                "on: workflow_call\n"
+                "jobs:\n"
+                "  inner-check:\n"
+                "    runs-on: ubuntu-latest\n"
+                "    steps: []\n"
+            ),
+            "merge-queue.yml": ("on: merge_group\njobs:\n  queue-gate: {}\n"),
+        },
+    )
+    covered = covered_workflows(root)
+    assert covered == (
+        f"{WORKFLOWS_DIR}/caller.yml",
+        f"{WORKFLOWS_DIR}/merge-queue.yml",
+        f"{WORKFLOWS_DIR}/reusable.yml",
+    )
+    report = audit_gates(
+        [
+            _gate(
+                id="infra_ci.caller_delegate",
+                workflow=f"{WORKFLOWS_DIR}/caller.yml",
+                job="delegate",
+            ),
+            _gate(
+                id="infra_ci.queue_gate",
+                workflow=f"{WORKFLOWS_DIR}/merge-queue.yml",
+                job="queue-gate",
+            ),
+        ],
+        root=root,
+        prefix="infra_ci.",
+        known_ci_workflows=covered,
+    )
+    assert report["unregistered_jobs"] == [f"{WORKFLOWS_DIR}/reusable.yml:inner-check"]

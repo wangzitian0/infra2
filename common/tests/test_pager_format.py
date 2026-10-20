@@ -352,7 +352,9 @@ def test_card_fields_are_separate_card_fields_in_the_shared_order(monkeypatch) -
         expected_short = {"级别", "环境", "对象", "开始于"}
         assert {
             label: field["is_short"]
-            for field, (_tag, label, _val) in zip(fields, _card_fields(card)[0], strict=True)
+            for field, (_tag, label, _val) in zip(
+                fields, _card_fields(card)[0], strict=True
+            )
         } == {label: (label in expected_short) for label in item}
         # values are plain text; only the runbook link is markup
         (block,) = _card_fields(card)

@@ -51,6 +51,9 @@ _BOOTSTRAP_TASKS = {
     "bootstrap/vault": None,
     "bootstrap/1password": None,
     "bootstrap/iac-runner": None,
+    "bootstrap/templates": None,
+    "finance_report/preview": None,
+    "truealpha/preview": None,
 }
 
 

@@ -291,3 +291,64 @@ def test_a_job_can_import_what_it_runs(workflow, job_id, module, declared) -> No
         f"job dies at ModuleNotFoundError. A module gained a transitive import and "
         f"the hand-written list did not move with it (#783)."
     )
+
+
+def test_ops_checks_jobs_do_not_hand_maintain_pip_install_lists() -> None:
+    """#800: `ops-checks.yml` jobs must install from `pyproject.toml` (`pip install -e .`
+    or `uv sync --locked`), never a hand-maintained `pip install <pkg1> <pkg2>` list."""
+    workflow = (
+        yaml.safe_load((WORKFLOWS / "ops-checks.yml").read_text(encoding="utf-8")) or {}
+    )
+    offenders: list[str] = []
+    for job_id, job in (workflow.get("jobs") or {}).items():
+        if not isinstance(job, dict):
+            continue
+        declared = _declared_distributions(job)
+        if declared is not None:
+            offenders.append(
+                f"ops-checks.yml:{job_id} declares hand-written list {sorted(declared)}"
+            )
+    assert offenders == [], "\n".join(offenders)
+
+
+def _unlocked_uv_invocations(
+    workflows_dir: Path, skip_files: set[str] = frozenset()
+) -> list[str]:
+    """Return `workflow:job:step:line` for any `uv run` or `uv sync` missing `--locked`/`--frozen`."""
+    violations: list[str] = []
+    for path in sorted(workflows_dir.glob("*.y*ml")):
+        if path.name in skip_files:
+            continue
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_id, job in (workflow.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            for step in job.get("steps") or []:
+                run = str(step.get("run") or "").replace("\\\n", " ")
+                for raw_line in run.splitlines():
+                    line = raw_line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if re.search(r"\buv\s+(?:run|sync)\b", line):
+                        if "--locked" not in line and "--frozen" not in line:
+                            violations.append(f"{path.name}:{job_id}:{line}")
+    return violations
+
+
+def test_workflows_outside_infra_ci_use_locked_or_frozen_on_uv_run_and_sync(
+    tmp_path: Path,
+) -> None:
+    """#1145: `uv run` and `uv sync` in workflows must carry `--locked` or `--frozen`
+    so a stale `uv.lock` fails loudly instead of silently re-resolving."""
+    # Note: infra-ci.yml is in the permanent owner-held set and is updated in PR-B.
+    violations = _unlocked_uv_invocations(WORKFLOWS, skip_files={"infra-ci.yml"})
+    assert violations == [], "Unlocked uv invocations:\n" + "\n".join(violations)
+
+    # Mutation proof: an unlocked `uv run` in a synthetic workflow is caught.
+    (tmp_path / "bad.yml").write_text(
+        "jobs:\n  apply:\n    steps:\n      - run: uv run python tools/probe.py\n",
+        encoding="utf-8",
+    )
+    assert _unlocked_uv_invocations(tmp_path) == [
+        "bad.yml:apply:uv run python tools/probe.py"
+    ]

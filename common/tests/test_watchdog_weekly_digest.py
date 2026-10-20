@@ -457,7 +457,10 @@ def test_build_digest_card_and_estate_app_health(monkeypatch) -> None:
     assert apps[0]["parity"] == "ahead_or_drift"
     assert apps[1]["app"] == "truealpha"
     assert apps[1]["production"]["url"] == "https://truealpha.club/api/health"
-    assert apps[1]["staging"]["url"] == "https://truealpha-staging.truealpha.club/api/health"
+    assert (
+        apps[1]["staging"]["url"]
+        == "https://truealpha-staging.truealpha.club/api/health"
+    )
     assert apps[1]["parity"] == "in_sync"
 
     summary = {
@@ -552,5 +555,3 @@ def test_build_digest_card_and_estate_app_health(monkeypatch) -> None:
         "activation",
         "core-funnel",
     ]
-
-

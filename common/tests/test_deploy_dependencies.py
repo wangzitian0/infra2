@@ -407,7 +407,8 @@ def test_shipped_manifest_has_no_fanout_coverage_violations():
 
 
 def test_alerting_dockerfile_copies_common_and_tools():
-    """#1270: alerting's image must COPY common and tools."""
+    """#1270, #967: alerting's image must install base PyPI dependencies before COPY uv.lock
+    so lockfile bumps do not invalidate the third-party layer cache, and must COPY common and tools."""
     from pathlib import Path
 
     dockerfile = (
@@ -419,3 +420,8 @@ def test_alerting_dockerfile_copies_common_and_tools():
     ):
         assert required in dockerfile
     assert "COPY libs" not in dockerfile
+    base_pip_idx = dockerfile.index("RUN pip install --no-cache-dir httpx")
+    copy_lock_idx = dockerfile.index("COPY uv.lock tools/sdk_requirement.py /tmp/sdk/")
+    assert base_pip_idx < copy_lock_idx, (
+        "base PyPI dependencies must be installed before COPY uv.lock so lockfile bumps reuse the layer cache (#967)"
+    )

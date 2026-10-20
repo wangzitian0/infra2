@@ -337,7 +337,9 @@ def build_stability_card(
     if degraded:
         lines = ["**Lowest availability signals**"]
         for signal in degraded:
-            domain = f" `[{signal['last_domain']}]`" if signal.get("last_domain") else ""
+            domain = (
+                f" `[{signal['last_domain']}]`" if signal.get("last_domain") else ""
+            )
             checks = signal["ok"] + signal["fail"]
             lines.append(
                 f"• `{signal['id']}`: **{signal['uptime_pct']}%** "
@@ -345,11 +347,15 @@ def build_stability_card(
             )
         sections.append("\n".join(lines))
     else:
-        sections.append("✅ **All monitored signals held 100% availability this window.**")
+        sections.append(
+            "✅ **All monitored signals held 100% availability this window.**"
+        )
     staging_items = [line for line in staging_lines if line]
     if staging_items:
         hr_after.add(len(sections) - 1)
-        sections.append("\n".join(f"**Secondary Env**: {line}" for line in staging_items))
+        sections.append(
+            "\n".join(f"**Secondary Env**: {line}" for line in staging_items)
+        )
     actions = [
         ("打开 SigNoz", signoz_url, "primary"),
         ("查看 Runbook", runbook_url, "default"),

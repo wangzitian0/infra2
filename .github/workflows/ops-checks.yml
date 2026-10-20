@@ -16,8 +16,8 @@ name: Ops Checks
   push:
     branches: [main]
     paths:
-      - "common/dokploy*.py"
-      - "common/vault_self_refresh_audit.py"
+      - "common/deploy/dokploy*.py"
+      - "common/security/vault_self_refresh_audit.py"
       - "tools/facet_reconcile.py"
       - "tools/dokploy_config_drift.py"
       - "tools/secrets_reconcile.py"
@@ -27,33 +27,26 @@ name: Ops Checks
       - "tools/deploy_v2_canary.py"
       - "common/deploy/preview.py"
       - "common/deploy/rollout.py"
-      - "common/deploy_contract.py"
-      - "common/deploy_env_config.py"
       - "common/deploy/contract.py"
       - "common/deploy/env_config.py"
       - "tools/resolve_deploy_ref.py"
       - "common/deploy/refs.py"
-      - "common/dokploy.py"
       - "common/deploy/dokploy_client.py"
       - "pyproject.toml"
       - "uv.lock"
       - "tools/sdk_requirement.py"
       - "finance_report/finance_report/preview/**"
       - ".github/workflows/ops-checks.yml"
-      - "docs/project/Infra-011.reliability_hardening.md"
   pull_request:
     paths:
       - "tools/deploy_v2.py"
       - "tools/deploy_v2_canary.py"
       - "common/deploy/preview.py"
       - "common/deploy/rollout.py"
-      - "common/deploy_contract.py"
-      - "common/deploy_env_config.py"
       - "common/deploy/contract.py"
       - "common/deploy/env_config.py"
       - "tools/resolve_deploy_ref.py"
       - "common/deploy/refs.py"
-      - "common/dokploy.py"
       - "common/deploy/dokploy_client.py"
       - "pyproject.toml"
       - "uv.lock"
@@ -171,7 +164,8 @@ jobs:
       - name: Install dependencies
         run: |
           sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install invoke httpx python-dotenv rich PyYAML "$sdk_requirement"
+          python -m pip install --no-deps "$sdk_requirement"
+          python -m pip install -e .
 
       - name: Audit deploy fan-out coverage (sufficiency)
         run: python tools/deploy_guard_audit.py
@@ -272,10 +266,10 @@ jobs:
           python-version: "3.11"
 
       - name: Install Python dependencies
-        # PyYAML: the backup checks derive the BackupFacet inventory (#895).
         run: |
           sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install httpx python-dotenv rich PyYAML "$sdk_requirement"
+          python -m pip install --no-deps "$sdk_requirement"
+          python -m pip install -e .
 
       - name: Configure SSH key
         if: env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != ''
@@ -415,13 +409,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      # httpx: tools/out_of_band_watchdog imports the Dokploy client, and both the
-      # stability report and the failure alert below import that module. Without it
-      # the failure alert died on ModuleNotFoundError (measured 2026-09-24, #904).
       - name: Install Python dependencies
         run: |
           sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install httpx python-dotenv rich "$sdk_requirement"
+          python -m pip install --no-deps "$sdk_requirement"
+          python -m pip install -e .
 
       - name: Configure SSH key
         env:
@@ -511,7 +503,8 @@ jobs:
       - name: Install runtime dependencies
         run: |
           sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install httpx python-dotenv rich "$sdk_requirement"
+          python -m pip install --no-deps "$sdk_requirement"
+          python -m pip install -e .
 
       - name: Run deploy_v2 canary
         env:
@@ -604,7 +597,8 @@ jobs:
       - name: Install runtime dependencies
         run: |
           sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install httpx python-dotenv rich "$sdk_requirement"
+          python -m pip install --no-deps "$sdk_requirement"
+          python -m pip install -e .
 
       - name: Detect leaked previews
         run: |
@@ -676,7 +670,8 @@ jobs:
       - name: Install runtime dependencies
         run: |
           sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install httpx python-dotenv rich "$sdk_requirement"
+          python -m pip install --no-deps "$sdk_requirement"
+          python -m pip install -e .
 
       - name: Re-ensure the host-hygiene Dokploy schedule
         run: |
@@ -764,7 +759,8 @@ jobs:
       - name: Install runtime dependencies
         run: |
           sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install httpx python-dotenv rich PyYAML invoke "$sdk_requirement"
+          python -m pip install --no-deps "$sdk_requirement"
+          python -m pip install -e .
 
       - name: Run facet reconcile
         run: |
@@ -892,7 +888,8 @@ jobs:
       - name: Install runtime dependencies
         run: |
           sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install httpx python-dotenv rich PyYAML invoke "$sdk_requirement"
+          python -m pip install --no-deps "$sdk_requirement"
+          python -m pip install -e .
 
       - name: Configure SSH key
         env:
@@ -1048,7 +1045,8 @@ jobs:
       - name: Install runtime dependencies
         run: |
           sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install httpx python-dotenv rich PyYAML invoke "$sdk_requirement"
+          python -m pip install --no-deps "$sdk_requirement"
+          python -m pip install -e .
       - name: Configure SSH key
         env:
           INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}

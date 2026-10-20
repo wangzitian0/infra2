@@ -471,8 +471,8 @@ def test_deploy_canary_installs_the_declared_sdk_requirement() -> None:
 
     assert 'sdk_requirement="$(python tools/sdk_requirement.py)"' in install_command
     assert (
-        'python -m pip install httpx python-dotenv rich "$sdk_requirement"'
-        in install_command
+        'python -m pip install --no-deps "$sdk_requirement"' in install_command
+        and "python -m pip install -e ." in install_command
     )
     for event in ("push", "pull_request"):
         paths = workflow["on"][event]["paths"]

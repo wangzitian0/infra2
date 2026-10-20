@@ -26,6 +26,8 @@ on:
     paths:
       - "bootstrap/06.iac_runner/**"
       - "scripts/deploy_iac_runner_bootstrap.sh"
+      - "uv.lock"
+      - "tools/sdk_requirement.py"
       - ".github/workflows/deploy.yml"
   workflow_dispatch:
     inputs:
