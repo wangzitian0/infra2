@@ -17,7 +17,7 @@ stale, and the container flips unhealthy -> Dokploy restarts it (#163/#475
 monitor-the-monitor; the standalone sidecars had no healthcheck at all).
 See common/observability/watchers/resident.py for the plugin surface + timing budget.
 """
-# alert-delivery-exempt: the probe ENGINE — delivers on behalf of every registered internal probe signal (per-spec, not per-module)
+# alert-delivery-exempt: the probe ENGINE — delivers on behalf of every registered internal probe signal (per-spec, not per-module); review=2027-04-01
 
 from __future__ import annotations
 
