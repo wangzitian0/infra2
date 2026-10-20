@@ -1290,7 +1290,7 @@ class Deployer:
         if not token:
             return {"valid": True, "error": None, "details": "No VAULT_APP_TOKEN found"}
 
-        vault_addr = e.get("VAULT_ADDR", "http://127.0.0.1:8200")
+        vault_addr = e.get("VAULT_ADDR", "http://vault:8200")
         return verify_token_status(
             token, vault_addr=vault_addr, min_ttl_hours=24, verifier=verify_vault_token
         )

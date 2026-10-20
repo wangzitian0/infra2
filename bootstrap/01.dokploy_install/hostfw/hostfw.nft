@@ -60,17 +60,6 @@ table inet infra2_hostfw {
 		}
 	}
 
-	set public_tcp {
-		type inet_service
-		elements = { 22, 80, 443 }
-	}
-
-	# 443: HTTP/3 on Traefik. 68/546: DHCPv4/DHCPv6 client replies.
-	set public_udp {
-		type inet_service
-		elements = { 68, 443, 546 }
-	}
-
 	# Host-bound traffic arriving on the public interface: allow-list, default drop.
 	chain input {
 		type filter hook input priority filter; policy accept;

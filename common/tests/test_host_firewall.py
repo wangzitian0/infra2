@@ -11,10 +11,15 @@ UNIT = (HOSTFW / "infra2-hostfw.service").read_text()
 SCRIPT = (HOSTFW / "hostfw.sh").read_text()
 
 
-def _set_elements(name: str) -> set[int]:
-    match = re.search(r"set %s \{[^}]*elements = \{([^}]*)\}" % name, RULES)
-    assert match, f"set {name} not found"
-    return {int(item) for item in match.group(1).replace(",", " ").split()}
+def _input_accepted_ports(proto: str) -> set[int]:
+    body = _chain("input")
+    ports: set[int] = set()
+    for match in re.finditer(
+        rf"\b{proto}\s+dport\s+(?:\{{([^}}]+)\}}|(\d+))\s+accept", body
+    ):
+        raw = match.group(1) or match.group(2)
+        ports.update(int(item) for item in raw.replace(",", " ").split())
+    return ports
 
 
 def _chain(name: str) -> str:
@@ -24,13 +29,15 @@ def _chain(name: str) -> str:
 
 
 def test_public_allow_list_is_ssh_and_traefik_only() -> None:
-    assert _set_elements("public_tcp") == {22, 80, 443}
+    assert "set public_tcp" not in RULES
+    assert "set public_udp" not in RULES
+    assert _input_accepted_ports("tcp") == {22, 80, 443}
     # 443: HTTP/3; 68/546: DHCP client replies.
-    assert _set_elements("public_udp") == {68, 443, 546}
+    assert _input_accepted_ports("udp") == {68, 443, 546}
 
 
 def test_admin_and_swarm_ports_are_not_public() -> None:
-    public = _set_elements("public_tcp") | _set_elements("public_udp")
+    public = _input_accepted_ports("tcp") | _input_accepted_ports("udp")
     # Dokploy UI, swarm control plane, gossip, VXLAN: all were reachable from the internet on 2026-09-17.
     assert not public & {3000, 2377, 7946, 4789}
 
