@@ -73,7 +73,9 @@ def _check_exemption_expiry(
     try:
         review_date = datetime.date.fromisoformat(match.group(1))
     except ValueError:
-        return f"{target}: invalid review date '{match.group(1)}' in exemption annotation"
+        return (
+            f"{target}: invalid review date '{match.group(1)}' in exemption annotation"
+        )
     if review_date < today:
         return (
             f"{target}: exemption expired on {review_date.isoformat()} "

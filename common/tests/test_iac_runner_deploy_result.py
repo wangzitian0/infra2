@@ -1303,8 +1303,18 @@ def _checked_out_paths(script: str) -> list[str]:
             cleaned = word.lstrip("(").rstrip(");")
             if cleaned == "cd" and index + 1 < len(words):
                 target = words[index + 1].rstrip(");")
-                assert "$code_dir" not in target and "$compose_root" not in target, (
+                assert "code_dir" not in target and "compose_root" not in target, (
                     f"the script must not cd into the clone: {words}"
+                )
+            if cleaned == "git" and any(
+                "code_dir" in w or "compose_root" in w for w in words[index + 1 :]
+            ):
+                assert words[index : index + 3] == [
+                    "git",
+                    "-C",
+                    "$code_dir",
+                ], (
+                    f'git on the clone must use exact `git -C "$code_dir"` prefix: {words}'
                 )
         if words[:3] == ["git", "-C", "$code_dir"]:
             commands.append(words)
@@ -1447,8 +1457,16 @@ def test_deploy_workflow_push_paths_cover_every_runner_dockerfile_copy_source() 
             'git -C "$code_dir" checkout -f "$INFRA2_DEPLOY_SHA" -- bootstrap/06.iac_runner uv.lock tools/sdk_requirement.py',
             'git -C "$code_dir" checkout -f "$INFRA2_DEPLOY_SHA" -- bootstrap/06.iac_runner uv.lock tools/sdk_requirement.py || true',
         ),
+        # 4. Aliasing via --git-dir / --work-tree instead of `git -C "$code_dir"`
+        BOOTSTRAP_DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        + '\ngit --git-dir="$code_dir/.git" --work-tree="$code_dir" checkout -f HEAD -- .\n',
     ],
-    ids=["subshell_cd_reset", "git_read_tree", "checkout_or_true"],
+    ids=[
+        "subshell_cd_reset",
+        "git_read_tree",
+        "checkout_or_true",
+        "git_dir_flag_alias",
+    ],
 )
 def test_checked_out_paths_rejects_all_three_checkout_bypasses(
     mutated_script: str,

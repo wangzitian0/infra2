@@ -251,7 +251,7 @@ def test_workflow_path_filter_guard_rejects_deleted_literal_and_empty_glob(
         "      - 'common/alerting/**'\n",
         encoding="utf-8",
     )
-    tracked = {"common/alerting/signoz.py"}
+    tracked = {"common/alerting/sub/signoz.py"}
     assert _workflow_path_filter_violations(wf_dir, tracked) == [
         "example.yml:push:paths:common/alerting.py does not exist",
         "example.yml:push:paths:common/dokploy*.py matches no tracked file",

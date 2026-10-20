@@ -173,7 +173,7 @@ def test_renaming_service_dir_without_dot_fails_unmapped_and_floor_guards(
 def test_truncating_service_roots_fails_audit(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Case 5: Setting `_SERVICE_ROOTS = ('bootstrap',)` fails `audit()` and `main()`."""
+    """Case 5: Setting `_SERVICE_ROOTS = ('bootstrap',)` or emptying `_SERVICE_ROOT_FLOORS` fails `audit()` and `main()`."""
     monkeypatch.setattr(deploy_guard_audit, "_SERVICE_ROOTS", ("bootstrap",))
     violations = deploy_guard_audit.audit()
     assert any(
@@ -185,6 +185,19 @@ def test_truncating_service_roots_fails_audit(
     assert deploy_guard_audit.main() == 1
     out = capsys.readouterr().out
     assert "_SERVICE_ROOTS is missing required service roots" in out
+
+    monkeypatch.setattr(
+        deploy_guard_audit,
+        "_SERVICE_ROOTS",
+        ("platform", "finance_report", "truealpha", "bootstrap"),
+    )
+    monkeypatch.setattr(deploy_guard_audit, "_SERVICE_ROOT_FLOORS", {})
+    floor_errs = deploy_guard_audit.audit()
+    assert any(
+        "_SERVICE_ROOT_FLOORS is missing required service roots" in v
+        for v in floor_errs
+    )
+    assert deploy_guard_audit.main() == 1
 
 
 def test_rewriting_mounts_and_contexts_to_bare_var_fails_dockerfile_canary_and_floors(
@@ -224,6 +237,21 @@ def test_rewriting_mounts_and_contexts_to_bare_var_fails_dockerfile_canary_and_f
         for v in violations
     )
     assert deploy_guard_audit.main(root=tmp_path) == 1
+
+    # Also verify a service with a custom `dockerfile: Dockerfile.custom` (and no literal `Dockerfile`) is caught by the canary when its context is unresolvable.
+    custom_dir = tmp_path / "platform" / "98.custom_build"
+    custom_dir.mkdir(parents=True)
+    (custom_dir / "Dockerfile.custom").write_text(
+        "FROM alpine:3.19\n", encoding="utf-8"
+    )
+    custom_compose = custom_dir / "compose.yaml"
+    custom_compose.write_text(
+        "services:\n  custom:\n    build:\n      context: ${UNSET_CTX}\n      dockerfile: Dockerfile.custom\n",
+        encoding="utf-8",
+    )
+    assert deploy_guard_audit.dockerfile_canary_violations(
+        [custom_compose], root=tmp_path
+    ) == ["platform/98.custom_build: has Dockerfile but config hash reads 0 inputs"]
 
 
 def test_audit_cli_includes_vault_agent_template_and_prints_per_root_breakdown(
