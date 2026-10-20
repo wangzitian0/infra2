@@ -379,6 +379,235 @@
       "softMax": null,
       "selectedLogFields": null,
       "selectedTracesFields": null
+    },
+    {
+      "id": "ai-provider-latency-p95",
+      "title": "AI provider call latency p95 by model",
+      "description": "p95 of finance.ai_provider.latency (ms) grouped by model and endpoint.",
+      "panelTypes": "graph",
+      "yAxisUnit": "ms",
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "queryName": "A",
+              "dataSource": "metrics",
+              "aggregations": [
+                {
+                  "expression": "p95(finance.ai_provider.latency)"
+                }
+              ],
+              "filter": {
+                "expression": "(service.name = 'finance-report-backend' AND deployment.environment IN $deployment_environment)"
+              },
+              "groupBy": [
+                {
+                  "dataType": "string",
+                  "key": "model",
+                  "type": "tag"
+                },
+                {
+                  "dataType": "string",
+                  "key": "endpoint",
+                  "type": "tag"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "expression": "A",
+              "disabled": false,
+              "stepInterval": 60,
+              "legend": "{{model}} ({{endpoint}})"
+            }
+          ]
+        },
+        "queryType": "builder"
+      },
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "timePreferance": "GLOBAL_TIME",
+      "softMin": null,
+      "softMax": null,
+      "selectedLogFields": null,
+      "selectedTracesFields": null
+    },
+    {
+      "id": "statement-parse-outcomes",
+      "title": "Statement parse outcomes (success vs failure)",
+      "description": "Count of finance.statement_parse.outcome grouped by outcome.",
+      "panelTypes": "graph",
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "queryName": "A",
+              "dataSource": "metrics",
+              "aggregations": [
+                {
+                  "expression": "sum(finance.statement_parse.outcome)"
+                }
+              ],
+              "filter": {
+                "expression": "(service.name = 'finance-report-backend' AND deployment.environment IN $deployment_environment)"
+              },
+              "groupBy": [
+                {
+                  "dataType": "string",
+                  "key": "outcome",
+                  "type": "tag"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "expression": "A",
+              "disabled": false,
+              "stepInterval": 60,
+              "legend": "{{outcome}}"
+            }
+          ]
+        },
+        "queryType": "builder"
+      },
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "timePreferance": "GLOBAL_TIME",
+      "softMin": null,
+      "softMax": null,
+      "selectedLogFields": null,
+      "selectedTracesFields": null
+    },
+    {
+      "id": "confidence-north-star",
+      "title": "Extraction confidence north-star p50",
+      "description": "Median extraction confidence score (finance.confidence_north_star, 0-100) for statement parsing.",
+      "panelTypes": "graph",
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "queryName": "A",
+              "dataSource": "metrics",
+              "aggregations": [
+                {
+                  "expression": "p50(finance.confidence_north_star)"
+                }
+              ],
+              "filter": {
+                "expression": "(service.name = 'finance-report-backend' AND deployment.environment IN $deployment_environment)"
+              },
+              "having": {
+                "expression": ""
+              },
+              "expression": "A",
+              "disabled": false,
+              "stepInterval": 60,
+              "legend": "confidence p50"
+            }
+          ]
+        },
+        "queryType": "builder"
+      },
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "timePreferance": "GLOBAL_TIME",
+      "softMin": null,
+      "softMax": null,
+      "selectedLogFields": null,
+      "selectedTracesFields": null
+    },
+    {
+      "id": "reconciliation-match-outcomes",
+      "title": "Reconciliation match outcomes",
+      "description": "Count of finance.reconciliation.match.outcome grouped by outcome (auto_accepted, pending_review, accepted, rejected, superseded).",
+      "panelTypes": "graph",
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "queryName": "A",
+              "dataSource": "metrics",
+              "aggregations": [
+                {
+                  "expression": "sum(finance.reconciliation.match.outcome)"
+                }
+              ],
+              "filter": {
+                "expression": "(service.name = 'finance-report-backend' AND deployment.environment IN $deployment_environment)"
+              },
+              "groupBy": [
+                {
+                  "dataType": "string",
+                  "key": "outcome",
+                  "type": "tag"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "expression": "A",
+              "disabled": false,
+              "stepInterval": 60,
+              "legend": "{{outcome}}"
+            }
+          ]
+        },
+        "queryType": "builder"
+      },
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "timePreferance": "GLOBAL_TIME",
+      "softMin": null,
+      "softMax": null,
+      "selectedLogFields": null,
+      "selectedTracesFields": null
+    },
+    {
+      "id": "financial-invariant-violations",
+      "title": "Financial invariant violations",
+      "description": "Count of finance.invariant.violation grouped by violation kind (must remain zero).",
+      "panelTypes": "graph",
+      "query": {
+        "builder": {
+          "queryData": [
+            {
+              "queryName": "A",
+              "dataSource": "metrics",
+              "aggregations": [
+                {
+                  "expression": "sum(finance.invariant.violation)"
+                }
+              ],
+              "filter": {
+                "expression": "(service.name = 'finance-report-backend' AND deployment.environment IN $deployment_environment)"
+              },
+              "groupBy": [
+                {
+                  "dataType": "string",
+                  "key": "kind",
+                  "type": "tag"
+                }
+              ],
+              "having": {
+                "expression": ""
+              },
+              "expression": "A",
+              "disabled": false,
+              "stepInterval": 60,
+              "legend": "{{kind}}"
+            }
+          ]
+        },
+        "queryType": "builder"
+      },
+      "opacity": "1",
+      "nullZeroValues": "zero",
+      "timePreferance": "GLOBAL_TIME",
+      "softMin": null,
+      "softMax": null,
+      "selectedLogFields": null,
+      "selectedTracesFields": null
     }
   ],
   "layout": [
@@ -458,6 +687,51 @@
       "i": "fe-exceptions",
       "x": 0,
       "y": 24,
+      "w": 6,
+      "h": 6,
+      "moved": false,
+      "static": false
+    },
+    {
+      "i": "ai-provider-latency-p95",
+      "x": 6,
+      "y": 24,
+      "w": 6,
+      "h": 6,
+      "moved": false,
+      "static": false
+    },
+    {
+      "i": "statement-parse-outcomes",
+      "x": 0,
+      "y": 30,
+      "w": 6,
+      "h": 6,
+      "moved": false,
+      "static": false
+    },
+    {
+      "i": "confidence-north-star",
+      "x": 6,
+      "y": 30,
+      "w": 6,
+      "h": 6,
+      "moved": false,
+      "static": false
+    },
+    {
+      "i": "reconciliation-match-outcomes",
+      "x": 0,
+      "y": 36,
+      "w": 6,
+      "h": 6,
+      "moved": false,
+      "static": false
+    },
+    {
+      "i": "financial-invariant-violations",
+      "x": 6,
+      "y": 36,
       "w": 6,
       "h": 6,
       "moved": false,

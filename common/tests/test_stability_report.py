@@ -536,3 +536,61 @@ def test_negative_days_below_zero_is_rejected(tmp_path, capsys) -> None:
         )
     assert exc.value.code == 2
     assert "--days must be >= 0" in capsys.readouterr().err
+
+
+def test_non_dry_run_delivers_card_by_default_and_text_when_requested(
+    tmp_path, monkeypatch
+) -> None:
+    report = _load_module()
+    paths = _files(
+        tmp_path,
+        _ledger("production"),
+        _ledger("staging"),
+        {"ok": True, "outages": []},
+    )
+    delivered: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        report,
+        "deliver_out_of_band_card",
+        lambda env, card, **kw: delivered.append(("card", card)),
+    )
+    monkeypatch.setattr(
+        report,
+        "deliver_out_of_band_text",
+        lambda env, msg, **kw: delivered.append(("text", msg)),
+    )
+
+    card_obj = report.build_report_card(
+        {"production": _ledger("production"), "staging": _ledger("staging")},
+        [],
+        NOW,
+    )
+    assert card_obj["header"]["template"] == "green"
+
+    assert (
+        report.run(
+            {},
+            ledger_files={
+                "production": paths["production"],
+                "staging": paths["staging"],
+            },
+            outages_file=paths["outages"],
+            now=NOW,
+        )
+        == 0
+    )
+    assert delivered[-1][0] == "card"
+
+    assert (
+        report.run(
+            {"INFRA2_STABILITY_REPORT_FORMAT": "text"},
+            ledger_files={
+                "production": paths["production"],
+                "staging": paths["staging"],
+            },
+            outages_file=paths["outages"],
+            now=NOW,
+        )
+        == 0
+    )
+    assert delivered[-1][0] == "text"

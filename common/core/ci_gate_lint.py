@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cross-repo CI gate linter enforcing Left-to-Right testing hierarchy.
 
-Validates GitHub Actions workflow definitions against `tools/ci_spec.py`:
+Validates GitHub Actions workflow definitions against `infra2_sdk.ci`:
 1. Shard bounds: PR matrix shards must be in [SHARD_MIN, SHARD_MAX] (2 to 8) to prevent cold-start bloat.
 2. Banned gate steps: heavy benchmarks and full reconciliations must not run in PR gate jobs.
 3. Compute saturation: pytest parallelism must use `-n auto` rather than arbitrary hardcoded workers.

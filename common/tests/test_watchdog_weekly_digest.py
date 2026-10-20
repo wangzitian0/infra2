@@ -419,3 +419,123 @@ def test_weekly_digest_workflow_schedule_and_dispatch_contract() -> None:
         in workflow["on"]["workflow_dispatch"]["inputs"]["task"]["options"]
     )
     assert "dry_run" in workflow["on"]["workflow_dispatch"]["inputs"]
+
+
+def test_build_digest_card_and_estate_app_health(monkeypatch) -> None:
+    """#1307: digest card renders interactive KPI fields, estate app parity, and action links."""
+    digest = _load_module()
+
+    class _Resp:
+        def __init__(self, data: dict) -> None:
+            self._data = data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> bool:
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps(self._data).encode("utf-8")
+
+    def fake_urlopen(request, timeout=5.0):
+        url = request.full_url
+        if "report-api-stg" in url:
+            return _Resp({"status": "healthy", "version": "0.2.8"})
+        if "report-api" in url:
+            return _Resp({"status": "healthy", "version": "0.2.7"})
+        return _Resp({"status": "healthy", "version": "0.1.3"})
+
+    monkeypatch.setattr(digest, "urlopen", fake_urlopen)
+    apps = digest.fetch_estate_app_health("zitian.party")
+    assert len(apps) == 2
+    assert apps[0]["app"] == "finance_report"
+    assert apps[0]["parity"] == "ahead_or_drift"
+    assert apps[1]["app"] == "truealpha"
+    assert apps[1]["parity"] == "in_sync"
+
+    summary = {
+        "week_start_utc": "2026-10-13",
+        "week_end_utc": "2026-10-20",
+        "window_days": 7,
+        "total_runs": 42,
+        "success_count": 42,
+        "failure_count": 0,
+        "cancelled_count": 0,
+        "other_count": 0,
+        "success_rate_pct": 100.0,
+        "estate_apps": apps,
+        "log_audit": {
+            "reviewed_run_count": 25,
+            "structured_event_run_count": 25,
+            "alertable_run_count": 0,
+            "delivery_success_run_count": 0,
+            "delivery_failure_run_count": 0,
+            "fallback_issue_run_count": 0,
+            "missing_alert_evidence_run_count": 0,
+            "alert_recall_evidence_pct": 100.0,
+            "failed_check_count": 0,
+            "failure_domain_counts": {},
+            "log_fetch_error_count": 0,
+        },
+        "stale_issues": [],
+    }
+    card = digest.build_digest_card(summary, "wangzitian0/infra2")
+    assert card["header"]["template"] == "green"
+    text_blob = json.dumps(card, ensure_ascii=False)
+    assert "finance_report" in text_blob
+    assert "0.2.8" in text_blob
+    assert "Core Journey 看板" in text_blob
+    assert "OpenPanel 漏斗" in text_blob
+    msg = digest.build_digest_message(summary, "wangzitian0/infra2")
+    assert "Estate app release parity:" in msg
+    assert "finance_report: prod=0.2.7 (healthy) | staging=0.2.8 (healthy)" in msg
+
+    # Degraded digest card with failed runs,stale issues, and delivery
+    degraded_summary = {
+        **summary,
+        "window_days": 1,
+        "failure_count": 2,
+        "failed_run_urls": ["https://github.com/wangzitian0/infra2/actions/runs/99"],
+        "stale_issues": [
+            {
+                "number": idx,
+                "title": f"Issue {idx}",
+                "url": f"https://github.com/wangzitian0/infra2/issues/{idx}",
+            }
+            for idx in range(1, 11)
+        ],
+    }
+    deg_card = digest.build_digest_card(degraded_summary, "wangzitian0/infra2")
+    assert deg_card["header"]["template"] == "orange"
+    assert "daily summary" in deg_card["header"]["title"]["content"]
+    assert "more" in json.dumps(deg_card, ensure_ascii=False)
+
+    sent: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        digest,
+        "deliver_out_of_band_card",
+        lambda env, c, **kw: sent.append(("card", c)),
+    )
+    monkeypatch.setattr(
+        digest,
+        "deliver_out_of_band_text",
+        lambda env, m, **kw: sent.append(("text", m)),
+    )
+    digest.deliver_digest({}, msg, card=card)
+    assert sent[-1][0] == "card"
+    digest.deliver_digest({"WATCHDOG_DIGEST_FORMAT": "text"}, msg, card=card)
+    assert sent[-1][0] == "text"
+
+    monkeypatch.setattr(digest, "fetch_recent_runs", lambda *a, **kw: [])
+    monkeypatch.setattr(digest, "fetch_recent_run_logs", lambda *a, **kw: {})
+    monkeypatch.setattr(digest, "fetch_stale_open_issues", lambda *a, **kw: [])
+    rc = digest.main(
+        {
+            "GITHUB_TOKEN": "tok",
+            "WATCHDOG_DIGEST_DRY_RUN": "1",
+            "WATCHDOG_DIGEST_ESTATE_HEALTH": "1",
+        },
+        argv=["--daily"],
+    )
+    assert rc == 0

@@ -11,6 +11,18 @@
         "upload_succeeded",
         "report_generated"
       ]
+    },
+    {
+      "name": "Upload → Review → Report (North Star)",
+      "description": "Full core loop funnel: statement upload, extraction completion, human review approval, and report generation.",
+      "chartType": "funnel",
+      "funnelWindowHours": 24,
+      "steps": [
+        "upload_started",
+        "upload_succeeded",
+        "review_approved",
+        "report_generated"
+      ]
     }
   ],
   "events_board": {

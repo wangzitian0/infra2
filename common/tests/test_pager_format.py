@@ -348,8 +348,12 @@ def test_card_fields_are_separate_card_fields_in_the_shared_order(monkeypatch) -
         } <= set(item)
         (fields,) = [e["fields"] for e in card["elements"] if "fields" in e]
         assert len(fields) == len(item)
-        # one field per row: short fields sit side by side and read as one line
-        assert {field["is_short"] for field in fields} == {False}
+        # compact metadata fields sit side by side (is_short=True); long fields span full width
+        expected_short = {"级别", "环境", "对象", "开始于"}
+        assert {
+            label: field["is_short"]
+            for field, (_tag, label, _val) in zip(fields, _card_fields(card)[0], strict=True)
+        } == {label: (label in expected_short) for label in item}
         # values are plain text; only the runbook link is markup
         (block,) = _card_fields(card)
         assert {label for tag, label, _value in block if tag == "lark_md"} == {

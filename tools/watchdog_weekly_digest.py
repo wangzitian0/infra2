@@ -17,12 +17,24 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from common.alerting import REPORT_TITLE_PREFIX, deliver_out_of_band_text  # noqa: E402
+from common.alerting import (  # noqa: E402
+    REPORT_TITLE_PREFIX,
+    deliver_out_of_band_card,
+    deliver_out_of_band_text,
+)
 
 WORKFLOW_FILE = "ops-checks.yml"
 WATCHDOG_JOB_NAME = "Check infra2 host and alert bridge"
 DEFAULT_REPOSITORY = "wangzitian0/infra2"
 DIGEST_WINDOW_DAYS = 7
+DAILY_WINDOW_DAYS = 1
+DEFAULT_INTERNAL_DOMAIN = "zitian.party"
+JOURNEY_BOARD_URL = "https://wangzitian0.github.io/finance_report/board/"
+OPENPANEL_URL = "https://analytics.zitian.party"
+SIGNOZ_URL = "https://signoz.zitian.party"
+WATCHDOG_RUNBOOK_URL = (
+    "https://github.com/wangzitian0/infra2/blob/main/platform/12.alerting/README.md#out-of-band-watchdog"
+)
 # #508: a PR can materially advance an open issue's scope without ever referencing it
 # (the merge contract now asks for a reference, but nothing enforced it retroactively —
 # #425/#475/#402 all lagged the repo by 1-3 weeks before this existed). 14 days with no
@@ -39,11 +51,12 @@ def fetch_recent_runs(
     watchdog_job_name: str = WATCHDOG_JOB_NAME,
     per_page: int = 100,
     now: datetime | None = None,
+    window_days: int = DIGEST_WINDOW_DAYS,
 ) -> list[dict[str, Any]]:
     """Fetch recent ops-checks runs that actually include the watchdog job."""
     owner, repo = repository.split("/", 1)
     current = now or datetime.now(UTC)
-    cutoff = current - timedelta(days=DIGEST_WINDOW_DAYS)
+    cutoff = current - timedelta(days=window_days)
     matching_runs: list[dict[str, Any]] = []
     page = 1
 
@@ -215,11 +228,14 @@ def _parse_iso8601(value: str) -> datetime:
 
 
 def recent_weekly_runs(
-    runs: list[dict[str, Any]], *, now: datetime | None = None
+    runs: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+    window_days: int = DIGEST_WINDOW_DAYS,
 ) -> list[dict[str, Any]]:
-    """Return workflow runs created inside the 7-day digest window."""
+    """Return workflow runs created inside the digest window."""
     current = now or datetime.now(UTC)
-    cutoff = current - timedelta(days=DIGEST_WINDOW_DAYS)
+    cutoff = current - timedelta(days=window_days)
     recent: list[dict[str, Any]] = []
     for run in runs:
         created_at = run.get("created_at")
@@ -235,12 +251,15 @@ def recent_weekly_runs(
 
 
 def summarize_weekly_runs(
-    runs: list[dict[str, Any]], *, now: datetime | None = None
+    runs: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+    window_days: int = DIGEST_WINDOW_DAYS,
 ) -> dict[str, Any]:
-    """Aggregate 7-day workflow run health summary."""
+    """Aggregate workflow run health summary over ``window_days``."""
     current = now or datetime.now(UTC)
-    cutoff = current - timedelta(days=DIGEST_WINDOW_DAYS)
-    recent = recent_weekly_runs(runs, now=current)
+    cutoff = current - timedelta(days=window_days)
+    recent = recent_weekly_runs(runs, now=current, window_days=window_days)
     totals: dict[str, int] = {
         "success": 0,
         "failure": 0,
@@ -281,6 +300,7 @@ def summarize_weekly_runs(
         "success_rate_pct": round(success_rate, 2),
         "failure_rate_pct": round(failure_rate, 2),
         "failed_run_urls": failed_urls[:5],
+        "window_days": window_days,
         "week_start_utc": cutoff.date().isoformat(),
         "week_end_utc": current.date().isoformat(),
     }
@@ -470,10 +490,66 @@ def summarize_stale_issues(issues: list[Mapping[str, Any]]) -> list[dict[str, An
     ]
 
 
+def fetch_estate_app_health(
+    internal_domain: str = DEFAULT_INTERNAL_DOMAIN,
+    *,
+    timeout: float = 5.0,
+) -> list[dict[str, Any]]:
+    """Probe Production vs. Staging /health endpoints for estate applications."""
+    specs = (
+        ("finance_report", "report-api"),
+        ("truealpha", "truealpha-api"),
+    )
+    results: list[dict[str, Any]] = []
+    for app_id, host_prefix in specs:
+        envs: dict[str, dict[str, str]] = {}
+        for env_name, suffix in (("production", ""), ("staging", "-stg")):
+            url = f"https://{host_prefix}{suffix}.{internal_domain}/health"
+            request = Request(
+                url,
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "infra2-watchdog-weekly-digest/1.0",
+                },
+                method="GET",
+            )
+            try:
+                with urlopen(request, timeout=timeout) as response:  # noqa: S310
+                    payload = json.loads(response.read().decode("utf-8"))
+                status = str(payload.get("status") or "unknown")
+                version = str(
+                    payload.get("version")
+                    or payload.get("app_version")
+                    or payload.get("git_sha")
+                    or "unknown"
+                )
+            except Exception as exc:  # noqa: BLE001 - digest probes are best-effort
+                status = f"unreachable ({type(exc).__name__})"
+                version = "unknown"
+            envs[env_name] = {"status": status, "version": version, "url": url}
+        prod_v = envs["production"]["version"]
+        stg_v = envs["staging"]["version"]
+        parity = (
+            "in_sync"
+            if prod_v != "unknown" and prod_v == stg_v
+            else ("ahead_or_drift" if stg_v != prod_v else "unknown")
+        )
+        results.append(
+            {
+                "app": app_id,
+                "production": envs["production"],
+                "staging": envs["staging"],
+                "parity": parity,
+            }
+        )
+    return results
+
+
 def build_digest_message(summary: Mapping[str, Any], repository: str) -> str:
-    """Build a compact weekly digest message."""
+    """Build a compact weekly or daily digest message."""
+    cadence = "daily" if summary.get("window_days") == 1 else "weekly"
     lines = [
-        f"{REPORT_TITLE_PREFIX}[WATCHDOG DIGEST] Infra2 out-of-band weekly summary",
+        f"{REPORT_TITLE_PREFIX}[WATCHDOG DIGEST] Infra2 out-of-band {cadence} summary",
         f"Repository: {repository}",
         f"Window (UTC): {summary['week_start_utc']} -> {summary['week_end_utc']}",
         (
@@ -515,6 +591,18 @@ def build_digest_message(summary: Mapping[str, Any], repository: str) -> str:
             lines.append(f"Failure domains: {domain_text}")
         if audit.get("log_fetch_error_count"):
             lines.append(f"Log fetch errors: {audit['log_fetch_error_count']}")
+    estate_apps = summary.get("estate_apps")
+    if isinstance(estate_apps, list) and estate_apps:
+        lines.append("Estate app release parity:")
+        for app_entry in estate_apps:
+            if not isinstance(app_entry, Mapping):
+                continue
+            prod = app_entry.get("production") or {}
+            stg = app_entry.get("staging") or {}
+            lines.append(
+                f"- {app_entry.get('app')}: prod={prod.get('version')} ({prod.get('status')}) | "
+                f"staging={stg.get('version')} ({stg.get('status')}) [{app_entry.get('parity')}]"
+            )
     stale_issues = summary.get("stale_issues")
     if isinstance(stale_issues, list) and stale_issues:
         lines.append(f"Stale open issues ({STALE_ISSUE_DAYS}+ days untouched):")
@@ -522,18 +610,223 @@ def build_digest_message(summary: Mapping[str, Any], repository: str) -> str:
             lines.append(f"- #{issue['number']} {issue['title']} ({issue['url']})")
         if len(stale_issues) > 10:
             lines.append(f"  ...and {len(stale_issues) - 10} more")
-    lines.append(
-        "Runbook: https://github.com/wangzitian0/infra2/blob/main/platform/12.alerting/README.md#out-of-band-watchdog"
-    )
+    lines.append(f"Runbook: {WATCHDOG_RUNBOOK_URL}")
     return "\n".join(lines)
 
 
-def deliver_digest(env: Mapping[str, str], message: str) -> None:
+def build_digest_card(summary: Mapping[str, Any], repository: str) -> dict[str, Any]:
+    """Build a Feishu interactive card for the weekly or daily watchdog digest."""
+    cadence = "daily" if summary.get("window_days") == 1 else "weekly"
+    failure_count = _as_int(summary.get("failure_count"))
+    audit = summary.get("log_audit") if isinstance(summary.get("log_audit"), Mapping) else {}
+    missing_recall = _as_int(audit.get("missing_alert_evidence_run_count"))
+    recall_pct = audit.get("alert_recall_evidence_pct", 100.0)
+    stale_issues = (
+        summary.get("stale_issues")
+        if isinstance(summary.get("stale_issues"), list)
+        else []
+    )
+    is_healthy = failure_count == 0 and missing_recall == 0
+    template = "green" if is_healthy else ("orange" if missing_recall == 0 else "red")
+    icon = "🟢" if is_healthy else ("🟡" if missing_recall == 0 else "🔴")
+    header_title = (
+        f"{icon} {REPORT_TITLE_PREFIX}[WATCHDOG DIGEST] "
+        f"Infra2 out-of-band {cadence} summary"
+    )
+
+    elements: list[dict[str, Any]] = [
+        {
+            "tag": "div",
+            "fields": [
+                {
+                    "is_short": True,
+                    "text": {
+                        "tag": "lark_md",
+                        "content": (
+                            f"**Watchdog Runs**\n"
+                            f"{summary['success_count']}/{summary['total_runs']} "
+                            f"({summary['success_rate_pct']}%)"
+                        ),
+                    },
+                },
+                {
+                    "is_short": True,
+                    "text": {
+                        "tag": "lark_md",
+                        "content": (
+                            f"**Alert Recall Evidence**\n"
+                            f"{recall_pct}% (missing: {missing_recall})"
+                        ),
+                    },
+                },
+                {
+                    "is_short": True,
+                    "text": {
+                        "tag": "lark_md",
+                        "content": (
+                            f"**Window (UTC)**\n"
+                            f"{summary['week_start_utc']} → {summary['week_end_utc']}"
+                        ),
+                    },
+                },
+                {
+                    "is_short": True,
+                    "text": {
+                        "tag": "lark_md",
+                        "content": (
+                            f"**Repository & Stale Issues**\n"
+                            f"`{repository}` · {len(stale_issues)} stale"
+                        ),
+                    },
+                },
+            ],
+        },
+        {"tag": "hr"},
+    ]
+
+    estate_apps = summary.get("estate_apps")
+    if isinstance(estate_apps, list) and estate_apps:
+        app_lines = ["**Estate App Release & Health Parity**"]
+        for app_entry in estate_apps:
+            if not isinstance(app_entry, Mapping):
+                continue
+            prod = app_entry.get("production") or {}
+            stg = app_entry.get("staging") or {}
+            parity = app_entry.get("parity", "unknown")
+            icon = "✅" if parity == "in_sync" else "🔄"
+            app_lines.append(
+                f"{icon} **{app_entry.get('app')}**: Prod `{prod.get('version')}` "
+                f"({prod.get('status')}) · Staging `{stg.get('version')}` "
+                f"({stg.get('status')})"
+            )
+        elements.append(
+            {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(app_lines)}}
+        )
+        elements.append({"tag": "hr"})
+
+    if audit:
+        domains = audit.get("failure_domain_counts")
+        domain_text = (
+            ", ".join(
+                f"`{name}`={count}"
+                for name, count in sorted(
+                    domains.items(), key=lambda item: (-int(item[1]), str(item[0]))
+                )[:5]
+            )
+            if isinstance(domains, Mapping) and domains
+            else "none"
+        )
+        audit_md = (
+            "**Alert Recall Audit**\n"
+            f"• Reviewed runs: **{audit.get('reviewed_run_count', 0)}** · "
+            f"Alertable: **{audit.get('alertable_run_count', 0)}** · "
+            f"Delivered: **{audit.get('delivery_success_run_count', 0)}** · "
+            f"Fallback issues: **{audit.get('fallback_issue_run_count', 0)}**\n"
+            f"• Failure domains: {domain_text}"
+        )
+        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": audit_md}})
+
+    failed_urls = summary.get("failed_run_urls", [])
+    if isinstance(failed_urls, list) and failed_urls:
+        fail_lines = ["**Recent Failed Runs**"] + [
+            f"• [{url.rsplit('/', 1)[-1]}]({url})" for url in failed_urls[:5]
+        ]
+        elements.append(
+            {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(fail_lines)}}
+        )
+
+    if stale_issues:
+        issue_lines = [
+            f"**Stale Open Issues ({STALE_ISSUE_DAYS}+ days untouched)**"
+        ] + [
+            f"• [#{issue['number']}]({issue['url']}) {issue['title']}"
+            for issue in stale_issues[:8]
+        ]
+        if len(stale_issues) > 8:
+            issue_lines.append(f"• …and {len(stale_issues) - 8} more")
+        elements.append(
+            {
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": "\n".join(issue_lines)},
+            }
+        )
+
+    elements.append(
+        {
+            "tag": "action",
+            "actions": [
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "Core Journey 看板"},
+                    "url": JOURNEY_BOARD_URL,
+                    "type": "primary",
+                },
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "OpenPanel 漏斗"},
+                    "url": OPENPANEL_URL,
+                    "type": "default",
+                },
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "SigNoz 监控"},
+                    "url": SIGNOZ_URL,
+                    "type": "default",
+                },
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "Watchdog Runbook"},
+                    "url": WATCHDOG_RUNBOOK_URL,
+                    "type": "default",
+                },
+            ],
+        }
+    )
+
+    return {
+        "config": {"wide_screen_mode": True},
+        "header": {
+            "template": template,
+            "title": {"tag": "plain_text", "content": header_title},
+        },
+        "elements": elements,
+    }
+
+
+def deliver_digest(
+    env: Mapping[str, str],
+    message: str,
+    *,
+    card: dict[str, Any] | None = None,
+) -> None:
     """Deliver digest via the shared out-of-band Feishu webhook/app path."""
+    fmt = env.get("WATCHDOG_DIGEST_FORMAT", "card").strip().lower()
+    if card is not None and fmt != "text":
+        deliver_out_of_band_card(env, card, fallback_text=message)
+        return
     deliver_out_of_band_text(env, message)
 
 
-def main(env: Mapping[str, str] | None = None) -> int:
+def main(
+    env: Mapping[str, str] | None = None,
+    argv: list[str] | None = None,
+) -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--daily",
+        action="store_true",
+        help="Generate a 1-day daily digest instead of a 7-day weekly digest.",
+    )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=None,
+        help="Custom window in days (overrides --daily and WATCHDOG_DIGEST_WINDOW_DAYS).",
+    )
+    args = parser.parse_args(argv if argv is not None else [])
+
     current_env = env or os.environ
     repository = (current_env.get("GITHUB_REPOSITORY") or DEFAULT_REPOSITORY).strip()
     token = current_env.get("GITHUB_TOKEN", "").strip()
@@ -541,9 +834,15 @@ def main(env: Mapping[str, str] | None = None) -> int:
         print("GITHUB_TOKEN is required for weekly digest generation")
         return 1
 
+    window_days = (
+        args.days
+        or (DAILY_WINDOW_DAYS if args.daily else None)
+        or _as_int(current_env.get("WATCHDOG_DIGEST_WINDOW_DAYS"))
+        or DIGEST_WINDOW_DAYS
+    )
     now = datetime.now(UTC)
-    runs = fetch_recent_runs(repository, token, now=now)
-    summary = summarize_weekly_runs(runs, now=now)
+    runs = fetch_recent_runs(repository, token, now=now, window_days=window_days)
+    summary = summarize_weekly_runs(runs, now=now, window_days=window_days)
     if current_env.get("WATCHDOG_DIGEST_REVIEW_LOGS", "1").strip().lower() not in {
         "0",
         "false",
@@ -553,10 +852,19 @@ def main(env: Mapping[str, str] | None = None) -> int:
         logs = fetch_recent_run_logs(
             repository,
             token,
-            recent_weekly_runs(runs, now=now),
+            recent_weekly_runs(runs, now=now, window_days=window_days),
             max_logs=max_logs,
         )
         summary["log_audit"] = summarize_watchdog_log_events(logs)
+    if current_env.get("WATCHDOG_DIGEST_ESTATE_HEALTH", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }:
+        domain = (
+            current_env.get("INTERNAL_DOMAIN") or DEFAULT_INTERNAL_DOMAIN
+        ).strip()
+        summary["estate_apps"] = fetch_estate_app_health(domain)
     if current_env.get("WATCHDOG_DIGEST_STALE_ISSUES", "1").strip().lower() not in {
         "0",
         "false",
@@ -571,10 +879,11 @@ def main(env: Mapping[str, str] | None = None) -> int:
         )
         summary["stale_issues"] = summarize_stale_issues(stale)
     message = build_digest_message(summary, repository)
+    card = build_digest_card(summary, repository)
     if current_env.get("WATCHDOG_DIGEST_DRY_RUN") == "1":
         print(message)
         return 0
-    deliver_digest(current_env, message)
+    deliver_digest(current_env, message, card=card)
     print(message)
     return 0
 
@@ -584,4 +893,4 @@ def _one_line(value: str) -> str:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(argv=sys.argv[1:]))
