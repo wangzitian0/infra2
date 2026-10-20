@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from tools import ci_gate_ruleset_audit as cgra
+from common.core import ci_gate_ruleset_audit as cgra
 
 # Every audit() now also asks whether the rulesets carrying those checks are
 # enforcing and un-bypassable. These tests are about the check list, so they
@@ -278,7 +278,7 @@ def test_live_required_contexts_returns_contexts_and_their_ruleset_ids() -> None
     import json
     from contextlib import contextmanager
 
-    from tools.ci_gate_ruleset_audit import _live_required_contexts
+    from common.core.ci_gate_ruleset_audit import _live_required_contexts
 
     payload = [
         {
@@ -311,7 +311,7 @@ def test_live_required_contexts_returns_contexts_and_their_ruleset_ids() -> None
 def test_an_unreachable_rules_api_is_undetermined_not_empty() -> None:
     """None, not ([], []): a caller reading "no requirements" from a failed call
     is the same hole as an empty protected set."""
-    from tools.ci_gate_ruleset_audit import _live_required_contexts
+    from common.core.ci_gate_ruleset_audit import _live_required_contexts
 
     def opener(request, timeout=None):
         raise OSError("network down")

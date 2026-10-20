@@ -10,7 +10,7 @@ import pytest
 
 from common.core import registry as reg
 from common.core.facets import BackupFacet, Exemption, ProbeFacet, SignalFacet
-from tools.service_facet_matrix import (
+from common.core.service_facet_matrix import (
     build_matrix,
     cell_state,
     consistency_flags,

@@ -12,7 +12,7 @@ from infra2_sdk.deploy import DeployOperation, DeployType
 from infra2_sdk.refs import ResolvedRef
 
 from common.deploy import app_deploy_request as receiver
-from tools import app_deploy_request as receiver_cli
+from common.deploy import app_deploy_request_cli as receiver_cli
 
 SHA = "a" * 40
 APP_REPO = "wangzitian0/finance_report"

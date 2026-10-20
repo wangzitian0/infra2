@@ -33,7 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load_backup_runner():
-    path = ROOT / "tools/backup_runner.py"
+    path = ROOT / "common/backup/backup_runner.py"
     spec = importlib.util.spec_from_file_location("backup_runner_under_test", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -42,7 +42,7 @@ def _load_backup_runner():
 
 
 def _load_backup_verification_tool():
-    path = ROOT / "tools/backup_verification.py"
+    path = ROOT / "common/backup/backup_verification_cli.py"
     spec = importlib.util.spec_from_file_location("backup_verification_tool", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -51,7 +51,7 @@ def _load_backup_verification_tool():
 
 
 def _load_backup_restore_rehearsal_tool():
-    path = ROOT / "tools/backup_restore_rehearsal.py"
+    path = ROOT / "common/backup/backup_restore_rehearsal.py"
     spec = importlib.util.spec_from_file_location("backup_restore_rehearsal_tool", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)

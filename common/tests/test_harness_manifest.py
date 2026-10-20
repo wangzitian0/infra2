@@ -13,7 +13,7 @@ from common.core.harness.manifest import (
     load_manifest,
     validate_manifest,
 )
-from tools.harness import main
+from common.core.harness_cli import main
 
 ROOT = Path(__file__).resolve().parents[2]
 

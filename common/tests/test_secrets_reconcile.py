@@ -12,7 +12,8 @@ from infra2_sdk.capacity import CapacityReading
 from infra2_sdk.secrets import SecretsError, WriteResult, op_item, vault_path
 
 from common.security.registry import SERVICES, Service
-from tools import secrets_reconcile, secrets_reconcile_check
+from common.security import secrets_reconcile
+from tools import secrets_reconcile_check
 
 ROOT = Path(__file__).resolve().parents[2]
 

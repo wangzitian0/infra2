@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from tools.coverage_regression_audit import main
+from common.core.coverage_regression_audit import main
 
 _COBERTURA = (
     '<?xml version="1.0" ?>\n'

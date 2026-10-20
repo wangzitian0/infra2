@@ -1410,7 +1410,7 @@ def test_canary_run_works_without_a_tracer(app, monkeypatch) -> None:
 def test_todo_is_registered_with_the_secret_registry_and_templates_are_generated() -> (
     None
 ):
-    from tools import secrets_render
+    from common.security import secrets_render
 
     service = secrets_registry.lookup("platform", "todo")
     assert service is not None

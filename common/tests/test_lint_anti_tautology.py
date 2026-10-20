@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.lint_anti_tautology import check_source, main
+from common.core.lint_anti_tautology import check_source, main
 
 
 def test_detects_assert_true_literal() -> None:

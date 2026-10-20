@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import yaml
 
-from tools.ci_gate_lint import lint_workflow
+from common.core.ci_gate_lint import lint_workflow
 from infra2_sdk.ci import (
     GATE_WALL_CLOCK_BUDGET_S,
     MAX_SINGLE_TEST_S,
@@ -137,7 +137,7 @@ def test_lint_non_pr_workflow_ignored(tmp_path: Path) -> None:
 
 
 def test_main_missing_directory_fails_closed(tmp_path: Path) -> None:
-    from tools.ci_gate_lint import main
+    from common.core.ci_gate_lint import main
     import sys
     from unittest.mock import patch
 

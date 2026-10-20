@@ -2919,13 +2919,9 @@ SDK_READ_VAULT = {"VAULT_ADDR", "VAULT_TOKEN", "VAULT_ROLE_ID", "VAULT_SECRET_ID
 
 def sdk_vocabulary() -> dict[str, dict]:
     """Read the SDK vocabulary via ``infra2_sdk.runtime.environment.runtime_env_contract()``."""
-    import infra2_sdk
-    from infra2_sdk.runtime import environment as sdk_env
+    from infra2_sdk.runtime.environment import runtime_env_contract
 
-    fn = getattr(infra2_sdk, "runtime_env_contract", None) or getattr(
-        sdk_env, "runtime_env_contract"
-    )
-    data = fn()
+    data = runtime_env_contract()
     entries = data.get("variables") or data.get("keys") or ()
     vocab: dict[str, dict] = {}
     for item in entries:

@@ -11,7 +11,7 @@ import pytest
 from infra2_sdk.secrets import SecretsError, WriteResult, vault_path
 
 from common.security.registry import SERVICES, Service
-from tools import secrets_prune
+from common.security import secrets_prune
 
 
 class MemoryStore:

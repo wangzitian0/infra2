@@ -24,7 +24,7 @@ from common.core.harness.sweep import (
     PrFacts,
     Status,
 )
-from tools import harness
+from common.core import harness_cli as harness
 
 NOW = 1_800_000_000.0
 MIN = 60.0

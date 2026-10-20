@@ -15,7 +15,7 @@ from pathlib import Path
 import yaml
 from infra2_sdk.ci import load_delivery_stages
 
-from tools.ci_gate_audit import (
+from common.core.ci_gate_audit import (
     PR_TRIGGERS,
     WORKFLOWS_DIR,
     _all_workflow_files,
@@ -197,7 +197,7 @@ def test_enforce_mode_fails_closed_on_an_unregistered_job(monkeypatch, capsys) -
     every workflow needs coordinate-izing when the audit only ever checks
     covered_workflows -- that would hide the exact same gap this PR exists to
     stop hiding, just moved from a source comment into the error message."""
-    import tools.ci_gate_audit as mod
+    import common.core.ci_gate_audit as mod
 
     fake_result = {
         "schema_errors": [],
@@ -314,7 +314,7 @@ def test_every_pr_triggered_workflow_is_fully_registered() -> None:
 def test_out_of_scope_workflows_really_cannot_gate_a_pull_request() -> None:
     """Whatever the audit excuses itself from checking must be excused for the stated
     reason -- not merely absent from a list someone forgot to update."""
-    from tools.ci_gate_audit import _workflow_triggers
+    from common.core.ci_gate_audit import _workflow_triggers
 
     for wf in audit()["out_of_scope_workflows"]:
         assert not (_workflow_triggers(ROOT / wf) & PR_TRIGGERS), (
@@ -391,7 +391,7 @@ def test_a_jobs_node_that_is_not_a_mapping_is_not_a_crash(tmp_path) -> None:
     """`jobs:` as a list or a scalar is valid YAML and an invalid workflow (#789
     review). `.keys()` on it took the whole audit down; there is nothing to
     enumerate, and a crash is not a finding."""
-    from tools.ci_gate_audit import _workflow_jobs
+    from common.core.ci_gate_audit import _workflow_jobs
 
     for body in ("jobs: oops\n", "jobs:\n  - a\n  - b\n", "jobs: null\n", "on: push\n"):
         path = tmp_path / "wf.yml"

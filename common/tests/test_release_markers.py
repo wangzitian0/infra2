@@ -7,7 +7,7 @@ from pathlib import Path
 
 from common.deploy import release_markers
 
-from tools import app_deploy_request
+from common.deploy import app_deploy_request_cli as app_deploy_request
 
 ROOT = Path(__file__).resolve().parents[2]
 

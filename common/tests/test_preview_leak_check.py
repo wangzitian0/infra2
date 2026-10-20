@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from tools import preview_leak_check as plc
+from common.deploy import preview_leak_check as plc
 
 
 class _FakeClient:
