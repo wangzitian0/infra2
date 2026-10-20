@@ -6,7 +6,6 @@ on:
     paths:
       - "**/Dockerfile*"
       - "**/compose*.yaml"
-      - "**/compose*.yml"
       - "**/requirements*.txt"
       - "uv.lock"
       - ".github/workflows/trivy-scan.yml"
