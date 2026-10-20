@@ -14,7 +14,7 @@ Only a commit on main runs. Inside that run:
      (_compose_artifact_files + the declared dependency globs) — no re-implementation, so the
      file set can't diverge from the deploy.
   2. Read those files' CONTENT at the ref via ``git cat-file --batch`` (in memory).
-  3. Feed (compose, env, items) to common.deploy.deployer.config_hash_from_items — the SAME pure function
+  3. Feed (compose, env, items) to common.deploy.config_hash.config_hash_from_items — the SAME pure function
      compute_local_config_hash uses, now path-independent (so a ref's content reproduces the
      iac-runner's hash exactly).
 Main's code gives a different hash whenever main changed the enumeration or the env plane
@@ -43,17 +43,18 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import glob as _glob  # noqa: E402
-
 from invoke import Context  # noqa: E402
 
+from common.deploy.config_hash import (  # noqa: E402
+    _compose_artifact_files,
+    _dependency_paths_from_globs,
+    _repo_rel,
+    config_hash_from_items,
+)
 from common.deploy.deployer import (  # noqa: E402
     Deployer,
     EXACT_COMMIT_RE,
     SOURCE_CONFIG_HASH_VERSION,
-    _compose_artifact_files,
-    _repo_rel,
-    config_hash_from_items,
     load_deployer_class as _load_deployer,
 )
 from common.deploy.dependencies import (  # noqa: E402
@@ -75,19 +76,8 @@ def _hash_input_paths(
         _repo_rel(p) for p in _compose_artifact_files(dep.compose_path, compose_content)
     ]
     key = service_key_from_path(dep.compose_path)
-    matched: set[Path] = set()
-    for pattern in extra_dependency_globs(key) if key else []:
-        for hit in _glob.glob(str(ROOT / pattern), recursive=True):
-            p = Path(hit)
-            # Same exclusion as common.deploy.deployer._dependency_items_from_disk: transient
-            # __pycache__/.pyc/.pyo are not in git and absent on a clean checkout.
-            if (
-                p.is_file()
-                and "__pycache__" not in p.parts
-                and not p.name.endswith((".pyc", ".pyo"))
-            ):
-                matched.add(p.resolve())
-    dep_paths = [_repo_rel(p) for p in sorted(matched)]
+    globs = extra_dependency_globs(key) if key else ()
+    dep_paths = [_repo_rel(p) for p in _dependency_paths_from_globs(globs, root=ROOT)]
     return dep.compose_path, artifact_paths, dep_paths
 
 

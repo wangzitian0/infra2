@@ -13,10 +13,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from common.deploy.deployer import (  # noqa: E402
-    _compute_config_hash,
-    discover_services,
-)
+from common.deploy.config_hash import _compute_config_hash  # noqa: E402
+from common.deploy.deployer import discover_services  # noqa: E402
 
 
 def test_config_hash_idempotency() -> None:
