@@ -47,6 +47,7 @@ from infra2_sdk.routing import PreviewStackCoordinates, derive_preview_coordinat
 from common.core.environ import infra_domain
 from common.deploy.compose_lock import compose_write_lock
 from common.deploy.dokploy_adapter import deployment_ids as _deployment_ids
+from common.deploy.env_util import _parse_env_text
 from common.deploy.promote import wait_for_rollout
 from common.deploy.env_config import (
     PREVIEW_ENVIRONMENT,
@@ -98,12 +99,8 @@ def _source_app_vault_creds(client, project: str, source_env: str) -> dict[str, 
             f"cannot source preview Vault creds: no {_SOURCE_APP_COMPOSE!r} compose in "
             f"{project}/{source_env}"
         )
-    env = client.get_compose_env(comp["composeId"]) or ""
-    creds = {}
-    for line in env.splitlines():
-        key, _, value = line.partition("=")
-        if key in _VAULT_CRED_KEYS and value:
-            creds[key] = value
+    parsed = _parse_env_text(client.get_compose_env(comp["composeId"]) or "")
+    creds = {k: parsed[k] for k in _VAULT_CRED_KEYS if parsed.get(k)}
     missing = [k for k in _VAULT_CRED_KEYS if k not in creds]
     if missing:
         raise RuntimeError(

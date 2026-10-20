@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 RELEASE_TAG_RE = re.compile(r"\Av[0-9]+\.[0-9]+\.[0-9]+\Z")
-_SEMVER_TAG_RE = RELEASE_TAG_RE
 #: Public: infra2_sdk.deploy builds its refusal message from both of these, so
 #: they are part of this module's surface rather than its internals (review on #684).
 PRODUCTION_MARKER_PREFIX = "production/"

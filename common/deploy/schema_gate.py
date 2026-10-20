@@ -50,7 +50,6 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from common.deploy.enum_sources import ENUM_SOURCES
 from common.deploy.in_service import container_names
 from common.core.constants import REPO_ROOT
 
@@ -81,11 +80,12 @@ def gate_applies(service: str) -> bool:
     Only a service ``tools.pre_deploy_schema_check`` actually knows how to evaluate is
     gated here — every other service is unaffected by this integration (a service with
     persistent enums needs registering in
-    ``tools.pre_deploy_schema_check.ENUM_SOURCES`` first, same as
-    ``docs/onboarding/07.new-service-sop.md`` already documents). Expanding coverage to
-    another service is separate follow-up work, not this wiring.
+    ``tools.pre_deploy_schema_check.ENUM_SOURCES`` and
+    ``common.deploy.schema_gate._BACKEND_IMAGE_REPOSITORY`` first, same as
+    ``docs/onboarding/07.new-service-sop.md`` already documents). Expanding
+    coverage to another service is separate follow-up work, not this wiring.
     """
-    return service in ENUM_SOURCES
+    return service in _BACKEND_IMAGE_REPOSITORY
 
 
 def _ssh_args(host: str) -> list[str]:

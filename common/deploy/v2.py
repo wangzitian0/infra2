@@ -26,7 +26,6 @@ import os
 import sys
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 import httpx  # Dokploy transport errors from common.deploy.dokploy_client surface as httpx exceptions
@@ -93,7 +92,6 @@ _INFRA2_REPO = "https://github.com/wangzitian0/infra2"
 _INFRA2_DEFAULT_BRANCH = "main"
 __all__ = [
     "DeployV2Result",
-    "Path",
     "_image_manifest_exists",
     "assert_iac_ref_on_main",
     "deploy_v2",

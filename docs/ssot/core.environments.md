@@ -206,8 +206,8 @@ python -m tools.deploy_v2 --service finance_report/app --type staging --version-
 cd repo
 
 # Finance Report backing services
-python -m tools.deploy_v2 --service finance_report/postgres --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
-python -m tools.deploy_v2 --service finance_report/redis --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
+python -m tools.deploy_v2 --service finance_report/postgres --type prod --iac-ref vX.Y.Z --domain zitian.party --staging-validated --code-reviewed
+python -m tools.deploy_v2 --service finance_report/redis --type prod --iac-ref vX.Y.Z --domain zitian.party --staging-validated --code-reviewed
 
 # Finance Report app
 python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref vX.Y.Z --iac-ref vX.Y.Z --domain zitian.party --staging-validated --code-reviewed
@@ -256,7 +256,7 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 | 环境 | ENV_SUFFIX | 容器名示例 |
 |------|-----------|-----------|
 | Local Docker | (无) | `postgres`, `backend`, `frontend` |
-| Test | `-pr-{PR}` | `finance_report-postgres-pr-123` |
+| Preview | `-{kind}-{value}` | `finance_report-backend-pr-123` |
 | Staging | `-staging` | `platform-postgres-staging` |
 | Production | (空) | `platform-postgres` |
 
@@ -265,16 +265,16 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 | 环境 | ENV_DOMAIN_SUFFIX | 域名示例 |
 |------|------------------|---------|
 | Local | (localhost) | `localhost:3000` |
-| Test | `-pr-{PR}` | `report-pr-123.zitian.party` |
+| Preview | `-{kind}-{value}` | `report-pr-123.zitian.party` |
 | Staging | `-staging` | `report-staging.zitian.party` |
 | Production | (空) | `report.zitian.party` |
 
 ### 4.3 数据隔离
 
-| 环境 | DATA_PATH | 说明 |
-|------|-----------|------|
+| 环境 | DATA_PATH / Volume | 说明 |
+|------|--------------------|------|
 | Local | `/tmp/` or volumes | 可随时删除 |
-| Test | `/data/test/{app}-pr-{PR}/` | PR 关闭后自动清理 |
+| Preview | 独立 Docker volume (`preview_db`) | `--down` (`delete_volumes=True`) 时自动销毁 |
 | Staging | `/data/{layer}/staging/` | 持久化 |
 | Production | `/data/{layer}/` | 持久化 + 备份 |
 
@@ -282,7 +282,7 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 
 | 环境 | Vault 路径 | 示例 |
 |------|----------|------|
-| Test | `secret/data/{project}/test/{service}` | `secret/data/finance_report/test/app` |
+| Preview | 复用源环境 (`staging`) AppRole 只读挂载，本地 DB 覆盖 `DATABASE_URL` | `secret/data/finance_report/staging/app` |
 | Staging | `secret/data/{project}/staging/{service}` | `secret/data/finance_report/staging/app` |
 | Production | `secret/data/{project}/production/{service}` | `secret/data/finance_report/production/app` |
 
@@ -489,99 +489,27 @@ compose、env、secret 路径、**外部镜像 tag**、Traefik 路由 label、�
 
 ---
 
-## 6. Test 环境特殊设计 - 0帧起手验证
-
-### 6.1 目标
-
-Test 环境的核心价值是验证**从零开始部署**的能力：
-- ✅ 新 VPS 能否在 10 分钟内完成 Bootstrap
-- ✅ 新项目能否在 5 分钟内部署完成
-- ✅ 所有依赖能否自动创建（bucket、用户、密钥）
-
-### 6.2 实现方式
-
-**临时资源创建**:
-```bash
-# PR 创建或手动验证时触发 deploy_v2 preview/pr
-cd repo
-python -m tools.deploy_v2 \
-  --service finance_report/app \
-  --type preview/pr \
-  --version-ref 123 \
-  --iac-ref vX.Y.Z \
-  --domain zitian.party
-```
-
-**自动清理**:
-```bash
-# PR 关闭后触发
-invoke test.cleanup --pr-number=123
-  1. 停止容器
-  2. 删除数据目录
-  3. 删除 Vault 密钥 (secret/data/finance_report/test/*)
-  4. 删除 S3 bucket
-  5. 删除 Dokploy 域名配置
-```
-
-### 6.3 验证清单
-
-每次 PR 部署到 Test 环境时，自动验证：
-- [ ] S3 bucket 自动创建
-- [ ] PostgreSQL 用户自动创建
-- [ ] Vault 密钥自动生成
-- [ ] 应用健康检查通过
-- [ ] 域名解析正确
-- [ ] HTTPS 证书有效
-
----
-
-## 7. 迭代速度对比
+## 6. 迭代速度对比
 
 | 环境 | 部署频率 | 变更范围 | 自动化程度 | 回滚成本 |
 |------|---------|---------|-----------|---------|
 | Local Dev | 每次保存 | 单个文件 | 热重载 | 0 (无影响) |
 | Local Docker | 每小时 | 多个服务 | docker compose up | 低 (重启容器) |
-| Test | 每个 PR | 完整功能 | GitHub Actions | 低 (删除 PR 环境) |
-| Staging | 每天 | 多个功能 | CI/CD | 中 (回滚版本) |
-| Production | 每周 | 稳定版本 | Manual approval | 高 (影响用户) |
+| Preview | 按需 / PR | 完整功能栈 + 独立临时 DB | `deploy_v2 --type preview/*` | 0 (`--down` 销毁栈与卷) |
+| Staging | 每个 Release Tag | 稳定候选版本 | `vX.Y.Z` Tag 自动部署 | 中 (发布前向修复 tag) |
+| Production | 按需晋升 | 已验证的 Release Tag | 显式 Promote + Owner 审批 | 高 (影响真实用户) |
 | DR | 被动触发 | 全量恢复 | 手动 | 极高 (业务中断) |
 
 ---
 
-## 8. 配置示例
+## 7. 配置示例
 
-### 8.1 Finance Report Test 环境
-
-```bash
-# Finance Report app repo preview workflow (conceptual)
-name: Deploy PR to Test
-on:
-  pull_request:
-    types: [opened, synchronize]
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Deploy to Test
-        env:
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          cd repo/
-          python -m tools.deploy_v2 \
-            --service finance_report/app \
-            --type preview/pr \
-            --version-ref "${PR_NUMBER}" \
-            --iac-ref main \
-            --domain zitian.party
-```
-
-### 8.2 Finance Report Staging 环境
+### 7.1 Finance Report Staging 环境
 
 ```bash
 # Dokploy Environment 配置 (staging)
 DATA_PATH=/data/finance_report/staging
-ENV_SUFFIX=-staging  # 可选
+ENV_SUFFIX=-staging
 ENV_DOMAIN_SUFFIX=-staging
 
 # Vault 密钥路径
@@ -589,7 +517,7 @@ secret/data/finance_report/staging/app/DATABASE_URL
 secret/data/finance_report/staging/app/S3_BUCKET
 ```
 
-### 8.3 Finance Report Production 环境
+### 7.2 Finance Report Production 环境
 
 ```bash
 # Dokploy Environment 配置 (production)
@@ -604,94 +532,19 @@ secret/data/finance_report/production/app/S3_BUCKET
 
 ---
 
-## 9. 设计约束 (Dos & Don'ts)
-
-### ✅ 推荐模式
-
-1. **Test 环境用于快速验证**
-   - PR 提交后立即部署到 Test
-   - 功能验证后再合并到 Staging
-   
-2. **Staging 环境用于完整测试**
-   - 运行完整 E2E 测试套件
-   - 性能测试、安全扫描
-   
-3. **Production 只部署稳定版本**
-   - 必须经过 Staging 完整验证
-   - 使用 Git tags 版本管理
-
-### ⛔ 禁止模式
-
-1. **禁止跳过 Staging 直接到 Production**
-   - 即使是"简单修复"也必须经过 Staging
-
-2. **禁止在 Production 测试新功能**
-   - 使用 Feature flags 控制灰度发布
-
-3. **禁止共享数据库**
-   - Test/Staging/Production 必须使用独立数据库
-
----
-
-## 10. The Proof (验证方法)
-
-### 验证环境隔离
+## 8. 验证方法 (The Proof)
 
 ```bash
-# 验证容器名隔离
-docker ps | grep finance_report
-# 应该看到:
-# - finance_report-postgres-pr-123 (Test)
-# - finance_report-postgres-staging (Staging)
-# - finance_report-postgres (Production)
+# 验证域名与版本隔离
+curl -fsS https://report-pr-123.zitian.party/api/health
+curl -fsS https://report-staging.zitian.party/api/health
+curl -fsS https://report.zitian.party/api/health
 
-# 验证域名隔离
-curl https://report-pr-123.zitian.party/api/health
-curl https://report-staging.zitian.party/api/health
-curl https://report.zitian.party/api/health
-
-# 验证数据隔离
-ls /data/test/finance_report-pr-123/
-ls /data/finance_report/staging/
-ls /data/finance_report/
-```
-
-### 验证 0 帧起手部署
-
-```bash
-# 模拟全新 VPS
-export DEPLOY_ENV=test
-export ENV_SUFFIX=-canary-preview
-
-# 计时开始
-time python -m tools.deploy_v2 \
+# 验证 Canary 探针一键拉起与拆除
+python -m tools.deploy_v2 \
   --service finance_report/app \
   --type canary \
   --iac-ref vX.Y.Z \
   --domain zitian.party
-
-# 预期结果:
-# - 完成时间 < 5 分钟
-# - 自动创建 bucket
-# - 自动生成密钥
-# - 健康检查通过
 ```
 
----
-
-## 11. 未来规划
-
-### 11.1 Multi-region Production
-
-考虑未来支持多地域生产环境：
-- `production-sg` (新加坡)
-- `production-us` (美国)
-
-### 11.2 Preview Environments
-
-多别名 preview 已落地（§4.6）：`branch-<name>` / `pr-<N>` / `commit-<sha7>` / `tag-<slug>` 四类别名各自一套
-带临时数据库的独立 compose 栈，经 `tools/deploy_v2` 操作（`--type preview/*` 拉起、`--down` 拆除，路由到 `common/deploy/preview` 后端）。
-
----
-
-*Last updated: 2026-06-15*

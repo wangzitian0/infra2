@@ -547,7 +547,7 @@ class DokployClient:
             not cover.
         """
         from common.deploy.compose_lock import compose_write_lock
-        from common.deploy.env_util import _preserve_runtime_env
+        from common.deploy.env_util import _parse_env_text, _preserve_runtime_env
 
         with compose_write_lock(compose_id):
             if env_str is None:
@@ -558,21 +558,9 @@ class DokployClient:
                     )
                     env_str = _preserve_runtime_env(desired_str, existing_env)
                 else:
-                    # Merge with existing
-                    env_dict = {}
-
-                    # Parse existing
-                    for line in existing_env.split("\n"):
-                        line = line.strip()
-                        if line and "=" in line and not line.startswith("#"):
-                            key, value = line.split("=", 1)
-                            env_dict[key] = value
-
-                    # Update with new values
+                    env_dict = _parse_env_text(existing_env)
                     if env_vars:
                         env_dict.update(env_vars)
-
-                    # Convert back to string
                     env_str = "\n".join(f"{k}={v}" for k, v in env_dict.items())
 
             return self.update_compose(compose_id, env=env_str)

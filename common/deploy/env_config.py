@@ -561,20 +561,25 @@ def cors_allowed_origins(domain: str) -> list[str]:
     the FE domains so the allow-list can never drift from them.
     """
     origins: list[str] = []
+    preview_base = _PREVIEW_SERVICE_CONFIGS["finance_report/app"].base_subdomain
     # Fixed, non-dynamic envs (prod first, then staging) — straight from their URL pattern.
     for env_name in ("prod", "staging"):
         cfg = _ENVIRONMENTS[env_name]
         origins.append(cfg.app_url(domain=domain))
-    # Preview branch aliases — a concrete public URL each. The branch-tip alias is
-    # `branch-<name>` => report-branch-<name>.<domain> (matches PreviewAlias.app_url),
-    # e.g. report-branch-main, NOT report-main.
+    # Preview branch aliases — a concrete public URL each.
     for branch in _PREVIEW_CORS_BRANCHES:
-        origins.append(f"https://report-branch-{branch}.{domain}")
+        origins.append(
+            preview_alias("branch", branch).app_url(
+                domain=domain, base_subdomain=preview_base
+            )
+        )
     # Canary preview slot.
-    origins.append(f"https://report-{CANARY_SLOT}.{domain}")
+    origins.append(
+        preview_alias("canary").app_url(domain=domain, base_subdomain=preview_base)
+    )
     # Preview pr/commit aliases — wildcard, since the value is per-deploy.
     for kind in _PREVIEW_CORS_WILDCARD_KINDS:
-        origins.append(f"https://report-{kind}-*.{domain}")
+        origins.append(f"https://{preview_base}-{kind}-*.{domain}")
     # Bespoke app overrides (e.g. truealpha/app staging and prod). The origin keeps the
     # shared-domain form <base_subdomain><suffix>.<domain>: the list is unchanged by the
     # production URL fix. The app's own domain is a separate change to the collector.

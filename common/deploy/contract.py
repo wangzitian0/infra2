@@ -37,7 +37,7 @@ from dataclasses import dataclass, replace
 from functools import lru_cache
 
 from common.core import registry as service_registry
-from common.deploy.env_config import env_config, preview_alias
+from common.deploy.env_config import CANARY_SLOT, env_config, preview_alias
 
 _SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")  # a resolved, image-addressable commit sha
 
@@ -346,7 +346,7 @@ def _is_valid_preview_sub_domain(spec: ServiceSpec, sub_domain: str) -> bool:
     #   -branch-<name> / -pr-<N> / -commit-<sha7> / -tag-<v1-2-3> (dots/slashes -> dashes).
     pattern = (
         rf"\A{re.escape(spec.base_subdomain)}-"
-        r"(branch-[a-z0-9-]+|pr-[1-9][0-9]*|commit-[0-9a-f]{7}|tag-v[0-9]+-[0-9]+-[0-9]+|canary-preview)\Z"
+        rf"(branch-[a-z0-9-]+|pr-[1-9][0-9]*|commit-[0-9a-f]{{7}}|tag-v[0-9]+-[0-9]+-[0-9]+|{re.escape(CANARY_SLOT)})\Z"
     )
     return re.match(pattern, sub_domain) is not None
 

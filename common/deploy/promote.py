@@ -44,6 +44,7 @@ from common.deploy.preflight import (
     verify_token_status,
 )
 from common.deploy.dokploy_adapter import (
+    await_effective_config_hash,
     deployment_ids as _deployment_ids,
     started_before_trigger,
 )
@@ -69,13 +70,6 @@ class DeployPlan:
     max_rollback_attempts: int = 2
 
 
-def _started_before(deployment: dict, floor_epoch: float) -> bool:
-    """Delegate start-timestamp floor filtering to dokploy_adapter.started_before_trigger."""
-    return started_before_trigger(
-        deployment, floor_epoch, start_epoch_fn=deployment_start_epoch
-    )
-
-
 def wait_for_rollout(
     client,
     compose_id: str,
@@ -93,7 +87,11 @@ def wait_for_rollout(
     window. Unified with common.deploy.rollout.wait_for_deployment (D5).
     """
     filter_fn = (
-        (lambda d: _started_before(d, min_started_at))
+        (
+            lambda d: started_before_trigger(
+                d, min_started_at, start_epoch_fn=deployment_start_epoch
+            )
+        )
         if min_started_at is not None
         else None
     )
@@ -372,42 +370,45 @@ def verify_effective_config_hash(
     When expected_keys is provided, also verify that the effective compose env contains
     no unexpected stale keys once the hash matches.
     """
-    deadline = _now() + max(0, timeout)
-    last_value: str | None = None
-    last_error: Exception | None = None
     compose_env = ""
-    while True:
-        try:
-            compose_env = client.get_compose_env(compose_id)
-            last_value = _env_value(compose_env, "CONFIGURATION_SHA256") or _env_value(
-                compose_env, "IAC_CONFIG_HASH"
-            )
-            last_error = None
-        except Exception as exc:  # transient Dokploy read; tolerate within window
-            last_error = exc
-        if last_value == expected_hash:
-            if expected_keys is not None:
-                effective_keys = set(_parse_env_text(compose_env))
-                unexpected = sorted(effective_keys - set(expected_keys))
-                if unexpected:
-                    raise RuntimeError(
-                        f"post-deploy config verify failed: effective config for "
-                        f"compose {compose_id} contains unexpected stale keys: "
-                        f"{', '.join(unexpected)}"
-                    )
-            return last_value
-        if _now() >= deadline:
-            if last_error is not None and last_value is None:
-                raise RuntimeError(
-                    f"post-deploy config verify could not read effective config for "
-                    f"compose {compose_id}: {last_error}"
-                )
+
+    def _read_hash() -> str | None:
+        nonlocal compose_env
+        compose_env = client.get_compose_env(compose_id)
+        return _env_value(compose_env, "CONFIGURATION_SHA256") or _env_value(
+            compose_env, "IAC_CONFIG_HASH"
+        )
+
+    try:
+        last_value = await_effective_config_hash(
+            _read_hash,
+            expected_hash,
+            timeout,
+            interval,
+            _sleep=_sleep,
+            _now=_now,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"post-deploy config verify could not read effective config for "
+            f"compose {compose_id}: {exc}"
+        ) from exc
+    if last_value != expected_hash:
+        raise RuntimeError(
+            f"post-deploy config verify failed: effective IAC_CONFIG_HASH "
+            f"{last_value!r} never advanced to {expected_hash!r} for compose "
+            f"{compose_id} within {timeout}s (deploy may not have taken)."
+        )
+    if expected_keys is not None:
+        effective_keys = set(_parse_env_text(compose_env))
+        unexpected = sorted(effective_keys - set(expected_keys))
+        if unexpected:
             raise RuntimeError(
-                f"post-deploy config verify failed: effective IAC_CONFIG_HASH "
-                f"{last_value!r} never advanced to {expected_hash!r} for compose "
-                f"{compose_id} within {timeout}s (deploy may not have taken)."
+                f"post-deploy config verify failed: effective config for "
+                f"compose {compose_id} contains unexpected stale keys: "
+                f"{', '.join(unexpected)}"
             )
-        _sleep(max(1, interval))
+    return last_value
 
 
 def _validate_deploy_preconditions(
