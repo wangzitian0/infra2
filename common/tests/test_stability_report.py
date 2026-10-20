@@ -16,7 +16,7 @@ from common.observability import local_ledger
 from common.observability.local_ledger import host_ledger_path
 
 ROOT = Path(__file__).resolve().parents[2]
-MODULE_PATH = ROOT / "tools" / "stability_report.py"
+MODULE_PATH = ROOT / "common" / "observability" / "stability_report.py"
 NOW = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
 DAY0 = datetime(2026, 9, 24, tzinfo=UTC).timestamp()
 

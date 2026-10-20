@@ -18,7 +18,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _module():
     spec = importlib.util.spec_from_file_location(
-        "webhook_delivery_audit", ROOT / "tools/webhook_delivery_audit.py"
+        "webhook_delivery_audit",
+        ROOT / "common/observability/webhook_delivery_audit.py",
     )
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)

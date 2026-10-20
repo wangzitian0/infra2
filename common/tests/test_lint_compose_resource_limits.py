@@ -16,7 +16,8 @@ from infra2_sdk.rules.compose import inspect_compose
 _SPEC = importlib.util.spec_from_file_location(
     "lint_compose_resource_limits",
     Path(__file__).resolve().parent.parent.parent
-    / "tools"
+    / "common"
+    / "core"
     / "lint_compose_resource_limits.py",
 )
 lint = importlib.util.module_from_spec(_SPEC)
