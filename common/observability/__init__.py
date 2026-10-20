@@ -35,9 +35,14 @@ _LAZY: "dict[str, str]" = {
     "analyze_container_logs": "common.observability.breakdown",
     "broken_state": "common.observability.breakdown",
     "build_breakdown_alert_payload": "common.observability.breakdown",
+    "build_digest_card": "common.observability.digest",
+    "build_digest_message": "common.observability.digest",
     "classify_reason": "common.observability.breakdown",
+    "deliver_digest": "common.observability.digest",
     "execute_probe": "common.observability.probes",
+    "fetch_estate_app_health": "common.observability.digest",
     "find_breakdown_containers": "common.observability.breakdown",
+    "load_estate_openpanel_presets": "common.observability.openpanel",
     "load_trail": "common.observability.issue_trail",
     "openpanel_env": "common.observability.openpanel",
     "parse_probe_specs": "common.observability.probes",
@@ -46,6 +51,8 @@ _LAZY: "dict[str, str]" = {
     "record_verdicts": "common.observability.issue_trail",
     "run_probe": "common.observability.probes",
     "run_probes": "common.observability.probes",
+    "summarize_watchdog_log_events": "common.observability.digest",
+    "summarize_weekly_runs": "common.observability.digest",
     "sweep_breakdowns": "common.observability.watchers",
 }
 

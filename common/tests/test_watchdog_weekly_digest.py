@@ -440,7 +440,7 @@ def test_build_digest_card_and_estate_app_health(monkeypatch) -> None:
 
     def fake_urlopen(request, timeout=5.0):
         url = request.full_url
-        if "report-api-stg" in url:
+        if "report-api-staging" in url:
             return _Resp({"status": "healthy", "version": "0.2.8"})
         if "report-api" in url:
             return _Resp({"status": "healthy", "version": "0.2.7"})
@@ -539,3 +539,10 @@ def test_build_digest_card_and_estate_app_health(monkeypatch) -> None:
         argv=["--daily"],
     )
     assert rc == 0
+
+    from common.observability.openpanel import load_estate_openpanel_presets
+
+    presets = load_estate_openpanel_presets()
+    assert "core-funnel" in presets
+    assert "activation" in presets
+

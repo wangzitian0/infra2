@@ -1,17 +1,19 @@
-"""Weekly digest for infra2 out-of-band watchdog job runs."""
+"""Thin CLI wrapper for the out-of-band watchdog weekly/daily digest (#1311).
+
+Domain logic lives in :mod:`common.observability.digest`. This module retains
+hookable module-level bindings so existing unit tests and workflow invocations
+operate identically.
+"""
 
 from __future__ import annotations
 
-from collections import Counter
-import io
-import json
 import os
 import sys
-from datetime import UTC, datetime, timedelta
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping
-from urllib.request import Request, urlopen
-import zipfile
+from typing import Any
+from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -22,25 +24,51 @@ from common.alerting import (  # noqa: E402
     deliver_out_of_band_card,
     deliver_out_of_band_text,
 )
-
-WORKFLOW_FILE = "ops-checks.yml"
-WATCHDOG_JOB_NAME = "Check infra2 host and alert bridge"
-DEFAULT_REPOSITORY = "wangzitian0/infra2"
-DIGEST_WINDOW_DAYS = 7
-DAILY_WINDOW_DAYS = 1
-DEFAULT_INTERNAL_DOMAIN = "zitian.party"
-JOURNEY_BOARD_URL = "https://wangzitian0.github.io/finance_report/board/"
-OPENPANEL_URL = "https://analytics.zitian.party"
-SIGNOZ_URL = "https://signoz.zitian.party"
-WATCHDOG_RUNBOOK_URL = (
-    "https://github.com/wangzitian0/infra2/blob/main/platform/12.alerting/README.md#out-of-band-watchdog"
+from common.observability import digest as _digest  # noqa: E402
+from common.observability.digest import (  # noqa: E402
+    DAILY_WINDOW_DAYS,
+    DEFAULT_INTERNAL_DOMAIN,
+    DEFAULT_REPOSITORY,
+    DIGEST_WINDOW_DAYS,
+    JOURNEY_BOARD_URL,
+    OPENPANEL_URL,
+    SIGNOZ_URL,
+    STALE_ISSUE_DAYS,
+    WATCHDOG_JOB_NAME,
+    WATCHDOG_RUNBOOK_URL,
+    WORKFLOW_FILE,
+    _as_int,
+    build_digest_card,
+    build_digest_message,
+    recent_weekly_runs,
+    summarize_stale_issues,
+    summarize_watchdog_log_events,
+    summarize_weekly_runs,
 )
-# #508: a PR can materially advance an open issue's scope without ever referencing it
-# (the merge contract now asks for a reference, but nothing enforced it retroactively —
-# #425/#475/#402 all lagged the repo by 1-3 weeks before this existed). 14 days with no
-# update is long enough that either the issue is genuinely stalled or work landed
-# without being linked back — both are worth a human glance, not silent drift.
-STALE_ISSUE_DAYS = 14
+
+
+def fetch_run_jobs(
+    repository: str,
+    token: str,
+    run_id: str | int,
+    *,
+    per_page: int = 100,
+) -> list[dict[str, Any]]:
+    return _digest.fetch_run_jobs(
+        repository, token, run_id, per_page=per_page, opener=urlopen
+    )
+
+
+def run_includes_job(
+    repository: str,
+    token: str,
+    run_id: str | int,
+    *,
+    job_name: str = WATCHDOG_JOB_NAME,
+) -> bool:
+    return _digest.run_includes_job(
+        repository, token, run_id, job_name=job_name, opener=urlopen
+    )
 
 
 def fetch_recent_runs(
@@ -53,131 +81,20 @@ def fetch_recent_runs(
     now: datetime | None = None,
     window_days: int = DIGEST_WINDOW_DAYS,
 ) -> list[dict[str, Any]]:
-    """Fetch recent ops-checks runs that actually include the watchdog job."""
-    owner, repo = repository.split("/", 1)
-    current = now or datetime.now(UTC)
-    cutoff = current - timedelta(days=window_days)
-    matching_runs: list[dict[str, Any]] = []
-    page = 1
-
-    while True:
-        request = Request(
-            (
-                f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/"
-                f"{workflow_file}/runs?per_page={per_page}&page={page}"
-            ),
-            headers=_github_headers(token),
-            method="GET",
-        )
-        with urlopen(request, timeout=15) as response:  # noqa: S310
-            payload = json.loads(response.read().decode("utf-8"))
-        runs = payload.get("workflow_runs")
-        page_runs = runs if isinstance(runs, list) else []
-        if not page_runs:
-            break
-
-        reached_cutoff = False
-        for run in page_runs:
-            created = _run_created_at(run)
-            if created is None:
-                continue
-            if created < cutoff:
-                reached_cutoff = True
-                continue
-            run_id = run.get("id") or run.get("databaseId")
-            if not run_id:
-                continue
-            if run_includes_job(
-                repository,
-                token,
-                run_id,
-                job_name=watchdog_job_name,
-            ):
-                matching_runs.append(run)
-
-        if reached_cutoff or len(page_runs) < per_page:
-            break
-        page += 1
-
-    return matching_runs
-
-
-def fetch_run_jobs(
-    repository: str,
-    token: str,
-    run_id: str | int,
-    *,
-    per_page: int = 100,
-) -> list[dict[str, Any]]:
-    """Fetch jobs for one GitHub Actions workflow run."""
-    owner, repo = repository.split("/", 1)
-    jobs: list[dict[str, Any]] = []
-    page = 1
-    while True:
-        request = Request(
-            (
-                f"https://api.github.com/repos/{owner}/{repo}/actions/runs/"
-                f"{run_id}/jobs?per_page={per_page}&page={page}"
-            ),
-            headers=_github_headers(token),
-            method="GET",
-        )
-        with urlopen(request, timeout=15) as response:  # noqa: S310
-            payload = json.loads(response.read().decode("utf-8"))
-        page_jobs = payload.get("jobs")
-        if not isinstance(page_jobs, list) or not page_jobs:
-            break
-        jobs.extend(page_jobs)
-        if len(page_jobs) < per_page:
-            break
-        page += 1
-
-    return jobs
-
-
-def run_includes_job(
-    repository: str,
-    token: str,
-    run_id: str | int,
-    *,
-    job_name: str = WATCHDOG_JOB_NAME,
-) -> bool:
-    """Return whether a workflow run contains the out-of-band watchdog job."""
-    return any(
-        str(job.get("name") or "") == job_name
-        and str(job.get("conclusion") or "").lower() != "skipped"
-        for job in fetch_run_jobs(repository, token, run_id)
+    return _digest.fetch_recent_runs(
+        repository,
+        token,
+        workflow_file=workflow_file,
+        watchdog_job_name=watchdog_job_name,
+        per_page=per_page,
+        now=now,
+        window_days=window_days,
+        opener=urlopen,
     )
-
-
-def _github_headers(token: str) -> dict[str, str]:
-    return {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "infra2-watchdog-weekly-digest/1.0",
-    }
-
-
-def _run_created_at(run: Mapping[str, Any]) -> datetime | None:
-    created_at = run.get("created_at")
-    if not isinstance(created_at, str):
-        return None
-    try:
-        return _parse_iso8601(created_at)
-    except ValueError:
-        return None
 
 
 def fetch_run_log(repository: str, token: str, run_id: str | int) -> str:
-    """Fetch and decode the GitHub Actions log archive for one workflow run."""
-    owner, repo = repository.split("/", 1)
-    request = Request(
-        f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/logs",
-        headers=_github_headers(token),
-        method="GET",
-    )
-    with urlopen(request, timeout=20) as response:  # noqa: S310
-        return _decode_log_payload(response.read())
+    return _digest.fetch_run_log(repository, token, run_id, opener=urlopen)
 
 
 def fetch_recent_run_logs(
@@ -187,240 +104,9 @@ def fetch_recent_run_logs(
     *,
     max_logs: int = 25,
 ) -> dict[str, str]:
-    """Fetch logs for recent runs; encode fetch failures as review events."""
-    logs: dict[str, str] = {}
-    for run in runs[: max(0, max_logs)]:
-        run_id = run.get("id") or run.get("databaseId")
-        if not run_id:
-            continue
-        key = str(run_id)
-        try:
-            logs[key] = fetch_run_log(repository, token, key)
-        except Exception as exc:  # noqa: BLE001 - digest must not fail closed on logs.
-            logs[key] = json.dumps(
-                {
-                    "event": "watchdog.digest.log_fetch_failure",
-                    "status": "fail",
-                    "run_id": key,
-                    "error": _one_line(str(exc)),
-                },
-                sort_keys=True,
-            )
-    return logs
-
-
-def _decode_log_payload(payload: bytes) -> str:
-    try:
-        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-            chunks: list[str] = []
-            for name in sorted(archive.namelist()):
-                if name.endswith("/"):
-                    continue
-                with archive.open(name) as handle:
-                    chunks.append(handle.read().decode("utf-8", errors="replace"))
-            return "\n".join(chunks)
-    except zipfile.BadZipFile:
-        return payload.decode("utf-8", errors="replace")
-
-
-def _parse_iso8601(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
-
-
-def recent_weekly_runs(
-    runs: list[dict[str, Any]],
-    *,
-    now: datetime | None = None,
-    window_days: int = DIGEST_WINDOW_DAYS,
-) -> list[dict[str, Any]]:
-    """Return workflow runs created inside the digest window."""
-    current = now or datetime.now(UTC)
-    cutoff = current - timedelta(days=window_days)
-    recent: list[dict[str, Any]] = []
-    for run in runs:
-        created_at = run.get("created_at")
-        if not isinstance(created_at, str):
-            continue
-        try:
-            created = _parse_iso8601(created_at)
-        except ValueError:
-            continue
-        if created >= cutoff:
-            recent.append(run)
-    return recent
-
-
-def summarize_weekly_runs(
-    runs: list[dict[str, Any]],
-    *,
-    now: datetime | None = None,
-    window_days: int = DIGEST_WINDOW_DAYS,
-) -> dict[str, Any]:
-    """Aggregate workflow run health summary over ``window_days``."""
-    current = now or datetime.now(UTC)
-    cutoff = current - timedelta(days=window_days)
-    recent = recent_weekly_runs(runs, now=current, window_days=window_days)
-    totals: dict[str, int] = {
-        "success": 0,
-        "failure": 0,
-        "cancelled": 0,
-        "timed_out": 0,
-        "other": 0,
-    }
-    failed_urls: list[str] = []
-    for run in recent:
-        conclusion = str(run.get("conclusion") or "").lower()
-        html_url = str(run.get("html_url") or "")
-        if conclusion == "success":
-            totals["success"] += 1
-        elif conclusion == "timed_out":
-            totals["failure"] += 1
-            totals["timed_out"] += 1
-            if html_url:
-                failed_urls.append(html_url)
-        elif conclusion == "failure":
-            totals["failure"] += 1
-            if html_url:
-                failed_urls.append(html_url)
-        elif conclusion == "cancelled":
-            totals["cancelled"] += 1
-        else:
-            totals["other"] += 1
-
-    total_count = len(recent)
-    success_rate = (totals["success"] / total_count * 100.0) if total_count else 0.0
-    failure_rate = (totals["failure"] / total_count * 100.0) if total_count else 0.0
-    return {
-        "total_runs": total_count,
-        "success_count": totals["success"],
-        "failure_count": totals["failure"],
-        "cancelled_count": totals["cancelled"],
-        "timed_out_count": totals["timed_out"],
-        "other_count": totals["other"],
-        "success_rate_pct": round(success_rate, 2),
-        "failure_rate_pct": round(failure_rate, 2),
-        "failed_run_urls": failed_urls[:5],
-        "window_days": window_days,
-        "week_start_utc": cutoff.date().isoformat(),
-        "week_end_utc": current.date().isoformat(),
-    }
-
-
-def summarize_watchdog_log_events(logs_by_run: Mapping[str, str]) -> dict[str, Any]:
-    """Review structured watchdog logs for alert recall evidence."""
-    failure_domains: Counter[str] = Counter()
-    reviewed_run_count = len(logs_by_run)
-    structured_event_run_count = 0
-    alertable_run_count = 0
-    delivery_success_run_count = 0
-    delivery_failure_run_count = 0
-    fallback_issue_run_count = 0
-    missing_alert_evidence_run_count = 0
-    failed_check_count = 0
-    log_fetch_error_count = 0
-
-    for log_text in logs_by_run.values():
-        events = list(_parse_watchdog_events(log_text))
-        if events:
-            structured_event_run_count += 1
-        check_failures = [
-            event
-            for event in events
-            if event.get("event") == "watchdog.check"
-            and str(event.get("status") or "").lower() == "fail"
-        ]
-        failed_check_count += len(check_failures)
-        for event in check_failures:
-            domain = str(event.get("failure_domain") or "unknown")
-            failure_domains[domain] += 1
-
-        complete_failure = any(
-            event.get("event") == "watchdog.run.complete"
-            and str(event.get("status") or "").lower() == "fail"
-            and _as_int(event.get("failure_count")) > 0
-            for event in events
-        )
-        # #908: a report-only failure goes to the daily report, never the pager,
-        # so it is not an alert that recall must account for.
-        paged_failures = [
-            event for event in check_failures if event.get("route") != "report"
-        ]
-        alertable = bool(paged_failures) or complete_failure
-        if alertable:
-            alertable_run_count += 1
-
-        delivery_success = any(
-            event.get("event") == "watchdog.delivery.success" for event in events
-        )
-        delivery_failures = [
-            event
-            for event in events
-            if event.get("event") == "watchdog.delivery.failure"
-        ]
-        fallback_issue = any(
-            str(event.get("fallback_issue_url") or "").strip()
-            for event in delivery_failures
-        )
-        if delivery_success:
-            delivery_success_run_count += 1
-        if delivery_failures:
-            delivery_failure_run_count += 1
-        if fallback_issue:
-            fallback_issue_run_count += 1
-        if alertable and not delivery_success and not fallback_issue:
-            missing_alert_evidence_run_count += 1
-        if any(
-            event.get("event") == "watchdog.digest.log_fetch_failure"
-            for event in events
-        ):
-            log_fetch_error_count += 1
-
-    recalled_runs = delivery_success_run_count + fallback_issue_run_count
-    recall_pct = (
-        round(recalled_runs / alertable_run_count * 100.0, 2)
-        if alertable_run_count
-        else 100.0
+    return _digest.fetch_recent_run_logs(
+        repository, token, runs, max_logs=max_logs, log_fetcher=fetch_run_log
     )
-    return {
-        "reviewed_run_count": reviewed_run_count,
-        "structured_event_run_count": structured_event_run_count,
-        "alertable_run_count": alertable_run_count,
-        "delivery_success_run_count": delivery_success_run_count,
-        "delivery_failure_run_count": delivery_failure_run_count,
-        "fallback_issue_run_count": fallback_issue_run_count,
-        "missing_alert_evidence_run_count": missing_alert_evidence_run_count,
-        "alert_recall_evidence_pct": recall_pct,
-        "failed_check_count": failed_check_count,
-        "failure_domain_counts": dict(sorted(failure_domains.items())),
-        "log_fetch_error_count": log_fetch_error_count,
-    }
-
-
-def _parse_watchdog_events(log_text: str) -> list[dict[str, Any]]:
-    decoder = json.JSONDecoder()
-    events: list[dict[str, Any]] = []
-    for line in log_text.splitlines():
-        start = line.find("{")
-        while start >= 0:
-            candidate = line[start:].strip()
-            try:
-                parsed, _end = decoder.raw_decode(candidate)
-            except json.JSONDecodeError:
-                start = line.find("{", start + 1)
-                continue
-            if isinstance(parsed, dict) and str(parsed.get("event") or "").startswith(
-                "watchdog."
-            ):
-                events.append(parsed)
-            break
-    return events
-
-
-def _as_int(value: object) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0
 
 
 def fetch_stale_open_issues(
@@ -431,63 +117,14 @@ def fetch_stale_open_issues(
     per_page: int = 100,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    """Open issues (not PRs) untouched for `stale_days`+, oldest-updated first.
-
-    A merged PR that advances an issue's scope is expected to reference it (#508);
-    this is the backstop for the case where one didn't — surfaced here rather than
-    silently trusted.
-    """
-    owner, repo = repository.split("/", 1)
-    current = now or datetime.now(UTC)
-    cutoff = current - timedelta(days=stale_days)
-    stale: list[dict[str, Any]] = []
-    page = 1
-
-    while True:
-        request = Request(
-            (
-                f"https://api.github.com/repos/{owner}/{repo}/issues"
-                f"?state=open&sort=updated&direction=asc&per_page={per_page}&page={page}"
-            ),
-            headers=_github_headers(token),
-            method="GET",
-        )
-        with urlopen(request, timeout=15) as response:  # noqa: S310
-            page_issues = json.loads(response.read().decode("utf-8"))
-        if not isinstance(page_issues, list) or not page_issues:
-            break
-
-        reached_fresh = False
-        for issue in page_issues:
-            if not isinstance(issue, dict) or "pull_request" in issue:
-                continue  # the issues API also returns PRs; not what this reports on
-            updated = (
-                _parse_iso8601(issue["updated_at"]) if issue.get("updated_at") else None
-            )
-            if updated is None:
-                continue
-            if updated >= cutoff:
-                reached_fresh = True  # ascending order: everything after is fresher
-                continue
-            stale.append(issue)
-
-        if reached_fresh or len(page_issues) < per_page:
-            break
-        page += 1
-
-    return stale
-
-
-def summarize_stale_issues(issues: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        {
-            "number": issue.get("number"),
-            "title": _one_line(str(issue.get("title") or "")),
-            "url": issue.get("html_url"),
-            "updated_at": issue.get("updated_at"),
-        }
-        for issue in issues
-    ]
+    return _digest.fetch_stale_open_issues(
+        repository,
+        token,
+        stale_days=stale_days,
+        per_page=per_page,
+        now=now,
+        opener=urlopen,
+    )
 
 
 def fetch_estate_app_health(
@@ -495,302 +132,9 @@ def fetch_estate_app_health(
     *,
     timeout: float = 5.0,
 ) -> list[dict[str, Any]]:
-    """Probe Production vs. Staging /health endpoints for estate applications."""
-    specs = (
-        ("finance_report", "report-api"),
-        ("truealpha", "truealpha-api"),
+    return _digest.fetch_estate_app_health(
+        internal_domain, timeout=timeout, opener=urlopen
     )
-    results: list[dict[str, Any]] = []
-    for app_id, host_prefix in specs:
-        envs: dict[str, dict[str, str]] = {}
-        for env_name, suffix in (("production", ""), ("staging", "-stg")):
-            url = f"https://{host_prefix}{suffix}.{internal_domain}/health"
-            request = Request(
-                url,
-                headers={
-                    "Accept": "application/json",
-                    "User-Agent": "infra2-watchdog-weekly-digest/1.0",
-                },
-                method="GET",
-            )
-            try:
-                with urlopen(request, timeout=timeout) as response:  # noqa: S310
-                    payload = json.loads(response.read().decode("utf-8"))
-                status = str(payload.get("status") or "unknown")
-                version = str(
-                    payload.get("version")
-                    or payload.get("app_version")
-                    or payload.get("git_sha")
-                    or "unknown"
-                )
-            except Exception as exc:  # noqa: BLE001 - digest probes are best-effort
-                status = f"unreachable ({type(exc).__name__})"
-                version = "unknown"
-            envs[env_name] = {"status": status, "version": version, "url": url}
-        prod_v = envs["production"]["version"]
-        stg_v = envs["staging"]["version"]
-        parity = (
-            "in_sync"
-            if prod_v != "unknown" and prod_v == stg_v
-            else ("ahead_or_drift" if stg_v != prod_v else "unknown")
-        )
-        results.append(
-            {
-                "app": app_id,
-                "production": envs["production"],
-                "staging": envs["staging"],
-                "parity": parity,
-            }
-        )
-    return results
-
-
-def build_digest_message(summary: Mapping[str, Any], repository: str) -> str:
-    """Build a compact weekly or daily digest message."""
-    cadence = "daily" if summary.get("window_days") == 1 else "weekly"
-    lines = [
-        f"{REPORT_TITLE_PREFIX}[WATCHDOG DIGEST] Infra2 out-of-band {cadence} summary",
-        f"Repository: {repository}",
-        f"Window (UTC): {summary['week_start_utc']} -> {summary['week_end_utc']}",
-        (
-            f"Runs: {summary['total_runs']} | Success: {summary['success_count']} | "
-            f"Failure: {summary['failure_count']} | Cancelled: {summary['cancelled_count']} | "
-            f"Other: {summary['other_count']}"
-        ),
-        f"Success rate: {summary['success_rate_pct']}%",
-    ]
-    failed_urls = summary.get("failed_run_urls", [])
-    if isinstance(failed_urls, list) and failed_urls:
-        lines.append("Recent failed runs:")
-        for url in failed_urls:
-            lines.append(f"- {url}")
-    audit = summary.get("log_audit")
-    if isinstance(audit, Mapping):
-        lines.append("Alert recall audit:")
-        lines.append(
-            f"Reviewed runs: {audit['reviewed_run_count']} | "
-            f"Structured-event runs: {audit['structured_event_run_count']} | "
-            f"Failed checks: {audit['failed_check_count']}"
-        )
-        lines.append(
-            f"Alertable runs: {audit['alertable_run_count']} | "
-            f"Delivery success: {audit['delivery_success_run_count']} | "
-            f"Delivery failure: {audit['delivery_failure_run_count']} | "
-            f"Fallback issues: {audit['fallback_issue_run_count']} | "
-            f"Missing evidence: {audit['missing_alert_evidence_run_count']} | "
-            f"Recall evidence: {audit['alert_recall_evidence_pct']}%"
-        )
-        domains = audit.get("failure_domain_counts")
-        if isinstance(domains, Mapping) and domains:
-            domain_text = ", ".join(
-                f"{name}={count}"
-                for name, count in sorted(
-                    domains.items(), key=lambda item: (-int(item[1]), str(item[0]))
-                )[:5]
-            )
-            lines.append(f"Failure domains: {domain_text}")
-        if audit.get("log_fetch_error_count"):
-            lines.append(f"Log fetch errors: {audit['log_fetch_error_count']}")
-    estate_apps = summary.get("estate_apps")
-    if isinstance(estate_apps, list) and estate_apps:
-        lines.append("Estate app release parity:")
-        for app_entry in estate_apps:
-            if not isinstance(app_entry, Mapping):
-                continue
-            prod = app_entry.get("production") or {}
-            stg = app_entry.get("staging") or {}
-            lines.append(
-                f"- {app_entry.get('app')}: prod={prod.get('version')} ({prod.get('status')}) | "
-                f"staging={stg.get('version')} ({stg.get('status')}) [{app_entry.get('parity')}]"
-            )
-    stale_issues = summary.get("stale_issues")
-    if isinstance(stale_issues, list) and stale_issues:
-        lines.append(f"Stale open issues ({STALE_ISSUE_DAYS}+ days untouched):")
-        for issue in stale_issues[:10]:
-            lines.append(f"- #{issue['number']} {issue['title']} ({issue['url']})")
-        if len(stale_issues) > 10:
-            lines.append(f"  ...and {len(stale_issues) - 10} more")
-    lines.append(f"Runbook: {WATCHDOG_RUNBOOK_URL}")
-    return "\n".join(lines)
-
-
-def build_digest_card(summary: Mapping[str, Any], repository: str) -> dict[str, Any]:
-    """Build a Feishu interactive card for the weekly or daily watchdog digest."""
-    cadence = "daily" if summary.get("window_days") == 1 else "weekly"
-    failure_count = _as_int(summary.get("failure_count"))
-    audit = summary.get("log_audit") if isinstance(summary.get("log_audit"), Mapping) else {}
-    missing_recall = _as_int(audit.get("missing_alert_evidence_run_count"))
-    recall_pct = audit.get("alert_recall_evidence_pct", 100.0)
-    stale_issues = (
-        summary.get("stale_issues")
-        if isinstance(summary.get("stale_issues"), list)
-        else []
-    )
-    is_healthy = failure_count == 0 and missing_recall == 0
-    template = "green" if is_healthy else ("orange" if missing_recall == 0 else "red")
-    icon = "🟢" if is_healthy else ("🟡" if missing_recall == 0 else "🔴")
-    header_title = (
-        f"{icon} {REPORT_TITLE_PREFIX}[WATCHDOG DIGEST] "
-        f"Infra2 out-of-band {cadence} summary"
-    )
-
-    elements: list[dict[str, Any]] = [
-        {
-            "tag": "div",
-            "fields": [
-                {
-                    "is_short": True,
-                    "text": {
-                        "tag": "lark_md",
-                        "content": (
-                            f"**Watchdog Runs**\n"
-                            f"{summary['success_count']}/{summary['total_runs']} "
-                            f"({summary['success_rate_pct']}%)"
-                        ),
-                    },
-                },
-                {
-                    "is_short": True,
-                    "text": {
-                        "tag": "lark_md",
-                        "content": (
-                            f"**Alert Recall Evidence**\n"
-                            f"{recall_pct}% (missing: {missing_recall})"
-                        ),
-                    },
-                },
-                {
-                    "is_short": True,
-                    "text": {
-                        "tag": "lark_md",
-                        "content": (
-                            f"**Window (UTC)**\n"
-                            f"{summary['week_start_utc']} → {summary['week_end_utc']}"
-                        ),
-                    },
-                },
-                {
-                    "is_short": True,
-                    "text": {
-                        "tag": "lark_md",
-                        "content": (
-                            f"**Repository & Stale Issues**\n"
-                            f"`{repository}` · {len(stale_issues)} stale"
-                        ),
-                    },
-                },
-            ],
-        },
-        {"tag": "hr"},
-    ]
-
-    estate_apps = summary.get("estate_apps")
-    if isinstance(estate_apps, list) and estate_apps:
-        app_lines = ["**Estate App Release & Health Parity**"]
-        for app_entry in estate_apps:
-            if not isinstance(app_entry, Mapping):
-                continue
-            prod = app_entry.get("production") or {}
-            stg = app_entry.get("staging") or {}
-            parity = app_entry.get("parity", "unknown")
-            icon = "✅" if parity == "in_sync" else "🔄"
-            app_lines.append(
-                f"{icon} **{app_entry.get('app')}**: Prod `{prod.get('version')}` "
-                f"({prod.get('status')}) · Staging `{stg.get('version')}` "
-                f"({stg.get('status')})"
-            )
-        elements.append(
-            {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(app_lines)}}
-        )
-        elements.append({"tag": "hr"})
-
-    if audit:
-        domains = audit.get("failure_domain_counts")
-        domain_text = (
-            ", ".join(
-                f"`{name}`={count}"
-                for name, count in sorted(
-                    domains.items(), key=lambda item: (-int(item[1]), str(item[0]))
-                )[:5]
-            )
-            if isinstance(domains, Mapping) and domains
-            else "none"
-        )
-        audit_md = (
-            "**Alert Recall Audit**\n"
-            f"• Reviewed runs: **{audit.get('reviewed_run_count', 0)}** · "
-            f"Alertable: **{audit.get('alertable_run_count', 0)}** · "
-            f"Delivered: **{audit.get('delivery_success_run_count', 0)}** · "
-            f"Fallback issues: **{audit.get('fallback_issue_run_count', 0)}**\n"
-            f"• Failure domains: {domain_text}"
-        )
-        elements.append({"tag": "div", "text": {"tag": "lark_md", "content": audit_md}})
-
-    failed_urls = summary.get("failed_run_urls", [])
-    if isinstance(failed_urls, list) and failed_urls:
-        fail_lines = ["**Recent Failed Runs**"] + [
-            f"• [{url.rsplit('/', 1)[-1]}]({url})" for url in failed_urls[:5]
-        ]
-        elements.append(
-            {"tag": "div", "text": {"tag": "lark_md", "content": "\n".join(fail_lines)}}
-        )
-
-    if stale_issues:
-        issue_lines = [
-            f"**Stale Open Issues ({STALE_ISSUE_DAYS}+ days untouched)**"
-        ] + [
-            f"• [#{issue['number']}]({issue['url']}) {issue['title']}"
-            for issue in stale_issues[:8]
-        ]
-        if len(stale_issues) > 8:
-            issue_lines.append(f"• …and {len(stale_issues) - 8} more")
-        elements.append(
-            {
-                "tag": "div",
-                "text": {"tag": "lark_md", "content": "\n".join(issue_lines)},
-            }
-        )
-
-    elements.append(
-        {
-            "tag": "action",
-            "actions": [
-                {
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": "Core Journey 看板"},
-                    "url": JOURNEY_BOARD_URL,
-                    "type": "primary",
-                },
-                {
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": "OpenPanel 漏斗"},
-                    "url": OPENPANEL_URL,
-                    "type": "default",
-                },
-                {
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": "SigNoz 监控"},
-                    "url": SIGNOZ_URL,
-                    "type": "default",
-                },
-                {
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": "Watchdog Runbook"},
-                    "url": WATCHDOG_RUNBOOK_URL,
-                    "type": "default",
-                },
-            ],
-        }
-    )
-
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "template": template,
-            "title": {"tag": "plain_text", "content": header_title},
-        },
-        "elements": elements,
-    }
 
 
 def deliver_digest(
@@ -799,12 +143,13 @@ def deliver_digest(
     *,
     card: dict[str, Any] | None = None,
 ) -> None:
-    """Deliver digest via the shared out-of-band Feishu webhook/app path."""
-    fmt = env.get("WATCHDOG_DIGEST_FORMAT", "card").strip().lower()
-    if card is not None and fmt != "text":
-        deliver_out_of_band_card(env, card, fallback_text=message)
-        return
-    deliver_out_of_band_text(env, message)
+    _digest.deliver_digest(
+        env,
+        message,
+        card=card,
+        card_sender=deliver_out_of_band_card,
+        text_sender=deliver_out_of_band_text,
+    )
 
 
 def main(
@@ -888,8 +233,35 @@ def main(
     return 0
 
 
-def _one_line(value: str) -> str:
-    return " ".join(value.split())
+__all__ = [
+    "DAILY_WINDOW_DAYS",
+    "DEFAULT_INTERNAL_DOMAIN",
+    "DEFAULT_REPOSITORY",
+    "DIGEST_WINDOW_DAYS",
+    "JOURNEY_BOARD_URL",
+    "OPENPANEL_URL",
+    "REPORT_TITLE_PREFIX",
+    "SIGNOZ_URL",
+    "STALE_ISSUE_DAYS",
+    "WATCHDOG_JOB_NAME",
+    "WATCHDOG_RUNBOOK_URL",
+    "WORKFLOW_FILE",
+    "build_digest_card",
+    "build_digest_message",
+    "deliver_digest",
+    "fetch_estate_app_health",
+    "fetch_recent_run_logs",
+    "fetch_recent_runs",
+    "fetch_run_jobs",
+    "fetch_run_log",
+    "fetch_stale_open_issues",
+    "main",
+    "recent_weekly_runs",
+    "run_includes_job",
+    "summarize_stale_issues",
+    "summarize_watchdog_log_events",
+    "summarize_weekly_runs",
+]
 
 
 if __name__ == "__main__":

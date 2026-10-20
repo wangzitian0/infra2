@@ -24,6 +24,8 @@ from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from common.alerting.card import build_feishu_report_card
+
 WORST_SIGNALS_SHOWN = 5
 
 
@@ -310,45 +312,14 @@ def build_stability_card(
     header_title = title or (
         f"{'🟢' if is_clean else '🟡'} [报告] [STABILITY] Infra2 {cadence} availability — positive proof"
     )
-    elements: list[dict[str, Any]] = [
-        {
-            "tag": "div",
-            "fields": [
-                {
-                    "is_short": True,
-                    "text": {
-                        "tag": "lark_md",
-                        "content": f"**Overall Availability**\n{overall}%",
-                    },
-                },
-                {
-                    "is_short": True,
-                    "text": {
-                        "tag": "lark_md",
-                        "content": (
-                            "**Signals at 100%**\n"
-                            f"{summary['perfect_count']}/{summary['signal_count']}"
-                        ),
-                    },
-                },
-                {
-                    "is_short": True,
-                    "text": {
-                        "tag": "lark_md",
-                        "content": f"**Window**\n{summary['window_days']}d (as of {summary['as_of']})",
-                    },
-                },
-                {
-                    "is_short": True,
-                    "text": {
-                        "tag": "lark_md",
-                        "content": f"**Probe Runs**\n{summary['total_runs']}",
-                    },
-                },
-            ],
-        },
-        {"tag": "hr"},
+    kpi_fields = [
+        ("Overall Availability", f"{overall}%"),
+        ("Signals at 100%", f"{summary['perfect_count']}/{summary['signal_count']}"),
+        ("Window", f"{summary['window_days']}d (as of {summary['as_of']})"),
+        ("Probe Runs", str(summary["total_runs"])),
     ]
+    sections: list[str] = []
+    hr_after: set[int] = set()
     unavailable = summary.get("unavailability")
     if isinstance(unavailable, Mapping):
         unavail_text = (
@@ -362,12 +333,7 @@ def build_stability_card(
             unavail_text += (
                 f"; {unavailable['unreadable']} unreadable record(s) NOT counted"
             )
-        elements.append(
-            {
-                "tag": "div",
-                "text": {"tag": "lark_md", "content": unavail_text},
-            }
-        )
+        sections.append(unavail_text)
     if degraded:
         lines = ["**Lowest availability signals**"]
         for signal in degraded:
@@ -377,63 +343,25 @@ def build_stability_card(
                 f"• `{signal['id']}`: **{signal['uptime_pct']}%** "
                 f"({signal['fail']} fail/{checks} checks){domain}"
             )
-        elements.append(
-            {
-                "tag": "div",
-                "text": {"tag": "lark_md", "content": "\n".join(lines)},
-            }
-        )
+        sections.append("\n".join(lines))
     else:
-        elements.append(
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": "✅ **All monitored signals held 100% availability this window.**",
-                },
-            }
-        )
+        sections.append("✅ **All monitored signals held 100% availability this window.**")
     staging_items = [line for line in staging_lines if line]
     if staging_items:
-        elements.append({"tag": "hr"})
-        elements.append(
-            {
-                "tag": "div",
-                "text": {
-                    "tag": "lark_md",
-                    "content": "\n".join(f"**Secondary Env**: {line}" for line in staging_items),
-                },
-            }
-        )
-    actions = []
-    if signoz_url:
-        actions.append(
-            {
-                "tag": "button",
-                "text": {"tag": "plain_text", "content": "打开 SigNoz"},
-                "url": signoz_url,
-                "type": "primary",
-            }
-        )
-    if runbook_url:
-        actions.append(
-            {
-                "tag": "button",
-                "text": {"tag": "plain_text", "content": "查看 Runbook"},
-                "url": runbook_url,
-                "type": "default",
-            }
-        )
-    if actions:
-        elements.append({"tag": "action", "actions": actions})
-    return {
-        "config": {"wide_screen_mode": True},
-        "header": {
-            "template": "green" if is_clean else "orange",
-            "title": {"tag": "plain_text", "content": header_title},
-        },
-        "elements": elements,
-    }
+        hr_after.add(len(sections) - 1)
+        sections.append("\n".join(f"**Secondary Env**: {line}" for line in staging_items))
+    actions = [
+        ("打开 SigNoz", signoz_url, "primary"),
+        ("查看 Runbook", runbook_url, "default"),
+    ]
+    return build_feishu_report_card(
+        title=header_title,
+        template="green" if is_clean else "orange",
+        kpi_fields=kpi_fields,
+        sections=sections,
+        actions=actions,
+        hr_after_sections=hr_after,
+    )
 
 
 __all__ = [

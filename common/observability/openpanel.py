@@ -1,10 +1,30 @@
-"""Single source of truth for OpenPanel client configuration (#840).
+"""Single source of truth for OpenPanel client configuration and query helpers (#840, #1311).
 
-Canonical domain location for per-environment OpenPanel client IDs and compose-env
-contributions. Previously located in tools/openpanel_clients.py.
+Canonical domain location for per-environment OpenPanel client IDs, compose-env
+contributions, and shared OpenPanel export query & funnel summary helpers from
+``infra2_sdk.observability``.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
+
+from infra2_sdk.observability import (
+    build_openpanel_payload,
+    format_openpanel_markdown,
+    load_openpanel_funnel_presets,
+    post_openpanel_json,
+    resolve_openpanel_api_key,
+    resolve_openpanel_api_url,
+)
+
+OPENPANEL_ANALYTICS_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "finance_report"
+    / "finance_report"
+    / "observability"
+    / "openpanel_analytics.json"
+)
 
 # One OpenPanel project per environment. Empty/missing => analytics is a no-op
 # (the component config-gates on a non-empty client id).
@@ -37,7 +57,20 @@ def openpanel_env(env_name: str) -> dict[str, str]:
     }
 
 
+def load_estate_openpanel_presets() -> dict[str, tuple[str, ...]]:
+    """Load the estate OpenPanel funnel presets from the declarative JSON contract."""
+    return load_openpanel_funnel_presets(OPENPANEL_ANALYTICS_PATH)
+
+
 __all__ = [
+    "OPENPANEL_ANALYTICS_PATH",
     "OPENPANEL_CLIENTS",
+    "build_openpanel_payload",
+    "format_openpanel_markdown",
+    "load_estate_openpanel_presets",
+    "load_openpanel_funnel_presets",
     "openpanel_env",
+    "post_openpanel_json",
+    "resolve_openpanel_api_key",
+    "resolve_openpanel_api_url",
 ]
