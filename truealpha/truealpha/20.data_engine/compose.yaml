@@ -6,7 +6,10 @@ x-dagster-service: &dagster-service
   image: ghcr.io/wangzitian0/truealpha-data-engine@${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?IMAGE_DIGEST is required}}
   pull_policy: always
   restart: always
-  mem_limit: ${DATA_ENGINE_MEM_LIMIT:-768m}
+  # One ceiling for staging and production: staging rehearses the production run mix.
+  # 768m in staging let the kernel kill the code server five times on 2026-10-20, and
+  # every run in it died (truealpha#1467). Production peaked at 590 MB of 1536m.
+  mem_limit: 1536m
   cpu_shares: ${TIER_CPU_SHARES:-1024}
   depends_on:
     vault-agent:
