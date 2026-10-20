@@ -13,7 +13,6 @@ on:
     branches: ["main"]
     paths:
       - "finance_report/finance_report/observability/**"
-      - "common/alerting.py"
       - "common/alerting/**"
       - "common/observability_dashboards.py"
       - "tools/signoz_alert_rule_probe.py"

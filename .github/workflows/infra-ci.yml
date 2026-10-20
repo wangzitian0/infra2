@@ -235,7 +235,7 @@ jobs:
         run: |
           cd ${{ github.workspace }}
           # tools.ci_gate_audit --enforce
-          uv run python -m tools.ci_runner preflight
+          uv run --locked python -m tools.ci_runner preflight
 
       - name: Run infra unit tests
         # PYTHONSAFEPATH (not -P) so pytest-xdist's execnet worker subprocesses also
@@ -251,9 +251,9 @@ jobs:
           # The template generator reads the app manifests through the submodules; infra-ci
           # never checks those out (#506), so fetch the few files at the pinned commits.
           # (script path, not -m: the job runs with PYTHONSAFEPATH=1, so `tools` is not a package on sys.path)
-          uv run python tools/fetch_app_manifests.py
-          uv run python tools/lint_anti_tautology.py common/tests
-          uv run python -m pytest common/tests -q -n auto \
+          uv run --locked python tools/fetch_app_manifests.py
+          uv run --locked python tools/lint_anti_tautology.py common/tests
+          uv run --locked python -m pytest common/tests -q -n auto \
             --cov=common \
             --cov=tools \
             --cov-report=term-missing \
@@ -282,7 +282,7 @@ jobs:
       - name: Gate coverage regression
         run: |
           cd ${{ github.workspace }}
-          uv run python tools/coverage_regression_audit.py
+          uv run --locked python tools/coverage_regression_audit.py
 
       # Shift-left: surface what this PR would re-deploy once released, and prove the
       # reconcile plan BUILDS on these changes (deploy-dependencies fan-out + service
@@ -298,7 +298,7 @@ jobs:
           for f in "${files[@]}"; do
             [[ -n "$f" ]] && args+=(--changed-file "$f")
           done
-          uv run python -m tools.reconcile_iac_inputs "${args[@]}"
+          uv run --locked python -m tools.reconcile_iac_inputs "${args[@]}"
 
       # #504/#541: the inventory's `blocks_merge: true` gates vs the LIVE GitHub branch
       # ruleset for main (the repo is public, so the default token can read the rules
@@ -310,7 +310,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           cd ${{ github.workspace }}
-          uv run python -m tools.ci_gate_ruleset_audit
+          uv run --locked python -m tools.ci_gate_ruleset_audit
 
   test-1password-healthcheck:
     name: Test 1Password Healthcheck
@@ -486,21 +486,8 @@ jobs:
       - name: Run ruff check
         run: ruff check common/ bootstrap/ platform/ finance_report/ truealpha/ tools/
 
-      - name: Determine changed Python files
-        id: changed-python
-        run: |
-          base_ref="${{ github.base_ref }}"
-          if [ -z "$base_ref" ]; then
-            base_ref="main"
-          fi
-          git fetch origin "$base_ref" --depth=1
-          files=$(git diff --name-only "origin/$base_ref...HEAD" -- common bootstrap platform finance_report truealpha tools | grep -E '\.py$' || true)
-          files="${files//$'\n'/ }"
-          echo "files=$files" >> "$GITHUB_OUTPUT"
-
       - name: Run ruff format check
-        if: steps.changed-python.outputs.files != ''
-        run: ruff format --check ${{ steps.changed-python.outputs.files }}
+        run: ruff format --check common/ bootstrap/ platform/ finance_report/ truealpha/ tools/
 
       - name: Run anti-tautology test linter
         run: |
