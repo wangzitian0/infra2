@@ -678,7 +678,7 @@ def test_deploy_replaces_compose_env_and_removes_model_overrides():
     )
     assert client.replace_flags == [True]
     assert plan.env_vars["ENV"] == "staging"
-    assert plan.env_vars["VAULT_ADDR"] == "https://vault.zitian.party"
+    assert plan.env_vars["VAULT_ADDR"] == "http://vault:8200"
     assert "PRIMARY_MODEL" not in plan.env_vars
     assert "OCR_MODEL" not in plan.env_vars
     assert "VISION_MODEL" not in plan.env_vars

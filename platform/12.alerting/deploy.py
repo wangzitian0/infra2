@@ -311,9 +311,7 @@ class AlertingDeployer(Deployer):
         if not cls.apply_secret_supply(c, env=e.get("ENV")):
             return None
         result = cls.compose_env_base(e)
-        result["VAULT_ADDR"] = e.get(
-            "VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"
-        )
+        result["VAULT_ADDR"] = e.get("VAULT_ADDR", "http://vault:8200")
         success("pre_compose complete - Vault holds the alerting runtime secrets")
         return result
 

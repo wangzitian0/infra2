@@ -170,7 +170,7 @@ def assert_approle_creds_present(service: str, client, compose_id: str) -> None:
             "empty address (missing VAULT_ADDR) and deadlock on its healthcheck (~6 "
             f"min) instead of starting. Run `DEPLOY_ENV=<env> invoke vault.setup-approle "
             f"--service={service} --deploy` (or set VAULT_ADDR, e.g. "
-            "https://vault.<INTERNAL_DOMAIN>) on the compose/project env before "
+            "http://vault:8200) on the compose/project env before "
             "deploying."
         )
 
@@ -550,7 +550,7 @@ def _build_deploy_env_vars(
     """Assemble all environment variables for the deployment compose."""
     env_vars = {
         "ENV": deploy_environment,
-        "VAULT_ADDR": f"https://vault.{infra_domain()}",
+        "VAULT_ADDR": "http://vault:8200",
         "IMAGE_TAG": image_tag,
         "GIT_COMMIT_SHA": image_tag,
         "NEXT_PUBLIC_APP_URL": cfg.app_url(domain=domain),

@@ -1,0 +1,15 @@
+# infra2 fail2ban sshd jail configuration (#724-R2).
+# Installed to /etc/fail2ban/jail.d/infra2-sshd.local by configure_ssh_fail2ban.sh.
+# Bans offending IPs into nftables `inet f2b-table` after 5 failed attempts (O2).
+[DEFAULT]
+banaction = nftables-multiport
+banaction_allports = nftables-allports
+chain = input
+
+[sshd]
+enabled = true
+port = ssh
+backend = systemd
+maxretry = 5
+findtime = 10m
+bantime = 1h

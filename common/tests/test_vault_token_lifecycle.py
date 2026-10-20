@@ -223,6 +223,7 @@ def test_configure_dokploy_approle_injects_creds_and_redeploys(monkeypatch) -> N
     assert client.updated_env == {
         "VAULT_ROLE_ID": "role-123",
         "VAULT_SECRET_ID": "secret-456",
+        "VAULT_ADDR": "http://vault:8200",
     }
     assert client.deploy_calls == 1
     assert client.redeploy_calls == 1
@@ -260,15 +261,22 @@ class FakeApproleVault:
         prior: str = '["acc-old-1", "acc-old-2"]',
         prior_ok: bool = True,
         destroy_ok: bool = True,
+        token_accessors: str = '["tok-old-1", "tok-new-1", "tok-other-role"]',
+        token_list_ok: bool = True,
+        revoke_ok: bool = True,
     ) -> None:
         self.events = events
         self.prior = prior
         self.prior_ok = prior_ok
         self.destroy_ok = destroy_ok
+        self.token_accessors = token_accessors
+        self.token_list_ok = token_list_ok
+        self.revoke_ok = revoke_ok
+        self.issued_tag: str | None = None
 
     def run(self, cmd, **_kwargs):
-        def res(ok=True, stdout=""):
-            return SimpleNamespace(ok=ok, stdout=stdout, stderr="")
+        def res(ok=True, stdout="", stderr=""):
+            return SimpleNamespace(ok=ok, stdout=stdout, stderr=stderr)
 
         if cmd == "vault auth list -format=json":
             return res(stdout=json.dumps({"approle/": {}}))
@@ -277,10 +285,14 @@ class FakeApproleVault:
             return res(ok=self.prior_ok, stdout=self.prior)
         if cmd == f"vault read -format=json auth/approle/role/{self.ROLE}/role-id":
             return res(stdout=json.dumps({"data": {"role_id": "role-1"}}))
-        if (
-            cmd
-            == f"vault write -f -format=json auth/approle/role/{self.ROLE}/secret-id"
-        ):
+        issue_prefix = (
+            f"vault write -format=json auth/approle/role/{self.ROLE}/secret-id "
+        )
+        if cmd.startswith(issue_prefix):
+            meta_raw = cmd.removeprefix(issue_prefix)
+            if meta_raw.startswith("metadata='") and meta_raw.endswith("'"):
+                meta_obj = json.loads(meta_raw[len("metadata='") : -1])
+                self.issued_tag = meta_obj.get("secret_id_issue")
             self.events.append("issue")
             return res(
                 stdout=json.dumps(
@@ -298,6 +310,25 @@ class FakeApproleVault:
         if cmd.startswith(prefix):
             self.events.append("destroy:" + cmd.removeprefix(prefix))
             return res(ok=self.destroy_ok)
+        if cmd == "vault list -format=json auth/token/accessors":
+            self.events.append("list_tokens")
+            return res(ok=self.token_list_ok, stdout=self.token_accessors)
+        lookup_prefix = "vault write -format=json auth/token/lookup-accessor accessor="
+        if cmd.startswith(lookup_prefix):
+            acc = cmd.removeprefix(lookup_prefix)
+            if acc == "tok-old-1":
+                meta = {"role_name": self.ROLE, "secret_id_issue": "old-tag"}
+            elif acc == "tok-new-1":
+                meta = {"role_name": self.ROLE, "secret_id_issue": self.issued_tag}
+            elif acc == "tok-expired":
+                return res(ok=False, stderr="invalid accessor")
+            else:
+                meta = {"role_name": "other-role", "secret_id_issue": "old-tag"}
+            return res(stdout=json.dumps({"data": {"meta": meta}}))
+        revoke_prefix = "vault write auth/token/revoke-accessor accessor="
+        if cmd.startswith(revoke_prefix):
+            self.events.append("revoke:" + cmd.removeprefix(revoke_prefix))
+            return res(ok=self.revoke_ok)
         return res()
 
 
@@ -354,7 +385,11 @@ def test_reissue_destroys_earlier_secret_ids_after_every_consumer_runs_the_new_o
         "refresh:role-1:secret-new",
         "destroy:secret_id_accessor=acc-old-1",
         "destroy:secret_id_accessor=acc-old-2",
+        "list_tokens",
+        "revoke:tok-old-1",
     ]
+    assert "revoke:tok-new-1" not in events
+    assert "revoke:tok-other-role" not in events
 
 
 def test_reissue_lists_the_earlier_secret_ids_before_it_issues_the_new_one(
@@ -744,7 +779,7 @@ def test_setup_approle_handles_the_iac_runner_last(monkeypatch) -> None:
                 out = json.dumps({"approle/": {}})
             elif cmd.endswith("/role-id"):
                 out = json.dumps({"data": {"role_id": "r"}})
-            elif cmd.endswith("/secret-id"):
+            elif "/secret-id " in cmd or cmd.endswith("/secret-id"):
                 out = json.dumps(
                     {"data": {"secret_id": "s", "secret_id_accessor": "a"}}
                 )
@@ -757,3 +792,23 @@ def test_setup_approle_handles_the_iac_runner_last(monkeypatch) -> None:
 
     assert "iac_runner" in order and len(order) > 1
     assert order[-1] == "iac_runner"
+
+
+def test_revoke_earlier_role_tokens_fails_on_unreadable_token_list_or_revoke_error(
+    monkeypatch,
+) -> None:
+    """#1074: a failed token accessor list or failed revoke marks the re-issue failed."""
+    events: list[str] = []
+    vault_list_fail = FakeApproleVault(events, token_accessors="", token_list_ok=False)
+    failure = _run_setup_approle(monkeypatch, vault_list_fail)
+    assert failure is not None and failure.code == 1
+
+    events2: list[str] = []
+    vault_revoke_fail = FakeApproleVault(
+        events2,
+        token_accessors='["tok-expired", "tok-old-1"]',
+        revoke_ok=False,
+    )
+    failure2 = _run_setup_approle(monkeypatch, vault_revoke_fail)
+    assert failure2 is not None and failure2.code == 1
+    assert "revoke:tok-old-1" in events2

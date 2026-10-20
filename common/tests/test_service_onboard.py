@@ -265,7 +265,7 @@ def test_onboard_service_end_to_end():
             env_vars={
                 "VAULT_ROLE_ID": "r-123",
                 "VAULT_SECRET_ID": "s-456",
-                "VAULT_ADDR": "https://vault.zitian.party",
+                "VAULT_ADDR": "http://vault:8200",
                 "ENV": "production",
             },
             replace=False,
