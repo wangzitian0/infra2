@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 from infra2_sdk.deploy import DeployOperation, DeployType
 from infra2_sdk.refs import ResolvedRef
+from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
 
 from common.deploy import app_deploy_request as receiver
 from common.deploy import app_deploy_request_cli as receiver_cli
@@ -156,7 +159,25 @@ def resolved(*args, **kwargs) -> ResolvedRef:
     return ResolvedRef(sha=SHA, image_ref="v1.2.3", form="tag")
 
 
+# An infra2 release whose App contract lists no manifest. Tests that are not about the
+# manifest preflight read it through ``git show``; the preflight tests use a real checkout.
+NO_MANIFEST_LOCK = json.dumps(
+    {"apps": {}, "files": [], "generated_by": "test", "lock_version": 1}
+)
+
+
+def checkout_without_manifests(root: Path) -> Path:
+    """The receiver's main checkout, for a deploy that runs at main (a preview)."""
+    (root / "contracts").mkdir(exist_ok=True)
+    (root / "contracts" / "apps.lock.json").write_text(
+        NO_MANIFEST_LOCK, encoding="utf-8"
+    )
+    return root
+
+
 def tags(args, **kwargs):
+    if "show" in args:
+        return SimpleNamespace(stdout=NO_MANIFEST_LOCK)
     if "production/v*.*.*" in args:
         return SimpleNamespace(stdout="production/v1.1.74\n")
     return SimpleNamespace(stdout="v1.1.76\nv1.1.75\n")
@@ -633,6 +654,7 @@ def test_iac_ref_refuses_a_marker_that_predates_the_release_pin(tmp_path) -> Non
 
 def test_plan_names_the_newest_release_next_to_the_ref_it_runs_at(tmp_path) -> None:
     """The promotion lag is on screen in the plan, before anything is deployed."""
+    checkout_without_manifests(tmp_path)
     production = receiver.make_plan(
         production_payload(),
         sender="wangzitian0",
@@ -816,6 +838,7 @@ def test_requires_preflight_canary_is_the_single_source_the_workflow_reads(
     build_payload = (
         production_payload if overrides.get("deploy_type") == "prod" else payload
     )
+    checkout_without_manifests(tmp_path)
     plan = receiver.make_plan(
         build_payload(**overrides),
         sender="wangzitian0",
@@ -989,6 +1012,8 @@ def _gate_cli(monkeypatch, request: dict, *extra: str) -> int:
             manifest_fetcher=lambda _url: Path(
                 "contracts/finance_report/required-env.generated.json"
             ).read_bytes(),
+            # The real lock and the real copies of this checkout stand in for any ref.
+            contract_reader=lambda _ref, path: Path(path).read_text(encoding="utf-8"),
             runner=tags,
         )
 
@@ -1434,191 +1459,331 @@ def test_authority_uses_the_sdk_evidence_url_validator() -> None:
         )
 
 
-# --- Manifest sha256 lock check (#1297) ------------------------------------------
+# --- App contract preflight (#1297, #1320) ----------------------------------------
+#
+# The receiver reads the App contract from the infra2 release the deploy will run at
+# (staging: the newest release tag; production: the marker). It compares what the
+# release image asks infra2 to supply with what that infra2 release supplies. Facts:
+# receiver run 39414198967 (production v0.2.30, 2026-10-20 11:20Z) read the lock at
+# production/v1.2.46, which lacked MCP_BEARER_TOKEN; staging v0.2.28 and v0.2.29 were
+# refused for a field infra2 supplied extra and for a code-only field.
+
+TA_REPO = "wangzitian0/truealpha"
+RELEASE_SHA = "dd066f62" + "0" * 32
+COPY_PATH = "contracts/truealpha/data-engine.required-env.generated.json"
+UPSTREAM_PATH = "apps/data-engine/required-env.generated.json"
+RELEASE_URL = (
+    f"https://raw.githubusercontent.com/{TA_REPO}/{RELEASE_SHA}/{UPSTREAM_PATH}"
+)
 
 
-def _write_manifest_lock(root: Path, files: list[dict]) -> None:
-    contracts = root / "contracts"
-    contracts.mkdir(parents=True, exist_ok=True)
-    lock = {
-        "apps": {
-            "truealpha": {
-                "commit": "5a6d5893" + "0" * 32,
-                "repository": "wangzitian0/truealpha",
-                "tag": None,
+def _field(env: str, source: str = "code", **overrides) -> EnvironmentField:
+    return EnvironmentField(field=env.lower(), env=env, source=source, **overrides)
+
+
+def _manifest(*fields: EnvironmentField) -> bytes:
+    manifest = EnvironmentManifest(source=UPSTREAM_PATH, fields=tuple(fields))
+    return (json.dumps(manifest.to_dict(), indent=2) + "\n").encode()
+
+
+def _git(root: Path, *args: str) -> None:
+    command = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*command, *args], check=True, capture_output=True)
+
+
+def _infra2_checkout(root: Path, releases: list[tuple[bytes | None, tuple[str, ...]]]):
+    """A git checkout whose commits carry the App contract: ``(copy, tags)`` per commit.
+
+    A copy of ``None`` is a commit that predates the vendored contract. The last commit
+    is HEAD, which is what the receiver checks out.
+    """
+    _git(root, "init", "-q", "-b", "main")
+    for index, (copy, tags_here) in enumerate(releases):
+        contracts = root / "contracts"
+        if copy is not None:
+            (contracts / "truealpha").mkdir(parents=True, exist_ok=True)
+            (root / COPY_PATH).write_bytes(copy)
+            lock = {
+                "apps": {
+                    "truealpha": {
+                        "commit": "5a6d5893" + "0" * 32,
+                        "repository": TA_REPO,
+                        "tag": None,
+                    }
+                },
+                "files": [
+                    {
+                        "app": "truealpha",
+                        "path": COPY_PATH,
+                        "sha256": hashlib.sha256(copy).hexdigest(),
+                        "upstream": UPSTREAM_PATH,
+                    }
+                ],
+                "generated_by": "tools/fetch_app_manifests.py --sync",
+                "lock_version": 1,
             }
-        },
-        "files": files,
-        "generated_by": "tools/fetch_app_manifests.py --sync",
-        "lock_version": 1,
-    }
-    (contracts / "apps.lock.json").write_text(json.dumps(lock), encoding="utf-8")
+            (contracts / "apps.lock.json").write_text(
+                json.dumps(lock), encoding="utf-8"
+            )
+        (root / "marker.txt").write_text(str(index), encoding="utf-8")
+        _git(root, "add", "-A")
+        _git(root, "commit", "-q", "-m", f"release {index}")
+        for tag in tags_here:
+            _git(root, "tag", tag)
+    return root
 
 
-def test_manifest_check_passes_when_release_manifests_match_lock_even_if_commit_moved(
-    tmp_path: Path,
-) -> None:
-    """#1297 AC1 & AC3: equal hashes pass even when the release SHA is newer than the
-    locked commit (manifests did not change between locked commit and release)."""
-    import hashlib
-
-    web_bytes = b'{"vars": ["APP_URL"]}\n'
-    llm_bytes = b'{"vars": ["OPENAI_API_KEY"]}\n'
-    _write_manifest_lock(
-        tmp_path,
-        [
-            {
-                "app": "truealpha",
-                "path": "contracts/truealpha/app-web.required-env.manifest.json",
-                "sha256": hashlib.sha256(web_bytes).hexdigest(),
-                "upstream": "apps/app-web/required-env.manifest.json",
-            },
-            {
-                "app": "truealpha",
-                "path": "contracts/truealpha/llm-service.required-env.generated.json",
-                "sha256": hashlib.sha256(llm_bytes).hexdigest(),
-                "upstream": "apps/llm-service/required-env.generated.json",
-            },
-        ],
-    )
-    release_sha = "dd066f62" + "0" * 32
-    ta_repo = "wangzitian0/truealpha"
-    upstream_bodies = {
-        f"https://raw.githubusercontent.com/{ta_repo}/{release_sha}/apps/app-web/required-env.manifest.json": web_bytes,
-        f"https://raw.githubusercontent.com/{ta_repo}/{release_sha}/apps/llm-service/required-env.generated.json": llm_bytes,
-    }
-    req = payload(
+def _request(*, production: bool = False) -> dict:
+    build = production_payload if production else payload
+    return build(
         service="truealpha/app",
-        source_repository=ta_repo,
+        source_repository=TA_REPO,
         version_ref="v0.2.13",
-        source_sha=release_sha,
+        source_sha=RELEASE_SHA,
         evidence={
-            "source_run_url": f"https://github.com/{ta_repo}/actions/runs/100",
+            "source_run_url": f"https://github.com/{TA_REPO}/actions/runs/100",
             "source_run_id": "100",
-            "staging_run_url": "",
-            "reviewed_change_url": "",
+            "staging_run_url": f"https://github.com/{TA_REPO}/actions/runs/101"
+            if production
+            else "",
+            "reviewed_change_url": f"https://github.com/{TA_REPO}/pull/10"
+            if production
+            else "",
         },
     )
-    plan = receiver.make_plan(
-        req,
+
+
+def _release_image(*_args, **_kwargs) -> ResolvedRef:
+    return ResolvedRef(sha=RELEASE_SHA, image_ref="v0.2.13", form="tag")
+
+
+def _preflight(root: Path, release: bytes, *, production: bool = False):
+    return receiver.make_plan(
+        _request(production=production),
         sender="wangzitian0",
         domain="zitian.party",
         timeout=600,
-        repo_root=tmp_path,
-        resolve_image=lambda *_a, **_k: ResolvedRef(
-            sha=release_sha, image_ref="v0.2.13", form="tag"
-        ),
-        manifest_fetcher=upstream_bodies.__getitem__,
-        runner=tags,
+        repo_root=root,
+        production_evidence_verifier=lambda _r: None,
+        resolve_image=_release_image,
+        manifest_fetcher={RELEASE_URL: release}.__getitem__,
     )
-    assert plan.request.version_ref == "v0.2.13"
 
 
-def test_manifest_check_refuses_deploy_when_a_release_manifest_differs_from_lock(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+DATABASE = _field("DATABASE_URL", "human")
+BEARER = _field("MCP_BEARER_TOKEN", "runtime", mirror_to_1password=True, sensitive=True)
+
+
+def test_preflight_ignores_a_release_change_in_code_fields(tmp_path: Path) -> None:
+    """Staging v0.2.29 was refused because truealpha#1461 removed a ``code`` field."""
+    root = _infra2_checkout(
+        tmp_path,
+        [(_manifest(DATABASE, _field("MOOMOO_MONTHLY_CALL_BUDGET")), ("v1.0.0",))],
+    )
+    release = _manifest(
+        DATABASE,
+        _field("MOOMOO_KLINE_QUOTA", description="renamed", group="Quota"),
+    )
+    plan = _preflight(root, release)
+    assert plan.iac_ref == "v1.0.0"
+
+
+def test_preflight_passes_when_infra2_supplies_more_than_the_release_needs(
+    tmp_path: Path,
 ) -> None:
-    """#1297 AC1 & AC2: when one manifest at source_sha differs from contracts/apps.lock.json,
-    make_plan and the CLI plan/execute step fail in seconds naming the differing manifest and
-    the exact sync + render remediation before deploy_v2 starts."""
-    import hashlib
+    """Staging v0.2.28 predates the field ``MCP_BEARER_TOKEN``. infra2 supplies it extra."""
+    root = _infra2_checkout(tmp_path, [(_manifest(DATABASE, BEARER), ("v1.0.0",))])
+    assert _preflight(root, _manifest(DATABASE)).iac_ref == "v1.0.0"
 
-    web_bytes = b'{"vars": ["APP_URL"]}\n'
-    locked_de_bytes = b'{"vars": ["DATABASE_URL"]}\n'
-    release_de_bytes = b'{"vars": ["DATABASE_URL", "SEC_USER_AGENT"]}\n'
-    _write_manifest_lock(
+
+def test_preflight_refuses_a_field_that_infra2_does_not_supply(tmp_path: Path) -> None:
+    root = _infra2_checkout(tmp_path, [(_manifest(DATABASE), ("v1.0.0",))])
+    release = _manifest(DATABASE, _field("SEC_USER_AGENT", "human"))
+    with pytest.raises(ValueError) as refusal:
+        _preflight(root, release)
+    message = str(refusal.value)
+    assert "SEC_USER_AGENT" in message
+    assert "DATABASE_URL" not in message
+    assert COPY_PATH in message
+    assert "tools/fetch_app_manifests.py --sync truealpha v0.2.13" in message
+    assert "tools/secrets_render.py --write" in message
+
+
+@pytest.mark.parametrize(
+    "attribute, theirs, ours",
+    [
+        ("source", "runtime", "human"),
+        ("empty_ok", True, False),
+        ("store_key", "OTHER", ""),
+        ("scope", "project", "env"),
+        ("group", "Other", "Application"),
+    ],
+)
+def test_preflight_refuses_a_field_whose_supply_attribute_differs(
+    tmp_path: Path, attribute: str, theirs: object, ours: object
+) -> None:
+    """Each attribute that changes the template or the supply is part of the contract."""
+    kept = _field(
+        "API_KEY", "human", **{attribute: ours} if attribute != "source" else {}
+    )
+    changed = _field(
+        "API_KEY", "human", **{attribute: theirs} if attribute != "source" else {}
+    )
+    if attribute == "source":
+        changed = _field("API_KEY", "runtime")
+    root = _infra2_checkout(tmp_path, [(_manifest(kept), ("v1.0.0",))])
+    with pytest.raises(ValueError, match=f"API_KEY.*{attribute}"):
+        _preflight(root, _manifest(changed))
+
+
+@pytest.mark.parametrize(
+    "attribute, theirs",
+    [
+        ("description", "now documented"),
+        ("sensitive", True),
+        ("has_default", False),
+        ("injected", True),
+        ("aliases", ("OLD_NAME",)),
+        ("ci", "allowed"),
+    ],
+)
+def test_preflight_ignores_attributes_infra2_never_reads(
+    tmp_path: Path, attribute: str, theirs: object
+) -> None:
+    root = _infra2_checkout(
+        tmp_path, [(_manifest(_field("API_KEY", "human")), ("v1.0.0",))]
+    )
+    release = _manifest(_field("API_KEY", "human", **{attribute: theirs}))
+    assert _preflight(root, release).iac_ref == "v1.0.0"
+
+
+def test_a_lagging_production_marker_asks_for_a_promotion_not_a_sync(
+    tmp_path: Path,
+) -> None:
+    """Receiver run 39414198967: main had the field, production/v1.2.46 did not."""
+    root = _infra2_checkout(
         tmp_path,
         [
-            {
-                "app": "truealpha",
-                "path": "contracts/truealpha/app-web.required-env.manifest.json",
-                "sha256": hashlib.sha256(web_bytes).hexdigest(),
-                "upstream": "apps/app-web/required-env.manifest.json",
-            },
-            {
-                "app": "truealpha",
-                "path": "contracts/truealpha/data-engine.required-env.generated.json",
-                "sha256": hashlib.sha256(locked_de_bytes).hexdigest(),
-                "upstream": "apps/data-engine/required-env.generated.json",
-            },
+            (_manifest(DATABASE), ("v1.2.46", "production/v1.2.46")),
+            (_manifest(DATABASE, BEARER), ("v1.2.47",)),
         ],
     )
-    release_sha = "dd066f62" + "0" * 32
-    ta_repo = "wangzitian0/truealpha"
-    upstream_bodies = {
-        f"https://raw.githubusercontent.com/{ta_repo}/{release_sha}/apps/app-web/required-env.manifest.json": web_bytes,
-        f"https://raw.githubusercontent.com/{ta_repo}/{release_sha}/apps/data-engine/required-env.generated.json": release_de_bytes,
-    }
-    req = production_payload(
-        service="truealpha/app",
-        source_repository=ta_repo,
-        version_ref="v0.2.13",
-        source_sha=release_sha,
-        evidence={
-            "source_run_url": f"https://github.com/{ta_repo}/actions/runs/100",
-            "source_run_id": "100",
-            "staging_run_url": f"https://github.com/{ta_repo}/actions/runs/101",
-            "reviewed_change_url": f"https://github.com/{ta_repo}/pull/10",
-        },
+    with pytest.raises(ValueError) as refusal:
+        _preflight(root, _manifest(DATABASE, BEARER), production=True)
+    message = str(refusal.value)
+    assert "MCP_BEARER_TOKEN" in message
+    assert "v1.2.46" in message
+    assert "promote infra2 to production" in message
+    assert "--sync" not in message
+    assert "secrets_render" not in message
+
+
+def test_a_lagging_staging_release_asks_for_a_release_not_a_sync(
+    tmp_path: Path,
+) -> None:
+    root = _infra2_checkout(
+        tmp_path,
+        [(_manifest(DATABASE), ("v1.2.46",)), (_manifest(DATABASE, BEARER), ())],
     )
-    with pytest.raises(ValueError) as exc_info:
-        receiver.make_plan(
-            req,
-            sender="wangzitian0",
-            domain="zitian.party",
-            timeout=600,
-            repo_root=tmp_path,
-            production_evidence_verifier=lambda _r: None,
-            resolve_image=lambda *_a, **_k: ResolvedRef(
-                sha=release_sha, image_ref="v0.2.13", form="tag"
-            ),
-            manifest_fetcher=upstream_bodies.__getitem__,
-            runner=tags,
+    with pytest.raises(ValueError) as refusal:
+        _preflight(root, _manifest(DATABASE, BEARER))
+    message = str(refusal.value)
+    assert "MCP_BEARER_TOKEN" in message
+    assert "cut an infra2 release" in message.lower()
+    assert "--sync" not in message
+
+
+def test_preflight_runs_at_the_marker_not_at_main(tmp_path: Path) -> None:
+    """A release that main satisfies but the marker does not is refused (and the reverse)."""
+    root = _infra2_checkout(
+        tmp_path,
+        [
+            (_manifest(DATABASE, BEARER), ("v1.2.46", "production/v1.2.46")),
+            (_manifest(DATABASE), ("v1.2.47",)),
+        ],
+    )
+    plan = _preflight(root, _manifest(DATABASE, BEARER), production=True)
+    assert plan.iac_ref == "v1.2.46"
+
+
+def test_preflight_fails_closed_when_the_infra2_release_has_no_app_contract(
+    tmp_path: Path,
+) -> None:
+    root = _infra2_checkout(
+        tmp_path,
+        [(None, ("v1.2.46",)), (_manifest(DATABASE), ())],
+    )
+    with pytest.raises(ValueError, match=r"v1\.2\.46.*contracts/apps\.lock\.json"):
+        _preflight(root, _manifest(DATABASE))
+
+
+@pytest.mark.parametrize("lock", ["not json", "{}", "[]", "null"])
+def test_preflight_fails_closed_when_the_lock_is_not_a_lock(lock: str) -> None:
+    """A lock without ``files`` lists no manifest. That must not read as nothing to check."""
+    with pytest.raises(
+        ValueError, match=r"apps\.lock\.json of infra2 release v1\.0\.0"
+    ):
+        receiver.verify_app_manifests(
+            receiver.parse_request(_request()),
+            repo_root=".",
+            iac_ref="v1.0.0",
+            manifest_fetcher={RELEASE_URL: _manifest(DATABASE)}.__getitem__,
+            contract_reader=lambda _ref, _path: lock,
         )
-    msg = str(exc_info.value)
-    assert "contracts/truealpha/data-engine.required-env.generated.json" in msg
-    assert "contracts/truealpha/app-web.required-env.manifest.json" not in msg
-    assert "tools/fetch_app_manifests.py --sync truealpha v0.2.13" in msg
-    assert "tools/secrets_render.py --write" in msg
-    assert "merge, then deploy again" in msg
 
-    # Verify CLI execute fails in make_plan before execute_plan / deploy_v2 is ever called
-    monkeypatch.setenv("APP_DEPLOY_REQUEST_JSON", json.dumps(req))
+
+@pytest.mark.parametrize(
+    "release",
+    [b"", b"not json", b'{"vars": ["APP_URL"]}\n', _manifest()],
+    ids=["empty", "not-json", "not-a-manifest", "no-fields"],
+)
+def test_preflight_refuses_a_release_manifest_that_is_not_a_manifest(
+    tmp_path: Path, release: bytes
+) -> None:
+    """GREEN-WHILE-EMPTY: a truncated release manifest asks for nothing. Refuse it."""
+    root = _infra2_checkout(tmp_path, [(_manifest(DATABASE), ("v1.0.0",))])
+    with pytest.raises(
+        ValueError, match=r"apps/data-engine/required-env\.generated\.json"
+    ):
+        _preflight(root, release)
+
+
+def test_preflight_refuses_an_infra2_copy_that_is_not_a_manifest(
+    tmp_path: Path,
+) -> None:
+    root = _infra2_checkout(tmp_path, [(b'{"vars": []}\n', ("v1.0.0",))])
+    with pytest.raises(ValueError, match=COPY_PATH):
+        _preflight(root, _manifest(DATABASE))
+
+
+def test_a_refusal_stops_the_cli_before_deploy_v2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _infra2_checkout(tmp_path, [(_manifest(DATABASE), ("v1.0.0",))])
+    monkeypatch.setenv("APP_DEPLOY_REQUEST_JSON", json.dumps(_request()))
     real_make_plan = receiver.make_plan
+    release = _manifest(DATABASE, _field("SEC_USER_AGENT", "human"))
 
-    def fake_make_plan(payload_json, **kwargs):
+    def offline_plan(payload_json, **kwargs):
         return real_make_plan(
             payload_json,
             **kwargs,
-            production_evidence_verifier=lambda _r: None,
-            resolve_image=lambda *_a, **_k: ResolvedRef(
-                sha=release_sha, image_ref="v0.2.13", form="tag"
-            ),
-            manifest_fetcher=upstream_bodies.__getitem__,
-            runner=tags,
+            resolve_image=_release_image,
+            manifest_fetcher={RELEASE_URL: release}.__getitem__,
         )
 
-    monkeypatch.setattr(receiver, "make_plan", fake_make_plan)
-    deploy_called = []
+    monkeypatch.setattr(receiver, "make_plan", offline_plan)
+    deploy_called: list[int] = []
     monkeypatch.setattr(
         receiver_cli, "execute_plan", lambda _p: deploy_called.append(1) or 0
     )
-
-    rc = receiver_cli.main(
-        [
-            "execute",
-            "--sender",
-            "wangzitian0",
-            "--domain",
-            "zitian.party",
-            "--repo-root",
-            str(tmp_path),
-        ]
+    code = receiver_cli.main(
+        ["execute", "--sender", "wangzitian0", "--domain", "zitian.party"]
+        + ["--repo-root", str(root)]
     )
-    assert rc == 1
+    assert code == 1
     assert deploy_called == []
-    err = capsys.readouterr().err
-    assert "contracts/truealpha/data-engine.required-env.generated.json" in err
-    assert "tools/fetch_app_manifests.py --sync truealpha v0.2.13" in err
+    assert "SEC_USER_AGENT" in capsys.readouterr().err
 
 
 def test_query_serving_release_returns_authoritative_dokploy_and_health_state(

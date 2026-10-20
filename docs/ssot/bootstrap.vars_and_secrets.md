@@ -120,8 +120,20 @@ Deployer 的 `compose_env_overrides` 提供，manifest 只描述"谁产生这个
 
 ### 1.6 Change an App contract
 
+The receiver refuses an App release only for a variable that infra2 must supply (#1320).
+It compares the deploy contract of the release manifests with the deploy contract in
+`contracts/` of the infra2 release that the deploy runs at. Staging runs at the newest
+release tag. Production runs at the `production/vX.Y.Z` marker, so a sync on `main` does
+not help a production deploy until infra2 is released and promoted.
+
+The deploy contract is every field whose `source` is not `code`, or that the template renders,
+with the attributes that `common/deploy/app_contract.py` lists as contract attributes. A change to
+a `code` field, a description or an attribute that the module lists as ignored needs no sync.
+A release that needs less than infra2 supplies passes. A refusal names the variable and the file.
+
 1. The App merges the manifest change to its `main` branch.
-2. Run `uv run python tools/fetch_app_manifests.py --sync <app> <ref>`. The `<ref>` is a tag, a branch name
+2. Sync only when the receiver names a variable that infra2 does not supply on `main` either.
+   Run `uv run python tools/fetch_app_manifests.py --sync <app> <ref>`. The `<ref>` is a tag, a branch name
    or a full commit sha. The command rewrites the copies and `contracts/apps.lock.json`.
    After a sync, and any time you doubt a copy, run `uv run python tools/fetch_app_manifests.py --verify`
    to compare every copy with upstream.
@@ -130,7 +142,9 @@ Deployer 的 `compose_env_overrides` 提供，manifest 只描述"谁产生这个
    whole file as changed. On 2026-10-15, the `main` file of finance_report has 1 line, and the copy has 1240 lines.
 4. The owner creates each new human value in 1Password. A deploy stops, and names the key, when a required value is missing.
 5. Release infra2 first, then the App. If the App goes first, its staging start check can fail,
-   because the App asks for a field that nobody supplies.
+   because the App asks for a field that nobody supplies. When the receiver says that infra2 `main`
+   already supplies the variable, do not sync again: cut an infra2 release (staging), or promote
+   infra2 to production (owner-reserved).
 
 To add a file, add an entry (`app`, `path`, `upstream`, `"sha256": ""`) to the lock and its path to
 `common/security/registry.py`. Then run step 2. Do not sync a version that drops a field.

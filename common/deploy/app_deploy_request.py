@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import subprocess
@@ -28,6 +27,7 @@ from infra2_sdk.refs import (
 from common.core.constants import APP_SOURCES
 from common.core.fetch_app_manifests import LOCK as APP_MANIFEST_LOCK, http_get
 from common.core.registry import domain_for_service
+from common.deploy.app_contract import Contract, Gap, parse_contract, unmet
 from common.deploy.release_markers import (
     MINIMUM_PRODUCTION_MARKER,
     PRODUCTION_MARKER_PREFIX,
@@ -219,29 +219,88 @@ def select_iac_ref(
     return marker
 
 
-def _load_app_manifest_lock(
-    *,
-    repo_root: str | Path,
-    iac_ref: str,
-    runner=subprocess.run,
-) -> dict[str, object] | None:
+#: Reads a file of the infra2 release ``ref``: ``(ref, path) -> text``. ``main`` is the
+#: receiver's own checkout.
+ContractReader = Callable[[str, str], str]
+
+
+def _git_contract_reader(
+    repo_root: str | Path, runner=subprocess.run
+) -> ContractReader:
     root = Path(repo_root)
-    lock_file = root / APP_MANIFEST_LOCK
-    if iac_ref and iac_ref != "main":
+
+    def read(ref: str, path: str) -> str:
+        if ref == "main":
+            try:
+                return (root / path).read_text(encoding="utf-8")
+            except OSError as exc:
+                raise ValueError(f"infra2 main has no readable {path}: {exc}") from None
         try:
-            proc = runner(
-                ["git", "-C", str(root), "show", f"{iac_ref}:{APP_MANIFEST_LOCK}"],
+            shown = runner(
+                ["git", "-C", str(root), "show", f"{ref}:{path}"],
                 capture_output=True,
                 text=True,
                 check=True,
             )
-            if isinstance(proc.stdout, str) and proc.stdout.strip().startswith("{"):
-                return json.loads(proc.stdout)
-        except (OSError, subprocess.SubprocessError, ValueError):
-            pass
-    if lock_file.is_file():
-        return json.loads(lock_file.read_text(encoding="utf-8"))
-    return None
+        except (OSError, subprocess.SubprocessError):
+            shown = None
+        if shown is None or not isinstance(shown.stdout, str) or not shown.stdout:
+            raise ValueError(
+                f"infra2 release {ref} has no {path}: the release predates the vendored "
+                "App contract (#1258), or its tag is not fetched"
+            )
+        return shown.stdout
+
+    return read
+
+
+def _contract_gaps(
+    read: ContractReader, ref: str, release: dict[str, Contract]
+) -> list[tuple[str, Gap]]:
+    """What the release needs and the infra2 release ``ref`` does not supply, by copy path."""
+    gaps = []
+    for path, wanted in release.items():
+        provided = parse_contract(read(ref, path), label=f"{path} at infra2 {ref}")
+        gaps.extend((path, gap) for gap in unmet(wanted, provided))
+    return gaps
+
+
+def _gap_remedy(
+    request: DeployRequest,
+    *,
+    read: ContractReader,
+    iac_ref: str,
+    release: dict[str, Contract],
+) -> str:
+    """The step that closes the gap. It depends on where main stands (#1320).
+
+    A sync helps only when main lacks the field too. When main supplies it already, the
+    infra2 release the deploy runs at is the stale part: syncing again changes nothing.
+    """
+    app_name = request.service.split("/", 1)[0]
+    if iac_ref != "main":
+        try:
+            main_has_it = not _contract_gaps(read, "main", release)
+        except ValueError:
+            main_has_it = False
+        if main_has_it:
+            if request.deploy_type == DeployType.PRODUCTION:
+                return (
+                    f"infra2 main already supplies it, so no sync is needed: production runs at "
+                    f"{PRODUCTION_MARKER_PREFIX}{iac_ref}, which predates main. Cut an infra2 "
+                    "release from main if none is newer than that, then promote infra2 to "
+                    "production (owner-reserved), then deploy again"
+                )
+            return (
+                f"infra2 main already supplies it, so no sync is needed: staging runs at {iac_ref}, "
+                "which predates main. Cut an infra2 release from main, then deploy again"
+            )
+    return (
+        f"run `tools/fetch_app_manifests.py --sync {app_name} {request.version_ref}` and "
+        "`tools/secrets_render.py --write`, merge, cut an infra2 release"
+        f"{' and promote it to production' if request.deploy_type == DeployType.PRODUCTION else ''}"
+        ", then deploy again"
+    )
 
 
 def verify_app_manifests(
@@ -250,30 +309,38 @@ def verify_app_manifests(
     repo_root: str | Path,
     iac_ref: str = "main",
     manifest_fetcher: Callable[[str], bytes] | None = None,
+    contract_reader: ContractReader | None = None,
     runner=subprocess.run,
 ) -> None:
-    """Compare the sha256 of each manifest of the requested release SHA with the lock (#1297)."""
+    """Refuse a release that asks for a variable the infra2 release ``iac_ref`` does not supply.
+
+    The deploy renders its Vault template and supplies its Vault values from the App
+    contract of ``iac_ref`` (staging: the newest release tag; production: the marker), so
+    that is the contract to compare, not main's. Only the part of a manifest that infra2
+    acts on counts (``common/deploy/app_contract.py``): a release that changes ``code``
+    fields needs no sync (#1320). A release that needs less than infra2 supplies passes.
+    """
     if request.operation == DeployOperation.REMOVE:
         return
-    lock = _load_app_manifest_lock(repo_root=repo_root, iac_ref=iac_ref, runner=runner)
-    if lock is None:
-        if manifest_fetcher is None:
-            return
-        raise ValueError(f"{APP_MANIFEST_LOCK} is missing under {repo_root}")
+    read = contract_reader or _git_contract_reader(repo_root, runner)
+    lock_text = read(iac_ref, APP_MANIFEST_LOCK)
     app_name = request.service.split("/", 1)[0]
-    files = [
-        f
-        for f in lock.get("files", [])  # type: ignore[union-attr]
-        if isinstance(f, Mapping) and f.get("app") == app_name
-    ]
+    try:
+        files = [
+            f
+            for f in json.loads(lock_text)["files"]
+            if isinstance(f, Mapping) and f.get("app") == app_name
+        ]
+    except (ValueError, KeyError, TypeError) as exc:
+        raise ValueError(
+            f"{APP_MANIFEST_LOCK} of infra2 release {iac_ref} is not a lock: {exc!r}"
+        ) from None
     if not files:
         return
     fetch = manifest_fetcher or http_get
-    differing: list[str] = []
+    release: dict[str, Contract] = {}
     for entry in files:
-        path = str(entry["path"])
         upstream = str(entry["upstream"])
-        expected_sha256 = str(entry["sha256"])
         url = (
             f"https://raw.githubusercontent.com/"
             f"{request.source_repository}/{request.source_sha}/{upstream}"
@@ -284,16 +351,16 @@ def verify_app_manifests(
             raise ValueError(
                 f"failed to fetch manifest {upstream} from {url}: {exc}"
             ) from None
-        actual_sha256 = hashlib.sha256(body).hexdigest() if body else ""
-        if not body or actual_sha256 != expected_sha256:
-            differing.append(path)
-    if differing:
-        joined = ", ".join(differing)
-        raise ValueError(
-            f"release manifests at {request.source_sha[:12]} differ from {APP_MANIFEST_LOCK} "
-            f"({joined}): run `tools/fetch_app_manifests.py --sync {app_name} {request.version_ref}` "
-            "and `tools/secrets_render.py --write`, merge, then deploy again"
-        )
+        release[str(entry["path"])] = parse_contract(body, label=f"{upstream} at {url}")
+    gaps = _contract_gaps(read, iac_ref, release)
+    if gaps:
+        lines = [
+            f"release manifests at {request.source_sha[:12]} need what infra2 release {iac_ref} "
+            "does not supply:"
+        ]
+        lines.extend(f"  {path}: {gap}" for path, gap in gaps)
+        lines.append(_gap_remedy(request, read=read, iac_ref=iac_ref, release=release))
+        raise ValueError("\n".join(lines))
 
 
 def make_plan(
@@ -307,6 +374,7 @@ def make_plan(
     resolve_image: Callable[..., ResolvedRef] = resolve_image_ref,
     resolve_pull: Callable[..., ResolvedRef] = resolve_pr,
     manifest_fetcher: Callable[[str], bytes] | None = None,
+    contract_reader: ContractReader | None = None,
     runner=subprocess.run,
 ) -> DeployPlan:
     request = parse_request(payload)
@@ -333,6 +401,7 @@ def make_plan(
         repo_root=repo_root,
         iac_ref=iac_ref,
         manifest_fetcher=manifest_fetcher,
+        contract_reader=contract_reader,
         runner=runner,
     )
     return DeployPlan(
