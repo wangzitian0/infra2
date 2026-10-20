@@ -16,13 +16,6 @@ name: Ops Checks
   push:
     branches: [main]
     paths:
-      - "common/deploy/dokploy*.py"
-      - "common/security/vault_self_refresh_audit.py"
-      - "tools/facet_reconcile.py"
-      - "tools/dokploy_config_drift.py"
-      - "tools/secrets_reconcile.py"
-      - "tools/secrets_reconcile_check.py"
-      - "tools/vault_self_refresh_audit_check.py"
       - "tools/deploy_v2.py"
       - "tools/deploy_v2_canary.py"
       - "common/deploy/preview.py"

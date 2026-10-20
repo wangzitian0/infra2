@@ -30,9 +30,7 @@ class FakeSecrets:
 class FakeDokployLookup:
     """Records find_compose_by_name calls and returns a scripted composeId."""
 
-    def __init__(
-        self, compose_ids: dict[tuple[str, str, str], str | None]
-    ) -> None:
+    def __init__(self, compose_ids: dict[tuple[str, str, str], str | None]) -> None:
         self._compose_ids = compose_ids
         self.calls: list[tuple[str, str, str]] = []
 

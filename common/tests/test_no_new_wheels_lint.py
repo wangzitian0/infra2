@@ -129,4 +129,3 @@ def test_scheduled_job_expired_nowheel_fails(tmp_path: Path) -> None:
     )
     assert len(errors) == 1
     assert "exemption expired on 2026-09-01" in errors[0]
-

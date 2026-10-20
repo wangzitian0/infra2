@@ -97,7 +97,9 @@ def service_root_counts(
 
 
 def dockerfile_canary_violations(composes: list[Path], root: Path = ROOT) -> list[str]:
-    """Ensure every deployed service with a `Dockerfile` reads at least one config-hash input (#1123)."""
+    """Ensure every deployed service with a `Dockerfile` or `build:` section reads at least one config-hash input (#1123)."""
+    import yaml
+
     resolved_root = root.resolve()
     violations: list[str] = []
     by_dir: dict[Path, list[Path]] = {}
@@ -105,7 +107,21 @@ def dockerfile_canary_violations(composes: list[Path], root: Path = ROOT) -> lis
         resolved_compose = Path(compose).resolve()
         by_dir.setdefault(resolved_compose.parent, []).append(resolved_compose)
     for service_dir, dir_composes in sorted(by_dir.items()):
-        if not (service_dir / "Dockerfile").is_file():
+        has_dockerfile_or_build = (service_dir / "Dockerfile").is_file()
+        if not has_dockerfile_or_build:
+            for c in dir_composes:
+                try:
+                    doc = yaml.safe_load(c.read_text(encoding="utf-8")) or {}
+                except yaml.YAMLError:
+                    doc = {}
+                services = doc.get("services") if isinstance(doc, dict) else None
+                if isinstance(services, dict) and any(
+                    isinstance(svc, dict) and svc.get("build")
+                    for svc in services.values()
+                ):
+                    has_dockerfile_or_build = True
+                    break
+        if not has_dockerfile_or_build:
             continue
         total_inputs = sum(
             len(_compose_artifact_files(str(c), c.read_text(encoding="utf-8")))
@@ -126,6 +142,13 @@ def floor_violations(composes: list[Path], root: Path = ROOT) -> list[str]:
     if missing_roots:
         violations.append(
             f"_SERVICE_ROOTS is missing required service roots: {', '.join(missing_roots)}"
+        )
+    missing_floors = [
+        sr for sr in _REQUIRED_SERVICE_ROOTS if sr not in _SERVICE_ROOT_FLOORS
+    ]
+    if missing_floors:
+        violations.append(
+            f"_SERVICE_ROOT_FLOORS is missing required service roots: {', '.join(missing_floors)}"
         )
     for rel in find_unmapped_composes(root=root):
         violations.append(
