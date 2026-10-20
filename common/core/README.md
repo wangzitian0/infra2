@@ -13,9 +13,9 @@
 
 | Module | Role | Key Exports |
 |--------|------|-------------|
-| `environ.py` | Deployment environment of this process, suffixes, platform hosts (was `common/common.py`, #955) | `get_env()`, `set_deploy_env()`, `with_env_suffix()`, `infra_domain()`, `service_domain()`, `DeploymentEnvironment` |
-| `registry.py` | Service registry read from each Deployer by AST (was `common/core/registry.py`) | `service_attrs()`, `ServiceMeta`, `all_services()`, `resolve_container_host()` |
-| `facets.py` | Typed per-service facets a Deployer declares (was `common/core/facets.py`) | `ProbeFacet`, `PublicRouteFacet`, `SignalFacet`, `BackupFacet`, `SecretsFacet`, `Exemption` |
+| `environ.py` | Deployment environment of this process, suffixes, platform hosts | `get_env()`, `set_deploy_env()`, `with_env_suffix()`, `infra_domain()`, `service_domain()`, `DeploymentEnvironment` |
+| `registry.py` | Service registry read from each Deployer by AST | `service_attrs()`, `ServiceMeta`, `all_services()`, `resolve_container_host()` |
+| `facets.py` | Typed per-service facets a Deployer declares | `ProbeFacet`, `PublicRouteFacet`, `SignalFacet`, `BackupFacet`, `SecretsFacet`, `Exemption` |
 | `constants.py` | Estate-wide constants and Docker labels | `DEPLOYMENT_ENV_PRODUCTION`, `DEPLOYMENT_ENV_STAGING`, `DEPLOYMENT_ENV_PREVIEW`, `DOCKER_LABEL_PREFIX`, `IDENTITY_SCHEMA_VERSION`, `MANAGED_BY`, `REPO_ROOT`, `GITHUB_OWNER` |
 
 ## Usage Examples

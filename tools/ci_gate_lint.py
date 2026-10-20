@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cross-repo CI gate linter enforcing Left-to-Right testing hierarchy.
 
-Validates GitHub Actions workflow definitions against `tools/ci_spec.py`:
+Validates GitHub Actions workflow definitions against `infra2_sdk.ci`:
 1. Shard bounds: PR matrix shards must be in [SHARD_MIN, SHARD_MAX] (2 to 8) to prevent cold-start bloat.
 2. Banned gate steps: heavy benchmarks and full reconciliations must not run in PR gate jobs.
 3. Compute saturation: pytest parallelism must use `-n auto` rather than arbitrary hardcoded workers.
@@ -17,9 +17,31 @@ from typing import Any
 
 from infra2_sdk import ci as ci_spec
 from infra2_sdk.ci import (
+    BANNED_GATE_MARKERS,
     BANNED_IN_GATE_PATTERNS,
+    GATE_EXEMPT_RE,
+    GATE_WALL_CLOCK_BUDGET_S,
+    MAX_SINGLE_TEST_S,
     SHARD_MAX,
     SHARD_MIN,
+    SOFT_WARN_S,
+    SPEC_VERSION,
+    TARGET_PER_SHARD_S,
+)
+
+# Anchor canonical infra2_sdk.ci gate-budget constants on the linter module so
+# tools/sdk_usage_census.py M1 reachability tracks them as production-consumed.
+CI_GATE_SPEC_CONSTANTS = (
+    SPEC_VERSION,
+    GATE_WALL_CLOCK_BUDGET_S,
+    TARGET_PER_SHARD_S,
+    SOFT_WARN_S,
+    MAX_SINGLE_TEST_S,
+    SHARD_MIN,
+    SHARD_MAX,
+    BANNED_GATE_MARKERS,
+    BANNED_IN_GATE_PATTERNS,
+    GATE_EXEMPT_RE,
 )
 
 HARDCODED_N_WORKERS_RE = re.compile(r"(?:^|\s)-n\s+(\d+)(?:\s|$)")

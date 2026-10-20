@@ -39,7 +39,7 @@ def _make_uv_lock(version: str) -> str:
 
 @pytest.fixture()
 def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
-    """Build a synthetic SDK package and two consumer repositories that pass all M1-M5 checks."""
+    """Build a synthetic SDK package and two consumer repositories that pass all M1-M6 checks."""
     sdk_root = tmp_path / "sdk_repo"
     pkg_root = sdk_root / "src" / PKG_UNDER
 
@@ -56,9 +56,9 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
         pkg_root,
         "__init__.py",
         f"""
-        from {PKG_UNDER}.alpha import used_in_prod, used_in_test_only, internal_helper, unused_func
+        from {PKG_UNDER}.alpha import used_in_prod, internal_helper, TYPED_CONST
 
-        __all__ = ["used_in_prod", "used_in_test_only", "internal_helper", "unused_func"]
+        __all__ = ["used_in_prod", "internal_helper", "TYPED_CONST"]
         """,
     )
     _write(
@@ -74,12 +74,6 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
         def used_in_prod() -> str:
             return internal_helper()
 
-        def used_in_test_only() -> str:
-            return "test"
-
-        def unused_func() -> str:
-            return "unused"
-
         class ProdService:
             def ping(self) -> str:
                 return "pong"
@@ -89,9 +83,9 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
         pkg_root,
         "runtime/__init__.py",
         f"""
-        from {PKG_UNDER}.runtime.environment import RuntimeEnvKey, runtime_env_contract
+        from {PKG_UNDER}.runtime.environment import RuntimeEnvKey, RuntimeEnvSpec, runtime_env_contract
 
-        __all__ = ["RuntimeEnvKey", "runtime_env_contract"]
+        __all__ = ["RuntimeEnvKey", "RuntimeEnvSpec", "runtime_env_contract"]
         """,
     )
     _write(
@@ -101,11 +95,12 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
         from dataclasses import dataclass
         from enum import StrEnum
 
+        __all__ = ["RuntimeEnvKey", "RuntimeEnvSpec", "runtime_env_contract"]
+
         class RuntimeEnvKey(StrEnum):
             ENVIRONMENT = "ENVIRONMENT"
             SERVICE_NAME = "OTEL_SERVICE_NAME"
             SERVICE_VERSION = "SERVICE_VERSION"
-            UNUSED_KEY = "OTEL_TRACES_SAMPLER"
 
         @dataclass(frozen=True)
         class RuntimeEnvSpec:
@@ -116,7 +111,6 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
             RuntimeEnvSpec(RuntimeEnvKey.ENVIRONMENT, ("ENV", "APP_ENV")),
             RuntimeEnvSpec(RuntimeEnvKey.SERVICE_NAME),
             RuntimeEnvSpec(RuntimeEnvKey.SERVICE_VERSION, ("IMAGE_TAG",)),
-            RuntimeEnvSpec(RuntimeEnvKey.UNUSED_KEY),
         )
 
         def runtime_env_contract() -> dict[str, object]:
@@ -148,25 +142,31 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
         "app/service.py",
         f"""
         import os
-        from {PKG_UNDER}.alpha import ProdService, used_in_prod
+        from {PKG_UNDER}.alpha import ProdService, TYPED_CONST, used_in_prod
+        from {PKG_UNDER}.runtime.environment import (
+            RuntimeEnvKey,
+            RuntimeEnvSpec,
+            runtime_env_contract,
+        )
 
         def run() -> str:
             env = os.environ.get("ENVIRONMENT", "staging")
+            env_alias = os.environ.get("ENV", env)
+            app_env = os.environ.get("APP_ENV", env_alias)
             svc = os.environ.get("OTEL_SERVICE_NAME", "svc-a")
             svc_obj = ProdService()
-            return f"{{env}}:{{svc}}:{{used_in_prod()}}:{{svc_obj.ping()}}"
+            _ = (TYPED_CONST, RuntimeEnvKey, RuntimeEnvSpec, runtime_env_contract())
+            return f"{{app_env}}:{{svc}}:{{used_in_prod()}}:{{svc_obj.ping()}}"
         """,
     )
     _write(
         consumer_a,
         "tests/test_service.py",
         f"""
-        import os
-        from {PKG_UNDER}.alpha import used_in_test_only
+        from {PKG_UNDER}.alpha import used_in_prod
 
-        def test_only_call() -> None:
-            os.environ["IMAGE_TAG"] = "1.0.0"
-            assert used_in_test_only() == "test"
+        def test_call() -> None:
+            assert used_in_prod() == "ok"
         """,
     )
     _write(
@@ -193,7 +193,8 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
 
         def handler() -> str:
             ver = os.environ.get("SERVICE_VERSION", "1.0")
-            return f"{{ver}}:{{sdk_alpha.used_in_prod()}}"
+            tag = os.environ.get("IMAGE_TAG", ver)
+            return f"{{tag}}:{{sdk_alpha.used_in_prod()}}"
         """,
     )
 
@@ -227,21 +228,19 @@ def test_clean_fixture_passes_all_metrics_and_cli_check(
     assert payload["check"]["failures"] == []
 
     m1 = payload["metrics"]["M1"]
-    assert m1["total_public"] == 11
-    assert m1["prod_used"] == 2  # used_in_prod, ProdService
-    assert m1["test_only"] == 1  # used_in_test_only
-    assert (
-        m1["internal_only"] == 5
-    )  # internal_helper, PUBLIC_CONST, RuntimeEnvKey, RuntimeEnvSpec, RUNTIME_ENV_SPECS
-    assert m1["unused"] == 3  # unused_func, TYPED_CONST, runtime_env_contract
+    assert m1["total_public"] == 8
+    assert m1["prod_used"] == 6
+    assert m1["test_only"] == 0
+    assert m1["internal_only"] == 2  # internal_helper, PUBLIC_CONST
+    assert m1["unused"] == 0
     assert m1["missing_imports"] == {"prod": [], "test": []}
     assert m1["cli_uses"] == {f"consumer_a:{PKG_UNDER}.alpha": 1}
 
     m2 = payload["metrics"]["M2"]
-    assert m2["total_keys"] == 7  # 4 canonical + 3 aliases
-    assert m2["prod_used"] == 3  # ENVIRONMENT, OTEL_SERVICE_NAME, SERVICE_VERSION
-    assert m2["test_only"] == 1  # IMAGE_TAG
-    assert m2["unused"] == 3  # ENV, APP_ENV, OTEL_TRACES_SAMPLER
+    assert m2["total_keys"] == 6  # 3 canonical + 3 aliases
+    assert m2["prod_used"] == 6
+    assert m2["test_only"] == 0
+    assert m2["unused"] == 0
 
     m3 = payload["metrics"]["M3"]
     assert m3["all_up_to_date"] is True
@@ -812,8 +811,68 @@ def test_m2_credits_canonical_key_when_registered_alias_is_used_in_prod(
     assert by_key["SERVICE_VERSION"] == "prod_used"
 
 
+def test_evaluate_checks_fails_on_m1_and_m2_ratchet_thresholds(
+    synthetic_workspace: tuple[Path, dict[str, Path]],
+) -> None:
+    pkg_root, consumers = synthetic_workspace
+    base_report = census.run_census(pkg_root=pkg_root, consumers=consumers)
+    assert census.evaluate_checks(base_report) == []
+
+    report_m1_unused = json.loads(json.dumps(base_report))
+    report_m1_unused["metrics"]["M1"]["unused"] = 1
+    assert any(
+        "M1: 1 unused public SDK symbol(s)" in f
+        for f in census.evaluate_checks(report_m1_unused)
+    )
+
+    report_m1_test = json.loads(json.dumps(base_report))
+    report_m1_test["metrics"]["M1"]["test_only"] = 1
+    assert any(
+        "M1: 1 test-only public SDK symbol(s)" in f
+        for f in census.evaluate_checks(report_m1_test)
+    )
+
+    report_m1_internal = json.loads(json.dumps(base_report))
+    report_m1_internal["metrics"]["M1"]["internal_only"] = 3
+    assert any(
+        "M1: 3 internal-only public SDK symbol(s) (max 2)" in f
+        for f in census.evaluate_checks(report_m1_internal)
+    )
+
+    report_m2_unused = json.loads(json.dumps(base_report))
+    report_m2_unused["metrics"]["M2"]["unused"] = 2
+    assert any(
+        "M2: 2 unused runtime_env_contract() key(s)" in f
+        for f in census.evaluate_checks(report_m2_unused)
+    )
+
+    report_m2_test = json.loads(json.dumps(base_report))
+    report_m2_test["metrics"]["M2"]["test_only"] = 1
+    assert any(
+        "M2: 1 test-only runtime_env_contract() key(s)" in f
+        for f in census.evaluate_checks(report_m2_test)
+    )
+
+
+def test_resolve_sdk_pkg_root_prefers_installed_package(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import infra2_sdk
+
+    fake_repo = tmp_path / "repo"
+    sub_pkg = fake_repo / "repos" / "infra2-sdk" / "src" / "infra2_sdk"
+    _write(sub_pkg, "__init__.py", "__version__ = '0.0.1'\n")
+    monkeypatch.setattr(census, "REPO_ROOT", fake_repo)
+
+    resolved = census.resolve_sdk_pkg_root(None)
+    assert resolved == Path(infra2_sdk.__file__).resolve().parent
+    assert resolved != sub_pkg
+
+
 def test_live_infra2_repository_census_contract() -> None:
-    report = census.run_census(consumers={"infra2": census.REPO_ROOT})
+    consumers = census.default_consumers()
+    report = census.run_census(consumers=consumers)
     metrics = report["metrics"]
     assert metrics["M1"]["total_public"] >= 50
     assert metrics["M1"]["prod_used"] >= 20
@@ -826,4 +885,6 @@ def test_live_infra2_repository_census_contract() -> None:
     assert metrics["M5"]["total_violations"] == 0
     assert metrics["M6"]["total_violations"] == 0
     assert metrics["M6"]["passed"] is True
-    assert census.evaluate_checks(report) == []
+    assert census.evaluate_checks(report, check_test_imports=True) == []
+    single_report = census.run_census(consumers={"infra2": census.REPO_ROOT})
+    assert census.evaluate_checks(single_report, check_test_imports=True) == []

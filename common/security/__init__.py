@@ -6,18 +6,18 @@ from typing import TYPE_CHECKING
 
 # Importing this package must not require infra2-sdk (#847).
 #
-# `supply.py` and `prune.py` import `infra2_sdk.secrets` unconditionally, so an eager
-# import here made every `common.security.*` import need the wheel -- including the ones a
-# minimal GitHub Actions job makes only for `VaultSecrets` / `generate_secret_token`.
-# Three guards pin that invariant at its source: `test_env.py::TestWithoutTheSdk`,
+# `store.py`, `supply.py`, and `prune.py` all import `infra2_sdk.secrets` unconditionally,
+# so an eager import here would make every `common.security.*` import need the wheel --
+# including `common.security` and `common.security.registry`.
+# Guards pin that invariant at its source:
 # `test_secrets_registry.py::test_the_registry_table_is_readable_without_the_sdk` (a real
-# CI incident, run 34938044492) and `test_workflow_runtime_deps.py::
-# test_a_job_can_import_what_it_runs`; `test_sdk_free_import_surface.py` pins it for this
-# package.
+# CI incident, run 34938044492), `test_workflow_runtime_deps.py::
+# test_a_job_can_import_what_it_runs`, and `test_sdk_free_import_surface.py`.
 #
-# `store` has no SDK dependency, so it stays eager. The SDK-backed names resolve through
-# a PEP 562 module-level `__getattr__`: `from common.security import apply_secret_supply`
-# keeps working, but only that access loads `supply` / `prune`, and without the SDK it
+# All exported names resolve lazily through `_SDK_BACKED` (`PEP 562` module-level
+# `__getattr__`): `from common.security import apply_secret_supply` keeps working,
+# and importing `common.security` or `common.security.registry` stays SDK-free. Without
+# the SDK, accessing any name in `_SDK_BACKED` loads `store` / `supply` / `prune` and
 # raises the SDK's own ImportError rather than returning a stub.
 if TYPE_CHECKING:
     from common.security.prune import prune_orphan_secrets
