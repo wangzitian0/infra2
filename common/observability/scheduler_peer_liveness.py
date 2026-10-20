@@ -27,10 +27,6 @@ PEER_WORKFLOW = "scheduler-liveness.yml"
 BOUND_CAP_ENV = "INFRA2_PEER_LIVENESS_BOUND_CAP_HOURS"
 SCHEDULED_PAGE = 5
 UNFILTERED_PAGE = 50
-STARTED = ("in_progress", "completed")
-STARTUP_FAILURE = "startup_failure"
-MINUTES_PER_DAY = 24 * 60
-API_BASE = "https://api.github.com"
 API_TIMEOUT_SECONDS = 20.0
 
 OK = "OK"
@@ -45,14 +41,12 @@ Get = Callable[[str], object]
 evaluate = evaluate_peer_liveness
 
 __all__ = [
-    "API_BASE",
     "API_TIMEOUT_SECONDS",
     "BOUND_CAP_ENV",
     "DELAY_ALLOWANCE",
     "DISABLED",
     "Get",
     "INVALID",
-    "MINUTES_PER_DAY",
     "MISSED_TICKS_TOLERATED",
     "NEVER",
     "OK",
@@ -62,8 +56,6 @@ __all__ = [
     "PeerVerdict",
     "SCHEDULED_PAGE",
     "STALE",
-    "STARTED",
-    "STARTUP_FAILURE",
     "ScheduleError",
     "UNFILTERED_PAGE",
     "UNVERIFIABLE",

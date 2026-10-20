@@ -501,6 +501,8 @@ def test_retired_flat_shim_files_stay_deleted() -> None:
 
 def test_retired_domain_shims_and_libs_stay_deleted() -> None:
     """Retired domain shims and the legacy libs/ tree must stay deleted."""
+    import importlib.util
+
     resurrected = [rel for rel in RETIRED_DOMAIN_SHIMS if (ROOT / rel).exists()]
     assert not resurrected, f"Retired domain shim files recreated: {resurrected}."
     libs_dir = ROOT / "libs"
@@ -510,6 +512,13 @@ def test_retired_domain_shims_and_libs_stay_deleted() -> None:
         else []
     )
     assert not libs_py, f"Legacy libs/ python files must not exist: {libs_py}"
+    assert not libs_dir.exists(), (
+        "Legacy libs/ directory must not exist on disk (residual __pycache__ "
+        "makes 'libs' importable as a PEP-420 namespace package)."
+    )
+    assert importlib.util.find_spec("libs") is None, (
+        "Legacy 'libs' package must not be importable."
+    )
 
 
 def test_no_tracked_python_file_uses_a_retired_flat_shim() -> None:
@@ -573,6 +582,9 @@ def test_docs_do_not_cite_retired_flat_common_modules() -> None:
         "common/vault_self_refresh_audit",
         "common/harness_sweep.py",
         "common/alerting.py",
+        "common/service_identity.py",
+        "common/recency.py",
+        "common.const",
         "common/observability/recency.py",
         "common/deploy/console.py",
         "common/security/vault_audit_ssh",
