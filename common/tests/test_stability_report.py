@@ -594,3 +594,23 @@ def test_non_dry_run_delivers_card_by_default_and_text_when_requested(
         == 0
     )
     assert delivered[-1][0] == "text"
+
+
+def test_empty_ledger_never_renders_green_card_or_100pct_all_clear() -> None:
+    """Empty ledger summaries must never render a green card or claim 100% availability."""
+    from common.observability.ledger import (
+        build_report_message,
+        build_stability_card,
+        summarize_ledger,
+    )
+
+    empty_summary = summarize_ledger(local_ledger.new_ledger("production"))
+    assert empty_summary["has_data"] is False
+    msg = build_report_message(empty_summary)
+    assert "All monitored signals held 100% availability" not in msg
+    assert "No probe rounds recorded this window" in msg
+    card = build_stability_card(empty_summary)
+    assert card["header"]["template"] == "orange"
+    card_blob = json.dumps(card, ensure_ascii=False)
+    assert "All monitored signals held 100% availability" not in card_blob
+    assert "No probe rounds recorded" in card_blob

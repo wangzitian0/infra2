@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlparse
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-MODULE_PATH = ROOT / "tools" / "watchdog_weekly_digest.py"
+MODULE_PATH = ROOT / "common" / "observability" / "digest.py"
 WORKFLOW_PATH = ROOT / ".github/workflows/ops-checks.yml"
 
 
@@ -496,6 +496,7 @@ def test_build_digest_card_and_estate_app_health(monkeypatch) -> None:
     assert "0.2.8" in text_blob
     assert "Core Journey 看板" in text_blob
     assert "OpenPanel 漏斗" in text_blob
+    assert "https://openpanel.zitian.party" in text_blob
     msg = digest.build_digest_message(summary, "wangzitian0/infra2")
     assert "Estate app release parity:" in msg
     assert "finance_report: prod=0.2.7 (healthy) | staging=0.2.8 (healthy)" in msg
@@ -518,7 +519,9 @@ def test_build_digest_card_and_estate_app_health(monkeypatch) -> None:
     deg_card = digest.build_digest_card(degraded_summary, "wangzitian0/infra2")
     assert deg_card["header"]["template"] == "orange"
     assert "daily summary" in deg_card["header"]["title"]["content"]
-    assert "more" in json.dumps(deg_card, ensure_ascii=False)
+    deg_blob = json.dumps(deg_card, ensure_ascii=False)
+    assert "…and 2 more" in deg_blob
+    assert "Issue 9" not in deg_blob
 
     sent: list[tuple[str, object]] = []
     monkeypatch.setattr(
@@ -538,6 +541,7 @@ def test_build_digest_card_and_estate_app_health(monkeypatch) -> None:
 
     monkeypatch.setattr(digest, "fetch_recent_runs", lambda *a, **kw: [])
     monkeypatch.setattr(digest, "fetch_recent_run_logs", lambda *a, **kw: {})
+    monkeypatch.setattr(digest, "fetch_estate_app_health", lambda *a, **kw: [])
     monkeypatch.setattr(digest, "fetch_stale_open_issues", lambda *a, **kw: [])
     rc = digest.main(
         {
@@ -555,3 +559,31 @@ def test_build_digest_card_and_estate_app_health(monkeypatch) -> None:
         "activation",
         "core-funnel",
     ]
+
+
+def test_fetch_estate_app_health_requires_healthy_status_for_in_sync(
+    monkeypatch,
+) -> None:
+    """Matching version strings on degraded endpoints must not report parity=in_sync."""
+    digest = _load_module()
+
+    class _Resp:
+        def __init__(self, data: dict) -> None:
+            self._data = data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> bool:
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps(self._data).encode("utf-8")
+
+    monkeypatch.setattr(
+        digest,
+        "urlopen",
+        lambda request, timeout=5.0: _Resp({"status": "degraded", "version": "0.2.8"}),
+    )
+    apps = digest.fetch_estate_app_health("zitian.party")
+    assert all(entry["parity"] == "unknown" for entry in apps)

@@ -241,6 +241,7 @@ def build_report_message(
 ) -> str:
     """Render the positive-proof availability report for Lark."""
     cadence = "daily" if summary.get("window_days") == 1 else "weekly"
+    has_data = bool(summary.get("has_data", int(summary.get("total_runs", 0) or 0) > 0))
     header = title or f"[STABILITY] Infra2 {cadence} availability — positive proof"
     lines = [
         header,
@@ -263,7 +264,9 @@ def build_report_message(
             )
         lines.append(line)
     degraded = [s for s in summary["signals"] if s["fail"] > 0][:WORST_SIGNALS_SHOWN]
-    if degraded:
+    if not has_data:
+        lines.append("No probe rounds recorded this window. ⚠️")
+    elif degraded:
         lines.append("Lowest availability:")
         for signal in degraded:
             domain = f" [{signal['last_domain']}]" if signal["last_domain"] else ""
@@ -304,16 +307,17 @@ def build_stability_card(
 ) -> dict[str, Any]:
     """Build a Feishu interactive card for the positive-proof availability report."""
     cadence = "daily" if summary.get("window_days") == 1 else "weekly"
+    has_data = bool(summary.get("has_data", int(summary.get("total_runs", 0) or 0) > 0))
     degraded = [s for s in summary.get("signals", []) if s.get("fail", 0) > 0][
         :WORST_SIGNALS_SHOWN
     ]
     overall = float(summary.get("overall_uptime_pct", 100.0))
-    is_clean = not degraded and overall >= 99.9
+    is_clean = has_data and not degraded and overall >= 99.9
     header_title = title or (
         f"{'🟢' if is_clean else '🟡'} [报告] [STABILITY] Infra2 {cadence} availability — positive proof"
     )
     kpi_fields = [
-        ("Overall Availability", f"{overall}%"),
+        ("Overall Availability", f"{overall}%" if has_data else "N/A (no data)"),
         ("Signals at 100%", f"{summary['perfect_count']}/{summary['signal_count']}"),
         ("Window", f"{summary['window_days']}d (as of {summary['as_of']})"),
         ("Probe Runs", str(summary["total_runs"])),
@@ -334,7 +338,11 @@ def build_stability_card(
                 f"; {unavailable['unreadable']} unreadable record(s) NOT counted"
             )
         sections.append(unavail_text)
-    if degraded:
+    if not has_data:
+        sections.append(
+            "⚠️ **No probe rounds recorded this window — availability unverified.**"
+        )
+    elif degraded:
         lines = ["**Lowest availability signals**"]
         for signal in degraded:
             domain = (
