@@ -68,7 +68,7 @@ const DETAIL_MAX = 300;
 // /status serves at most this much of any one text field (worst case tested < 3 KB).
 const STATUS_TEXT_MAX = 120;
 // #905: every pager message has one layout (ops.observability.md §3.1). These are
-// common/alerting.py's PAGER_FIELDS in the same order (the Worker has no log tail);
+// common/alerting/'s PAGER_FIELDS in the same order (the Worker has no log tail);
 // common/tests/test_cloudflare_watchdog.py holds the two together.
 const PAGER_FIELDS = ["级别", "环境", "对象", "现象", "开始于", "影响", "下一步", "Runbook"];
 const FIELD_SEPARATOR = "：";
@@ -76,7 +76,7 @@ const FIELD_SEPARATOR = "：";
 const LEVEL_BY_SEVERITY = { critical: "P0", error: "P1", warning: "P2", p0: "P0", p1: "P1", p2: "P2" };
 const LEVEL_RANK = { P0: 0, P1: 1, P2: 2 };
 const LEVEL_EMOJI = { P0: "🔴", P1: "🟠", P2: "🟡" };
-// Feishu text limit shared with common/alerting.py (MAX_MESSAGE_CHARS).
+// Feishu text limit shared with common/alerting/ (MAX_MESSAGE_CHARS).
 const MAX_MESSAGE_CHARS = 3500;
 const TRUNCATION_SUFFIX = "\n...[truncated]";
 const MAX_FULL_EVENTS = 5;
@@ -84,7 +84,7 @@ const MAX_SUMMARY_ITEMS = 20;
 const MAX_FIELD_CHARS = 300;
 const MAX_SUMMARY_CHARS = 160;
 const MAX_SUMMARY_LINE_CHARS = 240;
-// common/alerting.py _shrink_plans: [firing in full, recovered in full, summary lines].
+// common/alerting/ _shrink_plans: [firing in full, recovered in full, summary lines].
 // Fewer in full first, then the recovered become summary lines, then summary lines are
 // cut from the end: the ✅ 已恢复 section is never what goes first.
 const SHRINK_PLANS = [
@@ -641,7 +641,7 @@ function highestLevel(severities) {
   return severities.map(pagerLevel).reduce((best, level) => (LEVEL_RANK[level] < LEVEL_RANK[best] ? level : best), "P2");
 }
 
-// The owner's zone (UTC+8, no daylight saving), as common/alerting.py format_time.
+// The owner's zone (UTC+8, no daylight saving), as common/alerting/ format_time.
 function formatTime(ms) {
   const iso = new Date(ms + DISPLAY_OFFSET_MS).toISOString();
   return `${iso.slice(0, 10)} ${iso.slice(11, 16)}（UTC+8）`;

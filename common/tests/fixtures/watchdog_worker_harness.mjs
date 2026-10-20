@@ -718,7 +718,7 @@ for (const [label, fields, age] of [
   results.manyDown = messages;
 }
 
-// #905 parity with common/alerting.py: the shrink order, the 20-line cap, the field clip.
+// #905 parity with common/alerting/: the shrink order, the 20-line cap, the field clip.
 function shortTargets(prefix, count) {
   return Array.from({ length: count }, (_, i) => ({
     environment: "production",

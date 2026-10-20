@@ -1,4 +1,4 @@
-"""Tests for the #531 recency-window primitive: `common/recency.py`.
+"""Tests for the #531 recency-window primitive: `infra2_sdk.observability.is_recently_flapping`.
 
 Pure function, no Docker/mocking needed -- every case is expressed directly
 in count/timestamp/now terms.

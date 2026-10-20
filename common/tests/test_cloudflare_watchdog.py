@@ -578,7 +578,7 @@ HARNESS_START = 1_790_208_000
 
 @needs_node
 def test_worker_messages_follow_the_shared_field_order(world) -> None:
-    """#905: the Worker's text uses common/alerting.py's labels, separator and order: a
+    """#905: the Worker's text uses common/alerting/'s labels, separator and order: a
     page shows every field but the log tail, a recovery 级别 through 开始于."""
     runs = world["entrypointDown"]
     (page,) = _blocks(runs[1]["messages"][0])
