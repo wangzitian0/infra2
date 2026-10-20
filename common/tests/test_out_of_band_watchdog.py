@@ -2085,7 +2085,7 @@ def test_a_persistent_red_check_pages_once_then_reports_then_resolves(
     ]
     # the weekly digest counts delivery.success as recall evidence: a deduplicated day
     # is delivered, not "missing alert evidence"
-    from tools.watchdog_weekly_digest import summarize_watchdog_log_events
+    from common.observability.digest import summarize_watchdog_log_events
 
     audit = summarize_watchdog_log_events(
         {"run": "\n".join(json.dumps(event) for event in events)}
