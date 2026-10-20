@@ -18,6 +18,7 @@ from, or audited against, the registry instead of hand-maintained.
 from __future__ import annotations
 
 import ast
+import functools
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -153,13 +154,19 @@ def service_attrs() -> dict[str, ServiceMeta]:
     return result
 
 
-def _meta_from_deploy_file(
-    deploy_file: Path, *, service_id: str, layer: str
+@functools.lru_cache(maxsize=256)
+def _cached_meta_from_deploy_file(
+    deploy_file: Path,
+    mtime_ns: int,
+    file_size: int,
+    where: str,
+    service_id: str,
+    layer: str,
 ) -> ServiceMeta:
-    """Build one ServiceMeta from a deploy.py via AST (never imported)."""
+    """Build and cache one ServiceMeta from a deploy.py via AST (never imported)."""
+    _ = (mtime_ns, file_size)
     service_name_dir = service_id.split("/", 1)[1]
     tree = ast.parse(deploy_file.read_text(encoding="utf-8"))
-    where = str(deploy_file.relative_to(REPO_ROOT))
     return ServiceMeta(
         service_id=service_id,
         layer=layer,
@@ -188,11 +195,36 @@ def _meta_from_deploy_file(
     )
 
 
+def _meta_from_deploy_file(
+    deploy_file: Path, *, service_id: str, layer: str
+) -> ServiceMeta:
+    """Build one ServiceMeta from a deploy.py via AST (never imported)."""
+    st = deploy_file.stat()
+    where = str(deploy_file.relative_to(REPO_ROOT))
+    return _cached_meta_from_deploy_file(
+        deploy_file.resolve(),
+        st.st_mtime_ns,
+        st.st_size,
+        where,
+        service_id,
+        layer,
+    )
+
+
+@functools.lru_cache(maxsize=256)
+def _cached_compose_container_names(
+    compose_file: Path, mtime_ns: int, file_size: int, env_suffix: str
+) -> dict[str, str]:
+    from common.deploy.in_service import container_names
+
+    _ = (mtime_ns, file_size)
+    compose_text = compose_file.read_text(encoding="utf-8")
+    return container_names(compose_text, env_suffix)
+
+
 def _compose_container_names(meta: ServiceMeta, env_suffix: str) -> dict[str, str]:
     """compose service -> container name for ``meta``'s own compose file, resolved for
     ``env_suffix`` (``common.deploy.in_service.container_names``)."""
-    from common.deploy.in_service import container_names
-
     if not meta.compose_path:
         raise ValueError(
             f"{meta.service_id}: declares restart_after but no literal compose_path, "
@@ -200,12 +232,16 @@ def _compose_container_names(meta: ServiceMeta, env_suffix: str) -> dict[str, st
         )
     compose_file = REPO_ROOT / meta.compose_path
     try:
-        compose_text = compose_file.read_text(encoding="utf-8")
+        st = compose_file.stat()
+        return dict(
+            _cached_compose_container_names(
+                compose_file.resolve(), st.st_mtime_ns, st.st_size, env_suffix
+            )
+        )
     except OSError as exc:
         raise ValueError(
             f"{meta.service_id}: restart_after needs {meta.compose_path}: {exc}"
         ) from exc
-    return container_names(compose_text, env_suffix)
 
 
 def _validate_restart_after(metas: dict[str, ServiceMeta]) -> None:

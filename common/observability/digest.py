@@ -37,9 +37,7 @@ DEFAULT_INTERNAL_DOMAIN = "zitian.party"
 JOURNEY_BOARD_URL = "https://wangzitian0.github.io/finance_report/board/"
 OPENPANEL_URL = "https://analytics.zitian.party"
 SIGNOZ_URL = "https://signoz.zitian.party"
-WATCHDOG_RUNBOOK_URL = (
-    "https://github.com/wangzitian0/infra2/blob/main/platform/12.alerting/README.md#out-of-band-watchdog"
-)
+WATCHDOG_RUNBOOK_URL = "https://github.com/wangzitian0/infra2/blob/main/platform/12.alerting/README.md#out-of-band-watchdog"
 STALE_ISSUE_DAYS = 14
 
 
@@ -172,7 +170,9 @@ def _run_created_at(run: Mapping[str, Any]) -> datetime | None:
         return None
 
 
-def fetch_run_log(repository: str, token: str, run_id: str | int, *, opener=urlopen) -> str:
+def fetch_run_log(
+    repository: str, token: str, run_id: str | int, *, opener=urlopen
+) -> str:
     """Fetch and decode the GitHub Actions log archive for one workflow run."""
     owner, repo = repository.split("/", 1)
     request = Request(
@@ -820,9 +820,7 @@ def run_digest_cli(
         "false",
         "no",
     }:
-        domain = (
-            current_env.get("INTERNAL_DOMAIN") or DEFAULT_INTERNAL_DOMAIN
-        ).strip()
+        domain = (current_env.get("INTERNAL_DOMAIN") or DEFAULT_INTERNAL_DOMAIN).strip()
         summary["estate_apps"] = health_fetcher(domain)
     if current_env.get("WATCHDOG_DIGEST_STALE_ISSUES", "1").strip().lower() not in {
         "0",
@@ -833,9 +831,7 @@ def run_digest_cli(
             _as_int(current_env.get("WATCHDOG_DIGEST_STALE_ISSUE_DAYS"))
             or STALE_ISSUE_DAYS
         )
-        stale = stale_fetcher(
-            repository, token, stale_days=stale_days, now=now
-        )
+        stale = stale_fetcher(repository, token, stale_days=stale_days, now=now)
         summary["stale_issues"] = summarize_stale_issues(stale)
     message = build_digest_message(summary, repository)
     card = build_digest_card(summary, repository)

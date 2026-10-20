@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,13 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/ops-checks.yml"
 #: Shell tokens the workflow uses for the SDK pin (read from uv.lock by tools/sdk_requirement.py).
 SDK_TOKENS = ("$sdk_requirement", "infra2-sdk @")
+
+
+def _project_dependencies() -> set[str]:
+    """Distribution names declared in `pyproject.toml` `[project].dependencies`."""
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    deps = data.get("project", {}).get("dependencies", [])
+    return {Requirement(raw).name for raw in deps}
 
 
 def _job_packages(runs: list[str]) -> set[str] | None:
@@ -42,7 +50,9 @@ def _job_packages(runs: list[str]) -> set[str] | None:
         tail = line.split("pip install", 1)[1]
         for word in tail.split():
             word = word.strip("\"'")
-            if word and not word.startswith(("-", "$", "(", "@")) and "/" not in word:
+            if word in (".", "./"):
+                names |= _project_dependencies()
+            elif word and not word.startswith(("-", "$", "(", "@")) and "/" not in word:
                 names.add(word)
     return names if found else None
 

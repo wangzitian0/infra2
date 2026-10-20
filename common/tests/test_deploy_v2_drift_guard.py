@@ -9,12 +9,15 @@ ROOT = Path(__file__).resolve().parents[2]
 TEXT_SUFFIXES = {".md", ".py", ".yaml", ".yml", ".txt", ".toml"}
 SCAN_ROOTS = [
     ".github",
+    "bootstrap",
+    "common/deploy",
+    "common/tests",
     "docs",
     "finance_report",
-    "common/tests",
     "platform",
     "README.md",
     "tools",
+    "truealpha",
 ]
 
 
