@@ -6,7 +6,7 @@
       "tag": null
     },
     "truealpha": {
-      "commit": "df697f8c63aa90c55dd42f743438ac2794249792",
+      "commit": "d036c928f4f4dcadadf9be7c35855db4a926d5ff",
       "repository": "wangzitian0/truealpha",
       "tag": null
     }
@@ -27,7 +27,7 @@
     {
       "app": "truealpha",
       "path": "contracts/truealpha/data-engine.required-env.generated.json",
-      "sha256": "6627acc1ad898240cdf9a6ed69de902227073201b7dbe9aa740474607957d120",
+      "sha256": "d631d40acb442286083b75d94a713ff0744c666e0608367ffe37400e0548c734",
       "upstream": "apps/data-engine/required-env.generated.json"
     },
     {
