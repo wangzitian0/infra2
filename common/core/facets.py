@@ -197,14 +197,14 @@ class SecretsFacet:
 
     The vault self-refresh audit's inventory (formerly the handwritten
     ``vault-self-refresh-inventory.yaml`` SSOT, deleted) is DERIVED from these
-    declarations by ``common.vault_self_refresh_audit.load_inventory`` (#542).
+    declarations by ``common.security.vault_audit.load_inventory`` (#542).
     Everything derivable from the owning Deployer is NOT repeated here:
 
     - inventory ``id`` / ``project`` / ``dokploy_service`` derive from the
       declaring Deployer's registry id, ``project``, and ``service`` attrs;
     - ``vault_path_template`` derives as
       ``secret/data/{project}/{env}/{service}`` — the SAME (project, service)
-      facts ``common.env.get_secrets`` uses to build the deploy-side Vault path,
+      facts ``common.security.store.get_secrets`` uses to build the deploy-side Vault path,
       so the audit expectation and the deployed path cannot drift (#531);
     - ``compose_path`` defaults to the Deployer's own ``compose_path``, and the
       vault-agent config / secrets template are its ``vault-agent.hcl`` /
@@ -220,7 +220,7 @@ class SecretsFacet:
     WITHOUT the ``/secrets/.env`` mount (e.g. platform-prefect-worker), and
     ``optional_inert_fields`` (#526) names optional vault:true fields whose
     populated-ness is reported informationally — both formerly module-level
-    constants in common/vault_self_refresh_audit.py, now declared where the
+    constants in common/security/vault_audit.py, now declared where the
     service lives.
     """
 

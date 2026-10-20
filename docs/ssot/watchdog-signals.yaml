@@ -42,7 +42,7 @@
 # slow!=dead a structural rule, not per-check luck." It exists because this
 # codebase shipped that exact bug TWICE independently before the rule existed
 # -- common/observability/watchers/breakdown_watch.py (#475, 333 firing/resolved pairs in
-# 48h from un-debounced flapping) and common/vault_self_refresh_audit.py (#531,
+# 48h from un-debounced flapping) and common/security/vault_audit.py (#531,
 # four separate instances of a check with no time-window semantics). The
 # pre-existing free-text `alert_threshold: "3 consecutive failures"` field on
 # many entries below is left as-is (not retrofitted into the structured
@@ -572,7 +572,7 @@ signals:
   # sidecar's state-file healthcheck + probe heartbeat cover its liveness).
   # tier=minute/type=alert: a crash-looping container hurts users within
   # minutes. The consecutive_failures/renotify_window_sec below are
-  # common.observability.recency.evaluate_consecutive_hysteresis's fire thresholds -- exactly the
+  # infra2_sdk.observability.recency.evaluate_consecutive_hysteresis's fire thresholds -- exactly the
   # debounce whose ABSENCE caused #475 (333 firing/resolved pairs in 48h from a
   # single flapping container, each wrongly resetting the renotify clock).
   # Staging and preview containers never page (#903): they go to the daily
@@ -644,7 +644,7 @@ signals:
   # already owns. Because type=report, the alert-only consecutive_failures/
   # renotify_window_sec fields do not apply here: each scheduled run is a
   # fresh, independent one-shot audit with no consecutive-poll state to debounce
-  # (see common/vault_self_refresh_audit.py's module docstring for how
+  # (see common/security/vault_audit.py's module docstring for how
   # *within-a-run* staleness/recency is bounded instead, e.g.
   # RESTART_RECENCY_WINDOW_SECONDS).
   - signal_id: global.vault.self-refresh-audit

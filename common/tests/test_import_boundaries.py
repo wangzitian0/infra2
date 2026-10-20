@@ -40,6 +40,11 @@ ROOT = Path(__file__).resolve().parents[2]
 # Top-level import roots that common/ must never depend on (rules 2 and 3).
 _FORBIDDEN_ROOTS = ("tools", "bootstrap")
 
+# Leaf flat modules that have zero internal repo imports (guarded by
+# test_leaf_flat_modules_have_no_repo_imports). Domain packages may import them without
+# creating an import cycle.
+_LEAF_FLAT_MODULES = frozenset({"common.console"})
+
 # (importer path relative to the repo root, imported module).
 #
 # Debt owed to infra2#955. Every entry is a boundary violation that existed when the
@@ -49,11 +54,11 @@ _FORBIDDEN_ROOTS = ("tools", "bootstrap")
 #
 # History: 45 pairs when the guard landed, 42 after the common -> tools edges moved to
 # common.deploy.refs, 2 after #955 moved the flat implementations into common.core,
-# common.security, common.deploy and common.observability (the flat files are now frozen
-# shims, see common/README.md).
+# common.security, common.deploy and common.observability (the flat files were retired in
+# #1059, see common/README.md).
 #
-# The previous entries pointing at common.console were retired by introducing
-# common.deploy.console, which cleanly decouples domain packages from flat modules.
+# common.console is an explicit pure leaf module (_LEAF_FLAT_MODULES) with zero internal
+# repo imports (guarded by test_leaf_flat_modules_have_no_repo_imports).
 # Boundary debt is now zero.
 _DEBT_ROWS: tuple[tuple[str, str], ...] = ()
 
@@ -184,7 +189,7 @@ def _violates(module: str, importer_in_domain: bool, root: Path) -> bool:
         # is the stdlib unless `x` is a path in the repo (_imported_modules resolved it).
         return len(segments) > 1
     if importer_in_domain and top == "common":
-        if module == "common.console":
+        if module in _LEAF_FLAT_MODULES:
             return False
         return module == "common" or module in _flat_modules(root)
     return False
@@ -338,6 +343,7 @@ def test_extractor_does_not_treat_a_name_as_a_module() -> None:
     [
         ("common.common", True, True),  # rule 1
         ("common.common", False, False),  # a flat module may import a flat module
+        ("common.console", True, False),  # leaf flat module (_LEAF_FLAT_MODULES)
         ("common.core", True, False),  # domain -> domain is the intended direction
         ("common.core.environ", True, False),
         ("common", True, True),  # the flat root itself
@@ -353,6 +359,28 @@ def test_extractor_does_not_treat_a_name_as_a_module() -> None:
 )
 def test_violation_rules(module: str, in_domain: bool, expected: bool) -> None:
     assert _violates(module, in_domain, ROOT) is expected
+
+
+def test_leaf_flat_modules_have_no_repo_imports() -> None:
+    """Every module in _LEAF_FLAT_MODULES must have zero internal repo imports."""
+    internal_prefixes = (
+        "common",
+        "tools",
+        "platform",
+        "bootstrap",
+        "finance_report",
+        "truealpha",
+    )
+    for mod in sorted(_LEAF_FLAT_MODULES):
+        stem = mod.removeprefix("common.")
+        path = ROOT / "common" / f"{stem}.py"
+        assert path.is_file(), f"Leaf flat module missing: {path}"
+        imported = _imported_modules(path.read_text(encoding="utf-8"), "common", ROOT)
+        bad = {imp for imp in imported if imp.split(".")[0] in internal_prefixes}
+        assert not bad, (
+            f"{mod} is declared in _LEAF_FLAT_MODULES and must have zero internal repo "
+            f"imports, found: {sorted(bad)}"
+        )
 
 
 def test_collect_violations_on_a_synthetic_tree(tmp_path: Path) -> None:
@@ -429,8 +457,13 @@ RETIRED_FLAT_SHIMS_BATCH3 = {
 }
 
 RETIRED_FLAT_SHIMS_FINAL = {
-    "service_facets",
+    "constants",
+    "deployer",
     "deploy_dependencies",
+    "environ",
+    "facets",
+    "registry",
+    "service_facets",
 }
 
 ALL_RETIRED_FLAT_SHIMS = (
@@ -441,6 +474,15 @@ ALL_RETIRED_FLAT_SHIMS = (
     | RETIRED_FLAT_SHIMS_BATCH2D
     | RETIRED_FLAT_SHIMS_BATCH3
     | RETIRED_FLAT_SHIMS_FINAL
+)
+
+RETIRED_DOMAIN_SHIMS = (
+    "common/core/ci_spec.py",
+    "common/deploy/console.py",
+    "common/deploy/git_provenance.py",
+    "common/gate/coverage_regression.py",
+    "common/observability/recency.py",
+    "common/security/vault_tokens.py",
 )
 
 
@@ -455,6 +497,19 @@ def test_retired_flat_shim_files_stay_deleted() -> None:
         f"Retired flat shim files recreated under common/: {resurrected}. Use the domain "
         "packages directly."
     )
+
+
+def test_retired_domain_shims_and_libs_stay_deleted() -> None:
+    """Retired domain shims and the legacy libs/ tree must stay deleted."""
+    resurrected = [rel for rel in RETIRED_DOMAIN_SHIMS if (ROOT / rel).exists()]
+    assert not resurrected, f"Retired domain shim files recreated: {resurrected}."
+    libs_dir = ROOT / "libs"
+    libs_py = (
+        sorted(p.relative_to(ROOT).as_posix() for p in libs_dir.rglob("*.py"))
+        if libs_dir.exists()
+        else []
+    )
+    assert not libs_py, f"Legacy libs/ python files must not exist: {libs_py}"
 
 
 def test_no_tracked_python_file_uses_a_retired_flat_shim() -> None:
@@ -503,5 +558,53 @@ def test_no_tracked_python_file_uses_a_retired_flat_shim() -> None:
 
     assert not violations, (
         "Tracked python files still import retired flat shims:\n"
+        + "\n".join(f"  - {v}" for v in violations)
+    )
+
+
+def test_docs_do_not_cite_retired_flat_common_modules() -> None:
+    """Package READMEs and SSOT docs must not cite retired flat common modules or libs/."""
+    forbidden_tokens = (
+        "(was `common/",
+        "(was common/",
+        "libs/",
+        "common/coverage_regression.py",
+        "common/app_deploy_request.py",
+        "common/vault_self_refresh_audit",
+        "common/harness_sweep.py",
+        "common/alerting.py",
+        "common/observability/recency.py",
+        "common/deploy/console.py",
+        "common/security/vault_audit_ssh",
+        "common/observability/alert_bridge",
+        "common.observability.alert_bridge",
+        "common/deploy/request.py",
+        "common/harness/sweep.py",
+    )
+    doc_paths = sorted(
+        [
+            *(ROOT / "common").rglob("README.md"),
+            ROOT / "tools" / "README.md",
+            *(
+                p
+                for p in (ROOT / "docs" / "ssot").rglob("*")
+                if p.is_file() and p.suffix in {".md", ".yaml", ".yml"}
+            ),
+        ]
+    )
+    violations: list[str] = []
+    for path in doc_paths:
+        if not path.is_file():
+            continue
+        rel = path.relative_to(ROOT).as_posix()
+        text = path.read_text(encoding="utf-8")
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            for token in forbidden_tokens:
+                if token in line:
+                    violations.append(
+                        f"{rel}:{lineno}: contains retired reference {token!r}"
+                    )
+    assert not violations, (
+        "Documentation cites retired common/ shims or libs/ paths:\n"
         + "\n".join(f"  - {v}" for v in violations)
     )

@@ -23,7 +23,7 @@ SECRET_KEYS = ("token", "secret", "password", "key", "authorization")
 # restart-relevant signal it exposes is State.StartedAt (when the CURRENT run
 # began, i.e. the time of the most recent restart). classify_container()
 # therefore only flags a high restart count if the most recent restart was
-# itself within this window -- see common/observability/recency.py for the full reasoning.
+# itself within this window -- see infra2_sdk.observability.recency for the full reasoning.
 RESTART_RECENCY_WINDOW_SECONDS = 3600
 
 # (#531) docker logs has no notion of "only what's relevant to a live

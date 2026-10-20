@@ -911,15 +911,16 @@ def test_enforce_data_lane_snapshot_freshness_warning(monkeypatch, tmp_path, cap
     )
     with monkeypatch.context() as m:
         orig_path = dv2_mod.Path
-        m.setattr(
-            dv2_mod,
-            "Path",
-            lambda p: (
+
+        def fake_path(p):
+            return (
                 manifest
                 if str(p) == "/data/backups/anonymized/manifest.json"
                 else orig_path(p)
-            ),
-        )
+            )
+
+        m.setattr(dv2_mod, "Path", fake_path)
+        m.setattr(_preflight, "Path", fake_path)
         with caplog.at_level(logging.WARNING, logger="deploy_v2"):
             lane = enforce_data_lane_red_lines(target)
             assert lane == "staging"
@@ -1514,8 +1515,10 @@ def test_wait_for_image_dependencies_retries_until_all_artifacts_exist(monkeypat
         attempts["frontend"] += 1
         return attempts["frontend"] >= 2
 
-    monkeypatch.setattr(dv2, "_image_manifest_exists", exists)
-    monkeypatch.setattr(dv2.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(_preflight, "_image_manifest_exists", exists)
+    monkeypatch.setattr(
+        _preflight.time, "sleep", lambda seconds: sleeps.append(seconds)
+    )
 
     dv2._wait_for_image_dependencies(spec, "abcdef0", timeout=30, poll_seconds=1)
 
@@ -1526,7 +1529,9 @@ def test_wait_for_image_dependencies_retries_until_all_artifacts_exist(monkeypat
 def test_wait_for_image_dependencies_reports_missing_artifact(monkeypatch):
     spec = dv2.service_spec("finance_report/app")
 
-    monkeypatch.setattr(dv2, "_image_manifest_exists", lambda *_args, **_kw: False)
+    monkeypatch.setattr(
+        _preflight, "_image_manifest_exists", lambda *_args, **_kw: False
+    )
 
     with pytest.raises(RuntimeError, match="not published after 0s"):
         dv2._wait_for_image_dependencies(spec, "abcdef0", timeout=0, poll_seconds=0)

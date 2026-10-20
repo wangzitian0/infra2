@@ -26,7 +26,7 @@ Modules in `common/` that provide direct integrations or operational clients:
 
 | Module | Purpose | Key Exports |
 |--------|---------|-------------|
-| [`deploy/dokploy_client.py`](./deploy/dokploy_client.py) | Dokploy REST API wrapper (`common/deploy/dokploy_client.py` is its shim) | `DokployClient`, `get_dokploy()` |
+| [`deploy/dokploy_client.py`](./deploy/dokploy_client.py) | Dokploy REST API wrapper | `DokployClient`, `get_dokploy()` |
 | [`observability_dashboards.py`](./observability_dashboards.py) | SigNoz alert rules and dashboards loader. It stays here: moving it triggers apply-observability.yml, which needs owner approval (#1059 phase 2). | `load_alert_definitions()`, `render_alert_payloads()`, `require_rule_channel()` |
 | [`console.py`](./console.py) | Rich CLI formatting and header blocks | `header()`, `success()`, `error()`, `prompt_action()` |
 | [`common.py`](./common.py) | Environment derivation re-export and operator health check helper | `get_env()`, `check_service()` |
@@ -49,25 +49,22 @@ No frozen compatibility shims remain in `common/`.
 - `common/common.py` holds one function, `check_service`. It re-exports nothing (#1164).
   Import the environment helpers from `common.core.environ`.
   `check_service` is an operator task helper: it runs a health command
-  over SSH and prints through `common.console`, which a domain package must not import.
+  over SSH and prints through `common.console`.
   `test_no_libs_common_env_reexports.py` fails on any other use of `common.common`.
 - `common/console.py` holds its own implementation. `tools/pr_merge_gate.py` imports it, so
   it is in the merge gate's self-governing closure; moving it is a separate,
-  owner-approved change. `common/deploy/deployer.py` and `common/deploy/promote.py` import
-  the decoupled copy `common/deploy/console.py`, so the import-boundary debt ledger is
-  empty. `test_deploy_console_code_equals_flat_console_code` fails when the two copies
-  differ in code.
+  owner-approved change. `common.console` is a pure leaf module with zero internal repo
+  imports, enforced by `test_leaf_flat_modules_have_no_repo_imports` in
+  `common/tests/test_import_boundaries.py`.
 
 The guard asserts that both are *not* structurally shims: migrate one and the table must
 move with it.
 
 `common.security` imports without infra2-sdk (#847): `common/security/__init__.py` loads
-`supply` / `prune` lazily (PEP 562), so only touching an SDK-backed name needs the wheel;
-`common/tests/test_sdk_free_import_surface.py` pins it. `common/security/store.py` guards
-its own SDK import so minimal GitHub Actions jobs can use `verify_vault_token` / `generate_password`; its guards (`common/tests/test_env.py::TestWithoutTheSdk`,
+`store`, `supply`, and `prune` lazily (PEP 562), so only touching an SDK-backed name needs
+the wheel; `common/tests/test_sdk_free_import_surface.py`,
 `test_secrets_registry.py::test_the_registry_table_is_readable_without_the_sdk` and
-`test_workflow_runtime_deps.py::test_a_job_can_import_what_it_runs`) must keep passing
-unchanged.
+`test_workflow_runtime_deps.py::test_a_job_can_import_what_it_runs` pin this contract.
 
 ### Import boundaries
 

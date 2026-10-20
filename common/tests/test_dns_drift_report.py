@@ -6,23 +6,11 @@ workflow; the diff + report formatting — where the actual logic lives — are 
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[2]
+from common.deploy import dns_drift as m
 
 
 def _mod():
-    spec = importlib.util.spec_from_file_location(
-        "dns_drift_report", ROOT / "common/deploy/dns_drift.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    # Register before exec: @dataclass + `from __future__ import annotations` resolves its
-    # string annotations via sys.modules[__module__], which fails if the module isn't there.
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return m
 
 
 def test_compute_drift_splits_missing_and_unmanaged() -> None:

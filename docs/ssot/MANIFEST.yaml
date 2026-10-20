@@ -153,7 +153,7 @@ entries:
     description: ClickHouse storage for observability and analytics.
   # vault.self_refresh_inventory retired (#542): the audit inventory is DERIVED
   # from each service Deployer's SecretsFacet declarations (common/core/facets.py
-  # -> common/vault_self_refresh_audit.load_inventory); the former handwritten
+  # -> common/security/vault_audit.load_inventory); the former handwritten
   # docs/ssot/vault-self-refresh-inventory.yaml is deleted, its final content
   # frozen as common/tests/fixtures/vault_self_refresh_inventory_frozen.yaml
   # (equivalence proof: common/tests/test_vault_inventory_equivalence.py).

@@ -122,7 +122,7 @@ def is_test_path(path: str) -> bool:
 
 
 def resolve_sdk_pkg_root(sdk_src: Path | None = None) -> Path:
-    """Locate the infra2_sdk package directory from an explicit path, submodule, or site-packages."""
+    """Locate the infra2_sdk package directory from an explicit path, site-packages, or submodule."""
     if sdk_src is not None:
         candidate = sdk_src.resolve()
         if (candidate / "__init__.py").is_file():
@@ -133,13 +133,26 @@ def resolve_sdk_pkg_root(sdk_src: Path | None = None) -> Path:
             return candidate / "src" / "infra2_sdk"
         raise FileNotFoundError(f"infra2_sdk package not found under {sdk_src}")
 
+    loaded = sys.modules.get("infra2_sdk")
+    if loaded is not None and getattr(loaded, "__file__", None):
+        return Path(loaded.__file__).resolve().parent
+
+    import importlib.util
+
+    try:
+        spec = importlib.util.find_spec("infra2_sdk")
+    except (ImportError, ValueError):
+        spec = None
+    if spec is not None and spec.origin:
+        return Path(spec.origin).resolve().parent
+
     sub_pkg = REPO_ROOT / "repos" / "infra2-sdk" / "src" / "infra2_sdk"
     if (sub_pkg / "__init__.py").is_file():
         return sub_pkg
 
-    import infra2_sdk
-
-    return Path(infra2_sdk.__file__).resolve().parent
+    raise FileNotFoundError(
+        "infra2_sdk package not found in site-packages or repos/infra2-sdk"
+    )
 
 
 def default_consumers(root: Path = REPO_ROOT) -> dict[str, Path]:
@@ -1027,13 +1040,14 @@ def compute_m3(
             lagging_repos.append(repo)
             continue
         pinned_tuple = _parse_version_tuple(pinned)
-        up_to_date = pinned_tuple == latest_tuple
+        up_to_date = pinned_tuple >= latest_tuple
         if latest_tuple[0] != pinned_tuple[0]:
-            lag = pinned_tuple[0] - latest_tuple[0]
+            raw_lag = pinned_tuple[0] - latest_tuple[0]
         elif latest_tuple[1] != pinned_tuple[1]:
-            lag = pinned_tuple[1] - latest_tuple[1]
+            raw_lag = pinned_tuple[1] - latest_tuple[1]
         else:
-            lag = pinned_tuple[2] - latest_tuple[2]
+            raw_lag = pinned_tuple[2] - latest_tuple[2]
+        lag = min(0, raw_lag)
         per_repo[repo] = {
             "pinned_version": pinned,
             "latest_version": latest_clean,

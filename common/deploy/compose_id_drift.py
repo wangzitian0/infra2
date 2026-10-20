@@ -10,7 +10,7 @@ that happens — but only AT deploy time, with no proactive signal beforehand.
 
 This is that proactive signal: for every ``common.deploy.env_config.bespoke_app_compose_
 targets()`` entry, re-resolve the compose by (project, env, name) via ``DokployClient.
-find_compose_by_name`` — the same call ``common/vault_self_refresh_audit.py`` and
+find_compose_by_name`` — the same call ``common/security/vault_self_refresh_audit.py`` and
 ``common/deploy/preview.py`` already use — and assert the live ``composeId`` still matches
 the hardcoded literal.
 

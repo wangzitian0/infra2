@@ -33,20 +33,6 @@ from infra2_sdk.secrets import (
     vault_token_status,
 )
 
-
-_SDK_MISSING = (
-    "infra2-sdk is required to read or write secret stores: it is pinned in uv.lock "
-    "and installed by the iac-runner image from there; install the project dependencies "
-    "(uv sync) or rebuild the iac-runner image (deploy.yml does so on the next main push)."
-)
-
-
-def _require_sdk(cls):
-    if cls is None:
-        raise ModuleNotFoundError(_SDK_MISSING)
-    return cls
-
-
 CredentialType = Literal["bootstrap", "root_vars", "app_vars"]
 
 
@@ -105,17 +91,14 @@ class OpSecrets:
 
     def _client(self) -> OnePasswordBackend:
         if self._backend is None:
-            self._backend = _require_sdk(OnePasswordBackend)(self.VAULT)
+            self._backend = OnePasswordBackend(self.VAULT)
         return self._backend
 
     def _load(self) -> dict[str, str]:
         if self._cache is None:
             try:
                 raw = self._client().read(self.item)
-            except (SecretsError, OSError, ModuleNotFoundError) as error:
-                # ModuleNotFoundError: no infra2-sdk in a minimal GitHub Actions job
-                # (deploy_v2, watchdogs) — same degrade as a missing `op` binary, which
-                # is what those jobs always had (#649 incident: v1.1.66 crashed them).
+            except (SecretsError, OSError) as error:
                 # OSError: no `op` binary (CI runners, GitHub Actions) — degrade to an
                 # empty read exactly as the pre-SDK implementation did.
                 print(
@@ -138,7 +121,7 @@ class OpSecrets:
     def set(self, key: str, value: str) -> bool:
         try:
             self._client().write(self.item, {key: value})
-        except (SecretsError, OSError, ModuleNotFoundError) as error:
+        except (SecretsError, OSError) as error:
             print(f"OpSecrets: failed to set {key}: {error}", file=sys.stderr)
             return False
         self._cache = None
@@ -179,10 +162,6 @@ class VaultSecrets:
                     "(`vault token create -ttl=1h`, bootstrap/05.vault README) and export "
                     "it as VAULT_TOKEN."
                 )
-            if VaultKvBackend is None:
-                # A token but no SDK (minimal CI job): the historical "cannot reach Vault
-                # from here" class, which callers such as common.deploy.promote degrade on.
-                raise self.VaultConnectionError(f"\n❌ {_SDK_MISSING}")
             self._backend = VaultKvBackend(self.addr, token=self.token)
         return self._backend
 

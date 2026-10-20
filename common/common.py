@@ -1,7 +1,8 @@
 """Operator task helper for deploy tasks: ``check_service``.
 
-``check_service`` runs a health command over SSH and prints through ``common.console``.
-A domain package must not import ``common.console``, so the helper stays in this flat module.
+``check_service`` runs a health command over SSH and prints through ``common.console``
+(a pure leaf module with zero internal dependencies guarded by
+``test_leaf_flat_modules_have_no_repo_imports``).
 
 This module offers nothing else. The environment helpers live in ``common.core.environ``.
 Import them from there (#1164).
