@@ -755,6 +755,12 @@ def deliver_digest(
 def run_digest_cli(
     env: Mapping[str, str] | None = None,
     argv: list[str] | None = None,
+    *,
+    runs_fetcher=fetch_recent_runs,
+    logs_fetcher=fetch_recent_run_logs,
+    health_fetcher=fetch_estate_app_health,
+    stale_fetcher=fetch_stale_open_issues,
+    deliverer=deliver_digest,
 ) -> int:
     """CLI runner for the weekly/daily watchdog digest."""
     import argparse
@@ -787,7 +793,7 @@ def run_digest_cli(
         or DIGEST_WINDOW_DAYS
     )
     now = datetime.now(UTC)
-    runs = fetch_recent_runs(repository, token, now=now, window_days=window_days)
+    runs = runs_fetcher(repository, token, now=now, window_days=window_days)
     summary = summarize_weekly_runs(runs, now=now, window_days=window_days)
     if current_env.get("WATCHDOG_DIGEST_REVIEW_LOGS", "1").strip().lower() not in {
         "0",
@@ -795,7 +801,7 @@ def run_digest_cli(
         "no",
     }:
         max_logs = _as_int(current_env.get("WATCHDOG_DIGEST_LOG_LIMIT")) or 25
-        logs = fetch_recent_run_logs(
+        logs = logs_fetcher(
             repository,
             token,
             recent_weekly_runs(runs, now=now, window_days=window_days),
@@ -810,7 +816,7 @@ def run_digest_cli(
         domain = (
             current_env.get("INTERNAL_DOMAIN") or DEFAULT_INTERNAL_DOMAIN
         ).strip()
-        summary["estate_apps"] = fetch_estate_app_health(domain)
+        summary["estate_apps"] = health_fetcher(domain)
     if current_env.get("WATCHDOG_DIGEST_STALE_ISSUES", "1").strip().lower() not in {
         "0",
         "false",
@@ -820,7 +826,7 @@ def run_digest_cli(
             _as_int(current_env.get("WATCHDOG_DIGEST_STALE_ISSUE_DAYS"))
             or STALE_ISSUE_DAYS
         )
-        stale = fetch_stale_open_issues(
+        stale = stale_fetcher(
             repository, token, stale_days=stale_days, now=now
         )
         summary["stale_issues"] = summarize_stale_issues(stale)
@@ -829,7 +835,7 @@ def run_digest_cli(
     if current_env.get("WATCHDOG_DIGEST_DRY_RUN") == "1":
         print(message)
         return 0
-    deliver_digest(current_env, message, card=card)
+    deliverer(current_env, message, card=card)
     print(message)
     return 0
 

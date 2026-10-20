@@ -2,6 +2,7 @@
   "$comment": "Config-as-code INTENT for the finance_report OpenPanel product-analytics views (D / EPIC-024). OpenPanel exposes NO write API/MCP for funnels or dashboards (only event /track + read), so this file is the reviewable source of truth for the baseline funnel + events board, and the SOP-006 runbook in docs/ssot/platform.openpanel.md is the manual apply (OpenPanel UI). Event names MUST match the FE taxonomy ANALYTICS_EVENTS in apps/frontend/src/lib/analytics.ts and the BE emitter src/analytics.py. Querying these on-demand is automatable via the OpenPanel MCP / openpanel_query.py CLI (SOP-004/SOP-005).",
   "funnels": [
     {
+      "preset": "activation",
       "name": "Upload → Report",
       "description": "Core activation funnel: a user uploads a statement and reaches a generated report package.",
       "chartType": "funnel",
@@ -13,6 +14,7 @@
       ]
     },
     {
+      "preset": "core-funnel",
       "name": "Upload → Review → Report (North Star)",
       "description": "Full core loop funnel: statement upload, extraction completion, human review approval, and report generation.",
       "chartType": "funnel",

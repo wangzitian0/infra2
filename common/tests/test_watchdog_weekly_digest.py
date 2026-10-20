@@ -540,9 +540,12 @@ def test_build_digest_card_and_estate_app_health(monkeypatch) -> None:
     )
     assert rc == 0
 
-    from common.observability.openpanel import load_estate_openpanel_presets
+    from common.observability_dashboards import load_openpanel_analytics
 
-    presets = load_estate_openpanel_presets()
-    assert "core-funnel" in presets
-    assert "activation" in presets
+    analytics = load_openpanel_analytics()
+    assert [f.get("preset") for f in analytics["funnels"]] == [
+        "activation",
+        "core-funnel",
+    ]
+
 
