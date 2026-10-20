@@ -20,7 +20,7 @@ from unittest.mock import Mock, call
 
 import pytest
 
-from tools import fetch_app_manifests as contracts
+from common.core import fetch_app_manifests as contracts
 
 ROOT = Path(__file__).resolve().parents[2]
 SHA = "c" * 40

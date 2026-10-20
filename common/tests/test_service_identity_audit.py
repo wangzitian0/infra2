@@ -1,4 +1,4 @@
-from tools.service_identity_audit import ROOT, _owned_alert_catalogs, audit
+from common.core.service_identity_audit import ROOT, _owned_alert_catalogs, audit
 
 
 def test_cross_plane_service_identity_contract_is_complete() -> None:

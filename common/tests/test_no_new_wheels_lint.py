@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tools.no_new_wheels_lint import (
+from common.core.no_new_wheels_lint import (
     lint_python_callsites,
     lint_scheduled_jobs,
     registered_signal_names,

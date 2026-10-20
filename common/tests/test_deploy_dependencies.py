@@ -326,7 +326,7 @@ def test_fanout_coverage_refuses_a_compose_outside_a_service_directory(tmp_path)
 def test_the_audit_scans_every_service_root():
     """Each service root holds deployed composes (platform, the runner under
     bootstrap, and the two apps). A scan that drops one leaves its inputs unguarded."""
-    from tools import deploy_guard_audit
+    from common.deploy import deploy_guard_audit
 
     roots = {
         compose.relative_to(deploy_guard_audit.ROOT).parts[0]
@@ -353,7 +353,7 @@ def test_config_hash_input_count_is_zero_for_a_service_that_reads_no_file(tmp_pa
 
 def test_the_audit_exits_1_and_names_each_violation(monkeypatch, capsys):
     """This exit code is the infra-ci gate and the ops-checks monitor signal."""
-    from tools import deploy_guard_audit
+    from common.deploy import deploy_guard_audit
 
     monkeypatch.setattr(
         deploy_guard_audit,
@@ -366,7 +366,7 @@ def test_the_audit_exits_1_and_names_each_violation(monkeypatch, capsys):
 
 def test_the_audit_refuses_a_tree_with_no_service_compose(monkeypatch, capsys):
     """A scan that finds no compose file reads no input. It must fail, not pass."""
-    from tools import deploy_guard_audit
+    from common.deploy import deploy_guard_audit
 
     monkeypatch.setattr(deploy_guard_audit, "find_service_composes", lambda: [])
     assert deploy_guard_audit.main() == 1
@@ -375,7 +375,7 @@ def test_the_audit_refuses_a_tree_with_no_service_compose(monkeypatch, capsys):
 
 def test_the_audit_refuses_compose_files_that_yield_no_input(monkeypatch, capsys):
     """Composes that exist but yield no config-hash input leave nothing to check."""
-    from tools import deploy_guard_audit
+    from common.deploy import deploy_guard_audit
 
     monkeypatch.setattr(deploy_guard_audit, "config_hash_input_count", lambda c: 0)
     assert deploy_guard_audit.main() == 1
@@ -383,7 +383,7 @@ def test_the_audit_refuses_compose_files_that_yield_no_input(monkeypatch, capsys
 
 
 def test_the_audit_reports_how_many_files_it_read(capsys):
-    from tools import deploy_guard_audit
+    from common.deploy import deploy_guard_audit
 
     composes = deploy_guard_audit.find_service_composes()
     inputs = config_hash_input_count(composes)
@@ -395,7 +395,7 @@ def test_the_audit_reports_how_many_files_it_read(capsys):
 
 
 def test_shipped_manifest_has_no_fanout_coverage_violations():
-    from tools.deploy_guard_audit import audit, find_service_composes
+    from common.deploy.deploy_guard_audit import audit, find_service_composes
 
     composes = find_service_composes()
     alerting = [c for c in composes if c.parent.name == "12.alerting"]

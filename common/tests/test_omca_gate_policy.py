@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from tools.omca_gate_policy import evaluate_audit_report, main
+from common.core.omca_gate_policy import evaluate_audit_report, main
 
 
 def test_clean_audit_report_passes() -> None:

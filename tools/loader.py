@@ -108,7 +108,9 @@ def _ensure_runner_sdk_compat() -> None:
         setattr(refs_mod, "assert_after_on_main", assert_after_on_main)
 
     if not hasattr(refs_mod, "resolve_branch_to_sha"):
-        ls_remote_rows = getattr(refs_mod, "ls_remote_rows")
+        ls_remote_rows = getattr(refs_mod, "_ls_remote_rows", None) or getattr(
+            refs_mod, "ls_remote_rows"
+        )
         redact_repo = getattr(refs_mod, "redact_repo")
 
         def resolve_branch_to_sha(

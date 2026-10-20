@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from tools import sdk_usage_census as census
+from common.core import sdk_usage_census as census
 
 PKG_HYPHEN = "infra2" + "-sdk"
 PKG_UNDER = "infra2" + "_sdk"
@@ -39,7 +39,7 @@ def _make_uv_lock(version: str) -> str:
 
 @pytest.fixture()
 def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
-    """Build a synthetic SDK package and two consumer repositories that pass all M1-M5 checks."""
+    """Build a synthetic SDK package and two consumer repositories that pass all M1-M6 checks."""
     sdk_root = tmp_path / "sdk_repo"
     pkg_root = sdk_root / "src" / PKG_UNDER
 
@@ -56,29 +56,22 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
         pkg_root,
         "__init__.py",
         f"""
-        from {PKG_UNDER}.alpha import used_in_prod, used_in_test_only, internal_helper, unused_func
+        from {PKG_UNDER}.alpha import used_in_prod, ProdService
 
-        __all__ = ["used_in_prod", "used_in_test_only", "internal_helper", "unused_func"]
+        __all__ = ["used_in_prod", "ProdService"]
         """,
     )
     _write(
         pkg_root,
         "alpha.py",
         """
-        PUBLIC_CONST = "ok"
-        TYPED_CONST: str = "typed"
+        _INTERNAL_CONST = "ok"
 
-        def internal_helper() -> str:
-            return PUBLIC_CONST
+        def _internal_helper() -> str:
+            return _INTERNAL_CONST
 
         def used_in_prod() -> str:
-            return internal_helper()
-
-        def used_in_test_only() -> str:
-            return "test"
-
-        def unused_func() -> str:
-            return "unused"
+            return _internal_helper()
 
         class ProdService:
             def ping(self) -> str:
@@ -89,9 +82,9 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
         pkg_root,
         "runtime/__init__.py",
         f"""
-        from {PKG_UNDER}.runtime.environment import RuntimeEnvKey, runtime_env_contract
+        from {PKG_UNDER}.runtime.environment import runtime_env_contract
 
-        __all__ = ["RuntimeEnvKey", "runtime_env_contract"]
+        __all__ = ["runtime_env_contract"]
         """,
     )
     _write(
@@ -101,11 +94,12 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
         from dataclasses import dataclass
         from enum import StrEnum
 
+        __all__ = ["runtime_env_contract"]
+
         class RuntimeEnvKey(StrEnum):
             ENVIRONMENT = "ENVIRONMENT"
             SERVICE_NAME = "OTEL_SERVICE_NAME"
             SERVICE_VERSION = "SERVICE_VERSION"
-            UNUSED_KEY = "OTEL_TRACES_SAMPLER"
 
         @dataclass(frozen=True)
         class RuntimeEnvSpec:
@@ -116,7 +110,6 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
             RuntimeEnvSpec(RuntimeEnvKey.ENVIRONMENT, ("ENV", "APP_ENV")),
             RuntimeEnvSpec(RuntimeEnvKey.SERVICE_NAME),
             RuntimeEnvSpec(RuntimeEnvKey.SERVICE_VERSION, ("IMAGE_TAG",)),
-            RuntimeEnvSpec(RuntimeEnvKey.UNUSED_KEY),
         )
 
         def runtime_env_contract() -> dict[str, object]:
@@ -149,12 +142,17 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
         f"""
         import os
         from {PKG_UNDER}.alpha import ProdService, used_in_prod
+        from {PKG_UNDER}.runtime.environment import runtime_env_contract
 
         def run() -> str:
-            env = os.environ.get("ENVIRONMENT", "staging")
+            env = os.environ.get("ENVIRONMENT") or os.environ.get("ENV") or os.environ.get("APP_ENV", "staging")
             svc = os.environ.get("OTEL_SERVICE_NAME", "svc-a")
             svc_obj = ProdService()
-            return f"{{env}}:{{svc}}:{{used_in_prod()}}:{{svc_obj.ping()}}"
+            contract = runtime_env_contract()
+            return f"{{env}}:{{svc}}:{{used_in_prod()}}:{{svc_obj.ping()}}:{{len(contract)}}"
+
+        if __name__ == "__main__":
+            run()
         """,
     )
     _write(
@@ -162,11 +160,11 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
         "tests/test_service.py",
         f"""
         import os
-        from {PKG_UNDER}.alpha import used_in_test_only
+        from {PKG_UNDER}.alpha import used_in_prod
 
         def test_only_call() -> None:
             os.environ["IMAGE_TAG"] = "1.0.0"
-            assert used_in_test_only() == "test"
+            assert used_in_prod() == "ok"
         """,
     )
     _write(
@@ -192,8 +190,11 @@ def synthetic_workspace(tmp_path: Path) -> tuple[Path, dict[str, Path]]:
         import {PKG_UNDER}.alpha as sdk_alpha
 
         def handler() -> str:
-            ver = os.environ.get("SERVICE_VERSION", "1.0")
+            ver = os.environ.get("SERVICE_VERSION") or os.environ.get("IMAGE_TAG", "1.0")
             return f"{{ver}}:{{sdk_alpha.used_in_prod()}}"
+
+        if __name__ == "__main__":
+            handler()
         """,
     )
 
@@ -227,21 +228,19 @@ def test_clean_fixture_passes_all_metrics_and_cli_check(
     assert payload["check"]["failures"] == []
 
     m1 = payload["metrics"]["M1"]
-    assert m1["total_public"] == 11
-    assert m1["prod_used"] == 2  # used_in_prod, ProdService
-    assert m1["test_only"] == 1  # used_in_test_only
-    assert (
-        m1["internal_only"] == 5
-    )  # internal_helper, PUBLIC_CONST, RuntimeEnvKey, RuntimeEnvSpec, RUNTIME_ENV_SPECS
-    assert m1["unused"] == 3  # unused_func, TYPED_CONST, runtime_env_contract
+    assert m1["total_public"] == 3
+    assert m1["prod_used"] == 3  # used_in_prod, ProdService, runtime_env_contract
+    assert m1["test_only"] == 0
+    assert m1["internal_only"] == 0
+    assert m1["unused"] == 0
     assert m1["missing_imports"] == {"prod": [], "test": []}
     assert m1["cli_uses"] == {f"consumer_a:{PKG_UNDER}.alpha": 1}
 
     m2 = payload["metrics"]["M2"]
-    assert m2["total_keys"] == 7  # 4 canonical + 3 aliases
-    assert m2["prod_used"] == 3  # ENVIRONMENT, OTEL_SERVICE_NAME, SERVICE_VERSION
-    assert m2["test_only"] == 1  # IMAGE_TAG
-    assert m2["unused"] == 3  # ENV, APP_ENV, OTEL_TRACES_SAMPLER
+    assert m2["total_keys"] == 6  # 3 canonical + 3 aliases
+    assert m2["prod_used"] == 6
+    assert m2["test_only"] == 0
+    assert m2["unused"] == 0
 
     m3 = payload["metrics"]["M3"]
     assert m3["all_up_to_date"] is True
@@ -420,6 +419,9 @@ def test_m1_ignores_module_dunder_attributes_with_uninstalled_sdk_sdk_src(
 
         def locate_pkg() -> str:
             return f"{{getattr({PKG_UNDER}, '__file__', '')}}:{{{PKG_UNDER}.__file__}}:{{{PKG_UNDER}.__name__}}:{{__version__}}"
+
+        if __name__ == "__main__":
+            locate_pkg()
         """,
     )
     report = census.run_census(pkg_root=pkg_root, consumers=consumers)
@@ -637,6 +639,7 @@ def test_m6_mutation_fails_on_wildcard_reexport_sys_modules_hijack_and_reverse_c
         from common.deploy.v2 import *
 
         if __name__ == "__main__":
+            load_tool("other_cli")
             raise SystemExit(_v2.main())
         else:
             sys.modules[__name__] = _v2
@@ -656,9 +659,72 @@ def test_m6_mutation_fails_on_wildcard_reexport_sys_modules_hijack_and_reverse_c
     assert ".local_helper" in imported
     assert "common.deploy.v2.*" in imported
     assert "sys.modules[__name__]" in imported
+    assert "load_tool()" in imported
     assert "tools" in imported
     failures = census.evaluate_checks(report)
     assert any("M6:" in f for f in failures)
+
+
+def test_m1_and_m2_check_fails_when_non_prod_symbols_or_keys_exist(
+    synthetic_workspace: tuple[Path, dict[str, Path]],
+) -> None:
+    pkg_root, consumers = synthetic_workspace
+    _write(
+        pkg_root,
+        "extra.py",
+        """
+        def unreferenced_public_fn() -> str:
+            return "dead"
+        """,
+    )
+    _write(
+        pkg_root,
+        "runtime/environment.py",
+        """
+        from dataclasses import dataclass
+        from enum import StrEnum
+
+        __all__ = ["runtime_env_contract"]
+
+        class RuntimeEnvKey(StrEnum):
+            ENVIRONMENT = "ENVIRONMENT"
+            SERVICE_NAME = "OTEL_SERVICE_NAME"
+            SERVICE_VERSION = "SERVICE_VERSION"
+            DEAD_KEY = "OTEL_TRACES_SAMPLER"
+
+        @dataclass(frozen=True)
+        class RuntimeEnvSpec:
+            key: RuntimeEnvKey
+            aliases: tuple[str, ...] = ()
+
+        RUNTIME_ENV_SPECS = (
+            RuntimeEnvSpec(RuntimeEnvKey.ENVIRONMENT, ("ENV", "APP_ENV")),
+            RuntimeEnvSpec(RuntimeEnvKey.SERVICE_NAME),
+            RuntimeEnvSpec(RuntimeEnvKey.SERVICE_VERSION, ("IMAGE_TAG",)),
+            RuntimeEnvSpec(RuntimeEnvKey.DEAD_KEY),
+        )
+
+        def runtime_env_contract() -> dict[str, object]:
+            return {
+                "contract_version": 2,
+                "variables": [
+                    {"name": s.key.value, "aliases": list(s.aliases), "sensitive": False}
+                    for s in RUNTIME_ENV_SPECS
+                ],
+            }
+        """,
+    )
+    report = census.run_census(pkg_root=pkg_root, consumers=consumers)
+    failures = census.evaluate_checks(report)
+    assert any(
+        "M1: non-production SDK symbols" in f and "unreferenced_public_fn" in f
+        for f in failures
+    )
+    assert any(
+        "M2: non-production runtime_env_contract() keys" in f
+        and "OTEL_TRACES_SAMPLER" in f
+        for f in failures
+    )
 
 
 def test_cli_invalid_repo_or_sdk_src_exits_with_code_2(tmp_path: Path) -> None:
@@ -715,13 +781,19 @@ def test_m1_downgrades_uncalled_or_test_only_consumer_class_method_sdk_use(
 
         def test_method_sym() -> str:
             return "test"
+
+        def dead_func_sym() -> str:
+            return "dead_fn"
         """,
     )
     _write(
         consumers["consumer_a"],
         "app/model.py",
         f"""
-        from {PKG_UNDER}.zombie import dead_method_sym, test_method_sym
+        from {PKG_UNDER}.zombie import dead_func_sym, dead_method_sym, test_method_sym
+
+        def never_called_top_level_helper() -> str:
+            return dead_func_sym()
 
         class SettingsModel:
             def never_called_anywhere(self) -> str:
@@ -744,6 +816,7 @@ def test_m1_downgrades_uncalled_or_test_only_consumer_class_method_sdk_use(
     report = census.run_census(pkg_root=pkg_root, consumers=consumers)
     by_name = {s["name"]: s["reach"] for s in report["metrics"]["M1"]["symbols"]}
     assert by_name["dead_method_sym"] == "unused"
+    assert by_name["dead_func_sym"] == "unused"
     assert by_name["test_method_sym"] == "test_only"
 
 
@@ -819,7 +892,9 @@ def test_live_infra2_repository_census_contract() -> None:
     assert metrics["M1"]["prod_used"] >= 20
     assert metrics["M1"]["missing_imports"]["prod"] == []
     assert metrics["M2"]["total_keys"] >= 12
-    assert metrics["M2"]["prod_used"] >= 8
+    assert metrics["M2"]["prod_used"] == metrics["M2"]["total_keys"]
+    assert metrics["M2"]["test_only"] == 0
+    assert metrics["M2"]["unused"] == 0
     assert metrics["M3"]["consumers"]["infra2"]["up_to_date"] is True
     assert metrics["M3"]["consumers"]["infra2"]["lag"] == 0
     assert metrics["M4"]["total_violations"] == 0

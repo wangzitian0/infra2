@@ -33,7 +33,7 @@ from common.observability.issue_trail import (
     record_verdicts,
     title_for,
 )
-from tools import watchdog_issue_trail as trail_tool
+from common.observability import watchdog_issue_trail_cli as trail_tool
 
 RUN_URL = "https://github.com/wangzitian0/infra2/actions/runs/42"
 WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/ops-checks.yml"

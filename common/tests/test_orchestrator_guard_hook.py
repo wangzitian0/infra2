@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from tools import orchestrator_guard_hook as hook
+from common.core import orchestrator_guard_hook as hook
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "tools" / "orchestrator_guard_hook.py"

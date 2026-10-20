@@ -161,7 +161,7 @@ def test_workspace_status_never_reports_clean_when_git_status_fails(
 def test_status_passes_submodule_expectation_to_manifest_validation(
     monkeypatch, tmp_path: Path, option: str | None, expected: bool
 ) -> None:
-    import tools.harness as harness
+    import common.core.harness_cli as harness
 
     observed = []
 
@@ -518,7 +518,7 @@ def _no_network(*_args, **_kwargs):
 
 def _patch_cli(monkeypatch, fetcher: FakeFetcher):
     """Point `tools.harness` at fixtures: no git, no manifest file, no network."""
-    import tools.harness as harness
+    import common.core.harness_cli as harness
 
     check = SimpleNamespace(
         ok=True, repository_count=4, errors=(), warnings=(), findings=()
@@ -534,7 +534,7 @@ def _patch_cli(monkeypatch, fetcher: FakeFetcher):
 @pytest.mark.parametrize("argv", [["status"], ["status", "--json"], ["check"]])
 def test_default_commands_open_no_socket(monkeypatch, tmp_path, capsys, argv):
     """The real `main` on a fixture workspace: the real `fetch_json` would fail the test."""
-    from tools.harness import main
+    from common.core.harness_cli import main
 
     manifest = _workspace(tmp_path)
     manifest["repositories"][1]["health"] = {"production": URL}

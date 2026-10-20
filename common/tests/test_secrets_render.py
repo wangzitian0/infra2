@@ -9,7 +9,7 @@ import pytest
 from infra2_sdk.ci import validate_manifest_offline
 from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
 
-from tools import secrets_render
+from common.security import secrets_render
 
 ROOT = Path(__file__).resolve().parents[2]
 

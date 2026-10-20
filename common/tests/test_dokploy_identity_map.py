@@ -22,7 +22,7 @@ import pytest
 
 
 from common.core import registry as service_registry
-from tools import gen_dokploy_identity_map
+from common.core import gen_dokploy_identity_map
 
 
 def test_the_committed_map_matches_the_deploy_tree():

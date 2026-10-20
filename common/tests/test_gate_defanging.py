@@ -322,16 +322,17 @@ def test_every_gate_auditor_reads_workflows_through_ci_spec() -> None:
     """
     root = pathlib.Path(__file__).resolve().parents[2]
     for name in ("ci_gate_audit.py", "ci_gate_lint.py", "ci_gate_ruleset_audit.py"):
-        source = (root / "tools" / name).read_text(encoding="utf-8")
-        offenders = [
-            line.strip()
-            for line in source.splitlines()
-            if "yaml.safe_load" in line and "INVENTORY" not in line.upper()
-        ]
-        assert not offenders, (
-            f"tools/{name} parses a workflow itself instead of using "
-            f"tools.ci_spec.read_workflow: {offenders}"
-        )
+        for folder in ("tools", "common/core"):
+            source = (root / folder / name).read_text(encoding="utf-8")
+            offenders = [
+                line.strip()
+                for line in source.splitlines()
+                if "yaml.safe_load" in line and "INVENTORY" not in line.upper()
+            ]
+            assert not offenders, (
+                f"{folder}/{name} parses a workflow itself instead of using "
+                f"tools.ci_spec.read_workflow: {offenders}"
+            )
 
 
 def test_the_linter_still_reports_why_a_workflow_did_not_parse(tmp_path) -> None:
@@ -341,7 +342,7 @@ def test_the_linter_still_reports_why_a_workflow_did_not_parse(tmp_path) -> None
     an auditor wants and what a linter must not silently inherit -- a broken
     workflow would lint clean.
     """
-    from tools import ci_gate_lint
+    from common.core import ci_gate_lint
 
     broken = tmp_path / "broken.yml"
     broken.write_text("jobs: [\n", encoding="utf-8")
@@ -357,7 +358,7 @@ def test_the_linter_still_reports_why_a_workflow_did_not_parse(tmp_path) -> None
 def test_a_blank_workflow_is_not_a_lint_failure(tmp_path, body) -> None:
     """Preserved on purpose: this has always been no findings, and turning it into
     a failure would be a behaviour change smuggled in under a refactor."""
-    from tools import ci_gate_lint
+    from common.core import ci_gate_lint
 
     blank = tmp_path / "blank.yml"
     blank.write_text(body, encoding="utf-8")
