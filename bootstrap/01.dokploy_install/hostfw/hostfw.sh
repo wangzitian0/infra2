@@ -6,7 +6,8 @@
 #   hostfw.sh check              syntax-check hostfw.nft and confirm the public interface
 #   hostfw.sh apply              arm a 5-minute automatic revert, then load the table
 #   hostfw.sh confirm            cancel the revert (only after a NEW ssh login worked)
-#   hostfw.sh install            persist: /etc/infra2/hostfw.nft + infra2-hostfw.service (enabled)
+#   hostfw.sh install            persist: /etc/infra2/hostfw.nft + infra2-hostfw.service + cf-refresh timer
+#   hostfw.sh refresh-cf         check (--check) or atomically apply (--apply) live Cloudflare IP sets
 #   hostfw.sh status             table, drop counters, revert timer, installed-vs-repo sha256
 #
 # `apply` never flushes other tables. If the revert fires, the host is back to "no infra2 table",
@@ -68,12 +69,64 @@ install_persistent() {
   check
   install -d -m 0755 /etc/infra2
   install -m 0644 "$RULES" "$INSTALLED_RULES"
+  install -m 0755 "$HERE/hostfw.sh" /etc/infra2/hostfw.sh
   install -m 0644 "$UNIT" "$INSTALLED_UNIT"
+  if [ -f "$HERE/infra2-hostfw-cf-refresh.service" ] && [ -f "$HERE/infra2-hostfw-cf-refresh.timer" ]; then
+    install -m 0644 "$HERE/infra2-hostfw-cf-refresh.service" /etc/systemd/system/infra2-hostfw-cf-refresh.service
+    install -m 0644 "$HERE/infra2-hostfw-cf-refresh.timer" /etc/systemd/system/infra2-hostfw-cf-refresh.timer
+  fi
   systemctl daemon-reload
   systemctl enable --quiet infra2-hostfw.service
   # Loads the same rules once more; idempotent, since the file deletes and recreates only its own table.
   systemctl start infra2-hostfw.service
+  if [ -f /etc/systemd/system/infra2-hostfw-cf-refresh.timer ]; then
+    systemctl enable --now --quiet infra2-hostfw-cf-refresh.timer
+  fi
   echo "hostfw: installed $INSTALLED_RULES and enabled infra2-hostfw.service"
+}
+
+refresh_cf() {
+  local mode="${1:---check}"
+  [ "$mode" = "--check" ] || [ "$mode" = "--apply" ] || die "usage: $0 refresh-cf [--check|--apply]"
+  local v4_url="${CF_IPS_V4_URL:-https://www.cloudflare.com/ips-v4}"
+  local v6_url="${CF_IPS_V6_URL:-https://www.cloudflare.com/ips-v6}"
+  local v4_raw v6_raw v4_elems="" v6_elems="" cidr
+  v4_raw="$(curl -fsSL --max-time 15 "$v4_url")" || die "failed to fetch $v4_url"
+  v6_raw="$(curl -fsSL --max-time 15 "$v6_url")" || die "failed to fetch $v6_url"
+
+  local v4_count=0 v6_count=0
+  while IFS= read -r cidr; do
+    cidr="${cidr%%[[:space:]]*}"
+    [ -z "$cidr" ] && continue
+    [[ "$cidr" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]] || die "invalid IPv4 CIDR from Cloudflare: $cidr"
+    v4_elems="${v4_elems:+$v4_elems, }$cidr"
+    v4_count=$((v4_count + 1))
+  done <<< "$v4_raw"
+
+  while IFS= read -r cidr; do
+    cidr="${cidr%%[[:space:]]*}"
+    [ -z "$cidr" ] && continue
+    [[ "$cidr" =~ ^[0-9a-fA-F:]+/[0-9]+$ ]] || die "invalid IPv6 CIDR from Cloudflare: $cidr"
+    v6_elems="${v6_elems:+$v6_elems, }$cidr"
+    v6_count=$((v6_count + 1))
+  done <<< "$v6_raw"
+
+  [ "$v4_count" -ge 5 ] || die "refusing Cloudflare IPv4 list with too few entries ($v4_count)"
+  [ "$v6_count" -ge 3 ] || die "refusing Cloudflare IPv6 list with too few entries ($v6_count)"
+
+  if [ "$mode" = "--check" ]; then
+    echo "hostfw: Cloudflare IP sets verified (v4=$v4_count, v6=$v6_count)"
+    return 0
+  fi
+
+  [ "$(id -u)" = "0" ] || die "--apply requires root"
+  nft -f - <<EOF
+flush set inet $TABLE cf_ipv4
+add element inet $TABLE cf_ipv4 { $v4_elems }
+flush set inet $TABLE cf_ipv6
+add element inet $TABLE cf_ipv6 { $v6_elems }
+EOF
+  echo "hostfw: updated inet $TABLE @cf_ipv4 ($v4_count) and @cf_ipv6 ($v6_count)"
 }
 
 status() {
@@ -101,6 +154,13 @@ case "${1:-}" in
   apply) apply ;;
   confirm) confirm ;;
   install) install_persistent ;;
+  refresh-cf|--check|--apply)
+    if [ "${1:-}" = "refresh-cf" ]; then
+      refresh_cf "${2:---check}"
+    else
+      refresh_cf "$1"
+    fi
+    ;;
   status) status ;;
-  *) die "usage: $0 check|apply|confirm|install|status" ;;
+  *) die "usage: $0 check|apply|confirm|install|refresh-cf [--check|--apply]|status" ;;
 esac

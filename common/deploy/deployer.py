@@ -330,9 +330,7 @@ class Deployer:
         """Apply the shared VAULT_ADDR default used by both config identities."""
         e = env or cls.env()
         result = dict(env_vars)
-        result["VAULT_ADDR"] = e.get(
-            "VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"
-        )
+        result["VAULT_ADDR"] = e.get("VAULT_ADDR", "http://vault:8200")
         return result
 
     @classmethod
@@ -566,9 +564,7 @@ class Deployer:
 
         # Return base env vars + VAULT_ADDR for vault-init pattern
         result = cls.compose_env_base(e)
-        result["VAULT_ADDR"] = e.get(
-            "VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"
-        )
+        result["VAULT_ADDR"] = e.get("VAULT_ADDR", "http://vault:8200")
 
         env_vars("DOKPLOY ENV (vault-init)", result)
         success("pre_compose complete - vault-init will fetch secrets at runtime")
@@ -1248,7 +1244,7 @@ class Deployer:
                     f"{cls.service}: compose uses Vault AppRole auth but VAULT_ADDR is missing "
                     "from the deploy env — the vault-agent would hang reaching an empty Vault "
                     "address and the service would deadlock on its healthcheck. Set VAULT_ADDR "
-                    "(e.g. https://vault.<INTERNAL_DOMAIN>) on the compose/project env before "
+                    "(e.g. http://vault:8200) on the compose/project env before "
                     "deploying."
                 )
 
@@ -1294,9 +1290,7 @@ class Deployer:
         if not token:
             return {"valid": True, "error": None, "details": "No VAULT_APP_TOKEN found"}
 
-        vault_addr = e.get(
-            "VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"
-        )
+        vault_addr = e.get("VAULT_ADDR", "http://127.0.0.1:8200")
         return verify_token_status(
             token, vault_addr=vault_addr, min_ttl_hours=24, verifier=verify_vault_token
         )

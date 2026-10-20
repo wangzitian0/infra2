@@ -57,6 +57,91 @@ def test_dokploy_port_is_dropped_before_dockers_forward_chain() -> None:
     assert "policy accept" in body, "the forward chain drops only the Dokploy port"
 
 
+def test_cloudflare_sets_gate_http_and_https_in_input_and_forward() -> None:
+    """#724-R1: 80/443 TCP and 443 UDP only allow @cf_ipv4/@cf_ipv6 in input and forward; 22 stays open."""
+    assert "set cf_ipv4 {" in RULES and "flags interval" in RULES
+    assert "set cf_ipv6 {" in RULES
+    assert "173.245.48.0/20" in RULES
+    assert "2400:cb00::/32" in RULES
+
+    input_body = _chain("input")
+    assert "tcp dport 22 accept" in input_body
+    assert "tcp dport @public_tcp accept" not in input_body
+    assert "ip saddr @cf_ipv4 tcp dport { 80, 443 } accept" in input_body
+    assert "ip6 saddr @cf_ipv6 tcp dport { 80, 443 } accept" in input_body
+    assert "ip saddr @cf_ipv4 udp dport 443 accept" in input_body
+    assert "ip6 saddr @cf_ipv6 udp dport 443 accept" in input_body
+
+    forward_body = _chain("forward")
+    assert (
+        "iifname $PUBLIC_IF ip saddr != @cf_ipv4 meta l4proto tcp ct original proto-dst { 80, 443 } counter drop"
+        in forward_body
+    )
+    assert (
+        "iifname $PUBLIC_IF ip6 saddr != @cf_ipv6 meta l4proto tcp ct original proto-dst { 80, 443 } counter drop"
+        in forward_body
+    )
+    assert (
+        "iifname $PUBLIC_IF ip saddr != @cf_ipv4 meta l4proto udp ct original proto-dst 443 counter drop"
+        in forward_body
+    )
+    assert (
+        "iifname $PUBLIC_IF ip6 saddr != @cf_ipv6 meta l4proto udp ct original proto-dst 443 counter drop"
+        in forward_body
+    )
+
+
+def test_refresh_cf_validates_and_updates_sets_atomically(tmp_path: Path) -> None:
+    """#724-R1: hostfw.sh refresh-cf supports --check and --apply with count and CIDR validation."""
+    import subprocess
+
+    v4_file = tmp_path / "ips-v4.txt"
+    v6_file = tmp_path / "ips-v6.txt"
+    v4_file.write_text(
+        "\n".join(
+            [
+                "173.245.48.0/20",
+                "103.21.244.0/22",
+                "103.22.200.0/22",
+                "103.31.4.0/22",
+                "141.101.64.0/18",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    v6_file.write_text(
+        "\n".join(["2400:cb00::/32", "2606:4700::/32", "2803:f800::/32"]) + "\n",
+        encoding="utf-8",
+    )
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "CF_IPS_V4_URL": f"file://{v4_file}",
+        "CF_IPS_V6_URL": f"file://{v6_file}",
+    }
+    res = subprocess.run(
+        ["bash", str(HOSTFW / "hostfw.sh"), "refresh-cf", "--check"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res.returncode == 0, res.stderr
+    assert "Cloudflare IP sets verified (v4=5, v6=3)" in res.stdout
+
+    # Reject truncated list
+    v4_file.write_text("173.245.48.0/20\n", encoding="utf-8")
+    res_short = subprocess.run(
+        ["bash", str(HOSTFW / "hostfw.sh"), "refresh-cf", "--check"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res_short.returncode == 1
+    assert "too few entries" in res_short.stderr
+
+
 def test_rules_touch_only_their_own_table() -> None:
     # `flush ruleset` would wipe Docker's iptables-nft tables and fail2ban's inet f2b-table.
     assert "flush ruleset" not in RULES

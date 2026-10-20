@@ -448,7 +448,7 @@ def onboard_service(
                 env_vars={
                     "VAULT_ROLE_ID": role_id,
                     "VAULT_SECRET_ID": secret_id,
-                    "VAULT_ADDR": vault_addr,
+                    "VAULT_ADDR": e.get("VAULT_ADDR", "http://vault:8200"),
                     "ENV": env_name,
                 },
                 replace=False,

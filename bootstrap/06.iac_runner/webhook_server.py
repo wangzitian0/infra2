@@ -417,20 +417,19 @@ def op_service_account_works() -> bool:
         return False
     # monotonic clock for the TTL interval (matches _recent_result) — wall-clock jumps must
     # not cause extra op calls or an unexpectedly long cache window.
-    now = time.monotonic()
     with _op_health_lock:
+        now = time.monotonic()
         if now - float(_op_health_cache["at"]) < OP_HEALTHCHECK_TTL_SECONDS:
             return bool(_op_health_cache["ok"])
-    ok = False
-    try:
-        result = subprocess.run(["op", "whoami"], capture_output=True, timeout=10)
-        ok = result.returncode == 0
-    except (OSError, subprocess.SubprocessError):
         ok = False
-    with _op_health_lock:
+        try:
+            result = subprocess.run(["op", "whoami"], capture_output=True, timeout=10)
+            ok = result.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            ok = False
         _op_health_cache["ok"] = ok
-        _op_health_cache["at"] = now
-    return ok
+        _op_health_cache["at"] = time.monotonic()
+        return ok
 
 
 @app.route("/health", methods=["GET"])

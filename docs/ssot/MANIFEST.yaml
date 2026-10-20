@@ -68,6 +68,10 @@ entries:
     description: Bootstrap components including Dokploy, 1Password, and Vault.
     proofs:
       - common/tests/test_bootstrap_health.py
+      - common/tests/test_host_firewall.py
+      - common/tests/test_sshd_fail2ban_config.py
+      - common/tests/test_compose_security_baseline.py
+      - common/tests/test_supply_chain_pins.py
   bootstrap.vars_and_secrets:
     owner: docs/ssot/bootstrap.vars_and_secrets.md
     summary: 变量与密钥管理、.env 结构

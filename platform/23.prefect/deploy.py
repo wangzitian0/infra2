@@ -120,9 +120,7 @@ class PrefectDeployer(Deployer):
             success("Database created")
 
         result = cls.compose_env_base(e)
-        result["VAULT_ADDR"] = e.get(
-            "VAULT_ADDR", f"https://vault.{e.get('INTERNAL_DOMAIN', 'localhost')}"
-        )
+        result["VAULT_ADDR"] = e.get("VAULT_ADDR", "http://vault:8200")
 
         success("pre_compose complete - vault-init will fetch secrets at runtime")
         info(

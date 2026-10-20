@@ -1,0 +1,6 @@
+[Unit]
+Description=infra2 SSH auth.log abnormal login shipper to SigNoz OTel collector
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/infra2-auth-log-alert.sh

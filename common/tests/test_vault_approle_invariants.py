@@ -106,3 +106,13 @@ def test_vault_agent_entrypoint_fails_fast_on_missing_creds(compose: str) -> Non
             f"{compose}: the {name} fail-fast guard is present but its block does not "
             "`exit 1` — it would not abort the container on a missing value."
         )
+
+
+def test_deployer_vault_addr_defaults_to_internal_network() -> None:
+    """#646: sidecars reach Vault over dokploy-network (http://vault:8200), not the public route."""
+    from common.deploy.deployer import Deployer
+
+    env = {"ENV": "production", "INTERNAL_DOMAIN": "zitian.party"}
+    resolved = Deployer.config_env_with_vault_addr({"ENV": "production"}, env=env)
+    assert resolved["VAULT_ADDR"] == "http://vault:8200"
+    assert not resolved["VAULT_ADDR"].startswith("https://vault.")
