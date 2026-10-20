@@ -60,9 +60,10 @@ to the promoted digest; recording a Dokploy config hash alone is insufficient.
 
 ## 5. Resource Contract
 
-Every container has an explicit memory ceiling and CPU weight. Staging uses the lower
-tier (`768m` per Dagster role, CPU shares `512`); Production defaults to `1536m` and
-CPU shares `1024`. The deployment queue allows one capture run at a time to prevent
+Every container has an explicit memory ceiling and CPU weight. Staging and Production
+use the same memory ceiling (`1536m` per Dagster role), so staging rehearses the
+production run mix. Staging has the lower CPU weight (`512`; Production `1024`).
+`deploy.py` is the one source of both values. The deployment queue allows one capture run at a time to prevent
 OpenD/source budget contention.
 
 ## 6. The Proof

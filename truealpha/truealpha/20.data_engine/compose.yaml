@@ -6,7 +6,7 @@ x-dagster-service: &dagster-service
   image: ghcr.io/wangzitian0/truealpha-data-engine@${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?IMAGE_DIGEST is required}}
   pull_policy: always
   restart: always
-  mem_limit: ${DATA_ENGINE_MEM_LIMIT:-768m}
+  mem_limit: ${DATA_ENGINE_MEM_LIMIT:?deploy.py sets DATA_ENGINE_MEM_LIMIT}
   cpu_shares: ${TIER_CPU_SHARES:-1024}
   depends_on:
     vault-agent:
