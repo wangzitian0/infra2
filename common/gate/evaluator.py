@@ -189,12 +189,14 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
         f for f in facts.files if is_self_governing(f) and f not in lock_covered
     )
     # A held file never clears through the direction proof, in any lock state.
+    # Rule-text files (AGENTS.md / docs/ssot/ops.merge-gate.md) require a quoted
+    # owner instruction or approved tree SHA; the mutation checklist covers code/data.
     unproven = [
         f
         for f in governing
         if (f not in facts.proven_tighter or f in uncovered)
         and not (f in RULE_TEXT_FILES and quoted_instruction)
-        and not (f not in uncovered and checklist_clears)
+        and not (f not in uncovered and f not in RULE_TEXT_FILES and checklist_clears)
         and not tree_approved
     ]
     # The reason for a held file comes first. The "without a proof" line names only

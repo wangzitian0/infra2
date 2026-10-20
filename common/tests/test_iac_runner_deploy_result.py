@@ -2301,6 +2301,32 @@ def test_production_deploy_requires_valid_github_oidc_token(monkeypatch) -> None
     assert status_code == 403
     assert "Unexpected OIDC audience" in body["error"]
 
+    # 2c. OIDC token with wrong repository, expired exp, or non-tag/non-main ref -> 403
+    for bad_claims, expected_err in (
+        ({"repository": "evil/infra2"}, "Unexpected OIDC repository"),
+        ({"exp": now_ts - 10}, "OIDC token has expired"),
+        ({"ref": "refs/heads/feature/x"}, "OIDC token ref"),
+    ):
+        base_claims = {
+            "iss": "https://token.actions.githubusercontent.com",
+            "aud": "iac-runner",
+            "repository": "wangzitian0/infra2",
+            "environment": "production",
+            "ref": "refs/tags/v1.2.3",
+            "actor": "wangzitian0",
+            "exp": now_ts + 300,
+            **bad_claims,
+        }
+        tok, jwk_bad = _mint_rs256_jwt(base_claims)
+        monkeypatch.setattr(webhook_server, "_fetch_github_jwks", lambda j=jwk_bad: [j])
+        fake_flask.request.headers = {
+            **_signed_headers(monkeypatch),
+            "Authorization": f"Bearer {tok}",
+        }
+        body, status_code = webhook_server.version_deploy()
+        assert status_code == 403
+        assert expected_err in body["error"]
+
     # 3. Valid production OIDC token -> 202 and triggered_by bound to github-oidc:<actor>
     good_token, jwk2 = _mint_rs256_jwt(
         {

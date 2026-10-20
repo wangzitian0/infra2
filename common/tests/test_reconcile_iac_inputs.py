@@ -400,7 +400,9 @@ def test_reconcile_workflow_contract() -> None:
     assert "fetch-depth: 0" in text
     assert "deploy_v2/iac_runner" in text
     # release decoupling: prod is an explicit promotion, never an automatic tag-push deploy.
+    # promote_prod is the single workflow_dispatch input for staging vs prod (no duplicate target_env).
     assert "promote_prod" in workflow["on"]["workflow_dispatch"]["inputs"]
+    assert "target_env" not in workflow["on"]["workflow_dispatch"]["inputs"]
     assert "--promote-prod" in text
     # the provenance guard relies on origin/main being resolvable in a tag-push checkout;
     # lock the exact fetch step so a future workflow edit can't silently break the guard.
@@ -603,4 +605,3 @@ def test_prod_marker_file_roundtrip_and_precedence(tmp_path: Path) -> None:
     assert marker_path == tmp_path / "docs/ssot/prod-marker.json"
     assert read_prod_marker_file(repo_root=tmp_path) == "v1.2.9"
     assert production_marker(repo_root=tmp_path) == "v1.2.9"
-

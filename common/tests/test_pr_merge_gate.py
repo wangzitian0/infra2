@@ -3011,6 +3011,18 @@ def test_gate_change_checklist_clears_closure_file_when_lock_and_evidence_and_re
     held_verdict = gate.evaluate(held_facts, now=NOW)
     assert held_verdict.owner_required and held_verdict.exit_code == 2
 
+    # Rule-text files (AGENTS.md / docs/ssot/ops.merge-gate.md) require quoted owner
+    # instruction even when the mutation checklist holds.
+    rule_facts = _green(
+        head_sha=head,
+        files=("docs/ssot/ops.merge-gate.md",),
+        lock_failures=HOLDS,
+        body=body,
+        reviews=(("copilot-pull-request-reviewer", head, NOW - 120),),
+    )
+    rule_verdict = gate.evaluate(rule_facts, now=NOW)
+    assert rule_verdict.owner_required and rule_verdict.exit_code == 2
+
 
 def test_tree_identity_preserves_approval_across_mechanical_rebase():
     """#924: an owner-approved tree SHA preserves approval when HEAD^{tree} is unchanged."""

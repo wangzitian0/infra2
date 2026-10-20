@@ -233,7 +233,6 @@ def main(
     from common.gate.evaluator import (
         LOCK_NOT_REACHED,
         LOCK_SKIPPED,
-        lock_line,
         lock_state,
     )
     from common.gate.types import EXIT_OWNER, EXIT_READY, EXIT_UNEVALUABLE, EXIT_WAIT

@@ -238,7 +238,11 @@ def test_a_secret_read_by_a_name_that_is_not_literal_is_reported(expression):
     # its own line for those two forms. The line asserted here comes only from the
     # expression scan.
     assert failures[0] == "w.yml reads a secret by a name that is not literal"
-    assert all("holds production credentials" in f for f in failures[1:]), failures
+    if "dokploy_api_key" in expression.lower() and "[" not in expression:
+        assert len(failures) == 2
+        assert "holds production credentials" in failures[1]
+    else:
+        assert failures == ["w.yml reads a secret by a name that is not literal"]
 
 
 @pytest.mark.usefixtures("_no_tables")
@@ -369,6 +373,7 @@ def test_the_benign_secret_list_is_pinned():
 
 def test_zero_class_pending_entries_remain_in_ungated_jobs():
     """#1127 / 1035-R2: every ungated job has a final classification, never 'class pending'."""
+    assert len(UNGATED_JOBS) >= 11
     pending = [
         key for key, reason in UNGATED_JOBS.items() if "class pending" in reason.lower()
     ]
