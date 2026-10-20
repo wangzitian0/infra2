@@ -40,7 +40,7 @@ navigation pointers to local authority, not a second copy of its policy.
 
 | Repository | Architecture and work entry | Local verification entry |
 |---|---|---|
-| infra2 | `docs/ssot/` and `docs/project/Infra-019.*` | `uv run python -m tools.harness check`; `uv run python -m tools.ci_runner unit-tests --changed`; relevant SSOT's The Proof |
+| infra2 | `docs/ssot/` and `docs/project/archive/Infra-019.harness_control_plane.md` | `uv run python -m tools.harness check`; `uv run python -m tools.ci_runner unit-tests --changed`; relevant SSOT's The Proof |
 | infra2-sdk | `README.md`, `pyproject.toml`, module contracts | `uv run --extra dev pytest`; `uv run ruff check .` |
 | OMCA | `init.md`, `docs/README.md`, `docs/project/roadmap.md` | `make build`, `make test`, `make standalone`; host/version-specific qualification |
 | Finance Report | `vision.md`, `common/<pkg>/contract.py`, `common/meta/data/MANIFEST.yaml` | `tools/preflight.py --tier=static --pytest-changed` through its documented Python environment |
@@ -69,7 +69,7 @@ executable embeds reviewed Knowledge Packs and ontology; installation proof must
 run outside the build checkout, including after that checkout is removed.
 
 Reviewed snapshot and acceptance evidence live in
-[Infra-019 TODOWRITE](../docs/project/Infra-019.TODOWRITE.md).
+[Infra-019 (Archived)](../docs/project/archive/Infra-019.harness_control_plane.md#todowrite-archived).
 
 ## Workspace Guides
 

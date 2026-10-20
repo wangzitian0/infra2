@@ -93,10 +93,15 @@ Harness 只拥有这些仓库之间的协作视图与边界定义。
 与只此一机存在的命令。这些 repo 都是 public，泄露不可撤销。
 
 不变量：内容单向流动（dev_env → render → checkout / OMCA desired state），无反向写路径；
-secret 只经 `env_files` 进 hub，渲染件里不得出现字面量；Workspace 块不进任何机器全局文件。
-物证、投递表与工作项见 [infra2#820](https://github.com/wangzitian0/infra2/issues/820) 与
-dev_env#80。宿主发现规则（Codex / Gemini CLI 不越过 `.git`，Claude / Pi 无界向上）以
-OMCA Knowledge Pack 为准，未收录前引用 dev_env#44 的实测记录。
+`ws-apply` 生成 `~/.omca/harness.json`（工具经 `ws-mcp-runtime exec` 注入运行环境，凭证仅由
+`env_files` 与运行时缓存解析，渲染件零字面量凭据）并将各宿主 MCP 配置统一收敛为
+`omca hub bridge -profile <workspace> -server <name>`；`ws-tui` 与 `ws-mem-daemon` 已退役，
+全机仅保留 `omca` 单一 TUI 与常驻守护进程；Root 常驻块（`scope: host`）严格 $\le 2,000$ 字符；
+Workspace 块不进任何机器全局文件。物证、投递表与归档记录见
+[infra2#820](https://github.com/wangzitian0/infra2/issues/820) 与已归档
+[`Infra-019`](../project/archive/Infra-019.harness_control_plane.md)。宿主发现规则
+（Codex / Gemini CLI 不越过 `.git`，Claude / Pi 无界向上）以 OMCA Knowledge Pack 与
+`dev_env` `test_discovery_matrix_b_layer_sentinel.py` 回归护栏为准。
 
 这一边界延续 [`core.md` §3.1](./core.md#31-repository-dependency-boundary) 与已归档
 [`Infra-018`](../project/archive/Infra-018.repository_boundary_decoupling.md) 的源码解耦结论。
