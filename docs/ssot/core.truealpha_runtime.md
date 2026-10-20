@@ -63,7 +63,7 @@ to the promoted digest; recording a Dokploy config hash alone is insufficient.
 Every container has an explicit memory ceiling and CPU weight. Staging and Production
 use the same memory ceiling (`1536m` per Dagster role), so staging rehearses the
 production run mix. Staging has the lower CPU weight (`512`; Production `1024`).
-`deploy.py` is the one source of both values. The deployment queue allows one capture run at a time to prevent
+`20.data_engine/compose.yaml` is the one source of the memory ceiling; `deploy.py` sets the CPU weight. The deployment queue allows one capture run at a time to prevent
 OpenD/source budget contention.
 
 ## 6. The Proof

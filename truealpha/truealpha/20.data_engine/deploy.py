@@ -266,10 +266,6 @@ class DataEngineDeployer(Deployer):
             "TA_MINIO_S3_PORT": cls._MINIO_S3_PORTS.get(environment, "0"),
             "DAGSTER_WEBSERVER_PORT": cls._WEBSERVER_PORTS.get(environment, "0"),
             "TIER_CPU_SHARES": "512" if environment == "staging" else "1024",
-            # One memory ceiling for staging and production: staging rehearses the production
-            # run mix. 768m in staging let the kernel kill the code server five times on
-            # 2026-10-20; every run in it died (truealpha#1418). Production peaked at 590 MB.
-            "DATA_ENGINE_MEM_LIMIT": "1536m",
             "DATA_ENGINE_VAULT_MEM_LIMIT": "128m",
             # truealpha#854: the moomoo origins soaked on staging and were proven on a
             # manual forced TOPT tick there (2026-09-16 11:08Z, truealpha#874). Production

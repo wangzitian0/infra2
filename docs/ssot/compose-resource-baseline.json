@@ -32,9 +32,6 @@
     "truealpha/truealpha/01.postgres/compose.yaml::postgres",
     "truealpha/truealpha/01.postgres/compose.yaml::vault-agent",
     "truealpha/truealpha/10.app/compose.yaml::vault-agent",
-    "truealpha/truealpha/20.data_engine/compose.yaml::dagster-code-server",
-    "truealpha/truealpha/20.data_engine/compose.yaml::dagster-daemon",
-    "truealpha/truealpha/20.data_engine/compose.yaml::dagster-webserver",
     "truealpha/truealpha/20.data_engine/compose.yaml::vault-agent",
     "truealpha/truealpha/preview/compose.yaml::db",
     "truealpha/truealpha/preview/compose.yaml::vault-agent"
