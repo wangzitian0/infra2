@@ -222,6 +222,29 @@ def test_app_compose_env_config_rejects_unregistered_service():
         ec.app_compose_env_config("platform/redis", "staging")
 
 
+@pytest.mark.parametrize("environment", ["staging", "production"])
+def test_truealpha_app_url_is_the_host_that_the_deployer_routes(environment):
+    """One hostname, one formula. ``AppDeployer.compose_env_overrides`` computes APP_HOST
+    (the Traefik Host() rule). The URL that the health gate, the serving query and
+    NEXT_PUBLIC_APP_URL use must name the same host (production: the bare domain)."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "truealpha_app_deploy_for_env_config",
+        ROOT / "truealpha/truealpha/10.app/deploy.py",
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    domain = module.AppDeployer.domain
+    assert domain == "truealpha.club"
+    cfg = ec.app_compose_env_config("truealpha/app", environment)
+    routed = module.AppDeployer.compose_env_overrides(
+        env=environment, domain=domain, env_suffix=cfg.env_suffix
+    )["APP_HOST"]
+    assert cfg.app_url(domain=domain) == f"https://{routed}"
+
+
 def test_cors_allowed_origins_includes_truealpha():
     origins = ec.cors_allowed_origins("zitian.party")
     assert "https://truealpha.zitian.party" in origins

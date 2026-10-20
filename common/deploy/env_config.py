@@ -142,7 +142,11 @@ _APP_COMPOSE_OVERRIDES: dict[str, dict[str, _ComposeOverride]] = {
             "https://truealpha-staging.{domain}",
             fast_swap=True,
         ),
-        "prod": _ComposeOverride("j-gIAk0GfF0bGOitZN-og", "https://truealpha.{domain}"),
+        # Production is the bare product domain: AppDeployer.compose_env_overrides routes
+        # APP_HOST = domain. "https://truealpha.{domain}" named truealpha.truealpha.club,
+        # a host that does not exist, so the public health gate rolled back v0.2.30
+        # (receiver run 39415761918). A test pins this pattern to the Deployer's formula.
+        "prod": _ComposeOverride("j-gIAk0GfF0bGOitZN-og", "https://{domain}"),
     },
 }
 
@@ -571,10 +575,16 @@ def cors_allowed_origins(domain: str) -> list[str]:
     # Preview pr/commit aliases — wildcard, since the value is per-deploy.
     for kind in _PREVIEW_CORS_WILDCARD_KINDS:
         origins.append(f"https://report-{kind}-*.{domain}")
-    # Bespoke app overrides (e.g. truealpha/app staging and prod).
-    for overrides in _APP_COMPOSE_OVERRIDES.values():
-        for override in overrides.values():
-            origin = override.app_url_pattern.format(domain=domain)
+    # Bespoke app overrides (e.g. truealpha/app staging and prod). The origin keeps the
+    # shared-domain form <base_subdomain><suffix>.<domain>: the list is unchanged by the
+    # production URL fix. The app's own domain is a separate change to the collector.
+    from common.deploy.contract import service_spec
+
+    for service, overrides in _APP_COMPOSE_OVERRIDES.items():
+        base = service_spec(service).base_subdomain
+        for env_name in overrides:
+            suffix = app_compose_env_config(service, env_name).env_suffix
+            origin = f"https://{base}{suffix}.{domain}"
             if origin not in origins:
                 origins.append(origin)
     origins.append(_LOCAL_DEV_ORIGIN)
