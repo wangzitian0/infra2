@@ -440,18 +440,24 @@ def test_build_digest_card_and_estate_app_health(monkeypatch) -> None:
 
     def fake_urlopen(request, timeout=5.0):
         url = request.full_url
-        if "report-api-staging" in url:
+        if "report-staging.zitian.party/api/health" in url:
             return _Resp({"status": "healthy", "version": "0.2.8"})
-        if "report-api" in url:
+        if "report.zitian.party/api/health" in url:
             return _Resp({"status": "healthy", "version": "0.2.7"})
-        return _Resp({"status": "healthy", "version": "0.1.3"})
+        if "truealpha.club/api/health" in url:
+            return _Resp({"status": "ok", "git_sha": "0.1.3"})
+        raise AssertionError(f"Unexpected health URL: {url}")
 
     monkeypatch.setattr(digest, "urlopen", fake_urlopen)
     apps = digest.fetch_estate_app_health("zitian.party")
     assert len(apps) == 2
     assert apps[0]["app"] == "finance_report"
+    assert apps[0]["production"]["url"] == "https://report.zitian.party/api/health"
+    assert apps[0]["staging"]["url"] == "https://report-staging.zitian.party/api/health"
     assert apps[0]["parity"] == "ahead_or_drift"
     assert apps[1]["app"] == "truealpha"
+    assert apps[1]["production"]["url"] == "https://truealpha.club/api/health"
+    assert apps[1]["staging"]["url"] == "https://truealpha-staging.truealpha.club/api/health"
     assert apps[1]["parity"] == "in_sync"
 
     summary = {
@@ -534,7 +540,6 @@ def test_build_digest_card_and_estate_app_health(monkeypatch) -> None:
         {
             "GITHUB_TOKEN": "tok",
             "WATCHDOG_DIGEST_DRY_RUN": "1",
-            "WATCHDOG_DIGEST_ESTATE_HEALTH": "1",
         },
         argv=["--daily"],
     )

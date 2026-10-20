@@ -26,6 +26,7 @@ from common.alerting import (
     deliver_out_of_band_card,
     deliver_out_of_band_text,
 )
+from common.core.registry import domain_for_service
 
 WORKFLOW_FILE = "ops-checks.yml"
 WATCHDOG_JOB_NAME = "Check infra2 host and alert bridge"
@@ -494,20 +495,26 @@ def fetch_estate_app_health(
     timeout: float = 5.0,
     opener=urlopen,
 ) -> list[dict[str, Any]]:
-    """Probe Production vs. Staging /health endpoints via canonical SDK routing."""
+    """Probe Production vs. Staging /api/health endpoints via canonical SDK routing."""
     specs = (
-        ("finance_report", "report-api"),
-        ("truealpha", "truealpha-api"),
+        ("finance_report", "finance_report/app", "report"),
+        ("truealpha", "truealpha/app", "truealpha"),
     )
     results: list[dict[str, Any]] = []
-    for app_id, slug in specs:
+    for app_id, service_id, slug in specs:
+        custom_domain = domain_for_service(service_id)
+        service_domain = custom_domain or internal_domain
         envs: dict[str, dict[str, str]] = {}
         for env_name in ("production", "staging"):
-            url = resolve_service_url(
-                slug,
-                env_name,
-                base_domain=internal_domain,
-                path="/health",
+            url = (
+                f"https://{custom_domain}/api/health"
+                if env_name == "production" and custom_domain
+                else resolve_service_url(
+                    slug,
+                    env_name,
+                    base_domain=service_domain,
+                    path="/api/health",
+                )
             )
             request = Request(
                 url,
@@ -808,10 +815,10 @@ def run_digest_cli(
             max_logs=max_logs,
         )
         summary["log_audit"] = summarize_watchdog_log_events(logs)
-    if current_env.get("WATCHDOG_DIGEST_ESTATE_HEALTH", "0").strip().lower() in {
-        "1",
-        "true",
-        "yes",
+    if current_env.get("WATCHDOG_DIGEST_ESTATE_HEALTH", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
     }:
         domain = (
             current_env.get("INTERNAL_DOMAIN") or DEFAULT_INTERNAL_DOMAIN
