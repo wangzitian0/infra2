@@ -210,9 +210,7 @@ def _summarize_all_environments(
         label = f"{environment} (reported, never paged)"
         ledger = ledgers.get(environment)
         if not isinstance(ledger, Mapping):
-            staging_lines.append(
-                f"{label}: ledger unavailable: {ledger or 'not read'}"
-            )
+            staging_lines.append(f"{label}: ledger unavailable: {ledger or 'not read'}")
             continue
         try:
             summary = summarize_ledger(
@@ -254,9 +252,7 @@ def build_report_card(
     prod_summary, staging_lines = _summarize_all_environments(
         ledgers, outages, now, limit_days=limit_days
     )
-    return build_stability_card(
-        prod_summary, staging_lines=staging_lines, title=title
-    )
+    return build_stability_card(prod_summary, staging_lines=staging_lines, title=title)
 
 
 def run(

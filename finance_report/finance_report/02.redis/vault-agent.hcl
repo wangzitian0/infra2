@@ -1,5 +1,6 @@
 vault {
-  address = "${VAULT_ADDR}"
+  # VAULT_ADDR is set via container environment variable
+  # vault-agent CLI automatically uses VAULT_ADDR env var when address is not specified
 }
 auto_auth {
   method "approle" {
@@ -10,7 +11,8 @@ auto_auth {
     }
   }
 
-  sink "file" {
+  sink {
+    type = "file"
     config = {
       path = "/vault/.token"
     }
@@ -27,6 +29,7 @@ template_config {
 template {
   source      = "/etc/vault/secrets.ctmpl"
   destination = "/vault/secrets/.env"
+  perms       = 0644
   # The template is generated from the service's manifest; a required key missing in
   # Vault must fail the render (visible, no container start) instead of rendering
   # `%!q(<nil>)`. Optional keys are omitted by the template itself (empty_ok).

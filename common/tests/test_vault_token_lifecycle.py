@@ -14,6 +14,8 @@ import pytest
 
 from infra2_sdk.secrets import policy_name
 
+from common.tests.fakes import FakeDokployDeployments
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -111,12 +113,9 @@ class FakeContext:
         return SimpleNamespace(ok=True, stdout="", stderr="")
 
 
-class FakeDokployTokenDeploy:
+class FakeDokployTokenDeploy(FakeDokployDeployments):
     def __init__(self, deployment_snapshots: list[list[dict]]) -> None:
-        self.compose_id = "compose-iac-runner"
-        self.deployment_snapshots = list(deployment_snapshots)
-        self.deploy_calls = 0
-        self.redeploy_calls = 0
+        super().__init__(deployment_snapshots, compose_id="compose-iac-runner")
         self.updated_env: dict[str, str] = {}
 
     def find_compose_by_name(self, *_args, **_kwargs) -> dict:
@@ -133,22 +132,6 @@ class FakeDokployTokenDeploy:
         assert replace is False
         self.updated_env.update(env_vars or {})
         return {"ok": True}
-
-    def deploy_compose(self, compose_id):
-        assert compose_id == self.compose_id
-        self.deploy_calls += 1
-        return {"ok": True}
-
-    def redeploy_compose(self, compose_id):
-        assert compose_id == self.compose_id
-        self.redeploy_calls += 1
-        return {"ok": True}
-
-    def get_compose(self, compose_id):
-        assert compose_id == self.compose_id
-        if self.deployment_snapshots:
-            return {"deployments": self.deployment_snapshots.pop(0)}
-        return {"deployments": []}
 
 
 def _install_fake_dokploy(monkeypatch, client: FakeDokployTokenDeploy) -> None:

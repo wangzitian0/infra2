@@ -43,10 +43,9 @@ from infra2_sdk.ci import load_delivery_stages, validate_inventory
 ROOT = Path(__file__).resolve().parents[2]
 INVENTORY = "docs/ssot/ci-gate-inventory.yaml"
 WORKFLOWS_DIR = ".github/workflows"
-# A workflow is in scope exactly when it can put a check on a pull request. Both spellings:
-# `pull_request_target` runs on PRs too (with base-repo permissions), so excluding it would
-# leave the more privileged of the two unaudited.
-PR_TRIGGERS = frozenset({"pull_request", "pull_request_target"})
+# A workflow is in scope when it can put a check on a pull request or merge queue.
+# Both PR spellings (`pull_request`, `pull_request_target`) plus `merge_group` (#811).
+PR_TRIGGERS = frozenset({"pull_request", "pull_request_target", "merge_group"})
 
 
 def _workflow_jobs(path: Path) -> list[str]:
@@ -56,6 +55,24 @@ def _workflow_jobs(path: Path) -> list[str]:
     # instead, which is what the caller already knows how to report.
     jobs = ci_spec.load_workflow(path).get("jobs")
     return list(jobs.keys()) if isinstance(jobs, dict) else []
+
+
+def _called_local_workflows(path: Path, root: Path) -> list[str]:
+    """Local reusable workflows (`uses: ./.github/workflows/...`) invoked by jobs of `path`."""
+    jobs = ci_spec.load_workflow(path).get("jobs")
+    if not isinstance(jobs, dict):
+        return []
+    called: list[str] = []
+    for job in jobs.values():
+        if not isinstance(job, dict):
+            continue
+        uses = job.get("uses")
+        if not isinstance(uses, str) or not uses.startswith("./"):
+            continue
+        rel = uses[2:].split("@", 1)[0]
+        if rel.startswith(f"{WORKFLOWS_DIR}/") and (root / rel).is_file():
+            called.append(rel)
+    return sorted(set(called))
 
 
 def _workflow_triggers(path: Path) -> set[str]:
@@ -83,12 +100,22 @@ def _all_workflow_files(root: Path) -> list[str]:
 
 
 def covered_workflows(root: Path = ROOT) -> tuple[str, ...]:
-    """Workflows whose jobs must all be registered: those that run on a pull request."""
-    return tuple(
+    """Workflows whose jobs must all be registered: PR/merge_group workflows and their transitive local `workflow_call` targets (#811)."""
+    covered: set[str] = {
         wf
         for wf in _all_workflow_files(root)
         if _workflow_triggers(root / wf) & PR_TRIGGERS
-    )
+    }
+    frontier = set(covered)
+    while frontier:
+        nxt: set[str] = set()
+        for wf in frontier:
+            for target in _called_local_workflows(root / wf, root):
+                if target not in covered:
+                    nxt.add(target)
+        covered |= nxt
+        frontier = nxt
+    return tuple(sorted(covered))
 
 
 def audit_gates(

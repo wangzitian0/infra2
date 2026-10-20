@@ -14,6 +14,7 @@ on:
     paths:
       - "finance_report/finance_report/observability/**"
       - "common/alerting.py"
+      - "common/alerting/**"
       - "common/observability_dashboards.py"
       - "tools/signoz_alert_rule_probe.py"
       - ".github/workflows/apply-observability.yml"
@@ -70,12 +71,12 @@ jobs:
 
       - name: Canary — SigNoz alert rule payload
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.mode == 'canary' }}
-        run: uv run python tools/signoz_alert_rule_probe.py
+        run: uv run --locked python tools/signoz_alert_rule_probe.py
 
       - name: Apply alert rules (idempotent)
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'apply' }}
-        run: uv run python -m invoke fr-observability.shared.apply-alerts
+        run: uv run --locked python -m invoke fr-observability.shared.apply-alerts
 
       - name: Apply dashboard (idempotent)
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'apply' }}
-        run: uv run python -m invoke fr-observability.shared.apply-dashboard
+        run: uv run --locked python -m invoke fr-observability.shared.apply-dashboard

@@ -23,6 +23,7 @@ now fails CI with a message pointing at the facet/signal model.
 
 from __future__ import annotations
 
+import datetime
 import re
 import sys
 from pathlib import Path
@@ -44,14 +45,41 @@ SCAN_EXEMPT_FILES = {
     "tools/out_of_band_watchdog.py",  # defines deliver_out_of_band_alert
     "common/alerting/delivery.py",  # defines deliver_infra2_report + the shared engine
     "common/observability/probes.py",  # defines post_alert_bridge_payload
-    "tools/no_new_wheels_lint.py",
     "common/core/no_new_wheels_lint.py",
 }
 
 ALERTS_AS_RE = re.compile(r"#\s*alerts-as:\s*([A-Za-z0-9._-]+)")
-DELIVERY_EXEMPT_RE = re.compile(r"#\s*alert-delivery-exempt:\s*(\S.*)")
+DELIVERY_EXEMPT_RE = re.compile(r"#\s*(?:alert-delivery-exempt|nowheel):\s*(\S.*)")
 JOB_SIGNAL_RE = re.compile(r"#\s*signal:\s*([A-Za-z0-9._-]+)")
-JOB_EXEMPT_RE = re.compile(r"#\s*schedule-signal-exempt:\s*(\S.*)")
+JOB_EXEMPT_RE = re.compile(r"#\s*(?:schedule-signal-exempt|nowheel):\s*(\S.*)")
+REVIEW_DATE_RE = re.compile(r"(?:^|;\s*)review=(\d{4}-\d{2}-\d{2})\b")
+
+
+def _check_exemption_expiry(
+    target: str,
+    annotation_text: str,
+    today: datetime.date,
+    *,
+    require_review_date: bool = True,
+) -> str | None:
+    match = REVIEW_DATE_RE.search(annotation_text)
+    if match is None:
+        if require_review_date:
+            return (
+                f"{target}: exemption annotation must declare "
+                "'; review=YYYY-MM-DD' (#720 debt expiration audit)"
+            )
+        return None
+    try:
+        review_date = datetime.date.fromisoformat(match.group(1))
+    except ValueError:
+        return f"{target}: invalid review date '{match.group(1)}' in exemption annotation"
+    if review_date < today:
+        return (
+            f"{target}: exemption expired on {review_date.isoformat()} "
+            f"(today is {today.isoformat()}) — renew review date or register a signal (#720)"
+        )
+    return None
 
 
 def registered_signal_names() -> set[str]:
@@ -62,9 +90,13 @@ def registered_signal_names() -> set[str]:
 
 
 def lint_python_callsites(
-    root: Path = ROOT, signals: set[str] | None = None
+    root: Path = ROOT,
+    signals: set[str] | None = None,
+    *,
+    today: datetime.date | None = None,
 ) -> list[str]:
     signals = signals if signals is not None else registered_signal_names()
+    current_date = today if today is not None else datetime.date.today()
     errors: list[str] = []
     for folder in ("tools", "common"):
         # rglob, not glob: the #846 domain packages (common/observability/, common/deploy/,
@@ -79,6 +111,11 @@ def lint_python_callsites(
                 continue
             exempt = DELIVERY_EXEMPT_RE.search(text)
             if exempt:
+                err = _check_exemption_expiry(
+                    rel, exempt.group(1), current_date, require_review_date=True
+                )
+                if err is not None:
+                    errors.append(err)
                 continue
             declared = ALERTS_AS_RE.findall(text)
             if not declared:
@@ -99,9 +136,13 @@ def lint_python_callsites(
 
 
 def lint_scheduled_jobs(
-    ops_checks: Path = OPS_CHECKS, signals: set[str] | None = None
+    ops_checks: Path = OPS_CHECKS,
+    signals: set[str] | None = None,
+    *,
+    today: datetime.date | None = None,
 ) -> list[str]:
     signals = signals if signals is not None else registered_signal_names()
+    current_date = today if today is not None else datetime.date.today()
     text = ops_checks.read_text(encoding="utf-8")
     # only real job ids (yaml-parsed) count as headers — `on:`'s nested keys
     # (workflow_dispatch etc.) are 2-space-indented too and must not match
@@ -118,7 +159,16 @@ def lint_scheduled_jobs(
         block = text[start:end]
         if "github.event.schedule" not in block:
             continue  # not a scheduled job
-        if JOB_EXEMPT_RE.search(block):
+        exempt = JOB_EXEMPT_RE.search(block)
+        if exempt:
+            err = _check_exemption_expiry(
+                f"ops-checks.yml job '{m.group(1)}'",
+                exempt.group(1),
+                current_date,
+                require_review_date="# nowheel:" in exempt.group(0),
+            )
+            if err is not None:
+                errors.append(err)
             continue
         declared = JOB_SIGNAL_RE.findall(block)
         if not declared:

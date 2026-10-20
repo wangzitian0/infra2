@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
+import subprocess
+from pathlib import Path, PurePosixPath
+
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -177,3 +180,79 @@ def test_workflow_references_point_to_live_workflow_files() -> None:
                 missing.append(f"{path.relative_to(ROOT)}:{line_no}: {reference}")
 
     assert missing == [], "Missing workflow references:\n" + "\n".join(missing)
+
+
+def _workflow_path_filter_violations(
+    workflows_dir: Path, tracked_files: set[str]
+) -> list[str]:
+    """Return violations for workflow `paths` / `paths-ignore` filters that match no tracked file."""
+    violations: list[str] = []
+    for wf in sorted(workflows_dir.glob("*.y*ml")):
+        data = yaml.safe_load(wf.read_text(encoding="utf-8")) or {}
+        on_cfg = data.get("on", data.get(True)) or {}
+        if not isinstance(on_cfg, dict):
+            continue
+        for event in ("push", "pull_request", "pull_request_target"):
+            cfg = on_cfg.get(event)
+            if not isinstance(cfg, dict):
+                continue
+            for key in ("paths", "paths-ignore"):
+                for pat in cfg.get(key) or []:
+                    raw = str(pat).lstrip("!")
+                    if any(ch in raw for ch in "*?["):
+                        matched = any(
+                            PurePosixPath(f).match(raw)
+                            or (raw.endswith("/**") and f.startswith(raw[:-2]))
+                            for f in tracked_files
+                        )
+                        if not matched:
+                            violations.append(
+                                f"{wf.name}:{event}:{key}:{pat} matches no tracked file"
+                            )
+                    else:
+                        clean = raw.rstrip("/")
+                        if clean not in tracked_files and not any(
+                            f.startswith(clean + "/") for f in tracked_files
+                        ):
+                            violations.append(
+                                f"{wf.name}:{event}:{key}:{pat} does not exist"
+                            )
+    return violations
+
+
+def test_workflow_trigger_paths_exist_on_disk() -> None:
+    """#1021: every workflow `paths` and `paths-ignore` filter must match at least one tracked file."""
+    tracked = set(
+        subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines()
+    )
+    violations = [
+        v
+        for v in _workflow_path_filter_violations(
+            ROOT / ".github" / "workflows", tracked
+        )
+        # apply-observability.yml:push:paths:common/alerting.py is paired with test_pr_merge_gate.py in PR-B
+        if v != "apply-observability.yml:push:paths:common/alerting.py does not exist"
+    ]
+    assert violations == [], "Dead workflow path filters:\n" + "\n".join(violations)
+
+
+def test_workflow_path_filter_guard_rejects_deleted_literal_and_empty_glob(
+    tmp_path: Path,
+) -> None:
+    """#1021: mutation proof for `_workflow_path_filter_violations`."""
+    wf_dir = tmp_path / "workflows"
+    wf_dir.mkdir()
+    (wf_dir / "example.yml").write_text(
+        "on:\n"
+        "  push:\n"
+        "    paths:\n"
+        "      - 'common/alerting.py'\n"
+        "      - 'common/dokploy*.py'\n"
+        "      - 'common/alerting/**'\n",
+        encoding="utf-8",
+    )
+    tracked = {"common/alerting/signoz.py"}
+    assert _workflow_path_filter_violations(wf_dir, tracked) == [
+        "example.yml:push:paths:common/alerting.py does not exist",
+        "example.yml:push:paths:common/dokploy*.py matches no tracked file",
+    ]

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# alert-delivery-exempt: manual SOP tool (Infra-011 SOP-004/005), not scheduled; alert path fires only under operator invocation
+# alert-delivery-exempt: manual SOP tool (Infra-011 SOP-004/005), not scheduled; alert path fires only under operator invocation; review=2027-04-01
 """CLI entrypoint for backup_verification."""
 
 from __future__ import annotations

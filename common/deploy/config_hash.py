@@ -10,9 +10,64 @@ import glob as _glob
 import hashlib
 import json
 from pathlib import Path
+import re
 import shlex
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_GLOB_CHARS_RE = re.compile(r"[*?[]")
+_ENV_SUBST_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?-)([^}]*))?\}")
+
+
+def _expand_compose_env_defaults(value: str) -> str | None:
+    """Substitute `${VAR:-default}` and `${VAR-default}` with `default`.
+
+    Returns `None` if `value` contains an unresolvable `${...}` without a default.
+    """
+    if "${" not in value:
+        return value
+    unresolvable = False
+
+    def _replace(match: re.Match[str]) -> str:
+        nonlocal unresolvable
+        op = match.group(2)
+        default = match.group(3)
+        if op is None or default is None:
+            unresolvable = True
+            return ""
+        return default
+
+    expanded = _ENV_SUBST_RE.sub(_replace, value)
+    if unresolvable or "${" in expanded:
+        return None
+    return expanded
+
+
+def _join_dockerfile_continuations(text: str) -> list[str]:
+    """Join Dockerfile logical lines continued with a trailing `\\`, skipping comments."""
+    logical_lines: list[str] = []
+    current: list[str] = []
+    for raw_line in text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            if current:
+                logical_lines.append(" ".join(current))
+                current = []
+            continue
+        if stripped.startswith("#"):
+            # Inside a backslash continuation, Docker treats comment lines as ignored
+            # and continues the logical line across them.
+            continue
+        if stripped.endswith("\\"):
+            piece = stripped[:-1].rstrip()
+            if piece:
+                current.append(piece)
+        else:
+            current.append(stripped)
+            logical_lines.append(" ".join(current))
+            current = []
+    if current:
+        logical_lines.append(" ".join(current))
+    return logical_lines
 
 
 def _compute_config_hash(
@@ -47,21 +102,62 @@ def _iter_path_files(path: Path) -> list[Path]:
     )
 
 
+def _split_volume_source(volume: str) -> str:
+    """Extract the host/source part of a short-syntax compose volume entry, preserving `${VAR:-default}` colons."""
+    depth = 0
+    for idx, ch in enumerate(volume):
+        if ch == "$" and volume[idx : idx + 2] == "${":
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+        elif ch == ":" and depth == 0:
+            return volume[:idx]
+    return volume
+
+
 def _resolve_compose_relative(compose_dir: Path, source: str) -> Path | None:
-    if not source or "${" in source or source.startswith("/"):
+    if not source:
         return None
-    return (compose_dir / source).resolve()
+    expanded = _expand_compose_env_defaults(source)
+    if not expanded or expanded.startswith("/"):
+        return None
+    return (compose_dir / expanded).resolve()
 
 
 def _resolve_build_relative(context_dir: Path, source: str) -> Path | None:
-    if (
-        not source
-        or "${" in source
-        or source.startswith("/")
-        or source.startswith("--")
-    ):
+    if not source or source.startswith("--"):
         return None
-    return (context_dir / source).resolve()
+    expanded = _expand_compose_env_defaults(source)
+    if not expanded or expanded.startswith("/"):
+        return None
+    return (context_dir / expanded).resolve()
+
+
+def _resolve_build_sources(context_dir: Path, source: str) -> list[Path]:
+    """Resolve a COPY/ADD source (including `*?[` globs) against `context_dir`.
+
+    Raises `FileNotFoundError` when a glob matches zero files on disk so the config
+    hash and fan-out audit never silently skip a wildcard COPY (#1123).
+    """
+    if not source or source.startswith("--"):
+        return []
+    expanded = _expand_compose_env_defaults(source)
+    if not expanded or expanded.startswith("/"):
+        return []
+    if _GLOB_CHARS_RE.search(expanded):
+        hits = sorted(
+            Path(p).resolve() for p in _glob.glob(str(context_dir / expanded))
+        )
+        if not hits:
+            raise FileNotFoundError(
+                f"Dockerfile COPY/ADD glob {source!r} matched no files under {context_dir}"
+            )
+        files: list[Path] = []
+        for hit in hits:
+            files.extend(_iter_path_files(hit))
+        return files
+    resolved = (context_dir / expanded).resolve()
+    return _iter_path_files(resolved)
 
 
 def _dockerfile_copy_sources(dockerfile: Path, context_dir: Path) -> list[Path]:
@@ -69,10 +165,7 @@ def _dockerfile_copy_sources(dockerfile: Path, context_dir: Path) -> list[Path]:
         return []
 
     sources: list[Path] = []
-    for raw_line in dockerfile.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
+    for line in _join_dockerfile_continuations(dockerfile.read_text(encoding="utf-8")):
         instruction, _, remainder = line.partition(" ")
         if instruction.upper() not in {"COPY", "ADD"} or not remainder:
             continue
@@ -95,9 +188,7 @@ def _dockerfile_copy_sources(dockerfile: Path, context_dir: Path) -> list[Path]:
                 parsed_sources = parts[:-1]
 
         for source in parsed_sources:
-            resolved = _resolve_build_relative(context_dir, source)
-            if resolved:
-                sources.extend(_iter_path_files(resolved))
+            sources.extend(_resolve_build_sources(context_dir, source))
 
     return sources
 
@@ -126,12 +217,16 @@ def _compose_artifact_files(compose_path: str, compose_content: str) -> list[Pat
 
         build = service.get("build")
         if build:
+            explicit_dockerfile = False
             if isinstance(build, str):
                 context_dir = _resolve_compose_relative(compose_dir, build)
                 dockerfile = context_dir / "Dockerfile" if context_dir else None
             elif isinstance(build, dict):
                 context = str(build.get("context") or ".")
                 context_dir = _resolve_compose_relative(compose_dir, context)
+                explicit_dockerfile = (
+                    "dockerfile" in build and build.get("dockerfile") is not None
+                )
                 dockerfile_name = str(build.get("dockerfile") or "Dockerfile")
                 dockerfile = (
                     _resolve_build_relative(context_dir, dockerfile_name)
@@ -143,6 +238,10 @@ def _compose_artifact_files(compose_path: str, compose_content: str) -> list[Pat
                 dockerfile = None
 
             if dockerfile:
+                if explicit_dockerfile and not dockerfile.is_file():
+                    raise FileNotFoundError(
+                        f"compose {compose_path}: build dockerfile {dockerfile} does not exist"
+                    )
                 files.extend(_iter_path_files(dockerfile))
                 if context_dir:
                     files.extend(_dockerfile_copy_sources(dockerfile, context_dir))
@@ -151,16 +250,17 @@ def _compose_artifact_files(compose_path: str, compose_content: str) -> list[Pat
         if isinstance(volumes, list):
             for volume in volumes:
                 if isinstance(volume, str):
-                    source = volume.split(":", 1)[0]
+                    source = _split_volume_source(volume)
                 elif isinstance(volume, dict):
                     source = str(volume.get("source") or "")
                     if volume.get("type") not in (None, "bind"):
                         continue
                 else:
                     continue
-                if not source.startswith("."):
+                expanded_source = _expand_compose_env_defaults(source)
+                if not expanded_source or not expanded_source.startswith("."):
                     continue
-                resolved = _resolve_compose_relative(compose_dir, source)
+                resolved = _resolve_compose_relative(compose_dir, expanded_source)
                 if resolved:
                     files.extend(_iter_path_files(resolved))
 

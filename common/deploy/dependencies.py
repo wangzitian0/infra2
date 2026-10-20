@@ -33,19 +33,31 @@ def service_key_from_path(file_path: str) -> str | None:
     Mirrors the layout used by the iac-runner SERVICE_TASK_MAP / ALL_SERVICES:
     platform/<NN>.<svc>/...        -> platform/<svc>
     finance_report/finance_report/<NN>.<svc>/... -> finance_report/<svc>
+    finance_report/finance_report/preview/...    -> finance_report/preview
     truealpha/truealpha/<NN>.<svc>/... -> truealpha/<svc>
+    truealpha/truealpha/preview/...    -> truealpha/preview
     bootstrap/<NN>.<svc>/...       -> bootstrap/<svc-with-dashes>
+    bootstrap/templates/...        -> bootstrap/templates
     Anything else (common/, tools/, docs/, repo root) -> None (no own-dir owner).
     """
     parts = file_path.split("/")
     if parts[0] == "platform" and len(parts) >= 2 and "." in parts[1]:
         return f"platform/{parts[1].split('.', 1)[1]}"
-    if parts[0] == "finance_report" and len(parts) >= 3 and "." in parts[2]:
-        return f"finance_report/{parts[2].split('.', 1)[1]}"
-    if parts[0] == "truealpha" and len(parts) >= 3 and "." in parts[2]:
-        return f"truealpha/{parts[2].split('.', 1)[1]}"
-    if parts[0] == "bootstrap" and len(parts) >= 2 and "." in parts[1]:
-        return f"bootstrap/{parts[1].split('.', 1)[1].replace('_', '-')}"
+    if parts[0] == "finance_report" and len(parts) >= 3:
+        if "." in parts[2]:
+            return f"finance_report/{parts[2].split('.', 1)[1]}"
+        if parts[2] == "preview":
+            return "finance_report/preview"
+    if parts[0] == "truealpha" and len(parts) >= 3:
+        if "." in parts[2]:
+            return f"truealpha/{parts[2].split('.', 1)[1]}"
+        if parts[2] == "preview":
+            return "truealpha/preview"
+    if parts[0] == "bootstrap" and len(parts) >= 2:
+        if "." in parts[1]:
+            return f"bootstrap/{parts[1].split('.', 1)[1].replace('_', '-')}"
+        if parts[1] == "templates":
+            return "bootstrap/templates"
     return None
 
 

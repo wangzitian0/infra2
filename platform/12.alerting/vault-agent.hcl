@@ -1,7 +1,7 @@
 vault {
-  # VAULT_ADDR is set via container environment variable.
+  # VAULT_ADDR is set via container environment variable
+  # vault-agent CLI automatically uses VAULT_ADDR env var when address is not specified
 }
-
 auto_auth {
   method "approle" {
     config = {
