@@ -352,4 +352,3 @@ def test_run_schema_gate_sanitizes_db_credentials_on_missing_rollback_class() ->
     err_msg = str(exc_info.value)
     assert "leak_secret_pw" not in err_msg
     assert "postgresql://user:******@db.internal:5432/app" in err_msg
-

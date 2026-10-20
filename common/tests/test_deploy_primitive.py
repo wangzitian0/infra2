@@ -148,7 +148,12 @@ def _stub_public_health(monkeypatch):
     monkeypatch.setattr(
         dp,
         "default_http_get",
-        lambda **_kw: lambda _url: (200, '{"status": "ok", "version": "deadbeef", "git_sha": "deadbeef"}'),
+        lambda **_kw: (
+            lambda _url: (
+                200,
+                '{"status": "ok", "version": "deadbeef", "git_sha": "deadbeef"}',
+            )
+        ),
     )
 
 
@@ -1311,7 +1316,9 @@ def test_deploy_with_wait_fails_closed_and_emits_snapshot_when_public_health_ser
         return 200, '{"status": "ok", "version": "v0.0.41"}'
 
     client = FakeDokploy(deployments=_rollout_done)
-    with pytest.raises(RuntimeError, match="still reporting version 'v0.0.41'") as excinfo:
+    with pytest.raises(
+        RuntimeError, match="still reporting version 'v0.0.41'"
+    ) as excinfo:
         dp.deploy(
             "staging",
             FULL_SHA,
@@ -1337,7 +1344,9 @@ def test_deploy_with_wait_skips_public_health_when_verify_smoke_false():
         client=client,
         wait=True,
         verify_smoke=False,
-        http_get=lambda _u: (_ for _ in ()).throw(AssertionError("smoke should not run")),
+        http_get=lambda _u: (_ for _ in ()).throw(
+            AssertionError("smoke should not run")
+        ),
     )
 
 
@@ -1566,6 +1575,3 @@ def test_promote_reuses_dokploy_adapter_deployment_ids_ssot():
     assert dp._deployment_ids is dokploy_adapter.deployment_ids
     assert preview._deployment_ids is dokploy_adapter.deployment_ids
     assert not hasattr(dp, "_dep_id")
-
-
-

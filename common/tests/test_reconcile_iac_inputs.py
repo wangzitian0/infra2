@@ -605,7 +605,9 @@ def test_release_markers_ssot_no_prod_marker_file_duplication() -> None:
     assert not hasattr(release_markers, "PROD_MARKER_FILE")
     assert not hasattr(release_markers, "read_prod_marker_file")
     assert not hasattr(reconcile, "write_prod_marker_file")
-    assert reconcile.PRODUCTION_MARKER_PREFIX is release_markers.PRODUCTION_MARKER_PREFIX
+    assert (
+        reconcile.PRODUCTION_MARKER_PREFIX is release_markers.PRODUCTION_MARKER_PREFIX
+    )
     assert reconcile.RELEASE_TAG_RE is release_markers.RELEASE_TAG_RE
     status = release_markers.marker_status_from_tags(
         ("v1.2.8", "v1.2.9"), ("production/v1.2.8",)

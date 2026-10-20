@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import http.client
 import json
-import re
 import subprocess
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -337,9 +336,7 @@ def served_release(url: str, fetcher: Fetcher) -> tuple[str, str]:
     return "unknown", "no version or git_sha"
 
 
-def _remote_marker_status(
-    *, repo_root: Path, runner: Runner = subprocess.run
-) -> Any:
+def _remote_marker_status(*, repo_root: Path, runner: Runner = subprocess.run) -> Any:
     """Read remote tags (`git ls-remote --tags origin`) for the infra2 row (#1289)."""
     from common.deploy.release_markers import (
         PRODUCTION_MARKER_PREFIX,

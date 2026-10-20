@@ -225,14 +225,9 @@ def test_workflow_trigger_paths_exist_on_disk() -> None:
     tracked = set(
         subprocess.check_output(["git", "ls-files"], cwd=ROOT, text=True).splitlines()
     )
-    violations = [
-        v
-        for v in _workflow_path_filter_violations(
-            ROOT / ".github" / "workflows", tracked
-        )
-        # apply-observability.yml:push:paths:common/alerting.py is paired with test_pr_merge_gate.py in PR-B
-        if v != "apply-observability.yml:push:paths:common/alerting.py does not exist"
-    ]
+    violations = _workflow_path_filter_violations(
+        ROOT / ".github" / "workflows", tracked
+    )
     assert violations == [], "Dead workflow path filters:\n" + "\n".join(violations)
 
 
