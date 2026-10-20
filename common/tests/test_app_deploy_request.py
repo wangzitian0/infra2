@@ -171,11 +171,12 @@ def test_parse_request_rejects_non_object_and_bad_json() -> None:
 
 def test_authority_accepts_matching_sender_repo_and_ref() -> None:
     request = receiver.parse_request(payload())
-    receiver.validate_request_authority(
-        request,
-        sender="wangzitian0",
-        resolve_image=resolved,
-    )
+    for sender in ("wangzitian0", "infra-flash[bot]", "app/infra-flash"):
+        receiver.validate_request_authority(
+            request,
+            sender=sender,
+            resolve_image=resolved,
+        )
 
 
 def test_authority_rejects_sender_service_and_repository() -> None:

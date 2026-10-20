@@ -22,15 +22,6 @@ import yaml
 # job's own GitHub token.
 NON_PRODUCTION_SECRETS = (
     "GITHUB_TOKEN",
-    "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE",
-    "INFRA2_OUT_OF_BAND_FEISHU_API_BASE",
-    "INFRA2_OUT_OF_BAND_FEISHU_APP_ID",
-    "INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET",
-    "INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID",
-    "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL",
-    "INFRA2_REPORTS_FEISHU_APP_ID",
-    "INFRA2_REPORTS_FEISHU_APP_SECRET",
-    "INFRA2_REPORTS_FEISHU_CHAT_ID",
     "ZAI_CODING_CN_API_KEY",
 )
 
@@ -71,16 +62,14 @@ UNGATED_JOBS: dict[tuple[str, str], str] = {
     ): "scheduled read-only check of preview slots",
     ("ops-checks.yml", "vault-self-refresh-audit"): "scheduled read-only audit",
     ("ops-checks.yml", "secrets-reconcile"): "scheduled check that reports drift",
-    # These two jobs write to the production host on a schedule. A review gate would stall
-    # the schedule. The owner decides their class in the follow-up issue of #1125.
     (
         "ops-checks.yml",
         "host-hygiene-schedule",
-    ): "scheduled standing automation, class pending",
+    ): "scheduled idempotent host-hygiene schedule ensure (owner approved 2026-10-20, #1127)",
     (
         "ops-checks.yml",
         "facet-reconcile",
-    ): "scheduled standing automation, class pending",
+    ): "scheduled read-only drift report (#1127)",
 }
 
 # Used with fullmatch: a block scalar adds a final newline, and that form fails (#1138).
@@ -359,4 +348,22 @@ def workflow_contract_failures(texts: Mapping[str, str]) -> list[str]:
         workflows[name] = document
     if len(workflows) < len(texts):
         return failures
+    if GATED_JOBS or UNGATED_JOBS:
+        from common.gate.inventory import _required_check_workflows
+        from common.gate.types import WORKFLOW_PREFIX, _normalized_path
+
+        required_workflows = _required_check_workflows()
+        if required_workflows is None:
+            failures.append(
+                "cannot read a blocking gate with a workflow from docs/ssot/ci-gate-inventory.yaml"
+            )
+        else:
+            present = {
+                _normalized_path(f"{WORKFLOW_PREFIX}{name}") for name in workflows
+            }
+            for req in sorted(required_workflows):
+                if req not in present:
+                    failures.append(
+                        f"required-check workflow {req} is missing from .github/workflows"
+                    )
     return failures + contract_errors(workflows, GATED_JOBS, UNGATED_JOBS)

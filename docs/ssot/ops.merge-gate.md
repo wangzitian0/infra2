@@ -131,15 +131,21 @@ The lock holds when the four facts are true and the head satisfies the contract.
 - A deploy-triggering path does not need the owner. Each job named as production waits for the environment reviewer.
 
 Fail closed: when a fact is false or unreadable, the earlier rules apply to every other file. The verdict names each failure.
-When the lock holds, these changes still need the owner: the gate code and data, their tests, the rule-text files, and the contract tables.
-Two exits stay open. A rule-text file clears with a quoted owner instruction in the PR body.
-A change to `ci-gate-inventory.yaml` clears when the direction proof shows it is tighter.
-A file that Python or pytest runs before gate code also needs the owner.
+When the lock holds, these changes still need the owner unless cleared by a gate exit below: the gate code and data, their tests, the rule-text files, and the contract tables.
+Three exits apply:
+
+- A rule-text file clears with a quoted owner instruction in the PR body.
+- A change to `ci-gate-inventory.yaml` clears when the direction proof shows it is tighter.
+- A non-workflow file in `self_governing_files()` clears when the lock holds (`lock_state=verified`), the PR body has a `### Mutation evidence` section naming at least one test (`test_<name>` or `path::name`), and the current head has an automated review or bot independent verification comment (#1040).
+- Across a mechanical rebase that leaves `HEAD^{tree}` unchanged, citing the previously approved commit SHA (`approved: <sha>`) preserves approval (#924).
+
+A file that Python or pytest runs before gate code is also in the gate closure.
 Examples: a root module such as `yaml.py`, a package that replaces a gate module, and a `conftest.py` in `common/tests`.
-Bytecode, `.so` and `.pth` files, virtual environments and `sitecustomize.py` also need the owner, at any depth.
-`pytest.ini`, `tox.ini`, `setup.cfg` and `.coveragerc` need the owner at the root, in `common/` and in `common/tests/`.
+Bytecode, `.so` and `.pth` files, virtual environments and `sitecustomize.py` are also in the closure, at any depth.
+`pyproject.toml`, `pytest.ini`, `tox.ini`, `setup.cfg` and `.coveragerc` are in the closure at the root, in `common/` and in `common/tests/` (#1147, #1035).
+`tools/host_hygiene_schedule.py` and `tools/facet_reconcile.py` are in `self_governing_files()` (#1127, #1147).
 The gate compares paths case-folded, because the disk of the gate host does not tell case apart.
-`pyproject.toml` stays outside the gate, because dependency edits are common.
+The contract check verifies that every required-check workflow exists at the head SHA, so renaming or deleting a required-check workflow fails the production contract (#1035).
 
 The contract is strict in three ways.
 A conditional job must use the exact condition in its table entry. A condition that only contains it fails.
@@ -161,14 +167,11 @@ Limits of the lock:
 Residual risks:
 
 - The lock does not cover the production credentials that ungated jobs read.
-- The bodies of ungated jobs and the code they run are outside the gate (#1147). An agent can merge a change to them.
+- The bodies of ungated jobs remain outside the gate (#1147); `tools/host_hygiene_schedule.py` and `tools/facet_reconcile.py` are in `self_governing_files()`.
 - The gate checks that a gated job declares the right environment.
   It does not check that the job body keeps using the input that selects the environment.
   Example: a body edit hard-codes `--type prod`, and the environment condition still reads `inputs.type`.
-- A renamed workflow file is not held. The changed-file list holds only the new path.
-- The pytest settings in `pyproject.toml` are outside the gate (#1147).
-- Two scheduled jobs of `ops-checks.yml` write to the production host without the environment reviewer (#1127).
-- The real fix is to scope those credentials to the `production` environment (#1147).
+- `iac-runner` `/deploy` (`env=production`) enforces Layer 2 GitHub Actions OIDC verification (`environment == "production"`, `ref` matching `refs/heads/main` or `refs/tags/v*`) in addition to HMAC signing (#1126).
 
 ## 授权沿革
 

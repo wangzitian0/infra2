@@ -166,6 +166,9 @@ jobs:
     # A prod deploy waits here for the owner (#1125). The canary above runs first, so the
     # owner approves a deploy whose canary is already green.
     environment: ${{ inputs.type == 'prod' && 'production' || 'staging' }}
+    permissions:
+      contents: read
+      id-token: write
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:

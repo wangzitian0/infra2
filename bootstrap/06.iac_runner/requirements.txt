@@ -5,3 +5,4 @@ httpx>=0.25
 python-dotenv>=1.0
 rich>=13.0
 PyYAML>=6.0
+cryptography>=41.0
