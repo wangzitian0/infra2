@@ -147,8 +147,13 @@ def test_negative_junk_counts_are_coerced_to_zero() -> None:
 def test_negative_zero_checks_does_not_divide_by_zero() -> None:
     empty = summarize_ledger({"ledger": []})
     assert empty["signal_count"] == 0
-    assert empty["overall_uptime_pct"] == 100.0  # nothing to disprove
-    assert "held 100% availability" in build_report_message(empty)
+    assert empty["has_data"] is False
+    assert (
+        empty["overall_uptime_pct"] == 100.0
+    )  # _uptime_pct(0, 0) avoids ZeroDivisionError
+    msg = build_report_message(empty)
+    assert "No probe rounds recorded this window" in msg
+    assert "held 100% availability" not in msg
 
 
 # ---- #904: time the VPS recorded nothing, or was unreachable, is unavailable ----

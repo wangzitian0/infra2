@@ -2190,3 +2190,150 @@ def test_async_secrets_supply_response_id_matches_the_status_lookup(
     status_body, status_code = webhook_server.deployment_status()
     assert status_code == 200, status_body
     assert status_body["deployment_id"] == expected
+
+
+def _mint_rs256_jwt(claims: dict, *, kid: str = "test-kid") -> tuple[str, dict]:
+    import base64
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pub_numbers = private_key.public_key().public_numbers()
+
+    def b64u(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+    n_bytes = pub_numbers.n.to_bytes((pub_numbers.n.bit_length() + 7) // 8, "big")
+    e_bytes = pub_numbers.e.to_bytes((pub_numbers.e.bit_length() + 7) // 8, "big")
+    jwk = {
+        "kty": "RSA",
+        "kid": kid,
+        "use": "sig",
+        "alg": "RS256",
+        "n": b64u(n_bytes),
+        "e": b64u(e_bytes),
+    }
+    header_b64 = b64u(json.dumps({"alg": "RS256", "typ": "JWT", "kid": kid}).encode())
+    claims_b64 = b64u(json.dumps(claims).encode())
+    signing_input = f"{header_b64}.{claims_b64}".encode("ascii")
+    sig = private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
+    return f"{header_b64}.{claims_b64}.{b64u(sig)}", jwk
+
+
+def test_production_deploy_requires_valid_github_oidc_token(monkeypatch) -> None:
+    """#1126: /deploy with env=production rejects HMAC-only requests with 403 and accepts valid GitHub OIDC."""
+    sync_runner = _load_module(
+        "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
+    fake_flask = types.ModuleType("flask")
+
+    class FakeFlask:
+        def __init__(self, _name):
+            pass
+
+        def route(self, *_args, **_kwargs):
+            return lambda func: func
+
+    fake_flask.Flask = FakeFlask
+    fake_flask.jsonify = lambda payload: payload
+    request_json = {
+        "env": "production",
+        "ref": DEPLOY_SHA,
+        "wait": False,
+        "triggered_by": "deploy_v2",
+        "services": ["platform/redis"],
+    }
+    fake_flask.request = types.SimpleNamespace(
+        headers=_signed_headers(monkeypatch), data=b"", json=dict(request_json)
+    )
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    webhook_server = _load_module(
+        "webhook_server_oidc_under_test",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+
+    # 1. Missing OIDC token -> 403
+    body, status_code = webhook_server.version_deploy()
+    assert status_code == 403
+    assert "OIDC Bearer token" in body["error"]
+
+    # 2. OIDC token for staging environment -> 403
+    now_ts = int(time.time())
+    bad_token, jwk = _mint_rs256_jwt(
+        {
+            "iss": "https://token.actions.githubusercontent.com",
+            "aud": "iac-runner",
+            "repository": "wangzitian0/infra2",
+            "environment": "staging",
+            "ref": "refs/tags/v1.2.3",
+            "actor": "wangzitian0",
+            "exp": now_ts + 300,
+        }
+    )
+    monkeypatch.setattr(webhook_server, "_fetch_github_jwks", lambda: [jwk])
+    fake_flask.request.headers = {
+        **_signed_headers(monkeypatch),
+        "Authorization": f"Bearer {bad_token}",
+    }
+    body, status_code = webhook_server.version_deploy()
+    assert status_code == 403
+    assert "environment must be 'production'" in body["error"]
+
+    # 2b. OIDC token with wrong audience -> 403
+    wrong_aud_token, jwk_aud = _mint_rs256_jwt(
+        {
+            "iss": "https://token.actions.githubusercontent.com",
+            "aud": "https://github.com/wangzitian0",
+            "repository": "wangzitian0/infra2",
+            "environment": "production",
+            "ref": "refs/tags/v1.2.3",
+            "actor": "wangzitian0",
+            "exp": now_ts + 300,
+        }
+    )
+    monkeypatch.setattr(webhook_server, "_fetch_github_jwks", lambda: [jwk_aud])
+    fake_flask.request.headers = {
+        **_signed_headers(monkeypatch),
+        "Authorization": f"Bearer {wrong_aud_token}",
+    }
+    body, status_code = webhook_server.version_deploy()
+    assert status_code == 403
+    assert "Unexpected OIDC audience" in body["error"]
+
+    # 3. Valid production OIDC token -> 202 and triggered_by bound to github-oidc:<actor>
+    good_token, jwk2 = _mint_rs256_jwt(
+        {
+            "iss": "https://token.actions.githubusercontent.com",
+            "aud": "iac-runner",
+            "repository": "wangzitian0/infra2",
+            "environment": "production",
+            "ref": "refs/tags/v1.2.3",
+            "actor": "wangzitian0",
+            "exp": now_ts + 300,
+        }
+    )
+    monkeypatch.setattr(webhook_server, "_fetch_github_jwks", lambda: [jwk2])
+
+    class NoopThread:
+        def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+            pass
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(webhook_server.threading, "Thread", NoopThread)
+    monkeypatch.setattr(
+        sync_runner,
+        "sync_services_by_version",
+        lambda env, ref, triggered_by, services=None, **kw: sync_runner.SyncResult(
+            env=env, ref=ref, requested_services=list(services or []), results=[]
+        ),
+    )
+    fake_flask.request.headers = {
+        **_signed_headers(monkeypatch),
+        "Authorization": f"Bearer {good_token}",
+    }
+    body, status_code = webhook_server.version_deploy()
+    assert status_code == 202
+    assert body["triggered_by"] == "github-oidc:wangzitian0"

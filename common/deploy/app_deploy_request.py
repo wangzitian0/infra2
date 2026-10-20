@@ -61,7 +61,7 @@ __all__ = [
     "verify_production_evidence",
 ]
 
-ALLOWED_SENDERS = frozenset({"wangzitian0"})
+ALLOWED_SENDERS = frozenset({"wangzitian0", "infra-flash[bot]", "app/infra-flash"})
 FIXED_DEPLOY_TYPES = frozenset({DeployType.STAGING, DeployType.PRODUCTION})
 #: The deploy types whose request is canaried before it executes (truealpha#860):
 #: production only. app-deploy-request.yml's preflight_canary pre-filter mirrors this set;

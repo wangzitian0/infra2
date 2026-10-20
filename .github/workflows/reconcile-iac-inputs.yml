@@ -44,6 +44,7 @@ permissions:
   contents: write
   # the promotion guard lists this workflow's runs for the promoted tag (gh api .../runs)
   actions: read
+  id-token: write
 
 concurrency:
   # A run that waits for the owner holds its group. A production promotion has its own

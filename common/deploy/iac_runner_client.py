@@ -178,6 +178,31 @@ def _validate_version_ref(version_ref: str) -> str:
     return candidate
 
 
+def _fetch_actions_oidc_token(
+    *, audience: str = "iac-runner", getter=httpx.get
+) -> str | None:
+    """Request a GitHub Actions OIDC token when running inside an OIDC-enabled job (#1126)."""
+    explicit = os.environ.get("IAC_OIDC_TOKEN", "").strip()
+    if explicit:
+        return explicit
+    req_url = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL", "").strip()
+    req_token = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "").strip()
+    if not (req_url and req_token):
+        return None
+    sep = "&" if "?" in req_url else "?"
+    resp = getter(
+        f"{req_url}{sep}audience={audience}",
+        headers={"Authorization": f"Bearer {req_token}"},
+        timeout=10.0,
+    )
+    resp.raise_for_status()
+    data = _safe_json(resp)
+    value = str(data.get("value") or "").strip()
+    if not value:
+        raise RuntimeError("GitHub OIDC token endpoint returned no token value")
+    return value
+
+
 def trigger_platform_deploy(
     *,
     env: str,
@@ -193,6 +218,7 @@ def trigger_platform_deploy(
     transport=httpx.post,
     version_ref: str | None = None,
     action: str | None = None,
+    oidc_token: str | None = None,
 ) -> dict:
     """Trigger an iac_runner platform deploy of ``services`` at ``ref`` to ``env``.
 
@@ -222,6 +248,10 @@ def trigger_platform_deploy(
         body["version_ref"] = _validate_version_ref(version_ref)
     payload = json.dumps(body, separators=(",", ":")).encode()
     headers = _signed_headers(secret, payload, now=now, nonce=nonce or _new_nonce())
+    if env == "production":
+        token = oidc_token or _fetch_actions_oidc_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
     resp = transport(
         f"{base_url.rstrip('/')}/deploy",
         content=payload,

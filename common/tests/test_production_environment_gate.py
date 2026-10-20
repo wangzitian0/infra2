@@ -248,7 +248,7 @@ def test_a_secret_read_by_a_name_that_is_not_literal_is_reported(expression):
         "# read secrets from the vault, not secrets[0]",
         "if: ${{ inputs.task == 'secrets-reconcile' }}",
         "group: ${{ format('infra2-secrets-{0}', github.sha) }}",
-        "token: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_ID || github.token }}",
+        "token: ${{ secrets.GITHUB_TOKEN || github.token }}",
     ],
 )
 def test_prose_and_string_literals_are_not_secret_reads(line):
@@ -363,17 +363,16 @@ def test_the_real_workflow_tree_satisfies_the_gate_entry_point():
 def test_the_benign_secret_list_is_pinned():
     assert NON_PRODUCTION_SECRETS == (
         "GITHUB_TOKEN",
-        "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE",
-        "INFRA2_OUT_OF_BAND_FEISHU_API_BASE",
-        "INFRA2_OUT_OF_BAND_FEISHU_APP_ID",
-        "INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET",
-        "INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID",
-        "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL",
-        "INFRA2_REPORTS_FEISHU_APP_ID",
-        "INFRA2_REPORTS_FEISHU_APP_SECRET",
-        "INFRA2_REPORTS_FEISHU_CHAT_ID",
         "ZAI_CODING_CN_API_KEY",
     )
+
+
+def test_zero_class_pending_entries_remain_in_ungated_jobs():
+    """#1127 / 1035-R2: every ungated job has a final classification, never 'class pending'."""
+    pending = [
+        key for key, reason in UNGATED_JOBS.items() if "class pending" in reason.lower()
+    ]
+    assert pending == []
 
 
 def _reads(name: str) -> dict[str, dict]:
@@ -597,3 +596,93 @@ def test_the_scan_of_128_kib_takes_under_one_second(unit):
     started = time.perf_counter()
     workflow_contract_failures({"w.yml": text})
     assert time.perf_counter() - started < 1.0
+
+
+def test_missing_required_check_workflow_fails_contract():
+    """1035-R4: renaming or deleting a required-check workflow fails workflow_contract_failures."""
+    texts = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in sorted(WORKFLOWS_DIR.glob("*.y*ml"))
+        if path.name != "infra-ci.yml"
+    }
+    failures = workflow_contract_failures(texts)
+    assert any(
+        "required-check workflow .github/workflows/infra-ci.yml is missing" in f
+        for f in failures
+    ), failures
+
+
+def test_read_lock_facts_enforces_reviewer_bypass_and_policy_invariants():
+    """O1: read_lock_facts unit tests for Bot exclusion, pagination truncation, non-bool bypass, and policies."""
+    from common.gate.production_lock import (
+        REQUIRED_POLICIES,
+        lock_failures,
+        read_lock_facts,
+    )
+
+    repo = "wangzitian0/infra2"
+    env_path = f"repos/{repo}/environments/production"
+    live_env = {
+        "name": "production",
+        "can_admins_bypass": False,
+        "protection_rules": [
+            {
+                "type": "required_reviewers",
+                "reviewers": [{"type": "User", "reviewer": {"login": "wangzitian0"}}],
+            }
+        ],
+        "deployment_branch_policy": {"custom_branch_policies": True},
+    }
+    live_pol = {
+        "total_count": 2,
+        "branch_policies": [
+            {"name": "main", "type": "branch"},
+            {"name": "v*", "type": "tag"},
+        ],
+    }
+
+    # 1. Valid live shape
+    facts = read_lock_facts(
+        repo, gh=lambda argv: json.dumps(live_env if argv[-1] == env_path else live_pol)
+    )
+    assert facts.reviewers == 1
+    assert facts.can_admins_bypass is False
+    assert facts.custom_policies is True
+    assert facts.policies == REQUIRED_POLICIES
+    assert lock_failures(facts) == []
+
+    # 2. Bot reviewer excluded
+    bot_env = {
+        **live_env,
+        "protection_rules": [
+            {
+                "type": "required_reviewers",
+                "reviewers": [{"type": "Bot", "reviewer": {"login": "infra-flash"}}],
+            }
+        ],
+    }
+    bot_facts = read_lock_facts(
+        repo, gh=lambda argv: json.dumps(bot_env if argv[-1] == env_path else live_pol)
+    )
+    assert bot_facts.reviewers == 0
+    assert "the production environment has no required reviewer" in lock_failures(
+        bot_facts
+    )
+
+    # 3. Non-boolean can_admins_bypass fails closed as None
+    non_bool_env = {**live_env, "can_admins_bypass": "false"}
+    nb_facts = read_lock_facts(
+        repo,
+        gh=lambda argv: json.dumps(non_bool_env if argv[-1] == env_path else live_pol),
+    )
+    assert nb_facts.can_admins_bypass is None
+    assert any("can_admins_bypass=None" in f for f in lock_failures(nb_facts))
+
+    # 4. Partial pagination in deployment-branch-policies fails closed
+    truncated_pol = {**live_pol, "total_count": 3}
+    trunc_facts = read_lock_facts(
+        repo,
+        gh=lambda argv: json.dumps(live_env if argv[-1] == env_path else truncated_pol),
+    )
+    assert "partial list" in trunc_facts.error
+    assert lock_failures(trunc_facts) != []

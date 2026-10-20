@@ -2,8 +2,10 @@
 
 Canonical domain module for aggregating GitHub Actions watchdog runs, auditing
 structured alert-recall logs, checking stale open issues, probing estate
-application release/health parity via ``infra2_sdk.routing.resolve_service_url``,
-and rendering Feishu interactive report cards via ``build_feishu_report_card``.
+application release/health parity via canonical registry & SDK routing
+(``common.core.registry.domain_for_service`` and
+``infra2_sdk.routing.resolve_service_url``), and rendering Feishu interactive
+report cards via ``build_feishu_report_card``.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from common.alerting import (
     deliver_out_of_band_card,
     deliver_out_of_band_text,
 )
+from common.alerting.types import _one_line
 from common.core.registry import domain_for_service
 
 WORKFLOW_FILE = "ops-checks.yml"
@@ -35,10 +38,18 @@ DIGEST_WINDOW_DAYS = 7
 DAILY_WINDOW_DAYS = 1
 DEFAULT_INTERNAL_DOMAIN = "zitian.party"
 JOURNEY_BOARD_URL = "https://wangzitian0.github.io/finance_report/board/"
-OPENPANEL_URL = "https://analytics.zitian.party"
+OPENPANEL_URL = "https://openpanel.zitian.party"
 SIGNOZ_URL = "https://signoz.zitian.party"
 WATCHDOG_RUNBOOK_URL = "https://github.com/wangzitian0/infra2/blob/main/platform/12.alerting/README.md#out-of-band-watchdog"
 STALE_ISSUE_DAYS = 14
+DEFAULT_MAX_LOGS = 25
+GITHUB_TIMEOUT_S = 15
+LOG_TIMEOUT_S = 20
+HEALTH_TIMEOUT_S = 5.0
+MAX_FAILED_RUN_URLS = 5
+MAX_FAILURE_DOMAINS_SHOWN = 5
+MAX_STALE_ISSUES_SHOWN = 8
+HEALTHY_STATUSES = frozenset({"ok", "healthy"})
 
 
 def fetch_recent_runs(
@@ -50,9 +61,10 @@ def fetch_recent_runs(
     per_page: int = 100,
     now: datetime | None = None,
     window_days: int = DIGEST_WINDOW_DAYS,
-    opener=urlopen,
+    opener=None,
 ) -> list[dict[str, Any]]:
     """Fetch recent ops-checks runs that actually include the watchdog job."""
+    active_opener = opener or urlopen
     owner, repo = repository.split("/", 1)
     current = now or datetime.now(UTC)
     cutoff = current - timedelta(days=window_days)
@@ -68,7 +80,7 @@ def fetch_recent_runs(
             headers=_github_headers(token),
             method="GET",
         )
-        with opener(request, timeout=15) as response:  # noqa: S310
+        with active_opener(request, timeout=GITHUB_TIMEOUT_S) as response:  # noqa: S310
             payload = json.loads(response.read().decode("utf-8"))
         runs = payload.get("workflow_runs")
         page_runs = runs if isinstance(runs, list) else []
@@ -91,7 +103,7 @@ def fetch_recent_runs(
                 token,
                 run_id,
                 job_name=watchdog_job_name,
-                opener=opener,
+                opener=active_opener,
             ):
                 matching_runs.append(run)
 
@@ -108,9 +120,10 @@ def fetch_run_jobs(
     run_id: str | int,
     *,
     per_page: int = 100,
-    opener=urlopen,
+    opener=None,
 ) -> list[dict[str, Any]]:
     """Fetch jobs for one GitHub Actions workflow run."""
+    active_opener = opener or urlopen
     owner, repo = repository.split("/", 1)
     jobs: list[dict[str, Any]] = []
     page = 1
@@ -123,7 +136,7 @@ def fetch_run_jobs(
             headers=_github_headers(token),
             method="GET",
         )
-        with opener(request, timeout=15) as response:  # noqa: S310
+        with active_opener(request, timeout=GITHUB_TIMEOUT_S) as response:  # noqa: S310
             payload = json.loads(response.read().decode("utf-8"))
         page_jobs = payload.get("jobs")
         if not isinstance(page_jobs, list) or not page_jobs:
@@ -142,7 +155,7 @@ def run_includes_job(
     run_id: str | int,
     *,
     job_name: str = WATCHDOG_JOB_NAME,
-    opener=urlopen,
+    opener=None,
 ) -> bool:
     """Return whether a workflow run contains the out-of-band watchdog job."""
     return any(
@@ -171,16 +184,17 @@ def _run_created_at(run: Mapping[str, Any]) -> datetime | None:
 
 
 def fetch_run_log(
-    repository: str, token: str, run_id: str | int, *, opener=urlopen
+    repository: str, token: str, run_id: str | int, *, opener=None
 ) -> str:
     """Fetch and decode the GitHub Actions log archive for one workflow run."""
+    active_opener = opener or urlopen
     owner, repo = repository.split("/", 1)
     request = Request(
         f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/logs",
         headers=_github_headers(token),
         method="GET",
     )
-    with opener(request, timeout=20) as response:  # noqa: S310
+    with active_opener(request, timeout=LOG_TIMEOUT_S) as response:  # noqa: S310
         return _decode_log_payload(response.read())
 
 
@@ -189,10 +203,11 @@ def fetch_recent_run_logs(
     token: str,
     runs: list[dict[str, Any]],
     *,
-    max_logs: int = 25,
-    log_fetcher=fetch_run_log,
+    max_logs: int = DEFAULT_MAX_LOGS,
+    log_fetcher=None,
 ) -> dict[str, str]:
     """Fetch logs for recent runs; encode fetch failures as review events."""
+    active_fetcher = log_fetcher or fetch_run_log
     logs: dict[str, str] = {}
     for run in runs[: max(0, max_logs)]:
         run_id = run.get("id") or run.get("databaseId")
@@ -200,7 +215,7 @@ def fetch_recent_run_logs(
             continue
         key = str(run_id)
         try:
-            logs[key] = log_fetcher(repository, token, key)
+            logs[key] = active_fetcher(repository, token, key)
         except Exception as exc:  # noqa: BLE001 - digest must not fail closed on logs.
             logs[key] = json.dumps(
                 {
@@ -304,7 +319,7 @@ def summarize_weekly_runs(
         "other_count": totals["other"],
         "success_rate_pct": round(success_rate, 2),
         "failure_rate_pct": round(failure_rate, 2),
-        "failed_run_urls": failed_urls[:5],
+        "failed_run_urls": failed_urls[:MAX_FAILED_RUN_URLS],
         "window_days": window_days,
         "week_start_utc": cutoff.date().isoformat(),
         "week_end_utc": current.date().isoformat(),
@@ -433,9 +448,10 @@ def fetch_stale_open_issues(
     stale_days: int = STALE_ISSUE_DAYS,
     per_page: int = 100,
     now: datetime | None = None,
-    opener=urlopen,
+    opener=None,
 ) -> list[dict[str, Any]]:
     """Open issues (not PRs) untouched for ``stale_days``+, oldest-updated first."""
+    active_opener = opener or urlopen
     owner, repo = repository.split("/", 1)
     current = now or datetime.now(UTC)
     cutoff = current - timedelta(days=stale_days)
@@ -451,7 +467,7 @@ def fetch_stale_open_issues(
             headers=_github_headers(token),
             method="GET",
         )
-        with opener(request, timeout=15) as response:  # noqa: S310
+        with active_opener(request, timeout=GITHUB_TIMEOUT_S) as response:  # noqa: S310
             page_issues = json.loads(response.read().decode("utf-8"))
         if not isinstance(page_issues, list) or not page_issues:
             break
@@ -492,10 +508,11 @@ def summarize_stale_issues(issues: list[Mapping[str, Any]]) -> list[dict[str, An
 def fetch_estate_app_health(
     internal_domain: str = DEFAULT_INTERNAL_DOMAIN,
     *,
-    timeout: float = 5.0,
-    opener=urlopen,
+    timeout: float = HEALTH_TIMEOUT_S,
+    opener=None,
 ) -> list[dict[str, Any]]:
     """Probe Production vs. Staging /api/health endpoints via canonical SDK routing."""
+    active_opener = opener or urlopen
     specs = (
         ("finance_report", "finance_report/app", "report"),
         ("truealpha", "truealpha/app", "truealpha"),
@@ -525,7 +542,7 @@ def fetch_estate_app_health(
                 method="GET",
             )
             try:
-                with opener(request, timeout=timeout) as response:  # noqa: S310
+                with active_opener(request, timeout=timeout) as response:  # noqa: S310
                     payload = json.loads(response.read().decode("utf-8"))
                 status = str(payload.get("status") or "unknown")
                 version = str(
@@ -540,9 +557,11 @@ def fetch_estate_app_health(
             envs[env_name] = {"status": status, "version": version, "url": url}
         prod_v = envs["production"]["version"]
         stg_v = envs["staging"]["version"]
+        prod_ok = envs["production"]["status"].strip().lower() in HEALTHY_STATUSES
+        stg_ok = envs["staging"]["status"].strip().lower() in HEALTHY_STATUSES
         parity = (
             "in_sync"
-            if prod_v != "unknown" and prod_v == stg_v
+            if prod_v != "unknown" and prod_v == stg_v and prod_ok and stg_ok
             else ("ahead_or_drift" if stg_v != prod_v else "unknown")
         )
         results.append(
@@ -597,7 +616,7 @@ def build_digest_message(summary: Mapping[str, Any], repository: str) -> str:
                 f"{name}={count}"
                 for name, count in sorted(
                     domains.items(), key=lambda item: (-int(item[1]), str(item[0]))
-                )[:5]
+                )[:MAX_FAILURE_DOMAINS_SHOWN]
             )
             lines.append(f"Failure domains: {domain_text}")
         if audit.get("log_fetch_error_count"):
@@ -617,10 +636,10 @@ def build_digest_message(summary: Mapping[str, Any], repository: str) -> str:
     stale_issues = summary.get("stale_issues")
     if isinstance(stale_issues, list) and stale_issues:
         lines.append(f"Stale open issues ({STALE_ISSUE_DAYS}+ days untouched):")
-        for issue in stale_issues[:10]:
+        for issue in stale_issues[:MAX_STALE_ISSUES_SHOWN]:
             lines.append(f"- #{issue['number']} {issue['title']} ({issue['url']})")
-        if len(stale_issues) > 10:
-            lines.append(f"  ...and {len(stale_issues) - 10} more")
+        if len(stale_issues) > MAX_STALE_ISSUES_SHOWN:
+            lines.append(f"  ...and {len(stale_issues) - MAX_STALE_ISSUES_SHOWN} more")
     lines.append(f"Runbook: {WATCHDOG_RUNBOOK_URL}")
     return "\n".join(lines)
 
@@ -694,7 +713,7 @@ def build_digest_card(summary: Mapping[str, Any], repository: str) -> dict[str, 
                 f"`{name}`={count}"
                 for name, count in sorted(
                     domains.items(), key=lambda item: (-int(item[1]), str(item[0]))
-                )[:5]
+                )[:MAX_FAILURE_DOMAINS_SHOWN]
             )
             if isinstance(domains, Mapping) and domains
             else "none"
@@ -712,7 +731,8 @@ def build_digest_card(summary: Mapping[str, Any], repository: str) -> dict[str, 
     failed_urls = summary.get("failed_run_urls", [])
     if isinstance(failed_urls, list) and failed_urls:
         fail_lines = ["**Recent Failed Runs**"] + [
-            f"• [{url.rsplit('/', 1)[-1]}]({url})" for url in failed_urls[:5]
+            f"• [{url.rsplit('/', 1)[-1]}]({url})"
+            for url in failed_urls[:MAX_FAILED_RUN_URLS]
         ]
         sections.append("\n".join(fail_lines))
 
@@ -721,10 +741,12 @@ def build_digest_card(summary: Mapping[str, Any], repository: str) -> dict[str, 
             f"**Stale Open Issues ({STALE_ISSUE_DAYS}+ days untouched)**"
         ] + [
             f"• [#{issue['number']}]({issue['url']}) {issue['title']}"
-            for issue in stale_issues[:8]
+            for issue in stale_issues[:MAX_STALE_ISSUES_SHOWN]
         ]
-        if len(stale_issues) > 8:
-            issue_lines.append(f"• …and {len(stale_issues) - 8} more")
+        if len(stale_issues) > MAX_STALE_ISSUES_SHOWN:
+            issue_lines.append(
+                f"• …and {len(stale_issues) - MAX_STALE_ISSUES_SHOWN} more"
+            )
         sections.append("\n".join(issue_lines))
 
     actions = [
@@ -748,26 +770,32 @@ def deliver_digest(
     message: str,
     *,
     card: dict[str, Any] | None = None,
-    card_sender=deliver_out_of_band_card,
-    text_sender=deliver_out_of_band_text,
+    card_sender=None,
+    text_sender=None,
 ) -> None:
     """Deliver digest via the shared out-of-band Feishu webhook/app path."""
+    active_card_sender = card_sender or deliver_out_of_band_card
+    active_text_sender = text_sender or deliver_out_of_band_text
     fmt = env.get("WATCHDOG_DIGEST_FORMAT", "card").strip().lower()
     if card is not None and fmt != "text":
-        card_sender(env, card, fallback_text=message)
+        active_card_sender(env, card, fallback_text=message)
         return
-    text_sender(env, message)
+    active_text_sender(env, message)
+
+
+def _env_enabled(env: Mapping[str, str], name: str, *, default: str = "1") -> bool:
+    return env.get(name, default).strip().lower() not in {"0", "false", "no"}
 
 
 def run_digest_cli(
     env: Mapping[str, str] | None = None,
     argv: list[str] | None = None,
     *,
-    runs_fetcher=fetch_recent_runs,
-    logs_fetcher=fetch_recent_run_logs,
-    health_fetcher=fetch_estate_app_health,
-    stale_fetcher=fetch_stale_open_issues,
-    deliverer=deliver_digest,
+    runs_fetcher=None,
+    logs_fetcher=None,
+    health_fetcher=None,
+    stale_fetcher=None,
+    deliverer=None,
 ) -> int:
     """CLI runner for the weekly/daily watchdog digest."""
     import argparse
@@ -799,61 +827,70 @@ def run_digest_cli(
         or _as_int(current_env.get("WATCHDOG_DIGEST_WINDOW_DAYS"))
         or DIGEST_WINDOW_DAYS
     )
+    active_runs_fetcher = runs_fetcher or fetch_recent_runs
+    active_logs_fetcher = logs_fetcher or fetch_recent_run_logs
+    active_health_fetcher = health_fetcher or fetch_estate_app_health
+    active_stale_fetcher = stale_fetcher or fetch_stale_open_issues
+    active_deliverer = deliverer or deliver_digest
+
     now = datetime.now(UTC)
-    runs = runs_fetcher(repository, token, now=now, window_days=window_days)
+    runs = active_runs_fetcher(repository, token, now=now, window_days=window_days)
     summary = summarize_weekly_runs(runs, now=now, window_days=window_days)
-    if current_env.get("WATCHDOG_DIGEST_REVIEW_LOGS", "1").strip().lower() not in {
-        "0",
-        "false",
-        "no",
-    }:
-        max_logs = _as_int(current_env.get("WATCHDOG_DIGEST_LOG_LIMIT")) or 25
-        logs = logs_fetcher(
+    if _env_enabled(current_env, "WATCHDOG_DIGEST_REVIEW_LOGS"):
+        max_logs = (
+            _as_int(current_env.get("WATCHDOG_DIGEST_LOG_LIMIT")) or DEFAULT_MAX_LOGS
+        )
+        logs = active_logs_fetcher(
             repository,
             token,
             recent_weekly_runs(runs, now=now, window_days=window_days),
             max_logs=max_logs,
         )
         summary["log_audit"] = summarize_watchdog_log_events(logs)
-    if current_env.get("WATCHDOG_DIGEST_ESTATE_HEALTH", "1").strip().lower() not in {
-        "0",
-        "false",
-        "no",
-    }:
+    if _env_enabled(current_env, "WATCHDOG_DIGEST_ESTATE_HEALTH"):
         domain = (current_env.get("INTERNAL_DOMAIN") or DEFAULT_INTERNAL_DOMAIN).strip()
-        summary["estate_apps"] = health_fetcher(domain)
-    if current_env.get("WATCHDOG_DIGEST_STALE_ISSUES", "1").strip().lower() not in {
-        "0",
-        "false",
-        "no",
-    }:
+        summary["estate_apps"] = active_health_fetcher(domain)
+    if _env_enabled(current_env, "WATCHDOG_DIGEST_STALE_ISSUES"):
         stale_days = (
             _as_int(current_env.get("WATCHDOG_DIGEST_STALE_ISSUE_DAYS"))
             or STALE_ISSUE_DAYS
         )
-        stale = stale_fetcher(repository, token, stale_days=stale_days, now=now)
+        stale = active_stale_fetcher(repository, token, stale_days=stale_days, now=now)
         summary["stale_issues"] = summarize_stale_issues(stale)
     message = build_digest_message(summary, repository)
     card = build_digest_card(summary, repository)
     if current_env.get("WATCHDOG_DIGEST_DRY_RUN") == "1":
         print(message)
         return 0
-    deliverer(current_env, message, card=card)
+    active_deliverer(current_env, message, card=card)
     print(message)
     return 0
 
 
-def _one_line(value: str) -> str:
-    return " ".join(value.split())
+def main(
+    env: Mapping[str, str] | None = None,
+    argv: list[str] | None = None,
+) -> int:
+    """CLI entrypoint for weekly/daily watchdog digest."""
+    return run_digest_cli(env, argv)
 
 
 __all__ = [
     "DAILY_WINDOW_DAYS",
     "DEFAULT_INTERNAL_DOMAIN",
+    "DEFAULT_MAX_LOGS",
     "DEFAULT_REPOSITORY",
     "DIGEST_WINDOW_DAYS",
+    "GITHUB_TIMEOUT_S",
+    "HEALTHY_STATUSES",
+    "HEALTH_TIMEOUT_S",
     "JOURNEY_BOARD_URL",
+    "LOG_TIMEOUT_S",
+    "MAX_FAILED_RUN_URLS",
+    "MAX_FAILURE_DOMAINS_SHOWN",
+    "MAX_STALE_ISSUES_SHOWN",
     "OPENPANEL_URL",
+    "REPORT_TITLE_PREFIX",
     "SIGNOZ_URL",
     "STALE_ISSUE_DAYS",
     "WATCHDOG_JOB_NAME",
@@ -868,6 +905,7 @@ __all__ = [
     "fetch_run_jobs",
     "fetch_run_log",
     "fetch_stale_open_issues",
+    "main",
     "recent_weekly_runs",
     "run_digest_cli",
     "run_includes_job",

@@ -126,6 +126,10 @@ jobs:
               || needs.preflight_canary.result == 'skipped') }}
     # A production request waits here for the owner, after its canary is green (#1125).
     environment: ${{ github.event.client_payload.deploy_type == 'prod' && 'production' || 'staging' }}
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:

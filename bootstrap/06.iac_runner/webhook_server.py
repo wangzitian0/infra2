@@ -5,10 +5,12 @@ GitHub Webhook Server for IaC Runner
 Receives GitHub push events and triggers sync for changed services.
 """
 
+import base64
 import functools
 import hashlib
 import hmac
 import importlib.util
+import json
 import logging
 import os
 import re
@@ -16,6 +18,7 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.request
 from pathlib import Path
 from flask import Flask, request, jsonify
 
@@ -132,6 +135,144 @@ def verify_iac_request() -> bool:
         request.headers.get("X-IAC-Timestamp", ""),
         request.headers.get("X-IAC-Nonce", ""),
     )
+
+
+GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+GITHUB_OIDC_JWKS_URL = f"{GITHUB_OIDC_ISSUER}/.well-known/jwks"
+OIDC_ALLOWED_REPO = "wangzitian0/infra2"
+OIDC_ALLOWED_AUDIENCE = "iac-runner"
+OIDC_REF_RE = re.compile(r"\A(refs/heads/main|refs/tags/v.+)\Z")
+OIDC_JWKS_TTL_SECONDS = 3600
+_jwks_lock = threading.Lock()
+_jwks_cache: dict[str, object] = {"keys": [], "at": float("-inf")}
+
+
+def _b64url_decode(segment: str) -> bytes:
+    padded = segment + "=" * (-len(segment) % 4)
+    return base64.urlsafe_b64decode(padded.encode("ascii"))
+
+
+def _fetch_github_jwks() -> list[dict]:
+    now = time.monotonic()
+    with _jwks_lock:
+        if (
+            now - float(_jwks_cache["at"]) < OIDC_JWKS_TTL_SECONDS
+            and _jwks_cache["keys"]
+        ):
+            return list(_jwks_cache["keys"])  # type: ignore[arg-type]
+    with urllib.request.urlopen(GITHUB_OIDC_JWKS_URL, timeout=10) as resp:
+        doc = json.loads(resp.read().decode("utf-8"))
+    keys = doc.get("keys")
+    if not isinstance(keys, list) or not keys:
+        raise ValueError("GitHub OIDC JWKS returned no keys")
+    with _jwks_lock:
+        _jwks_cache["keys"] = keys
+        _jwks_cache["at"] = now
+    return keys
+
+
+def _verify_rs256_jwk(signing_input: bytes, signature: bytes, jwk: dict) -> bool:
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
+    if jwk.get("kty") != "RSA":
+        return False
+    n = int.from_bytes(_b64url_decode(str(jwk["n"])), "big")
+    e = int.from_bytes(_b64url_decode(str(jwk["e"])), "big")
+    public_key = rsa.RSAPublicNumbers(e, n).public_key()
+    try:
+        public_key.verify(signature, signing_input, padding.PKCS1v15(), hashes.SHA256())
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def verify_github_oidc_token(
+    auth_header: str,
+    *,
+    now=time.time,
+    jwks_fetcher=None,
+) -> tuple[bool, str, dict]:
+    """Verify a GitHub Actions OIDC Bearer token for production deploys (#1126)."""
+    if jwks_fetcher is None:
+        jwks_fetcher = _fetch_github_jwks
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return (
+            False,
+            "Production deploy requires a GitHub Actions OIDC Bearer token",
+            {},
+        )
+    token = auth_header.removeprefix("Bearer ").strip()
+    parts = token.split(".")
+    if len(parts) != 3:
+        return False, "Malformed OIDC token", {}
+    try:
+        header = json.loads(_b64url_decode(parts[0]).decode("utf-8"))
+        claims = json.loads(_b64url_decode(parts[1]).decode("utf-8"))
+        signature = _b64url_decode(parts[2])
+    except Exception:  # noqa: BLE001
+        return False, "Malformed OIDC token encoding", {}
+    if not isinstance(header, dict) or not isinstance(claims, dict):
+        return False, "Malformed OIDC token claims", {}
+    if header.get("alg") != "RS256" or not header.get("kid"):
+        return False, "Unsupported OIDC token algorithm or missing kid", {}
+
+    try:
+        keys = jwks_fetcher()
+    except Exception as exc:  # noqa: BLE001
+        return False, f"OIDC JWKS fetch failed: {exc}", {}
+
+    kid = str(header["kid"])
+    jwk = next(
+        (k for k in keys if isinstance(k, dict) and str(k.get("kid")) == kid), None
+    )
+    if jwk is None:
+        return False, "OIDC signing key not found in GitHub JWKS", {}
+
+    signing_input = f"{parts[0]}.{parts[1]}".encode("ascii")
+    if not _verify_rs256_jwk(signing_input, signature, jwk):
+        return False, "Invalid OIDC token signature", {}
+
+    current_time = float(now())
+    exp = claims.get("exp")
+    if not isinstance(exp, (int, float)) or current_time >= float(exp):
+        return False, "OIDC token has expired", {}
+    nbf = claims.get("nbf")
+    if isinstance(nbf, (int, float)) and current_time + 30 < float(nbf):
+        return False, "OIDC token is not yet valid", {}
+    if claims.get("iss") != GITHUB_OIDC_ISSUER:
+        return False, f"Unexpected OIDC issuer: {claims.get('iss')!r}", {}
+    aud_claim = claims.get("aud")
+    aud_ok = (
+        aud_claim == OIDC_ALLOWED_AUDIENCE
+        if isinstance(aud_claim, str)
+        else (
+            isinstance(aud_claim, list)
+            and OIDC_ALLOWED_AUDIENCE in [str(a) for a in aud_claim]
+        )
+    )
+    if not aud_ok:
+        return (
+            False,
+            f"Unexpected OIDC audience: {aud_claim!r} (expected {OIDC_ALLOWED_AUDIENCE!r})",
+            {},
+        )
+    if claims.get("repository") != OIDC_ALLOWED_REPO:
+        return False, f"Unexpected OIDC repository: {claims.get('repository')!r}", {}
+    if claims.get("environment") != "production":
+        return (
+            False,
+            f"OIDC token environment must be 'production', got {claims.get('environment')!r}",
+            {},
+        )
+    ref_claim = str(claims.get("ref") or "")
+    if not OIDC_REF_RE.fullmatch(ref_claim):
+        return (
+            False,
+            f"OIDC token ref {ref_claim!r} does not match refs/heads/main or refs/tags/v*",
+            {},
+        )
+    return True, "", claims
 
 
 def validate_deploy_ref(ref: str | None) -> str | None:
@@ -543,6 +684,15 @@ def version_deploy():
         return jsonify({"error": "Invalid env (must be staging or production)"}), 400
 
     services = payload.get("services")
+    if env == "production":
+        oidc_ok, oidc_err, oidc_claims = verify_github_oidc_token(
+            request.headers.get("Authorization", "")
+        )
+        if not oidc_ok:
+            return jsonify({"error": oidc_err}), 403
+        actor = str(oidc_claims.get("actor") or "").strip()
+        if actor and triggered_by in ("unknown", "deploy_v2"):
+            triggered_by = f"github-oidc:{actor}"
     if services is not None:
         if not isinstance(services, list) or not all(
             isinstance(s, str) for s in services
