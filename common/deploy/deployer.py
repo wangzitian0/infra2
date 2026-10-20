@@ -30,10 +30,7 @@ from common.console import (
 )
 from common.deploy.config_hash import (
     _artifact_items_from_disk,
-    _compose_artifact_files,
-    _compute_config_hash,
     _dependency_items_from_globs,
-    _repo_rel,
     config_hash_from_items,
 )
 from common.deploy.discovery import (
@@ -77,12 +74,9 @@ __all__ = [
     "SyncAction",
     "SyncResult",
     "_artifact_items_from_disk",
-    "_compose_artifact_files",
-    "_compute_config_hash",
     "_dependency_items_from_disk",
     "_parse_env_text",
     "_preserve_runtime_env",
-    "_repo_rel",
     "config_hash_from_items",
     "discover_services",
     "load_deployer_class",

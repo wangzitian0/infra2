@@ -88,6 +88,10 @@ def _compute_config_hash(
     return hashlib.sha256(combined.encode()).hexdigest()[:12]
 
 
+def _is_transient_file(path: Path) -> bool:
+    return "__pycache__" in path.parts or path.name.endswith((".pyc", ".pyo"))
+
+
 def _iter_path_files(path: Path) -> list[Path]:
     if path.is_file():
         return [path]
@@ -96,9 +100,7 @@ def _iter_path_files(path: Path) -> list[Path]:
     return sorted(
         child
         for child in path.rglob("*")
-        if child.is_file()
-        and "__pycache__" not in child.parts
-        and not child.name.endswith((".pyc", ".pyo"))
+        if child.is_file() and not _is_transient_file(child)
     )
 
 
@@ -325,23 +327,27 @@ def _artifact_items_from_disk(
     ]
 
 
+def _dependency_paths_from_globs(
+    globs: Iterable[str] = (), root: Path = _REPO_ROOT
+) -> list[Path]:
+    """Resolved non-transient files matching declared build/config dependency globs."""
+    matched: set[Path] = set()
+    for pattern in globs:
+        for hit in _glob.glob(str(root / pattern), recursive=True):
+            p = Path(hit)
+            if p.is_file() and not _is_transient_file(p):
+                matched.add(p.resolve())
+    return sorted(matched)
+
+
 def _dependency_items_from_globs(
     globs: Iterable[str] = (),
 ) -> list[tuple[str, bytes]]:
     """(repo-relative label, content) for declared build/config dependency globs."""
-    matched: set[Path] = set()
-    for pattern in globs:
-        for hit in _glob.glob(str(_REPO_ROOT / pattern), recursive=True):
-            p = Path(hit)
-            # Exclude transient __pycache__/.pyc/.pyo (mirrors _iter_path_files).
-            if (
-                p.is_file()
-                and "__pycache__" not in p.parts
-                and not p.name.endswith((".pyc", ".pyo"))
-            ):
-                matched.add(p.resolve())
-
-    return [(_repo_rel(path), path.read_bytes()) for path in sorted(matched)]
+    return [
+        (_repo_rel(path), path.read_bytes())
+        for path in _dependency_paths_from_globs(globs)
+    ]
 
 
 __all__ = [
@@ -350,7 +356,9 @@ __all__ = [
     "_compose_has_build",
     "_compute_config_hash",
     "_dependency_items_from_globs",
+    "_dependency_paths_from_globs",
     "_dockerfile_copy_sources",
+    "_is_transient_file",
     "_iter_path_files",
     "_repo_rel",
     "_resolve_build_relative",

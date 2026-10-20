@@ -374,7 +374,7 @@ services:
 
 
 def test_compose_artifact_files_handles_json_copy_and_bind_mounts(tmp_path) -> None:
-    from common.deploy.deployer import _compose_artifact_files
+    from common.deploy.config_hash import _compose_artifact_files
 
     app_dir = tmp_path / "app"
     app_dir.mkdir()
@@ -409,7 +409,7 @@ services:
 
 
 def test_compose_artifact_files_ignores_invalid_yaml(tmp_path) -> None:
-    from common.deploy.deployer import _compose_artifact_files
+    from common.deploy.config_hash import _compose_artifact_files
 
     compose = tmp_path / "compose.yaml"
 
@@ -1581,7 +1581,7 @@ def test_record_timeout_and_interval_honor_env_overrides(monkeypatch):
 
 def test_config_hash_counts_a_value_that_became_empty() -> None:
     """A variable flipping from a value to "" changes the container env; the hash must move."""
-    from common.deploy.deployer import _compute_config_hash
+    from common.deploy.config_hash import _compute_config_hash
 
     with_value = _compute_config_hash("x: 1", {"A": "1", "B": "2"})
     emptied = _compute_config_hash("x: 1", {"A": "1", "B": ""})

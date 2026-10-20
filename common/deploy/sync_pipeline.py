@@ -22,6 +22,12 @@ logger = logging.getLogger(__name__)
 
 SOURCE_CONFIG_HASH_VERSION = "v1"
 EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
+_IDENTITY_FIELDS: tuple[tuple[str, str], ...] = (
+    ("identity_schema", "INFRA_IDENTITY_SCHEMA"),
+    ("managed_by", "INFRA_MANAGED_BY"),
+    ("service_id", "INFRA_SERVICE_ID"),
+    ("environment", "INFRA_ENVIRONMENT"),
+)
 
 
 class SyncAction:
@@ -348,12 +354,7 @@ class SyncPipeline:
         ] == source_hash and bool(EXACT_COMMIT_RE.fullmatch(remote_ref))
         remote_service_identity_valid = all(
             remote_identity.get(remote_key) == expected_deploy_identity[env_key]
-            for remote_key, env_key in (
-                ("identity_schema", "INFRA_IDENTITY_SCHEMA"),
-                ("managed_by", "INFRA_MANAGED_BY"),
-                ("service_id", "INFRA_SERVICE_ID"),
-                ("environment", "INFRA_ENVIRONMENT"),
-            )
+            for remote_key, env_key in _IDENTITY_FIELDS
         )
 
         if (
@@ -509,12 +510,7 @@ class SyncPipeline:
                 "IAC_DEPLOY_REF "
                 f"expected {deploy_ref}, got {effective_identity['deploy_ref'] or 'none'}"
             )
-        for remote_key, env_key in (
-            ("identity_schema", "INFRA_IDENTITY_SCHEMA"),
-            ("managed_by", "INFRA_MANAGED_BY"),
-            ("service_id", "INFRA_SERVICE_ID"),
-            ("environment", "INFRA_ENVIRONMENT"),
-        ):
+        for remote_key, env_key in _IDENTITY_FIELDS:
             expected_val = expected_deploy_identity[env_key]
             if effective_identity.get(remote_key) != expected_val:
                 identity_mismatches.append(
