@@ -183,4 +183,3 @@ def test_required_tag_and_empty_local_build_tag_are_allowed():
         "    image: ghcr.io/wangzitian0/truealpha-data-engine@${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?IMAGE_DIGEST is required}}\n"
     )
     assert lint.find_default_tag_violations(good) == []
-

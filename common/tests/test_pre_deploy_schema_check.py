@@ -729,4 +729,3 @@ def test_migration_floor_blocks_when_applied_migration_is_older_than_required() 
     assert "migration_floor (0037)" in failures[0]
     assert "0035" in failures[0]
     assert "read-only SELECT statement" in failures[1]
-

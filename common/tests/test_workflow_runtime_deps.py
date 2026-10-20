@@ -340,8 +340,7 @@ def test_workflows_outside_infra_ci_use_locked_or_frozen_on_uv_run_and_sync(
 ) -> None:
     """#1145: `uv run` and `uv sync` in workflows must carry `--locked` or `--frozen`
     so a stale `uv.lock` fails loudly instead of silently re-resolving."""
-    # Note: infra-ci.yml is in the permanent owner-held set and is updated in PR-B.
-    violations = _unlocked_uv_invocations(WORKFLOWS, skip_files={"infra-ci.yml"})
+    violations = _unlocked_uv_invocations(WORKFLOWS)
     assert violations == [], "Unlocked uv invocations:\n" + "\n".join(violations)
 
     # Mutation proof: an unlocked `uv run` in a synthetic workflow is caught.

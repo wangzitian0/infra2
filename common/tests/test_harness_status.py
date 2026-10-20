@@ -684,7 +684,9 @@ def test_infra2_row_sees_remote_tags_not_merged_into_local_head(tmp_path: Path) 
     staging v1.2.44 and marker 3 releases behind."""
     remote = tmp_path / "origin.git"
     checkout = tmp_path / "checkout"
-    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "init", "--bare", str(remote)], check=True, capture_output=True
+    )
     subprocess.run(["git", "init", str(checkout)], check=True, capture_output=True)
     subprocess.run(
         ["git", "-C", str(checkout), "config", "user.email", "test@example.com"],
@@ -750,4 +752,3 @@ def test_infra2_row_sees_remote_tags_not_merged_into_local_head(tmp_path: Path) 
         "production": "v1.2.41",
         "note": "marker 3 releases behind",
     }
-

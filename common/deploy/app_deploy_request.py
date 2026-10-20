@@ -281,7 +281,9 @@ def verify_app_manifests(
         try:
             body = fetch(url)
         except SystemExit as exc:
-            raise ValueError(f"failed to fetch manifest {upstream} from {url}: {exc}") from None
+            raise ValueError(
+                f"failed to fetch manifest {upstream} from {url}: {exc}"
+            ) from None
         actual_sha256 = hashlib.sha256(body).hexdigest() if body else ""
         if not body or actual_sha256 != expected_sha256:
             differing.append(path)
@@ -468,7 +470,9 @@ def query_serving_release(
 
     expected_source = APP_SOURCES.get(service)
     if expected_source is None:
-        raise ValueError(f"service {service!r} is not an app service with serving state")
+        raise ValueError(
+            f"service {service!r} is not an app service with serving state"
+        )
     norm_env = "prod" if environment in ("prod", "production") else environment
     if norm_env not in ("staging", "prod"):
         raise ValueError(

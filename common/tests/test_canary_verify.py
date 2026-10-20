@@ -67,9 +67,7 @@ def _canned_stdout(
     environment: str = "production",
 ) -> str:
     sdk_version = (
-        sdk
-        if sdk is not None
-        else _resolve_locked_sdk_version(environment=environment)
+        sdk if sdk is not None else _resolve_locked_sdk_version(environment=environment)
     )
     return (
         "=== STATUS ===\n"
@@ -1130,9 +1128,7 @@ def test_canary_verify_reads_expected_sdk_from_release_ref_uv_lock(tmp_path) -> 
     assert (
         _resolve_locked_sdk_version(environment="production", repo_root=repo) == "3.6.0"
     )
-    assert (
-        _resolve_locked_sdk_version(environment="staging", repo_root=repo) == "3.7.1"
-    )
+    assert _resolve_locked_sdk_version(environment="staging", repo_root=repo) == "3.7.1"
 
     # Production container serves 3.6.0 -> passes even though checkout uv.lock is 3.7.3
     prod_stdout = _canned_stdout(
@@ -1156,4 +1152,3 @@ def test_canary_verify_reads_expected_sdk_from_release_ref_uv_lock(tmp_path) -> 
     assert mutated_report.sdk.ok is False
     assert mutated_report.expected_sdk == "3.7.1"
     assert mutated_report.all_ok is False
-

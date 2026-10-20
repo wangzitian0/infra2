@@ -140,9 +140,7 @@ def wait_for_deployment(
                 dep_id = _deployment_id(latest_new) or "none"
                 last_status = str(latest_new.get("status") or "none")
                 created = (
-                    latest_new.get("createdAt")
-                    or latest_new.get("startedAt")
-                    or "none"
+                    latest_new.get("createdAt") or latest_new.get("startedAt") or "none"
                 )
                 raise TimeoutError(
                     "no new deployment reached a terminal status in the window "

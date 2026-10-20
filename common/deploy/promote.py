@@ -527,7 +527,12 @@ def _notify_rollback_event(
     rollback_notifier: Callable[[dict[str, Any]], None] | None = None,
 ) -> None:
     """Deliver an immediate rollback notification and never mask the deploy error (#722)."""
-    severity = "P0" if event.get("circuit_breaker_tripped") or event.get("manual_intervention_required") else "WARN"
+    severity = (
+        "P0"
+        if event.get("circuit_breaker_tripped")
+        or event.get("manual_intervention_required")
+        else "WARN"
+    )
     text = (
         f"[{severity}] Deploy rollback event for {event.get('service')} ({event.get('environment')})\n"
         f"- Reason: {event.get('reason')}\n"
@@ -535,7 +540,10 @@ def _notify_rollback_event(
         f"- Action: {event.get('action')}\n"
         f"- Manual intervention required: {bool(event.get('manual_intervention_required'))}"
     )
-    print(f"[AUDIT] rollback notification: {text.replace(chr(10), ' | ')}", file=sys.stderr)
+    print(
+        f"[AUDIT] rollback notification: {text.replace(chr(10), ' | ')}",
+        file=sys.stderr,
+    )
     if rollback_notifier is not None:
         try:
             rollback_notifier(event)
@@ -761,7 +769,9 @@ def _execute_dokploy_rollout(
             existing_env = {}
         previous_image_tag = existing_env.get("IMAGE_TAG")
         try:
-            previous_rollback_attempts = int(existing_env.get("ROLLBACK_ATTEMPTS") or "0")
+            previous_rollback_attempts = int(
+                existing_env.get("ROLLBACK_ATTEMPTS") or "0"
+            )
         except ValueError:
             previous_rollback_attempts = 0
 
