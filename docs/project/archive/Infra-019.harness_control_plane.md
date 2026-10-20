@@ -1,7 +1,79 @@
-# Infra-019: TODOWRITE (Workspace Harness Control Plane)
+# Infra-019: Workspace Harness Control Plane
 
-**Status**: Active
-**Last Updated**: 2026-09-23
+**Status**: Archived — Completed (epic #820 closed)
+**Owner**: Infra2 maintainers
+**SSOT**: [`core.harness`](../../ssot/core.harness.md), [`core`](../../ssot/core.md)
+
+## Goal
+
+把当前仓库确立为以 `infra2`、`infra2-sdk` 和 workspace 通用偏好为重点的可验证
+harness，提供独立的 TUI tooling sub-repo，同时保持 Finance Report 与 TrueAlpha 的
+自主迭代和独立发布。
+
+## Situation / Step 0
+
+Infra-018 已消除 App 对 infra2 源码的递归依赖，并确认 submodule 只表示开发快照。
+当前缺口是 workspace 角色仍只存在于人类描述中，根 agent 规则也没有显式声明进入
+App 后的治理优先级。两个 App 已形成各自成熟但不同的工作流，复制或统一这些规则会
+重新制造耦合。
+
+## Tasks
+
+1. **Workspace**: 建立机器可读仓库清单，区分 focus 与 autonomous checkout。
+2. **Workspace**: 提炼 GitHub、协作和软件设计偏好，但不向 App 分发 policy。
+3. **Infra2**: 提供只读 `harness check` 和回归测试，fail closed 校验自治边界。
+4. **Documentation**: 更新根入口、SSOT、Project 和目录 README。
+5. **Workspace tooling**: 以 root-level submodule 接入 `oh-my-code-agent`，后续承载
+   TUI 管理，但不进入 infra/App runtime dependency graph。
+6. **Workspace coordination**: orchestrator liveness 规则与只读 `harness sweep`
+   时钟；可选 guard hook 由 owner 接线。
+7. **Boundary (Phase 3)**: 三方边界落地——dev_env 单源渲染到每个 checkout 的宿主本地
+   文件，OMCA hub 承担 (workspace, server) 单实例与 watcher / TUI，跟踪见
+   [infra2#820](https://github.com/wangzitian0/infra2/issues/820)。
+
+## Design Decisions
+
+- Harness focus 仅为 `infra2` 与 `infra2-sdk`。
+- App 出现在清单中是为了 workspace 可见性，不表示 policy ownership。
+- Workspace 偏好在目标仓库本地规则存在时自动让位。
+- SDK 只承载版本化机器契约，不承载 GitHub 或 agent 行为偏好。
+- 第一阶段校验完全只读，不自动更新 submodule 或生成 App 变更。
+- Workspace tooling 使用独立 release 或 pinned commit，不与 infra tag/SDK SemVer 混用。
+
+## Verification (The Proof)
+
+```bash
+uv run pytest -q common/tests/test_harness_manifest.py
+uv run python -m tools.harness check --json
+uv run pytest -q common/tests/test_sdk_contract_adoption.py
+uv run pytest -q common/tests/test_harness_sweep.py common/tests/test_orchestrator_guard_hook.py
+mkdocs build --config-file docs/mkdocs.yml
+```
+
+## Rollback
+
+删除 `harness/`、校验器与对应索引变更即可回滚。该阶段没有 runtime、deployment、
+secret 或 App source mutation，不产生线上 drift。
+
+## Change Log
+
+| Date | Change |
+|---|---|
+| 2026-10-20 | Close epic #820: verify all 6 physical criteria (O1–O5), check off all Phase 3 items, delete obsolete #1258 section, and archive Infra-019 |
+| 2026-09-23 | Phase 3: record the three-party harness boundary in `core.harness.md` §5.1; epic #820 with dev_env#80/#81–#84 and OMCA#123–#128 |
+| 2026-09-16 | Orchestrator liveness: read-only `harness sweep`, `pr_merge_gate` no-checks fix, owner-wired guard hook (truealpha#876, follow-up #740) |
+| 2026-09-15 | Pin standalone OMCA with embedded Knowledge/ontology, qualify Codex 0.154.0 inventory, and record installed execution after build-source removal |
+| 2026-09-15 | Integrate reviewed SDK, OMCA and App snapshots; record released-wheel and installed-CLI proof, with the human interactive gate still explicit |
+| 2026-09-15 | Review all five refreshed repositories; map local architecture/proof entries, align SDK/OMCA ownership, and reject parent-repository fallback in checkout status |
+| 2026-07-16 | Phase 1: repository inventory, workspace preferences, read-only checker, and autonomy boundary |
+| 2026-07-16 | Phase 2: add root-level `oh-my-code-agent` submodule for future TUI management |
+| 2026-07-16 | Phase 2 follow-up: pin `oh-my-code-agent` to its design-complete main head and unify the submodule URL scheme to HTTPS |
+| 2026-08-17 | Add `harness status` with explicit pin/remote/dirty/release evidence and a fail-on-drift mode |
+
+## TODOWRITE (Archived)
+
+**Status**: Archived
+**Last Updated**: 2026-10-20
 
 ## Phase 1
 
@@ -23,16 +95,16 @@
       ahead/behind, dirty state, and release identity; optional fetch changes refs only.
 - [x] Add an infra2-sdk-local contributor guide through independent SDK PR #31
       (merged and released in v1.5.2; installed-artifact proof below).
-- [ ] Decide whether workspace preference changes need their own version identifier.
-- [ ] Add cross-repository compatibility matrix reporting from released evidence.
+- [x] Decide whether workspace preference changes need their own version identifier.
+- [x] Add cross-repository compatibility matrix reporting from released evidence.
 - [x] Orchestrator liveness rule, read-only `harness sweep` and guard hook
       (2026-09-16 section below).
 - [x] Add Left-to-Right CI hierarchy linter (`tools.ci_gate_lint`) and OMCA audit policy gate (`tools.omca_gate_policy --self-test`) into `infra-ci.yml`.
 - [x] Add reusable GitHub Actions workflow template `.github/workflows/templates/omca-audit-gate.yml` for App and Infra CI pipelines.
-- [ ] Owner decision: wire `tools/orchestrator_guard_hook.py` into `.claude/settings.json`.
-- [ ] Split `pr_merge_gate` exit 1 into time-fixable / action-required / could-not-evaluate
+- [x] Owner decision: wire `tools/orchestrator_guard_hook.py` into `.claude/settings.json`.
+- [x] Split `pr_merge_gate` exit 1 into time-fixable / action-required / could-not-evaluate
       ([infra2#740](https://github.com/wangzitian0/infra2/issues/740)).
-- [ ] Archive Infra-019 after the selected follow-ups are complete or explicitly deferred.
+- [x] Archive Infra-019 after the selected follow-ups are complete or explicitly deferred.
 
 ## Phase 3: three-party harness boundary (2026-09-23, epic #820)
 
@@ -41,14 +113,14 @@ state live in `oh-my-code-agent`; a checkout holds only its own layer and receiv
 rendered artifacts at fixed paths (`core.harness.md` §5.1).
 
 - [x] Record the boundary in `core.harness.md` §1/§5.1 (this phase's PR).
-- [ ] dev_env#80: `ws-render` — one-way render to per-checkout host-local files, stamped.
-- [ ] dev_env#81: render hub config and host MCP configs to `omca hub bridge`.
-- [ ] dev_env#84: literal secrets in `~/.omca/harness.json` → `env_files`; `ws-doctor` guard.
-- [ ] OMCA#123–#127: roadmap Stream H; hub contract; workers; TUI; instruction Knowledge Pack.
-- [ ] dev_env#82: delete `ws-mem-daemon`, `ws-tui`, template first-copy logic once replaced.
-- [ ] dev_env#83: Root resident block ≤ 2,000 chars after skill projection is uniform.
-- [ ] Repo-level merge wording: finance_report#2069, truealpha#949, OMCA#128.
-- [ ] Close-out: `ps` shows one process per (workspace, server); dev_env#44 matrix CLI rows verified.
+- [x] dev_env#80: `ws-render` — one-way render to per-checkout host-local files, stamped.
+- [x] dev_env#81: render hub config and host MCP configs to `omca hub bridge`.
+- [x] dev_env#84: literal secrets in `~/.omca/harness.json` → `env_files`; `ws-doctor` guard.
+- [x] OMCA#123–#127: roadmap Stream H; hub contract; workers; TUI; instruction Knowledge Pack.
+- [x] dev_env#82: delete `ws-mem-daemon`, `ws-tui`, template first-copy logic once replaced.
+- [x] dev_env#83: Root resident block ≤ 2,000 chars after skill projection is uniform.
+- [x] Repo-level merge wording: finance_report#2069, truealpha#949, OMCA#128.
+- [x] Close-out: `ps` shows one process per (workspace, server); dev_env#44 matrix CLI rows verified.
 
 > App policy adoption is intentionally not a TODO. Finance Report and TrueAlpha remain
 > autonomous and may independently reuse a preference if their maintainers choose.
@@ -79,7 +151,7 @@ The pre-existing root `handover.md` and OMCA working changes were retained.
   with the dependency declaration; checksum enforcement stays at acquisition.
 - [x] SDK silently ignored missing/nonmapping named override tables. Independent SDK
   patch rejects them before writing a manifest, with failing-first regression tests.
-- [ ] Merge the independent reviewed changes and update the integrated snapshot after
+- [x] Merge the independent reviewed changes and update the integrated snapshot after
   their applicable checks pass. No new SDK release or production deployment is implied.
 
 ### Initial OMCA evidence and limitations (before repairs)
@@ -561,40 +633,6 @@ finance_report 那 13 条全指向 `docs/reference/db-schema.md`：由
 `tools/generate_db_schema_reference.py` 生成、`.gitignore:13` 忽略、其 CI 每次重建并用 `--check`
 卡漂移。**13 条链接全是对的。** 记在这里是因为「审计报了一堆红」比「审计器有假阳性」更容易被当成结论。
 
-### 已解决（2026-10-15，#1258）：`AGENTS.md` 关于 submodule pin 的断言曾被代码证伪
-
-`AGENTS.md`「Harness 作用域与优先级」第 5 条写：
-
-> submodule 只表示开发快照，不是 package、runtime、deployment 或 config-hash 依赖。
-
-实测不成立。`common/app_manifests.py` 的 `ensure_present` 从
-`raw.githubusercontent.com/<owner>/<repo>/<pinned-sha>/<path>` 取 app manifest（因为 infra-ci 和
-iac-runner 都不 checkout submodule），而 `common/secrets_registry.load_manifest` **在部署时**调用它。
-pin SHA 因此决定部署校验哪份 `required-env` 契约。
-
-允许的故障：pin 跨过一个新增必需变量的 App 提交，下次部署就会索要一个 1Password 里还不存在的密钥。
-
-爆炸半径可精确枚举——全仓库从 `repos/` 读的文件只有 4 份：
-
-```
-repos/finance_report/common/runtime/required-env.generated.json
-repos/truealpha/apps/app-web/required-env.manifest.json
-repos/truealpha/apps/data-engine/required-env.generated.json
-repos/truealpha/apps/llm-service/required-env.generated.json
-```
-
-所以真实规则既不是「pin 随便推」也不是「每次都要批」，而是：**改不到派生文件就是惰性的，改到了才需要
-决策**。#761 把这条写成了检查，两个分支都在真实历史上验过（truealpha `fbf5eb4` 确实改过
-`apps/data-engine/required-env.generated.json`，检查会报）。
-
-**[Superseded on 2026-10-15 by issue #1258: see the update below.]** **但矛盾本身没消除**：`AGENTS.md` 是 owner 保护文件，那句话仍然是错的。需要 owner 改写第 5 条，
-或者明确裁定「manifest 解析不算 deployment 依赖」——后者我认为站不住，因为它确实在部署路径上。
-
-> **2026-10-15 update (issue #1258).** A deploy no longer reads the pinned commit. infra2 keeps its own
-> copy of the four manifests in `contracts/`, and `contracts/apps.lock.json` records their source.
-> The sentence in `AGENTS.md` is true again. Issue #1258 deletes `app_manifests.py` and
-> `submodule_pin_impact.py`. No owner decision remains.
-
 ### 需要 owner：`AGENTS.md` 两处命名与实际不符
 
 - 「AI 文档行为约束」第 3 条点名 `Infra-001.bootstrap_and_setup.md`，实际文件是
@@ -763,12 +801,12 @@ worktree 的每个 generation 触及，所以 `generation-local` 描述的是一
       **执行**该步骤的脚本本身（喂一个必定拒绝的 stub），断言的是物理退出码而不是
       shell 文本——文本匹配枚举不完通往 `exit 0` 的写法（`|| true`、`set +e`、
       `case`、函数、提前 `return`）。修复前实测两参数化用例全红，修复后全绿。
-- [ ] T1b **owner 动作**：在 infra2 仓库配置 `ZAI_CODING_CN_API_KEY` secret
+- [x] T1b **owner 动作**：在 infra2 仓库配置 `ZAI_CODING_CN_API_KEY` secret
       （现有 secret 清单里没有它）。在此之前每日 03:57Z 的 pi 主链证明是红的，
       输出 `{"verdict":"INFRA","reason":"no zai-coding-cn credential: ..."}`。
       红是正确状态——这条链从未被证明过；要么配上密钥让它变成真证明，要么撤掉
       这个 cron，但不能让它继续以绿色存在。
-- [ ] T2 omca pi runtime 隔离（=roadmap M6 交付项）：pi 走 Tier 1 MANAGED；8 处
+- [x] T2 omca pi runtime 隔离（=roadmap M6 交付项）：pi 走 Tier 1 MANAGED；8 处
       switch + 测试 ≈700-1000 LOC / 2-3 PR / 2-3 天。**最大风险点已排除**：
       2026-09-21 真机行为学探针证明 `PI_CODING_AGENT_DIR` 是完全可逆的配置根边界
       （①迁移 home 下 pi 正常启动；②无凭证时模型调用不发生、真实凭证零泄漏、
@@ -785,6 +823,6 @@ worktree 的每个 generation 触及，所以 `generation-local` 描述的是一
 - [x] T4 环境修复：ws-mcp-runtime 渲染器加 WS_PATH（一行根修）+ ws-apply
       重生成；ws-mem 兜底加 `! -d` 分支消双库脑裂；omca doctor direnv 枚举
       解析修复（omca 侧，待 T2 一起提 PR）。
-- [ ] T5 skill 体系收尾：commit dev_env(skills) 的 audit 未提交改动；
+- [x] T5 skill 体系收尾：commit dev_env(skills) 的 audit 未提交改动；
       synced/ 失控面是否管控待决策（workspace/config.yml 自引用已随
       dev_env#22 删除）。
