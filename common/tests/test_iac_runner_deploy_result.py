@@ -2363,3 +2363,28 @@ def test_production_deploy_requires_valid_github_oidc_token(monkeypatch) -> None
     body, status_code = webhook_server.version_deploy()
     assert status_code == 202
     assert body["triggered_by"] == "github-oidc:wangzitian0"
+
+
+def test_sync_runner_own_dir_services_matches_service_key_from_path(
+    monkeypatch,
+) -> None:
+    """`sync_runner._own_dir_services` fallback must agree with `common.deploy.dependencies.service_key_from_path` across all service roots."""
+    from common.deploy.dependencies import service_key_from_path
+
+    sync_runner = _load_module(
+        "sync_runner_own_dir_parity", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
+    sample_paths = [
+        "platform/12.alerting/compose.yaml",
+        "finance_report/finance_report/01.app/compose.yaml",
+        "finance_report/finance_report/preview/compose.yaml",
+        "truealpha/truealpha/01.app/compose.yaml",
+        "truealpha/truealpha/preview/compose.yaml",
+        "bootstrap/06.iac_runner/compose.yaml",
+        "bootstrap/templates/vault-agent.compose.yaml",
+        "common/deploy/config_hash.py",
+        "tools/deploy_v2.py",
+    ]
+    for path in sample_paths:
+        expected = {k for k in (service_key_from_path(path),) if k is not None}
+        assert sync_runner._own_dir_services([path]) == expected, path
