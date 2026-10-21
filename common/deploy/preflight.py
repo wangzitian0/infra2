@@ -21,6 +21,7 @@ from infra2_sdk.secrets import vault_token_status
 from common.core.constants import REPO_ROOT
 from common.deploy.contract import DeployTarget, is_tag_only_iac_env
 from common.deploy.env_config import env_config
+from common.deploy.env_util import _parse_env_text
 
 _INFRA2_REPO = "https://github.com/wangzitian0/infra2"
 _DEFAULT_IMAGE_WAIT_SECONDS = 300.0
@@ -34,12 +35,8 @@ def parse_env_var(env_text: str | None, key: str) -> str | None:
 
     Returns None if absent or empty. Comments starting with '#' are ignored.
     """
-    for line in (env_text or "").splitlines():
-        line = line.strip()
-        if line.startswith(f"{key}=") and not line.startswith("#"):
-            val = line.split("=", 1)[1].strip()
-            return val if val else None
-    return None
+    val = _parse_env_text(env_text or "").get(key, "").strip()
+    return val or None
 
 
 def extract_vault_token_from_env(env_text: str | None) -> tuple[bool, str | None]:

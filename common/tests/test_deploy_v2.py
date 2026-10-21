@@ -895,7 +895,6 @@ def test_enforce_data_lane_snapshot_freshness_warning(monkeypatch, tmp_path, cap
     import logging
     from datetime import datetime, timezone, timedelta
     from common.deploy.contract import make_deploy_target
-    import common.deploy.v2 as dv2_mod
 
     old_time = (datetime.now(timezone.utc) - timedelta(days=8)).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
@@ -910,7 +909,7 @@ def test_enforce_data_lane_snapshot_freshness_warning(monkeypatch, tmp_path, cap
         iac_ref=SHA_IAC,
     )
     with monkeypatch.context() as m:
-        orig_path = dv2_mod.Path
+        orig_path = _preflight.Path
 
         def fake_path(p):
             return (
@@ -919,7 +918,6 @@ def test_enforce_data_lane_snapshot_freshness_warning(monkeypatch, tmp_path, cap
                 else orig_path(p)
             )
 
-        m.setattr(dv2_mod, "Path", fake_path)
         m.setattr(_preflight, "Path", fake_path)
         with caplog.at_level(logging.WARNING, logger="deploy_v2"):
             lane = enforce_data_lane_red_lines(target)

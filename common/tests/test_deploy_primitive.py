@@ -1602,8 +1602,24 @@ def test_verify_public_health_accepts_healthy_status_from_fastapi_init_service()
 def test_promote_reuses_dokploy_adapter_deployment_ids_ssot():
     """SSOT guard: promote and preview share dokploy_adapter.deployment_ids rather than
     maintaining duplicate _dep_id / _deployment_ids helpers."""
-    from common.deploy import dokploy_adapter, preview
+    from common.deploy import dokploy_adapter, preview, release_markers, v2
 
     assert dp._deployment_ids is dokploy_adapter.deployment_ids
     assert preview._deployment_ids is dokploy_adapter.deployment_ids
+    assert dp.await_effective_config_hash is dokploy_adapter.await_effective_config_hash
     assert not hasattr(dp, "_dep_id")
+    assert not hasattr(dp, "_started_before")
+    assert not hasattr(dokploy_adapter, "_TERMINAL_SUCCESS_STATUSES")
+    assert not hasattr(release_markers, "_SEMVER_TAG_RE")
+    assert "Path" not in v2.__all__
+
+
+def test_parse_remote_config_identity_ignores_commented_env_lines():
+    """SSOT guard: dokploy_adapter.parse_remote_config_identity uses _parse_env_text
+    so '#' comment lines are ignored consistently across all .env parsers."""
+    from common.deploy.dokploy_adapter import parse_remote_config_identity
+
+    identity = parse_remote_config_identity(
+        {"env": "# IAC_CONFIG_HASH=commented\nIAC_CONFIG_HASH=active-hash\n"}
+    )
+    assert identity["runtime_hash"] == "active-hash"

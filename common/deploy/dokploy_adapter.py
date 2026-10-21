@@ -11,6 +11,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from common.deploy.env_util import _parse_env_text
 from common.deploy.rollout import (
     TERMINAL_SUCCESS_STATUSES,
     RolloutError,
@@ -20,7 +21,6 @@ from common.deploy.rollout import (
 logger = logging.getLogger(__name__)
 
 _CLOCK_SKEW_TOLERANCE_SECONDS = 5
-_TERMINAL_SUCCESS_STATUSES = TERMINAL_SUCCESS_STATUSES
 
 
 def deployment_ids(deployments: list[dict]) -> set[str]:
@@ -74,7 +74,7 @@ def wait_for_new_deployment_record(
     *,
     min_started_at: float | None = None,
     start_epoch_fn: Callable[[dict], float | None] | None = None,
-    terminal_success_statuses: frozenset[str] = _TERMINAL_SUCCESS_STATUSES,
+    terminal_success_statuses: frozenset[str] = TERMINAL_SUCCESS_STATUSES,
 ) -> bool:
     """Wait for new deployment record to finish with a terminal status.
 
@@ -310,21 +310,10 @@ def parse_remote_config_identity(existing: dict | None) -> dict[str, str | None]
             "service_id": None,
             "environment": None,
         }
-    env_str = existing.get("env", "")
-    values: dict[str, str] = {}
-    for line in env_str.split("\n"):
-        key, separator, value = line.partition("=")
-        if separator and key in {
-            "CONFIGURATION_SHA256",
-            "IAC_CONFIG_HASH",
-            "IAC_SOURCE_CONFIG_HASH",
-            "IAC_DEPLOY_REF",
-            "INFRA_IDENTITY_SCHEMA",
-            "INFRA_MANAGED_BY",
-            "INFRA_SERVICE_ID",
-            "INFRA_ENVIRONMENT",
-        }:
-            values[key] = value.strip()
+    values = {
+        key: value.strip()
+        for key, value in _parse_env_text(existing.get("env", "")).items()
+    }
     return {
         "runtime_hash": values.get("CONFIGURATION_SHA256")
         or values.get("IAC_CONFIG_HASH"),
@@ -342,9 +331,12 @@ def await_effective_config_hash(
     expected_hash: str,
     timeout_seconds: int,
     interval_seconds: int,
+    *,
+    _sleep=time.sleep,
+    _now=time.monotonic,
 ) -> str | None:
     """Poll Dokploy effective IAC_CONFIG_HASH until it matches expected hash."""
-    deadline = time.monotonic() + timeout_seconds
+    deadline = _now() + max(0, timeout_seconds)
     interval = max(1, interval_seconds)
     last_value: str | None = None
     last_error: Exception | None = None
@@ -356,11 +348,11 @@ def await_effective_config_hash(
             last_error = exc
         if last_value == expected_hash:
             return last_value
-        if time.monotonic() >= deadline:
+        if _now() >= deadline:
             if last_value is None and last_error is not None:
                 raise last_error
             return last_value
-        time.sleep(interval)
+        _sleep(interval)
 
 
 def ensure_compose_domains(

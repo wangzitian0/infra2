@@ -352,3 +352,17 @@ def test_run_schema_gate_sanitizes_db_credentials_on_missing_rollback_class() ->
     err_msg = str(exc_info.value)
     assert "leak_secret_pw" not in err_msg
     assert "postgresql://user:******@db.internal:5432/app" in err_msg
+
+
+def test_enum_sources_single_source_matches_backend_image_repository() -> None:
+    """SSOT guard: tools/pre_deploy_schema_check.py is the single source of EnumSource/ENUM_SOURCES
+    with no duplicate common.deploy.enum_sources module or dual-definition fallback."""
+    from tools import pre_deploy_schema_check as check
+
+    assert set(sg._BACKEND_IMAGE_REPOSITORY) == set(check.ENUM_SOURCES)
+    assert not (
+        Path(__file__).resolve().parents[1] / "deploy" / "enum_sources.py"
+    ).exists()
+    script_text = sg._SCHEMA_CHECK_SCRIPT.read_text(encoding="utf-8")
+    assert script_text.count("class EnumSource") == 1
+    assert "common.deploy.enum_sources" not in script_text
