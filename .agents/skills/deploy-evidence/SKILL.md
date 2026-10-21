@@ -35,7 +35,7 @@ Authorize production deployment of vX.Y.Z? (Reply "deploy" to authorize, or "hol
 ```
 
 ### Phase 3: Prod Promote Dispatch
-A "deploy" covers only the tag it names. Immediately before dispatch, get a live reply from the owner in this session; an earlier or asynchronous answer is not enough. Then trigger the official promote:
+A "deploy" covers only the tag it names. Immediately before dispatch, get a live reply from the owner in this session; an earlier or asynchronous answer is not enough. The Root section `Production reservation` defines this step. Then trigger the official promote:
 ```bash
 gh workflow run reconcile-iac-inputs.yml -f promote_prod=true -f after=vX.Y.Z
 gh run watch <run-id>
