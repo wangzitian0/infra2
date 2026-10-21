@@ -227,6 +227,13 @@ App 不再 checkout/执行 infra2。发送 `repository_dispatch` type `app-deplo
 4. The receiver selects `iac_ref`: for staging, the newest `vX.Y.Z` tag that `HEAD` contains; for production,
    the newest `production/v*` marker that `HEAD` contains. It fails closed when the marker is missing or
    older than `MINIMUM_PRODUCTION_MARKER`. An App does not pin an infra submodule.
+   **Order for a production App release that needs a newer infra2** (infra2#1320): merge the infra2 change,
+   cut the release tag, run `Reconcile IaC Inputs` with `promote_prod=true`, and wait until it succeeds and
+   `production/<tag>` exists (`git ls-remote --tags origin 'production/*'`). Then dispatch the App production
+   deploy. The promotion creates the marker when it ends, and the receiver does not wait for a promotion in
+   progress: a dispatch before the marker exists runs at the previous marker. The manifest preflight then
+   refuses the request, names the missing variable, and says that infra2 main already supplies it. An App
+   release that needs nothing newer than the current marker can be dispatched at once.
 5. **只有 prod 先跑同坐标 canary**；通过后才调用既有 `deploy_v2`，Dokploy/Vault 凭据只存在于 infra2。
    staging 不再 canary（truealpha#860）：staging 部署本身就证明了该坐标——`--expected-sha` 钉住
    `version_ref`、只接受 on-main release tag、等镜像发布、promote 后等新 rollout 记录 / 推送的 config hash /
