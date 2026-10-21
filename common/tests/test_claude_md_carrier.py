@@ -50,9 +50,7 @@ def test_agents_md_is_committed_as_a_regular_file() -> None:
     agents_path = ROOT / TARGET
     assert agents_path.is_file()
     assert not agents_path.is_symlink()
-    assert agents_path.read_text(encoding="utf-8").strip(), (
-        "AGENTS.md is empty."
-    )
+    assert agents_path.read_text(encoding="utf-8").strip(), "AGENTS.md is empty."
 
 
 def test_claude_md_is_absent_so_native_agents_md_loads() -> None:
