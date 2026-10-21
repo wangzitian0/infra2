@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=797e68ffcef69540e14a2eb80050fd999206c4440b3870385f9efd1121ae016c -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=f08dda4819a096b0a0e27dd35a561f8d5fd08817ab3cebc4a9a455d198b0ee97 -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -64,7 +64,7 @@ This repository is both the implementation/deployment control plane for `infra2`
 4. **Preferences are not cross-repository commands:** Default GitHub, collaboration, and design preferences live in [`harness/workspace/`](harness/workspace/). More specific rules in the target repository prevail.
 5. **Dependency boundary:** A submodule is a development snapshot, not a package, runtime, deployment, or configuration-hash dependency. Stable cross-repository code contracts travel only through a published `infra2-sdk` version.
 6. **Submodule development boundary:** Submodule checkouts in `repos/` and `oh-my-code-agent/` must remain detached or on tracked commits matching parent pins. Develop submodule changes in independent checkouts or worktrees outside the harness working tree.
-7. **Canary role:** Canary deployments (`tools/deploy_v2_canary.py`) are ephemeral on-demand sandboxes for immediate route and alert verification. Canary is not a persistent background daemon or recurring cron job. Do not schedule continuous background runs for Canary.
+7. **Canary role:** This repository is the first consumer and Canary proving ground for released `infra2-sdk` versions before downstream adoption. Canary deployments (`tools/deploy_v2_canary.py`) are ephemeral on-demand sandboxes for immediate route and alert verification. Canary is not a persistent background daemon or recurring cron job. Do not schedule continuous background runs for Canary.
 
 ## Core mandatory principles (SSOT first)
 
@@ -102,6 +102,7 @@ Full procedures are in [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.
 
 | Task | Read |
 |---|---|
+| Read architectural charter, Canary SDK role, and IaC layer boundaries | [`init.md`](init.md) |
 | Overall engineering overview and quick start | [`README.md`](README.md) |
 | Open a PR, decide merge readiness, or merge | [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.md) |
 | Write code/docs, split tasks with STAR, or apply operating principles | [`docs/ssot/core.engineering.md`](docs/ssot/core.engineering.md) |
@@ -109,6 +110,4 @@ Full procedures are in [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.
 | Find the current task | [`docs/project/README.md`](docs/project/README.md) |
 | Integrate an App or onboard | [`docs/onboarding/README.md`](docs/onboarding/README.md) |
 | Change an infrastructure layer | Its README: [bootstrap](bootstrap/README.md), [platform](platform/README.md), [tools](tools/README.md), or [common](common/README.md) |
-
-`CLAUDE.md` is a committed symlink to `AGENTS.md` (`common/tests/test_claude_md_carrier.py`); edit rules only in `dev_env`.
 <!-- WS_STATIC_END -->

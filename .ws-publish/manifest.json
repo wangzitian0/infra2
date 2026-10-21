@@ -2,14 +2,13 @@
   "adapter": "rules-v2",
   "dirty_inputs": [],
   "inputs": {
-    "repo": "7937da1e8d0e1b3fce513df080d3471cdce11551b5018c5ad26edd131e6a0e73",
+    "repo": "855f3b41d6c7636f642980a96a0bdad2e33a848d8a4021619256b3e011dc2dd1",
     "root": "d91df5b3ff6c9678bf9ea25f58b9728ea4fa9419900713497be8a5becc786da8",
-    "skills": "988822cc5cff0a4f1b4537fa3ae06d9babd8cff85d6f0e2fd7212d1ca80cff60"
+    "skills": "0b99c42ee59b81254adb2715d352c2acc37b311ed8d631501f4b52d39854a0d7"
   },
   "language": "en",
   "outputs": {
-    "AGENTS.md": "d3b9caf69b0ed929d36d05417682eed0323790f90ad09f74b6f31d3c9e7a8d01",
-    "CLAUDE.md": "a54ff182c7e8acf56acfd6e4b9c3ff41e2c41a31c9b211b2deb9df75d9a478f9"
+    "AGENTS.md": "37a9f235b0b42823364379b96ae64f88af8fad6cdb3c91963a471bfe152d6956"
   },
   "profiles": [
     "code",
@@ -20,8 +19,8 @@
   "skills": {
     "files": {
       ".agents/skills/audit/SKILL.md": "b44f42fe2b4ea18edc226eb75e085c9ea05e18ecd9ebf5464107db3c23283b20",
-      ".agents/skills/auto/SKILL.md": "3cacac83ebffe8076d7de2fcb6e9bf18264d9a8303e2b472d5b4a447705a5537",
-      ".agents/skills/close/SKILL.md": "45cbf9380244ac82415469f6e383f67a1ae6b5b452dcb9dfe5d9fb0ec097011c",
+      ".agents/skills/auto/SKILL.md": "cd4e73158230292951224f2a114a5ad623948292ba68337314dec0081304ee56",
+      ".agents/skills/close/SKILL.md": "fa2ba85b222a39d658a9a83ad5c2a4a6af0abbc38288a0b4040d07a5baf8e3c0",
       ".agents/skills/codegraph/SKILL.md": "bb51d25b290a1ef9df958b4343cfd408fd9f4a8968f68a2e86cd5c9bdd9b16a6",
       ".agents/skills/deploy-evidence/SKILL.md": "60c9027250b099c918c7ff1473b51a9bd28f41d2fe3ed5e3b1030238f43fd5f0",
       ".agents/skills/init/SKILL.md": "83cf2f4f84a9bcc2c2380da553b8e67de44bad43661eacfd42863e7e69ba34a1",
@@ -30,10 +29,10 @@
       ".agents/skills/smoke/SKILL.md": "a672eeeb5cf57eda86d4e4653dd7d019f34c7f6647b37311a6941f6fa92f0004",
       ".agents/skills/ssot/SKILL.md": "7b5fea426a1f0814de4c37c12741b3abca735795296ae8a57cf0056a5b34ad19",
       ".agents/skills/swarm/SKILL.md": "351c35a4799edbf06d06b7700f64b366b3feeee1973ec6fb1edfbd5e5075f1c0",
-      ".agents/skills/z/SKILL.md": "658e2d4c99b715ffb4de466d3819018f717155e280e5cc98c654c2a6db625bb9",
+      ".agents/skills/z/SKILL.md": "f15a77d6a57ee130d5daa83b1ef7bc94dab42ccd9bde58668f77f79b47ebc410",
       ".claude/skills/audit/SKILL.md": "b44f42fe2b4ea18edc226eb75e085c9ea05e18ecd9ebf5464107db3c23283b20",
-      ".claude/skills/auto/SKILL.md": "3cacac83ebffe8076d7de2fcb6e9bf18264d9a8303e2b472d5b4a447705a5537",
-      ".claude/skills/close/SKILL.md": "45cbf9380244ac82415469f6e383f67a1ae6b5b452dcb9dfe5d9fb0ec097011c",
+      ".claude/skills/auto/SKILL.md": "cd4e73158230292951224f2a114a5ad623948292ba68337314dec0081304ee56",
+      ".claude/skills/close/SKILL.md": "fa2ba85b222a39d658a9a83ad5c2a4a6af0abbc38288a0b4040d07a5baf8e3c0",
       ".claude/skills/codegraph/SKILL.md": "bb51d25b290a1ef9df958b4343cfd408fd9f4a8968f68a2e86cd5c9bdd9b16a6",
       ".claude/skills/deploy-evidence/SKILL.md": "60c9027250b099c918c7ff1473b51a9bd28f41d2fe3ed5e3b1030238f43fd5f0",
       ".claude/skills/init/SKILL.md": "83cf2f4f84a9bcc2c2380da553b8e67de44bad43661eacfd42863e7e69ba34a1",
@@ -42,7 +41,7 @@
       ".claude/skills/smoke/SKILL.md": "a672eeeb5cf57eda86d4e4653dd7d019f34c7f6647b37311a6941f6fa92f0004",
       ".claude/skills/ssot/SKILL.md": "7b5fea426a1f0814de4c37c12741b3abca735795296ae8a57cf0056a5b34ad19",
       ".claude/skills/swarm/SKILL.md": "351c35a4799edbf06d06b7700f64b366b3feeee1973ec6fb1edfbd5e5075f1c0",
-      ".claude/skills/z/SKILL.md": "658e2d4c99b715ffb4de466d3819018f717155e280e5cc98c654c2a6db625bb9"
+      ".claude/skills/z/SKILL.md": "f15a77d6a57ee130d5daa83b1ef7bc94dab42ccd9bde58668f77f79b47ebc410"
     },
     "link_dirs": [
       ".claude/skills"
@@ -50,7 +49,7 @@
     "links": {},
     "root": ".agents/skills"
   },
-  "source_revision": "a33508d97a727b9cca34c432b46af28951458e78",
+  "source_revision": "f903db60239a350f8592e493d6d6fe8566611d0d",
   "target": {
     "remote": "github.com/wangzitian0/infra2",
     "repo": "infra2",

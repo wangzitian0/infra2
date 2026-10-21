@@ -20,6 +20,7 @@ repositories:
     release_identity: infra2-release-tag
     authority:
       - AGENTS.md
+      - init.md
       - docs/ssot/core.md
       - docs/ssot/core.harness.md
 
@@ -36,6 +37,8 @@ repositories:
     # through the published SDK artifact, per
     # core.harness.md §1 ("SDK 公共契约 | 已发布的 infra2-sdk SemVer artifact").
     authority:
+      - AGENTS.md
+      - init.md
       - README.md
       - pyproject.toml
 
