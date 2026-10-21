@@ -447,7 +447,9 @@ uv run python tools/fetch_app_manifests.py --verify                  # also comp
 uv run python tools/fetch_app_manifests.py --sync truealpha v0.2.0   # write the copies and the lock
 ```
 
-The steps to change an App contract are in
+The deploy receiver does not compare the bytes of these copies with a release. It compares the
+deploy contract: the variables that infra2 must supply (`common/deploy/app_contract.py`). A release
+that changes only plain `code` fields needs no sync. The steps to change an App contract are in
 [`bootstrap.vars_and_secrets`](../docs/ssot/bootstrap.vars_and_secrets.md).
 
 ## pi_chain_smoke.py (pi main-chain real-run proof)
