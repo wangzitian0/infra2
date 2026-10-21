@@ -289,13 +289,14 @@ def test_app_domain_override_does_not_leak_into_the_shared_control_plane_endpoin
 
 def test_truealpha_prod_deploy_resolves_its_own_compose_and_identity():
     # truealpha/app's production compose went live 2026-07-19 (Vault AppRole + app
-    # secret + MinIO bucket provisioned, postgres + app deployed and health-checked at
-    # https://truealpha.zitian.party) — mirrors the staging test above, prod env.
+    # secret + MinIO bucket provisioned, postgres + app deployed and health-checked).
+    # It serves on its own domain, as the receiver passes it (Deployer.domain) — mirrors
+    # the staging test above, prod env.
     client = FakeDokploy()
     plan = dp.deploy(
         "prod",
         FULL_SHA,
-        domain="zitian.party",
+        domain="truealpha.club",
         client=client,
         service="truealpha/app",
         staging_validated=True,
@@ -305,7 +306,7 @@ def test_truealpha_prod_deploy_resolves_its_own_compose_and_identity():
     assert plan.compose_id == "j-gIAk0GfF0bGOitZN-og"
     cid, env = client.updated[0]
     assert cid == "j-gIAk0GfF0bGOitZN-og"
-    assert env["NEXT_PUBLIC_APP_URL"] == "https://truealpha.zitian.party"
+    assert env["NEXT_PUBLIC_APP_URL"] == "https://truealpha.club"
     assert env["ENV_SUFFIX"] == ""
     assert env["INFRA_SERVICE_ID"] == "truealpha/app"
     assert env["INFRA_ENVIRONMENT"] == "production"
@@ -1297,6 +1298,37 @@ def test_deploy_with_wait_verifies_public_health_version_identity(monkeypatch):
         http_get=fake_http_get,
     )
     assert probed_urls == ["https://truealpha-staging.zitian.party/api/health"]
+
+
+def test_truealpha_prod_deploy_probes_the_host_that_traefik_routes(monkeypatch):
+    """Receiver run 39415761918 (production v0.2.30, 2026-10-20): the public health gate
+    probed https://truealpha.truealpha.club/api/health (HTTP 404, the host does not exist)
+    and rolled the release back. Production serves on the bare product domain. The probe
+    URL and NEXT_PUBLIC_APP_URL must be the APP_HOST that the compose routes."""
+    monkeypatch.setattr(dp.time, "sleep", lambda _s: None)
+    probed_urls: list[str] = []
+
+    def fake_http_get(url: str) -> tuple[int, str]:
+        probed_urls.append(url)
+        return 200, '{"status": "ok", "git_sha": "v0.0.42"}'
+
+    client = FakeDokploy(deployments=_rollout_done)
+    dp.deploy(
+        "prod",
+        FULL_SHA,
+        image_ref="v0.0.42",
+        domain="truealpha.club",
+        client=client,
+        service="truealpha/app",
+        staging_validated=True,
+        iac_ref="b" * 40,
+        wait=True,
+        http_get=fake_http_get,
+    )
+    _, env = client.updated[0]
+    assert env["APP_HOST"] == "truealpha.club"
+    assert env["NEXT_PUBLIC_APP_URL"] == "https://truealpha.club"
+    assert probed_urls == ["https://truealpha.club/api/health"]
 
 
 def test_deploy_with_wait_fails_closed_and_emits_snapshot_when_public_health_serves_stale_version(
