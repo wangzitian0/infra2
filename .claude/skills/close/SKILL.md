@@ -22,13 +22,15 @@ ws-delivery-status --assert-complete --reality-probe "<command>"
 | `ws-delivery-status --assert-complete ...` exit 0, service change in batched-staging repo (`auto-release-staging.yml`) or lane of multi-lane issue | **Complete** | Clean up worktree/branch; keep root product issue open with scope note (no `prod-pending`); disposition `batched-staging` |
 | `ws-delivery-status --assert-complete ...` exit 0, release promotion task with Stage 2 staging green + owner gave "deploy" + prod verified | **Complete** | Clean up worktree/branch; close issue; disposition `deployed` |
 | Release promotion task with Stage 2 staging green, awaiting owner reply to `[PROD GATEKEEPER]` | **Suspend** | Keep issue open with `prod-pending`; disposition `pending` |
-| `ws-delivery-status` exit 0 (Stage 1 only, no reality probe or probe failed) | **Suspend** | Report state strictly as `Stage 1 Landed (Unverified)`; issue stays open |
+| `ws-delivery-status` exit 0 (Stage 1 only, no reality probe) | **Suspend** | Report state strictly as `Stage 1 Landed (Unverified)`; issue stays open |
 | `ws-delivery-status` exit 1 (PR in review) | **Suspend** | Report state strictly as `In review` with PR URL |
-| `ws-delivery-status` exit 2 (unmerged branch, draft changes, or probe failed) | **Suspend** | Run `auto` to merge or write handover |
+| `ws-delivery-status` exit 3 (unmerged branch, draft changes, or probe failed) | **Suspend** | Run `auto` to merge or write handover |
+| `ws-delivery-status` exit 4 (could not read git or GitHub) | **Suspend** | Fix the cause in `reasons[]` and re-run; never read it as a pass |
 
 Unmerged work is never Complete. Merge to main without a verified Business Reality Probe is never Complete.
 Do not close the issue and do not delete the worktree in Suspend.
 Never declare complete or done when `ws-delivery-status` exits non-zero.
+Untracked files under `.agents/runs/` and unstaged submodule pointer moves do not block; the tool lists them.
 Complete also needs the predecessor gone: each file, branch, worktree, stash or flag that this issue's change replaces is deleted, or the issue states why it stays. Delete only what this issue created or replaced. Never delete what another session's worktree or stash owns.
 Push any local branch or record it in the handover so commits are never stranded locally.
 

@@ -40,8 +40,8 @@ navigation pointers to local authority, not a second copy of its policy.
 
 | Repository | Architecture and work entry | Local verification entry |
 |---|---|---|
-| infra2 | `docs/ssot/` and `docs/project/archive/Infra-019.harness_control_plane.md` | `uv run python -m tools.harness check`; `uv run python -m tools.ci_runner unit-tests --changed`; relevant SSOT's The Proof |
-| infra2-sdk | `README.md`, `pyproject.toml`, module contracts | `uv run --extra dev pytest`; `uv run ruff check .` |
+| infra2 | `init.md`, `AGENTS.md`, `docs/ssot/` | `uv run python -m tools.harness check`; `uv run python -m tools.ci_runner unit-tests --changed`; relevant SSOT's The Proof |
+| infra2-sdk | `init.md`, `AGENTS.md`, `README.md`, `pyproject.toml`, module contracts | `uv run --extra dev pytest`; `uv run ruff check .` |
 | OMCA | `init.md`, `docs/README.md`, `docs/project/roadmap.md` | `make build`, `make test`, `make standalone`; host/version-specific qualification |
 | Finance Report | `vision.md`, `common/<pkg>/contract.py`, `common/meta/data/MANIFEST.yaml` | `tools/preflight.py --tier=static --pytest-changed` through its documented Python environment |
 | TrueAlpha | `vision.md`, `init.md`, issue-owned acceptance checks | `tools/prepush.sh` with Bash 4+; scoped runtime/module tests |

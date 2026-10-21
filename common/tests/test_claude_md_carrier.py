@@ -1,42 +1,12 @@
-"""CLAUDE.md must be committed, and must carry AGENTS.md from *any* directory.
+"""AGENTS.md is the sole committed Repo-tier constitution; CLAUDE.md must stay absent.
 
-Two defects shaped this file, and the second one is why it no longer asks for
-an import.
-
-**First defect:** CLAUDE.md was not committed at all. It lived as an untracked
-symlink in one working tree, listed in `.git/info/exclude`, so every fresh
-clone, CI job and worktree started with no project instructions. The guard
-written for it concluded "not a symlink, a real file with an `@AGENTS.md`
-import" -- but the thing that had failed was *untracked*, not *symlink*. A
-committed symlink (mode 120000) is cloned like any other object, which the four
-sibling repositories have been demonstrating daily.
-
-**Second defect (#856):** the one-line `@AGENTS.md` import resolves only when
-that CLAUDE.md is in the current working directory. When the ancestor walk finds it instead, the
-import is not followed, so a session started in `common/`, `tools/`, `docs/ssot/`
-or any worktree subdirectory ran with no merge gate, no SSOT-first rule and no
-red lines -- silently. Measured with a discriminative probe ("does your loaded
-instruction text contain this string", file reads forbidden), twice per cell:
-
-    carrier                              repo root   subdirectory
-    CLAUDE.md = one-line @AGENTS.md      YES         NO
-    CLAUDE.md -> AGENTS.md (symlink)     YES         YES
-    CLAUDE.md inlining the whole text    YES         YES
-    AGENTS.md alone, ancestor CLAUDE.md  NO          NO
-
-The last row is why "just delete CLAUDE.md" is not the answer here: an ancestor
-CLAUDE.md suppresses native AGENTS.md reading, and this workspace has one.
-
-**What the old guard was protecting, and how it is protected now.** It forbade
-symlinks because git checks one out as a one-line text file on Windows without
-`core.symlinks`, yielding a CLAUDE.md whose whole content is a path -- and CI
-runs on Linux, so it would fail only where nobody looks. That risk is real and
-unchanged. What changed is the comparison: it is a platform-specific risk on a
-platform this repository is not developed on, weighed against a measured
-every-platform failure in the majority of sessions. So the symlink is taken and
-the Windows failure is made loud instead of traded away -- see
-`test_a_broken_symlink_checkout_fails_loudly`, which is exactly the shape such a
-checkout produces.
+Physical 2x2 probe measurement on `claude 2.1.303` (CLI) and `claude 2.1.299`
+(Desktop) established that when both the workspace-root `CLAUDE.md` and the
+repository `CLAUDE.md` are absent, Claude Code natively loads both workspace and
+repository `AGENTS.md` files from the repository root and from deep
+subdirectories. Removing `CLAUDE.md` eliminates the symlink carrier and its
+Windows checkout failure mode while preserving full `AGENTS.md` injection across
+all hosts.
 """
 
 from __future__ import annotations
@@ -61,78 +31,54 @@ def _git(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _committed_mode() -> str | None:
-    out = _git("ls-files", "-s", "CLAUDE.md").stdout.split()
+def _committed_mode(path: str) -> str | None:
+    out = _git("ls-files", "-s", path).stdout.split()
     return out[0] if out else None
 
 
-def test_claude_md_is_committed_not_a_local_convenience() -> None:
-    # HEAD, not the index: "is committed" is the claim, and `git ls-files`
-    # would pass on a bare `git add` in a tree whose HEAD has no such file.
-    assert _git("cat-file", "-e", "HEAD:CLAUDE.md").returncode == 0, (
-        "CLAUDE.md is not committed. An untracked carrier works only in the tree "
-        "that has it; every fresh clone, CI job and worktree then starts with no "
-        "project instructions at all."
+def test_agents_md_is_committed_as_a_regular_file() -> None:
+    """AGENTS.md must be committed in git as mode 100644 and exist as a non-empty regular file."""
+    assert _git("cat-file", "-e", f"HEAD:{TARGET}").returncode == 0, (
+        "AGENTS.md is not committed in HEAD. Every fresh clone, CI job, and "
+        "worktree requires a committed AGENTS.md."
+    )
+    mode = _committed_mode(TARGET)
+    assert mode == "100644", (
+        f"AGENTS.md is committed with mode {mode or '(absent)'}, not 100644 "
+        "(regular file)."
+    )
+    agents_path = ROOT / TARGET
+    assert agents_path.is_file()
+    assert not agents_path.is_symlink()
+    assert agents_path.read_text(encoding="utf-8").strip(), (
+        "AGENTS.md is empty."
     )
 
 
-def test_claude_md_is_a_committed_symlink_to_agents_md() -> None:
-    """Mode 120000 is the only carrier measured to work from a subdirectory."""
-    mode = _committed_mode()
-    assert mode == "120000", (
-        f"CLAUDE.md is committed with mode {mode or '(absent)'}, not 120000 "
-        f"(symlink). A one-line `@{TARGET}` import is resolved only when "
-        f"CLAUDE.md sits in the working directory, so every session started in a "
-        f"subdirectory would silently run with no constitution (#856)."
-    )
-    blob = _git("cat-file", "-p", "HEAD:CLAUDE.md").stdout.strip()
-    assert blob == TARGET, (
-        f"CLAUDE.md is a symlink to {blob!r}, not {TARGET!r}. The carrier has to "
-        f"point at the constitution, not at something next to it."
-    )
+def test_claude_md_is_absent_so_native_agents_md_loads() -> None:
+    """CLAUDE.md must not exist in git or on disk so Claude Code natively loads AGENTS.md.
 
-
-def test_claude_md_reads_back_as_the_constitution_itself() -> None:
-    """The effect, not the shape: opening CLAUDE.md must yield AGENTS.md's bytes.
-
-    This is what every host actually does, so it is the assertion that stays
-    true whichever carrier is chosen -- inline the text, symlink it, or find a
-    third way, and this still says whether the rules arrive.
-
-    That is not the same as saying the module tolerates a different carrier.
-    `test_claude_md_is_a_committed_symlink_to_agents_md` deliberately pins mode
-    120000, because the symlink is the one form measured to work from a
-    subdirectory. Changing carrier means changing that assertion too, with a new
-    measurement behind it -- this one will not object on its own, and is not
-    meant to be the thing that notices.
+    A 2x2 physical probe measurement on `claude 2.1.303` (CLI) and
+    `claude 2.1.299` (Desktop) confirmed that when both the workspace-root
+    `CLAUDE.md` and repository `CLAUDE.md` are absent, Claude Code natively
+    loads both workspace and repository `AGENTS.md` from root and deep
+    subdirectories. Any `CLAUDE.md` file in the directory walk suppresses
+    native `AGENTS.md` loading.
     """
-    carrier = (ROOT / "CLAUDE.md").read_bytes()
-    constitution = (ROOT / TARGET).read_bytes()
-    assert carrier == constitution, (
-        "CLAUDE.md does not read back as AGENTS.md. Whatever the carrier, a host "
-        "that opens CLAUDE.md has to receive the constitution; if it does not, "
-        "the rules are simply absent and nothing says so."
+    assert _git("ls-files", "CLAUDE.md").stdout.strip() == "", (
+        "CLAUDE.md is tracked in the git index. Remove it so native AGENTS.md "
+        "loading remains active."
     )
-
-
-def test_a_broken_symlink_checkout_fails_loudly() -> None:
-    """Windows without `core.symlinks` writes the target path as file content.
-
-    That is the one failure mode the symlink carrier adds, and it is silent by
-    nature: such a CLAUDE.md is a perfectly valid file that loads one word of
-    rules. This is what turns it into a red test instead. It is deliberately
-    written to fire on the *content shape*, so it works on any platform -- there
-    is no need for a Windows runner to exist before the guard does.
-    """
-    path = ROOT / "CLAUDE.md"
-    if path.is_symlink():
-        return  # intact checkout; the assertion below has nothing to catch
-    body = path.read_text(encoding="utf-8").strip()
-    assert body != TARGET, (
-        "CLAUDE.md is a regular file whose entire content is the single word "
-        f"{TARGET!r}. That is what a symlink looks like after a git checkout on "
-        "a platform without symlink support: the rules are not loaded, and "
-        "nothing else would have said so. Enable core.symlinks and re-checkout."
+    assert _git("cat-file", "-e", "HEAD:CLAUDE.md").returncode != 0, (
+        "CLAUDE.md is still committed in HEAD. Commit its removal."
+    )
+    claude_path = ROOT / "CLAUDE.md"
+    assert not claude_path.exists(), (
+        "CLAUDE.md exists on disk. Delete it so it does not suppress native "
+        "AGENTS.md loading."
+    )
+    assert not claude_path.is_symlink(), (
+        "CLAUDE.md exists as a broken symlink on disk. Delete it."
     )
 
 
