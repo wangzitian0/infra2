@@ -9,10 +9,7 @@ Run this after `smoke` passes. Use `prr` for the review and gate mechanics.
 
 ## Definition of Stage 1 (Code Landed)
 
-**Merge to main is Stage 1 (Code Landed), not task completion.** The owner corrected "done" claims for unmerged work many times:
-"If you did not open the PR and merge it, it is not done."
-Landing on main is a physical prerequisite for Stage 2 (Staging) and Stage 3 (Prod).
-Task completion requires both code landing and physical reality verification.
+**Merge to main is Stage 1 (Code Landed), not task completion.** Landing on main is a physical prerequisite for Stage 2 (Staging) and Stage 3 (Prod). Task completion requires both code landing and physical reality verification (`ws-delivery-status --assert-complete`).
 
 - Merge only through a PR. The owner grants merge authority when every gate passes.
 - Merge when ready. Then continue from the latest main. Do not pile up divergent branches.
@@ -67,7 +64,7 @@ Gate code, gate data and tests, required-check workflows and release code are th
 
 ## Report rules
 
-- State the root cause before you ask for a production decision. The owner could not decide without it.
-- Do only what was asked. "I asked you to add a skill. What else did you do?" is a real correction.
-- Keep committed text free of private names, internal hosts, and local paths. It must be safe to paste into a public issue.
-- Keep the description short and plain. The owner rejected text with an "AI tone".
+- State the root cause before you ask for a production decision.
+- Do only what was asked; do not bundle unrequested changes.
+- Keep committed text free of private names, internal hosts, and local paths so it is safe for public issues.
+- Keep descriptions short, factual, and in ASD-STE100 style.
