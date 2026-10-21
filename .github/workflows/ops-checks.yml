@@ -1174,7 +1174,8 @@ jobs:
     # deps it doesn't import) — this job is the one place that installs and runs it.
     name: e2e regressions smoke (production)
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '13 5 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'e2e-regressions-smoke' || inputs.task == 'all')) }}
-    runs-on: ubuntu-latest
+    # Pinned to 24.04: ubuntu-latest moved to 26.04 and the Playwright walks of truealpha failed there (truealpha#1471).
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
