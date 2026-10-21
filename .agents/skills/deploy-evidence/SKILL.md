@@ -24,14 +24,13 @@ gh run list --workflow reconcile-iac-inputs.yml --branch vX.Y.Z --limit 1
 ```
 
 ### Phase 2: Prod Gatekeeper Checkpoint
-If owner has not provided explicit prod disposition, format the 3-stage report and ask:
+If owner has not provided explicit prod disposition, format the 3-stage report (matching the `close` skill §3) and ask:
 ```text
-[PROD GATEKEEPER CHECKPOINT]
-- Stage 1 (Merge): Release tag vX.Y.Z = commit SHA <sha>
-- Stage 2 (Staging Soak): Run URL <url>, Soak Duration <duration>, Health: PASS
-- Stage 3 (Prod Baseline): Image <digest>, Watchdog: OK
-
-Authorize production deployment of vX.Y.Z? (Reply "deploy" to authorize, or "hold" to keep unpromoted)
+[PROD GATEKEEPER]
+- Stage 1 merge: release tag vX.Y.Z = commit <sha>
+- Stage 2 staging: run <url>, soak <duration>, health <result>
+- Stage 3 production: image <digest>, watchdog <state>
+Authorize production deployment of vX.Y.Z? Reply "deploy vX.Y.Z" or "hold".
 ```
 
 ### Phase 3: Prod Promote Dispatch
