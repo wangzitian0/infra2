@@ -46,13 +46,10 @@ Stored at: `secret/data/finance_report/<env>/app`
 | `AI_BASE_URL` | Provider base URL; defaults to Z.AI |
 | `AI_CHAT_COMPLETIONS_PATH` | Chat completions API path |
 | `AI_LAYOUT_PARSING_PATH` | OCR/layout parsing API path |
-| `PRIMARY_MODEL` | Primary text model; defaults to `glm-5.3-flash` |
-| `OCR_MODEL` | OCR-capable model; defaults to `glm-4.6v` |
-| `VISION_MODEL` | Vision-capable model; defaults to `glm-4.6v` |
+| Model keys | Not set. The infra2 SDK defaults apply (large, small and multimodal roles). Set a role only to customize production |
 | `AI_JSON_TIMEOUT_SECONDS` | Provider JSON extraction timeout; defaults to `360` |
 | `AI_JSON_MAX_TOKENS` | Provider JSON extraction output cap; defaults to `8192` |
 | `AI_JSON_DISABLE_THINKING` | Disable GLM thinking for deterministic JSON extraction; defaults to `true` |
-| `FALLBACK_MODELS` | Comma-separated fallback model list |
 | `NEXT_PUBLIC_APP_URL` | Frontend URL used by backend-generated links |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | SigNoz OTLP HTTP endpoint (optional Vault override; otherwise rendered — see Observability) |
 | `OTEL_SERVICE_NAME` | OTEL service name (optional Vault override) |

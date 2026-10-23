@@ -69,11 +69,9 @@ secret/data/finance_report/<env>/app
   - AI_BASE_URL
   - AI_CHAT_COMPLETIONS_PATH
   - AI_LAYOUT_PARSING_PATH
-  - PRIMARY_MODEL
-  - OCR_MODEL
-  - VISION_MODEL
-  - FALLBACK_MODELS
 ```
+
+Model keys are not part of this list. The deploy does not render them (tests in `common/tests` assert it). The infra2 SDK defaults apply.
 
 ## References
 
