@@ -259,6 +259,14 @@ App 不再 checkout/执行 infra2。发送 `repository_dispatch` type `app-deplo
    - So the receiver refuses a production request that is older than `PRODUCTION_REQUEST_MAX_AGE_SECONDS`
      (`common/deploy/app_deploy_request.py`): about 1740 s minus 300 s, which is 24 min (1440 s). For
      truealpha, the limit is conservative.
+   - **Sender deadline (#1363).** From infra2-sdk 3.13.0, `dispatch_and_wait` puts `sender_deadline` in the
+     dispatch payload: the time when the sender stops waiting, `--timeout` after the dispatch, by the clock.
+     The receiver then accepts a production request until that deadline minus
+     `PRODUCTION_DEPLOY_BUDGET_SECONDS` (300 s), and never later than 6 h after the run was created
+     (`production_request_accept_until`). A request with no deadline keeps the 1440 s limit. On 2026-10-23
+     the owner approved truealpha v0.2.55 1797 s after receiver run 39943259575 was created, and the
+     1440 s limit refused it. truealpha now waits 3600 s for a production request, so the same approval
+     is accepted until 3300 s minus the dispatch delay. A malformed `sender_deadline` stops every request.
    - The age is the time from the `created_at` of the receiver run to the check in the `plan` step. The oldest
      normal approval was 1411 s old at the check (receiver run 37776291342), 29 s inside the limit. An approval
      more than 29 s later is refused, and the release must then be dispatched again.
@@ -278,9 +286,8 @@ App 不再 checkout/执行 infra2。发送 `repository_dispatch` type `app-deplo
    - The main purpose of the check is to stop a late approval. The owner approved receiver run 38344114882 after
      it waited 1 h 52 min, when the request was 6955 s old.
    - Gap that remains: the check runs once, when the plan step runs. A request that starts near the limit can
-     still end after the finance_report sender stops. finance_report also needs 36 s to 62 s after the deploy
-     for its post-deploy checks (255 s once, with a cold E2E setup), inside the same 30 min job. To close the
-     gap, the request must carry the deadline of its sender. That is an infra2-sdk change.
+     still end after its sender stops, when the deploy takes more than 300 s. A sender that sends
+     `sender_deadline` closes the older gap of one fixed limit for all senders (#1363).
 
 Finance Report 的 staging/prod/rollback 已全部 cut over 到 receiver，App 仓库不再
 checkout 或执行 infra2 源码。receiver 通过只读 GitHub API

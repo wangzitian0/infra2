@@ -11,10 +11,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from infra2_sdk.deploy import (
+    PRODUCTION_DEPLOY_BUDGET_SECONDS,
     PRODUCTION_REQUEST_MAX_AGE_SECONDS,
     DeployOperation,
     DeployRequest,
     DeployType,
+    parse_sender_deadline,
+    production_request_accept_until,
     validate_evidence_urls,
     verify_production_evidence,
 )
@@ -59,7 +62,9 @@ __all__ = [
     "marker_status",
     "newest_release_tag",
     "parse_request",
+    "parse_sender_deadline",
     "production_marker",
+    "production_request_accept_until",
     "query_serving_release",
     "select_iac_ref",
     "validate_request_authority",
@@ -432,10 +437,19 @@ def make_plan(
 
 
 def check_request_age(
-    request: DeployRequest, *, created_at: str, run_attempt: str, now: datetime
+    request: DeployRequest,
+    *,
+    created_at: str,
+    run_attempt: str,
+    now: datetime,
+    sender_deadline: datetime | None = None,
 ) -> float | None:
     """Refuse a production request whose deploy can end after its sender stops (#1232).
 
+    ``sender_deadline`` is the time when the sender stops waiting, from the dispatch
+    payload (#1363). With it, the request is accepted until that time minus
+    PRODUCTION_DEPLOY_BUDGET_SECONDS. Without it (an older sender), the limit is
+    PRODUCTION_REQUEST_MAX_AGE_SECONDS after ``created_at``.
     ``created_at`` is the first creation time of the receiver run, from the GitHub API.
     A re-run does not change it. ``run_attempt`` is GITHUB_RUN_ATTEMPT: the sender
     stops when the first attempt ends, so a production re-run is refused. Every
@@ -462,14 +476,22 @@ def check_request_age(
             f"request age is negative: created {_iso(created)}, now {_iso(current)}. "
             "The runner clock or the creation time is wrong. Dispatch the release again."
         )
-    if age > PRODUCTION_REQUEST_MAX_AGE_SECONDS:
+    accept_until = production_request_accept_until(created, sender_deadline)
+    if current <= accept_until:
+        return age
+    if sender_deadline is None:
         raise ValueError(
             f"request expired: created {_iso(created)}, now {_iso(current)}, "
             f"limit {PRODUCTION_REQUEST_MAX_AGE_SECONDS} s. A sender may stop waiting "
             "before this deploy ends, and nothing would verify the deploy. Dispatch the "
             "release again."
         )
-    return age
+    raise ValueError(
+        f"request expired: created {_iso(created)}, now {_iso(current)}, accepted until "
+        f"{_iso(accept_until)} (sender deadline {_iso(sender_deadline)} minus "
+        f"{PRODUCTION_DEPLOY_BUDGET_SECONDS} s). The sender stops waiting before this "
+        "deploy ends, and nothing would verify the deploy. Dispatch the release again."
+    )
 
 
 def _utc_time(text: str) -> datetime:
