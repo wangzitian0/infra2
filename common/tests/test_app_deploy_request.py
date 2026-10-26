@@ -1263,6 +1263,87 @@ def test_a_production_request_without_a_valid_creation_time_is_refused(
         _age(production_payload(), created_at=created_at, now=INCIDENT_APPROVED)
 
 
+# Sender deadline (#1363). Facts from the session log and GitHub, 2026-10-23: truealpha
+# dispatched v0.2.55 at about 11:01:31Z; receiver run 39943259575 was created at
+# 11:02:13Z; the owner approved, and the plan step checked the age at 11:32:10Z.
+V0255_CREATED_AT = "2026-10-23T11:02:13Z"
+V0255_CREATED = datetime(2026, 10, 23, 11, 2, 13, tzinfo=timezone.utc)
+V0255_CHECKED = datetime(2026, 10, 23, 11, 32, 10, tzinfo=timezone.utc)
+ONE_HOUR_SENDER = "2026-10-23T12:01:31Z"  # dispatch + 3600 s, the new truealpha wait
+HALF_HOUR_SENDER = "2026-10-23T11:31:31Z"  # dispatch + 1800 s, the old wait
+
+
+def _deadline_age(
+    request_payload: dict, *, now: datetime, sender_deadline
+) -> float | None:
+    return receiver.check_request_age(
+        receiver.parse_request(request_payload),
+        created_at=V0255_CREATED_AT,
+        run_attempt="1",
+        now=now,
+        sender_deadline=sender_deadline,
+    )
+
+
+def _utc(text: str) -> datetime:
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
+def test_the_v0255_approval_is_refused_without_a_sender_deadline() -> None:
+    with pytest.raises(ValueError, match=r"^request expired: .* limit 1440 s\. "):
+        _deadline_age(production_payload(), now=V0255_CHECKED, sender_deadline=None)
+
+
+def test_the_v0255_approval_is_accepted_when_the_sender_waits_one_hour() -> None:
+    age = _deadline_age(
+        production_payload(), now=V0255_CHECKED, sender_deadline=_utc(ONE_HOUR_SENDER)
+    )
+    assert age == 1797
+
+
+def test_a_sender_deadline_keeps_the_deploy_budget_before_it() -> None:
+    """The deploy job needs up to 300 s, and the sender must still wait when it ends."""
+    deadline = _utc(ONE_HOUR_SENDER)
+    last = deadline - timedelta(seconds=300)
+    assert (
+        _deadline_age(production_payload(), now=last, sender_deadline=deadline)
+        == (last - V0255_CREATED).total_seconds()
+    )
+    with pytest.raises(ValueError) as refused:
+        _deadline_age(
+            production_payload(),
+            now=last + timedelta(seconds=1),
+            sender_deadline=deadline,
+        )
+    assert str(refused.value) == (
+        "request expired: created 2026-10-23T11:02:13Z, now 2026-10-23T11:56:32Z, "
+        "accepted until 2026-10-23T11:56:31Z (sender deadline 2026-10-23T12:01:31Z "
+        "minus 300 s). The sender stops waiting before this deploy ends, and nothing "
+        "would verify the deploy. Dispatch the release again."
+    )
+
+
+def test_a_short_sender_deadline_is_stricter_than_the_fixed_limit() -> None:
+    """The old 1800 s wait: the v0.2.55 approval came after it, so it is refused."""
+    with pytest.raises(ValueError, match=r"sender deadline 2026-10-23T11:31:31Z"):
+        _deadline_age(
+            production_payload(),
+            now=V0255_CHECKED,
+            sender_deadline=_utc(HALF_HOUR_SENDER),
+        )
+
+
+def test_a_staging_request_ignores_the_sender_deadline() -> None:
+    assert (
+        _deadline_age(
+            payload(),
+            now=V0255_CHECKED + timedelta(days=1),
+            sender_deadline=_utc(HALF_HOUR_SENDER),
+        )
+        is None
+    )
+
+
 def _expiry_cli(monkeypatch, request: dict, *extra: str, now: datetime) -> int:
     monkeypatch.setattr(receiver_cli, "_utc_now", lambda: now)
     return _gate_cli(monkeypatch, request, *extra)
@@ -1311,7 +1392,8 @@ def test_the_deploy_job_executes_a_production_request_inside_the_window(
     captured = capsys.readouterr()
     assert result == 0, captured.err
     assert json.loads(captured.out)["iac_ref"] == "v1.1.74"
-    assert "request age 1411 s, limit 1440 s" in captured.err
+    # No sender deadline: the fixed 1440 s limit, 03:57:12Z + 1440 s.
+    assert "request age 1411 s, accepted until 2026-10-13T04:21:12Z" in captured.err
 
 
 @pytest.mark.parametrize("run_attempt", ["1", "2"])
@@ -2044,3 +2126,48 @@ def test_query_serving_release_returns_authoritative_dokploy_and_health_state(
     assert out["image_tag"] == "v0.1.45"
     assert out["source_sha"] == SHA
     assert out["healthy"] is True
+
+
+def test_the_deploy_job_reads_the_sender_deadline_from_the_payload(
+    monkeypatch, capsys
+) -> None:
+    result = _expiry_cli(
+        monkeypatch,
+        {**production_payload(), "sender_deadline": ONE_HOUR_SENDER},
+        "--request-created-at",
+        V0255_CREATED_AT,
+        "--run-attempt",
+        "1",
+        "--expected-iac-ref",
+        "v1.1.74",
+        "--preflight-canary-result",
+        "success",
+        now=V0255_CHECKED,
+    )
+    captured = capsys.readouterr()
+    assert result == 0, captured.err
+    assert "request age 1797 s, accepted until 2026-10-23T11:56:31Z" in captured.err
+
+
+@pytest.mark.parametrize(
+    "request_payload",
+    [production_payload(), payload()],
+    ids=["production", "staging"],
+)
+def test_the_deploy_job_refuses_a_malformed_sender_deadline(
+    monkeypatch, capsys, request_payload
+) -> None:
+    """Every request parses the deadline, so staging uses the parse before production."""
+    result = _expiry_cli(
+        monkeypatch,
+        {**request_payload, "sender_deadline": "2026-10-23T12:01:31"},
+        "--request-created-at",
+        V0255_CREATED_AT,
+        "--run-attempt",
+        "1",
+        "--preflight-canary-result",
+        "success" if request_payload["deploy_type"] == "prod" else "skipped",
+        now=V0255_CHECKED,
+    )
+    assert result == 1
+    assert "sender_deadline" in capsys.readouterr().err

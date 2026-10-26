@@ -8,7 +8,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 from common.deploy.release_markers import marker_status
@@ -173,15 +173,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0 if serving.healthy else 1
 
         from common.deploy.app_deploy_request import (
-            PRODUCTION_REQUEST_MAX_AGE_SECONDS,
             check_request_age,
             make_plan,
+            parse_sender_deadline,
+            production_request_accept_until,
         )
 
         if not args.sender or not args.domain:
             raise ValueError("--sender and --domain are required for plan and execute")
+        payload_text = _payload_from_env(args.payload_env)
         plan = make_plan(
-            _payload_from_env(args.payload_env),
+            payload_text,
             sender=args.sender,
             domain=args.domain,
             timeout=args.timeout,
@@ -190,17 +192,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         # The age and the re-run rule go first (#1232): an expired request is refused
         # for its age, even when a newer production marker also changed its iac_ref.
         # The two flags go together, so one of them alone fails closed.
+        # Every request parses the sender deadline (#1363), so staging deploys use the
+        # parse before production does. make_plan already proved the payload is an object.
         if args.request_created_at is not None or args.run_attempt is not None:
+            sender_deadline = parse_sender_deadline(json.loads(payload_text))
+            now = _utc_now()
             age = check_request_age(
                 plan.request,
                 created_at=args.request_created_at or "",
                 run_attempt=args.run_attempt or "",
-                now=_utc_now(),
+                now=now,
+                sender_deadline=sender_deadline,
             )
             if age is not None:
+                created = now - timedelta(seconds=age)
+                accept_until = production_request_accept_until(created, sender_deadline)
                 print(
-                    f"request age {age:.0f} s, limit "
-                    f"{PRODUCTION_REQUEST_MAX_AGE_SECONDS} s",
+                    f"request age {age:.0f} s, accepted until "
+                    f"{accept_until:%Y-%m-%dT%H:%M:%SZ}",
                     file=sys.stderr,
                 )
         if args.expected_iac_ref and plan.iac_ref != args.expected_iac_ref:
