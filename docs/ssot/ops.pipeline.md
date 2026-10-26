@@ -259,7 +259,7 @@ App 不再 checkout/执行 infra2。发送 `repository_dispatch` type `app-deplo
    - So the receiver refuses a production request that is older than `PRODUCTION_REQUEST_MAX_AGE_SECONDS`
      (`common/deploy/app_deploy_request.py`): about 1740 s minus 300 s, which is 24 min (1440 s). For
      truealpha, the limit is conservative.
-   - **Sender deadline (#1363).** From infra2-sdk 3.13.0, `dispatch_and_wait` puts `sender_deadline` in the
+   - **Sender deadline (#1363).** `dispatch_and_wait` of infra2-sdk (the version in `uv.lock`) puts `sender_deadline` in the
      dispatch payload: the time when the sender stops waiting, `--timeout` after the dispatch, by the clock.
      The receiver then accepts a production request until that deadline minus
      `PRODUCTION_DEPLOY_BUDGET_SECONDS` (300 s), and never later than 6 h after the run was created
