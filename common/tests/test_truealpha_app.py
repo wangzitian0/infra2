@@ -407,7 +407,9 @@ def test_the_llm_start_period_is_not_below_the_sdk_standard(tmp_path: Path) -> N
     compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
     llm = _compose_seconds(compose["services"]["llm"]["healthcheck"]["start_period"])
 
-    assert standard >= 120, f"the SDK standard changed to {standard} s: review this test"
+    assert standard >= 120, (
+        f"the SDK standard changed to {standard} s: review this test"
+    )
     assert llm >= standard, (
         f"the llm start period is {llm} s; the SDK standard for an app that migrates at "
         f"start is {standard} s"
