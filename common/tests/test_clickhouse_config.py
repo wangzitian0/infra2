@@ -86,8 +86,53 @@ def test_authentik_resource_and_healthcheck_limits() -> None:
     server = services.get("server", {})
     worker = services.get("worker", {})
 
-    assert server.get("mem_limit") == "512m"
-    assert worker.get("mem_limit") == "384m"
+    assert server.get("mem_limit") == "768m"
+    assert worker.get("mem_limit") == "512m"
+    assert services.get("vault-agent", {}).get("mem_limit") == "128m"
 
     assert server.get("healthcheck", {}).get("interval") == "60s"
     assert worker.get("healthcheck", {}).get("interval") == "60s"
+
+
+def test_openpanel_and_finance_report_resource_bounds() -> None:
+    openpanel_path = ROOT / "platform/24.openpanel/compose.yaml"
+    assert openpanel_path.exists()
+    op_data = yaml.safe_load(openpanel_path.read_text(encoding="utf-8")) or {}
+    op_services = op_data.get("services", {})
+
+    assert op_services.get("vault-agent", {}).get("mem_limit") == "128m"
+    for svc_name in ("op-api", "op-dashboard", "op-worker"):
+        svc = op_services.get(svc_name, {})
+        assert svc.get("mem_limit") == "512m"
+        assert svc.get("init") is True
+
+    fr_app_path = ROOT / "finance_report/finance_report/10.app/compose.yaml"
+    assert fr_app_path.exists()
+    fr_app_data = yaml.safe_load(fr_app_path.read_text(encoding="utf-8")) or {}
+    fr_app_services = fr_app_data.get("services", {})
+
+    assert fr_app_services.get("prefect-worker", {}).get("mem_limit") == "1g"
+    assert (
+        fr_app_services.get("backend", {}).get("healthcheck", {}).get("interval")
+        == "30s"
+    )
+
+    fr_preview_path = ROOT / "finance_report/finance_report/preview/compose.yaml"
+    assert fr_preview_path.exists()
+    fr_preview_data = yaml.safe_load(fr_preview_path.read_text(encoding="utf-8")) or {}
+    fr_preview_services = fr_preview_data.get("services", {})
+
+    assert (
+        fr_preview_services.get("backend", {}).get("healthcheck", {}).get("interval")
+        == "30s"
+    )
+
+    tasks_text = (ROOT / "bootstrap/01.dokploy_install/tasks.py").read_text(
+        encoding="utf-8"
+    )
+    assert "docker service update --init --env-add NODE_OPTIONS=" in tasks_text
+
+    install_sh_text = (
+        ROOT / "bootstrap/01.dokploy_install/install_dokploy.sh"
+    ).read_text(encoding="utf-8")
+    assert "docker service update --init --env-add NODE_OPTIONS=" in install_sh_text

@@ -62,7 +62,7 @@ def install(c, version=DOKPLOY_VERSION):
     # Install Dokploy on VPS
     install_cmd = (
         f"curl -sSL https://dokploy.com/install.sh | DOKPLOY_VERSION={version} sh && "
-        "docker service update --env-add NODE_OPTIONS='--max-old-space-size=2048' dokploy"
+        "docker service update --init --env-add NODE_OPTIONS='--max-old-space-size=2048' dokploy"
     )
 
     result = run_with_status(

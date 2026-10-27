@@ -222,7 +222,7 @@ services:
       # leaves room for first-run host and migration variance while the outer canary
       # retains its independent 600s fail-closed deadline.
       start_period: 450s
-      interval: 10s
+      interval: 30s
       retries: 3
       timeout: 5s
     volumes:

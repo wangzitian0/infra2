@@ -69,7 +69,7 @@ echo ""
 echo "✅ Dokploy 安装完成"
 echo ""
 echo "⚙️  配置 Dokploy 运行时参数 (Node 堆内存上限 2048MB 防止 OOM)..."
-docker service update --env-add NODE_OPTIONS="--max-old-space-size=2048" dokploy
+docker service update --init --env-add NODE_OPTIONS="--max-old-space-size=2048" dokploy
 
 echo ""
 echo "⏳ 等待 Dokploy 服务重新就绪..."
