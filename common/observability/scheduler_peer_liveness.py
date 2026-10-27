@@ -7,17 +7,15 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from infra2_sdk.ci import ScheduleError, crons_in, largest_gap
 from infra2_sdk.observability import (
     DELAY_ALLOWANCE,
     MISSED_TICKS_TOLERATED,
     PeerReadError,
     PeerVerdict,
-    ScheduleError,
     bound_for,
-    crons_in,
     evaluate_peer_liveness,
     github_getter,
-    largest_gap,
     newest_tick,
     parse_bound_cap_hours,
 )
