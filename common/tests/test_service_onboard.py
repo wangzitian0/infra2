@@ -328,3 +328,51 @@ def test_offboard_service_purge_data():
     assert any(
         "DROP DATABASE" in str(call_args) for call_args in mock_c.run.call_args_list
     )
+
+
+def test_offboard_platform_service_purges_bare_service_db_and_role() -> None:
+    mock_c = MagicMock()
+    mock_runner_ok = MagicMock(return_value=MagicMock(returncode=0))
+    mock_dokploy = MagicMock()
+    mock_dokploy.find_compose_by_name.return_value = {
+        "composeId": "c-100",
+        "name": "activepieces",
+    }
+
+    summary = offboard_service(
+        c=mock_c,
+        service="activepieces",
+        project="platform",
+        env="production",
+        purge_data=True,
+        op_runner=mock_runner_ok,
+        vault_token="test-vault-token",
+        dokploy_client=mock_dokploy,
+    )
+
+    assert summary["db_purged"] is True
+    executed_commands = [
+        call_args.args[0] for call_args in mock_c.run.call_args_list if call_args.args
+    ]
+
+    assert any(
+        "DROP DATABASE IF EXISTS platform_activepieces_db;" in cmd
+        for cmd in executed_commands
+    )
+    assert any(
+        "DROP ROLE IF EXISTS platform_activepieces_user;" in cmd
+        for cmd in executed_commands
+    )
+    assert any(
+        "DROP DATABASE IF EXISTS activepieces;" in cmd for cmd in executed_commands
+    )
+    assert any("DROP ROLE IF EXISTS activepieces;" in cmd for cmd in executed_commands)
+    assert any(
+        "IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'platform_activepieces_user')"
+        in cmd
+        for cmd in executed_commands
+    )
+    assert any(
+        "IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'activepieces')" in cmd
+        for cmd in executed_commands
+    )

@@ -84,7 +84,7 @@ def _build_rehearsal_invariants(service_id: str, db: str) -> tuple[str, ...]:
             db_exists_check,
             "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public') < 40 THEN RAISE EXCEPTION 'table count below threshold (<40)'; END IF; END $$;",
             "DO $$ BEGIN IF (SELECT count(*) FROM accounts) < 3 THEN RAISE EXCEPTION 'accounts count below threshold (<3)'; END IF; END $$;",
-            "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM alembic_version WHERE version_num IN ('0065_user_soft_delete', '0064_enum_drift_cleanup', '0063_enum_case_compat', '0062_bank_custody')) THEN RAISE EXCEPTION 'unexpected alembic_version'; END IF; END $$;",
+            "DO $$ BEGIN IF (SELECT count(*) FROM alembic_version) <> 1 OR NOT EXISTS (SELECT 1 FROM alembic_version WHERE version_num ~ '^[0-9]{4}_[a-z0-9_]+$' AND substring(version_num FROM '^([0-9]{4})')::int >= 62) THEN RAISE EXCEPTION 'unexpected alembic_version'; END IF; END $$;",
         )
     if service_id == "truealpha/postgres":
         return (

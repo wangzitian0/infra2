@@ -167,6 +167,72 @@ def test_scan_detects_source_identity_that_does_not_match_its_own_ref(
     assert "does not match its deployed ref" in row.note
 
 
+def test_scan_in_sync_when_formula_changed_but_single_formula_inputs_match(
+    monkeypatch,
+) -> None:
+    class DummyDeployer:
+        pass
+
+    tag = "v1.2.3"
+    tag_commit = "a" * 40
+    deploy_ref = "b" * 40
+    sid = "platform/example"
+
+    monkeypatch.setattr(drift.service_registry, "all_services", lambda: [sid])
+    monkeypatch.setattr(drift, "_load_deployer", lambda _s: DummyDeployer)
+    monkeypatch.setattr(
+        drift, "_commit_at_ref", lambda ref: tag_commit if ref == tag else ref
+    )
+    monkeypatch.setattr(drift, "_source_env_vars", lambda _dep: {"ENV": "production"})
+
+    # Setup release.expected returning different hashes for deploy_ref vs tag
+    def fake_hashes_with_ref(commit, service_ids, *, root=None):
+        if commit == tag_commit:
+            return {
+                "version": "v1",
+                "services": {sid: {"hash": "formula-v2-hash", "missing": []}},
+            }
+        if commit == deploy_ref:
+            return {
+                "version": "v1",
+                "services": {sid: {"hash": "formula-v1-hash", "missing": []}},
+            }
+        return {"version": "v1", "services": {}}
+
+    monkeypatch.setattr(drift, "hashes_with_ref_code", fake_hashes_with_ref)
+
+    identity = DeployedIdentity(
+        runtime_hash="runtime",
+        source_hash="v1:formula-v1-hash",
+        deploy_ref=deploy_ref,
+    )
+    monkeypatch.setattr(drift, "_deployed_identities", lambda: {sid: identity})
+
+    # Case 1: single formula returns same hash for deploy_ref and tag -> in_sync
+    monkeypatch.setattr(
+        drift,
+        "expected_hash_at",
+        lambda _dep, _context, _ref, _env: ("same-single-formula", []),
+    )
+    rows_in_sync = drift.scan(tag)
+    assert len(rows_in_sync) == 1
+    assert rows_in_sync[0].verdict == "in_sync"
+    assert rows_in_sync[0].deployed_ref == deploy_ref
+
+    # Case 2: single formula returns different hashes for deploy_ref vs tag -> DRIFT
+    monkeypatch.setattr(
+        drift,
+        "expected_hash_at",
+        lambda _dep, _context, ref, _env: (
+            ("hash-at-dep", []) if ref == deploy_ref else ("hash-at-tag", [])
+        ),
+    )
+    rows_drift = drift.scan(tag)
+    assert len(rows_drift) == 1
+    assert rows_drift[0].verdict == "DRIFT"
+    assert rows_drift[0].deployed_ref == deploy_ref
+
+
 def test_scan_classifies_pre_migration_identity_without_false_drift(
     monkeypatch,
 ) -> None:
