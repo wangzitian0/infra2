@@ -78,6 +78,7 @@ table inet infra2_hostfw {
 	# Runs before Docker's FORWARD (priority filter). Drops direct non-CF hits to 80/443 and external hits on Dokploy UI (3000).
 	chain forward {
 		type filter hook forward priority filter - 1; policy accept;
+		ct state established,related accept
 		iifname $PUBLIC_IF meta l4proto tcp ct original proto-dst 3000 counter drop comment "infra2-hostfw: Dokploy UI is not public"
 		iifname $PUBLIC_IF ip saddr != @cf_ipv4 meta l4proto tcp ct original proto-dst { 80, 443 } counter drop comment "infra2-hostfw: non-CF IPv4 direct hit on 80/443"
 		iifname $PUBLIC_IF ip6 saddr != @cf_ipv6 meta l4proto tcp ct original proto-dst { 80, 443 } counter drop comment "infra2-hostfw: non-CF IPv6 direct hit on 80/443"

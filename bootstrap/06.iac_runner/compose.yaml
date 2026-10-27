@@ -1,5 +1,6 @@
 services:
   vault-agent:
+    mem_limit: 128m
     init: true  # tini as PID1 reaps healthcheck ssl_client zombies
     image: hashicorp/vault:1.15
     container_name: iac-runner-vault-agent
@@ -61,6 +62,7 @@ services:
       start_period: 10s
 
   iac-runner:
+    mem_limit: 3g
     build:
       context: ../..
       dockerfile: bootstrap/06.iac_runner/Dockerfile

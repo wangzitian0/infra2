@@ -65,7 +65,7 @@ services:
     image: hashicorp/vault:1.15
     container_name: truealpha-data-engine-vault-agent${ENV_SUFFIX}
     restart: always
-    mem_limit: ${DATA_ENGINE_VAULT_MEM_LIMIT:-128m}
+    mem_limit: 128m
     cpu_shares: ${TIER_CPU_SHARES:-1024}
     entrypoint:
       - sh
