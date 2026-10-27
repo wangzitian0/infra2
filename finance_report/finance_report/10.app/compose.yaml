@@ -191,7 +191,7 @@ services:
       # Keep the fixed stack aligned with preview. A live staging cold start on
       # 2026-08-18 needed 177s before the first successful /health response.
       start_period: 450s
-      interval: 10s
+      interval: 30s
       retries: 3
       timeout: 5s
     volumes:
@@ -219,7 +219,8 @@ services:
     pull_policy: always
     container_name: finance_report-prefect-worker${ENV_SUFFIX}
     restart: always
-    mem_limit: 512m
+    # Observed 540 MiB RSS+Swap working set during prefect.engine flow execution (2026-10-27).
+    mem_limit: 1g
     cpu_shares: ${TIER_CPU_SHARES:-1024}
     logging:
       driver: json-file

@@ -20,6 +20,7 @@ services:
     image: hashicorp/vault:1.15
     container_name: platform-openpanel-vault-agent${ENV_SUFFIX}
     restart: always
+    mem_limit: 128m
     entrypoint:
       - sh
       - -c
@@ -129,9 +130,11 @@ services:
   op-api:
     # Pinned by digest (was floating `:2`, a moving major tag that drifts upstream).
     # Bump deliberately: `docker buildx imagetools inspect lindesvard/openpanel-api:2 | grep -m1 ^Digest`.
+    init: true
     image: lindesvard/openpanel-api:2@sha256:9353647f96dcfcceecd0ba2efd4c05e77ace3ea3f5d56b2cef55c1c3b550be7c
     container_name: platform-openpanel-api${ENV_SUFFIX}
     restart: unless-stopped
+    mem_limit: 512m
     depends_on:
       vault-agent:
         condition: service_healthy
@@ -207,9 +210,11 @@ services:
       start_period: 120s
 
   op-dashboard:
+    init: true
     image: lindesvard/openpanel-dashboard:2@sha256:f6934fb35dabba990ca9e73253179494d2e0247fc4b96c8202adbbaa0f06833c
     container_name: platform-openpanel-dashboard${ENV_SUFFIX}
     restart: unless-stopped
+    mem_limit: 512m
     depends_on:
       op-api:
         condition: service_healthy
@@ -255,9 +260,11 @@ services:
       start_period: 60s
 
   op-worker:
+    init: true
     image: lindesvard/openpanel-worker:2@sha256:3f996a4f819a84a6ea90272a992fc025c4ad52d70b7612d65d666fafb2f83668
     container_name: platform-openpanel-worker${ENV_SUFFIX}
     restart: unless-stopped
+    mem_limit: 512m
     depends_on:
       op-api:
         condition: service_healthy
