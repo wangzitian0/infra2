@@ -233,3 +233,39 @@ def test_multi_project_leak_check_isolates_repos() -> None:
     # ta_30 is leaked (closed in truealpha)
     assert leak_ids == {"ta_30"}
     assert result["open_pr_fetch"] == "ok"
+
+
+def test_detect_legacy_pr_compose_in_test_env_as_closed_pr() -> None:
+    """Detect closed PR bare compose in test environment while ignoring non-PR composes."""
+    projects = [
+        {
+            "name": "finance_report",
+            "environments": [
+                {
+                    "name": "test",
+                    "compose": [
+                        {"name": "app", "composeId": "test_app"},
+                        {"name": "e2e-runner", "composeId": "test_e2e"},
+                        {"name": "pr-2656", "composeId": "DSJ7jnbs8zz39s545ahmL"},
+                    ],
+                },
+                {
+                    "name": "preview",
+                    "compose": [
+                        {"name": "pr-2657", "composeId": "bare_preview_pr"},
+                    ],
+                },
+            ],
+        }
+    ]
+    composes = plc.collect_preview_composes(projects)
+    assert {(c.compose_id, c.alias) for c in composes} == {
+        ("DSJ7jnbs8zz39s545ahmL", "pr-2656"),
+        ("bare_preview_pr", "pr-2657"),
+    }
+
+    client = _FakeClient(projects)
+    result = plc.detect(client, token="tok", opener=_opener_for([[{"number": 2657}]]))
+    assert [(c.compose_id, reason) for c, reason in result["leaks"]] == [
+        ("DSJ7jnbs8zz39s545ahmL", "closed-PR preview (pr-2656)")
+    ]

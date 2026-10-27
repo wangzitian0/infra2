@@ -491,3 +491,90 @@ def test_create_secrets_resolver_forwards_human_and_rejects_the_rest(
     assert "create_secrets_resolver()" in message
     assert "'bogus'" in message
     assert "resolver_for()" not in message
+
+
+def test_apply_prunes_orphan_keys_on_non_preview_service() -> None:
+    """Remove retired store keys via replace while keeping active and placeholder keys."""
+    from infra2_sdk.runtime.config_schema import EnvironmentManifest
+    from infra2_sdk.secrets import SecretsResolver, WriteResult, vault_path
+    from common.security.registry import Service
+
+    manifest = EnvironmentManifest.from_dict(
+        {
+            "contract_version": 2,
+            "source": "test/data_engine",
+            "fields": [
+                {
+                    "field": "sec_user_agent",
+                    "env": "SEC_USER_AGENT",
+                    "source": "human",
+                    "injected": True,
+                }
+            ],
+        }
+    )
+    service = Service(
+        "truealpha/truealpha/20.data_engine",
+        "truealpha",
+        "data_engine",
+        ("unused",),
+        store_only_keys=("S3_BUCKET",),
+    )
+    path = vault_path("truealpha", "staging", "data_engine")
+
+    class _ReplaceStore:
+        def __init__(self, initial: dict[str, dict[str, str]]) -> None:
+            self.items = {k: dict(v) for k, v in initial.items()}
+            self.replace_calls: list[tuple[str, dict[str, str]]] = []
+
+        def read(self, p: str) -> dict[str, str]:
+            return dict(self.items.get(p, {}))
+
+        def write(self, p: str, values: dict[str, str]) -> WriteResult:
+            cur = self.items.setdefault(p, {})
+            changed = tuple(k for k, v in values.items() if cur.get(k) != v)
+            cur.update(values)
+            return WriteResult(changed=changed)
+
+        def replace(self, p: str, values: dict[str, str]) -> WriteResult:
+            self.replace_calls.append((p, dict(values)))
+            self.items[p] = dict(values)
+            return WriteResult(changed=("LLM_MODEL",))
+
+    store = _ReplaceStore(
+        {
+            path: {
+                "_placeholder": "init",
+                "SEC_USER_AGENT": "agent-1",
+                "S3_BUCKET": "bucket-1",
+                "LLM_MODEL": "retired-model",
+            }
+        }
+    )
+    human = _ReplaceStore(
+        {"truealpha/staging/data_engine": {"SEC_USER_AGENT": "agent-1"}}
+    )
+    resolver = SecretsResolver(
+        manifest,
+        project="truealpha",
+        service="data_engine",
+        env="staging",
+        store=store,
+        human=human,
+    )
+
+    report = secrets_supply.apply(service, "staging", resolver=resolver)
+
+    assert report.ok
+    assert store.replace_calls == [
+        (
+            path,
+            {
+                "_placeholder": "init",
+                "SEC_USER_AGENT": "agent-1",
+                "S3_BUCKET": "bucket-1",
+            },
+        )
+    ]
+    assert "LLM_MODEL" not in store.items[path]
+    assert "pruned orphan keys: ['LLM_MODEL']" in report.notes

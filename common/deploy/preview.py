@@ -219,6 +219,23 @@ def _find_compose(client, project: str, name: str):
     return client.find_compose_by_name(name, project, env_name=PREVIEW_ENVIRONMENT)
 
 
+def _find_compose_for_down(client: Any, project: str, alias: Any) -> dict | None:
+    """Locate a preview compose for teardown, including legacy bare alias names."""
+    found = _find_compose(client, project, alias.compose_name)
+    if found is not None:
+        return found
+    envs = (
+        (PREVIEW_ENVIRONMENT, "test")
+        if alias.alias.startswith("pr-")
+        else (PREVIEW_ENVIRONMENT,)
+    )
+    for env_name in envs:
+        found = client.find_compose_by_name(alias.alias, project, env_name=env_name)
+        if found is not None:
+            return found
+    return None
+
+
 def _ensure_preview_compose(
     client,
     config: Any,
@@ -518,7 +535,7 @@ def down(
     """
     config = preview_service_config(service)
     alias = preview_alias(kind, value, slug_prefix=config.slug_prefix)
-    existing = _find_compose(client, config.project, alias.compose_name)
+    existing = _find_compose_for_down(client, config.project, alias)
     url = alias.app_url(domain=domain, base_subdomain=config.base_subdomain)
     slot_suffix = f"-{alias.alias}"
     if not existing:
