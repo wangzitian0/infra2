@@ -126,7 +126,12 @@ services:
       # 127.0.0.1, not localhost: alpine/slim images often resolve localhost to
       # ::1 first, and the server only listens on IPv4 -> spurious refused conns.
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)" ]
-      start_period: 30s
+      # The entrypoint applies the schema before it serves (db/apply_migrations.sh).
+      # The replay took 22 s to 27 s of the boot, and a busy host made one boot 69 s
+      # (truealpha#1513). Docker counts no failed check inside the start period.
+      # 120 s is the start period that infra2_sdk.scaffold gives an app with a Vault
+      # sidecar. common/tests/test_truealpha_app.py reads that value from the SDK.
+      start_period: 120s
       start_interval: 2s
       interval: 10s
       retries: 3
