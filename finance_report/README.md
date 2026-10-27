@@ -68,7 +68,6 @@ secret/data/finance_report/<env>/app
   - ZAI_API_KEY
   - AI_BASE_URL
   - AI_CHAT_COMPLETIONS_PATH
-  - AI_LAYOUT_PARSING_PATH
 ```
 
 Model keys are not part of this list. The deploy does not render them (tests in `common/tests` assert it). The infra2 SDK defaults apply.

@@ -42,7 +42,7 @@ from common.observability.issue_trail import (  # noqa: E402
     GitHubIssues,
     issue_trail_mode,
     load_trail,
-    reconcile,
+    reconcile_issue_trail,
 )
 
 
@@ -96,7 +96,7 @@ def main(env: Mapping[str, str] | None = None, *, issues_factory=GitHubIssues) -
         f"[{', '.join(sorted(trail.failing)) or 'none'}], {len(trail.green)} green, "
         f"complete={trail.complete}"
     )
-    return reconcile(
+    return reconcile_issue_trail(
         issues_factory(repository, token),
         trail,
         mode=mode,

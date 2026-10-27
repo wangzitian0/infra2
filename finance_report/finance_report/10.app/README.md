@@ -45,7 +45,6 @@ Stored at: `secret/data/finance_report/<env>/app`
 | `ZAI_API_KEY` | AI provider API key. The template renders it as the container variable `AI_API_KEY` |
 | `AI_BASE_URL` | Provider base URL; defaults to Z.AI |
 | `AI_CHAT_COMPLETIONS_PATH` | Chat completions API path |
-| `AI_LAYOUT_PARSING_PATH` | OCR/layout parsing API path |
 | Model keys | Not set. The infra2 SDK defaults apply (large, small and multimodal roles). Set a role only to customize production |
 | `AI_JSON_TIMEOUT_SECONDS` | Provider JSON extraction timeout; defaults to `360` |
 | `AI_JSON_MAX_TOKENS` | Provider JSON extraction output cap; defaults to `8192` |

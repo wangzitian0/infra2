@@ -29,7 +29,7 @@ from common.observability.issue_trail import (
     WriteFailed,
     issue_trail_mode,
     load_trail,
-    reconcile,
+    reconcile_issue_trail,
     record_verdicts,
     title_for,
 )
@@ -93,7 +93,7 @@ def _issue(number, name):
 
 def test_a_red_check_without_an_issue_opens_one_with_the_exact_title() -> None:
     api = FakeIssues()
-    code = reconcile(
+    code = reconcile_issue_trail(
         api,
         _trail([_red("cloudflare-worker-status", "worker status unhealthy")]),
         mode=FULL,
@@ -117,7 +117,12 @@ def test_a_red_check_with_an_open_issue_comments_on_the_oldest_instead_of_filing
     None
 ):
     api = FakeIssues([_issue(12, "infra2-ssh"), _issue(7, "infra2-ssh")])
-    assert reconcile(api, _trail([_red("infra2-ssh")]), mode=FULL, run_url=RUN_URL) == 0
+    assert (
+        reconcile_issue_trail(
+            api, _trail([_red("infra2-ssh")]), mode=FULL, run_url=RUN_URL
+        )
+        == 0
+    )
     assert api.created == []
     assert [number for number, _ in api.comments] == [7]
     assert api.closed == []
@@ -131,7 +136,7 @@ def test_dedup_is_title_equality_not_containment() -> None:
             {"number": 5, "title": title_for("infra2-ssh-extra")},
         ]
     )
-    reconcile(
+    reconcile_issue_trail(
         api, _trail([_red("infra2-ssh")], green=["infra2-ssh-extra"]), mode=OPEN_ONLY
     )
     assert [title for title, _, _ in api.created] == [title_for("infra2-ssh")]
@@ -140,22 +145,24 @@ def test_dedup_is_title_equality_not_containment() -> None:
 
 def test_a_failed_listing_never_falls_through_to_create(capsys) -> None:
     api = FakeIssues(list_error="HTTP 502")
-    assert reconcile(api, _trail([_red("infra2-ssh")]), mode=FULL) == 0
+    assert reconcile_issue_trail(api, _trail([_red("infra2-ssh")]), mode=FULL) == 0
     assert api.created == [] and api.comments == [] and api.closed == []
     assert "could not be listed" in capsys.readouterr().out
 
 
 def test_a_failed_write_after_a_good_listing_is_exit_1() -> None:
     assert (
-        reconcile(
+        reconcile_issue_trail(
             FakeIssues(fail_on={"create"}), _trail([_red("infra2-ssh")]), mode=FULL
         )
         == 1
     )
     commented = FakeIssues([_issue(1, "infra2-ssh")], fail_on={"comment"})
-    assert reconcile(commented, _trail([_red("infra2-ssh")]), mode=FULL) == 1
+    assert (
+        reconcile_issue_trail(commented, _trail([_red("infra2-ssh")]), mode=FULL) == 1
+    )
     closing = FakeIssues([_issue(1, "infra2-ssh")], fail_on={"close"})
-    assert reconcile(closing, _trail(green=["infra2-ssh"]), mode=FULL) == 1
+    assert reconcile_issue_trail(closing, _trail(green=["infra2-ssh"]), mode=FULL) == 1
 
 
 # --- close -------------------------------------------------------------------------
@@ -170,7 +177,7 @@ def test_a_green_check_closes_every_open_issue_with_its_title() -> None:
         ]
     )
     assert (
-        reconcile(
+        reconcile_issue_trail(
             api,
             _trail(green=["cloudflare-worker-status"]),
             mode=FULL,
@@ -186,7 +193,7 @@ def test_a_green_check_closes_every_open_issue_with_its_title() -> None:
 
 def test_a_check_that_was_not_evaluated_is_left_open() -> None:
     api = FakeIssues([_issue(5, "infra2-alert-bridge")])
-    assert reconcile(api, _trail(green=["infra2-ssh"]), mode=FULL) == 0
+    assert reconcile_issue_trail(api, _trail(green=["infra2-ssh"]), mode=FULL) == 0
     assert api.closed == [] and api.comments == []
 
 
@@ -194,7 +201,7 @@ def test_a_drill_or_branch_run_never_closes() -> None:
     api = FakeIssues([_issue(5, "cloudflare-worker-status")])
     red = _red("truealpha-scheduler-liveness", "STALE: capped at 0h")
     assert (
-        reconcile(
+        reconcile_issue_trail(
             api, _trail([red], green=["cloudflare-worker-status"]), mode=OPEN_ONLY
         )
         == 0
@@ -207,9 +214,9 @@ def test_a_drill_or_branch_run_never_closes() -> None:
 
 def test_off_writes_nothing() -> None:
     api = FakeIssues(list_error="must not be listed")
-    assert reconcile(api, _trail([_red("infra2-ssh")]), mode=OFF) == 0
+    assert reconcile_issue_trail(api, _trail([_red("infra2-ssh")]), mode=OFF) == 0
     assert api.created == []
-    assert reconcile(api, _trail(), mode="bogus") == 1
+    assert reconcile_issue_trail(api, _trail(), mode="bogus") == 1
 
 
 def test_an_unrecorded_check_is_left_alone_while_the_trail_is_incomplete() -> None:
@@ -217,7 +224,7 @@ def test_an_unrecorded_check_is_left_alone_while_the_trail_is_incomplete() -> No
     green nor red unless every step vouched for a complete record."""
     report_only = "dokploy-status:finance-report/production/backend"
     api = FakeIssues([_issue(1, report_only), _issue(2, "cloudflare-worker-status")])
-    reconcile(api, _trail(green=["cloudflare-worker-status"]), mode=FULL)
+    reconcile_issue_trail(api, _trail(green=["cloudflare-worker-status"]), mode=FULL)
     assert api.closed == [2]
     assert [number for number, _body in api.comments] == [2]
 
@@ -240,7 +247,7 @@ def test_a_complete_trail_retires_issues_of_checks_that_no_longer_report() -> No
         complete=True,
     )
 
-    assert reconcile(api, trail, mode=FULL, run_url=RUN_URL) == 0
+    assert reconcile_issue_trail(api, trail, mode=FULL, run_url=RUN_URL) == 0
 
     assert sorted(api.closed) == [1, 2, 4]
     bodies = dict(api.comments)
@@ -251,7 +258,7 @@ def test_a_complete_trail_retires_issues_of_checks_that_no_longer_report() -> No
     assert "is red" in bodies[3]
     # a drill or branch dispatch never closes, retired or not
     drill = FakeIssues([_issue(1, "infra2-ssh")])
-    reconcile(drill, trail, mode=OPEN_ONLY)
+    reconcile_issue_trail(drill, trail, mode=OPEN_ONLY)
     assert drill.closed == []
 
 
@@ -289,9 +296,9 @@ def test_the_trail_is_complete_only_when_every_step_recorded_completely(
 def test_the_full_lifecycle_red_then_red_then_green() -> None:
     api = FakeIssues()
     red = _trail([_red("cloudflare-worker-status")])
-    reconcile(api, red, mode=FULL)
-    reconcile(api, red, mode=FULL)
-    reconcile(api, _trail(green=["cloudflare-worker-status"]), mode=FULL)
+    reconcile_issue_trail(api, red, mode=FULL)
+    reconcile_issue_trail(api, red, mode=FULL)
+    reconcile_issue_trail(api, _trail(green=["cloudflare-worker-status"]), mode=FULL)
     assert len(api.created) == 1
     assert [number for number, _ in api.comments] == [1000, 1000]
     assert api.closed == [1000]
@@ -314,7 +321,7 @@ def test_bodies_carry_no_private_host_ip_or_secret() -> None:
         "via 2001:db8:0:0:0:0:0:1 with s3cr3t-value fake-actions-token; iac-runner at 10:26:58"
     )
     api = FakeIssues()
-    reconcile(api, _trail([_red("infra2-ssh", detail)]), mode=FULL, env=env)
+    reconcile_issue_trail(api, _trail([_red("infra2-ssh", detail)]), mode=FULL, env=env)
     body = api.created[0][1]
     for leaked in (
         "vps.internal.example",
@@ -356,11 +363,11 @@ def test_a_name_with_a_private_value_is_scrubbed_in_the_title_and_still_closes()
     env = {"INFRA2_WATCHDOG_SSH_HOST": "vps.internal.example"}
     name = "diag-vps.internal.example"
     api = FakeIssues()
-    reconcile(api, _trail([_red(name)]), mode=FULL, env=env)
+    reconcile_issue_trail(api, _trail([_red(name)]), mode=FULL, env=env)
     title, body, _ = api.created[0]
     assert title == title_for("diag-***")
     assert "vps.internal.example" not in body
-    reconcile(api, _trail(green=[name]), mode=FULL, env=env)
+    reconcile_issue_trail(api, _trail(green=[name]), mode=FULL, env=env)
     assert api.closed == [1000]
 
 
@@ -409,11 +416,11 @@ def test_a_step_that_recorded_nothing_is_red_and_its_next_record_closes_it(
     assert set(crashed.failing) == {WATCHDOG_SOURCE}
     assert "recorded no verdict" in crashed.failing[WATCHDOG_SOURCE].detail
     api = FakeIssues()
-    reconcile(api, crashed, mode=FULL)
+    reconcile_issue_trail(api, crashed, mode=FULL)
     assert [title for title, _, _ in api.created] == [title_for(WATCHDOG_SOURCE)]
 
     record_verdicts(path, source=WATCHDOG_SOURCE, checks=[])
-    reconcile(api, load_trail(path), mode=FULL)
+    reconcile_issue_trail(api, load_trail(path), mode=FULL)
     assert api.closed == [1000]
 
 

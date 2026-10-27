@@ -17,11 +17,11 @@
 | `probes.py` | In-band health probe specification & execution | `ProbeSpec`, `execute_probe()`, `run_probes()`, `parse_probe_specs()` |
 | `probe_environment.py` | The one resolver of a probe process's environment; no default, raises when unset or unknown (#1208) | `resolve_probe_environment()`, `PROBE_ENVIRONMENT_VARIABLES` |
 | `breakdown.py` | Container log triage & failure classification | `BreakdownVerdict`, `analyze_container_logs()`, `classify_reason()`, `build_breakdown_alert_payload()` |
-| `issue_trail.py` | GitHub Issue trail reconciliation | `reconcile_watchdog_issues()`, `record_verdicts()`, `load_trail()`, `CheckVerdict` |
+| `issue_trail.py` | GitHub Issue trail reconciliation | `reconcile_issue_trail()`, `record_verdicts()`, `load_trail()`, `CheckVerdict` |
 | `openpanel.py` | OpenPanel analytics client configuration SSOT | `OPENPANEL_CLIENTS`, `openpanel_env()` |
 | `local_ledger.py` | VPS availability ledger: per-signal daily ok/fail counts and last ok/fail times written by the probe runner (#904, #1223) | `record_probe_round()`, `host_ledger_path()`, `to_report_days()` |
 | `probe_specs.py` | Probe specs rendered from the registry for the probe runner | `render_probe_spec_text()`, `normalize_specs_text()` |
-| `scheduler_peer_liveness.py` | Liveness of the peer scheduler workflow | `evaluate()`, `BOUND_CAP_ENV` |
+| `scheduler_peer_liveness.py` | Liveness of the peer scheduler workflow | `evaluate_peer_liveness()`, `BOUND_CAP_ENV` |
 | `watchers/` | Alerting sidecar resident watcher plugins: `resident.py` (base and registry), `deploy_queue_guard.py`, `breakdown_watch.py` | `ResidentWatcher`, `build_watchers()`, `DeployQueueGuard`, `ContainerBreakdownWatcher` |
 
 ## Usage Examples
@@ -54,14 +54,14 @@ if verdict.is_broken:
 
 ### Reconciling Watchdog Issues
 ```python
-from common.observability import reconcile_watchdog_issues, CheckVerdict
+from common.observability import reconcile_issue_trail, CheckVerdict
 
 verdicts = [
     CheckVerdict(check="minio_health", ok=True, summary="MinIO 200 OK"),
     CheckVerdict(check="vault_seal", ok=False, summary="Vault is sealed"),
 ]
 # Opens/comments/closes corresponding GitHub issues with exact title matching
-reconcile_watchdog_issues(verdicts, repo="wangzitian0/infra2")
+reconcile_issue_trail(verdicts, repo="wangzitian0/infra2")
 ```
 
 ## Observability Invariants
