@@ -117,7 +117,12 @@ def test_a_red_check_with_an_open_issue_comments_on_the_oldest_instead_of_filing
     None
 ):
     api = FakeIssues([_issue(12, "infra2-ssh"), _issue(7, "infra2-ssh")])
-    assert reconcile_issue_trail(api, _trail([_red("infra2-ssh")]), mode=FULL, run_url=RUN_URL) == 0
+    assert (
+        reconcile_issue_trail(
+            api, _trail([_red("infra2-ssh")]), mode=FULL, run_url=RUN_URL
+        )
+        == 0
+    )
     assert api.created == []
     assert [number for number, _ in api.comments] == [7]
     assert api.closed == []
@@ -153,7 +158,9 @@ def test_a_failed_write_after_a_good_listing_is_exit_1() -> None:
         == 1
     )
     commented = FakeIssues([_issue(1, "infra2-ssh")], fail_on={"comment"})
-    assert reconcile_issue_trail(commented, _trail([_red("infra2-ssh")]), mode=FULL) == 1
+    assert (
+        reconcile_issue_trail(commented, _trail([_red("infra2-ssh")]), mode=FULL) == 1
+    )
     closing = FakeIssues([_issue(1, "infra2-ssh")], fail_on={"close"})
     assert reconcile_issue_trail(closing, _trail(green=["infra2-ssh"]), mode=FULL) == 1
 
