@@ -56,6 +56,19 @@ TARGET_LITTER=(
   "data/staging|legacy_staging_data_dir"
   "usr/local/sbin/tianclaw-vps-disk-maintenance.sh|retired_tianclaw_maintenance_script"
   "usr/local/sbin/infra2-host-backup.sh.before-a6f29e5|legacy_backup_script_copy"
+  "data/truealpha/ingest|legacy_host_ingest_venv"
+  "data/truealpha/issue68|legacy_issue68_venv"
+  "data/truealpha/issue68-runtime|legacy_issue68_runtime"
+  "data/truealpha/backups|legacy_truealpha_local_backups"
+  "data/platform/openpanel-staging|prod_only_service_staging_leftover"
+  "data/platform/clickhouse-staging|prod_only_service_staging_leftover"
+  "data/platform/signoz-staging|prod_only_service_staging_leftover"
+  "data/platform/activepieces|retired_activepieces_data_dir"
+  "data/finance_report/app-staging|legacy_empty_app_staging_dir"
+  "data/bootstrap/1password_dbreset_backup_20260609T132132Z|legacy_1password_upgrade_backup"
+  "data/bootstrap/1password.backup.20260605123024|legacy_1password_upgrade_backup"
+  "data/bootstrap/1password.backup.20260605T221434Z|legacy_1password_upgrade_backup"
+  "data/bootstrap/1password.cache-before-182.20260605171304|legacy_1password_upgrade_backup"
 )
 
 read_crontab() {

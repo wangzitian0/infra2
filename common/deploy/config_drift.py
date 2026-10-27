@@ -585,23 +585,52 @@ def scan(tag: str) -> list[Row]:
                 Row(
                     sid,
                     "in_sync",
-                    versioned_expected,
-                    identity.source_hash,
+                    expected=versioned_expected,
+                    deployed=identity.source_hash,
                     expected_ref=expected_ref,
                     deployed_ref=identity.deploy_ref,
                 )
             )
-        else:
+            continue
+        compare_note = ""
+        try:
+            cur_dep_hash, cur_dep_missing = expected_hash_at(
+                dep, c, identity.deploy_ref, env_vars
+            )
+            cur_tag_hash, cur_tag_missing = expected_hash_at(dep, c, tag, env_vars)
+        except Exception as exc:  # noqa: BLE001
+            compare_note = f"single-formula compare error: {exc}"
+            cur_dep_hash, cur_dep_missing = None, ["error"]
+            cur_tag_hash, cur_tag_missing = None, ["error"]
+        if (
+            cur_dep_hash
+            and cur_tag_hash
+            and not cur_dep_missing
+            and not cur_tag_missing
+            and cur_dep_hash == cur_tag_hash
+        ):
             rows.append(
                 Row(
                     sid,
-                    "DRIFT",
-                    versioned_expected,
-                    identity.source_hash,
+                    "in_sync",
+                    expected=versioned_expected,
+                    deployed=identity.source_hash,
                     expected_ref=expected_ref,
                     deployed_ref=identity.deploy_ref,
                 )
             )
+            continue
+        rows.append(
+            Row(
+                sid,
+                "DRIFT",
+                expected=versioned_expected,
+                deployed=identity.source_hash,
+                note=compare_note,
+                expected_ref=expected_ref,
+                deployed_ref=identity.deploy_ref,
+            )
+        )
     for row in rows:
         reason = release.fallbacks.get(row.service)
         if reason:
