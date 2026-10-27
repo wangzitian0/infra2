@@ -538,21 +538,29 @@ def _notify_rollback_event(
             return
     except Exception as exc:  # noqa: BLE001
         warning(f"release card update skipped/failed: {exc}")
-    try:
-        from common.alerting.delivery import deliver_out_of_band_text
 
-        if any(
-            os.environ.get(key)
-            for key in (
-                "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL",
-                "FEISHU_WEBHOOK_URL",
-                "INFRA2_OUT_OF_BAND_FEISHU_APP_ID",
-                "FEISHU_APP_ID",
-            )
-        ):
-            deliver_out_of_band_text(os.environ, text)
-    except Exception as exc:  # noqa: BLE001
-        warning(f"out-of-band rollback alert delivery skipped/failed: {exc}")
+    def send_text() -> None:
+        try:
+            from common.alerting.delivery import deliver_out_of_band_text
+
+            if any(
+                os.environ.get(key)
+                for key in (
+                    "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL",
+                    "FEISHU_WEBHOOK_URL",
+                    "INFRA2_OUT_OF_BAND_FEISHU_APP_ID",
+                    "FEISHU_APP_ID",
+                )
+            ):
+                deliver_out_of_band_text(os.environ, text)
+        except Exception as exc:  # noqa: BLE001
+            warning(f"out-of-band rollback alert delivery skipped/failed: {exc}")
+
+    # A hung Feishu call must not delay the re-raise of the deploy error. The delivery has
+    # the same time budget as the card hook.
+    from common.alerting import release_card
+
+    release_card.bounded(send_text, release_card.ROLLBACK_BUDGET_SECONDS, None)
 
 
 def _build_deploy_env_vars(

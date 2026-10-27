@@ -8,7 +8,7 @@ failure also gets a reply in the thread of the card.
 
 Every function is best effort and never raises. A notification must not stop a deploy.
 Every call that runs inside the deploy process has a time bound that holds even when a
-network call hangs (``_bounded``).
+network call hangs (``bounded``).
 
 Known gap: a rejected or expired approval, and a run cancelled before the deploy job
 starts, run no step after the approval gate, so the card stays at "Waiting for approval".
@@ -30,6 +30,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -52,6 +53,9 @@ STAGES: dict[str, tuple[str, str]] = {
     "failed": ("red", "Failed"),
 }
 
+#: The accept-until time carries the date: a sender deadline can put it hours away.
+ACCEPT_UNTIL_FORMAT = "%Y-%m-%d %H:%M UTC"
+
 MAX_DETAIL_CHARS = 600
 
 #: The thread reply carries the whole rollback event. The reason is its last line.
@@ -72,6 +76,13 @@ STAGE_ENV = "RELEASE_CARD_STAGE"
 
 #: The stages that carry a reason. A later generic "failed" update must not replace them.
 REASON_STAGES = frozenset({"rolled_back", "failed"})
+
+#: Threads that missed their budget and may still run. A rollback waits a short time for
+#: them, so a stalled progress update cannot overwrite the rollback that follows it.
+_ABANDONED: list[threading.Thread] = []
+
+#: How long a rollback notice waits for an abandoned thread.
+SETTLE_SECONDS = 2.0
 
 #: The shape of a Feishu message id. The id goes into a URL path and into a step output.
 MESSAGE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -105,11 +116,15 @@ def render_release_card(card: ReleaseCard) -> dict[str, Any]:
         expiry = (
             f" before {card.approval_expires_at}" if card.approval_expires_at else ""
         )
-        sections.append(
-            f"The owner approves the deploy in GitHub{expiry}. "
-            "An approval that comes after the request expires has no effect. "
+        stale = (
             "When that time has passed, this card is stale: the request expired "
             "or the owner rejected it."
+            if card.approval_expires_at
+            else "If the request expired or the owner rejected it, this card is stale."
+        )
+        sections.append(
+            f"The owner approves the deploy in GitHub{expiry}. "
+            f"An approval that comes after the request expires has no effect. {stale}"
         )
     actions = [
         (
@@ -234,7 +249,7 @@ def reply_release_failure(
 def note_progress(env: Mapping[str, str], what: str, outcome: str) -> None:
     """Show one finished deploy phase on the card of this run, when the run has a card."""
     message_id = env.get(MESSAGE_ID_ENV, "")
-    if not message_id:
+    if not message_id or _stalled():
         return
 
     def update() -> bool:
@@ -245,7 +260,7 @@ def note_progress(env: Mapping[str, str], what: str, outcome: str) -> None:
             env, message_id, card, timeout=PROGRESS_TIMEOUT_SECONDS
         )
 
-    _bounded(update, PROGRESS_BUDGET_SECONDS, False)
+    bounded(update, PROGRESS_BUDGET_SECONDS, False)
 
 
 def note_rollback(env: Mapping[str, str], event: Mapping[str, Any]) -> bool:
@@ -259,7 +274,8 @@ def note_rollback(env: Mapping[str, str], event: Mapping[str, Any]) -> bool:
     message_id = env.get(MESSAGE_ID_ENV, "")
     if not message_id:
         return False
-    return _bounded(
+    _settle(SETTLE_SECONDS)
+    return bounded(
         lambda: _show_rollback(env, message_id, event), ROLLBACK_BUDGET_SECONDS, False
     )
 
@@ -292,7 +308,7 @@ def _show_rollback(
 def accept_until_text(
     env: Mapping[str, str], run: Callable[..., Any] = subprocess.run
 ) -> str:
-    """The last time at which the receiver accepts this request, as ``HH:MM UTC``.
+    """The last time at which the receiver accepts this request, as ``YYYY-MM-DD HH:MM UTC``.
 
     The time comes from ``production_request_accept_until``, the function that the age
     check of the deploy job uses. It reads the creation time of this run from the GitHub
@@ -323,7 +339,7 @@ def accept_until_text(
             json.loads(env.get("APP_DEPLOY_REQUEST_JSON") or "{}")
         )
         accept_until = production_request_accept_until(created, deadline)
-        return accept_until.astimezone(timezone.utc).strftime("%H:%M UTC")
+        return accept_until.astimezone(timezone.utc).strftime(ACCEPT_UNTIL_FORMAT)
     except Exception as exc:  # noqa: BLE001 - a notification never stops a deploy
         _warn("accept-until", exc)
         return ""
@@ -341,7 +357,20 @@ def _remember_stage(env: Mapping[str, str], stage: str) -> None:
         _warn("stage", exc)
 
 
-def _bounded(call: Callable[[], Any], seconds: float, default: Any) -> Any:
+def _stalled() -> bool:
+    """True when an earlier call missed its budget and still runs. Feishu is slow then,
+    so a progress update is skipped and cannot add to the deploy time."""
+    return any(thread.is_alive() for thread in _ABANDONED)
+
+
+def _settle(seconds: float) -> None:
+    """Wait up to ``seconds`` in total for the abandoned threads."""
+    deadline = time.monotonic() + seconds
+    for thread in list(_ABANDONED):
+        thread.join(max(0.0, deadline - time.monotonic()))
+
+
+def bounded(call: Callable[[], Any], seconds: float, default: Any) -> Any:
     """Run ``call`` in a daemon thread. Return its result, or ``default`` after ``seconds``.
 
     A socket timeout applies to each read, so a server that sends one byte at a time
@@ -355,10 +384,11 @@ def _bounded(call: Callable[[], Any], seconds: float, default: Any) -> Any:
         except Exception as exc:  # noqa: BLE001 - a notification never stops a deploy
             _warn("bounded call", exc)
 
-    thread = threading.Thread(target=target, daemon=True)
+    thread = threading.Thread(target=target, daemon=True, name="release-card")
     thread.start()
     thread.join(seconds)
     if thread.is_alive():
+        _ABANDONED.append(thread)
         print(
             f"::warning title=Release card::no answer within {seconds:g} s",
             file=sys.stderr,

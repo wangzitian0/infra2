@@ -109,7 +109,7 @@ jobs:
           INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
           INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
           INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
-        run: timeout 90 python -m tools.release_card open --stage requested --github-output "$GITHUB_OUTPUT" || echo "::warning title=Release card::the card step failed"
+        run: timeout 30 python -m tools.release_card open --stage requested --github-output "$GITHUB_OUTPUT" || echo "::warning title=Release card::the card step failed"
       - name: Canary the exact app and IaC coordinates
         env:
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
@@ -141,7 +141,7 @@ jobs:
           INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
           INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
           RELEASE_CARD_MESSAGE_ID: ${{ steps.card.outputs.message_id }}
-        run: timeout 90 python -m tools.release_card advance --stage awaiting_approval --accept-until || echo "::warning title=Release card::the card step failed"
+        run: timeout 30 python -m tools.release_card advance --stage awaiting_approval --accept-until || echo "::warning title=Release card::the card step failed"
       - name: Show on the card that the canary failed
         if: ${{ (failure() || cancelled()) && steps.card.outputs.message_id != '' }}
         env:
@@ -152,7 +152,7 @@ jobs:
           INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
           INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
           RELEASE_CARD_MESSAGE_ID: ${{ steps.card.outputs.message_id }}
-        run: timeout 90 python -m tools.release_card advance --stage failed --detail "The canary failed or the run was cancelled. The deploy did not start." || echo "::warning title=Release card::the card step failed"
+        run: timeout 30 python -m tools.release_card advance --stage failed --detail "The canary failed or the run was cancelled. The deploy did not start." || echo "::warning title=Release card::the card step failed"
 
   deploy:
     name: execute validated request
@@ -228,7 +228,7 @@ jobs:
           INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
           INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
           RELEASE_CARD_MESSAGE_ID: ${{ needs.preflight_canary.outputs.card_message_id }}
-        run: timeout 90 python -m tools.release_card advance --stage deploying --detail "Approved. The deploy starts." || echo "::warning title=Release card::the card step failed"
+        run: timeout 30 python -m tools.release_card advance --stage deploying --detail "The deploy job started." || echo "::warning title=Release card::the card step failed"
       - name: Configure SSH key for the pre-deploy schema gate
         # common.deploy.schema_gate SSHes to the VPS to run pre_deploy_schema_check inside
         # the app's published image. Reuses INFRA2_WATCHDOG_SSH_* secrets (#802).
@@ -284,7 +284,7 @@ jobs:
           INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
           INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
           RELEASE_CARD_MESSAGE_ID: ${{ needs.preflight_canary.outputs.card_message_id }}
-        run: timeout 90 python -m tools.release_card advance --stage succeeded --detail "The release is in service." || echo "::warning title=Release card::the card step failed"
+        run: timeout 30 python -m tools.release_card advance --stage succeeded --detail "The release is in service." || echo "::warning title=Release card::the card step failed"
       - name: Show on the card that the deploy failed
         # A rollback already marked the card, so this step only writes a failure that no
         # rollback explained.
@@ -297,4 +297,4 @@ jobs:
           INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
           INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
           RELEASE_CARD_MESSAGE_ID: ${{ needs.preflight_canary.outputs.card_message_id }}
-        run: timeout 90 python -m tools.release_card advance --stage failed --detail "The deploy failed or the run was cancelled. Open the run for the reason." || echo "::warning title=Release card::the card step failed"
+        run: timeout 30 python -m tools.release_card advance --stage failed --detail "The deploy failed or the run was cancelled. Open the run for the reason." || echo "::warning title=Release card::the card step failed"

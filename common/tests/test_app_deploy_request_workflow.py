@@ -52,6 +52,18 @@ FEISHU_SECRETS = {
     "INFRA2_OUT_OF_BAND_FEISHU_API_BASE",
 }
 CARD_ID = "needs.preflight_canary.outputs.card_message_id"
+_WARN = '|| echo "::warning title=Release card::the card step failed"'
+_CARD = "timeout 30 python -m tools.release_card"
+#: The exact command of each card step. A step that holds the Feishu app secret must not
+#: gain a chained command, so the test compares the whole string, not a prefix.
+CARD_STEP_RUNS = {
+    "Open the release card": f'{_CARD} open --stage requested --github-output "$GITHUB_OUTPUT" {_WARN}',
+    "Show on the card that the owner must approve": f"{_CARD} advance --stage awaiting_approval --accept-until {_WARN}",
+    "Show on the card that the canary failed": f'{_CARD} advance --stage failed --detail "The canary failed or the run was cancelled. The deploy did not start." {_WARN}',
+    "Show on the card that the deploy starts": f'{_CARD} advance --stage deploying --detail "The deploy job started." {_WARN}',
+    "Show on the card that the deploy succeeded": f'{_CARD} advance --stage succeeded --detail "The release is in service." {_WARN}',
+    "Show on the card that the deploy failed": f'{_CARD} advance --stage failed --detail "The deploy failed or the run was cancelled. Open the run for the reason." {_WARN}',
+}
 
 
 def workflow() -> dict:
@@ -648,11 +660,8 @@ def test_every_card_step_is_bounded_and_cannot_fail_the_job() -> None:
             seen.add(item["name"])
             assert "continue-on-error" not in item, item["name"]
             run = item["run"]
-            assert run.startswith("timeout 90 python -m tools.release_card "), item[
-                "name"
-            ]
-            assert '|| echo "::warning' in run, item["name"]
-    assert seen == CARD_STEPS
+            assert run.strip() == CARD_STEP_RUNS[item["name"]], item["name"]
+    assert seen == CARD_STEPS == set(CARD_STEP_RUNS)
 
 
 def test_each_card_step_runs_only_for_a_run_with_a_card_and_in_the_right_state() -> (

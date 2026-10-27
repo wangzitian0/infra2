@@ -328,11 +328,16 @@ The receiver is the only writer. A sender never posts to Feishu.
 - The card needs the Feishu app mode (`INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE=feishu_app`). A webhook cannot update a
   card, so in webhook mode there is no card, every card step does nothing, and the rollback text of `promote` stays the
   notice.
-- A card step cannot stop a deploy. The step runs `timeout 90 python -m tools.release_card ... || echo "::warning"`,
+- A card step cannot stop a deploy. The step runs `timeout 30 python -m tools.release_card ... || echo "::warning"`,
   so a hung call or a bad argument gives a warning. Inside the deploy process, each hook runs in a daemon thread with a
   time budget (`PROGRESS_BUDGET_SECONDS`, `ROLLBACK_BUDGET_SECONDS`), because a socket timeout does not bound a
-  slow-drip server or a DNS lookup. The delivery settings are resolved in one place,
+  slow-drip server or a DNS lookup. After one progress update misses its budget, later progress updates are skipped, and
+  a rollback notice waits at most 2 s for the stalled update, so the stalled update cannot overwrite the rollback. The
+  text fallback of `promote` has the same budget as the rollback hook. The delivery settings are resolved in one place,
   `common.alerting.out_of_band_app_config`.
+- Time that the card adds to a deploy when Feishu hangs: 30 s for the step that shows the start, 6 s for the first
+  stalled progress update, and 30 s for the step that shows the result. The deploy budget of a production request is
+  `PRODUCTION_DEPLOY_BUDGET_SECONDS` (300 s). A healthy Feishu adds about two requests for each update.
 - Feishu limits: the app updates a card for 14 days after the send, the card sets `config.update_multi` to true, and only
   the sending app updates it. The app needs a permission of `im:message`, `im:message:send_as_bot` or
   `im:message:update`. The reply uses `reply_in_thread`.

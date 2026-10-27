@@ -105,6 +105,13 @@ def feishu(monkeypatch) -> FakeFeishu:
     return fake
 
 
+@pytest.fixture(autouse=True)
+def _no_abandoned_threads():
+    rc._ABANDONED.clear()
+    yield
+    rc._ABANDONED.clear()
+
+
 def _card(stage: str, **overrides) -> rc.ReleaseCard:
     values = {
         "stage": stage,
@@ -148,6 +155,10 @@ def test_the_approval_card_says_when_the_request_expires() -> None:
     assert "before 11:59 UTC" in text
     assert "has no effect" in text
     assert "this card is stale" in text
+
+    without_time = json.dumps(rc.render_release_card(_card("awaiting_approval")))
+    assert "When that time has passed" not in without_time
+    assert "this card is stale" in without_time
 
 
 def test_a_secret_in_the_detail_never_reaches_the_card() -> None:
@@ -413,9 +424,13 @@ def test_the_accept_until_time_is_the_one_that_the_deploy_job_enforces() -> None
     from common.deploy.app_deploy_request import production_request_accept_until
 
     created = datetime(2026, 10, 23, 11, 35, 39, tzinfo=timezone.utc)
-    fmt = "%H:%M UTC"
+    fmt = rc.ACCEPT_UNTIL_FORMAT
 
     without = rc.accept_until_text(APP_ENV, run=_gh_run_created)
+
+    # The time carries the date: a sender deadline can put it hours away.
+    assert without.startswith("2026-10-23 ")
+    assert without.endswith(" UTC")
 
     assert without == production_request_accept_until(created, None).strftime(fmt)
     deadline = created + timedelta(seconds=600)
@@ -683,3 +698,136 @@ def test_the_generic_names_are_the_fallback_and_values_are_trimmed() -> None:
         )["webhook_url"]
         == "https://hook"
     )
+
+
+def test_the_detail_on_the_card_is_clipped() -> None:
+    card = rc.render_release_card(_card("failed", detail="Q" * 5000))
+
+    assert json.dumps(card).count("Q") == rc.MAX_DETAIL_CHARS
+
+
+def test_the_hook_threads_are_daemons_so_a_stalled_call_cannot_keep_the_process(
+    monkeypatch,
+) -> None:
+    release = threading.Event()
+    seen: list[threading.Thread] = []
+
+    def hang(_request, timeout):
+        seen.append(threading.current_thread())
+        release.wait(30)
+        raise URLError("released")
+
+    monkeypatch.setattr("common.alerting.urlopen", hang)
+    monkeypatch.setattr(rc, "PROGRESS_BUDGET_SECONDS", 0.2)
+
+    rc.note_progress({**APP_ENV, rc.MESSAGE_ID_ENV: "om_card"}, "sync", "completed")
+    release.set()
+
+    assert seen and all(thread.daemon for thread in seen)
+    assert seen[0].name == "release-card"
+
+
+def test_after_a_stalled_progress_update_later_progress_updates_are_skipped(
+    monkeypatch,
+) -> None:
+    release = threading.Event()
+    calls: list[str] = []
+
+    def hang(request, timeout):
+        calls.append(request.full_url)
+        release.wait(30)
+        raise URLError("released")
+
+    monkeypatch.setattr("common.alerting.urlopen", hang)
+    monkeypatch.setattr(rc, "PROGRESS_BUDGET_SECONDS", 0.2)
+    env = {**APP_ENV, rc.MESSAGE_ID_ENV: "om_card"}
+
+    rc.note_progress(env, "sync", "completed")
+    started = time.monotonic()
+    rc.note_progress(env, "wait for health", "completed")
+    elapsed = time.monotonic() - started
+    release.set()
+
+    assert len(calls) == 1
+    assert elapsed < 0.1
+
+
+def test_a_stalled_progress_update_cannot_overwrite_the_rollback_that_follows(
+    monkeypatch,
+) -> None:
+    """The progress update stalls, its budget ends, and the rollback goes out. The stalled
+    update must reach Feishu before the rollback does, so the card ends as rolled back."""
+    applied: list[str] = []
+
+    def slow_progress(request, timeout):
+        body = json.loads(request.data.decode("utf-8")) if request.data else {}
+        content = body.get("content", "")
+        if request.get_method() == "PATCH" and "Deploying" in content:
+            time.sleep(0.8)
+        if request.full_url.endswith("/tenant_access_token/internal"):
+            return _Response({"code": 0, "tenant_access_token": "tenant-token"})
+        if request.get_method() == "PATCH":
+            title = json.loads(content)["header"]["title"]["content"]
+            applied.append("Deploying" if "Deploying" in title else "Rolled back")
+        return _Response({"code": 0})
+
+    monkeypatch.setattr("common.alerting.urlopen", slow_progress)
+    monkeypatch.setattr(rc, "PROGRESS_BUDGET_SECONDS", 0.2)
+    env = {**APP_ENV, rc.MESSAGE_ID_ENV: "om_card"}
+
+    rc.note_progress(env, "sync", "completed")
+    assert rc.note_rollback(env, EVENT) is True
+
+    assert applied == ["Deploying", "Rolled back"]
+
+
+def test_the_text_fallback_of_a_rollback_is_bounded_too(monkeypatch) -> None:
+    from common.deploy import promote
+
+    release = threading.Event()
+
+    def hang(_request, timeout):
+        release.wait(30)
+        raise URLError("released")
+
+    monkeypatch.setattr("common.alerting.urlopen", hang)
+    monkeypatch.setattr(rc, "ROLLBACK_BUDGET_SECONDS", 0.3)
+    for key, value in APP_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv(rc.MESSAGE_ID_ENV, raising=False)
+
+    started = time.monotonic()
+    promote._notify_rollback_event(EVENT)
+    elapsed = time.monotonic() - started
+    release.set()
+
+    assert elapsed < 3
+
+
+def test_when_the_card_calls_are_rejected_the_rollback_text_still_goes_out(
+    monkeypatch,
+) -> None:
+    """The app can hold the send permission and lack the update permission. Feishu then
+    answers the update and the reply with an error code. The text must still go out."""
+    from common.deploy import promote
+
+    calls: list[tuple[str, str]] = []
+
+    def no_update_permission(request, timeout):
+        url = request.full_url
+        calls.append((request.get_method(), url.rsplit("/", 1)[-1]))
+        if url.endswith("/tenant_access_token/internal"):
+            return _Response({"code": 0, "tenant_access_token": "tenant-token"})
+        if request.get_method() == "PATCH" or url.endswith("/reply"):
+            return _Response({"code": 99991672, "msg": "no permission"})
+        return _Response({"code": 0, "data": {"message_id": "om_text"}})
+
+    monkeypatch.setattr("common.alerting.urlopen", no_update_permission)
+    for key, value in {**APP_ENV, rc.MESSAGE_ID_ENV: "om_card"}.items():
+        monkeypatch.setenv(key, value)
+
+    promote._notify_rollback_event(EVENT)
+
+    sends = [c for c in calls if c[1] != "internal"]
+    assert [method for method, _ in sends] == ["PATCH", "POST", "POST"]
+    assert sends[-1][1].endswith("chat_id")
