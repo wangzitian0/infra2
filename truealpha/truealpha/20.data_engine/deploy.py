@@ -266,7 +266,6 @@ class DataEngineDeployer(Deployer):
             "TA_MINIO_S3_PORT": cls._MINIO_S3_PORTS.get(environment, "0"),
             "DAGSTER_WEBSERVER_PORT": cls._WEBSERVER_PORTS.get(environment, "0"),
             "TIER_CPU_SHARES": "512" if environment == "staging" else "1024",
-            "DATA_ENGINE_VAULT_MEM_LIMIT": "128m",
             # truealpha#854: the moomoo origins soaked on staging and were proven on a
             # manual forced TOPT tick there (2026-09-16 11:08Z, truealpha#874). Production
             # turns them on through this reviewed change (part of CONFIGURATION_SHA256: a
