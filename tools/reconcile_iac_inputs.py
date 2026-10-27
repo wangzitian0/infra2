@@ -31,6 +31,10 @@ from common.deploy.release_markers import (
 from infra2_sdk.refs import assert_after_on_main  # noqa: F401  (re-exported; #616)
 
 MANIFEST_PATH = "docs/ssot/deploy-dependencies.yaml"
+SOURCE_HASH_FORMULA_PATHS = (
+    "common/deploy/deployer.py",
+    "common/deploy/config_hash.py",
+)
 
 
 @dataclass(frozen=True)
@@ -240,6 +244,13 @@ def build_plan(changed_files: Sequence[str]) -> ReconcilePlan:
         for service in iac_pinned_services():
             selected.setdefault(
                 service, f"dependency manifest changed ({MANIFEST_PATH})"
+            )
+
+    formula_hits = [p for p in SOURCE_HASH_FORMULA_PATHS if p in files]
+    if formula_hits:
+        for service in iac_pinned_services():
+            selected.setdefault(
+                service, f"source config hash formula changed ({formula_hits[0]})"
             )
 
     for service, reason in sorted(decision.selected.items()):

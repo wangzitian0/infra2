@@ -86,18 +86,27 @@ def collect_preview_composes(projects: list[dict]) -> list[PreviewCompose]:
         if not prefix:
             continue
         for env in project.get("environments") or []:
-            if normalize_env_name(env.get("name")) != preview_env:
+            env_name = normalize_env_name(env.get("name"))
+            if env_name not in {preview_env, "test"}:
                 continue
             for compose in env.get("compose") or []:
                 cname = str(compose.get("name") or "")
                 cid = compose.get("composeId")
-                if not cid or not cname.startswith(prefix):
+                if not cid:
+                    continue
+                if env_name == preview_env and cname.startswith(prefix):
+                    alias = cname[len(prefix) :]
+                elif env_name == preview_env and cname.startswith(VALID_KIND_PREFIXES):
+                    alias = cname
+                elif env_name == "test" and cname.startswith("pr-"):
+                    alias = cname
+                else:
                     continue
                 found.append(
                     PreviewCompose(
                         compose_name=cname,
                         compose_id=str(cid),
-                        alias=cname[len(prefix) :],
+                        alias=alias,
                         project=pname,
                     )
                 )

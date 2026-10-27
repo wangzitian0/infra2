@@ -29,6 +29,7 @@ from infra2_sdk.secrets import (
     SecretsResolver,
     VaultKvBackend,
     urllib_transport,
+    vault_path,
 )
 
 from common.security.registry import Service, merged_manifest
@@ -207,6 +208,19 @@ def apply(
             notes.append(f"1Password unavailable ({error}); deploying on Vault (#625)")
     runtime = resolver.ensure_runtime()
     changed.update(runtime.changed)
+    if not service.preview and hasattr(resolver.store, "replace"):
+        allowed = {f.key for f in resolver.manifest.store_backed} | set(
+            service.store_only_keys
+        )
+        path = vault_path(service.project, env, service.service)
+        held = resolver.store.read(path)
+        orphans = sorted(k for k in held if k not in allowed and not k.startswith("_"))
+        if orphans:
+            resolver.store.replace(
+                path,
+                {k: v for k, v in held.items() if k in allowed or k.startswith("_")},
+            )
+            notes.append(f"pruned orphan keys: {orphans}")
     if human_reachable:
         try:
             mirror = resolver.mirror()

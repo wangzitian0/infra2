@@ -7,6 +7,7 @@ import os
 import secrets
 import shlex
 import sys
+import uuid
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from urllib.parse import quote
@@ -14,20 +15,6 @@ from urllib.parse import quote
 from common.deploy.deployer import Deployer, make_tasks
 from common.console import error, run_with_status, success, header, info, warning
 from common.core.facets import BackupFacet, Exemption
-
-
-def _generate_uuid() -> str:
-    """Generate an RFC 4122 compliant UUID v4 without importing standard library 'uuid'.
-
-    Standard library 'uuid' imports 'platform', which conflicts with this repo's
-    top-level 'platform' directory when validating deployers.
-    """
-    b = bytearray(secrets.token_bytes(16))
-    b[6] = (b[6] & 0x0F) | 0x40  # Version 4
-    b[8] = (b[8] & 0x3F) | 0x80  # Variant 1 (RFC 4122)
-    h = b.hex()
-    return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:]}"
-
 
 # Get shared_tasks from sys.modules (loaded by tools/loader.py)
 shared_tasks = sys.modules.get("platform.25.free.shared")
@@ -106,7 +93,7 @@ class FreeDeployer(Deployer):
                 )
                 return None
 
-        free_uuid = existing_uuid or os.getenv("FREE_UUID") or _generate_uuid()
+        free_uuid = existing_uuid or os.getenv("FREE_UUID") or str(uuid.uuid4())
         free_path = (
             existing_path
             or os.getenv("FREE_PATH")

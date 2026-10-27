@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import subprocess
+import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from common.tests.fakes import FakeSecrets
 from tools import dokploy_env, env_tool, local_init
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class FakeDokployClient:
@@ -216,3 +220,24 @@ def test_dokploy_logs_named_environment_selects_the_config(monkeypatch) -> None:
     )
 
     assert requested == ["staging"]
+
+
+def test_platform_dir_does_not_shadow_stdlib_platform() -> None:
+    """Ensure the repository platform directory does not shadow stdlib platform."""
+    assert not (ROOT / "platform" / "__init__.py").exists()
+    res1 = subprocess.run(
+        [sys.executable, "tools/preview_leak_check.py", "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res1.returncode == 0
+    res2 = subprocess.run(
+        [sys.executable, "tools/dokploy_config_drift.py", "--help"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res2.returncode == 0

@@ -53,6 +53,17 @@ def test_manifest_change_reconciles_all_iac_pinned_services() -> None:
     assert "dependency manifest changed" in plan.selected["platform/alerting"]
 
 
+def test_deployer_change_reconciles_all_iac_pinned_services() -> None:
+    """Select all iac_pinned services when the shared source config hash formula changes."""
+    plan = build_plan(["common/deploy/deployer.py"])
+
+    assert set(plan.services) == set(reconcile.iac_pinned_services())
+    assert (
+        plan.selected["platform/postgres"]
+        == "source config hash formula changed (common/deploy/deployer.py)"
+    )
+
+
 def test_prod_only_services_skip_staging() -> None:
     plan = build_plan(["platform/11.signoz/compose.yaml"])
 

@@ -662,6 +662,35 @@ def test_down_is_idempotent_when_alias_absent():
     assert result.url == "https://report-commit-1ab32d5.zitian.party"
 
 
+def test_down_falls_back_to_legacy_pr_compose_in_test_env():
+    """Find and delete legacy bare PR compose in test environment when preview compose is absent."""
+
+    class LegacyTestEnvDokploy(FakeDokploy):
+        def find_compose_by_name(self, name, project_name=None, env_name=None):
+            self.found.append((name, project_name, env_name))
+            if (
+                name == "pr-2656"
+                and project_name == "finance_report"
+                and env_name == "test"
+            ):
+                return {"composeId": "DSJ7jnbs8zz39s545ahmL"}
+            return None
+
+    fake = LegacyTestEnvDokploy(existing=None)
+    result = pl.down("pr", 2656, domain="zitian.party", client=fake)
+
+    assert ("finance-report-preview-pr-2656", "finance_report", "preview") in fake.found
+    assert ("pr-2656", "finance_report", "preview") in fake.found
+    assert ("pr-2656", "finance_report", "test") in fake.found
+    assert fake.deleted == [("DSJ7jnbs8zz39s545ahmL", True)]
+    assert result.compose_id == "DSJ7jnbs8zz39s545ahmL"
+    assert result.alias == "pr-2656"
+
+    fake_branch = LegacyTestEnvDokploy(existing=None)
+    pl.down("branch", "main", domain="zitian.party", client=fake_branch)
+    assert all(env_name != "test" for _, _, env_name in fake_branch.found)
+
+
 # --- the readiness poller --------------------------------------------------------
 
 
