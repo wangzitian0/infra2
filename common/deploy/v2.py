@@ -302,10 +302,18 @@ def _progress(what: str, outcome: str, started: float) -> None:
         file=sys.stderr,
         flush=True,
     )
-    # A production run shows each finished phase on its release card. This never raises.
-    from common.alerting import release_card
+    # A production run shows each finished phase on its release card. The update has a
+    # time bound and never stops the deploy.
+    try:
+        from common.alerting import release_card
 
-    release_card.note_progress(os.environ, what, outcome)
+        release_card.note_progress(os.environ, what, outcome)
+    except Exception as exc:  # noqa: BLE001
+        print(
+            f"[deploy_v2] release card update failed: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 # A staging deploy re-submits a request the runner lost once; a production deploy never does

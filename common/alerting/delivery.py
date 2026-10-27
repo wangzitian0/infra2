@@ -7,7 +7,7 @@ import json
 import os
 from collections.abc import Mapping
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from urllib.request import Request
 
 import common.alerting
@@ -272,7 +272,7 @@ def update_feishu_app_card(
     may update it, so this path needs app credentials and never works with a webhook.
     """
     base = validate_feishu_api_base(api_base)
-    safe_message_id = _required("FEISHU_MESSAGE_ID", message_id)
+    safe_message_id = quote(_required("FEISHU_MESSAGE_ID", message_id), safe="")
     access_token = _tenant_access_token(base, app_id, app_secret, timeout=timeout)
     return _post_json(
         f"{base}/open-apis/im/v1/messages/{safe_message_id}",
@@ -294,7 +294,7 @@ def reply_feishu_app_text(
 ) -> dict[str, Any]:
     """Reply to a message inside its thread. The reply opens the thread when none exists."""
     base = validate_feishu_api_base(api_base)
-    safe_message_id = _required("FEISHU_MESSAGE_ID", message_id)
+    safe_message_id = quote(_required("FEISHU_MESSAGE_ID", message_id), safe="")
     access_token = _tenant_access_token(base, app_id, app_secret, timeout=timeout)
     return _post_json(
         f"{base}/open-apis/im/v1/messages/{safe_message_id}/reply",

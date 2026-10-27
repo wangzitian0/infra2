@@ -38,9 +38,9 @@ from common.alerting.delivery import (
     message_id_of,
     out_of_band_app_config,
     redacted_app_config,
+    redacted_url,
     reply_feishu_app_text,
     update_feishu_app_card,
-    redacted_url,
     validate_feishu_api_base,
     validate_feishu_webhook_url,
 )

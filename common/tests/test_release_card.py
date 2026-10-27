@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.error import URLError
 
@@ -31,6 +33,15 @@ APP_ENV = {
     "APP_DEPLOY_REQUEST_JSON": json.dumps(REQUEST),
     "GITHUB_REPOSITORY": "wangzitian0/infra2",
     "GITHUB_RUN_ID": "39947166819",
+}
+EVENT = {
+    "service": "truealpha/app",
+    "environment": "prod",
+    "reason": "llm is unhealthy",
+    "from_version": "v0.2.56",
+    "to_version": "v0.2.55",
+    "action": "rolled_back",
+    "manual_intervention_required": False,
 }
 WEBHOOK_ENV = {
     "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE": "feishu_webhook",
@@ -136,6 +147,7 @@ def test_the_approval_card_says_when_the_request_expires() -> None:
     text = json.dumps(card)
     assert "before 11:59 UTC" in text
     assert "has no effect" in text
+    assert "this card is stale" in text
 
 
 def test_a_secret_in_the_detail_never_reaches_the_card() -> None:
@@ -186,19 +198,43 @@ def test_a_reply_goes_into_the_thread_of_the_card(feishu: FakeFeishu) -> None:
     assert json.loads(send["body"]["content"]) == {"text": "llm is unhealthy"}
 
 
-def test_a_webhook_cannot_update_a_card_so_only_a_person_stage_sends_text(
+def test_the_webhook_mode_wins_even_when_app_credentials_are_present(
     feishu: FakeFeishu,
 ) -> None:
-    assert rc.open_release_card(WEBHOOK_ENV, _card("requested")) == ""
-    assert rc.advance_release_card(WEBHOOK_ENV, "", _card("deploying")) is False
+    """The mode selects the path. A webhook run that also holds app credentials still
+    opens no card, so a stray credential cannot start a card the run cannot update."""
+    env = {**APP_ENV, "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE": "feishu_webhook"}
+
+    assert rc.open_release_card(env, _card("requested")) == ""
+    assert rc.advance_release_card(env, "om_card", _card("deploying")) is False
+    assert rc.reply_release_failure(env, "om_card", "reason") is False
+
     assert feishu.calls == []
 
-    assert rc.advance_release_card(WEBHOOK_ENV, "", _card("awaiting_approval")) is True
 
-    assert len(feishu.calls) == 1
-    text = feishu.calls[0]["body"]["content"]["text"]
-    assert "Waiting for approval" in text
-    assert RUN_URL in text
+def test_a_webhook_cannot_update_a_card_so_no_stage_sends_anything(
+    feishu: FakeFeishu, tmp_path: Path
+) -> None:
+    """The module needs the app mode. In webhook mode the deploy keeps its own rollback
+    text (common.deploy.promote), and the card steps do nothing."""
+    assert rc.open_release_card(WEBHOOK_ENV, _card("requested")) == ""
+    for stage in rc.STAGES:
+        assert rc.advance_release_card(WEBHOOK_ENV, "om_card", _card(stage)) is False
+    assert rc.reply_release_failure(WEBHOOK_ENV, "om_card", "reason") is False
+    assert (
+        rc.note_rollback({**WEBHOOK_ENV, rc.MESSAGE_ID_ENV: "om_card"}, EVENT) is False
+    )
+    output = tmp_path / "github_output"
+    assert (
+        rc.main(
+            ["open", "--stage", "requested", "--github-output", str(output)],
+            env=WEBHOOK_ENV,
+        )
+        == 0
+    )
+
+    assert feishu.calls == []
+    assert output.read_text(encoding="utf-8") == "message_id=\n"
 
 
 @pytest.mark.parametrize("env", [APP_ENV, WEBHOOK_ENV])
@@ -212,7 +248,7 @@ def test_a_failing_feishu_never_raises(monkeypatch, env: dict) -> None:
     assert rc.advance_release_card(env, "om_card", _card("failed")) is False
     assert rc.reply_release_failure(env, "om_card", "reason") is False
     rc.note_progress({**env, rc.MESSAGE_ID_ENV: "om_card"}, "sync", "done")
-    assert rc.note_rollback({**env, rc.MESSAGE_ID_ENV: "om_card"}, "reason") is False
+    assert rc.note_rollback({**env, rc.MESSAGE_ID_ENV: "om_card"}, EVENT) is False
 
 
 def test_progress_changes_the_card_only_when_the_run_has_one(
@@ -236,22 +272,59 @@ def test_progress_changes_the_card_only_when_the_run_has_one(
 def test_a_rollback_marks_the_card_and_replies_with_the_reason(
     feishu: FakeFeishu,
 ) -> None:
-    handled = rc.note_rollback(
-        {**APP_ENV, rc.MESSAGE_ID_ENV: "om_card"},
-        "[WARN] Deploy rollback event\n- Reason: llm is unhealthy",
-    )
+    handled = rc.note_rollback({**APP_ENV, rc.MESSAGE_ID_ENV: "om_card"}, EVENT)
 
     assert handled is True
     methods = [(c["method"], c["url"].rsplit("/", 1)[-1]) for c in feishu.sends()]
     assert methods == [("PATCH", "om_card"), ("POST", "reply")]
     patched = json.loads(feishu.sends()[0]["body"]["content"])
     assert "Rolled back" in patched["header"]["title"]["content"]
+    reply = json.loads(feishu.sends()[1]["body"]["content"])["text"]
+    assert "Action: rolled_back" in reply
+    assert "Reason: llm is unhealthy" in reply
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        "paused",
+        "blocked_by_schema_class_c",
+        "circuit_breaker_tripped",
+        "rollback_failed: dokploy refused the redeploy",
+    ],
+)
+def test_an_event_that_is_not_a_completed_rollback_shows_failed_with_the_action_first(
+    feishu: FakeFeishu, tmp_path: Path, action: str
+) -> None:
+    """Only the action rolled_back is a rollback. The others need a person. The action
+    and the manual-intervention line come before the long reason, so the clip of the
+    card and of the reply never cuts them."""
+    github_env = tmp_path / "github_env"
+    env = {**APP_ENV, rc.MESSAGE_ID_ENV: "om_card", "GITHUB_ENV": str(github_env)}
+    event = {
+        **EVENT,
+        "action": action,
+        "manual_intervention_required": True,
+        "reason": "unhealthy: " + "x" * 1300,
+    }
+
+    assert rc.note_rollback(env, event) is True
+
+    patched = json.loads(feishu.sends()[0]["body"]["content"])
+    title = patched["header"]["title"]["content"]
+    assert "Failed" in title and "Rolled back" not in title
+    assert f"Action: {action}" in json.dumps(patched)
+    reply = json.loads(feishu.sends()[1]["body"]["content"])["text"]
+    assert f"Action: {action}" in reply
+    assert "Manual intervention required: True" in reply
+    assert len(reply) <= rc.MAX_REPLY_CHARS
+    assert github_env.read_text(encoding="utf-8") == "RELEASE_CARD_STAGE=failed\n"
 
 
 def test_a_rollback_of_a_run_without_a_card_is_left_to_the_text_path(
     feishu: FakeFeishu,
 ) -> None:
-    assert rc.note_rollback(APP_ENV, "reason") is False
+    assert rc.note_rollback(APP_ENV, EVENT) is False
     assert feishu.calls == []
 
 
@@ -317,26 +390,70 @@ def test_a_rollback_counts_as_shown_when_only_the_reply_goes_out(monkeypatch) ->
 
     monkeypatch.setattr("common.alerting.urlopen", patch_fails)
 
-    handled = rc.note_rollback({**APP_ENV, rc.MESSAGE_ID_ENV: "om_card"}, "reason")
+    handled = rc.note_rollback({**APP_ENV, rc.MESSAGE_ID_ENV: "om_card"}, EVENT)
 
     assert handled is True
     assert [c["url"].rsplit("/", 1)[-1] for c in fake.sends()] == ["reply"]
 
 
-def test_the_expiry_is_the_run_creation_time_plus_the_request_lifetime() -> None:
-    def fake_run(command, **_kwargs):
-        assert command[:2] == ["gh", "api"]
-        assert command[2] == "repos/wangzitian0/infra2/actions/runs/39947166819"
-        return subprocess.CompletedProcess(command, 0, "2026-10-23T11:35:39Z\n", "")
+def _gh_run_created(command, **_kwargs):
+    assert command[:3] == [
+        "gh",
+        "api",
+        "repos/wangzitian0/infra2/actions/runs/39947166819",
+    ]
+    return subprocess.CompletedProcess(command, 0, "2026-10-23T11:35:39Z\n", "")
 
-    assert rc.expiry_text(APP_ENV, 1440, run=fake_run) == "11:59 UTC"
+
+def test_the_accept_until_time_is_the_one_that_the_deploy_job_enforces() -> None:
+    """The card must show the time that production_request_accept_until returns, the
+    function of the age check. A sender deadline moves it earlier than the default."""
+    from infra2_sdk.deploy import SENDER_DEADLINE_KEY
+
+    from common.deploy.app_deploy_request import production_request_accept_until
+
+    created = datetime(2026, 10, 23, 11, 35, 39, tzinfo=timezone.utc)
+    fmt = "%H:%M UTC"
+
+    without = rc.accept_until_text(APP_ENV, run=_gh_run_created)
+
+    assert without == production_request_accept_until(created, None).strftime(fmt)
+    deadline = created + timedelta(seconds=600)
+    env = {
+        **APP_ENV,
+        "APP_DEPLOY_REQUEST_JSON": json.dumps(
+            {**REQUEST, SENDER_DEADLINE_KEY: deadline.isoformat()}
+        ),
+    }
+    with_deadline = rc.accept_until_text(env, run=_gh_run_created)
+    assert with_deadline == production_request_accept_until(created, deadline).strftime(
+        fmt
+    )
+    assert with_deadline != without
 
 
-def test_an_unreadable_run_time_gives_no_expiry_and_no_error() -> None:
+def test_an_unreadable_run_time_gives_no_accept_until_and_no_error() -> None:
     def broken_run(command, **_kwargs):
         raise subprocess.CalledProcessError(1, command)
 
-    assert rc.expiry_text(APP_ENV, 1440, run=broken_run) == ""
+    assert rc.accept_until_text(APP_ENV, run=broken_run) == ""
+
+
+def test_the_cli_shows_the_accept_until_time_only_when_asked(
+    feishu: FakeFeishu, monkeypatch
+) -> None:
+    monkeypatch.setattr(rc, "accept_until_text", lambda _env: "11:59 UTC")
+    env = {**APP_ENV, rc.MESSAGE_ID_ENV: "om_card"}
+
+    assert (
+        rc.main(["advance", "--stage", "awaiting_approval", "--accept-until"], env=env)
+        == 0
+    )
+    assert rc.main(["advance", "--stage", "awaiting_approval"], env=env) == 0
+
+    with_time, without_time = (c["body"]["content"] for c in feishu.sends())
+    assert "before 11:59 UTC" in with_time
+    assert "before" not in without_time
 
 
 def test_a_rollback_is_remembered_for_the_later_steps_of_the_job(
@@ -345,15 +462,16 @@ def test_a_rollback_is_remembered_for_the_later_steps_of_the_job(
     github_env = tmp_path / "github_env"
     env = {**APP_ENV, rc.MESSAGE_ID_ENV: "om_card", "GITHUB_ENV": str(github_env)}
 
-    assert rc.note_rollback(env, "reason") is True
+    assert rc.note_rollback(env, EVENT) is True
 
     assert github_env.read_text(encoding="utf-8") == "RELEASE_CARD_STAGE=rolled_back\n"
 
 
-def test_the_failed_step_does_not_overwrite_a_card_that_a_rollback_marked(
-    feishu: FakeFeishu,
+@pytest.mark.parametrize("stage", sorted(rc.REASON_STAGES))
+def test_the_failed_step_does_not_overwrite_a_card_that_has_a_reason(
+    feishu: FakeFeishu, stage: str
 ) -> None:
-    env = {**APP_ENV, rc.MESSAGE_ID_ENV: "om_card", rc.STAGE_ENV: "rolled_back"}
+    env = {**APP_ENV, rc.MESSAGE_ID_ENV: "om_card", rc.STAGE_ENV: stage}
 
     assert rc.main(["advance", "--stage", "failed"], env=env) == 0
     assert feishu.calls == []
@@ -433,3 +551,135 @@ def test_each_finished_deploy_phase_reaches_the_card_of_the_run(
     )
 
     assert feishu.sends()[0]["method"] == "PATCH"
+
+
+def test_a_failing_card_hook_does_not_stop_the_rollback_text(
+    feishu: FakeFeishu, monkeypatch
+) -> None:
+    from common.deploy import promote
+
+    for key, value in {**APP_ENV, rc.MESSAGE_ID_ENV: "om_card"}.items():
+        monkeypatch.setenv(key, value)
+
+    def broken(_env, _event):
+        raise RuntimeError("card code is broken")
+
+    monkeypatch.setattr(rc, "note_rollback", broken)
+
+    promote._notify_rollback_event(EVENT)
+
+    assert feishu.sends()[0]["url"].endswith("receive_id_type=chat_id")
+
+
+def test_a_failing_card_hook_does_not_stop_the_deploy_progress(monkeypatch) -> None:
+    from common.deploy import v2
+
+    def broken(_env, _what, _outcome):
+        raise RuntimeError("card code is broken")
+
+    monkeypatch.setattr(rc, "note_progress", broken)
+
+    v2._progress("sync", "completed", time.monotonic())
+
+
+@pytest.mark.parametrize("payload", ["{not json", "null", "[]", "42"])
+def test_a_malformed_request_never_raises_and_never_calls_feishu(
+    feishu: FakeFeishu, capsys, payload: str
+) -> None:
+    env = {**APP_ENV, "APP_DEPLOY_REQUEST_JSON": payload, rc.MESSAGE_ID_ENV: "om_card"}
+
+    rc.note_progress(env, "sync", "completed")
+    assert rc.note_rollback(env, EVENT) is False
+    assert rc.main(["advance", "--stage", "deploying"], env=env) == 0
+    assert rc.main(["open", "--stage", "requested"], env=env) == 0
+
+    assert feishu.calls == []
+    assert capsys.readouterr().err.count("::warning title=Release card::") >= 4
+
+
+def test_a_hung_feishu_cannot_hold_the_deploy(monkeypatch) -> None:
+    """A socket timeout applies to each read, and a DNS lookup has none. The bound is the
+    thread join, so a call that never returns costs the deploy the budget and no more."""
+    release = threading.Event()
+
+    def hang(_request, timeout):
+        release.wait(30)
+        raise URLError("released")
+
+    monkeypatch.setattr("common.alerting.urlopen", hang)
+    monkeypatch.setattr(rc, "PROGRESS_BUDGET_SECONDS", 0.3)
+    monkeypatch.setattr(rc, "ROLLBACK_BUDGET_SECONDS", 0.3)
+    env = {**APP_ENV, rc.MESSAGE_ID_ENV: "om_card"}
+
+    started = time.monotonic()
+    rc.note_progress(env, "sync", "completed")
+    handled = rc.note_rollback(env, EVENT)
+    elapsed = time.monotonic() - started
+    release.set()
+
+    assert handled is False
+    assert elapsed < 3
+
+
+def test_the_time_budgets_stay_small() -> None:
+    assert rc.PROGRESS_TIMEOUT_SECONDS <= 5
+    assert rc.PROGRESS_BUDGET_SECONDS <= 10
+    assert rc.ROLLBACK_BUDGET_SECONDS <= 30
+
+
+def test_a_reply_hides_a_secret_and_stays_within_the_limit(feishu: FakeFeishu) -> None:
+    rc.reply_release_failure(
+        APP_ENV, "om_card", "failed: password=hunter2 " + "y" * 6000
+    )
+
+    text = json.loads(feishu.sends()[0]["body"]["content"])["text"]
+    assert "hunter2" not in text
+    assert len(text) <= rc.MAX_REPLY_CHARS
+
+
+def test_a_message_id_with_a_newline_never_reaches_the_step_output(
+    monkeypatch, tmp_path: Path
+) -> None:
+    def odd(request, timeout):
+        if request.full_url.endswith("/tenant_access_token/internal"):
+            return _Response({"code": 0, "tenant_access_token": "tenant-token"})
+        return _Response({"code": 0, "data": {"message_id": "om_x\nmessage_id=evil"}})
+
+    monkeypatch.setattr("common.alerting.urlopen", odd)
+    output = tmp_path / "github_output"
+
+    rc.main(
+        ["open", "--stage", "requested", "--github-output", str(output)], env=APP_ENV
+    )
+
+    assert output.read_text(encoding="utf-8") == "message_id=\n"
+
+
+def test_a_message_id_cannot_change_the_url_path(feishu: FakeFeishu) -> None:
+    alerting.update_feishu_app_card(
+        app_id="cli_test",
+        app_secret="app-credential",
+        message_id="om_a/../b?x=1",
+        card={},
+    )
+
+    assert feishu.sends()[0]["url"].endswith("/messages/om_a%2F..%2Fb%3Fx%3D1")
+
+
+def test_the_generic_names_are_the_fallback_and_values_are_trimmed() -> None:
+    assert (
+        alerting.out_of_band_app_config({"ALERT_DELIVERY_MODE": " feishu_app "})["mode"]
+        == "feishu_app"
+    )
+    assert (
+        alerting.out_of_band_app_config({"FEISHU_WEBHOOK_URL": "  https://hook  "})[
+            "webhook_url"
+        ]
+        == "https://hook"
+    )
+    assert (
+        alerting.out_of_band_app_config(
+            {"INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL": "  https://hook  "}
+        )["webhook_url"]
+        == "https://hook"
+    )

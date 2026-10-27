@@ -7,10 +7,18 @@ before the approval gate and updates the same card as the release moves. A rollb
 failure also gets a reply in the thread of the card.
 
 Every function is best effort and never raises. A notification must not stop a deploy.
+Every call that runs inside the deploy process has a time bound that holds even when a
+network call hangs (``_bounded``).
 
-The card needs the Feishu app mode (``feishu_app``). A webhook cannot update a card. In
-webhook mode, and when no card exists, the module sends one plain text message for the
-stages that need a person: waiting for approval, rolled back and failed.
+Known gap: a rejected or expired approval, and a run cancelled before the deploy job
+starts, run no step after the approval gate, so the card stays at "Waiting for approval".
+The card shows the accept-until time, so a viewer sees that it is stale. A job that closes
+the card would hold the Feishu secrets in a third job, and that is a production job
+classification edit in ``common.gate.production_contract`` (owner approval of the head SHA).
+
+The card needs the Feishu app mode (``feishu_app``). A webhook cannot update a card, so in
+webhook mode there is no card: ``open_release_card`` returns an empty id, and every later
+step does nothing. The rollback text of ``common.deploy.promote`` stays the notice then.
 """
 
 from __future__ import annotations
@@ -18,11 +26,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 import common.alerting
@@ -42,16 +52,29 @@ STAGES: dict[str, tuple[str, str]] = {
     "failed": ("red", "Failed"),
 }
 
-#: The stages where a person must look. They get a text message when no card can carry them.
-PERSON_STAGES = frozenset({"awaiting_approval", "rolled_back", "failed"})
-
 MAX_DETAIL_CHARS = 600
 
-#: A progress update runs inside the deploy. It waits this long at most.
+#: The thread reply carries the whole rollback event. The reason is its last line.
+MAX_REPLY_CHARS = 3000
+
+#: A progress update runs inside the deploy. Each request waits this long at most.
 PROGRESS_TIMEOUT_SECONDS = 3.0
 
-#: The step variable that tells the later steps of a job which stage a rollback set.
+#: The whole progress update (a token request and an update request) ends within this time.
+PROGRESS_BUDGET_SECONDS = 6.0
+
+#: The whole rollback notice (an update and a thread reply) ends within this time.
+ROLLBACK_BUDGET_SECONDS = 20.0
+
+#: The step variable that tells the later steps of a job that a rollback event wrote the
+#: reason on the card. The generic "failed" step then does not replace that reason.
 STAGE_ENV = "RELEASE_CARD_STAGE"
+
+#: The stages that carry a reason. A later generic "failed" update must not replace them.
+REASON_STAGES = frozenset({"rolled_back", "failed"})
+
+#: The shape of a Feishu message id. The id goes into a URL path and into a step output.
+MESSAGE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 
 @dataclass(frozen=True)
@@ -84,7 +107,9 @@ def render_release_card(card: ReleaseCard) -> dict[str, Any]:
         )
         sections.append(
             f"The owner approves the deploy in GitHub{expiry}. "
-            "An approval that comes after the request expires has no effect."
+            "An approval that comes after the request expires has no effect. "
+            "When that time has passed, this card is stale: the request expired "
+            "or the owner rejected it."
         )
     actions = [
         (
@@ -137,10 +162,9 @@ def open_release_card(
     env: Mapping[str, str], card: ReleaseCard, *, timeout: float = 10.0
 ) -> str:
     """Create the card. Return its message id, or an empty string when none exists."""
-    config = common.alerting.out_of_band_app_config(env)
     try:
+        config = common.alerting.out_of_band_app_config(env)
         if config["mode"] != "feishu_app":
-            _text_for_a_person(env, card, timeout)
             return ""
         response = common.alerting.deliver_feishu_app_card(
             app_id=config["app_id"],
@@ -150,7 +174,10 @@ def open_release_card(
             card=render_release_card(card),
             timeout=timeout,
         )
-        return common.alerting.message_id_of(response)
+        message_id = common.alerting.message_id_of(response)
+        if message_id and not MESSAGE_ID_PATTERN.match(message_id):
+            raise ValueError("the Feishu message id has an unexpected shape")
+        return message_id
     except Exception as exc:  # noqa: BLE001 - a notification never stops a deploy
         _warn("open", exc)
         return ""
@@ -163,11 +190,11 @@ def advance_release_card(
     *,
     timeout: float = 10.0,
 ) -> bool:
-    """Replace the card with the new state. Return true when the card or the text went out."""
-    config = common.alerting.out_of_band_app_config(env)
+    """Replace the card with the new state. Return true when the update went out."""
     try:
+        config = common.alerting.out_of_band_app_config(env)
         if not message_id or config["mode"] != "feishu_app":
-            return _text_for_a_person(env, card, timeout)
+            return False
         common.alerting.update_feishu_app_card(
             app_id=config["app_id"],
             app_secret=config["app_secret"],
@@ -185,21 +212,19 @@ def advance_release_card(
 def reply_release_failure(
     env: Mapping[str, str], message_id: str, text: str, *, timeout: float = 10.0
 ) -> bool:
-    """Reply in the thread of the card with the reason. Return true when a reply went out."""
-    config = common.alerting.out_of_band_app_config(env)
-    safe_text = redact_secrets(text)[:MAX_DETAIL_CHARS]
+    """Reply in the thread of the card. Return true when a reply went out."""
     try:
-        if message_id and config["mode"] == "feishu_app":
-            common.alerting.reply_feishu_app_text(
-                app_id=config["app_id"],
-                app_secret=config["app_secret"],
-                message_id=message_id,
-                text=safe_text,
-                api_base=config["api_base"],
-                timeout=timeout,
-            )
-            return True
-        common.alerting.deliver_out_of_band_text(env, safe_text, timeout=timeout)
+        config = common.alerting.out_of_band_app_config(env)
+        if not message_id or config["mode"] != "feishu_app":
+            return False
+        common.alerting.reply_feishu_app_text(
+            app_id=config["app_id"],
+            app_secret=config["app_secret"],
+            message_id=message_id,
+            text=redact_secrets(text)[:MAX_REPLY_CHARS],
+            api_base=config["api_base"],
+            timeout=timeout,
+        )
         return True
     except Exception as exc:  # noqa: BLE001 - a notification never stops a deploy
         _warn("reply", exc)
@@ -211,46 +236,74 @@ def note_progress(env: Mapping[str, str], what: str, outcome: str) -> None:
     message_id = env.get(MESSAGE_ID_ENV, "")
     if not message_id:
         return
-    try:
+
+    def update() -> bool:
         card = card_from_environment(
             env, "deploying", f"{what}: {outcome or 'unknown'}"
         )
-    except Exception as exc:  # noqa: BLE001 - a notification never stops a deploy
-        _warn("progress", exc)
-        return
-    advance_release_card(env, message_id, card, timeout=PROGRESS_TIMEOUT_SECONDS)
+        return advance_release_card(
+            env, message_id, card, timeout=PROGRESS_TIMEOUT_SECONDS
+        )
+
+    _bounded(update, PROGRESS_BUDGET_SECONDS, False)
 
 
-def note_rollback(env: Mapping[str, str], reason_text: str) -> bool:
-    """Mark the card rolled back and reply with the reason.
+def note_rollback(env: Mapping[str, str], event: Mapping[str, Any]) -> bool:
+    """Show a rollback event on the card and in its thread.
 
-    Return false when the run has no card or when both Feishu calls failed. The caller
-    then sends the text message."""
+    ``event`` is the event dictionary of ``common.deploy.promote``. Only the action
+    ``rolled_back`` is a completed rollback. Every other action (a paused rollback, a
+    rollback that failed, a blocked schema class, a tripped breaker) needs a person, so
+    the card shows ``failed`` with the action first. Return false when the run has no card
+    or when both Feishu calls failed. The caller then sends the text message."""
     message_id = env.get(MESSAGE_ID_ENV, "")
     if not message_id:
         return False
+    return _bounded(
+        lambda: _show_rollback(env, message_id, event), ROLLBACK_BUDGET_SECONDS, False
+    )
+
+
+def _show_rollback(
+    env: Mapping[str, str], message_id: str, event: Mapping[str, Any]
+) -> bool:
+    stage = "rolled_back" if event.get("action") == "rolled_back" else "failed"
+    lines = [
+        f"Action: {event.get('action')}",
+        f"Manual intervention required: {bool(event.get('manual_intervention_required'))}",
+        f"Version: {event.get('from_version')} -> {event.get('to_version') or 'none'}",
+        f"Reason: {event.get('reason')}",
+    ]
     try:
-        first_line = (reason_text.splitlines() or [""])[0]
-        card = card_from_environment(env, "rolled_back", first_line)
+        card = card_from_environment(env, stage, "\n".join(lines))
     except Exception as exc:  # noqa: BLE001 - a notification never stops a deploy
         _warn("rollback", exc)
         return False
+    headline = (
+        f"Deploy rollback event for {event.get('service')} ({event.get('environment')})"
+    )
     updated = advance_release_card(env, message_id, card)
-    replied = reply_release_failure(env, message_id, reason_text)
+    replied = reply_release_failure(env, message_id, "\n".join([headline, *lines]))
     if updated or replied:
-        _remember_stage(env, "rolled_back")
+        _remember_stage(env, stage)
     return updated or replied
 
 
-def expiry_text(
-    env: Mapping[str, str],
-    seconds: int,
-    run: Callable[..., Any] = subprocess.run,
+def accept_until_text(
+    env: Mapping[str, str], run: Callable[..., Any] = subprocess.run
 ) -> str:
-    """The time ``seconds`` after this run was created, as ``HH:MM UTC``.
+    """The last time at which the receiver accepts this request, as ``HH:MM UTC``.
 
-    An empty string when the run time cannot be read. The card then shows no time."""
+    The time comes from ``production_request_accept_until``, the function that the age
+    check of the deploy job uses. It reads the creation time of this run from the GitHub
+    API and the sender deadline from the request. An empty string when it cannot be
+    computed. The card then shows no time."""
     try:
+        from common.deploy.app_deploy_request import (
+            parse_sender_deadline,
+            production_request_accept_until,
+        )
+
         reply = run(
             [
                 "gh",
@@ -266,10 +319,13 @@ def expiry_text(
             env=dict(env),
         )
         created = datetime.fromisoformat(reply.stdout.strip().replace("Z", "+00:00"))
-        expires = created.astimezone(timezone.utc) + timedelta(seconds=seconds)
-        return expires.strftime("%H:%M UTC")
+        deadline = parse_sender_deadline(
+            json.loads(env.get("APP_DEPLOY_REQUEST_JSON") or "{}")
+        )
+        accept_until = production_request_accept_until(created, deadline)
+        return accept_until.astimezone(timezone.utc).strftime("%H:%M UTC")
     except Exception as exc:  # noqa: BLE001 - a notification never stops a deploy
-        _warn("expiry", exc)
+        _warn("accept-until", exc)
         return ""
 
 
@@ -285,24 +341,31 @@ def _remember_stage(env: Mapping[str, str], stage: str) -> None:
         _warn("stage", exc)
 
 
-def _text_for_a_person(
-    env: Mapping[str, str], card: ReleaseCard, timeout: float
-) -> bool:
-    """One plain text message for a stage that needs a person. No other stage sends text.
+def _bounded(call: Callable[[], Any], seconds: float, default: Any) -> Any:
+    """Run ``call`` in a daemon thread. Return its result, or ``default`` after ``seconds``.
 
-    Return true when a message went out."""
-    if card.stage not in PERSON_STAGES:
-        return False
-    label = STAGES[card.stage][1]
-    lines = [
-        f"[{label}] {card.service} {card.environment} {card.version_ref}",
-        card.detail,
-        card.run_url,
-    ]
-    common.alerting.deliver_out_of_band_text(
-        env, "\n".join(line for line in lines if line), timeout=timeout
-    )
-    return True
+    A socket timeout applies to each read, so a server that sends one byte at a time
+    can hold a request for minutes, and a DNS lookup has no timeout. The thread is a
+    daemon: it cannot keep the deploy process alive."""
+    result: list[Any] = [default]
+
+    def target() -> None:
+        try:
+            result[0] = call()
+        except Exception as exc:  # noqa: BLE001 - a notification never stops a deploy
+            _warn("bounded call", exc)
+
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    thread.join(seconds)
+    if thread.is_alive():
+        print(
+            f"::warning title=Release card::no answer within {seconds:g} s",
+            file=sys.stderr,
+            flush=True,
+        )
+        return default
+    return result[0]
 
 
 def _warn(action: str, exc: Exception) -> None:
@@ -316,7 +379,9 @@ def _warn(action: str, exc: Exception) -> None:
 def main(
     argv: Sequence[str] | None = None, env: Mapping[str, str] | None = None
 ) -> int:
-    """The step entry: ``open``, ``advance`` and ``reply``. The exit code is always 0."""
+    """The step entry: ``open`` and ``advance``. The workflow bounds the call with
+    ``timeout`` and turns a failed call into a warning (``|| echo``). Bad arguments
+    still make a non-zero exit here."""
     env = os.environ if env is None else env
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -324,35 +389,29 @@ def main(
         command = sub.add_parser(name)
         command.add_argument("--stage", choices=sorted(STAGES), required=True)
         command.add_argument("--detail", default="")
-        command.add_argument("--expires-at", default="")
-        command.add_argument("--expires-after-run-created", type=int, default=0)
+        command.add_argument(
+            "--accept-until",
+            action="store_true",
+            help="show the last time at which the receiver accepts this request",
+        )
     sub.choices["open"].add_argument("--github-output", default="")
     sub.choices["advance"].add_argument("--message-id", default="")
-    reply = sub.add_parser("reply")
-    reply.add_argument("--text", required=True)
-    reply.add_argument("--message-id", default="")
     args = parser.parse_args(argv)
 
     try:
-        if args.command != "reply":
-            if args.expires_after_run_created and not args.expires_at:
-                args.expires_at = expiry_text(env, args.expires_after_run_created)
-            if args.stage == "failed" and env.get(STAGE_ENV) == "rolled_back":
-                # A rollback already marked the card and replied with its reason.
-                return 0
+        if args.stage == "failed" and env.get(STAGE_ENV) in REASON_STAGES:
+            # A rollback event already wrote its reason on the card and in the thread.
+            return 0
+        expires_at = accept_until_text(env) if args.accept_until else ""
+        card = card_from_environment(env, args.stage, args.detail, expires_at)
         if args.command == "open":
-            card = card_from_environment(env, args.stage, args.detail, args.expires_at)
             message_id = open_release_card(env, card)
             if args.github_output:
                 with open(args.github_output, "a", encoding="utf-8") as handle:
                     handle.write(f"message_id={message_id}\n")
-        elif args.command == "advance":
-            message_id = args.message_id or env.get(MESSAGE_ID_ENV, "")
-            card = card_from_environment(env, args.stage, args.detail, args.expires_at)
-            advance_release_card(env, message_id, card)
         else:
             message_id = args.message_id or env.get(MESSAGE_ID_ENV, "")
-            reply_release_failure(env, message_id, args.text)
+            advance_release_card(env, message_id, card)
     except Exception as exc:  # noqa: BLE001 - a notification never stops a deploy
         _warn(args.command, exc)
     return 0

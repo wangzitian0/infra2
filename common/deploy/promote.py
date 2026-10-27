@@ -531,10 +531,13 @@ def _notify_rollback_event(
         return
     # A production run that has a release card shows the rollback on the card and in its
     # thread. The card replaces the text message. A run without a card sends the text.
-    from common.alerting import release_card
+    try:
+        from common.alerting import release_card
 
-    if release_card.note_rollback(os.environ, text):
-        return
+        if release_card.note_rollback(os.environ, event):
+            return
+    except Exception as exc:  # noqa: BLE001
+        warning(f"release card update skipped/failed: {exc}")
     try:
         from common.alerting.delivery import deliver_out_of_band_text
 

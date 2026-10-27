@@ -34,6 +34,15 @@ CARD_STEPS = {
     "Show on the card that the deploy succeeded",
     "Show on the card that the deploy failed",
 }
+#: Each card step runs only when the run has a card. The status steps also name the state
+#: of the job: success() or failure() is part of the contract, not an implementation detail.
+CARD_STEP_CONDITIONS = {
+    "Show on the card that the owner must approve": "${{ success() && steps.card.outputs.message_id != '' }}",
+    "Show on the card that the canary failed": "${{ (failure() || cancelled()) && steps.card.outputs.message_id != '' }}",
+    "Show on the card that the deploy starts": "${{ needs.preflight_canary.outputs.card_message_id != '' }}",
+    "Show on the card that the deploy succeeded": "${{ success() && needs.preflight_canary.outputs.card_message_id != '' }}",
+    "Show on the card that the deploy failed": "${{ (failure() || cancelled()) && needs.preflight_canary.outputs.card_message_id != '' }}",
+}
 FEISHU_SECRETS = {
     "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE",
     "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL",
@@ -621,17 +630,67 @@ def test_the_wait_for_approval_is_shown_before_the_gate_and_only_then() -> None:
     assert "--stage deploying" in starts["run"]
 
 
-def test_every_card_step_is_skipped_for_a_request_without_a_card_and_never_blocks() -> (
-    None
-):
+def _squash(text: str) -> str:
+    return " ".join(str(text).split())
+
+
+def test_every_card_step_is_bounded_and_cannot_fail_the_job() -> None:
+    """A notification must not stop a deploy. timeout bounds a hung call, and || echo
+    turns any failure (a bad argument, an import error, the timeout) into a warning.
+    continue-on-error is forbidden: it would also hide a step that is not a card step."""
     jobs = workflow()["jobs"]
+    seen = set()
 
     for job in jobs.values():
         for item in job["steps"]:
-            if item.get("name") not in CARD_STEPS or item.get("id") == "card":
+            if item.get("name") not in CARD_STEPS:
                 continue
-            assert "message_id" in item["if"] or "card_message_id" in item["if"], item[
+            seen.add(item["name"])
+            assert "continue-on-error" not in item, item["name"]
+            run = item["run"]
+            assert run.startswith("timeout 90 python -m tools.release_card "), item[
                 "name"
             ]
-            assert "continue-on-error" not in item, item["name"]
-            assert item["run"].startswith("python -m tools.release_card "), item["name"]
+            assert '|| echo "::warning' in run, item["name"]
+    assert seen == CARD_STEPS
+
+
+def test_each_card_step_runs_only_for_a_run_with_a_card_and_in_the_right_state() -> (
+    None
+):
+    jobs = workflow()["jobs"]
+    found = {}
+
+    for job in jobs.values():
+        for item in job["steps"]:
+            if item.get("name") in CARD_STEP_CONDITIONS:
+                found[item["name"]] = _squash(item["if"])
+
+    assert found == CARD_STEP_CONDITIONS
+
+
+def test_the_approval_card_shows_the_time_that_the_age_check_enforces() -> None:
+    waiting = step(
+        workflow()["jobs"]["preflight_canary"],
+        "Show on the card that the owner must approve",
+    )
+
+    assert "--accept-until" in waiting["run"]
+    assert "1440" not in waiting["run"]
+
+
+def test_no_job_besides_the_two_receiver_jobs_holds_the_feishu_secrets() -> None:
+    """A third job that reads the Feishu secrets is a new production job classification
+    in common/gate/production_contract.py. That table is a self-guard surface: an edit to
+    it needs the owner's approval of the head SHA. The card therefore lives in the two
+    existing, already classified jobs (#1370)."""
+    jobs = workflow()["jobs"]
+
+    assert set(jobs) == {"preflight_canary", "deploy"}
+    for name, job in jobs.items():
+        holders = [
+            item["name"]
+            for item in job["steps"]
+            if any(secret in str(item) for secret in FEISHU_SECRETS)
+        ]
+        assert set(holders) <= CARD_STEPS | {"Execute through deploy_v2"}, name
