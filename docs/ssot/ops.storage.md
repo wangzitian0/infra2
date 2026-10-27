@@ -57,6 +57,17 @@
     2. 迁移 `/data/<layer>/<service>${ENV_SUFFIX}` 目录（非生产带后缀）。
     3. 启动服务并验证健康。
 
+### SOP-003: 宿主机残留回收站隔离与延迟清理 (Host Quarantine & 15-Day Delayed Purge)
+
+- **触发条件**: 清理 VPS 宿主机历史残留目录、旧归档或退役脚本（#1373）
+- **策略**: 采用两阶段“先隔离、后清除”机制，严禁在生产宿主机直接执行无缓冲的 `rm -rf`。
+- **物理位置**: `/data/backups/quarantine/<batch-id>/files/<rel_path>`，索引清单位于 `/data/backups/quarantine/manifest.jsonl`（权限 `0600`，记录原始路径、SHA256、字节大小、`quarantined_at` 与 15 天后的 `purge_after_epoch`）。
+- **步骤**:
+    1. 只读扫描：`bootstrap/01.dokploy_install/host_guard/host_quarantine.sh --check`（零副作用列出残留项、权限漂移与退役 cron）。
+    2. 迁入回收站：`host_quarantine.sh --stage`（先备份并注释退役 cron，再按原始相对路径 `mv` 至 `/data/backups/quarantine/<batch-id>/files/`，并将 `/tmp/F3CNN` 活跃锁目录收敛为 `0700`/`0600` 原地保留）。
+    3. 观察期核查：`host_quarantine.sh --list`（保留 15 天观察期，期间若需回滚可直接按 `original_path` 迁回）。
+    4. 到期物理清理：观察期满 15 天后执行 `host_quarantine.sh --purge-expired`（仅删除 `now_epoch >= purge_after_epoch` 的到期批次并更新清单状态为 `purged`）。
+
 ---
 
 ## 5. 验证与测试 (The Proof)
@@ -64,6 +75,7 @@
 | 行为描述 | 验证方式 | 状态 |
 |----------|----------|------|
 | **存储路径一致性** | `compose.yaml` 中路径检查 | ✅ Manual |
+| **宿主机残留回收站隔离与 15 天延迟清理** | `common/tests/test_host_quarantine_script.py` | ✅ Automated |
 
 ---
 
