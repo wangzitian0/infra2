@@ -12,8 +12,8 @@ peeling, and remote resolution to ``infra2_sdk.refs`` while retaining the financ
 default repository binding and Dokploy-specific clone branch validation.
 
 It is library code: ``common.deploy.preview`` / ``common.deploy.promote`` import it from here
-instead of reaching up into ``tools/`` (#955). ``tools/resolve_deploy_ref.py`` keeps the
-CLI front door and re-exports these names for the callers that still import them there.
+instead of reaching up into ``tools/`` (#955). ``tools/resolve_deploy_ref.py`` provides the
+CLI front door and imports ``FINANCE_REPORT_REPO`` and ``resolve_to_sha`` from this module.
 """
 
 from __future__ import annotations

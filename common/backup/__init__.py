@@ -19,6 +19,7 @@ from common.backup.verification import (
     discover_deployer_data_paths,
     inventory_data_paths,
     load_backup_inventory,
+    validate_backup_inventory,
     verify_backup_manifest,
 )
 
@@ -37,5 +38,6 @@ __all__ = [
     "inventory_data_paths",
     "load_backup_inventory",
     "materialize_artifact",
+    "validate_backup_inventory",
     "verify_backup_manifest",
 ]

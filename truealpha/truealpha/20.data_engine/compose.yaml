@@ -15,14 +15,13 @@ x-dagster-service: &dagster-service
     vault-agent:
       condition: service_healthy
   entrypoint: ["/bin/sh", "/opt/truealpha/dagster-entrypoint.sh"]
-  environment:
+  environment: &dagster-env
     APP_ENV: ${ENV}
     # Host-loopback MinIO (#602); was derived inside the hand-written secrets.ctmpl.
     S3_ENDPOINT: http://127.0.0.1:${TA_MINIO_S3_PORT}
     GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
     MOOMOO_OPEND_HOST: 127.0.0.1
     MOOMOO_OPEND_PORT: "11111"
-    MOOMOO_LEDGER_BACKEND: postgres
     # truealpha#854: moomoo as a governed origin (third price origin, second financial
     # origin) is feature-flagged in the engine; the flags are per-environment IaC
     # (deploy.py::_release_recomputable_env): enabled in staging and production
@@ -201,25 +200,8 @@ services:
       retries: 5
       start_period: 30s
     environment:
-      APP_ENV: ${ENV}
-      S3_ENDPOINT: http://127.0.0.1:${TA_MINIO_S3_PORT}
+      <<: *dagster-env
       DAGSTER_WEBSERVER_PORT: ${DAGSTER_WEBSERVER_PORT}
-      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
-      MOOMOO_OPEND_HOST: 127.0.0.1
-      MOOMOO_OPEND_PORT: "11111"
-      MOOMOO_LEDGER_BACKEND: postgres
-      MOOMOO_KLINE_ORIGIN_ENABLED: ${MOOMOO_KLINE_ORIGIN_ENABLED:-false}
-      MOOMOO_FINANCIALS_ORIGIN_ENABLED: ${MOOMOO_FINANCIALS_ORIGIN_ENABLED:-false}
-      RELEASE_ID: ${RELEASE_ID:-${RELEASE_MANIFEST_ID:?RELEASE_ID is required}}
-      IMAGE_DIGEST: ${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?IMAGE_DIGEST is required}}
-      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
-      TRUEALPHA_RELEASE_MANIFEST_ID: ${RELEASE_ID:-${RELEASE_MANIFEST_ID:?RELEASE_ID is required}}
-      TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST: ${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?IMAGE_DIGEST is required}}
-      TRUEALPHA_CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
-      TRUEALPHA_CAPTURE_APPROVED_BY: ${CAPTURE_APPROVED_BY:?CAPTURE_APPROVED_BY is required}
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://127.0.0.1:14318
-      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-}
-      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
 
   dagster-daemon:
     <<: *dagster-service

@@ -23,7 +23,6 @@ Deleting either half leaves the shims unverified.
 from __future__ import annotations
 
 import ast
-import importlib
 import re
 from pathlib import Path
 
@@ -58,10 +57,6 @@ def _shim_table() -> list[tuple[str, str, str]]:
 TABLE = _shim_table()
 FROZEN = [(s, t) for s, t, status in TABLE if status == "Frozen Shim"]
 NOT_FROZEN = [(s, status) for s, _t, status in TABLE if status != "Frozen Shim"]
-
-
-def _module_name(relative_path: str) -> str:
-    return relative_path.removesuffix(".py").replace("/", ".")
 
 
 def _is_pure_reexport(path: Path) -> tuple[bool, str]:
@@ -101,54 +96,6 @@ def test_all_frozen_shims_are_retired() -> None:
     assert len(TABLE) >= 2, TABLE
     assert len(FROZEN) == 0, f"Expected 0 frozen shims, found {FROZEN}"
     assert NOT_FROZEN, "expected the table to still list the standalone modules"
-
-
-@pytest.mark.parametrize(
-    ("shim", "target"),
-    FROZEN
-    or [pytest.param("", "", marks=pytest.mark.skip(reason="All 33 shims retired"))],
-    ids=[s for s, _ in FROZEN] or ["zero_frozen_shims"],
-)
-def test_frozen_shim_holds_only_re_exports_of_the_module_the_table_names(
-    shim: str, target: str
-) -> None:
-    path = ROOT / shim
-    assert path.exists(), f"{shim} is in common/README.md but not on disk"
-
-    pure, detail = _is_pure_reexport(path)
-    assert pure, (
-        f"{shim} is marked 'Frozen Shim' in common/README.md but {detail}. Move the "
-        f"implementation into {target or 'its domain package'} and leave only "
-        f"re-exports here (#846)."
-    )
-    assert detail == target, (
-        f"common/README.md says {shim} re-exports {target}, but it actually re-exports "
-        f"{detail} — the table and the code disagree."
-    )
-
-
-@pytest.mark.parametrize(
-    ("shim", "target"),
-    FROZEN
-    or [pytest.param("", "", marks=pytest.mark.skip(reason="All 33 shims retired"))],
-    ids=[s for s, _ in FROZEN] or ["zero_frozen_shims"],
-)
-def test_every_re_exported_name_is_the_same_object_on_both_paths(
-    shim: str, target: str
-) -> None:
-    """The shim exists so the OLD import keeps resolving — to the very same object."""
-    old = importlib.import_module(_module_name(shim))
-    new = importlib.import_module(target)
-
-    exported = list(getattr(old, "__all__"))
-    assert exported, f"{shim} re-exports nothing"
-    for name in exported:
-        assert hasattr(old, name), f"{shim}.__all__ names {name!r}, which is absent"
-        assert hasattr(new, name), f"{target} does not define {name!r}"
-        assert getattr(old, name) is getattr(new, name), (
-            f"{_module_name(shim)}.{name} is not the same object as {target}.{name} — "
-            "the shim has grown its own copy"
-        )
 
 
 @pytest.mark.parametrize(

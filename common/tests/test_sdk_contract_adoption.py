@@ -30,6 +30,18 @@ DEPRECATED_RUNTIME_MODULES = {
     "probes": "infra2_sdk.runtime.probes (use infra2_sdk.runtime.health)",
 }
 
+DEPRECATED_SDK_ATTRS: dict[tuple[str, str], str] = {
+    ("infra2_sdk.ci", "inspect_compose"): "infra2_sdk.rules.compose.inspect_compose",
+    ("infra2_sdk.deploy", "identifier_kind"): "infra2_sdk.refs.identifier_kind",
+    (
+        "infra2_sdk.manifests",
+        "assert_environment",
+    ): "infra2_sdk.runtime.config_schema.assert_environment",
+    ("infra2_sdk.observability", "ScheduleError"): "infra2_sdk.ci.ScheduleError",
+    ("infra2_sdk.observability", "crons_in"): "infra2_sdk.ci.crons_in",
+    ("infra2_sdk.observability", "largest_gap"): "infra2_sdk.ci.largest_gap",
+}
+
 
 def _module_violations(
     module: str, names: tuple[str, ...] = (), *, chain: bool = False
@@ -56,6 +68,18 @@ def _module_violations(
         for shim_name, shim_desc in DEPRECATED_RUNTIME_MODULES.items():
             if parts[2:3] == [shim_name] or (len(parts) == 2 and shim_name in names):
                 violations.append(f"deprecated module {shim_desc}")
+    for (attr_mod, attr_name), canonical in DEPRECATED_SDK_ATTRS.items():
+        if module == attr_mod and attr_name in names:
+            violations.append(
+                f"deprecated attribute {attr_mod}.{attr_name} (use {canonical})"
+            )
+        elif chain and (
+            module == f"{attr_mod}.{attr_name}"
+            or module.startswith(f"{attr_mod}.{attr_name}.")
+        ):
+            violations.append(
+                f"deprecated attribute {attr_mod}.{attr_name} (use {canonical})"
+            )
     return violations
 
 
@@ -289,6 +313,10 @@ def test_the_sdk_contract_scan_flags_private_and_deprecated_use() -> None:
     assert _sdk_contract_violations(
         "from infra2_sdk.runtime.probes import DependencyStatus\n"
     ) == ["deprecated module infra2_sdk.runtime.probes (use infra2_sdk.runtime.health)"]
+    for (mod, attr), canonical in DEPRECATED_SDK_ATTRS.items():
+        expected = f"deprecated attribute {mod}.{attr} (use {canonical})"
+        assert _sdk_contract_violations(f"from {mod} import {attr}\n") == [expected]
+        assert _sdk_contract_violations(f"import {mod}\n{mod}.{attr}\n") == [expected]
     assert (
         _sdk_contract_violations(
             "from infra2_sdk.refs import ls_remote_rows, redact_repo\n"

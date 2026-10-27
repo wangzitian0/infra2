@@ -63,7 +63,7 @@ from common.observability.scheduler_peer_liveness import (  # noqa: E402
     BOUND_CAP_ENV,
     OK as PEER_OK,
     UNVERIFIABLE,
-    evaluate as evaluate_peer_liveness,
+    evaluate_peer_liveness,
     github_getter,
     parse_bound_cap_hours,
 )
