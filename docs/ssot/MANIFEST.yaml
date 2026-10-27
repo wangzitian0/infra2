@@ -215,6 +215,8 @@ entries:
     owner: docs/ssot/ops.storage.md
     summary: 备份策略、Google Drive 加密同步与还原演练
     description: Storage, Google Drive encrypted backup, and restore rehearsal policy.
+    proofs:
+      - common/tests/test_host_quarantine_script.py
   ops.deploy_dependencies:
     owner: docs/ssot/deploy-dependencies.yaml
     summary: 部署扇出 + content-hash 依赖清单
