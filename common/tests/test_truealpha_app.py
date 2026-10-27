@@ -1,4 +1,5 @@
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
@@ -371,3 +372,45 @@ def test_composing_preserves_last_promoted_image_tag_without_resetting_to_latest
     explicit_env = dict(base_env, IMAGE_TAG="v0.0.43")
     deployer.composing(MagicMock(), explicit_env)
     assert _parse_env_text(captured[1])["IMAGE_TAG"] == "v0.0.43"
+
+
+_DURATION_PART = re.compile(r"(\d+)(ms|s|m|h)")
+_DURATION_SECONDS = {"ms": 0.001, "s": 1, "m": 60, "h": 3600}
+
+
+def _compose_seconds(value: str) -> float:
+    """A Compose duration such as `30s` or `1m30s`, in seconds."""
+    return sum(
+        int(number) * _DURATION_SECONDS[unit]
+        for number, unit in _DURATION_PART.findall(str(value))
+    )
+
+
+def test_the_llm_start_period_is_not_below_the_sdk_standard(tmp_path: Path) -> None:
+    """truealpha#1513: the llm container applies the schema before it serves, as the SDK
+    scaffold prescribes (entrypoint secrets sync, then migrations). The scaffold gives an
+    app with a Vault sidecar a start period of 120 s. The llm container had 30 s and
+    gave up at about 60 s. On 2026-10-23 a busy host stretched the boot to 69 s, and the
+    deploy gate rolled back a server that was ready 10 s later. The number comes from the
+    SDK here, so the standard has one source."""
+    from infra2_sdk.scaffold import scaffold_service
+
+    scaffold_service("standard", tmp_path, profile="infra2")
+    scaffolded = yaml.safe_load((tmp_path / "compose.yaml").read_text(encoding="utf-8"))
+    app_services = [
+        service
+        for name, service in scaffolded["services"].items()
+        if name != "vault-agent"
+    ]
+    assert len(app_services) == 1, "the SDK scaffold holds one app service"
+    standard = _compose_seconds(app_services[0]["healthcheck"]["start_period"])
+    compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
+    llm = _compose_seconds(compose["services"]["llm"]["healthcheck"]["start_period"])
+
+    assert standard >= 120, (
+        f"the SDK standard changed to {standard} s: review this test"
+    )
+    assert llm >= standard, (
+        f"the llm start period is {llm} s; the SDK standard for an app that migrates at "
+        f"start is {standard} s"
+    )
