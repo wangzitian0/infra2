@@ -404,13 +404,18 @@ def test_the_llm_start_period_is_not_below_the_sdk_standard(tmp_path: Path) -> N
     ]
     assert len(app_services) == 1, "the SDK scaffold holds one app service"
     standard = _compose_seconds(app_services[0]["healthcheck"]["start_period"])
-    compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
-    llm = _compose_seconds(compose["services"]["llm"]["healthcheck"]["start_period"])
-
     assert standard >= 120, (
         f"the SDK standard changed to {standard} s: review this test"
     )
-    assert llm >= standard, (
-        f"the llm start period is {llm} s; the SDK standard for an app that migrates at "
-        f"start is {standard} s"
-    )
+    for path in (
+        SERVICE_DIR / "compose.yaml",
+        ROOT / "truealpha/truealpha/preview/compose.yaml",
+    ):
+        compose = yaml.safe_load(path.read_text(encoding="utf-8"))
+        llm = _compose_seconds(
+            compose["services"]["llm"]["healthcheck"]["start_period"]
+        )
+        assert llm >= standard, (
+            f"{path.relative_to(ROOT)} llm start period is {llm} s; the SDK standard "
+            f"for an app that migrates at start is {standard} s"
+        )
