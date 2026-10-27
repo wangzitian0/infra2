@@ -260,6 +260,7 @@ entries:
       alert vs report). Absorbs the former ops.alerting and ops.availability_ledger.
     proofs:
       - common/tests/test_alerting.py
+      - common/tests/test_release_card.py
       - common/tests/test_cloudflare_watchdog.py
       - common/tests/test_out_of_band_watchdog.py
       - common/tests/test_watchdog_consistency_audit.py

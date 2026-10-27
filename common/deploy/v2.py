@@ -302,6 +302,10 @@ def _progress(what: str, outcome: str, started: float) -> None:
         file=sys.stderr,
         flush=True,
     )
+    # A production run shows each finished phase on its release card. This never raises.
+    from common.alerting import release_card
+
+    release_card.note_progress(os.environ, what, outcome)
 
 
 # A staging deploy re-submits a request the runner lost once; a production deploy never does

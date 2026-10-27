@@ -529,6 +529,12 @@ def _notify_rollback_event(
         except Exception as exc:  # noqa: BLE001
             warning(f"rollback_notifier callback failed: {exc}")
         return
+    # A production run that has a release card shows the rollback on the card and in its
+    # thread. The card replaces the text message. A run without a card sends the text.
+    from common.alerting import release_card
+
+    if release_card.note_rollback(os.environ, text):
+        return
     try:
         from common.alerting.delivery import deliver_out_of_band_text
 

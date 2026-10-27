@@ -301,6 +301,28 @@ That person can also set `break_glass` (skips the staging-first rule) and `skip_
 `deploy_v2` still requires `iac_ref` to be a release tag on main. The run waits for the owner in the `production`
 environment. Record its coordinate (`service`, `version_ref`, `iac_ref`) in the issue.
 
+### 4.2 Production release card
+
+A production release has one Feishu card (`common/alerting/release_card.py`, `tools/release_card.py`).
+The receiver is the only writer. A sender never posts to Feishu.
+
+- `preflight_canary` creates the card after the plan step and writes its id to the job output `card_message_id`.
+  The last step of this job shows "Waiting for approval" with the time the request expires (1440 s after the run was
+  created). Nothing can run while the `production` environment gate waits, so no later step can show the wait.
+- The `deploy` job shows "Deploying" after the approval. `common.deploy.v2._progress` updates the card for each finished
+  phase. `common.deploy.promote._notify_rollback_event` marks the card "Rolled back" and replies in its thread with the
+  reason. The last steps show "Succeeded" or "Failed". A "Failed" step does not overwrite a rollback.
+- A staging request has no card. A rollback of a staging request sends one text message through the same out-of-band
+  settings.
+- The card needs the Feishu app mode (`INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE=feishu_app`). A webhook cannot update a
+  card. In webhook mode, and when no card exists, the module sends one text message for each stage that needs a person:
+  waiting for approval, rolled back and failed.
+- Every function is best effort and never raises. A notification must not stop a deploy. The delivery settings are
+  resolved in one place, `common.alerting.out_of_band_app_config`.
+- Feishu limits: the app updates a card for 14 days after the send, the card sets `config.update_multi` to true, and only
+  the sending app updates it. The app needs a permission of `im:message`, `im:message:send_as_bot` or
+  `im:message:update`. The reply uses `reply_in_thread`.
+
 ---
 
 ## 5. IaC Runner 集成

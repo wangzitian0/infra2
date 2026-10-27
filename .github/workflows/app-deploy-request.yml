@@ -58,6 +58,7 @@ jobs:
       cancel-in-progress: false
     outputs:
       iac_ref: ${{ steps.plan.outputs.iac_ref }}
+      card_message_id: ${{ steps.card.outputs.message_id }}
     steps:
       - name: Checkout released infra context
         uses: actions/checkout@v7
@@ -95,6 +96,19 @@ jobs:
             echo "version_ref=$version_ref"
             echo "iac_ref=$iac_ref"
           } >> "$GITHUB_OUTPUT"
+      - name: Open the release card
+        # A production release has one Feishu card. It is created here, before the approval
+        # gate, and the deploy job updates it. The step never fails: a notification must not
+        # stop a deploy. Its secrets are the Feishu delivery settings and nothing else.
+        id: card
+        env:
+          INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+          INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+          INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+          INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+        run: python -m tools.release_card open --stage requested --github-output "$GITHUB_OUTPUT"
       - name: Canary the exact app and IaC coordinates
         env:
           DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
@@ -113,6 +127,31 @@ jobs:
             --iac-ref "$VALIDATED_IAC_REF" \
             --domain "$INTERNAL_DOMAIN" \
             --timeout 600
+      - name: Show on the card that the owner must approve
+        # Nothing can run while the approval gate waits, so this is the last step before it.
+        # A production request expires 1440 s after the run was created (the age check in
+        # the deploy job). The card shows that time.
+        if: ${{ success() && steps.card.outputs.message_id != '' }}
+        env:
+          INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+          INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+          INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+          INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+          RELEASE_CARD_MESSAGE_ID: ${{ steps.card.outputs.message_id }}
+        run: python -m tools.release_card advance --stage awaiting_approval --expires-after-run-created 1440
+      - name: Show on the card that the canary failed
+        if: ${{ failure() && steps.card.outputs.message_id != '' }}
+        env:
+          INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+          INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+          INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+          INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+          RELEASE_CARD_MESSAGE_ID: ${{ steps.card.outputs.message_id }}
+        run: python -m tools.release_card advance --stage failed --detail "The canary failed. The deploy did not start."
 
   deploy:
     name: execute validated request
@@ -177,6 +216,18 @@ jobs:
           printf '%s\n' "$plan" | python -m json.tool
           iac_ref="$(printf '%s' "$plan" | python -c 'import json,sys; print(json.load(sys.stdin)["iac_ref"])')"
           echo "iac_ref=$iac_ref" >> "$GITHUB_OUTPUT"
+      - name: Show on the card that the deploy starts
+        # Reached only after the owner approved: the job waits at its environment gate.
+        if: ${{ needs.preflight_canary.outputs.card_message_id != '' }}
+        env:
+          INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+          INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+          INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+          INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+          RELEASE_CARD_MESSAGE_ID: ${{ needs.preflight_canary.outputs.card_message_id }}
+        run: python -m tools.release_card advance --stage deploying --detail "Approved. The deploy starts."
       - name: Configure SSH key for the pre-deploy schema gate
         # common.deploy.schema_gate SSHes to the VPS to run pre_deploy_schema_check inside
         # the app's published image. Reuses INFRA2_WATCHDOG_SSH_* secrets (#802).
@@ -201,6 +252,15 @@ jobs:
           INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
           INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
           INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
+          # The rollback notice of common.deploy.promote needs the Feishu settings. Without
+          # them it wrote one log line and told nobody (truealpha#1513).
+          INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+          INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+          INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+          INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+          RELEASE_CARD_MESSAGE_ID: ${{ needs.preflight_canary.outputs.card_message_id }}
         run: |
           set -euo pipefail
           if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
@@ -213,3 +273,27 @@ jobs:
             --repo-root . \
             --expected-iac-ref "$VALIDATED_IAC_REF" \
             --preflight-canary-result "$PREFLIGHT_CANARY_RESULT"
+      - name: Show on the card that the deploy succeeded
+        if: ${{ success() && needs.preflight_canary.outputs.card_message_id != '' }}
+        env:
+          INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+          INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+          INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+          INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+          RELEASE_CARD_MESSAGE_ID: ${{ needs.preflight_canary.outputs.card_message_id }}
+        run: python -m tools.release_card advance --stage succeeded --detail "The release is in service."
+      - name: Show on the card that the deploy failed
+        # A rollback already marked the card, so this step only writes a failure that no
+        # rollback explained.
+        if: ${{ failure() && needs.preflight_canary.outputs.card_message_id != '' }}
+        env:
+          INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+          INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+          INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+          INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+          INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+          RELEASE_CARD_MESSAGE_ID: ${{ needs.preflight_canary.outputs.card_message_id }}
+        run: python -m tools.release_card advance --stage failed --detail "The deploy failed. Open the run for the reason."
