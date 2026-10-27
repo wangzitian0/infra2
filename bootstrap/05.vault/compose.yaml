@@ -1,5 +1,6 @@
 services:
   vault:
+    mem_limit: 1g
     image: hashicorp/vault:1.15.4
     container_name: vault
     restart: always
@@ -46,6 +47,7 @@ services:
       start_period: 60s
 
   unsealer:
+    mem_limit: 1g
     build: .
     image: bootstrap-vault-unsealer:python3.11
     container_name: vault-unsealer

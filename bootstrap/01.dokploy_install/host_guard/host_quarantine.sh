@@ -69,6 +69,7 @@ TARGET_LITTER=(
   "data/bootstrap/1password.backup.20260605123024|legacy_1password_upgrade_backup"
   "data/bootstrap/1password.backup.20260605T221434Z|legacy_1password_upgrade_backup"
   "data/bootstrap/1password.cache-before-182.20260605171304|legacy_1password_upgrade_backup"
+  "tmp/__pycache__|stale_tmp_pycache"
 )
 
 read_crontab() {

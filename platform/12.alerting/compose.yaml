@@ -1,5 +1,6 @@
 services:
   vault-agent:
+    mem_limit: 128m
     init: true  # tini as PID1 reaps healthcheck ssl_client zombies
     image: hashicorp/vault:1.15
     container_name: platform-alerting-vault-agent${ENV_SUFFIX}
@@ -57,6 +58,7 @@ services:
       - dokploy-network
 
   feishu-alert-bridge:
+    mem_limit: 1g
     build:
       context: ../..
       dockerfile: platform/12.alerting/Dockerfile

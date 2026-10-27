@@ -29,6 +29,7 @@ services:
         max-file: "2"
 
   zookeeper:
+    mem_limit: 2g
     image: zookeeper:3.9
     container_name: platform-clickhouse-zookeeper${ENV_SUFFIX}
     restart: unless-stopped

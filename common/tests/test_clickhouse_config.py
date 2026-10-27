@@ -7,6 +7,8 @@ the resource stabilization specification.
 
 from __future__ import annotations
 
+import json
+from typing import Any
 import xml.etree.ElementTree as ET
 from pathlib import Path
 import yaml
@@ -136,3 +138,66 @@ def test_openpanel_and_finance_report_resource_bounds() -> None:
         ROOT / "bootstrap/01.dokploy_install/install_dokploy.sh"
     ).read_text(encoding="utf-8")
     assert "docker service update --init --env-add NODE_OPTIONS=" in install_sh_text
+
+
+def test_container_memory_limits_and_baseline_empty() -> None:
+    """Verify compose memory limits are configured and baseline is empty."""
+    from common.core.lint_compose_resource_limits import (
+        BASELINE_PATH,
+        main as lint_main,
+    )
+
+    baseline_data = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    assert baseline_data.get("unlimited") == []
+    assert lint_main() == 0
+
+    def load_services(rel_path: str) -> dict[str, Any]:
+        path = ROOT / rel_path
+        assert path.exists(), f"missing compose file: {rel_path}"
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return data.get("services", {})
+
+    # Postgres (4g)
+    for pg_rel in (
+        "platform/01.postgres/compose.yaml",
+        "finance_report/finance_report/01.postgres/compose.yaml",
+        "truealpha/truealpha/01.postgres/compose.yaml",
+    ):
+        services = load_services(pg_rel)
+        assert services.get("postgres", {}).get("mem_limit") == "4g"
+        assert services.get("vault-agent", {}).get("mem_limit") == "128m"
+
+    # Redis (1g)
+    for redis_rel in (
+        "platform/02.redis/compose.yaml",
+        "finance_report/finance_report/02.redis/compose.yaml",
+    ):
+        services = load_services(redis_rel)
+        assert services.get("redis", {}).get("mem_limit") == "1g"
+        assert services.get("vault-agent", {}).get("mem_limit") == "128m"
+
+    # SigNoz/OTel/Zookeeper (2g)
+    signoz_svcs = load_services("platform/11.signoz/compose.yaml")
+    assert signoz_svcs.get("signoz", {}).get("mem_limit") == "2g"
+    assert signoz_svcs.get("otel-collector", {}).get("mem_limit") == "2g"
+
+    ch_svcs = load_services("platform/03.clickhouse/compose.yaml")
+    assert ch_svcs.get("zookeeper", {}).get("mem_limit") == "2g"
+
+    # iac-runner (3g)
+    iac_svcs = load_services("bootstrap/06.iac_runner/compose.yaml")
+    assert iac_svcs.get("iac-runner", {}).get("mem_limit") == "3g"
+    assert iac_svcs.get("vault-agent", {}).get("mem_limit") == "128m"
+
+    # Vault/Alerting/1Password (1g)
+    vault_svcs = load_services("bootstrap/05.vault/compose.yaml")
+    assert vault_svcs.get("vault", {}).get("mem_limit") == "1g"
+    assert vault_svcs.get("unsealer", {}).get("mem_limit") == "1g"
+
+    alert_svcs = load_services("platform/12.alerting/compose.yaml")
+    assert alert_svcs.get("feishu-alert-bridge", {}).get("mem_limit") == "1g"
+    assert alert_svcs.get("vault-agent", {}).get("mem_limit") == "128m"
+
+    op_svcs = load_services("bootstrap/04.1password/compose.yaml")
+    assert op_svcs.get("op-connect-api", {}).get("mem_limit") == "1g"
+    assert op_svcs.get("op-connect-sync", {}).get("mem_limit") == "1g"
