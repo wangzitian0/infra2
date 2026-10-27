@@ -28,7 +28,7 @@ from common.observability import (
     BreakdownVerdict,
     ContainerBreakdownWatcher,
     analyze_container_logs,
-    reconcile_watchdog_issues,
+    reconcile_issue_trail,
 )
 from common.security import (
     apply_secret_supply,
@@ -154,7 +154,7 @@ def test_observability_watcher_and_trail_aliases() -> None:
     import inspect
 
     assert inspect.isclass(ContainerBreakdownWatcher)
-    assert callable(reconcile_watchdog_issues)
+    assert callable(reconcile_issue_trail)
 
 
 # ==========================================

@@ -36,8 +36,6 @@ UNVERIFIABLE = "UNVERIFIABLE"
 
 Get = Callable[[str], object]
 
-evaluate = evaluate_peer_liveness
-
 __all__ = [
     "API_TIMEOUT_SECONDS",
     "BOUND_CAP_ENV",
@@ -59,7 +57,6 @@ __all__ = [
     "UNVERIFIABLE",
     "bound_for",
     "crons_in",
-    "evaluate",
     "evaluate_peer_liveness",
     "github_getter",
     "largest_gap",

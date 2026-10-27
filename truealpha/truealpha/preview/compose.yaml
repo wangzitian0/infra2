@@ -178,7 +178,8 @@ services:
     healthcheck:
       # python stdlib probe: the uv-based slim image ships no curl/wget.
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)" ]
-      start_period: 30s
+      start_period: 120s
+      start_interval: 2s
       interval: 10s
       retries: 3
       timeout: 5s
