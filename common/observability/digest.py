@@ -834,7 +834,8 @@ def build_digest_card(
         stability_section=stability_section,
     )
     if stab_lines:
-        card_lines = ["**📈 可用率账本与公网中断对账（7d）**"]
+        window_days = _as_int(summary.get("window_days")) or DIGEST_WINDOW_DAYS
+        card_lines = [f"**📈 可用率账本与公网中断对账（{window_days}d）**"]
         for entry in stab_lines:
             clean = entry[2:].strip() if entry.startswith(("- ", "• ")) else entry
             card_lines.append(f"• {clean}")
@@ -995,17 +996,8 @@ def run_digest_cli(
         stale = active_stale_fetcher(repository, token, stale_days=stale_days, now=now)
         summary["stale_issues"] = summarize_stale_issues(stale)
 
-    should_include_stability = False
-    opt = current_env.get("WATCHDOG_DIGEST_INCLUDE_STABILITY", "").strip()
-    if opt == "1":
-        should_include_stability = True
-    elif opt == "0":
-        should_include_stability = False
-    elif (
-        bool(current_env.get("INFRA2_WATCHDOG_SSH_HOST"))
-        or stability_collector is not None
-    ):
-        should_include_stability = True
+    opt = current_env.get("WATCHDOG_DIGEST_INCLUDE_STABILITY", "").strip().lower()
+    should_include_stability = opt not in {"0", "false", "no"}
 
     stability_lines: list[str] | None = None
     if should_include_stability:

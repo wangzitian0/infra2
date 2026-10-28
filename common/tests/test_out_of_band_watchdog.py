@@ -2861,6 +2861,16 @@ def test_build_digest_text_and_card_include_stability_section_when_provided() ->
 
     assert build_digest_text is build_digest_message
 
+    # 5. Dynamic window_days in card header
+    card_1d = build_digest_card(
+        {**summary, "window_days": 1},
+        "wangzitian0/infra2",
+        stability_lines=stability_lines,
+    )
+    assert "📈 可用率账本与公网中断对账（1d）" in json.dumps(
+        card_1d, ensure_ascii=False
+    )
+
 
 def test_digest_workflow_step_runs_weekly_digest_without_separate_stability_step() -> (
     None

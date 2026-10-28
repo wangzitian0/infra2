@@ -548,6 +548,7 @@ def test_build_digest_card_and_estate_app_health(monkeypatch) -> None:
         {
             "GITHUB_TOKEN": "tok",
             "WATCHDOG_DIGEST_DRY_RUN": "1",
+            "WATCHDOG_DIGEST_INCLUDE_STABILITY": "0",
         },
         argv=["--daily"],
     )
@@ -617,20 +618,32 @@ def test_run_digest_cli_integrates_weekly_stability_into_unified_card(
     def fake_collector(env: dict, *, now=None, limit_days=7):
         return "\n".join(fake_stability_lines), fake_stability_lines
 
-    # 1. Without SSH host or stability flag: stability section omitted
+    # 1. Fail-closed: when WATCHDOG_DIGEST_INCLUDE_STABILITY is unset and SSH host is missing, fails closed
+    with pytest.raises(
+        RuntimeError, match="INFRA2_WATCHDOG_SSH_HOST / _USER / _KEY_PATH"
+    ):
+        digest.run_digest_cli(
+            {"GITHUB_TOKEN": "tok"},
+            deliverer=fake_deliver,
+        )
+
+    # 2. When WATCHDOG_DIGEST_INCLUDE_STABILITY="0" is explicitly set, stability is omitted and run succeeds
     rc = digest.run_digest_cli(
-        {"GITHUB_TOKEN": "tok"},
+        {
+            "GITHUB_TOKEN": "tok",
+            "WATCHDOG_DIGEST_INCLUDE_STABILITY": "0",
+        },
         deliverer=fake_deliver,
     )
     assert rc == 0
     assert "Availability (ledger ∩ /outages):" not in delivered_texts[-1]
-    assert "📈 可用率账本与公网中断对账（7d）" not in json.dumps(
+    assert "📈 可用率账本与公网中断对账" not in json.dumps(
         delivered_cards[-1], ensure_ascii=False
     )
 
-    # 2. With SSH host: collector runs and unifies card
+    # 3. Default with collector provided: collector runs and unifies card
     rc = digest.run_digest_cli(
-        {"GITHUB_TOKEN": "tok", "INFRA2_WATCHDOG_SSH_HOST": "vps.example.invalid"},
+        {"GITHUB_TOKEN": "tok"},
         deliverer=fake_deliver,
         stability_collector=fake_collector,
     )
@@ -646,11 +659,21 @@ def test_run_digest_cli_integrates_weekly_stability_into_unified_card(
     assert "📈 可用率账本与公网中断对账（7d）" in card_blob
     assert "Production availability: 100.0%" in card_blob
 
-    # 3. Disabling stability with WATCHDOG_DIGEST_INCLUDE_STABILITY=0
+    # 4. Dynamic window_days in card header (--daily -> 1d)
+    rc = digest.run_digest_cli(
+        {"GITHUB_TOKEN": "tok"},
+        argv=["--daily"],
+        deliverer=fake_deliver,
+        stability_collector=fake_collector,
+    )
+    assert rc == 0
+    card_blob = json.dumps(delivered_cards[-1], ensure_ascii=False)
+    assert "📈 可用率账本与公网中断对账（1d）" in card_blob
+
+    # 5. Disabling stability with WATCHDOG_DIGEST_INCLUDE_STABILITY=0
     rc = digest.run_digest_cli(
         {
             "GITHUB_TOKEN": "tok",
-            "INFRA2_WATCHDOG_SSH_HOST": "vps.example.invalid",
             "WATCHDOG_DIGEST_INCLUDE_STABILITY": "0",
         },
         deliverer=fake_deliver,
@@ -659,13 +682,13 @@ def test_run_digest_cli_integrates_weekly_stability_into_unified_card(
     assert rc == 0
     assert "Availability (ledger ∩ /outages):" not in delivered_texts[-1]
 
-    # 4. Fail-closed: collector error propagates as RuntimeError
+    # 6. Fail-closed: collector error propagates as RuntimeError
     def broken_collector(env: dict, *, now=None, limit_days=7):
         raise RuntimeError("production ledger read failed over SSH")
 
     with pytest.raises(RuntimeError, match="production ledger read failed over SSH"):
         digest.run_digest_cli(
-            {"GITHUB_TOKEN": "tok", "INFRA2_WATCHDOG_SSH_HOST": "vps.example.invalid"},
+            {"GITHUB_TOKEN": "tok"},
             deliverer=fake_deliver,
             stability_collector=broken_collector,
         )
