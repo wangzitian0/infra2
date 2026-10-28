@@ -555,3 +555,84 @@ def test_public_route_probes_must_follow_the_naming_contract(monkeypatch) -> Non
         "public-route probe finance-report-api-full-health-route (production) must "
         "be named '*-public-route' (common/observability/probe_specs.py naming contract)"
     ]
+
+
+def test_vps_public_route_signals_registered_with_minute_tier_and_debounce() -> None:
+    """Verify in-band VPS public-route signals declare minute tier and structured debounce."""
+    inventory = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
+    signals = {s["signal_id"]: s for s in inventory["signals"]}
+    expected_ids = [
+        "production.s3.public-route",
+        "production.authentik.public-route",
+        "production.signoz.public-route",
+        "staging.s3.public-route",
+        "staging.authentik.public-route",
+        "production.finance-report-api.public-route",
+        "staging.finance-report-web.public-route",
+        "staging.finance-report-api.public-route",
+        "production.truealpha-api.public-route",
+        "staging.truealpha-web.public-route",
+        "staging.truealpha-api.public-route",
+    ]
+    audit = _load_audit()
+    for signal_id in expected_ids:
+        entry = signals[signal_id]
+        assert entry["tier"] == "minute"
+        assert entry["type"] == "alert"
+        assert entry["primary_owner"] == "self"
+        assert entry["layer"] == "vps"
+        assert entry["consecutive_failures"] == 2
+        assert entry["renotify_window_sec"] == 0
+        assert audit._validate_tier_and_type(entry, signal_id) == []
+
+
+def test_t2_scheduled_job_signals_registered_with_expected_cadence_tiers() -> None:
+    """Verify registered scheduled job signals match expected tiers and signal types."""
+    inventory = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
+    signals = {s["signal_id"]: s for s in inventory["signals"]}
+    audit = _load_audit()
+
+    guard = signals["global.infra2.deploy-guard-audit"]
+    assert guard["tier"] == "day"
+    assert guard["type"] == "report"
+    assert guard["layer"] == "github"
+    assert guard["failure_class"] == "config-drift"
+    assert audit._validate_tier_and_type(guard, guard["signal_id"]) == []
+
+    canary = signals["global.infra2.deploy-v2-canary"]
+    assert canary["tier"] == "day"
+    assert canary["type"] == "report"
+    assert canary["layer"] == "github"
+    assert canary["failure_class"] == "config-drift"
+    assert audit._validate_tier_and_type(canary, canary["signal_id"]) == []
+
+    leak = signals["global.infra2.preview-leak-check"]
+    assert leak["tier"] == "hour"
+    assert leak["type"] == "alert"
+    assert leak["consecutive_failures"] == 1
+    assert leak["renotify_window_sec"] == 21600
+    assert leak["layer"] == "github"
+    assert leak["failure_class"] == "config-drift"
+    assert audit._validate_tier_and_type(leak, leak["signal_id"]) == []
+
+    hygiene = signals["global.infra2.host-hygiene-schedule"]
+    assert hygiene["tier"] == "day"
+    assert hygiene["type"] == "report"
+    assert hygiene["layer"] == "github"
+    assert hygiene["failure_class"] == "config-drift"
+    assert audit._validate_tier_and_type(hygiene, hygiene["signal_id"]) == []
+
+
+def test_monthly_ops_summary_signal_registered_as_month_report() -> None:
+    """Verify monthly ops summary signal registers with month tier and report type."""
+    inventory = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
+    signals = {s["signal_id"]: s for s in inventory["signals"]}
+    audit = _load_audit()
+
+    monthly = signals["global.infra2.monthly-ops-summary"]
+    assert monthly["tier"] == "month"
+    assert monthly["type"] == "report"
+    assert monthly["cadence"] == "30d"
+    assert monthly["layer"] == "github"
+    assert monthly["failure_class"] == "watchdog-liveness"
+    assert audit._validate_tier_and_type(monthly, monthly["signal_id"]) == []

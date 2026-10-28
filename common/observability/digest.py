@@ -36,6 +36,7 @@ WATCHDOG_JOB_NAME = "Check infra2 host and alert bridge"
 DEFAULT_REPOSITORY = "wangzitian0/infra2"
 DIGEST_WINDOW_DAYS = 7
 DAILY_WINDOW_DAYS = 1
+MONTHLY_WINDOW_DAYS = 30
 DEFAULT_INTERNAL_DOMAIN = "zitian.party"
 JOURNEY_BOARD_URL = "https://wangzitian0.github.io/finance_report/board/"
 OPENPANEL_URL = "https://openpanel.zitian.party"
@@ -679,8 +680,14 @@ def build_digest_message(
     stability_lines: Sequence[str] | None = None,
     stability_section: str | Sequence[str] | None = None,
 ) -> str:
-    """Build a compact weekly or daily digest message."""
-    cadence = "daily" if summary.get("window_days") == 1 else "weekly"
+    """Build a compact weekly, monthly, or daily digest message."""
+    window_days = _as_int(summary.get("window_days")) or DIGEST_WINDOW_DAYS
+    if window_days >= MONTHLY_WINDOW_DAYS:
+        cadence = "monthly"
+    elif window_days == 1:
+        cadence = "daily"
+    else:
+        cadence = "weekly"
     lines = [
         f"{REPORT_TITLE_PREFIX}[WATCHDOG DIGEST] Infra2 out-of-band {cadence} summary",
         f"Repository: {repository}",
@@ -767,8 +774,14 @@ def build_digest_card(
     stability_lines: Sequence[str] | None = None,
     stability_section: str | Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """Build a Feishu interactive card for the weekly or daily watchdog digest."""
-    cadence = "daily" if summary.get("window_days") == 1 else "weekly"
+    """Build a Feishu interactive card for the weekly, monthly, or daily digest."""
+    window_days = _as_int(summary.get("window_days")) or DIGEST_WINDOW_DAYS
+    if window_days >= MONTHLY_WINDOW_DAYS:
+        cadence = "monthly"
+    elif window_days == 1:
+        cadence = "daily"
+    else:
+        cadence = "weekly"
     failure_count = _as_int(summary.get("failure_count"))
     audit = (
         summary.get("log_audit")
@@ -835,7 +848,11 @@ def build_digest_card(
     )
     if stab_lines:
         window_days = _as_int(summary.get("window_days")) or DIGEST_WINDOW_DAYS
-        card_lines = [f"**📈 可用率账本与公网中断对账（{window_days}d）**"]
+        if window_days >= MONTHLY_WINDOW_DAYS:
+            card_title = f"**📈 月度运行质量汇总（{window_days}d）**"
+        else:
+            card_title = f"**📈 可用率账本与公网中断对账（{window_days}d）**"
+        card_lines = [card_title]
         for entry in stab_lines:
             clean = entry[2:].strip() if entry.startswith(("- ", "• ")) else entry
             card_lines.append(f"• {clean}")
@@ -944,10 +961,15 @@ def run_digest_cli(
         help="Generate a 1-day daily digest instead of a 7-day weekly digest.",
     )
     parser.add_argument(
+        "--monthly",
+        action="store_true",
+        help="Generate a 30-day monthly digest instead of a 7-day weekly digest.",
+    )
+    parser.add_argument(
         "--days",
         type=int,
         default=None,
-        help="Custom window in days (overrides --daily and WATCHDOG_DIGEST_WINDOW_DAYS).",
+        help="Custom window in days (overrides --monthly, --daily and WATCHDOG_DIGEST_WINDOW_DAYS).",
     )
     args = parser.parse_args(argv if argv is not None else [])
 
@@ -960,6 +982,7 @@ def run_digest_cli(
 
     window_days = (
         args.days
+        or (MONTHLY_WINDOW_DAYS if args.monthly else None)
         or (DAILY_WINDOW_DAYS if args.daily else None)
         or _as_int(current_env.get("WATCHDOG_DIGEST_WINDOW_DAYS"))
         or DIGEST_WINDOW_DAYS
@@ -1040,6 +1063,7 @@ __all__ = [
     "MAX_FAILED_RUN_URLS",
     "MAX_FAILURE_DOMAINS_SHOWN",
     "MAX_STALE_ISSUES_SHOWN",
+    "MONTHLY_WINDOW_DAYS",
     "OPENPANEL_URL",
     "REPORT_TITLE_PREFIX",
     "SIGNOZ_URL",

@@ -692,3 +692,97 @@ def test_run_digest_cli_integrates_weekly_stability_into_unified_card(
             deliverer=fake_deliver,
             stability_collector=broken_collector,
         )
+
+
+def test_monthly_digest_workflow_contract() -> None:
+    """Verify ops-checks workflow declares monthly schedule and passes monthly argument to digest."""
+    text = WORKFLOW_PATH.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(text)
+
+    assert {"cron": "0 2 1 * *"} in workflow["on"]["schedule"]
+
+    digest_job = workflow["jobs"]["digest"]
+    assert "0 2 1 * *" in str(digest_job.get("if", ""))
+    steps = digest_job.get("steps", [])
+    build_step = next(s for s in steps if s.get("name") == "Build and send digest")
+    assert "--monthly" in build_step.get("run", "")
+    assert "# signal: monthly-ops-summary" in text
+
+
+def test_monthly_digest_message_and_card_labels() -> None:
+    """Verify build functions generate monthly title and section header when window is monthly."""
+    digest = _load_module()
+
+    summary = {
+        "window_days": digest.MONTHLY_WINDOW_DAYS,
+        "week_start_utc": "2026-09-01",
+        "week_end_utc": "2026-10-01",
+        "total_runs": 30,
+        "success_count": 30,
+        "failure_count": 0,
+        "cancelled_count": 0,
+        "timed_out_count": 0,
+        "other_count": 0,
+        "success_rate_pct": 100.0,
+        "failure_rate_pct": 0.0,
+        "failed_run_urls": [],
+    }
+
+    message = digest.build_digest_message(
+        summary,
+        "wangzitian0/infra2",
+        stability_lines=["Production availability: 100.0%"],
+    )
+    assert "[WATCHDOG DIGEST] Infra2 out-of-band monthly summary" in message
+
+    card = digest.build_digest_card(
+        summary,
+        "wangzitian0/infra2",
+        stability_lines=["Production availability: 100.0%"],
+    )
+    card_json = json.dumps(card, ensure_ascii=False)
+    assert "[WATCHDOG DIGEST] Infra2 out-of-band monthly summary" in card_json
+    assert "📈 月度运行质量汇总（30d）" in card_json
+
+
+def test_run_digest_cli_monthly_argument(monkeypatch) -> None:
+    """Verify run_digest_cli uses thirty-day window when monthly flag is active."""
+    digest = _load_module()
+
+    captured_windows: list[int] = []
+
+    def fake_runs(repo, token, *, now=None, window_days=7):
+        captured_windows.append(window_days)
+        return []
+
+    monkeypatch.setattr(digest, "fetch_recent_runs", fake_runs)
+    monkeypatch.setattr(digest, "fetch_recent_run_logs", lambda *a, **kw: {})
+    monkeypatch.setattr(digest, "fetch_estate_app_health", lambda *a, **kw: [])
+    monkeypatch.setattr(digest, "fetch_stale_open_issues", lambda *a, **kw: [])
+
+    delivered_texts: list[str] = []
+    delivered_cards: list[dict] = []
+
+    def fake_deliver(env: dict, text: str, *, card=None) -> None:
+        delivered_texts.append(text)
+        if card is not None:
+            delivered_cards.append(card)
+
+    fake_stability_lines = [
+        "Production availability: 100.0% · Signals at 100%: 24/24 · Cloudflare outages: 0",
+    ]
+
+    def fake_collector(env: dict, *, now=None, limit_days=7):
+        return "\n".join(fake_stability_lines), fake_stability_lines
+
+    rc = digest.run_digest_cli(
+        {"GITHUB_TOKEN": "tok"},
+        argv=["--monthly"],
+        deliverer=fake_deliver,
+        stability_collector=fake_collector,
+    )
+    assert rc == 0
+    assert captured_windows == [30]
+    assert "Infra2 out-of-band monthly summary" in delivered_texts[-1]
+    card_blob = json.dumps(delivered_cards[-1], ensure_ascii=False)
+    assert "📈 月度运行质量汇总（30d）" in card_blob
