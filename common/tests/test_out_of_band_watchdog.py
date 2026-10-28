@@ -2798,3 +2798,76 @@ def test_main_pages_a_scheduled_job_that_never_started(monkeypatch, tmp_path) ->
     assert code == 1
     assert [_failure_names(page) for page in pages] == [{"infra2-scheduled-job-start"}]
     assert set(trail.failing) == {"infra2-scheduled-job-start"}
+
+
+def test_build_digest_text_and_card_include_stability_section_when_provided() -> None:
+    """Verify digest text and card include 7-day stability section when provided."""
+    from common.observability.digest import (
+        build_digest_card,
+        build_digest_message,
+        build_digest_text,
+    )
+
+    summary = {
+        "week_start_utc": "2026-10-14",
+        "week_end_utc": "2026-10-21",
+        "window_days": 7,
+        "total_runs": 10,
+        "success_count": 10,
+        "failure_count": 0,
+        "cancelled_count": 0,
+        "other_count": 0,
+        "success_rate_pct": 100.0,
+    }
+    stability_lines = [
+        "Production availability: 99.85% · Signals at 100%: 24/25 · Cloudflare outages: 1 (45.0m)",
+        "staging (reported, never paged): 100.0% · 25/25 signals at 100%",
+    ]
+
+    plain_text = build_digest_text(summary, "wangzitian0/infra2")
+    plain_card = build_digest_card(summary, "wangzitian0/infra2")
+    assert "Availability (ledger ∩ /outages):" not in plain_text
+    assert "📈 可用率账本与公网中断对账（7d）" not in json.dumps(
+        plain_card, ensure_ascii=False
+    )
+
+    text = build_digest_text(
+        summary, "wangzitian0/infra2", stability_lines=stability_lines
+    )
+    card = build_digest_card(
+        summary, "wangzitian0/infra2", stability_lines=stability_lines
+    )
+    assert "Availability (ledger ∩ /outages):" in text
+    assert (
+        "- Production availability: 99.85% · Signals at 100%: 24/25 · Cloudflare outages: 1 (45.0m)"
+        in text
+    )
+    assert "- staging (reported, never paged): 100.0% · 25/25 signals at 100%" in text
+
+    card_json = json.dumps(card, ensure_ascii=False)
+    assert "📈 可用率账本与公网中断对账（7d）" in card_json
+    assert "Production availability: 99.85%" in card_json
+    assert "staging (reported, never paged): 100.0%" in card_json
+
+    summary_with_stability = {**summary, "stability_lines": stability_lines}
+    text_from_summary = build_digest_message(
+        summary_with_stability, "wangzitian0/infra2"
+    )
+    card_from_summary = build_digest_card(summary_with_stability, "wangzitian0/infra2")
+    assert "Availability (ledger ∩ /outages):" in text_from_summary
+    assert "📈 可用率账本与公网中断对账（7d）" in json.dumps(
+        card_from_summary, ensure_ascii=False
+    )
+
+    assert build_digest_text is build_digest_message
+
+
+def test_digest_workflow_step_runs_weekly_digest_without_separate_stability_step() -> (
+    None
+):
+    """Verify digest job runs watchdog_weekly_digest without separate stability step."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    digest_job = workflow["jobs"]["digest"]
+    step_names = [step.get("name") for step in digest_job["steps"]]
+    assert "Build and send digest" in step_names
+    assert "Build and send positive stability report" not in step_names

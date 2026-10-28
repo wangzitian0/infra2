@@ -25,9 +25,7 @@ def test_the_weekly_digest_pages_when_it_fails() -> None:
     steps = _steps(digest)
     alert = steps["Alert on failure"]
     names = [step.get("name") for step in digest["steps"]]
-    assert names.index("Build and send positive stability report") < names.index(
-        "Alert on failure"
-    )
+    assert names.index("Build and send digest") < names.index("Alert on failure")
     assert (
         alert["if"].startswith("failure()")
         and "INFRA2_STABILITY_REPORT_DRY_RUN" in alert["if"]

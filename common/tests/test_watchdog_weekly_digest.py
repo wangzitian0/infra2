@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -587,3 +588,84 @@ def test_fetch_estate_app_health_requires_healthy_status_for_in_sync(
     )
     apps = digest.fetch_estate_app_health("zitian.party")
     assert all(entry["parity"] == "unknown" for entry in apps)
+
+
+def test_run_digest_cli_integrates_weekly_stability_into_unified_card(
+    monkeypatch,
+) -> None:
+    """Verify run_digest_cli unifies 7-day stability into single weekly card."""
+    digest = _load_module()
+
+    monkeypatch.setattr(digest, "fetch_recent_runs", lambda *a, **kw: [])
+    monkeypatch.setattr(digest, "fetch_recent_run_logs", lambda *a, **kw: {})
+    monkeypatch.setattr(digest, "fetch_estate_app_health", lambda *a, **kw: [])
+    monkeypatch.setattr(digest, "fetch_stale_open_issues", lambda *a, **kw: [])
+
+    delivered_cards: list[dict] = []
+    delivered_texts: list[str] = []
+
+    def fake_deliver(env: dict, text: str, *, card=None) -> None:
+        delivered_texts.append(text)
+        if card is not None:
+            delivered_cards.append(card)
+
+    fake_stability_lines = [
+        "Production availability: 100.0% · Signals at 100%: 24/24 · Cloudflare outages: 0",
+        "staging (reported, never paged): 100.0% · 24/24 signals at 100%",
+    ]
+
+    def fake_collector(env: dict, *, now=None, limit_days=7):
+        return "\n".join(fake_stability_lines), fake_stability_lines
+
+    # 1. Without SSH host or stability flag: stability section omitted
+    rc = digest.run_digest_cli(
+        {"GITHUB_TOKEN": "tok"},
+        deliverer=fake_deliver,
+    )
+    assert rc == 0
+    assert "Availability (ledger ∩ /outages):" not in delivered_texts[-1]
+    assert "📈 可用率账本与公网中断对账（7d）" not in json.dumps(
+        delivered_cards[-1], ensure_ascii=False
+    )
+
+    # 2. With SSH host: collector runs and unifies card
+    rc = digest.run_digest_cli(
+        {"GITHUB_TOKEN": "tok", "INFRA2_WATCHDOG_SSH_HOST": "vps.example.invalid"},
+        deliverer=fake_deliver,
+        stability_collector=fake_collector,
+    )
+    assert rc == 0
+    last_text = delivered_texts[-1]
+    last_card = delivered_cards[-1]
+    assert "Availability (ledger ∩ /outages):" in last_text
+    assert (
+        "- Production availability: 100.0% · Signals at 100%: 24/24 · Cloudflare outages: 0"
+        in last_text
+    )
+    card_blob = json.dumps(last_card, ensure_ascii=False)
+    assert "📈 可用率账本与公网中断对账（7d）" in card_blob
+    assert "Production availability: 100.0%" in card_blob
+
+    # 3. Disabling stability with WATCHDOG_DIGEST_INCLUDE_STABILITY=0
+    rc = digest.run_digest_cli(
+        {
+            "GITHUB_TOKEN": "tok",
+            "INFRA2_WATCHDOG_SSH_HOST": "vps.example.invalid",
+            "WATCHDOG_DIGEST_INCLUDE_STABILITY": "0",
+        },
+        deliverer=fake_deliver,
+        stability_collector=fake_collector,
+    )
+    assert rc == 0
+    assert "Availability (ledger ∩ /outages):" not in delivered_texts[-1]
+
+    # 4. Fail-closed: collector error propagates as RuntimeError
+    def broken_collector(env: dict, *, now=None, limit_days=7):
+        raise RuntimeError("production ledger read failed over SSH")
+
+    with pytest.raises(RuntimeError, match="production ledger read failed over SSH"):
+        digest.run_digest_cli(
+            {"GITHUB_TOKEN": "tok", "INFRA2_WATCHDOG_SSH_HOST": "vps.example.invalid"},
+            deliverer=fake_deliver,
+            stability_collector=broken_collector,
+        )

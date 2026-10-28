@@ -11,7 +11,7 @@ report cards via ``build_feishu_report_card``.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 import io
 import json
@@ -575,7 +575,110 @@ def fetch_estate_app_health(
     return results
 
 
-def build_digest_message(summary: Mapping[str, Any], repository: str) -> str:
+def collect_weekly_stability_section(
+    env: Mapping[str, str],
+    *,
+    now: datetime | None = None,
+    limit_days: int = DIGEST_WINDOW_DAYS,
+    vps_ledger_reader=None,
+    outages_fetcher=None,
+) -> tuple[str, list[str]]:
+    """Collect 7-day availability ledger and correlate with Cloudflare outages."""
+    import subprocess
+    from common.observability.stability_report import (
+        DEFAULT_OUTAGES_URL,
+        OPTIONAL_ENVIRONMENTS,
+        REQUIRED_ENVIRONMENT,
+        _summarize_all_environments,
+        fetch_outages,
+        read_vps_ledger,
+    )
+
+    current_now = now or datetime.now(UTC)
+    active_reader = vps_ledger_reader or read_vps_ledger
+    active_outages_fetcher = outages_fetcher or fetch_outages
+
+    outages_url = (
+        env.get("INFRA2_WATCHDOG_OUTAGES_URL") or DEFAULT_OUTAGES_URL
+    ).strip()
+    if not outages_url:
+        raise RuntimeError("INFRA2_WATCHDOG_OUTAGES_URL is required")
+    token = (env.get("INFRA2_WATCHDOG_WORKER_STATUS_TOKEN") or "").strip()
+
+    ledgers: dict[str, Mapping[str, Any] | str] = {
+        REQUIRED_ENVIRONMENT: active_reader(env, REQUIRED_ENVIRONMENT)
+    }
+    for environment in OPTIONAL_ENVIRONMENTS:
+        try:
+            ledgers[environment] = active_reader(env, environment)
+        except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+            ledgers[environment] = str(exc)
+
+    outages = active_outages_fetcher(outages_url, token)
+
+    prod_summary, staging_lines = _summarize_all_environments(
+        ledgers, outages, current_now, limit_days=limit_days
+    )
+
+    unavail = prod_summary.get("unavailability") or {}
+    outage_count = unavail.get("outage_count", 0)
+    outage_min = unavail.get("outage_minutes", 0.0)
+    outage_suffix = f" ({outage_min}m)" if outage_min > 0 else ""
+
+    prod_line = (
+        f"Production availability: {prod_summary['overall_uptime_pct']}% · "
+        f"Signals at 100%: {prod_summary['perfect_count']}/{prod_summary['signal_count']} · "
+        f"Cloudflare outages: {outage_count}{outage_suffix}"
+    )
+    lines = [prod_line, *staging_lines]
+    section_text = "\n".join(lines)
+    return section_text, lines
+
+
+def _resolve_stability_lines(
+    summary: Mapping[str, Any],
+    *,
+    stability_lines: Sequence[str] | None = None,
+    stability_section: str | Sequence[str] | None = None,
+) -> list[str]:
+    """Resolve stability report lines from arguments or summary mapping."""
+    if stability_lines is not None:
+        return list(stability_lines)
+    if stability_section is not None:
+        if isinstance(stability_section, (list, tuple)):
+            return list(stability_section)
+        if isinstance(stability_section, str) and stability_section.strip():
+            return [
+                line.strip()
+                for line in stability_section.strip().splitlines()
+                if line.strip()
+            ]
+    if summary.get("stability_lines") is not None:
+        raw = summary["stability_lines"]
+        if isinstance(raw, (list, tuple)):
+            return list(raw)
+    if summary.get("stability_section") is not None:
+        raw = summary["stability_section"]
+        if (
+            isinstance(raw, tuple)
+            and len(raw) == 2
+            and isinstance(raw[1], (list, tuple))
+        ):
+            return list(raw[1])
+        if isinstance(raw, (list, tuple)):
+            return list(raw)
+        if isinstance(raw, str) and raw.strip():
+            return [line.strip() for line in raw.strip().splitlines() if line.strip()]
+    return []
+
+
+def build_digest_message(
+    summary: Mapping[str, Any],
+    repository: str,
+    *,
+    stability_lines: Sequence[str] | None = None,
+    stability_section: str | Sequence[str] | None = None,
+) -> str:
     """Build a compact weekly or daily digest message."""
     cadence = "daily" if summary.get("window_days") == 1 else "weekly"
     lines = [
@@ -621,6 +724,16 @@ def build_digest_message(summary: Mapping[str, Any], repository: str) -> str:
             lines.append(f"Failure domains: {domain_text}")
         if audit.get("log_fetch_error_count"):
             lines.append(f"Log fetch errors: {audit['log_fetch_error_count']}")
+    stab_lines = _resolve_stability_lines(
+        summary,
+        stability_lines=stability_lines,
+        stability_section=stability_section,
+    )
+    if stab_lines:
+        lines.append("Availability (ledger ∩ /outages):")
+        for entry in stab_lines:
+            clean = entry[2:].strip() if entry.startswith(("- ", "• ")) else entry
+            lines.append(f"- {clean}")
     estate_apps = summary.get("estate_apps")
     if isinstance(estate_apps, list) and estate_apps:
         lines.append("Estate app release parity:")
@@ -644,7 +757,16 @@ def build_digest_message(summary: Mapping[str, Any], repository: str) -> str:
     return "\n".join(lines)
 
 
-def build_digest_card(summary: Mapping[str, Any], repository: str) -> dict[str, Any]:
+build_digest_text = build_digest_message
+
+
+def build_digest_card(
+    summary: Mapping[str, Any],
+    repository: str,
+    *,
+    stability_lines: Sequence[str] | None = None,
+    stability_section: str | Sequence[str] | None = None,
+) -> dict[str, Any]:
     """Build a Feishu interactive card for the weekly or daily watchdog digest."""
     cadence = "daily" if summary.get("window_days") == 1 else "weekly"
     failure_count = _as_int(summary.get("failure_count"))
@@ -704,6 +826,19 @@ def build_digest_card(summary: Mapping[str, Any], repository: str) -> dict[str, 
                 f"({stg.get('status')})"
             )
         sections.append("\n".join(app_lines))
+        hr_after.add(len(sections) - 1)
+
+    stab_lines = _resolve_stability_lines(
+        summary,
+        stability_lines=stability_lines,
+        stability_section=stability_section,
+    )
+    if stab_lines:
+        card_lines = ["**📈 可用率账本与公网中断对账（7d）**"]
+        for entry in stab_lines:
+            clean = entry[2:].strip() if entry.startswith(("- ", "• ")) else entry
+            card_lines.append(f"• {clean}")
+        sections.append("\n".join(card_lines))
         hr_after.add(len(sections) - 1)
 
     if audit:
@@ -796,6 +931,7 @@ def run_digest_cli(
     health_fetcher=None,
     stale_fetcher=None,
     deliverer=None,
+    stability_collector=None,
 ) -> int:
     """CLI runner for the weekly/daily watchdog digest."""
     import argparse
@@ -832,6 +968,7 @@ def run_digest_cli(
     active_health_fetcher = health_fetcher or fetch_estate_app_health
     active_stale_fetcher = stale_fetcher or fetch_stale_open_issues
     active_deliverer = deliverer or deliver_digest
+    active_stability_collector = stability_collector or collect_weekly_stability_section
 
     now = datetime.now(UTC)
     runs = active_runs_fetcher(repository, token, now=now, window_days=window_days)
@@ -857,8 +994,30 @@ def run_digest_cli(
         )
         stale = active_stale_fetcher(repository, token, stale_days=stale_days, now=now)
         summary["stale_issues"] = summarize_stale_issues(stale)
-    message = build_digest_message(summary, repository)
-    card = build_digest_card(summary, repository)
+
+    should_include_stability = False
+    opt = current_env.get("WATCHDOG_DIGEST_INCLUDE_STABILITY", "").strip()
+    if opt == "1":
+        should_include_stability = True
+    elif opt == "0":
+        should_include_stability = False
+    elif (
+        bool(current_env.get("INFRA2_WATCHDOG_SSH_HOST"))
+        or stability_collector is not None
+    ):
+        should_include_stability = True
+
+    stability_lines: list[str] | None = None
+    if should_include_stability:
+        stab_text, stab_lines = active_stability_collector(
+            current_env, now=now, limit_days=window_days
+        )
+        stability_lines = stab_lines
+        summary["stability_lines"] = stab_lines
+        summary["stability_section"] = stab_text
+
+    message = build_digest_message(summary, repository, stability_lines=stability_lines)
+    card = build_digest_card(summary, repository, stability_lines=stability_lines)
     if current_env.get("WATCHDOG_DIGEST_DRY_RUN") == "1":
         print(message)
         return 0
@@ -898,6 +1057,8 @@ __all__ = [
     "WORKFLOW_FILE",
     "build_digest_card",
     "build_digest_message",
+    "build_digest_text",
+    "collect_weekly_stability_section",
     "deliver_digest",
     "fetch_estate_app_health",
     "fetch_recent_run_logs",
