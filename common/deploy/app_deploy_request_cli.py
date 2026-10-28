@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import subprocess
@@ -15,6 +16,15 @@ from common.deploy.release_markers import marker_status
 
 if TYPE_CHECKING:
     from common.deploy.app_deploy_request import DeployPlan
+
+
+def _set_template_env(template: str | None) -> None:
+    if template:
+        os.environ["VAULT_SECRETS_TEMPLATE"] = base64.b64encode(
+            template.encode("utf-8")
+        ).decode("ascii")
+    else:
+        os.environ.pop("VAULT_SECRETS_TEMPLATE", None)
 
 
 def execute_plan(plan: "DeployPlan", *, run=None) -> int:
@@ -33,15 +43,24 @@ def execute_plan(plan: "DeployPlan", *, run=None) -> int:
         from common.deploy.v2 import main as deploy_v2_main
 
         run = deploy_v2_main
-    primary = plan.deploy_v2_args()
-    code = run(primary)
-    if code != 0:
-        return code
-    for companion in service_spec(plan.request.service).companions:
-        code = run(_companion_args(primary, companion))
+    previous = os.environ.get("VAULT_SECRETS_TEMPLATE")
+    try:
+        primary = plan.deploy_v2_args()
+        _set_template_env(plan.rendered_templates.get(plan.request.service))
+        code = run(primary)
         if code != 0:
             return code
-    return 0
+        for companion in service_spec(plan.request.service).companions:
+            _set_template_env(plan.rendered_templates.get(companion))
+            code = run(_companion_args(primary, companion))
+            if code != 0:
+                return code
+        return 0
+    finally:
+        if previous is None:
+            os.environ.pop("VAULT_SECRETS_TEMPLATE", None)
+        else:
+            os.environ["VAULT_SECRETS_TEMPLATE"] = previous
 
 
 def _companion_args(primary: list[str], companion: str) -> list[str]:

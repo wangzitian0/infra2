@@ -1,274 +1,134 @@
-"""tools/fetch_app_manifests.py: a deploy reads infra2's own copies of the App manifests (#1258).
+"""tools/fetch_app_manifests.py: guard against vendored App manifests in contracts/ (#1320).
 
-The offline check proves that the copies match contracts/apps.lock.json. Only --sync and
---verify use the network, and the tests replace their calls."""
+App environment manifests are fetched from the deployed release commit at deploy time to
+render the Vault Agent template. This guard fails if any vendored manifest or lock file
+reappears under ``contracts/`` or if ``SERVICES`` references ``contracts/`` or ``repos/``.
+"""
 
 from __future__ import annotations
 
 import ast
-import hashlib
 import http.client
 import io
-import json
 import os
 import ssl
 import subprocess
 import sys
 import urllib.error
 from pathlib import Path
-from unittest.mock import Mock, call
 
 import pytest
 
 from common.core import fetch_app_manifests as contracts
+from common.security.registry import SERVICES, Service
 
 ROOT = Path(__file__).resolve().parents[2]
-SHA = "c" * 40
-BODIES = {"one": b'{"fields": [1]}\n', "two": b'{"fields": [2]}\n'}
 
 
-def _tree(root: Path, bodies=BODIES) -> Path:
-    """Two copies of the App ``alpha`` and a lock that matches them. Return the lock."""
-    files = []
-    for name, body in bodies.items():
-        path = root / f"contracts/alpha/{name}.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(body)
-        sha256 = hashlib.sha256(body).hexdigest()
-        rel = path.relative_to(root).as_posix()
-        files.append(
-            {"app": "alpha", "path": rel, "sha256": sha256, "upstream": f"{name}.json"}
-        )
-    app = {"commit": "a" * 40, "repository": "owner/alpha", "tag": None}
-    lock = root / contracts.LOCK
-    lock.write_text(json.dumps({"apps": {"alpha": app}, "files": files}))
-    return lock
+def test_real_checkout_has_no_vendored_app_manifests() -> None:
+    """Acceptance Criterion 2 (#1320): contracts/truealpha/, contracts/finance_report/ and
+    contracts/apps.lock.json do not exist, and check() passes on the repository root."""
+    assert not (ROOT / "contracts" / "truealpha").exists()
+    assert not (ROOT / "contracts" / "finance_report").exists()
+    assert not (ROOT / "contracts" / "apps.lock.json").exists()
+    assert contracts.check(ROOT) == []
 
 
-def _files(root: Path) -> dict[Path, bytes]:
-    return {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
-
-
-def test_check_passes_on_a_consistent_tree(tmp_path: Path, capsys) -> None:
-    _tree(tmp_path)
-
+def test_check_passes_on_clean_tree(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     assert contracts.check(tmp_path) == []
     assert contracts.main([], root=tmp_path) == 0
-    assert "ok (2 files)" in capsys.readouterr().out
-
-
-def _lock_of(
-    path="contracts/alpha/one.json",
-    head="a" * 40,
-    repository="owner/alpha",
-    tag=None,
-    **file,
-) -> bytes:
-    entry = {"app": "alpha", "path": path, "sha256": "0" * 64, "upstream": "x", **file}
-    app = {"commit": head, "repository": repository, "tag": tag}
-    return json.dumps({"apps": {"alpha": app}, "files": [entry]}).encode()
+    assert "app manifest guard: ok" in capsys.readouterr().out
+    assert contracts.main(["--check"], root=tmp_path) == 0
 
 
 @pytest.mark.parametrize(
-    ("path", "content", "problem"),
+    "rel_path",
     [
-        ("contracts/alpha/one.json", b'{"fields": [7]}\n', "one.json: sha256 differs"),
-        ("contracts/alpha/extra.json", b"{}", "extra.json: not listed in contracts/"),
-        (contracts.LOCK, _lock_of("contracts/alpha/gone.json"), "gone.json: missing"),
-        (contracts.LOCK, _lock_of("../x.json"), "../x.json: outside contracts/"),
-        (contracts.LOCK, _lock_of("/tmp/x.json"), "/tmp/x.json: outside contracts/"),
-        (contracts.LOCK, _lock_of(head="g" * 40), "apps.alpha.commit is not 40"),
-        (
-            contracts.LOCK,
-            _lock_of(repository="bad"),
-            "apps.alpha.repository is not owner/name",
-        ),
-        (
-            contracts.LOCK,
-            _lock_of(repository=5),
-            "apps.alpha.repository is not owner/name",
-        ),
-        (contracts.LOCK, _lock_of(tag=5), "apps.alpha.tag must be null or a non-empty"),
-        (
-            contracts.LOCK,
-            _lock_of(tag=" "),
-            "apps.alpha.tag must be null or a non-empty",
-        ),
-        (
-            contracts.LOCK,
-            _lock_of(tag="v1\n"),
-            "apps.alpha.tag must be null or a non-empty",
-        ),
-        (contracts.LOCK, _lock_of(app="beta"), "app 'beta' is not in apps"),
-        (contracts.LOCK, _lock_of(upstream="../x"), "upstream is not a relative"),
-        (contracts.LOCK, _lock_of(upstream="/x"), "upstream is not a relative"),
-        (contracts.LOCK, _lock_of(sha256="A" * 64), "sha256 is not 64 lowercase hex"),
-        (contracts.LOCK, _lock_of(path=5), "malformed"),
-        (contracts.LOCK, b"{not json", "unreadable"),
-        (contracts.LOCK, b'{"files": [{}]}', "malformed"),
-        (contracts.LOCK, b'{"apps": []}', "malformed"),
+        "contracts/truealpha/data-engine.required-env.generated.json",
+        "contracts/truealpha/app-web.required-env.manifest.json",
+        "contracts/truealpha/llm-service.required-env.generated.json",
+        "contracts/finance_report/required-env.generated.json",
+        "contracts/apps.lock.json",
     ],
 )
-def test_check_reports_each_kind_of_drift(
-    tmp_path: Path, path, content, problem
+def test_check_fails_when_a_vendored_app_manifest_or_lock_reappears(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], rel_path: str
 ) -> None:
-    _tree(tmp_path)
-    (tmp_path / path).write_bytes(content)
+    """Falsifiability proof (#1320): re-introducing any vendored manifest or lock fails."""
+    target = tmp_path / rel_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('{"fields": []}\n', encoding="utf-8")
 
-    assert any(problem in line for line in contracts.check(tmp_path))
+    problems = contracts.check(tmp_path)
+    assert len(problems) == 1
+    assert rel_path in problems[0]
+    assert "vendored app manifest is forbidden (#1320)" in problems[0]
     assert contracts.main([], root=tmp_path) == 1
+    assert rel_path in capsys.readouterr().err
 
 
-def test_check_reports_an_upper_case_sha256_as_a_format_problem_only(tmp_path) -> None:
-    lock = _tree(tmp_path)
-    digest = hashlib.sha256(BODIES["one"]).hexdigest()
-    lock.write_text(lock.read_text().replace(digest, digest.upper()))
-    lines = contracts.check(tmp_path)
-    assert len(lines) == 1 and "one.json: sha256 is not 64 lowercase hex" in lines[0]
-
-
-def test_check_reports_a_symlink_that_hides_json_files(tmp_path: Path) -> None:
-    (_tree(tmp_path).parent / "link").symlink_to(tmp_path / "contracts/alpha")
-    assert "contracts/link: symlink" in contracts.check(tmp_path)
-
-
-# agree | one changed upstream byte | copy and lock edited together | truncated copy and upstream
-@pytest.mark.parametrize(
-    ("copy", "upstream", "bad"),
-    [
-        ({}, {}, ()),
-        ({}, {"one": b"{}"}, ("one",)),
-        ({"two": b"{}"}, {}, ("two",)),
-        ({"one": b""}, {"one": b""}, ("one",)),
-    ],
-)
-def test_verify_compares_with_the_upstream_bytes(tmp_path, copy, upstream, bad) -> None:
-    _tree(tmp_path, {**BODIES, **copy})
-    url = "https://raw.githubusercontent.com/owner/alpha/" + "a" * 40
-    # a body per exact URL: a wrong repository, commit or path raises KeyError and fails the test
-    served = {f"{url}/{n}.json": b for n, b in {**BODIES, **upstream}.items()}
-    fetch = served.__getitem__
-    ls_remote = Mock(return_value=f"{'a' * 40}\trefs/heads/main\n")
-    got = contracts.check(tmp_path, fetch, ls_remote)
-    assert [x.split(":")[0] for x in got] == [f"contracts/alpha/{b}.json" for b in bad]
-    assert contracts.check(tmp_path) == []  # the offline check passes in every case
-    assert contracts.main(
-        ["--verify"], root=tmp_path, fetch=fetch, ls_remote=ls_remote
-    ) == (1 if bad else 0)
-
-
-def test_verify_checks_locked_tag_and_main_branch(tmp_path: Path) -> None:
-    lock = _tree(tmp_path)
-    url = "https://raw.githubusercontent.com/owner/alpha/" + "a" * 40
-    served = {f"{url}/{n}.json": b for n, b in BODIES.items()}
-    fetch = served.__getitem__
-
-    # Missing refs/heads/main when tag is None
-    assert any(
-        "has no refs/heads/main" in line
-        for line in contracts.check(tmp_path, fetch, Mock(return_value=""))
-    )
-
-    # Locked tag resolves to a different commit
-    data = json.loads(lock.read_text())
-    data["apps"]["alpha"]["tag"] = "v1.0.0"
-    lock.write_text(json.dumps(data))
-    ls_remote_mismatch = Mock(return_value=f"{'b' * 40}\trefs/tags/v1.0.0\n")
-    assert any(
-        "tag 'v1.0.0' resolves to bbbbbbbbbbbb, not aaaaaaaaaaaa" in line
-        for line in contracts.check(tmp_path, fetch, ls_remote_mismatch)
-    )
-
-
-def test_sync_with_verify_runs_verification(tmp_path: Path) -> None:
-    _tree(tmp_path)
-    ls_remote = Mock(return_value=f"{SHA}\trefs/heads/main\n")
-    calls = []
-
-    def fetch(url: str) -> bytes:
-        calls.append(url)
-        # First 2 calls are sync, next 2 calls are verify; make verify see a Tampered upstream
-        if len(calls) > 2:
-            return b"tampered"
-        return b'{"ok": true}\n'
-
-    rc = contracts.main(
-        ["--sync", "alpha", "main", "--verify"],
-        root=tmp_path,
-        ls_remote=ls_remote,
-        fetch=fetch,
-    )
-    assert rc == 1
-    assert len(calls) == 4
-
-
-@pytest.mark.parametrize(
-    ("ref", "listing", "tag"),
-    [
-        ("main", f"{SHA}\trefs/heads/main\n", None),
-        # an annotated tag lists the tag object first; the peeled ^{} line names the commit
-        ("v2", f"{'d' * 40}\trefs/tags/v2\n{SHA}\trefs/tags/v2^{{}}\n", "v2"),
-        ("v3", f"{SHA}\trefs/tags/v3\n", "v3"),
-        ("rel/tags/x", f"{SHA}\trefs/heads/rel/tags/x\n", None),  # a branch, not a tag
-        (SHA, "", None),
-    ],
-)
-def test_sync_writes_the_copies_and_a_deterministic_lock(
-    tmp_path: Path, ref: str, listing: str, tag
+def test_check_fails_on_symlinks_in_contracts_or_registered_manifests(
+    tmp_path: Path,
 ) -> None:
-    lock_file = _tree(tmp_path)
-    ls_remote = Mock(return_value=listing)
+    target_dir = tmp_path / "other"
+    target_dir.mkdir()
+    contracts_link = tmp_path / "contracts"
+    contracts_link.symlink_to(target_dir)
+    assert contracts.check(tmp_path) == ["contracts: symlink is forbidden (#1320)"]
+    contracts_link.unlink()
 
-    # the fake download returns its own URL, so each copy shows what was asked for
-    contracts.sync("alpha", ref, tmp_path, ls_remote, str.encode)
+    contracts_dir = tmp_path / "contracts"
+    contracts_dir.mkdir()
+    nested_link = contracts_dir / "truealpha"
+    nested_link.symlink_to(target_dir)
+    assert contracts.check(tmp_path) == [
+        "contracts/truealpha: symlink is forbidden (#1320)"
+    ]
+    nested_link.unlink()
 
-    text = lock_file.read_text()
-    app = json.loads(text)["apps"]["alpha"]
-    assert app == {"commit": SHA, "repository": "owner/alpha", "tag": tag}
-    assert text == json.dumps(json.loads(text), indent=2, sort_keys=True) + "\n"
-    url = f"https://raw.githubusercontent.com/owner/alpha/{SHA}/one.json"
-    assert (tmp_path / "contracts/alpha/one.json").read_text() == url
-    assert contracts.check(tmp_path) == []
-    # a full sha needs no lookup; any other ref asks the remote once
-    asked = [] if ref == SHA else [call("https://github.com/owner/alpha.git", ref)]
-    assert ls_remote.call_args_list == asked
-    contracts.sync("alpha", ref, tmp_path, ls_remote, str.encode)
-    assert lock_file.read_text() == text  # the same run writes the same bytes
-
-
-def test_sync_changes_nothing_when_a_download_or_a_ref_fails(tmp_path: Path) -> None:
-    _tree(tmp_path)
-    before = _files(tmp_path)
-    ls_remote = Mock(return_value=f"{SHA}\trefs/heads/main\n")
-    second_fails = Mock(side_effect=[b"{}", SystemExit("fetching failed")])
-
-    for app, ref, fetch, message in [
-        ("alpha", "main", second_fails, "fetching failed"),
-        ("alpha", "main", Mock(return_value=b""), "upstream body is empty"),
-        ("alpha", "gone", str.encode, "no tag or branch 'gone'"),
-        ("beta", "main", str.encode, "unknown app 'beta'"),
-    ]:
-        with pytest.raises(SystemExit, match=message):
-            contracts.sync(app, ref, tmp_path, ls_remote, fetch)
-
-    assert _files(tmp_path) == before
+    manifest_link = tmp_path / "truealpha/truealpha/10.app/env.manifest.json"
+    manifest_link.parent.mkdir(parents=True, exist_ok=True)
+    real_file = tmp_path / "real.json"
+    real_file.write_text("{}", encoding="utf-8")
+    manifest_link.symlink_to(real_file)
+    problems = contracts.check(tmp_path)
+    assert (
+        "truealpha/truealpha/10.app/env.manifest.json: symlink is forbidden (#1320)"
+        in problems
+    )
 
 
 @pytest.mark.parametrize(
-    "path", ["../escape.json", "other/x.json", "contracts/../x.json"]
+    "bad_manifest",
+    [
+        "contracts/truealpha/data-engine.required-env.generated.json",
+        "repos/truealpha/apps/data-engine/required-env.generated.json",
+    ],
 )
-def test_sync_refuses_a_lock_path_outside_contracts(tmp_path: Path, path: str) -> None:
-    lock = _tree(tmp_path)
-    data = json.loads(lock.read_text())
-    data["files"][0]["path"] = path
-    lock.write_text(json.dumps(data))
-    before = _files(tmp_path)
+def test_check_fails_when_a_service_references_contracts_or_repos(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_manifest: str
+) -> None:
+    bad_service = Service(
+        "truealpha/truealpha/20.data_engine",
+        "truealpha",
+        "data_engine",
+        (bad_manifest,),
+    )
+    monkeypatch.setattr(contracts, "SERVICES", (bad_service,))
+    problems = contracts.check(tmp_path)
+    assert problems == [
+        f"truealpha/data_engine: {bad_manifest} references forbidden path (#1320)"
+    ]
 
-    with pytest.raises(SystemExit, match="outside contracts/"):
-        contracts.sync("alpha", SHA, tmp_path, Mock(), str.encode)
 
-    assert _files(tmp_path) == before
-    assert not (tmp_path.parent / "escape.json").exists()
+def test_sync_flag_is_rejected_with_explanation(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    rc = contracts.main(["--sync", "truealpha", "main"], root=tmp_path)
+    assert rc == 2
+    assert "removed in #1320" in capsys.readouterr().err
 
 
 def _http(code: int) -> urllib.error.HTTPError:
@@ -315,7 +175,7 @@ def test_the_retry_rule(steps, calls, waits, body) -> None:
     assert (len(played), waited) == (calls, waits)
 
 
-def test_the_real_copies_match_the_lock_as_a_stdlib_only_script(tmp_path: Path) -> None:
+def test_guard_runs_as_a_stdlib_only_script(tmp_path: Path) -> None:
     """infra-ci runs the script by path with PYTHONSAFEPATH=1. ``-S`` hides site-packages."""
     run = subprocess.run(
         [sys.executable, "-S", str(ROOT / "tools/fetch_app_manifests.py")],
@@ -326,33 +186,14 @@ def test_the_real_copies_match_the_lock_as_a_stdlib_only_script(tmp_path: Path) 
     )
 
     assert run.returncode == 0, run.stdout + run.stderr
-    assert run.stdout.startswith("app manifest copies: ok")
+    assert run.stdout.startswith("app manifest guard: ok")
 
 
-def test_lock_apps_are_the_directory_names_of_the_external_applications() -> None:
-    """``harness status --online`` reads ``apps.<directory name>`` of each App (#1259)."""
-    from common.core.harness.manifest import load_manifest
-    from common.core.harness.status import _contract_lock
-
-    repositories = load_manifest(ROOT / "harness/repos.yaml")["repositories"]
-    paths = [r["path"] for r in repositories if r.get("role") == "external-application"]
-    apps = json.loads((ROOT / contracts.LOCK).read_text())["apps"]
-
-    assert {Path(path).name for path in paths} == set(apps)
-    for path in paths:  # the tag, else the first 8 characters of the commit
-        app = apps[Path(path).name]
-        assert _contract_lock(ROOT, path) == (app["tag"] or app["commit"][:8])
-
-
-def test_registered_contract_paths_are_all_in_the_real_lock_and_exist() -> None:
-    from common.security.registry import SERVICES
-
+def test_registered_manifest_paths_are_stack_local_and_exist() -> None:
     paths = {p for service in SERVICES for p in service.manifests}
-    copies = {p for p in paths if p.startswith("contracts/")}
-
-    assert copies and copies == set(contracts.origins(ROOT))
-    assert [p for p in sorted(copies) if not (ROOT / p).is_file()] == []
+    assert [p for p in paths if p.startswith("contracts/")] == []
     assert [p for p in paths if p.startswith("repos/")] == []
+    assert [p for p in sorted(paths) if not (ROOT / p).is_file()] == []
 
 
 def _imports_app_manifests(source: str) -> bool:

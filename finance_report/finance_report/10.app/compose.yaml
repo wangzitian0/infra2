@@ -67,6 +67,11 @@ services:
         fi
         echo "$$VAULT_ROLE_ID" > /vault/role_id
         echo "$$VAULT_SECRET_ID" > /vault/secret_id
+        if [ -n "$$VAULT_SECRETS_TEMPLATE" ]; then
+          printf '%s' "$$VAULT_SECRETS_TEMPLATE" | base64 -d > /vault/secrets.ctmpl && [ -s /vault/secrets.ctmpl ] || { echo "CRITICAL: invalid VAULT_SECRETS_TEMPLATE"; exit 1; }
+          sed 's|/etc/vault/secrets.ctmpl|/vault/secrets.ctmpl|g' /etc/vault/vault-agent.hcl > /vault/vault-agent.hcl
+          exec vault agent -config=/vault/vault-agent.hcl
+        fi
         # AppRole auto_auth: vault-agent logs in and renews/re-auths the token
         # natively. No token_file decay, no manual renew loop.
         exec vault agent -config=/etc/vault/vault-agent.hcl
@@ -74,6 +79,7 @@ services:
       VAULT_ADDR: ${VAULT_ADDR}
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
+      VAULT_SECRETS_TEMPLATE: ${VAULT_SECRETS_TEMPLATE:-}
       ENV: ${ENV}
       # Consumed by secrets.ctmpl to template OTEL_RESOURCE_ATTRIBUTES'
       # service.version=<sha> (Infra-014). Short image sha; "unknown" fallback.

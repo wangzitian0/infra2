@@ -83,6 +83,7 @@ class DataEngineDeployer(Deployer):
             "CAPTURE_APPROVED_BY",
             "GIT_COMMIT_SHA",
             "CONFIGURATION_SHA256",
+            "VAULT_SECRETS_TEMPLATE",
         }
     )
 
@@ -253,6 +254,11 @@ class DataEngineDeployer(Deployer):
                 "GIT_COMMIT_SHA": secrets.get("GIT_COMMIT_SHA") or "unknown",
             }
         )
+        vault_template = (env if env is not None else cls.env()).get(
+            "VAULT_SECRETS_TEMPLATE", ""
+        )
+        if vault_template:
+            base["VAULT_SECRETS_TEMPLATE"] = vault_template
         base["CONFIGURATION_SHA256"] = cls._configuration_sha256(base)
         return base
 

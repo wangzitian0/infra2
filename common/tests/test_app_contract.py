@@ -1,10 +1,10 @@
-"""The App contract the receiver compares (#1320): what it keeps and what it drops.
+"""The App contract the receiver compares and renders (#1320): what it keeps and what it drops.
 
-The receiver refuses a release only for a variable that infra2 must supply. These tests
-prove the split against the SDK renderer that makes the Vault template and policy, and
-against the SDK start check that stops an image without its variables: a change the
-contract drops never changes either, and each attribute the contract keeps changes the
-comparison.
+The receiver renders the Vault Agent template from the deployed release manifest merged
+with the stack baseline manifest, and refuses a release only for a non-Vault variable that
+the stack compose contract does not supply or a Vault path not granted by ``vault-policy.hcl``.
+These tests prove the split against the SDK renderer that makes the Vault template and
+policy, and against the SDK start check that stops an image without its variables.
 """
 
 from __future__ import annotations
@@ -22,16 +22,19 @@ from infra2_sdk.runtime.config_schema import (
 from infra2_sdk.secrets import render_agent_policy, render_agent_template
 
 from common.deploy.app_contract import (
+    APP_UPSTREAM_MANIFESTS,
     CONTRACT_ATTRIBUTES,
     IGNORED_ATTRIBUTES,
+    parse_compose_contract,
     parse_contract,
-    stack_manifests,
+    render_release_template,
+    service_for_id,
+    service_stack_manifest,
+    service_vault_policy,
     unmet,
 )
-from common.security.registry import SERVICES
 
 ROOT = Path(__file__).resolve().parents[2]
-LOCK = ROOT / "contracts" / "apps.lock.json"
 
 
 def _field(env: str, source: str = "code", **overrides) -> EnvironmentField:
@@ -135,16 +138,21 @@ def test_the_contract_holds_exactly_the_fields_that_infra2_must_supply() -> None
             assert f"{member.env}=" in template, member.env
         if not acted:
             assert member.env not in template, member.env
-    # The code fields that compose a value, or that the image needs at start, are in it.
     assert {"CODE_COMPOSED", "CODE_INJECTED", "CODE_REQUIRED"} <= set(contract)
     assert "CODE_ONLY" not in contract
 
 
+def test_parse_compose_contract_keeps_only_non_vault_fields() -> None:
+    compose_contract = parse_compose_contract(_body(*BASE), label="x")
+    assert set(compose_contract) == {
+        "RELEASE_ID",
+        "DECISION_FLAG",
+        "CODE_INJECTED",
+        "CODE_REQUIRED",
+    }
+
+
 def test_every_field_that_the_image_cannot_start_without_is_in_the_contract() -> None:
-    """SDK start check: a field is missing when it is ``required``, or ``injected`` under
-    ``require_injected`` (the data engine entrypoint sets it). The hand-written compose of
-    infra2 supplies those, whatever the source of the field (common/tests/
-    test_truealpha_data_engine.py, #1287)."""
     contract = parse_contract(_body(*BASE), label="x")
     missing = set(_missing_at_start(BASE))
     assert {"CODE_INJECTED", "CODE_REQUIRED"} <= missing
@@ -232,37 +240,122 @@ def test_a_manifest_of_only_plain_code_fields_is_a_valid_empty_contract() -> Non
     assert parse_contract(_body(_field("A"), _field("B")), label="x") == {}
 
 
-def test_stack_manifests_name_the_other_files_of_every_consuming_stack() -> None:
-    engine = "contracts/truealpha/data-engine.required-env.generated.json"
-    assert stack_manifests(engine) == (
-        "truealpha/truealpha/20.data_engine/env.manifest.json",
+def test_every_app_upstream_service_has_a_stack_manifest_and_vault_policy() -> None:
+    """GREEN-WHILE-EMPTY: every entry in APP_UPSTREAM_MANIFESTS resolves to a real stack."""
+    assert set(APP_UPSTREAM_MANIFESTS) == {"finance_report", "truealpha"}
+    for app, entries in APP_UPSTREAM_MANIFESTS.items():
+        assert entries, app
+        for service_id, upstream in entries:
+            assert service_id.startswith(f"{app}/")
+            assert upstream.endswith(".json")
+            stack_path = service_stack_manifest(service_id)
+            policy_path = service_vault_policy(service_id)
+            assert (ROOT / stack_path).is_file(), stack_path
+            assert (ROOT / policy_path).is_file(), policy_path
+            contract = parse_contract(
+                (ROOT / stack_path).read_text("utf-8"), label=stack_path
+            )
+            assert contract, stack_path
+
+
+def test_render_release_template_renders_new_and_tightened_vault_variables() -> None:
+    """#1320 Acceptance Criteria 1 & 3: a release manifest that adds a new required Vault
+    variable or tightens an existing variable (from required=False, empty_ok=True to
+    required=True, empty_ok=False, such as SEC_USER_AGENT in truealpha#1382) renders both
+    into the Vault Agent template without a manual sync step in infra2."""
+    stack_before_sync = _body(
+        _field(
+            "DATABASE_URL",
+            "runtime",
+            provided_by="truealpha/postgres:POSTGRES_PASSWORD",
+            composed_from="postgresql://postgres:{POSTGRES_PASSWORD}@127.0.0.1:{env:TA_POSTGRES_PORT}/truealpha",
+        ),
+        _field(
+            "SEC_USER_AGENT",
+            "human",
+            required=False,
+            empty_ok=True,
+            scope="project",
+        ),
     )
-    app_web = "contracts/truealpha/app-web.required-env.manifest.json"
-    others = stack_manifests(app_web)
-    assert "contracts/truealpha/llm-service.required-env.generated.json" in others
-    assert "truealpha/truealpha/10.app/env.manifest.json" in others
-    assert app_web not in others and len(set(others)) == len(others)
-    assert stack_manifests("contracts/nothing.json") == ()
+    release_1382 = _body(
+        _field(
+            "DATABASE_URL",
+            "runtime",
+            provided_by="truealpha/postgres:POSTGRES_PASSWORD",
+            composed_from="postgresql://postgres:{POSTGRES_PASSWORD}@127.0.0.1:{env:TA_POSTGRES_PORT}/truealpha",
+        ),
+        _field(
+            "SEC_USER_AGENT",
+            "human",
+            required=True,
+            injected=True,
+            empty_ok=False,
+            scope="project",
+        ),
+        _field(
+            "BRAND_NEW_SECRET",
+            "human",
+            required=True,
+            empty_ok=False,
+        ),
+    )
+    template, _policy = render_release_template(
+        "truealpha/data_engine",
+        [("apps/data-engine/required-env.generated.json", release_1382)],
+        stack_manifest_body=stack_before_sync,
+    )
+    assert 'SEC_USER_AGENT={{ printf "%q" .Data.data.SEC_USER_AGENT }}' in template
+    assert 'BRAND_NEW_SECRET={{ printf "%q" .Data.data.BRAND_NEW_SECRET }}' in template
+    assert 'with index .Data.data "SEC_USER_AGENT"' not in template
+    with pytest.raises(
+        ValueError, match="declares invalid environment variable name 'BAD-NAME'"
+    ):
+        parse_contract(_body(_field("BAD-NAME", "human")), label="bad.json")
 
 
-def test_every_vendored_copy_has_a_stack_and_every_stack_manifest_exists() -> None:
-    """GREEN-WHILE-EMPTY: a copy that no stack consumes, or a registry path with no file,
-    would make the comparison read nothing."""
-    lock = json.loads(LOCK.read_text(encoding="utf-8"))
-    consumed = {path for service in SERVICES for path in service.manifests}
-    for entry in lock["files"]:
-        assert entry["path"] in consumed, entry["path"]
-        for path in stack_manifests(entry["path"]):
-            assert (ROOT / path).is_file(), path
-
-
-def test_the_vendored_copies_parse_to_a_non_empty_contract_each() -> None:
-    """GREEN-WHILE-EMPTY: a copy that parsed to nothing would pass every release."""
-    lock = json.loads(LOCK.read_text(encoding="utf-8"))
-    assert lock["files"]
-    for entry in lock["files"]:
-        contract = parse_contract(
-            (ROOT / entry["path"]).read_text("utf-8"), label=entry["path"]
+def test_render_release_template_refuses_ungranted_vault_policy_path() -> None:
+    """Falsifiability: a release manifest requesting a Vault path not in vault-policy.hcl fails."""
+    release_with_redis = _body(
+        _field(
+            "REDIS_URL",
+            "runtime",
+            provided_by="platform/redis:password",
+            composed_from="redis://:{password}@127.0.0.1:6379/0",
         )
-        assert contract, entry["path"]
-        assert unmet(contract, [contract]) == []
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"requires Vault path secret/data/platform/\{\{env\}\}/redis",
+    ):
+        render_release_template(
+            "truealpha/data_engine",
+            [("apps/data-engine/required-env.generated.json", release_with_redis)],
+        )
+
+
+def test_render_release_template_refuses_conflicting_declarations_and_invalid_inputs() -> (
+    None
+):
+    with pytest.raises(ValueError, match="unknown service"):
+        service_for_id("unknown/service")
+    with pytest.raises(ValueError, match="no release manifests"):
+        render_release_template("truealpha/app", [])
+    with pytest.raises(ValueError, match="not a valid Vault policy"):
+        render_release_template(
+            "truealpha/data_engine",
+            [
+                (
+                    "apps/data-engine/required-env.generated.json",
+                    _body(_field("A", "human")),
+                )
+            ],
+            committed_policy="# empty policy",
+        )
+    first = _body(_field("SHARED_KEY", "human"))
+    second = _body(_field("SHARED_KEY", "runtime"))
+    with pytest.raises(ValueError, match="SHARED_KEY.source declared differently"):
+        render_release_template(
+            "truealpha/app",
+            [("app-web", first), ("llm-service", second)],
+        )

@@ -2306,11 +2306,14 @@ def scan_manifest(
             unit=unit,
             extra=extra,
         )
-        is_app_stack_code = extra.get("source") == "code" and (
-            path.startswith("finance_report/finance_report/10.app")
-            or path.startswith("truealpha/truealpha/10.app")
+        is_app_stack_manifest = path.startswith(
+            (
+                "finance_report/finance_report/10.app/",
+                "truealpha/truealpha/10.app/",
+                "truealpha/truealpha/20.data_engine/",
+            )
         )
-        if synthetic_code_read or is_app_stack_code:
+        if synthetic_code_read or is_app_stack_manifest:
             inv.add(
                 key=key,
                 role="read",
@@ -2352,7 +2355,7 @@ def scan_manifest(
                 conf="med",
                 extra={"alias_of": key},
             )
-            if synthetic_code_read:
+            if synthetic_code_read or is_app_stack_manifest:
                 inv.add(
                     key=a,
                     role="read",
@@ -2771,25 +2774,10 @@ def resolve_weak_refs(inv: Inventory) -> None:
 
 
 def run(repos: dict[str, Path], *, include_app_manifests: bool = False) -> Inventory:
+    _ = include_app_manifests
     inv = Inventory()
     for name, root in repos.items():
         scan_repo(inv, name, root)
-    if include_app_manifests and "infra2" in repos:
-        from common.security import registry as sreg
-
-        root = repos["infra2"]
-        lock_files = json.loads((root / "contracts/apps.lock.json").read_text("utf-8"))[
-            "files"
-        ]
-        origin = {f["path"]: (f["app"], f["upstream"]) for f in lock_files}
-        for mp in dict.fromkeys(m for s in sreg.SERVICES for m in s.manifests):
-            if mp not in origin:
-                continue
-            app, upstream = origin[mp]
-            if app in repos and (repos[app] / ".git").exists():
-                continue
-            text = sreg.manifest_file(mp, root=root).read_text("utf-8", "replace")
-            scan_manifest(inv, app, upstream, text, synthetic_code_read=True)
     resolve_weak_refs(inv)
     return inv
 
@@ -3405,20 +3393,15 @@ CODE_UNITS = {
 def contract(inv, keys, services, comp_of=None, comps=None):
     comp_of = comp_of or {}
     comps = comps or {}
-    lock_files = json.loads(
-        (REPO_ROOT / "contracts/apps.lock.json").read_text("utf-8")
-    )["files"]
-    origin = {f["path"]: (f["app"], f["upstream"]) for f in lock_files}
     rows = []
     for s in services:
         mkeys, msrc = set(), {}
         for mp in s.manifests:
-            repo, rest = origin.get(mp, ("infra2", mp))
             for o in inv.occ:
                 if (
                     o.layer == "manifest"
-                    and o.repo == repo
-                    and o.path == rest
+                    and o.repo == "infra2"
+                    and o.path == mp
                     and not o.extra.get("alias_of")
                 ):
                     mkeys.add(o.key)

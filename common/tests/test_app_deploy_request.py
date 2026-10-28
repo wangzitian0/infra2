@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -159,39 +160,30 @@ def resolved(*args, **kwargs) -> ResolvedRef:
 
 
 # A world for the tests that are not about the manifest preflight: every infra2 release
-# lists one manifest per App, and the release image asks for what that manifest holds.
-# The preflight still parses and compares in these tests; the preflight tests use a
-# real git checkout.
+# has the stack manifests and policies, and the release image asks for what they hold.
+ROOT = Path(__file__).resolve().parents[2]
 WORLD_FIELD = EnvironmentField(field="a", env="A", source="human")
 WORLD_MANIFEST = json.dumps(
     EnvironmentManifest(source="test", fields=(WORLD_FIELD,)).to_dict()
 )
-WORLD_LOCK_FILES = [
-    {
-        "app": "finance_report",
-        "path": "contracts/finance_report/required-env.generated.json",
-        "sha256": "0" * 64,
-        "upstream": "common/runtime/required-env.generated.json",
-    },
-    {
-        "app": "truealpha",
-        "path": "contracts/truealpha/data-engine.required-env.generated.json",
-        "sha256": "0" * 64,
-        "upstream": "apps/data-engine/required-env.generated.json",
-    },
-]
-WORLD_LOCK = json.dumps(
-    {
-        "apps": {},
-        "files": WORLD_LOCK_FILES,
-        "generated_by": "test",
-        "lock_version": 1,
-    }
+WORLD_STACK_PATHS = (
+    "finance_report/finance_report/10.app/env.manifest.json",
+    "truealpha/truealpha/10.app/env.manifest.json",
+    "truealpha/truealpha/20.data_engine/env.manifest.json",
+)
+WORLD_POLICY_PATHS = (
+    "finance_report/finance_report/10.app/vault-policy.hcl",
+    "finance_report/finance_report/preview/vault-policy.hcl",
+    "truealpha/truealpha/10.app/vault-policy.hcl",
+    "truealpha/truealpha/preview/vault-policy.hcl",
+    "truealpha/truealpha/20.data_engine/vault-policy.hcl",
 )
 
 
 def world_read(_ref: str, path: str) -> str:
-    return WORLD_LOCK if path == "contracts/apps.lock.json" else WORLD_MANIFEST
+    if path.endswith(".hcl"):
+        return (ROOT / path).read_text(encoding="utf-8")
+    return WORLD_MANIFEST
 
 
 @pytest.fixture(autouse=True)
@@ -201,15 +193,12 @@ def _release_asks_for_what_the_world_holds(monkeypatch: pytest.MonkeyPatch) -> N
 
 def checkout_with_world(root: Path) -> Path:
     """The receiver's main checkout, for a deploy that runs at main (a preview)."""
-    for path in ("contracts/apps.lock.json", *(f["path"] for f in WORLD_LOCK_FILES)):
+    for path in WORLD_STACK_PATHS:
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text(WORLD_MANIFEST, encoding="utf-8")
+    for path in WORLD_POLICY_PATHS:
         (root / path).parent.mkdir(parents=True, exist_ok=True)
         (root / path).write_text(world_read("main", path), encoding="utf-8")
-    from common.deploy.app_contract import stack_manifests
-
-    for entry in WORLD_LOCK_FILES:
-        for path in stack_manifests(entry["path"]):
-            (root / path).parent.mkdir(parents=True, exist_ok=True)
-            (root / path).write_text(WORLD_MANIFEST, encoding="utf-8")
     return root
 
 
@@ -1048,7 +1037,7 @@ def _gate_cli(monkeypatch, request: dict, *extra: str) -> int:
             production_evidence_verifier=lambda request: None,
             resolve_image=resolved,
             manifest_fetcher=lambda _url: Path(
-                "contracts/finance_report/required-env.generated.json"
+                "finance_report/finance_report/10.app/env.manifest.json"
             ).read_bytes(),
             # The real lock and the real copies of this checkout stand in for any ref.
             contract_reader=lambda _ref, path: Path(path).read_text(encoding="utf-8"),
@@ -1579,22 +1568,52 @@ def test_authority_uses_the_sdk_evidence_url_validator() -> None:
         )
 
 
-# --- App contract preflight (#1297, #1320) ----------------------------------------
+# --- App contract preflight and release Vault template rendering (#1297, #1320) ----
 #
-# The receiver reads the App contract from the infra2 release the deploy will run at
-# (staging: the newest release tag; production: the marker). It compares what the
-# release image asks infra2 to supply with what that infra2 release supplies. Facts:
-# receiver run 39414198967 (production v0.2.30, 2026-10-20 11:20Z) read the lock at
-# production/v1.2.46, which lacked MCP_BEARER_TOKEN; staging v0.2.28 and v0.2.29 were
-# refused for a field infra2 supplied extra and for a code-only field.
+# The receiver reads the stack baseline manifest and vault-policy.hcl from the infra2
+# release the deploy will run at (staging: the newest release tag; production: the
+# marker) and fetches the upstream release manifests at source_sha. Vault-backed fields
+# from the release manifest render directly into secrets.ctmpl (gated by vault-policy.hcl),
+# while non-Vault compose fields must be supplied by the stack manifest at iac_ref.
 
 TA_REPO = "wangzitian0/truealpha"
+FR_REPO = "wangzitian0/finance_report"
 RELEASE_SHA = "dd066f62" + "0" * 32
-COPY_PATH = "contracts/truealpha/data-engine.required-env.generated.json"
 UPSTREAM_PATH = "apps/data-engine/required-env.generated.json"
+APP_WEB_UPSTREAM = "apps/app-web/required-env.manifest.json"
+LLM_UPSTREAM = "apps/llm-service/required-env.generated.json"
+FR_UPSTREAM = "common/runtime/required-env.generated.json"
 STACK_PATH = "truealpha/truealpha/20.data_engine/env.manifest.json"
+APP_STACK_PATH = "truealpha/truealpha/10.app/env.manifest.json"
+FR_STACK_PATH = "finance_report/finance_report/10.app/env.manifest.json"
 RELEASE_URL = (
     f"https://raw.githubusercontent.com/{TA_REPO}/{RELEASE_SHA}/{UPSTREAM_PATH}"
+)
+APP_WEB_URL = (
+    f"https://raw.githubusercontent.com/{TA_REPO}/{RELEASE_SHA}/{APP_WEB_UPSTREAM}"
+)
+LLM_URL = f"https://raw.githubusercontent.com/{TA_REPO}/{RELEASE_SHA}/{LLM_UPSTREAM}"
+FR_RELEASE_URL = (
+    f"https://raw.githubusercontent.com/{FR_REPO}/{RELEASE_SHA}/{FR_UPSTREAM}"
+)
+
+TA_APP_POLICY = (
+    'path "secret/data/truealpha/{{env}}/app" { capabilities = ["read"] }\n'
+    'path "secret/metadata/truealpha/{{env}}/app" { capabilities = ["read", "list"] }\n'
+    'path "secret/data/truealpha/staging/app" { capabilities = ["read"] }\n'
+    'path "secret/metadata/truealpha/staging/app" { capabilities = ["read", "list"] }\n'
+    'path "secret/data/truealpha/{{env}}/data_engine" { capabilities = ["read"] }\n'
+    'path "secret/metadata/truealpha/{{env}}/data_engine" { capabilities = ["read", "list"] }\n'
+    'path "auth/token/renew-self" { capabilities = ["update"] }\n'
+    'path "auth/token/lookup-self" { capabilities = ["read"] }\n'
+)
+FR_POLICY = (
+    'path "secret/data/finance_report/{{env}}/app" { capabilities = ["read"] }\n'
+    'path "secret/metadata/finance_report/{{env}}/app" { capabilities = ["read", "list"] }\n'
+    'path "secret/data/finance_report/staging/app" { capabilities = ["read"] }\n'
+    'path "secret/metadata/finance_report/staging/app" { capabilities = ["read", "list"] }\n'
+    'path "auth/token/renew-self" { capabilities = ["update"] }\n'
+    'path "auth/token/lookup-self" { capabilities = ["read"] }\n'
 )
 
 
@@ -1607,7 +1626,9 @@ def _manifest(*fields: EnvironmentField) -> bytes:
     return (json.dumps(manifest.to_dict(), indent=2) + "\n").encode()
 
 
-STACK_ONLY = _manifest(_field("STACK_ONLY_KEY", "human"))
+DATABASE = _field("DATABASE_URL", "human")
+BEARER = _field("MCP_BEARER_TOKEN", "runtime", mirror_to_1password=True, sensitive=True)
+DECISION_FLAG = _field("ENABLE_REALTIME_QUOTES", "decision")
 
 
 def _git(root: Path, *args: str) -> None:
@@ -1615,50 +1636,41 @@ def _git(root: Path, *args: str) -> None:
     subprocess.run([*command, *args], check=True, capture_output=True)
 
 
-def _lock(copy_paths: dict[str, str], *, files: list[dict] | None = None) -> str:
-    """A lock for truealpha: ``copy path -> upstream path``."""
-    entries = files or [
-        {"app": "truealpha", "path": path, "sha256": "0" * 64, "upstream": upstream}
-        for path, upstream in copy_paths.items()
-    ]
-    return json.dumps(
-        {
-            "apps": {
-                "truealpha": {
-                    "commit": "5a6d5893" + "0" * 32,
-                    "repository": TA_REPO,
-                    "tag": None,
-                }
-            },
-            "files": entries,
-            "generated_by": "tools/fetch_app_manifests.py --sync",
-            "lock_version": 1,
-        }
-    )
-
-
 def _infra2_checkout(
     root: Path,
     releases: list[tuple[bytes | None, tuple[str, ...]]],
     *,
-    stack: bytes = STACK_ONLY,
+    app_stack: bytes | None = None,
+    policy: str = TA_APP_POLICY,
     annotated: tuple[str, ...] = (),
 ):
-    """A git checkout whose commits carry the App contract: ``(copy, tags)`` per commit.
+    """Build a git checkout whose commits carry the stack manifests and Vault policies.
 
-    A copy of ``None`` is a commit that predates the vendored contract. The last commit
-    is HEAD, which is what the receiver checks out. ``stack`` is the stack-only manifest.
+    A stack manifest of ``None`` models a commit that predates the stack manifest. The
+    last commit is HEAD, which is what the receiver checks out.
     """
     _git(root, "init", "-q", "-b", "main")
-    for index, (copy, tags_here) in enumerate(releases):
-        if copy is not None:
-            (root / "contracts" / "truealpha").mkdir(parents=True, exist_ok=True)
-            (root / COPY_PATH).write_bytes(copy)
-            (root / STACK_PATH).parent.mkdir(parents=True, exist_ok=True)
-            (root / STACK_PATH).write_bytes(stack)
-            (root / "contracts" / "apps.lock.json").write_text(
-                _lock({COPY_PATH: UPSTREAM_PATH}), encoding="utf-8"
-            )
+    default_app_stack = app_stack if app_stack is not None else _manifest(DATABASE)
+    for index, (stack_bytes, tags_here) in enumerate(releases):
+        if stack_bytes is not None:
+            for path, content in (
+                (STACK_PATH, stack_bytes),
+                (APP_STACK_PATH, default_app_stack),
+                (FR_STACK_PATH, _manifest(DATABASE)),
+            ):
+                target = root / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+            for policy_path, text in (
+                ("truealpha/truealpha/10.app/vault-policy.hcl", policy),
+                ("truealpha/truealpha/preview/vault-policy.hcl", policy),
+                ("truealpha/truealpha/20.data_engine/vault-policy.hcl", policy),
+                ("finance_report/finance_report/10.app/vault-policy.hcl", FR_POLICY),
+                ("finance_report/finance_report/preview/vault-policy.hcl", FR_POLICY),
+            ):
+                target = root / policy_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(text, encoding="utf-8")
         (root / "marker.txt").write_text(str(index), encoding="utf-8")
         _git(root, "add", "-A")
         _git(root, "commit", "-q", "-m", f"release {index}")
@@ -1672,18 +1684,19 @@ def _infra2_checkout(
 
 def _request(*, production: bool = False, **overrides) -> dict:
     build = production_payload if production else payload
+    repo = str(overrides.get("source_repository", TA_REPO))
     fields = {
         "service": "truealpha/app",
-        "source_repository": TA_REPO,
+        "source_repository": repo,
         "version_ref": "v0.2.13",
         "source_sha": RELEASE_SHA,
         "evidence": {
-            "source_run_url": f"https://github.com/{TA_REPO}/actions/runs/100",
+            "source_run_url": f"https://github.com/{repo}/actions/runs/100",
             "source_run_id": "100",
-            "staging_run_url": f"https://github.com/{TA_REPO}/actions/runs/101"
+            "staging_run_url": f"https://github.com/{repo}/actions/runs/101"
             if production
             else "",
-            "reviewed_change_url": f"https://github.com/{TA_REPO}/pull/10"
+            "reviewed_change_url": f"https://github.com/{repo}/pull/10"
             if production
             else "",
         },
@@ -1695,7 +1708,32 @@ def _release_image(*_args, **_kwargs) -> ResolvedRef:
     return ResolvedRef(sha=RELEASE_SHA, image_ref="v0.2.13", form="tag")
 
 
-def _preflight(root: Path, release: bytes, *, production: bool = False, **overrides):
+def _manifest_map(
+    release: bytes,
+    *,
+    app_web: bytes | None = None,
+    llm: bytes | None = None,
+    fr: bytes | None = None,
+) -> dict[str, bytes]:
+    return {
+        RELEASE_URL: release,
+        APP_WEB_URL: app_web if app_web is not None else _manifest(DATABASE),
+        LLM_URL: llm if llm is not None else _manifest(DATABASE),
+        FR_RELEASE_URL: fr if fr is not None else _manifest(DATABASE),
+    }
+
+
+def _preflight(
+    root: Path,
+    release: bytes,
+    *,
+    production: bool = False,
+    app_web: bytes | None = None,
+    llm: bytes | None = None,
+    fr: bytes | None = None,
+    **overrides,
+):
+    bodies = _manifest_map(release, app_web=app_web, llm=llm, fr=fr)
     return receiver.make_plan(
         _request(production=production, **overrides),
         sender="wangzitian0",
@@ -1707,12 +1745,8 @@ def _preflight(root: Path, release: bytes, *, production: bool = False, **overri
         resolve_pull=lambda *_a, **_k: ResolvedRef(
             sha=RELEASE_SHA, image_ref="42", form="pr"
         ),
-        manifest_fetcher={RELEASE_URL: release}.__getitem__,
+        manifest_fetcher=bodies.__getitem__,
     )
-
-
-DATABASE = _field("DATABASE_URL", "human")
-BEARER = _field("MCP_BEARER_TOKEN", "runtime", mirror_to_1password=True, sensitive=True)
 
 
 def test_preflight_ignores_a_release_change_in_code_fields(tmp_path: Path) -> None:
@@ -1732,36 +1766,164 @@ def test_preflight_ignores_a_release_change_in_code_fields(tmp_path: Path) -> No
 def test_preflight_passes_when_infra2_supplies_more_than_the_release_needs(
     tmp_path: Path,
 ) -> None:
-    """Staging v0.2.28 predates the field ``MCP_BEARER_TOKEN``. infra2 supplies it extra."""
-    root = _infra2_checkout(tmp_path, [(_manifest(DATABASE, BEARER), ("v1.0.0",))])
+    """Staging v0.2.28 predates a stack field. infra2 supplies it extra."""
+    root = _infra2_checkout(
+        tmp_path, [(_manifest(DATABASE, DECISION_FLAG), ("v1.0.0",))]
+    )
     assert _preflight(root, _manifest(DATABASE)).iac_ref == "v1.0.0"
 
 
-def test_preflight_refuses_a_field_that_infra2_does_not_supply(tmp_path: Path) -> None:
+def test_replay_2026_10_19_sec_user_agent_renders_into_vault_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Replay of 2026-10-19 (#1320): truealpha#1382 tightened SEC_USER_AGENT in the release
+    manifest without a manual sync in infra2. The Vault Agent template renders SEC_USER_AGENT
+    directly from the deployed release manifest and execute_plan exports VAULT_SECRETS_TEMPLATE."""
+    stack_before_sync = _manifest(
+        DATABASE,
+        _field("SEC_USER_AGENT", "human", empty_ok=True),
+    )
+    root = _infra2_checkout(tmp_path, [(stack_before_sync, ("v1.0.0",))])
+    release_1382 = _manifest(
+        DATABASE,
+        _field("SEC_USER_AGENT", "human", empty_ok=False),
+    )
+    plan = _preflight(root, release_1382)
+    assert plan.iac_ref == "v1.0.0"
+    de_template = plan.rendered_templates["truealpha/data_engine"]
+    assert 'SEC_USER_AGENT={{ printf "%q" .Data.data.SEC_USER_AGENT }}' in de_template
+
+    seen_templates: list[tuple[str, str]] = []
+
+    def fake_run(argv: list[str]) -> int:
+        svc = argv[argv.index("--service") + 1]
+        raw_b64 = os.environ.get("VAULT_SECRETS_TEMPLATE", "")
+        decoded = base64.b64decode(raw_b64).decode("utf-8") if raw_b64 else ""
+        seen_templates.append((svc, decoded))
+        return 0
+
+    monkeypatch.delenv("VAULT_SECRETS_TEMPLATE", raising=False)
+    rc = receiver_cli.execute_plan(plan, run=fake_run)
+    assert rc == 0
+    assert [svc for svc, _ in seen_templates] == [
+        "truealpha/app",
+        "truealpha/data_engine",
+    ]
+    templates_by_service = dict(seen_templates)
+    assert "DATABASE_URL" in templates_by_service["truealpha/app"]
+    assert "SEC_USER_AGENT" in templates_by_service["truealpha/data_engine"]
+    assert "VAULT_SECRETS_TEMPLATE" not in os.environ
+
+
+@pytest.mark.parametrize(
+    "service, repo, secret_name",
+    [
+        ("truealpha/app", TA_REPO, "TA_NEW_VAULT_SECRET"),
+        ("finance_report/app", FR_REPO, "FR_NEW_VAULT_SECRET"),
+    ],
+)
+def test_release_manifest_adding_vault_variable_renders_without_manual_sync(
+    tmp_path: Path, service: str, repo: str, secret_name: str
+) -> None:
+    """A deploy of truealpha or finance_report whose release manifest adds a required Vault
+    variable renders that variable into secrets.ctmpl without a sync commit in infra2 (#1320)."""
     root = _infra2_checkout(tmp_path, [(_manifest(DATABASE), ("v1.0.0",))])
-    release = _manifest(DATABASE, _field("SEC_USER_AGENT", "human"))
+    added = _manifest(DATABASE, _field(secret_name, "human"))
+    plan = _preflight(
+        root,
+        _manifest(DATABASE),
+        app_web=added if service == "truealpha/app" else None,
+        fr=added if service == "finance_report/app" else None,
+        service=service,
+        source_repository=repo,
+    )
+    assert secret_name in plan.rendered_templates[service]
+
+
+def test_preflight_refuses_when_release_manifest_needs_vault_path_outside_policy(
+    tmp_path: Path,
+) -> None:
+    """When a release manifest adds a Vault variable whose provided_by requires a Vault path
+    not in vault-policy.hcl at iac_ref, preflight refuses with the policy path."""
+    root = _infra2_checkout(tmp_path, [(_manifest(DATABASE), ("v1.0.0",))])
+    redis_secret = _manifest(
+        DATABASE,
+        _field(
+            "REDIS_PASSWORD",
+            "runtime",
+            provided_by="truealpha/redis:REDIS_PASSWORD",
+        ),
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"secret/data/truealpha/\{\{env\}\}/redis.*vault-policy\.hcl",
+    ):
+        _preflight(root, redis_secret)
+
+
+def test_preflight_reads_vault_policy_at_iac_ref_not_head(tmp_path: Path) -> None:
+    """verify_app_manifests reads vault-policy.hcl at iac_ref (the production marker),
+    not from HEAD (#1320)."""
+    root = _infra2_checkout(
+        tmp_path,
+        [(_manifest(DATABASE), ("v1.2.46", "production/v1.2.46"))],
+    )
+    extended_policy = (
+        TA_APP_POLICY
+        + 'path "secret/data/truealpha/{{env}}/redis" { capabilities = ["read"] }\n'
+        + 'path "secret/metadata/truealpha/{{env}}/redis" { capabilities = ["read", "list"] }\n'
+    )
+    (root / "truealpha/truealpha/20.data_engine/vault-policy.hcl").write_text(
+        extended_policy, encoding="utf-8"
+    )
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "grant redis path on main")
+    _git(root, "tag", "v1.2.47")
+    redis_secret = _manifest(
+        DATABASE,
+        _field(
+            "REDIS_PASSWORD",
+            "runtime",
+            provided_by="truealpha/redis:REDIS_PASSWORD",
+        ),
+    )
+    with pytest.raises(
+        ValueError,
+        match=r"secret/data/truealpha/\{\{env\}\}/redis.*vault-policy\.hcl",
+    ):
+        _preflight(root, redis_secret, production=True)
+    staging_plan = _preflight(root, redis_secret)
+    assert staging_plan.iac_ref == "v1.2.47"
+    assert "REDIS_PASSWORD" in staging_plan.rendered_templates["truealpha/data_engine"]
+
+
+def test_preflight_refuses_a_compose_field_that_infra2_does_not_supply(
+    tmp_path: Path,
+) -> None:
+    root = _infra2_checkout(tmp_path, [(_manifest(DATABASE), ("v1.0.0",))])
+    release = _manifest(DATABASE, DECISION_FLAG)
     with pytest.raises(ValueError) as refusal:
         _preflight(root, release)
     message = str(refusal.value)
-    assert "SEC_USER_AGENT" in message
+    assert "ENABLE_REALTIME_QUOTES" in message
     assert "DATABASE_URL" not in message
-    assert COPY_PATH in message
-    assert "tools/fetch_app_manifests.py --sync truealpha v0.2.13" in message
-    assert "tools/secrets_render.py --write" in message
+    assert STACK_PATH in message
+    assert UPSTREAM_PATH in message
+    assert "env.manifest.json" in message
+    assert "--sync" not in message
 
 
-def test_preflight_counts_a_variable_that_a_stack_only_manifest_supplies(
+def test_preflight_counts_a_variable_that_a_stack_manifest_supplies(
     tmp_path: Path,
 ) -> None:
-    """The release fields of the data engine come from env.manifest.json, not from the
-    copy. A rollback to a release that still declares them must not be refused."""
+    """The release fields of the data engine come from env.manifest.json. A release that
+    declares them passes when the stack manifest supplies them and fails when it does not."""
     wanted = _field("RELEASE_MANIFEST_ID", "release", injected=True)
     (tmp_path / "with").mkdir()
     (tmp_path / "bare").mkdir()
     supplied = _infra2_checkout(
         tmp_path / "with",
-        [(_manifest(DATABASE), ("v1.0.0",))],
-        stack=_manifest(_field("RELEASE_MANIFEST_ID", "release", injected=True)),
+        [(_manifest(DATABASE, wanted), ("v1.0.0",))],
     )
     assert _preflight(supplied, _manifest(DATABASE, wanted)).iac_ref == "v1.0.0"
     bare = _infra2_checkout(tmp_path / "bare", [(_manifest(DATABASE), ("v1.0.0",))])
@@ -1772,7 +1934,7 @@ def test_preflight_counts_a_variable_that_a_stack_only_manifest_supplies(
 @pytest.mark.parametrize(
     "attribute, theirs, ours",
     [
-        ("source", "runtime", "human"),
+        ("source", "release", "decision"),
         ("empty_ok", True, False),
         ("store_key", "OTHER", ""),
         ("scope", "project", "env"),
@@ -1781,19 +1943,18 @@ def test_preflight_counts_a_variable_that_a_stack_only_manifest_supplies(
         ("aliases", ("OLD_NAME",), ()),
     ],
 )
-def test_preflight_refuses_a_field_whose_supply_attribute_differs(
+def test_preflight_refuses_a_compose_field_whose_supply_attribute_differs(
     tmp_path: Path, attribute: str, theirs: object, ours: object
 ) -> None:
-    """Each attribute that changes the template, the supply or the start check is part of
-    the contract."""
+    """Each attribute that changes compose supply or the start check is part of the contract."""
     kept = _field(
-        "API_KEY", "human", **({} if attribute == "source" else {attribute: ours})
+        "APP_TOGGLE", "decision", **({} if attribute == "source" else {attribute: ours})
     )
-    changed = _field("API_KEY", "runtime" if attribute == "source" else "human")
+    changed = _field("APP_TOGGLE", "release" if attribute == "source" else "decision")
     if attribute != "source":
-        changed = _field("API_KEY", "human", **{attribute: theirs})
+        changed = _field("APP_TOGGLE", "decision", **{attribute: theirs})
     root = _infra2_checkout(tmp_path, [(_manifest(kept), ("v1.0.0",))])
-    with pytest.raises(ValueError, match=f"API_KEY.*{attribute}"):
+    with pytest.raises(ValueError, match=f"APP_TOGGLE.*{attribute}"):
         _preflight(root, _manifest(changed))
 
 
@@ -1810,9 +1971,9 @@ def test_preflight_ignores_attributes_infra2_never_reads(
     tmp_path: Path, attribute: str, theirs: object
 ) -> None:
     root = _infra2_checkout(
-        tmp_path, [(_manifest(_field("API_KEY", "human")), ("v1.0.0",))]
+        tmp_path, [(_manifest(_field("APP_TOGGLE", "decision")), ("v1.0.0",))]
     )
-    release = _manifest(_field("API_KEY", "human", **{attribute: theirs}))
+    release = _manifest(_field("APP_TOGGLE", "decision", **{attribute: theirs}))
     assert _preflight(root, release).iac_ref == "v1.0.0"
 
 
@@ -1833,18 +1994,18 @@ def test_preflight_refuses_a_code_field_that_the_image_cannot_start_without(
 def test_a_lagging_production_marker_asks_for_a_promotion_not_a_sync(
     tmp_path: Path,
 ) -> None:
-    """Receiver run 39414198967: main had the field, production/v1.2.46 did not."""
+    """When main supplies the compose field and production/v1.2.46 does not, ask for promotion."""
     root = _infra2_checkout(
         tmp_path,
         [
             (_manifest(DATABASE), ("v1.2.46", "production/v1.2.46")),
-            (_manifest(DATABASE, BEARER), ("v1.2.47",)),
+            (_manifest(DATABASE, DECISION_FLAG), ("v1.2.47",)),
         ],
     )
     with pytest.raises(ValueError) as refusal:
-        _preflight(root, _manifest(DATABASE, BEARER), production=True)
+        _preflight(root, _manifest(DATABASE, DECISION_FLAG), production=True)
     message = str(refusal.value)
-    assert "MCP_BEARER_TOKEN" in message
+    assert "ENABLE_REALTIME_QUOTES" in message
     assert "v1.2.46" in message
     assert "promote infra2 to production" in message
     assert "Reconcile IaC Inputs with promote_prod" in message
@@ -1857,12 +2018,15 @@ def test_a_lagging_staging_release_asks_for_a_release_not_a_sync(
 ) -> None:
     root = _infra2_checkout(
         tmp_path,
-        [(_manifest(DATABASE), ("v1.2.46",)), (_manifest(DATABASE, BEARER), ())],
+        [
+            (_manifest(DATABASE), ("v1.2.46",)),
+            (_manifest(DATABASE, DECISION_FLAG), ()),
+        ],
     )
     with pytest.raises(ValueError) as refusal:
-        _preflight(root, _manifest(DATABASE, BEARER))
+        _preflight(root, _manifest(DATABASE, DECISION_FLAG))
     message = str(refusal.value)
-    assert "MCP_BEARER_TOKEN" in message
+    assert "ENABLE_REALTIME_QUOTES" in message
     assert "cut an infra2 release" in message.lower()
     assert "--sync" not in message
 
@@ -1873,12 +2037,12 @@ def test_preflight_runs_at_the_marker_not_at_main(tmp_path: Path) -> None:
     root = _infra2_checkout(
         tmp_path,
         [
-            (_manifest(DATABASE, BEARER), ("v1.2.46", "production/v1.2.46")),
+            (_manifest(DATABASE, DECISION_FLAG), ("v1.2.46", "production/v1.2.46")),
             (_manifest(DATABASE), ("v1.2.47",)),
         ],
         annotated=("v1.2.46",),
     )
-    plan = _preflight(root, _manifest(DATABASE, BEARER), production=True)
+    plan = _preflight(root, _manifest(DATABASE, DECISION_FLAG), production=True)
     assert plan.iac_ref == "v1.2.46"
     staging = _preflight(root, _manifest(DATABASE))
     assert staging.iac_ref == "v1.2.47"
@@ -1889,58 +2053,31 @@ def test_preflight_at_main_reads_the_checkout(tmp_path: Path) -> None:
     root = _infra2_checkout(tmp_path, [(_manifest(DATABASE), ("v1.0.0",))])
     preview = {"deploy_type": "preview/pr", "version_ref": "42"}
     assert _preflight(root, _manifest(DATABASE), **preview).iac_ref == "main"
-    with pytest.raises(ValueError, match="SEC_USER_AGENT"):
-        _preflight(
-            root, _manifest(DATABASE, _field("SEC_USER_AGENT", "human")), **preview
-        )
+    with pytest.raises(ValueError, match="ENABLE_REALTIME_QUOTES"):
+        _preflight(root, _manifest(DATABASE, DECISION_FLAG), **preview)
 
 
 def test_a_rollback_is_checked_and_a_removal_is_not(tmp_path: Path) -> None:
     root = _infra2_checkout(tmp_path, [(_manifest(DATABASE), ("v1.0.0",))])
-    unmet = _manifest(DATABASE, _field("SEC_USER_AGENT", "human"))
-    with pytest.raises(ValueError, match="SEC_USER_AGENT"):
+    unmet = _manifest(DATABASE, DECISION_FLAG)
+    with pytest.raises(ValueError, match="ENABLE_REALTIME_QUOTES"):
         _preflight(root, unmet, operation="rollback")
     removal = {"operation": "remove", "deploy_type": "preview/pr", "version_ref": "42"}
     assert _preflight(root, b"never fetched", **removal).iac_ref == "main"
 
 
 def test_preflight_checks_every_manifest_of_the_app(tmp_path: Path) -> None:
-    """truealpha has several manifests. A gap in the second one is found and named."""
-    second_copy = "contracts/truealpha/llm-service.required-env.generated.json"
-    second_upstream = "apps/llm-service/required-env.generated.json"
+    """truealpha has three upstream manifests. A compose gap in llm-service is found and named."""
     root = _infra2_checkout(tmp_path, [(_manifest(DATABASE), ("v1.0.0",))])
-    (root / second_copy).write_bytes(_manifest(DATABASE))
-    # The 10.app stack takes the app-web manifest too (common/security/registry.py).
-    (root / "contracts/truealpha/app-web.required-env.manifest.json").write_bytes(
-        _manifest(DATABASE)
-    )
-    lock = _lock({COPY_PATH: UPSTREAM_PATH, second_copy: second_upstream})
-    (root / "contracts/apps.lock.json").write_text(lock, encoding="utf-8")
-    for path in ("truealpha/truealpha/10.app/env.manifest.json",):
-        (root / path).parent.mkdir(parents=True, exist_ok=True)
-        (root / path).write_bytes(STACK_ONLY)
-    _git(root, "add", "-A")
-    _git(root, "commit", "-q", "-m", "second manifest")
-    _git(root, "tag", "-f", "v1.0.0")
-    bodies = {
-        RELEASE_URL: _manifest(DATABASE),
-        RELEASE_URL.replace(UPSTREAM_PATH, second_upstream): _manifest(
-            DATABASE, _field("LLM_KEY", "human")
-        ),
-    }
     with pytest.raises(ValueError) as refusal:
-        receiver.make_plan(
-            _request(),
-            sender="wangzitian0",
-            domain="zitian.party",
-            timeout=600,
-            repo_root=root,
-            resolve_image=_release_image,
-            manifest_fetcher=bodies.__getitem__,
+        _preflight(
+            root,
+            _manifest(DATABASE),
+            llm=_manifest(DATABASE, _field("LLM_MODEL_TIER", "decision")),
         )
     message = str(refusal.value)
-    assert second_copy in message and "LLM_KEY" in message
-    assert COPY_PATH not in message
+    assert LLM_UPSTREAM in message and "LLM_MODEL_TIER" in message
+    assert UPSTREAM_PATH not in message
 
 
 def test_preflight_refuses_a_release_manifest_that_cannot_be_fetched(
@@ -1963,50 +2100,15 @@ def test_preflight_refuses_a_release_manifest_that_cannot_be_fetched(
         )
 
 
-def test_preflight_fails_closed_when_the_infra2_release_has_no_app_contract(
+def test_preflight_fails_closed_when_the_infra2_release_has_no_stack_manifest(
     tmp_path: Path,
 ) -> None:
     root = _infra2_checkout(
         tmp_path,
         [(None, ("v1.2.46",)), (_manifest(DATABASE), ())],
     )
-    with pytest.raises(ValueError, match=r"v1\.2\.46.*contracts/apps\.lock\.json"):
+    with pytest.raises(ValueError, match=r"v1\.2\.46.*env\.manifest\.json"):
         _preflight(root, _manifest(DATABASE))
-
-
-@pytest.mark.parametrize("lock", ["not json", "{}", "[]", "null", '{"files": "abc"}'])
-def test_preflight_fails_closed_when_the_lock_is_not_a_lock(lock: str) -> None:
-    """A lock without ``files`` lists no manifest. That must not read as nothing to check."""
-    with pytest.raises(
-        ValueError, match=r"apps\.lock\.json of infra2 release v1\.0\.0"
-    ):
-        receiver.verify_app_manifests(
-            receiver.parse_request(_request()),
-            repo_root=".",
-            iac_ref="v1.0.0",
-            manifest_fetcher={RELEASE_URL: _manifest(DATABASE)}.__getitem__,
-            contract_reader=lambda _ref, _path: lock,
-        )
-
-
-@pytest.mark.parametrize(
-    "files",
-    [[], [{"app": "finance_report", "path": "x", "sha256": "0", "upstream": "y"}]],
-    ids=["no-files", "only-the-other-app"],
-)
-def test_preflight_fails_closed_when_the_lock_lists_no_manifest_of_the_app(
-    files: list[dict],
-) -> None:
-    """Every App has manifests. A lock that lists none must not read as nothing to check."""
-    lock = _lock({}, files=files) if files else _lock({}, files=[])
-    with pytest.raises(ValueError, match="lists no manifest of 'truealpha'"):
-        receiver.verify_app_manifests(
-            receiver.parse_request(_request()),
-            repo_root=".",
-            iac_ref="v1.0.0",
-            manifest_fetcher={RELEASE_URL: _manifest(DATABASE)}.__getitem__,
-            contract_reader=lambda _ref, _path: lock,
-        )
 
 
 @pytest.mark.parametrize(
@@ -2025,11 +2127,11 @@ def test_preflight_refuses_a_release_manifest_that_is_not_a_manifest(
         _preflight(root, release)
 
 
-def test_preflight_refuses_an_infra2_copy_that_is_not_a_manifest(
+def test_preflight_refuses_an_infra2_stack_manifest_that_is_not_a_manifest(
     tmp_path: Path,
 ) -> None:
     root = _infra2_checkout(tmp_path, [(b'{"vars": []}\n', ("v1.0.0",))])
-    with pytest.raises(ValueError, match=COPY_PATH):
+    with pytest.raises(ValueError, match=STACK_PATH):
         _preflight(root, _manifest(DATABASE))
 
 
@@ -2039,14 +2141,14 @@ def test_a_refusal_stops_the_cli_before_deploy_v2(
     root = _infra2_checkout(tmp_path, [(_manifest(DATABASE), ("v1.0.0",))])
     monkeypatch.setenv("APP_DEPLOY_REQUEST_JSON", json.dumps(_request()))
     real_make_plan = receiver.make_plan
-    release = _manifest(DATABASE, _field("SEC_USER_AGENT", "human"))
+    bodies = _manifest_map(_manifest(DATABASE, DECISION_FLAG))
 
     def offline_plan(payload_json, **kwargs):
         return real_make_plan(
             payload_json,
             **kwargs,
             resolve_image=_release_image,
-            manifest_fetcher={RELEASE_URL: release}.__getitem__,
+            manifest_fetcher=bodies.__getitem__,
         )
 
     monkeypatch.setattr(receiver, "make_plan", offline_plan)
@@ -2060,7 +2162,7 @@ def test_a_refusal_stops_the_cli_before_deploy_v2(
     )
     assert code == 1
     assert deploy_called == []
-    assert "SEC_USER_AGENT" in capsys.readouterr().err
+    assert "ENABLE_REALTIME_QUOTES" in capsys.readouterr().err
 
 
 def test_query_serving_release_returns_authoritative_dokploy_and_health_state(

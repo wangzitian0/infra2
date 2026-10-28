@@ -136,18 +136,15 @@ SERVICES: tuple[Service, ...] = (
         "postgres",
         ("truealpha/truealpha/01.postgres/env.manifest.json",),
     ),
-    # App stacks: the application's own manifest (infra2's copy in contracts/, recorded in
-    # contracts/apps.lock.json) plus stack-only additions kept here. Environment-specific
-    # config (S3 endpoint, rate limits, telemetry) lives in the compose file / Deployer,
-    # not in the template.
+    # App stacks: the stack baseline manifest lives in the stack directory (#1320);
+    # at deploy time the receiver merges the deployed release manifest on top of it
+    # to render the Vault Agent template. Environment-specific config (S3 endpoint,
+    # rate limits, telemetry) lives in the compose file / Deployer, not in the template.
     Service(
         "finance_report/finance_report/10.app",
         "finance_report",
         "app",
-        (
-            "contracts/finance_report/required-env.generated.json",
-            "finance_report/finance_report/10.app/env.manifest.json",
-        ),
+        ("finance_report/finance_report/10.app/env.manifest.json",),
         # _ensure_minio_bucket reads the bucket name back to decide whether the scoped
         # user already exists; the compose supplies the same name to the container.
         store_only_keys=("S3_BUCKET",),
@@ -156,10 +153,7 @@ SERVICES: tuple[Service, ...] = (
         "finance_report/finance_report/preview",
         "finance_report",
         "app",
-        (
-            "contracts/finance_report/required-env.generated.json",
-            "finance_report/finance_report/10.app/env.manifest.json",
-        ),
+        ("finance_report/finance_report/10.app/env.manifest.json",),
         source_env="staging",
         exclude_envs=("DATABASE_URL", "REDIS_URL", "PREVIEW_DATABASE_URL"),
     ),
@@ -167,11 +161,7 @@ SERVICES: tuple[Service, ...] = (
         "truealpha/truealpha/10.app",
         "truealpha",
         "app",
-        (
-            "contracts/truealpha/app-web.required-env.manifest.json",
-            "contracts/truealpha/llm-service.required-env.generated.json",
-            "truealpha/truealpha/10.app/env.manifest.json",
-        ),
+        ("truealpha/truealpha/10.app/env.manifest.json",),
         # same bucket-provisioning read as finance_report/app
         store_only_keys=("S3_BUCKET",),
     ),
@@ -179,11 +169,7 @@ SERVICES: tuple[Service, ...] = (
         "truealpha/truealpha/preview",
         "truealpha",
         "app",
-        (
-            "contracts/truealpha/app-web.required-env.manifest.json",
-            "contracts/truealpha/llm-service.required-env.generated.json",
-            "truealpha/truealpha/10.app/env.manifest.json",
-        ),
+        ("truealpha/truealpha/10.app/env.manifest.json",),
         source_env="staging",
         exclude_envs=(
             "DATABASE_URL",
@@ -195,10 +181,7 @@ SERVICES: tuple[Service, ...] = (
         "truealpha/truealpha/20.data_engine",
         "truealpha",
         "data_engine",
-        (
-            "contracts/truealpha/data-engine.required-env.generated.json",
-            "truealpha/truealpha/20.data_engine/env.manifest.json",
-        ),
+        ("truealpha/truealpha/20.data_engine/env.manifest.json",),
         # The deploy identity the Deployer reads at compose time (pin_release writes the
         # digest; the release id and the capture approval are governance values). They
         # move to the release/decision plane with truealpha#781 and this line goes away.
@@ -226,7 +209,7 @@ def manifest_file(path: str, *, root: Path = ROOT) -> Path:
 
 
 def load_manifest(path: str, *, root: Path = ROOT) -> EnvironmentManifest:
-    """Read one manifest. An App manifest is infra2's copy under ``contracts/``."""
+    """Read one manifest from its stack directory under ``root``."""
     from infra2_sdk.runtime.config_schema import EnvironmentManifest
 
     return EnvironmentManifest.from_dict(

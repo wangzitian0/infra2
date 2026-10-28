@@ -1339,14 +1339,20 @@ def test_all_sdk_keys_used_and_code_reads_declared_mutation():
 
 
 def test_the_app_manifests_are_counted_once_under_the_app_name(repo_scan):
-    """The infra2 scan skips contracts/: `run` files the copies under their Apps (#1258)."""
+    """App stack manifests live in their stack directories under infra2; contracts/ has none (#1320)."""
     occ = repo_scan[0].occ
 
     assert not [
         o for o in occ if o.repo == "infra2" and o.path.startswith("contracts/")
     ]
-    declared = {o.repo for o in occ if o.layer == "manifest" and o.repo != "infra2"}
-    assert declared == {"finance_report", "truealpha"}
+    manifest_paths = {
+        o.path for o in occ if o.layer == "manifest" and o.repo == "infra2"
+    }
+    assert {
+        "finance_report/finance_report/10.app/env.manifest.json",
+        "truealpha/truealpha/10.app/env.manifest.json",
+        "truealpha/truealpha/20.data_engine/env.manifest.json",
+    } <= manifest_paths
 
 
 def test_g1_mutation_rejects_undeclared_compose_or_ctmpl_or_unrendered_store_key():
