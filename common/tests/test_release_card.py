@@ -831,3 +831,26 @@ def test_when_the_card_calls_are_rejected_the_rollback_text_still_goes_out(
     sends = [c for c in calls if c[1] != "internal"]
     assert [method for method, _ in sends] == ["PATCH", "POST", "POST"]
     assert sends[-1][1].endswith("chat_id")
+
+
+def test_a_bounded_dispatch_failure_in_rollback_fallback_warns_and_does_not_raise(
+    monkeypatch,
+) -> None:
+    """When release_card.bounded raises during the fallback rollback alert dispatch,
+    _notify_rollback_event logs a warning and does not propagate the exception."""
+    from common.deploy import promote
+
+    warnings: list[str] = []
+
+    def boom(_fn, _budget, _default):
+        raise RuntimeError("thread pool exhausted")
+
+    monkeypatch.setattr(rc, "note_rollback", lambda _env, _event: False)
+    monkeypatch.setattr(rc, "bounded", boom)
+    monkeypatch.setattr(promote, "warning", warnings.append)
+
+    promote._notify_rollback_event(EVENT)
+
+    assert warnings == [
+        "out-of-band rollback alert delivery skipped/failed: thread pool exhausted"
+    ]

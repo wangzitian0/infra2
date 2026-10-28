@@ -558,9 +558,12 @@ def _notify_rollback_event(
 
     # A hung Feishu call must not delay the re-raise of the deploy error. The delivery has
     # the same time budget as the card hook.
-    from common.alerting import release_card
+    try:
+        from common.alerting import release_card
 
-    release_card.bounded(send_text, release_card.ROLLBACK_BUDGET_SECONDS, None)
+        release_card.bounded(send_text, release_card.ROLLBACK_BUDGET_SECONDS, None)
+    except Exception as exc:  # noqa: BLE001
+        warning(f"out-of-band rollback alert delivery skipped/failed: {exc}")
 
 
 def _build_deploy_env_vars(
