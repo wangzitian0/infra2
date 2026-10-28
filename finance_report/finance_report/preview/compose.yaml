@@ -138,7 +138,7 @@ services:
     environment:
       DEBUG: ${DEBUG:-false}
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
-      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://s3-staging.${INTERNAL_DOMAIN}}
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV:-preview}}
       # This alias's ENV token (main / pr-<N> / commit-<sha7>); the entrypoint uses
@@ -153,7 +153,7 @@ services:
       # Configuration the hand-written preview secrets.ctmpl used to default (values
       # previews effectively ran with on 2026-09-07, borrowing staging's); the generated
       # template renders only human / runtime values from the staging path.
-      S3_ENDPOINT: http://platform-s3:9000
+      S3_ENDPOINT: http://platform-s3-staging:9000
       S3_BUCKET: finance-report-staging
       S3_PUBLIC_BUCKET: finance-report-staging
       S3_PRESIGN_EXPIRY_SECONDS: "900"

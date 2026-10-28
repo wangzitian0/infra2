@@ -120,3 +120,25 @@ def test_backend_only_configuration_stays_off_the_worker() -> None:
         assert key not in worker, (
             f"{key} is backend-only and must not appear on the worker"
         )
+
+
+def test_s3_endpoints_are_environment_scoped() -> None:
+    services = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]
+    for name in ("backend", "prefect-worker"):
+        env = _environment(services[name])
+        assert env.get("S3_ENDPOINT") == "http://platform-s3${ENV_SUFFIX}:9000", name
+        assert (
+            env.get("S3_PUBLIC_ENDPOINT")
+            == "${S3_PUBLIC_ENDPOINT:-https://s3${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}}"
+        ), name
+
+    preview_compose = ROOT / "finance_report/finance_report/preview/compose.yaml"
+    preview_services = yaml.safe_load(preview_compose.read_text(encoding="utf-8"))[
+        "services"
+    ]
+    preview_backend = _environment(preview_services["backend"])
+    assert preview_backend.get("S3_ENDPOINT") == "http://platform-s3-staging:9000"
+    assert (
+        preview_backend.get("S3_PUBLIC_ENDPOINT")
+        == "${S3_PUBLIC_ENDPOINT:-https://s3-staging.${INTERNAL_DOMAIN}}"
+    )
