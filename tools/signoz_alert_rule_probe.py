@@ -194,9 +194,15 @@ def _delete_rule(base_url: str, api_key: str, rule_id: str) -> bool:
         f"/api/v1/rules/{quote(rule_id, safe='')}",
     ):
         response = _signoz_request(base_url, api_key, method="DELETE", path=path)
-        if response["ok"] or response["status"] == 404:
+        if response["ok"]:
             return True
-    return False
+    probe = _signoz_request(
+        base_url,
+        api_key,
+        method="GET",
+        path=f"/api/v1/rules/{quote(rule_id, safe='')}",
+    )
+    return probe.get("status") == 404
 
 
 def _signoz_request(

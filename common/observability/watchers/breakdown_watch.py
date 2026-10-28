@@ -101,6 +101,7 @@ DEFAULT_RECOVERY_THRESHOLD = 5
 # every ~2 h, for seven weeks).
 DEFAULT_STAY_RESOLVED_SECONDS = 6 * 3600
 DEFAULT_CHRONIC_DIGEST_SECONDS = 24 * 3600
+RE_BREAK_SUPPRESSION_CEILING = 3
 
 
 def is_report_only(breakdown: Breakdown | None) -> bool:
@@ -202,6 +203,7 @@ def _evaluate_broken_container(
     recovery_threshold: int,
     renotify: int,
     stay_resolved_seconds: int,
+    max_suppressed_rebreaks: int = RE_BREAK_SUPPRESSION_CEILING,
 ) -> Breakdown | None:
     """Evaluate one broken container against flap hysteresis and chronic floor."""
     import dataclasses
@@ -259,6 +261,18 @@ def _evaluate_broken_container(
         ):
             chronic[name] = int(chronic.get(name, 0)) + 1
             chronic_context[name] = b
+            if chronic[name] > max_suppressed_rebreaks:
+                chronic.pop(name, None)
+                chronic_context.pop(name, None)
+                logger.warning(
+                    "BREAKDOWN-REBREAK-ESCALATED %s (%s): re-break count exceeded "
+                    "ceiling %d; escalating page — %s",
+                    name,
+                    b.state,
+                    max_suppressed_rebreaks,
+                    b.reason,
+                )
+                return b
             logger.warning(
                 "BREAKDOWN-CHRONIC %s (%s): re-broke %ds after resolving (floor %ds); "
                 "suppressed page #%d — %s",
@@ -284,6 +298,9 @@ def _evaluate_broken_container(
             b.reason,
         )
     return None
+
+
+evaluate = _evaluate_broken_container
 
 
 def _process_recovered_containers(
@@ -409,6 +426,7 @@ def run_once(
     chronic_context: dict | None = None,
     stay_resolved_seconds: int = DEFAULT_STAY_RESOLVED_SECONDS,
     chronic_digest_seconds: int = DEFAULT_CHRONIC_DIGEST_SECONDS,
+    max_suppressed_rebreaks: int = RE_BREAK_SUPPRESSION_CEILING,
 ) -> int:
     """One sweep over all running containers evaluating flap hysteresis."""
     import time
@@ -437,6 +455,7 @@ def run_once(
             recovery_threshold=recovery_threshold,
             renotify=renotify,
             stay_resolved_seconds=stay_resolved_seconds,
+            max_suppressed_rebreaks=max_suppressed_rebreaks,
         )
         if firing is not None:
             fresh.append(firing)

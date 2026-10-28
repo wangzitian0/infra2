@@ -228,6 +228,19 @@ def verify_backup_manifest(
     }
 
 
+_BACKUP_SEVERITY_MAP = {
+    "P0": "critical",
+    "P1": "error",
+    "P2": "warning",
+}
+_SEVERITY_RANK = {
+    "critical": 3,
+    "error": 2,
+    "warning": 1,
+    "info": 0,
+}
+
+
 def build_backup_alert_payload(report: dict[str, Any]) -> dict[str, Any]:
     failures = [check for check in report["checks"] if check["status"] != "pass"]
     alerts = []
@@ -237,17 +250,14 @@ def build_backup_alert_payload(report: dict[str, Any]) -> dict[str, Any]:
             "production",
             component="backup",
         )
+        check_severity = _BACKUP_SEVERITY_MAP.get(check.get("severity", ""), "warning")
         alerts.append(
             {
                 "status": "firing",
                 "labels": {
                     "alertname": "InfraBackupVerificationFailed",
                     **identity.alert_labels(
-                        severity=(
-                            "critical"
-                            if check["severity"] in {"P0", "P1"}
-                            else check["severity"]
-                        ),
+                        severity=check_severity,
                         failure_domain="backup",
                     ),
                 },
@@ -257,13 +267,23 @@ def build_backup_alert_payload(report: dict[str, Any]) -> dict[str, Any]:
                 },
             }
         )
+    if failures:
+        common_severity = max(
+            (
+                _BACKUP_SEVERITY_MAP.get(c.get("severity", ""), "warning")
+                for c in failures
+            ),
+            key=lambda s: _SEVERITY_RANK.get(s, 0),
+        )
+    else:
+        common_severity = "info"
     return {
         "status": "firing" if failures else "resolved",
         "commonLabels": {
             "alertname": "InfraBackupVerificationFailed",
             "identity_schema": "v1",
             "managed_by": "infra2",
-            "severity": "critical" if failures else "info",
+            "severity": common_severity,
             "team": "infra",
         },
         "commonAnnotations": {

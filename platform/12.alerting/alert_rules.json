@@ -1,0 +1,30 @@
+{
+  "$comment": "Config-as-code SigNoz alert rules for platform alerting and core services (#906/#723).",
+  "service_id": "platform/alerting",
+  "environment": "production",
+  "rules": [
+    {
+      "signal": "logs",
+      "alert_name": "PlatformAlertingErrorLogs",
+      "service_name": "platform-alerting",
+      "severity": "error",
+      "threshold": 5,
+      "match_type": "in_total",
+      "eval_window": "15m0s",
+      "frequency": "1m",
+      "summary": "Severity P1 (15m total > 5): platform-alerting emitted more than 5 ERROR/FATAL log lines in 15 minutes"
+    },
+    {
+      "signal": "logs",
+      "service_id": "platform/todo",
+      "alert_name": "PlatformTodoErrorLogs",
+      "service_name": "platform-todo",
+      "severity": "error",
+      "threshold": 10,
+      "match_type": "in_total",
+      "eval_window": "15m0s",
+      "frequency": "1m",
+      "summary": "Severity P1 (15m total > 10): platform-todo emitted more than 10 ERROR/FATAL log lines in 15 minutes"
+    }
+  ]
+}

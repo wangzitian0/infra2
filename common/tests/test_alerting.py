@@ -1378,3 +1378,73 @@ def test_alerting_bridge_health_timeout_is_below_the_container_healthcheck(
         urlopen_timeout,
         docker_timeout,
     )
+
+
+def test_breakdown_watch_rebreak_suppression_ceiling_escalates() -> None:
+    """Escalate alert when re-break count exceeds max_suppressed_rebreaks ceiling."""
+    from common.observability.watchers.breakdown_watch import (
+        Breakdown,
+        RE_BREAK_SUPPRESSION_CEILING,
+        evaluate,
+    )
+    from infra2_sdk.observability import ConsecutiveObservationState
+
+    name = "test-worker"
+    b = Breakdown(
+        container=name,
+        state="restarting",
+        reason="crashloop",
+        detail="exit 1",
+    )
+    chronic: dict = {}
+    chronic_context: dict = {}
+    container_state: dict = {}
+    resolved_at = {name: 100.0}
+    now = 200.0
+    stay_resolved_seconds = 3600
+    failure_threshold = 3
+
+    for i in range(1, RE_BREAK_SUPPRESSION_CEILING + 1):
+        state = container_state.setdefault(name, ConsecutiveObservationState())
+        state.bad_streak = failure_threshold - 1
+        state.active = False
+        result = evaluate(
+            name=name,
+            b=b,
+            container_state=container_state,
+            resolved_at=resolved_at,
+            chronic=chronic,
+            chronic_context=chronic_context,
+            now=now,
+            wall=now,
+            failure_threshold=failure_threshold,
+            recovery_threshold=5,
+            renotify=0,
+            stay_resolved_seconds=stay_resolved_seconds,
+            max_suppressed_rebreaks=RE_BREAK_SUPPRESSION_CEILING,
+        )
+        assert result is None, f"re-break #{i} must be suppressed"
+        assert chronic[name] == i
+
+    state = container_state[name]
+    state.bad_streak = failure_threshold - 1
+    state.active = False
+    escalated = evaluate(
+        name=name,
+        b=b,
+        container_state=container_state,
+        resolved_at=resolved_at,
+        chronic=chronic,
+        chronic_context=chronic_context,
+        now=now,
+        wall=now,
+        failure_threshold=failure_threshold,
+        recovery_threshold=5,
+        renotify=0,
+        stay_resolved_seconds=stay_resolved_seconds,
+        max_suppressed_rebreaks=RE_BREAK_SUPPRESSION_CEILING,
+    )
+    assert escalated is not None, "re-break exceeding ceiling must escalate"
+    assert escalated.container == name
+    assert name not in chronic
+    assert name not in chronic_context

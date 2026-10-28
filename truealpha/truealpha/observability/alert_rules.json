@@ -1,0 +1,71 @@
+{
+  "$comment": "Config-as-code SigNoz alert rules for truealpha (#906/#723).",
+  "service_id": "truealpha/app",
+  "environment": "production",
+  "rules": [
+    {
+      "signal": "logs",
+      "alert_name": "TrueAlphaAppErrorLogs",
+      "service_name": "truealpha-app",
+      "severity": "error",
+      "threshold": 10,
+      "match_type": "in_total",
+      "eval_window": "15m0s",
+      "frequency": "1m",
+      "summary": "Severity P1 (15m total > 10): truealpha-app emitted more than 10 ERROR/FATAL log lines in 15 minutes"
+    },
+    {
+      "signal": "logs",
+      "service_id": "truealpha/data_engine",
+      "alert_name": "TrueAlphaDataEngineErrorLogs",
+      "service_name": "truealpha-data-engine",
+      "severity": "error",
+      "threshold": 10,
+      "match_type": "in_total",
+      "eval_window": "15m0s",
+      "frequency": "1m",
+      "summary": "Severity P1 (15m total > 10): truealpha-data-engine emitted more than 10 ERROR/FATAL log lines in 15 minutes"
+    },
+    {
+      "signal": "metrics",
+      "alert_name": "TrueAlphaHigh5xxRate",
+      "service_name": "truealpha-app",
+      "severity": "critical",
+      "threshold": 0.05,
+      "threshold_unit": "%",
+      "op": "above",
+      "match_type": "at_least_once",
+      "eval_window": "5m0s",
+      "frequency": "1m",
+      "promql": "(sum(increase({\"http.server.duration.count\", \"service.name\"=\"truealpha-app\", \"deployment.environment.name\"=\"production\", \"http.target\"!~\"^(/health|/api/v1/system/health)$\", \"http.status_code\"=~\"^5..$\"}[5m])) / sum(increase({\"http.server.duration.count\", \"service.name\"=\"truealpha-app\", \"deployment.environment.name\"=\"production\", \"http.target\"!~\"^(/health|/api/v1/system/health)$\"}[5m]))) and on() (sum(increase({\"http.server.duration.count\", \"service.name\"=\"truealpha-app\", \"deployment.environment.name\"=\"production\", \"http.target\"!~\"^(/health|/api/v1/system/health)$\", \"http.status_code\"=~\"^5..$\"}[5m])) >= 5)",
+      "summary": "Severity P0 (5m ratio > 5% and >= 5 errors): truealpha-app HTTP 5xx ratio exceeded 5% over 5 minutes"
+    },
+    {
+      "signal": "metrics",
+      "alert_name": "TrueAlphaP95LatencyHigh",
+      "service_name": "truealpha-app",
+      "severity": "error",
+      "threshold": 3000,
+      "threshold_unit": "ms",
+      "op": "above",
+      "match_type": "all_times",
+      "eval_window": "10m0s",
+      "frequency": "1m",
+      "promql": "(histogram_quantile(0.95, sum by (le) (rate({\"http.server.duration.bucket\", \"service.name\"=\"truealpha-app\", \"deployment.environment.name\"=\"production\", \"http.target\"!~\"^(/health|/api/v1/system/health)$\"}[5m]))) >= 0) or on() vector(0)",
+      "summary": "Severity P1 (sustained 10m p95 > 3000ms): truealpha-app HTTP p95 latency held above 3000ms for 10 minutes"
+    },
+    {
+      "signal": "metrics",
+      "alert_name": "TrueAlphaAppTelemetryAbsent",
+      "service_name": "truealpha-app",
+      "severity": "error",
+      "threshold": 0,
+      "op": "above",
+      "match_type": "at_least_once",
+      "eval_window": "5m0s",
+      "frequency": "1m",
+      "promql": "absent_over_time({\"http.server.duration.count\", \"service.name\"=\"truealpha-app\", \"deployment.environment.name\"=\"production\"}[15m])",
+      "summary": "Severity P1 (15m absent): truealpha-app exported no HTTP duration metrics for 15 minutes"
+    }
+  ]
+}

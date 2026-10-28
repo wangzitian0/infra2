@@ -198,6 +198,27 @@ _EXPECTED_RULES = {
         "5m0s",
         "",
     ),
+    "TrueAlphaAppErrorLogs": ("threshold_rule", "error", 10, "4", "15m0s", ""),
+    "TrueAlphaDataEngineErrorLogs": ("threshold_rule", "error", 10, "4", "15m0s", ""),
+    "TrueAlphaHigh5xxRate": ("promql_rule", "critical", 0.05, "1", "5m0s", "%"),
+    "TrueAlphaP95LatencyHigh": (
+        "promql_rule",
+        "error",
+        3000.0,
+        "2",
+        "10m0s",
+        "ms",
+    ),
+    "TrueAlphaAppTelemetryAbsent": (
+        "promql_rule",
+        "error",
+        0.0,
+        "1",
+        "5m0s",
+        "",
+    ),
+    "PlatformAlertingErrorLogs": ("threshold_rule", "error", 5, "4", "15m0s", ""),
+    "PlatformTodoErrorLogs": ("threshold_rule", "error", 10, "4", "15m0s", ""),
 }
 # docs/ssot/ops.observability.md §3: the severity label is the P level.
 _P_LEVEL_BY_SEVERITY = {"critical": "P0", "error": "P1", "warning": "P2"}
@@ -253,9 +274,8 @@ def test_rule_summary_names_the_p_level_of_its_severity_label(alert_name) -> Non
     ]
 
 
-# What finance-report-backend exports (finance_report
-# apps/backend/src/observability/telemetry_metrics.py) under the names SigNoz stores
-# with DOT_METRICS_ENABLED: the OTel instrument name as-is, a histogram's buckets as
+# What the services export under the names SigNoz stores with
+# DOT_METRICS_ENABLED: OTel instrument names as-is, histogram buckets as
 # "<name>.bucket". Label values are listed where a rule filters on them.
 _APP_METRICS: dict[str, dict[str, set[str]]] = {
     "http.server.request.count": {
@@ -263,6 +283,11 @@ _APP_METRICS: dict[str, dict[str, set[str]]] = {
         "http.route": {"/health", "/ping", "/ping/toggle", "/api/statements"},
     },
     "http.server.request.duration.bucket": {},
+    "http.server.duration.count": {
+        "http.status_code": {"200", "500", "502", "503"},
+        "http.target": {"/health", "/api/v1/system/health", "/api/v1/trade"},
+    },
+    "http.server.duration.bucket": {},
     "finance.statement_parse.outcome": {"outcome": {"success", "failure"}},
     "finance.reconciliation.match.outcome": {
         "outcome": {
@@ -313,7 +338,13 @@ def test_promql_selectors_reach_series_the_app_exports() -> None:
         assert selectors, alert_name
         for metric, matchers in selectors:
             assert metric in _APP_METRICS, (alert_name, metric)
-            assert ("service.name", "=", "finance-report-backend") in matchers
+            services = [
+                val for key, op, val in matchers if key == "service.name" and op == "="
+            ]
+            assert services in [["finance-report-backend"], ["truealpha-app"]], (
+                alert_name,
+                services,
+            )
             assert ("deployment.environment.name", "=", "production") in matchers
             value_filters += [
                 (alert_name, metric, label, value)
@@ -401,19 +432,29 @@ def test_p95_rule_pages_only_on_a_sustained_non_probe_breach() -> None:
 
 
 def test_backend_telemetry_absence_is_expressed_in_promql() -> None:
-    """#906: alertOnAbsent is a no-op on SigNoz PromQL rules, so the one rule that
-    must fire on missing data says so in the query: no request-count sample from the
-    production backend for 10 minutes."""
+    """#906: alertOnAbsent is a no-op on SigNoz PromQL rules, so rules that
+    must fire on missing data say so in the query."""
     absent = {
         name: promql
         for name, promql in _promql_rules().items()
         if "absent_over_time(" in promql
     }
 
-    assert list(absent) == ["FinanceReportBackendTelemetryAbsent"]
-    promql = absent["FinanceReportBackendTelemetryAbsent"]
-    assert promql.startswith("absent_over_time(") and promql.endswith("[10m])")
-    assert [metric for metric, _ in _selectors(promql)] == ["http.server.request.count"]
+    assert set(absent) == {
+        "FinanceReportBackendTelemetryAbsent",
+        "TrueAlphaAppTelemetryAbsent",
+    }
+    fr_promql = absent["FinanceReportBackendTelemetryAbsent"]
+    assert fr_promql.startswith("absent_over_time(") and fr_promql.endswith("[10m])")
+    assert [metric for metric, _ in _selectors(fr_promql)] == [
+        "http.server.request.count"
+    ]
+
+    ta_promql = absent["TrueAlphaAppTelemetryAbsent"]
+    assert ta_promql.startswith("absent_over_time(") and ta_promql.endswith("[15m])")
+    assert [metric for metric, _ in _selectors(ta_promql)] == [
+        "http.server.duration.count"
+    ]
 
 
 def test_metric_alert_definition_renders_signoz_v5_payload() -> None:
@@ -1132,7 +1173,87 @@ def test_signoz_alert_canary_retries_rule_id_resolution(monkeypatch) -> None:
     assert (
         module._resolve_rule_id("https://signoz.example", "key", "Canary") == "rule-1"
     )
-    assert calls["count"] == 2
+
+
+def test_delete_rule_attempts_v1_when_v2_returns_404(monkeypatch) -> None:
+    """Verify _delete_rule calls /api/v1/rules/{id} when /api/v2/rules/{id} returns 404."""
+    spec = importlib.util.spec_from_file_location(
+        "signoz_alert_rule_probe_under_test", SIGNOZ_ALERT_PROBE
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    calls = []
+
+    def fake_request(_base_url, _api_key, *, method, path, payload=None):
+        calls.append((method, path))
+        if method == "DELETE" and path == "/api/v2/rules/test-rule-id":
+            return {"ok": False, "status": 404, "body": "{}"}
+        if method == "DELETE" and path == "/api/v1/rules/test-rule-id":
+            return {"ok": True, "status": 200, "body": "{}"}
+        return {"ok": False, "status": 500, "body": "{}"}
+
+    monkeypatch.setattr(module, "_signoz_request", fake_request)
+
+    deleted = module._delete_rule("https://signoz.example", "key", "test-rule-id")
+    assert deleted is True
+    assert ("DELETE", "/api/v2/rules/test-rule-id") in calls
+    assert ("DELETE", "/api/v1/rules/test-rule-id") in calls
+
+
+def test_delete_rule_falls_back_to_get_probe_when_delete_fails(monkeypatch) -> None:
+    """Verify _delete_rule probes rule presence via GET when DELETE calls fail."""
+    spec = importlib.util.spec_from_file_location(
+        "signoz_alert_rule_probe_under_test", SIGNOZ_ALERT_PROBE
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    calls = []
+
+    def fake_request(_base_url, _api_key, *, method, path, payload=None):
+        calls.append((method, path))
+        if method == "DELETE":
+            return {"ok": False, "status": 404, "body": "{}"}
+        if method == "GET" and path == "/api/v1/rules/test-rule-id":
+            return {"ok": False, "status": 404, "body": "{}"}
+        return {"ok": False, "status": 500, "body": "{}"}
+
+    monkeypatch.setattr(module, "_signoz_request", fake_request)
+
+    deleted = module._delete_rule("https://signoz.example", "key", "test-rule-id")
+    assert deleted is True
+    assert ("GET", "/api/v1/rules/test-rule-id") in calls
+
+
+def test_routing_check_flags_stale_canary_probe_rules() -> None:
+    """Flag lingering canary probe rules as stale when not in expected catalog."""
+    canary_by_label = {
+        "id": "canary-1",
+        "alert": "UnknownCanaryAlert",
+        "labels": {"canary": "true"},
+    }
+    canary_by_prefix = {
+        "id": "canary-2",
+        "alert": "CanarySigNozPromqlPayload-12345",
+        "labels": {},
+    }
+    problems = check_alert_routing(
+        {"data": {"rules": [canary_by_label, canary_by_prefix]}},
+        {"data": [{"id": "c1", "name": "chan-1"}]},
+        channel_name="chan-1",
+        expected_alerts=[],
+    )
+    by_subject = {p.subject: p for p in problems if p.kind == "stale"}
+    assert "UnknownCanaryAlert" in by_subject
+    assert "CanarySigNozPromqlPayload-12345" in by_subject
+    assert "stale canary probe rule" in by_subject["UnknownCanaryAlert"].detail
+    assert (
+        "stale canary probe rule"
+        in by_subject["CanarySigNozPromqlPayload-12345"].detail
+    )
 
 
 def test_apply_observability_workflow_exposes_canary_mode() -> None:

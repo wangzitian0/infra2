@@ -241,6 +241,53 @@ def test_backup_failures_build_alert_payload() -> None:
     assert payload["alerts"][0]["labels"]["failure_domain"] == "backup"
 
 
+def test_backup_alert_payload_severity_mapping() -> None:
+    """Map backup check severities: P0 to critical, P1 to error, P2 to warning."""
+
+    def _make_report(checks: list[dict]) -> dict:
+        return {"checks": checks}
+
+    p0_check = {
+        "status": "fail",
+        "service_id": "test/p0",
+        "severity": "P0",
+        "summary": "p0 failure",
+        "evidence": "none",
+    }
+    p1_check = {
+        "status": "fail",
+        "service_id": "test/p1",
+        "severity": "P1",
+        "summary": "p1 failure",
+        "evidence": "none",
+    }
+    p2_check = {
+        "status": "fail",
+        "service_id": "test/p2",
+        "severity": "P2",
+        "summary": "p2 failure",
+        "evidence": "none",
+    }
+
+    payload_p2 = build_backup_alert_payload(_make_report([p2_check]))
+    assert payload_p2["alerts"][0]["labels"]["severity"] == "warning"
+    assert payload_p2["commonLabels"]["severity"] == "warning"
+
+    payload_p1 = build_backup_alert_payload(_make_report([p1_check]))
+    assert payload_p1["alerts"][0]["labels"]["severity"] == "error"
+    assert payload_p1["commonLabels"]["severity"] == "error"
+
+    payload_p0 = build_backup_alert_payload(_make_report([p0_check]))
+    assert payload_p0["alerts"][0]["labels"]["severity"] == "critical"
+    assert payload_p0["commonLabels"]["severity"] == "critical"
+
+    payload_multi = build_backup_alert_payload(_make_report([p2_check, p1_check]))
+    assert payload_multi["commonLabels"]["severity"] == "error"
+
+    payload_empty = build_backup_alert_payload(_make_report([]))
+    assert payload_empty["commonLabels"]["severity"] == "info"
+
+
 def test_backup_runner_creates_archive_and_checksum(tmp_path) -> None:
     """#158: backup runner can produce manifest-ready artifacts."""
     backup_runner = _load_backup_runner()
