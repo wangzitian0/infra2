@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,6 +38,13 @@ FINANCE_REPORT_OBSERVABILITY_DIR = (
     REPO_ROOT / "finance_report" / "finance_report" / "observability"
 )
 ALERT_RULES_FILE = FINANCE_REPORT_OBSERVABILITY_DIR / "alert_rules.json"
+TRUEALPHA_OBSERVABILITY_DIR = REPO_ROOT / "truealpha" / "truealpha" / "observability"
+PLATFORM_ALERTING_DIR = REPO_ROOT / "platform" / "12.alerting"
+ALERT_RULES_FILES: tuple[Path, ...] = (
+    ALERT_RULES_FILE,
+    TRUEALPHA_OBSERVABILITY_DIR / "alert_rules.json",
+    PLATFORM_ALERTING_DIR / "alert_rules.json",
+)
 DASHBOARD_FILE = FINANCE_REPORT_OBSERVABILITY_DIR / "dashboard.json"
 OPENPANEL_ANALYTICS_FILE = FINANCE_REPORT_OBSERVABILITY_DIR / "openpanel_analytics.json"
 
@@ -102,7 +109,7 @@ class MetricAlertDefinition:
     match_type: str = "at_least_once"
     eval_window: str = "5m0s"
     frequency: str = "1m"
-    service_name: str = "finance-report-backend"
+    service_name: str = ""
     group_by: list[str] | None = None
 
     def to_signoz_payload(self, channel_names: list[str]) -> dict[str, Any]:
@@ -144,107 +151,128 @@ def _load_json(path: Path) -> Any:
 
 
 def load_alert_definitions(
-    path: Path = ALERT_RULES_FILE,
+    path: Path | Sequence[Path] | None = None,
 ) -> list[AlertDefinition]:
-    """Load and validate the checked-in alert definitions."""
-    data = _load_json(path)
-    rules = data.get("rules") if isinstance(data, dict) else None
-    if not isinstance(rules, list) or not rules:
-        raise ObservabilityDefinitionError(
-            f"Alert definition must contain a non-empty 'rules' list: {path}"
-        )
+    """Load and validate checked-in alert definitions."""
+    if path is None:
+        paths: Sequence[Path] = ALERT_RULES_FILES
+    elif isinstance(path, Path):
+        paths = [path]
+    else:
+        paths = list(path)
 
     definitions: list[AlertDefinition] = []
-    service_id = str(data.get("service_id") or "").strip()
-    environment = str(data.get("environment") or "").strip()
     seen: set[str] = set()
-    for raw in rules:
-        if not isinstance(raw, dict):
-            raise ObservabilityDefinitionError(f"Each rule must be an object: {path}")
-        alert_name = str(raw.get("alert_name") or "").strip()
-        signal = str(raw.get("signal") or "logs").strip()
-        service_name = str(raw.get("service_name") or "").strip()
-        if not alert_name:
-            raise ObservabilityDefinitionError(f"Each rule needs alert_name: {path}")
-        if signal not in {"logs", "metrics"}:
+    for file_path in paths:
+        data = _load_json(file_path)
+        rules = data.get("rules") if isinstance(data, dict) else None
+        if not isinstance(rules, list) or not rules:
             raise ObservabilityDefinitionError(
-                f"Invalid signal {signal!r} for alert '{alert_name}' in {path}"
+                f"Alert definition must contain a non-empty 'rules' list: {file_path}"
             )
-        if not service_name:
-            raise ObservabilityDefinitionError(
-                f"Alert '{alert_name}' needs service_name: {path}"
+
+        default_service_id = str(data.get("service_id") or "").strip()
+        environment = str(data.get("environment") or "").strip()
+        for raw in rules:
+            if not isinstance(raw, dict):
+                raise ObservabilityDefinitionError(
+                    f"Each rule must be an object: {file_path}"
+                )
+            alert_name = str(raw.get("alert_name") or "").strip()
+            signal = str(raw.get("signal") or "logs").strip()
+            service_name = str(raw.get("service_name") or "").strip()
+            rule_service_id = str(
+                raw.get("service_id") or default_service_id or ""
+            ).strip()
+            if not alert_name:
+                raise ObservabilityDefinitionError(
+                    f"Each rule needs alert_name: {file_path}"
+                )
+            if signal not in {"logs", "metrics"}:
+                raise ObservabilityDefinitionError(
+                    f"Invalid signal {signal!r} for alert '{alert_name}' in {file_path}"
+                )
+            if not service_name:
+                raise ObservabilityDefinitionError(
+                    f"Alert '{alert_name}' needs service_name: {file_path}"
+                )
+            if alert_name in seen:
+                raise ObservabilityDefinitionError(
+                    f"Duplicate alert_name '{alert_name}' in {file_path}"
+                )
+            seen.add(alert_name)
+            if "alert_on_absent" in raw:
+                raise ObservabilityDefinitionError(
+                    f"Alert '{alert_name}' sets alert_on_absent in {file_path}: SigNoz ignores "
+                    "it on PromQL rules, and an error-log count has no data when healthy. "
+                    "Express 'no data is an outage' in the query with absent_over_time()."
+                )
+            raw_threshold = raw.get("threshold", 0)
+            if signal == "metrics":
+                summary = _required_text(
+                    raw.get("summary"), "summary", alert_name, file_path
+                )
+                promql = _required_text(
+                    raw.get("promql"), "promql", alert_name, file_path
+                )
+                threshold = _float_threshold(raw_threshold, alert_name, file_path)
+                match_type = str(raw.get("match_type") or "at_least_once")
+                _require_dotted_metric_selectors(promql, alert_name, file_path)
+                _reject_in_total_over_range_vectors(
+                    promql, match_type, alert_name, file_path
+                )
+                _require_alert_identity(rule_service_id, environment, file_path)
+                definitions.append(
+                    MetricAlertDefinition(
+                        alert_name=alert_name,
+                        promql=promql,
+                        summary=summary,
+                        service_id=rule_service_id,
+                        environment=environment,
+                        severity=str(raw.get("severity") or "warning"),
+                        threshold=threshold,
+                        threshold_unit=str(raw.get("threshold_unit") or ""),
+                        op=str(raw.get("op") or "above"),
+                        match_type=match_type,
+                        eval_window=str(raw.get("eval_window") or "5m0s"),
+                        frequency=str(raw.get("frequency") or "1m"),
+                        service_name=service_name,
+                        group_by=_string_list(
+                            raw.get("group_by"), "group_by", alert_name, file_path
+                        ),
+                    )
+                )
+                continue
+
+            summary = _required_text(
+                raw.get("summary")
+                or f"{service_name} emitted ERROR/FATAL logs in the last 5 minutes",
+                "summary",
+                alert_name,
+                file_path,
             )
-        if alert_name in seen:
-            raise ObservabilityDefinitionError(
-                f"Duplicate alert_name '{alert_name}' in {path}"
-            )
-        seen.add(alert_name)
-        if "alert_on_absent" in raw:
-            raise ObservabilityDefinitionError(
-                f"Alert '{alert_name}' sets alert_on_absent in {path}: SigNoz ignores "
-                "it on PromQL rules, and an error-log count has no data when healthy. "
-                "Express 'no data is an outage' in the query with absent_over_time()."
-            )
-        raw_threshold = raw.get("threshold", 0)
-        if signal == "metrics":
-            summary = _required_text(raw.get("summary"), "summary", alert_name, path)
-            promql = _required_text(raw.get("promql"), "promql", alert_name, path)
-            threshold = _float_threshold(raw_threshold, alert_name, path)
-            match_type = str(raw.get("match_type") or "at_least_once")
-            _require_dotted_metric_selectors(promql, alert_name, path)
-            _reject_in_total_over_range_vectors(promql, match_type, alert_name, path)
-            _require_alert_identity(service_id, environment, path)
+            try:
+                threshold = int(raw_threshold)
+            except (TypeError, ValueError) as exc:
+                raise ObservabilityDefinitionError(
+                    f"Invalid 'threshold' {raw_threshold!r} for alert '{alert_name}' in "
+                    f"{file_path}: must be an integer."
+                ) from exc
+            _require_alert_identity(rule_service_id, environment, file_path)
             definitions.append(
-                MetricAlertDefinition(
+                LogErrorAlertDefinition(
                     alert_name=alert_name,
-                    promql=promql,
+                    service_name=service_name,
                     summary=summary,
-                    service_id=service_id,
+                    service_id=rule_service_id,
                     environment=environment,
-                    severity=str(raw.get("severity") or "warning"),
+                    severity=str(raw.get("severity") or "error"),
                     threshold=threshold,
-                    threshold_unit=str(raw.get("threshold_unit") or ""),
-                    op=str(raw.get("op") or "above"),
-                    match_type=match_type,
+                    match_type=str(raw.get("match_type") or "at_least_once"),
                     eval_window=str(raw.get("eval_window") or "5m0s"),
                     frequency=str(raw.get("frequency") or "1m"),
-                    service_name=service_name,
-                    group_by=_string_list(
-                        raw.get("group_by"), "group_by", alert_name, path
-                    ),
                 )
             )
-            continue
-
-        summary = _required_text(
-            raw.get("summary")
-            or f"{service_name} emitted ERROR/FATAL logs in the last 5 minutes",
-            "summary",
-            alert_name,
-            path,
-        )
-        try:
-            threshold = int(raw_threshold)
-        except (TypeError, ValueError) as exc:
-            raise ObservabilityDefinitionError(
-                f"Invalid 'threshold' {raw_threshold!r} for alert '{alert_name}' in "
-                f"{path}: must be an integer."
-            ) from exc
-        _require_alert_identity(service_id, environment, path)
-        definitions.append(
-            LogErrorAlertDefinition(
-                alert_name=alert_name,
-                service_name=service_name,
-                summary=summary,
-                service_id=service_id,
-                environment=environment,
-                severity=str(raw.get("severity") or "error"),
-                threshold=threshold,
-                match_type=str(raw.get("match_type") or "at_least_once"),
-                eval_window=str(raw.get("eval_window") or "5m0s"),
-                frequency=str(raw.get("frequency") or "1m"),
-            )
-        )
     return definitions
 
 
@@ -268,7 +296,7 @@ def render_alert_payloads(
     channel_name: str | None = None,
     *,
     deploy_env: str | None = None,
-    path: Path = ALERT_RULES_FILE,
+    path: Path | Sequence[Path] | None = None,
 ) -> list[dict[str, Any]]:
     """Render every checked-in alert rule bound to the Feishu bridge channel.
 
@@ -381,21 +409,31 @@ def check_alert_routing(
                 RoutingProblem("unbound", name, reason)
                 for reason in unbound_reasons(rule)
             )
-    if managed_source:
-        for name, rules in sorted(by_name.items()):
-            if name in expected:
+    for name, rules in sorted(by_name.items()):
+        if name in expected:
+            continue
+        for rule in rules:
+            labels = rule.get("labels") or {}
+            is_canary = labels.get("canary") == "true" or name.startswith(
+                "CanarySigNozPromqlPayload-"
+            )
+            is_managed = bool(managed_source) and labels.get("source") == managed_source
+            if not (is_managed or is_canary):
                 continue
-            for rule in rules:
-                if (rule.get("labels") or {}).get("source") != managed_source:
-                    continue
+            if is_canary and not is_managed:
+                detail = (
+                    "stale canary probe rule, lingering after probe execution "
+                    "(`apply-alerts --prune` removes it)"
+                )
+            else:
                 detail = (
                     "stale managed rule, no longer in the catalog "
                     "(`apply-alerts --prune` removes it)"
                 )
-                reasons = unbound_reasons(rule)
-                if reasons:
-                    detail += "; also not delivering: " + "; ".join(reasons)
-                problems.append(RoutingProblem("stale", name, detail))
+            reasons = unbound_reasons(rule)
+            if reasons:
+                detail += "; also not delivering: " + "; ".join(reasons)
+            problems.append(RoutingProblem("stale", name, detail))
     return problems
 
 

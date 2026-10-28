@@ -783,3 +783,91 @@ def test_worker_clips_a_field_at_300_and_never_cuts_a_quote_open(world) -> None:
     assert len(loop["现象"]) < 300
     assert loop["现象"].startswith("探测循环报告不健康 — `bridge failing xxx")
     assert loop["现象"].endswith("…`") and loop["现象"].count("`") == 2
+
+
+@needs_node
+def test_evaluate_heartbeat_marks_stale_delivery_proof_unhealthy() -> None:
+    """When lastDeliveryOkAt is older than maxDeliverySilenceSeconds, mark heartbeat unhealthy."""
+    script = f"""
+    import worker from {json.dumps(str(WORKER))};
+    const {{ evaluateHeartbeat, loopStatus }} = worker;
+    const nowMs = 1800000000 * 1000;
+    const heartbeat = {{
+      environment: "production",
+      name: "platform-alerting-probes",
+      maxAgeSeconds: 5400,
+      maxDeliverySilenceSeconds: 3600,
+    }};
+    const freshRaw = JSON.stringify({{
+      schema: 2,
+      receivedAt: nowMs - 60000,
+      ok: true,
+      lastDeliveryOkAt: 1800000000 - 600,
+      detail: "ok",
+    }});
+    const vFresh = evaluateHeartbeat(heartbeat, freshRaw, nowMs, {{}});
+
+    const staleRaw = JSON.stringify({{
+      schema: 2,
+      receivedAt: nowMs - 60000,
+      ok: true,
+      lastDeliveryOkAt: 1800000000 - 4000,
+      detail: "ok",
+    }});
+    const vStale = evaluateHeartbeat(heartbeat, staleRaw, nowMs, {{}});
+
+    const envHeartbeat = {{
+      environment: "production",
+      name: "platform-alerting-probes",
+      maxAgeSeconds: 5400,
+    }};
+    const vEnv = evaluateHeartbeat(envHeartbeat, staleRaw, nowMs, {{
+      WATCHDOG_MAX_DELIVERY_SILENCE_SECONDS: "3600",
+    }});
+
+    const stateRaw = JSON.stringify({{
+      schema: 2,
+      receivedAt: nowMs - 60000,
+      ok: true,
+      detail: "ok",
+    }});
+    const priorState = {{
+      loops: {{
+        "production:platform-alerting-probes": {{
+          lastDeliveryOkAt: 1800000000 - 4000,
+        }},
+      }},
+    }};
+    const vState = evaluateHeartbeat(heartbeat, stateRaw, nowMs, {{}}, priorState);
+
+    const loopKey = "production:platform-alerting-probes";
+    const loopId = "production:platform-alerting-probes:heartbeat-unhealthy";
+    const testState = {{ alerts: {{}}, loops: {{}} }};
+    loopStatus(testState, loopKey, loopId, vStale);
+    const persistedLoop = testState.loops[loopKey];
+    const vPersisted = evaluateHeartbeat(heartbeat, stateRaw, nowMs, {{}}, testState);
+
+    console.log(JSON.stringify({{
+      vFresh: {{ state: vFresh.state, ok: vFresh.record.ok }},
+      vStale: {{ state: vStale.state, ok: vStale.record.ok, reason: vStale.reason, failureClass: vStale.failureClass }},
+      vEnv: {{ state: vEnv.state, ok: vEnv.record.ok, reason: vEnv.reason, failureClass: vEnv.failureClass }},
+      vState: {{ state: vState.state, ok: vState.record.ok, reason: vState.reason, failureClass: vState.failureClass }},
+      persistedLoop,
+      vPersisted: {{ state: vPersisted.state, ok: vPersisted.record.ok, reason: vPersisted.reason, failureClass: vPersisted.failureClass }},
+    }}));
+    """
+    res = subprocess.run(
+        [NODE, "--input-type=module", "-e", script],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    out = json.loads(res.stdout)
+    assert out["vFresh"]["state"] == "fresh"
+    assert out["vFresh"]["ok"] is True
+    for key in ("vStale", "vEnv", "vState", "vPersisted"):
+        assert out[key]["state"] == "unhealthy"
+        assert out[key]["ok"] is False
+        assert out[key]["reason"] == "delivery proof stale"
+        assert out[key]["failureClass"] == "alert-pipeline"
+    assert out["persistedLoop"]["lastDeliveryOkAt"] == 1800000000 - 4000

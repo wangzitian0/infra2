@@ -276,6 +276,7 @@ entries:
       - common/observability/probe_environment.py
       - common/tests/test_probe_environment.py
       - common/tests/test_probe_environment_callers.py
+      - common/tests/test_recall_drill.py
   watchdog.signals:
     owner: docs/ssot/watchdog-signals.yaml
     summary: Active watchdog signal inventory and ownership

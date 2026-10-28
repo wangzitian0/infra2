@@ -117,7 +117,13 @@ export default {
     }
     return jsonResponse({ ok: false, error: "not found" }, 404);
   },
+
+  evaluateHeartbeat,
+  heartbeatVerdict,
+  loopStatus,
 };
+
+export { evaluateHeartbeat, heartbeatVerdict, loopStatus };
 
 async function runScheduledWatchdog(env, nowMs) {
   let runError = null;
@@ -291,7 +297,7 @@ async function observe(env, config, state, nowMs) {
   // an unhealthy loop never suppresses.
   const vpsFailingRoutes = new Map();
   pagedHeartbeats.forEach((heartbeat, index) => {
-    const verdict = heartbeatVerdict(heartbeat, records[index], nowMs);
+    const verdict = evaluateHeartbeat(heartbeat, records[index], nowMs, env, state);
     const outage = trackOutageEdge(state, heartbeat, verdict, nowMs);
     observations.push(...heartbeatObservations(state, heartbeat, verdict, outage));
     const record = verdict.record;
@@ -384,7 +390,7 @@ function entrypointObservation(state, target, probe, threshold, vpsFailingRoutes
   };
 }
 
-function heartbeatVerdict(heartbeat, raw, nowMs) {
+function evaluateHeartbeat(heartbeat, raw, nowMs, env = {}, state = null) {
   if (!raw) {
     return { state: "missing", detail: "心跳缺失", ageSeconds: null, record: null };
   }
@@ -400,7 +406,38 @@ function heartbeatVerdict(heartbeat, raw, nowMs) {
   if (ageSeconds > maxAge) {
     return { state: "stale", detail: `心跳过期:${ageSeconds}s 前(上限 ${maxAge}s)`, ageSeconds, record };
   }
+
+  const key = `${heartbeat.environment}:${heartbeat.name}`;
+  const maxDeliverySilence = Number(
+    heartbeat.maxDeliverySilenceSeconds ?? (env && env.WATCHDOG_MAX_DELIVERY_SILENCE_SECONDS) ?? 0,
+  );
+  const deliveryOkAt =
+    record.lastDeliveryOkAt !== null && record.lastDeliveryOkAt !== undefined
+      ? record.lastDeliveryOkAt
+      : (state && state.loops && state.loops[key] && state.loops[key].lastDeliveryOkAt);
+
+  if (maxDeliverySilence > 0 && deliveryOkAt !== null && deliveryOkAt !== undefined) {
+    const silenceSeconds = Math.floor(nowMs / 1000) - Number(deliveryOkAt);
+    if (silenceSeconds > maxDeliverySilence) {
+      record.ok = false;
+      record.detail = "delivery proof stale";
+      record.failureClass = "alert-pipeline";
+      return {
+        state: "unhealthy",
+        detail: "delivery proof stale",
+        ageSeconds,
+        record,
+        reason: "delivery proof stale",
+        failureClass: "alert-pipeline",
+      };
+    }
+  }
+
   return { state: "fresh", detail: `心跳新鲜:${ageSeconds}s 前`, ageSeconds, record };
+}
+
+function heartbeatVerdict(heartbeat, raw, nowMs, env = {}, state = null) {
+  return evaluateHeartbeat(heartbeat, raw, nowMs, env, state);
 }
 
 function heartbeatObservations(state, heartbeat, verdict, outage) {
@@ -410,7 +447,7 @@ function heartbeatObservations(state, heartbeat, verdict, outage) {
     name: heartbeat.name,
     service_id: heartbeat.service_id || "infra/unregistered",
   };
-  const fresh = verdict.state === "fresh";
+  const fresh = verdict.state === "fresh" || verdict.state === "unhealthy";
   const stale = {
     ...common,
     identity: `${key}:heartbeat-stale`,
@@ -427,7 +464,7 @@ function heartbeatObservations(state, heartbeat, verdict, outage) {
   const unhealthy = {
     ...common,
     identity: `${key}:heartbeat-unhealthy`,
-    failureClass: "alert-pipeline",
+    failureClass: (verdict.record && verdict.record.failureClass) || "alert-pipeline",
     severity: "P1",
     status: loopStatus(state, key, `${key}:heartbeat-unhealthy`, verdict),
     summary: "探测循环报告不健康",
@@ -442,14 +479,20 @@ function heartbeatObservations(state, heartbeat, verdict, outage) {
 // stale record says nothing about the loop now. Either is "unknown": no counter
 // moves, nothing fires or resolves.
 function loopStatus(state, key, identity, verdict) {
-  if (verdict.state !== "fresh" || Number(verdict.record.schema) !== 2) {
+  if ((verdict.state !== "fresh" && verdict.state !== "unhealthy") || Number(verdict.record.schema) !== 2) {
     return "unknown";
   }
   const active = Boolean(state.alerts[identity]);
   const streak = state.loops[key] || { bad: 0, good: 0 };
   if (verdict.record.ok === false) {
     const bad = Math.min(LOOP_FAILURE_RUNS, Number(streak.bad || 0) + 1);
-    state.loops[key] = { bad, good: 0 };
+    const lastDeliveryOkAt = streak.lastDeliveryOkAt ?? verdict.record?.lastDeliveryOkAt ?? null;
+    state.loops[key] = {
+      ...streak,
+      bad,
+      good: 0,
+      ...(lastDeliveryOkAt ? { lastDeliveryOkAt } : {}),
+    };
     return active || bad >= LOOP_FAILURE_RUNS ? "failing" : "pending";
   }
   if (!active) {
@@ -461,7 +504,12 @@ function loopStatus(state, key, identity, verdict) {
     delete state.loops[key];
     return "ok";
   }
-  state.loops[key] = { bad: Number(streak.bad || 0), good };
+  const lastDeliveryOkAt = verdict.record?.lastDeliveryOkAt ?? streak.lastDeliveryOkAt ?? null;
+  state.loops[key] = {
+    bad: Number(streak.bad || 0),
+    good,
+    ...(lastDeliveryOkAt ? { lastDeliveryOkAt } : {}),
+  };
   return "pending";
 }
 
@@ -475,7 +523,7 @@ function trackOutageEdge(state, heartbeat, verdict, nowMs) {
     (edge) => edge.environment === heartbeat.environment && edge.name === heartbeat.name && edge.end === null,
   );
   const lastSeen = verdict.record ? Number(verdict.record.receivedAt || 0) : 0;
-  if (verdict.state === "fresh") {
+  if (verdict.state === "fresh" || verdict.state === "unhealthy") {
     if (open) {
       open.end = lastSeen;
       open.recoveredAt = nowMs;
@@ -712,7 +760,7 @@ function runbookUrl(obs) {
 //   ceil(86400 / minWriteInterval)   refresh writes
 // + statusChangeWritesPerDay         early writes for a changed verdict
 // per UTC day, however often the runner posts and however its verdict flaps.
-const DEFAULT_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS = 600;
+const DEFAULT_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS = 1800;
 const DEFAULT_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY = 24;
 // Hard runtime limits, whatever the Worker env says.
 const MIN_HEARTBEAT_WRITE_INTERVAL_SECONDS = 600;
