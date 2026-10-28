@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -73,36 +74,32 @@ def test_recall_drill_cli_dry_run_exits_zero() -> None:
         capture_output=True,
         text=True,
         check=False,
+        cwd=str(ROOT),
+        env={**os.environ, "PYTHONPATH": str(ROOT)},
     )
     assert result.returncode == 0, result.stderr
     assert '"status": "pass"' in result.stdout
     assert '"total_classes": 8' in result.stdout
 
 
-def test_recall_drill_cli_summary_reports_verified_counts() -> None:
+def test_recall_drill_cli_summary_reports_verified_counts(capsys, monkeypatch) -> None:
     """Verify CLI prints accurate passed class counts in text summary output."""
-    res_success = subprocess.run(
-        [sys.executable, str(CLI)],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert res_success.returncode == 0
-    assert "Recall drill: pass (8/8 classes verified)" in res_success.stdout
+    import tools.recall_drill as cli
+    from common.observability.recall_drill import SIMULATED_FAILURES
 
-    fail_script = (
-        "import sys, tools.recall_drill as cli, common.observability.recall_drill as rd; "
-        "rd.SIMULATED_FAILURES['host-reachability']['signal_id'] = 'invalid.signal.id'; "
-        "sys.exit(cli.main())"
+    monkeypatch.setattr(sys, "argv", ["recall_drill.py"])
+    assert cli.main() == 0
+    out, _ = capsys.readouterr()
+    assert "Recall drill: pass (8/8 classes verified)" in out
+
+    monkeypatch.setitem(
+        SIMULATED_FAILURES["host-reachability"],
+        "signal_id",
+        "invalid.signal.id",
     )
-    res_fail = subprocess.run(
-        [sys.executable, "-c", fail_script],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert res_fail.returncode == 2
-    assert "Recall drill: fail (7/8 classes verified)" in res_fail.stdout
+    assert cli.main() == 2
+    out_fail, _ = capsys.readouterr()
+    assert "Recall drill: fail (7/8 classes verified)" in out_fail
 
 
 def test_recall_drill_cli_refuses_no_dry_run() -> None:
@@ -112,6 +109,8 @@ def test_recall_drill_cli_refuses_no_dry_run() -> None:
         capture_output=True,
         text=True,
         check=False,
+        cwd=str(ROOT),
+        env={**os.environ, "PYTHONPATH": str(ROOT)},
     )
     assert result.returncode == 1
     assert "Recall drill only supports dry_run=True" in result.stderr
