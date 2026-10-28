@@ -289,10 +289,12 @@ class AppDeployer(Deployer):
             )
 
         secrets = cls.secrets_backend()
+        try:
+            env_bucket = cls.compose_env_base(cls.env()).get("S3_BUCKET")
+        except Exception:
+            env_bucket = None
         bucket_name = (
-            cls.compose_env_base(cls.env()).get("S3_BUCKET")
-            or secrets.get("S3_BUCKET")
-            or "statements"
+            env_bucket or secrets.get("S3_BUCKET") or "statements"
         )  # = compose default (#637)
         existing_access_key = secrets.get("S3_ACCESS_KEY")
         existing_secret_key = secrets.get("S3_SECRET_KEY")
