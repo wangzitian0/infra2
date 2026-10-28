@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 import io
 import json
@@ -30,6 +31,9 @@ from common.alerting import (
 )
 from common.alerting.types import _one_line
 from common.core.registry import domain_for_service
+
+_DEFAULT_URLOPEN = urlopen
+_SKIPPED_RUN_EVENTS = frozenset({"push", "pull_request", "pull_request_target"})
 
 WORKFLOW_FILE = "ops-checks.yml"
 WATCHDOG_JOB_NAME = "Check infra2 host and alert bridge"
@@ -89,6 +93,7 @@ def fetch_recent_runs(
             break
 
         reached_cutoff = False
+        candidates: list[tuple[dict[str, Any], str | int]] = []
         for run in page_runs:
             created = _run_created_at(run)
             if created is None:
@@ -96,17 +101,43 @@ def fetch_recent_runs(
             if created < cutoff:
                 reached_cutoff = True
                 continue
+            event_name = str(run.get("event") or "").strip().lower()
+            if event_name in _SKIPPED_RUN_EVENTS:
+                continue
             run_id = run.get("id") or run.get("databaseId")
             if not run_id:
                 continue
-            if run_includes_job(
-                repository,
-                token,
-                run_id,
-                job_name=watchdog_job_name,
-                opener=active_opener,
-            ):
-                matching_runs.append(run)
+            candidates.append((run, run_id))
+
+        if candidates:
+            if opener is None and urlopen is _DEFAULT_URLOPEN and len(candidates) > 1:
+                with ThreadPoolExecutor(max_workers=8) as pool:
+                    included = list(
+                        pool.map(
+                            lambda item: run_includes_job(
+                                repository,
+                                token,
+                                item[1],
+                                job_name=watchdog_job_name,
+                                opener=active_opener,
+                            ),
+                            candidates,
+                        )
+                    )
+            else:
+                included = [
+                    run_includes_job(
+                        repository,
+                        token,
+                        run_id,
+                        job_name=watchdog_job_name,
+                        opener=active_opener,
+                    )
+                    for _run, run_id in candidates
+                ]
+            for (run, _run_id), keep in zip(candidates, included, strict=True):
+                if keep:
+                    matching_runs.append(run)
 
         if reached_cutoff or len(page_runs) < per_page:
             break
@@ -586,6 +617,10 @@ def collect_weekly_stability_section(
 ) -> tuple[str, list[str]]:
     """Collect 7-day availability ledger and correlate with Cloudflare outages."""
     import subprocess
+    from common.observability.ledger import (
+        WORST_SIGNALS_SHOWN,
+        _format_degraded_signal_line,
+    )
     from common.observability.stability_report import (
         DEFAULT_OUTAGES_URL,
         OPTIONAL_ENVIRONMENTS,
@@ -626,12 +661,31 @@ def collect_weekly_stability_section(
     outage_min = unavail.get("outage_minutes", 0.0)
     outage_suffix = f" ({outage_min}m)" if outage_min > 0 else ""
 
+    perfect_count = prod_summary["perfect_count"]
+    signal_count = prod_summary["signal_count"]
+    probe_perfect = prod_summary.get("probe_perfect_count", perfect_count)
+    perfect_part = f"Signals at 100%: {perfect_count}/{signal_count}"
+    if probe_perfect != perfect_count:
+        perfect_part += f" (无探针故障: {probe_perfect}/{signal_count})"
+
     prod_line = (
         f"Production availability: {prod_summary['overall_uptime_pct']}% · "
-        f"Signals at 100%: {prod_summary['perfect_count']}/{prod_summary['signal_count']} · "
+        f"{perfect_part} · "
         f"Cloudflare outages: {outage_count}{outage_suffix}"
     )
     lines = [prod_line, *staging_lines]
+    unavail_min = float(unavail.get("minutes") or 0.0)
+    if unavail_min > 0:
+        gap_min = float(unavail.get("gap_minutes") or 0.0)
+        lines.append(
+            f"Unavailability breakdown: {unavail_min} min total "
+            f"({gap_min} min probe-runner gap, {outage_min} min Cloudflare outage)"
+        )
+    degraded = [
+        item for item in prod_summary.get("signals", []) if item.get("fail", 0) > 0
+    ][:WORST_SIGNALS_SHOWN]
+    for item in degraded:
+        lines.append(f"Degraded signal: {_format_degraded_signal_line(item)}")
     section_text = "\n".join(lines)
     return section_text, lines
 
@@ -701,11 +755,13 @@ def build_digest_message(
     ]
     failed_urls = summary.get("failed_run_urls", [])
     if isinstance(failed_urls, list) and failed_urls:
+        lines.append("")
         lines.append("Recent failed runs:")
         for url in failed_urls:
             lines.append(f"- {url}")
     audit = summary.get("log_audit")
     if isinstance(audit, Mapping):
+        lines.append("")
         lines.append("Alert recall audit:")
         lines.append(
             f"Reviewed runs: {audit['reviewed_run_count']} | "
@@ -737,12 +793,14 @@ def build_digest_message(
         stability_section=stability_section,
     )
     if stab_lines:
+        lines.append("")
         lines.append("Availability (ledger ∩ /outages):")
         for entry in stab_lines:
             clean = entry[2:].strip() if entry.startswith(("- ", "• ")) else entry
             lines.append(f"- {clean}")
     estate_apps = summary.get("estate_apps")
     if isinstance(estate_apps, list) and estate_apps:
+        lines.append("")
         lines.append("Estate app release parity:")
         for app_entry in estate_apps:
             if not isinstance(app_entry, Mapping):
@@ -755,11 +813,13 @@ def build_digest_message(
             )
     stale_issues = summary.get("stale_issues")
     if isinstance(stale_issues, list) and stale_issues:
+        lines.append("")
         lines.append(f"Stale open issues ({STALE_ISSUE_DAYS}+ days untouched):")
         for issue in stale_issues[:MAX_STALE_ISSUES_SHOWN]:
             lines.append(f"- #{issue['number']} {issue['title']} ({issue['url']})")
         if len(stale_issues) > MAX_STALE_ISSUES_SHOWN:
             lines.append(f"  ...and {len(stale_issues) - MAX_STALE_ISSUES_SHOWN} more")
+    lines.append("")
     lines.append(f"Runbook: {WATCHDOG_RUNBOOK_URL}")
     return "\n".join(lines)
 
@@ -802,21 +862,28 @@ def build_digest_card(
         f"{icon} {REPORT_TITLE_PREFIX}[WATCHDOG DIGEST] "
         f"Infra2 out-of-band {cadence} summary"
     )
+    rate_pct = float(summary.get("success_rate_pct", 0.0))
+    rate_icon = (
+        "🟢"
+        if failure_count == 0 and rate_pct >= 99.0
+        else ("🟡" if rate_pct >= 90.0 else "🔴")
+    )
+    recall_icon = "🟢" if missing_recall == 0 else "🔴"
     kpi_fields = [
         (
-            "Watchdog Runs",
-            f"{summary['success_count']}/{summary['total_runs']} ({summary['success_rate_pct']}%)",
+            "巡检成功率 (Watchdog)",
+            f"{rate_icon} {summary['success_count']}/{summary['total_runs']} ({rate_pct}%)",
         ),
         (
-            "Alert Recall Evidence",
-            f"{recall_pct}% (missing: {missing_recall})",
+            "告警召回率 (Recall)",
+            f"{recall_icon} {recall_pct}% (缺失: {missing_recall})",
         ),
         (
-            "Window (UTC)",
+            "统计窗口 (Window UTC)",
             f"{summary['week_start_utc']} → {summary['week_end_utc']}",
         ),
         (
-            "Repository & Stale Issues",
+            "仓库与陈旧工单 (Repo & Stale)",
             f"`{repository}` · {len(stale_issues)} stale",
         ),
     ]
@@ -825,18 +892,25 @@ def build_digest_card(
 
     estate_apps = summary.get("estate_apps")
     if isinstance(estate_apps, list) and estate_apps:
-        app_lines = ["**Estate App Release & Health Parity**"]
+        app_lines = ["**📦 核心应用版本与健康对齐 (Estate Parity)**"]
         for app_entry in estate_apps:
             if not isinstance(app_entry, Mapping):
                 continue
             prod = app_entry.get("production") or {}
             stg = app_entry.get("staging") or {}
             parity = app_entry.get("parity", "unknown")
-            status_icon = "✅" if parity == "in_sync" else "🔄"
+            if parity == "in_sync":
+                parity_badge = "🟢 对齐 (in_sync)"
+            elif parity == "ahead_or_drift":
+                parity_badge = "🟡 预发领先或漂移 (ahead_or_drift)"
+            else:
+                parity_badge = "⚪ 未知 (unknown)"
+            prod_label = f"[Prod]({prod['url']})" if prod.get("url") else "Prod"
+            stg_label = f"[Staging]({stg['url']})" if stg.get("url") else "Staging"
             app_lines.append(
-                f"{status_icon} **{app_entry.get('app')}**: Prod `{prod.get('version')}` "
-                f"({prod.get('status')}) · Staging `{stg.get('version')}` "
-                f"({stg.get('status')})"
+                f"• **{app_entry.get('app')}** — {parity_badge}  "
+                f"{prod_label}: `{prod.get('version')}` ({prod.get('status')}) · "
+                f"{stg_label}: `{stg.get('version')}` ({stg.get('status')})"
             )
         sections.append("\n".join(app_lines))
         hr_after.add(len(sections) - 1)
@@ -855,7 +929,17 @@ def build_digest_card(
         card_lines = [card_title]
         for entry in stab_lines:
             clean = entry[2:].strip() if entry.startswith(("- ", "• ")) else entry
-            card_lines.append(f"• {clean}")
+            if clean.startswith(("🟢", "🟡", "🔴", "⏱️")):
+                card_lines.append(f"• {clean}")
+            elif clean.startswith("Degraded signal:"):
+                detail = clean.removeprefix("Degraded signal:").strip()
+                card_lines.append(f"  • {detail}")
+            elif clean.startswith("Unavailability breakdown:"):
+                card_lines.append(f"• ⏱️ {clean}")
+            elif "100.0%" in clean and "0/" not in clean:
+                card_lines.append(f"• 🟢 {clean}")
+            else:
+                card_lines.append(f"• 🟡 {clean}")
         sections.append("\n".join(card_lines))
         hr_after.add(len(sections) - 1)
 
@@ -869,21 +953,32 @@ def build_digest_card(
                 )[:MAX_FAILURE_DOMAINS_SHOWN]
             )
             if isinstance(domains, Mapping) and domains
-            else "none"
+            else "none (无)"
         )
-        audit_md = (
-            "**Alert Recall Audit**\n"
-            f"• Reviewed runs: **{audit.get('reviewed_run_count', 0)}** · "
-            f"Alertable: **{audit.get('alertable_run_count', 0)}** · "
-            f"Delivered: **{audit.get('delivery_success_run_count', 0)}** · "
-            f"Fallback issues: **{audit.get('fallback_issue_run_count', 0)}**\n"
-            f"• Failure domains: {domain_text}"
-        )
-        sections.append(audit_md)
+        audit_lines = [
+            "**🔔 告警召回与投递审计 (Recall Audit)**",
+            (
+                f"• **日志抽检**：已审计 **{audit.get('reviewed_run_count', 0)}** 次运行 "
+                f"（结构化事件 **{audit.get('structured_event_run_count', 0)}** 次 · "
+                f"失败检查 **{audit.get('failed_check_count', 0)}** 项）"
+            ),
+            (
+                f"• **召回闭环**：应告警 **{audit.get('alertable_run_count', 0)}** 次 · "
+                f"投递成功 **{audit.get('delivery_success_run_count', 0)}** 次 · "
+                f"兜底建单 **{audit.get('fallback_issue_run_count', 0)}** 次 · "
+                f"缺失证据 **{audit.get('missing_alert_evidence_run_count', 0)}** 次"
+            ),
+            f"• **故障域分布**：{domain_text}",
+        ]
+        if audit.get("log_fetch_error_count"):
+            audit_lines.append(
+                f"• ⚠️ **日志拉取异常**：{audit['log_fetch_error_count']} 次"
+            )
+        sections.append("\n".join(audit_lines))
 
     failed_urls = summary.get("failed_run_urls", [])
     if isinstance(failed_urls, list) and failed_urls:
-        fail_lines = ["**Recent Failed Runs**"] + [
+        fail_lines = ["**🚨 近期失败运行 (Recent Failed Runs)**"] + [
             f"• [{url.rsplit('/', 1)[-1]}]({url})"
             for url in failed_urls[:MAX_FAILED_RUN_URLS]
         ]
@@ -891,7 +986,7 @@ def build_digest_card(
 
     if stale_issues:
         issue_lines = [
-            f"**Stale Open Issues ({STALE_ISSUE_DAYS}+ days untouched)**"
+            f"**🗂️ 陈旧未关闭工单 (Stale Open Issues · {STALE_ISSUE_DAYS}+ days untouched)**"
         ] + [
             f"• [#{issue['number']}]({issue['url']}) {issue['title']}"
             for issue in stale_issues[:MAX_STALE_ISSUES_SHOWN]

@@ -641,13 +641,18 @@ def test_collect_weekly_stability_section_correlates_7day_ledger_and_outages() -
     )
 
     assert isinstance(section_text, str)
-    assert len(lines) == 2
+    assert len(lines) == 4
     assert section_text == "\n".join(lines)
     assert "Production availability:" in lines[0]
-    assert "Signals at 100%: 0/1" in lines[0]
+    assert "Signals at 100%: 0/1 (无探针故障: 1/1)" in lines[0]
     assert "Cloudflare outages: 1 (45.0m)" in lines[0]
     assert "staging (reported, never paged):" in lines[1]
     assert "signals at 100%" in lines[1]
+    assert (
+        "Unavailability breakdown: 45.0 min total (0.0 min probe-runner gap, 45.0 min Cloudflare outage)"
+        in lines[2]
+    )
+    assert "production:minio-public-route" in lines[3]
 
 
 def test_collect_weekly_stability_section_raises_on_production_ledger_failure() -> None:

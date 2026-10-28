@@ -786,3 +786,67 @@ def test_run_digest_cli_monthly_argument(monkeypatch) -> None:
     assert "Infra2 out-of-band monthly summary" in delivered_texts[-1]
     card_blob = json.dumps(delivered_cards[-1], ensure_ascii=False)
     assert "📈 月度运行质量汇总（30d）" in card_blob
+
+
+def test_fetch_recent_runs_skips_push_and_pr_events_without_fetching_jobs(
+    monkeypatch,
+) -> None:
+    """Verify push and pull_request workflow runs do not trigger job API calls."""
+    digest = _load_module()
+    now = datetime(2026, 6, 9, 0, 0, tzinfo=UTC)
+    workflow_runs = [
+        {
+            "id": 10,
+            "event": "push",
+            "created_at": "2026-06-08T01:00:00Z",
+            "conclusion": "success",
+        },
+        {
+            "id": 11,
+            "event": "pull_request",
+            "created_at": "2026-06-08T00:30:00Z",
+            "conclusion": "success",
+        },
+        {
+            "id": 12,
+            "event": "schedule",
+            "created_at": "2026-06-08T00:00:00Z",
+            "conclusion": "success",
+        },
+    ]
+    requested_job_runs: list[str] = []
+
+    class _Response:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps(self._payload).encode("utf-8")
+
+    def fake_urlopen(request, timeout):  # noqa: ANN001, ARG001
+        parsed = urlparse(request.full_url)
+        if parsed.path.endswith("/actions/workflows/ops-checks.yml/runs"):
+            return _Response({"workflow_runs": workflow_runs})
+        if "/actions/runs/" in parsed.path and parsed.path.endswith("/jobs"):
+            run_id = parsed.path.split("/actions/runs/", 1)[1].split("/", 1)[0]
+            requested_job_runs.append(run_id)
+            return _Response(
+                {"jobs": [{"name": digest.WATCHDOG_JOB_NAME, "conclusion": "success"}]}
+            )
+        raise AssertionError(f"Unexpected URL: {request.full_url}")
+
+    monkeypatch.setattr(digest, "urlopen", fake_urlopen)
+    runs = digest.fetch_recent_runs(
+        "wangzitian0/infra2",
+        "token",
+        per_page=10,
+        now=now,
+    )
+    assert [run["id"] for run in runs] == [12]
+    assert requested_job_runs == ["12"]
