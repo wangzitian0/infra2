@@ -175,13 +175,13 @@ class HeadFacts:
 
 
 # Exit codes (#740, #1340). A caller acts on the code and outcome, never on the prose:
-# 1 means waiting will fix it, 2 means owner or independent review is required,
-# 3 means someone must act, 4 means this run could not judge the PR.
+# 1 means waiting will fix it, 2 means owner approval is required (production paths only),
+# 3 means independent review or action is required, 4 means this run could not judge the PR.
 EXIT_READY, EXIT_WAIT, EXIT_OWNER, EXIT_REVIEW, EXIT_ACTION, EXIT_UNEVALUABLE = (
     0,
     1,
     2,
-    2,
+    3,
     3,
     4,
 )

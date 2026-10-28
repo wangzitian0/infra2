@@ -507,12 +507,12 @@ def test_main_json_reports_the_owner_gate(capsys):
                 return json.dumps(doc)
             return out
 
-    assert gate.main(["704", "--json"], gh=_Protected(), now=lambda: NOW) == 2
+    assert gate.main(["704", "--json"], gh=_Protected(), now=lambda: NOW) == 3
     doc = json.loads(capsys.readouterr().out)
     assert (
         doc["review_required"] and not doc["owner_required"] and doc["ready"] is False
     )
-    assert doc["outcome"] == "review_required"
+    assert doc["outcome"] == "review_required" and doc["exit_code"] == 3
 
     assert (
         gate.main(
@@ -1176,7 +1176,7 @@ def test_rule_text_files_still_need_the_owner_without_a_citation():
     assert (
         verdict.review_required
         and not verdict.owner_required
-        and verdict.exit_code == 2
+        and verdict.exit_code == 3
     )
     assert any("what decides merges" in r for r in verdict.reasons)
     assert any("citing the owner instruction" in r for r in verdict.reasons), (
@@ -1195,7 +1195,7 @@ def test_a_header_with_no_quote_beneath_it_still_needs_the_owner():
     assert (
         verdict.review_required
         and not verdict.owner_required
-        and verdict.exit_code == 2
+        and verdict.exit_code == 3
     )
 
 
@@ -1215,7 +1215,7 @@ def test_a_citation_does_not_excuse_the_gates_own_code():
     assert (
         verdict.review_required
         and not verdict.owner_required
-        and verdict.exit_code == 2
+        and verdict.exit_code == 3
     )
     assert "tools/pr_merge_gate.py" in verdict.reasons[0]
     assert "AGENTS.md" not in verdict.reasons[0], (
@@ -1468,14 +1468,14 @@ def test_a_draft_is_not_mergeable():
 
 
 def test_a_pr_targeting_something_other_than_main_needs_the_owner():
-    # Same: `base=` appeared once, as base="main". Non-main base returns exit 2
+    # Same: `base=` appeared once, as base="main". Non-main base returns exit 3
     # with review_required=True and owner_required=False (#1340).
     verdict = gate.evaluate(_green(base="release/1.0"), now=NOW)
     assert not verdict.ready
     assert (
         verdict.review_required
         and not verdict.owner_required
-        and verdict.exit_code == 2
+        and verdict.exit_code == 3
     )
     assert any("not main" in r for r in verdict.reasons)
 
@@ -1757,7 +1757,7 @@ def test_the_same_change_unproven_still_needs_the_owner():
     assert (
         verdict.review_required
         and not verdict.owner_required
-        and verdict.exit_code == 2
+        and verdict.exit_code == 3
     )
     assert "ci-gate-inventory.yaml" in verdict.reasons[0]
 
@@ -1774,7 +1774,7 @@ def test_a_proven_file_does_not_excuse_an_unproven_one():
     assert (
         verdict.review_required
         and not verdict.owner_required
-        and verdict.exit_code == 2
+        and verdict.exit_code == 3
     )
     assert "tools/pr_merge_gate.py" in verdict.reasons[0]
     assert "ci-gate-inventory.yaml" not in verdict.reasons[0], (
@@ -2161,7 +2161,7 @@ def test_a_shadow_of_the_gate_goes_to_the_owner_when_the_lock_holds(path):
     assert (
         verdict.review_required
         and not verdict.owner_required
-        and verdict.exit_code == 2
+        and verdict.exit_code == 3
     ), verdict.reasons
     assert any("what decides merges" in r and path in r for r in verdict.reasons)
 
@@ -2370,7 +2370,7 @@ def test_the_guard_of_the_lock_stays_with_the_owner_when_the_lock_holds(path):
     assert (
         verdict.review_required
         and not verdict.owner_required
-        and verdict.exit_code == 2
+        and verdict.exit_code == 3
     ), path
     reason = next(r for r in verdict.reasons if "what decides merges" in r)
     assert path in reason and CI_WORKFLOW not in reason
@@ -2606,7 +2606,7 @@ def test_a_required_check_workflow_needs_the_owner_when_the_lock_holds():
     assert (
         verdict.review_required
         and not verdict.owner_required
-        and verdict.exit_code == 2
+        and verdict.exit_code == 3
     )
     assert _required_line(INFRA_CI) in verdict.reasons
 
@@ -2621,7 +2621,7 @@ def test_a_proven_tighter_required_check_workflow_still_needs_the_owner():
     assert (
         verdict.review_required
         and not verdict.owner_required
-        and verdict.exit_code == 2
+        and verdict.exit_code == 3
     ), verdict.reasons
     assert _required_line(INFRA_CI) in verdict.reasons
 
@@ -2684,7 +2684,7 @@ def test_a_mixed_pr_names_only_the_required_check_workflow():
     assert (
         verdict.review_required
         and not verdict.owner_required
-        and verdict.exit_code == 2
+        and verdict.exit_code == 3
     )
     decides = next(r for r in verdict.reasons if "what decides merges" in r)
     assert INFRA_CI in decides and deploy not in decides
@@ -2868,7 +2868,7 @@ def test_a_weakened_required_check_workflow_goes_to_the_owner(kind):
     assert (
         verdict.review_required
         and not verdict.owner_required
-        and verdict.exit_code == 2
+        and verdict.exit_code == 3
     ), verdict.reasons
     assert _required_line(INFRA_CI) in verdict.reasons
 
@@ -2918,7 +2918,7 @@ def test_a_changed_path_in_another_case_is_held_too():
     assert (
         verdict.review_required
         and not verdict.owner_required
-        and verdict.exit_code == 2
+        and verdict.exit_code == 3
     ), verdict.reasons
 
 
@@ -3106,7 +3106,7 @@ def test_gate_change_checklist_clears_closure_file_when_lock_and_evidence_and_re
     assert (
         rule_verdict.review_required
         and not rule_verdict.owner_required
-        and rule_verdict.exit_code == 2
+        and rule_verdict.exit_code == 3
     )
 
 
@@ -3215,12 +3215,13 @@ def test_gate_edit_with_recorded_review_returns_exit_zero_through_pr_merge_gate(
             return out
 
     unreviewed_gh = _NoReviewGh(files=("common/gate/evaluator.py",))
-    assert gate.main(["704", "--json"], gh=unreviewed_gh, now=lambda: READY_AT) == 2
+    assert gate.main(["704", "--json"], gh=unreviewed_gh, now=lambda: READY_AT) == 3
     unrev_doc = _json_verdict(capsys)
     assert unrev_doc["ready"] is False
     assert unrev_doc["owner_required"] is False
     assert unrev_doc["review_required"] is True
     assert unrev_doc["outcome"] == "review_required"
+    assert unrev_doc["exit_code"] == 3
 
 
 @pytest.mark.parametrize(
@@ -3288,9 +3289,10 @@ def test_production_env_or_unclassified_scheduled_jobs_return_owner_outcome(
 
 
 def test_no_exit_path_labels_a_non_production_pr_owner():
-    """#1340 Criterion 3: no exit path labels a non-production PR 'owner' across every reason kind."""
+    """#1340 Criterion 3: no exit path labels a non-production PR 'owner' or exits 2 across every reason kind."""
     from common.gate.types import (
         ACT,
+        EXIT_OWNER,
         OWNER,
         REASON_KINDS,
         REVIEW,
@@ -3312,9 +3314,11 @@ def test_no_exit_path_labels_a_non_production_pr_owner():
         )
         if kind != OWNER:
             assert verdict.outcome != "owner", kind
+            assert verdict.exit_code != EXIT_OWNER, kind
             assert not verdict.owner_required, kind
         else:
             assert verdict.outcome == "owner"
+            assert verdict.exit_code == EXIT_OWNER
             assert verdict.owner_required
 
     non_production_cases = [
@@ -3351,5 +3355,6 @@ def test_no_exit_path_labels_a_non_production_pr_owner():
         verdict = gate.evaluate(facts, now=NOW)
         assert verdict.outcome == expected_outcome, (facts, verdict.reasons)
         assert verdict.outcome != "owner", (facts, verdict.reasons)
+        assert verdict.exit_code != EXIT_OWNER, (facts, verdict.reasons)
         assert not verdict.owner_required, (facts, verdict.reasons)
         assert "needs the owner" not in gate.render(facts, verdict)

@@ -151,22 +151,22 @@ def test_evaluate_step_pipeline_end_to_end():
     facts = _base_facts(last_push_at=1000.0)
     verdict = evaluate(facts, now=2000.0, quiet_minutes=12, policy="clock")
     # In wangzitian0/infra2, common/gate/evaluator.py is in the review set (#1340):
-    # without a verified lock and recorded review it returns review_required, not owner.
+    # without a verified lock and recorded review it returns review_required (exit 3), not owner (exit 2).
     assert not verdict.ready
     assert verdict.review_required
     assert not verdict.owner_required
     assert not verdict.unevaluable
-    assert verdict.exit_code == 2
+    assert verdict.exit_code == 3
     assert verdict.outcome == "review_required"
     assert any("changes what decides merges" in r for r in verdict.reasons)
 
 
 def test_reason_kinds_partition_owner_from_non_production_outcomes():
-    """#1340: only OWNER reason kind yields outcome == 'owner'; non-production kinds never do."""
+    """#1340: only OWNER reason kind yields outcome == 'owner' or exit_code == 2."""
     assert set(REASON_KINDS) == {WAIT, REVIEW, OWNER, ACT, UNEVALUABLE}
     expected_outcomes = {
         WAIT: ("wait", 1, False, False),
-        REVIEW: ("review_required", 2, False, True),
+        REVIEW: ("review_required", 3, False, True),
         OWNER: ("owner", 2, True, False),
         ACT: ("action", 3, False, False),
         UNEVALUABLE: ("unevaluable", 4, False, False),

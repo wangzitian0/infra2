@@ -16,7 +16,6 @@ from common.gate.inventory import (
 import common.gate.production_contract as production_contract  # noqa: F401
 from common.gate.self_governance import (
     SCHEDULED_AUTOMATION_FILES,
-    _mutation_evidence_listed,  # noqa: F401
     _owner_instruction_quoted,
     is_self_governing,
 )

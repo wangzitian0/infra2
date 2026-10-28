@@ -145,8 +145,8 @@ Residual risks:
 |---|---|---|
 | 0 | Ready (merged with `--merge`). | Continue from the latest main. |
 | 1 | Wait. Time alone fixes it: a check is pending, no check has reported yet, or the head is settling. | Wait and re-run. |
-| 2 | Production path (`outcome="owner"`) or review set (`outcome="review_required"`). | For `owner`, ask the owner about this head SHA. For `review_required`, record an independent review of the head (or retarget the PR when base is not `main`). |
-| 3 | Action required. Waiting does not fix it: a red or cancelled check, an open review thread, a conflict, a draft, a PR that is not open, or a base that changed under green checks. | Fix the cause, push, re-run. |
+| 2 | Production path (`outcome="owner"`). | Ask the owner about this head SHA. |
+| 3 | Review set (`outcome="review_required"`) or action required (`outcome="action"`). | For `review_required`, record an independent review of the head (or retarget the PR when base is not `main`). For `action`, fix the cause (red or cancelled check, open review thread, conflict, draft, PR not open, or base changed under green checks), push, and re-run. |
 | 4 | Could not evaluate. This is not a verdict on the PR. The gate checkout's rules differ from main's (#873), or `gh` failed or returned unreadable data. The preflight finds a stale checkout before it reads any PR state. | Pull main in the gate checkout, or retry after the `gh` failure. |
 
 ## 线上测试
