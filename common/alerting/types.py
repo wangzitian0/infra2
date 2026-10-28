@@ -371,6 +371,12 @@ class PagerItem:
         )
         return [(label, value) for label, value in zip(PAGER_FIELDS, values) if value]
 
+    def format_message(self) -> str:
+        """Format the item fields as standard pager lines."""
+        return "\n".join(
+            f"{label}{FIELD_SEPARATOR}{value}" for label, value in self.fields()
+        )
+
     def summary_line(self) -> str:
         """The item in one line (级别 · 环境 · 对象 · 现象 · 开始于)."""
         parts = (

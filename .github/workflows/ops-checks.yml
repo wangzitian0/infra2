@@ -283,7 +283,6 @@ jobs:
         run: python tools/out_of_band_watchdog.py
 
       - name: Build and send daily positive stability report
-        if: env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != ''
         env:
           INFRA2_STABILITY_REPORT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
           INFRA2_WATCHDOG_OUTAGES_URL: ${{ vars.INFRA2_WATCHDOG_OUTAGES_URL }}
