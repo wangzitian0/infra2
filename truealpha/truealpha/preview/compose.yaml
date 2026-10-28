@@ -158,7 +158,7 @@ services:
         # A separate line (no &&) would let a migration failure silently fall through
         # to `exec uvicorn` anyway — explicit exit so a broken schema fails closed.
         sh ./db/apply_migrations.sh || exit 1
-        exec uvicorn llm_service.main:app --host 0.0.0.0 --port 8000
+        exec uvicorn llm_service.main:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 120
     environment:
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
