@@ -26,6 +26,44 @@ WORKFLOW = ROOT / ".github/workflows/app-deploy-request.yml"
 SECRET_REF = re.compile(r"\$\{\{\s*secrets\.")
 RECEIVER_CLI = "python -m tools.app_deploy_request"
 DEPLOY_PLAN_STEP = "Validate and display the side-effect-free plan"
+CARD_STEPS = {
+    "Open the release card",
+    "Show on the card that the owner must approve",
+    "Show on the card that the canary failed",
+    "Show on the card that the deploy starts",
+    "Show on the card that the deploy succeeded",
+    "Show on the card that the deploy failed",
+}
+#: Each card step runs only when the run has a card. The status steps also name the state
+#: of the job: success() or failure() is part of the contract, not an implementation detail.
+CARD_STEP_CONDITIONS = {
+    "Show on the card that the owner must approve": "${{ success() && steps.card.outputs.message_id != '' }}",
+    "Show on the card that the canary failed": "${{ (failure() || cancelled()) && steps.card.outputs.message_id != '' }}",
+    "Show on the card that the deploy starts": "${{ needs.preflight_canary.outputs.card_message_id != '' }}",
+    "Show on the card that the deploy succeeded": "${{ success() && needs.preflight_canary.outputs.card_message_id != '' }}",
+    "Show on the card that the deploy failed": "${{ (failure() || cancelled()) && needs.preflight_canary.outputs.card_message_id != '' }}",
+}
+FEISHU_SECRETS = {
+    "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE",
+    "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL",
+    "INFRA2_OUT_OF_BAND_FEISHU_APP_ID",
+    "INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET",
+    "INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID",
+    "INFRA2_OUT_OF_BAND_FEISHU_API_BASE",
+}
+CARD_ID = "needs.preflight_canary.outputs.card_message_id"
+_WARN = '|| echo "::warning title=Release card::the card step failed"'
+_CARD = "timeout 30 python -m tools.release_card"
+#: The exact command of each card step. A step that holds the Feishu app secret must not
+#: gain a chained command, so the test compares the whole string, not a prefix.
+CARD_STEP_RUNS = {
+    "Open the release card": f'{_CARD} open --stage requested --github-output "$GITHUB_OUTPUT" {_WARN}',
+    "Show on the card that the owner must approve": f"{_CARD} advance --stage awaiting_approval --accept-until {_WARN}",
+    "Show on the card that the canary failed": f'{_CARD} advance --stage failed --detail "The canary failed or the run was cancelled. The deploy did not start." {_WARN}',
+    "Show on the card that the deploy starts": f'{_CARD} advance --stage deploying --detail "The deploy job started." {_WARN}',
+    "Show on the card that the deploy succeeded": f'{_CARD} advance --stage succeeded --detail "The release is in service." {_WARN}',
+    "Show on the card that the deploy failed": f'{_CARD} advance --stage failed --detail "The deploy failed or the run was cancelled. Open the run for the reason." {_WARN}',
+}
 
 
 def workflow() -> dict:
@@ -143,6 +181,15 @@ def test_secrets_are_scoped_to_the_steps_that_use_them() -> None:
     for job in jobs.values():
         for item in job["steps"]:
             if item in (canary, execute, ssh_step):
+                continue
+            if item.get("name") in CARD_STEPS:
+                # A card step holds the Feishu delivery settings and no other secret.
+                secrets = {
+                    key
+                    for key, value in item["env"].items()
+                    if SECRET_REF.search(str(value))
+                }
+                assert secrets == FEISHU_SECRETS, item["name"]
                 continue
             assert not SECRET_REF.search(str(item)), item.get("name")
 
@@ -264,7 +311,9 @@ def test_the_iac_coordinate_is_pinned_from_canary_through_execution() -> None:
     and execute must run the ref its plan step displayed."""
     jobs = workflow()["jobs"]
     assert jobs["preflight_canary"]["outputs"] == {
-        "iac_ref": "${{ steps.plan.outputs.iac_ref }}"
+        "iac_ref": "${{ steps.plan.outputs.iac_ref }}",
+        # The id of the release card crosses the approval gate the same way (#1513).
+        "card_message_id": "${{ steps.card.outputs.message_id }}",
     }
     canary = step(jobs["preflight_canary"], "Canary the exact app and IaC coordinates")
     assert canary["env"]["VALIDATED_IAC_REF"] == "${{ steps.plan.outputs.iac_ref }}"
@@ -548,3 +597,109 @@ def test_the_request_shapes_cover_both_outcomes() -> None:
         for *_shape, plan in _request_shapes()
     }
     assert outcomes == {True, False}
+
+
+def test_the_rollback_notice_has_the_feishu_settings_it_needs() -> None:
+    """truealpha#1513: common.deploy.promote sent a rollback text only when a Feishu
+    variable was set in the environment of the execute step. None was set, so a rollback
+    wrote one log line and told nobody."""
+    execute = step(workflow()["jobs"]["deploy"], "Execute through deploy_v2")
+
+    for name in FEISHU_SECRETS:
+        assert execute["env"][name] == f"${{{{ secrets.{name} }}}}"
+    assert execute["env"]["RELEASE_CARD_MESSAGE_ID"] == f"${{{{ {CARD_ID} }}}}"
+
+
+def test_the_card_id_crosses_the_approval_gate_as_a_job_output() -> None:
+    jobs = workflow()["jobs"]
+
+    assert jobs["preflight_canary"]["outputs"]["card_message_id"] == (
+        "${{ steps.card.outputs.message_id }}"
+    )
+    opener = step(jobs["preflight_canary"], "Open the release card")
+    assert opener["id"] == "card"
+    assert "--github-output" in opener["run"]
+
+
+def test_the_wait_for_approval_is_shown_before_the_gate_and_only_then() -> None:
+    """Nothing can run while the environment gate waits, so the last step of the canary
+    job shows the wait. The deploy job shows the start after the owner approved."""
+    steps = workflow()["jobs"]["preflight_canary"]["steps"]
+    names = [item.get("name") for item in steps]
+
+    waiting = step(
+        workflow()["jobs"]["preflight_canary"],
+        "Show on the card that the owner must approve",
+    )
+    assert "--stage awaiting_approval" in waiting["run"]
+    assert (
+        names.index(waiting["name"])
+        == names.index("Canary the exact app and IaC coordinates") + 1
+    )
+    starts = step(
+        workflow()["jobs"]["deploy"], "Show on the card that the deploy starts"
+    )
+    assert "--stage deploying" in starts["run"]
+
+
+def _squash(text: str) -> str:
+    return " ".join(str(text).split())
+
+
+def test_every_card_step_is_bounded_and_cannot_fail_the_job() -> None:
+    """A notification must not stop a deploy. timeout bounds a hung call, and || echo
+    turns any failure (a bad argument, an import error, the timeout) into a warning.
+    continue-on-error is forbidden: it would also hide a step that is not a card step."""
+    jobs = workflow()["jobs"]
+    seen = set()
+
+    for job in jobs.values():
+        for item in job["steps"]:
+            if item.get("name") not in CARD_STEPS:
+                continue
+            seen.add(item["name"])
+            assert "continue-on-error" not in item, item["name"]
+            run = item["run"]
+            assert run.strip() == CARD_STEP_RUNS[item["name"]], item["name"]
+    assert seen == CARD_STEPS == set(CARD_STEP_RUNS)
+
+
+def test_each_card_step_runs_only_for_a_run_with_a_card_and_in_the_right_state() -> (
+    None
+):
+    jobs = workflow()["jobs"]
+    found = {}
+
+    for job in jobs.values():
+        for item in job["steps"]:
+            if item.get("name") in CARD_STEP_CONDITIONS:
+                found[item["name"]] = _squash(item["if"])
+
+    assert found == CARD_STEP_CONDITIONS
+
+
+def test_the_approval_card_shows_the_time_that_the_age_check_enforces() -> None:
+    waiting = step(
+        workflow()["jobs"]["preflight_canary"],
+        "Show on the card that the owner must approve",
+    )
+
+    assert "--accept-until" in waiting["run"]
+    assert "1440" not in waiting["run"]
+
+
+def test_no_job_besides_the_two_receiver_jobs_holds_the_feishu_secrets() -> None:
+    """A third job that reads the Feishu secrets is a new production job classification
+    in common/gate/production_contract.py. That table is a self-guard surface: an edit to
+    it needs the owner's approval of the head SHA. The card therefore lives in the two
+    existing, already classified jobs (#1370)."""
+    jobs = workflow()["jobs"]
+
+    assert set(jobs) == {"preflight_canary", "deploy"}
+    for name, job in jobs.items():
+        holders = [
+            item["name"]
+            for item in job["steps"]
+            if any(secret in str(item) for secret in FEISHU_SECRETS)
+        ]
+        assert set(holders) <= CARD_STEPS | {"Execute through deploy_v2"}, name

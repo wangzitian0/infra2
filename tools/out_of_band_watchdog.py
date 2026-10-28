@@ -45,6 +45,7 @@ from common.alerting import (  # noqa: E402
     firing_title,
     format_time,
     highest_level,
+    out_of_band_app_config,
     pager_level,
     redact_credentials,
     render_pager_text,
@@ -1992,21 +1993,14 @@ def _ssh_capture(config: SshConfig | None, timeout: float = 20.0):
 
 def deliver_out_of_band_alert(env: Mapping[str, str], message: str) -> None:
     """Send a direct Feishu alert without using the infra2 bridge."""
-    mode = (
-        env.get("INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE")
-        or env.get("ALERT_DELIVERY_MODE")
-        or "feishu_webhook"
-    ).strip()
+    config = out_of_band_app_config(env)
+    mode = config["mode"]
     if mode == "feishu_app":
         deliver_feishu_app_text(
-            app_id=env.get("INFRA2_OUT_OF_BAND_FEISHU_APP_ID")
-            or env.get("FEISHU_APP_ID", ""),
-            app_secret=env.get("INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET")
-            or env.get("FEISHU_APP_SECRET", ""),
-            chat_id=env.get("INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID")
-            or env.get("FEISHU_CHAT_ID", ""),
-            api_base=env.get("INFRA2_OUT_OF_BAND_FEISHU_API_BASE")
-            or env.get("FEISHU_API_BASE", "https://open.feishu.cn"),
+            app_id=config["app_id"],
+            app_secret=config["app_secret"],
+            chat_id=config["chat_id"],
+            api_base=config["api_base"],
             text=message,
         )
         return
@@ -2014,11 +2008,7 @@ def deliver_out_of_band_alert(env: Mapping[str, str], message: str) -> None:
     if mode != "feishu_webhook":
         raise ValueError(f"Unsupported out-of-band delivery mode: {mode}")
 
-    webhook_url = (
-        env.get("INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL")
-        or env.get("FEISHU_WEBHOOK_URL")
-        or ""
-    )
+    webhook_url = config["webhook_url"]
     if not webhook_url:
         raise ValueError(
             "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL or FEISHU_WEBHOOK_URL "

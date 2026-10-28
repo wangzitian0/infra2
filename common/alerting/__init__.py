@@ -35,8 +35,12 @@ from common.alerting.delivery import (
     deliver_out_of_band_text,
     feishu_host_reachable,
     is_report_only_environment,
+    message_id_of,
+    out_of_band_app_config,
     redacted_app_config,
     redacted_url,
+    reply_feishu_app_text,
+    update_feishu_app_card,
     validate_feishu_api_base,
     validate_feishu_webhook_url,
 )
@@ -229,4 +233,8 @@ __all__ = [
     "urlopen",
     "validate_feishu_api_base",
     "validate_feishu_webhook_url",
+    "message_id_of",
+    "out_of_band_app_config",
+    "reply_feishu_app_text",
+    "update_feishu_app_card",
 ]

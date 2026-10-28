@@ -529,19 +529,39 @@ def _notify_rollback_event(
         except Exception as exc:  # noqa: BLE001
             warning(f"rollback_notifier callback failed: {exc}")
         return
+    # A production run that has a release card shows the rollback on the card and in its
+    # thread. The card replaces the text message. A run without a card sends the text.
     try:
-        from common.alerting.delivery import deliver_out_of_band_text
+        from common.alerting import release_card
 
-        if any(
-            os.environ.get(key)
-            for key in (
-                "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL",
-                "FEISHU_WEBHOOK_URL",
-                "INFRA2_OUT_OF_BAND_FEISHU_APP_ID",
-                "FEISHU_APP_ID",
-            )
-        ):
-            deliver_out_of_band_text(os.environ, text)
+        if release_card.note_rollback(os.environ, event):
+            return
+    except Exception as exc:  # noqa: BLE001
+        warning(f"release card update skipped/failed: {exc}")
+
+    def send_text() -> None:
+        try:
+            from common.alerting.delivery import deliver_out_of_band_text
+
+            if any(
+                os.environ.get(key)
+                for key in (
+                    "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL",
+                    "FEISHU_WEBHOOK_URL",
+                    "INFRA2_OUT_OF_BAND_FEISHU_APP_ID",
+                    "FEISHU_APP_ID",
+                )
+            ):
+                deliver_out_of_band_text(os.environ, text)
+        except Exception as exc:  # noqa: BLE001
+            warning(f"out-of-band rollback alert delivery skipped/failed: {exc}")
+
+    # A hung Feishu call must not delay the re-raise of the deploy error. The delivery has
+    # the same time budget as the card hook.
+    try:
+        from common.alerting import release_card
+
+        release_card.bounded(send_text, release_card.ROLLBACK_BUDGET_SECONDS, None)
     except Exception as exc:  # noqa: BLE001
         warning(f"out-of-band rollback alert delivery skipped/failed: {exc}")
 
