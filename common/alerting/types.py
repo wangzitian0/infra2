@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from infra2_sdk.ci import parse_github_time
+
 FEISHU_WEBHOOK_HOSTS = {"open.feishu.cn", "open.larksuite.com"}
 FEISHU_WEBHOOK_PATH_PREFIX = "/open-apis/bot/v2/hook/"
 SIGNOZ_ALERT_SCHEMA_VERSION = "v2alpha1"
@@ -306,11 +308,11 @@ def _epoch(value: object) -> float | None:
             epoch = float(text)
         except ValueError:
             try:
-                parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+                parsed = parse_github_time(text)
             except ValueError:
                 return None
-            if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=timezone.utc)
+            if parsed is None:
+                return None
             try:
                 epoch = parsed.timestamp()
             except (OverflowError, OSError, ValueError):

@@ -22,7 +22,6 @@ from common.core.constants import (
     PRODUCTION,
     STAGING,
     STATEFUL_DEPLOY_ENVIRONMENTS,
-    is_stateful_deploy_env,
 )
 
 __all__ = [
@@ -38,10 +37,8 @@ __all__ = [
     "SHARED_PLATFORM_SERVICES",
     "STATEFUL_DEPLOY_ENVIRONMENTS",
     "get_env",
-    "get_environment",
     "get_service_url",
     "infra_domain",
-    "is_stateful_deploy_env",
     "normalize_env_name",
     "otel_ingest_endpoint",
     "reset_env_cache",
@@ -368,7 +365,9 @@ def otel_ingest_endpoint(env: dict | None = None) -> str:
     domain = (env or {}).get("INTERNAL_DOMAIN")
     if not domain:
         return ""
-    return f"https://{OTEL_INGEST_SUBDOMAIN}.{domain}{OTLP_TRACES_PATH}"
+    from infra2_sdk.runtime.otel import signal_endpoint
+
+    return signal_endpoint(f"https://{OTEL_INGEST_SUBDOMAIN}.{domain}", "traces")
 
 
 def normalize_env_name(value: str | None) -> str:
@@ -431,22 +430,6 @@ class DeploymentEnvironment:
 
     def __getitem__(self, key: str) -> str | None:
         return self.get(key)
-
-
-def get_environment() -> DeploymentEnvironment:
-    """C-03: Retrieve current DeploymentEnvironment as a typed domain object."""
-    raw = get_env()
-    env_name = raw.get("ENV") or STAGING
-    env_suffix = raw.get("ENV_SUFFIX")
-    if env_suffix is None:
-        env_suffix = "" if env_name == PRODUCTION else f"-{env_name}"
-    internal_domain = raw.get("INTERNAL_DOMAIN") or "zitian.party"
-    return DeploymentEnvironment(
-        name=env_name,
-        env_suffix=env_suffix,
-        internal_domain=internal_domain,
-        raw_env=raw,
-    )
 
 
 def with_env_suffix(

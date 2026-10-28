@@ -21,6 +21,7 @@ from typing import Any
 from urllib.request import Request, urlopen
 import zipfile
 
+from infra2_sdk.ci import parse_github_time
 from infra2_sdk.routing import resolve_service_url
 
 from common.alerting import (
@@ -276,7 +277,10 @@ def _decode_log_payload(payload: bytes) -> str:
 
 
 def _parse_iso8601(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = parse_github_time(value)
+    if parsed is None:
+        raise ValueError(f"invalid ISO8601 timestamp: {value!r}")
+    return parsed
 
 
 def recent_weekly_runs(

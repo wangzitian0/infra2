@@ -21,7 +21,6 @@ from common.backup import (
 )
 from common.core import (
     DeploymentEnvironment,
-    get_environment,
     with_env_suffix,
 )
 from common.observability import (
@@ -32,7 +31,6 @@ from common.observability import (
 )
 from common.security import (
     apply_secret_supply,
-    create_secrets_resolver,
     generate_secret_token,
     prune_orphan_secrets,
     resolve_vault_token,
@@ -62,12 +60,6 @@ def test_core_environment_handling(monkeypatch) -> None:
     )
     assert prod_env.is_production is True
     assert with_env_suffix("platform-redis", prod_env) == "platform-redis"
-
-    monkeypatch.setenv("DEPLOY_ENV", "staging")  # get_environment() has no default
-    curr = get_environment()
-    assert isinstance(curr, DeploymentEnvironment)
-    assert curr.name == "staging"
-    assert curr.env_suffix == "-staging"
 
 
 # ==========================================
@@ -99,9 +91,8 @@ def test_security_vault_token_resolution(monkeypatch) -> None:
 
 
 def test_security_interfaces_exposed() -> None:
-    """S-03, S-04, S-05: Ensure supply and prune interfaces are callable."""
+    """S-03, S-05: Ensure supply and prune interfaces are callable."""
     assert callable(apply_secret_supply)
-    assert callable(create_secrets_resolver)
     assert callable(prune_orphan_secrets)
 
 
@@ -167,7 +158,7 @@ def test_core_package_exports_the_objects_of_core_environ() -> None:
     from common.core import environ
 
     assert DeploymentEnvironment is environ.DeploymentEnvironment
-    assert get_environment is environ.get_environment
+    assert with_env_suffix is environ.with_env_suffix
 
 
 def test_rehearsal_timeout_guard(monkeypatch) -> None:

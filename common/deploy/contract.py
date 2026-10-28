@@ -36,8 +36,10 @@ import re
 from dataclasses import dataclass, replace
 from functools import lru_cache
 
+from infra2_sdk.runtime.environment import is_preview_alias
+
 from common.core import registry as service_registry
-from common.deploy.env_config import CANARY_SLOT, env_config, preview_alias
+from common.deploy.env_config import env_config, preview_alias
 
 _SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")  # a resolved, image-addressable commit sha
 
@@ -344,11 +346,15 @@ def _pinned_sub_domain(spec: ServiceSpec, env: str) -> str:
 def _is_valid_preview_sub_domain(spec: ServiceSpec, sub_domain: str) -> bool:
     # a preview slot is uniformly <kind>-<value>:
     #   -branch-<name> / -pr-<N> / -commit-<sha7> / -tag-<v1-2-3> (dots/slashes -> dashes).
-    pattern = (
-        rf"\A{re.escape(spec.base_subdomain)}-"
-        rf"(branch-[a-z0-9-]+|pr-[1-9][0-9]*|commit-[0-9a-f]{{7}}|tag-v[0-9]+-[0-9]+-[0-9]+|{re.escape(CANARY_SLOT)})\Z"
-    )
-    return re.match(pattern, sub_domain) is not None
+    prefix = f"{spec.base_subdomain}-"
+    if not sub_domain.startswith(prefix):
+        return False
+    slot = sub_domain[len(prefix) :]
+    if "_" in slot or slot != slot.lower():
+        return False
+    if slot.startswith("commit-") and len(slot) != len("commit-") + 7:
+        return False
+    return is_preview_alias(slot)
 
 
 # ---------------------------------------------------------------------------
