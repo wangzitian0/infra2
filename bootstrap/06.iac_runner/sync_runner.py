@@ -228,6 +228,25 @@ def diagnose_failure(stderr: str, stdout: str = "") -> dict[str, str]:
             ),
         }
 
+    _DOKPLOY_DEPLOYMENT_ERROR_MARKERS = (
+        "Dokploy deployment record entered error",
+        "deploy rollout entered error",
+    )
+    if any(marker in combined for marker in _DOKPLOY_DEPLOYMENT_ERROR_MARKERS):
+        matched_line = _first_matching_line(combined, _DOKPLOY_DEPLOYMENT_ERROR_MARKERS)
+        log_path_match = re.search(r"logPath=([^,)\s]+)", combined)
+        log_path = log_path_match.group(1) if log_path_match else "logPath"
+        fix_hint = (
+            f"Inspect the Dokploy compose build or pull log at {log_path} "
+            "on the Dokploy host and retry the deployment if the failure is transient."
+        )
+        return {
+            "error_kind": "dokploy_deployment_error",
+            "summary": matched_line,
+            "fix_hint": fix_hint,
+            "next_action": fix_hint,
+        }
+
     summary = _first_matching_line(
         combined,
         (
