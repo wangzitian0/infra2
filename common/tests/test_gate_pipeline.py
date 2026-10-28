@@ -155,6 +155,8 @@ def test_evaluate_step_pipeline_end_to_end():
     assert not verdict.ready
     assert verdict.review_required
     assert not verdict.owner_required
+    assert not verdict.unevaluable
+    assert verdict.exit_code == 2
     assert verdict.outcome == "review_required"
     assert any("changes what decides merges" in r for r in verdict.reasons)
 

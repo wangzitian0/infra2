@@ -285,10 +285,24 @@ def test_editing_unclassified_scheduled_jobs_in_ops_checks_fails_contract(job_na
     ops_doc["jobs"][job_name]["steps"].append({"run": "echo modified"})
     texts["ops-checks.yml"] = yaml.safe_dump(ops_doc, sort_keys=False)
     failures = workflow_contract_failures(texts)
-    assert (
+    assert failures == [
         f"ops-checks.yml:{job_name} edits an unclassified scheduled production job"
-        in failures
-    )
+    ]
+
+
+def test_unreadable_base_ops_checks_fails_closed(tmp_path, monkeypatch):
+    """#1340: workflow_contract_failures fails closed when base ops-checks.yml cannot be read."""
+    from tools import pr_merge_gate as gate
+
+    texts = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in sorted(WORKFLOWS_DIR.glob("*.y*ml"))
+    }
+    monkeypatch.setattr(gate, "WORKFLOW_DIR", tmp_path / "missing-workflows")
+    failures = workflow_contract_failures(texts)
+    assert failures == [
+        "ops-checks.yml: cannot read the base workflow to verify the unclassified scheduled jobs"
+    ]
 
 
 # --- #1138 audit: the condition is exact, the secret list is default deny -----------

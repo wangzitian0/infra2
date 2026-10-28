@@ -381,13 +381,20 @@ def workflow_contract_failures(texts: Mapping[str, str]) -> list[str]:
                 )
             except (OSError, _UnreadableYaml, yaml.YAMLError, RecursionError):
                 base_ops_doc = None
-            if isinstance(base_ops_doc, dict):
-                base_ops_jobs = base_ops_doc.get("jobs") or {}
-                head_ops_jobs = workflows["ops-checks.yml"].get("jobs") or {}
-                if isinstance(base_ops_jobs, dict) and isinstance(head_ops_jobs, dict):
-                    for job_name in UNCLASSIFIED_SCHEDULED_JOBS:
-                        if head_ops_jobs.get(job_name) != base_ops_jobs.get(job_name):
-                            failures.append(
-                                f"ops-checks.yml:{job_name} edits an unclassified scheduled production job"
-                            )
+            base_ops_jobs = (
+                base_ops_doc.get("jobs") if isinstance(base_ops_doc, dict) else None
+            )
+            head_ops_jobs = workflows["ops-checks.yml"].get("jobs") or {}
+            if not isinstance(base_ops_doc, dict) or not isinstance(
+                base_ops_jobs, dict
+            ):
+                failures.append(
+                    "ops-checks.yml: cannot read the base workflow to verify the unclassified scheduled jobs"
+                )
+            elif isinstance(head_ops_jobs, dict):
+                for job_name in UNCLASSIFIED_SCHEDULED_JOBS:
+                    if head_ops_jobs.get(job_name) != base_ops_jobs.get(job_name):
+                        failures.append(
+                            f"ops-checks.yml:{job_name} edits an unclassified scheduled production job"
+                        )
     return failures + contract_errors(workflows, GATED_JOBS, UNGATED_JOBS)

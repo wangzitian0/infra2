@@ -170,7 +170,9 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
     lock_covered = {
         f
         for f in facts.files
-        if lock_holds and f.startswith(WORKFLOW_PREFIX) and f not in uncovered
+        if lock_holds
+        and _normalized_path(f).startswith(WORKFLOW_PREFIX)
+        and f not in uncovered
     }
     quoted_instruction = _owner_instruction_quoted(facts.body)
     tree_approved = bool(
@@ -290,7 +292,7 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
         )
         owner = True
 
-    # This line explains an owner verdict that is already set; it does not add one.
+    # This OWNER-kind reason sets the owner verdict when no held deploy file already did.
     held_workflows = [
         f for f in unproven if _normalized_path(f).startswith(WORKFLOW_PREFIX)
     ]

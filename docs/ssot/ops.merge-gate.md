@@ -92,7 +92,7 @@ The gate returns `outcome="owner"` (`owner_required=True`) only for a production
 
 Every other edit in the closure (`common/gate/*.py`, `tools/pr_merge_gate.py`, `common/tests/test_*.py`, `docs/ssot/ci-gate-inventory.yaml`, `AGENTS.md`, `docs/ssot/ops.merge-gate.md`, `pyproject.toml`, shadow files, and required-check workflows when the lock holds) returns `outcome="review_required"` (`review_required=True`, `owner_required=False`) until cleared by one of these exits:
 
-- A rule-text file clears with a quoted owner instruction in the PR body or an independent verification comment on the current head.
+- A rule-text file clears with a quoted owner instruction in the PR body or an independent verification comment on the current head when the production lock holds.
 - A change to `ci-gate-inventory.yaml` clears when the direction proof shows it is tighter.
 - A review-set file clears when the lock holds (`lock_state=verified`) and the current head has a recorded automated review or an independent verification comment (#1040, #1340).
 - Across a mechanical rebase that leaves `HEAD^{tree}` unchanged, citing the previously approved commit SHA (`approved: <sha>`) preserves approval (#924).

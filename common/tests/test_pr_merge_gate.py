@@ -3318,22 +3318,38 @@ def test_no_exit_path_labels_a_non_production_pr_owner():
             assert verdict.owner_required
 
     non_production_cases = [
-        _green(files=("common/gate/evaluator.py",), lock_failures=HOLDS),
-        _green(files=("tools/pr_merge_gate.py",), lock_failures=HOLDS),
-        _green(files=("common/tests/test_pr_merge_gate.py",), lock_failures=HOLDS),
-        _green(files=("docs/ssot/ci-gate-inventory.yaml",), lock_failures=HOLDS),
-        _green(files=("AGENTS.md",), lock_failures=HOLDS),
-        _green(files=("docs/ssot/ops.merge-gate.md",), lock_failures=HOLDS),
-        _green(files=("pyproject.toml",), lock_failures=HOLDS),
-        _green(files=("yaml.py",), lock_failures=HOLDS),
-        _green(files=(INFRA_CI,), lock_failures=HOLDS),
-        _green(base="feature/branch", lock_failures=HOLDS),
-        _green(draft=True, lock_failures=HOLDS),
-        _green(last_push_at=NOW - 60, lock_failures=HOLDS),
-        _green(rule_drift=("AGENTS.md",), lock_failures=HOLDS),
+        (
+            _green(files=("common/gate/evaluator.py",), lock_failures=HOLDS),
+            "review_required",
+        ),
+        (
+            _green(files=("tools/pr_merge_gate.py",), lock_failures=HOLDS),
+            "review_required",
+        ),
+        (
+            _green(files=("common/tests/test_pr_merge_gate.py",), lock_failures=HOLDS),
+            "review_required",
+        ),
+        (
+            _green(files=("docs/ssot/ci-gate-inventory.yaml",), lock_failures=HOLDS),
+            "review_required",
+        ),
+        (_green(files=("AGENTS.md",), lock_failures=HOLDS), "review_required"),
+        (
+            _green(files=("docs/ssot/ops.merge-gate.md",), lock_failures=HOLDS),
+            "review_required",
+        ),
+        (_green(files=("pyproject.toml",), lock_failures=HOLDS), "review_required"),
+        (_green(files=("yaml.py",), lock_failures=HOLDS), "review_required"),
+        (_green(files=(INFRA_CI,), lock_failures=HOLDS), "review_required"),
+        (_green(base="feature/branch", lock_failures=HOLDS), "review_required"),
+        (_green(draft=True, lock_failures=HOLDS), "action"),
+        (_green(last_push_at=NOW - 60, lock_failures=HOLDS), "wait"),
+        (_green(rule_drift=("AGENTS.md",), lock_failures=HOLDS), "unevaluable"),
     ]
-    for facts in non_production_cases:
+    for facts, expected_outcome in non_production_cases:
         verdict = gate.evaluate(facts, now=NOW)
+        assert verdict.outcome == expected_outcome, (facts, verdict.reasons)
         assert verdict.outcome != "owner", (facts, verdict.reasons)
         assert not verdict.owner_required, (facts, verdict.reasons)
         assert "needs the owner" not in gate.render(facts, verdict)
