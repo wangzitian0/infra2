@@ -7,8 +7,13 @@ This module communicates with Dokploy API endpoints and tracks deployment record
 from __future__ import annotations
 
 import logging
+import os
+import re
+import shlex
+import subprocess
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Any
 
 from common.deploy.env_util import _parse_env_text
@@ -21,6 +26,115 @@ from common.deploy.rollout import (
 logger = logging.getLogger(__name__)
 
 _CLOCK_SKEW_TOLERANCE_SECONDS = 5
+_DOKPLOY_LOG_PREFIXES = ("/etc/dokploy/logs/", "/var/lib/dokploy/")
+_SAFE_REMOTE_LOG_PATH_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
+
+
+def _ssh_args_for_log_tail(host: str) -> list[str]:
+    """Build SSH arguments to read a Dokploy log tail from the host."""
+    args = [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=5",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+    ]
+    key_path = os.environ.get("INFRA2_WATCHDOG_SSH_KEY_PATH", "").strip()
+    if key_path:
+        args += [
+            "-i",
+            key_path,
+            "-o",
+            "StrictHostKeyChecking=no",
+            "-o",
+            "UserKnownHostsFile=/dev/null",
+        ]
+    port = os.environ.get("INFRA2_WATCHDOG_SSH_PORT", "").strip()
+    if port:
+        args += ["-p", port]
+    user = os.environ.get("INFRA2_WATCHDOG_SSH_USER", "").strip() or "root"
+    return [*args, f"{user}@{host}"]
+
+
+def read_deployment_log_tail(
+    deployment: Mapping[str, Any] | None,
+    *,
+    max_lines: int = 30,
+    max_chars: int = 2000,
+    allowed_prefixes: tuple[str, ...] = _DOKPLOY_LOG_PREFIXES,
+) -> str:
+    """Read the last lines of a Dokploy deployment log file.
+
+    Returns an empty string on missing, unsafe, or unreadable paths.
+    """
+    try:
+        if max_lines <= 0 or max_chars <= 0:
+            return ""
+        log_path = str((deployment or {}).get("logPath") or "").strip()
+        if not log_path or ".." in log_path:
+            return ""
+        if not log_path.startswith(allowed_prefixes):
+            return ""
+        path_obj = Path(log_path)
+        if ".." in path_obj.parts:
+            return ""
+        if path_obj.is_file():
+            lines = path_obj.read_text(encoding="utf-8", errors="replace").splitlines()
+            tail = "\n".join(lines[-max_lines:]).strip()
+            return tail[-max_chars:] if len(tail) > max_chars else tail
+
+        if not _SAFE_REMOTE_LOG_PATH_RE.fullmatch(log_path):
+            return ""
+        host = (
+            os.environ.get("INFRA2_WATCHDOG_SSH_HOST", "").strip()
+            or os.environ.get("VPS_HOST", "").strip()
+        )
+        if not host:
+            return ""
+        cmd = f"tail -n {int(max_lines)} -- {shlex.quote(log_path)}"
+        res = subprocess.run(
+            [*_ssh_args_for_log_tail(host), cmd],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if res.returncode != 0:
+            return ""
+        tail = "\n".join((res.stdout or "").splitlines()[-max_lines:]).strip()
+        return tail[-max_chars:] if len(tail) > max_chars else tail
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def format_deployment_error_details(
+    deployment: Mapping[str, Any] | None,
+    *,
+    log_tail: str = "",
+) -> str:
+    """Format deployment identifier, log path, error message, and log tail."""
+    dep = deployment or {}
+    dep_id = str(dep.get("deploymentId") or dep.get("id") or "").strip()
+    log_path = str(dep.get("logPath") or "").strip()
+    error_msg = str(dep.get("errorMessage") or "").strip()
+    parts: list[str] = []
+    if dep_id:
+        parts.append(f"deploymentId={dep_id}")
+    if error_msg:
+        parts.append(f"errorMessage={error_msg}")
+    if log_path:
+        parts.append(f"logPath={log_path}")
+    if log_tail:
+        compact_tail = " | ".join(
+            line.strip() for line in log_tail.splitlines() if line.strip()
+        )
+        if compact_tail:
+            parts.append(f"log_tail={compact_tail}")
+    if not parts:
+        return ""
+    return " (" + ", ".join(parts) + ")"
 
 
 def deployment_ids(deployments: list[dict]) -> set[str]:
@@ -103,7 +217,10 @@ def wait_for_new_deployment_record(
             is_filtered_fn=filter_fn,
         )
     except RolloutError as exc:
-        raise RuntimeError("Dokploy deployment record entered error") from exc
+        dep = getattr(exc, "deployment", None) or {}
+        log_tail = read_deployment_log_tail(dep)
+        suffix = format_deployment_error_details(dep, log_tail=log_tail)
+        raise RuntimeError(f"Dokploy deployment record entered error{suffix}") from exc
 
     if result.status == "done":
         return True

@@ -778,3 +778,158 @@ def test_ensure_project_rejects_invalid_create_response(monkeypatch):
 
     with pytest.raises(ValueError, match="Failed to create project platform"):
         ensure_project("platform")
+
+
+def test_wait_for_deployment_attaches_deployment_metadata_on_rollout_error():
+    from common.deploy.rollout import RolloutError, wait_for_deployment
+
+    record = {
+        "deploymentId": "dep-1366",
+        "status": "error",
+        "createdAt": "2026-10-28T03:36:39Z",
+        "errorMessage": "pull rate limit exceeded",
+        "logPath": "/etc/dokploy/logs/app-staging/dep-1366.log",
+    }
+    with pytest.raises(RolloutError) as excinfo:
+        wait_for_deployment(
+            lambda: [record],
+            set(),
+            timeout_seconds=5,
+            interval_seconds=1,
+            raise_on_error=True,
+        )
+    err = excinfo.value
+    assert err.deployment == record
+    msg = str(err)
+    assert "dep-1366" in msg
+    assert "2026-10-28T03:36:39Z" in msg
+    assert "pull rate limit exceeded" in msg
+    assert "/etc/dokploy/logs/app-staging/dep-1366.log" in msg
+
+
+def test_read_deployment_log_tail_reads_local_file_and_rejects_unsafe_paths(
+    tmp_path, monkeypatch
+):
+    from common.deploy.dokploy_adapter import read_deployment_log_tail
+
+    log_file = tmp_path / "dokploy-error.log"
+    lines = [f"line-{idx}: pulling layer" for idx in range(40)]
+    lines.append("Error response from daemon: manifest unknown")
+    log_file.write_text("\n".join(lines), encoding="utf-8")
+
+    tail = read_deployment_log_tail(
+        {"logPath": str(log_file)},
+        max_lines=5,
+        max_chars=500,
+        allowed_prefixes=(str(tmp_path),),
+    )
+    assert "Error response from daemon: manifest unknown" in tail
+    assert "line-36: pulling layer" in tail
+    assert "line-0: pulling layer" not in tail
+
+    assert read_deployment_log_tail({"logPath": str(log_file)}) == ""
+    assert (
+        read_deployment_log_tail(
+            {"logPath": str(log_file)},
+            max_lines=0,
+            allowed_prefixes=(str(tmp_path),),
+        )
+        == ""
+    )
+    assert (
+        read_deployment_log_tail(
+            {"logPath": str(log_file)},
+            max_chars=0,
+            allowed_prefixes=(str(tmp_path),),
+        )
+        == ""
+    )
+    assert read_deployment_log_tail(None) == ""
+    assert read_deployment_log_tail({}) == ""
+    assert read_deployment_log_tail({"logPath": "/etc/dokploy/logs/../passwd"}) == ""
+    assert read_deployment_log_tail({"logPath": "/nonexistent/other/file.log"}) == ""
+
+
+def test_read_deployment_log_tail_uses_ssh_fallback_and_swallows_errors(monkeypatch):
+    import subprocess
+    from common.deploy import dokploy_adapter
+
+    monkeypatch.setenv("INFRA2_WATCHDOG_SSH_HOST", "10.0.0.9")
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout="step 1\nError: compose pull failed\n", stderr=""
+        )
+
+    monkeypatch.setattr(dokploy_adapter.subprocess, "run", fake_run)
+    tail = dokploy_adapter.read_deployment_log_tail(
+        {"logPath": "/etc/dokploy/logs/truealpha-staging/dep-99.log"},
+        max_lines=10,
+    )
+    assert "Error: compose pull failed" in tail
+    assert len(calls) == 1
+    assert "root@10.0.0.9" in calls[0]
+    assert "/etc/dokploy/logs/truealpha-staging/dep-99.log" in calls[0][-1]
+
+    def raising_run(cmd, **kwargs):
+        raise OSError("ssh unreachable")
+
+    monkeypatch.setattr(dokploy_adapter.subprocess, "run", raising_run)
+    assert (
+        dokploy_adapter.read_deployment_log_tail(
+            {"logPath": "/etc/dokploy/logs/truealpha-staging/dep-99.log"}
+        )
+        == ""
+    )
+
+
+def test_wait_for_new_deployment_record_surfaces_log_tail_on_error(
+    tmp_path, monkeypatch
+):
+    from common.deploy import dokploy_adapter
+    from common.deploy.dokploy_adapter import (
+        read_deployment_log_tail,
+        wait_for_new_deployment_record,
+    )
+
+    monkeypatch.setattr(
+        dokploy_adapter,
+        "read_deployment_log_tail",
+        lambda dep, **kw: read_deployment_log_tail(
+            dep, allowed_prefixes=(str(tmp_path),), **kw
+        ),
+    )
+
+    log_file = tmp_path / "dep-err.log"
+    log_file.write_text(
+        "Pulling backend...\nError: Head https://ghcr.io/v2/x: 502 Bad Gateway\n",
+        encoding="utf-8",
+    )
+
+    class FakeClient:
+        def get_compose_deployments(self, compose_id):
+            return [
+                {
+                    "deploymentId": "dep-err-1",
+                    "status": "error",
+                    "createdAt": "2026-10-28T03:36:39Z",
+                    "errorMessage": None,
+                    "logPath": str(log_file),
+                }
+            ]
+
+    with pytest.raises(RuntimeError) as excinfo:
+        wait_for_new_deployment_record(
+            FakeClient(),
+            "compose-1",
+            set(),
+            timeout_seconds=5,
+            interval_seconds=1,
+        )
+    msg = str(excinfo.value)
+    assert msg.startswith("Dokploy deployment record entered error")
+    assert "deploymentId=dep-err-1" in msg
+    assert f"logPath={log_file}" in msg
+    assert "502 Bad Gateway" in msg

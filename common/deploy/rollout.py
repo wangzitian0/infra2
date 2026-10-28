@@ -29,6 +29,15 @@ _TERMINAL_GOOD = TERMINAL_SUCCESS_STATUSES
 class RolloutError(RuntimeError):
     """A new deployment record entered an ``error`` status."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        deployment: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.deployment = deployment
+
 
 @dataclass(frozen=True)
 class RolloutResult:
@@ -106,10 +115,22 @@ def wait_for_deployment(
                     if raise_on_error:
                         dep_id = _deployment_id(d) or "unknown"
                         created = d.get("createdAt") or d.get("startedAt") or "unknown"
+                        error_msg = str(d.get("errorMessage") or "").strip()
+                        log_path = str(d.get("logPath") or "").strip()
+                        details = [
+                            f"id={dep_id}",
+                            f"status={status}",
+                            f"createdAt={created}",
+                        ]
+                        if error_msg:
+                            details.append(f"errorMessage={error_msg}")
+                        if log_path:
+                            details.append(f"logPath={log_path}")
+                        details.append(f"new_ids={sorted(new_ids)}")
                         raise RolloutError(
                             f"Dokploy deployment record entered error "
-                            f"(id={dep_id}, status={status}, createdAt={created}, "
-                            f"new_ids={sorted(new_ids)})"
+                            f"({', '.join(details)})",
+                            deployment=d,
                         )
                     return RolloutResult("error", d, tuple(sorted(new_ids)), attempts)
 

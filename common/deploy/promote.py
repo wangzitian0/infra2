@@ -46,6 +46,8 @@ from common.deploy.preflight import (
 from common.deploy.dokploy_adapter import (
     await_effective_config_hash,
     deployment_ids as _deployment_ids,
+    format_deployment_error_details,
+    read_deployment_log_tail,
     started_before_trigger,
 )
 from common.deploy.rollout import RolloutError, wait_for_deployment
@@ -110,8 +112,11 @@ def wait_for_rollout(
         )
         return result.deployment
     except RolloutError as exc:
+        dep = getattr(exc, "deployment", None) or {}
+        log_tail = read_deployment_log_tail(dep)
+        suffix = format_deployment_error_details(dep, log_tail=log_tail)
         raise RuntimeError(
-            f"deploy rollout entered error (compose {compose_id})"
+            f"deploy rollout entered error (compose {compose_id}){suffix}"
         ) from exc
     except TimeoutError as exc:
         raise TimeoutError(

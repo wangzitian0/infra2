@@ -931,3 +931,83 @@ def test_composing_restores_existing_env_when_deploy_fails(monkeypatch):
         "env": "IAC_DEPLOY_REF=old_sha\n",
         "autoDeploy": False,
     }
+
+
+def test_wait_for_rollout_and_failure_snapshot_surface_dokploy_log_tail(
+    tmp_path, monkeypatch
+):
+    """#1366: wait_for_rollout and failure_snapshot.build_snapshot surface deploymentId,
+    logPath, errorMessage, and log tail when a Dokploy deployment record enters error."""
+    from common.deploy import failure_snapshot, promote
+    from common.deploy.dokploy_adapter import read_deployment_log_tail
+    from common.deploy.failure_snapshot import build_snapshot
+    from common.deploy.promote import wait_for_rollout
+
+    monkeypatch.setattr(
+        promote,
+        "read_deployment_log_tail",
+        lambda dep, **kw: read_deployment_log_tail(
+            dep, allowed_prefixes=(str(tmp_path),), **kw
+        ),
+    )
+    monkeypatch.setattr(
+        failure_snapshot,
+        "read_deployment_log_tail",
+        lambda dep, **kw: read_deployment_log_tail(
+            dep, allowed_prefixes=(str(tmp_path),), **kw
+        ),
+    )
+
+    log_file = tmp_path / "rollout-error.log"
+    log_file.write_text(
+        " Pulling worker ...\nfailed to copy: httpReadSeeker: unexpected EOF\n",
+        encoding="utf-8",
+    )
+    record = {
+        "deploymentId": "dep-rollout-77",
+        "status": "error",
+        "createdAt": "2026-10-28T03:39:31Z",
+        "errorMessage": "compose failed",
+        "logPath": str(log_file),
+    }
+
+    class FakeClient:
+        def get_compose_deployments(self, compose_id):
+            return [record]
+
+        def get_compose(self, compose_id):
+            return {
+                "composeId": compose_id,
+                "composeStatus": "error",
+            }
+
+    client = FakeClient()
+    with pytest.raises(RuntimeError) as excinfo:
+        wait_for_rollout(
+            client,
+            "cmp-staging-1",
+            set(),
+            timeout=5,
+            interval=1,
+            _sleep=lambda _s: None,
+        )
+    msg = str(excinfo.value)
+    assert msg.startswith("deploy rollout entered error (compose cmp-staging-1)")
+    assert "deploymentId=dep-rollout-77" in msg
+    assert "errorMessage=compose failed" in msg
+    assert f"logPath={log_file}" in msg
+    assert "unexpected EOF" in msg
+
+    snapshot = build_snapshot(client, "cmp-staging-1")
+    assert snapshot["platform_failure_domain"] == "dokploy-deployment-error"
+    assert snapshot["latest_deployment"]["deploymentId"] == "dep-rollout-77"
+    assert snapshot["latest_deployment"]["errorMessage"] == "compose failed"
+    assert snapshot["latest_deployment"]["logPath"] == str(log_file)
+    assert "unexpected EOF" in snapshot["latest_deployment"]["logTail"]
+
+    class NonDictClient:
+        def get_compose(self, compose_id):
+            return ["invalid"]
+
+    bad_snapshot = build_snapshot(NonDictClient(), "cmp-bad")
+    assert bad_snapshot["platform_failure_domain"] == "dokploy-api-unreachable"

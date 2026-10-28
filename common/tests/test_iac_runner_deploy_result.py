@@ -2388,3 +2388,30 @@ def test_sync_runner_own_dir_services_matches_service_key_from_path(
     for path in sample_paths:
         expected = {k for k in (service_key_from_path(path),) if k is not None}
         assert sync_runner._own_dir_services([path]) == expected, path
+
+
+def test_diagnose_failure_classifies_dokploy_deployment_error_with_log_tail(
+    monkeypatch,
+) -> None:
+    """#1366: diagnose_failure classifies Dokploy deployment record errors as
+    dokploy_deployment_error and preserves deploymentId, logPath, and log tail."""
+    sync_runner = _load_module(
+        "sync_runner_dokploy_dep_error_under_test",
+        IAC_RUNNER / "sync_runner.py",
+        monkeypatch,
+    )
+
+    stderr = (
+        "Traceback (most recent call last):\n"
+        "RuntimeError: Dokploy deployment record entered error "
+        "(deploymentId=dep-1366, logPath=/etc/dokploy/logs/truealpha/dep-1366.log, "
+        "log_tail=Pulling app | Error: Head https://ghcr.io/v2/truealpha: 502 Bad Gateway)\n"
+    )
+    diagnostic = sync_runner.diagnose_failure(stderr)
+
+    assert diagnostic["error_kind"] == "dokploy_deployment_error"
+    assert "dep-1366" in diagnostic["summary"]
+    assert "/etc/dokploy/logs/truealpha/dep-1366.log" in diagnostic["summary"]
+    assert "502 Bad Gateway" in diagnostic["summary"]
+    assert "/etc/dokploy/logs/truealpha/dep-1366.log" in diagnostic["fix_hint"]
+    assert "/etc/dokploy/logs/truealpha/dep-1366.log" in diagnostic["next_action"]

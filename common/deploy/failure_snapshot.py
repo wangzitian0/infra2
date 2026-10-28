@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import os
 
+from common.deploy.dokploy_adapter import read_deployment_log_tail
+
 # Compose/deployment states Dokploy reports once a rollout has actually started.
 _ACTIVE_STATES = {"running", "done", "success", "successful"}
 
@@ -24,6 +26,8 @@ _SNAPSHOT_FIELDS = (
     "deployment_count",
     "latest_deployment_status",
     "latest_deployment_error",
+    "latest_deployment_log_path",
+    "latest_deployment_log_tail",
     "platform_failure_domain",
     "error",
 )
@@ -78,18 +82,45 @@ def build_snapshot(client, compose_id: str) -> dict:
             "error": f"could not read Dokploy compose: {type(exc).__name__}",
             "platform_failure_domain": "dokploy-api-unreachable",
         }
+    if not isinstance(data, dict):
+        return {
+            "compose_id": compose_id,
+            "error": f"could not read Dokploy compose: {type(data).__name__}",
+            "platform_failure_domain": "dokploy-api-unreachable",
+        }
 
-    deployments = [d for d in (data.get("deployments") or []) if isinstance(d, dict)]
+    raw_deployments = data.get("deployments")
+    if not raw_deployments and hasattr(client, "get_compose_deployments"):
+        try:
+            raw_deployments = client.get_compose_deployments(compose_id)
+        except Exception:  # noqa: BLE001 - diagnostics never raise
+            raw_deployments = None
+    deployments = [d for d in (raw_deployments or []) if isinstance(d, dict)]
     compose_status = str(data.get("composeStatus") or "unknown")
     latest = _latest_deployment(deployments)
-    return {
+    latest_status = str(latest.get("status") or "none")
+    latest_error = str(latest.get("errorMessage") or "")[:500]
+    snapshot: dict = {
         "compose_id": compose_id,
         "compose_status": compose_status,
         "deployment_count": len(deployments),
-        "latest_deployment_status": str(latest.get("status") or "none"),
-        "latest_deployment_error": str(latest.get("errorMessage") or "")[:500],
+        "latest_deployment_status": latest_status,
+        "latest_deployment_error": latest_error,
         "platform_failure_domain": classify(compose_status, deployments),
     }
+    if latest_status.lower() == "error":
+        log_path = str(latest.get("logPath") or "")
+        log_tail = read_deployment_log_tail(latest)
+        snapshot["latest_deployment_log_path"] = log_path
+        snapshot["latest_deployment_log_tail"] = log_tail
+        snapshot["latest_deployment"] = {
+            "deploymentId": str(latest.get("deploymentId") or latest.get("id") or ""),
+            "status": latest_status,
+            "errorMessage": latest_error,
+            "logPath": log_path,
+            "logTail": log_tail,
+        }
+    return snapshot
 
 
 def _md_cell(value: object) -> str:
