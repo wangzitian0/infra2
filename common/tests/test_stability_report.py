@@ -614,3 +614,117 @@ def test_empty_ledger_never_renders_green_card_or_100pct_all_clear() -> None:
     card_blob = json.dumps(card, ensure_ascii=False)
     assert "All monitored signals held 100% availability" not in card_blob
     assert "No probe rounds recorded" in card_blob
+
+
+def test_collect_weekly_stability_section_correlates_7day_ledger_and_outages() -> None:
+    """Verify weekly stability section correlates 7-day VPS ledger and Cloudflare outages."""
+    from common.observability.digest import collect_weekly_stability_section
+
+    prod_doc = _ledger("production")
+    stg_doc = _ledger("staging")
+
+    def fake_reader(_env: dict, env_name: str) -> dict:
+        return prod_doc if env_name == "production" else stg_doc
+
+    def fake_outages(_url: str, _token: str) -> list:
+        return OUTAGES["outages"]
+
+    env = {
+        "INFRA2_WATCHDOG_SSH_HOST": "vps.example.invalid",
+        "INFRA2_WATCHDOG_WORKER_STATUS_TOKEN": "tok",
+    }
+    section_text, lines = collect_weekly_stability_section(
+        env,
+        now=NOW,
+        vps_ledger_reader=fake_reader,
+        outages_fetcher=fake_outages,
+    )
+
+    assert isinstance(section_text, str)
+    assert len(lines) == 2
+    assert section_text == "\n".join(lines)
+    assert "Production availability:" in lines[0]
+    assert "Signals at 100%: 0/1" in lines[0]
+    assert "Cloudflare outages: 1 (45.0m)" in lines[0]
+    assert "staging (reported, never paged):" in lines[1]
+    assert "signals at 100%" in lines[1]
+
+
+def test_collect_weekly_stability_section_raises_on_production_ledger_failure() -> None:
+    """Verify missing SSH config, failed read, or stale production ledger fails loudly."""
+    from common.observability.digest import collect_weekly_stability_section
+
+    # 1. Missing SSH config fails loudly with RuntimeError
+    with pytest.raises(
+        RuntimeError, match="INFRA2_WATCHDOG_SSH_HOST / _USER / _KEY_PATH"
+    ):
+        collect_weekly_stability_section({}, now=NOW)
+
+    # 2. SSH cat failure fails loudly with RuntimeError
+    def failing_reader(_env: dict, _env_name: str) -> dict:
+        raise RuntimeError("reading production ledger /host/ledger over SSH exited 1")
+
+    with pytest.raises(RuntimeError, match="over SSH exited 1"):
+        collect_weekly_stability_section(
+            {"INFRA2_WATCHDOG_SSH_HOST": "vps.example.invalid"},
+            now=NOW,
+            vps_ledger_reader=failing_reader,
+            outages_fetcher=lambda _u, _t: [],
+        )
+
+    # 3. Stale production ledger fails loudly with RuntimeError
+    stale_prod = _ledger("production", until=NOW.timestamp() - 7 * 3600)
+
+    with pytest.raises(RuntimeError, match="production ledger is stale"):
+        collect_weekly_stability_section(
+            {"INFRA2_WATCHDOG_SSH_HOST": "vps.example.invalid"},
+            now=NOW,
+            vps_ledger_reader=lambda _e, _n: stale_prod,
+            outages_fetcher=lambda _u, _t: [],
+        )
+
+
+def test_collect_weekly_stability_section_raises_on_outages_failure() -> None:
+    """Verify unreadable or failing Cloudflare outages fetch raises RuntimeError."""
+    from common.observability.digest import collect_weekly_stability_section
+
+    prod_doc = _ledger("production")
+
+    def failing_outages(_url: str, _token: str) -> list:
+        raise RuntimeError("outages https://worker/outages answered HTTP 500")
+
+    with pytest.raises(RuntimeError, match="answered HTTP 500"):
+        collect_weekly_stability_section(
+            {"INFRA2_WATCHDOG_SSH_HOST": "vps.example.invalid"},
+            now=NOW,
+            vps_ledger_reader=lambda _e, _n: prod_doc,
+            outages_fetcher=failing_outages,
+        )
+
+
+def test_collect_weekly_stability_section_staging_failure_reported_without_raising() -> (
+    None
+):
+    """Verify secondary staging ledger failure reports a note without raising RuntimeError."""
+    from common.observability.digest import collect_weekly_stability_section
+
+    prod_doc = _ledger("production")
+
+    def partial_reader(_env: dict, env_name: str) -> dict:
+        if env_name == "staging":
+            raise RuntimeError("staging ledger file not found")
+        return prod_doc
+
+    _section_text, lines = collect_weekly_stability_section(
+        {"INFRA2_WATCHDOG_SSH_HOST": "vps.example.invalid"},
+        now=NOW,
+        vps_ledger_reader=partial_reader,
+        outages_fetcher=lambda _u, _t: [],
+    )
+
+    assert len(lines) == 2
+    assert "Production availability:" in lines[0]
+    assert (
+        "staging (reported, never paged): ledger unavailable: staging ledger file not found"
+        in lines[1]
+    )
