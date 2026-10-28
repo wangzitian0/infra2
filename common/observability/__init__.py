@@ -28,6 +28,7 @@ _LAZY: "dict[str, str]" = {
     "DEFAULT_TIMEOUT_SECONDS": "common.observability.probes",
     "GitHubIssues": "common.observability.issue_trail",
     "IssueApi": "common.observability.issue_trail",
+    "MONTHLY_WINDOW_DAYS": "common.observability.digest",
     "OPENPANEL_CLIENTS": "common.observability.openpanel",
     "ProbeSpec": "common.observability.probes",
     "Trail": "common.observability.issue_trail",

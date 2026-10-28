@@ -493,6 +493,10 @@ def test_main_alerts_out_of_band_on_failure(monkeypatch):
     payload = json.loads(sent["text"].split(marker, 1)[1].splitlines()[0])
     assert payload["status"] == "fail"
     assert payload["failure_domain"] == "dokploy-control-plane"
+    from common.alerting import PAGER_FIELDS
+
+    for field in PAGER_FIELDS[:8]:
+        assert f"{field}：" in sent["text"]
 
 
 def test_main_no_alert_without_flag(monkeypatch):

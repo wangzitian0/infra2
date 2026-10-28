@@ -51,6 +51,7 @@ name: Ops Checks
     - cron: "37 2 * * *"
     - cron: "37 6 * * *"
     - cron: "0 1 * * 1"
+    - cron: "0 2 1 * *" # monthly operational quality & recall summary (#425 T4)
     - cron: "47 * * * *" # hourly Dokploy preview leak detection
     - cron: "27 4 * * *" # daily re-ensure of the VPS host-hygiene Dokploy schedule
     - cron: "17 7 * * *" # daily facet reconcile: compose_id + config-hash + dns drift (#542)
@@ -114,7 +115,7 @@ env:
 
 jobs:
   audit:
-    # schedule-signal-exempt: pre-T5 scheduled audit; signal registration pending (#425 T2 backlog)
+    # signal: deploy-guard-audit
     name: Audit deploy dependency graph
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '37 2 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'deploy-guard-audit' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
@@ -282,7 +283,6 @@ jobs:
         run: python tools/out_of_band_watchdog.py
 
       - name: Build and send daily positive stability report
-        if: env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != ''
         env:
           INFRA2_STABILITY_REPORT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
           INFRA2_WATCHDOG_OUTAGES_URL: ${{ vars.INFRA2_WATCHDOG_OUTAGES_URL }}
@@ -365,9 +365,9 @@ jobs:
 
   # Watchdog weekly digest jobs
   digest:
-    # schedule-signal-exempt: weekly self-proving report (#425) — its own delivery is the signal
+    # signal: monthly-ops-summary
     name: Build and send weekly digest
-    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '0 1 * * 1') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'watchdog-weekly-digest' || inputs.task == 'all')) }}
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '0 1 * * 1') || (github.event_name == 'schedule' && github.event.schedule == '0 2 1 * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'watchdog-weekly-digest' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -419,7 +419,7 @@ jobs:
           echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_stability_report" >> "$GITHUB_ENV"
 
       - name: Build and send digest
-        run: python tools/watchdog_weekly_digest.py
+        run: python tools/watchdog_weekly_digest.py ${{ github.event.schedule == '0 2 1 * *' && '--monthly' || '' }}
 
       # Two Mondays (08-31, 09-07) the stability report died on the watchdog ledger and
       # nothing paged: the digest job had no failure path (#658, recommendation 4).
@@ -451,7 +451,7 @@ jobs:
 
   # deploy_v2 acceptance canary jobs
   deploy-v2-canary:
-    # schedule-signal-exempt: stage-evidence canary, report-tier self-proving delivery (ops.observability SOP-007B); T5 registration pending (#425 T2 backlog)
+    # signal: deploy-v2-canary
     name: deploy_v2 live canary
     # Skip FORK PRs: they get no secrets, so the live deploy cannot run. Same-repo PRs,
     # main pushes, schedules, and manual runs all mutate the same reserved ephemeral slot.
@@ -552,7 +552,7 @@ jobs:
           echo "deploy_v2 acceptance canary is GREEN — the unified path deploys and converges."
 
   preview-leak-check:
-    # schedule-signal-exempt: hourly lifecycle-contract check, deliberately outside facet reconciliation (#542); T5 registration pending (#425 T2 backlog)
+    # signal: preview-leak-check
     name: Detect leaked Dokploy previews
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '47 * * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'preview-leak-check' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest

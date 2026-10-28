@@ -172,6 +172,10 @@ signals:
     failure_class: service-health
     severity: critical
     cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
 
   - signal_id: production.s3.public-route
     environment: production
@@ -182,6 +186,10 @@ signals:
     failure_class: service-health
     severity: critical
     cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
 
   - signal_id: production.authentik.public-route
     environment: production
@@ -192,6 +200,10 @@ signals:
     failure_class: service-health
     severity: critical
     cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
 
   - signal_id: production.signoz.public-route
     environment: production
@@ -202,6 +214,10 @@ signals:
     failure_class: service-health
     severity: critical
     cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
 
   - signal_id: staging.s3.public-route
     environment: staging
@@ -212,6 +228,10 @@ signals:
     failure_class: service-health
     severity: warning
     cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
 
   - signal_id: staging.authentik.public-route
     environment: staging
@@ -222,6 +242,10 @@ signals:
     failure_class: service-health
     severity: warning
     cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
 
   - signal_id: staging.signoz.public-route
     environment: staging
@@ -277,6 +301,10 @@ signals:
     failure_class: service-health
     severity: critical
     cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
 
   - signal_id: staging.finance-report-web.public-route
     environment: staging
@@ -287,6 +315,10 @@ signals:
     failure_class: service-health
     severity: warning
     cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
 
   - signal_id: staging.finance-report-api.public-route
     environment: staging
@@ -297,6 +329,10 @@ signals:
     failure_class: service-health
     severity: warning
     cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
 
   # #921: the full-dependency health route (finance_report#1653), probed in-band.
   - signal_id: production.finance-report-api-full-health.public-route
@@ -308,6 +344,10 @@ signals:
     failure_class: service-health
     severity: warning
     cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
 
   - signal_id: staging.finance-report-api-full-health.public-route
     environment: staging
@@ -318,6 +358,10 @@ signals:
     failure_class: service-health
     severity: warning
     cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
 
   - signal_id: production.truealpha-web.public-route
     environment: production
@@ -343,6 +387,10 @@ signals:
     failure_class: service-health
     severity: critical
     cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
 
   - signal_id: staging.truealpha-web.public-route
     environment: staging
@@ -353,6 +401,10 @@ signals:
     failure_class: service-health
     severity: warning
     cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
 
   - signal_id: staging.truealpha-api.public-route
     environment: staging
@@ -363,6 +415,10 @@ signals:
     failure_class: service-health
     severity: warning
     cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
 
   # The production probe-runner heartbeat pages two ways, both from the Worker:
   # stale -> P0 "VPS 或它的出网中断" (host-reachability, also a Cloudflare
@@ -702,4 +758,67 @@ signals:
     severity: critical
     cadence: 1d
     tier: day
+    type: report
+
+  # Scheduled ops-checks jobs (#425 T2 & T4 cadence convergence).
+  - signal_id: global.infra2.deploy-guard-audit
+    environment: global
+    component: iac
+    signal: deploy-guard-audit
+    primary_owner: self
+    failure_class: config-drift
+    layer: github
+    severity: critical
+    cadence: 1d
+    tier: day
+    type: report
+
+  - signal_id: global.infra2.deploy-v2-canary
+    environment: global
+    component: iac
+    signal: deploy-v2-canary
+    primary_owner: self
+    failure_class: config-drift
+    layer: github
+    severity: critical
+    cadence: 1d
+    tier: day
+    type: report
+
+  - signal_id: global.infra2.preview-leak-check
+    environment: global
+    component: dokploy
+    signal: preview-leak-check
+    primary_owner: self
+    failure_class: config-drift
+    layer: github
+    severity: warning
+    cadence: 1h
+    tier: hour
+    type: alert
+    consecutive_failures: 1
+    renotify_window_sec: 21600
+
+  - signal_id: global.infra2.host-hygiene-schedule
+    environment: global
+    component: host
+    signal: host-hygiene-schedule
+    primary_owner: self
+    failure_class: config-drift
+    layer: github
+    severity: warning
+    cadence: 1d
+    tier: day
+    type: report
+
+  - signal_id: global.infra2.monthly-ops-summary
+    environment: global
+    component: iac
+    signal: monthly-ops-summary
+    primary_owner: self
+    failure_class: watchdog-liveness
+    layer: github
+    severity: warning
+    cadence: 30d
+    tier: month
     type: report

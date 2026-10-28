@@ -250,13 +250,13 @@ if [ -n "${REMOTE}" ]; then
   if [ "${TIER}" = "weekly" ]; then
     # Weekly backups retained for 60 days (~8 weeks)
     echo "Pruning expired weekly backups older than 60d on ${REMOTE%/}/weekly..."
-    rclone delete --min-age 60d "${REMOTE%/}/weekly" 2>/dev/null || true
-    rclone rmdirs --leave-root "${REMOTE%/}/weekly" 2>/dev/null || true
+    rclone delete --min-age 60d "${REMOTE%/}/weekly" || echo "WARN: rclone retention prune failed" >&2
+    rclone rmdirs --leave-root "${REMOTE%/}/weekly" || echo "WARN: rclone retention prune failed" >&2
   elif [ "${TIER}" = "quarterly" ]; then
     # Quarterly backups retained for 730 days (2 years, total 8 snapshots)
     echo "Pruning expired quarterly backups older than 730d on ${REMOTE%/}/quarterly..."
-    rclone delete --min-age 730d "${REMOTE%/}/quarterly" 2>/dev/null || true
-    rclone rmdirs --leave-root "${REMOTE%/}/quarterly" 2>/dev/null || true
+    rclone delete --min-age 730d "${REMOTE%/}/quarterly" || echo "WARN: rclone retention prune failed" >&2
+    rclone rmdirs --leave-root "${REMOTE%/}/quarterly" || echo "WARN: rclone retention prune failed" >&2
   fi
 fi
 

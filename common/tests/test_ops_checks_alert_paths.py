@@ -50,3 +50,14 @@ def test_the_nightly_watchdog_reads_the_runner_health_and_pages_on_a_dead_prereq
         "deliver_out_of_band_alert" in health["run"] and "sys.exit(1)" in health["run"]
     )
     assert health["env"]["IAC_RUNNER_URL"].startswith("${{ vars.IAC_RUNNER_URL")
+
+
+def test_watchdog_daily_positive_stability_report_has_no_ssh_key_if_guard() -> None:
+    """Verify daily stability report step has no if condition gating on SSH key."""
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    watchdog = jobs["watchdog"]
+    steps = _steps(watchdog)
+    report_step = steps["Build and send daily positive stability report"]
+    assert "if" not in report_step or "INFRA2_WATCHDOG_SSH_PRIVATE_KEY" not in str(
+        report_step.get("if", "")
+    )

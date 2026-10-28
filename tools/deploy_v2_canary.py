@@ -36,6 +36,7 @@ Add ``--keep`` to leave the stack up.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
 import sys
@@ -310,7 +311,7 @@ def alert_failure(env, *, domain: str, detail: str, args, duration_ms: int = 0) 
     code. A red deploy canary means the shared deploy_v2 path is broken, so a real
     staging/prod deploy would likely fail the same way.
     """
-    from common.alerting import deliver_out_of_band_text
+    from common.alerting import PagerItem, deliver_out_of_band_text
 
     evidence = make_canary_stage_result(
         domain=domain,
@@ -319,8 +320,20 @@ def alert_failure(env, *, domain: str, detail: str, args, duration_ms: int = 0) 
         duration_ms=duration_ms,
         evidence_url=_run_url(env),
     )
+    pager_item = PagerItem(
+        level="P1",
+        environment="preview",
+        target=f"deploy_v2_canary ({domain})",
+        symptom=detail or f"deploy_v2 canary failed in domain {domain}",
+        since=getattr(evidence, "timestamp", None)
+        or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        impact="Shared deploy_v2 rollout path is broken; staging/production deploys may fail.",
+        action="Inspect canary run logs and Dokploy control plane.",
+        runbook="docs/ssot/ops.observability.md#sop-007b",
+    )
     text = (
         "🔴 deploy_v2 canary FAILED — infra2 deploy-path probe is RED\n"
+        f"{pager_item.format_message()}\n"
         f"failure_domain: {domain}\n"
         f"stage_result: {json.dumps(evidence.to_dict(), sort_keys=True)}\n"
         f"version_ref={args.version_ref} iac_ref={args.iac_ref} domain={args.domain}\n"
