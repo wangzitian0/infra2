@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 import re
-from pathlib import PurePosixPath
 
 from common.gate.inventory import (
     _declared_deploy_globs,
@@ -13,24 +12,26 @@ from common.gate.inventory import (
     _required_checks,
 )
 
-# A module import, so a test can change OWNER_HELD_WORKFLOWS, and the closure walk
-# of self_governance.py sees the module from this file.
-import common.gate.production_contract as production_contract
+# Keep module import so the closure walk in self_governance.py sees production_contract.
+import common.gate.production_contract as production_contract  # noqa: F401
 from common.gate.self_governance import (
-    _mutation_evidence_listed,
+    SCHEDULED_AUTOMATION_FILES,
+    _mutation_evidence_listed,  # noqa: F401
     _owner_instruction_quoted,
     is_self_governing,
 )
 from common.gate.types import (
     ABSENT,
+    ACT,
     AUTOMATED_REVIEWERS,
     BLOCKING_SEVERITY_TOTAL,
     GREEN_BUCKETS,
     GREEN_STATES,
     MAX_REVIEW_THREADS,
     MERGE_STATES_OK,
-    ACT,
+    OWNER,
     QUIET_MINUTES,
+    REVIEW,
     RULE_TEXT_FILES,
     SETTLE_SECONDS,
     UNEVALUABLE,
@@ -64,8 +65,7 @@ def _check_pr_state_and_conflicts(facts: HeadFacts, reasons: Reasons) -> bool:
     if facts.draft:
         reasons.append("pull request is a draft", ACT)
     if facts.base != "main":
-        reasons.append(f"base branch is {facts.base!r}, not main")
-        owner = True
+        reasons.append(f"base branch is {facts.base!r}, not main", REVIEW)
 
     is_open = facts.state == "OPEN"
     absent = sorted(
@@ -146,13 +146,9 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
         )
 
     # The production lock (#1138) replaces the owner for a workflow file, unless the
-    # file defines a required check or is on OWNER_HELD_WORKFLOWS. A held file goes to
-    # the owner in every lock state: the workflow direction proof reads only push paths
-    # and job names, not job bodies, so it cannot clear a file that runs a required
-    # check. An unreadable inventory holds every workflow file. Every other
-    # self-governing path stays with the owner.
+    # file defines a required check. A required-check workflow stays in the review set
+    # when the lock holds, and goes to the owner when the lock does not hold.
     lock_holds = facts.lock_failures == ()
-    owner_held = {name.casefold() for name in production_contract.OWNER_HELD_WORKFLOWS}
     required_workflows = _required_check_workflows()
 
     def _requires(path: str) -> bool:
@@ -160,15 +156,16 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
             required_workflows
         )
 
+    scheduled_automation = {_normalized_path(p) for p in SCHEDULED_AUTOMATION_FILES}
+
+    def _is_scheduled_automation(path: str) -> bool:
+        return _normalized_path(path) in scheduled_automation
+
     uncovered = sorted(
         f
         for f in facts.files
         if _normalized_path(f).startswith(WORKFLOW_PREFIX)
-        and (
-            required_workflows is None
-            or _requires(f)
-            or PurePosixPath(_normalized_path(f)).name in owner_held
-        )
+        and (required_workflows is None or _requires(f))
     )
     lock_covered = {
         f
@@ -179,67 +176,98 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
     tree_approved = bool(
         facts.head_tree_sha and facts.head_tree_sha in set(facts.approved_tree_shas)
     )
-    checklist_review_ready = any(
-        r[0] in AUTOMATED_REVIEWERS and r[2] > 0 for r in facts.reviews_on_head()
-    ) or (_opened_by_bot(facts) and _verified_at(facts) is not None)
-    checklist_clears = (
-        lock_holds and _mutation_evidence_listed(facts.body) and checklist_review_ready
+    review_recorded = (
+        any(r[0] in AUTOMATED_REVIEWERS and r[2] > 0 for r in facts.reviews_on_head())
+        or _verified_at(facts) is not None
     )
+    checklist_clears = lock_holds and review_recorded
     governing = sorted(
         f for f in facts.files if is_self_governing(f) and f not in lock_covered
     )
     # A held file never clears through the direction proof, in any lock state.
     # Rule-text files (AGENTS.md / docs/ssot/ops.merge-gate.md) require a quoted
-    # owner instruction or approved tree SHA; the mutation checklist covers code/data.
+    # owner instruction, an independent verification comment, or an approved tree SHA.
+    # Scheduled automation files always require the owner.
     unproven = [
         f
         for f in governing
         if (f not in facts.proven_tighter or f in uncovered)
-        and not (f in RULE_TEXT_FILES and quoted_instruction)
-        and not (f not in uncovered and f not in RULE_TEXT_FILES and checklist_clears)
+        and not (
+            f in RULE_TEXT_FILES
+            and (quoted_instruction or (lock_holds and _verified_at(facts) is not None))
+        )
+        and not (
+            not _is_scheduled_automation(f)
+            and f not in RULE_TEXT_FILES
+            and (f not in uncovered or required_workflows is not None)
+            and checklist_clears
+        )
         and not tree_approved
     ]
     # The reason for a held file comes first. The "without a proof" line names only
     # the files that have no proof (#1138 round 4).
     held = [f for f in unproven if f in uncovered]
     if held:
+        held_kind = REVIEW if lock_holds else OWNER
         if required_workflows is None:
             reasons.append(
                 "cannot read a blocking gate with a workflow from "
                 "docs/ssot/ci-gate-inventory.yaml: no workflow file clears through "
-                f"the lock or the direction proof ({', '.join(held)})"
+                f"the lock or the direction proof ({', '.join(held)})",
+                held_kind,
             )
         else:
             for f in held:
                 if _requires(f):
-                    reasons.append(
-                        f"{f} defines a required check: the owner approves head "
-                        f"{facts.head_sha[:7]}; the workflow proof does not read job "
-                        "bodies, so it cannot clear this file"
-                    )
-            listed = [f for f in held if not _requires(f)]
-            if listed:
-                reasons.append(
-                    f"the production lock does not cover {', '.join(listed)}: the "
-                    "file is on OWNER_HELD_WORKFLOWS in common/gate/production_contract.py"
-                )
-        owner = True
+                    if lock_holds:
+                        reasons.append(
+                            f"{f} defines a required check: an independent review of "
+                            f"head {facts.head_sha[:7]} is required; the workflow "
+                            "proof does not read job bodies, so it cannot clear this file",
+                            REVIEW,
+                        )
+                    else:
+                        reasons.append(
+                            f"{f} defines a required check: the owner approves head "
+                            f"{facts.head_sha[:7]}; the workflow proof does not read job "
+                            "bodies, so it cannot clear this file",
+                            OWNER,
+                        )
+        if not lock_holds:
+            owner = True
     proofless = [f for f in unproven if f not in facts.proven_tighter]
-    if proofless:
+    owner_proofless = [
+        f
+        for f in proofless
+        if _is_scheduled_automation(f)
+        or (not lock_holds and _normalized_path(f).startswith(WORKFLOW_PREFIX))
+    ]
+    review_proofless = [f for f in proofless if f not in owner_proofless]
+    if owner_proofless:
         reasons.append(
-            f"changes what decides merges ({', '.join(proofless)}) without a mechanical "
+            f"changes what decides merges ({', '.join(owner_proofless)}) without a mechanical "
             f"proof that the change can only make this gate say no more often: the "
             f"working-tree copy is what judged this PR, so owner approval of head "
-            f"{facts.head_sha[:7]} is required"
+            f"{facts.head_sha[:7]} is required",
+            OWNER,
         )
-        if any(f in RULE_TEXT_FILES for f in proofless):
+        owner = True
+    if review_proofless:
+        reasons.append(
+            f"changes what decides merges ({', '.join(review_proofless)}) without a mechanical "
+            f"proof that the change can only make this gate say no more often: the "
+            f"working-tree copy is what judged this PR, so an independent review of head "
+            f"{facts.head_sha[:7]} is required",
+            REVIEW,
+        )
+        if any(f in RULE_TEXT_FILES for f in review_proofless):
             reasons.append(
                 "rule-text files (AGENTS.md / docs/ssot/ops.merge-gate.md) can clear "
                 "this instead by citing the owner instruction that authorised the "
                 "edit in the PR body, under a heading matching 'owner instruction' / "
-                "'owner 指示' followed by a quoted line (`> ...` or 「...」)"
+                "'owner 指示' followed by a quoted line (`> ...` or 「...」)",
+                REVIEW,
             )
-        owner = True
 
     if not _declared_deploy_globs()[1]:
         reasons.append(
@@ -257,7 +285,8 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
         via = f" via {', '.join(workflows)}" if workflows else ""
         reasons.append(
             f"merging would trigger a deploy{via} ({', '.join(deploying)}): owner "
-            f"approval of head {facts.head_sha[:7]} required"
+            f"approval of head {facts.head_sha[:7]} required",
+            OWNER,
         )
         owner = True
 
@@ -267,7 +296,8 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
     ]
     if facts.lock_failures and (deploying or held_workflows):
         reasons.append(
-            f"production lock not verified: {'; '.join(facts.lock_failures)}"
+            f"production lock not verified: {'; '.join(facts.lock_failures)}",
+            OWNER,
         )
 
     required, inventory_read = _required_checks()
@@ -502,11 +532,12 @@ def evaluate(
 
     return Verdict(
         ready=not reasons,
-        owner_required=owner1 or owner2,
+        owner_required=owner1 or owner2 or (OWNER in reasons.kinds),
         reasons=list(reasons),
         quiet_remaining_seconds=max(0, remaining),
         action_required=ACT in reasons.kinds,
         unevaluable=UNEVALUABLE in reasons.kinds,
+        review_required=REVIEW in reasons.kinds,
     )
 
 
@@ -563,7 +594,6 @@ def evaluate_scope(
 ) -> dict[str, object]:
     """Classify changed paths before or after PR creation (#1104)."""
     lock_holds = lock_failures == ()
-    owner_held = {name.casefold() for name in production_contract.OWNER_HELD_WORKFLOWS}
     required_workflows = _required_check_workflows()
 
     def _requires(path: str) -> bool:
@@ -575,11 +605,7 @@ def evaluate_scope(
         f
         for f in files
         if _normalized_path(f).startswith(WORKFLOW_PREFIX)
-        and (
-            required_workflows is None
-            or _requires(f)
-            or PurePosixPath(_normalized_path(f)).name in owner_held
-        )
+        and (required_workflows is None or _requires(f))
     )
     lock_covered = {
         f
@@ -631,6 +657,7 @@ def render(facts: HeadFacts, verdict: Verdict) -> str:
     kind = {
         "unevaluable": "could not evaluate (not a verdict on the PR)",
         "owner": "needs the owner",
+        "review_required": "review required",
         "action": "action required (waiting will not fix it)",
         "wait": "not yet",
     }[verdict.outcome]

@@ -56,6 +56,8 @@ def _inventory_only_gained_authority(base_text: str, head_text: str) -> bool:
 
 def _workflow_only_gained_authority(base_text: str, head_text: str) -> bool:
     """True when a workflow's change only makes this gate say no more often."""
+    from common.gate.production_contract import UNCLASSIFIED_SCHEDULED_JOBS
+
     yaml_mod = _get_yaml()
 
     def read(text):
@@ -81,7 +83,15 @@ def _workflow_only_gained_authority(base_text: str, head_text: str) -> bool:
             str((spec.get("name") if isinstance(spec, dict) else None) or job_id)
             for job_id, spec in jobs.items()
         )
-        return paths, names
+        envs = {
+            str(job_id): spec.get("environment")
+            for job_id, spec in jobs.items()
+            if isinstance(spec, dict) and "environment" in spec
+        }
+        unclassified = {
+            name: jobs.get(name) for name in UNCLASSIFIED_SCHEDULED_JOBS if name in jobs
+        }
+        return paths, names, envs, unclassified
 
     base, head = read(base_text), read(head_text)
     if base is None or head is None:
@@ -91,6 +101,8 @@ def _workflow_only_gained_authority(base_text: str, head_text: str) -> bool:
         if head_paths is not None:
             return False
     elif head_paths is not None and not base_paths <= head_paths:
+        return False
+    if base[2] != head[2] or base[3] != head[3]:
         return False
     return base[1] <= head[1]
 

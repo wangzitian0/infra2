@@ -269,10 +269,26 @@ def test_passing_every_secret_to_a_called_workflow_is_reported():
     ]
 
 
-def test_no_workflow_file_is_held_with_the_owner_by_decision_of_2026_10_08():
-    """The lock covers every workflow file (#1138). The credentials that ungated jobs
-    read are the open risk; scoping them is tracked in #1147."""
-    assert production_contract.OWNER_HELD_WORKFLOWS == frozenset()
+def test_owner_held_workflows_constant_is_removed():
+    """#1340: OWNER_HELD_WORKFLOWS is deleted from common/gate/production_contract.py."""
+    assert not hasattr(production_contract, "OWNER_HELD_WORKFLOWS")
+
+
+@pytest.mark.parametrize("job_name", ["host-hygiene-schedule", "facet-reconcile"])
+def test_editing_unclassified_scheduled_jobs_in_ops_checks_fails_contract(job_name):
+    """#1340: editing host-hygiene-schedule or facet-reconcile in ops-checks.yml fails the contract."""
+    texts = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in sorted(WORKFLOWS_DIR.glob("*.y*ml"))
+    }
+    ops_doc = yaml.safe_load(texts["ops-checks.yml"])
+    ops_doc["jobs"][job_name]["steps"].append({"run": "echo modified"})
+    texts["ops-checks.yml"] = yaml.safe_dump(ops_doc, sort_keys=False)
+    failures = workflow_contract_failures(texts)
+    assert (
+        f"ops-checks.yml:{job_name} edits an unclassified scheduled production job"
+        in failures
+    )
 
 
 # --- #1138 audit: the condition is exact, the secret list is default deny -----------

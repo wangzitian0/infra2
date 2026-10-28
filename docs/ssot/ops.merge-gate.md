@@ -45,7 +45,7 @@
   When the lock does not hold or cannot be read, the merge needs the owner's approval of the current head SHA.
   An approval of an older head does not apply. See [Production lock](#production-lock).
   The target environment decides first, then reversibility. When the two disagree, the environment decides.
-- **其二，改动"决定合流的东西"（自我裁决闭包，#787 / #1040 / #1138）**：`tools/pr_merge_gate.self_governing_files()` 从 `pr_merge_gate.py` 出发，BFS 它 import 的每个仓内模块、它读的数据文件及各自测试，并显式包含两份规则散文（`AGENTS.md` 与本文件）。当 `production lock verified` 成立时，闭包内文件的自主合流出口以 [Production lock](#production-lock) 章节的 3 条出口为准（规则散文凭 `## Owner instruction` 引用放行、`ci-gate-inventory.yaml` 凭 `_proven_tighter()` 收紧证明放行、其余非 workflow 门禁代码/数据凭 `### Mutation evidence` + 当前 head 的自动审查或独立验证评论放行）。若仍触发 `exit 2`，则属于需 owner 批准的终态，不通过轮询消除。
+- **其二，改动"决定合流的东西"（自我裁决闭包，#787 / #1040 / #1138 / #1340）**：`tools/pr_merge_gate.self_governing_files()` 从 `pr_merge_gate.py` 出发，BFS 它 import 的每个仓内模块、它读的数据文件及各自测试，并显式包含两份规则散文（`AGENTS.md` 与本文件）。门禁仅对生产路径返回 `outcome="owner"` (`owner_required=True`)；闭包内其余非生产路径在获得当前 head 的独立审查前返回 `outcome="review_required"` (`review_required=True`, `owner_required=False`)，审查记录就位后返回 `ready=True`（详见 [Production lock](#production-lock)）。
 - **受保护文件**（`CLAUDE.md`，及各 App 标注为 protected 的架构文档）：修改时在 PR description 中引用授权它的 owner 指令，使授权可追溯。
 - **合流后闭环**：使用仓库允许的合流方式；确认 merge commit 已落在目标分支并监看 post-merge checks。失败时立即停止 tag / promote，报告并修复，不得继续发布。
   **但 `cancelled` 在合流前与合流后不是同一个含义**：作为 Merge Authority 一律算不满足（见上）；
@@ -75,22 +75,26 @@ The gate also applies the production contract to every workflow file of the head
 The contract tables are in `common/gate/production_contract.py`.
 The lock holds when the four facts are true and the head satisfies the contract. Then:
 
-- The agent merges a workflow edit, except in a workflow that defines a required check.
-  That workflow goes to the owner in every lock state, even when the direction proof calls the edit tighter.
+- The agent merges a workflow edit, except in a workflow that defines a required check or in the unclassified scheduled jobs `host-hygiene-schedule` and `facet-reconcile` of `ops-checks.yml`.
+  A workflow that defines a required check stays in the review set (`outcome="review_required"` when the lock holds), even when the direction proof calls the edit tighter.
   The workflow proof reads only push paths and job names, not job bodies.
   So it cannot show that a required job still checks the same thing.
   The gate derives these workflows from the `blocks_merge: true` gates in `ci-gate-inventory.yaml`.
   When the gate cannot read such a gate, the lock releases no workflow file.
-  A file on `OWNER_HELD_WORKFLOWS` in `common/gate/production_contract.py` is also held. That list is empty by decision of 2026-10-08.
 - A deploy-triggering path does not need the owner. Each job named as production waits for the environment reviewer.
 
 Fail closed: when a fact is false or unreadable, the earlier rules apply to every other file. The verdict names each failure.
-When the lock holds, these changes still need the owner unless cleared by a gate exit below: the gate code and data, their tests, the rule-text files, and the contract tables.
-Three exits apply:
+The gate returns `outcome="owner"` (`owner_required=True`) only for a production path (#1340):
 
-- A rule-text file clears with a quoted owner instruction in the PR body.
+- An edit to the settings of the `production` environment.
+- An edit to the jobs `host-hygiene-schedule` or `facet-reconcile` in `.github/workflows/ops-checks.yml`, or to `tools/host_hygiene_schedule.py` or `tools/facet_reconcile.py`.
+- A workflow or deploy-triggering edit when the production lock is not verified.
+
+Every other edit in the closure (`common/gate/*.py`, `tools/pr_merge_gate.py`, `common/tests/test_*.py`, `docs/ssot/ci-gate-inventory.yaml`, `AGENTS.md`, `docs/ssot/ops.merge-gate.md`, `pyproject.toml`, shadow files, and required-check workflows when the lock holds) returns `outcome="review_required"` (`review_required=True`, `owner_required=False`) until cleared by one of these exits:
+
+- A rule-text file clears with a quoted owner instruction in the PR body or an independent verification comment on the current head.
 - A change to `ci-gate-inventory.yaml` clears when the direction proof shows it is tighter.
-- A non-workflow file in `self_governing_files()` clears when the lock holds (`lock_state=verified`), the PR body has a `### Mutation evidence` section naming at least one test (`test_<name>` or `path::name`), and the current head has an automated review or bot independent verification comment (#1040).
+- A review-set file clears when the lock holds (`lock_state=verified`) and the current head has a recorded automated review or an independent verification comment (#1040, #1340).
 - Across a mechanical rebase that leaves `HEAD^{tree}` unchanged, citing the previously approved commit SHA (`approved: <sha>`) preserves approval (#924).
 
 A file that Python or pytest runs before gate code is also in the gate closure.
@@ -141,7 +145,7 @@ Residual risks:
 |---|---|---|
 | 0 | Ready (merged with `--merge`). | Continue from the latest main. |
 | 1 | Wait. Time alone fixes it: a check is pending, no check has reported yet, or the head is settling. | Wait and re-run. |
-| 2 | Needs the owner. | Ask the owner about this head SHA. |
+| 2 | Production path (`outcome="owner"`) or review set (`outcome="review_required"`). | For `owner`, ask the owner about this head SHA. For `review_required`, record an independent review of the head (or retarget the PR when base is not `main`). |
 | 3 | Action required. Waiting does not fix it: a red or cancelled check, an open review thread, a conflict, a draft, a PR that is not open, or a base that changed under green checks. | Fix the cause, push, re-run. |
 | 4 | Could not evaluate. This is not a verdict on the PR. The gate checkout's rules differ from main's (#873), or `gh` failed or returned unreadable data. The preflight finds a stale checkout before it reads any PR state. | Pull main in the gate checkout, or retry after the `gh` failure. |
 
