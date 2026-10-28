@@ -122,14 +122,14 @@ def test_backend_only_configuration_stays_off_the_worker() -> None:
         )
 
 
-def test_s3_endpoints_are_environment_scoped() -> None:
+def test_s3_endpoints_use_the_singleton_s3_service() -> None:
     services = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]
     for name in ("backend", "prefect-worker"):
         env = _environment(services[name])
-        assert env.get("S3_ENDPOINT") == "http://platform-s3${ENV_SUFFIX}:9000", name
+        assert env.get("S3_ENDPOINT") == "http://platform-s3:9000", name
         assert (
             env.get("S3_PUBLIC_ENDPOINT")
-            == "${S3_PUBLIC_ENDPOINT:-https://s3${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}}"
+            == "${S3_PUBLIC_ENDPOINT:-https://s3.${INTERNAL_DOMAIN}}"
         ), name
 
     preview_compose = ROOT / "finance_report/finance_report/preview/compose.yaml"
@@ -137,8 +137,118 @@ def test_s3_endpoints_are_environment_scoped() -> None:
         "services"
     ]
     preview_backend = _environment(preview_services["backend"])
-    assert preview_backend.get("S3_ENDPOINT") == "http://platform-s3-staging:9000"
-    assert (
-        preview_backend.get("S3_PUBLIC_ENDPOINT")
-        == "${S3_PUBLIC_ENDPOINT:-https://s3-staging.${INTERNAL_DOMAIN}}"
+    assert preview_backend.get("S3_ENDPOINT") == "http://platform-s3:9000"
+    assert preview_backend.get("S3_PUBLIC_ENDPOINT") == "${S3_PUBLIC_ENDPOINT:-}"
+
+
+def _load_finance_report_deploy_module():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "finance_report_app_deploy",
+        ROOT / "finance_report/finance_report/10.app/deploy.py",
     )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_ensure_s3_bucket_via_api_succeeds_when_head_returns_200(monkeypatch) -> None:
+    module = _load_finance_report_deploy_module()
+    deployer = module.AppDeployer
+
+    class _FakeSecrets:
+        def __init__(self, data: dict[str, str]):
+            self._data = data
+
+        def get(self, key: str) -> str | None:
+            return self._data.get(key)
+
+    monkeypatch.setattr(
+        deployer,
+        "secrets_backend",
+        classmethod(
+            lambda cls, env=None: _FakeSecrets(
+                {"S3_ACCESS_KEY": "ak-staging", "S3_SECRET_KEY": "sk-staging"}
+            )
+        ),
+    )
+    calls: list[tuple[str, str, str, str, str]] = []
+
+    def fake_request(method, endpoint_url, bucket, access_key, secret_key, **_kw):
+        calls.append((method, endpoint_url, bucket, access_key, secret_key))
+        return 200
+
+    monkeypatch.setattr(deployer, "_s3_bucket_request", staticmethod(fake_request))
+    assert deployer._ensure_s3_bucket_via_api(env="staging") is True
+    assert calls == [
+        (
+            "HEAD",
+            "http://platform-s3:9000",
+            "finance-report-staging",
+            "ak-staging",
+            "sk-staging",
+        )
+    ]
+
+
+def test_ensure_s3_bucket_via_api_creates_missing_bucket_on_404(monkeypatch) -> None:
+    module = _load_finance_report_deploy_module()
+    deployer = module.AppDeployer
+
+    class _FakeSecrets:
+        def __init__(self, data: dict[str, str]):
+            self._data = data
+
+        def get(self, key: str) -> str | None:
+            return self._data.get(key)
+
+    monkeypatch.setattr(
+        deployer,
+        "secrets_backend",
+        classmethod(
+            lambda cls, env=None: _FakeSecrets(
+                {"S3_ACCESS_KEY": "ak-staging", "S3_SECRET_KEY": "sk-staging"}
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "get_secrets",
+        lambda project, service, env: _FakeSecrets(
+            {"root_user": "minio-root", "root_password": "minio-root-password"}
+        ),
+    )
+    calls: list[tuple[str, str, str, str, str]] = []
+    responses = iter([404, 200, 200])
+
+    def fake_request(method, endpoint_url, bucket, access_key, secret_key, **_kw):
+        calls.append((method, endpoint_url, bucket, access_key, secret_key))
+        return next(responses)
+
+    monkeypatch.setattr(deployer, "_s3_bucket_request", staticmethod(fake_request))
+    assert deployer._ensure_s3_bucket_via_api(env="staging") is True
+    assert calls == [
+        (
+            "HEAD",
+            "http://platform-s3:9000",
+            "finance-report-staging",
+            "ak-staging",
+            "sk-staging",
+        ),
+        (
+            "PUT",
+            "http://platform-s3:9000",
+            "finance-report-staging",
+            "minio-root",
+            "minio-root-password",
+        ),
+        (
+            "HEAD",
+            "http://platform-s3:9000",
+            "finance-report-staging",
+            "ak-staging",
+            "sk-staging",
+        ),
+    ]

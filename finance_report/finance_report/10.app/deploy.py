@@ -1,4 +1,10 @@
+import datetime
+import hashlib
+import hmac
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from common.deploy.deployer import Deployer, make_tasks
 from common.console import header, success, info, warning, error
@@ -10,8 +16,75 @@ from common.core.facets import (
     StorageFacet,
 )
 from common.observability.openpanel import openpanel_env
+from common.security.store import VaultSecrets, get_secrets
 
 shared_tasks = sys.modules.get("finance_report.10.app.shared")
+
+
+def _s3_bucket_request(
+    method: str,
+    endpoint_url: str,
+    bucket: str,
+    access_key: str,
+    secret_key: str,
+    *,
+    region: str = "us-east-1",
+    timeout: float = 5.0,
+) -> int:
+    """Send a SigV4-signed HEAD or PUT request for a bucket and return HTTP status."""
+    url = f"{endpoint_url.rstrip('/')}/{bucket}"
+    parsed = urllib.parse.urlsplit(url)
+    host = parsed.netloc
+    uri = parsed.path or "/"
+    now = datetime.datetime.now(datetime.timezone.utc)
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    date_stamp = now.strftime("%Y%m%d")
+    payload_hash = hashlib.sha256(b"").hexdigest()
+    canonical_headers = (
+        f"host:{host}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n"
+    )
+    signed_headers = "host;x-amz-content-sha256;x-amz-date"
+    canonical_request = (
+        f"{method}\n{uri}\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
+    )
+    credential_scope = f"{date_stamp}/{region}/s3/aws4_request"
+    string_to_sign = (
+        "AWS4-HMAC-SHA256\n"
+        f"{amz_date}\n"
+        f"{credential_scope}\n"
+        f"{hashlib.sha256(canonical_request.encode('utf-8')).hexdigest()}"
+    )
+
+    def _sign(key: bytes, msg: str) -> bytes:
+        return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).digest()
+
+    k_date = _sign(f"AWS4{secret_key}".encode("utf-8"), date_stamp)
+    k_region = _sign(k_date, region)
+    k_service = _sign(k_region, "s3")
+    k_signing = _sign(k_service, "aws4_request")
+    signature = hmac.new(
+        k_signing, string_to_sign.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    authorization = (
+        f"AWS4-HMAC-SHA256 Credential={access_key}/{credential_scope}, "
+        f"SignedHeaders={signed_headers}, Signature={signature}"
+    )
+    req = urllib.request.Request(
+        url,
+        data=b"" if method == "PUT" else None,
+        method=method,
+        headers={
+            "Host": host,
+            "x-amz-date": amz_date,
+            "x-amz-content-sha256": payload_hash,
+            "Authorization": authorization,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return int(response.status)
+    except urllib.error.HTTPError as exc:
+        return int(exc.code)
 
 
 class AppDeployer(Deployer):
@@ -217,7 +290,9 @@ class AppDeployer(Deployer):
 
         secrets = cls.secrets_backend()
         bucket_name = (
-            secrets.get("S3_BUCKET") or "statements"
+            cls.compose_env_base(cls.env()).get("S3_BUCKET")
+            or secrets.get("S3_BUCKET")
+            or "statements"
         )  # = compose default (#637)
         existing_access_key = secrets.get("S3_ACCESS_KEY")
         existing_secret_key = secrets.get("S3_SECRET_KEY")
@@ -270,6 +345,99 @@ class AppDeployer(Deployer):
                 success("Vault: S3_BUCKET stored")
 
     _ensure_minio_bucket = _ensure_s3_bucket
+
+    _s3_bucket_request = staticmethod(_s3_bucket_request)
+
+    @classmethod
+    def _ensure_s3_bucket_via_api(
+        cls,
+        *,
+        env: str | None = None,
+        endpoint_url: str = "http://platform-s3:9000",
+    ) -> bool:
+        e = cls._env_for(env)
+        effective_env = env or cls._require_env_name(e)
+        secrets = cls.secrets_backend(env=effective_env)
+        try:
+            access_key = secrets.get("S3_ACCESS_KEY")
+            secret_key = secrets.get("S3_SECRET_KEY")
+            stored_bucket = secrets.get("S3_BUCKET")
+        except VaultSecrets.VaultSecretNotFoundError:
+            return True
+        if not (access_key and secret_key):
+            return True
+        bucket_name = (
+            cls.compose_env_overrides(
+                env=effective_env,
+                domain=e.get("INTERNAL_DOMAIN") or "",
+                env_suffix=e.get("ENV_DOMAIN_SUFFIX") or "",
+            ).get("S3_BUCKET")
+            or stored_bucket
+            or "statements"
+        )
+        try:
+            status = cls._s3_bucket_request(
+                "HEAD", endpoint_url, bucket_name, access_key, secret_key
+            )
+        except urllib.error.URLError as exc:
+            warning(
+                f"S3 endpoint {endpoint_url} not reachable from this context ({exc}); "
+                "skipping bucket API check"
+            )
+            return True
+        if status == 200:
+            info(f"S3 bucket '{bucket_name}' verified reachable via S3 API")
+            return True
+        if status == 404:
+            warning(
+                f"S3 bucket '{bucket_name}' returned 404 on {endpoint_url}; "
+                "creating with S3 root credentials"
+            )
+            try:
+                root_secrets = get_secrets("platform", "minio", "production")
+                root_user = root_secrets.get("root_user") or "admin"
+                root_password = root_secrets.get("root_password")
+            except VaultSecrets.VaultError as exc:
+                error(f"Could not read S3 root credentials from Vault: {exc}")
+                return False
+            if not root_password:
+                error(
+                    "S3 root_password missing in secret/platform/production/minio; "
+                    f"cannot create bucket '{bucket_name}'"
+                )
+                return False
+            put_status = cls._s3_bucket_request(
+                "PUT", endpoint_url, bucket_name, root_user, root_password
+            )
+            if put_status not in (200, 204, 409):
+                error(
+                    f"Failed to create S3 bucket '{bucket_name}' on {endpoint_url} "
+                    f"(HTTP {put_status})"
+                )
+                return False
+            verify_status = cls._s3_bucket_request(
+                "HEAD", endpoint_url, bucket_name, access_key, secret_key
+            )
+            if verify_status == 200:
+                success(
+                    f"S3 bucket '{bucket_name}' created and verified on {endpoint_url}"
+                )
+                return True
+            error(
+                f"S3 bucket '{bucket_name}' verification failed after creation "
+                f"(HTTP {verify_status})"
+            )
+            return False
+        error(
+            f"S3 bucket '{bucket_name}' check failed on {endpoint_url} (HTTP {status})"
+        )
+        return False
+
+    @classmethod
+    def apply_secret_supply(cls, c, *, env: str | None = None) -> bool:
+        if not super().apply_secret_supply(c, env=env):
+            return False
+        return cls._ensure_s3_bucket_via_api(env=env)
 
 
 if shared_tasks:
