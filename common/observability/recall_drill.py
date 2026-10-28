@@ -13,12 +13,14 @@ from typing import Any
 import yaml
 
 from common.alerting import PAGER_FIELDS, PagerItem
+from common.observability.watchdog_audit import LAYER_OF_OWNER, _load_inventory
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SIGNALS_FILE = REPO_ROOT / "docs" / "ssot" / "watchdog-signals.yaml"
 
 SIMULATED_FAILURES: dict[str, dict[str, Any]] = {
     "host-reachability": {
+        "signal_id": "production.dokploy.public-route",
         "level": "P0",
         "target": "dokploy-public-route",
         "symptom": "External HTTP probe returned status 522.",
@@ -28,6 +30,7 @@ SIMULATED_FAILURES: dict[str, dict[str, Any]] = {
         "runbook": "docs/ssot/ops.observability.md#sop-001",
     },
     "alert-pipeline": {
+        "signal_id": "production.alerting-probes.heartbeat",
         "level": "P1",
         "target": "platform-alerting-probes",
         "symptom": "Probe loop reports bridge delivery failing for 42 minutes.",
@@ -37,6 +40,7 @@ SIMULATED_FAILURES: dict[str, dict[str, Any]] = {
         "runbook": "docs/ssot/ops.observability.md#sop-002",
     },
     "watchdog-liveness": {
+        "signal_id": "global.cloudflare-worker-status.github",
         "level": "P0",
         "target": "infra2-cloudflare-watchdog",
         "symptom": "Cloudflare worker status document is older than 7200 seconds.",
@@ -46,6 +50,7 @@ SIMULATED_FAILURES: dict[str, dict[str, Any]] = {
         "runbook": "docs/ssot/ops.observability.md#sop-003",
     },
     "service-health": {
+        "signal_id": "production.signoz.public-route",
         "level": "P1",
         "target": "finance-report-backend",
         "symptom": "Backend emitted more than 10 error logs in 15 minutes.",
@@ -55,6 +60,7 @@ SIMULATED_FAILURES: dict[str, dict[str, Any]] = {
         "runbook": "docs/ssot/ops.observability.md#sop-004b",
     },
     "data-protection": {
+        "signal_id": "production.infra2-backup-production.github",
         "level": "P1",
         "target": "platform/postgres",
         "symptom": "Daily database backup artifact is stale or missing on remote.",
@@ -64,6 +70,7 @@ SIMULATED_FAILURES: dict[str, dict[str, Any]] = {
         "runbook": "docs/ssot/ops.backup.md#sop-001",
     },
     "config-drift": {
+        "signal_id": "global.infra2.facet-reconcile",
         "level": "P2",
         "target": "platform/vault",
         "symptom": "Vault self-refresh audit detected token drift.",
@@ -73,6 +80,7 @@ SIMULATED_FAILURES: dict[str, dict[str, Any]] = {
         "runbook": "docs/ssot/ops.security.md#sop-002",
     },
     "peer-scheduler": {
+        "signal_id": "global.truealpha-scheduler-liveness.github",
         "level": "P1",
         "target": "truealpha-scheduler",
         "symptom": "Peer repository scheduler heartbeat missing for 60 minutes.",
@@ -82,6 +90,7 @@ SIMULATED_FAILURES: dict[str, dict[str, Any]] = {
         "runbook": "docs/ssot/ops.observability.md#sop-005",
     },
     "scheduled-job-start": {
+        "signal_id": "global.infra2-scheduled-job-start.github",
         "level": "P1",
         "target": "ops-checks/host-hygiene",
         "symptom": "Scheduled ops-checks workflow failed before job execution started.",
@@ -104,6 +113,7 @@ class DrillClassResult:
     payload: dict[str, str]
     fields_verified: bool
     status: str
+    signal_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -126,25 +136,74 @@ def load_failure_classes(
     return {class_name: info.get("pager", "") for class_name, info in classes.items()}
 
 
-def run_recall_drill(*, dry_run: bool = True) -> RecallDrillReport:
+def run_recall_drill(
+    *,
+    dry_run: bool = True,
+    inventory: dict[str, Any] | None = None,
+) -> RecallDrillReport:
     """Run deterministic recall drill for all 8 watchdog failure classes.
 
-    Refuses execution when dry_run is False to protect ambient environments.
+    Verify signal routing, pager layer assignment, and alert fields.
+    Refuse execution when dry_run is False.
     """
     if not dry_run:
         raise ValueError(
             "Recall drill only supports dry_run=True to protect ambient services."
         )
 
-    failure_classes = load_failure_classes()
+    if inventory is None:
+        inventory = _load_inventory()
+
+    raw_classes = inventory.get("failure_classes") or {}
+    failure_classes = {
+        name: spec.get("pager", "") if isinstance(spec, dict) else str(spec)
+        for name, spec in raw_classes.items()
+    }
+    if not failure_classes:
+        failure_classes = load_failure_classes()
+
+    signals = inventory.get("signals") or []
+    signals_by_id = {
+        str(sig.get("signal_id")): sig for sig in signals if sig.get("signal_id")
+    }
+
+    classes_match = set(failure_classes.keys()) == set(SIMULATED_FAILURES.keys())
     results: dict[str, dict[str, Any]] = {}
     classes_evaluated: list[str] = []
 
     for failure_class, expected_layer in failure_classes.items():
         classes_evaluated.append(failure_class)
-        sim = SIMULATED_FAILURES.get(failure_class, {})
-        actual_layer = expected_layer
-        layer_verified = bool(actual_layer and actual_layer == expected_layer)
+        sim = SIMULATED_FAILURES.get(failure_class)
+        if not sim:
+            result_obj = DrillClassResult(
+                failure_class=failure_class,
+                expected_layer=expected_layer,
+                actual_layer="",
+                layer_verified=False,
+                payload={},
+                fields_verified=False,
+                status="fail",
+                signal_id="",
+            )
+            results[failure_class] = asdict(result_obj)
+            continue
+
+        signal_id = str(sim.get("signal_id", ""))
+        sig = signals_by_id.get(signal_id)
+        if sig is None:
+            actual_layer = ""
+            layer_verified = False
+        else:
+            owner = str(sig.get("primary_owner", ""))
+            signal_fc = sig.get("failure_class") or (
+                "service-health" if owner == "internal" else None
+            )
+            actual_layer = str(LAYER_OF_OWNER.get(owner) or sig.get("layer", ""))
+            layer_verified = bool(
+                actual_layer
+                and actual_layer == expected_layer
+                and signal_fc == failure_class
+            )
 
         item = PagerItem(
             level=sim.get("level", "P1"),
@@ -170,11 +229,14 @@ def run_recall_drill(*, dry_run: bool = True) -> RecallDrillReport:
             payload=fields,
             fields_verified=fields_verified,
             status=class_status,
+            signal_id=signal_id,
         )
         results[failure_class] = asdict(result_obj)
 
     overall_status = (
-        "pass" if all(r["status"] == "pass" for r in results.values()) else "fail"
+        "pass"
+        if classes_match and all(r["status"] == "pass" for r in results.values())
+        else "fail"
     )
     return RecallDrillReport(
         status=overall_status,

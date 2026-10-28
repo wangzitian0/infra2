@@ -89,3 +89,65 @@ def test_recall_drill_cli_refuses_no_dry_run() -> None:
     )
     assert result.returncode == 1
     assert "Recall drill only supports dry_run=True" in result.stderr
+
+
+def test_recall_drill_fails_on_signal_layer_mismatch() -> None:
+    """Fail recall drill when signal layer mismatches failure class pager."""
+    from common.observability.watchdog_audit import _load_inventory
+
+    inv = _load_inventory()
+    mutated_signals = []
+    for sig in inv["signals"]:
+        if sig.get("signal_id") == "production.dokploy.public-route":
+            mutated_sig = dict(sig)
+            mutated_sig["primary_owner"] = "github"
+            mutated_signals.append(mutated_sig)
+        else:
+            mutated_signals.append(sig)
+    inv["signals"] = mutated_signals
+
+    report = run_recall_drill(dry_run=True, inventory=inv)
+    assert report.status == "fail"
+    res = report.results["host-reachability"]
+    assert res["layer_verified"] is False
+    assert res["status"] == "fail"
+    assert res["actual_layer"] == "github"
+    assert res["expected_layer"] == "cloudflare"
+
+
+def test_recall_drill_fails_on_signal_failure_class_mismatch() -> None:
+    """Fail recall drill when signal failure class mismatches."""
+    from common.observability.watchdog_audit import _load_inventory
+
+    inv = _load_inventory()
+    mutated_signals = []
+    for sig in inv["signals"]:
+        if sig.get("signal_id") == "production.dokploy.public-route":
+            mutated_sig = dict(sig)
+            mutated_sig["failure_class"] = "service-health"
+            mutated_signals.append(mutated_sig)
+        else:
+            mutated_signals.append(sig)
+    inv["signals"] = mutated_signals
+
+    report = run_recall_drill(dry_run=True, inventory=inv)
+    assert report.status == "fail"
+    res = report.results["host-reachability"]
+    assert res["layer_verified"] is False
+    assert res["status"] == "fail"
+
+
+def test_recall_drill_fails_on_unsimulated_failure_class() -> None:
+    """Fail recall drill when inventory has an unsimulated failure class."""
+    from common.observability.watchdog_audit import _load_inventory
+
+    inv = _load_inventory()
+    classes = dict(inv.get("failure_classes", {}))
+    classes["unsimulated-new-class"] = {"pager": "vps", "covers": "test"}
+    inv["failure_classes"] = classes
+
+    report = run_recall_drill(dry_run=True, inventory=inv)
+    assert report.status == "fail"
+    res = report.results["unsimulated-new-class"]
+    assert res["status"] == "fail"
+    assert res["layer_verified"] is False

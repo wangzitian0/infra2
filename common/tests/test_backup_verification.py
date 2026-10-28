@@ -288,6 +288,24 @@ def test_backup_alert_payload_severity_mapping() -> None:
     assert payload_empty["commonLabels"]["severity"] == "info"
 
 
+def test_backup_alert_payload_environment() -> None:
+    """Propagate report environment or default to production in alert labels."""
+    check = {
+        "status": "fail",
+        "service_id": "test/service",
+        "severity": "P1",
+        "summary": "backup failed",
+        "evidence": "none",
+    }
+    payload_staging = build_backup_alert_payload(
+        {"environment": "staging", "checks": [check]}
+    )
+    assert payload_staging["alerts"][0]["labels"]["environment"] == "staging"
+
+    payload_default = build_backup_alert_payload({"checks": [check]})
+    assert payload_default["alerts"][0]["labels"]["environment"] == "production"
+
+
 def test_backup_runner_creates_archive_and_checksum(tmp_path) -> None:
     """#158: backup runner can produce manifest-ready artifacts."""
     backup_runner = _load_backup_runner()

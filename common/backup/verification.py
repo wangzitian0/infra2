@@ -244,10 +244,11 @@ _SEVERITY_RANK = {
 def build_backup_alert_payload(report: dict[str, Any]) -> dict[str, Any]:
     failures = [check for check in report["checks"] if check["status"] != "pass"]
     alerts = []
+    env_name = str(report.get("environment") or "production")
     for check in failures:
         identity = ServiceIdentity.build(
             check["service_id"],
-            "production",
+            env_name,
             component="backup",
         )
         check_severity = _BACKUP_SEVERITY_MAP.get(check.get("severity", ""), "warning")
