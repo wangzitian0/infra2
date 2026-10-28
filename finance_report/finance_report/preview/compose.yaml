@@ -216,7 +216,7 @@ services:
 
         echo "✅ [CHECKPOINT-2] Migrations completed successfully"
         echo "🔍 [CHECKPOINT-3] Starting uvicorn on port 8000..."
-        exec uvicorn src.main:app --host 0.0.0.0 --port 8000
+        exec uvicorn src.main:app --host 0.0.0.0 --port 8000 --timeout-keep-alive 120
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
       # A fresh preview DB runs the full migration chain before uvicorn. The 2026-08-17
