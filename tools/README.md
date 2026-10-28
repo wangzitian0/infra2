@@ -261,9 +261,9 @@ environment, and writes separate `production-manifest.json` and
 ENV_SUFFIX=-staging BACKUP_OUTPUT_DIR=/tmp/hb tools/host_backup.sh
 ```
 
-## backup_restore_rehearsal.py & run_restore_rehearsal.py
+## run_restore_rehearsal.py
 
-Guarded restore rehearsal for off-host backup artifacts. `run_restore_rehearsal.py`
+Guarded restore rehearsal for off-host backup artifacts (`common/backup/rehearsal.py`). `run_restore_rehearsal.py`
 automates the full sandbox lifecycle: spins up an ephemeral throwaway container
 (zero host port binds, zero mount to `/data`, resource capped), downloads and
 decrypts the latest artifact from Google Drive via `rclone crypt`, ingests the SQL
@@ -294,18 +294,6 @@ contract (0 only when every drilled service passed). Invariants are per service 
 count plus TOPT capture and GPPE row floors. The floors sit near half of the
 observed production values: low enough not to flap on routine change, high enough
 that a truncated restore cannot pass.
-
-For direct manual invocation against an existing pre-provisioned rehearsal container:
-
-```bash
-uv run python tools/backup_restore_rehearsal.py \
-  --manifest /var/backups/finance_report/backup-manifest.json \
-  --service-id finance_report/postgres \
-  --target-container finance-report-postgres-rehearsal \
-  --download-dir /tmp/restore-rehearsal \
-  --database finance_report \
-  --invariant-sql "select count(*) from alembic_version"
-```
 
 ## out_of_band_watchdog.py
 

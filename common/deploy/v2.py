@@ -41,7 +41,6 @@ from common.deploy.iac_runner_client import (
     trigger_platform_deploy,
 )
 from common.deploy.contract import (
-    _SHA_RE,
     DeployTarget,
     DeployTypeSpec,
     ServiceSpec,
@@ -74,6 +73,7 @@ from common.deploy.refs import (
     resolve_pr,
     resolve_to_sha,
 )
+from infra2_sdk.refs import short_sha
 
 from common.core.constants import APP_SOURCES
 
@@ -144,11 +144,13 @@ def _resolve_for_type(spec, version_ref, *, repo: str):
     resolved = resolve_image_ref(ref, repo=repo)
     # A bare short sha resolves to itself (not a 40-hex commit) — reject with a surface-level
     # message instead of letting it surface late as an opaque code_version contract error.
-    if not _SHA_RE.match(resolved.sha):
+    try:
+        short_sha(resolved.sha)
+    except ValueError as err:
         raise ValueError(
             f"version_ref {version_ref!r} resolved to {resolved.sha!r}, not a full commit "
             "sha — pass main, a tag vX.Y.Z, or a full 40-hex sha"
-        )
+        ) from err
     alias_value = {
         "branch": ref,  # the branch name -> slot branch-<name>
         "commit": resolved.sha,  # preview_alias truncates to the 7-char short sha
@@ -165,8 +167,10 @@ def _normalize_expected_sha(expected_sha: str | None) -> str | None:
     cleaned = str(expected_sha).strip().lower()
     if not cleaned:
         return None
-    if not _SHA_RE.match(cleaned):
-        raise ValueError("--expected-sha must be a full 40-hex commit sha")
+    try:
+        short_sha(cleaned)
+    except ValueError as err:
+        raise ValueError("--expected-sha must be a full 40-hex commit sha") from err
     return cleaned
 
 
@@ -180,7 +184,6 @@ class DeployV2Result:
 
 def _deploy_platform(
     service: str,
-    spec,
     deploy_type: str,
     iac_ref: str,
     *,
@@ -204,6 +207,7 @@ def _deploy_platform(
     ``iac_ref`` (the reconcile's shape), is ignored. Platform services have no preview —
     only ``staging`` / ``prod``.
     """
+    spec = service_spec(service)
     type_spec = deploy_type_spec(deploy_type)
     if type_spec.env not in ("staging", "prod"):
         raise ValueError(
@@ -744,7 +748,6 @@ def deploy_v2(
             raise ValueError("--expected-sha is only supported for app-backed deploys")
         return _deploy_platform(
             service,
-            svc_spec,
             deploy_type,
             iac_ref,
             runner_url=iac_runner_url,

@@ -22,7 +22,7 @@ import functools
 from dataclasses import dataclass
 from pathlib import Path
 
-from common.core.constants import REPO_ROOT
+from common.core.constants import PRODUCTION, REPO_ROOT
 from common.core.facets import (
     FACET_CLASSES,
     BackupFacet,
@@ -43,8 +43,6 @@ _LAYERS: dict[str, Path] = {
     "finance_report": REPO_ROOT / "finance_report" / "finance_report",
     "truealpha": REPO_ROOT / "truealpha" / "truealpha",
 }
-
-PRODUCTION = "production"
 
 _EXTERNAL_COMPONENT_IDS = {
     "1password-connect": "bootstrap/1password",
@@ -339,16 +337,6 @@ def all_services() -> list[str]:
     return sorted(service_attrs())
 
 
-def services_in_env(env: str) -> list[str]:
-    """Service_ids that actually deploy to `env` (prod_only excluded off-prod)."""
-    is_prod = env == PRODUCTION
-    return sorted(
-        meta.service_id
-        for meta in service_attrs().values()
-        if is_prod or not meta.prod_only
-    )
-
-
 def shared_services() -> set[str]:
     """Service_ids that run as a single shared (prod) instance for all envs."""
     return {m.service_id for m in service_attrs().values() if m.prod_only}
@@ -625,16 +613,6 @@ def _facet_seq(tree: ast.Module, attr_name: str, facet_cls: type, where: str) ->
             f"{facet_cls.__name__}(...) calls"
         )
     return tuple(_facet_instance(el, facet_cls, where) for el in value.elts)
-
-
-def _facet_one(tree: ast.Module, attr_name: str, facet_cls: type, where: str):
-    """The Deployer's single-facet ``attr_name``, AST-evaluated. Absent/None -> None."""
-    value = _deployer_assign(tree, attr_name)
-    if value is None:
-        return None
-    if isinstance(value, ast.Constant) and value.value is None:
-        return None
-    return _facet_instance(value, facet_cls, where)
 
 
 def _is_deployer_class(node: ast.ClassDef) -> bool:

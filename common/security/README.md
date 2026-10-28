@@ -15,7 +15,7 @@
 |--------|------|-------------|
 | `store.py` | 1Password and Vault stores, token helpers | `OpSecrets`, `VaultSecrets`, `get_secrets()`, `verify_vault_token()`, `generate_secret_token()`, `resolve_vault_token()` |
 | `registry.py` | Which services take which secrets, and from which manifests. An App manifest is infra2's copy in `contracts/` (#1258). | `SERVICES`, `Service`, `lookup()`, `merged_manifest()`, `store_keys()` |
-| `supply.py` | Manifest secret supply pipeline | `apply_secret_supply()`, `create_secrets_resolver()`, `SupplyReport` |
+| `supply.py` | Manifest secret supply pipeline | `apply_secret_supply()`, `resolver_for()`, `SupplyReport` |
 | `prune.py` | Orphan KV key detection & cleanup | `prune_orphan_secrets()` |
 
 `import common.security` needs no infra2-sdk: `store.py`, `supply.py`, and `prune.py` load lazily (PEP 562) on first access of an SDK-backed name, which then raises the SDK's `ImportError` if the wheel is absent (#847; pinned by `common/tests/test_sdk_free_import_surface.py`).

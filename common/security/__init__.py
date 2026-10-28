@@ -29,7 +29,6 @@ if TYPE_CHECKING:
     from common.security.supply import (
         SupplyReport,
         apply_secret_supply,
-        create_secrets_resolver,
     )
 
 # Names that need infra2-sdk; each maps to the submodule that defines it.
@@ -37,7 +36,6 @@ _SDK_BACKED: dict[str, str] = {
     "SupplyReport": "common.security.supply",
     "VaultSecrets": "common.security.store",
     "apply_secret_supply": "common.security.supply",
-    "create_secrets_resolver": "common.security.supply",
     "generate_secret_token": "common.security.store",
     "prune_orphan_secrets": "common.security.prune",
     "resolve_vault_token": "common.security.store",
@@ -47,7 +45,6 @@ __all__ = [
     "SupplyReport",
     "VaultSecrets",
     "apply_secret_supply",
-    "create_secrets_resolver",
     "generate_secret_token",
     "prune_orphan_secrets",
     "resolve_vault_token",

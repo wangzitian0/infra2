@@ -560,11 +560,12 @@ def test_non_dry_run_delivers_card_by_default_and_text_when_requested(
         lambda env, msg, **kw: delivered.append(("text", msg)),
     )
 
-    card_obj = report.build_report_card(
+    prod_summary, staging_lines = report._summarize_all_environments(
         {"production": _ledger("production"), "staging": _ledger("staging")},
         [],
         NOW,
     )
+    card_obj = report.build_stability_card(prod_summary, staging_lines=staging_lines)
     assert card_obj["header"]["template"] == "green"
 
     assert (

@@ -13,6 +13,7 @@ from pathlib import Path
 from infra2_sdk.deploy import (
     PRODUCTION_DEPLOY_BUDGET_SECONDS,
     PRODUCTION_REQUEST_MAX_AGE_SECONDS,
+    VERSION_KEYS,
     DeployOperation,
     DeployRequest,
     DeployType,
@@ -623,7 +624,7 @@ def query_serving_release(
                     "ok",
                     "healthy",
                 )
-                for key in ("version", "git_sha"):
+                for key in VERSION_KEYS:
                     val = parsed.get(key)
                     if isinstance(val, str) and val.strip():
                         public_version = val.strip()

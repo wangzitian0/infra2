@@ -73,6 +73,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
+from infra2_sdk.deploy import canonical_json_bytes
+
 from common.alerting import (
     DISPLAY_TIMEZONE,
     REPORT_TITLE_PREFIX,
@@ -217,7 +219,7 @@ def encode_marker(job: str, state: State, count: int) -> str:
         "since": state.since,
         "incident_since": state.incident_since,
     }
-    text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    text = canonical_json_bytes(payload).decode("utf-8")
     # `-->` or a tag inside a key must not end the HTML comment.
     text = text.replace("<", "\\u003c").replace(">", "\\u003e")
     return f"<!-- {MARKER} {text} -->"
@@ -257,7 +259,7 @@ def parse_marker(body: str, job: str) -> State | None:
 def encode_cleared_marker(job: str) -> str:
     """The marker of a state issue whose findings were resolved: lookups ignore it."""
     payload = {"v": STATE_VERSION, "job": job, "cleared": True}
-    return f"<!-- {MARKER} {json.dumps(payload, sort_keys=True, separators=(',', ':'))} -->"
+    return f"<!-- {MARKER} {canonical_json_bytes(payload).decode('utf-8')} -->"
 
 
 def is_cleared(body: str, job: str) -> bool:

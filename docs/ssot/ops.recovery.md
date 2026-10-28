@@ -134,25 +134,20 @@ uv run python tools/backup_verification.py --manifest /path/to/manifest.json --j
 
 ### SOP-005: 生成并上传 off-host 备份
 
-备份 runner 读取各服务 `BackupFacet` 声明派生的清单（[`common/backup/`](../../common/backup/README.md) `common/backup/verification.py::load_backup_inventory`，#542），
-为每个登记的 `data_path` 创建 archive、计算 SHA256，并通过主机上的 `rclone`
+备份 runner 读取各服务 `BackupFacet` 声明派生的清单（[`common/backup/`](../../common/backup/README.md) `common/backup/emitter.py` + `common/backup/verification.py::load_backup_inventory`，#542），
+由 `tools/host_backup.sh` 为每个登记的服务生成逻辑转储或归档、计算 SHA256，并通过主机上的 `rclone`
 remote 上传到 off-host storage。
 
-这个按声明生成文件归档的命令目前是手工入口；宿主机定时任务使用下面的
-`host_backup.sh`。不能用这里的示例命令证明每周的异地备份已经运行。
-
-Dry-run 不上传：
+本地验证（不覆盖异地最新指针 `*-manifest.json`）：
 
 ```bash
-uv run python tools/backup_runner.py --output-dir /tmp/infra2-backups --no-upload
+BACKUP_LOCAL_ONLY=1 BACKUP_OUTPUT_DIR=/tmp/infra2-backups tools/host_backup.sh
 ```
 
 生产上传示例：
 
 ```bash
-BACKUP_REMOTE=gdrive-backup:infra2 uv run python tools/backup_runner.py \
-  --output-dir /data/backups/infra2 \
-  --manifest /data/backups/infra2/manifest.json
+BACKUP_REMOTE=gdrive-backup:infra2 BACKUP_TIER=weekly tools/host_backup.sh
 ```
 
 `rclone` remote credentials live in 1Password `bootstrap/gdrive` (`rclone_conf` field).
@@ -260,15 +255,6 @@ python3 tools/run_restore_rehearsal.py \
   --database finance_report
 ```
 
-Or low-level manual invocation with `tools/backup_restore_rehearsal.py`:
-
-```bash
-uv run python tools/backup_restore_rehearsal.py \
-  --manifest /data/backups/infra2/production-manifest.json \
-  --service-id finance_report/postgres \
-  --target-container finance_report-postgres-restore-rehearsal
-```
-
 Safety rules:
 
 - The manifest must pass the same off-host freshness/checksum checks as SOP-004.
@@ -369,10 +355,10 @@ Until the first run writes the log, any crontab edit restarts that clock. After 
 | 行为描述 | 验证方式 | 覆盖率 |
 |----------|----------|--------|
 | **Backup inventory covers DATA_PATH** | `common/tests/test_backup_verification.py` | ✅ Implemented |
-| **Backup archive + checksum runner** | `tools/backup_runner.py` | ✅ Implemented |
+| **Backup archive + checksum emitter** | `tools/host_backup.sh` + `common/backup/emitter.py` | ✅ Implemented |
 | **Backup freshness/checksum manifest** | `tools/backup_verification.py` | ✅ Implemented |
 | **On-host backup runner (SOP-006): dumps first, one failure never stops the rest, tar exit 1 is a WARN, authenticated redis SAVE** | `common/tests/test_host_backup_script.py` | ✅ Implemented |
-| **Off-host restore rehearsal** | `tools/run_restore_rehearsal.py` + `common/backup/` (`common/tests/test_backup_verification.py`) | ✅ Implemented & Live Verified (10.62s PASS) |
+| **Off-host restore rehearsal** | `tools/run_restore_rehearsal.py` + `common/backup/rehearsal.py` (`common/tests/test_backup_verification.py`) | ✅ Implemented & Live Verified (10.62s PASS) |
 | **Vault Unseal 流程（自动）** | `bootstrap/05.vault/unsealer.py` 常驻自动解封;契约由 `common/tests/test_vault_unsealer.py`(过期 Connect token 拒绝 / sync 非 ACTIVE / sealed 报不健康 / key 不足中止)+ `common/tests/test_bootstrap_health.py`(healthcheck 接线)覆盖 | ✅ Automated |
 | **Vault Unseal 流程（手动兜底,SOP-001）** | `vault status` + `vault operator unseal` | ✅ Manual |
 | **vault-agent 凭证 re-provision (SOP-007)** | `vault.setup-approle --deploy` | ✅ Manual |

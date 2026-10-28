@@ -51,7 +51,7 @@ from common.deploy.dokploy_adapter import (
     started_before_trigger,
 )
 from common.deploy.rollout import RolloutError, wait_for_deployment
-from infra2_sdk.deploy import default_http_get, poll_until_healthy
+from infra2_sdk.deploy import VERSION_KEYS, default_http_get, poll_until_healthy
 
 
 @dataclass(frozen=True)
@@ -292,7 +292,7 @@ def verify_public_health(
         url,
         http_get=getter,
         expected_version=expected_version,
-        version_json_keys=("git_sha", "version"),
+        version_json_keys=VERSION_KEYS,
         require_status="ok",
         max_attempts=max_attempts,
         interval_seconds=step,

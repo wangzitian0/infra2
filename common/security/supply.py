@@ -261,28 +261,12 @@ def apply_secret_supply(
     return apply(service, env_name, resolver=resolver, restart=restart)
 
 
-def create_secrets_resolver(
-    service: Any,
-    env_name: str,
-    *,
-    store: Any = None,
-    human: Any = None,
-) -> Any:
-    """S-04: Construct a secrets resolver for a service and environment.
-
-    ``store`` and ``human`` are exactly what ``resolver_for`` accepts; naming them keeps
-    both reachable and makes any other keyword fail here, at the caller's call site.
-    """
-    return resolver_for(service, env_name, store=store, human=human)
-
-
 __all__ = [
     "ONEPASSWORD_VAULT",
     "SupplyReport",
     "TransientTransportError",
     "apply",
     "apply_secret_supply",
-    "create_secrets_resolver",
     "resolver_for",
     "retrying_transport",
     "vault_backend",

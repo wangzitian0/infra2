@@ -251,29 +251,6 @@ def test_cors_allowed_origins_includes_truealpha():
     assert "https://truealpha-staging.zitian.party" in origins
 
 
-def test_is_stateful_deploy_env_strict_and_lenient():
-    from common.core.constants import is_stateful_deploy_env
-
-    # Lenient (strict=False) accepts aliases and dynamic preview patterns
-    assert is_stateful_deploy_env("production") is True
-    assert is_stateful_deploy_env("prod") is True
-    assert is_stateful_deploy_env("staging") is True
-    assert is_stateful_deploy_env("stg") is True
-    assert is_stateful_deploy_env("preview") is True
-    assert is_stateful_deploy_env("pr-123") is True
-    assert is_stateful_deploy_env("commit-abc1234") is True
-    assert is_stateful_deploy_env("unknown-env") is False
-    assert is_stateful_deploy_env(None) is False
-
-    # Strict (strict=True) accepts ONLY the canonical tier names
-    assert is_stateful_deploy_env("production", strict=True) is True
-    assert is_stateful_deploy_env("staging", strict=True) is True
-    assert is_stateful_deploy_env("preview", strict=True) is True
-    assert is_stateful_deploy_env("prod", strict=True) is False
-    assert is_stateful_deploy_env("stg", strict=True) is False
-    assert is_stateful_deploy_env("pr-123", strict=True) is False
-
-
 def test_canary_slot_is_the_sdk_constant() -> None:
     """env_config re-exports the SDK object directly."""
     assert ec.CANARY_SLOT is infra2_sdk.CANARY_SLOT

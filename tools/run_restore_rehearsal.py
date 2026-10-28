@@ -98,8 +98,6 @@ def _build_rehearsal_invariants(service_id: str, db: str) -> tuple[str, ...]:
         "SELECT 1",
         db_exists_check,
         "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog', 'information_schema')) < 1 THEN RAISE EXCEPTION 'no tables restored'; END IF; END $$;",
-        "SELECT current_database()",
-        "SELECT 1",
     )
 
 
