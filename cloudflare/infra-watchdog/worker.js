@@ -120,9 +120,10 @@ export default {
 
   evaluateHeartbeat,
   heartbeatVerdict,
+  loopStatus,
 };
 
-export { evaluateHeartbeat, heartbeatVerdict };
+export { evaluateHeartbeat, heartbeatVerdict, loopStatus };
 
 async function runScheduledWatchdog(env, nowMs) {
   let runError = null;
@@ -485,7 +486,13 @@ function loopStatus(state, key, identity, verdict) {
   const streak = state.loops[key] || { bad: 0, good: 0 };
   if (verdict.record.ok === false) {
     const bad = Math.min(LOOP_FAILURE_RUNS, Number(streak.bad || 0) + 1);
-    state.loops[key] = { ...streak, bad, good: 0 };
+    const lastDeliveryOkAt = streak.lastDeliveryOkAt ?? verdict.record?.lastDeliveryOkAt ?? null;
+    state.loops[key] = {
+      ...streak,
+      bad,
+      good: 0,
+      ...(lastDeliveryOkAt ? { lastDeliveryOkAt } : {}),
+    };
     return active || bad >= LOOP_FAILURE_RUNS ? "failing" : "pending";
   }
   if (!active) {
@@ -497,7 +504,12 @@ function loopStatus(state, key, identity, verdict) {
     delete state.loops[key];
     return "ok";
   }
-  state.loops[key] = { bad: Number(streak.bad || 0), good };
+  const lastDeliveryOkAt = verdict.record?.lastDeliveryOkAt ?? streak.lastDeliveryOkAt ?? null;
+  state.loops[key] = {
+    bad: Number(streak.bad || 0),
+    good,
+    ...(lastDeliveryOkAt ? { lastDeliveryOkAt } : {}),
+  };
   return "pending";
 }
 

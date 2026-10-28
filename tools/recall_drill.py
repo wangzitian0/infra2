@@ -52,9 +52,10 @@ def main() -> int:
     if args.json:
         print(json.dumps(asdict(report), indent=2, ensure_ascii=False))
     else:
+        passed = sum(1 for r in report.results.values() if r.get("status") == "pass")
         print(
-            f"Recall drill status: {report.status} "
-            f"({report.total_classes}/{report.total_classes} classes verified)"
+            f"Recall drill: {report.status} "
+            f"({passed}/{report.total_classes} classes verified)"
         )
         for class_name, res in sorted(report.results.items()):
             print(f"  [{res['status']}] {class_name} -> pager: {res['actual_layer']}")

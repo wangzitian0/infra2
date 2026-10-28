@@ -67,7 +67,7 @@ SIMULATED_FAILURES: dict[str, dict[str, Any]] = {
         "since": "2026-10-28 12:00:00 UTC+8",
         "impact": "Disaster recovery RPO target breached.",
         "action": "Run manual backup trigger and check object storage credentials.",
-        "runbook": "docs/ssot/ops.backup.md#sop-001",
+        "runbook": "docs/ssot/ops.storage.md#sop-001",
     },
     "config-drift": {
         "signal_id": "global.infra2.facet-reconcile",
@@ -77,7 +77,7 @@ SIMULATED_FAILURES: dict[str, dict[str, Any]] = {
         "since": "2026-10-28 12:00:00 UTC+8",
         "impact": "Service secrets diverge from canonical configuration.",
         "action": "Execute vault reconcile workflow to sync credentials.",
-        "runbook": "docs/ssot/ops.security.md#sop-002",
+        "runbook": "docs/ssot/db.vault-integration.md#sop-002",
     },
     "peer-scheduler": {
         "signal_id": "global.truealpha-scheduler-liveness.github",

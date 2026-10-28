@@ -790,7 +790,7 @@ def test_evaluate_heartbeat_marks_stale_delivery_proof_unhealthy() -> None:
     """When lastDeliveryOkAt is older than maxDeliverySilenceSeconds, mark heartbeat unhealthy."""
     script = f"""
     import worker from {json.dumps(str(WORKER))};
-    const {{ evaluateHeartbeat }} = worker;
+    const {{ evaluateHeartbeat, loopStatus }} = worker;
     const nowMs = 1800000000 * 1000;
     const heartbeat = {{
       environment: "production",
@@ -840,11 +840,20 @@ def test_evaluate_heartbeat_marks_stale_delivery_proof_unhealthy() -> None:
     }};
     const vState = evaluateHeartbeat(heartbeat, stateRaw, nowMs, {{}}, priorState);
 
+    const loopKey = "production:platform-alerting-probes";
+    const loopId = "production:platform-alerting-probes:heartbeat-unhealthy";
+    const testState = {{ alerts: {{}}, loops: {{}} }};
+    loopStatus(testState, loopKey, loopId, vStale);
+    const persistedLoop = testState.loops[loopKey];
+    const vPersisted = evaluateHeartbeat(heartbeat, stateRaw, nowMs, {{}}, testState);
+
     console.log(JSON.stringify({{
       vFresh: {{ state: vFresh.state, ok: vFresh.record.ok }},
       vStale: {{ state: vStale.state, ok: vStale.record.ok, reason: vStale.reason, failureClass: vStale.failureClass }},
       vEnv: {{ state: vEnv.state, ok: vEnv.record.ok, reason: vEnv.reason, failureClass: vEnv.failureClass }},
       vState: {{ state: vState.state, ok: vState.record.ok, reason: vState.reason, failureClass: vState.failureClass }},
+      persistedLoop,
+      vPersisted: {{ state: vPersisted.state, ok: vPersisted.record.ok, reason: vPersisted.reason, failureClass: vPersisted.failureClass }},
     }}));
     """
     res = subprocess.run(
@@ -856,8 +865,9 @@ def test_evaluate_heartbeat_marks_stale_delivery_proof_unhealthy() -> None:
     out = json.loads(res.stdout)
     assert out["vFresh"]["state"] == "fresh"
     assert out["vFresh"]["ok"] is True
-    for key in ("vStale", "vEnv", "vState"):
+    for key in ("vStale", "vEnv", "vState", "vPersisted"):
         assert out[key]["state"] == "unhealthy"
         assert out[key]["ok"] is False
         assert out[key]["reason"] == "delivery proof stale"
         assert out[key]["failureClass"] == "alert-pipeline"
+    assert out["persistedLoop"]["lastDeliveryOkAt"] == 1800000000 - 4000

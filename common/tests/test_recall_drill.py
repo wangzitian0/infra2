@@ -79,6 +79,32 @@ def test_recall_drill_cli_dry_run_exits_zero() -> None:
     assert '"total_classes": 8' in result.stdout
 
 
+def test_recall_drill_cli_summary_reports_verified_counts() -> None:
+    """Verify CLI prints accurate passed class counts in text summary output."""
+    res_success = subprocess.run(
+        [sys.executable, str(CLI)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res_success.returncode == 0
+    assert "Recall drill: pass (8/8 classes verified)" in res_success.stdout
+
+    fail_script = (
+        "import sys, tools.recall_drill as cli, common.observability.recall_drill as rd; "
+        "rd.SIMULATED_FAILURES['host-reachability']['signal_id'] = 'invalid.signal.id'; "
+        "sys.exit(cli.main())"
+    )
+    res_fail = subprocess.run(
+        [sys.executable, "-c", fail_script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res_fail.returncode == 2
+    assert "Recall drill: fail (7/8 classes verified)" in res_fail.stdout
+
+
 def test_recall_drill_cli_refuses_no_dry_run() -> None:
     """Execute recall drill CLI with --no-dry-run flag and assert exit code one."""
     result = subprocess.run(
