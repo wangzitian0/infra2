@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from infra2_sdk.ci import parse_github_time
 from infra2_sdk.refs import ReleaseError, assert_after_on_main, resolve_image_digest
 from infra2_sdk.secrets import vault_token_status
 
@@ -363,8 +364,8 @@ def enforce_data_lane_red_lines(
 
                 m = json.loads(manifest_path.read_text(encoding="utf-8"))
                 gen_at = m.get("generated_at")
-                if gen_at:
-                    dt = datetime.fromisoformat(gen_at.replace("Z", "+00:00"))
+                dt = parse_github_time(gen_at) if isinstance(gen_at, str) else None
+                if dt is not None:
                     age_days = (datetime.now(timezone.utc) - dt).total_seconds() / 86400
                     if age_days > 7.0:
                         logging.getLogger("deploy_v2").warning(

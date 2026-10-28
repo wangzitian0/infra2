@@ -17,7 +17,6 @@ from common.core.constants import (
 )
 from common.core.environ import (
     DeploymentEnvironment,
-    get_environment,
     with_env_suffix,
 )
 
@@ -34,6 +33,5 @@ __all__ = [
     "REPO_ROOT",
     "STAGING",
     "STATEFUL_DEPLOY_ENVIRONMENTS",
-    "get_environment",
     "with_env_suffix",
 ]

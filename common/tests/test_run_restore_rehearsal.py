@@ -444,3 +444,65 @@ def test_finance_report_alembic_invariant_uses_monotonic_floor() -> None:
     )
     assert "substring(version_num FROM '^([0-9]{4})')::int >= 62" in invariants
     assert "0065_user_soft_delete" not in invariants
+
+
+def test_default_fallback_rehearsal_invariants_pass_restore_scalar_check(
+    tmp_path: Path,
+) -> None:
+    """#1393: fallback rehearsal invariants exclude non-boolean SELECT queries."""
+    import gzip
+
+    from common.backup.rehearsal import (
+        RestoreRehearsalPlan,
+        run_postgres_restore_rehearsal,
+    )
+
+    invariants = _build_rehearsal_invariants("platform/postgres", "postgres")
+    assert "SELECT current_database()" not in invariants
+    select_invariants = tuple(
+        sql for sql in invariants if sql.strip().upper().startswith("SELECT")
+    )
+    assert select_invariants == ("SELECT 1",)
+
+    dump_file = tmp_path / "dump.sql.gz"
+    with gzip.open(dump_file, "wb") as handle:
+        handle.write(b"SELECT 1;\n")
+
+    class _Stdin:
+        def write(self, _data: bytes) -> None:
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+    class _Proc:
+        def __init__(self) -> None:
+            self.stdin = _Stdin()
+
+        def wait(self) -> int:
+            return 0
+
+    class _Result:
+        returncode = 0
+        stdout = "1\n"
+        stderr = ""
+
+    plan = RestoreRehearsalPlan(
+        service_id="platform/postgres",
+        source_uri="r2:infra2/platform/postgres/dump.sql.gz",
+        archive_path=dump_file,
+        target_container="platform-postgres-restore-rehearsal",
+        pg_user="postgres",
+        database="postgres",
+        invariant_sql=invariants,
+    )
+    res = run_postgres_restore_rehearsal(
+        plan,
+        popen=lambda _cmd, stdin=None: _Proc(),
+        runner=lambda _cmd, **_kwargs: _Result(),
+    )
+    assert res["status"] == "pass"
+    assert res["invariants_checked"] == len(invariants)

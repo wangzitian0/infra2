@@ -38,31 +38,6 @@ PROJECT_REPOS: dict[str, str] = {
 }
 
 
-def is_stateful_deploy_env(env: str | None, *, strict: bool = False) -> bool:
-    """Return True if env represents one of the 3 stateful deploy environments.
-
-    If strict=True, requires the normalized tier to be exactly 'preview', 'staging', or 'production'.
-    If strict=False (default), also recognizes dynamic Dokploy preview instances
-    following the SSOT preview alias model ('pr-<N>', 'commit-<sha>', 'branch-<name>', 'tag-<v>', or 'preview-*').
-    """
-    if not env or not isinstance(env, str) or not env.strip():
-        return False
-    val = env.strip().lower()
-    if strict:
-        return val in STATEFUL_DEPLOY_ENVIRONMENTS
-    if val in ("prod", "production", "staging", "stg", "preview"):
-        return True
-    return (
-        val.startswith("pr-")
-        or val.startswith("commit-")
-        or val.startswith("branch-")
-        or val.startswith("tag-")
-        or val.startswith("preview-")
-        or val.startswith("canary-")
-        or val == "canary"
-    )
-
-
 __all__ = [
     "APP_SOURCES",
     "DEPLOYMENT_ENV_PREVIEW",
@@ -81,5 +56,4 @@ __all__ = [
     "REPO_ROOT",
     "STAGING",
     "STATEFUL_DEPLOY_ENVIRONMENTS",
-    "is_stateful_deploy_env",
 ]

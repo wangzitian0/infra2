@@ -29,7 +29,6 @@ import sys
 import time
 import threading
 import urllib.parse
-import urllib.request
 from typing import Any, Callable, Dict, List
 
 from fastapi import FastAPI, Request, Response
@@ -199,18 +198,22 @@ def _probe_tcp(host: str, port: int, timeout: float = 2.0) -> Dict[str, Any]:
 
 
 def _probe_http(url: str, timeout: float = 3.0) -> Dict[str, Any]:
+    import asyncio
+    from infra2_sdk.runtime.health import DependencyStatus
+    from infra2_sdk.runtime.http import HttpClientSettings, probe_http
+
     start = time.perf_counter()
     try:
-        req = urllib.request.Request(
-            url, headers={"User-Agent": "canary-todo-probe/1.0"}
+        result = asyncio.run(
+            probe_http(url, settings=HttpClientSettings(timeout_seconds=timeout))
         )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            code = resp.getcode()
-            if 200 <= code < 400:
-                return _outcome("pass", start, f"HTTP {code}")
-            return _outcome("fail", start, f"HTTP {code}")
     except Exception as exc:
         return _outcome("fail", start, str(exc))
+    if result.status != DependencyStatus.PRESENT or not result.detail.startswith(
+        ("HTTP 2", "HTTP 3")
+    ):
+        return _outcome("fail", start, result.detail)
+    return _outcome("pass", start, result.detail)
 
 
 def _resp_command(*parts: str) -> bytes:

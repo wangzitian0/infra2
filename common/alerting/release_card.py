@@ -33,8 +33,10 @@ import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import timezone
 from typing import Any
+
+from infra2_sdk.ci import parse_github_time, write_github_output
 
 import common.alerting
 from common.alerting.card import build_feishu_report_card
@@ -334,7 +336,9 @@ def accept_until_text(
             check=True,
             env=dict(env),
         )
-        created = datetime.fromisoformat(reply.stdout.strip().replace("Z", "+00:00"))
+        created = parse_github_time(reply.stdout)
+        if created is None:
+            raise ValueError("missing created_at")
         deadline = parse_sender_deadline(
             json.loads(env.get("APP_DEPLOY_REQUEST_JSON") or "{}")
         )
@@ -437,8 +441,9 @@ def main(
         if args.command == "open":
             message_id = open_release_card(env, card)
             if args.github_output:
-                with open(args.github_output, "a", encoding="utf-8") as handle:
-                    handle.write(f"message_id={message_id}\n")
+                write_github_output(
+                    {"message_id": message_id}, output_path=args.github_output
+                )
         else:
             message_id = args.message_id or env.get(MESSAGE_ID_ENV, "")
             advance_release_card(env, message_id, card)

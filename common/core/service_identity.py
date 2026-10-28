@@ -13,7 +13,6 @@ from common.core.constants import (
     IDENTITY_SCHEMA_VERSION,
     MANAGED_BY,
     STATEFUL_DEPLOY_ENVIRONMENTS,
-    is_stateful_deploy_env,
 )
 
 __all__ = [
@@ -25,7 +24,6 @@ __all__ = [
     "MANAGED_BY",
     "STATEFUL_DEPLOY_ENVIRONMENTS",
     "ServiceIdentity",
-    "is_stateful_deploy_env",
 ]
 
 _SERVICE_ID_RE = re.compile(r"^[a-z0-9_]+/[a-z0-9][a-z0-9_-]*$")

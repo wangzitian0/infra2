@@ -41,6 +41,7 @@ from common.core.constants import PREVIEW_KINDS
 # The canary runs arbitrary code on a fixed throwaway preview slot no real PR reuses.
 # Canonical SSOT slot is CANARY_SLOT ("canary-preview") defined in infra2-sdk.
 from infra2_sdk import CANARY_SLOT
+from infra2_sdk.refs import SHORT_SHA_LENGTH
 
 # data default per env. Non-prod defaults to `staging` data (operator choice); prod is
 # always real prod data. A PR sha never runs on prod data and prod data never leaves
@@ -463,7 +464,9 @@ def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
             raise ValueError(
                 f"preview commit alias needs a hex commit sha (>=7 chars), got {value!r}"
             )
-        return "commit", text[:7]  # short sha — matches IMAGE_TAG / service.version
+        return "commit", text[
+            :SHORT_SHA_LENGTH
+        ]  # short sha — matches IMAGE_TAG / service.version
     if kind == "tag":
         text = str(value).strip()
         if not _TAG_VALUE_RE.match(text):

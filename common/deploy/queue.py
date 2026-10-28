@@ -72,13 +72,13 @@ def parse_epoch_seconds(value) -> float | None:
             return None
         if s.isdigit():
             return parse_epoch_seconds(int(s))
+        from infra2_sdk.ci import parse_github_time
+
         try:
-            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            dt = parse_github_time(s)
         except ValueError:
             return None
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.timestamp()
+        return dt.timestamp() if dt is not None else None
     return None
 
 

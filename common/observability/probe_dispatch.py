@@ -12,6 +12,8 @@ import time
 from pathlib import Path
 from urllib.error import HTTPError
 
+from infra2_sdk.deploy import canonical_json_bytes
+
 from common.alerting.card import mark_report_payload
 from common.observability.probe_environment import resolve_probe_environment
 from common.observability.probes import failed_results, failure_domain
@@ -301,9 +303,7 @@ def _failure_fingerprint(results: list) -> str:
         }
         for result in failed_results(results)
     ]
-    encoded = json.dumps(failures, sort_keys=True, separators=(",", ":")).encode(
-        "utf-8"
-    )
+    encoded = canonical_json_bytes(failures)
     return hashlib.sha256(encoded).hexdigest()
 
 

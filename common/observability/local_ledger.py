@@ -49,6 +49,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from infra2_sdk.deploy import canonical_json_bytes
+
 SCHEMA = 2
 RETENTION_DAYS = 21
 LEDGER_FILE_ENV = "INFRA_PROBE_LEDGER_FILE"
@@ -244,7 +246,7 @@ def write_ledger(path: Path, ledger: Mapping[str, Any]) -> None:
     user can read it: the data reaches the disk before the rename publishes it."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.tmp")
-    data = json.dumps(ledger, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    data = canonical_json_bytes(ledger)
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
     try:
         os.write(fd, data)

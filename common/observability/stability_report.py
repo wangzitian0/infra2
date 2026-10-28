@@ -240,21 +240,6 @@ def build_report(
     return "\n".join(lines)
 
 
-def build_report_card(
-    ledgers: Mapping[str, Mapping[str, Any] | str],
-    outages: list[Any],
-    now: datetime,
-    *,
-    limit_days: int | None = None,
-    title: str | None = None,
-) -> dict[str, Any]:
-    """Render the production report and optional environments as an interactive card."""
-    prod_summary, staging_lines = _summarize_all_environments(
-        ledgers, outages, now, limit_days=limit_days
-    )
-    return build_stability_card(prod_summary, staging_lines=staging_lines, title=title)
-
-
 def run(
     env: Mapping[str, str],
     *,

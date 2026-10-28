@@ -3571,32 +3571,6 @@ def doc_only(inv, repos, vocab=None):
     return dict(out)
 
 
-def concept_rows(keys, comp_of, regex, not_regex=None):
-    rows = []
-    for k in sorted(keys.values(), key=lambda k: k.key):
-        if (
-            not regex.search(k.key)
-            or (not_regex and not_regex.search(k.key))
-            or k.info["platform"]
-        ):
-            continue
-        i = k.info
-        if not (i["n_w"] or i["n_r"] or i["decl_layers"]):
-            continue
-        rows.append(
-            dict(
-                key=k.key,
-                writes=i["n_w"],
-                reads=i["n_r"],
-                defaults=i["defaults"][:3],
-                comp=comp_of.get(k.key),
-                repos=i["repos"],
-                flags=k.flags,
-            )
-        )
-    return rows
-
-
 def write_outputs(
     out: pathlib.Path, inv, keys, comps, edges, comp_of, rows, heads, docs_only=None
 ):

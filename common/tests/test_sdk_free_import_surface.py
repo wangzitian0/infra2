@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 OPS_CHECKS = ROOT / ".github/workflows/ops-checks.yml"
 
 MUST_IMPORT_WITHOUT_SDK = [
+    "tools.harness",
     "tools.pi_chain_smoke",
     "common.security.registry",
 ]
@@ -31,7 +32,6 @@ SDK_BACKED_SECURITY_NAMES = [
     "SupplyReport",
     "VaultSecrets",
     "apply_secret_supply",
-    "create_secrets_resolver",
     "generate_secret_token",
     "prune_orphan_secrets",
     "resolve_vault_token",
@@ -214,7 +214,6 @@ def test_security_lazy_exports_match_the_public_surface_with_the_sdk() -> None:
     owners = {
         "SupplyReport": supply,
         "apply_secret_supply": supply,
-        "create_secrets_resolver": supply,
         "prune_orphan_secrets": prune,
         "VaultSecrets": store,
         "generate_secret_token": store,

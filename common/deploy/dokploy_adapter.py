@@ -149,13 +149,18 @@ def deployment_ids(deployments: list[dict]) -> set[str]:
 def get_compose_deployments(client: Any, compose_id: str) -> list[dict]:
     """Retrieve compose deployment records from Dokploy client."""
     get_fn = getattr(client, "get_compose_deployments", None)
+    deployments: Any = None
     if callable(get_fn):
         try:
             deployments = get_fn(compose_id)
         except Exception:  # noqa: BLE001
-            deployments = client.get_compose(compose_id).get("deployments")
-    else:
-        deployments = client.get_compose(compose_id).get("deployments")
+            deployments = None
+    if deployments is None:
+        try:
+            comp = client.get_compose(compose_id)
+            deployments = comp.get("deployments") if isinstance(comp, dict) else None
+        except Exception:  # noqa: BLE001
+            deployments = None
     return (
         [d for d in deployments if isinstance(d, dict)]
         if isinstance(deployments, list)
@@ -189,6 +194,8 @@ def wait_for_new_deployment_record(
     min_started_at: float | None = None,
     start_epoch_fn: Callable[[dict], float | None] | None = None,
     terminal_success_statuses: frozenset[str] = TERMINAL_SUCCESS_STATUSES,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    time_fn: Callable[[], float] = time.monotonic,
 ) -> bool:
     """Wait for new deployment record to finish with a terminal status.
 
@@ -209,12 +216,14 @@ def wait_for_new_deployment_record(
             lambda: get_compose_deployments(client, compose_id),
             previous_ids,
             timeout_seconds=timeout_seconds,
-            interval_seconds=interval_seconds,
+            interval_seconds=max(1, interval_seconds),
             require_terminal=True,
             terminal_success_statuses=terminal_success_statuses,
             raise_on_error=True,
             raise_on_timeout=False,
             is_filtered_fn=filter_fn,
+            _sleep=sleep_fn,
+            _now=time_fn,
         )
     except RolloutError as exc:
         dep = getattr(exc, "deployment", None) or {}
@@ -253,6 +262,8 @@ def deploy_compose_with_record_check(
     wait_fn: Callable[..., bool] | None = None,
     start_epoch_fn: Callable[[dict], float | None] | None = None,
     log_warning: Callable[[str], None] | None = None,
+    sleep_fn: Callable[[float], None] = time.sleep,
+    time_fn: Callable[[], float] = time.monotonic,
 ) -> None:
     """Trigger deploy and verify Dokploy creates a deployment record.
 
@@ -261,7 +272,15 @@ def deploy_compose_with_record_check(
     warn = log_warning or logger.warning
     waiter = wait_fn or (
         lambda c, cid, prev, to, iv, min_s: wait_for_new_deployment_record(
-            c, cid, prev, to, iv, min_started_at=min_s, start_epoch_fn=start_epoch_fn
+            c,
+            cid,
+            prev,
+            to,
+            iv,
+            min_started_at=min_s,
+            start_epoch_fn=start_epoch_fn,
+            sleep_fn=sleep_fn,
+            time_fn=time_fn,
         )
     )
 

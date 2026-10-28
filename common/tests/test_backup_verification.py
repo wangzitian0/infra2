@@ -33,15 +33,6 @@ from common.backup.rehearsal import (
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _load_backup_runner():
-    path = ROOT / "common/backup/backup_runner.py"
-    spec = importlib.util.spec_from_file_location("backup_runner_under_test", path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def _load_backup_verification_tool():
     path = ROOT / "common/backup/backup_verification_cli.py"
     spec = importlib.util.spec_from_file_location("backup_verification_tool", path)
@@ -51,13 +42,15 @@ def _load_backup_verification_tool():
     return module
 
 
-def _load_backup_restore_rehearsal_tool():
-    path = ROOT / "common/backup/backup_restore_rehearsal.py"
-    spec = importlib.util.spec_from_file_location("backup_restore_rehearsal_tool", path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def test_legacy_backup_and_rehearsal_predecessors_removed() -> None:
+    """#1393: retired backup and restore rehearsal predecessors do not exist on disk."""
+    for rel_path in (
+        "common/backup/backup_runner.py",
+        "tools/backup_runner.py",
+        "common/backup/backup_restore_rehearsal.py",
+        "tools/backup_restore_rehearsal.py",
+    ):
+        assert not (ROOT / rel_path).exists(), f"{rel_path} must stay removed"
 
 
 def test_backup_inventory_covers_deployer_data_paths() -> None:
@@ -304,30 +297,6 @@ def test_backup_alert_payload_environment() -> None:
 
     payload_default = build_backup_alert_payload({"checks": [check]})
     assert payload_default["alerts"][0]["labels"]["environment"] == "production"
-
-
-def test_backup_runner_creates_archive_and_checksum(tmp_path) -> None:
-    """#158: backup runner can produce manifest-ready artifacts."""
-    backup_runner = _load_backup_runner()
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "data.txt").write_text("important", encoding="utf-8")
-    entry = BackupEntry(
-        service_id="test/service",
-        data_path=str(source),
-        method="filesystem_archive",
-        restore_command="restore",
-        remote="r2",
-        retention_days=30,
-        rpo_hours=24,
-    )
-
-    archive = backup_runner._archive_entry(entry, tmp_path / "out", 1_800_000_000)
-    digest = backup_runner._sha256(archive)
-
-    assert archive.exists()
-    assert archive.stat().st_size > 0
-    assert len(digest) == 64
 
 
 def test_backup_verification_cli_uses_current_time_not_manifest_verified_at(
@@ -598,55 +567,6 @@ def test_backup_restore_rehearsal_selects_latest_artifact() -> None:
     )
 
     assert artifact["created_at"] == 1_800_000_000
-
-
-def test_backup_restore_rehearsal_dry_run_has_no_download_side_effect(
-    tmp_path, monkeypatch, capsys
-) -> None:
-    """Infra-011.17 / #945: dry-run validates target and plans without rclone."""
-    tool = _load_backup_restore_rehearsal_tool()
-    entry = BackupEntry(
-        service_id="finance_report/postgres",
-        data_path="/data/finance_report/postgres",
-        method="pg_dump_plus_data_archive",
-        restore_command="restore",
-        remote="r2",
-        retention_days=30,
-        rpo_hours=24,
-    )
-    manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text('{"artifacts":[]}', encoding="utf-8")
-    artifact = {
-        "remote_uri": "r2:infra2/finance_report/postgres/dump.sql.gz",
-        "method": "pg_dumpall_gz",
-    }
-
-    monkeypatch.setattr(tool, "load_backup_inventory", lambda: [entry])
-    monkeypatch.setattr(
-        tool, "assert_manifest_is_rehearsable", lambda *_args, **_kwargs: artifact
-    )
-
-    def fail_download(*_args, **_kwargs):
-        raise AssertionError("dry-run must not download artifacts")
-
-    monkeypatch.setattr(tool, "materialize_artifact", fail_download)
-
-    rc = tool.main(
-        [
-            "--manifest",
-            str(manifest_path),
-            "--target-container",
-            "finance-report-postgres-restore-rehearsal",
-            "--download-dir",
-            str(tmp_path / "downloads"),
-            "--dry-run",
-        ]
-    )
-
-    assert rc == 0
-    out = capsys.readouterr().out
-    assert '"status": "planned"' in out
-    assert str(tmp_path / "downloads" / "dump.sql.gz") in out
 
 
 def test_run_postgres_restore_rehearsal_filters_create_role_postgres(tmp_path) -> None:

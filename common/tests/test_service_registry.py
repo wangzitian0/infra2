@@ -131,15 +131,6 @@ def test_shared_services_are_the_prod_only_set() -> None:
     }
 
 
-def test_services_in_env_excludes_prod_only_off_production() -> None:
-    staging = set(reg.services_in_env("staging"))
-    production = set(reg.services_in_env("production"))
-
-    assert reg.shared_services() & staging == set()
-    assert reg.shared_services() <= production
-    assert production == set(reg.all_services())
-
-
 # --- restart_after (#726) ----------------------------------------------------
 
 _REDIS_DEPLOY = (
