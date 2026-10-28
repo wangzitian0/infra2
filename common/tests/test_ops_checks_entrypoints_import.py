@@ -130,7 +130,8 @@ def test_the_workflow_declares_jobs_to_check() -> None:
         "vault-self-refresh-audit",
         "secrets-reconcile",
     } <= set(entries)
-    assert "tools.stability_report" in entries["digest"]
+    assert "tools.watchdog_weekly_digest" in entries["digest"]
+    assert "tools.stability_report" in entries["watchdog"]
     assert "tools.out_of_band_watchdog" in entries["watchdog"]
     assert "tools.deploy_guard_audit" in entries["audit"]
 
