@@ -371,3 +371,69 @@ def test_build_stability_card_renders_green_for_clean_and_orange_for_degraded() 
     )
     unavail_card = build_stability_card(summarize_ledger(applied))
     assert "unreadable record(s) NOT counted" in str(unavail_card)
+
+
+def test_apply_unavailability_preserves_real_failure_domain_and_separates_probe_fails() -> (
+    None
+):
+    """Real probe failure domains must survive deploy/restart gaps and sort first."""
+    ledger = {
+        "as_of": "2026-09-24",
+        "ledger": [
+            {
+                "date": "2026-09-24",
+                "runs": 700,
+                "signals": {
+                    "production:github-clone-http": {
+                        "ok": 680,
+                        "fail": 20,
+                        "lastDomain": "infra-service",
+                    },
+                    "production:vault-http": {"ok": 700, "fail": 0},
+                },
+            },
+            {
+                "date": "2026-09-23",
+                "runs": 1380,
+                "signals": {
+                    "production:github-clone-http": {"ok": 1380, "fail": 0},
+                    "production:vault-http": {"ok": 1380, "fail": 0},
+                },
+            },
+        ],
+    }
+    applied = apply_unavailability(
+        ledger,
+        environment="production",
+        gaps=[(_s(23, 10), _s(23, 10, 5)), (_s(24, 9), _s(24, 9, 5))],
+        outages=[],
+        check_interval_seconds=60,
+        now=NOW,
+    )
+    gh_day24 = _signal(applied, "2026-09-24", "production:github-clone-http")
+    vault_day24 = _signal(applied, "2026-09-24", "production:vault-http")
+    assert gh_day24["fail"] == 25
+    assert gh_day24["unavail_fail"] == 5
+    assert gh_day24["lastDomain"] == "infra-service"
+    assert vault_day24["fail"] == 5
+    assert vault_day24["unavail_fail"] == 5
+    assert vault_day24["lastDomain"] == "unavailable"
+
+    summary = summarize_ledger(applied)
+    assert summary["perfect_count"] == 0
+    assert summary["probe_perfect_count"] == 1
+    assert summary["degraded_probe_count"] == 1
+    assert summary["signals"][0]["id"] == "production:github-clone-http"
+    assert summary["signals"][0]["probe_fail"] == 20
+    assert summary["signals"][0]["unavail_fail"] == 10
+    assert summary["signals"][0]["last_domain"] == "infra-service"
+    assert summary["signals"][1]["id"] == "production:vault-http"
+    assert summary["signals"][1]["probe_fail"] == 0
+    assert summary["signals"][1]["unavail_fail"] == 10
+    assert summary["signals"][1]["last_domain"] == "unavailable"
+
+    report_msg = build_report_message(summary)
+    assert "Signals at 100%: 0/2 (无探针故障: 1/2)" in report_msg
+    assert "[infra-service]" in report_msg
+    assert "探针故障 20 次 + 采样空窗 10 次" in report_msg
+    assert "仅受采样空窗影响 (10 次)" in report_msg
