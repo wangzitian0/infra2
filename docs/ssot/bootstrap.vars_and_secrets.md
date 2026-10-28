@@ -55,7 +55,7 @@ contract v2）里声明一个 **source class**；部署时 `Deployer.apply_secre
 （`common/security/`，由 `common/security/supply.py` 实现，兼容门面 `common/secrets_supply.py`，经 infra2-sdk `SecretsResolver`）按声明把 store 填齐——
 **Vault 只有这一个写入者，没有人手工往 Vault 里敲值。**
 
-> An App manifest is infra2's copy in `contracts/`, not a submodule file. See §1.5 and §1.6.
+> Each stack keeps its baseline manifest in `env.manifest.json`. At deploy time the receiver fetches the App release manifest from the deployed release commit and renders the Vault Agent template dynamically (`VAULT_SECRETS_TEMPLATE`, #1320). See §1.5 and §1.6.
 
 | source | 谁产生 | 同步方向 | 何时 | 示例 |
 |--------|--------|---------|------|------|
@@ -103,9 +103,7 @@ Vault 历史里，`vault kv rollback` 可回退）。**不要**手工 `env.set` 
 每个服务的 `secrets.ctmpl` 与 `vault-policy.hcl` 不再手写，而是由 `tools/secrets_render.py`
 从环境 manifest 生成。
 
-An App manifest is a copy in `contracts/`. The file `contracts/apps.lock.json` records the source commit,
-the tag and the sha256 of each copy. A platform service keeps its manifest in `env.manifest.json` in its
-directory. A deploy reads only these files. `tools/fetch_app_manifests.py` checks the copies offline.
+Each service keeps its baseline manifest in `env.manifest.json` in its stack directory. Vendored App manifest copies under `contracts/` and `contracts/apps.lock.json` are removed (#1320). `tools/fetch_app_manifests.py` guards against vendored App manifests reappearing under `contracts/`.
 
 manifest 里每个变量都声明了"谁产生它"
 （`human` / `runtime` / `release` / `decision` / `code`），模板只渲染 `human`、`runtime`、
@@ -118,41 +116,14 @@ create/update），不由 manifest 描述，仍然手写。app 栈（truealpha a
 Deployer 的 `compose_env_overrides` 提供，manifest 只描述"谁产生这个值"。
 `tools/validate_required_env.py` 随之退役，一致性由生成测试保证。
 
-### 1.6 Change an App contract
+### 1.6 Render the App Vault template from the deployed release manifest (#1320)
 
-The receiver refuses an App release only when it asks for something that infra2 does not supply (#1320).
-It compares the deploy contract of the release manifests with the deploy contract of the infra2
-release that the deploy runs at. Staging runs at the newest release tag. Production runs at the
-`production/vX.Y.Z` marker, so a sync on `main` does not help a production deploy until infra2 is
-released and promoted.
+At deploy time, the receiver fetches the upstream App release manifests (`APP_UPSTREAM_MANIFESTS` in `common/deploy/app_contract.py`) at `source_sha` and merges their Vault-backed fields (`human`, `runtime`, `composed_from`) with the stack baseline `env.manifest.json` at `iac_ref`. It renders the Vault Agent template for the deployed release and passes it to the stack `vault-agent` container via `VAULT_SECRETS_TEMPLATE`.
 
-The deploy contract is every field that infra2 must supply: its `source` is not `code`, or the template
-renders it, or the image stops at start without it (`required`, or `injected` under the start check).
-`common/deploy/app_contract.py` lists the attributes that count. infra2 supplies a variable from the copy
-or from a stack-only manifest of the same stack (`env.manifest.json`); either one meets the release.
-A plain `code` field (a default inside the image), a description, `has_default`, `sensitive` and `ci`
-need no sync. A release that needs less than infra2 supplies passes. A release that moves a variable to
-`code` also passes: infra2 keeps rendering the old value until a sync drops it, and that value then
-overrides the new default. A refusal names the variable, the attribute and the file.
-
-1. The App merges the manifest change to its `main` branch.
-2. Sync only when the receiver names a variable that infra2 does not supply on `main` either.
-   Run `uv run python tools/fetch_app_manifests.py --sync <app> <ref>`. The `<ref>` is a tag, a branch name
-   or a full commit sha. The command rewrites the copies and `contracts/apps.lock.json`.
-   After a sync, and any time you doubt a copy, run `uv run python tools/fetch_app_manifests.py --verify`
-   to compare every copy with upstream.
-3. Run `uv run python tools/secrets_render.py --write`, then `--check`. The pull request shows the template diff.
-   It shows the manifest diff line by line only when the App keeps its JSON layout. A layout change marks the
-   whole file as changed. On 2026-10-15, the `main` file of finance_report has 1 line, and the copy has 1240 lines.
-4. The owner creates each new human value in 1Password. A deploy stops, and names the key, when a required value is missing.
-5. Release infra2 first, then the App. If the App goes first, its staging start check can fail,
-   because the App asks for a field that nobody supplies. When the receiver says that infra2 `main`
-   already supplies the variable, do not sync again: cut an infra2 release (staging), or promote
-   infra2 to production (owner-reserved).
-
-To add a file, add an entry (`app`, `path`, `upstream`, `"sha256": ""`) to the lock and its path to
-`common/security/registry.py`. Then run step 2. Do not sync a version that drops a field.
-First wait until the last 3 production releases and the pinned data-engine digest no longer need that field.
+1. A release that adds or tightens a Vault variable (`human` or `runtime`, such as `SEC_USER_AGENT`) renders that variable directly into the Vault Agent template at deploy time without a manual sync step in `infra2`.
+2. Every Vault path in the rendered policy must be granted by the stack's committed `vault-policy.hcl` at `iac_ref`; a release that requests an ungranted Vault path fails closed before deploy.
+3. Non-Vault fields that the image requires at start (`release`, `decision`, or `required`/`injected` `code` fields) must be supplied by the stack `compose.yaml` and `env.manifest.json` at `iac_ref`. Plain `code` defaults (`required=False`, `injected=False`), descriptions, `has_default`, `sensitive`, and `ci` are ignored.
+4. When a release needs a new non-Vault compose variable or a new Vault policy path, add it to the stack `compose.yaml` and `env.manifest.json` in `infra2`, run `uv run python tools/secrets_render.py --write`, cut an `infra2` release, and promote it to production when needed.
 
 ---
 

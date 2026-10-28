@@ -437,20 +437,14 @@ python3 tools/doc_link_check.py
 
 ## fetch_app_manifests.py
 
-Checks and refreshes infra2's copies of the App environment manifests in `contracts/`.
-A deploy reads only these copies. [`contracts/apps.lock.json`](../contracts/apps.lock.json)
-records the commit, the tag and the sha256 of each copy.
+Guards against vendored App environment manifests reappearing in `contracts/` (#1320).
+A deploy renders the Vault Agent template directly from the deployed release manifest merged with the stack baseline manifest (`env.manifest.json`).
 
 ```bash
-uv run python tools/fetch_app_manifests.py                           # offline check; infra-ci runs it
-uv run python tools/fetch_app_manifests.py --verify                  # also compare with upstream (network)
-uv run python tools/fetch_app_manifests.py --sync truealpha v0.2.0   # write the copies and the lock
+uv run python tools/fetch_app_manifests.py                           # offline guard check; infra-ci runs it
 ```
 
-The deploy receiver does not compare the bytes of these copies with a release. It compares the
-deploy contract: the variables that infra2 must supply (`common/deploy/app_contract.py`). A release
-that changes only plain `code` fields needs no sync. The steps to change an App contract are in
-[`bootstrap.vars_and_secrets`](../docs/ssot/bootstrap.vars_and_secrets.md).
+The deploy receiver checks non-Vault compose fields against the stack manifest and renders Vault-backed fields from the release manifest (`common/deploy/app_contract.py`). See [`bootstrap.vars_and_secrets`](../docs/ssot/bootstrap.vars_and_secrets.md).
 
 ## pi_chain_smoke.py (pi main-chain real-run proof)
 

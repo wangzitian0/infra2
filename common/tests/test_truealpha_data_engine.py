@@ -947,19 +947,19 @@ def test_truealpha_compose_services_provide_every_injected_contract_variable():
     so boot validation cannot fail on contract-to-compose variable drift."""
     checks = (
         (
-            ROOT / "contracts/truealpha/data-engine.required-env.generated.json",
+            SERVICE_DIR / "env.manifest.json",
             SERVICE_DIR / "compose.yaml",
             SERVICE_DIR / "secrets.ctmpl",
             ("dagster-code-server", "dagster-webserver", "dagster-daemon"),
         ),
         (
-            ROOT / "contracts/truealpha/llm-service.required-env.generated.json",
+            ROOT / "truealpha/truealpha/10.app/env.manifest.json",
             ROOT / "truealpha/truealpha/10.app/compose.yaml",
             ROOT / "truealpha/truealpha/10.app/secrets.ctmpl",
             ("llm",),
         ),
         (
-            ROOT / "contracts/truealpha/llm-service.required-env.generated.json",
+            ROOT / "truealpha/truealpha/10.app/env.manifest.json",
             ROOT / "truealpha/truealpha/preview/compose.yaml",
             ROOT / "truealpha/truealpha/preview/secrets.ctmpl",
             ("llm",),
@@ -981,9 +981,7 @@ def test_truealpha_compose_services_provide_every_injected_contract_variable():
 def test_missing_injected_contract_variable_in_compose_is_detected():
     """Falsifiability test: removing or blanking an injected=true variable fails."""
     contract_data = json.loads(
-        (
-            ROOT / "contracts/truealpha/data-engine.required-env.generated.json"
-        ).read_text(encoding="utf-8")
+        (SERVICE_DIR / "env.manifest.json").read_text(encoding="utf-8")
     )
     compose_data = yaml.safe_load(
         (SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8")
@@ -992,12 +990,10 @@ def test_missing_injected_contract_variable_in_compose_is_detected():
         compose_data["services"]["dagster-code-server"]["environment"]
     )
     del code_server_env["RELEASE_ID"]
-    del code_server_env["TRUEALPHA_RELEASE_MANIFEST_ID"]
     compose_data["services"]["dagster-code-server"]["environment"] = code_server_env
 
     webserver_env = dict(compose_data["services"]["dagster-webserver"]["environment"])
     webserver_env["RELEASE_ID"] = ""
-    webserver_env["TRUEALPHA_RELEASE_MANIFEST_ID"] = None
     compose_data["services"]["dagster-webserver"]["environment"] = webserver_env
 
     missing = _missing_injected_contract_vars(
@@ -1015,13 +1011,9 @@ def test_missing_injected_contract_variable_in_compose_is_detected():
 def test_store_backed_injected_variable_missing_from_the_template_is_detected():
     """#1296: a human or runtime field that the image requires must be rendered by the Vault template.
 
-    The manifest copy can lag the image. Then the template has no line for the variable, the
-    container boot check stops the code server, and the compose environment is not involved.
     Falsifiability: remove the SEC_USER_AGENT line and the guard names it for every service."""
     contract_data = json.loads(
-        (
-            ROOT / "contracts/truealpha/data-engine.required-env.generated.json"
-        ).read_text(encoding="utf-8")
+        (SERVICE_DIR / "env.manifest.json").read_text(encoding="utf-8")
     )
     compose_data = yaml.safe_load(
         (SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8")

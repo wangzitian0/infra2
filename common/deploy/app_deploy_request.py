@@ -6,7 +6,7 @@ import json
 import re
 import subprocess
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,13 +28,17 @@ from infra2_sdk.refs import (
 )
 
 from common.core.constants import APP_SOURCES
-from common.core.fetch_app_manifests import LOCK as APP_MANIFEST_LOCK, http_get
+from common.core.fetch_app_manifests import http_get
 from common.core.registry import domain_for_service
 from common.deploy.app_contract import (
+    APP_UPSTREAM_MANIFESTS,
     Contract,
     Gap,
+    parse_compose_contract,
     parse_contract,
-    stack_manifests,
+    render_release_template,
+    service_stack_manifest,
+    service_vault_policy,
     unmet,
 )
 from common.deploy.release_markers import (
@@ -92,6 +96,7 @@ class DeployPlan:
     # promotion lag that made #650 invisible until a prod recreate had happened; naming
     # both in the plan means the lag is on screen before anything is deployed.
     newest_iac_tag: str = ""
+    rendered_templates: Mapping[str, str] = field(default_factory=dict)
 
     def deploy_v2_args(self) -> list[str]:
         args = [
@@ -154,6 +159,7 @@ class DeployPlan:
             "deploy_v2_args": self.deploy_v2_args(),
             "requires_preflight_canary": self.requires_preflight_canary,
             "newest_iac_tag": self.newest_iac_tag,
+            "rendered_templates": dict(self.rendered_templates),
         }
 
 
@@ -258,8 +264,8 @@ def _git_contract_reader(
             shown = None
         if shown is None or not isinstance(shown.stdout, str) or not shown.stdout:
             raise ValueError(
-                f"infra2 release {ref} has no {path}: the release predates the file "
-                "(the vendored App contract is from #1258), or its tag is not fetched"
+                f"infra2 release {ref} has no {path}: the release predates the file, "
+                "or its tag is not fetched"
             )
         return shown.stdout
 
@@ -267,16 +273,18 @@ def _git_contract_reader(
 
 
 def _contract_gaps(
-    read: ContractReader, ref: str, release: dict[str, Contract]
+    read: ContractReader, ref: str, release: dict[tuple[str, str], Contract]
 ) -> list[tuple[str, Gap]]:
-    """What the release needs and the infra2 release ``ref`` does not supply, by copy path."""
+    """What the release needs in compose and the infra2 release ``ref`` does not supply."""
     gaps = []
-    for path, wanted in release.items():
+    for (service_id, upstream), wanted in release.items():
+        stack_path = service_stack_manifest(service_id)
         provided = [
-            parse_contract(read(ref, source), label=f"{source} at infra2 {ref}")
-            for source in (path, *stack_manifests(path))
+            parse_contract(read(ref, stack_path), label=f"{stack_path} at infra2 {ref}")
         ]
-        gaps.extend((path, gap) for gap in unmet(wanted, provided))
+        gaps.extend(
+            (f"{stack_path} ({upstream})", gap) for gap in unmet(wanted, provided)
+        )
     return gaps
 
 
@@ -285,14 +293,9 @@ def _gap_remedy(
     *,
     read: ContractReader,
     iac_ref: str,
-    release: dict[str, Contract],
+    release: dict[tuple[str, str], Contract],
 ) -> str:
-    """The step that closes the gap. It depends on where main stands (#1320).
-
-    A sync helps only when main lacks the field too. When main supplies it already, the
-    infra2 release the deploy runs at is the stale part: syncing again changes nothing.
-    """
-    app_name = request.service.split("/", 1)[0]
+    """The step that closes a non-Vault compose contract gap (#1320)."""
     if iac_ref != "main":
         try:
             main_has_it = not _contract_gaps(read, "main", release)
@@ -312,8 +315,8 @@ def _gap_remedy(
                 "which predates main. Cut an infra2 release from main, then deploy again"
             )
     return (
-        f"run `tools/fetch_app_manifests.py --sync {app_name} {request.version_ref}` and "
-        "`tools/secrets_render.py --write`, merge, cut an infra2 release"
+        "add the variable to the stack compose file and env.manifest.json in infra2, "
+        "merge, cut an infra2 release"
         f"{' and promote it to production' if request.deploy_type == DeployType.PRODUCTION else ''}"
         ", then deploy again"
     )
@@ -327,39 +330,26 @@ def verify_app_manifests(
     manifest_fetcher: Callable[[str], bytes] | None = None,
     contract_reader: ContractReader | None = None,
     runner=subprocess.run,
-) -> None:
-    """Refuse a release that asks for a variable the infra2 release ``iac_ref`` does not supply.
+) -> dict[str, str]:
+    """Render each service's Vault Agent template from the release manifest and check the stack contract (#1320).
 
-    The deploy renders its Vault template and supplies its Vault values from the App
-    contract of ``iac_ref`` (staging: the newest release tag; production: the marker), so
-    that is the contract to compare, not main's. Only the part of a manifest that infra2
-    acts on counts (``common/deploy/app_contract.py``): a release that changes ``code``
-    fields needs no sync (#1320). A release that needs less than infra2 supplies passes.
+    Vault-backed fields from the release manifest are merged with the stack baseline manifest
+    at ``iac_ref`` to render ``secrets.ctmpl``, gated by the stack's ``vault-policy.hcl``.
+    Non-Vault fields (``release``, ``decision``, and ``required``/``injected`` ``code`` fields)
+    must be supplied by the stack manifest at ``iac_ref``.
     """
     if request.operation == DeployOperation.REMOVE:
-        return
+        return {}
     read = contract_reader or _git_contract_reader(repo_root, runner)
-    lock_text = read(iac_ref, APP_MANIFEST_LOCK)
     app_name = request.service.split("/", 1)[0]
-    try:
-        files = [
-            f
-            for f in json.loads(lock_text)["files"]
-            if isinstance(f, Mapping) and f.get("app") == app_name
-        ]
-    except (ValueError, KeyError, TypeError) as exc:
-        raise ValueError(
-            f"{APP_MANIFEST_LOCK} of infra2 release {iac_ref} is not a lock: {exc!r}"
-        ) from None
-    if not files:
-        raise ValueError(
-            f"{APP_MANIFEST_LOCK} of infra2 release {iac_ref} lists no manifest of "
-            f"{app_name!r}: the release cannot say what it supplies"
-        )
+    upstreams = APP_UPSTREAM_MANIFESTS.get(app_name)
+    if not upstreams:
+        raise ValueError(f"no upstream manifests registered for {app_name!r}")
+
     fetch = manifest_fetcher or http_get
-    release: dict[str, Contract] = {}
-    for entry in files:
-        upstream = str(entry["upstream"])
+    compose_release: dict[tuple[str, str], Contract] = {}
+    bodies_by_service: dict[str, list[tuple[str, bytes]]] = {}
+    for service_id, upstream in upstreams:
         url = (
             f"https://raw.githubusercontent.com/"
             f"{request.source_repository}/{request.source_sha}/{upstream}"
@@ -370,16 +360,41 @@ def verify_app_manifests(
             raise ValueError(
                 f"failed to fetch manifest {upstream} from {url}: {exc}"
             ) from None
-        release[str(entry["path"])] = parse_contract(body, label=f"{upstream} at {url}")
-    gaps = _contract_gaps(read, iac_ref, release)
+        label = f"{upstream} at {url}"
+        compose_release[(service_id, upstream)] = parse_compose_contract(
+            body, label=label
+        )
+        bodies_by_service.setdefault(service_id, []).append((label, body))
+
+    gaps = _contract_gaps(read, iac_ref, compose_release)
     if gaps:
         lines = [
             f"release manifests at {request.source_sha[:12]} need what infra2 release {iac_ref} "
             "does not supply:"
         ]
         lines.extend(f"  {path}: {gap}" for path, gap in gaps)
-        lines.append(_gap_remedy(request, read=read, iac_ref=iac_ref, release=release))
+        lines.append(
+            _gap_remedy(request, read=read, iac_ref=iac_ref, release=compose_release)
+        )
         raise ValueError("\n".join(lines))
+
+    preview = request.deploy_type not in FIXED_DEPLOY_TYPES
+    rendered_templates: dict[str, str] = {}
+    for service_id, service_bodies in bodies_by_service.items():
+        is_preview = preview and service_id == request.service
+        stack_path = service_stack_manifest(service_id, preview=is_preview)
+        policy_path = service_vault_policy(service_id, preview=is_preview)
+        stack_body = read(iac_ref, stack_path)
+        policy_body = read(iac_ref, policy_path)
+        template, _policy = render_release_template(
+            service_id,
+            service_bodies,
+            stack_manifest_body=stack_body,
+            committed_policy=policy_body,
+            preview=is_preview,
+        )
+        rendered_templates[service_id] = template
+    return rendered_templates
 
 
 def make_plan(
@@ -415,7 +430,7 @@ def make_plan(
     if timeout <= 0:
         raise ValueError("timeout must be positive")
     iac_ref = select_iac_ref(request.deploy_type, repo_root=repo_root, runner=runner)
-    verify_app_manifests(
+    rendered_templates = verify_app_manifests(
         request,
         repo_root=repo_root,
         iac_ref=iac_ref,
@@ -433,6 +448,7 @@ def make_plan(
             if request.deploy_type in FIXED_DEPLOY_TYPES
             else ""
         ),
+        rendered_templates=rendered_templates,
     )
 
 

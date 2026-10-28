@@ -34,6 +34,7 @@ This is a pure importable backend — the operator surface is the deploy_v2 CLI:
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -196,6 +197,9 @@ def _preview_env_vars(
         "CONFIGURATION_SHA256": config_hash,
         "IAC_CONFIG_HASH": config_hash,
     }
+    vault_template = os.environ.get("VAULT_SECRETS_TEMPLATE", "")
+    if vault_template:
+        env_vars["VAULT_SECRETS_TEMPLATE"] = vault_template
     from common.deploy.contract import service_spec
     from common.core.service_identity import ServiceIdentity
 

@@ -82,11 +82,17 @@ services:
         fi
         echo "$$VAULT_ROLE_ID" > /vault/role_id
         echo "$$VAULT_SECRET_ID" > /vault/secret_id
+        if [ -n "$$VAULT_SECRETS_TEMPLATE" ]; then
+          printf '%s' "$$VAULT_SECRETS_TEMPLATE" | base64 -d > /vault/secrets.ctmpl && [ -s /vault/secrets.ctmpl ] || { echo "CRITICAL: invalid VAULT_SECRETS_TEMPLATE"; exit 1; }
+          sed 's|/etc/vault/secrets.ctmpl|/vault/secrets.ctmpl|g' /etc/vault/vault-agent.hcl > /vault/vault-agent.hcl
+          exec vault agent -config=/vault/vault-agent.hcl
+        fi
         exec vault agent -config=/etc/vault/vault-agent.hcl
     environment:
       VAULT_ADDR: ${VAULT_ADDR}
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
+      VAULT_SECRETS_TEMPLATE: ${VAULT_SECRETS_TEMPLATE:-}
       ENV: ${ENV}
       TA_POSTGRES_PORT: ${TA_POSTGRES_PORT}
       # secrets.ctmpl dials MinIO with this (#604); `env "X"` inside the template

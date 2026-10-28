@@ -15,12 +15,10 @@ from common.security.registry import SERVICES, Service
 
 
 def test_every_registered_manifest_is_resolvable() -> None:
-    """Each registered manifest loads from the checkout and declares fields.
-
-    An App manifest is infra2's copy in ``contracts/`` (#1258). The test needs no
-    network, no submodule and no cache."""
+    """Each registered manifest loads from its stack directory and declares fields (#1320)."""
     for service in SERVICES:
         for path in service.manifests:
+            assert not path.startswith("contracts/"), f"{service.id}: {path}"
             manifest = secrets_registry.load_manifest(path)
             assert manifest.fields, f"{service.id}: {path} has no fields"
 
@@ -74,8 +72,8 @@ def test_merged_manifest_rejects_conflicting_render_attributes(tmp_path) -> None
 def test_load_manifest_reads_the_local_file_and_never_uses_the_network(
     tmp_path, monkeypatch
 ) -> None:
-    """A deploy reads infra2's copies (#1258). It once fetched an absent one (#824, #1109)."""
-    rel = "contracts/truealpha/x.required-env.generated.json"
+    """A stack manifest loads directly from disk and never uses the network (#1320)."""
+    rel = "truealpha/truealpha/10.app/env.manifest.json"
     _write(tmp_path, rel, [{"field": "k", "env": "K", "source": "runtime"}])
     assert secrets_registry.manifest_file(rel, root=tmp_path) == tmp_path / rel
     loaded = secrets_registry.load_manifest(rel, root=tmp_path)
@@ -87,7 +85,7 @@ def test_load_manifest_reads_the_local_file_and_never_uses_the_network(
     monkeypatch.setattr(urllib.request, "urlopen", refuse)
     monkeypatch.setattr(subprocess, "run", refuse)
     with pytest.raises(FileNotFoundError):
-        secrets_registry.load_manifest("contracts/absent.json", root=tmp_path)
+        secrets_registry.load_manifest("truealpha/absent.json", root=tmp_path)
 
 
 def test_every_provided_by_names_a_store_backed_field_of_that_provider() -> None:

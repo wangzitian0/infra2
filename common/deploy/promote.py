@@ -623,6 +623,9 @@ def _build_deploy_env_vars(
                 env=deploy_environment, domain=domain, env_suffix=cfg.env_suffix
             )
         )
+    vault_template = os.environ.get("VAULT_SECRETS_TEMPLATE", "")
+    if vault_template:
+        env_vars["VAULT_SECRETS_TEMPLATE"] = vault_template
     return env_vars, identity
 
 
