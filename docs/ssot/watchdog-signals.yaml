@@ -172,6 +172,10 @@ signals:
     failure_class: service-health
     severity: critical
     cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
 
   - signal_id: production.s3.public-route
     environment: production
@@ -340,6 +344,10 @@ signals:
     failure_class: service-health
     severity: warning
     cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
 
   - signal_id: staging.finance-report-api-full-health.public-route
     environment: staging
@@ -350,6 +358,10 @@ signals:
     failure_class: service-health
     severity: warning
     cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
 
   - signal_id: production.truealpha-web.public-route
     environment: production

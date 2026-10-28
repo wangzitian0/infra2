@@ -560,23 +560,18 @@ def test_public_route_probes_must_follow_the_naming_contract(monkeypatch) -> Non
 def test_vps_public_route_signals_registered_with_minute_tier_and_debounce() -> None:
     """Verify in-band VPS public-route signals declare minute tier and structured debounce."""
     inventory = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
-    signals = {s["signal_id"]: s for s in inventory["signals"]}
-    expected_ids = [
-        "production.s3.public-route",
-        "production.authentik.public-route",
-        "production.signoz.public-route",
-        "staging.s3.public-route",
-        "staging.authentik.public-route",
-        "production.finance-report-api.public-route",
-        "staging.finance-report-web.public-route",
-        "staging.finance-report-api.public-route",
-        "production.truealpha-api.public-route",
-        "staging.truealpha-web.public-route",
-        "staging.truealpha-api.public-route",
+    vps_route_signals = [
+        s
+        for s in inventory["signals"]
+        if s.get("primary_owner") == "self"
+        and s.get("layer") == "vps"
+        and str(s.get("signal", "")).endswith("-public-route")
     ]
+    assert len(vps_route_signals) == 14
+
     audit = _load_audit()
-    for signal_id in expected_ids:
-        entry = signals[signal_id]
+    for entry in vps_route_signals:
+        signal_id = entry["signal_id"]
         assert entry["tier"] == "minute"
         assert entry["type"] == "alert"
         assert entry["primary_owner"] == "self"
