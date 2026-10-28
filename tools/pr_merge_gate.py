@@ -410,6 +410,7 @@ def main(
                     "head": facts.head_sha,
                     "ready": verdict.ready,
                     "owner_required": verdict.owner_required,
+                    "review_required": verdict.review_required,
                     "outcome": verdict.outcome,
                     "exit_code": verdict.exit_code,
                     "reasons": verdict.reasons,
@@ -430,7 +431,7 @@ def main(
         text = render(facts, verdict)
         if verdict.ready:
             success(text)
-        elif verdict.owner_required or verdict.unevaluable:
+        elif verdict.owner_required or verdict.review_required or verdict.unevaluable:
             error(text)
         else:
             warning(text)

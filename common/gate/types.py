@@ -174,10 +174,17 @@ class HeadFacts:
         return tuple(r for r in self.reviews if r[1] == self.head_sha)
 
 
-# Exit codes (#740). A caller acts on the code alone, never on the prose:
-# 1 means waiting will fix it, 3 means someone must act, 4 means this run could not
-# judge the PR (fix the cause and re-run; it is not a verdict on the PR).
-EXIT_READY, EXIT_WAIT, EXIT_OWNER, EXIT_ACTION, EXIT_UNEVALUABLE = 0, 1, 2, 3, 4
+# Exit codes (#740, #1340). A caller acts on the code and outcome, never on the prose:
+# 1 means waiting will fix it, 2 means owner approval is required (production paths only),
+# 3 means independent review or action is required, 4 means this run could not judge the PR.
+EXIT_READY, EXIT_WAIT, EXIT_OWNER, EXIT_REVIEW, EXIT_ACTION, EXIT_UNEVALUABLE = (
+    0,
+    1,
+    2,
+    3,
+    3,
+    4,
+)
 OUTCOMES = {
     EXIT_READY: "ready",
     EXIT_WAIT: "wait",
@@ -187,7 +194,14 @@ OUTCOMES = {
 }
 
 # Reason kinds. "wait" is the default: time alone can clear it.
-WAIT, ACT, UNEVALUABLE = "wait", "act", "unevaluable"
+WAIT, REVIEW, OWNER, ACT, UNEVALUABLE = (
+    "wait",
+    "review_required",
+    "owner",
+    "act",
+    "unevaluable",
+)
+REASON_KINDS = (WAIT, REVIEW, OWNER, ACT, UNEVALUABLE)
 
 
 class Reasons(list):
@@ -210,21 +224,32 @@ class Verdict:
     quiet_remaining_seconds: int = 0
     action_required: bool = False
     unevaluable: bool = False
+    review_required: bool = False
 
     @property
     def exit_code(self) -> int:
-        """Ready first; then a run that could not judge (its other findings are not
-        trustworthy); then the owner; then someone must act; else wait."""
+        """Return exit code in priority order: ready, unevaluable, owner, review, action, wait."""
         if self.ready:
             return EXIT_READY
         if self.unevaluable:
             return EXIT_UNEVALUABLE
         if self.owner_required:
             return EXIT_OWNER
+        if self.review_required:
+            return EXIT_REVIEW
         if self.action_required:
             return EXIT_ACTION
         return EXIT_WAIT
 
     @property
     def outcome(self) -> str:
+        """Return outcome label for the verdict."""
+        if self.ready:
+            return "ready"
+        if self.unevaluable:
+            return "unevaluable"
+        if self.owner_required:
+            return "owner"
+        if self.review_required:
+            return "review_required"
         return OUTCOMES[self.exit_code]

@@ -20,9 +20,14 @@ from common.gate.review import request_copilot_review
 from common.gate.types import (
     ACT,
     COPILOT_BOT_ID,
+    OWNER,
+    REASON_KINDS,
+    REVIEW,
     SETTLE_SECONDS,
-    Reasons,
+    UNEVALUABLE,
+    WAIT,
     HeadFacts,
+    Reasons,
 )
 
 
@@ -83,7 +88,8 @@ def test_step_pr_state_and_conflicts_wrong_base():
     reasons = Reasons()
     facts = _base_facts(base="feature")
     owner = _check_pr_state_and_conflicts(facts, reasons)
-    assert owner
+    assert not owner
+    assert REVIEW in reasons.kinds
     assert any("not main" in r for r in reasons)
 
 
@@ -144,11 +150,45 @@ def test_step_settling_window_clock_passed():
 def test_evaluate_step_pipeline_end_to_end():
     facts = _base_facts(last_push_at=1000.0)
     verdict = evaluate(facts, now=2000.0, quiet_minutes=12, policy="clock")
-    # In wangzitian0/infra2, common/gate/evaluator.py is in self_governing closure,
-    # so without owner proof it requires owner action.
+    # In wangzitian0/infra2, common/gate/evaluator.py is in the review set (#1340):
+    # without a verified lock and recorded review it returns review_required (exit 3), not owner (exit 2).
     assert not verdict.ready
-    assert verdict.owner_required
+    assert verdict.review_required
+    assert not verdict.owner_required
+    assert not verdict.unevaluable
+    assert verdict.exit_code == 3
+    assert verdict.outcome == "review_required"
     assert any("changes what decides merges" in r for r in verdict.reasons)
+
+
+def test_reason_kinds_partition_owner_from_non_production_outcomes():
+    """#1340: only OWNER reason kind yields outcome == 'owner' or exit_code == 2."""
+    assert set(REASON_KINDS) == {WAIT, REVIEW, OWNER, ACT, UNEVALUABLE}
+    expected_outcomes = {
+        WAIT: ("wait", 1, False, False),
+        REVIEW: ("review_required", 3, False, True),
+        OWNER: ("owner", 2, True, False),
+        ACT: ("action", 3, False, False),
+        UNEVALUABLE: ("unevaluable", 4, False, False),
+    }
+    for kind in REASON_KINDS:
+        reasons = Reasons()
+        reasons.append(f"reason for {kind}", kind)
+        from common.gate.types import Verdict
+
+        verdict = Verdict(
+            ready=not reasons,
+            owner_required=OWNER in reasons.kinds,
+            reasons=list(reasons),
+            action_required=ACT in reasons.kinds,
+            unevaluable=UNEVALUABLE in reasons.kinds,
+            review_required=REVIEW in reasons.kinds,
+        )
+        outcome, code, is_owner, is_review = expected_outcomes[kind]
+        assert verdict.outcome == outcome
+        assert verdict.exit_code == code
+        assert verdict.owner_required is is_owner
+        assert verdict.review_required is is_review
 
 
 # --- #1075: settle 60 s after a review; a bot-opened PR needs a verification --

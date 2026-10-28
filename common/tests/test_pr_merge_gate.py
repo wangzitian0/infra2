@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from common.gate import production_contract
 from common.gate.inventory import _required_check_workflows
 from common.gate.types import _normalized_path
 from tools import pr_merge_gate as gate
@@ -508,9 +507,24 @@ def test_main_json_reports_the_owner_gate(capsys):
                 return json.dumps(doc)
             return out
 
-    assert gate.main(["704", "--json"], gh=_Protected(), now=lambda: NOW) == 2
+    assert gate.main(["704", "--json"], gh=_Protected(), now=lambda: NOW) == 3
     doc = json.loads(capsys.readouterr().out)
-    assert doc["owner_required"] and doc["ready"] is False
+    assert (
+        doc["review_required"] and not doc["owner_required"] and doc["ready"] is False
+    )
+    assert doc["outcome"] == "review_required" and doc["exit_code"] == 3
+
+    assert (
+        gate.main(
+            ["704", "--json"],
+            gh=_Gh(files=("tools/host_hygiene_schedule.py",)),
+            now=lambda: NOW,
+        )
+        == 2
+    )
+    owner_doc = json.loads(capsys.readouterr().out)
+    assert owner_doc["owner_required"] and not owner_doc["review_required"]
+    assert owner_doc["outcome"] == "owner" and owner_doc["ready"] is False
 
 
 def test_a_failing_gh_call_is_an_error_not_a_verdict():
@@ -1033,7 +1047,8 @@ def test_changing_what_decides_merges_needs_the_owner():
     # The gate decides from the working tree, which for an agent merging its
     # own PR is that PR's branch -- the change judges itself. #765 moved the
     # merge-authority rules into SSOT, out of the protected file, while a
-    # .md-only PR also skips every required check.
+    # .md-only PR also skips every required check. #1340 partitions review-set
+    # closure files (review_required) from scheduled production automation (owner_required).
     for path in (
         "tools/pr_merge_gate.py",
         "common/tests/test_pr_merge_gate.py",
@@ -1043,7 +1058,14 @@ def test_changing_what_decides_merges_needs_the_owner():
     ):
         verdict = gate.evaluate(_green(files=(path,)), now=NOW)
         assert not verdict.ready, path
-        assert verdict.owner_required, path
+        assert verdict.review_required and not verdict.owner_required, path
+        assert verdict.outcome == "review_required", path
+        assert any("what decides merges" in r for r in verdict.reasons), path
+    for path in ("tools/host_hygiene_schedule.py", "tools/facet_reconcile.py"):
+        verdict = gate.evaluate(_green(files=(path,)), now=NOW)
+        assert not verdict.ready, path
+        assert verdict.owner_required and not verdict.review_required, path
+        assert verdict.outcome == "owner", path
         assert any("what decides merges" in r for r in verdict.reasons), path
 
 
@@ -1151,7 +1173,11 @@ def test_rule_text_files_still_need_the_owner_without_a_citation():
     verdict = gate.evaluate(
         _green(files=("AGENTS.md", "docs/ssot/ops.merge-gate.md")), now=NOW
     )
-    assert verdict.owner_required and verdict.exit_code == 2
+    assert (
+        verdict.review_required
+        and not verdict.owner_required
+        and verdict.exit_code == 3
+    )
     assert any("what decides merges" in r for r in verdict.reasons)
     assert any("citing the owner instruction" in r for r in verdict.reasons), (
         verdict.reasons
@@ -1166,7 +1192,11 @@ def test_a_header_with_no_quote_beneath_it_still_needs_the_owner():
         ),
         now=NOW,
     )
-    assert verdict.owner_required and verdict.exit_code == 2
+    assert (
+        verdict.review_required
+        and not verdict.owner_required
+        and verdict.exit_code == 3
+    )
 
 
 def test_a_citation_does_not_excuse_the_gates_own_code():
@@ -1182,7 +1212,11 @@ def test_a_citation_does_not_excuse_the_gates_own_code():
         ),
         now=NOW,
     )
-    assert verdict.owner_required and verdict.exit_code == 2
+    assert (
+        verdict.review_required
+        and not verdict.owner_required
+        and verdict.exit_code == 3
+    )
     assert "tools/pr_merge_gate.py" in verdict.reasons[0]
     assert "AGENTS.md" not in verdict.reasons[0], (
         "the cited rule-text file must not be named as a blocker"
@@ -1434,11 +1468,15 @@ def test_a_draft_is_not_mergeable():
 
 
 def test_a_pr_targeting_something_other_than_main_needs_the_owner():
-    # Same: `base=` appeared once, as base="main". This branch sets owner too,
-    # so both the block and the escalation were uncovered.
+    # Same: `base=` appeared once, as base="main". Non-main base returns exit 3
+    # with review_required=True and owner_required=False (#1340).
     verdict = gate.evaluate(_green(base="release/1.0"), now=NOW)
     assert not verdict.ready
-    assert verdict.owner_required
+    assert (
+        verdict.review_required
+        and not verdict.owner_required
+        and verdict.exit_code == 3
+    )
     assert any("not main" in r for r in verdict.reasons)
 
 
@@ -1716,7 +1754,11 @@ def test_the_same_change_unproven_still_needs_the_owner():
         _facts(files=("docs/ssot/ci-gate-inventory.yaml", "tools/ci_gate_audit.py")),
         now=NOW,
     )
-    assert verdict.owner_required and verdict.exit_code == 2
+    assert (
+        verdict.review_required
+        and not verdict.owner_required
+        and verdict.exit_code == 3
+    )
     assert "ci-gate-inventory.yaml" in verdict.reasons[0]
 
 
@@ -1729,7 +1771,11 @@ def test_a_proven_file_does_not_excuse_an_unproven_one():
         ),
         now=NOW,
     )
-    assert verdict.owner_required and verdict.exit_code == 2
+    assert (
+        verdict.review_required
+        and not verdict.owner_required
+        and verdict.exit_code == 3
+    )
     assert "tools/pr_merge_gate.py" in verdict.reasons[0]
     assert "ci-gate-inventory.yaml" not in verdict.reasons[0], (
         "the proven file must not be named as a blocker"
@@ -2112,7 +2158,11 @@ def test_a_package_file_that_does_not_exist_is_still_in_the_closure(
 )
 def test_a_shadow_of_the_gate_goes_to_the_owner_when_the_lock_holds(path):
     verdict = gate.evaluate(_green(files=(path,), lock_failures=()), now=NOW)
-    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
+    assert (
+        verdict.review_required
+        and not verdict.owner_required
+        and verdict.exit_code == 3
+    ), verdict.reasons
     assert any("what decides merges" in r and path in r for r in verdict.reasons)
 
 
@@ -2317,13 +2367,16 @@ def test_the_guard_of_the_lock_stays_with_the_owner_when_the_lock_holds(path):
     verdict = gate.evaluate(
         _green(files=(CI_WORKFLOW, path), lock_failures=HOLDS), now=NOW
     )
-    assert verdict.owner_required and verdict.exit_code == 2, path
+    assert (
+        verdict.review_required
+        and not verdict.owner_required
+        and verdict.exit_code == 3
+    ), path
     reason = next(r for r in verdict.reasons if "what decides merges" in r)
     assert path in reason and CI_WORKFLOW not in reason
 
 
-# The six files with an ungated or conditional production job. The owner-held list is
-# empty by decision of 2026-10-08 (#1138), so the lock covers them too.
+# The six files with an ungated or conditional production job (#1138).
 FILES_WITH_JOBS_OUTSIDE_THE_ENVIRONMENT = (
     "app-deploy-request.yml",
     "deploy-report-main.yml",
@@ -2344,30 +2397,18 @@ def test_a_workflow_with_a_job_outside_the_environment_merges_when_the_lock_hold
     assert verdict.ready and verdict.exit_code == 0, verdict.reasons
 
 
-def _hold(monkeypatch, *names: str) -> None:
-    monkeypatch.setattr(production_contract, "OWNER_HELD_WORKFLOWS", frozenset(names))
-
-
-def test_a_held_workflow_stays_with_the_owner_when_the_lock_holds(monkeypatch):
-    _hold(monkeypatch, "ops-checks.yml")
-    held = f"{gate.WORKFLOW_PREFIX}ops-checks.yml"
+def test_a_scheduled_automation_file_stays_with_the_owner_when_the_lock_holds():
+    held = "tools/host_hygiene_schedule.py"
     verdict = gate.evaluate(
         _green(files=(held, CI_WORKFLOW), lock_failures=HOLDS), now=NOW
     )
-    assert verdict.owner_required and verdict.exit_code == 2
+    assert (
+        verdict.owner_required
+        and not verdict.review_required
+        and verdict.exit_code == 2
+    )
     reason = next(r for r in verdict.reasons if "what decides merges" in r)
     assert held in reason and CI_WORKFLOW not in reason
-    assert any(
-        r.startswith(f"the production lock does not cover {held}:")
-        for r in verdict.reasons
-    )
-
-
-def test_holding_one_workflow_leaves_the_others_covered(monkeypatch):
-    _hold(monkeypatch, "ops-checks.yml")
-    path = f"{gate.WORKFLOW_PREFIX}deploy.yml"
-    verdict = gate.evaluate(_green(files=(path,), lock_failures=HOLDS), now=NOW)
-    assert verdict.ready, verdict.reasons
 
 
 def test_a_proven_tighter_change_gets_no_new_blocker_from_the_lock():
@@ -2378,15 +2419,6 @@ def test_a_proven_tighter_change_gets_no_new_blocker_from_the_lock():
             now=NOW,
         )
         assert verdict.ready, (lock, verdict.reasons)
-
-
-def test_a_held_file_is_not_cleared_by_the_proof_while_the_lock_holds(monkeypatch):
-    _hold(monkeypatch, "ops-checks.yml")
-    path = f"{gate.WORKFLOW_PREFIX}ops-checks.yml"
-    verdict = gate.evaluate(
-        _green(files=(path,), proven_tighter=(path,), lock_failures=HOLDS), now=NOW
-    )
-    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
 
 
 def test_a_deploy_path_merges_without_the_owner_when_the_lock_holds():
@@ -2552,7 +2584,13 @@ def test_an_unverified_lock_alone_changes_no_verdict():
 INFRA_CI = f"{gate.WORKFLOW_PREFIX}infra-ci.yml"
 
 
-def _required_line(path: str) -> str:
+def _required_line(path: str, *, lock_holds: bool = True) -> str:
+    if lock_holds:
+        return (
+            f"{path} defines a required check: an independent review of head abcdef0 is "
+            "required; the workflow proof does not read job bodies, so it cannot clear "
+            "this file"
+        )
     return (
         f"{path} defines a required check: the owner approves head abcdef0; the "
         "workflow proof does not read job bodies, so it cannot clear this file"
@@ -2565,7 +2603,11 @@ def test_the_required_check_workflows_are_derived_from_the_inventory():
 
 def test_a_required_check_workflow_needs_the_owner_when_the_lock_holds():
     verdict = gate.evaluate(_green(files=(INFRA_CI,), lock_failures=HOLDS), now=NOW)
-    assert verdict.owner_required and verdict.exit_code == 2
+    assert (
+        verdict.review_required
+        and not verdict.owner_required
+        and verdict.exit_code == 3
+    )
     assert _required_line(INFRA_CI) in verdict.reasons
 
 
@@ -2576,7 +2618,11 @@ def test_a_proven_tighter_required_check_workflow_still_needs_the_owner():
         _green(files=(INFRA_CI,), proven_tighter=(INFRA_CI,), lock_failures=HOLDS),
         now=NOW,
     )
-    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
+    assert (
+        verdict.review_required
+        and not verdict.owner_required
+        and verdict.exit_code == 3
+    ), verdict.reasons
     assert _required_line(INFRA_CI) in verdict.reasons
 
 
@@ -2590,7 +2636,7 @@ def test_without_the_lock_the_proof_does_not_clear_a_required_check_workflow(loc
         now=NOW,
     )
     assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
-    assert _required_line(INFRA_CI) in verdict.reasons
+    assert _required_line(INFRA_CI, lock_holds=False) in verdict.reasons
 
 
 @pytest.mark.parametrize(
@@ -2635,7 +2681,11 @@ def test_a_mixed_pr_names_only_the_required_check_workflow():
     verdict = gate.evaluate(
         _green(files=(INFRA_CI, deploy), lock_failures=HOLDS), now=NOW
     )
-    assert verdict.owner_required and verdict.exit_code == 2
+    assert (
+        verdict.review_required
+        and not verdict.owner_required
+        and verdict.exit_code == 3
+    )
     decides = next(r for r in verdict.reasons if "what decides merges" in r)
     assert INFRA_CI in decides and deploy not in decides
     assert _required_line(INFRA_CI) in verdict.reasons
@@ -2673,7 +2723,7 @@ def test_an_unreadable_inventory_releases_no_workflow(tmp_path, monkeypatch, gat
     _inventory_at(tmp_path, monkeypatch, gates)
     assert _required_check_workflows() is None
     verdict = gate.evaluate(_green(files=(CI_WORKFLOW,), lock_failures=HOLDS), now=NOW)
-    assert verdict.owner_required
+    assert verdict.review_required and not verdict.owner_required
     assert any(
         r.startswith("cannot read a blocking gate with a workflow from ")
         and CI_WORKFLOW in r
@@ -2692,7 +2742,8 @@ def test_a_new_blocking_gate_holds_its_workflow(tmp_path, monkeypatch):
     _inventory_at(tmp_path, monkeypatch, [*gates, {**new_gate, "blocks_merge": True}])
     assert _required_check_workflows() == frozenset({INFRA_CI, deploy})
     verdict = gate.evaluate(_green(files=(deploy,), lock_failures=HOLDS), now=NOW)
-    assert verdict.owner_required and _required_line(deploy) in verdict.reasons
+    assert verdict.review_required and not verdict.owner_required
+    assert _required_line(deploy) in verdict.reasons
 
 
 # --- #1138 re-audit L7 and L8: the lock line and keys on every exit ------------------
@@ -2728,7 +2779,8 @@ def test_an_unread_lock_is_not_reported_as_verified(argv, gh, capsys):
 @pytest.mark.parametrize(
     "overrides, outcome",
     [
-        ({"files": ("AGENTS.md",)}, "owner"),
+        ({"files": ("tools/host_hygiene_schedule.py",)}, "owner"),
+        ({"files": ("AGENTS.md",)}, "review_required"),
         ({"draft": True}, "action"),
         ({"rule_drift": ("AGENTS.md",)}, "unevaluable"),
         ({"last_push_at": NOW - 60}, "wait"),
@@ -2813,7 +2865,11 @@ def test_a_weakened_required_check_workflow_goes_to_the_owner(kind):
     )
     # The proof reads only push paths and job names: it calls each of these tighter.
     assert proven == (INFRA_CI,), kind
-    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
+    assert (
+        verdict.review_required
+        and not verdict.owner_required
+        and verdict.exit_code == 3
+    ), verdict.reasons
     assert _required_line(INFRA_CI) in verdict.reasons
 
 
@@ -2849,13 +2905,21 @@ def test_an_inventory_path_in_another_spelling_still_holds_its_workflow(
     _inventory_at(tmp_path, monkeypatch, gates)
     assert _required_check_workflows() == frozenset({INFRA_CI})
     verdict = gate.evaluate(_green(files=(INFRA_CI,), lock_failures=HOLDS), now=NOW)
-    assert verdict.owner_required and _required_line(INFRA_CI) in verdict.reasons
+    assert (
+        verdict.review_required
+        and not verdict.owner_required
+        and _required_line(INFRA_CI) in verdict.reasons
+    )
 
 
 def test_a_changed_path_in_another_case_is_held_too():
     variant = f"{gate.WORKFLOW_PREFIX}Infra-CI.yml"
     verdict = gate.evaluate(_green(files=(variant,), lock_failures=HOLDS), now=NOW)
-    assert verdict.owner_required and verdict.exit_code == 2, verdict.reasons
+    assert (
+        verdict.review_required
+        and not verdict.owner_required
+        and verdict.exit_code == 3
+    ), verdict.reasons
 
 
 @pytest.mark.parametrize(
@@ -2993,7 +3057,7 @@ def test_last_push_at_none_returns_unevaluable_without_type_error():
 
 
 def test_gate_change_checklist_clears_closure_file_when_lock_and_evidence_and_review_hold():
-    """#1040: a non-workflow closure file clears when lock_holds, ### Mutation evidence, and review hold."""
+    """#1040, #1340: a review-set file clears when lock_holds and review holds."""
     head = "abcdef0123456789"
     body = "## Summary\n\n### Mutation evidence\n\n- `test_pr_merge_gate.py::test_x`\n"
     facts = _green(
@@ -3006,7 +3070,7 @@ def test_gate_change_checklist_clears_closure_file_when_lock_and_evidence_and_re
     verdict = gate.evaluate(facts, now=NOW)
     assert verdict.ready and verdict.exit_code == 0, verdict.reasons
 
-    # Required-check workflow (infra-ci.yml) remains owner-held even with checklist
+    # Required-check workflow (infra-ci.yml) clears with lock_holds and recorded review (#1340)
     held_facts = _green(
         head_sha=head,
         files=(INFRA_CI,),
@@ -3015,10 +3079,22 @@ def test_gate_change_checklist_clears_closure_file_when_lock_and_evidence_and_re
         reviews=(("copilot-pull-request-reviewer", head, NOW - 120),),
     )
     held_verdict = gate.evaluate(held_facts, now=NOW)
-    assert held_verdict.owner_required and held_verdict.exit_code == 2
+    assert held_verdict.ready and held_verdict.exit_code == 0, held_verdict.reasons
 
-    # Rule-text files (AGENTS.md / docs/ssot/ops.merge-gate.md) require quoted owner
-    # instruction even when the mutation checklist holds.
+    # Scheduled automation files remain owner_required even when review is recorded (#1340)
+    sched_facts = _green(
+        head_sha=head,
+        files=("tools/host_hygiene_schedule.py",),
+        lock_failures=HOLDS,
+        body=body,
+        reviews=(("copilot-pull-request-reviewer", head, NOW - 120),),
+    )
+    sched_verdict = gate.evaluate(sched_facts, now=NOW)
+    assert sched_verdict.owner_required and not sched_verdict.review_required
+    assert sched_verdict.outcome == "owner" and sched_verdict.exit_code == 2
+
+    # Rule-text files (AGENTS.md / docs/ssot/ops.merge-gate.md) without quoted
+    # instruction or independent verification comment return review_required, not owner (#1340).
     rule_facts = _green(
         head_sha=head,
         files=("docs/ssot/ops.merge-gate.md",),
@@ -3027,7 +3103,11 @@ def test_gate_change_checklist_clears_closure_file_when_lock_and_evidence_and_re
         reviews=(("copilot-pull-request-reviewer", head, NOW - 120),),
     )
     rule_verdict = gate.evaluate(rule_facts, now=NOW)
-    assert rule_verdict.owner_required and rule_verdict.exit_code == 2
+    assert (
+        rule_verdict.review_required
+        and not rule_verdict.owner_required
+        and rule_verdict.exit_code == 3
+    )
 
 
 def test_tree_identity_preserves_approval_across_mechanical_rebase():
@@ -3042,14 +3122,21 @@ def test_tree_identity_preserves_approval_across_mechanical_rebase():
     verdict = gate.evaluate(facts, now=NOW)
     assert verdict.ready and verdict.exit_code == 0, verdict.reasons
 
-    # A different tree SHA does not clear owner_required
+    # A different tree SHA does not clear review_required or owner_required
     changed_tree = _green(
         files=(INFRA_CI,),
         lock_failures=HOLDS,
         head_tree_sha="2" * 40,
         approved_tree_shas=(tree_sha,),
     )
-    assert gate.evaluate(changed_tree, now=NOW).owner_required
+    assert gate.evaluate(changed_tree, now=NOW).review_required
+    changed_owner_tree = _green(
+        files=("tools/host_hygiene_schedule.py",),
+        lock_failures=HOLDS,
+        head_tree_sha="2" * 40,
+        approved_tree_shas=(tree_sha,),
+    )
+    assert gate.evaluate(changed_owner_tree, now=NOW).owner_required
 
 
 def test_collect_requires_owner_approved_review_for_cited_tree_sha():
@@ -3103,3 +3190,171 @@ def test_wait_flag_polls_until_ready(monkeypatch):
     )
     assert rc == 0
     assert sleeps == [5]
+
+
+# --- #1340: review_required vs owner outcomes -----------------------------------------
+
+
+def test_gate_edit_with_recorded_review_returns_exit_zero_through_pr_merge_gate(capsys):
+    """#1340 Criterion 1: an edit to common/gate/*.py with a recorded review returns exit 0."""
+    reviewed_gh = _Gh(files=("common/gate/evaluator.py",))
+    assert gate.main(["704", "--json"], gh=reviewed_gh, now=lambda: READY_AT) == 0
+    doc = _json_verdict(capsys)
+    assert doc["ready"] is True
+    assert doc["owner_required"] is False
+    assert doc["review_required"] is False
+    assert doc["outcome"] == "ready"
+
+    class _NoReviewGh(_Gh):
+        def __call__(self, argv):
+            out = super().__call__(argv)
+            if list(argv)[:2] == ["pr", "view"]:
+                payload = json.loads(out)
+                payload["reviews"] = []
+                return json.dumps(payload)
+            return out
+
+    unreviewed_gh = _NoReviewGh(files=("common/gate/evaluator.py",))
+    assert gate.main(["704", "--json"], gh=unreviewed_gh, now=lambda: READY_AT) == 3
+    unrev_doc = _json_verdict(capsys)
+    assert unrev_doc["ready"] is False
+    assert unrev_doc["owner_required"] is False
+    assert unrev_doc["review_required"] is True
+    assert unrev_doc["outcome"] == "review_required"
+    assert unrev_doc["exit_code"] == 3
+
+
+@pytest.mark.parametrize(
+    "case_kind",
+    [
+        "prod-env-settings",
+        "ops-checks-host-hygiene-schedule",
+        "ops-checks-facet-reconcile",
+        "scheduled-automation-file",
+    ],
+)
+def test_production_env_or_unclassified_scheduled_jobs_return_owner_outcome(
+    case_kind, capsys
+):
+    """#1340 Criterion 2: production environment settings or unclassified scheduled jobs return 'owner'."""
+    import yaml
+
+    class _ProdMutationGh(_Gh):
+        def _lock_answer(self, path: str) -> str:
+            if case_kind == "prod-env-settings" and path.endswith(
+                "/environments/production"
+            ):
+                return json.dumps(
+                    {
+                        "can_admins_bypass": True,
+                        "protection_rules": [],
+                        "deployment_branch_policy": {"custom_branch_policies": True},
+                    }
+                )
+            if (
+                case_kind
+                in (
+                    "ops-checks-host-hygiene-schedule",
+                    "ops-checks-facet-reconcile",
+                )
+                and "/contents/.github/workflows/ops-checks.yml" in path
+            ):
+                job_id = (
+                    "host-hygiene-schedule"
+                    if case_kind == "ops-checks-host-hygiene-schedule"
+                    else "facet-reconcile"
+                )
+                base_text = (ROOT / ".github/workflows/ops-checks.yml").read_text(
+                    encoding="utf-8"
+                )
+                if path.endswith("?ref=main"):
+                    return base_text
+                ops_doc = yaml.safe_load(base_text)
+                ops_doc["jobs"][job_id]["steps"].append({"run": "echo mutated"})
+                return yaml.safe_dump(ops_doc, sort_keys=False)
+            return super()._lock_answer(path)
+
+    files_map = {
+        "prod-env-settings": (f"{gate.WORKFLOW_PREFIX}deploy.yml",),
+        "ops-checks-host-hygiene-schedule": (f"{gate.WORKFLOW_PREFIX}ops-checks.yml",),
+        "ops-checks-facet-reconcile": (f"{gate.WORKFLOW_PREFIX}ops-checks.yml",),
+        "scheduled-automation-file": ("tools/host_hygiene_schedule.py",),
+    }
+    gh = _ProdMutationGh(files=files_map[case_kind])
+    assert gate.main(["704", "--json"], gh=gh, now=lambda: READY_AT) == 2
+    doc = _json_verdict(capsys)
+    assert doc["outcome"] == "owner", doc
+    assert doc["owner_required"] is True
+    assert doc["review_required"] is False
+
+
+def test_no_exit_path_labels_a_non_production_pr_owner():
+    """#1340 Criterion 3: no exit path labels a non-production PR 'owner' or exits 2 across every reason kind."""
+    from common.gate.types import (
+        ACT,
+        EXIT_OWNER,
+        OWNER,
+        REASON_KINDS,
+        REVIEW,
+        UNEVALUABLE,
+        Reasons,
+        Verdict,
+    )
+
+    for kind in REASON_KINDS:
+        reasons = Reasons()
+        reasons.append(f"synthetic {kind}", kind)
+        verdict = Verdict(
+            ready=not reasons,
+            owner_required=OWNER in reasons.kinds,
+            reasons=list(reasons),
+            action_required=ACT in reasons.kinds,
+            unevaluable=UNEVALUABLE in reasons.kinds,
+            review_required=REVIEW in reasons.kinds,
+        )
+        if kind != OWNER:
+            assert verdict.outcome != "owner", kind
+            assert verdict.exit_code != EXIT_OWNER, kind
+            assert not verdict.owner_required, kind
+        else:
+            assert verdict.outcome == "owner"
+            assert verdict.exit_code == EXIT_OWNER
+            assert verdict.owner_required
+
+    non_production_cases = [
+        (
+            _green(files=("common/gate/evaluator.py",), lock_failures=HOLDS),
+            "review_required",
+        ),
+        (
+            _green(files=("tools/pr_merge_gate.py",), lock_failures=HOLDS),
+            "review_required",
+        ),
+        (
+            _green(files=("common/tests/test_pr_merge_gate.py",), lock_failures=HOLDS),
+            "review_required",
+        ),
+        (
+            _green(files=("docs/ssot/ci-gate-inventory.yaml",), lock_failures=HOLDS),
+            "review_required",
+        ),
+        (_green(files=("AGENTS.md",), lock_failures=HOLDS), "review_required"),
+        (
+            _green(files=("docs/ssot/ops.merge-gate.md",), lock_failures=HOLDS),
+            "review_required",
+        ),
+        (_green(files=("pyproject.toml",), lock_failures=HOLDS), "review_required"),
+        (_green(files=("yaml.py",), lock_failures=HOLDS), "review_required"),
+        (_green(files=(INFRA_CI,), lock_failures=HOLDS), "review_required"),
+        (_green(base="feature/branch", lock_failures=HOLDS), "review_required"),
+        (_green(draft=True, lock_failures=HOLDS), "action"),
+        (_green(last_push_at=NOW - 60, lock_failures=HOLDS), "wait"),
+        (_green(rule_drift=("AGENTS.md",), lock_failures=HOLDS), "unevaluable"),
+    ]
+    for facts, expected_outcome in non_production_cases:
+        verdict = gate.evaluate(facts, now=NOW)
+        assert verdict.outcome == expected_outcome, (facts, verdict.reasons)
+        assert verdict.outcome != "owner", (facts, verdict.reasons)
+        assert verdict.exit_code != EXIT_OWNER, (facts, verdict.reasons)
+        assert not verdict.owner_required, (facts, verdict.reasons)
+        assert "needs the owner" not in gate.render(facts, verdict)

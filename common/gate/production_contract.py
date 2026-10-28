@@ -298,10 +298,11 @@ def contract_errors(
     return errors
 
 
-# Workflow file names that stay with the owner when the production lock holds (#1138).
-# Empty by decision of 2026-10-08. Adding a file name holds that file with the owner.
-# This constant is in the gate closure, so a change to it goes to the owner.
-OWNER_HELD_WORKFLOWS: frozenset[str] = frozenset()
+# Unclassified scheduled jobs in ops-checks.yml that require owner approval on edit (#1340).
+UNCLASSIFIED_SCHEDULED_JOBS: tuple[str, ...] = (
+    "host-hygiene-schedule",
+    "facet-reconcile",
+)
 
 
 def workflow_contract_failures(texts: Mapping[str, str]) -> list[str]:
@@ -350,7 +351,11 @@ def workflow_contract_failures(texts: Mapping[str, str]) -> list[str]:
         return failures
     if GATED_JOBS or UNGATED_JOBS:
         from common.gate.inventory import _required_check_workflows
-        from common.gate.types import WORKFLOW_PREFIX, _normalized_path
+        from common.gate.types import (
+            WORKFLOW_PREFIX,
+            _get_workflow_dir,
+            _normalized_path,
+        )
 
         required_workflows = _required_check_workflows()
         if required_workflows is None:
@@ -366,4 +371,30 @@ def workflow_contract_failures(texts: Mapping[str, str]) -> list[str]:
                     failures.append(
                         f"required-check workflow {req} is missing from .github/workflows"
                     )
+        if "ops-checks.yml" in workflows:
+            base_ops_path = _get_workflow_dir() / "ops-checks.yml"
+            try:
+                base_ops_doc = _plain(
+                    yaml.compose(base_ops_path.read_text(encoding="utf-8")),
+                    set(),
+                    {},
+                )
+            except (OSError, _UnreadableYaml, yaml.YAMLError, RecursionError):
+                base_ops_doc = None
+            base_ops_jobs = (
+                base_ops_doc.get("jobs") if isinstance(base_ops_doc, dict) else None
+            )
+            head_ops_jobs = workflows["ops-checks.yml"].get("jobs") or {}
+            if not isinstance(base_ops_doc, dict) or not isinstance(
+                base_ops_jobs, dict
+            ):
+                failures.append(
+                    "ops-checks.yml: cannot read the base workflow to verify the unclassified scheduled jobs"
+                )
+            elif isinstance(head_ops_jobs, dict):
+                for job_name in UNCLASSIFIED_SCHEDULED_JOBS:
+                    if head_ops_jobs.get(job_name) != base_ops_jobs.get(job_name):
+                        failures.append(
+                            f"ops-checks.yml:{job_name} edits an unclassified scheduled production job"
+                        )
     return failures + contract_errors(workflows, GATED_JOBS, UNGATED_JOBS)
