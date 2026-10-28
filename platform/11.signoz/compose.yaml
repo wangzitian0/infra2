@@ -14,6 +14,7 @@ services:
         max-file: "2"
 
   signoz:
+    mem_limit: 2g
     image: signoz/signoz:v0.105.1
     container_name: platform-signoz${ENV_SUFFIX}
     hostname: signoz${ENV_SUFFIX}
@@ -60,6 +61,7 @@ services:
     # docs/ssot/platform.domain.md and common/tests/test_domain_routing_policy.py.
 
   otel-collector:
+    mem_limit: 2g
     image: signoz/signoz-otel-collector:v0.129.12
     container_name: platform-signoz-otel-collector${ENV_SUFFIX}
     restart: unless-stopped

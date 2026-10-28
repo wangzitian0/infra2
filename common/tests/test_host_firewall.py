@@ -98,6 +98,15 @@ def test_cloudflare_sets_gate_http_and_https_in_input_and_forward() -> None:
     )
 
 
+def test_forward_chain_accepts_established_replies_before_origin_drops() -> None:
+    """Assert forward chain accepts established replies before origin drop rules."""
+    forward_body = _chain("forward")
+    assert "ct state established,related accept" in forward_body
+    accept_pos = forward_body.index("ct state established,related accept")
+    first_drop_pos = forward_body.index("drop")
+    assert accept_pos < first_drop_pos
+
+
 def test_refresh_cf_validates_and_updates_sets_atomically(tmp_path: Path) -> None:
     """#724-R1: hostfw.sh refresh-cf supports --check and --apply with count and CIDR validation."""
     import subprocess

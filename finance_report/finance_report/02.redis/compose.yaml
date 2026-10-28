@@ -1,5 +1,6 @@
 services:
   vault-agent:
+    mem_limit: 128m
     init: true  # tini as PID1 reaps healthcheck ssl_client zombies
     image: hashicorp/vault:1.15
     container_name: finance_report-redis-vault-agent${ENV_SUFFIX}
@@ -62,6 +63,7 @@ services:
       start_period: 10s
 
   redis:
+    mem_limit: 1g
     image: redis:alpine
     container_name: finance_report-redis${ENV_SUFFIX}
     restart: always

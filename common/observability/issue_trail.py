@@ -35,15 +35,10 @@ FULL = "full"
 OPEN_ONLY = "open-only"
 OFF = "off"
 
-reconcile = reconcile_issue_trail
-reconcile_watchdog_issues = reconcile_issue_trail
-GitHubIssueClient = IssueApi
-
 __all__ = [
     "BOUND_CAP_ENV",
     "DRY_RUN_ENV",
     "FULL",
-    "GitHubIssueClient",
     "GitHubIssues",
     "ISSUE_LABELS",
     "IssueApi",
@@ -60,9 +55,7 @@ __all__ = [
     "check_name",
     "issue_trail_mode",
     "load_trail",
-    "reconcile",
     "reconcile_issue_trail",
-    "reconcile_watchdog_issues",
     "record_verdicts",
     "scrub",
     "title_for",

@@ -16,6 +16,7 @@ from common.backup.verification import (
     inventory_data_paths,
     load_backup_inventory,
     _parse_timestamp,
+    validate_backup_inventory,
     verify_backup_manifest,
 )
 from common.backup.rehearsal import (
@@ -70,6 +71,19 @@ def test_backup_inventory_covers_deployer_data_paths() -> None:
         if service_id not in inventory
     }
     assert missing == {}
+
+
+def test_validate_backup_inventory_rejects_invalid_entries(tmp_path: Path) -> None:
+    ids = validate_backup_inventory()
+    assert len(ids) >= 10
+    bad_path = tmp_path / "bad.yaml"
+    bad_path.write_text(
+        "defaults:\n  remote: r\n  retention_days: 1\n  rpo_hours: 1\n"
+        "services:\n  - service_id: a\n    data_path: /tmp/x\n    method: pg\n    restore_command: r\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="data_path must live under /data/"):
+        validate_backup_inventory(bad_path)
 
 
 def test_backup_manifest_requires_fresh_off_host_artifacts() -> None:

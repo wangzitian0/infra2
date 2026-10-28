@@ -94,5 +94,4 @@ repositories:
     authority:
       - AGENTS.md
       - init.md
-      - vision.md
       - README.md

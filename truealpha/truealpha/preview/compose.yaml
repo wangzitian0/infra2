@@ -24,6 +24,7 @@
 # INTERNAL_DOMAIN, CONFIGURATION_SHA256, VAULT_ADDR, VAULT_ROLE_ID, VAULT_SECRET_ID.
 services:
   vault-agent:
+    mem_limit: 128m
     init: true  # tini as PID1 reaps healthcheck ssl_client zombies
     image: hashicorp/vault:1.15
     container_name: truealpha-app-vault-agent${ENV_SUFFIX}
@@ -88,6 +89,7 @@ services:
   # NOT the shared staging/prod truealpha-postgres; nothing here persists past an
   # explicit teardown.
   db:
+    mem_limit: 1g
     image: postgres:16-alpine
     container_name: truealpha-preview-db${ENV_SUFFIX}
     restart: always
@@ -176,7 +178,8 @@ services:
     healthcheck:
       # python stdlib probe: the uv-based slim image ships no curl/wget.
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)" ]
-      start_period: 30s
+      start_period: 120s
+      start_interval: 2s
       interval: 10s
       retries: 3
       timeout: 5s

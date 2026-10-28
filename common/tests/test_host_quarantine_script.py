@@ -261,3 +261,46 @@ def test_purge_expired_enforces_15_day_retention_window(tmp_path: Path) -> None:
     ]
     assert all(r["status"] == "purged" for r in purged_records)
     assert all(r["purged_at_epoch"] == expire_epoch for r in purged_records)
+
+
+def test_second_batch_data_litter_quarantined(tmp_path: Path) -> None:
+    """Verify second batch data litter entries are detected and staged."""
+    files: dict[str, bytes] = {
+        "data/truealpha/ingest/pyvenv.cfg": b"home = /usr/bin\n",
+        "data/platform/activepieces/cache.json": b'{"cache": true}\n',
+        "data/platform/openpanel-staging/db.sqlite": b"sqlite-openpanel-data\n",
+        "data/bootstrap/1password_dbreset_backup_20260609T132132Z/1password.sqlite": b"sqlite-1password-data\n",
+        "tmp/__pycache__/cached.pyc": b"stale-pycache-bytes\n",
+    }
+    for rel, payload in files.items():
+        full = tmp_path / rel
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_bytes(payload)
+
+    # Assert --check reports all litter items
+    check_res = _run_quarantine(tmp_path, "--check")
+    assert check_res.returncode == 0, check_res.stderr
+    out = check_res.stdout
+    assert "/data/truealpha/ingest (legacy_host_ingest_venv)" in out
+    assert "/data/platform/activepieces (retired_activepieces_data_dir)" in out
+    assert (
+        "/data/platform/openpanel-staging (prod_only_service_staging_leftover)" in out
+    )
+    assert (
+        "/data/bootstrap/1password_dbreset_backup_20260609T132132Z (legacy_1password_upgrade_backup)"
+        in out
+    )
+    assert "/tmp/__pycache__ (stale_tmp_pycache)" in out
+
+    # Assert --stage moves all items into the quarantine batch directory
+    batch_id = "20261027T080000Z"
+    stage_res = _run_quarantine(tmp_path, "--stage", batch_id=batch_id)
+    assert stage_res.returncode == 0, stage_res.stderr
+
+    quarantine_dir = tmp_path / "data/backups/quarantine"
+    batch_dir = quarantine_dir / batch_id
+    for rel, payload in files.items():
+        assert not (tmp_path / rel).exists()
+        moved = batch_dir / "files" / rel
+        assert moved.exists()
+        assert moved.read_bytes() == payload

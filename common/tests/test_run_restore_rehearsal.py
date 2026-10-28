@@ -17,7 +17,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tools.run_restore_rehearsal import main, run_rehearsal, wait_for_postgres
+from tools.run_restore_rehearsal import (
+    _build_rehearsal_invariants,
+    main,
+    run_rehearsal,
+    wait_for_postgres,
+)
 
 
 def test_wait_for_postgres_ignores_temporary_init_server() -> None:
@@ -159,7 +164,9 @@ def test_run_rehearsal_docker_args_and_invariants(
         assert len(floors) >= 2
         assert all(floor > 1 for floor in floors), f"tautological floor in {floors}"
         assert "unexpected alembic_version" in invariants
-        assert "0065_user_soft_delete" in invariants
+        assert "substring(version_num FROM '^([0-9]{4})')::int >= 62" in invariants
+        assert "version_num ~ '^[0-9]{4}_[a-z0-9_]+$'" in invariants
+        assert "0065_user_soft_delete" not in invariants
 
         # Assert container teardown
         rm_cmds = [
@@ -428,3 +435,12 @@ def test_rehearsal_all_survives_a_malformed_report(monkeypatch, capsys) -> None:
     assert attempted == ["finance_report/postgres", "truealpha/postgres"]
     assert rc == 1
     assert "KeyError" in capsys.readouterr().out
+
+
+def test_finance_report_alembic_invariant_uses_monotonic_floor() -> None:
+    """Verify finance_report alembic invariant enforces monotonic floor >= 62."""
+    invariants = " ".join(
+        _build_rehearsal_invariants("finance_report/postgres", "finance_report")
+    )
+    assert "substring(version_num FROM '^([0-9]{4})')::int >= 62" in invariants
+    assert "0065_user_soft_delete" not in invariants

@@ -171,42 +171,50 @@ def offboard_service(
 
     # Step 3: PostgreSQL Lockdown or Purge
     info("Step 3: Managing PostgreSQL database & user...")
-    db_name = f"{clean_project}_{clean_service}_db"
-    db_user = f"{clean_project}_{clean_service}_user"
+    db_targets: list[tuple[str, str]] = [
+        (f"{clean_project}_{clean_service}_db", f"{clean_project}_{clean_service}_user")
+    ]
+    if clean_project == "platform":
+        db_targets.append((clean_service, clean_service))
     container = with_env_suffix("platform-postgres", e)
 
     if not dry_run:
-        # First terminate active connections and lock account
-        terminate_sql = (
-            f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-            f"WHERE usename = '{db_user}' AND pid <> pg_backend_pid();"
-        )
-        lock_sql = f"ALTER ROLE {db_user} NOLOGIN;"
-        cmd_lock = (
-            f'ssh root@{e["VPS_HOST"]} "docker exec {container} psql -U postgres -c '
-            f'\\"{terminate_sql} {lock_sql}\\""'
-        )
-        c.run(cmd_lock, hide=True, warn=True, in_stream=False)
-        result_summary["db_locked"] = True
-        success(f"PostgreSQL user '{db_user}' terminated and locked (NOLOGIN)")
+        for db_name, db_user in db_targets:
+            # First terminate active connections and lock account
+            terminate_sql = (
+                f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                f"WHERE usename = '{db_user}' AND pid <> pg_backend_pid();"
+            )
+            lock_sql = (
+                f"DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{db_user}') "
+                f"THEN EXECUTE 'ALTER ROLE {db_user} NOLOGIN'; END IF; END $$;"
+            )
+            cmd_lock = (
+                f'ssh root@{e["VPS_HOST"]} "docker exec {container} psql -U postgres -c '
+                f'\\"{terminate_sql} {lock_sql}\\""'
+            )
+            c.run(cmd_lock, hide=True, warn=True, in_stream=False)
+            result_summary["db_locked"] = True
+            success(f"PostgreSQL user '{db_user}' terminated and locked (NOLOGIN)")
 
-        if purge_data:
-            cmd_drop_db = (
-                f'ssh root@{e["VPS_HOST"]} "docker exec {container} psql -U postgres -c '
-                f'\\"DROP DATABASE IF EXISTS {db_name};\\""'
-            )
-            cmd_drop_user = (
-                f'ssh root@{e["VPS_HOST"]} "docker exec {container} psql -U postgres -c '
-                f'\\"DROP ROLE IF EXISTS {db_user};\\""'
-            )
-            c.run(cmd_drop_db, hide=True, warn=True, in_stream=False)
-            c.run(cmd_drop_user, hide=True, warn=True, in_stream=False)
-            result_summary["db_purged"] = True
-            warning(f"PURGED PostgreSQL database '{db_name}' and role '{db_user}'")
+            if purge_data:
+                cmd_drop_db = (
+                    f'ssh root@{e["VPS_HOST"]} "docker exec {container} psql -U postgres -c '
+                    f'\\"DROP DATABASE IF EXISTS {db_name};\\""'
+                )
+                cmd_drop_user = (
+                    f'ssh root@{e["VPS_HOST"]} "docker exec {container} psql -U postgres -c '
+                    f'\\"DROP ROLE IF EXISTS {db_user};\\""'
+                )
+                c.run(cmd_drop_db, hide=True, warn=True, in_stream=False)
+                c.run(cmd_drop_user, hide=True, warn=True, in_stream=False)
+                result_summary["db_purged"] = True
+                warning(f"PURGED PostgreSQL database '{db_name}' and role '{db_user}'")
     else:
-        info(
-            f"[DRY RUN] Would lock PostgreSQL user '{db_user}' (and purge DB if requested)"
-        )
+        for db_name, db_user in db_targets:
+            info(
+                f"[DRY RUN] Would lock PostgreSQL user '{db_user}' (and purge DB '{db_name}' if requested)"
+            )
 
     success(f"Offboard complete for {clean_project}/{clean_service}!")
     return result_summary

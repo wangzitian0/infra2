@@ -139,6 +139,24 @@ def inventory_data_paths(entries: list[BackupEntry]) -> dict[str, str]:
     return {entry.service_id: entry.data_path for entry in entries}
 
 
+def validate_backup_inventory(manifest_path: Path | None = None) -> list[str]:
+    """Validate backup inventory entries and return covered service IDs."""
+    entries = load_backup_inventory(manifest_path)
+    if not entries:
+        raise ValueError("Backup inventory must not be empty")
+    ids = [entry.service_id for entry in entries]
+    if len(ids) != len(set(ids)):
+        raise ValueError(f"Duplicate backup service_id: {ids}")
+    for entry in entries:
+        if not entry.data_path.startswith("/data/"):
+            raise ValueError(
+                f"{entry.service_id} data_path must live under /data/ (got: {entry.data_path})"
+            )
+        if not entry.method:
+            raise ValueError(f"{entry.service_id} missing backup method")
+    return ids
+
+
 def legacy_backup_aliases() -> dict[str, tuple[str, ...]]:
     """Derive legacy service_id aliases in backup manifests from service registry.
 
@@ -386,5 +404,6 @@ __all__ = [
     "discover_deployer_data_paths",
     "inventory_data_paths",
     "load_backup_inventory",
+    "validate_backup_inventory",
     "verify_backup_manifest",
 ]

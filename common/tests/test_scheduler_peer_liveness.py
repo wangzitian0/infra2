@@ -98,7 +98,7 @@ class FakeGitHub:
 
 
 def _verdict(github: FakeGitHub, **kwargs) -> peer.PeerVerdict:
-    return peer.evaluate(github, now=NOW, **kwargs)
+    return peer.evaluate_peer_liveness(github, now=NOW, **kwargs)
 
 
 # --- the bound ------------------------------------------------------------------
