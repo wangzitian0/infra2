@@ -956,13 +956,13 @@ def test_truealpha_compose_services_provide_every_injected_contract_variable():
             ROOT / "truealpha/truealpha/10.app/env.manifest.json",
             ROOT / "truealpha/truealpha/10.app/compose.yaml",
             ROOT / "truealpha/truealpha/10.app/secrets.ctmpl",
-            ("llm",),
+            ("llm", "web"),
         ),
         (
             ROOT / "truealpha/truealpha/10.app/env.manifest.json",
             ROOT / "truealpha/truealpha/preview/compose.yaml",
             ROOT / "truealpha/truealpha/preview/secrets.ctmpl",
-            ("llm",),
+            ("llm", "web"),
         ),
     )
     for contract_path, compose_path, template_path, roles in checks:

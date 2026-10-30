@@ -117,6 +117,7 @@ services:
       # Was defaulted by the hand-written secrets.ctmpl; the generated template renders
       # only human / runtime values, so the deployment states these here.
       APP_ENV: ${ENV}
+      NODE_ENV: production
       S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000
       # Telemetry (infra2#906, docs/ssot/ops.observability.md 4.2). The endpoint is the ONE
       # shared collector: no ${ENV_SUFFIX}, reachable only on dokploy-network. Identity is
@@ -206,6 +207,7 @@ services:
       # Was defaulted by the hand-written secrets.ctmpl; the generated template renders
       # only human / runtime values, so the deployment states these here.
       APP_ENV: ${ENV}
+      NODE_ENV: production
       S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000
       HOSTNAME: 0.0.0.0
       PORT: "3000"
