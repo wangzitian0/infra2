@@ -52,7 +52,7 @@ CLI 命令 `invoke env.*` 和 `get_secrets()` 函数通过 `--type` 参数区分
 
 每个服务读到的每个变量都在它的 manifest（`env.manifest.json` / app 的 `required-env.generated.json`，
 contract v2）里声明一个 **source class**；部署时 `Deployer.apply_secret_supply`
-（`common/security/`，由 `common/security/supply.py` 实现，兼容门面 `common/secrets_supply.py`，经 infra2-sdk `SecretsResolver`）按声明把 store 填齐——
+（`common/security/supply.py`，经 infra2-sdk `SecretsResolver`）按声明把 store 填齐——
 **Vault 只有这一个写入者，没有人手工往 Vault 里敲值。**
 
 > Each stack keeps its baseline manifest in `env.manifest.json`. At deploy time the receiver fetches the App release manifest from the deployed release commit and renders the Vault Agent template dynamically (`VAULT_SECRETS_TEMPLATE`, #1320). See §1.5 and §1.6.
@@ -66,7 +66,7 @@ contract v2）里声明一个 **source class**；部署时 `Deployer.apply_secre
 | `release` / `decision` | 部署流程 / 治理审批 | 注入部署 env，不进 store | 每次部署 | `GIT_COMMIT_SHA`、`governance/approvals/<env>.yaml` 里的批准 |
 | `code` | compose / manifest 默认值 | 不进 store | — | `PROBE_POSTGRES_USER`、`FEISHU_API_BASE` |
 
-**部署时的规则**（`common/security/supply.py::apply_secret_supply` / `common/secrets_supply.apply`）：
+**部署时的规则**（`common/security/supply.py::apply_secret_supply`）：
 
 1. `human`：从 1Password 复制到 Vault（值相同不写）；1Password **不可达**时按 Vault 现有值部署并留 note（#625），只有 Vault 也缺必填值才让部署失败。
 2. `runtime`：Vault 没有的生成一次；标了 `mirror_to_1password` 的回写 1Password。
@@ -81,7 +81,7 @@ Cloudflare 免费额度（KV 写入 1,000/天等；以昨日判定，并附 `clo
 
 **存储卫生**：一个服务的 Vault 路径只允许存两类值——(1) 它的 Vault Agent 模板会渲染进容器的
 值（manifest 里 `human` / `runtime` 的 store-backed 字段），(2) 运维任务直接读、且**故意不渲染**
-进容器的值（`common/core/service.py` / `common/secrets_registry.py` 的 `Service.store_only_keys`，每条都写明读它的代码）。
+进容器的值（`common/security/registry.py` 的 `Service.store_only_keys`，每条都写明读它的代码）。
 其余都是孤儿：退役代码路径写下的、或已经搬进 compose 的配置。孤儿危险在于它看起来仍然权威——
 finance_report 生产库里留着应用早已不读的 `PRIMARY_MODEL`，模板停止渲染它的那天，Dokploy 里的
 陈旧副本顶替了上去（#649）。
@@ -361,7 +361,7 @@ from common.security.supply import apply
 
 ### ✅ 推荐模式
 - 使用 `invoke env.*` 命令读写远端
-- 使用 `get_secrets()`/`OpSecrets` 在代码中**读**配置；写入由 `common/secrets_supply.py` 按 manifest 完成
+- 使用 `get_secrets()`/`OpSecrets` 在代码中**读**配置；写入由 `common/security/supply.py` 按 manifest 完成
 - **默认不指定 `--type`**，走 Vault（读）
 - 需要 1Password 时**显式声明** `--type=bootstrap` 或 `--type=root_vars`
 - `.env.example` 仅作为 KEY 清单（用于 `Deployer` 校验）

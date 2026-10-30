@@ -9,9 +9,7 @@ Track the duplication sites that must be derived-from / audited-against the
 
 ## Top Issues
 - [x] `bootstrap/06.iac_runner/sync_runner.py`: `ALL_SERVICES` hand-copied — now audited == registry (PR 1)
-- [ ] `common/common.py`: `SERVICE_SUBDOMAINS` keyed by role vs deploy.py `subdomain` keyed by service — reconcile (P0.1)
-- [ ] `common/common.py`: `SHARED_PLATFORM_SERVICES` must equal `service_registry.shared_services()` — add audit (P0.1)
-- [ ] `common/common.py`: `CONTAINERS` vs compose `container_name:` — audit (P0.1)
+- [x] `common/common.py`: retired `SERVICE_SUBDOMAINS`, `SHARED_PLATFORM_SERVICES`, and `CONTAINERS` in favor of `common.core.registry` (#1164; `common/common.py` holds only `check_service`)
 - [ ] `bootstrap/06.iac_runner/sync_runner.py`: `SERVICE_TASK_MAP` superset of registry (incl. bootstrap) — audit (P0.1)
 - [x] `platform/12.alerting/compose.yaml`: every `INFRA_PROBE_SPECS` row binds canonical `service_id`; CI checks registry agreement and bidirectional inventory coverage
 - [x] `docs/ssot/watchdog-signals.yaml`: all configured internal signals represented; component→service identity is registry-derived and audited

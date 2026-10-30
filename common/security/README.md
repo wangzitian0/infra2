@@ -58,4 +58,4 @@ for plan in report.plans:
 - **Zero Cleartext Logging**: Exception traces and debug logs redact authenticated URLs, passwords, and tokens.
 - **1Password as Static Root**: Human-entered secrets originate in 1Password; Vault is strictly for runtime-generated and cached secrets.
 - **Fail-Closed on Unmet Secrets**: Deployments abort immediately if any non-optional manifest key cannot be resolved.
-- **Guards & Tests**: Covered by `common/tests/test_secrets_supply.py`, `common/tests/test_secrets_prune.py`, and `common/tests/test_vault_tokens.py`.
+- **Guards & Tests**: Covered by `common/tests/test_secrets_supply.py`, `common/tests/test_secrets_prune.py`, and `common/tests/test_secrets_registry.py`.

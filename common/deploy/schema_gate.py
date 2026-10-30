@@ -15,8 +15,8 @@ which only exist inside its published OCI image, not in infra2's own Python envi
 - The iac-runner container IS reachable to the app's Postgres over ``dokploy-network``
   (``docker exec iac-runner python3 -c "socket.gethostbyname('finance_report-postgres-staging')"``
   resolves), but has no docker socket — ``docker inspect iac-runner`` shows only the
-  ``secrets``/``workspace``/``host_ssh`` mounts; ``bootstrap/06.iac_runner/README.md``'s
-  "Read-only docker socket mount" line does not match the live container and is stale.
+  ``secrets``/``workspace``/``host_ssh`` mounts (documented in
+  ``bootstrap/06.iac_runner/README.md``).
 - Only the VPS host itself runs the docker daemon AND sits on ``dokploy-network``.
 
 So this SSHes to the VPS (the same ``INFRA2_WATCHDOG_SSH_*`` convention

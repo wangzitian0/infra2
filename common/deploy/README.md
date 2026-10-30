@@ -69,4 +69,4 @@ assert plan.env == "staging"
 - **Immutable Ref Enforcement**: Staging and production accept immutable release tags only (promote-not-rebuild).
 - **RL-DATA-1 Deny-by-Default**: Production deployments fail closed unless both `--staging-validated` and `--code-reviewed` are explicitly proven.
 - **Fail-Closed Schema Gate**: Any syntax defect, unbound variable, or schema violation blocks deployment before Dokploy receives payload.
-- **Guards & Tests**: Covered by `common/tests/test_deploy_primitive.py`, `common/tests/test_preview_lifecycle.py`, and `common/tests/test_promote.py`.
+- **Guards & Tests**: Covered by `common/tests/test_deploy_primitive.py`, `common/tests/test_preview_lifecycle.py`, and `common/tests/test_deploy_v2.py`.
