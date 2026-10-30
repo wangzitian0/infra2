@@ -173,6 +173,7 @@ services:
       # environment at boot: S3_ENDPOINT must be present — the staging MinIO, the
       # same instance the staging stack uses.
       APP_ENV: staging
+      NODE_ENV: production
       S3_ENDPOINT: http://platform-s3-staging:9000
       # Same telemetry contract as 10.app/compose.yaml: the one shared collector, and the
       # identity common.deploy.preview issues for this alias (deployment.environment.name =
@@ -245,6 +246,7 @@ services:
       # environment at boot: S3_ENDPOINT must be present — the staging MinIO, the
       # same instance the staging stack uses.
       APP_ENV: staging
+      NODE_ENV: production
       S3_ENDPOINT: http://platform-s3-staging:9000
       HOSTNAME: 0.0.0.0
       PORT: "3000"
