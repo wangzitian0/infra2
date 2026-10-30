@@ -53,15 +53,12 @@ flowchart TB
 
 - **触发条件**: 应用反馈无法连接数据库
 - **步骤**:
-    1. 读取 Vault 密码：
+    1. 使用平台状态任务验证底层实例健康（不暴露或复用平台级 `root` 账号，应用侧独立凭据规范见 [`db.vault-integration.md`](./db.vault-integration.md#禁止模式-blacklist)）：
        ```bash
-       vault kv get -field=root_password secret/platform/<env>/postgres
+       DEPLOY_ENV=<env> invoke postgres.shared.status
+       DEPLOY_ENV=<env> invoke redis.shared.status
        ```
-    2. 在 VPS 侧测试连接：
-       ```bash
-       ssh root@<VPS_HOST>
-       docker exec -it platform-postgres${ENV_SUFFIX} psql -U postgres -c 'SELECT 1;'
-       ```
+    2. 如需排查特定应用角色连接，读取该应用自身的 Vault 凭据路径 `secret/data/<project>/<env>/<service>` 进行验证。
 
 ---
 
@@ -69,8 +66,8 @@ flowchart TB
 
 | 行为描述 | 验证方式 | 状态 |
 |----------|----------|------|
-| **Postgres 服务健康** | `invoke postgres.shared.status` | ✅ Manual |
-| **Redis 服务健康** | `invoke redis.shared.status` | ✅ Manual |
+| **Postgres 服务健康** | `DEPLOY_ENV=<env> invoke postgres.shared.status` | ✅ Manual |
+| **Redis 服务健康** | `DEPLOY_ENV=<env> invoke redis.shared.status` | ✅ Manual |
 
 ---
 

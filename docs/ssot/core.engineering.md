@@ -2,9 +2,6 @@
 
 ## 🧭 Wiki 入口地图与导航契约
 
-> #765 把这几节从 `AGENTS.md` 移出时，提交信息写的是「move the procedures to SSOT」，
-> 但它们没有落到任何文件里——全仓搜索只剩 `tools/README.md` 一处历史引用，而
-> `doc_link_check.py` 正是以「互引原則」为存在理由。此处按该提交声明的去向补回。
 > 路径相对本文件（`docs/ssot/`）。
 
 **0 级入口**：[`AGENTS.md`](../../AGENTS.md)

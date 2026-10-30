@@ -323,7 +323,7 @@ common/
 
 | 行为描述 | 测试文件 (Test Anchor) | 覆盖率 |
 |----------|-----------------------|--------|
-| **目录结构完整性** | `test_structure.py` (Backlog) | ⏳ Backlog |
+| **分层导入与边界守卫** | `common/tests/test_import_boundaries.py`, `common/tests/test_layer_coverage.py` | ✅ Critical |
 | **DNS 规则一致性** | [`test_network.py`](https://github.com/wangzitian0/infra2/blob/main/e2e_regressions/tests/bootstrap/network_layer/test_network.py) | ✅ Critical |
 | **SDK 契约采用** | `common/tests/test_sdk_contract_adoption.py` | ✅ Critical |
 | **App 请求边界** | `common/tests/test_app_deploy_request.py` | ✅ Critical |

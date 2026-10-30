@@ -114,64 +114,18 @@ flowchart TB
 
 ### 3.1 发布驱动部署（release tag → staging；显式 promote → prod）
 
-一个变更到达运行中的服务只有三条路，**合并到 `main` 不是其中之一**
-（权威定义见 [ops.pipeline.md](./ops.pipeline.md) §2.0 / §3.3）。
+一个变更到达运行中的服务只有三条路，**合并到 `main` 不是其中之一**。完整触发模型、staging/prod 晋升链路与 `promotion_soak_guard` 规则的**唯一权威定义**见 [ops.pipeline.md §2–3](./ops.pipeline.md#2-部署目标与触发-deploy-targets--triggers)；本节仅定义 IaC Runner 进程自身的接收与执行契约。
 
-**Staging（自动，随 release tag）**:
-
-```
-┌─────────────┐  1. git push origin vX.Y.Z  ┌──────────────────────────┐
-│ Maintainer  │ ──────────────────────────▶ │ reconcile-iac-inputs.yml │
-└─────────────┘                             └──────────────────────────┘
-                                                        │
-                                                        │ 2. assert_after_on_main：tag 必须 reachable from origin/main
-                                                        │ 3. diff 上一 release tag → 本 tag
-                                                        │ 4. changed files 经 deploy-dependencies.yaml fan-out
-                                                        │    → 受影响的 iac_pinned 服务集合
-                                                        ▼
-                                              ┌──────────────────┐
-                                              │ tools/deploy_v2  │  --type staging --iac-ref vX.Y.Z
-                                              └──────────────────┘
-                                                        │ 5. /health preflight；签名 POST /deploy
-                                                        │    {"env":"staging","ref":"<tag 的 40 位 SHA>","services":[...]}
-                                                        ▼
-                                              ┌──────────────┐
-                                              │  IaC Runner  │  6. checkout SHA → invoke {service}.sync（DEPLOY_ENV=staging）
-                                              └──────────────┘
-                                                        │ 7. workflow 用 deployment_id 轮询 /deploy/status，直到 per-service 终态
-                                                        ▼
-                                              ┌──────────────┐
-                                              │   Dokploy    │
-                                              │  (staging)   │
-                                              └──────────────┘
-```
-
-**Production（显式，由人放行；tag 推送绝不自动动 prod）**:
-
-```
-gh workflow run reconcile-iac-inputs.yml -f after=vX.Y.Z -f promote_prod=true
-        │
-        │ 1. 晋升守卫：after 必须是 vX.Y.Z、存在、reachable from origin/main，
-        │    且该 tag 有一次 push 触发的绿色 staging soak（dispatch 触发的 staging run 不算）。
-        │    查找由 `tools/promotion_soak_guard.py` 完成：按 tag 指向的 commit（`head_sha`）查，并接受
-        │    按 branch 过滤的列表；**只在一个 run 都没查到时**（列表为空或查询出错）有界重试（3 × 15s，GitHub
-        │    的列表索引最终一致）；已查到的 run 立即定论。非 success 的已结束 run、始终为空、始终出错一律拒绝（fail-closed，#970）
-        │ 2. before = 当前最新 production/v* marker（首个 marker 需显式 -f before=<已知 prod 版本>）
-        │ 3. 与 staging 相同的 fan-out → deploy_v2 --type prod → 签名 /deploy（DEPLOY_ENV=production）
-        ▼
-   所有服务成功后推送不可变 marker `production/vX.Y.Z`（重试只允许同 commit 幂等推送，禁止移动旧 marker）
-```
-
-**关键事实**:
-1. `/deploy` 只接受精确 40 位 commit SHA；tag → SHA 的解析在 GitHub Actions 侧完成（§4.4）
+**Runner `/deploy` 接收与幂等契约**:
+1. `/deploy` 只接受精确 40 位 commit SHA；tag → SHA 的解析在 GitHub Actions 侧完成（§4.4）。
 2. 操作身份是完整的五元组 `(env, exact_ref, normalized_service_set, version_ref, action)`
    （`webhook_server.py::_deployment_key`）→ `deployment_id`。服务集合是身份的一部分（不同服务集合不得互相命中
    cache / in-flight / status）；`version_ref`（app 镜像 pin，平台服务为空）区分同一 `iac_ref` 上两次不同 app release 的
    晋升；`action`（默认 `sync`）保证 secrets-supply 请求绝不被同坐标的缓存 sync 结果回答（#649）。
-   空 `version_ref` / 默认 `action` 不进入 id 种子，旧客户端按原 id 轮询仍能命中
-3. 是否真的重启由 `sync` 的 config-hash gate 决定（§3.3）；hash 未变即 no-op
-4. `main` 领先于最新 tag = **未发布**，是正常状态，不是 drift
-5. 回滚 = 以旧 tag 再跑一次 reconcile（§11.5）
+   空 `version_ref` / 默认 `action` 不进入 id 种子，旧客户端按原 id 轮询仍能命中。
+3. 是否真的重启由 `sync` 的 config-hash gate 决定（§3.3）；hash 未变即 no-op。
+4. `main` 领先于最新 tag = **未发布**，是正常状态，不是 drift。
+5. 回滚 = 以旧 tag 再跑一次 reconcile（§11.5）。
 
 **sync 子进程约定**:
 
@@ -445,73 +399,23 @@ IaC Runner `/health` must report `op_service_account_token=true`. It checks the
 actual runner process environment, not only the rendered `/secrets/.env` file, so
 a stale process that did not reload Vault Agent output is degraded.
 
-### 6.4 Vault AppRole 迁移设计（Planned, #257/#259）
+### 6.4 Vault AppRole 架构契约与反环不变量（Implemented, #369）
 
-> **Status**: Design (counterfactual-verified; **revised 2026-06-17** to honor the
-> secrets SSOT — deployer creds live in Dokploy env, **never** in 1Password, and a
-> **single bounded AppRole** replaces the earlier two-role/`op read` draft; see §6.4.2).
-> IaC Runner is the **last** service still on the legacy `token_file`
-> static-`VAULT_APP_TOKEN` model; the other 11 prod services are already on AppRole.
-> This section is the canonical design for finishing the migration (#369).
-> **Do not implement without honoring the P0 invariants below.**
+> **Status**: Active（#369 已完成全量 AppRole 切换与权限收敛；旧 `token_file` / 静态 `VAULT_APP_TOKEN` 模型已全面退役）。
 
-#### 6.4.1 为什么 IaC Runner 不能照搬其它服务的机械迁移
+#### 6.4.1 单一有界 AppRole，两处独立登录
 
-普通服务的 vault-agent 只渲染**自己**的 secret，迁 AppRole 就是换 `auth_method`。IaC
-Runner 有两个**不同**的 Vault 凭证**用途**（注意：用途不同，但 §6.4.2 用**一个有界
-AppRole** 同时满足，无需两个角色）：
+IaC Runner 复用平台服务的标准 AppRole 模式——`DEPLOY_ENV=production invoke vault.setup-approle --project=bootstrap --service=iac_runner` 将 `VAULT_ROLE_ID` / `VAULT_SECRET_ID` 注入 Dokploy compose env（既不进 1Password 也不进 Vault），绑定 §6.4.2 的有界 policy。容器内两处消费同一对 AppRole 凭证，但**各自独立登录、互不共享 token**：
 
-| 凭证用途 | 作用 | 范围 |
-|------|------|------|
-| **Sidecar 渲染** | vault-agent 渲染 runner 自己的 secret（`secret/data/bootstrap/{env}/iac_runner`） | 只读自身 |
-| **Deploy 凭证** | 传给 `invoke *.sync` 子进程作 `VAULT_ROOT_TOKEN`，让它们读写 `secret/data/{platform,finance_report}/{env}/*` | 宽但有界：跨服务 KV create/read/update（**无 delete、无 root**） |
+| 使用点 | 凭证消费方式 | 产出与作用域 |
+|--------|--------------|--------------|
+| **vault-agent sidecar** | `auth_method "approle"`，读 `/vault/role_id`、`/vault/secret_id` 自动登录并原生续期 | sink token，仅用于渲染 runner 自身配置（`secret/data/bootstrap/{env}/iac_runner`） |
+| **`resolve_vault_token`** | 从进程 env 读 `VAULT_ROLE_ID`/`VAULT_SECRET_ID` → 每次部署现场调用 `vault write auth/approle/login` | 短 TTL、有界 deployer token，作为进程环境 `VAULT_TOKEN` 传给 `invoke *.sync` 子进程（读写 `secret/data/{platform,finance_report,truealpha}/{env}/*`，无 delete、无 root） |
 
-今天后者就是静态 `VAULT_APP_TOKEN`（`sync_runner.py::resolve_vault_token`
-回落到它）。它会衰减、且是长寿明文。
-
-#### 6.4.2 目标设计（SSOT 正解：单一有界 AppRole + Dokploy env 注入）
-
-> **设计修正（2026-06-17，本次）**：本节早先草案把 deployer 登录材料**存入 1Password
-> 并在运行时 `op read`**。这**违反 secrets SSOT**：
-> **1Password 只装两类东西——①0 依赖启动根（Vault root/unseal、OP Connect token、Dokploy
-> API key、Cloudflare token）；②web 登录才能产出的 admin 密码（如 signoz admin）**。deployer
-> 凭证两者都不是——它是"进 Vault 的钥匙"，归宿与其余 11 个服务的 AppRole 凭证**完全一致**：
-> **Dokploy compose env**（由 `setup-approle` 注入，既不进 OP 也不进 Vault）。此外
-> `resolve_vault_token` 只读进程环境变量（从未解析过 1Password 引用），
-> 故本次按正解实现，且**全程不引入 OP 运行时读**。
-
-**一个有界 AppRole，两处使用**：IaC Runner 复用其余 11 个服务的既有模式——
-`invoke vault.setup-approle --project=bootstrap --service=iac_runner` 把
-`VAULT_ROLE_ID`/`VAULT_SECRET_ID` 注入 Dokploy compose env（既不进 OP 也不进 Vault），
-该 role 绑定 §6.4.3 的有界 policy。容器内两处使用同一对凭证、但**各自独立登录、互不共享 token**：
-
-| 使用点 | 怎么用这对 role_id/secret_id | 产出 |
-|--------|------------------------------|------|
-| **vault-agent sidecar** | `auth_method "approle"`，读 `/vault/role_id`、`/vault/secret_id` 自动登录并原生续期 | sink token 渲染 runner 自身配置 |
-| **`resolve_vault_token`** | 从**进程 env** 读 `VAULT_ROLE_ID`/`VAULT_SECRET_ID` → 每次部署现场 `vault write auth/approle/login` | 一枚**短 TTL、有界** token，作 `VAULT_ROOT_TOKEN` 传子进程 |
-
-- **Sidecar**：`auth_method` `token_file → approle`，与 openpanel 等**完全同构**。
-- **Deploy 凭证**：`resolve_vault_token` 改为每次部署用 `VAULT_ROLE_ID`/`VAULT_SECRET_ID`
-  现场 `auth/approle/login` 拿一枚短 TTL token，**不**复用 sidecar 的 sink token（规避共享卷
-  token 问题），并**删除 `VAULT_APP_TOKEN` 回落**。
-- **不 `op read`**：现有测试 Infra-011.10「runner 不得从 OP 解析 root token」的精神
-  **完整保留**——凭证来自 Dokploy env 而非 OP，登录产出的也是有界（非 root）token。
-- **0 帧根仍是 OP**：这对 AppRole 凭证由操作员持 OP 里的 Vault root token 跑 `setup-approle`
-  生成并注入；`secret_id_ttl=0 secret_id_num_uses=0` 永不过期。Vault 里没有任何 IaC Runner
-  "自签发又自轮换"的凭证。
-
-> **为何不用两个角色（窄 sidecar + 宽 deployer）？** 两角色能把 sidecar 的 sink token 也收
-> 窄（只读自身），是更强的最小权限；但它需扩展 `setup-approle` 注入第二对 env、给
-> `RUNTIME_ENV_KEYS_TO_PRESERVE`（`common/deploy/deployer.py`）加 `VAULT_DEPLOYER_*`，**否则每次重部署
-> 会丢失 deployer 凭证、致部署中断**（见 §6.4.5 场景 ③），并新增一份窄 policy 文件。单角色与
-> 今天的单一 `VAULT_APP_TOKEN` **同构、blast radius 持平**（今天那枚静态 token 同样是宽的），
-> 却额外获得 AppRole 的"不衰减 + 每次部署现签子 token"。故 **v1 采用单角色**；若日后要把 sink
-> token 也收窄，再作为**附加**的最小权限强化推进，不阻塞本次迁移。
-
-#### 6.4.3 最小权限 policy（deployer）
+#### 6.4.2 最小权限 policy（`bootstrap/06.iac_runner/vault-policy.hcl`）
 
 ```hcl
-# 跨服务 secret 同步——不可约的核心（runner 职责就是给所有服务同步 secret）
+# 跨服务 secret 同步——runner 职责是给平台与应用服务同步运行时 secret
 path "secret/data/platform/+/*"        { capabilities = ["create","read","update"] }   # 无 delete
 path "secret/data/finance_report/+/*"  { capabilities = ["create","read","update"] }
 path "secret/metadata/platform/+/*"        { capabilities = ["read","list"] }
@@ -520,77 +424,12 @@ path "secret/data/bootstrap/+/iac_runner"  { capabilities = ["read"] }          
 path "auth/token/lookup-self"          { capabilities = ["read"] }
 ```
 
-**v2（#369）已砍掉**以下两条（上面的 policy 块即收敛后的最终形态）：
-- `secret/data/bootstrap/+/vault_token_accessors/*`（CRUD）——曾是**追踪/轮换旧静态
-  token 的账本**（`common/vault_tokens.py`，仅旧 `setup-tokens` 任务用，**`.sync` 部署路径从不调用它**）。
-  全员 AppRole 后无静态 token 可追踪 → 已连同 `setup-tokens` 任务一并删除。
-- `auth/token/renew-self`（update）——AppRole 由 agent 原生续期/重登录，app 不需自 renew。
+#### 6.4.3 P0 反环不变量（红线，由 `common/tests/test_vault_approle_invariants.py` 锁定）
 
-> **依据**：`.sync → ensure_runtime_secrets` 实测只做 KV `get`/`set`（缺失则
-> `generate_password` 写回），**无铸 token、无写 policy/role、无 root 操作**，故上述
-> 有界 policy 充分。
-
-#### 6.4.4 P0 不变量（红线，迁移**必须**保持）
-
-1. **断环**：`SERVICE_TASK_MAP` 中 `bootstrap/{vault,1password,iac-runner}` 永远是
-   `None`——IaC Runner **不部署/不轮换它自己、不部署 Vault/1Password**。这是现有的
-   断环设计，迁移不得破坏。
-2. **不自指轮换**：IaC Runner 的 `role_id`/`secret_id` **绝不能**被纳入它自己的
-   `.sync`/accessor 轮换（`vault_token_accessors` 里不得有 `iac_runner`）。否则凭证过期时
-   要靠它自己刷新，而它已进不去 Vault → 死锁。
-3. **OP 扎根（带外注入）**：AppRole 的 `role_id`/`secret_id` 由操作员持 OP 里的 Vault
-   root token 运行 `setup-approle` 生成、注入 **Dokploy compose env**——**不进 OP、不进
-   Vault**（与其余 11 个服务一致），`secret_id_ttl=0 secret_id_num_uses=0` 永不过期。
-   IaC Runner 身份不得扎根在"Vault 签发且需 IaC Runner 在线才能 provision/refresh"的
-   凭证上；唯一静态根是 OP（操作员带外重建）。**绝不**把 deployer 凭证存进 OP（它非 0 帧
-   根、非 web admin 密码）或运行时 `op read`。
-4. **无 delete / 无 root**：deployer token 不得有 `delete`，不得改 bootstrap root 凭证。
-
-#### 6.4.5 反事实论证（聚焦循环依赖；逐场景给出恢复链或反例）
-
-> 单角色设计**不引入任何新循环依赖**：provision/恢复拓扑与今天的 token_file 完全一致
-> （操作员 + OP root → `setup-approle` → Dokploy env），只换认证机制（静态 token → approle 登录）。
-
-| # | 反事实场景 | 可恢复？恢复链 / 反例 |
-|---|-----------|----------------------|
-| ① | **0 帧冷启动**（全新 VPS、Vault 未初始化） | ✅ 操作员带外：装 Dokploy（OP 里 Dokploy key）→ bootstrap Vault（root/unseal 入 OP）→ 装 OP Connect → `setup-approle --service=iac_runner` 注入 `VAULT_ROLE_ID/SECRET_ID` 到 Dokploy env → `env.set` 写 runner 自身 secret → 部署 runner。**任何一步都不需要 runner 已在运行** |
-| ② | **Vault 全擦/重 bootstrap**（secret_id 失效） | ✅ 操作员持 OP root 重 bootstrap Vault，再跑 `setup-approle --service=iac_runner` 重注入。`SERVICE_TASK_MAP["bootstrap/iac-runner"]=None` + deploy.yml 把 `bootstrap/06.iac_runner/**` 路由到外部重建脚本 → **runner 永不自部署/自轮换**，重建者是操作员，不是 runner |
-| ③ | **Dokploy 重部署丢 env** | ✅ 单角色只用 `VAULT_ROLE_ID/SECRET_ID`，已在 `RUNTIME_ENV_KEYS_TO_PRESERVE`（`common/deploy/deployer.py:44`）内、跨重部署保留；万一丢失，操作员 `setup-approle` 带外重注入，非死锁。**⚠️ 若改两角色，必须把 `VAULT_DEPLOYER_*` 也加入该列表，否则丢凭证致部署中断——这是放弃两角色的关键原因** |
-| ④ | **secret_id 衰减 / kill-token**（#257 验收项） | ✅ `secret_id_ttl=0` 永不过期；sidecar agent 被 revoke 后凭 role_id/secret_id 自动重登录；deploy 凭证**每次部署现场新登录** → 杀 token 后下一次部署自愈，比 token_file 更强 |
-| ⑤ | **Vault 封存时走登录路径** | ✅ 优雅降级：`auth/approle/login` 失败 → `resolve_vault_token` 返回 None、该次 `.sync` 以明确 `vault_login_failed` 诊断失败，webhook server 进程不崩；sidecar 维持今天 `exit_on_err` 的重启语义，非新循环 |
-| ⑥ | **deployer 登录是否需要只有 runner 自己 `.sync` 才能 provision 的东西？** | ✅ **否**：role 与 secret_id 由操作员 `setup-approle` 带外建；`auth/approle/login` 是免认证端点，不需任何 runner 写入的 secret。deployer 角色的存在**不**依赖任何一次部署 |
-| ⑦ | **`.sync` 需要 root（铸 token / 写 policy）** | ✅ **否**：`ensure_runtime_secrets`（`common/deploy/deployer.py`）仅 KV `get/set`（缺失则 `generate_password` 写回），有界 policy 足够 |
-| ⑧ | **`setup-approle` 自身是否经 runner webhook？** | ✅ **否**：它是操作员机器上的 invoke 任务，`_configure_dokploy_approle` 直连 Dokploy API，不 POST runner `/webhook` 或 `/deploy` → 被迁移的服务自身无环 |
-| ⑨ | **`deploy_iac_runner_bootstrap.sh` 是否自部署 / 依赖被迁移破坏的读？** | ✅ 外部重建（SSH 直建 compose，不走 `/deploy`）。**⚠️ 但脚本现在预检 `VAULT_APP_TOKEN`（约 line 241），迁移后该 env 消失 → 必须改成预检 `VAULT_ROLE_ID/VAULT_SECRET_ID`，否则部署 runner 的工具本身被卡死** |
-| ⑩ | **`OP_SERVICE_ACCOUNT_TOKEN` 成 SPOF** | ✅ 不变甚至更轻：今天 `.sync` 已用它读 signoz admin（category②）；本设计 deploy 凭证**不再**经 OP，反而比草案的 `op read` 方案减少了一处 OP 运行时依赖 |
-| ⑪ | app 拿不到 agent 的 token（共享卷问题） | ✅ **消解**：deploy 凭证由 `resolve_vault_token` 独立 approle 登录现签，**不**复用 sidecar 的 sink token，无需共享卷 |
-| ⑫ | accessor grant 砍掉后 sync 失败 | ✅ **v2（#369）已砍**：accessor 仅 root bootstrap 用，`.sync` 不碰；砍后全套 common 测试 + 一次 staging `.sync` 通过验证 |
-
-#### 6.4.6 两阶段灰度
-
-- **v1（认证方式切换，policy 不变）**：
-  1. sidecar `vault-agent.hcl` `token_file → approle`（读 `/vault/role_id`、`/vault/secret_id`）；
-  2. `compose.yaml` vault-agent 块：entrypoint 从 `VAULT_ROLE_ID`/`VAULT_SECRET_ID` 写入 tmpfs、
-     去掉 in-band `renew-self` 循环、去掉 `VAULT_APP_TOKEN`，healthcheck 指向 sink token；
-  3. `sync_runner.py::resolve_vault_token` 改为 `VAULT_ROLE_ID`/`VAULT_SECRET_ID` →
-     `auth/approle/login` → 短 TTL token，**删除 `VAULT_APP_TOKEN` 回落**，并修 lines 125/129 诊断文案；
-  4. `setup-approle --project=bootstrap --service=iac_runner` 注入凭证（policy 文件已存在且有界）；
-  5. `scripts/deploy_iac_runner_bootstrap.sh` 预检 `VAULT_APP_TOKEN` → `VAULT_ROLE_ID`/`VAULT_SECRET_ID`；
-  6. iac_runner `auth_method: approle`（现声明于 `bootstrap/06.iac_runner/deploy.py`
-     的 `SecretsFacet`，audit inventory 由此派生，#542）；
-  7. 保留现有 policy（含 accessors）。先在 staging 验证完整发布链路（release tag → reconcile → `/deploy` → `.sync` → 服务 healthy）。
-- **v2（权限收敛）—— 已完成（#369）**：砍掉 `vault_token_accessors` grant 与 `renew-self`，删除
-  `setup-tokens` 任务与 `common/vault_tokens.py` 静态 token 账本代码（仅保留 AppRole 复用的
-  `policy_name`/`normalize_selector`/`VaultTokenTarget`），并从 `RUNTIME_ENV_KEYS_TO_PRESERVE` 移除
-  `VAULT_APP_TOKEN`。**这些后续现已完成 / 定型**：其它服务 policy 的 `renew-self` 已全部清理；ClickHouse 旧
-  token_file 变体（含 `compose-with-vault.yaml`）已在 #384 删除；`VAULT_APP_TOKEN` 部署预检有意保留为残留 token 的安全网。
-- iac-runner 是 bootstrap 服务、改坏会瘫掉部署链，**全程用外部 bootstrap 重建流程
-  （`scripts/deploy_iac_runner_bootstrap.sh`）而非 `/deploy` 自部署**（见 §5.2、§7.4），
-  并准备好回滚（恢复 `VAULT_APP_TOKEN` env + token_file compose）。
-
-> **紧迫性低、风险最高**：IaC Runner 走 bootstrap 部署、不经 preflight，且 sidecar 的
-> in-band `renew-self` 循环使其 token 不像被 preflight 拦的那些一样衰减 → 它**不是**部署
-> 误拦的来源。因此本迁移应作为**独立、设计完备、可回滚**的变更推进，不与其它服务捆绑。
+1. **断环**：IaC Runner **不部署/不轮换它自己、不部署 Vault/1Password**。`bootstrap/06.iac_runner/**` 变更由 `deploy.yml` 走外部 SSH 脚本（`scripts/deploy_iac_runner_bootstrap.sh`）带外重建。
+2. **不自指轮换**：IaC Runner 的 `role_id`/`secret_id` 绝不纳入 `.sync` 轮换（避免凭证失效时需靠自身刷新导致死锁）。
+3. **带外扎根**：AppRole 的 `role_id`/`secret_id` 由操作员持 1Password 中的 Vault root token 运行 `setup-approle` 生成并注入 Dokploy compose env（`secret_id_ttl=0 secret_id_num_uses=0`），跨重部署由 `RUNTIME_ENV_KEYS_TO_PRESERVE` 保留。严禁将 deployer 登录材料存入 1Password 或在运行时 `op read` root token。
+4. **无 delete / 无 root**：deployer token 仅具备业务 KV 的 `create/read/update`，不得拥有 `delete` 或修改 bootstrap root 凭证的权限。
 
 ---
 

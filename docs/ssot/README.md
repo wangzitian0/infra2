@@ -69,7 +69,6 @@
 | [platform.domain.md](./platform.domain.md) | `platform.domain` | 域名架构、Traefik 路由、Dokploy 配置规范 |
 | [platform.sso.md](./platform.sso.md) | `platform.sso` | Authentik SSO |
 | [platform.automation.md](./platform.automation.md) | `platform.automation` | Deployer 自动化 |
-| [platform.ai.md](./platform.ai.md) | `platform.ai` | AI 接入、OpenRouter |
 | [platform.openpanel.md](./platform.openpanel.md) | `platform.openpanel` | OpenPanel 产品分析部署 |
 | [platform.canary_todo.md](./platform.canary_todo.md) | `platform.canary_todo` | Canary Todo 平台基建校验工具 |
 

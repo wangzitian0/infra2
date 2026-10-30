@@ -161,24 +161,10 @@ def test_redesigned_pipeline_validation_command_targets_existing_files() -> None
 
 
 def test_code_owned_ssot_entries_have_test_or_code_proofs() -> None:
-    """Operational SSOTs with enforceable truth should carry proof anchors."""
+    """Every SSOT topic entry must carry at least one verifiable code or test proof anchor."""
     manifest_entries = _load_manifest()["entries"]
-    code_owned_keys = {
-        "bootstrap.iac_runner",
-        "platform.automation",
-        "platform.domain",
-        "platform.openpanel",
-        # ops.alerting + ops.availability_ledger folded into ops.obs (single owner).
-        "ops.obs",
-        # ops.backup_inventory retired (#542): the inventory is derived from
-        # Deployer BackupFacet declarations; its proof anchors moved to
-        # common/tests/test_backup_inventory_equivalence.py.
-        "ops.pipeline",
-        # vault.self_refresh_inventory retired (#542): the inventory is derived
-        # from Deployer SecretsFacet declarations; its proof anchors moved to
-        # common/tests/test_vault_inventory_equivalence.py.
-        "watchdog.signals",
-    }
 
-    for key in code_owned_keys:
-        assert manifest_entries[key].get("proofs"), f"{key} should have proof anchors"
+    for key, entry in manifest_entries.items():
+        assert entry.get("proofs"), (
+            f"{key} must declare at least one proof anchor in MANIFEST.yaml"
+        )

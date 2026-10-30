@@ -3,7 +3,7 @@
 **Status**: In Progress  
 **Owner**: Infra  
 **Priority**: P2  
-**Branch**: `feat/ssot-bootstrap-pitfalls`
+**Branch**: `main`
 
 ## Goal
 Establish a repeatable documentation engineering workflow with measurable link reachability and machine-readable SSOT ownership.
@@ -71,9 +71,9 @@ To-be:
 | 2026-06-11 | Added incremental SSOT HLS governance loop with finance_report issue references |
 
 ## Verification
-- [ ] L0 to L2 docs are reachable in <= 2 hops.
-- [ ] Link check passes for local docs.
-- [x] SSOT manifest governance test passes.
+- [x] L0 to L2 docs are reachable in <= 2 hops.
+- [x] Link check passes for local docs (`python -m tools.doc_link_check`).
+- [x] SSOT manifest governance test passes (`pytest common/tests/test_ssot_governance.py common/tests/test_ssot_reverse_governance.py`).
 
 ## TODOWRITE
 - [Infra-006.TODOWRITE.md](./Infra-006.TODOWRITE.md)

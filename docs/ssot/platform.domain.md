@@ -119,29 +119,12 @@ code-owned middleware or non-standard routing behavior.
 
 ### SOP-001: 新增 SSO 保护服务
 
-```bash
-# 1. deploy.py 禁用 Dokploy 域名
-subdomain = None
+SSO 保护服务的完整配置清单与标准 Traefik ForwardAuth 标签定义见 [platform.sso.md §4 SOP-002](./platform.sso.md#sop-002-新增-forward-auth-应用推荐) 与 [§6 SSO 保护服务配置清单](./platform.sso.md#-sso-保护服务配置清单)：
 
-# 2. compose.yaml 添加 Traefik labels
-labels:
-  - "traefik.enable=true"
-  - "traefik.http.routers.${SERVICE}${ENV_DOMAIN_SUFFIX}.rule=Host(`${SERVICE}${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
-  - "traefik.http.routers.${SERVICE}${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
-  - "traefik.http.routers.${SERVICE}${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
-  - "traefik.http.middlewares.${SERVICE}-auth.forwardauth.address=http://platform-authentik-server${ENV_SUFFIX}:9000/outpost.goauthentik.io/auth/traefik"
-  - "traefik.http.routers.${SERVICE}${ENV_DOMAIN_SUFFIX}.middlewares=${SERVICE}-auth@docker"
-
-# 3. Cloudflare 添加 DNS 记录（如果不在泛域名内）
-invoke dns_and_cert.add --records=${SERVICE}${ENV_DOMAIN_SUFFIX}
-
-# 4. Authentik 创建代理应用
-invoke authentik.shared.create-proxy-app \
-  --name="${SERVICE}" \
-  --slug="${SERVICE}" \
-  --external-host="https://${SERVICE}${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}" \
-  --internal-host="platform-${SERVICE}"
-```
+1. `deploy.py` 设置 `subdomain = None`（禁用 Dokploy 域名配置，避免与手动 Traefik labels 冲突）。
+2. `compose.yaml` 添加路由与 `${SERVICE}-auth${ENV_DOMAIN_SUFFIX}` ForwardAuth 中间件标签（含 `trustForwardHeader=true` 与 `authResponseHeaders`）。
+3. 若子域名不在泛域名 `*.${INTERNAL_DOMAIN}` 覆盖范围内，运行 `DEPLOY_ENV=<env> invoke dns-and-cert.add --records=${SERVICE}${ENV_DOMAIN_SUFFIX}`。
+4. 运行 `DEPLOY_ENV=<env> invoke authentik.shared.create-proxy-app` 创建 Authentik 代理应用。
 
 ### SOP-002: 新增非 SSO 服务
 
@@ -152,8 +135,8 @@ subdomain = "${SERVICE}"  # 最终域名: ${SERVICE}${ENV_DOMAIN_SUFFIX}.${INTER
 # 2. compose.yaml 不需要 Traefik labels
 # Dokploy 会自动生成基础路由
 
-# 3. Cloudflare 添加 DNS 记录
-invoke dns_and_cert.add --records=${SERVICE}${ENV_DOMAIN_SUFFIX}
+# 3. Cloudflare 添加 DNS 记录（若不在泛域名内）
+DEPLOY_ENV=<env> invoke dns-and-cert.add --records=${SERVICE}${ENV_DOMAIN_SUFFIX}
 ```
 
 ### SOP-003: 排查域名冲突
