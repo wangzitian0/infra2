@@ -14,9 +14,9 @@
 | Module | Role | Key Exports |
 |--------|------|-------------|
 | `store.py` | 1Password and Vault stores, token helpers | `OpSecrets`, `VaultSecrets`, `get_secrets()`, `verify_vault_token()`, `generate_secret_token()`, `resolve_vault_token()` |
-| `registry.py` | Which services take which secrets, and from which manifests. An App manifest is infra2's copy in `contracts/` (#1258). | `SERVICES`, `Service`, `lookup()`, `merged_manifest()`, `store_keys()` |
+| `registry.py` | Which services take which secrets, and from which manifests. App stack baseline manifests live in each stack directory and merge with the deployed release manifest at deploy time (#1320). | `SERVICES`, `Service`, `lookup()`, `merged_manifest()`, `store_keys()` |
 | `supply.py` | Manifest secret supply pipeline | `apply_secret_supply()`, `resolver_for()`, `SupplyReport` |
-| `prune.py` | Orphan KV key detection & cleanup | `prune_orphan_secrets()` |
+| `prune.py` | Orphan KV key detection & cleanup | `prune_orphan_secrets()`, `PruneReport`, `PrunePlan` |
 
 `import common.security` needs no infra2-sdk: `store.py`, `supply.py`, and `prune.py` load lazily (PEP 562) on first access of an SDK-backed name, which then raises the SDK's `ImportError` if the wheel is absent (#847; pinned by `common/tests/test_sdk_free_import_surface.py`).
 
@@ -30,7 +30,7 @@ from common.security.registry import lookup
 service = lookup("platform", "alerting")
 # Apply manifest to Vault: generates runtime passwords and copies 1Password human values
 report = apply_secret_supply(service, "staging")
-print(f"Supplied: {report.changed}, Missing: {report.missing}")
+print(f"Generated: {report.generated}, Mirrored: {report.mirrored}, Missing: {report.missing_human}")
 ```
 
 ### Resolving Tokens and Accessing Vault
@@ -46,10 +46,11 @@ secret_val = client.get("POSTGRES_PASSWORD")
 ```python
 from common.security import prune_orphan_secrets
 
-# Safe dry-run prune of undeclared Vault paths
-orphans = prune_orphan_secrets(dry_run=True)
-for path in orphans:
-    print(f"Undeclared orphan: {path}")
+# Safe dry-run prune of undeclared Vault keys
+report = prune_orphan_secrets(dry_run=True)
+for plan in report.plans:
+    if plan.orphans:
+        print(f"{plan.path}: undeclared orphan keys {plan.orphans}")
 ```
 
 ## Security Invariants

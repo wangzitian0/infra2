@@ -17,9 +17,9 @@
 | `deployer.py` | Platform & app deployment base class | `Deployer`, `make_tasks()`, `Deployer.apply_secret_supply()` |
 | `promote.py` | Staging & production promotion pipeline | `deploy()`, fixed environment orchestration |
 | `preview.py` | Dynamic preview stack lifecycle | `up()`, `down()`, preview slot routing |
-| `schema_gate.py` | Compose & environment schema validation | `validate_compose_schema()`, `assert_clean_environment()` |
-| `in_service.py` | Container health & liveness verification | `assert_in_service()`, `wait_for_containers()` |
-| `rollout.py` | Terminal rollout hooks & post-deploy checks | `verify_rollout()`, `terminal_summary()` |
+| `schema_gate.py` | Pre-deploy enum schema gate against live DB | `SchemaGateError`, `gate_applies()`, `run_schema_gate()` |
+| `in_service.py` | Container health & liveness verification | `ContainerObservation`, `InServiceVerdict`, `expected_running_services()`, `parse_docker_ps()`, `in_service_verdict()`, `container_names()` |
+| `rollout.py` | Dokploy rollout polling & terminal status | `RolloutError`, `RolloutResult`, `wait_for_deployment()`, `TERMINAL_SUCCESS_STATUSES` |
 | `failure_snapshot.py` | Dokploy failure diagnosis & GitHub summary snapshot | `emit_failure_snapshot()`, `build_snapshot()`, `classify()` |
 | `contract.py` | Deploy target contract per service | `service_spec()`, `ServiceSpec`, `validate_deploy_target()` |
 | `env_config.py` | Compose environment for fixed and preview stacks | `app_compose_env_config()`, `preview_service_config()`, `otel_env()` |
@@ -36,10 +36,11 @@
 from common.deploy.deployer import Deployer, make_tasks
 
 class PostgresDeployer(Deployer):
-    service_id = "platform/postgres"
+    service = "postgres"
+    compose_path = "platform/01.postgres/compose.yaml"
 
-    def pre_compose(self, c, env: str) -> None:
-        super().pre_compose(c, env)
+    def pre_compose(self, c) -> None:
+        super().pre_compose(c)
         # Custom pre-flight initialization
 
 # Generate Invoke tasks for CLI integration
@@ -48,17 +49,19 @@ tasks = make_tasks(PostgresDeployer)
 
 ### Triggering a Fixed-Environment Promotion
 ```python
+from common.deploy.dokploy_client import get_dokploy
 from common.deploy.promote import deploy
 
-# Orchestrates staging promotion with immutable release tag
-result = deploy(
-    service_key="platform/alerting",
-    deploy_type="staging",
-    version_ref="v1.1.96",
-    iac_ref="v1.1.96",
+# Orchestrates staging promotion for an app release tag (CLI front door: tools.deploy_v2)
+plan = deploy(
+    "staging",
+    "v1.1.96",
     domain="zitian.party",
+    client=get_dokploy(),
+    service="finance_report/app",
+    iac_ref="v1.1.96",
 )
-assert result.returncode == 0
+assert plan.env == "staging"
 ```
 
 ## Safety Invariants

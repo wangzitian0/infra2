@@ -14,10 +14,10 @@
 
 | Module | Role | Key Exports |
 |--------|------|-------------|
-| `probes.py` | In-band health probe specification & execution | `ProbeSpec`, `execute_probe()`, `run_probes()`, `parse_probe_specs()` |
+| `probes.py` | In-band health probe specification & execution | `ProbeSpec`, `run_probe()`, `run_probes()`, `execute_probe()`, `parse_probe_specs()` |
 | `probe_environment.py` | The one resolver of a probe process's environment; no default, raises when unset or unknown (#1208) | `resolve_probe_environment()`, `PROBE_ENVIRONMENT_VARIABLES` |
 | `breakdown.py` | Container log triage & failure classification | `BreakdownVerdict`, `analyze_container_logs()`, `classify_reason()`, `build_breakdown_alert_payload()` |
-| `issue_trail.py` | GitHub Issue trail reconciliation | `reconcile_issue_trail()`, `record_verdicts()`, `load_trail()`, `CheckVerdict` |
+| `issue_trail.py` | GitHub Issue trail reconciliation | `reconcile_issue_trail()`, `record_verdicts()`, `load_trail()`, `CheckVerdict`, `IssueApi`, `Trail` |
 | `openpanel.py` | OpenPanel analytics client configuration SSOT | `OPENPANEL_CLIENTS`, `openpanel_env()` |
 | `local_ledger.py` | VPS availability ledger: per-signal daily ok/fail counts and last ok/fail times written by the probe runner (#904, #1223) | `record_probe_round()`, `host_ledger_path()`, `to_report_days()` |
 | `probe_specs.py` | Probe specs rendered from the registry for the probe runner | `render_probe_spec_text()`, `normalize_specs_text()` |
@@ -28,40 +28,50 @@
 
 ### Executing In-Band Probes
 ```python
-from common.observability import execute_probe, ProbeSpec
+from common.observability import ProbeSpec, run_probe
 
 spec = ProbeSpec(
     name="postgres-tcp",
     kind="tcp",
     target="platform-postgres:5432",
-    timeout_seconds=5,
-    severity="critical",
+    timeout_sec=5.0,
 )
 
-result = execute_probe(spec)
-if not result.ok:
-    print(f"Probe failed: {result.message} (latency: {result.latency_ms}ms)")
+result = run_probe(spec)
+if result.status != "ok":
+    print(f"Probe failed: {result.detail} (latency: {result.latency_ms}ms)")
 ```
 
 ### Triaging Container Crashes
 ```python
 from common.observability import analyze_container_logs
 
-verdict = analyze_container_logs("platform-alerting", tail_lines=100)
-if verdict.is_broken:
-    print(f"Container broken: {verdict.reason} -> Suggested remediation: {verdict.remediation}")
+verdict = analyze_container_logs("platform-alerting", "ERROR: connection refused")
+print(f"Container breakdown cause: {verdict.cause} ({verdict.detail})")
 ```
 
 ### Reconciling Watchdog Issues
 ```python
-from common.observability import reconcile_issue_trail, CheckVerdict
+from pathlib import Path
+from common.observability.issue_trail import (
+    CheckVerdict,
+    GhIssueApi,
+    load_trail,
+    reconcile_issue_trail,
+    record_verdicts,
+)
 
-verdicts = [
-    CheckVerdict(check="minio_health", ok=True, summary="MinIO 200 OK"),
-    CheckVerdict(check="vault_seal", ok=False, summary="Vault is sealed"),
-]
+trail = load_trail(Path("/tmp/watchdog-trail.json"))
+record_verdicts(
+    trail,
+    [
+        CheckVerdict(name="s3_health", ok=True, detail="S3 200 OK"),
+        CheckVerdict(name="vault_seal", ok=False, detail="Vault is sealed"),
+    ],
+    now_iso="2026-10-30T00:00:00Z",
+)
 # Opens/comments/closes corresponding GitHub issues with exact title matching
-reconcile_issue_trail(verdicts, repo="wangzitian0/infra2")
+reconcile_issue_trail(GhIssueApi(repo="wangzitian0/infra2"), trail, mode="live")
 ```
 
 ## Observability Invariants
