@@ -30,7 +30,7 @@ from common.security.registry import lookup
 service = lookup("platform", "alerting")
 # Apply manifest to Vault: generates runtime passwords and copies 1Password human values
 report = apply_secret_supply(service, "staging")
-print(f"Generated: {report.generated}, Mirrored: {report.mirrored}, Missing: {report.missing_human}")
+print(f"Supplied: {report.changed}, Missing: {report.missing}, Notes: {report.notes}")
 ```
 
 ### Resolving Tokens and Accessing Vault

@@ -34,12 +34,13 @@ spec = ProbeSpec(
     name="postgres-tcp",
     kind="tcp",
     target="platform-postgres:5432",
-    timeout_sec=5.0,
+    timeout_seconds=5.0,
+    severity="critical",
 )
 
 result = run_probe(spec)
-if result.status != "ok":
-    print(f"Probe failed: {result.detail} (latency: {result.latency_ms}ms)")
+if not result.ok:
+    print(f"Probe failed: {result.summary} (elapsed: {result.elapsed_ms}ms)")
 ```
 
 ### Triaging Container Crashes

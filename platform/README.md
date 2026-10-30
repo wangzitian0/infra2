@@ -144,7 +144,12 @@ class NewDeployer(Deployer):
     data_path = "/data/platform/new"  # env suffix appended automatically outside prod
     subdomain = "new"  # or None for Traefik-labeled SSO routes
     service_port = 8000
-    secrets = SecretsFacet(manifests=("platform/30.new/env.manifest.json",))
+    secrets = (
+        SecretsFacet(
+            vault_agent_container="platform-new-vault-agent${ENV_SUFFIX}",
+            app_containers=("platform-new${ENV_SUFFIX}",),
+        ),
+    )
     probes = (
         ProbeFacet(name="http", kind="http", target="http://127.0.0.1:8000/livez"),
     )
