@@ -37,7 +37,7 @@ python -m tools.deploy_v2 --service platform/postgres --type staging --iac-ref v
 ### SOP-002: 查看状态
 
 ```bash
-invoke postgres.shared.status
+DEPLOY_ENV=<env> invoke postgres.shared.status
 ```
 
 ---
@@ -46,7 +46,7 @@ invoke postgres.shared.status
 
 | 行为描述 | 验证方式 | 状态 |
 |----------|----------|------|
-| **服务可达** | `invoke postgres.shared.status` | ✅ Manual |
+| **服务可达** | `DEPLOY_ENV=<env> invoke postgres.shared.status` | ✅ Manual |
 
 ---
 

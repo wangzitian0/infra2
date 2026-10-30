@@ -481,15 +481,7 @@ compose、env、secret 路径、**外部镜像 tag**、Traefik 路由 label、�
 
 ---
 
-## 5. 测试门禁 (Quality Gates)
-
-> 本节曾手抄一份「Local → PR → Staging → Production」门禁表，其中「Test → Staging 自动化 = GitHub Actions
-> (merge to main)」与现行模型矛盾：merge **不**部署；staging 跟 release tag，prod 显式 promote。
-> 门禁与触发由 [ops.pipeline.md](./ops.pipeline.md) §2.0「三过程，三闸门」**单一拥有**，此处不再重述。
-
----
-
-## 6. 迭代速度对比
+## 5. 迭代速度对比
 
 | 环境 | 部署频率 | 变更范围 | 自动化程度 | 回滚成本 |
 |------|---------|---------|-----------|---------|
@@ -502,9 +494,9 @@ compose、env、secret 路径、**外部镜像 tag**、Traefik 路由 label、�
 
 ---
 
-## 7. 配置示例
+## 6. 配置示例
 
-### 7.1 Finance Report Staging 环境
+### 6.1 Finance Report Staging 环境
 
 ```bash
 # Dokploy Environment 配置 (staging)
@@ -517,7 +509,7 @@ secret/data/finance_report/staging/app/DATABASE_URL
 secret/data/finance_report/staging/app/S3_BUCKET
 ```
 
-### 7.2 Finance Report Production 环境
+### 6.2 Finance Report Production 环境
 
 ```bash
 # Dokploy Environment 配置 (production)
@@ -532,10 +524,16 @@ secret/data/finance_report/production/app/S3_BUCKET
 
 ---
 
-## 8. 验证方法 (The Proof)
+## 7. 验证与测试 (The Proof)
+
+| 行为描述 | 验证方式 / 测试锚点 | 状态 |
+|----------|---------------------|------|
+| **四轴部署原语与环境矩阵契约** | `common/tests/test_deploy_contract.py`, `common/tests/test_reconcile_iac_inputs.py` | ✅ Automated |
+| **服务身份与 `GIT_COMMIT_SHA` 签发契约** | `common/tests/test_identity_contract.py` | ✅ Automated |
+| **环境后缀与数据路径隔离** | `common/tests/test_env_isolation.py`, `common/tests/test_deploy_env_config.py` | ✅ Automated |
 
 ```bash
-# 验证域名与版本隔离
+# 运行时验证域名与版本隔离
 curl -fsS https://report-pr-123.zitian.party/api/health
 curl -fsS https://report-staging.zitian.party/api/health
 curl -fsS https://report.zitian.party/api/health

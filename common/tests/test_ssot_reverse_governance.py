@@ -31,17 +31,23 @@ _ALLOWED_NON_TOPICS = {
 
 def test_every_ssot_doc_is_governed() -> None:
     entries = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))["entries"]
-    owned = {entry["owner"].split("/")[-1] for entry in entries.values()}
+    owned: set[str] = set()
+    for entry in entries.values():
+        owned.add(entry["owner"].split("/")[-1])
+        for proof in entry.get("proofs", []):
+            if proof.startswith("docs/ssot/"):
+                owned.add(proof.split("/")[-1])
 
     ungoverned = sorted(
         path.name
         for path in SSOT_DIR.iterdir()
         if path.is_file()
-        and path.suffix in {".md", ".yaml", ".yml"}
+        and path.suffix in {".md", ".yaml", ".yml", ".json"}
         and path.name not in owned
         and path.name not in _ALLOWED_NON_TOPICS
     )
     assert not ungoverned, (
-        "docs/ssot files with no MANIFEST owner (give them an entry, or — if truly not a "
-        "topic — add to _ALLOWED_NON_TOPICS with a reason):\n" + "\n".join(ungoverned)
+        "docs/ssot files with no MANIFEST owner or proof binding (give them an entry/proof, "
+        "or — if truly not a topic — add to _ALLOWED_NON_TOPICS with a reason):\n"
+        + "\n".join(ungoverned)
     )

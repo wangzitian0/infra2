@@ -14,6 +14,10 @@ entries:
     owner: docs/ssot/core.md
     summary: 架构 + 目录 + 环境 + 变量 + 网络
     description: Repository architecture, layers, environments, variables, and networks.
+    proofs:
+      - common/tests/test_sdk_contract_adoption.py
+      - common/tests/test_app_deploy_request.py
+      - e2e_regressions/tests/bootstrap/network_layer/test_network.py
   core.engineering:
     owner: docs/ssot/core.engineering.md
     summary: 代码风格、收敛红线、文档四分类、STAR 框架
@@ -22,6 +26,10 @@ entries:
       no-new-wheels convergence red lines and their CI enforcers, the four document
       categories with the AI authoring constraints, and the STAR task-breakdown
       framework. AGENTS.md keeps only the invariants and points here.
+    proofs:
+      - common/tests/test_no_new_wheels_lint.py
+      - common/tests/test_generated_doc_indexes_are_guarded.py
+      - common/tests/test_doc_consistency_guards.py
   core.environments:
     owner: docs/ssot/core.environments.md
     summary: 环境分类、隔离与命名
@@ -72,6 +80,8 @@ entries:
       - common/tests/test_sshd_fail2ban_config.py
       - common/tests/test_compose_security_baseline.py
       - common/tests/test_supply_chain_pins.py
+      - docs/ssot/compose-security-baseline.json
+      - docs/ssot/supply-chain-baseline.json
   bootstrap.vars_and_secrets:
     owner: docs/ssot/bootstrap.vars_and_secrets.md
     summary: 变量与密钥管理、.env 结构
@@ -86,6 +96,11 @@ entries:
     owner: docs/ssot/bootstrap.dns_and_cert.md
     summary: DNS 与证书自动化
     description: DNS and certificate automation.
+    proofs:
+      - bootstrap/02.dns_and_cert/tasks.py
+      - common/tests/test_dns_and_cert_multi_zone.py
+      - common/tests/test_dns_drift_report.py
+      - e2e_regressions/tests/bootstrap/network_layer/test_network.py
   bootstrap.iac_runner:
     owner: docs/ssot/bootstrap.iac_runner.md
     summary: IaC Runner GitOps 自动化、Vault-Agent 模式
@@ -103,6 +118,10 @@ entries:
     owner: docs/ssot/platform.sso.md
     summary: Authentik SSO
     description: Authentik SSO ownership and integration contract.
+    proofs:
+      - platform/10.authentik/compose.yaml
+      - platform/10.authentik/deploy.py
+      - platform/10.authentik/shared_tasks.py
   platform.automation:
     owner: docs/ssot/platform.automation.md
     summary: Deployer 自动化
@@ -110,10 +129,6 @@ entries:
     proofs:
       - common/tests/test_deployer.py
       - common/tests/test_dokploy.py
-  platform.ai:
-    owner: docs/ssot/platform.ai.md
-    summary: AI 接入、OpenRouter
-    description: AI provider and OpenRouter integration.
   platform.openpanel:
     owner: docs/ssot/platform.openpanel.md
     summary: OpenPanel 产品分析部署
@@ -136,6 +151,10 @@ entries:
     owner: docs/ssot/db.overview.md
     summary: 数据库总览、Vault 机制
     description: Database overview and Vault integration.
+    proofs:
+      - platform/01.postgres/compose.yaml
+      - platform/02.redis/compose.yaml
+      - tools/env_tool.py
   db.vault:
     owner: docs/ssot/db.vault-integration.md
     summary: Per-App Token、故障排查
@@ -147,14 +166,28 @@ entries:
     owner: docs/ssot/db.platform_pg.md
     summary: Platform PG (L1)
     description: Platform PostgreSQL.
+    proofs:
+      - platform/01.postgres/compose.yaml
+      - platform/01.postgres/deploy.py
   db.redis:
     owner: docs/ssot/db.redis.md
     summary: Redis 缓存
     description: Redis cache layer.
+    proofs:
+      - platform/02.redis/compose.yaml
+      - platform/02.redis/deploy.py
+      - common/tests/test_deploy_in_service.py
+      - common/tests/test_service_registry.py
+      - common/tests/test_redis_healthcheck_auth.py
   db.clickhouse:
     owner: docs/ssot/db.clickhouse.md
     summary: ClickHouse (SigNoz Storage)
     description: ClickHouse storage for observability and analytics.
+    proofs:
+      - platform/03.clickhouse/compose.yaml
+      - platform/03.clickhouse/deploy.py
+      - common/tests/test_clickhouse_config.py
+      - common/tests/test_clickhouse_memory_caps.py
   # vault.self_refresh_inventory retired (#542): the audit inventory is DERIVED
   # from each service Deployer's SecretsFacet declarations (common/core/facets.py
   # -> common/security/vault_audit.load_inventory); the former handwritten
@@ -171,6 +204,8 @@ entries:
       rule enforced by tools/lint_compose_resource_limits.py in infra-ci).
     proofs:
       - common/tests/test_image_pins.py
+      - common/tests/test_lint_compose_resource_limits.py
+      - docs/ssot/compose-resource-baseline.json
   ops.pipeline:
     owner: docs/ssot/ops.pipeline.md
     summary: CI/CD 流程、GitOps
@@ -204,6 +239,7 @@ entries:
     proofs:
       - common/tests/test_coverage_regression.py
       - common/tests/test_coverage_regression_audit_cli.py
+      - docs/ssot/coverage-baseline.json
   ops.recovery:
     owner: docs/ssot/ops.recovery.md
     summary: 故障恢复、Vault Unseal

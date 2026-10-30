@@ -1,12 +1,13 @@
 # SigNoz Deployment Guide
 
 > **Quick reference for deploying SigNoz observability platform**
+> **权威定义**: 可观测性架构、OTLP 接入、告警规则与时间尺度分层由 [`docs/ssot/ops.observability.md`](../ssot/ops.observability.md) 单一拥有；ClickHouse 存储层契约见 [`docs/ssot/db.clickhouse.md`](../ssot/db.clickhouse.md)。
 
 ## Overview
 
 SigNoz is deployed in two parts:
-1. **Storage Layer** (platform/03.clickhouse): ClickHouse + ZooKeeper
-2. **Application Layer** (platform/11.signoz): Query Service + Frontend + OTLP Collector
+1. **Storage Layer** ([`platform/03.clickhouse`](../../platform/03.clickhouse/README.md)): ClickHouse + ZooKeeper
+2. **Application Layer** ([`platform/11.signoz`](../../platform/11.signoz/README.md)): Query Service + Frontend + OTLP Collector
 
 ## Prerequisites
 
@@ -14,7 +15,7 @@ SigNoz is deployed in two parts:
 - DNS configured for `signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
 - Ports `${OTEL_GRPC_PORT}`, `${OTEL_HTTP_PORT}` available for OTLP (staging defaults: 14317/14318)
 
-> `ENV_SUFFIX` 生产为空；staging 请在 Dokploy Environment 显式设为 `-staging`（避免容器冲突）。
+> 环境隔离与 `ENV_SUFFIX` 规范见 [`docs/ssot/core.environments.md`](../ssot/core.environments.md)。
 
 ## Quick Deploy
 
@@ -35,52 +36,10 @@ DEPLOY_ENV=production invoke signoz.status
 ## Access
 
 - **Web UI**: `https://signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`
-- **OTLP gRPC**: `platform-signoz-otel-collector${ENV_SUFFIX}:4317` (Docker network only)
-- **OTLP HTTP**: `platform-signoz-otel-collector${ENV_SUFFIX}:4318` (Docker network only)
+- **OTLP Public Ingest (Browser FE)**: `https://otel${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}` (CORS allowlisted)
+- **OTLP Internal (Docker network)**: `platform-signoz-otel-collector${ENV_SUFFIX}:4317` (gRPC) / `:4318` (HTTP)
 
-> **Note**: OTLP endpoints are only accessible within the `dokploy-network`. 
 > Use `DEPLOY_ENV=<env> invoke signoz.shared.test-trace` to verify connectivity.
-
-## File Structure
-
-```
-platform/
-├── 03.clickhouse/              # Storage layer
-│   ├── compose.yaml            # ClickHouse + ZooKeeper
-│   ├── config.xml              # Server config
-│   ├── users.xml               # Auth config
-│   ├── deploy.py               # Deployer
-│   └── README.md
-│
-├── 11.signoz/                  # Application layer
-│   ├── compose.yaml            # SigNoz services
-│   ├── otel-collector-config.yaml
-│   ├── prometheus.yml
-│   ├── deploy.py               # Deployer
-│   └── README.md
-│
-└── signoz-official-compose.yaml # Reference
-```
-
-## Architecture
-
-```
-┌─────────────┐
-│ Apps (OTLP) │
-└──────┬──────┘
-       │
-       v
-┌──────────────────┐     ┌───────────────┐
-│ OTLP Collector   │────>│ ClickHouse    │
-│ :4317/:4318      │     │ + ZooKeeper   │
-└──────────────────┘     └───────┬───────┘
-                                 │
-                                 v
-┌──────────────────┐     ┌───────────────┐
-│ Frontend         │<────│ Query Service │
-│ signoz${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN} │     │               │
-└──────────────────┘     └───────────────┘
-```
 
 ## Troubleshooting
 

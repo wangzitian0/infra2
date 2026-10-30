@@ -103,11 +103,7 @@ def test_ac_proof_file_paths_in_epics_exist() -> None:
             if not _AC_RE.search(line):
                 continue  # only AC rows carry proof references
             for ref in _PROOF_PATH_RE.findall(line):
-                if (
-                    "*" in ref
-                    or not _INFRA2_PREFIX_RE.match(ref)
-                    or ref == "common/observability/openpanel_query.py"
-                ):
+                if "*" in ref or not _INFRA2_PREFIX_RE.match(ref):
                     continue  # globs + bare/cross-repo paths are out of scope (see above)
                 if not (ROOT / ref).exists():
                     missing.append(f"{doc.name}: {ref}")

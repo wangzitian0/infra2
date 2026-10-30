@@ -74,17 +74,17 @@ return ak_is_group_member(request.user, name='admins')
 ```bash
 # 1. 创建 Authentik Root Token（需要 Vault Root）
 export VAULT_ROOT_TOKEN=<vault-admin-token>
-invoke authentik.shared.create-root-token
+DEPLOY_ENV=<env> invoke authentik.shared.create-root-token
 
 # 2. 设置 admin 组并添加 akadmin
-invoke authentik.shared.setup-admin-group
+DEPLOY_ENV=<env> invoke authentik.shared.setup-admin-group
 ```
 
 ### SOP-002: 新增 Forward Auth 应用（推荐）
 
 ```bash
 # 使用 CLI 自动创建
-invoke authentik.shared.create-proxy-app \
+DEPLOY_ENV=<env> invoke authentik.shared.create-proxy-app \
   --name="Portal" \
   --slug="portal" \
   --external-host="https://home${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}" \
@@ -92,7 +92,7 @@ invoke authentik.shared.create-proxy-app \
   --port=8080
 
 # 多组访问
-invoke authentik.shared.create-proxy-app \
+DEPLOY_ENV=<env> invoke authentik.shared.create-proxy-app \
   --name="Dev Tools" \
   --slug="devtools" \
   --external-host="https://dev.example.com" \
@@ -202,14 +202,14 @@ labels:
 
 ```bash
 # 1. 检查 Authentik 健康状态
-invoke authentik.shared.status
+DEPLOY_ENV=<env> invoke authentik.shared.status
 
 # 2. 列出已配置的应用
-invoke authentik.shared.list-apps
+DEPLOY_ENV=<env> invoke authentik.shared.list-apps
 
 # 3. 测试未登录访问（应重定向）
 curl -I https://home${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
-# Expected: 302 → sso${ENV_DOMAIN_SUFFIX}.zitian.party
+# Expected: 302 → sso${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
 
 # 4. 测试已登录访问
 # 浏览器登录后，检查 Network 面板

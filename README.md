@@ -151,72 +151,24 @@ python -m tools.deploy_v2 --service finance_report/app --type staging --version-
 
 ```bash
 # Platform 服务
-invoke postgres.shared.status
-invoke redis.shared.status
+DEPLOY_ENV=production invoke postgres.shared.status
+DEPLOY_ENV=production invoke redis.shared.status
 
 # Finance Report 应用
-invoke fr-postgres.shared.status
-invoke fr-redis.shared.status
-invoke fr-app.shared.status
+DEPLOY_ENV=production invoke fr-postgres.shared.status
+DEPLOY_ENV=production invoke fr-redis.shared.status
+DEPLOY_ENV=production invoke fr-app.shared.status
 ```
 
-## 📦 Finance Report 部署
+## 📦 业务应用接入与部署（Finance Report / TrueAlpha）
 
-Finance Report 是一个个人财务管理系统，使用独立的 PostgreSQL 和 Redis 实例。
+应用仓库（`repos/finance_report`、`repos/truealpha`）保持独立发布节奏，通过 GitHub Actions 发送签名的 `AppDeployRequest` 或调用 `python -m tools.deploy_v2` 统一前门完成部署。完整契约与操作手册见：
 
-### 架构
-
-```
-report.zitian.party
-├── /api/* → Backend (FastAPI, port 8000)
-└── /*     → Frontend (Next.js, port 3000)
-```
-
-### 前置条件
-
-1. Vault 已就绪：`DEPLOY_ENV=production invoke vault.status`
-2. S3 兼容对象存储已就绪：`invoke s3.shared.status`
-3. Docker 镜像已构建并推送到 GHCR
-
-### 部署步骤
-
-```bash
-# 1. 设置环境变量
-export INTERNAL_DOMAIN=zitian.party
-export VAULT_ADDR=https://vault.zitian.party
-export VAULT_ROOT_TOKEN=$(op item get dexluuvzg5paff3cltmtnlnosm --vault=Infra2 --fields label=Token --reveal)
-
-# 2. 生成密钥（首次）
-invoke env.set POSTGRES_PASSWORD=$(openssl rand -base64 24) --project=finance_report --env=production --service=postgres
-invoke env.set PASSWORD=$(openssl rand -base64 24) --project=finance_report --env=production --service=redis
-
-# 3. 配置应用密钥
-# DATABASE_URL, REDIS_URL, S3_*, AI_API_KEY
-# 见 docs/project/Infra-009.finance_report_deploy.md
-
-# 4. 生成 Vault AppRole 凭证（role_id/secret_id → Dokploy env），显式给出环境
-DEPLOY_ENV=staging invoke vault.setup-approle --project=finance_report
-
-# Targeted staging repair for the app sidecar
-DEPLOY_ENV=staging invoke vault.setup-approle --project=finance_report --service=app
-
-# 5. 部署服务
-python -m tools.deploy_v2 --service finance_report/postgres --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
-python -m tools.deploy_v2 --service finance_report/redis --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
-python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref vX.Y.Z --iac-ref vX.Y.Z --domain zitian.party --staging-validated --code-reviewed
-
-# 6. 验证
-invoke fr-postgres.shared.status
-invoke fr-redis.shared.status
-invoke fr-app.shared.status
-curl https://report.zitian.party/api/health
-```
-
-### 相关文档
-
-- [Finance Report README](finance_report/README.md)
-- [Infra-009 项目文档](docs/project/archive/Infra-009.finance_report_deploy.md)
-- [源代码仓库](https://github.com/wangzitian0/finance_report)
+- **应用部署与三阶段晋升契约**：[docs/ssot/ops.pipeline.md](docs/ssot/ops.pipeline.md)
+- **环境隔离与四轴坐标（`deploy_v2`）**：[docs/ssot/core.environments.md](docs/ssot/core.environments.md)
+- **服务准入与退役原子 Saga（`service.onboard`）**：[docs/ssot/ops.service-lifecycle.md](docs/ssot/ops.service-lifecycle.md)
+- **Finance Report 模块说明**：[finance_report/README.md](finance_report/README.md) · [Infra-009 归档记录](docs/project/archive/Infra-009.finance_report_deploy.md)
+- **TrueAlpha 模块说明**：[truealpha/README.md](truealpha/README.md) · [TrueAlpha Data Engine SSOT](docs/ssot/core.truealpha_runtime.md)
 
 ## 🔗 相关链接
 
