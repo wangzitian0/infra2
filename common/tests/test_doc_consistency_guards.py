@@ -10,6 +10,8 @@ Two drift surfaces these close:
 
 from __future__ import annotations
 
+import ast
+import importlib
 import re
 from pathlib import Path
 
@@ -110,3 +112,147 @@ def test_ac_proof_file_paths_in_epics_exist() -> None:
     assert not missing, "EPIC AC proof paths do not resolve:\n" + "\n".join(
         sorted(missing)
     )
+
+
+_SDK_DOTTED_RE = re.compile(r"\binfra2[_-]sdk(?:\.[A-Za-z_][A-Za-z0-9_]*)+")
+
+
+def _active_governed_docs() -> list[Path]:
+    docs: list[Path] = []
+    for top in ("init.md", "README.md", "SECRETS.md"):
+        p = ROOT / top
+        if p.is_file():
+            docs.append(p)
+    for sub in ("docs", "common", "tools", "platform", "bootstrap", "harness"):
+        base = ROOT / sub
+        if not base.is_dir():
+            continue
+        for ext in ("*.md", "*.yaml", "*.yml"):
+            for p in base.rglob(ext):
+                if "archive" in p.parts:
+                    continue
+                docs.append(p)
+    return sorted(set(docs))
+
+
+def _resolve_sdk_dotted_reference(ref: str) -> str | None:
+    """Return an error string if `ref` is invalid or cannot resolve in `infra2_sdk`, else None."""
+    if ref.startswith("infra2-sdk."):
+        return f"invalid hyphenated package prefix in {ref!r} (use 'infra2_sdk.')"
+    parts = ref.split(".")
+    for i in range(len(parts), 0, -1):
+        mod_cand = ".".join(parts[:i])
+        try:
+            obj: object = importlib.import_module(mod_cand)
+            for attr in parts[i:]:
+                if not hasattr(obj, attr):
+                    return f"{ref!r}: {mod_cand!r} has no attribute {attr!r}"
+                obj = getattr(obj, attr)
+            return None
+        except Exception:
+            continue
+    return f"{ref!r}: could not import module from {ref!r}"
+
+
+def test_active_docs_infra2_sdk_dotted_references_resolve() -> None:
+    """Every `infra2_sdk.<path>` reference in active docs must resolve to a real module/symbol."""
+    errors: list[str] = []
+    checked = 0
+    for doc in _active_governed_docs():
+        text = doc.read_text(encoding="utf-8", errors="ignore")
+        for ref in sorted(set(_SDK_DOTTED_RE.findall(text))):
+            checked += 1
+            err = _resolve_sdk_dotted_reference(ref)
+            if err is not None:
+                errors.append(f"{doc.relative_to(ROOT)}: {err}")
+    assert checked >= 15, (
+        f"expected >= 15 infra2_sdk references across docs, got {checked}"
+    )
+    assert not errors, "unresolved infra2_sdk doc references:\n" + "\n".join(errors)
+
+
+def test_sdk_dotted_reference_resolver_rejects_hyphen_and_missing_attr() -> None:
+    assert _resolve_sdk_dotted_reference("infra2_sdk.secrets") is None
+    assert (
+        _resolve_sdk_dotted_reference(
+            "infra2_sdk.observability.evaluate_consecutive_hysteresis"
+        )
+        is None
+    )
+    assert "hyphenated" in (_resolve_sdk_dotted_reference("infra2-sdk.secrets") or "")
+    assert (
+        _resolve_sdk_dotted_reference("infra2_sdk.ci.coverage_regression") is not None
+    )
+
+
+def _module_ast_defined_names(py_file: Path) -> set[str]:
+    tree = ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+    defined: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            defined.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    defined.add(target.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            defined.add(node.target.id)
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                defined.add(alias.asname or alias.name)
+    return defined
+
+
+def _check_domain_readme_module_map(readme: Path) -> list[str]:
+    pkg_dir = readme.parent
+    rel_label = (
+        str(readme.relative_to(ROOT)) if readme.is_relative_to(ROOT) else readme.name
+    )
+    text = readme.read_text(encoding="utf-8")
+    errors: list[str] = []
+    for line in text.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.split("|")[1:-1]]
+        if len(cells) < 3 or cells[0] in ("Module", "--------", "---"):
+            continue
+        mod_match = re.search(r"`([A-Za-z0-9_./]+\.py)`", cells[0])
+        if not mod_match:
+            continue
+        mod_rel = mod_match.group(1)
+        py_file = pkg_dir / mod_rel
+        if not py_file.is_file():
+            errors.append(f"{rel_label}: missing module {mod_rel}")
+            continue
+        defined = _module_ast_defined_names(py_file)
+        for raw_tok in re.findall(r"`([^`]+)`", cells[2]):
+            clean = raw_tok.removesuffix("()")
+            if "." in clean:
+                clean = clean.split(".")[0]
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", clean):
+                continue
+            if clean not in defined:
+                errors.append(f"{rel_label} ({mod_rel}): symbol {clean!r} not in AST")
+    return errors
+
+
+def test_common_domain_readme_module_maps_match_ast_exports() -> None:
+    """Every `common/<domain>/README.md` Module Map row must list real `.py` files and AST symbols."""
+    readmes = sorted((ROOT / "common").glob("*/README.md"))
+    assert len(readmes) >= 5
+    errors: list[str] = []
+    for readme in readmes:
+        errors.extend(_check_domain_readme_module_map(readme))
+    assert not errors, "common/*/README.md Module Map drift:\n" + "\n".join(errors)
+
+
+def test_domain_readme_module_map_guard_rejects_phantom_export(tmp_path: Path) -> None:
+    mod = tmp_path / "sample.py"
+    mod.write_text("def real_fn() -> int:\n    return 1\n", encoding="utf-8")
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        "| Module | Role | Key Exports |\n|---|---|---|\n| `sample.py` | role | `real_fn()`, `ghost_fn()` |\n",
+        encoding="utf-8",
+    )
+    errs = _check_domain_readme_module_map(readme)
+    assert any("ghost_fn" in e for e in errs)

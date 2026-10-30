@@ -84,15 +84,15 @@ python -m tools.deploy_v2 --service platform/alerting --type staging --iac-ref v
 python -m tools.deploy_v2 --service platform/portal --type staging --iac-ref vX.Y.Z --domain zitian.party
 python -m tools.deploy_v2 --service platform/prefect --type prod --iac-ref vX.Y.Z --domain zitian.party --code-reviewed
 
-# Check status
-invoke postgres.status
-invoke redis.status
-invoke clickhouse.status
-invoke authentik.status
-invoke signoz.status
-invoke alerting.status
-invoke portal.status
-invoke prefect.status
+# Check status (requires explicit DEPLOY_ENV or INFRA_ENVIRONMENT)
+DEPLOY_ENV=staging invoke postgres.status
+DEPLOY_ENV=staging invoke redis.status
+DEPLOY_ENV=production invoke clickhouse.status
+DEPLOY_ENV=staging invoke authentik.status
+DEPLOY_ENV=production invoke signoz.status
+DEPLOY_ENV=staging invoke alerting.status
+DEPLOY_ENV=staging invoke portal.status
+DEPLOY_ENV=production invoke prefect.status
 ```
 
 ## Deployment Order
@@ -121,51 +121,50 @@ clickhouse ──► signoz ──► alerting
 
 ## Adding New Service
 
-1. Create directory: `platform/{nn}.{service}/`
+Follow [`docs/onboarding/07.new-service-sop.md`](../docs/onboarding/07.new-service-sop.md) and scaffold the service via `infra2_sdk.scaffold`:
 
-2. Create `deploy.py`:
-   ```python
-   import sys
-   from common.deploy.deployer import Deployer, make_tasks
-   
-   shared_tasks = sys.modules.get("platform.XX.new.shared")
-   
-   class NewDeployer(Deployer):
-       service = "new"
-       compose_path = "platform/XX.new/compose.yaml"
-       data_path = "/data/platform/new"  # env suffix appended automatically
-       secret_key = "password"  # Key in Vault
-       
-       # Domain configuration:
-       # - Set subdomain to auto-configure via Dokploy API (no SSO)
-       # - Set subdomain = None to use compose.yaml Traefik labels (for SSO)
-       subdomain = "new"  # or None for SSO-protected services
-       service_port = 8080
-       service_name = "server"  # For multi-service composes
-   
-   if shared_tasks:
-       _tasks = make_tasks(NewDeployer, shared_tasks)
-       status = _tasks["status"]
-       pre_compose = _tasks["pre_compose"]
-       composing = _tasks["composing"]
-       post_compose = _tasks["post_compose"]
-       setup = _tasks["setup"]
-   ```
+```bash
+uv run python -m infra2_sdk.scaffold \
+  --service-name <service> \
+  --tier 30 \
+  --port 8000 \
+  --profile infra2 \
+  --output-dir .
+```
 
-3. Create `shared_tasks.py`:
-   ```python
-   from invoke import task
-   from common.common import check_service
-   
-   @task
-   def status(c):
-       return check_service(c, "new", "health-cmd")
-   ```
+Each platform service declares its metadata and facets on its `Deployer` subclass in `platform/{nn}.{service}/deploy.py` (collected via AST by `common.core.registry.service_attrs()`):
 
-4. Copy vault-agent config from existing service and adapt
+```python
+from common.core.facets import ProbeFacet, SecretsFacet
+from common.deploy.deployer import Deployer, make_tasks
 
-5. Register the service, then deploy through deploy_v2:
-   `python -m tools.deploy_v2 --service platform/new --type staging --iac-ref vX.Y.Z --domain zitian.party`
+class NewDeployer(Deployer):
+    service = "new"
+    compose_path = "platform/30.new/compose.yaml"
+    data_path = "/data/platform/new"  # env suffix appended automatically outside prod
+    subdomain = "new"  # or None for Traefik-labeled SSO routes
+    service_port = 8000
+    secrets = (
+        SecretsFacet(
+            vault_agent_container="platform-new-vault-agent${ENV_SUFFIX}",
+            app_containers=("platform-new${ENV_SUFFIX}",),
+        ),
+    )
+    probes = (
+        ProbeFacet(name="http", kind="http", target="http://127.0.0.1:8000/livez"),
+    )
+
+_tasks = make_tasks(NewDeployer)
+status = _tasks["status"]
+pre_compose = _tasks["pre_compose"]
+composing = _tasks["composing"]
+post_compose = _tasks["post_compose"]
+setup = _tasks["setup"]
+sync = _tasks["sync"]
+```
+
+Deploy through `tools.deploy_v2`:
+`python -m tools.deploy_v2 --service platform/new --type staging --iac-ref vX.Y.Z --domain zitian.party`
 
 ## SSO Protection
 

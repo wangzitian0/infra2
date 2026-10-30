@@ -13,6 +13,7 @@ This repo owns **only** the deployed/online layer. It does **not** own:
   missing.
 
 The cross-repo secret contract (who declares, who injects, who supplies, and
-when the app fails loudly) is defined authoritatively by `infra2-sdk.secrets`
-and the application runtime configuration contracts (e.g. `common/runtime/deployment.md`).
+when the app fails loudly) is defined authoritatively by `infra2_sdk.secrets`,
+`infra2_sdk.runtime.config_schema` (`EnvironmentManifest`), and
+[`docs/ssot/bootstrap.vars_and_secrets.md`](docs/ssot/bootstrap.vars_and_secrets.md).
 This file is just infra2's one-paragraph statement of its part.

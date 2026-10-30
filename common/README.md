@@ -8,15 +8,16 @@
 
 ## 🏛️ Architecture & Domain Packages (SSOT)
 
-Infrastructure capabilities are organized into 5 cohesive domain packages. Each package is self-contained with its own localized `README.md`, domain entities, invariants, and tests:
+Infrastructure capabilities are organized into 6 cohesive domain packages. Each package is self-contained with its own localized `README.md`, domain entities, invariants, and tests:
 
 | Domain Package | SSOT Role | Local Documentation | Key Capabilities & APIs |
 |----------------|-----------|---------------------|--------------------------|
-| [`core/`](./core/README.md) | **Domain Entities & Environment** | [core/README.md](./core/README.md) | Single immutable `Service` entity, typed `DeploymentEnvironment`, environment derivation (`with_env_suffix`), estate constants |
+| [`core/`](./core/README.md) | **Domain Entities & Environment** | [core/README.md](./core/README.md) | Single immutable `ServiceMeta` entity (`service_attrs`), typed `DeploymentEnvironment`, environment derivation (`with_env_suffix`), estate constants |
 | [`security/`](./security/README.md) | **Secret Supply & Vault Lifecycle** | [security/README.md](./security/README.md) | Vault KV & 1Password resolution (`VaultSecrets`), deploy-time secret supply pipeline (`apply_secret_supply`), token generation, orphan key pruning |
 | [`backup/`](./backup/README.md) | **Disaster Recovery & Rehearsal** | [backup/README.md](./backup/README.md) | Backup inventory discovery (`load_backup_inventory`), manifest verification, restore rehearsal specifications (`RehearsalSpecification`), sandboxed rehearsal execution |
-| [`observability/`](./observability/README.md) | **Probes, Triage & Watchdogs** | [observability/README.md](./observability/README.md) | In-band health probes (`ProbeSpec`, `execute_probe`), container breakdown log analysis (`analyze_container_logs`), watchdog issue trail reconciliation, alerting sidecar resident watchers |
+| [`observability/`](./observability/README.md) | **Probes, Triage & Watchdogs** | [observability/README.md](./observability/README.md) | In-band health probes (`ProbeSpec`, `run_probes`), container breakdown log analysis (`analyze_container_logs`), watchdog issue trail reconciliation, alerting sidecar resident watchers |
 | [`deploy/`](./deploy/README.md) | **Deployment Engine & Promotion** | [deploy/README.md](./deploy/README.md) | Unified `Deployer` base class, fixed-environment promotion (`deploy()`), dynamic preview stack lifecycle (`up()`, `down()`), pre-deploy schema gate (`schema_gate`) |
+| [`alerting/`](./alerting/README.md) | **SigNoz Alerting & Feishu Delivery** | [alerting/README.md](./alerting/README.md) | SigNoz/Alertmanager payload parsing (`PagerMessage`), Feishu card rendering (`build_feishu_card_payload`), rule builders (`build_log_alert_rule`), and webhook/app delivery |
 
 ---
 
@@ -29,7 +30,7 @@ Modules in `common/` that provide direct integrations or operational clients:
 | [`deploy/dokploy_client.py`](./deploy/dokploy_client.py) | Dokploy REST API wrapper | `DokployClient`, `get_dokploy()` |
 | [`observability_dashboards.py`](./observability_dashboards.py) | SigNoz alert rules and dashboards loader. It stays here: moving it triggers apply-observability.yml, which needs owner approval (#1059 phase 2). | `load_alert_definitions()`, `render_alert_payloads()`, `require_rule_channel()` |
 | [`console.py`](./console.py) | Rich CLI formatting and header blocks | `header()`, `success()`, `error()`, `prompt_action()` |
-| [`common.py`](./common.py) | Environment derivation re-export and operator health check helper | `get_env()`, `check_service()` |
+| [`common.py`](./common.py) | Operator SSH health check helper | `check_service()` |
 
 ---
 
@@ -101,37 +102,46 @@ password = VaultSecrets(path="platform/staging/postgres").get("POSTGRES_PASSWORD
 
 ### 3. Disaster Recovery & Rehearsal (`common.backup`)
 ```python
-from common.backup import RehearsalSpecification, create_rehearsal_plan, execute_rehearsal
-
-spec = RehearsalSpecification(
-    service_id="platform/postgres",
-    database_name="postgres",
-    target_container="test-rehearsal-postgres",
-    target_port=15432,
+from pathlib import Path
+from common.backup import (
+    RehearsalSpecification,
+    create_rehearsal_plan,
+    execute_rehearsal,
+    load_backup_inventory,
 )
-plan = create_rehearsal_plan(spec, snapshot_date="latest")
+
+entry = next(e for e in load_backup_inventory() if "pg" in e.method)
+spec = RehearsalSpecification(
+    entry=entry,
+    artifact={"remote_uri": "local:/tmp/rehearsal.dump"},
+    archive_path=Path("/tmp/rehearsal.dump"),
+    target_container="test-rehearsal-postgres",
+    pg_user="postgres",
+    database="postgres",
+    invariant_sql=("SELECT 1;",),
+)
+plan = create_rehearsal_plan(spec)
 result = execute_rehearsal(plan)
 ```
 
 ### 4. Observability Probes & Log Triage (`common.observability`)
 ```python
-from common.observability import ProbeSpec, execute_probe, analyze_container_logs
+from common.observability import ProbeSpec, analyze_container_logs, run_probes
 
 spec = ProbeSpec(name="pg-tcp", kind="tcp", target="platform-postgres:5432")
-result = execute_probe(spec)
+results = run_probes([spec])
 
-verdict = analyze_container_logs("platform-alerting")
-if verdict.is_broken:
-    print(f"Container broken: {verdict.reason}")
+verdict = analyze_container_logs("platform-alerting", "ERROR: connection refused")
+print(f"Cause: {verdict.cause} ({verdict.detail})")
 ```
 
 ### 5. Deployment & Task Generation (`common.deploy`)
 ```python
 from common.deploy.deployer import Deployer, make_tasks
-from common.deploy.promote import deploy
 
 class CustomDeployer(Deployer):
-    service_id = "platform/custom"
+    service = "custom"
+    compose_path = "platform/30.custom/compose.yaml"
 
 tasks = make_tasks(CustomDeployer)
 ```

@@ -9,11 +9,11 @@
   1. **First consumer and Canary proving ground for released `infra2-sdk` SemVer packages.**
   2. **L1/L2 infrastructure implementation, L4 application deployer control plane, and multi-repository development workspace harness.**
 
-**Consumption boundary:** `infra2` installs a pinned release of `infra2-sdk` in `pyproject.toml` (`infra2-sdk @ git+https://github.com/wangzitian0/infra2-sdk.git@vX.Y.Z`). `infra2` never imports `repos/infra2-sdk` via `sys.path` or relative paths.
+**Consumption boundary:** `infra2` pins an immutable released wheel of `infra2-sdk` in `pyproject.toml` and `uv.lock` (with `sha256` extracted by `tools/sdk_requirement.py` for image and workflow installs, `#1115`). `infra2` never imports `repos/infra2-sdk` via `sys.path` or relative paths.
 
 ## 1. Core Architectural Principles
 
-1. **Canary Proving Ground for `infra2-sdk`:** `infra2` exercises `infra2-sdk` contracts (`capacity`, `ci`, `delivery`, `deploy`, `manifests`, `observability`, `refs`, `routing`, `rules`, `runtime`, `scaffold`, `secrets`, `transport`) in control-plane tools (`tools/deploy_v2.py`, `tools/deploy_v2_canary.py`, `tools/reconcile_iac_inputs.py`, `tools/sdk_usage_census.py`) before or alongside autonomous application adoption.
+1. **Canary Proving Ground for `infra2-sdk`:** `infra2` exercises `infra2-sdk` contracts (`capacity`, `ci`, `delivery`, `deploy`, `fastapi`, `manifests`, `observability`, `refs`, `routing`, `rules`, `runtime`, `scaffold`, `secrets`, `transport`) in control-plane tools and platform services (`tools/deploy_v2.py`, `tools/deploy_v2_canary.py`, `tools/reconcile_iac_inputs.py`, `tools/sdk_usage_census.py`, `platform/30.todo/app.py`) before or alongside autonomous application adoption.
 2. **4-Layer Infrastructure Topology (`docs/ssot/core.md`):**
    - **L1 Bootstrap (`bootstrap/`):** Global trust anchor (Dokploy, 1Password Connect, HashiCorp Vault, IaC Runner).
    - **L2 Platform (`platform/`):** Shared per-environment services (PostgreSQL, Redis, Authentik SSO, RustFS S3, SigNoz, OpenPanel).

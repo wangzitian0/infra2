@@ -208,8 +208,8 @@ IaC Runner manages deployer-discovered, explicitly selected services. Bootstrap 
 
 ## Security Considerations
 
-- HMAC signature verification for all requests
-- Read-only docker socket mount
+- HMAC signature verification for all requests (plus GitHub Actions OIDC token for `production`)
+- No docker socket mount inside the container (only `secrets`, `workspace`, and `host_ssh` mounts)
 - No write access to host filesystem (except workspace)
 - Bootstrap services excluded from auto-sync
 

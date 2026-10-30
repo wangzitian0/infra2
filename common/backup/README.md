@@ -24,25 +24,35 @@ from common.backup import load_backup_inventory
 
 inventory = load_backup_inventory()
 for entry in inventory:
-    print(f"Service: {entry.service_id}, Paths: {entry.paths}, Retention: {entry.retention}")
+    print(f"Service: {entry.service_id}, Path: {entry.data_path}, Retention: {entry.retention_days}d")
 ```
 
 ### Building and Executing a Restore Rehearsal
 ```python
-from common.backup import RehearsalSpecification, create_rehearsal_plan, execute_rehearsal
-
-# Define a guarded rehearsal specification targeting a disposable container
-spec = RehearsalSpecification(
-    service_id="platform/postgres",
-    database_name="postgres",
-    target_container="test-postgres-rehearsal",
-    target_port=15432,
+from pathlib import Path
+from common.backup import (
+    RehearsalSpecification,
+    create_rehearsal_plan,
+    execute_rehearsal,
+    load_backup_inventory,
 )
 
-plan = create_rehearsal_plan(spec, snapshot_date="latest")
+# Define a guarded rehearsal specification targeting a disposable container
+entry = next(e for e in load_backup_inventory() if "pg" in e.method)
+spec = RehearsalSpecification(
+    entry=entry,
+    artifact={"remote_uri": "local:/tmp/rehearsal.dump"},
+    archive_path=Path("/tmp/rehearsal.dump"),
+    target_container="test-postgres-rehearsal",
+    pg_user="postgres",
+    database="postgres",
+    invariant_sql=("SELECT 1;",),
+)
+
+plan = create_rehearsal_plan(spec)
 result = execute_rehearsal(plan)
-assert result.is_successful
-print(f"Restored {result.tables_verified} tables in {result.elapsed_seconds:.2f}s")
+assert result["status"] == "pass"
+print(f"Verified {result['invariants_checked']} invariants for {result['service_id']}")
 ```
 
 ## Safety Invariants
