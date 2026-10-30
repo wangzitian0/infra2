@@ -4,7 +4,7 @@
   "inputs": {
     "repo": "855f3b41d6c7636f642980a96a0bdad2e33a848d8a4021619256b3e011dc2dd1",
     "root": "f208efbbcca0a811379778106845a5ba505441adc743f7349177ff36530e117d",
-    "skills": "536bb47f7497d66c4dae15a5feaa23ee080419bff9e3aec801331673ac696b4f"
+    "skills": "66d5891ecebcd8f1953d4419c50b80b7f7d15a586e9d6df4a5001cf4da580d96"
   },
   "language": "en",
   "outputs": {
@@ -22,7 +22,7 @@
       ".agents/skills/auto/SKILL.md": "84ace822ac498982a53fcc6832c4bf99629cb78fbe2d74f770cdfc2711eb9192",
       ".agents/skills/close/SKILL.md": "4d387a5cb4487b4b310a28cc10adc9d4d7f16bbee7d4d07a2d510eb9f19bc459",
       ".agents/skills/codegraph/SKILL.md": "bb51d25b290a1ef9df958b4343cfd408fd9f4a8968f68a2e86cd5c9bdd9b16a6",
-      ".agents/skills/deploy-evidence/SKILL.md": "527d7d91e0077016cdbffc1daf44f651f3f93284bc415a85390c32a4a04be0a3",
+      ".agents/skills/deploy-evidence/SKILL.md": "27e71f4c07471ac0f283a5541e894c69065ef75ae0642c301993a638cd7d940d",
       ".agents/skills/init/SKILL.md": "fc094b5a7583e6935b4906b4076413d1a6c5306ae4d7c04b7edf90c2807d38c8",
       ".agents/skills/prr/SKILL.md": "b6a39261e549ceabfcd95cb4e5dbe3b09c4087a2082012a292dd0fe85daf7b25",
       ".agents/skills/recall/SKILL.md": "f5cf063ef87c26f48216ae4ea04c25764f309b8d5e97b56de60303541a1cc3a9",
@@ -34,7 +34,7 @@
       ".claude/skills/auto/SKILL.md": "84ace822ac498982a53fcc6832c4bf99629cb78fbe2d74f770cdfc2711eb9192",
       ".claude/skills/close/SKILL.md": "4d387a5cb4487b4b310a28cc10adc9d4d7f16bbee7d4d07a2d510eb9f19bc459",
       ".claude/skills/codegraph/SKILL.md": "bb51d25b290a1ef9df958b4343cfd408fd9f4a8968f68a2e86cd5c9bdd9b16a6",
-      ".claude/skills/deploy-evidence/SKILL.md": "527d7d91e0077016cdbffc1daf44f651f3f93284bc415a85390c32a4a04be0a3",
+      ".claude/skills/deploy-evidence/SKILL.md": "27e71f4c07471ac0f283a5541e894c69065ef75ae0642c301993a638cd7d940d",
       ".claude/skills/init/SKILL.md": "fc094b5a7583e6935b4906b4076413d1a6c5306ae4d7c04b7edf90c2807d38c8",
       ".claude/skills/prr/SKILL.md": "b6a39261e549ceabfcd95cb4e5dbe3b09c4087a2082012a292dd0fe85daf7b25",
       ".claude/skills/recall/SKILL.md": "f5cf063ef87c26f48216ae4ea04c25764f309b8d5e97b56de60303541a1cc3a9",
@@ -49,7 +49,7 @@
     "links": {},
     "root": ".agents/skills"
   },
-  "source_revision": "f098a43b63d6dde177e7b43e1606aea23ee6a591",
+  "source_revision": "22cdd1f53a1b13e141af6520fe1d5e9875f44b8a",
   "target": {
     "remote": "github.com/wangzitian0/infra2",
     "repo": "infra2",
