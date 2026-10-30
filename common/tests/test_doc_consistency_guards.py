@@ -256,3 +256,89 @@ def test_domain_readme_module_map_guard_rejects_phantom_export(tmp_path: Path) -
     )
     errs = _check_domain_readme_module_map(readme)
     assert any("ghost_fn" in e for e in errs)
+
+
+_DOTTED_REPO_REF_RE = re.compile(r"`((?:common|tools)(?:\.[A-Za-z_][A-Za-z0-9_]*)+)`")
+_TEST_FILE_REF_RE = re.compile(r"`(common/tests/test_[A-Za-z0-9_]+\.py)`")
+
+
+def _check_python_code_block_imports(text: str, label: str) -> list[str]:
+    errors: list[str] = []
+    for m in re.finditer(r"```python\n(.*?)```", text, re.S):
+        try:
+            tree = ast.parse(m.group(1))
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                if not node.module.startswith(("common", "tools", "infra2_sdk")):
+                    continue
+                try:
+                    mod = importlib.import_module(node.module)
+                except Exception as exc:
+                    errors.append(f"{label}: cannot import {node.module!r} ({exc})")
+                    continue
+                for alias in node.names:
+                    if alias.name != "*" and not hasattr(mod, alias.name):
+                        errors.append(
+                            f"{label}: {node.module!r} has no attribute {alias.name!r}"
+                        )
+    return errors
+
+
+def _resolve_dotted_repo_ref(ref: str) -> str | None:
+    if ref.endswith((".py", ".md", ".yaml", ".yml", ".json", ".sh", ".hcl", ".ctmpl")):
+        return None
+    parts = ref.split(".")
+    for i in range(len(parts), 0, -1):
+        mod_cand = ".".join(parts[:i])
+        try:
+            obj: object = importlib.import_module(mod_cand)
+            for attr in parts[i:]:
+                if not hasattr(obj, attr):
+                    return f"{ref!r}: {mod_cand!r} has no attribute {attr!r}"
+                obj = getattr(obj, attr)
+            return None
+        except Exception:
+            continue
+    return f"{ref!r}: could not resolve module or attribute"
+
+
+def test_active_docs_python_imports_dotted_refs_and_test_paths_resolve() -> None:
+    """Every active doc python import, dotted common/tools ref, and common/tests path resolves."""
+    errors: list[str] = []
+    for doc in _active_governed_docs():
+        if doc.suffix != ".md":
+            continue
+        rel = str(doc.relative_to(ROOT))
+        text = doc.read_text(encoding="utf-8", errors="ignore")
+        errors.extend(_check_python_code_block_imports(text, rel))
+        for m in _DOTTED_REPO_REF_RE.finditer(text):
+            err = _resolve_dotted_repo_ref(m.group(1))
+            if err is not None:
+                errors.append(f"{rel}: {err}")
+        for m in _TEST_FILE_REF_RE.finditer(text):
+            if not (ROOT / m.group(1)).is_file():
+                errors.append(f"{rel}: missing test file {m.group(1)!r}")
+    assert not errors, "active doc import/symbol/test-path drift:\n" + "\n".join(errors)
+
+
+def test_python_import_and_dotted_repo_ref_guards_reject_invalid_symbols() -> None:
+    bad_md = "```python\nfrom common.observability.issue_trail import GhIssueApi\n```\n"
+    assert any(
+        "GhIssueApi" in e for e in _check_python_code_block_imports(bad_md, "README.md")
+    )
+    assert (
+        _resolve_dotted_repo_ref(
+            "common.deploy.deployer.Deployer._assert_approle_creds_present"
+        )
+        is None
+    )
+    assert (
+        _resolve_dotted_repo_ref("common.deploy.promote.assert_approle_creds_present")
+        is None
+    )
+    assert (
+        _resolve_dotted_repo_ref("common.deploy.deployer._assert_approle_creds_present")
+        is not None
+    )

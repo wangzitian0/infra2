@@ -13,7 +13,7 @@
 | **服务定义** | `platform/{nn}.{service}/compose.yaml` | Docker Compose 配置 |
 | **部署任务** | `platform/{nn}.{service}/deploy.py` | pre-compose, composing, post-compose |
 | **状态检查** | `platform/{nn}.{service}/shared_tasks.py` | status() 返回 {is_ready, details} |
-| **公共库** | `common/` | common/core, common/security, common/backup, common/observability, common/deploy |
+| **公共库** | `common/` | common/core, common/security, common/backup, common/observability, common/deploy, common/alerting |
 | **CLI 工具** | `tools/` | env_tool.py, dokploy_env.py, local_init.py |
 
 > **Note**: 服务部署通过 Dokploy API 完成（需要 `DOKPLOY_API_KEY` 或 1Password 中的对应字段）。`env_tool` 仅管理 1Password/Vault secrets。
@@ -36,6 +36,7 @@ flowchart TB
         Backup[backup/]
         Observability[observability/]
         Deploy[deploy/]
+        Alerting[alerting/]
     end
     
     subgraph Tools["tools/ (CLI工具)"]

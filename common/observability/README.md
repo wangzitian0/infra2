@@ -56,7 +56,7 @@ print(f"Container breakdown cause: {verdict.cause} ({verdict.detail})")
 from pathlib import Path
 from common.observability.issue_trail import (
     CheckVerdict,
-    GhIssueApi,
+    GitHubIssues,
     load_trail,
     reconcile_issue_trail,
     record_verdicts,
@@ -72,7 +72,11 @@ record_verdicts(
     now_iso="2026-10-30T00:00:00Z",
 )
 # Opens/comments/closes corresponding GitHub issues with exact title matching
-reconcile_issue_trail(GhIssueApi(repo="wangzitian0/infra2"), trail, mode="live")
+reconcile_issue_trail(
+    GitHubIssues(repo="wangzitian0/infra2", token="ghs_example"),
+    trail,
+    mode="live",
+)
 ```
 
 ## Observability Invariants

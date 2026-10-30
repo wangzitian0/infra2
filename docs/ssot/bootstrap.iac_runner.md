@@ -367,7 +367,7 @@ DEPLOY_ENV=production invoke vault.setup-approle --project=bootstrap --service=i
 - Vault Agent sidecar 以 AppRole 登录并原生续期，拉取 `bootstrap/{env}/iac_runner` 密钥。
 - Sync subprocesses get `VAULT_TOKEN` from an in-container
   `auth/approle/login` (`resolve_vault_token`) — a short-TTL bounded token so the
-  deploy-time secret supply (`common/secrets_supply.py`) can read and fill
+  deploy-time secret supply (`common/security/supply.py`) can read and fill
   `{project}/{env}/*` runtime secret fields before deployment. The token must not
   grant `delete`, and it must not mutate bootstrap root credentials. The same value is
   still passed as `VAULT_ROOT_TOKEN` for one release so tasks pinned to the old name
