@@ -29,7 +29,8 @@ If owner has not provided explicit prod disposition, format the 3-stage report (
 [PROD GATEKEEPER]
 - Stage 1 merge: release tag vX.Y.Z = commit <sha>
 - Stage 2 staging: run <url>, soak <duration>, health <result>
-- Stage 3 production: image <digest>, watchdog <state>
+- Stage 2/3 served releases: paste the rows of `uv run python -m tools.harness status --fetch --online` (staging, production, marker lag)
+- Stage 3 production: platform container digest <digest>, watchdog <state>
 Authorize production deployment of vX.Y.Z? Reply "deploy vX.Y.Z" or "hold".
 ```
 
@@ -42,6 +43,13 @@ gh run watch <run-id> --exit-status  # run in the background; the host wakes you
 
 ### Phase 4: Touch Reality Physical Probes (Read-Only via Existing Tools)
 Never declare success based only on GitHub green! Verify the physical system using existing tools:
+
+#### 0. Served Releases (Staging and Production)
+Read the release that each App serves and the infra2 release markers. The command is read-only:
+```bash
+uv run python -m tools.harness status --fetch --online
+```
+The `staging` and `production` columns are the evidence for the released version. Do not type an App release or an image digest by hand. `unreachable` and `unknown` are not evidence. Find the cause before you continue.
 
 #### 1. Availability Ledger & Watchdog Outages Verification
 Verify VPS availability ledger and Cloudflare Watchdog blackbox outages (dry-run mode without Lark side-effects):
