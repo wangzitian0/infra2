@@ -137,6 +137,80 @@ def test_fetch_recent_runs_filters_ops_checks_to_watchdog_jobs_and_paginates(
     assert requested_job_runs == ["1", "2", "3"]
 
 
+def test_fetch_recent_runs_skips_non_watchdog_schedule_slots_without_fetching_jobs(
+    monkeypatch,
+) -> None:
+    """Digest skips non-watchdog cron slots before fetching /jobs."""
+    digest = _load_module()
+    now = datetime(2026, 6, 9, 0, 0, tzinfo=UTC)
+    workflow_runs = [
+        {
+            "id": 101,
+            "event": "schedule",
+            "created_at": "2026-06-08T02:25:17Z",
+            "conclusion": "success",
+        },
+        {
+            "id": 102,
+            "event": "schedule",
+            "created_at": "2026-06-08T02:40:33Z",
+            "conclusion": "success",
+        },
+        {
+            "id": 103,
+            "event": "schedule",
+            "created_at": "2026-06-08T03:51:24Z",
+            "conclusion": "success",
+        },
+        {
+            "id": 104,
+            "event": "workflow_dispatch",
+            "created_at": "2026-06-08T14:10:00Z",
+            "conclusion": "success",
+        },
+    ]
+    jobs_by_run = {
+        "101": [{"name": digest.WATCHDOG_JOB_NAME, "conclusion": "success"}],
+        "104": [{"name": digest.WATCHDOG_JOB_NAME, "conclusion": "success"}],
+    }
+    requested_job_runs: list[str] = []
+
+    class _Response:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> bool:
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps(self._payload).encode("utf-8")
+
+    def fake_urlopen(request, timeout):  # noqa: ANN001, ARG001
+        parsed = urlparse(request.full_url)
+        if parsed.path.endswith("/actions/workflows/ops-checks.yml/runs"):
+            return _Response({"workflow_runs": workflow_runs})
+        if "/actions/runs/" in parsed.path and parsed.path.endswith("/jobs"):
+            run_id = parsed.path.split("/actions/runs/", 1)[1].split("/", 1)[0]
+            requested_job_runs.append(run_id)
+            return _Response({"jobs": jobs_by_run[run_id]})
+        raise AssertionError(f"Unexpected URL: {request.full_url}")
+
+    monkeypatch.setattr(digest, "urlopen", fake_urlopen)
+
+    runs = digest.fetch_recent_runs(
+        "wangzitian0/infra2",
+        "token",
+        per_page=100,
+        now=now,
+    )
+
+    assert [run["id"] for run in runs] == [101, 104]
+    assert requested_job_runs == ["101", "104"]
+
+
 def test_fetch_stale_open_issues_filters_prs_and_recent_and_paginates(
     monkeypatch,
 ) -> None:

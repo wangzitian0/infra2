@@ -568,6 +568,7 @@ def run_backup_checks(
             for name in names
         ]
     try:
+        import inspect
         from common.backup.verification import (
             FUTURE_TOLERANCE_HOURS,
             INVENTORY_DEFAULTS,
@@ -577,7 +578,17 @@ def run_backup_checks(
         )
         from common.backup.rehearsal import ALL_SERVICES, PASS_SUMMARY_PREFIX
 
-        inventory = load_backup_inventory()
+        supports_env = (
+            "environment" in inspect.signature(load_backup_inventory).parameters
+        )
+        inventories = {
+            env: (
+                load_backup_inventory(environment=env)
+                if supports_env
+                else load_backup_inventory()
+            )
+            for _, env in BACKUP_CHECKS
+        }
     except Exception as exc:  # noqa: BLE001 - a broken verifier is red, never a pass.
         detail = (
             f"backup verifier unavailable: {type(exc).__name__}: {_one_line(str(exc))}"
@@ -609,7 +620,7 @@ def run_backup_checks(
                     environment,
                     path,
                     run(f"cat {shlex.quote(path)}"),
-                    inventory=inventory,
+                    inventory=inventories[environment],
                     verify=verify_backup_manifest,
                     now_ts=now_ts,
                 )

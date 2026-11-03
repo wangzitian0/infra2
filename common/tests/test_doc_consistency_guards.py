@@ -342,3 +342,16 @@ def test_python_import_and_dotted_repo_ref_guards_reject_invalid_symbols() -> No
         _resolve_dotted_repo_ref("common.deploy.deployer._assert_approle_creds_present")
         is not None
     )
+
+
+def test_observability_ssot_matches_alert_rules_files_and_digest_entrypoints() -> None:
+    """Verify ops.observability.md lists every ALERT_RULES_FILES path and current digest entrypoints."""
+    from common.observability_dashboards import ALERT_RULES_FILES
+
+    obs_doc = (ROOT / "docs/ssot/ops.observability.md").read_text(encoding="utf-8")
+    for rule_file in ALERT_RULES_FILES:
+        rel_path = str(rule_file.relative_to(ROOT))
+        assert rel_path in obs_doc, f"missing {rel_path} in ops.observability.md"
+    assert "tools/watchdog_weekly_digest.py" in obs_doc
+    assert "stability_report.py --daily" in obs_doc
+    assert "尚未转换:tools/deploy_v2_canary.py" not in obs_doc

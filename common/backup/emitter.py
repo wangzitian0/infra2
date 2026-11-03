@@ -92,7 +92,7 @@ def emit_backup_targets(
 ) -> list[HostBackupTarget]:
     """Emit sorted host backup targets from the backup inventory."""
     if entries is None:
-        entries = load_backup_inventory()
+        entries = load_backup_inventory(environment=environment)
 
     if suffix is None:
         suffix = "-staging" if environment == "staging" else ""

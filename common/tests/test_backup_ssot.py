@@ -97,3 +97,17 @@ def test_runner_lines_format() -> None:
         assert "/" in service_id
         assert kind in ("pg", "redis", "path")
         assert primary
+
+
+def test_staging_inventory_and_emitter_exclude_prod_only_services() -> None:
+    """Staging backup inventory and emitter exclude prod_only services."""
+    prod_only = {"platform/clickhouse", "platform/openpanel", "platform/signoz"}
+    staging_entries = load_backup_inventory(environment="staging")
+    staging_entry_ids = {entry.service_id for entry in staging_entries}
+    staging_target_ids = {
+        target.service_id for target in emit_backup_targets(environment="staging")
+    }
+
+    assert len(staging_entries) == 14
+    assert prod_only.isdisjoint(staging_entry_ids)
+    assert staging_target_ids == staging_entry_ids

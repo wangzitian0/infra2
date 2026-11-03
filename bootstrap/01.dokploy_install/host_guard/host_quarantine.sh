@@ -55,6 +55,7 @@ TARGET_LITTER=(
   "data/finance|retired_wealthfolio_data_dir"
   "data/staging|legacy_staging_data_dir"
   "usr/local/sbin/tianclaw-vps-disk-maintenance.sh|retired_tianclaw_maintenance_script"
+  "usr/local/sbin/dokploy-deploy-queue-watchdog.sh|retired_deploy_queue_host_cron_script"
   "usr/local/sbin/infra2-host-backup.sh.before-a6f29e5|legacy_backup_script_copy"
   "data/truealpha/ingest|legacy_host_ingest_venv"
   "data/truealpha/issue68|legacy_issue68_venv"
@@ -187,7 +188,7 @@ if [[ "${MODE}" == "--check" ]]; then
       if [[ "${line}" =~ ^[[:space:]]*# ]]; then
         continue
       fi
-      if [[ "${line}" == *"/root/backups/truealpha-prod-backup.sh"* || "${line}" == *"tianclaw-vps-disk-maintenance.sh"* ]]; then
+      if [[ "${line}" == *"/root/backups/truealpha-prod-backup.sh"* || "${line}" == *"tianclaw-vps-disk-maintenance.sh"* || "${line}" == *"dokploy-deploy-queue-watchdog.sh"* ]]; then
         echo "STALE_CRON ${line}"
       fi
     done <<< "${cron_content}"
@@ -227,7 +228,7 @@ if [[ "${MODE}" == "--stage" ]]; then
   if [[ -n "${cron_content}" ]]; then
     new_cron_file="$(mktemp)"
     while IFS= read -r line || [[ -n "${line}" ]]; do
-      if [[ ! "${line}" =~ ^[[:space:]]*# ]] && [[ "${line}" == *"/root/backups/truealpha-prod-backup.sh"* || "${line}" == *"tianclaw-vps-disk-maintenance.sh"* ]]; then
+      if [[ ! "${line}" =~ ^[[:space:]]*# ]] && [[ "${line}" == *"/root/backups/truealpha-prod-backup.sh"* || "${line}" == *"tianclaw-vps-disk-maintenance.sh"* || "${line}" == *"dokploy-deploy-queue-watchdog.sh"* ]]; then
         printf '# [quarantined %s batch=%s purge_after=%s] %s\n' "${quarantined_at}" "${INFRA2_QUARANTINE_BATCH_ID}" "${purge_after}" "${line}" >> "${new_cron_file}"
         cron_updated=1
       else

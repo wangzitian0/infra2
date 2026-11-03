@@ -45,7 +45,7 @@ SSH_NOISE = (
 
 def _manifest(environment: str, *, drop=(), stale=(), created_at=None) -> dict:
     artifacts = []
-    for entry in load_backup_inventory():
+    for entry in load_backup_inventory(environment=environment):
         if entry.service_id in drop:
             continue
         age_hours = entry.rpo_hours + 1 if entry.service_id in stale else 24
@@ -148,7 +148,9 @@ def test_a_healthy_host_is_green_for_every_backup_signal(host) -> None:
     assert set(results) == BACKUP_SIGNALS
     assert all(result.ok for result in results.values()), results
     total = len(load_backup_inventory())
+    staging_total = len(load_backup_inventory(environment="staging"))
     assert f"{total}/{total} artifacts" in results[PRODUCTION].detail
+    assert f"{staging_total}/{staging_total} artifacts" in results[STAGING].detail
     assert results[REHEARSAL].detail == f"{PASS_LINE} (22.0h ago)"
 
 

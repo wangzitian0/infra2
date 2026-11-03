@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 import time
@@ -26,7 +27,11 @@ def main() -> int:
     args = parser.parse_args()
 
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
-    entries = load_backup_inventory()
+    env = str(manifest.get("environment") or "production")
+    if "environment" in inspect.signature(load_backup_inventory).parameters:
+        entries = load_backup_inventory(environment=env)
+    else:
+        entries = load_backup_inventory()
     report = verify_backup_manifest(
         entries,
         manifest,
