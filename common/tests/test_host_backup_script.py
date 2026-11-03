@@ -180,7 +180,15 @@ def test_existing_latest_manifest_permissions_are_tightened(host) -> None:
 
 def test_staging_run_covers_all_declared_services(host) -> None:
     data_root = Path(host["env"]["BACKUP_DATA_ROOT"])
-    for entry in load_backup_inventory():
+    staging_inventory = load_backup_inventory(environment="staging")
+    staging_services = {entry.service_id for entry in staging_inventory}
+    assert len(staging_services) == 14
+    assert {
+        "platform/clickhouse",
+        "platform/openpanel",
+        "platform/signoz",
+    }.isdisjoint(staging_services)
+    for entry in staging_inventory:
         if entry.service_id.startswith("bootstrap/"):
             continue
         source = data_root / entry.data_path.removeprefix("/data/")
@@ -193,7 +201,7 @@ def test_staging_run_covers_all_declared_services(host) -> None:
     assert proc.returncode == 0, proc.stderr
     assert manifest["environment"] == "staging"
     assert (host["out"] / "staging-manifest.json").exists()
-    assert _ids(manifest) == ALL_SERVICES
+    assert _ids(manifest) == staging_services
 
 
 def test_unknown_environment_suffix_fails_before_archiving(host) -> None:

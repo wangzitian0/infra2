@@ -55,6 +55,7 @@ def _seed_host_litter(tmp_path: Path) -> dict[str, bytes]:
         "data/finance/wealthfolio.db": b"sqlite-wealthfolio-bytes",
         "tmp/pgtest.hehE.sh": b"#!/bin/sh\necho debug\n",
         "usr/local/sbin/tianclaw-vps-disk-maintenance.sh": b"#!/bin/sh\nrm -rf /tmp/old\n",
+        "usr/local/sbin/dokploy-deploy-queue-watchdog.sh": b"#!/bin/sh\necho queue\n",
     }
     for rel, payload in files.items():
         full = tmp_path / rel
@@ -83,6 +84,7 @@ def test_check_detects_litter_cron_and_f3cnn_without_mutation(tmp_path: Path) ->
         "0 3 * * * /usr/local/sbin/infra2-host-backup.sh\n"
         "30 2 * * * /root/backups/truealpha-prod-backup.sh\n"
         "15 4 * * * /usr/local/sbin/tianclaw-vps-disk-maintenance.sh\n"
+        "*/5 * * * * /usr/local/sbin/dokploy-deploy-queue-watchdog.sh\n"
         "# 0 1 * * * /root/backups/truealpha-prod-backup.sh --already-commented\n"
     )
     cron_file.write_text(cron_Text, encoding="utf-8")
@@ -97,12 +99,19 @@ def test_check_detects_litter_cron_and_f3cnn_without_mutation(tmp_path: Path) ->
     assert "FOUND 15 /zookeeper (unexpanded_data_path_mount)" in out
     assert "FOUND 24 /data/finance (retired_wealthfolio_data_dir)" in out
     assert (
+        "FOUND 21 /usr/local/sbin/dokploy-deploy-queue-watchdog.sh (retired_deploy_queue_host_cron_script)"
+        in out
+    )
+    assert (
         "PERMISSION_DRIFT /tmp/F3CNN (files wider than 0600; live OpenD lock dir, do not move)"
         in out
     )
     assert "STALE_CRON 30 2 * * * /root/backups/truealpha-prod-backup.sh" in out
     assert (
         "STALE_CRON 15 4 * * * /usr/local/sbin/tianclaw-vps-disk-maintenance.sh" in out
+    )
+    assert (
+        "STALE_CRON */5 * * * * /usr/local/sbin/dokploy-deploy-queue-watchdog.sh" in out
     )
     assert "infra2-host-backup.sh" not in out
     assert "--already-commented" not in out
@@ -125,7 +134,8 @@ def test_stage_moves_litter_records_manifest_updates_cron_and_tightens_f3cnn(
         "0 3 * * * /usr/local/sbin/infra2-host-backup.sh\n"
         "30 2 * * * /root/backups/truealpha-prod-backup.sh\n"
         "0 5 * * 0 /usr/local/bin/run_restore_rehearsal.py\n"
-        "15 4 * * * /usr/local/sbin/tianclaw-vps-disk-maintenance.sh\n",
+        "15 4 * * * /usr/local/sbin/tianclaw-vps-disk-maintenance.sh\n"
+        "*/5 * * * * /usr/local/sbin/dokploy-deploy-queue-watchdog.sh\n",
         encoding="utf-8",
     )
 
@@ -157,12 +167,13 @@ def test_stage_moves_litter_records_manifest_updates_cron_and_tightens_f3cnn(
         for line in manifest_path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert len(records) == 9
+    assert len(records) == 10
     by_orig = {r["original_path"]: r for r in records}
     assert "/root/ + .Destination)" in by_orig
     assert "/root/ .Destination}}{{end}}" in by_orig
     assert "/zookeeper" in by_orig
     assert "/data/finance" in by_orig
+    assert "/usr/local/sbin/dokploy-deploy-queue-watchdog.sh" in by_orig
 
     escape_rec = by_orig["/root/ + .Destination)"]
     assert escape_rec["batch_id"] == batch_id
@@ -186,6 +197,12 @@ def test_stage_moves_litter_records_manifest_updates_cron_and_tightens_f3cnn(
     assert len(commented_truealpha) == 1
     assert commented_truealpha[0].startswith("# [quarantined ")
     assert f"batch={batch_id}" in commented_truealpha[0]
+    commented_dokploy = [
+        line for line in updated_cron if "dokploy-deploy-queue-watchdog.sh" in line
+    ]
+    assert len(commented_dokploy) == 1
+    assert commented_dokploy[0].startswith("# [quarantined ")
+    assert f"batch={batch_id}" in commented_dokploy[0]
 
     # /tmp/F3CNN remains in place with tightened permissions (dir 0700, file 0600)
     f3cnn_dir = tmp_path / "tmp/F3CNN"
@@ -203,7 +220,7 @@ def test_stage_moves_litter_records_manifest_updates_cron_and_tightens_f3cnn(
     # --list prints manifest records
     list_res = _run_quarantine(tmp_path, "--list")
     assert list_res.returncode == 0
-    assert len(list_res.stdout.strip().splitlines()) == 9
+    assert len(list_res.stdout.strip().splitlines()) == 10
 
     # Idempotent re-run of --stage leaves no empty second batch directory
     second_batch = "20261027T070000Z"

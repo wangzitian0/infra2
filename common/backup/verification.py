@@ -61,7 +61,11 @@ def latest_manifest_path(environment: str) -> str:
     return f"{HOST_BACKUP_DIR}/{environment}-manifest.json"
 
 
-def load_backup_inventory(path: Path | str | None = None) -> list[BackupEntry]:
+def load_backup_inventory(
+    path: Path | str | None = None,
+    *,
+    environment: str | None = None,
+) -> list[BackupEntry]:
     """The backup inventory, DERIVED from each service's BackupFacet declarations.
 
     Formerly read from the handwritten ``ops.backup-inventory.yaml`` (deleted,
@@ -89,6 +93,8 @@ def load_backup_inventory(path: Path | str | None = None) -> list[BackupEntry]:
     seen: dict[str, str] = {}
     for owner_id in sorted(attrs):
         meta = attrs[owner_id]
+        if environment is not None and environment != "production" and meta.prod_only:
+            continue
         for facet in meta.backups:
             service_id = facet.service_id or owner_id
             data_path = facet.data_path or (meta.data_path or "")

@@ -102,8 +102,9 @@ def fetch_recent_runs(
             if created < cutoff:
                 reached_cutoff = True
                 continue
-            event_name = str(run.get("event") or "").strip().lower()
-            if event_name in _SKIPPED_RUN_EVENTS:
+            if not _is_candidate_watchdog_run(
+                run, created, workflow_file, watchdog_job_name
+            ):
                 continue
             run_id = run.get("id") or run.get("databaseId")
             if not run_id:
@@ -214,6 +215,27 @@ def _run_created_at(run: Mapping[str, Any]) -> datetime | None:
         return _parse_iso8601(created_at)
     except ValueError:
         return None
+
+
+def _is_candidate_watchdog_run(
+    run: Mapping[str, Any],
+    created: datetime,
+    workflow_file: str,
+    watchdog_job_name: str,
+) -> bool:
+    """Return whether a workflow run is a candidate for the watchdog job."""
+    event_name = str(run.get("event") or "").strip().lower()
+    if event_name in _SKIPPED_RUN_EVENTS:
+        return False
+    if (
+        workflow_file == WORKFLOW_FILE
+        and watchdog_job_name == WATCHDOG_JOB_NAME
+        and event_name == "schedule"
+    ):
+        return (created.hour == 2 and 17 <= created.minute < 37) or (
+            created.hour == 0 and created.minute == 0 and created.second == 0
+        )
+    return True
 
 
 def fetch_run_log(

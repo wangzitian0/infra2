@@ -18,12 +18,12 @@
 |------|----------------|------|
 | **采集 - 存储** | [platform/03.clickhouse](../../platform/03.clickhouse/) | ClickHouse + ZooKeeper |
 | **采集 - 应用** | [platform/11.signoz](../../platform/11.signoz/) | Query Service + Frontend + OTLP Collector |
-| **告警 - 规则** | **SigNoz Alert Manager** + `finance_report/finance_report/observability/alert_rules.json`(config-as-code) | 告警规则 |
+| **告警 - 规则** | **SigNoz Alert Manager** + `finance_report/finance_report/observability/alert_rules.json`、`truealpha/truealpha/observability/alert_rules.json`、`platform/12.alerting/alert_rules.json`(config-as-code,`common/observability_dashboards.py::ALERT_RULES_FILES`) | 告警规则 |
 | **告警 - 通知** | [platform/12.alerting](../../platform/12.alerting/) | SigNoz webhook → Feishu custom bot / app bot bridge(飞书交互卡片,格式见 §3.1);in-band probe runner |
 | **告警 - 密钥源头** | 1Password `platform/{env}/alerting` → 运行时镜像 Vault `secret/platform/{env}/alerting` | Feishu 凭据 + 可选 bridge basic auth |
 | **带外 watchdog** | [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/)(轻量带外,边缘 30min)+ [`.github/workflows/ops-checks.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/ops-checks.yml)(日级带外审计) | 只判 VPS 自己报告不了的:整机/整栈失联、告警链路自身失效;分工见 §1.1 |
 | **信号清单** | [`watchdog-signals.yaml`](watchdog-signals.yaml) | 按信号(非组件)追踪 watchdog 归属 |
-| **报告 - 账本** | VPS probe runner 账本文件(21 天,`common/observability/local_ledger.py`)+ Worker 心跳失联边沿(`/outages`)·`common/observability/ledger.py`(聚合)·`tools/stability_report.py`(周报) | 正向证明,见 §6 |
+| **报告 - 账本** | VPS probe runner 账本文件(21 天,`common/observability/local_ledger.py`)+ Worker 心跳失联边沿(`/outages`)·`common/observability/ledger.py`(聚合)·`tools/stability_report.py --daily`(日报,GitHub `ops-checks.yml` `watchdog` job) + `tools/watchdog_weekly_digest.py`(周报 7d / 月报 30d,`ops-checks.yml` `digest` job,内聚 `common/observability/digest.py::collect_weekly_stability_section`) | 正向证明,见 §6 |
 | **部署指南** | [Infra-007](../project/archive/Infra-007.signoz_install.md) | SigNoz 安装 |
 
 In-band 告警路径恒为:`component/app → OTLP Collector → SigNoz → platform/12.alerting → Feishu/Lark`。
@@ -124,8 +124,8 @@ probe runner 一次推送覆盖一组内所有失败探针,整条推送的 sever
 
 ### 3.1 推送格式(#905)
 
-**已转换的三个面**——bridge 发的**飞书交互卡片**(`common/alerting/card.py::build_feishu_alert_card`)、Cloudflare Worker 与 GitHub
-日级 watchdog 发的**文本**——用同一套字段、同一顺序、中文标签。尚未转换:`tools/deploy_v2_canary.py` 的失败推送(#905 跟进项)。
+**统一转换的四个面**——bridge 发的**飞书交互卡片**(`common/alerting/card.py::build_feishu_alert_card`)、Cloudflare Worker 文本、GitHub
+日级 watchdog 文本、以及 `tools/deploy_v2_canary.py` 失败告警(#1392)——全部使用同一套 `PAGER_FIELDS` 字段、同一顺序、中文标签。
 
 | # | 字段 | 内容 |
 |---|------|------|
@@ -272,9 +272,9 @@ collector 4317/4318 在 Docker 网络内 `expose`，另将 4318 仅绑定宿主�
     缺失、URL 非法)**永远**留在这里,不论历史——它没测到目标;从未成功过、仍在 15min 宽限期内的失败也暂留这里,描述写明
     "自 probe runner 启动以来从未通过 … 后转为 InfraServiceProbeFailed",而不是"探针坏了"。
 
-### 4.6 finance_report 告警/仪表盘 config-as-code(#373)
+### 4.6 告警/仪表盘 config-as-code(#373 / #1389)
 
-定义签入 `finance_report/finance_report/observability/`(`alert_rules.json` 含 `FinanceReportBackendErrorLogs` + RED/business/遥测缺失规则;`dashboard.json`;`shared_tasks.py`),**不在 UI 手点**;声明式 apply 见 SOP-004B/C 与 [ops.pipeline.md](./ops.pipeline.md)(apply 折进 tag reconcile 的目标态)。
+定义签入 `finance_report/finance_report/observability/alert_rules.json`(含 `FinanceReportBackendErrorLogs` + RED/business/遥测缺失规则；同目录含 `dashboard.json` 与 `shared_tasks.py`)、`truealpha/truealpha/observability/alert_rules.json`、`platform/12.alerting/alert_rules.json`(`common/observability_dashboards.py::ALERT_RULES_FILES`，#1389)，**不在 UI 手点**;声明式 apply 见 SOP-004B/C 与 [ops.pipeline.md](./ops.pipeline.md)(apply 折进 tag reconcile 的目标态)。
 
 **规则能否触发由下列 SigNoz 行为决定(#906 按 v0.105.1 源码核实;违反任一条,规则照样被 API 接受、状态显示 inactive,但永远不会触发)**:
 
@@ -316,8 +316,8 @@ collector 4317/4318 在 Docker 网络内 `expose`，另将 4318 仅绑定宿主�
 | L3 Finance Report | fr-app backend | RED SLO: ≥5 5xx and >5% of non-probe requests in 5m / non-probe p95 > 3000ms for 10m | P0/P1 | code (`FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`) |
 | L3 Finance Report | fr-app backend | business anomaly: parse spike / rate-limit / async failure | P1/P2/P1 | code (`FinanceReport{StatementParseFailureSpike,RateLimitSaturation,AsyncTaskFailures}`) |
 | L3 Finance Report | fr-app backend | no request metrics from production for 10m (backend down or OTLP export stopped) | P1 | code (`FinanceReportBackendTelemetryAbsent`) |
-| L3 TrueAlpha | truealpha-app llm | 端点与身份已签发(#906);遥测缺失 / 错误率 / 延迟规则待数据流通后补(依赖 truealpha#1034 的应用侧接入) | P1 | Planned(规则);签发 ✅ `test_truealpha_app.py` |
-| L3 TrueAlpha | data_engine(Dagster) | 无遥测:host 网络够不到 collector(§4.2),存活仍由容器 healthcheck + breakdown watch | — | Not issued(有意) |
+| L3 TrueAlpha | truealpha-app llm | 端点与身份已签发(#906);`truealpha/truealpha/observability/alert_rules.json` 签入错误日志、RED SLO 与遥测缺失规则(#1389);`platform/12.alerting/alert_rules.json` 同步签入平台层错误日志规则(`PlatformAlertingErrorLogs`, `PlatformTodoErrorLogs`) | P0/P1 | code (`TrueAlphaAppErrorLogs`, `TrueAlphaHigh5xxRate`, `TrueAlphaP95LatencyHigh`, `TrueAlphaAppTelemetryAbsent`);签发 ✅ `test_truealpha_app.py` |
+| L3 TrueAlpha | data_engine(Dagster) | host 网络容器经 `http://127.0.0.1:14318` 上报 OTLP(#1231, §4.2);错误日志规则签入 `truealpha/truealpha/observability/alert_rules.json`(#1389),存活同时由容器 healthcheck + breakdown watch 守卫 | P1 | code (`TrueAlphaDataEngineErrorLogs`) |
 | L3 Finance Report | fr-app public route | `report[-staging].zitian.party/` (web) or `/api/health` fails | P0 prod / P2 staging | Live in-band public-route probes (`finance-report-{web,api}-public-route`);prod web 另由 Cloudflare 作为产品外部入口(2 次连续失败)|
 | Cross-cutting | Vault app tokens / rendered env | missing / malformed / invalid / low-TTL / `<no value>` | P0/P1 | Docker healthcheck + `vault-audit.self-refresh` |
 | Cross-cutting | Backup freshness | latest off-host backup missing/stale/empty/no-checksum | P1 | backup manifest verifier |
@@ -370,7 +370,7 @@ collector 4317/4318 在 Docker 网络内 `expose`，另将 4318 仅绑定宿主�
 - **合算**只在 `common/observability/ledger.py`(纯函数,CLI 与测试共用):`apply_unavailability` 取空槽与失联区间的**并集**(重叠只计一次),
   按天、按探测周期(60 s)折算为该环境**每个**信号的失败次数——没有这一步,一台自己宕机的 VPS 会把幸存的日子报成 100%。读不懂的
   outage 记录计数并写进报告,不静默丢弃。
-- **周报**:`tools/stability_report.py`(GitHub `ops-checks.yml` digest job,周一)经 SSH 读两个环境的账本文件(同
+- **日报与周报/月报(#1385 / #1392)**:`tools/stability_report.py --daily` 在 GitHub `ops-checks.yml` 的 `watchdog` job 每日运行;7d 周报与 30d 月报(每月 1 日 `--monthly`)在 `ops-checks.yml` 的 `digest` job 由 `tools/watchdog_weekly_digest.py`(内聚 `common/observability/digest.py::collect_weekly_stability_section`)统一执行,经 SSH 读两个环境的账本文件(同
   `out_of_band_watchdog.py` 读备份 manifest 的方式),再取 Worker `/outages` → Lark。**production** 账本缺失、为空、超过 6 h 未更新或
   `/outages` 读不到,一律让任务失败并由该 job 的失败告警发出——不出报告好过出一份虚高的报告;**staging** 单独一行,缺失或过期只在报告里
   写明,不阻塞 production 报告。
@@ -407,8 +407,8 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 开放平台启用机器人 + 发布 `im:message` 权限 + 拿 `chat_id`,写 1Password root vars(`ALERT_DELIVERY_MODE=feishu_app`、`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_CHAT_ID`)→ setup-approle → deploy_v2 → `alerting.test-feishu`。
 可选 `FEISHU_REPORT_CHAT_ID`(#903,仅 app 模式):带 `delivery=report` 标签的推送(见 SOP-006)改投这个报告群;未设置时仍投告警群,不丢消息。报告卡片无论投到哪都以 `[报告]` 开头(§3.1)。bridge `/health` 的 `report_route` 显示当前走 `report-chat` 还是 `pager-fallback`。
 
-### SOP-004 / SOP-004B / SOP-004C: 应用 OTEL 错误告警 + finance_report 告警目录 config-as-code(#373 / #1106)
-1. bridge 健康 + SigNoz API key + Feishu channel(SOP-002/004 步骤)。
+### SOP-004 / SOP-004B / SOP-004C: 应用 OTEL 错误告警 + 全栈告警目录 config-as-code(#373 / #1106 / #1389)
+1. bridge 健康 + SigNoz API key + Feishu channel(SOP-002/004 步骤)。config-as-code 告警规则目录跨 `finance_report/finance_report/observability/alert_rules.json`、`truealpha/truealpha/observability/alert_rules.json` 与 `platform/12.alerting/alert_rules.json`(`common/observability_dashboards.py::ALERT_RULES_FILES`,#1389)统一加载与校验。
 2. 应用定义(幂等):
    ```bash
    uv run python -m invoke fr-observability.shared.apply-alerts
@@ -504,9 +504,9 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 Feishu page，且告警携带同一结构化记录。不得通过破坏 production 数据或恢复周期性
 `alert-delivery-canary` 来制造失败；Feishu 正向投递仍由日报送达自证。
 
-### SOP-008: 可用率账本 + 周报
+### SOP-008: 可用率账本 + 日报/周报/月报
 - 账本:部署 platform/alerting 后,宿主机 `/var/lib/infra2-availability-ledger${ENV_SUFFIX}/availability-ledger.json` 应每分钟更新(`updated_at`);Worker `GET /outages`(status token)列出 production 失联边沿。
-- 周报:`ops-checks.yml` digest job(周一 UTC)跑 `stability_report.py`,经 SSH 读两环境账本 + 取 `/outages` → Lark;本地
+- 日报与周报/月报:`ops-checks.yml` 的 `watchdog` job 每日运行 `tools/stability_report.py --daily`,经 SSH 读两环境账本 + 取 `/outages` → Lark;7d 周报与 30d 月报(每月 1 日 `--monthly`)在 `ops-checks.yml` 的 `digest` job 由 `tools/watchdog_weekly_digest.py` 汇总(#1385, #1392);本地
   `INFRA2_STABILITY_REPORT_DRY_RUN=1 python tools/stability_report.py --ledger production=prod.json --ledger staging=staging.json --outages outages.json`。
 
 ---
