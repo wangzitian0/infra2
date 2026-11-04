@@ -52,7 +52,7 @@ from typing import Any
 from infra2_sdk.deploy import canonical_json_bytes
 
 SCHEMA = 2
-RETENTION_DAYS = 21
+RETENTION_DAYS = 35
 LEDGER_FILE_ENV = "INFRA_PROBE_LEDGER_FILE"
 LEDGER_FILE_NAME = "availability-ledger.json"
 # Host directory the probe runner's ledger is bind-mounted from

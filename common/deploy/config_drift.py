@@ -443,6 +443,92 @@ def _deployed_identities() -> dict[str, DeployedIdentity]:
     return out
 
 
+def scan_iac_runner(
+    tag: str,
+    *,
+    health_url: str | None = None,
+    fetcher=None,
+) -> Row:
+    """Compare L1 iac-runner running GIT_SHA against latest commit touching bootstrap/06.iac_runner at tag."""
+    url = (health_url or os.environ.get("IAC_RUNNER_HEALTH_URL", "")).strip()
+    expected_commit = (
+        subprocess.run(
+            ["git", "rev-list", "-1", tag, "--", "bootstrap/06.iac_runner"],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        .stdout.strip()
+        .lower()
+    ) or _commit_at_ref(tag)
+    if not url:
+        return Row(
+            "bootstrap/iac_runner",
+            "env_unavailable",
+            expected=expected_commit[:12],
+            expected_ref=expected_commit,
+            note="IAC_RUNNER_HEALTH_URL not set",
+        )
+    try:
+        if fetcher is not None:
+            payload = fetcher(url)
+        else:
+            import urllib.request
+
+            with urllib.request.urlopen(url, timeout=8.0) as resp:
+                payload = json.loads(resp.read().decode("utf-8", "replace"))
+        running_sha = (
+            str(
+                (payload or {}).get("git_sha")
+                or ((payload or {}).get("checks") or {}).get("git_sha")
+                or (payload or {}).get("version")
+                or ""
+            )
+            .strip()
+            .lower()
+        )
+    except Exception as exc:  # noqa: BLE001
+        return Row(
+            "bootstrap/iac_runner",
+            "error",
+            expected=expected_commit[:12],
+            expected_ref=expected_commit,
+            note=f"iac-runner health fetch failed: {exc}",
+        )
+    if not running_sha or running_sha == "unknown":
+        return Row(
+            "bootstrap/iac_runner",
+            "legacy_identity",
+            expected=expected_commit[:12],
+            deployed=running_sha or None,
+            expected_ref=expected_commit,
+            note="iac-runner health missing git_sha",
+        )
+    anc = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", expected_commit, running_sha],
+        cwd=ROOT,
+        capture_output=True,
+    )
+    if anc.returncode == 0 or running_sha.startswith(expected_commit[:12]):
+        return Row(
+            "bootstrap/iac_runner",
+            "in_sync",
+            expected=expected_commit[:12],
+            deployed=running_sha[:12],
+            expected_ref=expected_commit,
+            deployed_ref=running_sha,
+        )
+    return Row(
+        "bootstrap/iac_runner",
+        "DRIFT",
+        expected=expected_commit[:12],
+        deployed=running_sha[:12],
+        note="L1 iac-runner container behind bootstrap/06.iac_runner at release",
+        expected_ref=expected_commit,
+        deployed_ref=running_sha,
+    )
+
+
 def scan(tag: str) -> list[Row]:
     c = Context()
     _set_env("production")
@@ -635,6 +721,8 @@ def scan(tag: str) -> list[Row]:
         reason = release.fallbacks.get(row.service)
         if reason:
             row.note = f"{row.note}; {reason}" if row.note else reason
+    if os.environ.get("IAC_RUNNER_HEALTH_URL"):
+        rows.append(scan_iac_runner(tag))
     return rows
 
 

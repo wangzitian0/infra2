@@ -384,6 +384,33 @@ def summarize_weekly_runs(
     }
 
 
+def summarize_ops_checks_jobs(
+    runs: Sequence[Mapping[str, Any]],
+    *,
+    now: datetime | None = None,
+    window_days: int = DIGEST_WINDOW_DAYS,
+) -> dict[str, dict[str, int]]:
+    """Summarize ops-checks runs by job or workflow name over ``window_days``."""
+    recent = recent_weekly_runs(list(runs), now=now, window_days=window_days)
+    by_job: dict[str, dict[str, int]] = {}
+    for run in recent:
+        job_name = str(run.get("job_name") or run.get("name") or "ops-checks").strip()
+        if not job_name:
+            continue
+        counts = by_job.setdefault(
+            job_name, {"total": 0, "success": 0, "failure": 0, "other": 0}
+        )
+        counts["total"] += 1
+        conclusion = str(run.get("conclusion") or "").lower()
+        if conclusion == "success":
+            counts["success"] += 1
+        elif conclusion in {"failure", "timed_out"}:
+            counts["failure"] += 1
+        else:
+            counts["other"] += 1
+    return dict(sorted(by_job.items()))
+
+
 def summarize_watchdog_log_events(logs_by_run: Mapping[str, str]) -> dict[str, Any]:
     """Review structured watchdog logs for alert recall evidence."""
     failure_domains: Counter[str] = Counter()
@@ -837,6 +864,17 @@ def build_digest_message(
                 f"- {app_entry.get('app')}: prod={prod.get('version')} ({prod.get('status')}) | "
                 f"staging={stg.get('version')} ({stg.get('status')}) [{app_entry.get('parity')}]"
             )
+    ops_jobs = summary.get("ops_checks_jobs")
+    if isinstance(ops_jobs, Mapping) and ops_jobs:
+        lines.append("")
+        lines.append("Ops-checks scheduled jobs:")
+        for job_name, counts in sorted(ops_jobs.items()):
+            if not isinstance(counts, Mapping):
+                continue
+            lines.append(
+                f"- {job_name}: {counts.get('success', 0)}/{counts.get('total', 0)} ok "
+                f"(fail={counts.get('failure', 0)})"
+            )
     stale_issues = summary.get("stale_issues")
     if isinstance(stale_issues, list) and stale_issues:
         lines.append("")
@@ -1001,6 +1039,19 @@ def build_digest_card(
                 f"• ⚠️ **日志拉取异常**：{audit['log_fetch_error_count']} 次"
             )
         sections.append("\n".join(audit_lines))
+
+    ops_jobs = summary.get("ops_checks_jobs")
+    if isinstance(ops_jobs, Mapping) and ops_jobs:
+        job_lines = ["**🧭 Ops-Checks 巡检作业全貌 (Scheduled Jobs)**"]
+        for job_name, counts in sorted(ops_jobs.items()):
+            if not isinstance(counts, Mapping):
+                continue
+            badge = "🟢" if _as_int(counts.get("failure")) == 0 else "🔴"
+            job_lines.append(
+                f"• {badge} **{job_name}**: `{counts.get('success', 0)}/{counts.get('total', 0)}` "
+                f"(失败: {counts.get('failure', 0)})"
+            )
+        sections.append("\n".join(job_lines))
 
     failed_urls = summary.get("failed_run_urls", [])
     if isinstance(failed_urls, list) and failed_urls:
@@ -1207,6 +1258,7 @@ __all__ = [
     "recent_weekly_runs",
     "run_digest_cli",
     "run_includes_job",
+    "summarize_ops_checks_jobs",
     "summarize_stale_issues",
     "summarize_watchdog_log_events",
     "summarize_weekly_runs",

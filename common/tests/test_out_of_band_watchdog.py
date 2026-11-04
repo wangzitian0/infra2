@@ -2881,3 +2881,34 @@ def test_digest_workflow_step_runs_weekly_digest_without_separate_stability_step
     step_names = [step.get("name") for step in digest_job["steps"]]
     assert "Build and send digest" in step_names
     assert "Build and send positive stability report" not in step_names
+
+
+def test_unregistered_target_in_vars_flags_signal_registry_configuration_error(
+    monkeypatch, tmp_path
+) -> None:
+    """Unregistered targets in INFRA2_WATCHDOG_*_TARGETS page as configuration drift unless overridden."""
+    code, pages, _reports, trail, _events = _run_day(
+        monkeypatch,
+        tmp_path,
+        worker_last_run=FRESH_CLEAN_RUN,
+        env_extra={
+            "INFRA2_WATCHDOG_SSH_TARGETS": "unregistered-probe|echo ok|ok",
+        },
+    )
+    assert code == 1
+    assert _failure_names(pages[0]) == {"watchdog-signal-registry"}
+    assert "unregistered GitHub watchdog target(s): unregistered-probe" in pages[0]
+    assert set(trail.failing) == {"out-of-band-watchdog"}
+
+    # When INFRA2_WATCHDOG_SSH_TARGETS_OVERRIDDEN == "1" (manual drill/diagnostic), no registry error is raised
+    code_override, pages_override, *_ = _run_day(
+        monkeypatch,
+        tmp_path,
+        worker_last_run=FRESH_CLEAN_RUN,
+        env_extra={
+            "INFRA2_WATCHDOG_SSH_TARGETS": "unregistered-probe|echo ok|ok",
+            "INFRA2_WATCHDOG_SSH_TARGETS_OVERRIDDEN": "1",
+        },
+    )
+    assert code_override == 0
+    assert pages_override == []

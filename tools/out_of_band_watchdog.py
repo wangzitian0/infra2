@@ -1454,6 +1454,18 @@ def load_report_only_checks(path: Path = SIGNAL_REGISTRY) -> frozenset[str]:
     return report_only
 
 
+def load_registered_github_signals(path: Path = SIGNAL_REGISTRY) -> frozenset[str]:
+    """All signal names registered with ``primary_owner: github`` in ``watchdog-signals.yaml``."""
+    import yaml
+
+    inventory = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return frozenset(
+        str(signal["signal"])
+        for signal in inventory["signals"]
+        if signal.get("primary_owner") == "github"
+    )
+
+
 def registry_signal(name: str) -> str:
     """The registered signal a check reports under (a Dokploy unit -> its family)."""
     return DOKPLOY_STATUS_CHECK if name.startswith(DOKPLOY_STATUS_FAMILY) else name
@@ -1646,8 +1658,10 @@ def _process_watchdog_routing(
 ) -> tuple[list[CheckResult], list[CheckResult], frozenset[str] | None]:
     try:
         report_only: frozenset[str] | None = load_report_only_checks()
+        registered: frozenset[str] | None = load_registered_github_signals()
     except Exception as exc:  # noqa: BLE001 - unknown routing pages everything.
         report_only = None
+        registered = None
         results.append(
             CheckResult(
                 SIGNAL_REGISTRY_CHECK,
@@ -1658,6 +1672,33 @@ def _process_watchdog_routing(
                 severity=_severity_for(SIGNAL_REGISTRY_CHECK, "configuration"),
             )
         )
+    if (
+        registered is not None
+        and current_env.get("INFRA2_WATCHDOG_SSH_TARGETS_OVERRIDDEN") != "1"
+    ):
+        configured_targets = [
+            target.name
+            for target in parse_http_targets(
+                current_env.get("INFRA2_WATCHDOG_HTTP_TARGETS", "")
+            )
+        ] + [
+            target.name
+            for target in parse_ssh_targets(
+                current_env.get("INFRA2_WATCHDOG_SSH_TARGETS", "")
+            )
+        ]
+        unregistered = [name for name in configured_targets if name not in registered]
+        if unregistered:
+            results.append(
+                CheckResult(
+                    SIGNAL_REGISTRY_CHECK,
+                    False,
+                    f"unregistered GitHub watchdog target(s): {', '.join(unregistered)} "
+                    f"(register in {SIGNAL_REGISTRY.name} or remove from INFRA2_WATCHDOG_*_TARGETS)",
+                    "configuration",
+                    severity=_severity_for(SIGNAL_REGISTRY_CHECK, "configuration"),
+                )
+            )
     paged, reported = route_failures(results, report_only)
     notes = [result.note for result in results if result.note]
     report = format_report_message(

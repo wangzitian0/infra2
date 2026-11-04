@@ -201,9 +201,12 @@ def main(argv: list[str] | None = None) -> int:
 
     root = args.root.resolve()
     manifest_path = _manifest_path(root, args.manifest)
+    submodules_expected = bool(
+        args.submodules_expected and not (root / ".git").is_file()
+    )
     if args.command == "check":
         result = check_workspace(
-            root, manifest_path, submodules_expected=args.submodules_expected
+            root, manifest_path, submodules_expected=submodules_expected
         )
         if args.json_output:
             print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
@@ -218,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if result.ok else 1
 
     manifest_check = check_workspace(
-        root, manifest_path, submodules_expected=args.submodules_expected
+        root, manifest_path, submodules_expected=submodules_expected
     )
     if not manifest_check.ok:
         if args.json_output:
@@ -229,7 +232,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"error: [{finding.code}] {finding.message}")
         return 1
     manifest = load_manifest(manifest_path)
-    result = workspace_status(root, manifest, fetch=args.fetch)
+    result = workspace_status(
+        root, manifest, fetch=args.fetch, submodules_expected=submodules_expected
+    )
     if args.online:
         result = observe_online(result, root, manifest, fetcher=fetch_json)
     if args.json_output:
