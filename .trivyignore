@@ -1,0 +1,3 @@
+# iac_runner and alerting container entrypoints manage runtime sockets/mounts as root inside isolated containers
+DS-0002
+AVD-DS-0002
