@@ -892,11 +892,17 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(serving.to_dict(), sort_keys=True))
         return 0
     if args.run_hook_slot:
-        manifest_or_path = (
-            fetch_hooks_manifest(args.hook_service, args.hook_source_sha)
-            if args.hook_service and args.hook_source_sha and not args.hooks_manifest
-            else Path(args.hooks_manifest)
-        )
+        if args.hooks_manifest:
+            manifest_or_path = Path(args.hooks_manifest)
+        elif args.hook_service and args.hook_source_sha:
+            manifest_or_path = fetch_hooks_manifest(
+                args.hook_service, args.hook_source_sha
+            )
+        else:
+            raise SystemExit(
+                "::error::--run-hook-slot requires either --hooks-manifest or both "
+                "--hook-service and --hook-source-sha"
+            )
         hook_res = execute_app_hook_slot(
             manifest_or_path,
             args.run_hook_slot,

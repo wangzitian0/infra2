@@ -740,3 +740,13 @@ def test_release_markers_ssot_no_prod_marker_file_duplication() -> None:
     assert status.production_marker == "v1.2.8"
     assert status.newest_tag == "v1.2.9"
     assert status.releases_behind == 1
+
+
+def test_run_hook_slot_fails_closed_without_manifest_or_service_coordinates() -> None:
+    """#1416: --run-hook-slot must fail closed when neither --hooks-manifest nor
+    (--hook-service + --hook-source-sha) is provided."""
+    with pytest.raises(
+        SystemExit,
+        match="--run-hook-slot requires either --hooks-manifest or both --hook-service and --hook-source-sha",
+    ):
+        main(["--after", "v1.2.3", "--run-hook-slot", "smoke"])

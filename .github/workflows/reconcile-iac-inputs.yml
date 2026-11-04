@@ -57,7 +57,11 @@ jobs:
     env:
       IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      VPS_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+      INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+      INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
       INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+      INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
       # reconcile shells out to tools.deploy_v2, whose on-main guard needs an authenticated
       # GitHub compare call (#635).
       GITHUB_TOKEN: ${{ github.token }}
@@ -84,6 +88,15 @@ jobs:
 
       - name: Install runtime dependencies
         run: python -m pip install invoke httpx python-dotenv pyyaml rich "$(python tools/sdk_requirement.py)"
+
+      - name: Configure SSH key for the pre-deploy schema gate
+        if: env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != ''
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_schema_gate
+          chmod 600 ~/.ssh/infra2_schema_gate
+          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_schema_gate" >> "$GITHUB_ENV"
 
       # A tag-push checkout has the full history (fetch-depth: 0) but no origin/main
       # remote-tracking ref. The reconcile guard (assert_after_on_main) refuses any tag
