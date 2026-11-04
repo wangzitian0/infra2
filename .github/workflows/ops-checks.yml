@@ -22,8 +22,6 @@ name: Ops Checks
       - "common/deploy/rollout.py"
       - "common/deploy/contract.py"
       - "common/deploy/env_config.py"
-      - "tools/resolve_deploy_ref.py"
-      - "common/deploy/refs.py"
       - "common/deploy/dokploy_client.py"
       - "pyproject.toml"
       - "uv.lock"
@@ -38,8 +36,6 @@ name: Ops Checks
       - "common/deploy/rollout.py"
       - "common/deploy/contract.py"
       - "common/deploy/env_config.py"
-      - "tools/resolve_deploy_ref.py"
-      - "common/deploy/refs.py"
       - "common/deploy/dokploy_client.py"
       - "pyproject.toml"
       - "uv.lock"
@@ -178,7 +174,7 @@ jobs:
         # Delivered every run, not only on failure (#425): the line names both
         # coordinates. Non-zero only when the marker predates the release-pin deployer,
         # which is the state that breaks the next production release.
-        run: python -m tools.app_deploy_request markers --repo-root .
+        run: python -m common.deploy.release_markers --repo-root .
 
       - name: Audit single deploy trigger (necessity)
         if: env.DOKPLOY_API_KEY != ''

@@ -1,82 +1,17 @@
-name: Auto-deploy report-branch-main
+name: Auto-deploy report-branch-main (Retired)
 
-# The ONE auto deploy target (SSOT §4.6): the main preview re-deploys whenever
-# app `main` passes CI, using the exact successful SHA emitted by the app repo.
-# App staging/prod fixed environments remain manual + pinned release tag.
-# IaC-pinned platform/backing services reconcile from infra2 main via
-# reconcile-iac-inputs.yml.
-#
-# Triggered by the APP repo after successful main CI via repository_dispatch
-# (type=deploy-report-main); also manually dispatchable here. Repository dispatch
-# validates the payload SHA against the app main tip and deploys the
-# report-branch-main preview slot through the unified deploy_v2 front door.
-# Manual dispatch keeps resolving current main.
-#
-# The APP-repo SENDER half is wired by the finance_report `notify-infra2.yml`
-# (finance_report#1173): successful app `main` CI -> repository_dispatch into
-# infra2. See Infra-015.
-
-on:
-  repository_dispatch:
-    types: [deploy-report-main]
-  workflow_dispatch: {}
+"on":
+  workflow_dispatch:
 
 permissions:
   contents: read
 
-concurrency:
-  # Serialize report-branch-main deploys; never run two against the same preview slot.
-  group: deploy-v2-preview-branch-main
-  cancel-in-progress: true
-
 jobs:
   deploy:
-    name: deploy report-branch-main
+    name: Deploy report-branch-main (Retired)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-      INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
-      DISPATCH_SHA: ${{ github.event.client_payload.sha }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install runtime dependencies
-        # common/env.py reads secret stores through infra2-sdk; install the wheel uv.lock
-        # pins, hash-verified, so this job runs the same code as the runner (#649, #1115).
+      - name: Retired in #1416
         run: |
-          sdk="$(python tools/sdk_requirement.py)"
-          python -m pip install invoke httpx python-dotenv rich "$sdk"
-
-      - name: Deploy report-branch-main
-        run: |
-          set -euo pipefail
-          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
-            echo "::error::DOKPLOY_API_KEY secret is required."
-            exit 1
-          fi
-
-          if [[ "${GITHUB_EVENT_NAME}" == "repository_dispatch" && -z "${DISPATCH_SHA:-}" ]]; then
-            echo "::error::repository_dispatch deploy-report-main requires client_payload.sha."
-            exit 1
-          fi
-
-          deploy_args=(
-            --service finance_report/app \
-            --type preview/branch \
-            --version-ref main \
-            --iac-ref main \
-            --domain "${INTERNAL_DOMAIN}"
-          )
-          if [[ -n "${DISPATCH_SHA:-}" ]]; then
-            deploy_args+=(--expected-sha "$DISPATCH_SHA")
-          fi
-
-          echo "Deploying report-branch-main with version_ref=main expected_sha=${DISPATCH_SHA:-<current-main>}"
-          python -m tools.deploy_v2 "${deploy_args[@]}"
+          echo "::error::Retired in #1416; use reconcile-iac-inputs.yml"
+          exit 1

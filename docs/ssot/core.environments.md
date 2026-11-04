@@ -375,10 +375,10 @@ deploy_v2(service, type, version_ref, iac_ref)
 |----|------|------|
 | `service` | 部署哪个已注册服务 | `deploy_contract.ServiceSpec` 注册表 |
 | `type` | 判别式：场景 + 解释其余轴、决定哪些必填（discriminated union）| `deploy_contract.DEPLOY_TYPES` |
-| `version_ref` | 多态版本面，由 `type` 解释：PR 号 / sha / tag `vX.Y.Z` / 分支（默认 main）；**staging/prod 只收 tag** | `resolve_deploy_ref`（执行时解析） |
+| `version_ref` | 多态版本面，由 `type` 解释：PR 号 / sha / tag `vX.Y.Z` / 分支（默认 main）；**staging/prod 只收 tag** | `infra2_sdk.refs`（执行时解析） |
 | `iac_ref` | infra2 的 ref（分支/tag/sha），钉死 compose/env/secret，并驱动 preview clone；**staging/prod 只收 tag** | `deploy_v2`（解析为 40-hex 身份） |
 
-**`version_ref` 解析成两样东西**（App 发布契约，`resolve_deploy_ref.resolve_image_ref` / `resolve_pr`）：
+**`version_ref` 解析成两样东西**（App 发布契约，`infra2_sdk.refs.resolve_image_ref` / `resolve_pr`）：
 commit `sha`（身份）+ `image_ref`（要拉的已发布镜像）——**code 拉短 sha 镜像，release 拉长期保留的 tag `:vX.Y.Z`**
 （sha 镜像会被剪，故 prod 必须按 tag 寻址）。`deploy_v2` 只透传 `image_ref` 给后端，不再自己判 sha-vs-tag。
 部署前 `deploy_v2` 会按 `ServiceSpec.image_repositories` 等待该 `image_ref` 在所有声明镜像仓库中存在；

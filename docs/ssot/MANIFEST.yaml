@@ -16,7 +16,7 @@ entries:
     description: Repository architecture, layers, environments, variables, and networks.
     proofs:
       - common/tests/test_sdk_contract_adoption.py
-      - common/tests/test_app_deploy_request.py
+      - common/tests/test_app_contract.py
       - e2e_regressions/tests/bootstrap/network_layer/test_network.py
   core.engineering:
     owner: docs/ssot/core.engineering.md

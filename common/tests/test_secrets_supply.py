@@ -213,7 +213,7 @@ def test_workflow_deploy_jobs_install_the_pinned_sdk() -> None:
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2]
-    for wf in ("deploy.yml", "deploy-report-main.yml", "preview-teardown.yml"):
+    for wf in ("deploy.yml", "preview-teardown.yml"):
         text = (root / ".github/workflows" / wf).read_text(encoding="utf-8")
         # tools/sdk_requirement.py reads the hash-verified wheel from uv.lock (#1115).
         assert re.search(

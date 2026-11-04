@@ -26,7 +26,7 @@ from common.deploy.iac_runner_client import (
     status_poll_attempts,
     status_poll_delays,
 )
-from common.deploy.refs import ResolvedRef, classify_ref
+from infra2_sdk.refs import ResolvedRef, classify_ref
 from common.deploy.v2 import (
     DeployV2Result,
     assert_iac_ref_on_main,
@@ -126,6 +126,7 @@ def calls(monkeypatch):
     monkeypatch.setattr(dv2, "resolve_pr", _fake_resolve_pr)
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
     monkeypatch.setattr(dv2, "resolve_branch_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "verify_app_manifests", lambda *a, **kw: {})
     return rec
 
 
@@ -2016,3 +2017,62 @@ def test_cli_threads_force_promote_pause_rollback_and_max_rollback_attempts(
     assert payload["detail"]["force_promote"] is True
     assert payload["detail"]["pause_rollback"] is True
     assert payload["detail"]["max_rollback_attempts"] == 3
+
+
+def test_preview_and_promote_derive_repo_when_repo_is_none(monkeypatch):
+    """#1416: preview.up and promote._validate_deploy_preconditions must pass a non-empty
+    repo keyword argument to infra2_sdk.refs.resolve_to_sha when repo=None."""
+    import common.deploy.preview as preview_mod
+    import common.deploy.promote as promote_mod
+
+    seen_repos: list[str] = []
+
+    def fake_resolve_to_sha(ref, *, repo):
+        assert isinstance(repo, str) and repo.endswith(".git")
+        seen_repos.append(repo)
+        return SHA_CODE
+
+    monkeypatch.setattr(preview_mod, "resolve_to_sha", fake_resolve_to_sha)
+    monkeypatch.setattr(promote_mod, "resolve_to_sha", fake_resolve_to_sha)
+
+    sha, _cfg, _data, _env = promote_mod._validate_deploy_preconditions(
+        "finance_report/app",
+        "staging",
+        "zitian.party",
+        SHA_CODE,
+        None,
+        staging_validated=False,
+        break_glass=False,
+    )
+    assert sha == SHA_CODE
+    assert seen_repos == ["https://github.com/wangzitian0/finance_report.git"]
+
+    monkeypatch.setattr(
+        preview_mod,
+        "_source_app_vault_creds",
+        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("stop-after-resolve")),
+    )
+    with pytest.raises(RuntimeError, match="stop-after-resolve"):
+        preview_mod.up(
+            "pr",
+            "999",
+            code=SHA_CODE,
+            service="truealpha/app",
+            domain="zitian.party",
+            client=object(),
+            repo=None,
+        )
+    assert seen_repos[-1] == "https://github.com/wangzitian0/truealpha.git"
+
+    with pytest.raises(
+        ValueError, match="has no registered source repository in APP_SOURCES"
+    ):
+        promote_mod._validate_deploy_preconditions(
+            "unknown/service",
+            "staging",
+            "zitian.party",
+            SHA_CODE,
+            None,
+            staging_validated=False,
+            break_glass=False,
+        )

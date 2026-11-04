@@ -58,8 +58,7 @@ SKIP_NAMES = {
     "bun.lock",
     "bun.lockb",
 }
-# `run` scans infra2's copies of the App manifests under the App's name (see
-# contracts/apps.lock.json), so the scan of infra2 itself skips them.
+# `run` skips any legacy files under `contracts/` when scanning infra2 itself.
 VENDORED_CONTRACTS = "contracts/"
 MAX_BYTES = 1_500_000
 

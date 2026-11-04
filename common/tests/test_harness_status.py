@@ -476,8 +476,8 @@ def _online(root: Path, outcomes: dict = BODIES, marker_status=None) -> Workspac
 
 
 def _write_lock(root: Path, content: str) -> None:
-    (root / "contracts").mkdir(exist_ok=True)
-    (root / "contracts" / "apps.lock.json").write_text(content, encoding="utf-8")
+    (root / "harness").mkdir(exist_ok=True)
+    (root / "harness" / "repos.yaml").write_text(content, encoding="utf-8")
 
 
 NO_FIELD = ("unknown", "no version or git_sha")
@@ -532,13 +532,20 @@ def test_infra2_row_comes_from_the_release_markers(
     assert marker_status.roots == [tmp_path]
 
 
-LOCK = '{"apps": {"finance_report": {"tag": "v0.1.88"}, "truealpha": {"tag": null, "commit": "0203431d00"}}}'
+LOCK = """repositories:
+  - id: finance-report
+    path: repos/finance_report
+    release_tag: v0.1.88
+  - id: truealpha
+    path: repos/truealpha
+    release_tag: v0.2.77
+"""
 TABLE_ROWS = [
     "repo            pin       checkout  contract(lock)  staging  production",
     "infra2          -         ed5ced96  -               v1.2.38  v1.2.35     (marker 3 releases behind)",
     "infra2-sdk      7cfe2b10  7cfe2b10  -               -        -",
     "finance-report  c3fde359  75149f66  v0.1.88         v0.2.2   v0.2.1",
-    "truealpha       0203431d  d2c95f40  0203431d        v0.1.16  v0.1.12",
+    "truealpha       0203431d  d2c95f40  v0.2.77         v0.1.16  v0.1.12",
 ]
 
 
@@ -549,10 +556,15 @@ def test_online_table_matches_the_golden_text(tmp_path: Path) -> None:
     assert render_online_table(_online(tmp_path)) == [header, *TABLE_ROWS]
 
 
-TAG_LOCK = '{"apps": {"truealpha": {"tag": %s}}}'
+TAG_LOCK = (
+    "repositories:\n  - id: truealpha\n    path: repos/truealpha\n    release_tag: %s\n"
+)
 
 
-@pytest.mark.parametrize("lock", ["{not json", TAG_LOCK % "5", TAG_LOCK % r'"v1\n"'])
+@pytest.mark.parametrize(
+    "lock",
+    ["{not yaml: [", TAG_LOCK % "5", TAG_LOCK % r'"v1\n"', TAG_LOCK % '"0203431d"'],
+)
 def test_bad_contract_lock_is_unknown(tmp_path: Path, lock: str) -> None:
     _write_lock(tmp_path, lock)
 
@@ -637,7 +649,8 @@ def test_online_json_shape(monkeypatch, tmp_path: Path, capsys) -> None:
     harness = _patch_cli(monkeypatch, FakeFetcher(outcomes))
     monkeypatch.setattr("common.deploy.release_markers.marker_status", _markers(BEHIND))
     _write_lock(
-        tmp_path, '{"apps": {"truealpha": {"tag": null, "commit": "0203431d00"}}}'
+        tmp_path,
+        "repositories:\n  - id: truealpha\n    path: repos/truealpha\n    release_tag: v0.2.77\n",
     )
 
     exit_code = harness.main(["status", "--online", "--json", "--root", str(tmp_path)])
@@ -657,7 +670,7 @@ def test_online_json_shape(monkeypatch, tmp_path: Path, capsys) -> None:
         "finance-report": row("v0.2.2", "v0.2.1"),
         "truealpha": row("unreachable", "v0.1.12", "staging: TimeoutError"),
     }
-    assert locks == [None, None, None, "0203431d"]
+    assert locks == [None, None, None, "v0.2.77"]
 
 
 def _response(body: bytes, final_url: str = URL) -> io.BytesIO:

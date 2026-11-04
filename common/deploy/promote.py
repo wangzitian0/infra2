@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from common.core.environ import infra_domain
+from common.deploy.app_contract import APP_SOURCES
 from common.deploy.compose_lock import compose_write_lock
 from common.console import warning
 from common.deploy import schema_gate
@@ -36,7 +37,7 @@ from common.deploy.queue import deployment_start_epoch
 from common.core import REPO_ROOT
 from common.deploy.failure_snapshot import emit_failure_snapshot
 from common.observability.openpanel import openpanel_env
-from common.deploy.refs import resolve_to_sha
+from infra2_sdk.refs import resolve_to_sha
 from common.deploy.preflight import (
     check_approle_creds,
     extract_vault_token_from_env,
@@ -431,7 +432,16 @@ def _validate_deploy_preconditions(
             f"invalid domain {domain!r}: must be non-empty with no whitespace "
             "(it is interpolated into a line-based compose env file)."
         )
-    sha = resolve_to_sha(code, repo=repo) if repo is not None else resolve_to_sha(code)
+    if repo is None:
+        slug = APP_SOURCES.get(service)
+        if not slug:
+            raise ValueError(
+                f"Service {service!r} has no registered source repository in APP_SOURCES"
+            )
+        effective_repo = f"https://github.com/{slug}.git"
+    else:
+        effective_repo = repo
+    sha = resolve_to_sha(code, repo=effective_repo)
     cfg = app_compose_env_config(service, env)
 
     if cfg.dynamic:
@@ -883,7 +893,7 @@ def deploy(
 ) -> DeployPlan:
     """Deploy a resolved app commit to a fixed app environment.
 
-    code  -> common.deploy.refs (main / vX.Y.Z / <sha>) -> a commit sha.
+    code  -> infra2_sdk.refs (main / vX.Y.Z / <sha>) -> a commit sha.
     env   -> deploy_env_config (which compose, URL, suffix, default data).
     data  -> derived from the env's data_default; callers cannot override it here.
     """

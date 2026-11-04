@@ -32,10 +32,10 @@ therefore:
 This is an IN-PROCESS lock: it serializes callers running in the same Python
 process/interpreter (two threads, or a caller invoking ``deploy()`` twice in a loop). It
 does NOT serialize across separate OS processes or separate CI runners. Today that
-boundary is covered by ``.github/workflows/app-deploy-request.yml``'s
-``concurrency: group: app-deploy-${service}-${deploy_type}, cancel-in-progress: false``
-(see infra2#525's root-cause write-up) — that GitHub Actions concurrency group is what
-actually serializes the two known callers (finance_report and truealpha) today. This
+boundary is covered by ``.github/workflows/reconcile-iac-inputs.yml``'s
+``concurrency`` group and ``.github/workflows/deploy.yml``'s concurrency group
+(see infra2#525's root-cause write-up) — those GitHub Actions concurrency groups
+serialize fixed-environment promotions across callers today. This
 module exists so the PRIMITIVE ITSELF is not silently unsafe for any future or direct
 caller that bypasses that workflow (an operator running the CLI twice, a script that
 fans out `deploy()` calls), rather than relying entirely on caller discipline.

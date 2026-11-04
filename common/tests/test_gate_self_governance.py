@@ -296,7 +296,7 @@ ORDINARY_PATHS = (
     "common/core/harness/sweep.py",
     "common/deploy/dependencies.py",
     "common/deploy/v2.py",
-    "common/deploy/refs.py",
+    "common/deploy/app_contract.py",
     "common/observability/openpanel.py",
     "common/observability/watchers/__init__.py",
     "platform/01.postgres/.env.example",

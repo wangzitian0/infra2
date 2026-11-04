@@ -750,7 +750,7 @@ def run_unit_tests(
     print(f"▶ Running infra unit test suite ({', '.join(test_paths)})...")
     start_time = time.monotonic()
 
-    # 1. Check the App manifest copies in contracts/ against contracts/apps.lock.json
+    # 1. Verify no vendored App manifests exist under contracts/
     try:
         _run_cmd([sys.executable, "tools/fetch_app_manifests.py"])
     except subprocess.CalledProcessError:

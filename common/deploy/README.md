@@ -27,7 +27,8 @@
 | `dependencies.py` | Deploy fan-out from `docs/ssot/deploy-dependencies.yaml` | `extra_dependency_globs()`, `service_key_from_path()` |
 | `compose_lock.py` | In-process compose env write lock | `compose_write_lock()` |
 | `dokploy_client.py` | Dokploy REST API client | `DokployClient`, `get_dokploy()`, `ensure_project()` |
-| `refs.py` | `version_ref` -> commit sha / image ref resolution (the CLI front door is `tools/resolve_deploy_ref.py`) | `resolve_to_sha()`, `resolve_image_ref()`, `resolve_pr()`, `resolve_branch_to_sha()` |
+| `app_contract.py` | App manifest preflight, Vault template rendering, SDK hooks, and release evidence | `verify_app_manifests()`, `render_release_template()`, `execute_app_hook_slot()`, `query_serving_release()` |
+| `release_markers.py` | Production release marker CRUD and lag guard CLI | `newest_release_tag()`, `production_marker()`, `marker_status()` |
 
 ## Usage Examples
 

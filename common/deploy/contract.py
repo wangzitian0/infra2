@@ -385,7 +385,7 @@ class DeployTypeSpec:
     ``accepted_forms`` is the type's slice of the (type × version_ref-form) matrix: the
     version_ref *forms* this type will accept, so a wrong combination (``prod`` + ``main``)
     fails closed instead of silently pulling a code image onto prod. Forms are the
-    ``resolve_deploy_ref.classify_ref`` outputs (``branch`` / ``sha`` / ``tag``) plus
+    ``infra2_sdk.refs.classify_ref`` outputs (``branch`` / ``sha`` / ``tag``) plus
     ``pr`` (a PR number, resolved via ``resolve_pr``). Fixed envs (``staging`` / ``prod``)
     accept ``tag`` only — they deploy immutable release images, never a moving code ref.
     """
@@ -405,7 +405,7 @@ class DeployTypeSpec:
     # bool here would be a second, drift-prone copy of a policy the env already owns.
 
 
-# The form vocabulary (resolve_deploy_ref.classify_ref outputs + the PR-number form).
+# The form vocabulary (infra2_sdk.refs.classify_ref outputs + the PR-number form).
 _CODE_FORMS = (
     "branch",
     "sha",

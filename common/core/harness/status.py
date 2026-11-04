@@ -13,7 +13,11 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
-from common.core.harness.manifest import HEALTH_ENVIRONMENTS
+from common.core.harness.manifest import (
+    HEALTH_ENVIRONMENTS,
+    RELEASE_TAG_RE,
+    load_manifest,
+)
 
 Runner = Callable[..., subprocess.CompletedProcess]
 # fetcher(url, timeout) returns the decoded JSON body. It raises OSError when nothing
@@ -457,21 +461,49 @@ def _served(
     }
 
 
-def _contract_lock(root: Path, repository_path: str) -> str | None:
-    """Tag, else the first 8 characters of the commit, of `apps.<directory>` in the lock."""
-    lock = root / "contracts" / "apps.lock.json"
-    if not lock.is_file():
+def _contract_lock(
+    root: Path, repository_path: str, entry: dict[str, Any] | None = None
+) -> str | None:
+    """Release tag declared for `repository_path` in `harness/repos.yaml` (`release_tag`)."""
+    raw_value: Any = None
+    has_key = False
+    repos_yaml = root / "harness" / "repos.yaml"
+    if repos_yaml.is_file():
+        try:
+            manifest = load_manifest(repos_yaml)
+            repositories = manifest.get("repositories")
+            if not isinstance(repositories, list):
+                return "unknown"
+            repo_id = entry.get("id") if isinstance(entry, dict) else None
+            matched = next(
+                (
+                    repo
+                    for repo in repositories
+                    if isinstance(repo, dict)
+                    and (
+                        repo.get("path") == repository_path
+                        or (repo_id is not None and repo.get("id") == repo_id)
+                    )
+                ),
+                None,
+            )
+            if matched is not None and "release_tag" in matched:
+                has_key = True
+                raw_value = matched["release_tag"]
+        except Exception:
+            return "unknown"
+    if not has_key and isinstance(entry, dict) and "release_tag" in entry:
+        has_key = True
+        raw_value = entry["release_tag"]
+    if not has_key or raw_value is None:
         return None
-    try:
-        app = json.loads(lock.read_text(encoding="utf-8"))["apps"].get(
-            Path(repository_path).name
-        )
-        if app is None:
-            return None
-        value = app["tag"] or app["commit"][:8]
-        return value if isinstance(value, str) and value.isprintable() else "unknown"
-    except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError):
-        return "unknown"
+    if (
+        isinstance(raw_value, str)
+        and raw_value.isprintable()
+        and bool(RELEASE_TAG_RE.fullmatch(raw_value))
+    ):
+        return raw_value
+    return "unknown"
 
 
 def observe_online(
@@ -506,10 +538,9 @@ def observe_online(
         precomputed[urls[0]] = served_release(urls[0], fetcher)
     items = []
     for item in status.repositories:
-        served = _served(
-            entries[item.repository_id], root, fetcher, marker_status, precomputed
-        )
-        lock = _contract_lock(root, item.path)
+        entry = entries[item.repository_id]
+        served = _served(entry, root, fetcher, marker_status, precomputed)
+        lock = _contract_lock(root, item.path, entry)
         items.append(replace(item, served=served, contract_lock=lock))
     observed_at = now().astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return WorkspaceStatus(tuple(items), observed_at)

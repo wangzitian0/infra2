@@ -45,22 +45,16 @@ its signal in `docs/ssot/watchdog-signals.yaml` (internal probe signals derive
 automatically from the service's `ProbeFacet`/`SignalFacet` declarations);
 `tools/no_new_wheels_lint.py` blocks CI otherwise.
 
-`app_deploy_request.py` is the thin cross-repository adapter in front of `deploy_v2`.
-`common/deploy/app_deploy_request.py` deserializes `infra2_sdk.deploy.DeployRequest`, validates
-source authority and immutable coordinates, remotely verifies Production run/review evidence,
-and selects the released IaC ref; the tool only wires argv/env and invokes the existing deploy
-front door. There is no CLI bypass for Production evidence. Dokploy/Vault mutation stays in
-infra2. Its `markers` action needs no request: it prints the production marker next to the
-newest release and exits non-zero once the marker is too old to pin the data engine from the
-release being promoted (#650) — the ops-checks deploy-guard-audit job runs it daily.
-`--require-preflight-canary` and `--preflight-canary-result` re-check the workflow's canary
-pre-filter against the validated plan (only production requests are canaried, truealpha#860);
-a disagreement in either direction fails before any credential is used. `--request-created-at`
-and `--run-attempt` give the receiver run's `created_at` and `GITHUB_RUN_ATTEMPT`. Every request
-needs a valid time; a production request that is older than `PRODUCTION_REQUEST_MAX_AGE_SECONDS`,
-or is a re-run, fails before the `iac_ref` check (#1232). `deploy_v2` prints
-one `deploy_v2 progress:` line per finished phase (secret supply, Dokploy promote, iac-runner sync)
-on stderr, so the receiver log shows where a deploy's time went.
+`reconcile_iac_inputs.py` orchestrates the unified multi-app and platform release train across
+`reconcile-iac-inputs.yml`. It detects changed `iac_pinned` platform services and App `release_tag`
+or `10.app/**` updates in `harness/repos.yaml`, emits per-service `deploy_v2` commands for Apps and
+their declared `companions` (`truealpha/data_engine`) while excluding companions from the platform
+batch, and executes App runtime hooks (`infra2_sdk.manifests.run_hook_slot`) and release evidence
+checks (`common/deploy/app_contract.py`). `common/deploy/release_markers.py` (`python -m common.deploy.release_markers`)
+prints the production marker next to the newest release and exits non-zero once the marker is too
+old to pin the data engine from the release being promoted (#650) — the ops-checks
+deploy-guard-audit job runs it daily. `deploy_v2` prints one `deploy_v2 progress:` line per finished
+phase (secret supply, Dokploy promote, iac-runner sync) on stderr.
 
 `webhook_delivery_audit.py` reads a repository's hook delivery list and fails only when
 deliveries are being **attempted and none are landing** — the shape of #585, where

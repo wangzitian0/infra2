@@ -168,8 +168,8 @@ The command reports `unknown` for an App in these cases:
 - The body has no `version` or `git_sha` text, or the text has a character that is not printable.
 - A redirect ends on a URL that is not https.
 
-`contract(lock)` shows the tag of `apps.<app>` in `contracts/apps.lock.json`. It shows the first 8 characters of the commit when the tag is null.
-`<app>` is the directory name under `repos/`. The column shows `unknown` when the command cannot read a printable tag or commit from the lock.
+`contract(lock)` shows the `release_tag` declared for that repository in `harness/repos.yaml` (`external-application` entries).
+The column shows `unknown` when `release_tag` is not a printable `vX.Y.Z` tag or `harness/repos.yaml` cannot be parsed.
 `harness check` rejects a `health:` URL that is not https, has no host, has a bad port, or has user information.
 
 The command never prints a cached or guessed value. The header of the table carries the UTC time of the reads.

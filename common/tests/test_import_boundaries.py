@@ -313,14 +313,14 @@ def _edges(source: str, package: str) -> set[str]:
         ("__import__('tools.deploy_v2')", "common.core", {"tools.deploy_v2"}),
         # tools resolves to the module, whether named by `from tools import x` or not
         (
-            "from tools import resolve_deploy_ref",
+            "from tools import deploy_v2",
             "common.deploy",
-            {"tools.resolve_deploy_ref"},
+            {"tools.deploy_v2"},
         ),
         (
-            "from tools.resolve_deploy_ref import resolve_to_sha",
+            "from tools.deploy_v2 import main",
             "common.deploy",
-            {"tools.resolve_deploy_ref"},
+            {"tools.deploy_v2"},
         ),
     ],
 )
@@ -478,11 +478,16 @@ ALL_RETIRED_FLAT_SHIMS = (
 
 RETIRED_DOMAIN_SHIMS = (
     "common/core/ci_spec.py",
+    "common/deploy/app_deploy_request.py",
+    "common/deploy/app_deploy_request_cli.py",
     "common/deploy/console.py",
     "common/deploy/git_provenance.py",
+    "common/deploy/refs.py",
     "common/gate/coverage_regression.py",
     "common/observability/recency.py",
     "common/security/vault_tokens.py",
+    "tools/app_deploy_request.py",
+    "tools/resolve_deploy_ref.py",
 )
 
 
@@ -587,6 +592,10 @@ def test_docs_do_not_cite_retired_flat_common_modules() -> None:
         "common.const",
         "common/observability/recency.py",
         "common/deploy/console.py",
+        "common/deploy/app_deploy_request.py",
+        "common/deploy/refs.py",
+        "tools/app_deploy_request.py",
+        "tools/resolve_deploy_ref.py",
         "common/security/vault_audit_ssh",
         "common/observability/alert_bridge",
         "common.observability.alert_bridge",

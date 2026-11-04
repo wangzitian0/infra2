@@ -21,17 +21,12 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **IaC Input Reconcile** | [`reconcile-iac-inputs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/reconcile-iac-inputs.yml) | **Release-tag** 触发(`push: tags: v*.*.*`):diff 上一 tag→本 tag,把 changed `iac_pinned` 服务以**该 tag** 为 `iac_ref` fan-out 给 `deploy_v2 → iac_runner`;config-hash gate 决定 no-op vs 重启。**不是 main-push、不是 sha。** |
+| **IaC Input Reconcile & Multi-App Release Train** | [`reconcile-iac-inputs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/reconcile-iac-inputs.yml) · [`tools/reconcile_iac_inputs.py`](https://github.com/wangzitian0/infra2/blob/main/tools/reconcile_iac_inputs.py) | **Release-tag** 触发(`push: tags: v*.*.*`)、定时巡检(`schedule: 0 * * * *`)与显式晋升(`workflow_dispatch`):diff 上一 tag→本 tag,把 changed `iac_pinned` 服务以**该 tag** 为 `iac_ref` fan-out 给 `deploy_v2 → iac_runner`;对 `harness/repos.yaml` 中变更的 App `release_tag` 或 `10.app/**` 目录按序输出独立 `deploy_v2` 命令（先主服务、再 `companions` 如 `truealpha/data_engine`，并从平台 batch 中剔除避免双部署）。 |
 | **Deploy 前门 (`deploy_v2`)** | [`tools/deploy_v2.py`](https://github.com/wangzitian0/infra2/blob/main/tools/deploy_v2.py) · [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) | 统一部署坐标 `(service, type, version_ref, iac_ref)`;app + 平台、staging/prod、pinned ref。底层调用 [`common/deploy/`](https://github.com/wangzitian0/infra2/blob/main/common/deploy/) 领域包驱动执行。 |
-| **App Deploy Request Receiver** | [`app-deploy-request.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/app-deploy-request.yml) · [`common/deploy/app_deploy_request.py`](https://github.com/wangzitian0/infra2/blob/main/common/deploy/app_deploy_request.py) | SDK `DeployRequest v1` 的跨仓库部署入口；验证 sender/repo/ref/SHA/evidence，prod 额外远端验证 run/review 状态。App staging 选最新 on-main infra release candidate；App prod 只选最新 `production/v*` marker 指向的 release；无 marker 时 production desired state 未知并 fail-closed。**marker 早于 `MINIMUM_PRODUCTION_MARKER`（`v1.1.59`，release pin #632 首次发布的 tag）时同样 fail-closed**：更旧的 deployer 会用运维手写进 Vault 的 digest 重建 data engine，而不是被晋升的那个 release（#650）。plan 输出同时给出 `iac_ref` 与 `newest_iac_tag`，晋升滞后在部署前就可见。 |
+| **App Release Contract & Hooks** | [`common/deploy/app_contract.py`](https://github.com/wangzitian0/infra2/blob/main/common/deploy/app_contract.py) · [`common/deploy/release_markers.py`](https://github.com/wangzitian0/infra2/blob/main/common/deploy/release_markers.py) | App 契约预检（`verify_app_manifests`）、Vault 模板渲染（`render_release_template`）、SDK 钩子调度（`execute_app_hook_slot`）与生产版本发布证据校验（`validate_app_release_evidence`）。**marker 早于 `MINIMUM_PRODUCTION_MARKER`（`v1.1.59`，release pin #632 首次发布的 tag）时 fail-closed**：更旧的 deployer 会用运维手写进 Vault 的 digest 重建 data engine，而不是被晋升的那个 release（#650）。 |
 | **IaC Runner Bootstrap (L1)** | [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) · [`scripts/deploy_iac_runner_bootstrap.sh`](https://github.com/wangzitian0/infra2/blob/main/scripts/deploy_iac_runner_bootstrap.sh) | **带外**自更新:`bootstrap/06.iac_runner/**` 变更时,Actions 在 VPS 上重建 runner 自身(跟 merged SHA),**独立 cadence**。 |
-| **Auto-deploy report-branch-main** | [`deploy-report-main.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy-report-main.yml) | **唯一**自动目标:app main push → main 预览重部署。 |
 | **Observability config apply** | [`apply-observability.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/apply-observability.yml) | 告警规则 / 看板,声明式 reconcile。**当前 merge 即 apply**(见 §3.4 未收口项)。 |
 | **Docs site** | [`docs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/docs.yml) · [`docs/mkdocs.yml`](../mkdocs.yml) | MkDocs → GitHub Pages。 |
-
-Receiver 的 validate job 将选定的 `iac_ref` 作为 job output 传给 canary/deploy；后续 job 重做
-权威校验时必须与该坐标完全一致，防止同一 receiver run 在新 release/production marker
-竞态中 canary 与 deploy 使用不同 IaC。
 
 ---
 
@@ -167,8 +162,8 @@ state 的唯一可版本化指针，不是新的部署触发器。prod promotion
 request 在 marker 建立前都 fail-closed，不用 latest release 猜生产事实。
 marker 不动就是 prod 用旧 deployer:2026-07-30 的 `production/v1.1.52` 让 truealpha v0.0.48 在
 2026-09-08 带着一个七月的 deployer 上了 prod(#650)。因此 marker 滞后每天由 ops-checks 的
-deploy-guard-audit 报一行(`python -m tools.app_deploy_request markers`),内容是 marker、落后几个
-release、以及是否已旧到会破坏下一次 prod 发布。App 仓库发布工作流通过 `python -m tools.app_deploy_request serving --service <svc> --env prod` 直接查询 infra2 权威部署态 `(source_sha, image_tag, iac_ref)`，不再从 App 自身 GitHub Actions 历史重推导 (#588)。
+deploy-guard-audit 报一行(`python -m common.deploy.release_markers --repo-root .`),内容是 marker、落后几个
+release、以及是否已旧到会破坏下一次 prod 发布。工作流与工具通过 `common.deploy.app_contract.query_serving_release` 直接查询 infra2 权威部署态 `(source_sha, image_tag, iac_ref)`，不再从 App 自身 GitHub Actions 历史重推导 (#588)。
 
 ### 3.4 未收口项(open / 目标态)
 
@@ -212,54 +207,18 @@ Details and value meanings: [`core.harness.md` §6](./core.harness.md#6-workspac
 
 prod red lines 由 `deploy_v2` 强制(deny-by-default):`--staging-validated` + `--code-reviewed`,否则 fail-closed。
 
-### 4.1 App DeployRequest event boundary
+### 4.1 Unified Multi-App Release Train & Hook Scheduling (#1416)
 
-App 不再 checkout/执行 infra2。发送 `repository_dispatch` type `app-deploy-request`，payload
-遵循固定版本 `infra2_sdk.deploy.DeployRequest`。Receiver 在任何副作用前 fail-closed 验证：
+App 不再 checkout/执行 infra2，也不再向 infra2 发送 push-based 跨仓请求。所有 App 的 Preview / Staging / Production 生命周期、伴随服务（`companions`）推进与运行时钩子（`hooks.yaml`）均收敛在 `infra2` 的 `reconcile-iac-inputs.yml` 与 `common/deploy/app_contract.py`：
 
-1. GitHub sender allowlist 与 `service -> source_repository` 绑定。
-2. evidence URL 必须是源 App 的 canonical GitHub URL；prod 同时要求 source/staging run 均
-   `completed/success`、仓库与 `head_sha` 精确匹配。Run 还必须匹配该 service 明确批准的
-   workflow path、event 与 versioned title，防止普通 CI run 冒充部署证据。Reviewed PR 必须
-   合入批准的 base branch，且 `merge_commit_sha == source_sha`。任一 GitHub API 请求或字段
-   校验失败即 fail-closed。
-3. `version_ref` 必须在源仓库解析到 payload 的完整 `source_sha`。
-4. The receiver selects `iac_ref`: for staging, the newest `vX.Y.Z` tag that `HEAD` contains; for production,
-   the newest `production/v*` marker that `HEAD` contains. It fails closed when the marker is missing or
-   older than `MINIMUM_PRODUCTION_MARKER`. An App does not pin an infra submodule.
-   **Order for a production App release that needs a newer infra2** (infra2#1320): merge the infra2 change,
-   cut the release tag, run `Reconcile IaC Inputs` with `promote_prod=true`, and wait until it succeeds and
-   `production/<tag>` exists (`git ls-remote --tags origin 'production/*'`). Then dispatch the App production
-   deploy. The promotion creates the marker when it ends, and the receiver does not wait for a promotion in
-   progress: a dispatch before the marker exists runs at the previous marker. The manifest preflight then
-   refuses the request, names the missing variable, and says that infra2 main already supplies it. An App
-   release that needs nothing newer than the current marker can be dispatched at once.
-5. **只有 prod 先跑同坐标 canary**；通过后才调用既有 `deploy_v2`，Dokploy/Vault 凭据只存在于 infra2。
-   staging 不再 canary（truealpha#860）：staging 部署本身就证明了该坐标——`--expected-sha` 钉住
-   `version_ref`、只接受 on-main release tag、等镜像发布、promote 后等新 rollout 记录 / 推送的 config hash /
-   每个带 healthcheck 的容器 in service；发送方随后在 staging 公网确认 release 身份，prod evidence 又要求
-   这个 staging run 成功。prod 跑在 production marker 上，这个坐标在 prod 之前没人部署过，所以 canary 继续门控 prod。
-6. **作业形状**（truealpha#860）：`deploy` 一个 job 内先无凭据验证（`plan` step），下一 step 才拿到
-   `DOKPLOY_API_KEY` / `IAC_WEBHOOK_SECRET` 执行——凭据按 step 作用域，不按 job；staging 请求只跑这一个 job。
-   `preflight_canary` 单独成 job，只因为 `deploy-v2-canary` 并发组只能挂在整个 job 上，而它只应覆盖 canary、
-   不覆盖 promote；`deploy` job 断言自己的 checkout 仍选出 canary 证明过的 `iac_ref`。canary job 的 `if:` 在任何
-   plan 之前求值，只能读 payload，它镜像 `DeployPlan.requires_preflight_canary`：workflow 测试把两者钉在一起，
-   运行时两边再对 plan 复核（`--require-preflight-canary` / `--preflight-canary-result`），漂移即 fail-closed。
-7. **A production request expires (#1232, #1363).** The sender waits for the receiver run and verifies the deploy. After the sender stops waiting, nothing verifies the deploy, so the receiver enforces a hard age and attempt gate in the credential-free `plan` step (`common/deploy/app_deploy_request.py`) before comparing `iac_ref` or accessing secrets:
-   - **Accept window (`production_request_accept_until`)**: When `dispatch_and_wait` supplies `sender_deadline` in the payload, the receiver accepts the production request until `sender_deadline - PRODUCTION_DEPLOY_BUDGET_SECONDS (300 s)`, capped at 6 h from `created_at`. When `sender_deadline` is absent, the receiver falls back to `PRODUCTION_REQUEST_MAX_AGE_SECONDS` (1440 s = 24 min from `created_at`). A malformed `sender_deadline`, missing/unparsable `created_at` (`--request-created-at`), or negative age fails closed immediately.
-   - **Single-attempt rule (`--run-attempt`)**: The receiver refuses any production request whose `GITHUB_RUN_ATTEMPT != 1` (because the sender stops waiting after attempt 1 ends).
-   - **Scope**: Only production requests enforce the age and attempt limits; staging requests may wait in the queue.
+1. **App Release Tag 单一真相源 (`harness/repos.yaml`)**：每个 `external-application` 在 `harness/repos.yaml` 中声明当前固定环境目标 `release_tag`（如 `finance-report: v0.2.46`、`truealpha: v0.2.77`）。
+2. **契约预检与模板注入 (`common/deploy/app_contract.py`)**：`deploy_v2` 在固定环境（staging/prod）与 preview 部署前调用 `verify_app_manifests`，直接从源 App 仓库对应 ref 读取 `contracts/env.manifest.yaml` 与 `contracts/secrets.ctmpl`，与 infra2 `EnvInventory` 交叉比对缺口并渲染注入 `VAULT_SECRETS_TEMPLATE`。
+3. **伴随服务原子跟随 (`ServiceSpec.companions`)**：`truealpha/app` 声明 `companions=("truealpha/data_engine",)`。当 `reconcile_iac_inputs.py` 检测到 `harness/repos.yaml` 中 App `release_tag` 或 `10.app/**` 变更时，按顺序生成主服务与伴随服务的独立 `deploy_v2 --version-ref <app_release_tag> --iac-ref <iac_ref>` 命令，并将伴随服务从平台 `iac_pinned` 批次中剔除，杜绝双部署。
+4. **SDK Hook Slot 调度 (`infra2_sdk.manifests.run_hook_slot`)**：`common/deploy/app_contract.py::execute_app_hook_slot` 与 `reconcile_iac_inputs.py --run-hook-slot` 负责在对应生命周期阶段读取 App 的 `contracts/hooks.yaml` 并执行声明的钩子槽位（`HOOK_SLOTS`）。
+5. **生产证据与时间窗守卫 (`validate_app_release_evidence`)**：生产晋升前校验 `infra2_sdk.deploy.DeployRequest` 证据链、单次执行限制（`run_attempt == 1`）与接收时间窗（`production_request_accept_until`）。
 
-Finance Report 的 staging/prod/rollback 已全部 cut over 到 receiver，App 仓库不再
-checkout 或执行 infra2 源码。receiver 通过只读 GitHub API
-取得远端事实后，才可附加既有 `--staging-validated --code-reviewed` red-line
-acknowledgements。URL 形状本身不构成 evidence。
-
-The receiver is not the only path to production. The workflow `deploy.yml` with `type=prod` takes a typed `iac_ref`.
-That run bypasses the receiver: the receiver checks no evidence and selects no marker for it.
-The person who starts the run sets `staging_validated` and `code_reviewed`, and nothing verifies them.
-That person can also set `break_glass` (skips the staging-first rule) and `skip_canary` (skips the pre-deploy canary).
-`deploy_v2` still requires `iac_ref` to be a release tag on main. The run waits for the owner in the `production`
+The workflow `deploy.yml` with `type=prod` also takes a typed `iac_ref` for manual or break-glass dispatches.
+`deploy_v2` requires `iac_ref` to be a release tag on main. The run waits for the owner in the `production`
 environment. Record its coordinate (`service`, `version_ref`, `iac_ref`) in the issue.
 
 ### 4.2 Production release card
@@ -439,8 +398,8 @@ infra2 固定一个不可变的 `infra2-sdk` release wheel，版本与 sha256 �
 - **A production job waits for the owner (#1125, #1035).** Each job that can change production declares
   `environment: production`. The job stops at `waiting` until a required reviewer approves the run.
   - Conditional jobs use `environment: ${{ <production condition> && 'production' || 'staging' }}`.
-    The jobs are `deploy.yml` `deploy` (`inputs.type == 'prod'`), `reconcile-iac-inputs.yml` `reconcile`
-    (`inputs.promote_prod`), and `app-deploy-request.yml` `deploy` (`deploy_type == 'prod'`).
+    The jobs are `deploy.yml` `deploy` (`inputs.type == 'prod'`) and `reconcile-iac-inputs.yml` `reconcile`
+    (`inputs.promote_prod`).
   - These jobs always use `production`: `deploy.yml` `bootstrap`, `apply-observability.yml` `apply`,
     and `deploy-cloudflare-watchdog.yml` `deploy`.
   - A run that waits holds its concurrency group. A production run therefore has its own group, so a
@@ -507,7 +466,7 @@ gh workflow run deploy.yml \
 | **common/tools 单测覆盖率不退化** | `infra-ci.yml`「Gate coverage regression」→ 详见 [`ops.test_coverage.md`](./ops.test_coverage.md)（Coveralls 独立于此,只做 main 徽章展示,不卡 PR） | ✅ |
 | **测试提前(PR dry-run plan)** | PR CI `Gate reconcile plan builds`:dry-run 出 fan-out plan,不部署 → `.github/workflows/infra-ci.yml` | ✅ |
 | **SDK pin/mirror 一致** | `common/tests/test_sdk_contract_adoption.py` | ✅ |
-| **App request fail-closed** | `common/tests/test_app_deploy_request.py` + `test_app_deploy_request_workflow.py` | ✅ |
+| **App contract & hook scheduling** | `common/tests/test_app_contract.py` + `common/tests/test_reconcile_iac_inputs.py` | ✅ |
 | **Finance Report fixed/preview cold-start budget** | `common/tests/test_deploy_primitive.py` + `test_preview_lifecycle.py` assert both backend healthchecks allow at least 450 seconds | ✅ |
 
 ---

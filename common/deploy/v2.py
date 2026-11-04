@@ -61,19 +61,20 @@ from common.deploy.preflight import (
 )
 from common.deploy.env_config import CANARY_SLOT, env_config
 from common.core.registry import domain_for_service
+from common.deploy.app_contract import encode_rendered_templates, verify_app_manifests
 from common.deploy.promote import deploy as _deploy_fixed
 from common.deploy.preview import _validate_domain
 from common.deploy.preview import down as _preview_down
 from common.deploy.preview import up as _preview_up
-from common.deploy.refs import (
+from infra2_sdk.refs import (
     ResolvedRef,
     classify_ref,
     resolve_branch_to_sha,
     resolve_image_ref,
     resolve_pr,
     resolve_to_sha,
+    short_sha,
 )
-from infra2_sdk.refs import short_sha
 
 from common.core.constants import APP_SOURCES
 
@@ -589,6 +590,9 @@ def _deploy_preview_v2(
     wait: bool,
     timeout: int,
     data_lane: list[str],
+    *,
+    iac_ref: str = "main",
+    verify_manifests: bool = False,
 ) -> DeployV2Result:
     if not svc_spec.supports_preview:
         raise ValueError(
@@ -596,19 +600,37 @@ def _deploy_preview_v2(
             "(common.deploy.contract.ServiceSpec.supports_preview=False) — register a "
             "common.deploy.env_config.preview_service_config entry for it first (#522)."
         )
-    result = _preview_up(
-        spec.alias_kind,
-        alias_value,
-        code=resolved.sha,
-        service=service,
-        image_ref=resolved.image_ref,
-        iac_ref=target.iac_ref,
-        domain=domain,
-        client=client,
-        branch=clone_ref,
-        wait=wait,
-        health_timeout=timeout,
-    )
+    previous_template = os.environ.get("VAULT_SECRETS_TEMPLATE")
+    injected_template = False
+    if verify_manifests and previous_template is None:
+        rendered = verify_app_manifests(
+            service,
+            source_sha=resolved.sha,
+            deploy_type=spec.key,
+            iac_ref=iac_ref,
+        )
+        encoded = encode_rendered_templates(rendered, service=service)
+        if encoded:
+            os.environ["VAULT_SECRETS_TEMPLATE"] = encoded
+            injected_template = True
+    try:
+        result = _preview_up(
+            spec.alias_kind,
+            alias_value,
+            code=resolved.sha,
+            service=service,
+            image_ref=resolved.image_ref,
+            iac_ref=target.iac_ref,
+            domain=domain,
+            client=client,
+            branch=clone_ref,
+            wait=wait,
+            health_timeout=timeout,
+            repo=_repo_for_service(service),
+        )
+    finally:
+        if injected_template:
+            os.environ.pop("VAULT_SECRETS_TEMPLATE", None)
     detail = {
         "alias": result.alias,
         "compose_id": result.compose_id,
@@ -642,38 +664,59 @@ def _deploy_fixed_v2(
     iac_webhook_secret: str | None,
     triggered_by: str,
     data_lane: list[str],
+    *,
+    iac_ref: str = "main",
+    verify_manifests: bool = False,
 ) -> DeployV2Result:
-    secret_supply = _supply_app_secrets(
-        service,
-        target.env,
-        target.iac_ref,
-        runner_url=iac_runner_url,
-        secret=iac_webhook_secret,
-        triggered_by=triggered_by,
-        timeout=timeout,
-    )
-    promote_started = time.monotonic()
-    plan = _deploy_fixed(
-        target.env,
-        resolved.sha,
-        domain=domain,
-        client=client,
-        service=service,
-        image_ref=resolved.image_ref,
-        iac_ref=target.iac_ref,
-        branch=clone_ref,
-        wait=wait,
-        timeout=timeout,
-        staging_validated=staging_validated,
-        break_glass=break_glass,
-        force_promote=force_promote,
-        pause_rollback=pause_rollback,
-        max_rollback_attempts=max_rollback_attempts,
-        verify_vault=verify_vault,
-        verify_config=verify_config,
-        verify_smoke=verify_smoke,
-        verify_ingestion=verify_ingestion,
-    )
+    previous_template = os.environ.get("VAULT_SECRETS_TEMPLATE")
+    injected_template = False
+    if verify_manifests and previous_template is None:
+        rendered = verify_app_manifests(
+            service,
+            source_sha=resolved.sha,
+            deploy_type=target.env,
+            iac_ref=iac_ref,
+        )
+        encoded = encode_rendered_templates(rendered, service=service)
+        if encoded:
+            os.environ["VAULT_SECRETS_TEMPLATE"] = encoded
+            injected_template = True
+    try:
+        secret_supply = _supply_app_secrets(
+            service,
+            target.env,
+            target.iac_ref,
+            runner_url=iac_runner_url,
+            secret=iac_webhook_secret,
+            triggered_by=triggered_by,
+            timeout=timeout,
+        )
+        promote_started = time.monotonic()
+        plan = _deploy_fixed(
+            target.env,
+            resolved.sha,
+            domain=domain,
+            client=client,
+            service=service,
+            image_ref=resolved.image_ref,
+            iac_ref=target.iac_ref,
+            branch=clone_ref,
+            wait=wait,
+            timeout=timeout,
+            staging_validated=staging_validated,
+            break_glass=break_glass,
+            force_promote=force_promote,
+            pause_rollback=pause_rollback,
+            max_rollback_attempts=max_rollback_attempts,
+            verify_vault=verify_vault,
+            repo=_repo_for_service(service),
+            verify_config=verify_config,
+            verify_smoke=verify_smoke,
+            verify_ingestion=verify_ingestion,
+        )
+    finally:
+        if injected_template:
+            os.environ.pop("VAULT_SECRETS_TEMPLATE", None)
     _progress(
         f"Dokploy promote of {service} to {target.env}",
         "in service" if wait else "triggered",
@@ -723,6 +766,7 @@ def deploy_v2(
     triggered_by: str = "deploy_v2",
     image_wait_seconds: float | None = None,
     image_poll_seconds: float | None = None,
+    verify_manifests: bool = False,
 ) -> DeployV2Result:
     """Execute one deploy_v2 coordinate ``(service, type, version_ref, iac_ref)``."""
     if force_promote:
@@ -807,6 +851,8 @@ def deploy_v2(
             wait,
             timeout,
             data_lane,
+            iac_ref=iac_ref,
+            verify_manifests=verify_manifests,
         )
 
     return _deploy_fixed_v2(
@@ -831,6 +877,8 @@ def deploy_v2(
         iac_webhook_secret,
         triggered_by,
         data_lane,
+        iac_ref=iac_ref,
+        verify_manifests=verify_manifests,
     )
 
 
@@ -944,6 +992,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="seconds between image artifact readiness checks (default: 10)",
     )
+    parser.add_argument(
+        "--no-verify-manifests",
+        action="store_true",
+        help="skip fetching upstream App manifests and rendering VAULT_SECRETS_TEMPLATE",
+    )
     return parser
 
 
@@ -1013,6 +1066,7 @@ def main(argv: list[str] | None = None) -> int:
             return _handle_platform_batch(args, service_names)
 
         client = None
+        should_verify_manifests = not args.no_verify_manifests
         if not service_spec(args.service).iac_pinned:
             from common.deploy.dokploy_client import get_dokploy
 
@@ -1040,6 +1094,7 @@ def main(argv: list[str] | None = None) -> int:
             repo=args.repo,
             image_wait_seconds=args.image_wait_seconds,
             image_poll_seconds=args.image_poll_seconds,
+            verify_manifests=should_verify_manifests,
         )
     except (ValueError, RuntimeError, TimeoutError, httpx.HTTPError) as exc:
         print(f"deploy_v2 failed: {exc}", file=sys.stderr)

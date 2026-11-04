@@ -6,9 +6,37 @@ import subprocess
 
 import pytest
 
-from common.deploy import refs
-from common.deploy import refs as r
-from tools import resolve_deploy_ref as cli_r
+from infra2_sdk import refs
+
+DEFAULT_REPO = "https://github.com/wangzitian0/finance_report.git"
+
+
+class _BoundRefs:
+    """Thin test adapter supplying default ``repo`` for ``infra2_sdk.refs``."""
+
+    classify_ref = staticmethod(refs.classify_ref)
+    redact_repo = staticmethod(refs.redact_repo)
+
+    @staticmethod
+    def resolve_to_sha(ref: str, *, repo: str = DEFAULT_REPO, **kwargs) -> str:
+        return refs.resolve_to_sha(ref, repo=repo, **kwargs)
+
+    @staticmethod
+    def resolve_image_ref(ref: str, *, repo: str = DEFAULT_REPO, **kwargs):
+        return refs.resolve_image_ref(ref, repo=repo, **kwargs)
+
+    @staticmethod
+    def resolve_pr(pr_number, *, repo: str = DEFAULT_REPO, **kwargs):
+        return refs.resolve_pr(pr_number, repo=repo, **kwargs)
+
+    @staticmethod
+    def resolve_branch_to_sha(
+        branch: str, *, repo: str = DEFAULT_REPO, **kwargs
+    ) -> str:
+        return refs.resolve_branch_to_sha(branch, repo=repo, **kwargs)
+
+
+r = _BoundRefs()
 
 
 class FakeRunner:
@@ -289,24 +317,3 @@ def test_resolve_pr_rejects_bad_number():
         r.resolve_pr("abc", runner=FakeRunner())
     with pytest.raises(ValueError, match="positive integer"):
         r.resolve_pr(0, runner=FakeRunner())
-
-
-def test_the_cli_module_exposes_only_main_front_door():
-    """#955, #1270: resolution lives in `common.deploy.refs`; `tools.resolve_deploy_ref` is a pure CLI."""
-    assert cli_r.__all__ == ["main"]
-    assert callable(cli_r.main)
-
-
-def test_cli_main_prints_the_resolved_sha(capsys):
-    # A bare sha is used verbatim, so this exercises the CLI without a network call.
-    assert cli_r.main(["abc1234"]) == 0
-    assert capsys.readouterr().out.strip() == "abc1234"
-
-
-def test_cli_main_reports_resolution_failure_with_exit_2(monkeypatch, capsys):
-    def boom(ref, *, repo):
-        raise ValueError("tag 'v9.9.9' not found")
-
-    monkeypatch.setattr(cli_r, "resolve_to_sha", boom)
-    assert cli_r.main(["v9.9.9"]) == 2
-    assert "error: tag 'v9.9.9' not found" in capsys.readouterr().err

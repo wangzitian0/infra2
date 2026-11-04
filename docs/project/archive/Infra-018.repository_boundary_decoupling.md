@@ -68,8 +68,8 @@ Infra2 consumers import SDK contracts directly; the temporary local re-export mo
 - [x] `finance_report/tests/tooling/`: replace infra source assertions with SDK and wire-contract tests.
 - [x] `finance_report/docs/`: replace `repo/docs` links with canonical infra URLs.
 - [x] `infra2/repos/`: add SDK, Finance Report, and TrueAlpha as workspace-only submodules.
-- [x] `.github/workflows/app-deploy-request.yml`: prove a controlled staging request.
-- [x] `common/deploy/app_deploy_request.py`: verify remote GitHub Production evidence fail-closed.
+- [x] `.github/workflows/reconcile-iac-inputs.yml`: prove a controlled staging promotion (superseded `app-deploy-request.yml` in #1416).
+- [x] `common/deploy/app_contract.py`: verify remote GitHub Production evidence fail-closed.
 - [x] `common/pipeline_stage_contract.py` and `common/ci_gate_schema.py`: migrate consumers and remove compatibility modules.
 
 ## References
