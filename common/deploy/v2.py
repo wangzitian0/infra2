@@ -626,6 +626,7 @@ def _deploy_preview_v2(
             branch=clone_ref,
             wait=wait,
             health_timeout=timeout,
+            repo=_repo_for_service(service),
         )
     finally:
         if injected_template:
@@ -708,6 +709,7 @@ def _deploy_fixed_v2(
             pause_rollback=pause_rollback,
             max_rollback_attempts=max_rollback_attempts,
             verify_vault=verify_vault,
+            repo=_repo_for_service(service),
             verify_config=verify_config,
             verify_smoke=verify_smoke,
             verify_ingestion=verify_ingestion,

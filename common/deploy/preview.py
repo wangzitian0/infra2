@@ -46,6 +46,7 @@ from infra2_sdk.deploy import poll_until_healthy
 from infra2_sdk.routing import PreviewStackCoordinates, derive_preview_coordinates
 
 from common.core.environ import infra_domain
+from common.deploy.app_contract import APP_SOURCES
 from common.deploy.compose_lock import compose_write_lock
 from common.deploy.dokploy_adapter import deployment_ids as _deployment_ids
 from common.deploy.env_util import _parse_env_text
@@ -329,7 +330,12 @@ def up(
     config = preview_service_config(service)
 
     alias = preview_alias(kind, value, slug_prefix=config.slug_prefix)
-    sha = resolve_to_sha(code, repo=repo) if repo is not None else resolve_to_sha(code)
+    effective_repo = (
+        repo
+        if repo is not None
+        else f"https://github.com/{APP_SOURCES.get(service, 'wangzitian0/finance_report')}.git"
+    )
+    sha = resolve_to_sha(code, repo=effective_repo)
     env_vars = _preview_env_vars(
         alias,
         service=service,

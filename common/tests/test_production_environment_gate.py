@@ -378,6 +378,10 @@ def test_the_table_holds_the_full_conditions_of_the_real_workflows():
     assert {k: v for k, v in GATED_JOBS.items() if v is not None} == {
         ("deploy.yml", "deploy"): "inputs.type == 'prod'",
         ("reconcile-iac-inputs.yml", "reconcile"): "inputs.promote_prod",
+        (
+            "app-deploy-request.yml",
+            "deploy",
+        ): "github.event.client_payload.deploy_type == 'prod'",
     }
 
 
@@ -386,7 +390,7 @@ def test_the_real_workflow_tree_satisfies_the_gate_entry_point():
         path.name: path.read_text(encoding="utf-8")
         for path in sorted(WORKFLOWS_DIR.glob("*.y*ml"))
     }
-    assert len(texts) >= 9, sorted(texts)
+    assert len(texts) >= 10, sorted(texts)
     assert workflow_contract_failures(texts) == []
 
 
@@ -399,7 +403,7 @@ def test_the_benign_secret_list_is_pinned():
 
 def test_zero_class_pending_entries_remain_in_ungated_jobs():
     """#1127 / 1035-R2: every ungated job has a final classification, never 'class pending'."""
-    assert len(UNGATED_JOBS) >= 9
+    assert len(UNGATED_JOBS) >= 11
     pending = [
         key for key, reason in UNGATED_JOBS.items() if "class pending" in reason.lower()
     ]

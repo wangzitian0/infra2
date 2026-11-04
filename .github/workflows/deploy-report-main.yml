@@ -1,0 +1,17 @@
+name: Auto-deploy report-branch-main (Retired)
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy report-branch-main (Retired)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Retired in #1416
+        run: |
+          echo "::error::Retired in #1416; use reconcile-iac-inputs.yml"
+          exit 1

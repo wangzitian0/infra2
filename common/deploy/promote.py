@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from common.core.environ import infra_domain
+from common.deploy.app_contract import APP_SOURCES
 from common.deploy.compose_lock import compose_write_lock
 from common.console import warning
 from common.deploy import schema_gate
@@ -431,7 +432,12 @@ def _validate_deploy_preconditions(
             f"invalid domain {domain!r}: must be non-empty with no whitespace "
             "(it is interpolated into a line-based compose env file)."
         )
-    sha = resolve_to_sha(code, repo=repo) if repo is not None else resolve_to_sha(code)
+    effective_repo = (
+        repo
+        if repo is not None
+        else f"https://github.com/{APP_SOURCES.get(service, 'wangzitian0/finance_report')}.git"
+    )
+    sha = resolve_to_sha(code, repo=effective_repo)
     cfg = app_compose_env_config(service, env)
 
     if cfg.dynamic:
