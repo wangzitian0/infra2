@@ -475,7 +475,10 @@ def scan_iac_runner(
         else:
             import urllib.request
 
-            with urllib.request.urlopen(url, timeout=8.0) as resp:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": "infra2-config-drift/1.0"}
+            )
+            with urllib.request.urlopen(req, timeout=8.0) as resp:
                 payload = json.loads(resp.read().decode("utf-8", "replace"))
         running_sha = (
             str(

@@ -84,10 +84,7 @@ class WorkspaceStatus:
 
     @property
     def ok(self) -> bool:
-        return all(
-            (item.initialized or not item.error) and not item.error
-            for item in self.repositories
-        )
+        return all(not item.error for item in self.repositories)
 
     @property
     def current(self) -> bool:
