@@ -84,3 +84,23 @@ def test_deliver_infra2_report_noops_when_unconfigured(monkeypatch) -> None:
     assert (
         deliver_infra2_report("hi") is False
     )  # not configured -> clean no-op, no raise
+
+
+def test_scan_iac_runner_flags_stale_l1_container_and_accepts_current() -> None:
+    m = _drift_mod()
+    in_sync = m.scan_iac_runner(
+        "HEAD",
+        health_url="https://iac-runner.example.test/health",
+        fetcher=lambda _url: {"git_sha": m._commit_at_ref("HEAD")},
+    )
+    assert in_sync.service == "bootstrap/iac_runner"
+    assert in_sync.verdict == "in_sync"
+
+    stale = m.scan_iac_runner(
+        "HEAD",
+        health_url="https://iac-runner.example.test/health",
+        fetcher=lambda _url: {"git_sha": "0" * 40},
+    )
+    assert stale.service == "bootstrap/iac_runner"
+    assert stale.verdict == "DRIFT"
+    assert "bootstrap/06.iac_runner" in stale.note

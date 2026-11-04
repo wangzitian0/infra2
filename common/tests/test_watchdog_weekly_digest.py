@@ -924,3 +924,62 @@ def test_fetch_recent_runs_skips_push_and_pr_events_without_fetching_jobs(
     )
     assert [run["id"] for run in runs] == [12]
     assert requested_job_runs == ["12"]
+
+
+def test_summarize_ops_checks_jobs_and_render_in_message_and_card() -> None:
+    """Verify summarize_ops_checks_jobs aggregates scheduled runs and renders in text/card."""
+    digest = _load_module()
+    now = datetime(2026, 6, 9, 0, 0, tzinfo=UTC)
+    runs = [
+        {
+            "job_name": "Check infra2 host and alert bridge",
+            "created_at": "2026-06-08T02:20:00Z",
+            "conclusion": "success",
+        },
+        {
+            "job_name": "Facet & config-hash reconcile",
+            "created_at": "2026-06-08T03:50:00Z",
+            "conclusion": "failure",
+        },
+        {
+            "job_name": "Facet & config-hash reconcile",
+            "created_at": "2026-05-01T03:50:00Z",
+            "conclusion": "failure",
+        },
+    ]
+    ops_jobs = digest.summarize_ops_checks_jobs(runs, now=now)
+    assert ops_jobs == {
+        "Check infra2 host and alert bridge": {
+            "total": 1,
+            "success": 1,
+            "failure": 0,
+            "other": 0,
+        },
+        "Facet & config-hash reconcile": {
+            "total": 1,
+            "success": 0,
+            "failure": 1,
+            "other": 0,
+        },
+    }
+
+    summary = {
+        "week_start_utc": "2026-06-02",
+        "week_end_utc": "2026-06-09",
+        "total_runs": 2,
+        "success_count": 1,
+        "failure_count": 1,
+        "cancelled_count": 0,
+        "other_count": 0,
+        "success_rate_pct": 50.0,
+        "ops_checks_jobs": ops_jobs,
+    }
+    msg = digest.build_digest_message(summary, "wangzitian0/infra2")
+    assert "Ops-checks scheduled jobs:" in msg
+    assert "- Check infra2 host and alert bridge: 1/1 ok (fail=0)" in msg
+    assert "- Facet & config-hash reconcile: 0/1 ok (fail=1)" in msg
+
+    card = digest.build_digest_card(summary, "wangzitian0/infra2")
+    card_blob = json.dumps(card, ensure_ascii=False)
+    assert "**🧭 Ops-Checks 巡检作业全貌 (Scheduled Jobs)**" in card_blob
+    assert "Facet & config-hash reconcile" in card_blob

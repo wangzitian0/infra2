@@ -149,7 +149,7 @@ def test_the_times_survive_the_file_and_an_old_file_stays_valid(tmp_path) -> Non
 @pytest.mark.parametrize("bad", ["yesterday", True, -1, 1.5, None])
 def test_a_malformed_time_never_costs_the_counts(tmp_path, field, bad) -> None:
     """The writer never reads the times, so a bad one must not make the file corrupt:
-    that would drop 21 days of counts. The verifier rejects a bad time itself."""
+    that would drop 35 days of counts. The verifier rejects a bad time itself."""
     state = tmp_path / "s.json"
     local_ledger.record_probe_round(_round(vault_ok=False), "production", state, T0)
     path = tmp_path / local_ledger.LEDGER_FILE_NAME
@@ -187,13 +187,16 @@ def test_rounds_land_on_their_utc_day() -> None:
 
 
 def test_prune_keeps_exactly_the_retention_window() -> None:
+    from common.observability import digest
+
     ledger = local_ledger.new_ledger("production")
-    for back in range(30):
+    for back in range(45):
         local_ledger.record_round(ledger, _round(), "production", T0 - back * DAY)
     local_ledger.prune(ledger, T0)
     dates = sorted(ledger["days"])
-    assert len(dates) == local_ledger.RETENTION_DAYS == 21
-    assert dates[0] == "2026-09-04"
+    assert len(dates) == local_ledger.RETENTION_DAYS == 35
+    assert local_ledger.RETENTION_DAYS >= digest.MONTHLY_WINDOW_DAYS
+    assert dates[0] == "2026-08-21"
     assert dates[-1] == "2026-09-24"
 
 

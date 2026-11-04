@@ -55,6 +55,8 @@ class RepositoryStatus:
 
     @property
     def current(self) -> bool:
+        if not self.initialized and not self.error:
+            return True
         pin_satisfied = (
             True if self.contract == "snapshot" else self.pin_matches is not False
         )
@@ -82,7 +84,7 @@ class WorkspaceStatus:
 
     @property
     def ok(self) -> bool:
-        return all(item.initialized and not item.error for item in self.repositories)
+        return all(not item.error for item in self.repositories)
 
     @property
     def current(self) -> bool:
@@ -163,6 +165,7 @@ def repository_status(
     repository: dict[str, Any],
     *,
     fetch: bool = False,
+    submodules_expected: bool = True,
     runner: Runner = subprocess.run,
 ) -> RepositoryStatus:
     relative = str(repository["path"])
@@ -178,15 +181,36 @@ def repository_status(
         "release_identity": str(repository["release_identity"]),
         "contract": contract,
     }
+    uninit_submodule_ok = (
+        repository.get("checkout") == "submodule" and not submodules_expected
+    )
     if not checkout.is_dir():
+        if uninit_submodule_ok:
+            return RepositoryStatus(
+                **common,
+                initialized=False,
+                parent_pin=_parent_pin(root, relative, runner=runner),
+            )
         return RepositoryStatus(**common, initialized=False, error="checkout missing")
     inside = _value(checkout, "rev-parse", "--is-inside-work-tree", runner=runner)
     if inside != "true":
+        if uninit_submodule_ok:
+            return RepositoryStatus(
+                **common,
+                initialized=False,
+                parent_pin=_parent_pin(root, relative, runner=runner),
+            )
         return RepositoryStatus(
             **common, initialized=False, error="not an initialized git checkout"
         )
     top_level = _value(checkout, "rev-parse", "--show-toplevel", runner=runner)
     if not top_level or Path(top_level).resolve() != checkout:
+        if uninit_submodule_ok:
+            return RepositoryStatus(
+                **common,
+                initialized=False,
+                parent_pin=_parent_pin(root, relative, runner=runner),
+            )
         return RepositoryStatus(
             **common,
             initialized=False,
@@ -276,6 +300,7 @@ def workspace_status(
     manifest: dict[str, Any],
     *,
     fetch: bool = False,
+    submodules_expected: bool = True,
     runner: Runner = subprocess.run,
 ) -> WorkspaceStatus:
     repositories = manifest.get("repositories")
@@ -283,7 +308,13 @@ def workspace_status(
         return WorkspaceStatus(())
     return WorkspaceStatus(
         tuple(
-            repository_status(root, repository, fetch=fetch, runner=runner)
+            repository_status(
+                root,
+                repository,
+                fetch=fetch,
+                submodules_expected=submodules_expected,
+                runner=runner,
+            )
             for repository in repositories
             if isinstance(repository, dict)
         )

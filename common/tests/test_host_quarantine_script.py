@@ -321,3 +321,32 @@ def test_second_batch_data_litter_quarantined(tmp_path: Path) -> None:
         moved = batch_dir / "files" / rel
         assert moved.exists()
         assert moved.read_bytes() == payload
+
+
+def test_quarantined_scripts_are_not_reinstalled_by_bootstrap_tasks() -> None:
+    """Retired host scripts in TARGET_LITTER must be deleted from bootstrap/ and tasks.py."""
+    import re
+
+    script_text = SCRIPT.read_text(encoding="utf-8")
+    block = re.search(r"TARGET_LITTER=\(\n(.*?)\n\)", script_text, re.S)
+    assert block is not None
+    quarantined_scripts: list[str] = []
+    for raw_line in block.group(1).splitlines():
+        entry = raw_line.strip().strip('"')
+        rel_path = entry.split("|", 1)[0]
+        basename = Path(rel_path).name
+        if basename.endswith(".sh"):
+            quarantined_scripts.append(basename)
+
+    assert "dokploy-deploy-queue-watchdog.sh" in quarantined_scripts
+    assert not (
+        REPO / "bootstrap/01.dokploy_install/dokploy-deploy-queue-watchdog.sh"
+    ).exists()
+
+    tasks_text = (REPO / "bootstrap/01.dokploy_install/tasks.py").read_text(
+        encoding="utf-8"
+    )
+    for script_name in quarantined_scripts:
+        assert script_name not in tasks_text, (
+            f"quarantined script {script_name!r} is still referenced in bootstrap/01.dokploy_install/tasks.py"
+        )

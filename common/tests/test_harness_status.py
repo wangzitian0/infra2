@@ -212,6 +212,53 @@ def test_empty_optional_submodule_is_not_reported_as_its_parent(tmp_path: Path) 
     assert not any(call[0] == "fetch" for call in calls)
 
 
+def test_linked_git_worktree_auto_disables_submodules_expected(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import common.core.harness_cli as harness
+
+    (tmp_path / ".git").write_text("gitdir: /tmp/parent/.git/worktrees/wt\n")
+    observed: list[bool] = []
+
+    def check_workspace(_root, _manifest, *, submodules_expected=True):
+        observed.append(submodules_expected)
+        return SimpleNamespace(ok=True)
+
+    monkeypatch.setattr(harness, "check_workspace", check_workspace)
+    monkeypatch.setattr(harness, "load_manifest", lambda _path: {"repositories": []})
+    monkeypatch.setattr(
+        harness,
+        "workspace_status",
+        lambda *_args, **kwargs: (
+            observed.append(kwargs.get("submodules_expected", True))
+            or SimpleNamespace(ok=True, current=True)
+        ),
+    )
+    monkeypatch.setattr(harness, "_print_status", lambda _result: None)
+
+    assert harness.main(["status", "--root", str(tmp_path)]) == 0
+    assert observed == [False, False]
+
+    uninit = repository_status(
+        tmp_path,
+        {
+            "id": "tooling",
+            "path": "tooling",
+            "checkout": "submodule",
+            "release_identity": "tag",
+        },
+        submodules_expected=False,
+        runner=lambda argv, **_kw: subprocess.CompletedProcess(
+            argv, 0, "160000 commit " + "b" * 40 + "\ttooling\n", ""
+        ),
+    )
+    assert not uninit.initialized
+    assert uninit.error == ""
+    assert uninit.parent_pin == "b" * 40
+    assert uninit.current is True
+    assert WorkspaceStatus((uninit,)).ok is True
+
+
 def test_repository_status_contract_snapshot_allows_pin_drift() -> None:
     pinned = RepositoryStatus(
         repository_id="pinned-repo",
