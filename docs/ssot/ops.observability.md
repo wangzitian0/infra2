@@ -23,7 +23,7 @@
 | **告警 - 密钥源头** | 1Password `platform/{env}/alerting` → 运行时镜像 Vault `secret/platform/{env}/alerting` | Feishu 凭据 + 可选 bridge basic auth |
 | **带外 watchdog** | [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/)(轻量带外,边缘 30min)+ [`.github/workflows/ops-checks.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/ops-checks.yml)(日级带外审计) | 只判 VPS 自己报告不了的:整机/整栈失联、告警链路自身失效;分工见 §1.1 |
 | **信号清单** | [`watchdog-signals.yaml`](watchdog-signals.yaml) | 按信号(非组件)追踪 watchdog 归属 |
-| **报告 - 账本** | VPS probe runner 账本文件(21 天,`common/observability/local_ledger.py`)+ Worker 心跳失联边沿(`/outages`)·`common/observability/ledger.py`(聚合)·`tools/stability_report.py --daily`(日报,GitHub `ops-checks.yml` `watchdog` job) + `tools/watchdog_weekly_digest.py`(周报 7d / 月报 30d,`ops-checks.yml` `digest` job,内聚 `common/observability/digest.py::collect_weekly_stability_section`) | 正向证明,见 §6 |
+| **报告 - 账本** | VPS probe runner 账本文件(35 天,`common/observability/local_ledger.py`)+ Worker 心跳失联边沿(`/outages`)·`common/observability/ledger.py`(聚合)·`tools/stability_report.py --daily`(日报,GitHub `ops-checks.yml` `watchdog` job) + `tools/watchdog_weekly_digest.py`(周报 7d / 月报 30d,`ops-checks.yml` `digest` job,内聚 `common/observability/digest.py::collect_weekly_stability_section`) | 正向证明,见 §6 |
 | **部署指南** | [Infra-007](../project/archive/Infra-007.signoz_install.md) | SigNoz 安装 |
 
 In-band 告警路径恒为:`component/app → OTLP Collector → SigNoz → platform/12.alerting → Feishu/Lark`。
@@ -79,7 +79,7 @@ owner 批准的当前 head SHA，才能满足 `AGENTS.md` 的生产权限边界�
 
 2. **轻门禁 (De-escalation of Pedantic Gates)**:
    - 门禁守卫核心代码安全契约、关键路径连通性与数据完整性，不阻断瞬态网络波动或无害的冷启动延迟抖动。
-   - 稳定性周报（`tools/stability_report.py`）严格遵循 7 天滚动窗口（默认 `--days 7`），彻底杜绝把 21 天历史已恢复故障计入当前周可用率的统计漂移。
+   - 稳定性周报（`tools/stability_report.py`）严格遵循 7 天滚动窗口（默认 `--days 7`），彻底杜绝把 35 天账本内的历史已恢复故障计入当前周可用率的统计漂移。
 
 3. **重跑通 (End-to-End Viability over Detail Grinding)**:
    - 严禁将 97 个容器的全部 stdout 日志未经筛选倾泻至 ClickHouse，防止单机线程池与磁盘 I/O 恶化。
@@ -358,7 +358,7 @@ collector 4317/4318 在 Docker 网络内 `expose`，另将 4318 仅绑定宿主�
 - **分工(#904,§1.1)**:成功/失败计数是重活,在 VPS;VPS 失联期间它什么也记不了,这一段只能在带外——Worker 只记心跳的
   失联/恢复**边沿**,不做累加。
 - **记账(VPS)**:probe runner 每轮一次调用 `common/observability/local_ledger.py::record_probe_round`,把每个探针(含公网路由探针,
-  取级联抑制**之前**的原始结果)的 ok/fail 累加进本环境**一个**账本文件的当日条目,保留 21 天,原子替换写入;文件在宿主机
+  取级联抑制**之前**的原始结果)的 ok/fail 累加进本环境**一个**账本文件的当日条目,保留 35 天,原子替换写入;文件在宿主机
   `/var/lib/infra2-availability-ledger${ENV_SUFFIX}/availability-ledger.json`(compose bind mount,跨重部署保留)。账本写失败只打日志,
   绝不打断探测循环(循环失败会被心跳报成告警链路故障)。
 - **最近一次结果时间(#1223)**:每个信号的当日条目另记 `lastOkAt` / `lastFailAt`(最近一次 ok / fail 那一轮的 epoch 秒,整数)。一轮只写自己结果对应的那个字段,绝不清掉另一个;从未出现该结果时字段缺省。旧账本没有这两个字段,读者必须把「缺字段」当作「时间未知」而不是「很久以前」(`tools/canary_verify.py` 即如此判:有失败而缺时间一律失败)。`ok` / `fail` 计数含义不变,`schema` 仍为 2。
@@ -377,7 +377,7 @@ collector 4317/4318 在 Docker 网络内 `expose`，另将 4318 仅绑定宿主�
 - **账本文件的完整性**:类型不对的合法 JSON 与非法 JSON 一样视为损坏,移到 `*.corrupt.json` 后重新开始(否则每轮都会抛错、账本静默冻结);
   写入先 `fsync` 临时文件再原子 `rename`。
 - **禁止**:把 `fail>0` 计入 100%/perfect · 信任畸形 day/signal/outage 抬高可用率 · 空账本报 100% · 在 Worker 里累加。
-- **已知缺口**:原 R2 冷归档随 Worker 瘦身删除,账本只有 21 天热数据;长期留存(把账本目录纳入备份)未做。
+- **账本备份与留存**:原 R2 冷归档随 Worker 瘦身删除,在线账本保留 35 天热数据;宿主机账本目录存在时由 `tools/host_backup.sh` 归档为 `observability/availability_ledger` 并随离机备份长期留存。
 
 > **天级日报(目标态,#425 T3)**:统一健康日报(探针绿/红、今日 fire/resolve、备份新鲜度、drift)发 Feishu,**其送达即投递自证**;"投递真断了"的硬信号留给独立带外 watchdog。6h 合成 `alert-delivery-canary` 已退役(它把投递自证做成了周期性告警);当前 bridge→Feishu 路径由 `lark-delivery-http`(配置有效 + Feishu 可达,不真发)、带外 watchdog 的 bridge `/health`、日报自身投递、以及真实告警共同覆盖。
 
@@ -538,7 +538,7 @@ Feishu page，且告警携带同一结构化记录。不得通过破坏 producti
 | Deploy-queue guard(卡死检测纯逻辑 + sidecar 编排:env 加载、扫描失败隔离、renotify 抑制、remediate/升级序列) | `common/tests/test_deploy_queue.py`, `common/tests/test_deploy_queue_guard.py` | ✅ |
 | 备份新鲜度告警 payload | `common/tests/test_backup_verification.py` | ✅ |
 | 账本聚合(正例+反例:降级绝不报 100%/perfect、畸形输入不抬高、0 检查不除零、空槽与失联区间并集计为失败) | `common/tests/test_availability_ledger.py` | ✅ |
-| VPS 账本记账(每轮计数与 5 min 在场槽、空槽区间、按 UTC 日、21 天裁剪、类型损坏移走、fsync 后原子写、失败不打断循环、runner 调用点) | `common/tests/test_local_ledger.py` | ✅ |
+| VPS 账本记账(每轮计数与 5 min 在场槽、空槽区间、按 UTC 日、35 天裁剪、类型损坏移走、fsync 后原子写、失败不打断循环、runner 调用点) | `common/tests/test_local_ledger.py` | ✅ |
 | Worker 行为契约(入口去抖、VPS 已报则抑制、按身份告警、失联边沿与 `/outages`、预算) | `common/tests/test_cloudflare_watchdog.py`, `test_cloudflare_watchdog_kv_budget.py` | ✅ |
 | 心跳契约 v2 端到端:真实 runner 的 POST 进真实 Worker(VPS 已投递的路由不重复报;未过去抖、未投递、维护期照报)(#903/#904) | `common/tests/test_heartbeat_contract.py` | ✅ |
 | 周 watchdog recall digest / 周正向稳定性报告 | `test_watchdog_weekly_digest.py`, `test_stability_report.py` | ✅ |

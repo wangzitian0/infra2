@@ -106,3 +106,23 @@ def test_otel_queue_dir_is_mounted_and_provisioned() -> None:
     assert "${DATA_PATH}/otel-queue:/var/lib/otelcol/file_storage" in compose
     deploy = (root / "platform/11.signoz/deploy.py").read_text(encoding="utf-8")
     assert "otel-queue" in deploy and "chown -R 10001:0" in deploy
+
+
+def test_otel_collector_normalizes_deployment_environment_name() -> None:
+    """Normalize legacy deployment.environment into deployment.environment.name across pipelines."""
+    import yaml
+
+    cfg = yaml.safe_load(
+        (ROOT / "platform/11.signoz/otel-collector-config.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    attrs = cfg["processors"]["resource"]["attributes"]
+    assert {
+        "key": "deployment.environment.name",
+        "from_attribute": "deployment.environment",
+        "action": "insert",
+    } in attrs
+    for pipeline in ("traces", "metrics", "logs"):
+        processors = cfg["service"]["pipelines"][pipeline]["processors"]
+        assert processors == ["memory_limiter", "resource", "batch"]

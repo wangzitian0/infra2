@@ -49,6 +49,14 @@ processors:
     check_interval: 5s
     limit_percentage: 80
     spike_limit_percentage: 25
+  # Normalize legacy deployment.environment (emitted by browser OTLP SDKs) into
+  # the standard OTel deployment.environment.name attribute without overwriting
+  # an explicit deployment.environment.name.
+  resource:
+    attributes:
+      - key: deployment.environment.name
+        from_attribute: deployment.environment
+        action: insert
 
 exporters:
   # SigNoz-specific exporters. retry_on_failure + a disk-backed sending_queue
@@ -92,13 +100,13 @@ service:
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, resource, batch]
       exporters: [clickhousetraces]
     metrics:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, resource, batch]
       exporters: [signozclickhousemetrics]
     logs:
       receivers: [otlp]
-      processors: [memory_limiter, batch]
+      processors: [memory_limiter, resource, batch]
       exporters: [clickhouselogsexporter]

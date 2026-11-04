@@ -104,3 +104,124 @@ def test_scan_iac_runner_flags_stale_l1_container_and_accepts_current() -> None:
     assert stale.service == "bootstrap/iac_runner"
     assert stale.verdict == "DRIFT"
     assert "bootstrap/06.iac_runner" in stale.note
+
+
+def test_scan_iac_runner_rejects_malformed_git_sha_before_git_merge_base(
+    monkeypatch,
+) -> None:
+    """Reject malformed or flag-like git_sha values before invoking git merge-base."""
+    import subprocess as sp
+
+    m = _drift_mod()
+    real_run = sp.run
+    merge_base_calls: list[list[str]] = []
+
+    def _spy_run(cmd, *args, **kwargs):
+        if isinstance(cmd, list) and "merge-base" in cmd:
+            merge_base_calls.append(cmd)
+        return real_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(m.subprocess, "run", _spy_run)
+    row = m.scan_iac_runner(
+        "HEAD",
+        health_url="https://iac-runner.example.test/health",
+        fetcher=lambda _url: {"git_sha": "-bad-flag"},
+    )
+    assert row.service == "bootstrap/iac_runner"
+    assert row.verdict == "error"
+    assert "invalid running git_sha" in row.note
+    assert merge_base_calls == []
+
+
+def test_scan_iac_runner_derives_default_url_from_internal_domain(monkeypatch) -> None:
+    """Derive https://iac.<INTERNAL_DOMAIN>/health when IAC_RUNNER_HEALTH_URL is unset."""
+    m = _drift_mod()
+    monkeypatch.delenv("IAC_RUNNER_HEALTH_URL", raising=False)
+    monkeypatch.setenv("INTERNAL_DOMAIN", "zitian.party")
+    seen_urls: list[str] = []
+
+    def _fetcher(url: str) -> dict[str, str]:
+        seen_urls.append(url)
+        return {"git_sha": m._commit_at_ref("HEAD")}
+
+    row = m.scan_iac_runner("HEAD", fetcher=_fetcher)
+    assert seen_urls == ["https://iac.zitian.party/health"]
+    assert row.service == "bootstrap/iac_runner"
+    assert row.verdict == "in_sync"
+
+
+def test_scan_appends_iac_runner_on_live_dokploy_run(monkeypatch) -> None:
+    """Append scan_iac_runner(tag) when DOKPLOY_API_KEY and INTERNAL_DOMAIN are set."""
+    m = _drift_mod()
+    monkeypatch.delenv("IAC_RUNNER_HEALTH_URL", raising=False)
+    monkeypatch.setenv("DOKPLOY_API_KEY", "live-key")
+    monkeypatch.setenv("INTERNAL_DOMAIN", "zitian.party")
+    monkeypatch.setattr(m.service_registry, "all_services", lambda: [])
+    monkeypatch.setattr(m, "_deployed_identities", lambda: {})
+    monkeypatch.setattr(m, "_commit_at_ref", lambda _tag: "a" * 40)
+    monkeypatch.setattr(
+        m,
+        "scan_iac_runner",
+        lambda tag: m.Row("bootstrap/iac_runner", "in_sync", expected=tag),
+    )
+
+    rows = m.scan("v1.2.3")
+    assert [r.service for r in rows] == ["bootstrap/iac_runner"]
+    assert rows[0].verdict == "in_sync"
+
+
+def test_scan_omits_iac_runner_when_env_unconfigured(monkeypatch) -> None:
+    """Omit bootstrap/iac_runner from scan() when neither IAC_RUNNER_HEALTH_URL nor live Dokploy env is set."""
+    m = _drift_mod()
+    monkeypatch.setenv("IAC_RUNNER_HEALTH_URL", "   ")
+    monkeypatch.delenv("DOKPLOY_API_KEY", raising=False)
+    monkeypatch.setenv("INTERNAL_DOMAIN", "zitian.party")
+    monkeypatch.setattr(m.service_registry, "all_services", lambda: [])
+    monkeypatch.setattr(m, "_deployed_identities", lambda: {})
+    monkeypatch.setattr(m, "_commit_at_ref", lambda _tag: "a" * 40)
+
+    called = False
+
+    def _unexpected_call(_tag: str):
+        nonlocal called
+        called = True
+        return m.Row("bootstrap/iac_runner", "in_sync")
+
+    monkeypatch.setattr(m, "scan_iac_runner", _unexpected_call)
+
+    rows = m.scan("v1.2.3")
+    assert rows == []
+    assert not called
+
+
+def test_iac_runner_dockerfile_and_webhook_expose_git_sha() -> None:
+    """Verify Dockerfile sets ENV GIT_SHA and webhook_server.py /health returns git_sha via AST."""
+    import ast
+
+    dockerfile = (ROOT / "bootstrap/06.iac_runner/Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    assert 'ENV GIT_SHA="${GIT_SHA}"' in dockerfile
+
+    webhook_src = (ROOT / "bootstrap/06.iac_runner/webhook_server.py").read_text(
+        encoding="utf-8"
+    )
+    tree = ast.parse(webhook_src)
+    health_fn = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "health"
+        ),
+        None,
+    )
+    assert health_fn is not None, "def health() not found in webhook_server.py"
+    dict_keys: set[str] = set()
+    for node in ast.walk(health_fn):
+        if isinstance(node, ast.Return) and node.value is not None:
+            for sub in ast.walk(node.value):
+                if isinstance(sub, ast.Dict):
+                    for k in sub.keys:
+                        if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                            dict_keys.add(k.value)
+    assert "git_sha" in dict_keys

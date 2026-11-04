@@ -2,6 +2,7 @@ FROM python:3.11-slim
 
 ARG GIT_SHA=unknown
 LABEL git.sha="${GIT_SHA}"
+ENV GIT_SHA="${GIT_SHA}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \

@@ -59,6 +59,7 @@ if [ "${TIER}" != "weekly" ] && [ "${TIER}" != "quarterly" ]; then
 fi
 DATA_ROOT="${BACKUP_DATA_ROOT:-/data}"
 SUFFIX="${ENV_SUFFIX:-}"
+LEDGER_DIR="${BACKUP_LEDGER_ROOT:-/var/lib/infra2-availability-ledger}${SUFFIX}"
 case "${SUFFIX}" in
   "") ENVIRONMENT="production" ;;
   "-staging") ENVIRONMENT="staging" ;;
@@ -205,6 +206,24 @@ while IFS= read -r line; do
     failures+=("${line%%|*}")
   fi
 done <<< "${SERVICES}"
+
+if [ -d "${LEDGER_DIR}" ] && [ -f "${LEDGER_DIR}/availability-ledger.json" ]; then
+  set +e
+  (
+    set -e
+    archive="${RUN_DIR}/observability_availability_ledger_${TS}.tar.gz"
+    archive_tree "observability/availability_ledger" "${archive}" "${LEDGER_DIR}" .
+    emit_artifact "observability/availability_ledger" "${archive}" "filesystem_archive"
+  ) < /dev/null
+  rc=$?
+  set -e
+  if [ "${rc}" -ne 0 ]; then
+    echo "FAILED observability/availability_ledger (exit ${rc})" >&2
+    failures+=("observability/availability_ledger")
+  fi
+elif [ -d "${LEDGER_DIR}" ]; then
+  echo "WARN observability/availability_ledger: directory ${LEDGER_DIR} exists without availability-ledger.json; skipping archive" >&2
+fi
 
 {
   echo "{"
