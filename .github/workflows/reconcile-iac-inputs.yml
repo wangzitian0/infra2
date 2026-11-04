@@ -10,6 +10,8 @@ name: Reconcile IaC Inputs
 "on":
   push:
     tags: ["v*.*.*"]
+  schedule:
+    - cron: "0 * * * *"
   workflow_dispatch:
     inputs:
       before:
@@ -54,6 +56,8 @@ jobs:
     timeout-minutes: 120
     env:
       IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
+      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
+      INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
       # reconcile shells out to tools.deploy_v2, whose on-main guard needs an authenticated
       # GitHub compare call (#635).
       GITHUB_TOKEN: ${{ github.token }}
@@ -147,7 +151,13 @@ jobs:
           # explicit, deliberate promotion via workflow_dispatch (promote_prod=true) —
           # a tag push NEVER auto-deploys prod.
           promote_prod="false"
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+          if [[ "$EVENT_NAME" == "schedule" ]]; then
+            after="$(git tag --list 'v*.*.*' --sort=-v:refname --merged origin/main | head -n1 || true)"
+            if [[ -z "$after" ]]; then
+              echo "::error::no on-main release tag found for scheduled reconcile."
+              exit 1
+            fi
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             after="${INPUT_AFTER:-$REF_NAME}"
             dry_run="$INPUT_DRY_RUN"
             promote_prod="$INPUT_PROMOTE_PROD"

@@ -280,7 +280,7 @@ def bespoke_app_compose_targets() -> tuple[ComposeTarget, ...]:
 #
 # This is PURE config: no Dokploy calls, no resolution. common/deploy/preview.py
 # turns the slug/suffix/url here into actual create_compose/deploy calls, and
-# resolve_deploy_ref.py turns `code` into the sha that a `commit` alias pins.
+# infra2_sdk.refs turns `code` into the sha that a `commit` alias pins.
 # The `deployment_environment` label mirrors the telemetry identity contract in
 # docs/ssot/core.environments.md §4.5 (values branch-<name> / pr-<N> / commit-<sha7> / tag-<slug>).
 

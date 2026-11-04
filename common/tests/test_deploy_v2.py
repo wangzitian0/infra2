@@ -26,7 +26,7 @@ from common.deploy.iac_runner_client import (
     status_poll_attempts,
     status_poll_delays,
 )
-from common.deploy.refs import ResolvedRef, classify_ref
+from infra2_sdk.refs import ResolvedRef, classify_ref
 from common.deploy.v2 import (
     DeployV2Result,
     assert_iac_ref_on_main,
@@ -126,6 +126,7 @@ def calls(monkeypatch):
     monkeypatch.setattr(dv2, "resolve_pr", _fake_resolve_pr)
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
     monkeypatch.setattr(dv2, "resolve_branch_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "verify_app_manifests", lambda *a, **kw: {})
     return rec
 
 

@@ -2376,10 +2376,8 @@ def test_the_guard_of_the_lock_stays_with_the_owner_when_the_lock_holds(path):
     assert path in reason and CI_WORKFLOW not in reason
 
 
-# The six files with an ungated or conditional production job (#1138).
+# The four files with an ungated or conditional production job (#1138).
 FILES_WITH_JOBS_OUTSIDE_THE_ENVIRONMENT = (
-    "app-deploy-request.yml",
-    "deploy-report-main.yml",
     "deploy.yml",
     "ops-checks.yml",
     "preview-teardown.yml",

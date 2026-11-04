@@ -36,7 +36,7 @@ from common.deploy.queue import deployment_start_epoch
 from common.core import REPO_ROOT
 from common.deploy.failure_snapshot import emit_failure_snapshot
 from common.observability.openpanel import openpanel_env
-from common.deploy.refs import resolve_to_sha
+from infra2_sdk.refs import resolve_to_sha
 from common.deploy.preflight import (
     check_approle_creds,
     extract_vault_token_from_env,
@@ -883,7 +883,7 @@ def deploy(
 ) -> DeployPlan:
     """Deploy a resolved app commit to a fixed app environment.
 
-    code  -> common.deploy.refs (main / vX.Y.Z / <sha>) -> a commit sha.
+    code  -> infra2_sdk.refs (main / vX.Y.Z / <sha>) -> a commit sha.
     env   -> deploy_env_config (which compose, URL, suffix, default data).
     data  -> derived from the env's data_default; callers cannot override it here.
     """

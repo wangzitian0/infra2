@@ -12,8 +12,10 @@ named 'infra2_sdk'` (run 34430724977, 2026-09-10).
 
 from __future__ import annotations
 
+import argparse
 import re
 import subprocess
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -150,14 +152,32 @@ def marker_status(*, repo_root: str | Path, runner=subprocess.run) -> MarkerStat
     return marker_status_from_tags(releases, (marker,))
 
 
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("action", nargs="?", default="markers", choices=("markers",))
+    parser.add_argument("--repo-root", default=".")
+    args = parser.parse_args(argv)
+    try:
+        status = marker_status(repo_root=args.repo_root)
+        print(status.line())
+        return 1 if status.stale else 0
+    except (ValueError, subprocess.SubprocessError, OSError) as exc:
+        print(f"release markers failed: {exc}", file=sys.stderr)
+        return 1
+
+
 __all__ = [
     "MINIMUM_PRODUCTION_MARKER",
     "MarkerStatus",
     "PRODUCTION_MARKER_PREFIX",
     "RELEASE_TAG_RE",
+    "main",
     "marker_status",
     "marker_status_from_tags",
     "newest_release_tag",
     "production_marker",
     "version_key",
 ]
+
+if __name__ == "__main__":
+    raise SystemExit(main())

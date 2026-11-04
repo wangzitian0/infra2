@@ -45,6 +45,7 @@ def _valid_manifest() -> dict:
                 "governance": "autonomous",
                 "source": "https://example.test/app",
                 "release_identity": "image",
+                "release_tag": "v0.1.0",
                 "authority": ["AGENTS.md"],
             },
         ],
@@ -497,3 +498,43 @@ def test_committed_health_urls_equal_the_registry_health_routes(monkeypatch) -> 
     # An App with its own domain is served on the bare domain in production.
     assert domain_for_service("truealpha/app") == "truealpha.club"
     assert health["truealpha"]["production"] == "https://truealpha.club/api/health"
+
+
+@pytest.mark.parametrize(
+    ("release_tag", "codes"),
+    [
+        ("v0.2.46", []),
+        (None, ["release-tag"]),
+        ("", ["release-tag"]),
+        ("0.2.46", ["release-tag"]),
+        ("v0.2", ["release-tag"]),
+        ("v0.2.46-rc1", ["release-tag"]),
+        (123, ["release-tag"]),
+        (["v0.2.46"], ["release-tag"]),
+    ],
+)
+def test_external_application_release_tag_is_validated(
+    tmp_path: Path, release_tag: object, codes: list[str]
+) -> None:
+    manifest = _workspace(tmp_path)
+    if release_tag is None:
+        manifest["repositories"][1].pop("release_tag", None)
+    else:
+        manifest["repositories"][1]["release_tag"] = release_tag
+
+    result = validate_manifest(tmp_path, manifest)
+
+    assert [error.code for error in result.errors] == codes
+    if codes:
+        assert "release_tag" in result.errors[0].message
+
+
+def test_non_external_application_rejects_malformed_release_tag(
+    tmp_path: Path,
+) -> None:
+    manifest = _workspace(tmp_path)
+    manifest["repositories"][0]["release_tag"] = "bad-tag"
+
+    result = validate_manifest(tmp_path, manifest)
+
+    assert [error.code for error in result.errors] == ["release-tag"]

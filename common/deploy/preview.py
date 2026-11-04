@@ -10,8 +10,8 @@ Unlike staging/prod (a fixed compose driven by common.deploy.promote.deploy), pr
 dynamic: the compose for an alias is found-or-created here by a deterministic name, so
 any number of aliases coexist and outlive a CI run until explicitly torn down.
 
-Design seams (mirroring common.deploy.promote / common.deploy.refs):
-- code -> sha           : common.deploy.refs.resolve_to_sha (the App image tag to pull)
+Design seams (mirroring common.deploy.promote / infra2_sdk.refs):
+- code -> sha           : infra2_sdk.refs.resolve_to_sha (the App image tag to pull)
 - service -> config     : deploy_env_config.preview_service_config (project / compose
                           path / db name / base_subdomain — the per-service knobs)
 - (kind, value) -> ids  : deploy_env_config.preview_alias (suffix / url / slug / label)
@@ -59,7 +59,7 @@ from common.deploy.env_config import (
     preview_service_config,
 )
 from common.observability.openpanel import openpanel_env
-from common.deploy.refs import resolve_to_sha
+from infra2_sdk.refs import resolve_to_sha
 
 
 @dataclass(frozen=True)

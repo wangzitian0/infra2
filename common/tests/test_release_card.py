@@ -419,9 +419,10 @@ def _gh_run_created(command, **_kwargs):
 def test_the_accept_until_time_is_the_one_that_the_deploy_job_enforces() -> None:
     """The card must show the time that production_request_accept_until returns, the
     function of the age check. A sender deadline moves it earlier than the default."""
-    from infra2_sdk.deploy import SENDER_DEADLINE_KEY
-
-    from common.deploy.app_deploy_request import production_request_accept_until
+    from infra2_sdk.deploy import (
+        SENDER_DEADLINE_KEY,
+        production_request_accept_until,
+    )
 
     created = datetime(2026, 10, 23, 11, 35, 39, tzinfo=timezone.utc)
     fmt = rc.ACCEPT_UNTIL_FORMAT

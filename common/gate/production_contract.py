@@ -32,10 +32,6 @@ GATED_JOBS: dict[tuple[str, str], str | None] = {
     ("deploy.yml", "deploy"): "inputs.type == 'prod'",
     ("deploy.yml", "bootstrap"): None,
     ("reconcile-iac-inputs.yml", "reconcile"): "inputs.promote_prod",
-    (
-        "app-deploy-request.yml",
-        "deploy",
-    ): "github.event.client_payload.deploy_type == 'prod'",
     ("apply-observability.yml", "apply"): None,
     ("deploy-cloudflare-watchdog.yml", "deploy"): None,
 }
@@ -43,11 +39,6 @@ GATED_JOBS: dict[tuple[str, str], str | None] = {
 # Jobs that read a production credential and do not need owner approval, with the reason.
 UNGATED_JOBS: dict[tuple[str, str], str] = {
     ("deploy.yml", "preflight_canary"): "canary on the throwaway slot, not production",
-    (
-        "app-deploy-request.yml",
-        "preflight_canary",
-    ): "canary on the throwaway slot, not production",
-    ("deploy-report-main.yml", "deploy"): "deploys the preview slot, not production",
     ("preview-teardown.yml", "teardown"): "removes a preview slot, not production",
     ("ops-checks.yml", "audit"): "scheduled read-only audit",
     ("ops-checks.yml", "watchdog"): "scheduled read-only probe",

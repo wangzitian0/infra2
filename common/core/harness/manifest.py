@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -13,6 +14,7 @@ import yaml
 Runner = Callable[..., subprocess.CompletedProcess]
 
 SCHEMA_VERSION = 1
+RELEASE_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
 ALLOWED_CHECKOUTS = {"root", "submodule"}
 ALLOWED_ROLES = {
     "infrastructure-control-plane",
@@ -169,6 +171,29 @@ def _validate_health(
             _error(findings, "health-url", message)
 
 
+def _validate_release_tag(
+    repository_id: str, role: str, release_tag: Any, findings: list[Finding]
+) -> None:
+    if role == "external-application":
+        if not isinstance(release_tag, str) or not RELEASE_TAG_RE.fullmatch(
+            release_tag
+        ):
+            _error(
+                findings,
+                "release-tag",
+                f"{repository_id} external-application must declare release_tag matching vX.Y.Z",
+            )
+        return
+    if release_tag is not None and (
+        not isinstance(release_tag, str) or not RELEASE_TAG_RE.fullmatch(release_tag)
+    ):
+        _error(
+            findings,
+            "release-tag",
+            f"{repository_id} release_tag must match vX.Y.Z",
+        )
+
+
 def _validate_workspace_section(
     root: Path, workspace: Any, findings: list[Finding]
 ) -> dict[str, Any]:
@@ -275,6 +300,7 @@ def _validate_repository_entry(
         contract = "snapshot" if role == "external-application" else "pinned"
 
     _validate_health(repository_id, checkout, repository.get("health"), findings)
+    _validate_release_tag(repository_id, role, repository.get("release_tag"), findings)
 
     expected_gov = {
         "infrastructure-control-plane": "local",
@@ -499,6 +525,7 @@ __all__ = [
     "Finding",
     "HEALTH_ENVIRONMENTS",
     "HarnessManifestError",
+    "RELEASE_TAG_RE",
     "Runner",
     "SCHEMA_VERSION",
     "check_workspace",

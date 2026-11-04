@@ -454,7 +454,7 @@ def test_scanner_finds_the_infra2_sdk_imports_of_the_tree() -> None:
     assert {
         "platform/12.alerting/app.py",
         "platform/30.todo/app.py",
-        "common/deploy/refs.py",
+        "common/deploy/v2.py",
         "common/deploy/preview.py",
     } <= set(found)
     assert len(found) >= 15

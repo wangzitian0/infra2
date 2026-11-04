@@ -38,10 +38,124 @@ def test_plan_selects_alerting_when_baked_tooling_changes() -> None:
 
 
 def test_plan_ignores_app_fixed_deploy_without_version_ref() -> None:
-    plan = build_plan(["finance_report/finance_report/10.app/compose.yaml"])
+    plan = build_plan(
+        ["finance_report/finance_report/10.app/compose.yaml"],
+        app_release_tags={},
+    )
 
     assert "finance_report/app" in plan.ignored
     assert plan.services == []
+
+
+def test_plan_selects_app_when_repos_yaml_or_app_dir_changes() -> None:
+    plan = build_plan(["finance_report/finance_report/10.app/compose.yaml"])
+
+    assert "finance_report/app" in plan.selected
+    assert plan.app_release_tags["finance_report/app"].startswith("v")
+    assert "finance_report/app" in plan.staging_services
+    assert "finance_report/app" in plan.prod_services
+
+
+def test_companion_service_promoted_once_after_app_and_excluded_from_platform_batch() -> (
+    None
+):
+    plan = build_plan(
+        [
+            "platform/12.alerting/compose.yaml",
+            "truealpha/truealpha/10.app/compose.yaml",
+            "truealpha/truealpha/30.data_engine/compose.yaml",
+        ],
+        app_release_tags={
+            "finance_report/app": "v0.2.46",
+            "truealpha/app": "v0.2.77",
+        },
+    )
+    commands = build_deploy_commands(
+        plan,
+        iac_ref="v1.2.3",
+        domain="zitian.party",
+        timeout=600,
+        python_executable="python",
+    )
+    staging_cmds = [c for c in commands if c.deploy_type == "staging"]
+    assert [c.service for c in staging_cmds] == [
+        "platform/alerting",
+        "truealpha/app",
+        "truealpha/data_engine",
+    ]
+    assert (
+        staging_cmds[1].argv[staging_cmds[1].argv.index("--version-ref") + 1]
+        == "v0.2.77"
+    )
+    assert (
+        staging_cmds[2].argv[staging_cmds[2].argv.index("--version-ref") + 1]
+        == "v0.2.77"
+    )
+    assert staging_cmds[2].argv[staging_cmds[2].argv.index("--iac-ref") + 1] == "v1.2.3"
+
+
+def test_changed_app_services_from_repos_yaml_detects_single_app_tag_bump() -> None:
+    before_yaml = yaml.safe_dump(
+        {
+            "repos": [
+                {
+                    "id": "finance-report",
+                    "role": "external-application",
+                    "release_tag": "v0.2.46",
+                },
+                {
+                    "id": "truealpha",
+                    "role": "external-application",
+                    "release_tag": "v0.2.76",
+                },
+            ]
+        }
+    )
+    after_yaml = yaml.safe_dump(
+        {
+            "repos": [
+                {
+                    "id": "finance-report",
+                    "role": "external-application",
+                    "release_tag": "v0.2.46",
+                },
+                {
+                    "id": "truealpha",
+                    "role": "external-application",
+                    "release_tag": "v0.2.77",
+                },
+            ]
+        }
+    )
+
+    def runner(argv, **_kwargs):
+        if "v1.0.0:harness/repos.yaml" in argv:
+            return subprocess.CompletedProcess(argv, 0, before_yaml, "")
+        if "v1.0.1:harness/repos.yaml" in argv:
+            return subprocess.CompletedProcess(argv, 0, after_yaml, "")
+        return subprocess.CompletedProcess(argv, 1, "", "missing")
+
+    changed = reconcile.changed_app_services_from_repos_yaml(
+        ROOT, before="v1.0.0", after="v1.0.1", runner=runner
+    )
+    assert list(changed) == ["truealpha/app"]
+    assert "v0.2.76 -> v0.2.77" in changed["truealpha/app"]
+
+
+def test_advance_app_release_train_computes_next_patch_tag() -> None:
+    def runner(argv, **_kwargs):
+        return subprocess.CompletedProcess(argv, 0, f"{SHA}\trefs/heads/main\n", "")
+
+    info = reconcile.advance_app_release_train(
+        "truealpha/app",
+        repo_url="https://github.com/wangzitian0/truealpha.git",
+        existing_tags=["v0.2.76", "v0.2.77"],
+        candidate_ref="main",
+        runner=runner,
+    )
+    assert info["candidate_sha"] == SHA
+    assert info["image_ref"] == SHA[:7]
+    assert info["next_tag"] == "v0.2.78"
 
 
 def test_manifest_change_reconciles_all_iac_pinned_services() -> None:

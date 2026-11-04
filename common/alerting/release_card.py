@@ -317,7 +317,7 @@ def accept_until_text(
     API and the sender deadline from the request. An empty string when it cannot be
     computed. The card then shows no time."""
     try:
-        from common.deploy.app_deploy_request import (
+        from infra2_sdk.deploy import (
             parse_sender_deadline,
             production_request_accept_until,
         )

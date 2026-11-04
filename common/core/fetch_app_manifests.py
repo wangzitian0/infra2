@@ -2,8 +2,8 @@
 """Guard against vendored App environment manifests in infra2 (#1320).
 
 App environment manifests are fetched from the deployed release commit at deploy
-time to render the Vault Agent template. Vendored copies under ``contracts/`` and
-``contracts/apps.lock.json`` are forbidden.
+time to render the Vault Agent template. Vendored copies under ``contracts/``
+are forbidden; ``harness/repos.yaml`` is the SSOT for App ``release_tag`` entries.
 
     uv run python tools/fetch_app_manifests.py                 # offline guard check (CI)
 """
@@ -23,7 +23,6 @@ from common.security.registry import SERVICES
 
 ROOT = Path(__file__).resolve().parents[2]
 CONTRACTS = Path("contracts")
-LOCK = "contracts/apps.lock.json"
 
 
 def check(root: Path = ROOT) -> list[str]:

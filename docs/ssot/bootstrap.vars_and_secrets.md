@@ -103,7 +103,7 @@ Vault 历史里，`vault kv rollback` 可回退）。**不要**手工 `env.set` 
 每个服务的 `secrets.ctmpl` 与 `vault-policy.hcl` 不再手写，而是由 `tools/secrets_render.py`
 从环境 manifest 生成。
 
-Each service keeps its baseline manifest in `env.manifest.json` in its stack directory. Vendored App manifest copies under `contracts/` and `contracts/apps.lock.json` are removed (#1320). `tools/fetch_app_manifests.py` guards against vendored App manifests reappearing under `contracts/`.
+Each service keeps its baseline manifest in `env.manifest.json` in its stack directory. Vendored App manifest copies under `contracts/` are forbidden (#1320); `harness/repos.yaml` declares each App's `release_tag`. `tools/fetch_app_manifests.py` guards against vendored App manifests reappearing under `contracts/`.
 
 manifest 里每个变量都声明了"谁产生它"
 （`human` / `runtime` / `release` / `decision` / `code`），模板只渲染 `human`、`runtime`、

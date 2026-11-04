@@ -7,8 +7,6 @@ from pathlib import Path
 
 from common.deploy import release_markers
 
-from common.deploy import app_deploy_request_cli as app_deploy_request
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -58,5 +56,5 @@ def test_the_markers_action_prints_coordinates_from_git(tmp_path, capsys):
     repo = _repo_with_releases(
         tmp_path / "infra2", marker="v1.1.76", releases=("v1.1.76", "v1.1.77")
     )
-    assert app_deploy_request.main(["markers", "--repo-root", str(repo)]) == 0
+    assert release_markers.main(["--repo-root", str(repo)]) == 0
     assert "production marker v1.1.76" in capsys.readouterr().out

@@ -20,7 +20,16 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
+import yaml
 
+from common.core.constants import REPO_ROOT
+from common.deploy.app_contract import (
+    execute_app_hook_slot,
+    fetch_hooks_manifest,
+    next_app_release_tag,
+    query_serving_release,
+    validate_app_release_evidence,
+)
 from common.deploy.dependencies import explain_fanout
 from common.deploy.contract import all_service_keys, service_spec
 from common.deploy.release_markers import (
@@ -28,9 +37,19 @@ from common.deploy.release_markers import (
     RELEASE_TAG_RE,
     version_key,
 )
-from infra2_sdk.refs import assert_after_on_main  # noqa: F401  (re-exported; #616)
+from infra2_sdk.deploy import DeployRequest
+from infra2_sdk.refs import (
+    assert_after_on_main,  # noqa: F401  (re-exported; #616)
+    next_patch_tag,
+    resolve_image_ref,
+)
 
 MANIFEST_PATH = "docs/ssot/deploy-dependencies.yaml"
+HARNESS_REPOS_PATH = "harness/repos.yaml"
+APP_REPO_ID_TO_SERVICE: dict[str, str] = {
+    "finance-report": "finance_report/app",
+    "truealpha": "truealpha/app",
+}
 SOURCE_HASH_FORMULA_PATHS = (
     "common/deploy/deployer.py",
     "common/deploy/config_hash.py",
@@ -50,6 +69,7 @@ class ReconcilePlan:
     # derived from the Deployer's literal attr). Surfaced so a prod promotion
     # plan shows WHY a service is absent instead of failing on it (v1.1.34).
     not_yet_in_production: list[str] = field(default_factory=list)
+    app_release_tags: dict[str, str] = field(default_factory=dict)
 
     @property
     def services(self) -> list[str]:
@@ -65,6 +85,7 @@ class ReconcilePlan:
             "staging_services": self.staging_services,
             "prod_services": self.prod_services,
             "not_yet_in_production": self.not_yet_in_production,
+            "app_release_tags": dict(self.app_release_tags),
         }
 
 
@@ -234,11 +255,122 @@ def iac_pinned_services() -> list[str]:
     return sorted(services)
 
 
-def build_plan(changed_files: Sequence[str]) -> ReconcilePlan:
+def _parse_repos_yaml_release_tags(raw_text: str) -> dict[str, str]:
+    data = yaml.safe_load(raw_text) or {}
+    entries = (
+        (data.get("repositories") or data.get("repos"))
+        if isinstance(data, Mapping)
+        else None
+    )
+    if not isinstance(entries, list):
+        return {}
+    tags: dict[str, str] = {}
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        if entry.get("role") != "external-application":
+            continue
+        repo_id = str(entry.get("id") or "")
+        service = APP_REPO_ID_TO_SERVICE.get(repo_id)
+        release_tag = entry.get("release_tag")
+        if service and isinstance(release_tag, str) and release_tag.strip():
+            tags[service] = release_tag.strip()
+    return tags
+
+
+def load_app_release_tags(
+    repo_root: Path = REPO_ROOT,
+    *,
+    rev: str | None = None,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> dict[str, str]:
+    """Read App ``release_tag`` entries from ``harness/repos.yaml`` at ``rev`` or working tree."""
+    if rev and not is_zero_sha(rev):
+        shown = runner(
+            ["git", "show", f"{rev}:{HARNESS_REPOS_PATH}"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+        )
+        if shown.returncode != 0:
+            return {}
+        return _parse_repos_yaml_release_tags(shown.stdout or "")
+    target = Path(repo_root) / HARNESS_REPOS_PATH
+    if not target.is_file():
+        return {}
+    return _parse_repos_yaml_release_tags(target.read_text(encoding="utf-8"))
+
+
+def changed_app_services_from_repos_yaml(
+    repo_root: Path = REPO_ROOT,
+    *,
+    before: str | None = None,
+    after: str | None = None,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> dict[str, str]:
+    """Return ``{service: reason}`` for Apps whose ``release_tag`` changed in ``harness/repos.yaml``."""
+    after_tags = load_app_release_tags(repo_root, rev=after, runner=runner)
+    if not after_tags:
+        after_tags = load_app_release_tags(repo_root, rev=None, runner=runner)
+    before_tags = (
+        load_app_release_tags(repo_root, rev=before, runner=runner)
+        if before and not is_zero_sha(before)
+        else {}
+    )
+    selected: dict[str, str] = {}
+    for service, after_tag in sorted(after_tags.items()):
+        before_tag = before_tags.get(service)
+        if before_tag != after_tag:
+            detail = f"{before_tag} -> {after_tag}" if before_tag else after_tag
+            selected[service] = f"release_tag in {HARNESS_REPOS_PATH} ({detail})"
+    if not selected and not before_tags:
+        for service, after_tag in sorted(after_tags.items()):
+            selected[service] = f"release_tag in {HARNESS_REPOS_PATH} ({after_tag})"
+    return selected
+
+
+def advance_app_release_train(
+    service: str,
+    *,
+    repo_url: str,
+    existing_tags: Sequence[str],
+    candidate_ref: str = "main",
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> dict[str, str]:
+    """Compute the next ``vX.Y.(Z+1)`` App release tag and resolve ``candidate_ref``."""
+    resolved = resolve_image_ref(candidate_ref, repo=repo_url, runner=runner)
+    next_tag = next_patch_tag(existing_tags)
+    return {
+        "service": service,
+        "candidate_sha": resolved.sha,
+        "image_ref": resolved.image_ref,
+        "next_tag": next_app_release_tag(existing_tags, initial=next_tag),
+    }
+
+
+def build_plan(
+    changed_files: Sequence[str],
+    *,
+    repo_root: Path = REPO_ROOT,
+    before: str | None = None,
+    after: str | None = None,
+    app_release_tags: Mapping[str, str] | None = None,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> ReconcilePlan:
     files = sorted(dict.fromkeys(str(path) for path in changed_files if str(path)))
     decision = explain_fanout(files)
     selected: dict[str, str] = {}
     ignored: dict[str, str] = {}
+    dropped = list(decision.dropped)
+
+    effective_app_tags = (
+        dict(app_release_tags)
+        if app_release_tags is not None
+        else (
+            load_app_release_tags(repo_root, rev=after, runner=runner)
+            or load_app_release_tags(repo_root, rev=None, runner=runner)
+        )
+    )
 
     if MANIFEST_PATH in files:
         for service in iac_pinned_services():
@@ -253,6 +385,20 @@ def build_plan(changed_files: Sequence[str]) -> ReconcilePlan:
                 service, f"source config hash formula changed ({formula_hits[0]})"
             )
 
+    if HARNESS_REPOS_PATH in files:
+        repos_selected = changed_app_services_from_repos_yaml(
+            repo_root, before=before, after=after, runner=runner
+        )
+        if not repos_selected and effective_app_tags:
+            repos_selected = {
+                svc: f"release_tag in {HARNESS_REPOS_PATH} ({tag})"
+                for svc, tag in sorted(effective_app_tags.items())
+            }
+        for svc, reason in sorted(repos_selected.items()):
+            selected[svc] = reason
+        if repos_selected and HARNESS_REPOS_PATH in dropped:
+            dropped.remove(HARNESS_REPOS_PATH)
+
     for service, reason in sorted(decision.selected.items()):
         try:
             spec = service_spec(service)
@@ -260,9 +406,13 @@ def build_plan(changed_files: Sequence[str]) -> ReconcilePlan:
             ignored[service] = "not registered in deploy_v2 service registry"
             continue
         if not spec.iac_pinned:
-            ignored[service] = (
-                "not iac_pinned; fixed app deploys need an explicit version_ref"
-            )
+            app_tag = effective_app_tags.get(service, "")
+            if app_tag:
+                selected.setdefault(service, f"{reason}; release_tag={app_tag}")
+            else:
+                ignored[service] = (
+                    "not iac_pinned; fixed app deploys need an explicit version_ref"
+                )
             continue
         selected[service] = reason
 
@@ -288,11 +438,47 @@ def build_plan(changed_files: Sequence[str]) -> ReconcilePlan:
         changed_files=files,
         selected=dict(sorted(selected.items())),
         ignored=dict(sorted(ignored.items())),
-        dropped=sorted(decision.dropped),
+        dropped=sorted(dropped),
         staging_services=staging_services,
         prod_services=prod_services,
         not_yet_in_production=not_yet_in_production,
+        app_release_tags=dict(sorted(effective_app_tags.items())),
     )
+
+
+def _single_service_deploy_command(
+    service: str,
+    deploy_type: str,
+    *,
+    version_ref: str,
+    iac_ref: str,
+    domain: str,
+    timeout: int,
+    staging_validated: bool,
+    python_executable: str,
+) -> DeployCommand:
+    argv = [
+        python_executable,
+        "-m",
+        "tools.deploy_v2",
+        "--service",
+        service,
+        "--type",
+        deploy_type,
+        "--version-ref",
+        version_ref,
+        "--iac-ref",
+        iac_ref,
+        "--domain",
+        domain,
+        "--timeout",
+        str(timeout),
+    ]
+    if deploy_type == "prod":
+        argv.append("--code-reviewed")
+        if staging_validated:
+            argv.append("--staging-validated")
+    return DeployCommand(service=service, deploy_type=deploy_type, argv=argv)
 
 
 def build_deploy_commands(
@@ -310,35 +496,84 @@ def build_deploy_commands(
     ):
         if not services:
             continue
-        argv = [
-            python_executable,
-            "-m",
-            "tools.deploy_v2",
-            "--service",
-            ",".join(services),
-            "--type",
-            deploy_type,
-            # iac_pinned services ignore version_ref (their artifact IS the iac_ref stack),
-            # but staging/prod accept tags only — pin both axes to the promoted release tag
-            # so the command is self-consistent and never carries a moving ref to a fixed env.
-            "--version-ref",
-            iac_ref,
-            "--iac-ref",
-            iac_ref,
-            "--domain",
-            domain,
-            "--timeout",
-            str(timeout),
+        app_services = [svc for svc in services if not service_spec(svc).iac_pinned]
+        companion_services = {
+            comp for svc in app_services for comp in service_spec(svc).companions
+        }
+        platform_services = [
+            svc
+            for svc in services
+            if service_spec(svc).iac_pinned and svc not in companion_services
         ]
-        if deploy_type == "prod":
-            argv.append("--code-reviewed")
-            if set(services) & set(plan.staging_services):
-                argv.append("--staging-validated")
-        commands.append(
-            DeployCommand(
-                service=",".join(services), deploy_type=deploy_type, argv=argv
+        if platform_services:
+            argv = [
+                python_executable,
+                "-m",
+                "tools.deploy_v2",
+                "--service",
+                ",".join(platform_services),
+                "--type",
+                deploy_type,
+                # iac_pinned services ignore version_ref (their artifact IS the iac_ref stack),
+                # but staging/prod accept tags only — pin both axes to the promoted release tag
+                # so the command is self-consistent and never carries a moving ref to a fixed env.
+                "--version-ref",
+                iac_ref,
+                "--iac-ref",
+                iac_ref,
+                "--domain",
+                domain,
+                "--timeout",
+                str(timeout),
+            ]
+            if deploy_type == "prod":
+                argv.append("--code-reviewed")
+                if set(platform_services) & set(plan.staging_services):
+                    argv.append("--staging-validated")
+            commands.append(
+                DeployCommand(
+                    service=",".join(platform_services),
+                    deploy_type=deploy_type,
+                    argv=argv,
+                )
             )
-        )
+        for app_svc in app_services:
+            app_tag = plan.app_release_tags.get(app_svc)
+            if not app_tag:
+                raise ValueError(
+                    f"missing release_tag in {HARNESS_REPOS_PATH} for {app_svc!r}"
+                )
+            staging_ok = app_svc in plan.staging_services
+            commands.append(
+                _single_service_deploy_command(
+                    app_svc,
+                    deploy_type,
+                    version_ref=app_tag,
+                    iac_ref=iac_ref,
+                    domain=domain,
+                    timeout=timeout,
+                    staging_validated=staging_ok,
+                    python_executable=python_executable,
+                )
+            )
+            for companion in service_spec(app_svc).companions:
+                spec = service_spec(companion)
+                if deploy_type == "prod" and spec.not_yet_in_production:
+                    continue
+                if deploy_type == "staging" and spec.prod_only:
+                    continue
+                commands.append(
+                    _single_service_deploy_command(
+                        companion,
+                        deploy_type,
+                        version_ref=app_tag,
+                        iac_ref=iac_ref,
+                        domain=domain,
+                        timeout=timeout,
+                        staging_validated=staging_ok,
+                        python_executable=python_executable,
+                    )
+                )
     return commands
 
 
@@ -572,12 +807,107 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="explicit changed file; bypasses git diff when provided",
     )
+    parser.add_argument(
+        "--app-release-tag",
+        action="append",
+        default=[],
+        metavar="SERVICE=TAG",
+        help="override App release_tag for planning (repeatable, e.g. finance_report/app=v0.2.46)",
+    )
+    parser.add_argument(
+        "--run-hook-slot",
+        default="",
+        help="optional verification hook slot to execute via infra2_sdk.manifests",
+    )
+    parser.add_argument(
+        "--hooks-manifest",
+        default="",
+        help="path to runtime-hooks.manifest.json when --run-hook-slot is set",
+    )
+    parser.add_argument(
+        "--hook-service",
+        default="",
+        help="App service key to fetch runtime-hooks.manifest.json for when --hooks-manifest is omitted",
+    )
+    parser.add_argument(
+        "--hook-source-sha",
+        default="",
+        help="40-hex commit sha for fetching runtime-hooks.manifest.json",
+    )
+    parser.add_argument(
+        "--hook-app-url",
+        default="",
+        help="App URL passed to --run-hook-slot",
+    )
+    parser.add_argument(
+        "--query-serving-service",
+        default="",
+        help="optional App service key to query serving release state for",
+    )
+    parser.add_argument(
+        "--validate-evidence-json",
+        default="",
+        help="optional DeployRequest JSON string to validate evidence URLs for",
+    )
+    parser.add_argument(
+        "--advance-train-service",
+        default="",
+        help="optional App service key to compute next release train tag for",
+    )
+    parser.add_argument(
+        "--advance-train-repo",
+        default="",
+        help="Git repo URL for --advance-train-service",
+    )
+    parser.add_argument(
+        "--advance-train-tag",
+        action="append",
+        default=[],
+        help="existing release tag for --advance-train-service (repeatable)",
+    )
     parser.add_argument("--output-json", default="", help="optional output JSON path")
     args = parser.parse_args(argv)
     promote_prod = bool(args.promote_prod or args.target_env in ("prod", "production"))
     target_env = "prod" if promote_prod else "staging"
 
     repo_root = Path(args.repo_root).resolve()
+    if args.advance_train_service:
+        train = advance_app_release_train(
+            args.advance_train_service,
+            repo_url=args.advance_train_repo,
+            existing_tags=args.advance_train_tag,
+            candidate_ref=args.after,
+        )
+        print(json.dumps(train, sort_keys=True))
+        return 0
+    if args.validate_evidence_json:
+        request = DeployRequest.from_dict(json.loads(args.validate_evidence_json))
+        validate_app_release_evidence(request, verify_prod=promote_prod)
+    if args.query_serving_service:
+        serving = query_serving_release(
+            args.query_serving_service,
+            target_env,
+            domain=args.domain,
+        )
+        print(json.dumps(serving.to_dict(), sort_keys=True))
+        return 0
+    if args.run_hook_slot:
+        manifest_or_path = (
+            fetch_hooks_manifest(args.hook_service, args.hook_source_sha)
+            if args.hook_service and args.hook_source_sha and not args.hooks_manifest
+            else Path(args.hooks_manifest)
+        )
+        hook_res = execute_app_hook_slot(
+            manifest_or_path,
+            args.run_hook_slot,
+            app_url=args.hook_app_url or f"https://{args.domain}",
+            environment=target_env,
+            version_ref=args.after,
+            cwd=repo_root,
+        )
+        print(json.dumps(hook_res.to_dict(), sort_keys=True))
+        return 0 if hook_res.status == "pass" else 1
+
     # Validate the durable desired-state coordinate before any production side
     # effect.  A branch, SHA, or pre-release must never deploy successfully and
     # only then fail while trying to record its marker.
@@ -606,7 +936,25 @@ def main(argv: list[str] | None = None) -> int:
         if args.changed_file
         else changed_files_from_git(repo_root, effective_before or None, args.after)
     )
-    plan = build_plan(changed_files)
+    tag_overrides: dict[str, str] | None = None
+    if args.app_release_tag:
+        tag_overrides = load_app_release_tags(
+            repo_root, rev=args.after
+        ) or load_app_release_tags(repo_root)
+        for item in args.app_release_tag:
+            if "=" not in item:
+                raise SystemExit(
+                    f"::error::expected SERVICE=TAG for --app-release-tag, got {item!r}"
+                )
+            svc, tag = item.split("=", 1)
+            tag_overrides[svc.strip()] = tag.strip()
+    plan = build_plan(
+        changed_files,
+        repo_root=repo_root,
+        before=effective_before or None,
+        after=args.after,
+        app_release_tags=tag_overrides,
+    )
     commands = build_deploy_commands(
         plan,
         iac_ref=args.after,
