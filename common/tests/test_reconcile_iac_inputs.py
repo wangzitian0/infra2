@@ -750,3 +750,36 @@ def test_run_hook_slot_fails_closed_without_manifest_or_service_coordinates() ->
         match="--run-hook-slot requires either --hooks-manifest or both --hook-service and --hook-source-sha",
     ):
         main(["--after", "v1.2.3", "--run-hook-slot", "smoke"])
+
+
+def test_validate_evidence_json_returns_immediately_without_running_reconcile(
+    monkeypatch, capsys
+) -> None:
+    """#1416: --validate-evidence-json validates the DeployRequest and returns 0 without
+    falling through into reconcile planning or deployment."""
+    monkeypatch.setattr(
+        reconcile,
+        "build_plan",
+        lambda *_a, **_kw: (_ for _ in ()).throw(
+            AssertionError("build_plan must not run on --validate-evidence-json")
+        ),
+    )
+    payload = json.dumps(
+        {
+            "contract_version": 1,
+            "request_id": "req-1416-staging",
+            "operation": "deploy",
+            "service": "finance_report/app",
+            "deploy_type": "staging",
+            "version_ref": "v0.2.46",
+            "source_repository": "wangzitian0/finance_report",
+            "source_sha": SHA,
+            "evidence": {
+                "source_run_url": "https://github.com/wangzitian0/finance_report/actions/runs/100"
+            },
+        }
+    )
+    rc = main(["--after", "v1.2.3", "--validate-evidence-json", payload])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["max_age_seconds"] > 0

@@ -2063,3 +2063,16 @@ def test_preview_and_promote_derive_repo_when_repo_is_none(monkeypatch):
             repo=None,
         )
     assert seen_repos[-1] == "https://github.com/wangzitian0/truealpha.git"
+
+    with pytest.raises(
+        ValueError, match="has no registered source repository in APP_SOURCES"
+    ):
+        promote_mod._validate_deploy_preconditions(
+            "unknown/service",
+            "staging",
+            "zitian.party",
+            SHA_CODE,
+            None,
+            staging_validated=False,
+            break_glass=False,
+        )

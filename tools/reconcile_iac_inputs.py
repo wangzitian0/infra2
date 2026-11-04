@@ -882,7 +882,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.validate_evidence_json:
         request = DeployRequest.from_dict(json.loads(args.validate_evidence_json))
-        validate_app_release_evidence(request, verify_prod=promote_prod)
+        evidence_result = validate_app_release_evidence(
+            request, verify_prod=promote_prod
+        )
+        print(json.dumps(evidence_result, sort_keys=True))
+        return 0
     if args.query_serving_service:
         serving = query_serving_release(
             args.query_serving_service,

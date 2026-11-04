@@ -330,11 +330,15 @@ def up(
     config = preview_service_config(service)
 
     alias = preview_alias(kind, value, slug_prefix=config.slug_prefix)
-    effective_repo = (
-        repo
-        if repo is not None
-        else f"https://github.com/{APP_SOURCES.get(service, 'wangzitian0/finance_report')}.git"
-    )
+    if repo is None:
+        slug = APP_SOURCES.get(service)
+        if not slug:
+            raise ValueError(
+                f"Service {service!r} has no registered source repository in APP_SOURCES"
+            )
+        effective_repo = f"https://github.com/{slug}.git"
+    else:
+        effective_repo = repo
     sha = resolve_to_sha(code, repo=effective_repo)
     env_vars = _preview_env_vars(
         alias,
