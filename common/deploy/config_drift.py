@@ -450,24 +450,36 @@ def scan_iac_runner(
     fetcher=None,
 ) -> Row:
     """Compare L1 iac-runner running GIT_SHA against latest commit touching bootstrap/06.iac_runner at tag."""
-    url = (health_url or os.environ.get("IAC_RUNNER_HEALTH_URL", "")).strip()
-    expected_commit = (
-        subprocess.run(
-            ["git", "rev-list", "-1", tag, "--", "bootstrap/06.iac_runner"],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
+    domain = os.environ.get("INTERNAL_DOMAIN", "").strip()
+    default_url = f"https://iac.{domain}/health" if domain else ""
+    url = (
+        health_url or os.environ.get("IAC_RUNNER_HEALTH_URL", "") or default_url
+    ).strip()
+    try:
+        expected_commit = (
+            subprocess.run(
+                ["git", "rev-list", "-1", tag, "--", "bootstrap/06.iac_runner"],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            .stdout.strip()
+            .lower()
+        ) or _commit_at_ref(tag)
+    except Exception as exc:  # noqa: BLE001
+        return Row(
+            "bootstrap/iac_runner",
+            "error",
+            note=f"could not resolve expected commit at {tag}: {exc}",
         )
-        .stdout.strip()
-        .lower()
-    ) or _commit_at_ref(tag)
     if not url:
         return Row(
             "bootstrap/iac_runner",
             "env_unavailable",
             expected=expected_commit[:12],
             expected_ref=expected_commit,
-            note="IAC_RUNNER_HEALTH_URL not set",
+            note="IAC_RUNNER_HEALTH_URL or INTERNAL_DOMAIN not set",
         )
     try:
         if fetcher is not None:
@@ -507,11 +519,32 @@ def scan_iac_runner(
             expected_ref=expected_commit,
             note="iac-runner health missing git_sha",
         )
-    anc = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", expected_commit, running_sha],
-        cwd=ROOT,
-        capture_output=True,
-    )
+    if not re.fullmatch(r"[0-9a-f]{7,40}", running_sha):
+        return Row(
+            "bootstrap/iac_runner",
+            "error",
+            expected=expected_commit[:12],
+            deployed=running_sha[:12],
+            expected_ref=expected_commit,
+            note=f"invalid running git_sha: {running_sha!r}",
+        )
+    try:
+        anc = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", expected_commit, running_sha],
+            cwd=ROOT,
+            capture_output=True,
+            timeout=10,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return Row(
+            "bootstrap/iac_runner",
+            "error",
+            expected=expected_commit[:12],
+            deployed=running_sha[:12],
+            expected_ref=expected_commit,
+            deployed_ref=running_sha,
+            note=f"git merge-base failed: {exc}",
+        )
     if anc.returncode == 0 or running_sha.startswith(expected_commit[:12]):
         return Row(
             "bootstrap/iac_runner",
@@ -724,7 +757,11 @@ def scan(tag: str) -> list[Row]:
         reason = release.fallbacks.get(row.service)
         if reason:
             row.note = f"{row.note}; {reason}" if row.note else reason
-    if os.environ.get("IAC_RUNNER_HEALTH_URL"):
+    has_health_url = bool(os.environ.get("IAC_RUNNER_HEALTH_URL", "").strip())
+    has_live_dokploy = bool(os.environ.get("DOKPLOY_API_KEY", "").strip()) and bool(
+        os.environ.get("INTERNAL_DOMAIN", "").strip()
+    )
+    if has_health_url or has_live_dokploy:
         rows.append(scan_iac_runner(tag))
     return rows
 

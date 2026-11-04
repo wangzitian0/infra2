@@ -13,6 +13,8 @@ on:
     branches: ["main"]
     paths:
       - "finance_report/finance_report/observability/**"
+      - "truealpha/truealpha/observability/**"
+      - "platform/12.alerting/alert_rules.json"
       - "common/alerting/**"
       - "common/observability_dashboards.py"
       - "tools/signoz_alert_rule_probe.py"

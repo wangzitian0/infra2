@@ -614,6 +614,7 @@ def health():
             "status": "healthy" if all_healthy else "degraded",
             "checks": checks,
             "in_flight_deploys": in_flight_deploys,
+            "git_sha": os.environ.get("GIT_SHA", "unknown").strip() or "unknown",
         }
     ), status_code
 

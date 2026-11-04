@@ -472,3 +472,39 @@ def test_backup_syncs_repo_before_emitting_services(host, tmp_path) -> None:
         i for i, c in enumerate(calls) if c.startswith(("docker ", "tar "))
     )
     assert first_archive_idx > 0
+
+
+def test_backup_archives_availability_ledger_when_present(host, tmp_path) -> None:
+    """Archive observability/availability_ledger when BACKUP_LEDGER_ROOT has availability-ledger.json."""
+    ledger_root = tmp_path / "infra2-availability-ledger"
+    ledger_root.mkdir()
+    (ledger_root / "availability-ledger.json").write_text(
+        '{"schema": 2}', encoding="utf-8"
+    )
+
+    proc, manifest, _ = _run(host, BACKUP_LEDGER_ROOT=str(ledger_root))
+    assert proc.returncode == 0, proc.stderr
+    assert _ids(manifest) == ALL_SERVICES | {"observability/availability_ledger"}
+    ledger_artifacts = [
+        a
+        for a in manifest["artifacts"]
+        if a["service_id"] == "observability/availability_ledger"
+    ]
+    assert len(ledger_artifacts) == 1
+    assert ledger_artifacts[0]["method"] == "filesystem_archive"
+
+
+def test_backup_warns_when_ledger_dir_exists_without_marker_file(
+    host, tmp_path
+) -> None:
+    """Emit a warning to stderr when BACKUP_LEDGER_ROOT exists without availability-ledger.json."""
+    ledger_root = tmp_path / "infra2-availability-ledger-empty"
+    ledger_root.mkdir()
+
+    proc, manifest, _ = _run(host, BACKUP_LEDGER_ROOT=str(ledger_root))
+    assert proc.returncode == 0, proc.stderr
+    assert "observability/availability_ledger" not in _ids(manifest)
+    assert (
+        f"WARN observability/availability_ledger: directory {ledger_root} exists without availability-ledger.json; skipping archive"
+        in proc.stderr
+    )

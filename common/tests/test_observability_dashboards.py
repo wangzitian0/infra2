@@ -19,6 +19,7 @@ from common.alerting import (
 )
 from common.observability_dashboards import (
     ALERT_RULES_FILE,
+    ALERT_RULES_FILES,
     DASHBOARD_FILE,
     ObservabilityDefinitionError,
     build_dashboard_import_payload,
@@ -2262,3 +2263,19 @@ def test_legacy_dashboard_row_is_found_whether_its_title_is_absent_or_empty(
     found = find_stored_dashboards({"status": "success", "data": [row]}, DASH_TITLE)
 
     assert [(d.id, d.legacy) for d in found] == [("legacy", True)]
+
+
+def test_apply_observability_workflow_watches_every_alert_rules_file() -> None:
+    """Ensure apply-observability.yml triggers on every alert_rules.json and dashboard.json."""
+    import fnmatch
+    import yaml
+
+    wf = yaml.safe_load(APPLY_OBSERVABILITY_WORKFLOW.read_text(encoding="utf-8"))
+    on_block = wf.get("on") or wf.get(True)
+    push_paths = on_block["push"]["paths"]
+
+    for target in (*ALERT_RULES_FILES, DASHBOARD_FILE):
+        rel = target.relative_to(ROOT).as_posix()
+        assert any(fnmatch.fnmatch(rel, pat) for pat in push_paths), (
+            f"{rel} is not matched by any on.push.paths pattern in apply-observability.yml: {push_paths}"
+        )
