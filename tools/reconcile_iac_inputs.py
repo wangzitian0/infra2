@@ -963,7 +963,7 @@ def audit_app_hooks(
                     slot_errors.append(
                         f"forbidden secret {env_name!r} in slot {slot_name!r}"
                     )
-        for dry_slot in ("smoke",):
+        for dry_slot in ("smoke", "scheduled_audit"):
             spec = manifest.slots[dry_slot]
             augmented_opt = tuple(
                 dict.fromkeys(
@@ -975,6 +975,20 @@ def audit_app_hooks(
                     ]
                 )
             )
+            ambient = {
+                "APP_URL": "https://staging.example.invalid",
+                "INFRA2_HOOK_APP_URL": "https://staging.example.invalid",
+                "BASE_URL": "https://staging.example.invalid",
+                "DEPLOY_BASE_URL": "https://staging.example.invalid",
+                "STAGING_BASE_URL": "https://staging.example.invalid",
+                "TA_BASE_URL": "https://staging.example.invalid",
+                "ENVIRONMENT": "staging",
+                "DEPLOY_ENV": "staging",
+                "APP_VERSION_REF": pinned_tag or "v0.1.0",
+                "EXPECTED_SHA": pinned_tag or "v0.1.0",
+            }
+            for req_key in spec.required_env:
+                ambient.setdefault(req_key, "dry-run-placeholder")
             try:
                 build_hook_env(
                     replace(spec, optional_env=augmented_opt),
@@ -983,15 +997,7 @@ def audit_app_hooks(
                     environment="staging",
                     version_ref=pinned_tag or "v0.1.0",
                     artifacts_dir=spec.artifacts_dir,
-                    ambient_env={
-                        "APP_URL": "https://staging.example.invalid",
-                        "INFRA2_HOOK_APP_URL": "https://staging.example.invalid",
-                        "BASE_URL": "https://staging.example.invalid",
-                        "ENVIRONMENT": "staging",
-                        "DEPLOY_ENV": "staging",
-                        "APP_VERSION_REF": pinned_tag or "v0.1.0",
-                        "EXPECTED_SHA": pinned_tag or "v0.1.0",
-                    },
+                    ambient_env=ambient,
                 )
             except ValueError as exc:
                 slot_errors.append(f"{dry_slot}: {exc}")

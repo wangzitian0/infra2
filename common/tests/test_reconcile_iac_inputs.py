@@ -1238,22 +1238,148 @@ def test_sync_app_releases_create_pr_pushes_branch_restores_head_and_opens_or_up
     assert any(c[:4] == ["gh", "pr", "edit", "1501"] for c in calls)
 
 
+_REAL_FR_HOOKS_MANIFEST_JSON = """\
+{
+  "schema_version": 1,
+  "service": "finance_report/app",
+  "slots": {
+    "smoke": {
+      "run": "BASE_URL=\\"$INFRA2_HOOK_APP_URL\\" bash tools/smoke_test.sh",
+      "timeout_seconds": 180
+    },
+    "preview_gate": {
+      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
+      "run": "BASE_URL=\\"$INFRA2_HOOK_APP_URL\\" bash tools/smoke_test.sh && eval \\"$(python tools/test_selection.py --stage preview_minimum_e2e --shell)\\" && pytest \\"${PREVIEW_MINIMUM_E2E_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$PREVIEW_MINIMUM_E2E_MARKER\\"",
+      "timeout_seconds": 600,
+      "required_env": [
+        "AI_API_KEY"
+      ],
+      "optional_env": [
+        "AI_PROVIDER",
+        "AI_BASE_URL",
+        "LARGE_MODEL",
+        "SMALL_MODEL",
+        "MULTIMODAL_MODEL"
+      ]
+    },
+    "staging_gate": {
+      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
+      "run": "BASE_URL=\\"$INFRA2_HOOK_APP_URL\\" bash tools/smoke_test.sh && eval \\"$(python tools/test_selection.py --stage staging_core_e2e --shell)\\" && pytest \\"${STAGING_CORE_E2E_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$STAGING_CORE_E2E_MARKER\\" && pytest tests/e2e/test_ai_provider_connectivity.py -v --tb=short -o addopts=\\"\\" && eval \\"$(python tools/test_selection.py --stage staging_ai_ocr --corpus canary --shell)\\" && pytest \\"${STAGING_AI_OCR_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$STAGING_AI_OCR_MARKER\\"",
+      "timeout_seconds": 1800,
+      "required_env": [
+        "AI_API_KEY"
+      ],
+      "optional_env": [
+        "AI_PROVIDER",
+        "AI_BASE_URL",
+        "LARGE_MODEL",
+        "SMALL_MODEL",
+        "MULTIMODAL_MODEL",
+        "TEST_USER_EMAIL",
+        "TEST_USER_PASSWORD"
+      ]
+    },
+    "scheduled_audit": {
+      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
+      "run": "eval \\"$(python tools/test_selection.py --stage staging_ai_ocr --corpus audit_replay --shell)\\" && pytest \\"${STAGING_AI_OCR_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$STAGING_AI_OCR_MARKER\\" && eval \\"$(python tools/test_selection.py --stage staging_ai_ocr --corpus core_journey --shell)\\" && pytest \\"${STAGING_AI_OCR_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$STAGING_AI_OCR_MARKER\\"",
+      "timeout_seconds": 2400,
+      "required_env": [
+        "AI_API_KEY"
+      ],
+      "optional_env": [
+        "AI_PROVIDER",
+        "AI_BASE_URL",
+        "LARGE_MODEL",
+        "SMALL_MODEL",
+        "MULTIMODAL_MODEL"
+      ]
+    }
+  }
+}
+"""
+
+_REAL_TA_HOOKS_MANIFEST_JSON = """\
+{
+  "schema_version": 1,
+  "service": "truealpha/app",
+  "slots": {
+    "smoke": {
+      "run": "uv run python tools/health_check.py \\"$APP_URL/api/health\\" \\"$APP_VERSION_REF\\" 36 && uv run python tools/surface_contract.py \\"$APP_URL\\"",
+      "timeout_seconds": 420,
+      "required_env": [
+        "APP_URL",
+        "APP_VERSION_REF"
+      ]
+    },
+    "preview_gate": {
+      "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps chromium",
+      "run": "uv run python tools/health_check.py \\"$APP_URL/api/health\\" \\"$APP_VERSION_REF\\" 36 && bash tools/warm_surface.sh \\"$APP_URL\\" / /research/rankings && (cd apps/app-web && TA_BASE_URL=\\"$APP_URL\\" node e2e/walk-tree.mjs) && uv run python tools/surface_contract.py --authenticated \\"$APP_URL\\"",
+      "timeout_seconds": 900,
+      "required_env": [
+        "APP_URL",
+        "APP_VERSION_REF",
+        "TA_EMAIL",
+        "TA_MEMBER_EMAIL",
+        "TA_PASSWORD",
+        "TA_MCP_TOKEN"
+      ]
+    },
+    "staging_gate": {
+      "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps chromium",
+      "run": "uv run python tools/health_check.py \\"$APP_URL/api/health\\" \\"$APP_VERSION_REF\\" 36 && bash tools/warm_surface.sh \\"$APP_URL\\" / /research/rankings && (cd apps/app-web && TA_BASE_URL=\\"$APP_URL\\" node e2e/walk-tree.mjs) && uv run python tools/surface_contract.py --authenticated \\"$APP_URL\\"",
+      "timeout_seconds": 900,
+      "required_env": [
+        "APP_URL",
+        "APP_VERSION_REF",
+        "TA_EMAIL",
+        "TA_MEMBER_EMAIL",
+        "TA_PASSWORD",
+        "TA_MCP_TOKEN"
+      ]
+    },
+    "scheduled_audit": {
+      "bootstrap": "uv sync --frozen",
+      "run": "uv run python tools/nightly_verdicts.py \\"$APP_URL/api/health\\" --environment \\"$ENVIRONMENT\\" --repo . && uv run python tools/surface_contract.py \\"$APP_URL\\"",
+      "timeout_seconds": 600,
+      "required_env": [
+        "APP_URL",
+        "ENVIRONMENT"
+      ]
+    }
+  }
+}
+"""
+
+
 def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
     monkeypatch, tmp_path
 ) -> None:
     """#1416 (Fix 2): load the real repos/finance_report/runtime-hooks.manifest.json and
-    repos/truealpha/runtime-hooks.manifest.json from disk and execute execute_app_hook_slot
+    repos/truealpha/runtime-hooks.manifest.json contracts and execute execute_app_hook_slot
     and run_post_deploy_app_hooks without mocking execute_app_hook_slot or build_hook_env."""
     from common.deploy.app_contract import execute_app_hook_slot, load_hooks_manifest
     from infra2_sdk.refs import ResolvedRef
 
-    fr_manifest_path = ROOT / "repos" / "finance_report" / "runtime-hooks.manifest.json"
-    ta_manifest_path = ROOT / "repos" / "truealpha" / "runtime-hooks.manifest.json"
-    assert fr_manifest_path.is_file(), f"missing {fr_manifest_path}"
-    assert ta_manifest_path.is_file(), f"missing {ta_manifest_path}"
+    # Prepare an isolated repo_root in tmp_path with repos/finance_report and repos/truealpha
+    # containing the exact verbatim manifests, and verify against on-disk submodules if checked out.
+    fr_sub = tmp_path / "repos" / "finance_report"
+    ta_sub = tmp_path / "repos" / "truealpha"
+    fr_sub.mkdir(parents=True, exist_ok=True)
+    ta_sub.mkdir(parents=True, exist_ok=True)
+    fr_manifest_path = fr_sub / "runtime-hooks.manifest.json"
+    ta_manifest_path = ta_sub / "runtime-hooks.manifest.json"
+    fr_manifest_path.write_text(_REAL_FR_HOOKS_MANIFEST_JSON, encoding="utf-8")
+    ta_manifest_path.write_text(_REAL_TA_HOOKS_MANIFEST_JSON, encoding="utf-8")
 
     fr_manifest = load_hooks_manifest(fr_manifest_path)
     ta_manifest = load_hooks_manifest(ta_manifest_path)
+
+    disk_fr = ROOT / "repos" / "finance_report" / "runtime-hooks.manifest.json"
+    disk_ta = ROOT / "repos" / "truealpha" / "runtime-hooks.manifest.json"
+    if disk_fr.is_file():
+        assert load_hooks_manifest(disk_fr).to_dict() == fr_manifest.to_dict()
+    if disk_ta.is_file():
+        assert load_hooks_manifest(disk_ta).to_dict() == ta_manifest.to_dict()
 
     invocations: list[tuple[list[str], Path | None, dict[str, str]]] = []
 
@@ -1268,13 +1394,13 @@ def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
         app_url="https://truealpha-staging.truealpha.club",
         environment="staging",
         version_ref="v0.2.80",
-        cwd=ROOT / "repos" / "truealpha",
+        cwd=ta_sub,
         ambient_env={"PATH": "/usr/bin:/bin"},
         runner=_capturing_runner,
     )
     assert res_ta_smoke.status == "pass"
     _, ta_cwd, ta_env = invocations[-1]
-    assert ta_cwd == ROOT / "repos" / "truealpha"
+    assert ta_cwd == ta_sub
     assert ta_env["APP_URL"] == "https://truealpha-staging.truealpha.club"
     assert ta_env["APP_VERSION_REF"] == "v0.2.80"
 
@@ -1285,7 +1411,7 @@ def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
         app_url="https://truealpha-staging.truealpha.club",
         environment="staging",
         version_ref="v0.2.80",
-        cwd=ROOT / "repos" / "truealpha",
+        cwd=ta_sub,
         ambient_env={"PATH": "/usr/bin:/bin"},
         runner=_capturing_runner,
     )
@@ -1300,18 +1426,23 @@ def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
         app_url="https://report-staging.zitian.party",
         environment="staging",
         version_ref="v0.2.47",
-        cwd=ROOT / "repos" / "finance_report",
+        cwd=fr_sub,
         ambient_env={"PATH": "/usr/bin:/bin"},
         runner=_capturing_runner,
     )
     assert res_fr_smoke.status == "pass"
     _, fr_cwd, fr_env = invocations[-1]
-    assert fr_cwd == ROOT / "repos" / "finance_report"
+    assert fr_cwd == fr_sub
     assert fr_env["INFRA2_HOOK_APP_URL"] == "https://report-staging.zitian.party"
     assert fr_env["APP_URL"] == "https://report-staging.zitian.party"
     assert fr_env["BASE_URL"] == "https://report-staging.zitian.party"
 
     # 4. run_post_deploy_app_hooks uses repos/<app> cwd when present, or fetches temp checkout
+    (tmp_path / "harness").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "harness" / "repos.yaml").write_text(
+        (ROOT / "harness" / "repos.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     monkeypatch.setattr(
         reconcile,
         "resolve_image_ref",
@@ -1319,7 +1450,7 @@ def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
     )
     plan = build_plan(
         ["harness/repos.yaml"],
-        repo_root=ROOT,
+        repo_root=tmp_path,
         app_release_tags={
             "finance_report/app": "v0.2.47",
             "truealpha/app": "v0.2.80",
@@ -1339,7 +1470,7 @@ def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
     hook_results = reconcile.run_post_deploy_app_hooks(
         plan,
         applied,
-        repo_root=ROOT,
+        repo_root=tmp_path,
         after="v3.1.24",
         target_env="staging",
         manifest_fetcher=lambda url: (
@@ -1351,8 +1482,8 @@ def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
         record_issues=False,
     )
     assert [r["status"] for r in hook_results] == ["pass", "pass"]
-    assert hook_results[0]["cwd"] == str(ROOT / "repos" / "finance_report")
-    assert hook_results[1]["cwd"] == str(ROOT / "repos" / "truealpha")
+    assert hook_results[0]["cwd"] == str(fr_sub)
+    assert hook_results[1]["cwd"] == str(ta_sub)
 
 
 def test_record_app_hook_issue_trail_opens_and_closes_app_issues() -> None:
@@ -1435,10 +1566,34 @@ def test_record_app_hook_issue_trail_opens_and_closes_app_issues() -> None:
     assert ta_api.closed == [10]
 
 
-def test_audit_app_hooks_cli_validates_both_apps(capsys) -> None:
+def test_audit_app_hooks_cli_validates_both_apps(monkeypatch, capsys, tmp_path) -> None:
     """#1416 (Fix 3): --audit-app-hooks validates both finance_report/app and truealpha/app
-    runtime-hooks.manifest.json files and exits 0."""
-    rc = main(["--repo-root", str(ROOT), "--audit-app-hooks"])
+    runtime-hooks.manifest.json files (both from local checkouts and via remote fetch when
+    submodules are absent in CI) and exits 0."""
+    from infra2_sdk.refs import ResolvedRef
+
+    (tmp_path / "harness").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "harness" / "repos.yaml").write_text(
+        (ROOT / "harness" / "repos.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "fetch_hooks_manifest",
+        lambda svc, sha, **_kw: reconcile.RuntimeHooksManifest.from_dict(
+            json.loads(
+                _REAL_FR_HOOKS_MANIFEST_JSON
+                if svc == "finance_report/app"
+                else _REAL_TA_HOOKS_MANIFEST_JSON
+            )
+        ),
+    )
+    rc = main(["--repo-root", str(tmp_path), "--audit-app-hooks"])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["ok"] is True
