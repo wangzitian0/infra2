@@ -176,6 +176,9 @@ jobs:
         # which is the state that breaks the next production release.
         run: python -m common.deploy.release_markers --repo-root .
 
+      - name: Audit App runtime hooks manifests (#1416)
+        run: python -m tools.reconcile_iac_inputs --audit-app-hooks
+
       - name: Audit single deploy trigger (necessity)
         if: env.DOKPLOY_API_KEY != ''
         run: python -m invoke dokploy.audit-autodeploy

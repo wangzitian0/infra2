@@ -609,23 +609,58 @@ def execute_app_hook_slot(
             FORBIDDEN_HOOK_ENV_PREFIXES
         ):
             raise ValueError(f"forbidden secret in hook slot {slot!r}: {name}")
+    cleaned_url = app_url.strip()
+    effective_ambient: dict[str, str] = dict(
+        os.environ if ambient_env is None else ambient_env
+    )
+    for env_key, default_val in (
+        ("APP_URL", cleaned_url),
+        ("INFRA2_HOOK_APP_URL", cleaned_url),
+        ("BASE_URL", cleaned_url),
+        ("DEPLOY_BASE_URL", cleaned_url),
+        ("STAGING_BASE_URL", cleaned_url),
+        ("TA_BASE_URL", cleaned_url),
+        ("ENVIRONMENT", environment),
+        ("DEPLOY_ENV", environment),
+        ("APP_VERSION_REF", version_ref),
+        ("EXPECTED_SHA", version_ref),
+    ):
+        if not str(effective_ambient.get(env_key, "")).strip():
+            effective_ambient[env_key] = default_val
+
+    augmented_optional = tuple(
+        dict.fromkeys(
+            [
+                *slot_spec.optional_env,
+                "INFRA2_HOOK_APP_URL",
+                "BASE_URL",
+                "DEPLOY_ENV",
+            ]
+        )
+    )
+    augmented_slot_spec = replace(slot_spec, optional_env=augmented_optional)
+    augmented_manifest = RuntimeHooksManifest(
+        service=manifest.service,
+        slots={**manifest.slots, slot: augmented_slot_spec},
+        schema_version=manifest.schema_version,
+    )
     _ = build_hook_env(
-        slot_spec,
+        augmented_slot_spec,
         slot=slot,
-        app_url=app_url,
+        app_url=cleaned_url,
         environment=environment,
         version_ref=version_ref,
-        artifacts_dir=slot_spec.artifacts_dir,
-        ambient_env=os.environ if ambient_env is None else ambient_env,
+        artifacts_dir=augmented_slot_spec.artifacts_dir,
+        ambient_env=effective_ambient,
     )
     return run_hook_slot(
-        manifest,
+        augmented_manifest,
         slot,
-        app_url=app_url,
+        app_url=cleaned_url,
         environment=environment,
         version_ref=version_ref,
         cwd=cwd,
-        ambient_env=ambient_env,
+        ambient_env=effective_ambient,
         result_path=result_path,
         runner=runner,
     )
