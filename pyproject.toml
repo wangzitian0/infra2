@@ -50,9 +50,7 @@ e2e = [
 asyncio_mode = "auto"
 testpaths = ["common/tests"]
 # Print the 25 slowest tests that take 1 s or more, so the CI log names where time goes (#1453).
-# With -n, an idle worker takes queued tests from a busy worker, so one long test at the end of
-# a queue does not leave the other workers idle (#1453).
-addopts = "--durations=25 --durations-min=1.0 --dist worksteal"
+addopts = "--durations=25 --durations-min=1.0"
 # Dump the stack of any test that runs for more than 120 s, so a stall names its cause (#1453).
 faulthandler_timeout = 120
 markers = [
