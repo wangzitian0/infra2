@@ -74,6 +74,10 @@ class ServiceSpec:
             Defaults to ``<service-part-of-key>`` with underscores dashed, matching the
             registry key unless the app's compose already established a different label.
         identity_component: The ``component`` telemetry label. Defaults to ``"app"``.
+        worker_identity_service_name: The ``service.name`` of the Prefect worker process
+            that runs the app image. Empty means the app has no worker identity. When set,
+            the promote path issues ``OTEL_WORKER_SERVICE_NAME`` and
+            ``OTEL_WORKER_RESOURCE_ATTRIBUTES`` with component ``worker`` (#1431).
         companions: Services promoted by the SAME app-deploy request, after this one,
             at the same ``version_ref`` / ``iac_ref`` / type. ``truealpha/app`` carries
             ``truealpha/data_engine`` (truealpha#712): one release request promotes
@@ -96,6 +100,7 @@ class ServiceSpec:
     image_repositories: tuple[str, ...] = ()
     identity_service_name: str = ""
     identity_component: str = "app"
+    worker_identity_service_name: str = ""
     companions: tuple[str, ...] = ()
     supports_preview: bool = True
 
@@ -125,6 +130,7 @@ SERVICES: dict[str, ServiceSpec] = {
             "ghcr.io/wangzitian0/finance_report-frontend",
         ),
         identity_service_name="finance-report-backend",
+        worker_identity_service_name="finance-report-worker",
     ),
     # #500: version-pinned staging promotion (finance_report's fixed-compose path,
     # generalized). #522: preview/canary wired via common.deploy.preview (generalized

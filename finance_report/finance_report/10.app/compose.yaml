@@ -32,13 +32,12 @@ x-app-runtime-env: &app_runtime_env
   S3_PUBLIC_BUCKET: ${S3_PUBLIC_BUCKET:-}
   S3_PRESIGN_EXPIRY_SECONDS: "900"
   PREFECT_API_URL: http://platform-prefect-server${ENV_SUFFIX}:4200/api
-# OTEL_EXPORTER_OTLP_ENDPOINT is deliberately NOT here. It turns export ON, and this
-# application refuses to start when export is on without a deployment.environment tag in
-# OTEL_RESOURCE_ATTRIBUTES — which the deployer issues per component, for the backend.
-# Handing the worker the endpoint alone crash-looped staging within a minute of the first
-# deploy (2026-09-10): "Telemetry contract violation: OTEL export is enabled in a deployed
-# environment but OTEL_RESOURCE_ATTRIBUTES has no deployment.environment tag". Giving the
-# worker real telemetry means giving it its own identity, which is its own change.
+# OTEL_EXPORTER_OTLP_ENDPOINT is NOT in this anchor. It turns export ON, and the application
+# refuses to start when export is on without a deployment.environment tag in
+# OTEL_RESOURCE_ATTRIBUTES (staging crash-looped on 2026-09-10 when the worker got the
+# endpoint alone). Each exporting service therefore names the endpoint next to its own
+# issued identity: backend uses OTEL_RESOURCE_ATTRIBUTES, prefect-worker uses
+# OTEL_WORKER_RESOURCE_ATTRIBUTES (#1431). The promote path issues both.
 
 services:
   vault-agent:
@@ -252,6 +251,9 @@ services:
       # crash-loops at ~1.5 cores per environment (2026-09-08: 71 restarts). So is
       # S3_BUCKET, whose absence here broke every staging parse (see the anchor).
       <<: *app_runtime_env
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
+      OTEL_SERVICE_NAME: ${OTEL_WORKER_SERVICE_NAME:-finance-report-worker}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_WORKER_RESOURCE_ATTRIBUTES:-}
     volumes:
       - secrets:/secrets:ro
     networks:
