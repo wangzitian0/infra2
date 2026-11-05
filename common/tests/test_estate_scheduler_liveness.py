@@ -244,7 +244,7 @@ def test_a_run_that_started_no_job_is_not_a_tick(run) -> None:
     w = wf("tick", age=None)
     w["scheduled"] = w["unfiltered"] = [run]
     (verdict,) = _verdicts(FakeGitHub({REPO_A: [w]}), repositories=(REPO_A,))
-    assert verdict.status == est.NEVER, verdict  # the file is 3 days old
+    assert verdict.status == est.STALE, verdict  # runs fired, none started a job
 
 
 def test_never_ran_is_green_only_while_the_file_is_younger_than_the_bound() -> None:
@@ -424,7 +424,7 @@ def test_the_gap_is_measured_from_the_crons(crons, gap) -> None:
         ["x * * * *"],
         ["0 */0 * * *"],
         ["0 5-3 * * *"],
-        ["0 0 1 1 *"],
+        ["0 0 29 2 *"],
     ],
 )
 def test_a_schedule_it_cannot_measure_is_rejected(crons) -> None:
@@ -441,7 +441,7 @@ def test_a_weekly_workflow_gets_a_weekly_bound() -> None:
 
 
 def test_a_schedule_it_cannot_measure_is_red() -> None:
-    w = wf("tick", "on:\n  schedule:\n    - cron: '0 0 1 1 *'\n")
+    w = wf("tick", "on:\n  schedule:\n    - cron: '0 0 29 2 *'\n")
     (verdict,) = _verdicts(FakeGitHub({REPO_A: [w]}), repositories=(REPO_A,))
     assert verdict.status == est.INVALID
 
@@ -560,3 +560,155 @@ def test_the_reader_turns_every_transport_failure_into_a_read_error(failure) -> 
 def test_the_reader_rejects_a_body_that_is_not_json() -> None:
     with pytest.raises(est.PeerReadError):
         est.github_getter("t", opener=lambda _r, timeout: _Response(b"<html>"))("/x")
+
+
+# --- review of d862872 -----------------------------------------------------------------
+
+FLOW = "on:\n  schedule: [{cron: '41 */6 * * *'}]\n"
+FLOW_ITEM = "on:\n  schedule:\n    - {cron: '41 */6 * * *'}\n"
+QUOTED_KEY = "on:\n  schedule:\n    - \"cron\": '41 */6 * * *'\n"
+QUOTED_ON = "\"on\":\n  schedule:\n    - cron: '41 */6 * * *'\n"
+SCHEDULE_IN_RUN_BLOCK = (
+    "on:\n  push:\njobs:\n  j:\n    steps:\n      - run: |\n"
+    "          cron: '0 1 * * *'\n"
+)
+
+
+@pytest.mark.parametrize("text", [FLOW, FLOW_ITEM, QUOTED_KEY, QUOTED_ON, SIX_HOURLY])
+def test_every_yaml_shape_of_a_schedule_is_measured(text) -> None:
+    (verdict,) = _verdicts(
+        FakeGitHub({REPO_A: [wf("w", text, age=timedelta(hours=14))]}),
+        repositories=(REPO_A,),
+    )
+    assert verdict.status == est.STALE, verdict
+    assert "13.0h bound" in verdict.detail
+
+
+def test_a_cron_line_inside_a_run_block_is_not_a_schedule() -> None:
+    github = FakeGitHub({REPO_A: [wf("w", SCHEDULE_IN_RUN_BLOCK, age=None), wf("t")]})
+    assert [v.path for v in _verdicts(github, repositories=(REPO_A,))] == [path_of("t")]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "on: [unclosed\n  schedule: {",
+        "on:\n  schedule:\n    - {}\n",
+        "on:\n  schedule:\n    - cron: ''\n",
+        "on:\n  schedule: nightly\n",
+        "on:\n  schedule:\n    - cron: 5\n",
+    ],
+)
+def test_invalid_yaml_or_a_schedule_without_a_cron_is_invalid(text) -> None:
+    (verdict,) = _verdicts(
+        FakeGitHub({REPO_A: [wf("w", text, age=timedelta(hours=1))]}),
+        repositories=(REPO_A,),
+    )
+    assert verdict.status == est.INVALID, verdict
+
+
+def test_a_sunday_written_as_seven_is_measured() -> None:
+    assert est.largest_gap(["0 1 * * 7"]) == timedelta(days=7)
+    assert est.largest_gap(["0 1 * * 5-7"]) == est.largest_gap(["0 1 * * 5,6,0"])
+
+
+@pytest.mark.parametrize(
+    ("cron", "gap"),
+    [
+        ("0 0 29-31 * *", timedelta(days=57)),  # Jan 31 -> Mar 29 in a common year
+        ("0 0 30 * *", timedelta(days=60)),  # Jan 30 -> Mar 30, leap year
+        ("0 0 1 3,6,9,12 *", timedelta(days=92)),  # Mar 1 -> Jun 1
+    ],
+)
+def test_calendar_edge_crons_are_measured_by_their_real_largest_gap(cron, gap) -> None:
+    assert est.largest_gap([cron]) == gap
+
+
+def test_a_cron_that_fires_once_in_the_window_is_invalid_not_a_guess() -> None:
+    with pytest.raises(est.ScheduleError, match="fewer than twice"):
+        est.largest_gap(["0 0 29 2 *"])
+
+
+def test_a_missing_or_malformed_total_count_on_the_404_path_is_red() -> None:
+    for bad in ({}, {"total_count": "3"}, {"total_count": None}):
+        w = wf("gone")
+        base = f"/repos/{REPO_A}/actions/workflows/{w['id']}"
+        overrides = _gone(w)
+        overrides[f"{base}/runs?event=schedule&per_page={est.SCHEDULED_PAGE}"] = bad
+        (verdict,) = _verdicts(
+            FakeGitHub({REPO_A: [w]}, overrides=overrides), repositories=(REPO_A,)
+        )
+        assert verdict.status == est.UNVERIFIABLE, (bad, verdict)
+
+
+@pytest.mark.parametrize(
+    "run",
+    [
+        _run(timedelta(hours=1), conclusion="startup_failure"),
+        _run(timedelta(hours=1), status="queued", conclusion=None),
+    ],
+)
+def test_scheduled_runs_that_all_failed_to_start_are_red_even_for_a_young_file(
+    run,
+) -> None:
+    w = wf("w", age=None, changed_age=timedelta(hours=2))
+    w["scheduled"] = w["unfiltered"] = [run]
+    (verdict,) = _verdicts(FakeGitHub({REPO_A: [w]}), repositories=(REPO_A,))
+    assert verdict.status == est.STALE, verdict
+    assert "none started a job" in verdict.detail
+
+
+def test_a_real_listing_shape_without_the_deleted_workflow_discovers_the_rest() -> None:
+    # Live 2026-11-05: truealpha scheduler-liveness.yml answers state=deleted by
+    # name but is absent from the listing. The check cannot see what the listing
+    # hides, and it must not invent it.
+    entry = {
+        "id": 1,
+        "node_id": "W_x",
+        "name": "tick",
+        "path": path_of("tick"),
+        "state": "active",
+        "created_at": "2026-09-22T14:40:45.000+08:00",
+        "updated_at": "2026-09-22T14:40:45.000+08:00",
+        "url": "https://api.github.com/repos/o/a/actions/workflows/1",
+        "html_url": "https://github.com/o/a/blob/main/x",
+        "badge_url": "https://github.com/o/a/workflows/tick/badge.svg",
+    }
+    w = wf("tick", wid=1)
+    github = FakeGitHub({REPO_A: [w]})
+    github.routes[f"/repos/{REPO_A}/actions/workflows?per_page={est.LISTING_PAGE}"] = {
+        "total_count": 1,
+        "workflows": [entry],
+    }
+    verdicts = _verdicts(github, repositories=(REPO_A,))
+    assert [(v.path, v.status) for v in verdicts] == [(path_of("tick"), est.OK)]
+
+
+def test_the_aggregate_names_each_red_workflow_as_a_unit_without_readings() -> None:
+    estate = {
+        REPO_A: [
+            wf("tick", age=timedelta(days=2)),
+            wf("off", state="disabled_inactivity"),
+        ],
+        REPO_B: [wf("ok")],
+    }
+    aggregate = est.evaluate_estate_liveness(
+        FakeGitHub(estate), now=NOW, repositories=(REPO_A, REPO_B)
+    )
+    assert aggregate.units == (
+        f"{REPO_A}:{path_of('off')}:DISABLED",
+        f"{REPO_A}:{path_of('tick')}:STALE",
+    )
+    other_age = FakeGitHub(
+        {
+            REPO_A: [
+                wf("tick", age=timedelta(days=9)),
+                wf("off", state="disabled_inactivity"),
+            ],
+            REPO_B: [wf("ok")],
+        }
+    )
+    again = est.evaluate_estate_liveness(
+        other_age, now=NOW, repositories=(REPO_A, REPO_B)
+    )
+    assert again.units == aggregate.units

@@ -1221,15 +1221,18 @@ def run_estate_scheduler_liveness_check(
     attempts = max(1, max_attempts)
     detail = ""
     status = UNVERIFIABLE
+    units: tuple[str, ...] = ()
     for attempt in range(1, attempts + 1):
         try:
             verdict = evaluate_estate_liveness(
                 getter, now=now or datetime.now(UTC), bound_cap=bound_cap
             )
             status, detail = verdict.status, verdict.detail
+            units = tuple(getattr(verdict, "units", ()))
         except Exception as exc:  # noqa: BLE001 - an unreadable peer is red, never a pass.
             status = UNVERIFIABLE
             detail = f"peer check raised {type(exc).__name__}: {_one_line(str(exc))}"
+            units = (f"check:raised:{type(exc).__name__}",)
         if status != UNVERIFIABLE or attempt == attempts:
             break
         if retry_delay_seconds > 0:
@@ -1242,6 +1245,7 @@ def run_estate_scheduler_liveness_check(
             f"{status}: {detail}",
             "" if ok else "peer-scheduler-liveness",
             attempt_count=attempt,
+            units=() if ok else units,
         )
     ]
 

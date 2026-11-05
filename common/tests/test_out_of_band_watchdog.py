@@ -2966,3 +2966,39 @@ def test_unregistered_target_in_vars_flags_signal_registry_configuration_error(
     )
     assert code_override == 0
     assert pages_override == []
+
+
+def test_estate_check_pages_again_when_a_second_workflow_stops_not_on_a_new_reading(
+    monkeypatch,
+) -> None:
+    """Review of #1444: identity is per red workflow; ages are not in it."""
+    from common.observability import estate_scheduler_liveness as est
+
+    watchdog = _load_watchdog()
+    days = iter(
+        [
+            est.EstateVerdict(est.STALE, "doc-drift 20h", ("o/a:w/a.yml:STALE",)),
+            est.EstateVerdict(est.STALE, "doc-drift 44h", ("o/a:w/a.yml:STALE",)),
+            est.EstateVerdict(
+                est.STALE, "two", ("o/a:w/a.yml:STALE", "o/b:w/b.yml:STALE")
+            ),
+            est.EstateVerdict(
+                est.UNVERIFIABLE, "HTTP 403", ("o/b:(workflow listing):UNVERIFIABLE",)
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        watchdog, "evaluate_estate_liveness", lambda _g, *, now, bound_cap: next(days)
+    )
+    keys = []
+    for _ in range(4):
+        (result,) = watchdog.run_estate_scheduler_liveness_check(
+            {}, getter_factory=lambda _t, timeout: object(), max_attempts=1
+        )
+        result = watchdog.replace(
+            result, severity=watchdog._severity_for(result.name, result.failure_domain)
+        )
+        keys.append({f.key for f in watchdog.page_findings([result])})
+    assert keys[0] == keys[1]
+    assert keys[2] != keys[1] and len(keys[2]) == 2
+    assert keys[3] != keys[2]

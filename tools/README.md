@@ -312,7 +312,7 @@ past 72 h. A missing or rejected (401/403) `DOKPLOY_API_KEY`, or a missing repor
 secret, is a `configuration` failure and pages.
 It also checks every scheduled workflow of the estate repositories
 (`estate-scheduler-liveness`, logic in `common/observability/estate_scheduler_liveness.py`,
-#1432): red when a scheduled workflow is not active or deleted, has not ticked on
+#1432): red when a scheduled workflow is disabled, has not ticked on
 schedule within 2 x its own largest cron gap + 1 h, never ticked while its file is
 older than that bound, or cannot be read. `INFRA2_PEER_LIVENESS_BOUND_CAP_HOURS` only
 tightens the bound (`0` = drill red). With `INFRA2_WATCHDOG_VERDICTS_PATH` set it

@@ -10,18 +10,26 @@ times the largest gap plus an hour. No workflow name or period is written here.
 
 A scheduled workflow is red when:
 
-- its state is not ``active`` (``disabled_*``, ``deleted``): DISABLED;
-- its newest scheduled run that started a job is older than the bound: STALE;
+- its state is not ``active`` (``disabled_*``): DISABLED. The live listing does not
+  return ``deleted`` workflows (truealpha ``scheduler-liveness.yml``, id 359536403,
+  has state ``deleted`` and is absent from it), so a workflow deleted from the
+  default branch is NOT detected. A state ``deleted`` entry would be DISABLED;
+- a listed workflow whose file is missing on the default branch ran on schedule
+  before: DISABLED. Without a scheduled run it is branch-only and skipped;
+- its newest scheduled run that started a job is older than the bound: STALE.
+  Scheduled runs that exist but none started a job (``startup_failure``, queued)
+  are STALE too;
 - it never ran on schedule and its file changed longer ago than the bound: NEVER;
-- a cron cannot be measured: INVALID;
-- an API read failed, a listing is truncated, or the file is gone: UNVERIFIABLE.
-  A read error is never a pass.
+- the YAML is invalid, a ``schedule`` entry has no cron, or a cron cannot be
+  measured: INVALID;
+- an API read failed or a listing is truncated: UNVERIFIABLE. A read error is
+  never a pass.
 
-The estate has no scheduled workflow at all only when a read lied: that case is
-UNVERIFIABLE, not green. Workflows outside ``.github/workflows/`` are skipped.
-A listed workflow whose file is missing on the default branch is skipped when it
-never ran on schedule (branch-only), and DISABLED when it did. A workflow whose
-listing entry is gone cannot be discovered; see ``docs/ssot/ops.observability.md``.
+The schedule is read from the parsed YAML (``on.schedule[*].cron``), so flow style,
+quoted keys and the boolean ``on`` key are handled. The estate with no scheduled
+workflow is UNVERIFIABLE, not green. Workflows outside ``.github/workflows/`` are
+skipped. The watchdog runs daily, so detection lags a stop by up to bound + 24 h.
+Nothing automated watches the scheduler of ``ops-checks.yml`` itself.
 
 Canonical cron and bound primitives live in ``infra2_sdk`` (#1270).
 """
@@ -35,7 +43,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
-from infra2_sdk.ci import ScheduleError, crons_in
+import yaml
+
+from infra2_sdk.ci import ScheduleError
 from infra2_sdk.observability import (
     DELAY_ALLOWANCE,
     MISSED_TICKS_TOLERATED,
@@ -91,8 +101,10 @@ class WorkflowVerdict:
 # day-of-week restriction (live: ``0 1 * * 1`` is INVALID). The estate has weekly
 # crons, so the gap is measured here over a window of days.
 
-#: A cron must fire at least twice in this window to have a measurable gap.
-GAP_WINDOW_DAYS = 62
+#: The days sampled: four years from a leap year reach Feb 29, quarterly and
+#: month-end crons. A cron with fewer than two fires in it is not measurable.
+GAP_WINDOW_DAYS = 1461
+_WINDOW_START = datetime(2024, 1, 1, tzinfo=UTC)
 _NAMES = {
     "month": {
         n: i
@@ -149,10 +161,7 @@ def largest_gap(crons: list[str]) -> timedelta:
     """Return the largest gap between consecutive fire times of all *crons*."""
     if not crons:
         raise ScheduleError("the workflow has no cron to measure")
-    start = datetime(
-        2026, 1, 1, tzinfo=UTC
-    )  # a fixed Thursday; the gap is calendar-independent enough
-    fires: list[datetime] = []
+    day_times: dict[int, set[int]] = {}  # day offset -> minutes of that day
     for cron in crons:
         parts = cron.split()
         if len(parts) != 5:
@@ -165,26 +174,69 @@ def largest_gap(crons: list[str]) -> timedelta:
         )
         dows = {d % 7 for d in dows}
         dom_free, dow_free = parts[2].startswith("*"), parts[4].startswith("*")
+        times = {h * 60 + m for h in hours for m in minutes}
         for offset in range(GAP_WINDOW_DAYS):
-            day = start + timedelta(days=offset)
-            weekday = (day.weekday() + 1) % 7
-            by_dom, by_dow = day.day in doms, weekday in dows
+            day = _WINDOW_START + timedelta(days=offset)
             if day.month not in months:
                 continue
+            by_dom, by_dow = day.day in doms, (day.weekday() + 1) % 7 in dows
             # Vixie rule: both restricted -> either matches; else both must match.
-            if not (
+            if (
                 (by_dom or by_dow)
                 if not dom_free and not dow_free
                 else (by_dom and by_dow)
             ):
-                continue
-            fires.extend(day.replace(hour=h, minute=m) for h in hours for m in minutes)
-    fires = sorted(set(fires))
+                day_times.setdefault(offset, set()).update(times)
+    fires = sorted(o * 1440 + t for o, ts in day_times.items() for t in ts)
     if len(fires) < 2:
         raise ScheduleError(
             f"crons {crons!r} fire fewer than twice in {GAP_WINDOW_DAYS} days; teach this reader"
         )
-    return max(b - a for a, b in zip(fires, fires[1:], strict=False))
+    return timedelta(minutes=max(b - a for a, b in zip(fires, fires[1:], strict=False)))
+
+
+def schedule_crons(text: str) -> list[str]:
+    """Return ``on.schedule[*].cron`` of a workflow file; ``[]`` when it has no schedule.
+
+    Raises ``ScheduleError`` for invalid YAML or a ``schedule`` entry with no cron.
+    PyYAML reads the key ``on`` as boolean ``True``; both spellings are accepted.
+    """
+    try:
+        document = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ScheduleError(f"the file is not valid YAML: {exc}") from exc
+    if not isinstance(document, dict):
+        raise ScheduleError("the file is not a YAML mapping")
+    triggers = document.get("on", document.get(True))
+    if not isinstance(triggers, dict) or "schedule" not in triggers:
+        return []
+    entries = triggers["schedule"]
+    if not isinstance(entries, list) or not entries:
+        raise ScheduleError("on.schedule is not a non-empty list")
+    crons = []
+    for entry in entries:
+        cron = entry.get("cron") if isinstance(entry, dict) else None
+        if not isinstance(cron, str) or not cron.strip():
+            raise ScheduleError(f"a schedule entry has no cron: {entry!r}")
+        crons.append(cron.strip())
+    return crons
+
+
+@dataclass(frozen=True)
+class EstateVerdict:
+    """The estate verdict. ``units`` names each red workflow as ``repo:path:status``.
+
+    Units hold no age or timestamp, so a reading change keeps the page identity and
+    a second red workflow changes it (#962).
+    """
+
+    status: str
+    detail: str
+    units: tuple[str, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return self.status == OK
 
 
 def _object(get: Get, path: str) -> dict:
@@ -217,11 +269,11 @@ def _runs(get: Get, path: str) -> list[dict]:
     return runs
 
 
-def _newest(get: Get, path: str) -> datetime | None:
+def _tick(runs: list[dict], base: str) -> datetime | None:
     try:
-        return newest_tick(_runs(get, path))
+        return newest_tick(runs)
     except ValueError as exc:  # an unreadable created_at
-        raise PeerReadError(f"GET {path}: {exc}") from exc
+        raise PeerReadError(f"{base} runs: {exc}") from exc
 
 
 def _file_text(get: Get, repository: str, path: str, branch: str) -> str:
@@ -289,15 +341,21 @@ def _evaluate_workflow(
         # file was deleted while it was in use.
         base = f"/repos/{repository}/actions/workflows/{workflow_id}"
         ran = _object(get, f"{base}/runs?event=schedule&per_page={SCHEDULED_PAGE}")
-        if not ran.get("total_count"):
+        count = ran.get("total_count")
+        if not isinstance(count, int) or isinstance(count, bool):
+            raise PeerReadError(f"GET {base}/runs has no integer total_count")
+        if count == 0:
             return None
         return WorkflowVerdict(
             repository,
             path,
             DISABLED,
-            f"{where} is deleted from {branch} but ran on schedule {ran['total_count']} times",
+            f"{where} is deleted from {branch} but ran on schedule {count} times",
         )
-    crons = crons_in(text)
+    try:
+        crons = schedule_crons(text)
+    except ScheduleError as exc:
+        return WorkflowVerdict(repository, path, INVALID, f"{where}: {exc}")
     if not crons:
         return None
     if state != "active":
@@ -314,9 +372,14 @@ def _evaluate_workflow(
     if bound_cap is not None:
         bound = min(bound, bound_cap)
     base = f"/repos/{repository}/actions/workflows/{workflow_id}"
-    newest = _newest(get, f"{base}/runs?event=schedule&per_page={SCHEDULED_PAGE}")
+    scheduled = _runs(get, f"{base}/runs?event=schedule&per_page={SCHEDULED_PAGE}")
+    newest = _tick(scheduled, base)
     if newest is None or now - newest > bound:
-        witness = _newest(get, f"{base}/runs?per_page={UNFILTERED_PAGE}")
+        unfiltered = _runs(get, f"{base}/runs?per_page={UNFILTERED_PAGE}")
+        scheduled = scheduled + [
+            run for run in unfiltered if run.get("event") == "schedule"
+        ]
+        witness = _tick(unfiltered, base)
         if witness is not None and (newest is None or witness > newest):
             newest = witness
     if newest is not None:
@@ -332,6 +395,14 @@ def _evaluate_workflow(
             )
         return WorkflowVerdict(
             repository, path, OK, f"{seen} is {_hours(age)} old (bound {_hours(bound)})"
+        )
+    if scheduled:
+        return WorkflowVerdict(
+            repository,
+            path,
+            STALE,
+            f"{where} has {len(scheduled)} scheduled runs and none started a job: "
+            "its scheduler fires but the workflow does not run",
         )
     since = now - _last_changed(get, repository, path, branch)
     never = f"{where} never ran on schedule; its file changed {_hours(since)} ago"
@@ -395,7 +466,7 @@ def evaluate_estate_liveness(
     now: datetime,
     bound_cap: timedelta | None = None,
     repositories: Iterable[str] | None = None,
-) -> PeerVerdict:
+) -> EstateVerdict:
     """Fold the per-workflow verdicts into one watchdog verdict."""
     repositories = tuple(ESTATE_REPOSITORIES if repositories is None else repositories)
     verdicts = evaluate_workflows(
@@ -408,15 +479,17 @@ def evaluate_estate_liveness(
         shown = lines[:MAX_DETAIL_ENTRIES]
         if len(lines) > len(shown):
             shown.append(f"+{len(lines) - len(shown)} more")
-        return PeerVerdict(
-            status, f"{len(red)} of {len(verdicts)} red; " + "; ".join(shown)
+        units = tuple(sorted(f"{v.repository}:{v.path}:{v.status}" for v in red))
+        return EstateVerdict(
+            status, f"{len(red)} of {len(verdicts)} red; " + "; ".join(shown), units
         )
     if not verdicts:
-        return PeerVerdict(
+        return EstateVerdict(
             UNVERIFIABLE,
             "no scheduled workflow found in the estate: the listing cannot be trusted",
+            (f"{LISTING}:{UNVERIFIABLE}",),
         )
-    return PeerVerdict(
+    return EstateVerdict(
         OK,
         f"{len(verdicts)} scheduled workflows in {len(repositories)} repositories "
         "ticked within their measured bounds",
@@ -437,6 +510,7 @@ __all__ = [
     "NEVER",
     "OK",
     "PeerReadError",
+    "EstateVerdict",
     "PeerVerdict",
     "SCHEDULED_PAGE",
     "STALE",
@@ -445,7 +519,7 @@ __all__ = [
     "UNVERIFIABLE",
     "WorkflowVerdict",
     "bound_for",
-    "crons_in",
+    "schedule_crons",
     "evaluate_estate_liveness",
     "evaluate_workflows",
     "github_getter",

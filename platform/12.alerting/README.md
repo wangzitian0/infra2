@@ -352,7 +352,7 @@ never close; `dry_run` and `ssh_targets_override` runs write nothing.
 
 The job also checks every scheduled workflow of the estate repositories
 (`estate-scheduler-liveness`, #1432; truealpha's own `scheduler-liveness` workflow
-no longer exists): red when one is not active or deleted, its newest scheduled
+no longer exists): red when one is disabled, its newest scheduled
 run is older than 2 x its own largest cron gap + 1 h, it never ran and its
 file is older than that, or a read fails. Drill it with `workflow_dispatch`
 `task=out-of-band-watchdog`, `peer_liveness_bound_cap_hours=0`: the check goes red,
