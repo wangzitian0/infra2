@@ -14,7 +14,22 @@ from unittest import mock
 
 import pytest
 
+from common.deploy.config_hash import (
+    _artifact_items_from_disk,
+    _compose_artifact_files,
+    _repo_rel,
+    config_hash_from_items,
+)
+
 ROOT = Path(__file__).resolve().parents[2]
+
+# The collector rule that fills the standard key from the legacy key. Browser OTLP
+# SDKs emit only the legacy key, so this rule is the source of `.name` on their spans.
+ENVIRONMENT_NAME_RULE = {
+    "key": "deployment.environment.name",
+    "from_attribute": "deployment.environment",
+    "action": "insert",
+}
 
 
 def _load_signoz_deployer():
@@ -126,3 +141,41 @@ def test_otel_collector_normalizes_deployment_environment_name() -> None:
     for pipeline in ("traces", "metrics", "logs"):
         processors = cfg["service"]["pipelines"][pipeline]["processors"]
         assert processors == ["memory_limiter", "resource", "batch"]
+
+
+def test_rendered_collector_config_inserts_environment_name() -> None:
+    """The file that `sync` uploads to the host runs the `.name` rule on every signal (#1434)."""
+    import yaml
+
+    D = _load_signoz_deployer()
+    rendered = D._render_collector_config(
+        {"ENV_SUFFIX": "", "INTERNAL_DOMAIN": "zitian.party"}
+    )
+    cfg = yaml.safe_load(rendered)
+    assert ENVIRONMENT_NAME_RULE in cfg["processors"]["resource"]["attributes"]
+    for pipeline in ("traces", "metrics", "logs"):
+        assert "resource" in cfg["service"]["pipelines"][pipeline]["processors"]
+
+
+def test_collector_rule_change_flips_the_signoz_config_hash() -> None:
+    """A change to the collector template changes the SigNoz hash, so `sync` cannot skip it (#1434).
+
+    Before #1438 the hash did not read the template: two promotions printed "config
+    unchanged" and the host kept the old rule set.
+    """
+    compose = ROOT / "platform/11.signoz/compose.yaml"
+    text = compose.read_text(encoding="utf-8")
+    template = (ROOT / "platform/11.signoz/otel-collector-config.yaml").resolve()
+    assert template in _compose_artifact_files(str(compose), text)
+
+    legacy_source = b"from_attribute: deployment.environment\n"
+    items = _artifact_items_from_disk(str(compose), text)
+    label = _repo_rel(template)
+    assert any(lbl == label and legacy_source in body for lbl, body in items)
+    without_rule = [
+        (lbl, body.replace(legacy_source, b"") if lbl == label else body)
+        for lbl, body in items
+    ]
+    assert config_hash_from_items(text, {}, without_rule, []) != (
+        config_hash_from_items(text, {}, items, [])
+    )
