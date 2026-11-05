@@ -631,8 +631,12 @@ def execute_app_hook_slot(
     )
 
 
-def _git_url(repository: str) -> str:
+def git_url(repository: str) -> str:
+    """Return the HTTPS Git clone URL for a ``owner/repo`` GitHub slug."""
     return f"https://github.com/{repository}.git"
+
+
+_git_url = git_url
 
 
 @dataclass(frozen=True)
@@ -803,6 +807,7 @@ __all__ = [
     "encode_rendered_templates",
     "execute_app_hook_slot",
     "fetch_hooks_manifest",
+    "git_url",
     "load_hooks_manifest",
     "next_app_release_tag",
     "parse_compose_contract",
