@@ -350,10 +350,11 @@ a red run opens it or comments on the open one, and the next green scheduled run
 recorded no verdict is itself red. Drills and branch dispatches open/comment but
 never close; `dry_run` and `ssh_targets_override` runs write nothing.
 
-The job also checks truealpha's `scheduler-liveness` workflow as its peer
-(`truealpha-scheduler-liveness`): red when it is not active, its newest scheduled
-run is older than 2 x its largest cron gap + 1 h (13 h today), it never ran and its
-file is older than that, or the read fails. Drill it with `workflow_dispatch`
+The job also checks every scheduled workflow of the estate repositories
+(`estate-scheduler-liveness`, #1432; truealpha's own `scheduler-liveness` workflow
+no longer exists): red when one is disabled, its newest scheduled
+run is older than 2 x its own largest cron gap + 1 h, it never ran and its
+file is older than that, or a read fails. Drill it with `workflow_dispatch`
 `task=out-of-band-watchdog`, `peer_liveness_bound_cap_hours=0`: the check goes red,
 Feishu is paged and the issue is opened; the next scheduled run, or a dispatch
 on `main` without the cap, closes it.
@@ -372,8 +373,8 @@ entrypoint per product; every other public route is probed in-band here, and the
 staging heartbeat is shown on the Worker's `/status` without paging. The daily
 GitHub audit pages on: Cloudflare Worker liveness via `/status` (last run within the
 Worker's own `WATCHDOG_STATUS_MAX_AGE_SECONDS` and delivered), the production
-off-host backup, the restore rehearsal, truealpha's scheduler-liveness workflow
-(peer liveness), failures of its own configuration, and any check the signal
+off-host backup, the restore rehearsal, the estate scheduler liveness
+(every scheduled workflow still ticking), failures of its own configuration, and any check the signal
 registry does not mark `type: report`. It reports, without paging: the public
 Dokploy entrypoint, SSH reachability, Docker daemon reachability, container
 health, the `platform-alerting` in-container `/health` endpoint, the staging

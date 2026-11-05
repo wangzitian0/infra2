@@ -21,7 +21,7 @@ from infra2_sdk.observability import (
     title_for,
 )
 
-from common.observability.scheduler_peer_liveness import BOUND_CAP_ENV
+from common.observability.estate_scheduler_liveness import BOUND_CAP_ENV
 
 ISSUE_LABELS = ("incident",)
 VERDICTS_ENV = "INFRA2_WATCHDOG_VERDICTS_PATH"
