@@ -17,9 +17,7 @@ from pathlib import Path
 
 import yaml
 
-_REFERENCE = re.compile(
-    r"\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?P<default>:[-+][^}]*)?\}"
-)
+_REFERENCE = re.compile(r"\$\{(?P<name>[A-Za-z_]\w*)(?P<default>:[-+][^${}]*)?\}")
 # A reference whose name is followed by anything but `:-` or the closing brace (`:?`, `-`, `+`...).
 _UNSUPPORTED = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?!:[-+]|\}|[A-Za-z0-9_])")
 
@@ -53,7 +51,11 @@ def resolve(value: str, issued_env: dict[str, str]) -> str:
             return issued
         return default[2:] if default else ""
 
-    return _REFERENCE.sub(_sub, value)
+    # Innermost reference first: `${A:-${B:-x}}` resolves `${B:-x}` first.
+    previous = None
+    while previous != value:
+        previous, value = value, _REFERENCE.sub(_sub, value)
+    return value
 
 
 def container_env(
