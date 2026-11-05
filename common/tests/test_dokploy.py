@@ -195,7 +195,8 @@ class TestDokployClient:
         with pytest.raises(
             httpx.RequestError, match="Error while performing Dokploy API request"
         ):
-            client._request("GET", "project.all")
+            client._request("GET", "project.all", _sleep=lambda *_: None)
+        assert len(fake.calls) == 3  # one try and two retries of a safe GET
 
     def test_request_retries_transient_5xx_get_then_succeeds(
         self, monkeypatch, dokploy_env
