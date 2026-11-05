@@ -21,7 +21,7 @@
 | `openpanel.py` | OpenPanel analytics client configuration SSOT | `OPENPANEL_CLIENTS`, `openpanel_env()` |
 | `local_ledger.py` | VPS availability ledger: per-signal daily ok/fail counts and last ok/fail times written by the probe runner (#904, #1223) | `record_probe_round()`, `host_ledger_path()`, `to_report_days()` |
 | `probe_specs.py` | Probe specs rendered from the registry for the probe runner | `render_probe_spec_text()`, `normalize_specs_text()` |
-| `scheduler_peer_liveness.py` | Liveness of the peer scheduler workflow | `evaluate_peer_liveness()`, `BOUND_CAP_ENV` |
+| `estate_scheduler_liveness.py` | Liveness of every scheduled workflow in the estate repositories | `evaluate_estate_liveness()`, `evaluate_workflows()`, `BOUND_CAP_ENV` |
 | `watchers/` | Alerting sidecar resident watcher plugins: `resident.py` (base and registry), `deploy_queue_guard.py`, `breakdown_watch.py` | `ResidentWatcher`, `build_watchers()`, `DeployQueueGuard`, `ContainerBreakdownWatcher` |
 
 ## Usage Examples

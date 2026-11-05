@@ -35,7 +35,7 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from common.observability.scheduler_peer_liveness import BOUND_CAP_ENV  # noqa: E402
+from common.observability.estate_scheduler_liveness import BOUND_CAP_ENV  # noqa: E402
 from common.observability.issue_trail import (  # noqa: E402
     OFF,
     VERDICTS_ENV,

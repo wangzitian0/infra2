@@ -60,11 +60,11 @@ from common.observability.page_dedup import (  # noqa: E402
     resolve_page_state,
 )
 from common.observability import scheduled_job_start  # noqa: E402
-from common.observability.scheduler_peer_liveness import (  # noqa: E402
+from common.observability.estate_scheduler_liveness import (  # noqa: E402
     BOUND_CAP_ENV,
     OK as PEER_OK,
     UNVERIFIABLE,
-    evaluate_peer_liveness,
+    evaluate_estate_liveness,
     github_getter,
     parse_bound_cap_hours,
 )
@@ -109,8 +109,8 @@ WATCHDOG_SELF_DOMAINS = frozenset({"configuration", "report-delivery"})
 WATCHDOG_SELF_CHECKS = frozenset({SIGNAL_REGISTRY_CHECK, REPORT_CHECK})
 PAGE, REPORT = "page", "report"
 
-#: truealpha#876: the peer that sees truealpha's scheduler-liveness workflow die.
-PEER_SCHEDULER_LIVENESS_CHECK = "truealpha-scheduler-liveness"
+#: #1432: every scheduled workflow of the estate repositories is still ticking.
+ESTATE_SCHEDULER_LIVENESS_CHECK = "estate-scheduler-liveness"
 #: #1101: scheduled ops-checks jobs that GitHub failed before they started.
 SCHEDULED_JOB_START_CHECK = "infra2-scheduled-job-start"
 DOKPLOY_STATUS_CHECK = "infra2-dokploy-status"
@@ -1191,7 +1191,7 @@ def _dokploy_deployment_evidence(deployment: Mapping[str, object]) -> dict[str, 
     }
 
 
-def run_peer_scheduler_liveness_check(
+def run_estate_scheduler_liveness_check(
     env: Mapping[str, str],
     timeout: float = 10.0,
     *,
@@ -1200,18 +1200,18 @@ def run_peer_scheduler_liveness_check(
     getter_factory=github_getter,
     now: datetime | None = None,
 ) -> list[CheckResult]:
-    """truealpha#876: is truealpha's scheduler-liveness workflow still ticking?
+    """#1432: is every scheduled workflow of the estate repositories still ticking?
 
-    That workflow watches every scheduled workflow in the estate but cannot
-    report its own dead scheduler; this is the peer. An unreadable answer is
-    red (retried once, like the HTTP checks); the verdict itself is not retried.
+    Discovers the scheduled workflows of each estate repository through the
+    GitHub API and measures each bound from its own crons. An unreadable answer
+    is red (retried once, like the HTTP checks); the verdict itself is not retried.
     """
     try:
         bound_cap = parse_bound_cap_hours(env.get(BOUND_CAP_ENV))
     except ValueError as exc:
         return [
             CheckResult(
-                PEER_SCHEDULER_LIVENESS_CHECK,
+                ESTATE_SCHEDULER_LIVENESS_CHECK,
                 False,
                 f"{BOUND_CAP_ENV}: {exc}",
                 "configuration",
@@ -1221,15 +1221,18 @@ def run_peer_scheduler_liveness_check(
     attempts = max(1, max_attempts)
     detail = ""
     status = UNVERIFIABLE
+    units: tuple[str, ...] = ()
     for attempt in range(1, attempts + 1):
         try:
-            verdict = evaluate_peer_liveness(
+            verdict = evaluate_estate_liveness(
                 getter, now=now or datetime.now(UTC), bound_cap=bound_cap
             )
             status, detail = verdict.status, verdict.detail
+            units = tuple(getattr(verdict, "units", ()))
         except Exception as exc:  # noqa: BLE001 - an unreadable peer is red, never a pass.
             status = UNVERIFIABLE
             detail = f"peer check raised {type(exc).__name__}: {_one_line(str(exc))}"
+            units = (f"check:raised:{type(exc).__name__}",)
         if status != UNVERIFIABLE or attempt == attempts:
             break
         if retry_delay_seconds > 0:
@@ -1237,11 +1240,12 @@ def run_peer_scheduler_liveness_check(
     ok = status == PEER_OK
     return [
         CheckResult(
-            PEER_SCHEDULER_LIVENESS_CHECK,
+            ESTATE_SCHEDULER_LIVENESS_CHECK,
             ok,
             f"{status}: {detail}",
             "" if ok else "peer-scheduler-liveness",
             attempt_count=attempt,
+            units=() if ok else units,
         )
     ]
 
@@ -1258,8 +1262,8 @@ def run_scheduled_job_start_check(
     """#1101: did every scheduled ops-checks job of the last day start?
 
     A job GitHub fails before it starts never runs its own alert step, and the
-    run still counts as a tick for truealpha's scheduler-liveness. An unreadable
-    answer is red, after one retry like the peer check.
+    run still counts as a tick for a workflow-level check. An unreadable
+    answer is red, after one retry like the estate scheduler check.
     """
     getter = getter_factory(env.get("GITHUB_TOKEN", "").strip(), timeout=timeout)
     attempts = max(1, max_attempts)
@@ -1337,7 +1341,7 @@ def _severity_for(name: str, failure_domain: str) -> str:
     if failure_domain in {
         "cloudflare-worker-health",
         "dokploy-control-plane",
-        # a dead peer scheduler hides every other scheduled check's staleness
+        # a stopped, disabled or unverifiable scheduled workflow hides its check's staleness
         "peer-scheduler-liveness",
         # a scheduled check that never started reported nothing (#1101)
         "scheduled-job-start",
@@ -1364,7 +1368,7 @@ _IMPACT_BY_DOMAIN = {
     "configuration": "watchdog 自身配置缺失或被拒:它看不见的故障没人报",
     "cloudflare-worker-health": "Cloudflare 带外 watchdog 停跑或投递失败:整机失联时无人报警",
     "dokploy-control-plane": "Dokploy 控制面异常:部署与回滚受阻",
-    "peer-scheduler-liveness": "truealpha 的 scheduler-liveness 死了:定时 workflow 停跑无人报",
+    "peer-scheduler-liveness": "estate 中有定时 workflow 停跑、被禁用或无法核实",
     "scheduled-job-start": "定时检查 job 没启动就失败:它自己的告警没跑,它要查的故障无人报",
     "report-delivery": "报告投递失败:只报告的发现没有送到任何人",
     "backup": "异地备份缺失或过期:数据在下次成功备份前无保护",
@@ -1628,7 +1632,7 @@ def _run_all_watchdog_checks(
     results.extend(run_ssh_checks(ssh_config, ssh_targets))
     results.extend(run_backup_checks(ssh_config))
     results.extend(
-        run_peer_scheduler_liveness_check(
+        run_estate_scheduler_liveness_check(
             current_env,
             timeout,
             max_attempts=retry_max_attempts,
@@ -2107,9 +2111,8 @@ def _suggested_action_for_failure(name: str, failure_domain: str) -> str:
         )
     if failure_domain == "peer-scheduler-liveness":
         return (
-            "打开 truealpha 的 `scheduler-liveness` workflow:被禁用就重新启用,再看它最新"
-            "一次定时运行与 https://www.githubstatus.com ;它停摆期间,全 estate 停跑的定时 workflow "
-            "都无人报告"
+            "按详情里的仓库与 workflow 打开其 Actions 页:被禁用就重新启用,再看它最新"
+            "一次定时运行与 https://www.githubstatus.com ;已删除的 workflow 须确认是有意移除并同步删除其依赖"
         )
     if failure_domain == "backup":
         return (
@@ -2153,8 +2156,8 @@ def _runbook_url_for_failure(failure_domain: str) -> str:
         )
     if failure_domain == "peer-scheduler-liveness":
         return (
-            "https://github.com/wangzitian0/truealpha/actions/workflows/"
-            "scheduler-liveness.yml"
+            "https://github.com/wangzitian0/infra2/blob/main/"
+            "docs/ssot/ops.observability.md#sop-005b-github-兜底带外-watchdog日级"
         )
     if failure_domain == "scheduled-job-start":
         return "https://github.com/wangzitian0/infra2/actions/workflows/ops-checks.yml"
