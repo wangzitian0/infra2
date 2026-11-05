@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "finance_report/finance_report/10.app/compose.yaml"
 TEMPLATE = ROOT / "finance_report/finance_report/10.app/secrets.ctmpl"
 PREFECT_SERVER = "http://platform-prefect-server${ENV_SUFFIX}:4200/api"
+PUBLIC_S3_ENDPOINT = "${S3_PUBLIC_ENDPOINT:-https://s3.${INTERNAL_DOMAIN}}"
 
 
 def _environment(service: dict) -> dict[str, str]:
@@ -127,10 +128,7 @@ def test_s3_endpoints_use_the_singleton_s3_service() -> None:
     for name in ("backend", "prefect-worker"):
         env = _environment(services[name])
         assert env.get("S3_ENDPOINT") == "http://platform-s3:9000", name
-        assert (
-            env.get("S3_PUBLIC_ENDPOINT")
-            == "${S3_PUBLIC_ENDPOINT:-https://s3.${INTERNAL_DOMAIN}}"
-        ), name
+        assert env.get("S3_PUBLIC_ENDPOINT") == PUBLIC_S3_ENDPOINT, name
 
     preview_compose = ROOT / "finance_report/finance_report/preview/compose.yaml"
     preview_services = yaml.safe_load(preview_compose.read_text(encoding="utf-8"))[
@@ -138,7 +136,13 @@ def test_s3_endpoints_use_the_singleton_s3_service() -> None:
     ]
     preview_backend = _environment(preview_services["backend"])
     assert preview_backend.get("S3_ENDPOINT") == "http://platform-s3:9000"
-    assert preview_backend.get("S3_PUBLIC_ENDPOINT") == "${S3_PUBLIC_ENDPOINT:-}"
+    # The old pin froze the empty value `${S3_PUBLIC_ENDPOINT:-}`. finance_report treats an
+    # empty value as absent and refuses to start (#1466), so the preview takes the same
+    # public endpoint as staging and production.
+    assert preview_backend.get("S3_PUBLIC_ENDPOINT") == PUBLIC_S3_ENDPOINT
+    # Same refusal for PREFECT_API_URL. The preview names a server host with its own alias
+    # suffix, which does not exist (see test_finance_report_required_env_contract.py).
+    assert preview_backend.get("PREFECT_API_URL") == PREFECT_SERVER
 
 
 def _load_finance_report_deploy_module():

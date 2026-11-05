@@ -29,7 +29,9 @@ x-app-runtime-env: &app_runtime_env
   S3_ENDPOINT: http://platform-s3:9000
   S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://s3.${INTERNAL_DOMAIN}}
   S3_BUCKET: ${S3_BUCKET:-statements}
-  S3_PUBLIC_BUCKET: ${S3_PUBLIC_BUCKET:-}
+  # finance_report keeps a set-but-empty S3_PUBLIC_BUCKET as absent and refuses to start
+  # (#1466). An empty value and the bucket below behave the same: it falls back to S3_BUCKET.
+  S3_PUBLIC_BUCKET: ${S3_PUBLIC_BUCKET:-${S3_BUCKET:-statements}}
   S3_PRESIGN_EXPIRY_SECONDS: "900"
   PREFECT_API_URL: http://platform-prefect-server${ENV_SUFFIX}:4200/api
 # OTEL_EXPORTER_OTLP_ENDPOINT is deliberately NOT here. It turns export ON, and this

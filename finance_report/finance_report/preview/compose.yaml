@@ -144,7 +144,15 @@ services:
     environment:
       DEBUG: ${DEBUG:-false}
       GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
-      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-}
+      # finance_report refuses to start when its env manifest declares a name that this
+      # container lacks, and an empty value counts as lacking (#1466). The three names
+      # below follow the staging and production values.
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://s3.${INTERNAL_DOMAIN}}
+      API_RATE_LIMIT_REQUESTS: ${API_RATE_LIMIT_REQUESTS:-300}
+      # A preview has no Prefect server. The host with this alias suffix does not exist,
+      # so a parse dispatch fails at once and finance_report parses in-process. Never
+      # name the staging or production server here: it would run preview uploads there.
+      PREFECT_API_URL: http://platform-prefect-server${ENV_SUFFIX}:4200/api
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV:-preview}}
       # This alias's ENV token (main / pr-<N> / commit-<sha7>); the entrypoint uses

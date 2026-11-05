@@ -56,6 +56,17 @@ writes the shared staging/prod database. The backend healthcheck grants a bounde
 complete create/deploy/readiness/cleanup operation, while the outer canary retains its
 independent 600-second hard deadline.
 
+## Required env names (#1466)
+
+finance_report refuses to start when its env manifest declares a name that the backend
+container lacks. An empty value counts as lacking. The manifest copy is
+`../10.app/env.manifest.json`. `common/tests/test_finance_report_required_env_contract.py`
+fails when the backend of this compose, of staging or of production lacks a declared name.
+
+A preview has no Prefect server and no worker. `PREFECT_API_URL` names a host with the
+alias suffix, which does not exist. A parse dispatch then fails at once and finance_report
+parses in-process. Do not point `PREFECT_API_URL` at the staging or production server.
+
 ## One-time LIVE setup (not unit-testable)
 
 - A Dokploy `preview` environment under the `finance_report` project.
