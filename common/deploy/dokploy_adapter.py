@@ -28,9 +28,14 @@ logger = logging.getLogger(__name__)
 _CLOCK_SKEW_TOLERANCE_SECONDS = 5
 _DOKPLOY_LOG_PREFIXES = ("/etc/dokploy/logs/", "/var/lib/dokploy/")
 _SAFE_REMOTE_LOG_PATH_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
+_DEFAULT_RUNTIME_SSH_KEY_PATH = Path("/root/.ssh_runtime/id_ed25519")
 
 
-def _ssh_args_for_log_tail(host: str) -> list[str]:
+def _ssh_args_for_log_tail(
+    host: str,
+    *,
+    runtime_key_path: Path = _DEFAULT_RUNTIME_SSH_KEY_PATH,
+) -> list[str]:
     """Build SSH arguments to read a Dokploy log tail from the host."""
     args = [
         "ssh",
@@ -42,15 +47,14 @@ def _ssh_args_for_log_tail(host: str) -> list[str]:
         "StrictHostKeyChecking=accept-new",
     ]
     key_path = os.environ.get("INFRA2_WATCHDOG_SSH_KEY_PATH", "").strip()
+    try:
+        has_runtime_key = runtime_key_path.is_file()
+    except OSError:
+        has_runtime_key = False
+    if not key_path and has_runtime_key:
+        key_path = str(runtime_key_path)
     if key_path:
-        args += [
-            "-i",
-            key_path,
-            "-o",
-            "StrictHostKeyChecking=no",
-            "-o",
-            "UserKnownHostsFile=/dev/null",
-        ]
+        args += ["-i", key_path]
     port = os.environ.get("INFRA2_WATCHDOG_SSH_PORT", "").strip()
     if port:
         args += ["-p", port]
@@ -287,14 +291,27 @@ def deploy_compose_with_record_check(
     before_ids = deployment_ids(get_compose_deployments(client, compose_id))
     trigger_epoch = time.time()
     client.deploy_compose(compose_id)
-    if waiter(
-        client, compose_id, before_ids, timeout_seconds, interval_seconds, trigger_epoch
-    ):
-        return
+    try:
+        if waiter(
+            client,
+            compose_id,
+            before_ids,
+            timeout_seconds,
+            interval_seconds,
+            trigger_epoch,
+        ):
+            return
+        warn(
+            "Dokploy deploy did not produce a new deployment record; retrying with compose.redeploy"
+        )
+    except RuntimeError as exc:
+        if not isinstance(exc.__cause__, RolloutError) and not str(exc).startswith(
+            "Dokploy deployment record entered error"
+        ):
+            raise
+        warn(f"Dokploy deploy failed ({exc}); retrying once with compose.redeploy")
+        sleep_fn(max(1, interval_seconds))
 
-    warn(
-        "Dokploy deploy did not produce a new deployment record; retrying with compose.redeploy"
-    )
     before_ids = deployment_ids(get_compose_deployments(client, compose_id))
     trigger_epoch = time.time()
     client.redeploy_compose(compose_id)

@@ -313,11 +313,55 @@ def _format_degraded_signal_line(
     )
 
 
+MONTHLY_CADENCE_MIN_DAYS = 28
+
+
+def _cadence_label(window_days: object) -> str:
+    """Name the report cadence from the window length, not from a CLI flag."""
+    days = _coerce_count(window_days)
+    if days == 1:
+        return "daily"
+    if days >= MONTHLY_CADENCE_MIN_DAYS:
+        return "monthly"
+    return "weekly"
+
+
+def _watchdog_state(summary: Mapping[str, Any]) -> str | None:
+    """Map the watchdog step outcome of the same run to ok, red or unknown.
+
+    Returns None when the caller gave no outcome (reports outside the daily job).
+    Anything other than ``success`` or ``failure`` (empty, skipped, cancelled) is
+    unknown and never counts as green.
+    """
+    if "watchdog_outcome" not in summary:
+        return None
+    outcome = str(summary.get("watchdog_outcome") or "").strip().lower()
+    if outcome == "success":
+        return "ok"
+    if outcome == "failure":
+        return "red"
+    return "unknown"
+
+
+def _watchdog_line(summary: Mapping[str, Any]) -> str | None:
+    state = _watchdog_state(summary)
+    if state == "ok":
+        return "Watchdog: ok"
+    if state == "red":
+        return "Watchdog: FAILED this run — the day is RED (a page was sent)"
+    if state == "unknown":
+        return (
+            "Watchdog: UNKNOWN — outcome of the same run is missing, "
+            "the day is not green"
+        )
+    return None
+
+
 def build_report_message(
     summary: Mapping[str, Any], *, title: str | None = None
 ) -> str:
     """Render the positive-proof availability report for Lark."""
-    cadence = "daily" if summary.get("window_days") == 1 else "weekly"
+    cadence = _cadence_label(summary.get("window_days"))
     has_data = bool(summary.get("has_data", int(summary.get("total_runs", 0) or 0) > 0))
     header = title or f"[STABILITY] Infra2 {cadence} availability — positive proof"
     perfect_count = _coerce_count(summary.get("perfect_count"))
@@ -333,6 +377,9 @@ def build_report_message(
         f"Overall availability: {summary['overall_uptime_pct']}%",
         perfect_line,
     ]
+    watchdog_line = _watchdog_line(summary)
+    if watchdog_line:
+        lines.append(watchdog_line)
     unavailable = summary.get("unavailability")
     if unavailable:
         line = (
@@ -389,15 +436,19 @@ def build_stability_card(
     ),
 ) -> dict[str, Any]:
     """Build a Feishu interactive card for the positive-proof availability report."""
-    cadence = "daily" if summary.get("window_days") == 1 else "weekly"
+    cadence = _cadence_label(summary.get("window_days"))
     has_data = bool(summary.get("has_data", int(summary.get("total_runs", 0) or 0) > 0))
     degraded = [s for s in summary.get("signals", []) if s.get("fail", 0) > 0][
         :WORST_SIGNALS_SHOWN
     ]
     overall = float(summary.get("overall_uptime_pct", 100.0))
-    is_clean = has_data and not degraded and overall >= 99.9
+    watchdog_state = _watchdog_state(summary)
+    is_clean = (
+        has_data and not degraded and overall >= 99.9 and watchdog_state in (None, "ok")
+    )
+    badge = "🔴" if watchdog_state == "red" else ("🟢" if is_clean else "🟡")
     header_title = title or (
-        f"{'🟢' if is_clean else '🟡'} [报告] [STABILITY] Infra2 {cadence} availability — positive proof"
+        f"{badge} [报告] [STABILITY] Infra2 {cadence} availability — positive proof"
     )
     prod_badge = "🟢" if overall >= 99.9 else ("🟡" if overall >= 99.0 else "🔴")
     perfect_count = _coerce_count(summary.get("perfect_count"))
@@ -422,6 +473,11 @@ def build_stability_card(
     ]
     sections: list[str] = []
     hr_after: set[int] = set()
+    watchdog_line = _watchdog_line(summary)
+    if watchdog_line:
+        icon = {"ok": "🟢", "red": "🔴"}.get(watchdog_state or "", "🟡")
+        sections.append(f"**🛰️ 看门狗 (Watchdog)**\n• {icon} {watchdog_line}")
+        hr_after.add(len(sections) - 1)
     unavailable = summary.get("unavailability")
     if isinstance(unavailable, Mapping):
         unavail_lines = [
@@ -485,7 +541,9 @@ def build_stability_card(
     ]
     return build_feishu_report_card(
         title=header_title,
-        template="green" if is_clean else "orange",
+        template="red"
+        if watchdog_state == "red"
+        else ("green" if is_clean else "orange"),
         kpi_fields=kpi_fields,
         sections=sections,
         actions=actions,

@@ -61,3 +61,21 @@ def test_watchdog_daily_positive_stability_report_has_no_ssh_key_if_guard() -> N
     assert "if" not in report_step or "INFRA2_WATCHDOG_SSH_PRIVATE_KEY" not in str(
         report_step.get("if", "")
     )
+
+
+def test_the_daily_report_runs_after_a_failed_watchdog_with_its_outcome() -> None:
+    """#1433: a paged day still gets its report, marked red from the watchdog outcome."""
+    steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["watchdog"][
+        "steps"
+    ]
+    names = [step.get("name") for step in steps]
+    report_name = "Build and send daily positive stability report"
+    assert names.index("Run watchdog") < names.index(report_name)
+    watchdog = steps[names.index("Run watchdog")]
+    report = steps[names.index(report_name)]
+    assert watchdog["id"] == "watchdog"
+    assert report["if"] == "${{ !cancelled() }}"
+    assert (
+        report["env"]["INFRA2_WATCHDOG_OUTCOME"]
+        == "${{ steps." + watchdog["id"] + ".outcome }}"
+    )

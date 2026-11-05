@@ -207,12 +207,12 @@ prod red lines 由 `deploy_v2` 强制(deny-by-default):`--staging-validated` + `
 
 ### 4.1 Unified Multi-App Release Train & Hook Scheduling (#1416)
 
-App 不再 checkout/执行 infra2，也不再向 infra2 发送 push-based 跨仓请求。所有 App 的 Preview / Staging / Production 生命周期、伴随服务（`companions`）推进与运行时钩子（`hooks.yaml`）均收敛在 `infra2` 的 `reconcile-iac-inputs.yml` 与 `common/deploy/app_contract.py`：
+App 不再 checkout/执行 infra2，也不再向 infra2 发送 push-based 跨仓请求。所有 App 的 Preview / Staging / Production 生命周期、伴随服务（`companions`）推进与运行时钩子（`runtime-hooks.manifest.json`）均收敛在 `infra2` 的 `reconcile-iac-inputs.yml` 与 `common/deploy/app_contract.py`：
 
 1. **App Release Tag 单一真相源 (`harness/repos.yaml`)**：每个 `external-application` 在 `harness/repos.yaml` 中声明当前固定环境目标 `release_tag`（如 `finance-report: v0.2.46`、`truealpha: v0.2.77`）。
-2. **契约预检与模板注入 (`common/deploy/app_contract.py`)**：`deploy_v2` 在固定环境（staging/prod）与 preview 部署前调用 `verify_app_manifests`，直接从源 App 仓库对应 ref 读取 `contracts/env.manifest.yaml` 与 `contracts/secrets.ctmpl`，与 infra2 `EnvInventory` 交叉比对缺口并渲染注入 `VAULT_SECRETS_TEMPLATE`。
+2. **契约预检与模板注入 (`common/deploy/app_contract.py`)**：`deploy_v2` 在固定环境（staging/prod）与 preview 部署前调用 `verify_app_manifests`，直接从源 App 仓库对应 ref 读取所需的环境契约清单（与栈内 `env.manifest.json` 比对）并渲染注入 `secrets.ctmpl`（`VAULT_SECRETS_TEMPLATE`）。
 3. **伴随服务原子跟随 (`ServiceSpec.companions`)**：`truealpha/app` 声明 `companions=("truealpha/data_engine",)`。当 `reconcile_iac_inputs.py` 检测到 `harness/repos.yaml` 中 App `release_tag` 或 `10.app/**` 变更时，按顺序生成主服务与伴随服务的独立 `deploy_v2 --version-ref <app_release_tag> --iac-ref <iac_ref>` 命令，并将伴随服务从平台 `iac_pinned` 批次中剔除，杜绝双部署。
-4. **SDK Hook Slot 调度 (`infra2_sdk.manifests.run_hook_slot`)**：`common/deploy/app_contract.py::execute_app_hook_slot` 与 `reconcile_iac_inputs.py --run-hook-slot` 负责在对应生命周期阶段读取 App 的 `contracts/hooks.yaml` 并执行声明的钩子槽位（`HOOK_SLOTS`）。
+4. **SDK Hook Slot 调度 (`infra2_sdk.manifests.run_hook_slot`)**：`common/deploy/app_contract.py::execute_app_hook_slot` 与 `reconcile_iac_inputs.py --run-hook-slot` 负责在对应生命周期阶段读取 App 的 `runtime-hooks.manifest.json` 并执行声明的钩子槽位（`HOOK_SLOTS`）。
 5. **生产证据与时间窗守卫 (`validate_app_release_evidence`)**：生产晋升前校验 `infra2_sdk.deploy.DeployRequest` 证据链、单次执行限制（`run_attempt == 1`）与接收时间窗（`production_request_accept_until`）。
 
 The workflow `deploy.yml` with `type=prod` also takes a typed `iac_ref` for manual or break-glass dispatches.

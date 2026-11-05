@@ -87,9 +87,9 @@ name: Ops Checks
         default: ""
       peer_liveness_bound_cap_hours:
         # truealpha#876 drill: the cap only TIGHTENS the measured bound; `0` forces the
-        # truealpha scheduler-liveness peer check red. A run with this set pages and
+        # estate scheduler-liveness check red. A run with this set pages and
         # opens/comments on the issue, and never closes one.
-        description: "Drill (out-of-band-watchdog): cap the truealpha scheduler-liveness peer bound at this many hours (empty = measured bound; 0 = red)"
+        description: "Drill (out-of-band-watchdog): cap the estate scheduler-liveness bounds at this many hours (empty = measured bound; 0 = red)"
         required: false
         type: string
         default: ""
@@ -271,6 +271,7 @@ jobs:
           echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_watchdog" >> "$GITHUB_ENV"
 
       - name: Run watchdog
+        id: watchdog
         # #908: failures of checks another layer pages go to the daily report, not the pager.
         env:
           INFRA2_REPORTS_FEISHU_APP_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_ID }}
@@ -278,8 +279,12 @@ jobs:
           INFRA2_REPORTS_FEISHU_CHAT_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_CHAT_ID }}
         run: python tools/out_of_band_watchdog.py
 
+      # #1433: send the report every day, also when the watchdog paged. The report
+      # marks a paged day red from the outcome of the step above.
       - name: Build and send daily positive stability report
+        if: ${{ !cancelled() }}
         env:
+          INFRA2_WATCHDOG_OUTCOME: ${{ steps.watchdog.outcome }}
           INFRA2_STABILITY_REPORT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
           INFRA2_WATCHDOG_OUTAGES_URL: ${{ vars.INFRA2_WATCHDOG_OUTAGES_URL }}
           INFRA2_WATCHDOG_WORKER_STATUS_TOKEN: ${{ secrets.INFRA2_WATCHDOG_WORKER_STATUS_TOKEN }}
