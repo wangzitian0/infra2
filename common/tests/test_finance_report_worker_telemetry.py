@@ -14,7 +14,7 @@ from pathlib import Path
 
 from common.deploy import promote as dp
 from common.deploy.contract import SERVICES
-from common.observability_dashboards import load_alert_definitions, load_dashboard
+from common.observability_dashboards import load_dashboard
 from common.tests.compose_env import container_env
 from common.tests.test_deploy_primitive import (
     FIXED_FINANCE_REPORT_COMPOSE,
@@ -50,7 +50,9 @@ def _attributes(raw: str) -> dict[str, str]:
 
 
 def test_worker_container_gets_endpoint_and_its_own_issued_identity() -> None:
-    worker = container_env(FIXED_FINANCE_REPORT_COMPOSE, "prefect-worker", _pushed_env())
+    worker = container_env(
+        FIXED_FINANCE_REPORT_COMPOSE, "prefect-worker", _pushed_env()
+    )
     assert worker["OTEL_EXPORTER_OTLP_ENDPOINT"] == COLLECTOR
     assert worker["OTEL_SERVICE_NAME"] == WORKER
     attributes = _attributes(worker["OTEL_RESOURCE_ATTRIBUTES"])
@@ -116,7 +118,9 @@ def test_parse_alerts_count_exactly_backend_and_worker() -> None:
         "FinanceReportStatementParseFailureSpike",
         "FinanceReportAsyncTaskFailures",
     ):
-        match = re.search(r'"service\.name"=~"((?:[^"\\]|\\.)*)"', rules[name]["promql"])
+        match = re.search(
+            r'"service\.name"=~"((?:[^"\\]|\\.)*)"', rules[name]["promql"]
+        )
         assert match, name
         pattern = match.group(1)
         assert re.fullmatch(pattern, BACKEND), name
