@@ -338,7 +338,6 @@ jobs:
               if [[ -n "$synced_infra_tag" ]]; then
                 before="$after"
                 after="$synced_infra_tag"
-                changed_files="$(git diff --name-only "$before" "$after")"
                 args=(--after "$after"
                       --before "$before"
                       --domain "$INTERNAL_DOMAIN"
