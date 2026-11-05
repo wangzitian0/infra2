@@ -815,3 +815,269 @@ def test_reconcile_workflow_folds_in_bootstrap_and_observability_apply_on_promot
     alerts_idx = obs_script.index("fr-observability.shared.apply-alerts")
     dashboard_idx = obs_script.index("fr-observability.shared.apply-dashboard")
     assert alerts_idx < dashboard_idx
+
+
+def test_post_deploy_app_hooks_execute_smoke_and_record_results(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    """#1416 (M2): --run-post-deploy-hooks resolves each deployed App's release_tag SHA
+    and environment URL, fetches runtime-hooks.manifest.json, executes the smoke slot,
+    and records hook_results in the reconcile JSON payload."""
+    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+    from infra2_sdk.refs import ResolvedRef
+
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.47\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.80\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(reconcile, "assert_after_on_main", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        reconcile,
+        "run_deploy_commands",
+        lambda cmds, **_kw: [
+            {
+                "service": c.service,
+                "type": c.deploy_type,
+                "returncode": 0,
+                "stdout": "{}",
+                "stderr": "",
+            }
+            for c in cmds
+        ],
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
+    )
+
+    manifest = RuntimeHooksManifest.from_dict(
+        {
+            "schema_version": 1,
+            "service": "finance_report/app",
+            "slots": {
+                slot: {
+                    "run": "echo ok",
+                    "bootstrap": "",
+                    "timeout_seconds": 30,
+                    "required_env": [],
+                    "optional_env": [],
+                    "artifacts_dir": f"artifacts/{slot}",
+                }
+                for slot in HOOK_SLOTS
+            },
+        }
+    )
+    fetched: list[tuple[str, str]] = []
+    executed: list[tuple[str, str, str, str]] = []
+
+    def _fake_fetch(service: str, sha: str, **_kw):
+        fetched.append((service, sha))
+        return manifest
+
+    def _fake_exec(
+        _m, slot: str, *, app_url: str, environment: str, version_ref: str, **_kw
+    ):
+        executed.append((slot, app_url, environment, version_ref))
+        return HookRunResult(
+            service="finance_report/app",
+            slot=slot,
+            environment=environment,
+            app_url=app_url,
+            version_ref=version_ref,
+            status="pass",
+            exit_code=0,
+            duration_seconds=0.12,
+        )
+
+    monkeypatch.setattr(reconcile, "fetch_hooks_manifest", _fake_fetch)
+    monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
+
+    rc = main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--after",
+            "v3.1.23",
+            "--changed-file",
+            "harness/repos.yaml",
+            "--run-post-deploy-hooks",
+        ]
+    )
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert len(out["hook_results"]) == 2
+    assert fetched == [("finance_report/app", SHA), ("truealpha/app", SHA)]
+    assert executed == [
+        ("smoke", "https://report-staging.zitian.party", "staging", "v0.2.47"),
+        ("smoke", "https://truealpha-staging.truealpha.club", "staging", "v0.2.80"),
+    ]
+
+
+def test_post_deploy_app_hooks_failure_blocks_prod_marker_and_returns_nonzero(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    """#1416 (M2): when a post-deploy smoke hook fails during promote_prod, the production
+    marker must NOT advance and main() must return exit code 1."""
+    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+    from infra2_sdk.refs import ResolvedRef
+
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.47\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(reconcile, "assert_after_on_main", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        reconcile, "assert_production_marker_advances", lambda *_a, **_kw: "v3.1.22"
+    )
+    marker_recorded: list[str] = []
+    monkeypatch.setattr(
+        reconcile,
+        "record_production_marker",
+        lambda tag, *_a, **_kw: marker_recorded.append(tag) or f"production/{tag}",
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "run_deploy_commands",
+        lambda cmds, **_kw: [
+            {
+                "service": c.service,
+                "type": c.deploy_type,
+                "returncode": 0,
+                "stdout": "{}",
+                "stderr": "",
+            }
+            for c in cmds
+        ],
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
+    )
+    manifest = RuntimeHooksManifest.from_dict(
+        {
+            "schema_version": 1,
+            "service": "finance_report/app",
+            "slots": {
+                slot: {
+                    "run": "exit 1",
+                    "bootstrap": "",
+                    "timeout_seconds": 30,
+                    "required_env": [],
+                    "optional_env": [],
+                    "artifacts_dir": f"artifacts/{slot}",
+                }
+                for slot in HOOK_SLOTS
+            },
+        }
+    )
+    monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
+    monkeypatch.setattr(
+        reconcile,
+        "execute_app_hook_slot",
+        lambda *_a, **_kw: HookRunResult(
+            service="finance_report/app",
+            slot="smoke",
+            environment="production",
+            app_url="https://report.zitian.party",
+            version_ref="v0.2.47",
+            status="fail",
+            exit_code=1,
+            duration_seconds=0.05,
+            summary="smoke check failed",
+        ),
+    )
+
+    rc = main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--before",
+            "v3.1.22",
+            "--after",
+            "v3.1.23",
+            "--promote-prod",
+            "--changed-file",
+            "harness/repos.yaml",
+            "--run-post-deploy-hooks",
+        ]
+    )
+    assert rc == 1
+    assert marker_recorded == []
+    out = json.loads(capsys.readouterr().out)
+    assert out["production_marker"] == ""
+    assert out["hook_results"][0]["status"] == "fail"
+
+
+def test_sync_app_releases_updates_repos_yaml_when_remote_tag_advances(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    """#1416 (T1): --sync-app-releases --apply-repos-yaml queries upstream App tags,
+    detects a newer vX.Y.Z tag than harness/repos.yaml, and updates harness/repos.yaml
+    in place while preserving comments."""
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    # keep this comment\n"
+        "    release_tag: v0.2.46\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.80\n",
+        encoding="utf-8",
+    )
+
+    def _fake_remote(repo_url: str, **_kw):
+        if "finance_report" in repo_url:
+            return (
+                SHA,
+                {"v0.2.46": "1" * 40, "v0.2.47": SHA},
+            )
+        return (
+            "2" * 40,
+            {"v0.2.80": "2" * 40},
+        )
+
+    monkeypatch.setattr(reconcile, "_query_remote_app_refs", _fake_remote)
+    monkeypatch.setattr(reconcile, "newest_release_tag", lambda **_kw: "v3.1.22")
+
+    rc = main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--sync-app-releases",
+            "--apply-repos-yaml",
+        ]
+    )
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["needs_update"] is True
+    assert out["updates"] == {"finance_report/app": "v0.2.47"}
+    assert out["repos_yaml_updated"] is True
+    assert out["next_infra_tag"] == "v3.1.23"
+
+    updated_text = repos_yaml.read_text(encoding="utf-8")
+    assert "# keep this comment" in updated_text
+    assert "release_tag: v0.2.47" in updated_text
+    assert "release_tag: v0.2.80" in updated_text

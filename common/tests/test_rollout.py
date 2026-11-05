@@ -203,3 +203,86 @@ def test_custom_terminal_success_statuses():
     )
     assert result.status == "done"
     assert result.ok is True
+
+
+def test_deploy_compose_with_record_check_retries_once_on_runtime_error() -> None:
+    """#1416 (G1): when the initial deploy_compose waiter raises RuntimeError (e.g. a
+    transient GHCR DNS lookup error in Dokploy), deploy_compose_with_record_check warns,
+    sleeps once, and retries with client.redeploy_compose."""
+    from common.deploy.dokploy_adapter import deploy_compose_with_record_check
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def get_compose_deployments(self, _cid: str) -> list[dict]:
+            return [{"deploymentId": "old-1"}]
+
+        def deploy_compose(self, cid: str) -> None:
+            self.calls.append(f"deploy:{cid}")
+
+        def redeploy_compose(self, cid: str) -> None:
+            self.calls.append(f"redeploy:{cid}")
+
+    client = _FakeClient()
+    warnings: list[str] = []
+    sleeps: list[float] = []
+    attempts = 0
+
+    def _flaky_waiter(_c, _cid, _prev, _to, _iv, _min_s) -> bool:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError(
+                "Dokploy deployment record entered error (deploymentId=dep-1, "
+                "log_tail=lookup ghcr.io on 127.0.0.53:53: server misbehaving)"
+            )
+        return True
+
+    deploy_compose_with_record_check(
+        client,
+        "compose-123",
+        interval_seconds=3,
+        wait_fn=_flaky_waiter,
+        log_warning=warnings.append,
+        sleep_fn=sleeps.append,
+    )
+    assert client.calls == ["deploy:compose-123", "redeploy:compose-123"]
+    assert len(warnings) == 1
+    assert "retrying once with compose.redeploy" in warnings[0]
+    assert sleeps == [3]
+
+    # When both deploy_compose and redeploy_compose raise RuntimeError, the second error propagates.
+    def _always_failing_waiter(*_a) -> bool:
+        raise RuntimeError("Dokploy deployment record entered error (persistent)")
+
+    with pytest.raises(RuntimeError, match="persistent"):
+        deploy_compose_with_record_check(
+            client,
+            "compose-123",
+            interval_seconds=2,
+            wait_fn=_always_failing_waiter,
+            log_warning=warnings.append,
+            sleep_fn=sleeps.append,
+        )
+
+
+def test_ssh_args_for_log_tail_uses_runtime_ssh_key_and_strict_host_key_checking_no(
+    tmp_path, monkeypatch
+) -> None:
+    """#1416 (G1): _ssh_args_for_log_tail falls back to /root/.ssh_runtime/id_ed25519
+    when INFRA2_WATCHDOG_SSH_KEY_PATH is unset, and always sets StrictHostKeyChecking=no."""
+    from common.deploy.dokploy_adapter import _ssh_args_for_log_tail
+
+    monkeypatch.delenv("INFRA2_WATCHDOG_SSH_KEY_PATH", raising=False)
+    monkeypatch.delenv("INFRA2_WATCHDOG_SSH_PORT", raising=False)
+    monkeypatch.delenv("INFRA2_WATCHDOG_SSH_USER", raising=False)
+    runtime_key = tmp_path / "id_ed25519"
+    runtime_key.write_text("dummy-key", encoding="utf-8")
+
+    args = _ssh_args_for_log_tail("10.0.0.1", runtime_key_path=runtime_key)
+    assert "StrictHostKeyChecking=no" in args
+    assert "UserKnownHostsFile=/dev/null" in args
+    assert "-i" in args
+    assert args[args.index("-i") + 1] == str(runtime_key)
+    assert args[-1] == "root@10.0.0.1"

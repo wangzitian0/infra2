@@ -22,8 +22,10 @@ from pathlib import Path
 from typing import Callable, Sequence
 import yaml
 
-from common.core.constants import REPO_ROOT
+from common.core.constants import APP_SOURCES, REPO_ROOT
+from common.core.registry import domain_for_service
 from common.deploy.app_contract import (
+    _git_url,
     execute_app_hook_slot,
     fetch_hooks_manifest,
     next_app_release_tag,
@@ -32,9 +34,11 @@ from common.deploy.app_contract import (
 )
 from common.deploy.dependencies import explain_fanout
 from common.deploy.contract import all_service_keys, service_spec
+from common.deploy.env_config import app_compose_env_config
 from common.deploy.release_markers import (
     PRODUCTION_MARKER_PREFIX,
     RELEASE_TAG_RE,
+    newest_release_tag,
     version_key,
 )
 from infra2_sdk.deploy import DeployRequest
@@ -49,6 +53,13 @@ HARNESS_REPOS_PATH = "harness/repos.yaml"
 APP_REPO_ID_TO_SERVICE: dict[str, str] = {
     "finance-report": "finance_report/app",
     "truealpha": "truealpha/app",
+}
+SERVICE_TO_APP_REPO_ID: dict[str, str] = {
+    service: repo_id for repo_id, service in APP_REPO_ID_TO_SERVICE.items()
+}
+SERVICE_TO_SUBMODULE_PATH: dict[str, str] = {
+    "finance_report/app": "repos/finance_report",
+    "truealpha/app": "repos/truealpha",
 }
 SOURCE_HASH_FORMULA_PATHS = (
     "common/deploy/deployer.py",
@@ -346,6 +357,312 @@ def advance_app_release_train(
         "image_ref": resolved.image_ref,
         "next_tag": next_app_release_tag(existing_tags, initial=next_tag),
     }
+
+
+def update_repos_yaml_release_tags(
+    repo_root: Path,
+    updates: Mapping[str, str],
+) -> bool:
+    """Update ``release_tag`` entries in ``harness/repos.yaml`` preserving comments."""
+    if not updates:
+        return False
+    target = Path(repo_root) / HARNESS_REPOS_PATH
+    text = target.read_text(encoding="utf-8")
+    new_text = text
+    for service, new_tag in sorted(updates.items()):
+        if not RELEASE_TAG_RE.fullmatch(new_tag):
+            raise ValueError(f"invalid release tag {new_tag!r} for {service}")
+        repo_id = SERVICE_TO_APP_REPO_ID.get(service)
+        if not repo_id:
+            raise ValueError(f"unknown app service {service!r}")
+        pattern = re.compile(
+            rf"(^\s*-\s+id:\s+{re.escape(repo_id)}\b[\s\S]*?^\s*release_tag:\s*)(v[0-9]+\.[0-9]+\.[0-9]+)",
+            re.MULTILINE,
+        )
+        new_text, count = pattern.subn(rf"\g<1>{new_tag}", new_text, count=1)
+        if count != 1:
+            raise ValueError(
+                f"could not locate release_tag for {repo_id!r} in {HARNESS_REPOS_PATH}"
+            )
+    if new_text == text:
+        return False
+    target.write_text(new_text, encoding="utf-8")
+    return True
+
+
+def _query_remote_app_refs(
+    repo_url: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> tuple[str, dict[str, str]]:
+    """Return ``(main_sha, {tag_name: commit_sha})`` for ``v*.*.*`` tags in ``repo_url``."""
+    listed = runner(
+        ["git", "ls-remote", "--refs", "--tags", "--heads", repo_url],
+        capture_output=True,
+        text=True,
+    )
+    if listed.returncode != 0:
+        raise RuntimeError(
+            f"git ls-remote failed for {repo_url}: {(listed.stderr or '').strip()}"
+        )
+    raw_refs: dict[str, str] = {}
+    for line in (listed.stdout or "").splitlines():
+        parts = line.strip().split()
+        if len(parts) == 2:
+            raw_refs[parts[1]] = parts[0].strip().lower()
+    main_sha = raw_refs.get("refs/heads/main", "")
+    peeled = runner(
+        ["git", "ls-remote", "--tags", repo_url],
+        capture_output=True,
+        text=True,
+    )
+    if peeled.returncode == 0:
+        for line in (peeled.stdout or "").splitlines():
+            parts = line.strip().split()
+            if len(parts) == 2:
+                raw_refs[parts[1]] = parts[0].strip().lower()
+    tag_shas: dict[str, str] = {}
+    for ref, sha in raw_refs.items():
+        if not ref.startswith("refs/tags/") or ref.endswith("^{}"):
+            continue
+        tag = ref.removeprefix("refs/tags/")
+        if RELEASE_TAG_RE.fullmatch(tag):
+            tag_shas[tag] = raw_refs.get(f"{ref}^{{}}", sha)
+    return main_sha, tag_shas
+
+
+def sync_app_releases(
+    repo_root: Path = REPO_ROOT,
+    *,
+    services: Sequence[str] = (),
+    apply_repos_yaml: bool = False,
+    sync_gitlinks: bool = False,
+    cut_missing_app_tag: bool = False,
+    cut_infra_tag: bool = False,
+    dry_run: bool = False,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> dict[str, object]:
+    """Pull-based App version sync against remote App repositories (#1416)."""
+    pinned_tags = load_app_release_tags(repo_root, runner=runner)
+    target_services = (
+        [str(s) for s in services if str(s)] if services else sorted(APP_SOURCES.keys())
+    )
+    entries: dict[str, dict[str, object]] = {}
+    updates: dict[str, str] = {}
+    target_shas: dict[str, str] = {}
+
+    for service in target_services:
+        repo_slug = APP_SOURCES.get(service)
+        if not repo_slug:
+            raise ValueError(f"unknown app service {service!r}")
+        repo_url = _git_url(repo_slug)
+        main_sha, tag_shas = _query_remote_app_refs(repo_url, runner=runner)
+        sorted_tags = sorted(tag_shas, key=version_key)
+        latest_tag = sorted_tags[-1] if sorted_tags else ""
+        latest_tag_sha = tag_shas.get(latest_tag, "") if latest_tag else ""
+        pinned_tag = pinned_tags.get(service, "")
+
+        main_ahead = bool(
+            main_sha and (not latest_tag_sha or main_sha != latest_tag_sha)
+        )
+        computed_next_tag = (
+            next_app_release_tag(sorted_tags) if main_ahead else latest_tag
+        )
+        target_tag = latest_tag
+        target_sha = latest_tag_sha
+        if cut_missing_app_tag and main_ahead and computed_next_tag:
+            target_tag = computed_next_tag
+            target_sha = main_sha
+
+        drifted = bool(target_tag and target_tag != pinned_tag)
+        if drifted:
+            updates[service] = target_tag
+            if target_sha:
+                target_shas[service] = target_sha
+
+        entries[service] = {
+            "service": service,
+            "repository": repo_slug,
+            "pinned_tag": pinned_tag,
+            "latest_remote_tag": latest_tag,
+            "latest_remote_tag_sha": latest_tag_sha,
+            "main_sha": main_sha,
+            "main_ahead_of_latest_tag": main_ahead,
+            "next_app_tag": computed_next_tag,
+            "target_tag": target_tag,
+            "target_sha": target_sha,
+            "needs_update": drifted,
+        }
+
+    repos_yaml_updated = False
+    gitlinks_updated: list[str] = []
+    next_infra_tag = ""
+    infra_tag_cut = False
+
+    if updates and apply_repos_yaml and not dry_run:
+        repos_yaml_updated = update_repos_yaml_release_tags(repo_root, updates)
+        if sync_gitlinks:
+            for service, sha in sorted(target_shas.items()):
+                sub_path = SERVICE_TO_SUBMODULE_PATH.get(service)
+                if not sub_path:
+                    continue
+                updated = runner(
+                    [
+                        "git",
+                        "update-index",
+                        "--cacheinfo",
+                        f"160000,{sha},{sub_path}",
+                    ],
+                    cwd=repo_root,
+                    capture_output=True,
+                    text=True,
+                )
+                if updated.returncode == 0:
+                    gitlinks_updated.append(sub_path)
+
+    if updates:
+        try:
+            current_infra = newest_release_tag(repo_root=repo_root, runner=runner)
+            next_infra_tag = next_patch_tag([current_infra])
+        except ValueError:
+            next_infra_tag = "v0.1.0"
+        if cut_infra_tag and repos_yaml_updated and not dry_run:
+            commit_msg = (
+                "chore(release): sync app release tags ("
+                + ", ".join(f"{svc}={tag}" for svc, tag in sorted(updates.items()))
+                + ")"
+            )
+            paths_to_add = [HARNESS_REPOS_PATH, *gitlinks_updated]
+            runner(
+                ["git", "add", *paths_to_add],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            runner(
+                ["git", "commit", "-m", commit_msg],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            runner(
+                ["git", "tag", next_infra_tag],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            runner(
+                ["git", "push", "origin", "HEAD:main", f"refs/tags/{next_infra_tag}"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            infra_tag_cut = True
+
+    return {
+        "apps": entries,
+        "updates": updates,
+        "needs_update": bool(updates),
+        "repos_yaml_updated": repos_yaml_updated,
+        "gitlinks_updated": gitlinks_updated,
+        "next_infra_tag": next_infra_tag,
+        "infra_tag_cut": infra_tag_cut,
+        "dry_run": dry_run,
+    }
+
+
+def resolve_app_hook_coordinates(
+    service: str,
+    *,
+    repo_root: Path = REPO_ROOT,
+    after: str = "",
+    target_env: str = "staging",
+    domain: str = "zitian.party",
+    source_sha: str = "",
+    app_url: str = "",
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> tuple[str, str, str]:
+    """Resolve ``(version_ref, source_sha, app_url)`` for an App hook invocation (#1416)."""
+    repo_slug = APP_SOURCES.get(service)
+    if not repo_slug:
+        raise ValueError(f"unknown app service {service!r}")
+    tags = load_app_release_tags(
+        repo_root, rev=after or None, runner=runner
+    ) or load_app_release_tags(repo_root, rev=None, runner=runner)
+    version_ref = tags.get(service) or after or "main"
+    resolved_sha = source_sha.strip()
+    if not resolved_sha:
+        resolved = resolve_image_ref(
+            version_ref, repo=_git_url(repo_slug), runner=runner
+        )
+        resolved_sha = resolved.sha.lower()
+    resolved_url = app_url.strip()
+    if not resolved_url:
+        effective_domain = domain_for_service(service) or domain
+        norm_env = "prod" if target_env in ("prod", "production") else "staging"
+        cfg = app_compose_env_config(service, norm_env)
+        resolved_url = cfg.app_url(domain=effective_domain)
+    return version_ref, resolved_sha, resolved_url
+
+
+def run_post_deploy_app_hooks(
+    plan: ReconcilePlan,
+    applied: Sequence[DeployCommand],
+    *,
+    repo_root: Path = REPO_ROOT,
+    after: str = "",
+    target_env: str = "staging",
+    domain: str = "zitian.party",
+    slot: str = "smoke",
+    manifest_fetcher: Callable[[str], bytes] | None = None,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> list[dict[str, object]]:
+    """Execute post-deploy verification hook slot for each deployed App service (#1416)."""
+    applied_services = {
+        part.strip()
+        for cmd in applied
+        for part in cmd.service.split(",")
+        if part.strip() in APP_SOURCES
+    }
+    hook_results: list[dict[str, object]] = []
+    for service in sorted(applied_services):
+        version_ref = plan.app_release_tags.get(service) or after
+        _, source_sha, app_url = resolve_app_hook_coordinates(
+            service,
+            repo_root=repo_root,
+            after=after,
+            target_env=target_env,
+            domain=domain,
+            runner=runner,
+        )
+        manifest = fetch_hooks_manifest(
+            service,
+            source_sha,
+            manifest_fetcher=manifest_fetcher,
+        )
+        res = execute_app_hook_slot(
+            manifest,
+            slot,
+            app_url=app_url,
+            environment="production"
+            if target_env in ("prod", "production")
+            else "staging",
+            version_ref=version_ref,
+            cwd=repo_root,
+            runner=runner,
+        )
+        entry = res.to_dict()
+        entry["service"] = service
+        entry["app_url"] = app_url
+        entry["source_sha"] = source_sha
+        hook_results.append(entry)
+        if res.status != "pass":
+            break
+    return hook_results
 
 
 def build_plan(
@@ -775,9 +1092,7 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="previous release tag (base for changed-file detection)",
     )
-    parser.add_argument(
-        "--after", required=True, help="release tag to promote (iac_ref)"
-    )
+    parser.add_argument("--after", default="", help="release tag to promote (iac_ref)")
     parser.add_argument(
         "--domain", default=os.environ.get("INTERNAL_DOMAIN", "zitian.party")
     )
@@ -865,18 +1180,75 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="existing release tag for --advance-train-service (repeatable)",
     )
+    parser.add_argument(
+        "--run-post-deploy-hooks",
+        action="store_true",
+        help="execute post-deploy App smoke hooks after successful deploy_v2 commands (#1416)",
+    )
+    parser.add_argument(
+        "--post-deploy-hook-slot",
+        default="smoke",
+        help="hook slot to run when --run-post-deploy-hooks is enabled (default: smoke)",
+    )
+    parser.add_argument(
+        "--sync-app-releases",
+        action="store_true",
+        help="query upstream App repositories and sync harness/repos.yaml release_tag pins (#1416)",
+    )
+    parser.add_argument(
+        "--sync-service",
+        action="append",
+        default=[],
+        help="limit --sync-app-releases to specific App service(s) (repeatable)",
+    )
+    parser.add_argument(
+        "--apply-repos-yaml",
+        action="store_true",
+        help="write updated release_tag values to harness/repos.yaml during --sync-app-releases",
+    )
+    parser.add_argument(
+        "--sync-gitlinks",
+        action="store_true",
+        help="update submodule gitlinks alongside harness/repos.yaml during --sync-app-releases",
+    )
+    parser.add_argument(
+        "--cut-missing-app-tag",
+        action="store_true",
+        help="compute next patch tag when upstream App main is ahead of its latest v*.*.* tag",
+    )
+    parser.add_argument(
+        "--cut-infra-tag",
+        action="store_true",
+        help="commit updated harness/repos.yaml and push next infra2 vX.Y.Z tag when updates exist",
+    )
     parser.add_argument("--output-json", default="", help="optional output JSON path")
     args = parser.parse_args(argv)
     promote_prod = bool(args.promote_prod or args.target_env in ("prod", "production"))
     target_env = "prod" if promote_prod else "staging"
 
     repo_root = Path(args.repo_root).resolve()
+    if args.sync_app_releases:
+        sync_res = sync_app_releases(
+            repo_root,
+            services=args.sync_service,
+            apply_repos_yaml=args.apply_repos_yaml,
+            sync_gitlinks=args.sync_gitlinks,
+            cut_missing_app_tag=args.cut_missing_app_tag,
+            cut_infra_tag=args.cut_infra_tag,
+            dry_run=args.dry_run,
+        )
+        print(json.dumps(sync_res, sort_keys=True))
+        if args.output_json:
+            Path(args.output_json).write_text(
+                json.dumps(sync_res, indent=2), encoding="utf-8"
+            )
+        return 0
     if args.advance_train_service:
         train = advance_app_release_train(
             args.advance_train_service,
             repo_url=args.advance_train_repo,
             existing_tags=args.advance_train_tag,
-            candidate_ref=args.after,
+            candidate_ref=args.after or "main",
         )
         print(json.dumps(train, sort_keys=True))
         return 0
@@ -896,9 +1268,29 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(serving.to_dict(), sort_keys=True))
         return 0
     if args.run_hook_slot:
+        version_ref = args.after or "main"
+        app_url = args.hook_app_url or f"https://{args.domain}"
         if args.hooks_manifest:
             manifest_or_path = Path(args.hooks_manifest)
+            if args.hook_service and not args.hook_app_url:
+                version_ref, _, app_url = resolve_app_hook_coordinates(
+                    args.hook_service,
+                    repo_root=repo_root,
+                    after=args.after,
+                    target_env=target_env,
+                    domain=args.domain,
+                    source_sha=args.hook_source_sha or ("a" * 40),
+                )
         elif args.hook_service and args.hook_source_sha:
+            if not args.hook_app_url:
+                version_ref, _, app_url = resolve_app_hook_coordinates(
+                    args.hook_service,
+                    repo_root=repo_root,
+                    after=args.after,
+                    target_env=target_env,
+                    domain=args.domain,
+                    source_sha=args.hook_source_sha,
+                )
             manifest_or_path = fetch_hooks_manifest(
                 args.hook_service, args.hook_source_sha
             )
@@ -910,13 +1302,16 @@ def main(argv: list[str] | None = None) -> int:
         hook_res = execute_app_hook_slot(
             manifest_or_path,
             args.run_hook_slot,
-            app_url=args.hook_app_url or f"https://{args.domain}",
-            environment=target_env,
-            version_ref=args.after,
+            app_url=app_url,
+            environment="production" if promote_prod else "staging",
+            version_ref=version_ref,
             cwd=repo_root,
         )
         print(json.dumps(hook_res.to_dict(), sort_keys=True))
         return 0 if hook_res.status == "pass" else 1
+
+    if not args.after:
+        raise SystemExit("::error::--after is required for IaC input reconcile")
 
     # Validate the durable desired-state coordinate before any production side
     # effect.  A branch, SHA, or pre-release must never deploy successfully and
@@ -981,11 +1376,29 @@ def main(argv: list[str] | None = None) -> int:
     results: list[dict] = []
     if applied:
         results = run_deploy_commands(applied)
+    hook_results: list[dict[str, object]] = []
+    if (
+        args.run_post_deploy_hooks
+        and applied
+        and not args.dry_run
+        and not any(result.get("returncode") != 0 for result in results)
+    ):
+        hook_results = run_post_deploy_app_hooks(
+            plan,
+            applied,
+            repo_root=repo_root,
+            after=args.after,
+            target_env=target_env,
+            domain=args.domain,
+            slot=args.post_deploy_hook_slot,
+        )
+    hooks_failed = any(item.get("status") != "pass" for item in hook_results)
     production_marker = ""
     if (
         promote_prod
         and not args.dry_run
         and not any(result.get("returncode") != 0 for result in results)
+        and not hooks_failed
     ):
         production_marker = record_production_marker(args.after, repo_root)
 
@@ -1007,6 +1420,7 @@ def main(argv: list[str] | None = None) -> int:
         "target_env": target_env,
         "production_marker": production_marker,
         "results": results,
+        "hook_results": hook_results,
         "dry_run": args.dry_run,
     }
     print(json.dumps(payload, sort_keys=True))
@@ -1015,7 +1429,11 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps(payload, indent=2), encoding="utf-8"
         )
     write_summary(plan=plan, commands=commands, results=results, dry_run=args.dry_run)
-    return 1 if any(result.get("returncode") != 0 for result in results) else 0
+    return (
+        1
+        if (any(result.get("returncode") != 0 for result in results) or hooks_failed)
+        else 0
+    )
 
 
 if __name__ == "__main__":
