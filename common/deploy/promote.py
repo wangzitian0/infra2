@@ -606,7 +606,7 @@ def _build_deploy_env_vars(
         "CONFIGURATION_SHA256": config_hash,
         "IAC_CONFIG_HASH": config_hash,
     }
-    from common.deploy.contract import service_spec
+    from common.deploy.contract import service_spec, worker_telemetry_env
     from common.core.service_identity import ServiceIdentity
 
     svc_spec = service_spec(service)
@@ -621,19 +621,11 @@ def _build_deploy_env_vars(
     env_vars.update(identity.deploy_env())
     env_vars["OTEL_SERVICE_NAME"] = identity.service_name
     env_vars["OTEL_RESOURCE_ATTRIBUTES"] = identity.otel_resource_attributes()
-    if svc_spec.worker_identity_service_name:
-        worker_identity = ServiceIdentity.build(
-            service,
-            deploy_environment,
-            component="worker",
-            service_name=svc_spec.worker_identity_service_name,
-            version=image_tag,
-            iac_ref=iac_ref,
+    env_vars.update(
+        worker_telemetry_env(
+            service, deploy_environment, version=image_tag, iac_ref=iac_ref
         )
-        env_vars["OTEL_WORKER_SERVICE_NAME"] = worker_identity.service_name
-        env_vars["OTEL_WORKER_RESOURCE_ATTRIBUTES"] = (
-            worker_identity.otel_resource_attributes()
-        )
+    )
     env_vars.update(openpanel_env(env))
     env_vars.update(otel_env(domain=infra_domain()))
 

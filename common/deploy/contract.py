@@ -110,6 +110,33 @@ class ServiceSpec:
         return self.key.split("/", 1)[-1].replace("_", "-")
 
 
+def worker_telemetry_env(
+    service: str, environment: str, *, version: str, iac_ref: str
+) -> dict[str, str]:
+    """Issue the worker process identity, or ``{}`` when the app has none (#1431).
+
+    The ONE builder for ``OTEL_WORKER_SERVICE_NAME`` and ``OTEL_WORKER_RESOURCE_ATTRIBUTES``.
+    The promote path and the iac-runner sync path both call it.
+    """
+    spec = SERVICES.get(service)
+    if spec is None or not spec.worker_identity_service_name:
+        return {}
+    from common.core.service_identity import ServiceIdentity
+
+    identity = ServiceIdentity.build(
+        service,
+        environment,
+        component="worker",
+        service_name=spec.worker_identity_service_name,
+        version=version,
+        iac_ref=iac_ref,
+    )
+    return {
+        "OTEL_WORKER_SERVICE_NAME": identity.service_name,
+        "OTEL_WORKER_RESOURCE_ATTRIBUTES": identity.otel_resource_attributes(),
+    }
+
+
 # finance_report and truealpha/app have a BESPOKE deploy_v2 backend (fixed-compose
 # promote path via common.deploy.promote; finance_report additionally supports the preview
 # lifecycle via common.deploy.preview — truealpha/app does not yet, #500). EVERY OTHER

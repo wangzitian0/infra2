@@ -251,7 +251,9 @@ services:
       # crash-loops at ~1.5 cores per environment (2026-09-08: 71 restarts). So is
       # S3_BUCKET, whose absence here broke every staging parse (see the anchor).
       <<: *app_runtime_env
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
+      # `:+` keeps export OFF when a deploy path issues no worker attributes (Compose
+      # spec interpolation; needs Docker Compose v2.0.0 or newer, not python docker-compose 1.x).
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_WORKER_RESOURCE_ATTRIBUTES:+http://platform-signoz-otel-collector:4318}
       OTEL_SERVICE_NAME: ${OTEL_WORKER_SERVICE_NAME:-finance-report-worker}
       OTEL_RESOURCE_ATTRIBUTES: ${OTEL_WORKER_RESOURCE_ATTRIBUTES:-}
     volumes:

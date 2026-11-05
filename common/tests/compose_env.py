@@ -6,7 +6,7 @@ Asserting on the pushed env alone proves the deploy issued a value, and assertin
 compose text alone proves a reference exists; only resolving one against the other proves
 the container gets it (the same gap truealpha#474's ``APP_HOST`` fell through).
 
-Only the two substitution forms the repository's composes use are supported. Anything else
+Only the three substitution forms the repository's composes use are supported. Anything else
 fails loudly, so a new form cannot silently resolve to an empty string.
 """
 
@@ -17,9 +17,9 @@ from pathlib import Path
 
 import yaml
 
-_REFERENCE = re.compile(r"\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?P<default>:-[^}]*)?\}")
+_REFERENCE = re.compile(r"\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?P<default>:[-+][^}]*)?\}")
 # A reference whose name is followed by anything but `:-` or the closing brace (`:?`, `-`, `+`...).
-_UNSUPPORTED = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?!:-|\}|[A-Za-z0-9_])")
+_UNSUPPORTED = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?!:[-+]|\}|[A-Za-z0-9_])")
 
 
 def compose_services(compose_path: Path) -> dict[str, dict]:
@@ -43,9 +43,12 @@ def resolve(value: str, issued_env: dict[str, str]) -> str:
 
     def _sub(match: re.Match[str]) -> str:
         issued = issued_env.get(match["name"], "")
+        default = match["default"]
+        if default and default.startswith(":+"):
+            # `${VAR:+text}`: text when VAR is set and non-empty, else empty.
+            return default[2:] if issued else ""
         if issued:
             return issued
-        default = match["default"]
         return default[2:] if default else ""
 
     return _REFERENCE.sub(_sub, value)
