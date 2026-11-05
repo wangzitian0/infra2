@@ -24,6 +24,10 @@ if str(ROOT) not in sys.path:
 from common.deploy.config_hash import (  # noqa: E402
     _compose_artifact_files,
     _compose_has_build,
+    compose_host_mount_files,
+    compose_mount_fingerprint_gaps,
+    mount_fingerprint_var,
+    parse_compose_services,
 )
 from common.deploy.dependencies import (  # noqa: E402
     CANONICAL_SERVICE_ROOTS,
@@ -130,6 +134,45 @@ def dockerfile_canary_violations(composes: list[Path], root: Path = ROOT) -> lis
     return violations
 
 
+def host_mount_violations(composes: list[Path], root: Path = ROOT) -> list[str]:
+    """Every `${DATA_PATH}/file.ext` host mount needs a hash input and a fingerprint (#1438).
+
+    The service must also read the fingerprint of the rendered file in a label. Without
+    it, `docker compose up -d` keeps the running container after a template change.
+
+    The service deploy.py renders such a file from a template in the service directory.
+    A template change must change the config hash, or `sync` skips the deploy.
+    """
+    violations: list[str] = []
+    for compose in composes:
+        compose = Path(compose).resolve()
+        text = compose.read_text(encoding="utf-8")
+        rel = compose.relative_to(root.resolve()).as_posix()
+        try:
+            parse_compose_services(text)
+        except ValueError as exc:
+            violations.append(f"{rel}: host mount check read nothing: {exc}")
+            continue
+        inputs = {
+            path.name
+            for path in _compose_artifact_files(str(compose), text)
+            if path.parent == compose.parent
+        }
+        for name in sorted(set(compose_host_mount_files(text))):
+            if name not in inputs and f"{name}.tmpl" not in inputs:
+                violations.append(
+                    f"{rel}: host mount {name!r} has no config-hash input; "
+                    f"add {name!r} or {name + '.tmpl'!r} to the service directory"
+                )
+        for service, name in compose_mount_fingerprint_gaps(text):
+            violations.append(
+                f"{rel}: service {service!r} mounts host file {name!r} without a "
+                f"fingerprint label; add a label that reads "
+                f"${{{mount_fingerprint_var(name)}:-}}"
+            )
+    return violations
+
+
 def floor_violations(
     composes: list[Path],
     root: Path = ROOT,
@@ -181,6 +224,7 @@ def floor_violations(
                 f"{sr}: read {actual_inputs} config-hash inputs, below floor {min_inputs}"
             )
     violations.extend(dockerfile_canary_violations(composes, root=root))
+    violations.extend(host_mount_violations(composes, root=root))
     return violations
 
 
