@@ -180,7 +180,7 @@ the same run and on the same tag. `run_deploy_commands` runs the same command ag
   the run summary. The production marker still advances only after every unit succeeded.
 - **Idempotency.** The retry is the same signed `/deploy` request, so the runner answers with the same `deployment_id`; it
   serves a remembered success and re-runs a failed or `interrupted` record. The config-hash gate (§5.3) then skips a service
-  that already matches. A retry costs up to 120 s of pauses plus a run: the 15-minute release budget is exceeded.
+  that already matches and whose newest Dokploy deployment record is `done`. A retry costs up to 120 s of pauses plus a run: the 15-minute release budget is exceeded.
 
 ### 3.4 未收口项(open / 目标态)
 

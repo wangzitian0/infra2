@@ -867,6 +867,41 @@ def test_verify_still_in_service_detects_mismatched_recorded_deploy_ref_checkout
     assert LAST_DEPLOY_SHA[:12] in err
 
 
+def _records(*statuses):  # oldest first, the newest last
+    return [
+        {"deploymentId": f"d{n}", "status": s, "createdAt": f"2026-11-05T0{n}:00"}
+        for n, s in enumerate(statuses)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("statuses", "redeploys"),
+    [
+        (("done", "error"), True),
+        (("done", "running"), True),
+        (("error", "done"), False),
+        ((), False),
+    ],
+)
+def test_an_unchanged_stack_is_skipped_only_when_its_newest_record_is_done(
+    monkeypatch, statuses, redeploys
+):
+    """#1439: a runner killed after it wrote the new hash leaves hash, checkout and the old
+    containers matching while Dokploy's deploy runs or failed; the skip must not turn the
+    retry green. No record keeps the skip. The redeploy's newer `done` record ends the block."""
+    records = _records(*statuses)
+    redis, deployed = _redis_sync(monkeypatch, remote_hash="h1")
+    monkeypatch.setattr(
+        "common.deploy.dokploy_adapter.get_compose_deployments", lambda _c, _id: records
+    )
+    host = _Host(checkout=LAST_DEPLOY_SHA, containers=REDIS_UP)
+
+    redis.sync(host)
+    assert (len(deployed) == 1) is redeploys
+    records.append({"status": "done", "createdAt": "2026-11-05T09:00"})
+    assert redis.sync(host)["action"] == "skipped" and len(deployed) == int(redeploys)
+
+
 def test_composing_restores_existing_env_when_deploy_fails(monkeypatch):
     """#1247: if _deploy_compose_with_record_check raises after upsert_github_compose
     wrote the new env to Dokploy DB, composing() restores existing_env so the DB does

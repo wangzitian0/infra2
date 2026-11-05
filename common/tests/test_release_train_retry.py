@@ -107,6 +107,7 @@ def test_the_third_transient_failure_fails_the_unit():
         "deploy_v2 failed: Effective remote config is stale after deploy (expected a, got b)\n",
         "deploy_v2 failed: KeyError: 'compose_id'\n",
         "deploy_v2 failed: version probe https://x.party/version returned 502 Bad Gateway\n",
+        "deploy_v2 failed: i/o timeout reaching ghcr.io\ndeploy_v2 failed: KeyError: 'compose_id'\n",
     ],
     ids=[
         "auth",
@@ -114,6 +115,7 @@ def test_the_third_transient_failure_fails_the_unit():
         "changed-hash",
         "unrecognised",
         "5xx-without-registry",
+        "last-verdict-wins",
     ],
 )
 def test_a_deterministic_failure_is_not_retried(stderr):
@@ -123,6 +125,15 @@ def test_a_deterministic_failure_is_not_retried(stderr):
 
     assert len(script.argvs) == 1 and results[0]["returncode"] == 1
     assert len(results[0]["attempts"]) == 1 and results[0]["attempts"][0]["cause"]
+
+
+def test_a_unit_that_mixes_a_platform_and_an_app_service_is_never_retried():
+    mixed = DeployCommand("platform/alerting,finance_report/app", "prod", ["deploy"])
+    script = _Script((1, DNS), (0, ""))
+
+    _run([mixed], script)
+
+    assert len(script.argvs) == 1
 
 
 def test_an_app_unit_is_never_retried():

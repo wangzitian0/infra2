@@ -196,8 +196,13 @@ logged and never fails a deploy. At start the runner loads the file: a record ol
 dropped, at most 64 stay, and a deploy that was in flight becomes `{"status": "interrupted", ...}` on `/deploy/status`
 (HTTP 200). `interrupted` is not a result: a duplicate `/deploy` runs again and the config-hash gate (§3.3) decides. The
 loader never raises: a file that is not UTF-8, is nested past the recursion limit or has the wrong shape is moved to
-`deploy_state.json.corrupt` and the runner starts empty. Known residual risk: after a gunicorn worker-only restart an
-orphaned `invoke` child may still run while a retry starts.
+`deploy_state.json.corrupt` and the runner starts empty.
+
+Two risks follow from a restart. (1) A runner killed after it wrote the new config hash leaves the hash, the checkout and
+the old containers matching while Dokploy's deploy still runs or has failed; a retry would skip and turn green. The skip
+guard (`Deployer._verify_newest_deployment_done`) now lets the hash skip apply only when the newest Dokploy deployment
+record is `done`; no record, or an unreadable list, keeps the skip. (2) Still open (#1472): after a gunicorn
+worker-only restart an orphaned `invoke` child may still run while a retry starts.
 
 ---
 
