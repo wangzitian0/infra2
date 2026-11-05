@@ -116,7 +116,7 @@ def fetch_recent_runs(
                 with ThreadPoolExecutor(max_workers=8) as pool:
                     included = list(
                         pool.map(
-                            lambda item: run_includes_job(
+                            lambda item: _watchdog_run_jobs(
                                 repository,
                                 token,
                                 item[1],
@@ -128,7 +128,7 @@ def fetch_recent_runs(
                     )
             else:
                 included = [
-                    run_includes_job(
+                    _watchdog_run_jobs(
                         repository,
                         token,
                         run_id,
@@ -137,8 +137,17 @@ def fetch_recent_runs(
                     )
                     for _run, run_id in candidates
                 ]
-            for (run, _run_id), keep in zip(candidates, included, strict=True):
-                if keep:
+            for (run, _run_id), jobs in zip(candidates, included, strict=True):
+                if jobs is not None:
+                    # Keep the job list of the one jobs call per run: the weekly
+                    # digest summarizes the scheduled jobs from it (#1433).
+                    run["jobs"] = [
+                        {
+                            "name": str(job.get("name") or ""),
+                            "conclusion": str(job.get("conclusion") or ""),
+                        }
+                        for job in jobs
+                    ]
                     matching_runs.append(run)
 
         if reached_cutoff or len(page_runs) < per_page:
@@ -181,6 +190,25 @@ def fetch_run_jobs(
         page += 1
 
     return jobs
+
+
+def _watchdog_run_jobs(
+    repository: str,
+    token: str,
+    run_id: str | int,
+    *,
+    job_name: str = WATCHDOG_JOB_NAME,
+    opener=None,
+) -> list[dict[str, Any]] | None:
+    """Return the jobs of a run that includes the watchdog job, else None."""
+    jobs = fetch_run_jobs(repository, token, run_id, opener=opener)
+    if any(
+        str(job.get("name") or "") == job_name
+        and str(job.get("conclusion") or "").lower() != "skipped"
+        for job in jobs
+    ):
+        return jobs
+    return None
 
 
 def run_includes_job(
@@ -393,15 +421,32 @@ def summarize_ops_checks_jobs(
     """Summarize ops-checks runs by job or workflow name over ``window_days``."""
     recent = recent_weekly_runs(list(runs), now=now, window_days=window_days)
     by_job: dict[str, dict[str, int]] = {}
+    entries: list[tuple[str, str]] = []
     for run in recent:
-        job_name = str(run.get("job_name") or run.get("name") or "ops-checks").strip()
+        jobs = run.get("jobs")
+        if isinstance(jobs, list) and jobs:
+            # One entry per job of the run; a skipped job did not run.
+            entries.extend(
+                (str(job.get("name") or "").strip(), str(job.get("conclusion") or ""))
+                for job in jobs
+                if isinstance(job, Mapping)
+                and str(job.get("conclusion") or "").lower() != "skipped"
+            )
+        else:
+            entries.append(
+                (
+                    str(run.get("job_name") or run.get("name") or "ops-checks").strip(),
+                    str(run.get("conclusion") or ""),
+                )
+            )
+    for job_name, raw_conclusion in entries:
         if not job_name:
             continue
         counts = by_job.setdefault(
             job_name, {"total": 0, "success": 0, "failure": 0, "other": 0}
         )
         counts["total"] += 1
-        conclusion = str(run.get("conclusion") or "").lower()
+        conclusion = raw_conclusion.lower()
         if conclusion == "success":
             counts["success"] += 1
         elif conclusion in {"failure", "timed_out"}:

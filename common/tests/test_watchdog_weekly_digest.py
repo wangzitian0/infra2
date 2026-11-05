@@ -923,7 +923,8 @@ def test_fetch_recent_runs_skips_push_and_pr_events_without_fetching_jobs(
         now=now,
     )
     assert [run["id"] for run in runs] == [12]
-    assert requested_job_runs == ["12"]
+    assert requested_job_runs == ["12"]  # one jobs call per candidate run
+    assert runs[0]["jobs"] and runs[0]["jobs"][0]["name"] == digest.WATCHDOG_JOB_NAME
 
 
 def test_summarize_ops_checks_jobs_and_render_in_message_and_card() -> None:
@@ -969,8 +970,27 @@ def test_run_digest_cli_renders_ops_checks_jobs_section() -> None:
     digest = _load_module()
     created = (datetime.now(UTC) - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
     runs = [
-        {"id": 1, "name": "ops-checks", "created_at": created, "conclusion": "success"},
-        {"id": 2, "name": "ops-checks", "created_at": created, "conclusion": "failure"},
+        {
+            "id": 1,
+            "name": "Ops Checks",
+            "created_at": created,
+            "conclusion": "success",
+            "jobs": [
+                {"name": "watchdog", "conclusion": "success"},
+                {"name": "deploy-v2-canary", "conclusion": "success"},
+                {"name": "digest", "conclusion": "skipped"},
+            ],
+        },
+        {
+            "id": 2,
+            "name": "Ops Checks",
+            "created_at": created,
+            "conclusion": "failure",
+            "jobs": [
+                {"name": "watchdog", "conclusion": "success"},
+                {"name": "deploy-v2-canary", "conclusion": "failure"},
+            ],
+        },
     ]
     texts: list[str] = []
     cards: list[dict] = []
@@ -993,10 +1013,13 @@ def test_run_digest_cli_renders_ops_checks_jobs_section() -> None:
     )
     assert rc == 0
     assert "Ops-checks scheduled jobs:" in texts[-1]
-    assert "- ops-checks: 1/2 ok (fail=1)" in texts[-1]
+    assert "- watchdog: 2/2 ok (fail=0)" in texts[-1]
+    assert "- deploy-v2-canary: 1/2 ok (fail=1)" in texts[-1]
+    assert "Ops Checks:" not in texts[-1]
+    assert "digest:" not in texts[-1]  # a skipped job did not run
     card_blob = json.dumps(cards[-1], ensure_ascii=False)
     assert "**🧭 Ops-Checks 巡检作业全貌 (Scheduled Jobs)**" in card_blob
-    assert "ops-checks" in card_blob
+    assert "deploy-v2-canary" in card_blob
 
 
 def test_dry_run_watchdog_logs_are_not_alerts_without_delivery() -> None:
