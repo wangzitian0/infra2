@@ -49,6 +49,10 @@ e2e = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["common/tests"]
+# Print the 25 slowest tests that take 1 s or more, so the CI log names where time goes (#1453).
+addopts = "--durations=25 --durations-min=1.0"
+# Dump the stack of any test that runs for more than 120 s, so a stall names its cause (#1453).
+faulthandler_timeout = 120
 markers = [
     "smoke: quick smoke tests",
     "sso: SSO/Portal tests",
