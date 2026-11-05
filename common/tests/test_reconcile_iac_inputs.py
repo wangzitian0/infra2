@@ -1169,7 +1169,9 @@ def test_sync_app_releases_create_pr_pushes_branch_restores_head_and_opens_or_up
         argv = [str(x) for x in cmd]
         calls.append(argv)
         if argv == ["git", "rev-parse", "HEAD"]:
-            return subprocess.CompletedProcess(argv, 0, stdout="orig123456\n", stderr="")
+            return subprocess.CompletedProcess(
+                argv, 0, stdout="orig123456\n", stderr=""
+            )
         if argv[:3] == ["gh", "pr", "list"]:
             return subprocess.CompletedProcess(
                 argv, 0, stdout=open_prs_response, stderr=""

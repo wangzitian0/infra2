@@ -620,7 +620,9 @@ def sync_app_releases(
                     f"- `{svc}`: `{old_tag}` -> `{new_tag}` (`{sha[:12]}`)"
                 )
             body_lines.append("")
-            body_lines.append(f"Next `infra2` release tag candidate: `{next_infra_tag}`")
+            body_lines.append(
+                f"Next `infra2` release tag candidate: `{next_infra_tag}`"
+            )
             pr_body = "\n".join(body_lines)
 
             listed_prs = runner(
@@ -934,7 +936,9 @@ def audit_app_hooks(
                 source = str(local_manifest_path.relative_to(repo_root))
             else:
                 ref = pinned_tag or "main"
-                resolved = resolve_image_ref(ref, repo=git_url(repo_slug), runner=runner)
+                resolved = resolve_image_ref(
+                    ref, repo=git_url(repo_slug), runner=runner
+                )
                 manifest = fetch_hooks_manifest(
                     service,
                     resolved.sha.lower(),
@@ -963,7 +967,12 @@ def audit_app_hooks(
             spec = manifest.slots[dry_slot]
             augmented_opt = tuple(
                 dict.fromkeys(
-                    [*spec.optional_env, "INFRA2_HOOK_APP_URL", "BASE_URL", "DEPLOY_ENV"]
+                    [
+                        *spec.optional_env,
+                        "INFRA2_HOOK_APP_URL",
+                        "BASE_URL",
+                        "DEPLOY_ENV",
+                    ]
                 )
             )
             try:
@@ -1108,8 +1117,10 @@ def run_post_deploy_app_hooks(
         hook_results.append(entry)
         if res.status != "pass":
             break
-    if record_issues and hook_results and (
-        os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if (
+        record_issues
+        and hook_results
+        and (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"))
     ):
         record_app_hook_issue_trail(
             hook_results,
