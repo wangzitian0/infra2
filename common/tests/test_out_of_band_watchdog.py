@@ -531,7 +531,7 @@ def test_main_sends_feishu_only_when_a_paging_check_fails(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         watchdog,
-        "run_peer_scheduler_liveness_check",
+        "run_estate_scheduler_liveness_check",
         lambda _env, _timeout, **_kwargs: [],
     )
     monkeypatch.setattr(
@@ -638,7 +638,7 @@ def test_main_structured_check_logs_include_attempt_count(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         watchdog,
-        "run_peer_scheduler_liveness_check",
+        "run_estate_scheduler_liveness_check",
         lambda _env, _timeout, **_kwargs: [],
     )
     monkeypatch.setattr(
@@ -678,7 +678,7 @@ def test_main_uses_default_retry_values_when_env_is_blank(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         watchdog,
-        "run_peer_scheduler_liveness_check",
+        "run_estate_scheduler_liveness_check",
         lambda _env, _timeout, **_kwargs: [],
     )
 
@@ -718,10 +718,10 @@ def test_main_records_delivery_failure_event_instead_of_crashing(monkeypatch) ->
     )
     monkeypatch.setattr(
         watchdog,
-        "run_peer_scheduler_liveness_check",
+        "run_estate_scheduler_liveness_check",
         lambda _env, _timeout, **_kwargs: [
             watchdog.CheckResult(
-                "truealpha-scheduler-liveness",
+                "estate-scheduler-liveness",
                 False,
                 "STALE: 20h old",
                 "peer-scheduler-liveness",
@@ -776,10 +776,10 @@ def test_main_records_delivery_success_event_for_weekly_recall_audit(
     )
     monkeypatch.setattr(
         watchdog,
-        "run_peer_scheduler_liveness_check",
+        "run_estate_scheduler_liveness_check",
         lambda _env, _timeout, **_kwargs: [
             watchdog.CheckResult(
-                "truealpha-scheduler-liveness",
+                "estate-scheduler-liveness",
                 False,
                 "STALE: 20h old",
                 "peer-scheduler-liveness",
@@ -1446,7 +1446,7 @@ def _patch_checks(monkeypatch, watchdog, *, dokploy=(), peer=()) -> None:
     )
     monkeypatch.setattr(
         watchdog,
-        "run_peer_scheduler_liveness_check",
+        "run_estate_scheduler_liveness_check",
         lambda _env, _timeout, **_kwargs: list(peer),
     )
     monkeypatch.setattr(watchdog, "deliver_out_of_band_alert", lambda _env, _msg: None)
@@ -1461,7 +1461,7 @@ def test_main_records_the_paging_verdicts_for_the_issue_trail(
 
     watchdog = _load_watchdog()
     peer = watchdog.CheckResult(
-        watchdog.PEER_SCHEDULER_LIVENESS_CHECK,
+        watchdog.ESTATE_SCHEDULER_LIVENESS_CHECK,
         False,
         "STALE: newest scheduled run is 20.0h old",
         "peer-scheduler-liveness",
@@ -1483,9 +1483,9 @@ def test_main_records_the_paging_verdicts_for_the_issue_trail(
     trail = load_trail(path, expected_sources=["out-of-band-watchdog"])
     assert set(trail.failing) == {
         "cloudflare-worker-status",
-        watchdog.PEER_SCHEDULER_LIVENESS_CHECK,
+        watchdog.ESTATE_SCHEDULER_LIVENESS_CHECK,
     }
-    assert trail.failing[watchdog.PEER_SCHEDULER_LIVENESS_CHECK].severity == "P1"
+    assert trail.failing[watchdog.ESTATE_SCHEDULER_LIVENESS_CHECK].severity == "P1"
     # the watchdog's own redaction runs before anything leaves the step
     assert "abc" not in trail.failing["cloudflare-worker-status"].detail
     # a report-only check (green here) never reaches the trail; a paging one does
@@ -1544,7 +1544,7 @@ def test_main_runs_the_peer_check_with_the_watchdog_retry_settings(monkeypatch) 
         captured.update(kwargs, timeout=timeout)
         return []
 
-    monkeypatch.setattr(watchdog, "run_peer_scheduler_liveness_check", fake_peer)
+    monkeypatch.setattr(watchdog, "run_estate_scheduler_liveness_check", fake_peer)
     watchdog.main(
         {
             "WATCHDOG_DRY_RUN": "1",
@@ -1557,7 +1557,7 @@ def test_main_runs_the_peer_check_with_the_watchdog_retry_settings(monkeypatch) 
 
 
 def _peer_factory(verdicts, seen):
-    from common.observability.scheduler_peer_liveness import PeerVerdict
+    from common.observability.estate_scheduler_liveness import PeerVerdict
 
     answers = iter(verdicts)
 
@@ -1576,7 +1576,7 @@ def _peer_factory(verdicts, seen):
 
 
 def test_peer_check_green_and_red_verdicts(monkeypatch) -> None:
-    """truealpha#876: the peer verdict becomes one watchdog check."""
+    """#1432: the estate verdict becomes one watchdog check."""
     watchdog = _load_watchdog()
     seen: list = []
     factory, evaluate = _peer_factory(
@@ -1587,32 +1587,86 @@ def test_peer_check_green_and_red_verdicts(monkeypatch) -> None:
         ],
         seen,
     )
-    monkeypatch.setattr(watchdog, "evaluate_peer_liveness", evaluate)
+    monkeypatch.setattr(watchdog, "evaluate_estate_liveness", evaluate)
     env = {"GITHUB_TOKEN": " tok "}
 
-    (green,) = watchdog.run_peer_scheduler_liveness_check(
+    (green,) = watchdog.run_estate_scheduler_liveness_check(
         env, 4.0, getter_factory=factory
     )
-    assert green.ok and green.name == "truealpha-scheduler-liveness"
+    assert green.ok and green.name == "estate-scheduler-liveness"
     assert green.detail == "OK: fresh"
     assert seen[:2] == [("tok", 4.0), ("evaluate", None)]
 
-    (stale,) = watchdog.run_peer_scheduler_liveness_check(
+    (stale,) = watchdog.run_estate_scheduler_liveness_check(
         env, getter_factory=factory, retry_delay_seconds=0
     )
     assert not stale.ok and stale.failure_domain == "peer-scheduler-liveness"
     assert stale.attempt_count == 1  # a verdict is not retried
-    (disabled,) = watchdog.run_peer_scheduler_liveness_check(
+    (disabled,) = watchdog.run_estate_scheduler_liveness_check(
         env, getter_factory=factory
     )
     assert disabled.detail.startswith("DISABLED")
     assert watchdog._severity_for(stale.name, stale.failure_domain) == "P1"
-    assert "scheduler-liveness" in watchdog._suggested_action_for_failure(
+    assert "Actions" in watchdog._suggested_action_for_failure(
         stale.name, stale.failure_domain
     )
     assert watchdog._runbook_url_for_failure(stale.failure_domain).endswith(
-        "truealpha/actions/workflows/scheduler-liveness.yml"
+        "docs/ssot/ops.observability.md#sop-005b-github-兜底带外-watchdog日级"
     )
+
+
+def test_estate_check_goes_red_on_a_real_stale_workflow_through_the_real_evaluator() -> (
+    None
+):
+    """#1432: no mocked evaluator; the real cron parser and bound run end to end."""
+    import base64
+    from datetime import UTC, datetime, timedelta
+
+    watchdog = _load_watchdog()
+    now = datetime(2026, 11, 5, 3, 0, tzinfo=UTC)
+    path = ".github/" + "workflows/x.yml"
+    text = "on:\n  schedule:\n    - cron: '41 */6 * * *'\n"
+    old = (now - timedelta(hours=14)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    repo = "wangzitian0/infra2"
+    routes = {
+        f"/repos/{repo}/actions/workflows?per_page=100": {
+            "total_count": 1,
+            "workflows": [{"id": 5, "path": path, "state": "active"}],
+        },
+        f"/repos/{repo}": {"default_branch": "main"},
+        f"/repos/{repo}/contents/{path}?ref=main": {
+            "encoding": "base64",
+            "content": base64.b64encode(text.encode()).decode(),
+        },
+    }
+    runs = {
+        "workflow_runs": [
+            {
+                "id": 1,
+                "event": "schedule",
+                "status": "completed",
+                "conclusion": "success",
+                "created_at": old,
+            }
+        ]
+    }
+    routes[f"/repos/{repo}/actions/workflows/5/runs?event=schedule&per_page=5"] = runs
+    routes[f"/repos/{repo}/actions/workflows/5/runs?per_page=50"] = runs
+    monkey = pytest.MonkeyPatch()
+    from common.observability import estate_scheduler_liveness
+
+    monkey.setattr(estate_scheduler_liveness, "ESTATE_REPOSITORIES", (repo,))
+    try:
+        (red,) = watchdog.run_estate_scheduler_liveness_check(
+            {},
+            getter_factory=lambda _t, timeout: routes.__getitem__,
+            now=now,
+            max_attempts=1,
+        )
+    finally:
+        monkey.undo()
+    assert not red.ok and red.detail.startswith("STALE:")
+    assert "x.yml" in red.detail
 
 
 def test_peer_check_unreadable_is_red_after_one_retry(monkeypatch) -> None:
@@ -1627,17 +1681,17 @@ def test_peer_check_unreadable_is_red_after_one_retry(monkeypatch) -> None:
         ],
         seen,
     )
-    monkeypatch.setattr(watchdog, "evaluate_peer_liveness", evaluate)
+    monkeypatch.setattr(watchdog, "evaluate_estate_liveness", evaluate)
     sleeps: list = []
     monkeypatch.setattr(watchdog.time, "sleep", sleeps.append)
 
-    (red,) = watchdog.run_peer_scheduler_liveness_check(
+    (red,) = watchdog.run_estate_scheduler_liveness_check(
         {}, getter_factory=factory, max_attempts=2, retry_delay_seconds=9
     )
     assert not red.ok and red.detail == "UNVERIFIABLE: HTTP 403"
     assert red.attempt_count == 2 and sleeps == [9]
 
-    (recovered,) = watchdog.run_peer_scheduler_liveness_check(
+    (recovered,) = watchdog.run_estate_scheduler_liveness_check(
         {}, getter_factory=factory, max_attempts=2, retry_delay_seconds=0
     )
     assert recovered.ok and recovered.attempt_count == 2
@@ -1649,15 +1703,15 @@ def test_peer_check_bound_cap_is_passed_and_validated(monkeypatch) -> None:
     watchdog = _load_watchdog()
     seen: list = []
     factory, evaluate = _peer_factory([("STALE", "capped")], seen)
-    monkeypatch.setattr(watchdog, "evaluate_peer_liveness", evaluate)
+    monkeypatch.setattr(watchdog, "evaluate_estate_liveness", evaluate)
 
-    (drill,) = watchdog.run_peer_scheduler_liveness_check(
+    (drill,) = watchdog.run_estate_scheduler_liveness_check(
         {"INFRA2_PEER_LIVENESS_BOUND_CAP_HOURS": "0"}, getter_factory=factory
     )
     assert not drill.ok
     assert ("evaluate", timedelta(0)) in seen
 
-    (bad,) = watchdog.run_peer_scheduler_liveness_check(
+    (bad,) = watchdog.run_estate_scheduler_liveness_check(
         {"INFRA2_PEER_LIVENESS_BOUND_CAP_HOURS": "soon"}, getter_factory=factory
     )
     assert not bad.ok and bad.failure_domain == "configuration"
@@ -1671,7 +1725,7 @@ PAGING = {
     "cloudflare-worker-status",
     "infra2-backup-production",
     "infra2-restore-rehearsal",
-    "truealpha-scheduler-liveness",
+    "estate-scheduler-liveness",
     "infra2-scheduled-job-start",
 }
 _FAILURE_LINE = re.compile(r"^- \[P\d\] (?:\[[^\]]+\] )?(\S+): ", re.MULTILINE)
@@ -1802,9 +1856,9 @@ def _run_day(
     )
     monkeypatch.setattr(
         watchdog,
-        "run_peer_scheduler_liveness_check",
+        "run_estate_scheduler_liveness_check",
         lambda _env, _timeout, **_kwargs: [
-            result("truealpha-scheduler-liveness", "peer-scheduler-liveness")
+            result("estate-scheduler-liveness", "peer-scheduler-liveness")
         ],
     )
     monkeypatch.setattr(
@@ -1920,7 +1974,7 @@ def test_main_pages_only_the_owned_classes_and_reports_the_rest(
         "out-of-band-watchdog",
         "cloudflare-worker-status",
         "infra2-restore-rehearsal",
-        "truealpha-scheduler-liveness",
+        "estate-scheduler-liveness",
         "infra2-scheduled-job-start",
     }
     routes = {
@@ -2600,7 +2654,7 @@ def test_a_github_page_shows_every_field_of_the_shared_layout() -> None:
         ("infra2-backup-staging", "backup", "staging"),
         ("infra2-restore-rehearsal", "restore-rehearsal", "production"),
         ("watchdog-signal-registry", "configuration", "global"),
-        ("truealpha-scheduler-liveness", "peer-scheduler-liveness", "global"),
+        ("estate-scheduler-liveness", "peer-scheduler-liveness", "global"),
         ("infra2-scheduled-job-start", "scheduled-job-start", "global"),
     ],
 )

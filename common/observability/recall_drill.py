@@ -80,10 +80,10 @@ SIMULATED_FAILURES: dict[str, dict[str, Any]] = {
         "runbook": "docs/ssot/db.vault-integration.md#sop-002",
     },
     "peer-scheduler": {
-        "signal_id": "global.truealpha-scheduler-liveness.github",
+        "signal_id": "global.estate-scheduler-liveness.github",
         "level": "P1",
-        "target": "truealpha-scheduler",
-        "symptom": "Peer repository scheduler heartbeat missing for 60 minutes.",
+        "target": "estate-scheduler",
+        "symptom": "A scheduled workflow of the estate has not ticked within its measured bound.",
         "since": "2026-10-28 12:00:00 UTC+8",
         "impact": "Peer scheduled execution stalled.",
         "action": "Verify prefect agent status and inspect prefect worker logs.",

@@ -14,13 +14,13 @@
   `cloudflare-worker-status` incident (ops-checks run 35048603264) left no record
   that it was seen or resolved. The watchdog job now keeps one GitHub issue per
   red check (Infra-012.16), in addition to Feishu.
-- truealpha's `scheduler-liveness` workflow watches every scheduled workflow in
-  the estate but cannot report its own dead scheduler; the GitHub watchdog is now
-  its peer (Infra-012.17).
+- truealpha's `scheduler-liveness` workflow was deleted (truealpha#1589); the
+  GitHub watchdog now checks every scheduled workflow of the estate itself
+  (Infra-012.17, #1432).
 - `issues: write` moved from the ops-checks workflow level to the watchdog job
   (digest keeps `issues: read`): the PR-triggered deploy_v2 canary no longer
   carries it.
-- Open: the GitHub plane stays daily (Non-Goals), so a dead peer scheduler is
+- Open: the GitHub plane stays daily (Non-Goals), so a dead scheduler is
   reported up to bound + 24 h late; infra2 has no mutation registry, so the
   drill is a `workflow_dispatch` input plus unit tests.
 
@@ -201,7 +201,7 @@ User can now see: "Outage was 10:00-10:15 (15 min), root cause was HTTP 502 (lik
 | **Infra-012.14** | SigNoz and OpenPanel have automated synthetic write-then-query probes: SigNoz writes an OTLP log nonce through the collector and queries `signoz_logs.distributed_logs_v2`; OpenPanel writes a `/track` event nonce and queries `openpanel.events`. | **CI tests**: `common/tests/test_observability_roundtrip_probe.py` validates both emit/query payloads and `common/tests/test_probe_specs.py::test_synthetic_roundtrip_canaries_are_declared` verifies the probes are declared. |
 | **Infra-012.15** | The alert bridge→Feishu/Lark delivery path is proven **without** a periodic synthetic alert (the 6h real-send `alert-delivery-canary` was retired per #425 T3 — a periodic liveness proof implemented as a periodic alert is the anti-pattern #425 forbids). Coverage: `lark-delivery-http` (bridge config valid + Feishu reachable, no real post), the out-of-band watchdog's independent bridge `/health` check, the daily reports' own Feishu delivery, and real alerts when they fire. | **CI tests**: `common/tests/test_probe_specs.py::test_synthetic_roundtrip_canaries_are_declared` asserts `lark-delivery-http` is declared and the real-send canary is gone. |
 | **Infra-012.16** | Every red GitHub-watchdog check leaves a GitHub trail (truealpha#876 W4): one issue per check titled exactly `ops-checks watchdog is red: <check>`, commented while red, closed by the next green scheduled run; a watchdog step that recorded no verdict is red; a failed listing never creates; drills never close; public bodies carry no secret env value or IP. | **Tests**: `common/tests/test_watchdog_issue_trail.py`, `common/tests/test_out_of_band_watchdog.py::test_workflow_records_the_watchdog_verdicts_as_issues`. **Live**: the first scheduled red run after merge opens the issue; the next green one closes it. |
-| **Infra-012.17** | The GitHub watchdog is the peer of truealpha's `scheduler-liveness` workflow (truealpha#876 W5): red when it is not active, its newest started scheduled run is older than 2 x its largest cron gap + 1 h (measured from the file), it never ran while its file is older than that bound, or any read fails. Drillable with `peer_liveness_bound_cap_hours=0`. | **Tests**: `common/tests/test_scheduler_peer_liveness.py`, `common/tests/test_out_of_band_watchdog.py::test_peer_check_*`. **Drill**: dispatch `task=out-of-band-watchdog`, `peer_liveness_bound_cap_hours=0` → Feishu page + issue; next scheduled run closes it. |
+| **Infra-012.17** | The GitHub watchdog checks every scheduled workflow of the estate repositories (#1432; replaces the peer check of truealpha's deleted `scheduler-liveness`): red when a workflow is not active or deleted, its newest started scheduled run is older than 2 x its own largest cron gap + 1 h (measured from its file), it never ran while its file is older than that bound, or any read fails. Drillable with `peer_liveness_bound_cap_hours=0`. | **Tests**: `common/tests/test_estate_scheduler_liveness.py`, `common/tests/test_out_of_band_watchdog.py::test_peer_check_*`. **Drill**: dispatch `task=out-of-band-watchdog`, `peer_liveness_bound_cap_hours=0` → Feishu page + issue; next scheduled run closes it. |
 
 ---
 

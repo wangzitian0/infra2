@@ -418,7 +418,7 @@ RETIRED_FLAT_SHIMS_BATCH1 = {
     "page_dedup",
     "probe_specs",
     "resident_watchers",
-    "scheduler_peer_liveness",
+    "estate_scheduler_liveness",
     "watchdog_issue_trail",
     "watchdog_signal_entries",
 }
