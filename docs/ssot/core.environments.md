@@ -307,6 +307,8 @@ an explicit per-environment Vault value.
 | IaC 版本 | `infra.iac.ref` | exact 40-character infra2 commit SHA |
 | 契约所有权 | `infra.identity.schema=v1`, `infra.managed_by=infra2` | 固定值 |
 
+**Worker identity (#1431):** the finance_report Prefect worker runs the backend image but exports under its own identity: `service.name=finance-report-worker`, `infra.component=worker`, same `infra.service.id`. The promote path issues `OTEL_WORKER_SERVICE_NAME` and `OTEL_WORKER_RESOURCE_ATTRIBUTES` from `ServiceSpec.worker_identity_service_name`; the `prefect-worker` compose service maps them to `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`. Parse alerts and panels select both `service.name` values.
+
 **签发归 infra2**：Deployer / fixed promote / preview 三个入口从 registry 和已验证部署坐标构建 `ServiceIdentity`；应用与 Vault Agent 只消费签发值，不得从 secret 或自身默认值重定义身份。标准字段是 `deployment.environment.name`；迁移期双写旧 `deployment.environment`，查询和新告警必须使用 `.name`。身份 metadata 不进入运行配置 hash，远端缺失/错误则触发一次 reconcile；部署后校验关键 `INFRA_*` 字段，避免永久重启抖动。OTLP 端点见 [ops.observability.md](ops.observability.md#41-应用接入-otlp)。
 
 对 **preview** 多别名而言，`deployment.environment.name` 的取值就是 alias token（见 §4.6）。同一份签发逻辑由 `common/deploy/preview` 后端（经 `tools/deploy_v2 --type preview/*` 触发，非直接调用）注入 compose（vault-agent 与遥测共同消费），与 `common/deploy/env_config.py::preview_alias` 派生的 `env_suffix` 保持同源。

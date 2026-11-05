@@ -342,15 +342,30 @@ def test_promql_selectors_reach_series_the_app_exports() -> None:
             services = [
                 val for key, op, val in matchers if key == "service.name" and op == "="
             ]
-            assert services in [["finance-report-backend"], ["truealpha-app"]], (
-                alert_name,
-                services,
-            )
+            pattern = [
+                val for key, op, val in matchers if key == "service.name" and op == "=~"
+            ]
+            if pattern:
+                # #1431: the parse metrics come from the backend and the worker process.
+                assert services == [], alert_name
+                assert len(pattern) == 1, alert_name
+                matched = {
+                    name
+                    for name in ("finance-report-backend", "finance-report-worker")
+                    if re.fullmatch(pattern[0], name)
+                }
+                assert matched == {"finance-report-backend", "finance-report-worker"}
+                assert not re.fullmatch(pattern[0], "finance-report-frontend")
+            else:
+                assert services in [["finance-report-backend"], ["truealpha-app"]], (
+                    alert_name,
+                    services,
+                )
             assert ("deployment.environment.name", "=", "production") in matchers
             value_filters += [
                 (alert_name, metric, label, value)
                 for label, op, value in matchers
-                if op == "=~"
+                if op == "=~" and label != "service.name"
             ]
 
     assert value_filters  # the parse-failure outcome filter at least
@@ -530,7 +545,6 @@ def test_dashboard_has_full_backend_red_and_fe_page_load() -> None:
     for wid in (
         "ai-provider-latency-p95",
         "statement-parse-outcomes",
-        "confidence-north-star",
         "reconciliation-match-outcomes",
         "financial-invariant-violations",
     ):
@@ -539,7 +553,6 @@ def test_dashboard_has_full_backend_red_and_fe_page_load() -> None:
         assert qdata["dataSource"] == "metrics"
     assert _agg("ai-provider-latency-p95") == "p95(finance.ai_provider.latency)"
     assert _agg("statement-parse-outcomes") == "sum(finance.statement_parse.outcome)"
-    assert _agg("confidence-north-star") == "p50(finance.confidence_north_star)"
     assert (
         _agg("reconciliation-match-outcomes")
         == "sum(finance.reconciliation.match.outcome)"

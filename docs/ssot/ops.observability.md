@@ -72,6 +72,11 @@ owner 批准的当前 head SHA，才能满足 `AGENTS.md` 的生产权限边界�
 
 1. **重看板 (Macro Status Single-Pane-of-Glass)**:
    - 生产环境统一入口由 Homer Portal (`platform/21.portal`) 提供，清晰分层：
+     - **Applications**：业务应用入口（`finance_report`、`truealpha`）及其 SigNoz 看板（#1467）。规则 (rules):
+       - `_render_config` derives this group from the service registry. The template holds a `# {{APPLICATION_ITEMS}}` placeholder line and no application host. `common/observability/portal_apps.py` builds the items.
+       - The applications are the keys of `common.core.constants.APP_SOURCES`. Each link is the web-root `PublicRouteFacet` of the Deployer. `public_route_host` in `common/observability/probe_specs.py` builds the host. The public-route probes use the same function. The staging portal links the staging host. The production portal links the production host.
+       - An application gets a dashboard link only when `<layer>/observability/dashboard.json` exists. The link target is the SigNoz dashboard list, filtered by the `title` of that file through the `search` query parameter (SigNoz v0.105.1 reads it on the list page). SigNoz is `prod_only`, so both portals link the one `signoz` host.
+       - A missing registry fact makes the render fail. The portal then keeps its last delivered file. Deploy dependencies of the portal are in `deploy-dependencies.yaml` (`platform/portal`).
      - **Platform Services**：底层控制面与鉴权（Dokploy、Vault、Authentik、1Password、Canary Todo）。
      - **Observability & Dashboards**：遥测与看板中心（SigNoz APM、SigNoz Dashboards、OpenPanel、Prefect、S3 Console）。
      - **Out-of-Band & Health**：带外与边缘防线（Cloudflare Edge Watchdog status）。
