@@ -485,10 +485,19 @@ def await_effective_config_hash(
     timeout_seconds: int,
     interval_seconds: int,
     *,
-    _sleep=time.sleep,
-    _now=time.monotonic,
+    _sleep=None,
+    _now=None,
 ) -> str | None:
-    """Poll Dokploy effective IAC_CONFIG_HASH until it matches expected hash."""
+    """Poll Dokploy effective IAC_CONFIG_HASH until it matches expected hash.
+
+    ``_sleep`` and ``_now`` default to ``time.sleep`` and ``time.monotonic`` at call time.
+    A default bound at import time ignores a clock that a test puts on the ``time``
+    module, and the poll then waits the full timeout in real time (#1453).
+    """
+    if _sleep is None:
+        _sleep = time.sleep
+    if _now is None:
+        _now = time.monotonic
     deadline = _now() + max(0, timeout_seconds)
     interval = max(1, interval_seconds)
     last_value: str | None = None

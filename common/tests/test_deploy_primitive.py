@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -1201,6 +1202,13 @@ def test_deploy_with_wait_fails_when_the_frontend_is_left_created(monkeypatch):
 
 def test_deploy_with_wait_waits_for_a_health_check_still_starting(monkeypatch):
     monkeypatch.setattr(dp.time, "sleep", lambda _s: None)
+    # verify_in_service binds time.sleep when the module loads, so the patch above never
+    # reaches it. Hand it a no-op sleep, or the test waits 2 x 5 s in real time (#1453).
+    monkeypatch.setattr(
+        dp,
+        "verify_in_service",
+        functools.partial(dp.verify_in_service, _sleep=lambda _s: None),
+    )
     reads: list[int] = []
 
     def containers(self):
