@@ -872,3 +872,64 @@ def test_status_poll_attempts_is_the_fewest_polls_covering_the_budget(budget):
 def test_status_poll_attempts_refuses_a_schedule_that_never_pauses():
     with pytest.raises(ValueError, match="never pauses"):
         status_poll_attempts(60, initial=0)
+
+
+# --- #1439: an interrupted deploy is a transient runner fault, not a result ------------
+
+
+def _interrupted_body(deployment_id: str = "b" * 16) -> dict:
+    return {
+        "status": "interrupted",
+        "deployment_id": deployment_id,
+        "env": "production",
+        "ref": SHA,
+        "error": "iac_runner restarted while this deployment was in flight",
+    }
+
+
+def test_poll_raises_a_typed_error_for_an_interrupted_deploy_at_once():
+    """The restarted runner answers `interrupted` (HTTP 200). That is not a result the
+    caller may report as a failed deploy: the outcome is unknown and a new request is safe.
+    The poll must raise a typed error on the first answer, not wait out a grace."""
+    calls, transport = _capture([(_interrupted_body(), 200)])
+    with pytest.raises(RuntimeError) as excinfo:
+        poll_platform_deploy_status(
+            env="production",
+            ref=SHA,
+            services=["platform/redis"],
+            deployment_id="b" * 16,
+            base_url="u",
+            secret=SECRET,
+            attempts=90,
+            interval=0,
+            sleep=lambda *_: None,
+            nonce_factory=lambda: "nonce123",
+            transport=transport,
+        )
+    error = excinfo.value
+    assert type(error).__name__ == "RunnerInterruptedError"
+    assert isinstance(error, RunnerLostDeploymentError)
+    message = str(error)
+    assert "iac_runner reported interrupted" in message
+    assert "b" * 16 in message and SHA[:12] in message and "production" in message
+    assert len(calls) == 1
+
+
+def test_poll_raises_when_a_running_deploy_turns_out_to_be_interrupted():
+    calls, transport = _capture(
+        [({"status": "in_progress"}, 200), (_interrupted_body(), 200)]
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        poll_platform_deploy_status(
+            env="production",
+            ref=SHA,
+            base_url="u",
+            secret=SECRET,
+            attempts=90,
+            interval=0,
+            sleep=lambda *_: None,
+            nonce_factory=lambda: "nonce123",
+            transport=transport,
+        )
+    assert type(excinfo.value).__name__ == "RunnerInterruptedError"
+    assert len(calls) == 2

@@ -17,7 +17,9 @@ import os
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Sequence
 import yaml
@@ -35,6 +37,7 @@ from common.deploy.app_contract import (
 from common.deploy.dependencies import explain_fanout
 from common.deploy.contract import all_service_keys, service_spec
 from common.deploy.env_config import app_compose_env_config
+from common.deploy.transient_failure import classify_failure
 from common.deploy.release_markers import (
     PRODUCTION_MARKER_PREFIX,
     RELEASE_TAG_RE,
@@ -936,24 +939,79 @@ def commands_to_apply(
     return [command for command in commands if command.deploy_type == wanted]
 
 
+# Owner decision (2026-11-05, #1439): the approval of a production tag covers at most two
+# automatic retries of a failed unit, in the same run and on the same tag. A retry runs the
+# same command line again, so it can neither start a new run nor change the tag.
+MAX_UNIT_RETRIES = 2
+# The pause before retry 1 and retry 2. A resolver or a registry needs seconds to recover;
+# a restarted runner needs about a minute to answer again.
+UNIT_RETRY_BACKOFF_SECONDS = (30.0, 90.0)
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def run_deploy_commands(
     commands: Sequence[DeployCommand],
     *,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], str] = _utc_now,
+    max_retries: int = MAX_UNIT_RETRIES,
+    backoff_seconds: Sequence[float] = UNIT_RETRY_BACKOFF_SECONDS,
 ) -> list[dict]:
+    """Run each deploy command; retry a failed one on a transient fault, then stop at a
+    failure that stays.
+
+    A failed command is retried at most ``max_retries`` times, and only when
+    :func:`common.deploy.transient_failure.classify_failure` calls its failure transient
+    (DNS or network, a registry 5xx, a runner that lost or interrupted the deploy). A
+    deterministic or unrecognised failure is never retried. Every attempt, the first
+    included, is recorded as ``attempts: [{n, cause, at}]``: ``cause`` is why that attempt
+    failed, and ``None`` for an attempt that succeeded. Each retry is also logged to
+    stderr with its cause.
+
+    Idempotency: the command for a second attempt is the first attempt's command line. A
+    platform unit is a signed ``/deploy`` request with the same coordinates; the runner
+    answers a finished deploy from its record and the config-hash gate skips a service that
+    already matches. An app unit re-promotes the same commit and image to the same
+    environment, the end state of a manual re-run.
+    """
     results: list[dict] = []
     for command in commands:
-        completed = runner(
-            command.argv,
-            capture_output=True,
-            text=True,
-        )
+        attempts: list[dict] = []
+        while True:
+            attempt = {"n": len(attempts) + 1, "cause": None, "at": clock()}
+            attempts.append(attempt)
+            completed = runner(
+                command.argv,
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode == 0:
+                break
+            failure = classify_failure(completed.stderr, completed.stdout)
+            attempt["cause"] = failure.cause
+            retries_used = attempt["n"] - 1
+            if not failure.transient or retries_used >= max_retries:
+                break
+            pause = float(backoff_seconds[min(retries_used, len(backoff_seconds) - 1)])
+            print(
+                f"reconcile retry: {command.deploy_type} {command.service}: attempt "
+                f"{attempt['n'] + 1} of {max_retries + 1} after {failure.cause} "
+                f"(same command, same tag; waiting {pause:g}s)",
+                file=sys.stderr,
+                flush=True,
+            )
+            sleep(pause)
         record = {
             "service": command.service,
             "type": command.deploy_type,
             "returncode": completed.returncode,
             "stdout": completed.stdout,
             "stderr": completed.stderr,
+            "attempts": attempts,
         }
         if completed.returncode == 0 and completed.stdout.strip():
             try:
@@ -1053,6 +1111,14 @@ def failure_alert_text(
             ]
             detail = (verdict or stderr_lines or ["no diagnostic"])[-1]
             lines.append(f"- {env} {services}: {detail[:200]}")
+    for item in failed:
+        attempts = item.get("attempts") or []
+        if len(attempts) > 1:
+            lines.append(
+                f"- {item.get('type') or '?'} {item.get('service') or '?'}: "
+                f"still failing after {len(attempts)} attempts "
+                f"(last cause: {attempts[-1].get('cause') or 'unknown'})"[:300]
+            )
     lines.append(f"Run: {run_url}")
     return "\n".join(lines)
 
@@ -1094,6 +1160,19 @@ def write_summary(
         lines.append(
             f"- Deploy results: `{len(results) - len(failed)} ok / {len(failed)} failed`"
         )
+        retried = [item for item in results if len(item.get("attempts") or []) > 1]
+        if retried:
+            lines.append(
+                f"- Unit retries (at most {MAX_UNIT_RETRIES} per unit, same run, same tag):"
+            )
+            for item in retried:
+                steps = "; ".join(
+                    f"attempt {a.get('n')} at {a.get('at')}: {a.get('cause') or 'ok'}"
+                    for a in item["attempts"]
+                )
+                lines.append(
+                    f"  - `{item.get('service')}` ({item.get('type')}): {steps}"
+                )
     lines.append("")
     lines.append("```json")
     lines.append(

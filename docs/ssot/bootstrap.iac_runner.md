@@ -124,8 +124,10 @@ flowchart TB
    晋升；`action`（默认 `sync`）保证 secrets-supply 请求绝不被同坐标的缓存 sync 结果回答（#649）。
    空 `version_ref` / 默认 `action` 不进入 id 种子，旧客户端按原 id 轮询仍能命中。
 3. 是否真的重启由 `sync` 的 config-hash gate 决定（§3.3）；hash 未变即 no-op。
-4. `main` 领先于最新 tag = **未发布**，是正常状态，不是 drift。
-5. 回滚 = 以旧 tag 再跑一次 reconcile（§11.5）。
+4. Deploy records are saved on the `/workspace` volume (§3.4). A restart does not erase them, and a deploy that was in
+   flight at the restart reads back as `interrupted`, not `not_found`.
+5. `main` 领先于最新 tag = **未发布**，是正常状态，不是 drift。
+6. 回滚 = 以旧 tag 再跑一次 reconcile（§11.5）。
 
 **sync 子进程约定**:
 
@@ -186,6 +188,22 @@ def sync_service(service_name):
 - ✅ 幂等性保证（多次执行结果相同）
 - ✅ 快速失败（检测到配置无变更时立即返回）
 
+### 3.4 Persistent deploy records (#1439)
+
+The runner used to keep `_in_flight_deploys` and `_recent_deploys` in memory only. A worker or container restart erased
+them, and a poll for a deploy that the restart had interrupted got `not_found` (run 41967457003, 2026-11-05).
+
+| Fact | Value |
+|---|---|
+| File | `/workspace/.iac_runner/deploy_state.json` (`IAC_RUNNER_STATE_DIR` overrides the directory). The `/workspace` volume is `${DATA_PATH}/workspace`. The directory is beside the repo checkout, not inside it. |
+| Content | `version`, `saved_at`, `in_flight` (key, start, trigger) and `recent` (key, completion time, response). |
+| Write | One writer at a time (`_deploy_state_lock`): snapshot, temp file in the same directory, `fsync`, `os.replace`. A failed write is logged and shown in `/health` as `deploy_state`; it never fails a deploy. |
+| Load | At import. A record older than its limit is dropped: 600 s for a result, 3600 s for `interrupted`. At most 64 records stay (`MAX_PERSISTED_DEPLOYS`). |
+| Restart | Every key in flight becomes an `interrupted` record (§4.5). The state file is written back. |
+| Bad file | An unreadable file, or a `version` other than 1, is moved to `deploy_state.json.corrupt`. The runner starts empty and logs an error. |
+
+Idle wait (`wait_for_idle.sh`, #666) stays: a recreate still kills the thread of a deploy, and the retry then costs a run.
+
 ---
 
 ## 4. API 端点
@@ -210,10 +228,20 @@ curl https://iac.{domain}/health
 ```json
 {
   "status": "healthy",
-  "version": "1.0.0",
-  "uptime": 3600
+  "checks": {"http": true, "vault_secrets": true},
+  "in_flight_deploys": 0,
+  "deploy_state": {
+    "persistent": true,
+    "path": "/workspace/.iac_runner/deploy_state.json",
+    "last_error": "",
+    "records": 3
+  },
+  "git_sha": "7e4294e"
 }
 ```
+
+`deploy_state` stays out of `checks`: a runner that cannot save its records still deploys, so it is reported and not
+made unhealthy (§3.4). `persistent=false` with a `last_error` means a restart would lose the records.
 
 ### 4.3 `/webhook` - GitHub Webhook（验签后 `ignored`）
 
@@ -293,6 +321,31 @@ curl -X POST https://iac.{domain}/deploy \
   "status_url": "/deploy/status"
 }
 ```
+
+### 4.5 `/deploy/status` - `interrupted`
+
+A restart that kills a running deploy leaves an `in_flight` entry in the state file. The next process loads it as:
+
+```json
+{
+  "status": "interrupted",
+  "deployment_id": "b3f8d7ad4d0e0d2f",
+  "env": "production",
+  "ref": "0123456789abcdef0123456789abcdef01234567",
+  "requested_services": ["platform/redis"],
+  "interrupted_at": "2026-11-05T04:29:12Z",
+  "error": "iac_runner restarted while this deployment was in flight, so its outcome is unknown. ..."
+}
+```
+
+HTTP status is 200. `interrupted` is not a result: `/deploy` does not answer a duplicate request from it, and the same
+request runs again. The client (`iac_runner_client.poll_platform_deploy_status`) raises `RunnerInterruptedError`, a
+subclass of `RunnerLostDeploymentError`, and the release train retries the unit (`ops.pipeline.md` §3.3.1).
+
+A second request is safe. The deployment key is `(env, exact_ref, normalized_service_set, version_ref, action)`, so the
+retry has the same `deployment_id`. The config-hash gate (§3.3) skips a service that already matches. It also deploys a
+service whose newest Dokploy deployment record is `error`, because a runner killed after it wrote the new hash cannot
+restore the old one.
 
 ## 5. 服务映射
 
@@ -893,6 +946,19 @@ curl -X POST https://iac.{domain}/webhook \
 
 # 预期输出: {"status":"ignored","reason":"a push to main is not a deploy trigger; staging follows a release tag","commit":"01234567"}
 # 错误签名 → 401 {"error":"Invalid signature"}
+```
+
+### 13.2.1 Persistent records and unit retry (#1439)
+
+```bash
+# The runner saved its records on the volume, and /health says so:
+curl -s https://iac.{domain}/health | jq .deploy_state
+# Expected: {"persistent": true, "path": "/workspace/.iac_runner/deploy_state.json", "last_error": "", ...}
+
+# Tests (focused; each is red when the matching code is mutated):
+uv run pytest common/tests/test_iac_runner_persistence.py -x
+uv run pytest common/tests/test_iac_runner_client.py -k "interrupted or loss_markers" -x
+uv run pytest common/tests/test_release_train_retry.py -x
 ```
 
 ### 13.3 发布链路验证（release tag → staging）

@@ -1676,7 +1676,7 @@ def test_fixed_app_deploy_without_runner_credentials_skips_the_supply(
     assert calls["fixed"] is not None
 
 
-# --- a lost runner request: staging re-submits once, production fails at once (#666) ----
+# --- a lost or interrupted runner request: deploy_v2 sends it once, the release train retries (#1439) ----
 
 
 _LOST_MESSAGE = (
@@ -1755,49 +1755,31 @@ def _run_runner_site(site, env_type):
     )
 
 
-@pytest.mark.parametrize("site", _RUNNER_SITES)
-def test_staging_resubmits_a_lost_request_once_and_succeeds(
-    calls, monkeypatch, capsys, site
-):
-    rec = _scripted_runner(
-        monkeypatch, [_lost(), {"status": "completed", "deployment_id": "x"}]
+def _interrupted(deployment_id="unknown"):
+    from common.deploy.iac_runner_client import RunnerInterruptedError
+
+    return RunnerInterruptedError(
+        f"iac_runner reported interrupted for deploy dddddddddddd to staging "
+        f"(deployment {deployment_id}): the runner restarted while this deployment "
+        "was in flight and its outcome is unknown (#1439)"
     )
-    _run_runner_site(site, "staging")
-    assert len(rec["triggers"]) == 2
-    assert len(rec["polls"]) == 2
-    # the second poll follows the second request's id, not the lost one
-    assert rec["polls"][0]["deployment_id"] == f"{1:016x}"
-    assert rec["polls"][1]["deployment_id"] == f"{2:016x}"
-    err = capsys.readouterr().err
-    assert err.count("lost; re-submitting once") == 1
-    assert "deploy_v2 failed:" not in err and "ended '" not in err
 
 
 @pytest.mark.parametrize("site", _RUNNER_SITES)
-def test_staging_fails_when_the_resubmitted_request_is_lost_too(
-    calls, monkeypatch, site
+@pytest.mark.parametrize("env_type", ["staging", "prod"])
+@pytest.mark.parametrize("fault", ["not_found", "interrupted"])
+def test_a_lost_or_interrupted_request_is_sent_once_and_raised_unchanged(
+    calls, monkeypatch, capsys, site, env_type, fault
 ):
-    # the script has more losses than the code may consume: a third request would find one
-    rec = _scripted_runner(monkeypatch, [_lost(f"{n:016x}") for n in range(1, 5)])
+    """#1439: the release train owns the retry budget (at most 2 per unit, both
+    environments, each one recorded). deploy_v2 must not add a private re-submit: it would
+    spend a second request that no attempt record shows. The success that waits behind the
+    fault in the script proves the code did not take it."""
+    original = _lost(f"{1:016x}") if fault == "not_found" else _interrupted(f"{1:016x}")
+    ok = {"status": "completed", "deployment_id": "x"}
+    rec = _scripted_runner(monkeypatch, [original, ok, ok, ok])
     with pytest.raises(RunnerLostDeploymentError) as excinfo:
-        _run_runner_site(site, "staging")
-    assert len(rec["triggers"]) == 2  # exactly one re-submit, never a third request
-    assert len(rec["polls"]) == 2
-    message = str(excinfo.value)
-    assert f"{1:016x}" in message and f"{2:016x}" in message
-    assert "no record of this deployment" in message  # the cause survives
-    assert isinstance(excinfo.value.__cause__, RunnerLostDeploymentError)
-
-
-@pytest.mark.parametrize("site", _RUNNER_SITES)
-def test_production_fails_at_once_on_a_lost_request(calls, monkeypatch, capsys, site):
-    original = _lost(f"{1:016x}")
-    # later losses stand ready: a production re-submit would find one and the test would see it
-    rec = _scripted_runner(
-        monkeypatch, [original] + [_lost(f"{n:016x}") for n in range(2, 5)]
-    )
-    with pytest.raises(RunnerLostDeploymentError) as excinfo:
-        _run_runner_site(site, "prod")
+        _run_runner_site(site, env_type)
     assert len(rec["triggers"]) == 1
     assert len(rec["polls"]) == 1
     assert excinfo.value is original  # the original error, not a re-wrapped one
@@ -1849,14 +1831,13 @@ class _RunnerAnswer:
 
 
 @pytest.mark.parametrize("site", ["secret-supply", "batch"])
-@pytest.mark.parametrize(
-    ("env_type", "resubmits"), [("staging", True), ("prod", False)]
-)
-def test_the_real_client_loss_error_drives_the_resubmit_decision(
-    calls, monkeypatch, site, env_type, resubmits
+@pytest.mark.parametrize("env_type", ["staging", "prod"])
+@pytest.mark.parametrize("fault", ["not_found", "interrupted"])
+def test_the_real_client_loss_error_reaches_the_release_train_in_both_environments(
+    calls, monkeypatch, site, env_type, fault
 ):
     """Join the two halves: the REAL poll function, on a runner that answers ``not_found``
-    to the first request, must make deploy_v2 re-submit (staging) or stop (production)."""
+    or ``interrupted`` to the first request, must make deploy_v2 raise after one request."""
     from common.deploy import iac_runner_client as iac_runner_client
 
     real_poll = iac_runner_client.poll_platform_deploy_status
@@ -1865,14 +1846,15 @@ def test_the_real_client_loss_error_drives_the_resubmit_decision(
 
     def fake_trigger(**kw):
         sent.append(kw)
-        assert len(sent) <= 4, "runaway re-submit loop"
+        assert len(sent) <= 2, "runaway re-submit loop"
         return {"status": "accepted", "deployment_id": f"{len(sent):016x}"}
 
     def runner_transport(url, *, content, headers, timeout):
-        # the runner of request 1 was recreated and forgot it; request 2 is a fresh runner's
-        if len(sent) == 1:
-            return _RunnerAnswer({"status": "not_found"}, 404)
-        return _RunnerAnswer({"status": "completed"}, 200)
+        if fault == "interrupted":
+            return _RunnerAnswer(
+                {"status": "interrupted", "deployment_id": f"{1:016x}"}, 200
+            )
+        return _RunnerAnswer({"status": "not_found"}, 404)
 
     def sleep(seconds):
         moment[0] += seconds
@@ -1885,13 +1867,10 @@ def test_the_real_client_loss_error_drives_the_resubmit_decision(
             **kw, now=lambda: moment[0], sleep=sleep, transport=runner_transport
         ),
     )
-    if resubmits:
+    expected = "no record of this" if fault == "not_found" else "outcome is unknown"
+    with pytest.raises(RunnerLostDeploymentError, match=expected):
         _run_runner_site(site, env_type)
-        assert len(sent) == 2
-    else:
-        with pytest.raises(RunnerLostDeploymentError, match="no record of this"):
-            _run_runner_site(site, env_type)
-        assert len(sent) == 1
+    assert len(sent) == 1
 
 
 def test_a_request_that_is_not_awaited_is_sent_once_and_never_polled(monkeypatch):
@@ -1905,7 +1884,6 @@ def test_a_request_that_is_not_awaited_is_sent_once_and_never_polled(monkeypatch
         triggered_by="deploy_v2",
         wait=False,
         timeout=120,
-        started=0.0,
     )
     assert response["deployment_id"] == f"{1:016x}" and final is None
     assert len(rec["triggers"]) == 1 and rec["polls"] == []

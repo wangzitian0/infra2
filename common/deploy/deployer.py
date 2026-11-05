@@ -822,9 +822,10 @@ class Deployer:
         every unchanged service on every release (#718). The config hash already covers
         the compose file, its build context and declared dependencies, so the older
         checkout holds the same inputs; what a skip still has to prove is that the
-        containers are up (#691, #698) and that if the compose env records an
+        containers are up (#691, #698), that if the compose env records an
         `IAC_DEPLOY_REF` from a prior failed/interrupted sync, the on-disk checkout
-        actually matches that recorded `IAC_DEPLOY_REF` (#1247).
+        actually matches that recorded `IAC_DEPLOY_REF` (#1247), and that the newest
+        Dokploy deployment record is not in error (#1439).
 
         Returns an error string when the stack is not in service (sync redeploys it),
         None when it is. Raises when the host cannot be asked (no appName, `docker ps`
@@ -836,7 +837,41 @@ class Deployer:
         container_error = cls._verify_containers_in_service(c, stack)
         if container_error:
             return container_error
-        return cls._verify_recorded_deploy_ref_checkout(stack)
+        checkout_error = cls._verify_recorded_deploy_ref_checkout(stack)
+        if checkout_error:
+            return checkout_error
+        return cls._verify_latest_deployment_not_failed(compose_id)
+
+    @classmethod
+    def _verify_latest_deployment_not_failed(cls, compose_id: str) -> str | None:
+        """An unchanged stack whose newest Dokploy deployment record is `error` is not done.
+
+        The runner writes the new config hash to the compose env before it deploys, and
+        restores the old hash when the deploy fails. A runner that dies between the two
+        restores nothing, so after its restart (#1439) the hash matches, the old
+        containers still run and the checkout is at the recorded ref, yet the deploy that
+        Dokploy ran on its own may have failed (an image pull). Only the newest record is
+        evidence: a failure that a later deploy repaired is not. No record, or a list that
+        cannot be read, is no evidence and keeps the skip, as an unreadable host does.
+        """
+        from common.deploy.dokploy_adapter import latest_deployment_record
+        from common.deploy.dokploy_client import get_dokploy
+
+        e = cls.env()
+        domain = e.get("INTERNAL_DOMAIN")
+        try:
+            latest = latest_deployment_record(
+                get_dokploy(host=f"cloud.{domain}" if domain else None), compose_id
+            )
+        except Exception:  # noqa: BLE001
+            return None
+        if latest and str(latest.get("status") or "").lower() == "error":
+            deployment_id = latest.get("deploymentId") or latest.get("id") or "unknown"
+            return (
+                f"the newest Dokploy deployment record of {cls.service} "
+                f"({deployment_id}) is in error (#1439)"
+            )
+        return None
 
     @classmethod
     def _verify_recorded_deploy_ref_checkout(cls, stack: _HostStack) -> str | None:

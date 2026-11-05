@@ -445,8 +445,15 @@ class _Host:
 class _Dokploy:
     """platform/redis in `env`; any other lookup finds nothing."""
 
-    def __init__(self, env: str = "production"):
+    def __init__(self, env: str = "production", deployments=None):
         self.env = env
+        self.deployments = deployments
+
+    def get_compose_deployments(self, compose_id):
+        assert compose_id == "cid"
+        if self.deployments is None:
+            raise RuntimeError("deployment.allByCompose unavailable")
+        return list(self.deployments)
 
     def find_compose_by_name(self, name, project_name=None, env_name=None):
         if (name, project_name, env_name) == ("redis", "platform", self.env):
@@ -865,6 +872,82 @@ def test_verify_still_in_service_detects_mismatched_recorded_deploy_ref_checkout
     assert err is not None
     assert stale_on_disk_sha[:12] in err
     assert LAST_DEPLOY_SHA[:12] in err
+
+
+def _unchanged_redis_with_records(monkeypatch, deployments):
+    """An unchanged, in-service redis whose Dokploy record list is `deployments`."""
+    redis, deployed = _redis_sync(monkeypatch, remote_hash="h1")
+    monkeypatch.setattr(
+        "common.deploy.dokploy_client.get_dokploy",
+        lambda host=None: _Dokploy("production", deployments),
+    )
+    return redis, deployed, _Host(checkout=LAST_DEPLOY_SHA, containers=REDIS_UP)
+
+
+def test_an_unchanged_stack_whose_latest_deployment_record_failed_is_redeployed(
+    monkeypatch,
+):
+    """#1439: the runner restarted after it wrote the new config hash and before its
+    deploy ended; Dokploy's own deploy then failed (an image pull). The hash matches, the
+    old containers still run and the checkout is at the recorded ref, so the retry that
+    the interrupted record invites would skip and report a deploy that never happened.
+    The newest Dokploy record decides: an `error` record forces the redeploy."""
+    redis, deployed, host = _unchanged_redis_with_records(
+        monkeypatch,
+        [
+            {
+                "deploymentId": "d1",
+                "status": "done",
+                "createdAt": "2026-11-05T05:00:00Z",
+            },
+            {
+                "deploymentId": "d2",
+                "status": "error",
+                "createdAt": "2026-11-05T06:00:00Z",
+            },
+        ],
+    )
+
+    redis.sync(host)
+
+    assert len(deployed) == 1
+    assert deployed[0]["IAC_DEPLOY_REF"] == RELEASE_SHA
+
+
+def test_an_older_failed_record_does_not_block_the_skip_when_the_newest_is_done(
+    monkeypatch,
+):
+    """Only the newest record is evidence. A failure that a later deploy repaired is not."""
+    redis, deployed, host = _unchanged_redis_with_records(
+        monkeypatch,
+        [
+            {
+                "deploymentId": "d1",
+                "status": "error",
+                "createdAt": "2026-11-05T05:00:00Z",
+            },
+            {
+                "deploymentId": "d2",
+                "status": "done",
+                "createdAt": "2026-11-05T06:00:00Z",
+            },
+        ],
+    )
+
+    result = redis.sync(host)
+
+    assert result["action"] == "skipped" and deployed == []
+
+
+@pytest.mark.parametrize("records", [None, []], ids=["unreadable", "none-yet"])
+def test_no_deployment_record_is_no_evidence_and_keeps_the_skip(monkeypatch, records):
+    """Unobservable is not failed (the rule of the in-service check): without a record the
+    skip stands, as it did before the record check existed."""
+    redis, deployed, host = _unchanged_redis_with_records(monkeypatch, records)
+
+    result = redis.sync(host)
+
+    assert result["action"] == "skipped" and deployed == []
 
 
 def test_composing_restores_existing_env_when_deploy_fails(monkeypatch):
