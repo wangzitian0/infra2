@@ -47,7 +47,11 @@ def _ssh_args_for_log_tail(
         "StrictHostKeyChecking=accept-new",
     ]
     key_path = os.environ.get("INFRA2_WATCHDOG_SSH_KEY_PATH", "").strip()
-    if not key_path and runtime_key_path.is_file():
+    try:
+        has_runtime_key = runtime_key_path.is_file()
+    except OSError:
+        has_runtime_key = False
+    if not key_path and has_runtime_key:
         key_path = str(runtime_key_path)
     if key_path:
         args += ["-i", key_path]
@@ -301,6 +305,10 @@ def deploy_compose_with_record_check(
             "Dokploy deploy did not produce a new deployment record; retrying with compose.redeploy"
         )
     except RuntimeError as exc:
+        if not isinstance(exc.__cause__, RolloutError) and not str(exc).startswith(
+            "Dokploy deployment record entered error"
+        ):
+            raise
         warn(f"Dokploy deploy failed ({exc}); retrying once with compose.redeploy")
         sleep_fn(max(1, interval_seconds))
 
