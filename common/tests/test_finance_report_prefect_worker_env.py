@@ -52,12 +52,8 @@ SHARED_RUNTIME_KEYS = (
     "S3_PRESIGN_EXPIRY_SECONDS",
     "PREFECT_API_URL",
 )
-#: Backend-only, and must stay that way. The OTLP endpoint is the sharp case — it turns
-#: export on, and the app refuses to start when export is on without a
-#: deployment.environment tag in OTEL_RESOURCE_ATTRIBUTES, which the deployer issues per
-#: component (see the comment on the anchor). CORS_ORIGINS and OTEL_SERVICE_NAME are the
-#: quiet case: they describe the HTTP service, which the worker is not.
-BACKEND_ONLY_KEYS = ("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_SERVICE_NAME", "CORS_ORIGINS")
+#: Backend-only. CORS_ORIGINS describes the HTTP service, which the worker is not.
+BACKEND_ONLY_KEYS = ("CORS_ORIGINS",)
 
 
 def test_the_worker_gets_the_same_runtime_configuration_as_the_backend() -> None:
@@ -103,13 +99,11 @@ def test_compose_files_do_not_redeclare_model_defaults_and_frontend_uses_app_url
 
 
 def test_backend_only_configuration_stays_off_the_worker() -> None:
-    """The worker takes the shared anchor and nothing else.
+    """The worker takes the shared anchor plus its own telemetry identity (#1431).
 
-    Motivating case: handing it OTEL_EXPORTER_OTLP_ENDPOINT alone crash-looped staging
-    within a minute of the deploy — export on, no deployment.environment tag, Settings()
-    refuses to construct. The rest of the list is the same invariant without the drama:
-    CORS_ORIGINS and OTEL_SERVICE_NAME describe the HTTP service, and a worker claiming
-    them would be describing something it is not.
+    The OTLP endpoint turns export on, and Settings() refuses to start without a
+    deployment.environment tag (staging crash-loop, 2026-09-10). The worker therefore
+    takes the endpoint only together with its own issued resource attributes.
     """
     services = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]
     backend = _environment(services["backend"])
@@ -120,6 +114,8 @@ def test_backend_only_configuration_stays_off_the_worker() -> None:
         assert key not in worker, (
             f"{key} is backend-only and must not appear on the worker"
         )
+    assert "OTEL_EXPORTER_OTLP_ENDPOINT" in worker
+    assert "${OTEL_WORKER_RESOURCE_ATTRIBUTES" in worker["OTEL_RESOURCE_ATTRIBUTES"]
 
 
 def test_s3_endpoints_use_the_singleton_s3_service() -> None:
