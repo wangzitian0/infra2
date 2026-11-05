@@ -566,24 +566,34 @@ def _filter(widget_id: str, widgets: dict[str, dict]) -> str:
     ]
 
 
+# The legacy resource key, not followed by `.name`. SSOT core.environments §4.5: queries
+# use `deployment.environment.name` (#1434). `$deployment_environment` has an underscore.
+LEGACY_ENVIRONMENT_KEY = re.compile(r"deployment\.environment(?!\.name)")
+
+
 def test_every_widget_is_filterable_by_deployment_environment() -> None:
     """The deployment_environment dropdown only filters a panel if the panel's query
-    references it — assert EVERY widget carries the `$deployment_environment` filter so
-    the dashboard variable is real, not decorative (CR #391)."""
+    references it — assert EVERY widget filters on `deployment.environment.name` and
+    carries no legacy-key filter, so the variable is real, not decorative (CR #391, #1434)."""
     for w in load_dashboard()["widgets"]:
         expression = w["query"]["builder"]["queryData"][0]["filter"]["expression"]
-        assert "deployment.environment IN $deployment_environment" in expression, (
-            f"widget {w['id']} is not filterable by deployment_environment"
+        assert "deployment.environment.name IN $deployment_environment" in expression, (
+            f"widget {w['id']} is not filterable by deployment.environment.name"
+        )
+        assert not LEGACY_ENVIRONMENT_KEY.search(json.dumps(w)), (
+            f"widget {w['id']} still uses the legacy key deployment.environment"
         )
 
 
 def test_env_variable_query_targets_the_live_v2_logs_schema() -> None:
-    """The deployment.environment dropdown must query the table/columns that actually
+    """The deployment.environment.name dropdown must query the table/columns that actually
     exist on the SigNoz instance (logs v2: distributed_logs_v2 + resources_string),
     not the retired v1 schema (distributed_logs + stringTagMap) which UNKNOWN_TABLEs."""
-    query = load_dashboard()["variables"]["deployment_environment"]["queryValue"]
+    variable = load_dashboard()["variables"]["deployment_environment"]
+    query = variable["queryValue"]
     assert "distributed_logs_v2" in query
-    assert "resources_string" in query
+    assert "resources_string['deployment.environment.name']" in query
+    assert not LEGACY_ENVIRONMENT_KEY.search(json.dumps(variable))
     # the retired v1 identifiers must not reappear
     assert "stringTagMap" not in query
     assert "signoz_logs.distributed_logs " not in query + " "

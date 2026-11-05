@@ -313,6 +313,8 @@ an explicit per-environment Vault value.
 
 对 **preview** 多别名而言，`deployment.environment.name` 的取值就是 alias token（见 §4.6）。同一份签发逻辑由 `common/deploy/preview` 后端（经 `tools/deploy_v2 --type preview/*` 触发，非直接调用）注入 compose（vault-agent 与遥测共同消费），与 `common/deploy/env_config.py::preview_alias` 派生的 `env_suffix` 保持同源。
 
+**Label migration state (#1434).** The Finance Report dashboard filters and its `deployment_environment` variable use `deployment.environment.name`. Browser OTLP SDKs emit only the legacy key `deployment.environment`. The `resource` processor in `platform/11.signoz/otel-collector-config.yaml` (action `insert`) is the only source of `.name` on browser spans. Apps and probes still write both keys. `common/tests/test_signoz_config_delivery.py` checks that the rendered collector file holds the rule and that a change to it flips the SigNoz config hash. The dashboard shows frontend panels only after a promotion delivers the collector rule.
+
 <a id="commit-identity"></a>
 #### 4.5.1 Commit identity contract (#1211)
 
