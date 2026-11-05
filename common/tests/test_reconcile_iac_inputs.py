@@ -798,13 +798,20 @@ def test_reconcile_workflow_folds_in_bootstrap_and_observability_apply_on_promot
     steps = job["steps"]
     names = [step.get("name") for step in steps]
     assert "Install uv" in names
-    reconcile_step = steps[names.index("Reconcile changed IaC inputs")]
-    script = reconcile_step["run"]
+    reconcile_idx = names.index("Reconcile changed IaC inputs")
+    obs_idx = names.index("Reconcile SigNoz observability (alerts + dashboard)")
+    assert reconcile_idx < obs_idx
 
+    reconcile_step = steps[reconcile_idx]
+    script = reconcile_step["run"]
     bootstrap_idx = script.index("scripts/deploy_iac_runner_bootstrap.sh")
     health_idx = script.index("IaC Runner public health attempt ${attempt}/12")
-    reconcile_idx = script.index("python -m tools.reconcile_iac_inputs")
-    alerts_idx = script.index("fr-observability.shared.apply-alerts")
-    dashboard_idx = script.index("fr-observability.shared.apply-dashboard")
+    run_reconcile_idx = script.index("python -m tools.reconcile_iac_inputs")
+    assert bootstrap_idx < health_idx < run_reconcile_idx
 
-    assert bootstrap_idx < health_idx < reconcile_idx < alerts_idx < dashboard_idx
+    obs_step = steps[obs_idx]
+    assert obs_step["env"]["DEPLOY_ENV"] == "production"
+    obs_script = obs_step["run"]
+    alerts_idx = obs_script.index("fr-observability.shared.apply-alerts")
+    dashboard_idx = obs_script.index("fr-observability.shared.apply-dashboard")
+    assert alerts_idx < dashboard_idx

@@ -253,11 +253,14 @@ jobs:
               install -m 700 -d ~/.ssh
               printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_bootstrap
               chmod 600 ~/.ssh/infra2_bootstrap
-              ssh_port="${INFRA2_WATCHDOG_SSH_PORT:-22}"
+              ssh_port_args=()
+              if [[ -n "${INFRA2_WATCHDOG_SSH_PORT:-}" ]]; then
+                ssh_port_args=(-p "$INFRA2_WATCHDOG_SSH_PORT")
+              fi
               deploy_sha="$(git rev-parse "$after^{commit}")"
               ssh \
                 -i ~/.ssh/infra2_bootstrap \
-                -p "$ssh_port" \
+                "${ssh_port_args[@]}" \
                 -o StrictHostKeyChecking=no \
                 -o UserKnownHostsFile=/dev/null \
                 "${INFRA2_WATCHDOG_SSH_USER}@${INFRA2_WATCHDOG_SSH_HOST}" \
@@ -311,30 +314,41 @@ jobs:
 
           python -m tools.reconcile_iac_inputs "${args[@]}"
 
-          # Observability (SigNoz Alerts + Dashboard) Reconcile (in-train):
-          # finance_report/finance_report/observability/**, truealpha/truealpha/observability/**,
-          # platform/12.alerting/alert_rules.json, common/alerting/**,
-          # common/observability_dashboards.py, tools/signoz_alert_rule_probe.py
-          if [[ "$promote_prod" == "true" && "$dry_run" != "true" ]]; then
-            obs_changed="false"
-            while IFS= read -r file; do
-              [[ -z "$file" ]] && continue
-              case "$file" in
-                finance_report/finance_report/observability/*|truealpha/truealpha/observability/*|platform/12.alerting/alert_rules.json|common/alerting/*|common/observability_dashboards.py|tools/signoz_alert_rule_probe.py)
-                  obs_changed="true"
-                  break
-                  ;;
-              esac
-            done <<< "$changed_files"
+          echo "RECONCILE_BEFORE=$before" >> "$GITHUB_ENV"
+          echo "RECONCILE_AFTER=$after" >> "$GITHUB_ENV"
 
-            if [[ "$obs_changed" == "true" ]]; then
-              if [[ -z "${SIGNOZ_API_KEY:-}" ]]; then
-                echo "::error::SIGNOZ_API_KEY secret is not set — cannot apply observability config."
-                exit 1
-              fi
-              ENV=production DEPLOY_ENV=production uv run --locked python -m invoke fr-observability.shared.apply-alerts
-              ENV=production DEPLOY_ENV=production uv run --locked python -m invoke fr-observability.shared.apply-dashboard
+      - name: Reconcile SigNoz observability (alerts + dashboard)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.promote_prod && !inputs.dry_run }}
+        env:
+          ENV: production
+          DEPLOY_ENV: production
+        run: |
+          set -euo pipefail
+          changed_files=""
+          if [[ -n "${RECONCILE_BEFORE:-}" ]]; then
+            changed_files="$(git diff --name-only "$RECONCILE_BEFORE" "$RECONCILE_AFTER")"
+          else
+            changed_files="$(git diff-tree --no-commit-id --name-only -r "$RECONCILE_AFTER")"
+          fi
+
+          obs_changed="false"
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            case "$file" in
+              finance_report/finance_report/observability/*|truealpha/truealpha/observability/*|platform/12.alerting/alert_rules.json|common/alerting/*|common/observability_dashboards.py|tools/signoz_alert_rule_probe.py)
+                obs_changed="true"
+                break
+                ;;
+            esac
+          done <<< "$changed_files"
+
+          if [[ "$obs_changed" == "true" ]]; then
+            if [[ -z "${SIGNOZ_API_KEY:-}" ]]; then
+              echo "::error::SIGNOZ_API_KEY secret is not set — cannot apply observability config."
+              exit 1
             fi
+            uv run --locked python -m invoke fr-observability.shared.apply-alerts
+            uv run --locked python -m invoke fr-observability.shared.apply-dashboard
           fi
 
       # v1.1.57's reconcile (2026-09-07 08:35Z) recorded onepassword_auth_failed for

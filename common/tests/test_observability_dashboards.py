@@ -2282,11 +2282,13 @@ def test_apply_observability_workflow_watches_every_alert_rules_file() -> None:
         )
     )
     reconcile_steps = reconcile_wf["jobs"]["reconcile"]["steps"]
-    run_script = next(
-        s["run"]
+    obs_step = next(
+        s
         for s in reconcile_steps
-        if s.get("name") == "Reconcile changed IaC inputs"
+        if s.get("name") == "Reconcile SigNoz observability (alerts + dashboard)"
     )
+    assert obs_step["env"]["DEPLOY_ENV"] == "production"
+    run_script = obs_step["run"]
     non_comment_lines = [
         line for line in run_script.splitlines() if not line.lstrip().startswith("#")
     ]
