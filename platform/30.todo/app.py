@@ -612,6 +612,13 @@ init_service(
     check_timeout_seconds=READINESS_TIMEOUT_SECONDS,
 )
 
+# The probes call httpx, and httpx logs one INFO line for each successful request. With the
+# root logger at INFO, those lines were 75% of the exported log lines (#1436). The libraries
+# keep their WARNING and ERROR lines. The service logs each failed check itself, with the
+# reason, and it logs the canary result line for each run.
+for _library_logger in ("httpx", "httpcore"):
+    logging.getLogger(_library_logger).setLevel(logging.WARNING)
+
 
 @fastapi_app.middleware("http")
 async def add_cors_headers(request: Request, call_next: Any) -> Response:

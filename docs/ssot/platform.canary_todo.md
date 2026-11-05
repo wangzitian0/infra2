@@ -119,6 +119,8 @@ Without step 3 the `s3` check reports `unconfigured`, with the names of the miss
 
 Each run emits one `canary.run` span with one `canary.check.<name>` child span per check, and logs the outcome. SigNoz separates the environments by `deployment.environment.name`.
 
+**Log lines (#1436).** A run where every check passes logs one INFO line, `canary run ok: 3 write paths passed`. A run with a failed or unconfigured gating check logs `canary run red: ...` at ERROR. A check that does not pass logs a WARNING, `canary check <name> is <status>: <reason>`. `app.py` sets the `httpx` and `httpcore` loggers to WARNING after `init_service`. Before this, `httpx` logged one INFO line for each successful probe request, so the root level INFO exported three such lines for each run. They were 75% of the exported log lines (24 h, SigNoz ClickHouse, 2026-11-05). A successful probe request now logs nothing. A WARNING or ERROR record of these libraries is still exported. `httpx` logs no WARNING for a refused connection or an HTTP 5xx response, so the service line `canary check <name> is fail: <reason>` is the log of a failed probe. `common/tests/test_todo_probe_log_noise.py` loads the real app and proves each rule.
+
 ## 6. Constraints
 
 ### Do
