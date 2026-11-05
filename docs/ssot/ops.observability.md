@@ -429,6 +429,14 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 
    已知限制:cumulative counter 的某个 attribute 组合只在第一次计数后才出现,序列一出现就是 1,`increase()` 看不到这第一次;所以进程重启后第一次失败/5xx 不计入。`increase()` 会按窗口外推,值可能略高于真实次数(3 次拒绝可能算成约 3.75)。非探针流量很少,p95 可能只由几个请求决定;规则要求连续 10 分钟每分钟都超线,正是为了应对这一点。backend 健康检查自身的 p95 偏高(中位约 1.4s,最高 10s),另记在 #906。`FinanceReportReconciliationAnomaly` 已移出目录:它过滤 `outcome=~"failed|error|anomaly"`,而 app 只会发出 `auto_accepted|pending_review|accepted|rejected|superseded`,永远不会触发;app 发出真正的失败 outcome 后再恢复。apply 默认只记录不 prune,线上那条旧规则会保留(它本来就不会触发),需要时用 `--prune` 删除。
 4. 先跑 schema canary:`gh workflow run apply-observability.yml --ref <ref> -f mode=canary`(建一条 disabled PromQL 规则验 v5 信封再删)。apply 应在 app 发完所有引用 metric 名后。
+   **Canary cleanup contract (#1435).** The canary prints "passed" only after it reads the cleanup back:
+   1. After a DELETE, it reads `GET /api/v1/rules`. The rule id and the rule name must be absent.
+   2. It then reads `GET /api/v1/route_policies`. No route policy may have `name` equal to the rule id, or contain the rule id in its `expression`.
+   3. A DELETE status is not proof. A read error, or an OK answer that is not a list, is a failure.
+   4. If the rule is still listed, the canary sends the DELETE again, at most 3 attempts. It then fails with a message that names the rule id and the rule name.
+   5. The canary never turns on `--prune`. A rule that the canary leaves stays until an owner-approved run of `apply-alerts --prune` removes it (see step 7). The steady-state apply only logs "would prune".
+
+   SigNoz v0.105.1 facts, read from its source: (a) The only rule DELETE route is `DELETE /api/v1/rules/{id}`. `/api/v2/rules/{id}` has no route, and the web catch-all answers it with `200` and `index.html`. (b) `POST /api/v1/rules` stores the route policy of a rule with `name` equal to the rule id. (c) `DELETE /api/v1/rules/{id}` removes the rule row, the notification config and all route policies with that name in one database transaction. So the rule DELETE removes the route policy, and the canary still reads it back to catch an orphan. The canary before #1435 sent the v2 DELETE first and accepted its `200`. That matches the leftover rule `CanarySigNozPromqlPayload-39390600682`. It was not reproduced against production.
 5. **投递自证(#973;apply 后必跑,只读 → 显式发一条)**:
    ```bash
    uv run python -m invoke fr-observability.shared.verify-alert-routing   # 只读:受管规则都绑定了飞书渠道名,渠道存在且唯一,目录之外没有遗留的受管规则

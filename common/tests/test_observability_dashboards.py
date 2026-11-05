@@ -1176,57 +1176,333 @@ def test_signoz_alert_canary_retries_rule_id_resolution(monkeypatch) -> None:
     )
 
 
-def test_delete_rule_attempts_v1_when_v2_returns_404(monkeypatch) -> None:
-    """Verify _delete_rule calls /api/v1/rules/{id} when /api/v2/rules/{id} returns 404."""
-    spec = importlib.util.spec_from_file_location(
-        "signoz_alert_rule_probe_under_test", SIGNOZ_ALERT_PROBE
-    )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
+def test_delete_rule_falls_through_to_v2_when_v1_leaves_the_rule(monkeypatch) -> None:
+    """#1435: _delete_rule tries the v2 path when the v1 DELETE leaves the rule listed."""
+    module = _load_signoz_alert_probe()
+    listed_rules = [{"id": "test-rule-id", "alert": "Canary"}]
     calls = []
 
     def fake_request(_base_url, _api_key, *, method, path, payload=None):
         calls.append((method, path))
-        if method == "DELETE" and path == "/api/v2/rules/test-rule-id":
-            return {"ok": False, "status": 404, "body": "{}"}
         if method == "DELETE" and path == "/api/v1/rules/test-rule-id":
-            return {"ok": True, "status": 200, "body": "{}"}
-        return {"ok": False, "status": 500, "body": "{}"}
+            return {"ok": True, "status": 200, "body": "{}", "data": {}}
+        if method == "DELETE" and path == "/api/v2/rules/test-rule-id":
+            listed_rules.clear()
+            return {"ok": True, "status": 200, "body": "{}", "data": {}}
+        if (method, path) == ("GET", "/api/v1/rules"):
+            data = {"status": "success", "data": {"rules": list(listed_rules)}}
+            return {"ok": True, "status": 200, "body": "{}", "data": data}
+        if (method, path) == ("GET", "/api/v1/route_policies"):
+            data = {"status": "success", "data": []}
+            return {"ok": True, "status": 200, "body": "{}", "data": data}
+        return {"ok": False, "status": 500, "body": "{}", "data": None}
+
+    monkeypatch.setattr(module, "_signoz_request", fake_request)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    problem = module._delete_rule(
+        "https://signoz.example", "key", "test-rule-id", "Canary"
+    )
+
+    assert problem is None
+    assert calls.index(("DELETE", "/api/v1/rules/test-rule-id")) < calls.index(
+        ("DELETE", "/api/v2/rules/test-rule-id")
+    )
+
+
+def test_delete_rule_accepts_a_rule_that_is_already_gone(monkeypatch) -> None:
+    """#1435: DELETE answers 404 for an absent rule. The list read-back confirms it."""
+    module = _load_signoz_alert_probe()
+
+    def fake_request(_base_url, _api_key, *, method, path, payload=None):
+        if method == "DELETE":
+            return {"ok": False, "status": 404, "body": "{}", "data": None}
+        data = {"status": "success", "data": {"rules": []}}
+        if path == "/api/v1/route_policies":
+            data = {"status": "success", "data": []}
+        return {"ok": True, "status": 200, "body": "{}", "data": data}
 
     monkeypatch.setattr(module, "_signoz_request", fake_request)
 
-    deleted = module._delete_rule("https://signoz.example", "key", "test-rule-id")
-    assert deleted is True
-    assert ("DELETE", "/api/v2/rules/test-rule-id") in calls
-    assert ("DELETE", "/api/v1/rules/test-rule-id") in calls
+    assert (
+        module._delete_rule("https://signoz.example", "key", "test-rule-id", "Canary")
+        is None
+    )
 
 
-def test_delete_rule_falls_back_to_get_probe_when_delete_fails(monkeypatch) -> None:
-    """Verify _delete_rule probes rule presence via GET when DELETE calls fail."""
+def test_delete_rule_rejects_a_404_delete_while_the_rule_is_still_listed(
+    monkeypatch,
+) -> None:
+    """#1435: a DELETE status is no proof. A listed rule stays a failure."""
+    module = _load_signoz_alert_probe()
+
+    def fake_request(_base_url, _api_key, *, method, path, payload=None):
+        if method == "DELETE":
+            return {"ok": False, "status": 404, "body": "{}", "data": None}
+        rules = [{"id": "test-rule-id", "alert": "Canary"}]
+        data = {"status": "success", "data": {"rules": rules}}
+        return {"ok": True, "status": 200, "body": "{}", "data": data}
+
+    monkeypatch.setattr(module, "_signoz_request", fake_request)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    problem = module._delete_rule(
+        "https://signoz.example", "key", "test-rule-id", "Canary"
+    )
+
+    assert problem is not None
+    assert "test-rule-id" in problem
+    assert "Canary" in problem
+    assert "status=404" in problem
+
+
+# ---------------------------------------------------------------------------
+# #1435: the canary must read the rule back after DELETE
+
+
+def _load_signoz_alert_probe():
     spec = importlib.util.spec_from_file_location(
         "signoz_alert_rule_probe_under_test", SIGNOZ_ALERT_PROBE
     )
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
 
-    calls = []
 
-    def fake_request(_base_url, _api_key, *, method, path, payload=None):
-        calls.append((method, path))
-        if method == "DELETE":
-            return {"ok": False, "status": 404, "body": "{}"}
-        if method == "GET" and path == "/api/v1/rules/test-rule-id":
-            return {"ok": False, "status": 404, "body": "{}"}
-        return {"ok": False, "status": 500, "body": "{}"}
+_CANARY_ENV = {"SIGNOZ_API_KEY": "key", "GITHUB_RUN_ID": "1435", "ENV": "production"}
+_CANARY_RULE_NAME = "CanarySigNozPromqlPayload-1435"
+_CANARY_RULE_ID = "0199aaaa-1435-7000-8000-000000000001"
+_CANARY_POLICY_ID = "0199aaaa-1435-7000-8000-0000000000a1"
 
-    monkeypatch.setattr(module, "_signoz_request", fake_request)
 
-    deleted = module._delete_rule("https://signoz.example", "key", "test-rule-id")
-    assert deleted is True
-    assert ("GET", "/api/v1/rules/test-rule-id") in calls
+class _FakeSigNozV01051:
+    """In-memory model of the SigNoz v0.105.1 API that the canary probe calls.
+
+    Facts taken from the SigNoz v0.105.1 source:
+    - ``DELETE /api/v1/rules/{id}`` is the only rule DELETE route. There is no
+      ``/api/v2/rules/{id}`` route, so the web catch-all answers a DELETE there with
+      ``200`` and the HTML of ``index.html`` and changes nothing.
+    - ``POST /api/v1/rules`` stores a route policy whose ``name`` is the rule id.
+    - ``DELETE /api/v1/rules/{id}`` removes the rule and its route policies together.
+    - ``GET /api/v1/rules`` lists ``{"data": {"rules": [...]}}``;
+      ``GET /api/v1/route_policies`` lists ``{"data": [...]}``.
+
+    ``v1_delete`` selects what the v1 DELETE does:
+    ``removes`` (rule and policy), ``ignores`` (answers OK, changes nothing) or
+    ``keeps_policy`` (removes the rule only). The first ``ignored_deletes`` v1 DELETE
+    calls answer OK and change nothing, whatever ``v1_delete`` says.
+    """
+
+    def __init__(
+        self,
+        *,
+        v1_delete: str = "removes",
+        ignored_deletes: int = 0,
+        rules_unreadable_after_delete: bool = False,
+        policies_unreadable: bool = False,
+        stores_legacy_rule_shape: bool = False,
+        html_list: str | None = None,
+    ) -> None:
+        self.v1_delete = v1_delete
+        self.ignored_deletes = ignored_deletes
+        self.rules_unreadable_after_delete = rules_unreadable_after_delete
+        self.policies_unreadable = policies_unreadable
+        self.stores_legacy_rule_shape = stores_legacy_rule_shape
+        self.html_list = html_list
+        self.rules: dict[str, dict] = {}
+        self.policies: dict[str, dict] = {}
+        self.v1_delete_calls = 0
+        self.v2_delete_calls = 0
+        self.calls: list[tuple[str, str]] = []
+
+    @staticmethod
+    def _reply(status: int, data=None, body: str | None = None) -> dict:
+        text = body if body is not None else json.dumps(data)
+        return {
+            "ok": 200 <= status < 300,
+            "status": status,
+            "body": text,
+            "data": data,
+        }
+
+    def request(self, _base_url, _api_key, *, method, path, payload=None):
+        self.calls.append((method, path))
+        if (method, path) == ("GET", "/api/v1/channels"):
+            channel = {"id": "chan-id", "name": "infra2-feishu-alerts-production"}
+            return self._reply(200, {"status": "success", "data": [channel]})
+        if (method, path) == ("POST", "/api/v1/rules"):
+            rule = json.loads(json.dumps(payload))
+            if self.stores_legacy_rule_shape:
+                rule["condition"]["compositeQuery"].pop("queries", None)
+            rule["id"] = _CANARY_RULE_ID
+            self.rules[_CANARY_RULE_ID] = rule
+            self.policies[_CANARY_POLICY_ID] = {
+                "id": _CANARY_POLICY_ID,
+                "name": _CANARY_RULE_ID,
+                "expression": f'threshold.name == "x" && ruleId == "{_CANARY_RULE_ID}"',
+            }
+            created = {"id": _CANARY_RULE_ID, "alert": rule["alert"]}
+            return self._reply(200, {"status": "success", "data": created})
+        if (method, path) == ("GET", "/api/v1/rules"):
+            if self.rules_unreadable_after_delete and self.v1_delete_calls:
+                return self._reply(500, {"status": "error"}, body="database locked")
+            if self.html_list == "rules" and self.v1_delete_calls:
+                return self._reply(200, None, body="<!doctype html><html></html>")
+            listing = {"rules": list(self.rules.values())}
+            return self._reply(200, {"status": "success", "data": listing})
+        if (method, path) == ("GET", "/api/v1/route_policies"):
+            if self.policies_unreadable:
+                return self._reply(500, {"status": "error"}, body="database locked")
+            if self.html_list == "policies":
+                return self._reply(200, None, body="<!doctype html><html></html>")
+            data = {"status": "success", "data": list(self.policies.values())}
+            return self._reply(200, data)
+        if method == "DELETE" and path.startswith("/api/v2/rules/"):
+            self.v2_delete_calls += 1
+            return self._reply(200, None, body="<!doctype html><html></html>")
+        if method == "DELETE" and path.startswith("/api/v1/rules/"):
+            rule_id = path.rsplit("/", 1)[1]
+            self.v1_delete_calls += 1
+            if rule_id not in self.rules:
+                return self._reply(404, {"status": "error", "errorType": "not_found"})
+            ignored = self.v1_delete == "ignores" or (
+                self.v1_delete_calls <= self.ignored_deletes
+            )
+            if not ignored:
+                del self.rules[rule_id]
+                if self.v1_delete == "removes":
+                    self.policies = {
+                        key: value
+                        for key, value in self.policies.items()
+                        if value["name"] != rule_id
+                    }
+            return self._reply(200, {"status": "success", "data": "rule deleted"})
+        return self._reply(404, None, body="not found")
+
+
+def _run_canary(monkeypatch, capsys, fake: _FakeSigNozV01051) -> tuple[int, str, str]:
+    module = _load_signoz_alert_probe()
+    monkeypatch.setattr(module, "_signoz_request", fake.request)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+    code = module.main(dict(_CANARY_ENV))
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err
+
+
+def test_canary_passes_when_signoz_deletes_the_rule_and_its_route_policy(
+    monkeypatch, capsys
+) -> None:
+    """#1435: a server that deletes for real passes, and nothing stays behind."""
+    fake = _FakeSigNozV01051(v1_delete="removes")
+
+    code, out, err = _run_canary(monkeypatch, capsys, fake)
+
+    assert code == 0, err
+    assert f"SigNoz alert canary passed: {_CANARY_RULE_NAME}" in out
+    assert fake.rules == {}
+    assert fake.policies == {}
+
+
+def test_canary_fails_when_delete_answers_ok_but_the_rule_stays(
+    monkeypatch, capsys
+) -> None:
+    """#1435: production answered OK to DELETE and kept the rule. That must fail."""
+    fake = _FakeSigNozV01051(v1_delete="ignores")
+
+    code, out, err = _run_canary(monkeypatch, capsys, fake)
+
+    assert code == 1
+    assert "passed" not in out
+    assert _CANARY_RULE_ID in err
+    assert _CANARY_RULE_NAME in err
+    assert 2 <= fake.v1_delete_calls <= 5  # retried, and the retry is bounded
+    assert _CANARY_RULE_ID in fake.rules  # the rule really is still there
+
+
+def test_canary_retries_delete_until_the_rule_is_gone(monkeypatch, capsys) -> None:
+    """#1435: a DELETE that is ignored once is retried, then verified by read-back."""
+    fake = _FakeSigNozV01051(v1_delete="removes", ignored_deletes=1)
+
+    code, out, err = _run_canary(monkeypatch, capsys, fake)
+
+    assert code == 0, err
+    assert "SigNoz alert canary passed" in out
+    assert fake.v1_delete_calls == 2
+    assert fake.rules == {}
+    assert fake.policies == {}
+
+
+def test_canary_fails_when_the_rule_list_cannot_be_read_after_delete(
+    monkeypatch, capsys
+) -> None:
+    """#1435: a read error after DELETE is a failure. It must not count as gone."""
+    fake = _FakeSigNozV01051(v1_delete="removes", rules_unreadable_after_delete=True)
+
+    code, out, err = _run_canary(monkeypatch, capsys, fake)
+
+    assert code == 1
+    assert "passed" not in out
+    assert _CANARY_RULE_ID in err
+    assert _CANARY_RULE_NAME in err
+
+
+def test_canary_fails_when_the_route_policy_survives_the_rule_delete(
+    monkeypatch, capsys
+) -> None:
+    """#1435: the rule is gone but its route policy is not. That must fail by id."""
+    fake = _FakeSigNozV01051(v1_delete="keeps_policy")
+
+    code, out, err = _run_canary(monkeypatch, capsys, fake)
+
+    assert code == 1
+    assert "passed" not in out
+    assert _CANARY_POLICY_ID in err
+    assert _CANARY_RULE_ID in err
+    assert fake.rules == {}
+    assert _CANARY_POLICY_ID in fake.policies
+
+
+def test_canary_fails_when_route_policies_cannot_be_read(monkeypatch, capsys) -> None:
+    """#1435: a read error on the route policy list is a failure, not a pass."""
+    fake = _FakeSigNozV01051(v1_delete="removes", policies_unreadable=True)
+
+    code, out, err = _run_canary(monkeypatch, capsys, fake)
+
+    assert code == 1
+    assert "passed" not in out
+    assert _CANARY_RULE_ID in err
+    assert "route polic" in err
+
+
+@pytest.mark.parametrize("html_list", ["rules", "policies"])
+def test_canary_fails_when_a_list_read_answers_ok_without_a_list(
+    monkeypatch, capsys, html_list: str
+) -> None:
+    """#1435: a 200 that is not a list (for example the web page) is not "empty"."""
+    fake = _FakeSigNozV01051(v1_delete="removes", html_list=html_list)
+
+    code, out, err = _run_canary(monkeypatch, capsys, fake)
+
+    assert code == 1
+    assert "passed" not in out
+    assert _CANARY_RULE_ID in err
+    assert "not a list" in err
+
+
+def test_canary_names_the_leftover_rule_when_the_v5_check_fails(
+    monkeypatch, capsys
+) -> None:
+    """#1435: the v5 failure path also reports a cleanup that did not happen."""
+    fake = _FakeSigNozV01051(v1_delete="ignores", stores_legacy_rule_shape=True)
+
+    code, out, err = _run_canary(monkeypatch, capsys, fake)
+
+    assert code == 1
+    assert "passed" not in out
+    assert "v5 PromQL" in err
+    assert "NOT removed" in err
+    assert _CANARY_RULE_ID in err
 
 
 def test_routing_check_flags_stale_canary_probe_rules() -> None:
