@@ -165,7 +165,9 @@ def test_renaming_service_dir_without_dot_fails_unmapped_and_floor_guards(
         for v in violations
     )
     assert any(
-        v.startswith("platform: read 0 config-hash inputs, below floor 350")
+        # `${DATA_PATH}` template mounts still count as inputs (#1438), so not exactly 0.
+        v.startswith("platform: read ")
+        and v.endswith("config-hash inputs, below floor 350")
         for v in violations
     )
 
@@ -271,7 +273,9 @@ def test_rewriting_mounts_and_contexts_to_bare_var_fails_dockerfile_canary_and_f
 
     violations = deploy_guard_audit.floor_violations(composes, root=tmp_path)
     assert any(
-        v.startswith("platform: read 0 config-hash inputs, below floor 350")
+        # `${DATA_PATH}` template mounts still count as inputs (#1438), so not exactly 0.
+        v.startswith("platform: read ")
+        and v.endswith("config-hash inputs, below floor 350")
         for v in violations
     )
     assert deploy_guard_audit.main(root=tmp_path) == 1

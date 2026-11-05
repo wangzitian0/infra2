@@ -79,6 +79,7 @@ services:
       timeout: 5s
       retries: 3
     labels:
+      - "iac.mount-sha256.config.xml=${IAC_MOUNT_SHA256_CONFIG_XML:-}"
       - "traefik.enable=false"
 
 networks:

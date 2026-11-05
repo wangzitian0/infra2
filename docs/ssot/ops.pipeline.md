@@ -367,6 +367,16 @@ runtime hash 不匹配才重部署,source hash/ref 由 T3 drift 检测。local a
 bind-mount 文件、Dockerfile 及其 `COPY`/`ADD` 源,防止代码/Vault 模板变了但 compose 文本没变时被跳过。
 runtime hash 相同但 source identity 缺失/非法时执行一次 migration reconcile;source identity 已有效且
 fingerprint 未变时保留其原 deploy ref,不因无关的新 release 重启服务。
+Host-rendered files (#1438): a compose bind mount `${DATA_PATH}/<name>` mounts a file that the service
+`deploy.py` renders from `<name>` or `<name>.tmpl` in the service directory. The compose mount is the only
+declaration. Both config hashes read that template, so a template edit changes the hash and `sync` deploys.
+Docker Compose recreates a container only when its resolved compose config changes, so the deployer also
+passes the sha256 of the rendered bytes as the variable `IAC_MOUNT_SHA256_<NAME>`. The service reads the
+variable in the label `iac.mount-sha256.<name>`. A content change recreates only the services that mount
+that file. `Deployer.composing()` refuses to deploy when the compose needs a variable that is not set,
+and `tools/deploy_guard_audit.py` fails when a mounting service has no such label.
+The variables are not part of `IAC_CONFIG_HASH`, `IAC_SOURCE_CONFIG_HASH` or `IAC_DEPLOY_REF`.
+
 服务一旦声明 `runtime_only_config_keys`，必须显式实现不访问 secret backend 的
 `source_config_env_base`；合同测试枚举所有这类 Deployer，并校验 runtime-only key 不进入 source
 identity。

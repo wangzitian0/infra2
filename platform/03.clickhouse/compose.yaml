@@ -108,6 +108,9 @@ services:
       retries: 3
       start_period: 30s
     labels:
+      # Recreate this container when the rendered host file changes (#1438): compose
+      # keeps a container whose resolved config is unchanged. The deployer sets the sha256.
+      - "iac.mount-sha256.config.xml=${IAC_MOUNT_SHA256_CONFIG_XML:-}"
       - "traefik.enable=false"
 
 networks:

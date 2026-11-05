@@ -560,6 +560,8 @@ def test_promote_prod_refuses_a_tag_without_a_green_staging_soak() -> None:
     # and Layer 2 GitHub OIDC requires id-token: write (#1126)
     assert workflow["permissions"] == {
         "contents": "write",
+        "pull-requests": "write",
+        "issues": "write",
         "actions": "read",
         "id-token": "write",
     }
@@ -1130,3 +1132,470 @@ def test_sync_app_releases_cut_and_push_infra_tag(
     assert res["next_infra_tag"] == "v3.1.23"
     assert ["git", "tag", "v3.1.23"] in git_calls
     assert ["git", "push", "origin", "HEAD:main", "refs/tags/v3.1.23"] in git_calls
+
+
+def test_sync_app_releases_create_pr_pushes_branch_restores_head_and_opens_or_updates_pr(
+    monkeypatch, tmp_path
+) -> None:
+    """#1416 (Fix 1): --create-pr commits harness/repos.yaml + gitlinks, force-pushes
+    origin HEAD:refs/heads/<pr_branch>, resets the local checkout back to orig_head,
+    and opens a new PR (or updates an existing open PR) via gh."""
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.46\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.80\n",
+        encoding="utf-8",
+    )
+
+    def _fake_remote(repo_url: str, **_kw):
+        if "finance_report" in repo_url:
+            return (SHA, {"v0.2.46": "1" * 40, "v0.2.47": SHA})
+        return ("2" * 40, {"v0.2.80": "2" * 40})
+
+    monkeypatch.setattr(reconcile, "_query_remote_app_refs", _fake_remote)
+    monkeypatch.setattr(reconcile, "newest_release_tag", lambda **_kw: "v3.1.22")
+
+    calls: list[list[str]] = []
+    open_prs_response = "[]"
+
+    def _runner(cmd, **_kw):
+        argv = [str(x) for x in cmd]
+        calls.append(argv)
+        if argv == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout="orig123456\n", stderr=""
+            )
+        if argv[:3] == ["gh", "pr", "list"]:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=open_prs_response, stderr=""
+            )
+        if argv[:3] == ["gh", "pr", "create"]:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout="https://github.com/wangzitian0/infra2/pull/1501\n",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    res = reconcile.sync_app_releases(
+        tmp_path,
+        apply_repos_yaml=True,
+        sync_gitlinks=True,
+        create_pr=True,
+        pr_branch="chore/sync-app-releases",
+        runner=_runner,
+    )
+    assert res["pr_created"] is True
+    assert res["pr_updated"] is False
+    assert res["pr_url"] == "https://github.com/wangzitian0/infra2/pull/1501"
+    assert res["pr_number"] == 1501
+    assert res["pr_branch"] == "chore/sync-app-releases"
+    assert [
+        "git",
+        "push",
+        "--force-with-lease",
+        "origin",
+        "HEAD:refs/heads/chore/sync-app-releases",
+    ] in calls
+    assert ["git", "reset", "--hard", "orig123456"] in calls
+    assert any(c[:3] == ["gh", "pr", "create"] for c in calls)
+
+    # Second run when an open PR already exists -> updates via gh pr edit
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.46\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.80\n",
+        encoding="utf-8",
+    )
+    calls.clear()
+    open_prs_response = json.dumps(
+        [{"number": 1501, "url": "https://github.com/wangzitian0/infra2/pull/1501"}]
+    )
+    res2 = reconcile.sync_app_releases(
+        tmp_path,
+        apply_repos_yaml=True,
+        sync_gitlinks=True,
+        create_pr=True,
+        pr_branch="chore/sync-app-releases",
+        runner=_runner,
+    )
+    assert res2["pr_created"] is False
+    assert res2["pr_updated"] is True
+    assert res2["pr_number"] == 1501
+    assert any(c[:4] == ["gh", "pr", "edit", "1501"] for c in calls)
+
+
+_REAL_FR_HOOKS_MANIFEST_JSON = """\
+{
+  "schema_version": 1,
+  "service": "finance_report/app",
+  "slots": {
+    "smoke": {
+      "run": "BASE_URL=\\"$INFRA2_HOOK_APP_URL\\" bash tools/smoke_test.sh",
+      "timeout_seconds": 180
+    },
+    "preview_gate": {
+      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
+      "run": "BASE_URL=\\"$INFRA2_HOOK_APP_URL\\" bash tools/smoke_test.sh && eval \\"$(python tools/test_selection.py --stage preview_minimum_e2e --shell)\\" && pytest \\"${PREVIEW_MINIMUM_E2E_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$PREVIEW_MINIMUM_E2E_MARKER\\"",
+      "timeout_seconds": 600,
+      "required_env": [
+        "AI_API_KEY"
+      ],
+      "optional_env": [
+        "AI_PROVIDER",
+        "AI_BASE_URL",
+        "LARGE_MODEL",
+        "SMALL_MODEL",
+        "MULTIMODAL_MODEL"
+      ]
+    },
+    "staging_gate": {
+      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
+      "run": "BASE_URL=\\"$INFRA2_HOOK_APP_URL\\" bash tools/smoke_test.sh && eval \\"$(python tools/test_selection.py --stage staging_core_e2e --shell)\\" && pytest \\"${STAGING_CORE_E2E_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$STAGING_CORE_E2E_MARKER\\" && pytest tests/e2e/test_ai_provider_connectivity.py -v --tb=short -o addopts=\\"\\" && eval \\"$(python tools/test_selection.py --stage staging_ai_ocr --corpus canary --shell)\\" && pytest \\"${STAGING_AI_OCR_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$STAGING_AI_OCR_MARKER\\"",
+      "timeout_seconds": 1800,
+      "required_env": [
+        "AI_API_KEY"
+      ],
+      "optional_env": [
+        "AI_PROVIDER",
+        "AI_BASE_URL",
+        "LARGE_MODEL",
+        "SMALL_MODEL",
+        "MULTIMODAL_MODEL",
+        "TEST_USER_EMAIL",
+        "TEST_USER_PASSWORD"
+      ]
+    },
+    "scheduled_audit": {
+      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
+      "run": "eval \\"$(python tools/test_selection.py --stage staging_ai_ocr --corpus audit_replay --shell)\\" && pytest \\"${STAGING_AI_OCR_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$STAGING_AI_OCR_MARKER\\" && eval \\"$(python tools/test_selection.py --stage staging_ai_ocr --corpus core_journey --shell)\\" && pytest \\"${STAGING_AI_OCR_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$STAGING_AI_OCR_MARKER\\"",
+      "timeout_seconds": 2400,
+      "required_env": [
+        "AI_API_KEY"
+      ],
+      "optional_env": [
+        "AI_PROVIDER",
+        "AI_BASE_URL",
+        "LARGE_MODEL",
+        "SMALL_MODEL",
+        "MULTIMODAL_MODEL"
+      ]
+    }
+  }
+}
+"""
+
+_REAL_TA_HOOKS_MANIFEST_JSON = """\
+{
+  "schema_version": 1,
+  "service": "truealpha/app",
+  "slots": {
+    "smoke": {
+      "run": "uv run python tools/health_check.py \\"$APP_URL/api/health\\" \\"$APP_VERSION_REF\\" 36 && uv run python tools/surface_contract.py \\"$APP_URL\\"",
+      "timeout_seconds": 420,
+      "required_env": [
+        "APP_URL",
+        "APP_VERSION_REF"
+      ]
+    },
+    "preview_gate": {
+      "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps chromium",
+      "run": "uv run python tools/health_check.py \\"$APP_URL/api/health\\" \\"$APP_VERSION_REF\\" 36 && bash tools/warm_surface.sh \\"$APP_URL\\" / /research/rankings && (cd apps/app-web && TA_BASE_URL=\\"$APP_URL\\" node e2e/walk-tree.mjs) && uv run python tools/surface_contract.py --authenticated \\"$APP_URL\\"",
+      "timeout_seconds": 900,
+      "required_env": [
+        "APP_URL",
+        "APP_VERSION_REF",
+        "TA_EMAIL",
+        "TA_MEMBER_EMAIL",
+        "TA_PASSWORD",
+        "TA_MCP_TOKEN"
+      ]
+    },
+    "staging_gate": {
+      "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps chromium",
+      "run": "uv run python tools/health_check.py \\"$APP_URL/api/health\\" \\"$APP_VERSION_REF\\" 36 && bash tools/warm_surface.sh \\"$APP_URL\\" / /research/rankings && (cd apps/app-web && TA_BASE_URL=\\"$APP_URL\\" node e2e/walk-tree.mjs) && uv run python tools/surface_contract.py --authenticated \\"$APP_URL\\"",
+      "timeout_seconds": 900,
+      "required_env": [
+        "APP_URL",
+        "APP_VERSION_REF",
+        "TA_EMAIL",
+        "TA_MEMBER_EMAIL",
+        "TA_PASSWORD",
+        "TA_MCP_TOKEN"
+      ]
+    },
+    "scheduled_audit": {
+      "bootstrap": "uv sync --frozen",
+      "run": "uv run python tools/nightly_verdicts.py \\"$APP_URL/api/health\\" --environment \\"$ENVIRONMENT\\" --repo . && uv run python tools/surface_contract.py \\"$APP_URL\\"",
+      "timeout_seconds": 600,
+      "required_env": [
+        "APP_URL",
+        "ENVIRONMENT"
+      ]
+    }
+  }
+}
+"""
+
+
+def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
+    monkeypatch, tmp_path
+) -> None:
+    """#1416 (Fix 2): load the real repos/finance_report/runtime-hooks.manifest.json and
+    repos/truealpha/runtime-hooks.manifest.json contracts and execute execute_app_hook_slot
+    and run_post_deploy_app_hooks without mocking execute_app_hook_slot or build_hook_env."""
+    from common.deploy.app_contract import execute_app_hook_slot, load_hooks_manifest
+    from infra2_sdk.refs import ResolvedRef
+
+    # Prepare an isolated repo_root in tmp_path with repos/finance_report and repos/truealpha
+    # containing the exact verbatim manifests, and verify against on-disk submodules if checked out.
+    fr_sub = tmp_path / "repos" / "finance_report"
+    ta_sub = tmp_path / "repos" / "truealpha"
+    fr_sub.mkdir(parents=True, exist_ok=True)
+    ta_sub.mkdir(parents=True, exist_ok=True)
+    fr_manifest_path = fr_sub / "runtime-hooks.manifest.json"
+    ta_manifest_path = ta_sub / "runtime-hooks.manifest.json"
+    fr_manifest_path.write_text(_REAL_FR_HOOKS_MANIFEST_JSON, encoding="utf-8")
+    ta_manifest_path.write_text(_REAL_TA_HOOKS_MANIFEST_JSON, encoding="utf-8")
+
+    fr_manifest = load_hooks_manifest(fr_manifest_path)
+    ta_manifest = load_hooks_manifest(ta_manifest_path)
+
+    disk_fr = ROOT / "repos" / "finance_report" / "runtime-hooks.manifest.json"
+    disk_ta = ROOT / "repos" / "truealpha" / "runtime-hooks.manifest.json"
+    if disk_fr.is_file():
+        assert load_hooks_manifest(disk_fr).to_dict() == fr_manifest.to_dict()
+    if disk_ta.is_file():
+        assert load_hooks_manifest(disk_ta).to_dict() == ta_manifest.to_dict()
+
+    invocations: list[tuple[list[str], Path | None, dict[str, str]]] = []
+
+    def _capturing_runner(cmd, *, env=None, cwd=None, **_kw):
+        invocations.append((list(cmd), Path(cwd) if cwd else None, dict(env or {})))
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok\n", stderr="")
+
+    # 1. truealpha smoke (declares required_env: ["APP_URL", "APP_VERSION_REF"])
+    res_ta_smoke = execute_app_hook_slot(
+        ta_manifest,
+        "smoke",
+        app_url="https://truealpha-staging.truealpha.club",
+        environment="staging",
+        version_ref="v0.2.80",
+        cwd=ta_sub,
+        ambient_env={"PATH": "/usr/bin:/bin"},
+        runner=_capturing_runner,
+    )
+    assert res_ta_smoke.status == "pass"
+    _, ta_cwd, ta_env = invocations[-1]
+    assert ta_cwd == ta_sub
+    assert ta_env["APP_URL"] == "https://truealpha-staging.truealpha.club"
+    assert ta_env["APP_VERSION_REF"] == "v0.2.80"
+
+    # 2. truealpha scheduled_audit (declares required_env: ["APP_URL", "ENVIRONMENT"])
+    res_ta_audit = execute_app_hook_slot(
+        ta_manifest,
+        "scheduled_audit",
+        app_url="https://truealpha-staging.truealpha.club",
+        environment="staging",
+        version_ref="v0.2.80",
+        cwd=ta_sub,
+        ambient_env={"PATH": "/usr/bin:/bin"},
+        runner=_capturing_runner,
+    )
+    assert res_ta_audit.status == "pass"
+    _, _, ta_audit_env = invocations[-1]
+    assert ta_audit_env["ENVIRONMENT"] == "staging"
+
+    # 3. finance_report smoke (uses BASE_URL="$INFRA2_HOOK_APP_URL" bash tools/smoke_test.sh)
+    res_fr_smoke = execute_app_hook_slot(
+        fr_manifest,
+        "smoke",
+        app_url="https://report-staging.zitian.party",
+        environment="staging",
+        version_ref="v0.2.47",
+        cwd=fr_sub,
+        ambient_env={"PATH": "/usr/bin:/bin"},
+        runner=_capturing_runner,
+    )
+    assert res_fr_smoke.status == "pass"
+    _, fr_cwd, fr_env = invocations[-1]
+    assert fr_cwd == fr_sub
+    assert fr_env["INFRA2_HOOK_APP_URL"] == "https://report-staging.zitian.party"
+    assert fr_env["APP_URL"] == "https://report-staging.zitian.party"
+    assert fr_env["BASE_URL"] == "https://report-staging.zitian.party"
+
+    # 4. run_post_deploy_app_hooks uses repos/<app> cwd when present, or fetches temp checkout
+    (tmp_path / "harness").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "harness" / "repos.yaml").write_text(
+        (ROOT / "harness" / "repos.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
+    )
+    plan = build_plan(
+        ["harness/repos.yaml"],
+        repo_root=tmp_path,
+        app_release_tags={
+            "finance_report/app": "v0.2.47",
+            "truealpha/app": "v0.2.80",
+        },
+    )
+    applied = [
+        reconcile.DeployCommand(
+            service="finance_report/app", deploy_type="staging", argv=["true"]
+        ),
+        reconcile.DeployCommand(
+            service="truealpha/app", deploy_type="staging", argv=["true"]
+        ),
+    ]
+    invocations.clear()
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    hook_results = reconcile.run_post_deploy_app_hooks(
+        plan,
+        applied,
+        repo_root=tmp_path,
+        after="v3.1.24",
+        target_env="staging",
+        manifest_fetcher=lambda url: (
+            fr_manifest_path.read_bytes()
+            if "finance_report" in url
+            else ta_manifest_path.read_bytes()
+        ),
+        runner=_capturing_runner,
+        record_issues=False,
+    )
+    assert [r["status"] for r in hook_results] == ["pass", "pass"]
+    assert hook_results[0]["cwd"] == str(fr_sub)
+    assert hook_results[1]["cwd"] == str(ta_sub)
+
+
+def test_record_app_hook_issue_trail_opens_and_closes_app_issues() -> None:
+    """#1416 (Fix 3): record_app_hook_issue_trail opens an issue on the target App repo
+    when a post-deploy hook fails and closes it when the hook passes on a subsequent run."""
+
+    class _FakeIssueApi:
+        def __init__(self, repo: str) -> None:
+            self.repo = repo
+            self.issues: list[dict] = []
+            self.comments: list[tuple[int, str]] = []
+            self.closed: list[int] = []
+
+        def open_issues(self, *, with_body: bool = False) -> list[dict]:
+            return list(self.issues)
+
+        def create(self, title: str, body: str, labels) -> int:
+            num = len(self.issues) + 10
+            self.issues.append({"number": num, "title": title, "body": body})
+            return num
+
+        def comment(self, number: int, body: str) -> None:
+            self.comments.append((number, body))
+
+        def close(self, number: int) -> None:
+            self.closed.append(number)
+
+    apis: dict[str, _FakeIssueApi] = {}
+
+    def _factory(repo: str, _token: str) -> _FakeIssueApi:
+        return apis.setdefault(repo, _FakeIssueApi(repo))
+
+    env = {
+        "GITHUB_TOKEN": "tok-123",
+        "GITHUB_EVENT_NAME": "schedule",
+        "GITHUB_REPOSITORY": "wangzitian0/infra2",
+    }
+    rc_fail = reconcile.record_app_hook_issue_trail(
+        [
+            {
+                "service": "truealpha/app",
+                "slot": "smoke",
+                "status": "fail",
+                "app_url": "https://truealpha-staging.truealpha.club",
+                "version_ref": "v0.2.80",
+                "summary": "run exited with code 1",
+                "stderr_tail": "HTTP 502 Bad Gateway",
+            }
+        ],
+        target_env="staging",
+        run_url="https://github.com/wangzitian0/infra2/actions/runs/999",
+        env=env,
+        issues_factory=_factory,
+    )
+    assert rc_fail == 0
+    assert "wangzitian0/truealpha" in apis
+    ta_api = apis["wangzitian0/truealpha"]
+    assert len(ta_api.issues) == 1
+    assert "app-hook:truealpha/app:smoke:staging" in ta_api.issues[0]["title"]
+
+    # Subsequent passing run closes the issue
+    rc_pass = reconcile.record_app_hook_issue_trail(
+        [
+            {
+                "service": "truealpha/app",
+                "slot": "smoke",
+                "status": "pass",
+                "app_url": "https://truealpha-staging.truealpha.club",
+                "version_ref": "v0.2.80",
+                "summary": "smoke passed",
+                "stderr_tail": "",
+            }
+        ],
+        target_env="staging",
+        run_url="https://github.com/wangzitian0/infra2/actions/runs/1000",
+        env=env,
+        issues_factory=_factory,
+    )
+    assert rc_pass == 0
+    assert ta_api.closed == [10]
+
+
+def test_audit_app_hooks_cli_validates_both_apps(monkeypatch, capsys, tmp_path) -> None:
+    """#1416 (Fix 3): --audit-app-hooks validates both finance_report/app and truealpha/app
+    runtime-hooks.manifest.json files (both from local checkouts and via remote fetch when
+    submodules are absent in CI) and exits 0."""
+    from infra2_sdk.refs import ResolvedRef
+
+    (tmp_path / "harness").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "harness" / "repos.yaml").write_text(
+        (ROOT / "harness" / "repos.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "fetch_hooks_manifest",
+        lambda svc, sha, **_kw: reconcile.RuntimeHooksManifest.from_dict(
+            json.loads(
+                _REAL_FR_HOOKS_MANIFEST_JSON
+                if svc == "finance_report/app"
+                else _REAL_TA_HOOKS_MANIFEST_JSON
+            )
+        ),
+    )
+    rc = main(["--repo-root", str(tmp_path), "--audit-app-hooks"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True
+    assert out["services"]["finance_report/app"]["ok"] is True
+    assert out["services"]["truealpha/app"]["ok"] is True
