@@ -230,12 +230,15 @@ def build_report(
     *,
     limit_days: int | None = None,
     title: str | None = None,
+    watchdog_outcome: str | None = None,
 ) -> str:
     """The production report, then one line per optional environment. A value in
     ``ledgers`` that is a string is the reason that environment could not be read."""
     prod_summary, staging_lines = _summarize_all_environments(
         ledgers, outages, now, limit_days=limit_days
     )
+    if watchdog_outcome is not None:
+        prod_summary["watchdog_outcome"] = watchdog_outcome
     lines = [build_report_message(prod_summary, title=title), *staging_lines]
     return "\n".join(lines)
 
@@ -283,8 +286,20 @@ def run(
     prod_summary, staging_lines = _summarize_all_environments(
         ledgers, outages, now, limit_days=limit_days
     )
+    # The daily job passes the outcome of its watchdog step. An empty value counts as
+    # unknown; an absent variable means the caller does not report a watchdog line.
+    watchdog_outcome = env.get("INFRA2_WATCHDOG_OUTCOME")
+    if watchdog_outcome is not None:
+        prod_summary["watchdog_outcome"] = watchdog_outcome
     message = as_report(
-        build_report(ledgers, outages, now, limit_days=limit_days, title=title)
+        build_report(
+            ledgers,
+            outages,
+            now,
+            limit_days=limit_days,
+            title=title,
+            watchdog_outcome=watchdog_outcome,
+        )
     )
     if env.get("INFRA2_STABILITY_REPORT_DRY_RUN") == "1":
         print(message)

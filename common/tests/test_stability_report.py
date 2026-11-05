@@ -734,3 +734,120 @@ def test_collect_weekly_stability_section_staging_failure_reported_without_raisi
         "staging (reported, never paged): ledger unavailable: staging ledger file not found"
         in lines[1]
     )
+
+
+# ---- #1433 (a) watchdog outcome of the same run; (d) cadence from window length ----
+
+
+def _run_dry(report, tmp_path, capsys, argv_tail, env):
+    paths = _files(tmp_path, _ledger("production"), _ledger("staging"), OUTAGES)
+    code = report.main(
+        [
+            "--ledger",
+            f"production={paths['production']}",
+            "--ledger",
+            f"staging={paths['staging']}",
+            "--outages",
+            paths["outages"],
+            *argv_tail,
+        ],
+        env={"INFRA2_STABILITY_REPORT_DRY_RUN": "1", **env},
+        now=NOW,
+    )
+    assert code == 0
+    return capsys.readouterr().out
+
+
+def test_negative_failed_watchdog_outcome_marks_the_day_red(tmp_path, capsys) -> None:
+    out = _run_dry(
+        _load_module(),
+        tmp_path,
+        capsys,
+        ["--daily"],
+        {"INFRA2_WATCHDOG_OUTCOME": "failure"},
+    )
+    assert "Watchdog: FAILED" in out
+    assert "RED" in out
+    assert "Overall availability:" in out  # probe data stays visible
+
+
+@pytest.mark.parametrize("outcome", ["", "skipped", "cancelled", "garbage"])
+def test_negative_missing_or_unknown_watchdog_outcome_is_not_green(
+    tmp_path, capsys, outcome
+) -> None:
+    out = _run_dry(
+        _load_module(),
+        tmp_path,
+        capsys,
+        ["--daily"],
+        {"INFRA2_WATCHDOG_OUTCOME": outcome},
+    )
+    assert "Watchdog: UNKNOWN" in out
+    assert "Watchdog: ok" not in out
+
+
+def test_positive_successful_watchdog_outcome_stays_green(tmp_path, capsys) -> None:
+    out = _run_dry(
+        _load_module(),
+        tmp_path,
+        capsys,
+        ["--daily"],
+        {"INFRA2_WATCHDOG_OUTCOME": "success"},
+    )
+    assert "Watchdog: ok" in out
+    assert "RED" not in out
+
+
+def test_card_template_follows_the_watchdog_outcome() -> None:
+    report = _load_module()
+    summary, lines = report._summarize_all_environments(
+        {"production": _ledger("production"), "staging": _ledger("staging")}, [], NOW
+    )
+    assert report.build_stability_card(summary)["header"]["template"] == "green"
+    templates = {}
+    for outcome in ("success", "failure", "skipped"):
+        card = report.build_stability_card(
+            {**summary, "watchdog_outcome": outcome}, staging_lines=lines
+        )
+        templates[outcome] = card["header"]["template"]
+    assert templates == {"success": "green", "failure": "red", "skipped": "orange"}
+
+
+def test_run_passes_the_watchdog_outcome_to_the_delivered_card(
+    tmp_path, monkeypatch
+) -> None:
+    report = _load_module()
+    paths = _files(
+        tmp_path, _ledger("production"), _ledger("staging"), {"ok": True, "outages": []}
+    )
+    cards: list[dict] = []
+    monkeypatch.setattr(
+        report, "deliver_out_of_band_card", lambda env, card, **kw: cards.append(card)
+    )
+    code = report.run(
+        {"INFRA2_WATCHDOG_OUTCOME": "failure"},
+        ledger_files={"production": paths["production"], "staging": paths["staging"]},
+        outages_file=paths["outages"],
+        now=NOW,
+    )
+    assert code == 0
+    assert cards[-1]["header"]["template"] == "red"
+
+
+@pytest.mark.parametrize(
+    ("days", "cadence"), [(1, "daily"), (7, "weekly"), (30, "monthly")]
+)
+def test_cadence_label_comes_from_the_window_length(
+    tmp_path, capsys, days, cadence
+) -> None:
+    report = _load_module()
+    prod = _ledger("production")
+    # A 30-day report needs 30 ledger days; reuse one day, the label reads the
+    # requested window through summary["window_days"].
+    summary, _ = report._summarize_all_environments(
+        {"production": prod}, [], NOW, limit_days=days
+    )
+    summary = {**summary, "window_days": days}
+    assert f"Infra2 {cadence} availability" in report.build_report_message(summary)
+    card = report.build_stability_card(summary)
+    assert f"Infra2 {cadence} availability" in card["header"]["title"]["content"]

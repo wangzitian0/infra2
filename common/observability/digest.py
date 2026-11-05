@@ -423,11 +423,17 @@ def summarize_watchdog_log_events(logs_by_run: Mapping[str, str]) -> dict[str, A
     missing_alert_evidence_run_count = 0
     failed_check_count = 0
     log_fetch_error_count = 0
+    dry_run_excluded_run_count = 0
 
     for log_text in logs_by_run.values():
         events = list(_parse_watchdog_events(log_text))
         if events:
             structured_event_run_count += 1
+        # A manual dry run sends nothing: it is no alert, so it cannot lack delivery
+        # evidence. Count it so the exclusion stays visible.
+        if any(event.get("dry_run") is True for event in events):
+            dry_run_excluded_run_count += 1
+            continue
         check_failures = [
             event
             for event in events
@@ -496,6 +502,7 @@ def summarize_watchdog_log_events(logs_by_run: Mapping[str, str]) -> dict[str, A
         "failed_check_count": failed_check_count,
         "failure_domain_counts": dict(sorted(failure_domains.items())),
         "log_fetch_error_count": log_fetch_error_count,
+        "dry_run_excluded_run_count": dry_run_excluded_run_count,
     }
 
 
@@ -829,6 +836,8 @@ def build_digest_message(
             f"Missing evidence: {audit['missing_alert_evidence_run_count']} | "
             f"Recall evidence: {audit['alert_recall_evidence_pct']}%"
         )
+        if audit.get("dry_run_excluded_run_count"):
+            lines.append(f"Dry runs excluded: {audit['dry_run_excluded_run_count']}")
         domains = audit.get("failure_domain_counts")
         if isinstance(domains, Mapping) and domains:
             domain_text = ", ".join(
@@ -1030,7 +1039,8 @@ def build_digest_card(
                 f"• **召回闭环**：应告警 **{audit.get('alertable_run_count', 0)}** 次 · "
                 f"投递成功 **{audit.get('delivery_success_run_count', 0)}** 次 · "
                 f"兜底建单 **{audit.get('fallback_issue_run_count', 0)}** 次 · "
-                f"缺失证据 **{audit.get('missing_alert_evidence_run_count', 0)}** 次"
+                f"缺失证据 **{audit.get('missing_alert_evidence_run_count', 0)}** 次 · "
+                f"试运行已排除 **{audit.get('dry_run_excluded_run_count', 0)}** 次"
             ),
             f"• **故障域分布**：{domain_text}",
         ]
@@ -1169,6 +1179,9 @@ def run_digest_cli(
     now = datetime.now(UTC)
     runs = active_runs_fetcher(repository, token, now=now, window_days=window_days)
     summary = summarize_weekly_runs(runs, now=now, window_days=window_days)
+    summary["ops_checks_jobs"] = summarize_ops_checks_jobs(
+        runs, now=now, window_days=window_days
+    )
     if _env_enabled(current_env, "WATCHDOG_DIGEST_REVIEW_LOGS"):
         max_logs = (
             _as_int(current_env.get("WATCHDOG_DIGEST_LOG_LIMIT")) or DEFAULT_MAX_LOGS
