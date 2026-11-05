@@ -315,14 +315,14 @@ def test_layering_rejects_a_second_pager_for_a_class() -> None:
     audit = _load_audit()
 
     def github_pages_service_health(inventory, signals):
-        signals["global.truealpha-scheduler-liveness.github"]["failure_class"] = (
+        signals["global.estate-scheduler-liveness.github"]["failure_class"] = (
             "service-health"
         )
 
     errors = _layering_errors(audit, github_pages_service_health)
 
     assert errors == [
-        "global.truealpha-scheduler-liveness.github: pages service-health from the "
+        "global.estate-scheduler-liveness.github: pages service-health from the "
         "github layer, but service-health is paged only by vps (one pager per "
         "failure class)"
     ]
@@ -353,12 +353,12 @@ def test_layering_debt_names_the_phase_that_pays_it() -> None:
     def no_phase(inventory, signals):
         # The registry carries no debt since #904/#908, so the fixture makes its
         # own: a real violation whose debt entry names no phase.
-        signals["global.truealpha-scheduler-liveness.github"]["failure_class"] = (
+        signals["global.estate-scheduler-liveness.github"]["failure_class"] = (
             "service-health"
         )
         inventory["relayering_debt"].append(
             {
-                "signal_id": "global.truealpha-scheduler-liveness.github",
+                "signal_id": "global.estate-scheduler-liveness.github",
                 "reason": "moved by a later phase",
             }
         )

@@ -160,6 +160,7 @@ services:
       - secrets:/secrets:ro
       - ${DATA_PATH:-/data/bootstrap/iac-runner}/workspace:/workspace
       - ${SSH_DIR_PATH:-/root/.ssh}:/host_ssh:ro
+      - /etc/dokploy/logs:/etc/dokploy/logs:ro
     networks:
       - dokploy-network
     healthcheck:

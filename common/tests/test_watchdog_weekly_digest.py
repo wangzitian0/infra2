@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -923,7 +923,8 @@ def test_fetch_recent_runs_skips_push_and_pr_events_without_fetching_jobs(
         now=now,
     )
     assert [run["id"] for run in runs] == [12]
-    assert requested_job_runs == ["12"]
+    assert requested_job_runs == ["12"]  # one jobs call per candidate run
+    assert runs[0]["jobs"] and runs[0]["jobs"][0]["name"] == digest.WATCHDOG_JOB_NAME
 
 
 def test_summarize_ops_checks_jobs_and_render_in_message_and_card() -> None:
@@ -963,23 +964,93 @@ def test_summarize_ops_checks_jobs_and_render_in_message_and_card() -> None:
         },
     }
 
-    summary = {
-        "week_start_utc": "2026-06-02",
-        "week_end_utc": "2026-06-09",
-        "total_runs": 2,
-        "success_count": 1,
-        "failure_count": 1,
-        "cancelled_count": 0,
-        "other_count": 0,
-        "success_rate_pct": 50.0,
-        "ops_checks_jobs": ops_jobs,
-    }
-    msg = digest.build_digest_message(summary, "wangzitian0/infra2")
-    assert "Ops-checks scheduled jobs:" in msg
-    assert "- Check infra2 host and alert bridge: 1/1 ok (fail=0)" in msg
-    assert "- Facet & config-hash reconcile: 0/1 ok (fail=1)" in msg
 
-    card = digest.build_digest_card(summary, "wangzitian0/infra2")
-    card_blob = json.dumps(card, ensure_ascii=False)
+def test_run_digest_cli_renders_ops_checks_jobs_section() -> None:
+    """#1433: the real entry point wires the ops-checks job summary into text and card."""
+    digest = _load_module()
+    created = (datetime.now(UTC) - timedelta(hours=6)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    runs = [
+        {
+            "id": 1,
+            "name": "Ops Checks",
+            "created_at": created,
+            "conclusion": "success",
+            "jobs": [
+                {"name": "watchdog", "conclusion": "success"},
+                {"name": "deploy-v2-canary", "conclusion": "success"},
+                {"name": "digest", "conclusion": "skipped"},
+            ],
+        },
+        {
+            "id": 2,
+            "name": "Ops Checks",
+            "created_at": created,
+            "conclusion": "failure",
+            "jobs": [
+                {"name": "watchdog", "conclusion": "success"},
+                {"name": "deploy-v2-canary", "conclusion": "failure"},
+            ],
+        },
+    ]
+    texts: list[str] = []
+    cards: list[dict] = []
+
+    def deliver(env, text, *, card=None) -> None:
+        texts.append(text)
+        cards.append(card)
+
+    rc = digest.run_digest_cli(
+        {
+            "GITHUB_TOKEN": "tok",
+            "WATCHDOG_DIGEST_REVIEW_LOGS": "0",
+            "WATCHDOG_DIGEST_ESTATE_HEALTH": "0",
+            "WATCHDOG_DIGEST_STALE_ISSUES": "0",
+            "WATCHDOG_DIGEST_INCLUDE_STABILITY": "0",
+        },
+        argv=[],
+        runs_fetcher=lambda *a, **kw: runs,
+        deliverer=deliver,
+    )
+    assert rc == 0
+    assert "Ops-checks scheduled jobs:" in texts[-1]
+    assert "- watchdog: 2/2 ok (fail=0)" in texts[-1]
+    assert "- deploy-v2-canary: 1/2 ok (fail=1)" in texts[-1]
+    assert "Ops Checks:" not in texts[-1]
+    assert "digest:" not in texts[-1]  # a skipped job did not run
+    card_blob = json.dumps(cards[-1], ensure_ascii=False)
     assert "**🧭 Ops-Checks 巡检作业全貌 (Scheduled Jobs)**" in card_blob
-    assert "Facet & config-hash reconcile" in card_blob
+    assert "deploy-v2-canary" in card_blob
+
+
+def test_dry_run_watchdog_logs_are_not_alerts_without_delivery() -> None:
+    """#1433: a manual dry run (dry_run=true) is not an alert missing delivery evidence."""
+    digest = _load_module()
+    dry = "\n".join(
+        [
+            '{"event":"watchdog.check","name":"x","status":"fail","failure_domain":"d"}',
+            '{"event":"watchdog.run.complete","status":"fail","failure_count":1,"dry_run":true}',
+        ]
+    )
+    real = "\n".join(
+        [
+            '{"event":"watchdog.check","name":"x","status":"fail","failure_domain":"d"}',
+            '{"event":"watchdog.delivery.success","status":"ok","failure_count":1}',
+            '{"event":"watchdog.run.complete","status":"fail","failure_count":1,"dry_run":false}',
+        ]
+    )
+    audit = digest.summarize_watchdog_log_events({"dry": dry, "real": real})
+    assert audit["dry_run_excluded_run_count"] == 1
+    assert audit["alertable_run_count"] == 1
+    assert audit["missing_alert_evidence_run_count"] == 0
+    assert audit["alert_recall_evidence_pct"] == 100.0
+    only_dry = digest.summarize_watchdog_log_events({"dry": dry})
+    assert only_dry["alertable_run_count"] == 0
+    assert only_dry["dry_run_excluded_run_count"] == 1
+    summary = {
+        **digest.summarize_weekly_runs([], now=datetime.now(UTC)),
+        "log_audit": audit,
+    }
+    assert "Dry runs excluded: 1" in digest.build_digest_message(summary, "o/r")
+    assert "试运行已排除 **1**" in json.dumps(
+        digest.build_digest_card(summary, "o/r"), ensure_ascii=False
+    )
