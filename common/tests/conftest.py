@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import subprocess
+
 import pytest
+
+# The function a ``OnePasswordBackend`` built without a ``runner`` holds. Read before any test
+# replaces ``subprocess.run``.
+_REAL_SUBPROCESS_RUN = subprocess.run
 
 # The variables that choose the deployment environment of a process. ``get_env`` has no
 # default (#1039), so a test that needs an environment sets it, and no test inherits one
@@ -26,24 +32,20 @@ def _no_ambient_deployment_environment(monkeypatch):
     environ.reset_env_cache()
 
 
-def _op_cli_is_absent(argv, *_args, **_kwargs):
-    """A runner that behaves as a machine without the ``op`` binary."""
-    raise FileNotFoundError(2, "the op CLI is not available in unit tests", argv[0])
-
-
 @pytest.fixture(autouse=True)
 def _no_ambient_op_cli(monkeypatch):
     """Keep unit tests off the 1Password CLI of the developer shell.
 
     CI has no ``op`` binary, so ``OpSecrets`` reads an empty item there. A shell with ``op``
     made the same tests read the real vault and wait up to 30 s each (#1453). A backend
-    built with its own ``runner`` is unchanged."""
+    with its own ``runner`` is unchanged."""
     from infra2_sdk.secrets import OnePasswordBackend
 
-    real_init = OnePasswordBackend.__init__
+    real_op = OnePasswordBackend._op
 
-    def init(self, *args, runner=None, **kwargs):
-        runner = _op_cli_is_absent if runner is None else runner
-        real_init(self, *args, runner=runner, **kwargs)
+    def guarded_op(self, *args, **kwargs):
+        if self._run is _REAL_SUBPROCESS_RUN:
+            raise FileNotFoundError(2, "the op CLI is not available in unit tests")
+        return real_op(self, *args, **kwargs)
 
-    monkeypatch.setattr(OnePasswordBackend, "__init__", init)
+    monkeypatch.setattr(OnePasswordBackend, "_op", guarded_op)
