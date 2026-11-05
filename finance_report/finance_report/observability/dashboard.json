@@ -1,6 +1,6 @@
 {
   "title": "Finance Report — Backend & Frontend",
-  "description": "Baseline observability dashboard for finance_report (#373). Covers backend error rate + latency and browser frontend web-vitals + exceptions, sourced from the shared SigNoz collector. Applied via `invoke fr-observability.shared.apply-dashboard`. Services are distinguished by service.name; environments by deployment.environment.",
+  "description": "Baseline observability dashboard for finance_report (#373). Covers backend error rate + latency and browser frontend web-vitals + exceptions, sourced from the shared SigNoz collector. Applied via `invoke fr-observability.shared.apply-dashboard`. Services are distinguished by service.name; environments by deployment.environment.name.",
   "tags": [
     "finance-report",
     "infra2",
@@ -11,10 +11,10 @@
     "deployment_environment": {
       "type": "QUERY",
       "name": "deployment_environment",
-      "description": "deployment.environment (production / staging / pr-N)",
+      "description": "deployment.environment.name (production / staging / pr-N)",
       "multiSelect": true,
       "showALLOption": true,
-      "queryValue": "SELECT DISTINCT resources_string['deployment.environment'] FROM signoz_logs.distributed_logs_v2 WHERE resources_string['deployment.environment'] != ''"
+      "queryValue": "SELECT DISTINCT resources_string['deployment.environment.name'] FROM signoz_logs.distributed_logs_v2 WHERE resources_string['deployment.environment.name'] != ''"
     }
   },
   "widgets": [
@@ -35,7 +35,7 @@
                 }
               ],
               "filter": {
-                "expression": "(service.name = 'finance-report-backend' AND severity_text IN ['ERROR', 'FATAL'] AND deployment.environment IN $deployment_environment)"
+                "expression": "(service.name = 'finance-report-backend' AND severity_text IN ['ERROR', 'FATAL'] AND deployment.environment.name IN $deployment_environment)"
               },
               "having": {
                 "expression": ""
@@ -75,7 +75,7 @@
                 }
               ],
               "filter": {
-                "expression": "(service.name = 'finance-report-backend' AND deployment.environment IN $deployment_environment)"
+                "expression": "(service.name = 'finance-report-backend' AND deployment.environment.name IN $deployment_environment)"
               },
               "having": {
                 "expression": ""
@@ -114,7 +114,7 @@
                 }
               ],
               "filter": {
-                "expression": "(service.name = 'finance-report-backend' AND kind_string = 'Server' AND deployment.environment IN $deployment_environment)"
+                "expression": "(service.name = 'finance-report-backend' AND kind_string = 'Server' AND deployment.environment.name IN $deployment_environment)"
               },
               "having": {
                 "expression": ""
@@ -153,7 +153,7 @@
                 }
               ],
               "filter": {
-                "expression": "(service.name = 'finance-report-backend' AND hasError = true AND kind_string = 'Server' AND deployment.environment IN $deployment_environment)"
+                "expression": "(service.name = 'finance-report-backend' AND hasError = true AND kind_string = 'Server' AND deployment.environment.name IN $deployment_environment)"
               },
               "having": {
                 "expression": ""
@@ -193,7 +193,7 @@
                 }
               ],
               "filter": {
-                "expression": "(service.name = 'finance-report-backend' AND deployment.environment IN $deployment_environment)"
+                "expression": "(service.name = 'finance-report-backend' AND deployment.environment.name IN $deployment_environment)"
               },
               "having": {
                 "expression": ""
@@ -233,7 +233,7 @@
                 }
               ],
               "filter": {
-                "expression": "(service.name = 'finance-report-backend' AND deployment.environment IN $deployment_environment)"
+                "expression": "(service.name = 'finance-report-backend' AND deployment.environment.name IN $deployment_environment)"
               },
               "having": {
                 "expression": ""
@@ -273,7 +273,7 @@
                 }
               ],
               "filter": {
-                "expression": "(service.name = 'finance-report-frontend' AND name = 'documentLoad' AND deployment.environment IN $deployment_environment)"
+                "expression": "(service.name = 'finance-report-frontend' AND name = 'documentLoad' AND deployment.environment.name IN $deployment_environment)"
               },
               "having": {
                 "expression": ""
@@ -312,7 +312,7 @@
                 }
               ],
               "filter": {
-                "expression": "(service.name = 'finance-report-frontend' AND deployment.environment IN $deployment_environment) AND web_vital.name EXISTS"
+                "expression": "(service.name = 'finance-report-frontend' AND deployment.environment.name IN $deployment_environment) AND web_vital.name EXISTS"
               },
               "groupBy": [
                 {
@@ -358,7 +358,7 @@
                 }
               ],
               "filter": {
-                "expression": "(service.name = 'finance-report-frontend' AND name = 'exception' AND deployment.environment IN $deployment_environment)"
+                "expression": "(service.name = 'finance-report-frontend' AND name = 'exception' AND deployment.environment.name IN $deployment_environment)"
               },
               "having": {
                 "expression": ""
@@ -398,7 +398,7 @@
                 }
               ],
               "filter": {
-                "expression": "(service.name = 'finance-report-backend' AND deployment.environment IN $deployment_environment)"
+                "expression": "(service.name = 'finance-report-backend' AND deployment.environment.name IN $deployment_environment)"
               },
               "groupBy": [
                 {
@@ -449,7 +449,7 @@
                 }
               ],
               "filter": {
-                "expression": "(service.name = 'finance-report-backend' AND deployment.environment IN $deployment_environment)"
+                "expression": "(service.name = 'finance-report-backend' AND deployment.environment.name IN $deployment_environment)"
               },
               "groupBy": [
                 {
@@ -495,7 +495,7 @@
                 }
               ],
               "filter": {
-                "expression": "(service.name = 'finance-report-backend' AND deployment.environment IN $deployment_environment)"
+                "expression": "(service.name = 'finance-report-backend' AND deployment.environment.name IN $deployment_environment)"
               },
               "having": {
                 "expression": ""
@@ -534,7 +534,7 @@
                 }
               ],
               "filter": {
-                "expression": "(service.name = 'finance-report-backend' AND deployment.environment IN $deployment_environment)"
+                "expression": "(service.name = 'finance-report-backend' AND deployment.environment.name IN $deployment_environment)"
               },
               "groupBy": [
                 {
@@ -580,7 +580,7 @@
                 }
               ],
               "filter": {
-                "expression": "(service.name = 'finance-report-backend' AND deployment.environment IN $deployment_environment)"
+                "expression": "(service.name = 'finance-report-backend' AND deployment.environment.name IN $deployment_environment)"
               },
               "groupBy": [
                 {
