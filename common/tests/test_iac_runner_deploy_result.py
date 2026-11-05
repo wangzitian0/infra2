@@ -22,6 +22,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 IAC_RUNNER = ROOT / "bootstrap/06.iac_runner"
 DEPLOY_PLATFORM_WORKFLOW = ROOT / ".github/workflows/deploy.yml"
+RECONCILE_WORKFLOW = ROOT / ".github/workflows/reconcile-iac-inputs.yml"
 BOOTSTRAP_DEPLOY_SCRIPT = ROOT / "scripts/deploy_iac_runner_bootstrap.sh"
 IAC_RUNNER_VAULT_POLICY = IAC_RUNNER / "vault-policy.hcl"
 DEPLOY_SHA = "a" * 40
@@ -1140,13 +1141,21 @@ def test_run_invoke_task_does_not_resolve_vault_root_token_from_1password(
 
 
 def test_deploy_platform_triggers_on_iac_runner_bootstrap_changes() -> None:
-    """Infra-011.8: runner source changes enter the bootstrap-update workflow (via push paths)."""
-    workflow = DEPLOY_PLATFORM_WORKFLOW.read_text(encoding="utf-8")
+    """Infra-011.8 & #1416: deploy.yml has no on.push trigger; runner source changes
+    enter the release train (reconcile-iac-inputs.yml) before tools.reconcile_iac_inputs."""
+    deploy_spec = yaml.safe_load(DEPLOY_PLATFORM_WORKFLOW.read_text(encoding="utf-8"))
+    deploy_triggers = deploy_spec.get("on", deploy_spec.get(True)) or {}
+    assert "push" not in deploy_triggers
+    assert "workflow_dispatch" in deploy_triggers
 
-    assert '"bootstrap/06.iac_runner/**"' in workflow
-    assert "scripts/deploy_iac_runner_bootstrap.sh" in workflow
-    assert "Deploy IaC Runner bootstrap changes" in workflow
-    assert "Check IaC Runner health" in workflow
+    reconcile_text = RECONCILE_WORKFLOW.read_text(encoding="utf-8")
+    assert "bootstrap/06.iac_runner/*" in reconcile_text
+    assert "scripts/deploy_iac_runner_bootstrap.sh" in reconcile_text
+    assert "Deploy IaC Runner bootstrap changes" in reconcile_text
+    assert "Check IaC Runner health" in reconcile_text
+    assert reconcile_text.index(
+        "Deploy IaC Runner bootstrap changes"
+    ) < reconcile_text.index("python -m tools.reconcile_iac_inputs")
 
 
 def test_deploy_platform_no_longer_triggers_platform_service_deploys() -> None:
@@ -1377,14 +1386,41 @@ def _push_path_matches(rel: str, pattern: str) -> bool:
 
 
 def test_deploy_workflow_push_paths_cover_every_runner_dockerfile_copy_source() -> None:
-    """#1155: every file the runner image COPYs must match `deploy.yml` `on.push.paths`
-    so a change to `uv.lock` or `tools/sdk_requirement.py` triggers the bootstrap update."""
+    """#1155 & #1416: deploy.yml has no on.push trigger, and every file the runner image
+    COPYs matches the in-train bootstrap filter in reconcile-iac-inputs.yml so a change to
+    `uv.lock` or `tools/sdk_requirement.py` updates the runner during release promotion."""
+    import fnmatch
     from common.deploy.config_hash import _dockerfile_copy_sources
 
     spec = yaml.safe_load(DEPLOY_PLATFORM_WORKFLOW.read_text(encoding="utf-8"))
     triggers = spec.get("on", spec.get(True)) or {}
-    push_paths = (triggers.get("push") or {}).get("paths") or []
-    assert push_paths, "deploy.yml declares no on.push.paths"
+    assert "push" not in triggers, "deploy.yml must not declare on.push"
+
+    reconcile_wf = yaml.safe_load(RECONCILE_WORKFLOW.read_text(encoding="utf-8"))
+    reconcile_steps = reconcile_wf["jobs"]["reconcile"]["steps"]
+    run_script = next(
+        s["run"]
+        for s in reconcile_steps
+        if s.get("name") == "Reconcile changed IaC inputs"
+    )
+    non_comment_lines = [
+        line for line in run_script.splitlines() if not line.lstrip().startswith("#")
+    ]
+    train_patterns = [
+        pat.strip()
+        for line in non_comment_lines
+        if line.strip().endswith(")")
+        and "|" in line
+        and "bootstrap/06.iac_runner" in line
+        for pat in line.strip()[:-1].split("|")
+    ]
+    expected_patterns = [
+        "bootstrap/06.iac_runner/*",
+        "scripts/deploy_iac_runner_bootstrap.sh",
+        "uv.lock",
+        "tools/sdk_requirement*.py",
+    ]
+    assert train_patterns == expected_patterns
 
     compose = yaml.safe_load((IAC_RUNNER / "compose.yaml").read_text(encoding="utf-8"))
     builds = _service_builds(compose)
@@ -1396,9 +1432,12 @@ def test_deploy_workflow_push_paths_cover_every_runner_dockerfile_copy_source() 
         assert files, f"{name}: no COPY source found"
         for path in files:
             rel = path.relative_to(ROOT).as_posix()
-            assert any(_push_path_matches(rel, pat) for pat in push_paths), (
-                f"{rel} is COPYed by the {name} image but matches no on.push.paths "
-                f"entry in deploy.yml ({push_paths})"
+            assert any(
+                fnmatch.fnmatch(rel, pat) or _push_path_matches(rel, pat)
+                for pat in train_patterns
+            ), (
+                f"{rel} is COPYed by the {name} image but matches no bootstrap "
+                f"pattern in reconcile-iac-inputs.yml ({train_patterns})"
             )
 
 
