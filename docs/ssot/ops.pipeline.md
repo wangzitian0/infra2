@@ -175,20 +175,52 @@ A retry runs in the same run and on the same tag. It never starts a new run and 
 - **Budget.** At most 2 retries per unit (3 runs in all), for staging and production alike, with a pause of 30 s and
   then 90 s. The retry runs the same command line, so the tag, the `--iac-ref` and the `--version-ref` do not change.
   `deploy_v2` itself sends a runner request once; no second layer retries.
+- **Time cost.** A retry adds a pause of 30 s (retry 1) or 90 s (retry 2), up to 120 s per unit, plus one more run of the
+  unit for each retry. Each run keeps its own `--timeout`, and an attempt that ends in `runner_not_found` already took at
+  least 90 s. The 15-minute release budget (`Pipeline time contract`) is exceeded whenever a retry happens. That is a
+  pipeline defect to read in the run summary (`Unit retries`), not a reason to skip the retry. A timeout is not retried.
 - **Which failures.** `common.deploy.transient_failure.classify_failure` reads the failure verdict (the text from the
-  last `deploy_v2 failed:` line). A deterministic marker wins and the unit is not retried: an auth error, a health
-  check after a good pull, a changed config hash, a config error. A transient marker earns a retry: DNS or network
-  (`server misbehaving`, `i/o timeout`, `TLS handshake timeout`), a registry 5xx, a runner transport blip, and a runner
-  that lost (`not_found`) or interrupted a deploy. An unrecognised failure is not retried.
+  LAST `deploy_v2 failed:` line) in this order:
+  1. A unit that wrote to the compose is never retried (see App units below).
+  2. A deterministic marker wins: an auth error, a health check after a good pull, a changed config hash, a config error,
+     a rollback or circuit-breaker message (`circuit breaker tripped`, `manual intervention required`).
+  3. A transient marker earns a retry: DNS or network (`server misbehaving`, `i/o timeout`, `TLS handshake timeout`), a
+     registry 5xx, a runner transport blip, and a runner that lost (`not_found`) or interrupted a deploy. Two patterns are
+     narrow. A 5xx phrase (`502 Bad Gateway`) counts only on a line that names a registry or a pull (`ghcr.io`, `/v2/`,
+     `registry`, `pull`, `manifest`); a version probe or a GitHub API call that returns 502 is not retried. The glibc
+     `Temporary failure in name resolution` counts only inside a `deploy_v2 failed:` verdict; a stray CI-side line is
+     not retried. The Go resolver text (`server misbehaving`) comes from Docker on the host and counts anywhere.
+  4. An unrecognised failure is not retried.
+- **App units.** An app unit goes through `common.deploy.promote.deploy`. After its first write to the compose,
+  `promote` prints `deploy_v2 rollout started:` (`ROLLOUT_STARTED_MARKER`). From then on a failure triggers the automatic
+  rollback, which writes `ROLLBACK_ATTEMPTS=n` into the compose env; the third consecutive rollback trips the circuit
+  breaker (`max_rollback_attempts=2`): a P0 alert, no rollback, and the new `IMAGE_TAG` left in the env while the old
+  containers run. A re-run of an app unit that already wrote to the compose would add one rollback restart and one
+  re-promote restart per attempt and walk the count to the breaker. So the train does not retry any unit whose failed
+  attempt printed the rollout marker, and it records `rollout_started` and `rolled_back` (an `Action: rolled_back` or
+  `rollback_failed` notification) on every unit result. An app unit retries only when it fails before that line: the
+  secret supply through the runner, the image-manifest check, the preflight. A platform unit goes through the runner and
+  never prints the marker, so it keeps its retry. A rollout that fails on a Dokploy-side pull therefore fails the app unit
+  once, with one rollback, as it did before #1439.
 - **Record.** Every attempt is written to the result JSON as `attempts: [{n, cause, at}]` (`cause` is why that attempt
   failed, `null` when it succeeded), logged to stderr as `reconcile retry: ...`, listed in the run summary under
-  `Unit retries`, and counted in the failure alert of a unit that stays red.
-- **Idempotency.** A platform unit is a signed `/deploy` request with the same coordinates, so the runner answers it with
-  the same `deployment_id`. It serves a remembered success and re-runs a remembered failure or `interrupted` record. The
-  sync of each service then asks the config-hash gate (§5.3): a service whose hash, source identity, containers and
-  recorded checkout match is skipped, and any other service is deployed. The skip also requires that the newest Dokploy
-  deployment record of the compose is not in `error`. An app unit re-promotes the same commit and image to the same
-  environment, which is the end state of a manual re-run.
+  `Unit retries`, and counted in the failure alert of a unit that stays red. The unit result also carries
+  `rollout_started` and `rolled_back`.
+- **Idempotency of a platform unit.** The unit is a signed `/deploy` request with the same coordinates, so the runner
+  answers it with the same `deployment_id`. It serves a remembered success and re-runs a remembered failure or
+  `interrupted` record. The sync of each service then asks the config-hash gate (§5.3): a service whose hash, source
+  identity, containers and recorded checkout match is skipped, and any other service is deployed. The skip also requires
+  that the newest Dokploy deployment record of the compose is a completed success (`done`). A record that is `running`,
+  `queued`, `error`, `cancelled` or without a status means do not skip, because a runner killed after Dokploy started its
+  deploy leaves the hash, the checkout and the old containers matching while the deploy has not finished or can still
+  fail on the pull. The block lasts one sync: the forced redeploy writes a newer `done` record. No record, or a list that
+  cannot be read, keeps the skip.
+- **Idempotency of an app unit.** There is no hash skip. A retry before the rollout started changes nothing in the
+  compose, so a repeat is safe. After the rollout started the unit is not retried.
+- **Manual dispatch.** `deploy.yml` `workflow_dispatch type=staging` runs `python -m tools.deploy_v2` directly, not the
+  train. It lost the one re-submit that #666 gave a staging `deploy_v2` whose runner was recreated between the request
+  and the poll: it fails and a person dispatches it again. Release-train callers are covered by this budget.
+  `app-deploy-request.yml` is retired.
 - **Production marker.** The `production/<tag>` marker advances only after every unit of the tag succeeded, a unit that
   succeeded on a retry included. A unit that stays red after its retries stops the run and the marker does not move.
 
@@ -301,7 +333,7 @@ post-merge 部署被 GitHub Actions `concurrency` 串行化,调 IaC Runner 前�
 完成 sync 结果,不只是请求被接受**。操作坐标是 `(env, exact_ref, normalized_service_set)`:服务集合是身份的一部分,
 不是日志附属字段;同一 release 并发部署不同服务不得互相命中 cache / in-flight / status。
 不走公网 Cloudflare 的 `wait=true`(会在 sync 完成前 524)。
-A `not_found` answer that lasts longer than 90 seconds is a lost request; the client fails and names the cause and the deployment id. Only a real status resets the 90-second timer: a gateway error does not. An `interrupted` answer (§5.1.1) is raised at once as a second transient runner fault. `deploy_v2` sends a request once and never re-submits it itself; the release train retries the failed unit (§3.3.1).
+A `not_found` answer that lasts longer than 90 seconds is a lost request; the client fails and names the cause and the deployment id. Only a real status resets the 90-second timer: a gateway error does not. An `interrupted` answer (§5.1.1) is raised at once as a second transient runner fault. `deploy_v2` sends a request once and never re-submits it itself; the release train retries the failed unit (§3.3.1). A manual `deploy.yml` `workflow_dispatch type=staging` is not the train: since #1439 it no longer re-submits a request that the runner lost (the #666 staging re-submit moved to the train), so a person dispatches it again.
 
 ### 5.1 Endpoints
 
@@ -321,9 +353,20 @@ failed (run 41967457003, 2026-11-05). The file holds the keys in flight and the 
 - **Write.** Every state change writes the whole file in one locked step: a temp file in the same directory, `fsync`, then
   `os.replace`. A reader or a crash sees the old complete file or the new one. A write error never fails a deploy; it is
   logged and `/health` reports `deploy_state.persistent=false` with `last_error`.
-- **Load.** The runner loads the file at start. A record past its age limit is dropped (600 s for a result, 3600 s for an
-  `interrupted` record) and at most 64 records stay. An unreadable file or an unknown `version` is kept as
-  `deploy_state.json.corrupt` and the runner starts empty.
+- **Load.** The runner loads the file at start and the loader never raises: the runner must boot whatever the file holds.
+  A record past its age limit is dropped (600 s for a result, 3600 s for an `interrupted` record) and at most 64 records
+  stay. A file over 8 MiB, bytes that are not UTF-8, JSON nested past the recursion limit, an unknown `version` or a
+  document of the wrong shape is moved to `deploy_state.json.corrupt-<time>` (the newest 3 copies stay) and the runner
+  starts empty and logs an error once. A file that cannot be read at all (permissions, I/O error) is left in place.
+  A restored record keeps its `env`, `ref`, services, `version_ref` and `action`, so a `secrets-supply` record does not
+  come back as a `sync` key (#649).
+- **Worker-only restart.** gunicorn kills a worker by its pid; the `invoke` child of its sync keeps running. The
+  deployment lock (`/tmp/deployment.lock`, `sync_runner.file_lock(share_with_children=True)`) is passed to every
+  `invoke` child (`pass_fds`), so the OS keeps it held until the child ends, and the child clears the inheritable flag at
+  once so a grandchild does not hold it. The retry of the `interrupted` deploy starts a thread that waits for that lock
+  (at most `DEPLOYMENT_LOCK_WAIT_SECONDS`, 3600 s), then syncs: the config-hash gate decides on fresh state. The poll sees
+  `in_progress` meanwhile, so no second sync of a service runs beside the orphan. After the wait limit the sync ends as a
+  failed sync (`Sync not started: another process still holds the deployment lock ...`), which the train does not retry.
 - **Interrupted.** A deploy that was in flight at the restart lost its thread. Its record reads back as
   `{"status": "interrupted", ...}` on `/deploy/status` (HTTP 200), never as `not_found`. `interrupted` is not a result and
   the runner does not serve it for a duplicate request: the next `/deploy` with the same coordinates runs again.

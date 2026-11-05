@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import re
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1623,3 +1625,202 @@ def test_parse_remote_config_identity_ignores_commented_env_lines():
         {"env": "# IAC_CONFIG_HASH=commented\nIAC_CONFIG_HASH=active-hash\n"}
     )
     assert identity["runtime_hash"] == "active-hash"
+
+
+# --- #1439: the release train must never retry into the rollback circuit breaker -----
+#
+# An app unit goes through `deploy()`. A failure after `deploy_compose` rolls production
+# back and adds 1 to ROLLBACK_ATTEMPTS in the compose env; the third consecutive rollback
+# trips the breaker (no rollback, a P0 alert, the new IMAGE_TAG left in the env). The
+# release train re-runs a failed unit, so a retry of an app unit that already rolled back
+# would walk the counter to the breaker. These tests drive the REAL `deploy()` against a
+# stateful fake Dokploy through the REAL `run_deploy_commands`.
+
+_APP_ENV_BEFORE = (
+    "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\n"
+    "VAULT_ADDR=https://vault.zitian.party\nIMAGE_TAG=v0.1.40\n"
+)
+_DNS_ERROR_RECORD = (
+    "lookup ghcr.io on 127.0.0.53:53: server misbehaving"  # what Dokploy's pull logged
+)
+
+
+class _StatefulAppDokploy(FakeDokploy):
+    """A fake whose compose env survives between attempts, as the real one does."""
+
+    def __init__(self, env_str: str, *, failing_rollout: bool, **kw):
+        self.state = {"env_str": env_str}
+        self.failing_rollout = failing_rollout
+        super().__init__(
+            deployments=self._records,
+            env_str=lambda _self: self.state["env_str"],
+            **kw,
+        )
+
+    def _records(self, _self):
+        status = "error" if self.failing_rollout else "done"
+        records = [{"deploymentId": "dep-old", "status": "done"}]
+        for index in range(len(self.deployed)):
+            record = {"deploymentId": f"dep-{index}", "status": status}
+            if self.failing_rollout:
+                record["errorMessage"] = _DNS_ERROR_RECORD
+            records.append(record)
+        return records
+
+    def update_compose_env(
+        self, compose_id, env_vars=None, env_str=None, *, replace=False
+    ):
+        super().update_compose_env(
+            compose_id, env_vars=env_vars, env_str=env_str, replace=replace
+        )
+        merged = dict(env_vars or {})
+        merged.setdefault("VAULT_ROLE_ID", "r")
+        merged.setdefault("VAULT_SECRET_ID", "s")
+        merged.setdefault("VAULT_ADDR", "https://vault.zitian.party")
+        self.state["env_str"] = "\n".join(f"{k}={v}" for k, v in merged.items())
+        return {}
+
+    @property
+    def rollback_attempts(self) -> int:
+        for line in self.state["env_str"].splitlines():
+            if line.startswith("ROLLBACK_ATTEMPTS="):
+                return int(line.split("=", 1)[1])
+        return 0
+
+
+def _app_unit_runner(client, notifications, *, image_ref="v0.1.41", before=None):
+    """A `subprocess.run` stand-in that runs the real deploy() and prints what
+    tools.deploy_v2 prints: the failure verdict on stderr, exit 1."""
+    import contextlib
+    import io
+    import subprocess
+
+    calls: list[int] = []
+
+    def runner(argv, **_kwargs):
+        calls.append(len(calls) + 1)
+        stderr = io.StringIO()
+        returncode = 0
+        with contextlib.redirect_stderr(stderr):
+            try:
+                if before is not None:
+                    before(len(calls))
+                dp.deploy(
+                    "staging",
+                    FULL_SHA,
+                    image_ref=image_ref,
+                    domain="zitian.party",
+                    client=client,
+                    wait=True,
+                    timeout=5,
+                    max_rollback_attempts=2,
+                    http_get=lambda _u: (
+                        200,
+                        json.dumps({"status": "ok", "version": image_ref}),
+                    ),
+                    rollback_notifier=notifications.append,
+                )
+            except RuntimeError as exc:
+                print(f"deploy_v2 failed: {exc}", file=sys.stderr)
+                returncode = 1
+        return subprocess.CompletedProcess(
+            argv, returncode, "{}" if returncode == 0 else "", stderr.getvalue()
+        )
+
+    runner.calls = calls
+    return runner
+
+
+def _app_command():
+    from tools.reconcile_iac_inputs import DeployCommand
+
+    return DeployCommand(
+        service="finance_report/app", deploy_type="prod", argv=["deploy_v2", "app"]
+    )
+
+
+def _run_train(runner):
+    from tools.reconcile_iac_inputs import run_deploy_commands
+
+    sleeps: list[float] = []
+    results = run_deploy_commands(
+        [_app_command()], runner=runner, sleep=sleeps.append, clock=lambda: "t"
+    )
+    return results, sleeps
+
+
+def test_an_app_unit_that_rolled_back_is_not_retried_by_the_release_train(monkeypatch):
+    """Reviewer finding 1 on 4c8d50b: three attempts of a failing app rollout ran the
+    rollback twice and tripped the breaker on the third. The failed attempt rolled
+    production back, so the unit is not retried and the counter stays what ONE attempt
+    leaves."""
+    monkeypatch.setattr(dp.time, "sleep", lambda _s: None)
+    notifications: list[dict] = []
+    single = _StatefulAppDokploy(_APP_ENV_BEFORE, failing_rollout=True)
+    _app_unit_runner(single, notifications)(["one attempt, no train"])
+    one_attempt_counter = single.rollback_attempts
+    one_attempt_highest = max(n.get("attempt", 0) for n in notifications)
+    assert (one_attempt_counter, one_attempt_highest) == (1, 1)  # precondition
+
+    notifications.clear()
+    client = _StatefulAppDokploy(_APP_ENV_BEFORE, failing_rollout=True)
+    runner = _app_unit_runner(client, notifications)
+    results, sleeps = _run_train(runner)
+
+    assert runner.calls == [1], "an app unit that rolled back must not run again"
+    assert sleeps == []
+    assert results[0]["returncode"] == 1
+    assert results[0]["rollout_started"] is True
+    assert results[0]["rolled_back"] is True
+    assert results[0]["attempts"][0]["cause"].startswith("rollout_started:")
+    assert len(results[0]["attempts"]) == 1
+    assert client.rollback_attempts <= one_attempt_counter
+    # The highest rollback attempt number any notification carried: the breaker trips at 3.
+    assert max(n.get("attempt", 0) for n in notifications) <= one_attempt_highest
+    assert [n["action"] for n in notifications] == ["rolled_back"]
+    assert not any(n.get("circuit_breaker_tripped") for n in notifications)
+
+
+def test_a_pre_rollout_pull_failure_is_retried_and_no_rollback_runs(monkeypatch):
+    """Failures before any rollout step (the registry or DNS check, the preflight) leave
+    production untouched. They keep the retry, and the rollback count stays 0."""
+    monkeypatch.setattr(dp.time, "sleep", lambda _s: None)
+    notifications: list[dict] = []
+    client = _StatefulAppDokploy(_APP_ENV_BEFORE, failing_rollout=False)
+
+    def fail_first_preflight(attempt: int) -> None:
+        if attempt == 1:
+            raise RuntimeError(
+                "image ghcr.io/wangzitian0/app:v0.1.41: dial tcp: "
+                "lookup ghcr.io on 127.0.0.53:53: server misbehaving"
+            )
+
+    runner = _app_unit_runner(client, notifications, before=fail_first_preflight)
+    results, sleeps = _run_train(runner)
+
+    assert runner.calls == [1, 2]
+    assert sleeps == [30.0]
+    assert results[0]["returncode"] == 0
+    assert results[0]["attempts"][0]["cause"].startswith("dns:")
+    assert results[0]["rolled_back"] is False
+    assert notifications == []
+    assert client.rollback_attempts == 0
+    assert len(client.deployed) == 1, "one rollout, no rollback deploy"
+
+
+def test_a_breaker_left_at_two_by_an_earlier_run_is_not_retried(monkeypatch):
+    """The count is already 2, so attempt 1 trips the breaker. The breaker message carries
+    the original `server misbehaving` text; it must not make the train re-promote."""
+    monkeypatch.setattr(dp.time, "sleep", lambda _s: None)
+    notifications: list[dict] = []
+    client = _StatefulAppDokploy(
+        _APP_ENV_BEFORE + "ROLLBACK_ATTEMPTS=2\n", failing_rollout=True
+    )
+    runner = _app_unit_runner(client, notifications)
+
+    results, sleeps = _run_train(runner)
+
+    assert runner.calls == [1] and sleeps == []
+    assert results[0]["returncode"] == 1
+    assert [n["action"] for n in notifications] == ["circuit_breaker_tripped"]
+    assert "circuit breaker tripped" in results[0]["stderr"]

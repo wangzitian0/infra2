@@ -10,6 +10,8 @@ import os
 import re
 import subprocess
 import sys
+import time
+import contextlib
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -39,6 +41,11 @@ if _CHECKOUT_PATH not in sys.path:
 
 WORKSPACE_LOCK_FILE = Path("/tmp/workspace.lock")
 DEPLOYMENT_LOCK_FILE = Path("/tmp/deployment.lock")
+# How long a sync waits for the deployment lock before it reports a failed sync. A
+# sync that a restarted gunicorn worker left behind holds the lock until it ends (#1439).
+DEPLOYMENT_LOCK_WAIT_SECONDS = float(
+    os.environ.get("DEPLOYMENT_LOCK_WAIT_SECONDS") or "3600"
+)
 INVOKE_BOOTSTRAP = (
     "import platform, runpy, sys; "
     "sys.path.insert(0, '.'); "
@@ -392,18 +399,66 @@ class SyncResult:
         }
 
 
+class LockTimeout(RuntimeError):
+    """A lock stayed held for longer than the wait limit."""
+
+
+# Descriptors of locks that the invoke children inherit (see file_lock). Only the thread
+# that holds the deployment lock adds or removes one, so a plain list is enough.
+_shared_lock_fds: list[int] = []
+
+
 @contextmanager
-def file_lock(lock_path: Path, description: str):
-    """Acquire exclusive file lock to prevent concurrent operations."""
+def file_lock(
+    lock_path: Path,
+    description: str,
+    *,
+    share_with_children: bool = False,
+    wait_seconds: float | None = None,
+):
+    """Acquire exclusive file lock to prevent concurrent operations.
+
+    ``wait_seconds`` limits the wait (None waits for ever, the old behaviour); a lock that
+    stays held raises :class:`LockTimeout`.
+
+    ``share_with_children`` makes the lock outlive this process while an invoke child
+    runs (#1439). A flock belongs to the open file description, and ``run_invoke_task``
+    passes this descriptor to the child, so the lock is released only when the last holder
+    exits. gunicorn kills a worker by its pid and the invoke child keeps running; without
+    this the lock died with the worker, the restarted worker reported the deploy
+    `interrupted`, and the retry started a second sync beside the first.
+    """
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_file = open(lock_path, "w")
     logger.info(f"Acquiring {description} lock...")
     try:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        if wait_seconds is None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        else:
+            deadline = time.monotonic() + wait_seconds
+            while True:
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        raise LockTimeout(
+                            f"another process still holds the {description} lock after "
+                            f"{wait_seconds:g}s (a child of an earlier runner worker may "
+                            "still run)"
+                        ) from None
+                    time.sleep(min(1.0, max(0.05, wait_seconds / 10)))
         logger.info(f"{description} lock acquired")
-        yield
+        if share_with_children:
+            _shared_lock_fds.append(lock_file.fileno())
+        try:
+            yield
+        finally:
+            if share_with_children:
+                _shared_lock_fds.remove(lock_file.fileno())
     finally:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        with contextlib.suppress(OSError):
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
         lock_file.close()
         logger.info(f"{description} lock released")
 
@@ -739,14 +794,26 @@ def run_invoke_task(
     env_vars.setdefault("COLUMNS", "200")
     logger.info("Invoke child env: %s", safe_invoke_env_summary(env_vars))
 
+    # A held deployment lock goes to the child (file_lock, #1439), so that the lock lives as
+    # long as the child does, even if this worker is killed. The child drops the
+    # inheritable flag at once: a grandchild that it forks and execs must not keep the lock.
+    lock_fds = tuple(_shared_lock_fds)
+    bootstrap = INVOKE_BOOTSTRAP
+    spawn_options: dict = {}
+    if lock_fds:
+        release = "".join(f"os.set_inheritable({fd}, False); " for fd in lock_fds)
+        bootstrap = f"import os; {release}{INVOKE_BOOTSTRAP}"
+        spawn_options["pass_fds"] = lock_fds
+
     try:
         result = subprocess.run(
-            [sys.executable, "-P", "-c", INVOKE_BOOTSTRAP, task_name],
+            [sys.executable, "-P", "-c", bootstrap, task_name],
             cwd=repo_path,
             capture_output=True,
             text=True,
             env=env_vars,
             timeout=DEPLOY_TIMEOUT,
+            **spawn_options,
         )
         return {
             "task": task_name,
@@ -849,143 +916,166 @@ def sync_services(
 ) -> SyncResult:
     """Sync the specified services with deployment lock."""
     requested_services = sorted(services)
-    with file_lock(DEPLOYMENT_LOCK_FILE, "deployment"):
-        logger.info(
-            f"Starting sync for services: {services} (env={deploy_env}, ref={ref})"
+    try:
+        with file_lock(
+            DEPLOYMENT_LOCK_FILE,
+            "deployment",
+            share_with_children=True,
+            wait_seconds=DEPLOYMENT_LOCK_WAIT_SECONDS,
+        ):
+            return _sync_services_locked(
+                services, requested_services, ref, deploy_env, version_ref, action
+            )
+    except LockTimeout as exc:
+        logger.error("Sync not started: %s", exc)
+        return SyncResult(
+            env=deploy_env,
+            ref=ref,
+            requested_services=requested_services,
+            repo_updated=False,
+            error=f"Sync not started: {exc}",
         )
 
-        repo_path = WORKSPACE / REPO_NAME
-        current_head = resolve_checkout_head(repo_path) if repo_path.exists() else None
 
-        if not update_repo(ref=ref):
-            logger.error("Failed to update repo, aborting sync")
+def _sync_services_locked(
+    services: set[str],
+    requested_services: list[str],
+    ref: str | None,
+    deploy_env: str,
+    version_ref: str | None,
+    action: str | None,
+) -> SyncResult:
+    """The body of sync_services; the caller holds the deployment lock."""
+    logger.info(f"Starting sync for services: {services} (env={deploy_env}, ref={ref})")
+
+    repo_path = WORKSPACE / REPO_NAME
+    current_head = resolve_checkout_head(repo_path) if repo_path.exists() else None
+
+    if not update_repo(ref=ref):
+        logger.error("Failed to update repo, aborting sync")
+        return SyncResult(
+            env=deploy_env,
+            ref=ref,
+            requested_services=requested_services,
+            repo_updated=False,
+            error="Failed to update repo",
+        )
+
+    resolved_head = resolve_checkout_head(repo_path)
+    if ref and EXACT_COMMIT_RE.fullmatch(ref):
+        if resolved_head != ref.lower():
+            logger.error(
+                "Checked-out HEAD does not match requested ref: expected=%s actual=%s",
+                ref.lower(),
+                resolved_head or "unavailable",
+            )
             return SyncResult(
                 env=deploy_env,
                 ref=ref,
                 requested_services=requested_services,
                 repo_updated=False,
-                error="Failed to update repo",
+                error="Checked-out HEAD does not match requested exact ref",
             )
 
-        resolved_head = resolve_checkout_head(repo_path)
-        if ref and EXACT_COMMIT_RE.fullmatch(ref):
-            if resolved_head != ref.lower():
-                logger.error(
-                    "Checked-out HEAD does not match requested ref: expected=%s actual=%s",
-                    ref.lower(),
-                    resolved_head or "unavailable",
-                )
-                return SyncResult(
-                    env=deploy_env,
-                    ref=ref,
-                    requested_services=requested_services,
-                    repo_updated=False,
-                    error="Checked-out HEAD does not match requested exact ref",
-                )
+    if "__all__" in services:
+        services = set(_all_services())
+        logger.info("Syncing all services due to common/ change")
+    elif not services:
+        # If services set is empty, determine changes dynamically via git diff
+        if current_head and resolved_head and current_head != resolved_head:
+            res_diff = subprocess.run(
+                ["git", "diff", "--name-only", current_head, resolved_head],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if res_diff.returncode == 0:
+                changed_files = res_diff.stdout.splitlines()
+                services = get_changed_services_from_files(changed_files)
+                _log_fanout_decision(changed_files, services)
+                if "__all__" in services:
+                    services = set(_all_services())
 
-        if "__all__" in services:
+        if not services:
+            # If still empty (fresh clone or no detected changes), fallback to all
             services = set(_all_services())
-            logger.info("Syncing all services due to common/ change")
-        elif not services:
-            # If services set is empty, determine changes dynamically via git diff
-            if current_head and resolved_head and current_head != resolved_head:
-                res_diff = subprocess.run(
-                    ["git", "diff", "--name-only", current_head, resolved_head],
-                    cwd=repo_path,
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
+            logger.info("No changes detected or fresh clone; syncing all services")
+
+    results: list[ServiceSyncResult] = []
+    task_map = _service_task_map()  # discovered once; reused for every service below
+    for service in sorted(services):
+        task_name = task_map.get(service)
+
+        if task_name is None:
+            logger.info(f"Skipping {service} (no sync task configured)")
+            results.append(
+                ServiceSyncResult(
+                    service=service,
+                    task=None,
+                    success=True,
+                    skipped=True,
                 )
-                if res_diff.returncode == 0:
-                    changed_files = res_diff.stdout.splitlines()
-                    services = get_changed_services_from_files(changed_files)
-                    _log_fanout_decision(changed_files, services)
-                    if "__all__" in services:
-                        services = set(_all_services())
-
-            if not services:
-                # If still empty (fresh clone or no detected changes), fallback to all
-                services = set(_all_services())
-                logger.info("No changes detected or fresh clone; syncing all services")
-
-        results: list[ServiceSyncResult] = []
-        task_map = (
-            _service_task_map()
-        )  # discovered once; reused for every service below
-        for service in sorted(services):
-            task_name = task_map.get(service)
-
-            if task_name is None:
-                logger.info(f"Skipping {service} (no sync task configured)")
-                results.append(
-                    ServiceSyncResult(
-                        service=service,
-                        task=None,
-                        success=True,
-                        skipped=True,
-                    )
-                )
-                continue
-
-            extra = {"version_ref": version_ref} if version_ref else {}
-            if action and action != "sync":
-                extra["action"] = action
-            if resolved_head:
-                result = run_invoke_task(
-                    task_name, repo_path, deploy_env, resolved_head, **extra
-                )
-            else:
-                result = run_invoke_task(task_name, repo_path, deploy_env, **extra)
-            service_result = ServiceSyncResult(
-                service=service,
-                task=task_name,
-                success=bool(result["success"]),
-                stdout=str(result.get("stdout", "")),
-                stderr=str(result.get("stderr", "")),
             )
-            results.append(service_result)
+            continue
 
-            if service_result.success:
-                logger.info(f"✅ {service}: sync completed")
-                for line in service_result.verdict:
-                    logger.info(f"   {service}: {line}")
-            else:
-                logger.error(f"❌ {service}: sync failed")
-                diagnostic = diagnose_failure(
-                    service_result.stderr, service_result.stdout
-                )
-                logger.error(
-                    "Diagnostic: service=%s task=%s kind=%s summary=%s next=%s",
-                    service,
-                    task_name,
-                    diagnostic["error_kind"],
-                    diagnostic["summary"],
-                    diagnostic["next_action"],
-                )
-                logger.error(_tail_text(service_result.stderr))
+        extra = {"version_ref": version_ref} if version_ref else {}
+        if action and action != "sync":
+            extra["action"] = action
+        if resolved_head:
+            result = run_invoke_task(
+                task_name, repo_path, deploy_env, resolved_head, **extra
+            )
+        else:
+            result = run_invoke_task(task_name, repo_path, deploy_env, **extra)
+        service_result = ServiceSyncResult(
+            service=service,
+            task=task_name,
+            success=bool(result["success"]),
+            stdout=str(result.get("stdout", "")),
+            stderr=str(result.get("stderr", "")),
+        )
+        results.append(service_result)
 
-        sync_result = SyncResult(
-            env=deploy_env,
-            ref=ref,
-            requested_services=requested_services,
-            results=results,
-        )
-        logger.info(
-            "Sync complete: "
-            f"{sync_result.succeeded} succeeded, "
-            f"{sync_result.failed} failed, "
-            f"{sync_result.skipped} skipped"
-        )
-        for failure in sync_result.to_dict()["failure_summary"]:
+        if service_result.success:
+            logger.info(f"✅ {service}: sync completed")
+            for line in service_result.verdict:
+                logger.info(f"   {service}: {line}")
+        else:
+            logger.error(f"❌ {service}: sync failed")
+            diagnostic = diagnose_failure(service_result.stderr, service_result.stdout)
             logger.error(
-                "Failure summary: service=%s task=%s kind=%s summary=%s next=%s",
-                failure["service"],
-                failure["task"],
-                failure["error_kind"],
-                failure["summary"],
-                failure["next_action"],
+                "Diagnostic: service=%s task=%s kind=%s summary=%s next=%s",
+                service,
+                task_name,
+                diagnostic["error_kind"],
+                diagnostic["summary"],
+                diagnostic["next_action"],
             )
-        return sync_result
+            logger.error(_tail_text(service_result.stderr))
+
+    sync_result = SyncResult(
+        env=deploy_env,
+        ref=ref,
+        requested_services=requested_services,
+        results=results,
+    )
+    logger.info(
+        "Sync complete: "
+        f"{sync_result.succeeded} succeeded, "
+        f"{sync_result.failed} failed, "
+        f"{sync_result.skipped} skipped"
+    )
+    for failure in sync_result.to_dict()["failure_summary"]:
+        logger.error(
+            "Failure summary: service=%s task=%s kind=%s summary=%s next=%s",
+            failure["service"],
+            failure["task"],
+            failure["error_kind"],
+            failure["summary"],
+            failure["next_action"],
+        )
+    return sync_result
 
 
 def sync_services_by_version(

@@ -51,7 +51,12 @@ from common.deploy.dokploy_adapter import (
     read_deployment_log_tail,
     started_before_trigger,
 )
-from common.deploy.rollout import RolloutError, wait_for_deployment
+from common.deploy.rollout import (
+    ROLLBACK_EVENT_MARKER,
+    ROLLOUT_STARTED_MARKER,
+    RolloutError,
+    wait_for_deployment,
+)
 from infra2_sdk.deploy import VERSION_KEYS, default_http_get, poll_until_healthy
 
 
@@ -535,7 +540,7 @@ def _notify_rollback_event(
         f"- Manual intervention required: {bool(event.get('manual_intervention_required'))}"
     )
     print(
-        f"[AUDIT] rollback notification: {text.replace(chr(10), ' | ')}",
+        f"{ROLLBACK_EVENT_MARKER} {text.replace(chr(10), ' | ')}",
         file=sys.stderr,
     )
     if rollback_notifier is not None:
@@ -796,6 +801,15 @@ def _execute_dokploy_rollout(
             _deployment_ids(client.get_compose_deployments(compose_id))
             if wait
             else set()
+        )
+        # From here on this run writes to the compose. A failure after this line can leave
+        # a changed env, a rollback and a rollback count behind, so the release train does
+        # not run the unit again (#1439): a retry would walk the count to the circuit
+        # breaker (max_rollback_attempts), which switches the automatic rollback off.
+        print(
+            f"{ROLLOUT_STARTED_MARKER} {service} (compose {compose_id})",
+            file=sys.stderr,
+            flush=True,
         )
         if branch:
             client.update_compose(compose_id, branch=branch)

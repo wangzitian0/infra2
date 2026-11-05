@@ -950,6 +950,79 @@ def test_no_deployment_record_is_no_evidence_and_keeps_the_skip(monkeypatch, rec
     assert result["action"] == "skipped" and deployed == []
 
 
+@pytest.mark.parametrize("status", ["running", "queued", "cancelled", "", "error"])
+def test_an_unchanged_stack_is_redeployed_unless_its_newest_record_is_done(
+    monkeypatch, status
+):
+    """Review of 4c8d50b: a runner killed after Dokploy started its deploy leaves hash,
+    checkout and the old containers matching and the newest record `running`. A skip then
+    reports green before the deploy has finished, and it can still fail on the pull. Only
+    a completed success may stand for a skip."""
+    redis, deployed, host = _unchanged_redis_with_records(
+        monkeypatch,
+        [
+            {
+                "deploymentId": "d1",
+                "status": "done",
+                "createdAt": "2026-11-05T05:00:00Z",
+            },
+            {
+                "deploymentId": "d2",
+                "status": status,
+                "createdAt": "2026-11-05T06:00:00Z",
+            },
+        ],
+    )
+
+    redis.sync(host)
+
+    assert len(deployed) == 1, status
+
+
+@pytest.mark.parametrize("status", ["done", "success", "successful", "DONE"])
+def test_an_unchanged_stack_whose_newest_record_is_done_is_skipped(monkeypatch, status):
+    redis, deployed, host = _unchanged_redis_with_records(
+        monkeypatch,
+        [
+            {
+                "deploymentId": "d1",
+                "status": "error",
+                "createdAt": "2026-11-05T05:00:00Z",
+            },
+            {
+                "deploymentId": "d2",
+                "status": status,
+                "createdAt": "2026-11-05T06:00:00Z",
+            },
+        ],
+    )
+
+    result = redis.sync(host)
+
+    assert result["action"] == "skipped" and deployed == []
+
+
+def test_a_healthy_service_is_not_redeployed_for_ever_after_an_old_error_record(
+    monkeypatch,
+):
+    """The block lasts one sync: the forced redeploy writes a newer `done` record, and the
+    next sync skips again."""
+    records = [
+        {"deploymentId": "d1", "status": "error", "createdAt": "2026-11-05T05:00:00Z"}
+    ]
+    redis, deployed, host = _unchanged_redis_with_records(monkeypatch, records)
+
+    redis.sync(host)
+    assert len(deployed) == 1  # the error record forced the redeploy
+    records.append(
+        {"deploymentId": "d2", "status": "done", "createdAt": "2026-11-05T07:00:00Z"}
+    )
+    second = redis.sync(host)
+
+    assert second["action"] == "skipped"
+    assert len(deployed) == 1  # no second redeploy
+
+
 def test_composing_restores_existing_env_when_deploy_fails(monkeypatch):
     """#1247: if _deploy_compose_with_record_check raises after upsert_github_compose
     wrote the new env to Dokploy DB, composing() restores existing_env so the DB does

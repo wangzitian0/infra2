@@ -25,6 +25,14 @@ TERMINAL_SUCCESS_STATUSES = frozenset({"done", "success", "successful"})
 _RUNNING_OR_DONE = frozenset({"running", "done", "success", "successful"})
 _TERMINAL_GOOD = TERMINAL_SUCCESS_STATUSES
 
+# Lines that `common.deploy.promote` prints on stderr, read by the release train
+# (`common.deploy.transient_failure`, #1439). A failure after ROLLOUT_STARTED_MARKER may
+# have changed the compose env, the containers or the rollback counter, so the train does
+# not run that unit again. ROLLBACK_EVENT_MARKER starts every rollback notification line
+# (rolled back, rollback failed, paused, blocked, circuit breaker tripped).
+ROLLOUT_STARTED_MARKER = "deploy_v2 rollout started:"
+ROLLBACK_EVENT_MARKER = "[AUDIT] rollback notification:"
+
 
 class RolloutError(RuntimeError):
     """A new deployment record entered an ``error`` status."""

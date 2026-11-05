@@ -200,7 +200,8 @@ them, and a poll for a deploy that the restart had interrupted got `not_found` (
 | Write | One writer at a time (`_deploy_state_lock`): snapshot, temp file in the same directory, `fsync`, `os.replace`. A failed write is logged and shown in `/health` as `deploy_state`; it never fails a deploy. |
 | Load | At import. A record older than its limit is dropped: 600 s for a result, 3600 s for `interrupted`. At most 64 records stay (`MAX_PERSISTED_DEPLOYS`). |
 | Restart | Every key in flight becomes an `interrupted` record (§4.5). The state file is written back. |
-| Bad file | An unreadable file, or a `version` other than 1, is moved to `deploy_state.json.corrupt`. The runner starts empty and logs an error. |
+| Bad file | The loader never raises. A file over 8 MiB, bytes that are not UTF-8, JSON nested past the recursion limit, a `version` other than 1 or a wrong shape is moved to `deploy_state.json.corrupt-<time>` (the newest 3 copies stay). The runner starts empty and logs one error. |
+| Worker-only restart | gunicorn kills a worker by pid and its `invoke` child keeps running. `sync_runner.file_lock(share_with_children=True)` passes the deployment lock to every `invoke` child, so the OS holds it until the child ends. The retry waits for it (limit `DEPLOYMENT_LOCK_WAIT_SECONDS`, 3600 s) and then syncs; no second sync of a service runs beside the orphan. |
 
 Idle wait (`wait_for_idle.sh`, #666) stays: a recreate still kills the thread of a deploy, and the retry then costs a run.
 
@@ -342,10 +343,12 @@ HTTP status is 200. `interrupted` is not a result: `/deploy` does not answer a d
 request runs again. The client (`iac_runner_client.poll_platform_deploy_status`) raises `RunnerInterruptedError`, a
 subclass of `RunnerLostDeploymentError`, and the release train retries the unit (`ops.pipeline.md` §3.3.1).
 
-A second request is safe. The deployment key is `(env, exact_ref, normalized_service_set, version_ref, action)`, so the
-retry has the same `deployment_id`. The config-hash gate (§3.3) skips a service that already matches. It also deploys a
-service whose newest Dokploy deployment record is `error`, because a runner killed after it wrote the new hash cannot
-restore the old one.
+A second request is safe for a platform unit. The deployment key is `(env, exact_ref, normalized_service_set,
+version_ref, action)`, so the retry has the same `deployment_id`. The config-hash gate (§3.3) skips a service that
+already matches, and only when the newest Dokploy deployment record of its compose is a completed success (`done`): a
+runner killed after it wrote the new hash cannot restore the old one, and a record that is `running`, `queued`, `error`
+or without a status means the deploy has not finished or can still fail. An app unit has no hash skip; the train
+retries it only when it fails before its first write to the compose (`ops.pipeline.md` §3.3.1).
 
 ## 5. 服务映射
 

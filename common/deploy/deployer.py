@@ -834,7 +834,7 @@ class Deployer:
         containers are up (#691, #698), that if the compose env records an
         `IAC_DEPLOY_REF` from a prior failed/interrupted sync, the on-disk checkout
         actually matches that recorded `IAC_DEPLOY_REF` (#1247), and that the newest
-        Dokploy deployment record is not in error (#1439).
+        Dokploy deployment record is a completed success (#1439).
 
         Returns an error string when the stack is not in service (sync redeploys it),
         None when it is. Raises when the host cannot be asked (no appName, `docker ps`
@@ -849,22 +849,30 @@ class Deployer:
         checkout_error = cls._verify_recorded_deploy_ref_checkout(stack)
         if checkout_error:
             return checkout_error
-        return cls._verify_latest_deployment_not_failed(compose_id)
+        return cls._verify_latest_deployment_done(compose_id)
 
     @classmethod
-    def _verify_latest_deployment_not_failed(cls, compose_id: str) -> str | None:
-        """An unchanged stack whose newest Dokploy deployment record is `error` is not done.
+    def _verify_latest_deployment_done(cls, compose_id: str) -> str | None:
+        """An unchanged stack is skipped only when its newest Dokploy record is a success.
 
         The runner writes the new config hash to the compose env before it deploys, and
         restores the old hash when the deploy fails. A runner that dies between the two
         restores nothing, so after its restart (#1439) the hash matches, the old
         containers still run and the checkout is at the recorded ref, yet the deploy that
-        Dokploy ran on its own may have failed (an image pull). Only the newest record is
-        evidence: a failure that a later deploy repaired is not. No record, or a list that
-        cannot be read, is no evidence and keeps the skip, as an unreadable host does.
+        Dokploy runs on its own may still be running, queued or failed (an image pull).
+        A skip then reports green for a deploy that has not finished or never worked.
+        Anything but a completed success (`done`) as the newest record means do not skip:
+        `running`, `queued`, `error`, `cancelled` and a record without a status.
+
+        The block lasts one sync. The redeploy it forces writes a newer record, so a
+        healthy unchanged service is not redeployed for ever because an old `error`
+        record was once the newest. Only the newest record is evidence. No record, or a
+        list that cannot be read, is no evidence and keeps the skip, as an unreadable
+        host does.
         """
         from common.deploy.dokploy_adapter import latest_deployment_record
         from common.deploy.dokploy_client import get_dokploy
+        from common.deploy.rollout import TERMINAL_SUCCESS_STATUSES
 
         e = cls.env()
         domain = e.get("INTERNAL_DOMAIN")
@@ -874,13 +882,16 @@ class Deployer:
             )
         except Exception:  # noqa: BLE001
             return None
-        if latest and str(latest.get("status") or "").lower() == "error":
-            deployment_id = latest.get("deploymentId") or latest.get("id") or "unknown"
-            return (
-                f"the newest Dokploy deployment record of {cls.service} "
-                f"({deployment_id}) is in error (#1439)"
-            )
-        return None
+        if latest is None:
+            return None
+        status = str(latest.get("status") or "").lower()
+        if status in TERMINAL_SUCCESS_STATUSES:
+            return None
+        deployment_id = latest.get("deploymentId") or latest.get("id") or "unknown"
+        return (
+            f"the newest Dokploy deployment record of {cls.service} ({deployment_id}) "
+            f"is '{status or 'without a status'}', not a completed success (#1439)"
+        )
 
     @classmethod
     def _verify_recorded_deploy_ref_checkout(cls, stack: _HostStack) -> str | None:

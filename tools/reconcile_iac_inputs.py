@@ -42,7 +42,11 @@ from common.deploy.app_contract import (
 from common.deploy.dependencies import explain_fanout
 from common.deploy.contract import all_service_keys, service_spec
 from common.deploy.env_config import app_compose_env_config
-from common.deploy.transient_failure import classify_failure
+from common.deploy.transient_failure import (
+    classify_failure,
+    rolled_back,
+    rollout_started,
+)
 from common.deploy.release_markers import (
     PRODUCTION_MARKER_PREFIX,
     RELEASE_TAG_RE,
@@ -1426,9 +1430,13 @@ def run_deploy_commands(
 
     Idempotency: the command for a second attempt is the first attempt's command line. A
     platform unit is a signed ``/deploy`` request with the same coordinates; the runner
-    answers a finished deploy from its record and the config-hash gate skips a service that
-    already matches. An app unit re-promotes the same commit and image to the same
-    environment, the end state of a manual re-run.
+    answers a finished deploy from its record, and the config-hash gate skips a service that
+    already matches (only when its newest Dokploy deployment record is ``done``). An app
+    unit has no such gate and its failure triggers the automatic rollback, which a re-run
+    would repeat until the circuit breaker trips. So an app unit is retried only when it
+    failed before its first write to the compose: ``classify_failure`` refuses any attempt
+    whose stderr holds the rollout marker, and each result records ``rollout_started`` and
+    ``rolled_back``.
     """
     results: list[dict] = []
     for command in commands:
@@ -1464,6 +1472,10 @@ def run_deploy_commands(
             "stdout": completed.stdout,
             "stderr": completed.stderr,
             "attempts": attempts,
+            # Did the last attempt write to the compose, and did it roll back? An app unit
+            # that did either is not retried (transient_failure, #1439).
+            "rollout_started": rollout_started(completed.stderr),
+            "rolled_back": rolled_back(completed.stderr),
         }
         if completed.returncode == 0 and completed.stdout.strip():
             try:

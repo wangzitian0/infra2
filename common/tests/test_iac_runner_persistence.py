@@ -288,28 +288,43 @@ def test_concurrent_writers_do_not_corrupt_or_lose_records(monkeypatch, tmp_path
     state_file = tmp_path / STATE_FILE_NAME
     real_replace = os.replace
 
-    first_call = threading.Lock()
-    seen_first = [False]
-
-    def slow_replace(src, dst):
-        # The first writer to reach the swap stalls. Writers that run unlocked then swap
-        # in newer snapshots, and the stalled one swaps in its older snapshot last.
-        with first_call:
-            stall = not seen_first[0]
-            seen_first[0] = True
-        if stall:
-            time.sleep(0.15)
-        return real_replace(src, dst)
-
-    monkeypatch.setattr(ws.os, "replace", slow_replace)
     writers = 16
     keys = [
         ws._deployment_key("staging", DEPLOY_SHA, [f"platform/svc{n}"])
         for n in range(writers)
     ]
+
+    # Make an unlocked race deterministic. The writer that takes the FIRST snapshot (it holds
+    # only a few records) waits until every record is stored, then stalls at the swap, so
+    # that it swaps its stale snapshot in last. With the lock the other writers cannot even
+    # store while it waits, so the file ends complete.
+    first_snapshot = threading.Lock()
+    owner: list[int] = []
+    real_snapshot = ws._snapshot_locked
+
+    def snapshot_then_wait():
+        snapshot = real_snapshot()
+        with first_snapshot:
+            mine = not owner
+            if mine:
+                owner.append(threading.get_ident())
+        if mine:
+            deadline = time.monotonic() + 0.3
+            while len(ws._recent_deploys) < writers and time.monotonic() < deadline:
+                time.sleep(0.005)
+        return snapshot
+
+    def stalled_replace(src, dst):
+        if owner and threading.get_ident() == owner[0]:
+            time.sleep(0.15)
+        return real_replace(src, dst)
+
     for key in keys:
         with ws._deploy_state_lock:
             ws._begin_deploy_locked(key)
+    # Armed only now, so that the set-up above is not "the first snapshot".
+    monkeypatch.setattr(ws, "_snapshot_locked", snapshot_then_wait)
+    monkeypatch.setattr(ws.os, "replace", stalled_replace)
 
     barrier = threading.Barrier(writers + 1)
     errors: list[BaseException] = []
@@ -400,3 +415,116 @@ def test_a_state_file_in_an_unknown_shape_is_ignored_not_trusted(
     assert damaged._recent_deploys == {} and damaged._in_flight_deploys == set()
     body, code = _poll(damaged, accepted["deployment_id"])
     assert code == 404 and body["status"] == "not_found"
+
+
+# --- review of 4c8d50b: the loader must never stop the runner from starting ----------
+
+
+def _random_bytes(size: int) -> bytes:
+    import random
+
+    return random.Random(1439).randbytes(size)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        pytest.param(b"\xff\xfe\x00garbage", id="not-utf8"),
+        pytest.param(b"[" * 100000 + b"]" * 100000, id="nested-past-recursion-limit"),
+        pytest.param(_random_bytes(65536), id="random-bytes"),
+        pytest.param(b"[0," * (3 * 1024 * 1024 + 1) + b"0]", id="over-ten-mb"),
+        pytest.param(b"", id="empty"),
+        pytest.param(b"null", id="json-null"),
+    ],
+)
+def test_the_loader_never_raises_whatever_the_state_file_holds(
+    monkeypatch, tmp_path, caplog, content
+):
+    """gunicorn imports the module; an exception here means no worker boots and every
+    deploy stops until a person deletes the file. Whatever the file holds, the runner
+    starts empty, keeps the file aside, and writes a fresh one."""
+    _install_sync_runner(monkeypatch)
+    assert len(content) >= 0
+    (tmp_path / STATE_FILE_NAME).write_bytes(content)
+
+    ws = _load_runner(monkeypatch, tmp_path)  # must not raise
+
+    assert ws._recent_deploys == {} and ws._in_flight_deploys == set()
+    if len(content) > 8 * 1024 * 1024:
+        # A file past the size limit is refused before it is parsed.
+        assert "larger than" in caplog.text
+    kept = sorted(p.name for p in tmp_path.iterdir() if ".corrupt" in p.name)
+    if content:
+        assert len(kept) == 1, kept
+        assert (tmp_path / kept[0]).read_bytes() == content
+    fresh = json.loads((tmp_path / STATE_FILE_NAME).read_text(encoding="utf-8"))
+    assert fresh["version"] == 1 and fresh["recent"] == []
+
+
+def test_only_the_newest_three_corrupt_copies_are_kept(monkeypatch, tmp_path):
+    _install_sync_runner(monkeypatch)
+    for generation in range(5):
+        (tmp_path / STATE_FILE_NAME).write_bytes(b"\xff corrupt %d" % generation)
+        _load_runner(monkeypatch, tmp_path)
+        time.sleep(0.002)  # distinct timestamps in the copy names
+
+    kept = sorted(p.name for p in tmp_path.iterdir() if ".corrupt" in p.name)
+    assert len(kept) == 3, kept
+    contents = [(tmp_path / name).read_bytes() for name in kept]
+    assert contents == [b"\xff corrupt 2", b"\xff corrupt 3", b"\xff corrupt 4"]
+
+
+def test_an_interrupted_record_lives_for_an_hour_not_ten_minutes(monkeypatch, tmp_path):
+    """The client may poll long after a restart. A result lasts 600 s; an interrupted
+    record 3600 s."""
+    _install_sync_runner(monkeypatch)
+    first = _load_runner(monkeypatch, tmp_path)
+    monkeypatch.setattr(first.threading, "Thread", _NeverRuns)
+    accepted, _ = _request_deploy(first)
+    real_time = time.time
+
+    def restart_after(seconds: float):
+        monkeypatch.setattr(time, "time", lambda: real_time() + seconds)
+        try:
+            return _load_runner(monkeypatch, tmp_path)
+        finally:
+            monkeypatch.setattr(time, "time", real_time)
+
+    # The first restart turns the in-flight key into an interrupted record and saves it.
+    second = restart_after(0)
+    body, code = _poll(second, accepted["deployment_id"])
+    assert (code, body["status"]) == (200, "interrupted")
+
+    thirty_minutes = restart_after(30 * 60)
+    body, code = _poll(thirty_minutes, accepted["deployment_id"])
+    assert (code, body["status"]) == (200, "interrupted")
+
+    ninety_minutes = restart_after(90 * 60)
+    body, code = _poll(ninety_minutes, accepted["deployment_id"])
+    assert code == 404 and body["status"] == "not_found"
+
+
+def test_a_restored_record_keeps_its_action_and_version_ref(monkeypatch, tmp_path):
+    """A `secrets-supply` record must not come back as a `sync` key (#649): the same
+    coordinates with another action are another deployment."""
+    _install_sync_runner(monkeypatch)
+    first = _load_runner(monkeypatch, tmp_path)
+    monkeypatch.setattr(first.threading, "Thread", _RunsNow)
+    supply = {**COORD, "action": "secrets-supply", "version_ref": "v1.2.3"}
+    _sign(first, {**supply, "wait": False})
+    accepted, _ = first.version_deploy()
+
+    second = _load_runner(monkeypatch, tmp_path)
+    _sign(second, {**supply, "deployment_id": accepted["deployment_id"]})
+    body, code = second.deployment_status()
+    assert (code, body["status"]) == (200, "completed")
+    assert body["action"] == "secrets-supply" and body["version_ref"] == "v1.2.3"
+
+    # The same coordinates as a plain sync are not that deployment.
+    _sign(second, dict(COORD))
+    body, code = second.deployment_status()
+    assert code == 404 and body["status"] == "not_found"
+    # And the version_ref is part of the key too.
+    _sign(second, {**COORD, "action": "secrets-supply", "version_ref": "v9.9.9"})
+    _body, code = second.deployment_status()
+    assert code == 404

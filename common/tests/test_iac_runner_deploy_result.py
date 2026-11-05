@@ -63,7 +63,7 @@ def test_sync_services_returns_structured_failure_result(monkeypatch) -> None:
     )
 
     @contextmanager
-    def unlocked(_path, _description):
+    def unlocked(_path, _description, **_options):
         yield
 
     monkeypatch.setattr(sync_runner, "file_lock", unlocked)

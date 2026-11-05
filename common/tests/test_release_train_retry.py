@@ -399,3 +399,138 @@ def test_the_messages_of_the_real_client_are_classified_as_transient(fault):
     verdict = classify_failure(f"deploy_v2 failed: {excinfo.value}\n")
     assert verdict.transient is True
     assert verdict.kind == f"runner_{fault}"
+
+
+# --- #1439 review of 4c8d50b: rollback, breaker, narrower patterns, which line ---------
+
+
+def _classify(stderr: str):
+    from common.deploy.transient_failure import classify_failure
+
+    return classify_failure(stderr)
+
+
+def test_a_rollback_circuit_breaker_message_is_never_transient():
+    """The breaker message carries the original failure text, `server misbehaving`
+    included. A train that retried on it would re-promote an app whose automatic rollback
+    is switched off (P0 alert, manual intervention required)."""
+    stderr = (
+        "deploy_v2 failed: automatic rollback circuit breaker tripped for "
+        "finance_report/app (production): attempt 3 exceeds max_rollback_attempts=2; "
+        "manual intervention required (P0 alert emitted): deploy rollout entered error "
+        "(errorMessage=lookup ghcr.io on 127.0.0.53:53: server misbehaving)\n"
+    )
+    verdict = _classify(stderr)
+    assert verdict.transient is False
+    assert verdict.kind == "rollback"
+
+
+def test_a_failure_after_the_rollout_started_is_never_transient():
+    """promote prints the rollout marker before its first write to the compose. From then
+    on the compose env, the containers or a rollback may have changed, so the train does not
+    run the unit again, whatever the verdict says."""
+    from common.deploy.rollout import ROLLOUT_STARTED_MARKER
+
+    stderr = (
+        f"{ROLLOUT_STARTED_MARKER} finance_report/app (compose c1)\n"
+        "deploy_v2 failed: deploy rollout entered error (errorMessage=lookup ghcr.io "
+        "on 127.0.0.53:53: server misbehaving)\n"
+    )
+    verdict = _classify(stderr)
+    assert verdict.transient is False
+    assert verdict.kind == "rollout_started"
+
+
+def test_a_platform_unit_has_no_rollout_marker_and_is_still_retried():
+    """The platform path goes through the runner, never through promote: no marker, so the
+    unit keeps its retry. The result says so."""
+    script = _Script((1, DNS_FAILURE), (0, ""))
+
+    results = _run([_command("prod")], script)
+
+    assert len(script.argvs) == 2
+    assert results[0]["rollout_started"] is False
+    assert results[0]["rolled_back"] is False
+
+
+@pytest.mark.parametrize(
+    ("label", "stderr"),
+    [
+        (
+            "version-probe-502",
+            "deploy_v2 failed: version probe https://report.zitian.party/version "
+            "returned 502 Bad Gateway\n",
+        ),
+        (
+            "ci-side-504",
+            "deploy_v2 failed: GET https://api.github.com/repos/x/y/git/ref/tags/v1: "
+            "504 Gateway Time-out\n",
+        ),
+        (
+            "ci-side-name-resolution-no-verdict",
+            "Traceback (most recent call last):\n"
+            '  File "x.py", line 1, in <module>\n'
+            "httpx.ConnectError: [Errno -3] Temporary failure in name resolution\n",
+        ),
+    ],
+)
+def test_the_transient_patterns_need_their_own_context(label, stderr):
+    """`registry_5xx` needs a registry or pull line; `dns` from the glibc resolver needs
+    the `deploy_v2 failed:` verdict. A bare 502 or a stray CI-side line is not enough."""
+    assert _classify(stderr).transient is False, label
+
+
+@pytest.mark.parametrize(
+    ("kind", "stderr"),
+    [
+        (
+            "registry_5xx",
+            "deploy_v2 failed: Dokploy deployment record entered error (log_tail=Head "
+            '"https://ghcr.io/v2/wangzitian0/app/manifests/v1": 502 Bad Gateway)\n',
+        ),
+        (
+            "registry_5xx",
+            "deploy_v2 failed: pulling image from registry-1.docker.io failed: "
+            "504 Gateway Time-out\n",
+        ),
+        (
+            "dns",
+            "deploy_v2 failed: [Errno -3] Temporary failure in name resolution\n",
+        ),
+        (
+            "dns",
+            'Error response from daemon: Get "https://ghcr.io/v2/": dial tcp: lookup '
+            "ghcr.io on 127.0.0.53:53: server misbehaving\n",
+        ),
+    ],
+)
+def test_the_transient_patterns_still_match_in_their_own_context(kind, stderr):
+    verdict = _classify(stderr)
+    assert (verdict.transient, verdict.kind) == (True, kind)
+
+
+def test_the_last_failure_verdict_is_the_one_that_is_read():
+    """Two `deploy_v2 failed:` lines (a wrapper printed the first): the LAST one is the
+    verdict. Reading the first would retry a unit whose final failure is deterministic,
+    or skip the retry of one whose final failure is transient."""
+    transient = "deploy_v2 failed: i/o timeout reaching ghcr.io\n"
+    deterministic = "deploy_v2 failed: KeyError: 'compose_id'\n"
+    assert _classify(transient + deterministic).transient is False
+    assert _classify(deterministic + transient).transient is True
+
+
+def test_every_attempt_reports_whether_its_rollout_ran_or_was_rolled_back():
+    from common.deploy.rollout import ROLLBACK_EVENT_MARKER, ROLLOUT_STARTED_MARKER
+
+    stderr = (
+        f"{ROLLOUT_STARTED_MARKER} finance_report/app (compose c1)\n"
+        f"{ROLLBACK_EVENT_MARKER} [WARN] Deploy rollback event | Action: rolled_back\n"
+        "deploy_v2 failed: deploy rollout entered error\n"
+    )
+    script = _Script((1, stderr), (0, ""))
+
+    results = _run([_command("prod")], script)
+
+    assert len(script.argvs) == 1
+    assert results[0]["rollout_started"] is True
+    assert results[0]["rolled_back"] is True

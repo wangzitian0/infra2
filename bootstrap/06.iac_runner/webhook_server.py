@@ -48,6 +48,10 @@ DEPLOY_STATE_FILE = (
 )
 DEPLOY_STATE_VERSION = 1
 MAX_PERSISTED_DEPLOYS = 64
+# A saved state of 64 records is far below this; a larger file is a fault, not state.
+MAX_STATE_FILE_BYTES = 8 * 1024 * 1024
+# Unusable state files are kept aside for diagnosis; older copies are deleted.
+MAX_CORRUPT_COPIES = 3
 SIGNATURE_TTL_SECONDS = 300
 MAX_REQUEST_BODY_BYTES = 65536
 EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -529,7 +533,7 @@ def _persist_deploy_state_locked() -> None:
     try:
         _atomic_write_json(DEPLOY_STATE_FILE, _snapshot_locked())
         _deploy_state_error = ""
-    except (OSError, TypeError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 - a save error must never fail a deploy
         message = f"{type(exc).__name__}: {exc}"
         if message != _deploy_state_error:
             logger.error(
@@ -564,39 +568,67 @@ def _finish_deploy_locked(key: DeploymentKey, response: dict | None) -> None:
     _persist_deploy_state_locked()
 
 
+def _prune_corrupt_copies() -> None:
+    """Keep the newest MAX_CORRUPT_COPIES quarantined files; the names sort by time."""
+    prefix = f"{DEPLOY_STATE_FILE.name}.corrupt-"
+    with contextlib.suppress(OSError):
+        copies = sorted(
+            path
+            for path in DEPLOY_STATE_FILE.parent.iterdir()
+            if path.name.startswith(prefix)
+        )
+        for stale in copies[:-MAX_CORRUPT_COPIES]:
+            with contextlib.suppress(OSError):
+                stale.unlink()
+
+
 def _quarantine_state_file(reason: str) -> None:
-    quarantine = DEPLOY_STATE_FILE.with_name(DEPLOY_STATE_FILE.name + ".corrupt")
+    quarantine = DEPLOY_STATE_FILE.with_name(
+        f"{DEPLOY_STATE_FILE.name}.corrupt-{time.time_ns():020d}"
+    )
     logger.error(
         "Deploy state file %s is unusable (%s); starting empty, keeping it as %s",
         DEPLOY_STATE_FILE,
-        reason,
+        reason[:200],
         quarantine,
     )
     with contextlib.suppress(OSError):
         os.replace(DEPLOY_STATE_FILE, quarantine)
+    _prune_corrupt_copies()
 
 
-def _load_deploy_state() -> None:
-    """Restore the records an earlier process saved. Runs once at import, before any
-    request thread exists. A deploy that was in flight is now an interrupted record."""
+def _read_saved_state() -> tuple[list, list] | None:
+    """The saved (recent, in_flight) lists, or None when there is nothing to restore.
+
+    Any file content is possible after a storage fault: bytes that are not UTF-8, JSON
+    nested past the recursion limit, a huge file, a valid document of the wrong shape.
+    gunicorn imports this module, so an exception here keeps every worker from booting
+    and stops all deploys until a person deletes the file. Every decode, parse and shape
+    failure therefore quarantines the file and starts empty (`Exception`, never
+    `BaseException`). A file that cannot be read at all (permissions, I/O error) is left
+    where it is."""
     try:
-        raw = DEPLOY_STATE_FILE.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return
-    except OSError as exc:
-        logger.error("Deploy state file %s is unreadable: %s", DEPLOY_STATE_FILE, exc)
-        return
-    try:
-        data = json.loads(raw)
+        if DEPLOY_STATE_FILE.stat().st_size > MAX_STATE_FILE_BYTES:
+            raise ValueError(f"file is larger than {MAX_STATE_FILE_BYTES} bytes")
+        raw = DEPLOY_STATE_FILE.read_bytes()
+        data = json.loads(raw.decode("utf-8"))
         if not isinstance(data, dict) or data.get("version") != DEPLOY_STATE_VERSION:
             raise ValueError("unknown state file version")
         saved_recent, saved_in_flight = data.get("recent"), data.get("in_flight")
         if not isinstance(saved_recent, list) or not isinstance(saved_in_flight, list):
             raise ValueError("recent and in_flight must be lists")
-    except ValueError as exc:
-        _quarantine_state_file(str(exc))
-        return
+        return saved_recent, saved_in_flight
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        logger.error("Deploy state file %s is unreadable: %s", DEPLOY_STATE_FILE, exc)
+        return None
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        _quarantine_state_file(f"{type(exc).__name__}: {exc}")
+        return None
 
+
+def _restore_saved_records(saved_recent: list, saved_in_flight: list) -> None:
     now_wall, now_monotonic = time.time(), time.monotonic()
     restored = interrupted = 0
     with _deploy_state_lock:
@@ -633,6 +665,20 @@ def _load_deploy_state() -> None:
         DEPLOY_STATE_FILE,
         interrupted,
     )
+
+
+def _load_deploy_state() -> None:
+    """Restore the records an earlier process saved. Runs once at import, before any
+    request thread exists, and never raises: the runner must start. A deploy that was in
+    flight at the restart is now an interrupted record."""
+    try:
+        saved = _read_saved_state()
+        if saved is not None:
+            _restore_saved_records(*saved)
+    except Exception:  # noqa: BLE001
+        logger.exception("Deploy records could not be restored; starting empty")
+        with _deploy_state_lock:
+            _recent_deploys.clear()
 
 
 def _reusable_result(key: DeploymentKey) -> dict | None:
