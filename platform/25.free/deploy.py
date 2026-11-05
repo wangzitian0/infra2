@@ -12,6 +12,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from urllib.parse import quote
 
+from common.deploy.config_hash import mount_fingerprint_env
 from common.deploy.deployer import Deployer, make_tasks
 from common.console import error, run_with_status, success, header, info, warning
 from common.core.facets import BackupFacet, Exemption
@@ -47,6 +48,17 @@ class FreeDeployer(Deployer):
         ),
     )
     secret_key = ""
+
+    @classmethod
+    def _render_config(cls, free_uuid: str, free_path: str) -> str | None:
+        """Render config.json from its template for one uuid and path (pure)."""
+        template_path = Path(__file__).with_name("config.json.tmpl")
+        if not template_path.exists():
+            error("Missing config template", str(template_path))
+            return None
+        config_content = template_path.read_text(encoding="utf-8")
+        config_content = config_content.replace("{{FREE_UUID}}", free_uuid)
+        return config_content.replace("{{FREE_PATH}}", free_path)
 
     @classmethod
     def _ensure_remote_config(cls, c) -> tuple[str, str] | None:
@@ -114,20 +126,21 @@ class FreeDeployer(Deployer):
 
         perm_cmd = f"ssh {shlex.quote(f'{user}@{host}')} {shlex.quote(f'chown {cls.uid}:{cls.gid} {safe_path} && chmod 600 {safe_path}')}"
 
-        if existing_uuid == free_uuid and existing_path == free_path:
+        config_content = cls._render_config(free_uuid, free_path)
+        if config_content is None:
+            return None
+
+        # Skip the upload only when the host file equals the rendered template, so a
+        # template change reaches the host while uuid and path stay stable (#1438).
+        if (
+            existing_uuid == free_uuid
+            and existing_path == free_path
+            and res.stdout.strip() == config_content.strip()
+        ):
             perm_res = run_with_status(c, perm_cmd, "Set config permissions")
             if not perm_res.ok:
                 return None
             return free_uuid, free_path
-
-        template_path = Path(__file__).with_name("config.json.tmpl")
-        if not template_path.exists():
-            error("Missing config template", str(template_path))
-            return None
-
-        config_content = template_path.read_text(encoding="utf-8")
-        config_content = config_content.replace("{{FREE_UUID}}", free_uuid)
-        config_content = config_content.replace("{{FREE_PATH}}", free_path)
 
         tmp_path = None
         try:
@@ -189,8 +202,13 @@ class FreeDeployer(Deployer):
         config_info = cls._ensure_remote_config(c)
         if not config_info:
             raise RuntimeError("Failed to ensure remote config for free gateway")
-        _free_uuid, free_path = config_info
+        free_uuid, free_path = config_info
         env_vars["FREE_PATH"] = free_path
+        rendered = cls._render_config(free_uuid, free_path)
+        if rendered is None:
+            raise RuntimeError("Failed to render free gateway config")
+        # The label fingerprint recreates the container when config.json changes (#1438).
+        env_vars.update(mount_fingerprint_env({"config.json": rendered}))
         return super().composing(c, env_vars)
 
     @classmethod

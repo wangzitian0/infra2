@@ -16,6 +16,7 @@ import shlex
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _GLOB_CHARS_RE = re.compile(r"[*?[]")
 _HOST_DATA_PREFIX = "${DATA_PATH}/"
+_MOUNT_FINGERPRINT_PREFIX = "IAC_MOUNT_SHA256_"
 _ENV_SUBST_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?-)([^}]*))?\}")
 
 
@@ -253,33 +254,113 @@ def _host_mount_template(compose_dir: Path, source: str) -> Path | None:
     return None
 
 
-def compose_host_mount_files(compose_content: str) -> list[str]:
-    """File name of each `${DATA_PATH}/file.ext` host mount of a compose.
-
-    Only mounts whose last path part has a file suffix count. A directory mount
-    such as `${DATA_PATH}/data` holds runtime data, not a rendered template.
-    """
+def _compose_services(compose_content: str) -> dict:
     try:
         import yaml
     except ModuleNotFoundError:
-        return []
+        return {}
     try:
         compose = yaml.safe_load(compose_content) or {}
     except yaml.YAMLError:
-        return []
+        return {}
     services = compose.get("services", {}) if isinstance(compose, dict) else {}
-    if not isinstance(services, dict):
-        return []
-    found: list[str] = []
-    for service in services.values():
+    return services if isinstance(services, dict) else {}
+
+
+def compose_service_host_mounts(compose_content: str) -> dict[str, list[str]]:
+    """Map each compose service to the file names of its `${DATA_PATH}/file.ext` mounts.
+
+    Only mounts whose last path part has a file suffix count. A directory mount
+    such as `${DATA_PATH}/data` holds runtime data, not a rendered template.
+    This is the one declaration of which host files a service mounts (#1438).
+    """
+    found: dict[str, list[str]] = {}
+    for service_name, service in _compose_services(compose_content).items():
         if not isinstance(service, dict):
             continue
+        names: list[str] = []
         for source in _bind_mount_sources(service):
             name = _host_mount_name(source)
             if name is None or "." not in name.lstrip("."):
                 continue
-            found.append(name)
+            names.append(name)
+        if names:
+            found[str(service_name)] = sorted(set(names))
     return found
+
+
+def compose_host_mount_files(compose_content: str) -> list[str]:
+    """File name of each `${DATA_PATH}/file.ext` host mount of a compose."""
+    return [
+        name
+        for names in compose_service_host_mounts(compose_content).values()
+        for name in names
+    ]
+
+
+def mount_fingerprint_var(name: str) -> str:
+    """Compose variable that carries the content fingerprint of host file `name`."""
+    return _MOUNT_FINGERPRINT_PREFIX + re.sub(r"[^A-Za-z0-9]", "_", name).upper()
+
+
+def mount_fingerprint_env(rendered: dict[str, str | bytes]) -> dict[str, str]:
+    """sha256 of each rendered host file, keyed by its compose variable.
+
+    The compose service reads the variable in a label. A content change changes the
+    resolved compose config, so `docker compose up -d` recreates that service only (#1438).
+    """
+    out: dict[str, str] = {}
+    for name, content in rendered.items():
+        data = content.encode("utf-8") if isinstance(content, str) else content
+        out[mount_fingerprint_var(name)] = hashlib.sha256(data).hexdigest()
+    return out
+
+
+def service_label_text(service: dict) -> str:
+    """All label keys and values of one compose service as one string."""
+    labels = service.get("labels", [])
+    if isinstance(labels, dict):
+        return "\n".join(f"{k}={v}" for k, v in labels.items())
+    if isinstance(labels, list):
+        return "\n".join(str(item) for item in labels)
+    return ""
+
+
+def compose_mount_fingerprint_gaps(compose_content: str) -> list[tuple[str, str]]:
+    """(service, file name) of each host mount whose service label lacks the fingerprint."""
+    services = _compose_services(compose_content)
+    gaps: list[tuple[str, str]] = []
+    for service_name, names in compose_service_host_mounts(compose_content).items():
+        text = service_label_text(services[service_name])
+        for name in names:
+            if mount_fingerprint_var(name) not in text:
+                gaps.append((service_name, name))
+    return gaps
+
+
+def missing_mount_fingerprints(compose_path: str, env_vars: dict) -> list[str]:
+    """Fingerprint variables the compose needs that `env_vars` does not carry.
+
+    A missing variable resolves to an empty label, so the container would keep the
+    old file after a template change. Unreadable composes need none.
+    """
+    path = Path(compose_path)
+    if not path.is_absolute():
+        path = _REPO_ROOT / path
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return [
+        var for var in required_mount_fingerprint_vars(text) if not env_vars.get(var)
+    ]
+
+
+def required_mount_fingerprint_vars(compose_content: str) -> list[str]:
+    """Fingerprint variables a deploy must supply for this compose."""
+    return sorted(
+        {mount_fingerprint_var(n) for n in compose_host_mount_files(compose_content)}
+    )
 
 
 def _compose_artifact_files(compose_path: str, compose_content: str) -> list[Path]:
@@ -424,6 +505,12 @@ __all__ = [
     "_compose_artifact_files",
     "_compose_has_build",
     "compose_host_mount_files",
+    "compose_mount_fingerprint_gaps",
+    "compose_service_host_mounts",
+    "missing_mount_fingerprints",
+    "mount_fingerprint_env",
+    "mount_fingerprint_var",
+    "required_mount_fingerprint_vars",
     "_compute_config_hash",
     "_dependency_items_from_globs",
     "_dependency_paths_from_globs",

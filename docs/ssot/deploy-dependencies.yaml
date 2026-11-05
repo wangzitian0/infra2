@@ -29,6 +29,10 @@
 # fails when such a `<name>` mount has no template. Name each template in the service
 # directory; the compose mount is the single declaration. `deploy.py` must deliver the
 # rendered file from `composing()`, because `sync` skips `pre_compose()`.
+# The service must also read `${IAC_MOUNT_SHA256_<NAME>:-}` in a label, and
+# `composing()` must set that variable to the sha256 of the rendered bytes. Compose
+# recreates a container only when its resolved config changes, so a changed file
+# alone leaves the old container running. The guard fails when the label is missing.
 #
 # Enforcement: `tools/deploy_guard_audit.py` (the infra-ci `ci_runner preflight`
 # gate "Deploy guard audit" + the scheduled ops-checks step "Audit deploy fan-out

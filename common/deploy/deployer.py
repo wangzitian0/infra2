@@ -32,6 +32,7 @@ from common.deploy.config_hash import (
     _artifact_items_from_disk,
     _dependency_items_from_globs,
     config_hash_from_items,
+    missing_mount_fingerprints,
 )
 from common.deploy.discovery import (
     discover_services as _discover_services_pure,
@@ -575,6 +576,14 @@ class Deployer:
     @classmethod
     def composing(cls, c: "Context", env_vars: dict[str, str]) -> str:
         """Deploy via Dokploy API using GitHub provider. Returns composeId."""
+        # Fail closed (#1438): a host-mounted file without its content fingerprint would
+        # leave the old container running after a template change.
+        missing = missing_mount_fingerprints(cls.compose_path, env_vars)
+        if missing:
+            raise ValueError(
+                f"{cls.service}: composing() did not set mount fingerprint(s) "
+                f"{', '.join(missing)}; the container would keep its old config file"
+            )
         from common.deploy.dokploy_client import get_dokploy, ensure_project
         from common.core.constants import GITHUB_OWNER, GITHUB_REPO, GITHUB_BRANCH
 

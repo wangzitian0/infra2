@@ -25,6 +25,8 @@ from common.deploy.config_hash import (  # noqa: E402
     _compose_artifact_files,
     _compose_has_build,
     compose_host_mount_files,
+    compose_mount_fingerprint_gaps,
+    mount_fingerprint_var,
 )
 from common.deploy.dependencies import (  # noqa: E402
     CANONICAL_SERVICE_ROOTS,
@@ -132,7 +134,10 @@ def dockerfile_canary_violations(composes: list[Path], root: Path = ROOT) -> lis
 
 
 def host_mount_violations(composes: list[Path], root: Path = ROOT) -> list[str]:
-    """Every `${DATA_PATH}/file.ext` host mount needs a config-hash input (#1438).
+    """Every `${DATA_PATH}/file.ext` host mount needs a hash input and a fingerprint (#1438).
+
+    The service must also read the fingerprint of the rendered file in a label. Without
+    it, `docker compose up -d` keeps the running container after a template change.
 
     The service deploy.py renders such a file from a template in the service directory.
     A template change must change the config hash, or `sync` skips the deploy.
@@ -153,6 +158,12 @@ def host_mount_violations(composes: list[Path], root: Path = ROOT) -> list[str]:
                     f"{rel}: host mount {name!r} has no config-hash input; "
                     f"add {name!r} or {name + '.tmpl'!r} to the service directory"
                 )
+        for service, name in compose_mount_fingerprint_gaps(text):
+            violations.append(
+                f"{rel}: service {service!r} mounts host file {name!r} without a "
+                f"fingerprint label; add a label that reads "
+                f"${{{mount_fingerprint_var(name)}:-}}"
+            )
     return violations
 
 
