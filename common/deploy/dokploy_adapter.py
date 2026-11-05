@@ -172,24 +172,6 @@ def get_compose_deployments(client: Any, compose_id: str) -> list[dict]:
     )
 
 
-def latest_deployment_record(client: Any, compose_id: str) -> dict | None:
-    """The newest Dokploy deployment record of a compose, or None without any record.
-
-    The newest is the one with the greatest ``createdAt`` (or ``startedAt``), the order
-    ``common.deploy.rollout`` uses. A record list that cannot be read is also None: the
-    caller must treat that as no evidence, not as a failed deploy.
-    """
-    records = get_compose_deployments(client, compose_id)
-    if not records:
-        return None
-    return max(
-        records,
-        key=lambda record: str(
-            record.get("createdAt") or record.get("startedAt") or ""
-        ),
-    )
-
-
 def started_before_trigger(
     deployment: dict,
     floor_epoch: float,

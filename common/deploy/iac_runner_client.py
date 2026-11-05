@@ -46,33 +46,12 @@ STATUS_POLL_MAX_SECONDS = 10.0
 STATUS_NOT_FOUND_GRACE_SECONDS = 90.0
 
 
-# The release train reads these phrases in a failed unit's stderr to tell a transient
-# runner fault from a deterministic failure (common.deploy.transient_failure). They are
-# part of the messages below; a test pins both ends.
-RUNNER_NOT_FOUND_MARKER = "iac_runner answered not_found"
-RUNNER_INTERRUPTED_MARKER = "iac_runner reported interrupted"
-
-
 class RunnerLostDeploymentError(RuntimeError):
     """The runner has no record of a deploy it accepted: the request is lost (#666).
 
     Raised only when ``not_found`` answers outlast ``not_found_grace``. A gateway error,
     a timeout and a failed deploy are other errors: the runner may still hold that deploy,
     so a caller must not submit it again.
-
-    A lost request is a transient fault. A second request for the same coordinates is
-    safe: the runner answers a finished deploy from its record, and a sync of an
-    unchanged configuration is skipped by the config-hash gate (#1439).
-    """
-
-
-class RunnerInterruptedError(RunnerLostDeploymentError):
-    """The runner restarted while it ran this deploy: its outcome is unknown (#1439).
-
-    The runner saves its deploy records on disk, so after a restart it answers
-    ``interrupted`` for a deploy that was in flight, and not ``not_found``. This is not a
-    failed deploy and not a result. It is a transient fault with the same remedy as a
-    lost request: request the same coordinates again.
     """
 
 
@@ -326,9 +305,6 @@ def poll_platform_deploy_status(
     A gateway or transport error does not: after a runner recreation the gateway can flap
     between not_found and 502, and each answer would otherwise reset the other's timer.
 
-    An ``interrupted`` answer means the runner restarted while it ran the deploy (#1439).
-    The poll raises :class:`RunnerInterruptedError` at once; it is a transient fault.
-
     Returns the final status dict. A terminal status is anything other than ``running`` /
     ``pending`` / ``in_progress``. Raises ``ValueError`` for a bad env/ref/secret/base_url
     BEFORE any request, and ``TimeoutError`` if it never settles within ``attempts``.
@@ -415,7 +391,7 @@ def poll_platform_deploy_status(
                 if moment - not_found_since > not_found_grace:
                     lost_id = deployment_id or body.get("deployment_id") or "unknown"
                     raise RunnerLostDeploymentError(
-                        f"{RUNNER_NOT_FOUND_MARKER} for {int(moment - not_found_since)}s "
+                        f"iac_runner answered not_found for {int(moment - not_found_since)}s "
                         f"while polling deploy {ref[:12]} to {env} (deployment {lost_id}): "
                         "the runner has no record of this deployment; it was probably "
                         "recreated between the request and the first poll (#666)"
@@ -444,16 +420,6 @@ def poll_platform_deploy_status(
         not_found_since = None
         resp.raise_for_status()
         last = resp.json() if resp.content else {}
-        if str(last.get("status", "")).lower() == "interrupted":
-            # The runner restarted while it ran this deploy (#1439). The outcome is
-            # unknown, so this is neither a result nor a failure: raise at once, since
-            # waiting cannot change the answer.
-            raise RunnerInterruptedError(
-                f"{RUNNER_INTERRUPTED_MARKER} for deploy {ref[:12]} to {env} "
-                f"(deployment {deployment_id or last.get('deployment_id') or 'unknown'}): "
-                "the runner restarted while this deployment was in flight and its "
-                "outcome is unknown; the same request can be sent again (#1439)"
-            )
         if str(last.get("status", "")).lower() not in terminal_excluded:
             return last
         sleep(next(delays))
@@ -464,10 +430,6 @@ def poll_platform_deploy_status(
 
 
 __all__ = [
-    "RUNNER_INTERRUPTED_MARKER",
-    "RUNNER_NOT_FOUND_MARKER",
-    "RunnerInterruptedError",
-    "RunnerLostDeploymentError",
     "STATUS_NOT_FOUND_GRACE_SECONDS",
     "STATUS_POLL_BACKOFF",
     "STATUS_POLL_INITIAL_SECONDS",

@@ -165,65 +165,6 @@ marker 不动就是 prod 用旧 deployer:2026-07-30 的 `production/v1.1.52` 让
 deploy-guard-audit 报一行(`python -m common.deploy.release_markers --repo-root .`),内容是 marker、落后几个
 release、以及是否已旧到会破坏下一次 prod 发布。工作流与工具通过 `common.deploy.app_contract.query_serving_release` 直接查询 infra2 权威部署态 `(source_sha, image_tag, iac_ref)`，不再从 App 自身 GitHub Actions 历史重推导 (#588)。
 
-#### 3.3.1 Unit retry in the release train (#1439)
-
-Owner decision (2026-11-05): the approval of a production tag covers bounded automatic retries of a failed unit.
-A retry runs in the same run and on the same tag. It never starts a new run and never changes the tag.
-
-- **Unit.** One `tools.deploy_v2` command that `run_deploy_commands` builds: the platform batch of one environment, or
-  one app service with its companions.
-- **Budget.** At most 2 retries per unit (3 runs in all), for staging and production alike, with a pause of 30 s and
-  then 90 s. The retry runs the same command line, so the tag, the `--iac-ref` and the `--version-ref` do not change.
-  `deploy_v2` itself sends a runner request once; no second layer retries.
-- **Time cost.** A retry adds a pause of 30 s (retry 1) or 90 s (retry 2), up to 120 s per unit, plus one more run of the
-  unit for each retry. Each run keeps its own `--timeout`, and an attempt that ends in `runner_not_found` already took at
-  least 90 s. The 15-minute release budget (`Pipeline time contract`) is exceeded whenever a retry happens. That is a
-  pipeline defect to read in the run summary (`Unit retries`), not a reason to skip the retry. A timeout is not retried.
-- **Which failures.** `common.deploy.transient_failure.classify_failure` reads the failure verdict (the text from the
-  LAST `deploy_v2 failed:` line) in this order:
-  1. A unit that wrote to the compose is never retried (see App units below).
-  2. A deterministic marker wins: an auth error, a health check after a good pull, a changed config hash, a config error,
-     a rollback or circuit-breaker message (`circuit breaker tripped`, `manual intervention required`).
-  3. A transient marker earns a retry: DNS or network (`server misbehaving`, `i/o timeout`, `TLS handshake timeout`), a
-     registry 5xx, a runner transport blip, and a runner that lost (`not_found`) or interrupted a deploy. Two patterns are
-     narrow. A 5xx phrase (`502 Bad Gateway`) counts only on a line that names a registry or a pull (`ghcr.io`, `/v2/`,
-     `registry`, `pull`, `manifest`); a version probe or a GitHub API call that returns 502 is not retried. The glibc
-     `Temporary failure in name resolution` counts only inside a `deploy_v2 failed:` verdict; a stray CI-side line is
-     not retried. The Go resolver text (`server misbehaving`) comes from Docker on the host and counts anywhere.
-  4. An unrecognised failure is not retried.
-- **App units.** An app unit goes through `common.deploy.promote.deploy`. After its first write to the compose,
-  `promote` prints `deploy_v2 rollout started:` (`ROLLOUT_STARTED_MARKER`). From then on a failure triggers the automatic
-  rollback, which writes `ROLLBACK_ATTEMPTS=n` into the compose env; the third consecutive rollback trips the circuit
-  breaker (`max_rollback_attempts=2`): a P0 alert, no rollback, and the new `IMAGE_TAG` left in the env while the old
-  containers run. A re-run of an app unit that already wrote to the compose would add one rollback restart and one
-  re-promote restart per attempt and walk the count to the breaker. So the train does not retry any unit whose failed
-  attempt printed the rollout marker, and it records `rollout_started` and `rolled_back` (an `Action: rolled_back` or
-  `rollback_failed` notification) on every unit result. An app unit retries only when it fails before that line: the
-  secret supply through the runner, the image-manifest check, the preflight. A platform unit goes through the runner and
-  never prints the marker, so it keeps its retry. A rollout that fails on a Dokploy-side pull therefore fails the app unit
-  once, with one rollback, as it did before #1439.
-- **Record.** Every attempt is written to the result JSON as `attempts: [{n, cause, at}]` (`cause` is why that attempt
-  failed, `null` when it succeeded), logged to stderr as `reconcile retry: ...`, listed in the run summary under
-  `Unit retries`, and counted in the failure alert of a unit that stays red. The unit result also carries
-  `rollout_started` and `rolled_back`.
-- **Idempotency of a platform unit.** The unit is a signed `/deploy` request with the same coordinates, so the runner
-  answers it with the same `deployment_id`. It serves a remembered success and re-runs a remembered failure or
-  `interrupted` record. The sync of each service then asks the config-hash gate (§5.3): a service whose hash, source
-  identity, containers and recorded checkout match is skipped, and any other service is deployed. The skip also requires
-  that the newest Dokploy deployment record of the compose is a completed success (`done`). A record that is `running`,
-  `queued`, `error`, `cancelled` or without a status means do not skip, because a runner killed after Dokploy started its
-  deploy leaves the hash, the checkout and the old containers matching while the deploy has not finished or can still
-  fail on the pull. The block lasts one sync: the forced redeploy writes a newer `done` record. No record, or a list that
-  cannot be read, keeps the skip.
-- **Idempotency of an app unit.** There is no hash skip. A retry before the rollout started changes nothing in the
-  compose, so a repeat is safe. After the rollout started the unit is not retried.
-- **Manual dispatch.** `deploy.yml` `workflow_dispatch type=staging` runs `python -m tools.deploy_v2` directly, not the
-  train. It lost the one re-submit that #666 gave a staging `deploy_v2` whose runner was recreated between the request
-  and the poll: it fails and a person dispatches it again. Release-train callers are covered by this budget.
-  `app-deploy-request.yml` is retired.
-- **Production marker.** The `production/<tag>` marker advances only after every unit of the tag succeeded, a unit that
-  succeeded on a retry included. A unit that stays red after its retries stops the run and the marker does not move.
-
 ### 3.4 未收口项(open / 目标态)
 
 1. ✅ **把 `iac_runner` bootstrap 与 `apply-observability` 折进 tag reconcile 已落地 (#1416)** —— `deploy.yml` 与 `apply-observability.yml` 移除 `on.push`，合流 `main` 不再产生班车外的 `production` 审批挂起单；L1 runner 自更新与 L2 SigNoz 告警/看板全部收敛进 `reconcile-iac-inputs.yml` (`promote_prod=true`) 单一发布班车。
@@ -333,7 +274,7 @@ post-merge 部署被 GitHub Actions `concurrency` 串行化,调 IaC Runner 前�
 完成 sync 结果,不只是请求被接受**。操作坐标是 `(env, exact_ref, normalized_service_set)`:服务集合是身份的一部分,
 不是日志附属字段;同一 release 并发部署不同服务不得互相命中 cache / in-flight / status。
 不走公网 Cloudflare 的 `wait=true`(会在 sync 完成前 524)。
-A `not_found` answer that lasts longer than 90 seconds is a lost request; the client fails and names the cause and the deployment id. Only a real status resets the 90-second timer: a gateway error does not. An `interrupted` answer (§5.1.1) is raised at once as a second transient runner fault. `deploy_v2` sends a request once and never re-submits it itself; the release train retries the failed unit (§3.3.1). A manual `deploy.yml` `workflow_dispatch type=staging` is not the train: since #1439 it no longer re-submits a request that the runner lost (the #666 staging re-submit moved to the train), so a person dispatches it again.
+A `not_found` answer that lasts longer than 90 seconds is a lost request; the client fails and names the cause and the deployment id. Only a real status resets the 90-second timer: a gateway error does not. A staging deploy re-submits a lost request once; a production deploy fails at once.
 
 ### 5.1 Endpoints
 
@@ -343,35 +284,6 @@ A `not_found` answer that lasts longer than 90 seconds is a lost request; the cl
 | `/webhook` | POST | GitHub push receiver. **Deploys nothing**: a merge is not a release. staging 由 release tag 经 `reconcile-iac-inputs.yml` 自动晋升，prod 由显式 promote，app 的 PR 走 preview 栈；infra2 自身没有常驻 preview，PR 期的 `deploy_v2 live canary` 就是它的 preview。此前它会用未打标的 main HEAD 部署 staging（对每个声明了 `common/**`/`tools/**` 的服务，等于「合并即部署」），该路径已移除。|
 | `/deploy` | POST | 版本部署;`wait=true` 为 legacy 直等 |
 | `/deploy/status` | POST | 用 `/deploy` 返回的 `deployment_id` 签名轮询同一操作的真实 sync 结果 |
-
-#### 5.1.1 Persistent deploy records (#1439)
-
-The runner saves its deploy records in `${DATA_PATH}/workspace/.iac_runner/deploy_state.json` (the `/workspace` volume).
-Before #1439 it kept them in memory, and a worker or container restart erased them: the poll then got `not_found` and
-failed (run 41967457003, 2026-11-05). The file holds the keys in flight and the recent results.
-
-- **Write.** Every state change writes the whole file in one locked step: a temp file in the same directory, `fsync`, then
-  `os.replace`. A reader or a crash sees the old complete file or the new one. A write error never fails a deploy; it is
-  logged and `/health` reports `deploy_state.persistent=false` with `last_error`.
-- **Load.** The runner loads the file at start and the loader never raises: the runner must boot whatever the file holds.
-  A record past its age limit is dropped (600 s for a result, 3600 s for an `interrupted` record) and at most 64 records
-  stay. A file over 8 MiB, bytes that are not UTF-8, JSON nested past the recursion limit, an unknown `version` or a
-  document of the wrong shape is moved to `deploy_state.json.corrupt-<time>` (the newest 3 copies stay) and the runner
-  starts empty and logs an error once. A file that cannot be read at all (permissions, I/O error) is left in place.
-  A restored record keeps its `env`, `ref`, services, `version_ref` and `action`, so a `secrets-supply` record does not
-  come back as a `sync` key (#649).
-- **Worker-only restart.** gunicorn kills a worker by its pid; the `invoke` child of its sync keeps running. The
-  deployment lock (`/tmp/deployment.lock`, `sync_runner.file_lock(share_with_children=True)`) is passed to every
-  `invoke` child (`pass_fds`), so the OS keeps it held until the child ends, and the child clears the inheritable flag at
-  once so a grandchild does not hold it. The retry of the `interrupted` deploy starts a thread that waits for that lock
-  (at most `DEPLOYMENT_LOCK_WAIT_SECONDS`, 3600 s), then syncs: the config-hash gate decides on fresh state. The poll sees
-  `in_progress` meanwhile, so no second sync of a service runs beside the orphan. After the wait limit the sync ends as a
-  failed sync (`Sync not started: another process still holds the deployment lock ...`), which the train does not retry.
-- **Interrupted.** A deploy that was in flight at the restart lost its thread. Its record reads back as
-  `{"status": "interrupted", ...}` on `/deploy/status` (HTTP 200), never as `not_found`. `interrupted` is not a result and
-  the runner does not serve it for a duplicate request: the next `/deploy` with the same coordinates runs again.
-- **Client.** `poll_platform_deploy_status` raises `RunnerInterruptedError` at once. It is a transient fault: the release
-  train retries the unit (§3.3.1).
 
 ### 5.2 服务映射规则(fan-out)
 
@@ -386,9 +298,8 @@ failed (run 41967457003, 2026-11-05). The file holds the keys in flight and the 
 **为什么 runner bootstrap 走带外**:IaC Runner 不能在自己正被 Actions 轮询的 `/deploy` 请求里重启自己;Actions
 从容器外拥有自更新步骤(更新 Dokploy compose checkout → 重建 runner 镜像 → 等 health → 再 `/deploy`)。
 
-**Idle wait before the recreate (#666):** A recreate used to drop the runner's in-memory deploy state. Since #1439 the
-runner saves its deploy records (§5.1.1), so the wait now only avoids interrupting a deploy; it no longer protects the
-record of one. The script builds the image first. Then it reads `in_flight_deploys` from `/health` every 10 seconds.
+**Idle wait before the recreate (#666):** A recreate drops the runner's in-memory deploy state.
+The script builds the image first. Then it reads `in_flight_deploys` from `/health` every 10 seconds.
 It recreates the runner immediately after the count is 0. The wait has a limit of 900 seconds
 (`IAC_RUNNER_IDLE_WAIT_SECONDS`). At the limit, the script prints a warning and recreates the runner.
 If the count is unknown, the script does not wait. An older runner image does not report the field.

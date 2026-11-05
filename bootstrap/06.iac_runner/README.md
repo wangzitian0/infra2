@@ -36,8 +36,6 @@ The recent-result window (600s) is part of that idempotency, and only a **succes
 
 `/workspace/infra2` is a **mirror of origin**, not a repository anyone commits in. The sync fetches with `--tags --force --prune --prune-tags`, so a tag that was re-cut or withdrawn upstream is followed rather than defended: without that, one leftover local tag makes every later deploy abort with `Failed to update repo` (2026-09-09, a stale `v1.1.77` blocking `v1.1.77`'s own staging soak). Submodules are never recursed — the runner deploys infra2's own tree.
 
-The runner's deploy records live beside the mirror, in `/workspace/.iac_runner/deploy_state.json`, so a worker or container restart does not erase them (#1439). A deploy that was in flight at the restart reads back as `interrupted` on `/deploy/status`, and the release train requests it again. `/health` shows `deploy_state.persistent`; `false` means a restart would lose the records. See [bootstrap.iac_runner SSOT](../../docs/ssot/bootstrap.iac_runner.md) §3.4.
-
 ## Architecture
 
 Uses **vault-agent sidecar** pattern for secrets injection:

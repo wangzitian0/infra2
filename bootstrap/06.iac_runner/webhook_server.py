@@ -6,7 +6,6 @@ Receives GitHub push events and triggers sync for changed services.
 """
 
 import base64
-import contextlib
 import functools
 import hashlib
 import hmac
@@ -17,11 +16,9 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 import urllib.request
-from datetime import datetime, timezone
 from pathlib import Path
 from flask import Flask, request, jsonify
 
@@ -35,23 +32,6 @@ GIT_REPO_URL = os.environ.get("GIT_REPO_URL")
 GIT_BRANCH = os.environ.get("GIT_BRANCH") or "main"
 SECRETS_FILE = Path("/secrets/.env")
 RECENT_DEPLOY_TTL_SECONDS = 600
-# A deploy that was in flight when the runner restarted reads back as "interrupted". The
-# client may poll long after the restart (it tolerates a 180 s gateway outage first), so
-# this record outlives an ordinary result.
-INTERRUPTED_DEPLOY_TTL_SECONDS = 3600
-# Deploy records live on the /workspace volume so a worker or container restart does not
-# erase them (#1439). The directory sits beside the repo checkout, never inside it: a
-# `git clean` of /workspace/infra2 must not remove it. Tests point it elsewhere.
-DEPLOY_STATE_FILE = (
-    Path(os.environ.get("IAC_RUNNER_STATE_DIR") or WORKSPACE / ".iac_runner")
-    / "deploy_state.json"
-)
-DEPLOY_STATE_VERSION = 1
-MAX_PERSISTED_DEPLOYS = 64
-# A saved state of 64 records is far below this; a larger file is a fault, not state.
-MAX_STATE_FILE_BYTES = 8 * 1024 * 1024
-# Unusable state files are kept aside for diagnosis; older copies are deleted.
-MAX_CORRUPT_COPIES = 3
 SIGNATURE_TTL_SECONDS = 300
 MAX_REQUEST_BODY_BYTES = 65536
 EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -81,11 +61,7 @@ _op_health_cache: dict[str, object] = {"ok": False, "at": float("-inf")}
 _deploy_state_lock = threading.Lock()
 DeploymentKey = tuple[str, str, tuple[str, ...]]
 _in_flight_deploys: set[DeploymentKey] = set()
-# Wall-clock start and trigger of each in-flight deploy; only the persisted record reads it.
-_in_flight_meta: dict[DeploymentKey, tuple[float, str]] = {}
 _recent_deploys: dict[DeploymentKey, tuple[float, dict]] = {}
-# The last error from writing the state file; "" while the file is current (#1439).
-_deploy_state_error = ""
 _seen_nonces: dict[str, float] = {}
 _nonce_lock = threading.Lock()
 if hasattr(app, "config"):
@@ -382,303 +358,15 @@ def _deployment_id(key: DeploymentKey) -> str:
     return hashlib.sha256(seed.encode()).hexdigest()[:16]
 
 
-def _record_ttl(response: dict) -> int:
-    """How long a remembered record stays: an interrupted one outlives a result (#1439)."""
-    if response.get("status") == "interrupted":
-        return INTERRUPTED_DEPLOY_TTL_SECONDS
-    return RECENT_DEPLOY_TTL_SECONDS
-
-
 def _recent_result(key: DeploymentKey) -> dict | None:
     item = _recent_deploys.get(key)
     if not item:
         return None
     completed_at, response = item
-    if time.monotonic() - completed_at > _record_ttl(response):
+    if time.monotonic() - completed_at > RECENT_DEPLOY_TTL_SECONDS:
         _recent_deploys.pop(key, None)
         return None
     return response
-
-
-# --- Persistent deploy records (#1439) -------------------------------------------------
-#
-# gunicorn runs one worker with four threads, so every writer below is a thread of one
-# process and `_deploy_state_lock` orders them. A snapshot and its write happen under that
-# one lock: two writers that snapshot in one order and write in the other would leave the
-# older state on disk. The file is replaced atomically (temp file in the same directory,
-# fsync, os.replace), so a reader or a crash sees the old complete file or the new one.
-#
-# What is saved: the keys in flight, and the recent results. A restart kills the threads
-# that ran the in-flight deploys, so at load every in-flight key becomes an "interrupted"
-# record. Before this change it became "not_found", and the client could not tell a lost
-# request from a deploy that never existed (run 41967457003, 2026-11-05).
-
-
-def _key_to_json(key: DeploymentKey) -> dict:
-    return {
-        "env": key[0],
-        "ref": key[1],
-        "services": list(key[2]),
-        "version_ref": key[3],
-        "action": key[4],
-    }
-
-
-def _key_from_json(raw) -> DeploymentKey | None:
-    """The key a record was saved under, or None when the entry is not a valid key."""
-    if not isinstance(raw, dict):
-        return None
-    env, ref, services = raw.get("env"), raw.get("ref"), raw.get("services")
-    version_ref, action = raw.get("version_ref", ""), raw.get("action", "sync")
-    if not (isinstance(env, str) and isinstance(ref, str)):
-        return None
-    if not isinstance(services, list) or not all(isinstance(s, str) for s in services):
-        return None
-    if not (isinstance(version_ref, str) and isinstance(action, str)):
-        return None
-    return (env, ref, tuple(services), version_ref, action or "sync")
-
-
-def _iso_utc(epoch: float) -> str:
-    return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _interrupted_response(key: DeploymentKey, interrupted_at: float, triggered_by: str):
-    response = {
-        "status": "interrupted",
-        "deployment_id": _deployment_id(key),
-        "env": key[0],
-        "ref": key[1],
-        "triggered_by": triggered_by,
-        "requested_services": list(key[2]),
-        "interrupted_at": _iso_utc(interrupted_at),
-        "error": (
-            "iac_runner restarted while this deployment was in flight, so its outcome "
-            "is unknown. Request it again: a service whose configuration hash already "
-            "matches is skipped, and any other service is deployed."
-        ),
-    }
-    if key[3]:
-        response["version_ref"] = key[3]
-    if key[4] and key[4] != "sync":
-        response["action"] = key[4]
-    return response
-
-
-def _prune_recent_locked(now_monotonic: float) -> None:
-    """Drop records past their age limit, then the oldest beyond the size bound."""
-    for key, (stored_at, response) in list(_recent_deploys.items()):
-        if now_monotonic - stored_at > _record_ttl(response):
-            _recent_deploys.pop(key, None)
-    overflow = len(_recent_deploys) - MAX_PERSISTED_DEPLOYS
-    if overflow > 0:
-        oldest_first = sorted(_recent_deploys.items(), key=lambda item: item[1][0])
-        for key, _item in oldest_first[:overflow]:
-            _recent_deploys.pop(key, None)
-
-
-def _snapshot_locked() -> dict:
-    now_monotonic, now_wall = time.monotonic(), time.time()
-    _prune_recent_locked(now_monotonic)
-    return {
-        "version": DEPLOY_STATE_VERSION,
-        "saved_at": now_wall,
-        "in_flight": [
-            {
-                "key": _key_to_json(key),
-                "started_at": _in_flight_meta.get(key, (now_wall, "unknown"))[0],
-                "triggered_by": _in_flight_meta.get(key, (now_wall, "unknown"))[1],
-            }
-            for key in sorted(_in_flight_deploys)
-        ],
-        "recent": [
-            {
-                "key": _key_to_json(key),
-                "completed_at": now_wall - (now_monotonic - stored_at),
-                "response": response,
-            }
-            for key, (stored_at, response) in sorted(
-                _recent_deploys.items(), key=lambda item: item[1][0]
-            )
-        ],
-    }
-
-
-def _atomic_write_json(path: Path, payload: dict) -> None:
-    """Write `payload` so that `path` holds the old complete file or the new one."""
-    # parents=False: a missing /workspace is a misconfiguration to report, not to create.
-    path.parent.mkdir(exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(tmp_name, path)
-    except BaseException:
-        with contextlib.suppress(OSError):
-            os.unlink(tmp_name)
-        raise
-
-
-def _persist_deploy_state_locked() -> None:
-    """Save the records. The caller holds `_deploy_state_lock`.
-
-    A failed save never fails a deploy: the records stay in memory as before this change.
-    The failure is logged and shown by /health (`deploy_state`), so lost durability is
-    visible and not a silent green."""
-    global _deploy_state_error
-    try:
-        _atomic_write_json(DEPLOY_STATE_FILE, _snapshot_locked())
-        _deploy_state_error = ""
-    except Exception as exc:  # noqa: BLE001 - a save error must never fail a deploy
-        message = f"{type(exc).__name__}: {exc}"
-        if message != _deploy_state_error:
-            logger.error(
-                "Deploy records are not persisted to %s: %s", DEPLOY_STATE_FILE, message
-            )
-        _deploy_state_error = message
-
-
-def _deploy_state_health() -> dict:
-    error = _deploy_state_error
-    return {
-        "persistent": not error,
-        "path": str(DEPLOY_STATE_FILE),
-        "last_error": error,
-        "records": len(_recent_deploys),
-    }
-
-
-def _begin_deploy_locked(key: DeploymentKey, triggered_by: str = "unknown") -> None:
-    """Mark `key` in flight and save it. The caller holds `_deploy_state_lock`."""
-    _in_flight_deploys.add(key)
-    _in_flight_meta[key] = (time.time(), triggered_by)
-    _persist_deploy_state_locked()
-
-
-def _finish_deploy_locked(key: DeploymentKey, response: dict | None) -> None:
-    """Store the result, clear the in-flight mark and save, in one step under the lock."""
-    if response is not None:
-        _recent_deploys[key] = (time.monotonic(), response)
-    _in_flight_deploys.discard(key)
-    _in_flight_meta.pop(key, None)
-    _persist_deploy_state_locked()
-
-
-def _prune_corrupt_copies() -> None:
-    """Keep the newest MAX_CORRUPT_COPIES quarantined files; the names sort by time."""
-    prefix = f"{DEPLOY_STATE_FILE.name}.corrupt-"
-    with contextlib.suppress(OSError):
-        copies = sorted(
-            path
-            for path in DEPLOY_STATE_FILE.parent.iterdir()
-            if path.name.startswith(prefix)
-        )
-        for stale in copies[:-MAX_CORRUPT_COPIES]:
-            with contextlib.suppress(OSError):
-                stale.unlink()
-
-
-def _quarantine_state_file(reason: str) -> None:
-    quarantine = DEPLOY_STATE_FILE.with_name(
-        f"{DEPLOY_STATE_FILE.name}.corrupt-{time.time_ns():020d}"
-    )
-    logger.error(
-        "Deploy state file %s is unusable (%s); starting empty, keeping it as %s",
-        DEPLOY_STATE_FILE,
-        reason[:200],
-        quarantine,
-    )
-    with contextlib.suppress(OSError):
-        os.replace(DEPLOY_STATE_FILE, quarantine)
-    _prune_corrupt_copies()
-
-
-def _read_saved_state() -> tuple[list, list] | None:
-    """The saved (recent, in_flight) lists, or None when there is nothing to restore.
-
-    Any file content is possible after a storage fault: bytes that are not UTF-8, JSON
-    nested past the recursion limit, a huge file, a valid document of the wrong shape.
-    gunicorn imports this module, so an exception here keeps every worker from booting
-    and stops all deploys until a person deletes the file. Every decode, parse and shape
-    failure therefore quarantines the file and starts empty (`Exception`, never
-    `BaseException`). A file that cannot be read at all (permissions, I/O error) is left
-    where it is."""
-    try:
-        if DEPLOY_STATE_FILE.stat().st_size > MAX_STATE_FILE_BYTES:
-            raise ValueError(f"file is larger than {MAX_STATE_FILE_BYTES} bytes")
-        raw = DEPLOY_STATE_FILE.read_bytes()
-        data = json.loads(raw.decode("utf-8"))
-        if not isinstance(data, dict) or data.get("version") != DEPLOY_STATE_VERSION:
-            raise ValueError("unknown state file version")
-        saved_recent, saved_in_flight = data.get("recent"), data.get("in_flight")
-        if not isinstance(saved_recent, list) or not isinstance(saved_in_flight, list):
-            raise ValueError("recent and in_flight must be lists")
-        return saved_recent, saved_in_flight
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        logger.error("Deploy state file %s is unreadable: %s", DEPLOY_STATE_FILE, exc)
-        return None
-    except Exception as exc:  # noqa: BLE001 - see the docstring
-        _quarantine_state_file(f"{type(exc).__name__}: {exc}")
-        return None
-
-
-def _restore_saved_records(saved_recent: list, saved_in_flight: list) -> None:
-    now_wall, now_monotonic = time.time(), time.monotonic()
-    restored = interrupted = 0
-    with _deploy_state_lock:
-        for item in saved_recent:
-            if not isinstance(item, dict):
-                continue
-            key = _key_from_json(item.get("key"))
-            response, completed_at = item.get("response"), item.get("completed_at")
-            if key is None or not isinstance(response, dict):
-                continue
-            if isinstance(completed_at, bool) or not isinstance(
-                completed_at, (int, float)
-            ):
-                continue
-            age = max(0.0, now_wall - float(completed_at))
-            _recent_deploys[key] = (now_monotonic - age, response)
-            restored += 1
-        for item in saved_in_flight:
-            key = _key_from_json(item.get("key") if isinstance(item, dict) else None)
-            if key is None:
-                continue
-            triggered_by = str(item.get("triggered_by") or "unknown")
-            # The thread that ran this deploy died with the process.
-            _recent_deploys[key] = (
-                now_monotonic,
-                _interrupted_response(key, now_wall, triggered_by),
-            )
-            interrupted += 1
-        _prune_recent_locked(now_monotonic)
-    logger.info(
-        "Restored %d deploy record(s) from %s; %d deploy(s) were in flight at the restart "
-        "and now read as interrupted",
-        restored,
-        DEPLOY_STATE_FILE,
-        interrupted,
-    )
-
-
-def _load_deploy_state() -> None:
-    """Restore the records an earlier process saved. Runs once at import, before any
-    request thread exists, and never raises: the runner must start. A deploy that was in
-    flight at the restart is now an interrupted record."""
-    try:
-        saved = _read_saved_state()
-        if saved is not None:
-            _restore_saved_records(*saved)
-    except Exception:  # noqa: BLE001
-        logger.exception("Deploy records could not be restored; starting empty")
-        with _deploy_state_lock:
-            _recent_deploys.clear()
 
 
 def _reusable_result(key: DeploymentKey) -> dict | None:
@@ -831,7 +519,9 @@ def _run_deployment(
         # poll never sees the key gone before its result exists, and no key stays in
         # flight until a restart (the bootstrap idle wait reads this set, #666).
         with _deploy_state_lock:
-            _finish_deploy_locked(key, response)
+            if response is not None:
+                _recent_deploys[key] = (time.monotonic(), response)
+            _in_flight_deploys.discard(key)
 
 
 def _failed_response(
@@ -919,14 +609,11 @@ def health():
     with _deploy_state_lock:
         in_flight_deploys = len(_in_flight_deploys)
 
-    # Like the count, this stays out of `checks`: a runner that cannot save its records
-    # still deploys, so it is reported and not made unhealthy (#1439).
     return jsonify(
         {
             "status": "healthy" if all_healthy else "degraded",
             "checks": checks,
             "in_flight_deploys": in_flight_deploys,
-            "deploy_state": _deploy_state_health(),
             "git_sha": os.environ.get("GIT_SHA", "unknown").strip() or "unknown",
         }
     ), status_code
@@ -1055,7 +742,7 @@ def version_deploy():
                         action=action,
                     )
                 ), 202
-            _begin_deploy_locked(key, triggered_by)
+            _in_flight_deploys.add(key)
 
         _run_deployment(
             env,
@@ -1092,7 +779,7 @@ def version_deploy():
                     action=action,
                 )
             ), 202
-        _begin_deploy_locked(key, triggered_by)
+        _in_flight_deploys.add(key)
 
     if services is not None:
         thread = threading.Thread(
@@ -1220,13 +907,6 @@ def deployment_status():
             "ref": ref,
         }
     ), 404
-
-
-# Restore after every definition above exists. The save also writes back the interrupted
-# records and proves at start-up that the state directory is writable.
-_load_deploy_state()
-with _deploy_state_lock:
-    _persist_deploy_state_locked()
 
 
 if __name__ == "__main__":
