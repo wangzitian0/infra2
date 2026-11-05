@@ -64,6 +64,17 @@ services:
       - truealpha/truealpha/*/deploy.py
       - uv.lock
 
+  # platform/signoz renders otel-collector-config.yaml on the host (#1438). The
+  # CORS allow-list in that file comes from `cors_allowed_origins()`, which reads
+  # `env_config.py` and, through `service_spec()`, `contract.py`. A change to either
+  # changes the rendered file, so it must flip this hash. The test
+  # `test_rendered_template_source_modules_are_hash_dependencies` derives this list
+  # from the `_render*` functions of the deploy.py and fails when a module is missing.
+  platform/signoz:
+    depends_on:
+      - common/deploy/env_config.py
+      - common/deploy/contract.py
+
   platform/todo:
     depends_on:
       - uv.lock

@@ -27,6 +27,7 @@ from common.deploy.config_hash import (  # noqa: E402
     compose_host_mount_files,
     compose_mount_fingerprint_gaps,
     mount_fingerprint_var,
+    parse_compose_services,
 )
 from common.deploy.dependencies import (  # noqa: E402
     CANONICAL_SERVICE_ROOTS,
@@ -146,12 +147,17 @@ def host_mount_violations(composes: list[Path], root: Path = ROOT) -> list[str]:
     for compose in composes:
         compose = Path(compose).resolve()
         text = compose.read_text(encoding="utf-8")
+        rel = compose.relative_to(root.resolve()).as_posix()
+        try:
+            parse_compose_services(text)
+        except ValueError as exc:
+            violations.append(f"{rel}: host mount check read nothing: {exc}")
+            continue
         inputs = {
             path.name
             for path in _compose_artifact_files(str(compose), text)
             if path.parent == compose.parent
         }
-        rel = compose.relative_to(root.resolve()).as_posix()
         for name in sorted(set(compose_host_mount_files(text))):
             if name not in inputs and f"{name}.tmpl" not in inputs:
                 violations.append(

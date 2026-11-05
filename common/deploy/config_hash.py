@@ -15,7 +15,8 @@ import shlex
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _GLOB_CHARS_RE = re.compile(r"[*?[]")
-_HOST_DATA_PREFIX = "${DATA_PATH}/"
+_HOST_VAR_PREFIX_RE = re.compile(r"^\$\{[A-Za-z_][A-Za-z0-9_]*(?::?-[^}]*)?\}/")
+_HOST_DATA_VAR_RE = re.compile(r"^\$\{DATA_PATH(?::?-[^}]*)?\}/")
 _MOUNT_FINGERPRINT_PREFIX = "IAC_MOUNT_SHA256_"
 _ENV_SUBST_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?-)([^}]*))?\}")
 
@@ -229,8 +230,16 @@ def _bind_mount_sources(service: dict) -> list[str]:
 
 
 def _host_mount_name(source: str) -> str | None:
-    """File name of a `${DATA_PATH}/<name>` host mount (the deploy-rendered file path)."""
-    if not source.startswith(_HOST_DATA_PREFIX):
+    """File name of a host mount under a variable, such as `${DATA_PATH}/<name>`.
+
+    The deploy.py renders the file to the host path. Any leading `${VAR}`,
+    `${VAR:-default}` or `${VAR-default}` counts, except a default that is a
+    relative path: the hash reads that path from the repository (`./` sources).
+    """
+    if not _HOST_VAR_PREFIX_RE.match(source):
+        return None
+    expanded = _expand_compose_env_defaults(source)
+    if expanded is not None and expanded.startswith("."):
         return None
     name = source.rstrip("/").rsplit("/", 1)[-1]
     if not name or "${" in name:
@@ -254,17 +263,30 @@ def _host_mount_template(compose_dir: Path, source: str) -> Path | None:
     return None
 
 
-def _compose_services(compose_content: str) -> dict:
+def parse_compose_services(compose_content: str) -> dict:
+    """Services of a compose text. Raises ValueError when the text cannot be read.
+
+    A guard that parses nothing checks nothing, so the guard uses this strict form.
+    """
     try:
         import yaml
-    except ModuleNotFoundError:
-        return {}
+    except ModuleNotFoundError as exc:
+        raise ValueError("PyYAML is not installed") from exc
     try:
-        compose = yaml.safe_load(compose_content) or {}
-    except yaml.YAMLError:
+        compose = yaml.safe_load(compose_content)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"compose is not valid YAML: {exc}") from exc
+    services = compose.get("services") if isinstance(compose, dict) else None
+    if not isinstance(services, dict):
+        raise ValueError("compose has no `services` mapping")
+    return services
+
+
+def _compose_services(compose_content: str) -> dict:
+    try:
+        return parse_compose_services(compose_content)
+    except ValueError:
         return {}
-    services = compose.get("services", {}) if isinstance(compose, dict) else {}
-    return services if isinstance(services, dict) else {}
 
 
 def compose_service_host_mounts(compose_content: str) -> dict[str, list[str]]:
@@ -272,6 +294,10 @@ def compose_service_host_mounts(compose_content: str) -> dict[str, list[str]]:
 
     Only mounts whose last path part has a file suffix count. A directory mount
     such as `${DATA_PATH}/data` holds runtime data, not a rendered template.
+    A host file without a suffix (for example `htpasswd`) is left out on purpose:
+    the name alone cannot tell it from a data directory. Any `${VAR}/`, `${VAR:-x}/`
+    prefix counts, not only `${DATA_PATH}`. Only a `${DATA_PATH}` mount can name a
+    template, so a file under another variable always fails the guard.
     This is the one declaration of which host files a service mounts (#1438).
     """
     found: dict[str, list[str]] = {}
@@ -333,7 +359,9 @@ def compose_mount_fingerprint_gaps(compose_content: str) -> list[tuple[str, str]
     for service_name, names in compose_service_host_mounts(compose_content).items():
         text = service_label_text(services[service_name])
         for name in names:
-            if mount_fingerprint_var(name) not in text:
+            var = re.escape(mount_fingerprint_var(name))
+            # Compare the whole variable name: `X_OLD` must not satisfy `X`.
+            if not re.search(r"\$\{" + var + r"(?![A-Za-z0-9_])", text):
                 gaps.append((service_name, name))
     return gaps
 
@@ -342,7 +370,8 @@ def missing_mount_fingerprints(compose_path: str, env_vars: dict) -> list[str]:
     """Fingerprint variables the compose needs that `env_vars` does not carry.
 
     A missing variable resolves to an empty label, so the container would keep the
-    old file after a template change. Unreadable composes need none.
+    old file after a template change. A missing file needs none; a file that does
+    not parse raises ValueError.
     """
     path = Path(compose_path)
     if not path.is_absolute():
@@ -351,6 +380,7 @@ def missing_mount_fingerprints(compose_path: str, env_vars: dict) -> list[str]:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return []
+    parse_compose_services(text)  # raises ValueError on an unreadable compose
     return [
         var for var in required_mount_fingerprint_vars(text) if not env_vars.get(var)
     ]
@@ -417,15 +447,15 @@ def _compose_artifact_files(compose_path: str, compose_content: str) -> list[Pat
                     files.extend(_dockerfile_copy_sources(dockerfile, context_dir))
 
         for source in _bind_mount_sources(service):
-            expanded_source = _expand_compose_env_defaults(source)
-            if expanded_source is None:
-                # `${DATA_PATH}/x` has no default: the host file is rendered by the
-                # service deploy.py from a template in the service directory (#1438).
+            if _host_mount_name(source) is not None and _HOST_DATA_VAR_RE.match(source):
+                # The host file is rendered by the service deploy.py from a template
+                # in the service directory (#1438). The compose mount is the declaration.
                 template = _host_mount_template(compose_dir, source)
                 if template:
                     files.append(template)
                 continue
-            if not expanded_source.startswith("."):
+            expanded_source = _expand_compose_env_defaults(source)
+            if not expanded_source or not expanded_source.startswith("."):
                 continue
             resolved = _resolve_compose_relative(compose_dir, expanded_source)
             if resolved:
@@ -510,6 +540,7 @@ __all__ = [
     "missing_mount_fingerprints",
     "mount_fingerprint_env",
     "mount_fingerprint_var",
+    "parse_compose_services",
     "required_mount_fingerprint_vars",
     "_compute_config_hash",
     "_dependency_items_from_globs",

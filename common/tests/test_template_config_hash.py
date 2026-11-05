@@ -6,6 +6,7 @@ Before the fix, `sync` printed "config unchanged, skipping deploy" after a chang
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 from pathlib import Path
 
@@ -346,3 +347,214 @@ def test_free_uploads_template_change_when_uuid_and_path_are_stable(
     current = module.FreeDeployer._render_config(FREE_UUID, FREE_PATH)
     assert _free_upload_count(monkeypatch, current) == 0
     assert _free_upload_count(monkeypatch, current.replace('"warn"', '"info"')) == 1
+
+
+# --- review findings of PR #1447 (head 7762f85) -------------------------------------
+
+
+def _local_module_path(module: str) -> Path | None:
+    path = ROOT / (module.replace(".", "/") + ".py")
+    return path if path.is_file() else None
+
+
+def _imports(node: ast.AST) -> dict[str, str]:
+    """name -> module for each `from X import name` below `node`."""
+    found: dict[str, str] = {}
+    for child in ast.walk(node):
+        if isinstance(child, ast.ImportFrom) and child.module:
+            for alias in child.names:
+                found[alias.asname or alias.name] = child.module
+    return found
+
+
+def _used_names(node: ast.AST) -> set[str]:
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+
+
+def rendered_template_source_modules(service_dir: str) -> set[Path]:
+    """Repo modules whose code feeds a `_render*` function of the service deploy.py.
+
+    Direct: a `common.*` name that a `_render*` function uses. One hop: the lazy
+    imports of the function that defines that name.
+    """
+    tree = ast.parse((ROOT / service_dir / "deploy.py").read_text(encoding="utf-8"))
+    modules: set[Path] = set()
+    for func in [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name.startswith("_render")
+    ]:
+        scope = {**_imports(tree), **_imports(func)}
+        for name in _used_names(func) & scope.keys():
+            module = scope[name]
+            path = _local_module_path(module)
+            # `common.console` only prints; it never shapes the rendered bytes.
+            if (
+                path is None
+                or not module.startswith("common.")
+                or module == "common.console"
+            ):
+                continue
+            modules.add(path)
+            target = ast.parse(path.read_text(encoding="utf-8"))
+            for defn in ast.walk(target):
+                if isinstance(defn, ast.FunctionDef) and defn.name == name:
+                    for lazy_module in _imports(defn).values():
+                        lazy = _local_module_path(lazy_module)
+                        if lazy and lazy_module.startswith("common."):
+                            modules.add(lazy)
+    return {m.resolve() for m in modules}
+
+
+def test_signoz_render_reads_env_config_and_contract() -> None:
+    """Falsifies a green-while-empty scan: the signoz render has repo-module sources."""
+    names = {p.name for p in rendered_template_source_modules("platform/11.signoz")}
+    assert {"env_config.py", "contract.py"} <= names
+
+
+@pytest.mark.parametrize("service_dir", sorted(FINGERPRINT_SERVICES))
+def test_rendered_template_source_modules_are_hash_dependencies(
+    service_dir: str,
+) -> None:
+    """A module that feeds a rendered file must be a hash dependency of the service."""
+    from common.deploy.dependencies import (
+        extra_dependency_globs,
+        service_key_from_path,
+    )
+
+    key = service_key_from_path(f"{service_dir}/compose.yaml")
+    globs = extra_dependency_globs(key)
+    from common.deploy.config_hash import _dependency_paths_from_globs
+
+    hashed = set(_dependency_paths_from_globs(globs))
+    missing = sorted(
+        p.relative_to(ROOT).as_posix()
+        for p in rendered_template_source_modules(service_dir)
+        if p not in hashed
+    )
+    assert missing == [], f"{key}: add to depends_on in deploy-dependencies.yaml"
+
+
+def test_changing_a_dependency_module_flips_the_signoz_hash(tmp_path: Path) -> None:
+    from common.deploy.config_hash import (
+        _dependency_items_from_globs,
+        config_hash_from_items,
+    )
+    from common.deploy.dependencies import extra_dependency_globs
+
+    compose = ROOT / "platform/11.signoz/compose.yaml"
+    text = compose.read_text(encoding="utf-8")
+    items = _artifact_items_from_disk(str(compose), text)
+    deps = _dependency_items_from_globs(extra_dependency_globs("platform/signoz"))
+    base = config_hash_from_items(text, {}, items, deps)
+    changed = [
+        (label, content + b"\n# edit" if label.endswith("env_config.py") else content)
+        for label, content in deps
+    ]
+    assert any(label.endswith("env_config.py") for label, _ in deps)
+    assert config_hash_from_items(text, {}, items, changed) != base
+
+
+# --- guard hardening ----------------------------------------------------------------
+
+
+def _compose_with(volume: str, label_var: str = "IAC_MOUNT_SHA256_C_YML") -> str:
+    return (
+        "services:\n"
+        "  app:\n"
+        "    image: x\n"
+        "    labels:\n"
+        f'      - "iac.mount-sha256.c.yml=${{{label_var}:-}}"\n'
+        "    volumes:\n" + volume
+    )
+
+
+@pytest.mark.parametrize(
+    "volume",
+    [
+        "      - ${DATA_PATH:-/data/x}/c.yml:/etc/c.yml:ro\n",
+        "      - ${CONF_DIR}/c.yml:/etc/c.yml:ro\n",
+        "      - type: bind\n        source: ${DATA_PATH}/c.yml\n        target: /etc/c.yml\n",
+        "      - type: bind\n        source: ${DATA_PATH:-/d}/c.yml\n        target: /etc/c.yml\n",
+    ],
+)
+def test_mount_forms_are_detected(volume: str) -> None:
+    from common.deploy.config_hash import compose_host_mount_files
+
+    assert compose_host_mount_files(_compose_with(volume)) == ["c.yml"]
+
+
+@pytest.mark.parametrize(
+    "volume",
+    [
+        "      - ${DATA_PATH}/data:/var/lib/app\n",
+        "      - ${X:-./conf}/c.yml:/etc/c.yml:ro\n",
+        "      - ./c.yml:/etc/c.yml:ro\n",
+        "      - ${DATA_PATH}/htpasswd:/etc/htpasswd:ro\n",
+    ],
+)
+def test_non_rendered_mount_forms_are_ignored(volume: str) -> None:
+    """Directories, repo-relative paths and suffix-less names are out of scope."""
+    from common.deploy.config_hash import compose_host_mount_files
+
+    assert compose_host_mount_files(_compose_with(volume)) == []
+
+
+@pytest.mark.parametrize(
+    "volume",
+    [
+        "      - ${DATA_PATH:-/data/x}/c.yml:/etc/c.yml:ro\n",
+        "      - type: bind\n        source: ${DATA_PATH}/c.yml\n        target: /etc/c.yml\n",
+    ],
+)
+def test_guard_names_mount_form_without_template(tmp_path: Path, volume: str) -> None:
+    service_dir = tmp_path / "platform" / "98.forms"
+    service_dir.mkdir(parents=True)
+    compose = service_dir / "compose.yaml"
+    compose.write_text(_compose_with(volume), encoding="utf-8")
+    violations = deploy_guard_audit.host_mount_violations([compose], root=tmp_path)
+    assert any("'c.yml'" in v and "no config-hash input" in v for v in violations)
+    (service_dir / "c.yml.tmpl").write_text("x")
+    assert deploy_guard_audit.host_mount_violations([compose], root=tmp_path) == []
+
+
+def test_label_with_a_longer_variable_name_does_not_count(tmp_path: Path) -> None:
+    text = _compose_with(
+        "      - ${DATA_PATH}/c.yml:/etc/c.yml:ro\n",
+        label_var="IAC_MOUNT_SHA256_C_YML_OLD",
+    )
+    assert compose_mount_fingerprint_gaps(text) == [("app", "c.yml")]
+    ok = _compose_with("      - ${DATA_PATH}/c.yml:/etc/c.yml:ro\n")
+    assert compose_mount_fingerprint_gaps(ok) == []
+
+
+@pytest.mark.parametrize("content", ["services: [", "- not a mapping\n", "x: 1\n"])
+def test_guard_fails_on_compose_it_cannot_read(tmp_path: Path, content: str) -> None:
+    service_dir = tmp_path / "platform" / "97.broken"
+    service_dir.mkdir(parents=True)
+    compose = service_dir / "compose.yaml"
+    compose.write_text(content, encoding="utf-8")
+    violations = deploy_guard_audit.host_mount_violations([compose], root=tmp_path)
+    assert len(violations) == 1
+    assert "read nothing" in violations[0]
+
+
+def test_composing_check_raises_on_unparsable_compose(tmp_path: Path) -> None:
+    broken = tmp_path / "compose.yaml"
+    broken.write_text("services: [", encoding="utf-8")
+    with pytest.raises(ValueError):
+        missing_mount_fingerprints(str(broken), {})
+    assert missing_mount_fingerprints(str(tmp_path / "absent.yaml"), {}) == []
+
+
+def test_guard_rejects_host_file_under_another_variable(tmp_path: Path) -> None:
+    """Only `${DATA_PATH}` names a template; a template beside it does not clear `${CONF_DIR}`."""
+    service_dir = tmp_path / "platform" / "96.other"
+    service_dir.mkdir(parents=True)
+    compose = service_dir / "compose.yaml"
+    compose.write_text(
+        _compose_with("      - ${CONF_DIR}/c.yml:/etc/c.yml:ro\n"), encoding="utf-8"
+    )
+    (service_dir / "c.yml.tmpl").write_text("x")
+    violations = deploy_guard_audit.host_mount_violations([compose], root=tmp_path)
+    assert any("'c.yml'" in v and "no config-hash input" in v for v in violations)
