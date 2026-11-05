@@ -218,7 +218,8 @@ def _delete_rule(
     DELETE goes into the failure line, and the read-back decides.
 
     ``/api/v1/rules/{id}`` comes first because it is the only DELETE route of the
-    pinned SigNoz v0.105.1. The v2 path stays for a later SigNoz version.
+    SigNoz version in ``platform/11.signoz/compose.yaml``. The v2 path stays for a
+    later SigNoz version.
     """
     paths = (
         f"/api/v1/rules/{quote(rule_id, safe='')}",
