@@ -10,9 +10,14 @@ from common.deploy.config_hash import mount_fingerprint_env
 from common.deploy.deployer import Deployer, make_tasks
 from common.console import env_vars, error, run_with_status, success, header
 from common.core.facets import BackupFacet, Exemption
+from common.observability.portal_apps import application_items, render_items_yaml
 
 # Get shared_tasks from sys.modules (loaded by tools/loader.py)
 shared_tasks = sys.modules.get("platform.21.portal.shared")
+
+# A YAML comment in the template, so the raw template stays valid YAML. The line is
+# replaced by the registry-derived list items of the Applications group (#1467).
+APPLICATIONS_PLACEHOLDER = "      # {{APPLICATION_ITEMS}}"
 
 
 class PortalDeployer(Deployer):
@@ -62,7 +67,22 @@ class PortalDeployer(Deployer):
             error("Missing config template", str(template_path))
             return None
 
+        # The Applications group derives from the service registry (#1467).
+        try:
+            applications = render_items_yaml(
+                application_items(
+                    internal_domain=internal_domain, domain_suffix=domain_suffix
+                )
+            )
+        except ValueError as exc:
+            error("Cannot derive the Applications group", str(exc))
+            return None
+
         config_content = template_path.read_text()
+        if APPLICATIONS_PLACEHOLDER not in config_content:
+            error("Missing placeholder in config template", APPLICATIONS_PLACEHOLDER)
+            return None
+        config_content = config_content.replace(APPLICATIONS_PLACEHOLDER, applications)
         config_content = config_content.replace("{{INTERNAL_DOMAIN}}", internal_domain)
         return config_content.replace("{{ENV_DOMAIN_SUFFIX}}", domain_suffix)
 
