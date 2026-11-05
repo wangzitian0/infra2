@@ -17,6 +17,7 @@ Static homepage for platform services, powered by Homer. Protected by Authentik 
 
 - `platform/21.portal/compose.yaml` - service definition + SSO labels
 - `platform/21.portal/config.yml.tmpl` - Homer links and layout
+- `common/observability/portal_apps.py` - items of the `Applications` group, derived from the registry
 - `${DATA_PATH}/config.yml` - rendered config on VPS
 
 ## Deployment
@@ -34,7 +35,7 @@ invoke portal.post_compose
 
 `pre_compose` will:
 - create `${DATA_PATH}`
-- render `config.yml.tmpl` with `INTERNAL_DOMAIN` + `ENV_DOMAIN_SUFFIX`
+- render `config.yml.tmpl` with `INTERNAL_DOMAIN` + `ENV_DOMAIN_SUFFIX` and the registry-derived `Applications` items
 - upload `${DATA_PATH}/config.yml`
 
 ## SSO Protection
@@ -123,6 +124,25 @@ labels:
 ## Updating Links
 
 Edit `config.yml.tmpl` and re-run `invoke portal.pre_compose` to regenerate the config.
+
+## Applications Group
+
+The `Applications` group is not hand-written. `deploy.py::_render_config` fills the
+`# {{APPLICATION_ITEMS}}` placeholder line from the service registry
+(`common/observability/portal_apps.py`):
+
+- One link for each key of `common.core.constants.APP_SOURCES`. The link is the web-root
+  public route of the application Deployer. `public_route_host` builds the host, so the
+  staging portal shows staging hosts and the production portal shows production hosts.
+- One dashboard link for an application only when `<layer>/observability/dashboard.json`
+  exists. It opens the SigNoz dashboard list, filtered by the title of that file. SigNoz is
+  `prod_only`, so both portals use the `signoz` host.
+- A missing registry fact makes `_render_config` return none. The deploy then stops before
+  it uploads a partial file.
+
+The hash of the portal reads the files that shape this group (`docs/ssot/deploy-dependencies.yaml`,
+key `platform/portal`). A change to one of them recreates only the portal container on the next
+promotion.
 
 ## Related
 

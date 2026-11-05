@@ -75,6 +75,23 @@ services:
       - common/deploy/env_config.py
       - common/deploy/contract.py
 
+  # platform/portal renders the "Applications" group of config.yml from the service
+  # registry (#1467): each app's public route (its Deployer), the SigNoz host, and the
+  # `observability/dashboard.json` files the dashboard links exist for. A change to any
+  # of them changes the rendered file, so it must flip this hash. The test
+  # `test_rendered_template_source_modules_are_hash_dependencies` checks the modules.
+  platform/portal:
+    depends_on:
+      - common/observability/portal_apps.py
+      - common/observability/probe_specs.py
+      - common/core/registry.py
+      - common/core/constants.py
+      - platform/11.signoz/deploy.py
+      - finance_report/finance_report/*/deploy.py
+      - truealpha/truealpha/*/deploy.py
+      - finance_report/finance_report/observability/dashboard.json
+      - truealpha/truealpha/observability/dashboard.json
+
   platform/todo:
     depends_on:
       - uv.lock

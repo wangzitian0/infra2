@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from common.core.service_identity import ServiceIdentity
+from common.deploy.contract import worker_telemetry_env
 
 if TYPE_CHECKING:
     from invoke import Context
@@ -440,6 +441,14 @@ class SyncPipeline:
             env_vars_dict["OTEL_SERVICE_NAME"] = telemetry_identity.service_name
             env_vars_dict["OTEL_RESOURCE_ATTRIBUTES"] = (
                 telemetry_identity.otel_resource_attributes()
+            )
+            env_vars_dict.update(
+                worker_telemetry_env(
+                    self.ctx.service_id,
+                    str(e.get("ENV") or ""),
+                    version=deploy_ref,
+                    iac_ref=deploy_ref,
+                )
             )
 
         try:
