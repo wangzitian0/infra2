@@ -4,10 +4,25 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+from pathlib import Path
+
+import pytest
 
 from tools import observability_roundtrip_probe as probe
+from common.core import registry
+from common.core.service_identity import ServiceIdentity
 from common.observability.openpanel import OPENPANEL_CLIENTS
+from common.tests.compose_env import container_env
+
+ROOT = Path(__file__).resolve().parents[2]
+IDENTITY_CONTRACT_DOC = ROOT / "docs/ssot/core.environments.md"
+IDENTITY_CONTRACT_ANCHOR = '<a id="telemetry-identity"></a>'
+ALERTING_COMPOSE = ROOT / "platform/12.alerting/compose.yaml"
+#: The compatibility key that the contract dual-writes during the migration.
+LEGACY_ENVIRONMENT_KEY = "deployment.environment"
+SHA40 = "1af32e6daf17e2c58383dd2c0bfaea13bc11e517"
 
 
 def test_signoz_roundtrip_posts_otlp_log_and_queries_nonce(monkeypatch) -> None:
@@ -43,7 +58,11 @@ def test_signoz_roundtrip_posts_otlp_log_and_queries_nonce(monkeypatch) -> None:
         "key": "deployment.environment.name",
         "value": {"stringValue": "staging"},
     } in resource_attrs
-    assert not any(a["key"] == "deployment.environment" for a in resource_attrs)
+    # The contract dual-writes the legacy key during the migration (#1452).
+    assert {
+        "key": LEGACY_ENVIRONMENT_KEY,
+        "value": {"stringValue": "staging"},
+    } in resource_attrs
     log_record = posted[0]["payload"]["resourceLogs"][0]["scopeLogs"][0]["logRecords"][
         0
     ]
@@ -232,3 +251,143 @@ def test_main_reports_a_backend_failure_as_an_ordinary_failure(
     err = capsys.readouterr().err
     assert err.startswith("roundtrip-failed backend=openpanel")
     assert "HTTP Error 500" in err
+
+
+# ---- uniform identity of the canary log record (#1452) -------------------------------
+
+
+def _contract_keys() -> set[str]:
+    """The canonical resource keys of the telemetry identity table, parsed from the SSOT."""
+    lines = IDENTITY_CONTRACT_DOC.read_text(encoding="utf-8").splitlines()
+    assert lines.count(IDENTITY_CONTRACT_ANCHOR) == 1, (
+        "the identity anchor must exist once"
+    )
+    rows: list[str] = []
+    for line in lines[lines.index(IDENTITY_CONTRACT_ANCHOR) + 1 :]:
+        if line.startswith("|"):
+            rows.append(line)
+        elif rows:
+            break
+    keys: set[str] = set()
+    for row in rows[2:]:  # skip the header and the separator
+        canonical_cell = row.strip().strip("|").split("|")[1]
+        keys.update(
+            token.split("=", 1)[0] for token in re.findall(r"`([^`]+)`", canonical_cell)
+        )
+    # A parse that finds nothing would make every assertion below pass for nothing.
+    assert len(keys) >= 9, f"the identity table parse found only {sorted(keys)}"
+    return keys
+
+
+def _signoz_resource(monkeypatch, *, env: str = "staging", iac_ref: str | None = SHA40):
+    """The resource attributes of the log that the signoz round-trip posts, as a dict."""
+    posted: list[dict] = []
+    monkeypatch.setenv("OBS_ROUNDTRIP_ENV", env)
+    if iac_ref is None:
+        monkeypatch.delenv("INFRA_IAC_REF", raising=False)
+    else:
+        monkeypatch.setenv("INFRA_IAC_REF", iac_ref)
+    monkeypatch.setattr(
+        probe, "_post_json", lambda _url, payload, **_kw: posted.append(payload)
+    )
+    monkeypatch.setattr(probe, "_wait_for_count", lambda *_args: 1)
+
+    probe.run_signoz_roundtrip("nonce-1")
+
+    attributes = posted[0]["resourceLogs"][0]["resource"]["attributes"]
+    keys = [attribute["key"] for attribute in attributes]
+    assert len(keys) == len(set(keys)), f"duplicate resource keys: {keys}"
+    return {a["key"]: a["value"]["stringValue"] for a in attributes}
+
+
+def test_signoz_log_resource_carries_every_key_of_the_identity_contract(
+    monkeypatch,
+) -> None:
+    resource = _signoz_resource(monkeypatch)
+
+    expected_keys = _contract_keys() | {LEGACY_ENVIRONMENT_KEY}
+    assert sorted(expected_keys - resource.keys()) == []
+    assert [key for key in expected_keys if not resource[key]] == []
+
+
+def test_signoz_log_resource_equals_the_identity_builder_output(monkeypatch) -> None:
+    resource = _signoz_resource(monkeypatch, env="staging", iac_ref=SHA40)
+
+    identity = ServiceIdentity.build(
+        "platform/signoz",
+        "staging",
+        component="signoz-roundtrip",
+        service_name="infra-observability-canary",
+        version=SHA40,
+        iac_ref=SHA40,
+    )
+    built = dict(
+        pair.split("=", 1) for pair in identity.otel_resource_attributes().split(",")
+    )
+    assert resource == {**built, "infra.canary.nonce": "nonce-1"}
+    # The values that the SigNoz query and the alert labels depend on.
+    assert resource["service.name"] == "infra-observability-canary"
+    assert resource["infra.service.id"] == "platform/signoz"
+    assert resource["infra.component"] == "signoz-roundtrip"
+    assert resource["service.version"] == SHA40
+    assert resource["infra.iac.ref"] == SHA40
+    assert resource[LEGACY_ENVIRONMENT_KEY] == resource["deployment.environment.name"]
+
+
+def test_signoz_log_resource_marks_the_version_unknown_when_no_release_ref_exists(
+    monkeypatch,
+) -> None:
+    resource = _signoz_resource(monkeypatch, iac_ref=None)
+
+    assert resource["service.version"] == "unknown"
+    # The builder drops an empty ref; a fake ref would lie about the release.
+    assert "infra.iac.ref" not in resource
+    assert resource["infra.service.id"] == "platform/signoz"
+    assert resource[LEGACY_ENVIRONMENT_KEY] == "staging"
+
+
+def test_signoz_roundtrip_with_a_malformed_release_ref_is_misconfigured(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    monkeypatch.setenv("OBS_ROUNDTRIP_ENV", "staging")
+    monkeypatch.setenv("INFRA_IAC_REF", "not-a-sha")
+    monkeypatch.setattr(
+        probe,
+        "_post_json",
+        lambda *_a, **_k: pytest.fail("the probe must stop before it posts"),
+    )
+
+    assert _run_main(monkeypatch, tmp_path, "signoz") == probe.MISCONFIGURED_EXIT_CODE
+    err = capsys.readouterr().err
+    assert err.startswith("roundtrip-misconfigured backend=signoz")
+    assert "iac_ref" in err
+
+
+def test_probe_identity_names_the_service_that_declares_the_probe() -> None:
+    """The canary log and the alert of the same probe carry one `infra.service.id`."""
+    declaring = registry.service_attrs()[probe.SIGNOZ_PROBE_SERVICE_ID]
+    facets = {facet.name: facet for facet in declaring.probes}
+
+    assert facets[probe.SIGNOZ_PROBE_NAME].target.endswith(
+        "observability_roundtrip_probe.py signoz"
+    )
+
+
+def test_deploy_issued_release_ref_reaches_the_canary_log(monkeypatch) -> None:
+    """The deploy issues INFRA_IAC_REF, the compose hands it to the probe runner, and
+    the canary log reports it. The probe runner is a separate container of the compose."""
+    issued = ServiceIdentity.build(
+        "platform/alerting",
+        "staging",
+        component="alerting",
+        service_name="platform-alerting",
+        version=SHA40,
+        iac_ref=SHA40,
+    ).deploy_env()
+
+    runner_env = container_env(ALERTING_COMPOSE, "infra-probe-runner", issued)
+
+    assert runner_env["INFRA_IAC_REF"] == SHA40
+    resource = _signoz_resource(monkeypatch, iac_ref=runner_env["INFRA_IAC_REF"])
+    assert resource["service.version"] == SHA40
+    assert resource["infra.iac.ref"] == SHA40

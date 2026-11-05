@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock
 import importlib.util
+import itertools
 import re
 from pathlib import Path
 
@@ -1353,6 +1354,13 @@ def test_runtime_only_config_requires_explicit_secret_free_source_builder() -> N
         UnsafeDeployer.source_config_env_base({"ENV": "production"})
 
 
+def _advancing_clock():
+    """A fake monotonic clock that moves 1 s per read. A poll that never settles then
+    reaches its deadline after a few hundred reads, with no real wait."""
+    ticks = itertools.count()
+    return lambda: float(next(ticks))
+
+
 def test_await_effective_config_hash_retries_until_settled(monkeypatch):
     """Async Dokploy settling: a stale/none first read must be retried, not
     treated as a failure, once the effective hash advances."""
@@ -1365,12 +1373,18 @@ def test_await_effective_config_hash_retries_until_settled(monkeypatch):
         data_path = "/data/x"
 
     monkeypatch.setattr(deployer.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(deployer.time, "monotonic", _advancing_clock())
     reads = iter([None, "stale", "expected"])
-    monkeypatch.setattr(
-        D, "get_remote_config_hash", classmethod(lambda cls: next(reads))
-    )
+    read_count: list[int] = []
+
+    def read_next(_cls):
+        read_count.append(1)
+        return next(reads)
+
+    monkeypatch.setattr(D, "get_remote_config_hash", classmethod(read_next))
 
     assert D._await_effective_config_hash("expected") == "expected"
+    assert len(read_count) == 3  # the poll stopped on the match, it did not read on
 
 
 def test_await_effective_config_hash_times_out_when_unadvanced(monkeypatch):
@@ -1390,6 +1404,35 @@ def test_await_effective_config_hash_times_out_when_unadvanced(monkeypatch):
     monkeypatch.setattr(D, "get_remote_config_hash", classmethod(lambda cls: "stale"))
 
     assert D._await_effective_config_hash("expected") == "stale"
+
+
+def test_await_effective_config_hash_uses_the_clock_in_force_at_call_time(monkeypatch):
+    """#1453: the poll must read time.sleep and time.monotonic when it runs, not when the
+    module loads. A clock bound at import ignored a replaced clock, so two tests waited
+    the whole 420 s timeout in real time."""
+    import pytest
+
+    from common.deploy import dokploy_adapter
+
+    sleeps: list[float] = []
+    # deadline = 0 + 420; the third check is past it
+    ticks = iter([0.0, 1.0, 2.0, 999.0])
+    monkeypatch.setattr(dokploy_adapter.time, "sleep", sleeps.append)
+    monkeypatch.setattr(dokploy_adapter.time, "monotonic", lambda: next(ticks))
+    reads: list[int] = []
+
+    def read_stale() -> str:
+        reads.append(1)
+        if len(reads) > 3:
+            pytest.fail("the poll used the real clock, not the clock at call time")
+        return "stale"
+
+    assert (
+        dokploy_adapter.await_effective_config_hash(read_stale, "expected", 420, 1)
+        == "stale"
+    )
+    assert sleeps == [1, 1]  # slept once after each of the first two reads
+    assert len(reads) == 3
 
 
 def test_approle_preflight_passes_for_non_approle_compose(tmp_path):
@@ -1520,6 +1563,7 @@ def test_await_effective_config_hash_tolerates_a_transient_read(monkeypatch):
         data_path = "/data/x"
 
     monkeypatch.setattr(deployer.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(deployer.time, "monotonic", _advancing_clock())
     calls = {"n": 0}
 
     def flaky(_cls):
