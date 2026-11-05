@@ -2276,13 +2276,31 @@ def test_apply_observability_workflow_watches_every_alert_rules_file() -> None:
     assert "push" not in on_block
     assert "workflow_dispatch" in on_block
 
-    reconcile_text = (ROOT / ".github/workflows/reconcile-iac-inputs.yml").read_text(
-        encoding="utf-8"
+    reconcile_wf = yaml.safe_load(
+        (ROOT / ".github/workflows/reconcile-iac-inputs.yml").read_text(
+            encoding="utf-8"
+        )
     )
-    assert "fr-observability.shared.apply-alerts" in reconcile_text
-    assert "fr-observability.shared.apply-dashboard" in reconcile_text
+    reconcile_steps = reconcile_wf["jobs"]["reconcile"]["steps"]
+    run_script = next(
+        s["run"]
+        for s in reconcile_steps
+        if s.get("name") == "Reconcile changed IaC inputs"
+    )
+    non_comment_lines = [
+        line for line in run_script.splitlines() if not line.lstrip().startswith("#")
+    ]
+    non_comment_script = "\n".join(non_comment_lines)
+    assert "fr-observability.shared.apply-alerts" in non_comment_script
+    assert "fr-observability.shared.apply-dashboard" in non_comment_script
 
     train_patterns = [
+        pat.strip()
+        for line in non_comment_lines
+        if line.strip().endswith(")") and "|" in line and "observability" in line
+        for pat in line.strip()[:-1].split("|")
+    ]
+    expected_patterns = [
         "finance_report/finance_report/observability/*",
         "truealpha/truealpha/observability/*",
         "platform/12.alerting/alert_rules.json",
@@ -2290,10 +2308,7 @@ def test_apply_observability_workflow_watches_every_alert_rules_file() -> None:
         "common/observability_dashboards.py",
         "tools/signoz_alert_rule_probe.py",
     ]
-    for pat in train_patterns:
-        assert pat in reconcile_text, (
-            f"{pat} missing from reconcile-iac-inputs.yml observability filter"
-        )
+    assert train_patterns == expected_patterns
 
     for target in (*ALERT_RULES_FILES, DASHBOARD_FILE):
         rel = target.relative_to(ROOT).as_posix()

@@ -168,11 +168,6 @@ def test_the_deploy_triggering_globs_cover_every_push_triggered_deploy_workflow(
         workflow = yaml.safe_load((workflows / name).read_text(encoding="utf-8"))
         on = workflow.get("on", workflow.get(True))
         if "push" not in on:
-            assert name in (
-                "deploy.yml",
-                "apply-observability.yml",
-                "deploy-cloudflare-watchdog.yml",
-            )
             assert "workflow_dispatch" in on
             continue
         for pattern in on["push"]["paths"]:

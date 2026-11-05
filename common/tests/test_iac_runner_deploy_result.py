@@ -1396,17 +1396,31 @@ def test_deploy_workflow_push_paths_cover_every_runner_dockerfile_copy_source() 
     triggers = spec.get("on", spec.get(True)) or {}
     assert "push" not in triggers, "deploy.yml must not declare on.push"
 
-    reconcile_text = RECONCILE_WORKFLOW.read_text(encoding="utf-8")
+    reconcile_wf = yaml.safe_load(RECONCILE_WORKFLOW.read_text(encoding="utf-8"))
+    reconcile_steps = reconcile_wf["jobs"]["reconcile"]["steps"]
+    run_script = next(
+        s["run"]
+        for s in reconcile_steps
+        if s.get("name") == "Reconcile changed IaC inputs"
+    )
+    non_comment_lines = [
+        line for line in run_script.splitlines() if not line.lstrip().startswith("#")
+    ]
     train_patterns = [
+        pat.strip()
+        for line in non_comment_lines
+        if line.strip().endswith(")")
+        and "|" in line
+        and "bootstrap/06.iac_runner" in line
+        for pat in line.strip()[:-1].split("|")
+    ]
+    expected_patterns = [
         "bootstrap/06.iac_runner/*",
         "scripts/deploy_iac_runner_bootstrap.sh",
         "uv.lock",
         "tools/sdk_requirement*.py",
     ]
-    for pat in train_patterns:
-        assert pat in reconcile_text, (
-            f"reconcile-iac-inputs.yml is missing bootstrap filter token {pat!r}"
-        )
+    assert train_patterns == expected_patterns
 
     compose = yaml.safe_load((IAC_RUNNER / "compose.yaml").read_text(encoding="utf-8"))
     builds = _service_builds(compose)
