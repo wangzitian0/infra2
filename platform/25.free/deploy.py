@@ -205,10 +205,14 @@ class FreeDeployer(Deployer):
         free_uuid, free_path = config_info
         env_vars["FREE_PATH"] = free_path
         rendered = cls._render_config(free_uuid, free_path)
-        if rendered is None:
-            raise RuntimeError("Failed to render free gateway config")
         # The label fingerprint recreates the container when config.json changes (#1438).
-        env_vars.update(mount_fingerprint_env({"config.json": rendered}))
+        env_vars.update(
+            mount_fingerprint_env(
+                {"config.json": rendered},
+                service=cls.service,
+                template_dir=Path(__file__).parent,
+            )
+        )
         return super().composing(c, env_vars)
 
     @classmethod

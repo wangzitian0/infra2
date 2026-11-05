@@ -329,14 +329,27 @@ def mount_fingerprint_var(name: str) -> str:
     return _MOUNT_FINGERPRINT_PREFIX + re.sub(r"[^A-Za-z0-9]", "_", name).upper()
 
 
-def mount_fingerprint_env(rendered: dict[str, str | bytes]) -> dict[str, str]:
+def mount_fingerprint_env(
+    rendered: dict[str, str | bytes | None],
+    *,
+    service: str = "",
+    template_dir: Path | str | None = None,
+) -> dict[str, str]:
     """sha256 of each rendered host file, keyed by its compose variable.
 
     The compose service reads the variable in a label. A content change changes the
     resolved compose config, so `docker compose up -d` recreates that service only (#1438).
+    A `None` content means the render failed (a missing template): raise an error
+    that names the service and the template path instead of failing in the hash.
     """
     out: dict[str, str] = {}
     for name, content in rendered.items():
+        if content is None:
+            where = f"{Path(template_dir) / name}" if template_dir else name
+            raise RuntimeError(
+                f"{service or 'service'}: cannot render host file {name!r}; "
+                f"template missing or unreadable: {where} (or {where}.tmpl)"
+            )
         data = content.encode("utf-8") if isinstance(content, str) else content
         out[mount_fingerprint_var(name)] = hashlib.sha256(data).hexdigest()
     return out

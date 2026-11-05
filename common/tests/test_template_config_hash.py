@@ -235,15 +235,6 @@ def test_deployer_composing_refuses_missing_fingerprint(monkeypatch) -> None:
         Ghost.composing(None, {})
 
 
-def _load_deploy_module(service_dir: str):
-    spec = importlib.util.spec_from_file_location(
-        f"deploy_{service_dir.split('.')[-1]}", ROOT / service_dir / "deploy.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 @pytest.mark.parametrize("service_dir", sorted(FINGERPRINT_SERVICES))
 def test_composing_delivers_config_and_sets_fingerprint(
     monkeypatch, service_dir: str
@@ -558,3 +549,38 @@ def test_guard_rejects_host_file_under_another_variable(tmp_path: Path) -> None:
     (service_dir / "c.yml.tmpl").write_text("x")
     violations = deploy_guard_audit.host_mount_violations([compose], root=tmp_path)
     assert any("'c.yml'" in v and "no config-hash input" in v for v in violations)
+
+
+@pytest.mark.parametrize("service_dir", sorted(FINGERPRINT_SERVICES))
+def test_composing_names_service_and_template_when_render_fails(
+    monkeypatch, service_dir: str
+) -> None:
+    """A render that returns None (missing template) gives an explicit error."""
+    from common.deploy.deployer import Deployer
+
+    service, name, cls_name = FINGERPRINT_SERVICES[service_dir]
+    cls = getattr(_load_deploy_module(service_dir), cls_name)
+    monkeypatch.setattr(cls, "env", classmethod(lambda _c: {"ENV": "x"}))
+    for attr in ("_deliver_config", "_deliver_collector_config"):
+        if hasattr(cls, attr):
+            monkeypatch.setattr(cls, attr, classmethod(lambda _c, *_a: True))
+    for attr in ("_render_config", "_render_collector_config"):
+        if hasattr(cls, attr):
+            monkeypatch.setattr(cls, attr, classmethod(lambda _c, *_a: None))
+    if hasattr(cls, "_ensure_remote_config"):
+        monkeypatch.setattr(
+            cls,
+            "_ensure_remote_config",
+            classmethod(lambda _c, _ctx: ("uuid", "/api/v1/p")),
+        )
+    monkeypatch.setattr(Deployer, "composing", classmethod(lambda *_a: "id"))
+    with pytest.raises(RuntimeError) as err:
+        cls.composing(None, {})
+    message = str(err.value)
+    assert cls.service in message
+    assert f"{service_dir}/{name}" in message
+
+
+def test_mount_fingerprint_env_rejects_none_content() -> None:
+    with pytest.raises(RuntimeError, match=r"svc: cannot render host file 'a.cfg'"):
+        mount_fingerprint_env({"a.cfg": None}, service="svc", template_dir="d")

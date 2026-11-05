@@ -326,7 +326,9 @@ class SigNozDeployer(Deployer):
         # resolved config is unchanged (#1438).
         env_vars.update(
             mount_fingerprint_env(
-                {"otel-collector-config.yaml": cls._render_collector_config(e)}
+                {"otel-collector-config.yaml": cls._render_collector_config(e)},
+                service=cls.service,
+                template_dir=Path(__file__).parent,
             )
         )
         return super().composing(c, env_vars)

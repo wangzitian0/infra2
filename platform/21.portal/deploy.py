@@ -119,7 +119,13 @@ class PortalDeployer(Deployer):
         if not cls._deliver_config(c, env):
             raise RuntimeError("Failed to deliver Homer config.yml to host")
         # The label fingerprint recreates the container when config.yml changes (#1438).
-        env_vars.update(mount_fingerprint_env({"config.yml": cls._render_config(env)}))
+        env_vars.update(
+            mount_fingerprint_env(
+                {"config.yml": cls._render_config(env)},
+                service=cls.service,
+                template_dir=Path(__file__).parent,
+            )
+        )
         return super().composing(c, env_vars)
 
     @classmethod

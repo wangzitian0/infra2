@@ -109,7 +109,13 @@ class ClickHouseDeployer(Deployer):
         if not cls._deliver_config(c, e):
             raise RuntimeError("Failed to deliver ClickHouse config.xml to host")
         # The label fingerprint recreates the container when config.xml changes (#1438).
-        env_vars.update(mount_fingerprint_env({"config.xml": cls._render_config(e)}))
+        env_vars.update(
+            mount_fingerprint_env(
+                {"config.xml": cls._render_config(e)},
+                service=cls.service,
+                template_dir=Path(__file__).parent,
+            )
+        )
         return super().composing(c, env_vars)
 
     @classmethod
