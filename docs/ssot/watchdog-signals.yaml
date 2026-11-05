@@ -545,19 +545,20 @@ signals:
     tier: day
     type: report
 
-  # Peer liveness for truealpha's scheduler-liveness workflow (truealpha#876 W5).
-  # That workflow watches every scheduled workflow in the estate but cannot report
-  # its own dead scheduler; tools/out_of_band_watchdog.py
-  # run_peer_scheduler_liveness_check (common/observability/scheduler_peer_liveness.py) is the peer.
-  # Red when the workflow is not active, its newest scheduled run is older than the
-  # bound measured from its crons (2 x largest gap + 1 h; 13 h today), it never ran
-  # and its file is older than that bound, or the read fails. component=github: the
-  # GitHub Actions scheduler is the thing being watched. Daily, like the rest of the
-  # GitHub plane, so detection lags a dead scheduler by up to bound + 24 h.
-  - signal_id: global.truealpha-scheduler-liveness.github
+  # Estate scheduler liveness (#1432). truealpha's scheduler-liveness workflow was
+  # deleted in truealpha#1589; tools/out_of_band_watchdog.py
+  # run_estate_scheduler_liveness_check (common/observability/estate_scheduler_liveness.py)
+  # replaces it. It discovers the scheduled workflows of the estate repositories
+  # through the GitHub API. Red when a scheduled workflow is not active, its newest
+  # scheduled run is older than the bound measured from its own crons (2 x largest
+  # gap + 1 h), it never ran and its file is older than that bound, a cron cannot be
+  # measured, or a read fails. component=github: the GitHub Actions scheduler is the
+  # thing being watched. Daily, like the rest of the GitHub plane, so detection lags
+  # a dead scheduler by up to bound + 24 h.
+  - signal_id: global.estate-scheduler-liveness.github
     environment: global
     component: github
-    signal: truealpha-scheduler-liveness
+    signal: estate-scheduler-liveness
     primary_owner: github
     failure_class: peer-scheduler
     severity: critical

@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+from common.deploy.config_hash import mount_fingerprint_env
 from common.deploy.deployer import Deployer, make_tasks
 from common.console import success, info, run_with_status, error
 from common.core.facets import BackupFacet, Exemption
@@ -51,6 +52,73 @@ class ClickHouseDeployer(Deployer):
     )
 
     @classmethod
+    def _render_config(cls, e) -> str | None:
+        """Render config.xml from its template (pure; none when the template is missing)."""
+        suffix = e.get("ENV_SUFFIX", "")
+        template_path = Path(__file__).with_name("config.xml")
+        if not template_path.exists():
+            error("Missing ClickHouse config template", str(template_path))
+            return None
+        config_content = template_path.read_text()
+        config_content = config_content.replace(
+            "{{CLICKHOUSE_HOST}}", f"platform-clickhouse{suffix}"
+        )
+        return config_content.replace(
+            "{{ZOOKEEPER_HOST}}", f"platform-clickhouse-zookeeper{suffix}"
+        )
+
+    @classmethod
+    def _deliver_config(cls, c, e) -> bool:
+        """Upload the rendered config.xml to the host (idempotent)."""
+        data_path = cls.data_path_for_env(e)
+        ssh_user = e.get("VPS_SSH_USER") or "root"
+
+        config_content = cls._render_config(e)
+        if config_content is None:
+            return False
+        config_path = f"{data_path}/config.xml"
+
+        tmp_path = None
+        try:
+            with NamedTemporaryFile("w", delete=False) as tmp:
+                tmp.write(config_content)
+                tmp_path = tmp.name
+
+            result = run_with_status(
+                c,
+                f"scp {tmp_path} {ssh_user}@{e['VPS_HOST']}:{config_path}",
+                "Upload ClickHouse config",
+            )
+            if not result.ok:
+                return False
+
+            run_with_status(
+                c,
+                f"ssh {ssh_user}@{e['VPS_HOST']} 'chown {cls.uid}:{cls.gid} {config_path}'",
+                "Set config ownership",
+            )
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+        return True
+
+    @classmethod
+    def composing(cls, c, env_vars):
+        """Deliver config.xml, then deploy (`sync` skips pre_compose)."""
+        e = cls.env()
+        if not cls._deliver_config(c, e):
+            raise RuntimeError("Failed to deliver ClickHouse config.xml to host")
+        # The label fingerprint recreates the container when config.xml changes (#1438).
+        env_vars.update(
+            mount_fingerprint_env(
+                {"config.xml": cls._render_config(e)},
+                service=cls.service,
+                template_dir=Path(__file__).parent,
+            )
+        )
+        return super().composing(c, env_vars)
+
+    @classmethod
     def pre_compose(cls, c):
         """Prepare directories for ClickHouse data, logs, and ZooKeeper."""
         if not cls._prepare_dirs(c):
@@ -58,8 +126,6 @@ class ClickHouseDeployer(Deployer):
 
         e = cls.env()
         data_path = cls.data_path_for_env(e)
-        ssh_user = e.get("VPS_SSH_USER") or "root"
-        suffix = e.get("ENV_SUFFIX", "")
 
         # Create subdirectories
         subdirs = ["data", "logs", "user_scripts", "zookeeper"]
@@ -84,42 +150,10 @@ class ClickHouseDeployer(Deployer):
             "Set ZooKeeper permissions",
         )
 
-        template_path = Path(__file__).with_name("config.xml")
-        if not template_path.exists():
-            error("Missing ClickHouse config template", str(template_path))
+        # #1438: config delivery is shared with composing() so `sync`, which skips
+        # pre_compose, also ships a config.xml template change.
+        if not cls._deliver_config(c, e):
             return None
-
-        config_content = template_path.read_text()
-        config_content = config_content.replace(
-            "{{CLICKHOUSE_HOST}}", f"platform-clickhouse{suffix}"
-        )
-        config_content = config_content.replace(
-            "{{ZOOKEEPER_HOST}}", f"platform-clickhouse-zookeeper{suffix}"
-        )
-        config_path = f"{data_path}/config.xml"
-
-        tmp_path = None
-        try:
-            with NamedTemporaryFile("w", delete=False) as tmp:
-                tmp.write(config_content)
-                tmp_path = tmp.name
-
-            result = run_with_status(
-                c,
-                f"scp {tmp_path} {ssh_user}@{e['VPS_HOST']}:{config_path}",
-                "Upload ClickHouse config",
-            )
-            if not result.ok:
-                return None
-
-            run_with_status(
-                c,
-                f"ssh {ssh_user}@{e['VPS_HOST']} 'chown {cls.uid}:{cls.gid} {config_path}'",
-                "Set config ownership",
-            )
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
 
         success("pre_compose complete")
         info("Note: ClickHouse using empty password initially (internal-only)")

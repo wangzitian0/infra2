@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from invoke import task
 
+from common.deploy.config_hash import mount_fingerprint_env
 from common.deploy.deployer import Deployer, make_tasks
 from common.console import env_vars, error, run_with_status, success, header
 from common.core.facets import BackupFacet, Exemption
@@ -48,12 +49,8 @@ class PortalDeployer(Deployer):
     )
 
     @classmethod
-    def pre_compose(cls, c):
-        if not cls._prepare_dirs(c):
-            error("Failed to prepare portal directories")
-            return None
-
-        env = cls.env()
+    def _render_config(cls, env) -> str | None:
+        """Render config.yml from its template (pure; none on missing input)."""
         internal_domain = env.get("INTERNAL_DOMAIN")
         if not internal_domain:
             error("Missing INTERNAL_DOMAIN")
@@ -67,7 +64,18 @@ class PortalDeployer(Deployer):
 
         config_content = template_path.read_text()
         config_content = config_content.replace("{{INTERNAL_DOMAIN}}", internal_domain)
-        config_content = config_content.replace("{{ENV_DOMAIN_SUFFIX}}", domain_suffix)
+        return config_content.replace("{{ENV_DOMAIN_SUFFIX}}", domain_suffix)
+
+    @classmethod
+    def _deliver_config(cls, c, env) -> str | None:
+        """Upload the rendered config.yml to the host.
+
+        Returns the host config path, or None on failure. Shared by pre_compose and
+        composing so `sync`, which skips pre_compose, ships a template change (#1438).
+        """
+        config_content = cls._render_config(env)
+        if config_content is None:
+            return None
         data_path = cls.data_path_for_env(env)
         config_path = f"{data_path}/config.yml"
         host = env.get("VPS_HOST")
@@ -96,31 +104,61 @@ class PortalDeployer(Deployer):
             )
             if not result.ok:
                 return None
-
-            portal_url = f"https://home{domain_suffix}.{internal_domain}"
-            env_vars(
-                "PORTAL INFO",
-                {
-                    "PORTAL_URL": portal_url,
-                    "CONFIG_PATH": config_path,
-                    "INTERNAL_DOMAIN": internal_domain,
-                },
-            )
-            success("pre_compose complete")
-            result = cls.compose_env_base(env)
-            result.update(
-                {
-                    "PORTAL_URL": portal_url,
-                    "INTERNAL_DOMAIN": internal_domain,
-                }
-            )
-            return result
+            return config_path
         except OSError as exc:
             error("Failed to create temp config", str(exc))
             return None
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
+
+    @classmethod
+    def composing(cls, c, env_vars):
+        """Deliver config.yml, then deploy (`sync` skips pre_compose)."""
+        env = cls.env()
+        if not cls._deliver_config(c, env):
+            raise RuntimeError("Failed to deliver Homer config.yml to host")
+        # The label fingerprint recreates the container when config.yml changes (#1438).
+        env_vars.update(
+            mount_fingerprint_env(
+                {"config.yml": cls._render_config(env)},
+                service=cls.service,
+                template_dir=Path(__file__).parent,
+            )
+        )
+        return super().composing(c, env_vars)
+
+    @classmethod
+    def pre_compose(cls, c):
+        if not cls._prepare_dirs(c):
+            error("Failed to prepare portal directories")
+            return None
+
+        env = cls.env()
+        config_path = cls._deliver_config(c, env)
+        if not config_path:
+            return None
+
+        internal_domain = env["INTERNAL_DOMAIN"]
+        domain_suffix = env.get("ENV_DOMAIN_SUFFIX", "")
+        portal_url = f"https://home{domain_suffix}.{internal_domain}"
+        env_vars(
+            "PORTAL INFO",
+            {
+                "PORTAL_URL": portal_url,
+                "CONFIG_PATH": config_path,
+                "INTERNAL_DOMAIN": internal_domain,
+            },
+        )
+        success("pre_compose complete")
+        result = cls.compose_env_base(env)
+        result.update(
+            {
+                "PORTAL_URL": portal_url,
+                "INTERNAL_DOMAIN": internal_domain,
+            }
+        )
+        return result
 
 
 @task
