@@ -29,7 +29,8 @@ x-app-runtime-env: &app_runtime_env
   S3_ENDPOINT: http://platform-s3:9000
   S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://s3.${INTERNAL_DOMAIN}}
   S3_BUCKET: ${S3_BUCKET:-statements}
-  S3_PUBLIC_BUCKET: ${S3_PUBLIC_BUCKET:-}
+  # An empty S3_PUBLIC_BUCKET stops finance_report at boot (#1466); it reads `s3_public_bucket or bucket`.
+  S3_PUBLIC_BUCKET: ${S3_PUBLIC_BUCKET:-${S3_BUCKET:-statements}}
   S3_PRESIGN_EXPIRY_SECONDS: "900"
   PREFECT_API_URL: http://platform-prefect-server${ENV_SUFFIX}:4200/api
 # OTEL_EXPORTER_OTLP_ENDPOINT is deliberately NOT here. It turns export ON, and this
