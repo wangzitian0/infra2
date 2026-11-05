@@ -17,7 +17,8 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass, field
+import tempfile
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Sequence
 import yaml
@@ -25,9 +26,13 @@ import yaml
 from common.core.constants import APP_SOURCES, REPO_ROOT
 from common.core.registry import domain_for_service
 from common.deploy.app_contract import (
+    APP_HOOKS_MANIFEST_PATH,
+    HOOK_SLOTS,
+    RuntimeHooksManifest,
     execute_app_hook_slot,
     fetch_hooks_manifest,
     git_url,
+    load_hooks_manifest,
     next_app_release_tag,
     query_serving_release,
     validate_app_release_evidence,
@@ -41,7 +46,19 @@ from common.deploy.release_markers import (
     newest_release_tag,
     version_key,
 )
+from common.observability.issue_trail import (
+    CheckVerdict,
+    GitHubIssues,
+    Trail,
+    issue_trail_mode,
+    reconcile_issue_trail,
+)
 from infra2_sdk.deploy import DeployRequest
+from infra2_sdk.manifests import (
+    FORBIDDEN_HOOK_ENV_NAMES,
+    FORBIDDEN_HOOK_ENV_PREFIXES,
+    build_hook_env,
+)
 from infra2_sdk.refs import (
     assert_after_on_main,  # noqa: F401  (re-exported; #616)
     next_patch_tag,
@@ -440,6 +457,8 @@ def sync_app_releases(
     cut_missing_app_tag: bool = False,
     cut_infra_tag: bool = False,
     push_infra_tag: bool = False,
+    create_pr: bool = False,
+    pr_branch: str = "chore/sync-app-releases",
     dry_run: bool = False,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> dict[str, object]:
@@ -500,6 +519,10 @@ def sync_app_releases(
     next_infra_tag = ""
     infra_tag_cut = False
     infra_tag_pushed = False
+    pr_created = False
+    pr_updated = False
+    pr_url = ""
+    pr_number: int | None = None
 
     if updates and apply_repos_yaml and not dry_run:
         repos_yaml_updated = update_repos_yaml_release_tags(repo_root, updates)
@@ -528,13 +551,152 @@ def sync_app_releases(
             next_infra_tag = next_patch_tag([current_infra])
         except ValueError:
             next_infra_tag = "v0.1.0"
-        if cut_infra_tag and repos_yaml_updated and not dry_run:
-            commit_msg = (
-                "chore(train): advance app release tags ("
-                + ", ".join(f"{svc}={tag}" for svc, tag in sorted(updates.items()))
-                + ")"
+        commit_msg = (
+            "chore(train): advance app release tags ("
+            + ", ".join(f"{svc}={tag}" for svc, tag in sorted(updates.items()))
+            + ")"
+        )
+        paths_to_add = [HARNESS_REPOS_PATH, *gitlinks_updated]
+        if create_pr and repos_yaml_updated and not dry_run:
+            orig_head = runner(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            runner(
+                ["git", "add", *paths_to_add],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
             )
-            paths_to_add = [HARNESS_REPOS_PATH, *gitlinks_updated]
+            runner(
+                [
+                    "git",
+                    "-c",
+                    "user.name=github-actions[bot]",
+                    "-c",
+                    "user.email=41898282+github-actions[bot]@users.noreply.github.com",
+                    "commit",
+                    "-m",
+                    commit_msg,
+                ],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            runner(
+                [
+                    "git",
+                    "push",
+                    "--force-with-lease",
+                    "origin",
+                    f"HEAD:refs/heads/{pr_branch}",
+                ],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            runner(
+                ["git", "reset", "--hard", orig_head],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            body_lines = [
+                "Automated pull-based App release train sync (#1416).",
+                "",
+                "### Updated App Release Pins (`harness/repos.yaml`)",
+            ]
+            for svc, new_tag in sorted(updates.items()):
+                old_tag = pinned_tags.get(svc, "<none>")
+                sha = target_shas.get(svc, "")
+                body_lines.append(
+                    f"- `{svc}`: `{old_tag}` -> `{new_tag}` (`{sha[:12]}`)"
+                )
+            body_lines.append("")
+            body_lines.append(f"Next `infra2` release tag candidate: `{next_infra_tag}`")
+            pr_body = "\n".join(body_lines)
+
+            listed_prs = runner(
+                [
+                    "gh",
+                    "pr",
+                    "list",
+                    "--head",
+                    pr_branch,
+                    "--base",
+                    "main",
+                    "--state",
+                    "open",
+                    "--json",
+                    "number,url",
+                ],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+            )
+            existing_prs: list[dict[str, object]] = []
+            if listed_prs.returncode == 0 and (listed_prs.stdout or "").strip():
+                try:
+                    parsed = json.loads(listed_prs.stdout)
+                    if isinstance(parsed, list):
+                        existing_prs = [p for p in parsed if isinstance(p, dict)]
+                except ValueError:
+                    existing_prs = []
+            if existing_prs:
+                raw_num = existing_prs[0].get("number")
+                if isinstance(raw_num, int):
+                    pr_number = raw_num
+                pr_url = str(existing_prs[0].get("url") or "")
+                runner(
+                    [
+                        "gh",
+                        "pr",
+                        "edit",
+                        str(pr_number or pr_branch),
+                        "--title",
+                        commit_msg,
+                        "--body",
+                        pr_body,
+                    ],
+                    cwd=repo_root,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                pr_updated = True
+            else:
+                created_pr = runner(
+                    [
+                        "gh",
+                        "pr",
+                        "create",
+                        "--base",
+                        "main",
+                        "--head",
+                        pr_branch,
+                        "--title",
+                        commit_msg,
+                        "--body",
+                        pr_body,
+                    ],
+                    cwd=repo_root,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                pr_url = (created_pr.stdout or "").strip()
+                m_num = re.search(r"/pull/([0-9]+)$", pr_url)
+                if m_num:
+                    pr_number = int(m_num.group(1))
+                pr_created = True
+        elif cut_infra_tag and repos_yaml_updated and not dry_run:
             runner(
                 ["git", "add", *paths_to_add],
                 cwd=repo_root,
@@ -591,7 +753,259 @@ def sync_app_releases(
         "next_infra_tag": next_infra_tag,
         "infra_tag_cut": infra_tag_cut,
         "infra_tag_pushed": infra_tag_pushed,
+        "pr_branch": pr_branch if create_pr else "",
+        "pr_created": pr_created,
+        "pr_updated": pr_updated,
+        "pr_url": pr_url,
+        "pr_number": pr_number,
         "dry_run": dry_run,
+    }
+
+
+def resolve_app_hook_cwd(
+    service: str,
+    source_sha: str,
+    *,
+    repo_root: Path = REPO_ROOT,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
+    """Return ``(app_cwd, temp_dir_or_none)`` containing an App checkout at ``source_sha`` (#1416)."""
+    sub_rel = SERVICE_TO_SUBMODULE_PATH.get(service, "")
+    if sub_rel:
+        sub_dir = Path(repo_root) / sub_rel
+        if sub_dir.is_dir() and (sub_dir / APP_HOOKS_MANIFEST_PATH).is_file():
+            return sub_dir, None
+    repo_slug = APP_SOURCES.get(service, "")
+    if not repo_slug:
+        return Path(repo_root), None
+    tmp_dir = tempfile.TemporaryDirectory(
+        prefix=f"infra2-hook-{service.replace('/', '-')}-"
+    )
+    checkout_dir = Path(tmp_dir.name)
+    try:
+        runner(
+            ["git", "init", "-q"],
+            cwd=checkout_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        runner(
+            ["git", "remote", "add", "origin", git_url(repo_slug)],
+            cwd=checkout_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        runner(
+            ["git", "fetch", "--depth", "1", "origin", source_sha],
+            cwd=checkout_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        runner(
+            ["git", "checkout", "-q", "FETCH_HEAD"],
+            cwd=checkout_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return checkout_dir, tmp_dir
+    except Exception:
+        tmp_dir.cleanup()
+        return Path(repo_root), None
+
+
+def record_app_hook_issue_trail(
+    hook_results: Sequence[Mapping[str, object]],
+    *,
+    target_env: str = "staging",
+    run_url: str = "",
+    env: Mapping[str, str] | None = None,
+    issues_factory: Callable[[str, str], object] = GitHubIssues,
+) -> int:
+    """Open, comment on, or close an incident issue in the target App repository (#1416)."""
+    current_env = dict(os.environ if env is None else env)
+    token = (
+        current_env.get("GITHUB_TOKEN") or current_env.get("GH_TOKEN") or ""
+    ).strip()
+    if not token or not hook_results:
+        return 0
+    mode = issue_trail_mode(current_env)
+    if mode == "off":
+        effective_env = {**current_env, "GITHUB_EVENT_NAME": "workflow_dispatch"}
+        mode = issue_trail_mode(effective_env)
+    else:
+        effective_env = current_env
+
+    by_service: dict[str, list[Mapping[str, object]]] = {}
+    for entry in hook_results:
+        svc = str(entry.get("service") or "").strip()
+        if svc:
+            by_service.setdefault(svc, []).append(entry)
+
+    rc = 0
+    norm_env = "production" if target_env in ("prod", "production") else "staging"
+    for svc, items in sorted(by_service.items()):
+        app_repo = APP_SOURCES.get(
+            svc, current_env.get("GITHUB_REPOSITORY", "wangzitian0/infra2")
+        )
+        trail = Trail(complete=False)
+        for item in items:
+            slot = str(item.get("slot") or "smoke")
+            status = str(item.get("status") or "fail")
+            name = f"app-hook:{svc}:{slot}:{norm_env}"
+            if status == "pass":
+                trail.green.add(name)
+            else:
+                summary = str(item.get("summary") or f"{slot} failed")
+                stderr_tail = str(item.get("stderr_tail") or "")
+                app_url = str(item.get("app_url") or "")
+                version_ref = str(item.get("version_ref") or "")
+                detail = (
+                    f"service={svc} env={norm_env} version_ref={version_ref} "
+                    f"app_url={app_url}\n{summary}\n{stderr_tail}"
+                ).strip()
+                trail.failing[name] = CheckVerdict(
+                    name=name,
+                    ok=False,
+                    detail=detail,
+                    severity="high",
+                    failure_domain="app",
+                )
+        res = reconcile_issue_trail(
+            issues_factory(app_repo, token),
+            trail,
+            mode=mode,
+            run_url=run_url or github_run_url(current_env),
+            context=f"post-deploy hook ({norm_env})",
+            env=effective_env,
+        )
+        if res != 0:
+            fallback_repo = current_env.get("GITHUB_REPOSITORY", "wangzitian0/infra2")
+            if fallback_repo and fallback_repo != app_repo:
+                res = reconcile_issue_trail(
+                    issues_factory(fallback_repo, token),
+                    trail,
+                    mode=mode,
+                    run_url=run_url or github_run_url(current_env),
+                    context=f"post-deploy hook ({norm_env})",
+                    env=effective_env,
+                )
+            rc = rc or res
+    return rc
+
+
+def audit_app_hooks(
+    repo_root: Path = REPO_ROOT,
+    *,
+    services: Sequence[str] = (),
+    manifest_fetcher: Callable[[str], bytes] | None = None,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> dict[str, object]:
+    """Validate 4-slot ``runtime-hooks.manifest.json`` contracts for all registered Apps (#1416)."""
+    target_services = (
+        [str(s) for s in services if str(s)] if services else sorted(APP_SOURCES.keys())
+    )
+    pinned_tags = load_app_release_tags(repo_root, runner=runner)
+    checked: dict[str, dict[str, object]] = {}
+    errors: list[str] = []
+
+    for service in target_services:
+        repo_slug = APP_SOURCES.get(service)
+        if not repo_slug:
+            errors.append(f"unknown app service {service!r}")
+            continue
+        pinned_tag = pinned_tags.get(service, "")
+        sub_rel = SERVICE_TO_SUBMODULE_PATH.get(service, "")
+        local_manifest_path = (
+            (Path(repo_root) / sub_rel / APP_HOOKS_MANIFEST_PATH) if sub_rel else None
+        )
+        manifest: RuntimeHooksManifest | None = None
+        source = ""
+        try:
+            if (
+                manifest_fetcher is None
+                and local_manifest_path is not None
+                and local_manifest_path.is_file()
+            ):
+                manifest = load_hooks_manifest(local_manifest_path)
+                source = str(local_manifest_path.relative_to(repo_root))
+            else:
+                ref = pinned_tag or "main"
+                resolved = resolve_image_ref(ref, repo=git_url(repo_slug), runner=runner)
+                manifest = fetch_hooks_manifest(
+                    service,
+                    resolved.sha.lower(),
+                    manifest_fetcher=manifest_fetcher,
+                )
+                source = f"{repo_slug}@{resolved.sha[:12]}:{APP_HOOKS_MANIFEST_PATH}"
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{service}: {exc}")
+            checked[service] = {"ok": False, "error": str(exc)}
+            continue
+
+        slot_errors: list[str] = []
+        for slot_name in HOOK_SLOTS:
+            if slot_name not in manifest.slots:
+                slot_errors.append(f"missing slot {slot_name!r}")
+                continue
+            spec = manifest.slots[slot_name]
+            for env_name in (*spec.required_env, *spec.optional_env):
+                if env_name in FORBIDDEN_HOOK_ENV_NAMES or env_name.startswith(
+                    FORBIDDEN_HOOK_ENV_PREFIXES
+                ):
+                    slot_errors.append(
+                        f"forbidden secret {env_name!r} in slot {slot_name!r}"
+                    )
+        for dry_slot in ("smoke",):
+            spec = manifest.slots[dry_slot]
+            augmented_opt = tuple(
+                dict.fromkeys(
+                    [*spec.optional_env, "INFRA2_HOOK_APP_URL", "BASE_URL", "DEPLOY_ENV"]
+                )
+            )
+            try:
+                build_hook_env(
+                    replace(spec, optional_env=augmented_opt),
+                    slot=dry_slot,
+                    app_url="https://staging.example.invalid",
+                    environment="staging",
+                    version_ref=pinned_tag or "v0.1.0",
+                    artifacts_dir=spec.artifacts_dir,
+                    ambient_env={
+                        "APP_URL": "https://staging.example.invalid",
+                        "INFRA2_HOOK_APP_URL": "https://staging.example.invalid",
+                        "BASE_URL": "https://staging.example.invalid",
+                        "ENVIRONMENT": "staging",
+                        "DEPLOY_ENV": "staging",
+                        "APP_VERSION_REF": pinned_tag or "v0.1.0",
+                        "EXPECTED_SHA": pinned_tag or "v0.1.0",
+                    },
+                )
+            except ValueError as exc:
+                slot_errors.append(f"{dry_slot}: {exc}")
+        if slot_errors:
+            errors.extend(f"{service}: {err}" for err in slot_errors)
+            checked[service] = {
+                "ok": False,
+                "source": source,
+                "pinned_tag": pinned_tag,
+                "errors": slot_errors,
+            }
+        else:
+            checked[service] = {
+                "ok": True,
+                "source": source,
+                "pinned_tag": pinned_tag,
+                "slots": list(manifest.slots.keys()),
+            }
+
+    return {
+        "ok": len(errors) == 0,
+        "services": checked,
+        "errors": errors,
     }
 
 
@@ -640,6 +1054,7 @@ def run_post_deploy_app_hooks(
     slot: str = "smoke",
     manifest_fetcher: Callable[[str], bytes] | None = None,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    record_issues: bool = True,
 ) -> list[dict[str, object]]:
     """Execute post-deploy verification hook slot for each deployed App service (#1416)."""
     applied_services = {
@@ -664,24 +1079,44 @@ def run_post_deploy_app_hooks(
             source_sha,
             manifest_fetcher=manifest_fetcher,
         )
-        res = execute_app_hook_slot(
-            manifest,
-            slot,
-            app_url=app_url,
-            environment="production"
-            if target_env in ("prod", "production")
-            else "staging",
-            version_ref=version_ref,
-            cwd=repo_root,
+        hook_cwd, tmp_checkout = resolve_app_hook_cwd(
+            service,
+            source_sha,
+            repo_root=repo_root,
             runner=runner,
         )
+        try:
+            res = execute_app_hook_slot(
+                manifest,
+                slot,
+                app_url=app_url,
+                environment="production"
+                if target_env in ("prod", "production")
+                else "staging",
+                version_ref=version_ref,
+                cwd=hook_cwd,
+                runner=runner,
+            )
+        finally:
+            if tmp_checkout is not None:
+                tmp_checkout.cleanup()
         entry = res.to_dict()
         entry["service"] = service
         entry["app_url"] = app_url
         entry["source_sha"] = source_sha
+        entry["cwd"] = str(hook_cwd)
         hook_results.append(entry)
         if res.status != "pass":
             break
+    if record_issues and hook_results and (
+        os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    ):
+        record_app_hook_issue_trail(
+            hook_results,
+            target_env=target_env,
+            run_url=github_run_url(os.environ),
+            env=os.environ,
+        )
     return hook_results
 
 
@@ -1246,12 +1681,38 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="push committed harness/repos.yaml and next infra2 vX.Y.Z tag to origin",
     )
+    parser.add_argument(
+        "--create-pr",
+        action="store_true",
+        help="push updated harness/repos.yaml to a branch and open/update a PR (#1416)",
+    )
+    parser.add_argument(
+        "--pr-branch",
+        default="chore/sync-app-releases",
+        help="head branch name when --create-pr is enabled (default: chore/sync-app-releases)",
+    )
+    parser.add_argument(
+        "--audit-app-hooks",
+        action="store_true",
+        help="validate 4-slot runtime-hooks.manifest.json contracts for registered Apps (#1416)",
+    )
     parser.add_argument("--output-json", default="", help="optional output JSON path")
     args = parser.parse_args(argv)
     promote_prod = bool(args.promote_prod or args.target_env in ("prod", "production"))
     target_env = "prod" if promote_prod else "staging"
 
     repo_root = Path(args.repo_root).resolve()
+    if args.audit_app_hooks:
+        audit_res = audit_app_hooks(
+            repo_root,
+            services=args.sync_service,
+        )
+        print(json.dumps(audit_res, sort_keys=True))
+        if args.output_json:
+            Path(args.output_json).write_text(
+                json.dumps(audit_res, indent=2), encoding="utf-8"
+            )
+        return 0 if audit_res.get("ok") else 1
     if args.sync_app_releases:
         sync_res = sync_app_releases(
             repo_root,
@@ -1261,6 +1722,8 @@ def main(argv: list[str] | None = None) -> int:
             cut_missing_app_tag=args.cut_missing_app_tag,
             cut_infra_tag=args.cut_infra_tag,
             push_infra_tag=args.push_infra_tag,
+            create_pr=args.create_pr,
+            pr_branch=args.pr_branch,
             dry_run=args.dry_run,
         )
         print(json.dumps(sync_res, sort_keys=True))
@@ -1296,6 +1759,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.run_hook_slot:
         version_ref = args.after or "main"
         app_url = args.hook_app_url or f"https://{args.domain}"
+        hook_cwd = repo_root
+        tmp_checkout = None
         if args.hooks_manifest:
             manifest_or_path = Path(args.hooks_manifest)
             if args.hook_service and not args.hook_app_url:
@@ -1320,19 +1785,28 @@ def main(argv: list[str] | None = None) -> int:
             manifest_or_path = fetch_hooks_manifest(
                 args.hook_service, args.hook_source_sha
             )
+            hook_cwd, tmp_checkout = resolve_app_hook_cwd(
+                args.hook_service,
+                args.hook_source_sha,
+                repo_root=repo_root,
+            )
         else:
             raise SystemExit(
                 "::error::--run-hook-slot requires either --hooks-manifest or both "
                 "--hook-service and --hook-source-sha"
             )
-        hook_res = execute_app_hook_slot(
-            manifest_or_path,
-            args.run_hook_slot,
-            app_url=app_url,
-            environment="production" if promote_prod else "staging",
-            version_ref=version_ref,
-            cwd=repo_root,
-        )
+        try:
+            hook_res = execute_app_hook_slot(
+                manifest_or_path,
+                args.run_hook_slot,
+                app_url=app_url,
+                environment="production" if promote_prod else "staging",
+                version_ref=version_ref,
+                cwd=hook_cwd,
+            )
+        finally:
+            if tmp_checkout is not None:
+                tmp_checkout.cleanup()
         print(json.dumps(hook_res.to_dict(), sort_keys=True))
         return 0 if hook_res.status == "pass" else 1
 

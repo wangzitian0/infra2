@@ -46,6 +46,9 @@ name: Reconcile IaC Inputs
 permissions:
   # Explicit production promotion records an immutable production/v* marker.
   contents: write
+  # Pull-based App release sync opens/updates PRs and records hook failure issues (#1416).
+  pull-requests: write
+  issues: write
   # the promotion guard lists this workflow's runs for the promoted tag (gh api .../runs)
   actions: read
   id-token: write
@@ -234,7 +237,7 @@ jobs:
 
           # IaC Runner Bootstrap Update (in-train before tools.reconcile_iac_inputs):
           # bootstrap/06.iac_runner/**, scripts/deploy_iac_runner_bootstrap.sh, uv.lock, tools/sdk_requirement.py
-          if [[ "$promote_prod" == "true" && "$dry_run" != "true" ]]; then
+          if [[ "$dry_run" != "true" ]]; then
             bootstrap_changed="false"
             while IFS= read -r file; do
               [[ -z "$file" ]] && continue
@@ -247,65 +250,69 @@ jobs:
             done <<< "$changed_files"
 
             if [[ "$bootstrap_changed" == "true" ]]; then
-              echo "Deploy IaC Runner bootstrap changes for '$after'..."
-              if [[ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
-                echo "::error::INFRA2_WATCHDOG_SSH_PRIVATE_KEY is required to update the IaC Runner bootstrap."
-                exit 1
+              if [[ "$promote_prod" == "true" ]]; then
+                if [[ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
+                  echo "::error::INFRA2_WATCHDOG_SSH_PRIVATE_KEY is required to update the IaC Runner bootstrap."
+                  exit 1
+                fi
+                if [[ -z "${INFRA2_WATCHDOG_SSH_HOST:-}" ]]; then
+                  echo "::error::INFRA2_WATCHDOG_SSH_HOST is required."
+                  exit 1
+                fi
+                if [[ -z "${INFRA2_WATCHDOG_SSH_USER:-}" ]]; then
+                  echo "::error::INFRA2_WATCHDOG_SSH_USER is required."
+                  exit 1
+                fi
               fi
-              if [[ -z "${INFRA2_WATCHDOG_SSH_HOST:-}" ]]; then
-                echo "::error::INFRA2_WATCHDOG_SSH_HOST is required."
-                exit 1
-              fi
-              if [[ -z "${INFRA2_WATCHDOG_SSH_USER:-}" ]]; then
-                echo "::error::INFRA2_WATCHDOG_SSH_USER is required."
-                exit 1
-              fi
-              install -m 700 -d ~/.ssh
-              printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_bootstrap
-              chmod 600 ~/.ssh/infra2_bootstrap
-              ssh_port_args=()
-              if [[ -n "${INFRA2_WATCHDOG_SSH_PORT:-}" ]]; then
-                ssh_port_args=(-p "$INFRA2_WATCHDOG_SSH_PORT")
-              fi
-              deploy_sha="$(git rev-parse "$after^{commit}")"
-              ssh \
-                -i ~/.ssh/infra2_bootstrap \
-                "${ssh_port_args[@]}" \
-                -o StrictHostKeyChecking=no \
-                -o UserKnownHostsFile=/dev/null \
-                "${INFRA2_WATCHDOG_SSH_USER}@${INFRA2_WATCHDOG_SSH_HOST}" \
-                "INFRA2_DEPLOY_SHA='${deploy_sha}' bash -s" \
-                < scripts/deploy_iac_runner_bootstrap.sh
+              if [[ -n "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" && -n "${INFRA2_WATCHDOG_SSH_HOST:-}" && -n "${INFRA2_WATCHDOG_SSH_USER:-}" ]]; then
+                echo "Deploy IaC Runner bootstrap changes for '$after'..."
+                install -m 700 -d ~/.ssh
+                printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_bootstrap
+                chmod 600 ~/.ssh/infra2_bootstrap
+                ssh_port_args=()
+                if [[ -n "${INFRA2_WATCHDOG_SSH_PORT:-}" ]]; then
+                  ssh_port_args=(-p "$INFRA2_WATCHDOG_SSH_PORT")
+                fi
+                deploy_sha="$(git rev-parse "$after^{commit}")"
+                ssh \
+                  -i ~/.ssh/infra2_bootstrap \
+                  "${ssh_port_args[@]}" \
+                  -o StrictHostKeyChecking=no \
+                  -o UserKnownHostsFile=/dev/null \
+                  "${INFRA2_WATCHDOG_SSH_USER}@${INFRA2_WATCHDOG_SSH_HOST}" \
+                  "INFRA2_DEPLOY_SHA='${deploy_sha}' bash -s" \
+                  < scripts/deploy_iac_runner_bootstrap.sh
 
-              echo "Check IaC Runner health..."
-              health_url="${IAC_RUNNER_URL%/}/health"
-              body="$(mktemp)"
-              last_status=""
-              healthy="false"
-              for attempt in $(seq 1 12); do
-                : > "$body"
-                status="$(curl -sS -o "$body" -w "%{http_code}" \
-                  --connect-timeout 10 \
-                  --max-time 20 \
-                  "$health_url" || true)"
-                last_status="$status"
-                echo "IaC Runner public health attempt ${attempt}/12: url=$health_url status=$status"
-                if [[ -s "$body" ]]; then
-                  sed 's/^/  /' "$body" || true
-                else
-                  echo "  <empty body>"
-                fi
-                if [[ "$status" == "200" ]]; then
+                echo "Check IaC Runner health..."
+                health_url="${IAC_RUNNER_URL%/}/health"
+                body="$(mktemp)"
+                last_status=""
+                healthy="false"
+                for attempt in $(seq 1 12); do
+                  : > "$body"
+                  status="$(curl -sS -o "$body" -w "%{http_code}" \
+                    --connect-timeout 10 \
+                    --max-time 20 \
+                    "$health_url" || true)"
+                  last_status="$status"
+                  echo "IaC Runner public health attempt ${attempt}/12: url=$health_url status=$status"
+                  if [[ -s "$body" ]]; then
+                    sed 's/^/  /' "$body" || true
+                  else
+                    echo "  <empty body>"
+                  fi
+                  if [[ "$status" == "200" ]]; then
+                    rm -f "$body"
+                    healthy="true"
+                    break
+                  fi
+                  sleep 10
+                done
+                if [[ "$healthy" != "true" ]]; then
                   rm -f "$body"
-                  healthy="true"
-                  break
+                  echo "::error::IaC Runner public health stayed unhealthy after 12 attempts. Last HTTP status: $last_status. Check Traefik/Dokploy routing, Cloudflare propagation, VAULT_APP_TOKEN, and iac-runner container health."
+                  exit 1
                 fi
-                sleep 10
-              done
-              if [[ "$healthy" != "true" ]]; then
-                rm -f "$body"
-                echo "::error::IaC Runner public health stayed unhealthy after 12 attempts. Last HTTP status: $last_status. Check Traefik/Dokploy routing, Cloudflare propagation, VAULT_APP_TOKEN, and iac-runner container health."
-                exit 1
               fi
             fi
           fi
@@ -330,7 +337,7 @@ jobs:
             if [[ "$dry_run" == "true" ]]; then
               sync_args+=(--dry-run)
             elif [[ "$promote_prod" != "true" ]]; then
-              sync_args+=(--cut-infra-tag --push-infra-tag)
+              sync_args+=(--create-pr)
             fi
             python -m tools.reconcile_iac_inputs "${sync_args[@]}"
             if [[ "$promote_prod" != "true" && "$dry_run" != "true" && -f sync-app-releases.json ]]; then
