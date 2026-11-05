@@ -199,7 +199,7 @@ def test_a_check_that_was_not_evaluated_is_left_open() -> None:
 
 def test_a_drill_or_branch_run_never_closes() -> None:
     api = FakeIssues([_issue(5, "cloudflare-worker-status")])
-    red = _red("truealpha-scheduler-liveness", "STALE: capped at 0h")
+    red = _red("estate-scheduler-liveness", "STALE: capped at 0h")
     assert (
         reconcile_issue_trail(
             api, _trail([red], green=["cloudflare-worker-status"]), mode=OPEN_ONLY
@@ -208,7 +208,7 @@ def test_a_drill_or_branch_run_never_closes() -> None:
     )
     assert api.closed == []
     assert [title for title, _, _ in api.created] == [
-        title_for("truealpha-scheduler-liveness")
+        title_for("estate-scheduler-liveness")
     ]
 
 
@@ -657,7 +657,7 @@ def test_the_tool_drill_opens_but_never_closes(tmp_path: Path) -> None:
     record_verdicts(
         env["INFRA2_WATCHDOG_VERDICTS_PATH"],
         source=WATCHDOG_SOURCE,
-        checks=[_red("truealpha-scheduler-liveness"), CheckVerdict("infra2-ssh", True)],
+        checks=[_red("estate-scheduler-liveness"), CheckVerdict("infra2-ssh", True)],
     )
     record_verdicts(
         env["INFRA2_WATCHDOG_VERDICTS_PATH"], source=RUNNER_HEALTH_SOURCE, checks=[]

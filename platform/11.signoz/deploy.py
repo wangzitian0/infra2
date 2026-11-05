@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
+from common.deploy.config_hash import mount_fingerprint_env
 from common.deploy.deployer import Deployer, make_tasks
 from common.console import success, info, run_with_status, error, warning
 from common.core.environ import (
@@ -320,6 +321,16 @@ class SigNozDeployer(Deployer):
         # read-only; sync skips pre_compose, so deliver it here too).
         if not cls._deliver_collector_config(c, e):
             raise RuntimeError("Failed to deliver otel-collector config to host")
+        # The label fingerprint recreates the collector when its config changes: the
+        # collector reads the file only at start, and compose keeps a container whose
+        # resolved config is unchanged (#1438).
+        env_vars.update(
+            mount_fingerprint_env(
+                {"otel-collector-config.yaml": cls._render_collector_config(e)},
+                service=cls.service,
+                template_dir=Path(__file__).parent,
+            )
+        )
         return super().composing(c, env_vars)
 
 

@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 import uuid
 
+from common.core.service_identity import ServiceIdentity
 from common.observability.openpanel import openpanel_env
 from common.observability.probe_environment import (
     DEFAULT_ALERTING_ENV_FILE,
@@ -29,6 +30,15 @@ DEFAULT_QUERY_WAIT_SECONDS = 30
 DEFAULT_QUERY_POLL_SECONDS = 2
 
 SIGNOZ_SERVICE_NAME = "infra-observability-canary"
+# The probe that writes the canary log, and the registry service that declares it
+# (`ProbeFacet` in platform/11.signoz/deploy.py). The alert of that probe carries the
+# same `service_id` and component, so its alert and its log share one identity (#1452).
+# The probe image holds no `platform/` tree, so the registry cannot be read at run
+# time; `test_probe_identity_names_the_service_that_declares_the_probe` pins the pair.
+SIGNOZ_PROBE_NAME = "signoz-roundtrip"
+SIGNOZ_PROBE_SERVICE_ID = "platform/signoz"
+# `service.version` when the deploy issued no release ref (local run).
+UNKNOWN_VERSION = "unknown"
 SIGNOZ_LOG_MESSAGE = "infra-signoz-roundtrip-canary"
 OPENPANEL_EVENT_NAME = "infra_observability_roundtrip_canary"
 
@@ -178,19 +188,47 @@ def run_openpanel_roundtrip(nonce: str) -> ProbeResult:
     return ProbeResult(backend="openpanel", nonce=nonce, count=count)
 
 
+def _canary_identity(deploy_env: str) -> ServiceIdentity:
+    """The identity of the canary signals, from the one identity builder (#1452).
+
+    The release ref is `INFRA_IAC_REF`: the deploy issues it and the alerting compose
+    hands it to the probe runner. A local run has none, so `service.version` is
+    `unknown` and `infra.iac.ref` is absent. A malformed ref is a configuration error:
+    the round-trip tested nothing, so it exits EX_CONFIG."""
+    iac_ref = (os.getenv("INFRA_IAC_REF") or "").strip().lower()
+    try:
+        return ServiceIdentity.build(
+            SIGNOZ_PROBE_SERVICE_ID,
+            deploy_env,
+            component=SIGNOZ_PROBE_NAME,
+            service_name=SIGNOZ_SERVICE_NAME,
+            version=iac_ref or UNKNOWN_VERSION,
+            iac_ref=iac_ref,
+        )
+    except ValueError as exc:
+        raise ProbeConfigError(f"invalid canary identity: {exc}") from exc
+
+
+def _canary_resource(nonce: str, deploy_env: str) -> dict:
+    """The OTLP `resource` of every canary signal: identity attributes plus the nonce.
+
+    Every OTLP payload of this probe must take its resource from here."""
+    rendered = _canary_identity(deploy_env).otel_resource_attributes()
+    attributes = [
+        _string_attr(key, value)
+        for key, _, value in (pair.partition("=") for pair in rendered.split(","))
+    ]
+    attributes.append(_string_attr("infra.canary.nonce", nonce))
+    return {"attributes": attributes}
+
+
 def _signoz_log_payload(nonce: str, deploy_env: str) -> dict:
     now_nanos = int(time.time() * 1_000_000_000)
     body = f"{SIGNOZ_LOG_MESSAGE} nonce={nonce}"
     return {
         "resourceLogs": [
             {
-                "resource": {
-                    "attributes": [
-                        _string_attr("service.name", SIGNOZ_SERVICE_NAME),
-                        _string_attr("deployment.environment.name", deploy_env),
-                        _string_attr("infra.canary.nonce", nonce),
-                    ]
-                },
+                "resource": _canary_resource(nonce, deploy_env),
                 "scopeLogs": [
                     {
                         "scope": {"name": "infra2.observability_roundtrip_probe"},

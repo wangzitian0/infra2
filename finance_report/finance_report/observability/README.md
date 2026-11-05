@@ -96,7 +96,10 @@ uv run python tools/signoz_alert_rule_probe.py
 
 1. Run `apply-observability.yml` with `mode=canary`; it creates one disabled
    temporary PromQL rule using the generated payload, verifies SigNoz stores the
-   v5 `queries[]` envelope, then deletes it.
+   v5 `queries[]` envelope, then deletes it. The canary prints "passed" only after
+   it reads back that the rule and its route policy are gone. It retries the
+   DELETE at most 3 times and fails if the rule or the route policy remains
+   (#1435). Cleanup contract: [ops.observability.md](../../../docs/ssot/ops.observability.md), SOP-004C step 4.
 2. Emit more than 10 synthetic backend ERROR logs within 15 minutes (one is
    below the threshold by design); confirm `FinanceReportBackendErrorLogs` fires
    and a message lands in the Lark group.

@@ -87,9 +87,9 @@ name: Ops Checks
         default: ""
       peer_liveness_bound_cap_hours:
         # truealpha#876 drill: the cap only TIGHTENS the measured bound; `0` forces the
-        # truealpha scheduler-liveness peer check red. A run with this set pages and
+        # estate scheduler-liveness check red. A run with this set pages and
         # opens/comments on the issue, and never closes one.
-        description: "Drill (out-of-band-watchdog): cap the truealpha scheduler-liveness peer bound at this many hours (empty = measured bound; 0 = red)"
+        description: "Drill (out-of-band-watchdog): cap the estate scheduler-liveness bounds at this many hours (empty = measured bound; 0 = red)"
         required: false
         type: string
         default: ""
@@ -175,6 +175,9 @@ jobs:
         # coordinates. Non-zero only when the marker predates the release-pin deployer,
         # which is the state that breaks the next production release.
         run: python -m common.deploy.release_markers --repo-root .
+
+      - name: Audit App runtime hooks manifests (#1416)
+        run: python -m tools.reconcile_iac_inputs --audit-app-hooks
 
       - name: Audit single deploy trigger (necessity)
         if: env.DOKPLOY_API_KEY != ''
