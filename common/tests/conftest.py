@@ -47,16 +47,3 @@ def _no_ambient_op_cli(monkeypatch):
         real_init(self, *args, runner=runner, **kwargs)
 
     monkeypatch.setattr(OnePasswordBackend, "__init__", init)
-
-
-@pytest.fixture(scope="session", autouse=True)
-def _parse_each_yaml_text_once():
-    """Parse each YAML text once per worker (#1453). See ``common/tests/yaml_cache.py``."""
-    import yaml
-
-    from common.tests.yaml_cache import ParseOnce
-
-    real_safe_load = yaml.safe_load
-    yaml.safe_load = ParseOnce(real_safe_load)
-    yield
-    yaml.safe_load = real_safe_load
