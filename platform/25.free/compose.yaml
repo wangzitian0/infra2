@@ -26,6 +26,9 @@ services:
         max-size: "5m"
         max-file: "2"
     labels:
+      # Recreate this container when the rendered host file changes (#1438): compose
+      # keeps a container whose resolved config is unchanged. The deployer sets the sha256.
+      - "iac.mount-sha256.config.json=${IAC_MOUNT_SHA256_CONFIG_JSON:-}"
       - "traefik.enable=true"
       - "traefik.http.routers.free${ENV_DOMAIN_SUFFIX}.rule=Host(`free${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && Path(`${FREE_PATH}`)"
       - "traefik.http.routers.free${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"

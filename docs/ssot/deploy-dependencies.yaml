@@ -23,6 +23,17 @@
 #
 # Globs are fnmatch-style against repo-relative changed-file paths.
 #
+# Host templates (#1438): a compose bind mount `${DATA_PATH}/<name>` renders a host
+# file from `<name>` or `<name>.tmpl` in the service directory. The config hash reads
+# that template, so a template edit flips the hash and `sync` deploys it. The guard
+# fails when such a `<name>` mount has no template. Name each template in the service
+# directory; the compose mount is the single declaration. `deploy.py` must deliver the
+# rendered file from `composing()`, because `sync` skips `pre_compose()`.
+# The service must also read `${IAC_MOUNT_SHA256_<NAME>:-}` in a label, and
+# `composing()` must set that variable to the sha256 of the rendered bytes. Compose
+# recreates a container only when its resolved config changes, so a changed file
+# alone leaves the old container running. The guard fails when the label is missing.
+#
 # Enforcement: `tools/deploy_guard_audit.py` (the infra-ci `ci_runner preflight`
 # gate "Deploy guard audit" + the scheduled ops-checks step "Audit deploy fan-out
 # coverage (sufficiency)") fails if any file
@@ -52,6 +63,17 @@ services:
       - finance_report/finance_report/*/deploy.py
       - truealpha/truealpha/*/deploy.py
       - uv.lock
+
+  # platform/signoz renders otel-collector-config.yaml on the host (#1438). The
+  # CORS allow-list in that file comes from `cors_allowed_origins()`, which reads
+  # `env_config.py` and, through `service_spec()`, `contract.py`. A change to either
+  # changes the rendered file, so it must flip this hash. The test
+  # `test_rendered_template_source_modules_are_hash_dependencies` derives this list
+  # from the `_render*` functions of the deploy.py and fails when a module is missing.
+  platform/signoz:
+    depends_on:
+      - common/deploy/env_config.py
+      - common/deploy/contract.py
 
   platform/todo:
     depends_on:
