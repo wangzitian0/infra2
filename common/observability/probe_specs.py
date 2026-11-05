@@ -149,6 +149,28 @@ def normalized_probe_fields(specs_text: str) -> list[list[str]]:
     return sorted(rows)
 
 
+def public_route_host(meta, facet, *, domain: str, domain_suffix: str) -> str:
+    """Host that serves one PublicRouteFacet in one environment (#543, #1467).
+
+    ``domain_suffix`` is "" in production and "-<env>" elsewhere. The in-band
+    public-route probes and the Homer portal links both call this function, so
+    they cannot disagree on a host.
+    """
+    sub = facet.subdomain or (meta.subdomain or "")
+    if not sub:
+        raise ValueError(
+            f"{meta.service_id}: PublicRouteFacet needs a subdomain (the "
+            "Deployer declares none and the facet does not override it)"
+        )
+    if meta.domain and not domain_suffix:
+        # A product domain (truealpha.club) is the bare host in production;
+        # non-production keeps the prefix: truealpha-staging.truealpha.club
+        # (truealpha#474 — the formula the deploy ships as APP_HOST).
+        return meta.domain
+    host_suffix = "" if (meta.prod_only or facet.env_shared) else domain_suffix
+    return f"{sub}{host_suffix}.{meta.domain or domain}"
+
+
 def render_public_route_spec_text(env: str, domain: str, attrs=None) -> str:
     """Aggregate every service's PublicRouteFacets into the runner's
     ``PUBLIC_ROUTE_PROBE_SPECS`` text for one deploy environment (#543,
@@ -178,12 +200,9 @@ def render_public_route_spec_text(env: str, domain: str, attrs=None) -> str:
             prod_only = meta.prod_only
             if prod_only and not is_production:
                 continue
-            sub = facet.subdomain or (meta.subdomain or "")
-            if not sub:
-                raise ValueError(
-                    f"{owner_id}: PublicRouteFacet needs a subdomain (the "
-                    "Deployer declares none and the facet does not override it)"
-                )
+            host = public_route_host(
+                meta, facet, domain=domain, domain_suffix=domain_suffix
+            )
             name = facet.name or f"{service_id.split('/', 1)[-1]}-public-route"
             if name in seen:
                 raise ValueError(
@@ -191,17 +210,9 @@ def render_public_route_spec_text(env: str, domain: str, attrs=None) -> str:
                     f"both {seen[name]} and {owner_id}"
                 )
             seen[name] = owner_id
-            host_suffix = "" if (prod_only or facet.env_shared) else domain_suffix
             severity = facet.severity if is_production else "warning"
             # domain resolved at render time (the $-free transport rejects
             # placeholders — the Dokploy .env lesson, #541)
-            if meta.domain and is_production:
-                # A product domain (truealpha.club) is the bare host in production;
-                # non-production keeps the prefix: truealpha-staging.truealpha.club
-                # (truealpha#474 — the formula the deploy ships as APP_HOST).
-                host = meta.domain
-            else:
-                host = f"{sub}{host_suffix}.{meta.domain or domain}"
             target = f"https://{host}{facet.path}"
             lines.append(
                 "|".join(
