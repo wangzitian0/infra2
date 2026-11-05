@@ -18,7 +18,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Sequence
 import yaml
@@ -38,6 +40,7 @@ from common.deploy.app_contract import (
     validate_app_release_evidence,
 )
 from common.deploy.dependencies import explain_fanout
+from common.deploy.transient_failure import classify_failure
 from common.deploy.contract import all_service_keys, service_spec
 from common.deploy.env_config import app_compose_env_config
 from common.deploy.release_markers import (
@@ -1388,24 +1391,70 @@ def commands_to_apply(
     return [command for command in commands if command.deploy_type == wanted]
 
 
+# Owner decision (2026-11-05, #1439): the approval of a production tag covers at most two
+# automatic retries of a failed unit, in the same run and on the same tag (same command).
+MAX_UNIT_RETRIES = 2
+UNIT_RETRY_BACKOFF_SECONDS = (30.0, 90.0)
+
+
+def _is_platform_unit(command: DeployCommand) -> bool:
+    """True for a unit of iac_pinned services (the runner path). An app unit goes through
+    promote, whose failure rolls production back; it is never retried."""
+    names = [name for name in command.service.split(",") if name]
+    try:
+        return bool(names) and all(service_spec(name).iac_pinned for name in names)
+    except Exception:  # noqa: BLE001 - an unknown service is not retried
+        return False
+
+
 def run_deploy_commands(
     commands: Sequence[DeployCommand],
     *,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], str] = lambda: datetime.now(timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    ),
 ) -> list[dict]:
+    """Run each deploy command; retry a failed platform unit on a transient fault.
+
+    At most MAX_UNIT_RETRIES retries, only when ``classify_failure`` calls the failure
+    transient. Every attempt is recorded as ``attempts: [{n, cause, at}]`` (``cause`` is
+    why it failed, None when it succeeded). Idempotency: the retry is the same signed
+    ``/deploy`` request (same ``deployment_id``), and the config-hash gate skips a service
+    that already matches. An app unit is never retried: its failure triggers promote's
+    rollback, which a re-run repeats until the circuit breaker trips.
+    """
     results: list[dict] = []
     for command in commands:
-        completed = runner(
-            command.argv,
-            capture_output=True,
-            text=True,
-        )
+        attempts: list[dict] = []
+        while True:
+            attempt = {"n": len(attempts) + 1, "cause": None, "at": clock()}
+            attempts.append(attempt)
+            completed = runner(command.argv, capture_output=True, text=True)
+            if completed.returncode == 0:
+                break
+            transient, attempt["cause"] = classify_failure(completed.stderr)
+            if not (transient and _is_platform_unit(command)):
+                break
+            if attempt["n"] > MAX_UNIT_RETRIES:
+                break
+            pause = UNIT_RETRY_BACKOFF_SECONDS[attempt["n"] - 1]
+            print(
+                f"reconcile retry: {command.deploy_type} {command.service}: attempt "
+                f"{attempt['n'] + 1} of {MAX_UNIT_RETRIES + 1} after {attempt['cause']} "
+                f"(same command, same tag; waiting {pause:g}s)",
+                file=sys.stderr,
+                flush=True,
+            )
+            sleep(pause)
         record = {
             "service": command.service,
             "type": command.deploy_type,
             "returncode": completed.returncode,
             "stdout": completed.stdout,
             "stderr": completed.stderr,
+            "attempts": attempts,
         }
         if completed.returncode == 0 and completed.stdout.strip():
             try:
@@ -1546,6 +1595,14 @@ def write_summary(
         lines.append(
             f"- Deploy results: `{len(results) - len(failed)} ok / {len(failed)} failed`"
         )
+        for item in results:
+            attempts = item.get("attempts") or []
+            if len(attempts) > 1:
+                steps = "; ".join(
+                    f"attempt {a['n']} at {a['at']}: {a['cause'] or 'ok'}"
+                    for a in attempts
+                )
+                lines.append(f"- Retried `{item['service']}` ({item['type']}): {steps}")
     lines.append("")
     lines.append("```json")
     lines.append(

@@ -6,6 +6,7 @@ Receives GitHub push events and triggers sync for changed services.
 """
 
 import base64
+import contextlib
 import functools
 import hashlib
 import hmac
@@ -16,6 +17,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.request
@@ -32,6 +34,12 @@ GIT_REPO_URL = os.environ.get("GIT_REPO_URL")
 GIT_BRANCH = os.environ.get("GIT_BRANCH") or "main"
 SECRETS_FILE = Path("/secrets/.env")
 RECENT_DEPLOY_TTL_SECONDS = 600
+# Deploy records live on the /workspace volume, beside the repo checkout (#1439).
+DEPLOY_STATE_FILE = (
+    Path(os.environ.get("IAC_RUNNER_STATE_DIR") or WORKSPACE / ".iac_runner")
+    / "deploy_state.json"
+)
+MAX_PERSISTED_DEPLOYS = 64
 SIGNATURE_TTL_SECONDS = 300
 MAX_REQUEST_BODY_BYTES = 65536
 EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -369,6 +377,112 @@ def _recent_result(key: DeploymentKey) -> dict | None:
     return response
 
 
+# --- Persistent deploy records (#1439) -------------------------------------------------
+# A restart used to erase _in_flight_deploys and _recent_deploys, and the client poll then
+# got "not_found" (run 41967457003). Now every change is saved to DEPLOY_STATE_FILE under
+# _deploy_state_lock (temp file, fsync, os.replace: a reader or a crash sees a whole file).
+# The thread of a deploy that was in flight died with the process, so at load its key
+# becomes an "interrupted" record: a transient fault that the client may request again.
+
+
+def _key_to_json(key: DeploymentKey) -> dict:
+    return dict(zip(("env", "ref", "services", "version_ref", "action"), key))
+
+
+def _key_from_json(raw) -> DeploymentKey:
+    env, ref, services = raw["env"], raw["ref"], raw["services"]
+    version_ref, action = raw["version_ref"], raw["action"]
+    if not all(isinstance(s, str) for s in (env, ref, version_ref, action, *services)):
+        raise ValueError("a saved key is malformed")
+    return (env, ref, tuple(services), version_ref, action)
+
+
+def _interrupted_response(key: DeploymentKey) -> dict:
+    return {
+        "status": "interrupted",
+        "deployment_id": _deployment_id(key),
+        "env": key[0],
+        "ref": key[1],
+        "triggered_by": "unknown",
+        "requested_services": list(key[2]),
+        "error": (
+            "iac_runner restarted while this deployment was in flight, so its outcome "
+            "is unknown. Request it again: a service whose config hash matches is skipped."
+        ),
+    }
+
+
+def _save_state_locked() -> None:
+    """Save the records. The caller holds _deploy_state_lock. A failed save is logged and
+    never fails a deploy: the records stay in memory as before."""
+    now_monotonic, now_wall = time.monotonic(), time.time()
+    for key, (stored_at, _response) in list(_recent_deploys.items()):
+        if now_monotonic - stored_at > RECENT_DEPLOY_TTL_SECONDS:
+            del _recent_deploys[key]
+    oldest_first = sorted(_recent_deploys, key=lambda k: _recent_deploys[k][0])
+    payload = {
+        "version": 1,
+        "in_flight": [_key_to_json(key) for key in sorted(_in_flight_deploys)],
+        "recent": [
+            {
+                "key": _key_to_json(key),
+                "completed_at": now_wall - (now_monotonic - _recent_deploys[key][0]),
+                "response": _recent_deploys[key][1],
+            }
+            for key in oldest_first[-MAX_PERSISTED_DEPLOYS:]
+        ],
+    }
+    try:
+        DEPLOY_STATE_FILE.parent.mkdir(exist_ok=True)  # never creates /workspace
+        fd, tmp_name = tempfile.mkstemp(dir=DEPLOY_STATE_FILE.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_name, DEPLOY_STATE_FILE)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_name)
+            raise
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Deploy records not saved to %s: %s", DEPLOY_STATE_FILE, exc)
+
+
+def _load_state() -> None:
+    """Restore the saved records at start. It never raises: the runner must boot whatever
+    the file holds (not UTF-8, nested past the recursion limit, the wrong shape). An
+    unusable file is moved to .corrupt and the runner starts empty."""
+    try:
+        data = json.loads(DEPLOY_STATE_FILE.read_bytes().decode("utf-8"))
+        if data["version"] != 1:
+            raise ValueError("unknown version")
+        now_wall, now_monotonic = time.time(), time.monotonic()
+        restored: dict[DeploymentKey, tuple[float, dict]] = {}
+        for item in data["recent"]:
+            if not isinstance(item["response"], dict):
+                raise ValueError("a saved response is malformed")
+            age = max(0.0, now_wall - float(item["completed_at"]))
+            key = _key_from_json(item["key"])
+            restored[key] = (now_monotonic - age, item["response"])
+        for raw_key in data["in_flight"]:
+            key = _key_from_json(raw_key)
+            restored[key] = (now_monotonic, _interrupted_response(key))
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        logger.error("Deploy state file %s is unreadable: %s", DEPLOY_STATE_FILE, exc)
+        return
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Deploy state file %s is unusable: %s", DEPLOY_STATE_FILE, exc)
+        with contextlib.suppress(OSError):
+            os.replace(DEPLOY_STATE_FILE, str(DEPLOY_STATE_FILE) + ".corrupt")
+        return
+    with _deploy_state_lock:
+        _recent_deploys.update(restored)
+        _save_state_locked()  # drops what is too old and writes the interrupted records
+
+
 def _reusable_result(key: DeploymentKey) -> dict | None:
     """A remembered result worth serving INSTEAD of deploying again — a success only.
 
@@ -522,6 +636,7 @@ def _run_deployment(
             if response is not None:
                 _recent_deploys[key] = (time.monotonic(), response)
             _in_flight_deploys.discard(key)
+            _save_state_locked()
 
 
 def _failed_response(
@@ -743,6 +858,7 @@ def version_deploy():
                     )
                 ), 202
             _in_flight_deploys.add(key)
+            _save_state_locked()
 
         _run_deployment(
             env,
@@ -780,6 +896,7 @@ def version_deploy():
                 )
             ), 202
         _in_flight_deploys.add(key)
+        _save_state_locked()
 
     if services is not None:
         thread = threading.Thread(
@@ -907,6 +1024,9 @@ def deployment_status():
             "ref": ref,
         }
     ), 404
+
+
+_load_state()
 
 
 if __name__ == "__main__":

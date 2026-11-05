@@ -165,6 +165,23 @@ marker 不动就是 prod 用旧 deployer:2026-07-30 的 `production/v1.1.52` 让
 deploy-guard-audit 报一行(`python -m common.deploy.release_markers --repo-root .`),内容是 marker、落后几个
 release、以及是否已旧到会破坏下一次 prod 发布。工作流与工具通过 `common.deploy.app_contract.query_serving_release` 直接查询 infra2 权威部署态 `(source_sha, image_tag, iac_ref)`，不再从 App 自身 GitHub Actions 历史重推导 (#588)。
 
+#### 3.3.1 Unit retry in the release train (#1439)
+
+Owner decision (2026-11-05): the approval of a production tag covers at most 2 automatic retries of a failed unit, in
+the same run and on the same tag. `run_deploy_commands` runs the same command again after 30 s, then after 90 s.
+
+- **Which units.** Platform units only (every service `iac_pinned`, for example `truealpha/data_engine`). An app unit
+  goes through `promote`, whose failure rolls production back and counts toward the circuit breaker, so it is never retried.
+- **Which failures.** `common.deploy.transient_failure.classify_failure` reads the last `deploy_v2 failed:` line. It
+  retries only DNS or network (`server misbehaving`, `i/o timeout`, `TLS handshake timeout`), a registry 5xx on a line that
+  names a registry or a pull, and a runner that lost (`not_found`) or interrupted the deploy. Auth, a health check after a
+  good pull, a changed hash and anything unrecognised are not retried.
+- **Record.** `attempts: [{n, cause, at}]` in the result JSON, a `reconcile retry:` line on stderr, and a `Retried` line in
+  the run summary. The production marker still advances only after every unit succeeded.
+- **Idempotency.** The retry is the same signed `/deploy` request, so the runner answers with the same `deployment_id`; it
+  serves a remembered success and re-runs a failed or `interrupted` record. The config-hash gate (§5.3) then skips a service
+  that already matches and whose newest Dokploy deployment record is `done`. A retry costs up to 120 s of pauses plus a run: the 15-minute release budget is exceeded.
+
 ### 3.4 未收口项(open / 目标态)
 
 1. ✅ **把 `iac_runner` bootstrap 与 `apply-observability` 折进 tag reconcile 已落地 (#1416)** —— `deploy.yml` 与 `apply-observability.yml` 移除 `on.push`，合流 `main` 不再产生班车外的 `production` 审批挂起单；L1 runner 自更新与 L2 SigNoz 告警/看板全部收敛进 `reconcile-iac-inputs.yml` (`promote_prod=true`) 单一发布班车。
@@ -275,6 +292,7 @@ post-merge 部署被 GitHub Actions `concurrency` 串行化,调 IaC Runner 前�
 不是日志附属字段;同一 release 并发部署不同服务不得互相命中 cache / in-flight / status。
 不走公网 Cloudflare 的 `wait=true`(会在 sync 完成前 524)。
 A `not_found` answer that lasts longer than 90 seconds is a lost request; the client fails and names the cause and the deployment id. Only a real status resets the 90-second timer: a gateway error does not. A staging deploy re-submits a lost request once; a production deploy fails at once.
+An `interrupted` answer (the runner restarted while it ran the deploy, #1439) is raised the same way, as `RunnerInterruptedError`.
 
 ### 5.1 Endpoints
 

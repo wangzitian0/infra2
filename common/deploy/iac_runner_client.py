@@ -55,6 +55,16 @@ class RunnerLostDeploymentError(RuntimeError):
     """
 
 
+class RunnerInterruptedError(RunnerLostDeploymentError):
+    """The runner restarted while it ran this deploy: its outcome is unknown (#1439).
+
+    The runner saves its deploy records, so after a restart it answers ``interrupted``
+    for a deploy that was in flight, not ``not_found``. Like a lost request this is a
+    transient fault, and requesting the same coordinates again is safe: the config-hash
+    gate skips a service that already matches.
+    """
+
+
 def status_poll_delays(
     initial: float = STATUS_POLL_INITIAL_SECONDS,
     backoff: float = STATUS_POLL_BACKOFF,
@@ -420,6 +430,12 @@ def poll_platform_deploy_status(
         not_found_since = None
         resp.raise_for_status()
         last = resp.json() if resp.content else {}
+        if str(last.get("status", "")).lower() == "interrupted":
+            raise RunnerInterruptedError(
+                f"iac_runner reported interrupted for deploy {ref[:12]} to {env} "
+                f"(deployment {deployment_id or last.get('deployment_id') or 'unknown'}): "
+                "the runner restarted while it ran this deployment (#1439)"
+            )
         if str(last.get("status", "")).lower() not in terminal_excluded:
             return last
         sleep(next(delays))

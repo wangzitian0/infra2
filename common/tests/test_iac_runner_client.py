@@ -872,3 +872,30 @@ def test_status_poll_attempts_is_the_fewest_polls_covering_the_budget(budget):
 def test_status_poll_attempts_refuses_a_schedule_that_never_pauses():
     with pytest.raises(ValueError, match="never pauses"):
         status_poll_attempts(60, initial=0)
+
+
+# --- #1439: an interrupted deploy is a transient runner fault, not a result ------------
+
+
+def test_poll_raises_a_typed_error_for_an_interrupted_deploy_at_once():
+    """The restarted runner answers `interrupted` (HTTP 200): the outcome is unknown and a
+    new request is safe, so it is neither a result nor a failed deploy."""
+    from common.deploy.transient_failure import classify_failure
+
+    answers = [({"status": "in_progress"}, 200), ({"status": "interrupted"}, 200)]
+    calls, transport = _capture(answers)
+    with pytest.raises(RunnerLostDeploymentError, match="reported interrupted") as err:
+        poll_platform_deploy_status(
+            env="production",
+            ref=SHA,
+            base_url="u",
+            secret=SECRET,
+            attempts=90,
+            interval=0,
+            sleep=lambda *_: None,
+            nonce_factory=lambda: "nonce123",
+            transport=transport,
+        )
+
+    assert type(err.value).__name__ == "RunnerInterruptedError" and len(calls) == 2
+    assert classify_failure(f"deploy_v2 failed: {err.value}\n")[0] is True

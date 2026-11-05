@@ -845,7 +845,28 @@ class Deployer:
         container_error = cls._verify_containers_in_service(c, stack)
         if container_error:
             return container_error
-        return cls._verify_recorded_deploy_ref_checkout(stack)
+        checkout_error = cls._verify_recorded_deploy_ref_checkout(stack)
+        return checkout_error or cls._verify_newest_deployment_done(compose_id)
+
+    @classmethod
+    def _verify_newest_deployment_done(cls, compose_id: str) -> str | None:
+        """Skip only when the newest Dokploy record is a success (#1439). A runner killed
+        after it wrote the new hash leaves hash, checkout and old containers matching while
+        Dokploy's deploy runs or failed. No record, or an unreadable list, keeps the skip."""
+        from common.deploy.dokploy_adapter import get_compose_deployments
+        from common.deploy.dokploy_client import get_dokploy
+        from common.deploy.rollout import TERMINAL_SUCCESS_STATUSES
+
+        domain = cls.env().get("INTERNAL_DOMAIN")
+        client = get_dokploy(host=f"cloud.{domain}" if domain else None)
+        records = get_compose_deployments(client, compose_id)
+        if not records:
+            return None
+        newest = max(records, key=lambda r: str(r.get("createdAt") or ""))
+        status = str(newest.get("status") or "").lower()
+        if status in TERMINAL_SUCCESS_STATUSES:
+            return None
+        return f"the newest Dokploy deployment record is '{status}', not done"
 
     @classmethod
     def _verify_recorded_deploy_ref_checkout(cls, stack: _HostStack) -> str | None:

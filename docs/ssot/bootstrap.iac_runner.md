@@ -186,6 +186,24 @@ def sync_service(service_name):
 - ✅ 幂等性保证（多次执行结果相同）
 - ✅ 快速失败（检测到配置无变更时立即返回）
 
+### 3.4 Persistent deploy records (#1439)
+
+The runner used to keep `_in_flight_deploys` and `_recent_deploys` in memory only. A worker or container restart erased
+them and the poll got `not_found` (run 41967457003). Now `webhook_server` saves them to
+`/workspace/.iac_runner/deploy_state.json` (`IAC_RUNNER_STATE_DIR` overrides the directory; it sits beside the repo
+checkout). Every change is written under `_deploy_state_lock` with a temp file, `fsync` and `os.replace`. A failed save is
+logged and never fails a deploy. At start the runner loads the file: a record older than `RECENT_DEPLOY_TTL_SECONDS` is
+dropped, at most 64 stay, and a deploy that was in flight becomes `{"status": "interrupted", ...}` on `/deploy/status`
+(HTTP 200). `interrupted` is not a result: a duplicate `/deploy` runs again and the config-hash gate (§3.3) decides. The
+loader never raises: a file that is not UTF-8, is nested past the recursion limit or has the wrong shape is moved to
+`deploy_state.json.corrupt` and the runner starts empty.
+
+Two risks follow from a restart. (1) A runner killed after it wrote the new config hash leaves the hash, the checkout and
+the old containers matching while Dokploy's deploy still runs or has failed; a retry would skip and turn green. The skip
+guard (`Deployer._verify_newest_deployment_done`) now lets the hash skip apply only when the newest Dokploy deployment
+record is `done`; no record, or an unreadable list, keeps the skip. (2) Still open (#1472): after a gunicorn
+worker-only restart an orphaned `invoke` child may still run while a retry starts.
+
 ---
 
 ## 4. API 端点
