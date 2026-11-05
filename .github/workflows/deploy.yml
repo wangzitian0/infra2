@@ -21,14 +21,6 @@ name: Deploy (deploy_v2)
 # path is caught on a disposable stack, never on real prod data. skip_canary=true bypasses it.
 
 on:
-  push:
-    branches: ["main"]
-    paths:
-      - "bootstrap/06.iac_runner/**"
-      - "scripts/deploy_iac_runner_bootstrap.sh"
-      - "uv.lock"
-      - "tools/sdk_requirement.py"
-      - ".github/workflows/deploy.yml"
   workflow_dispatch:
     inputs:
       service:
@@ -83,7 +75,7 @@ permissions:
 
 concurrency:
   # One in-flight deploy per type; never let two deploys race the same compose/slot.
-  group: ${{ (github.event_name == 'push' || inputs.service == 'bootstrap/iac-runner') && 'iac-runner-bootstrap' || format('deploy-v2-{0}', github.event.inputs.type) }}
+  group: ${{ inputs.service == 'bootstrap/iac-runner' && 'iac-runner-bootstrap' || format('deploy-v2-{0}', github.event.inputs.type) }}
   cancel-in-progress: false
 
 jobs:
@@ -292,7 +284,7 @@ jobs:
   # IaC runner bootstrap jobs
   bootstrap:
     name: update iac_runner bootstrap
-    if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.service == 'bootstrap/iac-runner') }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.service == 'bootstrap/iac-runner' }}
     # L1 bootstrap self-update and runner rebuild are production changes (#1125).
     environment: production
     runs-on: ubuntu-latest

@@ -9,16 +9,6 @@ name: Apply Observability (alerts + dashboard) IaC
 # The Feishu alert channel is found-by-name when it already exists, so no Feishu
 # secrets are needed for the steady-state apply.
 on:
-  push:
-    branches: ["main"]
-    paths:
-      - "finance_report/finance_report/observability/**"
-      - "truealpha/truealpha/observability/**"
-      - "platform/12.alerting/alert_rules.json"
-      - "common/alerting/**"
-      - "common/observability_dashboards.py"
-      - "tools/signoz_alert_rule_probe.py"
-      - ".github/workflows/apply-observability.yml"
   workflow_dispatch:
     inputs:
       mode:

@@ -2266,16 +2266,37 @@ def test_legacy_dashboard_row_is_found_whether_its_title_is_absent_or_empty(
 
 
 def test_apply_observability_workflow_watches_every_alert_rules_file() -> None:
-    """Ensure apply-observability.yml triggers on every alert_rules.json and dashboard.json."""
+    """Ensure apply-observability.yml has no on.push trigger and reconcile-iac-inputs.yml
+    watches every alert_rules.json and dashboard.json and invokes apply-alerts / apply-dashboard."""
     import fnmatch
     import yaml
 
     wf = yaml.safe_load(APPLY_OBSERVABILITY_WORKFLOW.read_text(encoding="utf-8"))
     on_block = wf.get("on") or wf.get(True)
-    push_paths = on_block["push"]["paths"]
+    assert "push" not in on_block
+    assert "workflow_dispatch" in on_block
+
+    reconcile_text = (ROOT / ".github/workflows/reconcile-iac-inputs.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "fr-observability.shared.apply-alerts" in reconcile_text
+    assert "fr-observability.shared.apply-dashboard" in reconcile_text
+
+    train_patterns = [
+        "finance_report/finance_report/observability/*",
+        "truealpha/truealpha/observability/*",
+        "platform/12.alerting/alert_rules.json",
+        "common/alerting/*",
+        "common/observability_dashboards.py",
+        "tools/signoz_alert_rule_probe.py",
+    ]
+    for pat in train_patterns:
+        assert pat in reconcile_text, (
+            f"{pat} missing from reconcile-iac-inputs.yml observability filter"
+        )
 
     for target in (*ALERT_RULES_FILES, DASHBOARD_FILE):
         rel = target.relative_to(ROOT).as_posix()
-        assert any(fnmatch.fnmatch(rel, pat) for pat in push_paths), (
-            f"{rel} is not matched by any on.push.paths pattern in apply-observability.yml: {push_paths}"
+        assert any(fnmatch.fnmatch(rel, pat) for pat in train_patterns), (
+            f"{rel} is not matched by any observability pattern in reconcile-iac-inputs.yml: {train_patterns}"
         )

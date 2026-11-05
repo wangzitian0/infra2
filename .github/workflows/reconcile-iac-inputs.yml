@@ -67,6 +67,7 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
+      SIGNOZ_API_KEY: ${{ secrets.SIGNOZ_API_KEY }}
       # A failed reconcile pages out of band (#658): the runner's per-service error_kind is
       # the earliest machine-readable point of every deploy-chain incident of 2026-09-04..08.
       INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
@@ -85,6 +86,12 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
 
       - name: Install runtime dependencies
         run: python -m pip install invoke httpx python-dotenv pyyaml rich "$(python tools/sdk_requirement.py)"
@@ -208,6 +215,88 @@ jobs:
             exit 1
           fi
 
+          changed_files=""
+          if [[ -n "$before" ]]; then
+            changed_files="$(git diff --name-only "$before" "$after")"
+          else
+            changed_files="$(git diff-tree --no-commit-id --name-only -r "$after")"
+          fi
+
+          # IaC Runner Bootstrap Update (in-train before tools.reconcile_iac_inputs):
+          # bootstrap/06.iac_runner/**, scripts/deploy_iac_runner_bootstrap.sh, uv.lock, tools/sdk_requirement.py
+          if [[ "$promote_prod" == "true" && "$dry_run" != "true" ]]; then
+            bootstrap_changed="false"
+            while IFS= read -r file; do
+              [[ -z "$file" ]] && continue
+              case "$file" in
+                bootstrap/06.iac_runner/*|scripts/deploy_iac_runner_bootstrap.sh|uv.lock|tools/sdk_requirement*.py)
+                  bootstrap_changed="true"
+                  break
+                  ;;
+              esac
+            done <<< "$changed_files"
+
+            if [[ "$bootstrap_changed" == "true" ]]; then
+              echo "Deploy IaC Runner bootstrap changes for '$after'..."
+              if [[ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
+                echo "::error::INFRA2_WATCHDOG_SSH_PRIVATE_KEY is required to update the IaC Runner bootstrap."
+                exit 1
+              fi
+              if [[ -z "${INFRA2_WATCHDOG_SSH_HOST:-}" ]]; then
+                echo "::error::INFRA2_WATCHDOG_SSH_HOST is required."
+                exit 1
+              fi
+              if [[ -z "${INFRA2_WATCHDOG_SSH_USER:-}" ]]; then
+                echo "::error::INFRA2_WATCHDOG_SSH_USER is required."
+                exit 1
+              fi
+              install -m 700 -d ~/.ssh
+              printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_bootstrap
+              chmod 600 ~/.ssh/infra2_bootstrap
+              ssh_port="${INFRA2_WATCHDOG_SSH_PORT:-22}"
+              deploy_sha="$(git rev-parse "$after^{commit}")"
+              ssh \
+                -i ~/.ssh/infra2_bootstrap \
+                -p "$ssh_port" \
+                -o StrictHostKeyChecking=no \
+                -o UserKnownHostsFile=/dev/null \
+                "${INFRA2_WATCHDOG_SSH_USER}@${INFRA2_WATCHDOG_SSH_HOST}" \
+                "INFRA2_DEPLOY_SHA='${deploy_sha}' bash -s" \
+                < scripts/deploy_iac_runner_bootstrap.sh
+
+              echo "Check IaC Runner health..."
+              health_url="${IAC_RUNNER_URL%/}/health"
+              body="$(mktemp)"
+              last_status=""
+              healthy="false"
+              for attempt in $(seq 1 12); do
+                : > "$body"
+                status="$(curl -sS -o "$body" -w "%{http_code}" \
+                  --connect-timeout 10 \
+                  --max-time 20 \
+                  "$health_url" || true)"
+                last_status="$status"
+                echo "IaC Runner public health attempt ${attempt}/12: url=$health_url status=$status"
+                if [[ -s "$body" ]]; then
+                  sed 's/^/  /' "$body" || true
+                else
+                  echo "  <empty body>"
+                fi
+                if [[ "$status" == "200" ]]; then
+                  rm -f "$body"
+                  healthy="true"
+                  break
+                fi
+                sleep 10
+              done
+              if [[ "$healthy" != "true" ]]; then
+                rm -f "$body"
+                echo "::error::IaC Runner public health stayed unhealthy after 12 attempts. Last HTTP status: $last_status. Check Traefik/Dokploy routing, Cloudflare propagation, VAULT_APP_TOKEN, and iac-runner container health."
+                exit 1
+              fi
+            fi
+          fi
+
           args=(--after "$after"
                 --domain "$INTERNAL_DOMAIN"
                 --timeout 3300
@@ -221,6 +310,32 @@ jobs:
           fi
 
           python -m tools.reconcile_iac_inputs "${args[@]}"
+
+          # Observability (SigNoz Alerts + Dashboard) Reconcile (in-train):
+          # finance_report/finance_report/observability/**, truealpha/truealpha/observability/**,
+          # platform/12.alerting/alert_rules.json, common/alerting/**,
+          # common/observability_dashboards.py, tools/signoz_alert_rule_probe.py
+          if [[ "$promote_prod" == "true" && "$dry_run" != "true" ]]; then
+            obs_changed="false"
+            while IFS= read -r file; do
+              [[ -z "$file" ]] && continue
+              case "$file" in
+                finance_report/finance_report/observability/*|truealpha/truealpha/observability/*|platform/12.alerting/alert_rules.json|common/alerting/*|common/observability_dashboards.py|tools/signoz_alert_rule_probe.py)
+                  obs_changed="true"
+                  break
+                  ;;
+              esac
+            done <<< "$changed_files"
+
+            if [[ "$obs_changed" == "true" ]]; then
+              if [[ -z "${SIGNOZ_API_KEY:-}" ]]; then
+                echo "::error::SIGNOZ_API_KEY secret is not set — cannot apply observability config."
+                exit 1
+              fi
+              ENV=production DEPLOY_ENV=production uv run --locked python -m invoke fr-observability.shared.apply-alerts
+              ENV=production DEPLOY_ENV=production uv run --locked python -m invoke fr-observability.shared.apply-dashboard
+            fi
+          fi
 
       # v1.1.57's reconcile (2026-09-07 08:35Z) recorded onepassword_auth_failed for
       # platform/alerting and unknown_invoke_failure for truealpha/data_engine twenty minutes

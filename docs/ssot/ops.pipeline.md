@@ -24,8 +24,8 @@
 | **IaC Input Reconcile & Multi-App Release Train** | [`reconcile-iac-inputs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/reconcile-iac-inputs.yml) · [`tools/reconcile_iac_inputs.py`](https://github.com/wangzitian0/infra2/blob/main/tools/reconcile_iac_inputs.py) | **Release-tag** 触发(`push: tags: v*.*.*`)、定时巡检(`schedule: 0 * * * *`)与显式晋升(`workflow_dispatch`):diff 上一 tag→本 tag,把 changed `iac_pinned` 服务以**该 tag** 为 `iac_ref` fan-out 给 `deploy_v2 → iac_runner`;对 `harness/repos.yaml` 中变更的 App `release_tag` 或 `10.app/**` 目录按序输出独立 `deploy_v2` 命令（先主服务、再 `companions` 如 `truealpha/data_engine`，并从平台 batch 中剔除避免双部署）。 |
 | **Deploy 前门 (`deploy_v2`)** | [`tools/deploy_v2.py`](https://github.com/wangzitian0/infra2/blob/main/tools/deploy_v2.py) · [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) | 统一部署坐标 `(service, type, version_ref, iac_ref)`;app + 平台、staging/prod、pinned ref。底层调用 [`common/deploy/`](https://github.com/wangzitian0/infra2/blob/main/common/deploy/) 领域包驱动执行。 |
 | **App Release Contract & Hooks** | [`common/deploy/app_contract.py`](https://github.com/wangzitian0/infra2/blob/main/common/deploy/app_contract.py) · [`common/deploy/release_markers.py`](https://github.com/wangzitian0/infra2/blob/main/common/deploy/release_markers.py) | App 契约预检（`verify_app_manifests`）、Vault 模板渲染（`render_release_template`）、SDK 钩子调度（`execute_app_hook_slot`）与生产版本发布证据校验（`validate_app_release_evidence`）。**marker 早于 `MINIMUM_PRODUCTION_MARKER`（`v1.1.59`，release pin #632 首次发布的 tag）时 fail-closed**：更旧的 deployer 会用运维手写进 Vault 的 digest 重建 data engine，而不是被晋升的那个 release（#650）。 |
-| **IaC Runner Bootstrap (L1)** | [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) · [`scripts/deploy_iac_runner_bootstrap.sh`](https://github.com/wangzitian0/infra2/blob/main/scripts/deploy_iac_runner_bootstrap.sh) | **带外**自更新:`bootstrap/06.iac_runner/**` 变更时,Actions 在 VPS 上重建 runner 自身(跟 merged SHA),**独立 cadence**。 |
-| **Observability config apply** | [`apply-observability.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/apply-observability.yml) | 告警规则 / 看板,声明式 reconcile。**当前 merge 即 apply**(见 §3.4 未收口项)。 |
+| **IaC Runner Bootstrap (L1)** | [`reconcile-iac-inputs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/reconcile-iac-inputs.yml) · [`deploy.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/deploy.yml) · [`scripts/deploy_iac_runner_bootstrap.sh`](https://github.com/wangzitian0/infra2/blob/main/scripts/deploy_iac_runner_bootstrap.sh) | **随班车自更新 + 手动兜底**:`bootstrap/06.iac_runner/**` 等变更在 `reconcile-iac-inputs.yml` (`promote_prod=true`) 中于 `tools.reconcile_iac_inputs` 之前在 VPS 上先自更新 runner 并通过健康检查(跟被晋升 tag SHA);`deploy.yml` 保留手动 `workflow_dispatch` 入口。 |
+| **Observability config apply** | [`reconcile-iac-inputs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/reconcile-iac-inputs.yml) · [`apply-observability.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/apply-observability.yml) | 告警规则 / 看板,声明式 reconcile:**已折进 tag release train** (`reconcile-iac-inputs.yml` `promote_prod=true`),`apply-observability.yml` 保留手动 `workflow_dispatch` (apply / canary) 入口。 |
 | **Docs site** | [`docs.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/docs.yml) · [`docs/mkdocs.yml`](../mkdocs.yml) | MkDocs → GitHub Pages。 |
 
 ---
@@ -62,7 +62,7 @@
 | **app prod** | **手动**(app)| **同一个 release tag** | `deploy_v2 --type prod --version-ref vX.Y.Z --staging-validated --code-reviewed` | 真实 prod 数据 | 长期 |
 | **平台服务**(iac_pinned)**staging** | **release tag 推送**(`v*.*.*`)→ **自动 staging**(soak)| **该 tag** 作 `iac_ref` | `reconcile-iac-inputs.yml` → `deploy_v2 → iac_runner` | — | 长期 |
 | **平台服务**(iac_pinned)**prod** | **显式 promote**(`workflow_dispatch` `promote_prod=true` / `--promote-prod`)——tag 推送**不**自动动 prod | **同一 tag** | 同上 | — | 长期 |
-| **L1 Bootstrap**(iac-runner)| `bootstrap/06.iac_runner/**` 变更 | merged SHA | 带外 self-update(`deploy.yml`)| — | 独立 cadence |
+| **L1 Bootstrap**(iac-runner)| `bootstrap/06.iac_runner/**` 变更 | release tag SHA | 随 `reconcile-iac-inputs.yml` (`promote_prod=true`) 前置 self-update (或 `deploy.yml` 手动 `workflow_dispatch`) | — | 随 release train |
 
 Preview success is a two-stage proof, not public reachability alone. The lifecycle
 snapshots Dokploy deployment IDs before its trigger, waits for a new record attributable
@@ -140,12 +140,12 @@ infra2 有天然分层(层级编号沿用 [core.md#层级定义](./core.md#层�
 
 | 层 | 内容 | 部署触发 | 跟什么版本 |
 |----|------|---------|-----------|
-| **L1 Bootstrap** | iac-runner / Vault / Dokploy(部署引擎自己)| **带外自更新**(它就是执行 reconcile 的人,不能等自己的 tag)| merged SHA |
+| **L1 Bootstrap** | iac-runner / Vault / Dokploy(部署引擎自己)| **release tag → reconcile (`promote_prod=true`) 前置自更新** + 手动 `workflow_dispatch` (`deploy.yml`) | release tag |
 | **L2 Platform · 服务** | postgres / redis / signoz / alerting / openpanel … | **release tag → reconcile** | release tag |
-| **L2 Platform · 配置** | 告警规则 / 看板 / 探针 spec | **当前 merge 即 apply**(目标:折进 tag reconcile,见 §3.4)| merge SHA(目标:tag)|
+| **L2 Platform · 配置** | 告警规则 / 看板 / 探针 spec | **release tag → reconcile (`promote_prod=true`)** + 手动 `workflow_dispatch` (`apply-observability.yml`) | release tag |
 
-→ **最新 release tag 是 staging candidate，最新 `production/v*` marker 才是 L2 Platform·服务
-production 的权威 live 版本**;L1 Bootstrap 与 L2·配置 的版本错位**必须可见**(§3.5),
+→ **最新 release tag 是 staging candidate，最新 `production/v*` marker 才是 L1 Bootstrap、L2 Platform·服务与 L2·配置
+production 的权威 live 版本**;各层版本状态**必须可见**(§3.5),
 不静默、也不叫 drift。
 
 ### 3.3 晋升与 soak(promotion)
@@ -167,9 +167,7 @@ release、以及是否已旧到会破坏下一次 prod 发布。工作流与工�
 
 ### 3.4 未收口项(open / 目标态)
 
-1. **把 `apply-observability` 折进 tag reconcile** —— 当前 L2 配置 merge 即 apply,使「一个 tag」不是平台 live 的
-   **完整**快照。**前置依赖:[Infra-013](../project/Infra-013.service_registry_ssot.md) P1**(从 registry 生成
-   `watchdog-signals.yaml` / `INFRA_PROBE_SPECS`,消除手抄)——在 P1 完成前,折进 tag 是脆的。
+1. ✅ **把 `iac_runner` bootstrap 与 `apply-observability` 折进 tag reconcile 已落地 (#1416)** —— `deploy.yml` 与 `apply-observability.yml` 移除 `on.push`，合流 `main` 不再产生班车外的 `production` 审批挂起单；L1 runner 自更新与 L2 SigNoz 告警/看板全部收敛进 `reconcile-iac-inputs.yml` (`promote_prod=true`) 单一发布班车。
 2. **Release-train 自动化**(release-please 式):常驻 `Release vX.Y.Z` PR 累积「未发布增量」+ 自动 changelog +
    自动 semver。它的 diff 就是「哪些没发布」的答案(替代靠人 ssh 手查)。
 3. ✅ **显式晋升闸门已落地**:tag 自动 staging,prod 经 `--promote-prod` 显式放行(reconcile 拆分 + 来源守卫)。

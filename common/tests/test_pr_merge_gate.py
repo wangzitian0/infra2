@@ -160,11 +160,19 @@ def test_the_deploy_triggering_globs_cover_every_push_triggered_deploy_workflow(
     import yaml
 
     workflows = ROOT / ".github/workflows"
-    for name in ("deploy.yml", "deploy-cloudflare-watchdog.yml"):
+    for name in (
+        "deploy.yml",
+        "apply-observability.yml",
+        "deploy-cloudflare-watchdog.yml",
+    ):
         workflow = yaml.safe_load((workflows / name).read_text(encoding="utf-8"))
         on = workflow.get("on", workflow.get(True))
         if "push" not in on:
-            assert name == "deploy-cloudflare-watchdog.yml"
+            assert name in (
+                "deploy.yml",
+                "apply-observability.yml",
+                "deploy-cloudflare-watchdog.yml",
+            )
             assert "workflow_dispatch" in on
             continue
         for pattern in on["push"]["paths"]:
@@ -808,13 +816,10 @@ def test_a_closed_pr_costs_no_comparison_round_trip():
 def test_a_prod_reaching_deploy_needs_the_owner_and_a_canary_does_not():
     # Owner approval is scoped by environment (owner, 2026-09-21): staging, the
     # reserved pr-0 canary slot and the report-branch-main preview are the
-    # agent's to merge; prod is not. apply-observability writes to live SigNoz,
-    # so it stays owner-required; ops-checks' canary targets the reserved
-    # ephemeral slot, so it does not.
-    assert (
-        gate._deploy_triggering("common/alerting/signoz.py")
-        == "apply-observability.yml"
-    )
+    # agent's to merge; prod is not. apply-observability is folded into the tag
+    # release train (#1416) with no on.push trigger, so merging observability
+    # files does not trigger a deploy on merge.
+    assert not gate._deploy_triggering("common/alerting/signoz.py")
     # deploy.yml is in the written list, which reports "on merge" -- it has no
     # workflow to cite because the merge itself is the trigger.
     assert gate._deploy_triggering(".github/workflows/deploy.yml") == "on merge"
@@ -832,17 +837,16 @@ def test_ordinary_paths_are_still_not_deploy_triggering():
 
 def test_the_written_globs_survive_derivation():
     # These have no workflow path filter to be derived from -- a runner rebuild
-    # and a bootstrap self-update are triggered by the merge itself.
+    # and a bootstrap self-update are in the written DEPLOY_TRIGGERING_GLOBS list.
     assert gate._deploy_triggering("bootstrap/06.iac_runner/main.tf")
     assert gate._deploy_triggering("scripts/deploy_iac_runner_bootstrap.sh")
     assert not gate._deploy_triggering("cloudflare/infra-watchdog/src/index.ts")
 
 
 def test_a_deploy_triggering_path_routes_to_the_owner():
-    # common/alerting/signoz.py, not tools/deploy_v2.py: the latter only starts the
-    # reserved-slot canary, which is the agent's to merge since the owner
-    # scoped approval by environment.
-    verdict = gate.evaluate(_facts(files=("common/alerting/signoz.py",)), now=NOW)
+    # bootstrap/06.iac_runner/main.tf is in DEPLOY_TRIGGERING_GLOBS, whereas
+    # tools/deploy_v2.py only starts the reserved-slot canary.
+    verdict = gate.evaluate(_facts(files=("bootstrap/06.iac_runner/main.tf",)), now=NOW)
     assert not verdict.ready
     assert verdict.owner_required
     assert any("trigger a deploy" in r for r in verdict.reasons)
@@ -867,13 +871,25 @@ def test_a_missing_workflow_directory_is_a_broken_read_not_an_empty_repo(monkeyp
         gate._required_checks.cache_clear()
 
 
-def test_the_deploy_reason_names_the_workflow_that_fires():
+def test_the_deploy_reason_names_the_workflow_that_fires(tmp_path, monkeypatch):
     # "tools/deploy_v2.py triggers a deploy" makes an owner go and find out
     # which one. Naming it makes the line a judgement they can act on.
-    verdict = gate.evaluate(_facts(files=("common/alerting/signoz.py",)), now=NOW)
-    reason = next(r for r in verdict.reasons if "trigger a deploy" in r)
-    assert "apply-observability.yml" in reason
-    assert "common/alerting/signoz.py" in reason
+    wf_dir = tmp_path / "workflows"
+    wf_dir.mkdir()
+    (wf_dir / "apply-observability.yml").write_text(
+        'on:\n  push:\n    branches: ["main"]\n    paths: ["common/alerting/**"]\n'
+        "jobs:\n  apply:\n    steps:\n      - run: invoke fr-observability.shared.apply-alerts\n",
+        encoding="utf-8",
+    )
+    gate._declared_deploy_globs.cache_clear()
+    monkeypatch.setattr(gate, "WORKFLOW_DIR", wf_dir)
+    try:
+        verdict = gate.evaluate(_facts(files=("common/alerting/signoz.py",)), now=NOW)
+        reason = next(r for r in verdict.reasons if "trigger a deploy" in r)
+        assert "apply-observability.yml" in reason
+        assert "common/alerting/signoz.py" in reason
+    finally:
+        gate._declared_deploy_globs.cache_clear()
 
 
 def test_a_merge_triggered_path_needs_no_workflow_to_name():
@@ -885,21 +901,40 @@ def test_a_merge_triggered_path_needs_no_workflow_to_name():
     assert " via " not in reason
 
 
-def test_the_observability_apply_is_deploy_triggering():
-    # apply-observability.yml pushes to main and runs
-    # `invoke fr-observability.shared.apply-alerts` against live SigNoz.
-    # AGENTS.md names "observability apply" as a high-risk merge side effect,
-    # and the first marker list missed it -- the same omission the derivation
-    # was written to stop.
+def test_the_observability_apply_is_deploy_triggering(tmp_path, monkeypatch):
+    # apply-observability.yml in the live tree no longer has on.push (#1416), so
+    # observability files do not trigger a deploy on merge; if a workflow does
+    # declare on.push with an observability marker, _deploy_triggering derives it.
     gate._declared_deploy_globs.cache_clear()
-    assert (
-        gate._deploy_triggering("finance_report/finance_report/observability/x.yaml")
-        == "apply-observability.yml"
+    assert not gate._deploy_triggering(
+        "finance_report/finance_report/observability/x.yaml"
     )
-    assert (
-        gate._deploy_triggering("common/alerting/signoz.py")
-        == "apply-observability.yml"
+    assert not gate._deploy_triggering("common/alerting/signoz.py")
+
+    wf_dir = tmp_path / "workflows"
+    wf_dir.mkdir()
+    (wf_dir / "apply-observability.yml").write_text(
+        "on:\n  push:\n    branches: [main]\n    paths:\n"
+        '      - "finance_report/finance_report/observability/**"\n'
+        '      - "common/alerting/**"\n'
+        "jobs:\n  apply:\n    steps:\n      - run: invoke fr-observability.shared.apply-alerts\n",
+        encoding="utf-8",
     )
+    gate._declared_deploy_globs.cache_clear()
+    monkeypatch.setattr(gate, "WORKFLOW_DIR", wf_dir)
+    try:
+        assert (
+            gate._deploy_triggering(
+                "finance_report/finance_report/observability/x.yaml"
+            )
+            == "apply-observability.yml"
+        )
+        assert (
+            gate._deploy_triggering("common/alerting/signoz.py")
+            == "apply-observability.yml"
+        )
+    finally:
+        gate._declared_deploy_globs.cache_clear()
 
 
 def test_a_trigger_field_may_be_a_string_or_omitted():
@@ -2302,9 +2337,7 @@ def test_each_condition_maps_to_its_remedy(facts_kwargs, expected):
 def test_a_deploy_path_still_needs_the_owner_even_with_a_red_check():
     """Exit 2 outranks 3: the owner decision does not go away when CI turns green."""
     verdict = gate.evaluate(
-        _facts(
-            files=("common/observability_dashboards.py",), checks=(("Tests", "fail"),)
-        ),
+        _facts(files=("bootstrap/06.iac_runner/main.tf",), checks=(("Tests", "fail"),)),
         now=NOW,
     )
     assert verdict.exit_code == 2 and verdict.action_required
@@ -2423,14 +2456,16 @@ def test_a_proven_tighter_change_gets_no_new_blocker_from_the_lock():
 
 def test_a_deploy_path_merges_without_the_owner_when_the_lock_holds():
     verdict = gate.evaluate(
-        _green(files=("common/alerting/signoz.py",), lock_failures=HOLDS), now=NOW
+        _green(files=("bootstrap/06.iac_runner/main.tf",), lock_failures=HOLDS),
+        now=NOW,
     )
     assert verdict.ready and not verdict.owner_required, verdict.reasons
 
 
 def test_a_deploy_path_needs_the_owner_when_the_lock_was_not_read():
     verdict = gate.evaluate(
-        _green(files=("common/alerting/signoz.py",), lock_failures=None), now=NOW
+        _green(files=("bootstrap/06.iac_runner/main.tf",), lock_failures=None),
+        now=NOW,
     )
     assert verdict.owner_required and verdict.exit_code == 2
     assert any("trigger a deploy" in r for r in verdict.reasons)
@@ -2438,7 +2473,8 @@ def test_a_deploy_path_needs_the_owner_when_the_lock_was_not_read():
 
 def test_a_deploy_path_needs_the_owner_and_says_why_when_the_lock_fails():
     verdict = gate.evaluate(
-        _green(files=("common/alerting/signoz.py",), lock_failures=("x",)), now=NOW
+        _green(files=("bootstrap/06.iac_runner/main.tf",), lock_failures=("x",)),
+        now=NOW,
     )
     assert verdict.owner_required and verdict.exit_code == 2
     assert "production lock not verified: x" in verdict.reasons
