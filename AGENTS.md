@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=b484c30c4dee1bc4b73a8ded9bbd24bdabffa7b6624c5e33491fd28d2ff4ae83 -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=5d01eeac41c9609c2ddc498b895aee027ebbff06cec6ee4b02999d1491c72837 -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -86,7 +86,7 @@ Full procedures are in [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.
    **Three-stage lifecycle -- merge != deploy (owner instruction, 2026-09-25):**
    - **Stage 1 -- Code Merge:** `git merge` lands commits on `main` (zero service impact).
    - **Stage 2 -- Staging Deploy:** Triggered by pushing tag `vX.Y.Z` (auto-deploys staging soak only).
-   - **Stage 3 -- Production Deploy:** Requires explicit dispatch (`deploy.yml type=prod` or `reconcile-iac-inputs.yml promote_prod=true`) after [`deploy-evidence`](.agents/skills/deploy-evidence/SKILL.md) and [`close`](.agents/skills/close/SKILL.md).
+   - **Stage 3 -- Production Deploy:** Requires explicit dispatch (`deploy.yml type=prod` or `reconcile-iac-inputs.yml promote_prod=true`) after [`deploy-evidence`](.agents/skills/deploy-evidence/SKILL.md) and the `close` skill.
 6. **Review set and production paths** (owner instructions, 2026-09-22, 2026-10-06, 2026-10-08 and 2026-10-20). The gate verifies the GitHub `production` environment lock and `common/gate/production_contract.py` on every open PR, printing `production lock verified` (`lock_state=verified`) when satisfied (`ops.merge-gate.md`). The review set is the closure of rule 5, the contract tables, and the release code; edits in the review set are the agent's after an independent review, `### Mutation evidence` naming tests, and a clean main gate checkout. These edits are production changes in this repository, whatever the exit code. First, an edit to the settings of the `production` environment. Second, an edit to the jobs `host-hygiene-schedule` or `facet-reconcile` of `ops-checks.yml`, or to `tools/host_hygiene_schedule.py` or `tools/facet_reconcile.py`. Third, an edit to a workflow or to the release code when the verdict does not print `production lock verified`. Without the lock, such an edit can reach production with no reviewer. An edit that makes the contract or the lock facts gate fewer production jobs follows the Root self-guard. `common/gate/self_governance.py` owns `_direction_proof_for()`; do not copy its list.
 
 ## Security and hard boundaries
