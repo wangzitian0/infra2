@@ -267,11 +267,11 @@ def test_deploy_compose_with_record_check_retries_once_on_runtime_error() -> Non
         )
 
 
-def test_ssh_args_for_log_tail_uses_runtime_ssh_key_and_strict_host_key_checking_no(
+def test_ssh_args_for_log_tail_uses_runtime_ssh_key_and_accept_new(
     tmp_path, monkeypatch
 ) -> None:
     """#1416 (G1): _ssh_args_for_log_tail falls back to /root/.ssh_runtime/id_ed25519
-    when INFRA2_WATCHDOG_SSH_KEY_PATH is unset, and always sets StrictHostKeyChecking=no."""
+    when INFRA2_WATCHDOG_SSH_KEY_PATH is unset, and uses StrictHostKeyChecking=accept-new."""
     from common.deploy.dokploy_adapter import _ssh_args_for_log_tail
 
     monkeypatch.delenv("INFRA2_WATCHDOG_SSH_KEY_PATH", raising=False)
@@ -281,8 +281,8 @@ def test_ssh_args_for_log_tail_uses_runtime_ssh_key_and_strict_host_key_checking
     runtime_key.write_text("dummy-key", encoding="utf-8")
 
     args = _ssh_args_for_log_tail("10.0.0.1", runtime_key_path=runtime_key)
-    assert "StrictHostKeyChecking=no" in args
-    assert "UserKnownHostsFile=/dev/null" in args
+    assert "StrictHostKeyChecking=accept-new" in args
+    assert "StrictHostKeyChecking=no" not in args
     assert "-i" in args
     assert args[args.index("-i") + 1] == str(runtime_key)
     assert args[-1] == "root@10.0.0.1"

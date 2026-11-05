@@ -1081,3 +1081,52 @@ def test_sync_app_releases_updates_repos_yaml_when_remote_tag_advances(
     assert "# keep this comment" in updated_text
     assert "release_tag: v0.2.47" in updated_text
     assert "release_tag: v0.2.80" in updated_text
+
+
+def test_sync_app_releases_cut_and_push_infra_tag(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    """#1416 (T1): when --cut-infra-tag and --push-infra-tag are passed, sync_app_releases
+    commits the updated harness/repos.yaml, creates next_infra_tag, and pushes HEAD:main
+    and refs/tags/<next_infra_tag> to origin."""
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.46\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.80\n",
+        encoding="utf-8",
+    )
+
+    def _fake_remote(repo_url: str, **_kw):
+        if "finance_report" in repo_url:
+            return (SHA, {"v0.2.46": "1" * 40, "v0.2.47": SHA})
+        return ("2" * 40, {"v0.2.80": "2" * 40})
+
+    monkeypatch.setattr(reconcile, "_query_remote_app_refs", _fake_remote)
+    monkeypatch.setattr(reconcile, "newest_release_tag", lambda **_kw: "v3.1.22")
+
+    git_calls: list[list[str]] = []
+
+    def _fake_runner(cmd, **_kw):
+        git_calls.append(list(cmd))
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    res = reconcile.sync_app_releases(
+        tmp_path,
+        apply_repos_yaml=True,
+        sync_gitlinks=True,
+        cut_infra_tag=True,
+        push_infra_tag=True,
+        runner=_fake_runner,
+    )
+    assert res["infra_tag_cut"] is True
+    assert res["infra_tag_pushed"] is True
+    assert res["next_infra_tag"] == "v3.1.23"
+    assert ["git", "tag", "v3.1.23"] in git_calls
+    assert ["git", "push", "origin", "HEAD:main", "refs/tags/v3.1.23"] in git_calls

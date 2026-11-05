@@ -25,9 +25,9 @@ import yaml
 from common.core.constants import APP_SOURCES, REPO_ROOT
 from common.core.registry import domain_for_service
 from common.deploy.app_contract import (
-    _git_url,
     execute_app_hook_slot,
     fetch_hooks_manifest,
+    git_url,
     next_app_release_tag,
     query_serving_release,
     validate_app_release_evidence,
@@ -439,6 +439,7 @@ def sync_app_releases(
     sync_gitlinks: bool = False,
     cut_missing_app_tag: bool = False,
     cut_infra_tag: bool = False,
+    push_infra_tag: bool = False,
     dry_run: bool = False,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> dict[str, object]:
@@ -455,7 +456,7 @@ def sync_app_releases(
         repo_slug = APP_SOURCES.get(service)
         if not repo_slug:
             raise ValueError(f"unknown app service {service!r}")
-        repo_url = _git_url(repo_slug)
+        repo_url = git_url(repo_slug)
         main_sha, tag_shas = _query_remote_app_refs(repo_url, runner=runner)
         sorted_tags = sorted(tag_shas, key=version_key)
         latest_tag = sorted_tags[-1] if sorted_tags else ""
@@ -498,6 +499,7 @@ def sync_app_releases(
     gitlinks_updated: list[str] = []
     next_infra_tag = ""
     infra_tag_cut = False
+    infra_tag_pushed = False
 
     if updates and apply_repos_yaml and not dry_run:
         repos_yaml_updated = update_repos_yaml_release_tags(repo_root, updates)
@@ -528,7 +530,7 @@ def sync_app_releases(
             next_infra_tag = "v0.1.0"
         if cut_infra_tag and repos_yaml_updated and not dry_run:
             commit_msg = (
-                "chore(release): sync app release tags ("
+                "chore(train): advance app release tags ("
                 + ", ".join(f"{svc}={tag}" for svc, tag in sorted(updates.items()))
                 + ")"
             )
@@ -541,7 +543,16 @@ def sync_app_releases(
                 check=True,
             )
             runner(
-                ["git", "commit", "-m", commit_msg],
+                [
+                    "git",
+                    "-c",
+                    "user.name=github-actions[bot]",
+                    "-c",
+                    "user.email=41898282+github-actions[bot]@users.noreply.github.com",
+                    "commit",
+                    "-m",
+                    commit_msg,
+                ],
                 cwd=repo_root,
                 capture_output=True,
                 text=True,
@@ -554,14 +565,22 @@ def sync_app_releases(
                 text=True,
                 check=True,
             )
-            runner(
-                ["git", "push", "origin", "HEAD:main", f"refs/tags/{next_infra_tag}"],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
             infra_tag_cut = True
+            if push_infra_tag:
+                runner(
+                    [
+                        "git",
+                        "push",
+                        "origin",
+                        "HEAD:main",
+                        f"refs/tags/{next_infra_tag}",
+                    ],
+                    cwd=repo_root,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                infra_tag_pushed = True
 
     return {
         "apps": entries,
@@ -571,6 +590,7 @@ def sync_app_releases(
         "gitlinks_updated": gitlinks_updated,
         "next_infra_tag": next_infra_tag,
         "infra_tag_cut": infra_tag_cut,
+        "infra_tag_pushed": infra_tag_pushed,
         "dry_run": dry_run,
     }
 
@@ -597,7 +617,7 @@ def resolve_app_hook_coordinates(
     resolved_sha = source_sha.strip()
     if not resolved_sha:
         resolved = resolve_image_ref(
-            version_ref, repo=_git_url(repo_slug), runner=runner
+            version_ref, repo=git_url(repo_slug), runner=runner
         )
         resolved_sha = resolved.sha.lower()
     resolved_url = app_url.strip()
@@ -1219,7 +1239,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--cut-infra-tag",
         action="store_true",
-        help="commit updated harness/repos.yaml and push next infra2 vX.Y.Z tag when updates exist",
+        help="commit updated harness/repos.yaml and create next infra2 vX.Y.Z tag when updates exist",
+    )
+    parser.add_argument(
+        "--push-infra-tag",
+        action="store_true",
+        help="push committed harness/repos.yaml and next infra2 vX.Y.Z tag to origin",
     )
     parser.add_argument("--output-json", default="", help="optional output JSON path")
     args = parser.parse_args(argv)
@@ -1235,6 +1260,7 @@ def main(argv: list[str] | None = None) -> int:
             sync_gitlinks=args.sync_gitlinks,
             cut_missing_app_tag=args.cut_missing_app_tag,
             cut_infra_tag=args.cut_infra_tag,
+            push_infra_tag=args.push_infra_tag,
             dry_run=args.dry_run,
         )
         print(json.dumps(sync_res, sort_keys=True))

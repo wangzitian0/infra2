@@ -44,9 +44,7 @@ def _ssh_args_for_log_tail(
         "-o",
         "ConnectTimeout=5",
         "-o",
-        "StrictHostKeyChecking=no",
-        "-o",
-        "UserKnownHostsFile=/dev/null",
+        "StrictHostKeyChecking=accept-new",
     ]
     key_path = os.environ.get("INFRA2_WATCHDOG_SSH_KEY_PATH", "").strip()
     if not key_path and runtime_key_path.is_file():
