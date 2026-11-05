@@ -294,6 +294,7 @@ Optional tuning:
 
 - `OBS_ROUNDTRIP_INTERVAL_SECONDS`: defaults to `300`
 - `OBS_ROUNDTRIP_QUERY_WAIT_SECONDS`: defaults to `30`
+- `INFRA_IAC_REF`: the deploy issues it (full infra2 SHA). The `signoz-roundtrip` probe reports it as `service.version` and `infra.iac.ref` on its canary log. Without it, `service.version` is `unknown` (#1452)
 - `ALERT_DELIVERY_CANARY_INTERVAL_SECONDS`: defaults to `21600`
 
 Required GitHub repository secrets for fallback SSH diagnostics:

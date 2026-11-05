@@ -327,6 +327,8 @@ An `app` service never receives a 40-hex SHA in `GIT_COMMIT_SHA`. The deploy set
 
 **Decision: `ServiceIdentity` stays the source of the SigNoz resource attributes.** `Deployer.sync`, fixed promote and preview render `OTEL_RESOURCE_ATTRIBUTES` with `ServiceIdentity.otel_resource_attributes()`. The keys `infra.service.id`, `infra.component`, `infra.iac.ref`, `infra.identity.schema` and `infra.managed_by` exist only there. Services validate issued telemetry coordinates through `init_service(..., require_issued_identity=True)`.
 
+**The round-trip canary follows the same contract (#1452).** `tools/observability_roundtrip_probe.py` posts its canary log directly to the collector, so it has no SDK and no issued `OTEL_RESOURCE_ATTRIBUTES`. It builds its resource with `ServiceIdentity.otel_resource_attributes()`. `infra.service.id` is the registered service that declares the probe (`platform/signoz`), and `infra.component` is the probe name (`signoz-roundtrip`). `service.name` stays `infra-observability-canary`. `INFRA_IAC_REF` supplies `service.version` and `infra.iac.ref`; the alerting compose passes it to the probe runner. Without a ref, `service.version` is `unknown`.
+
 ---
 
 <a id="manual-deploy-targets"></a>

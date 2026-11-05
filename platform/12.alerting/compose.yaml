@@ -179,6 +179,10 @@ services:
       # #903). Only that allowlist reports: `prod` pages. A typo or a missing ENV
       # stops the runner with EX_CONFIG (#1208).
       ENV: ${ENV}
+      # The deploy issues the full infra2 SHA as INFRA_IAC_REF. The round-trip probe
+      # reports it as `service.version` and `infra.iac.ref` on its canary log (#1452).
+      # Empty when the deploy issues none: the probe then reports `unknown`.
+      INFRA_IAC_REF: ${INFRA_IAC_REF:-}
       ALERT_BRIDGE_URL: http://platform-alerting${ENV_SUFFIX}:8080/signoz/webhook
       ALERTING_ENV_FILE: /secrets/.env
       INFRA_PROBE_INTERVAL_SECONDS: ${INFRA_PROBE_INTERVAL_SECONDS:-60}
