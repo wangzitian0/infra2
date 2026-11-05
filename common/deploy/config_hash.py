@@ -15,6 +15,7 @@ import shlex
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _GLOB_CHARS_RE = re.compile(r"[*?[]")
+_HOST_DATA_PREFIX = "${DATA_PATH}/"
 _ENV_SUBST_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?-)([^}]*))?\}")
 
 
@@ -210,6 +211,77 @@ def _compose_has_build(compose_content: str) -> bool:
     )
 
 
+def _bind_mount_sources(service: dict) -> list[str]:
+    """Source strings of the short and long syntax bind mounts of one compose service."""
+    volumes = service.get("volumes", [])
+    if not isinstance(volumes, list):
+        return []
+    sources: list[str] = []
+    for volume in volumes:
+        if isinstance(volume, str):
+            sources.append(_split_volume_source(volume))
+        elif isinstance(volume, dict):
+            if volume.get("type") not in (None, "bind"):
+                continue
+            sources.append(str(volume.get("source") or ""))
+    return sources
+
+
+def _host_mount_name(source: str) -> str | None:
+    """File name of a `${DATA_PATH}/<name>` host mount (the deploy-rendered file path)."""
+    if not source.startswith(_HOST_DATA_PREFIX):
+        return None
+    name = source.rstrip("/").rsplit("/", 1)[-1]
+    if not name or "${" in name:
+        return None
+    return name
+
+
+def _host_mount_template(compose_dir: Path, source: str) -> Path | None:
+    """Template file in the service directory that renders a `${VAR}/name` host mount.
+
+    The service deploy.py renders `name` (or `name.tmpl`) from the service directory
+    to the host path. The compose mount is the one declaration of which file that is.
+    """
+    name = _host_mount_name(source)
+    if name is None:
+        return None
+    for candidate in (name, f"{name}.tmpl"):
+        path = compose_dir / candidate
+        if path.is_file():
+            return path.resolve()
+    return None
+
+
+def compose_host_mount_files(compose_content: str) -> list[str]:
+    """File name of each `${DATA_PATH}/file.ext` host mount of a compose.
+
+    Only mounts whose last path part has a file suffix count. A directory mount
+    such as `${DATA_PATH}/data` holds runtime data, not a rendered template.
+    """
+    try:
+        import yaml
+    except ModuleNotFoundError:
+        return []
+    try:
+        compose = yaml.safe_load(compose_content) or {}
+    except yaml.YAMLError:
+        return []
+    services = compose.get("services", {}) if isinstance(compose, dict) else {}
+    if not isinstance(services, dict):
+        return []
+    found: list[str] = []
+    for service in services.values():
+        if not isinstance(service, dict):
+            continue
+        for source in _bind_mount_sources(service):
+            name = _host_mount_name(source)
+            if name is None or "." not in name.lstrip("."):
+                continue
+            found.append(name)
+    return found
+
+
 def _compose_artifact_files(compose_path: str, compose_content: str) -> list[Path]:
     try:
         import yaml
@@ -263,23 +335,20 @@ def _compose_artifact_files(compose_path: str, compose_content: str) -> list[Pat
                 if context_dir:
                     files.extend(_dockerfile_copy_sources(dockerfile, context_dir))
 
-        volumes = service.get("volumes", [])
-        if isinstance(volumes, list):
-            for volume in volumes:
-                if isinstance(volume, str):
-                    source = _split_volume_source(volume)
-                elif isinstance(volume, dict):
-                    source = str(volume.get("source") or "")
-                    if volume.get("type") not in (None, "bind"):
-                        continue
-                else:
-                    continue
-                expanded_source = _expand_compose_env_defaults(source)
-                if not expanded_source or not expanded_source.startswith("."):
-                    continue
-                resolved = _resolve_compose_relative(compose_dir, expanded_source)
-                if resolved:
-                    files.extend(_iter_path_files(resolved))
+        for source in _bind_mount_sources(service):
+            expanded_source = _expand_compose_env_defaults(source)
+            if expanded_source is None:
+                # `${DATA_PATH}/x` has no default: the host file is rendered by the
+                # service deploy.py from a template in the service directory (#1438).
+                template = _host_mount_template(compose_dir, source)
+                if template:
+                    files.append(template)
+                continue
+            if not expanded_source.startswith("."):
+                continue
+            resolved = _resolve_compose_relative(compose_dir, expanded_source)
+            if resolved:
+                files.extend(_iter_path_files(resolved))
 
     return sorted(set(files))
 
@@ -354,6 +423,7 @@ __all__ = [
     "_artifact_items_from_disk",
     "_compose_artifact_files",
     "_compose_has_build",
+    "compose_host_mount_files",
     "_compute_config_hash",
     "_dependency_items_from_globs",
     "_dependency_paths_from_globs",

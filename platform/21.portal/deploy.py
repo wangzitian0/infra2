@@ -48,12 +48,12 @@ class PortalDeployer(Deployer):
     )
 
     @classmethod
-    def pre_compose(cls, c):
-        if not cls._prepare_dirs(c):
-            error("Failed to prepare portal directories")
-            return None
+    def _deliver_config(cls, c, env) -> str | None:
+        """Render config.yml from its template and upload it to the host.
 
-        env = cls.env()
+        Returns the host config path, or None on failure. Shared by pre_compose and
+        composing so `sync`, which skips pre_compose, ships a template change (#1438).
+        """
         internal_domain = env.get("INTERNAL_DOMAIN")
         if not internal_domain:
             error("Missing INTERNAL_DOMAIN")
@@ -96,31 +96,52 @@ class PortalDeployer(Deployer):
             )
             if not result.ok:
                 return None
-
-            portal_url = f"https://home{domain_suffix}.{internal_domain}"
-            env_vars(
-                "PORTAL INFO",
-                {
-                    "PORTAL_URL": portal_url,
-                    "CONFIG_PATH": config_path,
-                    "INTERNAL_DOMAIN": internal_domain,
-                },
-            )
-            success("pre_compose complete")
-            result = cls.compose_env_base(env)
-            result.update(
-                {
-                    "PORTAL_URL": portal_url,
-                    "INTERNAL_DOMAIN": internal_domain,
-                }
-            )
-            return result
+            return config_path
         except OSError as exc:
             error("Failed to create temp config", str(exc))
             return None
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 os.unlink(tmp_path)
+
+    @classmethod
+    def composing(cls, c, env_vars):
+        """Deliver config.yml, then deploy (`sync` skips pre_compose)."""
+        if not cls._deliver_config(c, cls.env()):
+            raise RuntimeError("Failed to deliver Homer config.yml to host")
+        return super().composing(c, env_vars)
+
+    @classmethod
+    def pre_compose(cls, c):
+        if not cls._prepare_dirs(c):
+            error("Failed to prepare portal directories")
+            return None
+
+        env = cls.env()
+        config_path = cls._deliver_config(c, env)
+        if not config_path:
+            return None
+
+        internal_domain = env["INTERNAL_DOMAIN"]
+        domain_suffix = env.get("ENV_DOMAIN_SUFFIX", "")
+        portal_url = f"https://home{domain_suffix}.{internal_domain}"
+        env_vars(
+            "PORTAL INFO",
+            {
+                "PORTAL_URL": portal_url,
+                "CONFIG_PATH": config_path,
+                "INTERNAL_DOMAIN": internal_domain,
+            },
+        )
+        success("pre_compose complete")
+        result = cls.compose_env_base(env)
+        result.update(
+            {
+                "PORTAL_URL": portal_url,
+                "INTERNAL_DOMAIN": internal_domain,
+            }
+        )
+        return result
 
 
 @task

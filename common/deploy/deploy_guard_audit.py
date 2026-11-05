@@ -24,6 +24,7 @@ if str(ROOT) not in sys.path:
 from common.deploy.config_hash import (  # noqa: E402
     _compose_artifact_files,
     _compose_has_build,
+    compose_host_mount_files,
 )
 from common.deploy.dependencies import (  # noqa: E402
     CANONICAL_SERVICE_ROOTS,
@@ -130,6 +131,31 @@ def dockerfile_canary_violations(composes: list[Path], root: Path = ROOT) -> lis
     return violations
 
 
+def host_mount_violations(composes: list[Path], root: Path = ROOT) -> list[str]:
+    """Every `${DATA_PATH}/file.ext` host mount needs a config-hash input (#1438).
+
+    The service deploy.py renders such a file from a template in the service directory.
+    A template change must change the config hash, or `sync` skips the deploy.
+    """
+    violations: list[str] = []
+    for compose in composes:
+        compose = Path(compose).resolve()
+        text = compose.read_text(encoding="utf-8")
+        inputs = {
+            path.name
+            for path in _compose_artifact_files(str(compose), text)
+            if path.parent == compose.parent
+        }
+        rel = compose.relative_to(root.resolve()).as_posix()
+        for name in sorted(set(compose_host_mount_files(text))):
+            if name not in inputs and f"{name}.tmpl" not in inputs:
+                violations.append(
+                    f"{rel}: host mount {name!r} has no config-hash input; "
+                    f"add {name!r} or {name + '.tmpl'!r} to the service directory"
+                )
+    return violations
+
+
 def floor_violations(
     composes: list[Path],
     root: Path = ROOT,
@@ -181,6 +207,7 @@ def floor_violations(
                 f"{sr}: read {actual_inputs} config-hash inputs, below floor {min_inputs}"
             )
     violations.extend(dockerfile_canary_violations(composes, root=root))
+    violations.extend(host_mount_violations(composes, root=root))
     return violations
 
 
