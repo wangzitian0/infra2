@@ -1006,10 +1006,16 @@ def resolve_app_hook_cwd(
     service: str,
     source_sha: str,
     *,
+    release_ref: str = "",
     repo_root: Path = REPO_ROOT,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
-    """Return ``(app_cwd, temp_dir_or_none)`` containing an App checkout at ``source_sha`` (#1416)."""
+    """Return ``(app_cwd, temp_dir_or_none)`` containing an App checkout at ``source_sha`` (#1416).
+
+    A ``vX.Y.Z`` ``release_ref`` is also fetched as a tag (#1567): a depth-1 fetch of one
+    commit carries no tag names, and an App check that reads its release with
+    ``git rev-parse <tag>^{commit}`` fails without it.
+    """
     sub_rel = SERVICE_TO_SUBMODULE_PATH.get(service, "")
     if sub_rel:
         sub_dir = Path(repo_root) / sub_rel
@@ -1051,6 +1057,20 @@ def resolve_app_hook_cwd(
             text=True,
             check=True,
         )
+        if RELEASE_TAG_RE.fullmatch(release_ref):
+            fetched = runner(
+                ["git", "fetch", "-q", "--depth", "1", "origin", "tag", release_ref],
+                cwd=checkout_dir,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if fetched.returncode != 0:
+                # The checkout stays valid. The App check reports the missing tag itself.
+                sys.stderr.write(
+                    f"::warning::release tag {release_ref} was not fetched for {service}: "
+                    f"{(fetched.stderr or fetched.stdout or '').strip()}\n"
+                )
         return checkout_dir, tmp_dir
     except Exception:
         tmp_dir.cleanup()
@@ -1373,6 +1393,7 @@ def run_post_deploy_app_hooks(
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 service,
                 source_sha,
+                release_ref=version_ref,
                 repo_root=repo_root,
                 runner=runner,
             )
@@ -1531,6 +1552,7 @@ def run_scheduled_app_audits(
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 service,
                 source_sha,
+                release_ref=version_ref,
                 repo_root=repo_root,
                 runner=runner,
             )
@@ -2404,6 +2426,7 @@ def main(argv: list[str] | None = None) -> int:
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 args.hook_service,
                 args.hook_source_sha,
+                release_ref=version_ref,
                 repo_root=repo_root,
             )
         elif args.hook_service:
@@ -2421,6 +2444,7 @@ def main(argv: list[str] | None = None) -> int:
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 args.hook_service,
                 resolved_sha,
+                release_ref=version_ref,
                 repo_root=repo_root,
             )
         else:

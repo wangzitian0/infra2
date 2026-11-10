@@ -2900,3 +2900,80 @@ def test_sync_app_releases_cut_missing_app_tag_runs_ephemeral_preview_gate_and_a
     assert len(deploy_v2_calls_fail) == 2
     assert "--down" in deploy_v2_calls_fail[1]
     assert not any(c[:2] == ["gh", "api"] for c in commands_seen)
+
+
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def _origin_with_release_tag(tmp_path: Path) -> tuple[Path, str, str]:
+    """A real git origin: commit 1, annotated tag v1.2.3 on commit 2, commit 3 on main."""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "main")
+    (origin / "f.txt").write_text("one")
+    _git(origin, "add", "f.txt")
+    _git(origin, "commit", "-q", "-m", "one")
+    (origin / "f.txt").write_text("two")
+    _git(origin, "commit", "-q", "-am", "two")
+    tagged = _git(origin, "rev-parse", "HEAD")
+    _git(origin, "tag", "-a", "v1.2.3", "-m", "release")
+    (origin / "f.txt").write_text("three")
+    _git(origin, "commit", "-q", "-am", "three")
+    return origin, tagged, _git(origin, "rev-parse", "HEAD")
+
+
+def _checkout_of(monkeypatch, origin: Path, **kwargs):
+    monkeypatch.setitem(reconcile.APP_SOURCES, "test/app", "test/app")
+    monkeypatch.setattr(reconcile, "git_url", lambda _slug: origin.as_uri())
+    monkeypatch.setattr(reconcile, "SERVICE_TO_SUBMODULE_PATH", {})
+    return reconcile.resolve_app_hook_cwd("test/app", kwargs.pop("sha"), **kwargs)
+
+
+def test_hook_checkout_resolves_the_release_tag_as_a_commit(
+    tmp_path, monkeypatch
+) -> None:
+    """#1567: an App check runs `git rev-parse <tag>^{commit}` in the hook checkout.
+    A depth-1 fetch of one commit carries no tag names, so the check failed with
+    "is not a commit in this checkout (fetch tags)" and ran 4 of 15 expected checks."""
+    origin, tagged, _head = _origin_with_release_tag(tmp_path)
+    cwd, tmp = _checkout_of(monkeypatch, origin, sha=tagged, release_ref="v1.2.3")
+    try:
+        assert _git(cwd, "rev-parse", "--verify", "v1.2.3^{commit}") == tagged
+        assert _git(cwd, "rev-parse", "HEAD") == tagged
+        assert _git(cwd, "rev-list", "--count", "HEAD") == "1"  # still depth 1
+    finally:
+        tmp.cleanup()
+
+
+def test_hook_checkout_without_a_release_ref_has_no_tag_names(
+    tmp_path, monkeypatch
+) -> None:
+    """Control for the test above: with no release ref the checkout is the old depth-1 one."""
+    origin, tagged, _head = _origin_with_release_tag(tmp_path)
+    cwd, tmp = _checkout_of(monkeypatch, origin, sha=tagged)
+    try:
+        assert _git(cwd, "tag", "--list") == ""
+    finally:
+        tmp.cleanup()
+
+
+@pytest.mark.parametrize("ref", ["main", "", "v1.2", "--upload-pack=x", "v9.9.9"])
+def test_hook_checkout_ignores_a_ref_that_is_not_a_published_release_tag(
+    tmp_path, monkeypatch, ref
+) -> None:
+    """Only a `vX.Y.Z` ref is fetched. A tag the origin lacks leaves a valid checkout."""
+    origin, tagged, _head = _origin_with_release_tag(tmp_path)
+    cwd, tmp = _checkout_of(monkeypatch, origin, sha=tagged, release_ref=ref)
+    try:
+        assert cwd != reconcile.REPO_ROOT
+        assert _git(cwd, "rev-parse", "HEAD") == tagged
+        assert _git(cwd, "tag", "--list") == ""
+    finally:
+        tmp.cleanup()
