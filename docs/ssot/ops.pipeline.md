@@ -168,7 +168,7 @@ Its job annotations (`gh api --paginate repos/<repo>/check-runs/<job id>/annotat
 Preconditions: the tag is on `main`; no marker exists for it; it is newer than the latest marker; no reconcile run is waiting, pending, in progress or queued.
 Immediately before each production promotion dispatch of `reconcile-iac-inputs.yml`, `uv run --locked python -m tools.harness prod-queue` must exit 0 (#1528).
 It exits 1 while any production promotion run is active, and 4 when GitHub cannot be read.
-A `gh run cancel <id>` on a run that waits for approval completes in less than 20 s, and the next pending run moves to `waiting`.
+A `gh run cancel <id>` on a run that waits for approval ends that run, and the next pending run moves to `waiting`.
 Cancel only a run that your own command output started, or with an owner reply.
 Commands: `git fetch --tags origin`; `<sha>` is `git rev-parse <tag>^{commit}`; `git tag production/<tag> <sha>`; `git push origin refs/tags/production/<tag>`.
 Then `git ls-remote --tags origin refs/tags/production/<tag>` must show `<sha>`.
