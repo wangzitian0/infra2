@@ -5,8 +5,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
-import yaml
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HARNESS_REPOS_YAML = REPO_ROOT / "harness" / "repos.yaml"
 
@@ -48,6 +46,55 @@ def _repo_slug(raw_source: str) -> str:
     return cleaned
 
 
+def _parse_repos_yaml_stdlib(raw_text: str) -> dict[str, object]:
+    """Minimal stdlib parser for ``harness/repos.yaml`` when PyYAML is not installed."""
+    repositories: list[dict[str, str]] = []
+    repos_map: dict[str, dict[str, str]] = {}
+    section = ""
+    current_item: dict[str, str] | None = None
+    current_repo_key = ""
+
+    for raw_line in raw_text.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw_line) - len(raw_line.lstrip(" "))
+        if indent == 0 and stripped.endswith(":"):
+            section = stripped[:-1].strip()
+            current_item = None
+            current_repo_key = ""
+            continue
+        if section == "repositories":
+            if stripped.startswith("- "):
+                current_item = {}
+                repositories.append(current_item)
+                kv = stripped[2:].strip()
+                if ":" in kv:
+                    k, _, v = kv.partition(":")
+                    current_item[k.strip()] = v.strip().strip("'\"")
+            elif indent == 4 and current_item is not None and ":" in stripped:
+                k, _, v = stripped.partition(":")
+                val = v.strip().strip("'\"")
+                if val:
+                    current_item[k.strip()] = val
+        elif section == "repos":
+            if indent == 2 and stripped.endswith(":"):
+                current_repo_key = stripped[:-1].strip().strip("'\"")
+                repos_map[current_repo_key] = {}
+            elif indent >= 4 and current_repo_key and ":" in stripped:
+                k, _, v = stripped.partition(":")
+                val = v.strip().strip("'\"")
+                if val:
+                    repos_map[current_repo_key][k.strip()] = val
+
+    out: dict[str, object] = {}
+    if repositories:
+        out["repositories"] = repositories
+    if repos_map:
+        out["repos"] = repos_map
+    return out
+
+
 def _load_app_sources_from_repos_yaml(
     repos_yaml: Path = HARNESS_REPOS_YAML,
 ) -> dict[str, str]:
@@ -55,8 +102,16 @@ def _load_app_sources_from_repos_yaml(
     if not repos_yaml.is_file():
         return dict(_DEFAULT_APP_SOURCES)
     try:
-        data = yaml.safe_load(repos_yaml.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
+        raw_text = repos_yaml.read_text(encoding="utf-8")
+    except OSError:
+        return dict(_DEFAULT_APP_SOURCES)
+    try:
+        import yaml  # type: ignore[import-untyped]
+
+        data = yaml.safe_load(raw_text) or {}
+    except ModuleNotFoundError:
+        data = _parse_repos_yaml_stdlib(raw_text)
+    except Exception:  # noqa: BLE001
         return dict(_DEFAULT_APP_SOURCES)
     if not isinstance(data, Mapping):
         return dict(_DEFAULT_APP_SOURCES)

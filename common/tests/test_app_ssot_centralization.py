@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import ast
+import sys
 from pathlib import Path
+
+import pytest
 
 from common.core import constants, registry
 from common.deploy import app_contract
@@ -12,7 +15,9 @@ from common import observability_dashboards as obs
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_app_sources_derives_dynamically_from_repos_yaml(tmp_path: Path) -> None:
+def test_app_sources_derives_dynamically_from_repos_yaml(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """When harness/repos.yaml adds a 4th app `alpha_lab`, _load_app_sources_from_repos_yaml
     includes it automatically without editing common/core/constants.py."""
     assert constants.APP_SOURCES == {
@@ -46,6 +51,17 @@ def test_app_sources_derives_dynamically_from_repos_yaml(tmp_path: Path) -> None
         "    release_tag: v0.1.0\n",
         encoding="utf-8",
     )
+    assert constants._load_app_sources_from_repos_yaml(compact_yaml) == {
+        "alpha_lab/app": "wangzitian0/alpha_lab",
+    }
+
+    # Pure-stdlib fallback when PyYAML is absent (e.g. in stdlib-only lint CI jobs)
+    monkeypatch.setitem(sys.modules, "yaml", None)
+    assert (
+        constants._load_app_sources_from_repos_yaml(ROOT / "harness" / "repos.yaml")
+        == constants.APP_SOURCES
+    )
+    assert constants._load_app_sources_from_repos_yaml(synthetic_repos_yaml) == derived
     assert constants._load_app_sources_from_repos_yaml(compact_yaml) == {
         "alpha_lab/app": "wangzitian0/alpha_lab",
     }
