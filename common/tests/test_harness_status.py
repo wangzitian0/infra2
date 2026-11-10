@@ -812,3 +812,91 @@ def test_infra2_row_sees_remote_tags_not_merged_into_local_head(tmp_path: Path) 
         "production": "v1.2.41",
         "note": "marker 3 releases behind",
     }
+
+
+def test_observe_online_computes_train_gate_metrics_and_threshold(
+    tmp_path: Path,
+) -> None:
+    now_dt = datetime.fromisoformat("2026-11-10T12:00:00+00:00")
+    now_ts = int(now_dt.timestamp())
+    # 20 hours ago for silent case
+    twenty_hours_ago = str(now_ts - 20 * 3600)
+    # 50 hours ago for >= 48h prompt case
+    fifty_hours_ago = str(now_ts - 50 * 3600)
+
+    for rel in ("repos/finance_report", "repos/truealpha"):
+        (tmp_path / rel).mkdir(parents=True, exist_ok=True)
+
+    def make_runner(fr_timestamps: list[str], ta_timestamps: list[str]):
+        def runner(argv, **_kwargs):
+            checkout = Path(argv[2])
+            if checkout == tmp_path:
+                lines = [twenty_hours_ago, str(now_ts - 3600)]
+            elif checkout.name == "finance_report":
+                lines = fr_timestamps
+            elif checkout.name == "truealpha":
+                lines = ta_timestamps
+            else:
+                return subprocess.CompletedProcess(argv, 128, "", "not a repo")
+            out = ("\n".join(lines) + "\n") if lines else ""
+            return subprocess.CompletedProcess(argv, 0, out, "")
+
+        return runner
+
+    # Case 1: total_unpromoted_prs = 2 + 3 + 1 = 6 (< 15), oldest = 20.0h (< 48h) -> SILENT
+    silent_status = observe_online(
+        _status(),
+        tmp_path,
+        _manifest(),
+        fetcher=FakeFetcher(BODIES),
+        marker_status=_markers(BEHIND),
+        now=lambda: now_dt,
+        runner=make_runner([twenty_hours_ago] * 3, [str(now_ts - 2 * 3600)]),
+    )
+    assert silent_status.train_gate == {
+        "total_unpromoted_prs": 6,
+        "oldest_unpromoted_age_hours": 20.0,
+        "prod_gatekeeper": "SILENT",
+        "repositories": {
+            "infra2": {"unpromoted_prs": 2, "oldest_unpromoted_age_hours": 20.0},
+            "finance-report": {
+                "unpromoted_prs": 3,
+                "oldest_unpromoted_age_hours": 20.0,
+            },
+            "truealpha": {"unpromoted_prs": 1, "oldest_unpromoted_age_hours": 2.0},
+        },
+    }
+    table_lines = render_online_table(silent_status)
+    assert (
+        table_lines[-1]
+        == "train_gate: total_unpromoted_prs=6  oldest_unpromoted_age=20.0h  prod_gatekeeper=SILENT"
+    )
+
+    # Case 2: oldest = 50.0h (>= 48h) -> PROMPT_REQUIRED
+    age_prompt_status = observe_online(
+        _status(),
+        tmp_path,
+        _manifest(),
+        fetcher=FakeFetcher(BODIES),
+        marker_status=_markers(BEHIND),
+        now=lambda: now_dt,
+        runner=make_runner([fifty_hours_ago], []),
+    )
+    assert age_prompt_status.train_gate is not None
+    assert age_prompt_status.train_gate["total_unpromoted_prs"] == 3
+    assert age_prompt_status.train_gate["oldest_unpromoted_age_hours"] == 50.0
+    assert age_prompt_status.train_gate["prod_gatekeeper"] == "PROMPT_REQUIRED"
+
+    # Case 3: total_unpromoted_prs = 15 (>= 15) within 20h -> PROMPT_REQUIRED
+    count_prompt_status = observe_online(
+        _status(),
+        tmp_path,
+        _manifest(),
+        fetcher=FakeFetcher(BODIES),
+        marker_status=_markers(BEHIND),
+        now=lambda: now_dt,
+        runner=make_runner([twenty_hours_ago] * 10, [twenty_hours_ago] * 3),
+    )
+    assert count_prompt_status.train_gate is not None
+    assert count_prompt_status.train_gate["total_unpromoted_prs"] == 15
+    assert count_prompt_status.train_gate["prod_gatekeeper"] == "PROMPT_REQUIRED"
