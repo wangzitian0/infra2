@@ -1742,6 +1742,106 @@ def test_apply_observability_workflow_exposes_canary_mode() -> None:
     assert "inputs.mode == 'apply'" in workflow
 
 
+def _apply_observability_document() -> dict:
+    """Return the parsed apply-observability.yml."""
+    import yaml
+
+    return yaml.safe_load(APPLY_OBSERVABILITY_WORKFLOW.read_text(encoding="utf-8"))
+
+
+def _apply_observability_triggers() -> dict:
+    """Return the `on` block. PyYAML reads the key `on` as the boolean True."""
+    document = _apply_observability_document()
+    return document["on"] if "on" in document else document[True]
+
+
+def _apply_observability_job() -> dict:
+    """Return the parsed `apply` job of apply-observability.yml."""
+    return _apply_observability_document()["jobs"]["apply"]
+
+
+def _apply_observability_step(name: str) -> dict:
+    """Return the one step of the `apply` job with this exact name."""
+    matches = [s for s in _apply_observability_job()["steps"] if s.get("name") == name]
+    assert len(matches) == 1, f"expected exactly one step named {name!r}"
+    return matches[0]
+
+
+def test_apply_observability_mode_input_options_are_exact() -> None:
+    """#1435: the mode input offers apply, canary and prune-alerts, in this order."""
+    mode_input = _apply_observability_triggers()["workflow_dispatch"]["inputs"]["mode"]
+
+    assert mode_input["options"] == ["apply", "canary", "prune-alerts"]
+    assert mode_input["default"] == "apply"
+
+
+def test_apply_observability_triggers_permissions_and_concurrency_are_exact() -> None:
+    """#1435: the new mode adds no trigger, no write permission, no queue change."""
+    document = _apply_observability_document()
+
+    assert set(_apply_observability_triggers()) == {"workflow_dispatch"}
+    assert document["permissions"] == {"contents": "read"}
+    assert document["concurrency"] == {
+        "group": "apply-observability",
+        "cancel-in-progress": False,
+    }
+
+
+def test_apply_observability_step_names_are_exact_and_in_order() -> None:
+    """#1435: an added or removed step changes this list."""
+    names = [step["name"] for step in _apply_observability_job()["steps"]]
+
+    assert names == [
+        "Checkout",
+        "Set up Python",
+        "Install uv",
+        "Preflight — SIGNOZ_API_KEY present",
+        "Canary — SigNoz alert rule payload",
+        "Apply alert rules (idempotent)",
+        "Apply dashboard (idempotent)",
+    ]
+
+
+def test_apply_observability_alerts_step_prunes_only_in_prune_alerts_mode() -> None:
+    """#1435: prune-alerts runs apply-alerts with --prune; other modes pass no flag."""
+    step = _apply_observability_step("Apply alert rules (idempotent)")
+
+    assert step == {
+        "name": "Apply alert rules (idempotent)",
+        "if": (
+            "${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'apply' "
+            "|| inputs.mode == 'prune-alerts' }}"
+        ),
+        "env": {
+            "PRUNE_FLAG": "${{ inputs.mode == 'prune-alerts' && '--prune' || '' }}"
+        },
+        "run": (
+            "uv run --locked python -m invoke fr-observability.shared.apply-alerts "
+            "$PRUNE_FLAG"
+        ),
+    }
+
+
+def test_apply_observability_dashboard_step_never_runs_in_prune_alerts_mode() -> None:
+    """#1435: a prune run must not push dashboards the owner did not approve."""
+    step = _apply_observability_step("Apply dashboard (idempotent)")
+
+    assert step == {
+        "name": "Apply dashboard (idempotent)",
+        "if": (
+            "${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'apply' }}"
+        ),
+        "run": (
+            "uv run --locked python -m invoke fr-observability.shared.apply-dashboard"
+        ),
+    }
+
+
+def test_apply_observability_job_environment_stays_production() -> None:
+    """#1435: the new mode adds no unattended path; every run waits for the owner."""
+    assert _apply_observability_job()["environment"] == "production"
+
+
 def test_ssot_documents_alert_and_dashboard_apply_path() -> None:
     """#373: ops docs document how the alert + dashboard are applied."""
     alerting = (ROOT / "docs/ssot/ops.observability.md").read_text(encoding="utf-8")
