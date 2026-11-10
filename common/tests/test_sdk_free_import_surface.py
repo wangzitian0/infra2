@@ -1,10 +1,9 @@
 """Guard that every CI job without infra2-sdk runs only SDK-free modules (#1270).
 
-`ops-checks.yml` installs the locked `infra2-sdk` wheel in all Python jobs (`audit`,
-`watchdog`, `digest`, `preview-leak-check`,
-`host-hygiene-schedule`, `facet-reconcile`, `vault-self-refresh-audit`,
-`secrets-reconcile`, and `e2e-regressions-smoke` via `uv sync`). Only `pi-chain-smoke`
-runs on a bare interpreter without `pip install`, executing `tools/pi_chain_smoke.py`.
+All current `ops-checks.yml` Python jobs (`audit`, `watchdog`, `digest`,
+`preview-leak-check`, `host-hygiene-schedule`, `facet-reconcile`,
+`vault-self-refresh-audit`, `secrets-reconcile`, and `e2e-regressions-smoke`)
+install `infra2-sdk` via `uv sync`.
 """
 
 from __future__ import annotations
@@ -24,7 +23,6 @@ OPS_CHECKS = ROOT / ".github/workflows/ops-checks.yml"
 
 MUST_IMPORT_WITHOUT_SDK = [
     "tools.harness",
-    "tools.pi_chain_smoke",
     "common.security.registry",
 ]
 
@@ -155,8 +153,7 @@ jobs:
 
 def test_the_list_covers_every_module_the_sdk_free_ops_checks_jobs_run() -> None:
     jobs = _sdk_free_job_modules(yaml.safe_load(OPS_CHECKS.read_text(encoding="utf-8")))
-    assert set(jobs) == {"pi-chain-smoke"}, f"unexpected SDK-free jobs: {jobs}"
-    assert jobs["pi-chain-smoke"] == {"tools.pi_chain_smoke"}
+    assert set(jobs) == set(), f"unexpected SDK-free jobs: {jobs}"
     missing = {
         job: sorted(modules - set(MUST_IMPORT_WITHOUT_SDK))
         for job, modules in jobs.items()

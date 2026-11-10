@@ -182,13 +182,6 @@ gates:
     job: secrets-reconcile
     blocks_merge: false
     failure_semantics: Declared secrets diverge from 1Password, or the account is near a capacity limit.
-  - id: infra_ci.pi_chain_smoke
-    stage: ops.scheduled_cleanup
-    task_category: provider_smoke
-    workflow: .github/workflows/ops-checks.yml
-    job: pi-chain-smoke
-    blocks_merge: false
-    failure_semantics: The pi CLI -> zai-coding-cn -> glm-5.3-flash chain cannot complete a real call (credential, routing, or provider outage).
   - id: infra_ci.e2e_regressions_smoke
     stage: prod.release_integrity
     task_category: e2e_regression
