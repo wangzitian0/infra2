@@ -382,21 +382,10 @@ promote tier(`common.deploy.promote.deploy`,app + staging|prod,跑在 GitHub Act
 即为缺失),并在其后通过公网 `/api/health` 校验 HTTP 200、`status == "ok"` 与版本身份(`version`/`git_sha`
 匹配目标 `image_tag`,#569);`wait=True` 时默认开启,失败走同一条 failure snapshot 路径。
 
-### 5.4 Env × Stage Result Contract
+### 5.4 Env × Stage Result Contract (Retired)
 
-`infra2_sdk.delivery` 拥有 CI/CD、route canary、watchdog、probe 共享的稀疏 Env×Stage 证据 schema；
-infra2 与 App producer 都直接从各自固定版本的 SDK 导入，不保留源码级 compatibility re-export。
-当 stage 结果用于部署决策/告警路由/加速时,producer 必须发可比记录而非一次性日志。
-infra2 固定一个不可变的 `infra2-sdk` release wheel，版本与 sha256 只在 `uv.lock`。infra2 当前没有运行时
-producer:唯一的 producer(deploy_v2 预览位探针)已随 #1477 删除。新 producer 必须把成功证据的
-`target` 记为已解析 code/IaC SHA;禁用健康检查的 `--no-wait` 只能记录带原因的 `skip`。
-
-必填:`source` · `environment`(`local`/`pr`/`pr-preview`/`staging`/`production`)· `stage` · `target` ·
-`status`(`pass`/`fail`/`skip`/`warn`/`running`)· `duration_ms`/`deadline_ms` · `failure_domain`(失败必填)·
-`external_dependency` · `suppressed_reason`/`skipped_reason`(跳过必填,使加速可审计)。
-
-**加速规则**:prod 跳过不算安全加速;非 prod 跳过仅当 stage 显式 eligible 且带 reason 才算。
-**一致性规则**:跨 stage 矛盾记为 disagreement kind(如内部 health 绿但公网路由挂、heartbeat 与公网路由不符)。
+原 SDK delivery 模块历史拥有的 Env×Stage 证据 schema 已随 deploy_v2 canary（#1477）及 SDK 3.21.0 废弃。
+所有相关的旧 stage 探针与测试均已安全移除，不再保留无消费者的冗余代码。
 
 ---
 
@@ -481,7 +470,7 @@ gh workflow run deploy.yml \
 |------|----------|------|
 | **平台服务随 tag 晋升** | push `v*.*.*` → `reconcile-iac-inputs.yml` 运行 → IaC Runner logs | ✅ 本季实测(v1.1.9/v1.1.10)|
 | **Config hash 幂等性** | 相同配置重复部署应 no-op | ✅ |
-| **Env×Stage schema/speed/consistency** | `common/tests/test_pipeline_stage_contract.py` | ✅ |
+| **Canary retirement verification** | `common/tests/test_retired_deploy_canary.py` | ✅ |
 | **deploy_v2 prod fail-closed** | 缺 `--staging-validated/--code-reviewed` → 拒绝 | ✅ |
 | **off-main tag 来源守卫** | `assert_after_on_main` 拒绝非 `origin/main` 祖先的 tag → `common/tests/test_reconcile_iac_inputs.py` | ✅ |
 | **tag 不自动 prod(staging/prod 拆分)** | tag 推送只 apply staging;prod 需 `--promote-prod` → `commands_to_apply` 测试 | ✅ |
