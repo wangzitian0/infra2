@@ -20,7 +20,11 @@ ENVIRONMENTS = {
     "production": {"INTERNAL_DOMAIN": DOMAIN, "ENV_DOMAIN_SUFFIX": ""},
     "staging": {"INTERNAL_DOMAIN": DOMAIN, "ENV_DOMAIN_SUFFIX": "-staging"},
 }
-DASHBOARD = ROOT / "finance_report/finance_report/observability/dashboard.json"
+DASHBOARDS = {
+    "Finance Report Dashboard": ROOT
+    / "finance_report/finance_report/observability/dashboard.json",
+    "Truealpha Dashboard": ROOT / "truealpha/truealpha/observability/dashboard.json",
+}
 
 # Links that existed before #1467: name -> URL with `{S}` for ENV_DOMAIN_SUFFIX.
 EXISTING_LINKS = {
@@ -147,11 +151,14 @@ def test_no_link_points_to_another_environment() -> None:
     assert "Applications" in _groups(staging)
 
 
+@pytest.mark.parametrize("name", sorted(DASHBOARDS))
 @pytest.mark.parametrize("environment", sorted(ENVIRONMENTS))
-def test_dashboard_link_targets_the_one_signoz_instance(environment: str) -> None:
+def test_dashboard_link_targets_the_one_signoz_instance(
+    environment: str, name: str
+) -> None:
     """SigNoz is prod_only: no `signoz-staging` host exists, so both portals use `signoz`."""
-    title = json.loads(DASHBOARD.read_text(encoding="utf-8"))["title"]
-    url = _application_urls(environment)["Finance Report Dashboard"]
+    title = json.loads(DASHBOARDS[name].read_text(encoding="utf-8"))["title"]
+    url = _application_urls(environment)[name]
     parsed = urlparse(url)
     assert (parsed.scheme, parsed.hostname, parsed.path) == (
         "https",
@@ -162,15 +169,7 @@ def test_dashboard_link_targets_the_one_signoz_instance(environment: str) -> Non
     subtitles = {
         i["name"]: i["subtitle"] for i in _groups(_config(environment))["Applications"]
     }
-    assert subtitles["Finance Report Dashboard"] == title
-
-
-def test_no_dashboard_link_for_an_app_without_a_dashboard() -> None:
-    """truealpha ships no dashboard.json yet, so the portal must not invent a link."""
-    assert not (ROOT / "truealpha/truealpha/observability/dashboard.json").exists()
-    names = set(_application_urls("production"))
-    assert "Truealpha Dashboard" not in names
-    assert "Finance Report Dashboard" in names
+    assert subtitles[name] == title
 
 
 def test_dashboard_links_follow_the_dashboard_files(tmp_path: Path) -> None:
@@ -183,7 +182,8 @@ def test_dashboard_links_follow_the_dashboard_files(tmp_path: Path) -> None:
         )
         return {item["name"] for item in items}
 
-    assert "Truealpha Dashboard" not in names(_LAYERS)
+    assert {"Truealpha Dashboard", "Finance Report Dashboard"} <= names(_LAYERS)
+    assert "Truealpha Dashboard" not in names({**_LAYERS, "truealpha": tmp_path})
 
     layout = tmp_path / "observability"
     layout.mkdir()
@@ -303,4 +303,5 @@ def test_portal_hash_reads_every_file_that_shapes_the_applications() -> None:
         "truealpha/truealpha/10.app/deploy.py",
         "platform/11.signoz/deploy.py",
         "finance_report/finance_report/observability/dashboard.json",
+        "truealpha/truealpha/observability/dashboard.json",
     } <= hashed

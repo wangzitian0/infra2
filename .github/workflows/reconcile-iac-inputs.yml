@@ -381,7 +381,7 @@ jobs:
           while IFS= read -r file; do
             [[ -z "$file" ]] && continue
             case "$file" in
-              finance_report/finance_report/observability/*|truealpha/truealpha/observability/*|platform/12.alerting/alert_rules.json|common/alerting/*|common/observability_dashboards.py|tools/signoz_alert_rule_probe.py)
+              finance_report/finance_report/observability/*|truealpha/truealpha/observability/*|platform/12.alerting/alert_rules.json|platform/12.alerting/dashboard.json|platform/30.todo/dashboard.json|common/alerting/*|common/observability_dashboards.py|tools/signoz_alert_rule_probe.py)
                 obs_changed="true"
                 break
                 ;;

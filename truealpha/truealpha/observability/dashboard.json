@@ -1,0 +1,40 @@
+{
+  "title": "TrueAlpha — App & Data Engine",
+  "description": "Request rate, 5xx share, p50/p95 latency and active requests of truealpha-app (old HTTP convention: http.server.duration.*), plus error and warning logs of truealpha-data-engine, which exports no metrics. Health probes are excluded as in the TrueAlpha alert rules. Metric names were read from SigNoz on 2026-11-10 (read-only). Applied by `invoke fr-observability.shared.apply-dashboard`. Environments are deployment.environment.name.",
+  "tags": ["truealpha", "infra2", "config-as-code"],
+  "version": "v5",
+  "variables": {
+    "deployment_environment": {
+      "type": "QUERY",
+      "name": "deployment_environment",
+      "description": "deployment.environment.name (production / staging / pr-N)",
+      "multiSelect": true,
+      "showALLOption": true,
+      "queryValue": "SELECT DISTINCT resources_string['deployment.environment.name'] FROM signoz_logs.distributed_logs_v2 WHERE resources_string['deployment.environment.name'] != ''"
+    }
+  },
+  "widgets": [
+    {"id": "app-request-rate", "title": "Request rate", "description": "Requests per second (http.server.duration.count).", "panelTypes": "graph", "yAxisUnit": "reqps",
+     "query": {"builder": {"queryData": [{"queryName": "A", "dataSource": "metrics", "aggregations": [{"metricName": "http.server.duration.count", "timeAggregation": "rate", "spaceAggregation": "sum"}], "filter": {"expression": "(service.name = 'truealpha-app' AND http.target NOT IN ['/health', '/api/v1/system/health'] AND deployment.environment.name IN $deployment_environment)"}, "having": {"expression": ""}, "expression": "A", "disabled": false, "stepInterval": 60, "legend": "requests/s"}]}, "queryType": "builder"},
+     "opacity": "1", "nullZeroValues": "zero", "timePreferance": "GLOBAL_TIME", "softMin": null, "softMax": null, "selectedLogFields": null, "selectedTracesFields": null},
+    {"id": "app-error-rate-5xx", "title": "5xx share of requests", "description": "5xx requests divided by all requests (http.server.duration.count, attribute http.status_code).", "panelTypes": "graph", "yAxisUnit": "percentunit",
+     "query": {"builder": {"queryData": [{"queryName": "A", "dataSource": "metrics", "aggregations": [{"metricName": "http.server.duration.count", "timeAggregation": "rate", "spaceAggregation": "sum"}], "filter": {"expression": "(service.name = 'truealpha-app' AND http.target NOT IN ['/health', '/api/v1/system/health'] AND http.status_code REGEXP '^5[0-9][0-9]' AND deployment.environment.name IN $deployment_environment)"}, "having": {"expression": ""}, "expression": "A", "disabled": true, "stepInterval": 60, "legend": "5xx"}, {"queryName": "B", "dataSource": "metrics", "aggregations": [{"metricName": "http.server.duration.count", "timeAggregation": "rate", "spaceAggregation": "sum"}], "filter": {"expression": "(service.name = 'truealpha-app' AND http.target NOT IN ['/health', '/api/v1/system/health'] AND deployment.environment.name IN $deployment_environment)"}, "having": {"expression": ""}, "expression": "B", "disabled": true, "stepInterval": 60, "legend": "all"}], "queryFormulas": [{"queryName": "F1", "expression": "A/B", "disabled": false, "legend": "5xx share"}]}, "queryType": "builder"},
+     "opacity": "1", "nullZeroValues": "zero", "timePreferance": "GLOBAL_TIME", "softMin": null, "softMax": null, "selectedLogFields": null, "selectedTracesFields": null},
+    {"id": "app-latency", "title": "Request latency p50 / p95", "description": "p50 and p95 request duration from the histogram http.server.duration.bucket.", "panelTypes": "graph", "yAxisUnit": "ms",
+     "query": {"builder": {"queryData": [{"queryName": "A", "dataSource": "metrics", "aggregations": [{"metricName": "http.server.duration.bucket", "spaceAggregation": "p50"}], "filter": {"expression": "(service.name = 'truealpha-app' AND http.target NOT IN ['/health', '/api/v1/system/health'] AND deployment.environment.name IN $deployment_environment)"}, "having": {"expression": ""}, "expression": "A", "disabled": false, "stepInterval": 60, "legend": "p50"}, {"queryName": "B", "dataSource": "metrics", "aggregations": [{"metricName": "http.server.duration.bucket", "spaceAggregation": "p95"}], "filter": {"expression": "(service.name = 'truealpha-app' AND http.target NOT IN ['/health', '/api/v1/system/health'] AND deployment.environment.name IN $deployment_environment)"}, "having": {"expression": ""}, "expression": "B", "disabled": false, "stepInterval": 60, "legend": "p95"}]}, "queryType": "builder"},
+     "opacity": "1", "nullZeroValues": "zero", "timePreferance": "GLOBAL_TIME", "softMin": null, "softMax": null, "selectedLogFields": null, "selectedTracesFields": null},
+    {"id": "app-active-requests", "title": "Active requests", "description": "Requests in flight (http.server.active_requests).", "panelTypes": "graph",
+     "query": {"builder": {"queryData": [{"queryName": "A", "dataSource": "metrics", "aggregations": [{"metricName": "http.server.active_requests", "timeAggregation": "latest", "spaceAggregation": "sum"}], "filter": {"expression": "(service.name = 'truealpha-app' AND deployment.environment.name IN $deployment_environment)"}, "having": {"expression": ""}, "expression": "A", "disabled": false, "stepInterval": 60, "legend": "active"}]}, "queryType": "builder"},
+     "opacity": "1", "nullZeroValues": "zero", "timePreferance": "GLOBAL_TIME", "softMin": null, "softMax": null, "selectedLogFields": null, "selectedTracesFields": null},
+    {"id": "data-engine-logs", "title": "Data engine error and warning logs", "description": "ERROR/FATAL and WARNING log lines of truealpha-data-engine (it exports logs and traces only).", "panelTypes": "graph",
+     "query": {"builder": {"queryData": [{"queryName": "A", "dataSource": "logs", "aggregations": [{"expression": "count()"}], "filter": {"expression": "(service.name = 'truealpha-data-engine' AND severity_text IN ['ERROR', 'FATAL'] AND deployment.environment.name IN $deployment_environment)"}, "having": {"expression": ""}, "expression": "A", "disabled": false, "stepInterval": 60, "legend": "errors"}, {"queryName": "B", "dataSource": "logs", "aggregations": [{"expression": "count()"}], "filter": {"expression": "(service.name = 'truealpha-data-engine' AND severity_text IN ['WARNING', 'WARN'] AND deployment.environment.name IN $deployment_environment)"}, "having": {"expression": ""}, "expression": "B", "disabled": false, "stepInterval": 60, "legend": "warnings"}]}, "queryType": "builder"},
+     "opacity": "1", "nullZeroValues": "zero", "timePreferance": "GLOBAL_TIME", "softMin": null, "softMax": null, "selectedLogFields": null, "selectedTracesFields": null}
+  ],
+  "layout": [
+    {"i": "app-request-rate", "x": 0, "y": 0, "w": 6, "h": 6, "moved": false, "static": false},
+    {"i": "app-error-rate-5xx", "x": 6, "y": 0, "w": 6, "h": 6, "moved": false, "static": false},
+    {"i": "app-latency", "x": 0, "y": 6, "w": 6, "h": 6, "moved": false, "static": false},
+    {"i": "app-active-requests", "x": 6, "y": 6, "w": 6, "h": 6, "moved": false, "static": false},
+    {"i": "data-engine-logs", "x": 0, "y": 12, "w": 6, "h": 6, "moved": false, "static": false}
+  ]
+}
