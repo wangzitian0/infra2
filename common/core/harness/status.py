@@ -85,6 +85,7 @@ class RepositoryStatus:
 class WorkspaceStatus:
     repositories: tuple[RepositoryStatus, ...]
     observed_at: str | None = None  # UTC time of the `--online` reads
+    train_gate: dict[str, Any] | None = None
 
     @property
     def ok(self) -> bool:
@@ -101,6 +102,7 @@ class WorkspaceStatus:
             "ok": self.ok,
             "current": self.current,
             **({"observed_at": self.observed_at} if self.observed_at else {}),
+            **({"train_gate": self.train_gate} if self.train_gate is not None else {}),
             "repositories": [item.to_dict() for item in self.repositories],
         }
 
@@ -506,6 +508,77 @@ def _contract_lock(
     return "unknown"
 
 
+def _unpromoted_metrics(
+    checkout: Path,
+    prod_ref: str | None,
+    remote_ref: str | None,
+    observed_dt: datetime,
+    *,
+    runner: Runner = subprocess.run,
+) -> tuple[int, float | None] | None:
+    """Count first-parent commits in `prod_ref..remote_ref` and age (hours) of the oldest."""
+    if not prod_ref or not RELEASE_TAG_RE.fullmatch(prod_ref):
+        return None
+    if not checkout.is_dir():
+        return None
+    target = remote_ref or "origin/main"
+    proc = _git(
+        checkout,
+        "log",
+        "--first-parent",
+        "--format=%ct",
+        f"{prod_ref}..{target}",
+        runner=runner,
+    )
+    if proc.returncode != 0:
+        return None
+    timestamps = [
+        int(line.strip()) for line in proc.stdout.splitlines() if line.strip().isdigit()
+    ]
+    if not timestamps:
+        return (0, 0.0)
+    oldest_ts = min(timestamps)
+    age_hours = max(0.0, round((observed_dt.timestamp() - oldest_ts) / 3600.0, 1))
+    return (len(timestamps), age_hours)
+
+
+def _compute_train_gate(
+    items: list[RepositoryStatus],
+    root: Path,
+    observed_dt: datetime,
+    *,
+    runner: Runner = subprocess.run,
+) -> dict[str, Any] | None:
+    per_repo: dict[str, dict[str, Any]] = {}
+    total_prs = 0
+    oldest_hours = 0.0
+    for item in items:
+        prod_ref = (item.served or {}).get("production")
+        checkout = root if item.path == "." else root / item.path
+        metrics = _unpromoted_metrics(
+            checkout, prod_ref, item.remote_ref, observed_dt, runner=runner
+        )
+        if metrics is None:
+            continue
+        count, age = metrics
+        per_repo[item.repository_id] = {
+            "unpromoted_prs": count,
+            "oldest_unpromoted_age_hours": age,
+        }
+        total_prs += count
+        if age is not None and age > oldest_hours:
+            oldest_hours = age
+    if not per_repo:
+        return None
+    prompt = total_prs >= 15 or oldest_hours >= 48.0
+    return {
+        "total_unpromoted_prs": total_prs,
+        "oldest_unpromoted_age_hours": oldest_hours,
+        "prod_gatekeeper": "PROMPT_REQUIRED" if prompt else "SILENT",
+        "repositories": per_repo,
+    }
+
+
 def observe_online(
     status: WorkspaceStatus,
     root: Path,
@@ -514,6 +587,7 @@ def observe_online(
     fetcher: Fetcher,
     marker_status: Callable[..., Any] | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    runner: Runner = subprocess.run,
 ) -> WorkspaceStatus:
     """`status` plus what each repository serves online and its contract lock.
 
@@ -542,8 +616,10 @@ def observe_online(
         served = _served(entry, root, fetcher, marker_status, precomputed)
         lock = _contract_lock(root, item.path, entry)
         items.append(replace(item, served=served, contract_lock=lock))
-    observed_at = now().astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    return WorkspaceStatus(tuple(items), observed_at)
+    observed_dt = now().astimezone(timezone.utc)
+    observed_at = observed_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    train_gate = _compute_train_gate(items, root, observed_dt, runner=runner)
+    return WorkspaceStatus(tuple(items), observed_at, train_gate=train_gate)
 
 
 def render_online_table(status: WorkspaceStatus) -> list[str]:
@@ -570,6 +646,13 @@ def render_online_table(status: WorkspaceStatus) -> list[str]:
     for row, note in zip(rows, notes):
         cells = "  ".join(cell.ljust(width) for cell, width in zip(row, widths))
         lines.append(f"{cells}  {note}".rstrip())
+    if status.train_gate is not None:
+        tg = status.train_gate
+        lines.append(
+            f"train_gate: total_unpromoted_prs={tg['total_unpromoted_prs']}  "
+            f"oldest_unpromoted_age={tg['oldest_unpromoted_age_hours']:.1f}h  "
+            f"prod_gatekeeper={tg['prod_gatekeeper']}"
+        )
     return lines
 
 
