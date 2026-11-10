@@ -25,6 +25,21 @@
       "eval_window": "15m0s",
       "frequency": "1m",
       "summary": "Severity P1 (15m total > 10): platform-todo emitted more than 10 ERROR/FATAL log lines in 15 minutes"
+    },
+    {
+      "signal": "metrics",
+      "service_id": "platform/todo",
+      "alert_name": "PlatformTodoProbeFailures",
+      "service_name": "platform-todo",
+      "severity": "error",
+      "promql": "sum(increase({\"canary.probe.outcomes\",\"service.name\"=\"platform-todo\",\"deployment.environment.name\"=\"production\",\"canary.status\"=\"fail\"}[5m]))",
+      "threshold": 0,
+      "threshold_unit": "count",
+      "op": "above",
+      "match_type": "at_least_once",
+      "eval_window": "5m0s",
+      "frequency": "1m",
+      "summary": "Severity P1 (5m count > 0): platform-todo recorded failed dependency probe outcomes in 5 minutes"
     }
   ]
 }

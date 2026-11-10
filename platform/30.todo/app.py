@@ -154,6 +154,7 @@ def _probe_postgres(
     dbname: str = "postgres",
     timeout: float = 2.0,
     connector: Callable[..., Any] | None = None,
+    verify_write: bool = False,
 ) -> Dict[str, Any]:
     """Log in as the dedicated canary role and run `SELECT 1`.
 
@@ -168,7 +169,11 @@ def _probe_postgres(
             "CANARY_POSTGRES_USER and CANARY_POSTGRES_PASSWORD are not configured",
         )
     try:
-        from infra2_sdk.runtime.postgres import PostgresSettings, probe_postgres
+        from infra2_sdk.runtime.postgres import (
+            PostgresSettings,
+            probe_postgres,
+            redact_postgres_error,
+        )
         from infra2_sdk.runtime.health import DependencyStatus
 
         dsn = (
@@ -179,12 +184,98 @@ def _probe_postgres(
         settings = PostgresSettings(
             dsn=dsn, connect_timeout_seconds=max(1, min(60, math.ceil(timeout)))
         )
-        result = probe_postgres(settings, connector=connector)
+        if not verify_write:
+            result = probe_postgres(settings, connector=connector)
+            if result.status != DependencyStatus.PRESENT:
+                return _outcome(
+                    "fail", start, f"login as {user} failed: {result.detail}"
+                )
+            return _outcome("pass", start, f"login as {user}: {result.detail}")
+
+        raw_conn = None
+        conn_or_cm = None
+        try:
+            if connector is None:
+                import psycopg
+
+                connect = psycopg.connect
+            else:
+                connect = connector
+            connect_kwargs: dict[str, Any] = {
+                "connect_timeout": settings.connect_timeout_seconds,
+            }
+            if connector is None:
+                connect_kwargs["options"] = (
+                    f"-c statement_timeout={int(settings.statement_timeout_seconds * 1000)}"
+                )
+            conn_or_cm = connect(settings.psycopg_dsn, **connect_kwargs)
+
+            def _run_crud(connection: Any) -> None:
+                connection.execute("SELECT 1").fetchone()
+                connection.execute(
+                    "CREATE TEMP TABLE IF NOT EXISTS canary_todo_probe (id TEXT PRIMARY KEY, title TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO canary_todo_probe (id, title) VALUES ('probe-1', 'canary-write-ok') ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title"
+                )
+                row = connection.execute(
+                    "SELECT title FROM canary_todo_probe WHERE id = 'probe-1'"
+                ).fetchone()
+                connection.execute("DELETE FROM canary_todo_probe WHERE id = 'probe-1'")
+                if not row or row[0] != "canary-write-ok":
+                    raise _ProbeFailure(
+                        f"SELECT returned {row!r} instead of ('canary-write-ok',)"
+                    )
+
+            if hasattr(conn_or_cm, "__enter__"):
+                with conn_or_cm as connection:
+                    raw_conn = connection
+                    _run_crud(connection)
+            else:
+                raw_conn = conn_or_cm
+                _run_crud(raw_conn)
+        except Exception as exc:  # noqa: BLE001
+            redacted = redact_postgres_error(str(exc), settings)
+            return _outcome(
+                "fail",
+                start,
+                f"login as {user} failed: {type(exc).__name__}: {redacted}",
+            )
+        finally:
+            target = raw_conn if raw_conn is not None else conn_or_cm
+            if target is not None and hasattr(target, "close"):
+                with contextlib.suppress(Exception):
+                    target.close()
+        return _outcome(
+            "pass",
+            start,
+            f"login as {user}: SELECT 1 and write/read/delete transaction succeeded",
+        )
     except Exception as exc:  # noqa: BLE001 - a probe reports the failure
         return _outcome("fail", start, f"{type(exc).__name__}: {exc}")
-    if result.status != DependencyStatus.PRESENT:
-        return _outcome("fail", start, f"login as {user} failed: {result.detail}")
-    return _outcome("pass", start, f"login as {user}: {result.detail}")
+
+
+def probe_postgres_crud(
+    host: str,
+    port: int = 5432,
+    *,
+    user: str = "",
+    password: str = "",
+    dbname: str = "postgres",
+    timeout: float = 5.0,
+    connector: Callable[..., Any] | None = None,
+) -> Dict[str, Any]:
+    """Execute authenticated Postgres login plus a temp-table write/read/delete transaction."""
+    return _probe_postgres(
+        host,
+        port,
+        user=user,
+        password=password,
+        dbname=dbname,
+        timeout=timeout,
+        connector=connector,
+        verify_write=True,
+    )
 
 
 def _probe_tcp(host: str, port: int, timeout: float = 2.0) -> Dict[str, Any]:
@@ -406,6 +497,24 @@ def _traced_check(name: str, probe: Callable[[], Dict[str, Any]]) -> Dict[str, A
         span.set_attribute("canary.status", result["status"])
         span.set_attribute("canary.latency_ms", result["latency_ms"])
         span.set_attribute("canary.detail", result["detail"])
+    if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip():
+        from opentelemetry import metrics as otel_metrics
+
+        meter = otel_metrics.get_meter(SERVICE_TRACER_NAME)
+        attrs = {
+            "canary.check": name,
+            "canary.status": str(result.get("status", "unknown")),
+        }
+        meter.create_histogram(
+            "canary.probe.duration_ms",
+            unit="ms",
+            description="Latency of each canary dependency probe in milliseconds",
+        ).record(float(result.get("latency_ms") or 0.0), attrs)
+        meter.create_counter(
+            "canary.probe.outcomes",
+            unit="1",
+            description="Count of canary dependency probe outcomes by check and status",
+        ).add(1, attrs)
     if result["status"] != PASS:
         LOGGER.warning(
             "canary check %s is %s: %s", name, result["status"], result["detail"]

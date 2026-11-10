@@ -5,12 +5,16 @@ from __future__ import annotations
 import io
 import re
 import sys
+from pathlib import Path
 
 from invoke import task
 
 from common.console import error, header, info, run_with_status, success
+from common.deploy.config_hash import mount_fingerprint_env
 from common.deploy.deployer import Deployer, make_tasks
 from common.core.facets import ProbeFacet, SecretsFacet, SignalFacet
+
+SERVICE_DIR = Path(__file__).resolve().parent
 
 shared_tasks = sys.modules.get("platform.30.todo.shared")
 
@@ -163,6 +167,24 @@ class TodoDeployer(Deployer):
             f"{cls.service}: Postgres role {cls.CANARY_PG_ROLE} is present and current"
         )
         return True
+
+    @classmethod
+    def rendered_mount_fingerprints(cls) -> dict[str, str]:
+        """Compute deterministic SHA-256 mount fingerprints for vault-agent.hcl and secrets.ctmpl."""
+        return mount_fingerprint_env(
+            {
+                "vault-agent.hcl": (SERVICE_DIR / "vault-agent.hcl").read_bytes(),
+                "secrets.ctmpl": (SERVICE_DIR / "secrets.ctmpl").read_bytes(),
+            },
+            service=cls.service,
+            template_dir=SERVICE_DIR,
+        )
+
+    @classmethod
+    def compose_env_base(cls, env: dict | None = None) -> dict[str, str]:
+        base = super().compose_env_base(env)
+        base.update(cls.rendered_mount_fingerprints())
+        return base
 
     @classmethod
     def apply_secret_supply(cls, c, *, env=None) -> bool:

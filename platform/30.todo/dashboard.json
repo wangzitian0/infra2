@@ -25,12 +25,20 @@
      "opacity": "1", "nullZeroValues": "zero", "timePreferance": "GLOBAL_TIME", "softMin": null, "softMax": null, "selectedLogFields": null, "selectedTracesFields": null},
     {"id": "todo-active-requests", "title": "Active requests", "description": "Requests in flight (http.server.active_requests).", "panelTypes": "graph",
      "query": {"builder": {"queryData": [{"queryName": "A", "dataSource": "metrics", "aggregations": [{"metricName": "http.server.active_requests", "timeAggregation": "latest", "spaceAggregation": "sum"}], "filter": {"expression": "(service.name = 'platform-todo' AND deployment.environment.name IN $deployment_environment)"}, "having": {"expression": ""}, "expression": "A", "disabled": false, "stepInterval": 60, "legend": "active"}]}, "queryType": "builder"},
+     "opacity": "1", "nullZeroValues": "zero", "timePreferance": "GLOBAL_TIME", "softMin": null, "softMax": null, "selectedLogFields": null, "selectedTracesFields": null},
+    {"id": "todo-probe-latency-p95", "title": "Canary Probe Latency (p95 ms)", "description": "p95 latency of canary dependency probes from canary.probe.duration_ms.bucket.", "panelTypes": "graph", "yAxisUnit": "ms",
+     "query": {"builder": {"queryData": [{"queryName": "A", "dataSource": "metrics", "aggregations": [{"metricName": "canary.probe.duration_ms.bucket", "spaceAggregation": "p95"}], "filter": {"expression": "(service.name = 'platform-todo' AND deployment.environment.name IN $deployment_environment)"}, "having": {"expression": ""}, "expression": "A", "disabled": false, "stepInterval": 60, "legend": "{{canary.check}}"}]}, "queryType": "builder"},
+     "opacity": "1", "nullZeroValues": "zero", "timePreferance": "GLOBAL_TIME", "softMin": null, "softMax": null, "selectedLogFields": null, "selectedTracesFields": null},
+    {"id": "todo-probe-outcomes", "title": "Canary Probe Outcomes by Check", "description": "Rate of canary dependency probe outcomes by check and status (canary.probe.outcomes).", "panelTypes": "graph",
+     "query": {"builder": {"queryData": [{"queryName": "A", "dataSource": "metrics", "aggregations": [{"metricName": "canary.probe.outcomes", "timeAggregation": "rate", "spaceAggregation": "sum"}], "filter": {"expression": "(service.name = 'platform-todo' AND deployment.environment.name IN $deployment_environment)"}, "having": {"expression": ""}, "expression": "A", "disabled": false, "stepInterval": 60, "legend": "{{canary.check}} ({{canary.status}})"}]}, "queryType": "builder"},
      "opacity": "1", "nullZeroValues": "zero", "timePreferance": "GLOBAL_TIME", "softMin": null, "softMax": null, "selectedLogFields": null, "selectedTracesFields": null}
   ],
   "layout": [
     {"i": "todo-request-rate", "x": 0, "y": 0, "w": 6, "h": 6, "moved": false, "static": false},
     {"i": "todo-error-rate-5xx", "x": 6, "y": 0, "w": 6, "h": 6, "moved": false, "static": false},
     {"i": "todo-latency", "x": 0, "y": 6, "w": 6, "h": 6, "moved": false, "static": false},
-    {"i": "todo-active-requests", "x": 6, "y": 6, "w": 6, "h": 6, "moved": false, "static": false}
+    {"i": "todo-active-requests", "x": 6, "y": 6, "w": 6, "h": 6, "moved": false, "static": false},
+    {"i": "todo-probe-latency-p95", "x": 0, "y": 12, "w": 6, "h": 6, "moved": false, "static": false},
+    {"i": "todo-probe-outcomes", "x": 6, "y": 12, "w": 6, "h": 6, "moved": false, "static": false}
   ]
 }
