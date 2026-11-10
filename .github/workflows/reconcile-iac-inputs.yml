@@ -347,7 +347,7 @@ jobs:
             if [[ "$promote_prod" == "true" ]]; then
               args+=(--run-post-deploy-hooks --post-deploy-hook-slot smoke)
             else
-              args+=(--run-post-deploy-hooks --post-deploy-hook-slot smoke,staging_gate)
+              args+=(--run-post-deploy-hooks --post-deploy-hook-slot staging_gate)
             fi
           fi
           if [[ "$promote_prod" == "true" ]]; then
@@ -360,7 +360,7 @@ jobs:
             hook_args=(--run-hook-slot "${{ inputs.run_hook_slot || 'preview_gate' }}" --domain "$INTERNAL_DOMAIN")
             [[ -n "${{ inputs.hook_service || '' }}" ]] && hook_args+=(--hook-service "${{ inputs.hook_service || '' }}")
             [[ -n "${{ inputs.target_url || '' }}" ]] && hook_args+=(--target-url "${{ inputs.target_url || '' }}")
-            [[ -n "$after" ]] && hook_args+=(--version-ref "$after")
+            [[ -n "$INPUT_AFTER" ]] && hook_args+=(--version-ref "$INPUT_AFTER")
             python -m tools.reconcile_iac_inputs "${hook_args[@]}"
             exit 0
           fi
@@ -386,7 +386,7 @@ jobs:
                       --output-json reconcile-result.json
                       --env staging)
                 if [[ "$run_post_deploy_hooks" == "true" ]]; then
-                  args+=(--run-post-deploy-hooks --post-deploy-hook-slot smoke,staging_gate)
+                  args+=(--run-post-deploy-hooks --post-deploy-hook-slot staging_gate)
                 fi
               fi
             fi
