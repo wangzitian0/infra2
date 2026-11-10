@@ -5,13 +5,16 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import urllib.request
 from collections.abc import Sequence
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "base_url",
+        help="Base service URL (for example https://todo-staging.zitian.party).",
+    )
     parser.add_argument(
         "--require-service",
         default="",
@@ -25,8 +28,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    base_url = (os.environ.get("TARGET_URL") or os.environ["APP_URL"]).rstrip("/")
-    url = f"{base_url}/api/health"
+    url = f"{args.base_url.rstrip('/')}/api/health"
     with urllib.request.urlopen(url, timeout=args.timeout) as resp:
         body = resp.read().decode("utf-8")
         status = resp.status

@@ -3,7 +3,7 @@
   "service": "platform/todo",
   "slots": {
     "smoke": {
-      "run": "python3 probe_health.py",
+      "run": "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\"",
       "timeout_seconds": 60,
       "required_env": [
         "APP_URL"
@@ -13,7 +13,7 @@
       ]
     },
     "preview_gate": {
-      "run": "python3 probe_health.py --require-service platform/todo",
+      "run": "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo",
       "timeout_seconds": 120,
       "required_env": [
         "APP_URL"
@@ -23,7 +23,7 @@
       ]
     },
     "staging_gate": {
-      "run": "python3 probe_health.py --require-service platform/todo",
+      "run": "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo",
       "timeout_seconds": 180,
       "required_env": [
         "APP_URL"
@@ -33,7 +33,7 @@
       ]
     },
     "scheduled_audit": {
-      "run": "python3 probe_health.py --require-service platform/todo",
+      "run": "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo",
       "timeout_seconds": 300,
       "required_env": [
         "APP_URL"

@@ -636,7 +636,15 @@ def verify_and_cut_app_preview_tag(
             check=True,
         )
     finally:
-        runner(down_argv, cwd=repo_root, capture_output=True, text=True)
+        down_res = runner(down_argv, cwd=repo_root, capture_output=True, text=True)
+        if down_res.returncode != 0:
+            detail = (down_res.stderr or down_res.stdout or "").strip()
+            msg = (
+                f"preview/branch teardown failed for {service}@{main_sha[:7]}: {detail}"
+            )
+            if sys.exc_info()[1] is None:
+                raise RuntimeError(msg)
+            print(f"WARN: {msg}", file=sys.stderr)
     return preview_url
 
 
