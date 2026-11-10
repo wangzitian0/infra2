@@ -302,17 +302,25 @@ class _Result:
 
 
 class _FakeContext:
-    def __init__(self, host_text: str) -> None:
-        self.host_text = host_text
+    def __init__(self, host_text: str, ok: bool = True, raises: bool = False) -> None:
+        self.host_text, self.ok, self.raises = host_text, ok, raises
+        self.commands: list[str] = []
 
-    def run(self, *_a, **_k):
-        return _Result(self.host_text)
+    def run(self, cmd, *_a, **_k):
+        self.commands.append(cmd)
+        if self.raises:
+            raise OSError("ssh: connection reset")
+        result = _Result(self.host_text)
+        result.ok = self.ok
+        return result
 
 
-def _free_upload_count(monkeypatch, host_text: str) -> int:
+def _free_ensure(monkeypatch, ctx):
+    """Run `_ensure_remote_config`; return (result, host writes, logged errors)."""
     module = _load_deploy_module("platform/25.free")
     cls = module.FreeDeployer
     uploads: list[str] = []
+    errors: list[str] = []
     monkeypatch.setattr(
         cls,
         "env",
@@ -327,7 +335,13 @@ def _free_upload_count(monkeypatch, host_text: str) -> int:
         "run_with_status",
         lambda _c, cmd, _d: uploads.append(cmd) or _Result(),
     )
-    assert cls._ensure_remote_config(_FakeContext(host_text)) == (FREE_UUID, FREE_PATH)
+    monkeypatch.setattr(module, "error", lambda msg, *_: errors.append(msg))
+    return cls._ensure_remote_config(ctx), uploads, errors
+
+
+def _free_upload_count(monkeypatch, host_text: str) -> int:
+    result, uploads, _ = _free_ensure(monkeypatch, _FakeContext(host_text))
+    assert result == (FREE_UUID, FREE_PATH)
     return sum(1 for cmd in uploads if cmd.startswith("scp "))
 
 
@@ -338,6 +352,62 @@ def test_free_uploads_template_change_when_uuid_and_path_are_stable(
     current = module.FreeDeployer._render_config(FREE_UUID, FREE_PATH)
     assert _free_upload_count(monkeypatch, current) == 0
     assert _free_upload_count(monkeypatch, current.replace('"warn"', '"info"')) == 1
+
+
+# --- #1449: only a confirmed absent host file may create a uuid and path -------------
+
+ABSENT = "__IAC_ABSENT__"  # printed by the remote read command for a missing file
+CONFIG_PATH = "/data/platform/free/config.json"
+
+
+@pytest.mark.parametrize(
+    "ctx",
+    [
+        _FakeContext("", ok=False),
+        _FakeContext("", ok=True),
+        _FakeContext(ABSENT, ok=False),
+        _FakeContext("", raises=True),
+    ],
+    ids=["nonzero-exit", "empty-output", "failed-with-sentinel", "raises"],
+)
+def test_free_failed_read_stops_without_new_values_or_write(monkeypatch, ctx) -> None:
+    result, writes, errors = _free_ensure(monkeypatch, ctx)
+    assert result is None
+    assert writes == []
+    assert any(CONFIG_PATH in message for message in errors)
+
+
+def test_free_confirmed_absent_file_creates_values_and_writes(monkeypatch) -> None:
+    ctx = _FakeContext(ABSENT + "\n")
+    result, writes, _ = _free_ensure(monkeypatch, ctx)
+    assert ABSENT in ctx.commands[0] and CONFIG_PATH in ctx.commands[0]
+    assert result == (FREE_UUID, FREE_PATH)
+    assert [cmd.split()[0] for cmd in writes] == ["scp", "ssh"]
+
+
+def test_free_existing_file_keeps_its_uuid_and_path(monkeypatch) -> None:
+    module = _load_deploy_module("platform/25.free")
+    old_uuid, old_path = "223e4567-e89b-12d3-a456-426614174999", "/api/v1/kept"
+    host = module.FreeDeployer._render_config(old_uuid, old_path)
+    result, writes, _ = _free_ensure(monkeypatch, _FakeContext(host))
+    assert result == (old_uuid, old_path)  # the env FREE_UUID/FREE_PATH lose
+    assert [cmd.split()[0] for cmd in writes] == ["ssh"]  # permissions only, no scp
+
+
+@pytest.mark.parametrize("host", ["{not json", '{"inbounds": []}'])
+def test_free_malformed_existing_file_is_not_overwritten(monkeypatch, host) -> None:
+    result, writes, _ = _free_ensure(monkeypatch, _FakeContext(host))
+    assert (result, writes) == (None, [])
+
+
+def test_free_client_info_reports_a_failed_read(monkeypatch) -> None:
+    module = _load_deploy_module("platform/25.free")
+    cls, errors = module.FreeDeployer, []
+    env = {"ENV": "production", "VPS_HOST": "h", "INTERNAL_DOMAIN": "x.test"}
+    monkeypatch.setattr(cls, "env", classmethod(lambda _c: env))
+    monkeypatch.setattr(module, "error", lambda msg, *_: errors.append(msg))
+    cls.print_client_info(_FakeContext("", ok=False))
+    assert any(CONFIG_PATH in message for message in errors)
 
 
 # --- review findings of PR #1447 (head 7762f85) -------------------------------------
