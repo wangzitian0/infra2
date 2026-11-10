@@ -161,6 +161,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           AI_API_KEY: ${{ secrets.ZAI_CODING_CN_API_KEY }}
+          TA_EMAIL: ${{ secrets.TA_EMAIL }}
+          TA_MEMBER_EMAIL: ${{ secrets.TA_MEMBER_EMAIL }}
+          TA_PASSWORD: ${{ secrets.TA_PASSWORD }}
+          TA_MCP_TOKEN: ${{ secrets.TA_MCP_TOKEN }}
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           python -m tools.reconcile_iac_inputs --run-scheduled-audit

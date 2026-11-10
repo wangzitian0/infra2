@@ -2577,18 +2577,7 @@ def _required_env_without_source(raw_manifest: dict) -> dict[str, tuple[str, ...
     "raw_manifest",
     [
         pytest.param(_REAL_FR_HOOKS_MANIFEST_JSON, id="finance_report"),
-        pytest.param(
-            _REAL_TA_HOOKS_MANIFEST_JSON,
-            id="truealpha",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason=(
-                    "infra2 supplies no TA_EMAIL, TA_MEMBER_EMAIL, TA_PASSWORD or "
-                    "TA_MCP_TOKEN to the slots staging_gate and preview_gate (#1534). "
-                    "Remove this mark when infra2 supplies them."
-                ),
-            ),
-        ),
+        pytest.param(_REAL_TA_HOOKS_MANIFEST_JSON, id="truealpha"),
     ],
 )
 def test_app_hook_manifest_required_env_has_an_infra2_source(raw_manifest: str) -> None:
@@ -2900,3 +2889,586 @@ def test_sync_app_releases_cut_missing_app_tag_runs_ephemeral_preview_gate_and_a
     assert len(deploy_v2_calls_fail) == 2
     assert "--down" in deploy_v2_calls_fail[1]
     assert not any(c[:2] == ["gh", "api"] for c in commands_seen)
+
+
+def test_audit_app_hooks_fails_closed_on_unsupplied_required_env(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    """#1534: audit_app_hooks rejects any slot whose required_env lacks an infra2 source in
+    HOOK_RUNNER_SECRET_ENV | HOOK_RUNNER_CONTEXT_ENV instead of masking it with a dry-run placeholder."""
+    from infra2_sdk.refs import ResolvedRef
+
+    (tmp_path / "harness").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "harness" / "repos.yaml").write_text(
+        (ROOT / "harness" / "repos.yaml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
+    )
+
+    bad_ta = json.loads(_REAL_TA_HOOKS_MANIFEST_JSON)
+    bad_ta["slots"]["staging_gate"]["required_env"].append("UNSUPPLIED_TA_SECRET")
+    bad_fr = json.loads(_REAL_FR_HOOKS_MANIFEST_JSON)
+    bad_fr["slots"]["smoke"]["required_env"] = ["UNSUPPLIED_SMOKE_SECRET"]
+
+    monkeypatch.setattr(
+        reconcile,
+        "fetch_hooks_manifest",
+        lambda svc, _sha, **_kw: reconcile.RuntimeHooksManifest.from_dict(
+            bad_fr if svc == "finance_report/app" else bad_ta
+        ),
+    )
+
+    rc = main(["--repo-root", str(tmp_path), "--audit-app-hooks"])
+    assert rc == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert (
+        "truealpha/app: unsupplied required_env 'UNSUPPLIED_TA_SECRET' in slot 'staging_gate'"
+        in out["errors"]
+    )
+    assert (
+        "finance_report/app: unsupplied required_env 'UNSUPPLIED_SMOKE_SECRET' in slot 'smoke'"
+        in out["errors"]
+    )
+    assert any(
+        "finance_report/app: smoke: missing required hook env" in err
+        for err in out["errors"]
+    )
+
+
+def test_failure_alert_text_classifies_deploy_failure_hook_failure_and_success() -> (
+    None
+):
+    """#1577: failure_alert_text classifies three states: (1) container deploy failed,
+    (2) container deploys succeeded and post-deploy hook failed, and (3) all passed."""
+    deploy_ok = [{"service": "truealpha/app", "type": "staging", "returncode": 0}]
+    deploy_fail = [
+        {
+            "service": "truealpha/app",
+            "type": "staging",
+            "returncode": 1,
+            "stderr": "deploy_v2 failed: runner timeout\n",
+        }
+    ]
+    hook_fail = [
+        {
+            "service": "truealpha/app",
+            "slot": "staging_gate",
+            "version_ref": "v0.2.85",
+            "status": "fail",
+            "summary": "missing required hook env: TA_EMAIL\nextra line ignored",
+            "stderr_tail": "stderr fallback",
+        }
+    ]
+    hook_pass = [
+        {
+            "service": "truealpha/app",
+            "slot": "staging_gate",
+            "version_ref": "v0.2.85",
+            "status": "pass",
+            "summary": "ok",
+        }
+    ]
+
+    # State 1: deploy failed takes precedence even if hook_results also has entries
+    state1 = reconcile.failure_alert_text(
+        after="v3.1.45",
+        results=deploy_fail,
+        hook_results=hook_fail,
+        run_url="https://x/runs/1",
+        promote_prod=False,
+    )
+    assert state1 is not None
+    assert state1.startswith("🚨 IaC reconcile FAILED for v3.1.45 (staging soak).")
+    assert "Post-deploy hook FAILED" not in state1
+
+    # State 2 (staging soak): deploys succeeded, post-deploy hook failed
+    state2_staging = reconcile.failure_alert_text(
+        after="v3.1.45",
+        results=deploy_ok,
+        hook_results=hook_fail,
+        run_url="https://x/runs/2",
+        promote_prod=False,
+    )
+    assert state2_staging == (
+        "⚠️ Post-deploy hook FAILED for v3.1.45 (staging soak; container deploys succeeded).\n"
+        "- truealpha/app [staging_gate @ v0.2.85]: missing required hook env: TA_EMAIL\n"
+        "Run: https://x/runs/2"
+    )
+
+    # State 2 (prod promotion + blank summary falling back to stderr_tail)
+    state2_prod = reconcile.failure_alert_text(
+        after="v3.1.46",
+        results=deploy_ok,
+        hook_results=[
+            {
+                "service": "finance_report/app",
+                "slot": "smoke",
+                "version_ref": "",
+                "status": "fail",
+                "summary": "   ",
+                "stderr_tail": "HTTP 502 Bad Gateway\ntraceback",
+            }
+        ],
+        run_url="https://x/runs/3",
+        promote_prod=True,
+    )
+    assert state2_prod == (
+        "⚠️ Post-deploy hook FAILED for v3.1.46 (PRODUCTION promotion; container deploys succeeded).\n"
+        "- finance_report/app [smoke @ v3.1.46]: HTTP 502 Bad Gateway\n"
+        "Run: https://x/runs/3"
+    )
+
+    # State 3: neither deploy nor hook failed -> None
+    assert (
+        reconcile.failure_alert_text(
+            after="v3.1.45",
+            results=deploy_ok,
+            hook_results=hook_pass,
+            run_url="https://x/runs/4",
+            promote_prod=False,
+        )
+        is None
+    )
+
+
+def test_record_app_hook_issue_trail_annotates_opened_commented_fallback_and_unrecorded() -> (
+    None
+):
+    """#1577: record_app_hook_issue_trail annotates mutable hook_results dicts with
+    issue_trail_action ('opened', 'commented', 'unrecorded', or 'closed') and issue_number,
+    including when falling back from app_repo (HTTP 403) to fallback_repo."""
+    from common.observability.issue_trail import ListingFailed, WriteFailed
+
+    class _FakeIssueApi:
+        def __init__(
+            self,
+            repo: str,
+            *,
+            forbid_writes: bool = False,
+            fail_listing: bool = False,
+        ) -> None:
+            self.repo = repo
+            self.forbid_writes = forbid_writes
+            self.fail_listing = fail_listing
+            self.issues: list[dict] = []
+            self.comments: list[tuple[int, str]] = []
+            self.closed: list[int] = []
+
+        def open_issues(self, *, with_body: bool = False) -> list[dict]:
+            if self.fail_listing:
+                raise ListingFailed("HTTP 500")
+            return list(self.issues)
+
+        def create(self, title: str, body: str, labels) -> int:
+            if self.forbid_writes:
+                raise WriteFailed("HTTP 403 Resource not accessible by integration")
+            num = 1572 if self.repo == "wangzitian0/infra2" else len(self.issues) + 10
+            self.issues.append({"number": num, "title": title, "body": body})
+            return num
+
+        def comment(self, number: int, body: str) -> None:
+            if self.forbid_writes:
+                raise WriteFailed("HTTP 403 Resource not accessible by integration")
+            self.comments.append((number, body))
+
+        def update_body(self, number: int, body: str) -> None:
+            if self.forbid_writes:
+                raise WriteFailed("HTTP 403 Resource not accessible by integration")
+
+        def close(self, number: int) -> None:
+            if self.forbid_writes:
+                raise WriteFailed("HTTP 403 Resource not accessible by integration")
+            self.closed.append(number)
+
+    # 1. Cross-repo fallback (truealpha 403 -> infra2 opens #1572, then comments on #1572, then closes #1572)
+    apis: dict[str, _FakeIssueApi] = {
+        "wangzitian0/truealpha": _FakeIssueApi(
+            "wangzitian0/truealpha", forbid_writes=True
+        ),
+        "wangzitian0/infra2": _FakeIssueApi("wangzitian0/infra2"),
+    }
+    env = {
+        "GITHUB_TOKEN": "tok-123",
+        "GITHUB_EVENT_NAME": "schedule",
+        "GITHUB_REPOSITORY": "wangzitian0/infra2",
+    }
+
+    first_run = [
+        {
+            "service": "truealpha/app",
+            "slot": "staging_gate",
+            "status": "fail",
+            "version_ref": "v0.2.85",
+            "summary": "missing required hook env",
+        }
+    ]
+    assert (
+        reconcile.record_app_hook_issue_trail(
+            first_run,
+            target_env="staging",
+            slot="staging_gate",
+            env=env,
+            issues_factory=lambda repo, _tok: apis[repo],
+        )
+        == 0
+    )
+    assert first_run[0]["issue_trail_action"] == "opened"
+    assert first_run[0]["issue_number"] == 1572
+
+    second_run = [
+        {
+            "service": "truealpha/app",
+            "slot": "staging_gate",
+            "status": "fail",
+            "version_ref": "v0.2.85",
+            "summary": "missing required hook env",
+        }
+    ]
+    assert (
+        reconcile.record_app_hook_issue_trail(
+            second_run,
+            target_env="staging",
+            slot="staging_gate",
+            env=env,
+            issues_factory=lambda repo, _tok: apis[repo],
+        )
+        == 0
+    )
+    assert second_run[0]["issue_trail_action"] == "commented"
+    assert second_run[0]["issue_number"] == 1572
+
+    green_run = [
+        {
+            "service": "truealpha/app",
+            "slot": "staging_gate",
+            "status": "pass",
+            "version_ref": "v0.2.85",
+            "summary": "passed",
+        }
+    ]
+    assert (
+        reconcile.record_app_hook_issue_trail(
+            green_run,
+            target_env="staging",
+            slot="staging_gate",
+            env=env,
+            issues_factory=lambda repo, _tok: apis[repo],
+        )
+        == 0
+    )
+    assert green_run[0]["issue_trail_action"] == "closed"
+    assert green_run[0]["issue_number"] == 1572
+
+    # 2. Both repos fail or listing fails -> annotated as 'unrecorded' (never suppressed)
+    broken_apis = {
+        "wangzitian0/truealpha": _FakeIssueApi(
+            "wangzitian0/truealpha", fail_listing=True
+        ),
+        "wangzitian0/infra2": _FakeIssueApi("wangzitian0/infra2", fail_listing=True),
+    }
+    unrecorded_run = [
+        {
+            "service": "truealpha/app",
+            "slot": "staging_gate",
+            "status": "fail",
+            "version_ref": "v0.2.85",
+            "summary": "hook failed",
+        }
+    ]
+    reconcile.record_app_hook_issue_trail(
+        unrecorded_run,
+        target_env="staging",
+        slot="staging_gate",
+        env=env,
+        issues_factory=lambda repo, _tok: broken_apis[repo],
+    )
+    assert unrecorded_run[0]["issue_trail_action"] == "unrecorded"
+    assert "issue_number" not in unrecorded_run[0]
+
+
+def test_should_suppress_schedule_hook_alert_and_main_schedule_dedup(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    """#1577: schedule runs suppress duplicate Feishu hook alerts ONLY when all deploys succeeded
+    and every failed hook commented on an already-open incident issue, while main() still exits 1."""
+    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+    from infra2_sdk.refs import ResolvedRef
+
+    ok_deploys = [{"service": "truealpha/app", "returncode": 0}]
+    commented_hook = [
+        {
+            "service": "truealpha/app",
+            "status": "fail",
+            "issue_trail_action": "commented",
+        }
+    ]
+    opened_hook = [
+        {"service": "truealpha/app", "status": "fail", "issue_trail_action": "opened"}
+    ]
+    unrecorded_hook = [
+        {
+            "service": "truealpha/app",
+            "status": "fail",
+            "issue_trail_action": "unrecorded",
+        }
+    ]
+
+    assert (
+        reconcile.should_suppress_schedule_hook_alert(
+            event_name="schedule",
+            results=ok_deploys,
+            hook_results=commented_hook,
+        )
+        == "schedule_known_open_hook_incidents"
+    )
+    # Tag push or workflow_dispatch must NEVER suppress
+    for non_schedule in ("push", "workflow_dispatch", ""):
+        assert (
+            reconcile.should_suppress_schedule_hook_alert(
+                event_name=non_schedule,
+                results=ok_deploys,
+                hook_results=commented_hook,
+            )
+            is None
+        )
+    # Deploy failure must NEVER suppress
+    assert (
+        reconcile.should_suppress_schedule_hook_alert(
+            event_name="schedule",
+            results=[{"service": "truealpha/app", "returncode": 1}],
+            hook_results=commented_hook,
+        )
+        is None
+    )
+    # Newly opened or unrecorded hook issue must NEVER suppress
+    for must_page_hooks in (
+        opened_hook,
+        unrecorded_hook,
+        commented_hook + opened_hook,
+        [{"service": "truealpha/app", "status": "pass"}],
+        [],
+    ):
+        assert (
+            reconcile.should_suppress_schedule_hook_alert(
+                event_name="schedule",
+                results=ok_deploys,
+                hook_results=must_page_hooks,
+            )
+            is None
+        )
+
+    # End-to-end main() check on schedule: suppressed alert_text, non-null alert_suppressed_reason, exit code 1
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.85\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(reconcile, "assert_after_on_main", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        reconcile,
+        "run_deploy_commands",
+        lambda cmds, **_kw: [
+            {
+                "service": c.service,
+                "type": c.deploy_type,
+                "returncode": 0,
+                "stdout": "{}",
+                "stderr": "",
+            }
+            for c in cmds
+        ],
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
+    )
+    manifest = RuntimeHooksManifest.from_dict(
+        {
+            "schema_version": 1,
+            "service": "truealpha/app",
+            "slots": {s: {"run": "exit 1", "timeout_seconds": 30} for s in HOOK_SLOTS},
+        }
+    )
+    monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
+    monkeypatch.setattr(
+        reconcile,
+        "execute_app_hook_slot",
+        lambda *_a, **_kw: HookRunResult(
+            service="truealpha/app",
+            slot="staging_gate",
+            environment="staging",
+            app_url="https://truealpha-staging.truealpha.club",
+            version_ref="v0.2.85",
+            status="fail",
+            exit_code=1,
+            duration_seconds=0.1,
+            summary="staging_gate failed",
+        ),
+    )
+
+    trail_action = "commented"
+
+    def _fake_trail(entries, **_kw):
+        for e in entries:
+            if isinstance(e, dict):
+                e["issue_trail_action"] = trail_action
+                e["issue_number"] = 1572
+        return 0
+
+    monkeypatch.setattr(reconcile, "record_app_hook_issue_trail", _fake_trail)
+    monkeypatch.setenv("GITHUB_TOKEN", "tok-sched")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+
+    rc_suppressed = main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--after",
+            "v3.1.45",
+            "--changed-file",
+            "harness/repos.yaml",
+            "--run-post-deploy-hooks",
+        ]
+    )
+    out_suppressed = json.loads(capsys.readouterr().out)
+    assert rc_suppressed == 1
+    assert out_suppressed["alert_text"] is None
+    assert (
+        out_suppressed["alert_suppressed_reason"]
+        == "schedule_known_open_hook_incidents"
+    )
+
+    # First occurrence ('opened') on schedule still pages!
+    trail_action = "opened"
+    rc_paged = main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--after",
+            "v3.1.45",
+            "--changed-file",
+            "harness/repos.yaml",
+            "--run-post-deploy-hooks",
+        ]
+    )
+    out_paged = json.loads(capsys.readouterr().out)
+    assert rc_paged == 1
+    assert out_paged["alert_suppressed_reason"] is None
+    assert out_paged["alert_text"] is not None
+    assert out_paged["alert_text"].startswith("⚠️ Post-deploy hook FAILED for v3.1.45")
+
+
+def test_resolve_workflow_failure_alert_preserves_crash_detection_and_honors_suppression(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """#1577: resolve_workflow_failure_alert and the Alert on failure workflow step preserve
+    100% fail-closed crash detection while forwarding explicit hook alerts and suppressing
+    duplicate schedule repeats."""
+    import tools.out_of_band_watchdog as watchdog
+
+    result_file = tmp_path / "reconcile-result.json"
+    run_url = "https://github.com/wangzitian0/infra2/actions/runs/777"
+
+    # 1. Missing result_file in reconcile-deploy -> crash fallback alert
+    text, notice = reconcile.resolve_workflow_failure_alert(
+        result_file,
+        after="v3.1.45",
+        promote_prod=False,
+        run_url=run_url,
+        reconcile_phase="reconcile-deploy",
+    )
+    assert notice is None
+    assert text == (
+        "🚨 IaC reconcile FAILED for v3.1.45 (staging soak) before any "
+        f"deploy result was recorded (guard, provenance or runner unreachable).\nRun: {run_url}"
+    )
+
+    # 2. Corrupt JSON -> crash fallback alert
+    result_file.write_text("{corrupt-json", encoding="utf-8")
+    text_corrupt, notice_corrupt = reconcile.resolve_workflow_failure_alert(
+        result_file,
+        after="v3.1.45",
+        promote_prod=True,
+        run_url=run_url,
+    )
+    assert notice_corrupt is None
+    assert (
+        text_corrupt is not None
+        and "(PRODUCTION promotion) before any deploy result was recorded"
+        in text_corrupt
+    )
+
+    # 3. Null alert_text WITHOUT alert_suppressed_reason -> crash fallback alert
+    result_file.write_text(
+        json.dumps({"alert_text": None, "alert_suppressed_reason": None}),
+        encoding="utf-8",
+    )
+    text_null, notice_null = reconcile.resolve_workflow_failure_alert(
+        result_file,
+        after="v3.1.45",
+        promote_prod=False,
+        run_url=run_url,
+    )
+    assert notice_null is None
+    assert text_null == text
+
+    # 4. Explicit post-deploy hook alert -> sends exact alert_text
+    hook_msg = (
+        "⚠️ Post-deploy hook FAILED for v3.1.45 (staging soak; container deploys succeeded).\nRun: "
+        + run_url
+    )
+    result_file.write_text(
+        json.dumps({"alert_text": hook_msg, "alert_suppressed_reason": None}),
+        encoding="utf-8",
+    )
+    assert reconcile.resolve_workflow_failure_alert(
+        result_file,
+        after="v3.1.45",
+        promote_prod=False,
+        run_url=run_url,
+    ) == (hook_msg, None)
+
+    # 5. Suppressed duplicate schedule hook failure -> skip_notice, no Feishu alert, verified via workflow YAML snippet
+    result_file.write_text(
+        json.dumps(
+            {
+                "alert_text": None,
+                "alert_suppressed_reason": "schedule_known_open_hook_incidents",
+            }
+        ),
+        encoding="utf-8",
+    )
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["reconcile"]["steps"]
+    alert_step = next(s for s in steps if s.get("name") == "Alert on failure")
+    py_body = alert_step["run"].split("python - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+
+    delivered: list[str] = []
+    monkeypatch.setattr(
+        watchdog,
+        "deliver_out_of_band_alert",
+        lambda _env, msg: delivered.append(msg),
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("RECONCILE_PHASE", "reconcile-deploy")
+    monkeypatch.setenv("INPUT_AFTER", "v3.1.45")
+    monkeypatch.setenv("INPUT_PROMOTE_PROD", "false")
+    with pytest.raises(SystemExit) as exc_info:
+        exec(compile(py_body, "<alert-on-failure-suppressed>", "exec"), {})
+    assert exc_info.value.code == 0
+    assert delivered == []
+    assert (
+        "::notice::Suppressing duplicate schedule Feishu alert (schedule_known_open_hook_incidents); open incident issue(s) updated."
+        in capsys.readouterr().out
+    )
