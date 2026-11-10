@@ -237,7 +237,7 @@ def test_a_dispatch_is_not_a_tick() -> None:
     "run",
     [
         _run(timedelta(hours=1), conclusion="startup_failure"),
-        _run(timedelta(hours=1), status="queued", conclusion=None),
+        _run(timedelta(hours=3), status="queued", conclusion=None),
     ],
 )
 def test_a_run_that_started_no_job_is_not_a_tick(run) -> None:
@@ -645,7 +645,7 @@ def test_a_missing_or_malformed_total_count_on_the_404_path_is_red() -> None:
     "run",
     [
         _run(timedelta(hours=1), conclusion="startup_failure"),
-        _run(timedelta(hours=1), status="queued", conclusion=None),
+        _run(timedelta(hours=3), status="queued", conclusion=None),
     ],
 )
 def test_scheduled_runs_that_all_failed_to_start_are_red_even_for_a_young_file(
@@ -712,3 +712,100 @@ def test_the_aggregate_names_each_red_workflow_as_a_unit_without_readings() -> N
         other_age, now=NOW, repositories=(REPO_A, REPO_B)
     )
     assert again.units == aggregate.units
+
+
+# --- #1451: edges of the unstarted-run rule and of the schedule reader --------------------
+
+
+def _estate_for_runs(*, scheduled, unfiltered=None):
+    w = wf("w", age=None, changed_age=timedelta(hours=2))
+    w["scheduled"] = list(scheduled)
+    w["unfiltered"] = list(scheduled if unfiltered is None else unfiltered)
+    (verdict,) = _verdicts(FakeGitHub({REPO_A: [w]}), repositories=(REPO_A,))
+    return verdict
+
+
+def _queued(age, run_id=1):
+    return _run(age, status="queued", conclusion=None, run_id=run_id)
+
+
+@pytest.mark.parametrize(
+    ("age", "status"),
+    [
+        (timedelta(minutes=1), est.OK),  # the first tick of a new workflow still waits
+        (timedelta(minutes=59), est.OK),
+        (timedelta(minutes=61), est.STALE),
+        (timedelta(hours=3), est.STALE),
+    ],
+)
+def test_a_queued_run_is_red_only_after_the_start_allowance(age, status) -> None:
+    assert est.QUEUED_RUN_ALLOWANCE == timedelta(hours=1)
+    verdict = _estate_for_runs(scheduled=[_queued(age)])
+    assert verdict.status == status, verdict
+
+
+def test_a_startup_failure_is_red_at_once_and_beside_a_young_queued_run() -> None:
+    failed = _run(timedelta(minutes=1), conclusion="startup_failure", run_id=1)
+    assert _estate_for_runs(scheduled=[failed]).status == est.STALE
+    both = _estate_for_runs(scheduled=[_queued(timedelta(minutes=1), 2), failed])
+    assert both.status == est.STALE, both
+
+
+@pytest.mark.parametrize(
+    ("second_id", "count"), [(7, "1 scheduled run and"), (8, "2 scheduled runs and")]
+)
+def test_a_run_in_both_listings_counts_once(second_id, count) -> None:
+    verdict = _estate_for_runs(
+        scheduled=[_queued(timedelta(hours=3), 7)],
+        unfiltered=[_queued(timedelta(hours=3), second_id)],
+    )
+    assert verdict.status == est.STALE and count in verdict.detail, verdict
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["on: schedule\n", "on: [push, schedule]\n", "on:\n  schedule: []\n"],
+)
+def test_a_schedule_event_without_a_usable_cron_is_invalid_and_names_the_file(
+    text,
+) -> None:
+    (verdict,) = _verdicts(
+        FakeGitHub({REPO_A: [wf("w", text)]}), repositories=(REPO_A,)
+    )
+    assert verdict.status == est.INVALID, verdict
+    assert path_of("w") in verdict.detail and "cron" in verdict.detail
+
+
+@pytest.mark.parametrize(
+    ("text", "crons"),
+    [
+        (DAILY, ["17 2 * * *"]),
+        (NOT_SCHEDULED, []),
+        ("on: push\n", []),
+        ("on: [push, workflow_dispatch]\n", []),
+    ],
+)
+def test_only_a_schedule_event_makes_a_workflow_scheduled(text, crons) -> None:
+    assert est.schedule_crons(text) == crons
+
+
+@pytest.mark.parametrize(
+    ("ahead", "status"),
+    [
+        (timedelta(seconds=60), est.OK),  # within the 300 s clock-skew limit
+        (timedelta(seconds=301), est.UNVERIFIABLE),
+        (timedelta(hours=2), est.UNVERIFIABLE),
+        (timedelta(days=3650), est.UNVERIFIABLE),
+    ],
+)
+def test_a_queued_run_dated_in_the_future_is_unverifiable_beyond_the_skew(
+    ahead, status
+) -> None:
+    verdict = _estate_for_runs(scheduled=[_queued(-ahead)])
+    assert verdict.status == status, verdict
+
+
+def test_the_future_run_message_names_the_workflow_and_the_timestamp() -> None:
+    ahead = timedelta(hours=2)
+    verdict = _estate_for_runs(scheduled=[_queued(-ahead)])
+    assert path_of("w") in verdict.detail and _iso(NOW + ahead) in verdict.detail
