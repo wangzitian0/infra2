@@ -1,0 +1,149 @@
+# Temporary diagnostic for #1543. Do not merge.
+# It runs the bootstrap command of the finance_report hook slot `staging_gate`
+# four ways on `ubuntu-latest` and prints stdout and stderr of each run.
+name: Diag hook bootstrap (temporary, #1543)
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/diag-hook-bootstrap.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Install runtime dependencies
+        run: uv pip install --system invoke httpx python-dotenv pyyaml rich
+
+      - name: Prepare the hook directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/hook/tests/e2e"
+          printf '%s\n' \
+            httpx \
+            pytest \
+            pytest-asyncio \
+            pytest-playwright \
+            'playwright==1.57.0' \
+            pytest-xdist \
+            reportlab \
+            pyyaml \
+            > "$RUNNER_TEMP/hook/tests/e2e/requirements.txt"
+          echo "--- requirements.txt"
+          cat "$RUNNER_TEMP/hook/tests/e2e/requirements.txt"
+          echo "--- host"
+          uname -a
+          cat /etc/os-release | head -3 || true
+          sh --version 2>&1 | head -1 || true
+          ls -l /bin/sh
+          # The helper file defines `cleanenv` and `report`. Later steps source it.
+          cat > "$RUNNER_TEMP/cleanenv.sh" <<'HELPER_EOF'
+          # cleanenv <command> [args...]: run a command with `env -i` and only the
+          # variables that the SDK copies into the hook environment.
+          # An unset variable is omitted.
+          cleanenv() {
+            local IFS=$'\n'
+            local envargs=(
+              ${PATH:+PATH=$PATH}
+              ${HOME:+HOME=$HOME}
+              ${USER:+USER=$USER}
+              LANG="${LANG:-C.UTF-8}"
+              TERM=dumb
+              ${TMPDIR:+TMPDIR=$TMPDIR}
+              ${UV_CACHE_DIR:+UV_CACHE_DIR=$UV_CACHE_DIR}
+              ${VIRTUAL_ENV:+VIRTUAL_ENV=$VIRTUAL_ENV}
+              ${PLAYWRIGHT_BROWSERS_PATH:+PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH}
+            )
+            env -i "${envargs[@]}" "$@"
+          }
+
+          # report <id> <exit code>: print the RESULT block of one variant.
+          # The files $RUNNER_TEMP/<id>.out and $RUNNER_TEMP/<id>.err hold the output.
+          report() {
+            echo "RESULT $1 rc=$2"
+            echo "--- stdout"
+            cat "$RUNNER_TEMP/$1.out"
+            echo "--- stderr"
+            cat "$RUNNER_TEMP/$1.err"
+            echo "RESULT $1 rc=$2" >> "$RUNNER_TEMP/results.txt"
+          }
+          HELPER_EOF
+          echo "--- cleanenv.sh"
+          cat "$RUNNER_TEMP/cleanenv.sh"
+
+      - name: "v0 env probe, login shell"
+        id: v0
+        continue-on-error: true
+        run: |
+          set +e
+          . "$RUNNER_TEMP/cleanenv.sh"
+          cd "$RUNNER_TEMP/hook"
+          # shellcheck disable=SC2016
+          PROBE='echo "PATH=$PATH"; for c in uv python python3 playwright; do command -v "$c" || echo "$c: not found"; done; echo "HOME=$HOME"'
+          cleanenv sh -lc "$PROBE" > "$RUNNER_TEMP/v0.out" 2> "$RUNNER_TEMP/v0.err"
+          rc=$?
+          report v0 "$rc"
+          echo "--- outside the clean environment"
+          echo "PATH of the step: $PATH"
+          for c in uv python python3 playwright; do command -v "$c" || echo "$c: not found"; done
+
+      - name: "v1 exact: sh -lc, clean env"
+        id: v1
+        continue-on-error: true
+        run: |
+          set +e
+          . "$RUNNER_TEMP/cleanenv.sh"
+          cd "$RUNNER_TEMP/hook"
+          CMD='uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium'
+          cleanenv sh -lc "$CMD" > "$RUNNER_TEMP/v1.out" 2> "$RUNNER_TEMP/v1.err"
+          rc=$?
+          report v1 "$rc"
+
+      - name: "v2 sh -c (no login), clean env"
+        id: v2
+        continue-on-error: true
+        run: |
+          set +e
+          . "$RUNNER_TEMP/cleanenv.sh"
+          cd "$RUNNER_TEMP/hook"
+          CMD='uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium'
+          cleanenv sh -c "$CMD" > "$RUNNER_TEMP/v2.out" 2> "$RUNNER_TEMP/v2.err"
+          rc=$?
+          report v2 "$rc"
+
+      - name: "v3 control: bash -c, full environment"
+        id: v3
+        continue-on-error: true
+        run: |
+          set +e
+          . "$RUNNER_TEMP/cleanenv.sh"
+          cd "$RUNNER_TEMP/hook"
+          CMD='uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium'
+          bash -c "$CMD" > "$RUNNER_TEMP/v3.out" 2> "$RUNNER_TEMP/v3.err"
+          rc=$?
+          report v3 "$rc"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Hook bootstrap diagnostic (#1543)"
+            echo '```'
+            cat "$RUNNER_TEMP/results.txt" 2>/dev/null || echo "no results"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
