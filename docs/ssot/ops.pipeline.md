@@ -49,19 +49,20 @@
 因为 `deploy_v2` 是 app + platform 的统一前门,所有部署侧守卫都在此收口。
 
 **核心铁律**:
-- **preview 按需拉起/销毁**(`preview/branch` 与 `preview/pr`)——按 PR 或分支验证完整栈,不再随 main 合并自动维持常驻 preview。
+- **preview 瞬态闭环验证**(`preview/branch` 与 `preview/pr`)——App 合流 `main` 后,在切出 `vX.Y.Z` tag 进入 Staging 火车前,由 `sync_app_releases(..., cut_missing_app_tag=True)` (内部调用 `verify_and_cut_app_preview_tag`) 瞬态拉起 `preview/branch` (`main`),执行 `preview_gate` 钩子(验证 0 帧冷启动、空库 Alembic 迁移、Vault 模板渲染与最小真实 E2E),通过后才推送 App `vX.Y.Z` tag,并在 `finally` 中**立即执行 `--down` 销毁**(连同临时数据库卷),绝不留存常驻 preview 容器(#1416, #1554)。
+- **四阶段 1:1 钩子槽位 SSOT (`DEFAULT_STAGE_HOOK_SLOTS`)**——每个运行时阶段只执行唯一对应的 `runtime-hooks.manifest.json` 槽位,禁止跨槽位重复跑同一检查:`preview -> preview_gate`、`staging -> staging_gate`、`prod -> smoke`、`schedule -> scheduled_audit`(#1554)。
 - **staging / prod 只部署 release tag**(不可变镜像,不接受 branch/sha);staging 与 prod **钉同一个 tag**
   (**promote-not-rebuild**,不是部署 main sha),App 的固定环境版本由 `harness/repos.yaml` (`release_tag`) 驱动。
 - 统一入口 `tools/deploy_v2.py`;**prod 对真实数据 deny-by-default**,缺 `--staging-validated --code-reviewed` 直接 fail-closed。
 
-| 目标 | 触发 | 部署什么 | 入口(示意)| 数据 | 生命周期 |
-|------|------|---------|------|------|---------|
-| **preview**(branch/pr)| 手动按需 | 分支名 / PR# | `deploy_v2 --type preview/{branch,pr}` | 临时 DB | teardown 前 |
-| **app staging** | **release tag 推送**(`reconcile-iac-inputs.yml` 读 `harness/repos.yaml`)或手动 `--bootstrap` | release tag(钉和 prod 同一个)| `deploy_v2 --type staging --version-ref vX.Y.Z` | staging 数据 | 长期(同构 prod)|
-| **app prod** | **显式 promote**(`reconcile-iac-inputs.yml` `promote_prod=true`)或手动 `--bootstrap` | **同一个 release tag** | `deploy_v2 --type prod --version-ref vX.Y.Z --staging-validated --code-reviewed` | 真实 prod 数据 | 长期 |
-| **平台服务**(iac_pinned)**staging** | **release tag 推送**(`v*.*.*`)→ **自动 staging**(soak)| **该 tag** 作 `iac_ref` | `reconcile-iac-inputs.yml` → `deploy_v2 → iac_runner` | — | 长期 |
-| **平台服务**(iac_pinned)**prod** | **显式 promote**(`workflow_dispatch` `promote_prod=true` / `--promote-prod`)——tag 推送**不**自动动 prod | **同一 tag** | 同上 | — | 长期 |
-| **L1 Bootstrap**(iac-runner)| `bootstrap/06.iac_runner/**` 变更 | release tag SHA | 随 `reconcile-iac-inputs.yml` (`promote_prod=true`) 前置 self-update (或 `deploy.yml` 手动 `workflow_dispatch`) | — | 随 release train |
+| 目标 | 触发 | 部署什么 | 入口(示意)| 验证钩子 (`DEFAULT_STAGE_HOOK_SLOTS`) | 数据 | 生命周期 |
+|------|------|---------|------|------|------|---------|
+| **preview**(branch/pr)| App 合流 `main` 自动切 tag 前瞬态拉起 (`--cut-missing-app-tag`) 或手动按需 | 分支名 (`main`) / PR# | `deploy_v2 --type preview/{branch,pr}` | `preview_gate` | 临时 DB | `finally` 立即 `--down` |
+| **app staging** | **release tag 推送**(`reconcile-iac-inputs.yml` 读 `harness/repos.yaml`)或手动 `--bootstrap` | release tag(钉和 prod 同一个)| `deploy_v2 --type staging --version-ref vX.Y.Z` | `staging_gate` | staging 数据 | 长期(同构 prod)|
+| **app prod** | **显式 promote**(`reconcile-iac-inputs.yml` `promote_prod=true`)或手动 `--bootstrap` | **同一个 release tag** | `deploy_v2 --type prod --version-ref vX.Y.Z --staging-validated --code-reviewed` | `smoke` | 真实 prod 数据 | 长期 |
+| **平台服务**(iac_pinned)**staging** | **release tag 推送**(`v*.*.*`)→ **自动 staging**(soak)| **该 tag** 作 `iac_ref` | `reconcile-iac-inputs.yml` → `deploy_v2 → iac_runner` | `staging_gate` (含 `platform/todo`) | — | 长期 |
+| **平台服务**(iac_pinned)**prod** | **显式 promote**(`workflow_dispatch` `promote_prod=true` / `--promote-prod`)——tag 推送**不**自动动 prod | **同一 tag** | 同上 | `smoke` (含 `platform/todo`) | — | 长期 |
+| **L1 Bootstrap**(iac-runner)| `bootstrap/06.iac_runner/**` 变更 | release tag SHA | 随 `reconcile-iac-inputs.yml` (`promote_prod=true`) 前置 self-update (或 `deploy.yml` 手动 `workflow_dispatch`) | — | — | 随 release train |
 
 Preview success is a two-stage proof, not public reachability alone. The lifecycle
 snapshots Dokploy deployment IDs before its trigger, waits for a new record attributable

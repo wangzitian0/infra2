@@ -610,6 +610,13 @@ def test_reconcile_workflow_run_name_shows_the_release_tag() -> None:
     )
 
 
+def test_reconcile_job_runs_on_ubuntu_24_04_for_playwright() -> None:
+    """#1543: ubuntu-latest is 26.04, where Playwright 1.57.0 has no chromium build."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    runs_on = workflow["jobs"]["reconcile"]["runs-on"]
+    assert runs_on == "ubuntu-24.04"
+
+
 def test_promote_prod_refuses_a_tag_without_a_green_staging_soak() -> None:
     """2026-09-07: v1.1.61 was promoted to production while its own staging reconcile had
     failed; production alerting crash-looped until the rollback. The guard step runs only
@@ -999,9 +1006,7 @@ def test_post_deploy_app_hooks_execute_smoke_and_record_results(
     out = json.loads(capsys.readouterr().out)
     assert fetched == [("finance_report/app", SHA), ("truealpha/app", SHA)]
     assert executed == [
-        ("smoke", "https://report-staging.zitian.party", "staging", "v0.2.47"),
         ("staging_gate", "https://report-staging.zitian.party", "staging", "v0.2.47"),
-        ("smoke", "https://truealpha-staging.truealpha.club", "staging", "v0.2.80"),
         (
             "staging_gate",
             "https://truealpha-staging.truealpha.club",
@@ -1009,7 +1014,7 @@ def test_post_deploy_app_hooks_execute_smoke_and_record_results(
             "v0.2.80",
         ),
     ]
-    assert len(out["hook_results"]) == 4
+    assert len(out["hook_results"]) == 2
 
 
 def test_post_deploy_app_hooks_failure_blocks_prod_marker_and_returns_nonzero(
@@ -2726,3 +2731,172 @@ def test_run_post_deploy_app_hooks_records_failed_entry_on_missing_required_hook
     ok, detail = judge_staging_gate(post_results, {"platform/todo": "v3.2.0"})
     assert ok is False
     assert detail == "failed staging_gate for platform/todo@v3.2.0"
+
+
+def test_default_stage_hook_slots_bijection_and_workflow_ssot() -> None:
+    """#1554: DEFAULT_STAGE_HOOK_SLOTS maps each runtime stage to exactly one HOOK_SLOT
+    (1-to-1 bijection), reconcile-iac-inputs.yml never runs smoke,staging_gate redundantly,
+    and run_hook_slot passes --version-ref only when INPUT_AFTER is explicitly set."""
+    from infra2_sdk.manifests import HOOK_SLOTS
+
+    assert dict(reconcile.DEFAULT_STAGE_HOOK_SLOTS) == {
+        "preview": "preview_gate",
+        "staging": "staging_gate",
+        "prod": "smoke",
+        "schedule": "scheduled_audit",
+    }
+    assert set(reconcile.DEFAULT_STAGE_HOOK_SLOTS.values()) == set(HOOK_SLOTS)
+    assert len(reconcile.DEFAULT_STAGE_HOOK_SLOTS) == len(HOOK_SLOTS)
+    assert reconcile.default_hook_slot_for_stage("preview") == "preview_gate"
+    assert reconcile.default_hook_slot_for_stage("staging") == "staging_gate"
+    assert reconcile.default_hook_slot_for_stage("prod") == "smoke"
+    assert reconcile.default_hook_slot_for_stage("production") == "smoke"
+    assert reconcile.default_hook_slot_for_stage("schedule") == "scheduled_audit"
+    with pytest.raises(ValueError, match="unknown hook stage"):
+        reconcile.default_hook_slot_for_stage("unknown")
+
+    workflow_text = WORKFLOW.read_text(encoding="utf-8")
+    assert "smoke,staging_gate" not in workflow_text
+    assert (
+        "--run-post-deploy-hooks --post-deploy-hook-slot staging_gate" in workflow_text
+    )
+    assert "--run-post-deploy-hooks --post-deploy-hook-slot smoke" in workflow_text
+    assert '[[ -n "$INPUT_AFTER" ]] && hook_args+=(--version-ref "$INPUT_AFTER")' in (
+        workflow_text
+    )
+    assert '[[ -n "$after" ]] && hook_args+=(--version-ref "$after")' not in (
+        workflow_text
+    )
+
+
+def test_sync_app_releases_cut_missing_app_tag_runs_ephemeral_preview_gate_and_always_tears_down(
+    monkeypatch, tmp_path
+) -> None:
+    """#1554: when cut_missing_app_tag=True and an App's main is ahead of its latest tag,
+    sync_app_releases deploys preview/branch (main), runs preview_gate, cuts and pushes
+    refs/tags/vX.Y.Z only on pass, and always runs deploy_v2 --down in finally."""
+    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.46\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.80\n",
+        encoding="utf-8",
+    )
+
+    def _fake_remote(repo_url: str, **_kw):
+        if "finance_report" in repo_url:
+            return (SHA, {"v0.2.46": "1" * 40})
+        return ("2" * 40, {"v0.2.80": "2" * 40})
+
+    monkeypatch.setattr(reconcile, "_query_remote_app_refs", _fake_remote)
+    monkeypatch.setattr(reconcile, "newest_release_tag", lambda **_kw: "v3.1.40")
+
+    manifest = RuntimeHooksManifest.from_dict(
+        {
+            "schema_version": 1,
+            "service": "finance_report/app",
+            "slots": {
+                slot_name: {
+                    "run": "echo ok",
+                    "bootstrap": "",
+                    "timeout_seconds": 30,
+                    "required_env": [],
+                    "optional_env": [],
+                }
+                for slot_name in HOOK_SLOTS
+            },
+        }
+    )
+    monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_app_hook_cwd",
+        lambda *_a, **_kw: (tmp_path, None),
+    )
+
+    commands_seen: list[list[str]] = []
+    hook_calls: list[tuple[str, str, str, str]] = []
+    gate_should_pass = True
+
+    def _fake_exec(
+        _m, slot: str, *, app_url: str, environment: str, version_ref: str, **_kw
+    ):
+        hook_calls.append((slot, app_url, environment, version_ref))
+        return HookRunResult(
+            service="finance_report/app",
+            slot=slot,
+            environment=environment,
+            app_url=app_url,
+            version_ref=version_ref,
+            status="pass" if gate_should_pass else "fail",
+            exit_code=0 if gate_should_pass else 1,
+            duration_seconds=0.2,
+            summary="ok" if gate_should_pass else "preview e2e failed",
+        )
+
+    monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
+
+    def _runner(cmd, **_kw):
+        argv = [str(x) for x in cmd]
+        commands_seen.append(argv)
+        return subprocess.CompletedProcess(argv, 0, stdout="{}", stderr="")
+
+    # 1. Passing preview_gate: deploys up, runs preview_gate, pushes tag ref, tears down (--down).
+    res = reconcile.sync_app_releases(
+        tmp_path,
+        apply_repos_yaml=True,
+        cut_missing_app_tag=True,
+        runner=_runner,
+    )
+    assert res["updates"] == {"finance_report/app": "v0.2.47"}
+    assert res["apps"]["finance_report/app"]["preview_verified"] is True
+    assert (
+        res["apps"]["finance_report/app"]["preview_url"]
+        == "https://report-branch-main.zitian.party"
+    )
+    assert hook_calls == [
+        (
+            "preview_gate",
+            "https://report-branch-main.zitian.party",
+            "preview",
+            SHA[:7],
+        )
+    ]
+    deploy_v2_calls = [c for c in commands_seen if "tools.deploy_v2" in c]
+    assert len(deploy_v2_calls) == 2
+    assert "--down" not in deploy_v2_calls[0]
+    assert "preview/branch" in deploy_v2_calls[0]
+    assert "--down" in deploy_v2_calls[1]
+    assert [
+        "gh",
+        "api",
+        "repos/wangzitian0/finance_report/git/refs",
+        "-f",
+        "ref=refs/tags/v0.2.47",
+        "-f",
+        f"sha={SHA}",
+    ] in commands_seen
+
+    # 2. Failing preview_gate (mutation proof): tears down (--down) in finally, never pushes tag, raises RuntimeError.
+    commands_seen.clear()
+    hook_calls.clear()
+    gate_should_pass = False
+    with pytest.raises(RuntimeError, match="preview_gate failed"):
+        reconcile.sync_app_releases(
+            tmp_path,
+            apply_repos_yaml=True,
+            cut_missing_app_tag=True,
+            runner=_runner,
+        )
+    deploy_v2_calls_fail = [c for c in commands_seen if "tools.deploy_v2" in c]
+    assert len(deploy_v2_calls_fail) == 2
+    assert "--down" in deploy_v2_calls_fail[1]
+    assert not any(c[:2] == ["gh", "api"] for c in commands_seen)

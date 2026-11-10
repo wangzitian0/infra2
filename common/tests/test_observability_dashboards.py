@@ -1850,6 +1850,16 @@ def test_apply_observability_job_environment_stays_production() -> None:
     assert _apply_observability_job()["environment"] == "production"
 
 
+def test_apply_observability_run_name_shows_the_mode_and_the_release_tag() -> None:
+    """#1435: the approver must see the mode and the release tag in the run title."""
+    run_name = _apply_observability_document().get("run-name")
+
+    assert isinstance(run_name, str), "run-name is missing from the workflow"
+    assert run_name == (
+        "Apply Observability (${{ inputs.mode }} ${{ github.ref_name }})"
+    )
+
+
 def test_ssot_documents_alert_and_dashboard_apply_path() -> None:
     """#373: ops docs document how the alert + dashboard are applied."""
     alerting = (ROOT / "docs/ssot/ops.observability.md").read_text(encoding="utf-8")

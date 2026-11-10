@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Callable, Sequence
 import yaml
 
@@ -49,7 +50,11 @@ from common.deploy.dependencies import explain_fanout
 from common.deploy.transient_failure import classify_failure
 from common.deploy.contract import all_service_keys, service_spec
 from common.deploy.preflight import assert_app_version_ref_on_main
-from common.deploy.env_config import app_compose_env_config
+from common.deploy.env_config import (
+    app_compose_env_config,
+    preview_alias,
+    preview_service_config,
+)
 from common.deploy.release_markers import (
     PRODUCTION_MARKER_PREFIX,
     RELEASE_TAG_RE,
@@ -81,6 +86,27 @@ HARNESS_REPOS_PATH = "harness/repos.yaml"
 SERVICE_TO_APP_REPO_ID: dict[str, str] = {
     service: repo_id for repo_id, service in APP_REPO_ID_TO_SERVICE.items()
 }
+
+#: Single source of truth mapping each runtime verification stage to its canonical hook slot (#1554).
+DEFAULT_STAGE_HOOK_SLOTS: Mapping[str, str] = MappingProxyType(
+    {
+        "preview": "preview_gate",
+        "staging": "staging_gate",
+        "prod": "smoke",
+        "schedule": "scheduled_audit",
+    }
+)
+
+
+def default_hook_slot_for_stage(stage: str) -> str:
+    """Return the canonical hook slot for ``stage`` from ``DEFAULT_STAGE_HOOK_SLOTS`` (#1554)."""
+    normalized = "prod" if stage in ("prod", "production") else str(stage).strip()
+    try:
+        return DEFAULT_STAGE_HOOK_SLOTS[normalized]
+    except KeyError:
+        raise ValueError(
+            f"unknown hook stage {stage!r}; allowed: {list(DEFAULT_STAGE_HOOK_SLOTS)}"
+        ) from None
 
 
 def _discover_local_service_hook_manifests(
@@ -493,6 +519,135 @@ def _query_remote_app_refs(
     return main_sha, tag_shas
 
 
+def verify_and_cut_app_preview_tag(
+    service: str,
+    *,
+    repo_slug: str,
+    repo_url: str,
+    main_sha: str,
+    next_tag: str,
+    repo_root: Path = REPO_ROOT,
+    domain: str = "zitian.party",
+    timeout: int = 1800,
+    python_executable: str = sys.executable or "python",
+    manifest_fetcher: Callable[[str], bytes] | None = None,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> str:
+    """Deploy ephemeral preview/branch (main), run preview_gate, cut next_tag, and always tear down (#1554)."""
+    assert_app_version_ref_on_main(
+        main_sha,
+        "staging",
+        service=service,
+        repo=repo_url,
+        repo_root=repo_root,
+    )
+    preview_cfg = preview_service_config(service)
+    effective_domain = domain_for_service(service) or domain
+    alias_cfg = preview_alias("branch", "main", slug_prefix=preview_cfg.slug_prefix)
+    preview_url = alias_cfg.app_url(
+        domain=effective_domain, base_subdomain=preview_cfg.base_subdomain
+    )
+    try:
+        iac_ref = newest_release_tag(repo_root=repo_root, runner=runner)
+    except ValueError:
+        iac_ref = "main"
+
+    up_argv = [
+        python_executable,
+        "-m",
+        "tools.deploy_v2",
+        "--service",
+        service,
+        "--type",
+        "preview/branch",
+        "--version-ref",
+        "main",
+        "--iac-ref",
+        iac_ref,
+        "--domain",
+        effective_domain,
+        "--timeout",
+        str(timeout),
+    ]
+    down_argv = [
+        python_executable,
+        "-m",
+        "tools.deploy_v2",
+        "--service",
+        service,
+        "--type",
+        "preview/branch",
+        "--version-ref",
+        "main",
+        "--iac-ref",
+        iac_ref,
+        "--domain",
+        effective_domain,
+        "--down",
+    ]
+    try:
+        up_res = runner(up_argv, cwd=repo_root, capture_output=True, text=True)
+        if up_res.returncode != 0:
+            detail = (up_res.stderr or up_res.stdout or "").strip()
+            raise RuntimeError(
+                f"preview/branch deploy failed for {service}@{main_sha[:7]}: {detail}"
+            )
+        manifest = fetch_hooks_manifest(
+            service,
+            main_sha,
+            manifest_fetcher=manifest_fetcher,
+        )
+        hook_cwd, tmp_checkout = resolve_app_hook_cwd(
+            service,
+            main_sha,
+            repo_root=repo_root,
+            runner=runner,
+        )
+        try:
+            hook_res = execute_app_hook_slot(
+                manifest,
+                default_hook_slot_for_stage("preview"),
+                app_url=preview_url,
+                environment="preview",
+                version_ref=main_sha[:7],
+                cwd=hook_cwd,
+                runner=runner,
+            )
+        finally:
+            if tmp_checkout is not None:
+                tmp_checkout.cleanup()
+        if hook_res.status != "pass":
+            raise RuntimeError(
+                f"preview_gate failed for {service}@{main_sha[:7]}: {hook_res.summary}"
+            )
+        runner(
+            [
+                "gh",
+                "api",
+                f"repos/{repo_slug}/git/refs",
+                "-f",
+                f"ref=refs/tags/{next_tag}",
+                "-f",
+                f"sha={main_sha}",
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    finally:
+        down_res = runner(down_argv, cwd=repo_root, capture_output=True, text=True)
+        if down_res.returncode != 0:
+            detail = (down_res.stderr or down_res.stdout or "").strip()
+            msg = (
+                f"preview/branch teardown failed for {service}@{main_sha[:7]}: {detail}"
+            )
+            if sys.exc_info()[1] is None:
+                raise RuntimeError(msg)
+            print(f"WARN: {msg}", file=sys.stderr)
+    return preview_url
+
+
 def sync_app_releases(
     repo_root: Path = REPO_ROOT,
     *,
@@ -505,9 +660,11 @@ def sync_app_releases(
     create_pr: bool = False,
     pr_branch: str = "chore/sync-app-releases",
     dry_run: bool = False,
+    domain: str = "zitian.party",
+    manifest_fetcher: Callable[[str], bytes] | None = None,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> dict[str, object]:
-    """Pull-based App version sync against remote App repositories (#1416)."""
+    """Pull-based App version sync against remote App repositories (#1416, #1554)."""
     pinned_tags = load_app_release_tags(repo_root, runner=runner)
     target_services = (
         [str(s) for s in services if str(s)] if services else sorted(APP_SOURCES.keys())
@@ -535,7 +692,22 @@ def sync_app_releases(
         )
         target_tag = latest_tag
         target_sha = latest_tag_sha
+        preview_verified = False
+        preview_url = ""
         if cut_missing_app_tag and main_ahead and computed_next_tag:
+            if not dry_run:
+                preview_url = verify_and_cut_app_preview_tag(
+                    service,
+                    repo_slug=repo_slug,
+                    repo_url=repo_url,
+                    main_sha=main_sha,
+                    next_tag=computed_next_tag,
+                    repo_root=repo_root,
+                    domain=domain,
+                    manifest_fetcher=manifest_fetcher,
+                    runner=runner,
+                )
+                preview_verified = True
             target_tag = computed_next_tag
             target_sha = main_sha
 
@@ -563,6 +735,8 @@ def sync_app_releases(
             "next_app_tag": computed_next_tag,
             "target_tag": target_tag,
             "target_sha": target_sha,
+            "preview_verified": preview_verified,
+            "preview_url": preview_url,
             "needs_update": drifted,
         }
 
@@ -2002,8 +2176,8 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help=(
             "comma-separated hook slot(s) from HOOK_SLOTS to run when "
-            "--run-post-deploy-hooks is enabled (defaults to 'smoke,staging_gate' "
-            "for staging and 'smoke' for prod; #1493)"
+            "--run-post-deploy-hooks is enabled (defaults to 'staging_gate' "
+            "for staging and 'smoke' for prod via DEFAULT_STAGE_HOOK_SLOTS; #1493, #1554)"
         ),
     )
     parser.add_argument(
@@ -2357,8 +2531,8 @@ def main(argv: list[str] | None = None) -> int:
         and not args.dry_run
         and not any(result.get("returncode") != 0 for result in results)
     ):
-        effective_slot = args.post_deploy_hook_slot or (
-            "smoke" if promote_prod else "smoke,staging_gate"
+        effective_slot = args.post_deploy_hook_slot or default_hook_slot_for_stage(
+            "prod" if promote_prod else "staging"
         )
         hook_results = run_post_deploy_app_hooks(
             plan,

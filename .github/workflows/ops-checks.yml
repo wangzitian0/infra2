@@ -81,7 +81,8 @@ jobs:
     # signal: deploy-guard-audit
     name: Audit deploy dependency graph
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '37 2 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'deploy-guard-audit' || inputs.task == 'all')) }}
-    runs-on: ubuntu-latest
+    # Pinned to 24.04: ubuntu-latest is 26.04, where Playwright 1.57.0 has no chromium build (#1543).
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -121,6 +122,13 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          # Cache off: a dry run skips the hook step, uv never runs, and the cache
+          # save of the post step would fail with "Cache path does not exist".
+          enable-cache: false
 
       - name: Install dependencies
         run: |
