@@ -95,6 +95,9 @@ jobs:
       IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
       SIGNOZ_API_KEY: ${{ secrets.SIGNOZ_API_KEY }}
+      # The hook slot staging_gate of finance_report lists AI_API_KEY in required_env (#1529).
+      # HOOK_RUNNER_SECRET_ENV in common/deploy/app_contract.py names this secret.
+      AI_API_KEY: ${{ secrets.ZAI_CODING_CN_API_KEY }}
       # A failed reconcile pages out of band (#658): the runner's per-service error_kind is
       # the earliest machine-readable point of every deploy-chain incident of 2026-09-04..08.
       INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}

@@ -20,6 +20,7 @@ import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from infra2_sdk.deploy import (
@@ -66,6 +67,49 @@ FIXED_DEPLOY_TYPES = frozenset(
     {"staging", "prod", DeployType.STAGING, DeployType.PRODUCTION}
 )
 APP_HOOKS_MANIFEST_PATH = "runtime-hooks.manifest.json"
+#: Pairs of (env name, GitHub Actions secret) for the env that the infra2 hook runner takes
+#: from a secret. The env name is one that an App manifest lists in ``required_env`` or
+#: ``optional_env``. Each workflow step that runs an App hook slot sets each env name from
+#: its secret (#1529); a test parses the workflows and fails on a step that does not.
+_HOOK_RUNNER_SECRET_PAIRS: tuple[tuple[str, str], ...] = (
+    ("AI_API_KEY", "ZAI_CODING_CN_API_KEY"),
+)
+#: The same pairs as a read-only mapping: env name -> secret name.
+HOOK_RUNNER_SECRET_ENV: Mapping[str, str] = MappingProxyType(
+    dict(_HOOK_RUNNER_SECRET_PAIRS)
+)
+
+
+def _hook_context_env(
+    app_url: str, environment: str, version_ref: str
+) -> tuple[tuple[str, str], ...]:
+    """Return (env name, value) pairs that the runner fills from the deploy request."""
+    return (
+        ("APP_URL", app_url),
+        ("INFRA2_HOOK_APP_URL", app_url),
+        ("BASE_URL", app_url),
+        ("DEPLOY_BASE_URL", app_url),
+        ("STAGING_BASE_URL", app_url),
+        ("TA_BASE_URL", app_url),
+        ("ENVIRONMENT", environment),
+        ("DEPLOY_ENV", environment),
+        ("APP_VERSION_REF", version_ref),
+        ("EXPECTED_SHA", version_ref),
+    )
+
+
+#: Env names that the runner adds to ``optional_env`` of every slot. A manifest cannot list
+#: them in ``required_env``: the SDK rejects a name in both lists.
+_HOOK_OPTIONAL_CONTEXT_ENV: tuple[str, ...] = (
+    "INFRA2_HOOK_APP_URL",
+    "BASE_URL",
+    "DEPLOY_ENV",
+)
+#: Env names that the runner fills from the deploy request when the ambient env holds none.
+#: A manifest may list these in ``required_env`` without a secret.
+HOOK_RUNNER_CONTEXT_ENV: frozenset[str] = frozenset(
+    name for name, _value in _hook_context_env("", "", "")
+) - set(_HOOK_OPTIONAL_CONTEXT_ENV)
 ContractReader = Callable[[str, str], str]
 
 #: The attributes of a field that change what infra2 renders, supplies or composes.
@@ -635,30 +679,14 @@ def execute_app_hook_slot(
     effective_ambient: dict[str, str] = dict(
         os.environ if ambient_env is None else ambient_env
     )
-    for env_key, default_val in (
-        ("APP_URL", cleaned_url),
-        ("INFRA2_HOOK_APP_URL", cleaned_url),
-        ("BASE_URL", cleaned_url),
-        ("DEPLOY_BASE_URL", cleaned_url),
-        ("STAGING_BASE_URL", cleaned_url),
-        ("TA_BASE_URL", cleaned_url),
-        ("ENVIRONMENT", environment),
-        ("DEPLOY_ENV", environment),
-        ("APP_VERSION_REF", version_ref),
-        ("EXPECTED_SHA", version_ref),
+    for env_key, default_val in _hook_context_env(
+        cleaned_url, environment, version_ref
     ):
         if not str(effective_ambient.get(env_key, "")).strip():
             effective_ambient[env_key] = default_val
 
     augmented_optional = tuple(
-        dict.fromkeys(
-            [
-                *slot_spec.optional_env,
-                "INFRA2_HOOK_APP_URL",
-                "BASE_URL",
-                "DEPLOY_ENV",
-            ]
-        )
+        dict.fromkeys([*slot_spec.optional_env, *_HOOK_OPTIONAL_CONTEXT_ENV])
     )
     augmented_slot_spec = replace(slot_spec, optional_env=augmented_optional)
     augmented_manifest = RuntimeHooksManifest(
@@ -850,6 +878,8 @@ __all__ = [
     "ContractReader",
     "FIXED_DEPLOY_TYPES",
     "Gap",
+    "HOOK_RUNNER_CONTEXT_ENV",
+    "HOOK_RUNNER_SECRET_ENV",
     "HOOK_SLOTS",
     "HookRunResult",
     "HookSlotSpec",
