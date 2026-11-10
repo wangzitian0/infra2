@@ -610,6 +610,13 @@ def test_reconcile_workflow_run_name_shows_the_release_tag() -> None:
     )
 
 
+def test_reconcile_job_runs_on_ubuntu_24_04_for_playwright() -> None:
+    """#1543: ubuntu-latest is 26.04, where Playwright 1.57.0 has no chromium build."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    runs_on = workflow["jobs"]["reconcile"]["runs-on"]
+    assert runs_on == "ubuntu-24.04"
+
+
 def test_promote_prod_refuses_a_tag_without_a_green_staging_soak() -> None:
     """2026-09-07: v1.1.61 was promoted to production while its own staging reconcile had
     failed; production alerting crash-looped until the rollback. The guard step runs only
