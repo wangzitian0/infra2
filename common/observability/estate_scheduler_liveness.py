@@ -17,11 +17,13 @@ A scheduled workflow is red when:
 - a listed workflow whose file is missing on the default branch ran on schedule
   before: DISABLED. Without a scheduled run it is branch-only and skipped;
 - its newest scheduled run that started a job is older than the bound: STALE.
-  Scheduled runs that exist but none started a job (``startup_failure``, queued)
-  are STALE too;
+  Scheduled runs that exist but none started a job are STALE too, once one is a
+  ``startup_failure`` or has queued longer than ``QUEUED_RUN_ALLOWANCE`` (1 hour).
+  A run seen in both run listings counts once (by run id);
 - it never ran on schedule and its file changed longer ago than the bound: NEVER;
-- the YAML is invalid, a ``schedule`` entry has no cron, or a cron cannot be
-  measured: INVALID;
+- the YAML is invalid, ``schedule`` is named with no cron (``on: schedule``,
+  ``on: [push, schedule]``, ``schedule: []``, an entry without ``cron``), or a cron
+  cannot be measured: INVALID;
 - an API read failed or a listing is truncated: UNVERIFIABLE. A read error is
   never a pass.
 
@@ -70,6 +72,9 @@ SCHEDULED_PAGE = 5
 UNFILTERED_PAGE = 50
 API_TIMEOUT_SECONDS = 20.0
 MAX_DETAIL_ENTRIES = 12
+#: A scheduled run that has not started a job is red only after this age, or at once
+#: on ``startup_failure``. The first run of a new workflow waits in the queue first.
+QUEUED_RUN_ALLOWANCE = timedelta(hours=1)
 
 OK = "OK"
 STALE = "STALE"
@@ -208,11 +213,15 @@ def schedule_crons(text: str) -> list[str]:
     if not isinstance(document, dict):
         raise ScheduleError("the file is not a YAML mapping")
     triggers = document.get("on", document.get(True))
+    if triggers == "schedule" or (
+        isinstance(triggers, list) and "schedule" in triggers
+    ):
+        raise ScheduleError("on names schedule without a cron: GitHub never runs it")
     if not isinstance(triggers, dict) or "schedule" not in triggers:
         return []
     entries = triggers["schedule"]
     if not isinstance(entries, list) or not entries:
-        raise ScheduleError("on.schedule is not a non-empty list")
+        raise ScheduleError("on.schedule has no cron: it is not a non-empty list")
     crons = []
     for entry in entries:
         cron = entry.get("cron") if isinstance(entry, dict) else None
@@ -274,6 +283,23 @@ def _tick(runs: list[dict], base: str) -> datetime | None:
         return newest_tick(runs)
     except ValueError as exc:  # an unreadable created_at
         raise PeerReadError(f"{base} runs: {exc}") from exc
+
+
+def _distinct(runs: list[dict]) -> list[dict]:
+    """Drop repeats of one run id; the two run listings overlap."""
+    unique: dict[object, dict] = {}
+    for run in runs:
+        key = run.get("id")
+        unique.setdefault(id(run) if key is None else key, run)
+    return list(unique.values())
+
+
+def _never_started(run: dict, now: datetime) -> bool:
+    """Return True for a run that failed to start or has queued past the allowance."""
+    if run.get("conclusion") == "startup_failure":
+        return True
+    created = _timestamp(run.get("created_at"), f"run {run.get('id')}")
+    return now - created > QUEUED_RUN_ALLOWANCE
 
 
 def _file_text(get: Get, repository: str, path: str, branch: str) -> str:
@@ -376,9 +402,9 @@ def _evaluate_workflow(
     newest = _tick(scheduled, base)
     if newest is None or now - newest > bound:
         unfiltered = _runs(get, f"{base}/runs?per_page={UNFILTERED_PAGE}")
-        scheduled = scheduled + [
-            run for run in unfiltered if run.get("event") == "schedule"
-        ]
+        scheduled = _distinct(
+            scheduled + [run for run in unfiltered if run.get("event") == "schedule"]
+        )
         witness = _tick(unfiltered, base)
         if witness is not None and (newest is None or witness > newest):
             newest = witness
@@ -397,12 +423,21 @@ def _evaluate_workflow(
             repository, path, OK, f"{seen} is {_hours(age)} old (bound {_hours(bound)})"
         )
     if scheduled:
+        total = f"{len(scheduled)} scheduled run{'' if len(scheduled) == 1 else 's'}"
+        if any(_never_started(run, now) for run in scheduled):
+            return WorkflowVerdict(
+                repository,
+                path,
+                STALE,
+                f"{where} has {total} and none started a job: "
+                "its scheduler fires but the workflow does not run",
+            )
         return WorkflowVerdict(
             repository,
             path,
-            STALE,
-            f"{where} has {len(scheduled)} scheduled runs and none started a job: "
-            "its scheduler fires but the workflow does not run",
+            OK,
+            f"{where} has {total} queued for under {_hours(QUEUED_RUN_ALLOWANCE)}, "
+            "waiting for the first job to start",
         )
     since = now - _last_changed(get, repository, path, branch)
     never = f"{where} never ran on schedule; its file changed {_hours(since)} ago"
