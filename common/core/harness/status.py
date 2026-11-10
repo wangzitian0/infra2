@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
+from common.core.harness.prod_queue import ProductionQueue, render_queue_lines
 from common.core.harness.manifest import (
     HEALTH_ENVIRONMENTS,
     RELEASE_TAG_RE,
@@ -86,6 +87,7 @@ class WorkspaceStatus:
     repositories: tuple[RepositoryStatus, ...]
     observed_at: str | None = None  # UTC time of the `--online` reads
     train_gate: dict[str, Any] | None = None
+    prod_queue: ProductionQueue | None = None
 
     @property
     def ok(self) -> bool:
@@ -103,6 +105,11 @@ class WorkspaceStatus:
             "current": self.current,
             **({"observed_at": self.observed_at} if self.observed_at else {}),
             **({"train_gate": self.train_gate} if self.train_gate is not None else {}),
+            **(
+                {"prod_queue": self.prod_queue.to_dict()}
+                if self.prod_queue is not None
+                else {}
+            ),
             "repositories": [item.to_dict() for item in self.repositories],
         }
 
@@ -588,6 +595,7 @@ def observe_online(
     marker_status: Callable[..., Any] | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     runner: Runner = subprocess.run,
+    queue_reader: Callable[[Path], ProductionQueue] | None = None,
 ) -> WorkspaceStatus:
     """`status` plus what each repository serves online and its contract lock.
 
@@ -619,7 +627,10 @@ def observe_online(
     observed_dt = now().astimezone(timezone.utc)
     observed_at = observed_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     train_gate = _compute_train_gate(items, root, observed_dt, runner=runner)
-    return WorkspaceStatus(tuple(items), observed_at, train_gate=train_gate)
+    prod_queue = queue_reader(root) if queue_reader is not None else None
+    return WorkspaceStatus(
+        tuple(items), observed_at, train_gate=train_gate, prod_queue=prod_queue
+    )
 
 
 def render_online_table(status: WorkspaceStatus) -> list[str]:
@@ -653,6 +664,8 @@ def render_online_table(status: WorkspaceStatus) -> list[str]:
             f"oldest_unpromoted_age={tg['oldest_unpromoted_age_hours']:.1f}h  "
             f"prod_gatekeeper={tg['prod_gatekeeper']}"
         )
+    if status.prod_queue is not None:
+        lines.extend(render_queue_lines(status.prod_queue))
     return lines
 
 

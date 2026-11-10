@@ -16,6 +16,7 @@ import pytest
 import yaml
 
 from common.deploy.release_markers import MarkerStatus
+from common.core.harness.prod_queue import ProductionQueue
 from common.core.harness.status import (
     RepositoryStatus,
     WorkspaceStatus,
@@ -586,6 +587,11 @@ def _patch_cli(monkeypatch, fetcher: FakeFetcher):
     monkeypatch.setattr(harness, "load_manifest", lambda _path: _manifest())
     monkeypatch.setattr(harness, "workspace_status", lambda *_a, **_k: _status())
     monkeypatch.setattr(harness, "fetch_json", fetcher)
+    monkeypatch.setattr(
+        harness.harness_prod_queue,
+        "read_production_queue",
+        lambda _root: ProductionQueue(),
+    )
     monkeypatch.setattr(urllib.request, "urlopen", _no_network)
     return harness
 
@@ -641,7 +647,7 @@ def test_online_text_has_a_blank_line_and_the_table(monkeypatch, tmp_path, capsy
     lines = capsys.readouterr().out.splitlines()
     assert lines[:10] == [*OFFLINE_LINES, ""]
     assert re.fullmatch(r"online \(observed [\dT:Z-]+; infra2 row.*\):", lines[10])
-    assert lines[11:] == TABLE_ROWS
+    assert lines[11:] == [*TABLE_ROWS, "prod_queue: empty"]
 
 
 def test_online_json_shape(monkeypatch, tmp_path: Path, capsys) -> None:
@@ -671,6 +677,7 @@ def test_online_json_shape(monkeypatch, tmp_path: Path, capsys) -> None:
         "truealpha": row("unreachable", "v0.1.12", "staging: TimeoutError"),
     }
     assert locks == [None, None, None, "v0.2.77"]
+    assert payload["prod_queue"] == {"runs": [], "error": ""}
 
 
 def _response(body: bytes, final_url: str = URL) -> io.BytesIO:

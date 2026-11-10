@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 
 from common.core.harness import sweep as harness_sweep  # noqa: E402
 from common.core.harness.manifest import check_workspace, load_manifest  # noqa: E402
+from common.core.harness import prod_queue as harness_prod_queue  # noqa: E402
 from common.core.harness.status import (  # noqa: E402
     WorkspaceStatus,
     fetch_json,
@@ -118,6 +119,29 @@ def _shared_arguments(parser: argparse.ArgumentParser) -> None:
     )
 
 
+PROD_QUEUE_DESCRIPTION = """Print the active production promotion runs of
+reconcile-iac-inputs.yml and the preflight verdict. Run it before every production
+promotion dispatch. Exit 0: queue empty, dispatch allowed. Exit 1: a production run is
+active. Exit 4: the queue is unreadable. Read-only."""
+
+
+def _prod_queue(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(
+        prog="python -m tools.harness prod-queue", description=PROD_QUEUE_DESCRIPTION
+    )
+    parser.add_argument("--root", type=Path, default=ROOT)
+    parser.add_argument("--json", action="store_true", dest="json_output")
+    args = parser.parse_args(argv)
+    queue = harness_prod_queue.read_production_queue(args.root.resolve())
+    code, message = harness_prod_queue.preflight(queue)
+    if args.json_output:
+        payload = {**queue.to_dict(), "exit": code, "message": message}
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+    else:
+        print("\n".join([*harness_prod_queue.render_queue_lines(queue), *message]))
+    return code
+
+
 def _manifest_path(root: Path, requested: Path | None) -> Path:
     if requested is None:
         return root / "harness" / "repos.yaml"
@@ -167,12 +191,20 @@ def main(argv: list[str] | None = None) -> int:
     # reserves for "an item finished while others still wait".
     if argv[:1] == ["sweep"]:
         return _sweep(argv[1:])
+    if argv[:1] == ["prod-queue"]:
+        return _prod_queue(argv[1:])
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     # Listed for --help only; main() dispatches `sweep` before this parser runs.
     subparsers.add_parser(
         "sweep",
         help="one state per watched agent/PR/release/run (see `sweep --help`)",
+        add_help=False,
+    )
+    subparsers.add_parser(
+        "prod-queue",
+        help="production promotion queue; run before every production promotion "
+        "dispatch (see `prod-queue --help`)",
         add_help=False,
     )
     check = subparsers.add_parser("check", help="validate the workspace inventory")
@@ -236,7 +268,13 @@ def main(argv: list[str] | None = None) -> int:
         root, manifest, fetch=args.fetch, submodules_expected=submodules_expected
     )
     if args.online:
-        result = observe_online(result, root, manifest, fetcher=fetch_json)
+        result = observe_online(
+            result,
+            root,
+            manifest,
+            fetcher=fetch_json,
+            queue_reader=harness_prod_queue.read_production_queue,
+        )
     if args.json_output:
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
     else:

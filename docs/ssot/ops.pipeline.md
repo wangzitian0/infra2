@@ -166,6 +166,10 @@ The warning exists only when the marker call was reached: a real promotion (no d
 Read this evidence before you record: read the NEWEST `(PROD <tag>)` run for that tag, record only if no later production run exists, and check that the run is `success`.
 Its job annotations (`gh api --paginate repos/<repo>/check-runs/<job id>/annotations`) must hold the pending-marker warning for that exact tag.
 Preconditions: the tag is on `main`; no marker exists for it; it is newer than the latest marker; no reconcile run is waiting, pending, in progress or queued.
+Immediately before each production promotion dispatch of `reconcile-iac-inputs.yml`, `uv run --locked python -m tools.harness prod-queue` must exit 0 (#1528).
+It exits 1 while any production promotion run is active, and 4 when GitHub cannot be read.
+A `gh run cancel <id>` on a run that waits for approval ends that run, and the next pending run moves to `waiting`.
+Cancel only a run that your own command output started, or with an owner reply.
 Commands: `git fetch --tags origin`; `<sha>` is `git rev-parse <tag>^{commit}`; `git tag production/<tag> <sha>`; `git push origin refs/tags/production/<tag>`.
 Then `git ls-remote --tags origin refs/tags/production/<tag>` must show `<sha>`.
 The marker is immutable: never move it.
@@ -449,7 +453,8 @@ git commit -am "fix: critical issue"
 gh pr create --base main --fill          # fast-track review → 合并回 main(on-main 不变式)
 # 合并后,从 main 打 patch tag → 自动晋升 staging:
 git checkout main && git pull && git tag v1.3.1 && git push origin v1.3.1
-# staging soak 后,显式 promote 平台服务到 prod:
+# staging soak 后,显式 promote 平台服务到 prod
+# (紧接着前,`uv run --locked python -m tools.harness prod-queue` 必须退出 0):
 gh workflow run reconcile-iac-inputs.yml -f after=v1.3.1 -f promote_prod=true
 # app 走统一前门、钉同一 tag(prod 仍 deny-by-default):
 gh workflow run deploy.yml -f service="finance_report/app" -f type="prod" \
