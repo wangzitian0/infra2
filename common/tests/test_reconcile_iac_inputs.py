@@ -368,10 +368,10 @@ APP_REJECTION = (
 )
 
 
-def _marker_runner(push_code: int, push_stderr: str):
+def _marker_runner(push_code: int, push_stderr: str, tag: str = "v1.2.3"):
     def runner(argv, **_kwargs):
         if argv[:3] == ["git", "rev-parse", "--verify"]:
-            if argv[3] == "v1.2.3^{commit}":
+            if argv[3] == f"{tag}^{{commit}}":
                 return subprocess.CompletedProcess(argv, 0, "b" * 40 + "\n", "")
             return subprocess.CompletedProcess(argv, 128, "", "missing")
         if argv[:2] == ["git", "push"]:
@@ -392,14 +392,13 @@ def test_production_marker_push_rejected_by_github_app_rule_raises_rejected() ->
     )
 
 
-def test_production_marker_other_push_failure_still_exits_with_error() -> None:
+@pytest.mark.parametrize("stderr", ["network down", "refusing to update this ref"])
+def test_production_marker_other_push_failure_still_exits_with_error(stderr) -> None:
     with pytest.raises(SystemExit) as raised:
-        record_production_marker(
-            "v1.2.3", ROOT, runner=_marker_runner(1, "network down")
-        )
+        record_production_marker("v1.2.3", ROOT, runner=_marker_runner(1, stderr))
 
     assert raised.value.code == (
-        "::error::cannot push production marker production/v1.2.3: network down"
+        f"::error::cannot push production marker production/v1.2.3: {stderr}"
     )
 
 
@@ -1107,8 +1106,19 @@ def test_post_deploy_app_hooks_failure_blocks_prod_marker_and_returns_nonzero(
     assert out["hook_results"][0]["status"] == "fail"
 
 
-def _run_promotion_main(monkeypatch, capsys, record):
-    """Drive a green prod promotion of v3.1.23 with `record` as the marker writer."""
+PROMOTION_ARGV = [
+    "--before",
+    "v3.1.22",
+    "--after",
+    "v3.1.23",
+    "--promote-prod",
+    "--changed-file",
+    "platform/12.alerting/compose.yaml",
+]
+
+
+def _run_promotion_main(monkeypatch, capsys, record, returncode=0):
+    """Drive a prod promotion of v3.1.23: every deploy returns `returncode`."""
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     monkeypatch.setattr(reconcile, "assert_after_on_main", lambda *_a, **_kw: None)
     monkeypatch.setattr(
@@ -1122,24 +1132,14 @@ def _run_promotion_main(monkeypatch, capsys, record):
             {
                 "service": c.service,
                 "type": c.deploy_type,
-                "returncode": 0,
+                "returncode": returncode,
                 "stdout": "{}",
                 "stderr": "",
             }
             for c in cmds
         ],
     )
-    rc = main(
-        [
-            "--before",
-            "v3.1.22",
-            "--after",
-            "v3.1.23",
-            "--promote-prod",
-            "--changed-file",
-            "platform/12.alerting/compose.yaml",
-        ]
-    )
+    rc = main(PROMOTION_ARGV)
     lines = capsys.readouterr().out.splitlines()
     warnings = [line for line in lines if line.startswith("::warning::")]
     return rc, warnings, json.loads(lines[-1])
@@ -1159,8 +1159,8 @@ def test_main_stays_green_and_reports_pending_marker_when_github_rejects_push(
     assert warnings == [
         "::warning::production marker production/v3.1.23 is pending: GitHub rejects "
         "a GitHub App push for a commit whose workflow files differ from main "
-        "(#1511). Record it with: uv run python -m tools.record_production_marker "
-        "v3.1.23"
+        "(#1511). Record it by hand: see docs/ssot/ops.pipeline.md, section on "
+        "the production marker."
     ]
     assert out["marker_pending"] == "production/v3.1.23"
     assert out["production_marker"] == ""
@@ -1180,6 +1180,50 @@ def test_main_reports_no_pending_marker_when_marker_is_recorded(
     assert warnings == []
     assert out["marker_pending"] == ""
     assert out["production_marker"] == "production/v3.1.23"
+
+
+def test_main_never_reaches_the_marker_when_a_deploy_returns_nonzero(
+    monkeypatch, capsys
+) -> None:
+    called = []
+
+    def record(tag, *_a, **_kw):
+        called.append(tag)
+        return f"production/{tag}"
+
+    rc, warnings, out = _run_promotion_main(monkeypatch, capsys, record, returncode=1)
+
+    assert rc == 1
+    assert called == []
+    assert warnings == []
+    assert out["marker_pending"] == ""
+    assert out["production_marker"] == ""
+
+
+def test_main_does_not_swallow_a_marker_push_failure_that_is_not_the_app_rule(
+    monkeypatch, capsys
+) -> None:
+    real = reconcile.record_production_marker
+
+    def network_down(tag, root, **_kw):
+        return real(tag, root, runner=_marker_runner(1, "network down", tag))
+
+    with pytest.raises(SystemExit) as raised:
+        _run_promotion_main(monkeypatch, capsys, network_down)
+
+    assert raised.value.code == (
+        "::error::cannot push production marker production/v3.1.23: network down"
+    )
+
+
+def test_main_does_not_swallow_an_unrelated_error_from_the_marker_call(
+    monkeypatch, capsys
+) -> None:
+    def broken(tag, *_a, **_kw):
+        raise RuntimeError("marker writer broke")
+
+    with pytest.raises(RuntimeError, match="^marker writer broke$"):
+        _run_promotion_main(monkeypatch, capsys, broken)
 
 
 def test_sync_app_releases_updates_repos_yaml_when_remote_tag_advances(

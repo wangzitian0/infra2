@@ -2224,8 +2224,8 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"::warning::production marker {marker_pending} is pending: GitHub "
                 "rejects a GitHub App push for a commit whose workflow files differ "
-                "from main (#1511). Record it with: "
-                f"uv run python -m tools.record_production_marker {args.after}"
+                "from main (#1511). Record it by hand: see docs/ssot/ops.pipeline.md, "
+                "section on the production marker."
             )
 
     run_url = github_run_url(os.environ)
