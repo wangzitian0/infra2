@@ -3,14 +3,16 @@
 
 Serves todo.zitian.party as the acceptance and verification tool for the platform's
 real runtime paths:
-- Postgres: login as a dedicated read-only role, then SELECT 1
+- Postgres: login as role `canary_ro`, then `SELECT 1`, `SET LOCAL transaction_read_only = off`,
+  and a temporary-table `canary_todo_probe` `CREATE`/`INSERT`/`SELECT`/`DELETE` roundtrip
 - Redis: AUTH, then SETEX/GET/DEL of a random value
 - S3: PUT, GET and DELETE of one object under a canary prefix
-- SigNoz, OpenPanel, Authentik: liveness over HTTP
+- SigNoz, OpenPanel, Authentik: liveness over HTTP, plus Feishu and SDK contract probes
+- Startup environment manifest validation (`validate_startup_environment` via `assert_environment`)
 
 `/api/canary/status` runs these checks. The probe runner reads it over the Docker
 network (ProbeFacet `todo-canary-status`). Traefik does not route it without SSO.
-The service sends traces and logs to SigNoz when the deploy issues an OTLP endpoint.
+The service sends traces, metrics, and logs to SigNoz when the deploy issues an OTLP endpoint.
 """
 
 from __future__ import annotations
@@ -756,6 +758,12 @@ async def add_cors_headers(request: Request, call_next: Any) -> Response:
 
 @fastapi_app.api_route("/api/health", methods=["GET", "HEAD"], tags=["Observability"])
 def fastapi_api_health() -> Response:
+    git_sha = (
+        os.environ.get("GIT_COMMIT_SHA") or os.environ.get("INFRA_IAC_REF") or "unknown"
+    ).strip() or "unknown"
+    version = (
+        os.environ.get("SERVICE_VERSION") or os.environ.get("IMAGE_TAG") or git_sha
+    ).strip() or "unknown"
     return JSONResponse(
         status_code=200,
         content={
@@ -763,6 +771,8 @@ def fastapi_api_health() -> Response:
             "status": "healthy",
             "service": "platform/todo",
             "domain": "todo.zitian.party",
+            "version": version,
+            "git_sha": git_sha,
             "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
         },
     )

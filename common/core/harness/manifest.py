@@ -194,6 +194,50 @@ def _validate_release_tag(
         )
 
 
+def _validate_external_app_registry_binding(
+    root: Path,
+    repository_id: str,
+    relative: str,
+    role: str,
+    health: Any,
+    findings: list[Finding],
+) -> None:
+    if role != "external-application":
+        return
+    if not (root / "common" / "core" / "registry.py").is_file():
+        return
+    from common.core.environ import infra_domain
+    from common.core.registry import service_attrs
+    from common.observability.probe_specs import render_public_route_spec_text
+
+    service_id = f"{Path(relative).name.replace('-', '_')}/app"
+    attrs = service_attrs()
+    if service_id not in attrs:
+        _error(
+            findings,
+            "app-registry",
+            f"{repository_id} external-application has no registered service {service_id!r} in common/core/registry.py",
+        )
+        return
+    if not isinstance(health, dict):
+        return
+    for environment, url in health.items():
+        if environment not in HEALTH_ENVIRONMENTS or not _is_https_url(url):
+            continue
+        rendered = render_public_route_spec_text(environment, infra_domain())
+        expected_urls = [
+            row[2]
+            for line in rendered.splitlines()
+            if len(row := line.split("|")) > 7 and row[7] == service_id
+        ]
+        if url not in expected_urls:
+            _error(
+                findings,
+                "health-registry-drift",
+                f"{repository_id} health.{environment} {url!r} does not match service registry route {expected_urls!r} for {service_id}",
+            )
+
+
 def _validate_workspace_section(
     root: Path, workspace: Any, findings: list[Finding]
 ) -> dict[str, Any]:
@@ -301,6 +345,9 @@ def _validate_repository_entry(
 
     _validate_health(repository_id, checkout, repository.get("health"), findings)
     _validate_release_tag(repository_id, role, repository.get("release_tag"), findings)
+    _validate_external_app_registry_binding(
+        root, repository_id, relative, role, repository.get("health"), findings
+    )
 
     expected_gov = {
         "infrastructure-control-plane": "local",

@@ -1,7 +1,7 @@
 # Canary Todo SSOT
 
 > **SSOT Key**: `platform.canary_todo`
-> **Definition**: Canary Todo (`platform/30.todo`) is a synthetic service at `todo.zitian.party`. It proves that the platform's real runtime paths work: authenticated writes to Redis, a Postgres login, an S3 write, and telemetry export. The probe runner reads its status document, so a broken path pages or reports.
+> **Definition**: Canary Todo (`platform/30.todo`) is a synthetic service at `todo.zitian.party`. It proves that the platform's real runtime paths work: authenticated writes to Redis, a Postgres read-only login and session temporary-table write/read/delete roundtrip, an S3 write, and telemetry export. The probe runner reads its status document, so a broken path pages or reports.
 > **Scope**: Canary Todo is the one Canary of infra2 (#1477): no CI job, schedule or deploy step deploys an App to prove infra2.
 
 ---
@@ -10,12 +10,15 @@
 
 | Dimension | Location | Role |
 |-----------|----------|------|
-| Service code and probes | `platform/30.todo/app.py` | Probes, status document, telemetry bootstrap |
-| Container topology | `platform/30.todo/compose.yaml` | App container, vault-agent sidecar, Traefik routers |
+| Service code and probes | `platform/30.todo/app.py` | Probes, status document, startup `validate_startup_environment`, custom OTel metrics, telemetry bootstrap |
+| Web UI & capability matrix | `platform/30.todo/ui.py` | HTML UI rendering and capability matrix view |
+| Container topology | `platform/30.todo/compose.yaml` | App container, vault-agent sidecar, Traefik routers, `IAC_MOUNT_SHA256_*` fingerprint env vars |
 | Image | `platform/30.todo/Dockerfile` | Python 3.11 image. It installs the `infra2-sdk` wheel that `uv.lock` pins, with its hash. |
-| Deployer and facets | `platform/30.todo/deploy.py` | `TodoDeployer`: probe, signal, secrets, telemetry identity, Postgres role |
-| Secret contract | `platform/30.todo/env.manifest.json` | Generates `secrets.ctmpl` and `vault-policy.hcl` |
-| Tests | `common/tests/test_todo_service.py`, `common/tests/test_todo_canary_depth.py`, `common/tests/test_platform_otel_adoption.py` | Behaviour, routing, deployer contracts, and the telemetry links of every `init_service` caller |
+| Deployer and facets | `platform/30.todo/deploy.py` | `TodoDeployer`: probe, signal, secrets, telemetry identity, Postgres role, `rendered_mount_fingerprints()` |
+| Secret & env contract | `platform/30.todo/env.manifest.json` | Enforced at startup via `assert_environment` and used to generate `secrets.ctmpl` and `vault-policy.hcl` |
+| Runtime verification hooks | `platform/30.todo/runtime-hooks.manifest.json` | 4-slot runtime verification hooks (`smoke`, `preview_gate`, `staging_gate`, `scheduled_audit`), executed by `tools/reconcile_iac_inputs.py` |
+| Observability dashboard | `platform/30.todo/dashboard.json` | SigNoz v5 dashboard definition discovered by `common/observability_dashboards.py` |
+| Tests | `common/tests/test_todo_service.py`, `common/tests/test_todo_canary_depth.py`, `common/tests/test_app_ssot_centralization.py`, `common/tests/test_platform_otel_adoption.py` | Behaviour, deep probe contracts, SSOT centralization, routing, deployer contracts, and the telemetry links of every `init_service` caller |
 
 ## 2. What Each Check Proves
 
@@ -34,10 +37,10 @@ Each check reports one of three states:
 | Check | Passes when | `fail` when | `unconfigured` when |
 |-------|-------------|-------------|---------------------|
 | `redis` | `AUTH`, `PING`, `SETEX`, `GET` (same random value), `DEL` all succeed | `-NOAUTH`, `-WRONGPASS`, any other error reply, a different value on `GET` | No `REDIS_PASSWORD` |
-| `postgres` | Login as role `canary_ro` and `SELECT 1` succeed | Any server `E` (ErrorResponse), a failed login | No role name or password |
-| `s3` (alias `minio`) | `PUT`, `GET` (same body) and `DELETE` of `canary/<random>` in bucket `platform-canary` succeed | A denied or failed request, a different body | No bucket, access key or secret key |
+| `postgres` | Login as role `canary_ro`, `SELECT 1`, `SET LOCAL transaction_read_only = off`, and a session-scoped temporary table `canary_todo_probe` `CREATE` / `INSERT` / `SELECT` / `DELETE` roundtrip all succeed | Any server `E` (ErrorResponse), a failed login, or a roundtrip mismatch | No role name or password |
+| `s3` | `PUT`, `GET` (same body) and `DELETE` of `canary/<random>` in bucket `platform-canary` succeed | A denied or failed request, a different body | No bucket, access key or secret key |
 
-**Informational checks** (`signoz`, `openpanel`, `authentik`) test HTTP liveness (2xx or 3xx). They appear in `checks`, but they never change `ok` or the HTTP status. Each has its own probe and severity, so an outage must not page a second time as `todo-canary-status`.
+**Informational checks** (`signoz`, `openpanel`, `authentik`) test HTTP liveness (2xx or 3xx). They appear in `checks`, but they never change `ok` or the HTTP status. Each has its own probe and severity, so an outage must not page a second time as `todo-canary-status`. In addition, `probe_feishu_webhook` and `probe_sdk_contract` provide deep capability probes, and custom OpenTelemetry metrics (`todo.canary.probe.duration_ms` histogram and `todo.canary.probe.runs_total` counter) record every probe execution.
 
 The document returns HTTP 200 only when every gating check passes. It returns HTTP 503 when a gating check is `fail` or `unconfigured`. The body starts with the verdict, because the probe runner keeps only the first 128 bytes as its observed text:
 
@@ -76,6 +79,13 @@ A change to the severity changes `ProbeFacet.severity` and the two frozen fixtur
 - The public health check and the internal canary status keep their veto. Old failures never hide a service that fails now.
 
 A deploy therefore turns the pillar red for one window, not for the rest of the day. The ledger fields are in `common/observability/local_ledger.py`. The first UTC day after the writer change keeps a failure that the old writer counted: that day has no `lastFailAt`.
+
+## 3A. Runtime Hooks & Mount Fingerprints
+
+- **Startup environment validation**: `validate_startup_environment()` in `platform/30.todo/app.py` calls `assert_environment(ENV_MANIFEST_PATH, environ=environ, require_injected=True)` during `main()` startup so missing required variables in `platform/30.todo/env.manifest.json` fail closed before Uvicorn binds.
+- **Mount fingerprints**: `TodoDeployer.rendered_mount_fingerprints()` in `platform/30.todo/deploy.py` computes SHA-256 digests of the rendered `vault-agent.hcl` and `secrets.ctmpl` files and injects `IAC_MOUNT_SHA256_VAULT_AGENT_HCL` and `IAC_MOUNT_SHA256_SECRETS_CTMPL` into `platform/30.todo/compose.yaml`, forcing container recreation when secret templates change.
+- **Runtime verification hooks**: `platform/30.todo/runtime-hooks.manifest.json` declares the 4-slot verification contract (`smoke`, `preview_gate`, `staging_gate`, `scheduled_audit`) and is registered in `tools/reconcile_iac_inputs.py` (`LOCAL_SERVICE_HOOK_MANIFESTS`).
+- **Dashboard & custom OTel metrics**: `platform/30.todo/dashboard.json` defines the SigNoz v5 dashboard discovered by `common/observability_dashboards.py`, charting `todo.canary.probe.duration_ms` and `todo.canary.probe.runs_total`.
 
 ## 4. Credentials
 

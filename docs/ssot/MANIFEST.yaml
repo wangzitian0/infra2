@@ -143,11 +143,18 @@ entries:
     summary: Canary Todo 平台基建校验工具
     description: Canary Todo service for platform infrastructure acceptance and physical runtime verification.
     proofs:
+      - platform/30.todo/app.py
       - platform/30.todo/compose.yaml
       - platform/30.todo/deploy.py
+      - platform/30.todo/env.manifest.json
+      - platform/30.todo/runtime-hooks.manifest.json
+      - platform/30.todo/dashboard.json
       - tools/canary_verify.py
       - common/observability/signoz_queries.py
       - common/tests/test_canary_verify.py
+      - common/tests/test_todo_service.py
+      - common/tests/test_todo_canary_depth.py
+      - common/tests/test_app_ssot_centralization.py
 
   db.overview:
     owner: docs/ssot/db.overview.md
