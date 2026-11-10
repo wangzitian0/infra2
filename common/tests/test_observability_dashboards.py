@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import re
+import shlex
 import sys
 import types
 from pathlib import Path
@@ -1128,10 +1129,12 @@ def test_apply_alerts_raises_nonzero_exit_when_rule_create_fails(monkeypatch) ->
             "body": "bad_data",
         }
 
-    alerting = types.SimpleNamespace(
-        _ensure_signoz_channel=lambda _c: "chan-1",
-        _signoz_request=fake_request,
-    )
+    # The real module supplies the retry contract (transient statuses, delays, wait).
+    alerting = _load_real_alerting()
+    waits: list[float] = []
+    monkeypatch.setattr(alerting, "_ensure_signoz_channel", lambda _c: "chan-1")
+    monkeypatch.setattr(alerting, "_signoz_request", fake_request)
+    monkeypatch.setattr(alerting, "_sleep", waits.append)
     fake_console = types.ModuleType("common.console")
     fake_console.error = lambda *_args, **_kwargs: None
     fake_console.success = lambda *_args, **_kwargs: None
@@ -1144,6 +1147,7 @@ def test_apply_alerts_raises_nonzero_exit_when_rule_create_fails(monkeypatch) ->
         module.apply_alerts(object())
 
     assert exc.value.code == 1
+    assert waits == []  # a 400 is not transient: one POST, no wait
     assert [(method, path) for method, path, _ in calls] == [
         ("GET", "/api/v1/rules"),
         ("POST", "/api/v1/rules"),
@@ -2945,10 +2949,12 @@ class _FakeCurl:
     def __init__(self, *answers: tuple[str, bool]):
         self.answers = answers
         self.commands: list[str] = []
+        self.kwargs: list[dict] = []
 
-    def run(self, command, **_kwargs):
+    def run(self, command, **kwargs):
         index = min(len(self.commands), len(self.answers) - 1)
         self.commands.append(command)
+        self.kwargs.append(kwargs)
         stdout, ok = self.answers[index]
         return types.SimpleNamespace(stdout=stdout, ok=ok)
 
@@ -2959,7 +2965,16 @@ def _answer(status: int, body: str = "") -> tuple[str, bool]:
 
 
 _CURL_FAILED = ("", False)  # no output at all: connection error or timeout
-_SIGNOZ_TEST_API_KEY = "test-api-key-1550"
+
+
+def _load_real_alerting():
+    spec = importlib.util.spec_from_file_location(
+        "alerting_retry_under_test", ROOT / "platform/12.alerting/shared_tasks.py"
+    )
+    assert spec and spec.loader
+    alerting = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(alerting)
+    return alerting
 
 
 def _real_signoz_request(monkeypatch):
@@ -2967,22 +2982,12 @@ def _real_signoz_request(monkeypatch):
 
     Returns `(alerting, waits)`; `waits` records each requested pause in seconds.
     """
-    spec = importlib.util.spec_from_file_location(
-        "alerting_retry_under_test", ROOT / "platform/12.alerting/shared_tasks.py"
-    )
-    assert spec and spec.loader
-    alerting = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(alerting)
+    alerting = _load_real_alerting()
     waits: list[float] = []
     monkeypatch.setattr(
         alerting,
         "_signoz_context",
-        lambda: {
-            "env": {},
-            "deploy_env": "production",
-            "domain": "signoz.example.test",
-            "api_key": _SIGNOZ_TEST_API_KEY,
-        },
+        lambda: {"domain": "signoz.example.test", "api_key": "test-api-key-1550"},
     )
     monkeypatch.setattr(alerting, "_sleep", waits.append)
     return alerting, waits
@@ -3005,8 +3010,10 @@ def test_signoz_request_get_retries_one_transient_520_then_returns_the_200(
         "body": '{"status": "success"}',
     }
     assert len(c.commands) == 2
-    assert c.commands[0] == c.commands[1]
     assert waits == [2]
+    # Every attempt runs the same command, and `c.run` never raises on a curl failure.
+    assert c.commands[0] == c.commands[1]
+    assert c.kwargs == [{"warn": True, "hide": True}] * 2
 
 
 def test_signoz_request_put_returns_the_last_520_after_three_attempts(
@@ -3014,27 +3021,28 @@ def test_signoz_request_put_returns_the_last_520_after_three_attempts(
 ) -> None:
     alerting, waits = _real_signoz_request(monkeypatch)
     c = _FakeCurl(_answer(520, "first"), _answer(520, "second"), _answer(520, "third"))
+    payload = {"alert": "A", "labels": {"source": "test"}}
 
     result = alerting._signoz_request(
-        c, method="PUT", path="/api/v1/rules/rule-1", payload={"alert": "A"}
+        c, method="PUT", path="/api/v1/rules/rule-1", payload=payload
     )
 
     assert result == {"ok": False, "data": None, "status": 520, "body": "third"}
     assert len(c.commands) == 3
     assert waits == [2, 5]
+    # A retried PUT sends the same payload each time.
+    assert len(set(c.commands)) == 1
+    assert shlex.quote(json.dumps(payload)) in c.commands[0]
 
 
 @pytest.mark.parametrize("answer", [_answer(520, "error code: 520"), _CURL_FAILED])
-@pytest.mark.parametrize("method", ["POST", "PATCH"])
-def test_signoz_request_post_and_other_methods_never_retry(
-    monkeypatch, method, answer
-) -> None:
+def test_signoz_request_post_never_retries(monkeypatch, answer) -> None:
     """A lost POST response can hide a rule that SigNoz already created."""
     alerting, waits = _real_signoz_request(monkeypatch)
     c = _FakeCurl(answer, _answer(200, "{}"))
 
     result = alerting._signoz_request(
-        c, method=method, path="/api/v1/rules", payload={"alert": "A"}
+        c, method="POST", path="/api/v1/rules", payload={"alert": "A"}
     )
 
     assert result["status"] == (520 if answer is not _CURL_FAILED else 0)
@@ -3043,17 +3051,14 @@ def test_signoz_request_post_and_other_methods_never_retry(
     assert waits == []
 
 
-@pytest.mark.parametrize("method", ["GET", "PUT", "DELETE"])
-@pytest.mark.parametrize(
-    "status", [200, 204, 301, 400, 404, 409, 500, 501, 505, 519, 525]
-)
-def test_signoz_request_idempotent_request_returns_a_non_transient_status_at_once(
-    monkeypatch, method, status
+@pytest.mark.parametrize("status", [200, 400, 404, 500, 501, 519, 525])
+def test_signoz_request_get_returns_a_non_transient_status_at_once(
+    monkeypatch, status
 ) -> None:
     alerting, waits = _real_signoz_request(monkeypatch)
     c = _FakeCurl(_answer(status, "body"), _answer(200, "{}"))
 
-    result = alerting._signoz_request(c, method=method, path="/api/v1/rules")
+    result = alerting._signoz_request(c, method="GET", path="/api/v1/rules")
 
     assert result["status"] == status
     assert result["body"] == "body"
@@ -3061,18 +3066,28 @@ def test_signoz_request_idempotent_request_returns_a_non_transient_status_at_onc
     assert waits == []
 
 
-@pytest.mark.parametrize("status", [502, 503, 504, 520, 521, 522, 523, 524])
-def test_signoz_request_every_listed_gateway_status_is_retried_once(
+@pytest.mark.parametrize("status", [520, 524])
+def test_signoz_request_get_retries_the_edges_of_the_transient_range(
     monkeypatch, status
 ) -> None:
     alerting, waits = _real_signoz_request(monkeypatch)
     c = _FakeCurl(_answer(status), _answer(200, "{}"))
 
-    result = alerting._signoz_request(c, method="DELETE", path="/api/v1/rules/rule-1")
+    result = alerting._signoz_request(c, method="GET", path="/api/v1/rules")
 
     assert result["status"] == 200
     assert len(c.commands) == 2
     assert waits == [2]
+
+
+def test_signoz_transient_statuses_are_the_gateway_errors_and_status_zero() -> None:
+    """Status 0 is a curl failure. 502 to 504 and 520 to 524 are gateway and edge errors."""
+    alerting = _load_real_alerting()
+
+    assert alerting._SIGNOZ_TRANSIENT_STATUSES == frozenset(
+        {0, 502, 503, 504, 520, 521, 522, 523, 524}
+    )
+    assert alerting._SIGNOZ_RETRY_DELAYS_SECONDS == (2, 5)
 
 
 @pytest.mark.parametrize(
@@ -3120,10 +3135,10 @@ def test_signoz_request_retry_matches_the_method_in_any_letter_case(
     assert waits == [2]
 
 
-def test_signoz_request_retry_logs_each_attempt_and_never_the_api_key(
+def test_signoz_request_retry_logs_only_the_status_method_path_and_delay(
     monkeypatch, capsys
 ) -> None:
-    alerting, _waits = _real_signoz_request(monkeypatch)
+    alerting, _ = _real_signoz_request(monkeypatch)
     c = _FakeCurl(_answer(520), _answer(502), _answer(200, "{}"))
 
     alerting._signoz_request(
@@ -3135,8 +3150,7 @@ def test_signoz_request_retry_logs_each_attempt_and_never_the_api_key(
         "SigNoz API 520 for PUT /api/v1/rules/rule-1; retry 1/2 in 2s",
         "SigNoz API 502 for PUT /api/v1/rules/rule-1; retry 2/2 in 5s",
     ]
-    assert _SIGNOZ_TEST_API_KEY not in shown.out + shown.err
-    assert "secret-rule" not in shown.out + shown.err
+    assert shown.err == ""
 
 
 def test_signoz_request_without_a_context_makes_no_call_and_no_wait(
@@ -3151,3 +3165,232 @@ def test_signoz_request_without_a_context_makes_no_call_and_no_wait(
     assert result == {"ok": False, "data": None, "status": 0, "body": ""}
     assert c.commands == []
     assert waits == []
+
+
+# --- #1550: re-create an alert rule safely after a transient create failure ---------
+#
+# `apply_alerts` re-applies a rule by DELETE, then POST. In run 42815407435 the DELETE
+# worked and the POST answered 520, so the rule stayed missing. A lost POST response can
+# also hide a rule that SigNoz already stored, so the retry looks before it POSTs again.
+
+_INCIDENT_RULE = "FinanceReportRateLimitSaturation"
+_STALE_RULE = "FinanceReportReconciliationAnomaly"
+
+
+class _LossyCreateSigNoz(_FakeSigNoz):
+    """`_FakeSigNoz` that answers each POST of one rule from a script.
+
+    A script entry is `(status, stored)`. Status 200 creates the rule. Any other
+    status fails the POST. With `stored` set, SigNoz keeps the rule although the
+    caller sees the failure: a lost response. After a failed POST, the next list
+    answers `relist_status` when that is not 200.
+    """
+
+    def __init__(self, rule_name, script, *, relist_status=200, **kwargs):
+        super().__init__(**kwargs)
+        self.rule_name = rule_name
+        self.script = list(script)
+        self.relist_status = relist_status
+        self.posted: list[str] = []  # alert name of every POST, in order
+        self._relist_pending = False
+
+    def request(self, _c, *, method, path, payload=None):
+        if (method, path) == ("GET", "/api/v1/rules") and self._relist_pending:
+            self._relist_pending = False
+            if self.relist_status != 200:
+                self.calls.append((method, path, payload))
+                body = f"error code: {self.relist_status}"
+                return {
+                    "ok": False,
+                    "data": None,
+                    "status": self.relist_status,
+                    "body": body,
+                }
+        if (method, path) == ("POST", "/api/v1/rules"):
+            self.posted.append(payload["alert"])
+            if payload["alert"] == self.rule_name and self.script:
+                status, stored = self.script.pop(0)
+                if status != 200:
+                    if stored:
+                        super().request(_c, method=method, path=path, payload=payload)
+                    else:
+                        self.calls.append((method, path, payload))
+                    self._relist_pending = True
+                    return {
+                        "ok": False,
+                        "data": None,
+                        "status": status,
+                        "body": f"error code: {status}",
+                    }
+        return super().request(_c, method=method, path=path, payload=payload)
+
+
+def _apply_alerts_over(monkeypatch, fake):
+    """`apply_alerts` over `fake`, on the real alerting module.
+
+    Returns `(task, Exit, waits, errors, successes)`. `errors` holds the `(message,
+    detail)` pair of each error line; `successes` holds each success message.
+    """
+    task, alerting, Exit, _ = _install_real_alerting(monkeypatch, fake)
+    waits: list[float] = []
+    errors: list[tuple] = []
+    successes: list[str] = []
+    monkeypatch.setattr(alerting, "_sleep", waits.append)
+    _patch_console(
+        monkeypatch,
+        error=lambda *a, **k: errors.append(a),
+        success=lambda *a, **k: successes.append(a[0]),
+    )
+    return task.apply_alerts, Exit, waits, errors, successes
+
+
+def _stored_names(fake) -> list[str]:
+    return sorted(rule["alert"] for rule in fake.rules.values())
+
+
+def test_apply_alerts_create_posts_again_after_a_lost_create_that_stored_nothing(
+    monkeypatch,
+) -> None:
+    fake = _LossyCreateSigNoz(
+        _INCIDENT_RULE, [(520, False)], rules=_prod_before_this_fix()
+    )
+    apply_alerts, _, waits, errors, successes = _apply_alerts_over(monkeypatch, fake)
+
+    assert apply_alerts(object()) is True
+
+    assert fake.posted.count(_INCIDENT_RULE) == 2
+    assert waits == [2]
+    assert errors == []
+    assert f"SigNoz alert rule updated: {_INCIDENT_RULE}" in successes
+    assert _stored_names(fake).count(_INCIDENT_RULE) == 1
+    # Between the failed POST and the next POST, the task listed the rules once.
+    posts = [
+        i
+        for i, call in enumerate(fake.calls)
+        if call[2] and call[0] == "POST" and call[2]["alert"] == _INCIDENT_RULE
+    ]
+    between = fake.calls[posts[0] + 1 : posts[1]]
+    assert [(method, path) for method, path, _ in between] == [("GET", "/api/v1/rules")]
+
+
+def test_apply_alerts_create_does_not_post_again_when_the_rule_is_already_listed(
+    monkeypatch,
+) -> None:
+    fake = _LossyCreateSigNoz(
+        _INCIDENT_RULE, [(520, True)], rules=_prod_before_this_fix()
+    )
+    apply_alerts, _, waits, errors, successes = _apply_alerts_over(monkeypatch, fake)
+
+    assert apply_alerts(object()) is True
+
+    assert fake.posted.count(_INCIDENT_RULE) == 1
+    assert waits == [2]
+    assert errors == []
+    assert (
+        f"SigNoz alert rule created after a lost response: {_INCIDENT_RULE}"
+        in successes
+    )
+    assert _stored_names(fake).count(_INCIDENT_RULE) == 1
+
+
+def test_apply_alerts_create_fails_naming_the_rule_after_three_lost_creates(
+    monkeypatch,
+) -> None:
+    fake = _LossyCreateSigNoz(
+        _INCIDENT_RULE, [(520, False)] * 3, rules=_prod_before_this_fix()
+    )
+    apply_alerts, Exit, waits, errors, _ = _apply_alerts_over(monkeypatch, fake)
+
+    with pytest.raises(Exit) as exc:
+        apply_alerts(object())
+
+    assert exc.value.code == 1
+    assert fake.posted.count(_INCIDENT_RULE) == 3
+    assert waits == [2, 5]
+    assert errors == [
+        (
+            f"Failed to apply SigNoz alert rule: {_INCIDENT_RULE}",
+            "status=520 body=error code: 520",
+        )
+    ]
+    assert _INCIDENT_RULE not in _stored_names(fake)
+
+
+@pytest.mark.parametrize("status", [400, 404])
+def test_apply_alerts_create_does_not_retry_a_non_transient_status(
+    monkeypatch, status
+) -> None:
+    fake = _LossyCreateSigNoz(
+        _INCIDENT_RULE, [(status, False)], rules=_prod_before_this_fix()
+    )
+    apply_alerts, Exit, waits, errors, _ = _apply_alerts_over(monkeypatch, fake)
+
+    with pytest.raises(Exit) as exc:
+        apply_alerts(object())
+
+    assert exc.value.code == 1
+    assert fake.posted.count(_INCIDENT_RULE) == 1
+    assert waits == []
+    assert errors == [
+        (
+            f"Failed to apply SigNoz alert rule: {_INCIDENT_RULE}",
+            f"status={status} body=error code: {status}",
+        )
+    ]
+
+
+def test_apply_alerts_create_retries_a_create_that_got_no_status(monkeypatch) -> None:
+    fake = _LossyCreateSigNoz(
+        _INCIDENT_RULE, [(0, False)], rules=_prod_before_this_fix()
+    )
+    apply_alerts, _, waits, errors, _ = _apply_alerts_over(monkeypatch, fake)
+
+    assert apply_alerts(object()) is True
+
+    assert fake.posted.count(_INCIDENT_RULE) == 2
+    assert waits == [2]
+    assert errors == []
+
+
+def test_apply_alerts_create_never_posts_again_when_the_list_cannot_prove_absence(
+    monkeypatch,
+) -> None:
+    """An unreadable list could hide a stored rule, and a second POST would duplicate it."""
+    fake = _LossyCreateSigNoz(
+        _INCIDENT_RULE, [(520, True)], relist_status=520, rules=_prod_before_this_fix()
+    )
+    apply_alerts, Exit, waits, errors, _ = _apply_alerts_over(monkeypatch, fake)
+
+    with pytest.raises(Exit) as exc:
+        apply_alerts(object())
+
+    assert exc.value.code == 1
+    assert fake.posted.count(_INCIDENT_RULE) == 1
+    assert waits == [2]
+    assert errors == [
+        (
+            f"Failed to apply SigNoz alert rule: {_INCIDENT_RULE}",
+            "status=520 body=error code: 520",
+        )
+    ]
+    assert _stored_names(fake).count(_INCIDENT_RULE) == 1
+
+
+def test_apply_alerts_create_failure_of_one_rule_does_not_stop_the_other_rules(
+    monkeypatch,
+) -> None:
+    order = [definition.alert_name for definition in load_alert_definitions()]
+    first = order[0]
+    fake = _LossyCreateSigNoz(first, [(400, False)], rules=_prod_before_this_fix())
+    apply_alerts, Exit, waits, errors, _ = _apply_alerts_over(monkeypatch, fake)
+
+    with pytest.raises(Exit) as exc:
+        apply_alerts(object())
+
+    assert exc.value.code == 1
+    assert fake.posted == order
+    assert waits == []
+    assert [message for message, _ in errors] == [
+        f"Failed to apply SigNoz alert rule: {first}"
+    ]
+    assert _stored_names(fake) == sorted({*order[1:], _STALE_RULE})

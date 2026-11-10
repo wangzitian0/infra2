@@ -21,9 +21,10 @@ from common.core.environ import get_env, service_domain, with_env_suffix
 
 
 # Retry only a request that is safe to repeat. A lost POST response can hide a rule
-# that SigNoz already created. Status 0 means curl failed or printed no status (#1550).
+# that SigNoz already created, so a caller that POSTs must look before it POSTs again.
+# Status 0 means curl failed or printed no status (#1550).
 _SIGNOZ_RETRY_METHODS = frozenset({"GET", "PUT", "DELETE"})
-_SIGNOZ_RETRY_STATUSES = frozenset({0, 502, 503, 504, 520, 521, 522, 523, 524})
+_SIGNOZ_TRANSIENT_STATUSES = frozenset({0, 502, 503, 504, 520, 521, 522, 523, 524})
 # One entry per retry: seconds to wait before attempt 2, then before attempt 3.
 _SIGNOZ_RETRY_DELAYS_SECONDS = (2, 5)
 _sleep = time.sleep
@@ -111,7 +112,7 @@ def _signoz_request(c, *, method: str, path: str, payload: dict | None = None):
             body = raw
             status = 0
 
-        if status not in _SIGNOZ_RETRY_STATUSES or attempt == len(retry_delays):
+        if status not in _SIGNOZ_TRANSIENT_STATUSES or attempt == len(retry_delays):
             break
         # Log the method, path and delay only: never the API key, header or payload.
         print(

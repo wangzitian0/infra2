@@ -184,7 +184,29 @@ def apply_alerts(c, dry_run=False, prune=False):
         created = alerting._signoz_request(
             c, method="POST", path="/api/v1/rules", payload=payload
         )
-        if created["ok"]:
+        # A transient failure (edge 5xx, no status) can hide a rule SigNoz already
+        # stored. Wait, list the rules, and POST again only when the name is absent: a
+        # second POST of a stored rule would duplicate it (#1550).
+        retries, lost_response = 0, False
+        while (
+            not created["ok"]
+            and created["status"] in alerting._SIGNOZ_TRANSIENT_STATUSES
+            and retries < len(alerting._SIGNOZ_RETRY_DELAYS_SECONDS)
+        ):
+            alerting._sleep(alerting._SIGNOZ_RETRY_DELAYS_SECONDS[retries])
+            retries += 1
+            relisted = alerting._signoz_request(c, method="GET", path="/api/v1/rules")
+            if not relisted["ok"]:
+                break  # an unreadable list cannot prove absence: never risk a duplicate
+            if find_signoz_rule_id(relisted.get("data"), alert_name):
+                lost_response = True
+                break
+            created = alerting._signoz_request(
+                c, method="POST", path="/api/v1/rules", payload=payload
+            )
+        if lost_response:
+            success(f"SigNoz alert rule created after a lost response: {alert_name}")
+        elif created["ok"]:
             success(
                 f"SigNoz alert rule {'updated' if existing_id else 'created'}: "
                 f"{alert_name}"
