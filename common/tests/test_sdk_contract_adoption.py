@@ -32,6 +32,7 @@ DEPRECATED_RUNTIME_MODULES = {
 
 DEPRECATED_SDK_ATTRS: dict[tuple[str, str], str] = {
     ("infra2_sdk.ci", "inspect_compose"): "infra2_sdk.rules.compose.inspect_compose",
+    ("infra2_sdk.deploy", "dispatch_and_wait"): "infra2_sdk.deploy.poll_until_healthy",
     ("infra2_sdk.deploy", "identifier_kind"): "infra2_sdk.refs.identifier_kind",
     (
         "infra2_sdk.manifests",
@@ -40,6 +41,7 @@ DEPRECATED_SDK_ATTRS: dict[tuple[str, str], str] = {
     ("infra2_sdk.observability", "ScheduleError"): "infra2_sdk.ci.ScheduleError",
     ("infra2_sdk.observability", "crons_in"): "infra2_sdk.ci.crons_in",
     ("infra2_sdk.observability", "largest_gap"): "infra2_sdk.ci.largest_gap",
+    ("infra2_sdk.refs", "resolve_branch_to_sha"): "infra2_sdk.refs.resolve_to_sha",
 }
 
 
@@ -319,7 +321,7 @@ def test_the_sdk_contract_scan_flags_private_and_deprecated_use() -> None:
         assert _sdk_contract_violations(f"import {mod}\n{mod}.{attr}\n") == [expected]
     assert (
         _sdk_contract_violations(
-            "from infra2_sdk.refs import ls_remote_rows, redact_repo\n"
+            "from infra2_sdk.refs import classify_ref, resolve_to_sha\n"
             "from other_pkg._private import _x\n"
         )
         == []
