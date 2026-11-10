@@ -79,3 +79,11 @@ def test_the_daily_report_runs_after_a_failed_watchdog_with_its_outcome() -> Non
         report["env"]["INFRA2_WATCHDOG_OUTCOME"]
         == "${{ steps." + watchdog["id"] + ".outcome }}"
     )
+
+
+def test_ops_checks_audit_job_runs_on_ubuntu_24_04_for_playwright() -> None:
+    """#1543: the audit job runs the scheduled_audit hook slot, whose bootstrap installs
+    Playwright chromium. ubuntu-latest is 26.04, where Playwright 1.57.0 has no build."""
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    runs_on = jobs["audit"]["runs-on"]
+    assert runs_on == "ubuntu-24.04"
