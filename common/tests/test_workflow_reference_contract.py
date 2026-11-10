@@ -22,6 +22,7 @@ ACTION_VERSION_RE = re.compile(r"v(\d+)(?:\.\d+\.\d+)?")
 MINIMUM_OFFICIAL_ACTION_MAJORS = {
     "actions/checkout": 7,
     "actions/deploy-pages": 5,
+    "actions/download-artifact": 8,
     "actions/setup-go": 6,
     "actions/setup-python": 6,
     "actions/upload-artifact": 7,

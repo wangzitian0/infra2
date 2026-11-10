@@ -39,6 +39,15 @@ gates:
     job: test-deployer-logic
     blocks_merge: true
     failure_semantics: Deployer config-hash idempotency, container healthcheck verification, pre-deploy schema gate, service discovery, or unit tests fail.
+  - id: infra_ci.unit_shard
+    stage: github_ci.merge_authority
+    task_category: deployer_contract
+    workflow: .github/workflows/infra-ci.yml
+    job: test-unit-shard
+    # Not a required context itself: the required check `Test Deployer Hash Logic`
+    # (infra_ci.deployer_logic) needs it, runs with always(), and fails unless every shard succeeded.
+    blocks_merge: false
+    failure_semantics: A unit test in this shard of the traced pytest run fails (#1499).
   - id: infra_ci.op_healthcheck
     stage: github_ci.merge_authority
     task_category: secret_preflight
