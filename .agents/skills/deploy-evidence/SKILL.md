@@ -37,9 +37,11 @@ Authorize production deployment of vX.Y.Z? Reply "deploy vX.Y.Z" or "hold".
 ### Phase 3: Prod Promote Dispatch
 A "deploy" covers only the tag it names. Immediately before dispatch, get a live reply from the owner in this session; an earlier or asynchronous answer is not enough. The Root section `Production reservation` defines this step. Then trigger the official promote:
 ```bash
+uv run --locked python -m tools.harness prod-queue  # must exit 0 immediately before the dispatch
 gh workflow run reconcile-iac-inputs.yml -f promote_prod=true -f after=vX.Y.Z
 gh run watch <run-id> --exit-status  # run in the background; the host wakes you when it ends
 ```
+Exit 1: a production run is active. Do not dispatch, because a dispatch cancels a pending run. Wait until each run completes. Cancel a run that waits for approval only when your own command output started it, or with an owner reply. Exit 4: GitHub is unreadable. Do not dispatch.
 
 ### Phase 4: Touch Reality Physical Probes (Read-Only via Existing Tools)
 Never declare success based only on GitHub green! Verify the physical system using existing tools:
