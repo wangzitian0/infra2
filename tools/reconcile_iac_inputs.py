@@ -1002,6 +1002,17 @@ def sync_app_releases(
     }
 
 
+#: Hook slots whose check reads the release lineage with ``git log`` (#1567). The truealpha
+#: nightly verdict check dates a check from the commit that first declared it. Other slots
+#: need no release tag, so a production smoke run adds no fetch.
+LINEAGE_HOOK_SLOTS = frozenset({"scheduled_audit"})
+
+
+def release_ref_for_slot(slot: str, version_ref: str) -> str:
+    """The release ref a checkout for ``slot`` must hold, or ``""`` when the slot needs none."""
+    return version_ref if slot in LINEAGE_HOOK_SLOTS else ""
+
+
 def resolve_app_hook_cwd(
     service: str,
     source_sha: str,
@@ -1012,9 +1023,11 @@ def resolve_app_hook_cwd(
 ) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
     """Return ``(app_cwd, temp_dir_or_none)`` containing an App checkout at ``source_sha`` (#1416).
 
-    A ``vX.Y.Z`` ``release_ref`` is also fetched as a tag (#1567): a depth-1 fetch of one
-    commit carries no tag names, and an App check that reads its release with
-    ``git rev-parse <tag>^{commit}`` fails without it.
+    A ``vX.Y.Z`` ``release_ref`` is also fetched as a tag with its full commit history and no
+    file contents (#1567). A depth-1 fetch of one commit carries no tag names, so an App check
+    that runs ``git rev-parse <tag>^{commit}`` fails. Full history is on purpose: a check that
+    dates a name with ``git log -S`` on a one-commit history gets the release date and not the
+    date that the name first appeared.
     """
     sub_rel = SERVICE_TO_SUBMODULE_PATH.get(service, "")
     if sub_rel:
@@ -1059,7 +1072,16 @@ def resolve_app_hook_cwd(
         )
         if RELEASE_TAG_RE.fullmatch(release_ref):
             fetched = runner(
-                ["git", "fetch", "-q", "--depth", "1", "origin", "tag", release_ref],
+                [
+                    "git",
+                    "fetch",
+                    "-q",
+                    "--filter=blob:none",
+                    "--no-tags",
+                    "origin",
+                    "tag",
+                    release_ref,
+                ],
                 cwd=checkout_dir,
                 capture_output=True,
                 text=True,
@@ -1393,7 +1415,6 @@ def run_post_deploy_app_hooks(
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 service,
                 source_sha,
-                release_ref=version_ref,
                 repo_root=repo_root,
                 runner=runner,
             )
@@ -1552,7 +1573,7 @@ def run_scheduled_app_audits(
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 service,
                 source_sha,
-                release_ref=version_ref,
+                release_ref=release_ref_for_slot(slot, version_ref),
                 repo_root=repo_root,
                 runner=runner,
             )
@@ -2426,7 +2447,7 @@ def main(argv: list[str] | None = None) -> int:
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 args.hook_service,
                 args.hook_source_sha,
-                release_ref=version_ref,
+                release_ref=release_ref_for_slot(args.run_hook_slot, version_ref),
                 repo_root=repo_root,
             )
         elif args.hook_service:
@@ -2444,7 +2465,7 @@ def main(argv: list[str] | None = None) -> int:
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 args.hook_service,
                 resolved_sha,
-                release_ref=version_ref,
+                release_ref=release_ref_for_slot(args.run_hook_slot, version_ref),
                 repo_root=repo_root,
             )
         else:
