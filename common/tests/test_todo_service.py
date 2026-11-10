@@ -100,6 +100,16 @@ def test_todo_app_endpoints_contract(monkeypatch) -> None:
     assert data["ok"] is True
     assert data["service"] == "platform/todo"
     assert data["domain"] == "todo.zitian.party"
+    assert data["version"] == "unknown"
+    assert data["git_sha"] == "unknown"
+
+    monkeypatch.setenv("GIT_COMMIT_SHA", "abcdef1234567890")
+    resp_ver = client.get("/api/health")
+    assert resp_ver.status_code == 200
+    data_ver = resp_ver.json()
+    assert data_ver["version"] == "abcdef1234567890"
+    assert data_ver["git_sha"] == "abcdef1234567890"
+    monkeypatch.delenv("GIT_COMMIT_SHA", raising=False)
 
     # 2. /api/canary/status
     resp = client.get("/api/canary/status")

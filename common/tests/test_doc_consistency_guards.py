@@ -357,3 +357,18 @@ def test_observability_ssot_matches_alert_rules_files_and_digest_entrypoints() -
     standards_doc = (ROOT / "docs/ssot/ops.standards.md").read_text(encoding="utf-8")
     assert "当前尚未接入" not in standards_doc
     assert "common.deploy.schema_gate" in standards_doc
+
+
+def test_canary_todo_docs_match_deep_probe_and_manifest_contracts() -> None:
+    """Verify Canary Todo SSOT and README stay synchronized with deep probes and manifests."""
+    for rel_path in ("docs/ssot/platform.canary_todo.md", "platform/30.todo/README.md"):
+        text = (ROOT / rel_path).read_text(encoding="utf-8")
+        assert "alias minio" not in text.lower(), f"stale minio alias in {rel_path}"
+        assert "alias `minio`" not in text.lower(), f"stale minio alias in {rel_path}"
+        assert "canary_todo_probe" in text, f"missing canary_todo_probe in {rel_path}"
+        assert "runtime-hooks.manifest.json" in text, (
+            f"missing runtime-hooks.manifest.json in {rel_path}"
+        )
+        assert "validate_startup_environment" in text or "assert_environment" in text, (
+            f"missing startup env validation reference in {rel_path}"
+        )

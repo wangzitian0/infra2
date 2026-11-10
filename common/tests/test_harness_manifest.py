@@ -538,3 +538,35 @@ def test_non_external_application_rejects_malformed_release_tag(
     result = validate_manifest(tmp_path, manifest)
 
     assert [error.code for error in result.errors] == ["release-tag"]
+
+
+def test_external_application_registry_and_health_route_binding(monkeypatch) -> None:
+    monkeypatch.delenv("INTERNAL_DOMAIN", raising=False)
+    manifest = load_manifest(ROOT / "harness" / "repos.yaml")
+
+    # 1. Drifted health URL for a registered external-application -> health-registry-drift
+    drifted = yaml.safe_load(yaml.safe_dump(manifest))
+    fin = next(r for r in drifted["repositories"] if r["id"] == "finance-report")
+    fin["health"]["production"] = "https://wrong.example.test/api/health"
+    res_drift = validate_manifest(ROOT, drifted, submodules_expected=False)
+    assert [e.code for e in res_drift.errors] == ["health-registry-drift"]
+
+    # 2. Unregistered external-application -> app-registry
+    unreg = yaml.safe_load(yaml.safe_dump(manifest))
+    unreg["repositories"].append(
+        {
+            "id": "ghost-app",
+            "path": "repos/ghost-app",
+            "checkout": "submodule",
+            "role": "external-application",
+            "governance": "autonomous",
+            "contract": "snapshot",
+            "source": "https://example.test/ghost-app",
+            "release_identity": "image",
+            "release_tag": "v0.1.0",
+            "authority": ["AGENTS.md"],
+            "optional": True,
+        }
+    )
+    res_unreg = validate_manifest(ROOT, unreg, submodules_expected=False)
+    assert [e.code for e in res_unreg.errors] == ["app-registry"]

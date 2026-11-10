@@ -528,7 +528,7 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 > ✅ **已退役**:每小时部署合成 compose 的 route canary(`tools/dokploy_route_canary.py` + `common/dokploy_route_canary.py`,约 1000 行)整体删除,不设观察期。其原有覆盖由更便宜的常驻机制承接:公网路由可达性 → `PublicRouteFacet` 声明渲染进 probe runner(SOP-006)+ Cloudflare watchdog;Dokploy 控制面/部署状态 → 带外 watchdog 的 `run_dokploy_status_check`(缺 `DOKPLOY_API_KEY` fail-closed 归类 `configuration`,签名由 canary 移交);部署卡死 → deploy-queue guard(常驻 sidecar 插件)。真实 preview 路由回归由 app PR preview 流程自身承担。
 
 ### SOP-007B: deploy_v2 预览位探针(已退役,#1477)
-> ✅ **已退役**:把 App 部署到保留预览位的 deploy_v2 探针(`ops-checks.yml` 的定时/PR job、`deploy.yml` 的部署前预检 job 及其 CLI)整体删除。Canary 只指 Canary Todo(`platform/30.todo`,见 [`platform.canary_todo.md`](platform.canary_todo.md)):它每 60 s 在 staging 与 production 写 Redis、登录 Postgres、对 S3 写读删。生产保护不变:prod deploy 仍需 `staging_validated=true`(RL-DATA-1)与 `production` environment 的 owner 批准。
+> ✅ **已退役**:把 App 部署到保留预览位的 deploy_v2 探针(`ops-checks.yml` 的定时/PR job、`deploy.yml` 的部署前预检 job 及其 CLI)整体删除。Canary 只指 Canary Todo(`platform/30.todo`,见 [`platform.canary_todo.md`](platform.canary_todo.md)):它每 60 s 在 staging 与 production 写 Redis、在 Postgres 执行只读角色登录与临时表写读删、对 S3 写读删。生产保护不变:prod deploy 仍需 `staging_validated=true`(RL-DATA-1)与 `production` environment 的 owner 批准。
 
 ### SOP-008: 可用率账本 + 日报/周报/月报
 - 账本:部署 platform/alerting 后,宿主机 `/var/lib/infra2-availability-ledger${ENV_SUFFIX}/availability-ledger.json` 应每分钟更新(`updated_at`);Worker `GET /outages`(status token)列出 production 失联边沿。
