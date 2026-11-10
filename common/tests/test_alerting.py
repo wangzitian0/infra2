@@ -894,8 +894,6 @@ def test_only_staging_and_preview_environments_are_report_only() -> None:
         "preview",
         "pr-5",
         "branch-main",
-        "commit-1ab32d5",
-        "tag-v1-2-3",
     ]
     assert [v for v in pages if is_report_only_environment(v)] == []
     assert [v for v in reports if not is_report_only_environment(v)] == []

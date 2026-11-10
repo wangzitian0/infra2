@@ -129,8 +129,9 @@ reconcile-iac-inputs.yml with promote_prod=true, at a tag that has soaked in sta
 
 **A merge to `main`**: nothing deploys. `main` ahead of the newest tag means
 *unreleased*, which is the normal state, not drift. `/webhook` authenticates the push
-and answers `ignored`. An app repository's PR gets a preview stack instead; infra2 has
-no persistent preview environment — a PR's `deploy_v2 live canary` is its preview.
+and answers `ignored`. An app repository's PR or branch can stand up an ephemeral
+preview stack via `deploy_v2 --type preview/{pr,branch}`; infra2 has no persistent
+preview environment.
 
 See [`docs/ssot/ops.pipeline.md`](../../docs/ssot/ops.pipeline.md) §2–3 for the
 authoritative version of all three.

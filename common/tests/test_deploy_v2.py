@@ -41,11 +41,15 @@ SHA_IAC = "d" * 40
 
 @pytest.fixture(autouse=True)
 def _stub_iac_on_main_guard(monkeypatch):
-    # The #465 on-main guard calls GitHub's compare API. Stub it module-wide so routing
-    # tests (app and platform) never network; the guard's own behavior is covered by the
-    # assert_iac_ref_on_main unit tests, which call the real imported function (a local name
-    # unaffected by this monkeypatch on the dv2 module attribute).
+    # The #465 / #1500 on-main and train guards call GitHub's compare API or read harness/repos.yaml.
+    # Stub them module-wide so routing tests (app and platform) never network; each guard's
+    # own behavior is covered by dedicated unit tests below, which call the real imported
+    # functions directly (local names unaffected by this monkeypatch on dv2 module attributes).
     monkeypatch.setattr(dv2, "assert_iac_ref_on_main", lambda *a, **k: None)
+    monkeypatch.setattr(dv2, "assert_app_version_ref_on_main", lambda *a, **k: None)
+    monkeypatch.setattr(
+        dv2, "assert_app_version_ref_matches_train", lambda *a, **k: None
+    )
 
 
 def _fake_resolve_image_ref(ref, **_kw):
@@ -125,7 +129,6 @@ def calls(monkeypatch):
     monkeypatch.setattr(dv2, "resolve_image_ref", _fake_resolve_image_ref)
     monkeypatch.setattr(dv2, "resolve_pr", _fake_resolve_pr)
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
-    monkeypatch.setattr(dv2, "resolve_branch_to_sha", lambda ref, **kw: SHA_IAC)
     monkeypatch.setattr(dv2, "verify_app_manifests", lambda *a, **kw: {})
     return rec
 
@@ -672,50 +675,15 @@ def test_preview_pr_rejects_non_numeric(calls):
     assert calls["preview"] is None
 
 
-def test_preview_commit_slot_is_short_sha(calls):
-    res = _deploy(deploy_type="preview/commit", version_ref="c" * 40)
-    assert res.target.sub_domain == "report-commit-ccccccc"
-    assert calls["preview"]["kind"] == "commit"
-
-
-def test_preview_commit_rejects_a_branch(calls):
-    # CF3: branch and commit are now distinct types — commit takes ONLY a sha
-    with pytest.raises(ValueError, match="does not accept a 'branch'"):
-        _deploy(deploy_type="preview/commit", version_ref="main")
+@pytest.mark.parametrize("retired_type", ["preview/commit", "preview/tag", "canary"])
+def test_retired_preview_and_canary_types_rejected(calls, retired_type):
+    # #1500: preview/commit, preview/tag, and canary are retired; only preview/branch and preview/pr remain
+    with pytest.raises(ValueError, match="unknown deploy type"):
+        _deploy(deploy_type=retired_type, version_ref="main")
     assert calls["preview"] is None
 
 
-def test_preview_commit_rejects_short_sha_with_surface_message(calls):
-    # CF4: a short sha resolves to itself (not a full commit) -> clear, version_ref-level error
-    with pytest.raises(ValueError, match="not a full commit sha"):
-        _deploy(deploy_type="preview/commit", version_ref="abc1234")
-    assert calls["preview"] is None
-
-
-def test_preview_tag_slot_is_dns_safe_and_pulls_tag(calls):
-    res = _deploy(deploy_type="preview/tag", version_ref="v1.2.3")
-    assert res.target.sub_domain == "report-tag-v1-2-3"
-    assert calls["preview"]["image_ref"] == "v1.2.3"  # release image, not a sha
-    assert calls["image_waits"][-1]["image_ref"] == "v1.2.3"
-
-
-# --- canary: any code, fixed reserved slot --------------------------------
-
-
-def test_canary_runs_code_on_the_reserved_slot(calls):
-    res = _deploy(deploy_type="canary", version_ref="main")
-    assert res.backend == "preview-lifecycle"
-    assert calls["preview"]["kind"] == "canary"
-    assert calls["preview"]["value"] == dv2.CANARY_SLOT
-    assert res.target.sub_domain == f"report-{dv2.CANARY_SLOT}"
-
-
-def test_canary_defaults_version_ref_to_main(calls):
-    _deploy(deploy_type="canary", version_ref="")
-    assert calls["preview"]["code"] == SHA_CODE  # resolved 'main'
-
-
-# --- iac_ref drives the clone (iac_branch dissolved) ----------------------
+# --- iac_ref drives the clone (bare 40-hex SHA rejected in preview) --------
 
 
 def test_iac_branch_ref_is_cloned_verbatim(calls):
@@ -723,46 +691,16 @@ def test_iac_branch_ref_is_cloned_verbatim(calls):
     assert calls["preview"]["branch"] == "v1.2.3"
 
 
-def test_iac_sha_falls_back_to_default_branch(calls):
-    # a sha can't be `git clone -b`'d (#342) -> default branch; iac_ref stays the record
-    res = _deploy(deploy_type="preview/pr", version_ref=7, iac_ref="d" * 40)
-    assert calls["preview"]["branch"] == "main"
-    assert res.target.iac_ref == SHA_IAC
-
-
-def test_preview_iac_sha_can_clone_a_branch_resolving_to_the_same_sha(calls):
-    res = _deploy(
-        deploy_type="preview/pr",
-        version_ref=7,
-        iac_ref="d" * 40,
-        iac_clone_ref="fix/preview-proof",
-    )
-    assert calls["preview"]["branch"] == "fix/preview-proof"
-    assert res.target.iac_ref == SHA_IAC
-
-
-def test_preview_iac_clone_ref_rejects_authority_mismatch(monkeypatch, calls):
-    monkeypatch.setattr(dv2, "resolve_branch_to_sha", lambda *_a, **_kw: "e" * 40)
-    with pytest.raises(ValueError, match="not authoritative iac_ref SHA"):
+@pytest.mark.parametrize("preview_type", ["preview/pr", "preview/branch"])
+def test_preview_rejects_bare_sha_iac_ref(calls, preview_type):
+    # #1500 (AC4): preview requires a branch or release-tag iac_ref; bare 40-hex SHAs cannot be cloned by git clone -b
+    with pytest.raises(ValueError, match="requires a branch or release-tag iac_ref"):
         _deploy(
-            deploy_type="canary",
-            version_ref="main",
+            deploy_type=preview_type,
+            version_ref=7 if preview_type == "preview/pr" else "main",
             iac_ref="d" * 40,
-            iac_clone_ref="fix/other-head",
         )
     assert calls["preview"] is None
-
-
-def test_fixed_env_rejects_iac_clone_ref(calls):
-    with pytest.raises(ValueError, match="only supported for preview/canary"):
-        _deploy(
-            deploy_type="prod",
-            version_ref="v1.2.3",
-            staging_validated=True,
-            code_reviewed=True,
-            iac_clone_ref="fix/not-authority",
-        )
-    assert calls["fixed"] is None
 
 
 @pytest.mark.parametrize("bad_iac", ["main", "d" * 40])
@@ -844,10 +782,12 @@ def test_truealpha_preview_routes_to_preview_backend_with_its_own_service(calls)
     assert calls["preview"]["service"] == "truealpha/app"
 
 
-def test_truealpha_canary_routes_to_preview_backend_too(calls):
-    _deploy(service="truealpha/app", deploy_type="canary", version_ref="main")
+def test_truealpha_preview_pr_routes_to_preview_backend_too(calls):
+    _deploy(service="truealpha/app", deploy_type="preview/pr", version_ref=42)
     assert calls["fixed"] is None
     assert calls["preview"]["service"] == "truealpha/app"
+    assert calls["preview"]["kind"] == "pr"
+    assert calls["preview"]["value"] == 42
 
 
 def test_unknown_service_rejected(calls):
@@ -2076,3 +2016,214 @@ def test_preview_and_promote_derive_repo_when_repo_is_none(monkeypatch):
             staging_validated=False,
             break_glass=False,
         )
+
+
+# --- #1500 AC1: Deployer._checkout_ref() prefers vX.Y.Z over production/vX.Y.Z ---
+
+
+def test_deployer_checkout_ref_prefers_release_tag_over_production_marker(monkeypatch):
+    """#1500 (AC1): when HEAD carries both production/v3.1.24 and v3.1.24, git describe
+    --tags --exact-match can return production/v3.1.24 (invalid iac_ref). _checkout_ref()
+    must inspect git tag --points-at HEAD and return the release tag v3.1.24."""
+    from common.deploy.deployer import Deployer
+
+    calls_seen: list[list[str]] = []
+
+    def fake_run(cmd, *, capture_output=True, text=True, check=False):
+        calls_seen.append(list(cmd))
+        if cmd[:3] == ["git", "tag", "--points-at"]:
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout="production/v3.1.24\nv3.1.24\nv3.1.9\n", stderr=""
+            )
+        raise AssertionError(f"unexpected git call: {cmd}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert Deployer._checkout_ref() == "v3.1.24"
+    assert calls_seen == [["git", "tag", "--points-at", "HEAD"]]
+
+
+def test_deployer_checkout_ref_falls_back_when_no_release_tag_points_at_head(
+    monkeypatch,
+):
+    """#1500 (AC1): when HEAD has only a non-release tag or no tag, _checkout_ref() falls
+    back to commit SHA, never returning production/vX.Y.Z."""
+    from common.deploy.deployer import Deployer
+
+    def fake_run(cmd, *, capture_output=True, text=True, check=False):
+        if cmd[:3] == ["git", "tag", "--points-at"]:
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout="production/v3.1.24\n", stderr=""
+            )
+        if cmd[:2] == ["git", "rev-parse"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=SHA_IAC + "\n", stderr="")
+        raise AssertionError(f"unexpected git call: {cmd}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert Deployer._checkout_ref() == SHA_IAC
+
+
+# --- #1500 AC2: assert_app_version_ref_on_main guard ------------------------
+
+
+@pytest.mark.parametrize("status", ["behind", "identical"])
+def test_assert_app_version_ref_on_main_accepts_reachable_commit(status):
+    from common.deploy.preflight import assert_app_version_ref_on_main
+
+    def fake_transport(url, *, headers, timeout):
+        assert (
+            url
+            == "https://api.github.com/repos/wangzitian0/truealpha/compare/main...v0.2.80"
+        )
+        return httpx.Response(
+            200,
+            json={"status": status},
+            request=httpx.Request("GET", url),
+        )
+
+    assert_app_version_ref_on_main(
+        "v0.2.80",
+        "staging",
+        service="truealpha/app",
+        repo="https://github.com/wangzitian0/truealpha.git",
+        transport=fake_transport,
+    )
+
+
+@pytest.mark.parametrize("status", ["ahead", "diverged"])
+def test_assert_app_version_ref_on_main_rejects_off_main_commit(status):
+    from common.deploy.preflight import assert_app_version_ref_on_main
+
+    def fake_transport(url, *, headers, timeout):
+        return httpx.Response(
+            200,
+            json={"status": status},
+            request=httpx.Request("GET", url),
+        )
+
+    with pytest.raises(ValueError, match="is not on wangzitian0/truealpha main"):
+        assert_app_version_ref_on_main(
+            "v0.2.99-rc1",
+            "staging",
+            service="truealpha/app",
+            repo="https://github.com/wangzitian0/truealpha.git",
+            transport=fake_transport,
+        )
+
+
+def test_assert_app_version_ref_on_main_falls_back_to_local_git_on_api_error(
+    monkeypatch, tmp_path
+):
+    from common.deploy.preflight import assert_app_version_ref_on_main
+
+    def fake_transport(url, *, headers, timeout):
+        return httpx.Response(
+            502,
+            text="Bad Gateway",
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(
+        _preflight,
+        "assert_after_on_main",
+        lambda ref, root: (_ for _ in ()).throw(SystemExit("::error::off-main")),
+    )
+    with pytest.raises(
+        RuntimeError,
+        match="cannot prove version_ref 'v0.2.47' is on wangzitian0/finance_report main",
+    ):
+        assert_app_version_ref_on_main(
+            "v0.2.47",
+            "staging",
+            service="finance_report/app",
+            repo="https://github.com/wangzitian0/finance_report.git",
+            transport=fake_transport,
+            sleep=lambda _s: None,
+            max_attempts=1,
+            repo_root=tmp_path,
+        )
+
+
+# --- #1500 AC3: App fixed-env train SSOT (harness/repos.yaml + --bootstrap) ---
+
+
+def test_assert_app_version_ref_matches_train_enforces_repos_yaml(tmp_path):
+    from common.deploy.preflight import assert_app_version_ref_matches_train
+
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.47\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.80\n",
+        encoding="utf-8",
+    )
+
+    # Matching tag passes
+    assert_app_version_ref_matches_train(
+        "truealpha/app", "v0.2.80", "staging", repo_root=tmp_path
+    )
+
+    # Mismatched tag fails closed without --bootstrap
+    with pytest.raises(
+        ValueError, match="does not match harness/repos.yaml release_tag"
+    ):
+        assert_app_version_ref_matches_train(
+            "truealpha/app", "v0.2.79", "staging", repo_root=tmp_path
+        )
+
+    # Mismatched tag passes with bootstrap=True
+    assert_app_version_ref_matches_train(
+        "truealpha/app",
+        "v0.2.79",
+        "staging",
+        bootstrap=True,
+        repo_root=tmp_path,
+    )
+
+
+def test_deploy_v2_defaults_app_version_ref_from_repos_yaml_and_threads_bootstrap(
+    monkeypatch, calls, capsys
+):
+    """#1500 (AC3): omitting --version-ref on staging/prod App deploy defaults to
+    harness/repos.yaml release_tag, and --bootstrap threads through CLI -> deploy_v2."""
+    monkeypatch.setattr(dv2, "default_version_ref", lambda svc: "v0.2.80")
+    recorded_train_checks: list[tuple[str, str, str, bool]] = []
+
+    def fake_train_guard(svc, vref, dtype, *, bootstrap=False, **_kw):
+        recorded_train_checks.append((svc, vref, dtype, bootstrap))
+
+    monkeypatch.setattr(dv2, "assert_app_version_ref_matches_train", fake_train_guard)
+    monkeypatch.setattr(
+        "common.deploy.dokploy_client.get_dokploy", lambda **_kw: object()
+    )
+
+    # 1. Default version_ref when omitted
+    res = _deploy(service="truealpha/app", deploy_type="staging", version_ref="")
+    assert res.detail["image_ref"] == "v0.2.80"
+    assert calls["fixed"]["image_ref"] == "v0.2.80"
+    assert recorded_train_checks[-1] == ("truealpha/app", "v0.2.80", "staging", False)
+
+    # 2. CLI --bootstrap flag threads bootstrap=True
+    rc = dv2.main(
+        [
+            "--service",
+            "truealpha/app",
+            "--type",
+            "staging",
+            "--version-ref",
+            "v0.2.79",
+            "--iac-ref",
+            "v1.2.3",
+            "--domain",
+            "zitian.party",
+            "--bootstrap",
+        ]
+    )
+    assert rc == 0
+    assert recorded_train_checks[-1] == ("truealpha/app", "v0.2.79", "staging", True)
+    assert "[AUDIT] deploy_v2 bootstrap=True" in capsys.readouterr().err

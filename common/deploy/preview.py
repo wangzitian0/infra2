@@ -37,7 +37,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -61,6 +61,8 @@ from common.deploy.env_config import (
 )
 from common.observability.openpanel import openpanel_env
 from infra2_sdk.refs import resolve_to_sha
+
+PreviewType = Literal["branch", "pr"]
 
 
 @dataclass(frozen=True)

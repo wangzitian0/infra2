@@ -40,7 +40,10 @@ def retired_references(name: str, text: str) -> list[str]:
 def test_no_workflow_references_the_retired_deploy_canary() -> None:
     names = {path.name for path in WORKFLOWS}
     # The scan must read the files that held the canary, or it passes on nothing.
-    assert {"deploy.yml", "ops-checks.yml", "app-deploy-request.yml"} <= names
+    assert {"deploy.yml", "ops-checks.yml"} <= names
+    assert "app-deploy-request.yml" not in names
+    assert "deploy-report-main.yml" not in names
+    assert "preview-teardown.yml" not in names
     found = [
         reference
         for path in WORKFLOWS

@@ -49,17 +49,16 @@
 因为 `deploy_v2` 是 app + platform 的统一前门,所有部署侧守卫都在此收口。
 
 **核心铁律**:
-- `report-branch-main`(main 预览)随 main 合并**自动**重部署——「永远看到 main 现在长啥样」的活环境。
+- **preview 按需拉起/销毁**(`preview/branch` 与 `preview/pr`)——按 PR 或分支验证完整栈,不再随 main 合并自动维持常驻 preview。
 - **staging / prod 只部署 release tag**(不可变镜像,不接受 branch/sha);staging 与 prod **钉同一个 tag**
-  (**promote-not-rebuild**,不是部署 main sha)。
+  (**promote-not-rebuild**,不是部署 main sha),App 的固定环境版本由 `harness/repos.yaml` (`release_tag`) 驱动。
 - 统一入口 `tools/deploy_v2.py`;**prod 对真实数据 deny-by-default**,缺 `--staging-validated --code-reviewed` 直接 fail-closed。
 
 | 目标 | 触发 | 部署什么 | 入口(示意)| 数据 | 生命周期 |
 |------|------|---------|------|------|---------|
-| **report-branch-main**(preview)| **自动**(main 合并即发)| main 尖端 | `deploy_v2 --type preview/branch` | 临时 DB | teardown 前 |
-| **其余 preview**(pr/commit/tag)| 手动按需 | PR# / sha / tag | `deploy_v2 --type preview/{pr,commit,tag}` | 临时 DB | teardown 前 |
-| **app staging** | **手动**(app)| release tag(钉和 prod 同一个)| `deploy_v2 --type staging --version-ref vX.Y.Z` | staging 数据 | 长期(同构 prod)|
-| **app prod** | **手动**(app)| **同一个 release tag** | `deploy_v2 --type prod --version-ref vX.Y.Z --staging-validated --code-reviewed` | 真实 prod 数据 | 长期 |
+| **preview**(branch/pr)| 手动按需 | 分支名 / PR# | `deploy_v2 --type preview/{branch,pr}` | 临时 DB | teardown 前 |
+| **app staging** | **release tag 推送**(`reconcile-iac-inputs.yml` 读 `harness/repos.yaml`)或手动 `--bootstrap` | release tag(钉和 prod 同一个)| `deploy_v2 --type staging --version-ref vX.Y.Z` | staging 数据 | 长期(同构 prod)|
+| **app prod** | **显式 promote**(`reconcile-iac-inputs.yml` `promote_prod=true`)或手动 `--bootstrap` | **同一个 release tag** | `deploy_v2 --type prod --version-ref vX.Y.Z --staging-validated --code-reviewed` | 真实 prod 数据 | 长期 |
 | **平台服务**(iac_pinned)**staging** | **release tag 推送**(`v*.*.*`)→ **自动 staging**(soak)| **该 tag** 作 `iac_ref` | `reconcile-iac-inputs.yml` → `deploy_v2 → iac_runner` | — | 长期 |
 | **平台服务**(iac_pinned)**prod** | **显式 promote**(`workflow_dispatch` `promote_prod=true` / `--promote-prod`)——tag 推送**不**自动动 prod | **同一 tag** | 同上 | — | 长期 |
 | **L1 Bootstrap**(iac-runner)| `bootstrap/06.iac_runner/**` 变更 | release tag SHA | 随 `reconcile-iac-inputs.yml` (`promote_prod=true`) 前置 self-update (或 `deploy.yml` 手动 `workflow_dispatch`) | — | 随 release train |
@@ -89,7 +88,7 @@ staging/production stacks. Both backend healthchecks therefore grant a bounded 4
 startup period. The 2026-08-17 exact-head reserved-slot preview needed 293.6 seconds for the complete
 create/deploy/readiness/cleanup operation, and a 2026-08-18 fixed-staging cold start needed
 177 seconds before its first healthy response. This leaves cold-host margin while the outer
-canary still fails closed at its configured 600-second deadline. The emitted stage record
+readiness poll still fails closed at its configured 600-second deadline. The emitted stage record
 uses that configured deadline, not the SDK's generic stage default; a `hard-breach` is a red
 time-budget failure even if health is green.
 
@@ -212,9 +211,9 @@ Details and value meanings: [`core.harness.md` §6](./core.harness.md#6-workspac
 统一坐标 **`(service, type, version_ref, iac_ref)`**——四个正交轴:
 
 - `service`: `service_registry` key(如 `platform/postgres`、`finance_report/app`)。
-- `type`: `preview/{branch,pr,commit,tag}` / `staging` / `prod`。
-- `version_ref`: 多态——PR# / sha / **tag** / branch / release(app 业务镜像身份)。
-- `iac_ref`: **钉 infra2 栈修订**(staging/prod 只接受 tag)。
+- `type`: `preview/{branch,pr}` / `staging` / `prod`。
+- `version_ref`: 多态——PR# / branch / **tag**(app 业务镜像身份;staging/prod 默认对齐 `harness/repos.yaml`)。
+- `iac_ref`: **钉 infra2 栈修订**(staging/prod 只接受 tag,preview 只接受 branch 或 tag)。
 
 prod red lines 由 `deploy_v2` 强制(deny-by-default):`--staging-validated` + `--code-reviewed`,否则 fail-closed。
 
@@ -222,13 +221,13 @@ prod red lines 由 `deploy_v2` 强制(deny-by-default):`--staging-validated` + `
 
 App 不再 checkout/执行 infra2，也不再向 infra2 发送 push-based 跨仓请求。所有 App 的 Preview / Staging / Production 生命周期、伴随服务（`companions`）推进与运行时钩子（`runtime-hooks.manifest.json`）均收敛在 `infra2` 的 `reconcile-iac-inputs.yml` 与 `common/deploy/app_contract.py`：
 
-1. **App Release Tag 单一真相源 (`harness/repos.yaml`)**：每个 `external-application` 在 `harness/repos.yaml` 中声明当前固定环境目标 `release_tag`（如 `finance-report: v0.2.46`、`truealpha: v0.2.77`）。
+1. **App Release Tag 单一真相源 (`harness/repos.yaml`)**：每个 `external-application` 在 `harness/repos.yaml` 中声明当前固定环境目标 `release_tag`（如 `finance-report: v0.2.51`、`truealpha: v0.2.83`），且该 tag 必须在对应 App 仓库 `origin/main` 上（`assert_app_version_ref_on_main`）。
 2. **契约预检与模板注入 (`common/deploy/app_contract.py`)**：`deploy_v2` 在固定环境（staging/prod）与 preview 部署前调用 `verify_app_manifests`，直接从源 App 仓库对应 ref 读取所需的环境契约清单（与栈内 `env.manifest.json` 比对）并渲染注入 `secrets.ctmpl`（`VAULT_SECRETS_TEMPLATE`）。
 3. **伴随服务原子跟随 (`ServiceSpec.companions`)**：`truealpha/app` 声明 `companions=("truealpha/data_engine",)`。当 `reconcile_iac_inputs.py` 检测到 `harness/repos.yaml` 中 App `release_tag` 或 `10.app/**` 变更时，按顺序生成主服务与伴随服务的独立 `deploy_v2 --version-ref <app_release_tag> --iac-ref <iac_ref>` 命令，并将伴随服务从平台 `iac_pinned` 批次中剔除，杜绝双部署。
 4. **SDK Hook Slot 调度 (`infra2_sdk.manifests.run_hook_slot`)**：`common/deploy/app_contract.py::execute_app_hook_slot` 与 `reconcile_iac_inputs.py --run-hook-slot` 负责在对应生命周期阶段读取 App 的 `runtime-hooks.manifest.json` 并执行声明的钩子槽位（`HOOK_SLOTS`）。
 5. **生产证据与时间窗守卫 (`validate_app_release_evidence`)**：生产晋升前校验 `infra2_sdk.deploy.DeployRequest` 证据链、单次执行限制（`run_attempt == 1`）与接收时间窗（`production_request_accept_until`）。
 
-The workflow `deploy.yml` with `type=prod` also takes a typed `iac_ref` for manual or break-glass dispatches.
+The workflow `deploy.yml` with `type=prod` also takes a typed `iac_ref` for manual or break-glass dispatches (`bootstrap=true` when overriding `harness/repos.yaml`).
 `deploy_v2` requires `iac_ref` to be a release tag on main. The run waits for the owner in the `production`
 environment. Record its coordinate (`service`, `version_ref`, `iac_ref`) in the issue.
 
@@ -237,7 +236,7 @@ environment. Record its coordinate (`service`, `version_ref`, `iac_ref`) in the 
 A production release has one Feishu card (`common/alerting/release_card.py`, `tools/release_card.py`).
 The receiver is the only writer. A sender never posts to Feishu.
 
-- The pre-deploy job of the request (retired with `app-deploy-request.yml` in #1416) creates the card after the plan
+- The pre-deploy job of the release workflow creates the card after the plan
   step and writes its id to the job output `card_message_id`.
   The last step of this job shows "Waiting for approval" with the time from `production_request_accept_until`. That
   function is the one that the age check of the `deploy` job uses, so the card and the check give the same time. A
@@ -503,24 +502,25 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
 
 ## 10. Preview 生命周期回收 & 泄露处置 SOP
 
-**生命周期是严格 1:1**:infra2 起一个 preview,就负责在它的 PR 关闭时把它拆掉。preview 是被**强势管理**的资源,**不靠定期 GC 兜底**——残留的 preview 是**异常**(teardown 被跳过或失败),不是常态。
+**生命周期是严格 1:1**:infra2 起一个 preview,就负责在它的 PR 关闭或分支删除后将其拆掉。preview 是被**强势管理**的资源,**不靠定期 GC 兜底**——残留的 preview 是**异常**(teardown 被跳过或失败),不是常态。
 
-**事件驱动的拆除归 infra2**(app 不碰 Dokploy):PR 关闭时,app repo 发一个中立信号(`repository_dispatch` type `preview-teardown`,`client_payload.pr_number`),`preview-teardown.yml` 收到后走统一前门 `deploy_v2 --type preview/pr --version-ref <n> --down`(幂等)做权威拆除;失败 → 飞书告警(泄露将至)。app 侧不再自己拆。
+**拆除归 infra2**(app 不碰 Dokploy):通过统一前门 `deploy_v2 --type preview/{pr,branch} --version-ref <val> --down`(幂等)做权威拆除。
 
-**泄露 = 告警,不是静默清理。** 每小时的 `ops-checks` job `preview-leak-check`(`47 * * * *`)只**检测**:列出 `finance_report/preview` 下的 compose,把两类无歧义的孤儿判为泄露——
+**泄露 = 告警,不是静默清理。** 每小时的 `ops-checks` job `preview-leak-check`(`47 * * * *`)只**检测**:列出 `finance_report/preview` 与 `truealpha/preview` 下的 compose,把三类无歧义的孤儿判为泄露——
 
-1. **pre-rename 裸 slug**(无 `branch-/pr-/commit-/tag-` 前缀,如改名前遗留的 `main`);
-2. **已关闭 PR 的 `pr-<n>`**(1:1 teardown 漏了)。
+1. **无有效当前前缀的孤儿别名**(无 `branch-` 或 `pr-` 前缀,如遗留的裸 `main` 或已退役的槽位);
+2. **已关闭 PR 的 `pr-<n>`**(1:1 teardown 漏了);
+3. **远端分支已删除的 `branch-<name>`**。
 
-保留:`branch-main`、`canary-preview`、`tag-*`、所有有效 kind。拉不到 open-PR 列表时,只判裸-slug(fail-safe)。**检测到泄露 → job 失败 → 飞书告警**。它**从不**在 CI 里删东西。
+拉不到 open-PR 或远端分支列表时,只判无有效前缀的孤儿(fail-safe)。**检测到泄露 → job 失败 → 飞书告警**。它**从不**在 CI 里删东西。
 
 ### 泄露告警处置 SOP
 
 收到 `🚨 Dokploy preview LEAK detected` 飞书告警时:
 
 1. **看清单**:打开告警里的 run,`Detect leaked previews` step 列出了泄露的 compose 名 + 原因。
-2. **确认确实是泄露**:对应 PR 已关?是改名遗留的裸 slug?(别误删正在用的 branch-main / canary / 开放 PR 的预览。)
-3. **根因 1:1 为什么没收**:查那个 PR 关闭时的 teardown 是否 fire/成功——**修因比扫尾重要**(否则会反复泄露)。
+2. **确认确实是泄露**:对应 PR 已关或远端分支已删?是无有效前缀的孤儿?(别误删正在用的有效分支或开放 PR 的预览。)
+3. **根因 1:1 为什么没收**:查对应预览为何未执行 `--down` teardown——**修因比扫尾重要**(否则会反复泄露)。
 4. **处置(手动、确定性)**:确认后在能访问 Dokploy 的机器上跑:
    ```bash
    python -m tools.preview_leak_check --remediate   # 删掉已确认的泄露 compose(含 volume)

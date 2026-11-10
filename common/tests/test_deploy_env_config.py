@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import infra2_sdk
 import pytest
 
 from common.deploy import env_config as ec
@@ -137,38 +136,16 @@ def test_preview_alias_pr_accepts_string_value():
     assert ec.preview_alias("pr", "42").alias == "pr-42"
 
 
-def test_preview_alias_commit_truncates_to_short_sha():
-    long_sha = "1ab32d5e6f7089abcdef0123456789abcdef0123"
-    a = ec.preview_alias("commit", long_sha)
-    assert a.value == "1ab32d5"  # short sha matches IMAGE_TAG / service.version
-    assert a.alias == "commit-1ab32d5"
-    assert a.env_suffix == "-commit-1ab32d5"
-    assert a.compose_name == "finance-report-preview-commit-1ab32d5"
-    assert a.deployment_environment == "commit-1ab32d5"
-    assert (
-        a.app_url(domain="zitian.party") == "https://report-commit-1ab32d5.zitian.party"
-    )
-
-
-def test_preview_alias_commit_lowercases():
-    assert ec.preview_alias("commit", "ABCDEF1").value == "abcdef1"
-
-
 @pytest.mark.parametrize("bad", ["0", "-3", "abc", "", "1.5"])
 def test_preview_alias_pr_rejects_non_positive_int(bad):
     with pytest.raises(ValueError, match="positive PR number"):
         ec.preview_alias("pr", bad)
 
 
-@pytest.mark.parametrize("bad", ["xyz", "12345", "g123456", ""])
-def test_preview_alias_commit_rejects_non_sha(bad):
-    with pytest.raises(ValueError, match="hex commit sha"):
-        ec.preview_alias("commit", bad)
-
-
-def test_preview_alias_unknown_kind_raises():
+@pytest.mark.parametrize("retired", ["commit", "tag", "canary", "release"])
+def test_preview_alias_unknown_or_retired_kind_raises(retired):
     with pytest.raises(ValueError, match="unknown preview kind"):
-        ec.preview_alias("release", "v1.0.0")
+        ec.preview_alias(retired, "v1.0.0")
 
 
 def test_preview_aliases_are_unique_per_kind_value():
@@ -176,37 +153,14 @@ def test_preview_aliases_are_unique_per_kind_value():
     names = {
         ec.preview_alias("branch", "main").compose_name,
         ec.preview_alias("pr", 5).compose_name,
-        ec.preview_alias("commit", "1ab32d5").compose_name,
-        ec.preview_alias("tag", "v1.2.3").compose_name,
     }
-    assert len(names) == 4
+    assert len(names) == 2
 
 
 def test_preview_alias_is_frozen():
     a = ec.preview_alias("pr", 5)
     with pytest.raises(Exception):
         a.alias = "pr-6"  # type: ignore[misc]
-
-
-def test_preview_tag_alias_is_dns_safe():
-    from common.deploy.env_config import preview_alias
-
-    a = preview_alias("tag", "v1.2.3")
-    assert a.value == "v1.2.3"  # canonical tag kept for the image ref
-    assert a.alias == "tag-v1-2-3"  # dots -> dashes for the single DNS label
-    assert a.env_suffix == "-tag-v1-2-3"
-    assert a.app_url(domain="zitian.party") == "https://report-tag-v1-2-3.zitian.party"
-
-
-def test_preview_tag_alias_rejects_non_tag():
-    import pytest
-
-    from common.deploy.env_config import preview_alias
-
-    with pytest.raises(ValueError, match="vX.Y.Z release tag"):
-        preview_alias("tag", "1.2.3")  # missing leading v
-    with pytest.raises(ValueError, match="vX.Y.Z release tag"):
-        preview_alias("tag", "main")
 
 
 def test_app_compose_env_config_rejects_unregistered_service():
@@ -249,8 +203,5 @@ def test_cors_allowed_origins_includes_truealpha():
     origins = ec.cors_allowed_origins("zitian.party")
     assert "https://truealpha.zitian.party" in origins
     assert "https://truealpha-staging.zitian.party" in origins
-
-
-def test_canary_slot_is_the_sdk_constant() -> None:
-    """env_config re-exports the SDK object directly."""
-    assert ec.CANARY_SLOT is infra2_sdk.CANARY_SLOT
+    assert "https://report-canary-preview.zitian.party" not in origins
+    assert "https://report-commit-*.zitian.party" not in origins

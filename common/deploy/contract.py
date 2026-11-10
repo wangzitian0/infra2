@@ -25,19 +25,23 @@ comes from the app repo (``code_version``) while the compose/env wiring comes fr
 (``iac_ref``) — two refs that drift independently; and infra2 is multi-service, so what to
 deploy is its own dimension. ``sub_domain`` is the stack-instance label: pinned by ``env``
 for staging/prod, free (the preview alias) for preview — this is what lets the coexisting
-``report-branch-main`` / ``report-pr-N`` / ``report-commit-<sha>`` previews be addressed by name.
+``report-branch-main`` / ``report-pr-N`` previews be addressed by name.
 
 SSOT: docs/ssot/core.environments.md §4.7.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from pathlib import Path
 import re
 from dataclasses import dataclass, replace
 from functools import lru_cache
 
+import yaml
 from infra2_sdk.runtime.environment import is_preview_alias
 
+from common.core.constants import REPO_ROOT
 from common.core import registry as service_registry
 from common.deploy.env_config import env_config, preview_alias
 
@@ -251,7 +255,7 @@ def sub_domain_for(
     """The canonical ``sub_domain`` label for a target.
 
     staging/prod are pinned by ``env`` (``base`` + the env suffix); preview takes the
-    alias (``branch-<name>`` / ``pr-<N>`` / ``commit-<sha7>`` / ``tag-<slug>``).
+    alias (``branch-<name>`` / ``pr-<N>``).
     """
     cfg = env_config(env)
     if cfg.dynamic:  # preview
@@ -261,9 +265,7 @@ def sub_domain_for(
         if spec.prod_only:
             raise ValueError(f"{spec.key} has no preview instances (prod_only)")
         if alias_kind is None:
-            raise ValueError(
-                "preview requires an alias_kind (branch | pr | commit | tag | canary)"
-            )
+            raise ValueError("preview requires an alias_kind (branch | pr)")
         return (
             f"{spec.base_subdomain}{preview_alias(alias_kind, alias_value).env_suffix}"
         )
@@ -354,7 +356,7 @@ def validate_deploy_target(target: DeployTarget, spec: ServiceSpec) -> None:
             raise ValueError(
                 f"sub_domain {target.sub_domain!r} is not a valid preview slot for "
                 f"{spec.base_subdomain!r} (expected {spec.base_subdomain}-branch-<name> / "
-                f"-pr-<N> / -commit-<sha7>)"
+                f"-pr-<N>)"
             )
         for env_name in ("staging", "prod"):
             if target.sub_domain == _pinned_sub_domain(spec, env_name):
@@ -378,14 +380,14 @@ def _pinned_sub_domain(spec: ServiceSpec, env: str) -> str:
 
 def _is_valid_preview_sub_domain(spec: ServiceSpec, sub_domain: str) -> bool:
     # a preview slot is uniformly <kind>-<value>:
-    #   -branch-<name> / -pr-<N> / -commit-<sha7> / -tag-<v1-2-3> (dots/slashes -> dashes).
+    #   -branch-<name> / -pr-<N> (dots/slashes -> dashes).
     prefix = f"{spec.base_subdomain}-"
     if not sub_domain.startswith(prefix):
         return False
     slot = sub_domain[len(prefix) :]
     if "_" in slot or slot != slot.lower():
         return False
-    if slot.startswith("commit-") and len(slot) != len("commit-") + 7:
+    if not slot.startswith(("branch-", "pr-")):
         return False
     return is_preview_alias(slot)
 
@@ -447,8 +449,7 @@ _RELEASE_FORMS = ("tag",)  # a retained, immutable release image: vX.Y.Z
 _ALL_REF_FORMS = _CODE_FORMS + _RELEASE_FORMS
 
 # The closed set of deploy types. Adding a scenario = adding one entry here (open-closed);
-# existing types are untouched. `canary` is an EXPLICIT type (guardrail: never an emergent
-# property of "empty params") — it is a preview deploy whose execution adds health+teardown.
+# existing types are untouched.
 #
 # accepted_forms encodes the (type × form) matrix:
 #   staging        — RELEASE tag only; staging mirrors prod (promote-not-rebuild), so a
@@ -456,10 +457,6 @@ _ALL_REF_FORMS = _CODE_FORMS + _RELEASE_FORMS
 #   prod           — RELEASE tag only (vX.Y.Z); a code ref fails closed.
 #   preview/branch — a branch tip (default main) -> report-branch-<name>.
 #   preview/pr     — a PR number (resolve_pr -> the PR head image) -> report-pr-<N>.
-#   preview/commit — a pinned commit sha -> report-commit-<sha7>.
-#   preview/tag    — a release tag -> report-tag-<slug>.
-#   canary         — any ref form, code OR release (_ALL_REF_FORMS); runs on a fixed
-#                    throwaway canary-preview slot (a deploy-path probe, kept maximally flexible).
 # Every preview slot is uniformly <kind>-<value>; `branch` (not a bare `main`) is what makes
 # that uniform — so downstream slot parsing/generation never special-cases the main tip.
 DEPLOY_TYPES: dict[str, DeployTypeSpec] = {
@@ -471,16 +468,43 @@ DEPLOY_TYPES: dict[str, DeployTypeSpec] = {
     "preview/pr": DeployTypeSpec(
         "preview/pr", env="preview", alias_kind="pr", accepted_forms=("pr",)
     ),
-    "preview/commit": DeployTypeSpec(
-        "preview/commit", env="preview", alias_kind="commit", accepted_forms=("sha",)
-    ),
-    "preview/tag": DeployTypeSpec(
-        "preview/tag", env="preview", alias_kind="tag", accepted_forms=("tag",)
-    ),
-    "canary": DeployTypeSpec(
-        "canary", env="preview", alias_kind="canary", accepted_forms=_ALL_REF_FORMS
-    ),
 }
+
+_APP_REPO_ID_TO_SERVICE: dict[str, str] = {
+    "finance-report": "finance_report/app",
+    "truealpha": "truealpha/app",
+}
+_HARNESS_REPOS_REL_PATH = "harness/repos.yaml"
+
+
+def default_version_ref(service: str, *, repo_root: Path = REPO_ROOT) -> str | None:
+    """Return the release-train ``release_tag`` from ``harness/repos.yaml`` for an App service."""
+    target = Path(repo_root) / _HARNESS_REPOS_REL_PATH
+    if not target.is_file():
+        return None
+    data = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
+    entries = (
+        (data.get("repositories") or data.get("repos"))
+        if isinstance(data, Mapping)
+        else None
+    )
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        if entry.get("role") != "external-application":
+            continue
+        repo_id = str(entry.get("id") or "")
+        mapped_service = _APP_REPO_ID_TO_SERVICE.get(repo_id)
+        release_tag = entry.get("release_tag")
+        if (
+            mapped_service == service
+            and isinstance(release_tag, str)
+            and release_tag.strip()
+        ):
+            return release_tag.strip()
+    return None
 
 
 def deploy_type_spec(deploy_type: str) -> DeployTypeSpec:
@@ -510,24 +534,29 @@ def validate_ref_form(deploy_type: str, form: str) -> None:
 
 # Fixed envs pin their IaC to an immutable release tag, NOT a moving sha/branch. This is the
 # iac_ref counterpart to validate_ref_form: it is a separate axis from version_ref (a preview
-# legitimately clones a branch/sha iac_ref), so it keys on the type's env rather than the
+# legitimately clones a branch/tag iac_ref), so it keys on the type's env rather than the
 # version_ref form matrix.
 _TAG_ONLY_IAC_ENVS = ("staging", "prod")
 
 
 def validate_iac_ref_form(deploy_type: str, iac_form: str) -> None:
-    """Fail closed when a fixed env (staging/prod) is handed a non-tag ``iac_ref``.
+    """Fail closed when ``iac_ref`` form violates the deploy type's environment contract.
 
     ``iac_form`` is a ``classify_ref`` output. staging/prod must pin IaC to a release tag
     (``vX.Y.Z``); a ``branch``/``sha`` iac_ref raises here rather than letting a moving
-    infra2 ref reach a fixed env. preview/canary accept any iac_ref form (they clone live
-    refs), so this is a no-op for them.
+    infra2 ref reach a fixed env. preview clones a GitHub branch or tag ref via Dokploy
+    and therefore rejects a bare 40-hex ``sha`` ``iac_ref``.
     """
     spec = deploy_type_spec(deploy_type)
     if spec.env in _TAG_ONLY_IAC_ENVS and iac_form != "tag":
         raise ValueError(
             f"deploy type {deploy_type!r} (env {spec.env!r}) requires a release-tag "
             f"iac_ref (vX.Y.Z), got a {iac_form!r} ref"
+        )
+    if spec.env == "preview" and iac_form == "sha":
+        raise ValueError(
+            f"deploy type {deploy_type!r} (env {spec.env!r}) requires a branch or "
+            f"release-tag iac_ref (Dokploy cannot clone a bare sha), got a {iac_form!r} ref"
         )
 
 
