@@ -40,10 +40,22 @@ run-name: Reconcile IaC Inputs (${{ inputs.promote_prod && 'PROD' || 'staging' }
         type: boolean
         default: false
       run_post_deploy_hooks:
-        description: "Execute post-deploy App smoke hooks after successful deploy_v2 commands"
+        description: "Execute post-deploy App hooks after successful deploy_v2 commands"
         required: false
         type: boolean
         default: true
+      run_hook_slot:
+        description: "Optional explicit App runtime hook slot (e.g. preview_gate) to execute"
+        required: false
+        default: ""
+      hook_service:
+        description: "Optional App service key when running run_hook_slot"
+        required: false
+        default: ""
+      target_url:
+        description: "Optional explicit target URL when running run_hook_slot preview_gate"
+        required: false
+        default: ""
 
 permissions:
   # Explicit production promotion records an immutable production/v* marker.
@@ -326,12 +338,25 @@ jobs:
           [[ -n "$before" ]] && args+=(--before "$before")
           [[ "$dry_run" == "true" ]] && args+=(--dry-run)
           if [[ "${{ inputs.run_post_deploy_hooks != false && 'true' || 'false' }}" == "true" ]]; then
-            args+=(--run-post-deploy-hooks)
+            if [[ "$promote_prod" == "true" ]]; then
+              args+=(--run-post-deploy-hooks --post-deploy-hook-slot smoke)
+            else
+              args+=(--run-post-deploy-hooks --post-deploy-hook-slot smoke,staging_gate)
+            fi
           fi
           if [[ "$promote_prod" == "true" ]]; then
             args+=(--promote-prod --env prod)
           else
             args+=(--env staging)
+          fi
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && -n "${{ inputs.run_hook_slot || '' }}" ]]; then
+            hook_args=(--run-hook-slot "${{ inputs.run_hook_slot || 'preview_gate' }}" --domain "$INTERNAL_DOMAIN")
+            [[ -n "${{ inputs.hook_service || '' }}" ]] && hook_args+=(--hook-service "${{ inputs.hook_service || '' }}")
+            [[ -n "${{ inputs.target_url || '' }}" ]] && hook_args+=(--target-url "${{ inputs.target_url || '' }}")
+            [[ -n "$after" ]] && hook_args+=(--version-ref "$after")
+            python -m tools.reconcile_iac_inputs "${hook_args[@]}"
+            exit 0
           fi
 
           if [[ "$EVENT_NAME" == "schedule" || "${{ inputs.sync_app_releases || false }}" == "true" ]]; then
@@ -355,7 +380,7 @@ jobs:
                       --output-json reconcile-result.json
                       --env staging)
                 if [[ "${{ inputs.run_post_deploy_hooks != false && 'true' || 'false' }}" == "true" ]]; then
-                  args+=(--run-post-deploy-hooks)
+                  args+=(--run-post-deploy-hooks --post-deploy-hook-slot smoke,staging_gate)
                 fi
               fi
             fi

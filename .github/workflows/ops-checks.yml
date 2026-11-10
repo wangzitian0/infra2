@@ -82,7 +82,11 @@ jobs:
     name: Audit deploy dependency graph
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '37 2 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'deploy-guard-audit' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+      issues: write
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
       # Job scope on purpose: `secrets` is not available in a step-level `if:`, so the
@@ -145,6 +149,15 @@ jobs:
 
       - name: Audit App runtime hooks manifests (#1416)
         run: python -m tools.reconcile_iac_inputs --audit-app-hooks
+
+      - name: Run scheduled App runtime audits (#1493)
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          AI_API_KEY: ${{ secrets.ZAI_CODING_CN_API_KEY }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python -m tools.reconcile_iac_inputs --run-scheduled-audit
 
       - name: Audit single deploy trigger (necessity)
         if: env.DOKPLOY_API_KEY != ''

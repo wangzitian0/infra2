@@ -29,8 +29,10 @@ import os
 import subprocess
 import sys
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Callable, Protocol
+from pathlib import Path
+from typing import Any, Callable, Protocol
 from urllib.parse import urlencode
 
 SOAK_WORKFLOW = "reconcile-iac-inputs.yml"
@@ -42,7 +44,11 @@ GH_TIMEOUT_SECONDS = 60
 GREEN = "green"
 EMPTY = "empty"
 NOT_GREEN = "not_green"
+STAGING_GATE_FAILED = "staging_gate_failed"
 ERROR = "error"
+
+EXIT_GREEN = 0
+EXIT_NOT_GREEN = 1
 
 
 class LookupFailed(RuntimeError):
@@ -66,6 +72,80 @@ class Verdict:
     seen: tuple[dict, ...] = ()
     sha: str = ""
 
+    @property
+    def ok(self) -> bool:
+        return self.state == GREEN
+
+    @property
+    def exit_code(self) -> int:
+        return EXIT_GREEN if self.state == GREEN else EXIT_NOT_GREEN
+
+    @property
+    def run_url(self) -> str:
+        return self.url
+
+
+SoakVerdict = Verdict
+
+
+def judge_staging_gate(
+    hook_results: Sequence[Mapping[str, Any]],
+    required_releases: Mapping[str, str],
+) -> tuple[bool, str]:
+    """Verify every required ``(service_id, version_ref)`` has a green ``staging_gate`` verdict (#1493).
+
+    Returns ``(True, detail)`` when all required ``staging_gate`` entries exist and
+    succeeded with no failed entry for that ``(service_id, version_ref)``. Returns
+    ``(False, detail)`` naming any missing or failed ``service_id@version_ref``.
+    """
+    if not required_releases:
+        return True, "no staging_gate releases required"
+    missing: list[str] = []
+    failed: list[str] = []
+    for raw_svc, raw_ver in sorted(required_releases.items()):
+        svc = str(raw_svc).strip()
+        ver = str(raw_ver).strip()
+        matching: list[Mapping[str, Any]] = []
+        for entry in hook_results or ():
+            if not isinstance(entry, Mapping):
+                continue
+            if str(entry.get("slot") or "").strip() != "staging_gate":
+                continue
+            entry_svc = str(
+                entry.get("service_id") or entry.get("service") or ""
+            ).strip()
+            entry_ver = str(entry.get("version_ref") or "").strip()
+            if entry_svc == svc and entry_ver == ver:
+                matching.append(entry)
+        if not matching:
+            missing.append(f"{svc}@{ver}")
+            continue
+        has_true = False
+        has_false = False
+        for entry in matching:
+            raw_ok = entry.get("ok")
+            if isinstance(raw_ok, bool):
+                is_ok = raw_ok
+            else:
+                is_ok = str(entry.get("status") or "").strip() == "pass"
+            if is_ok:
+                has_true = True
+            else:
+                has_false = True
+        if has_false or not has_true:
+            failed.append(f"{svc}@{ver}")
+    if missing or failed:
+        parts: list[str] = []
+        if missing:
+            parts.append(f"missing staging_gate for {', '.join(missing)}")
+        if failed:
+            parts.append(f"failed staging_gate for {', '.join(failed)}")
+        return False, "; ".join(parts)
+    verified = ", ".join(
+        f"{svc}@{ver}" for svc, ver in sorted(required_releases.items())
+    )
+    return True, f"staging_gate passed for {verified}"
+
 
 def _relevant(runs: list[dict], tag: str, sha: str) -> list[dict]:
     """Push-triggered runs of THIS tag on THIS commit, de-duplicated across listings.
@@ -84,7 +164,14 @@ def _relevant(runs: list[dict], tag: str, sha: str) -> list[dict]:
     return list(out.values())
 
 
-def judge_soak(runs: list[dict], *, tag: str, sha: str) -> Verdict:
+def judge_soak(
+    runs: list[dict],
+    *,
+    tag: str,
+    sha: str,
+    hook_results: Sequence[Mapping[str, Any]] | None = None,
+    required_staging_gates: Mapping[str, str] | None = None,
+) -> Verdict:
     """Pure decision over the runs both listings returned.
 
     EMPTY is the only state a caller may retry. A pass needs at least one ``success``
@@ -109,10 +196,24 @@ def judge_soak(runs: list[dict], *, tag: str, sha: str) -> Verdict:
     green = [r for r in relevant if r.get("conclusion") == "success"]
     if green and not concluded_bad:
         newest = max(green, key=lambda r: str(r.get("created_at") or ""))
+        run_url = str(newest.get("html_url") or "")
+        created_at = str(newest.get("created_at") or "")
+        if required_staging_gates:
+            gate_ok, gate_detail = judge_staging_gate(
+                list(hook_results or ()), dict(required_staging_gates)
+            )
+            if not gate_ok:
+                return Verdict(
+                    STAGING_GATE_FAILED,
+                    detail=gate_detail,
+                    url=run_url,
+                    created_at=created_at,
+                    seen=seen,
+                )
         return Verdict(
             GREEN,
-            url=str(newest.get("html_url") or ""),
-            created_at=str(newest.get("created_at") or ""),
+            url=run_url,
+            created_at=created_at,
             seen=seen,
         )
     return Verdict(NOT_GREEN, seen=seen)
@@ -126,6 +227,8 @@ def look_up_soak(
     delay_seconds: float = DEFAULT_DELAY_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
     log: Callable[[str], None] = print,
+    hook_results: Sequence[Mapping[str, Any]] | None = None,
+    required_staging_gates: Mapping[str, str] | None = None,
 ) -> Verdict:
     """Resolve the tag's commit, then look for its soak, retrying only an EMPTY answer.
 
@@ -147,7 +250,16 @@ def look_up_soak(
                 runs.extend(source(key))
             except LookupFailed as exc:
                 errors.append(str(exc))
-        verdict = replace(judge_soak(runs, tag=tag, sha=sha), sha=sha)
+        verdict = replace(
+            judge_soak(
+                runs,
+                tag=tag,
+                sha=sha,
+                hook_results=hook_results,
+                required_staging_gates=required_staging_gates,
+            ),
+            sha=sha,
+        )
         if verdict.state != EMPTY:
             return verdict
         if errors:
@@ -172,6 +284,8 @@ def refusal_message(
         "whose staging reconcile did not pass."
     )
     where = f" (commit {verdict.sha[:12]})" if verdict.sha else ""
+    if verdict.state == STAGING_GATE_FAILED:
+        return f"{base} Staging gate verification failed{where}: {verdict.detail}."
     if verdict.state == EMPTY:
         return (
             f"{base} The run listing was empty on all {attempts} attempts, "
@@ -245,6 +359,22 @@ class GhClient:
         return self._runs(branch=tag)
 
 
+def _parse_hook_results_json(raw: str) -> list[dict[str, Any]]:
+    text = raw.strip()
+    if not text:
+        return []
+    if text.startswith("@"):
+        text = Path(text[1:]).read_text(encoding="utf-8")
+    parsed = json.loads(text)
+    if isinstance(parsed, Mapping) and "hook_results" in parsed:
+        parsed = parsed["hook_results"]
+    if not isinstance(parsed, list) or not all(
+        isinstance(item, Mapping) for item in parsed
+    ):
+        raise ValueError("hook_results JSON must be a list of objects")
+    return [dict(item) for item in parsed]
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -260,11 +390,44 @@ def main(
     parser.add_argument("--workflow", default=SOAK_WORKFLOW)
     parser.add_argument("--attempts", type=int, default=DEFAULT_ATTEMPTS)
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY_SECONDS)
+    parser.add_argument(
+        "--require-staging-gate",
+        action="append",
+        default=[],
+        metavar="SERVICE=VERSION_REF",
+        help="require a green staging_gate hook verdict for SERVICE at VERSION_REF (#1493)",
+    )
+    parser.add_argument(
+        "--hook-results-json",
+        default="",
+        help="JSON string or @path containing hook_results list from staging reconcile (#1493)",
+    )
     args = parser.parse_args(argv)
 
     if args.attempts < 1 or args.delay < 0:
         print("::error::promotion guard: --attempts must be >= 1 and --delay >= 0.")
         return 1
+    required_staging_gates: dict[str, str] = {}
+    for item in args.require_staging_gate:
+        if "=" not in item:
+            print(
+                f"::error::promotion guard: expected SERVICE=VERSION_REF for --require-staging-gate, got {item!r}."
+            )
+            return 1
+        svc, ver = item.split("=", 1)
+        if not svc.strip() or not ver.strip():
+            print(
+                f"::error::promotion guard: expected SERVICE=VERSION_REF for --require-staging-gate, got {item!r}."
+            )
+            return 1
+        required_staging_gates[svc.strip()] = ver.strip()
+
+    try:
+        hook_results = _parse_hook_results_json(args.hook_results_json)
+    except (OSError, ValueError) as exc:
+        print(f"::error::promotion guard: unreadable --hook-results-json: {exc}.")
+        return 1
+
     if client is None:
         if not args.repo:
             print("::error::promotion guard: no repository (set GH_REPO or --repo).")
@@ -277,6 +440,8 @@ def main(
         attempts=args.attempts,
         delay_seconds=args.delay,
         sleep=sleep,
+        hook_results=hook_results,
+        required_staging_gates=required_staging_gates or None,
     )
     if verdict.state == GREEN:
         print(

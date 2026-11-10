@@ -20,11 +20,15 @@ import tools.promotion_soak_guard as guard
 from tools.promotion_soak_guard import (
     EMPTY,
     ERROR,
+    EXIT_GREEN,
+    EXIT_NOT_GREEN,
     GREEN,
     NOT_GREEN,
+    STAGING_GATE_FAILED,
     GhClient,
     LookupFailed,
     judge_soak,
+    judge_staging_gate,
     look_up_soak,
     main,
 )
@@ -380,3 +384,179 @@ def test_the_workflow_guard_step_calls_the_tool_and_keeps_the_gate_inputs() -> N
     assert [job.get("name") for job in workflow["jobs"].values()] == [
         "reconcile iac-pinned inputs"
     ]
+
+
+# --- #1493: staging_gate verification during promotion soak --------------------------
+
+
+def test_judge_staging_gate_passes_when_required_release_is_green() -> None:
+    ok, detail = judge_staging_gate(
+        [
+            {
+                "service_id": "finance_report",
+                "slot": "smoke",
+                "version_ref": "v1.2.9",
+                "ok": True,
+            },
+            {
+                "service_id": "finance_report",
+                "slot": "staging_gate",
+                "version_ref": "v1.2.9",
+                "ok": True,
+            },
+        ],
+        {"finance_report": "v1.2.9"},
+    )
+    assert ok is True
+    assert "staging_gate passed for finance_report@v1.2.9" in detail
+
+
+@pytest.mark.parametrize(
+    ("hook_results", "expected_substr"),
+    [
+        ([], "missing staging_gate for finance_report@v1.2.9"),
+        (
+            [
+                {
+                    "service_id": "finance_report",
+                    "slot": "smoke",
+                    "version_ref": "v1.2.9",
+                    "ok": True,
+                }
+            ],
+            "missing staging_gate for finance_report@v1.2.9",
+        ),
+        (
+            [
+                {
+                    "service_id": "finance_report",
+                    "slot": "staging_gate",
+                    "version_ref": "v1.2.8",
+                    "ok": True,
+                }
+            ],
+            "missing staging_gate for finance_report@v1.2.9",
+        ),
+        (
+            [
+                {
+                    "service_id": "finance_report",
+                    "slot": "staging_gate",
+                    "version_ref": "v1.2.9",
+                    "ok": False,
+                }
+            ],
+            "failed staging_gate for finance_report@v1.2.9",
+        ),
+        (
+            [
+                {
+                    "service_id": "finance_report",
+                    "slot": "staging_gate",
+                    "version_ref": "v1.2.9",
+                    "ok": True,
+                },
+                {
+                    "service_id": "finance_report",
+                    "slot": "staging_gate",
+                    "version_ref": "v1.2.9",
+                    "ok": False,
+                },
+            ],
+            "failed staging_gate for finance_report@v1.2.9",
+        ),
+    ],
+    ids=["empty", "only-smoke", "wrong-version-ref", "failed", "mixed-pass-fail"],
+)
+def test_judge_staging_gate_fails_when_missing_failed_or_mismatched_version(
+    hook_results, expected_substr: str
+) -> None:
+    ok, detail = judge_staging_gate(hook_results, {"finance_report": "v1.2.9"})
+    assert ok is False
+    assert expected_substr in detail
+
+
+def test_judge_soak_verifies_required_staging_gates_and_cli_flags(
+    capsys, tmp_path
+) -> None:
+    green_runs = [run("success", n=2)]
+    required = {"finance_report": "v1.2.9"}
+    good_hooks = [
+        {
+            "service_id": "finance_report",
+            "slot": "staging_gate",
+            "version_ref": "v1.2.9",
+            "ok": True,
+        }
+    ]
+
+    verdict_ok = judge_soak(
+        green_runs,
+        tag=TAG,
+        sha=SHA,
+        hook_results=good_hooks,
+        required_staging_gates=required,
+    )
+    assert verdict_ok.ok is True
+    assert verdict_ok.exit_code == EXIT_GREEN
+    assert verdict_ok.state == GREEN
+
+    for bad_hooks in (
+        [],
+        [
+            {
+                "service_id": "finance_report",
+                "slot": "staging_gate",
+                "version_ref": "v1.2.9",
+                "ok": False,
+            }
+        ],
+        [
+            {
+                "service_id": "finance_report",
+                "slot": "staging_gate",
+                "version_ref": "v1.2.8",
+                "ok": True,
+            }
+        ],
+    ):
+        verdict_bad = judge_soak(
+            green_runs,
+            tag=TAG,
+            sha=SHA,
+            hook_results=bad_hooks,
+            required_staging_gates=required,
+        )
+        assert verdict_bad.ok is False
+        assert verdict_bad.exit_code == EXIT_NOT_GREEN
+        assert verdict_bad.state == STAGING_GATE_FAILED
+        assert "finance_report@v1.2.9" in verdict_bad.detail
+
+    # CLI integration with --require-staging-gate and --hook-results-json (@file)
+    hooks_file = tmp_path / "reconcile-result.json"
+    hooks_file.write_text(json.dumps({"hook_results": good_hooks}), encoding="utf-8")
+    assert (
+        _main(
+            FakeClient(by_commit=[green_runs]),
+            "--require-staging-gate",
+            "finance_report=v1.2.9",
+            "--hook-results-json",
+            f"@{hooks_file}",
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert (
+        _main(
+            FakeClient(by_commit=[green_runs]),
+            "--require-staging-gate",
+            "finance_report=v1.2.9",
+            "--hook-results-json",
+            "[]",
+        )
+        == 1
+    )
+    err_out = capsys.readouterr().out
+    assert "Staging gate verification failed" in err_out
+    assert "missing staging_gate for finance_report@v1.2.9" in err_out
