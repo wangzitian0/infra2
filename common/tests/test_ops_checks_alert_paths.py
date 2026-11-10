@@ -87,3 +87,34 @@ def test_ops_checks_audit_job_runs_on_ubuntu_24_04_for_playwright() -> None:
     jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
     runs_on = jobs["audit"]["runs-on"]
     assert runs_on == "ubuntu-24.04"
+
+
+def test_ops_checks_audit_job_installs_uv_before_the_hook_audit() -> None:
+    """#1561: the scheduled_audit bootstrap of finance_report runs `uv pip install`.
+    The audit job must install uv, with the reconcile job's version, before that step."""
+    reconcile_workflow = ROOT / ".github" / "workflows" / "reconcile-iac-inputs.yml"
+    reconcile_steps = yaml.safe_load(reconcile_workflow.read_text(encoding="utf-8"))[
+        "jobs"
+    ]["reconcile"]["steps"]
+    reconcile_uv = [
+        step
+        for step in reconcile_steps
+        if str(step.get("uses", "")).startswith("astral-sh/setup-uv@")
+    ]
+    assert len(reconcile_uv) == 1
+    expected_uses = reconcile_uv[0]["uses"]
+    expected_with = reconcile_uv[0].get("with")
+
+    audit_steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["audit"][
+        "steps"
+    ]
+    uv_indexes = [
+        index
+        for index, step in enumerate(audit_steps)
+        if step.get("uses") == expected_uses
+    ]
+    assert len(uv_indexes) == 1
+    assert audit_steps[uv_indexes[0]].get("with") == expected_with
+    audit_names = [step.get("name") for step in audit_steps]
+    assert "Run scheduled App runtime audits (#1493)" in audit_names
+    assert uv_indexes[0] < audit_names.index("Run scheduled App runtime audits (#1493)")
