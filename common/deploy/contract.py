@@ -35,6 +35,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 import re
+import subprocess
 from dataclasses import dataclass, replace
 from functools import lru_cache
 
@@ -477,12 +478,35 @@ _APP_REPO_ID_TO_SERVICE: dict[str, str] = {
 _HARNESS_REPOS_REL_PATH = "harness/repos.yaml"
 
 
-def default_version_ref(service: str, *, repo_root: Path = REPO_ROOT) -> str | None:
+def default_version_ref(
+    service: str,
+    *,
+    repo_root: Path = REPO_ROOT,
+    iac_ref: str | None = None,
+) -> str | None:
     """Return the release-train ``release_tag`` from ``harness/repos.yaml`` for an App service."""
-    target = Path(repo_root) / _HARNESS_REPOS_REL_PATH
-    if not target.is_file():
-        return None
-    data = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
+    raw_text: str | None = None
+    ref = str(iac_ref).strip() if iac_ref is not None else ""
+    if ref and ref != "main":
+        try:
+            res = subprocess.run(
+                ["git", "show", f"{ref}:{_HARNESS_REPOS_REL_PATH}"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=10,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                raw_text = res.stdout
+        except (OSError, subprocess.SubprocessError):
+            raw_text = None
+    if raw_text is None:
+        target = Path(repo_root) / _HARNESS_REPOS_REL_PATH
+        if not target.is_file():
+            return None
+        raw_text = target.read_text(encoding="utf-8")
+    data = yaml.safe_load(raw_text) or {}
     entries = (
         (data.get("repositories") or data.get("repos"))
         if isinstance(data, Mapping)

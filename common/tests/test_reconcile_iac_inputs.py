@@ -2681,3 +2681,41 @@ def test_hook_runner_context_env_names_reach_a_slot_without_ambient_values(
                 ambient_env={"PATH": "/usr/bin:/bin"},
                 runner=_runner,
             )
+
+
+def test_run_post_deploy_app_hooks_skips_missing_required_hook_env_without_raising(
+    monkeypatch,
+) -> None:
+    """#1533: when a hook slot raises ValueError('missing required hook env: ...'),
+    run_post_deploy_app_hooks records a skipped pass entry instead of crashing the train."""
+
+    def _fake_exec(
+        manifest,
+        slot: str,
+        **_kw,
+    ):
+        raise ValueError("missing required hook env: ['AI_API_KEY']")
+
+    monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
+
+    plan = build_plan(["platform/30.todo/app.py"])
+    applied = [
+        reconcile.DeployCommand(
+            service="platform/todo", deploy_type="staging", argv=["true"]
+        )
+    ]
+    post_results = reconcile.run_post_deploy_app_hooks(
+        plan,
+        applied,
+        repo_root=ROOT,
+        after="v3.2.0",
+        target_env="staging",
+        slot="staging_gate",
+        record_issues=False,
+    )
+    assert len(post_results) == 1
+    assert post_results[0]["service"] == "platform/todo"
+    assert post_results[0]["slot"] == "staging_gate"
+    assert post_results[0]["ok"] is True
+    assert post_results[0]["skipped"] is True
+    assert "missing required hook env" in str(post_results[0]["skip_reason"])

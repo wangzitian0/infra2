@@ -3,6 +3,7 @@
 Sync Runner - executes invoke sync tasks for changed services.
 """
 
+import concurrent.futures
 import fcntl
 import json
 import logging
@@ -912,57 +913,71 @@ def sync_services(
         task_map = (
             _service_task_map()
         )  # discovered once; reused for every service below
-        for service in sorted(services):
-            task_name = task_map.get(service)
+        ordered_services = sorted(services)
 
-            if task_name is None:
-                logger.info(f"Skipping {service} (no sync task configured)")
-                results.append(
-                    ServiceSyncResult(
-                        service=service,
-                        task=None,
-                        success=True,
-                        skipped=True,
-                    )
-                )
-                continue
-
+        def _invoke_for_service(service_name: str, task_name: str) -> dict[str, object]:
             extra = {"version_ref": version_ref} if version_ref else {}
             if action and action != "sync":
                 extra["action"] = action
             if resolved_head:
-                result = run_invoke_task(
+                return run_invoke_task(
                     task_name, repo_path, deploy_env, resolved_head, **extra
                 )
-            else:
-                result = run_invoke_task(task_name, repo_path, deploy_env, **extra)
-            service_result = ServiceSyncResult(
-                service=service,
-                task=task_name,
-                success=bool(result["success"]),
-                stdout=str(result.get("stdout", "")),
-                stderr=str(result.get("stderr", "")),
-            )
-            results.append(service_result)
+            return run_invoke_task(task_name, repo_path, deploy_env, **extra)
 
-            if service_result.success:
-                logger.info(f"✅ {service}: sync completed")
-                for line in service_result.verdict:
-                    logger.info(f"   {service}: {line}")
-            else:
-                logger.error(f"❌ {service}: sync failed")
-                diagnostic = diagnose_failure(
-                    service_result.stderr, service_result.stdout
+        futures_by_service: dict[str, concurrent.futures.Future] = {}
+        max_workers = min(4, max(1, len(ordered_services)))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for service in ordered_services:
+                task_name = task_map.get(service)
+                if task_name is not None:
+                    futures_by_service[service] = executor.submit(
+                        _invoke_for_service, service, task_name
+                    )
+
+            for service in ordered_services:
+                task_name = task_map.get(service)
+
+                if task_name is None:
+                    logger.info(f"Skipping {service} (no sync task configured)")
+                    results.append(
+                        ServiceSyncResult(
+                            service=service,
+                            task=None,
+                            success=True,
+                            skipped=True,
+                        )
+                    )
+                    continue
+
+                result = futures_by_service[service].result()
+                service_result = ServiceSyncResult(
+                    service=service,
+                    task=task_name,
+                    success=bool(result["success"]),
+                    stdout=str(result.get("stdout", "")),
+                    stderr=str(result.get("stderr", "")),
                 )
-                logger.error(
-                    "Diagnostic: service=%s task=%s kind=%s summary=%s next=%s",
-                    service,
-                    task_name,
-                    diagnostic["error_kind"],
-                    diagnostic["summary"],
-                    diagnostic["next_action"],
-                )
-                logger.error(_tail_text(service_result.stderr))
+                results.append(service_result)
+
+                if service_result.success:
+                    logger.info(f"✅ {service}: sync completed")
+                    for line in service_result.verdict:
+                        logger.info(f"   {service}: {line}")
+                else:
+                    logger.error(f"❌ {service}: sync failed")
+                    diagnostic = diagnose_failure(
+                        service_result.stderr, service_result.stdout
+                    )
+                    logger.error(
+                        "Diagnostic: service=%s task=%s kind=%s summary=%s next=%s",
+                        service,
+                        task_name,
+                        diagnostic["error_kind"],
+                        diagnostic["summary"],
+                        diagnostic["next_action"],
+                    )
+                    logger.error(_tail_text(service_result.stderr))
 
         sync_result = SyncResult(
             env=deploy_env,

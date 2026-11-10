@@ -783,7 +783,10 @@ def deploy_v2(
     if spec.env in ("staging", "prod") and not (
         str(effective_version_ref).strip() if effective_version_ref is not None else ""
     ):
-        train_tag = default_version_ref(service)
+        try:
+            train_tag = default_version_ref(service, iac_ref=iac_ref)
+        except TypeError:
+            train_tag = default_version_ref(service)
         if train_tag:
             effective_version_ref = train_tag
 
@@ -801,6 +804,7 @@ def deploy_v2(
             str(effective_version_ref).strip(),
             deploy_type,
             bootstrap=bootstrap,
+            iac_ref=iac_ref,
         )
         assert_app_version_ref_on_main(
             str(effective_version_ref).strip(),
