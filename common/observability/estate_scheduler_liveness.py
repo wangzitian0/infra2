@@ -281,11 +281,26 @@ def _runs(get: Get, path: str) -> list[dict]:
     return runs
 
 
-def _tick(runs: list[dict], base: str) -> datetime | None:
+#: Conclusions of a completed run that did not execute its scheduled work (#1484).
+_NOT_A_TICK_CONCLUSIONS = frozenset({"cancelled", "skipped"})
+
+
+def _tick(runs: list[dict], base: str, now: datetime) -> datetime | None:
+    eligible = [
+        run for run in runs if run.get("conclusion") not in _NOT_A_TICK_CONCLUSIONS
+    ]
     try:
-        return newest_tick(runs)
+        tick = newest_tick(eligible)
     except ValueError as exc:  # an unreadable created_at
         raise PeerReadError(f"{base} runs: {exc}") from exc
+    if tick is not None and tick - now > timedelta(
+        seconds=CLOCK_SKEW_TOLERANCE_SECONDS
+    ):
+        raise PeerReadError(
+            f"{base} newest tick {tick.isoformat()} is ahead of the clock "
+            "(clock skew?): its age cannot be trusted"
+        )
+    return tick
 
 
 def _distinct(runs: list[dict]) -> list[dict]:
@@ -299,7 +314,10 @@ def _distinct(runs: list[dict]) -> list[dict]:
 
 def _never_started(run: dict, now: datetime) -> bool:
     """Return True for a run that failed to start or has queued past the allowance."""
-    if run.get("conclusion") == "startup_failure":
+    if (
+        run.get("conclusion") == "startup_failure"
+        or run.get("conclusion") in _NOT_A_TICK_CONCLUSIONS
+    ):
         return True
     created = _timestamp(run.get("created_at"), f"run {run.get('id')}")
     if created - now > timedelta(seconds=CLOCK_SKEW_TOLERANCE_SECONDS):
@@ -407,13 +425,13 @@ def _evaluate_workflow(
         bound = min(bound, bound_cap)
     base = f"/repos/{repository}/actions/workflows/{workflow_id}"
     scheduled = _runs(get, f"{base}/runs?event=schedule&per_page={SCHEDULED_PAGE}")
-    newest = _tick(scheduled, base)
+    newest = _tick(scheduled, base, now)
     if newest is None or now - newest > bound:
         unfiltered = _runs(get, f"{base}/runs?per_page={UNFILTERED_PAGE}")
         scheduled = _distinct(
             scheduled + [run for run in unfiltered if run.get("event") == "schedule"]
         )
-        witness = _tick(unfiltered, base)
+        witness = _tick(unfiltered, base, now)
         if witness is not None and (newest is None or witness > newest):
             newest = witness
     if newest is not None:

@@ -542,7 +542,8 @@ def test_dashboard_has_full_backend_red_and_fe_page_load() -> None:
     assert "kind_string = 'Server'" in err_filter
     assert "hasError = true" in err_filter
 
-    # #1307: AI/OCR and core business telemetry widgets are present and query metrics
+    # #1307, #1481: AI/OCR and core business telemetry widgets are present and query
+    # metrics in SigNoz v5 builder format (metricName + spaceAggregation/timeAggregation).
     for wid in (
         "ai-provider-latency-p95",
         "statement-parse-outcomes",
@@ -552,13 +553,32 @@ def test_dashboard_has_full_backend_red_and_fe_page_load() -> None:
         assert wid in widgets, f"missing AI/business telemetry widget {wid}"
         qdata = widgets[wid]["query"]["builder"]["queryData"][0]
         assert qdata["dataSource"] == "metrics"
-    assert _agg("ai-provider-latency-p95") == "p95(finance.ai_provider.latency)"
-    assert _agg("statement-parse-outcomes") == "sum(finance.statement_parse.outcome)"
-    assert (
-        _agg("reconciliation-match-outcomes")
-        == "sum(finance.reconciliation.match.outcome)"
-    )
-    assert _agg("financial-invariant-violations") == "sum(finance.invariant.violation)"
+
+    def _metric_agg(wid: str) -> dict:
+        (aggregation,) = widgets[wid]["query"]["builder"]["queryData"][0][
+            "aggregations"
+        ]
+        return aggregation
+
+    assert _metric_agg("ai-provider-latency-p95") == {
+        "metricName": "finance.ai_provider.latency.bucket",
+        "spaceAggregation": "p95",
+    }
+    assert _metric_agg("statement-parse-outcomes") == {
+        "metricName": "finance.statement_parse.outcome",
+        "timeAggregation": "increase",
+        "spaceAggregation": "sum",
+    }
+    assert _metric_agg("reconciliation-match-outcomes") == {
+        "metricName": "finance.reconciliation.match.outcome",
+        "timeAggregation": "increase",
+        "spaceAggregation": "sum",
+    }
+    assert _metric_agg("financial-invariant-violations") == {
+        "metricName": "finance.invariant.violation",
+        "timeAggregation": "increase",
+        "spaceAggregation": "sum",
+    }
 
 
 def _filter(widget_id: str, widgets: dict[str, dict]) -> str:
@@ -590,13 +610,13 @@ SERVICE_METRICS = {
     "platform-alerting": _NEW_HTTP | {"http.server.active_requests"},
     "platform-todo": _NEW_HTTP | {"http.server.active_requests"},
     "finance-report-backend": {
-        "finance.ai_provider.latency",
+        "finance.ai_provider.latency.bucket",
         "finance.statement_parse.outcome",
         "finance.reconciliation.match.outcome",
         "finance.invariant.violation",
     },
     "finance-report-worker": {
-        "finance.ai_provider.latency",
+        "finance.ai_provider.latency.bucket",
         "finance.statement_parse.outcome",
     },
     "finance-report-frontend": set(),
@@ -773,9 +793,15 @@ def test_dashboard_is_stored_in_the_v5_query_shape_so_create_equals_update() -> 
             assert not {"aggregateOperator", "aggregateAttribute", "filters"} & set(
                 query
             )
-            assert query["aggregations"] and all(
-                a["expression"] for a in query["aggregations"]
-            )
+            if query["dataSource"] == "metrics":
+                assert query["aggregations"] and all(
+                    a.get("metricName") and a.get("spaceAggregation")
+                    for a in query["aggregations"]
+                )
+            else:
+                assert query["aggregations"] and all(
+                    a["expression"] for a in query["aggregations"]
+                )
             assert query["filter"]["expression"]
 
 
@@ -817,6 +843,14 @@ def test_the_unmutated_dashboard_copy_loads(tmp_path) -> None:
         (
             lambda d: d["widgets"][0]["query"]["builder"]["queryData"][0].pop("filter"),
             "filter.expression",
+        ),
+        (
+            lambda d: next(
+                w for w in d["widgets"] if w["id"] == "ai-provider-latency-p95"
+            )["query"]["builder"]["queryData"][0].update(
+                aggregations=[{"expression": "p95(finance.ai_provider.latency)"}]
+            ),
+            "metricName",
         ),
         (lambda d: d["widgets"][1].update(id=d["widgets"][0]["id"]), "unique id"),
     ],

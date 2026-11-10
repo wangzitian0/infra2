@@ -809,3 +809,46 @@ def test_the_future_run_message_names_the_workflow_and_the_timestamp() -> None:
     ahead = timedelta(hours=2)
     verdict = _estate_for_runs(scheduled=[_queued(-ahead)])
     assert path_of("w") in verdict.detail and _iso(NOW + ahead) in verdict.detail
+
+
+# --- #1484: cancelled/skipped runs are not ticks and newest_tick checks clock skew ---------
+
+
+@pytest.mark.parametrize("conclusion", ["cancelled", "skipped"])
+@pytest.mark.parametrize("age", [timedelta(minutes=5), timedelta(hours=3)])
+def test_a_cancelled_or_skipped_scheduled_run_is_not_a_tick(conclusion, age) -> None:
+    run = {
+        **_run(age, conclusion=conclusion),
+        "run_started_at": _iso(NOW - age),
+    }
+    verdict = _estate_for_runs(scheduled=[run])
+    assert verdict.status == est.STALE, verdict
+
+
+def test_a_cancelled_run_alongside_a_fresh_started_run_is_green() -> None:
+    cancelled = {
+        **_run(timedelta(minutes=5), conclusion="cancelled", run_id=1),
+        "run_started_at": _iso(NOW - timedelta(minutes=5)),
+    }
+    succeeded = _run(timedelta(hours=2), conclusion="success", run_id=2)
+    verdict = _estate_for_runs(scheduled=[cancelled, succeeded])
+    assert verdict.status == est.OK, verdict
+    assert "2.0h old" in verdict.detail
+
+
+@pytest.mark.parametrize(
+    ("ahead", "status"),
+    [
+        (timedelta(seconds=60), est.OK),
+        (timedelta(seconds=300), est.OK),
+        (timedelta(seconds=301), est.UNVERIFIABLE),
+        (timedelta(hours=2), est.UNVERIFIABLE),
+    ],
+)
+def test_a_started_tick_dated_in_the_future_is_unverifiable_beyond_the_skew(
+    ahead, status
+) -> None:
+    verdict = _estate_for_runs(scheduled=[_run(-ahead, conclusion="success")])
+    assert verdict.status == status, verdict
+    if status == est.UNVERIFIABLE:
+        assert "clock skew" in verdict.detail

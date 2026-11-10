@@ -636,6 +636,14 @@ def _require_v5_builder_queries(
                 "v4 migration drops a bare `count` aggregation, leaving a query that "
                 "aggregates nothing."
             )
+        if query_data.get("dataSource") == "metrics":
+            for agg in aggregations:
+                metric_name = agg.get("metricName") if isinstance(agg, dict) else None
+                if not isinstance(metric_name, str) or not metric_name.strip():
+                    raise ObservabilityDefinitionError(
+                        f"Widget '{widget_id}' metrics query aggregation needs a "
+                        f"non-empty 'metricName' in {path} (got {agg!r})."
+                    )
         filter_expression = (query_data.get("filter") or {}).get("expression")
         if not isinstance(filter_expression, str) or not filter_expression.strip():
             raise ObservabilityDefinitionError(
