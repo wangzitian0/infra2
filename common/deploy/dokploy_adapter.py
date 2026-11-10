@@ -198,14 +198,18 @@ def wait_for_new_deployment_record(
     min_started_at: float | None = None,
     start_epoch_fn: Callable[[dict], float | None] | None = None,
     terminal_success_statuses: frozenset[str] = TERMINAL_SUCCESS_STATUSES,
-    sleep_fn: Callable[[float], None] = time.sleep,
-    time_fn: Callable[[], float] = time.monotonic,
+    sleep_fn: Callable[[float], None] | None = None,
+    time_fn: Callable[[], float] | None = None,
 ) -> bool:
     """Wait for new deployment record to finish with a terminal status.
 
     Returns true on success. Returns false when no record appears before deadline.
     Raises RuntimeError on error status or timeout with in-progress record.
     """
+    if sleep_fn is None:
+        sleep_fn = time.sleep
+    if time_fn is None:
+        time_fn = time.monotonic
     filter_fn = (
         (
             lambda d: started_before_trigger(
@@ -266,13 +270,17 @@ def deploy_compose_with_record_check(
     wait_fn: Callable[..., bool] | None = None,
     start_epoch_fn: Callable[[dict], float | None] | None = None,
     log_warning: Callable[[str], None] | None = None,
-    sleep_fn: Callable[[float], None] = time.sleep,
-    time_fn: Callable[[], float] = time.monotonic,
+    sleep_fn: Callable[[float], None] | None = None,
+    time_fn: Callable[[], float] | None = None,
 ) -> None:
     """Trigger deploy and verify Dokploy creates a deployment record.
 
     Retries with redeploy_compose if deploy_compose produces no record.
     """
+    if sleep_fn is None:
+        sleep_fn = time.sleep
+    if time_fn is None:
+        time_fn = time.monotonic
     warn = log_warning or logger.warning
     waiter = wait_fn or (
         lambda c, cid, prev, to, iv, min_s: wait_for_new_deployment_record(

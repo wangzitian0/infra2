@@ -72,7 +72,7 @@ class DokployClient:
         endpoint: str,
         *,
         _retries: int = 2,
-        _sleep=time.sleep,
+        _sleep=None,
         idempotent: bool = False,
         **kwargs,
     ) -> dict | list:
@@ -83,6 +83,8 @@ class DokployClient:
         is safe to repeat: any GET, or a POST the caller marks ``idempotent``. A flaky
         control plane should self-heal rather than hard-fail the caller.
         """
+        if _sleep is None:
+            _sleep = time.sleep
         headers = {
             "accept": "application/json",
             "content-type": "application/json",
