@@ -195,6 +195,8 @@ Without `--online`, none of these keys appears.
 它只打印、不投递告警，因此不注册 signal（`tools/no_new_wheels_lint.py` 只约束告警投递调用）。
 
 `tools/orchestrator_guard_hook.py` 是可选的 Claude Code hook：主会话中超过 4 分钟的
+`harness prod-queue` lists the active production promotion runs of `reconcile-iac-inputs.yml` and exits 0 (empty), 1 (a run is active) or 4 (unreadable). Run it before every production promotion dispatch. `status --online` prints the same `prod_queue:` lines (#1528).
+
 前台调用与前台等待循环被拒绝，watch list 非空却未 arm watch 时拦截一次结束回合；
 subagent（hook 输入含 `agent_id`）豁免。`.claude/settings.json` 需 owner 审阅，仓库不自动接线。
 
@@ -203,6 +205,7 @@ subagent（hook 输入含 `agent_id`）豁免。`.claude/settings.json` 需 owne
 ```bash
 uv run pytest -q common/tests/test_harness_manifest.py
 uv run pytest -q common/tests/test_harness_status.py
+uv run pytest -q common/tests/test_harness_prod_queue.py
 uv run pytest -q common/tests/test_harness_sweep.py common/tests/test_orchestrator_guard_hook.py
 uv run python -m tools.harness sweep /abs/path/to/watch.json
 uv run python -m tools.harness check --json

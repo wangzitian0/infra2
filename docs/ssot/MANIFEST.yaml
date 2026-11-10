@@ -56,6 +56,7 @@ entries:
     proofs:
       - common/tests/test_harness_manifest.py
       - common/tests/test_harness_status.py
+      - common/tests/test_harness_prod_queue.py
       - common/tests/test_harness_sweep.py
       - common/tests/test_sdk_usage_census.py
       - tools/sdk_usage_census.py
