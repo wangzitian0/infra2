@@ -91,30 +91,62 @@ def test_ops_checks_audit_job_runs_on_ubuntu_24_04_for_playwright() -> None:
 
 def test_ops_checks_audit_job_installs_uv_before_the_hook_audit() -> None:
     """#1561: the scheduled_audit bootstrap of finance_report runs `uv pip install`.
-    The audit job must install uv, with the reconcile job's version, before that step."""
+    The audit job must install uv, with the reconcile job's version, after Python
+    and before that step. The cache is off: the hook step is skipped in a dry run,
+    and setup-uv then fails its post step with "Cache path does not exist"."""
     reconcile_workflow = ROOT / ".github" / "workflows" / "reconcile-iac-inputs.yml"
     reconcile_steps = yaml.safe_load(reconcile_workflow.read_text(encoding="utf-8"))[
         "jobs"
     ]["reconcile"]["steps"]
-    reconcile_uv = [
-        step
+    reconcile_uv_uses = [
+        step["uses"]
         for step in reconcile_steps
         if str(step.get("uses", "")).startswith("astral-sh/setup-uv@")
     ]
-    assert len(reconcile_uv) == 1
-    expected_uses = reconcile_uv[0]["uses"]
-    expected_with = reconcile_uv[0].get("with")
+    assert reconcile_uv_uses, (
+        "job reconcile of reconcile-iac-inputs.yml has no astral-sh/setup-uv step"
+    )
+    expected_uses = reconcile_uv_uses[0]
 
     audit_steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["audit"][
         "steps"
     ]
+    audit_names = [step.get("name") for step in audit_steps]
+    hook_name = "Run scheduled App runtime audits (#1493)"
+    assert hook_name in audit_names, (
+        f"job audit of ops-checks.yml has no step named {hook_name!r}"
+    )
+    python_indexes = [
+        index
+        for index, step in enumerate(audit_steps)
+        if str(step.get("uses", "")).startswith("actions/setup-python@")
+    ]
+    assert python_indexes, (
+        "job audit of ops-checks.yml has no actions/setup-python step"
+    )
     uv_indexes = [
         index
         for index, step in enumerate(audit_steps)
         if step.get("uses") == expected_uses
     ]
-    assert len(uv_indexes) == 1
-    assert audit_steps[uv_indexes[0]].get("with") == expected_with
-    audit_names = [step.get("name") for step in audit_steps]
-    assert "Run scheduled App runtime audits (#1493)" in audit_names
-    assert uv_indexes[0] < audit_names.index("Run scheduled App runtime audits (#1493)")
+    assert len(uv_indexes) == 1, (
+        f"job audit of ops-checks.yml must hold exactly one step that uses "
+        f"{expected_uses}; found {len(uv_indexes)}"
+    )
+    uv_index = uv_indexes[0]
+    uv_step = audit_steps[uv_index]
+    for key in ("if", "continue-on-error", "env"):
+        assert key not in uv_step, (
+            f"the uv step of job audit in ops-checks.yml must not set `{key}`"
+        )
+    assert uv_step.get("with") == {"enable-cache": False}, (
+        "the uv step of job audit in ops-checks.yml must set `with` to "
+        f"{{enable-cache: false}} only; found {uv_step.get('with')!r}"
+    )
+    assert max(python_indexes) < uv_index, (
+        "the uv step of job audit in ops-checks.yml must come after the "
+        "actions/setup-python step"
+    )
+    assert uv_index < audit_names.index(hook_name), (
+        f"the uv step of job audit in ops-checks.yml must come before {hook_name!r}"
+    )
