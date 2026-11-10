@@ -1731,6 +1731,67 @@ def test_apply_observability_workflow_exposes_canary_mode() -> None:
     assert "inputs.mode == 'apply'" in workflow
 
 
+def _apply_observability_job() -> dict:
+    """Return the parsed `apply` job of apply-observability.yml."""
+    import yaml
+
+    document = yaml.safe_load(APPLY_OBSERVABILITY_WORKFLOW.read_text(encoding="utf-8"))
+    return document["jobs"]["apply"]
+
+
+def _apply_observability_step(name: str) -> dict:
+    """Return the one step of the `apply` job with this exact name."""
+    matches = [s for s in _apply_observability_job()["steps"] if s.get("name") == name]
+    assert len(matches) == 1, f"expected exactly one step named {name!r}"
+    return matches[0]
+
+
+def test_apply_observability_mode_input_options_are_exact() -> None:
+    """#1435: the mode input offers apply, canary and prune-alerts, in this order."""
+    import yaml
+
+    document = yaml.safe_load(APPLY_OBSERVABILITY_WORKFLOW.read_text(encoding="utf-8"))
+    on_block = document.get("on") or document.get(True)
+    mode_input = on_block["workflow_dispatch"]["inputs"]["mode"]
+
+    assert mode_input["options"] == ["apply", "canary", "prune-alerts"]
+    assert mode_input["default"] == "apply"
+
+
+def test_apply_observability_alerts_step_prunes_only_in_prune_alerts_mode() -> None:
+    """#1435: prune-alerts runs apply-alerts with --prune; other modes pass no flag."""
+    step = _apply_observability_step("Apply alert rules (idempotent)")
+
+    assert step["if"] == (
+        "${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'apply' "
+        "|| inputs.mode == 'prune-alerts' }}"
+    )
+    assert step["env"] == {
+        "PRUNE_FLAG": "${{ inputs.mode == 'prune-alerts' && '--prune' || '' }}"
+    }
+    assert step["run"] == (
+        "uv run --locked python -m invoke fr-observability.shared.apply-alerts "
+        "$PRUNE_FLAG"
+    )
+
+
+def test_apply_observability_dashboard_step_never_runs_in_prune_alerts_mode() -> None:
+    """#1435: a prune run must not push dashboards the owner did not approve."""
+    step = _apply_observability_step("Apply dashboard (idempotent)")
+
+    assert step["if"] == (
+        "${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'apply' }}"
+    )
+    assert step["run"] == (
+        "uv run --locked python -m invoke fr-observability.shared.apply-dashboard"
+    )
+
+
+def test_apply_observability_job_environment_stays_production() -> None:
+    """#1435: the new mode adds no unattended path; every run waits for the owner."""
+    assert _apply_observability_job()["environment"] == "production"
+
+
 def test_ssot_documents_alert_and_dashboard_apply_path() -> None:
     """#373: ops docs document how the alert + dashboard are applied."""
     alerting = (ROOT / "docs/ssot/ops.observability.md").read_text(encoding="utf-8")
