@@ -2930,3 +2930,224 @@ def test_apply_observability_workflow_watches_every_alert_rules_file() -> None:
         assert any(fnmatch.fnmatch(rel, pat) for pat in train_patterns), (
             f"{rel} is not matched by any observability pattern in reconcile-iac-inputs.yml: {train_patterns}"
         )
+
+
+# --- #1550: bounded retry of one transient SigNoz API failure ---------------------
+
+
+class _FakeCurl:
+    """`c` stand-in. Each `run` call answers with the next curl result.
+
+    After the last answer, `run` repeats it, so an extra attempt shows as a call
+    count and not as an IndexError.
+    """
+
+    def __init__(self, *answers: tuple[str, bool]):
+        self.answers = answers
+        self.commands: list[str] = []
+
+    def run(self, command, **_kwargs):
+        index = min(len(self.commands), len(self.answers) - 1)
+        self.commands.append(command)
+        stdout, ok = self.answers[index]
+        return types.SimpleNamespace(stdout=stdout, ok=ok)
+
+
+def _answer(status: int, body: str = "") -> tuple[str, bool]:
+    """One curl result: the body, a newline, then the `-w` status line."""
+    return f"{body}\n{status}", True
+
+
+_CURL_FAILED = ("", False)  # no output at all: connection error or timeout
+_SIGNOZ_TEST_API_KEY = "test-api-key-1550"
+
+
+def _real_signoz_request(monkeypatch):
+    """The real `_signoz_request`, with no sleep and no secret lookup.
+
+    Returns `(alerting, waits)`; `waits` records each requested pause in seconds.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "alerting_retry_under_test", ROOT / "platform/12.alerting/shared_tasks.py"
+    )
+    assert spec and spec.loader
+    alerting = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(alerting)
+    waits: list[float] = []
+    monkeypatch.setattr(
+        alerting,
+        "_signoz_context",
+        lambda: {
+            "env": {},
+            "deploy_env": "production",
+            "domain": "signoz.example.test",
+            "api_key": _SIGNOZ_TEST_API_KEY,
+        },
+    )
+    monkeypatch.setattr(alerting, "_sleep", waits.append)
+    return alerting, waits
+
+
+def test_signoz_request_get_retries_one_transient_520_then_returns_the_200(
+    monkeypatch,
+) -> None:
+    alerting, waits = _real_signoz_request(monkeypatch)
+    c = _FakeCurl(
+        _answer(520, "error code: 520"), _answer(200, '{"status": "success"}')
+    )
+
+    result = alerting._signoz_request(c, method="GET", path="/api/v1/rules")
+
+    assert result == {
+        "ok": True,
+        "data": {"status": "success"},
+        "status": 200,
+        "body": '{"status": "success"}',
+    }
+    assert len(c.commands) == 2
+    assert c.commands[0] == c.commands[1]
+    assert waits == [2]
+
+
+def test_signoz_request_put_returns_the_last_520_after_three_attempts(
+    monkeypatch,
+) -> None:
+    alerting, waits = _real_signoz_request(monkeypatch)
+    c = _FakeCurl(_answer(520, "first"), _answer(520, "second"), _answer(520, "third"))
+
+    result = alerting._signoz_request(
+        c, method="PUT", path="/api/v1/rules/rule-1", payload={"alert": "A"}
+    )
+
+    assert result == {"ok": False, "data": None, "status": 520, "body": "third"}
+    assert len(c.commands) == 3
+    assert waits == [2, 5]
+
+
+@pytest.mark.parametrize("answer", [_answer(520, "error code: 520"), _CURL_FAILED])
+@pytest.mark.parametrize("method", ["POST", "PATCH"])
+def test_signoz_request_post_and_other_methods_never_retry(
+    monkeypatch, method, answer
+) -> None:
+    """A lost POST response can hide a rule that SigNoz already created."""
+    alerting, waits = _real_signoz_request(monkeypatch)
+    c = _FakeCurl(answer, _answer(200, "{}"))
+
+    result = alerting._signoz_request(
+        c, method=method, path="/api/v1/rules", payload={"alert": "A"}
+    )
+
+    assert result["status"] == (520 if answer is not _CURL_FAILED else 0)
+    assert result["ok"] is False
+    assert len(c.commands) == 1
+    assert waits == []
+
+
+@pytest.mark.parametrize("method", ["GET", "PUT", "DELETE"])
+@pytest.mark.parametrize(
+    "status", [200, 204, 301, 400, 404, 409, 500, 501, 505, 519, 525]
+)
+def test_signoz_request_idempotent_request_returns_a_non_transient_status_at_once(
+    monkeypatch, method, status
+) -> None:
+    alerting, waits = _real_signoz_request(monkeypatch)
+    c = _FakeCurl(_answer(status, "body"), _answer(200, "{}"))
+
+    result = alerting._signoz_request(c, method=method, path="/api/v1/rules")
+
+    assert result["status"] == status
+    assert result["body"] == "body"
+    assert len(c.commands) == 1
+    assert waits == []
+
+
+@pytest.mark.parametrize("status", [502, 503, 504, 520, 521, 522, 523, 524])
+def test_signoz_request_every_listed_gateway_status_is_retried_once(
+    monkeypatch, status
+) -> None:
+    alerting, waits = _real_signoz_request(monkeypatch)
+    c = _FakeCurl(_answer(status), _answer(200, "{}"))
+
+    result = alerting._signoz_request(c, method="DELETE", path="/api/v1/rules/rule-1")
+
+    assert result["status"] == 200
+    assert len(c.commands) == 2
+    assert waits == [2]
+
+
+@pytest.mark.parametrize(
+    "unreadable",
+    [_CURL_FAILED, ("curl: (28) timed out", False), ("body\nnot-a-number", True)],
+)
+def test_signoz_request_delete_retries_unreadable_curl_output_then_returns_the_200(
+    monkeypatch, unreadable
+) -> None:
+    alerting, waits = _real_signoz_request(monkeypatch)
+    c = _FakeCurl(unreadable, _answer(200, "{}"))
+
+    result = alerting._signoz_request(c, method="DELETE", path="/api/v1/rules/rule-1")
+
+    assert result["status"] == 200
+    assert result["ok"] is True
+    assert len(c.commands) == 2
+    assert waits == [2]
+
+
+def test_signoz_request_put_recovers_on_the_third_attempt(monkeypatch) -> None:
+    alerting, waits = _real_signoz_request(monkeypatch)
+    c = _FakeCurl(_answer(503), _answer(502), _answer(200, '{"id": "rule-1"}'))
+
+    result = alerting._signoz_request(
+        c, method="PUT", path="/api/v1/rules/rule-1", payload={"alert": "A"}
+    )
+
+    assert result["status"] == 200
+    assert result["data"] == {"id": "rule-1"}
+    assert len(c.commands) == 3
+    assert waits == [2, 5]
+
+
+def test_signoz_request_retry_matches_the_method_in_any_letter_case(
+    monkeypatch,
+) -> None:
+    alerting, waits = _real_signoz_request(monkeypatch)
+    c = _FakeCurl(_answer(520), _answer(200, "{}"))
+
+    result = alerting._signoz_request(c, method="get", path="/api/v1/rules")
+
+    assert result["status"] == 200
+    assert len(c.commands) == 2
+    assert waits == [2]
+
+
+def test_signoz_request_retry_logs_each_attempt_and_never_the_api_key(
+    monkeypatch, capsys
+) -> None:
+    alerting, _waits = _real_signoz_request(monkeypatch)
+    c = _FakeCurl(_answer(520), _answer(502), _answer(200, "{}"))
+
+    alerting._signoz_request(
+        c, method="PUT", path="/api/v1/rules/rule-1", payload={"alert": "secret-rule"}
+    )
+
+    shown = capsys.readouterr()
+    assert shown.out.splitlines() == [
+        "SigNoz API 520 for PUT /api/v1/rules/rule-1; retry 1/2 in 2s",
+        "SigNoz API 502 for PUT /api/v1/rules/rule-1; retry 2/2 in 5s",
+    ]
+    assert _SIGNOZ_TEST_API_KEY not in shown.out + shown.err
+    assert "secret-rule" not in shown.out + shown.err
+
+
+def test_signoz_request_without_a_context_makes_no_call_and_no_wait(
+    monkeypatch,
+) -> None:
+    alerting, waits = _real_signoz_request(monkeypatch)
+    monkeypatch.setattr(alerting, "_signoz_context", lambda: None)
+    c = _FakeCurl(_answer(520))
+
+    result = alerting._signoz_request(c, method="GET", path="/api/v1/rules")
+
+    assert result == {"ok": False, "data": None, "status": 0, "body": ""}
+    assert c.commands == []
+    assert waits == []

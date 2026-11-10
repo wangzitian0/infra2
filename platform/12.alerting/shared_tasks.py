@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shlex
+import time
 from io import StringIO
 
 from invoke import task
@@ -17,6 +18,15 @@ from common.alerting import (
     signoz_feishu_channel_name,
 )
 from common.core.environ import get_env, service_domain, with_env_suffix
+
+
+# Retry only a request that is safe to repeat. A lost POST response can hide a rule
+# that SigNoz already created. Status 0 means curl failed or printed no status (#1550).
+_SIGNOZ_RETRY_METHODS = frozenset({"GET", "PUT", "DELETE"})
+_SIGNOZ_RETRY_STATUSES = frozenset({0, 502, 503, 504, 520, 521, 522, 523, 524})
+# One entry per retry: seconds to wait before attempt 2, then before attempt 3.
+_SIGNOZ_RETRY_DELAYS_SECONDS = (2, 5)
+_sleep = time.sleep
 
 
 def _bridge_url(env: dict[str, str | None]) -> str:
@@ -78,24 +88,37 @@ def _signoz_request(c, *, method: str, path: str, payload: dict | None = None):
     if payload is not None:
         body_args = f" --data-raw {shlex.quote(json.dumps(payload))}"
 
-    result = c.run(
+    command = (
         f"curl -sS -X {shlex.quote(method)} "
         f"'https://{context['domain']}{path}' "
         f"-H {api_key_header} "
         "-H 'Content-Type: application/json' "
         f"-w '\\n%{{http_code}}'"
-        f"{body_args}",
-        warn=True,
-        hide=True,
+        f"{body_args}"
+    )
+    retry_delays = (
+        _SIGNOZ_RETRY_DELAYS_SECONDS if method.upper() in _SIGNOZ_RETRY_METHODS else ()
     )
 
-    raw = result.stdout or ""
-    try:
-        body, status_text = raw.rsplit("\n", 1)
-        status = int(status_text.strip())
-    except ValueError:
-        body = raw
-        status = 0
+    for attempt in range(len(retry_delays) + 1):
+        result = c.run(command, warn=True, hide=True)
+
+        raw = result.stdout or ""
+        try:
+            body, status_text = raw.rsplit("\n", 1)
+            status = int(status_text.strip())
+        except ValueError:
+            body = raw
+            status = 0
+
+        if status not in _SIGNOZ_RETRY_STATUSES or attempt == len(retry_delays):
+            break
+        # Log the method, path and delay only: never the API key, header or payload.
+        print(
+            f"SigNoz API {status} for {method.upper()} {path}; "
+            f"retry {attempt + 1}/{len(retry_delays)} in {retry_delays[attempt]}s"
+        )
+        _sleep(retry_delays[attempt])
 
     decoded = None
     if body.strip():
