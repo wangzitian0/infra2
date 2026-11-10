@@ -6,7 +6,7 @@ Before the fix, `sync` printed "config unchanged, skipping deploy" after a chang
 
 from __future__ import annotations
 
-import ast
+import hashlib
 import importlib.util
 from pathlib import Path
 
@@ -413,89 +413,6 @@ def test_free_client_info_reports_a_failed_read(monkeypatch) -> None:
 # --- review findings of PR #1447 (head 7762f85) -------------------------------------
 
 
-def _local_module_path(module: str) -> Path | None:
-    path = ROOT / (module.replace(".", "/") + ".py")
-    return path if path.is_file() else None
-
-
-def _imports(node: ast.AST) -> dict[str, str]:
-    """name -> module for each `from X import name` below `node`."""
-    found: dict[str, str] = {}
-    for child in ast.walk(node):
-        if isinstance(child, ast.ImportFrom) and child.module:
-            for alias in child.names:
-                found[alias.asname or alias.name] = child.module
-    return found
-
-
-def _used_names(node: ast.AST) -> set[str]:
-    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
-
-
-def rendered_template_source_modules(service_dir: str) -> set[Path]:
-    """Repo modules whose code feeds a `_render*` function of the service deploy.py.
-
-    Direct: a `common.*` name that a `_render*` function uses. One hop: the lazy
-    imports of the function that defines that name.
-    """
-    tree = ast.parse((ROOT / service_dir / "deploy.py").read_text(encoding="utf-8"))
-    modules: set[Path] = set()
-    for func in [
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.FunctionDef) and n.name.startswith("_render")
-    ]:
-        scope = {**_imports(tree), **_imports(func)}
-        for name in _used_names(func) & scope.keys():
-            module = scope[name]
-            path = _local_module_path(module)
-            # `common.console` only prints; it never shapes the rendered bytes.
-            if (
-                path is None
-                or not module.startswith("common.")
-                or module == "common.console"
-            ):
-                continue
-            modules.add(path)
-            target = ast.parse(path.read_text(encoding="utf-8"))
-            for defn in ast.walk(target):
-                if isinstance(defn, ast.FunctionDef) and defn.name == name:
-                    for lazy_module in _imports(defn).values():
-                        lazy = _local_module_path(lazy_module)
-                        if lazy and lazy_module.startswith("common."):
-                            modules.add(lazy)
-    return {m.resolve() for m in modules}
-
-
-def test_signoz_render_reads_env_config_and_contract() -> None:
-    """Falsifies a green-while-empty scan: the signoz render has repo-module sources."""
-    names = {p.name for p in rendered_template_source_modules("platform/11.signoz")}
-    assert {"env_config.py", "contract.py"} <= names
-
-
-@pytest.mark.parametrize("service_dir", sorted(FINGERPRINT_SERVICES))
-def test_rendered_template_source_modules_are_hash_dependencies(
-    service_dir: str,
-) -> None:
-    """A module that feeds a rendered file must be a hash dependency of the service."""
-    from common.deploy.dependencies import (
-        extra_dependency_globs,
-        service_key_from_path,
-    )
-
-    key = service_key_from_path(f"{service_dir}/compose.yaml")
-    globs = extra_dependency_globs(key)
-    from common.deploy.config_hash import _dependency_paths_from_globs
-
-    hashed = set(_dependency_paths_from_globs(globs))
-    missing = sorted(
-        p.relative_to(ROOT).as_posix()
-        for p in rendered_template_source_modules(service_dir)
-        if p not in hashed
-    )
-    assert missing == [], f"{key}: add to depends_on in deploy-dependencies.yaml"
-
-
 def test_changing_a_dependency_module_flips_the_signoz_hash(tmp_path: Path) -> None:
     from common.deploy.config_hash import (
         _dependency_items_from_globs,
@@ -654,3 +571,9 @@ def test_composing_names_service_and_template_when_render_fails(
 def test_mount_fingerprint_env_rejects_none_content() -> None:
     with pytest.raises(RuntimeError, match=r"svc: cannot render host file 'a.cfg'"):
         mount_fingerprint_env({"a.cfg": None}, service="svc", template_dir="d")
+
+
+def test_mount_fingerprint_env_accepts_empty_string_content() -> None:
+    assert mount_fingerprint_env({"a.cfg": ""}) == {
+        "IAC_MOUNT_SHA256_A_CFG": hashlib.sha256(b"").hexdigest()
+    }

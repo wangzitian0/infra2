@@ -80,8 +80,8 @@ def wait_for_rollout(
     *,
     timeout: int = 600,
     interval: int = 5,
-    _sleep=time.sleep,
-    _now=time.monotonic,
+    _sleep=None,
+    _now=None,
     min_started_at: float | None = None,
 ) -> dict:
     """Poll until a NEW Dokploy deployment record reaches a terminal-good status.
@@ -89,6 +89,10 @@ def wait_for_rollout(
     Raises RuntimeError if the new record errors, TimeoutError if none finishes in the
     window. Unified with common.deploy.rollout.wait_for_deployment (D5).
     """
+    if _sleep is None:
+        _sleep = time.sleep
+    if _now is None:
+        _now = time.monotonic
     filter_fn = (
         (
             lambda d: started_before_trigger(
@@ -308,8 +312,8 @@ def verify_in_service(
     *,
     timeout: int = IN_SERVICE_SETTLE_SECONDS,
     interval: int = 5,
-    _sleep=time.sleep,
-    _now=time.monotonic,
+    _sleep=None,
+    _now=None,
 ) -> str:
     """Every service the app's compose declares a healthcheck for has a running,
     not-unhealthy container, seen through Dokploy's ``docker.getContainers`` — the only
@@ -323,6 +327,10 @@ def verify_in_service(
     ``timeout``. Returns the verdict message on success; raises RuntimeError otherwise.
     Mirrors common.deploy.deployer.Deployer.verify_in_service for the iac-runner tier.
     """
+    if _sleep is None:
+        _sleep = time.sleep
+    if _now is None:
+        _now = time.monotonic
     from common.deploy.in_service import (
         expected_running_containers,
         in_service_verdict,
@@ -366,8 +374,8 @@ def verify_effective_config_hash(
     expected_keys: Collection[str] | None = None,
     timeout: int = 600,
     interval: int = 5,
-    _sleep=time.sleep,
-    _now=time.monotonic,
+    _sleep=None,
+    _now=None,
 ) -> str:
     """Poll the compose's effective IAC_CONFIG_HASH until it matches expected_hash, then
     return it; raise RuntimeError if it never advances within the window. Always returns
@@ -376,6 +384,10 @@ def verify_effective_config_hash(
     When expected_keys is provided, also verify that the effective compose env contains
     no unexpected stale keys once the hash matches.
     """
+    if _sleep is None:
+        _sleep = time.sleep
+    if _now is None:
+        _now = time.monotonic
     compose_env = ""
 
     def _read_hash() -> str | None:
@@ -894,7 +906,7 @@ def deploy(
     verify_smoke: bool = True,
     verify_ingestion: bool = False,
     http_get: Any = None,
-    _now=time.time,
+    _now=None,
 ) -> DeployPlan:
     """Deploy a resolved app commit to a fixed app environment.
 
@@ -902,6 +914,8 @@ def deploy(
     env   -> deploy_env_config (which compose, URL, suffix, default data).
     data  -> derived from the env's data_default; callers cannot override it here.
     """
+    if _now is None:
+        _now = time.time
     if force_promote:
         print(
             f"[AUDIT] force_promote=True requested for {service} -> {env} (code={code!r})",
