@@ -803,9 +803,10 @@ def test_validate_evidence_json_returns_immediately_without_running_reconcile(
 def test_reconcile_workflow_folds_in_bootstrap_and_observability_apply_on_promote_prod() -> (
     None
 ):
-    """#1416: reconcile-iac-inputs.yml folds in both the IaC Runner bootstrap self-update
-    (before tools.reconcile_iac_inputs) and the SigNoz observability apply (after
-    tools.reconcile_iac_inputs) when promote_prod=true."""
+    """#1416 & #1486: reconcile-iac-inputs.yml runs the health-gated in-train IaC Runner
+    bootstrap update (before tools.reconcile_iac_inputs) on non-dry-run reconciles in both
+    Stage 2 staging soak and Stage 3 prod promotion, and folds in the SigNoz observability
+    apply (after tools.reconcile_iac_inputs) when promote_prod=true."""
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["reconcile"]
     assert job["env"]["SIGNOZ_API_KEY"] == "${{ secrets.SIGNOZ_API_KEY }}"
@@ -819,12 +820,19 @@ def test_reconcile_workflow_folds_in_bootstrap_and_observability_apply_on_promot
 
     reconcile_step = steps[reconcile_idx]
     script = reconcile_step["run"]
-    bootstrap_idx = script.index("scripts/deploy_iac_runner_bootstrap.sh")
+    non_dry_run_idx = script.index('if [[ "$dry_run" != "true" ]]; then')
+    bootstrap_idx = script.index("< scripts/deploy_iac_runner_bootstrap.sh")
     health_idx = script.index("IaC Runner public health attempt ${attempt}/12")
-    run_reconcile_idx = script.index("python -m tools.reconcile_iac_inputs")
-    assert bootstrap_idx < health_idx < run_reconcile_idx
+    run_reconcile_idx = script.index("\npython -m tools.reconcile_iac_inputs")
+    assert non_dry_run_idx < bootstrap_idx < health_idx < run_reconcile_idx
 
     obs_step = steps[obs_idx]
+    assert (
+        obs_step["if"]
+        == "github.event_name == 'workflow_dispatch' && inputs.promote_prod && !inputs.dry_run"
+        or obs_step["if"]
+        == "${{ github.event_name == 'workflow_dispatch' && inputs.promote_prod && !inputs.dry_run }}"
+    )
     assert obs_step["env"]["DEPLOY_ENV"] == "production"
     obs_script = obs_step["run"]
     alerts_idx = obs_script.index("fr-observability.shared.apply-alerts")
@@ -1612,3 +1620,129 @@ def test_audit_app_hooks_cli_validates_both_apps(monkeypatch, capsys, tmp_path) 
     assert out["ok"] is True
     assert out["services"]["finance_report/app"]["ok"] is True
     assert out["services"]["truealpha/app"]["ok"] is True
+
+
+def test_sync_app_releases_create_pr_surfaces_gh_stderr_on_failure(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    """#1463: when `gh pr create` or `gh pr edit` fails with CalledProcessError,
+    sync_app_releases writes the captured stderr to sys.stderr before re-raising."""
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.46\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.80\n",
+        encoding="utf-8",
+    )
+
+    def _fake_remote(repo_url: str, **_kw):
+        if "finance_report" in repo_url:
+            return (SHA, {"v0.2.46": "1" * 40, "v0.2.47": SHA})
+        return ("2" * 40, {"v0.2.80": "2" * 40})
+
+    monkeypatch.setattr(reconcile, "_query_remote_app_refs", _fake_remote)
+    monkeypatch.setattr(reconcile, "newest_release_tag", lambda **_kw: "v3.1.22")
+
+    open_prs_response = "[]"
+
+    def _failing_runner(cmd, **_kw):
+        argv = [str(x) for x in cmd]
+        if argv == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout="orig123456\n", stderr=""
+            )
+        if argv[:3] == ["gh", "pr", "list"]:
+            return subprocess.CompletedProcess(
+                argv, 0, stdout=open_prs_response, stderr=""
+            )
+        if argv[:3] in (["gh", "pr", "create"], ["gh", "pr", "edit"]):
+            raise subprocess.CalledProcessError(
+                1,
+                argv,
+                output="",
+                stderr="GraphQL: GitHub Actions is not permitted to create or approve pull requests",
+            )
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    with pytest.raises(subprocess.CalledProcessError):
+        reconcile.sync_app_releases(
+            tmp_path,
+            apply_repos_yaml=True,
+            sync_gitlinks=True,
+            create_pr=True,
+            pr_branch="chore/sync-app-releases",
+            runner=_failing_runner,
+        )
+    err = capsys.readouterr().err
+    assert (
+        "gh pr command failed (exit 1): GraphQL: GitHub Actions is not permitted to create or approve pull requests"
+        in err
+    )
+
+
+def test_reconcile_workflow_skips_deploy_outage_alert_when_sync_app_releases_fails(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """#1463: reconcile-iac-inputs.yml records RECONCILE_PHASE=sync-app-releases before
+    the pull-based App release PR sync and RECONCILE_PHASE=reconcile-deploy before the tag
+    deploy step, and Alert on failure skips deliver_out_of_band_alert when a failure occurs
+    during sync-app-releases before reconcile-result.json exists."""
+    import tools.out_of_band_watchdog as watchdog
+
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["reconcile"]["steps"]
+    names = [step.get("name") for step in steps]
+    reconcile_step = steps[names.index("Reconcile changed IaC inputs")]
+    alert_step = steps[names.index("Alert on failure")]
+
+    reconcile_script = reconcile_step["run"]
+    sync_phase_idx = reconcile_script.index(
+        'echo "RECONCILE_PHASE=sync-app-releases" >> "$GITHUB_ENV"'
+    )
+    sync_cmd_idx = reconcile_script.index(
+        'python -m tools.reconcile_iac_inputs "${sync_args[@]}"'
+    )
+    deploy_phase_idx = reconcile_script.index(
+        'echo "RECONCILE_PHASE=reconcile-deploy" >> "$GITHUB_ENV"'
+    )
+    deploy_cmd_idx = reconcile_script.index(
+        'python -m tools.reconcile_iac_inputs "${args[@]}"'
+    )
+    assert sync_phase_idx < sync_cmd_idx < deploy_phase_idx < deploy_cmd_idx
+
+    assert alert_step["env"]["RECONCILE_PHASE"] == "${{ env.RECONCILE_PHASE || '' }}"
+    alert_run = alert_step["run"]
+    py_body = alert_run.split("python - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+
+    delivered: list[str] = []
+    monkeypatch.setattr(
+        watchdog,
+        "deliver_out_of_band_alert",
+        lambda _env, text: delivered.append(text),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    # Case 1: failure during sync-app-releases (no reconcile-result.json) -> skip Feishu alert
+    monkeypatch.setenv("RECONCILE_PHASE", "sync-app-releases")
+    monkeypatch.setenv("INPUT_AFTER", "v3.1.25")
+    monkeypatch.setenv("INPUT_PROMOTE_PROD", "false")
+    with pytest.raises(SystemExit) as exc_info:
+        exec(compile(py_body, "<alert-on-failure>", "exec"), {})
+    assert exc_info.value.code == 0
+    assert delivered == []
+    assert (
+        "App release PR sync failed before reconcile-deploy phase; skipping deploy-outage Feishu alert."
+        in capsys.readouterr().out
+    )
+
+    # Case 2: failure during reconcile-deploy (no reconcile-result.json) -> pages Feishu
+    monkeypatch.setenv("RECONCILE_PHASE", "reconcile-deploy")
+    exec(compile(py_body, "<alert-on-failure>", "exec"), {})
+    assert len(delivered) == 1
+    assert "🚨 IaC reconcile FAILED for v3.1.25 (staging soak)" in delivered[0]

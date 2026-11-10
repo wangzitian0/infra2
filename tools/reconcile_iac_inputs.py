@@ -659,43 +659,55 @@ def sync_app_releases(
                 if isinstance(raw_num, int):
                     pr_number = raw_num
                 pr_url = str(existing_prs[0].get("url") or "")
-                runner(
-                    [
-                        "gh",
-                        "pr",
-                        "edit",
-                        str(pr_number or pr_branch),
-                        "--title",
-                        commit_msg,
-                        "--body",
-                        pr_body,
-                    ],
-                    cwd=repo_root,
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
+                try:
+                    runner(
+                        [
+                            "gh",
+                            "pr",
+                            "edit",
+                            str(pr_number or pr_branch),
+                            "--title",
+                            commit_msg,
+                            "--body",
+                            pr_body,
+                        ],
+                        cwd=repo_root,
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                except subprocess.CalledProcessError as exc:
+                    sys.stderr.write(
+                        f"gh pr command failed (exit {exc.returncode}): {(exc.stderr or exc.stdout or '').strip()}\n"
+                    )
+                    raise
                 pr_updated = True
             else:
-                created_pr = runner(
-                    [
-                        "gh",
-                        "pr",
-                        "create",
-                        "--base",
-                        "main",
-                        "--head",
-                        pr_branch,
-                        "--title",
-                        commit_msg,
-                        "--body",
-                        pr_body,
-                    ],
-                    cwd=repo_root,
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
+                try:
+                    created_pr = runner(
+                        [
+                            "gh",
+                            "pr",
+                            "create",
+                            "--base",
+                            "main",
+                            "--head",
+                            pr_branch,
+                            "--title",
+                            commit_msg,
+                            "--body",
+                            pr_body,
+                        ],
+                        cwd=repo_root,
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                except subprocess.CalledProcessError as exc:
+                    sys.stderr.write(
+                        f"gh pr command failed (exit {exc.returncode}): {(exc.stderr or exc.stdout or '').strip()}\n"
+                    )
+                    raise
                 pr_url = (created_pr.stdout or "").strip()
                 m_num = re.search(r"/pull/([0-9]+)$", pr_url)
                 if m_num:

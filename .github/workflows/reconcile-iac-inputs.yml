@@ -341,6 +341,7 @@ jobs:
             elif [[ "$promote_prod" != "true" ]]; then
               sync_args+=(--create-pr)
             fi
+            echo "RECONCILE_PHASE=sync-app-releases" >> "$GITHUB_ENV"
             python -m tools.reconcile_iac_inputs "${sync_args[@]}"
             if [[ "$promote_prod" != "true" && "$dry_run" != "true" && -f sync-app-releases.json ]]; then
               synced_infra_tag="$(jq -r 'if .infra_tag_cut then (.next_infra_tag // empty) else empty end' sync-app-releases.json)"
@@ -360,6 +361,7 @@ jobs:
             fi
           fi
 
+          echo "RECONCILE_PHASE=reconcile-deploy" >> "$GITHUB_ENV"
           python -m tools.reconcile_iac_inputs "${args[@]}"
 
           echo "RECONCILE_BEFORE=$before" >> "$GITHUB_ENV"
@@ -407,6 +409,7 @@ jobs:
         env:
           INPUT_AFTER: ${{ inputs.after || github.ref_name }}
           INPUT_PROMOTE_PROD: ${{ inputs.promote_prod || false }}
+          RECONCILE_PHASE: ${{ env.RECONCILE_PHASE || '' }}
         run: |
           python - <<'PY'
           import json, os
@@ -423,6 +426,9 @@ jobs:
           )
           text = None
           result = Path("reconcile-result.json")
+          if os.environ.get("RECONCILE_PHASE") == "sync-app-releases" and not result.exists():
+              print("::warning::App release PR sync failed before reconcile-deploy phase; skipping deploy-outage Feishu alert.")
+              raise SystemExit(0)
           if result.exists():
               try:
                   text = json.loads(result.read_text()).get("alert_text")
