@@ -2683,11 +2683,13 @@ def test_hook_runner_context_env_names_reach_a_slot_without_ambient_values(
             )
 
 
-def test_run_post_deploy_app_hooks_skips_missing_required_hook_env_without_raising(
+def test_run_post_deploy_app_hooks_records_failed_entry_on_missing_required_hook_env(
     monkeypatch,
 ) -> None:
     """#1533: when a hook slot raises ValueError('missing required hook env: ...'),
-    run_post_deploy_app_hooks records a skipped pass entry instead of crashing the train."""
+    run_post_deploy_app_hooks records a failed HookRunResult (status='fail', ok=False,
+    exit_code=1) instead of an unhandled traceback, and judge_staging_gate rejects it."""
+    from tools.promotion_soak_guard import judge_staging_gate
 
     def _fake_exec(
         manifest,
@@ -2716,6 +2718,11 @@ def test_run_post_deploy_app_hooks_skips_missing_required_hook_env_without_raisi
     assert len(post_results) == 1
     assert post_results[0]["service"] == "platform/todo"
     assert post_results[0]["slot"] == "staging_gate"
-    assert post_results[0]["ok"] is True
-    assert post_results[0]["skipped"] is True
-    assert "missing required hook env" in str(post_results[0]["skip_reason"])
+    assert post_results[0]["status"] == "fail"
+    assert post_results[0]["ok"] is False
+    assert post_results[0]["exit_code"] == 1
+    assert "missing required hook env" in str(post_results[0]["missing_env_error"])
+
+    ok, detail = judge_staging_gate(post_results, {"platform/todo": "v3.2.0"})
+    assert ok is False
+    assert detail == "failed staging_gate for platform/todo@v3.2.0"

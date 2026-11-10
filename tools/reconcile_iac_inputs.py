@@ -1207,7 +1207,7 @@ def run_post_deploy_app_hooks(
                 hook_env_name = (
                     "production" if target_env in ("prod", "production") else "staging"
                 )
-                skipped_reason: str | None = None
+                missing_env_error: str | None = None
                 try:
                     res = execute_app_hook_slot(
                         manifest,
@@ -1221,18 +1221,18 @@ def run_post_deploy_app_hooks(
                 except ValueError as exc:
                     if "missing required hook env:" not in str(exc):
                         raise
-                    skipped_reason = str(exc)
+                    missing_env_error = str(exc)
                     res = HookRunResult(
                         service=manifest.service,
                         slot=single_slot,
                         environment=hook_env_name,
                         app_url=app_url,
                         version_ref=version_ref,
-                        status="pass",
-                        exit_code=0,
+                        status="fail",
+                        exit_code=1,
                         duration_seconds=0.0,
-                        summary=f"skipped: {exc}",
-                        stderr_tail="",
+                        summary=missing_env_error,
+                        stderr_tail=missing_env_error,
                     )
                 entry = res.to_dict()
                 entry["service"] = service
@@ -1242,9 +1242,8 @@ def run_post_deploy_app_hooks(
                 entry["app_url"] = app_url
                 entry["source_sha"] = source_sha
                 entry["cwd"] = str(hook_cwd)
-                if skipped_reason is not None:
-                    entry["skipped"] = True
-                    entry["skip_reason"] = skipped_reason
+                if missing_env_error is not None:
+                    entry["missing_env_error"] = missing_env_error
                 hook_results.append(entry)
                 if res.status != "pass":
                     stop_early = True
@@ -1364,7 +1363,7 @@ def run_scheduled_app_audits(
         hook_env_name = (
             "production" if target_env in ("prod", "production") else "staging"
         )
-        skipped_reason: str | None = None
+        missing_env_error: str | None = None
         try:
             try:
                 res = execute_app_hook_slot(
@@ -1380,18 +1379,18 @@ def run_scheduled_app_audits(
             except ValueError as exc:
                 if "missing required hook env:" not in str(exc):
                     raise
-                skipped_reason = str(exc)
+                missing_env_error = str(exc)
                 res = HookRunResult(
                     service=manifest.service,
                     slot=slot,
                     environment=hook_env_name,
                     app_url=app_url,
                     version_ref=version_ref,
-                    status="pass",
-                    exit_code=0,
+                    status="fail",
+                    exit_code=1,
                     duration_seconds=0.0,
-                    summary=f"skipped: {exc}",
-                    stderr_tail="",
+                    summary=missing_env_error,
+                    stderr_tail=missing_env_error,
                 )
         finally:
             if tmp_checkout is not None:
@@ -1404,9 +1403,8 @@ def run_scheduled_app_audits(
         entry["app_url"] = app_url
         entry["source_sha"] = source_sha
         entry["cwd"] = str(hook_cwd)
-        if skipped_reason is not None:
-            entry["skipped"] = True
-            entry["skip_reason"] = skipped_reason
+        if missing_env_error is not None:
+            entry["missing_env_error"] = missing_env_error
         results.append(entry)
 
     if (
