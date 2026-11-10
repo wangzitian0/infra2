@@ -170,6 +170,7 @@ def apply_alerts(c, dry_run=False, prune=False):
         )
         raise Exit("Failed to list SigNoz alert rules before apply", code=1)
     existing_rules = listed.get("data")
+    ids_before = _signoz_rule_ids(existing_rules)
 
     all_ok = True
     # --- upsert: (re)write every catalog rule so a changed definition takes effect.
@@ -185,32 +186,40 @@ def apply_alerts(c, dry_run=False, prune=False):
             c, method="POST", path="/api/v1/rules", payload=payload
         )
         # A transient failure (edge 5xx, no status) can hide a rule SigNoz already
-        # stored. Wait, list the rules, and POST again only when the name is absent: a
-        # second POST of a stored rule would duplicate it (#1550).
+        # stored. Wait, list the rules, and POST again only when no NEW rule with this
+        # name is listed: a second POST of a stored rule would duplicate it (#1550).
         retries, lost_response = 0, False
         while (
             not created["ok"]
             and created["status"] in alerting._SIGNOZ_TRANSIENT_STATUSES
             and retries < len(alerting._SIGNOZ_RETRY_DELAYS_SECONDS)
         ):
-            alerting._sleep(alerting._SIGNOZ_RETRY_DELAYS_SECONDS[retries])
+            delay = alerting._SIGNOZ_RETRY_DELAYS_SECONDS[retries]
             retries += 1
+            info(
+                f"SigNoz create of {alert_name} got {created['status']}; "
+                f"wait {delay}s, check the rule list, then retry"
+            )
+            alerting._sleep(delay)
             relisted = alerting._signoz_request(c, method="GET", path="/api/v1/rules")
-            if not relisted["ok"]:
-                break  # an unreadable list cannot prove absence: never risk a duplicate
-            if find_signoz_rule_id(relisted.get("data"), alert_name):
+            if not relisted["ok"] or not isinstance(relisted.get("data"), (dict, list)):
+                # An unreadable list cannot prove absence: never risk a duplicate.
+                error(
+                    f"SigNoz rule state unknown after a failed create: {alert_name}",
+                    "the rule list is unreadable, so the task sends no second create",
+                )
+                break
+            if _signoz_rule_ids(relisted["data"], alert_name) - ids_before:
                 lost_response = True
                 break
             created = alerting._signoz_request(
                 c, method="POST", path="/api/v1/rules", payload=payload
             )
+        verb = "updated" if existing_id else "created"
         if lost_response:
-            success(f"SigNoz alert rule created after a lost response: {alert_name}")
+            success(f"SigNoz alert rule {verb} after a lost response: {alert_name}")
         elif created["ok"]:
-            success(
-                f"SigNoz alert rule {'updated' if existing_id else 'created'}: "
-                f"{alert_name}"
-            )
+            success(f"SigNoz alert rule {verb}: {alert_name}")
         else:
             all_ok = False
             error(
@@ -248,6 +257,21 @@ def apply_alerts(c, dry_run=False, prune=False):
     if not all_ok:
         raise Exit("Failed to reconcile one or more SigNoz alert rules", code=1)
     return all_ok
+
+
+def _signoz_rule_ids(rules_response, alert_name: str | None = None) -> set[str]:
+    """Ids of the listed rules; only the rules named ``alert_name`` when it is given."""
+    from common.alerting import _iter_signoz_items
+
+    return {
+        str(rule.get("id") or rule.get("ruleId"))
+        for rule in _iter_signoz_items(
+            rules_response, collection_keys=("rules", "items")
+        )
+        if isinstance(rule, dict)
+        and (rule.get("id") or rule.get("ruleId"))
+        and (alert_name is None or alert_name in (rule.get("alert"), rule.get("name")))
+    }
 
 
 def _delete_signoz_rule(alerting, c, rule_id: str) -> bool:

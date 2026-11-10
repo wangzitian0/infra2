@@ -90,7 +90,7 @@ def _signoz_request(c, *, method: str, path: str, payload: dict | None = None):
         body_args = f" --data-raw {shlex.quote(json.dumps(payload))}"
 
     command = (
-        f"curl -sS -X {shlex.quote(method)} "
+        f"curl -sS --connect-timeout 10 --max-time 30 -X {shlex.quote(method)} "
         f"'https://{context['domain']}{path}' "
         f"-H {api_key_header} "
         "-H 'Content-Type: application/json' "

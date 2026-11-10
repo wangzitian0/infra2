@@ -435,6 +435,10 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
    uv run python -m invoke fr-observability.shared.apply-dashboard
    uv run python -m invoke fr-observability.shared.print-alerts   # 离线看 payload
    ```
+   **Apply and retry contract (#1550).** `apply-alerts` re-applies each rule by delete, then create.
+   - A transient create failure (HTTP 502, 503, 504, 520 to 524, or no status) makes the task wait 2 s, then 5 s. After each wait, it lists the rules and creates again only when no new rule with that name exists. It makes at most 3 creates. An unreadable list never triggers a second create.
+   - In the request helper, `GET`, `PUT` and `DELETE` retry the same way. `POST` never retries there. Each curl call is limited to 30 s.
+   - If all creates fail, the rule stays missing and the task exits 1. The next apply restores it.
 3. **finance_report 规则目录(#1106 / #906)**:metric 规则渲染为 SigNoz v5 PromQL(`alertType=METRIC_BASED_ALERT`, `ruleType=promql_rule`, `condition.compositeQuery.queries[]`),error-log 规则渲染为 v5 builder `threshold_rule`(`queries[]` 里的 `builder_query`, `signal=logs`);SigNoz 拒任一规则即 fail 整个 apply(部分 apply 不算成功 GitOps)。写法约束见 §4.6。每条规则的判定(阈值、窗口、无数据):
 
    | 规则 | 触发条件 | 等级 | 无数据时 | 理由 |
