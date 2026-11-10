@@ -187,6 +187,7 @@ jobs:
           INPUT_AFTER: ${{ inputs.after || '' }}
           INPUT_DRY_RUN: ${{ inputs.dry_run || false }}
           INPUT_PROMOTE_PROD: ${{ inputs.promote_prod || false }}
+          INPUT_RUN_POST_DEPLOY_HOOKS: ${{ inputs.run_post_deploy_hooks }}
         run: |
           set -euo pipefail
 
@@ -194,6 +195,7 @@ jobs:
           # staging/prod accept tags only, so reconcile always pins the tag (not a sha).
           after="$REF_NAME"
           dry_run="false"
+          run_post_deploy_hooks="${INPUT_RUN_POST_DEPLOY_HOOKS:-true}"
           # Release decoupling: a tag push auto-applies STAGING only (soak). Prod is an
           # explicit, deliberate promotion via workflow_dispatch (promote_prod=true) —
           # a tag push NEVER auto-deploys prod.
@@ -337,7 +339,7 @@ jobs:
                 --output-json reconcile-result.json)
           [[ -n "$before" ]] && args+=(--before "$before")
           [[ "$dry_run" == "true" ]] && args+=(--dry-run)
-          if [[ "${{ inputs.run_post_deploy_hooks != false && 'true' || 'false' }}" == "true" ]]; then
+          if [[ "$run_post_deploy_hooks" == "true" ]]; then
             if [[ "$promote_prod" == "true" ]]; then
               args+=(--run-post-deploy-hooks --post-deploy-hook-slot smoke)
             else
@@ -379,7 +381,7 @@ jobs:
                       --timeout 3300
                       --output-json reconcile-result.json
                       --env staging)
-                if [[ "${{ inputs.run_post_deploy_hooks != false && 'true' || 'false' }}" == "true" ]]; then
+                if [[ "$run_post_deploy_hooks" == "true" ]]; then
                   args+=(--run-post-deploy-hooks --post-deploy-hook-slot smoke,staging_gate)
                 fi
               fi

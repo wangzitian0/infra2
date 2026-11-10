@@ -2130,18 +2130,46 @@ def main(argv: list[str] | None = None) -> int:
         app_url = explicit_url or f"https://{args.domain}"
         hook_cwd = repo_root
         tmp_checkout = None
+        local_manifests = _discover_local_service_hook_manifests(repo_root)
+        rel_local = (
+            (
+                local_manifests.get(args.hook_service)
+                or LOCAL_SERVICE_HOOK_MANIFESTS.get(args.hook_service)
+            )
+            if args.hook_service
+            else None
+        )
         if args.hooks_manifest:
             manifest_or_path = Path(args.hooks_manifest)
             if args.hook_service and not explicit_url:
-                resolved_ver, _, app_url = resolve_app_hook_coordinates(
-                    args.hook_service,
-                    repo_root=repo_root,
-                    after=args.version_ref or args.after,
-                    target_env=target_env,
-                    domain=args.domain,
-                    source_sha=args.hook_source_sha or ("a" * 40),
-                )
-                version_ref = args.version_ref or resolved_ver
+                if args.hook_service not in APP_SOURCES and rel_local:
+                    app_url = _local_service_app_url(
+                        args.hook_service,
+                        "prod" if promote_prod else target_env,
+                        args.domain,
+                    )
+                else:
+                    resolved_ver, _, app_url = resolve_app_hook_coordinates(
+                        args.hook_service,
+                        repo_root=repo_root,
+                        after=args.version_ref or args.after,
+                        target_env=target_env,
+                        domain=args.domain,
+                        source_sha=args.hook_source_sha or ("a" * 40),
+                    )
+                    version_ref = args.version_ref or resolved_ver
+        elif args.hook_service and args.hook_service not in APP_SOURCES and rel_local:
+            local_path = Path(repo_root) / rel_local
+            if not local_path.is_file():
+                local_path = REPO_ROOT / rel_local
+            manifest_or_path = load_hooks_manifest(local_path)
+            version_ref = args.version_ref or args.after or "main"
+            app_url = explicit_url or _local_service_app_url(
+                args.hook_service,
+                "prod" if promote_prod else target_env,
+                args.domain,
+            )
+            hook_cwd = local_path.parent
         elif args.hook_service and args.hook_source_sha:
             if not explicit_url:
                 resolved_ver, _, app_url = resolve_app_hook_coordinates(
