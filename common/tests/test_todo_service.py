@@ -112,11 +112,11 @@ def test_todo_app_endpoints_contract(monkeypatch) -> None:
         "postgres",
         "redis",
         "s3",
-        "minio",
         "signoz",
         "openpanel",
         "authentik",
     }
+    assert "minio" not in checks
     for name, c in checks.items():
         assert c["status"] == "pass"
 

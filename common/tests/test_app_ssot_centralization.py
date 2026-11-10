@@ -24,6 +24,14 @@ def test_app_sources_derives_dynamically_from_repos_yaml(
         "finance_report/app": "wangzitian0/finance_report",
         "truealpha/app": "wangzitian0/truealpha",
     }
+    assert constants.APP_REPO_ID_TO_SERVICE == {
+        "finance-report": "finance_report/app",
+        "truealpha": "truealpha/app",
+    }
+    assert constants.SERVICE_TO_SUBMODULE_PATH == {
+        "finance_report/app": "repos/finance_report",
+        "truealpha/app": "repos/truealpha",
+    }
 
     synthetic_repos_yaml = tmp_path / "repos.yaml"
     synthetic_repos_yaml.write_text(
@@ -40,6 +48,16 @@ def test_app_sources_derives_dynamically_from_repos_yaml(
         "finance_report/app": "wangzitian0/finance_report",
         "truealpha/app": "wangzitian0/truealpha",
         "alpha_lab/app": "wangzitian0/alpha_lab",
+    }
+    assert constants._load_app_repo_id_to_service(synthetic_repos_yaml) == {
+        "finance-report": "finance_report/app",
+        "truealpha": "truealpha/app",
+        "alpha-lab": "alpha_lab/app",
+    }
+    assert constants._load_service_to_submodule_path(synthetic_repos_yaml) == {
+        "finance_report/app": "repos/finance_report",
+        "truealpha/app": "repos/truealpha",
+        "alpha_lab/app": "repos/alpha_lab",
     }
 
     # Also supports the compact `repos:` mapping shape
@@ -170,12 +188,41 @@ def test_ast_guard_no_hardcoded_observability_file_tuples() -> None:
     const_tree = ast.parse(
         (ROOT / "common" / "core" / "constants.py").read_text(encoding="utf-8")
     )
+    derived_constants = {
+        "APP_SOURCES",
+        "APP_REPO_ID_TO_SERVICE",
+        "SERVICE_TO_SUBMODULE_PATH",
+    }
+    seen_derived: set[str] = set()
     for node in const_tree.body:
         if (
             isinstance(node, ast.AnnAssign)
             and isinstance(node.target, ast.Name)
-            and node.target.id == "APP_SOURCES"
+            and node.target.id in derived_constants
         ):
+            seen_derived.add(node.target.id)
             assert isinstance(node.value, ast.Call), (
-                "APP_SOURCES must be derived via _load_app_sources_from_repos_yaml()"
+                f"{node.target.id} must be derived via a loader call in common/core/constants.py"
+            )
+    assert seen_derived == derived_constants
+
+    reconcile_tree = ast.parse(
+        (ROOT / "tools" / "reconcile_iac_inputs.py").read_text(encoding="utf-8")
+    )
+    for node in reconcile_tree.body:
+        target_names = []
+        val = None
+        if isinstance(node, ast.Assign):
+            target_names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            val = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            target_names = [node.target.id]
+            val = node.value
+        for forbidden in ("APP_REPO_ID_TO_SERVICE", "SERVICE_TO_SUBMODULE_PATH"):
+            assert forbidden not in target_names, (
+                f"{forbidden} must be imported from common.core.constants, not redefined in reconcile_iac_inputs.py"
+            )
+        if "LOCAL_SERVICE_HOOK_MANIFESTS" in target_names:
+            assert isinstance(val, ast.Call), (
+                "LOCAL_SERVICE_HOOK_MANIFESTS must be derived via _discover_local_service_hook_manifests()"
             )

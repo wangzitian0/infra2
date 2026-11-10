@@ -25,8 +25,13 @@ from pathlib import Path
 from typing import Callable, Sequence
 import yaml
 
-from common.core.constants import APP_SOURCES, REPO_ROOT
-from common.core.registry import domain_for_service
+from common.core.constants import (
+    APP_REPO_ID_TO_SERVICE,
+    APP_SOURCES,
+    REPO_ROOT,
+    SERVICE_TO_SUBMODULE_PATH,
+)
+from common.core.registry import domain_for_service, service_attrs
 from common.deploy.app_contract import (
     APP_HOOKS_MANIFEST_PATH,
     HOOK_SLOTS,
@@ -71,17 +76,42 @@ from infra2_sdk.refs import (
 
 MANIFEST_PATH = "docs/ssot/deploy-dependencies.yaml"
 HARNESS_REPOS_PATH = "harness/repos.yaml"
-APP_REPO_ID_TO_SERVICE: dict[str, str] = {
-    "finance-report": "finance_report/app",
-    "truealpha": "truealpha/app",
-}
 SERVICE_TO_APP_REPO_ID: dict[str, str] = {
     service: repo_id for repo_id, service in APP_REPO_ID_TO_SERVICE.items()
 }
-SERVICE_TO_SUBMODULE_PATH: dict[str, str] = {
-    "finance_report/app": "repos/finance_report",
-    "truealpha/app": "repos/truealpha",
-}
+
+
+def _discover_local_service_hook_manifests(
+    repo_root: Path = REPO_ROOT,
+) -> dict[str, str]:
+    """Discover local ``runtime-hooks.manifest.json`` files declared by registered IaC services."""
+    manifests: dict[str, str] = {}
+    for service_id, meta in sorted(service_attrs().items()):
+        if not meta.compose_path:
+            continue
+        rel_dir = Path(meta.compose_path).parent
+        rel_manifest = (rel_dir / APP_HOOKS_MANIFEST_PATH).as_posix()
+        if (Path(repo_root) / rel_manifest).is_file():
+            manifests[service_id] = rel_manifest
+    return manifests
+
+
+LOCAL_SERVICE_HOOK_MANIFESTS: dict[str, str] = _discover_local_service_hook_manifests()
+
+
+def _local_service_app_url(
+    service: str,
+    target_env: str,
+    domain: str,
+) -> str:
+    """Resolve the public HTTPS URL for a registered IaC service in ``target_env``."""
+    meta = service_attrs().get(service)
+    effective_domain = (meta.domain if meta and meta.domain else "") or domain
+    subdomain = (meta.subdomain or meta.service) if meta else service.split("/")[-1]
+    env_suffix = "" if target_env in ("prod", "production") else "-staging"
+    return f"https://{subdomain}{env_suffix}.{effective_domain}"
+
+
 SOURCE_HASH_FORMULA_PATHS = (
     "common/deploy/deployer.py",
     "common/deploy/config_hash.py",
@@ -1122,37 +1152,54 @@ def run_post_deploy_app_hooks(
     record_issues: bool = True,
     issues_factory: Callable[[str, str], object] = GitHubIssues,
 ) -> list[dict[str, object]]:
-    """Execute post-deploy verification hook slot(s) for each deployed App service (#1416, #1493)."""
+    """Execute post-deploy verification hook slot(s) for each deployed App or local service (#1416, #1493, #1521)."""
     slots = _parse_hook_slots(slot)
+    local_manifests = _discover_local_service_hook_manifests(repo_root)
     applied_services = {
         part.strip()
         for cmd in applied
         for part in cmd.service.split(",")
         if part.strip() in APP_SOURCES
+        or part.strip() in local_manifests
+        or part.strip() in LOCAL_SERVICE_HOOK_MANIFESTS
     }
     hook_results: list[dict[str, object]] = []
     stop_early = False
     for service in sorted(applied_services):
-        version_ref = plan.app_release_tags.get(service) or after
-        _, source_sha, app_url = resolve_app_hook_coordinates(
-            service,
-            repo_root=repo_root,
-            after=after,
-            target_env=target_env,
-            domain=domain,
-            runner=runner,
+        rel_local = local_manifests.get(service) or LOCAL_SERVICE_HOOK_MANIFESTS.get(
+            service
         )
-        manifest = fetch_hooks_manifest(
-            service,
-            source_sha,
-            manifest_fetcher=manifest_fetcher,
-        )
-        hook_cwd, tmp_checkout = resolve_app_hook_cwd(
-            service,
-            source_sha,
-            repo_root=repo_root,
-            runner=runner,
-        )
+        local_path = (Path(repo_root) / rel_local) if rel_local else None
+        if service not in APP_SOURCES and local_path is not None:
+            if not local_path.is_file():
+                local_path = REPO_ROOT / rel_local  # type: ignore[arg-type]
+            manifest = load_hooks_manifest(local_path)
+            version_ref = after or "main"
+            source_sha = after or "local"
+            app_url = _local_service_app_url(service, target_env, domain)
+            hook_cwd = local_path.parent
+            tmp_checkout = None
+        else:
+            version_ref = plan.app_release_tags.get(service) or after
+            _, source_sha, app_url = resolve_app_hook_coordinates(
+                service,
+                repo_root=repo_root,
+                after=after,
+                target_env=target_env,
+                domain=domain,
+                runner=runner,
+            )
+            manifest = fetch_hooks_manifest(
+                service,
+                source_sha,
+                manifest_fetcher=manifest_fetcher,
+            )
+            hook_cwd, tmp_checkout = resolve_app_hook_cwd(
+                service,
+                source_sha,
+                repo_root=repo_root,
+                runner=runner,
+            )
         try:
             for single_slot in slots:
                 res = execute_app_hook_slot(
@@ -1219,12 +1266,14 @@ def run_scheduled_app_audits(
     run_url: str = "",
     services: Sequence[str] | None = None,
 ) -> list[dict[str, object]]:
-    """Execute a scheduled runtime hook slot across registered Apps and record the GitHub Issue trail (#1493)."""
+    """Execute a scheduled runtime hook slot across registered Apps and local services and record the GitHub Issue trail (#1493, #1521)."""
     if slot not in HOOK_SLOTS:
         raise ValueError(f"unknown hook slot {slot!r}; allowed: {list(HOOK_SLOTS)}")
     effective_domain = base_domain.strip() or domain
+    local_manifests = _discover_local_service_hook_manifests(repo_root)
+    default_services = sorted(set(APP_SOURCES.keys()) | set(local_manifests.keys()))
     target_services = (
-        [str(s) for s in services if str(s)] if services else sorted(APP_SOURCES.keys())
+        [str(s) for s in services if str(s)] if services else default_services
     )
     pinned_tags = load_app_release_tags(repo_root, runner=runner)
     effective_ambient: dict[str, str] = dict(os.environ)
@@ -1235,41 +1284,59 @@ def run_scheduled_app_audits(
 
     results: list[dict[str, object]] = []
     for service in target_services:
-        repo_slug = APP_SOURCES.get(service)
-        if not repo_slug:
-            raise ValueError(f"unknown app service {service!r}")
-        version_ref, source_sha, app_url = resolve_app_hook_coordinates(
-            service,
-            repo_root=repo_root,
-            after=pinned_tags.get(service, ""),
-            target_env=target_env,
-            domain=effective_domain,
-            runner=runner,
+        rel_local = local_manifests.get(service) or LOCAL_SERVICE_HOOK_MANIFESTS.get(
+            service
         )
-        sub_rel = SERVICE_TO_SUBMODULE_PATH.get(service, "")
-        local_manifest_path = (
-            (Path(repo_root) / sub_rel / APP_HOOKS_MANIFEST_PATH) if sub_rel else None
-        )
-        if (
-            manifest_fetcher is None
-            and local_manifest_path is not None
-            and local_manifest_path.is_file()
-        ):
-            manifest = load_hooks_manifest(local_manifest_path)
+        if service not in APP_SOURCES and rel_local:
+            local_path = Path(repo_root) / rel_local
+            if not local_path.is_file():
+                local_path = REPO_ROOT / rel_local
+            manifest = load_hooks_manifest(local_path)
+            if slot not in manifest.slots:
+                continue
+            version_ref = "main"
+            source_sha = "local"
+            app_url = _local_service_app_url(service, target_env, effective_domain)
+            hook_cwd = local_path.parent
+            tmp_checkout = None
         else:
-            manifest = fetch_hooks_manifest(
+            repo_slug = APP_SOURCES.get(service)
+            if not repo_slug:
+                raise ValueError(f"unknown app service {service!r}")
+            version_ref, source_sha, app_url = resolve_app_hook_coordinates(
+                service,
+                repo_root=repo_root,
+                after=pinned_tags.get(service, ""),
+                target_env=target_env,
+                domain=effective_domain,
+                runner=runner,
+            )
+            sub_rel = SERVICE_TO_SUBMODULE_PATH.get(service, "")
+            local_manifest_path = (
+                (Path(repo_root) / sub_rel / APP_HOOKS_MANIFEST_PATH)
+                if sub_rel
+                else None
+            )
+            if (
+                manifest_fetcher is None
+                and local_manifest_path is not None
+                and local_manifest_path.is_file()
+            ):
+                manifest = load_hooks_manifest(local_manifest_path)
+            else:
+                manifest = fetch_hooks_manifest(
+                    service,
+                    source_sha,
+                    manifest_fetcher=manifest_fetcher,
+                )
+            if slot not in manifest.slots:
+                continue
+            hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 service,
                 source_sha,
-                manifest_fetcher=manifest_fetcher,
+                repo_root=repo_root,
+                runner=runner,
             )
-        if slot not in manifest.slots:
-            continue
-        hook_cwd, tmp_checkout = resolve_app_hook_cwd(
-            service,
-            source_sha,
-            repo_root=repo_root,
-            runner=runner,
-        )
         try:
             res = execute_app_hook_slot(
                 manifest,

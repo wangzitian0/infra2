@@ -2267,3 +2267,97 @@ def test_reconcile_rejects_off_main_app_release_tag_in_sync_and_deploy(
                 "harness/repos.yaml",
             ]
         )
+
+
+def test_local_service_hook_manifests_discovery_and_execution(monkeypatch) -> None:
+    """#1521: LOCAL_SERVICE_HOOK_MANIFESTS is dynamically derived from service_attrs() and
+    both run_post_deploy_app_hooks and run_scheduled_app_audits execute platform/todo's
+    runtime-hooks.manifest.json slots."""
+    from infra2_sdk.manifests import HookRunResult
+
+    assert reconcile.LOCAL_SERVICE_HOOK_MANIFESTS == {
+        "platform/todo": "platform/30.todo/runtime-hooks.manifest.json",
+    }
+
+    executed: list[tuple[str, str, str, str, Path]] = []
+
+    def _fake_exec(
+        manifest,
+        slot: str,
+        *,
+        app_url: str,
+        environment: str,
+        version_ref: str,
+        cwd: Path,
+        **_kw,
+    ):
+        executed.append((manifest.service, slot, app_url, environment, Path(cwd)))
+        return HookRunResult(
+            service=manifest.service,
+            slot=slot,
+            environment=environment,
+            app_url=app_url,
+            version_ref=version_ref,
+            status="pass",
+            exit_code=0,
+            duration_seconds=0.05,
+        )
+
+    monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
+
+    plan = build_plan(["platform/30.todo/app.py"])
+    applied = [
+        reconcile.DeployCommand(
+            service="platform/todo", deploy_type="staging", argv=["true"]
+        )
+    ]
+    post_results = reconcile.run_post_deploy_app_hooks(
+        plan,
+        applied,
+        repo_root=ROOT,
+        after="v3.2.0",
+        target_env="staging",
+        slot="smoke,staging_gate",
+        record_issues=False,
+    )
+    assert [r["slot"] for r in post_results] == ["smoke", "staging_gate"]
+    assert all(
+        r["service"] == "platform/todo" and r["ok"] is True for r in post_results
+    )
+    assert executed == [
+        (
+            "platform/todo",
+            "smoke",
+            "https://todo-staging.zitian.party",
+            "staging",
+            ROOT / "platform/30.todo",
+        ),
+        (
+            "platform/todo",
+            "staging_gate",
+            "https://todo-staging.zitian.party",
+            "staging",
+            ROOT / "platform/30.todo",
+        ),
+    ]
+
+    executed.clear()
+    audit_results = reconcile.run_scheduled_app_audits(
+        ROOT,
+        target_env="prod",
+        slot="scheduled_audit",
+        record_trail=False,
+        services=["platform/todo"],
+    )
+    assert len(audit_results) == 1
+    assert audit_results[0]["service"] == "platform/todo"
+    assert audit_results[0]["ok"] is True
+    assert executed == [
+        (
+            "platform/todo",
+            "scheduled_audit",
+            "https://todo.zitian.party",
+            "production",
+            ROOT / "platform/30.todo",
+        ),
+    ]

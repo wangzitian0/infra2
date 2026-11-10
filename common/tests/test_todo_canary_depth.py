@@ -361,8 +361,10 @@ def test_redis_probe_fails_when_get_returns_a_different_value(app) -> None:
 
 
 class _FakeConnection:
-    def __init__(self):
+    def __init__(self, readback: str = "canary-write-ok"):
         self.statements: list[str] = []
+        self._readback = readback
+        self._last_sql = ""
 
     def __enter__(self):
         return self
@@ -372,10 +374,13 @@ class _FakeConnection:
 
     def execute(self, sql):
         self.statements.append(sql)
+        self._last_sql = sql
         return self
 
     def fetchone(self):
-        return (1,)
+        if self._last_sql == "SELECT 1":
+            return (1,)
+        return (self._readback,)
 
     def close(self):
         return None
@@ -443,7 +448,14 @@ def test_postgres_probe_logs_in_as_the_canary_role_and_selects_one(app) -> None:
     )
     assert parts.username == "canary_ro"
     assert unquote(parts.password) == password
-    assert connection.statements == ["SELECT 1"]
+    assert connection.statements == [
+        "SELECT 1",
+        "SET LOCAL transaction_read_only = off",
+        "CREATE TEMP TABLE IF NOT EXISTS canary_todo_probe (id TEXT PRIMARY KEY, title TEXT NOT NULL)",
+        "INSERT INTO canary_todo_probe (id, title) VALUES ('probe-1', 'canary-write-ok') ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title",
+        "SELECT title FROM canary_todo_probe WHERE id = 'probe-1'",
+        "DELETE FROM canary_todo_probe WHERE id = 'probe-1'",
+    ]
     assert "canary_ro" in result["detail"]
 
 
@@ -634,11 +646,11 @@ def test_run_all_checks_hands_each_probe_its_credentials(app, monkeypatch) -> No
         "postgres",
         "redis",
         "s3",
-        "minio",
         "signoz",
         "openpanel",
         "authentik",
     }
+    assert "minio" not in report["checks"]
     assert calls["redis"]["args"][0] == "platform-redis-staging"
     assert calls["redis"]["kwargs"]["password"] == REDIS_PW
     assert calls["postgres"]["args"][0] == "platform-postgres-staging"
@@ -695,7 +707,7 @@ def test_a_failed_write_path_turns_the_document_red_as_503(app, monkeypatch) -> 
     assert body["ok"] is False
     assert body["failed"] == ["s3"] and body["unconfigured"] == []
     assert body["checks"]["s3"]["detail"] == "AccessDenied"
-    assert body["checks"]["minio"]["status"] == "fail", "the legacy alias follows s3"
+    assert "minio" not in body["checks"]
 
 
 def test_an_unconfigured_write_path_is_red_but_never_a_failure(
@@ -1183,6 +1195,7 @@ def test_main_starts_no_second_telemetry_bootstrap(
 
     for key, value in _issued_telemetry_env("staging").items():
         monkeypatch.setenv(key, value)
+    monkeypatch.setenv("CANARY_POSTGRES_PASSWORD", PG_PASSWORD)
     # main() installs a SIGTERM handler and starts the server: do neither in the test run
     monkeypatch.setattr(signal, "signal", lambda *args: None)
     server = types.ModuleType("uvicorn")
@@ -1195,6 +1208,20 @@ def test_main_starts_no_second_telemetry_bootstrap(
 
     assert len(telemetry_calls) == 1, "main() must not start OpenTelemetry again"
     assert not hasattr(module, "configure_service_telemetry")
+
+
+def test_main_validates_startup_environment_against_manifest_and_fails_closed(
+    monkeypatch, telemetry_calls
+) -> None:
+    """`main()` calls validate_startup_environment() and fails closed with RuntimeError
+    when CANARY_POSTGRES_PASSWORD (required by env.manifest.json) is missing."""
+    for key, value in _issued_telemetry_env("staging").items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("CANARY_POSTGRES_PASSWORD", raising=False)
+    module = _load_todo_app()
+
+    with pytest.raises(RuntimeError, match="CANARY_POSTGRES_PASSWORD"):
+        module.main()
 
 
 def test_the_providers_shut_down_with_the_app(monkeypatch, telemetry_calls) -> None:
@@ -1897,6 +1924,7 @@ def test_postgres_probe_crud_executes_write_read_delete_roundtrip(app) -> None:
     assert res["status"] == "pass", res
     assert conn.statements == [
         "SELECT 1",
+        "SET LOCAL transaction_read_only = off",
         "CREATE TEMP TABLE IF NOT EXISTS canary_todo_probe (id TEXT PRIMARY KEY, title TEXT NOT NULL)",
         "INSERT INTO canary_todo_probe (id, title) VALUES ('probe-1', 'canary-write-ok') ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title",
         "SELECT title FROM canary_todo_probe WHERE id = 'probe-1'",
