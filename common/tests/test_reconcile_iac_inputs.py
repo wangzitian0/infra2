@@ -30,6 +30,15 @@ WORKFLOW = ROOT / ".github" / "workflows" / "reconcile-iac-inputs.yml"
 SHA = "a" * 40
 
 
+@pytest.fixture(autouse=True)
+def _stub_app_version_ref_on_main(monkeypatch) -> None:
+    """Stub the #1500 GitHub compare API guard in offline reconcile unit tests;
+    dedicated tests below verify the guard is invoked and fails closed on off-main tags."""
+    monkeypatch.setattr(
+        reconcile, "assert_app_version_ref_on_main", lambda *_a, **_kw: None
+    )
+
+
 def test_plan_selects_alerting_when_baked_tooling_changes() -> None:
     plan = build_plan(["tools/observability_roundtrip_probe.py"])
 
@@ -2178,3 +2187,64 @@ def test_every_declared_hook_slot_is_wired_into_workflows() -> None:
     for raw_manifest in (_REAL_FR_HOOKS_MANIFEST_JSON, _REAL_TA_HOOKS_MANIFEST_JSON):
         manifest = reconcile.RuntimeHooksManifest.from_dict(json.loads(raw_manifest))
         assert _unwired_hook_slots(tuple(manifest.slots.keys()), workflow_texts) == []
+
+
+def test_reconcile_rejects_off_main_app_release_tag_in_sync_and_deploy(
+    monkeypatch, tmp_path
+) -> None:
+    """#1500 (AC2): both sync_app_releases (when applying/creating PR) and reconcile.main
+    (when executing App deploy commands) must verify App version_ref is on main and fail
+    closed when assert_app_version_ref_on_main rejects an off-main tag."""
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.46\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.80\n",
+        encoding="utf-8",
+    )
+
+    def _fake_remote(repo_url: str, **_kw):
+        if "finance_report" in repo_url:
+            return (SHA, {"v0.2.46": "1" * 40, "v0.2.47": "bad" + "0" * 37})
+        return ("2" * 40, {"v0.2.80": "2" * 40})
+
+    monkeypatch.setattr(reconcile, "_query_remote_app_refs", _fake_remote)
+
+    def _reject_off_main(version_ref, deploy_type, *, service, **_kw):
+        raise ValueError(
+            f"{service} version_ref {version_ref!r} is not reachable from main"
+        )
+
+    monkeypatch.setattr(reconcile, "assert_app_version_ref_on_main", _reject_off_main)
+
+    # 1. sync_app_releases fails closed before mutating repos.yaml
+    with pytest.raises(ValueError, match="not reachable from main"):
+        reconcile.sync_app_releases(
+            tmp_path,
+            apply_repos_yaml=True,
+        )
+
+    # 2. main() non-dry-run deploy fails closed before running deploy_v2
+    monkeypatch.setattr(reconcile, "assert_after_on_main", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: reconcile.ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
+    )
+    with pytest.raises(SystemExit, match="not reachable from main"):
+        main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--after",
+                "v3.1.25",
+                "--changed-file",
+                "harness/repos.yaml",
+            ]
+        )

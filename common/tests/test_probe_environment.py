@@ -76,9 +76,6 @@ def test_an_unset_override_falls_through_to_the_shared_variables(monkeypatch):
         ("preview", "preview"),
         ("pr-5", "pr_5"),
         ("branch-main", "branch_main"),
-        ("commit-1ab32d5", "commit_1ab32d5"),
-        ("tag-v1.2.3", "tag_v1.2.3"),
-        ("canary-preview", "canary_preview"),
     ],
 )
 def test_a_value_is_normalized_to_the_name_the_estate_uses(monkeypatch, raw, expected):

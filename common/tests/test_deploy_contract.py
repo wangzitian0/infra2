@@ -13,12 +13,14 @@ from common.deploy.contract import (
     SERVICES,
     DeployTarget,
     ServiceSpec,
+    default_version_ref,
     deploy_type_spec,
     make_deploy_target,
     make_target,
     service_spec,
     sub_domain_for,
     validate_deploy_target,
+    validate_iac_ref_form,
 )
 
 SHA_A = "a" * 40
@@ -56,10 +58,6 @@ def test_sub_domain_for_reuses_env_config_and_preview_alias():
         sub_domain_for(REPORT, "preview", alias_kind="branch", alias_value="main")
         == "report-branch-main"
     )
-    assert (
-        sub_domain_for(REPORT, "preview", alias_kind="commit", alias_value="1ab32d5e")
-        == "report-commit-1ab32d5"
-    )
 
 
 # --- preview multi-instance addressing ------------------------------------
@@ -70,7 +68,6 @@ def test_sub_domain_for_reuses_env_config_and_preview_alias():
     [
         ("branch", "main", "report-branch-main"),
         ("pr", 123, "report-pr-123"),
-        ("commit", "1ab32d5e9f", "report-commit-1ab32d5"),
     ],
 )
 def test_preview_slots(kind, value, expected):
@@ -78,14 +75,12 @@ def test_preview_slots(kind, value, expected):
     assert t.env == "preview" and t.sub_domain == expected
 
 
-def test_preview_main_and_same_commit_are_distinct_slots():
+def test_preview_main_and_pr_are_distinct_slots():
     a = _target(
         "finance_report/app", "preview", alias_kind="branch", alias_value="main"
     )
-    b = _target(
-        "finance_report/app", "preview", alias_kind="commit", alias_value="1ab32d5"
-    )
-    assert a.sub_domain != b.sub_domain  # the collision the 4-tuple could not express
+    b = _target("finance_report/app", "preview", alias_kind="pr", alias_value=123)
+    assert a.sub_domain != b.sub_domain
 
 
 def test_preview_requires_alias():
@@ -96,8 +91,16 @@ def test_preview_requires_alias():
 def test_preview_rejects_bad_alias_value():
     with pytest.raises(ValueError):
         _target("finance_report/app", "preview", alias_kind="pr", alias_value=0)
-    with pytest.raises(ValueError):
-        _target("finance_report/app", "preview", alias_kind="commit", alias_value="zz")
+    with pytest.raises(ValueError, match="unknown preview kind"):
+        _target(
+            "finance_report/app", "preview", alias_kind="commit", alias_value="1ab32d5"
+        )
+    with pytest.raises(ValueError, match="unknown preview kind"):
+        _target("finance_report/app", "preview", alias_kind="tag", alias_value="v1.2.3")
+    with pytest.raises(ValueError, match="unknown preview kind"):
+        _target(
+            "finance_report/app", "preview", alias_kind="canary", alias_value="preview"
+        )
 
 
 # --- sha shapes ------------------------------------------------------------
@@ -205,22 +208,11 @@ def test_type_first_derives_env_and_sub_domain():
     [
         ("preview/branch", "main", "report-branch-main"),
         ("preview/pr", 7, "report-pr-7"),
-        ("preview/commit", "1ab32d5", "report-commit-1ab32d5"),
-        (
-            "canary",
-            "preview",
-            "report-canary-preview",
-        ),  # canary is an explicit type -> semantic canary-preview slot
-        (
-            "canary",
-            "canary-preview",
-            "report-canary-preview",
-        ),  # canonical slot maps to semantic slot
         (
             "preview/pr",
             999,
             "report-pr-999",
-        ),  # PR 999 is now a standard PR and no longer remapped to canary
+        ),  # PR 999 is a standard PR
     ],
 )
 def test_type_first_preview_aliases(deploy_type, alias_value, expected):
@@ -233,6 +225,37 @@ def test_type_first_preview_aliases(deploy_type, alias_value, expected):
     )
     assert t.env == "preview"
     assert t.sub_domain == expected
+
+
+@pytest.mark.parametrize("retired_type", ["preview/commit", "preview/tag", "canary"])
+def test_retired_preview_deploy_types_are_rejected(retired_type):
+    with pytest.raises(ValueError, match="unknown deploy type"):
+        deploy_type_spec(retired_type)
+
+
+def test_validate_iac_ref_form_rejects_sha_for_preview():
+    validate_iac_ref_form("preview/pr", "branch")
+    validate_iac_ref_form("preview/branch", "tag")
+    with pytest.raises(ValueError, match="Dokploy cannot clone a bare sha"):
+        validate_iac_ref_form("preview/pr", "sha")
+
+
+def test_default_version_ref_reads_repos_yaml(tmp_path):
+    repos_dir = tmp_path / "harness"
+    repos_dir.mkdir()
+    (repos_dir / "repos.yaml").write_text(
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.51\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.83\n",
+        encoding="utf-8",
+    )
+    assert default_version_ref("finance_report/app", repo_root=tmp_path) == "v0.2.51"
+    assert default_version_ref("truealpha/app", repo_root=tmp_path) == "v0.2.83"
+    assert default_version_ref("platform/redis", repo_root=tmp_path) is None
 
 
 @pytest.mark.parametrize("deploy_type", ["staging", "prod"])

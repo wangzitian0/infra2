@@ -2,23 +2,20 @@
 """Detect (and, on demand, remediate) leaked Dokploy preview stacks — infra2-owned.
 
 The lifecycle contract is **strict 1:1**: infra2 stands a preview up and tears it
-down when its PR closes. A leftover preview is therefore an *exception* (a teardown
-that was skipped or failed — e.g. the bare ``main`` slot stranded after the
-``branch-main`` rename, or a mid-flight failure, infra2#310), NOT a routine state
+down when its PR closes or branch is deleted. A leftover preview is therefore an
+*exception* (a teardown that was skipped or failed, infra2#310), NOT a routine state
 to be silently swept by a periodic GC. So this tool **detects and ALERTS**; it does
 not delete on a schedule. Remediation is a deliberate, SOP-driven manual step
 (``--remediate``) — see docs/ssot/ops.pipeline.md#preview.
 
-A preview is flagged as leaked when it is one of two unambiguous orphan classes:
-  1. **Pre-rename bare-slug aliases** — a preview alias with no current kind prefix
-     (``branch-``/``pr-``/``commit-``/``tag-``), e.g. the bare ``main`` slot the model
-     replaced with ``branch-main``. The deterministic-name ``down`` can't reach it.
+A preview is flagged as leaked when it is one of three unambiguous orphan classes:
+  1. **Aliases without an active kind prefix** — a preview alias that does not start
+     with ``branch-`` or ``pr-`` (e.g. legacy bare ``main`` or retired kind prefixes).
   2. **``pr-<n>`` previews for CLOSED PRs** — a leaked PR teardown.
+  3. **``branch-<slug>`` previews for DELETED remote branches** — a leaked branch preview.
 
-Everything else (``branch-main``, the reserved ``CANARY_SLOT`` slot,
-``tag-*``, any non-preview compose) is left untouched. Fail-safe: if the open-PR
-set can't be fetched, PR leaks are not flagged (bare-slug orphans still are, since
-they don't depend on PR state).
+Fail-safe: if the open-PR set or remote-branch set can't be fetched, PR/branch leaks
+are not flagged (invalid-prefix orphans still are, since they don't depend on GitHub API state).
 
 Modes:
 - default (cron): **detect only**. Exit non-zero if any leak is found, so the
@@ -44,18 +41,17 @@ if str(ROOT) not in sys.path:
 from common.core.environ import normalize_env_name  # noqa: E402
 from common.core.constants import PROJECT_REPOS  # noqa: E402
 from common.deploy.env_config import (  # noqa: E402
-    CANARY_SLOT,
     PREVIEW_ENVIRONMENT,
     PREVIEW_KINDS,
 )
 
-# The bare main-tip preview and canary preview that are never treated as leaks.
-ALWAYS_KEEP_ALIASES = frozenset({"branch-main", CANARY_SLOT})
-# Every current alias is `<kind>-<slug>` for a known kind (branch/pr/commit/tag);
+# No preview alias is permanently exempt from leak detection (#1500).
+ALWAYS_KEEP_ALIASES: frozenset[str] = frozenset()
+# Every current alias is `<kind>-<slug>` for a known kind (branch/pr);
 # an alias with no known kind prefix (e.g. the bare `main` slug from before the
-# branch-main rename) is a pre-rename orphan the deterministic-name `down` can no
-# longer reach. Derived from the public PREVIEW_KINDS so a new kind can't silently
-# be misclassified as an orphan.
+# branch-main rename, or retired `canary-preview`/`commit-*`/`tag-*` aliases) is
+# an orphan the current preview contract no longer permits. Derived from
+# PREVIEW_KINDS so only active kinds are recognized.
 VALID_KIND_PREFIXES = tuple(f"{kind}-" for kind in PREVIEW_KINDS)
 APP_REPO = PROJECT_REPOS.get("finance_report", "wangzitian0/finance_report")
 
@@ -113,14 +109,23 @@ def collect_preview_composes(projects: list[dict]) -> list[PreviewCompose]:
     return found
 
 
-def orphan_reason(alias: str, *, open_pr_numbers: set[int] | None) -> str | None:
+def _branch_slug(branch_name: str) -> str:
+    return branch_name.strip().lower().replace(".", "-").replace("/", "-")
+
+
+def orphan_reason(
+    alias: str,
+    *,
+    open_pr_numbers: set[int] | None,
+    active_branches: set[str] | None = None,
+) -> str | None:
     """Why ``alias`` should be reaped, or None to keep it.
 
-    Conservative by construction: keep branch-main, the canary slot, all tag-*,
-    and (when the open-PR set is known) open PRs. Reap only (a) aliases with no
-    valid kind prefix — pre-rename bare slugs like ``main`` — and (b) ``pr-<n>``
-    for a PR that is provably closed. ``open_pr_numbers is None`` => PR state
-    unknown => leave PR previews alone (fail-safe).
+    Reap:
+      (a) aliases with no valid kind prefix (e.g. bare ``main``, retired ``canary-preview``,
+          ``commit-*``, ``tag-*``);
+      (b) ``pr-<n>`` for a PR that is provably closed (``open_pr_numbers is None`` => unknown => keep);
+      (c) ``branch-<slug>`` for a remote branch that no longer exists (``active_branches is None`` => unknown => keep).
     """
     if alias in ALWAYS_KEEP_ALIASES:
         return None
@@ -135,7 +140,14 @@ def orphan_reason(alias: str, *, open_pr_numbers: set[int] | None) -> str | None
             return None
         if number not in open_pr_numbers:
             return f"closed-PR preview ({alias})"
-    return None  # branch-* / tag-* / open pr -> keep
+    if alias.startswith("branch-"):
+        if active_branches is None:
+            return None
+        slug = alias[len("branch-") :]
+        normalized_branches = {_branch_slug(b) for b in active_branches}
+        if slug not in normalized_branches:
+            return f"deleted-branch preview ({alias})"
+    return None
 
 
 def select_orphans(
@@ -143,6 +155,8 @@ def select_orphans(
     *,
     open_pr_numbers: set[int] | None = None,
     open_prs_by_project: dict[str, set[int] | None] | None = None,
+    active_branches: set[str] | None = None,
+    active_branches_by_project: dict[str, set[str] | None] | None = None,
 ) -> list[tuple[PreviewCompose, str]]:
     """Return (compose, reason) for each orphan to reap; everything else kept."""
     out: list[tuple[PreviewCompose, str]] = []
@@ -151,7 +165,15 @@ def select_orphans(
             prs = open_prs_by_project.get(c.project)
         else:
             prs = open_pr_numbers
-        reason = orphan_reason(c.alias, open_pr_numbers=prs)
+        if active_branches_by_project is not None:
+            branches = active_branches_by_project.get(c.project)
+        else:
+            branches = active_branches
+        reason = orphan_reason(
+            c.alias,
+            open_pr_numbers=prs,
+            active_branches=branches,
+        )
         if reason is not None:
             out.append((c, reason))
     return out
@@ -197,6 +219,43 @@ def fetch_open_pr_numbers(
     return numbers
 
 
+def fetch_remote_branches(
+    token: str | None,
+    *,
+    repo: str = APP_REPO,
+    opener=urllib.request.urlopen,
+) -> set[str] | None:
+    """Active branch names for the app repo, or None if they can't be determined."""
+    if not token or not repo:
+        return None
+    branches: set[str] = set()
+    page = 1
+    while page <= 10:
+        url = f"https://api.github.com/repos/{repo}/branches?per_page=100&page={page}"
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "infra2-preview-leak-check/1.0",
+            },
+        )
+        try:
+            with opener(request, timeout=20) as response:
+                batch = json.loads(response.read().decode("utf-8"))
+        except Exception:  # noqa: BLE001 - any failure -> "unknown", fail safe
+            return None
+        if not isinstance(batch, list) or not batch:
+            break
+        for entry in batch:
+            if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+                branches.add(entry["name"])
+        if len(batch) < 100:
+            break
+        page += 1
+    return branches
+
+
 def remediate(client, leaks: list[tuple[PreviewCompose, str]]) -> list[str]:
     """Delete each confirmed leak (the SOP-driven manual step); return log lines."""
     lines: list[str] = []
@@ -210,14 +269,22 @@ def detect(client, *, token: str | None, opener=urllib.request.urlopen) -> dict:
     """Detect leaked previews (no mutation). Pure: lists, classifies, reports."""
     projects = client.list_projects()
     composes = collect_preview_composes(projects)
-    distinct_projects = sorted({c.project for c in composes})
+    distinct_projects = sorted({*PROJECT_REPOS.keys(), *(c.project for c in composes)})
     open_prs_by_project: dict[str, set[int] | None] = {}
+    active_branches_by_project: dict[str, set[str] | None] = {}
     for proj in distinct_projects:
         repo = PROJECT_REPOS.get(proj, APP_REPO)
         open_prs_by_project[proj] = fetch_open_pr_numbers(
             token, repo=repo, opener=opener
         )
-    leaks = select_orphans(composes, open_prs_by_project=open_prs_by_project)
+        active_branches_by_project[proj] = fetch_remote_branches(
+            token, repo=repo, opener=opener
+        )
+    leaks = select_orphans(
+        composes,
+        open_prs_by_project=open_prs_by_project,
+        active_branches_by_project=active_branches_by_project,
+    )
     fetch_ok = (
         all(v is not None for v in open_prs_by_project.values())
         if open_prs_by_project

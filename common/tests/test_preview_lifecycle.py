@@ -378,8 +378,8 @@ def test_up_preserves_create_timeout_when_alias_did_not_appear():
 def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
     client = FakeDokploy(existing=None)
     pl.up(
-        "commit",
-        "1ab32d5e6f",
+        "branch",
+        "feat/test-branch",
         code="abc1234",
         domain="zitian.party",
         client=client,
@@ -392,10 +392,15 @@ def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
     _cid, env = client.env_updates[0]
     assert env["IMAGE_TAG"] == SHORT_SHA
     assert env["GIT_COMMIT_SHA"] == SHORT_SHA
-    assert env["ENV_SUFFIX"] == "-commit-1ab32d5"
-    assert env["ENV_DOMAIN_SUFFIX"] == "-commit-1ab32d5"
-    assert env["ENV"] == "commit-1ab32d5"  # telemetry deployment.environment label
-    assert env["NEXT_PUBLIC_APP_URL"] == "https://report-commit-1ab32d5.zitian.party"
+    assert env["ENV_SUFFIX"] == "-branch-feat-test-branch"
+    assert env["ENV_DOMAIN_SUFFIX"] == "-branch-feat-test-branch"
+    assert (
+        env["ENV"] == "branch-feat-test-branch"
+    )  # telemetry deployment.environment label
+    assert (
+        env["NEXT_PUBLIC_APP_URL"]
+        == "https://report-branch-feat-test-branch.zitian.party"
+    )
     assert env["INTERNAL_DOMAIN"] == "zitian.party"
     # cache-bust is keyed on the RESOLVED sha (short form), not the alias token
     assert env["IAC_CONFIG_HASH"] == f"preview-{SHORT_SHA}-1000000"
@@ -407,11 +412,12 @@ def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
     assert "PREVIEW_SECRET_ENV" not in env
     assert env["INFRA_IDENTITY_SCHEMA"] == "v1"
     assert env["INFRA_SERVICE_ID"] == "finance_report/app"
-    assert env["INFRA_ENVIRONMENT"] == "commit-1ab32d5"
+    assert env["INFRA_ENVIRONMENT"] == "branch-feat-test-branch"
     assert env["INFRA_SERVICE_VERSION"] == SHORT_SHA
     assert env["INFRA_IAC_REF"] == "b" * 40
     assert (
-        "deployment.environment.name=commit-1ab32d5" in env["OTEL_RESOURCE_ATTRIBUTES"]
+        "deployment.environment.name=branch-feat-test-branch"
+        in env["OTEL_RESOURCE_ATTRIBUTES"]
     )
 
 
@@ -424,8 +430,8 @@ def test_up_app_domain_override_does_not_leak_into_the_otel_endpoint():
     # promote's crash-looping prod symptom).
     client = FakeDokploy(existing=None)
     pl.up(
-        "commit",
-        "1ab32d5e6f",
+        "branch",
+        "feat/test-branch",
         code="abc1234",
         service="truealpha/app",
         domain="truealpha.club",
@@ -451,8 +457,8 @@ def test_truealpha_preview_llm_container_receives_the_collector_and_the_alias_id
     The compose is resolved against the env the preview actually pushes."""
     client = FakeDokploy(existing=None)
     pl.up(
-        "commit",
-        "1ab32d5e6f",
+        "branch",
+        "feat/test-branch",
         code="abc1234",
         service="truealpha/app",
         domain="truealpha.club",
@@ -472,7 +478,7 @@ def test_truealpha_preview_llm_container_receives_the_collector_and_the_alias_id
     attributes = dict(
         pair.split("=", 1) for pair in llm["OTEL_RESOURCE_ATTRIBUTES"].split(",")
     )
-    assert attributes["deployment.environment.name"] == "commit-1ab32d5"
+    assert attributes["deployment.environment.name"] == "branch-feat-test-branch"
     assert attributes["service.name"] == llm["OTEL_SERVICE_NAME"]
     assert attributes["infra.service.id"] == "truealpha/app"
     assert attributes["infra.iac.ref"] == "b" * 40
@@ -656,10 +662,10 @@ def test_down_deletes_compose_with_volumes():
 
 def test_down_is_idempotent_when_alias_absent():
     client = FakeDokploy(existing=None)
-    result = pl.down("commit", "1ab32d5", domain="zitian.party", client=client)
+    result = pl.down("branch", "feat/test-branch", domain="zitian.party", client=client)
     assert client.deleted == []  # nothing to delete -> no call
     assert result.compose_id is None
-    assert result.url == "https://report-commit-1ab32d5.zitian.party"
+    assert result.url == "https://report-branch-feat-test-branch.zitian.party"
 
 
 def test_down_falls_back_to_legacy_pr_compose_in_test_env():

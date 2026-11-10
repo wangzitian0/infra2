@@ -4,8 +4,8 @@
 > Canonical contract: `docs/ssot/core.environments.md` §4.6 (manual deploy targets).
 
 A throwaway, manually-deployed copy of the Finance Report app. Unlike staging/prod
-(one fixed Dokploy compose each), preview is a **family of aliases** — `main`,
-`pr-<N>`, `commit-<sha7>` — and each alias is its OWN Dokploy compose stack with its
+(one fixed Dokploy compose each), preview is a **family of aliases** — `branch-<name>`,
+`pr-<N>` — and each alias is its OWN Dokploy compose stack with its
 OWN ephemeral database. Any number coexist; they outlive a CI run until torn down.
 
 ## Files
@@ -25,7 +25,6 @@ Driven by the `tools/deploy_v2.py` front door, which routes preview to the
 ```bash
 # Stand up / update + deploy an alias, then prove the triggered rollout and both versions
 python -m tools.deploy_v2 --type preview/pr --version-ref 5 --iac-ref main --domain zitian.party
-python -m tools.deploy_v2 --type preview/commit --version-ref 1ab32d5 --iac-ref main --domain zitian.party
 python -m tools.deploy_v2 --type preview/branch --version-ref main --iac-ref main --domain zitian.party
 
 # Tear down an alias AND destroy its ephemeral DB volume
@@ -52,8 +51,8 @@ The `db` service stores data on the **named** `preview_db` volume (no host bind 
 so `down` (`delete_compose(delete_volumes=True)`) removes it entirely. Migrations run on
 backend startup (`alembic upgrade head`) against the fresh DB. Preview NEVER reads or
 writes the shared staging/prod database. The backend healthcheck grants a bounded
-450-second startup period. The 2026-08-17 exact-head canary needed 293.6 seconds for its
-complete create/deploy/readiness/cleanup operation, while the outer canary retains its
+450-second startup period. The 2026-08-17 exact-head preview needed 293.6 seconds for its
+complete create/deploy/readiness/cleanup operation, while the outer readiness poll retains its
 independent 600-second hard deadline.
 
 ## One-time LIVE setup (not unit-testable)

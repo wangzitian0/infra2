@@ -379,10 +379,6 @@ def test_the_table_holds_the_full_conditions_of_the_real_workflows():
     assert {k: v for k, v in GATED_JOBS.items() if v is not None} == {
         ("deploy.yml", "deploy"): "inputs.type == 'prod'",
         ("reconcile-iac-inputs.yml", "reconcile"): "inputs.promote_prod",
-        (
-            "app-deploy-request.yml",
-            "deploy",
-        ): "github.event.client_payload.deploy_type == 'prod'",
     }
 
 
@@ -391,7 +387,7 @@ def test_the_real_workflow_tree_satisfies_the_gate_entry_point():
         path.name: path.read_text(encoding="utf-8")
         for path in sorted(WORKFLOWS_DIR.glob("*.y*ml"))
     }
-    assert len(texts) >= 10, sorted(texts)
+    assert len(texts) >= 7, sorted(texts)
     assert workflow_contract_failures(texts) == []
 
 
@@ -404,7 +400,7 @@ def test_the_benign_secret_list_is_pinned():
 
 def test_zero_class_pending_entries_remain_in_ungated_jobs():
     """#1127 / 1035-R2: every ungated job has a final classification, never 'class pending'."""
-    assert len(UNGATED_JOBS) >= 10
+    assert len(UNGATED_JOBS) >= 8
     pending = [
         key for key, reason in UNGATED_JOBS.items() if "class pending" in reason.lower()
     ]
@@ -724,34 +720,31 @@ def test_read_lock_facts_enforces_reviewer_bypass_and_policy_invariants():
     assert lock_failures(trunc_facts) != []
 
 
-def test_retired_workflows_allow_whole_file_deletion_but_fail_closed_when_present():
-    """#1504 / #1500: omitting a workflow in RETIRED_WORKFLOWS passes, whereas omitting a
-    job inside a still-present retired workflow or omitting a non-retired workflow fails."""
-    assert RETIRED_WORKFLOWS == frozenset(
-        {
-            "app-deploy-request.yml",
-            "deploy-report-main.yml",
-            "preview-teardown.yml",
-        }
-    )
+def test_retired_workflows_are_removed_from_contract_and_disk():
+    """#1504 / #1500: after deleting app-deploy-request.yml, deploy-report-main.yml, and
+    preview-teardown.yml, RETIRED_WORKFLOWS is empty, the files are absent from disk,
+    and re-introducing any of them with a secret fails closed."""
+    assert RETIRED_WORKFLOWS == frozenset()
     workflows = _load_workflows(WORKFLOWS_DIR)
-    for retired in RETIRED_WORKFLOWS:
-        without_retired = {k: v for k, v in workflows.items() if k != retired}
-        assert contract_errors(without_retired, GATED_JOBS, UNGATED_JOBS) == []
-
-    without_all_retired = {
-        k: v for k, v in workflows.items() if k not in RETIRED_WORKFLOWS
-    }
-    assert contract_errors(without_all_retired, GATED_JOBS, UNGATED_JOBS) == []
-
-    # Still-present retired workflow missing its governed job fails closed
-    partial_retired = {
-        **workflows,
-        "app-deploy-request.yml": {"jobs": {"other": {"steps": []}}},
-    }
-    assert contract_errors(partial_retired, GATED_JOBS, UNGATED_JOBS) == [
-        "app-deploy-request.yml:deploy is named in the contract and does not exist"
-    ]
+    for retired in (
+        "app-deploy-request.yml",
+        "deploy-report-main.yml",
+        "preview-teardown.yml",
+    ):
+        assert retired not in workflows
+        reintroduced = {
+            **workflows,
+            retired: {
+                "jobs": {
+                    "deploy": {
+                        "steps": [{"env": {"K": "${{ secrets.DOKPLOY_API_KEY }}"}}]
+                    }
+                }
+            },
+        }
+        assert contract_errors(reintroduced, GATED_JOBS, UNGATED_JOBS) == [
+            f"{retired}:deploy holds production credentials ['DOKPLOY_API_KEY'] and is in neither GATED_JOBS nor UNGATED_JOBS"
+        ]
 
     # Omitting a non-retired workflow file still fails closed
     without_deploy = {k: v for k, v in workflows.items() if k != "deploy.yml"}

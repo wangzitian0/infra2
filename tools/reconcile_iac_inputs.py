@@ -42,6 +42,7 @@ from common.deploy.app_contract import (
 from common.deploy.dependencies import explain_fanout
 from common.deploy.transient_failure import classify_failure
 from common.deploy.contract import all_service_keys, service_spec
+from common.deploy.preflight import assert_app_version_ref_on_main
 from common.deploy.env_config import app_compose_env_config
 from common.deploy.release_markers import (
     PRODUCTION_MARKER_PREFIX,
@@ -508,6 +509,13 @@ def sync_app_releases(
 
         drifted = bool(target_tag and target_tag != pinned_tag)
         if drifted:
+            if (apply_repos_yaml or cut_infra_tag or create_pr) and not dry_run:
+                assert_app_version_ref_on_main(
+                    target_tag,
+                    "staging",
+                    service=service,
+                    repo=repo_url,
+                )
             updates[service] = target_tag
             if target_sha:
                 target_shas[service] = target_sha
@@ -2185,6 +2193,21 @@ def main(argv: list[str] | None = None) -> int:
         promote_prod=promote_prod,
         target_env=target_env,
     )
+    if applied and not args.dry_run:
+        for cmd in applied:
+            for svc in (s.strip() for s in cmd.service.split(",") if s.strip()):
+                if svc in APP_SOURCES:
+                    app_tag = plan.app_release_tags.get(svc, "")
+                    if app_tag:
+                        try:
+                            assert_app_version_ref_on_main(
+                                app_tag,
+                                cmd.deploy_type,
+                                service=svc,
+                                repo_root=repo_root,
+                            )
+                        except (ValueError, RuntimeError) as exc:
+                            raise SystemExit(f"::error::{exc}") from exc
     deferred = [command for command in commands if command not in applied]
     results: list[dict] = []
     if applied:

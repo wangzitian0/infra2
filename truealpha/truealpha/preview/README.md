@@ -2,7 +2,7 @@
 
 A throwaway, manually-deployed copy of the TrueAlpha app (web + llm). Unlike
 staging/prod (one fixed Dokploy compose each), preview is a **family of aliases** —
-`branch-<name>`, `pr-<N>`, `commit-<sha7>`, `tag-<slug>` — and each alias is its OWN
+`branch-<name>`, `pr-<N>` — and each alias is its OWN
 Dokploy compose stack with its OWN ephemeral database. Any number coexist; they outlive
 a CI run until torn down. Mirrors `finance_report/finance_report/preview/` (#522
 generalized `common/deploy/preview.py` off a per-service registry — see
@@ -21,7 +21,6 @@ generalized `common/deploy/preview.py` off a per-service registry — see
 
 ```bash
 python -m tools.deploy_v2 --service truealpha/app --type preview/pr --version-ref 5 --iac-ref main --domain zitian.party
-python -m tools.deploy_v2 --service truealpha/app --type preview/commit --version-ref 1ab32d5 --iac-ref main --domain zitian.party
 python -m tools.deploy_v2 --service truealpha/app --type preview/branch --version-ref main --iac-ref main --domain zitian.party
 
 # Tear down an alias AND destroy its ephemeral DB volume

@@ -32,18 +32,12 @@ GATED_JOBS: dict[tuple[str, str], str | None] = {
     ("deploy.yml", "deploy"): "inputs.type == 'prod'",
     ("deploy.yml", "bootstrap"): None,
     ("reconcile-iac-inputs.yml", "reconcile"): "inputs.promote_prod",
-    (
-        "app-deploy-request.yml",
-        "deploy",
-    ): "github.event.client_payload.deploy_type == 'prod'",
     ("apply-observability.yml", "apply"): None,
     ("deploy-cloudflare-watchdog.yml", "deploy"): None,
 }
 
 # Jobs that read a production credential and do not need owner approval, with the reason.
 UNGATED_JOBS: dict[tuple[str, str], str] = {
-    ("deploy-report-main.yml", "deploy"): "deploys the preview slot, not production",
-    ("preview-teardown.yml", "teardown"): "removes a preview slot, not production",
     ("ops-checks.yml", "audit"): "scheduled read-only audit",
     ("ops-checks.yml", "watchdog"): "scheduled read-only probe",
     ("ops-checks.yml", "digest"): "scheduled read-only report",
@@ -63,17 +57,9 @@ UNGATED_JOBS: dict[tuple[str, str], str] = {
     ): "scheduled read-only drift report (#1127)",
 }
 
-# Retired workflow files scheduled for deletion (#1500). While a retired workflow file
-# still exists in .github/workflows/, every job it declares remains governed by GATED_JOBS
-# and UNGATED_JOBS; once the workflow file itself is removed, contract_errors does not
-# fail on its absent entry so the deletion PR can pass main's workflow_contract_failures.
-RETIRED_WORKFLOWS: frozenset[str] = frozenset(
-    {
-        "app-deploy-request.yml",
-        "deploy-report-main.yml",
-        "preview-teardown.yml",
-    }
-)
+# Retired workflow files removed in #1500. Kept as an empty set so callers importing
+# RETIRED_WORKFLOWS remain compatible while GATED_JOBS and UNGATED_JOBS hold only live workflows.
+RETIRED_WORKFLOWS: frozenset[str] = frozenset()
 
 # Used with fullmatch: a block scalar adds a final newline, and that form fails (#1138).
 _GATED_EXPRESSION = re.compile(
