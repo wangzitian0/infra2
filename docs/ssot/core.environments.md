@@ -39,17 +39,17 @@ flowchart LR
         end
 
         subgraph DeployEnvs["有状态部署环境 (3 Stateful Envs + DR)"]
-            Preview["1. Preview 临时隔离环境<br/>(按 PR 动态拉起/销毁)"]
-            Staging["2. Staging 集成预发环境<br/>(生产同构真实运行时)"]
-            Production["3. Production 生产环境<br/>(最高稳定 SLA)"]
+            Preview["1. Preview 瞬态隔离环境<br/>(App post-merge 切 tag 前瞬态拉起 / 跑完 preview_gate 立即 --down)"]
+            Staging["2. Staging 集成预发环境<br/>(火车粒度 <=4 PRs · staging_gate)"]
+            Production["3. Production 生产环境<br/>(火车粒度 >=15 PRs 或 >=48h · smoke)"]
             DR["[目标态] DR 异地灾备<br/>(冷备/定期演练)"]
         end
     end
 
     DevStation -->|提交 PR| GHARunner
     GHARunner --> Gate1
-    Gate1 -->|合流 main| Preview
-    Gate1 -->|生成不可变 Tag| Staging
+    Gate1 -->|合流 main · 瞬态验证后切 vX.Y.Z 并 --down| Preview
+    Preview -->|生成不可变 App Tag 入列火车| Staging
     Staging --> Gate2
     Gate2 -->|显式 Promote| Production
     Production -.->|Google Drive 加密备份流| DR
