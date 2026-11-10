@@ -1,4 +1,6 @@
 name: Reconcile IaC Inputs
+# A production run that waits for approval must show its release tag in the run title (#1488).
+run-name: Reconcile IaC Inputs (${{ inputs.promote_prod && 'PROD' || 'staging' }} ${{ inputs.after || github.ref_name }})
 
 # Release-tag input-drift reconcile for iac_pinned services.
 # staging/prod deploy immutable release tags only (promote-not-rebuild), so this GitOps

@@ -539,6 +539,17 @@ def test_reconcile_workflow_contract() -> None:
     assert 'before="$production_before"' in text
 
 
+def test_reconcile_workflow_run_name_shows_the_release_tag() -> None:
+    """#1488: a production run that waits for approval must show its tag in the run title."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    run_name = workflow.get("run-name")
+    assert isinstance(run_name, str), "run-name is missing from the workflow"
+    assert "inputs.promote_prod" in run_name
+    assert "inputs.after" in run_name
+    # Tag pushes and the 2-hour schedule have empty inputs, so the title falls back to the ref.
+    assert "github.ref_name" in run_name
+
+
 def test_promote_prod_refuses_a_tag_without_a_green_staging_soak() -> None:
     """2026-09-07: v1.1.61 was promoted to production while its own staging reconcile had
     failed; production alerting crash-looped until the rollback. The guard step runs only
