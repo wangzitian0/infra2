@@ -1757,7 +1757,9 @@ def test_traced_check_emits_duration_histogram_and_outcomes_counter_with_otlp(
             self.unit = unit
             self.description = description
 
-        def record(self, amount: float, attributes: dict[str, str] | None = None) -> None:
+        def record(
+            self, amount: float, attributes: dict[str, str] | None = None
+        ) -> None:
             recorded_histograms.append(
                 (self.name, amount, dict(attributes or {}), self.unit, self.description)
             )
@@ -1800,7 +1802,10 @@ def test_traced_check_emits_duration_histogram_and_outcomes_counter_with_otlp(
     assert set(meter_names) == {"platform-todo"}
     assert len(recorded_histograms) == 6
     assert len(recorded_counters) == 6
-    hist_by_check = {attrs["canary.check"]: (name, val, attrs, unit) for name, val, attrs, unit, _ in recorded_histograms}
+    hist_by_check = {
+        attrs["canary.check"]: (name, val, attrs, unit)
+        for name, val, attrs, unit, _ in recorded_histograms
+    }
     assert hist_by_check["s3"] == (
         "canary.probe.duration_ms",
         12.25,
@@ -1813,7 +1818,10 @@ def test_traced_check_emits_duration_histogram_and_outcomes_counter_with_otlp(
         {"canary.check": "postgres", "canary.status": "pass"},
         "ms",
     )
-    cnt_by_check = {attrs["canary.check"]: (name, val, attrs, unit) for name, val, attrs, unit, _ in recorded_counters}
+    cnt_by_check = {
+        attrs["canary.check"]: (name, val, attrs, unit)
+        for name, val, attrs, unit, _ in recorded_counters
+    }
     assert cnt_by_check["s3"] == (
         "canary.probe.outcomes",
         1,
@@ -1961,8 +1969,13 @@ def test_todo_rendered_mount_fingerprints_and_compose_labels(deploy) -> None:
     base = deploy.TodoDeployer.compose_env_base(
         {"ENV": "staging", "ENV_SUFFIX": "-staging", "INTERNAL_DOMAIN": "example.com"}
     )
-    assert base["IAC_MOUNT_SHA256_VAULT_AGENT_HCL"] == fp["IAC_MOUNT_SHA256_VAULT_AGENT_HCL"]
-    assert base["IAC_MOUNT_SHA256_SECRETS_CTMPL"] == fp["IAC_MOUNT_SHA256_SECRETS_CTMPL"]
+    assert (
+        base["IAC_MOUNT_SHA256_VAULT_AGENT_HCL"]
+        == fp["IAC_MOUNT_SHA256_VAULT_AGENT_HCL"]
+    )
+    assert (
+        base["IAC_MOUNT_SHA256_SECRETS_CTMPL"] == fp["IAC_MOUNT_SHA256_SECRETS_CTMPL"]
+    )
 
     agent_labels = compose_services(COMPOSE)["vault-agent"]["labels"]
     assert (
@@ -1973,4 +1986,3 @@ def test_todo_rendered_mount_fingerprints_and_compose_labels(deploy) -> None:
         "infra2.mount.secrets.ctmpl.sha256=${IAC_MOUNT_SHA256_SECRETS_CTMPL:-}"
         in agent_labels
     )
-

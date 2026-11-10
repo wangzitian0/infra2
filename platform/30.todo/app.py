@@ -187,7 +187,9 @@ def _probe_postgres(
         if not verify_write:
             result = probe_postgres(settings, connector=connector)
             if result.status != DependencyStatus.PRESENT:
-                return _outcome("fail", start, f"login as {user} failed: {result.detail}")
+                return _outcome(
+                    "fail", start, f"login as {user} failed: {result.detail}"
+                )
             return _outcome("pass", start, f"login as {user}: {result.detail}")
 
         from infra2_sdk.runtime._optional import require
@@ -216,9 +218,7 @@ def _probe_postgres(
                 row = connection.execute(
                     "SELECT title FROM canary_todo_probe WHERE id = 'probe-1'"
                 ).fetchone()
-                connection.execute(
-                    "DELETE FROM canary_todo_probe WHERE id = 'probe-1'"
-                )
+                connection.execute("DELETE FROM canary_todo_probe WHERE id = 'probe-1'")
                 if not row or row[0] != "canary-write-ok":
                     raise _ProbeFailure(
                         f"SELECT returned {row!r} instead of ('canary-write-ok',)"
