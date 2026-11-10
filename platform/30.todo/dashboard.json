@@ -1,0 +1,36 @@
+{
+  "title": "Platform Todo — HTTP Service",
+  "description": "Request rate, 5xx share, p50/p95 latency and active requests of platform-todo (new HTTP convention: http.server.request.duration.*). Probe traffic is included. The 5xx share reads the OpenTelemetry attribute http.response.status_code: confirm the series carries it after the first apply. Metric names were read from SigNoz on 2026-11-10 (read-only). Applied by `invoke fr-observability.shared.apply-dashboard`. Environments are deployment.environment.name.",
+  "tags": ["platform-todo", "infra2", "config-as-code"],
+  "version": "v5",
+  "variables": {
+    "deployment_environment": {
+      "type": "QUERY",
+      "name": "deployment_environment",
+      "description": "deployment.environment.name (production / staging / pr-N)",
+      "multiSelect": true,
+      "showALLOption": true,
+      "queryValue": "SELECT DISTINCT resources_string['deployment.environment.name'] FROM signoz_logs.distributed_logs_v2 WHERE resources_string['deployment.environment.name'] != ''"
+    }
+  },
+  "widgets": [
+    {"id": "todo-request-rate", "title": "Request rate", "description": "Requests per second (http.server.request.duration.count).", "panelTypes": "graph", "yAxisUnit": "reqps",
+     "query": {"builder": {"queryData": [{"queryName": "A", "dataSource": "metrics", "aggregations": [{"metricName": "http.server.request.duration.count", "timeAggregation": "rate", "spaceAggregation": "sum"}], "filter": {"expression": "(service.name = 'platform-todo' AND deployment.environment.name IN $deployment_environment)"}, "having": {"expression": ""}, "expression": "A", "disabled": false, "stepInterval": 60, "legend": "requests/s"}]}, "queryType": "builder"},
+     "opacity": "1", "nullZeroValues": "zero", "timePreferance": "GLOBAL_TIME", "softMin": null, "softMax": null, "selectedLogFields": null, "selectedTracesFields": null},
+    {"id": "todo-error-rate-5xx", "title": "5xx share of requests", "description": "5xx requests divided by all requests (http.server.request.duration.count, attribute http.response.status_code).", "panelTypes": "graph", "yAxisUnit": "percentunit",
+     "query": {"builder": {"queryData": [{"queryName": "A", "dataSource": "metrics", "aggregations": [{"metricName": "http.server.request.duration.count", "timeAggregation": "rate", "spaceAggregation": "sum"}], "filter": {"expression": "(service.name = 'platform-todo' AND http.response.status_code REGEXP '^5[0-9][0-9]' AND deployment.environment.name IN $deployment_environment)"}, "having": {"expression": ""}, "expression": "A", "disabled": true, "stepInterval": 60, "legend": "5xx"}, {"queryName": "B", "dataSource": "metrics", "aggregations": [{"metricName": "http.server.request.duration.count", "timeAggregation": "rate", "spaceAggregation": "sum"}], "filter": {"expression": "(service.name = 'platform-todo' AND deployment.environment.name IN $deployment_environment)"}, "having": {"expression": ""}, "expression": "B", "disabled": true, "stepInterval": 60, "legend": "all"}], "queryFormulas": [{"queryName": "F1", "expression": "A/B", "disabled": false, "legend": "5xx share"}]}, "queryType": "builder"},
+     "opacity": "1", "nullZeroValues": "zero", "timePreferance": "GLOBAL_TIME", "softMin": null, "softMax": null, "selectedLogFields": null, "selectedTracesFields": null},
+    {"id": "todo-latency", "title": "Request latency p50 / p95", "description": "p50 and p95 request duration from the histogram http.server.request.duration.bucket.", "panelTypes": "graph", "yAxisUnit": "s",
+     "query": {"builder": {"queryData": [{"queryName": "A", "dataSource": "metrics", "aggregations": [{"metricName": "http.server.request.duration.bucket", "spaceAggregation": "p50"}], "filter": {"expression": "(service.name = 'platform-todo' AND deployment.environment.name IN $deployment_environment)"}, "having": {"expression": ""}, "expression": "A", "disabled": false, "stepInterval": 60, "legend": "p50"}, {"queryName": "B", "dataSource": "metrics", "aggregations": [{"metricName": "http.server.request.duration.bucket", "spaceAggregation": "p95"}], "filter": {"expression": "(service.name = 'platform-todo' AND deployment.environment.name IN $deployment_environment)"}, "having": {"expression": ""}, "expression": "B", "disabled": false, "stepInterval": 60, "legend": "p95"}]}, "queryType": "builder"},
+     "opacity": "1", "nullZeroValues": "zero", "timePreferance": "GLOBAL_TIME", "softMin": null, "softMax": null, "selectedLogFields": null, "selectedTracesFields": null},
+    {"id": "todo-active-requests", "title": "Active requests", "description": "Requests in flight (http.server.active_requests).", "panelTypes": "graph",
+     "query": {"builder": {"queryData": [{"queryName": "A", "dataSource": "metrics", "aggregations": [{"metricName": "http.server.active_requests", "timeAggregation": "latest", "spaceAggregation": "sum"}], "filter": {"expression": "(service.name = 'platform-todo' AND deployment.environment.name IN $deployment_environment)"}, "having": {"expression": ""}, "expression": "A", "disabled": false, "stepInterval": 60, "legend": "active"}]}, "queryType": "builder"},
+     "opacity": "1", "nullZeroValues": "zero", "timePreferance": "GLOBAL_TIME", "softMin": null, "softMax": null, "selectedLogFields": null, "selectedTracesFields": null}
+  ],
+  "layout": [
+    {"i": "todo-request-rate", "x": 0, "y": 0, "w": 6, "h": 6, "moved": false, "static": false},
+    {"i": "todo-error-rate-5xx", "x": 6, "y": 0, "w": 6, "h": 6, "moved": false, "static": false},
+    {"i": "todo-latency", "x": 0, "y": 6, "w": 6, "h": 6, "moved": false, "static": false},
+    {"i": "todo-active-requests", "x": 6, "y": 6, "w": 6, "h": 6, "moved": false, "static": false}
+  ]
+}

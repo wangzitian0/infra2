@@ -21,6 +21,7 @@ from common.observability_dashboards import (
     ALERT_RULES_FILE,
     ALERT_RULES_FILES,
     DASHBOARD_FILE,
+    DASHBOARD_FILES,
     ObservabilityDefinitionError,
     build_dashboard_import_payload,
     check_alert_routing,
@@ -571,25 +572,152 @@ def _filter(widget_id: str, widgets: dict[str, dict]) -> str:
 LEGACY_ENVIRONMENT_KEY = re.compile(r"deployment\.environment(?!\.name)")
 
 
-def test_every_widget_is_filterable_by_deployment_environment() -> None:
+ENVIRONMENT_FILTER = "deployment.environment.name IN $deployment_environment"
+_SERVICE_FILTER = re.compile(r"service\.name\s*(?:=\s*'([^']+)'|IN\s*\[([^\]]*)\])")
+# Every service a dashboard may query, with the metrics it exports (a service.name typo
+# or a metric the service lacks draws an empty panel). truealpha-* and platform-* were read from SigNoz on
+# 2026-11-10 (read-only): truealpha-app uses the old HTTP semantic convention, the
+# platform services the new one, truealpha-data-engine exports logs and traces only.
+# finance-report-* are the names its dashboard already queried (#1307).
+_OLD_HTTP = {"http.server.duration.bucket", "http.server.duration.count"}
+_NEW_HTTP = {
+    "http.server.request.duration.bucket",
+    "http.server.request.duration.count",
+}
+SERVICE_METRICS = {
+    "truealpha-app": _OLD_HTTP | {"http.server.active_requests"},
+    "truealpha-data-engine": set(),
+    "platform-alerting": _NEW_HTTP | {"http.server.active_requests"},
+    "platform-todo": _NEW_HTTP | {"http.server.active_requests"},
+    "finance-report-backend": {
+        "finance.ai_provider.latency",
+        "finance.statement_parse.outcome",
+        "finance.reconciliation.match.outcome",
+        "finance.invariant.violation",
+    },
+    "finance-report-worker": {
+        "finance.ai_provider.latency",
+        "finance.statement_parse.outcome",
+    },
+    "finance-report-frontend": set(),
+}
+all_dashboards = pytest.mark.parametrize(
+    "path", DASHBOARD_FILES, ids=lambda p: p.relative_to(ROOT).as_posix()
+)
+
+
+def _queries(dashboard: dict):
+    for widget in dashboard["widgets"]:
+        for query in widget["query"]["builder"]["queryData"]:
+            yield widget["id"], query
+
+
+def _services(expression: str) -> set[str]:
+    return {
+        name
+        for one, many in _SERVICE_FILTER.findall(expression)
+        for name in ([one] if one else re.findall(r"'([^']+)'", many))
+    }
+
+
+def _metric_names(query: dict) -> list[str]:
+    """`metricName` (SigNoz v5 metrics aggregation) or the `p95(name)` expression form."""
+    return [
+        a.get("metricName") or re.fullmatch(r"\w+\((.+)\)", a["expression"]).group(1)
+        for a in query["aggregations"]
+    ]
+
+
+def _environment_problems(dashboard: dict) -> list[str]:
+    problems = [
+        f"widget {wid} lacks {ENVIRONMENT_FILTER}"
+        for wid, query in _queries(dashboard)
+        if ENVIRONMENT_FILTER not in query["filter"]["expression"]
+    ]
+    if LEGACY_ENVIRONMENT_KEY.search(json.dumps(dashboard)):
+        problems.append("legacy key deployment.environment (no .name)")
+    return problems
+
+
+def _service_problems(dashboard: dict) -> list[str]:
+    problems = []
+    for wid, query in _queries(dashboard):
+        services = _services(query["filter"]["expression"])
+        if not services or not services <= SERVICE_METRICS.keys():
+            problems.append(f"widget {wid} queries unknown services {sorted(services)}")
+            continue
+        exported = set().union(*(SERVICE_METRICS[s] for s in services))
+        names = _metric_names(query) if query["dataSource"] == "metrics" else []
+        problems += [
+            f"widget {wid}: metric {name} is not exported by {sorted(services)}"
+            for name in names
+            if name not in exported
+        ]
+    return problems
+
+
+def test_dashboard_files_list_every_dashboard_json_and_titles_differ() -> None:
+    """apply-dashboard upserts by title: a file outside DASHBOARD_FILES is never applied,
+    and two files with one title would overwrite each other."""
+    on_disk = {
+        found
+        for layer in ("finance_report", "truealpha", "platform")
+        for found in (ROOT / layer).rglob("dashboard.json")
+    }
+    assert on_disk == set(DASHBOARD_FILES)
+    titles = [load_dashboard(path)["title"] for path in DASHBOARD_FILES]
+    assert len(set(titles)) == len(titles)
+
+
+@all_dashboards
+def test_every_widget_is_filterable_by_deployment_environment(path) -> None:
     """The deployment_environment dropdown only filters a panel if the panel's query
-    references it — assert EVERY widget filters on `deployment.environment.name` and
-    carries no legacy-key filter, so the variable is real, not decorative (CR #391, #1434)."""
-    for w in load_dashboard()["widgets"]:
-        expression = w["query"]["builder"]["queryData"][0]["filter"]["expression"]
-        assert "deployment.environment.name IN $deployment_environment" in expression, (
-            f"widget {w['id']} is not filterable by deployment.environment.name"
-        )
-        assert not LEGACY_ENVIRONMENT_KEY.search(json.dumps(w)), (
-            f"widget {w['id']} still uses the legacy key deployment.environment"
-        )
+    references it — assert EVERY query of EVERY dashboard filters on
+    `deployment.environment.name` and no key is the legacy one, so the variable is real,
+    not decorative (CR #391, #1434)."""
+    assert _environment_problems(load_dashboard(path)) == []
 
 
-def test_env_variable_query_targets_the_live_v2_logs_schema() -> None:
+@all_dashboards
+def test_every_widget_names_its_service_and_a_metric_it_exports(path) -> None:
+    """A service.name typo or a metric the service does not export draws an empty panel
+    that reads as a healthy service (GREEN-WHILE-EMPTY)."""
+    assert _service_problems(load_dashboard(path)) == []
+
+
+@all_dashboards
+def test_the_dashboard_checks_fail_on_the_change_each_one_guards(path) -> None:
+    def first(dashboard: dict) -> dict:
+        return dashboard["widgets"][0]["query"]["builder"]["queryData"][0]
+
+    legacy = load_dashboard(path)
+    expression = first(legacy)["filter"]["expression"]
+    first(legacy)["filter"]["expression"] = expression.replace(
+        "deployment.environment.name IN", "deployment.environment IN"
+    )
+    problems = _environment_problems(legacy)
+    assert any(legacy["widgets"][0]["id"] in p for p in problems)
+    assert any("legacy key" in p for p in problems)
+
+    typo = load_dashboard(path)
+    first(typo)["filter"]["expression"] = re.sub(
+        r"service\.name (=|IN) ('[^']+'|\[[^\]]*\])", "service.name = 'x'", expression
+    )
+    assert any("unknown services ['x']" in p for p in _service_problems(typo))
+
+    metric = load_dashboard(path)
+    queries = [q for _, q in _queries(metric) if q["dataSource"] == "metrics"]
+    if queries:  # the finance_report logs/traces panels carry no metric
+        queries[0]["aggregations"] = [{"metricName": "not.an.exported.metric"}]
+        assert any("not.an.exported" in p for p in _service_problems(metric))
+
+
+@all_dashboards
+def test_env_variable_query_targets_the_live_v2_logs_schema(path) -> None:
     """The deployment.environment.name dropdown must query the table/columns that actually
     exist on the SigNoz instance (logs v2: distributed_logs_v2 + resources_string),
     not the retired v1 schema (distributed_logs + stringTagMap) which UNKNOWN_TABLEs."""
-    variable = load_dashboard()["variables"]["deployment_environment"]
+    variable = load_dashboard(path)["variables"]["deployment_environment"]
     query = variable["queryValue"]
     assert "distributed_logs_v2" in query
     assert "resources_string['deployment.environment.name']" in query
@@ -892,7 +1020,7 @@ def test_alert_on_absent_key_is_rejected(tmp_path) -> None:
         load_alert_definitions(_write_catalog(tmp_path, rule))
 
 
-def _load_fr_observability_tasks(monkeypatch):
+def _load_fr_observability_tasks(monkeypatch, all_dashboards=False):
     fake_invoke = types.ModuleType("invoke")
     fake_invoke.task = lambda func=None, **_kwargs: func if func else (lambda f: f)
 
@@ -912,6 +1040,8 @@ def _load_fr_observability_tasks(monkeypatch):
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    if not all_dashboards:  # the apply tests below drive the one finance_report file
+        module.DASHBOARD_FILES = (DASHBOARD_FILE,)
     return module, Exit
 
 
@@ -1579,6 +1709,8 @@ def test_ssot_documents_alert_and_dashboard_apply_path() -> None:
     assert "SOP-004C" in alerting
     assert "fr-observability.shared.apply-alerts" in alerting
     assert "fr-observability.shared.apply-dashboard" in observability
+    for dashboard_file in DASHBOARD_FILES:  # #1464
+        assert dashboard_file.relative_to(ROOT).as_posix() in observability
 
 
 # ---------------------------------------------------------------------------
@@ -2316,6 +2448,41 @@ def test_verify_dashboard_task_reads_and_judges(monkeypatch) -> None:
     assert exc.value.code == 1
 
 
+def test_apply_dashboard_applies_every_checked_in_dashboard_once(monkeypatch) -> None:
+    """#1464: one apply creates each DASHBOARD_FILES dashboard, a second only updates."""
+    module, _ = _load_fr_observability_tasks(monkeypatch, all_dashboards=True)
+    calls, rows, _ = _install_dashboards(monkeypatch, [])
+
+    assert module.apply_dashboard(object()) is True
+    module.apply_dashboard(object())
+
+    count = len(DASHBOARD_FILES)
+    assert [m for m, _ in _writes(calls)] == ["POST"] * count + ["PUT"] * count
+    posted = [body for method, _, body in calls if method == "POST"]
+    assert posted == [build_dashboard_import_payload(p) for p in DASHBOARD_FILES]
+    assert len(rows) == count
+    printed = module.print_dashboard(object())
+    assert printed == posted
+
+
+def test_verify_dashboard_task_names_the_dashboard_missing_from_signoz(
+    monkeypatch,
+) -> None:
+    module, Exit = _load_fr_observability_tasks(monkeypatch, all_dashboards=True)
+    stored = [
+        {"id": f"d{n}", "data": load_dashboard(path)}
+        for n, path in enumerate(DASHBOARD_FILES)
+    ]
+    _, rows, messages = _install_dashboards(monkeypatch, stored)
+    assert module.verify_dashboard(object()) is True
+
+    missing = rows.pop(f"d{len(DASHBOARD_FILES) - 1}")["data"]["title"]
+    with pytest.raises(Exit) as exc:
+        module.verify_dashboard(object())
+    assert exc.value.code == 1
+    assert any(missing in message for message in messages["error"])
+
+
 # ---------------------------------------------------------------------------
 # #973: the REAL channel lookup, against a SigNoz whose channel id != its name
 
@@ -2605,13 +2772,15 @@ def test_apply_observability_workflow_watches_every_alert_rules_file() -> None:
         "finance_report/finance_report/observability/*",
         "truealpha/truealpha/observability/*",
         "platform/12.alerting/alert_rules.json",
+        "platform/12.alerting/dashboard.json",
+        "platform/30.todo/dashboard.json",
         "common/alerting/*",
         "common/observability_dashboards.py",
         "tools/signoz_alert_rule_probe.py",
     ]
     assert train_patterns == expected_patterns
 
-    for target in (*ALERT_RULES_FILES, DASHBOARD_FILE):
+    for target in (*ALERT_RULES_FILES, *DASHBOARD_FILES):
         rel = target.relative_to(ROOT).as_posix()
         assert any(fnmatch.fnmatch(rel, pat) for pat in train_patterns), (
             f"{rel} is not matched by any observability pattern in reconcile-iac-inputs.yml: {train_patterns}"

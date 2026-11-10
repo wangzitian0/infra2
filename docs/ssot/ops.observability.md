@@ -282,6 +282,20 @@ collector 4317/4318 在 Docker 网络内 `expose`，另将 4318 仅绑定宿主�
 
 定义签入 `finance_report/finance_report/observability/alert_rules.json`(含 `FinanceReportBackendErrorLogs` + RED/business/遥测缺失规则；同目录含 `dashboard.json` 与 `shared_tasks.py`)、`truealpha/truealpha/observability/alert_rules.json`、`platform/12.alerting/alert_rules.json`(`common/observability_dashboards.py::ALERT_RULES_FILES`，#1389)，**不在 UI 手点**;声明式 apply 见 SOP-004B/C 与 [ops.pipeline.md](./ops.pipeline.md)(apply 折进 tag reconcile 的目标态)。
 
+SigNoz dashboards (#1464). `common/observability_dashboards.py::DASHBOARD_FILES` lists every dashboard. `apply-dashboard` and `verify-dashboard` handle each file by its `title`:
+
+| Dashboard file | Services | Metrics (truealpha and platform names read from SigNoz on 2026-11-10) |
+|---|---|---|
+| `finance_report/finance_report/observability/dashboard.json` | `finance-report-backend`, `finance-report-worker`, `finance-report-frontend` | `finance.*` application metrics, plus trace and log panels |
+| `truealpha/truealpha/observability/dashboard.json` | `truealpha-app`, `truealpha-data-engine` | `http.server.duration.*` (old HTTP convention), `http.server.active_requests`. `truealpha-data-engine` exports no metrics: its panel reads logs. |
+| `platform/12.alerting/dashboard.json` | `platform-alerting` | `http.server.request.duration.*` (new HTTP convention), `http.server.active_requests` |
+| `platform/30.todo/dashboard.json` | `platform-todo` | `http.server.request.duration.*` (new HTTP convention), `http.server.active_requests` |
+
+- Every query filters on `deployment.environment.name IN $deployment_environment` and on `service.name`. The legacy key `deployment.environment` is not allowed.
+- `common/tests/test_observability_dashboards.py` holds the catalog of metrics per service and fails on a metric the service does not export.
+- The portal "Applications" group links a dashboard only for a business application (`truealpha/truealpha/observability/dashboard.json`). The platform dashboards have no portal link.
+- Merge deploys nothing. The observability apply is a production job that waits for the owner.
+
 **规则能否触发由下列 SigNoz 行为决定(#906 按 v0.105.1 源码核实;违反任一条,规则照样被 API 接受、状态显示 inactive,但永远不会触发)**:
 
 - **PromQL 必须用点号名**:SigNoz 开着 `DOT_METRICS_ENABLED`,collector 以 OTel 原名落库(直方图为 `<name>.bucket`),PromQL 适配器按原样匹配 `metric_name` 与 label key。只有 `{"http.server.request.count","service.name"="…"}` 这种带引号的 UTF-8 写法能匹配到数据;`http_server_request_count{service_name=…}` 匹配不到任何序列。`common/observability_dashboards.py` 加载时拒绝裸名选择器。
