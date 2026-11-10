@@ -361,6 +361,90 @@ def test_production_marker_created_and_pushed_after_first_promotion() -> None:
     assert ["git", "push", "origin", "refs/tags/production/v1.2.3"] in calls
 
 
+_APP_REJECTION = (
+    "refusing to allow a GitHub App to create or update workflow "
+    "`.github/workflows/deploy.yml` without `workflows` permission"
+)
+
+
+def _marker_runner(push_stderr, api_code=0, api_stderr=""):
+    calls = []
+
+    def runner(argv, **_kwargs):
+        calls.append(argv)
+        if argv[:3] == ["git", "rev-parse", "--verify"]:
+            if argv[3] == "v1.2.3^{commit}":
+                return subprocess.CompletedProcess(argv, 0, "b" * 40 + "\n", "")
+            return subprocess.CompletedProcess(argv, 128, "", "missing")
+        if argv[:2] == ["git", "push"]:
+            return subprocess.CompletedProcess(argv, 1, "", push_stderr)
+        if argv[0] == "gh":
+            return subprocess.CompletedProcess(argv, api_code, "", api_stderr)
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    return runner, calls
+
+
+def test_production_marker_falls_back_to_the_refs_api_when_the_push_is_rejected(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    runner, calls = _marker_runner(_APP_REJECTION)
+
+    assert record_production_marker("v1.2.3", ROOT, runner=runner) == (
+        "production/v1.2.3"
+    )
+    assert [
+        "gh",
+        "api",
+        "--method",
+        "POST",
+        "repos/owner/repo/git/refs",
+        "-f",
+        "ref=refs/tags/production/v1.2.3",
+        "-f",
+        "sha=" + "b" * 40,
+    ] in calls
+
+
+def test_production_marker_reports_both_errors_when_the_refs_api_also_fails(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    runner, _calls = _marker_runner(
+        _APP_REJECTION + " PUSH-DETAIL-7", api_code=1, api_stderr="API-DETAIL-9"
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        record_production_marker("v1.2.3", ROOT, runner=runner)
+
+    message = str(excinfo.value)
+    assert "PUSH-DETAIL-7" in message
+    assert "API-DETAIL-9" in message
+
+
+def test_production_marker_does_not_call_the_refs_api_for_another_push_failure(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    runner, calls = _marker_runner("network down")
+
+    with pytest.raises(SystemExit, match="cannot push production marker"):
+        record_production_marker("v1.2.3", ROOT, runner=runner)
+
+    assert not [argv for argv in calls if argv[0] == "gh"]
+
+
+def test_production_marker_fallback_needs_the_repository_name(monkeypatch) -> None:
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    runner, calls = _marker_runner(_APP_REJECTION)
+
+    with pytest.raises(SystemExit, match="cannot push production marker"):
+        record_production_marker("v1.2.3", ROOT, runner=runner)
+
+    assert not [argv for argv in calls if argv[0] == "gh"]
+
+
 def test_production_marker_rejects_non_release_ref() -> None:
     for invalid in ("main", "v1.2.3-rc.1"):
         with pytest.raises(ValueError, match="version tag"):

@@ -246,9 +246,36 @@ def record_production_marker(
         capture_output=True,
         text=True,
     )
-    if pushed.returncode != 0:
+    if pushed.returncode == 0:
+        return marker
+    push_error = (
+        f"::error::cannot push production marker {marker}: {pushed.stderr.strip()}"
+    )
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    # GitHub App pushes are rejected when workflow files differ from main (#1511).
+    if "refusing to allow a GitHub App" not in pushed.stderr or not repo:
+        raise SystemExit(push_error)
+    created = runner(
+        [
+            "gh",
+            "api",
+            "--method",
+            "POST",
+            f"repos/{repo}/git/refs",
+            "-f",
+            f"ref=refs/tags/{marker}",
+            "-f",
+            f"sha={target_sha}",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if created.returncode != 0:
         raise SystemExit(
-            f"::error::cannot push production marker {marker}: {pushed.stderr.strip()}"
+            f"::error::cannot record production marker {marker}: push failed with "
+            f"{pushed.stderr.strip()}; refs API failed with {created.stderr.strip()}. "
+            "Record the marker by hand only after every deploy result and hook passed."
         )
     return marker
 
