@@ -48,6 +48,8 @@ e2e = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+addopts = "--durations=25 --durations-min=1.0"
+faulthandler_timeout = 120
 testpaths = ["common/tests"]
 markers = [
     "smoke: quick smoke tests",

@@ -253,6 +253,9 @@ jobs:
           # (script path, not -m: the job runs with PYTHONSAFEPATH=1, so `tools` is not a package on sys.path)
           uv run --locked python tools/fetch_app_manifests.py
           uv run --locked python tools/lint_anti_tautology.py common/tests
+          # Print the runner facts that explain a slow run (#1494). The worker count comes
+          # from pytest-xdist's own hook, so it equals what `-n auto` uses. Never fail the step.
+          uv run --locked python -c "import os, types, xdist.plugin as p; cpu = next((l.split(':', 1)[1].strip() for l in open('/proc/cpuinfo') if l.startswith('model name')), 'unknown') if os.path.exists('/proc/cpuinfo') else 'unknown'; print('runner: nproc=%s cpu_model=%s xdist_workers=%s' % (os.cpu_count(), cpu, p.pytest_xdist_auto_num_workers(types.SimpleNamespace(option=types.SimpleNamespace(numprocesses='auto')))))" || echo "runner: facts unavailable"
           uv run --locked python -m pytest common/tests -q -n auto \
             --cov=common \
             --cov=tools \
