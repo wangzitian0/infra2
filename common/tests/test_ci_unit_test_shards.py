@@ -76,7 +76,9 @@ def test_shards_are_complete_disjoint_and_not_empty(
     assert set().union(*shards) == full
 
 
-def test_shard_split_is_the_same_in_every_process(many_tests: tuple[Path, Path]) -> None:
+def test_shard_split_is_the_same_in_every_process(
+    many_tests: tuple[Path, Path],
+) -> None:
     path, directory = many_tests
     first, _ = _collect(path, f"1/{SHARD_COUNT}", directory)
     second, _ = _collect(path, f"1/{SHARD_COUNT}", directory)
@@ -149,5 +151,9 @@ def test_shard_jobs_gate_before_pytest_and_keep_the_coverage_targets() -> None:
     assert "--shard=${{ matrix.shard }}/2" in run["run"]
     assert "--cov=common" in run["run"] and "--cov=tools" in run["run"]
     assert "-n auto" in run["run"]
-    upload = next(s for s in job["steps"] if s.get("uses", "").startswith("actions/upload-artifact"))
+    upload = next(
+        s
+        for s in job["steps"]
+        if s.get("uses", "").startswith("actions/upload-artifact")
+    )
     assert upload["with"]["include-hidden-files"] is True
