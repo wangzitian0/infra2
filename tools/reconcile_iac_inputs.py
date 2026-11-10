@@ -193,6 +193,10 @@ def assert_production_marker_advances(
     return current
 
 
+class ProductionMarkerRejected(Exception):
+    """GitHub refused the marker push of the workflow token (#1511)."""
+
+
 def record_production_marker(
     release_tag: str,
     repo_root: Path,
@@ -248,9 +252,14 @@ def record_production_marker(
         text=True,
     )
     if pushed.returncode != 0:
-        raise SystemExit(
-            f"::error::cannot push production marker {marker}: {pushed.stderr.strip()}"
-        )
+        detail = pushed.stderr.strip()
+        # Measured in #1511: the Actions token cannot create a ref at a commit whose
+        # workflow files differ from main. The deploy is done; only the record is late.
+        if "refusing to allow a GitHub App" in pushed.stderr:
+            raise ProductionMarkerRejected(
+                f"cannot push production marker {marker}: {detail}"
+            )
+        raise SystemExit(f"::error::cannot push production marker {marker}: {detail}")
     return marker
 
 
@@ -2224,13 +2233,23 @@ def main(argv: list[str] | None = None) -> int:
         )
     hooks_failed = any(item.get("status") != "pass" for item in hook_results)
     production_marker = ""
+    marker_pending = ""
     if (
         promote_prod
         and not args.dry_run
         and not any(result.get("returncode") != 0 for result in results)
         and not hooks_failed
     ):
-        production_marker = record_production_marker(args.after, repo_root)
+        try:
+            production_marker = record_production_marker(args.after, repo_root)
+        except ProductionMarkerRejected:
+            marker_pending = production_marker_tag(args.after)
+            print(
+                f"::warning::production marker {marker_pending} is pending: GitHub "
+                "rejects a GitHub App push for a commit whose workflow files differ "
+                "from main (#1511). Record it by hand: see docs/ssot/ops.pipeline.md, "
+                "section on the production marker."
+            )
 
     run_url = github_run_url(os.environ)
     payload = {
@@ -2249,6 +2268,7 @@ def main(argv: list[str] | None = None) -> int:
         "promote_prod": promote_prod,
         "target_env": target_env,
         "production_marker": production_marker,
+        "marker_pending": marker_pending,
         "results": results,
         "hook_results": hook_results,
         "dry_run": args.dry_run,

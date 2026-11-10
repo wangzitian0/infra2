@@ -160,6 +160,16 @@ marker 不动就是 prod 用旧 deployer:2026-07-30 的 `production/v1.1.52` 让
 deploy-guard-audit 报一行(`python -m common.deploy.release_markers --repo-root .`),内容是 marker、落后几个
 release、以及是否已旧到会破坏下一次 prod 发布。工作流与工具通过 `common.deploy.app_contract.query_serving_release` 直接查询 infra2 权威部署态 `(source_sha, image_tag, iac_ref)`，不再从 App 自身 GitHub Actions 历史重推导 (#588)。
 
+**Production marker, manual record (#1511).** GitHub can reject the marker push of the workflow token when the workflow files of the tagged commit differ from `main`.
+The run then stays green and prints `production marker production/<tag> is pending`; the result JSON carries `marker_pending`.
+The warning exists only when the marker call was reached: a real promotion (no dry run, no hook-only run) whose deploys all returned 0 and whose hooks all passed.
+Read this evidence before you record: read the NEWEST `(PROD <tag>)` run for that tag, record only if no later production run exists, and check that the run is `success`.
+Its job annotations (`gh api --paginate repos/<repo>/check-runs/<job id>/annotations`) must hold the pending-marker warning for that exact tag.
+Preconditions: the tag is on `main`; no marker exists for it; it is newer than the latest marker; no reconcile run is waiting, pending, in progress or queued.
+Commands: `git fetch --tags origin`; `<sha>` is `git rev-parse <tag>^{commit}`; `git tag production/<tag> <sha>`; `git push origin refs/tags/production/<tag>`.
+Then `git ls-remote --tags origin refs/tags/production/<tag>` must show `<sha>`.
+The marker is immutable: never move it.
+
 #### 3.3.1 Unit retry in the release train (#1439)
 
 Owner decision (2026-11-05): the approval of a production tag covers at most 2 automatic retries of a failed unit, in
