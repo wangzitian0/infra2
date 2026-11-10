@@ -1,0 +1,97 @@
+# Temporary diagnostic for #1511. Do not merge. Creates and deletes throwaway tags under diag-1511/.
+name: Diag marker push (temporary, #1511)
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/diag-marker-push.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN: ${{ github.run_id }}
+      # Commit of release v3.1.27.
+      OLD: dac1a968fd71e09846559922887c38e72b86367d
+    steps:
+      - name: Check out full history
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Facts
+        run: |
+          MAIN=$(git rev-parse origin/main)
+          echo "MAIN=$MAIN" >> "$GITHUB_ENV"
+          echo "MAIN=$MAIN"
+          echo "OLD=$OLD"
+          echo "Workflow files that differ between OLD and MAIN:"
+          git diff --name-status "$OLD" "$MAIN" -- .github/workflows
+
+      - name: Test 1 - git push of a tag on the OLD release commit
+        id: t1
+        continue-on-error: true
+        run: |
+          set +e
+          out=$(git push origin "$OLD:refs/tags/diag-1511/push-old-$RUN" 2>&1); rc=$?
+          echo "RESULT t1 rc=$rc $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)" | tee -a "$RUNNER_TEMP/results.txt"
+          exit "$rc"
+
+      - name: Test 2 - refs API on the OLD release commit
+        id: t2
+        continue-on-error: true
+        run: |
+          set +e
+          out=$(gh api --method POST "repos/$REPO/git/refs" -f "ref=refs/tags/diag-1511/api-old-$RUN" -f "sha=$OLD" 2>&1); rc=$?
+          echo "RESULT t2 rc=$rc $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)" | tee -a "$RUNNER_TEMP/results.txt"
+          exit "$rc"
+
+      - name: Test 3 - control, git push of a tag on the current main tip
+        id: t3
+        continue-on-error: true
+        run: |
+          set +e
+          out=$(git push origin "$MAIN:refs/tags/diag-1511/push-main-$RUN" 2>&1); rc=$?
+          echo "RESULT t3 rc=$rc $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)" | tee -a "$RUNNER_TEMP/results.txt"
+          exit "$rc"
+
+      - name: Test 4 - control, refs API on the current main tip
+        id: t4
+        continue-on-error: true
+        run: |
+          set +e
+          out=$(gh api --method POST "repos/$REPO/git/refs" -f "ref=refs/tags/diag-1511/api-main-$RUN" -f "sha=$MAIN" 2>&1); rc=$?
+          echo "RESULT t4 rc=$rc $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-300)" | tee -a "$RUNNER_TEMP/results.txt"
+          exit "$rc"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          set +e
+          for name in push-old api-old push-main api-main; do
+            out=$(gh api --method DELETE "repos/$REPO/git/refs/tags/diag-1511/$name-$RUN" 2>&1); rc=$?
+            echo "CLEANUP $name rc=$rc $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-200)"
+          done
+          remaining=$(git ls-remote --tags origin "refs/tags/diag-1511/*")
+          echo "REMAINING refs:"
+          echo "$remaining"
+          if [ -n "$remaining" ]; then
+            echo "::error::Throwaway tags remain on the remote."
+            exit 1
+          fi
+          echo "REMAINING none"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "| Test | Result |"
+            echo "|---|---|"
+            tr '|' '/' < "$RUNNER_TEMP/results.txt" | sed 's/^RESULT \([a-z0-9]*\) /| \1 | /; s/$/ |/'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
