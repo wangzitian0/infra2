@@ -1731,12 +1731,22 @@ def test_apply_observability_workflow_exposes_canary_mode() -> None:
     assert "inputs.mode == 'apply'" in workflow
 
 
-def _apply_observability_job() -> dict:
-    """Return the parsed `apply` job of apply-observability.yml."""
+def _apply_observability_document() -> dict:
+    """Return the parsed apply-observability.yml."""
     import yaml
 
-    document = yaml.safe_load(APPLY_OBSERVABILITY_WORKFLOW.read_text(encoding="utf-8"))
-    return document["jobs"]["apply"]
+    return yaml.safe_load(APPLY_OBSERVABILITY_WORKFLOW.read_text(encoding="utf-8"))
+
+
+def _apply_observability_triggers() -> dict:
+    """Return the `on` block. PyYAML reads the key `on` as the boolean True."""
+    document = _apply_observability_document()
+    return document["on"] if "on" in document else document[True]
+
+
+def _apply_observability_job() -> dict:
+    """Return the parsed `apply` job of apply-observability.yml."""
+    return _apply_observability_document()["jobs"]["apply"]
 
 
 def _apply_observability_step(name: str) -> dict:
@@ -1748,43 +1758,72 @@ def _apply_observability_step(name: str) -> dict:
 
 def test_apply_observability_mode_input_options_are_exact() -> None:
     """#1435: the mode input offers apply, canary and prune-alerts, in this order."""
-    import yaml
-
-    document = yaml.safe_load(APPLY_OBSERVABILITY_WORKFLOW.read_text(encoding="utf-8"))
-    on_block = document.get("on") or document.get(True)
-    mode_input = on_block["workflow_dispatch"]["inputs"]["mode"]
+    mode_input = _apply_observability_triggers()["workflow_dispatch"]["inputs"]["mode"]
 
     assert mode_input["options"] == ["apply", "canary", "prune-alerts"]
     assert mode_input["default"] == "apply"
+
+
+def test_apply_observability_triggers_permissions_and_concurrency_are_exact() -> None:
+    """#1435: the new mode adds no trigger, no write permission, no queue change."""
+    document = _apply_observability_document()
+
+    assert set(_apply_observability_triggers()) == {"workflow_dispatch"}
+    assert document["permissions"] == {"contents": "read"}
+    assert document["concurrency"] == {
+        "group": "apply-observability",
+        "cancel-in-progress": False,
+    }
+
+
+def test_apply_observability_step_names_are_exact_and_in_order() -> None:
+    """#1435: an added or removed step changes this list."""
+    names = [step["name"] for step in _apply_observability_job()["steps"]]
+
+    assert names == [
+        "Checkout",
+        "Set up Python",
+        "Install uv",
+        "Preflight — SIGNOZ_API_KEY present",
+        "Canary — SigNoz alert rule payload",
+        "Apply alert rules (idempotent)",
+        "Apply dashboard (idempotent)",
+    ]
 
 
 def test_apply_observability_alerts_step_prunes_only_in_prune_alerts_mode() -> None:
     """#1435: prune-alerts runs apply-alerts with --prune; other modes pass no flag."""
     step = _apply_observability_step("Apply alert rules (idempotent)")
 
-    assert step["if"] == (
-        "${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'apply' "
-        "|| inputs.mode == 'prune-alerts' }}"
-    )
-    assert step["env"] == {
-        "PRUNE_FLAG": "${{ inputs.mode == 'prune-alerts' && '--prune' || '' }}"
+    assert step == {
+        "name": "Apply alert rules (idempotent)",
+        "if": (
+            "${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'apply' "
+            "|| inputs.mode == 'prune-alerts' }}"
+        ),
+        "env": {
+            "PRUNE_FLAG": "${{ inputs.mode == 'prune-alerts' && '--prune' || '' }}"
+        },
+        "run": (
+            "uv run --locked python -m invoke fr-observability.shared.apply-alerts "
+            "$PRUNE_FLAG"
+        ),
     }
-    assert step["run"] == (
-        "uv run --locked python -m invoke fr-observability.shared.apply-alerts "
-        "$PRUNE_FLAG"
-    )
 
 
 def test_apply_observability_dashboard_step_never_runs_in_prune_alerts_mode() -> None:
     """#1435: a prune run must not push dashboards the owner did not approve."""
     step = _apply_observability_step("Apply dashboard (idempotent)")
 
-    assert step["if"] == (
-        "${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'apply' }}"
-    )
-    assert step["run"] == (
-        "uv run --locked python -m invoke fr-observability.shared.apply-dashboard"
-    )
+    assert step == {
+        "name": "Apply dashboard (idempotent)",
+        "if": (
+            "${{ github.event_name != 'workflow_dispatch' || inputs.mode == 'apply' }}"
+        ),
+        "run": (
+            "uv run --locked python -m invoke fr-observability.shared.apply-dashboard"
+        ),
+    }
 
 
 def test_apply_observability_job_environment_stays_production() -> None:
