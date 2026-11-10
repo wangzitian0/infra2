@@ -34,6 +34,7 @@ from common.core.constants import (
 from common.core.registry import domain_for_service, service_attrs
 from common.deploy.app_contract import (
     APP_HOOKS_MANIFEST_PATH,
+    HOOK_RUNNER_SECRET_ENV,
     HOOK_SLOTS,
     RuntimeHooksManifest,
     execute_app_hook_slot,
@@ -2043,12 +2044,11 @@ def main(argv: list[str] | None = None) -> int:
 
     repo_root = Path(args.repo_root).resolve()
     if args.run_scheduled_audit:
-        ai_key = (
-            os.environ.get("AI_API_KEY")
-            or os.environ.get("ZAI_CODING_CN_API_KEY")
-            or ""
-        )
-        env_overrides = {"AI_API_KEY": ai_key} if ai_key else None
+        env_overrides = {
+            name: value
+            for name, secret in HOOK_RUNNER_SECRET_ENV.items()
+            if (value := os.environ.get(name) or os.environ.get(secret))
+        } or None
         hook_results = run_scheduled_app_audits(
             repo_root,
             target_env=target_env,
