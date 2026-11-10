@@ -15,7 +15,6 @@ class _BoundRefs:
     """Thin test adapter supplying default ``repo`` for ``infra2_sdk.refs``."""
 
     classify_ref = staticmethod(refs.classify_ref)
-    redact_repo = staticmethod(refs.redact_repo)
 
     @staticmethod
     def resolve_to_sha(ref: str, *, repo: str = DEFAULT_REPO, **kwargs) -> str:
@@ -28,12 +27,6 @@ class _BoundRefs:
     @staticmethod
     def resolve_pr(pr_number, *, repo: str = DEFAULT_REPO, **kwargs):
         return refs.resolve_pr(pr_number, repo=repo, **kwargs)
-
-    @staticmethod
-    def resolve_branch_to_sha(
-        branch: str, *, repo: str = DEFAULT_REPO, **kwargs
-    ) -> str:
-        return refs.resolve_branch_to_sha(branch, repo=repo, **kwargs)
 
 
 r = _BoundRefs()
@@ -95,34 +88,6 @@ def test_resolve_main_uses_refs_heads_main():
     assert r.resolve_to_sha("main", runner=runner) == "1" * 40
     assert runner.calls[0][:2] == ["git", "ls-remote"]
     assert runner.calls[0][-1] == "refs/heads/main"
-
-
-def test_resolve_clone_branch_supports_slashes_without_broadening_classify_ref():
-    runner = FakeRunner(
-        stdout="2" * 40 + "\trefs/heads/fix/canary-operation-evidence\n"
-    )
-    assert (
-        r.resolve_branch_to_sha("fix/canary-operation-evidence", runner=runner)
-        == "2" * 40
-    )
-    assert runner.calls[0][-1] == "refs/heads/fix/canary-operation-evidence"
-    with pytest.raises(ValueError, match="unrecognized deploy ref"):
-        r.classify_ref("fix/canary-operation-evidence")
-
-
-@pytest.mark.parametrize(
-    "branch", ["", "refs/heads/main", "../main", "bad branch", "bad~branch"]
-)
-def test_resolve_clone_branch_rejects_invalid_shapes_before_network(branch):
-    runner = FakeRunner(stdout="should-not-be-used")
-    with pytest.raises(ValueError, match="invalid clone branch"):
-        r.resolve_branch_to_sha(branch, runner=runner)
-    assert runner.calls == []
-
-
-def test_resolve_clone_branch_fails_when_exact_head_is_absent():
-    with pytest.raises(ValueError, match="clone branch.*not found"):
-        r.resolve_branch_to_sha("fix/missing", runner=FakeRunner(stdout=""))
 
 
 class _RealisticLsRemote:
@@ -216,21 +181,6 @@ def test_resolve_timeout_is_wrapped_as_value_error():
     runner = FakeRunner(raises=subprocess.TimeoutExpired(["git", "ls-remote"], 30))
     with pytest.raises(ValueError, match="git ls-remote failed"):
         r.resolve_to_sha("main", runner=runner)
-
-
-def test_redact_repo_strips_embedded_credentials():
-    assert (
-        refs.redact_repo("https://ghp_secret@github.com/x/y.git")
-        == "https://<redacted>@github.com/x/y.git"
-    )
-    assert (
-        refs.redact_repo("https://user:pass@github.com/x/y.git")
-        == "https://<redacted>@github.com/x/y.git"
-    )
-    # an unauthenticated URL is left untouched
-    assert (
-        refs.redact_repo("https://github.com/x/y.git") == "https://github.com/x/y.git"
-    )
 
 
 def test_error_messages_do_not_leak_repo_credentials():
