@@ -787,3 +787,25 @@ def test_a_schedule_event_without_a_usable_cron_is_invalid_and_names_the_file(
 )
 def test_only_a_schedule_event_makes_a_workflow_scheduled(text, crons) -> None:
     assert est.schedule_crons(text) == crons
+
+
+@pytest.mark.parametrize(
+    ("ahead", "status"),
+    [
+        (timedelta(seconds=60), est.OK),  # within the 300 s clock-skew limit
+        (timedelta(seconds=301), est.UNVERIFIABLE),
+        (timedelta(hours=2), est.UNVERIFIABLE),
+        (timedelta(days=3650), est.UNVERIFIABLE),
+    ],
+)
+def test_a_queued_run_dated_in_the_future_is_unverifiable_beyond_the_skew(
+    ahead, status
+) -> None:
+    verdict = _estate_for_runs(scheduled=[_queued(-ahead)])
+    assert verdict.status == status, verdict
+
+
+def test_the_future_run_message_names_the_workflow_and_the_timestamp() -> None:
+    ahead = timedelta(hours=2)
+    verdict = _estate_for_runs(scheduled=[_queued(-ahead)])
+    assert path_of("w") in verdict.detail and _iso(NOW + ahead) in verdict.detail

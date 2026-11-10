@@ -75,6 +75,9 @@ MAX_DETAIL_ENTRIES = 12
 #: A scheduled run that has not started a job is red only after this age, or at once
 #: on ``startup_failure``. The first run of a new workflow waits in the queue first.
 QUEUED_RUN_ALLOWANCE = timedelta(hours=1)
+#: A timestamp this far ahead of the local clock is clock skew, not a young run. The
+#: Worker check (``tools/out_of_band_watchdog.py``) reads this one value too.
+CLOCK_SKEW_TOLERANCE_SECONDS = 300
 
 OK = "OK"
 STALE = "STALE"
@@ -299,6 +302,11 @@ def _never_started(run: dict, now: datetime) -> bool:
     if run.get("conclusion") == "startup_failure":
         return True
     created = _timestamp(run.get("created_at"), f"run {run.get('id')}")
+    if created - now > timedelta(seconds=CLOCK_SKEW_TOLERANCE_SECONDS):
+        raise PeerReadError(
+            f"run {run.get('id')} created_at {run.get('created_at')} is ahead of the "
+            "clock (clock skew?): its age cannot be trusted"
+        )
     return now - created > QUEUED_RUN_ALLOWANCE
 
 
@@ -424,7 +432,7 @@ def _evaluate_workflow(
         )
     if scheduled:
         total = f"{len(scheduled)} scheduled run{'' if len(scheduled) == 1 else 's'}"
-        if any(_never_started(run, now) for run in scheduled):
+        if any([_never_started(run, now) for run in scheduled]):  # reads every run
             return WorkflowVerdict(
                 repository,
                 path,
@@ -534,6 +542,7 @@ def evaluate_estate_liveness(
 __all__ = [
     "API_TIMEOUT_SECONDS",
     "BOUND_CAP_ENV",
+    "CLOCK_SKEW_TOLERANCE_SECONDS",
     "DELAY_ALLOWANCE",
     "DISABLED",
     "ESTATE_REPOSITORIES",
