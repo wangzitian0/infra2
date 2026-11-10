@@ -173,10 +173,21 @@ def apply_alerts(c, dry_run=False, prune=False):
     ids_before = _signoz_rule_ids(existing_rules)
 
     all_ok = True
+    started = alerting._monotonic()
     # --- upsert: (re)write every catalog rule so a changed definition takes effect.
     # delete-then-create with verified deletion; a failed create fails the apply loudly
     # (CI non-zero) rather than silently leaving the old rule.
-    for alert_name, payload in rendered:
+    for position, (alert_name, payload) in enumerate(rendered):
+        # A job killed between a DELETE and its POST leaves a rule missing. Past the
+        # deadline, stop BEFORE the next DELETE and leave the other rules as they are.
+        if alerting._monotonic() - started > alerting._APPLY_ALERTS_DEADLINE_SECONDS:
+            all_ok = False
+            error(
+                f"Stopped after {alerting._APPLY_ALERTS_DEADLINE_SECONDS} s: not "
+                "applied, the live rule is unchanged: "
+                + ", ".join(name for name, _ in rendered[position:])
+            )
+            break
         existing_id = find_signoz_rule_id(existing_rules, alert_name)
         if existing_id and not _delete_signoz_rule(alerting, c, str(existing_id)):
             all_ok = False
@@ -202,14 +213,16 @@ def apply_alerts(c, dry_run=False, prune=False):
             )
             alerting._sleep(delay)
             relisted = alerting._signoz_request(c, method="GET", path="/api/v1/rules")
-            if not relisted["ok"] or not isinstance(relisted.get("data"), (dict, list)):
-                # An unreadable list cannot prove absence: never risk a duplicate.
+            listed_rules = _rule_collection(relisted.get("data"))
+            if not relisted["ok"] or listed_rules is None:
+                # A list without a rule collection cannot prove absence: never risk a
+                # duplicate.
                 error(
                     f"SigNoz rule state unknown after a failed create: {alert_name}",
                     "the rule list is unreadable, so the task sends no second create",
                 )
                 break
-            if _signoz_rule_ids(relisted["data"], alert_name) - ids_before:
+            if _signoz_rule_ids(listed_rules, alert_name) - ids_before:
                 lost_response = True
                 break
             created = alerting._signoz_request(
@@ -257,6 +270,23 @@ def apply_alerts(c, dry_run=False, prune=False):
     if not all_ok:
         raise Exit("Failed to reconcile one or more SigNoz alert rules", code=1)
     return all_ok
+
+
+def _rule_collection(decoded) -> list | None:
+    """The list of rules in a decoded SigNoz list answer, or None when it holds none.
+
+    It looks where ``_iter_signoz_items`` looks, but accepts only a list. The real answer
+    is ``{"status": "success", "data": {"rules": [...]}}``. An empty list is a valid
+    proof of absence under ``rules`` or ``items``. A bare empty list is not: any
+    endpoint could answer it.
+    """
+    data = decoded.get("data", decoded) if isinstance(decoded, dict) else decoded
+    if isinstance(data, dict):
+        for key in ("rules", "items"):
+            if isinstance(data.get(key), list):
+                return data[key]
+        data = data.get("data")
+    return data if isinstance(data, list) and data else None
 
 
 def _signoz_rule_ids(rules_response, alert_name: str | None = None) -> set[str]:

@@ -28,6 +28,10 @@ _SIGNOZ_TRANSIENT_STATUSES = frozenset({0, 502, 503, 504, 520, 521, 522, 523, 52
 # One entry per retry: seconds to wait before attempt 2, then before attempt 3.
 _SIGNOZ_RETRY_DELAYS_SECONDS = (2, 5)
 _sleep = time.sleep
+# A job killed between a DELETE and its POST leaves a rule missing, so apply_alerts
+# stops before the next DELETE once this many seconds have passed (#1550).
+_APPLY_ALERTS_DEADLINE_SECONDS = 1200
+_monotonic = time.monotonic
 
 
 def _bridge_url(env: dict[str, str | None]) -> str:
