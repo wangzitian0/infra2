@@ -20,7 +20,10 @@ def test_infra_ci_publishes_coverage_context_without_blocking_delivery() -> None
     assert 'PYTHONSAFEPATH: "1"' in workflow
     assert "--cov=common" in workflow
     assert "--cov=tools" in workflow
-    assert "--cov-report=xml:coverage/infra2-coverage.xml" in workflow
+    # Each shard writes a data file; the final job combines them into the XML (#1499).
+    assert "coverage xml -o coverage/infra2-coverage.xml" in workflow
+    assert "coverage combine" in workflow
+    assert "include-hidden-files: true" in workflow
     assert "--cov-fail-under=0" in workflow
     assert "Upload infra coverage context" in workflow
     assert "infra2-coverage-context" in workflow

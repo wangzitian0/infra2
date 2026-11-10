@@ -200,8 +200,15 @@ jobs:
       - name: Run harness check
         run: python3 -m tools.harness check --no-submodules-expected
 
-  test-deployer-logic:
-    name: Test Deployer Hash Logic
+  # Parallel shards (the matrix below is the only place that states the count) run the traced unit tests (#1499). Each test belongs to one shard by
+  # a hash of its node id (common/ci_plugins/pytest_shard.py). The final job
+  # `test-deployer-logic` combines the coverage data and keeps the required check name.
+  test-unit-shard:
+    name: Unit tests shard ${{ matrix.shard }}/${{ strategy.job-total }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     needs: detect-changes
     if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
@@ -245,6 +252,10 @@ jobs:
         # crash on startup.
         env:
           PYTHONSAFEPATH: "1"
+          # PYTHONSAFEPATH drops the working directory from sys.path, so name the plugin
+          # directory (it holds only pytest_shard.py). xdist workers inherit it.
+          PYTHONPATH: ${{ github.workspace }}/common/ci_plugins
+          COVERAGE_FILE: ${{ github.workspace }}/coverage/.coverage.shard${{ matrix.shard }}
         run: |
           cd ${{ github.workspace }}
           mkdir -p coverage
@@ -257,11 +268,72 @@ jobs:
           # from pytest-xdist's own hook, so it equals what `-n auto` uses. Never fail the step.
           uv run --locked python -c "import os, types, xdist.plugin as p; cpu = next((l.split(':', 1)[1].strip() for l in open('/proc/cpuinfo') if l.startswith('model name')), 'unknown') if os.path.exists('/proc/cpuinfo') else 'unknown'; print('runner: nproc=%s cpu_model=%s xdist_workers=%s' % (os.cpu_count(), cpu, p.pytest_xdist_auto_num_workers(types.SimpleNamespace(option=types.SimpleNamespace(numprocesses='auto')))))" || echo "runner: facts unavailable"
           uv run --locked python -m pytest common/tests -q -n auto \
+            -p pytest_shard --shard=${{ matrix.shard }}/${{ strategy.job-total }} \
             --cov=common \
             --cov=tools \
-            --cov-report=term-missing \
-            --cov-report=xml:coverage/infra2-coverage.xml \
+            --cov-report= \
             --cov-fail-under=0
+
+      - name: Upload coverage data of this shard
+        uses: actions/upload-artifact@v7
+        with:
+          name: infra2-coverage-data-shard${{ matrix.shard }}
+          path: coverage/.coverage.shard${{ matrix.shard }}
+          include-hidden-files: true
+          if-no-files-found: error
+
+
+  test-deployer-logic:
+    name: Test Deployer Hash Logic
+    needs: [detect-changes, test-unit-shard]
+    # always(): a required check that is skipped counts as passed, so this job must run
+    # after a failed or cancelled shard and fail itself (#1499).
+    if: always() && needs.detect-changes.outputs.has_non_doc == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every unit-test shard to succeed
+        env:
+          SHARD_RESULT: ${{ needs.test-unit-shard.result }}
+        run: |
+          echo "test-unit-shard result: ${SHARD_RESULT}"
+          [ "${SHARD_RESULT}" = "success" ]
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v8.3.2
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install dependencies
+        run: |
+          cd ${{ github.workspace }}
+          # common/env.py and common/secrets_supply.py import infra2-sdk; install the wheel
+          # uv.lock pins, hash-verified, so this job validates what the runner runs (#1115).
+          uv pip install --system invoke httpx python-dotenv rich \
+            "$(python tools/sdk_requirement.py)"
+
+      - name: Download coverage data of the shards
+        uses: actions/download-artifact@v8
+        with:
+          pattern: infra2-coverage-data-shard*
+          path: coverage
+          merge-multiple: true
+
+      - name: Combine shard coverage into one report
+        run: |
+          cd ${{ github.workspace }}
+          # --keep: leave the shard files in place for a rerun of this step.
+          uv run --locked coverage combine --keep coverage/.coverage.shard*
+          uv run --locked coverage report --show-missing
+          uv run --locked coverage xml -o coverage/infra2-coverage.xml
 
       - name: Upload infra coverage context
         uses: actions/upload-artifact@v7
