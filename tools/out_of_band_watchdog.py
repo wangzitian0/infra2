@@ -62,6 +62,7 @@ from common.observability.page_dedup import (  # noqa: E402
 from common.observability import scheduled_job_start  # noqa: E402
 from common.observability.estate_scheduler_liveness import (  # noqa: E402
     BOUND_CAP_ENV,
+    CLOCK_SKEW_TOLERANCE_SECONDS,
     OK as PEER_OK,
     UNVERIFIABLE,
     evaluate_estate_liveness,
@@ -93,7 +94,7 @@ PAGE_DEDUP_LABEL = "GitHub 日级带外审计"
 WORKER_WRANGLER = ROOT / "cloudflare/infra-watchdog/wrangler.toml"
 WORKER_MAX_AGE_VAR = "WATCHDOG_STATUS_MAX_AGE_SECONDS"
 #: worker.js statusResponse: a last run this far "in the future" is clock skew, stale.
-WORKER_FUTURE_TOLERANCE_SECONDS = 300
+WORKER_FUTURE_TOLERANCE_SECONDS = CLOCK_SKEW_TOLERANCE_SECONDS
 
 #: #908 (ops.observability.md §1.1): which checks page is decided by the signal
 #: registry, not here. A GitHub signal pages unless it is `type: report`; the

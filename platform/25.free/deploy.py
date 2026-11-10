@@ -17,6 +17,9 @@ from common.deploy.deployer import Deployer, make_tasks
 from common.console import error, run_with_status, success, header, info, warning
 from common.core.facets import BackupFacet, Exemption
 
+# Printed by the remote read command when the host file does not exist (#1449).
+ABSENT_SENTINEL = "__IAC_ABSENT__"
+
 # Get shared_tasks from sys.modules (loaded by tools/loader.py)
 shared_tasks = sys.modules.get("platform.25.free.shared")
 
@@ -61,6 +64,29 @@ class FreeDeployer(Deployer):
         return config_content.replace("{{FREE_PATH}}", free_path)
 
     @classmethod
+    def _read_remote_config(cls, c, target: str, path: str) -> str | None:
+        """Return the host config text, "" if confirmed absent, None if the read failed."""
+        quoted = shlex.quote(path)
+        script = (
+            f"if [ -e {quoted} ]; then cat {quoted}; else echo {ABSENT_SENTINEL}; fi"
+        )
+        try:
+            res = c.run(
+                f"ssh -o BatchMode=yes {shlex.quote(target)} {shlex.quote(script)}",
+                warn=True,
+                hide=True,
+            )
+            out, detail = (res.stdout.strip() if res.ok else ""), "non-zero exit"
+        except Exception as exc:
+            out, detail = "", str(exc)
+        if not out:
+            error(
+                f"Cannot read host config {path} on {target}; stop the deploy", detail
+            )
+            return None
+        return "" if out == ABSENT_SENTINEL else out
+
+    @classmethod
     def _ensure_remote_config(cls, c) -> tuple[str, str] | None:
         env = cls.env()
         host = env.get("VPS_HOST")
@@ -80,14 +106,15 @@ class FreeDeployer(Deployer):
             )
             return None
 
-        # Check if remote config already exists to keep UUID and Path stable
+        # Keep UUID and Path stable. Only a confirmed absent file may create new values (#1449).
         existing_uuid = None
         existing_path = None
-        check_cmd = f"ssh -o BatchMode=yes {shlex.quote(f'{user}@{host}')} {shlex.quote(f'cat {safe_path}')}"
-        res = c.run(check_cmd, warn=True, hide=True)
-        if res.ok and res.stdout.strip():
+        host_text = cls._read_remote_config(c, f"{user}@{host}", config_remote_path)
+        if host_text is None:
+            return None
+        if host_text:
             try:
-                cfg = json.loads(res.stdout.strip())
+                cfg = json.loads(host_text)
                 inbounds = cfg.get("inbounds", [])
                 if inbounds:
                     users = inbounds[0].get("users", [])
@@ -135,7 +162,7 @@ class FreeDeployer(Deployer):
         if (
             existing_uuid == free_uuid
             and existing_path == free_path
-            and res.stdout.strip() == config_content.strip()
+            and host_text == config_content.strip()
         ):
             perm_res = run_with_status(c, perm_cmd, "Set config permissions")
             if not perm_res.ok:
@@ -242,12 +269,10 @@ class FreeDeployer(Deployer):
 
         free_uuid = None
         free_path = None
-        safe_path = shlex.quote(config_remote_path)
-        check_cmd = f"ssh -o BatchMode=yes {shlex.quote(f'{user}@{host}')} {shlex.quote(f'cat {safe_path}')}"
-        res = c.run(check_cmd, warn=True, hide=True)
-        if res.ok and res.stdout.strip():
+        host_text = cls._read_remote_config(c, f"{user}@{host}", config_remote_path)
+        if host_text:
             try:
-                cfg = json.loads(res.stdout.strip())
+                cfg = json.loads(host_text)
                 inbounds = cfg.get("inbounds", [])
                 if inbounds:
                     users = inbounds[0].get("users", [])
