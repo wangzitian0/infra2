@@ -31,6 +31,7 @@ DEPRECATED_RUNTIME_MODULES = {
 }
 
 DEPRECATED_SDK_ATTRS: dict[tuple[str, str], str] = {
+    ("infra2_sdk.ci", "crons_in"): "yaml.safe_load",
     ("infra2_sdk.ci", "inspect_compose"): "infra2_sdk.rules.compose.inspect_compose",
     ("infra2_sdk.deploy", "dispatch_and_wait"): "infra2_sdk.deploy.poll_until_healthy",
     ("infra2_sdk.deploy", "identifier_kind"): "infra2_sdk.refs.identifier_kind",
@@ -39,8 +40,10 @@ DEPRECATED_SDK_ATTRS: dict[tuple[str, str], str] = {
         "assert_environment",
     ): "infra2_sdk.runtime.config_schema.assert_environment",
     ("infra2_sdk.observability", "ScheduleError"): "infra2_sdk.ci.ScheduleError",
-    ("infra2_sdk.observability", "crons_in"): "infra2_sdk.ci.crons_in",
+    ("infra2_sdk.observability", "crons_in"): "yaml.safe_load",
     ("infra2_sdk.observability", "largest_gap"): "infra2_sdk.ci.largest_gap",
+    ("infra2_sdk.refs", "SHORT_SHA_LENGTH"): "infra2_sdk.refs.classify_ref",
+    ("infra2_sdk.refs", "redact_repo"): "infra2_sdk.refs.resolve_to_sha",
     ("infra2_sdk.refs", "resolve_branch_to_sha"): "infra2_sdk.refs.resolve_to_sha",
 }
 
