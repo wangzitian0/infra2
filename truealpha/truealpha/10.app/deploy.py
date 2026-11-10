@@ -25,6 +25,10 @@ class AppDeployer(Deployer):
 
     service = "app"
     compose_path = "truealpha/truealpha/10.app/compose.yaml"
+    upstream_manifests = (
+        "apps/app-web/required-env.manifest.json",
+        "apps/llm-service/required-env.generated.json",
+    )
     data_path = None
     secret_key = "DATABASE_URL"
     project = "truealpha"  # Dokploy project name

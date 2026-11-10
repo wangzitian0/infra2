@@ -122,6 +122,8 @@ class ServiceMeta:
     storage: tuple[StorageFacet, ...] = ()
     # Legacy compose names for backward-compatibility during rollout (#954, #958)
     legacy_compose_names: tuple[str, ...] = ()
+    # Upstream release manifest paths in the App repository (#1504)
+    upstream_manifests: tuple[str, ...] = ()
 
     def exempted(self, check_id: str) -> bool:
         """True if this service explicitly opted out of facet ``check_id``."""
@@ -188,6 +190,7 @@ def _cached_meta_from_deploy_file(
         restart_after=_facet_seq(tree, "restart_after", RestartAfterFacet, where),
         storage=_facet_seq(tree, "storage", StorageFacet, where),
         legacy_compose_names=_class_tuple_str_attr(tree, "legacy_compose_names"),
+        upstream_manifests=_class_tuple_str_attr(tree, "upstream_manifests"),
     )
 
 

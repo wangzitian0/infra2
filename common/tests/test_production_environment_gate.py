@@ -20,6 +20,7 @@ from common.gate import production_contract
 from common.gate.production_contract import (
     GATED_JOBS,
     NON_PRODUCTION_SECRETS,
+    RETIRED_WORKFLOWS,
     UNGATED_JOBS,
     _production_credentials,
     contract_errors,
@@ -721,3 +722,40 @@ def test_read_lock_facts_enforces_reviewer_bypass_and_policy_invariants():
     )
     assert "partial list" in trunc_facts.error
     assert lock_failures(trunc_facts) != []
+
+
+def test_retired_workflows_allow_whole_file_deletion_but_fail_closed_when_present():
+    """#1504 / #1500: omitting a workflow in RETIRED_WORKFLOWS passes, whereas omitting a
+    job inside a still-present retired workflow or omitting a non-retired workflow fails."""
+    assert RETIRED_WORKFLOWS == frozenset(
+        {
+            "app-deploy-request.yml",
+            "deploy-report-main.yml",
+            "preview-teardown.yml",
+        }
+    )
+    workflows = _load_workflows(WORKFLOWS_DIR)
+    for retired in RETIRED_WORKFLOWS:
+        without_retired = {k: v for k, v in workflows.items() if k != retired}
+        assert contract_errors(without_retired, GATED_JOBS, UNGATED_JOBS) == []
+
+    without_all_retired = {
+        k: v for k, v in workflows.items() if k not in RETIRED_WORKFLOWS
+    }
+    assert contract_errors(without_all_retired, GATED_JOBS, UNGATED_JOBS) == []
+
+    # Still-present retired workflow missing its governed job fails closed
+    partial_retired = {
+        **workflows,
+        "app-deploy-request.yml": {"jobs": {"other": {"steps": []}}},
+    }
+    assert contract_errors(partial_retired, GATED_JOBS, UNGATED_JOBS) == [
+        "app-deploy-request.yml:deploy is named in the contract and does not exist"
+    ]
+
+    # Omitting a non-retired workflow file still fails closed
+    without_deploy = {k: v for k, v in workflows.items() if k != "deploy.yml"}
+    assert contract_errors(without_deploy, GATED_JOBS, UNGATED_JOBS) == [
+        "deploy.yml:bootstrap is named in the contract and does not exist",
+        "deploy.yml:deploy is named in the contract and does not exist",
+    ]

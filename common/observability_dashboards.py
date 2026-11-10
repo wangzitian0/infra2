@@ -29,30 +29,76 @@ from common.alerting import (
     signoz_feishu_channel_name,
     signoz_rule_channel_problems,
 )
+from common.core.registry import _LAYERS
 
 # Repository root: common/observability_dashboards.py -> repo root is parents[1].
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+
+def _discover_observability_files(
+    filename: str,
+    repo_root: Path = REPO_ROOT,
+) -> tuple[Path, ...]:
+    """Discover checked-in ``filename`` across registered layers (#1504)."""
+    found: list[Path] = []
+    seen: set[Path] = set()
+
+    def _add(candidate: Path) -> None:
+        if candidate.is_file() and candidate not in seen:
+            seen.add(candidate)
+            found.append(candidate)
+
+    layer_order = [
+        *(k for k in _LAYERS if k != "platform"),
+        *(("platform",) if "platform" in _LAYERS else ()),
+    ]
+    for layer in layer_order:
+        default_path = _LAYERS[layer]
+        try:
+            rel_layer = default_path.relative_to(REPO_ROOT)
+            layer_dir = repo_root / rel_layer
+        except ValueError:
+            layer_dir = default_path
+        if not layer_dir.is_dir():
+            continue
+        _add(layer_dir / "observability" / filename)
+        _add(layer_dir / filename)
+        for child in sorted(layer_dir.iterdir()):
+            if not child.is_dir():
+                continue
+            _add(child / "observability" / filename)
+            _add(child / filename)
+
+    apps_dir = repo_root / "apps"
+    if apps_dir.is_dir():
+        for child in sorted(apps_dir.iterdir()):
+            if not child.is_dir():
+                continue
+            _add(child / "observability" / filename)
+            _add(child / filename)
+
+    return tuple(found)
+
+
+def _discover_alert_rules_files(repo_root: Path = REPO_ROOT) -> tuple[Path, ...]:
+    """Discover all ``alert_rules.json`` files across registered service layers (#1504)."""
+    return _discover_observability_files("alert_rules.json", repo_root=repo_root)
+
+
+def _discover_dashboard_files(repo_root: Path = REPO_ROOT) -> tuple[Path, ...]:
+    """Discover all ``dashboard.json`` files across registered service layers (#1504)."""
+    return _discover_observability_files("dashboard.json", repo_root=repo_root)
+
+
 # Canonical location of the finance_report observability definitions.
-FINANCE_REPORT_OBSERVABILITY_DIR = (
-    REPO_ROOT / "finance_report" / "finance_report" / "observability"
-)
+FINANCE_REPORT_OBSERVABILITY_DIR = _LAYERS["finance_report"] / "observability"
 ALERT_RULES_FILE = FINANCE_REPORT_OBSERVABILITY_DIR / "alert_rules.json"
-TRUEALPHA_OBSERVABILITY_DIR = REPO_ROOT / "truealpha" / "truealpha" / "observability"
-PLATFORM_ALERTING_DIR = REPO_ROOT / "platform" / "12.alerting"
-ALERT_RULES_FILES: tuple[Path, ...] = (
-    ALERT_RULES_FILE,
-    TRUEALPHA_OBSERVABILITY_DIR / "alert_rules.json",
-    PLATFORM_ALERTING_DIR / "alert_rules.json",
-)
+TRUEALPHA_OBSERVABILITY_DIR = _LAYERS["truealpha"] / "observability"
+PLATFORM_ALERTING_DIR = _LAYERS["platform"] / "12.alerting"
+ALERT_RULES_FILES: tuple[Path, ...] = _discover_alert_rules_files()
 DASHBOARD_FILE = FINANCE_REPORT_OBSERVABILITY_DIR / "dashboard.json"
 # Every dashboard the apply path sends to SigNoz (#1464); the apply upserts by title.
-DASHBOARD_FILES: tuple[Path, ...] = (
-    DASHBOARD_FILE,
-    TRUEALPHA_OBSERVABILITY_DIR / "dashboard.json",
-    PLATFORM_ALERTING_DIR / "dashboard.json",
-    REPO_ROOT / "platform" / "30.todo" / "dashboard.json",
-)
+DASHBOARD_FILES: tuple[Path, ...] = _discover_dashboard_files()
 OPENPANEL_ANALYTICS_FILE = FINANCE_REPORT_OBSERVABILITY_DIR / "openpanel_analytics.json"
 
 

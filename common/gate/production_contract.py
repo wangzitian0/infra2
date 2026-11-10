@@ -63,6 +63,18 @@ UNGATED_JOBS: dict[tuple[str, str], str] = {
     ): "scheduled read-only drift report (#1127)",
 }
 
+# Retired workflow files scheduled for deletion (#1500). While a retired workflow file
+# still exists in .github/workflows/, every job it declares remains governed by GATED_JOBS
+# and UNGATED_JOBS; once the workflow file itself is removed, contract_errors does not
+# fail on its absent entry so the deletion PR can pass main's workflow_contract_failures.
+RETIRED_WORKFLOWS: frozenset[str] = frozenset(
+    {
+        "app-deploy-request.yml",
+        "deploy-report-main.yml",
+        "preview-teardown.yml",
+    }
+)
+
 # Used with fullmatch: a block scalar adds a final newline, and that form fails (#1138).
 _GATED_EXPRESSION = re.compile(
     r"\$\{\{\s*(?P<condition>.+?)\s*&&\s*'production'\s*\|\|\s*'staging'\s*\}\}"
@@ -283,6 +295,8 @@ def contract_errors(
                     f"{credentials} and is in neither GATED_JOBS nor UNGATED_JOBS"
                 )
     for key in sorted((set(gated) | set(ungated)) - seen):
+        if key[0] in RETIRED_WORKFLOWS and key[0] not in workflows:
+            continue
         errors.append(f"{key[0]}:{key[1]} is named in the contract and does not exist")
     for key in sorted(set(gated) & set(ungated)):
         errors.append(f"{key[0]}:{key[1]} is both gated and ungated")

@@ -92,6 +92,7 @@ class AppDeployer(Deployer):
 
     service = "app"
     compose_path = "finance_report/finance_report/10.app/compose.yaml"
+    upstream_manifests = ("common/runtime/required-env.generated.json",)
     data_path = None
     secret_key = "DATABASE_URL"
     project = "finance_report"
