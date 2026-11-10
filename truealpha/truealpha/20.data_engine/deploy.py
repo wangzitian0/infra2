@@ -42,6 +42,7 @@ class DataEngineDeployer(Deployer):
 
     service = "data_engine"
     compose_path = "truealpha/truealpha/20.data_engine/compose.yaml"
+    upstream_manifests = ("apps/data-engine/required-env.generated.json",)
     data_path = "/data/truealpha/dagster"
 
     # Backup facts (#542): the backup inventory derives from these

@@ -57,7 +57,7 @@ from infra2_sdk.secrets import render_agent_policy, render_agent_template
 
 from common.core.constants import APP_SOURCES, REPO_ROOT
 from common.core.fetch_app_manifests import http_get
-from common.core.registry import domain_for_service
+from common.core.registry import ServiceMeta, domain_for_service, service_attrs
 from common.deploy.release_markers import PRODUCTION_MARKER_PREFIX
 from common.security.registry import _RENDER_KEYS, SERVICES, Service
 
@@ -94,8 +94,7 @@ IGNORED_ATTRIBUTES: tuple[str, ...] = (
     "ci",
 )
 
-#: Upstream release manifest paths in each App repository, paired with the infra2 service id.
-APP_UPSTREAM_MANIFESTS: dict[str, tuple[tuple[str, str], ...]] = {
+_DEFAULT_APP_UPSTREAM_MANIFESTS: dict[str, tuple[tuple[str, str], ...]] = {
     "finance_report": (
         ("finance_report/app", "common/runtime/required-env.generated.json"),
     ),
@@ -105,6 +104,29 @@ APP_UPSTREAM_MANIFESTS: dict[str, tuple[tuple[str, str], ...]] = {
         ("truealpha/data_engine", "apps/data-engine/required-env.generated.json"),
     ),
 }
+
+
+def _derive_app_upstream_manifests(
+    attrs: Mapping[str, ServiceMeta] | None = None,
+) -> dict[str, tuple[tuple[str, str], ...]]:
+    """Derive ``APP_UPSTREAM_MANIFESTS`` from ``ServiceMeta.upstream_manifests`` (#1504)."""
+    metas = service_attrs() if attrs is None else attrs
+    grouped: dict[str, list[tuple[str, str]]] = {}
+    for meta in metas.values():
+        if not meta.upstream_manifests:
+            continue
+        entries = grouped.setdefault(meta.layer, [])
+        for rel_path in meta.upstream_manifests:
+            entries.append((meta.service_id, rel_path))
+    if not grouped:
+        return dict(_DEFAULT_APP_UPSTREAM_MANIFESTS)
+    return {layer: tuple(items) for layer, items in grouped.items()}
+
+
+#: Upstream release manifest paths in each App repository, paired with the infra2 service id.
+APP_UPSTREAM_MANIFESTS: dict[str, tuple[tuple[str, str], ...]] = (
+    _derive_app_upstream_manifests()
+)
 
 #: Environment name -> the contract attributes of the field.
 Contract = dict[str, dict[str, object]]
