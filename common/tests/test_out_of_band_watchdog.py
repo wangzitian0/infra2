@@ -116,7 +116,9 @@ def test_workflow_runs_daily_and_can_be_dispatched() -> None:
         if (job.get("permissions") or {}).get("issues") == "write"
     ]
     # #962: the three daily jobs that page keep their page-dedup state as issues.
+    # #1493: audit records scheduled_audit App runtime hook verdicts as issues.
     assert writers == [
+        "audit",
         "watchdog",
         "facet-reconcile",
         "vault-self-refresh-audit",
