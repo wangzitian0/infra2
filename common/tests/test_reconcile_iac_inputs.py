@@ -373,7 +373,7 @@ def test_production_marker_created_and_pushed_after_first_promotion() -> None:
 
 APP_REJECTION = (
     "remote: error: GH013: refusing to allow a GitHub App to create or update "
-    "workflow `.github/workflows/app-deploy-request.yml` without `workflows` permission"
+    "workflow `.github/workflows/reconcile-iac-inputs.yml` without `workflows` permission"
 )
 
 
@@ -1126,7 +1126,7 @@ PROMOTION_ARGV = [
 ]
 
 
-def _run_promotion_main(monkeypatch, capsys, record, returncode=0):
+def _run_promotion_main(monkeypatch, capsys, record, returncode=0, extra_args=()):
     """Drive a prod promotion of v3.1.23: every deploy returns `returncode`."""
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     monkeypatch.setattr(reconcile, "assert_after_on_main", lambda *_a, **_kw: None)
@@ -1148,7 +1148,7 @@ def _run_promotion_main(monkeypatch, capsys, record, returncode=0):
             for c in cmds
         ],
     )
-    rc = main(PROMOTION_ARGV)
+    rc = main([*PROMOTION_ARGV, *extra_args])
     lines = capsys.readouterr().out.splitlines()
     warnings = [line for line in lines if line.startswith("::warning::")]
     return rc, warnings, json.loads(lines[-1])
@@ -1189,6 +1189,25 @@ def test_main_reports_no_pending_marker_when_marker_is_recorded(
     assert warnings == []
     assert out["marker_pending"] == ""
     assert out["production_marker"] == "production/v3.1.23"
+
+
+def test_main_does_not_reach_the_marker_call_in_a_dry_run(monkeypatch, capsys) -> None:
+    called = []
+
+    def record(tag, *_a, **_kw):
+        called.append(tag)
+        raise reconcile.ProductionMarkerRejected("a dry run must not record a marker")
+
+    rc, warnings, out = _run_promotion_main(
+        monkeypatch, capsys, record, extra_args=["--dry-run"]
+    )
+
+    assert rc == 0
+    assert called == []
+    assert warnings == []
+    assert out["dry_run"] is True
+    assert out["marker_pending"] == ""
+    assert out["production_marker"] == ""
 
 
 def test_main_never_reaches_the_marker_when_a_deploy_returns_nonzero(
