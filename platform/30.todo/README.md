@@ -13,7 +13,7 @@ Canary service at `todo.zitian.party`. It proves the platform's real runtime pat
 ## Validated Capabilities
 
 1. **Redis** (`platform/02.redis`): `AUTH`, then `SETEX`, `GET` and `DEL` of a random value. `-NOAUTH` fails.
-2. **Postgres** (`platform/01.postgres`): login as the read-only role `canary_ro`, then `SELECT 1`, `SET LOCAL transaction_read_only = off`, and a session-scoped `canary_todo_probe` temporary table `CREATE`/`INSERT`/`SELECT`/`DELETE` roundtrip. An `E` reply fails.
+2. **Postgres** (`platform/01.postgres`): login as the read-only role `canary_ro`, then `SET LOCAL transaction_read_only = off` first, then `SELECT 1`, and a session-scoped `canary_todo_probe` temporary table `CREATE`/`INSERT`/`SELECT`/`DELETE` roundtrip. An `E` reply fails.
 3. **S3** (`platform/03.s3`): `PUT`, `GET` and `DELETE` of one object under `canary/` in bucket `platform-canary`.
 4. **SigNoz** (`platform/11.signoz`): collector liveness. The canary also exports its own traces, logs, and custom OpenTelemetry metrics (`todo.canary.probe.duration_ms`, `todo.canary.probe.runs_total`), with its SigNoz v5 dashboard in `dashboard.json`.
 5. **OpenPanel** (`platform/24.openpanel`): API liveness.

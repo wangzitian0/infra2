@@ -373,6 +373,11 @@ class _FakeConnection:
         return False
 
     def execute(self, sql):
+        sets_mode = "transaction_read_only" in sql or "READ WRITE" in sql.upper()
+        if sets_mode and self.statements and sql.upper().startswith(("SET", "BEGIN")):
+            raise RuntimeError(
+                "ActiveSqlTransaction: transaction read-write mode must be set before any query"
+            )
         self.statements.append(sql)
         self._last_sql = sql
         return self
@@ -449,14 +454,22 @@ def test_postgres_probe_logs_in_as_the_canary_role_and_selects_one(app) -> None:
     assert parts.username == "canary_ro"
     assert unquote(parts.password) == password
     assert connection.statements == [
-        "SELECT 1",
         "SET LOCAL transaction_read_only = off",
+        "SELECT 1",
         "CREATE TEMP TABLE IF NOT EXISTS canary_todo_probe (id TEXT PRIMARY KEY, title TEXT NOT NULL)",
         "INSERT INTO canary_todo_probe (id, title) VALUES ('probe-1', 'canary-write-ok') ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title",
         "SELECT title FROM canary_todo_probe WHERE id = 'probe-1'",
         "DELETE FROM canary_todo_probe WHERE id = 'probe-1'",
     ]
     assert "canary_ro" in result["detail"]
+
+
+def test_fake_connection_rejects_the_read_write_switch_after_a_query() -> None:
+    """Pin the PostgreSQL rule in the fake: the old order of #1522 must raise."""
+    connection = _FakeConnection()
+    connection.execute("SELECT 1").fetchone()
+    with pytest.raises(RuntimeError, match="must be set before any query"):
+        connection.execute("SET LOCAL transaction_read_only = off")
 
 
 def test_postgres_probe_fails_when_the_connector_raises(app) -> None:
@@ -1923,8 +1936,8 @@ def test_postgres_probe_crud_executes_write_read_delete_roundtrip(app) -> None:
     )
     assert res["status"] == "pass", res
     assert conn.statements == [
-        "SELECT 1",
         "SET LOCAL transaction_read_only = off",
+        "SELECT 1",
         "CREATE TEMP TABLE IF NOT EXISTS canary_todo_probe (id TEXT PRIMARY KEY, title TEXT NOT NULL)",
         "INSERT INTO canary_todo_probe (id, title) VALUES ('probe-1', 'canary-write-ok') ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title",
         "SELECT title FROM canary_todo_probe WHERE id = 'probe-1'",

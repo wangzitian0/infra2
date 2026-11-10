@@ -3,7 +3,7 @@
 
 Serves todo.zitian.party as the acceptance and verification tool for the platform's
 real runtime paths:
-- Postgres: login as role `canary_ro`, then `SELECT 1`, `SET LOCAL transaction_read_only = off`,
+- Postgres: login as role `canary_ro`, then `SET LOCAL transaction_read_only = off`, `SELECT 1`,
   and a temporary-table `canary_todo_probe` `CREATE`/`INSERT`/`SELECT`/`DELETE` roundtrip
 - Redis: AUTH, then SETEX/GET/DEL of a random value
 - S3: PUT, GET and DELETE of one object under a canary prefix
@@ -161,7 +161,7 @@ def _probe_postgres(
     connector: Callable[..., Any] | None = None,
     verify_write: bool = True,
 ) -> Dict[str, Any]:
-    """Log in as the dedicated canary role and run `SELECT 1` plus a temp-table write/read/delete transaction.
+    """Log in as the dedicated canary role. Set the transaction read-write, run `SELECT 1`, then a temp-table write/read/delete roundtrip.
 
     A server that answers the login with an ErrorResponse (`E`), such as "too many
     clients", fails the check. The password never appears in the detail: the SDK
@@ -216,8 +216,9 @@ def _probe_postgres(
             conn_or_cm = connect(settings.psycopg_dsn, **connect_kwargs)
 
             def _run_crud(connection: Any) -> None:
-                connection.execute("SELECT 1").fetchone()
+                # PostgreSQL accepts a change of the read/write mode only before the first query.
                 connection.execute("SET LOCAL transaction_read_only = off")
+                connection.execute("SELECT 1").fetchone()
                 connection.execute(
                     "CREATE TEMP TABLE IF NOT EXISTS canary_todo_probe (id TEXT PRIMARY KEY, title TEXT NOT NULL)"
                 )
