@@ -47,7 +47,7 @@ from urllib.parse import quote
 
 import yaml
 
-from infra2_sdk.ci import ScheduleError
+from infra2_sdk.ci import ScheduleError, largest_gap
 from infra2_sdk.observability import (
     DELAY_ALLOWANCE,
     MISSED_TICKS_TOLERATED,
@@ -102,105 +102,6 @@ class WorkflowVerdict:
     @property
     def ok(self) -> bool:
         return self.status == OK
-
-
-# --- cron gap -----------------------------------------------------------------
-# infra2_sdk.ci.largest_gap reads only daily-periodic crons and rejects a
-# day-of-week restriction (live: ``0 1 * * 1`` is INVALID). The estate has weekly
-# crons, so the gap is measured here over a window of days.
-
-#: The days sampled: four years from a leap year reach Feb 29, quarterly and
-#: month-end crons. A cron with fewer than two fires in it is not measurable.
-GAP_WINDOW_DAYS = 1461
-_WINDOW_START = datetime(2024, 1, 1, tzinfo=UTC)
-_NAMES = {
-    "month": {
-        n: i
-        for i, n in enumerate(
-            "JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC".split(), 1
-        )
-    },
-    "dow": {n: i for i, n in enumerate("SUN MON TUE WED THU FRI SAT".split())},
-}
-_RANGES = {
-    "minute": (0, 59),
-    "hour": (0, 23),
-    "dom": (1, 31),
-    "month": (1, 12),
-    "dow": (0, 7),
-}
-
-
-def _value(token: str, field: str) -> int:
-    low, high = _RANGES[field]
-    number = int(token) if token.isdigit() else _NAMES.get(field, {}).get(token.upper())
-    if number is None or not low <= number <= high:
-        raise ScheduleError(
-            f"{field}: {token!r} is not a value in {low}-{high}; teach this reader"
-        )
-    return number
-
-
-def _field_values(text: str, field: str) -> set[int]:
-    low, high = _RANGES[field]
-    values: set[int] = set()
-    for element in text.split(","):
-        span, _, step_text = element.partition("/")
-        if step_text and not step_text.isdigit():
-            raise ScheduleError(f"{field}: step {step_text!r} is not a number")
-        step = int(step_text) if step_text else 1
-        if step < 1:
-            raise ScheduleError(f"{field}: step must be at least 1")
-        if span == "*":
-            first, last = low, (6 if field == "dow" else high)
-        elif "-" in span:
-            first, _, end = span.partition("-")
-            first, last = _value(first, field), _value(end, field)
-        else:
-            first = _value(span, field)
-            last = high if step_text else first
-        if first > last:
-            raise ScheduleError(f"{field}: range {span!r} runs backwards")
-        values.update(range(first, last + 1, step))
-    return values
-
-
-def largest_gap(crons: list[str]) -> timedelta:
-    """Return the largest gap between consecutive fire times of all *crons*."""
-    if not crons:
-        raise ScheduleError("the workflow has no cron to measure")
-    day_times: dict[int, set[int]] = {}  # day offset -> minutes of that day
-    for cron in crons:
-        parts = cron.split()
-        if len(parts) != 5:
-            raise ScheduleError(
-                f"cron {cron!r} does not have 5 fields; teach this reader"
-            )
-        minutes, hours, doms, months, dows = (
-            _field_values(part, field)
-            for part, field in zip(parts, _RANGES, strict=True)
-        )
-        dows = {d % 7 for d in dows}
-        dom_free, dow_free = parts[2].startswith("*"), parts[4].startswith("*")
-        times = {h * 60 + m for h in hours for m in minutes}
-        for offset in range(GAP_WINDOW_DAYS):
-            day = _WINDOW_START + timedelta(days=offset)
-            if day.month not in months:
-                continue
-            by_dom, by_dow = day.day in doms, (day.weekday() + 1) % 7 in dows
-            # Vixie rule: both restricted -> either matches; else both must match.
-            if (
-                (by_dom or by_dow)
-                if not dom_free and not dow_free
-                else (by_dom and by_dow)
-            ):
-                day_times.setdefault(offset, set()).update(times)
-    fires = sorted(o * 1440 + t for o, ts in day_times.items() for t in ts)
-    if len(fires) < 2:
-        raise ScheduleError(
-            f"crons {crons!r} fire fewer than twice in {GAP_WINDOW_DAYS} days; teach this reader"
-        )
-    return timedelta(minutes=max(b - a for a, b in zip(fires, fires[1:], strict=False)))
 
 
 def schedule_crons(text: str) -> list[str]:

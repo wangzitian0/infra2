@@ -1273,16 +1273,13 @@ _REAL_FR_HOOKS_MANIFEST_JSON = """\
   "service": "finance_report/app",
   "slots": {
     "smoke": {
-      "run": "BASE_URL=\\"$INFRA2_HOOK_APP_URL\\" bash tools/smoke_test.sh",
+      "run": "bash tools/smoke_test.sh \\"$INFRA2_HOOK_APP_URL\\"",
       "timeout_seconds": 180
     },
     "preview_gate": {
       "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
-      "run": "BASE_URL=\\"$INFRA2_HOOK_APP_URL\\" bash tools/smoke_test.sh && eval \\"$(python tools/test_selection.py --stage preview_minimum_e2e --shell)\\" && pytest \\"${PREVIEW_MINIMUM_E2E_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$PREVIEW_MINIMUM_E2E_MARKER\\"",
+      "run": "bash tools/smoke_test.sh \\"$INFRA2_HOOK_APP_URL\\" && eval \\"$(python tools/test_selection.py --stage preview_minimum_e2e --shell)\\" && pytest \\"${PREVIEW_MINIMUM_E2E_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$PREVIEW_MINIMUM_E2E_MARKER\\" && eval \\"$(python tools/test_selection.py --touched-files ${INFRA2_TOUCHED_FILES:-} --shell)\\" && ( [ ${#TOUCHED_E2E_TESTS[@]} -eq 0 ] || pytest \\"${TOUCHED_E2E_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$TOUCHED_E2E_MARKER\\" )",
       "timeout_seconds": 600,
-      "required_env": [
-        "AI_API_KEY"
-      ],
       "optional_env": [
         "AI_PROVIDER",
         "AI_BASE_URL",
@@ -1293,7 +1290,7 @@ _REAL_FR_HOOKS_MANIFEST_JSON = """\
     },
     "staging_gate": {
       "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
-      "run": "BASE_URL=\\"$INFRA2_HOOK_APP_URL\\" bash tools/smoke_test.sh && eval \\"$(python tools/test_selection.py --stage staging_core_e2e --shell)\\" && pytest \\"${STAGING_CORE_E2E_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$STAGING_CORE_E2E_MARKER\\" && pytest tests/e2e/test_ai_provider_connectivity.py -v --tb=short -o addopts=\\"\\" && eval \\"$(python tools/test_selection.py --stage staging_ai_ocr --corpus canary --shell)\\" && pytest \\"${STAGING_AI_OCR_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$STAGING_AI_OCR_MARKER\\"",
+      "run": "bash tools/smoke_test.sh \\"$INFRA2_HOOK_APP_URL\\" && eval \\"$(python tools/test_selection.py --stage staging_core_e2e --shell)\\" && pytest \\"${STAGING_CORE_E2E_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$STAGING_CORE_E2E_MARKER\\" && pytest tests/e2e/test_ai_provider_connectivity.py -v --tb=short -o addopts=\\"\\" && eval \\"$(python tools/test_selection.py --stage staging_ai_ocr --corpus canary --shell)\\" && pytest \\"${STAGING_AI_OCR_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$STAGING_AI_OCR_MARKER\\"",
       "timeout_seconds": 1800,
       "required_env": [
         "AI_API_KEY"
