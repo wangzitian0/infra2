@@ -404,57 +404,6 @@ uv run python tools/fetch_app_manifests.py                           # offline g
 
 The deploy receiver checks non-Vault compose fields against the stack manifest and renders Vault-backed fields from the release manifest (`common/deploy/app_contract.py`). See [`bootstrap.vars_and_secrets`](../docs/ssot/bootstrap.vars_and_secrets.md).
 
-## pi_chain_smoke.py (pi main-chain real-run proof)
-
-The scheduled, token-consuming end-to-end proof of the agent main chain
-(Infra-019 2026-09-21): launch a fresh `pi` CLI process against
-`zai-coding-cn`/`glm-5.3-flash` in JSON mode and assert the whole chain —
-provider routing, `stopReason=stop`, sentinel echo, and
-`0 < totalTokens <= 30000` (the ceiling doubles as a system-prompt-bloat
-regression detector). Exists because every component gate stayed green while
-the real chain was broken; per the owner's verdict, mechanism success must be
-proven by real runs that consume tokens.
-
-Observational only: consumes external model quota and asserts remote-model
-prose, so it must never gate merges (`# schedule-signal-exempt` in
-ops-checks.yml; daily cron + `workflow_dispatch` task `pi-chain-smoke`). Exit
-contract: `0` pass/SKIP, `1` chain assertion failure, `2` infra error
-(pi missing/timeout/unparseable). Credentials: `ZAI_CODING_CN_API_KEY` env
-(CI secret) or a local `auth.json` — read from `$PI_CODING_AGENT_DIR` when that is set to a non-empty
-value, and from `~/.pi/agent` otherwise. An `auth.json` that exists but cannot
-be read, is not JSON, or carries no `zai-coding-cn` entry each report their own
-reason rather than all reading as "no credential".
-
-`preflight()` never treats env as a silent default: whichever of the two
-lines actually supplied the credential is named in a stderr line
-(`[pi_chain_smoke] preflight: credential from ...`) and carried into the verdict JSON as
-`credential_source`, on both PASS and FAIL, so a run never leaves it to be
-re-derived after the fact (dev_env#48). This dev_env issue also resolved the
-apparent inconsistency between the two credential names: `GLM_API_KEY` and
-`ZAI_CODING_CN_API_KEY` name one zai-coding-cn provider credential, with
-`GLM_API_KEY`'s 1Password entry as the single source and the latter derived
-from it in the workspace's `.envrc`, so the env line here is no longer
-structurally unset in a normal workspace.
-
-```bash
-# Local proof (uses auth.json credentials)
-python3 tools/pi_chain_smoke.py
-
-# CI mode: missing credentials are an infra error, not a SKIP
-python3 tools/pi_chain_smoke.py --strict
-```
-
-The scheduled job passes `--strict` and lets it decide. Nothing in the step
-answers the credential question first: a shell pre-check that printed `SKIP`
-and exited 0 on an empty secret made `--strict` unreachable, so a proof whose
-premise is that green component gates hid a broken chain would itself have
-reported green every day without launching pi. While
-`ZAI_CODING_CN_API_KEY` is unset on the repository the daily run is therefore
-**red, naming the missing credential** — the honest state for a check that has
-never run. `common/tests/test_pi_chain_smoke_ci_wiring.py` executes the step's
-own script against a refusing stub, so the property holds however the script
-is later rewritten.
-
 ## References
 
 - [文档索引](../docs/README.md)

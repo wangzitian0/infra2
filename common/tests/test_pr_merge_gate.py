@@ -825,7 +825,7 @@ def test_a_prod_reaching_deploy_needs_the_owner_and_a_canary_does_not():
 def test_ordinary_paths_are_still_not_deploy_triggering():
     # Derivation must not swallow the repository whole: over-blocking would
     # send every PR to the owner and make the signal worthless.
-    assert not gate._deploy_triggering("tools/pi_chain_smoke.py")
+    assert not gate._deploy_triggering("tools/harness.py")
     assert not gate._deploy_triggering("tools/README.md")
     assert not gate._deploy_triggering("common/tests/test_pr_merge_gate.py")
 
@@ -1664,7 +1664,7 @@ def test_registering_a_non_blocking_gate_is_proven_tighter():
         "    stage: ops.scheduled_cleanup\n"
         "    task_category: t\n"
         "    workflow: .github/workflows/ops-checks.yml\n"
-        "    job: pi-chain-smoke\n"
+        "    job: e2e-regressions-smoke\n"
         "    blocks_merge: false\n"
     )
     assert gate._inventory_only_gained_authority(BASE_INV, head)
