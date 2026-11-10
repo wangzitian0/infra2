@@ -2449,3 +2449,235 @@ def test_main_run_hook_slot_resolves_local_service_manifest_and_url(
             ROOT / "platform/30.todo",
         )
     ]
+
+
+# --- #1529: the env that the hook runner supplies to App hook slots ----------------------
+
+_HOOK_SLOT_FLAGS = (
+    "--run-post-deploy-hooks",
+    "--run-hook-slot",
+    "--run-scheduled-audit",
+)
+
+
+def _secret_name(value: object) -> str | None:
+    """Return NAME when ``value`` is exactly the expression ``${{ secrets.NAME }}``."""
+    match = re.fullmatch(
+        r"\$\{\{\s*secrets\.([A-Za-z0-9_]+)\s*\}\}", str(value).strip()
+    )
+    return match.group(1) if match else None
+
+
+def _hook_slot_steps(
+    workflows: dict[str, dict],
+) -> list[tuple[str, str, str, dict]]:
+    """Return (file, job, step name, effective env) of each step that runs an App hook slot.
+
+    The effective env is the workflow env, overlaid by the job env, overlaid by the step env.
+    """
+    found: list[tuple[str, str, str, dict]] = []
+    for file_name, workflow in workflows.items():
+        for job_id, job in (workflow.get("jobs") or {}).items():
+            for index, step in enumerate(job.get("steps") or []):
+                script = step.get("run")
+                if not isinstance(script, str) or not any(
+                    flag in script for flag in _HOOK_SLOT_FLAGS
+                ):
+                    continue
+                env = {
+                    **(workflow.get("env") or {}),
+                    **(job.get("env") or {}),
+                    **(step.get("env") or {}),
+                }
+                found.append((file_name, job_id, step.get("name") or f"#{index}", env))
+    return found
+
+
+def _unsupplied_runner_env(
+    workflows: dict[str, dict], table: dict[str, str]
+) -> list[str]:
+    """Return one line per hook-slot step that lacks a table name or uses the wrong secret."""
+    problems: list[str] = []
+    for file_name, job_id, step_name, env in _hook_slot_steps(workflows):
+        for name, secret in table.items():
+            if _secret_name(env.get(name, "")) != secret:
+                problems.append(
+                    f"{file_name} job {job_id!r} step {step_name!r}: "
+                    f"{name} must be ${{{{ secrets.{secret} }}}}, got {env.get(name)!r}"
+                )
+    return problems
+
+
+def _load_workflows() -> dict[str, dict]:
+    return {
+        path.name: yaml.safe_load(path.read_text(encoding="utf-8"))
+        for path in sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
+    }
+
+
+def test_workflow_steps_that_run_hook_slots_supply_every_runner_secret_env() -> None:
+    """#1529: each step that runs an App hook slot gets each name of
+    HOOK_RUNNER_SECRET_ENV from the secret that the table names. Run 42809042184 failed with
+    ``missing required hook env: AI_API_KEY`` because reconcile-iac-inputs.yml did not."""
+    from common.deploy import app_contract
+
+    table = dict(app_contract.HOOK_RUNNER_SECRET_ENV)
+    workflows = _load_workflows()
+
+    # The scan must find both known runners. An empty scan would pass without checking.
+    runners = {(file_name, job) for file_name, job, _, _ in _hook_slot_steps(workflows)}
+    assert {
+        ("reconcile-iac-inputs.yml", "reconcile"),
+        ("ops-checks.yml", "audit"),
+    } <= runners
+    assert table
+    assert _unsupplied_runner_env(workflows, table) == []
+
+    # Mutation proof 1: a job env without the name fails.
+    mutated = yaml.safe_load(yaml.safe_dump(workflows))
+    del mutated["reconcile-iac-inputs.yml"]["jobs"]["reconcile"]["env"]["AI_API_KEY"]
+    problems = _unsupplied_runner_env(mutated, table)
+    assert len(problems) == 1
+    assert "reconcile-iac-inputs.yml job 'reconcile'" in problems[0]
+    assert "AI_API_KEY must be ${{ secrets.ZAI_CODING_CN_API_KEY }}" in problems[0]
+
+    # Mutation proof 2: the name from another secret fails.
+    mutated = yaml.safe_load(yaml.safe_dump(workflows))
+    mutated["reconcile-iac-inputs.yml"]["jobs"]["reconcile"]["env"]["AI_API_KEY"] = (
+        "${{ secrets.OTHER_API_KEY }}"
+    )
+    assert len(_unsupplied_runner_env(mutated, table)) == 1
+
+
+def _required_env_without_source(raw_manifest: dict) -> dict[str, tuple[str, ...]]:
+    """Map each slot to its ``required_env`` names that the infra2 runner never supplies.
+
+    The runner supplies the names of HOOK_RUNNER_SECRET_ENV (from a secret) and of
+    HOOK_RUNNER_CONTEXT_ENV (from the deploy request).
+    """
+    from common.deploy import app_contract
+
+    manifest = reconcile.RuntimeHooksManifest.from_dict(raw_manifest)
+    supplied = set(app_contract.HOOK_RUNNER_SECRET_ENV) | set(
+        app_contract.HOOK_RUNNER_CONTEXT_ENV
+    )
+    gaps = {
+        slot: tuple(name for name in spec.required_env if name not in supplied)
+        for slot, spec in manifest.slots.items()
+    }
+    return {slot: names for slot, names in gaps.items() if names}
+
+
+@pytest.mark.parametrize(
+    "raw_manifest",
+    [
+        pytest.param(_REAL_FR_HOOKS_MANIFEST_JSON, id="finance_report"),
+        pytest.param(
+            _REAL_TA_HOOKS_MANIFEST_JSON,
+            id="truealpha",
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason=(
+                    "infra2 supplies no TA_EMAIL, TA_MEMBER_EMAIL, TA_PASSWORD or "
+                    "TA_MCP_TOKEN to the slots staging_gate and preview_gate (#1534). "
+                    "Remove this mark when infra2 supplies them."
+                ),
+            ),
+        ),
+    ],
+)
+def test_app_hook_manifest_required_env_has_an_infra2_source(raw_manifest: str) -> None:
+    """#1529: every ``required_env`` name of every slot has a source in the infra2 runner."""
+    assert _required_env_without_source(json.loads(raw_manifest)) == {}
+
+
+def test_required_env_check_names_an_unknown_required_env() -> None:
+    """#1529: the check returns the slot and name of a ``required_env`` entry without source."""
+    manifest = json.loads(_REAL_FR_HOOKS_MANIFEST_JSON)
+    manifest["slots"]["staging_gate"]["required_env"].append("NEW_REQUIRED_NAME")
+    assert _required_env_without_source(manifest) == {
+        "staging_gate": ("NEW_REQUIRED_NAME",)
+    }
+
+
+def test_local_service_hook_manifests_required_env_has_an_infra2_source() -> None:
+    """#1529: the local manifests that the runner executes need no env beyond the runner's."""
+    paths = sorted(reconcile.LOCAL_SERVICE_HOOK_MANIFESTS.values())
+    assert paths
+    gaps = {
+        rel: _required_env_without_source(
+            json.loads((ROOT / rel).read_text(encoding="utf-8"))
+        )
+        for rel in paths
+    }
+    assert gaps == {rel: {} for rel in paths}
+
+
+def test_hook_runner_context_env_names_reach_a_slot_without_ambient_values(
+    tmp_path,
+) -> None:
+    """#1529: execute_app_hook_slot supplies each name of HOOK_RUNNER_CONTEXT_ENV when the
+    ambient env holds none of them. It rejects a ``required_env`` name outside that set,
+    and a name that it adds to ``optional_env`` itself."""
+    from common.deploy import app_contract
+    from infra2_sdk.manifests import HOOK_SLOTS
+
+    def _manifest(required: list[str]) -> reconcile.RuntimeHooksManifest:
+        return reconcile.RuntimeHooksManifest.from_dict(
+            {
+                "schema_version": 1,
+                "service": "finance_report/app",
+                "slots": {
+                    slot: {
+                        "run": "echo ok",
+                        "timeout_seconds": 30,
+                        "required_env": required if slot == "smoke" else [],
+                    }
+                    for slot in HOOK_SLOTS
+                },
+            }
+        )
+
+    seen: list[dict[str, str]] = []
+
+    def _runner(cmd, *, env=None, **_kw):
+        seen.append(dict(env or {}))
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok\n", stderr="")
+
+    context_names = sorted(app_contract.HOOK_RUNNER_CONTEXT_ENV)
+    assert context_names
+    result = app_contract.execute_app_hook_slot(
+        _manifest(context_names),
+        "smoke",
+        app_url="https://app.example.invalid",
+        environment="staging",
+        version_ref="v1.2.3",
+        cwd=tmp_path,
+        ambient_env={"PATH": "/usr/bin:/bin"},
+        runner=_runner,
+    )
+    assert result.status == "pass"
+    assert {name: bool(seen[-1].get(name)) for name in context_names} == {
+        name: True for name in context_names
+    }
+
+    rejected = {
+        "NEW_REQUIRED_NAME": "missing required hook env: NEW_REQUIRED_NAME",
+        # The runner lists these three in optional_env of every slot.
+        "INFRA2_HOOK_APP_URL": "cannot be in both required_env and optional_env",
+        "BASE_URL": "cannot be in both required_env and optional_env",
+        "DEPLOY_ENV": "cannot be in both required_env and optional_env",
+    }
+    for name, message in rejected.items():
+        assert name not in app_contract.HOOK_RUNNER_CONTEXT_ENV
+        with pytest.raises(ValueError, match=message):
+            app_contract.execute_app_hook_slot(
+                _manifest([name]),
+                "smoke",
+                app_url="https://app.example.invalid",
+                environment="staging",
+                version_ref="v1.2.3",
+                cwd=tmp_path,
+                ambient_env={"PATH": "/usr/bin:/bin"},
+                runner=_runner,
+            )
