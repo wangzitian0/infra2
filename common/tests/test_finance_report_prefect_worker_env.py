@@ -137,6 +137,20 @@ def test_s3_endpoints_use_the_singleton_s3_service() -> None:
     assert preview_backend.get("S3_PUBLIC_ENDPOINT") == "${S3_PUBLIC_ENDPOINT:-}"
 
 
+def test_preview_backend_disables_storage_sweep_and_raises_rate_limit() -> None:
+    """#1540: Preview shares Staging's S3 bucket and runs bursty E2E suites."""
+    preview_compose = ROOT / "finance_report/finance_report/preview/compose.yaml"
+    preview_services = yaml.safe_load(preview_compose.read_text(encoding="utf-8"))[
+        "services"
+    ]
+    preview_backend = _environment(preview_services["backend"])
+    assert preview_backend.get("ENABLE_STORAGE_SWEEP") == "false"
+    assert (
+        preview_backend.get("API_RATE_LIMIT_REQUESTS")
+        == "${API_RATE_LIMIT_REQUESTS:-2000}"
+    )
+
+
 def _load_finance_report_deploy_module():
     import importlib.util
 
