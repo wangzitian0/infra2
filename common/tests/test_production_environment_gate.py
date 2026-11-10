@@ -403,7 +403,7 @@ def test_the_benign_secret_list_is_pinned():
 
 def test_zero_class_pending_entries_remain_in_ungated_jobs():
     """#1127 / 1035-R2: every ungated job has a final classification, never 'class pending'."""
-    assert len(UNGATED_JOBS) >= 11
+    assert len(UNGATED_JOBS) >= 10
     pending = [
         key for key, reason in UNGATED_JOBS.items() if "class pending" in reason.lower()
     ]

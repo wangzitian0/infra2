@@ -193,10 +193,6 @@ class Deployer:
     # Containers of THIS service to restart after another service is redeployed (#726);
     # the dependency's sync performs the restart (restart_dependents).
     restart_after: tuple[RestartAfterFacet, ...] = ()
-    # True for services whose deploy path is exercised by the deploy_v2
-    # acceptance canary (tools/deploy_v2_canary.py iterates the registry for
-    # this flag instead of hardcoding a service id).
-    deploy_v2_canary: bool = False
 
     @classmethod
     def env(cls) -> dict[str, str | None]:

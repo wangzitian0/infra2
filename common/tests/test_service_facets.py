@@ -179,7 +179,6 @@ def test_service_attrs_exposes_facet_fields_for_every_service() -> None:
         assert isinstance(meta.signals, tuple)
         assert isinstance(meta.exemptions, tuple)
         assert all(isinstance(b, BackupFacet) for b in meta.backups)
-        assert isinstance(meta.deploy_v2_canary, bool)
 
 
 def test_deployer_base_facet_defaults_are_empty() -> None:
@@ -190,7 +189,6 @@ def test_deployer_base_facet_defaults_are_empty() -> None:
     assert Deployer.backups == ()
     assert Deployer.exemptions == ()
     assert Deployer.restart_after == ()
-    assert Deployer.deploy_v2_canary is False
 
 
 # --- completeness matrix -----------------------------------------------------

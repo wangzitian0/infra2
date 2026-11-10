@@ -15,7 +15,7 @@ A preview is flagged as leaked when it is one of two unambiguous orphan classes:
      replaced with ``branch-main``. The deterministic-name ``down`` can't reach it.
   2. **``pr-<n>`` previews for CLOSED PRs** — a leaked PR teardown.
 
-Everything else (``branch-main``, the reserved canary ``pr-<CANARY_PR>`` slot,
+Everything else (``branch-main``, the reserved ``CANARY_SLOT`` slot,
 ``tag-*``, any non-preview compose) is left untouched. Fail-safe: if the open-PR
 set can't be fetched, PR leaks are not flagged (bare-slug orphans still are, since
 they don't depend on PR state).

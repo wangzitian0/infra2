@@ -403,9 +403,9 @@ _SKIP_VERIFY = re.compile(r"NO_VERIFY_HASHES|--no-verify-hashes", re.I)
 #: The fewest steps that call the script, per file. A scan that finds fewer reads
 #: nothing, and the shape tests would pass on an empty set.
 MIN_STEPS_CALLING_THE_SCRIPT = {
-    "workflows/deploy.yml": 2,
+    "workflows/deploy.yml": 1,
     "workflows/infra-ci.yml": 3,
-    "workflows/ops-checks.yml": 9,
+    "workflows/ops-checks.yml": 8,
     "workflows/preview-teardown.yml": 1,
     "workflows/reconcile-iac-inputs.yml": 1,
 }

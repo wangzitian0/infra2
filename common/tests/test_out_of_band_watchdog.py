@@ -97,7 +97,7 @@ def test_workflow_runs_daily_and_can_be_dispatched() -> None:
         in workflow["on"]["workflow_dispatch"]["inputs"]["task"]["options"]
     )
     assert "ssh_targets_override" in workflow["on"]["workflow_dispatch"]["inputs"]
-    # issues: per job, never workflow-wide: deploy-v2-canary runs same-repo PR code.
+    # issues: per job, never workflow-wide: each job gets only the scopes it uses.
     assert workflow["permissions"] == {"contents": "read", "actions": "read"}
     jobs = workflow["jobs"]
     assert jobs["watchdog"]["permissions"] == {

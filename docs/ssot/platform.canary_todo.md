@@ -2,6 +2,7 @@
 
 > **SSOT Key**: `platform.canary_todo`
 > **Definition**: Canary Todo (`platform/30.todo`) is a synthetic service at `todo.zitian.party`. It proves that the platform's real runtime paths work: authenticated writes to Redis, a Postgres login, an S3 write, and telemetry export. The probe runner reads its status document, so a broken path pages or reports.
+> **Scope**: Canary Todo is the one Canary of infra2 (#1477): no CI job, schedule or deploy step deploys an App to prove infra2.
 
 ---
 

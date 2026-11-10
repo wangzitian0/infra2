@@ -75,22 +75,18 @@ remains routable during replacement, or a backend that starts while the frontend
 `Created`, cannot produce a false green. `--no-wait` explicitly omits both proofs and must
 not be used by a blocking deployment workflow.
 
-The reserved `canary-preview` canary is a singleton mutable resource, so all workflow events share
-one non-cancelling job concurrency group. A same-repository PR records its exact head SHA as
-the authoritative IaC identity and may pass the head branch only as a clone transport; the
-front door proves both refs resolve to the same commit before mutating Dokploy. If the
-non-idempotent `compose.create` call times out after Dokploy commits it, the lifecycle
+If the non-idempotent `compose.create` call times out after Dokploy commits it, the lifecycle
 re-reads and adopts the one deterministic project/environment/name instead of creating a
 duplicate. Teardown is green only after two consecutive reads observe **both** the
-Dokploy compose record absent and zero containers for that service's reserved `canary-preview`
-slot in Dokploy's host container API. A deleted record with lingering `Created`,
+Dokploy compose record absent and zero containers for that service's preview slot in
+Dokploy's host container API. A deleted record with lingering `Created`,
 `Restarting` or running containers is a failed cleanup, even if Dokploy reports the
-delete request as successful. The 2026-09-23 live canary reported `torn_down: true`
-while the host still had four legacy canary containers; record-only checks are insufficient.
+delete request as successful. On 2026-09-23 a reserved-slot teardown reported `torn_down: true`
+while the host still had four legacy containers; record-only checks are insufficient.
 
 A Finance Report backend runs migrations before Uvicorn in both preview and fixed
 staging/production stacks. Both backend healthchecks therefore grant a bounded 450-second
-startup period. The 2026-08-17 exact-head canary needed 293.6 seconds for the complete
+startup period. The 2026-08-17 exact-head reserved-slot preview needed 293.6 seconds for the complete
 create/deploy/readiness/cleanup operation, and a 2026-08-18 fixed-staging cold start needed
 177 seconds before its first healthy response. This leaves cold-host margin while the outer
 canary still fails closed at its configured 600-second deadline. The emitted stage record
@@ -241,7 +237,8 @@ environment. Record its coordinate (`service`, `version_ref`, `iac_ref`) in the 
 A production release has one Feishu card (`common/alerting/release_card.py`, `tools/release_card.py`).
 The receiver is the only writer. A sender never posts to Feishu.
 
-- `preflight_canary` creates the card after the plan step and writes its id to the job output `card_message_id`.
+- The pre-deploy job of the request (retired with `app-deploy-request.yml` in #1416) creates the card after the plan
+  step and writes its id to the job output `card_message_id`.
   The last step of this job shows "Waiting for approval" with the time from `production_request_accept_until`. That
   function is the one that the age check of the `deploy` job uses, so the card and the check give the same time. A
   sender deadline in the request moves the time earlier. Nothing can run while the `production` environment gate
@@ -256,7 +253,7 @@ The receiver is the only writer. A sender never posts to Feishu.
   `production` environment gate. The card stays at "Waiting for approval". The card shows the accept-until time and says
   that it is stale after that time. A third job could close the card, but it would hold the Feishu secrets, and that is
   a production job classification edit in `common/gate/production_contract.py`. That edit needs the owner's approval
-  of the head SHA (infra2#1370). A cancelled run during the canary or the deploy does reach the card: the failure steps
+  of the head SHA (infra2#1370). A cancelled run during the deploy does reach the card: the failure steps
   run on `failure() || cancelled()`.
 - A staging request has no card. A rollback of a staging request sends one text message through the same out-of-band
   settings.
@@ -299,7 +296,7 @@ An `interrupted` answer (the runner restarted while it ran the deploy, #1439) is
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | 健康检查(含 vault / op / dokploy_api_key 功能性 fail-closed)|
-| `/webhook` | POST | GitHub push receiver. **Deploys nothing**: a merge is not a release. staging 由 release tag 经 `reconcile-iac-inputs.yml` 自动晋升，prod 由显式 promote，app 的 PR 走 preview 栈；infra2 自身没有常驻 preview，PR 期的 `deploy_v2 live canary` 就是它的 preview。此前它会用未打标的 main HEAD 部署 staging（对每个声明了 `common/**`/`tools/**` 的服务，等于「合并即部署」），该路径已移除。|
+| `/webhook` | POST | GitHub push receiver. **Deploys nothing**: a merge is not a release. staging 由 release tag 经 `reconcile-iac-inputs.yml` 自动晋升，prod 由显式 promote，app 的 PR 走 preview 栈；infra2 自身没有常驻 preview，PR 期也不部署任何 App（#1477）。此前它会用未打标的 main HEAD 部署 staging（对每个声明了 `common/**`/`tools/**` 的服务，等于「合并即部署」），该路径已移除。|
 | `/deploy` | POST | 版本部署;`wait=true` 为 legacy 直等 |
 | `/deploy/status` | POST | 用 `/deploy` 返回的 `deployment_id` 签名轮询同一操作的真实 sync 结果 |
 
@@ -390,10 +387,9 @@ promote tier(`common.deploy.promote.deploy`,app + staging|prod,跑在 GitHub Act
 `infra2_sdk.delivery` 拥有 CI/CD、route canary、watchdog、probe 共享的稀疏 Env×Stage 证据 schema；
 infra2 与 App producer 都直接从各自固定版本的 SDK 导入，不保留源码级 compatibility re-export。
 当 stage 结果用于部署决策/告警路由/加速时,producer 必须发可比记录而非一次性日志。
-infra2 固定一个不可变的 `infra2-sdk` release wheel，版本与 sha256 只在 `uv.lock`；`deploy_v2_canary` 是首个
-真实 producer：健康路径把 `StageResult` 写入 job summary JSON，失败路径把同一记录放入
-带外告警，并将控制面/配置/运行时/清理故障映射为 SDK 标准 failure domain。成功证据的
-`target` 必须记录已解析 code/IaC SHA；禁用健康检查的 `--no-wait` 只能记录带原因的 `skip`。
+infra2 固定一个不可变的 `infra2-sdk` release wheel，版本与 sha256 只在 `uv.lock`。infra2 当前没有运行时
+producer:唯一的 producer(deploy_v2 预览位探针)已随 #1477 删除。新 producer 必须把成功证据的
+`target` 记为已解析 code/IaC SHA;禁用健康检查的 `--no-wait` 只能记录带原因的 `skip`。
 
 必填:`source` · `environment`(`local`/`pr`/`pr-preview`/`staging`/`production`)· `stage` · `target` ·
 `status`(`pass`/`fail`/`skip`/`warn`/`running`)· `duration_ms`/`deadline_ms` · `failure_domain`(失败必填)·

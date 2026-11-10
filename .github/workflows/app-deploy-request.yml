@@ -7,18 +7,8 @@ permissions:
   contents: read
 
 jobs:
-  preflight_canary:
-    name: Preflight Canary (Retired)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Retired in #1416
-        run: |
-          echo "::error::Retired in #1416; use reconcile-iac-inputs.yml"
-          exit 1
-
   deploy:
     name: Deploy (Retired)
-    needs: [preflight_canary]
     runs-on: ubuntu-latest
     environment: ${{ github.event.client_payload.deploy_type == 'prod' && 'production' || 'staging' }}
     steps:

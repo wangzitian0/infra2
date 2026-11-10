@@ -2,12 +2,12 @@
 
 GitHub cannot start a job whose ``concurrency.group`` equals the group its
 workflow run already holds. The job ends ``failure`` with no runner and no step,
-so an alert step inside it never runs. #993 renamed the deploy_v2 canary job's
-group to ``deploy-v2-canary``, the name the ``37 6 * * *`` schedule gives its
-whole run, and the daily scheduled canary stopped starting without a page.
+so an alert step inside it never runs. #993 gave a scheduled ops-checks job the
+group name that its schedule gives the whole run, and that daily job stopped
+starting without a page.
 
-Sharing one job-level group across workflows is intended (it serializes every
-canary on the reserved slot). Only a match within one workflow deadlocks.
+Sharing one job-level group across workflows is permitted (it serializes the jobs
+on one shared resource). Only a match within one workflow deadlocks.
 
 The check over-approximates: every quoted literal in the workflow-level
 expression counts as a possible run group, a ``format()`` or text-plus-``${{ }}``
@@ -151,20 +151,20 @@ def _wf(top, job_group, options=None):
         # #993's shape.
         (
             "${{ github.event_name == 'schedule' && github.event.schedule == '37 6 * * *'"
-            " && 'deploy-v2-canary' || format('ops-checks-push-{0}', github.sha) }}",
-            "deploy-v2-canary",
+            " && 'reserved-slot' || format('ops-checks-push-{0}', github.sha) }}",
+            "reserved-slot",
         ),
         # The last fallback value of an || chain.
         (
-            "${{ github.event_name == 'push' && 'a' || 'deploy-v2-canary' }}",
-            "deploy-v2-canary",
+            "${{ github.event_name == 'push' && 'a' || 'reserved-slot' }}",
+            "reserved-slot",
         ),
-        ("${{ inputs.g || 'deploy-v2-canary' }}", "deploy-v2-canary"),
+        ("${{ inputs.g || 'reserved-slot' }}", "reserved-slot"),
         # format() prefixes.
         ("${{ format('ops-checks-{0}', inputs.task) }}", "ops-checks-facet-reconcile"),
         ("${{ format('deploy-v2-{0}-{1}', inputs.a, inputs.b) }}", "deploy-v2-x-y"),
         # Text mixed with an expression.
-        ("deploy-v2-${{ inputs.type }}", "deploy-v2-canary"),
+        ("deploy-v2-${{ inputs.type }}", "deploy-v2-preview"),
         # Identical expressions at both levels, the common copy-paste deadlock.
         (
             "${{ github.workflow }}-${{ github.ref }}",
@@ -172,7 +172,7 @@ def _wf(top, job_group, options=None):
         ),
         # Shapes the check cannot bound are findings, not passes.
         ("${{ format('{0}-canary', inputs.x) }}", "anything"),
-        ("${{ github.ref }}", "deploy-v2-canary"),
+        ("${{ github.ref }}", "reserved-slot"),
         ("${{ github.workflow }}", "${{ github.job }}"),
     ],
 )
@@ -181,24 +181,44 @@ def test_each_deadlock_shape_is_found(top, job_group) -> None:
 
 
 def test_a_choice_input_expands_to_its_options() -> None:
-    """deploy.yml: format('deploy-v2-{0}', inputs.type) never yields deploy-v2-canary
-    while 'canary' is not a type option; once it is, the job deadlocks."""
+    """deploy.yml: format('deploy-v2-{0}', inputs.type) never yields deploy-v2-preview
+    while 'preview' is not a type option; once it is, the job deadlocks."""
     top = "${{ format('deploy-v2-{0}', github.event.inputs.type) }}"
-    assert deadlocks(_wf(top, "deploy-v2-canary", ["staging", "prod"])) == []
-    assert deadlocks(_wf(top, "deploy-v2-canary", ["staging", "canary"])) != []
+    assert deadlocks(_wf(top, "deploy-v2-preview", ["staging", "prod"])) == []
+    assert deadlocks(_wf(top, "deploy-v2-preview", ["staging", "preview"])) != []
     mixed = "deploy-v2-${{ inputs.type }}"
-    assert deadlocks(_wf(mixed, "deploy-v2-canary", ["staging", "prod"])) == []
-    assert deadlocks(_wf(mixed, "deploy-v2-canary", ["canary"])) != []
+    assert deadlocks(_wf(mixed, "deploy-v2-preview", ["staging", "prod"])) == []
+    assert deadlocks(_wf(mixed, "deploy-v2-preview", ["preview"])) != []
 
 
-def test_the_scheduled_canary_has_its_own_workflow_group() -> None:
-    text = (ROOT / ".github" / "workflows" / "ops-checks.yml").read_text(
-        encoding="utf-8"
+@pytest.mark.parametrize("name", ["ops-checks.yml", "deploy.yml"])
+def test_the_real_workflow_groups_stay_bounded(name: str) -> None:
+    """No job in these files declares its own group today, so the deadlock check above
+    has no subject in them. This positive control reads their real workflow-level
+    groups: each must stay bounded, so a job-level group added later is decided and
+    never reported as "cannot bound"."""
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
     )
-    workflow = yaml.safe_load(text)
-    names, _, _ = workflow_group_names(_group(workflow["concurrency"]), workflow)
-    assert "infra2-deploy-v2-canary" in names
-    assert (
-        _group(workflow["jobs"]["deploy-v2-canary"]["concurrency"])
-        == "deploy-v2-canary"
+    names, _, is_open = workflow_group_names(_group(workflow["concurrency"]), workflow)
+    assert not is_open
+    assert names
+
+
+def test_each_ops_checks_schedule_and_task_has_a_known_run_group() -> None:
+    """Each schedule names its own run group, and each dispatch task expands to
+    `ops-checks-<task>`. A job-level group equal to one of these names deadlocks."""
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "ops-checks.yml").read_text(encoding="utf-8")
     )
+    group = _group(workflow["concurrency"])
+    names, _, _ = workflow_group_names(group, workflow)
+    tasks = _choices(workflow, "task")
+    assert tasks
+    assert {f"ops-checks-{task}" for task in tasks} <= names
+    for entry in (workflow.get(True) or workflow.get("on"))["schedule"]:
+        assert f"github.event.schedule == '{entry['cron']}'" in group or (
+            entry["cron"] in ("0 1 * * 1", "0 2 1 * *")
+        ), entry
+    job = {"j": {"concurrency": {"group": "infra2-out-of-band-watchdog"}}}
+    assert deadlocks({**workflow, "jobs": job}) != []

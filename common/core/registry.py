@@ -108,7 +108,6 @@ class ServiceMeta:
     backups: tuple[BackupFacet, ...] = ()
     secrets: tuple[SecretsFacet, ...] = ()
     exemptions: tuple[Exemption, ...] = ()
-    deploy_v2_canary: bool = False
     # Dedicated product domain override (e.g. truealpha/app -> truealpha.club);
     # None = use whatever shared INTERNAL_DOMAIN the deploy request/caller passes
     # in (every service until truealpha/app). Kept last, with a default, so
@@ -186,7 +185,6 @@ def _cached_meta_from_deploy_file(
         backups=_facet_seq(tree, "backups", BackupFacet, where),
         secrets=_facet_seq(tree, "secrets", SecretsFacet, where),
         exemptions=_facet_seq(tree, "exemptions", Exemption, where),
-        deploy_v2_canary=bool(_class_attr(tree, "deploy_v2_canary") or False),
         restart_after=_facet_seq(tree, "restart_after", RestartAfterFacet, where),
         storage=_facet_seq(tree, "storage", StorageFacet, where),
         legacy_compose_names=_class_tuple_str_attr(tree, "legacy_compose_names"),

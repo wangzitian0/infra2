@@ -213,30 +213,6 @@ invoke dokploy.env-list --project=platform
 invoke dokploy.env-ensure --project=platform --env=staging --description="staging env"
 ```
 
-## deploy_v2_canary.py
-
-End-to-end proof for the unified deploy primitive. It deploys Finance Report to
-the workflow-serialized `canary-preview` slot, waits for the current trigger's terminal
-Dokploy deployment record, verifies the exact requested version on every public
-surface, and tears the stack and ephemeral database down in `finally`. Cleanup
-passes only after two consecutive observations of absence. Success and failure
-output include an `infra2_sdk.delivery.StageResult` and explicit `torn_down`
-evidence. A same-repository PR passes its exact head SHA as `--iac-ref` and its
-head branch as `--iac-clone-ref`; the two must resolve to the same commit before
-Dokploy is changed. `--no-wait` is recorded as `skip`, never as a smoke pass.
-The stage record's deadline is the configured `--timeout`; a functionally healthy
-operation that exceeds it exits red as a `time-budget` failure instead of emitting
-the contradictory `status=pass` / `budget_status=hard-breach` pair.
-Scheduled/post-merge failures page through the out-of-band Feishu path, while PR
-failures remain CI-only.
-
-```bash
-uv run python -m tools.deploy_v2_canary \
-  --version-ref main \
-  --iac-ref main \
-  --domain zitian.party
-```
-
 ## host_backup.sh
 
 On-host weekly backup (installed as `/usr/local/sbin/infra2-host-backup.sh`,

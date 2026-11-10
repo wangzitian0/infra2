@@ -167,14 +167,6 @@ class AppDeployer(Deployer):
     telemetry_service_name = "finance-report-backend"
     telemetry_component = "backend"
 
-    # deploy_v2 acceptance canary support (#541, #1287): app-deploy-request.yml
-    # passes --service explicitly for every app's prod preflight canary
-    # (including truealpha/app). Declaring deploy_v2_canary = True here marks
-    # finance_report/app as the single representative service for ops-checks.yml's
-    # default engine canary, avoiding duplicate sequential canary runs on the
-    # shared lock.
-    deploy_v2_canary = True
-
     # Vault self-refresh facts (#542): the audit inventory derives from these
     # (AppRole auth — the #257/#259 pilot). Two surfaces:
     #   1. the app itself. optional_inert_fields (#526): LLM_ENCRYPTION_KEYS'

@@ -8,17 +8,15 @@ name: Deploy (deploy_v2)
 #
 # This replaces the per-env App-repo bash (tools/dokploy_deploy.sh). It is manual-only
 # for now (operator-triggered): merging it changes no automated behavior, and running it
-# is the live acceptance test for the unified path on a real fixed env (stronger than the
-# throwaway-preview canary in ops-checks.yml).
+# is the live acceptance test for the unified path on a real fixed env.
 #
 # prod safety: RL-DATA-1 is deny-by-default in deploy_v2 — a prod deploy must pass BOTH
 # staging_validated=true (staging-first) and code_reviewed=true (reviewed code on prod
 # data), or the front door fails closed before any side effect.
 #
-# Pre-deploy canary GATE (staging/prod): before touching a real fixed env, the preflight_canary
-# job canaries the EXACT (version_ref, iac_ref) on the throwaway slot; the real deploy job runs
-# only if that canary is green (or skipped for preview types / skip_canary). A broken deploy
-# path is caught on a disposable stack, never on real prod data. skip_canary=true bypasses it.
+# No pre-deploy App canary (#1477): the Canary Todo (platform/30.todo) is the one Canary.
+# Staging comes first (staging_validated=true, RL-DATA-1), and a prod deploy waits for
+# the owner's approval on the `production` environment.
 
 on:
   workflow_dispatch:
@@ -60,11 +58,6 @@ on:
         required: false
         type: boolean
         default: false
-      skip_canary:
-        description: "skip the pre-deploy canary gate (staging/prod only; emergency)"
-        required: false
-        type: boolean
-        default: false
       timeout:
         description: "health-check seconds"
         required: false
@@ -79,84 +72,12 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Pre-deploy gate: canary the EXACT (version_ref, iac_ref) about to ship to a fixed env on
-  # the throwaway pr-<N> slot. Green proves the deploy path + this artifact actually deploy
-  # before we touch real staging/prod data. Only gates staging/prod (preview types already
-  # ARE throwaway deploys). Shares the canary concurrency group so it never races the
-  # scheduled/post-merge canary for the reserved slot. skip_canary is the emergency bypass.
-  preflight_canary:
-    name: preflight canary
-    # Only the APP has a preview canary; a platform (iac_pinned) deploy is gated by
-    # iac_runner's own checks, so skip the app canary for platform services.
-    if: >-
-      ${{ github.event_name == 'workflow_dispatch'
-          && inputs.service != 'bootstrap/iac-runner'
-          && (github.event.inputs.type == 'staging' || github.event.inputs.type == 'prod')
-          && github.event.inputs.skip_canary != 'true'
-          && (github.event.inputs.service == 'finance_report/app'
-              || github.event.inputs.service == '') }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    concurrency:
-      group: deploy-v2-canary
-      cancel-in-progress: false
-    env:
-      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-      # deploy_v2's on-main guard asks GitHub's compare API; without a token the call is
-      # anonymous and shares a 60/hour budget per runner IP (#635: `403 rate limit exceeded`).
-      GITHUB_TOKEN: ${{ github.token }}
-      INTERNAL_DOMAIN: ${{ github.event.inputs.domain || 'zitian.party' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      - name: Install runtime dependencies
-        # deploy_v2_canary imports infra2_sdk.delivery (#498) — install the package
-        # itself (as app-deploy-request.yml's canary step already does) instead of a
-        # manually maintained subset that silently drifts out of sync with its imports.
-        # The SDK comes first, hash-verified from uv.lock (#1115). pyproject.toml names
-        # its URL with no hash, and pip keeps the installed wheel while that URL equals
-        # the one in uv.lock (a test holds it). A swapped release asset fails the first
-        # command, and bash -e stops the step before the project install.
-        run: |
-          sdk="$(python tools/sdk_requirement.py)"
-          python -m pip install --no-deps "$sdk"
-          python -m pip install -e .
-      - name: Canary the artifact before the real deploy
-        env:
-          VERSION_REF_INPUT: ${{ github.event.inputs.version_ref || 'main' }}
-          IAC_REF_INPUT: ${{ github.event.inputs.iac_ref || 'main' }}
-          DOMAIN_INPUT: ${{ github.event.inputs.domain || 'zitian.party' }}
-          TIMEOUT_INPUT: ${{ github.event.inputs.timeout || '600' }}
-        run: |
-          set -euo pipefail
-          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
-            echo "::error::DOKPLOY_API_KEY secret is required for the preflight canary."
-            exit 1
-          fi
-          echo "Preflighting $VERSION_REF_INPUT (iac $IAC_REF_INPUT) on the canary slot..."
-          python -m tools.deploy_v2_canary \
-            --version-ref "$VERSION_REF_INPUT" \
-            --iac-ref "$IAC_REF_INPUT" \
-            --domain "$DOMAIN_INPUT" \
-            --timeout "$TIMEOUT_INPUT"
-
   deploy:
     name: deploy_v2 ${{ github.event.inputs.type }}
-    needs: [preflight_canary]
-    # proceed when the canary passed, OR when it was skipped (preview types / skip_canary) —
-    # but NEVER when it failed: a red canary means the deploy path is broken, so abort.
     if: >-
-      ${{ always()
-          && github.event_name == 'workflow_dispatch'
-          && inputs.service != 'bootstrap/iac-runner'
-          && (needs.preflight_canary.result == 'success'
-              || needs.preflight_canary.result == 'skipped') }}
-    # A prod deploy waits here for the owner (#1125). The canary above runs first, so the
-    # owner approves a deploy whose canary is already green.
+      ${{ github.event_name == 'workflow_dispatch'
+          && inputs.service != 'bootstrap/iac-runner' }}
+    # A prod deploy waits here for the owner (#1125).
     environment: ${{ inputs.type == 'prod' && 'production' || 'staging' }}
     permissions:
       contents: read

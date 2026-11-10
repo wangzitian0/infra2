@@ -116,14 +116,13 @@ _JOBS = _jobs()
 
 
 def test_the_workflow_declares_jobs_to_check() -> None:
-    """Parsing must find all 9 Python entrypoint jobs in ops-checks.yml, or the parametrized test below runs nothing."""
+    """Parsing must find all 8 Python entrypoint jobs in ops-checks.yml, or the parametrized test below runs nothing."""
     entries = {name: entry for name, _, entry in _JOBS}
 
     assert {
         "audit",
         "watchdog",
         "digest",
-        "deploy-v2-canary",
         "preview-leak-check",
         "host-hygiene-schedule",
         "facet-reconcile",
