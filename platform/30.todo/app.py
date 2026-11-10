@@ -758,12 +758,7 @@ async def add_cors_headers(request: Request, call_next: Any) -> Response:
 
 @fastapi_app.api_route("/api/health", methods=["GET", "HEAD"], tags=["Observability"])
 def fastapi_api_health() -> Response:
-    git_sha = (
-        os.environ.get("GIT_COMMIT_SHA") or os.environ.get("INFRA_IAC_REF") or "unknown"
-    ).strip() or "unknown"
-    version = (
-        os.environ.get("SERVICE_VERSION") or os.environ.get("IMAGE_TAG") or git_sha
-    ).strip() or "unknown"
+    git_sha = os.environ.get("GIT_COMMIT_SHA", "").strip() or "unknown"
     return JSONResponse(
         status_code=200,
         content={
@@ -771,7 +766,7 @@ def fastapi_api_health() -> Response:
             "status": "healthy",
             "service": "platform/todo",
             "domain": "todo.zitian.party",
-            "version": version,
+            "version": git_sha,
             "git_sha": git_sha,
             "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
         },
