@@ -1,4 +1,4 @@
-"""Contracts for the 2-shard unit-test run in infra-ci (#1499)."""
+"""Contracts for the sharded unit-test run in infra-ci (#1499)."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ PLUGIN_DIR = ROOT / "common" / "ci_plugins"
 WORKFLOW = ROOT / ".github" / "workflows" / "infra-ci.yml"
 SHARD_JOB = "test-unit-shard"
 FINAL_JOB = "test-deployer-logic"
-SHARD_COUNT = 2
+SHARD_COUNT = 3
 TEST_COUNT = 60
 
 
@@ -142,13 +142,17 @@ def test_final_job_check_fails_unless_the_shards_succeeded(
 def test_shard_jobs_gate_before_pytest_and_keep_the_coverage_targets() -> None:
     job = _workflow()["jobs"][SHARD_JOB]
     assert job["strategy"]["fail-fast"] is False
-    assert job["strategy"]["matrix"]["shard"] == [1, 2]
+    shards = job["strategy"]["matrix"]["shard"]
+    assert len(shards) >= 2
+    assert shards == list(range(1, len(shards) + 1)), "matrix must be 1..N"
+    assert "strategy.job-total" in job["name"]
     names = [s.get("name", "") for s in job["steps"]]
     assert names.index("Gate preflight static, SSOT, and drift checks") < names.index(
         "Run infra unit tests"
     )
     run = next(s for s in job["steps"] if s.get("name") == "Run infra unit tests")
-    assert "--shard=${{ matrix.shard }}/2" in run["run"]
+    assert "--shard=${{ matrix.shard }}/${{ strategy.job-total }}" in run["run"]
+    assert "/2" not in run["run"].split("--shard=")[1].split()[0]
     assert "--cov=common" in run["run"] and "--cov=tools" in run["run"]
     assert "-n auto" in run["run"]
     upload = next(
@@ -157,3 +161,10 @@ def test_shard_jobs_gate_before_pytest_and_keep_the_coverage_targets() -> None:
         if s.get("uses", "").startswith("actions/upload-artifact")
     )
     assert upload["with"]["include-hidden-files"] is True
+
+
+def test_final_job_combines_the_shard_files_by_glob() -> None:
+    steps = _workflow()["jobs"][FINAL_JOB]["steps"]
+    combine = next(s for s in steps if "coverage combine" in s.get("run", ""))
+    assert "coverage/.coverage.shard*" in combine["run"]
+    assert ".coverage.shard1" not in combine["run"]

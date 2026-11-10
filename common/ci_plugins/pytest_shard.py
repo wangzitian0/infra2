@@ -1,6 +1,7 @@
 """Pytest plugin that runs one deterministic shard of the collected tests (#1499).
 
-Usage: ``pytest -p common.core.pytest_shard --shard=K/N`` (K is 1-based).
+Usage: ``PYTHONPATH=<repo>/common/ci_plugins pytest -p pytest_shard --shard=K/N`` (K is 1-based).
+The directory goes on PYTHONPATH because PYTHONSAFEPATH=1 hides the working directory.
 A test belongs to shard K when ``crc32(node id) % N == K - 1``. The rule uses
 only the node id, so every pytest-xdist worker computes the same split.
 Without ``--shard`` the plugin changes nothing.
