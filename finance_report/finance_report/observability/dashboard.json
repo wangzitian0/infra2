@@ -394,7 +394,8 @@
               "dataSource": "metrics",
               "aggregations": [
                 {
-                  "expression": "p95(finance.ai_provider.latency)"
+                  "metricName": "finance.ai_provider.latency.bucket",
+                  "spaceAggregation": "p95"
                 }
               ],
               "filter": {
@@ -445,7 +446,9 @@
               "dataSource": "metrics",
               "aggregations": [
                 {
-                  "expression": "sum(finance.statement_parse.outcome)"
+                  "metricName": "finance.statement_parse.outcome",
+                  "timeAggregation": "increase",
+                  "spaceAggregation": "sum"
                 }
               ],
               "filter": {
@@ -491,7 +494,9 @@
               "dataSource": "metrics",
               "aggregations": [
                 {
-                  "expression": "sum(finance.reconciliation.match.outcome)"
+                  "metricName": "finance.reconciliation.match.outcome",
+                  "timeAggregation": "increase",
+                  "spaceAggregation": "sum"
                 }
               ],
               "filter": {
@@ -537,7 +542,9 @@
               "dataSource": "metrics",
               "aggregations": [
                 {
-                  "expression": "sum(finance.invariant.violation)"
+                  "metricName": "finance.invariant.violation",
+                  "timeAggregation": "increase",
+                  "spaceAggregation": "sum"
                 }
               ],
               "filter": {
