@@ -544,10 +544,12 @@ def test_reconcile_workflow_run_name_shows_the_release_tag() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     run_name = workflow.get("run-name")
     assert isinstance(run_name, str), "run-name is missing from the workflow"
-    assert "inputs.promote_prod" in run_name
-    assert "inputs.after" in run_name
     # Tag pushes and the 2-hour schedule have empty inputs, so the title falls back to the ref.
-    assert "github.ref_name" in run_name
+    assert run_name == (
+        "Reconcile IaC Inputs "
+        "(${{ inputs.promote_prod && 'PROD' || 'staging' }} "
+        "${{ inputs.after || github.ref_name }})"
+    )
 
 
 def test_promote_prod_refuses_a_tag_without_a_green_staging_soak() -> None:
