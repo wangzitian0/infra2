@@ -1,14 +1,11 @@
 name: Deploy (deploy_v2)
 
-# The infra2-owned deploy entrypoint for the finance_report app (Infra-009,
+# The infra2-owned deploy entrypoint for the finance_report and truealpha apps (Infra-009,
 # finance_report#883: "infra2 owns every deploy"). Wraps `python -m tools.deploy_v2` —
 # the unified (service, type, version_ref, iac_ref) front door — so any scenario (staging /
-# prod / preview-main|pr|commit|tag) deploys through the SAME mechanism, by hand today and
-# (next) triggered by App-repo CI via repository_dispatch.
+# prod / preview-branch|pr) deploys through the SAME mechanism.
 #
-# This replaces the per-env App-repo bash (tools/dokploy_deploy.sh). It is manual-only
-# for now (operator-triggered): merging it changes no automated behavior, and running it
-# is the live acceptance test for the unified path on a real fixed env.
+# This replaces the per-env App-repo bash (tools/dokploy_deploy.sh).
 #
 # prod safety: RL-DATA-1 is deny-by-default in deploy_v2 — a prod deploy must pass BOTH
 # staging_validated=true (staging-first) and code_reviewed=true (reviewed code on prod
@@ -30,13 +27,13 @@ on:
         required: false
         default: staging
         type: choice
-        options: [staging, prod, preview/branch, preview/pr, preview/commit, preview/tag]
+        options: [staging, prod, preview/branch, preview/pr]
       version_ref:
-        description: "Version surface, interpreted by type: PR# (preview/pr) | tag vX.Y.Z (prod / preview/tag) | sha (preview/commit) | main"
+        description: "Version surface, interpreted by type: PR# (preview/pr) | tag vX.Y.Z (staging/prod, defaults to harness/repos.yaml release_tag) | branch (preview/branch, defaults to main)"
         required: false
-        default: "main"
+        default: ""
       iac_ref:
-        description: "infra2 ref surface: main | vX.Y.Z | <sha>"
+        description: "infra2 ref surface: main | vX.Y.Z"
         required: false
         default: "main"
       domain:
@@ -55,6 +52,11 @@ on:
         default: false
       break_glass:
         description: "prod only — bypass staging-first (emergency)"
+        required: false
+        type: boolean
+        default: false
+      bootstrap:
+        description: "staging/prod app only — allow version_ref not matching harness/repos.yaml"
         required: false
         type: boolean
         default: false
@@ -92,13 +94,8 @@ jobs:
       # The ONE shared control-plane domain (common.common.infra_domain, #561) --
       # cloud./vault./otel. host builds must NEVER follow a per-service app-routing
       # override (inputs.domain, e.g. truealpha.club), or they produce a nonexistent
-      # hostname with no Traefik router or cert (a Cloudflare 526). app-deploy-
-      # request.yml already gets this right (fixed vars.INTERNAL_DOMAIN, independent
-      # of the per-request service domain); this job conflated the two by deriving it
-      # from inputs.domain -- discovered live deploying truealpha#474 (a
-      # truealpha/app prod deploy with inputs.domain=truealpha.club 526'd on
-      # cloud.truealpha.club before any mutation). The per-service app-routing domain
-      # still flows correctly to deploy_v2 via inputs.domain below (a separate,
+      # hostname with no Traefik router or cert (a Cloudflare 526). The per-service
+      # app-routing domain flows to deploy_v2 via inputs.domain below (a separate,
       # already-decoupled --domain CLI argument, not this env var).
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
       # platform (iac_pinned) services trigger the iac_runner webhook instead of Dokploy.
@@ -150,12 +147,13 @@ jobs:
         env:
           SERVICE_INPUT: ${{ github.event.inputs.service || 'finance_report/app' }}
           TYPE_INPUT: ${{ github.event.inputs.type }}
-          VERSION_REF_INPUT: ${{ github.event.inputs.version_ref || 'main' }}
+          VERSION_REF_INPUT: ${{ github.event.inputs.version_ref || '' }}
           IAC_REF_INPUT: ${{ github.event.inputs.iac_ref || 'main' }}
           DOMAIN_INPUT: ${{ github.event.inputs.domain || 'zitian.party' }}
           STAGING_VALIDATED_INPUT: ${{ github.event.inputs.staging_validated }}
           CODE_REVIEWED_INPUT: ${{ github.event.inputs.code_reviewed }}
           BREAK_GLASS_INPUT: ${{ github.event.inputs.break_glass }}
+          BOOTSTRAP_INPUT: ${{ github.event.inputs.bootstrap }}
           TIMEOUT_INPUT: ${{ github.event.inputs.timeout || '600' }}
         run: |
           set -euo pipefail
@@ -181,6 +179,7 @@ jobs:
           [[ "$STAGING_VALIDATED_INPUT" == "true" ]] && args+=(--staging-validated)
           [[ "$CODE_REVIEWED_INPUT" == "true" ]] && args+=(--code-reviewed)
           [[ "$BREAK_GLASS_INPUT" == "true" ]] && args+=(--break-glass)
+          [[ "$BOOTSTRAP_INPUT" == "true" ]] && args+=(--bootstrap)
           echo "deploy_v2 ${args[*]}"
           set +e
           out="$(python -m tools.deploy_v2 "${args[@]}")"

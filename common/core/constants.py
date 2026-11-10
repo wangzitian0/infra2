@@ -24,7 +24,7 @@ STATEFUL_DEPLOY_ENVIRONMENTS = (
 MANAGED_BY = "infra2"
 DOCKER_LABEL_PREFIX = "party.zitian.infra"
 IDENTITY_SCHEMA_VERSION = "v1"
-PREVIEW_KINDS = ("branch", "pr", "commit", "tag", "canary")
+PREVIEW_KINDS = ("branch", "pr")
 
 # GitHub Repository Configuration
 GITHUB_OWNER = "wangzitian0"

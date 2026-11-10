@@ -38,11 +38,6 @@ from dataclasses import dataclass, replace
 from common.core.environ import normalize_env_name
 from common.core.constants import PREVIEW_KINDS
 
-# The canary runs arbitrary code on a fixed throwaway preview slot no real PR reuses.
-# Canonical SSOT slot is CANARY_SLOT ("canary-preview") defined in infra2-sdk.
-from infra2_sdk import CANARY_SLOT
-from infra2_sdk.refs import SHORT_SHA_LENGTH
-
 # data default per env. Non-prod defaults to `staging` data (operator choice); prod is
 # always real prod data. A PR sha never runs on prod data and prod data never leaves
 # prod un-anonymized (the G2 / RL-DATA red lines, finance_report#877). deploy_v2 derives
@@ -288,12 +283,7 @@ def bespoke_app_compose_targets() -> tuple[ComposeTarget, ...]:
 # and 7-char shas already are; we still validate so a bad alias fails fast (a bad
 # suffix would silently produce an unroutable Host() rule or a name collision).
 _PR_VALUE_RE = re.compile(r"\A[1-9][0-9]*\Z")  # a positive PR number, no leading zero
-_SHA7_RE = re.compile(r"\A[0-9a-f]{7,40}\Z")  # a (lowercased) commit sha, >=7 hex
-_TAG_VALUE_RE = re.compile(r"\Av\d+\.\d+\.\d+\Z")  # a release tag vX.Y.Z
 _BRANCH_VALUE_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")  # a git branch name (e.g. main)
-_CANARY_VALUE_RE = re.compile(
-    r"\A[a-z0-9][a-z0-9_-]*\Z"
-)  # a canary slot name (e.g. preview)
 
 
 # The Dokploy ENVIRONMENT name every service's preview stacks live under (kept distinct
@@ -431,9 +421,8 @@ def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
     """Validate (kind, value) and return the (kind, canonical-value) pair.
 
     `branch` takes a branch name (default `main`). `pr` requires a positive integer.
-    `commit` requires a hex sha (>=7 chars) and is truncated to the 7-char short form
-    used everywhere else (image tag, telemetry service.version). Raises ValueError on bad
-    input — an invalid alias must fail loudly, never silently produce an unroutable stack.
+    Raises ValueError on bad input — an invalid alias must fail loudly, never silently
+    produce an unroutable stack.
     """
     if kind == "branch":
         text = (str(value).strip() if value is not None else "") or "main"
@@ -447,36 +436,6 @@ def _normalize_alias(kind: str, value: int | str | None) -> tuple[str, str]:
                 f"preview pr alias needs a positive PR number, got {value!r}"
             )
         return "pr", text
-    if kind == "canary":
-        text = str(value).strip().lower() if value is not None else ""
-        if not text or text in (
-            "preview",
-            "canary",
-            CANARY_SLOT,
-        ):
-            text = "preview"
-        elif not _CANARY_VALUE_RE.match(text):
-            raise ValueError(f"preview canary alias needs a valid slug, got {value!r}")
-        return "canary", text
-    if kind == "commit":
-        text = str(value).strip().lower()
-        if not _SHA7_RE.match(text):
-            raise ValueError(
-                f"preview commit alias needs a hex commit sha (>=7 chars), got {value!r}"
-            )
-        return "commit", text[
-            :SHORT_SHA_LENGTH
-        ]  # short sha — matches IMAGE_TAG / service.version
-    if kind == "tag":
-        text = str(value).strip()
-        if not _TAG_VALUE_RE.match(text):
-            raise ValueError(
-                f"preview tag alias needs a vX.Y.Z release tag, got {value!r}"
-            )
-        return (
-            "tag",
-            text,
-        )  # canonical (keeps dots, for the image ref); slug uses dashes
     raise ValueError(
         f"unknown preview kind {kind!r}: expected one of {list(PREVIEW_KINDS)}"
     )
@@ -500,18 +459,16 @@ def preview_alias(
 
         preview_alias("branch", "main") -> alias branch-main,     suffix -branch-main
         preview_alias("pr", 5)          -> alias pr-5,            suffix -pr-5
-        preview_alias("commit", sha)    -> alias commit-1ab32d5,  suffix -commit-1ab32d5
-        preview_alias("tag", "v1.2.3")  -> alias tag-v1-2-3,      suffix -tag-v1-2-3
 
     ``slug_prefix`` defaults to finance_report/app's (the original preview-capable
     service) so every pre-#522 call site is unchanged; a caller deploying a different
     service passes its ``PreviewServiceConfig.slug_prefix`` explicitly.
     """
     norm_kind, norm_value = _normalize_alias(kind, value)
-    # The URL/compose slug must be a single DNS label: a tag's/branch's dots and slashes
-    # become dashes (tag-v1-2-3, branch-main). norm_value keeps the canonical value
-    # (v1.2.3 / main) for the image ref + telemetry.
-    if norm_kind in ("tag", "branch"):
+    # The URL/compose slug must be a single DNS label: a branch's dots and slashes
+    # become dashes (branch-main). norm_value keeps the canonical value
+    # (main) for the image ref + telemetry.
+    if norm_kind == "branch":
         slug = norm_value.lower().replace(".", "-").replace("/", "-")
     else:
         slug = norm_value
@@ -545,10 +502,10 @@ def preview_alias(
 _LOCAL_DEV_ORIGIN = "http://localhost:3000"
 
 # Preview kinds that get a *wildcard* CORS origin (report-<kind>-*.<domain>).
-# A wildcard is required because the concrete value (PR number / commit sha) is
+# A wildcard is required because the concrete value (PR number) is
 # only known per-deploy. `branch-main` is enumerated explicitly below (the only
 # branch alias with a public, CORS-eligible URL today) rather than wildcarded.
-_PREVIEW_CORS_WILDCARD_KINDS = ("pr", "commit")
+_PREVIEW_CORS_WILDCARD_KINDS = ("pr",)
 # Branch aliases with a public, CORS-eligible preview URL (currently just main).
 _PREVIEW_CORS_BRANCHES = ("main",)
 
@@ -576,11 +533,7 @@ def cors_allowed_origins(domain: str) -> list[str]:
                 domain=domain, base_subdomain=preview_base
             )
         )
-    # Canary preview slot.
-    origins.append(
-        preview_alias("canary").app_url(domain=domain, base_subdomain=preview_base)
-    )
-    # Preview pr/commit aliases — wildcard, since the value is per-deploy.
+    # Preview pr aliases — wildcard, since the value is per-deploy.
     for kind in _PREVIEW_CORS_WILDCARD_KINDS:
         origins.append(f"https://{preview_base}-{kind}-*.{domain}")
     # Bespoke app overrides (e.g. truealpha/app staging and prod). The origin keeps the

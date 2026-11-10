@@ -44,6 +44,7 @@ from common.deploy.contract import (
     DeployTarget,
     DeployTypeSpec,
     ServiceSpec,
+    default_version_ref,
     deploy_type_spec,
     make_deploy_target,
     make_target,
@@ -55,11 +56,13 @@ from common.deploy.contract import (
 from common.deploy.preflight import (
     _image_manifest_exists,
     _wait_for_image_dependencies,
+    assert_app_version_ref_matches_train,
+    assert_app_version_ref_on_main,
     assert_iac_ref_on_main,
     enforce_data_lane_red_lines,
     resolve_data_lane,
 )
-from common.deploy.env_config import CANARY_SLOT, env_config
+from common.deploy.env_config import env_config
 from common.core.registry import domain_for_service
 from common.deploy.app_contract import encode_rendered_templates, verify_app_manifests
 from common.deploy.promote import deploy as _deploy_fixed
@@ -69,7 +72,6 @@ from common.deploy.preview import up as _preview_up
 from infra2_sdk.refs import (
     ResolvedRef,
     classify_ref,
-    resolve_branch_to_sha,
     resolve_image_ref,
     resolve_pr,
     resolve_to_sha,
@@ -86,14 +88,11 @@ _APP_REPO = _SERVICE_REPOS.get(
     _APP_SERVICE, "https://github.com/wangzitian0/finance_report.git"
 )
 _INFRA2_REPO = "https://github.com/wangzitian0/infra2"
-# Dokploy's github source clones a branch/tag ref (`git clone -b`), NOT a commit sha — a
-# raw sha fails "Remote branch <sha> not found" (finance_report#342). So when iac_ref is a
-# sha we clone the default branch; a branch/tag iac_ref is cloned verbatim (this is what
-# dissolves the old separate `iac_branch` input — the iac_ref surface now drives the clone).
-_INFRA2_DEFAULT_BRANCH = "main"
 __all__ = [
     "DeployV2Result",
     "_image_manifest_exists",
+    "assert_app_version_ref_matches_train",
+    "assert_app_version_ref_on_main",
     "assert_iac_ref_on_main",
     "deploy_v2",
     "enforce_data_lane_red_lines",
@@ -103,7 +102,7 @@ __all__ = [
 
 
 def _default_main(version_ref) -> str:
-    """A ``branch`` / ``canary`` version_ref defaults to the main tip when omitted."""
+    """A ``branch`` version_ref defaults to the main tip when omitted."""
     return (str(version_ref).strip() if version_ref is not None else "") or "main"
 
 
@@ -118,21 +117,12 @@ def _resolve_for_type(spec, version_ref, *, repo: str):
     The ``type`` decides how ``version_ref`` is read (a discriminated union), and the
     matrix (``accepted_forms``) fails closed on a form the type does not take:
 
-    - ``canary``          — any ref form, code OR release (default main); runs on the
-                            fixed ``CANARY_SLOT`` slot (it is a deploy-path probe, so
-                            it stays maximally flexible).
     - ``preview/pr``      — ``version_ref`` IS a PR number (``resolve_pr`` -> PR-head image);
                             its slot is that number.
     - ``preview/branch``  — a branch tip (default main); slot ``branch-<name>``.
-    - everything else     — ``version_ref`` is a git ref: validate its form against the
-                            type, then ``resolve_image_ref``. The slot is the tag
-                            (``preview/tag``), the short sha (``preview/commit``), or absent
-                            (fixed staging+prod).
+    - ``staging`` / ``prod`` — ``version_ref`` is a release tag ``vX.Y.Z``: validate its form
+                            against the type, then ``resolve_image_ref``.
     """
-    if spec.key == "canary":
-        ref = _default_main(version_ref)
-        validate_ref_form(spec.key, classify_ref(ref))
-        return resolve_image_ref(ref, repo=repo), CANARY_SLOT
     if spec.alias_kind == "pr":
         return resolve_pr(version_ref, repo=repo), version_ref
     # `branch` defaults to the main tip; the other ref types require an explicit version_ref.
@@ -154,8 +144,6 @@ def _resolve_for_type(spec, version_ref, *, repo: str):
         ) from err
     alias_value = {
         "branch": ref,  # the branch name -> slot branch-<name>
-        "commit": resolved.sha,  # preview_alias truncates to the 7-char short sha
-        "tag": ref,
         None: None,  # fixed staging / prod carry no preview slot
     }[spec.alias_kind]
     return resolved, alias_value
@@ -542,7 +530,6 @@ def _resolve_app_refs(
     spec: DeployTypeSpec,
     version_ref: str,
     iac_ref: str,
-    iac_clone_ref: str | None,
     normalized_expected_sha: str | None,
     repo: str | None,
 ) -> tuple[ResolvedRef, str, str, str]:
@@ -557,22 +544,8 @@ def _resolve_app_refs(
             f"not expected sha {normalized_expected_sha!r}"
         )
 
-    iac_form = classify_ref(iac_ref)
     iac_sha = resolve_to_sha(iac_ref, repo=_INFRA2_REPO)
-    if iac_clone_ref is not None:
-        clone_ref = iac_clone_ref.strip()
-        if iac_form != "sha" or not clone_ref:
-            raise ValueError(
-                "--iac-clone-ref requires a non-empty clone ref and exact-SHA --iac-ref"
-            )
-        clone_sha = resolve_branch_to_sha(clone_ref, repo=_INFRA2_REPO)
-        if clone_sha.lower() != iac_sha.lower():
-            raise ValueError(
-                f"iac clone ref {clone_ref!r} resolved to {clone_sha!r}, "
-                f"not authoritative iac_ref SHA {iac_sha!r}"
-            )
-    else:
-        clone_ref = _INFRA2_DEFAULT_BRANCH if iac_form == "sha" else iac_ref.strip()
+    clone_ref = iac_ref.strip()
 
     return resolved, alias_value, iac_sha, clone_ref
 
@@ -744,12 +717,12 @@ def deploy_v2(
     deploy_type: str,
     version_ref,
     iac_ref: str,
-    iac_clone_ref: str | None = None,
     client,
     domain: str,
     wait: bool = True,
     staging_validated: bool = False,
     break_glass: bool = False,
+    bootstrap: bool = False,
     force_promote: bool = False,
     pause_rollback: bool = False,
     max_rollback_attempts: int = 2,
@@ -779,13 +752,16 @@ def deploy_v2(
             f"[AUDIT] deploy_v2 pause_rollback=True for {service} ({deploy_type}, {version_ref!r})",
             file=sys.stderr,
         )
+    if bootstrap:
+        print(
+            f"[AUDIT] deploy_v2 bootstrap=True for {service} ({deploy_type}, {version_ref!r})",
+            file=sys.stderr,
+        )
     domain = domain_for_service(service) or domain
     svc_spec = service_spec(service)
     normalized_expected_sha = _normalize_expected_sha(expected_sha)
     validate_iac_ref_form(deploy_type, classify_ref(iac_ref))
     spec = deploy_type_spec(deploy_type)
-    if iac_clone_ref is not None and not env_config(spec.env).dynamic:
-        raise ValueError("--iac-clone-ref is only supported for preview/canary deploys")
     assert_iac_ref_on_main(iac_ref, deploy_type)
     if svc_spec.iac_pinned:  # platform service -> iac_runner /deploy webhook
         if normalized_expected_sha is not None:
@@ -803,15 +779,35 @@ def deploy_v2(
             version_ref=version_ref,
         )
 
+    effective_version_ref = version_ref
+    if spec.env in ("staging", "prod") and not (
+        str(effective_version_ref).strip() if effective_version_ref is not None else ""
+    ):
+        train_tag = default_version_ref(service)
+        if train_tag:
+            effective_version_ref = train_tag
+
     resolved, alias_value, iac_sha, clone_ref = _resolve_app_refs(
         service,
         spec,
-        version_ref,
+        effective_version_ref,
         iac_ref,
-        iac_clone_ref,
         normalized_expected_sha,
         repo,
     )
+    if spec.env in ("staging", "prod"):
+        assert_app_version_ref_matches_train(
+            service,
+            str(effective_version_ref).strip(),
+            deploy_type,
+            bootstrap=bootstrap,
+        )
+        assert_app_version_ref_on_main(
+            str(effective_version_ref).strip(),
+            deploy_type,
+            service=service,
+            repo=repo,
+        )
     target = make_target(
         deploy_type,
         service=service,
@@ -889,20 +885,19 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--type",
         required=True,
         dest="deploy_type",
-        help="deploy type: staging | prod | preview/branch | preview/pr | preview/commit "
-        "| preview/tag | canary",
+        help="deploy type: staging | prod | preview/branch | preview/pr",
     )
     parser.add_argument(
         "--version-ref",
         default="",
         help="version surface, interpreted by --type: a PR# (preview/pr), a release tag "
-        "vX.Y.Z (prod / preview/tag), a sha (preview/commit), or main; "
-        "ignored for iac_pinned platform/backing services",
+        "vX.Y.Z (staging / prod, defaults to harness/repos.yaml release_tag), or a branch "
+        "(preview/branch, defaults to main); ignored for iac_pinned platform/backing services",
     )
     parser.add_argument(
         "--iac-ref",
         required=True,
-        help="infra2 ref pinning the IaC: main | vX.Y.Z | <sha>",
+        help="infra2 ref pinning the IaC: main | vX.Y.Z",
     )
     parser.add_argument(
         "--domain", required=True, help="base domain, e.g. zitian.party"
@@ -921,6 +916,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--break-glass", action="store_true", help="bypass staging-first (emergency)"
+    )
+    parser.add_argument(
+        "--bootstrap",
+        action="store_true",
+        help="allow a staging/prod app deploy with a version_ref not matching harness/repos.yaml",
     )
     parser.add_argument(
         "--force-promote",
@@ -1009,8 +1009,6 @@ def _handle_teardown(args: argparse.Namespace) -> int:
         )
     if spec.alias_kind == "branch":
         alias_value = _default_main(args.version_ref)
-    elif spec.alias_kind == "canary":
-        alias_value = CANARY_SLOT
     else:
         alias_value = args.version_ref
     from common.deploy.dokploy_client import get_dokploy
@@ -1081,6 +1079,7 @@ def main(argv: list[str] | None = None) -> int:
             wait=not args.no_wait,
             staging_validated=args.staging_validated,
             break_glass=args.break_glass,
+            bootstrap=args.bootstrap,
             force_promote=args.force_promote,
             pause_rollback=args.pause_rollback,
             max_rollback_attempts=args.max_rollback_attempts,

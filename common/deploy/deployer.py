@@ -745,21 +745,39 @@ class Deployer:
 
     @classmethod
     def _checkout_ref(cls) -> str | None:
-        """The ref Dokploy is told to check out: the exact tag on HEAD, else HEAD's sha."""
+        """The ref Dokploy is told to check out: the highest release tag on HEAD, else HEAD's sha."""
         import subprocess
+        from common.deploy.release_markers import RELEASE_TAG_RE, version_key
 
-        for argv in (
-            ["git", "describe", "--tags", "--exact-match"],
-            ["git", "rev-parse", "HEAD"],
-        ):
-            try:
-                result = subprocess.run(
-                    argv, capture_output=True, text=True, check=False
-                )
-            except OSError:
-                return None
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()
+        try:
+            points_at = subprocess.run(
+                ["git", "tag", "--points-at", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return None
+        if points_at.returncode == 0 and points_at.stdout.strip():
+            release_tags = [
+                tag.strip()
+                for tag in points_at.stdout.splitlines()
+                if RELEASE_TAG_RE.fullmatch(tag.strip())
+            ]
+            if release_tags:
+                return max(release_tags, key=version_key)
+
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return None
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
         return None
 
     @classmethod

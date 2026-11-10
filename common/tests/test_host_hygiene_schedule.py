@@ -50,8 +50,6 @@ def test_preview_exclusion_pattern_matches_real_container_names() -> None:
         "finance_report-preview-db-pr-84",
         "finance_report-app-vault-agent-pr-84",
         "finance_report-backend-branch-main",
-        "finance_report-frontend-commit-1ab32d5",
-        "finance_report-preview-db-tag-v1-2-3",
     ]
     for name in must_match:
         assert rx.match(name), f"preview container not excluded: {name}"

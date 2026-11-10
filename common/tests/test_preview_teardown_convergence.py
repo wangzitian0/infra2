@@ -139,7 +139,7 @@ def _ok_get(url, timeout):
     return 200, f'{{"git_sha":"{SHORT_SHA}","version":"{SHORT_SHA}"}}'
 
 
-_ALIASES = [("branch", "main"), ("pr", 7), ("commit", "1ab32d5")]
+_ALIASES = [("branch", "main"), ("pr", 7)]
 
 
 @pytest.mark.parametrize("kind,value", _ALIASES)
@@ -248,14 +248,14 @@ def test_down_with_wait_true_verifies_physical_container_absence():
     # Sequence: first read sees a container, next two reads see empty (2 consecutive clean reads)
     client = ContainerListFakeDokploy(
         [
-            [{"name": "/finance-report-canary-preview"}],
+            [{"name": "/finance-report-branch-main"}],
             [],
             [],
         ]
     )
     result = pl.down(
-        "canary",
-        "preview",
+        "branch",
+        "main",
         domain="zitian.party",
         client=client,
         wait=True,
@@ -268,10 +268,10 @@ def test_down_with_wait_true_verifies_physical_container_absence():
 
 def test_down_with_wait_true_detects_container_survivors():
     # Container never disappears
-    client = ContainerListFakeDokploy([[{"name": "/finance-report-canary-preview"}]])
+    client = ContainerListFakeDokploy([[{"name": "/finance-report-branch-main"}]])
     result = pl.down(
-        "canary",
-        "preview",
+        "branch",
+        "main",
         domain="zitian.party",
         client=client,
         wait=True,

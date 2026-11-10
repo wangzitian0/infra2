@@ -694,8 +694,6 @@ def test_report_only_follows_the_environment_label_then_the_name():
         "platform-prefect-worker-staging",
         "finance_report-backend-pr-12",
         "finance_report-preview-db-branch-main",
-        "finance_report-frontend-commit-1ab32d5",
-        "finance_report-backend-tag-v1-2-3",
     ]
     unlabelled_pages = ["platform-prefect-worker", "vault", "platform-alerting-probes"]
     assert [n for n in unlabelled_reports if not report_only(_docker_entry(n))] == []

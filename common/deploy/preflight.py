@@ -19,8 +19,12 @@ from infra2_sdk.ci import parse_github_time
 from infra2_sdk.refs import ReleaseError, assert_after_on_main, resolve_image_digest
 from infra2_sdk.secrets import vault_token_status
 
-from common.core.constants import REPO_ROOT
-from common.deploy.contract import DeployTarget, is_tag_only_iac_env
+from common.core.constants import APP_SOURCES, REPO_ROOT
+from common.deploy.contract import (
+    DeployTarget,
+    default_version_ref,
+    is_tag_only_iac_env,
+)
 from common.deploy.env_config import env_config
 from common.deploy.env_util import _parse_env_text
 
@@ -230,6 +234,101 @@ def assert_iac_ref_on_main(
             f"iac_ref {iac_ref!r} is not on infra2 main (compare status={status!r}); "
             f"staging/prod require an on-main release tag (#465 -- the app-side twin of the "
             f"reconcile off-main guard). Re-cut/use a tag on main."
+        )
+
+
+def assert_app_version_ref_on_main(
+    version_ref: str,
+    deploy_type: str,
+    *,
+    service: str,
+    repo: str | None = None,
+    token: str | None = None,
+    transport=httpx.get,
+    sleep=time.sleep,
+    now=time.time,
+    max_attempts: int = 3,
+    repo_root: Path | None = None,
+) -> None:
+    """Fail-closed: a fixed-env (staging/prod) App ``version_ref`` must be on the App repo's ``main``."""
+    if not is_tag_only_iac_env(deploy_type):
+        return
+    ref = version_ref.strip()
+    target_repo = repo or f"https://github.com/{APP_SOURCES.get(service, '')}"
+    owner_name = _infra2_owner_name(target_repo)
+    if not owner_name or "/" not in owner_name:
+        raise ValueError(
+            f"cannot resolve GitHub repository for service {service!r} (repo={repo!r})"
+        )
+    url = f"https://api.github.com/repos/{owner_name}/compare/main...{ref}"
+    headers = {"Accept": "application/vnd.github+json"}
+    tok = (
+        token
+        if token is not None
+        else (os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or "").strip()
+    )
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
+    try:
+        status = _github_compare_status(
+            url,
+            headers,
+            anonymous=not tok,
+            transport=transport,
+            sleep=sleep,
+            now=now,
+            max_attempts=max_attempts,
+        )
+    except Exception as api_error:  # noqa: BLE001 - fall back to local git if provided
+        fallback_root = repo_root
+        if fallback_root is None:
+            candidate_sub = REPO_ROOT / "repos" / service.split("/", 1)[0]
+            if (candidate_sub / ".git").exists():
+                fallback_root = candidate_sub
+        if fallback_root is None:
+            raise RuntimeError(
+                f"cannot prove version_ref {version_ref!r} is on {owner_name} main: "
+                f"the GitHub compare API failed ({type(api_error).__name__}: {api_error}) "
+                f"and no local checkout is available (#1500)"
+            ) from api_error
+        try:
+            assert_after_on_main(ref, fallback_root)
+        except SystemExit as local_failure:
+            local_reason = str(local_failure.code).removeprefix("::error::")
+            raise RuntimeError(
+                f"cannot prove version_ref {version_ref!r} is on {owner_name} main: "
+                f"the GitHub compare API failed ({type(api_error).__name__}: {api_error}) "
+                f"and local git did not confirm it ({local_reason}) (#1500)"
+            ) from api_error
+        return
+    if status not in ("behind", "identical"):
+        raise ValueError(
+            f"version_ref {version_ref!r} is not on {owner_name} main "
+            f"(compare status={status!r}); staging/prod require an on-main release tag "
+            f"(#1500). Re-cut/use a tag on main."
+        )
+
+
+def assert_app_version_ref_matches_train(
+    service: str,
+    version_ref: str,
+    deploy_type: str,
+    *,
+    bootstrap: bool = False,
+    repo_root: Path = REPO_ROOT,
+) -> None:
+    """Fail-closed when a fixed-env App deploy ``version_ref`` drifts from ``harness/repos.yaml`` unless ``bootstrap`` is set."""
+    if bootstrap or not is_tag_only_iac_env(deploy_type):
+        return
+    expected = default_version_ref(service, repo_root=repo_root)
+    if expected is None:
+        return
+    actual = str(version_ref or "").strip()
+    if actual != expected:
+        raise ValueError(
+            f"version_ref {actual!r} for {service} ({deploy_type}) does not match "
+            f"harness/repos.yaml release_tag {expected!r}; update harness/repos.yaml "
+            f"via the release train or pass --bootstrap for an emergency override (#1500)"
         )
 
 
