@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -939,12 +940,19 @@ def test_post_deploy_app_hooks_execute_smoke_and_record_results(
     )
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
-    assert len(out["hook_results"]) == 2
     assert fetched == [("finance_report/app", SHA), ("truealpha/app", SHA)]
     assert executed == [
         ("smoke", "https://report-staging.zitian.party", "staging", "v0.2.47"),
+        ("staging_gate", "https://report-staging.zitian.party", "staging", "v0.2.47"),
         ("smoke", "https://truealpha-staging.truealpha.club", "staging", "v0.2.80"),
+        (
+            "staging_gate",
+            "https://truealpha-staging.truealpha.club",
+            "staging",
+            "v0.2.80",
+        ),
     ]
+    assert len(out["hook_results"]) == 4
 
 
 def test_post_deploy_app_hooks_failure_blocks_prod_marker_and_returns_nonzero(
@@ -1743,3 +1751,262 @@ def test_reconcile_workflow_skips_deploy_outage_alert_when_sync_app_releases_fai
     exec(compile(py_body, "<alert-on-failure>", "exec"), {})
     assert len(delivered) == 1
     assert "🚨 IaC reconcile FAILED for v3.1.25 (staging soak)" in delivered[0]
+
+
+def test_parse_hook_slots_deduplicates_and_validates() -> None:
+    """#1493: _parse_hook_slots splits comma-separated slots, strips whitespace, preserves order,
+    and rejects empty or unknown slot names."""
+    assert reconcile._parse_hook_slots("smoke, staging_gate , smoke") == (
+        "smoke",
+        "staging_gate",
+    )
+    with pytest.raises(ValueError, match="at least one slot"):
+        reconcile._parse_hook_slots(" , ")
+    with pytest.raises(ValueError, match="unknown hook slot 'nonexistent'"):
+        reconcile._parse_hook_slots("smoke,nonexistent")
+
+
+def test_run_post_deploy_app_hooks_executes_smoke_and_staging_gate_in_order(
+    monkeypatch, tmp_path
+) -> None:
+    """#1493: run_post_deploy_app_hooks with slot='smoke,staging_gate' executes both smoke and
+    staging_gate in order for each deployed App and records issue trails per slot."""
+    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+    from infra2_sdk.refs import ResolvedRef
+
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
+    )
+    manifest = RuntimeHooksManifest.from_dict(
+        {
+            "schema_version": 1,
+            "service": "finance_report/app",
+            "slots": {
+                slot_name: {
+                    "run": "echo ok",
+                    "bootstrap": "",
+                    "timeout_seconds": 30,
+                    "required_env": [],
+                    "optional_env": [],
+                    "artifacts_dir": f"artifacts/{slot_name}",
+                }
+                for slot_name in HOOK_SLOTS
+            },
+        }
+    )
+    executed_slots: list[str] = []
+    recorded_trails: list[tuple[str, list[str]]] = []
+
+    def _fake_exec(
+        _m, slot: str, *, app_url: str, environment: str, version_ref: str, **_kw
+    ):
+        executed_slots.append(slot)
+        return HookRunResult(
+            service="finance_report/app",
+            slot=slot,
+            environment=environment,
+            app_url=app_url,
+            version_ref=version_ref,
+            status="pass",
+            exit_code=0,
+            duration_seconds=0.1,
+        )
+
+    def _fake_record(results, *, slot: str = "", **_kw):
+        recorded_trails.append((slot, [str(r.get("slot")) for r in results]))
+        return 0
+
+    monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
+    monkeypatch.setattr(reconcile, "record_app_hook_issue_trail", _fake_record)
+    monkeypatch.setenv("GITHUB_TOKEN", "tok-test")
+
+    plan = build_plan(
+        ["finance_report/finance_report/10.app/compose.yaml"],
+        app_release_tags={"finance_report/app": "v0.2.50"},
+    )
+    applied = [
+        reconcile.DeployCommand(
+            service="finance_report/app", deploy_type="staging", argv=["true"]
+        )
+    ]
+    results = reconcile.run_post_deploy_app_hooks(
+        plan,
+        applied,
+        repo_root=tmp_path,
+        after="v3.1.29",
+        target_env="staging",
+        slot="smoke,staging_gate",
+        manifest_fetcher=lambda _url: json.dumps(manifest.to_dict()).encode("utf-8"),
+    )
+    assert executed_slots == ["smoke", "staging_gate"]
+    assert [r["slot"] for r in results] == ["smoke", "staging_gate"]
+    assert all(r["ok"] is True for r in results)
+    assert recorded_trails == [
+        ("smoke", ["smoke"]),
+        ("staging_gate", ["staging_gate"]),
+    ]
+
+
+def test_run_scheduled_app_audits_executes_scheduled_audit_and_records_trail(
+    monkeypatch, capsys, tmp_path
+) -> None:
+    """#1493: run_scheduled_app_audits discovers Apps declaring scheduled_audit, forwards
+    AI_API_KEY via env_overrides, records the issue trail, and main(--run-scheduled-audit)
+    returns 1 when any audit fails."""
+    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+    from infra2_sdk.refs import ResolvedRef
+
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.50\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.83\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
+    )
+    manifest = RuntimeHooksManifest.from_dict(
+        {
+            "schema_version": 1,
+            "service": "finance_report/app",
+            "slots": {
+                slot_name: {
+                    "run": "echo ok",
+                    "bootstrap": "",
+                    "timeout_seconds": 30,
+                    "required_env": ["AI_API_KEY"]
+                    if slot_name == "scheduled_audit"
+                    else [],
+                    "optional_env": [],
+                    "artifacts_dir": f"artifacts/{slot_name}",
+                }
+                for slot_name in HOOK_SLOTS
+            },
+        }
+    )
+    monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
+
+    seen_calls: list[tuple[str, str, str, str]] = []
+    recorded_trails: list[tuple[str, int]] = []
+
+    def _fake_exec(
+        _m,
+        slot: str,
+        *,
+        app_url: str,
+        environment: str,
+        version_ref: str,
+        ambient_env=None,
+        **_kw,
+    ):
+        seen_calls.append(
+            (slot, app_url, version_ref, str((ambient_env or {}).get("AI_API_KEY", "")))
+        )
+        return HookRunResult(
+            service="finance_report/app",
+            slot=slot,
+            environment=environment,
+            app_url=app_url,
+            version_ref=version_ref,
+            status="fail" if "report-staging" in app_url else "pass",
+            exit_code=1 if "report-staging" in app_url else 0,
+            duration_seconds=0.25,
+            summary="U7/U13 core journey failed"
+            if "report-staging" in app_url
+            else "ok",
+        )
+
+    monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
+    monkeypatch.setattr(
+        reconcile,
+        "record_app_hook_issue_trail",
+        lambda results, *, slot="", **_kw: (
+            recorded_trails.append((slot, len(results))) or 0
+        ),
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "tok-audit")
+    monkeypatch.setenv("ZAI_CODING_CN_API_KEY", "zai-secret-key")
+    monkeypatch.delenv("AI_API_KEY", raising=False)
+
+    rc = main(["--repo-root", str(tmp_path), "--run-scheduled-audit"])
+    assert rc == 1
+    out = json.loads(capsys.readouterr().out)
+    results = out["scheduled_audit_results"]
+    assert len(results) == 2
+    assert results[0]["service"] == "finance_report/app"
+    assert results[0]["ok"] is False
+    assert results[1]["service"] == "truealpha/app"
+    assert results[1]["ok"] is True
+    assert seen_calls == [
+        (
+            "scheduled_audit",
+            "https://report-staging.zitian.party",
+            "v0.2.50",
+            "zai-secret-key",
+        ),
+        (
+            "scheduled_audit",
+            "https://truealpha-staging.truealpha.club",
+            "v0.2.83",
+            "zai-secret-key",
+        ),
+    ]
+    assert recorded_trails == [("scheduled_audit", 2)]
+
+
+def _unwired_hook_slots(
+    slots: tuple[str, ...], workflow_texts: dict[str, str]
+) -> list[str]:
+    """Return hook slots from ``slots`` that no workflow in ``workflow_texts`` invokes."""
+    combined = "\n".join(workflow_texts.values())
+    unwired: list[str] = []
+    for slot in slots:
+        slot_wired = False
+        if slot == "scheduled_audit" and "--run-scheduled-audit" in combined:
+            slot_wired = True
+        if re.search(rf"\b{re.escape(slot)}\b", combined):
+            slot_wired = True
+        if not slot_wired:
+            unwired.append(slot)
+    return unwired
+
+
+def test_every_declared_hook_slot_is_wired_into_workflows() -> None:
+    """#1493 (AC 4): every slot in HOOK_SLOTS ('smoke', 'preview_gate', 'staging_gate',
+    'scheduled_audit') is referenced and wired into .github/workflows/*.yml, and adding a
+    hypothetical dead slot to HOOK_SLOTS fails the check."""
+    from infra2_sdk.manifests import HOOK_SLOTS
+
+    workflows_dir = ROOT / ".github" / "workflows"
+    workflow_texts = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in sorted(workflows_dir.glob("*.y*ml"))
+    }
+    assert set(HOOK_SLOTS) == {
+        "smoke",
+        "preview_gate",
+        "staging_gate",
+        "scheduled_audit",
+    }
+    assert _unwired_hook_slots(tuple(HOOK_SLOTS), workflow_texts) == []
+
+    # Mutation proof: a hypothetical dead slot not wired in any workflow fails closed.
+    assert _unwired_hook_slots((*HOOK_SLOTS, "unwired_slot"), workflow_texts) == [
+        "unwired_slot"
+    ]
+
+    # Also verify each realApp runtime-hooks.manifest.json slot is covered by HOOK_SLOTS and workflows.
+    for raw_manifest in (_REAL_FR_HOOKS_MANIFEST_JSON, _REAL_TA_HOOKS_MANIFEST_JSON):
+        manifest = reconcile.RuntimeHooksManifest.from_dict(json.loads(raw_manifest))
+        assert _unwired_hook_slots(tuple(manifest.slots.keys()), workflow_texts) == []

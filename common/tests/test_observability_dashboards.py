@@ -221,6 +221,7 @@ _EXPECTED_RULES = {
     ),
     "PlatformAlertingErrorLogs": ("threshold_rule", "error", 5, "4", "15m0s", ""),
     "PlatformTodoErrorLogs": ("threshold_rule", "error", 10, "4", "15m0s", ""),
+    "PlatformTodoProbeFailures": ("promql_rule", "error", 0.0, "1", "5m0s", "count"),
 }
 # docs/ssot/ops.observability.md §3: the severity label is the P level.
 _P_LEVEL_BY_SEVERITY = {"critical": "P0", "error": "P1", "warning": "P2"}
@@ -302,6 +303,7 @@ _APP_METRICS: dict[str, dict[str, set[str]]] = {
     },
     "finance.rate_limit.rejected": {},
     "finance.async_parse.failure": {},
+    "canary.probe.outcomes": {"canary.status": {"pass", "fail", "unconfigured"}},
 }
 _SELECTOR = re.compile(r"\{([^{}]*)\}")
 _MATCHER = re.compile(r'"([^"]+)"\s*(=~|!~|!=|=)\s*"((?:[^"\\]|\\.)*)"')
@@ -358,7 +360,11 @@ def test_promql_selectors_reach_series_the_app_exports() -> None:
                 assert matched == {"finance-report-backend", "finance-report-worker"}
                 assert not re.fullmatch(pattern[0], "finance-report-frontend")
             else:
-                assert services in [["finance-report-backend"], ["truealpha-app"]], (
+                assert services in [
+                    ["finance-report-backend"],
+                    ["truealpha-app"],
+                    ["platform-todo"],
+                ], (
                     alert_name,
                     services,
                 )
@@ -608,7 +614,12 @@ SERVICE_METRICS = {
     "truealpha-app": _OLD_HTTP | {"http.server.active_requests"},
     "truealpha-data-engine": set(),
     "platform-alerting": _NEW_HTTP | {"http.server.active_requests"},
-    "platform-todo": _NEW_HTTP | {"http.server.active_requests"},
+    "platform-todo": _NEW_HTTP
+    | {
+        "http.server.active_requests",
+        "canary.probe.duration_ms.bucket",
+        "canary.probe.outcomes",
+    },
     "finance-report-backend": {
         "finance.ai_provider.latency.bucket",
         "finance.statement_parse.outcome",

@@ -838,6 +838,7 @@ def record_app_hook_issue_trail(
     hook_results: Sequence[Mapping[str, object]],
     *,
     target_env: str = "staging",
+    slot: str = "",
     run_url: str = "",
     env: Mapping[str, str] | None = None,
     issues_factory: Callable[[str, str], object] = GitHubIssues,
@@ -864,19 +865,22 @@ def record_app_hook_issue_trail(
 
     rc = 0
     norm_env = "production" if target_env in ("prod", "production") else "staging"
+    context_label = (
+        f"app hook {slot} ({norm_env})" if slot else f"post-deploy hook ({norm_env})"
+    )
     for svc, items in sorted(by_service.items()):
         app_repo = APP_SOURCES.get(
             svc, current_env.get("GITHUB_REPOSITORY", "wangzitian0/infra2")
         )
         trail = Trail(complete=False)
         for item in items:
-            slot = str(item.get("slot") or "smoke")
+            item_slot = str(item.get("slot") or slot or "smoke")
             status = str(item.get("status") or "fail")
-            name = f"app-hook:{svc}:{slot}:{norm_env}"
+            name = f"app-hook:{svc}:{item_slot}:{norm_env}"
             if status == "pass":
                 trail.green.add(name)
             else:
-                summary = str(item.get("summary") or f"{slot} failed")
+                summary = str(item.get("summary") or f"{item_slot} failed")
                 stderr_tail = str(item.get("stderr_tail") or "")
                 app_url = str(item.get("app_url") or "")
                 version_ref = str(item.get("version_ref") or "")
@@ -896,7 +900,7 @@ def record_app_hook_issue_trail(
             trail,
             mode=mode,
             run_url=run_url or github_run_url(current_env),
-            context=f"post-deploy hook ({norm_env})",
+            context=context_label,
             env=effective_env,
         )
         if res != 0:
@@ -907,7 +911,7 @@ def record_app_hook_issue_trail(
                     trail,
                     mode=mode,
                     run_url=run_url or github_run_url(current_env),
-                    context=f"post-deploy hook ({norm_env})",
+                    context=context_label,
                     env=effective_env,
                 )
             rc = rc or res
@@ -1073,6 +1077,20 @@ def resolve_app_hook_coordinates(
     return version_ref, resolved_sha, resolved_url
 
 
+def _parse_hook_slots(slot_spec: str) -> tuple[str, ...]:
+    """Parse and validate a comma-separated hook slot specification (#1493)."""
+    raw_items = [part.strip() for part in str(slot_spec).split(",") if part.strip()]
+    if not raw_items:
+        raise ValueError("hook slot specification must name at least one slot")
+    seen: list[str] = []
+    for item in raw_items:
+        if item not in HOOK_SLOTS:
+            raise ValueError(f"unknown hook slot {item!r}; allowed: {list(HOOK_SLOTS)}")
+        if item not in seen:
+            seen.append(item)
+    return tuple(seen)
+
+
 def run_post_deploy_app_hooks(
     plan: ReconcilePlan,
     applied: Sequence[DeployCommand],
@@ -1085,8 +1103,10 @@ def run_post_deploy_app_hooks(
     manifest_fetcher: Callable[[str], bytes] | None = None,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     record_issues: bool = True,
+    issues_factory: Callable[[str, str], object] = GitHubIssues,
 ) -> list[dict[str, object]]:
-    """Execute post-deploy verification hook slot for each deployed App service (#1416)."""
+    """Execute post-deploy verification hook slot(s) for each deployed App service (#1416, #1493)."""
+    slots = _parse_hook_slots(slot)
     applied_services = {
         part.strip()
         for cmd in applied
@@ -1094,6 +1114,7 @@ def run_post_deploy_app_hooks(
         if part.strip() in APP_SOURCES
     }
     hook_results: list[dict[str, object]] = []
+    stop_early = False
     for service in sorted(applied_services):
         version_ref = plan.app_release_tags.get(service) or after
         _, source_sha, app_url = resolve_app_hook_coordinates(
@@ -1116,6 +1137,123 @@ def run_post_deploy_app_hooks(
             runner=runner,
         )
         try:
+            for single_slot in slots:
+                res = execute_app_hook_slot(
+                    manifest,
+                    single_slot,
+                    app_url=app_url,
+                    environment="production"
+                    if target_env in ("prod", "production")
+                    else "staging",
+                    version_ref=version_ref,
+                    cwd=hook_cwd,
+                    runner=runner,
+                )
+                entry = res.to_dict()
+                entry["service"] = service
+                entry["service_id"] = service
+                entry["slot"] = single_slot
+                entry["ok"] = res.status == "pass"
+                entry["app_url"] = app_url
+                entry["source_sha"] = source_sha
+                entry["cwd"] = str(hook_cwd)
+                hook_results.append(entry)
+                if res.status != "pass":
+                    stop_early = True
+                    break
+        finally:
+            if tmp_checkout is not None:
+                tmp_checkout.cleanup()
+        if stop_early:
+            break
+    if (
+        record_issues
+        and hook_results
+        and (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"))
+    ):
+        for single_slot in slots:
+            slot_results = [
+                r for r in hook_results if str(r.get("slot") or "") == single_slot
+            ]
+            if slot_results:
+                record_app_hook_issue_trail(
+                    slot_results,
+                    target_env=target_env,
+                    slot=single_slot,
+                    run_url=github_run_url(os.environ),
+                    env=os.environ,
+                    issues_factory=issues_factory,
+                )
+    return hook_results
+
+
+def run_scheduled_app_audits(
+    repo_root: Path = REPO_ROOT,
+    *,
+    target_env: str = "staging",
+    slot: str = "scheduled_audit",
+    domain: str = "zitian.party",
+    base_domain: str = "",
+    env_overrides: Mapping[str, str] | None = None,
+    manifest_fetcher: Callable[[str], bytes] | None = None,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    issues_factory: Callable[[str, str], object] = GitHubIssues,
+    record_trail: bool = True,
+    run_url: str = "",
+    services: Sequence[str] | None = None,
+) -> list[dict[str, object]]:
+    """Execute a scheduled runtime hook slot across registered Apps and record the GitHub Issue trail (#1493)."""
+    if slot not in HOOK_SLOTS:
+        raise ValueError(f"unknown hook slot {slot!r}; allowed: {list(HOOK_SLOTS)}")
+    effective_domain = base_domain.strip() or domain
+    target_services = (
+        [str(s) for s in services if str(s)] if services else sorted(APP_SOURCES.keys())
+    )
+    pinned_tags = load_app_release_tags(repo_root, runner=runner)
+    effective_ambient: dict[str, str] = dict(os.environ)
+    if env_overrides:
+        for k, v in env_overrides.items():
+            if v is not None:
+                effective_ambient[str(k)] = str(v)
+
+    results: list[dict[str, object]] = []
+    for service in target_services:
+        repo_slug = APP_SOURCES.get(service)
+        if not repo_slug:
+            raise ValueError(f"unknown app service {service!r}")
+        version_ref, source_sha, app_url = resolve_app_hook_coordinates(
+            service,
+            repo_root=repo_root,
+            after=pinned_tags.get(service, ""),
+            target_env=target_env,
+            domain=effective_domain,
+            runner=runner,
+        )
+        sub_rel = SERVICE_TO_SUBMODULE_PATH.get(service, "")
+        local_manifest_path = (
+            (Path(repo_root) / sub_rel / APP_HOOKS_MANIFEST_PATH) if sub_rel else None
+        )
+        if (
+            manifest_fetcher is None
+            and local_manifest_path is not None
+            and local_manifest_path.is_file()
+        ):
+            manifest = load_hooks_manifest(local_manifest_path)
+        else:
+            manifest = fetch_hooks_manifest(
+                service,
+                source_sha,
+                manifest_fetcher=manifest_fetcher,
+            )
+        if slot not in manifest.slots:
+            continue
+        hook_cwd, tmp_checkout = resolve_app_hook_cwd(
+            service,
+            source_sha,
+            repo_root=repo_root,
+            runner=runner,
+        )
+        try:
             res = execute_app_hook_slot(
                 manifest,
                 slot,
@@ -1125,6 +1263,7 @@ def run_post_deploy_app_hooks(
                 else "staging",
                 version_ref=version_ref,
                 cwd=hook_cwd,
+                ambient_env=effective_ambient,
                 runner=runner,
             )
         finally:
@@ -1132,24 +1271,28 @@ def run_post_deploy_app_hooks(
                 tmp_checkout.cleanup()
         entry = res.to_dict()
         entry["service"] = service
+        entry["service_id"] = service
+        entry["slot"] = slot
+        entry["ok"] = res.status == "pass"
         entry["app_url"] = app_url
         entry["source_sha"] = source_sha
         entry["cwd"] = str(hook_cwd)
-        hook_results.append(entry)
-        if res.status != "pass":
-            break
+        results.append(entry)
+
     if (
-        record_issues
-        and hook_results
-        and (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"))
+        record_trail
+        and results
+        and (effective_ambient.get("GITHUB_TOKEN") or effective_ambient.get("GH_TOKEN"))
     ):
         record_app_hook_issue_trail(
-            hook_results,
+            results,
             target_env=target_env,
-            run_url=github_run_url(os.environ),
-            env=os.environ,
+            slot=slot,
+            run_url=run_url or github_run_url(effective_ambient),
+            env=effective_ambient,
+            issues_factory=issues_factory,
         )
-    return hook_results
+    return results
 
 
 def build_plan(
@@ -1724,12 +1867,39 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--run-post-deploy-hooks",
         action="store_true",
-        help="execute post-deploy App smoke hooks after successful deploy_v2 commands (#1416)",
+        help="execute post-deploy App hooks after successful deploy_v2 commands (#1416, #1493)",
     )
     parser.add_argument(
         "--post-deploy-hook-slot",
-        default="smoke",
-        help="hook slot to run when --run-post-deploy-hooks is enabled (default: smoke)",
+        default="",
+        help=(
+            "comma-separated hook slot(s) from HOOK_SLOTS to run when "
+            "--run-post-deploy-hooks is enabled (defaults to 'smoke,staging_gate' "
+            "for staging and 'smoke' for prod; #1493)"
+        ),
+    )
+    parser.add_argument(
+        "--run-scheduled-audit",
+        action="store_true",
+        help=(
+            "execute the scheduled_audit runtime hook slot across registered Apps "
+            "and record the GitHub Issue audit trail (#1493)"
+        ),
+    )
+    parser.add_argument(
+        "--no-hook-issue-trail",
+        action="store_true",
+        help="disable recording GitHub Issue trails when running App runtime hooks (#1493)",
+    )
+    parser.add_argument(
+        "--target-url",
+        default="",
+        help="explicit target URL override when running --run-hook-slot (e.g. preview_gate)",
+    )
+    parser.add_argument(
+        "--version-ref",
+        default="",
+        help="explicit version ref override when running --run-hook-slot",
     )
     parser.add_argument(
         "--sync-app-releases",
@@ -1788,6 +1958,30 @@ def main(argv: list[str] | None = None) -> int:
     target_env = "prod" if promote_prod else "staging"
 
     repo_root = Path(args.repo_root).resolve()
+    if args.run_scheduled_audit:
+        ai_key = (
+            os.environ.get("AI_API_KEY")
+            or os.environ.get("ZAI_CODING_CN_API_KEY")
+            or ""
+        )
+        env_overrides = {"AI_API_KEY": ai_key} if ai_key else None
+        hook_results = run_scheduled_app_audits(
+            repo_root,
+            target_env=target_env,
+            slot="scheduled_audit",
+            base_domain=args.domain,
+            env_overrides=env_overrides,
+            record_trail=not args.no_hook_issue_trail,
+            run_url=os.environ.get("GITHUB_RUN_URL", "") or github_run_url(os.environ),
+            services=args.sync_service or None,
+        )
+        out_payload = {"scheduled_audit_results": hook_results}
+        print(json.dumps(out_payload, sort_keys=True))
+        if args.output_json:
+            Path(args.output_json).write_text(
+                json.dumps(out_payload, indent=2), encoding="utf-8"
+            )
+        return 1 if any(item.get("status") != "pass" for item in hook_results) else 0
     if args.audit_app_hooks:
         audit_res = audit_app_hooks(
             repo_root,
@@ -1843,37 +2037,61 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(serving.to_dict(), sort_keys=True))
         return 0
     if args.run_hook_slot:
-        version_ref = args.after or "main"
-        app_url = args.hook_app_url or f"https://{args.domain}"
+        if args.run_hook_slot not in HOOK_SLOTS:
+            raise SystemExit(
+                f"::error::unknown hook slot {args.run_hook_slot!r}; allowed: {list(HOOK_SLOTS)}"
+            )
+        version_ref = args.version_ref or args.after or "main"
+        explicit_url = args.target_url or args.hook_app_url
+        app_url = explicit_url or f"https://{args.domain}"
         hook_cwd = repo_root
         tmp_checkout = None
         if args.hooks_manifest:
             manifest_or_path = Path(args.hooks_manifest)
-            if args.hook_service and not args.hook_app_url:
-                version_ref, _, app_url = resolve_app_hook_coordinates(
+            if args.hook_service and not explicit_url:
+                resolved_ver, _, app_url = resolve_app_hook_coordinates(
                     args.hook_service,
                     repo_root=repo_root,
-                    after=args.after,
+                    after=args.version_ref or args.after,
                     target_env=target_env,
                     domain=args.domain,
                     source_sha=args.hook_source_sha or ("a" * 40),
                 )
+                version_ref = args.version_ref or resolved_ver
         elif args.hook_service and args.hook_source_sha:
-            if not args.hook_app_url:
-                version_ref, _, app_url = resolve_app_hook_coordinates(
+            if not explicit_url:
+                resolved_ver, _, app_url = resolve_app_hook_coordinates(
                     args.hook_service,
                     repo_root=repo_root,
-                    after=args.after,
+                    after=args.version_ref or args.after,
                     target_env=target_env,
                     domain=args.domain,
                     source_sha=args.hook_source_sha,
                 )
+                version_ref = args.version_ref or resolved_ver
             manifest_or_path = fetch_hooks_manifest(
                 args.hook_service, args.hook_source_sha
             )
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 args.hook_service,
                 args.hook_source_sha,
+                repo_root=repo_root,
+            )
+        elif args.hook_service:
+            resolved_ver, resolved_sha, resolved_url = resolve_app_hook_coordinates(
+                args.hook_service,
+                repo_root=repo_root,
+                after=args.version_ref or args.after,
+                target_env=target_env,
+                domain=args.domain,
+                app_url=explicit_url,
+            )
+            version_ref = args.version_ref or resolved_ver
+            app_url = explicit_url or resolved_url
+            manifest_or_path = fetch_hooks_manifest(args.hook_service, resolved_sha)
+            hook_cwd, tmp_checkout = resolve_app_hook_cwd(
+                args.hook_service,
+                resolved_sha,
                 repo_root=repo_root,
             )
         else:
@@ -1969,6 +2187,9 @@ def main(argv: list[str] | None = None) -> int:
         and not args.dry_run
         and not any(result.get("returncode") != 0 for result in results)
     ):
+        effective_slot = args.post_deploy_hook_slot or (
+            "smoke" if promote_prod else "smoke,staging_gate"
+        )
         hook_results = run_post_deploy_app_hooks(
             plan,
             applied,
@@ -1976,7 +2197,7 @@ def main(argv: list[str] | None = None) -> int:
             after=args.after,
             target_env=target_env,
             domain=args.domain,
-            slot=args.post_deploy_hook_slot,
+            slot=effective_slot,
         )
     hooks_failed = any(item.get("status") != "pass" for item in hook_results)
     production_marker = ""
