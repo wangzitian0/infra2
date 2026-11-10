@@ -161,6 +161,12 @@ marker 不动就是 prod 用旧 deployer:2026-07-30 的 `production/v1.1.52` 让
 deploy-guard-audit 报一行(`python -m common.deploy.release_markers --repo-root .`),内容是 marker、落后几个
 release、以及是否已旧到会破坏下一次 prod 发布。工作流与工具通过 `common.deploy.app_contract.query_serving_release` 直接查询 infra2 权威部署态 `(source_sha, image_tag, iac_ref)`，不再从 App 自身 GitHub Actions 历史重推导 (#588)。
 
+**Pending marker (#1511).** GitHub can reject the marker push of the workflow token when the tagged commit has workflow files
+that differ from `main`. The run then stays `success` and prints `::warning::`. The result JSON field `marker_pending` holds
+`production/vX.Y.Z`; it is empty when the run recorded the marker. After the promotion run is `success`, record the marker with
+`uv run python -m tools.record_production_marker vX.Y.Z`. The tool refuses unless the tag is on `origin/main`, the marker is new
+and newer than the latest marker, no reconcile run is busy, and the newest `(PROD vX.Y.Z)` run is `success`.
+
 #### 3.3.1 Unit retry in the release train (#1439)
 
 Owner decision (2026-11-05): the approval of a production tag covers at most 2 automatic retries of a failed unit, in
