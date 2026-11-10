@@ -35,6 +35,7 @@ from common.core.constants import (
 from common.core.registry import domain_for_service, service_attrs
 from common.deploy.app_contract import (
     APP_HOOKS_MANIFEST_PATH,
+    HOOK_RUNNER_CONTEXT_ENV,
     HOOK_RUNNER_SECRET_ENV,
     HOOK_SLOTS,
     RuntimeHooksManifest,
@@ -67,6 +68,8 @@ from common.observability.issue_trail import (
     Trail,
     issue_trail_mode,
     reconcile_issue_trail,
+    scrub,
+    title_for,
 )
 from infra2_sdk.deploy import DeployRequest
 from infra2_sdk.manifests import (
@@ -1057,6 +1060,52 @@ def resolve_app_hook_cwd(
         return Path(repo_root), None
 
 
+class _RecordingIssueApi:
+    """Proxy around ``IssueApi`` that records per-title issue actions (#1577)."""
+
+    def __init__(self, inner: object) -> None:
+        self._inner = inner
+        self.number_to_title: dict[int, str] = {}
+        self.actions_by_title: dict[str, tuple[str, int]] = {}
+        self.listing_failed: bool = False
+
+    def open_issues(self, *args: object, **kwargs: object) -> list[dict]:
+        try:
+            issues = self._inner.open_issues(*args, **kwargs)  # type: ignore[attr-defined]
+        except Exception:
+            self.listing_failed = True
+            raise
+        for issue in issues:
+            if isinstance(issue, Mapping):
+                num = issue.get("number")
+                title = issue.get("title")
+                if isinstance(num, int) and isinstance(title, str):
+                    self.number_to_title[num] = title
+        return issues
+
+    def create(self, title: str, body: str, labels: object) -> int:
+        number = self._inner.create(title, body, labels)  # type: ignore[attr-defined]
+        if isinstance(number, int):
+            self.number_to_title[number] = title
+            self.actions_by_title[title] = ("opened", number)
+        return number
+
+    def comment(self, number: int, body: str) -> None:
+        self._inner.comment(number, body)  # type: ignore[attr-defined]
+        title = self.number_to_title.get(number)
+        if title is not None and title not in self.actions_by_title:
+            self.actions_by_title[title] = ("commented", number)
+
+    def update_body(self, number: int, body: str) -> None:
+        self._inner.update_body(number, body)  # type: ignore[attr-defined]
+
+    def close(self, number: int) -> None:
+        self._inner.close(number)  # type: ignore[attr-defined]
+        title = self.number_to_title.get(number)
+        if title is not None:
+            self.actions_by_title[title] = ("closed", number)
+
+
 def record_app_hook_issue_trail(
     hook_results: Sequence[Mapping[str, object]],
     *,
@@ -1066,12 +1115,17 @@ def record_app_hook_issue_trail(
     env: Mapping[str, str] | None = None,
     issues_factory: Callable[[str, str], object] = GitHubIssues,
 ) -> int:
-    """Open, comment on, or close an incident issue in the target App repository (#1416)."""
+    """Open, comment on, or close an incident issue in the target App repository (#1416, #1577)."""
+    if not hook_results:
+        return 0
     current_env = dict(os.environ if env is None else env)
     token = (
         current_env.get("GITHUB_TOKEN") or current_env.get("GH_TOKEN") or ""
     ).strip()
-    if not token or not hook_results:
+    if not token:
+        for entry in hook_results:
+            if isinstance(entry, dict) and str(entry.get("status") or "fail") != "pass":
+                entry["issue_trail_action"] = "unrecorded"
         return 0
     mode = issue_trail_mode(current_env)
     if mode == "off":
@@ -1085,6 +1139,8 @@ def record_app_hook_issue_trail(
         svc = str(entry.get("service") or "").strip()
         if svc:
             by_service.setdefault(svc, []).append(entry)
+        elif isinstance(entry, dict) and str(entry.get("status") or "fail") != "pass":
+            entry["issue_trail_action"] = "unrecorded"
 
     rc = 0
     norm_env = "production" if target_env in ("prod", "production") else "staging"
@@ -1118,26 +1174,78 @@ def record_app_hook_issue_trail(
                     severity="high",
                     failure_domain="app",
                 )
+        recorded_actions: dict[str, tuple[str, int]] = {}
+        app_proxy = _RecordingIssueApi(issues_factory(app_repo, token))
         res = reconcile_issue_trail(
-            issues_factory(app_repo, token),
+            app_proxy,
             trail,
             mode=mode,
             run_url=run_url or github_run_url(current_env),
             context=context_label,
             env=effective_env,
         )
-        if res != 0:
-            fallback_repo = current_env.get("GITHUB_REPOSITORY", "wangzitian0/infra2")
+        fallback_repo = current_env.get("GITHUB_REPOSITORY", "wangzitian0/infra2")
+        if res == 0 and not app_proxy.listing_failed:
+            recorded_actions.update(app_proxy.actions_by_title)
+            if mode == "full" and fallback_repo and fallback_repo != app_repo:
+                unclosed_green = {
+                    g_name
+                    for g_name in trail.green
+                    if recorded_actions.get(
+                        title_for(scrub(g_name, effective_env)), ("", 0)
+                    )[0]
+                    != "closed"
+                }
+                if unclosed_green:
+                    green_fallback_proxy = _RecordingIssueApi(
+                        issues_factory(fallback_repo, token)
+                    )
+                    green_res = reconcile_issue_trail(
+                        green_fallback_proxy,
+                        Trail(green=unclosed_green, complete=False),
+                        mode=mode,
+                        run_url=run_url or github_run_url(current_env),
+                        context=context_label,
+                        env=effective_env,
+                    )
+                    if green_res == 0 and not green_fallback_proxy.listing_failed:
+                        recorded_actions.update(green_fallback_proxy.actions_by_title)
+                    rc = rc or green_res
+        elif res != 0 or app_proxy.listing_failed:
             if fallback_repo and fallback_repo != app_repo:
+                fallback_proxy = _RecordingIssueApi(
+                    issues_factory(fallback_repo, token)
+                )
                 res = reconcile_issue_trail(
-                    issues_factory(fallback_repo, token),
+                    fallback_proxy,
                     trail,
                     mode=mode,
                     run_url=run_url or github_run_url(current_env),
                     context=context_label,
                     env=effective_env,
                 )
+                if res == 0 and not fallback_proxy.listing_failed:
+                    recorded_actions.update(fallback_proxy.actions_by_title)
             rc = rc or res
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_slot = str(item.get("slot") or slot or "smoke")
+            status = str(item.get("status") or "fail")
+            name = f"app-hook:{svc}:{item_slot}:{norm_env}"
+            expected_title = title_for(scrub(name, effective_env))
+            recorded = recorded_actions.get(expected_title)
+            if status == "pass":
+                if recorded is not None and recorded[0] == "closed":
+                    item["issue_trail_action"] = "closed"
+                    item["issue_number"] = recorded[1]
+            else:
+                if recorded is not None and recorded[0] in ("commented", "opened"):
+                    item["issue_trail_action"] = recorded[0]
+                    item["issue_number"] = recorded[1]
+                else:
+                    item["issue_trail_action"] = "unrecorded"
     return rc
 
 
@@ -1192,6 +1300,7 @@ def audit_app_hooks(
             checked[service] = {"ok": False, "error": str(exc)}
             continue
 
+        supplied = set(HOOK_RUNNER_SECRET_ENV) | set(HOOK_RUNNER_CONTEXT_ENV)
         slot_errors: list[str] = []
         for slot_name in HOOK_SLOTS:
             if slot_name not in manifest.slots:
@@ -1205,7 +1314,14 @@ def audit_app_hooks(
                     slot_errors.append(
                         f"forbidden secret {env_name!r} in slot {slot_name!r}"
                     )
+            for env_name in spec.required_env:
+                if env_name not in supplied:
+                    slot_errors.append(
+                        f"unsupplied required_env {env_name!r} in slot {slot_name!r}"
+                    )
         for dry_slot in ("smoke", "scheduled_audit"):
+            if dry_slot not in manifest.slots:
+                continue
             spec = manifest.slots[dry_slot]
             augmented_opt = tuple(
                 dict.fromkeys(
@@ -1229,8 +1345,8 @@ def audit_app_hooks(
                 "APP_VERSION_REF": pinned_tag or "v0.1.0",
                 "EXPECTED_SHA": pinned_tag or "v0.1.0",
             }
-            for req_key in spec.required_env:
-                ambient.setdefault(req_key, "dry-run-placeholder")
+            for sec_key in HOOK_RUNNER_SECRET_ENV:
+                ambient.setdefault(sec_key, "dry-run-secret")
             try:
                 build_hook_env(
                     replace(spec, optional_env=augmented_opt),
@@ -1929,7 +2045,7 @@ _RUNNER_FINAL_RE = re.compile(
 )
 
 
-def failure_summary_from_result(result: dict) -> list[dict]:
+def failure_summary_from_result(result: Mapping[str, object]) -> list[dict]:
     """The iac-runner's per-service diagnostics behind a failed deploy_v2 command.
 
     deploy_v2 raises with the runner's final status record appended as a Python literal
@@ -1975,44 +2091,129 @@ def github_run_url(env: Mapping[str, str]) -> str:
 
 
 def failure_alert_text(
-    *, after: str, results: Sequence[dict], run_url: str, promote_prod: bool
+    *,
+    after: str,
+    results: Sequence[Mapping[str, object]],
+    run_url: str,
+    promote_prod: bool,
+    hook_results: Sequence[Mapping[str, object]] = (),
 ) -> str | None:
     """One Feishu message for a failed reconcile: which tag, which environment, and per
     service the runner's error_kind and next action — the earliest machine-readable point
-    of every deploy-chain incident of 2026-09-04..08 (infra2#658). ``None`` when nothing
+    of every deploy-chain incident of 2026-09-04..08 (infra2#658), or an explicit
+    post-deploy hook alert when container deploys succeeded (#1577). ``None`` when nothing
     failed."""
     failed = [item for item in results if item.get("returncode") != 0]
-    if not failed:
+    if failed:
+        lines = [
+            f"🚨 IaC reconcile FAILED for {after} ({'PRODUCTION promotion' if promote_prod else 'staging soak'})."
+        ]
+        for item in failed:
+            env = str(item.get("type") or "?")
+            services = str(item.get("service") or "?")
+            summary = failure_summary_from_result(item)
+            if summary:
+                for entry in summary:
+                    lines.append(
+                        f"- {env} {entry.get('service') or services}: {entry.get('error_kind') or 'unknown'}"
+                        f" — {str(entry.get('next_action') or entry.get('summary') or '').strip()[:200]}"
+                    )
+            else:
+                stderr_lines = [
+                    line.strip()
+                    for line in str(item.get("stderr") or "").strip().splitlines()
+                    if line.strip()
+                ]
+                # deploy_v2's own verdict line names the failure; the lines after it are
+                # library boilerplate ("For more information check: https://developer...")
+                # — the first real page (v1.1.73, 2026-09-08 11:01Z) quoted the boilerplate.
+                verdict = [
+                    line
+                    for line in stderr_lines
+                    if line.startswith("deploy_v2 failed:")
+                ]
+                detail = (verdict or stderr_lines or ["no diagnostic"])[-1]
+                lines.append(f"- {env} {services}: {detail[:200]}")
+        lines.append(f"Run: {run_url}")
+        return "\n".join(lines)
+
+    failed_hooks = [item for item in hook_results if item.get("status") != "pass"]
+    if failed_hooks:
+        kind = "PRODUCTION promotion" if promote_prod else "staging soak"
+        lines = [
+            f"⚠️ Post-deploy hook FAILED for {after} ({kind}; container deploys succeeded)."
+        ]
+        for item in failed_hooks:
+            svc = str(item.get("service") or "?")
+            slot = str(item.get("slot") or "?")
+            vref = str(item.get("version_ref") or after or "?")
+            raw_summary = (
+                str(item.get("summary") or "").strip()
+                or str(item.get("stderr_tail") or "").strip()
+                or "hook failed"
+            )
+            summary_line = raw_summary.splitlines()[0][:200]
+            lines.append(f"- {svc} [{slot} @ {vref}]: {summary_line}")
+        lines.append(f"Run: {run_url}")
+        return "\n".join(lines)
+
+    return None
+
+
+def should_suppress_schedule_hook_alert(
+    *,
+    event_name: str,
+    results: Sequence[Mapping[str, object]],
+    hook_results: Sequence[Mapping[str, object]],
+) -> str | None:
+    """Return a suppression reason when a scheduled reconcile only repeats known open hook incidents (#1577)."""
+    if event_name != "schedule":
         return None
-    lines = [
-        f"🚨 IaC reconcile FAILED for {after} ({'PRODUCTION promotion' if promote_prod else 'staging soak'})."
-    ]
-    for item in failed:
-        env = str(item.get("type") or "?")
-        services = str(item.get("service") or "?")
-        summary = failure_summary_from_result(item)
-        if summary:
-            for entry in summary:
-                lines.append(
-                    f"- {env} {entry.get('service') or services}: {entry.get('error_kind') or 'unknown'}"
-                    f" — {str(entry.get('next_action') or entry.get('summary') or '').strip()[:200]}"
+    if any(item.get("returncode") != 0 for item in results):
+        return None
+    failed_hooks = [item for item in hook_results if item.get("status") != "pass"]
+    if not failed_hooks:
+        return None
+    if all(item.get("issue_trail_action") == "commented" for item in failed_hooks):
+        return "schedule_known_open_hook_incidents"
+    return None
+
+
+def resolve_workflow_failure_alert(
+    result_path: Path,
+    *,
+    after: str,
+    promote_prod: bool,
+    run_url: str,
+    reconcile_phase: str = "",
+) -> tuple[str | None, str | None]:
+    """Resolve ``(alert_text_to_send, skip_notice)`` for the workflow ``Alert on failure`` step (#1577)."""
+    if reconcile_phase == "sync-app-releases" and not result_path.exists():
+        return (
+            None,
+            "::warning::App release PR sync failed before reconcile-deploy phase; skipping deploy-outage Feishu alert.",
+        )
+    if result_path.exists():
+        try:
+            data = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = None
+        if isinstance(data, Mapping):
+            alert_text = data.get("alert_text")
+            if isinstance(alert_text, str) and alert_text.strip():
+                return (alert_text, None)
+            suppressed_reason = data.get("alert_suppressed_reason")
+            if isinstance(suppressed_reason, str) and suppressed_reason.strip():
+                return (
+                    None,
+                    f"::notice::Suppressing duplicate schedule Feishu alert ({suppressed_reason}); open incident issue(s) updated. Run: {run_url}",
                 )
-        else:
-            stderr_lines = [
-                line.strip()
-                for line in str(item.get("stderr") or "").strip().splitlines()
-                if line.strip()
-            ]
-            # deploy_v2's own verdict line names the failure; the lines after it are
-            # library boilerplate ("For more information check: https://developer...")
-            # — the first real page (v1.1.73, 2026-09-08 11:01Z) quoted the boilerplate.
-            verdict = [
-                line for line in stderr_lines if line.startswith("deploy_v2 failed:")
-            ]
-            detail = (verdict or stderr_lines or ["no diagnostic"])[-1]
-            lines.append(f"- {env} {services}: {detail[:200]}")
-    lines.append(f"Run: {run_url}")
-    return "\n".join(lines)
+    kind = "PRODUCTION promotion" if promote_prod else "staging soak"
+    crash_fallback_text = (
+        f"🚨 IaC reconcile FAILED for {after} ({kind}) before any "
+        f"deploy result was recorded (guard, provenance or runner unreachable).\nRun: {run_url}"
+    )
+    return (crash_fallback_text, None)
 
 
 def write_summary(
@@ -2564,13 +2765,21 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     run_url = github_run_url(os.environ)
+    suppressed_reason = should_suppress_schedule_hook_alert(
+        event_name=os.environ.get("GITHUB_EVENT_NAME", ""),
+        results=results,
+        hook_results=hook_results,
+    )
+    raw_alert_text = failure_alert_text(
+        after=args.after,
+        results=results,
+        hook_results=hook_results,
+        run_url=run_url,
+        promote_prod=promote_prod,
+    )
     payload = {
-        "alert_text": failure_alert_text(
-            after=args.after,
-            results=results,
-            run_url=run_url,
-            promote_prod=promote_prod,
-        ),
+        "alert_text": None if suppressed_reason else raw_alert_text,
+        "alert_suppressed_reason": suppressed_reason,
         "plan": plan.to_dict(),
         "commands": [command.to_dict() for command in commands],
         # what actually ran this invocation vs what is left for a deliberate next step
