@@ -2186,6 +2186,79 @@ def test_assert_app_version_ref_matches_train_enforces_repos_yaml(tmp_path):
     )
 
 
+def test_assert_app_version_ref_matches_train_reads_iac_ref_from_git_history(
+    tmp_path,
+) -> None:
+    """#1533: when iac_ref is an older tag/commit, assert_app_version_ref_matches_train
+    reads harness/repos.yaml from that iac_ref rather than the newer working tree."""
+    import subprocess
+    from common.deploy.preflight import assert_app_version_ref_matches_train
+
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test User"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.104\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "v3.1.35"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "tag", "v3.1.35"], cwd=tmp_path, check=True, capture_output=True
+    )
+
+    # Advance working tree to v0.2.105
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.105\n",
+        encoding="utf-8",
+    )
+
+    # Promoting v0.2.104 at iac_ref=v3.1.35 succeeds even though working tree is at v0.2.105
+    assert_app_version_ref_matches_train(
+        "truealpha/app",
+        "v0.2.104",
+        "prod",
+        iac_ref="v3.1.35",
+        repo_root=tmp_path,
+    )
+    # Promoting v0.2.105 at iac_ref=v3.1.35 fails because v3.1.35 sets release_tag to v0.2.104
+    with pytest.raises(
+        ValueError, match="does not match harness/repos.yaml release_tag 'v0.2.104'"
+    ):
+        assert_app_version_ref_matches_train(
+            "truealpha/app",
+            "v0.2.105",
+            "prod",
+            iac_ref="v3.1.35",
+            repo_root=tmp_path,
+        )
+
+
 def test_deploy_v2_defaults_app_version_ref_from_repos_yaml_and_threads_bootstrap(
     monkeypatch, calls, capsys
 ):

@@ -265,6 +265,27 @@ if ! grep -q '^DOKPLOY_API_KEY=' "$env_file"; then
   fi
 fi
 
+current_health="$(
+  docker inspect iac-runner \
+    --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || echo none
+)"
+if [ "$current_health" = "healthy" ] \
+  && [ -n "$current_git_sha" ] \
+  && [ "$current_git_sha" != "<no value>" ]; then
+  if git -C "$code_dir" rev-parse -q --verify "${current_git_sha}^{commit}" >/dev/null 2>&1; then
+    current_runner_tree="$(
+      git -C "$code_dir" rev-parse "${current_git_sha}:bootstrap/06.iac_runner" 2>/dev/null || true
+    )"
+    target_runner_tree="$(
+      git -C "$code_dir" rev-parse "${INFRA2_DEPLOY_SHA}:bootstrap/06.iac_runner" 2>/dev/null || true
+    )"
+    if [ -n "$current_runner_tree" ] && [ "$current_runner_tree" = "$target_runner_tree" ]; then
+      echo "IaC Runner inputs unchanged from $current_git_sha and container is healthy; skipping image rebuild and recreate"
+      exit 0
+    fi
+  fi
+fi
+
 echo "Building IaC Runner image for compose project $project"
 docker compose \
   -p "$project" \

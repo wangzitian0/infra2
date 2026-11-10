@@ -315,12 +315,16 @@ def assert_app_version_ref_matches_train(
     deploy_type: str,
     *,
     bootstrap: bool = False,
+    iac_ref: str | None = None,
     repo_root: Path = REPO_ROOT,
 ) -> None:
     """Fail-closed when a fixed-env App deploy ``version_ref`` drifts from ``harness/repos.yaml`` unless ``bootstrap`` is set."""
     if bootstrap or not is_tag_only_iac_env(deploy_type):
         return
-    expected = default_version_ref(service, repo_root=repo_root)
+    try:
+        expected = default_version_ref(service, repo_root=repo_root, iac_ref=iac_ref)
+    except TypeError:
+        expected = default_version_ref(service, repo_root=repo_root)
     if expected is None:
         return
     actual = str(version_ref or "").strip()
