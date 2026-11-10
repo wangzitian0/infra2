@@ -29,11 +29,14 @@ import sys
 import time
 import threading
 import urllib.parse
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, Callable, Dict, List
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from infra2_sdk.fastapi import init_service
+from infra2_sdk.runtime.config_schema import assert_environment
 
 LOGGER = logging.getLogger("platform-todo")
 SERVICE_TRACER_NAME = "platform-todo"
@@ -154,9 +157,9 @@ def _probe_postgres(
     dbname: str = "postgres",
     timeout: float = 2.0,
     connector: Callable[..., Any] | None = None,
-    verify_write: bool = False,
+    verify_write: bool = True,
 ) -> Dict[str, Any]:
-    """Log in as the dedicated canary role and run `SELECT 1`.
+    """Log in as the dedicated canary role and run `SELECT 1` plus a temp-table write/read/delete transaction.
 
     A server that answers the login with an ErrorResponse (`E`), such as "too many
     clients", fails the check. The password never appears in the detail: the SDK
@@ -212,6 +215,7 @@ def _probe_postgres(
 
             def _run_crud(connection: Any) -> None:
                 connection.execute("SELECT 1").fetchone()
+                connection.execute("SET LOCAL transaction_read_only = off")
                 connection.execute(
                     "CREATE TEMP TABLE IF NOT EXISTS canary_todo_probe (id TEXT PRIMARY KEY, title TEXT NOT NULL)"
                 )
@@ -601,8 +605,6 @@ def run_all_checks() -> Dict[str, Any]:
             "postgres": results["postgres"],
             "redis": results["redis"],
             "s3": results["s3"],
-            # backward-compatibility alias for existing dashboards
-            "minio": results["s3"],
             "signoz": results["signoz"],
             "openpanel": results["openpanel"],
             "authentik": results["authentik"],
@@ -906,7 +908,16 @@ def fastapi_ui_index(request: Request) -> HTMLResponse:
 app = fastapi_app
 
 
+ENV_MANIFEST_PATH = Path(__file__).resolve().parent / "env.manifest.json"
+
+
+def validate_startup_environment(environ: Mapping[str, str] | None = None) -> None:
+    """Fail closed at startup when any required variable in env.manifest.json is missing."""
+    assert_environment(ENV_MANIFEST_PATH, environ=environ, require_injected=True)
+
+
 def main() -> None:
+    validate_startup_environment()
     port = int(os.environ.get("PORT", "8000"))
     LOGGER.info(
         "Canary Todo service starting on port %d with FastAPI and infra2_sdk", port
