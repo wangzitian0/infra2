@@ -567,7 +567,7 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 | Worker 行为契约(入口去抖、VPS 已报则抑制、按身份告警、失联边沿与 `/outages`、预算) | `common/tests/test_cloudflare_watchdog.py`, `test_cloudflare_watchdog_kv_budget.py` | ✅ |
 | 心跳契约 v2 端到端:真实 runner 的 POST 进真实 Worker(VPS 已投递的路由不重复报;未过去抖、未投递、维护期照报)(#903/#904) | `common/tests/test_heartbeat_contract.py` | ✅ |
 | 周 watchdog recall digest / 周正向稳定性报告 | `test_watchdog_weekly_digest.py`, `test_stability_report.py` | ✅ |
-| Env×Stage failure-domain / disagreement 契约 | `common/tests/test_pipeline_stage_contract.py` | ✅ |
+| Env×Stage failure-domain / disagreement 契约（canary 废弃生命周期） | `common/tests/test_retired_deploy_canary.py` | ✅ |
 | synthetic round-trip(配置缺失 → `EX_CONFIG`,后端失败 → 1) | `test_observability_roundtrip_probe.py` | ✅ |
 | IaC/runtime/telemetry/alert 身份契约 | `tools/service_identity_audit.py`, `common/tests/test_service_identity*.py` | ✅ |
 | truealpha 端点与身份签发(llm 容器拿到 collector 端点 + 各入口签发的身份;端点不无身份出现、不进 host 网络、不进 web;sync 与 promote/preview 同名)(#906) | `common/tests/test_truealpha_app.py`, `test_deploy_primitive.py`, `test_preview_lifecycle.py` | ✅ |

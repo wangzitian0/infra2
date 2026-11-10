@@ -219,7 +219,7 @@ entries:
       daily report-only via ops-checks.yml's facet-reconcile job, #542).
     proofs:
       - common/tests/test_iac_runner_deploy_result.py
-      - common/tests/test_pipeline_stage_contract.py
+      - common/tests/test_delivery_stages.py
       - common/tests/test_reconcile_iac_inputs.py
       - common/tests/test_dokploy_config_drift.py
       - common/tests/test_deploy_guard_audit_mutations.py
