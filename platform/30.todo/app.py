@@ -192,12 +192,15 @@ def _probe_postgres(
                 )
             return _outcome("pass", start, f"login as {user}: {result.detail}")
 
-        from infra2_sdk.runtime._optional import require
-
         raw_conn = None
         conn_or_cm = None
         try:
-            connect = connector or require("psycopg", extra="postgres").connect
+            if connector is None:
+                import psycopg
+
+                connect = psycopg.connect
+            else:
+                connect = connector
             connect_kwargs: dict[str, Any] = {
                 "connect_timeout": settings.connect_timeout_seconds,
             }
