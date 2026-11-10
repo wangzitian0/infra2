@@ -54,6 +54,9 @@ services:
       - ./vault-agent.hcl:/etc/vault/vault-agent.hcl:ro
       - ./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro
       - secrets:/vault/secrets
+    labels:
+      - "infra2.mount.vault-agent.hcl.sha256=${IAC_MOUNT_SHA256_VAULT_AGENT_HCL:-}"
+      - "infra2.mount.secrets.ctmpl.sha256=${IAC_MOUNT_SHA256_SECRETS_CTMPL:-}"
     networks:
       - dokploy-network
 

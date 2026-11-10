@@ -23,6 +23,7 @@ import re
 import secrets
 import socket
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -1728,3 +1729,248 @@ def test_redaction_removes_any_password_clause_not_only_the_known_value(deploy) 
     assert "some-other-value" not in cleaned and "and-this" not in cleaned
     assert "known-secret-1" not in cleaned
     assert cleaned.count("<redacted>") == 3
+
+
+# ------------------------------------------- #1503: 1:1 runtime capability parity
+
+
+def test_traced_check_emits_duration_histogram_and_outcomes_counter_with_otlp(
+    app, monkeypatch
+) -> None:
+    """#1503: when OTEL_EXPORTER_OTLP_ENDPOINT is set, _traced_check records both
+    canary.probe.duration_ms and canary.probe.outcomes via opentelemetry.metrics."""
+    import opentelemetry.metrics as otel_metrics
+    import opentelemetry.trace as otel_trace
+
+    _env(monkeypatch)
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", COLLECTOR_OTLP_HTTP)
+    tracer = _FakeTracer()
+    monkeypatch.setattr(otel_trace, "get_tracer", lambda name: tracer)
+
+    recorded_histograms: list[tuple[str, float, dict[str, str], str, str]] = []
+    recorded_counters: list[tuple[str, int, dict[str, str], str, str]] = []
+    meter_names: list[str] = []
+
+    class _FakeHistogram:
+        def __init__(self, name: str, unit: str, description: str):
+            self.name = name
+            self.unit = unit
+            self.description = description
+
+        def record(self, amount: float, attributes: dict[str, str] | None = None) -> None:
+            recorded_histograms.append(
+                (self.name, amount, dict(attributes or {}), self.unit, self.description)
+            )
+
+    class _FakeCounter:
+        def __init__(self, name: str, unit: str, description: str):
+            self.name = name
+            self.unit = unit
+            self.description = description
+
+        def add(self, amount: int, attributes: dict[str, str] | None = None) -> None:
+            recorded_counters.append(
+                (self.name, amount, dict(attributes or {}), self.unit, self.description)
+            )
+
+    class _FakeMeter:
+        def create_histogram(self, name: str, unit: str = "", description: str = ""):
+            return _FakeHistogram(name, unit, description)
+
+        def create_counter(self, name: str, unit: str = "", description: str = ""):
+            return _FakeCounter(name, unit, description)
+
+    def _get_meter(name: str):
+        meter_names.append(name)
+        return _FakeMeter()
+
+    monkeypatch.setattr(otel_metrics, "get_meter", _get_meter)
+    ok = {"status": "pass", "latency_ms": 4.5, "detail": "ok"}
+    monkeypatch.setattr(app, "_probe_redis", lambda *a, **k: dict(ok))
+    monkeypatch.setattr(app, "_probe_postgres", lambda *a, **k: dict(ok))
+    monkeypatch.setattr(app, "_probe_http", lambda *a, **k: dict(ok))
+    monkeypatch.setattr(
+        app,
+        "_probe_s3",
+        lambda **k: {"status": "fail", "latency_ms": 12.25, "detail": "denied"},
+    )
+
+    app.run_all_checks()
+
+    assert set(meter_names) == {"platform-todo"}
+    assert len(recorded_histograms) == 6
+    assert len(recorded_counters) == 6
+    hist_by_check = {attrs["canary.check"]: (name, val, attrs, unit) for name, val, attrs, unit, _ in recorded_histograms}
+    assert hist_by_check["s3"] == (
+        "canary.probe.duration_ms",
+        12.25,
+        {"canary.check": "s3", "canary.status": "fail"},
+        "ms",
+    )
+    assert hist_by_check["postgres"] == (
+        "canary.probe.duration_ms",
+        4.5,
+        {"canary.check": "postgres", "canary.status": "pass"},
+        "ms",
+    )
+    cnt_by_check = {attrs["canary.check"]: (name, val, attrs, unit) for name, val, attrs, unit, _ in recorded_counters}
+    assert cnt_by_check["s3"] == (
+        "canary.probe.outcomes",
+        1,
+        {"canary.check": "s3", "canary.status": "fail"},
+        "1",
+    )
+
+
+def test_traced_check_does_not_request_meter_without_otlp_endpoint(
+    app, monkeypatch
+) -> None:
+    """#1503: when OTEL_EXPORTER_OTLP_ENDPOINT is unset/empty, neither get_tracer nor
+    get_meter is called."""
+    import opentelemetry.metrics as otel_metrics
+    import opentelemetry.trace as otel_trace
+
+    _env(monkeypatch)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
+
+    def _forbid(*args, **kwargs):
+        raise AssertionError("OTel meter/tracer requested without OTLP endpoint")
+
+    monkeypatch.setattr(otel_trace, "get_tracer", _forbid)
+    monkeypatch.setattr(otel_metrics, "get_meter", _forbid)
+    ok = {"status": "pass", "latency_ms": 1.0, "detail": "ok"}
+    monkeypatch.setattr(app, "_probe_redis", lambda *a, **k: dict(ok))
+    monkeypatch.setattr(app, "_probe_postgres", lambda *a, **k: dict(ok))
+    monkeypatch.setattr(app, "_probe_http", lambda *a, **k: dict(ok))
+    monkeypatch.setattr(app, "_probe_s3", lambda **k: dict(ok))
+
+    assert app.run_all_checks()["ok"] is True
+
+
+def test_postgres_probe_crud_executes_write_read_delete_roundtrip(app) -> None:
+    """#1503: verify_write=True / probe_postgres_crud executes SELECT 1 plus a temp-table
+    CREATE, INSERT, SELECT and DELETE roundtrip, and fails on read-back mismatch."""
+
+    class _CrudConn:
+        def __init__(self, readback: str = "canary-write-ok"):
+            self.statements: list[str] = []
+            self._readback = readback
+            self._last_sql = ""
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql: str):
+            self.statements.append(sql)
+            self._last_sql = sql
+            return self
+
+        def fetchone(self):
+            if self._last_sql == "SELECT 1":
+                return (1,)
+            return (self._readback,)
+
+        def close(self):
+            return None
+
+    conn = _CrudConn("canary-write-ok")
+    res = app.probe_postgres_crud(
+        "platform-postgres-staging",
+        5432,
+        user="canary_rw",
+        password=PG_PASSWORD,
+        dbname="postgres",
+        timeout=2.0,
+        connector=lambda dsn, **kw: conn,
+    )
+    assert res["status"] == "pass", res
+    assert conn.statements == [
+        "SELECT 1",
+        "CREATE TEMP TABLE IF NOT EXISTS canary_todo_probe (id TEXT PRIMARY KEY, title TEXT NOT NULL)",
+        "INSERT INTO canary_todo_probe (id, title) VALUES ('probe-1', 'canary-write-ok') ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title",
+        "SELECT title FROM canary_todo_probe WHERE id = 'probe-1'",
+        "DELETE FROM canary_todo_probe WHERE id = 'probe-1'",
+    ]
+
+    bad_conn = _CrudConn("corrupted-value")
+    bad_res = app._probe_postgres(
+        "platform-postgres-staging",
+        5432,
+        user="canary_rw",
+        password=PG_PASSWORD,
+        dbname="postgres",
+        timeout=2.0,
+        connector=lambda dsn, **kw: bad_conn,
+        verify_write=True,
+    )
+    assert bad_res["status"] == "fail"
+    assert "corrupted-value" in bad_res["detail"]
+    assert PG_PASSWORD not in bad_res["detail"]
+
+
+def test_todo_runtime_hooks_manifest_declares_all_four_slots() -> None:
+    """#1503: platform/30.todo/runtime-hooks.manifest.json conforms to RuntimeHooksManifest
+    and declares all 4 HOOK_SLOTS."""
+    from common.deploy.app_contract import (
+        HOOK_SLOTS,
+        execute_app_hook_slot,
+        load_hooks_manifest,
+    )
+
+    manifest_path = SERVICE_DIR / "runtime-hooks.manifest.json"
+    manifest = load_hooks_manifest(manifest_path)
+    assert manifest.schema_version == 1
+    assert manifest.service == "platform/todo"
+    assert set(manifest.slots) == set(HOOK_SLOTS)
+    assert manifest.slots["smoke"].timeout_seconds == 60
+    assert manifest.slots["preview_gate"].timeout_seconds == 120
+    assert manifest.slots["staging_gate"].timeout_seconds == 180
+    assert manifest.slots["scheduled_audit"].timeout_seconds == 300
+
+    for slot in HOOK_SLOTS:
+        res = execute_app_hook_slot(
+            manifest,
+            slot,
+            app_url="https://todo-staging.example.com",
+            environment="staging",
+            version_ref="v1.0.0",
+            cwd=SERVICE_DIR,
+            ambient_env={"PATH": "/usr/bin:/bin"},
+            runner=lambda cmd, **kw: subprocess.CompletedProcess(
+                cmd, 0, stdout="ok\n", stderr=""
+            ),
+        )
+        assert res.status == "pass"
+
+
+def test_todo_rendered_mount_fingerprints_and_compose_labels(deploy) -> None:
+    """#1503: TodoDeployer.rendered_mount_fingerprints computes SHA-256 digests for
+    vault-agent.hcl and secrets.ctmpl, merges them in compose_env_base, and compose.yaml
+    labels vault-agent with both fingerprints."""
+    fp = deploy.TodoDeployer.rendered_mount_fingerprints()
+    assert set(fp) == {
+        "IAC_MOUNT_SHA256_VAULT_AGENT_HCL",
+        "IAC_MOUNT_SHA256_SECRETS_CTMPL",
+    }
+    for key, digest in fp.items():
+        assert re.fullmatch(r"[0-9a-f]{64}", digest), (key, digest)
+
+    base = deploy.TodoDeployer.compose_env_base(
+        {"ENV": "staging", "ENV_SUFFIX": "-staging", "INTERNAL_DOMAIN": "example.com"}
+    )
+    assert base["IAC_MOUNT_SHA256_VAULT_AGENT_HCL"] == fp["IAC_MOUNT_SHA256_VAULT_AGENT_HCL"]
+    assert base["IAC_MOUNT_SHA256_SECRETS_CTMPL"] == fp["IAC_MOUNT_SHA256_SECRETS_CTMPL"]
+
+    agent_labels = compose_services(COMPOSE)["vault-agent"]["labels"]
+    assert (
+        "infra2.mount.vault-agent.hcl.sha256=${IAC_MOUNT_SHA256_VAULT_AGENT_HCL:-}"
+        in agent_labels
+    )
+    assert (
+        "infra2.mount.secrets.ctmpl.sha256=${IAC_MOUNT_SHA256_SECRETS_CTMPL:-}"
+        in agent_labels
+    )
+
