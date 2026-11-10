@@ -44,9 +44,7 @@ def test_no_workflow_references_the_retired_deploy_canary() -> None:
     found = [
         reference
         for path in WORKFLOWS
-        for reference in retired_references(
-            path.name, path.read_text(encoding="utf-8")
-        )
+        for reference in retired_references(path.name, path.read_text(encoding="utf-8"))
     ]
     assert found == []
     assert not (ROOT / "tools" / "deploy_v2_canary.py").exists()

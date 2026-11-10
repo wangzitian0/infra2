@@ -209,9 +209,7 @@ def test_each_ops_checks_schedule_and_task_has_a_known_run_group() -> None:
     """Each schedule names its own run group, and each dispatch task expands to
     `ops-checks-<task>`. A job-level group equal to one of these names deadlocks."""
     workflow = yaml.safe_load(
-        (ROOT / ".github" / "workflows" / "ops-checks.yml").read_text(
-            encoding="utf-8"
-        )
+        (ROOT / ".github" / "workflows" / "ops-checks.yml").read_text(encoding="utf-8")
     )
     group = _group(workflow["concurrency"])
     names, _, _ = workflow_group_names(group, workflow)
