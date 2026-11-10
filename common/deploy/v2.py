@@ -119,7 +119,7 @@ def _resolve_for_type(spec, version_ref, *, repo: str):
     matrix (``accepted_forms``) fails closed on a form the type does not take:
 
     - ``canary``          — any ref form, code OR release (default main); runs on the
-                            fixed ``pr-<CANARY_PR>`` slot (it is a deploy-path probe, so
+                            fixed ``CANARY_SLOT`` slot (it is a deploy-path probe, so
                             it stays maximally flexible).
     - ``preview/pr``      — ``version_ref`` IS a PR number (``resolve_pr`` -> PR-head image);
                             its slot is that number.

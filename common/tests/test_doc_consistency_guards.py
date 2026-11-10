@@ -354,7 +354,6 @@ def test_observability_ssot_matches_alert_rules_files_and_digest_entrypoints() -
         assert rel_path in obs_doc, f"missing {rel_path} in ops.observability.md"
     assert "tools/watchdog_weekly_digest.py" in obs_doc
     assert "stability_report.py --daily" in obs_doc
-    assert "尚未转换:tools/deploy_v2_canary.py" not in obs_doc
     standards_doc = (ROOT / "docs/ssot/ops.standards.md").read_text(encoding="utf-8")
     assert "当前尚未接入" not in standards_doc
     assert "common.deploy.schema_gate" in standards_doc

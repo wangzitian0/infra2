@@ -1160,7 +1160,7 @@ def test_each_deduplicated_job_is_wired_through_page_dedup(job) -> None:
     names = [step.get("name") for step in body["steps"]]
     dry_run = "!(github.event_name == 'workflow_dispatch' && inputs.dry_run)"
 
-    # issues: write for this job only, never workflow-wide (deploy-v2-canary runs PR code)
+    # issues: write for this job only, never workflow-wide (least privilege per job)
     assert workflow["permissions"] == {"contents": "read", "actions": "read"}
     assert body["permissions"] == {
         "contents": "read",

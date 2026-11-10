@@ -117,15 +117,6 @@ gates:
     # workflow, so the audit's coverage invariant requires it declared.
     blocks_merge: false
     failure_semantics: The built docs site fails to publish to GitHub Pages after a merge to main.
-  - id: infra_ci.deploy_v2_canary
-    stage: preview.runtime
-    task_category: deploy_canary
-    workflow: .github/workflows/ops-checks.yml
-    job: deploy-v2-canary
-    # The one ops-checks job that does run on same-repo PRs (touching deploy paths). Not a
-    # required context, so it is PR runtime proof rather than merge authority.
-    blocks_merge: false
-    failure_semantics: A live deploy_v2 canary against the temporary slot fails to roll out, verify, or tear down.
   - id: infra_ci.deploy_graph_audit
     stage: ops.scheduled_cleanup
     task_category: drift_report

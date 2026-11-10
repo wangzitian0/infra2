@@ -5,47 +5,15 @@ name: Ops Checks
 #     into its image declares it, so a change actually redeploys it.
 #   - Necessity:  the iac-runner is the single deploy trigger (no compose left on
 #     Dokploy-native autoDeploy outside the allowlist).
-#   - The deploy_v2 canary proves trigger-bound rollout, public version identity,
-#     and teardown convergence on the reserved pr-999 preview.
 #   - Out-of-band watchdog and weekly digest prove alert delivery and recall.
-# Failing deploy guard / canary / watchdog checks deliver Feishu alerts via the
+# Failing deploy guard / watchdog checks deliver Feishu alerts via the
 # shared out-of-band channel. The watchdog job also keeps one GitHub issue per red
 # check, closed by the next green scheduled run (truealpha#876 W4).
 
 "on":
-  push:
-    branches: [main]
-    paths:
-      - "tools/deploy_v2.py"
-      - "tools/deploy_v2_canary.py"
-      - "common/deploy/preview.py"
-      - "common/deploy/rollout.py"
-      - "common/deploy/contract.py"
-      - "common/deploy/env_config.py"
-      - "common/deploy/dokploy_client.py"
-      - "pyproject.toml"
-      - "uv.lock"
-      - "tools/sdk_requirement.py"
-      - "finance_report/finance_report/preview/**"
-      - ".github/workflows/ops-checks.yml"
-  pull_request:
-    paths:
-      - "tools/deploy_v2.py"
-      - "tools/deploy_v2_canary.py"
-      - "common/deploy/preview.py"
-      - "common/deploy/rollout.py"
-      - "common/deploy/contract.py"
-      - "common/deploy/env_config.py"
-      - "common/deploy/dokploy_client.py"
-      - "pyproject.toml"
-      - "uv.lock"
-      - "tools/sdk_requirement.py"
-      - "finance_report/finance_report/preview/**"
-      - ".github/workflows/ops-checks.yml"
   schedule:
     - cron: "17 2 * * *"
     - cron: "37 2 * * *"
-    - cron: "37 6 * * *"
     - cron: "0 1 * * 1"
     - cron: "0 2 1 * *" # monthly operational quality & recall summary (#425 T4)
     - cron: "47 * * * *" # hourly Dokploy preview leak detection
@@ -64,7 +32,6 @@ name: Ops Checks
         type: choice
         options:
           - deploy-guard-audit
-          - deploy-v2-canary
           - preview-leak-check
           - host-hygiene-schedule
           - out-of-band-watchdog
@@ -96,14 +63,14 @@ name: Ops Checks
 
 # issues: granted per job below (watchdog writes the issue trail and its page state,
 # digest reads issues, facet-reconcile / vault-self-refresh-audit / secrets-reconcile
-# write their page-dedup state, #962), not here: the deploy-v2-canary job runs
-# same-repo PR code.
+# write their page-dedup state, #962), not here: each job gets only the scopes it
+# uses.
 permissions:
   contents: read
   actions: read
 
 concurrency:
-  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '37 6 * * *' && 'infra2-deploy-v2-canary' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && github.event.schedule == '27 8 * * *' && 'infra2-secrets-reconcile' || github.event_name == 'schedule' && github.event.schedule == '57 3 * * *' && 'pi-chain-smoke' || github.event_name == 'schedule' && github.event.schedule == '13 5 * * *' && 'e2e-regressions-smoke' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) || format('ops-checks-push-{0}', github.sha) }}
+  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'infra2-deploy-guard-audit' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && github.event.schedule == '27 8 * * *' && 'infra2-secrets-reconcile' || github.event_name == 'schedule' && github.event.schedule == '57 3 * * *' && 'pi-chain-smoke' || github.event_name == 'schedule' && github.event.schedule == '13 5 * * *' && 'e2e-regressions-smoke' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) }}
   cancel-in-progress: false
 
 env:
@@ -452,108 +419,6 @@ jobs:
               f"Run: {run_url}",
           )
           PY
-
-  # deploy_v2 acceptance canary jobs
-  deploy-v2-canary:
-    # signal: deploy-v2-canary
-    name: deploy_v2 live canary
-    # Skip FORK PRs: they get no secrets, so the live deploy cannot run. Same-repo PRs,
-    # main pushes, schedules, and manual runs all mutate the same reserved ephemeral slot.
-    if: >-
-      ${{ ((github.event_name == 'pull_request'
-            && github.event.pull_request.head.repo.full_name == github.repository)
-          || github.event_name == 'push'
-          || (github.event_name == 'schedule' && github.event.schedule == '37 6 * * *')
-          || (github.event_name == 'workflow_dispatch' && (inputs.task == 'deploy-v2-canary' || inputs.task == 'all'))) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    concurrency:
-      group: deploy-v2-canary
-      cancel-in-progress: false
-    env:
-      DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
-      INTERNAL_DOMAIN: zitian.party
-      # out-of-band Feishu delivery (same secrets the watchdog uses) — a red probe pages.
-      # Injected ONLY for non-PR events: a PR run never uses --alert-on-failure, so do not
-      # expose alerting credentials to PR code (smaller blast radius).
-      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE || '' }}
-      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL || '' }}
-      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID || '' }}
-      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET || '' }}
-      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID || '' }}
-      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ github.event_name != 'pull_request' && secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE || '' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install runtime dependencies
-        run: |
-          sdk_requirement="$(python tools/sdk_requirement.py)"
-          python -m pip install --no-deps "$sdk_requirement"
-          python -m pip install -e .
-
-      - name: Run deploy_v2 canary
-        env:
-          VERSION_REF_INPUT: main
-          IAC_REF_INPUT: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main' }}
-          IAC_CLONE_REF_INPUT: ${{ github.event_name == 'pull_request' && github.head_ref || '' }}
-          DOMAIN_INPUT: zitian.party
-          TIMEOUT_INPUT: "600"
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
-            echo "::error::DOKPLOY_API_KEY secret is required for the deploy_v2 canary."
-            exit 1
-          fi
-
-          # Out-of-band alert ONLY on a non-PR failure: post-merge/scheduled red = an infra
-          # incident (page); a PR red is CI feedback to the author (no page).
-          alert_args=()
-          [[ "$EVENT_NAME" != "pull_request" ]] && alert_args+=(--alert-on-failure)
-          clone_args=()
-          [[ -n "$IAC_CLONE_REF_INPUT" ]] && clone_args+=(--iac-clone-ref "$IAC_CLONE_REF_INPUT")
-
-          # The canary prints a single JSON line on success; capture it so we can assert
-          # the stack was actually torn down (no leaked ephemeral stack) before passing.
-          set +e
-          out="$(python -m tools.deploy_v2_canary \
-            --version-ref "$VERSION_REF_INPUT" \
-            --iac-ref "$IAC_REF_INPUT" \
-            --domain "$DOMAIN_INPUT" \
-            --timeout "$TIMEOUT_INPUT" \
-            "${clone_args[@]}" \
-            "${alert_args[@]}")"
-          rc=$?
-          set -e
-
-          echo "canary output: $out"
-          {
-            echo "## deploy_v2 Acceptance Canary"
-            echo ""
-            echo '```json'
-            echo "$out"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [[ $rc -ne 0 ]]; then
-            echo "::error::deploy_v2 canary failed (exit $rc) — the unified deploy path did not go green."
-            exit $rc
-          fi
-
-          # Belt-and-braces: even on exit 0, refuse to pass if teardown did not run, so a
-          # canary can never leave its ephemeral stack behind.
-          if ! echo "$out" | python -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get("torn_down") else 1)'; then
-            echo "::error::canary did not tear down its stack (torn_down != true) — possible leak."
-            exit 1
-          fi
-          echo "deploy_v2 acceptance canary is GREEN — the unified path deploys and converges."
 
   preview-leak-check:
     # signal: preview-leak-check

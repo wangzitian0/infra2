@@ -273,7 +273,7 @@ def test_deploy_queue_guard_registered_and_matches_code() -> None:
 def test_vault_self_refresh_audit_registered_as_day_report() -> None:
     """The daily audit pages Feishu only on a confirmed fail (never on a bare
     schedule tick), and is silent on success -- the same shape this SSOT
-    already classifies deploy_v2_canary under. tier=day/type=report, not alert:
+    already classifies deploy-guard-audit under. tier=day/type=report, not alert:
     it has no consecutive-poll state to debounce (each scheduled run is an
     independent one-shot audit)."""
     inventory = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
@@ -593,13 +593,6 @@ def test_t2_scheduled_job_signals_registered_with_expected_cadence_tiers() -> No
     assert guard["layer"] == "github"
     assert guard["failure_class"] == "config-drift"
     assert audit._validate_tier_and_type(guard, guard["signal_id"]) == []
-
-    canary = signals["global.infra2.deploy-v2-canary"]
-    assert canary["tier"] == "day"
-    assert canary["type"] == "report"
-    assert canary["layer"] == "github"
-    assert canary["failure_class"] == "config-drift"
-    assert audit._validate_tier_and_type(canary, canary["signal_id"]) == []
 
     leak = signals["global.infra2.preview-leak-check"]
     assert leak["tier"] == "hour"

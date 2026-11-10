@@ -2906,7 +2906,7 @@ def test_a_weakened_required_check_workflow_goes_to_the_owner(kind):
 
 @pytest.mark.parametrize("kind", WEAKENINGS)
 @pytest.mark.parametrize(
-    "name, job", [("docs.yml", "build"), ("deploy.yml", "preflight_canary")]
+    "name, job", [("docs.yml", "build"), ("deploy.yml", "deploy")]
 )
 def test_the_same_edit_to_a_workflow_without_a_required_check_is_the_agents(
     kind, name, job

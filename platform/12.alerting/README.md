@@ -147,8 +147,7 @@ packages. The bridge pages people, so a bad `OTEL_*` value is logged and never s
 
 Every page on the three converted surfaces — this bridge's card, the Cloudflare
 Worker's text and the GitHub watchdog's text — shows the same fields in the same
-order (`tools/deploy_v2_canary.py` is not converted yet; a #905 follow-up)
-([ops.observability.md §3.1](../../docs/ssot/ops.observability.md#31-推送格式905)):
+order ([ops.observability.md §3.1](../../docs/ssot/ops.observability.md#31-推送格式905)):
 
 | Field | What it says |
 |---|---|

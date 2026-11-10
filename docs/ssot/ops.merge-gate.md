@@ -36,8 +36,7 @@
 **仍需 owner 的两类，判据各不相同，分别列**：
 
 - **First class: the target environment decides. Staging is the agent's; production is the owner's** (owner approval, 2026-09-21).
-  The agent merges a change that starts a staging deploy, the canary on the reserved slot `pr-0`, or the `report-branch-main` preview.
-  The canary is the `deploy-v2-canary` job of `ops-checks.yml`. These merges need no approval.
+  The agent merges a change that starts a staging deploy or the `report-branch-main` preview. These merges need no approval.
   These production jobs need the owner: prod apply, prod promote, L1 bootstrap self-update, and the observability apply.
   The runner rebuild that `bootstrap/06.iac_runner/**` starts also needs the owner.
   When the production lock holds, a merge that starts one of these jobs only creates a run.

@@ -307,8 +307,9 @@ def test_every_pr_triggered_workflow_is_fully_registered() -> None:
     result = audit()
     assert result["unregistered_jobs"] == []
     # And the scope is genuinely wider than the single workflow it used to be frozen at,
-    # so this test cannot pass vacuously.
-    assert len(result["covered_workflows"]) >= 3, result["covered_workflows"]
+    # so this test cannot pass vacuously. docs.yml and infra-ci.yml start on a pull
+    # request; ops-checks.yml stopped with the deploy_v2 canary (#1477).
+    assert len(result["covered_workflows"]) >= 2, result["covered_workflows"]
 
 
 def test_out_of_scope_workflows_really_cannot_gate_a_pull_request() -> None:

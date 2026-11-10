@@ -566,8 +566,8 @@ signals:
 
   # Scheduled ops-checks jobs that GitHub failed before they started (#1101). Such a
   # job has no runner and no step, so its own `Alert on failure` step never runs,
-  # and truealpha's scheduler-liveness counts the run as a tick. #1086: the
-  # deploy_v2 canary waited on its own run's concurrency group on 2026-10-06 and
+  # and truealpha's scheduler-liveness counts the run as a tick. #1086: a scheduled
+  # ops-checks job waited on its own run's concurrency group on 2026-10-06 and
   # nothing paged. tools/out_of_band_watchdog.py run_scheduled_job_start_check
   # (common/observability/scheduled_job_start.py) lists the scheduled runs of the last
   # 26 h; a job that started and failed alerts itself and is not a finding. A failed
@@ -695,7 +695,7 @@ signals:
   # tier=day/type=report, NOT alert: the job is silent on success and its only
   # notification is a page on a *confirmed* `status="fail"` result -- the same
   # silent-success/page-only-on-confirmed-failure shape this SSOT already
-  # classifies deploy_v2_canary under (ops.observability.md §2 / SOP-007B), and
+  # classifies deploy-guard-audit under (ops.observability.md §2), and
   # its once-daily cadence matches the harm-timescale of a slowly-staling Vault
   # secret (hours-to-days), not a minutes-scale liveness signal probe-runner
   # already owns. Because type=report, the alert-only consecutive_failures/
@@ -766,18 +766,6 @@ signals:
     environment: global
     component: iac
     signal: deploy-guard-audit
-    primary_owner: self
-    failure_class: config-drift
-    layer: github
-    severity: critical
-    cadence: 1d
-    tier: day
-    type: report
-
-  - signal_id: global.infra2.deploy-v2-canary
-    environment: global
-    component: iac
-    signal: deploy-v2-canary
     primary_owner: self
     failure_class: config-drift
     layer: github

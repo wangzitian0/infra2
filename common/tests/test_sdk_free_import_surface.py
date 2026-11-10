@@ -1,7 +1,7 @@
 """Guard that every CI job without infra2-sdk runs only SDK-free modules (#1270).
 
 `ops-checks.yml` installs the locked `infra2-sdk` wheel in all Python jobs (`audit`,
-`watchdog`, `digest`, `deploy-v2-canary`, `preview-leak-check`,
+`watchdog`, `digest`, `preview-leak-check`,
 `host-hygiene-schedule`, `facet-reconcile`, `vault-self-refresh-audit`,
 `secrets-reconcile`, and `e2e-regressions-smoke` via `uv sync`). Only `pi-chain-smoke`
 runs on a bare interpreter without `pip install`, executing `tools/pi_chain_smoke.py`.

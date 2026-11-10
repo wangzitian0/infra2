@@ -491,53 +491,30 @@ def test_python_embedded_in_workflows_and_shell_uses_only_the_published_contract
     assert {**workflow_found, **shell_found} == {}
 
 
-def test_deploy_canary_installs_the_declared_sdk_requirement() -> None:
+def test_each_ops_checks_job_installs_the_declared_sdk_requirement() -> None:
+    """Each ops-checks job that installs the project first installs the locked SDK
+    wheel that tools/sdk_requirement.py reads from uv.lock (#1115)."""
     workflow = yaml.safe_load(OPS_CHECKS.read_text(encoding="utf-8"))
-    job = workflow["jobs"]["deploy-v2-canary"]
-    steps = {step["name"]: step for step in job["steps"]}
-    install_command = steps["Install runtime dependencies"]["run"]
-
-    assert 'sdk_requirement="$(python tools/sdk_requirement.py)"' in install_command
-    assert (
-        'python -m pip install --no-deps "$sdk_requirement"' in install_command
-        and "python -m pip install -e ." in install_command
-    )
-    for event in ("push", "pull_request"):
-        paths = workflow["on"][event]["paths"]
-        # The installed SDK is the wheel uv.lock pins, read by tools/sdk_requirement.py
-        # (#1115). Moving the repos/infra2-sdk submodule pointer never changes it, so
-        # that path was a no-op trigger and was removed (#506).
-        assert {"pyproject.toml", "uv.lock", "tools/sdk_requirement.py"} <= set(paths)
-        assert "repos/infra2-sdk" not in paths
-
-
-def test_reserved_deploy_canary_slot_is_globally_serialized() -> None:
-    workflow = yaml.safe_load(OPS_CHECKS.read_text(encoding="utf-8"))
-    concurrency = workflow["jobs"]["deploy-v2-canary"]["concurrency"]
-
-    assert concurrency == {
-        "group": "deploy-v2-canary",
-        "cancel-in-progress": False,
+    installers = {
+        name: "\n".join(step.get("run", "") for step in job.get("steps", []))
+        for name, job in workflow["jobs"].items()
+        if any(
+            "python -m pip install -e ." in step.get("run", "")
+            for step in job.get("steps", [])
+        )
     }
-
-
-def test_pull_request_canary_binds_exact_head_authority_to_cloneable_branch() -> None:
-    workflow = yaml.safe_load(OPS_CHECKS.read_text(encoding="utf-8"))
-    job = workflow["jobs"]["deploy-v2-canary"]
-    steps = {step["name"]: step for step in job["steps"]}
-    env = steps["Run deploy_v2 canary"]["env"]
-    iac_ref = env["IAC_REF_INPUT"]
-    clone_ref = env["IAC_CLONE_REF_INPUT"]
-
-    assert "github.event_name == 'pull_request'" in iac_ref
-    assert "github.event.pull_request.head.sha" in iac_ref
-    assert iac_ref.endswith("|| 'main' }}")
-    assert "github.head_ref" in clone_ref
-    assert clone_ref.endswith("|| '' }}")
-
-    run_command = steps["Run deploy_v2 canary"]["run"]
-    assert 'clone_args+=(--iac-clone-ref "$IAC_CLONE_REF_INPUT")' in run_command
-    assert '"${clone_args[@]}"' in run_command
+    # Eight jobs install the project today. A scan that finds fewer reads nothing,
+    # and the loop below would pass on an empty set.
+    assert len(installers) >= 8, sorted(installers)
+    for name, install_command in installers.items():
+        assert (
+            'sdk_requirement="$(python tools/sdk_requirement.py)"' in install_command
+        ), name
+        sdk_install = 'python -m pip install --no-deps "$sdk_requirement"'
+        assert sdk_install in install_command, name
+        assert install_command.index(sdk_install) < install_command.index(
+            "python -m pip install -e ."
+        ), name
 
 
 def test_retired_compatibility_modules_stay_removed() -> None:

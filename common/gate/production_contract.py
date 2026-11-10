@@ -42,20 +42,11 @@ GATED_JOBS: dict[tuple[str, str], str | None] = {
 
 # Jobs that read a production credential and do not need owner approval, with the reason.
 UNGATED_JOBS: dict[tuple[str, str], str] = {
-    ("deploy.yml", "preflight_canary"): "canary on the throwaway slot, not production",
-    (
-        "app-deploy-request.yml",
-        "preflight_canary",
-    ): "canary on the throwaway slot, not production",
     ("deploy-report-main.yml", "deploy"): "deploys the preview slot, not production",
     ("preview-teardown.yml", "teardown"): "removes a preview slot, not production",
     ("ops-checks.yml", "audit"): "scheduled read-only audit",
     ("ops-checks.yml", "watchdog"): "scheduled read-only probe",
     ("ops-checks.yml", "digest"): "scheduled read-only report",
-    (
-        "ops-checks.yml",
-        "deploy-v2-canary",
-    ): "canary on the throwaway slot, not production",
     (
         "ops-checks.yml",
         "preview-leak-check",
