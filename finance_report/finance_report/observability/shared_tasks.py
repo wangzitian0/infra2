@@ -32,6 +32,7 @@ from invoke import task
 
 from common.alerting import AlertingError
 from common.observability_dashboards import (
+    DASHBOARD_FILES,
     ROUTING_PROBLEM_KINDS,
     ObservabilityDefinitionError,
     build_dashboard_import_payload,
@@ -88,10 +89,10 @@ def print_alerts(c):
 
 @task
 def print_dashboard(c):
-    """Print the SigNoz dashboard import payload from the checked-in definition."""
-    payload = build_dashboard_import_payload()
-    print(json.dumps(payload, indent=2, sort_keys=True))
-    return payload
+    """Print the SigNoz dashboard import payloads from the checked-in definitions."""
+    payloads = [build_dashboard_import_payload(path) for path in DASHBOARD_FILES]
+    print(json.dumps(payloads, indent=2, sort_keys=True))
+    return payloads
 
 
 @task
@@ -256,7 +257,17 @@ def _delete_signoz_rule(alerting, c, rule_id: str) -> bool:
 
 @task
 def apply_dashboard(c, delete_duplicates=False):
-    """Create/update the finance_report baseline SigNoz dashboard.
+    """Create/update every checked-in SigNoz dashboard (``DASHBOARD_FILES``, #1464).
+
+    Each file is applied by ``_apply_dashboard_file``; a failure stops the loop.
+    """
+    for path in DASHBOARD_FILES:
+        _apply_dashboard_file(c, path, delete_duplicates)
+    return True
+
+
+def _apply_dashboard_file(c, path, delete_duplicates):
+    """Create/update one SigNoz dashboard from ``path``.
 
     Looks the dashboard up by exact title and updates that row in place; creates it
     only when none exists. A row stored by the pre-#934 apply (title nested under a
@@ -272,7 +283,7 @@ def apply_dashboard(c, delete_duplicates=False):
     from common.console import error, info, success, warning
 
     alerting = _alerting_shared()
-    payload = build_dashboard_import_payload()
+    payload = build_dashboard_import_payload(path)
     title = payload["title"]
 
     listed = alerting._signoz_request(c, method="GET", path="/api/v1/dashboards")
@@ -342,13 +353,13 @@ def apply_dashboard(c, delete_duplicates=False):
 
 @task
 def verify_dashboard(c):
-    """Read-only: SigNoz holds exactly one correct copy of the checked-in dashboard."""
+    """Read-only: SigNoz holds exactly one correct copy of each checked-in dashboard."""
     from invoke.exceptions import Exit
 
     from common.console import error, success
 
     alerting = _alerting_shared()
-    dashboard = load_dashboard()
+    dashboards = [load_dashboard(path) for path in DASHBOARD_FILES]
     listed = alerting._signoz_request(c, method="GET", path="/api/v1/dashboards")
     if not listed["ok"]:
         error(
@@ -356,12 +367,17 @@ def verify_dashboard(c):
             f"status={listed['status']} body={listed['body'][:500]}",
         )
         raise Exit("Failed to list SigNoz dashboards", code=1)
-    problems = check_dashboard_state(listed.get("data"), dashboard)
+    problems = [
+        f"{dashboard['title']}: {problem}"
+        for dashboard in dashboards
+        for problem in check_dashboard_state(listed.get("data"), dashboard)
+    ]
     if problems:
         for problem in problems:
             error(f"dashboard: {problem}")
-        raise Exit("SigNoz dashboard does not match the checked-in definition", code=1)
-    success(f"SigNoz holds exactly one correct dashboard: {dashboard['title']}")
+        raise Exit("SigNoz dashboards do not match the checked-in definitions", code=1)
+    titles = ", ".join(dashboard["title"] for dashboard in dashboards)
+    success(f"SigNoz holds exactly one correct copy of each dashboard: {titles}")
     return True
 
 

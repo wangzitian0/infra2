@@ -46,6 +46,13 @@ ALERT_RULES_FILES: tuple[Path, ...] = (
     PLATFORM_ALERTING_DIR / "alert_rules.json",
 )
 DASHBOARD_FILE = FINANCE_REPORT_OBSERVABILITY_DIR / "dashboard.json"
+# Every dashboard the apply path sends to SigNoz (#1464); the apply upserts by title.
+DASHBOARD_FILES: tuple[Path, ...] = (
+    DASHBOARD_FILE,
+    TRUEALPHA_OBSERVABILITY_DIR / "dashboard.json",
+    PLATFORM_ALERTING_DIR / "dashboard.json",
+    REPO_ROOT / "platform" / "30.todo" / "dashboard.json",
+)
 OPENPANEL_ANALYTICS_FILE = FINANCE_REPORT_OBSERVABILITY_DIR / "openpanel_analytics.json"
 
 
