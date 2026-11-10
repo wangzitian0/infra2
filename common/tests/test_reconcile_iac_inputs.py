@@ -2361,3 +2361,91 @@ def test_local_service_hook_manifests_discovery_and_execution(monkeypatch) -> No
             ROOT / "platform/30.todo",
         ),
     ]
+
+
+def test_reconcile_workflow_defaults_run_post_deploy_hooks_on_tag_push_and_schedule() -> (
+    None
+):
+    """#1521: on tag push and schedule events inputs.run_post_deploy_hooks is null, so
+    reconcile-iac-inputs.yml must pass INPUT_RUN_POST_DEPLOY_HOOKS via env and default
+    run_post_deploy_hooks="${INPUT_RUN_POST_DEPLOY_HOOKS:-true}" in bash."""
+    workflow_text = WORKFLOW.read_text(encoding="utf-8")
+    assert (
+        "INPUT_RUN_POST_DEPLOY_HOOKS: ${{ inputs.run_post_deploy_hooks }}"
+        in workflow_text
+    )
+    assert (
+        'run_post_deploy_hooks="${INPUT_RUN_POST_DEPLOY_HOOKS:-true}"' in workflow_text
+    )
+    assert workflow_text.count('if [[ "$run_post_deploy_hooks" == "true" ]]; then') >= 2
+    assert "inputs.run_post_deploy_hooks != false" not in workflow_text
+
+
+def test_main_run_hook_slot_resolves_local_service_manifest_and_url(
+    monkeypatch,
+) -> None:
+    """#1521: main(['--run-hook-slot', 'staging_gate', '--hook-service', 'platform/todo', ...])
+    resolves platform/30.todo/runtime-hooks.manifest.json and https://todo-staging.zitian.party
+    without raising ValueError: unknown app service 'platform/todo'."""
+    from infra2_sdk.manifests import HookRunResult
+
+    captured: list[tuple[str, str, str, str, str, Path]] = []
+
+    def _fake_exec(
+        manifest,
+        slot: str,
+        *,
+        app_url: str,
+        environment: str,
+        version_ref: str,
+        cwd: Path,
+        **_kw,
+    ):
+        captured.append(
+            (
+                manifest.service,
+                slot,
+                app_url,
+                environment,
+                version_ref,
+                Path(cwd),
+            )
+        )
+        return HookRunResult(
+            service=manifest.service,
+            slot=slot,
+            environment=environment,
+            app_url=app_url,
+            version_ref=version_ref,
+            status="pass",
+            exit_code=0,
+            duration_seconds=0.05,
+        )
+
+    monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
+
+    rc = main(
+        [
+            "--repo-root",
+            str(ROOT),
+            "--run-hook-slot",
+            "staging_gate",
+            "--hook-service",
+            "platform/todo",
+            "--domain",
+            "zitian.party",
+            "--version-ref",
+            "v3.1.35",
+        ]
+    )
+    assert rc == 0
+    assert captured == [
+        (
+            "platform/todo",
+            "staging_gate",
+            "https://todo-staging.zitian.party",
+            "staging",
+            "v3.1.35",
+            ROOT / "platform/30.todo",
+        )
+    ]
