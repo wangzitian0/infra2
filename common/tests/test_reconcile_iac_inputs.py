@@ -2543,14 +2543,17 @@ def test_reconcile_workflow_defaults_run_post_deploy_hooks_and_schedule_exits_af
     )
     assert 'if [[ "$run_post_deploy_hooks" == "true" ]]; then' in workflow_text
     assert "inputs.run_post_deploy_hooks != false" not in workflow_text
-    sched_idx = workflow_text.index('if [[ "$EVENT_NAME" == "schedule" ]]; then')
+    sched_idx = workflow_text.index(
+        'if [[ "$EVENT_NAME" == "schedule" || "${{ inputs.sync_app_releases || false }}" == "true" ]]; then'
+    )
     deploy_idx = workflow_text.index("RECONCILE_PHASE=reconcile-deploy")
     sched_block = workflow_text[sched_idx:deploy_idx]
+    assert "--sync-app-releases --apply-repos-yaml --sync-gitlinks" in sched_block
+    assert "sync_args+=(--create-pr)" in sched_block
     assert (
-        "--sync-app-releases --apply-repos-yaml --sync-gitlinks --create-pr"
+        'if [[ "$EVENT_NAME" == "schedule" ]]; then\n              exit 0'
         in sched_block
     )
-    assert "exit 0" in sched_block
     assert "synced_infra_tag" not in workflow_text
 
 

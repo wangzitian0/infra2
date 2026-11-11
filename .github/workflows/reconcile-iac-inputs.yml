@@ -200,17 +200,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ "$EVENT_NAME" == "schedule" ]]; then
-            echo "RECONCILE_PHASE=sync-app-releases" >> "$GITHUB_ENV"
-            python -m tools.reconcile_iac_inputs \
-              --sync-app-releases --apply-repos-yaml --sync-gitlinks --create-pr \
-              --output-json sync-app-releases.json
-            exit 0
-          fi
-
           # after = the release tag being promoted; before = the previous v*.*.* tag.
           # staging/prod accept tags only, so reconcile always pins the tag (not a sha).
           after="$REF_NAME"
+          before="${INPUT_BEFORE:-}"
           dry_run="false"
           run_post_deploy_hooks="${INPUT_RUN_POST_DEPLOY_HOOKS:-true}"
           # Release decoupling: a tag push auto-applies STAGING only (soak). Prod is an
@@ -223,43 +216,44 @@ jobs:
             promote_prod="$INPUT_PROMOTE_PROD"
           fi
 
-          before="${INPUT_BEFORE:-}"
-          if [[ "$promote_prod" == "true" ]]; then
-            # Production is cumulative from its own desired-state marker, not from
-            # the previous staging candidate.  Otherwise vN+1/vN+2 staging-only
-            # changes are silently skipped when vN+3 is finally promoted.
-            production_marker="$(git tag --list 'production/v*.*.*' --sort=-v:refname | head -n1 || true)"
-            if [[ -n "$production_marker" ]]; then
-              production_before="${production_marker#production/}"
-              if [[ -n "$before" && "$before" != "$production_before" ]]; then
-                echo "::error::production before must match $production_marker; got '$before'."
+          changed_files=""
+          if [[ "$EVENT_NAME" != "schedule" ]]; then
+            if [[ "$promote_prod" == "true" ]]; then
+              # Production is cumulative from its own desired-state marker, not from
+              # the previous staging candidate.  Otherwise vN+1/vN+2 staging-only
+              # changes are silently skipped when vN+3 is finally promoted.
+              production_marker="$(git tag --list 'production/v*.*.*' --sort=-v:refname | head -n1 || true)"
+              if [[ -n "$production_marker" ]]; then
+                production_before="${production_marker#production/}"
+                if [[ -n "$before" && "$before" != "$production_before" ]]; then
+                  echo "::error::production before must match $production_marker; got '$before'."
+                  exit 1
+                fi
+                before="$production_before"
+              elif [[ -z "$before" ]]; then
+                echo "::error::first production marker requires an explicit known-production 'before' release."
                 exit 1
               fi
-              before="$production_before"
             elif [[ -z "$before" ]]; then
-              echo "::error::first production marker requires an explicit known-production 'before' release."
+              # Staging remains incremental from the immediately previous release.
+              before="$(git tag --list 'v*.*.*' --sort=-v:refname --merged "${after}^" 2>/dev/null | head -n1 || true)"
+            fi
+            echo "Promoting release tag '$after' (base '${before:-<none>}')"
+
+            if [[ "$dry_run" != "true" && -z "${IAC_WEBHOOK_SECRET:-}" ]]; then
+              echo "::error::IAC_WEBHOOK_SECRET is required for IaC input reconcile."
               exit 1
             fi
-          elif [[ -z "$before" ]]; then
-            # Staging remains incremental from the immediately previous release.
-            before="$(git tag --list 'v*.*.*' --sort=-v:refname --merged "${after}^" 2>/dev/null | head -n1 || true)"
-          fi
-          echo "Promoting release tag '$after' (base '${before:-<none>}')"
+            if [[ "$dry_run" != "true" && -z "${IAC_RUNNER_URL:-}" ]]; then
+              echo "::error::IAC_RUNNER_URL is required for IaC input reconcile."
+              exit 1
+            fi
 
-          if [[ "$dry_run" != "true" && -z "${IAC_WEBHOOK_SECRET:-}" ]]; then
-            echo "::error::IAC_WEBHOOK_SECRET is required for IaC input reconcile."
-            exit 1
-          fi
-          if [[ "$dry_run" != "true" && -z "${IAC_RUNNER_URL:-}" ]]; then
-            echo "::error::IAC_RUNNER_URL is required for IaC input reconcile."
-            exit 1
-          fi
-
-          changed_files=""
-          if [[ -n "$before" ]]; then
-            changed_files="$(git diff --name-only "$before" "$after")"
-          else
-            changed_files="$(git diff-tree --no-commit-id --name-only -r "$after")"
+            if [[ -n "$before" ]]; then
+              changed_files="$(git diff --name-only "$before" "$after")"
+            else
+              changed_files="$(git diff-tree --no-commit-id --name-only -r "$after")"
+            fi
           fi
 
           # IaC Runner Bootstrap Update (in-train before tools.reconcile_iac_inputs):
@@ -377,7 +371,7 @@ jobs:
             exit 0
           fi
 
-          if [[ "${{ inputs.sync_app_releases || false }}" == "true" ]]; then
+          if [[ "$EVENT_NAME" == "schedule" || "${{ inputs.sync_app_releases || false }}" == "true" ]]; then
             sync_args=(--sync-app-releases --apply-repos-yaml --sync-gitlinks --output-json sync-app-releases.json)
             if [[ "$dry_run" == "true" ]]; then
               sync_args+=(--dry-run)
@@ -386,6 +380,9 @@ jobs:
             fi
             echo "RECONCILE_PHASE=sync-app-releases" >> "$GITHUB_ENV"
             python -m tools.reconcile_iac_inputs "${sync_args[@]}"
+            if [[ "$EVENT_NAME" == "schedule" ]]; then
+              exit 0
+            fi
           fi
 
           echo "RECONCILE_PHASE=reconcile-deploy" >> "$GITHUB_ENV"
