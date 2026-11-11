@@ -598,6 +598,16 @@ def _api_from_env(env: Mapping[str, str]) -> StateApi | None:
     return GitHubIssues(repository, token)
 
 
+def _exec_state_sync(action_fn: Callable[[], None], job: str, err_fmt: str) -> int:
+    try:
+        action_fn()
+        return 0
+    except Exception as exc:  # noqa: BLE001 - the page went out; say loudly.
+        err_msg = err_fmt.format(exc_type=type(exc).__name__, exc=exc)
+        print(f"::error::page dedup [{job}]: {err_msg}")
+        return 1
+
+
 def dedup_page(
     env: Mapping[str, str],
     *,
@@ -694,9 +704,9 @@ def dedup_page(
         deliver_page(env, _page_with_note(page_message, decision))
         code = 0
         if decision.write and identity is not None and lookup.kind != UNREADABLE:
-            try:
-                assert api is not None
-                _record(
+            assert api is not None
+            code = _exec_state_sync(
+                lambda: _record(
                     api,
                     job,
                     label,
@@ -705,13 +715,10 @@ def dedup_page(
                     decision,
                     now=now,
                     run_url=run_url,
-                )
-            except Exception as exc:  # noqa: BLE001 - the page went out; say loudly.
-                code = 1
-                print(
-                    f"::error::page dedup [{job}]: the page was delivered but its state "
-                    f"was not recorded ({type(exc).__name__}: {exc}); the next run pages again"
-                )
+                ),
+                job,
+                "the page was delivered but its state was not recorded ({exc_type}: {exc}); the next run pages again",
+            )
         return Outcome(PAGE, decision.reason, exit_code=code)
 
     # RESOLVED
@@ -720,15 +727,11 @@ def dedup_page(
         env,
         resolved_text(job, label, lookup.state, now=now, run_url=run_url),
     )
-    code = 0
-    try:
-        _close(api, job, lookup, now=now, run_url=run_url)
-    except Exception as exc:  # noqa: BLE001 - the page went out; say loudly.
-        code = 1
-        print(
-            f"::error::page dedup [{job}]: RESOLVED was delivered but clearing or "
-            f"closing the state issue failed ({type(exc).__name__}: {exc})"
-        )
+    code = _exec_state_sync(
+        lambda: _close(api, job, lookup, now=now, run_url=run_url),
+        job,
+        "RESOLVED was delivered but clearing or closing the state issue failed ({exc_type}: {exc})",
+    )
     return Outcome(RESOLVED, decision.reason, exit_code=code)
 
 

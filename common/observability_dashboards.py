@@ -43,10 +43,13 @@ def _discover_observability_files(
     found: list[Path] = []
     seen: set[Path] = set()
 
-    def _add(candidate: Path) -> None:
-        if candidate.is_file() and candidate not in seen:
-            seen.add(candidate)
-            found.append(candidate)
+    def _add_candidates(base: Path) -> None:
+        if not base.is_dir():
+            return
+        for candidate in (base / "observability" / filename, base / filename):
+            if candidate.is_file() and candidate not in seen:
+                seen.add(candidate)
+                found.append(candidate)
 
     layer_order = [
         *(k for k in _LAYERS if k != "platform"),
@@ -55,27 +58,18 @@ def _discover_observability_files(
     for layer in layer_order:
         default_path = _LAYERS[layer]
         try:
-            rel_layer = default_path.relative_to(REPO_ROOT)
-            layer_dir = repo_root / rel_layer
+            layer_dir = repo_root / default_path.relative_to(REPO_ROOT)
         except ValueError:
             layer_dir = default_path
-        if not layer_dir.is_dir():
-            continue
-        _add(layer_dir / "observability" / filename)
-        _add(layer_dir / filename)
-        for child in sorted(layer_dir.iterdir()):
-            if not child.is_dir():
-                continue
-            _add(child / "observability" / filename)
-            _add(child / filename)
+        _add_candidates(layer_dir)
+        if layer_dir.is_dir():
+            for child in sorted(layer_dir.iterdir()):
+                _add_candidates(child)
 
     apps_dir = repo_root / "apps"
     if apps_dir.is_dir():
         for child in sorted(apps_dir.iterdir()):
-            if not child.is_dir():
-                continue
-            _add(child / "observability" / filename)
-            _add(child / filename)
+            _add_candidates(child)
 
     return tuple(found)
 
@@ -570,14 +564,16 @@ def _float_threshold(value: Any, alert_name: str, path: Path) -> float:
         ) from exc
 
 
+def _all_nonempty_strings(items: Iterable[Any]) -> bool:
+    return all(isinstance(item, str) and item.strip() for item in items)
+
+
 def _string_list(
     value: Any, field: str, alert_name: str, path: Path
 ) -> list[str] | None:
     if value is None:
         return None
-    if not isinstance(value, list) or not all(
-        isinstance(item, str) and item.strip() for item in value
-    ):
+    if not isinstance(value, list) or not _all_nonempty_strings(value):
         raise ObservabilityDefinitionError(
             f"Alert '{alert_name}' field {field} must be a list of strings: {path}"
         )
@@ -849,7 +845,7 @@ def load_openpanel_analytics(path: Path = OPENPANEL_ANALYTICS_FILE) -> dict[str,
             raise ObservabilityDefinitionError(
                 f"Each funnel needs a name and >=2 steps: {path}"
             )
-        if not all(isinstance(step, str) and step.strip() for step in steps):
+        if not _all_nonempty_strings(steps):
             raise ObservabilityDefinitionError(
                 f"Each funnel step must be a non-empty string: {path}"
             )
@@ -865,7 +861,7 @@ def load_openpanel_analytics(path: Path = OPENPANEL_ANALYTICS_FILE) -> dict[str,
         raise ObservabilityDefinitionError(
             f"OpenPanel analytics needs an 'events_board' with a non-empty 'events' list: {path}"
         )
-    if not all(isinstance(event, str) and event.strip() for event in board["events"]):
+    if not _all_nonempty_strings(board["events"]):
         raise ObservabilityDefinitionError(
             f"Each events_board event must be a non-empty string: {path}"
         )

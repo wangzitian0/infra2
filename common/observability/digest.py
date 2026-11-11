@@ -58,6 +58,44 @@ MAX_STALE_ISSUES_SHOWN = 8
 HEALTHY_STATUSES = frozenset({"ok", "healthy"})
 
 
+def _github_headers(token: str) -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "infra2-watchdog-weekly-digest/1.0",
+    }
+
+
+def _github_fetch_bytes(
+    url: str,
+    token: str = "",
+    *,
+    headers: Mapping[str, str] | None = None,
+    opener=None,
+    timeout: float = GITHUB_TIMEOUT_S,
+) -> bytes:
+    active_opener = opener or urlopen
+    req_headers = dict(headers or _github_headers(token))
+    request = Request(url, headers=req_headers, method="GET")
+    with active_opener(request, timeout=timeout) as response:  # noqa: S310
+        return response.read()
+
+
+def _github_fetch_json(
+    url: str,
+    token: str = "",
+    *,
+    headers: Mapping[str, str] | None = None,
+    opener=None,
+    timeout: float = GITHUB_TIMEOUT_S,
+) -> Any:
+    return json.loads(
+        _github_fetch_bytes(
+            url, token, headers=headers, opener=opener, timeout=timeout
+        ).decode("utf-8")
+    )
+
+
 def fetch_recent_runs(
     repository: str,
     token: str,
@@ -78,16 +116,13 @@ def fetch_recent_runs(
     page = 1
 
     while True:
-        request = Request(
-            (
-                f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/"
-                f"{workflow_file}/runs?per_page={per_page}&page={page}"
-            ),
-            headers=_github_headers(token),
-            method="GET",
+        url = (
+            f"https://api.github.com/repos/{owner}/{repo}/actions/workflows/"
+            f"{workflow_file}/runs?per_page={per_page}&page={page}"
         )
-        with active_opener(request, timeout=GITHUB_TIMEOUT_S) as response:  # noqa: S310
-            payload = json.loads(response.read().decode("utf-8"))
+        payload = _github_fetch_json(
+            url, token, opener=active_opener, timeout=GITHUB_TIMEOUT_S
+        )
         runs = payload.get("workflow_runs")
         page_runs = runs if isinstance(runs, list) else []
         if not page_runs:
@@ -171,16 +206,13 @@ def fetch_run_jobs(
     jobs: list[dict[str, Any]] = []
     page = 1
     while True:
-        request = Request(
-            (
-                f"https://api.github.com/repos/{owner}/{repo}/actions/runs/"
-                f"{run_id}/jobs?per_page={per_page}&page={page}"
-            ),
-            headers=_github_headers(token),
-            method="GET",
+        url = (
+            f"https://api.github.com/repos/{owner}/{repo}/actions/runs/"
+            f"{run_id}/jobs?per_page={per_page}&page={page}"
         )
-        with active_opener(request, timeout=GITHUB_TIMEOUT_S) as response:  # noqa: S310
-            payload = json.loads(response.read().decode("utf-8"))
+        payload = _github_fetch_json(
+            url, token, opener=active_opener, timeout=GITHUB_TIMEOUT_S
+        )
         page_jobs = payload.get("jobs")
         if not isinstance(page_jobs, list) or not page_jobs:
             break
@@ -227,14 +259,6 @@ def run_includes_job(
     )
 
 
-def _github_headers(token: str) -> dict[str, str]:
-    return {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "infra2-watchdog-weekly-digest/1.0",
-    }
-
-
 def _run_created_at(run: Mapping[str, Any]) -> datetime | None:
     created_at = run.get("created_at")
     if not isinstance(created_at, str):
@@ -270,15 +294,10 @@ def fetch_run_log(
     repository: str, token: str, run_id: str | int, *, opener=None
 ) -> str:
     """Fetch and decode the GitHub Actions log archive for one workflow run."""
-    active_opener = opener or urlopen
     owner, repo = repository.split("/", 1)
-    request = Request(
-        f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/logs",
-        headers=_github_headers(token),
-        method="GET",
-    )
-    with active_opener(request, timeout=LOG_TIMEOUT_S) as response:  # noqa: S310
-        return _decode_log_payload(response.read())
+    url = f"https://api.github.com/repos/{owner}/{repo}/actions/runs/{run_id}/logs"
+    payload = _github_fetch_bytes(url, token, opener=opener, timeout=LOG_TIMEOUT_S)
+    return _decode_log_payload(payload)
 
 
 def fetch_recent_run_logs(
@@ -379,13 +398,10 @@ def summarize_weekly_runs(
         html_url = str(run.get("html_url") or "")
         if conclusion == "success":
             totals["success"] += 1
-        elif conclusion == "timed_out":
+        elif conclusion in ("failure", "timed_out"):
             totals["failure"] += 1
-            totals["timed_out"] += 1
-            if html_url:
-                failed_urls.append(html_url)
-        elif conclusion == "failure":
-            totals["failure"] += 1
+            if conclusion == "timed_out":
+                totals["timed_out"] += 1
             if html_url:
                 failed_urls.append(html_url)
         elif conclusion == "cancelled":
@@ -596,16 +612,13 @@ def fetch_stale_open_issues(
     page = 1
 
     while True:
-        request = Request(
-            (
-                f"https://api.github.com/repos/{owner}/{repo}/issues"
-                f"?state=open&sort=updated&direction=asc&per_page={per_page}&page={page}"
-            ),
-            headers=_github_headers(token),
-            method="GET",
+        url = (
+            f"https://api.github.com/repos/{owner}/{repo}/issues"
+            f"?state=open&sort=updated&direction=asc&per_page={per_page}&page={page}"
         )
-        with active_opener(request, timeout=GITHUB_TIMEOUT_S) as response:  # noqa: S310
-            page_issues = json.loads(response.read().decode("utf-8"))
+        page_issues = _github_fetch_json(
+            url, token, opener=active_opener, timeout=GITHUB_TIMEOUT_S
+        )
         if not isinstance(page_issues, list) or not page_issues:
             break
 
@@ -670,17 +683,16 @@ def fetch_estate_app_health(
                     path="/api/health",
                 )
             )
-            request = Request(
-                url,
-                headers={
-                    "Accept": "application/json",
-                    "User-Agent": "infra2-watchdog-weekly-digest/1.0",
-                },
-                method="GET",
-            )
             try:
-                with active_opener(request, timeout=timeout) as response:  # noqa: S310
-                    payload = json.loads(response.read().decode("utf-8"))
+                payload = _github_fetch_json(
+                    url,
+                    headers={
+                        "Accept": "application/json",
+                        "User-Agent": "infra2-watchdog-weekly-digest/1.0",
+                    },
+                    opener=active_opener,
+                    timeout=timeout,
+                )
                 status = str(payload.get("status") or "unknown")
                 version = str(
                     payload.get("version")
@@ -832,6 +844,15 @@ def _resolve_stability_lines(
     return []
 
 
+def _digest_cadence(summary: Mapping[str, Any]) -> tuple[str, int]:
+    window_days = _as_int(summary.get("window_days")) or DIGEST_WINDOW_DAYS
+    if window_days >= MONTHLY_WINDOW_DAYS:
+        return "monthly", window_days
+    if window_days == 1:
+        return "daily", window_days
+    return "weekly", window_days
+
+
 def build_digest_message(
     summary: Mapping[str, Any],
     repository: str,
@@ -840,13 +861,7 @@ def build_digest_message(
     stability_section: str | Sequence[str] | None = None,
 ) -> str:
     """Build a compact weekly, monthly, or daily digest message."""
-    window_days = _as_int(summary.get("window_days")) or DIGEST_WINDOW_DAYS
-    if window_days >= MONTHLY_WINDOW_DAYS:
-        cadence = "monthly"
-    elif window_days == 1:
-        cadence = "daily"
-    else:
-        cadence = "weekly"
+    cadence, _ = _digest_cadence(summary)
     lines = [
         f"{REPORT_TITLE_PREFIX}[WATCHDOG DIGEST] Infra2 out-of-band {cadence} summary",
         f"Repository: {repository}",
@@ -953,13 +968,7 @@ def build_digest_card(
     stability_section: str | Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Build a Feishu interactive card for the weekly, monthly, or daily digest."""
-    window_days = _as_int(summary.get("window_days")) or DIGEST_WINDOW_DAYS
-    if window_days >= MONTHLY_WINDOW_DAYS:
-        cadence = "monthly"
-    elif window_days == 1:
-        cadence = "daily"
-    else:
-        cadence = "weekly"
+    cadence, window_days = _digest_cadence(summary)
     failure_count = _as_int(summary.get("failure_count"))
     audit = (
         summary.get("log_audit")

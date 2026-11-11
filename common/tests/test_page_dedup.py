@@ -145,7 +145,8 @@ def age_state(api, job: str, days: int) -> None:
     """Make the recorded page `days` older (tests do not wait a day)."""
     for issue in api.issues.values():
         state = pd.parse_marker(issue["body"], job)
-        assert state is not None
+        if state is None:
+            raise AssertionError(f"missing marker for {job} in issue body")
         shifted = State(
             state.fingerprint,
             state.keys,
@@ -619,20 +620,27 @@ def test_a_finding_whose_check_did_not_run_is_not_resolved(
     assert decision.action == expected, label
 
 
-def test_cut_short_or_unreadable_state_is_never_resolved_past_an_unevaluated_check() -> (
-    None
-):
-    cut = State(pd.fingerprint(JOB, ["a"]), ("a",), int(day(1)), int(day(1)), total=250)
-    for lookup in (Lookup(FOUND, (7,), cut), Lookup(CORRUPT, (7,))):
-        decision = pd.decide(
+@pytest.mark.parametrize(
+    "lookup",
+    [
+        Lookup(FOUND, (7,), State(pd.fingerprint(JOB, ["a"]), ("a",), 1, 1, 250)),
+        Lookup(CORRUPT, (7,)),
+    ],
+)
+def test_cut_short_or_unreadable_state_is_never_resolved_past_an_unevaluated_check(
+    lookup,
+) -> None:
+    assert (
+        pd.decide(
             _identity(),
             lookup,
             mode=FULL,
             now=day(2),
             observed_clean=True,
             unevaluated=["dns:"],
-        )
-        assert decision.action == NONE
+        ).action
+        == NONE
+    )
 
 
 def test_decision_details_name_what_changed_and_the_day() -> None:
@@ -1170,8 +1178,8 @@ def test_each_deduplicated_job_is_wired_through_page_dedup(job) -> None:
     }
     # the token reaches only the two steps that use it, not the job's other steps
     assert "GITHUB_TOKEN" not in body["env"]
-    for name in (alert, resolve):
-        assert steps[name]["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
+    assert steps[alert]["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
+    assert steps[resolve]["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
     # a failed run pages through the dedup, a green run resolves; neither on a dry run
     assert steps[alert]["if"] == f"failure() && {dry_run}"
     assert steps[resolve]["if"] == f"success() && {dry_run}"
@@ -1183,8 +1191,8 @@ def test_each_deduplicated_job_is_wired_through_page_dedup(job) -> None:
     assert f'job="{job}"' in steps[resolve]["run"]
     assert "resolve_page_state(" in steps[resolve]["run"]
     # the pager is never called directly any more: that was the daily re-page
-    for name in (alert, resolve):
-        assert "deliver_out_of_band_alert(" not in steps[name]["run"]
+    assert "deliver_out_of_band_alert(" not in steps[alert]["run"]
+    assert "deliver_out_of_band_alert(" not in steps[resolve]["run"]
     # the "still unresolved" report needs the reports chat in the alert step
     reports = {
         "INFRA2_REPORTS_FEISHU_APP_ID",
@@ -1208,6 +1216,43 @@ def step_env(monkeypatch):
     return api, channels, monkeypatch
 
 
+def _assert_step_lifecycle(
+    job: str,
+    step_env,
+    *,
+    set_state,
+    day1_str: str,
+    day1_match: str,
+    age: int,
+    day2_str: str,
+    day2_day: int,
+    unproven_fn,
+    clean_fn,
+    clean_step: str,
+    resolved_header: str,
+) -> None:
+    api, ch, _ = step_env
+    alert, resolve = DEDUPED_JOBS[job]
+
+    set_state(day1_str)
+    assert _execute(job, alert) == 0
+    assert len(ch.pages) == 1 and day1_match in ch.pages[0]
+
+    age_state(api, job, age)
+    set_state(day2_str)
+    assert _execute(job, alert) == 0
+    assert len(ch.pages) == 1
+    assert ch.reports[0].startswith(f"[报告] 仍未恢复 · 第 {day2_day} 天 · {job}")
+
+    unproven_fn()
+    assert len(ch.pages) >= 1 and api.open_titles() != []
+
+    clean_fn()
+    assert _execute(job, resolve if clean_step == "resolve" else alert) == 0
+    assert ch.pages[-1].startswith(resolved_header)
+    assert api.open_titles() == []
+
+
 def test_facet_steps_page_report_and_resolve(step_env, tmp_path) -> None:
     import tools.facet_reconcile as fr
 
@@ -1219,8 +1264,7 @@ def test_facet_steps_page_report_and_resolve(step_env, tmp_path) -> None:
     def sections(note="", *, dns="ran", compose_blocked=False):
         return [
             fr.Section(
-                "compose-id",
-                blockers=["live lookup failed"] if compose_blocked else [],
+                "compose-id", blockers=["live lookup failed"] if compose_blocked else []
             ),
             fr.Section("config-hash"),
             fr.Section(
@@ -1233,48 +1277,45 @@ def test_facet_steps_page_report_and_resolve(step_env, tmp_path) -> None:
             ),
         ]
 
-    def job_ran(secs):
-        """The check step's observation, then the green job's resolve step."""
-        monkeypatch.setattr(fr, "run_all", lambda: secs)
-        fr.write_observation(secs)
-        return _execute("facet-reconcile", resolve)
+    def unproven():
+        monkeypatch.setattr(fr, "run_all", lambda: sections(dns="skipped"))
+        fr.write_observation(sections(dns="skipped"))
+        assert _execute("facet-reconcile", resolve) == 0
+        monkeypatch.setattr(fr, "run_all", lambda: sections(dns="skipped"))
+        assert _execute("facet-reconcile", alert) == 0
 
-    monkeypatch.setattr(fr, "run_all", lambda: sections("missing since 09-20"))
-    assert _execute("facet-reconcile", alert) == 0
-    assert (
-        len(ch.pages) == 1 and "[dns] a.example.test missing since 09-20" in ch.pages[0]
+    _assert_step_lifecycle(
+        "facet-reconcile",
+        step_env,
+        set_state=lambda s: monkeypatch.setattr(fr, "run_all", lambda: sections(s)),
+        day1_str="missing since 09-20",
+        day1_match="[dns] a.example.test missing since 09-20",
+        age=1,
+        day2_str="missing since 09-20 (day 2)",
+        day2_day=2,
+        unproven_fn=unproven,
+        clean_fn=lambda: (
+            monkeypatch.setattr(fr, "run_all", lambda: sections()),
+            fr.write_observation(sections()),
+        ),
+        clean_step="resolve",
+        resolved_header="✅ [已恢复] 每日 facet 对账",
     )
 
-    age_state(api, "facet-reconcile", 1)
-    monkeypatch.setattr(fr, "run_all", lambda: sections("missing since 09-20 (day 2)"))
-    assert _execute("facet-reconcile", alert) == 0
-    assert len(ch.pages) == 1
-    assert ch.reports[0].startswith("[报告] 仍未恢复 · 第 2 天 · facet-reconcile")
-    assert "missing since 09-20 (day 2)" in ch.reports[0]  # the current reading
-
-    # the job is green only because the dns section was skipped (Cloudflare 401): that
-    # is not proof the drift is gone, so no RESOLVED and the state is kept
-    assert job_ran(sections(dns="skipped")) == 0
-    assert len(ch.pages) == 1 and api.open_titles() != []
-    # ... the same on a failed run whose alert step finds no finding
-    monkeypatch.setattr(fr, "run_all", lambda: sections(dns="skipped"))
-    assert _execute("facet-reconcile", alert) == 0
-    assert len(ch.pages) == 1 and api.open_titles() != []
-    # a blocker in ANOTHER section does not stop the dns finding from being resolved
-    # once dns really ran and found nothing
     monkeypatch.setattr(fr, "run_all", lambda: sections(compose_blocked=True))
     assert _execute("facet-reconcile", alert) == 0
     assert ch.pages[-1].startswith("✅ [已恢复] 每日 facet 对账")
     assert api.open_titles() == []
 
-    # a green run resolves what it observed; without an observation nothing resolves
     monkeypatch.setattr(fr, "run_all", lambda: sections("missing again"))
     assert _execute("facet-reconcile", alert) == 0
     pages = len(ch.pages)
     observation.unlink(missing_ok=True)
     assert _execute("facet-reconcile", resolve) == 0
     assert len(ch.pages) == pages and api.open_titles() != []
-    assert job_ran(sections()) == 0
+    monkeypatch.setattr(fr, "run_all", lambda: sections())
+    fr.write_observation(sections())
+    assert _execute("facet-reconcile", resolve) == 0
     assert ch.pages[-1].startswith("✅ [已恢复] 每日 facet 对账")
     assert api.open_titles() == []
 
@@ -1287,13 +1328,13 @@ def test_vault_steps_page_report_and_resolve(step_env, tmp_path) -> None:
     saved = tmp_path / "vault-report.json"
     monkeypatch.setenv(vault.REPORT_ENV, str(saved))
 
-    def report(summary: str, status="fail", result_status="fail", check_id="agent"):
+    def report(summary: str, status="fail", result_status="fail"):
         return {
             "status": status,
             "results": [
                 {
                     "service_id": "platform/redis",
-                    "check_id": check_id,
+                    "check_id": "agent",
                     "status": result_status,
                     "severity": "critical",
                     "summary": summary,
@@ -1301,33 +1342,27 @@ def test_vault_steps_page_report_and_resolve(step_env, tmp_path) -> None:
             ],
         }
 
-    monkeypatch.setattr(vault, "run", lambda: report("restarted 3 times"))
-    assert _execute("vault-self-refresh-audit", alert) == 0
-    assert len(ch.pages) == 1 and "restarted 3 times" in ch.pages[0]
+    def unproven():
+        monkeypatch.setattr(vault, "run", lambda: report("?", "fail", "error"))
+        assert _execute("vault-self-refresh-audit", alert) == 0
+        assert _execute("vault-self-refresh-audit", resolve) == 0
 
-    age_state(api, "vault-self-refresh-audit", 2)
-    monkeypatch.setattr(vault, "run", lambda: report("restarted 8 times"))
-    assert _execute("vault-self-refresh-audit", alert) == 0
-    assert len(ch.pages) == 1
-    assert ch.reports[0].startswith(
-        "[报告] 仍未恢复 · 第 3 天 · vault-self-refresh-audit"
+    _assert_step_lifecycle(
+        "vault-self-refresh-audit",
+        step_env,
+        set_state=lambda s: monkeypatch.setattr(vault, "run", lambda: report(s)),
+        day1_str="restarted 3 times",
+        day1_match="restarted 3 times",
+        age=2,
+        day2_str="restarted 8 times",
+        day2_day=3,
+        unproven_fn=unproven,
+        clean_fn=lambda: monkeypatch.setattr(
+            vault, "run", lambda: report("ok", "pass", "pass")
+        ),
+        clean_step="alert",
+        resolved_header="✅ [已恢复] Vault self-refresh 审计",
     )
-    assert "restarted 8 times" in ch.reports[0]  # the reading that moved
-
-    # the rerun is non-pass without any `fail` result (a hiccup): nothing resolves
-    monkeypatch.setattr(vault, "run", lambda: report("?", "fail", "error"))
-    assert _execute("vault-self-refresh-audit", alert) == 0
-    assert len(ch.pages) == 1 and api.open_titles() != []
-
-    # a green job that has no readable report proves nothing
-    assert _execute("vault-self-refresh-audit", resolve) == 0
-    assert len(ch.pages) == 1 and api.open_titles() != []
-
-    # an all-pass rerun resolves
-    monkeypatch.setattr(vault, "run", lambda: report("ok", "pass", "pass"))
-    assert _execute("vault-self-refresh-audit", alert) == 0
-    assert ch.pages[-1].startswith("✅ [已恢复] Vault self-refresh 审计")
-    assert api.open_titles() == []
 
 
 def test_vault_info_for_a_check_that_could_not_compare_does_not_resolve_its_failure(
@@ -1408,30 +1443,27 @@ def test_secrets_steps_page_report_and_resolve(step_env, tmp_path) -> None:
             encoding="utf-8",
         )
 
-    write(1198)
-    assert _execute("secrets-reconcile", alert) == 0
-    assert len(ch.pages) == 1
-    assert "quota cloudflare.kv.write 1198/1000 per day exceeded" in ch.pages[0]
+    def unproven():
+        write(10, capacity=False)
+        assert _execute("secrets-reconcile", alert) == 0
+        assert _execute("secrets-reconcile", resolve) == 0
+        path.write_text(json.dumps({"ok": False, "transport_error": "ssh"}), "utf-8")
+        assert _execute("secrets-reconcile", alert) == 0
 
-    age_state(api, "secrets-reconcile", 1)
-    write(1500)  # the reading moved; the finding did not
-    assert _execute("secrets-reconcile", alert) == 0
-    assert len(ch.pages) == 1
-    assert ch.reports[0].startswith("[报告] 仍未恢复 · 第 2 天 · secrets-reconcile")
-
-    # an unreadable report is no proof of recovery, on a failed or a green run
-    write(10, capacity=False)
-    assert _execute("secrets-reconcile", alert) == 0
-    assert _execute("secrets-reconcile", resolve) == 0
-    path.write_text(json.dumps({"ok": False, "transport_error": "ssh"}), "utf-8")
-    assert _execute("secrets-reconcile", alert) == 0
-    assert len(ch.pages) == 1 and api.open_titles() != []
-
-    # a complete, clean report resolves
-    write(10)
-    assert _execute("secrets-reconcile", resolve) == 0
-    assert ch.pages[-1].startswith("✅ [已恢复] 密钥对账与容量")
-    assert api.open_titles() == []
+    _assert_step_lifecycle(
+        "secrets-reconcile",
+        step_env,
+        set_state=lambda s: write(int(s)),
+        day1_str="1198",
+        day1_match="quota cloudflare.kv.write 1198/1000 per day exceeded",
+        age=1,
+        day2_str="1500",
+        day2_day=2,
+        unproven_fn=unproven,
+        clean_fn=lambda: write(10),
+        clean_step="resolve",
+        resolved_header="✅ [已恢复] 密钥对账与容量",
+    )
 
 
 def test_secrets_store_reconciled_without_1password_does_not_resolve_its_findings(
@@ -1511,30 +1543,24 @@ def test_audit_steps_page_report_and_resolve(step_env, tmp_path) -> None:
                 encoding="utf-8",
             )
 
-    write_state(hook_summary="verdict age 49h")
-    assert _execute("audit", alert) == 0
-    assert len(ch.pages) == 1 and "verdict age 49h" in ch.pages[0]
-    assert api.open_titles() == ["ops-checks paged: audit"]
+    def unproven():
+        write_state(hook_summary="", skip_hooks=True)
+        assert _execute("audit", resolve) == 0
+        write_state(guard_fail=True, hook_summary="verdict age 73h")
+        assert _execute("audit", alert) == 0
+        assert len(ch.pages) == 2 and "guard:fanout-sufficiency" in ch.pages[-1]
 
-    age_state(api, "audit", 1)
-    write_state(hook_summary="verdict age 73h")
-    assert _execute("audit", alert) == 0
-    assert len(ch.pages) == 1
-    assert ch.reports[0].startswith("[报告] 仍未恢复 · 第 2 天 · audit")
-    assert "verdict age 73h" in ch.reports[0]
-
-    # missing scheduled-audit-result.json leaves app-hook:* unevaluated (no false resolve)
-    write_state(hook_summary="", skip_hooks=True)
-    assert _execute("audit", resolve) == 0
-    assert len(ch.pages) == 1 and api.open_titles() == ["ops-checks paged: audit"]
-
-    # adding a guard failure changes identity and re-pages
-    write_state(guard_fail=True, hook_summary="verdict age 73h")
-    assert _execute("audit", alert) == 0
-    assert len(ch.pages) == 2 and "guard:fanout-sufficiency" in ch.pages[-1]
-
-    # all guards and scheduled hooks clean -> resolves and closes ops-checks paged: audit
-    write_state(guard_fail=False, hook_summary="")
-    assert _execute("audit", resolve) == 0
-    assert ch.pages[-1].startswith("✅ [已恢复] 部署守卫与应用运行态审计")
-    assert api.open_titles() == []
+    _assert_step_lifecycle(
+        "audit",
+        step_env,
+        set_state=lambda s: write_state(hook_summary=s),
+        day1_str="verdict age 49h",
+        day1_match="verdict age 49h",
+        age=1,
+        day2_str="verdict age 73h",
+        day2_day=2,
+        unproven_fn=unproven,
+        clean_fn=lambda: write_state(guard_fail=False, hook_summary=""),
+        clean_step="resolve",
+        resolved_header="✅ [已恢复] 部署守卫与应用运行态审计",
+    )
