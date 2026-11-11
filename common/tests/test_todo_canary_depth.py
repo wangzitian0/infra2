@@ -1960,9 +1960,9 @@ def test_postgres_probe_crud_executes_write_read_delete_roundtrip(app) -> None:
     assert PG_PASSWORD not in bad_res["detail"]
 
 
-def test_todo_runtime_hooks_manifest_declares_all_four_slots() -> None:
-    """#1503, #1554: platform/30.todo/runtime-hooks.manifest.json conforms to
-    RuntimeHooksManifest, declares all 4 HOOK_SLOTS without duplicating inline Python
+def test_todo_runtime_hooks_manifest_declares_all_five_slots() -> None:
+    """#1503, #1554, #1608: platform/30.todo/runtime-hooks.manifest.json conforms to
+    RuntimeHooksManifest schema v2, declares all 5 HOOK_SLOTS without duplicating inline Python
     one-liners across slots, and delegates to probe_health.py."""
     from common.deploy.app_contract import (
         HOOK_SLOTS,
@@ -1972,12 +1972,13 @@ def test_todo_runtime_hooks_manifest_declares_all_four_slots() -> None:
 
     manifest_path = SERVICE_DIR / "runtime-hooks.manifest.json"
     manifest = load_hooks_manifest(manifest_path)
-    assert manifest.schema_version == 1
+    assert manifest.schema_version == 2
     assert manifest.service == "platform/todo"
     assert set(manifest.slots) == set(HOOK_SLOTS)
     assert manifest.slots["smoke"].timeout_seconds == 60
     assert manifest.slots["preview_gate"].timeout_seconds == 120
     assert manifest.slots["staging_gate"].timeout_seconds == 180
+    assert manifest.slots["prod_gate"].timeout_seconds == 120
     assert manifest.slots["scheduled_audit"].timeout_seconds == 300
     for slot_name, spec in manifest.slots.items():
         assert "python3 probe_health.py" in spec.run, slot_name

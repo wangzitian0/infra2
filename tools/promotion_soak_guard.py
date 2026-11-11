@@ -24,11 +24,14 @@ Standard library only: the workflow job installs no dependencies for this step.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
+import re
 import subprocess
 import sys
 import time
+import zipfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -36,10 +39,22 @@ from typing import Any, Callable, Protocol
 from urllib.parse import urlencode
 
 SOAK_WORKFLOW = "reconcile-iac-inputs.yml"
+RECONCILE_ARTIFACT_NAME = "iac-input-reconcile-result"
+RECONCILE_RESULT_JSON = "reconcile-result.json"
 DEFAULT_ATTEMPTS = 3
 DEFAULT_DELAY_SECONDS = 15.0
 PER_PAGE = 30  # a tag push has one soak run; a handful at most after a re-tag
 GH_TIMEOUT_SECONDS = 60
+_SEMVER_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+
+
+def _tag_key(tag: str) -> tuple[int, int, int] | None:
+    """Parse ``vX.Y.Z`` into an integer tuple for cumulative tag window comparisons (#1563)."""
+    m = _SEMVER_TAG_RE.fullmatch(str(tag or "").strip())
+    if m is None:
+        return None
+    return int(m.group(1)), int(m.group(2)), int(m.group(3))
+
 
 GREEN = "green"
 EMPTY = "empty"
@@ -229,6 +244,7 @@ def look_up_soak(
     log: Callable[[str], None] = print,
     hook_results: Sequence[Mapping[str, Any]] | None = None,
     required_staging_gates: Mapping[str, str] | None = None,
+    since_tag: str = "",
 ) -> Verdict:
     """Resolve the tag's commit, then look for its soak, retrying only an EMPTY answer.
 
@@ -250,16 +266,37 @@ def look_up_soak(
                 runs.extend(source(key))
             except LookupFailed as exc:
                 errors.append(str(exc))
-        verdict = replace(
+        base_verdict = replace(
             judge_soak(
                 runs,
                 tag=tag,
                 sha=sha,
-                hook_results=hook_results,
-                required_staging_gates=required_staging_gates,
             ),
             sha=sha,
         )
+        if base_verdict.state == GREEN and required_staging_gates:
+            effective_hooks = hook_results
+            if effective_hooks is None:
+                fetcher = getattr(client, "hook_results_in_window", None)
+                if callable(fetcher):
+                    try:
+                        effective_hooks = fetcher(tag, since_tag=since_tag)
+                    except LookupFailed as exc:
+                        return Verdict(ERROR, detail=str(exc), sha=sha)
+                else:
+                    effective_hooks = []
+            verdict = replace(
+                judge_soak(
+                    runs,
+                    tag=tag,
+                    sha=sha,
+                    hook_results=effective_hooks,
+                    required_staging_gates=required_staging_gates,
+                ),
+                sha=sha,
+            )
+        else:
+            verdict = base_verdict
         if verdict.state != EMPTY:
             return verdict
         if errors:
@@ -358,6 +395,112 @@ class GhClient:
     def runs_by_branch(self, tag: str) -> list[dict]:
         return self._runs(branch=tag)
 
+    def _exec_bytes(self, argv: list[str]) -> bytes:
+        try:
+            proc = self._run(
+                argv,
+                capture_output=True,
+                text=False,
+                timeout=GH_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise LookupFailed(f"{' '.join(argv[:3])}: {exc}") from exc
+        if proc.returncode != 0:
+            raw_err = proc.stderr or proc.stdout or b""
+            detail = (
+                raw_err.decode("utf-8", errors="replace")
+                if isinstance(raw_err, (bytes, bytearray))
+                else str(raw_err)
+            ).strip()[:300]
+            raise LookupFailed(
+                f"{' '.join(argv[:3])} exited {proc.returncode}: {detail}"
+            )
+        out = proc.stdout
+        if isinstance(out, bytes):
+            return out
+        return str(out or "").encode("utf-8")
+
+    def recent_push_runs(self) -> list[dict]:
+        return self._runs()
+
+    def hook_results_for_run(self, run_id: int) -> list[dict[str, Any]]:
+        """Download ``iac-input-reconcile-result`` artifact for ``run_id`` and return ``hook_results`` (#1563)."""
+        meta_path = f"repos/{self.repo}/actions/runs/{run_id}/artifacts"
+        raw_meta = self._exec(["gh", "api", meta_path])
+        try:
+            artifacts = json.loads(raw_meta)["artifacts"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise LookupFailed(
+                f"gh api {meta_path}: unreadable response ({exc})"
+            ) from exc
+        if not isinstance(artifacts, list):
+            raise LookupFailed(f"gh api {meta_path}: artifacts is not a list")
+        chosen: dict | None = None
+        for item in artifacts:
+            if not isinstance(item, dict):
+                continue
+            if item.get("name") == RECONCILE_ARTIFACT_NAME and not item.get("expired"):
+                chosen = item
+                break
+        if chosen is None or not chosen.get("id"):
+            return []
+        zip_path = f"repos/{self.repo}/actions/artifacts/{chosen['id']}/zip"
+        raw_zip = self._exec_bytes(["gh", "api", zip_path])
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw_zip)) as zf:
+                payload_text = zf.read(RECONCILE_RESULT_JSON).decode("utf-8")
+            return _parse_hook_results_json(payload_text)
+        except (
+            OSError,
+            zipfile.BadZipFile,
+            KeyError,
+            UnicodeDecodeError,
+            ValueError,
+        ) as exc:
+            raise LookupFailed(
+                f"gh api {zip_path}: unreadable {RECONCILE_RESULT_JSON} ({exc})"
+            ) from exc
+
+    def hook_results_in_window(
+        self, tag: str, *, since_tag: str = ""
+    ) -> list[dict[str, Any]]:
+        """Collect ``hook_results`` from concluded green push runs in ``(since_tag, tag]`` (#1563)."""
+        target_key = _tag_key(tag)
+        if target_key is None:
+            raise LookupFailed(
+                f"invalid release tag {tag!r} for cumulative soak window"
+            )
+        lower_key: tuple[int, int, int] | None = None
+        if since_tag.strip():
+            lower_key = _tag_key(since_tag)
+            if lower_key is None:
+                raise LookupFailed(
+                    f"invalid --since-tag {since_tag!r} for cumulative soak window"
+                )
+        seen_ids: set[int] = set()
+        selected_ids: list[int] = []
+        for run_obj in self.recent_push_runs():
+            if run_obj.get("event") != "push" or run_obj.get("conclusion") != "success":
+                continue
+            branch_key = _tag_key(str(run_obj.get("head_branch") or ""))
+            if branch_key is None:
+                continue
+            if lower_key is not None:
+                in_window = lower_key < branch_key <= target_key
+            else:
+                in_window = branch_key == target_key
+            if not in_window:
+                continue
+            raw_id = run_obj.get("id")
+            if isinstance(raw_id, int) and raw_id not in seen_ids:
+                seen_ids.add(raw_id)
+                selected_ids.append(raw_id)
+        combined: list[dict[str, Any]] = []
+        for rid in selected_ids:
+            combined.extend(self.hook_results_for_run(rid))
+        return combined
+
 
 def _parse_hook_results_json(raw: str) -> list[dict[str, Any]]:
     text = raw.strip()
@@ -391,15 +534,20 @@ def main(
     parser.add_argument("--attempts", type=int, default=DEFAULT_ATTEMPTS)
     parser.add_argument("--delay", type=float, default=DEFAULT_DELAY_SECONDS)
     parser.add_argument(
+        "--since-tag",
+        default="",
+        help="optional prior production tag bound for cumulative staging_gate lookup (#1563)",
+    )
+    parser.add_argument(
         "--require-staging-gate",
         action="append",
         default=[],
         metavar="SERVICE=VERSION_REF",
-        help="require a green staging_gate hook verdict for SERVICE at VERSION_REF (#1493)",
+        help="require a green staging_gate hook verdict for SERVICE at VERSION_REF (#1493, #1563)",
     )
     parser.add_argument(
         "--hook-results-json",
-        default="",
+        default=None,
         help="JSON string or @path containing hook_results list from staging reconcile (#1493)",
     )
     args = parser.parse_args(argv)
@@ -422,11 +570,13 @@ def main(
             return 1
         required_staging_gates[svc.strip()] = ver.strip()
 
-    try:
-        hook_results = _parse_hook_results_json(args.hook_results_json)
-    except (OSError, ValueError) as exc:
-        print(f"::error::promotion guard: unreadable --hook-results-json: {exc}.")
-        return 1
+    hook_results: list[dict[str, Any]] | None = None
+    if args.hook_results_json is not None:
+        try:
+            hook_results = _parse_hook_results_json(args.hook_results_json)
+        except (OSError, ValueError) as exc:
+            print(f"::error::promotion guard: unreadable --hook-results-json: {exc}.")
+            return 1
 
     if client is None:
         if not args.repo:
@@ -442,6 +592,7 @@ def main(
         sleep=sleep,
         hook_results=hook_results,
         required_staging_gates=required_staging_gates or None,
+        since_tag=args.since_tag,
     )
     if verdict.state == GREEN:
         print(

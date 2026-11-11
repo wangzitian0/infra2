@@ -1148,14 +1148,19 @@ def test_deploy_platform_triggers_on_iac_runner_bootstrap_changes() -> None:
     assert "push" not in deploy_triggers
     assert "workflow_dispatch" in deploy_triggers
 
-    reconcile_text = RECONCILE_WORKFLOW.read_text(encoding="utf-8")
-    assert "bootstrap/06.iac_runner/*" in reconcile_text
-    assert "scripts/deploy_iac_runner_bootstrap.sh" in reconcile_text
-    assert "Deploy IaC Runner bootstrap changes" in reconcile_text
-    assert "Check IaC Runner health" in reconcile_text
-    assert reconcile_text.index(
+    reconcile_spec = yaml.safe_load(RECONCILE_WORKFLOW.read_text(encoding="utf-8"))
+    reconcile_step = next(
+        s
+        for s in reconcile_spec["jobs"]["reconcile"]["steps"]
+        if s.get("name") == "Reconcile changed IaC inputs"
+    )["run"]
+    assert "bootstrap/06.iac_runner/*" in reconcile_step
+    assert "scripts/deploy_iac_runner_bootstrap.sh" in reconcile_step
+    assert "Deploy IaC Runner bootstrap changes" in reconcile_step
+    assert "Check IaC Runner health" in reconcile_step
+    assert reconcile_step.index(
         "Deploy IaC Runner bootstrap changes"
-    ) < reconcile_text.index("python -m tools.reconcile_iac_inputs")
+    ) < reconcile_step.index("python -m tools.reconcile_iac_inputs")
 
 
 def test_deploy_platform_no_longer_triggers_platform_service_deploys() -> None:

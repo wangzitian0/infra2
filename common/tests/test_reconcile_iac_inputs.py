@@ -1143,7 +1143,7 @@ def test_post_deploy_app_hooks_execute_smoke_and_record_results(
 
     manifest = RuntimeHooksManifest.from_dict(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "service": "finance_report/app",
             "slots": {
                 slot: {
@@ -1196,17 +1196,26 @@ def test_post_deploy_app_hooks_execute_smoke_and_record_results(
     )
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
-    assert fetched == [("finance_report/app", SHA), ("truealpha/app", SHA)]
-    assert executed == [
-        ("staging_gate", "https://report-staging.zitian.party", "staging", "v0.2.47"),
-        (
-            "staging_gate",
-            "https://truealpha-staging.truealpha.club",
-            "staging",
-            "v0.2.80",
-        ),
-    ]
-    assert len(out["hook_results"]) == 2
+    assert sorted(fetched) == [("finance_report/app", SHA), ("truealpha/app", SHA)]
+    assert sorted(executed) == sorted(
+        [
+            ("smoke", "https://report-staging.zitian.party", "staging", "v0.2.47"),
+            (
+                "staging_gate",
+                "https://report-staging.zitian.party",
+                "staging",
+                "v0.2.47",
+            ),
+            ("smoke", "https://truealpha-staging.truealpha.club", "staging", "v0.2.80"),
+            (
+                "staging_gate",
+                "https://truealpha-staging.truealpha.club",
+                "staging",
+                "v0.2.80",
+            ),
+        ]
+    )
+    assert len(out["hook_results"]) == 4
 
 
 def test_post_deploy_app_hooks_failure_blocks_prod_marker_and_returns_nonzero(
@@ -1259,7 +1268,7 @@ def test_post_deploy_app_hooks_failure_blocks_prod_marker_and_returns_nonzero(
     )
     manifest = RuntimeHooksManifest.from_dict(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "service": "finance_report/app",
             "slots": {
                 slot: {
@@ -1629,17 +1638,17 @@ def test_sync_app_releases_create_pr_pushes_branch_restores_head_and_opens_or_up
 
 _REAL_FR_HOOKS_MANIFEST_JSON = """\
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "service": "finance_report/app",
   "slots": {
     "smoke": {
       "run": "bash tools/smoke_test.sh \\"$INFRA2_HOOK_APP_URL\\"",
-      "timeout_seconds": 180
+      "timeout_seconds": 120
     },
     "preview_gate": {
       "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
-      "run": "bash tools/smoke_test.sh \\"$INFRA2_HOOK_APP_URL\\" && eval \\"$(python tools/test_selection.py --stage preview_minimum_e2e --shell)\\" && pytest \\"${PREVIEW_MINIMUM_E2E_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$PREVIEW_MINIMUM_E2E_MARKER\\" && eval \\"$(python tools/test_selection.py --touched-files ${INFRA2_TOUCHED_FILES:-} --shell)\\" && ( [ ${#TOUCHED_E2E_TESTS[@]} -eq 0 ] || pytest \\"${TOUCHED_E2E_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$TOUCHED_E2E_MARKER\\" )",
-      "timeout_seconds": 600,
+      "run": "bash tools/smoke_test.sh \\"$INFRA2_HOOK_APP_URL\\" && python tools/test_selection.py --stage preview_minimum_e2e --run && python tools/test_selection.py --touched-files ${INFRA2_TOUCHED_FILES:-} --run",
+      "timeout_seconds": 360,
       "optional_env": [
         "AI_PROVIDER",
         "AI_BASE_URL",
@@ -1650,11 +1659,8 @@ _REAL_FR_HOOKS_MANIFEST_JSON = """\
     },
     "staging_gate": {
       "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
-      "run": "bash tools/smoke_test.sh \\"$INFRA2_HOOK_APP_URL\\" && eval \\"$(python tools/test_selection.py --stage staging_core_e2e --shell)\\" && pytest \\"${STAGING_CORE_E2E_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$STAGING_CORE_E2E_MARKER\\" && pytest tests/e2e/test_ai_provider_connectivity.py -v --tb=short -o addopts=\\"\\" && eval \\"$(python tools/test_selection.py --stage staging_ai_ocr --corpus canary --shell)\\" && pytest \\"${STAGING_AI_OCR_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$STAGING_AI_OCR_MARKER\\"",
-      "timeout_seconds": 1800,
-      "required_env": [
-        "AI_API_KEY"
-      ],
+      "run": "bash tools/smoke_test.sh \\"$INFRA2_HOOK_APP_URL\\" && python tools/test_selection.py --stage staging_core_e2e --run && STRICT_E2E_GATES=1 python -m pytest tests/e2e/test_ai_provider_connectivity.py -v --tb=short -o addopts=\\"\\" && python tools/test_selection.py --stage staging_ai_ocr --corpus canary --run",
+      "timeout_seconds": 540,
       "optional_env": [
         "AI_PROVIDER",
         "AI_BASE_URL",
@@ -1665,19 +1671,22 @@ _REAL_FR_HOOKS_MANIFEST_JSON = """\
         "TEST_USER_PASSWORD"
       ]
     },
+    "prod_gate": {
+      "run": "bash tools/smoke_test.sh \\"$INFRA2_HOOK_APP_URL\\"",
+      "timeout_seconds": 180
+    },
     "scheduled_audit": {
       "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
-      "run": "eval \\"$(python tools/test_selection.py --stage staging_ai_ocr --corpus audit_replay --shell)\\" && pytest \\"${STAGING_AI_OCR_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$STAGING_AI_OCR_MARKER\\" && eval \\"$(python tools/test_selection.py --stage staging_ai_ocr --corpus core_journey --shell)\\" && pytest \\"${STAGING_AI_OCR_TESTS[@]}\\" -v --tb=short -o addopts=\\"\\" -m \\"$STAGING_AI_OCR_MARKER\\"",
-      "timeout_seconds": 2400,
-      "required_env": [
-        "AI_API_KEY"
-      ],
+      "run": "python tools/test_selection.py --stage staging_ai_ocr --corpus audit_replay --run && python tools/test_selection.py --stage staging_ai_ocr --corpus core_journey --run && python -m common.testing.benchmarks.pdf_corpus_oracle --app-url \\"$INFRA2_HOOK_APP_URL\\" --max-workers 1 && python -m common.testing.benchmarks.run_financial_scenario_benchmark --app-url \\"$INFRA2_HOOK_APP_URL\\" --case 1,2,3,4,5,6",
+      "timeout_seconds": 3600,
       "optional_env": [
         "AI_PROVIDER",
         "AI_BASE_URL",
         "LARGE_MODEL",
         "SMALL_MODEL",
-        "MULTIMODAL_MODEL"
+        "MULTIMODAL_MODEL",
+        "TEST_USER_EMAIL",
+        "TEST_USER_PASSWORD"
       ]
     }
   }
@@ -1686,12 +1695,12 @@ _REAL_FR_HOOKS_MANIFEST_JSON = """\
 
 _REAL_TA_HOOKS_MANIFEST_JSON = """\
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "service": "truealpha/app",
   "slots": {
     "smoke": {
-      "run": "uv run python tools/health_check.py \\"$APP_URL/api/health\\" \\"$APP_VERSION_REF\\" 36 && uv run python tools/surface_contract.py \\"$APP_URL\\"",
-      "timeout_seconds": 420,
+      "run": "uv run python tools/health_check.py \\"$APP_URL/api/health\\" \\"$APP_VERSION_REF\\" 36",
+      "timeout_seconds": 120,
       "required_env": [
         "APP_URL",
         "APP_VERSION_REF"
@@ -1700,7 +1709,7 @@ _REAL_TA_HOOKS_MANIFEST_JSON = """\
     "preview_gate": {
       "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps chromium",
       "run": "uv run python tools/health_check.py \\"$APP_URL/api/health\\" \\"$APP_VERSION_REF\\" 36 && bash tools/warm_surface.sh \\"$APP_URL\\" / /research/rankings && (cd apps/app-web && TA_BASE_URL=\\"$APP_URL\\" node e2e/walk-tree.mjs) && uv run python tools/surface_contract.py --authenticated \\"$APP_URL\\"",
-      "timeout_seconds": 900,
+      "timeout_seconds": 360,
       "required_env": [
         "APP_URL",
         "APP_VERSION_REF",
@@ -1713,7 +1722,7 @@ _REAL_TA_HOOKS_MANIFEST_JSON = """\
     "staging_gate": {
       "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps chromium",
       "run": "uv run python tools/health_check.py \\"$APP_URL/api/health\\" \\"$APP_VERSION_REF\\" 36 && bash tools/warm_surface.sh \\"$APP_URL\\" / /research/rankings && (cd apps/app-web && TA_BASE_URL=\\"$APP_URL\\" node e2e/walk-tree.mjs) && uv run python tools/surface_contract.py --authenticated \\"$APP_URL\\"",
-      "timeout_seconds": 900,
+      "timeout_seconds": 420,
       "required_env": [
         "APP_URL",
         "APP_VERSION_REF",
@@ -1721,6 +1730,13 @@ _REAL_TA_HOOKS_MANIFEST_JSON = """\
         "TA_MEMBER_EMAIL",
         "TA_PASSWORD",
         "TA_MCP_TOKEN"
+      ]
+    },
+    "prod_gate": {
+      "run": "uv run python tools/surface_contract.py \\"$APP_URL\\"",
+      "timeout_seconds": 240,
+      "required_env": [
+        "APP_URL"
       ]
     },
     "scheduled_audit": {
@@ -2142,7 +2158,7 @@ def test_run_post_deploy_app_hooks_executes_smoke_and_staging_gate_in_order(
     )
     manifest = RuntimeHooksManifest.from_dict(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "service": "finance_report/app",
             "slots": {
                 slot_name: {
@@ -2239,7 +2255,7 @@ def test_run_scheduled_app_audits_executes_scheduled_audit_and_records_trail(
     )
     manifest = RuntimeHooksManifest.from_dict(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "service": "finance_report/app",
             "slots": {
                 slot_name: {
@@ -2358,6 +2374,7 @@ def test_every_declared_hook_slot_is_wired_into_workflows() -> None:
         "smoke",
         "preview_gate",
         "staging_gate",
+        "prod_gate",
         "scheduled_audit",
     }
     assert _unwired_hook_slots(tuple(HOOK_SLOTS), workflow_texts) == []
@@ -2958,7 +2975,9 @@ def test_app_hook_manifest_required_env_has_an_infra2_source(raw_manifest: str) 
 def test_required_env_check_names_an_unknown_required_env() -> None:
     """#1529: the check returns the slot and name of a ``required_env`` entry without source."""
     manifest = json.loads(_REAL_FR_HOOKS_MANIFEST_JSON)
-    manifest["slots"]["staging_gate"]["required_env"].append("NEW_REQUIRED_NAME")
+    manifest["slots"]["staging_gate"].setdefault("required_env", []).append(
+        "NEW_REQUIRED_NAME"
+    )
     assert _required_env_without_source(manifest) == {
         "staging_gate": ("NEW_REQUIRED_NAME",)
     }
@@ -2989,7 +3008,7 @@ def test_hook_runner_context_env_names_reach_a_slot_without_ambient_values(
     def _manifest(required: list[str]) -> reconcile.RuntimeHooksManifest:
         return reconcile.RuntimeHooksManifest.from_dict(
             {
-                "schema_version": 1,
+                "schema_version": 2,
                 "service": "finance_report/app",
                 "slots": {
                     slot: {
@@ -3092,34 +3111,35 @@ def test_run_post_deploy_app_hooks_records_failed_entry_on_missing_required_hook
     assert detail == "failed staging_gate for platform/todo@v3.2.0"
 
 
-def test_default_stage_hook_slots_bijection_and_workflow_ssot() -> None:
-    """#1554: DEFAULT_STAGE_HOOK_SLOTS maps each runtime stage to exactly one HOOK_SLOT
-    (1-to-1 bijection), reconcile-iac-inputs.yml never runs smoke,staging_gate redundantly,
-    and run_hook_slot passes --version-ref only when INPUT_AFTER is explicitly set."""
-    from infra2_sdk.manifests import HOOK_SLOTS
+def test_stage_hook_plans_ssot_and_workflow_wiring() -> None:
+    """#1608: DEFAULT_STAGE_HOOK_SLOTS / default_hook_slot_for_stage are deleted in favor of
+    infra2_sdk.manifests.STAGE_HOOK_PLANS / stage_hook_plan (Pre -> Deploy smoke -> Post gate),
+    and reconcile-iac-inputs.yml delegates slot selection to stage_hook_plan."""
+    from infra2_sdk.manifests import HOOK_SLOTS, STAGE_HOOK_PLANS, stage_hook_plan
 
-    assert dict(reconcile.DEFAULT_STAGE_HOOK_SLOTS) == {
-        "preview": "preview_gate",
-        "staging": "staging_gate",
-        "prod": "smoke",
-        "schedule": "scheduled_audit",
+    assert not hasattr(reconcile, "DEFAULT_STAGE_HOOK_SLOTS")
+    assert not hasattr(reconcile, "default_hook_slot_for_stage")
+    assert reconcile.STAGE_HOOK_PLANS is STAGE_HOOK_PLANS
+    assert reconcile.stage_hook_plan is stage_hook_plan
+
+    covered_slots = {
+        slot
+        for plan in STAGE_HOOK_PLANS.values()
+        for slot in (plan.deploy_slot, plan.post_slot)
+        if slot
     }
-    assert set(reconcile.DEFAULT_STAGE_HOOK_SLOTS.values()) == set(HOOK_SLOTS)
-    assert len(reconcile.DEFAULT_STAGE_HOOK_SLOTS) == len(HOOK_SLOTS)
-    assert reconcile.default_hook_slot_for_stage("preview") == "preview_gate"
-    assert reconcile.default_hook_slot_for_stage("staging") == "staging_gate"
-    assert reconcile.default_hook_slot_for_stage("prod") == "smoke"
-    assert reconcile.default_hook_slot_for_stage("production") == "smoke"
-    assert reconcile.default_hook_slot_for_stage("schedule") == "scheduled_audit"
-    with pytest.raises(ValueError, match="unknown hook stage"):
-        reconcile.default_hook_slot_for_stage("unknown")
+    assert covered_slots == set(HOOK_SLOTS)
+    assert reconcile._stage_slots_csv("staging") == "smoke,staging_gate"
+    assert reconcile._stage_slots_csv("prod") == "smoke,prod_gate"
+    assert reconcile._stage_slots_csv("production") == "smoke,prod_gate"
+    assert reconcile._stage_slots_csv("preview") == "smoke,preview_gate"
+    assert reconcile._stage_slots_csv("schedule") == "scheduled_audit"
+    with pytest.raises(ValueError, match="unknown"):
+        reconcile._stage_slots_csv("unknown")
 
     workflow_text = WORKFLOW.read_text(encoding="utf-8")
-    assert "smoke,staging_gate" not in workflow_text
-    assert (
-        "--run-post-deploy-hooks --post-deploy-hook-slot staging_gate" in workflow_text
-    )
-    assert "--run-post-deploy-hooks --post-deploy-hook-slot smoke" in workflow_text
+    assert "--post-deploy-hook-slot" not in workflow_text
+    assert "args+=(--run-post-deploy-hooks)" in workflow_text
     assert '[[ -n "$INPUT_AFTER" ]] && hook_args+=(--version-ref "$INPUT_AFTER")' in (
         workflow_text
     )
@@ -3160,7 +3180,7 @@ def test_sync_app_releases_cut_missing_app_tag_runs_ephemeral_preview_gate_and_a
 
     manifest = RuntimeHooksManifest.from_dict(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "service": "finance_report/app",
             "slots": {
                 slot_name: {
@@ -3576,7 +3596,7 @@ def test_resolve_workflow_failure_alert_and_scheduled_audit_json_contract(
     )
     manifest = RuntimeHooksManifest.from_dict(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "service": "truealpha/app",
             "slots": {s: {"run": "exit 1", "timeout_seconds": 30} for s in HOOK_SLOTS},
         }
@@ -3794,6 +3814,7 @@ def test_hook_checkout_survives_a_refused_tag_fetch_and_says_so(
         ("scheduled_audit", "v1.2.3"),
         ("smoke", ""),
         ("staging_gate", ""),
+        ("prod_gate", ""),
         ("preview_gate", ""),
     ],
 )
@@ -3804,11 +3825,12 @@ def test_release_ref_is_needed_only_by_the_slot_that_declares_checkout_lineage(
 
     manifest = RuntimeHooksManifest.from_dict(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "service": "truealpha/app",
             "slots": {
                 s: {
                     "run": "echo ok",
+                    "timeout_seconds": 30,
                     "checkout_lineage": s == "scheduled_audit",
                 }
                 for s in HOOK_SLOTS
@@ -3844,7 +3866,7 @@ def _record_hook_checkouts(monkeypatch, tmp_path) -> list[tuple[str, str]]:
     )
     manifest = RuntimeHooksManifest.from_dict(
         {
-            "schema_version": 1,
+            "schema_version": 2,
             "service": "finance_report/app",
             "slots": {
                 slot_name: {
@@ -4007,3 +4029,258 @@ def test_scheduled_audit_function_asks_for_no_tag_for_another_slot(
     reconcile.run_scheduled_app_audits(tmp_path, slot="smoke", runner=subprocess.run)
     assert seen
     assert {ref for _svc, ref in seen} == {""}
+
+
+def test_pre_apply_guard_runs_train_version_match_before_any_unit_deploys(
+    monkeypatch, tmp_path
+) -> None:
+    """#1544: every pre-apply App guard that deploy_v2 runs (including
+    assert_app_version_ref_matches_train) MUST run in reconcile.main() BEFORE
+    run_deploy_commands touches the first unit. When unit N (truealpha/app) violates
+    harness/repos.yaml, zero earlier platform or App units may be deployed."""
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.61\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.89\n",
+        encoding="utf-8",
+    )
+
+    deploy_calls: list[list[str]] = []
+    monkeypatch.setattr(reconcile, "assert_after_on_main", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        reconcile, "assert_production_marker_advances", lambda *_a, **_kw: "v3.1.49"
+    )
+    monkeypatch.setattr(
+        reconcile, "assert_app_version_ref_on_main", lambda *_a, **_kw: None
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "run_deploy_commands",
+        lambda cmds, **_kw: deploy_calls.extend([list(c.argv) for c in cmds]) or [],
+    )
+
+    with pytest.raises(
+        SystemExit,
+        match="version_ref 'v0.2.88' for truealpha/app \\(prod\\) does not match harness/repos.yaml release_tag 'v0.2.89'",
+    ):
+        main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--before",
+                "v3.1.49",
+                "--after",
+                "v3.1.50",
+                "--promote-prod",
+                "--changed-file",
+                "platform/12.alerting/compose.yaml",
+                "--changed-file",
+                "harness/repos.yaml",
+                "--app-release-tag",
+                "truealpha/app=v0.2.88",
+            ]
+        )
+    assert deploy_calls == []
+
+
+def test_run_post_deploy_app_hooks_executes_services_concurrently_and_stops_slot_chain_per_service(
+    monkeypatch, tmp_path
+) -> None:
+    """#1608, #1602 (S3.1): run_post_deploy_app_hooks executes deployed services concurrently
+    so total wall-clock is bounded by max(services) rather than sum(services), while stopping
+    a failing service's own smoke->staging_gate chain without dropping sibling verdicts."""
+    import threading
+    import time as _time
+    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+    from infra2_sdk.refs import ResolvedRef
+
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.61\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.89\n",
+        encoding="utf-8",
+    )
+    todo_dir = tmp_path / "platform" / "30.todo"
+    todo_dir.mkdir(parents=True, exist_ok=True)
+    (todo_dir / "runtime-hooks.manifest.json").write_text(
+        (ROOT / "platform" / "30.todo" / "runtime-hooks.manifest.json").read_text(
+            encoding="utf-8"
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
+    )
+    monkeypatch.setattr(
+        reconcile, "resolve_app_hook_cwd", lambda *_a, **_kw: (tmp_path, None)
+    )
+
+    def _fake_fetch(service: str, _sha: str, **_kw):
+        return RuntimeHooksManifest.from_dict(
+            {
+                "schema_version": 2,
+                "service": service,
+                "slots": {
+                    s: {"run": "echo ok", "timeout_seconds": 30} for s in HOOK_SLOTS
+                },
+            }
+        )
+
+    monkeypatch.setattr(reconcile, "fetch_hooks_manifest", _fake_fetch)
+
+    barrier = threading.Barrier(3, timeout=2.0)
+    lock = threading.Lock()
+    seen: list[tuple[str, str]] = []
+
+    def _concurrent_exec(
+        manifest, slot: str, *, app_url: str, environment: str, version_ref: str, **_kw
+    ):
+        if slot == "smoke":
+            barrier.wait()  # proves all 3 services run concurrently in separate threads!
+        _time.sleep(0.05)
+        with lock:
+            seen.append((manifest.service, slot))
+        failed = manifest.service == "finance_report/app" and slot == "smoke"
+        return HookRunResult(
+            service=manifest.service,
+            slot=slot,
+            environment=environment,
+            app_url=app_url,
+            version_ref=version_ref,
+            status="fail" if failed else "pass",
+            exit_code=1 if failed else 0,
+            duration_seconds=0.05,
+            summary="smoke failed" if failed else "ok",
+        )
+
+    monkeypatch.setattr(reconcile, "execute_app_hook_slot", _concurrent_exec)
+
+    plan = build_plan(
+        ["platform/30.todo/app.py", "harness/repos.yaml"],
+        repo_root=tmp_path,
+        app_release_tags={
+            "finance_report/app": "v0.2.61",
+            "truealpha/app": "v0.2.89",
+        },
+    )
+    applied = [
+        reconcile.DeployCommand("platform/todo", "staging", ["true"]),
+        reconcile.DeployCommand("finance_report/app", "staging", ["true"]),
+        reconcile.DeployCommand("truealpha/app", "staging", ["true"]),
+    ]
+    results = reconcile.run_post_deploy_app_hooks(
+        plan,
+        applied,
+        repo_root=tmp_path,
+        after="v3.1.50",
+        target_env="staging",
+        slot="smoke,staging_gate",
+        record_issues=False,
+    )
+    # finance_report/app stopped after failed smoke, while platform/todo & truealpha/app
+    # still ran both smoke and staging_gate concurrently and reported full verdicts!
+    by_svc_slot = {(r["service"], r["slot"]): r["ok"] for r in results}
+    assert by_svc_slot == {
+        ("finance_report/app", "smoke"): False,
+        ("platform/todo", "smoke"): True,
+        ("platform/todo", "staging_gate"): True,
+        ("truealpha/app", "smoke"): True,
+        ("truealpha/app", "staging_gate"): True,
+    }
+
+
+def test_print_changed_app_releases_cli_for_cumulative_promotion_guard(
+    capsys, tmp_path
+) -> None:
+    """#1563: --print-changed-app-releases --before <marker> --after <tag> emits
+    SERVICE=TAG lines for every App service selected across cumulative tags."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "harness").mkdir()
+    (repo / "docs" / "ssot").mkdir(parents=True)
+    (repo / "docs" / "ssot" / "deploy-dependencies.yaml").write_text(
+        (ROOT / "docs" / "ssot" / "deploy-dependencies.yaml").read_text(
+            encoding="utf-8"
+        ),
+        encoding="utf-8",
+    )
+    (repo / "harness" / "repos.yaml").write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.60\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.87\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "v3.1.48")
+    _git(repo, "tag", "v3.1.48")
+
+    # v3.1.49 bumps finance-report
+    (repo / "harness" / "repos.yaml").write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.61\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.87\n",
+        encoding="utf-8",
+    )
+    _git(repo, "commit", "-q", "-am", "v3.1.49")
+    _git(repo, "tag", "v3.1.49")
+
+    # v3.1.50 bumps truealpha
+    (repo / "harness" / "repos.yaml").write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.61\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.89\n",
+        encoding="utf-8",
+    )
+    _git(repo, "commit", "-q", "-am", "v3.1.50")
+    _git(repo, "tag", "v3.1.50")
+
+    rc = main(
+        [
+            "--repo-root",
+            str(repo),
+            "--print-changed-app-releases",
+            "--before",
+            "v3.1.48",
+            "--after",
+            "v3.1.50",
+        ]
+    )
+    assert rc == 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines == [
+        "finance_report/app=v0.2.61",
+        "truealpha/app=v0.2.89",
+    ]

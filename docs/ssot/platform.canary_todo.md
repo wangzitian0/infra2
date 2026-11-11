@@ -16,7 +16,7 @@
 | Image | `platform/30.todo/Dockerfile` | Python 3.11 image. It installs the `infra2-sdk` wheel that `uv.lock` pins, with its hash. |
 | Deployer and facets | `platform/30.todo/deploy.py` | `TodoDeployer`: probe, signal, secrets, telemetry identity, Postgres role, `rendered_mount_fingerprints()` |
 | Secret & env contract | `platform/30.todo/env.manifest.json` | Enforced at startup via `assert_environment` and used to generate `secrets.ctmpl` and `vault-policy.hcl` |
-| Runtime verification hooks | `platform/30.todo/runtime-hooks.manifest.json` | 4-slot runtime verification hooks (`smoke`, `preview_gate`, `staging_gate`, `scheduled_audit`), executed by `tools/reconcile_iac_inputs.py` |
+| Runtime verification hooks | `platform/30.todo/runtime-hooks.manifest.json` | 5-slot schema v2 runtime verification hooks (`smoke`, `preview_gate`, `staging_gate`, `prod_gate`, `scheduled_audit`), executed by `tools/reconcile_iac_inputs.py` |
 | Observability dashboard | `platform/30.todo/dashboard.json` | SigNoz v5 dashboard definition discovered by `common/observability_dashboards.py` |
 | Tests | `common/tests/test_todo_service.py`, `common/tests/test_todo_canary_depth.py`, `common/tests/test_app_ssot_centralization.py`, `common/tests/test_platform_otel_adoption.py` | Behaviour, deep probe contracts, SSOT centralization, routing, deployer contracts, and the telemetry links of every `init_service` caller |
 
@@ -84,7 +84,7 @@ A deploy therefore turns the pillar red for one window, not for the rest of the 
 
 - **Startup environment validation**: `validate_startup_environment()` in `platform/30.todo/app.py` calls `assert_environment(ENV_MANIFEST_PATH, environ=environ, require_injected=True)` during `main()` startup so missing required variables in `platform/30.todo/env.manifest.json` fail closed before Uvicorn binds.
 - **Mount fingerprints**: `TodoDeployer.rendered_mount_fingerprints()` in `platform/30.todo/deploy.py` computes SHA-256 digests of the rendered `vault-agent.hcl` and `secrets.ctmpl` files and injects `IAC_MOUNT_SHA256_VAULT_AGENT_HCL` and `IAC_MOUNT_SHA256_SECRETS_CTMPL` into `platform/30.todo/compose.yaml`, forcing container recreation when secret templates change.
-- **Runtime verification hooks**: `platform/30.todo/runtime-hooks.manifest.json` declares the 4-slot verification contract (`smoke`, `preview_gate`, `staging_gate`, `scheduled_audit`) and is registered in `tools/reconcile_iac_inputs.py` (`LOCAL_SERVICE_HOOK_MANIFESTS`).
+- **Runtime verification hooks**: `platform/30.todo/runtime-hooks.manifest.json` declares the 5-slot schema v2 verification contract (`smoke`, `preview_gate`, `staging_gate`, `prod_gate`, `scheduled_audit`) and is registered in `tools/reconcile_iac_inputs.py` (`LOCAL_SERVICE_HOOK_MANIFESTS`).
 - **Dashboard & custom OTel metrics**: `platform/30.todo/dashboard.json` defines the SigNoz v5 dashboard discovered by `common/observability_dashboards.py`, charting `canary.probe.duration_ms` and `canary.probe.outcomes`.
 
 ## 4. Credentials

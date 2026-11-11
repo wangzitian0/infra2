@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "service": "platform/todo",
   "slots": {
     "smoke": {
@@ -25,6 +25,16 @@
     "staging_gate": {
       "run": "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo",
       "timeout_seconds": 180,
+      "required_env": [
+        "APP_URL"
+      ],
+      "optional_env": [
+        "TARGET_URL"
+      ]
+    },
+    "prod_gate": {
+      "run": "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo",
+      "timeout_seconds": 120,
       "required_env": [
         "APP_URL"
       ],

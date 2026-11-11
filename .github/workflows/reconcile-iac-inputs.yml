@@ -45,7 +45,7 @@ run-name: Reconcile IaC Inputs (${{ inputs.promote_prod && 'PROD' || 'staging' }
         type: boolean
         default: true
       run_hook_slot:
-        description: "Optional explicit App runtime hook slot (e.g. preview_gate) to execute"
+        description: "Optional explicit App runtime hook slot (smoke, preview_gate, staging_gate, prod_gate, scheduled_audit) to execute"
         required: false
         default: ""
       hook_service:
@@ -188,9 +188,17 @@ jobs:
             echo "::error::release tag '$after' is not reachable from origin/main."
             exit 1
           fi
-          python -m tools.promotion_soak_guard "$after"
           marker="$(git tag --list 'production/v*.*.*' --sort=-v:refname | head -n1 || true)"
           echo "production marker: ${marker:-<none>}"
+          gate_args=()
+          if [[ -n "$marker" ]]; then
+            gate_args+=(--since-tag "${marker#production/}")
+            changed_app_releases="$(python -m tools.reconcile_iac_inputs --print-changed-app-releases --before "${marker#production/}" --after "$after")"
+            while IFS= read -r req; do
+              [[ -n "$req" ]] && gate_args+=(--require-staging-gate "$req")
+            done <<< "$changed_app_releases"
+          fi
+          python -m tools.promotion_soak_guard "$after" "${gate_args[@]}"
           if [[ -n "$marker" ]]; then
             echo "change set production receives (${marker#production/} -> $after):"
             git diff --stat "${marker#production/}" "$after" -- . ':!docs' ':!*.md' | tail -n 60
@@ -358,11 +366,8 @@ jobs:
           [[ -n "$before" ]] && args+=(--before "$before")
           [[ "$dry_run" == "true" ]] && args+=(--dry-run)
           if [[ "$run_post_deploy_hooks" == "true" ]]; then
-            if [[ "$promote_prod" == "true" ]]; then
-              args+=(--run-post-deploy-hooks --post-deploy-hook-slot smoke)
-            else
-              args+=(--run-post-deploy-hooks --post-deploy-hook-slot staging_gate)
-            fi
+            # stage_hook_plan: staging -> smoke + staging_gate; prod -> smoke + prod_gate
+            args+=(--run-post-deploy-hooks)
           fi
           if [[ "$promote_prod" == "true" ]]; then
             args+=(--promote-prod --env prod)

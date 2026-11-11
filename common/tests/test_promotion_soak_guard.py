@@ -560,3 +560,194 @@ def test_judge_soak_verifies_required_staging_gates_and_cli_flags(
     err_out = capsys.readouterr().out
     assert "Staging gate verification failed" in err_out
     assert "missing staging_gate for finance_report@v1.2.9" in err_out
+
+
+def _reconcile_artifact_zip(hook_results: list[dict]) -> bytes:
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr(
+            "reconcile-result.json",
+            json.dumps({"hook_results": hook_results}),
+        )
+    return buf.getvalue()
+
+
+def test_promotion_guard_workflow_passes_cumulative_require_staging_gate() -> None:
+    """#1563: reconcile-iac-inputs.yml's Production promotion guard step computes all App
+    releases changed since production/v*.*.* via --print-changed-app-releases and forwards
+    --since-tag and --require-staging-gate SERVICE=TAG to promotion_soak_guard."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(text)
+    steps = workflow["jobs"]["reconcile"]["steps"]
+    step = next(s for s in steps if s.get("name") == GUARD_STEP)
+    script = step["run"]
+
+    assert "--print-changed-app-releases" in script
+    assert "--since-tag" in script
+    assert "--require-staging-gate" in script
+    assert (
+        'changed_app_releases="$(python -m tools.reconcile_iac_inputs --print-changed-app-releases'
+        in script
+    )
+    assert "< <(" not in script
+    assert 'python -m tools.promotion_soak_guard "$after" "${gate_args[@]}"' in script
+
+
+def test_look_up_soak_fetches_hook_results_artifacts_across_cumulative_tags_and_fails_closed(
+    capsys,
+) -> None:
+    """#1563: when --require-staging-gate is passed without --hook-results-json, GhClient
+    fetches iac-input-reconcile-result artifacts from concluded push runs in (since_tag, tag],
+    passing cumulative multi-tag promotions only when every required App@version has a green
+    staging_gate and failing closed when any required staging_gate failed or is missing."""
+    sha_49 = "c" * 40
+    sha_50 = "d" * 40
+    run_48 = run("success", branch="v3.1.48", sha="b" * 40, n=48)
+    run_49 = run("success", branch="v3.1.49", sha=sha_49, n=49)
+    run_50 = run("success", branch="v3.1.50", sha=sha_50, n=50)
+
+    zip_49 = _reconcile_artifact_zip(
+        [
+            {
+                "service": "finance_report/app",
+                "slot": "staging_gate",
+                "version_ref": "v0.2.61",
+                "status": "pass",
+                "ok": True,
+            }
+        ]
+    )
+    zip_50_green = _reconcile_artifact_zip(
+        [
+            {
+                "service": "truealpha/app",
+                "slot": "staging_gate",
+                "version_ref": "v0.2.89",
+                "status": "pass",
+                "ok": True,
+            }
+        ]
+    )
+    zip_50_red = _reconcile_artifact_zip(
+        [
+            {
+                "service": "truealpha/app",
+                "slot": "staging_gate",
+                "version_ref": "v0.2.89",
+                "status": "fail",
+                "ok": False,
+            }
+        ]
+    )
+
+    def _build_gh_runner(zip_for_50: bytes):
+        def _runner(argv, *, text=True, **_kw):
+            if argv[:2] == ["git", "rev-parse"]:
+                return _completed(sha_50 + "\n")
+            path = argv[2]
+            if "runs?" in path:
+                return _completed(
+                    json.dumps({"workflow_runs": [run_50, run_49, run_48]})
+                )
+            if path == "repos/o/r/actions/runs/49/artifacts":
+                return _completed(
+                    json.dumps(
+                        {
+                            "artifacts": [
+                                {
+                                    "id": 9049,
+                                    "name": "iac-input-reconcile-result",
+                                    "expired": False,
+                                }
+                            ]
+                        }
+                    )
+                )
+            if path == "repos/o/r/actions/runs/50/artifacts":
+                return _completed(
+                    json.dumps(
+                        {
+                            "artifacts": [
+                                {
+                                    "id": 9050,
+                                    "name": "iac-input-reconcile-result",
+                                    "expired": False,
+                                }
+                            ]
+                        }
+                    )
+                )
+            if path == "repos/o/r/actions/artifacts/9049/zip":
+                assert text is False
+                return subprocess.CompletedProcess(argv, 0, zip_49, b"")
+            if path == "repos/o/r/actions/artifacts/9050/zip":
+                assert text is False
+                return subprocess.CompletedProcess(argv, 0, zip_for_50, b"")
+            raise AssertionError(f"unexpected gh/git call: {argv}")
+
+        return _runner
+
+    # 1. Cumulative green across v3.1.49 (finance_report) + v3.1.50 (truealpha) passes!
+    client_green = GhClient("o/r", run=_build_gh_runner(zip_50_green))
+    rc_ok = main(
+        [
+            "v3.1.50",
+            "--since-tag",
+            "v3.1.48",
+            "--require-staging-gate",
+            "finance_report/app=v0.2.61",
+            "--require-staging-gate",
+            "truealpha/app=v0.2.89",
+            "--attempts",
+            "1",
+            "--delay",
+            "0",
+        ],
+        client=client_green,
+    )
+    assert rc_ok == 0
+    capsys.readouterr()
+
+    # 2. Failed staging_gate in v3.1.50 blocks promotion fail-closed!
+    client_red = GhClient("o/r", run=_build_gh_runner(zip_50_red))
+    rc_red = main(
+        [
+            "v3.1.50",
+            "--since-tag",
+            "v3.1.48",
+            "--require-staging-gate",
+            "finance_report/app=v0.2.61",
+            "--require-staging-gate",
+            "truealpha/app=v0.2.89",
+            "--attempts",
+            "1",
+            "--delay",
+            "0",
+        ],
+        client=client_red,
+    )
+    assert rc_red == 1
+    out_red = capsys.readouterr().out
+    assert "failed staging_gate for truealpha/app@v0.2.89" in out_red
+
+    # 3. Missing staging_gate (e.g. unsoaked v0.2.90) blocks promotion fail-closed!
+    rc_missing = main(
+        [
+            "v3.1.50",
+            "--since-tag",
+            "v3.1.48",
+            "--require-staging-gate",
+            "truealpha/app=v0.2.90",
+            "--attempts",
+            "1",
+            "--delay",
+            "0",
+        ],
+        client=client_green,
+    )
+    assert rc_missing == 1
+    out_missing = capsys.readouterr().out
+    assert "missing staging_gate for truealpha/app@v0.2.90" in out_missing

@@ -580,7 +580,7 @@ def test_query_serving_release_returns_authoritative_dokploy_and_health_state() 
 
 def test_fetch_and_execute_app_hook_slot(tmp_path: Path) -> None:
     raw_hooks = {
-        "schema_version": 1,
+        "schema_version": 2,
         "service": "truealpha/app",
         "slots": {
             slot: {

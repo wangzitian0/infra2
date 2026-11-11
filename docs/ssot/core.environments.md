@@ -40,8 +40,8 @@ flowchart LR
 
         subgraph DeployEnvs["有状态部署环境 (3 Stateful Envs + DR)"]
             Preview["1. Preview 瞬态隔离环境<br/>(App post-merge 切 tag 前瞬态拉起 / 跑完 preview_gate 立即 --down)"]
-            Staging["2. Staging 集成预发环境<br/>(火车粒度 <=4 PRs · staging_gate)"]
-            Production["3. Production 生产环境<br/>(火车粒度 >=15 PRs 或 >=48h · smoke)"]
+            Staging["2. Staging 集成预发环境<br/>(火车粒度 <=4 PRs · smoke + staging_gate)"]
+            Production["3. Production 生产环境<br/>(火车粒度 >=15 PRs 或 >=48h · smoke + prod_gate)"]
             DR["[目标态] DR 异地灾备<br/>(冷备/定期演练)"]
         end
     end
