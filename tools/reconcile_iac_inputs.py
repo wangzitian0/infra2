@@ -1005,6 +1005,11 @@ def sync_app_releases(
     }
 
 
+#: Deepens the depth-1 hook checkout to the full history of a release tag. The checkout holds
+#: the tag's own commit, so a plain tag fetch sends nothing and leaves it shallow. `--unshallow`
+#: is not used: git refuses it on a complete repository.
+_FULL_HISTORY_DEPTH = "--depth=2147483647"
+
 #: Hook slots whose check reads the release lineage with ``git log`` (#1567). The truealpha
 #: nightly verdict check dates a check from the commit that first declared it. Other slots
 #: need no release tag, so a production smoke run adds no fetch.
@@ -1081,6 +1086,7 @@ def resolve_app_hook_cwd(
                     "-q",
                     "--filter=blob:none",
                     "--no-tags",
+                    _FULL_HISTORY_DEPTH,
                     "origin",
                     "tag",
                     release_ref,
