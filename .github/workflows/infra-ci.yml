@@ -145,7 +145,10 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           tree="$(git rev-parse 'HEAD^{tree}')"
-          run_id="$(python3 tools/ci_tree_reuse.py --repo "${{ github.repository }}" --tree "$tree" || true)"
+          commit="$(git rev-parse HEAD)"
+          run_id="$(python3 tools/ci_tree_reuse.py --repo "${{ github.repository }}" --tree "$tree" --commit "$commit" || true)"
+          # Only a run id may become the output: anything else runs the shards.
+          [[ "$run_id" =~ ^[0-9]+$ ]] || run_id=""
           echo "tree=${tree} reuse_run_id=${run_id:-none}"
           echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
@@ -328,7 +331,7 @@ jobs:
       actions: read
     steps:
       # With a reused run the shards are skipped on purpose; anything else must be success.
-      - name: Require every unit-test shard to succeed
+      - name: Require every unit-test shard to succeed, or a reused green run
         env:
           SHARD_RESULT: ${{ needs.test-unit-shard.result }}
           REUSE_RUN_ID: ${{ needs.detect-changes.outputs.reuse_run_id }}
