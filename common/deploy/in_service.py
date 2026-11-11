@@ -10,6 +10,8 @@ listing says about it — so the verdict can be tested without a host.
 
 from __future__ import annotations
 
+from common.core.yaml_text import safe_load_text
+
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -48,7 +50,7 @@ def expected_running_services(compose_content: str) -> tuple[str, ...]:
     and exit by design, so the compose file itself says which containers must be found
     running.
     """
-    doc = yaml.safe_load(compose_content) or {}
+    doc = safe_load_text(yaml, compose_content) or {}
     services = doc.get("services") or {}
     return tuple(
         sorted(
@@ -130,7 +132,7 @@ def container_names(compose_content: str, env_suffix: str) -> dict[str, str]:
     Every service in this repo declares a fixed ``container_name``, so this is how a
     compose service key becomes the name ``docker`` knows it by in a given environment.
     """
-    doc = yaml.safe_load(compose_content) or {}
+    doc = safe_load_text(yaml, compose_content) or {}
     services = doc.get("services") or {}
     names: dict[str, str] = {}
     for service, spec in services.items():
