@@ -531,7 +531,7 @@ RUN curl -sSfLo op.zip https://cache.agilebits.com/dist/1P/op2/pkg/v2.30.0/op_li
 /bin/sh: 1: unzip: not found
 ```
 
-**原因**: `python:3.12-slim` 基础镜像不包含 `unzip` 工具
+**原因**: `python:3.11-slim` 基础镜像不包含 `unzip` 工具
 
 **解决方案**: 已在 Dockerfile 中添加 unzip 依赖（见 PR #102）
 ```dockerfile

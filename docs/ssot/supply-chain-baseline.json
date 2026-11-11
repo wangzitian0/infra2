@@ -58,6 +58,7 @@
     "bootstrap/04.1password/Dockerfile::1password/connect-api:${OP_CONNECT_VERSION}",
     "bootstrap/04.1password/Dockerfile::1password/connect-sync:${OP_CONNECT_VERSION}",
     "bootstrap/04.1password/Dockerfile::golang:1.24-alpine",
+    "bootstrap/05.vault/Dockerfile::python:3.11-slim",
     "platform/03.s3/Dockerfile::rustfs/rustfs:1.0.0"
   ]
 }

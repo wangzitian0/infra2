@@ -108,7 +108,7 @@ print("OK")
     script_b64 = base64.b64encode(python_script.encode()).decode()
 
     # Use pip cache volume to speed up repeated runs
-    cmd = f"ssh root@{host} 'docker run --rm --network=dokploy-network -v signoz-otel-pip-cache:/root/.cache/pip python:3.11-slim bash -c \"pip install -q opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http 2>/dev/null && echo {script_b64} | base64 -d | python3\"'"
+    cmd = f"ssh root@{host} 'docker run --rm --network=dokploy-network -v signoz-otel-pip-cache:/root/.cache/pip python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b bash -c \"pip install -q opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http 2>/dev/null && echo {script_b64} | base64 -d | python3\"'"
 
     result = c.run(cmd, warn=True, hide=True)
 
@@ -208,7 +208,7 @@ print("OK")
     script_b64 = base64.b64encode(python_script.encode()).decode()
 
     # Use pip cache volume to speed up repeated runs
-    cmd = f"ssh root@{host} 'docker run --rm --network=dokploy-network -v signoz-otel-pip-cache:/root/.cache/pip python:3.11-slim bash -c \"pip install -q opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http 2>/dev/null && echo {script_b64} | base64 -d | python3\"'"
+    cmd = f"ssh root@{host} 'docker run --rm --network=dokploy-network -v signoz-otel-pip-cache:/root/.cache/pip python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b bash -c \"pip install -q opentelemetry-api opentelemetry-sdk opentelemetry-exporter-otlp-proto-http 2>/dev/null && echo {script_b64} | base64 -d | python3\"'"
 
     result = c.run(cmd, warn=True, hide=True)
 
