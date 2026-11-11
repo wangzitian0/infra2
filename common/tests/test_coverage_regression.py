@@ -142,7 +142,7 @@ class TestCheckNoRegression:
 
         assert ok is False
         assert "regressed" in message
-        assert "--update-baseline" in message
+        assert "65.00%" in message and "70.00%" in message
 
     def test_tiny_float_noise_does_not_fail(self) -> None:
         current = {"line_rate": 0.699999995, "lines_covered": 70, "lines_valid": 100}

@@ -1559,7 +1559,7 @@ def test_main_runs_the_peer_check_with_the_watchdog_retry_settings(monkeypatch) 
 
 
 def _peer_factory(verdicts, seen):
-    from common.observability.estate_scheduler_liveness import PeerVerdict
+    from common.observability.estate_scheduler_liveness import EstateVerdict
 
     answers = iter(verdicts)
 
@@ -1572,7 +1572,7 @@ def _peer_factory(verdicts, seen):
         answer = next(answers)
         if isinstance(answer, Exception):
             raise answer
-        return PeerVerdict(*answer)
+        return EstateVerdict(*answer)
 
     return factory, evaluate
 

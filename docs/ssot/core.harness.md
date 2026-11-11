@@ -221,6 +221,7 @@ uv run pytest -q common/tests/test_sdk_contract_adoption.py
 - 所有 `external-application` 必须是 `autonomous`，且不能进入 focus。
 - authority 与 preference 路径可读且不能逃逸 workspace root。
 - 现有 SDK 采用测试继续证明消费者使用发布 artifact，而不是 submodule 源码。
+- `tools.sdk_usage_census` 的 `M1` 以包级契约（`infra2_sdk/__init__.py` 与 `infra2_sdk/runtime/__init__.py` 的 `__all__`）作为「公开符号（public symbol）」的唯一定义，退役子模块 `__all__` 口径，并对照 AST 实际导入核验 `tests/surface.json` 的 `consumer:` 声明（#1410）。
 - `status --online` reads the release from the `version` field, else `git_sha`. It reports `unreachable` and `unknown` instead of a guess. Without `--online`, `status` and `check` open no socket (`common/tests/test_harness_status.py`).
 - Each `health:` URL is an https URL. It equals the public health route of the same App in the service registry (`common/tests/test_harness_manifest.py`).
 - `sweep` 对未 resolved review thread、红色 check、未知值与失败的 probe 从不报告

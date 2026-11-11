@@ -110,7 +110,7 @@ def test_a_red_check_without_an_issue_opens_one_with_the_exact_title() -> None:
         and "worker status unhealthy" in body
         and "scheduled run" in body
     )
-    assert "Feishu" in body
+    assert "One open issue per check." in body
 
 
 def test_a_red_check_with_an_open_issue_comments_on_the_oldest_instead_of_filing() -> (
@@ -252,7 +252,10 @@ def test_a_complete_trail_retires_issues_of_checks_that_no_longer_report() -> No
     assert sorted(api.closed) == [1, 2, 4]
     bodies = dict(api.comments)
     assert "no longer reports to this trail" in bodies[1]
-    assert "report-only now" in bodies[1] and RUN_URL in bodies[1]
+    assert (
+        "Closed by the ops-checks watchdog issue trail." in bodies[1]
+        and RUN_URL in bodies[1]
+    )
     assert "no longer reports to this trail" in bodies[2]
     assert "is green again" in bodies[4]
     assert "is red" in bodies[3]

@@ -7,7 +7,7 @@ builds, the deploy workflows) reads the requirement here. pip then verifies the
 same hash that CI verifies, and a release bump edits pyproject.toml and uv.lock
 only.
 
-Usage: python tools/sdk_requirement.py [LOCK]
+Usage: python tools/sdk_requirement.py [--extras EXTRA[,EXTRA...]] [LOCK]
 
 Stdlib only: the image builds run it before pip installs anything.
 """
@@ -21,14 +21,25 @@ import tomllib
 from pathlib import Path
 
 PACKAGE = "infra2-sdk"
+_EXTRA_NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
 
 
-def sdk_requirement(lock: Path) -> str:
-    """`infra2-sdk @ <wheel url>#sha256=<digest>` from the lock.
+def _normalize_extras(extras: str) -> str:
+    if not extras:
+        return ""
+    items = [item.strip() for item in extras.split(",")]
+    if not items or any(not _EXTRA_NAME.fullmatch(item) for item in items):
+        raise ValueError(f"invalid extras list: {extras!r}")
+    return ",".join(dict.fromkeys(items))
+
+
+def sdk_requirement(lock: Path, *, extras: str = "") -> str:
+    """`infra2-sdk @ <wheel url>#sha256=<digest>` (or `infra2-sdk[extras] @ ...`) from the lock.
 
     Raises ValueError when the lock does not pin exactly one direct wheel with a
-    sha256 hash.
+    sha256 hash or when ``extras`` contains invalid identifiers.
     """
+    normalized_extras = _normalize_extras(extras)
     packages = [
         package
         for package in tomllib.loads(lock.read_text(encoding="utf-8")).get(
@@ -48,15 +59,21 @@ def sdk_requirement(lock: Path) -> str:
     algorithm, _, digest = str(wheels[0].get("hash", "")).partition(":")
     if algorithm != "sha256" or not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise ValueError(f"{lock}: the {PACKAGE} wheel has no sha256 hash")
-    return f"{PACKAGE} @ {url}#sha256={digest}"
+    target = f"{PACKAGE}[{normalized_extras}]" if normalized_extras else PACKAGE
+    return f"{target} @ {url}#sha256={digest}"
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--extras",
+        default="",
+        help="Optional comma-separated extras (for example fastapi,postgres,s3,http).",
+    )
     parser.add_argument("lock", nargs="?", default="uv.lock", type=Path)
     args = parser.parse_args(argv)
     try:
-        print(sdk_requirement(args.lock))
+        print(sdk_requirement(args.lock, extras=args.extras))
     except (OSError, ValueError, tomllib.TOMLDecodeError) as error:
         print(f"sdk_requirement: {error}", file=sys.stderr)
         return 1

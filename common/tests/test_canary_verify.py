@@ -1093,7 +1093,13 @@ def test_canary_verify_reads_expected_sdk_from_release_ref_uv_lock(tmp_path) -> 
     )
 
     def _lock_with(ver: str) -> str:
-        return f'version = 1\n\n[[package]]\nname = "infra2-sdk"\nversion = "{ver}"\n'
+        return (
+            "version = 1\n\n"
+            "[[package]]\n"
+            'name = "infra2-sdk"\n'
+            f'version = "{ver}"\n'
+            f'source = {{ url = "https://example.invalid/infra2_sdk-{ver}-py3-none-any.whl" }}\n'
+        )
 
     # v1.2.41 (production marker): SDK 3.6.0
     (repo / "uv.lock").write_text(_lock_with("3.6.0"), encoding="utf-8")

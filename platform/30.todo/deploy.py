@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from invoke import task
+from infra2_sdk.routing import CANARY_SLOT
 
 from common.console import error, header, info, run_with_status, success
 from common.deploy.config_hash import mount_fingerprint_env
@@ -27,6 +28,7 @@ class TodoDeployer(Deployer):
     subdomain = None
     service_port = 8000
     service_name = "todo"
+    canary_slot = CANARY_SLOT
     secret_key = ""
 
     backups = ()
@@ -203,6 +205,7 @@ class TodoDeployer(Deployer):
 def sso_setup(c):
     """Register Canary Todo in Authentik SSO (One-time or idempotent)"""
     from infra2_sdk.routing import derive_preview_coordinates
+    from infra2_sdk.runtime.environment import resolve_environment_tier
 
     env = TodoDeployer.env()
     internal_domain = env.get("INTERNAL_DOMAIN")
@@ -211,9 +214,8 @@ def sso_setup(c):
         error("Missing INTERNAL_DOMAIN")
         return
 
-    coords = derive_preview_coordinates(
-        "todo", env.get("ENV") or "production", base_domain=internal_domain
-    )
+    tier = resolve_environment_tier(env.get("ENV") or "production")
+    coords = derive_preview_coordinates("todo", tier, base_domain=internal_domain)
     suffix = coords.env_suffix
     domain_suffix = coords.env_domain_suffix
     todo_url = coords.preview_url
