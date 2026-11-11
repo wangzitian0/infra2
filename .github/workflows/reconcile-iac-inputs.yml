@@ -97,8 +97,12 @@ jobs:
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
       SIGNOZ_API_KEY: ${{ secrets.SIGNOZ_API_KEY }}
       # The hook slot staging_gate of finance_report lists AI_API_KEY in required_env (#1529).
-      # HOOK_RUNNER_SECRET_ENV in common/deploy/app_contract.py names this secret.
+      # HOOK_RUNNER_SECRET_ENV in common/deploy/app_contract.py names these secrets (#1534).
       AI_API_KEY: ${{ secrets.ZAI_CODING_CN_API_KEY }}
+      TA_EMAIL: ${{ secrets.TA_EMAIL }}
+      TA_MEMBER_EMAIL: ${{ secrets.TA_MEMBER_EMAIL }}
+      TA_PASSWORD: ${{ secrets.TA_PASSWORD }}
+      TA_MCP_TOKEN: ${{ secrets.TA_MCP_TOKEN }}
       # A failed reconcile pages out of band (#658): the runner's per-service error_kind is
       # the earliest machine-readable point of every deploy-chain incident of 2026-09-04..08.
       INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
@@ -443,9 +447,10 @@ jobs:
           RECONCILE_PHASE: ${{ env.RECONCILE_PHASE || '' }}
         run: |
           python - <<'PY'
-          import json, os
+          import os
           from pathlib import Path
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
+          from tools.reconcile_iac_inputs import resolve_workflow_failure_alert
 
           run_url = "/".join(
               v for v in (
@@ -455,23 +460,18 @@ jobs:
                   os.environ.get("GITHUB_RUN_ID"),
               ) if v
           )
-          text = None
-          result = Path("reconcile-result.json")
-          if os.environ.get("RECONCILE_PHASE") == "sync-app-releases" and not result.exists():
-              print("::warning::App release PR sync failed before reconcile-deploy phase; skipping deploy-outage Feishu alert.")
+          alert_text, skip_notice = resolve_workflow_failure_alert(
+              Path("reconcile-result.json"),
+              after=os.environ.get("INPUT_AFTER") or "",
+              promote_prod=os.environ.get("INPUT_PROMOTE_PROD") == "true",
+              run_url=run_url,
+              reconcile_phase=os.environ.get("RECONCILE_PHASE") or "",
+          )
+          if skip_notice:
+              print(skip_notice)
               raise SystemExit(0)
-          if result.exists():
-              try:
-                  text = json.loads(result.read_text()).get("alert_text")
-              except ValueError:
-                  text = None
-          if not text:
-              kind = "PRODUCTION promotion" if os.environ.get("INPUT_PROMOTE_PROD") == "true" else "staging soak"
-              text = (
-                  f"🚨 IaC reconcile FAILED for {os.environ.get('INPUT_AFTER')} ({kind}) before any "
-                  f"deploy result was recorded (guard, provenance or runner unreachable).\nRun: {run_url}"
-              )
-          deliver_out_of_band_alert(os.environ, text)
+          assert alert_text is not None
+          deliver_out_of_band_alert(os.environ, alert_text)
           PY
 
       - name: Upload reconcile result

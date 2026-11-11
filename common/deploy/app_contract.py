@@ -73,6 +73,10 @@ APP_HOOKS_MANIFEST_PATH = "runtime-hooks.manifest.json"
 #: its secret (#1529); a test parses the workflows and fails on a step that does not.
 _HOOK_RUNNER_SECRET_PAIRS: tuple[tuple[str, str], ...] = (
     ("AI_API_KEY", "ZAI_CODING_CN_API_KEY"),
+    ("TA_EMAIL", "TA_EMAIL"),
+    ("TA_MEMBER_EMAIL", "TA_MEMBER_EMAIL"),
+    ("TA_PASSWORD", "TA_PASSWORD"),
+    ("TA_MCP_TOKEN", "TA_MCP_TOKEN"),
 )
 #: The same pairs as a read-only mapping: env name -> secret name.
 HOOK_RUNNER_SECRET_ENV: Mapping[str, str] = MappingProxyType(
