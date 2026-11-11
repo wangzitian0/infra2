@@ -5,6 +5,8 @@ Part of common.deploy domain decomposition (#955, #1009).
 
 from __future__ import annotations
 
+from common.deploy.yaml_text import safe_load_text
+
 from collections.abc import Iterable
 import glob as _glob
 import hashlib
@@ -202,7 +204,7 @@ def _compose_has_build(compose_content: str) -> bool:
     except ModuleNotFoundError:
         return False
     try:
-        compose = yaml.safe_load(compose_content) or {}
+        compose = safe_load_text(yaml, compose_content) or {}
     except yaml.YAMLError:
         return False
     services = compose.get("services", {}) if isinstance(compose, dict) else {}
@@ -273,7 +275,7 @@ def parse_compose_services(compose_content: str) -> dict:
     except ModuleNotFoundError as exc:
         raise ValueError("PyYAML is not installed") from exc
     try:
-        compose = yaml.safe_load(compose_content)
+        compose = safe_load_text(yaml, compose_content)
     except yaml.YAMLError as exc:
         raise ValueError(f"compose is not valid YAML: {exc}") from exc
     services = compose.get("services") if isinstance(compose, dict) else None
@@ -415,7 +417,7 @@ def _compose_artifact_files(compose_path: str, compose_content: str) -> list[Pat
     compose_file = Path(compose_path)
     compose_dir = compose_file.parent.resolve()
     try:
-        compose = yaml.safe_load(compose_content) or {}
+        compose = safe_load_text(yaml, compose_content) or {}
     except yaml.YAMLError:
         return []
 

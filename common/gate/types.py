@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import copy
-import functools
 import posixpath
 import subprocess
 import sys
@@ -11,6 +9,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+
+from common.deploy.yaml_text import safe_load_text  # noqa: F401 - used by common.gate.inventory
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 ABSENT = "ABSENT"
@@ -86,28 +86,6 @@ def _get_yaml():
     import yaml
 
     return yaml
-
-
-@functools.lru_cache(maxsize=256)
-def _parse_once(loader: Callable[[str], object], text: str) -> object:
-    return loader(text)
-
-
-def safe_load_text(yaml_mod, text: str) -> object:
-    """Return ``yaml_mod.safe_load(text)``; parse each (loader, text) pair once (#1602).
-
-    The key is the ``safe_load`` function and the text, not a path. A new loader
-    (a test that replaces ``yaml`` or ``yaml.safe_load``) gets a new parse. A test
-    that replaces ``ROOT`` gets a new parse only when the text differs; the same text
-    gives the same value. A parse that raises is not stored. The caller gets a deep copy, so a caller that changes the
-    result cannot change the result of a later call.
-    """
-    loader = yaml_mod.safe_load
-    try:
-        hash(loader)
-    except TypeError:
-        return loader(text)
-    return copy.deepcopy(_parse_once(loader, text))
 
 
 def _get_subprocess():

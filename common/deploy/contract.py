@@ -32,6 +32,8 @@ SSOT: docs/ssot/core.environments.md §4.7.
 
 from __future__ import annotations
 
+from common.deploy.yaml_text import safe_load_text
+
 from collections.abc import Mapping
 from pathlib import Path
 import re
@@ -506,7 +508,7 @@ def default_version_ref(
         if not target.is_file():
             return None
         raw_text = target.read_text(encoding="utf-8")
-    data = yaml.safe_load(raw_text) or {}
+    data = safe_load_text(yaml, raw_text) or {}
     entries = (
         (data.get("repositories") or data.get("repos"))
         if isinstance(data, Mapping)

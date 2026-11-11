@@ -14,7 +14,10 @@ it implements. Hence the historical list is pinned here.
 from __future__ import annotations
 
 import json
+import os
 import pathlib
+import subprocess
+import sys
 
 import pytest
 
@@ -352,3 +355,35 @@ def test_the_required_check_report_test_is_in_the_closure() -> None:
     assert (ROOT / path).is_file()
     assert path in gate.self_governing_files()
     assert gate.is_self_governing(path)
+
+
+def test_every_repository_module_the_gate_runs_is_in_the_closure() -> None:
+    """A module that `python -m tools.pr_merge_gate` executes but the closure omits
+    could change a verdict without the review set (#1602 review: importing
+    `common.core` ran `common/core/constants.py` and `environ.py` in the gate)."""
+    probe = (
+        "import json, os, sys\n"
+        "import tools.pr_merge_gate\n"
+        "root = os.getcwd()\n"
+        "files = sorted({os.path.relpath(m.__file__, root) for m in list(sys.modules.values())\n"
+        "    if getattr(m, '__file__', None) and m.__file__.startswith(root + os.sep)\n"
+        "    and '.venv' not in m.__file__})\n"
+        "print(json.dumps(files))\n"
+    )
+    env = {
+        k: v for k, v in os.environ.items() if k not in ("PYTHONSAFEPATH", "PYTHONPATH")
+    }
+    out = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    ).stdout
+    loaded = [p.replace(os.sep, "/") for p in json.loads(out)]
+    assert "tools/pr_merge_gate.py" in loaded and len(loaded) >= 5, loaded
+    closure = set(gate.self_governing_files())
+    outside = [p for p in loaded if p not in closure]
+    assert not outside, f"the gate runs these files outside its closure: {outside}"
