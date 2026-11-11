@@ -42,6 +42,20 @@
     },
     {
       "signal": "metrics",
+      "alert_name": "TrueAlphaHigh5xxRateStable",
+      "service_name": "truealpha-app",
+      "severity": "critical",
+      "threshold": 0.05,
+      "threshold_unit": "%",
+      "op": "above",
+      "match_type": "at_least_once",
+      "eval_window": "5m0s",
+      "frequency": "1m",
+      "promql": "(sum(increase({\"http.server.request.duration.count\", \"service.name\"=\"truealpha-app\", \"deployment.environment.name\"=\"production\", \"http.route\"!~\"^(/health|/livez|/readyz|/api/v1/system/health)$\", \"http.response.status_code\"=~\"^5..$\"}[5m])) / sum(increase({\"http.server.request.duration.count\", \"service.name\"=\"truealpha-app\", \"deployment.environment.name\"=\"production\", \"http.route\"!~\"^(/health|/livez|/readyz|/api/v1/system/health)$\"}[5m]))) and on() (sum(increase({\"http.server.request.duration.count\", \"service.name\"=\"truealpha-app\", \"deployment.environment.name\"=\"production\", \"http.route\"!~\"^(/health|/livez|/readyz|/api/v1/system/health)$\", \"http.response.status_code\"=~\"^5..$\"}[5m])) >= 5)",
+      "summary": "Severity P0 (5m ratio > 5% and >= 5 errors): truealpha-app HTTP 5xx ratio exceeded 5% over 5 minutes (reads the stable HTTP metric; infra2#1465)"
+    },
+    {
+      "signal": "metrics",
       "alert_name": "TrueAlphaP95LatencyHigh",
       "service_name": "truealpha-app",
       "severity": "error",
@@ -56,6 +70,20 @@
     },
     {
       "signal": "metrics",
+      "alert_name": "TrueAlphaP95LatencyHighStable",
+      "service_name": "truealpha-app",
+      "severity": "error",
+      "threshold": 3000,
+      "threshold_unit": "ms",
+      "op": "above",
+      "match_type": "all_times",
+      "eval_window": "10m0s",
+      "frequency": "1m",
+      "promql": "(histogram_quantile(0.95, sum by (le) (rate({\"http.server.request.duration.bucket\", \"service.name\"=\"truealpha-app\", \"deployment.environment.name\"=\"production\", \"http.route\"!~\"^(/health|/livez|/readyz|/api/v1/system/health)$\"}[5m]))) * 1000 >= 0) or on() vector(0)",
+      "summary": "Severity P1 (sustained 10m p95 > 3000ms): truealpha-app HTTP p95 latency held above 3000ms for 10 minutes (reads the stable HTTP metric, seconds, scaled to ms; infra2#1465)"
+    },
+    {
+      "signal": "metrics",
       "alert_name": "TrueAlphaAppTelemetryAbsent",
       "service_name": "truealpha-app",
       "severity": "error",
@@ -64,8 +92,8 @@
       "match_type": "at_least_once",
       "eval_window": "5m0s",
       "frequency": "1m",
-      "promql": "absent_over_time({\"http.server.duration.count\", \"service.name\"=\"truealpha-app\", \"deployment.environment.name\"=\"production\"}[15m])",
-      "summary": "Severity P1 (15m absent): truealpha-app exported no HTTP duration metrics for 15 minutes"
+      "promql": "absent_over_time({\"http.server.duration.count\", \"service.name\"=\"truealpha-app\", \"deployment.environment.name\"=\"production\"}[15m]) and on() absent_over_time({\"process.uptime\", \"service.name\"=\"truealpha-app\", \"deployment.environment.name\"=\"production\"}[15m])",
+      "summary": "Severity P1 (15m absent): truealpha-app exported no HTTP duration metrics for 15 minutes (fires only when both the legacy HTTP metric and the process.uptime heartbeat are absent; infra2#1465)"
     }
   ]
 }
