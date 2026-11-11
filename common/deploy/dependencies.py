@@ -17,6 +17,8 @@ replaces the old `common/ -> __all__` catch-all that redeployed everything.
 
 from __future__ import annotations
 
+from common.deploy.yaml_text import safe_load_text
+
 import fnmatch
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -80,7 +82,7 @@ def load_dependency_manifest(
     p = Path(path)
     if not p.exists():
         return {}
-    raw = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    raw = safe_load_text(yaml, p.read_text(encoding="utf-8")) or {}
     services = raw.get("services") or {}
     result: dict[str, list[str]] = {}
     for key, spec in services.items():
@@ -205,7 +207,7 @@ def _config_hash_inputs(compose_paths, root: Path):
         if key is None:
             raise ValueError(f"{compose} is not in a service directory")
         text = compose.read_text(encoding="utf-8")
-        yaml.safe_load(text)
+        safe_load_text(yaml, text)
         for path in _compose_artifact_files(str(compose), text):
             # The hash reads through a symlink and labels the input by its target, so
             # the audit checks the target too: a link under a declared tree can point
