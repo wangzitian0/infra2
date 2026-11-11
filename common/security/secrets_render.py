@@ -1,23 +1,5 @@
 #!/usr/bin/env python3
-"""Vault Agent templates and policies, generated from environment manifests.
-
-Every migrated service's ``secrets.ctmpl`` (and, except for the IaC runner, its
-``vault-policy.hcl``) is derived from the manifest(s) that say who produces each
-variable (infra2-sdk contract v2): the application's own manifest at its deployed
-``release_tag`` in ``harness/repos.yaml`` plus, for platform services and stack-only
-additions, a manifest kept in this repository next to the service. The runner's policy
-is its *writer* identity across projects, a bootstrap concern no manifest describes,
-so it stays hand-written. Nothing else in a template is written by hand.
-
-Required keys fail closed: each migrated service's ``vault-agent.hcl`` sets
-``error_on_missing_key = true``, so a required value missing in Vault stops the render
-instead of rendering ``%!q(<nil>)``; optional (``empty_ok``) keys are omitted by the
-template itself.
-
-    uv run python tools/secrets_render.py --write        # regenerate every service
-    uv run python tools/secrets_render.py --check        # CI: committed == generated
-    uv run python tools/secrets_render.py --list         # what each service reads
-"""
+"""Generate Vault Agent templates and policies from environment manifests and verify them against committed files."""
 
 from __future__ import annotations
 

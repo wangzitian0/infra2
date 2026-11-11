@@ -21,8 +21,13 @@ class FakeResponse:
         self._payload = payload if payload is not None else {}
         self.content = content
         self._status_error = status_error
-        self.status_code = 200
+        self.status_code = (
+            status_error.response.status_code
+            if status_error and getattr(status_error, "response", None) is not None
+            else 200
+        )
         self.reason_phrase = "OK"
+        self.headers = {}
 
     def raise_for_status(self):
         if self._status_error:

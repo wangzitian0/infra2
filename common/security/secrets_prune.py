@@ -1,25 +1,5 @@
 #!/usr/bin/env python3
-"""Remove from each service's Vault path what nothing reads (store hygiene, #649).
-
-A service's store may hold exactly three kinds of value: what its Vault Agent template
-renders into the container (the manifest's store-backed fields), what an operator task
-reads directly (``Service.store_only_keys`` in common/secrets_registry.py, each entry
-naming its reader), and what a probe or an operator parks under a reserved prefix
-(``RESERVED_PREFIXES`` below — the same names the SDK's reconcile ignores), which this
-tool keeps and never counts as an orphan. Anything else is an orphan — a value written
-by a retired code path, or a configuration key that moved into the compose file — and
-it is dangerous precisely because it looks authoritative:
-platform/production/finance_report kept a PRIMARY_MODEL the app stopped reading, and the
-day the template stopped rendering it, a stale Dokploy copy surfaced instead (#649).
-
-    python3 tools/secrets_prune.py                         # dry run over every service
-    python3 tools/secrets_prune.py --service platform/alerting --env staging
-    python3 tools/secrets_prune.py --apply                 # rewrite the documents
-
-Names only, never values. ``--apply`` rewrites each document without the orphan keys
-(KV v2 has no per-key delete); the previous version stays in Vault's history, so a prune
-is reversible with ``vault kv rollback``.
-"""
+"""Remove orphan keys from each service Vault path (store hygiene, #649)."""
 
 from __future__ import annotations
 

@@ -68,16 +68,7 @@ class ProbeResult:
 
 
 def parse_probe_specs(raw: str) -> list[ProbeSpec]:
-    """Parse newline-separated probe specs.
-
-    Format: name|kind|target|expected|severity|timeout_seconds|depends_on|service_id
-
-    The specs arrive via the Dokploy compose env as ONE double-quoted
-    ``\\n``-escaped dotenv value (#541); compose's dotenv normally expands it
-    back to real newlines before the runner sees it. `normalize_specs_text`
-    also accepts the still-encoded form, so the runner parses the same probe
-    set no matter which side of the dotenv expansion it observes.
-    """
+    """Parse newline-separated probe specs into ProbeSpec instances."""
     from common.observability.probe_specs import normalize_specs_text
 
     specs: list[ProbeSpec] = []
@@ -161,14 +152,7 @@ _SEVERITY_RANK = {"critical": 0, "error": 1, "warning": 2, "info": 3}
 
 
 def group_severity(failures: list[ProbeResult]) -> str:
-    """The severity a payload carries for ``failures``: the most severe one declared.
-
-    One payload covers every failing probe of a group. Its severity used to be that of
-    whichever probe rendered first, so a P1 `openpanel-roundtrip` failing next to a P2
-    `openpanel-worker-http` (listed earlier) went out as a warning. An unrecognised
-    severity is sent as `critical`: a typo pages loudly, and the payload still carries
-    only a level the SSOT defines.
-    """
+    """Return the most severe level among probe failures."""
     if not failures:
         return "info"
     declared = (result.spec.severity.strip().lower() for result in failures)
@@ -196,19 +180,7 @@ def build_probe_alert_payload(
     recovered: Mapping[str, float | None] | None = None,
     now: float | None = None,
 ) -> dict:
-    """Build an Alertmanager-shaped payload for the failing probes in ``results``.
-
-    ``severity_override`` forces the severity of every alert AND the group severity —
-    used to route "probe never succeeded" (misconfigured probe) failures to a low
-    severity so a broken probe cannot page critical like a real service outage.
-
-    #905: every alert carries what the card shows — the probe's ``target`` and
-    ``expected`` next to its ``observed`` reading, and ``startsAt`` from ``started_at``
-    (probe name -> epoch seconds of its first failure in this incident). A resolve
-    (no failures) lists each probe in ``recovered`` (probe name -> when its failure
-    started) as a resolved alert with ``startsAt`` and ``endsAt`` (``now``), so the
-    RESOLVED card names what recovered and for how long it was down.
-    """
+    """Build Alertmanager payload for failing probe results."""
     failures = failed_results(results)
     status = "firing" if failures else "resolved"
     environment = resolve_probe_environment()

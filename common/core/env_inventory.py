@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""Environment-variable inventory, SDK classification, and SSOT contract guards.
-
-Every place that WRITES, READS or DECLARES an environment variable becomes one ``Occ``
-record. ``analyze()`` joins the records by key, classifies each key against
-``infra2_sdk.runtime.environment.runtime_env_contract()`` (classes ``C1`` to ``C6``), and
-evaluates the service manifest contract (``common.security.registry.SERVICES``).
-
-Outputs are written to ``.agents/runs/env-inventory`` by default and are never committed.
-"""
+"""Collect environment-variable occurrences across repositories, classify keys against infra2-sdk contracts, and evaluate service manifests."""
 
 from __future__ import annotations
 
@@ -610,11 +602,7 @@ class PyScan(ast.NodeVisitor):
     def visit_ListComp(self, node):
         self._comp(node, [node.elt])
 
-    def visit_SetComp(self, node):
-        self._comp(node, [node.elt])
-
-    def visit_GeneratorExp(self, node):
-        self._comp(node, [node.elt])
+    visit_SetComp = visit_GeneratorExp = visit_ListComp
 
     def visit_DictComp(self, node):
         self._comp(node, [node.key, node.value])
@@ -1761,26 +1749,15 @@ def scan_compose(inv: Inventory, repo: str, path: str, text: str) -> None:
         elif isinstance(node, yaml.SequenceNode):
             for it in node.value:
                 if isinstance(it, yaml.ScalarNode):
-                    s = it.value
-                    if "=" in s:
-                        k, _, v = s.partition("=")
-                        emit_env(
-                            service,
-                            third,
-                            k.strip(),
-                            v,
-                            it.start_mark.line + 1,
-                            container,
-                        )
-                    else:
-                        emit_env(
-                            service,
-                            third,
-                            s.strip(),
-                            None,
-                            it.start_mark.line + 1,
-                            container,
-                        )
+                    k, eq, v = it.value.partition("=")
+                    emit_env(
+                        service,
+                        third,
+                        k.strip(),
+                        v if eq else None,
+                        it.start_mark.line + 1,
+                        container,
+                    )
 
     def shell_blobs(node, key=None):
         """Scalars that a container shell runs: command/entrypoint values and anything holding $$."""
@@ -1919,46 +1896,29 @@ def scan_dockerfile(inv: Inventory, repo: str, path: str, text: str) -> None:
         rest = parts[1] if len(parts) > 1 else ""
         if instr == "ENV":
             if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", rest):
-                for k, v in _split_assign_pairs(rest):
-                    shape, refs, identity = classify_value(
-                        k, v if v is not None else ""
-                    )
-                    defined.add(k)
-                    inv.add(
-                        key=k,
-                        role="write",
-                        layer="dockerfile",
-                        repo=repo,
-                        path=path,
-                        line=ln,
-                        value=v,
-                        shape=shape,
-                        refs=refs,
-                        identity=identity,
-                        via="ENV",
-                        unit=unit,
-                    )
-                    for r in refs:
-                        inv.edge(r, k, "copy" if identity else "derive", repo, path, ln)
+                pairs = _split_assign_pairs(rest)
             else:
                 k, _, v = rest.partition(" ")
-                if k:
-                    shape, refs, identity = classify_value(k, v.strip())
-                    defined.add(k)
-                    inv.add(
-                        key=k,
-                        role="write",
-                        layer="dockerfile",
-                        repo=repo,
-                        path=path,
-                        line=ln,
-                        value=v.strip(),
-                        shape=shape,
-                        refs=refs,
-                        identity=identity,
-                        via="ENV",
-                        unit=unit,
-                    )
+                pairs = [(k, v.strip())] if k else []
+            for k, v in pairs:
+                shape, refs, identity = classify_value(k, v if v is not None else "")
+                defined.add(k)
+                inv.add(
+                    key=k,
+                    role="write",
+                    layer="dockerfile",
+                    repo=repo,
+                    path=path,
+                    line=ln,
+                    value=v,
+                    shape=shape,
+                    refs=refs,
+                    identity=identity,
+                    via="ENV",
+                    unit=unit,
+                )
+                for r in refs:
+                    inv.edge(r, k, "copy" if identity else "derive", repo, path, ln)
         elif instr == "ARG":
             k, eq, v = rest.partition("=")
             k = k.strip()
@@ -2156,29 +2116,20 @@ def scan_workflow(
     for idx, raw in enumerate(text.split("\n")):
         for expr in GH_EXPR.findall(raw):
             for ctx, name in GH_CTX.findall(expr):
-                if ctx == "env":
-                    inv.add(
-                        key=name,
-                        role="read",
-                        layer="workflow-expr",
-                        repo=repo,
-                        path=path,
-                        line=idx + 1,
-                        via="${{ env. }}",
-                        unit=unit,
-                    )
-                else:
-                    inv.add(
-                        key=name,
-                        role="read",
-                        layer="workflow-expr",
-                        repo=repo,
-                        path=path,
-                        line=idx + 1,
-                        ns="gh-secret" if ctx == "secrets" else "gh-var",
-                        via=f"${{{{ {ctx}. }}}}",
-                        unit=unit,
-                    )
+                is_env = ctx == "env"
+                inv.add(
+                    key=name,
+                    role="read",
+                    layer="workflow-expr",
+                    repo=repo,
+                    path=path,
+                    line=idx + 1,
+                    ns=""
+                    if is_env
+                    else ("gh-secret" if ctx == "secrets" else "gh-var"),
+                    via="${{ env. }}" if is_env else f"${{{{ {ctx}. }}}}",
+                    unit=unit,
+                )
 
 
 # ---------------------------------------------------------------------------------------------
@@ -2312,20 +2263,24 @@ def scan_manifest(
                 "truealpha/truealpha/20.data_engine/",
             )
         )
-        if synthetic_code_read or is_app_stack_manifest:
-            inv.add(
-                key=key,
-                role="read",
-                layer="py-settings",
-                repo=repo,
-                path=path,
-                line=ln,
-                required=bool(fld.get("required")),
-                has_default=bool(fld.get("has_default", True)),
-                via="app-manifest",
-                unit=unit,
-                extra={"secret": bool(fld.get("sensitive"))},
-            )
+
+        def emit_synthetic(k: str, via_str: str, extra_d: dict | None = None) -> None:
+            if synthetic_code_read or is_app_stack_manifest:
+                inv.add(
+                    key=k,
+                    role="read",
+                    layer="py-settings",
+                    repo=repo,
+                    path=path,
+                    line=ln,
+                    required=bool(fld.get("required")),
+                    has_default=bool(fld.get("has_default", True)),
+                    via=via_str,
+                    unit=unit,
+                    extra=extra_d,
+                )
+
+        emit_synthetic(key, "app-manifest", {"secret": bool(fld.get("sensitive"))})
         for ph in re.findall(
             r"\{env:([A-Z][A-Z0-9_]+)\}", str(fld.get("composed_from") or "")
         ):
@@ -2354,19 +2309,7 @@ def scan_manifest(
                 conf="med",
                 extra={"alias_of": key},
             )
-            if synthetic_code_read or is_app_stack_manifest:
-                inv.add(
-                    key=a,
-                    role="read",
-                    layer="py-settings",
-                    repo=repo,
-                    path=path,
-                    line=ln,
-                    required=bool(fld.get("required")),
-                    has_default=bool(fld.get("has_default", True)),
-                    via="app-manifest-alias",
-                    unit=unit,
-                )
+            emit_synthetic(a, "app-manifest-alias")
 
 
 TS_PATTERNS = [
@@ -2416,6 +2359,30 @@ def scan_ts(
     for idx, raw in enumerate(text.split("\n"), line0 - 1):
         if raw.lstrip().startswith("//"):
             continue
+
+        def emit_ts_read(
+            key_name: str,
+            via_str: str,
+            dflt: str | None = None,
+            conf_str: str = "high",
+            has_dflt: bool = False,
+        ) -> None:
+            inv.add(
+                key=key_name,
+                role="read",
+                layer="ts-env-read",
+                repo=repo,
+                path=path,
+                line=idx + 1,
+                scope=scope,
+                default=dflt,
+                has_default=has_dflt or dflt is not None,
+                required=False,
+                via=via_str,
+                unit=unit,
+                conf=conf_str,
+            )
+
         for pat, via in TS_PATTERNS:
             for m in pat.finditer(raw):
                 key = m.group(1)
@@ -2442,69 +2409,20 @@ def scan_ts(
                         conf="med",
                     )
                     continue
-                inv.add(
-                    key=key,
-                    role="read",
-                    layer="ts-env-read",
-                    repo=repo,
-                    path=path,
-                    line=idx + 1,
-                    scope=scope,
-                    default=dflt,
-                    has_default=dflt is not None,
-                    required=False,
-                    via=via,
-                    unit=unit,
-                )
+                emit_ts_read(key, via, dflt=dflt)
         if re.search(r"(cloudflare|worker)", path, re.I):
             for m in re.finditer(r"(?<![A-Za-z0-9_.])env\.([A-Z][A-Z0-9_]{2,})", raw):
-                inv.add(
-                    key=m.group(1),
-                    role="read",
-                    layer="ts-env-read",
-                    repo=repo,
-                    path=path,
-                    line=idx + 1,
-                    scope=scope,
-                    via="worker env.",
-                    unit=unit,
-                    conf="med",
-                    required=False,
-                )
+                emit_ts_read(m.group(1), "worker env.", conf_str="med")
         for alias in ts_aliases:
             for m in re.finditer(
                 r"(?<![A-Za-z0-9_.])" + re.escape(alias) + r"\.([A-Z][A-Z0-9_]{2,})",
                 raw,
             ):
-                inv.add(
-                    key=m.group(1),
-                    role="read",
-                    layer="ts-env-read",
-                    repo=repo,
-                    path=path,
-                    line=idx + 1,
-                    scope=scope,
-                    via=f"{alias}.",
-                    unit=unit,
-                    conf="med",
-                    required=False,
-                )
+                emit_ts_read(m.group(1), f"{alias}.", conf_str="med")
         for m in re.finditer(
             r"(?<![A-Za-z0-9_.])env\(\s*[\"']([A-Z][A-Z0-9_]{2,})[\"']", raw
         ):
-            inv.add(
-                key=m.group(1),
-                role="read",
-                layer="ts-env-read",
-                repo=repo,
-                path=path,
-                line=idx + 1,
-                scope=scope,
-                via="env()",
-                unit=unit,
-                conf="med",
-                required=False,
-            )
+            emit_ts_read(m.group(1), "env()", conf_str="med")
         for m in re.finditer(r"vi\.stubEnv\(\s*[\"']([A-Z][A-Z0-9_]{2,})[\"']", raw):
             inv.add(
                 key=m.group(1),
@@ -2522,18 +2440,8 @@ def scan_ts(
             for part in m.group(1).split(","):
                 name = part.split(":")[0].split("=")[0].strip()
                 if name and ANY_KEY.match(name):
-                    inv.add(
-                        key=name,
-                        role="read",
-                        layer="ts-env-read",
-                        repo=repo,
-                        path=path,
-                        line=idx + 1,
-                        scope=scope,
-                        via="destructure",
-                        unit=unit,
-                        conf="med",
-                        has_default="=" in part,
+                    emit_ts_read(
+                        name, "destructure", conf_str="med", has_dflt="=" in part
                     )
         for tok in re.findall(r"[\"']([A-Z][A-Z0-9_]{2,})[\"']", raw):
             inv.strings[(repo, path, "ts")].append((tok, idx + 1, "plain", None))
@@ -2650,10 +2558,12 @@ def scan_package_json(inv: Inventory, repo: str, path: str, text: str) -> None:
 def scan_docs(inv: Inventory, repo: str, path: str, text: str) -> None:
     layer = "docs-ssot" if path.startswith("docs/ssot/") else "docs-other"
     for idx, raw in enumerate(text.split("\n")):
-        for tok in re.findall(r"`([A-Z][A-Z0-9_]{2,})(?:=[^`]*)?`", raw):
-            inv.strings[(repo, path, layer)].append((tok, idx + 1, "plain", None))
-        for tok in re.findall(r"\$\{?([A-Z][A-Z0-9_]{2,})\}?", raw):
-            inv.strings[(repo, path, layer)].append((tok, idx + 1, "plain", None))
+        for pat in (
+            r"`([A-Z][A-Z0-9_]{2,})(?:=[^`]*)?`",
+            r"\$\{?([A-Z][A-Z0-9_]{2,})\}?",
+        ):
+            for tok in re.findall(pat, raw):
+                inv.strings[(repo, path, layer)].append((tok, idx + 1, "plain", None))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -2713,11 +2623,7 @@ DEPLOY_CODE = re.compile(
 
 
 def resolve_weak_refs(inv: Inventory) -> None:
-    """A string literal or a doc token equal to a known key becomes a low-confidence record.
-
-    The syntactic context decides the role: a dict key or a subscript store looks like a write
-    (a deploy script that builds an env mapping), a subscript load or .get() looks like a read.
-    """
+    """Resolve string literals matching known keys into low-confidence occurrences based on syntactic context."""
     known = {
         o.key
         for o in inv.occ
