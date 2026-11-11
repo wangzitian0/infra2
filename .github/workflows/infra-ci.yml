@@ -59,6 +59,7 @@ jobs:
   detect-changes:
     name: Detect Non-Doc Changes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       has_non_doc: ${{ steps.check.outputs.has_non_doc }}
     steps:
@@ -132,6 +133,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -180,6 +182,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -200,9 +203,10 @@ jobs:
       - name: Run harness check
         run: python3 -m tools.harness check --no-submodules-expected
 
-  # Parallel shards (the matrix below is the only place that states the count) run the traced unit tests (#1499). Each test belongs to one shard by
-  # a hash of its node id (common/ci_plugins/pytest_shard.py). The final job
-  # `test-deployer-logic` combines the coverage data and keeps the required check name.
+  # Parallel shards (the matrix below is the only place that states the count) run the traced unit tests (#1499).
+  # Each test file belongs to one shard. common/ci_plugins/pytest_shard.py assigns the files by their
+  # measured seconds (shard_weights.json) before collection, so a worker imports only its own files (#1602).
+  # The final job `test-deployer-logic` combines the coverage data and keeps the required check name.
   test-unit-shard:
     name: Unit tests shard ${{ matrix.shard }}/${{ strategy.job-total }}
     strategy:
@@ -212,6 +216,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -237,8 +242,10 @@ jobs:
 
       # Fail fast left to right: run sub-second static, SSOT and drift gates first
       # so documentation/contract drift fails in <5 seconds rather than waiting for
-      # the 2-minute unit test suite.
+      # the 2-minute unit test suite. The preflight reads only the tree, so one shard
+      # runs it; the other shards do not repeat the same 7 s (#1602).
       - name: Gate preflight static, SSOT, and drift checks
+        if: matrix.shard == 1
         run: |
           cd ${{ github.workspace }}
           # tools.ci_gate_audit --enforce
@@ -253,7 +260,7 @@ jobs:
         env:
           PYTHONSAFEPATH: "1"
           # PYTHONSAFEPATH drops the working directory from sys.path, so name the plugin
-          # directory (it holds only pytest_shard.py). xdist workers inherit it.
+          # directory (it holds only pytest_shard.py and its weights). xdist workers inherit it.
           PYTHONPATH: ${{ github.workspace }}/common/ci_plugins
           COVERAGE_FILE: ${{ github.workspace }}/coverage/.coverage.shard${{ matrix.shard }}
         run: |
@@ -272,13 +279,16 @@ jobs:
             --cov=common \
             --cov=tools \
             --cov-report= \
-            --cov-fail-under=0
+            --cov-fail-under=0 \
+            --shard-durations-out=coverage/durations.shard${{ matrix.shard }}.json
 
       - name: Upload coverage data of this shard
         uses: actions/upload-artifact@v7
         with:
           name: infra2-coverage-data-shard${{ matrix.shard }}
-          path: coverage/.coverage.shard${{ matrix.shard }}
+          path: |
+            coverage/.coverage.shard${{ matrix.shard }}
+            coverage/durations.shard${{ matrix.shard }}.json
           include-hidden-files: true
           if-no-files-found: error
 
@@ -290,6 +300,7 @@ jobs:
     # after a failed or cancelled shard and fail itself (#1499).
     if: always() && needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Require every unit-test shard to succeed
         env:
@@ -387,11 +398,34 @@ jobs:
           cd ${{ github.workspace }}
           uv run --locked python -m tools.ci_gate_ruleset_audit
 
+      # Print the measured load of each shard and merge the file seconds (#1602).
+      # When the loads drift apart, copy the artifact to common/ci_plugins/shard_weights.json.
+      - name: Report shard loads and merge the measured weights
+        # gate-exempt: reporting shard balance for a later commit, not checking code.
+        # It runs after every gate of this job, so a failure here hides no gate.
+        continue-on-error: true
+        run: |
+          cd ${{ github.workspace }}
+          uv run --locked python common/ci_plugins/pytest_shard.py merge \
+            coverage/shard_weights.json coverage/durations.shard*.json
+
+      - name: Upload measured shard weights
+        # gate-exempt: an artifact for a later commit; the artifact service being down
+        # must not fail the required check.
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: infra2-shard-weights
+          path: coverage/shard_weights.json
+          if-no-files-found: warn
+          overwrite: true
+
   test-1password-healthcheck:
     name: Test 1Password Healthcheck
     needs: detect-changes
     if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -400,7 +434,11 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: '1.24.x'
-          cache: false
+          # Restore the Go build cache: a cold build compiles net/http and takes 17-21 s
+          # on every PR (#1602). The package has no go.sum (GOPATH mode), so key the
+          # cache on its source file.
+          cache: true
+          cache-dependency-path: bootstrap/04.1password/healthcheck.go
 
       - name: Build healthcheck binary
         run: |
@@ -413,6 +451,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -473,6 +512,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # This job is advisory - vault policy fmt has container issues in GHA
     continue-on-error: true
     steps:
@@ -513,6 +553,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -546,6 +587,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
