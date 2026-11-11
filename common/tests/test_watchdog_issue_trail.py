@@ -727,8 +727,20 @@ def test_the_tool_retires_obsolete_watchdog_checks_without_touching_app_hook_iss
     api = FakeIssues(
         [
             _issue(11, "infra2-old-check"),
-            _issue(12, "app-hook:finance_report/app:staging_gate:staging"),
-            _issue(13, "app-hook:truealpha/app:scheduled_audit:staging"),
+            {
+                "number": 12,
+                "title": title_for(
+                    "finance_report/app:staging_gate:staging",
+                    title_prefix="app-hook is red: ",
+                ),
+            },
+            {
+                "number": 13,
+                "title": title_for(
+                    "truealpha/app:scheduled_audit:staging",
+                    title_prefix="app-hook is red: ",
+                ),
+            },
             _issue(14, "infra2-ssh"),
         ]
     )
@@ -740,49 +752,6 @@ def test_the_tool_retires_obsolete_watchdog_checks_without_touching_app_hook_iss
     assert "is green again" in bodies[14]
 
 
-def test_watchdog_scoped_issue_api_filters_app_hooks_and_delegates_writes() -> None:
-    """#1583: `_WatchdogScopedIssueApi` forwards `with_body` and write methods intact."""
-    calls: list[tuple] = []
-
-    class _DetailedApi:
-        def open_issues(self, *, with_body: bool = False) -> list[dict]:
-            calls.append(("open_issues", with_body))
-            return [
-                {"number": 1, "title": title_for("infra2-ssh"), "body": "b1"},
-                {
-                    "number": 2,
-                    "title": title_for(
-                        "app-hook:finance_report/app:staging_gate:staging"
-                    ),
-                    "body": "b2",
-                },
-                {"number": 3, "title": "unrelated issue", "body": "b3"},
-            ]
-
-        def create(self, title: str, body: str, labels) -> int:
-            calls.append(("create", title, body, tuple(labels)))
-            return 88
-
-        def comment(self, number: int, body: str) -> None:
-            calls.append(("comment", number, body))
-
-        def update_body(self, number: int, body: str) -> None:
-            calls.append(("update_body", number, body))
-
-        def close(self, number: int) -> None:
-            calls.append(("close", number))
-
-    scoped = trail_tool._WatchdogScopedIssueApi(_DetailedApi())
-    listed = scoped.open_issues(with_body=True)
-    assert [item["number"] for item in listed] == [1, 3]
-    assert scoped.create("T", "B", ("incident",)) == 88
-    scoped.comment(88, "C")
-    scoped.update_body(88, "U")
-    scoped.close(88)
-    assert calls == [
-        ("open_issues", True),
-        ("create", "T", "B", ("incident",)),
-        ("comment", 88, "C"),
-        ("update_body", 88, "U"),
-        ("close", 88),
-    ]
+def test_watchdog_issue_trail_cli_has_no_scoped_proxy_wrapper() -> None:
+    """#1590: namespace isolation uses `title_prefix` in `infra2_sdk`, not a CLI proxy."""
+    assert not hasattr(trail_tool, "_WatchdogScopedIssueApi")

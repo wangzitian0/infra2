@@ -155,9 +155,9 @@ def test_ops_checks_audit_job_installs_uv_before_the_hook_audit() -> None:
 def test_ops_checks_audit_job_runs_all_deploy_guards_before_scheduled_app_hooks() -> (
     None
 ):
-    """#1583: all deploy-guard steps run unconditionally before scheduled App hooks,
-    scheduled App hooks emit `scheduled-audit-result.json`, and `Alert on failure`
-    classifies and deduplicates alerts via `resolve_audit_job_failure_alert`."""
+    """#1583/#1590: all deploy-guard steps run unconditionally before scheduled App hooks,
+    scheduled App hooks emit `scheduled-audit-result.json`, and `Alert on confirmed failure`
+    routes paging through `common.observability.page_dedup.dedup_page`."""
     audit_steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["audit"][
         "steps"
     ]
@@ -176,8 +176,9 @@ def test_ops_checks_audit_job_runs_all_deploy_guards_before_scheduled_app_hooks(
     assert "--run-scheduled-audit" in hook_step["run"]
     assert "--output-json scheduled-audit-result.json" in hook_step["run"]
 
-    alert_idx = names.index("Alert on failure")
-    assert hook_idx < alert_idx
+    alert_idx = names.index("Alert on confirmed failure")
+    resolve_idx = names.index("Resolve the paged failures")
+    assert hook_idx < alert_idx < resolve_idx
     alert_step = audit_steps[alert_idx]
-    assert "resolve_audit_job_failure_alert" in alert_step["run"]
-    assert "scheduled-audit-result.json" in alert_step["run"]
+    assert "dedup_page(" in alert_step["run"]
+    assert "confirmed_finding_pairs(" in alert_step["run"]

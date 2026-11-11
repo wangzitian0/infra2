@@ -76,6 +76,7 @@ concurrency:
 
 jobs:
   reconcile:
+    # alert-delivery-exempt: event-driven tag/prod deploy failure alert (not a scheduled check); review=2027-05-01
     name: reconcile iac-pinned inputs
     # A production promotion waits for the owner. A tag push reconciles staging only (#1125).
     environment: ${{ inputs.promote_prod && 'production' || 'staging' }}
@@ -199,6 +200,14 @@ jobs:
         run: |
           set -euo pipefail
 
+          if [[ "$EVENT_NAME" == "schedule" ]]; then
+            echo "RECONCILE_PHASE=sync-app-releases" >> "$GITHUB_ENV"
+            python -m tools.reconcile_iac_inputs \
+              --sync-app-releases --apply-repos-yaml --sync-gitlinks --create-pr \
+              --output-json sync-app-releases.json
+            exit 0
+          fi
+
           # after = the release tag being promoted; before = the previous v*.*.* tag.
           # staging/prod accept tags only, so reconcile always pins the tag (not a sha).
           after="$REF_NAME"
@@ -208,13 +217,7 @@ jobs:
           # explicit, deliberate promotion via workflow_dispatch (promote_prod=true) —
           # a tag push NEVER auto-deploys prod.
           promote_prod="false"
-          if [[ "$EVENT_NAME" == "schedule" ]]; then
-            after="$(git tag --list 'v*.*.*' --sort=-v:refname --merged origin/main | head -n1 || true)"
-            if [[ -z "$after" ]]; then
-              echo "::error::no on-main release tag found for scheduled reconcile."
-              exit 1
-            fi
-          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             after="${INPUT_AFTER:-$REF_NAME}"
             dry_run="$INPUT_DRY_RUN"
             promote_prod="$INPUT_PROMOTE_PROD"
@@ -374,7 +377,7 @@ jobs:
             exit 0
           fi
 
-          if [[ "$EVENT_NAME" == "schedule" || "${{ inputs.sync_app_releases || false }}" == "true" ]]; then
+          if [[ "${{ inputs.sync_app_releases || false }}" == "true" ]]; then
             sync_args=(--sync-app-releases --apply-repos-yaml --sync-gitlinks --output-json sync-app-releases.json)
             if [[ "$dry_run" == "true" ]]; then
               sync_args+=(--dry-run)
@@ -383,22 +386,6 @@ jobs:
             fi
             echo "RECONCILE_PHASE=sync-app-releases" >> "$GITHUB_ENV"
             python -m tools.reconcile_iac_inputs "${sync_args[@]}"
-            if [[ "$promote_prod" != "true" && "$dry_run" != "true" && -f sync-app-releases.json ]]; then
-              synced_infra_tag="$(jq -r 'if .infra_tag_cut then (.next_infra_tag // empty) else empty end' sync-app-releases.json)"
-              if [[ -n "$synced_infra_tag" ]]; then
-                before="$after"
-                after="$synced_infra_tag"
-                args=(--after "$after"
-                      --before "$before"
-                      --domain "$INTERNAL_DOMAIN"
-                      --timeout 3300
-                      --output-json reconcile-result.json
-                      --env staging)
-                if [[ "$run_post_deploy_hooks" == "true" ]]; then
-                  args+=(--run-post-deploy-hooks --post-deploy-hook-slot staging_gate)
-                fi
-              fi
-            fi
           fi
 
           echo "RECONCILE_PHASE=reconcile-deploy" >> "$GITHUB_ENV"

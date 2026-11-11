@@ -103,6 +103,7 @@ jobs:
       INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
       INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
       INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      DEPLOY_GUARD_AUDIT_REPORT: ${{ github.workspace }}/deploy-guard-audit-report.json
       GITHUB_SERVER_URL: ${{ github.server_url }}
       GITHUB_REPOSITORY: ${{ github.repository }}
       GITHUB_RUN_ID: ${{ github.run_id }}
@@ -140,28 +141,40 @@ jobs:
       - name: Audit webhook delivery health (#682)
         # Reads the hook's own delivery list, the one record of #585's seven silent
         # weeks. Needs a token with `admin:repo_hook` READ scope — the Actions token
-        # cannot carry it, so the step is inert until INFRA2_HOOKS_READ_TOKEN exists
-        # rather than failing daily on a permission it can never have.
-        if: ${{ env.INFRA2_HOOKS_READ_TOKEN != '' }}
+        # cannot carry it, so the step records `skipped` until INFRA2_HOOKS_READ_TOKEN
+        # exists rather than failing daily on a permission it can never have.
+        if: ${{ !cancelled() }}
         env:
           GITHUB_TOKEN: ${{ secrets.INFRA2_HOOKS_READ_TOKEN }}
-        run: python tools/webhook_delivery_audit.py --repo "$GITHUB_REPOSITORY"
+        run: |
+          if [[ -z "${INFRA2_HOOKS_READ_TOKEN:-}" ]]; then
+            python tools/deploy_guard_audit.py --skip-check guard:webhook-delivery missing-token
+          else
+            python tools/deploy_guard_audit.py --record-check guard:webhook-delivery "webhook delivery health" -- python tools/webhook_delivery_audit.py --repo "$GITHUB_REPOSITORY"
+          fi
 
       - name: Report the production marker lag (#650)
         # Delivered every run, not only on failure (#425): the line names both
         # coordinates. Non-zero only when the marker predates the release-pin deployer,
         # which is the state that breaks the next production release.
-        run: python -m common.deploy.release_markers --repo-root .
+        if: ${{ !cancelled() }}
+        run: python tools/deploy_guard_audit.py --record-check guard:production-marker-lag "production marker lag" -- python -m common.deploy.release_markers --repo-root .
 
       - name: Audit App runtime hooks manifests (#1416)
-        run: python -m tools.reconcile_iac_inputs --audit-app-hooks
+        if: ${{ !cancelled() }}
+        run: python tools/deploy_guard_audit.py --record-check guard:app-hooks-manifest "App runtime hooks manifests" -- python -m tools.reconcile_iac_inputs --audit-app-hooks
 
       - name: Audit single deploy trigger (necessity)
-        if: env.DOKPLOY_API_KEY != ''
-        run: python -m invoke dokploy.audit-autodeploy
+        if: ${{ !cancelled() }}
+        run: |
+          if [[ -z "${DOKPLOY_API_KEY:-}" ]]; then
+            python tools/deploy_guard_audit.py --skip-check guard:dokploy-autodeploy missing-api-key
+          else
+            python tools/deploy_guard_audit.py --record-check guard:dokploy-autodeploy "Dokploy single deploy trigger" -- python -m invoke dokploy.audit-autodeploy
+          fi
 
       - name: Run scheduled App runtime audits (#1493)
-        if: ${{ github.event.inputs.dry_run != 'true' }}
+        if: ${{ !cancelled() && github.event.inputs.dry_run != 'true' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           AI_API_KEY: ${{ secrets.ZAI_CODING_CN_API_KEY }}
@@ -171,34 +184,67 @@ jobs:
           TA_MCP_TOKEN: ${{ secrets.TA_MCP_TOKEN }}
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          python -m tools.reconcile_iac_inputs --run-scheduled-audit --output-json scheduled-audit-result.json
+          python tools/deploy_guard_audit.py --record-check guard:scheduled-app-audit "scheduled App runtime audits" -- python -m tools.reconcile_iac_inputs --run-scheduled-audit --output-json scheduled-audit-result.json
 
-      - name: Alert on failure
+      - name: Alert on confirmed failure
         if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INFRA2_REPORTS_FEISHU_APP_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_ID }}
+          INFRA2_REPORTS_FEISHU_APP_SECRET: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_SECRET }}
+          INFRA2_REPORTS_FEISHU_CHAT_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_CHAT_ID }}
         run: |
           python - <<'PY'
           import os
-          from pathlib import Path
+          from common.observability.page_dedup import dedup_page, run_url_from_env
+          from tools.deploy_guard_audit import (
+              confirmed_finding_pairs,
+              observed_all_clean,
+              unevaluated_prefixes,
+          )
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
-          from tools.reconcile_iac_inputs import resolve_audit_job_failure_alert
 
-          run_url = "/".join(
-              v for v in (
-                  os.environ.get("GITHUB_SERVER_URL"),
-                  os.environ.get("GITHUB_REPOSITORY"),
-                  "actions/runs",
-                  os.environ.get("GITHUB_RUN_ID"),
-              ) if v
+          pairs = confirmed_finding_pairs(os.environ)
+          if not pairs:
+              print("deploy-guard audit job failed without a confirmed finding -- not paging.")
+          detail = "\n".join(line for _key, line in pairs)
+          outcome = dedup_page(
+              os.environ,
+              job="audit",
+              label="部署守卫与应用运行态审计",
+              findings=pairs,
+              observed_clean=observed_all_clean(os.environ),
+              unevaluated=unevaluated_prefixes(os.environ),
+              detail=detail,
+              page_message=(
+                  f"🚨 Deploy-guard & App runtime audit found {len(pairs)} failing check(s).\n"
+                  f"{detail}\n"
+                  f"Run: {run_url_from_env(os.environ)}"
+              ),
+              deliver_page=deliver_out_of_band_alert,
           )
-          alert_text, skip_notice = resolve_audit_job_failure_alert(
-              Path("scheduled-audit-result.json"),
-              run_url=run_url,
+          raise SystemExit(outcome.exit_code)
+          PY
+
+      - name: Resolve the paged failures
+        if: success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os
+          from common.observability.page_dedup import resolve_page_state
+          from tools.deploy_guard_audit import unevaluated_prefixes
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          outcome = resolve_page_state(
+              os.environ,
+              job="audit",
+              label="部署守卫与应用运行态审计",
+              unevaluated=unevaluated_prefixes(os.environ),
+              deliver_page=deliver_out_of_band_alert,
           )
-          if skip_notice:
-              print(skip_notice)
-              raise SystemExit(0)
-          assert alert_text is not None
-          deliver_out_of_band_alert(os.environ, alert_text)
+          raise SystemExit(outcome.exit_code)
           PY
 
   watchdog:

@@ -84,11 +84,25 @@ def _check_exemption_expiry(
     return None
 
 
-def registered_signal_names() -> set[str]:
+def _load_signals(signals_yaml: Path = SIGNALS_YAML) -> list[dict]:
     import yaml
 
-    data = yaml.safe_load(SIGNALS_YAML.read_text(encoding="utf-8"))
-    return {str(s.get("signal", "")) for s in data.get("signals", [])}
+    data = yaml.safe_load(signals_yaml.read_text(encoding="utf-8")) or {}
+    return [s for s in data.get("signals", []) if isinstance(s, dict)]
+
+
+def registered_signal_names() -> set[str]:
+    return {str(s.get("signal", "")) for s in _load_signals()}
+
+
+def day_report_self_signals(signals_yaml: Path = SIGNALS_YAML) -> set[str]:
+    return {
+        str(s.get("signal", ""))
+        for s in _load_signals(signals_yaml)
+        if s.get("primary_owner") == "self"
+        and s.get("tier") == "day"
+        and s.get("type") == "report"
+    }
 
 
 def lint_python_callsites(
@@ -189,10 +203,103 @@ def lint_scheduled_jobs(
     return errors
 
 
+def lint_workflow_callsites(
+    workflows_dir: Path | None = None,
+    signals: set[str] | None = None,
+    *,
+    day_report_signals: set[str] | None = None,
+    today: datetime.date | None = None,
+) -> list[str]:
+    import yaml
+
+    wf_dir = (
+        workflows_dir if workflows_dir is not None else (ROOT / ".github/workflows")
+    )
+    signals = signals if signals is not None else registered_signal_names()
+    day_reports = (
+        day_report_signals
+        if day_report_signals is not None
+        else day_report_self_signals()
+    )
+    current_date = today if today is not None else datetime.date.today()
+    errors: list[str] = []
+    if not wf_dir.is_dir():
+        return errors
+    for path in sorted(wf_dir.glob("*.y*ml")):
+        text = path.read_text(encoding="utf-8")
+        if "\njobs:" not in text:
+            continue
+        job_ids = set(((yaml.safe_load(text) or {}).get("jobs") or {}).keys())
+        jobs_start = text.index("\njobs:")
+        job_re = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$", re.M)
+        headers = [
+            m for m in job_re.finditer(text, jobs_start) if m.group(1) in job_ids
+        ]
+        for i, m in enumerate(headers):
+            job_id = m.group(1)
+            start = m.start()
+            end = headers[i + 1].start() if i + 1 < len(headers) else len(text)
+            block = text[start:end]
+            uses_primitive = any(p in block for p in PRIMITIVES) or (
+                "deliver_page=deliver_out_of_band_alert" in block
+            )
+            if not uses_primitive:
+                continue
+            target = f"{path.name} job '{job_id}'"
+            delivery_exempt = DELIVERY_EXEMPT_RE.search(block)
+            if delivery_exempt:
+                err = _check_exemption_expiry(
+                    target,
+                    delivery_exempt.group(1),
+                    current_date,
+                    require_review_date=True,
+                )
+                if err is not None:
+                    errors.append(err)
+                continue
+            sched_exempt = JOB_EXEMPT_RE.search(block)
+            if sched_exempt:
+                err = _check_exemption_expiry(
+                    target,
+                    sched_exempt.group(1),
+                    current_date,
+                    require_review_date="# nowheel:" in sched_exempt.group(0),
+                )
+                if err is not None:
+                    errors.append(err)
+                continue
+            declared = JOB_SIGNAL_RE.findall(block)
+            if not declared:
+                errors.append(
+                    f"{target}: calls an alert-delivery primitive in inline workflow "
+                    "Python without '# signal: <signal>' or '# alert-delivery-exempt: "
+                    "<reason>; review=YYYY-MM-DD' (#1590 no-new-wheels)"
+                )
+                continue
+            for name in declared:
+                if name not in signals:
+                    errors.append(
+                        f"{target}: '# signal: {name}' is not a registered signal"
+                    )
+                elif name in day_reports:
+                    if (
+                        "deliver_out_of_band_alert(" in block
+                        or "dedup_page(" not in block
+                    ):
+                        errors.append(
+                            f"{target}: day/report signal '{name}' must route paging "
+                            "through common.observability.page_dedup.dedup_page "
+                            "(direct deliver_out_of_band_alert call forbidden; #1590)"
+                        )
+    return errors
+
+
 def main() -> int:
     signals = registered_signal_names()
-    errors = lint_python_callsites(signals=signals) + lint_scheduled_jobs(
-        signals=signals
+    errors = (
+        lint_python_callsites(signals=signals)
+        + lint_scheduled_jobs(signals=signals)
+        + lint_workflow_callsites(signals=signals)
     )
     for e in errors:
         print(f"ERROR: {e}")

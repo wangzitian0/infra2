@@ -1142,6 +1142,7 @@ def _execute(job: str, step: str) -> int:
 
 #: job -> (alert step, resolve step)
 DEDUPED_JOBS = {
+    "audit": ("Alert on confirmed failure", "Resolve the paged failures"),
     "facet-reconcile": ("Alert on confirmed findings", "Resolve the paged findings"),
     "vault-self-refresh-audit": (
         "Alert on confirmed failure",
@@ -1467,3 +1468,73 @@ def test_secrets_store_reconciled_without_1password_does_not_resolve_its_finding
     write(missing=[])
     assert _execute("secrets-reconcile", resolve) == 0
     assert ch.pages[-1].startswith("✅ [已恢复] 密钥对账与容量")
+
+
+def test_audit_steps_page_report_and_resolve(step_env, tmp_path) -> None:
+    import common.deploy.deploy_guard_audit as dga
+
+    api, ch, monkeypatch = step_env
+    alert, resolve = DEDUPED_JOBS["audit"]
+    guard_report = tmp_path / "deploy-guard-audit-report.json"
+    hook_report = tmp_path / "scheduled-audit-result.json"
+    monkeypatch.setenv(dga.REPORT_ENV, str(guard_report))
+    monkeypatch.setenv("SCHEDULED_AUDIT_RESULT", str(hook_report))
+
+    def write_state(
+        *, guard_fail=False, hook_summary="verdict age 49h", skip_hooks=False
+    ):
+        checks = {k: {"status": "pass", "summary": k} for k in dga.ALL_GUARD_KEYS}
+        if guard_fail:
+            checks["guard:fanout-sufficiency"] = {
+                "status": "fail",
+                "summary": "unmapped compose",
+            }
+        guard_report.write_text(json.dumps({"checks": checks}), encoding="utf-8")
+        if skip_hooks:
+            hook_report.unlink(missing_ok=True)
+        else:
+            hook_report.write_text(
+                json.dumps(
+                    {
+                        "scheduled_audit_results": [
+                            {
+                                "service": "truealpha/app",
+                                "slot": "scheduled_audit",
+                                "environment": "staging",
+                                "version_ref": "v0.2.87",
+                                "status": "fail" if hook_summary else "pass",
+                                "summary": hook_summary or "ok",
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+    write_state(hook_summary="verdict age 49h")
+    assert _execute("audit", alert) == 0
+    assert len(ch.pages) == 1 and "verdict age 49h" in ch.pages[0]
+    assert api.open_titles() == ["ops-checks paged: audit"]
+
+    age_state(api, "audit", 1)
+    write_state(hook_summary="verdict age 73h")
+    assert _execute("audit", alert) == 0
+    assert len(ch.pages) == 1
+    assert ch.reports[0].startswith("[报告] 仍未恢复 · 第 2 天 · audit")
+    assert "verdict age 73h" in ch.reports[0]
+
+    # missing scheduled-audit-result.json leaves app-hook:* unevaluated (no false resolve)
+    write_state(hook_summary="", skip_hooks=True)
+    assert _execute("audit", resolve) == 0
+    assert len(ch.pages) == 1 and api.open_titles() == ["ops-checks paged: audit"]
+
+    # adding a guard failure changes identity and re-pages
+    write_state(guard_fail=True, hook_summary="verdict age 73h")
+    assert _execute("audit", alert) == 0
+    assert len(ch.pages) == 2 and "guard:fanout-sufficiency" in ch.pages[-1]
+
+    # all guards and scheduled hooks clean -> resolves and closes ops-checks paged: audit
+    write_state(guard_fail=False, hook_summary="")
+    assert _execute("audit", resolve) == 0
+    assert ch.pages[-1].startswith("✅ [已恢复] 部署守卫与应用运行态审计")
+    assert api.open_titles() == []
