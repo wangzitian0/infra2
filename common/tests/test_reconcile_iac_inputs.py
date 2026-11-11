@@ -3739,8 +3739,9 @@ def _recording_runner(argvs: list[list[str]]):
     return run
 
 
+@pytest.mark.parametrize("checkout_at", ["tagged_commit", "later_commit"])
 def test_hook_checkout_dates_a_name_from_the_lineage_of_the_release(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, checkout_at
 ) -> None:
     """#1567: the truealpha nightly check runs `git rev-parse <tag>^{commit}` and then
     `git log --reverse -S'"name"' <tag>` in the hook checkout. A depth-1 checkout has no tag
@@ -3748,7 +3749,10 @@ def test_hook_checkout_dates_a_name_from_the_lineage_of_the_release(
     second command with the release commit (commit 2) in place of commit 1, which is the
     commit that first held the name."""
     origin, first, tagged, head = _origin_with_release_tag(tmp_path)
-    cwd, tmp = _checkout_of(monkeypatch, origin, head, release_ref="v1.2.3")
+    # The audit asks for the tag's own commit (`resolve_image_ref` peels the tag), so
+    # "tagged_commit" is the real flow. A plain tag fetch sends no history there.
+    sha = tagged if checkout_at == "tagged_commit" else head
+    cwd, tmp = _checkout_of(monkeypatch, origin, sha, release_ref="v1.2.3")
     try:
         # Checked first: `git log -S` below downloads the old file contents it needs.
         missing = _git(cwd, "rev-list", "--objects", "--missing=print", "v1.2.3")
@@ -3766,9 +3770,12 @@ def test_hook_checkout_dates_a_name_from_the_lineage_of_the_release(
             "f.txt",
         ).splitlines()
         assert dated[0] == first
+        assert _git(cwd, "rev-list", "--count", "v1.2.3") == "2"
         # The checked-out commit is the one that was asked for, not the tag.
-        assert _git(cwd, "rev-parse", "HEAD") == head
-        assert (cwd / "f.txt").read_text() == '"needle"\nC\n'
+        assert _git(cwd, "rev-parse", "HEAD") == sha
+        assert (cwd / "f.txt").read_text() == (
+            '"needle"\nB\n' if checkout_at == "tagged_commit" else '"needle"\nC\n'
+        )
     finally:
         assert tmp is not None
         tmp.cleanup()
@@ -3830,7 +3837,9 @@ def test_hook_checkout_runs_one_blobless_full_history_tag_fetch(
         assert tag_fetches[0][-2:] == ["tag", "v1.2.3"]
         assert "--filter=blob:none" in tag_fetches[0]
         assert "--no-tags" in tag_fetches[0]
+        assert "--depth=2147483647" in tag_fetches[0]
         assert "--depth" not in tag_fetches[0]
+        assert "--unshallow" not in tag_fetches[0]
     finally:
         assert tmp is not None
         tmp.cleanup()
@@ -4008,3 +4017,14 @@ def test_run_hook_slot_passes_the_release_tag_only_for_the_audit_slot(
     rc = main(argv)
     assert rc == 0
     assert seen == [("finance_report/app", expected)]
+
+
+def test_scheduled_audit_function_asks_for_no_tag_for_another_slot(
+    monkeypatch, tmp_path
+) -> None:
+    """The slot gate at the audit call site: `run_scheduled_app_audits` with a slot that does
+    not read the lineage must not ask for the release tag."""
+    seen = _record_hook_checkouts(monkeypatch, tmp_path)
+    reconcile.run_scheduled_app_audits(tmp_path, slot="smoke", runner=subprocess.run)
+    assert seen
+    assert {ref for _svc, ref in seen} == {""}
