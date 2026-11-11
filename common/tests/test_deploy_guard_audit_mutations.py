@@ -317,3 +317,88 @@ def test_audit_cli_includes_vault_agent_template_and_prints_per_root_breakdown(
         assert f"  {sr}: " in out
         assert "compose files," in out
         assert "inputs" in out
+
+
+def test_recorded_check_cli_corrupt_report_and_scheduled_audit_crash_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1590: `cli()` records pass/fail/skipped checks, corrupt or missing reports remain
+    unevaluated (`['']` / `observed_all_clean=False`), and a crashed `--run-scheduled-audit`
+    step without `scheduled-audit-result.json` surfaces `guard:scheduled-app-audit`."""
+    import json
+    import sys
+
+    guard_report = tmp_path / "guard-report.json"
+    hook_report = tmp_path / "hook-report.json"
+    env = {
+        deploy_guard_audit.REPORT_ENV: str(guard_report),
+        "SCHEDULED_AUDIT_RESULT": str(hook_report),
+    }
+    monkeypatch.setenv(deploy_guard_audit.REPORT_ENV, str(guard_report))
+    monkeypatch.setenv("SCHEDULED_AUDIT_RESULT", str(hook_report))
+
+    # Both missing -> nothing observed, all unevaluated (`[""]`)
+    assert deploy_guard_audit.unevaluated_prefixes(env) == [""]
+    assert deploy_guard_audit.observed_all_clean(env) is False
+
+    # Corrupt JSON in both -> treated safely as empty/unreadable, never clean
+    guard_report.write_text("{corrupt", encoding="utf-8")
+    hook_report.write_text("{corrupt", encoding="utf-8")
+    assert deploy_guard_audit.unevaluated_prefixes(env) == [""]
+    assert deploy_guard_audit.observed_all_clean(env) is False
+
+    # `--skip-check` records skipped status and keeps that guard prefix unevaluated
+    assert (
+        deploy_guard_audit.cli(
+            ["--skip-check", "guard:dokploy-autodeploy", "missing-api-key"]
+        )
+        == 0
+    )
+    assert "guard:dokploy-autodeploy" in deploy_guard_audit.unevaluated_prefixes(env)
+
+    # `--record-check` forwards non-zero exit code and records `exited <code>` on empty output
+    rc = deploy_guard_audit.cli(
+        [
+            "--record-check",
+            "guard:scheduled-app-audit",
+            "scheduled App runtime audits",
+            "--",
+            sys.executable,
+            "-c",
+            "raise SystemExit(3)",
+        ]
+    )
+    assert rc == 3
+    # When `hook-report.json` is corrupt/missing, the crashed runner step itself surfaces
+    pairs = deploy_guard_audit.confirmed_finding_pairs(env)
+    assert pairs == [
+        (
+            "guard:scheduled-app-audit",
+            "- guard:scheduled-app-audit: scheduled App runtime audits: exited 3",
+        )
+    ]
+
+    # Once `hook-report.json` contains a concrete failing `app-hook:*` item, granular key wins
+    hook_report.write_text(
+        json.dumps(
+            {
+                "scheduled_audit_results": [
+                    {
+                        "service": "finance_report/app",
+                        "slot": "scheduled_audit",
+                        "environment": "staging",
+                        "version_ref": "v0.1.0",
+                        "status": "fail",
+                        "summary": "smoke failed",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert deploy_guard_audit.confirmed_finding_pairs(env) == [
+        (
+            "app-hook:finance_report/app:scheduled_audit:staging",
+            "- finance_report/app [scheduled_audit @ v0.1.0]: smoke failed",
+        )
+    ]

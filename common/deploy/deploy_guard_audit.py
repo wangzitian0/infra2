@@ -14,8 +14,13 @@ scheduled monitor (ops-checks deploy-guard-audit task alerts on the non-zero exi
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -300,5 +305,208 @@ def main(root: Path = ROOT) -> int:
     return 1
 
 
+REPORT_ENV = "DEPLOY_GUARD_AUDIT_REPORT"
+DEFAULT_REPORT_PATH = "deploy-guard-audit-report.json"
+DEFAULT_HOOK_RESULT_PATH = "scheduled-audit-result.json"
+ALL_GUARD_KEYS = (
+    "guard:fanout-sufficiency",
+    "guard:webhook-delivery",
+    "guard:production-marker-lag",
+    "guard:app-hooks-manifest",
+    "guard:dokploy-autodeploy",
+)
+SCHEDULED_AUDIT_STEP_KEY = "guard:scheduled-app-audit"
+
+
+def report_path(env: Mapping[str, str] | None = None) -> Path:
+    current = os.environ if env is None else env
+    return Path(current.get(REPORT_ENV) or DEFAULT_REPORT_PATH)
+
+
+def load_report(env: Mapping[str, str] | None = None) -> dict[str, Any]:
+    path = report_path(env)
+    if not path.exists():
+        return {"checks": {}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"checks": {}}
+    return data if isinstance(data, dict) else {"checks": {}}
+
+
+def record_check(
+    key: str,
+    status: str,
+    summary: str = "",
+    *,
+    env: Mapping[str, str] | None = None,
+) -> None:
+    path = report_path(env)
+    report = load_report(env)
+    checks = report.setdefault("checks", {})
+    if not isinstance(checks, dict):
+        checks = {}
+        report["checks"] = checks
+    checks[key] = {"status": status, "summary": summary}
+    path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def run_recorded_check(
+    key: str,
+    label: str,
+    argv: list[str],
+    *,
+    env: Mapping[str, str] | None = None,
+    runner=subprocess.run,
+) -> int:
+    proc = runner(argv, text=True, capture_output=True, check=False)
+    if proc.stdout:
+        sys.stdout.write(proc.stdout)
+    if proc.stderr:
+        sys.stderr.write(proc.stderr)
+    if proc.returncode == 0:
+        record_check(key, "pass", label, env=env)
+        return 0
+    combined = ((proc.stderr or "") + "\n" + (proc.stdout or "")).strip()
+    first = combined.splitlines()[-1][:200] if combined else f"exited {proc.returncode}"
+    record_check(key, "fail", f"{label}: {first}", env=env)
+    return int(proc.returncode)
+
+
+def _load_hook_results(
+    env: Mapping[str, str] | None = None,
+    *,
+    hook_result_path: Path | None = None,
+) -> list[dict[str, Any]] | None:
+    target = (
+        hook_result_path
+        if hook_result_path is not None
+        else Path(
+            (os.environ if env is None else env).get("SCHEDULED_AUDIT_RESULT")
+            or DEFAULT_HOOK_RESULT_PATH
+        )
+    )
+    if not target.exists():
+        return None
+    try:
+        raw = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    items = raw.get("scheduled_audit_results") if isinstance(raw, Mapping) else None
+    if not isinstance(items, list):
+        return None
+    return [item for item in items if isinstance(item, dict)]
+
+
+def confirmed_finding_pairs(
+    env: Mapping[str, str] | None = None,
+    *,
+    hook_result_path: Path | None = None,
+) -> list[tuple[str, str]]:
+    """Return ``(identity_key, detail_line)`` pairs for confirmed deploy-guard and App hook failures."""
+    report = load_report(env)
+    checks = report.get("checks") if isinstance(report.get("checks"), Mapping) else {}
+    pairs: list[tuple[str, str]] = []
+    for key in ALL_GUARD_KEYS:
+        entry = checks.get(key)
+        if isinstance(entry, Mapping) and entry.get("status") == "fail":
+            summary = str(entry.get("summary") or key).splitlines()[0][:200]
+            pairs.append((key, f"- {key}: {summary}"))
+    hook_items = _load_hook_results(env, hook_result_path=hook_result_path) or []
+    hook_pairs: list[tuple[str, str]] = []
+    for item in sorted(hook_items, key=lambda r: str(r.get("service") or "")):
+        if item.get("status") == "pass":
+            continue
+        svc = str(item.get("service") or "?")
+        slot = str(item.get("slot") or "scheduled_audit")
+        norm_env = (
+            "production"
+            if str(item.get("environment") or "staging") in ("prod", "production")
+            else "staging"
+        )
+        vref = str(item.get("version_ref") or "?")
+        raw_summary = (
+            str(item.get("summary") or "").strip()
+            or str(item.get("stderr_tail") or "").strip()
+            or "hook failed"
+        )
+        summary_line = raw_summary.splitlines()[0][:200]
+        key = f"app-hook:{svc}:{slot}:{norm_env}"
+        hook_pairs.append((key, f"- {svc} [{slot} @ {vref}]: {summary_line}"))
+    if hook_pairs:
+        pairs.extend(hook_pairs)
+    else:
+        sched_entry = checks.get(SCHEDULED_AUDIT_STEP_KEY)
+        if isinstance(sched_entry, Mapping) and sched_entry.get("status") == "fail":
+            summary = str(
+                sched_entry.get("summary") or SCHEDULED_AUDIT_STEP_KEY
+            ).splitlines()[0][:200]
+            pairs.append(
+                (SCHEDULED_AUDIT_STEP_KEY, f"- {SCHEDULED_AUDIT_STEP_KEY}: {summary}")
+            )
+    return pairs
+
+
+def unevaluated_prefixes(
+    env: Mapping[str, str] | None = None,
+    *,
+    hook_result_path: Path | None = None,
+) -> list[str]:
+    """Return finding key prefixes that this audit run did not evaluate."""
+    report = load_report(env)
+    checks = report.get("checks") if isinstance(report.get("checks"), Mapping) else {}
+    hook_items = _load_hook_results(env, hook_result_path=hook_result_path)
+    if not checks and hook_items is None:
+        return [""]
+    prefixes = [
+        key
+        for key in ALL_GUARD_KEYS
+        if not isinstance(checks.get(key), Mapping)
+        or checks[key].get("status") not in ("pass", "fail")
+    ]
+    if hook_items is None:
+        prefixes.append("app-hook:")
+    return prefixes
+
+
+def observed_all_clean(
+    env: Mapping[str, str] | None = None,
+    *,
+    hook_result_path: Path | None = None,
+) -> bool:
+    """True when every evaluated check passed and at least one check ran."""
+    report = load_report(env)
+    checks = report.get("checks") if isinstance(report.get("checks"), Mapping) else {}
+    hook_items = _load_hook_results(env, hook_result_path=hook_result_path)
+    if not checks and hook_items is None:
+        return False
+    return not confirmed_finding_pairs(env, hook_result_path=hook_result_path)
+
+
+def cli(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args[:1] == ["--skip-check"] and len(args) >= 2:
+        reason = args[2] if len(args) >= 3 else "skipped"
+        record_check(args[1], "skipped", reason)
+        return 0
+    if args[:1] == ["--record-check"] and "--" in args:
+        sep = args.index("--")
+        if sep < 2 or not args[sep + 1 :]:
+            raise SystemExit(
+                "usage: deploy_guard_audit.py --record-check <key> [label] -- <cmd...>"
+            )
+        key = args[1]
+        label = args[2] if sep >= 3 else key
+        return run_recorded_check(key, label, args[sep + 1 :])
+    rc = main()
+    if os.environ.get(REPORT_ENV):
+        record_check(
+            "guard:fanout-sufficiency",
+            "pass" if rc == 0 else "fail",
+            "deploy fan-out coverage sufficiency",
+        )
+    return rc
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(cli())

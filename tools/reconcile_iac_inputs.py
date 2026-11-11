@@ -68,8 +68,6 @@ from common.observability.issue_trail import (
     Trail,
     issue_trail_mode,
     reconcile_issue_trail,
-    scrub,
-    title_for,
 )
 from infra2_sdk.deploy import DeployRequest
 from infra2_sdk.manifests import (
@@ -658,8 +656,6 @@ def sync_app_releases(
     apply_repos_yaml: bool = False,
     sync_gitlinks: bool = False,
     cut_missing_app_tag: bool = False,
-    cut_infra_tag: bool = False,
-    push_infra_tag: bool = False,
     create_pr: bool = False,
     pr_branch: str = "chore/sync-app-releases",
     dry_run: bool = False,
@@ -716,7 +712,7 @@ def sync_app_releases(
 
         drifted = bool(target_tag and target_tag != pinned_tag)
         if drifted:
-            if (apply_repos_yaml or cut_infra_tag or create_pr) and not dry_run:
+            if (apply_repos_yaml or create_pr) and not dry_run:
                 assert_app_version_ref_on_main(
                     target_tag,
                     "staging",
@@ -746,8 +742,6 @@ def sync_app_releases(
     repos_yaml_updated = False
     gitlinks_updated: list[str] = []
     next_infra_tag = ""
-    infra_tag_cut = False
-    infra_tag_pushed = False
     pr_created = False
     pr_updated = False
     pr_url = ""
@@ -939,53 +933,6 @@ def sync_app_releases(
                 if m_num:
                     pr_number = int(m_num.group(1))
                 pr_created = True
-        elif cut_infra_tag and repos_yaml_updated and not dry_run:
-            runner(
-                ["git", "add", *paths_to_add],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            runner(
-                [
-                    "git",
-                    "-c",
-                    "user.name=github-actions[bot]",
-                    "-c",
-                    "user.email=41898282+github-actions[bot]@users.noreply.github.com",
-                    "commit",
-                    "-m",
-                    commit_msg,
-                ],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            runner(
-                ["git", "tag", next_infra_tag],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            infra_tag_cut = True
-            if push_infra_tag:
-                runner(
-                    [
-                        "git",
-                        "push",
-                        "origin",
-                        "HEAD:main",
-                        f"refs/tags/{next_infra_tag}",
-                    ],
-                    cwd=repo_root,
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                infra_tag_pushed = True
 
     return {
         "apps": entries,
@@ -994,8 +941,6 @@ def sync_app_releases(
         "repos_yaml_updated": repos_yaml_updated,
         "gitlinks_updated": gitlinks_updated,
         "next_infra_tag": next_infra_tag,
-        "infra_tag_cut": infra_tag_cut,
-        "infra_tag_pushed": infra_tag_pushed,
         "pr_branch": pr_branch if create_pr else "",
         "pr_created": pr_created,
         "pr_updated": pr_updated,
@@ -1009,16 +954,25 @@ def sync_app_releases(
 #: the tag's own commit, so a plain tag fetch sends nothing and leaves it shallow. `--unshallow`
 #: is not used: git refuses it on a complete repository.
 _FULL_HISTORY_DEPTH = "--depth=2147483647"
-
-#: Hook slots whose check reads the release lineage with ``git log`` (#1567). The truealpha
-#: nightly verdict check dates a check from the commit that first declared it. Other slots
-#: need no release tag, so a production smoke run adds no fetch.
-LINEAGE_HOOK_SLOTS = frozenset({"scheduled_audit"})
+APP_HOOK_TITLE_PREFIX = "app-hook is red: "
+APP_HOOK_ISSUE_SOURCE = "app runtime hook"
 
 
-def release_ref_for_slot(slot: str, version_ref: str) -> str:
-    """The release ref a checkout for ``slot`` must hold, or ``""`` when the slot needs none."""
-    return version_ref if slot in LINEAGE_HOOK_SLOTS else ""
+def _slot_release_ref(
+    manifest: RuntimeHooksManifest | Path,
+    slots: Sequence[str],
+    version_ref: str,
+) -> str:
+    """Return ``version_ref`` when any requested slot declares ``checkout_lineage=True``."""
+    if not isinstance(manifest, RuntimeHooksManifest):
+        return ""
+    return (
+        version_ref
+        if any(
+            s in manifest.slots and manifest.slots[s].checkout_lineage for s in slots
+        )
+        else ""
+    )
 
 
 def resolve_app_hook_cwd(
@@ -1037,11 +991,6 @@ def resolve_app_hook_cwd(
     dates a name with ``git log -S`` on a one-commit history gets the release date and not the
     date that the name first appeared.
     """
-    sub_rel = SERVICE_TO_SUBMODULE_PATH.get(service, "")
-    if sub_rel:
-        sub_dir = Path(repo_root) / sub_rel
-        if sub_dir.is_dir() and (sub_dir / APP_HOOKS_MANIFEST_PATH).is_file():
-            return sub_dir, None
     repo_slug = APP_SOURCES.get(service, "")
     if not repo_slug:
         return Path(repo_root), None
@@ -1108,52 +1057,6 @@ def resolve_app_hook_cwd(
         return Path(repo_root), None
 
 
-class _RecordingIssueApi:
-    """Proxy around ``IssueApi`` that records per-title issue actions (#1577)."""
-
-    def __init__(self, inner: object) -> None:
-        self._inner = inner
-        self.number_to_title: dict[int, str] = {}
-        self.actions_by_title: dict[str, tuple[str, int]] = {}
-        self.listing_failed: bool = False
-
-    def open_issues(self, *args: object, **kwargs: object) -> list[dict]:
-        try:
-            issues = self._inner.open_issues(*args, **kwargs)  # type: ignore[attr-defined]
-        except Exception:
-            self.listing_failed = True
-            raise
-        for issue in issues:
-            if isinstance(issue, Mapping):
-                num = issue.get("number")
-                title = issue.get("title")
-                if isinstance(num, int) and isinstance(title, str):
-                    self.number_to_title[num] = title
-        return issues
-
-    def create(self, title: str, body: str, labels: object) -> int:
-        number = self._inner.create(title, body, labels)  # type: ignore[attr-defined]
-        if isinstance(number, int):
-            self.number_to_title[number] = title
-            self.actions_by_title[title] = ("opened", number)
-        return number
-
-    def comment(self, number: int, body: str) -> None:
-        self._inner.comment(number, body)  # type: ignore[attr-defined]
-        title = self.number_to_title.get(number)
-        if title is not None and title not in self.actions_by_title:
-            self.actions_by_title[title] = ("commented", number)
-
-    def update_body(self, number: int, body: str) -> None:
-        self._inner.update_body(number, body)  # type: ignore[attr-defined]
-
-    def close(self, number: int) -> None:
-        self._inner.close(number)  # type: ignore[attr-defined]
-        title = self.number_to_title.get(number)
-        if title is not None:
-            self.actions_by_title[title] = ("closed", number)
-
-
 def record_app_hook_issue_trail(
     hook_results: Sequence[Mapping[str, object]],
     *,
@@ -1163,7 +1066,7 @@ def record_app_hook_issue_trail(
     env: Mapping[str, str] | None = None,
     issues_factory: Callable[[str, str], object] = GitHubIssues,
 ) -> int:
-    """Open, comment on, or close an incident issue in the target App repository (#1416, #1577)."""
+    """Open, comment on, or close an incident issue in the target App repository (#1416, #1590)."""
     if not hook_results:
         return 0
     current_env = dict(os.environ if env is None else env)
@@ -1171,9 +1074,6 @@ def record_app_hook_issue_trail(
         current_env.get("GITHUB_TOKEN") or current_env.get("GH_TOKEN") or ""
     ).strip()
     if not token:
-        for entry in hook_results:
-            if isinstance(entry, dict) and str(entry.get("status") or "fail") != "pass":
-                entry["issue_trail_action"] = "unrecorded"
         return 0
     mode = issue_trail_mode(current_env)
     if mode == "off":
@@ -1187,23 +1087,20 @@ def record_app_hook_issue_trail(
         svc = str(entry.get("service") or "").strip()
         if svc:
             by_service.setdefault(svc, []).append(entry)
-        elif isinstance(entry, dict) and str(entry.get("status") or "fail") != "pass":
-            entry["issue_trail_action"] = "unrecorded"
 
     rc = 0
     norm_env = "production" if target_env in ("prod", "production") else "staging"
     context_label = (
         f"app hook {slot} ({norm_env})" if slot else f"post-deploy hook ({norm_env})"
     )
+    fallback_repo = current_env.get("GITHUB_REPOSITORY", "wangzitian0/infra2")
     for svc, items in sorted(by_service.items()):
-        app_repo = APP_SOURCES.get(
-            svc, current_env.get("GITHUB_REPOSITORY", "wangzitian0/infra2")
-        )
+        app_repo = APP_SOURCES.get(svc, fallback_repo)
         trail = Trail(complete=False)
         for item in items:
             item_slot = str(item.get("slot") or slot or "smoke")
             status = str(item.get("status") or "fail")
-            name = f"app-hook:{svc}:{item_slot}:{norm_env}"
+            name = f"{svc}:{item_slot}:{norm_env}"
             if status == "pass":
                 trail.green.add(name)
             else:
@@ -1222,78 +1119,47 @@ def record_app_hook_issue_trail(
                     severity="high",
                     failure_domain="app",
                 )
-        recorded_actions: dict[str, tuple[str, int]] = {}
-        app_proxy = _RecordingIssueApi(issues_factory(app_repo, token))
         res = reconcile_issue_trail(
-            app_proxy,
+            issues_factory(app_repo, token),
             trail,
             mode=mode,
             run_url=run_url or github_run_url(current_env),
             context=context_label,
             env=effective_env,
+            title_prefix=APP_HOOK_TITLE_PREFIX,
+            source=APP_HOOK_ISSUE_SOURCE,
         )
-        fallback_repo = current_env.get("GITHUB_REPOSITORY", "wangzitian0/infra2")
-        if res == 0 and not app_proxy.listing_failed:
-            recorded_actions.update(app_proxy.actions_by_title)
-            if mode == "full" and fallback_repo and fallback_repo != app_repo:
-                unclosed_green = {
-                    g_name
-                    for g_name in trail.green
-                    if recorded_actions.get(
-                        title_for(scrub(g_name, effective_env)), ("", 0)
-                    )[0]
-                    != "closed"
-                }
-                if unclosed_green:
-                    green_fallback_proxy = _RecordingIssueApi(
-                        issues_factory(fallback_repo, token)
-                    )
-                    green_res = reconcile_issue_trail(
-                        green_fallback_proxy,
-                        Trail(green=unclosed_green, complete=False),
-                        mode=mode,
-                        run_url=run_url or github_run_url(current_env),
-                        context=context_label,
-                        env=effective_env,
-                    )
-                    if green_res == 0 and not green_fallback_proxy.listing_failed:
-                        recorded_actions.update(green_fallback_proxy.actions_by_title)
-                    rc = rc or green_res
-        elif res != 0 or app_proxy.listing_failed:
-            if fallback_repo and fallback_repo != app_repo:
-                fallback_proxy = _RecordingIssueApi(
-                    issues_factory(fallback_repo, token)
+        if res == 0:
+            if (
+                mode == "full"
+                and trail.green
+                and fallback_repo
+                and fallback_repo != app_repo
+            ):
+                green_res = reconcile_issue_trail(
+                    issues_factory(fallback_repo, token),
+                    Trail(green=set(trail.green), complete=False),
+                    mode=mode,
+                    run_url=run_url or github_run_url(current_env),
+                    context=context_label,
+                    env=effective_env,
+                    title_prefix=APP_HOOK_TITLE_PREFIX,
+                    source=APP_HOOK_ISSUE_SOURCE,
                 )
+                rc = rc or green_res
+        else:
+            if fallback_repo and fallback_repo != app_repo:
                 res = reconcile_issue_trail(
-                    fallback_proxy,
+                    issues_factory(fallback_repo, token),
                     trail,
                     mode=mode,
                     run_url=run_url or github_run_url(current_env),
                     context=context_label,
                     env=effective_env,
+                    title_prefix=APP_HOOK_TITLE_PREFIX,
+                    source=APP_HOOK_ISSUE_SOURCE,
                 )
-                if res == 0 and not fallback_proxy.listing_failed:
-                    recorded_actions.update(fallback_proxy.actions_by_title)
             rc = rc or res
-
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            item_slot = str(item.get("slot") or slot or "smoke")
-            status = str(item.get("status") or "fail")
-            name = f"app-hook:{svc}:{item_slot}:{norm_env}"
-            expected_title = title_for(scrub(name, effective_env))
-            recorded = recorded_actions.get(expected_title)
-            if status == "pass":
-                if recorded is not None and recorded[0] == "closed":
-                    item["issue_trail_action"] = "closed"
-                    item["issue_number"] = recorded[1]
-            else:
-                if recorded is not None and recorded[0] in ("commented", "opened"):
-                    item["issue_trail_action"] = recorded[0]
-                    item["issue_number"] = recorded[1]
-                else:
-                    item["issue_trail_action"] = "unrecorded"
     return rc
 
 
@@ -1318,31 +1184,17 @@ def audit_app_hooks(
             errors.append(f"unknown app service {service!r}")
             continue
         pinned_tag = pinned_tags.get(service, "")
-        sub_rel = SERVICE_TO_SUBMODULE_PATH.get(service, "")
-        local_manifest_path = (
-            (Path(repo_root) / sub_rel / APP_HOOKS_MANIFEST_PATH) if sub_rel else None
-        )
         manifest: RuntimeHooksManifest | None = None
         source = ""
         try:
-            if (
-                manifest_fetcher is None
-                and local_manifest_path is not None
-                and local_manifest_path.is_file()
-            ):
-                manifest = load_hooks_manifest(local_manifest_path)
-                source = str(local_manifest_path.relative_to(repo_root))
-            else:
-                ref = pinned_tag or "main"
-                resolved = resolve_image_ref(
-                    ref, repo=git_url(repo_slug), runner=runner
-                )
-                manifest = fetch_hooks_manifest(
-                    service,
-                    resolved.sha.lower(),
-                    manifest_fetcher=manifest_fetcher,
-                )
-                source = f"{repo_slug}@{resolved.sha[:12]}:{APP_HOOKS_MANIFEST_PATH}"
+            ref = pinned_tag or "main"
+            resolved = resolve_image_ref(ref, repo=git_url(repo_slug), runner=runner)
+            manifest = fetch_hooks_manifest(
+                service,
+                resolved.sha.lower(),
+                manifest_fetcher=manifest_fetcher,
+            )
+            source = f"{repo_slug}@{resolved.sha[:12]}:{APP_HOOKS_MANIFEST_PATH}"
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{service}: {exc}")
             checked[service] = {"ok": False, "error": str(exc)}
@@ -1537,10 +1389,7 @@ def run_post_deploy_app_hooks(
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 service,
                 source_sha,
-                release_ref=next(
-                    (r for s in slots if (r := release_ref_for_slot(s, version_ref))),
-                    "",
-                ),
+                release_ref=_slot_release_ref(manifest, slots, version_ref),
                 repo_root=repo_root,
                 runner=runner,
             )
@@ -1676,30 +1525,17 @@ def run_scheduled_app_audits(
                 domain=effective_domain,
                 runner=runner,
             )
-            sub_rel = SERVICE_TO_SUBMODULE_PATH.get(service, "")
-            local_manifest_path = (
-                (Path(repo_root) / sub_rel / APP_HOOKS_MANIFEST_PATH)
-                if sub_rel
-                else None
+            manifest = fetch_hooks_manifest(
+                service,
+                source_sha,
+                manifest_fetcher=manifest_fetcher,
             )
-            if (
-                manifest_fetcher is None
-                and local_manifest_path is not None
-                and local_manifest_path.is_file()
-            ):
-                manifest = load_hooks_manifest(local_manifest_path)
-            else:
-                manifest = fetch_hooks_manifest(
-                    service,
-                    source_sha,
-                    manifest_fetcher=manifest_fetcher,
-                )
             if slot not in manifest.slots:
                 continue
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 service,
                 source_sha,
-                release_ref=release_ref_for_slot(slot, version_ref),
+                release_ref=_slot_release_ref(manifest, (slot,), version_ref),
                 repo_root=repo_root,
                 runner=runner,
             )
@@ -2213,84 +2049,6 @@ def failure_alert_text(
     return None
 
 
-def scheduled_audit_alert_text(
-    *,
-    hook_results: Sequence[Mapping[str, object]],
-    target_env: str,
-    run_url: str,
-) -> str | None:
-    """Format a Feishu alert for a failed scheduled App runtime audit (#1583)."""
-    failed_hooks = [item for item in hook_results if item.get("status") != "pass"]
-    if not failed_hooks:
-        return None
-    lines = [
-        f"⚠️ Scheduled App runtime audit FAILED ({target_env}; deploy-guard invariants passed)."
-    ]
-    for item in failed_hooks:
-        svc = str(item.get("service") or "?")
-        slot = str(item.get("slot") or "?")
-        vref = str(item.get("version_ref") or "?")
-        raw_summary = (
-            str(item.get("summary") or "").strip()
-            or str(item.get("stderr_tail") or "").strip()
-            or "hook failed"
-        )
-        summary_line = raw_summary.splitlines()[0][:200]
-        lines.append(f"- {svc} [{slot} @ {vref}]: {summary_line}")
-    lines.append(f"Run: {run_url}")
-    return "\n".join(lines)
-
-
-def resolve_audit_job_failure_alert(
-    result_path: Path,
-    *,
-    run_url: str,
-) -> tuple[str | None, str | None]:
-    """Resolve ``(alert_text_to_send, skip_notice)`` for the ``ops-checks`` ``audit`` job (#1583)."""
-    if result_path.exists():
-        try:
-            data = json.loads(result_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            data = None
-        if isinstance(data, Mapping):
-            alert_text = data.get("alert_text")
-            if isinstance(alert_text, str) and alert_text.strip():
-                return (alert_text, None)
-            suppressed_reason = data.get("alert_suppressed_reason")
-            if isinstance(suppressed_reason, str) and suppressed_reason.strip():
-                return (
-                    None,
-                    f"::notice::Suppressing duplicate schedule Feishu alert ({suppressed_reason}); open incident issue(s) updated. Run: {run_url}",
-                )
-    crash_fallback_text = (
-        "🚨 Infra2 deploy-guard audit failed.\n"
-        "A deploy dependency invariant is broken (under-fan-out coverage "
-        "or a non-allowlisted Dokploy autoDeploy). Services may run stale "
-        "code or deploy outside the iac-runner.\n"
-        f"Run: {run_url}"
-    )
-    return (crash_fallback_text, None)
-
-
-def should_suppress_schedule_hook_alert(
-    *,
-    event_name: str,
-    results: Sequence[Mapping[str, object]],
-    hook_results: Sequence[Mapping[str, object]],
-) -> str | None:
-    """Return a suppression reason when a scheduled reconcile only repeats known open hook incidents (#1577)."""
-    if event_name != "schedule":
-        return None
-    if any(item.get("returncode") != 0 for item in results):
-        return None
-    failed_hooks = [item for item in hook_results if item.get("status") != "pass"]
-    if not failed_hooks:
-        return None
-    if all(item.get("issue_trail_action") == "commented" for item in failed_hooks):
-        return "schedule_known_open_hook_incidents"
-    return None
-
-
 def resolve_workflow_failure_alert(
     result_path: Path,
     *,
@@ -2314,12 +2072,6 @@ def resolve_workflow_failure_alert(
             alert_text = data.get("alert_text")
             if isinstance(alert_text, str) and alert_text.strip():
                 return (alert_text, None)
-            suppressed_reason = data.get("alert_suppressed_reason")
-            if isinstance(suppressed_reason, str) and suppressed_reason.strip():
-                return (
-                    None,
-                    f"::notice::Suppressing duplicate schedule Feishu alert ({suppressed_reason}); open incident issue(s) updated. Run: {run_url}",
-                )
     kind = "PRODUCTION promotion" if promote_prod else "staging soak"
     crash_fallback_text = (
         f"🚨 IaC reconcile FAILED for {after} ({kind}) before any "
@@ -2543,16 +2295,6 @@ def main(argv: list[str] | None = None) -> int:
         help="compute next patch tag when upstream App main is ahead of its latest v*.*.* tag",
     )
     parser.add_argument(
-        "--cut-infra-tag",
-        action="store_true",
-        help="commit updated harness/repos.yaml and create next infra2 vX.Y.Z tag when updates exist",
-    )
-    parser.add_argument(
-        "--push-infra-tag",
-        action="store_true",
-        help="push committed harness/repos.yaml and next infra2 vX.Y.Z tag to origin",
-    )
-    parser.add_argument(
         "--create-pr",
         action="store_true",
         help="push updated harness/repos.yaml to a branch and open/update a PR (#1416)",
@@ -2590,21 +2332,7 @@ def main(argv: list[str] | None = None) -> int:
             run_url=run_url,
             services=args.sync_service or None,
         )
-        suppressed_reason = should_suppress_schedule_hook_alert(
-            event_name=os.environ.get("GITHUB_EVENT_NAME", ""),
-            results=(),
-            hook_results=hook_results,
-        )
-        raw_alert = scheduled_audit_alert_text(
-            hook_results=hook_results,
-            target_env=target_env,
-            run_url=run_url,
-        )
-        out_payload = {
-            "alert_text": None if suppressed_reason else raw_alert,
-            "alert_suppressed_reason": suppressed_reason,
-            "scheduled_audit_results": hook_results,
-        }
+        out_payload = {"scheduled_audit_results": hook_results}
         print(json.dumps(out_payload, sort_keys=True))
         if args.output_json:
             Path(args.output_json).write_text(
@@ -2629,8 +2357,6 @@ def main(argv: list[str] | None = None) -> int:
             apply_repos_yaml=args.apply_repos_yaml,
             sync_gitlinks=args.sync_gitlinks,
             cut_missing_app_tag=args.cut_missing_app_tag,
-            cut_infra_tag=args.cut_infra_tag,
-            push_infra_tag=args.push_infra_tag,
             create_pr=args.create_pr,
             pr_branch=args.pr_branch,
             dry_run=args.dry_run,
@@ -2732,7 +2458,9 @@ def main(argv: list[str] | None = None) -> int:
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 args.hook_service,
                 args.hook_source_sha,
-                release_ref=release_ref_for_slot(args.run_hook_slot, version_ref),
+                release_ref=_slot_release_ref(
+                    manifest_or_path, (args.run_hook_slot,), version_ref
+                ),
                 repo_root=repo_root,
             )
         elif args.hook_service:
@@ -2750,7 +2478,9 @@ def main(argv: list[str] | None = None) -> int:
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 args.hook_service,
                 resolved_sha,
-                release_ref=release_ref_for_slot(args.run_hook_slot, version_ref),
+                release_ref=_slot_release_ref(
+                    manifest_or_path, (args.run_hook_slot,), version_ref
+                ),
                 repo_root=repo_root,
             )
         else:
@@ -2894,11 +2624,6 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     run_url = github_run_url(os.environ)
-    suppressed_reason = should_suppress_schedule_hook_alert(
-        event_name=os.environ.get("GITHUB_EVENT_NAME", ""),
-        results=results,
-        hook_results=hook_results,
-    )
     raw_alert_text = failure_alert_text(
         after=args.after,
         results=results,
@@ -2907,8 +2632,7 @@ def main(argv: list[str] | None = None) -> int:
         promote_prod=promote_prod,
     )
     payload = {
-        "alert_text": None if suppressed_reason else raw_alert_text,
-        "alert_suppressed_reason": suppressed_reason,
+        "alert_text": raw_alert_text,
         "plan": plan.to_dict(),
         "commands": [command.to_dict() for command in commands],
         # what actually ran this invocation vs what is left for a deliberate next step

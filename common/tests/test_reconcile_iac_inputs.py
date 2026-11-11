@@ -1507,53 +1507,20 @@ def test_sync_app_releases_updates_repos_yaml_when_remote_tag_advances(
     assert "release_tag: v0.2.80" in updated_text
 
 
-def test_sync_app_releases_cut_and_push_infra_tag(
-    monkeypatch, capsys, tmp_path
-) -> None:
-    """#1416 (T1): when --cut-infra-tag and --push-infra-tag are passed, sync_app_releases
-    commits the updated harness/repos.yaml, creates next_infra_tag, and pushes HEAD:main
-    and refs/tags/<next_infra_tag> to origin."""
-    repos_yaml = tmp_path / "harness" / "repos.yaml"
-    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
-    repos_yaml.write_text(
-        "schema_version: 1\n"
-        "repositories:\n"
-        "  - id: finance-report\n"
-        "    role: external-application\n"
-        "    release_tag: v0.2.46\n"
-        "  - id: truealpha\n"
-        "    role: external-application\n"
-        "    release_tag: v0.2.80\n",
-        encoding="utf-8",
-    )
-
-    def _fake_remote(repo_url: str, **_kw):
-        if "finance_report" in repo_url:
-            return (SHA, {"v0.2.46": "1" * 40, "v0.2.47": SHA})
-        return ("2" * 40, {"v0.2.80": "2" * 40})
-
-    monkeypatch.setattr(reconcile, "_query_remote_app_refs", _fake_remote)
-    monkeypatch.setattr(reconcile, "newest_release_tag", lambda **_kw: "v3.1.22")
-
-    git_calls: list[list[str]] = []
-
-    def _fake_runner(cmd, **_kw):
-        git_calls.append(list(cmd))
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    res = reconcile.sync_app_releases(
-        tmp_path,
-        apply_repos_yaml=True,
-        sync_gitlinks=True,
-        cut_infra_tag=True,
-        push_infra_tag=True,
-        runner=_fake_runner,
-    )
-    assert res["infra_tag_cut"] is True
-    assert res["infra_tag_pushed"] is True
-    assert res["next_infra_tag"] == "v3.1.23"
-    assert ["git", "tag", "v3.1.23"] in git_calls
-    assert ["git", "push", "origin", "HEAD:main", "refs/tags/v3.1.23"] in git_calls
+def test_deleted_legacy_alert_and_tag_wheels_are_absent() -> None:
+    """#1590: legacy tag-cutting, hardcoded lineage slot sets, issue-API proxies,
+    and schedule alert-suppression duplicates must stay removed."""
+    for removed in (
+        "LINEAGE_HOOK_SLOTS",
+        "release_ref_for_slot",
+        "_RecordingIssueApi",
+        "scheduled_audit_alert_text",
+        "resolve_audit_job_failure_alert",
+        "should_suppress_schedule_hook_alert",
+    ):
+        assert not hasattr(reconcile, removed), f"{removed} must not exist"
+    with pytest.raises(SystemExit):
+        main(["--sync-app-releases", "--cut-infra-tag"])
 
 
 def test_sync_app_releases_create_pr_pushes_branch_restores_head_and_opens_or_updates_pr(
@@ -1760,6 +1727,7 @@ _REAL_TA_HOOKS_MANIFEST_JSON = """\
       "bootstrap": "uv sync --frozen",
       "run": "uv run python tools/nightly_verdicts.py \\"$APP_URL/api/health\\" --environment \\"$ENVIRONMENT\\" --repo . && uv run python tools/surface_contract.py \\"$APP_URL\\"",
       "timeout_seconds": 600,
+      "checkout_lineage": true,
       "required_env": [
         "APP_URL",
         "ENVIRONMENT"
@@ -1901,8 +1869,8 @@ def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
         record_issues=False,
     )
     assert [r["status"] for r in hook_results] == ["pass", "pass"]
-    assert hook_results[0]["cwd"] == str(fr_sub)
-    assert hook_results[1]["cwd"] == str(ta_sub)
+    assert hook_results[0]["cwd"] != str(fr_sub)
+    assert hook_results[1]["cwd"] != str(ta_sub)
 
 
 def test_record_app_hook_issue_trail_opens_and_closes_app_issues() -> None:
@@ -1961,7 +1929,7 @@ def test_record_app_hook_issue_trail_opens_and_closes_app_issues() -> None:
     assert "wangzitian0/truealpha" in apis
     ta_api = apis["wangzitian0/truealpha"]
     assert len(ta_api.issues) == 1
-    assert "app-hook:truealpha/app:smoke:staging" in ta_api.issues[0]["title"]
+    assert ta_api.issues[0]["title"] == "app-hook is red: truealpha/app:smoke:staging"
 
     # Subsequent passing run closes the issue
     rc_pass = reconcile.record_app_hook_issue_trail(
@@ -2560,12 +2528,11 @@ def test_local_service_hook_manifests_discovery_and_execution(monkeypatch) -> No
     ]
 
 
-def test_reconcile_workflow_defaults_run_post_deploy_hooks_on_tag_push_and_schedule() -> (
+def test_reconcile_workflow_defaults_run_post_deploy_hooks_and_schedule_exits_after_pr_sync() -> (
     None
 ):
-    """#1521: on tag push and schedule events inputs.run_post_deploy_hooks is null, so
-    reconcile-iac-inputs.yml must pass INPUT_RUN_POST_DEPLOY_HOOKS via env and default
-    run_post_deploy_hooks="${INPUT_RUN_POST_DEPLOY_HOOKS:-true}" in bash."""
+    """#1521, #1590: schedule events run --sync-app-releases --create-pr and exit 0
+    without deploying; tag pushes default run_post_deploy_hooks to true."""
     workflow_text = WORKFLOW.read_text(encoding="utf-8")
     assert (
         "INPUT_RUN_POST_DEPLOY_HOOKS: ${{ inputs.run_post_deploy_hooks }}"
@@ -2574,8 +2541,20 @@ def test_reconcile_workflow_defaults_run_post_deploy_hooks_on_tag_push_and_sched
     assert (
         'run_post_deploy_hooks="${INPUT_RUN_POST_DEPLOY_HOOKS:-true}"' in workflow_text
     )
-    assert workflow_text.count('if [[ "$run_post_deploy_hooks" == "true" ]]; then') >= 2
+    assert 'if [[ "$run_post_deploy_hooks" == "true" ]]; then' in workflow_text
     assert "inputs.run_post_deploy_hooks != false" not in workflow_text
+    sched_idx = workflow_text.index(
+        'if [[ "$EVENT_NAME" == "schedule" || "${{ inputs.sync_app_releases || false }}" == "true" ]]; then'
+    )
+    deploy_idx = workflow_text.index("RECONCILE_PHASE=reconcile-deploy")
+    sched_block = workflow_text[sched_idx:deploy_idx]
+    assert "--sync-app-releases --apply-repos-yaml --sync-gitlinks" in sched_block
+    assert "sync_args+=(--create-pr)" in sched_block
+    assert (
+        'if [[ "$EVENT_NAME" == "schedule" ]]; then\n              exit 0'
+        in sched_block
+    )
+    assert "synced_infra_tag" not in workflow_text
 
 
 def test_main_run_hook_slot_resolves_local_service_manifest_and_url(
@@ -3228,32 +3207,22 @@ def test_failure_alert_text_classifies_deploy_failure_hook_failure_and_success()
     )
 
 
-def test_record_app_hook_issue_trail_annotates_opened_commented_fallback_and_unrecorded() -> (
+def test_record_app_hook_issue_trail_falls_back_to_infra2_under_app_hook_prefix() -> (
     None
 ):
-    """#1577: record_app_hook_issue_trail annotates mutable hook_results dicts with
-    issue_trail_action ('opened', 'commented', 'unrecorded', or 'closed') and issue_number,
-    including when falling back from app_repo (HTTP 403) to fallback_repo."""
-    from common.observability.issue_trail import ListingFailed, WriteFailed
+    """#1590: cross-repo 403 falls back to `wangzitian0/infra2` using native
+    `title_prefix='app-hook is red: '` with zero dict side-channel mutations."""
+    from common.observability.issue_trail import WriteFailed
 
     class _FakeIssueApi:
-        def __init__(
-            self,
-            repo: str,
-            *,
-            forbid_writes: bool = False,
-            fail_listing: bool = False,
-        ) -> None:
+        def __init__(self, repo: str, *, forbid_writes: bool = False) -> None:
             self.repo = repo
             self.forbid_writes = forbid_writes
-            self.fail_listing = fail_listing
             self.issues: list[dict] = []
             self.comments: list[tuple[int, str]] = []
             self.closed: list[int] = []
 
         def open_issues(self, *, with_body: bool = False) -> list[dict]:
-            if self.fail_listing:
-                raise ListingFailed("HTTP 500")
             return list(self.issues)
 
         def create(self, title: str, body: str, labels) -> int:
@@ -3268,17 +3237,12 @@ def test_record_app_hook_issue_trail_annotates_opened_commented_fallback_and_unr
                 raise WriteFailed("HTTP 403 Resource not accessible by integration")
             self.comments.append((number, body))
 
-        def update_body(self, number: int, body: str) -> None:
-            if self.forbid_writes:
-                raise WriteFailed("HTTP 403 Resource not accessible by integration")
-
         def close(self, number: int) -> None:
             if self.forbid_writes:
                 raise WriteFailed("HTTP 403 Resource not accessible by integration")
             self.closed.append(number)
 
-    # 1. Cross-repo fallback (truealpha 403 -> infra2 opens #1572, then comments on #1572, then closes #1572)
-    apis: dict[str, _FakeIssueApi] = {
+    apis = {
         "wangzitian0/truealpha": _FakeIssueApi(
             "wangzitian0/truealpha", forbid_writes=True
         ),
@@ -3290,477 +3254,120 @@ def test_record_app_hook_issue_trail_annotates_opened_commented_fallback_and_unr
         "GITHUB_REPOSITORY": "wangzitian0/infra2",
     }
 
-    first_run = [
-        {
-            "service": "truealpha/app",
-            "slot": "staging_gate",
-            "status": "fail",
-            "version_ref": "v0.2.85",
-            "summary": "missing required hook env",
-        }
-    ]
-    assert (
-        reconcile.record_app_hook_issue_trail(
-            first_run,
-            target_env="staging",
-            slot="staging_gate",
-            env=env,
-            issues_factory=lambda repo, _tok: apis[repo],
-        )
-        == 0
-    )
-    assert first_run[0]["issue_trail_action"] == "opened"
-    assert first_run[0]["issue_number"] == 1572
-
-    second_run = [
-        {
-            "service": "truealpha/app",
-            "slot": "staging_gate",
-            "status": "fail",
-            "version_ref": "v0.2.85",
-            "summary": "missing required hook env",
-        }
-    ]
-    assert (
-        reconcile.record_app_hook_issue_trail(
-            second_run,
-            target_env="staging",
-            slot="staging_gate",
-            env=env,
-            issues_factory=lambda repo, _tok: apis[repo],
-        )
-        == 0
-    )
-    assert second_run[0]["issue_trail_action"] == "commented"
-    assert second_run[0]["issue_number"] == 1572
-
-    green_run = [
-        {
-            "service": "truealpha/app",
-            "slot": "staging_gate",
-            "status": "pass",
-            "version_ref": "v0.2.85",
-            "summary": "passed",
-        }
-    ]
-    assert (
-        reconcile.record_app_hook_issue_trail(
-            green_run,
-            target_env="staging",
-            slot="staging_gate",
-            env=env,
-            issues_factory=lambda repo, _tok: apis[repo],
-        )
-        == 0
-    )
-    assert green_run[0]["issue_trail_action"] == "closed"
-    assert green_run[0]["issue_number"] == 1572
-
-    # 2. Both repos fail or listing fails -> annotated as 'unrecorded' (never suppressed)
-    broken_apis = {
-        "wangzitian0/truealpha": _FakeIssueApi(
-            "wangzitian0/truealpha", fail_listing=True
-        ),
-        "wangzitian0/infra2": _FakeIssueApi("wangzitian0/infra2", fail_listing=True),
+    fail_item = {
+        "service": "truealpha/app",
+        "slot": "staging_gate",
+        "status": "fail",
+        "version_ref": "v0.2.87",
+        "summary": "missing required hook env",
     }
-    unrecorded_run = [
-        {
-            "service": "truealpha/app",
-            "slot": "staging_gate",
-            "status": "fail",
-            "version_ref": "v0.2.85",
-            "summary": "hook failed",
-        }
-    ]
-    reconcile.record_app_hook_issue_trail(
-        unrecorded_run,
-        target_env="staging",
-        slot="staging_gate",
-        env=env,
-        issues_factory=lambda repo, _tok: broken_apis[repo],
-    )
-    assert unrecorded_run[0]["issue_trail_action"] == "unrecorded"
-    assert "issue_number" not in unrecorded_run[0]
-
-
-def test_should_suppress_schedule_hook_alert_and_main_schedule_dedup(
-    monkeypatch, capsys, tmp_path
-) -> None:
-    """#1577: schedule runs suppress duplicate Feishu hook alerts ONLY when all deploys succeeded
-    and every failed hook commented on an already-open incident issue, while main() still exits 1."""
-    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
-    from infra2_sdk.refs import ResolvedRef
-
-    ok_deploys = [{"service": "truealpha/app", "returncode": 0}]
-    commented_hook = [
-        {
-            "service": "truealpha/app",
-            "status": "fail",
-            "issue_trail_action": "commented",
-        }
-    ]
-    opened_hook = [
-        {"service": "truealpha/app", "status": "fail", "issue_trail_action": "opened"}
-    ]
-    unrecorded_hook = [
-        {
-            "service": "truealpha/app",
-            "status": "fail",
-            "issue_trail_action": "unrecorded",
-        }
-    ]
-
     assert (
-        reconcile.should_suppress_schedule_hook_alert(
-            event_name="schedule",
-            results=ok_deploys,
-            hook_results=commented_hook,
-        )
-        == "schedule_known_open_hook_incidents"
-    )
-    # Tag push or workflow_dispatch must NEVER suppress
-    for non_schedule in ("push", "workflow_dispatch", ""):
-        assert (
-            reconcile.should_suppress_schedule_hook_alert(
-                event_name=non_schedule,
-                results=ok_deploys,
-                hook_results=commented_hook,
-            )
-            is None
-        )
-    # Deploy failure must NEVER suppress
-    assert (
-        reconcile.should_suppress_schedule_hook_alert(
-            event_name="schedule",
-            results=[{"service": "truealpha/app", "returncode": 1}],
-            hook_results=commented_hook,
-        )
-        is None
-    )
-    # Newly opened or unrecorded hook issue must NEVER suppress
-    for must_page_hooks in (
-        opened_hook,
-        unrecorded_hook,
-        commented_hook + opened_hook,
-        [{"service": "truealpha/app", "status": "pass"}],
-        [],
-    ):
-        assert (
-            reconcile.should_suppress_schedule_hook_alert(
-                event_name="schedule",
-                results=ok_deploys,
-                hook_results=must_page_hooks,
-            )
-            is None
-        )
-
-    # End-to-end main() check on schedule: suppressed alert_text, non-null alert_suppressed_reason, exit code 1
-    repos_yaml = tmp_path / "harness" / "repos.yaml"
-    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
-    repos_yaml.write_text(
-        "schema_version: 1\n"
-        "repositories:\n"
-        "  - id: truealpha\n"
-        "    role: external-application\n"
-        "    release_tag: v0.2.85\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(reconcile, "assert_after_on_main", lambda *_a, **_kw: None)
-    monkeypatch.setattr(
-        reconcile,
-        "run_deploy_commands",
-        lambda cmds, **_kw: [
-            {
-                "service": c.service,
-                "type": c.deploy_type,
-                "returncode": 0,
-                "stdout": "{}",
-                "stderr": "",
-            }
-            for c in cmds
-        ],
-    )
-    monkeypatch.setattr(
-        reconcile,
-        "resolve_image_ref",
-        lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
-    )
-    manifest = RuntimeHooksManifest.from_dict(
-        {
-            "schema_version": 1,
-            "service": "truealpha/app",
-            "slots": {s: {"run": "exit 1", "timeout_seconds": 30} for s in HOOK_SLOTS},
-        }
-    )
-    monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
-    monkeypatch.setattr(
-        reconcile,
-        "execute_app_hook_slot",
-        lambda *_a, **_kw: HookRunResult(
-            service="truealpha/app",
+        reconcile.record_app_hook_issue_trail(
+            [fail_item],
+            target_env="staging",
             slot="staging_gate",
-            environment="staging",
-            app_url="https://truealpha-staging.truealpha.club",
-            version_ref="v0.2.85",
-            status="fail",
-            exit_code=1,
-            duration_seconds=0.1,
-            summary="staging_gate failed",
-        ),
+            env=env,
+            issues_factory=lambda repo, _tok: apis[repo],
+        )
+        == 0
     )
+    assert "issue_trail_action" not in fail_item
+    assert apis["wangzitian0/infra2"].issues == [
+        {
+            "number": 1572,
+            "title": "app-hook is red: truealpha/app:staging_gate:staging",
+            "body": apis["wangzitian0/infra2"].issues[0]["body"],
+        }
+    ]
+    assert "app runtime hook" in apis["wangzitian0/infra2"].issues[0]["body"]
 
-    trail_action = "commented"
-
-    def _fake_trail(entries, **_kw):
-        for e in entries:
-            if isinstance(e, dict):
-                e["issue_trail_action"] = trail_action
-                e["issue_number"] = 1572
-        return 0
-
-    monkeypatch.setattr(reconcile, "record_app_hook_issue_trail", _fake_trail)
-    monkeypatch.setenv("GITHUB_TOKEN", "tok-sched")
-    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
-
-    rc_suppressed = main(
-        [
-            "--repo-root",
-            str(tmp_path),
-            "--after",
-            "v3.1.45",
-            "--changed-file",
-            "harness/repos.yaml",
-            "--run-post-deploy-hooks",
-        ]
-    )
-    out_suppressed = json.loads(capsys.readouterr().out)
-    assert rc_suppressed == 1
-    assert out_suppressed["alert_text"] is None
+    # Repeat failure comments on #1572 instead of creating a duplicate
     assert (
-        out_suppressed["alert_suppressed_reason"]
-        == "schedule_known_open_hook_incidents"
+        reconcile.record_app_hook_issue_trail(
+            [dict(fail_item)],
+            target_env="staging",
+            slot="staging_gate",
+            env=env,
+            issues_factory=lambda repo, _tok: apis[repo],
+        )
+        == 0
     )
+    assert len(apis["wangzitian0/infra2"].issues) == 1
+    assert [n for n, _ in apis["wangzitian0/infra2"].comments] == [1572]
 
-    # First occurrence ('opened') on schedule still pages!
-    trail_action = "opened"
-    rc_paged = main(
-        [
-            "--repo-root",
-            str(tmp_path),
-            "--after",
-            "v3.1.45",
-            "--changed-file",
-            "harness/repos.yaml",
-            "--run-post-deploy-hooks",
-        ]
+    # Passing run closes the fallback issue in wangzitian0/infra2
+    assert (
+        reconcile.record_app_hook_issue_trail(
+            [
+                {
+                    "service": "truealpha/app",
+                    "slot": "staging_gate",
+                    "status": "pass",
+                    "version_ref": "v0.2.87",
+                    "summary": "passed",
+                }
+            ],
+            target_env="staging",
+            slot="staging_gate",
+            env=env,
+            issues_factory=lambda repo, _tok: apis[repo],
+        )
+        == 0
     )
-    out_paged = json.loads(capsys.readouterr().out)
-    assert rc_paged == 1
-    assert out_paged["alert_suppressed_reason"] is None
-    assert out_paged["alert_text"] is not None
-    assert out_paged["alert_text"].startswith("⚠️ Post-deploy hook FAILED for v3.1.45")
+    assert apis["wangzitian0/infra2"].closed == [1572]
 
 
-def test_resolve_workflow_failure_alert_preserves_crash_detection_and_honors_suppression(
+def test_resolve_workflow_failure_alert_and_scheduled_audit_json_contract(
     monkeypatch, tmp_path, capsys
 ) -> None:
-    """#1577: resolve_workflow_failure_alert and the Alert on failure workflow step preserve
-    100% fail-closed crash detection while forwarding explicit hook alerts and suppressing
-    duplicate schedule repeats."""
-    import tools.out_of_band_watchdog as watchdog
+    """#1590: resolve_workflow_failure_alert fails closed on missing/corrupt/null JSON,
+    skips sync-app-releases failures before deploy, and --run-scheduled-audit writes
+    structured scheduled_audit_results for page_dedup."""
+    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+    from infra2_sdk.refs import ResolvedRef
 
     result_file = tmp_path / "reconcile-result.json"
     run_url = "https://github.com/wangzitian0/infra2/actions/runs/777"
 
-    # 1. Missing result_file in reconcile-deploy -> crash fallback alert
-    text, notice = reconcile.resolve_workflow_failure_alert(
+    assert reconcile.resolve_workflow_failure_alert(
         result_file,
-        after="v3.1.45",
+        after="",
         promote_prod=False,
         run_url=run_url,
-        reconcile_phase="reconcile-deploy",
+        reconcile_phase="sync-app-releases",
+    ) == (
+        None,
+        "::warning::App release PR sync failed before reconcile-deploy phase; skipping deploy-outage Feishu alert.",
     )
-    assert notice is None
-    assert text == (
-        "🚨 IaC reconcile FAILED for v3.1.45 (staging soak) before any "
+
+    expected_crash = (
+        "🚨 IaC reconcile FAILED for v3.1.48 (staging soak) before any "
         f"deploy result was recorded (guard, provenance or runner unreachable).\nRun: {run_url}"
-    )
-
-    # 2. Corrupt JSON -> crash fallback alert
-    result_file.write_text("{corrupt-json", encoding="utf-8")
-    text_corrupt, notice_corrupt = reconcile.resolve_workflow_failure_alert(
-        result_file,
-        after="v3.1.45",
-        promote_prod=True,
-        run_url=run_url,
-    )
-    assert notice_corrupt is None
-    assert (
-        text_corrupt is not None
-        and "(PRODUCTION promotion) before any deploy result was recorded"
-        in text_corrupt
-    )
-
-    # 3. Null alert_text WITHOUT alert_suppressed_reason -> crash fallback alert
-    result_file.write_text(
-        json.dumps({"alert_text": None, "alert_suppressed_reason": None}),
-        encoding="utf-8",
-    )
-    text_null, notice_null = reconcile.resolve_workflow_failure_alert(
-        result_file,
-        after="v3.1.45",
-        promote_prod=False,
-        run_url=run_url,
-    )
-    assert notice_null is None
-    assert text_null == text
-
-    # 4. Explicit post-deploy hook alert -> sends exact alert_text
-    hook_msg = (
-        "⚠️ Post-deploy hook FAILED for v3.1.45 (staging soak; container deploys succeeded).\nRun: "
-        + run_url
-    )
-    result_file.write_text(
-        json.dumps({"alert_text": hook_msg, "alert_suppressed_reason": None}),
-        encoding="utf-8",
     )
     assert reconcile.resolve_workflow_failure_alert(
         result_file,
-        after="v3.1.45",
+        after="v3.1.48",
         promote_prod=False,
         run_url=run_url,
+        reconcile_phase="reconcile-deploy",
+    ) == (expected_crash, None)
+
+    result_file.write_text("{corrupt", encoding="utf-8")
+    text_prod, notice_prod = reconcile.resolve_workflow_failure_alert(
+        result_file, after="v3.1.48", promote_prod=True, run_url=run_url
+    )
+    assert notice_prod is None and "(PRODUCTION promotion)" in (text_prod or "")
+
+    hook_msg = f"⚠️ Post-deploy hook FAILED for v3.1.48 (staging soak; container deploys succeeded).\nRun: {run_url}"
+    result_file.write_text(json.dumps({"alert_text": hook_msg}), encoding="utf-8")
+    assert reconcile.resolve_workflow_failure_alert(
+        result_file, after="v3.1.48", promote_prod=False, run_url=run_url
     ) == (hook_msg, None)
 
-    # 5. Suppressed duplicate schedule hook failure -> skip_notice, no Feishu alert, verified via workflow YAML snippet
-    result_file.write_text(
-        json.dumps(
-            {
-                "alert_text": None,
-                "alert_suppressed_reason": "schedule_known_open_hook_incidents",
-            }
-        ),
-        encoding="utf-8",
-    )
-    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    steps = workflow["jobs"]["reconcile"]["steps"]
-    alert_step = next(s for s in steps if s.get("name") == "Alert on failure")
-    py_body = alert_step["run"].split("python - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
-
-    delivered: list[str] = []
-    monkeypatch.setattr(
-        watchdog,
-        "deliver_out_of_band_alert",
-        lambda _env, msg: delivered.append(msg),
-    )
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("RECONCILE_PHASE", "reconcile-deploy")
-    monkeypatch.setenv("INPUT_AFTER", "v3.1.45")
-    monkeypatch.setenv("INPUT_PROMOTE_PROD", "false")
-    with pytest.raises(SystemExit) as exc_info:
-        exec(compile(py_body, "<alert-on-failure-suppressed>", "exec"), {})
-    assert exc_info.value.code == 0
-    assert delivered == []
-    assert (
-        "::notice::Suppressing duplicate schedule Feishu alert (schedule_known_open_hook_incidents); open incident issue(s) updated."
-        in capsys.readouterr().out
-    )
-
-
-def test_scheduled_audit_alert_text_and_audit_job_failure_resolution(
-    monkeypatch, tmp_path, capsys
-) -> None:
-    """#1583: scheduled_audit_alert_text formats App runtime audit failures distinctly from
-    deploy-guard crashes, main(--run-scheduled-audit --output-json) records suppression on
-    schedule repeats while exiting 1, and resolve_audit_job_failure_alert fails closed on
-    missing/corrupt JSON while honoring explicit alert_text and alert_suppressed_reason."""
-    import tools.out_of_band_watchdog as watchdog
-    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
-    from infra2_sdk.refs import ResolvedRef
-
-    run_url = "https://github.com/wangzitian0/infra2/actions/runs/888"
-
-    # 1. scheduled_audit_alert_text returns None when all hooks pass
-    assert (
-        reconcile.scheduled_audit_alert_text(
-            hook_results=[
-                {
-                    "service": "finance_report/app",
-                    "slot": "scheduled_audit",
-                    "version_ref": "v0.2.59",
-                    "status": "pass",
-                    "summary": "ok",
-                }
-            ],
-            target_env="staging",
-            run_url=run_url,
-        )
-        is None
-    )
-
-    # 2. scheduled_audit_alert_text formats failed hooks cleanly
-    formatted = reconcile.scheduled_audit_alert_text(
-        hook_results=[
-            {
-                "service": "truealpha/app",
-                "slot": "scheduled_audit",
-                "version_ref": "v0.2.86",
-                "status": "fail",
-                "summary": "nightly check failed\nsecond line ignored",
-            },
-            {
-                "service": "finance_report/app",
-                "slot": "scheduled_audit",
-                "version_ref": "v0.2.59",
-                "status": "pass",
-                "summary": "ok",
-            },
-        ],
-        target_env="staging",
-        run_url=run_url,
-    )
-    assert formatted == (
-        "⚠️ Scheduled App runtime audit FAILED (staging; deploy-guard invariants passed).\n"
-        "- truealpha/app [scheduled_audit @ v0.2.86]: nightly check failed\n"
-        f"Run: {run_url}"
-    )
-
-    # 3. resolve_audit_job_failure_alert: missing/corrupt/empty -> deploy-guard crash fallback
-    result_file = tmp_path / "scheduled-audit-result.json"
-    expected_guard_crash = (
-        "🚨 Infra2 deploy-guard audit failed.\n"
-        "A deploy dependency invariant is broken (under-fan-out coverage "
-        "or a non-allowlisted Dokploy autoDeploy). Services may run stale "
-        "code or deploy outside the iac-runner.\n"
-        f"Run: {run_url}"
-    )
-    assert reconcile.resolve_audit_job_failure_alert(result_file, run_url=run_url) == (
-        expected_guard_crash,
-        None,
-    )
-    result_file.write_text("{invalid", encoding="utf-8")
-    assert reconcile.resolve_audit_job_failure_alert(result_file, run_url=run_url) == (
-        expected_guard_crash,
-        None,
-    )
-    result_file.write_text(
-        json.dumps({"alert_text": None, "alert_suppressed_reason": None}),
-        encoding="utf-8",
-    )
-    assert reconcile.resolve_audit_job_failure_alert(result_file, run_url=run_url) == (
-        expected_guard_crash,
-        None,
-    )
-
-    # 4. End-to-end main(["--run-scheduled-audit", "--output-json", ...]) on schedule:
-    #    'commented' suppresses alert_text while returning 1; 'opened' populates alert_text.
     repos_yaml = tmp_path / "harness" / "repos.yaml"
     repos_yaml.parent.mkdir(parents=True, exist_ok=True)
     repos_yaml.write_text(
-        "schema_version: 1\n"
-        "repositories:\n"
-        "  - id: truealpha\n"
-        "    role: external-application\n"
-        "    release_tag: v0.2.86\n",
+        "schema_version: 1\nrepositories:\n  - id: truealpha\n    role: external-application\n    release_tag: v0.2.87\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(
@@ -3777,9 +3384,7 @@ def test_scheduled_audit_alert_text_and_audit_job_failure_resolution(
     )
     monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
     monkeypatch.setattr(
-        reconcile,
-        "resolve_app_hook_cwd",
-        lambda *_a, **_kw: (tmp_path, None),
+        reconcile, "resolve_app_hook_cwd", lambda *_a, **_kw: (tmp_path, None)
     )
     monkeypatch.setattr(
         reconcile,
@@ -3789,28 +3394,16 @@ def test_scheduled_audit_alert_text_and_audit_job_failure_resolution(
             slot="scheduled_audit",
             environment="staging",
             app_url="https://truealpha-staging.truealpha.club",
-            version_ref="v0.2.86",
+            version_ref="v0.2.87",
             status="fail",
             exit_code=1,
             duration_seconds=0.1,
             summary="nightly verdict failed",
         ),
     )
-    trail_action = "commented"
-
-    def _fake_trail(entries, **_kw):
-        for e in entries:
-            if isinstance(e, dict):
-                e["issue_trail_action"] = trail_action
-                e["issue_number"] = 901
-        return 0
-
-    monkeypatch.setattr(reconcile, "record_app_hook_issue_trail", _fake_trail)
-    monkeypatch.setenv("GITHUB_TOKEN", "tok-audit")
-    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
-    monkeypatch.setenv("GITHUB_RUN_URL", run_url)
-
-    rc_commented = main(
+    monkeypatch.setattr(reconcile, "record_app_hook_issue_trail", lambda *_a, **_kw: 0)
+    sched_out = tmp_path / "scheduled-audit-result.json"
+    rc = main(
         [
             "--repo-root",
             str(tmp_path),
@@ -3818,71 +3411,14 @@ def test_scheduled_audit_alert_text_and_audit_job_failure_resolution(
             "--sync-service",
             "truealpha/app",
             "--output-json",
-            str(result_file),
+            str(sched_out),
         ]
     )
     capsys.readouterr()
-    assert rc_commented == 1
-    saved_commented = json.loads(result_file.read_text(encoding="utf-8"))
-    assert saved_commented["alert_text"] is None
-    assert (
-        saved_commented["alert_suppressed_reason"]
-        == "schedule_known_open_hook_incidents"
-    )
-    assert reconcile.resolve_audit_job_failure_alert(result_file, run_url=run_url) == (
-        None,
-        f"::notice::Suppressing duplicate schedule Feishu alert (schedule_known_open_hook_incidents); open incident issue(s) updated. Run: {run_url}",
-    )
-
-    # Execute the actual ops-checks.yml jobs.audit Alert on failure snippet when suppressed
-    ops_workflow = yaml.safe_load(
-        (ROOT / ".github" / "workflows" / "ops-checks.yml").read_text(encoding="utf-8")
-    )
-    audit_alert_step = next(
-        s
-        for s in ops_workflow["jobs"]["audit"]["steps"]
-        if s.get("name") == "Alert on failure"
-    )
-    py_body = (
-        audit_alert_step["run"].split("python - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
-    )
-    delivered: list[str] = []
-    monkeypatch.setattr(
-        watchdog,
-        "deliver_out_of_band_alert",
-        lambda _env, msg: delivered.append(msg),
-    )
-    monkeypatch.chdir(tmp_path)
-    with pytest.raises(SystemExit) as exc_info:
-        exec(compile(py_body, "<ops-checks-audit-alert-suppressed>", "exec"), {})
-    assert exc_info.value.code == 0
-    assert delivered == []
-    assert "Suppressing duplicate schedule Feishu alert" in capsys.readouterr().out
-
-    # First occurrence ('opened') on schedule writes alert_text and pages via Alert on failure
-    trail_action = "opened"
-    rc_opened = main(
-        [
-            "--repo-root",
-            str(tmp_path),
-            "--run-scheduled-audit",
-            "--sync-service",
-            "truealpha/app",
-            "--output-json",
-            str(result_file),
-        ]
-    )
-    capsys.readouterr()
-    assert rc_opened == 1
-    saved_opened = json.loads(result_file.read_text(encoding="utf-8"))
-    assert saved_opened["alert_suppressed_reason"] is None
-    assert saved_opened["alert_text"] == (
-        "⚠️ Scheduled App runtime audit FAILED (staging; deploy-guard invariants passed).\n"
-        "- truealpha/app [scheduled_audit @ v0.2.86]: nightly verdict failed\n"
-        f"Run: {run_url}"
-    )
-    exec(compile(py_body, "<ops-checks-audit-alert-paged>", "exec"), {})
-    assert delivered == [saved_opened["alert_text"]]
+    assert rc == 1
+    saved = json.loads(sched_out.read_text(encoding="utf-8"))
+    assert set(saved) == {"scheduled_audit_results"}
+    assert saved["scheduled_audit_results"][0]["summary"] == "nightly verdict failed"
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -4062,10 +3598,25 @@ def test_hook_checkout_survives_a_refused_tag_fetch_and_says_so(
         ("preview_gate", ""),
     ],
 )
-def test_release_ref_is_needed_only_by_the_slot_that_reads_the_lineage(
+def test_release_ref_is_needed_only_by_the_slot_that_declares_checkout_lineage(
     slot, expected
 ) -> None:
-    assert reconcile.release_ref_for_slot(slot, "v1.2.3") == expected
+    from infra2_sdk.manifests import HOOK_SLOTS, RuntimeHooksManifest
+
+    manifest = RuntimeHooksManifest.from_dict(
+        {
+            "schema_version": 1,
+            "service": "truealpha/app",
+            "slots": {
+                s: {
+                    "run": "echo ok",
+                    "checkout_lineage": s == "scheduled_audit",
+                }
+                for s in HOOK_SLOTS
+            },
+        }
+    )
+    assert reconcile._slot_release_ref(manifest, (slot,), "v1.2.3") == expected
 
 
 def _record_hook_checkouts(monkeypatch, tmp_path) -> list[tuple[str, str]]:
@@ -4104,6 +3655,7 @@ def _record_hook_checkouts(monkeypatch, tmp_path) -> list[tuple[str, str]]:
                     "required_env": [],
                     "optional_env": [],
                     "artifacts_dir": f"artifacts/{slot_name}",
+                    "checkout_lineage": slot_name == "scheduled_audit",
                 }
                 for slot_name in HOOK_SLOTS
             },

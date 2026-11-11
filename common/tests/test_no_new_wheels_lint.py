@@ -6,8 +6,10 @@ import datetime
 from pathlib import Path
 
 from common.core.no_new_wheels_lint import (
+    day_report_self_signals,
     lint_python_callsites,
     lint_scheduled_jobs,
+    lint_workflow_callsites,
     registered_signal_names,
 )
 
@@ -16,6 +18,7 @@ def test_current_tree_passes() -> None:
     signals = registered_signal_names()
     assert lint_python_callsites(signals=signals) == []
     assert lint_scheduled_jobs(signals=signals) == []
+    assert lint_workflow_callsites(signals=signals) == []
 
 
 def test_synthetic_unregistered_callsite_is_caught(tmp_path: Path) -> None:
@@ -129,3 +132,52 @@ def test_scheduled_job_expired_nowheel_fails(tmp_path: Path) -> None:
     )
     assert len(errors) == 1
     assert "exemption expired on 2026-09-01" in errors[0]
+
+
+def test_workflow_callsite_without_signal_or_direct_pager_on_day_report_fails(
+    tmp_path: Path,
+) -> None:
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    assert "deploy-guard-audit" in day_report_self_signals()
+
+    (wf_dir / "unannotated.yml").write_text(
+        "name: rogue\n"
+        "jobs:\n"
+        "  notify:\n"
+        "    steps:\n"
+        "      - run: |\n"
+        "          python -c \"deliver_out_of_band_alert({}, 'hi')\"\n",
+        encoding="utf-8",
+    )
+    (wf_dir / "bypass-dedup.yml").write_text(
+        "name: ops\n"
+        "jobs:\n"
+        "  audit:\n"
+        "    # signal: deploy-guard-audit\n"
+        "    steps:\n"
+        "      - run: |\n"
+        "          python -c \"deliver_out_of_band_alert({}, 'daily spam')\"\n",
+        encoding="utf-8",
+    )
+    (wf_dir / "exempt.yml").write_text(
+        "name: reconcile\n"
+        "jobs:\n"
+        "  reconcile:\n"
+        "    # alert-delivery-exempt: event-driven deploy failure; review=2027-05-01\n"
+        "    steps:\n"
+        "      - run: |\n"
+        "          python -c \"deliver_out_of_band_alert({}, 'deploy failed')\"\n",
+        encoding="utf-8",
+    )
+
+    errors = lint_workflow_callsites(
+        workflows_dir=wf_dir,
+        signals=registered_signal_names(),
+        today=datetime.date(2026, 11, 11),
+    )
+    assert len(errors) == 2
+    assert any("unannotated.yml job 'notify'" in err for err in errors)
+    assert any(
+        "bypass-dedup.yml job 'audit'" in err and "dedup_page" in err for err in errors
+    )
