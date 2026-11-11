@@ -63,6 +63,18 @@ def test_the_requirement_is_the_locked_wheel_and_hash() -> None:
     assert sdk_requirement(LOCK) == (
         f"infra2-sdk @ {package['source']['url']}#sha256={digest}"
     )
+    assert sdk_requirement(LOCK, extras="fastapi,postgres,s3,http") == (
+        f"infra2-sdk[fastapi,postgres,s3,http] @ {package['source']['url']}#sha256={digest}"
+    )
+
+
+@pytest.mark.parametrize(
+    "bad_extras",
+    [",", "fastapi,", "fastapi;rm -rf /", "$foo", "fastapi|cat"],
+)
+def test_invalid_extras_are_refused(bad_extras: str) -> None:
+    with pytest.raises(ValueError, match="invalid extras list"):
+        sdk_requirement(LOCK, extras=bad_extras)
 
 
 def test_the_installed_sdk_is_the_locked_release() -> None:
@@ -137,7 +149,23 @@ def test_the_cli_prints_nothing_and_fails_on_a_bad_lock(tmp_path) -> None:
     assert (result.returncode, result.stdout) == (1, "")
 
 
-_IMAGE_ASSIGN = 'RUN sdk="$(python /tmp/sdk/sdk_requirement.py /tmp/sdk/uv.lock)"'
+_IMAGE_ASSIGN_RE = re.compile(
+    r'^RUN sdk="\$\(python /tmp/sdk/sdk_requirement\.py'
+    r"(?: --extras (?P<extras>[a-z0-9][a-z0-9_-]*(?:,[a-z0-9][a-z0-9_-]*)*))?"
+    r' /tmp/sdk/uv\.lock\)"$'
+)
+
+
+def _image_assign_line(text: str, rel: str) -> tuple[str, str]:
+    matches = [
+        line.rstrip(" \t\\")
+        for line in text.splitlines()
+        if line.startswith('RUN sdk="$(python /tmp/sdk/sdk_requirement.py')
+    ]
+    assert len(matches) == 1, f"{rel}: expected one checked SDK RUN line, got {matches}"
+    match = _IMAGE_ASSIGN_RE.fullmatch(matches[0])
+    assert match is not None, f"{rel}: malformed SDK RUN assignment: {matches[0]}"
+    return matches[0], match.group("extras") or ""
 
 
 def _run_instruction(text: str, first_line: str) -> str:
@@ -156,8 +184,9 @@ def test_each_image_installs_the_locked_requirement(rel: str) -> None:
     # One reader: the image copies the script and the lock, and holds no reader of its own.
     assert "COPY uv.lock tools/sdk_requirement.py /tmp/sdk/\n" in text
     assert "tomllib" not in text, f"{rel} holds its own copy of the lock reader"
-    run = _run_instruction(text, _IMAGE_ASSIGN)
-    assert run.startswith(f"{_IMAGE_ASSIGN} && pip install "), run
+    assign_line, extras = _image_assign_line(text, rel)
+    run = _run_instruction(text, assign_line)
+    assert run.startswith(f"{assign_line} && pip install "), run
     # Everything after `pip install` is pip arguments: no second command, no comment,
     # and the requirement is passed whole, once, and quoted. `${sdk%%#*}` would cut off
     # the hash, and a trailing `# "$sdk"` or `&& echo "$sdk"` would not install it.
@@ -176,18 +205,23 @@ def test_each_image_installs_the_locked_requirement(rel: str) -> None:
     assert words[-1] == "$sdk" and not words[-2].startswith("-"), (
         f"{rel}: $sdk must be the last pip argument and no option may take it: {args}"
     )
-    # Run the script as the image does (script, then lock path) and compare with the
-    # lock read independently, so the command line is tested and not only the function.
+    # Run the script as the image does (script, optional --extras, then lock path) and compare with
+    # the lock read independently, so the command line is tested and not only the function.
     package = _locked()
     digest = package["wheels"][0]["hash"].removeprefix("sha256:")
+    cli_cmd = [sys.executable, str(SCRIPT)]
+    if extras:
+        cli_cmd.extend(["--extras", extras])
+    cli_cmd.append(str(LOCK))
     res = subprocess.run(
-        [sys.executable, str(SCRIPT), str(LOCK)],
+        cli_cmd,
         capture_output=True,
         text=True,
         check=True,
     )
+    expected_pkg = f"infra2-sdk[{extras}]" if extras else "infra2-sdk"
     assert res.stdout.strip() == (
-        f"infra2-sdk @ {package['source']['url']}#sha256={digest}"
+        f"{expected_pkg} @ {package['source']['url']}#sha256={digest}"
     )
 
 
@@ -199,14 +233,16 @@ _NAMES_THE_SDK = re.compile(r"infra2(?:%5f|[-_.])?sdk|sdk_requirement|/tmp/sdk",
 def test_each_image_names_the_sdk_only_in_its_two_checked_lines(rel: str) -> None:
     """A later `RUN` that installs the SDK again, a second `COPY` over the script, and a
     `sed` on the script all leave the checked `RUN` intact and drop the hash."""
+    text = (ROOT / rel).read_text(encoding="utf-8")
+    assign_line, _ = _image_assign_line(text, rel)
     named = [
         line.rstrip(" \t\\")
-        for line in (ROOT / rel).read_text(encoding="utf-8").splitlines()
+        for line in text.splitlines()
         if not line.lstrip().startswith("#") and _NAMES_THE_SDK.search(line)
     ]
     assert named == [
         "COPY uv.lock tools/sdk_requirement.py /tmp/sdk/",
-        _IMAGE_ASSIGN,
+        assign_line,
     ], f"{rel}: only the COPY and the checked RUN may name the SDK or the script"
 
 

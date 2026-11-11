@@ -72,16 +72,15 @@ class CanaryRealityReport:
 
 
 def _parse_sdk_version_from_lock_text(lock_text: str) -> str:
-    import tomllib
+    from infra2_sdk.deploy import parse_wheel_version
 
-    try:
-        doc = tomllib.loads(lock_text)
-        for pkg in doc.get("package", []):
-            if pkg.get("name") == "infra2-sdk":
-                return str(pkg.get("version", ""))
-    except Exception:
-        pass
-    return ""
+    return parse_wheel_version(lock_text)
+
+
+def _read_locked_sdk_version_file(path: Path) -> str:
+    if not path.exists():
+        return ""
+    return _parse_sdk_version_from_lock_text(path.read_text(encoding="utf-8"))
 
 
 def _resolve_locked_sdk_version(
@@ -93,12 +92,9 @@ def _resolve_locked_sdk_version(
 ) -> str:
     """Read the infra2-sdk package version pinned in the release's uv.lock (#1289)."""
     if lock_path is not None:
-        if lock_path.exists():
-            version_str = _parse_sdk_version_from_lock_text(
-                lock_path.read_text(encoding="utf-8")
-            )
-            if version_str:
-                return version_str
+        version_str = _read_locked_sdk_version_file(lock_path)
+        if version_str:
+            return version_str
     else:
         root = repo_root or Path(__file__).resolve().parents[1]
         try:
@@ -124,12 +120,9 @@ def _resolve_locked_sdk_version(
         except Exception:
             pass
         fallback_lock = root / "uv.lock"
-        if fallback_lock.exists():
-            version_str = _parse_sdk_version_from_lock_text(
-                fallback_lock.read_text(encoding="utf-8")
-            )
-            if version_str:
-                return version_str
+        version_str = _read_locked_sdk_version_file(fallback_lock)
+        if version_str:
+            return version_str
     try:
         from importlib.metadata import version
 

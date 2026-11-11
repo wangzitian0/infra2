@@ -393,9 +393,33 @@ def _otel_extra_requirements() -> list[Requirement]:
 def test_the_image_installs_the_sdk_otel_extra_requirements_as_plain_pins(
     app: Path,
 ) -> None:
-    """pyproject keeps `infra2-sdk @ <wheel>` extras-free, so the Dockerfile lists the
-    `otel` extra's requirements itself. They must equal what the SDK declares."""
+    """An image installs the SDK's `otel` requirements either via `sdk_requirement.py --extras`
+    (with an extra whose SDK metadata covers every `otel` requirement) or via plain pins."""
     dockerfile = (app.parent / "Dockerfile").read_text(encoding="utf-8")
+    extras_match = re.search(
+        r"sdk_requirement\.py\s+--extras\s+([a-z0-9_,-]+)", dockerfile
+    )
+    if extras_match is not None:
+        selected = {
+            item.strip() for item in extras_match.group(1).split(",") if item.strip()
+        }
+        sdk_requires = importlib.metadata.requires("infra2-sdk") or []
+        by_extra: dict[str, dict[str, Requirement]] = {}
+        for raw in sdk_requires:
+            req_part, _, marker = raw.partition(";")
+            extra_m = re.search(r'extra\s*==\s*"([^"]+)"', marker)
+            if extra_m is not None:
+                parsed_req = Requirement(req_part.strip())
+                by_extra.setdefault(extra_m.group(1), {})[parsed_req.name] = parsed_req
+        covered: dict[str, Requirement] = {}
+        for extra_name in selected:
+            covered.update(by_extra.get(extra_name, {}))
+        for parsed in _otel_extra_requirements():
+            assert parsed.name in covered, (
+                f"{app.parent.name}/Dockerfile extras {sorted(selected)} lack {parsed.name}"
+            )
+            assert covered[parsed.name].specifier == parsed.specifier
+        return
     for parsed in _otel_extra_requirements():
         pins = re.findall(rf'"({re.escape(parsed.name)}[^"\s]*)"', dockerfile)
         assert pins, f"{app.parent.name}/Dockerfile lacks {parsed.name}"

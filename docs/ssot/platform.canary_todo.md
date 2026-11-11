@@ -40,7 +40,7 @@ Each check reports one of three states:
 | `postgres` | Login as role `canary_ro`, `SET LOCAL transaction_read_only = off` first, then `SELECT 1`, and a session-scoped temporary table `canary_todo_probe` `CREATE` / `INSERT` / `SELECT` / `DELETE` roundtrip all succeed | Any server `E` (ErrorResponse), a failed login, or a roundtrip mismatch | No role name or password |
 | `s3` | `PUT`, `GET` (same body) and `DELETE` of `canary/<random>` in bucket `platform-canary` succeed | A denied or failed request, a different body | No bucket, access key or secret key |
 
-**Informational checks** (`signoz`, `openpanel`, `authentik`) test HTTP liveness (2xx or 3xx). They appear in `checks`, but they never change `ok` or the HTTP status. Each has its own probe and severity, so an outage must not page a second time as `todo-canary-status`. In addition, `probe_feishu_webhook` and `probe_sdk_contract` provide deep capability probes, and custom OpenTelemetry metrics (`todo.canary.probe.duration_ms` histogram and `todo.canary.probe.runs_total` counter) record every probe execution.
+**Informational checks** (`signoz`, `openpanel`, `authentik`) test HTTP liveness (2xx or 3xx). They appear in `checks`, but they never change `ok` or the HTTP status. Each has its own probe and severity, so an outage must not page a second time as `todo-canary-status`. Custom OpenTelemetry metrics (`canary.probe.duration_ms` histogram and `canary.probe.outcomes` counter) record every probe execution.
 
 The document returns HTTP 200 only when every gating check passes. It returns HTTP 503 when a gating check is `fail` or `unconfigured`. The body starts with the verdict, because the probe runner keeps only the first 128 bytes as its observed text:
 
@@ -85,7 +85,7 @@ A deploy therefore turns the pillar red for one window, not for the rest of the 
 - **Startup environment validation**: `validate_startup_environment()` in `platform/30.todo/app.py` calls `assert_environment(ENV_MANIFEST_PATH, environ=environ, require_injected=True)` during `main()` startup so missing required variables in `platform/30.todo/env.manifest.json` fail closed before Uvicorn binds.
 - **Mount fingerprints**: `TodoDeployer.rendered_mount_fingerprints()` in `platform/30.todo/deploy.py` computes SHA-256 digests of the rendered `vault-agent.hcl` and `secrets.ctmpl` files and injects `IAC_MOUNT_SHA256_VAULT_AGENT_HCL` and `IAC_MOUNT_SHA256_SECRETS_CTMPL` into `platform/30.todo/compose.yaml`, forcing container recreation when secret templates change.
 - **Runtime verification hooks**: `platform/30.todo/runtime-hooks.manifest.json` declares the 4-slot verification contract (`smoke`, `preview_gate`, `staging_gate`, `scheduled_audit`) and is registered in `tools/reconcile_iac_inputs.py` (`LOCAL_SERVICE_HOOK_MANIFESTS`).
-- **Dashboard & custom OTel metrics**: `platform/30.todo/dashboard.json` defines the SigNoz v5 dashboard discovered by `common/observability_dashboards.py`, charting `todo.canary.probe.duration_ms` and `todo.canary.probe.runs_total`.
+- **Dashboard & custom OTel metrics**: `platform/30.todo/dashboard.json` defines the SigNoz v5 dashboard discovered by `common/observability_dashboards.py`, charting `canary.probe.duration_ms` and `canary.probe.outcomes`.
 
 ## 4. Credentials
 
@@ -137,7 +137,7 @@ Each run emits one `canary.run` span with one `canary.check.<name>` child span p
 ### Do
 - Add a new platform capability as a new check in `app.py`. Prove a real write or login, not liveness.
 - Keep the probe target, the compose container name, and the app route equal. `test_probe_target_matches_the_compose_container_port_and_app_route` guards this.
-- Keep the Dockerfile reading the `infra2-sdk` wheel from `uv.lock` (`test_each_image_installs_the_locked_requirement` guards this), and its OpenTelemetry pins equal to the SDK `otel` extra.
+- Keep the Dockerfile installing the `infra2-sdk` wheel and its runtime extras (`fastapi,postgres,s3,http`) from `uv.lock` (`test_each_image_installs_the_locked_requirement` and `test_the_image_installs_the_sdk_otel_extra_requirements_as_plain_pins` guard this).
 
 ### Do not
 - Do not route `/api/canary/status` without SSO. `test_only_the_health_path_is_served_without_sso` evaluates the real Traefik rules.

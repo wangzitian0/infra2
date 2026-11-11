@@ -7,7 +7,7 @@ real runtime paths:
   and a temporary-table `canary_todo_probe` `CREATE`/`INSERT`/`SELECT`/`DELETE` roundtrip
 - Redis: AUTH, then SETEX/GET/DEL of a random value
 - S3: PUT, GET and DELETE of one object under a canary prefix
-- SigNoz, OpenPanel, Authentik: liveness over HTTP, plus Feishu and SDK contract probes
+- SigNoz, OpenPanel, Authentik: liveness over HTTP
 - Startup environment manifest validation (`validate_startup_environment` via `assert_environment`)
 
 `/api/canary/status` runs these checks. The probe runner reads it over the Docker
@@ -17,9 +17,8 @@ The service sends traces, metrics, and logs to SigNoz when the deploy issues an 
 
 from __future__ import annotations
 
-import concurrent.futures
+import asyncio
 import contextlib
-import contextvars
 import html
 import logging
 import math
@@ -39,6 +38,19 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 from infra2_sdk.fastapi import init_service
 from infra2_sdk.runtime.config_schema import assert_environment
+from infra2_sdk.runtime.environment import (
+    EnvironmentTier,
+    RuntimeEnvKey,
+    resolve_runtime_env,
+)
+from infra2_sdk.runtime.health import (
+    Dependency,
+    DependencyKind,
+    DependencyManifest,
+    DependencyStatus,
+    ProbeResult,
+    run_probes,
+)
 
 LOGGER = logging.getLogger("platform-todo")
 SERVICE_TRACER_NAME = "platform-todo"
@@ -63,6 +75,36 @@ UNCONFIGURED = "unconfigured"
 # Authentik have their own probes and severities, so they stay informational here.
 GATING_CHECKS = ("postgres", "redis", "s3")
 INFORMATIONAL_CHECKS = ("signoz", "openpanel", "authentik")
+_HOSTED_TIERS = frozenset({EnvironmentTier.STAGING, EnvironmentTier.PRODUCTION})
+CANARY_DEPENDENCY_MANIFEST = DependencyManifest(
+    (
+        Dependency(
+            "postgres",
+            DependencyKind.CODE_DOMINANT,
+            _HOSTED_TIERS,
+            frozenset({"CANARY_POSTGRES_USER", "CANARY_POSTGRES_PASSWORD"}),
+        ),
+        Dependency(
+            "redis",
+            DependencyKind.CODE_DOMINANT,
+            _HOSTED_TIERS,
+            frozenset({"REDIS_PASSWORD"}),
+        ),
+        Dependency(
+            "s3",
+            DependencyKind.CODE_DOMINANT,
+            _HOSTED_TIERS,
+            frozenset(
+                {
+                    "CANARY_S3_ENDPOINT_URL",
+                    "CANARY_S3_BUCKET",
+                    "CANARY_S3_ACCESS_KEY",
+                    "CANARY_S3_SECRET_KEY",
+                }
+            ),
+        ),
+    )
+)
 
 # Each run does real writes and opens a Postgres connection, and the canary role allows 5.
 # One run is in flight at a time, and a result is reused for this long. It stays below the
@@ -177,9 +219,7 @@ def _probe_postgres(
         from infra2_sdk.runtime.postgres import (
             PostgresSettings,
             probe_postgres,
-            redact_postgres_error,
         )
-        from infra2_sdk.runtime.health import DependencyStatus
 
         dsn = (
             f"postgresql://{urllib.parse.quote(user, safe='')}"
@@ -197,62 +237,66 @@ def _probe_postgres(
                 )
             return _outcome("pass", start, f"login as {user}: {result.detail}")
 
-        raw_conn = None
-        conn_or_cm = None
-        try:
+        class _CrudSession:
+            def __init__(self, raw: Any) -> None:
+                self._raw = raw
+                self._conn: Any = None
+
+            def __enter__(self) -> Any:
+                self._conn = (
+                    self._raw.__enter__()
+                    if hasattr(self._raw, "__enter__")
+                    else self._raw
+                )
+                return self._conn
+
+            def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+                try:
+                    if exc_type is None and self._conn is not None:
+                        self._conn.execute("SELECT 1").fetchone()
+                        self._conn.execute(
+                            "CREATE TEMP TABLE IF NOT EXISTS canary_todo_probe (id TEXT PRIMARY KEY, title TEXT NOT NULL)"
+                        )
+                        self._conn.execute(
+                            "INSERT INTO canary_todo_probe (id, title) VALUES ('probe-1', 'canary-write-ok') ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title"
+                        )
+                        row = self._conn.execute(
+                            "SELECT title FROM canary_todo_probe WHERE id = 'probe-1'"
+                        ).fetchone()
+                        self._conn.execute(
+                            "DELETE FROM canary_todo_probe WHERE id = 'probe-1'"
+                        )
+                        if not row or row[0] != "canary-write-ok":
+                            raise _ProbeFailure(
+                                f"SELECT returned {row!r} instead of ('canary-write-ok',)"
+                            )
+                finally:
+                    if hasattr(self._raw, "__exit__"):
+                        self._raw.__exit__(exc_type, exc, tb)
+                    target = self._conn if self._conn is not None else self._raw
+                    if target is not None and hasattr(target, "close"):
+                        with contextlib.suppress(Exception):
+                            target.close()
+                return False
+
+        def _crud_connector(psycopg_dsn: str, **kwargs: Any) -> _CrudSession:
             if connector is None:
                 import psycopg
 
-                connect = psycopg.connect
-            else:
-                connect = connector
-            connect_kwargs: dict[str, Any] = {
-                "connect_timeout": settings.connect_timeout_seconds,
-            }
-            if connector is None:
-                connect_kwargs["options"] = (
-                    f"-c statement_timeout={int(settings.statement_timeout_seconds * 1000)}"
+                kwargs.setdefault(
+                    "options",
+                    f"-c statement_timeout={int(settings.statement_timeout_seconds * 1000)}",
                 )
-            conn_or_cm = connect(settings.psycopg_dsn, **connect_kwargs)
+                return _CrudSession(psycopg.connect(psycopg_dsn, **kwargs))
+            return _CrudSession(connector(psycopg_dsn, **kwargs))
 
-            def _run_crud(connection: Any) -> None:
-                # PostgreSQL accepts a change of the read/write mode only before the first query.
-                connection.execute("SET LOCAL transaction_read_only = off")
-                connection.execute("SELECT 1").fetchone()
-                connection.execute(
-                    "CREATE TEMP TABLE IF NOT EXISTS canary_todo_probe (id TEXT PRIMARY KEY, title TEXT NOT NULL)"
-                )
-                connection.execute(
-                    "INSERT INTO canary_todo_probe (id, title) VALUES ('probe-1', 'canary-write-ok') ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title"
-                )
-                row = connection.execute(
-                    "SELECT title FROM canary_todo_probe WHERE id = 'probe-1'"
-                ).fetchone()
-                connection.execute("DELETE FROM canary_todo_probe WHERE id = 'probe-1'")
-                if not row or row[0] != "canary-write-ok":
-                    raise _ProbeFailure(
-                        f"SELECT returned {row!r} instead of ('canary-write-ok',)"
-                    )
-
-            if hasattr(conn_or_cm, "__enter__"):
-                with conn_or_cm as connection:
-                    raw_conn = connection
-                    _run_crud(connection)
-            else:
-                raw_conn = conn_or_cm
-                _run_crud(raw_conn)
-        except Exception as exc:  # noqa: BLE001
-            redacted = redact_postgres_error(str(exc), settings)
-            return _outcome(
-                "fail",
-                start,
-                f"login as {user} failed: {type(exc).__name__}: {redacted}",
-            )
-        finally:
-            target = raw_conn if raw_conn is not None else conn_or_cm
-            if target is not None and hasattr(target, "close"):
-                with contextlib.suppress(Exception):
-                    target.close()
+        result = probe_postgres(
+            settings,
+            connector=_crud_connector,
+            query="SET LOCAL transaction_read_only = off",
+        )
+        if result.status != DependencyStatus.PRESENT:
+            return _outcome("fail", start, f"login as {user} failed: {result.detail}")
         return _outcome(
             "pass",
             start,
@@ -295,15 +339,13 @@ def _probe_tcp(host: str, port: int, timeout: float = 2.0) -> Dict[str, Any]:
         return _outcome("fail", start, str(exc))
 
 
-def _probe_http(url: str, timeout: float = 3.0) -> Dict[str, Any]:
-    import asyncio
-    from infra2_sdk.runtime.health import DependencyStatus
+async def _probe_http_async(url: str, timeout: float = 3.0) -> Dict[str, Any]:
     from infra2_sdk.runtime.http import HttpClientSettings, probe_http
 
     start = time.perf_counter()
     try:
-        result = asyncio.run(
-            probe_http(url, settings=HttpClientSettings(timeout_seconds=timeout))
+        result = await probe_http(
+            url, settings=HttpClientSettings(timeout_seconds=timeout)
         )
     except Exception as exc:
         return _outcome("fail", start, str(exc))
@@ -312,6 +354,13 @@ def _probe_http(url: str, timeout: float = 3.0) -> Dict[str, Any]:
     ):
         return _outcome("fail", start, result.detail)
     return _outcome("pass", start, result.detail)
+
+
+def _probe_http(url: str, timeout: float = 3.0) -> Dict[str, Any]:
+    return asyncio.run(_probe_http_async(url, timeout=timeout))
+
+
+_DEFAULT_PROBE_HTTP = _probe_http
 
 
 def _resp_command(*parts: str) -> bytes:
@@ -425,6 +474,7 @@ def _probe_s3(
         from infra2_sdk.runtime.s3 import (
             S3Settings,
             create_s3_client,
+            put_object_bytes,
             read_object_bytes,
         )
 
@@ -447,7 +497,7 @@ def _probe_s3(
     written = False
     try:
         try:
-            s3.put_object(Bucket=bucket, Key=key, Body=body)
+            put_object_bytes(s3, bucket=bucket, key=key, data=body)
         except Exception as exc:  # noqa: BLE001
             raise _ProbeFailure(f"PUT failed: {exc}") from exc
         written = True
@@ -472,6 +522,15 @@ def _probe_s3(
     return _outcome("pass", start, "PUT, GET and DELETE verified under canary prefix")
 
 
+def _otlp_active() -> bool:
+    return bool(
+        (
+            resolve_runtime_env(None, RuntimeEnvKey.OTEL_EXPORTER_OTLP_ENDPOINT).value
+            or ""
+        ).strip()
+    )
+
+
 class _NullSpan:
     def set_attribute(self, key: str, value: Any) -> None:
         return None
@@ -482,7 +541,7 @@ def _span(name: str, **attributes: Any):
 
     The tracer comes from the global provider that `init_service` installs at import.
     """
-    if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip():
+    if not _otlp_active():
         return contextlib.nullcontext(_NullSpan())
     from opentelemetry import trace
 
@@ -491,20 +550,8 @@ def _span(name: str, **attributes: Any):
     )
 
 
-def _traced_check(name: str, probe: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
-    with _span(f"canary.check.{name}", **{"canary.check": name}) as span:
-        try:
-            result = probe()
-        except Exception as exc:  # noqa: BLE001 - one crashed probe must not hide the rest
-            result = {
-                "status": "fail",
-                "latency_ms": 0.0,
-                "detail": f"probe raised {type(exc).__name__}: {exc}",
-            }
-        span.set_attribute("canary.status", result["status"])
-        span.set_attribute("canary.latency_ms", result["latency_ms"])
-        span.set_attribute("canary.detail", result["detail"])
-    if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip():
+def _record_check_telemetry(name: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    if _otlp_active():
         from opentelemetry import metrics as otel_metrics
 
         meter = otel_metrics.get_meter(SERVICE_TRACER_NAME)
@@ -529,34 +576,132 @@ def _traced_check(name: str, probe: Callable[[], Dict[str, Any]]) -> Dict[str, A
     return result
 
 
-def _run_checks(
-    plan: Dict[str, Callable[[], Dict[str, Any]]],
-) -> Dict[str, Dict[str, Any]]:
-    """Run every check in parallel, each bounded by CHECK_DEADLINE_SECONDS."""
-    executor = concurrent.futures.ThreadPoolExecutor(
-        max_workers=len(plan), thread_name_prefix="canary-check"
+def _traced_check(name: str, probe: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
+    with _span(f"canary.check.{name}", **{"canary.check": name}) as span:
+        try:
+            result = probe()
+        except Exception as exc:  # noqa: BLE001 - one crashed probe must not hide the rest
+            result = {
+                "status": "fail",
+                "latency_ms": 0.0,
+                "detail": f"probe raised {type(exc).__name__}: {exc}",
+            }
+        span.set_attribute("canary.status", result["status"])
+        span.set_attribute("canary.latency_ms", result["latency_ms"])
+        span.set_attribute("canary.detail", result["detail"])
+    return _record_check_telemetry(name, result)
+
+
+async def _traced_check_async(name: str, probe: Callable[[], Any]) -> Dict[str, Any]:
+    with _span(f"canary.check.{name}", **{"canary.check": name}) as span:
+        try:
+            result = await probe()
+        except Exception as exc:  # noqa: BLE001 - one crashed probe must not hide the rest
+            result = {
+                "status": "fail",
+                "latency_ms": 0.0,
+                "detail": f"probe raised {type(exc).__name__}: {exc}",
+            }
+        span.set_attribute("canary.status", result["status"])
+        span.set_attribute("canary.latency_ms", result["latency_ms"])
+        span.set_attribute("canary.detail", result["detail"])
+    return _record_check_telemetry(name, result)
+
+
+def _to_probe_result(name: str, raw: Dict[str, Any]) -> ProbeResult:
+    status = (
+        DependencyStatus.PRESENT
+        if raw.get("status") == PASS
+        else DependencyStatus.ABSENT
     )
+    return ProbeResult(
+        name,
+        status,
+        str(raw.get("detail") or ""),
+        float(raw.get("latency_ms") or 0.0),
+    )
+
+
+def _run_checks(
+    plan: Dict[str, Callable[[], Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """Run every check in parallel through infra2_sdk.runtime.health.run_probes."""
+    raw_outcomes: Dict[str, Dict[str, Any]] = {}
+    checks: list[Any] = []
+    for name, fn in plan.items():
+        if asyncio.iscoroutinefunction(fn):
+
+            class _AsyncCheck:
+                def __init__(
+                    self, check_name: str, check_fn: Callable[[], Any]
+                ) -> None:
+                    self.name = check_name
+                    self._fn = check_fn
+
+                async def probe(self) -> ProbeResult:
+                    raw = await _traced_check_async(self.name, self._fn)
+                    raw_outcomes[self.name] = raw
+                    return _to_probe_result(self.name, raw)
+
+            checks.append(_AsyncCheck(name, fn))
+        else:
+
+            class _SyncCheck:
+                def __init__(
+                    self, check_name: str, check_fn: Callable[[], Dict[str, Any]]
+                ) -> None:
+                    self.name = check_name
+                    self._fn = check_fn
+
+                def probe(self) -> ProbeResult:
+                    raw = _traced_check(self.name, self._fn)
+                    raw_outcomes[self.name] = raw
+                    return _to_probe_result(self.name, raw)
+
+            checks.append(_SyncCheck(name, fn))
+
+    coro = run_probes(checks, timeout_seconds=CHECK_DEADLINE_SECONDS)
     try:
-        futures = {
-            # one context copy per task: it carries the active span into the worker
-            executor.submit(
-                contextvars.copy_context().run, _traced_check, name, probe
-            ): name
-            for name, probe in plan.items()
-        }
-        done, pending = concurrent.futures.wait(futures, timeout=CHECK_DEADLINE_SECONDS)
-        results = {futures[future]: future.result() for future in done}
-        for future in pending:
-            name = futures[future]
-            detail = f"check did not finish within {CHECK_DEADLINE_SECONDS:g}s"
-            LOGGER.warning("canary check %s failed: %s", name, detail)
-            results[name] = {
+        asyncio.get_running_loop()
+    except RuntimeError:
+        probe_results = asyncio.run(coro)
+    else:
+        import contextvars
+
+        holder: list[Any] = []
+        err_holder: list[BaseException] = []
+        ctx = contextvars.copy_context()
+
+        def _loop_runner() -> None:
+            try:
+                holder.append(ctx.run(asyncio.run, coro))
+            except BaseException as exc:  # noqa: BLE001
+                err_holder.append(exc)
+
+        runner_thread = threading.Thread(
+            target=_loop_runner, name="canary-probe-loop", daemon=True
+        )
+        runner_thread.start()
+        runner_thread.join()
+        if err_holder:
+            raise err_holder[0]
+        probe_results = holder[0]
+    results: Dict[str, Dict[str, Any]] = {}
+    for res in probe_results:
+        if res.name in raw_outcomes:
+            results[res.name] = raw_outcomes[res.name]
+        else:
+            detail = (
+                f"check did not finish within {CHECK_DEADLINE_SECONDS:g}s"
+                if res.detail.startswith("probe timed out after ")
+                else res.detail
+            )
+            LOGGER.warning("canary check %s failed: %s", res.name, detail)
+            results[res.name] = {
                 "status": "fail",
                 "latency_ms": round(CHECK_DEADLINE_SECONDS * 1000, 1),
                 "detail": detail,
             }
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
     return {name: results[name] for name in plan}
 
 
@@ -587,7 +732,16 @@ def run_all_checks() -> Dict[str, Any]:
         "AUTHENTIK_ENDPOINT", "http://platform-authentik-server:9000/-/health/live/"
     )
 
-    plan: Dict[str, Callable[[], Dict[str, Any]]] = {
+    def _http_entry(url: str) -> Callable[[], Any]:
+        if _probe_http is _DEFAULT_PROBE_HTTP:
+
+            async def _run_http() -> Dict[str, Any]:
+                return await _probe_http_async(url)
+
+            return _run_http
+        return lambda: _probe_http(url)
+
+    plan: Dict[str, Callable[[], Any]] = {
         "postgres": lambda: _probe_postgres(
             pg_host, pg_port, user=pg_user, password=pg_password, dbname=pg_database
         ),
@@ -598,9 +752,9 @@ def run_all_checks() -> Dict[str, Any]:
             access_key=s3_access_key,
             secret_key=s3_secret_key,
         ),
-        "signoz": lambda: _probe_http(signoz_url),
-        "openpanel": lambda: _probe_http(openpanel_url),
-        "authentik": lambda: _probe_http(authentik_url),
+        "signoz": _http_entry(signoz_url),
+        "openpanel": _http_entry(openpanel_url),
+        "authentik": _http_entry(authentik_url),
     }
     with _span("canary.run") as run_span:
         results = _run_checks(plan)
@@ -724,6 +878,7 @@ init_service(
     strict_otel=True,
     require_issued_identity=True,
     check_timeout_seconds=READINESS_TIMEOUT_SECONDS,
+    suppress_probe_telemetry=True,
 )
 
 # The probes call httpx, and httpx logs one INFO line for each successful request. With the
@@ -757,9 +912,19 @@ async def add_cors_headers(request: Request, call_next: Any) -> Response:
     return response
 
 
+def _resolved_git_sha() -> str:
+    raw = (
+        os.environ.get("GIT_COMMIT_SHA", "").strip()
+        or (
+            resolve_runtime_env(None, RuntimeEnvKey.SERVICE_VERSION).value or ""
+        ).strip()
+    )
+    return raw or "unknown"
+
+
 @fastapi_app.api_route("/api/health", methods=["GET", "HEAD"], tags=["Observability"])
 def fastapi_api_health() -> Response:
-    git_sha = os.environ.get("GIT_COMMIT_SHA", "").strip() or "unknown"
+    git_sha = _resolved_git_sha()
     return JSONResponse(
         status_code=200,
         content={
@@ -903,7 +1068,8 @@ def fastapi_ui_index(request: Request) -> HTMLResponse:
             "未检测到 ForwardAuth 头 (开发/直连模式)"
             "</span>"
         )
-    sha = os.environ.get("GIT_COMMIT_SHA", "")[:7] or "unknown"
+    resolved_sha = _resolved_git_sha()
+    sha = resolved_sha[:7] if resolved_sha != "unknown" else "unknown"
     rendered = HTML_TEMPLATE.replace("${GIT_COMMIT_SHA}", sha).replace(
         "${AUTH_BADGE}", auth_badge
     )

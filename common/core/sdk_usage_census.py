@@ -3,8 +3,11 @@
 
 This CLI tool promotes the census scripts into one tested command that computes
 six metrics (M1 through M6):
-  M1: Public symbol reachability across consumers (prod_used, test_only, internal_only, unused)
-      and missing consumer imports.
+  M1: Package-contract public symbol reachability across consumers (prod_used, test_only,
+      internal_only, unused), surface.json justification verification, and missing consumer
+      imports. "Public symbol" has one definition: an entry in package `__init__.py` `__all__`
+      (`infra2_sdk.__all__` and `infra2_sdk.runtime.__all__`); submodule `__all__` is retired
+      as a public-contract denominator (#1410).
   M2: runtime_env_contract() key reachability across consumers (prod_used, test_only, unused)
       and C1 through C6 classifications.
   M3: Consumer infra2-sdk version pin lag relative to the latest SDK release version.
@@ -226,8 +229,23 @@ def _is_overload_stub(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return False
 
 
-def public_defs(pkg_root: Path) -> list[dict[str, Any]]:
-    """Collect public module-level functions, classes, and constants in infra2_sdk."""
+def _extract_dunder_all_entries(tree: ast.Module) -> list[tuple[str, int]]:
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            getattr(t, "id", "") == "__all__" for t in node.targets
+        ):
+            if isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
+                return [
+                    (elt.value, elt.lineno)
+                    for elt in node.value.elts
+                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                ]
+    return []
+
+
+def _module_symbol_defs(
+    pkg_root: Path, *, ignore_dunder_all: bool
+) -> list[dict[str, Any]]:
     defs: list[dict[str, Any]] = []
     for path in sorted(pkg_root.rglob("*.py")):
         rel_parts = path.relative_to(pkg_root).with_suffix("").parts
@@ -242,18 +260,8 @@ def public_defs(pkg_root: Path) -> list[dict[str, Any]]:
             tree = ast.parse(path.read_text("utf-8", "replace"))
         except SyntaxError:
             continue
-        exported: set[str] | None = None
-        for node in tree.body:
-            if isinstance(node, ast.Assign) and any(
-                getattr(t, "id", "") == "__all__" for t in node.targets
-            ):
-                if isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
-                    elts = {
-                        elt.value
-                        for elt in node.value.elts
-                        if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
-                    }
-                    exported = elts if elts else None
+        exported_list = _extract_dunder_all_entries(tree)
+        exported = {name for name, _ in exported_list} if exported_list else None
         for node in tree.body:
             kind: str | None = None
             name: str | None = None
@@ -278,7 +286,7 @@ def public_defs(pkg_root: Path) -> list[dict[str, Any]]:
                 kind, name = "constant", node.target.id
             if not name or name.startswith("_") or name in SKIP_SYMBOL_NAMES:
                 continue
-            if exported is not None and name not in exported:
+            if not ignore_dunder_all and exported is not None and name not in exported:
                 continue
             defs.append(
                 {
@@ -288,6 +296,125 @@ def public_defs(pkg_root: Path) -> list[dict[str, Any]]:
                     "line": node.lineno,
                     "end": getattr(node, "end_lineno", node.lineno),
                     "path": str(path),
+                }
+            )
+    return defs
+
+
+def load_surface_justifications(
+    pkg_root: Path,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """Load `tests/surface.json` justifications keyed by `(package_module, name)`."""
+    for candidate in (
+        pkg_root.parent.parent / "tests" / "surface.json",
+        pkg_root.parent / "tests" / "surface.json",
+    ):
+        if candidate.is_file():
+            try:
+                raw = json.loads(candidate.read_text("utf-8", "replace"))
+            except (OSError, ValueError):
+                return {}
+            break
+    else:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for pkg_name, mapping in raw.items():
+        if not isinstance(pkg_name, str) or not isinstance(mapping, dict):
+            continue
+        for sym, reason in mapping.items():
+            if not isinstance(sym, str) or not isinstance(reason, str):
+                continue
+            prefix, sep, detail = reason.partition(":")
+            kind = prefix.strip() if sep else "other"
+            consumers = (
+                [c.strip() for c in detail.split(",") if c.strip()]
+                if kind == "consumer"
+                else []
+            )
+            out[(pkg_name, sym)] = {
+                "kind": kind,
+                "reason": reason,
+                "consumers": consumers,
+            }
+    return out
+
+
+def public_defs(pkg_root: Path) -> list[dict[str, Any]]:
+    """Collect package-contract public symbols from package `__init__.py` `__all__` (#1410).
+
+    Falls back to top-level submodule definitions only when no package `__init__.py`
+    declares `__all__` (for standalone single-module unit fixtures).
+    """
+    package_exports: list[tuple[str, str, Path, int]] = []
+    contract_inits = [pkg_root / "__init__.py", pkg_root / "runtime" / "__init__.py"]
+    for init_path in contract_inits:
+        if not init_path.is_file():
+            continue
+        try:
+            tree = ast.parse(init_path.read_text("utf-8", "replace"))
+        except SyntaxError:
+            continue
+        pkg_mod = module_name(init_path, pkg_root)
+        for sym, lineno in _extract_dunder_all_entries(tree):
+            if sym and not sym.startswith("_") and sym not in SKIP_SYMBOL_NAMES:
+                package_exports.append((pkg_mod, sym, init_path, lineno))
+
+    if not package_exports:
+        return _module_symbol_defs(pkg_root, ignore_dunder_all=False)
+
+    all_mod_defs = _module_symbol_defs(pkg_root, ignore_dunder_all=True)
+    by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for d in all_mod_defs:
+        by_name[d["name"]].append(d)
+
+    defs: list[dict[str, Any]] = []
+    for pkg_mod, sym, init_path, lineno in package_exports:
+        pkg_dir = init_path.parent
+        submod_py = pkg_dir / f"{sym}.py"
+        subpkg_init = pkg_dir / sym / "__init__.py"
+        if submod_py.is_file():
+            defs.append(
+                {
+                    "package": pkg_mod,
+                    "module": f"{pkg_mod}.{sym}",
+                    "name": sym,
+                    "kind": "module",
+                    "line": 1,
+                    "end": 1,
+                    "path": str(submod_py),
+                }
+            )
+            continue
+        if subpkg_init.is_file():
+            defs.append(
+                {
+                    "package": pkg_mod,
+                    "module": f"{pkg_mod}.{sym}",
+                    "name": sym,
+                    "kind": "module",
+                    "line": 1,
+                    "end": 1,
+                    "path": str(subpkg_init),
+                }
+            )
+            continue
+        candidates = by_name.get(sym, [])
+        scoped = [c for c in candidates if c["module"].startswith(f"{pkg_mod}.")]
+        chosen = (scoped or candidates or [None])[0]
+        if chosen is not None:
+            defs.append({**chosen, "package": pkg_mod})
+        else:
+            defs.append(
+                {
+                    "package": pkg_mod,
+                    "module": pkg_mod,
+                    "name": sym,
+                    "kind": "reexport",
+                    "line": lineno,
+                    "end": lineno,
+                    "path": str(init_path),
                 }
             )
     return defs
@@ -708,8 +835,18 @@ def compute_m1(
     left_the_packages: tuple[str, ...] = DEFAULT_LEFT_THE_PACKAGES,
     package_scoped_left: dict[str, set[str]] | None = None,
 ) -> tuple[dict[str, Any], dict[tuple[str, str], list[str]]]:
-    """Compute M1: public symbol reachability and consumer import verification."""
+    """Compute M1: package-contract symbol reachability, surface.json verification, and consumer imports."""
     defs = public_defs(pkg_root)
+    surface_map = load_surface_justifications(pkg_root)
+    has_package_contract = any("package" in d for d in defs)
+    contract_source = (
+        "package_dunder_all" if has_package_contract else "module_defs_fallback"
+    )
+    surface_policy = (
+        "honors_documented_and_held; verifies_consumer_claims"
+        if surface_map
+        else "no_surface_json; all_public_require_prod_use"
+    )
     internal = sdk_internal_refs(pkg_root)
     prod, test, seen_imports = consumer_symbol_refs(
         consumers, left_the_packages, package_scoped_left
@@ -721,22 +858,49 @@ def compute_m1(
         cli_modules[mod_target][repo_name] += count
     main_calls_by_path: dict[str, set[str]] = {}
 
+    submodule_prod: dict[str, Counter[str]] = defaultdict(Counter)
+    submodule_test: dict[str, Counter[str]] = defaultdict(Counter)
+    for (base, _attr), sites in seen_imports.items():
+        for site in sites:
+            repo_name, rel_path, _ = site.split(":", 2)
+            target_bucket = submodule_test if is_test_path(rel_path) else submodule_prod
+            parts = base.split(".")
+            for idx in range(2, len(parts) + 1):
+                prefix = ".".join(parts[:idx])
+                target_bucket[prefix][repo_name] += 1
+    for mod_target, repo_counts in cli_modules.items():
+        parts = mod_target.split(".")
+        for idx in range(2, len(parts) + 1):
+            prefix = ".".join(parts[:idx])
+            for r_name, r_cnt in repo_counts.items():
+                submodule_prod[prefix][r_name] += r_cnt
+
     missing_prod, missing_test = check_consumer_imports(seen_imports, pkg_root)
 
     rows: list[dict[str, Any]] = []
     counts: Counter[str] = Counter()
+    justification_counts: Counter[str] = Counter()
+    stale_consumer_claims: list[dict[str, Any]] = []
+    present_consumers = set(consumers)
+
     for d in defs:
         name = d["name"]
         mod = d["module"]
+        pkg_mod = d.get("package", mod)
         prod_repos = dict(prod.get(name, {}))
-        if mod in cli_modules:
+        test_repos = dict(test.get(name, {}))
+        if d.get("kind") == "module":
+            for r_name, r_cnt in submodule_prod.get(mod, {}).items():
+                prod_repos[r_name] = prod_repos.get(r_name, 0) + r_cnt
+            for r_name, r_cnt in submodule_test.get(mod, {}).items():
+                test_repos[r_name] = test_repos.get(r_name, 0) + r_cnt
+        elif mod in cli_modules:
             called_in_main = main_calls_by_path.setdefault(
                 d["path"], _main_called_symbols(d["path"])
             )
             if name in called_in_main:
                 for r_name, r_cnt in cli_modules[mod].items():
                     prod_repos[r_name] = prod_repos.get(r_name, 0) + r_cnt
-        test_repos = dict(test.get(name, {}))
         internal_n = sum(
             1
             for f, ln in internal.get(name, [])
@@ -751,9 +915,33 @@ def compute_m1(
         else:
             reach = "unused"
         counts[reach] += 1
+
+        surf = surface_map.get((pkg_mod, name))
+        surface_kind = surf["kind"] if surf else ("unlisted" if surface_map else "none")
+        surface_reason = surf["reason"] if surf else ""
+        justification_counts[surface_kind] += 1
+        if surf and surface_kind == "consumer":
+            missing_claimed = sorted(
+                repo_c
+                for repo_c in surf["consumers"]
+                if repo_c in present_consumers and repo_c not in prod_repos
+            )
+            if missing_claimed:
+                stale_consumer_claims.append(
+                    {
+                        "package": pkg_mod,
+                        "name": name,
+                        "claimed_consumers": surf["consumers"],
+                        "actual_prod_consumers": sorted(prod_repos),
+                        "missing_consumers": missing_claimed,
+                    }
+                )
+
         rows.append(
             {
                 **d,
+                "surface_kind": surface_kind,
+                "surface_reason": surface_reason,
                 "internal_refs": internal_n,
                 "prod_repos": ";".join(sorted(prod_repos)),
                 "prod_refs": sum(prod_repos.values()),
@@ -765,6 +953,10 @@ def compute_m1(
     total = len(rows)
     prod_used = counts["prod_used"]
     m1 = {
+        "contract_source": contract_source,
+        "surface_policy": surface_policy,
+        "surface_justifications": dict(sorted(justification_counts.items())),
+        "stale_consumer_claims": stale_consumer_claims,
         "prod_used": prod_used,
         "test_only": counts["test_only"],
         "internal_only": counts["internal_only"],
@@ -1619,20 +1811,27 @@ def evaluate_checks(
     enforce_full_reachability = len(report.get("consumers", [])) >= 2
     if m1["total_public"] <= 0:
         failures.append("M1: zero public SDK symbols discovered")
-    if enforce_full_reachability and (
-        m1.get("test_only", 0) > 0
-        or m1.get("internal_only", 0) > 0
-        or m1.get("unused", 0) > 0
-    ):
+    if enforce_full_reachability:
         non_prod = [
             f"{s['module']}.{s['name']} ({s['reach']})"
             for s in m1.get("symbols", [])
             if s.get("reach") != "prod_used"
+            and s.get("surface_kind") not in ("documented", "held")
         ]
-        samples = ", ".join(non_prod[:5])
+        if non_prod:
+            samples = ", ".join(non_prod[:5])
+            failures.append(
+                f"M1: non-production SDK symbols (test_only={m1.get('test_only', 0)}, "
+                f"internal_only={m1.get('internal_only', 0)}, unused={m1.get('unused', 0)}): {samples}"
+            )
+    stale_claims = m1.get("stale_consumer_claims", [])
+    if stale_claims:
+        samples = ", ".join(
+            f"{item['package']}.{item['name']} (missing {','.join(item['missing_consumers'])})"
+            for item in stale_claims[:5]
+        )
         failures.append(
-            f"M1: non-production SDK symbols (test_only={m1.get('test_only', 0)}, "
-            f"internal_only={m1.get('internal_only', 0)}, unused={m1.get('unused', 0)}): {samples}"
+            f"M1: {len(stale_claims)} stale surface.json consumer claim(s): {samples}"
         )
     missing_prod = m1["missing_imports"]["prod"]
     if missing_prod:
@@ -1791,9 +1990,12 @@ def _format_human_summary(report: dict[str, Any], failures: list[str]) -> str:
         f"SDK package: {report['sdk_package']} (target v{report['latest_version']})",
         f"Consumers:   {', '.join(report['consumers'])}",
         (
-            f"M1 symbol reachability: {m1['prod_used']}/{m1['total_public']} "
+            f"M1 symbol reachability ({m1.get('contract_source', 'package_dunder_all')}; "
+            f"{m1.get('surface_policy', '')}): {m1['prod_used']}/{m1['total_public']} "
             f"({m1['ratio'] * 100:.1f}%) "
             f"[test_only={m1['test_only']}, internal_only={m1['internal_only']}, unused={m1['unused']}, "
+            f"justifications={m1.get('surface_justifications', {})}, "
+            f"stale_claims={len(m1.get('stale_consumer_claims', []))}, "
             f"missing_prod={len(m1['missing_imports']['prod'])}]"
         ),
         (

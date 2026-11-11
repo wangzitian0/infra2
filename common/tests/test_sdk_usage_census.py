@@ -679,6 +679,16 @@ def test_m1_and_m2_check_fails_when_non_prod_symbols_or_keys_exist(
     )
     _write(
         pkg_root,
+        "__init__.py",
+        f"""
+        from {PKG_UNDER}.alpha import used_in_prod, ProdService
+        from {PKG_UNDER}.extra import unreferenced_public_fn
+
+        __all__ = ["used_in_prod", "ProdService", "unreferenced_public_fn"]
+        """,
+    )
+    _write(
+        pkg_root,
         "runtime/environment.py",
         """
         from dataclasses import dataclass
@@ -787,6 +797,22 @@ def test_m1_downgrades_uncalled_or_test_only_consumer_class_method_sdk_use(
         """,
     )
     _write(
+        pkg_root,
+        "__init__.py",
+        f"""
+        from {PKG_UNDER}.alpha import used_in_prod, ProdService
+        from {PKG_UNDER}.zombie import dead_func_sym, dead_method_sym, test_method_sym
+
+        __all__ = [
+            "used_in_prod",
+            "ProdService",
+            "dead_method_sym",
+            "test_method_sym",
+            "dead_func_sym",
+        ]
+        """,
+    )
+    _write(
         consumers["consumer_a"],
         "app/model.py",
         f"""
@@ -842,6 +868,21 @@ def test_m1_ignores_empty_dunder_all_and_credits_cli_main_call_sites(
         """,
     )
     _write(
+        pkg_root,
+        "__init__.py",
+        f"""
+        from {PKG_UNDER}.alpha import used_in_prod, ProdService
+        from {PKG_UNDER}.cli_tool import cli_entry_helper, unreferenced_in_main
+
+        __all__ = [
+            "used_in_prod",
+            "ProdService",
+            "cli_entry_helper",
+            "unreferenced_in_main",
+        ]
+        """,
+    )
+    _write(
         consumers["consumer_a"],
         ".github/workflows/infra-ci.yml",
         f"""
@@ -885,9 +926,139 @@ def test_m2_credits_canonical_key_when_registered_alias_is_used_in_prod(
     assert by_key["SERVICE_VERSION"] == "prod_used"
 
 
+def test_m1_audits_package_dunder_all_even_when_submodule_dunder_all_hides_symbol(
+    synthetic_workspace: tuple[Path, dict[str, Path]],
+) -> None:
+    """#1410: package `__init__.py` `__all__` is the public contract; a symbol omitted from
+    its submodule's `__all__` or an exported submodule in package `__all__` must be visible."""
+    pkg_root, consumers = synthetic_workspace
+    _write(
+        pkg_root,
+        "hidden_sub.py",
+        """
+        __all__ = ["visible_sub_fn"]
+
+        def visible_sub_fn() -> str:
+            return "sub"
+
+        def reexported_only_in_pkg() -> str:
+            return "pkg"
+        """,
+    )
+    _write(
+        pkg_root,
+        "__init__.py",
+        f"""
+        from {PKG_UNDER} import alpha
+        from {PKG_UNDER}.alpha import used_in_prod, ProdService
+        from {PKG_UNDER}.hidden_sub import reexported_only_in_pkg
+
+        __all__ = ["alpha", "used_in_prod", "ProdService", "reexported_only_in_pkg"]
+        """,
+    )
+    report = census.run_census(pkg_root=pkg_root, consumers=consumers)
+    m1 = report["metrics"]["M1"]
+    assert m1["contract_source"] == "package_dunder_all"
+    by_name = {s["name"]: s for s in m1["symbols"]}
+    assert "visible_sub_fn" not in by_name
+    assert by_name["alpha"]["kind"] == "module"
+    assert by_name["alpha"]["reach"] == "prod_used"
+    assert by_name["reexported_only_in_pkg"]["reach"] == "unused"
+    failures = census.evaluate_checks(report)
+    assert any("reexported_only_in_pkg" in f for f in failures)
+
+
+def test_m1_verifies_surface_json_consumer_claims_and_honors_documented_and_held(
+    synthetic_workspace: tuple[Path, dict[str, Path]],
+) -> None:
+    """#1410: M1 honors `documented:` and `held:` entries in `tests/surface.json` while
+    failing on stale `consumer:` claims whose named consumer has 0 production AST imports."""
+    pkg_root, consumers = synthetic_workspace
+    sdk_root = pkg_root.parent.parent
+    _write(
+        pkg_root,
+        "alpha.py",
+        """
+        def used_in_prod() -> str:
+            return "ok"
+
+        class ProdService:
+            def ping(self) -> str:
+                return "pong"
+
+        def doc_entrypoint() -> str:
+            return "doc"
+
+        HELD_CONST = 1
+        """,
+    )
+    _write(
+        pkg_root,
+        "__init__.py",
+        f"""
+        from {PKG_UNDER}.alpha import HELD_CONST, ProdService, doc_entrypoint, used_in_prod
+
+        __all__ = ["used_in_prod", "ProdService", "doc_entrypoint", "HELD_CONST"]
+        """,
+    )
+    _write(
+        sdk_root,
+        "tests/surface.json",
+        json.dumps(
+            {
+                PKG_UNDER: {
+                    "used_in_prod": "consumer: consumer_a, consumer_b",
+                    "ProdService": "consumer: consumer_a, consumer_b",
+                    "doc_entrypoint": "documented: README section Core",
+                    "HELD_CONST": "held: decision 7",
+                },
+                f"{PKG_UNDER}.runtime": {
+                    "runtime_env_contract": "consumer: consumer_a",
+                },
+            }
+        ),
+    )
+    report = census.run_census(pkg_root=pkg_root, consumers=consumers)
+    m1 = report["metrics"]["M1"]
+    assert m1["surface_justifications"] == {"consumer": 3, "documented": 1, "held": 1}
+    # ProdService is used in consumer_a only, NOT in consumer_b -> stale claim!
+    assert len(m1["stale_consumer_claims"]) == 1
+    assert m1["stale_consumer_claims"][0]["name"] == "ProdService"
+    assert m1["stale_consumer_claims"][0]["missing_consumers"] == ["consumer_b"]
+    failures = census.evaluate_checks(report)
+    assert any(
+        "stale surface.json consumer claim" in f and "ProdService" in f
+        for f in failures
+    )
+    # Documented and held symbols are honored (not flagged as non-production SDK symbols)
+    assert not any("non-production SDK symbols" in f for f in failures)
+
+    # Fix surface.json claim -> passes cleanly
+    _write(
+        sdk_root,
+        "tests/surface.json",
+        json.dumps(
+            {
+                PKG_UNDER: {
+                    "used_in_prod": "consumer: consumer_a, consumer_b",
+                    "ProdService": "consumer: consumer_a",
+                    "doc_entrypoint": "documented: README section Core",
+                    "HELD_CONST": "held: decision 7",
+                },
+                f"{PKG_UNDER}.runtime": {
+                    "runtime_env_contract": "consumer: consumer_a",
+                },
+            }
+        ),
+    )
+    clean_report = census.run_census(pkg_root=pkg_root, consumers=consumers)
+    assert census.evaluate_checks(clean_report) == []
+
+
 def test_live_infra2_repository_census_contract() -> None:
     report = census.run_census(consumers={"infra2": census.REPO_ROOT})
     metrics = report["metrics"]
+    assert metrics["M1"]["contract_source"] == "package_dunder_all"
     assert metrics["M1"]["total_public"] >= 50
     assert metrics["M1"]["prod_used"] >= 20
     assert metrics["M1"]["missing_imports"]["prod"] == []
