@@ -129,6 +129,14 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
 
+      # The truealpha hook slots run `bun install` and `bunx playwright` in their bootstrap.
+      # A hook step must not change the runner system, so the job installs bun (#1603).
+      # The action ref is a commit SHA, not a tag, because the job env holds secrets.
+      - name: Install bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.4"
+
       - name: Install runtime dependencies
         run: uv pip install --system invoke httpx python-dotenv pyyaml rich "$(python tools/sdk_requirement.py)"
 
