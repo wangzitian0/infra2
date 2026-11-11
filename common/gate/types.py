@@ -48,7 +48,7 @@ DEPLOY_MARKERS = (
     "terraform apply",
 )
 
-MERGE_STATES_OK = frozenset({"CLEAN", "HAS_HOOKS", "UNSTABLE"})
+MERGE_STATES_OK = frozenset({"CLEAN", "HAS_HOOKS", "UNSTABLE", "BEHIND"})
 GREEN_BUCKETS = frozenset({"pass", "skipping"})
 GREEN_STATES = frozenset({"SUCCESS", "SKIPPED", "NEUTRAL"})
 MAX_REVIEW_THREADS = 100
@@ -152,6 +152,7 @@ class HeadFacts:
     mergeable: str = ""
     merge_state: str = ""
     base_changed_files: tuple[str, ...] = ()
+    first_behind_at: float | None = None
     proven_tighter: tuple[str, ...] = ()
     rule_drift: tuple[str, ...] = ()
     changed_files: int = 0

@@ -182,14 +182,14 @@ def _read_checks(number: int, *, repo: str, gh: Runner | None = None) -> str:
         return "[]"
 
 
-def _base_changed_files(
+def _compare_base(
     repo: str, head_sha: str, base: str, *, gh: Runner | None = None
-) -> tuple[str, ...]:
-    """Files the base branch has changed since this head diverged from it."""
+) -> tuple[tuple[str, ...], float | None]:
+    """Files and earliest commit epoch on `base` since `head_sha` diverged."""
     if gh is None:
         gh = _gh
     if not head_sha or not base:
-        return ()
+        return (), None
     try:
         payload = json.loads(
             gh(
@@ -197,13 +197,28 @@ def _base_changed_files(
                     "api",
                     f"repos/{repo}/compare/{head_sha}...{base}",
                     "--jq",
-                    "{files:[.files[]?.filename]}",
+                    "{files:[.files[]?.filename], first_commit_date: .commits[0].commit.committer.date}",
                 ]
             )
         )
     except (RuntimeError, json.JSONDecodeError):
-        return ()
-    return tuple(str(f) for f in payload.get("files") or [])
+        return (), None
+    files = tuple(str(f) for f in payload.get("files") or [])
+    raw_date = payload.get("first_commit_date")
+    first_at: float | None = None
+    if isinstance(raw_date, str) and raw_date.strip():
+        try:
+            first_at = _epoch(raw_date)
+        except ValueError:
+            first_at = None
+    return files, first_at
+
+
+def _base_changed_files(
+    repo: str, head_sha: str, base: str, *, gh: Runner | None = None
+) -> tuple[str, ...]:
+    """Files the base branch has changed since this head diverged from it."""
+    return _compare_base(repo, head_sha, base, gh=gh)[0]
 
 
 def _field(view: dict, name: str) -> str:
@@ -325,15 +340,15 @@ def collect(
     last_push = max((_epoch(c["committedDate"]) for c in commits), default=0.0)
     head_sha = str(view.get("headRefOid") or "")
     head_seen = any(str(c.get("oid") or "") == head_sha for c in commits)
-    base_changed = (
-        _base_changed_files(
+    base_changed, first_behind_at = (
+        _compare_base(
             repo,
             str(view.get("headRefOid") or ""),
             str(view.get("baseRefName") or ""),
             gh=gh,
         )
         if str(view.get("state") or "") == "OPEN"
-        else ()
+        else ((), None)
     )
     changed = tuple(str(f["path"]) for f in view.get("files") or [])
     proven = (
@@ -436,6 +451,7 @@ def collect(
             mergeable=_field(view, "mergeable"),
             merge_state=_field(view, "mergeStateStatus"),
             base_changed_files=base_changed,
+            first_behind_at=first_behind_at,
             body=body_text,
             author=(
                 str(author.get("__typename") or ""),
