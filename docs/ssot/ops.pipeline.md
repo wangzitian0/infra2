@@ -491,6 +491,7 @@ gh workflow run deploy.yml \
 | **tag 不自动 prod(staging/prod 拆分)** | tag 推送只 apply staging;prod 需 `--promote-prod` → `commands_to_apply` 测试 | ✅ |
 | **common/tools 单测覆盖率不退化** | `infra-ci.yml`「Gate coverage regression」→ 详见 [`ops.test_coverage.md`](./ops.test_coverage.md)（Coveralls 独立于此,只做 main 徽章展示,不卡 PR） | ✅ |
 | **测试提前(PR dry-run plan)** | PR CI `Gate reconcile plan builds`:dry-run 出 fan-out plan,不部署 → `.github/workflows/infra-ci.yml` | ✅ |
+| **main 复用 PR 已测的同一棵树** | A push to main whose `HEAD^{tree}` equals the tree of a green pull-request run skips the unit-test shards and reads that run's shard coverage. `tools/ci_tree_reuse.py` finds the run; any error or doubt runs the shards (#1602) → `common/tests/test_ci_tree_reuse.py` | ✅ |
 | **SDK pin/mirror 一致** | `common/tests/test_sdk_contract_adoption.py` | ✅ |
 | **App contract & hook scheduling** | `common/tests/test_app_contract.py` + `common/tests/test_reconcile_iac_inputs.py` | ✅ |
 | **Finance Report fixed/preview cold-start budget** | `common/tests/test_deploy_primitive.py` + `test_preview_lifecycle.py` assert both backend healthchecks allow at least 450 seconds | ✅ |
