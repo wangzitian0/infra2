@@ -25,6 +25,20 @@ def _load_module():
     return module
 
 
+class _Response:
+    def __init__(self, payload: object) -> None:
+        self._payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return json.dumps(self._payload).encode("utf-8")
+
+
 def test_summarize_weekly_runs_filters_old_runs() -> None:
     """Infra-012.8: digest only counts runs in last 7 days."""
     digest = _load_module()
@@ -97,19 +111,6 @@ def test_fetch_recent_runs_filters_ops_checks_to_watchdog_jobs_and_paginates(
     requested_workflow_pages: list[str] = []
     requested_job_runs: list[str] = []
 
-    class _Response:
-        def __init__(self, payload: dict[str, object]) -> None:
-            self._payload = payload
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> bool:
-            return False
-
-        def read(self) -> bytes:
-            return json.dumps(self._payload).encode("utf-8")
-
     def fake_urlopen(request, timeout):  # noqa: ANN001, ARG001
         parsed = urlparse(request.full_url)
         query = parse_qs(parsed.query)
@@ -174,19 +175,6 @@ def test_fetch_recent_runs_skips_non_watchdog_schedule_slots_without_fetching_jo
         "104": [{"name": digest.WATCHDOG_JOB_NAME, "conclusion": "success"}],
     }
     requested_job_runs: list[str] = []
-
-    class _Response:
-        def __init__(self, payload: dict[str, object]) -> None:
-            self._payload = payload
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> bool:
-            return False
-
-        def read(self) -> bytes:
-            return json.dumps(self._payload).encode("utf-8")
 
     def fake_urlopen(request, timeout):  # noqa: ANN001, ARG001
         parsed = urlparse(request.full_url)
@@ -260,19 +248,6 @@ def test_fetch_stale_open_issues_filters_prs_and_recent_and_paginates(
         ],
     }
     requested_pages: list[str] = []
-
-    class _Response:
-        def __init__(self, payload) -> None:
-            self._payload = payload
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> bool:
-            return False
-
-        def read(self) -> bytes:
-            return json.dumps(self._payload).encode("utf-8")
 
     def fake_urlopen(request, timeout):  # noqa: ANN001, ARG001
         parsed = urlparse(request.full_url)
@@ -500,27 +475,14 @@ def test_build_digest_card_and_estate_app_health(monkeypatch) -> None:
     """#1307: digest card renders interactive KPI fields, estate app parity, and action links."""
     digest = _load_module()
 
-    class _Resp:
-        def __init__(self, data: dict) -> None:
-            self._data = data
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args) -> bool:
-            return False
-
-        def read(self) -> bytes:
-            return json.dumps(self._data).encode("utf-8")
-
     def fake_urlopen(request, timeout=5.0):
         url = request.full_url
         if "report-staging.zitian.party/api/health" in url:
-            return _Resp({"status": "healthy", "version": "0.2.8"})
+            return _Response({"status": "healthy", "version": "0.2.8"})
         if "report.zitian.party/api/health" in url:
-            return _Resp({"status": "healthy", "version": "0.2.7"})
+            return _Response({"status": "healthy", "version": "0.2.7"})
         if "truealpha.club/api/health" in url:
-            return _Resp({"status": "ok", "git_sha": "0.1.3"})
+            return _Response({"status": "ok", "git_sha": "0.1.3"})
         raise AssertionError(f"Unexpected health URL: {url}")
 
     monkeypatch.setattr(digest, "urlopen", fake_urlopen)
@@ -643,23 +605,12 @@ def test_fetch_estate_app_health_requires_healthy_status_for_in_sync(
     """Matching version strings on degraded endpoints must not report parity=in_sync."""
     digest = _load_module()
 
-    class _Resp:
-        def __init__(self, data: dict) -> None:
-            self._data = data
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args) -> bool:
-            return False
-
-        def read(self) -> bytes:
-            return json.dumps(self._data).encode("utf-8")
-
     monkeypatch.setattr(
         digest,
         "urlopen",
-        lambda request, timeout=5.0: _Resp({"status": "degraded", "version": "0.2.8"}),
+        lambda request, timeout=5.0: _Response(
+            {"status": "degraded", "version": "0.2.8"}
+        ),
     )
     apps = digest.fetch_estate_app_health("zitian.party")
     assert all(entry["parity"] == "unknown" for entry in apps)
@@ -889,19 +840,6 @@ def test_fetch_recent_runs_skips_push_and_pr_events_without_fetching_jobs(
         },
     ]
     requested_job_runs: list[str] = []
-
-    class _Response:
-        def __init__(self, payload: dict[str, object]) -> None:
-            self._payload = payload
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb) -> bool:
-            return False
-
-        def read(self) -> bytes:
-            return json.dumps(self._payload).encode("utf-8")
 
     def fake_urlopen(request, timeout):  # noqa: ANN001, ARG001
         parsed = urlparse(request.full_url)

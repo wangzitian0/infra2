@@ -203,14 +203,29 @@ def module_name(path: Path, pkg_root: Path) -> str:
     return ".".join(parts)
 
 
+def _parse_py_file(path: Path) -> tuple[str, ast.Module] | tuple[None, None]:
+    try:
+        text = path.read_text("utf-8", "replace")
+        return text, ast.parse(text)
+    except (SyntaxError, UnicodeDecodeError, OSError):
+        return None, None
+
+
+def _assigned_names(stmt: ast.stmt) -> list[str]:
+    if isinstance(stmt, ast.Assign):
+        return [t.id for t in stmt.targets if isinstance(t, ast.Name)]
+    if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+        return [stmt.target.id]
+    return []
+
+
 def _is_overload_stub(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """Return True when a function definition is decorated with @overload or @typing.overload."""
-    for dec in node.decorator_list:
-        if isinstance(dec, ast.Name) and dec.id == "overload":
-            return True
-        if isinstance(dec, ast.Attribute) and dec.attr == "overload":
-            return True
-    return False
+    return any(
+        (isinstance(d, ast.Name) and d.id == "overload")
+        or (isinstance(d, ast.Attribute) and d.attr == "overload")
+        for d in node.decorator_list
+    )
 
 
 def _extract_dunder_all_entries(tree: ast.Module) -> list[tuple[str, int]]:
@@ -240,9 +255,8 @@ def _module_symbol_defs(
         if path.name == "__init__.py":
             continue
         mod = module_name(path, pkg_root)
-        try:
-            tree = ast.parse(path.read_text("utf-8", "replace"))
-        except SyntaxError:
+        _, tree = _parse_py_file(path)
+        if tree is None:
             continue
         exported_list = _extract_dunder_all_entries(tree)
         exported = {name for name, _ in exported_list} if exported_list else None
@@ -255,19 +269,14 @@ def _module_symbol_defs(
                 kind, name = "function", node.name
             elif isinstance(node, ast.ClassDef):
                 kind, name = "class", node.name
-            elif (
-                isinstance(node, ast.Assign)
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and node.targets[0].id.isupper()
-            ):
-                kind, name = "constant", node.targets[0].id
-            elif (
-                isinstance(node, ast.AnnAssign)
-                and isinstance(node.target, ast.Name)
-                and node.target.id.isupper()
-            ):
-                kind, name = "constant", node.target.id
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                tgt = (
+                    node.targets[0]
+                    if isinstance(node, ast.Assign) and len(node.targets) == 1
+                    else getattr(node, "target", None)
+                )
+                if isinstance(tgt, ast.Name) and tgt.id.isupper():
+                    kind, name = "constant", tgt.id
             if not name or name.startswith("_") or name in SKIP_SYMBOL_NAMES:
                 continue
             if not ignore_dunder_all and exported is not None and name not in exported:
@@ -332,9 +341,8 @@ def public_defs(pkg_root: Path) -> list[dict[str, Any]]:
     for init_path in contract_inits:
         if not init_path.is_file():
             continue
-        try:
-            tree = ast.parse(init_path.read_text("utf-8", "replace"))
-        except SyntaxError:
+        _, tree = _parse_py_file(init_path)
+        if tree is None:
             continue
         pkg_mod = module_name(init_path, pkg_root)
         for sym, lineno in _extract_dunder_all_entries(tree):
@@ -397,9 +405,8 @@ def sdk_internal_refs(pkg_root: Path) -> dict[str, list[tuple[str, int]]]:
     refs: dict[str, list[tuple[str, int]]] = defaultdict(list)
     for path in sorted(pkg_root.rglob("*.py")):
         reexport = path.name == "__init__.py"
-        try:
-            tree = ast.parse(path.read_text("utf-8", "replace"))
-        except SyntaxError:
+        _, tree = _parse_py_file(path)
+        if tree is None:
             continue
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and not reexport:
@@ -426,9 +433,8 @@ def sdk_module_exports(pkg_root: Path) -> dict[str, set[str]]:
         for i in range(1, len(parts)):
             parent = ".".join(parts[:i])
             exports[parent].add(parts[i])
-        try:
-            tree = ast.parse(path.read_text("utf-8", "replace"))
-        except SyntaxError:
+        _, tree = _parse_py_file(path)
+        if tree is None:
             continue
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -439,28 +445,21 @@ def sdk_module_exports(pkg_root: Path) -> dict[str, set[str]]:
                 for stmt in ast.walk(node):
                     if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         exports[cls_key].add(stmt.name)
-                    elif isinstance(stmt, ast.Assign):
-                        for target in stmt.targets:
-                            if isinstance(target, ast.Name):
-                                exports[cls_key].add(target.id)
-                    elif isinstance(stmt, ast.AnnAssign) and isinstance(
-                        stmt.target, ast.Name
-                    ):
-                        exports[cls_key].add(stmt.target.id)
-            elif isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        exports[mod].add(target.id)
-                        if target.id == "__all__" and isinstance(
-                            node.value, (ast.List, ast.Tuple, ast.Set)
-                        ):
-                            for elt in node.value.elts:
-                                if isinstance(elt, ast.Constant) and isinstance(
-                                    elt.value, str
-                                ):
-                                    exports[mod].add(elt.value)
-            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-                exports[mod].add(node.target.id)
+                    else:
+                        for n in _assigned_names(stmt):
+                            exports[cls_key].add(n)
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                for n in _assigned_names(node):
+                    exports[mod].add(n)
+                if isinstance(node, ast.Assign) and any(
+                    getattr(t, "id", "") == "__all__" for t in node.targets
+                ):
+                    if isinstance(node.value, (ast.List, ast.Tuple, ast.Set)):
+                        for elt in node.value.elts:
+                            if isinstance(elt, ast.Constant) and isinstance(
+                                elt.value, str
+                            ):
+                                exports[mod].add(elt.value)
             elif isinstance(node, ast.ImportFrom):
                 src_mod = node.module or ""
                 if node.level and path.name == "__init__.py":
@@ -594,12 +593,9 @@ def consumer_symbol_refs(
     for repo, root in sorted(consumers.items()):
         parsed_files: list[tuple[str, bool, ast.AST]] = []
         for rel in list_repo_files(root, suffix=".py"):
-            try:
-                source = (root / rel).read_text("utf-8", "replace")
-                tree = ast.parse(source)
-            except (SyntaxError, UnicodeDecodeError, OSError):
-                continue
-            parsed_files.append((rel, is_test_path(rel), tree))
+            _, tree = _parse_py_file(root / rel)
+            if tree is not None:
+                parsed_files.append((rel, is_test_path(rel), tree))
 
         prod_tokens, test_tokens = _consumer_repo_tokens(parsed_files)
 
@@ -780,20 +776,17 @@ def check_consumer_imports(
 
 def _main_called_symbols(path: str) -> set[str]:
     """Return top-level symbol names loaded inside `def main` of `path`."""
-    try:
-        tree = ast.parse(Path(path).read_text("utf-8", "replace"))
-    except (SyntaxError, OSError):
+    _, tree = _parse_py_file(Path(path))
+    if tree is None:
         return set()
-    called: set[str] = set()
-    for node in tree.body:
-        if (
-            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == "main"
-        ):
-            for sub in ast.walk(node):
-                if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
-                    called.add(sub.id)
-    return called
+    return {
+        sub.id
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "main"
+        for sub in ast.walk(node)
+        if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load)
+    }
 
 
 def compute_m1(
@@ -1156,13 +1149,11 @@ def _extract_sdk_version(text: str) -> str | None:
 
 def consumer_pinned_version(root: Path) -> str | None:
     """Extract the pinned infra2-sdk version from a consumer repository."""
-    lock_rel_paths = ("uv.lock", "apps/backend/uv.lock")
-    for rel in lock_rel_paths:
+    for rel in ("uv.lock", "apps/backend/uv.lock"):
         lock_path = root / rel
         if lock_path.is_file():
             try:
-                req = sdk_requirement(lock_path)
-                ver = _extract_sdk_version(req)
+                ver = _extract_sdk_version(sdk_requirement(lock_path))
                 if ver:
                     return ver
             except Exception:  # noqa: BLE001
@@ -1170,12 +1161,10 @@ def consumer_pinned_version(root: Path) -> str | None:
 
     for rel in ("pyproject.toml", "apps/backend/pyproject.toml"):
         pyproj = root / rel
-        if not pyproj.is_file():
-            continue
-        text = pyproj.read_text("utf-8", "replace")
-        ver = _extract_sdk_version(text)
-        if ver:
-            return ver
+        if pyproj.is_file():
+            ver = _extract_sdk_version(pyproj.read_text("utf-8", "replace"))
+            if ver:
+                return ver
     return None
 
 
@@ -1226,6 +1215,39 @@ def compute_m3(
     }
 
 
+def _parse_sdk_tests_ast(pkg_root: Path | None) -> list[ast.Module]:
+    if pkg_root is None:
+        return []
+    tests_dir = pkg_root.parent.parent / "tests"
+    trees: list[ast.Module] = []
+    for name in ("test_readme_claims.py", "wheel_smoke.py"):
+        _, tree = _parse_py_file(tests_dir / name)
+        if tree is not None:
+            trees.append(tree)
+    return trees
+
+
+def _violation_summary(
+    violations: list[dict[str, str]],
+    by_repo: dict[str, list[Any]],
+    **extra: Any,
+) -> dict[str, Any]:
+    return {
+        "total_violations": len(violations),
+        **extra,
+        "by_repo": {repo: len(items) for repo, items in sorted(by_repo.items())},
+        "violations": violations,
+    }
+
+
+def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
+    if rows:
+        with path.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(fh, fieldnames=list(rows[0]))
+            writer.writeheader()
+            writer.writerows(rows)
+
+
 def _iter_removed_name_pairs(tree: ast.Module) -> list[tuple[str, str]]:
     """Extract (module, dotted_name) string pairs from REMOVED_* tuple/list assignments."""
     pairs: list[tuple[str, str]] = []
@@ -1256,47 +1278,26 @@ def _iter_removed_name_pairs(tree: ast.Module) -> list[tuple[str, str]]:
 def load_left_the_packages(pkg_root: Path | None = None) -> tuple[str, ...]:
     """Return the tuple of unconditionally retired SDK symbols."""
     names = list(DEFAULT_LEFT_THE_PACKAGES)
-    if pkg_root is not None:
-        tests_dir = pkg_root.parent.parent / "tests"
-        readme_test = tests_dir / "test_readme_claims.py"
-        if readme_test.is_file():
-            try:
-                tree = ast.parse(readme_test.read_text("utf-8", "replace"))
-                for node in tree.body:
-                    if isinstance(node, ast.Assign) and any(
-                        getattr(t, "id", "") == "LEFT_THE_PACKAGES"
-                        for t in node.targets
-                    ):
-                        if isinstance(node.value, (ast.Tuple, ast.List, ast.Set)):
-                            for elt in node.value.elts:
-                                if (
-                                    isinstance(elt, ast.Constant)
-                                    and isinstance(elt.value, str)
-                                    and elt.value not in names
-                                ):
-                                    names.append(elt.value)
-                for _mod, dotted in _iter_removed_name_pairs(tree):
-                    if (
-                        "." not in dotted
-                        and dotted not in SKIP_SYMBOL_NAMES
-                        and dotted not in names
-                    ):
-                        names.append(dotted)
-            except (SyntaxError, OSError):
-                pass
-        wheel_smoke = tests_dir / "wheel_smoke.py"
-        if wheel_smoke.is_file():
-            try:
-                tree = ast.parse(wheel_smoke.read_text("utf-8", "replace"))
-                for _mod, dotted in _iter_removed_name_pairs(tree):
-                    if (
-                        "." not in dotted
-                        and dotted not in SKIP_SYMBOL_NAMES
-                        and dotted not in names
-                    ):
-                        names.append(dotted)
-            except (SyntaxError, OSError):
-                pass
+    for tree in _parse_sdk_tests_ast(pkg_root):
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(
+                getattr(t, "id", "") == "LEFT_THE_PACKAGES" for t in node.targets
+            ):
+                if isinstance(node.value, (ast.Tuple, ast.List, ast.Set)):
+                    for elt in node.value.elts:
+                        if (
+                            isinstance(elt, ast.Constant)
+                            and isinstance(elt.value, str)
+                            and elt.value not in names
+                        ):
+                            names.append(elt.value)
+        for _mod, dotted in _iter_removed_name_pairs(tree):
+            if (
+                "." not in dotted
+                and dotted not in SKIP_SYMBOL_NAMES
+                and dotted not in names
+            ):
+                names.append(dotted)
     return tuple(names)
 
 
@@ -1305,93 +1306,69 @@ def load_package_scoped_left_names(
 ) -> dict[str, set[str]]:
     """Return module-scoped retired symbol names from dict LEFT_THE_PACKAGES and REMOVED_* tables."""
     scoped: dict[str, set[str]] = defaultdict(set)
-    if pkg_root is None:
-        return {}
-    tests_dir = pkg_root.parent.parent / "tests"
-    readme_test = tests_dir / "test_readme_claims.py"
-    if readme_test.is_file():
-        try:
-            tree = ast.parse(readme_test.read_text("utf-8", "replace"))
-            for node in tree.body:
-                if isinstance(node, ast.Assign) and any(
-                    getattr(t, "id", "") == "LEFT_THE_PACKAGES" for t in node.targets
-                ):
-                    if isinstance(node.value, ast.Dict):
-                        for pkg_key, mod_dict in zip(
-                            node.value.keys, node.value.values, strict=False
+    for tree in _parse_sdk_tests_ast(pkg_root):
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(
+                getattr(t, "id", "") == "LEFT_THE_PACKAGES" for t in node.targets
+            ):
+                if isinstance(node.value, ast.Dict):
+                    for pkg_key, mod_dict in zip(
+                        node.value.keys, node.value.values, strict=False
+                    ):
+                        if not (
+                            isinstance(pkg_key, ast.Constant)
+                            and isinstance(pkg_key.value, str)
+                            and isinstance(mod_dict, ast.Dict)
                         ):
-                            if not (
-                                isinstance(pkg_key, ast.Constant)
-                                and isinstance(pkg_key.value, str)
-                                and isinstance(mod_dict, ast.Dict)
-                            ):
+                            continue
+                        for sym_list in mod_dict.values:
+                            if not isinstance(sym_list, (ast.List, ast.Tuple, ast.Set)):
                                 continue
-                            pkg_name = pkg_key.value
-                            for sym_list in mod_dict.values:
-                                if not isinstance(
-                                    sym_list, (ast.List, ast.Tuple, ast.Set)
+                            for elt in sym_list.elts:
+                                if isinstance(elt, ast.Constant) and isinstance(
+                                    elt.value, str
                                 ):
-                                    continue
-                                for elt in sym_list.elts:
-                                    if isinstance(elt, ast.Constant) and isinstance(
-                                        elt.value, str
-                                    ):
-                                        scoped[pkg_name].add(elt.value)
-            for mod_name, dotted in _iter_removed_name_pairs(tree):
-                if "." in dotted:
-                    parent, attr = dotted.rsplit(".", 1)
-                    scoped[f"{mod_name}.{parent}"].add(attr)
-                else:
-                    scoped[mod_name].add(dotted)
-        except (SyntaxError, OSError):
-            pass
-    wheel_smoke = tests_dir / "wheel_smoke.py"
-    if wheel_smoke.is_file():
-        try:
-            tree = ast.parse(wheel_smoke.read_text("utf-8", "replace"))
-            for mod_name, dotted in _iter_removed_name_pairs(tree):
-                if "." in dotted:
-                    parent, attr = dotted.rsplit(".", 1)
-                    scoped[f"{mod_name}.{parent}"].add(attr)
-                else:
-                    scoped[mod_name].add(dotted)
-        except (SyntaxError, OSError):
-            pass
+                                    scoped[pkg_key.value].add(elt.value)
+        for mod_name, dotted in _iter_removed_name_pairs(tree):
+            if "." in dotted:
+                parent, attr = dotted.rsplit(".", 1)
+                scoped[f"{mod_name}.{parent}"].add(attr)
+            else:
+                scoped[mod_name].add(dotted)
     return {k: set(v) for k, v in scoped.items()}
 
 
 def _try_imports_sdk(node: ast.Try) -> bool:
     """Return True when a try block imports infra2_sdk and catches ImportError/ModuleNotFoundError."""
-    catches_import_error = False
-    for handler in node.handlers:
-        if handler.type is None:
-            continue
-        names: list[str] = []
-        if isinstance(handler.type, ast.Name):
-            names.append(handler.type.id)
-        elif isinstance(handler.type, ast.Tuple):
-            names.extend(
-                elt.id for elt in handler.type.elts if isinstance(elt, ast.Name)
+    catches = any(
+        isinstance(h.type, ast.Name)
+        and h.type.id in ("ImportError", "ModuleNotFoundError")
+        or (
+            isinstance(h.type, ast.Tuple)
+            and any(
+                isinstance(e, ast.Name)
+                and e.id in ("ImportError", "ModuleNotFoundError")
+                for e in h.type.elts
             )
-        if any(n in ("ImportError", "ModuleNotFoundError") for n in names):
-            catches_import_error = True
-            break
-    if not catches_import_error:
+        )
+        for h in node.handlers
+        if h.type is not None
+    )
+    if not catches:
         return False
-
-    for stmt in node.body:
-        for sub in ast.walk(stmt):
-            if (
-                isinstance(sub, ast.ImportFrom)
-                and sub.module
-                and sub.module.split(".")[0] == "infra2_sdk"
-            ):
-                return True
-            if isinstance(sub, ast.Import) and any(
-                alias.name.split(".")[0] == "infra2_sdk" for alias in sub.names
-            ):
-                return True
-    return False
+    return any(
+        (
+            isinstance(sub, ast.ImportFrom)
+            and bool(sub.module)
+            and sub.module.split(".")[0] == "infra2_sdk"
+        )
+        or (
+            isinstance(sub, ast.Import)
+            and any(a.name.split(".")[0] == "infra2_sdk" for a in sub.names)
+        )
+        for stmt in node.body
+        for sub in ast.walk(stmt)
+    )
 
 
 def compute_m4(
@@ -1433,9 +1410,8 @@ def compute_m4(
                     or rel in CENSUS_SELF_REL_PATHS
                 ):
                     continue
-                try:
-                    tree = ast.parse((root / rel).read_text("utf-8", "replace"))
-                except (SyntaxError, UnicodeDecodeError, OSError):
+                _, tree = _parse_py_file(root / rel)
+                if tree is None:
                     continue
                 for node in ast.walk(tree):
                     if isinstance(node, ast.Try) and _try_imports_sdk(node):
@@ -1458,11 +1434,7 @@ def compute_m4(
                 ):
                     _add_rec(repo, "common", "pure_reexport_shim", f"{repo}:{rel}:1")
 
-    return {
-        "total_violations": len(sites_all),
-        "by_repo": {repo: len(items) for repo, items in sorted(by_repo.items())},
-        "violations": sites_all,
-    }
+    return _violation_summary(sites_all, by_repo)
 
 
 def _is_pure_reexport_shim(tree: ast.Module) -> bool:
@@ -1500,10 +1472,8 @@ def compute_m5(consumers: dict[str, Path]) -> dict[str, Any]:
                 continue
             full_path = root / rel
             if rel.endswith(".py"):
-                try:
-                    text = full_path.read_text("utf-8", "replace")
-                    tree = ast.parse(text)
-                except (SyntaxError, UnicodeDecodeError, OSError):
+                text, tree = _parse_py_file(full_path)
+                if tree is None or text is None:
                     continue
                 for node in ast.walk(tree):
                     if isinstance(node, (ast.Set, ast.List, ast.Tuple)):
@@ -1530,29 +1500,21 @@ def compute_m5(consumers: dict[str, Path]) -> dict[str, Any]:
                         )
                 if "SERVICE_NAME" in text and "OTEL_SERVICE_NAME" in text:
                     for node in ast.walk(tree):
-                        if isinstance(node, ast.Call) and isinstance(
-                            node.func, ast.Attribute
+                        if (
+                            isinstance(node, ast.Call)
+                            and isinstance(node.func, ast.Attribute)
+                            and node.func.attr in ("get", "getenv", "pop")
+                            and node.args
+                            and isinstance(node.args[0], ast.Constant)
+                            and node.args[0].value == "SERVICE_NAME"
                         ):
-                            if node.func.attr in ("get", "getenv", "pop") and node.args:
-                                first = node.args[0]
-                                if (
-                                    isinstance(first, ast.Constant)
-                                    and first.value == "SERVICE_NAME"
-                                ):
-                                    _add_v(
-                                        repo,
-                                        f"{repo}:{rel}:{node.lineno}",
-                                        "env_lookup",
-                                    )
-                        elif isinstance(node, ast.Subscript):
-                            sl = node.slice
-                            if (
-                                isinstance(sl, ast.Constant)
-                                and sl.value == "SERVICE_NAME"
-                            ):
-                                _add_v(
-                                    repo, f"{repo}:{rel}:{node.lineno}", "env_subscript"
-                                )
+                            _add_v(repo, f"{repo}:{rel}:{node.lineno}", "env_lookup")
+                        elif (
+                            isinstance(node, ast.Subscript)
+                            and isinstance(node.slice, ast.Constant)
+                            and node.slice.value == "SERVICE_NAME"
+                        ):
+                            _add_v(repo, f"{repo}:{rel}:{node.lineno}", "env_subscript")
             elif rel.endswith(".json") and (
                 "env.manifest" in rel or "required-env" in rel
             ):
@@ -1565,11 +1527,7 @@ def compute_m5(consumers: dict[str, Path]) -> dict[str, Any]:
                 if '"SERVICE_NAME"' in serialized:
                     _add_v(repo, f"{repo}:{rel}:1", "manifest_service_name")
 
-    return {
-        "total_violations": len(violations),
-        "by_repo": {repo: len(items) for repo, items in sorted(by_repo.items())},
-        "violations": violations,
-    }
+    return _violation_summary(violations, by_repo)
 
 
 def compute_m6(consumers: dict[str, Path]) -> dict[str, Any]:
@@ -1590,9 +1548,8 @@ def compute_m6(consumers: dict[str, Path]) -> dict[str, Any]:
             in_prod = rel.startswith(("common/", "apps/", "platform/"))
             if not (in_tools or in_prod):
                 continue
-            try:
-                tree = ast.parse((root / rel).read_text("utf-8", "replace"))
-            except (SyntaxError, UnicodeDecodeError, OSError):
+            _, tree = _parse_py_file(root / rel)
+            if tree is None:
                 continue
             for node in ast.walk(tree):
                 if isinstance(node, ast.ImportFrom):
@@ -1630,42 +1587,21 @@ def compute_m6(consumers: dict[str, Path]) -> dict[str, Any]:
                                 f"{repo}:{rel}:{node.lineno}",
                                 "sys.modules[__name__]",
                             )
-                elif isinstance(node, ast.Call):
-                    if (
-                        isinstance(node.func, ast.Name) and node.func.id == "load_tool"
-                    ) or (
-                        isinstance(node.func, ast.Attribute)
-                        and node.func.attr == "load_tool"
-                    ):
-                        _add_m6(repo, f"{repo}:{rel}:{node.lineno}", "load_tool()")
+                elif (
+                    isinstance(node, ast.Call)
+                    and getattr(node.func, "id", getattr(node.func, "attr", None))
+                    == "load_tool"
+                ):
+                    _add_m6(repo, f"{repo}:{rel}:{node.lineno}", "load_tool()")
 
-    return {
-        "total_violations": len(violations),
-        "passed": len(violations) == 0,
-        "by_repo": {repo: len(items) for repo, items in sorted(by_repo.items())},
-        "violations": violations,
-    }
+    return _violation_summary(violations, by_repo, passed=len(violations) == 0)
 
 
 def write_artifacts(out_dir: Path, report: dict[str, Any]) -> None:
     """Write CSV and JSON census artifacts when --out is specified."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    symbols = report["metrics"]["M1"]["symbols"]
-    if symbols:
-        with (out_dir / "sdk_api_reach.csv").open(
-            "w", newline="", encoding="utf-8"
-        ) as fh:
-            writer = csv.DictWriter(fh, fieldnames=list(symbols[0]))
-            writer.writeheader()
-            writer.writerows(symbols)
-
-    keys = report["metrics"]["M2"]["keys"]
-    if keys:
-        with (out_dir / "sdk_cover.csv").open("w", newline="", encoding="utf-8") as fh:
-            writer = csv.DictWriter(fh, fieldnames=list(keys[0]))
-            writer.writeheader()
-            writer.writerows(keys)
-
+    _write_csv(out_dir / "sdk_api_reach.csv", report["metrics"]["M1"]["symbols"])
+    _write_csv(out_dir / "sdk_cover.csv", report["metrics"]["M2"]["keys"])
     (out_dir / "sdk_usage_census.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",

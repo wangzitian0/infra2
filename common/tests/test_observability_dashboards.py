@@ -754,15 +754,15 @@ def test_dashboard_has_full_backend_red_and_fe_page_load() -> None:
     p50·p95·p99) plus a FE page-load widget, not just error+p95."""
     widgets = {w["id"]: w for w in load_dashboard()["widgets"]}
     # Rate, Errors, and the three Duration percentiles
-    for wid in (
+    red_widgets = {
         "be-throughput",
         "be-error-rate-5xx",
         "be-latency-p50",
         "be-latency-p95",
         "be-latency-p99",
-    ):
-        assert wid in widgets, f"missing RED widget {wid}"
-    assert "fe-page-load" in widgets
+        "fe-page-load",
+    }
+    assert red_widgets <= set(widgets)
 
     # the latency widgets request the right aggregate on durationNano (p50/p95/p99)
     def _agg(wid: str) -> str:
@@ -786,15 +786,17 @@ def test_dashboard_has_full_backend_red_and_fe_page_load() -> None:
 
     # #1307, #1481: AI/OCR and core business telemetry widgets are present and query
     # metrics in SigNoz v5 builder format (metricName + spaceAggregation/timeAggregation).
-    for wid in (
+    ai_widgets = (
         "ai-provider-latency-p95",
         "statement-parse-outcomes",
         "reconciliation-match-outcomes",
         "financial-invariant-violations",
-    ):
-        assert wid in widgets, f"missing AI/business telemetry widget {wid}"
-        qdata = widgets[wid]["query"]["builder"]["queryData"][0]
-        assert qdata["dataSource"] == "metrics"
+    )
+    assert set(ai_widgets) <= set(widgets)
+    assert [
+        widgets[wid]["query"]["builder"]["queryData"][0]["dataSource"]
+        for wid in ai_widgets
+    ] == ["metrics"] * len(ai_widgets)
 
     def _metric_agg(wid: str) -> dict:
         (aggregation,) = widgets[wid]["query"]["builder"]["queryData"][0][
@@ -1119,28 +1121,18 @@ def test_invalid_definitions_raise() -> None:
         load_dashboard(OBS_DIR / "does-not-exist.json")
 
 
-def test_non_integer_threshold_raises_definition_error(tmp_path) -> None:
-    """#373 review: a malformed `threshold` raises ObservabilityDefinitionError
-    (not a raw ValueError) so bad definitions fail with a clear, catchable error."""
-    import json
-
-    bad = tmp_path / "alert_rules.json"
-    bad.write_text(
-        json.dumps(
-            {"rules": [{"alert_name": "X", "service_name": "svc", "threshold": "oops"}]}
-        )
-    )
-    with pytest.raises(ObservabilityDefinitionError, match="threshold"):
-        load_alert_definitions(bad)
-
-
-def test_metric_alert_requires_promql_and_numeric_threshold(tmp_path) -> None:
-    """#1106: malformed metric alert definitions fail before apply."""
-    import json
-
-    missing_promql = tmp_path / "missing_promql.json"
-    missing_promql.write_text(
-        json.dumps(
+@pytest.mark.parametrize(
+    ("rule", "match"),
+    [
+        (
+            {
+                "rules": [
+                    {"alert_name": "X", "service_name": "svc", "threshold": "oops"}
+                ]
+            },
+            "threshold",
+        ),
+        (
             {
                 "rules": [
                     {
@@ -1151,16 +1143,10 @@ def test_metric_alert_requires_promql_and_numeric_threshold(tmp_path) -> None:
                         "summary": "missing query",
                     }
                 ]
-            }
+            },
+            "promql",
         ),
-        encoding="utf-8",
-    )
-    with pytest.raises(ObservabilityDefinitionError, match="promql"):
-        load_alert_definitions(missing_promql)
-
-    bad_threshold = tmp_path / "bad_threshold.json"
-    bad_threshold.write_text(
-        json.dumps(
+        (
             {
                 "rules": [
                     {
@@ -1172,21 +1158,10 @@ def test_metric_alert_requires_promql_and_numeric_threshold(tmp_path) -> None:
                         "summary": "bad threshold",
                     }
                 ]
-            }
+            },
+            "threshold",
         ),
-        encoding="utf-8",
-    )
-    with pytest.raises(ObservabilityDefinitionError, match="threshold"):
-        load_alert_definitions(bad_threshold)
-
-
-def test_metric_alert_requires_metric_specific_summary_and_service(tmp_path) -> None:
-    """#1106 review: metric rules cannot inherit log-oriented defaults."""
-    import json
-
-    missing_summary = tmp_path / "missing_summary.json"
-    missing_summary.write_text(
-        json.dumps(
+        (
             {
                 "rules": [
                     {
@@ -1197,16 +1172,10 @@ def test_metric_alert_requires_metric_specific_summary_and_service(tmp_path) -> 
                         "promql": "sum(up)",
                     }
                 ]
-            }
+            },
+            "summary",
         ),
-        encoding="utf-8",
-    )
-    with pytest.raises(ObservabilityDefinitionError, match="summary"):
-        load_alert_definitions(missing_summary)
-
-    missing_service = tmp_path / "missing_service.json"
-    missing_service.write_text(
-        json.dumps(
+        (
             {
                 "rules": [
                     {
@@ -1217,12 +1186,23 @@ def test_metric_alert_requires_metric_specific_summary_and_service(tmp_path) -> 
                         "promql": "sum(up)",
                     }
                 ]
-            }
+            },
+            "service_name",
         ),
-        encoding="utf-8",
-    )
-    with pytest.raises(ObservabilityDefinitionError, match="service_name"):
-        load_alert_definitions(missing_service)
+    ],
+    ids=[
+        "non-integer-threshold",
+        "metric-missing-promql",
+        "metric-bad-threshold",
+        "metric-missing-summary",
+        "metric-missing-service",
+    ],
+)
+def test_invalid_alert_rule_definitions_raise(tmp_path, rule, match) -> None:
+    bad = tmp_path / "alert_rules.json"
+    bad.write_text(json.dumps(rule), encoding="utf-8")
+    with pytest.raises(ObservabilityDefinitionError, match=match):
+        load_alert_definitions(bad)
 
 
 def _write_catalog(tmp_path: Path, rule: dict) -> Path:
@@ -1561,15 +1541,19 @@ def test_apply_dashboard_raises_nonzero_exit_when_list_fails(monkeypatch) -> Non
     assert calls == [("GET", "/api/v1/dashboards", None)]
 
 
-def test_signoz_alert_canary_uses_disabled_v5_promql_payload() -> None:
-    """#1106 regression: live canary uses the same disabled v5 PromQL payload."""
+def _load_signoz_alert_probe():
     spec = importlib.util.spec_from_file_location(
         "signoz_alert_rule_probe_under_test", SIGNOZ_ALERT_PROBE
     )
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
 
+
+def test_signoz_alert_canary_uses_disabled_v5_promql_payload() -> None:
+    """#1106 regression: live canary uses the same disabled v5 PromQL payload."""
+    module = _load_signoz_alert_probe()
     payload = module._build_canary_payload("CanarySigNozPromqlPayload-test", "chan-1")
 
     assert payload["alert"] == "CanarySigNozPromqlPayload-test"
@@ -1588,12 +1572,7 @@ def test_signoz_alert_canary_uses_disabled_v5_promql_payload() -> None:
 
 def test_signoz_alert_canary_retries_rule_id_resolution(monkeypatch) -> None:
     """#1106 regression: canary cleanup should wait for the created rule to list."""
-    spec = importlib.util.spec_from_file_location(
-        "signoz_alert_rule_probe_under_test", SIGNOZ_ALERT_PROBE
-    )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = _load_signoz_alert_probe()
     calls = {"count": 0}
 
     def fake_request(_base_url, _api_key, *, method, path, payload=None):
@@ -1699,16 +1678,6 @@ def test_delete_rule_rejects_a_404_delete_while_the_rule_is_still_listed(
 
 # ---------------------------------------------------------------------------
 # #1435: the canary must read the rule back after DELETE
-
-
-def _load_signoz_alert_probe():
-    spec = importlib.util.spec_from_file_location(
-        "signoz_alert_rule_probe_under_test", SIGNOZ_ALERT_PROBE
-    )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 _CANARY_ENV = {"SIGNOZ_API_KEY": "key", "GITHUB_RUN_ID": "1435", "ENV": "production"}
@@ -1845,22 +1814,6 @@ def test_canary_passes_when_signoz_deletes_the_rule_and_its_route_policy(
     assert fake.policies == {}
 
 
-def test_canary_fails_when_delete_answers_ok_but_the_rule_stays(
-    monkeypatch, capsys
-) -> None:
-    """#1435: production answered OK to DELETE and kept the rule. That must fail."""
-    fake = _FakeSigNozV01051(v1_delete="ignores")
-
-    code, out, err = _run_canary(monkeypatch, capsys, fake)
-
-    assert code == 1
-    assert "passed" not in out
-    assert _CANARY_RULE_ID in err
-    assert _CANARY_RULE_NAME in err
-    assert 2 <= fake.v1_delete_calls <= 5  # retried, and the retry is bounded
-    assert _CANARY_RULE_ID in fake.rules  # the rule really is still there
-
-
 def test_canary_retries_delete_until_the_rule_is_gone(monkeypatch, capsys) -> None:
     """#1435: a DELETE that is ignored once is retried, then verified by read-back."""
     fake = _FakeSigNozV01051(v1_delete="removes", ignored_deletes=1)
@@ -1874,76 +1827,104 @@ def test_canary_retries_delete_until_the_rule_is_gone(monkeypatch, capsys) -> No
     assert fake.policies == {}
 
 
-def test_canary_fails_when_the_rule_list_cannot_be_read_after_delete(
-    monkeypatch, capsys
+@pytest.mark.parametrize(
+    (
+        "kwargs",
+        "err_part1",
+        "err_part2",
+        "expect_rule_stored",
+        "expect_policy_stored",
+        "check_delete_retries",
+    ),
+    [
+        (
+            {"v1_delete": "ignores"},
+            _CANARY_RULE_ID,
+            _CANARY_RULE_NAME,
+            True,
+            True,
+            True,
+        ),
+        (
+            {"v1_delete": "removes", "rules_unreadable_after_delete": True},
+            _CANARY_RULE_ID,
+            _CANARY_RULE_NAME,
+            False,
+            False,
+            False,
+        ),
+        (
+            {"v1_delete": "keeps_policy"},
+            _CANARY_POLICY_ID,
+            _CANARY_RULE_ID,
+            False,
+            True,
+            False,
+        ),
+        (
+            {"v1_delete": "removes", "policies_unreadable": True},
+            _CANARY_RULE_ID,
+            "route polic",
+            False,
+            False,
+            False,
+        ),
+        (
+            {"v1_delete": "removes", "html_list": "rules"},
+            _CANARY_RULE_ID,
+            "not a list",
+            False,
+            False,
+            False,
+        ),
+        (
+            {"v1_delete": "removes", "html_list": "policies"},
+            _CANARY_RULE_ID,
+            "not a list",
+            False,
+            False,
+            False,
+        ),
+        (
+            {"v1_delete": "ignores", "stores_legacy_rule_shape": True},
+            "v5 PromQL",
+            "NOT removed",
+            True,
+            True,
+            False,
+        ),
+    ],
+    ids=[
+        "delete-ignored-rule-stays",
+        "rules-unreadable-after-delete",
+        "route-policy-survives",
+        "route-policies-unreadable",
+        "html-rules-list",
+        "html-policies-list",
+        "v5-check-fails-rule-leftover",
+    ],
+)
+def test_canary_failure_scenarios(
+    monkeypatch,
+    capsys,
+    kwargs,
+    err_part1,
+    err_part2,
+    expect_rule_stored,
+    expect_policy_stored,
+    check_delete_retries,
 ) -> None:
-    """#1435: a read error after DELETE is a failure. It must not count as gone."""
-    fake = _FakeSigNozV01051(v1_delete="removes", rules_unreadable_after_delete=True)
-
+    fake = _FakeSigNozV01051(**kwargs)
     code, out, err = _run_canary(monkeypatch, capsys, fake)
-
     assert code == 1
     assert "passed" not in out
-    assert _CANARY_RULE_ID in err
-    assert _CANARY_RULE_NAME in err
-
-
-def test_canary_fails_when_the_route_policy_survives_the_rule_delete(
-    monkeypatch, capsys
-) -> None:
-    """#1435: the rule is gone but its route policy is not. That must fail by id."""
-    fake = _FakeSigNozV01051(v1_delete="keeps_policy")
-
-    code, out, err = _run_canary(monkeypatch, capsys, fake)
-
-    assert code == 1
-    assert "passed" not in out
-    assert _CANARY_POLICY_ID in err
-    assert _CANARY_RULE_ID in err
-    assert fake.rules == {}
-    assert _CANARY_POLICY_ID in fake.policies
-
-
-def test_canary_fails_when_route_policies_cannot_be_read(monkeypatch, capsys) -> None:
-    """#1435: a read error on the route policy list is a failure, not a pass."""
-    fake = _FakeSigNozV01051(v1_delete="removes", policies_unreadable=True)
-
-    code, out, err = _run_canary(monkeypatch, capsys, fake)
-
-    assert code == 1
-    assert "passed" not in out
-    assert _CANARY_RULE_ID in err
-    assert "route polic" in err
-
-
-@pytest.mark.parametrize("html_list", ["rules", "policies"])
-def test_canary_fails_when_a_list_read_answers_ok_without_a_list(
-    monkeypatch, capsys, html_list: str
-) -> None:
-    """#1435: a 200 that is not a list (for example the web page) is not "empty"."""
-    fake = _FakeSigNozV01051(v1_delete="removes", html_list=html_list)
-
-    code, out, err = _run_canary(monkeypatch, capsys, fake)
-
-    assert code == 1
-    assert "passed" not in out
-    assert _CANARY_RULE_ID in err
-    assert "not a list" in err
-
-
-def test_canary_names_the_leftover_rule_when_the_v5_check_fails(
-    monkeypatch, capsys
-) -> None:
-    """#1435: the v5 failure path also reports a cleanup that did not happen."""
-    fake = _FakeSigNozV01051(v1_delete="ignores", stores_legacy_rule_shape=True)
-
-    code, out, err = _run_canary(monkeypatch, capsys, fake)
-
-    assert code == 1
-    assert "passed" not in out
-    assert "v5 PromQL" in err
-    assert "NOT removed" in err
-    assert _CANARY_RULE_ID in err
+    assert err_part1 in err
+    assert err_part2 in err
+    assert (_CANARY_RULE_ID in fake.rules) is expect_rule_stored
+    assert (_CANARY_POLICY_ID in fake.policies) is expect_policy_stored
+    min_calls = 2 if check_delete_retries else 0
+    max_calls = 5 if check_delete_retries else 100
+    assert min_calls <= fake.v1_delete_calls <= max_calls
 
 
 def test_routing_check_flags_stale_canary_probe_rules() -> None:
@@ -2211,38 +2192,37 @@ def test_renderer_rejects_a_rule_that_ends_up_unbound(monkeypatch) -> None:
         render_alert_payloads()
 
 
-def test_require_rule_channel_rejects_every_way_a_rule_misses_the_channel() -> None:
-    """#973: the checks `require_rule_channel` makes, one mutation each."""
+_CHANNEL_MUTATIONS = {
+    "no thresholds": lambda p: p["condition"]["thresholds"].update(spec=[]),
+    "empty channels": lambda p: p["condition"]["thresholds"]["spec"][0].update(
+        channels=[]
+    ),
+    "missing channels key": lambda p: p["condition"]["thresholds"]["spec"][0].pop(
+        "channels"
+    ),
+    "other channel": lambda p: p["condition"]["thresholds"]["spec"][0].update(
+        channels=["someone-else"]
+    ),
+    "channel id instead of name": lambda p: p["condition"]["thresholds"]["spec"][
+        0
+    ].update(channels=[CHANNEL_ID]),
+    "usePolicy": lambda p: p["notificationSettings"].update(usePolicy=True),
+    "no notificationSettings": lambda p: p.pop("notificationSettings"),
+    "v1 schema": lambda p: p.update(schemaVersion="v1"),
+}
+
+
+def test_require_rule_channel_accepts_valid_payload() -> None:
     base = render_alert_payloads()[0]
     assert require_rule_channel(base, BRIDGE_CHANNEL) is base
 
-    def mutated(change):
-        payload = json.loads(json.dumps(base))
-        change(payload)
-        return payload
 
-    wrong = {
-        "no thresholds": lambda p: p["condition"]["thresholds"].update(spec=[]),
-        "empty channels": lambda p: p["condition"]["thresholds"]["spec"][0].update(
-            channels=[]
-        ),
-        "missing channels key": lambda p: p["condition"]["thresholds"]["spec"][0].pop(
-            "channels"
-        ),
-        "other channel": lambda p: p["condition"]["thresholds"]["spec"][0].update(
-            channels=["someone-else"]
-        ),
-        "channel id instead of name": lambda p: p["condition"]["thresholds"]["spec"][
-            0
-        ].update(channels=[CHANNEL_ID]),
-        "usePolicy": lambda p: p["notificationSettings"].update(usePolicy=True),
-        "no notificationSettings": lambda p: p.pop("notificationSettings"),
-        "v1 schema": lambda p: p.update(schemaVersion="v1"),
-    }
-    for label, change in wrong.items():
-        with pytest.raises(ObservabilityDefinitionError):
-            require_rule_channel(mutated(change), BRIDGE_CHANNEL)
-        assert label
+@pytest.mark.parametrize("label", list(_CHANNEL_MUTATIONS))
+def test_require_rule_channel_rejects_missing_channel(label: str) -> None:
+    payload = json.loads(json.dumps(render_alert_payloads()[0]))
+    _CHANNEL_MUTATIONS[label](payload)
+    with pytest.raises(ObservabilityDefinitionError):
+        require_rule_channel(payload, BRIDGE_CHANNEL)
 
 
 # ---- check_alert_routing: what `verify-alert-routing` decides ----------------
@@ -3319,18 +3299,33 @@ def test_signoz_request_get_returns_a_non_transient_status_at_once(
     assert waits == []
 
 
-@pytest.mark.parametrize("status", [520, 524])
-def test_signoz_request_get_retries_the_edges_of_the_transient_range(
-    monkeypatch, status
+@pytest.mark.parametrize(
+    ("method", "answers", "status", "cmd_count", "waits"),
+    [
+        ("GET", [_answer(520), _answer(200, "{}")], 200, 2, [2]),
+        ("GET", [_answer(524), _answer(200, "{}")], 200, 2, [2]),
+        ("get", [_answer(520), _answer(200, "{}")], 200, 2, [2]),
+        (
+            "PUT",
+            [_answer(503), _answer(502), _answer(200, '{"id": "rule-1"}')],
+            200,
+            3,
+            [2, 5],
+        ),
+    ],
+    ids=["edge-520", "edge-524", "case-insensitive", "put-recovers-third-attempt"],
+)
+def test_signoz_request_retry_recovery(
+    monkeypatch, method, answers, status, cmd_count, waits
 ) -> None:
-    alerting, waits = _real_signoz_request(monkeypatch)
-    c = _FakeCurl(_answer(status), _answer(200, "{}"))
-
-    result = alerting._signoz_request(c, method="GET", path="/api/v1/rules")
-
-    assert result["status"] == 200
-    assert len(c.commands) == 2
-    assert waits == [2]
+    alerting, record_waits = _real_signoz_request(monkeypatch)
+    c = _FakeCurl(*answers)
+    result = alerting._signoz_request(
+        c, method=method, path="/api/v1/rules", payload={"alert": "A"}
+    )
+    assert result["status"] == status
+    assert len(c.commands) == cmd_count
+    assert record_waits == waits
 
 
 def test_signoz_transient_statuses_are_the_gateway_errors_and_status_zero() -> None:
@@ -3357,33 +3352,6 @@ def test_signoz_request_delete_retries_unreadable_curl_output_then_returns_the_2
 
     assert result["status"] == 200
     assert result["ok"] is True
-    assert len(c.commands) == 2
-    assert waits == [2]
-
-
-def test_signoz_request_put_recovers_on_the_third_attempt(monkeypatch) -> None:
-    alerting, waits = _real_signoz_request(monkeypatch)
-    c = _FakeCurl(_answer(503), _answer(502), _answer(200, '{"id": "rule-1"}'))
-
-    result = alerting._signoz_request(
-        c, method="PUT", path="/api/v1/rules/rule-1", payload={"alert": "A"}
-    )
-
-    assert result["status"] == 200
-    assert result["data"] == {"id": "rule-1"}
-    assert len(c.commands) == 3
-    assert waits == [2, 5]
-
-
-def test_signoz_request_retry_matches_the_method_in_any_letter_case(
-    monkeypatch,
-) -> None:
-    alerting, waits = _real_signoz_request(monkeypatch)
-    c = _FakeCurl(_answer(520), _answer(200, "{}"))
-
-    result = alerting._signoz_request(c, method="get", path="/api/v1/rules")
-
-    assert result["status"] == 200
     assert len(c.commands) == 2
     assert waits == [2]
 
@@ -3523,11 +3491,12 @@ def _failed_line(status: int) -> tuple[str, str]:
     )
 
 
+@pytest.mark.parametrize("status", [520, 0])
 def test_apply_alerts_create_posts_again_after_a_lost_create_that_stored_nothing(
-    monkeypatch,
+    monkeypatch, status: int
 ) -> None:
     fake = _LossyCreateSigNoz(
-        _INCIDENT_RULE, [(520, False)], rules=_prod_before_this_fix()
+        _INCIDENT_RULE, [(status, False)], rules=_prod_before_this_fix()
     )
     run = _apply_alerts_over(monkeypatch, fake)
 
@@ -3547,7 +3516,7 @@ def test_apply_alerts_create_posts_again_after_a_lost_create_that_stored_nothing
         ("POST", _INCIDENT_RULE),
     ]
     assert (
-        f"SigNoz create of {_INCIDENT_RULE} got 520; wait 2s, "
+        f"SigNoz create of {_INCIDENT_RULE} got {status}; wait 2s, "
         "check the rule list, then retry"
     ) in run.infos
 
@@ -3645,19 +3614,6 @@ def test_apply_alerts_create_does_not_retry_a_non_transient_status(
     assert fake.posted.count(_INCIDENT_RULE) == 1
     assert run.waits == []
     assert run.errors == [_failed_line(status)]
-
-
-def test_apply_alerts_create_retries_a_create_that_got_no_status(monkeypatch) -> None:
-    fake = _LossyCreateSigNoz(
-        _INCIDENT_RULE, [(0, False)], rules=_prod_before_this_fix()
-    )
-    run = _apply_alerts_over(monkeypatch, fake)
-
-    assert run.apply(object()) is True
-
-    assert fake.posted.count(_INCIDENT_RULE) == 2
-    assert run.waits == [2]
-    assert run.errors == []
 
 
 def _list_answer(body) -> dict:

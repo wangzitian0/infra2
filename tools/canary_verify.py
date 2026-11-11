@@ -92,37 +92,33 @@ def _resolve_locked_sdk_version(
 ) -> str:
     """Read the infra2-sdk package version pinned in the release's uv.lock (#1289)."""
     if lock_path is not None:
-        version_str = _read_locked_sdk_version_file(lock_path)
-        if version_str:
-            return version_str
-    else:
-        root = repo_root or Path(__file__).resolve().parents[1]
-        try:
-            from common.deploy.release_markers import (
-                newest_release_tag,
-                production_marker,
-            )
+        return _read_locked_sdk_version_file(lock_path)
+    root = repo_root or Path(__file__).resolve().parents[1]
+    try:
+        from common.deploy.release_markers import (
+            newest_release_tag,
+            production_marker,
+        )
 
-            ref = (
-                production_marker(repo_root=root, runner=runner)
-                if environment == "production"
-                else newest_release_tag(repo_root=root, runner=runner)
-            )
-            proc = runner(
-                ["git", "-C", str(root), "show", f"{ref}:uv.lock"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            version_str = _parse_sdk_version_from_lock_text(proc.stdout)
-            if version_str:
-                return version_str
-        except Exception:
-            pass
-        fallback_lock = root / "uv.lock"
-        version_str = _read_locked_sdk_version_file(fallback_lock)
+        ref = (
+            production_marker(repo_root=root, runner=runner)
+            if environment == "production"
+            else newest_release_tag(repo_root=root, runner=runner)
+        )
+        proc = runner(
+            ["git", "-C", str(root), "show", f"{ref}:uv.lock"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        version_str = _parse_sdk_version_from_lock_text(proc.stdout)
         if version_str:
             return version_str
+    except Exception:
+        pass
+    version_str = _read_locked_sdk_version_file(root / "uv.lock")
+    if version_str:
+        return version_str
     try:
         from importlib.metadata import version
 
@@ -303,6 +299,26 @@ def _evaluate_ledger_signal(
     return True, f"{counts} ({ages})", details
 
 
+def _parse_telemetry_pillar(
+    section_text: str,
+    pillar_name: str,
+    count_key: str,
+    max_age_seconds: int,
+    environment: str,
+    now: datetime | None,
+) -> PillarResult:
+    out = section_text.strip().split("\t")
+    count = int(out[0]) if out and out[0].isdigit() else 0
+    latest = out[1] if len(out) > 1 else ""
+    ok, summary, details = _evaluate_freshness(
+        count, latest, pillar_name=pillar_name, max_age_seconds=max_age_seconds, now=now
+    )
+    details[count_key] = count
+    details["environment"] = environment
+    details["window_seconds"] = max_age_seconds
+    return PillarResult(ok=ok, summary=summary, details=details)
+
+
 def verify_canary(
     environment: str = "production",
     expected_sdk: str | None = None,
@@ -317,24 +333,12 @@ def verify_canary(
         )
 
     host, user, key_path, port = _resolve_ssh_credentials()
-    container = (
-        "platform-todo" if environment == "production" else "platform-todo-staging"
-    )
-    # compose container_name: platform-alerting${ENV_SUFFIX}
-    bridge_container = (
-        "platform-alerting"
-        if environment == "production"
-        else "platform-alerting-staging"
-    )
-    domain = (
-        "todo.zitian.party"
-        if environment == "production"
-        else "todo-staging.zitian.party"
-    )
+    suffix = "" if environment == "production" else "-staging"
+    container = f"platform-todo{suffix}"
+    bridge_container = f"platform-alerting{suffix}"
+    domain = f"todo{suffix}.zitian.party"
     ledger_path = (
-        "/var/lib/infra2-availability-ledger/availability-ledger.json"
-        if environment == "production"
-        else "/var/lib/infra2-availability-ledger-staging/availability-ledger.json"
+        f"/var/lib/infra2-availability-ledger{suffix}/availability-ledger.json"
     )
     signal_id = f"{environment}:todo-canary-status"
     # The same environment and the same window scope both telemetry queries.
@@ -422,45 +426,21 @@ def verify_canary(
         pass
 
     installed_sdk = sections.get("SDK", "unknown").strip()
-
-    # Parse Tracking
-    traces_out = sections.get("TRACES", "").strip().split("\t")
-    trace_count = int(traces_out[0]) if traces_out and traces_out[0].isdigit() else 0
-    trace_latest = traces_out[1] if len(traces_out) > 1 else ""
-    tracking_ok, tracking_summary, tracking_details = _evaluate_freshness(
-        trace_count,
-        trace_latest,
-        pillar_name="spans",
-        max_age_seconds=max_age_seconds,
-        now=now,
+    tracking_pillar = _parse_telemetry_pillar(
+        sections.get("TRACES", ""),
+        "spans",
+        "span_count",
+        max_age_seconds,
+        environment,
+        now,
     )
-    tracking_details["span_count"] = trace_count
-    tracking_details["environment"] = environment
-    tracking_details["window_seconds"] = max_age_seconds
-    tracking_pillar = PillarResult(
-        ok=tracking_ok,
-        summary=tracking_summary,
-        details=tracking_details,
-    )
-
-    # Parse Logs
-    logs_out = sections.get("LOGS", "").strip().split("\t")
-    log_count = int(logs_out[0]) if logs_out and logs_out[0].isdigit() else 0
-    log_latest = logs_out[1] if len(logs_out) > 1 else ""
-    logs_ok, logs_summary, logs_details = _evaluate_freshness(
-        log_count,
-        log_latest,
-        pillar_name="log entries",
-        max_age_seconds=max_age_seconds,
-        now=now,
-    )
-    logs_details["log_count"] = log_count
-    logs_details["environment"] = environment
-    logs_details["window_seconds"] = max_age_seconds
-    logs_pillar = PillarResult(
-        ok=logs_ok,
-        summary=logs_summary,
-        details=logs_details,
+    logs_pillar = _parse_telemetry_pillar(
+        sections.get("LOGS", ""),
+        "log entries",
+        "log_count",
+        max_age_seconds,
+        environment,
+        now,
     )
 
     # Parse Monitoring (Ledger)

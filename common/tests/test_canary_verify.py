@@ -142,241 +142,60 @@ def test_resolve_ssh_credentials_custom(monkeypatch: pytest.MonkeyPatch) -> None
 def test_verify_canary_happy_path() -> None:
     """Verify happy path where all pillars return healthy status."""
     locked_version = _resolve_locked_sdk_version(environment="staging")
-    fixed_now = datetime(2026, 10, 12, 12, 0, 0, tzinfo=timezone.utc)
-    fresh_traces = _relative_ts(60, now=fixed_now)
-    fresh_logs = _relative_ts(120, now=fixed_now)
-
-    fake_ssh_stdout = (
-        "=== STATUS ===\n"
-        '{"ok": true, "failed": []}\n'
-        "=== SDK ===\n"
-        f"{locked_version}\n"
-        "=== TRACES ===\n"
-        f"500\t{fresh_traces}\n"
-        "=== LOGS ===\n"
-        f"100\t{fresh_logs}\n"
-        "=== LEDGER ===\n"
-        '{"day": "2026-10-12", "runs": 10, "signal": {"ok": 10, "fail": 0}}\n'
-        "=== ALERT_BRIDGE ===\n"
-        f"{BRIDGE_HEALTHY}\n"
+    stdout = _canned_stdout(
+        traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
+        logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
+        environment="staging",
     )
-
-    with (
-        patch("urllib.request.urlopen") as mock_url,
-        patch("tools.canary_verify._ssh_cmd", return_value=(0, fake_ssh_stdout, "")),
-    ):
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.read.return_value = json.dumps({"ok": True}).encode()
-        mock_resp.__enter__.return_value = mock_resp
-        mock_url.return_value = mock_resp
-
-        report = verify_canary("staging", now=fixed_now)
-
-        assert report.all_ok is True
-        assert report.installed_sdk == locked_version
-        assert report.sdk.ok is True
-        assert report.tracking.ok is True
-        assert "fresh:" in report.tracking.summary
-        assert report.logs.ok is True
-        assert "fresh:" in report.logs.summary
-        assert report.monitoring.ok is True
-        assert report.alerts.ok is True
+    report, _ = _verify_with_canned_ssh("staging", stdout)
+    assert report.all_ok is True
+    assert report.installed_sdk == locked_version
+    assert report.sdk.ok is True
+    assert report.tracking.ok is True
+    assert "fresh:" in report.tracking.summary
+    assert report.logs.ok is True
+    assert "fresh:" in report.logs.summary
+    assert report.monitoring.ok is True
+    assert report.alerts.ok is True
 
 
-def test_verify_canary_stale_logs_rejected() -> None:
-    """Falsify STALE-REPORTED-AS-FRESH: reject 3-day-old logs despite positive count."""
-    locked_version = _resolve_locked_sdk_version()
-    fixed_now = datetime(2026, 10, 12, 12, 0, 0, tzinfo=timezone.utc)
-    fresh_traces = _relative_ts(60, now=fixed_now)
-    stale_logs = _relative_ts(3 * 86400, now=fixed_now)  # 3 days ago
-
-    fake_ssh_stdout = (
-        "=== STATUS ===\n"
-        '{"ok": true, "failed": []}\n'
-        "=== SDK ===\n"
-        f"{locked_version}\n"
-        "=== TRACES ===\n"
-        f"500\t{fresh_traces}\n"
-        "=== LOGS ===\n"
-        f"9711\t{stale_logs}\n"
-        "=== LEDGER ===\n"
-        '{"day": "2026-10-12", "runs": 10, "signal": {"ok": 10, "fail": 0}}\n'
-        "=== ALERT_BRIDGE ===\n"
-        f"{BRIDGE_HEALTHY}\n"
-    )
-
-    with (
-        patch("urllib.request.urlopen") as mock_url,
-        patch("tools.canary_verify._ssh_cmd", return_value=(0, fake_ssh_stdout, "")),
-    ):
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.read.return_value = json.dumps({"ok": True}).encode()
-        mock_resp.__enter__.return_value = mock_resp
-        mock_url.return_value = mock_resp
-
-        report = verify_canary("staging", now=fixed_now)
-
-        assert report.all_ok is False
-        assert report.logs.ok is False
-        assert "Stale log entries" in report.logs.summary
-        assert "age:" in report.logs.summary
-
-
-def test_verify_canary_stale_traces_rejected() -> None:
-    """Falsify STALE-REPORTED-AS-FRESH: reject 3-day-old traces despite positive count."""
-    locked_version = _resolve_locked_sdk_version()
-    fixed_now = datetime(2026, 10, 12, 12, 0, 0, tzinfo=timezone.utc)
-    stale_traces = _relative_ts(3 * 86400, now=fixed_now)
-    fresh_logs = _relative_ts(120, now=fixed_now)
-
-    fake_ssh_stdout = (
-        "=== STATUS ===\n"
-        '{"ok": true, "failed": []}\n'
-        "=== SDK ===\n"
-        f"{locked_version}\n"
-        "=== TRACES ===\n"
-        f"500\t{stale_traces}\n"
-        "=== LOGS ===\n"
-        f"100\t{fresh_logs}\n"
-        "=== LEDGER ===\n"
-        '{"day": "2026-10-12", "runs": 10, "signal": {"ok": 10, "fail": 0}}\n'
-        "=== ALERT_BRIDGE ===\n"
-        f"{BRIDGE_HEALTHY}\n"
-    )
-
-    with (
-        patch("urllib.request.urlopen") as mock_url,
-        patch("tools.canary_verify._ssh_cmd", return_value=(0, fake_ssh_stdout, "")),
-    ):
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.read.return_value = json.dumps({"ok": True}).encode()
-        mock_resp.__enter__.return_value = mock_resp
-        mock_url.return_value = mock_resp
-
-        report = verify_canary("staging", now=fixed_now)
-
-        assert report.all_ok is False
-        assert report.tracking.ok is False
-        assert "Stale spans" in report.tracking.summary
-
-
-def test_verify_canary_zero_count_rejected() -> None:
-    """Reject verification if log count is zero."""
-    locked_version = _resolve_locked_sdk_version()
-    fixed_now = datetime(2026, 10, 12, 12, 0, 0, tzinfo=timezone.utc)
-    fresh_traces = _relative_ts(60, now=fixed_now)
-
-    fake_ssh_stdout = (
-        "=== STATUS ===\n"
-        '{"ok": true, "failed": []}\n'
-        "=== SDK ===\n"
-        f"{locked_version}\n"
-        "=== TRACES ===\n"
-        f"500\t{fresh_traces}\n"
-        "=== LOGS ===\n"
-        "0\t\n"
-        "=== LEDGER ===\n"
-        '{"day": "2026-10-12", "runs": 10, "signal": {"ok": 10, "fail": 0}}\n'
-        "=== ALERT_BRIDGE ===\n"
-        f"{BRIDGE_HEALTHY}\n"
-    )
-
-    with (
-        patch("urllib.request.urlopen") as mock_url,
-        patch("tools.canary_verify._ssh_cmd", return_value=(0, fake_ssh_stdout, "")),
-    ):
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.read.return_value = json.dumps({"ok": True}).encode()
-        mock_resp.__enter__.return_value = mock_resp
-        mock_url.return_value = mock_resp
-
-        report = verify_canary("staging", now=fixed_now)
-
-        assert report.all_ok is False
-        assert report.logs.ok is False
-        assert "0 log entries recorded" in report.logs.summary
-
-
-def test_verify_canary_malformed_timestamp_rejected() -> None:
-    """Reject verification if timestamp cannot be parsed (fail-closed)."""
-    locked_version = _resolve_locked_sdk_version()
-    fixed_now = datetime(2026, 10, 12, 12, 0, 0, tzinfo=timezone.utc)
-    fresh_traces = _relative_ts(60, now=fixed_now)
-
-    fake_ssh_stdout = (
-        "=== STATUS ===\n"
-        '{"ok": true, "failed": []}\n'
-        "=== SDK ===\n"
-        f"{locked_version}\n"
-        "=== TRACES ===\n"
-        f"500\t{fresh_traces}\n"
-        "=== LOGS ===\n"
-        "100\tnot-a-valid-timestamp\n"
-        "=== LEDGER ===\n"
-        '{"day": "2026-10-12", "runs": 10, "signal": {"ok": 10, "fail": 0}}\n'
-        "=== ALERT_BRIDGE ===\n"
-        f"{BRIDGE_HEALTHY}\n"
-    )
-
-    with (
-        patch("urllib.request.urlopen") as mock_url,
-        patch("tools.canary_verify._ssh_cmd", return_value=(0, fake_ssh_stdout, "")),
-    ):
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.read.return_value = json.dumps({"ok": True}).encode()
-        mock_resp.__enter__.return_value = mock_resp
-        mock_url.return_value = mock_resp
-
-        report = verify_canary("staging", now=fixed_now)
-
-        assert report.all_ok is False
-        assert report.logs.ok is False
-        assert "Malformed timestamp" in report.logs.summary
-
-
-def test_verify_canary_sdk_mismatch() -> None:
-    """Report failure when installed SDK does not match the locked release."""
-    locked_version = _resolve_locked_sdk_version(environment="staging")
-    fixed_now = datetime(2026, 10, 12, 12, 0, 0, tzinfo=timezone.utc)
-    fresh_traces = _relative_ts(60, now=fixed_now)
-    fresh_logs = _relative_ts(120, now=fixed_now)
-
-    fake_ssh_stdout = (
-        "=== STATUS ===\n"
-        '{"ok": true, "failed": []}\n'
-        "=== SDK ===\n"
-        "0.0.1-mismatch\n"
-        "=== TRACES ===\n"
-        f"500\t{fresh_traces}\n"
-        "=== LOGS ===\n"
-        f"100\t{fresh_logs}\n"
-        "=== LEDGER ===\n"
-        '{"day": "2026-10-12", "runs": 10, "signal": {"ok": 10, "fail": 0}}\n'
-        "=== ALERT_BRIDGE ===\n"
-        f"{BRIDGE_HEALTHY}\n"
-    )
-
-    with (
-        patch("urllib.request.urlopen") as mock_url,
-        patch("tools.canary_verify._ssh_cmd", return_value=(0, fake_ssh_stdout, "")),
-    ):
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.read.return_value = json.dumps({"ok": True}).encode()
-        mock_resp.__enter__.return_value = mock_resp
-        mock_url.return_value = mock_resp
-
-        report = verify_canary("staging", now=fixed_now)
-
-        assert report.all_ok is False
-        assert report.sdk.ok is False
-        assert "0.0.1-mismatch" in report.sdk.summary
-        assert locked_version in report.sdk.summary
+@pytest.mark.parametrize(
+    ("pillar", "stdout_kwargs", "expected_summary"),
+    [
+        (
+            "logs",
+            {"logs": f"9711\t{_relative_ts(3 * 86400, now=FIXED_NOW)}"},
+            "Stale log entries",
+        ),
+        (
+            "tracking",
+            {"traces": f"500\t{_relative_ts(3 * 86400, now=FIXED_NOW)}"},
+            "Stale spans",
+        ),
+        ("logs", {"logs": "0\t\n"}, "0 log entries recorded"),
+        ("logs", {"logs": "100\tnot-a-valid-timestamp\n"}, "Malformed timestamp"),
+        ("sdk", {"sdk": "0.0.1-mismatch"}, "0.0.1-mismatch"),
+        (
+            "monitoring",
+            {
+                "ledger": '{"day": "2026-10-12", "runs": 10, "signal": {"ok": 8, "fail": 2}}\n'
+            },
+            "fail",
+        ),
+    ],
+)
+def test_verify_canary_pillar_rejections(
+    pillar: str, stdout_kwargs: dict, expected_summary: str
+) -> None:
+    traces = stdout_kwargs.get("traces", f"500\t{_relative_ts(60, now=FIXED_NOW)}")
+    logs = stdout_kwargs.get("logs", f"100\t{_relative_ts(120, now=FIXED_NOW)}")
+    kwargs = {k: v for k, v in stdout_kwargs.items() if k not in ("traces", "logs")}
+    stdout = _canned_stdout(traces=traces, logs=logs, **kwargs)
+    report, _ = _verify_with_canned_ssh("staging", stdout)
+    assert report.all_ok is False
+    result = getattr(report, pillar)
+    assert result.ok is False
+    assert expected_summary in result.summary
 
 
 def test_verify_canary_ssh_failure() -> None:
@@ -387,8 +206,7 @@ def test_verify_canary_ssh_failure() -> None:
             "tools.canary_verify._ssh_cmd", return_value=(1, "", "Connection refused")
         ),
     ):
-        mock_resp = MagicMock()
-        mock_resp.status = 200
+        mock_resp = MagicMock(status=200)
         mock_resp.read.return_value = json.dumps({"ok": True}).encode()
         mock_resp.__enter__.return_value = mock_resp
         mock_url.return_value = mock_resp
@@ -397,44 +215,6 @@ def test_verify_canary_ssh_failure() -> None:
 
         assert report.all_ok is False
         assert "Connection refused" in report.tracking.summary
-
-
-def test_verify_canary_ledger_failure() -> None:
-    """Report failure when ledger records failures."""
-    locked_version = _resolve_locked_sdk_version()
-    fixed_now = datetime(2026, 10, 12, 12, 0, 0, tzinfo=timezone.utc)
-    fresh_traces = _relative_ts(60, now=fixed_now)
-    fresh_logs = _relative_ts(120, now=fixed_now)
-
-    fake_ssh_stdout = (
-        "=== STATUS ===\n"
-        '{"ok": true, "failed": []}\n'
-        "=== SDK ===\n"
-        f"{locked_version}\n"
-        "=== TRACES ===\n"
-        f"500\t{fresh_traces}\n"
-        "=== LOGS ===\n"
-        f"100\t{fresh_logs}\n"
-        "=== LEDGER ===\n"
-        '{"day": "2026-10-12", "runs": 10, "signal": {"ok": 8, "fail": 2}}\n'
-        "=== ALERT_BRIDGE ===\n"
-        '{"status": "ok"}\n'
-    )
-
-    with (
-        patch("urllib.request.urlopen") as mock_url,
-        patch("tools.canary_verify._ssh_cmd", return_value=(0, fake_ssh_stdout, "")),
-    ):
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.read.return_value = json.dumps({"ok": True}).encode()
-        mock_resp.__enter__.return_value = mock_resp
-        mock_url.return_value = mock_resp
-
-        report = verify_canary("staging", now=fixed_now)
-
-        assert report.all_ok is False
-        assert report.monitoring.ok is False
 
 
 @pytest.mark.parametrize(
@@ -464,59 +244,48 @@ def test_evaluate_freshness_boundaries(
     assert expected_keyword in summary
 
 
-def test_evaluate_freshness_empty_and_zero_count() -> None:
-    fixed_now = datetime(2026, 10, 12, 12, 0, 0, tzinfo=timezone.utc)
-
-    # Count zero
+@pytest.mark.parametrize(
+    ("count", "latest_str", "expected_summary"),
+    [
+        (0, "2026-10-12 11:59:00", "0 spans recorded"),
+        (-1, "2026-10-12 11:59:00", "0 spans recorded"),
+        (10, "", "Missing timestamp"),
+        (10, None, "Missing timestamp"),
+    ],
+)
+def test_evaluate_freshness_empty_and_zero_count(
+    count: int, latest_str: str | None, expected_summary: str
+) -> None:
     ok, summary, _ = _evaluate_freshness(
-        0, "2026-10-12 11:59:00", "spans", now=fixed_now
+        count,
+        latest_str,
+        "spans",
+        now=FIXED_NOW,  # type: ignore[arg-type]
     )
     assert ok is False
-    assert "0 spans recorded" in summary
+    assert expected_summary in summary
 
-    # Count negative
-    ok, summary, _ = _evaluate_freshness(
-        -1, "2026-10-12 11:59:00", "spans", now=fixed_now
+
+def _fake_report(ok: bool = True, sdk: str = "1.0.0") -> CanaryRealityReport:
+    p = PillarResult(ok=ok, summary="ok" if ok else "Stale traces")
+    return CanaryRealityReport(
+        environment="staging",
+        all_ok=ok,
+        tracking=p,
+        logs=p,
+        monitoring=p,
+        alerts=p,
+        installed_sdk=sdk,
+        expected_sdk=sdk,
+        sdk=PillarResult(ok=True, summary=f"matches locked release {sdk}"),
     )
-    assert ok is False
-    assert "0 spans recorded" in summary
-
-    # Empty timestamp
-    ok, summary, _ = _evaluate_freshness(10, "", "spans", now=fixed_now)
-    assert ok is False
-    assert "Missing timestamp" in summary
-
-    # None timestamp
-    ok, summary, _ = _evaluate_freshness(10, None, "spans", now=fixed_now)  # type: ignore[arg-type]
-    assert ok is False
-    assert "Missing timestamp" in summary
 
 
 def test_main_cli_output(capsys: pytest.CaptureFixture[str]) -> None:
     """Verify CLI exit code and output formatting."""
     locked_version = _resolve_locked_sdk_version()
-    fake_report_pass = CanaryRealityReport(
-        environment="staging",
-        all_ok=True,
-        tracking=PillarResult(ok=True, summary="traces ok"),
-        logs=PillarResult(ok=True, summary="logs ok"),
-        monitoring=PillarResult(ok=True, summary="monitoring ok"),
-        alerts=PillarResult(ok=True, summary="alerts ok"),
-        installed_sdk=locked_version,
-        expected_sdk=locked_version,
-        sdk=PillarResult(ok=True, summary=f"matches locked release {locked_version}"),
-    )
-    fake_report_fail = CanaryRealityReport(
-        environment="staging",
-        all_ok=False,
-        tracking=PillarResult(ok=False, summary="Stale traces"),
-        logs=PillarResult(ok=True, summary="logs ok"),
-        monitoring=PillarResult(ok=True, summary="monitoring ok"),
-        alerts=PillarResult(ok=True, summary="alerts ok"),
-        installed_sdk=locked_version,
-        expected_sdk=locked_version,
-        sdk=PillarResult(ok=True, summary=f"matches locked release {locked_version}"),
-    )
+    fake_report_pass = _fake_report(True, locked_version)
+    fake_report_fail = _fake_report(False, locked_version)
 
     with patch("tools.canary_verify.verify_canary", return_value=fake_report_pass):
         code = main(["--env", "staging"])
