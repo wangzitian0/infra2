@@ -15,7 +15,7 @@
 | **Service Code** | [`bootstrap/06.iac_runner/`](../../bootstrap/06.iac_runner/) | 服务实现、Dockerfile |
 | **Deployment** | [`bootstrap/06.iac_runner/deploy.py`](../../bootstrap/06.iac_runner/deploy.py) | 部署脚本 |
 | **Secrets** | `secret/data/bootstrap/production/iac_runner` (Vault) | WEBHOOK_SECRET, GIT_REPO_URL |
-| **GitHub Workflows** | [`reconcile-iac-inputs.yml`](../../.github/workflows/reconcile-iac-inputs.yml) · [`deploy.yml`](../../.github/workflows/deploy.yml) | release tag 推送 → **自动 staging**；`workflow_dispatch promote_prod=true` → **显式 prod**（经 `deploy_v2 → /deploy`）。`deploy.yml` 只负责 runner 自身的带外重建（`bootstrap/06.iac_runner/**` 合并后）与手动 `deploy_v2` 入口 |
+| **GitHub Workflows** | [`reconcile-iac-inputs.yml`](../../.github/workflows/reconcile-iac-inputs.yml) · [`deploy.yml`](../../.github/workflows/deploy.yml) | release tag 推送 → **自动 staging**；`workflow_dispatch promote_prod=true` → **显式 prod**（经 `deploy_v2 → /deploy`）。`deploy.yml` 只负责 runner 自身的带外重建（手动 `workflow_dispatch`，需 owner 批准；班车内的更新只在 `promote_prod=true` 的生产运行里跑，#1486）与手动 `deploy_v2` 入口 |
 | **Component README** | [`bootstrap/06.iac_runner/README.md`](../../bootstrap/06.iac_runner/README.md) | 操作手册 |
 
 ---
@@ -584,9 +584,9 @@ INFRA2_DEPLOY_SHA=$(git rev-parse HEAD) bash scripts/deploy_iac_runner_bootstrap
 
 ### 7.4 更新 IaC Runner
 
-**Automated post-merge update**:
+**Automated update in the production run** (not on merge):
 
-When `bootstrap/06.iac_runner/**` changes on `main`, GitHub Actions runs
+When a release changes `bootstrap/06.iac_runner/**` (or the other runner files), the production run of the release train (`reconcile-iac-inputs.yml` with `promote_prod=true`, approved by the owner; #1486) runs
 `scripts/deploy_iac_runner_bootstrap.sh` on the VPS before the normal
 `/deploy` call. The script resolves the live Dokploy compose project from the
 `iac-runner` container label, checks out only the paths the runner image
@@ -595,6 +595,8 @@ When `bootstrap/06.iac_runner/**` changes on `main`, GitHub Actions runs
 fails when the Dockerfile and that line disagree), rebuilds the compose project with
 `GIT_SHA=<short_sha>`, recreates the runner with the confirmed Dokploy compose
 env instead of the previous container env, and waits for Docker health.
+
+The staging soak of a release does not rebuild the runner (the runner serves staging and production, so a rebuild is a production change; owner decision 2026-11-11). A release whose staging soak needs the new runner therefore cannot go green first. The way out is the owner-approved `bootstrap` job of `deploy.yml` (service `bootstrap/iac-runner`), then a re-run of the soak.
 
 Generic deployer config hashes include compose text, deploy env values, local
 bind-mounted files referenced by compose, Dockerfiles, and Dockerfile

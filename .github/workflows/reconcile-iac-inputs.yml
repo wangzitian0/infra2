@@ -288,7 +288,10 @@ jobs:
                   exit 1
                 fi
               fi
-              if [[ -n "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" && -n "${INFRA2_WATCHDOG_SSH_HOST:-}" && -n "${INFRA2_WATCHDOG_SSH_USER:-}" ]]; then
+              # The shared runner serves staging and production, so a rebuild is a production
+              # change (AGENTS.md rule 5; owner decision 2026-11-11, #1486). It runs only in
+              # the production run, after the owner approves the `production` environment.
+              if [[ "$promote_prod" == "true" ]]; then
                 echo "Deploy IaC Runner bootstrap changes for '$after'..."
                 install -m 700 -d ~/.ssh
                 printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_bootstrap
@@ -337,6 +340,8 @@ jobs:
                   echo "::error::IaC Runner public health stayed unhealthy after 12 attempts. Last HTTP status: $last_status. Check Traefik/Dokploy routing, Cloudflare propagation, VAULT_APP_TOKEN, and iac-runner container health."
                   exit 1
                 fi
+              else
+                echo "::notice::The IaC Runner bootstrap changed in this release. A rebuild is a production change, so it waits for the owner-approved production run (cumulative from the production marker)."
               fi
             fi
           fi
