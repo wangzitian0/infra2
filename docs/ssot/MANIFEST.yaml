@@ -231,6 +231,7 @@ entries:
       - common/tests/test_reconcile_iac_inputs.py
       - common/tests/test_dokploy_config_drift.py
       - common/tests/test_deploy_guard_audit_mutations.py
+      - common/tests/test_ci_tree_reuse.py
   ops.e2e:
     owner: docs/ssot/ops.e2e-regressions.md
     summary: 部署验证、E2E 测试

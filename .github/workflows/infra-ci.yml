@@ -60,8 +60,15 @@ jobs:
     name: Detect Non-Doc Changes
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      # Read the artifact list and the merged pull request for the tree reuse lookup
+      # below (#1602). Public reads work without them; a private repository needs both.
+      actions: read
+      pull-requests: read
     outputs:
       has_non_doc: ${{ steps.check.outputs.has_non_doc }}
+      reuse_run_id: ${{ steps.reuse.outputs.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -127,6 +134,25 @@ jobs:
           else
             echo "has_non_doc=false" >> "$GITHUB_OUTPUT"
           fi
+
+      # A squash merge onto an unchanged base gives main the tree that the pull
+      # request's merge ref already passed (14 of 20 merges, #1602). For such a push
+      # the shards would run the same tests on the same bytes again. The lookup prints
+      # the id of that green pull-request run, or nothing; any error prints nothing,
+      # so the shards run. test-deployer-logic then reads that run's coverage data.
+      - name: Find a green pull-request run of the same tree
+        id: reuse
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          commit="$(git rev-parse HEAD)"
+          run_id="$(python3 tools/ci_tree_reuse.py --repo "${{ github.repository }}" --tree "$tree" --commit "$commit" || true)"
+          # Only a run id may become the output: anything else runs the shards.
+          [[ "$run_id" =~ ^[0-9]+$ ]] || run_id=""
+          echo "tree=${tree} reuse_run_id=${run_id:-none}"
+          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
   validate-compose:
     name: Validate Compose Files
@@ -214,7 +240,7 @@ jobs:
       matrix:
         shard: [1, 2, 3]
     needs: detect-changes
-    if: needs.detect-changes.outputs.has_non_doc == 'true'
+    if: needs.detect-changes.outputs.has_non_doc == 'true' && needs.detect-changes.outputs.reuse_run_id == ''
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -301,13 +327,23 @@ jobs:
     if: always() && needs.detect-changes.outputs.has_non_doc == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      # Download the shard coverage of a reused pull-request run (#1602).
+      actions: read
     steps:
-      - name: Require every unit-test shard to succeed
+      # With a reused run the shards are skipped on purpose; anything else must be success.
+      - name: Require every unit-test shard to succeed, or a reused green run
         env:
           SHARD_RESULT: ${{ needs.test-unit-shard.result }}
+          REUSE_RUN_ID: ${{ needs.detect-changes.outputs.reuse_run_id }}
         run: |
-          echo "test-unit-shard result: ${SHARD_RESULT}"
-          [ "${SHARD_RESULT}" = "success" ]
+          echo "test-unit-shard result: ${SHARD_RESULT} reuse_run_id: ${REUSE_RUN_ID:-none}"
+          if [ -n "${REUSE_RUN_ID}" ]; then
+            [ "${SHARD_RESULT}" = "skipped" ]
+          else
+            [ "${SHARD_RESULT}" = "success" ]
+          fi
 
       - name: Checkout
         uses: actions/checkout@v7
@@ -332,11 +368,22 @@ jobs:
             "$(python tools/sdk_requirement.py)"
 
       - name: Download coverage data of the shards
+        if: needs.detect-changes.outputs.reuse_run_id == ''
         uses: actions/download-artifact@v8
         with:
           pattern: infra2-coverage-data-shard*
           path: coverage
           merge-multiple: true
+
+      - name: Download coverage data of the reused pull-request run
+        if: needs.detect-changes.outputs.reuse_run_id != ''
+        uses: actions/download-artifact@v8
+        with:
+          pattern: infra2-coverage-data-shard*
+          path: coverage
+          merge-multiple: true
+          run-id: ${{ needs.detect-changes.outputs.reuse_run_id }}
+          github-token: ${{ github.token }}
 
       - name: Combine shard coverage into one report
         run: |
@@ -417,6 +464,28 @@ jobs:
         with:
           name: infra2-shard-weights
           path: coverage/shard_weights.json
+          if-no-files-found: warn
+          overwrite: true
+
+      # The marker says: every gate above passed on this tree, with the shards of this
+      # run. A later push to main with the same tree reuses this run (#1602).
+      - name: Record the tested tree
+        id: tree
+        if: github.event_name == 'pull_request' && needs.test-unit-shard.result == 'success'
+        run: |
+          tree="$(git rev-parse 'HEAD^{tree}')"
+          echo "${tree} ${{ github.run_id }}" > coverage/unit-green.txt
+          echo "sha=${tree}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the tested-tree marker
+        # gate-exempt: a marker for a later push; without it main runs the shards again.
+        # The artifact service being down must not fail the required check.
+        if: steps.tree.outputs.sha != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-green-${{ steps.tree.outputs.sha }}
+          path: coverage/unit-green.txt
           if-no-files-found: warn
           overwrite: true
 
