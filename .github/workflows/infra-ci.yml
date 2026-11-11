@@ -62,8 +62,10 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      # Read the artifact list for the tree reuse lookup below (#1602).
+      # Read the artifact list and the merged pull request for the tree reuse lookup
+      # below (#1602). Public reads work without them; a private repository needs both.
       actions: read
+      pull-requests: read
     outputs:
       has_non_doc: ${{ steps.check.outputs.has_non_doc }}
       reuse_run_id: ${{ steps.reuse.outputs.run_id }}

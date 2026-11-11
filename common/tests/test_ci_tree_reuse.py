@@ -290,6 +290,8 @@ def test_only_a_push_to_main_looks_up_a_reusable_run() -> None:
     assert step["id"] == "reuse"
     assert job["outputs"]["reuse_run_id"] == "${{ steps.reuse.outputs.run_id }}"
     assert job["permissions"]["actions"] == "read"
+    # GET /commits/{sha}/pulls needs it once the repository is private.
+    assert job["permissions"]["pull-requests"] == "read"
 
 
 @pytest.mark.parametrize(
