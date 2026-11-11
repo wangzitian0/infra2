@@ -330,6 +330,46 @@ def classify_value(key: str, value: str | None) -> tuple[str, tuple, bool]:
     return "composed", tuple(dict.fromkeys(refs)), False
 
 
+def _add_classified_write(
+    inv: Inventory,
+    key: str,
+    value: str | None,
+    layer: str,
+    repo: str,
+    path: str,
+    line: int,
+    unit: str,
+    via: str,
+    scope: str = "prod",
+    conf: str = "high",
+    extra: dict | None = None,
+    add_edge: bool = True,
+) -> Occ:
+    shape, refs, identity = classify_value(key, value)
+    o = inv.add(
+        key=key,
+        role="write",
+        layer=layer,
+        repo=repo,
+        path=path,
+        line=line,
+        scope=scope,
+        value=value,
+        shape=shape,
+        refs=refs,
+        identity=identity,
+        via=via,
+        unit=unit,
+        conf=conf,
+        extra=extra or {},
+    )
+    if add_edge and refs and (identity or shape == "composed"):
+        for r in refs:
+            if not r.startswith(("secret:", "var:")):
+                inv.edge(r, key, "copy" if identity else "derive", repo, path, line)
+    return o
+
+
 # ---------------------------------------------------------------------------------------------
 # Python (AST)
 # ---------------------------------------------------------------------------------------------
@@ -827,67 +867,60 @@ class PyScan(ast.NodeVisitor):
         if isinstance(f, ast.Attribute):
             kind = self.env_kind(f.value)
             attr = f.attr
-            if kind and attr == "get":
-                if args:
+            if kind:
+                conf = "high" if kind == "os" else "med"
+                pfx = "os.environ." if kind == "os" else "mapping."
+                if attr == "get" and args:
                     self.read(
                         node,
                         args[0],
                         args[1] if len(args) > 1 else kws.get("default"),
-                        "os.environ.get" if kind == "os" else "mapping.get",
-                        conf="high" if kind == "os" else "med",
+                        f"{pfx}get",
+                        conf=conf,
                         mapping=(kind != "os"),
                     )
-                return
-            if kind and attr == "pop":
-                if id(node) in self.discarded_calls:
                     return
-                if args:
+                if attr == "pop" and args and id(node) not in self.discarded_calls:
                     self.read(
                         node,
                         args[0],
                         args[1] if len(args) > 1 else None,
-                        "os.environ.pop" if kind == "os" else "mapping.pop",
-                        conf="high" if kind == "os" else "med",
+                        f"{pfx}pop",
+                        conf=conf,
                         required_hint=False,
                         mapping=(kind != "os"),
                     )
-                return
-            if kind and attr == "setdefault":
-                if args:
-                    self.write(
-                        node,
-                        args[0],
-                        args[1] if len(args) > 1 else None,
-                        "os.environ.setdefault",
-                        conf="high" if kind == "os" else "med",
-                    )
+                    return
+                if attr == "setdefault" and args:
+                    dflt = args[1] if len(args) > 1 else None
+                    self.write(node, args[0], dflt, "os.environ.setdefault", conf=conf)
                     self.read(
                         node,
                         args[0],
-                        args[1] if len(args) > 1 else None,
+                        dflt,
                         "os.environ.setdefault",
                         conf="med",
                         required_hint=False,
                     )
-                return
-            if kind and attr == "update":
-                if args:
-                    self.dict_writes(
-                        node,
-                        args[0],
-                        "os.environ.update",
-                        "py-env-write",
-                        "high" if kind == "os" else "med",
-                    )
-                for k, v in kws.items():
-                    self.write(
-                        node,
-                        ast.Constant(value=k),
-                        v,
-                        "os.environ.update",
-                        "py-env-write",
-                    )
-                return
+                    return
+                if attr == "update":
+                    if args:
+                        self.dict_writes(
+                            node,
+                            args[0],
+                            "os.environ.update",
+                            "py-env-write",
+                            conf,
+                        )
+                    for k, v in kws.items():
+                        self.write(
+                            node,
+                            ast.Constant(value=k),
+                            v,
+                            "os.environ.update",
+                            "py-env-write",
+                        )
+                    return
             # os.putenv
             if (
                 attr == "putenv"
@@ -1038,28 +1071,21 @@ class PyScan(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Compare(self, node: ast.Compare) -> None:
-        if (
-            len(node.ops) == 1
-            and isinstance(node.ops[0], (ast.In, ast.NotIn))
-            and isinstance(node.left, ast.Constant)
-        ):
-            self.ctxmap[id(node.left)] = "in"
-        if (
-            len(node.ops) == 1
-            and isinstance(node.ops[0], (ast.In, ast.NotIn))
-            and self.env_kind(node.comparators[0])
-        ):
-            key, _ = self.key_of(node.left)
-            self.rec(
-                node,
-                key,
-                "read",
-                "py-env-read",
-                has_default=True,
-                required=False,
-                via="in os.environ",
-                conf="med",
-            )
+        if len(node.ops) == 1 and isinstance(node.ops[0], (ast.In, ast.NotIn)):
+            if isinstance(node.left, ast.Constant):
+                self.ctxmap[id(node.left)] = "in"
+            if self.env_kind(node.comparators[0]):
+                key, _ = self.key_of(node.left)
+                self.rec(
+                    node,
+                    key,
+                    "read",
+                    "py-env-read",
+                    has_default=True,
+                    required=False,
+                    via="in os.environ",
+                    conf="med",
+                )
         self.generic_visit(node)
 
     def visit_List(self, node: ast.List) -> None:
@@ -1702,42 +1728,33 @@ def scan_compose(inv: Inventory, repo: str, path: str, text: str) -> None:
     seen_lines: set[tuple] = set()
 
     def emit_env(service, third, key, value, ln, container=None):
-        shape, refs, identity = classify_value(key, value)
-        inv.add(
-            key=key,
-            role="write",
-            layer="compose",
-            repo=repo,
-            path=path,
-            line=ln,
+        _add_classified_write(
+            inv,
+            key,
+            value,
+            "compose",
+            repo,
+            path,
+            ln,
+            unit,
+            "environment",
             scope=scope,
-            value=value,
-            shape=shape,
-            refs=refs,
-            identity=identity,
-            via="environment",
-            unit=unit,
             extra={"service": service, "third_party": third, "container": container},
         )
-        if refs and (identity or shape == "composed"):
-            for r in refs:
-                inv.edge(r, key, "copy" if identity else "derive", repo, path, ln)
 
     def do_mapping(service, third, node, container=None):
         if isinstance(node, yaml.MappingNode):
             for k, v in y_items(node):
                 if isinstance(k, yaml.ScalarNode):
                     val = (
-                        v.value
+                        (
+                            (None if v.value in ("", "~", "null") else v.value)
+                            if v.tag == "tag:yaml.org,2002:null"
+                            else v.value
+                        )
                         if isinstance(v, yaml.ScalarNode)
-                        and v.tag != "tag:yaml.org,2002:null"
-                        else (None if isinstance(v, yaml.ScalarNode) else "")
+                        else ""
                     )
-                    if (
-                        isinstance(v, yaml.ScalarNode)
-                        and v.tag == "tag:yaml.org,2002:null"
-                    ):
-                        val = None if v.value in ("", "~", "null") else v.value
                     emit_env(
                         service,
                         third,
@@ -1901,24 +1918,18 @@ def scan_dockerfile(inv: Inventory, repo: str, path: str, text: str) -> None:
                 k, _, v = rest.partition(" ")
                 pairs = [(k, v.strip())] if k else []
             for k, v in pairs:
-                shape, refs, identity = classify_value(k, v if v is not None else "")
                 defined.add(k)
-                inv.add(
-                    key=k,
-                    role="write",
-                    layer="dockerfile",
-                    repo=repo,
-                    path=path,
-                    line=ln,
-                    value=v,
-                    shape=shape,
-                    refs=refs,
-                    identity=identity,
-                    via="ENV",
-                    unit=unit,
+                _add_classified_write(
+                    inv,
+                    k,
+                    v if v is not None else "",
+                    "dockerfile",
+                    repo,
+                    path,
+                    ln,
+                    unit,
+                    "ENV",
                 )
-                for r in refs:
-                    inv.edge(r, k, "copy" if identity else "derive", repo, path, ln)
         elif instr == "ARG":
             k, eq, v = rest.partition("=")
             k = k.strip()
@@ -2001,37 +2012,35 @@ def scan_workflow(
                             exprs = GH_EXPR.findall(raw)
                             if exprs:
                                 shape = "composed"
-                                for e in exprs:
-                                    for ctx, name in GH_CTX.findall(e):
-                                        refs.append(
-                                            (
-                                                "secret:"
-                                                if ctx == "secrets"
-                                                else "var:"
-                                                if ctx == "vars"
-                                                else ""
-                                            )
-                                            + name
-                                        )
-                                whole = GH_EXPR.fullmatch(raw.strip())
-                                if whole and len(refs) == 1:
+                                refs = [
+                                    (
+                                        "secret:"
+                                        if ctx == "secrets"
+                                        else "var:"
+                                        if ctx == "vars"
+                                        else ""
+                                    )
+                                    + name
+                                    for e in exprs
+                                    for ctx, name in GH_CTX.findall(e)
+                                ]
+                                if GH_EXPR.fullmatch(raw.strip()) and len(refs) == 1:
                                     shape, identity = (
-                                        (
-                                            "secret-ref"
-                                            if refs[0].startswith("secret:")
-                                            else "ref"
-                                        ),
+                                        "secret-ref"
+                                        if refs[0].startswith("secret:")
+                                        else "ref",
                                         True,
                                     )
                             elif raw == "":
                                 shape = "empty"
+                            ln = ek.start_mark.line + 1
                             inv.add(
                                 key=ek.value,
                                 role="write",
                                 layer="workflow-env",
                                 repo=repo,
                                 path=path,
-                                line=ek.start_mark.line + 1,
+                                line=ln,
                                 value=raw,
                                 shape=shape,
                                 refs=tuple(refs),
@@ -2047,7 +2056,7 @@ def scan_workflow(
                                         "copy" if identity else "derive",
                                         repo,
                                         path,
-                                        ek.start_mark.line + 1,
+                                        ln,
                                     )
                 elif (
                     isinstance(k, yaml.ScalarNode)
@@ -2057,24 +2066,19 @@ def scan_workflow(
                     for j, bl in enumerate(v.value.split("\n")):
                         bm = re.match(r"^\s*([A-Z][A-Z0-9_]*)=(.*)$", bl)
                         if bm:
-                            shape, refs, identity = classify_value(
-                                bm.group(1), bm.group(2).strip()
-                            )
-                            inv.add(
-                                key=bm.group(1),
-                                role="write",
-                                layer="workflow-build-arg",
-                                repo=repo,
-                                path=path,
-                                line=v.start_mark.line
+                            _add_classified_write(
+                                inv,
+                                bm.group(1),
+                                bm.group(2).strip(),
+                                "workflow-build-arg",
+                                repo,
+                                path,
+                                v.start_mark.line
                                 + (2 if v.style in ("|", ">") else 1)
                                 + j,
-                                value=bm.group(2).strip(),
-                                shape=shape,
-                                refs=refs,
-                                identity=identity,
-                                via="build-args",
-                                unit=unit,
+                                unit,
+                                "build-args",
+                                add_edge=False,
                             )
                 elif (
                     isinstance(k, yaml.ScalarNode)
@@ -2569,6 +2573,20 @@ def scan_docs(inv: Inventory, repo: str, path: str, text: str) -> None:
 # ---------------------------------------------------------------------------------------------
 # driver
 # ---------------------------------------------------------------------------------------------
+ROUTED_SCANNERS = {
+    "compose": scan_compose,
+    "dockerfile": scan_dockerfile,
+    "ctmpl": scan_ctmpl,
+    "env-example": scan_env_example,
+    "manifest": scan_manifest,
+    "ts": scan_ts,
+    "package-json": scan_package_json,
+    "make": scan_make,
+    "wrangler": scan_wrangler,
+    "docs": scan_docs,
+}
+
+
 def scan_repo(inv: Inventory, repo: str, root: Path) -> None:
     files = [
         f
@@ -2592,28 +2610,10 @@ def scan_repo(inv: Inventory, repo: str, root: Path) -> None:
             scan_python_text(inv, repo, f, text, consts)
         elif kind == "shell":
             scan_shell_text(inv, repo, f, text, "shell", scope_of(f), 1, consts)
-        elif kind == "compose":
-            scan_compose(inv, repo, f, text)
-        elif kind == "dockerfile":
-            scan_dockerfile(inv, repo, f, text)
         elif kind == "workflow":
             scan_workflow(inv, repo, f, text, consts)
-        elif kind == "ctmpl":
-            scan_ctmpl(inv, repo, f, text)
-        elif kind == "env-example":
-            scan_env_example(inv, repo, f, text)
-        elif kind == "manifest":
-            scan_manifest(inv, repo, f, text)
-        elif kind == "ts":
-            scan_ts(inv, repo, f, text)
-        elif kind == "package-json":
-            scan_package_json(inv, repo, f, text)
-        elif kind == "make":
-            scan_make(inv, repo, f, text)
-        elif kind == "wrangler":
-            scan_wrangler(inv, repo, f, text)
-        elif kind == "docs":
-            scan_docs(inv, repo, f, text)
+        elif kind in ROUTED_SCANNERS:
+            ROUTED_SCANNERS[kind](inv, repo, f, text)
 
 
 DEPLOY_CODE = re.compile(
@@ -3603,46 +3603,61 @@ def write_outputs(
     a(
         f"Keys (namespace env): **{len(ordered)}**. Records: {len(inv.occ)}. Parse errors: {len(inv.errors)}. Unresolved dynamic accesses: {len(inv.dynamic)}.\n"
     )
+
+    def _tbl(hdr: str, sep: str, row_lines: list[str]) -> None:
+        a(hdr)
+        a(sep)
+        for row in row_lines:
+            a(row)
+        a("")
+
     a("## SDK classes\n")
-    a("| Class | Keys |\n|---|---:|")
-    for cls_name, cnt in sorted(class_counts.items()):
-        a(f"| {cls_name} | {cnt} |")
-    a("")
+    _tbl(
+        "| Class | Keys |",
+        "|---|---:|",
+        [f"| {c} | {n} |" for c, n in sorted(class_counts.items())],
+    )
     a("## Flag counts\n")
-    a("| Flag | Keys | Meaning |\n|---|---:|---|")
-    for f, c in sorted(
-        flag_counts.items(), key=lambda kv: (-SEVERITY.get(kv[0], 0), -kv[1])
-    ):
-        a(f"| {f} | {c} | {MEANING.get(f, '')} |")
-    a("")
+    _tbl(
+        "| Flag | Keys | Meaning |",
+        "|---|---:|---|",
+        [
+            f"| {f} | {c} | {MEANING.get(f, '')} |"
+            for f, c in sorted(
+                flag_counts.items(), key=lambda kv: (-SEVERITY.get(kv[0], 0), -kv[1])
+            )
+        ],
+    )
     for f in sorted(flag_counts, key=lambda x: (-SEVERITY.get(x, 0), x)):
         if f in ("UNDOCUMENTED", "ONLY_TESTS_OR_DOCS", "ALIAS_GROUP"):
             continue
         sel = [k for k in ordered if f in k.flags]
         a(f"## {f} ({len(sel)})\n\n{MEANING.get(f, '')}\n")
-        a(
-            "| Key | Class | Repos | Written by | Read by | Defaults | Sites |\n|---|---|---|---|---|---|---|"
-        )
-        for k in sel[:150]:
-            i = k.info
-            a(
-                f"| `{k.key}` | {i.get('sdk_class', '')[:2]} | {','.join(i['repos'])} | {','.join(i['w_layers'] + i['decl_layers'])} | {','.join(i['r_layers'])} | "
-                f"{'; '.join(('<redacted>' if k.sensitive else d) for d in i['defaults'])[:60]} | {' ; '.join(i['w_sites'][:1] + i['r_sites'][:1])} |"
-            )
+        f_rows = [
+            f"| `{k.key}` | {k.info.get('sdk_class', '')[:2]} | {','.join(k.info['repos'])} | {','.join(k.info['w_layers'] + k.info['decl_layers'])} | {','.join(k.info['r_layers'])} | "
+            f"{'; '.join(('<redacted>' if k.sensitive else d) for d in k.info['defaults'])[:60]} | {' ; '.join(k.info['w_sites'][:1] + k.info['r_sites'][:1])} |"
+            for k in sel[:150]
+        ]
         if len(sel) > 150:
-            a(f"\n… {len(sel) - 150} more in env_inventory.csv\n")
-        a("")
-    a("## Service contract check (common/security/registry.SERVICES)\n")
-    a(
-        "| Service | manifest keys | ctmpl keys | compose keys | code reads | ctmpl not in manifest | store keys not rendered | first-party compose keys outside contract | code reads (no default) declared nowhere |\n|---|---:|---:|---:|---:|---|---|---|---|"
-    )
-    for r in rows:
-        a(
-            f"| {r['service']} ({r['directory']}) | {r['manifest_keys']} | {r['ctmpl_keys']} | {r['compose_keys']} | {r['code_reads']} | "
-            f"{', '.join(r['ctmpl_not_in_manifest']) or '–'} | {', '.join(r['store_key_not_rendered']) or '–'} | "
-            f"{', '.join(r['compose_first_party_not_in_manifest'][:8]) or '–'}{' …' if len(r['compose_first_party_not_in_manifest']) > 8 else ''} | "
-            f"{', '.join(r['code_reads_not_declared'][:8]) or '–'}{' …' if len(r['code_reads_not_declared']) > 8 else ''} |"
+            f_rows.append(f"\n… {len(sel) - 150} more in env_inventory.csv\n")
+        _tbl(
+            "| Key | Class | Repos | Written by | Read by | Defaults | Sites |",
+            "|---|---|---|---|---|---|---|",
+            f_rows,
         )
+    a("## Service contract check (common/security/registry.SERVICES)\n")
+    svc_rows = [
+        f"| {r['service']} ({r['directory']}) | {r['manifest_keys']} | {r['ctmpl_keys']} | {r['compose_keys']} | {r['code_reads']} | "
+        f"{', '.join(r['ctmpl_not_in_manifest']) or '–'} | {', '.join(r['store_key_not_rendered']) or '–'} | "
+        f"{', '.join(r['compose_first_party_not_in_manifest'][:8]) or '–'}{' …' if len(r['compose_first_party_not_in_manifest']) > 8 else ''} | "
+        f"{', '.join(r['code_reads_not_declared'][:8]) or '–'}{' …' if len(r['code_reads_not_declared']) > 8 else ''} |"
+        for r in rows
+    ]
+    _tbl(
+        "| Service | manifest keys | ctmpl keys | compose keys | code reads | ctmpl not in manifest | store keys not rendered | first-party compose keys outside contract | code reads (no default) declared nowhere |",
+        "|---|---:|---:|---:|---:|---|---|---|---|",
+        svc_rows,
+    )
     (out / "env_inventory.md").write_text("\n".join(md) + "\n")
     return flag_counts
 

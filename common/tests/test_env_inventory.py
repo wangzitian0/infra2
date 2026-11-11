@@ -27,6 +27,11 @@ def w(root: Path, rel: str, body: str) -> None:
     p.write_text(textwrap.dedent(body).lstrip("\n"))
 
 
+def write_tree(root: Path, files: dict[str, str]) -> None:
+    for rel, body in files.items():
+        w(root, rel, body)
+
+
 @pytest.fixture()
 def inv(tmp_path):
     w(
@@ -866,216 +871,145 @@ def keys(tmp_path):
     db_pw_real_k = "DB_" + "PASSWORD_REAL"
     db_pw_dummy_k = "DB_" + "PASSWORD_DUMMY"
     dev_pw_k = "DEV_ONLY_" + "PASSWORD"
-    w(
+    write_tree(
         tmp_path,
-        "svc/compose.yaml",
-        f"""
-        services:
-          app:
-            build: .
-            environment:
-              {pw_real_k}: {pw_real_v}
-              {pw_dummy_k}: {pw_dummy_v}
-              GOOD_PASSWORD: ${{GOOD_PASSWORD}}
-              WRITE_ONLY: x
-              CONSUMED: y
-              ENV: ${{ENV:-production}}
-          db:
-            image: postgres:16
-            environment:
-              POSTGRES_USER: admin
-              THIRD_PARTY_ONLY: z
-    """,
-    )
-    w(
-        tmp_path,
-        "svc/app.py",
-        """
-        import os
-        a = os.environ["REQ_NO_SUPPLY"]
-        b = os.environ.get("OPT_NO_SUPPLY")
-        c = os.environ.get("ONLY_DEFAULT", "x")
-        d = os.environ.get("CONSUMED")
-        e = os.environ["RVD"]
-        f = os.environ.get("RVD", "d")
-        g = os.environ.get("ALIAS_ONE") or os.environ.get("ALIAS_TWO")
-        h = os.environ["SOME_API_KEY"]
-        i = os.environ.get("GOOD_PASSWORD")
-        k = os.environ.get("ENV", "production")
-        l = os.environ.get("SUPPLIED_BY_WORKFLOW")
-        m = os.environ.get("ALIASED_API_KEY")
-        n = os.environ.get("SECRETS_ENV_FILE")
-    """,
-    )
-    w(
-        tmp_path,
-        "svc/switch.py",
-        """
-        import os
-        a = os.environ.get("TEST_ONLY_SWITCH")
-        b = os.environ["GITHUB_EVENT_NAME"]
-        c = os.environ.get("GITHUB_EVENT_NAME", "x")
-    """,
-    )
-    w(
-        tmp_path,
-        "svc/tests/test_switch.py",
-        """
-        def test_x(monkeypatch):
-            monkeypatch.setenv("TEST_ONLY_SWITCH", "1")
-    """,
-    )
-    w(
-        tmp_path,
-        "svc/tests/test_reads.py",
-        """
-        import os
-        def test_y():
-            assert os.environ.get("WRITTEN_FOR_TESTS_ONLY")
-    """,
-    )
-    w(
-        tmp_path,
-        ".github/workflows/infra-ci.yml",
-        """
-        name: y
-        jobs:
-          j:
-            runs-on: ubuntu-latest
-            env:
-              WRITTEN_FOR_TESTS_ONLY: "1"
-              GO111MODULE: "on"
-            steps:
-              - run: echo hi
-    """,
-    )
-    w(
-        tmp_path,
-        "tp/env.manifest.json",
-        '{"fields": [{"env": "TP_DECLARED_ONLY", "source": "runtime", "sensitive": true}]}',
-    )
-    w(
-        tmp_path,
-        "svc/compose-reader.yaml",
-        """
-        services:
-          reader:
-            build: .
-            container_name: reader
-            environment:
-              SHELL_READ_VIA_DOLLARS: "1"
-            command: sh -c 'echo $$SHELL_READ_VIA_DOLLARS'
-    """,
-    )
-    w(
-        tmp_path,
-        "svc/compose.defaults.yaml",
-        f"""
-        services:
-          pw:
-            build: .
-            container_name: pw
-            environment:
-              {db_pw_real_k}: ${{{db_pw_real_k}:-{pw_real_v}}}
-              {db_pw_dummy_k}: ${{{db_pw_dummy_k}:-changeme}}
-              DB_PASSWORD_REF: ${{DB_PASSWORD_REF:-${{OTHER_PASSWORD_REF}}}}
-    """,
-    )
-    w(
-        tmp_path,
-        "docker-compose.yml",
-        f"""
-        services:
-          dev:
-            build: .
-            environment:
-              {dev_pw_k}: ${{{dev_pw_k}:-{pw_real_v}}}
-    """,
-    )
-    w(
-        tmp_path,
-        "tools/probe_tool.py",
-        """
-        import os
-        a = os.environ.get("TOOL_ONLY_ENV", "production")
-        b = os.environ.get("TOOL_ONLY_SHA", "unknown")
-    """,
-    )
-    w(
-        tmp_path,
-        "common/deploy/ident.py",
-        """
-        import os
-        a = os.environ.get("DEPLOYED_ONLY_ENV", "production")
-        c = os.environ.get("RELEASE_SHA", "unknown")
-    """,
-    )
-    w(
-        tmp_path,
-        "svc/other.py",
-        """
-        import os
-        a = os.environ.get("CONFLICT_K", "1")
-        b = os.environ.get("COPIED_K", "same")
-    """,
-    )
-    w(
-        tmp_path,
-        "svc/third.py",
-        """
-        import os
-        a = os.environ.get("CONFLICT_K", "2")
-        b = os.environ.get("COPIED_K", "same")
-    """,
-    )
-    w(
-        tmp_path,
-        "svc/secrets.ctmpl",
-        """
-        {{- with secret "secret/data/p/e/svc" -}}
-        FP_SECRET_KEY={{ .Data.data.a }}
-        MAN_ONLY_KEY={{ .Data.data.b }}
-        {{- end }}
-    """,
-    )
-    w(
-        tmp_path,
-        "tp/compose.yaml",
-        """
-        services:
-          thirdparty:
-            image: some/thirdparty:1
-            environment:
-              TP_PLAIN: x
-    """,
-    )
-    w(
-        tmp_path,
-        "tp/secrets.ctmpl",
-        """
-        {{- with secret "secret/data/p/e/tp" -}}
-        TP_SECRET_KEY={{ .Data.data.k }}
-        {{- end }}
-    """,
-    )
-    w(
-        tmp_path,
-        "svc/env.manifest.json",
-        '{"fields": [{"env": "DEAD_ENTRY", "source": "code"}, {"env": "CONSUMED", "source": "code"}, {"env": "GOOD_PASSWORD", "source": "runtime", "sensitive": true}, {"env": "MAN_ONLY_KEY", "source": "runtime", "sensitive": true}, {"env": "MAIN_API_KEY", "aliases": ["ALIASED_API_KEY"], "source": "runtime", "sensitive": true}]}',
-    )
-    w(
-        tmp_path,
-        ".github/workflows/ops-checks.yml",
-        """
-        name: x
-        jobs:
-          j:
-            runs-on: ubuntu-latest
-            env:
-              SUPPLIED_BY_WORKFLOW: yes
-            steps:
-              - run: echo hi
-    """,
+        {
+            "svc/compose.yaml": f"""
+            services:
+              app:
+                build: .
+                environment:
+                  {pw_real_k}: {pw_real_v}
+                  {pw_dummy_k}: {pw_dummy_v}
+                  GOOD_PASSWORD: ${{GOOD_PASSWORD}}
+                  WRITE_ONLY: x
+                  CONSUMED: y
+                  ENV: ${{ENV:-production}}
+              db:
+                image: postgres:16
+                environment:
+                  POSTGRES_USER: admin
+                  THIRD_PARTY_ONLY: z
+            """,
+            "svc/app.py": """
+            import os
+            a = os.environ["REQ_NO_SUPPLY"]
+            b = os.environ.get("OPT_NO_SUPPLY")
+            c = os.environ.get("ONLY_DEFAULT", "x")
+            d = os.environ.get("CONSUMED")
+            e = os.environ["RVD"]
+            f = os.environ.get("RVD", "d")
+            g = os.environ.get("ALIAS_ONE") or os.environ.get("ALIAS_TWO")
+            h = os.environ["SOME_API_KEY"]
+            i = os.environ.get("GOOD_PASSWORD")
+            k = os.environ.get("ENV", "production")
+            l = os.environ.get("SUPPLIED_BY_WORKFLOW")
+            m = os.environ.get("ALIASED_API_KEY")
+            n = os.environ.get("SECRETS_ENV_FILE")
+            """,
+            "svc/switch.py": """
+            import os
+            a = os.environ.get("TEST_ONLY_SWITCH")
+            b = os.environ["GITHUB_EVENT_NAME"]
+            c = os.environ.get("GITHUB_EVENT_NAME", "x")
+            """,
+            "svc/tests/test_switch.py": """
+            def test_x(monkeypatch):
+                monkeypatch.setenv("TEST_ONLY_SWITCH", "1")
+            """,
+            "svc/tests/test_reads.py": """
+            import os
+            def test_y():
+                assert os.environ.get("WRITTEN_FOR_TESTS_ONLY")
+            """,
+            ".github/workflows/infra-ci.yml": """
+            name: y
+            jobs:
+              j:
+                runs-on: ubuntu-latest
+                env:
+                  WRITTEN_FOR_TESTS_ONLY: "1"
+                  GO111MODULE: "on"
+                steps:
+                  - run: echo hi
+            """,
+            "tp/env.manifest.json": '{"fields": [{"env": "TP_DECLARED_ONLY", "source": "runtime", "sensitive": true}]}',
+            "svc/compose-reader.yaml": """
+            services:
+              reader:
+                build: .
+                container_name: reader
+                environment:
+                  SHELL_READ_VIA_DOLLARS: "1"
+                command: sh -c 'echo $$SHELL_READ_VIA_DOLLARS'
+            """,
+            "svc/compose.defaults.yaml": f"""
+            services:
+              pw:
+                build: .
+                container_name: pw
+                environment:
+                  {db_pw_real_k}: ${{{db_pw_real_k}:-{pw_real_v}}}
+                  {db_pw_dummy_k}: ${{{db_pw_dummy_k}:-changeme}}
+                  DB_PASSWORD_REF: ${{DB_PASSWORD_REF:-${{OTHER_PASSWORD_REF}}}}
+            """,
+            "docker-compose.yml": f"""
+            services:
+              dev:
+                build: .
+                environment:
+                  {dev_pw_k}: ${{{dev_pw_k}:-{pw_real_v}}}
+            """,
+            "tools/probe_tool.py": """
+            import os
+            a = os.environ.get("TOOL_ONLY_ENV", "production")
+            b = os.environ.get("TOOL_ONLY_SHA", "unknown")
+            """,
+            "common/deploy/ident.py": """
+            import os
+            a = os.environ.get("DEPLOYED_ONLY_ENV", "production")
+            c = os.environ.get("RELEASE_SHA", "unknown")
+            """,
+            "svc/other.py": """
+            import os
+            a = os.environ.get("CONFLICT_K", "1")
+            b = os.environ.get("COPIED_K", "same")
+            """,
+            "svc/third.py": """
+            import os
+            a = os.environ.get("CONFLICT_K", "2")
+            b = os.environ.get("COPIED_K", "same")
+            """,
+            "svc/secrets.ctmpl": """
+            {{- with secret "secret/data/p/e/svc" -}}
+            FP_SECRET_KEY={{ .Data.data.a }}
+            MAN_ONLY_KEY={{ .Data.data.b }}
+            {{- end }}
+            """,
+            "tp/compose.yaml": """
+            services:
+              thirdparty:
+                image: some/thirdparty:1
+                environment:
+                  TP_PLAIN: x
+            """,
+            "tp/secrets.ctmpl": """
+            {{- with secret "secret/data/p/e/tp" -}}
+            TP_SECRET_KEY={{ .Data.data.k }}
+            {{- end }}
+            """,
+            "svc/env.manifest.json": '{"fields": [{"env": "DEAD_ENTRY", "source": "code"}, {"env": "CONSUMED", "source": "code"}, {"env": "GOOD_PASSWORD", "source": "runtime", "sensitive": true}, {"env": "MAN_ONLY_KEY", "source": "runtime", "sensitive": true}, {"env": "MAIN_API_KEY", "aliases": ["ALIASED_API_KEY"], "source": "runtime", "sensitive": true}]}',
+            ".github/workflows/ops-checks.yml": """
+            name: x
+            jobs:
+              j:
+                runs-on: ubuntu-latest
+                env:
+                  SUPPLIED_BY_WORKFLOW: yes
+                steps:
+                  - run: echo hi
+            """,
+        },
     )
     inv_ = envinv.run({"fx": tmp_path})
     k, *_ = envreport.analyze(inv_)
@@ -1196,6 +1130,46 @@ def _is_deployed_site(o: envinv.Occ) -> bool:
     return base in envinv.DEPLOYED_LAYERS or (
         base == "py-env-read" and bool(envinv.DEPLOYED_CODE.match(o.path))
     )
+
+
+def _mk_occ(
+    key: str,
+    layer: str = "compose-interp",
+    path: str = "platform/12.alerting/compose.yaml",
+    line: int = 179,
+    role: str = "read",
+    scope: str = "prod",
+    default: str | None = None,
+    has_default: bool | None = None,
+    repo: str = "infra2",
+) -> envinv.Occ:
+    return envinv.Occ(
+        key=key,
+        role=role,
+        layer=layer,
+        repo=repo,
+        path=path,
+        line=line,
+        scope=scope,
+        default=default,
+        has_default=has_default if has_default is not None else (default is not None),
+        required=False,
+    )
+
+
+def _mk_k(
+    key: str,
+    flags: list[str] | None = None,
+    w_layers: list[str] | None = None,
+    occ: list[envinv.Occ] | None = None,
+    info: dict | None = None,
+) -> envinv.K:
+    info_dict = (
+        info
+        if info is not None
+        else ({"w_layers": w_layers} if w_layers is not None else None)
+    )
+    return envinv.K(key=key, flags=flags or [], occ=occ or [], info=info_dict)
 
 
 def g2_violations(keys_map: dict[str, envinv.K]) -> dict[str, list[str]]:
@@ -1355,7 +1329,10 @@ def test_the_app_manifests_are_counted_once_under_the_app_name(repo_scan):
     } <= manifest_paths
 
 
-def test_g1_mutation_rejects_undeclared_compose_or_ctmpl_or_unrendered_store_key():
+@pytest.mark.parametrize("field", G1_FIELDS)
+def test_g1_mutation_rejects_undeclared_compose_or_ctmpl_or_unrendered_store_key(
+    field: str,
+) -> None:
     assert "_EMPTY_ROWS" in g1_violations([])
     clean_row = {
         "service": "platform/todo",
@@ -1365,92 +1342,43 @@ def test_g1_mutation_rejects_undeclared_compose_or_ctmpl_or_unrendered_store_key
         "compose_first_party_not_in_manifest": [],
     }
     assert g1_violations([clean_row]) == {}
-    for field in G1_FIELDS:
-        mutated = copy.deepcopy(clean_row)
-        mutated[field] = ["MUTATED_UNDECLARED_KEY"]
-        assert g1_violations([mutated]) == {
-            "platform/todo (platform/30.todo)": {field: ["MUTATED_UNDECLARED_KEY"]}
-        }
+    mutated = copy.deepcopy(clean_row)
+    mutated[field] = ["MUTATED_UNDECLARED_KEY"]
+    assert g1_violations([mutated]) == {
+        "platform/todo (platform/30.todo)": {field: ["MUTATED_UNDECLARED_KEY"]}
+    }
 
 
 def test_g2_mutation_rejects_failopen_env_default_and_retired_heartbeat_env():
     assert "_EMPTY_ENV_TIER" in g2_violations({})
-    clean_env = envinv.K(
-        key="ENV",
+    clean_env = _mk_k(
+        "ENV",
         occ=[
-            envinv.Occ(
-                key="ENV",
-                role="read",
-                layer="compose-interp",
-                repo="infra2",
-                path="platform/12.alerting/compose.yaml",
-                line=179,
-                scope="prod",
-                default=None,
-                has_default=False,
-                required=False,
-            ),
-            envinv.Occ(
-                key="ENV",
-                role="read",
-                layer="compose-interp",
-                repo="infra2",
+            _mk_occ("ENV", default=None),
+            _mk_occ(
+                "ENV",
                 path="common/tests/fixtures/compose.yaml",
                 line=10,
                 scope="test",
                 default="production",
-                has_default=True,
-                required=False,
             ),
         ],
     )
     assert g2_violations({"ENV": clean_env}) == {}
 
-    failopen_env = envinv.K(
-        key="ENV",
-        occ=[
-            envinv.Occ(
-                key="ENV",
-                role="read",
-                layer="compose-interp",
-                repo="infra2",
-                path="platform/12.alerting/compose.yaml",
-                line=179,
-                scope="prod",
-                default="production",
-                has_default=True,
-                required=False,
-            )
-        ],
+    failopen_env = _mk_k("ENV", occ=[_mk_occ("ENV", default="production")])
+    nested_failopen = _mk_k(
+        "INFRA_ENVIRONMENT",
+        occ=[_mk_occ("INFRA_ENVIRONMENT", line=180, default="${ENV:-production}")],
     )
-    nested_failopen = envinv.K(
-        key="INFRA_ENVIRONMENT",
+    retired_hb = _mk_k(
+        "INFRA_PROBE_HEARTBEAT_ENV",
         occ=[
-            envinv.Occ(
-                key="INFRA_ENVIRONMENT",
-                role="read",
-                layer="compose-interp",
-                repo="infra2",
-                path="platform/12.alerting/compose.yaml",
-                line=180,
-                scope="prod",
-                default="${ENV:-production}",
-                has_default=True,
-                required=False,
-            )
-        ],
-    )
-    retired_hb = envinv.K(
-        key="INFRA_PROBE_HEARTBEAT_ENV",
-        occ=[
-            envinv.Occ(
-                key="INFRA_PROBE_HEARTBEAT_ENV",
-                role="read",
+            _mk_occ(
+                "INFRA_PROBE_HEARTBEAT_ENV",
                 layer="py-env-read",
-                repo="infra2",
                 path="common/observability/probe_environment.py",
                 line=27,
-                scope="prod",
             )
         ],
     )
@@ -1465,57 +1393,52 @@ def test_g2_mutation_rejects_failopen_env_default_and_retired_heartbeat_env():
 
 
 def test_placeholder_regex_and_expanded_g2_g3_mutations():
-    for leaked in (
+    leaks = (
         "admin-s3cr3t9fQ",
         "postgres8xKd02",
         "testA1b2C3d4E5",
         "local-prod-key-7d1a",
         "dummy-12345678",
-    ):
-        assert not envinv.PLACEHOLDER.match(leaked), leaked
-    for valid_placeholder in (
+    )
+    assert [x for x in leaks if envinv.PLACEHOLDER.match(x)] == []
+    valid = (
         "dummy-op-connect-token",
         "ci-placeholder-do-not-use-in-production",
         "changeme",
         "postgres",
         "minioadmin",
         "${SECRET_REF}",
-    ):
-        assert envinv.PLACEHOLDER.match(valid_placeholder), valid_placeholder
+    )
+    assert [x for x in valid if not envinv.PLACEHOLDER.match(x)] == []
 
-    py_failopen_env = envinv.K(
-        key="ENV",
+    py_failopen_env = _mk_k(
+        "ENV",
         occ=[
-            envinv.Occ(
-                key="ENV",
-                role="read",
+            _mk_occ(
+                "ENV",
                 layer="py-env-read",
-                repo="infra2",
                 path="common/deploy/sync_pipeline.py",
                 line=164,
-                scope="prod",
                 default="production",
-                has_default=True,
-                required=False,
             )
         ],
     )
     assert "ENV" in g2_violations({"ENV": py_failopen_env})
 
-    py_dead_write = envinv.K(
-        key="INFRA_COMPONENT",
+    py_dead_write = _mk_k(
+        "INFRA_COMPONENT",
         flags=["WRITE_NO_READER"],
-        info={"w_layers": ["py-deploy-env"]},
+        w_layers=["py-deploy-env"],
     )
-    conflict_k = envinv.K(
-        key="DEPLOY_TIMEOUT",
+    conflict_k = _mk_k(
+        "DEPLOY_TIMEOUT",
         flags=["DEFAULT_CONFLICT"],
-        info={"w_layers": ["compose"]},
+        w_layers=["compose"],
     )
-    copied_k = envinv.K(
-        key="GIT_BRANCH",
+    copied_k = _mk_k(
+        "GIT_BRANCH",
         flags=["DEFAULT_COPIED"],
-        info={"w_layers": ["compose"]},
+        w_layers=["compose"],
     )
     g3 = g3_violations(
         {k.key: k for k in (py_dead_write, conflict_k, copied_k)},
@@ -1528,31 +1451,19 @@ def test_placeholder_regex_and_expanded_g2_g3_mutations():
 
 def test_g3_mutation_rejects_dead_writes_and_stale_declarations_and_doc_only():
     assert "_EMPTY_KEYS_MAP" in g3_violations({}, {})
-    clean_k = envinv.K(
-        key="ENV",
-        flags=[],
-        info={"w_layers": ["compose"]},
-    )
+    clean_k = _mk_k("ENV", w_layers=["compose"])
     assert g3_violations({"ENV": clean_k}, {}) == {}
-    dead_wf = envinv.K(
-        key="DOKPLOY_ROUTE_CANARY_HOST",
+    dead_wf = _mk_k(
+        "DOKPLOY_ROUTE_CANARY_HOST",
         flags=["WRITE_NO_READER"],
-        info={"w_layers": ["workflow-env"]},
+        w_layers=["workflow-env"],
     )
-    dead_man = envinv.K(
-        key="ANTHROPIC_API_KEY",
-        flags=["DEAD_MANIFEST_ENTRY"],
-        info=None,
-    )
-    stale_ex = envinv.K(
-        key="AI_DAILY_LIMIT_USD",
-        flags=["STALE_ENV_EXAMPLE"],
-        info={"w_layers": []},
-    )
-    secret_def = envinv.K(
-        key="REAL_SECRET_PASSWORD",
+    dead_man = _mk_k("ANTHROPIC_API_KEY", flags=["DEAD_MANIFEST_ENTRY"])
+    stale_ex = _mk_k("AI_DAILY_LIMIT_USD", flags=["STALE_ENV_EXAMPLE"], w_layers=[])
+    secret_def = _mk_k(
+        "REAL_SECRET_PASSWORD",
         flags=["SECRET_DEFAULT", "SECRET_LITERAL"],
-        info={"w_layers": ["compose"]},
+        w_layers=["compose"],
     )
     v = g3_violations(
         {k.key: k for k in (dead_wf, dead_man, stale_ex, secret_def)},
