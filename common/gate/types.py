@@ -96,9 +96,10 @@ def _parse_once(loader: Callable[[str], object], text: str) -> object:
 def safe_load_text(yaml_mod, text: str) -> object:
     """Return ``yaml_mod.safe_load(text)``; parse each (loader, text) pair once (#1602).
 
-    The key is the ``safe_load`` function and the text, not a path. A test that
-    replaces ``ROOT``, ``yaml`` or ``yaml.safe_load`` gets a new parse. A parse that
-    raises is not stored. The caller gets a deep copy, so a caller that changes the
+    The key is the ``safe_load`` function and the text, not a path. A new loader
+    (a test that replaces ``yaml`` or ``yaml.safe_load``) gets a new parse. A test
+    that replaces ``ROOT`` gets a new parse only when the text differs; the same text
+    gives the same value. A parse that raises is not stored. The caller gets a deep copy, so a caller that changes the
     result cannot change the result of a later call.
     """
     loader = yaml_mod.safe_load
