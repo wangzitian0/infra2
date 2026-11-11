@@ -13,6 +13,7 @@
 | **门禁逻辑** | `infra2_sdk.ci` (`read_coverage_summary`, `load_baseline`, `write_baseline`, `check_no_regression`) | 解析 Cobertura XML、加载/写入基线、判定是否退化 |
 | **CLI 入口** | [`tools/coverage_regression_audit.py`](https://github.com/wangzitian0/infra2/blob/main/tools/coverage_regression_audit.py) | PR 门禁调用的命令 |
 | **生成命令** | `infra-ci.yml` 的 `test-unit-shard`（矩阵分片，数量只在 `matrix.shard` 声明）与 `test-deployer-logic`（`coverage combine`） | 每个分片 `pytest --cov=common --cov=tools`；终态任务 `coverage xml -o coverage/infra2-coverage.xml` |
+| **分片规则** | [`common/ci_plugins/pytest_shard.py`](https://github.com/wangzitian0/infra2/blob/main/common/ci_plugins/pytest_shard.py) + `shard_weights.json` | Each test file belongs to one shard, assigned by measured seconds before collection (#1602). A stale weight changes only the balance. Regenerate the weights with the command in the plugin docstring. |
 
 ---
 
