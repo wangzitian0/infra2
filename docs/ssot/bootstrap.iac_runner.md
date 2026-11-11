@@ -586,7 +586,7 @@ INFRA2_DEPLOY_SHA=$(git rev-parse HEAD) bash scripts/deploy_iac_runner_bootstrap
 
 **Automated post-merge update**:
 
-When `bootstrap/06.iac_runner/**` changes on `main`, GitHub Actions runs
+When `bootstrap/06.iac_runner/**` changes on `main`, the production run of the release train (`reconcile-iac-inputs.yml` with `promote_prod=true`, approved by the owner; #1486) runs
 `scripts/deploy_iac_runner_bootstrap.sh` on the VPS before the normal
 `/deploy` call. The script resolves the live Dokploy compose project from the
 `iac-runner` container label, checks out only the paths the runner image

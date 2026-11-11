@@ -869,9 +869,10 @@ def test_reconcile_workflow_folds_in_bootstrap_and_observability_apply_on_promot
     None
 ):
     """#1416 & #1486: reconcile-iac-inputs.yml runs the health-gated in-train IaC Runner
-    bootstrap update (before tools.reconcile_iac_inputs) on non-dry-run reconciles in both
-    Stage 2 staging soak and Stage 3 prod promotion, and folds in the SigNoz observability
-    apply (after tools.reconcile_iac_inputs) when promote_prod=true."""
+    bootstrap update (before tools.reconcile_iac_inputs) in the Stage 3 prod promotion only
+    (the shared runner is production; owner decision 2026-11-11), and folds in the SigNoz
+    observability apply (after tools.reconcile_iac_inputs) when promote_prod=true. The
+    behaviour of the update block is tested by running it below."""
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     job = workflow["jobs"]["reconcile"]
     assert job["env"]["SIGNOZ_API_KEY"] == "${{ secrets.SIGNOZ_API_KEY }}"
@@ -903,6 +904,144 @@ def test_reconcile_workflow_folds_in_bootstrap_and_observability_apply_on_promot
     alerts_idx = obs_script.index("fr-observability.shared.apply-alerts")
     dashboard_idx = obs_script.index("fr-observability.shared.apply-dashboard")
     assert alerts_idx < dashboard_idx
+
+
+def _runner_bootstrap_block() -> str:
+    """The bash of the in-train runner update, cut out of the real workflow step."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["reconcile"]["steps"]
+    script = next(
+        step["run"]
+        for step in steps
+        if step.get("name") == "Reconcile changed IaC inputs"
+    )
+    start = script.index("# IaC Runner Bootstrap Update")
+    end = script.index("\nargs=(--after")
+    return script[start:end]
+
+
+def _run_runner_block(
+    tmp_path: Path,
+    *,
+    promote_prod: bool,
+    changed_files: str,
+    with_ssh_credentials: bool = True,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    """Run the update block with stubbed ssh, curl and sleep; return the run and the ssh calls."""
+    import os
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ssh_log = tmp_path / "ssh.log"
+    (bin_dir / "ssh").write_text(
+        f'#!/bin/sh\necho "$*" >> "{ssh_log}"\ncat > /dev/null\n', encoding="utf-8"
+    )
+    (bin_dir / "curl").write_text(
+        "#!/bin/sh\n"
+        'while [ "$#" -gt 0 ]; do\n'
+        '  if [ "$1" = "-o" ]; then echo ok > "$2"; fi\n'
+        "  shift\n"
+        "done\n"
+        "printf 200\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "sleep").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    for name in ("ssh", "curl", "sleep"):
+        (bin_dir / name).chmod(0o755)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    (repo / "f.txt").write_text("x")
+    _git(repo, "add", "f.txt")
+    _git(repo, "commit", "-q", "-m", "one")
+    _git(repo, "tag", "v9.9.9")
+    # The block feeds this file to ssh on stdin (the real one is read by the stub).
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "deploy_iac_runner_bootstrap.sh").write_text("true\n")
+    home = tmp_path / "home"
+    home.mkdir()
+    header = (
+        'dry_run="false"\n'
+        f'promote_prod="{"true" if promote_prod else "false"}"\n'
+        'after="v9.9.9"\n'
+        f"changed_files={changed_files!r}\n"
+        'IAC_RUNNER_URL="https://runner.example"\n'
+    )
+    env = {
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "HOME": str(home),
+        "INFRA2_WATCHDOG_SSH_PRIVATE_KEY": "key" if with_ssh_credentials else "",
+        "INFRA2_WATCHDOG_SSH_HOST": "host.example" if with_ssh_credentials else "",
+        "INFRA2_WATCHDOG_SSH_USER": "root" if with_ssh_credentials else "",
+    }
+    result = subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", header + _runner_bootstrap_block()],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    calls = ssh_log.read_text().splitlines() if ssh_log.exists() else []
+    return result, calls
+
+
+_RUNNER_CHANGE = "bootstrap/06.iac_runner/Dockerfile\ndocs/README.md"
+
+
+def test_runner_bootstrap_update_waits_for_the_production_run(tmp_path) -> None:
+    """#1486, owner decision 2026-11-11: the shared iac-runner is production. A staging soak
+    whose release changes the runner files must not rebuild it; it says why and goes on."""
+    result, ssh_calls = _run_runner_block(
+        tmp_path, promote_prod=False, changed_files=_RUNNER_CHANGE
+    )
+    assert result.returncode == 0, result.stderr
+    assert ssh_calls == []
+    assert "::notice::The IaC Runner bootstrap changed in this release" in result.stdout
+    assert "Deploy IaC Runner bootstrap changes" not in result.stdout
+
+
+def test_runner_bootstrap_update_runs_in_the_production_run(tmp_path) -> None:
+    result, ssh_calls = _run_runner_block(
+        tmp_path, promote_prod=True, changed_files=_RUNNER_CHANGE
+    )
+    assert result.returncode == 0, result.stderr
+    assert len(ssh_calls) == 1
+    assert "root@host.example" in ssh_calls[0]
+    assert "INFRA2_DEPLOY_SHA=" in ssh_calls[0]
+    assert (
+        "IaC Runner public health attempt 1/12: url=https://runner.example/health status=200"
+        in result.stdout
+    )
+    assert "::notice::" not in result.stdout
+
+
+@pytest.mark.parametrize("promote_prod", [False, True])
+def test_runner_bootstrap_update_is_silent_when_no_runner_file_changed(
+    tmp_path, promote_prod
+) -> None:
+    result, ssh_calls = _run_runner_block(
+        tmp_path, promote_prod=promote_prod, changed_files="docs/README.md\ncommon/x.py"
+    )
+    assert result.returncode == 0, result.stderr
+    assert ssh_calls == []
+    assert "::notice::" not in result.stdout
+
+
+def test_production_runner_update_refuses_to_run_without_ssh_credentials(
+    tmp_path,
+) -> None:
+    """A production run with runner changes and no credentials fails closed: it does not
+    skip the update and go on to deploy services on an old runner."""
+    result, ssh_calls = _run_runner_block(
+        tmp_path,
+        promote_prod=True,
+        changed_files=_RUNNER_CHANGE,
+        with_ssh_credentials=False,
+    )
+    assert result.returncode == 1
+    assert "INFRA2_WATCHDOG_SSH_PRIVATE_KEY is required" in result.stdout
+    assert ssh_calls == []
 
 
 def test_post_deploy_app_hooks_execute_smoke_and_record_results(
