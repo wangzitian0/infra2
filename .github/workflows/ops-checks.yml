@@ -120,7 +120,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version-file: .python-version
 
       - name: Install uv
         uses: astral-sh/setup-uv@v8.3.2
@@ -295,7 +295,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version-file: .python-version
 
       - name: Install Python dependencies
         run: |
@@ -443,7 +443,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version-file: .python-version
 
       - name: Install Python dependencies
         run: |
@@ -520,7 +520,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version-file: .python-version
 
       - name: Install runtime dependencies
         run: |
@@ -593,7 +593,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version-file: .python-version
 
       - name: Install runtime dependencies
         run: |
@@ -682,7 +682,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version-file: .python-version
 
       - name: Install runtime dependencies
         run: |
@@ -811,7 +811,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version-file: .python-version
 
       - name: Install runtime dependencies
         run: |
@@ -969,7 +969,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version-file: .python-version
       - name: Install runtime dependencies
         run: |
           sdk_requirement="$(python tools/sdk_requirement.py)"
@@ -1087,7 +1087,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version-file: .python-version
 
       - name: Install uv
         uses: astral-sh/setup-uv@v8.3.2
