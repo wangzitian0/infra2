@@ -588,7 +588,10 @@ def test_promotion_guard_workflow_passes_cumulative_require_staging_gate() -> No
     assert "--print-changed-app-releases" in script
     assert "--since-tag" in script
     assert "--require-staging-gate" in script
-    assert 'changed_app_releases="$(python -m tools.reconcile_iac_inputs --print-changed-app-releases' in script
+    assert (
+        'changed_app_releases="$(python -m tools.reconcile_iac_inputs --print-changed-app-releases'
+        in script
+    )
     assert "< <(" not in script
     assert 'python -m tools.promotion_soak_guard "$after" "${gate_args[@]}"' in script
 

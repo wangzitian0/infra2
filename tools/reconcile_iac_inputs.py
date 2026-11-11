@@ -76,7 +76,7 @@ from infra2_sdk.deploy import DeployRequest
 from infra2_sdk.manifests import (
     FORBIDDEN_HOOK_ENV_NAMES,
     FORBIDDEN_HOOK_ENV_PREFIXES,
-    STAGE_HOOK_PLANS,
+    STAGE_HOOK_PLANS,  # noqa: F401
     HookRunResult,
     StageHookPlan,  # noqa: F401
     build_hook_env,
@@ -1350,6 +1350,7 @@ def run_post_deploy_app_hooks(
         or part.strip() in local_manifests
         or part.strip() in LOCAL_SERVICE_HOOK_MANIFESTS
     }
+
     def _run_for_service(service: str) -> list[dict[str, object]]:
         rel_local = local_manifests.get(service) or LOCAL_SERVICE_HOOK_MANIFESTS.get(
             service
@@ -1446,7 +1447,9 @@ def run_post_deploy_app_hooks(
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=len(services_sorted)
         ) as pool:
-            futures = {svc: pool.submit(_run_for_service, svc) for svc in services_sorted}
+            futures = {
+                svc: pool.submit(_run_for_service, svc) for svc in services_sorted
+            }
             for svc in services_sorted:
                 hook_results.extend(futures[svc].result())
     if (

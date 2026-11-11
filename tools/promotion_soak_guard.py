@@ -55,6 +55,7 @@ def _tag_key(tag: str) -> tuple[int, int, int] | None:
         return None
     return int(m.group(1)), int(m.group(2)), int(m.group(3))
 
+
 GREEN = "green"
 EMPTY = "empty"
 NOT_GREEN = "not_green"
@@ -450,7 +451,13 @@ class GhClient:
             with zipfile.ZipFile(io.BytesIO(raw_zip)) as zf:
                 payload_text = zf.read(RECONCILE_RESULT_JSON).decode("utf-8")
             return _parse_hook_results_json(payload_text)
-        except (OSError, zipfile.BadZipFile, KeyError, UnicodeDecodeError, ValueError) as exc:
+        except (
+            OSError,
+            zipfile.BadZipFile,
+            KeyError,
+            UnicodeDecodeError,
+            ValueError,
+        ) as exc:
             raise LookupFailed(
                 f"gh api {zip_path}: unreadable {RECONCILE_RESULT_JSON} ({exc})"
             ) from exc
@@ -461,7 +468,9 @@ class GhClient:
         """Collect ``hook_results`` from concluded green push runs in ``(since_tag, tag]`` (#1563)."""
         target_key = _tag_key(tag)
         if target_key is None:
-            raise LookupFailed(f"invalid release tag {tag!r} for cumulative soak window")
+            raise LookupFailed(
+                f"invalid release tag {tag!r} for cumulative soak window"
+            )
         lower_key: tuple[int, int, int] | None = None
         if since_tag.strip():
             lower_key = _tag_key(since_tag)
