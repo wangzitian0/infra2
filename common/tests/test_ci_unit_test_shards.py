@@ -293,3 +293,47 @@ def test_exactly_one_shard_runs_the_preflight() -> None:
     step = next(s for s in job["steps"] if s.get("name") == PREFLIGHT_STEP)
     assert step.get("if") == "matrix.shard == 1"
     assert job["strategy"]["matrix"]["shard"][0] == 1
+
+
+def test_merge_sums_the_seconds_of_the_shard_files(tmp_path: Path) -> None:
+    first, second, out = (tmp_path / n for n in ("a.json", "b.json", "out.json"))
+    first.write_text('{"t_a.py": 1.5, "t_b.py": 2.0}', encoding="utf-8")
+    second.write_text('{"t_b.py": 0.25, "t_c.py": 4.0}', encoding="utf-8")
+    code = _plugin().main(["merge", str(out), str(first), str(second)])
+    assert code == 0
+    assert json.loads(out.read_text(encoding="utf-8")) == {
+        "t_a.py": 1.5,
+        "t_b.py": 2.25,
+        "t_c.py": 4.0,
+    }
+
+
+def test_merge_fails_when_a_shard_wrote_no_durations(tmp_path: Path) -> None:
+    out = tmp_path / "out.json"
+    code = _plugin().main(["merge", str(out), str(tmp_path / "absent.json")])
+    assert code == 1
+    assert not out.exists()
+
+
+def test_each_shard_records_and_uploads_its_file_seconds() -> None:
+    job = _workflow()["jobs"][SHARD_JOB]
+    run = next(s for s in job["steps"] if s.get("name") == "Run infra unit tests")
+    out = "coverage/durations.shard${{ matrix.shard }}.json"
+    assert f"--shard-durations-out={out}" in run["run"]
+    upload = next(
+        s
+        for s in job["steps"]
+        if s.get("uses", "").startswith("actions/upload-artifact")
+    )
+    assert out in upload["with"]["path"].splitlines()
+
+
+def test_the_final_job_merges_the_shard_seconds_into_a_weights_artifact() -> None:
+    steps = _workflow()["jobs"][FINAL_JOB]["steps"]
+    merge = next(s for s in steps if "pytest_shard.py merge" in s.get("run", ""))
+    assert "coverage/durations.shard*.json" in merge["run"]
+    upload = next(
+        s for s in steps if s.get("with", {}).get("name") == "infra2-shard-weights"
+    )
+    assert upload["with"]["path"] == "coverage/shard_weights.json"
+    assert steps.index(merge) < steps.index(upload)

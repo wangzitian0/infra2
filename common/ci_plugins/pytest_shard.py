@@ -19,10 +19,13 @@ Assignment rule (longest processing time first):
 The rule reads only file paths and the weights file, so every process computes the
 same split. A wrong or old weight changes only the balance, never the partition.
 
-Regenerate the weights from a full run (no ``--shard``)::
+Measure the weights on CI, not on a laptop: CPU-bound and process-bound tests scale
+differently on the 4 vCPU runner. Each CI shard writes its file seconds with
+``--shard-durations-out``; ``test-deployer-logic`` merges them and uploads the
+artifact ``infra2-shard-weights``. Copy that file to ``common/ci_plugins/shard_weights.json``
+when the printed shard loads drift apart. Local merge::
 
-    pytest common/tests -n auto -p pytest_shard \
-        --shard-durations-out=common/ci_plugins/shard_weights.json
+    python common/ci_plugins/pytest_shard.py merge OUT.json durations.shard*.json
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import statistics
+import sys
 import zlib
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
@@ -206,3 +210,40 @@ class _DurationRecorder:
     def pytest_sessionfinish(self) -> None:
         payload = {f: round(s, 2) for f, s in sorted(self.seconds.items())}
         self.out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def merge_durations(paths: Sequence[Path]) -> dict[str, float]:
+    """Return the per-file seconds of ``paths`` summed into one sorted mapping."""
+    merged: dict[str, float] = {}
+    for path in paths:
+        for name, seconds in load_weights(path).items():
+            merged[name] = round(merged.get(name, 0.0) + seconds, 2)
+    return dict(sorted(merged.items()))
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """``merge OUT IN...``: print the load of each IN and write their sum to OUT."""
+    args = list(sys.argv[1:] if argv is None else argv)
+    if len(args) < 3 or args[0] != "merge":
+        print(
+            "usage: pytest_shard.py merge OUT.json DURATIONS.json...", file=sys.stderr
+        )
+        return 2
+    out, inputs = Path(args[1]), [Path(a) for a in args[2:]]
+    missing = [str(p) for p in inputs if not p.is_file()]
+    if missing:
+        print(
+            f"pytest_shard merge: missing input {', '.join(missing)}", file=sys.stderr
+        )
+        return 1
+    for path in inputs:
+        seconds = load_weights(path)
+        print(f"{path.name}: {len(seconds)} files, {sum(seconds.values()):.1f} s")
+    merged = merge_durations(inputs)
+    out.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+    print(f"merged {len(merged)} files, {sum(merged.values()):.1f} s into {out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -279,13 +279,16 @@ jobs:
             --cov=common \
             --cov=tools \
             --cov-report= \
-            --cov-fail-under=0
+            --cov-fail-under=0 \
+            --shard-durations-out=coverage/durations.shard${{ matrix.shard }}.json
 
       - name: Upload coverage data of this shard
         uses: actions/upload-artifact@v7
         with:
           name: infra2-coverage-data-shard${{ matrix.shard }}
-          path: coverage/.coverage.shard${{ matrix.shard }}
+          path: |
+            coverage/.coverage.shard${{ matrix.shard }}
+            coverage/durations.shard${{ matrix.shard }}.json
           include-hidden-files: true
           if-no-files-found: error
 
@@ -342,6 +345,21 @@ jobs:
           uv run --locked coverage combine --keep coverage/.coverage.shard*
           uv run --locked coverage report --show-missing
           uv run --locked coverage xml -o coverage/infra2-coverage.xml
+
+      # Print the measured load of each shard and merge the file seconds (#1602).
+      # When the loads drift apart, copy the artifact to common/ci_plugins/shard_weights.json.
+      - name: Report shard loads and merge the measured weights
+        run: |
+          cd ${{ github.workspace }}
+          uv run --locked python common/ci_plugins/pytest_shard.py merge \
+            coverage/shard_weights.json coverage/durations.shard*.json
+
+      - name: Upload measured shard weights
+        uses: actions/upload-artifact@v7
+        with:
+          name: infra2-shard-weights
+          path: coverage/shard_weights.json
+          if-no-files-found: error
 
       - name: Upload infra coverage context
         uses: actions/upload-artifact@v7
