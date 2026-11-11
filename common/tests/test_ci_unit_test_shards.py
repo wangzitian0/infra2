@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import statistics
 import subprocess
 import sys
 from pathlib import Path
@@ -177,25 +176,36 @@ def test_bad_shard_weights_fail_the_run(
     assert f"{weights}: " in run.stdout + run.stderr
 
 
-def test_the_committed_weights_balance_the_real_test_files() -> None:
+def test_a_run_places_the_files_by_the_weights_file(
+    many_files: Path, tmp_path: Path
+) -> None:
+    # One heavy file fills shard 1. Equal default weights or a path hash put other files there.
+    weights = tmp_path / "weights.json"
+    names = sorted(p.name for p in many_files.glob("test_*.py"))
+    heavy = names[-1]
+    weights.write_text(
+        json.dumps({n: (100.0 if n == heavy else 1.0) for n in names}),
+        encoding="utf-8",
+    )
+    placed = {}
+    for k in range(1, SHARD_COUNT + 1):
+        ids, run = _run(
+            [many_files], f"{k}/{SHARD_COUNT}", many_files, f"--shard-weights={weights}"
+        )
+        assert run.returncode == 0, run.stdout + run.stderr
+        placed[k] = _files_of(ids)
+    assert placed[1] == {heavy}
+    assert len(placed[2]) == len(placed[3]) == (len(names) - 1) // 2
+
+
+def test_the_committed_weights_parse_and_use_rootdir_paths() -> None:
+    # A key in another form (a bare name, an absolute path) matches no file, so every
+    # file would fall back to the median weight and the balance would be lost silently.
     plugin = _plugin()
-    count = len(_workflow()["jobs"][SHARD_JOB]["strategy"]["matrix"]["shard"])
     weights = plugin.load_weights(plugin.DEFAULT_WEIGHTS)
     assert weights, f"{plugin.DEFAULT_WEIGHTS} holds no weights"
-    files = sorted(
-        p.relative_to(ROOT).as_posix()
-        for p in (ROOT / "common" / "tests").rglob("test_*.py")
-        if "__pycache__" not in p.parts
-    )
-    shard = plugin.assign(files, weights, count)
-    default = statistics.median(weights.values())
-    loads = [
-        sum(weights.get(f, default) for f in files if shard[f] == k)
-        for k in range(1, count + 1)
-    ]
-    assert all(loads), loads
-    # Bound of longest-processing-time first: no shard exceeds another by the largest file.
-    assert max(loads) - min(loads) <= max(weights.values()), loads
+    wrong = [n for n in weights if not n.startswith("common/tests/test_")]
+    assert not wrong, f"keys that are not rootdir paths: {wrong[:5]}"
 
 
 def test_the_durations_out_option_writes_the_seconds_of_each_file(
@@ -308,7 +318,7 @@ def test_merge_sums_the_seconds_of_the_shard_files(tmp_path: Path) -> None:
     }
 
 
-def test_merge_fails_when_a_shard_wrote_no_durations(tmp_path: Path) -> None:
+def test_merge_fails_when_no_durations_file_exists(tmp_path: Path) -> None:
     out = tmp_path / "out.json"
     code = _plugin().main(["merge", str(out), str(tmp_path / "absent.json")])
     assert code == 1
@@ -337,3 +347,19 @@ def test_the_final_job_merges_the_shard_seconds_into_a_weights_artifact() -> Non
     )
     assert upload["with"]["path"] == "coverage/shard_weights.json"
     assert steps.index(merge) < steps.index(upload)
+
+
+def test_the_weights_report_runs_after_every_gate_and_cannot_fail_the_check() -> None:
+    # A report for a later commit must not hide a gate or fail the required check.
+    steps = _workflow()["jobs"][FINAL_JOB]["steps"]
+    names = [s.get("name", "") for s in steps]
+    report = [
+        i
+        for i, s in enumerate(steps)
+        if "pytest_shard.py merge" in s.get("run", "")
+        or s.get("with", {}).get("name") == "infra2-shard-weights"
+    ]
+    gates = [i for i, n in enumerate(names) if n.startswith(("Gate ", "Audit "))]
+    assert len(report) == 2 and len(gates) >= 3, (report, gates)
+    assert min(report) > max(gates)
+    assert all(steps[i].get("continue-on-error") is True for i in report)
