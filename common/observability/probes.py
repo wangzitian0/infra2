@@ -365,33 +365,30 @@ def _run_command(
     return result.stdout.strip()
 
 
+def _check_dep(prober, settings) -> str:
+    result = prober(settings)
+    if result.status != DependencyStatus.PRESENT:
+        raise RuntimeError(result.detail)
+    return result.detail
+
+
 def _run_postgres(
     spec: ProbeSpec,
     *,
     prober: Callable[[PostgresSettings], object] | None,
 ) -> str:
-    """Real ``SELECT 1`` reachability, not just a TCP handshake.
-
-    ``spec.target`` is ``host:port/dbname`` (compose already resolved
-    ``${ENV_SUFFIX}`` etc.) — no credentials in the registry-derived, frozen-fixture
-    -checked probe spec text. The probe-runner's own vault-rendered secrets
-    (platform/12.alerting/secrets.ctmpl) carry a dedicated, minimal-privilege
-    monitoring role: PROBE_POSTGRES_USER / PROBE_POSTGRES_PASSWORD. That role needs
-    no table grants — ``SELECT 1`` only requires CONNECT on the database.
-    """
+    """Real ``SELECT 1`` reachability, not just a TCP handshake."""
     password = os.environ.get("PROBE_POSTGRES_PASSWORD", "").strip()
     if not password:
         raise RuntimeError("PROBE_POSTGRES_PASSWORD is not set")
     user = os.environ.get("PROBE_POSTGRES_USER", "probe_monitor").strip()
-    settings = PostgresSettings(
-        dsn=f"postgresql://{user}:{password}@{spec.target}",
-        connect_timeout_seconds=max(1, min(60, int(spec.timeout_seconds))),
+    return _check_dep(
+        prober or probe_postgres,
+        PostgresSettings(
+            dsn=f"postgresql://{user}:{password}@{spec.target}",
+            connect_timeout_seconds=max(1, min(60, int(spec.timeout_seconds))),
+        ),
     )
-    probe = prober or probe_postgres
-    result = probe(settings)
-    if result.status != DependencyStatus.PRESENT:
-        raise RuntimeError(result.detail)
-    return result.detail
 
 
 def _run_s3(
@@ -399,14 +396,7 @@ def _run_s3(
     *,
     prober: Callable[[S3Settings], object] | None,
 ) -> str:
-    """Real ``head_bucket`` reachability, not just an HTTP 200 on a liveness path.
-
-    ``spec.target`` is the S3-compatible endpoint URL (e.g.
-    ``http://platform-minio${ENV_SUFFIX}:9000``). The bucket and credentials come
-    from the probe-runner's own vault-rendered secrets — a dedicated, minimal
-    -privilege monitoring key scoped to one small healthcheck bucket, not the
-    MinIO root credentials.
-    """
+    """Real ``head_bucket`` reachability, not just an HTTP 200 on a liveness path."""
     bucket = os.environ.get("PROBE_S3_BUCKET", "").strip()
     access_key = os.environ.get("PROBE_S3_ACCESS_KEY", "").strip()
     secret_key = os.environ.get("PROBE_S3_SECRET_KEY", "").strip()
@@ -414,31 +404,22 @@ def _run_s3(
         raise RuntimeError(
             "PROBE_S3_BUCKET / PROBE_S3_ACCESS_KEY / PROBE_S3_SECRET_KEY are not set"
         )
-    settings = S3Settings(
-        bucket=bucket,
-        endpoint_url=spec.target,
-        access_key_id=access_key,
-        secret_access_key=secret_key,
-        addressing_style="path",
-        connect_timeout_seconds=max(1.0, min(60.0, spec.timeout_seconds)),
-        read_timeout_seconds=max(1.0, min(60.0, spec.timeout_seconds)),
+    return _check_dep(
+        prober or probe_s3,
+        S3Settings(
+            bucket=bucket,
+            endpoint_url=spec.target,
+            access_key_id=access_key,
+            secret_access_key=secret_key,
+            addressing_style="path",
+            connect_timeout_seconds=max(1.0, min(60.0, spec.timeout_seconds)),
+            read_timeout_seconds=max(1.0, min(60.0, spec.timeout_seconds)),
+        ),
     )
-    probe = prober or probe_s3
-    result = probe(settings)
-    if result.status != DependencyStatus.PRESENT:
-        raise RuntimeError(result.detail)
-    return result.detail
 
 
 def _run_resource(spec: ProbeSpec, *, sample_seconds: float | None = None) -> str:
-    """Return host resource usage as a percentage string for cpu | mem | disk:<path>.
-
-    Reads host-global /proc (/proc/stat and /proc/meminfo are not namespaced, so
-    they report the host even from inside a container) and statvfs for disk.
-    `disk:<path>` reports usage of the filesystem backing <path>; statvfs needs
-    only ANY path on the target filesystem, so the deploy bind-mounts a small
-    dedicated host directory (not the host root) into the container.
-    """
+    """Return host resource usage as a percentage string for cpu | mem | disk:<path>."""
     target = spec.target.strip()
     if target == "cpu":
         if sample_seconds is None:
@@ -447,15 +428,12 @@ def _run_resource(spec: ProbeSpec, *, sample_seconds: float | None = None) -> st
                 sample_seconds = float(raw)
             except ValueError:
                 sample_seconds = 3.0
-        clamped_sample = max(0.05, min(30.0, sample_seconds))
-        usage = _cpu_percent(clamped_sample)
-    elif target == "mem":
-        usage = _mem_percent()
-    elif target.startswith("disk:"):
-        usage = _disk_percent(target.split(":", 1)[1] or "/")
-    else:
-        raise ValueError(f"Unsupported resource target: {target!r}")
-    return f"{usage:.1f}"
+        return f"{_cpu_percent(max(0.05, min(30.0, sample_seconds))):.1f}"
+    if target == "mem":
+        return f"{_mem_percent():.1f}"
+    if target.startswith("disk:"):
+        return f"{_disk_percent(target.split(':', 1)[1] or '/'):.1f}"
+    raise ValueError(f"Unsupported resource target: {target!r}")
 
 
 def _cpu_percent(sample_seconds: float) -> float:
@@ -516,24 +494,14 @@ def _matches_expected(spec: ProbeSpec, observed: str) -> bool:
 
 
 def failure_domain(result: ProbeResult) -> str:
-    """Where a failure sits. Part of a failure's identity (#903).
-
-    A host resource probe is ``host-disk``, ``host-mem`` or ``host-cpu`` (#905: its
-    card needs the host's impact and next step, not a service's). Otherwise
-    ``probe-client-blocked`` (the edge refused the probe, error 1010) or
-    ``service-or-route``.
-    """
+    """Where a failure sits. Part of a failure's identity (#903)."""
     if result.spec.kind == "resource":
         target = result.spec.target.strip()
         if target.startswith("disk:"):
             return "host-disk"
         return {"cpu": "host-cpu", "mem": "host-mem"}.get(target, "host-resource")
-    observed = result.observed.lower()
-    summary = result.summary.lower()
-    if any(
-        marker in observed or marker in summary
-        for marker in PROBE_CLIENT_BLOCKED_MARKERS
-    ):
+    lowered = f"{result.observed.lower()} {result.summary.lower()}"
+    if any(marker in lowered for marker in PROBE_CLIENT_BLOCKED_MARKERS):
         return "probe-client-blocked"
     return "service-or-route"
 

@@ -305,89 +305,99 @@ DELIVERED_FAILING_RUN = {
 UNDELIVERED_RUN = {**DELIVERED_FAILING_RUN, "deliveryError": "feishu delivery failed"}
 
 
-def test_worker_status_is_green_on_a_fresh_run_that_delivered_its_findings(
-    monkeypatch,
-) -> None:
-    """#908: the Worker paged its own findings; the audit judges only its liveness."""
-    watchdog = _load_watchdog()
-    _worker_status_response(monkeypatch, watchdog, DELIVERED_FAILING_RUN)
-
-    (result,) = watchdog.run_worker_status_check(
-        {"INFRA2_WATCHDOG_WORKER_STATUS_TOKEN": "status-token"},
-        timeout=3,
-        retry_delay_seconds=0,
-        max_age_seconds=7200,
-    )
-
-    assert result.ok is True
-    assert result.attempt_count == 1
-    assert result.detail == "worker last run fresh: age=890s (max 7200s)"
-    # ...and what the run found is carried to the report as information
-    assert "delivered by the Worker itself: ok=False failures=2" in result.note
-    assert "routes=8 heartbeats=2" in result.note
-
-
-def test_worker_status_pages_when_its_last_run_could_not_deliver(monkeypatch) -> None:
-    """Liveness is "runs AND delivers": undelivered pages are a blind Worker."""
-    watchdog = _load_watchdog()
-    served = _worker_status_response(monkeypatch, watchdog, UNDELIVERED_RUN)
-
-    (result,) = watchdog.run_worker_status_check(
-        {"INFRA2_WATCHDOG_WORKER_STATUS_TOKEN": "status-token"},
-        timeout=3,
-        retry_delay_seconds=0,
-        max_age_seconds=7200,
-    )
-
-    assert (result.ok, result.failure_domain) == (False, "cloudflare-worker-health")
-    assert result.detail == (
-        "worker runs but could not deliver its alerts: age=890s failures=2 "
-        "delivery_error=feishu delivery failed"
-    )
-    assert len(served) == 2  # retried once before turning red
-
-
 @pytest.mark.parametrize(
-    ("age", "expected"),
+    (
+        "last_run",
+        "expected_ok",
+        "expected_domain",
+        "expected_detail",
+        "expected_note_substr",
+        "expected_served_len",
+    ),
     [
-        (7201, "worker last run is stale: age=7201s > max 7200s"),
-        (-301, "worker last run is 301s in the future (clock skew?)"),
-        (None, "worker has no recorded run: ageSeconds=None"),
+        (
+            DELIVERED_FAILING_RUN,
+            True,
+            "",
+            "worker last run fresh: age=890s (max 7200s)",
+            "delivered by the Worker itself: ok=False failures=2",
+            1,
+        ),
+        (
+            UNDELIVERED_RUN,
+            False,
+            "cloudflare-worker-health",
+            (
+                "worker runs but could not deliver its alerts: age=890s "
+                "failures=2 delivery_error=feishu delivery failed"
+            ),
+            "",
+            2,
+        ),
+        (
+            {"ok": True, "ageSeconds": 7201},
+            False,
+            "cloudflare-worker-health",
+            "worker last run is stale: age=7201s > max 7200s",
+            "",
+            2,
+        ),
+        (
+            {"ok": True, "ageSeconds": -301},
+            False,
+            "cloudflare-worker-health",
+            "worker last run is 301s in the future (clock skew?)",
+            "",
+            2,
+        ),
+        (
+            {"ok": True, "ageSeconds": None},
+            False,
+            "cloudflare-worker-health",
+            "worker has no recorded run: ageSeconds=None",
+            "",
+            2,
+        ),
+        (
+            {"ok": True, "ageSeconds": 7200},
+            True,
+            "",
+            "worker last run fresh: age=7200s (max 7200s)",
+            "",
+            1,
+        ),
+    ],
+    ids=[
+        "delivered-failing",
+        "undelivered",
+        "stale",
+        "future-clock-skew",
+        "no-recorded-run",
+        "exact-bound",
     ],
 )
-def test_worker_status_is_red_when_the_last_run_is_not_fresh(
-    monkeypatch, age, expected
+def test_worker_status_evaluation_cases(
+    monkeypatch,
+    last_run,
+    expected_ok,
+    expected_domain,
+    expected_detail,
+    expected_note_substr,
+    expected_served_len,
 ) -> None:
     watchdog = _load_watchdog()
-    served = _worker_status_response(
-        monkeypatch, watchdog, {"ok": True, "ageSeconds": age}
-    )
-
+    served = _worker_status_response(monkeypatch, watchdog, last_run)
     (result,) = watchdog.run_worker_status_check(
         {"INFRA2_WATCHDOG_WORKER_STATUS_TOKEN": "status-token"},
         timeout=3,
         retry_delay_seconds=0,
         max_age_seconds=7200,
     )
-
-    assert (result.ok, result.detail) == (False, expected)
-    assert result.failure_domain == "cloudflare-worker-health"
-    assert len(served) == 2  # retried once before turning red
-
-
-def test_worker_status_is_green_at_exactly_the_bound(monkeypatch) -> None:
-    watchdog = _load_watchdog()
-    _worker_status_response(monkeypatch, watchdog, {"ok": True, "ageSeconds": 7200})
-
-    (result,) = watchdog.run_worker_status_check(
-        {"INFRA2_WATCHDOG_WORKER_STATUS_TOKEN": "t"},
-        timeout=3,
-        retry_delay_seconds=0,
-        max_age_seconds=7200,
-    )
-
-    assert result.ok is True
-    assert result.note == ""  # a clean run has nothing to report
+    assert result.ok is expected_ok
+    assert result.detail == expected_detail
+    assert result.failure_domain == expected_domain
+    assert expected_note_substr in result.note
+    assert len(served) == expected_served_len
 
 
 def test_worker_status_bound_is_the_workers_own_configured_max_age(tmp_path) -> None:

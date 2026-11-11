@@ -44,6 +44,88 @@ def _load_probe_runner():
     return module
 
 
+class FakeResponse:
+    def __init__(self, body: bytes = b"ok", status: int = 200) -> None:
+        self.body = body
+        self.status = status
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self, *_args):
+        return self.body
+
+
+def _result(spec, ok, observed="x"):
+    return probes.ProbeResult(
+        spec=spec, ok=ok, summary="s" if ok else "boom", observed=observed, elapsed_ms=1
+    )
+
+
+def _scripted_runner(monkeypatch, *, env: str | None = "production", clock=None):
+    """A runner whose probes return scripted results and whose bridge records posts."""
+    runner = _load_probe_runner()
+    posted: list[dict] = []
+    beats: list[dict] = []
+    script: dict = {"results": {}}
+    bridge: dict = {"fail": None, "attempts": 0}
+
+    for name in (
+        "INFRA_PROBE_DRY_RUN",
+        "INFRA_PROBE_MAINTENANCE_UNTIL",
+        "INFRA_PROBE_RENOTIFY_SECONDS",
+        "INFRA_ENVIRONMENT",
+        "DEPLOY_ENV",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    if env is None:
+        monkeypatch.delenv("ENV", raising=False)
+    else:
+        monkeypatch.setenv("ENV", env)
+    monkeypatch.setenv(
+        "INFRA_PROBE_HEARTBEAT_URL", "https://watchdog.example/heartbeat"
+    )
+
+    def fake_post(_url, payload, **_kwargs):
+        bridge["attempts"] += 1
+        if bridge["fail"] is not None:
+            raise bridge["fail"]
+        posted.append(payload)
+        return {}
+
+    def fake_run_probes(specs):
+        results = []
+        for spec in specs:
+            observed = script["results"].get(spec.name)
+            if observed is None:
+                results.append(_result(spec, True, observed="ok"))
+            else:
+                results.append(
+                    probes.ProbeResult(
+                        spec=spec,
+                        ok=False,
+                        summary=f"expected {spec.expected!r}, observed {observed!r}",
+                        observed=observed,
+                        elapsed_ms=1,
+                    )
+                )
+        return results
+
+    def fake_urlopen(request, *, timeout):
+        beats.append(json.loads(request.data.decode("utf-8")))
+        return FakeResponse()
+
+    monkeypatch.setattr(runner, "post_alert_bridge_payload", fake_post)
+    monkeypatch.setattr(runner, "run_probes", fake_run_probes)
+    monkeypatch.setattr(runner, "urlopen", fake_urlopen)
+    if clock is not None:
+        monkeypatch.setattr(runner.time, "time", clock)
+    return runner, posted, beats, script, bridge
+
+
 def test_probe_specs_parse_http_tcp_and_command() -> None:
     """#183: probe config is code-owned and typed."""
     specs = parse_probe_specs(
@@ -226,23 +308,11 @@ def test_http_probe_sends_stable_browser_compatible_headers(monkeypatch) -> None
     """#183: public-route probes must not trip Cloudflare Browser Integrity Check."""
     captured = {}
 
-    class FakeResponse:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self, _limit):
-            return b"ok"
-
     def fake_urlopen(request, *, timeout):
         captured["user_agent"] = request.get_header("User-agent")
         captured["accept"] = request.get_header("Accept")
         captured["timeout"] = timeout
-        return FakeResponse()
+        return FakeResponse(b"ok")
 
     monkeypatch.setattr(probes, "urlopen", fake_urlopen)
     spec = parse_probe_specs("route|http|https://cloud.example|200|critical|3")[0]
@@ -267,19 +337,9 @@ def test_the_bridge_post_sends_the_probe_user_agent(monkeypatch, credentials) ->
     without Basic auth."""
     captured: dict = {}
 
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self):
-            return b"{}"
-
     def fake_urlopen(request, *, timeout):
         captured["request"] = request
-        return FakeResponse()
+        return FakeResponse(b"{}")
 
     monkeypatch.setattr(probes, "urlopen", fake_urlopen)
 
@@ -514,24 +574,11 @@ def test_probe_runner_dedupes_unchanged_failures_and_sends_recovery(
     tmp_path,
 ) -> None:
     """#183: repeated unchanged probe failures are quiet until recovery or renotify."""
-    runner = _load_probe_runner()
-    posted: list[dict] = []
-    outcomes = [(503, "sealed"), (503, "sealed"), (200, "ok")]
-
+    runner, posted, _, script, _ = _scripted_runner(monkeypatch)
     monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
     monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
-    monkeypatch.setattr(
-        runner,
-        "post_alert_bridge_payload",
-        lambda _url, payload, **_kwargs: posted.append(payload),
-    )
-
-    def fake_run_probes(specs):
-        status, body = outcomes.pop(0)
-        return [probes.run_probe(specs[0], http_get=lambda *_args: (status, body))]
-
-    monkeypatch.setattr(runner, "run_probes", fake_run_probes)
     state_path = tmp_path / "probe-state.json"
+    script["results"] = {"vault": "503:sealed"}
 
     assert (
         runner.run_once(
@@ -551,6 +598,7 @@ def test_probe_runner_dedupes_unchanged_failures_and_sends_recovery(
         )
         == 1
     )
+    script["results"] = {"vault": None}
     assert (
         runner.run_once(
             state_path=state_path,
@@ -564,12 +612,6 @@ def test_probe_runner_dedupes_unchanged_failures_and_sends_recovery(
     assert [payload["status"] for payload in posted] == ["firing", "resolved"]
     assert posted[0]["commonLabels"]["alertname"] == "InfraServiceProbeFailed"
     assert posted[1]["commonLabels"]["alertname"] == "InfraServiceProbeFailed"
-
-
-def _result(spec, ok, observed="x"):
-    return probes.ProbeResult(
-        spec=spec, ok=ok, summary="s" if ok else "boom", observed=observed, elapsed_ms=1
-    )
 
 
 def test_never_green_command_probe_routes_to_misconfigured_warning(
@@ -1225,23 +1267,10 @@ def test_probe_runner_requires_consecutive_failures_before_alerting(
     tmp_path,
 ) -> None:
     """#209: fast internal probing must not produce alert noise on one failure."""
-    runner = _load_probe_runner()
-    posted: list[dict] = []
-
+    runner, posted, _, script, _ = _scripted_runner(monkeypatch)
     monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
     monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
-    monkeypatch.setattr(
-        runner,
-        "post_alert_bridge_payload",
-        lambda _url, payload, **_kwargs: posted.append(payload),
-    )
-    monkeypatch.setattr(
-        runner,
-        "run_probes",
-        lambda specs: [
-            probes.run_probe(specs[0], http_get=lambda *_args: (503, "sealed"))
-        ],
-    )
+    script["results"] = {"vault": "503:sealed"}
     state_path = tmp_path / "probe-state.json"
 
     assert runner.run_once(state_path=state_path, failure_threshold=3) == 1
@@ -1257,24 +1286,11 @@ def test_probe_runner_requires_consecutive_recoveries_before_resolving(
     tmp_path,
 ) -> None:
     """#209: one passing probe should not resolve a flapping incident."""
-    runner = _load_probe_runner()
-    posted: list[dict] = []
-    outcomes = [(503, "down"), (503, "down"), (200, "ok"), (200, "ok")]
-
+    runner, posted, _, script, _ = _scripted_runner(monkeypatch)
     monkeypatch.setenv("INFRA_PROBE_SPECS", "vault|http|http://vault|200")
     monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
-    monkeypatch.setattr(
-        runner,
-        "post_alert_bridge_payload",
-        lambda _url, payload, **_kwargs: posted.append(payload),
-    )
-
-    def fake_run_probes(specs):
-        status, body = outcomes.pop(0)
-        return [probes.run_probe(specs[0], http_get=lambda *_args: (status, body))]
-
-    monkeypatch.setattr(runner, "run_probes", fake_run_probes)
     state_path = tmp_path / "probe-state.json"
+    script["results"] = {"vault": "503:down"}
 
     assert (
         runner.run_once(
@@ -1292,6 +1308,7 @@ def test_probe_runner_requires_consecutive_recoveries_before_resolving(
         )
         == 1
     )
+    script["results"] = {"vault": None}
     assert (
         runner.run_once(
             state_path=state_path,
@@ -1319,16 +1336,6 @@ def test_probe_runner_posts_cloudflare_watchdog_heartbeat(
     """Infra-011.2: the external watchdog can detect a stopped probe runner."""
     runner = _load_probe_runner()
     captured = {}
-
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self, _limit):
-            return b"ok"
 
     def fake_urlopen(request, *, timeout):
         captured["url"] = request.full_url
@@ -1384,16 +1391,6 @@ def test_probe_runner_liveness_ping_is_flagged_on_the_wire(monkeypatch) -> None:
     ok=true alternated with a failing verdict and every alternation was a KV put."""
     runner = _load_probe_runner()
     sent: list[dict] = []
-
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self, _limit):
-            return b"ok"
 
     def fake_urlopen(request, *, timeout):
         sent.append(json.loads(request.data.decode("utf-8")))
@@ -1872,82 +1869,6 @@ class _Clock:
 
     def __call__(self) -> float:
         return self.now
-
-
-class _HeartbeatResponse:
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_args):
-        return False
-
-    def read(self, _limit):
-        return b"ok"
-
-
-def _scripted_runner(monkeypatch, *, env: str | None = "production", clock=None):
-    """A runner whose probes return scripted results and whose bridge records posts.
-
-    ``script["results"]`` maps probe name -> None (passing) or the observed reading of a
-    failure; ``bridge["fail"]`` makes the next bridge POST raise the given exception.
-    """
-    runner = _load_probe_runner()
-    posted: list[dict] = []
-    beats: list[dict] = []
-    script: dict = {"results": {}}
-    bridge: dict = {"fail": None, "attempts": 0}
-
-    for name in (
-        "INFRA_PROBE_DRY_RUN",
-        "INFRA_PROBE_MAINTENANCE_UNTIL",
-        "INFRA_PROBE_RENOTIFY_SECONDS",
-        "INFRA_ENVIRONMENT",
-        "DEPLOY_ENV",
-    ):
-        monkeypatch.delenv(name, raising=False)
-    if env is None:  # a runner that was never told its environment
-        monkeypatch.delenv("ENV", raising=False)
-    else:
-        monkeypatch.setenv("ENV", env)
-    monkeypatch.setenv(
-        "INFRA_PROBE_HEARTBEAT_URL", "https://watchdog.example/heartbeat"
-    )
-
-    def fake_post(_url, payload, **_kwargs):
-        bridge["attempts"] += 1
-        if bridge["fail"] is not None:
-            raise bridge["fail"]
-        posted.append(payload)
-        return {}
-
-    def fake_run_probes(specs):
-        results = []
-        for spec in specs:
-            observed = script["results"].get(spec.name)
-            if observed is None:
-                results.append(_result(spec, True, observed="ok"))
-            else:
-                results.append(
-                    probes.ProbeResult(
-                        spec=spec,
-                        ok=False,
-                        summary=f"expected {spec.expected!r}, observed {observed!r}",
-                        observed=observed,
-                        elapsed_ms=1,
-                    )
-                )
-        return results
-
-    def fake_urlopen(request, *, timeout):
-        beats.append(json.loads(request.data.decode("utf-8")))
-        return _HeartbeatResponse()
-
-    monkeypatch.setattr(runner, "post_alert_bridge_payload", fake_post)
-    monkeypatch.setattr(runner, "run_probes", fake_run_probes)
-    monkeypatch.setattr(runner, "urlopen", fake_urlopen)
-    if clock is not None:
-        monkeypatch.setattr(runner.time, "time", clock)
-    return runner, posted, beats, script, bridge
 
 
 _HOST_SPECS = "host-cpu|resource|cpu|80|warning\nhost-mem|resource|mem|80|warning"

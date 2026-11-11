@@ -652,58 +652,35 @@ def _backup_manifest_result(
     now_ts: int,
 ) -> CheckResult:
     returncode, stdout, stderr = completed
+
+    def err(detail: str, unit: str, domain: str = "backup") -> CheckResult:
+        return CheckResult(name, False, detail, domain, units=(unit,))
+
     if returncode == SSH_TRANSPORT_FAILURE:
-        return CheckResult(
-            name,
-            False,
+        return err(
             f"could not reach the host to read {path}: {_last_line(stderr)}",
-            "backup",
-            units=("manifest:host-unreachable",),
+            "manifest:host-unreachable",
         )
     if returncode != 0:
-        return CheckResult(
-            name,
-            False,
+        return err(
             f"no {environment} manifest at {path}: {_last_line(stderr or stdout)}",
-            "backup",
-            units=("manifest:missing",),
+            "manifest:missing",
         )
     try:
         manifest = json.loads(stdout)
     except ValueError as exc:
-        return CheckResult(
-            name,
-            False,
-            f"{path} is not JSON: {exc}",
-            "backup",
-            units=("manifest:not-json",),
-        )
+        return err(f"{path} is not JSON: {exc}", "manifest:not-json")
     if not isinstance(manifest, dict):
-        return CheckResult(
-            name,
-            False,
-            f"{path} is not a JSON object",
-            "backup",
-            units=("manifest:not-an-object",),
-        )
+        return err(f"{path} is not a JSON object", "manifest:not-an-object")
     if manifest.get("environment") != environment:
-        return CheckResult(
-            name,
-            False,
-            f"{path} records environment {manifest.get('environment')!r}, "
-            f"expected {environment!r}",
-            "backup",
-            units=("manifest:wrong-environment",),
+        return err(
+            f"{path} records environment {manifest.get('environment')!r}, expected {environment!r}",
+            "manifest:wrong-environment",
         )
     checks = verify(inventory, manifest, now=now_ts)["checks"]
     if not checks:
-        # An empty inventory verifies nothing; 0 of 0 is not a pass.
-        return CheckResult(
-            name,
-            False,
-            "backup inventory is empty",
-            "configuration",
-            units=("inventory:empty",),
+        return err(
+            "backup inventory is empty", "inventory:empty", domain="configuration"
         )
     failed = [check for check in checks if check["status"] != "pass"]
     if failed:
@@ -716,9 +693,6 @@ def _backup_manifest_result(
             False,
             f"{len(failed)}/{len(checks)} artifacts failed: {shown}{more}",
             "backup",
-            # structured, not parsed from the detail: which artifact, at what severity,
-            # failing how (the verifier's fixed phrases: stale, empty, missing, ...;
-            # its readings are in `evidence`, never in the summary)
             units=tuple(
                 sorted(
                     {
@@ -2027,9 +2001,7 @@ def deliver_out_of_band_alert(env: Mapping[str, str], message: str) -> None:
 def _failure_domain_for_http_target(name: str) -> str:
     if name == "infra2-public-entrypoint":
         return "host-reachability"
-    if name.endswith("public-route"):
-        return "public-route"
-    return "http-target"
+    return "public-route" if name.endswith("public-route") else "http-target"
 
 
 def _failure_domain_for_ssh_target(name: str) -> str:
@@ -2037,51 +2009,45 @@ def _failure_domain_for_ssh_target(name: str) -> str:
         return "host-reachability"
     if name in {"infra2-docker", "infra2-docker-health"}:
         return "docker-runtime"
-    if name == "infra2-alert-bridge":
-        return "alert-bridge"
-    return "host-diagnostics"
+    return "alert-bridge" if name == "infra2-alert-bridge" else "host-diagnostics"
+
+
+_SUGGESTED_ACTIONS = {
+    "host-reachability": "从外部网络确认 VPS 可达与 DNS(`curl` + `traceroute`)",
+    "docker-runtime": "SSH 登录 infra2,对不健康的容器执行 `docker ps` / `docker inspect`",
+    "alert-bridge": "在宿主机内查看 `platform-alerting` 容器的日志与 `/health`",
+    "cloudflare-worker-health": "用 `WATCHDOG_STATUS_TOKEN` 调用 Worker 的 `/status`,确认最近一次运行是否新鲜",
+    "dokploy-control-plane": "检查 Dokploy API 与部署日志,找出发布或网络失败",
+    "scheduled-job-start": (
+        "打开详情里的 run,看那个 job 为何没拿到 runner(同名 `concurrency.group` 死锁见 #1086,"
+        "或 https://www.githubstatus.com );修复后用 `workflow_dispatch` 重跑该 task"
+    ),
+    "peer-scheduler-liveness": (
+        "按详情里的仓库与 workflow 打开其 Actions 页:被禁用就重新启用,再看它最新"
+        "一次定时运行与 https://www.githubstatus.com ;已删除的 workflow 须确认是有意移除并同步删除其依赖"
+    ),
+    "backup": (
+        "在宿主机上查 `/var/log/infra2-backup*.log` 里的 FAILED 行,按 SOP-006 重跑 "
+        "`/usr/local/sbin/infra2-host-backup.sh`,再按 SOP-004 校验 manifest"
+    ),
+    "restore-rehearsal": (
+        "在宿主机上查看 `/var/log/infra2-backup-restore-rehearsal.log`"
+        "(日志不存在时查看 root 的 crontab),"
+        "按 SOP-006A 手动重跑或安装演练的 cron 命令"
+    ),
+    "report-delivery": (
+        "检查 `INFRA2_REPORTS_FEISHU_*` secrets 与报告 app;"
+        "未送达的只报告发现在本次运行的日志里"
+    ),
+}
 
 
 def _suggested_action_for_failure(name: str, failure_domain: str) -> str:
     """下一步 of a GitHub page (#905: Chinese; commands, paths and identifiers kept
     verbatim, in backticks)."""
-    if failure_domain == "host-reachability":
-        return "从外部网络确认 VPS 可达与 DNS(`curl` + `traceroute`)"
-    if failure_domain == "docker-runtime":
-        return "SSH 登录 infra2,对不健康的容器执行 `docker ps` / `docker inspect`"
-    if failure_domain == "alert-bridge":
-        return "在宿主机内查看 `platform-alerting` 容器的日志与 `/health`"
-    if failure_domain == "cloudflare-worker-health":
-        return "用 `WATCHDOG_STATUS_TOKEN` 调用 Worker 的 `/status`,确认最近一次运行是否新鲜"
-    if failure_domain == "dokploy-control-plane":
-        return "检查 Dokploy API 与部署日志,找出发布或网络失败"
-    if failure_domain == "scheduled-job-start":
-        return (
-            "打开详情里的 run,看那个 job 为何没拿到 runner(同名 `concurrency.group` 死锁见 #1086,"
-            "或 https://www.githubstatus.com );修复后用 `workflow_dispatch` 重跑该 task"
-        )
-    if failure_domain == "peer-scheduler-liveness":
-        return (
-            "按详情里的仓库与 workflow 打开其 Actions 页:被禁用就重新启用,再看它最新"
-            "一次定时运行与 https://www.githubstatus.com ;已删除的 workflow 须确认是有意移除并同步删除其依赖"
-        )
-    if failure_domain == "backup":
-        return (
-            "在宿主机上查 `/var/log/infra2-backup*.log` 里的 FAILED 行,按 SOP-006 重跑 "
-            "`/usr/local/sbin/infra2-host-backup.sh`,再按 SOP-004 校验 manifest"
-        )
-    if failure_domain == "restore-rehearsal":
-        return (
-            "在宿主机上查看 `/var/log/infra2-backup-restore-rehearsal.log`"
-            "(日志不存在时查看 root 的 crontab),"
-            "按 SOP-006A 手动重跑或安装演练的 cron 命令"
-        )
-    if failure_domain == "report-delivery":
-        return (
-            "检查 `INFRA2_REPORTS_FEISHU_*` secrets 与报告 app;"
-            "未送达的只报告发现在本次运行的日志里"
-        )
-    return "查看失败检查的详情,手动确认目标服务是否健康"
+    return _SUGGESTED_ACTIONS.get(
+        failure_domain, "查看失败检查的详情,手动确认目标服务是否健康"
+    )
 
 
 def _runbook_url_for_failure(failure_domain: str) -> str:
@@ -2112,9 +2078,11 @@ def _runbook_url_for_failure(failure_domain: str) -> str:
         )
     if failure_domain == "scheduled-job-start":
         return "https://github.com/wangzitian0/infra2/actions/workflows/ops-checks.yml"
-    anchor = "#out-of-band-watchdog"
-    if failure_domain == "alert-bridge":
-        anchor = "#alerting-bridge"
+    anchor = (
+        "#alerting-bridge"
+        if failure_domain == "alert-bridge"
+        else "#out-of-band-watchdog"
+    )
     return (
         "https://github.com/wangzitian0/infra2/blob/main/platform/12.alerting/README.md"
         f"{anchor}"
@@ -2223,23 +2191,13 @@ def _redact(value: str) -> str:
 
 
 def _env_int(env: Mapping[str, str], key: str, default: int) -> int:
-    raw = env.get(key)
-    if raw is None:
-        return default
-    value = str(raw).strip()
-    if not value:
-        return default
-    return int(value)
+    val = env.get(key, "").strip()
+    return int(val) if val else default
 
 
 def _env_float(env: Mapping[str, str], key: str, default: float) -> float:
-    raw = env.get(key)
-    if raw is None:
-        return default
-    value = str(raw).strip()
-    if not value:
-        return default
-    return float(value)
+    val = env.get(key, "").strip()
+    return float(val) if val else default
 
 
 def _emit_structured_log(payload: Mapping[str, object]) -> None:

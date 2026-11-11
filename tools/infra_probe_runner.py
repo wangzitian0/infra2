@@ -155,6 +155,10 @@ def _configure_logging() -> None:
         logging.getLogger(name).setLevel(logging.INFO)
 
 
+def _env_int(name: str, default: int) -> int:
+    return int(os.getenv(name, str(default)))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     mode = parser.add_mutually_exclusive_group()
@@ -173,17 +177,15 @@ def main() -> int:
     except ValueError as exc:
         print(f"infra probe runner cannot start: {exc}", file=sys.stderr, flush=True)
         return os.EX_CONFIG
-    interval = int(
-        os.getenv("INFRA_PROBE_INTERVAL_SECONDS", str(DEFAULT_PROBE_INTERVAL_SECONDS))
+    interval = _env_int("INFRA_PROBE_INTERVAL_SECONDS", DEFAULT_PROBE_INTERVAL_SECONDS)
+    renotify_seconds = _env_int(
+        "INFRA_PROBE_RENOTIFY_SECONDS", DEFAULT_RENOTIFY_SECONDS
     )
-    renotify_seconds = int(
-        os.getenv("INFRA_PROBE_RENOTIFY_SECONDS", str(DEFAULT_RENOTIFY_SECONDS))
+    failure_threshold = _env_int(
+        "INFRA_PROBE_FAILURE_THRESHOLD", DEFAULT_FAILURE_THRESHOLD
     )
-    failure_threshold = int(
-        os.getenv("INFRA_PROBE_FAILURE_THRESHOLD", str(DEFAULT_FAILURE_THRESHOLD))
-    )
-    recovery_threshold = int(
-        os.getenv("INFRA_PROBE_RECOVERY_THRESHOLD", str(DEFAULT_RECOVERY_THRESHOLD))
+    recovery_threshold = _env_int(
+        "INFRA_PROBE_RECOVERY_THRESHOLD", DEFAULT_RECOVERY_THRESHOLD
     )
     state_path = Path(os.getenv("INFRA_PROBE_STATE_FILE", DEFAULT_STATE_FILE))
     # Mirror run_once's gate: dry-run must not emit heartbeat/state (no misleading
@@ -283,10 +285,6 @@ def _host_specs_for_env(specs: list) -> list:
     if not is_report_only_environment(_deploy_env()):
         return specs
     return [spec for spec in specs if spec.kind != "resource"]
-
-
-def _env_int(name: str, default: int) -> int:
-    return int(os.getenv(name, str(default)))
 
 
 def _track_never_green(
@@ -468,23 +466,17 @@ def run_once(
     renotify_seconds = (
         renotify_seconds
         if renotify_seconds is not None
-        else int(
-            os.getenv("INFRA_PROBE_RENOTIFY_SECONDS", str(DEFAULT_RENOTIFY_SECONDS))
-        )
+        else _env_int("INFRA_PROBE_RENOTIFY_SECONDS", DEFAULT_RENOTIFY_SECONDS)
     )
     failure_threshold = (
         failure_threshold
         if failure_threshold is not None
-        else int(
-            os.getenv("INFRA_PROBE_FAILURE_THRESHOLD", str(DEFAULT_FAILURE_THRESHOLD))
-        )
+        else _env_int("INFRA_PROBE_FAILURE_THRESHOLD", DEFAULT_FAILURE_THRESHOLD)
     )
     recovery_threshold = (
         recovery_threshold
         if recovery_threshold is not None
-        else int(
-            os.getenv("INFRA_PROBE_RECOVERY_THRESHOLD", str(DEFAULT_RECOVERY_THRESHOLD))
-        )
+        else _env_int("INFRA_PROBE_RECOVERY_THRESHOLD", DEFAULT_RECOVERY_THRESHOLD)
     )
     if escalation_failures is None:
         escalation_failures = _env_int(
@@ -577,7 +569,9 @@ def run_once(
     # no probe lines in it is indistinguishable from a runner that probed nothing —
     # which is exactly how #608 read this container's log on 2026-09-09, while 24
     # infra-service and 7 public-route probes were in fact passing every minute.
-    if not as_json:
+    if as_json:
+        print(json.dumps(json_results, indent=2))
+    else:
         print(
             "infra probes: "
             + " · ".join(
@@ -587,8 +581,6 @@ def run_once(
             + (" — FAILURES" if any_failures else ""),
             flush=True,
         )
-    if as_json:
-        print(json.dumps(json_results, indent=2))
     for error in loop_errors:
         print(f"probe-runner loop error: {error}", flush=True)
     if not dry_run:
