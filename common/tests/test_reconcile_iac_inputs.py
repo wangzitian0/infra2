@@ -3990,6 +3990,42 @@ def test_post_deploy_smoke_asks_for_no_release_tag(monkeypatch, tmp_path) -> Non
     assert seen == [("finance_report/app", "v0.2.50")]
 
 
+@pytest.mark.parametrize(
+    ("slot", "expected"),
+    [
+        ("scheduled_audit,smoke", "v0.2.50"),
+        ("smoke,scheduled_audit", "v0.2.50"),
+        (" smoke , scheduled_audit ", "v0.2.50"),
+        ("smoke,staging_gate", ""),
+    ],
+)
+def test_post_deploy_asks_for_the_release_tag_whichever_slot_reads_the_lineage(
+    monkeypatch, tmp_path, slot, expected
+) -> None:
+    """The slot list of one post-deploy run: the tag is wanted when ANY slot reads the lineage,
+    wherever it stands in the list (a "last slot only" or "first slot only" rule fails)."""
+    seen = _record_hook_checkouts(monkeypatch, tmp_path)
+    plan = build_plan(
+        ["finance_report/finance_report/10.app/compose.yaml"],
+        app_release_tags={"finance_report/app": "v0.2.50"},
+    )
+    applied = [
+        reconcile.DeployCommand(
+            service="finance_report/app", deploy_type="staging", argv=["true"]
+        )
+    ]
+    reconcile.run_post_deploy_app_hooks(
+        plan,
+        applied,
+        repo_root=tmp_path,
+        after="v1.2.3",
+        target_env="staging",
+        slot=slot,
+        record_issues=False,
+    )
+    assert seen == [("finance_report/app", expected)]
+
+
 @pytest.mark.parametrize("with_source_sha", [True, False])
 @pytest.mark.parametrize(
     ("slot", "expected"), [("scheduled_audit", "v0.2.50"), ("smoke", "")]
