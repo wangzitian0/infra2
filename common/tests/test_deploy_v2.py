@@ -252,7 +252,11 @@ def test_iac_ref_on_main_fail_closed_on_api_error(empty_checkout):
     # unverified ref through; the API error stays reachable as the exception cause
     with pytest.raises(RuntimeError, match="compare API failed.*local git") as raised:
         assert_iac_ref_on_main(
-            "v1.2.3", "prod", token="", transport=_cmp_transport("behind", code=502)
+            "v1.2.3",
+            "prod",
+            token="",
+            transport=_cmp_transport("behind", code=502),
+            sleep=lambda _s: None,
         )
     assert isinstance(raised.value.__cause__, httpx.HTTPStatusError)
 
@@ -411,7 +415,11 @@ def test_iac_ref_on_main_local_git_proves_ancestry_when_the_api_errors(full_clon
     """Case (a): the compare API answers 502 and the full clone proves v1.0.0 is an
     ancestor of origin/main, so the guard passes (#616 item 3)."""
     assert_iac_ref_on_main(
-        "v1.0.0", "prod", token="", transport=_cmp_transport("behind", code=502)
+        "v1.0.0",
+        "prod",
+        token="",
+        transport=_cmp_transport("behind", code=502),
+        sleep=lambda _s: None,
     )
 
 
@@ -421,7 +429,13 @@ def test_iac_ref_on_main_local_git_proves_ancestry_when_the_transport_raises(
     def transport(url, **_kw):
         raise httpx.ConnectError("network down")
 
-    assert_iac_ref_on_main("v1.0.0", "staging", token="", transport=transport)
+    assert_iac_ref_on_main(
+        "v1.0.0",
+        "staging",
+        token="",
+        transport=transport,
+        sleep=lambda _s: None,
+    )
 
 
 def test_iac_ref_on_main_refused_when_api_errors_and_local_git_says_not_ancestor(
@@ -432,7 +446,11 @@ def test_iac_ref_on_main_refused_when_api_errors_and_local_git_says_not_ancestor
         RuntimeError, match="compare API failed.*local git.*not reachable"
     ):
         assert_iac_ref_on_main(
-            "v9.9.9", "prod", token="", transport=_cmp_transport("behind", code=502)
+            "v9.9.9",
+            "prod",
+            token="",
+            transport=_cmp_transport("behind", code=502),
+            sleep=lambda _s: None,
         )
 
 
@@ -444,7 +462,11 @@ def test_iac_ref_on_main_refused_when_api_errors_and_the_commit_is_missing_local
         RuntimeError, match="compare API failed.*local git.*cannot resolve"
     ):
         assert_iac_ref_on_main(
-            "v7.7.7", "prod", token="", transport=_cmp_transport("behind", code=502)
+            "v7.7.7",
+            "prod",
+            token="",
+            transport=_cmp_transport("behind", code=502),
+            sleep=lambda _s: None,
         )
 
 
@@ -457,7 +479,11 @@ def test_iac_ref_on_main_shallow_clone_is_not_trusted_by_accident(shallow_clone)
     assert "v1.0.0" not in local_tags  # the fixture really lacks the commit
     with pytest.raises(RuntimeError) as raised:
         assert_iac_ref_on_main(
-            "v1.0.0", "prod", token="", transport=_cmp_transport("behind", code=502)
+            "v1.0.0",
+            "prod",
+            token="",
+            transport=_cmp_transport("behind", code=502),
+            sleep=lambda _s: None,
         )
     message = str(raised.value)
     assert "compare API failed" in message
@@ -468,7 +494,11 @@ def test_iac_ref_on_main_shallow_clone_is_not_trusted_by_accident(shallow_clone)
 def test_iac_ref_on_main_refused_when_origin_main_is_missing_locally(empty_checkout):
     with pytest.raises(RuntimeError, match="compare API failed.*local git"):
         assert_iac_ref_on_main(
-            "v1.0.0", "prod", token="", transport=_cmp_transport("behind", code=502)
+            "v1.0.0",
+            "prod",
+            token="",
+            transport=_cmp_transport("behind", code=502),
+            sleep=lambda _s: None,
         )
 
 
@@ -2141,6 +2171,122 @@ def test_assert_app_version_ref_on_main_falls_back_to_local_git_on_api_error(
             max_attempts=1,
             repo_root=tmp_path,
         )
+
+
+@pytest.mark.parametrize("transient_code", [500, 502, 503, 504])
+def test_github_compare_status_retries_transient_5xx_then_succeeds(transient_code):
+    """#1583: transient GitHub compare 5xx responses retry with exponential backoff."""
+    from common.deploy.preflight import (
+        _github_compare_status,
+        assert_app_version_ref_on_main,
+    )
+
+    answers = [
+        _CmpResp("", code=transient_code, text="Internal Server Error"),
+        _CmpResp("behind", code=200),
+    ]
+    slept: list[float] = []
+    assert_app_version_ref_on_main(
+        "v0.2.58",
+        "staging",
+        service="finance_report/app",
+        repo="https://github.com/wangzitian0/finance_report.git",
+        token="tok",
+        transport=lambda _url, **_kw: answers.pop(0),
+        sleep=slept.append,
+        now=lambda: 0.0,
+        max_attempts=3,
+    )
+    assert slept == [1.0]
+    assert answers == []
+
+    # Non-5xx HTTP 404 is deterministic and must NOT retry
+    not_found_slept: list[float] = []
+    with pytest.raises(httpx.HTTPStatusError):
+        _github_compare_status(
+            "https://api.github.com/repos/o/r/compare/main...v1.0.0",
+            {},
+            anonymous=False,
+            transport=lambda _url, **_kw: _CmpResp("", code=404),
+            sleep=not_found_slept.append,
+            now=lambda: 0.0,
+            max_attempts=3,
+        )
+    assert not_found_slept == []
+
+
+def test_github_compare_status_fails_closed_after_persistent_500():
+    """#1583: persistent HTTP 500 caps backoff at 8s and raises HTTPStatusError."""
+    from common.deploy.preflight import _github_compare_status
+
+    slept: list[float] = []
+    calls = 0
+
+    def always_500(_url, **_kw):
+        nonlocal calls
+        calls += 1
+        return _CmpResp("", code=500, text="Internal Server Error")
+
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        _github_compare_status(
+            "https://api.github.com/repos/o/r/compare/main...v1.0.0",
+            {},
+            anonymous=False,
+            transport=always_500,
+            sleep=slept.append,
+            now=lambda: 0.0,
+            max_attempts=6,
+        )
+    assert exc_info.value.response.status_code == 500
+    assert calls == 6
+    assert slept == [1.0, 2.0, 4.0, 8.0, 8.0]
+
+
+def test_github_compare_status_retries_transient_transport_error_and_fails_closed_when_persistent():
+    """#1583: transient httpx.TransportError retries; persistent TransportError raises."""
+    from common.deploy.preflight import _github_compare_status
+
+    # 1. Transient ConnectError followed by 200 succeeds
+    events: list[object] = [
+        httpx.ConnectError("connection reset"),
+        _CmpResp("identical", code=200),
+    ]
+    slept: list[float] = []
+
+    def flaky_transport(_url, **_kw):
+        nxt = events.pop(0)
+        if isinstance(nxt, Exception):
+            raise nxt
+        return nxt
+
+    status = _github_compare_status(
+        "https://api.github.com/repos/o/r/compare/main...v1.0.0",
+        {},
+        anonymous=False,
+        transport=flaky_transport,
+        sleep=slept.append,
+        now=lambda: 0.0,
+        max_attempts=3,
+    )
+    assert status == "identical"
+    assert slept == [1.0]
+    assert events == []
+
+    # 2. Persistent ConnectError across all max_attempts raises
+    slept_fail: list[float] = []
+    with pytest.raises(httpx.ConnectError, match="network unreachable"):
+        _github_compare_status(
+            "https://api.github.com/repos/o/r/compare/main...v1.0.0",
+            {},
+            anonymous=False,
+            transport=lambda _url, **_kw: (_ for _ in ()).throw(
+                httpx.ConnectError("network unreachable")
+            ),
+            sleep=slept_fail.append,
+            now=lambda: 0.0,
+            max_attempts=3,
+        )
+    assert slept_fail == [1.0, 2.0]
 
 
 # --- #1500 AC3: App fixed-env train SSOT (harness/repos.yaml + --bootstrap) ---

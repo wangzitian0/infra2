@@ -156,6 +156,10 @@ jobs:
       - name: Audit App runtime hooks manifests (#1416)
         run: python -m tools.reconcile_iac_inputs --audit-app-hooks
 
+      - name: Audit single deploy trigger (necessity)
+        if: env.DOKPLOY_API_KEY != ''
+        run: python -m invoke dokploy.audit-autodeploy
+
       - name: Run scheduled App runtime audits (#1493)
         if: ${{ github.event.inputs.dry_run != 'true' }}
         env:
@@ -167,18 +171,16 @@ jobs:
           TA_MCP_TOKEN: ${{ secrets.TA_MCP_TOKEN }}
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          python -m tools.reconcile_iac_inputs --run-scheduled-audit
-
-      - name: Audit single deploy trigger (necessity)
-        if: env.DOKPLOY_API_KEY != ''
-        run: python -m invoke dokploy.audit-autodeploy
+          python -m tools.reconcile_iac_inputs --run-scheduled-audit --output-json scheduled-audit-result.json
 
       - name: Alert on failure
         if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
         run: |
           python - <<'PY'
           import os
+          from pathlib import Path
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
+          from tools.reconcile_iac_inputs import resolve_audit_job_failure_alert
 
           run_url = "/".join(
               v for v in (
@@ -188,14 +190,15 @@ jobs:
                   os.environ.get("GITHUB_RUN_ID"),
               ) if v
           )
-          deliver_out_of_band_alert(
-              os.environ,
-              "🚨 Infra2 deploy-guard audit failed.\n"
-              "A deploy dependency invariant is broken (under-fan-out coverage "
-              "or a non-allowlisted Dokploy autoDeploy). Services may run stale "
-              "code or deploy outside the iac-runner.\n"
-              f"Run: {run_url}",
+          alert_text, skip_notice = resolve_audit_job_failure_alert(
+              Path("scheduled-audit-result.json"),
+              run_url=run_url,
           )
+          if skip_notice:
+              print(skip_notice)
+              raise SystemExit(0)
+          assert alert_text is not None
+          deliver_out_of_band_alert(os.environ, alert_text)
           PY
 
   watchdog:

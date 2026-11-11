@@ -150,3 +150,34 @@ def test_ops_checks_audit_job_installs_uv_before_the_hook_audit() -> None:
     assert uv_index < audit_names.index(hook_name), (
         f"the uv step of job audit in ops-checks.yml must come before {hook_name!r}"
     )
+
+
+def test_ops_checks_audit_job_runs_all_deploy_guards_before_scheduled_app_hooks() -> (
+    None
+):
+    """#1583: all deploy-guard steps run unconditionally before scheduled App hooks,
+    scheduled App hooks emit `scheduled-audit-result.json`, and `Alert on failure`
+    classifies and deduplicates alerts via `resolve_audit_job_failure_alert`."""
+    audit_steps = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["audit"][
+        "steps"
+    ]
+    names = [step.get("name") for step in audit_steps]
+    hook_name = "Run scheduled App runtime audits (#1493)"
+    hook_idx = names.index(hook_name)
+    for guard_name in (
+        "Audit deploy fan-out coverage (sufficiency)",
+        "Audit App runtime hooks manifests (#1416)",
+        "Audit single deploy trigger (necessity)",
+    ):
+        assert names.index(guard_name) < hook_idx, (
+            f"{guard_name!r} must run before {hook_name!r} in ops-checks.yml jobs.audit"
+        )
+    hook_step = audit_steps[hook_idx]
+    assert "--run-scheduled-audit" in hook_step["run"]
+    assert "--output-json scheduled-audit-result.json" in hook_step["run"]
+
+    alert_idx = names.index("Alert on failure")
+    assert hook_idx < alert_idx
+    alert_step = audit_steps[alert_idx]
+    assert "resolve_audit_job_failure_alert" in alert_step["run"]
+    assert "scheduled-audit-result.json" in alert_step["run"]

@@ -3472,3 +3472,539 @@ def test_resolve_workflow_failure_alert_preserves_crash_detection_and_honors_sup
         "::notice::Suppressing duplicate schedule Feishu alert (schedule_known_open_hook_incidents); open incident issue(s) updated."
         in capsys.readouterr().out
     )
+
+
+def test_scheduled_audit_alert_text_and_audit_job_failure_resolution(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """#1583: scheduled_audit_alert_text formats App runtime audit failures distinctly from
+    deploy-guard crashes, main(--run-scheduled-audit --output-json) records suppression on
+    schedule repeats while exiting 1, and resolve_audit_job_failure_alert fails closed on
+    missing/corrupt JSON while honoring explicit alert_text and alert_suppressed_reason."""
+    import tools.out_of_band_watchdog as watchdog
+    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+    from infra2_sdk.refs import ResolvedRef
+
+    run_url = "https://github.com/wangzitian0/infra2/actions/runs/888"
+
+    # 1. scheduled_audit_alert_text returns None when all hooks pass
+    assert (
+        reconcile.scheduled_audit_alert_text(
+            hook_results=[
+                {
+                    "service": "finance_report/app",
+                    "slot": "scheduled_audit",
+                    "version_ref": "v0.2.59",
+                    "status": "pass",
+                    "summary": "ok",
+                }
+            ],
+            target_env="staging",
+            run_url=run_url,
+        )
+        is None
+    )
+
+    # 2. scheduled_audit_alert_text formats failed hooks cleanly
+    formatted = reconcile.scheduled_audit_alert_text(
+        hook_results=[
+            {
+                "service": "truealpha/app",
+                "slot": "scheduled_audit",
+                "version_ref": "v0.2.86",
+                "status": "fail",
+                "summary": "nightly check failed\nsecond line ignored",
+            },
+            {
+                "service": "finance_report/app",
+                "slot": "scheduled_audit",
+                "version_ref": "v0.2.59",
+                "status": "pass",
+                "summary": "ok",
+            },
+        ],
+        target_env="staging",
+        run_url=run_url,
+    )
+    assert formatted == (
+        "⚠️ Scheduled App runtime audit FAILED (staging; deploy-guard invariants passed).\n"
+        "- truealpha/app [scheduled_audit @ v0.2.86]: nightly check failed\n"
+        f"Run: {run_url}"
+    )
+
+    # 3. resolve_audit_job_failure_alert: missing/corrupt/empty -> deploy-guard crash fallback
+    result_file = tmp_path / "scheduled-audit-result.json"
+    expected_guard_crash = (
+        "🚨 Infra2 deploy-guard audit failed.\n"
+        "A deploy dependency invariant is broken (under-fan-out coverage "
+        "or a non-allowlisted Dokploy autoDeploy). Services may run stale "
+        "code or deploy outside the iac-runner.\n"
+        f"Run: {run_url}"
+    )
+    assert reconcile.resolve_audit_job_failure_alert(result_file, run_url=run_url) == (
+        expected_guard_crash,
+        None,
+    )
+    result_file.write_text("{invalid", encoding="utf-8")
+    assert reconcile.resolve_audit_job_failure_alert(result_file, run_url=run_url) == (
+        expected_guard_crash,
+        None,
+    )
+    result_file.write_text(
+        json.dumps({"alert_text": None, "alert_suppressed_reason": None}),
+        encoding="utf-8",
+    )
+    assert reconcile.resolve_audit_job_failure_alert(result_file, run_url=run_url) == (
+        expected_guard_crash,
+        None,
+    )
+
+    # 4. End-to-end main(["--run-scheduled-audit", "--output-json", ...]) on schedule:
+    #    'commented' suppresses alert_text while returning 1; 'opened' populates alert_text.
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.86\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
+    )
+    manifest = RuntimeHooksManifest.from_dict(
+        {
+            "schema_version": 1,
+            "service": "truealpha/app",
+            "slots": {s: {"run": "exit 1", "timeout_seconds": 30} for s in HOOK_SLOTS},
+        }
+    )
+    monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_app_hook_cwd",
+        lambda *_a, **_kw: (tmp_path, None),
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "execute_app_hook_slot",
+        lambda *_a, **_kw: HookRunResult(
+            service="truealpha/app",
+            slot="scheduled_audit",
+            environment="staging",
+            app_url="https://truealpha-staging.truealpha.club",
+            version_ref="v0.2.86",
+            status="fail",
+            exit_code=1,
+            duration_seconds=0.1,
+            summary="nightly verdict failed",
+        ),
+    )
+    trail_action = "commented"
+
+    def _fake_trail(entries, **_kw):
+        for e in entries:
+            if isinstance(e, dict):
+                e["issue_trail_action"] = trail_action
+                e["issue_number"] = 901
+        return 0
+
+    monkeypatch.setattr(reconcile, "record_app_hook_issue_trail", _fake_trail)
+    monkeypatch.setenv("GITHUB_TOKEN", "tok-audit")
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+    monkeypatch.setenv("GITHUB_RUN_URL", run_url)
+
+    rc_commented = main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--run-scheduled-audit",
+            "--sync-service",
+            "truealpha/app",
+            "--output-json",
+            str(result_file),
+        ]
+    )
+    capsys.readouterr()
+    assert rc_commented == 1
+    saved_commented = json.loads(result_file.read_text(encoding="utf-8"))
+    assert saved_commented["alert_text"] is None
+    assert (
+        saved_commented["alert_suppressed_reason"]
+        == "schedule_known_open_hook_incidents"
+    )
+    assert reconcile.resolve_audit_job_failure_alert(result_file, run_url=run_url) == (
+        None,
+        f"::notice::Suppressing duplicate schedule Feishu alert (schedule_known_open_hook_incidents); open incident issue(s) updated. Run: {run_url}",
+    )
+
+    # Execute the actual ops-checks.yml jobs.audit Alert on failure snippet when suppressed
+    ops_workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "ops-checks.yml").read_text(encoding="utf-8")
+    )
+    audit_alert_step = next(
+        s
+        for s in ops_workflow["jobs"]["audit"]["steps"]
+        if s.get("name") == "Alert on failure"
+    )
+    py_body = (
+        audit_alert_step["run"].split("python - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+    )
+    delivered: list[str] = []
+    monkeypatch.setattr(
+        watchdog,
+        "deliver_out_of_band_alert",
+        lambda _env, msg: delivered.append(msg),
+    )
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc_info:
+        exec(compile(py_body, "<ops-checks-audit-alert-suppressed>", "exec"), {})
+    assert exc_info.value.code == 0
+    assert delivered == []
+    assert "Suppressing duplicate schedule Feishu alert" in capsys.readouterr().out
+
+    # First occurrence ('opened') on schedule writes alert_text and pages via Alert on failure
+    trail_action = "opened"
+    rc_opened = main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--run-scheduled-audit",
+            "--sync-service",
+            "truealpha/app",
+            "--output-json",
+            str(result_file),
+        ]
+    )
+    capsys.readouterr()
+    assert rc_opened == 1
+    saved_opened = json.loads(result_file.read_text(encoding="utf-8"))
+    assert saved_opened["alert_suppressed_reason"] is None
+    assert saved_opened["alert_text"] == (
+        "⚠️ Scheduled App runtime audit FAILED (staging; deploy-guard invariants passed).\n"
+        "- truealpha/app [scheduled_audit @ v0.2.86]: nightly verdict failed\n"
+        f"Run: {run_url}"
+    )
+    exec(compile(py_body, "<ops-checks-audit-alert-paged>", "exec"), {})
+    assert delivered == [saved_opened["alert_text"]]
+
+
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def _origin_with_release_tag(tmp_path: Path) -> tuple[Path, str, str, str]:
+    """A real git origin. Commit 1 adds the text `"needle"` to f.txt. Commit 2 changes
+    another line and carries the annotated tag v1.2.3. Commit 3 is the head of main.
+    Returns (origin, commit1, commit2, commit3)."""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "main")
+    _git(origin, "config", "uploadpack.allowFilter", "true")
+    (origin / "f.txt").write_text('"needle"\nA\n')
+    _git(origin, "add", "f.txt")
+    _git(origin, "commit", "-q", "-m", "one")
+    first = _git(origin, "rev-parse", "HEAD")
+    (origin / "f.txt").write_text('"needle"\nB\n')
+    _git(origin, "commit", "-q", "-am", "two")
+    tagged = _git(origin, "rev-parse", "HEAD")
+    _git(origin, "tag", "-a", "v1.2.3", "-m", "release")
+    (origin / "f.txt").write_text('"needle"\nC\n')
+    _git(origin, "commit", "-q", "-am", "three")
+    return origin, first, tagged, _git(origin, "rev-parse", "HEAD")
+
+
+def _checkout_of(monkeypatch, origin: Path, sha: str, **kwargs):
+    monkeypatch.setitem(reconcile.APP_SOURCES, "test/app", "test/app")
+    monkeypatch.setattr(reconcile, "git_url", lambda _slug: origin.as_uri())
+    monkeypatch.setattr(reconcile, "SERVICE_TO_SUBMODULE_PATH", {})
+    return reconcile.resolve_app_hook_cwd("test/app", sha, **kwargs)
+
+
+def _recording_runner(argvs: list[list[str]]):
+    def run(argv, **kwargs):
+        argvs.append(list(argv))
+        return subprocess.run(argv, **kwargs)
+
+    return run
+
+
+def test_hook_checkout_dates_a_name_from_the_lineage_of_the_release(
+    tmp_path, monkeypatch
+) -> None:
+    """#1567: the truealpha nightly check runs `git rev-parse <tag>^{commit}` and then
+    `git log --reverse -S'"name"' <tag>` in the hook checkout. A depth-1 checkout has no tag
+    name, so the first command failed. A depth-1 tag fetch would pass it and answer the
+    second command with the release commit (commit 2) in place of commit 1, which is the
+    commit that first held the name."""
+    origin, first, tagged, head = _origin_with_release_tag(tmp_path)
+    cwd, tmp = _checkout_of(monkeypatch, origin, head, release_ref="v1.2.3")
+    try:
+        # Checked first: `git log -S` below downloads the old file contents it needs.
+        missing = _git(cwd, "rev-list", "--objects", "--missing=print", "v1.2.3")
+        assert any(line.startswith("?") for line in missing.splitlines())
+        assert _git(cwd, "rev-parse", "--verify", "v1.2.3^{commit}") == tagged
+        dated = _git(
+            cwd,
+            "log",
+            "--reverse",
+            "--format=%H",
+            "-S",
+            '"needle"',
+            "v1.2.3",
+            "--",
+            "f.txt",
+        ).splitlines()
+        assert dated[0] == first
+        # The checked-out commit is the one that was asked for, not the tag.
+        assert _git(cwd, "rev-parse", "HEAD") == head
+        assert (cwd / "f.txt").read_text() == '"needle"\nC\n'
+    finally:
+        assert tmp is not None
+        tmp.cleanup()
+
+
+def test_hook_checkout_without_a_release_ref_has_no_tag_names(
+    tmp_path, monkeypatch
+) -> None:
+    """Control for the test above: with no release ref the checkout is the old depth-1 one."""
+    origin, _first, tagged, _head = _origin_with_release_tag(tmp_path)
+    cwd, tmp = _checkout_of(monkeypatch, origin, tagged)
+    try:
+        assert _git(cwd, "tag", "--list") == ""
+        with pytest.raises(subprocess.CalledProcessError):
+            _git(cwd, "rev-parse", "--verify", "v1.2.3^{commit}")
+        assert _git(cwd, "rev-list", "--count", "HEAD") == "1"
+    finally:
+        assert tmp is not None
+        tmp.cleanup()
+
+
+@pytest.mark.parametrize(
+    "ref", ["main", "", "v1.2", "--upload-pack=x", "v1.2.3\n", "v1.2.3:refs/heads/x"]
+)
+def test_hook_checkout_fetches_only_a_vXYZ_release_tag(
+    tmp_path, monkeypatch, ref
+) -> None:
+    """The fetch guard is `RELEASE_TAG_RE`. The runner records every command, so a ref that
+    the guard should stop shows up as a `fetch ... tag` call even when git itself would
+    refuse it."""
+    origin, _first, tagged, _head = _origin_with_release_tag(tmp_path)
+    argvs: list[list[str]] = []
+    cwd, tmp = _checkout_of(
+        monkeypatch, origin, tagged, release_ref=ref, runner=_recording_runner(argvs)
+    )
+    try:
+        assert cwd != reconcile.REPO_ROOT
+        assert [a for a in argvs if "tag" in a] == []
+    finally:
+        assert tmp is not None
+        tmp.cleanup()
+
+
+def test_hook_checkout_runs_one_blobless_full_history_tag_fetch(
+    tmp_path, monkeypatch
+) -> None:
+    origin, _first, tagged, _head = _origin_with_release_tag(tmp_path)
+    argvs: list[list[str]] = []
+    _cwd, tmp = _checkout_of(
+        monkeypatch,
+        origin,
+        tagged,
+        release_ref="v1.2.3",
+        runner=_recording_runner(argvs),
+    )
+    try:
+        tag_fetches = [a for a in argvs if a[:2] == ["git", "fetch"] and "tag" in a]
+        assert len(tag_fetches) == 1
+        assert tag_fetches[0][-2:] == ["tag", "v1.2.3"]
+        assert "--filter=blob:none" in tag_fetches[0]
+        assert "--no-tags" in tag_fetches[0]
+        assert "--depth" not in tag_fetches[0]
+    finally:
+        assert tmp is not None
+        tmp.cleanup()
+
+
+def test_hook_checkout_survives_a_refused_tag_fetch_and_says_so(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """A tag that the origin lacks leaves a valid checkout and one ::warning:: line."""
+    origin, _first, tagged, _head = _origin_with_release_tag(tmp_path)
+    cwd, tmp = _checkout_of(monkeypatch, origin, tagged, release_ref="v9.9.9")
+    try:
+        assert cwd != reconcile.REPO_ROOT
+        assert _git(cwd, "rev-parse", "HEAD") == tagged
+        err = capsys.readouterr().err
+        assert "::warning::release tag v9.9.9 was not fetched for test/app" in err
+    finally:
+        assert tmp is not None
+        tmp.cleanup()
+
+
+@pytest.mark.parametrize(
+    ("slot", "expected"),
+    [
+        ("scheduled_audit", "v1.2.3"),
+        ("smoke", ""),
+        ("staging_gate", ""),
+        ("preview_gate", ""),
+    ],
+)
+def test_release_ref_is_needed_only_by_the_slot_that_reads_the_lineage(
+    slot, expected
+) -> None:
+    assert reconcile.release_ref_for_slot(slot, "v1.2.3") == expected
+
+
+def _record_hook_checkouts(monkeypatch, tmp_path) -> list[tuple[str, str]]:
+    """Stub the hook environment of a reconcile run; return the (service, release_ref)
+    of every hook checkout that the run asks for."""
+    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+    from infra2_sdk.refs import ResolvedRef
+
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.50\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.83\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
+    )
+    manifest = RuntimeHooksManifest.from_dict(
+        {
+            "schema_version": 1,
+            "service": "finance_report/app",
+            "slots": {
+                slot_name: {
+                    "run": "echo ok",
+                    "bootstrap": "",
+                    "timeout_seconds": 30,
+                    "required_env": [],
+                    "optional_env": [],
+                    "artifacts_dir": f"artifacts/{slot_name}",
+                }
+                for slot_name in HOOK_SLOTS
+            },
+        }
+    )
+    monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
+    monkeypatch.setattr(
+        reconcile,
+        "execute_app_hook_slot",
+        lambda _m, slot, *, app_url, environment, version_ref, **_kw: HookRunResult(
+            service="finance_report/app",
+            slot=slot,
+            environment=environment,
+            app_url=app_url,
+            version_ref=version_ref,
+            status="pass",
+            exit_code=0,
+            duration_seconds=0.1,
+            summary="ok",
+        ),
+    )
+    monkeypatch.setattr(reconcile, "record_app_hook_issue_trail", lambda *_a, **_kw: 0)
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    seen: list[tuple[str, str]] = []
+
+    def _fake_checkout(service, _sha, *, release_ref="", **_kw):
+        seen.append((service, release_ref))
+        return tmp_path, None
+
+    monkeypatch.setattr(reconcile, "resolve_app_hook_cwd", _fake_checkout)
+    return seen
+
+
+def test_scheduled_audit_asks_for_the_release_tag_of_each_app(
+    monkeypatch, tmp_path
+) -> None:
+    """The call site of #1567: the scheduled audit passes the pinned release of each App."""
+    seen = _record_hook_checkouts(monkeypatch, tmp_path)
+    reconcile.run_scheduled_app_audits(tmp_path, runner=subprocess.run)
+    assert dict(seen) == {"finance_report/app": "v0.2.50", "truealpha/app": "v0.2.83"}
+
+
+def test_post_deploy_smoke_asks_for_no_release_tag(monkeypatch, tmp_path) -> None:
+    """A production smoke run must not gain a fetch, whereas a lineage slot in post-deploy does."""
+    seen = _record_hook_checkouts(monkeypatch, tmp_path)
+    plan = build_plan(
+        ["finance_report/finance_report/10.app/compose.yaml"],
+        app_release_tags={"finance_report/app": "v0.2.50"},
+    )
+    applied = [
+        reconcile.DeployCommand(
+            service="finance_report/app", deploy_type="prod", argv=["true"]
+        )
+    ]
+    reconcile.run_post_deploy_app_hooks(
+        plan,
+        applied,
+        repo_root=tmp_path,
+        after="v1.2.3",
+        target_env="production",
+        slot="smoke",
+        record_issues=False,
+    )
+    assert seen == [("finance_report/app", "")]
+
+    seen.clear()
+    reconcile.run_post_deploy_app_hooks(
+        plan,
+        applied,
+        repo_root=tmp_path,
+        after="v1.2.3",
+        target_env="staging",
+        slot="smoke,scheduled_audit",
+        record_issues=False,
+    )
+    assert seen == [("finance_report/app", "v0.2.50")]
+
+
+@pytest.mark.parametrize("with_source_sha", [True, False])
+@pytest.mark.parametrize(
+    ("slot", "expected"), [("scheduled_audit", "v0.2.50"), ("smoke", "")]
+)
+def test_run_hook_slot_passes_the_release_tag_only_for_the_audit_slot(
+    monkeypatch, tmp_path, slot, expected, with_source_sha
+) -> None:
+    """Both service branches of --run-hook-slot: with an explicit source SHA, and with the
+    SHA resolved from the pinned release."""
+    seen = _record_hook_checkouts(monkeypatch, tmp_path)
+    argv = [
+        "--repo-root",
+        str(tmp_path),
+        "--run-hook-slot",
+        slot,
+        "--hook-service",
+        "finance_report/app",
+        "--version-ref",
+        "v0.2.50",
+        "--target-url",
+        "https://report-staging.example",
+    ]
+    if with_source_sha:
+        argv += ["--hook-source-sha", SHA]
+    rc = main(argv)
+    assert rc == 0
+    assert seen == [("finance_report/app", expected)]
