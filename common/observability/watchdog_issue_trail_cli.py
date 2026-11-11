@@ -40,10 +40,44 @@ from common.observability.issue_trail import (  # noqa: E402
     OFF,
     VERDICTS_ENV,
     GitHubIssues,
+    check_name,
     issue_trail_mode,
     load_trail,
     reconcile_issue_trail,
 )
+
+
+class _WatchdogScopedIssueApi:
+    """Scope watchdog issue listings to exclude ``app-hook:*`` incidents (#1583)."""
+
+    def __init__(self, inner: object) -> None:
+        self._inner = inner
+
+    def open_issues(self, *, with_body: bool = False) -> list[dict]:
+        items = (
+            self._inner.open_issues(with_body=True)  # type: ignore[attr-defined]
+            if with_body
+            else self._inner.open_issues()  # type: ignore[attr-defined]
+        )
+        return [
+            item
+            for item in items
+            if not (check_name(str(item.get("title") or "")) or "").startswith(
+                "app-hook:"
+            )
+        ]
+
+    def create(self, title: str, body: str, labels: object) -> int:
+        return self._inner.create(title, body, labels)  # type: ignore[attr-defined]
+
+    def comment(self, number: int, body: str) -> None:
+        self._inner.comment(number, body)  # type: ignore[attr-defined]
+
+    def update_body(self, number: int, body: str) -> None:
+        self._inner.update_body(number, body)  # type: ignore[attr-defined]
+
+    def close(self, number: int) -> None:
+        self._inner.close(number)  # type: ignore[attr-defined]
 
 
 def run_context(env: Mapping[str, str]) -> str:
@@ -97,7 +131,7 @@ def main(env: Mapping[str, str] | None = None, *, issues_factory=GitHubIssues) -
         f"complete={trail.complete}"
     )
     return reconcile_issue_trail(
-        issues_factory(repository, token),
+        _WatchdogScopedIssueApi(issues_factory(repository, token)),
         trail,
         mode=mode,
         run_url=_run_url(current),

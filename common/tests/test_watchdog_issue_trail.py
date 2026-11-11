@@ -704,3 +704,85 @@ def test_the_tool_is_inert_when_off_and_loud_when_misconfigured(
         )
         == 1
     )
+
+
+def test_the_tool_retires_obsolete_watchdog_checks_without_touching_app_hook_issues(
+    tmp_path: Path,
+) -> None:
+    """#1583: a complete watchdog trail retires obsolete watchdog checks in infra2
+    while leaving cross-repo fallback `app-hook:*` incident issues open and untouched."""
+    env = _tool_env(tmp_path)
+    record_verdicts(
+        env["INFRA2_WATCHDOG_VERDICTS_PATH"],
+        source=WATCHDOG_SOURCE,
+        checks=[CheckVerdict("infra2-ssh", True)],
+        complete=True,
+    )
+    record_verdicts(
+        env["INFRA2_WATCHDOG_VERDICTS_PATH"],
+        source=RUNNER_HEALTH_SOURCE,
+        checks=[CheckVerdict(RUNNER_HEALTH_SOURCE, True)],
+        complete=True,
+    )
+    api = FakeIssues(
+        [
+            _issue(11, "infra2-old-check"),
+            _issue(12, "app-hook:finance_report/app:staging_gate:staging"),
+            _issue(13, "app-hook:truealpha/app:scheduled_audit:staging"),
+            _issue(14, "infra2-ssh"),
+        ]
+    )
+    assert trail_tool.main(env, issues_factory=lambda _r, _t: api) == 0
+    assert sorted(api.closed) == [11, 14]
+    bodies = dict(api.comments)
+    assert set(bodies) == {11, 14}
+    assert "no longer reports to this trail" in bodies[11]
+    assert "is green again" in bodies[14]
+
+
+def test_watchdog_scoped_issue_api_filters_app_hooks_and_delegates_writes() -> None:
+    """#1583: `_WatchdogScopedIssueApi` forwards `with_body` and write methods intact."""
+    calls: list[tuple] = []
+
+    class _DetailedApi:
+        def open_issues(self, *, with_body: bool = False) -> list[dict]:
+            calls.append(("open_issues", with_body))
+            return [
+                {"number": 1, "title": title_for("infra2-ssh"), "body": "b1"},
+                {
+                    "number": 2,
+                    "title": title_for(
+                        "app-hook:finance_report/app:staging_gate:staging"
+                    ),
+                    "body": "b2",
+                },
+                {"number": 3, "title": "unrelated issue", "body": "b3"},
+            ]
+
+        def create(self, title: str, body: str, labels) -> int:
+            calls.append(("create", title, body, tuple(labels)))
+            return 88
+
+        def comment(self, number: int, body: str) -> None:
+            calls.append(("comment", number, body))
+
+        def update_body(self, number: int, body: str) -> None:
+            calls.append(("update_body", number, body))
+
+        def close(self, number: int) -> None:
+            calls.append(("close", number))
+
+    scoped = trail_tool._WatchdogScopedIssueApi(_DetailedApi())
+    listed = scoped.open_issues(with_body=True)
+    assert [item["number"] for item in listed] == [1, 3]
+    assert scoped.create("T", "B", ("incident",)) == 88
+    scoped.comment(88, "C")
+    scoped.update_body(88, "U")
+    scoped.close(88)
+    assert calls == [
+        ("open_issues", True),
+        ("create", "T", "B", ("incident",)),
+        ("comment", 88, "C"),
+        ("update_body", 88, "U"),
+        ("close", 88),
+    ]

@@ -1005,14 +1005,33 @@ def sync_app_releases(
     }
 
 
+#: Hook slots whose check reads the release lineage with ``git log`` (#1567). The truealpha
+#: nightly verdict check dates a check from the commit that first declared it. Other slots
+#: need no release tag, so a production smoke run adds no fetch.
+LINEAGE_HOOK_SLOTS = frozenset({"scheduled_audit"})
+
+
+def release_ref_for_slot(slot: str, version_ref: str) -> str:
+    """The release ref a checkout for ``slot`` must hold, or ``""`` when the slot needs none."""
+    return version_ref if slot in LINEAGE_HOOK_SLOTS else ""
+
+
 def resolve_app_hook_cwd(
     service: str,
     source_sha: str,
     *,
+    release_ref: str = "",
     repo_root: Path = REPO_ROOT,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> tuple[Path, tempfile.TemporaryDirectory[str] | None]:
-    """Return ``(app_cwd, temp_dir_or_none)`` containing an App checkout at ``source_sha`` (#1416)."""
+    """Return ``(app_cwd, temp_dir_or_none)`` containing an App checkout at ``source_sha`` (#1416).
+
+    A ``vX.Y.Z`` ``release_ref`` is also fetched as a tag with its full commit history and no
+    file contents (#1567). A depth-1 fetch of one commit carries no tag names, so an App check
+    that runs ``git rev-parse <tag>^{commit}`` fails. Full history is on purpose: a check that
+    dates a name with ``git log -S`` on a one-commit history gets the release date and not the
+    date that the name first appeared.
+    """
     sub_rel = SERVICE_TO_SUBMODULE_PATH.get(service, "")
     if sub_rel:
         sub_dir = Path(repo_root) / sub_rel
@@ -1054,6 +1073,29 @@ def resolve_app_hook_cwd(
             text=True,
             check=True,
         )
+        if RELEASE_TAG_RE.fullmatch(release_ref):
+            fetched = runner(
+                [
+                    "git",
+                    "fetch",
+                    "-q",
+                    "--filter=blob:none",
+                    "--no-tags",
+                    "origin",
+                    "tag",
+                    release_ref,
+                ],
+                cwd=checkout_dir,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if fetched.returncode != 0:
+                # The checkout stays valid. The App check reports the missing tag itself.
+                sys.stderr.write(
+                    f"::warning::release tag {release_ref} was not fetched for {service}: "
+                    f"{(fetched.stderr or fetched.stdout or '').strip()}\n"
+                )
         return checkout_dir, tmp_dir
     except Exception:
         tmp_dir.cleanup()
@@ -1489,6 +1531,10 @@ def run_post_deploy_app_hooks(
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 service,
                 source_sha,
+                release_ref=next(
+                    (r for s in slots if (r := release_ref_for_slot(s, version_ref))),
+                    "",
+                ),
                 repo_root=repo_root,
                 runner=runner,
             )
@@ -1647,6 +1693,7 @@ def run_scheduled_app_audits(
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 service,
                 source_sha,
+                release_ref=release_ref_for_slot(slot, version_ref),
                 repo_root=repo_root,
                 runner=runner,
             )
@@ -2160,6 +2207,65 @@ def failure_alert_text(
     return None
 
 
+def scheduled_audit_alert_text(
+    *,
+    hook_results: Sequence[Mapping[str, object]],
+    target_env: str,
+    run_url: str,
+) -> str | None:
+    """Format a Feishu alert for a failed scheduled App runtime audit (#1583)."""
+    failed_hooks = [item for item in hook_results if item.get("status") != "pass"]
+    if not failed_hooks:
+        return None
+    lines = [
+        f"⚠️ Scheduled App runtime audit FAILED ({target_env}; deploy-guard invariants passed)."
+    ]
+    for item in failed_hooks:
+        svc = str(item.get("service") or "?")
+        slot = str(item.get("slot") or "?")
+        vref = str(item.get("version_ref") or "?")
+        raw_summary = (
+            str(item.get("summary") or "").strip()
+            or str(item.get("stderr_tail") or "").strip()
+            or "hook failed"
+        )
+        summary_line = raw_summary.splitlines()[0][:200]
+        lines.append(f"- {svc} [{slot} @ {vref}]: {summary_line}")
+    lines.append(f"Run: {run_url}")
+    return "\n".join(lines)
+
+
+def resolve_audit_job_failure_alert(
+    result_path: Path,
+    *,
+    run_url: str,
+) -> tuple[str | None, str | None]:
+    """Resolve ``(alert_text_to_send, skip_notice)`` for the ``ops-checks`` ``audit`` job (#1583)."""
+    if result_path.exists():
+        try:
+            data = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = None
+        if isinstance(data, Mapping):
+            alert_text = data.get("alert_text")
+            if isinstance(alert_text, str) and alert_text.strip():
+                return (alert_text, None)
+            suppressed_reason = data.get("alert_suppressed_reason")
+            if isinstance(suppressed_reason, str) and suppressed_reason.strip():
+                return (
+                    None,
+                    f"::notice::Suppressing duplicate schedule Feishu alert ({suppressed_reason}); open incident issue(s) updated. Run: {run_url}",
+                )
+    crash_fallback_text = (
+        "🚨 Infra2 deploy-guard audit failed.\n"
+        "A deploy dependency invariant is broken (under-fan-out coverage "
+        "or a non-allowlisted Dokploy autoDeploy). Services may run stale "
+        "code or deploy outside the iac-runner.\n"
+        f"Run: {run_url}"
+    )
+    return (crash_fallback_text, None)
+
+
 def should_suppress_schedule_hook_alert(
     *,
     event_name: str,
@@ -2467,6 +2573,7 @@ def main(argv: list[str] | None = None) -> int:
             for name, secret in HOOK_RUNNER_SECRET_ENV.items()
             if (value := os.environ.get(name) or os.environ.get(secret))
         } or None
+        run_url = os.environ.get("GITHUB_RUN_URL", "") or github_run_url(os.environ)
         hook_results = run_scheduled_app_audits(
             repo_root,
             target_env=target_env,
@@ -2474,10 +2581,24 @@ def main(argv: list[str] | None = None) -> int:
             base_domain=args.domain,
             env_overrides=env_overrides,
             record_trail=not args.no_hook_issue_trail,
-            run_url=os.environ.get("GITHUB_RUN_URL", "") or github_run_url(os.environ),
+            run_url=run_url,
             services=args.sync_service or None,
         )
-        out_payload = {"scheduled_audit_results": hook_results}
+        suppressed_reason = should_suppress_schedule_hook_alert(
+            event_name=os.environ.get("GITHUB_EVENT_NAME", ""),
+            results=(),
+            hook_results=hook_results,
+        )
+        raw_alert = scheduled_audit_alert_text(
+            hook_results=hook_results,
+            target_env=target_env,
+            run_url=run_url,
+        )
+        out_payload = {
+            "alert_text": None if suppressed_reason else raw_alert,
+            "alert_suppressed_reason": suppressed_reason,
+            "scheduled_audit_results": hook_results,
+        }
         print(json.dumps(out_payload, sort_keys=True))
         if args.output_json:
             Path(args.output_json).write_text(
@@ -2605,6 +2726,7 @@ def main(argv: list[str] | None = None) -> int:
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 args.hook_service,
                 args.hook_source_sha,
+                release_ref=release_ref_for_slot(args.run_hook_slot, version_ref),
                 repo_root=repo_root,
             )
         elif args.hook_service:
@@ -2622,6 +2744,7 @@ def main(argv: list[str] | None = None) -> int:
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 args.hook_service,
                 resolved_sha,
+                release_ref=release_ref_for_slot(args.run_hook_slot, version_ref),
                 repo_root=repo_root,
             )
         else:

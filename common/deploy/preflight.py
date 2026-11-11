@@ -141,6 +141,13 @@ def _rate_limit_wait_seconds(resp, now: float) -> float:
     return float(_RATE_LIMIT_DEFAULT_WAIT_SECONDS)
 
 
+_TRANSIENT_COMPARE_STATUS_CODES = (500, 502, 503, 504)
+
+
+def _transient_backoff_seconds(attempt: int) -> float:
+    return min(float(2 ** (attempt - 1)), 8.0)
+
+
 def _github_compare_status(
     url: str,
     headers: dict[str, str],
@@ -152,24 +159,37 @@ def _github_compare_status(
     max_attempts: int,
 ) -> str | None:
     """GitHub's compare ``status`` for ``url``; raise when the API cannot answer."""
+    resp = None
     for attempt in range(1, max_attempts + 1):
-        resp = transport(url, headers=headers, timeout=30)
-        if not _rate_limited(resp):
-            break
-        wait = _rate_limit_wait_seconds(resp, now())
-        if attempt < max_attempts and wait <= _RATE_LIMIT_MAX_WAIT_SECONDS:
-            sleep(wait)
-            continue
-        why = (
-            "the call was UNAUTHENTICATED -- export GITHUB_TOKEN (github.token) in the deploy "
-            "step; anonymous calls share GitHub's 60/hour budget per runner IP"
-            if anonymous
-            else "the token's GitHub API budget is spent"
-        )
-        raise RuntimeError(
-            f"GitHub compare API rate-limited (HTTP {resp.status_code}) for {url}: {why}; "
-            f"budget resets in ~{wait:.0f}s (attempt {attempt}/{max_attempts}, #635)"
-        )
+        try:
+            resp = transport(url, headers=headers, timeout=30)
+        except httpx.TransportError:
+            if attempt < max_attempts:
+                sleep(_transient_backoff_seconds(attempt))
+                continue
+            raise
+        if _rate_limited(resp):
+            wait = _rate_limit_wait_seconds(resp, now())
+            if attempt < max_attempts and wait <= _RATE_LIMIT_MAX_WAIT_SECONDS:
+                sleep(wait)
+                continue
+            why = (
+                "the call was UNAUTHENTICATED -- export GITHUB_TOKEN (github.token) in the deploy "
+                "step; anonymous calls share GitHub's 60/hour budget per runner IP"
+                if anonymous
+                else "the token's GitHub API budget is spent"
+            )
+            raise RuntimeError(
+                f"GitHub compare API rate-limited (HTTP {resp.status_code}) for {url}: {why}; "
+                f"budget resets in ~{wait:.0f}s (attempt {attempt}/{max_attempts}, #635)"
+            )
+        if getattr(resp, "status_code", 200) in _TRANSIENT_COMPARE_STATUS_CODES:
+            if attempt < max_attempts:
+                sleep(_transient_backoff_seconds(attempt))
+                continue
+            resp.raise_for_status()
+        break
+    assert resp is not None
     resp.raise_for_status()
     return (resp.json() or {}).get("status")
 
