@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import concurrent.futures
 from collections.abc import Mapping
 import json
 import os
@@ -22,7 +23,6 @@ import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from types import MappingProxyType
 from typing import Callable, Sequence
 import yaml
 
@@ -50,7 +50,10 @@ from common.deploy.app_contract import (
 from common.deploy.dependencies import explain_fanout
 from common.deploy.transient_failure import classify_failure
 from common.deploy.contract import all_service_keys, service_spec
-from common.deploy.preflight import assert_app_version_ref_on_main
+from common.deploy.preflight import (
+    assert_app_version_ref_matches_train,
+    assert_app_version_ref_on_main,
+)
 from common.deploy.env_config import (
     app_compose_env_config,
     preview_alias,
@@ -73,8 +76,11 @@ from infra2_sdk.deploy import DeployRequest
 from infra2_sdk.manifests import (
     FORBIDDEN_HOOK_ENV_NAMES,
     FORBIDDEN_HOOK_ENV_PREFIXES,
+    STAGE_HOOK_PLANS,
     HookRunResult,
+    StageHookPlan,  # noqa: F401
     build_hook_env,
+    stage_hook_plan,
 )
 from infra2_sdk.refs import (
     assert_after_on_main,  # noqa: F401  (re-exported; #616)
@@ -88,26 +94,11 @@ SERVICE_TO_APP_REPO_ID: dict[str, str] = {
     service: repo_id for repo_id, service in APP_REPO_ID_TO_SERVICE.items()
 }
 
-#: Single source of truth mapping each runtime verification stage to its canonical hook slot (#1554).
-DEFAULT_STAGE_HOOK_SLOTS: Mapping[str, str] = MappingProxyType(
-    {
-        "preview": "preview_gate",
-        "staging": "staging_gate",
-        "prod": "smoke",
-        "schedule": "scheduled_audit",
-    }
-)
 
-
-def default_hook_slot_for_stage(stage: str) -> str:
-    """Return the canonical hook slot for ``stage`` from ``DEFAULT_STAGE_HOOK_SLOTS`` (#1554)."""
-    normalized = "prod" if stage in ("prod", "production") else str(stage).strip()
-    try:
-        return DEFAULT_STAGE_HOOK_SLOTS[normalized]
-    except KeyError:
-        raise ValueError(
-            f"unknown hook stage {stage!r}; allowed: {list(DEFAULT_STAGE_HOOK_SLOTS)}"
-        ) from None
+def _stage_slots_csv(stage: str) -> str:
+    """Return comma-separated deploy+post hook slots for ``stage`` from ``STAGE_HOOK_PLANS`` (#1608)."""
+    plan_spec = stage_hook_plan(stage)
+    return ",".join(s for s in (plan_spec.deploy_slot, plan_spec.post_slot) if s)
 
 
 def _discover_local_service_hook_manifests(
@@ -607,7 +598,7 @@ def verify_and_cut_app_preview_tag(
         try:
             hook_res = execute_app_hook_slot(
                 manifest,
-                default_hook_slot_for_stage("preview"),
+                stage_hook_plan("preview").post_slot,
                 app_url=preview_url,
                 environment="preview",
                 version_ref=main_sha[:7],
@@ -1202,6 +1193,10 @@ def audit_app_hooks(
 
         supplied = set(HOOK_RUNNER_SECRET_ENV) | set(HOOK_RUNNER_CONTEXT_ENV)
         slot_errors: list[str] = []
+        if manifest.schema_version != 2:
+            slot_errors.append(
+                f"expected schema_version 2, got {manifest.schema_version!r}"
+            )
         for slot_name in HOOK_SLOTS:
             if slot_name not in manifest.slots:
                 slot_errors.append(f"missing slot {slot_name!r}")
@@ -1219,7 +1214,7 @@ def audit_app_hooks(
                     slot_errors.append(
                         f"unsupplied required_env {env_name!r} in slot {slot_name!r}"
                     )
-        for dry_slot in ("smoke", "scheduled_audit"):
+        for dry_slot in ("smoke", "prod_gate", "scheduled_audit"):
             if dry_slot not in manifest.slots:
                 continue
             spec = manifest.slots[dry_slot]
@@ -1355,9 +1350,7 @@ def run_post_deploy_app_hooks(
         or part.strip() in local_manifests
         or part.strip() in LOCAL_SERVICE_HOOK_MANIFESTS
     }
-    hook_results: list[dict[str, object]] = []
-    stop_early = False
-    for service in sorted(applied_services):
+    def _run_for_service(service: str) -> list[dict[str, object]]:
         rel_local = local_manifests.get(service) or LOCAL_SERVICE_HOOK_MANIFESTS.get(
             service
         )
@@ -1393,6 +1386,7 @@ def run_post_deploy_app_hooks(
                 repo_root=repo_root,
                 runner=runner,
             )
+        svc_results: list[dict[str, object]] = []
         try:
             for single_slot in slots:
                 hook_env_name = (
@@ -1435,15 +1429,26 @@ def run_post_deploy_app_hooks(
                 entry["cwd"] = str(hook_cwd)
                 if missing_env_error is not None:
                     entry["missing_env_error"] = missing_env_error
-                hook_results.append(entry)
+                svc_results.append(entry)
                 if res.status != "pass":
-                    stop_early = True
                     break
         finally:
             if tmp_checkout is not None:
                 tmp_checkout.cleanup()
-        if stop_early:
-            break
+        return svc_results
+
+    services_sorted = sorted(applied_services)
+    hook_results: list[dict[str, object]] = []
+    if len(services_sorted) <= 1:
+        for svc in services_sorted:
+            hook_results.extend(_run_for_service(svc))
+    else:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(services_sorted)
+        ) as pool:
+            futures = {svc: pool.submit(_run_for_service, svc) for svc in services_sorted}
+            for svc in services_sorted:
+                hook_results.extend(futures[svc].result())
     if (
         record_issues
         and hook_results
@@ -2241,8 +2246,16 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help=(
             "comma-separated hook slot(s) from HOOK_SLOTS to run when "
-            "--run-post-deploy-hooks is enabled (defaults to 'staging_gate' "
-            "for staging and 'smoke' for prod via DEFAULT_STAGE_HOOK_SLOTS; #1493, #1554)"
+            "--run-post-deploy-hooks is enabled (defaults to 'smoke,staging_gate' "
+            "for staging and 'smoke,prod_gate' for prod via STAGE_HOOK_PLANS; #1608)"
+        ),
+    )
+    parser.add_argument(
+        "--print-changed-app-releases",
+        action="store_true",
+        help=(
+            "emit SERVICE=TAG lines for App services selected between --before and "
+            "--after for cumulative promotion soak verification (#1563)"
         ),
     )
     parser.add_argument(
@@ -2307,7 +2320,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--audit-app-hooks",
         action="store_true",
-        help="validate 4-slot runtime-hooks.manifest.json contracts for registered Apps (#1416)",
+        help="validate 5-slot schema v2 runtime-hooks.manifest.json contracts for registered Apps (#1608)",
     )
     parser.add_argument("--output-json", default="", help="optional output JSON path")
     args = parser.parse_args(argv)
@@ -2315,6 +2328,26 @@ def main(argv: list[str] | None = None) -> int:
     target_env = "prod" if promote_prod else "staging"
 
     repo_root = Path(args.repo_root).resolve()
+    if args.print_changed_app_releases:
+        if not args.before or not args.after:
+            raise SystemExit(
+                "::error::--print-changed-app-releases requires both --before and --after"
+            )
+        changed = (
+            list(args.changed_file)
+            if args.changed_file
+            else changed_files_from_git(repo_root, args.before, args.after)
+        )
+        plan = build_plan(
+            changed,
+            repo_root=repo_root,
+            before=args.before,
+            after=args.after,
+        )
+        for svc in sorted(s for s in plan.selected if s in APP_SOURCES):
+            if tag := plan.app_release_tags.get(svc, ""):
+                print(f"{svc}={tag}")
+        return 0
     if args.run_scheduled_audit:
         env_overrides = {
             name: value
@@ -2567,11 +2600,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     if applied and not args.dry_run:
         for cmd in applied:
+            is_bootstrap = "--bootstrap" in cmd.argv
             for svc in (s.strip() for s in cmd.service.split(",") if s.strip()):
                 if svc in APP_SOURCES:
                     app_tag = plan.app_release_tags.get(svc, "")
                     if app_tag:
                         try:
+                            assert_app_version_ref_matches_train(
+                                svc,
+                                app_tag,
+                                cmd.deploy_type,
+                                bootstrap=is_bootstrap,
+                                iac_ref=args.after,
+                                repo_root=repo_root,
+                            )
                             assert_app_version_ref_on_main(
                                 app_tag,
                                 cmd.deploy_type,
@@ -2591,7 +2633,7 @@ def main(argv: list[str] | None = None) -> int:
         and not args.dry_run
         and not any(result.get("returncode") != 0 for result in results)
     ):
-        effective_slot = args.post_deploy_hook_slot or default_hook_slot_for_stage(
+        effective_slot = args.post_deploy_hook_slot or _stage_slots_csv(
             "prod" if promote_prod else "staging"
         )
         hook_results = run_post_deploy_app_hooks(
