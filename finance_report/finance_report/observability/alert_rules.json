@@ -30,6 +30,20 @@
     },
     {
       "signal": "metrics",
+      "alert_name": "FinanceReportHigh5xxRateStable",
+      "service_name": "finance-report-backend",
+      "severity": "critical",
+      "threshold": 0.05,
+      "threshold_unit": "%",
+      "op": "above",
+      "match_type": "at_least_once",
+      "eval_window": "5m0s",
+      "frequency": "1m",
+      "promql": "(sum(increase({\"http.server.request.duration.count\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\",\"http.route\"!~\"^(/health|/ping|/ping/toggle)$\",\"http.response.status_code\"=~\"^5..$\"}[5m])) / sum(increase({\"http.server.request.duration.count\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\",\"http.route\"!~\"^(/health|/ping|/ping/toggle)$\",\"http.response.status_code\"=~\"^.+$\"}[5m]))) and on() (sum(increase({\"http.server.request.duration.count\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\",\"http.route\"!~\"^(/health|/ping|/ping/toggle)$\",\"http.response.status_code\"=~\"^5..$\"}[5m])) >= 5)",
+      "summary": "finance_report backend returned at least 5 HTTP 5xx and more than 5% 5xx across non-probe requests within 5 minutes. Severity P0 (reads the stable HTTP metric http.server.request.duration; infra2#1465). Runbook: docs/ssot/ops.observability.md SOP-004C."
+    },
+    {
+      "signal": "metrics",
       "alert_name": "FinanceReportP95LatencyHigh",
       "service_name": "finance-report-backend",
       "severity": "error",
@@ -39,8 +53,22 @@
       "match_type": "all_times",
       "eval_window": "10m0s",
       "frequency": "1m",
-      "promql": "(histogram_quantile(0.95, sum by (le) (rate({\"http.server.request.duration.bucket\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\",\"http.route\"!~\"^(/health|/ping|/ping/toggle)$\"}[5m]))) >= 0) or on() vector(0)",
+      "promql": "(histogram_quantile(0.95, sum by (le) (rate({\"http.server.request.duration.bucket\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\",\"http.route\"!~\"^(/health|/ping|/ping/toggle)$\",\"http.response.status_code_class\"=~\"^.+$\"}[5m]))) >= 0) or on() vector(0)",
       "summary": "finance_report backend p95 latency of non-probe requests stayed above 3000ms for 10 minutes. Severity P1. Runbook: docs/ssot/ops.observability.md SOP-004C."
+    },
+    {
+      "signal": "metrics",
+      "alert_name": "FinanceReportP95LatencyHighStable",
+      "service_name": "finance-report-backend",
+      "severity": "error",
+      "threshold": 3000,
+      "threshold_unit": "ms",
+      "op": "above",
+      "match_type": "all_times",
+      "eval_window": "10m0s",
+      "frequency": "1m",
+      "promql": "(histogram_quantile(0.95, sum by (le) (rate({\"http.server.request.duration.bucket\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\",\"http.route\"!~\"^(/health|/ping|/ping/toggle)$\",\"http.response.status_code\"=~\"^.+$\"}[5m]))) * 1000 >= 0) or on() vector(0)",
+      "summary": "finance_report backend p95 latency of non-probe requests stayed above 3000ms for 10 minutes. Severity P1 (reads the stable HTTP metric, seconds, scaled to ms; infra2#1465). Runbook: docs/ssot/ops.observability.md SOP-004C."
     },
     {
       "signal": "metrics",

@@ -161,7 +161,23 @@ def test_alert_definition_renders_signoz_log_rule_routed_to_channel() -> None:
 _EXPECTED_RULES = {
     "FinanceReportBackendErrorLogs": ("threshold_rule", "error", 10, "4", "15m0s", ""),
     "FinanceReportHigh5xxRate": ("promql_rule", "critical", 0.05, "1", "5m0s", "%"),
+    "FinanceReportHigh5xxRateStable": (
+        "promql_rule",
+        "critical",
+        0.05,
+        "1",
+        "5m0s",
+        "%",
+    ),
     "FinanceReportP95LatencyHigh": (
+        "promql_rule",
+        "error",
+        3000.0,
+        "2",
+        "10m0s",
+        "ms",
+    ),
+    "FinanceReportP95LatencyHighStable": (
         "promql_rule",
         "error",
         3000.0,
@@ -204,7 +220,23 @@ _EXPECTED_RULES = {
     "TrueAlphaAppErrorLogs": ("threshold_rule", "error", 10, "4", "15m0s", ""),
     "TrueAlphaDataEngineErrorLogs": ("threshold_rule", "error", 10, "4", "15m0s", ""),
     "TrueAlphaHigh5xxRate": ("promql_rule", "critical", 0.05, "1", "5m0s", "%"),
+    "TrueAlphaHigh5xxRateStable": (
+        "promql_rule",
+        "critical",
+        0.05,
+        "1",
+        "5m0s",
+        "%",
+    ),
     "TrueAlphaP95LatencyHigh": (
+        "promql_rule",
+        "error",
+        3000.0,
+        "2",
+        "10m0s",
+        "ms",
+    ),
+    "TrueAlphaP95LatencyHighStable": (
         "promql_rule",
         "error",
         3000.0,
@@ -286,7 +318,17 @@ _APP_METRICS: dict[str, dict[str, set[str]]] = {
         "http.response.status_code_class": {"1xx", "2xx", "3xx", "4xx", "5xx"},
         "http.route": {"/health", "/ping", "/ping/toggle", "/api/statements"},
     },
-    "http.server.request.duration.bucket": {},
+    # One name, two producers (infra2#1465). The custom histogram of finance_report is in
+    # milliseconds and carries `http.response.status_code_class`; the stable histogram of
+    # FastAPI (>= 0.162) is in seconds and carries `http.response.status_code` and no class.
+    "http.server.request.duration.bucket": {
+        "http.response.status_code_class": {"1xx", "2xx", "3xx", "4xx", "5xx"},
+        "http.response.status_code": {"200", "307", "404", "500", "502", "503"},
+    },
+    "http.server.request.duration.count": {
+        "http.response.status_code": {"200", "307", "404", "500", "502", "503"},
+        "http.route": {"/health", "/livez", "/readyz", "/mcp", "/api/statements"},
+    },
     "http.server.duration.count": {
         "http.status_code": {"200", "500", "502", "503"},
         "http.target": {"/health", "/api/v1/system/health", "/api/v1/trade"},
@@ -403,12 +445,24 @@ def test_promql_regex_matchers_are_anchored() -> None:
 _PROBE_ROUTE_EXCLUSION = ("http.route", "!~", "^(/health|/ping|/ping/toggle)$")
 
 
-def test_5xx_rule_needs_a_minimum_5xx_count_and_ignores_probe_traffic() -> None:
+@pytest.mark.parametrize(
+    ("rule", "five_xx_matcher"),
+    [
+        ("FinanceReportHigh5xxRate", ("http.response.status_code_class", "=", "5xx")),
+        (
+            "FinanceReportHigh5xxRateStable",
+            ("http.response.status_code", "=~", "^5..$"),
+        ),
+    ],
+)
+def test_5xx_rule_needs_a_minimum_5xx_count_and_ignores_probe_traffic(
+    rule: str, five_xx_matcher: tuple[str, str, str]
+) -> None:
     """#906: the old ratio divided by clamp_min(total_rate, 1) and required every point
     of the window, so a low-traffic outage never fired; healthy /health probes also
     diluted a user-facing outage below 5%. Every selector now excludes the probe
     routes, the ratio is not clamped, and at least 5 5xx must exist in the window."""
-    promql = _promql_rules()["FinanceReportHigh5xxRate"]
+    promql = _promql_rules()[rule]
     selectors = _selectors(promql)
     ratio, guard = promql.split(" and on() ", 1)
 
@@ -418,15 +472,32 @@ def test_5xx_rule_needs_a_minimum_5xx_count_and_ignores_probe_traffic() -> None:
     assert len(selectors) == 3
     for _metric, matchers in selectors:
         assert _PROBE_ROUTE_EXCLUSION in matchers
-    five_xx = [
-        m
-        for _metric, m in selectors
-        if ("http.response.status_code_class", "=", "5xx") in m
-    ]
+    five_xx = [m for _metric, m in selectors if five_xx_matcher in m]
+    if rule.endswith("Stable"):
+        # `.count` of the stable histogram has the name of finance_report's custom
+        # histogram too (#1465): every selector, the denominator included, must require
+        # the label that only the stable series carry.
+        assert all(
+            any(label == "http.response.status_code" for label, _op, _v in matchers)
+            for _metric, matchers in selectors
+        )
     assert len(five_xx) == 2  # the ratio's numerator and the count guard
 
 
-def test_p95_rule_pages_only_on_a_sustained_non_probe_breach() -> None:
+@pytest.mark.parametrize(
+    ("rule", "metric", "scale"),
+    [
+        ("FinanceReportP95LatencyHigh", "http.server.request.duration.bucket", ""),
+        (
+            "FinanceReportP95LatencyHighStable",
+            "http.server.request.duration.bucket",
+            " \\* 1000",
+        ),
+    ],
+)
+def test_p95_rule_pages_only_on_a_sustained_non_probe_breach(
+    rule: str, metric: str, scale: str
+) -> None:
     """#906 live check (2026-09-24, 24 h): with /health included the p95 was mostly the
     health endpoint's own latency (p50 1412 ms, max 10 s), and 1500 ms / at_least_once
     would have fired in 197 five-minute windows a day. The rule excludes the probe
@@ -436,7 +507,7 @@ def test_p95_rule_pages_only_on_a_sustained_non_probe_breach() -> None:
     non-probe request, so a lone slow request would pass "all remaining points above".
     `>= 0` drops the NaN and `or on() vector(0)` puts a 0 in its place, so a quiet
     minute breaks the streak instead of vanishing from it."""
-    payload = _rendered_rules()["FinanceReportP95LatencyHigh"]
+    payload = _rendered_rules()[rule]
     promql = payload["condition"]["compositeQuery"]["queries"][0]["spec"]["query"]
     (threshold,) = payload["condition"]["thresholds"]["spec"]
     selectors = _selectors(promql)
@@ -444,15 +515,84 @@ def test_p95_rule_pages_only_on_a_sustained_non_probe_breach() -> None:
     assert threshold["matchType"] == "2"  # all_times
     assert threshold["target"] == 3000.0
     assert payload["evaluation"]["spec"]["evalWindow"] == "10m0s"
-    assert [metric for metric, _ in selectors] == [
-        "http.server.request.duration.bucket"
-    ]
+    assert [name for name, _ in selectors] == [metric]
     assert _PROBE_ROUTE_EXCLUSION in selectors[0][1]
     assert re.fullmatch(
-        r"\(histogram_quantile\(0\.95, sum by \(le\) \(rate\(\{[^{}]*\}\[5m\]\)\)\) >= 0\)"
+        r"\(histogram_quantile\(0\.95, sum by \(le\) \(rate\(\{[^{}]*\}\[5m\]\)\)\)"
+        + scale
+        + r" >= 0\)"
         r" or on\(\) vector\(0\)",
         promql,
     )
+
+
+def _matchers(rule: str) -> list[tuple[str, str, str]]:
+    return [
+        m for _metric, matchers in _selectors(_promql_rules()[rule]) for m in matchers
+    ]
+
+
+def test_finance_report_p95_rules_cannot_read_each_others_series() -> None:
+    """#1465: the custom histogram of finance_report (milliseconds) and the stable one of
+    FastAPI (seconds) have the same metric name. They differ by label: only the custom one
+    carries `http.response.status_code_class`; only the stable one carries
+    `http.response.status_code`. Each rule must require its own label, or a rolling deploy
+    that runs both builds mixes two units and two bucket sets in one quantile."""
+    legacy = _matchers("FinanceReportP95LatencyHigh")
+    stable = _matchers("FinanceReportP95LatencyHighStable")
+
+    assert ("http.response.status_code_class", "=~", "^.+$") in legacy
+    assert not [m for m in legacy if m[0] == "http.response.status_code"]
+    assert ("http.response.status_code", "=~", "^.+$") in stable
+    assert not [m for m in stable if m[0] == "http.response.status_code_class"]
+
+
+@pytest.mark.parametrize(
+    ("legacy", "stable"),
+    [
+        ("FinanceReportP95LatencyHigh", "FinanceReportP95LatencyHighStable"),
+        ("TrueAlphaP95LatencyHigh", "TrueAlphaP95LatencyHighStable"),
+    ],
+)
+def test_the_stable_latency_rule_scales_seconds_to_the_millisecond_threshold(
+    legacy: str, stable: str
+) -> None:
+    """#1465: the stable histogram is in seconds; the threshold is 3000 ms. Without the
+    factor the rule compares 4 (seconds) with 3000 and never fires."""
+    rules = _promql_rules()
+    payloads = _rendered_rules()
+
+    assert " * 1000 >= 0)" in rules[stable]
+    assert "* 1000" not in rules[legacy]
+    for name in (legacy, stable):
+        (threshold,) = payloads[name]["condition"]["thresholds"]["spec"]
+        assert threshold["target"] == 3000.0
+        assert threshold["targetUnit"] == "ms"
+
+
+def test_truealpha_stable_rules_read_only_the_stable_http_metric() -> None:
+    """#1465: the legacy rules read `http.server.duration` (contrib instrumentor, ms,
+    `http.target`, `http.status_code`); the stable rules read FastAPI's
+    `http.server.request.duration` with `http.route` and `http.response.status_code`."""
+    legacy_labels = {"http.target", "http.status_code"}
+    for rule, metric in (
+        ("TrueAlphaHigh5xxRateStable", "http.server.request.duration.count"),
+        ("TrueAlphaP95LatencyHighStable", "http.server.request.duration.bucket"),
+    ):
+        selectors = _selectors(_promql_rules()[rule])
+        assert selectors and {name for name, _ in selectors} == {metric}, rule
+        assert not legacy_labels & {
+            label for _n, ms in selectors for label, _o, _v in ms
+        }
+        assert ("deployment.environment.name", "=", "production") in selectors[0][1]
+    assert ("http.response.status_code", "=~", "^5..$") in _matchers(
+        "TrueAlphaHigh5xxRateStable"
+    )
+    for rule in ("TrueAlphaHigh5xxRate", "TrueAlphaP95LatencyHigh"):
+        assert {name for name, _ in _selectors(_promql_rules()[rule])} <= {
+            "http.server.duration.count",
+            "http.server.duration.bucket",
+        }
 
 
 def test_backend_telemetry_absence_is_expressed_in_promql() -> None:
