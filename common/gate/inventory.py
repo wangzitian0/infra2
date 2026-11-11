@@ -15,6 +15,7 @@ from common.gate.types import (
     _get_workflow_dir,
     _get_yaml,
     _normalized_path,
+    safe_load_text,
 )
 
 
@@ -22,7 +23,7 @@ def _blocking_coordinates(text: str) -> frozenset[tuple[str, str, str]] | None:
     """(gate id, workflow, job) for every gate with merge authority, or None."""
     yaml_mod = _get_yaml()
     try:
-        doc = yaml_mod.safe_load(text)
+        doc = safe_load_text(yaml_mod, text)
         gates = (doc or {}).get("gates")
     except (yaml_mod.YAMLError, AttributeError):
         return None
@@ -62,7 +63,7 @@ def _workflow_only_gained_authority(base_text: str, head_text: str) -> bool:
 
     def read(text):
         try:
-            doc = yaml_mod.safe_load(text)
+            doc = safe_load_text(yaml_mod, text)
         except yaml_mod.YAMLError:
             return None
         if not isinstance(doc, dict):
@@ -134,7 +135,7 @@ def _declared_deploy_globs() -> tuple[tuple[tuple[str, str], ...], bool]:
     for path in names:
         try:
             text = path.read_text(encoding="utf-8")
-            doc = yaml_mod.safe_load(text)
+            doc = safe_load_text(yaml_mod, text)
         except (OSError, UnicodeDecodeError, getattr(yaml_mod, "YAMLError", Exception)):
             continue
         parsed += 1
@@ -194,8 +195,9 @@ def _required_checks() -> tuple[frozenset[str], bool]:
     root = _get_root()
     yaml_mod = _get_yaml()
     try:
-        doc = yaml_mod.safe_load(
-            (root / "docs/ssot/ci-gate-inventory.yaml").read_text(encoding="utf-8")
+        doc = safe_load_text(
+            yaml_mod,
+            (root / "docs/ssot/ci-gate-inventory.yaml").read_text(encoding="utf-8"),
         )
         gates = [g for g in (doc.get("gates") or []) if g.get("blocks_merge")]
     except (OSError, getattr(yaml_mod, "YAMLError", Exception), AttributeError):
@@ -207,8 +209,8 @@ def _required_checks() -> tuple[frozenset[str], bool]:
         job, workflow = gate.get("job"), gate.get("workflow")
         display = job
         try:
-            spec = yaml_mod.safe_load(
-                (root / str(workflow)).read_text(encoding="utf-8")
+            spec = safe_load_text(
+                yaml_mod, (root / str(workflow)).read_text(encoding="utf-8")
             )
             display = ((spec.get("jobs") or {}).get(job) or {}).get("name") or job
         except (

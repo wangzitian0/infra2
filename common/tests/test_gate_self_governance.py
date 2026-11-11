@@ -121,6 +121,7 @@ def test_the_guard_of_the_production_lock_is_in_the_closure() -> None:
         "tools/__init__.py",
         "common/tests/test_gate_pipeline.py",
         "common/tests/test_gate_self_governance.py",
+        "common/tests/test_gate_yaml_parse_cache.py",
     ],
 )
 def test_package_files_and_the_gate_tests_are_in_the_closure(path) -> None:
