@@ -2725,6 +2725,205 @@ def test_workflow_steps_that_run_hook_slots_supply_every_runner_secret_env() -> 
     assert len(_unsupplied_runner_env(mutated, table)) == 1
 
 
+# --- #1603: the bun that App hook commands call must exist on the hook runner -------------
+
+_BUN_COMMAND = re.compile(r"\bbunx?\b")
+_EXACT_BUN_VERSION = re.compile(r"\d+\.\d+\.\d+")
+_COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
+_SCHEDULED_AUDIT_FLAG = "--run-scheduled-audit"
+
+
+def _bun_slots(raw_manifests: tuple[str, ...]) -> list[tuple[str, str, str, str]]:
+    """Return (service, slot, field, command) for each bootstrap or run command of a slot
+    that calls ``bun`` or ``bunx``."""
+    found: list[tuple[str, str, str, str]] = []
+    for raw_manifest in raw_manifests:
+        manifest = json.loads(raw_manifest)
+        for slot, spec in manifest["slots"].items():
+            for field in ("bootstrap", "run"):
+                command = spec.get(field) or ""
+                if _BUN_COMMAND.search(command):
+                    found.append((manifest["service"], slot, field, command))
+    return found
+
+
+def _setup_bun_ref(step: dict) -> str | None:
+    """Return the ref after ``@`` when the step uses oven-sh/setup-bun, else None."""
+    uses = step.get("uses")
+    if isinstance(uses, str) and uses.startswith("oven-sh/setup-bun@"):
+        return uses.split("@", 1)[1]
+    return None
+
+
+def _is_pinned_setup_bun(step: dict) -> bool:
+    """Return True when the step pins setup-bun to a 40-hex commit SHA and bun to x.y.z.
+
+    The job env holds secrets. A movable tag of a third-party action is a supply-chain path.
+    """
+    ref = _setup_bun_ref(step)
+    version = (step.get("with") or {}).get("bun-version")
+    return (
+        ref is not None
+        and _COMMIT_SHA.fullmatch(ref) is not None
+        and _EXACT_BUN_VERSION.fullmatch(str(version)) is not None
+    )
+
+
+def _hook_steps_without_bun(
+    workflows: dict[str, dict], raw_manifests: tuple[str, ...]
+) -> list[str]:
+    """Return one line per hook-slot step that can reach a slot whose command calls bun
+    and has no earlier step of the same job that installs bun at an exact version with a
+    setup action pinned to a commit SHA.
+
+    A step that runs only ``--run-scheduled-audit`` reaches only ``scheduled_audit`` slots.
+    Every other hook-slot step can reach every slot.
+    """
+    bun_slots = _bun_slots(raw_manifests)
+    problems: list[str] = []
+    for file_name, job_id, step_name, _env in _hook_slot_steps(workflows):
+        steps = workflows[file_name]["jobs"][job_id]["steps"]
+        index = next(
+            i
+            for i, step in enumerate(steps)
+            if (step.get("name") or f"#{i}") == step_name
+            and any(flag in str(step.get("run")) for flag in _HOOK_SLOT_FLAGS)
+        )
+        script = steps[index]["run"]
+        audit_only = _SCHEDULED_AUDIT_FLAG in script and not any(
+            flag in script for flag in _HOOK_SLOT_FLAGS if flag != _SCHEDULED_AUDIT_FLAG
+        )
+        reached = [
+            (service, slot, field, command)
+            for service, slot, field, command in bun_slots
+            if not audit_only or slot == "scheduled_audit"
+        ]
+        if not reached or any(_is_pinned_setup_bun(step) for step in steps[:index]):
+            continue
+        calls = "; ".join(
+            f"{service} slot {slot!r} {field} {command!r}"
+            for service, slot, field, command in reached
+        )
+        seen = [
+            f"ref {_setup_bun_ref(step)!r} "
+            f"bun-version {(step.get('with') or {}).get('bun-version')!r}"
+            for step in steps[:index]
+            if _setup_bun_ref(step) is not None
+        ]
+        problems.append(
+            f"{file_name} job {job_id!r} step {step_name!r} runs App hook slots, and "
+            f"these commands call bun: {calls}. Missing step: an earlier step of the job "
+            f"that uses oven-sh/setup-bun@<40-hex commit SHA> with bun-version: <x.y.z>. "
+            f"Setup steps found: {seen or 'none'}"
+        )
+    return problems
+
+
+def test_hook_slot_steps_install_the_bun_that_manifest_commands_call() -> None:
+    """#1603: run 42982038433 failed the truealpha staging_gate bootstrap with
+    ``sh: 1: bun: not found``, because the reconcile job installed Python and uv only.
+    Each step that can run a slot calling bun or bunx needs an earlier step of the same job
+    that installs bun at an exact version. The job env holds secrets, so the setup action
+    is pinned to a 40-hex commit SHA, not to a movable tag."""
+    raw_manifests = (_REAL_TA_HOOKS_MANIFEST_JSON, _REAL_FR_HOOKS_MANIFEST_JSON)
+    workflows = _load_workflows()
+
+    # The scan must find the known bun slots. An empty scan would pass without checking.
+    found = {(service, slot) for service, slot, _, _ in _bun_slots(raw_manifests)}
+    assert {
+        ("truealpha/app", "preview_gate"),
+        ("truealpha/app", "staging_gate"),
+    } <= found
+    runners = {(file_name, job) for file_name, job, _, _ in _hook_slot_steps(workflows)}
+    assert {
+        ("reconcile-iac-inputs.yml", "reconcile"),
+        ("ops-checks.yml", "audit"),
+    } <= runners
+    assert _hook_steps_without_bun(workflows, raw_manifests) == []
+
+    def mutated_copy() -> tuple[dict[str, dict], list[dict]]:
+        copy = yaml.safe_load(yaml.safe_dump(workflows))
+        return copy, copy["reconcile-iac-inputs.yml"]["jobs"]["reconcile"]["steps"]
+
+    # Mutation proof 1: a job without the setup step gives exactly one problem.
+    mutated, steps = mutated_copy()
+    kept = [s for s in steps if not str(s.get("uses")).startswith("oven-sh/setup-bun@")]
+    assert len(steps) - len(kept) == 1
+    steps[:] = kept
+    problems = _hook_steps_without_bun(mutated, raw_manifests)
+    assert len(problems) == 1
+    assert "reconcile-iac-inputs.yml job 'reconcile'" in problems[0]
+    assert "step 'Reconcile changed IaC inputs'" in problems[0]
+    assert "truealpha/app slot 'staging_gate' bootstrap" in problems[0]
+    assert "truealpha/app slot 'preview_gate' bootstrap" in problems[0]
+    assert "bun install --frozen-lockfile" in problems[0]
+    assert (
+        "oven-sh/setup-bun@<40-hex commit SHA> with bun-version: <x.y.z>" in problems[0]
+    )
+
+    # Mutation proof 2: a version that is not exact fails.
+    for version in ("latest", "1.4", "1.x", "", None):
+        mutated, steps = mutated_copy()
+        (setup,) = [
+            s for s in steps if str(s.get("uses")).startswith("oven-sh/setup-bun@")
+        ]
+        if version is None:
+            del setup["with"]["bun-version"]
+        else:
+            setup["with"]["bun-version"] = version
+        problems = _hook_steps_without_bun(mutated, raw_manifests)
+        assert len(problems) == 1, version
+        assert "oven-sh/setup-bun@" in problems[0], version
+
+    # Mutation proof 3: a setup step after the hook step fails.
+    mutated, steps = mutated_copy()
+    (setup,) = [s for s in steps if str(s.get("uses")).startswith("oven-sh/setup-bun@")]
+    steps.remove(setup)
+    steps.append(setup)
+    assert len(_hook_steps_without_bun(mutated, raw_manifests)) == 1
+
+    # Mutation proof 4: a bun call in a scheduled_audit slot reaches the audit job only.
+    ops_manifest = json.loads(_REAL_TA_HOOKS_MANIFEST_JSON)
+    ops_manifest["slots"]["scheduled_audit"]["bootstrap"] = (
+        "bun install --frozen-lockfile"
+    )
+    problems = _hook_steps_without_bun(workflows, (json.dumps(ops_manifest),))
+    assert len(problems) == 1
+    assert "ops-checks.yml job 'audit'" in problems[0]
+    assert (
+        "slot 'scheduled_audit' bootstrap 'bun install --frozen-lockfile'"
+        in problems[0]
+    )
+
+    # Mutation proof 5: a ref that is not a 40-hex commit SHA fails. A 40-hex SHA passes.
+    mutated, steps = mutated_copy()
+    (setup,) = [s for s in steps if str(s.get("uses")).startswith("oven-sh/setup-bun@")]
+    real_ref = _setup_bun_ref(setup)
+    assert real_ref is not None and _COMMIT_SHA.fullmatch(real_ref)
+    for ref in ("v2.2.0", "v2", "main", real_ref[:39], real_ref + "0"):
+        mutated, steps = mutated_copy()
+        (setup,) = [
+            s for s in steps if str(s.get("uses")).startswith("oven-sh/setup-bun@")
+        ]
+        setup["uses"] = f"oven-sh/setup-bun@{ref}"
+        problems = _hook_steps_without_bun(mutated, raw_manifests)
+        assert len(problems) == 1, ref
+        assert f"ref {ref!r} bun-version '1.4.4'" in problems[0], ref
+    mutated, steps = mutated_copy()
+    (setup,) = [s for s in steps if str(s.get("uses")).startswith("oven-sh/setup-bun@")]
+    setup["uses"] = "oven-sh/setup-bun@" + "0123456789abcdef" * 2 + "01234567"
+    assert _hook_steps_without_bun(mutated, raw_manifests) == []
+
+    # Mutation proof 6: the word match finds bun and bunx, and no other word.
+    word_manifest = json.loads(_REAL_FR_HOOKS_MANIFEST_JSON)
+    word_manifest["slots"]["smoke"]["run"] = "bash debunk.sh && bundle exec bunker"
+    assert _bun_slots((json.dumps(word_manifest),)) == []
+    word_manifest["slots"]["smoke"]["run"] = "cd web && bunx playwright test"
+    assert [slot for _, slot, _, _ in _bun_slots((json.dumps(word_manifest),))] == [
+        "smoke"
+    ]
+
+
 def _required_env_without_source(raw_manifest: dict) -> dict[str, tuple[str, ...]]:
     """Map each slot to its ``required_env`` names that the infra2 runner never supplies.
 
