@@ -17,7 +17,7 @@ replaces the old `common/ -> __all__` catch-all that redeployed everything.
 
 from __future__ import annotations
 
-from common.core.yaml_text import safe_load_text
+from common.deploy.yaml_text import safe_load_text
 
 import fnmatch
 from dataclasses import dataclass, field

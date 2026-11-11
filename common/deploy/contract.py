@@ -32,7 +32,7 @@ SSOT: docs/ssot/core.environments.md §4.7.
 
 from __future__ import annotations
 
-from common.core.yaml_text import safe_load_text
+from common.deploy.yaml_text import safe_load_text
 
 from collections.abc import Mapping
 from pathlib import Path

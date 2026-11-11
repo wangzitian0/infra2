@@ -5,7 +5,7 @@ Part of common.deploy domain decomposition (#955, #1009).
 
 from __future__ import annotations
 
-from common.core.yaml_text import safe_load_text
+from common.deploy.yaml_text import safe_load_text
 
 from collections.abc import Iterable
 import glob as _glob

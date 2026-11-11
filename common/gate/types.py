@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from common.core.yaml_text import safe_load_text  # noqa: F401 - used by common.gate.inventory
+from common.deploy.yaml_text import safe_load_text  # noqa: F401 - used by common.gate.inventory
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 ABSENT = "ABSENT"

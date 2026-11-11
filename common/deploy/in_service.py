@@ -10,7 +10,7 @@ listing says about it — so the verdict can be tested without a host.
 
 from __future__ import annotations
 
-from common.core.yaml_text import safe_load_text
+from common.deploy.yaml_text import safe_load_text
 
 import re
 from collections.abc import Iterable
