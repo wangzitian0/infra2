@@ -1,8 +1,4 @@
-"""Pure Vault self-refresh audit data models and classifiers.
-
-This module provides data models, inventory derivation from SecretsFacet, and
-pure classifiers for Vault self-refresh audit without requiring SSH access.
-"""
+"""Data models, inventory derivation from SecretsFacet, and pure classifiers for Vault self-refresh audit."""
 
 from __future__ import annotations
 
@@ -103,26 +99,12 @@ class CheckResult:
 
 
 def vault_path_template(project: str, service: str) -> str:
-    """The audit's expected Vault KV path template for a service.
-
-    Built from the SAME (project, service) facts common.env.get_secrets uses
-    to construct the deploy-side path (app_vars ->
-    secret/data/{project}/{env}/{service}), so editing a Deployer's
-    project/service moves the deployed secret path AND this audit
-    expectation in lockstep -- they cannot drift (#531/#542).
-    """
+    """Build the expected Vault KV path template for a service from project and service names."""
     return f"secret/data/{project}/{{env}}/{service}"
 
 
 def load_inventory() -> list[VaultService]:
-    """DERIVE the audit inventory from the Deployer SecretsFacets (#542).
-
-    One entry per SecretsFacet across the registry scan plus the bootstrap
-    plane's facet-only deploy.py files. Deterministic: declaring services in
-    sorted id order, facets in declaration order. A duplicate derived id fails
-    closed -- two facets silently claiming one inventory entry is exactly the
-    drift class the facet model exists to kill.
-    """
+    """Derive the audit inventory deterministically from Deployer SecretsFacet declarations."""
     from common.core.registry import bootstrap_facet_attrs, service_attrs
 
     metas = {**bootstrap_facet_attrs(), **service_attrs()}
@@ -148,13 +130,7 @@ def load_inventory() -> list[VaultService]:
 
 
 def _vault_service_from_facet(meta, facet) -> VaultService:
-    """Build one VaultService from a SecretsFacet + its declaring ServiceMeta.
-
-    Everything derivable comes from the Deployer's own deploy facts (see
-    SecretsFacet's docstring): id/project/dokploy_service from the registry
-    identity, compose/agent-config/template paths from compose_path, and
-    the vault path template from the deploy-side (project, service) pair.
-    """
+    """Build one VaultService instance from a SecretsFacet and its declaring ServiceMeta."""
     compose_path = facet.compose_path or meta.compose_path
     if not compose_path:
         raise ValueError(

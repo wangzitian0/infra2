@@ -1,36 +1,5 @@
 #!/usr/bin/env python3
-"""Manual lifecycle for the multi-alias PREVIEW environment.
-
-The preview env (deploy_env_config.py) is a *family* of throwaway stacks, one per
-alias — ``main`` / ``pr-<N>`` / ``commit-<sha7>`` — each its OWN Dokploy compose with
-its OWN ephemeral database. This module is the importable library that creates, deploys,
-health-checks, and tears those stacks down, for every service registered in
-``deploy_env_config.preview_service_config`` (finance_report/app, truealpha/app — #522).
-Unlike staging/prod (a fixed compose driven by common.deploy.promote.deploy), preview is
-dynamic: the compose for an alias is found-or-created here by a deterministic name, so
-any number of aliases coexist and outlive a CI run until explicitly torn down.
-
-Design seams (mirroring common.deploy.promote / infra2_sdk.refs):
-- code -> sha           : infra2_sdk.refs.resolve_to_sha (the App image tag to pull)
-- service -> config     : deploy_env_config.preview_service_config (project / compose
-                          path / db name / base_subdomain — the per-service knobs)
-- (kind, value) -> ids  : deploy_env_config.preview_alias (suffix / url / slug / label)
-- side effects          : the injected Dokploy client (create/update/deploy/delete)
-- readiness             : this trigger's terminal deployment record, then injected HTTP
-                          probes for every configured public version surface
-
-Everything with side effects takes an injected client/getter so the orchestration is
-unit-testable with a mock — NO live Dokploy/HTTP call happens in tests. The compose
-template is pulled from infra2 via Dokploy's GitHub source (sourceType="github",
-composePath=...), the same mechanism common.deploy.deployer uses, so the relative vault-agent
-files the template mounts (vault-agent.hcl / secrets.ctmpl) exist on the Dokploy host.
-
-This is a pure importable backend — the operator surface is the deploy_v2 CLI:
-    python -m tools.deploy_v2 --type preview/pr --version-ref 5 --iac-ref main --domain zitian.party
-    python -m tools.deploy_v2 --type preview/pr --version-ref 5 --iac-ref main --domain zitian.party --down
-``--service`` selects the target (default finance_report/app); truealpha/app previews use
-    python -m tools.deploy_v2 --service truealpha/app --type preview/pr --version-ref 5 --iac-ref main --domain zitian.party
-"""
+"""Preview environment lifecycle management for dynamic multi-alias stacks."""
 
 from __future__ import annotations
 
@@ -87,14 +56,7 @@ _AMBIGUOUS_CREATE_RECOVERY_INTERVAL_SECONDS = 2
 
 
 def _source_app_vault_creds(client, project: str, source_env: str) -> dict[str, str]:
-    """Read the AppRole creds the ``source_env`` app compose runs with, in ``project``.
-
-    Previews reuse the source env's AppRole (they read its secret path via the service's
-    ``PreviewServiceConfig.secret_env``), exactly the creds staging runs with — set once on
-    the source compose by ``invoke setup-approle``. We copy them onto the preview compose at
-    deploy time because a throwaway alias is recreated each ``up`` (and deleted on ``down``),
-    so it can never rely on a manual one-time injection persisting the way a fixed env does.
-    """
+    """Read AppRole credentials from the source environment app compose."""
     comp = client.find_compose_by_name(
         _SOURCE_APP_COMPOSE, project, env_name=source_env
     )
@@ -115,12 +77,7 @@ def _source_app_vault_creds(client, project: str, source_env: str) -> dict[str, 
 
 
 def _validate_domain(domain: str) -> str:
-    """Reject a malformed domain (empty or containing whitespace).
-
-    Whitespace in the domain would corrupt the Dokploy host (cloud.<domain>) and the
-    Traefik Host() rules / env blob, so it is rejected up front for BOTH up and down.
-    Returns the validated domain unchanged so callers can use the result inline.
-    """
+    """Reject malformed domains with whitespace or empty string."""
     if not domain or any(c.isspace() for c in domain):
         raise ValueError(f"invalid domain {domain!r}: non-empty, no whitespace")
     return domain
@@ -147,20 +104,7 @@ def _preview_env_vars(
     iac_ref: str = "",
     _now=time.time,
 ) -> dict[str, str]:
-    """Assemble the Dokploy compose env for one preview alias.
-
-    Mirrors common.deploy.promote.deploy's shared keys (IMAGE_TAG/GIT_COMMIT_SHA short-sha,
-    NEXT_PUBLIC_APP_URL, ENV_SUFFIX/ENV_DOMAIN_SUFFIX, COMPOSE_PROFILES, TRAEFIK_ENABLE,
-    INTERNAL_DOMAIN, IAC_CONFIG_HASH cache-bust) and adds the preview-only bits: ENV is
-    the alias display label (telemetry consumes it); the generated secrets.ctmpl reads the
-    Vault app secrets to render, and the ephemeral-DB knobs point DATABASE_URL at the
-    stack's own local postgres.
-
-    NOTE: VAULT_ADDR / VAULT_ROLE_ID / VAULT_SECRET_ID are NOT set here — ``up`` injects
-    them separately via ``_source_app_vault_creds`` (read from the source env's app compose
-    each deploy, since a throwaway alias can't rely on a one-time injection persisting).
-    Keeping them out of this pure assembler means it never logs or embeds the creds.
-    """
+    """Assemble Dokploy compose environment variables for one preview alias."""
     config = preview_service_config(service)
     coords = _preview_coordinates(service, alias, domain=domain)
     # IMAGE_TAG is the published ref: a release tag (image_ref="vX.Y.Z") or the short sha.
@@ -316,18 +260,7 @@ def up(
     _sleep=time.sleep,
     _monotonic=time.monotonic,
 ) -> PreviewResult:
-    """Stand up (or update) the preview stack for one alias and deploy ``code``.
-
-    ``service`` (default ``finance_report/app``, the original preview-capable service)
-    selects the :func:`~common.deploy.env_config.preview_service_config` — which Dokploy
-    project, compose template, and ephemeral-DB name this alias uses.
-
-    Resolves code->sha, computes the alias identity, finds-or-creates this alias's own
-    Dokploy compose (GitHub-sourced preview template), pushes the env, triggers a deploy,
-    and — when wait=True — waits for this trigger's terminal-good deployment record,
-    then proves every configured public surface serves the requested version. Idempotent:
-    re-running an alias updates and redeploys the same compose in place.
-    """
+    """Deploy code to the preview stack for one alias."""
     _validate_domain(domain)
     config = preview_service_config(service)
 

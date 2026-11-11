@@ -1,66 +1,4 @@
-"""Page a daily GitHub-plane job's conclusion only when its identity changes (#962).
-
-Measured in the pager chat, 2026-09-26..10-05: 28 of ~40 messages were three
-conditions (`infra2-backup-production` 10, the Vault self-refresh audit 9, the daily
-facet reconcile 9), each paged again every day with the same conclusion. Their alert
-steps paged "on any confirmed failure" and kept no memory across runs. The in-band
-layer already stopped this (#903: only an identity change pages; a chronic failure is
-a report); this is the same rule for the GitHub plane.
-
-**Identity** = the job plus the stable key of each confirmed finding (a name, never a
-reading, an age, a size, a timestamp or a run URL). A reading in the key would make
-every day a new identity, which is the bug.
-
-**Decision** (``decide``; ``mode`` is ``issue_trail_mode``):
-
-====================================  =================================================
-state read / what this run found      action
-====================================  =================================================
-off (dry run, SSH override, …)        page as before (dry run: deliver nothing)
-state could not be read, findings     PAGE (fail loud); nothing is written
-state marker unreadable, findings     PAGE; the marker is rewritten
-no state, findings                    PAGE (first appearance); state recorded
-same identity as the recorded one     REPORT ``[报告] 仍未恢复 · 第 N 天 · <job>`` to the
-                                      reports chat, not the pager; nothing is written
-different identity (added/removed)    PAGE with the whole new set; state replaced
-no findings, run proved none, state   RESOLVED page, state closed (never in an
-recorded                              open-only run: a drill or branch dispatch never
-                                      closes anything)
-no findings, run did not prove none   nothing (a transient lookup failure is not a
-                                      recovery); the state is kept
-no findings, but a recorded finding   nothing: a check that did not run (a skipped
-belongs to a check not evaluated      section, an unreadable quota) has not recovered
-open-only run (drill, branch          may page and report, but records nothing: a
-dispatch)                             drill's identity must not become what the next
-                                      scheduled run trusts
-====================================  =================================================
-
-The identity deliberately excludes readings (ages, sizes, counts, quota levels): a
-worsening *within* one finding is not a new page. It is visible in the daily
-``[报告] 仍未恢复`` message, which carries the current detail lines. A finding that
-aggregates several units (a backup check over many artifacts) names each failing unit
-in its keys, so a different unit failing, or the same unit failing worse in kind
-(severity), is a new identity.
-
-Lives in ``common.observability`` and renders pager/report text with the alerting
-package (``common.alerting``). It imports the issue trail's client from
-``common.observability.issue_trail``, which is within the same domain package.
-
-**State** is one open GitHub issue per job, titled exactly ``ops-checks paged: <job>``,
-whose body ends in a ``<!-- infra2-page-dedup {json} -->`` marker holding the
-identity's fingerprint, its (scrubbed) keys and when it began. It reuses the issue
-trail's client, listing, scrubbing and run modes (``common/observability/issue_trail.py``)
-but not its issues: the trail's issues are opened by the job's *last* step whether or
-not the page was delivered, so reading them as "already paged" would hide a page that
-never arrived. Here state is written only after the page was delivered. Only issues
-authored by the Actions bot or the repository owner count: the repository is public and
-a stranger's same-title issue must not be able to silence the pager.
-
-Failure never silences: a listing that fails, an unreadable marker, a missing token, a
-report that cannot be delivered, or any exception in this module's own decision code
-pages exactly as the jobs did before (``dedup_page`` guards its planning step). A page
-that cannot be delivered raises and records nothing, so the next run pages again.
-"""
+"""Deduplicate daily alerts on the GitHub plane using issue state markers."""
 
 from __future__ import annotations
 
@@ -165,9 +103,7 @@ def make_identity(
     findings: Iterable[Finding | tuple[str, str] | str],
     env: Mapping[str, str] | None = None,
 ) -> Identity:
-    """The identity of a job's findings. A finding with no key falls back to its line,
-    and then to a placeholder: findings that exist can never produce an empty
-    identity, which would read as "all resolved"."""
+    """Build identity tuple and fingerprint for job findings."""
     keys = sorted(
         {
             _clean(item.key) or _clean(item.line) or "unkeyed finding"
@@ -182,9 +118,7 @@ def make_identity(
 
 
 def day_number(since: float, now: float) -> int:
-    """Which calendar day (owner's zone) of this identity ``now`` is; the day it
-    was first paged is day 1. Calendar days, not 24 h blocks: a cron that starts a
-    few minutes early must not read as the same day."""
+    """Return calendar day number in display timezone since first page."""
     first = datetime.fromtimestamp(since, tz=DISPLAY_TIMEZONE).date()
     today = datetime.fromtimestamp(now, tz=DISPLAY_TIMEZONE).date()
     return max(1, (today - first).days + 1)
@@ -304,8 +238,7 @@ def trusted_authors(env: Mapping[str, str]) -> frozenset[str]:
 
 
 def find_state(api: StateApi, job: str, trusted: frozenset[str]) -> Lookup:
-    """Read the job's state issue. Anything but a clean read is UNREADABLE: the caller
-    pages, because nothing may be decided from a listing it could not trust."""
+    """Read the job state issue from GitHub."""
     try:
         issues = api.open_issues(with_body=True)
     except Exception as exc:  # noqa: BLE001 - an unreadable state must page, not crash.
@@ -385,11 +318,7 @@ def decide(
     observed_clean: bool = False,
     unevaluated: Sequence[str] = (),
 ) -> Decision:
-    """The whole decision table, pure. ``observed_clean`` says that a run with no
-    findings actually proved there are none (a clean job, or a complete report);
-    without it an empty finding list is only a transient lookup failure.
-    ``unevaluated`` (key prefixes) narrows that: a recorded finding whose check did
-    not run in this run is not proven gone."""
+    """Evaluate findings against recorded state and return action decision."""
     if mode == OFF:
         if identity.keys:
             return Decision(PAGE, "dedup is off for this run: paging as before")
@@ -686,16 +615,7 @@ def dedup_page(
     now: float | None = None,
     api: StateApi | None = None,
 ) -> Outcome:
-    """Deliver a job's confirmed findings per the decision table above.
-
-    ``deliver_page(env, text)`` is the job's pager (``deliver_out_of_band_alert``);
-    ``deliver_report(text, env) -> bool`` the reports chat (``deliver_infra2_report``:
-    False = not configured). ``observed_clean`` is for the call that has no findings:
-    True only when the run proved there are none; ``unevaluated`` are the key
-    prefixes of checks that did not run, whose recorded findings are then unproven
-    (``""`` = nothing was observed). ``detail`` is the current detail text a report
-    shows (default: the findings' own lines), since identity excludes readings.
-    """
+    """Deliver alert or report according to state machine decision."""
     findings = list(findings)
     now = time.time() if now is None else now
     run_url = run_url_from_env(env) if run_url is None else run_url
@@ -824,8 +744,7 @@ def resolve_page_state(
     now: float | None = None,
     api: StateApi | None = None,
 ) -> Outcome:
-    """A run that proved the job is clean: resolve what was paged, if anything,
-    except findings whose check this run did not evaluate (``unevaluated`` prefixes)."""
+    """Resolve paged state for a proven clean run."""
     return dedup_page(
         env,
         job=job,

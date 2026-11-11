@@ -1,16 +1,15 @@
-"""
-Dokploy API Client
-
-Wraps Dokploy REST API for automated compose deployments.
-Requires DOKPLOY_API_KEY in environment (generate from /settings/profile).
-"""
+"""Client for the Dokploy REST API."""
 
 from __future__ import annotations
+
 import logging
 import os
 import time
-import httpx
+
 from dotenv import load_dotenv
+import httpx
+from infra2_sdk.runtime.http import request_with_retry
+
 from common.core.environ import normalize_env_name as _common_normalize_env_name
 
 logger = logging.getLogger(__name__)
@@ -25,7 +24,7 @@ def _normalize_env_name(env_name: str | None) -> str | None:
 
 
 class DokployClient:
-    """Client for Dokploy REST API"""
+    """Client for Dokploy REST API."""
 
     def __init__(self, base_url: str | None = None, api_key: str | None = None):
         from common.core.environ import infra_domain
@@ -37,7 +36,6 @@ class DokployClient:
         )
         self.api_key = api_key or os.getenv("DOKPLOY_API_KEY")
 
-        # Fallback to 1Password
         if not self.api_key:
             try:
                 from common.security.store import OpSecrets
@@ -49,7 +47,6 @@ class DokployClient:
                         self.api_key = key
                         break
             except (ImportError, AttributeError, KeyError):
-                # If 1Password integration or secret is unavailable, fall back to env var / final validation below.
                 pass
 
         if not self.api_key:
@@ -57,13 +54,6 @@ class DokployClient:
                 "DOKPLOY_API_KEY not set. Generate from Dokploy /settings/profile or store in 1Password"
             )
 
-    # Gateway blips (the dokploy-traefik in front of the API or Cloudflare edge returns
-    # these when the backend is briefly unresponsive or a transpacific packet drops). Safe to retry
-    # on a GET — and on a POST the caller marks ``idempotent`` (a set-desired-state write like
-    # ``compose.update``, where re-applying the same payload is a no-op even if the first attempt
-    # already acted). A 502/503/504, Cloudflare 520-524, or a read-timeout means the gateway never
-    # relayed a response; for a NON-idempotent POST (create/deploy/delete) the backend may still have
-    # acted, so those are never retried.
     _TRANSIENT_STATUS = (502, 503, 504, 520, 521, 522, 523, 524)
 
     def _request(
@@ -76,15 +66,7 @@ class DokployClient:
         idempotent: bool = False,
         **kwargs,
     ) -> dict | list:
-        """Make authenticated request to Dokploy API.
-
-        Transient gateway errors (502/503/504, Cloudflare 520-524) and connection errors (incl. read-timeouts
-        from a churning control plane, see #252) are retried with backoff when the request
-        is safe to repeat: any GET, or a POST the caller marks ``idempotent``. A flaky
-        control plane should self-heal rather than hard-fail the caller.
-        """
-        if _sleep is None:
-            _sleep = time.sleep
+        """Make authenticated request to Dokploy API with retry and backoff."""
         headers = {
             "accept": "application/json",
             "content-type": "application/json",
@@ -93,22 +75,24 @@ class DokployClient:
         }
         url = f"{self.base_url}/{endpoint}"
         retryable = method.upper() == "GET" or idempotent
-        attempt = 0
-        while True:
+        max_attempts = (1 + _retries) if retryable else 1
+        sleep_fn = _sleep or time.sleep
+
+        with httpx.Client(timeout=30.0) as client:
             try:
-                with httpx.Client(timeout=30.0) as client:
-                    resp = client.request(method, url, headers=headers, **kwargs)
-                    resp.raise_for_status()
+                resp = request_with_retry(
+                    client,
+                    method,
+                    url,
+                    max_attempts=max_attempts,
+                    retry_statuses=self._TRANSIENT_STATUS,
+                    sleep=sleep_fn,
+                    headers=headers,
+                    **kwargs,
+                )
+                resp.raise_for_status()
                 return resp.json() if resp.content else {}
             except httpx.HTTPStatusError as exc:
-                if (
-                    retryable
-                    and exc.response.status_code in self._TRANSIENT_STATUS
-                    and attempt < _retries
-                ):
-                    attempt += 1
-                    _sleep(2**attempt)
-                    continue
                 raise httpx.HTTPStatusError(
                     f"Dokploy API request failed for {method} {url}: "
                     f"status code {exc.response.status_code} {exc.response.reason_phrase}",
@@ -116,10 +100,6 @@ class DokployClient:
                     response=exc.response,
                 ) from exc
             except httpx.RequestError as exc:
-                if retryable and attempt < _retries:
-                    attempt += 1
-                    _sleep(2**attempt)
-                    continue
                 raise httpx.RequestError(
                     f"Error while performing Dokploy API request {method} {url}: {exc}",
                     request=exc.request,
@@ -240,44 +220,35 @@ class DokployClient:
         # plane (#252), unlike compose.create/deploy/delete.
         return self._request("POST", "compose.update", json=payload, idempotent=True)
 
+    def _compose_action(self, action: str, compose_id: str, **kwargs) -> dict:
+        """Execute a compose lifecycle action."""
+        return self._request(
+            "POST", f"compose.{action}", json={"composeId": compose_id, **kwargs}
+        )
+
     def deploy_compose(self, compose_id: str) -> dict:
-        """Trigger deployment for compose application"""
-        return self._request("POST", "compose.deploy", json={"composeId": compose_id})
+        """Trigger deployment for compose application."""
+        return self._compose_action("deploy", compose_id)
 
     def redeploy_compose(self, compose_id: str) -> dict:
-        """Trigger redeployment for compose application"""
-        return self._request("POST", "compose.redeploy", json={"composeId": compose_id})
+        """Trigger redeployment for compose application."""
+        return self._compose_action("redeploy", compose_id)
 
     def delete_compose(self, compose_id: str, *, delete_volumes: bool = False) -> dict:
         """Delete a compose application."""
-        return self._request(
-            "POST",
-            "compose.delete",
-            json={"composeId": compose_id, "deleteVolumes": delete_volumes},
-        )
+        return self._compose_action("delete", compose_id, deleteVolumes=delete_volumes)
 
     def cancel_compose_deployment(self, compose_id: str) -> dict:
-        """Cancel the running deployment for a compose (Dokploy-native).
-
-        Use this instead of raw `bull:deployments:*` Redis surgery: Dokploy owns
-        the queue and lifecycle, so cancelling through its own API keeps the
-        BullMQ bookkeeping and the deployment DB record consistent.
-        """
-        return self._request(
-            "POST", "compose.cancelDeployment", json={"composeId": compose_id}
-        )
+        """Cancel the running deployment for a compose."""
+        return self._compose_action("cancelDeployment", compose_id)
 
     def kill_compose_build(self, compose_id: str) -> dict:
         """Kill the stuck build process for a compose deployment."""
-        return self._request(
-            "POST", "compose.killBuild", json={"composeId": compose_id}
-        )
+        return self._compose_action("killBuild", compose_id)
 
     def clean_compose_queues(self, compose_id: str) -> dict:
         """Drain pending BullMQ deploy jobs for a compose."""
-        return self._request(
-            "POST", "compose.cleanQueues", json={"composeId": compose_id}
-        )
+        return self._compose_action("cleanQueues", compose_id)
 
     def get_compose(self, compose_id: str) -> dict:
         """Get compose details"""
@@ -527,27 +498,7 @@ class DokployClient:
         *,
         replace: bool = True,
     ) -> dict:
-        """Update environment variables for a compose service.
-
-        Args:
-            compose_id: ID of the compose application
-            env_vars: Dict of key-value pairs
-            env_str: Raw env string (replaces existing if provided)
-            replace: When True (default), replace existing env wholesale with env_vars
-                while preserving RUNTIME_ENV_KEYS_TO_PRESERVE from existing env.
-        Note:
-            This parser expects simple KEY=VALUE lines and does not handle quoted,
-            escaped, or multiline values.
-        Note (infra2#525):
-            Dokploy's compose.one has no version/etag/updatedAt field to gate this
-            write on (confirmed against a live response), so the merge below is
-            serialized per compose_id via common.deploy.compose_lock.compose_write_lock: two
-            concurrent callers merging into the SAME compose_id cannot silently
-            discard each other's write, because the second caller's GET is guaranteed
-            to happen only after the first caller's POST has landed. This is an
-            in-process lock only — see common/deploy/compose_lock.py for what it does and does
-            not cover.
-        """
+        """Update environment variables for a compose service under compose_write_lock."""
         from common.deploy.compose_lock import compose_write_lock
         from common.deploy.env_util import _parse_env_text, _preserve_runtime_env
 
@@ -569,15 +520,7 @@ class DokployClient:
 
     # Git Provider endpoints
     def list_git_providers(self) -> list[dict]:
-        """List configured GitHub providers.
-
-        Dokploy exposes these at `github.githubProviders`; each entry is
-        `{"githubId": ..., "gitProvider": {"providerType": "github", ...}}`.
-        The previously-used `settings.gitProvider.all` path 404s on current
-        Dokploy, so Method 1 below always fell through to the fragile compose
-        inference — which then broke too once `project.all` stopped returning
-        per-compose `githubId`. Querying the authoritative endpoint fixes both.
-        """
+        """List configured GitHub providers."""
         return self._request("GET", "github.githubProviders")
 
     def get_github_provider_id(self) -> str | None:

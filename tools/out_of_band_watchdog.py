@@ -1,17 +1,4 @@
-"""Out-of-band infra2 watchdog: the daily GitHub audit (ops.observability.md §1.1).
-
-It pages the failure classes the GitHub layer owns -- the Cloudflare Worker's
-liveness (runs and delivers), backups and the restore rehearsal, the peer
-scheduler -- plus failures of its own configuration and any check the signal
-registry does not mark `type: report`. The report-only checks (host, Docker,
-bridge, Dokploy status, staging backups) still run, and their failures go to one
-daily report because another layer pages them (#908).
-
-A page is delivered only when the set of paged checks changes (#962,
-``common/observability/page_dedup.py``): the same set on a later day is a
-`[报告] 仍未恢复` in the reports chat, and a day on which the set empties sends a
-RESOLVED page. Unreadable state pages as before.
-"""
+"""Out-of-band infra2 watchdog for daily GitHub plane audit."""
 
 from __future__ import annotations
 
@@ -289,14 +276,7 @@ def run_worker_status_check(
     retry_delay_seconds: float = 60.0,
     max_age_seconds: int | None = None,
 ) -> list[CheckResult]:
-    """Is the Cloudflare Worker running and delivering? (watchdog-liveness, #908)
-
-    Red when its last run is older than the Worker's own
-    `WATCHDOG_STATUS_MAX_AGE_SECONDS`, or when that run could not deliver its
-    alerts. What a run found and did deliver (failures, an empty config) the
-    Worker already paged; here it is a note for the daily report, so one Worker
-    finding is not paged a second time a day later.
-    """
+    """Verify Cloudflare Worker liveness and status delivery."""
     url = (
         env.get("INFRA2_WATCHDOG_WORKER_STATUS_URL") or DEFAULT_WORKER_STATUS_URL
     ).strip()
@@ -553,15 +533,7 @@ def run_backup_checks(
     now: datetime | None = None,
     capture=None,
 ) -> list[CheckResult]:
-    """#895: are the weekly off-host backups and the restore rehearsal current?
-
-    Each environment's latest manifest is judged by the SOP-004 verifier an
-    operator runs by hand (every BackupFacet present, within its RPO, non-empty,
-    checksummed, off-host), plus the manifest's own environment: a Staging run
-    once overwrote the only pointer. The verifier is imported here, not at module
-    top: other jobs import this module for alert delivery without PyYAML, and a
-    broken import must stay a red check instead of a dead watchdog.
-    """
+    """Verify weekly off-host backups and restore rehearsal."""
     names = [name for name, _ in BACKUP_CHECKS] + [RESTORE_REHEARSAL_CHECK]
     if config is None:
         return [
@@ -910,16 +882,7 @@ def run_dokploy_status_check(
     client_factory=get_dokploy,
     unit_runtime=None,
 ) -> list[CheckResult]:
-    """Read Dokploy's per-compose/app status for the daily report (#908).
-
-    A missing or rejected DOKPLOY_API_KEY is a configuration failure, and a
-    configuration failure pages. Any compose/application whose status is exactly
-    ``error`` (case-insensitive) is a report-only failure; ``idle``/``done``/
-    ``running`` (and anything else) are not findings. For a compose in ``error``,
-    `unit_runtime(project) -> (returncode, stdout, stderr)` runs
-    unit_runtime_command on the host; when that unit's own containers run healthy
-    on the current config the record is stale (split_stale_dokploy_records).
-    """
+    """Check Dokploy application status for daily reporting."""
     if not env.get("DOKPLOY_API_KEY", "").strip():
         return [
             CheckResult(
@@ -1201,12 +1164,7 @@ def run_estate_scheduler_liveness_check(
     getter_factory=github_getter,
     now: datetime | None = None,
 ) -> list[CheckResult]:
-    """#1432: is every scheduled workflow of the estate repositories still ticking?
-
-    Discovers the scheduled workflows of each estate repository through the
-    GitHub API and measures each bound from its own crons. An unreadable answer
-    is red (retried once, like the HTTP checks); the verdict itself is not retried.
-    """
+    """Verify scheduled workflows in estate repositories are ticking."""
     try:
         bound_cap = parse_bound_cap_hours(env.get(BOUND_CAP_ENV))
     except ValueError as exc:
@@ -1961,15 +1919,7 @@ def _record_issue_trail_verdicts(
     results: list[CheckResult],
     report_only: frozenset[str] | None,
 ) -> None:
-    """Hand this run's PAGING verdicts to the issue-trail step (truealpha#876 W4).
-
-    Report-only checks never open issues (#908): their failures are report lines.
-    A failure of the watchdog itself that surfaced on a report-only check (its
-    configuration, the report path) is recorded as the watchdog step's own red
-    verdict, which the next run that records cleanly closes. When the registry is
-    unreadable nothing but that verdict is recorded, and the record says it is
-    incomplete so the trail does not close issues of checks it did not record.
-    """
+    """Record paging verdicts for issue-trail step."""
     path = env.get(VERDICTS_ENV, "").strip()
     if not path:
         return

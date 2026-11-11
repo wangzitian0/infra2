@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""Measure infra2-sdk public symbol and environment-key usage across consumer repositories.
-
-This CLI tool promotes the census scripts into one tested command that computes
-six metrics (M1 through M6):
-  M1: Package-contract public symbol reachability across consumers (prod_used, test_only,
-      internal_only, unused), surface.json justification verification, and missing consumer
-      imports. "Public symbol" has one definition: an entry in package `__init__.py` `__all__`
-      (`infra2_sdk.__all__` and `infra2_sdk.runtime.__all__`); submodule `__all__` is retired
-      as a public-contract denominator (#1410).
-  M2: runtime_env_contract() key reachability across consumers (prod_used, test_only, unused)
-      and C1 through C6 classifications.
-  M3: Consumer infra2-sdk version pin lag relative to the latest SDK release version.
-  M4: Consumer references to symbols listed in LEFT_THE_PACKAGES, residual libs/ or tools/_lib/
-      directories, and except ImportError SDK fallback copies (must equal 0).
-  M5: Consumer hardcoded SERVICE_NAME or OTEL key lists outside sdk_vocabulary() (must equal 0).
-  M6: Consumer tools/*.py cross-imports (from tools... or import tools... inside tools/, must equal 0).
-"""
+"""Measure infra2-sdk public symbol and environment-key usage across consumer repositories for metrics M1 through M6."""
 
 from __future__ import annotations
 
@@ -342,11 +326,7 @@ def load_surface_justifications(
 
 
 def public_defs(pkg_root: Path) -> list[dict[str, Any]]:
-    """Collect package-contract public symbols from package `__init__.py` `__all__` (#1410).
-
-    Falls back to top-level submodule definitions only when no package `__init__.py`
-    declares `__all__` (for standalone single-module unit fixtures).
-    """
+    """Collect package-contract public symbols from package `__init__.py` `__all__` (#1410)."""
     package_exports: list[tuple[str, str, Path, int]] = []
     contract_inits = [pkg_root / "__init__.py", pkg_root / "runtime" / "__init__.py"]
     for init_path in contract_inits:
@@ -374,7 +354,12 @@ def public_defs(pkg_root: Path) -> list[dict[str, Any]]:
         pkg_dir = init_path.parent
         submod_py = pkg_dir / f"{sym}.py"
         subpkg_init = pkg_dir / sym / "__init__.py"
-        if submod_py.is_file():
+        mod_path = (
+            submod_py
+            if submod_py.is_file()
+            else (subpkg_init if subpkg_init.is_file() else None)
+        )
+        if mod_path is not None:
             defs.append(
                 {
                     "package": pkg_mod,
@@ -383,20 +368,7 @@ def public_defs(pkg_root: Path) -> list[dict[str, Any]]:
                     "kind": "module",
                     "line": 1,
                     "end": 1,
-                    "path": str(submod_py),
-                }
-            )
-            continue
-        if subpkg_init.is_file():
-            defs.append(
-                {
-                    "package": pkg_mod,
-                    "module": f"{pkg_mod}.{sym}",
-                    "name": sym,
-                    "kind": "module",
-                    "line": 1,
-                    "end": 1,
-                    "path": str(subpkg_init),
+                    "path": str(mod_path),
                 }
             )
             continue
@@ -667,13 +639,14 @@ def consumer_symbol_refs(
             else:
                 to_test_locals, to_dead_locals = set(), set()
 
+            def _record_use(sym_name: str, bound_name: str) -> None:
+                if bound_name not in to_dead_locals:
+                    (test if bound_name in to_test_locals else bucket)[sym_name][
+                        repo
+                    ] += 1
+
             for local_bound, sdk_name in local_to_sdk.items():
-                if local_bound in to_dead_locals:
-                    continue
-                if local_bound in to_test_locals:
-                    test[sdk_name][repo] += 1
-                else:
-                    bucket[sdk_name][repo] += 1
+                _record_use(sdk_name, local_bound)
 
             star_retired_for_file = set(retired_set)
             for smod in star_modules:
@@ -686,14 +659,8 @@ def consumer_symbol_refs(
                 ):
                     if node.attr in MODULE_DUNDER_ATTRS:
                         continue
-                    target_base = mod_alias[node.value.id]
-                    if node.value.id in to_dead_locals:
-                        pass
-                    elif node.value.id in to_test_locals:
-                        test[node.attr][repo] += 1
-                    else:
-                        bucket[node.attr][repo] += 1
-                    seen_imports[(target_base, node.attr)].append(
+                    _record_use(node.attr, node.value.id)
+                    seen_imports[(mod_alias[node.value.id], node.attr)].append(
                         f"{repo}:{rel}:{node.lineno}"
                     )
                 elif (
@@ -860,20 +827,22 @@ def compute_m1(
 
     submodule_prod: dict[str, Counter[str]] = defaultdict(Counter)
     submodule_test: dict[str, Counter[str]] = defaultdict(Counter)
+
+    def _accum_prefixes(
+        target: dict[str, Counter[str]], mod: str, repo: str, count: int
+    ) -> None:
+        parts = mod.split(".")
+        for idx in range(2, len(parts) + 1):
+            target[".".join(parts[:idx])][repo] += count
+
     for (base, _attr), sites in seen_imports.items():
         for site in sites:
             repo_name, rel_path, _ = site.split(":", 2)
-            target_bucket = submodule_test if is_test_path(rel_path) else submodule_prod
-            parts = base.split(".")
-            for idx in range(2, len(parts) + 1):
-                prefix = ".".join(parts[:idx])
-                target_bucket[prefix][repo_name] += 1
+            bucket = submodule_test if is_test_path(rel_path) else submodule_prod
+            _accum_prefixes(bucket, base, repo_name, 1)
     for mod_target, repo_counts in cli_modules.items():
-        parts = mod_target.split(".")
-        for idx in range(2, len(parts) + 1):
-            prefix = ".".join(parts[:idx])
-            for r_name, r_cnt in repo_counts.items():
-                submodule_prod[prefix][r_name] += r_cnt
+        for r_name, r_cnt in repo_counts.items():
+            _accum_prefixes(submodule_prod, mod_target, r_name, r_cnt)
 
     missing_prod, missing_test = check_consumer_imports(seen_imports, pkg_root)
 
@@ -1437,34 +1406,26 @@ def compute_m4(
     by_repo: dict[str, list[dict[str, str]]] = defaultdict(list)
     sites_all: list[dict[str, str]] = []
 
+    def _add_rec(r: str, mod: str, n: str, site: str) -> None:
+        rec = {"module": mod, "name": n, "site": site}
+        by_repo[r].append(rec)
+        sites_all.append(rec)
+
     for (module, name), sites in sorted(seen_imports.items()):
         if name not in retired and name not in pkg_left.get(module, set()):
             continue
         for site in sorted(set(sites)):
-            repo = site.split(":", 1)[0]
-            rec = {"module": module, "name": name, "site": site}
-            by_repo[repo].append(rec)
-            sites_all.append(rec)
+            _add_rec(site.split(":", 1)[0], module, name, site)
 
     if consumers:
         for repo, root in sorted(consumers.items()):
             repo_files = list_repo_files(root)
-            if any(rel.startswith("libs/") for rel in repo_files):
-                rec = {
-                    "module": "libs",
-                    "name": "libs/",
-                    "site": f"{repo}:libs",
-                }
-                by_repo[repo].append(rec)
-                sites_all.append(rec)
-            if any(rel.startswith("tools/_lib/") for rel in repo_files):
-                rec = {
-                    "module": "tools._lib",
-                    "name": "tools/_lib/",
-                    "site": f"{repo}:tools/_lib",
-                }
-                by_repo[repo].append(rec)
-                sites_all.append(rec)
+            for prefix, mod, n in (
+                ("libs/", "libs", "libs/"),
+                ("tools/_lib/", "tools._lib", "tools/_lib/"),
+            ):
+                if any(rel.startswith(prefix) for rel in repo_files):
+                    _add_rec(repo, mod, n, f"{repo}:{n.rstrip('/')}")
             for rel in repo_files:
                 if (
                     not rel.endswith(".py")
@@ -1478,13 +1439,12 @@ def compute_m4(
                     continue
                 for node in ast.walk(tree):
                     if isinstance(node, ast.Try) and _try_imports_sdk(node):
-                        rec = {
-                            "module": "infra2_sdk",
-                            "name": "except_ImportError_fallback",
-                            "site": f"{repo}:{rel}:{node.lineno}",
-                        }
-                        by_repo[repo].append(rec)
-                        sites_all.append(rec)
+                        _add_rec(
+                            repo,
+                            "infra2_sdk",
+                            "except_ImportError_fallback",
+                            f"{repo}:{rel}:{node.lineno}",
+                        )
                 if (
                     rel.startswith("common/")
                     and not rel.endswith("/__init__.py")
@@ -1496,13 +1456,7 @@ def compute_m4(
                     }
                     and _is_pure_reexport_shim(tree)
                 ):
-                    rec = {
-                        "module": "common",
-                        "name": "pure_reexport_shim",
-                        "site": f"{repo}:{rel}:1",
-                    }
-                    by_repo[repo].append(rec)
-                    sites_all.append(rec)
+                    _add_rec(repo, "common", "pure_reexport_shim", f"{repo}:{rel}:1")
 
     return {
         "total_violations": len(sites_all),
@@ -1535,6 +1489,11 @@ def compute_m5(consumers: dict[str, Path]) -> dict[str, Any]:
     by_repo: dict[str, list[dict[str, str]]] = defaultdict(list)
     violations: list[dict[str, str]] = []
 
+    def _add_v(repo_key: str, site_str: str, kind_str: str) -> None:
+        rec = {"repo": repo_key, "site": site_str, "kind": kind_str}
+        by_repo[repo_key].append(rec)
+        violations.append(rec)
+
     for repo, root in sorted(consumers.items()):
         for rel in list_repo_files(root):
             if is_test_path(rel) or rel in CENSUS_SELF_REL_PATHS:
@@ -1566,13 +1525,9 @@ def compute_m5(consumers: dict[str, Path]) -> dict[str, Any]:
                         any(s.startswith("OTEL_") for s in strs)
                         or bool(strs & OTEL_COMPANION_KEYS)
                     ):
-                        rec = {
-                            "repo": repo,
-                            "site": f"{repo}:{rel}:{node.lineno}",
-                            "kind": "hardcoded_collection",
-                        }
-                        by_repo[repo].append(rec)
-                        violations.append(rec)
+                        _add_v(
+                            repo, f"{repo}:{rel}:{node.lineno}", "hardcoded_collection"
+                        )
                 if "SERVICE_NAME" in text and "OTEL_SERVICE_NAME" in text:
                     for node in ast.walk(tree):
                         if isinstance(node, ast.Call) and isinstance(
@@ -1584,26 +1539,20 @@ def compute_m5(consumers: dict[str, Path]) -> dict[str, Any]:
                                     isinstance(first, ast.Constant)
                                     and first.value == "SERVICE_NAME"
                                 ):
-                                    rec = {
-                                        "repo": repo,
-                                        "site": f"{repo}:{rel}:{node.lineno}",
-                                        "kind": "env_lookup",
-                                    }
-                                    by_repo[repo].append(rec)
-                                    violations.append(rec)
+                                    _add_v(
+                                        repo,
+                                        f"{repo}:{rel}:{node.lineno}",
+                                        "env_lookup",
+                                    )
                         elif isinstance(node, ast.Subscript):
                             sl = node.slice
                             if (
                                 isinstance(sl, ast.Constant)
                                 and sl.value == "SERVICE_NAME"
                             ):
-                                rec = {
-                                    "repo": repo,
-                                    "site": f"{repo}:{rel}:{node.lineno}",
-                                    "kind": "env_subscript",
-                                }
-                                by_repo[repo].append(rec)
-                                violations.append(rec)
+                                _add_v(
+                                    repo, f"{repo}:{rel}:{node.lineno}", "env_subscript"
+                                )
             elif rel.endswith(".json") and (
                 "env.manifest" in rel or "required-env" in rel
             ):
@@ -1614,13 +1563,7 @@ def compute_m5(consumers: dict[str, Path]) -> dict[str, Any]:
                     continue
                 serialized = json.dumps(data)
                 if '"SERVICE_NAME"' in serialized:
-                    rec = {
-                        "repo": repo,
-                        "site": f"{repo}:{rel}:1",
-                        "kind": "manifest_service_name",
-                    }
-                    by_repo[repo].append(rec)
-                    violations.append(rec)
+                    _add_v(repo, f"{repo}:{rel}:1", "manifest_service_name")
 
     return {
         "total_violations": len(violations),
@@ -1633,6 +1576,11 @@ def compute_m6(consumers: dict[str, Path]) -> dict[str, Any]:
     """Compute M6: consumer tools/*.py cross-imports, hijacks, load_tool calls, and reverse common->tools imports."""
     by_repo: dict[str, list[dict[str, str]]] = defaultdict(list)
     violations: list[dict[str, str]] = []
+
+    def _add_m6(repo_key: str, site_str: str, import_str: str) -> None:
+        rec = {"repo": repo_key, "site": site_str, "import": import_str}
+        by_repo[repo_key].append(rec)
+        violations.append(rec)
 
     for repo, root in sorted(consumers.items()):
         for rel in list_repo_files(root, suffix=".py"):
@@ -1649,39 +1597,23 @@ def compute_m6(consumers: dict[str, Path]) -> dict[str, Any]:
             for node in ast.walk(tree):
                 if isinstance(node, ast.ImportFrom):
                     if in_tools and (node.level or 0) > 0:
-                        rec = {
-                            "repo": repo,
-                            "site": f"{repo}:{rel}:{node.lineno}",
-                            "import": f"{'.' * (node.level or 1)}{node.module or ''}",
-                        }
-                        by_repo[repo].append(rec)
-                        violations.append(rec)
+                        _add_m6(
+                            repo,
+                            f"{repo}:{rel}:{node.lineno}",
+                            f"{'.' * (node.level or 1)}{node.module or ''}",
+                        )
                     elif node.module and node.module.split(".")[0] == "tools":
-                        rec = {
-                            "repo": repo,
-                            "site": f"{repo}:{rel}:{node.lineno}",
-                            "import": node.module,
-                        }
-                        by_repo[repo].append(rec)
-                        violations.append(rec)
+                        _add_m6(repo, f"{repo}:{rel}:{node.lineno}", node.module)
                     elif in_tools and any(alias.name == "*" for alias in node.names):
-                        rec = {
-                            "repo": repo,
-                            "site": f"{repo}:{rel}:{node.lineno}",
-                            "import": f"{node.module or ''}.*",
-                        }
-                        by_repo[repo].append(rec)
-                        violations.append(rec)
+                        _add_m6(
+                            repo,
+                            f"{repo}:{rel}:{node.lineno}",
+                            f"{node.module or ''}.*",
+                        )
                 elif isinstance(node, ast.Import):
                     for alias in node.names:
                         if alias.name.split(".")[0] == "tools":
-                            rec = {
-                                "repo": repo,
-                                "site": f"{repo}:{rel}:{node.lineno}",
-                                "import": alias.name,
-                            }
-                            by_repo[repo].append(rec)
-                            violations.append(rec)
+                            _add_m6(repo, f"{repo}:{rel}:{node.lineno}", alias.name)
                 elif in_tools and isinstance(node, ast.Assign):
                     for target in node.targets:
                         if (
@@ -1693,13 +1625,11 @@ def compute_m6(consumers: dict[str, Path]) -> dict[str, Any]:
                             and isinstance(target.slice, ast.Name)
                             and target.slice.id == "__name__"
                         ):
-                            rec = {
-                                "repo": repo,
-                                "site": f"{repo}:{rel}:{node.lineno}",
-                                "import": "sys.modules[__name__]",
-                            }
-                            by_repo[repo].append(rec)
-                            violations.append(rec)
+                            _add_m6(
+                                repo,
+                                f"{repo}:{rel}:{node.lineno}",
+                                "sys.modules[__name__]",
+                            )
                 elif isinstance(node, ast.Call):
                     if (
                         isinstance(node.func, ast.Name) and node.func.id == "load_tool"
@@ -1707,13 +1637,7 @@ def compute_m6(consumers: dict[str, Path]) -> dict[str, Any]:
                         isinstance(node.func, ast.Attribute)
                         and node.func.attr == "load_tool"
                     ):
-                        rec = {
-                            "repo": repo,
-                            "site": f"{repo}:{rel}:{node.lineno}",
-                            "import": "load_tool()",
-                        }
-                        by_repo[repo].append(rec)
-                        violations.append(rec)
+                        _add_m6(repo, f"{repo}:{rel}:{node.lineno}", "load_tool()")
 
     return {
         "total_violations": len(violations),

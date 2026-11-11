@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
-"""Daily reconcile: is every store what its manifest says, and is every quota in budget?
-
-For each registered service (common/secrets_registry.py) and each environment it deploys
-to, the infra2-sdk resolver compares the Vault path with the manifest — missing, empty,
-unclassified keys — and, when 1Password answers, with the human-entered values (stale).
-Capacity readings for the Cloudflare free tier behind the heartbeat worker are
-evaluated against their limits (#616 flapping ate the KV write budget), and the KV
-writes per UTC day over the last week plus today so far are reported with them, so a
-budget that is creeping up shows before it trips. Names and counts only, never values.
-
-    python3 tools/secrets_reconcile.py            # inside the iac-runner (Vault + op reachable)
-    python3 tools/secrets_reconcile.py --json     # machine-readable, for the ops-check job
-
-Exit 1 when anything is missing, empty, unclassified, stale, or over budget.
-"""
+"""Reconcile service Vault stores against manifests and verify capacity quotas."""
 
 from __future__ import annotations
 
@@ -61,12 +47,7 @@ def over_privileged(
     documents: Mapping[str, Mapping[str, str]],
     root_credentials: Mapping[str, Mapping[str, str]],
 ) -> dict[str, list[str]]:
-    """Which stores hold a credential that belongs to the object store's root account.
-
-    ``documents`` is ``{"project/service|env": {key: value}}`` and ``root_credentials`` is
-    ``{env: {"root_user": ..., "root_password": ...}}``. Compares digests, returns key
-    names: an application may hold its own scoped credential and nothing stronger (#677).
-    """
+    """Return stores holding credentials matching the object store root account."""
     passwords = {
         _digest(creds.get("root_password", "")): env
         for env, creds in root_credentials.items()
@@ -187,11 +168,7 @@ def reading_trend(
     name: str = TREND_READING,
     days: int = TREND_DAYS,
 ) -> list[dict[str, object]]:
-    """``name`` used per UTC day, oldest first: ``days`` complete days, then today so far.
-
-    ``used`` is None when Cloudflare answered nothing for the account that day; an
-    account row without the reading means none were used (0).
-    """
+    """Collect daily capacity readings across UTC days."""
     rows: list[dict[str, object]] = []
     for offset in range(days, -1, -1):
         day = today - dt.timedelta(days=offset)
@@ -225,11 +202,7 @@ def capacity_section(
     today: dt.date | None = None,
     fetch: Callable[[dt.date], Iterable[CapacityReading]] | None = None,
 ) -> tuple[CapacityReport, dict[str, object] | None, str | None]:
-    """Yesterday against the free tier, plus the ``TREND_READING`` trend around it.
-
-    One token read and one analytics query per day (yesterday's serves both). A trend
-    that cannot be read is reported beside the verdict, never instead of it.
-    """
+    """Evaluate free-tier capacity and daily trends."""
     today = today or dt.datetime.now(dt.UTC).date()
     if fetch is None:
         token = cloudflare_token(human)

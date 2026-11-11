@@ -1,17 +1,5 @@
 #!/usr/bin/env python3
-"""Client for the iac_runner ``/deploy`` webhook — the platform-service deploy trigger.
-
-``deploy_v2`` routes platform (iac-pinned) services HERE rather than re-implementing their
-deploy: ``Deployer.sync`` is deeply invoke/Context + ``os.environ`` coupled, so the faithful
-move is to trigger the SAME signed webhook ``deploy.yml`` already uses. A platform
-deploy via ``deploy_v2`` is therefore byte-for-byte the deploy iac_runner performs today —
-fidelity by construction, not by replication.
-
-Signing mirrors ``webhook_server.verify_iac_signature`` exactly:
-    signed_payload = f"{timestamp}.{nonce}.".encode() + payload_bytes
-    X-Hub-Signature-256: sha256=HMAC_SHA256(IAC_WEBHOOK_SECRET, signed_payload)
-    + X-IAC-Timestamp: <unix seconds> , X-IAC-Nonce: <hex>
-"""
+"""Client for the iac_runner /deploy webhook."""
 
 from __future__ import annotations
 
@@ -29,40 +17,18 @@ _SHA40_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 _DEPLOYMENT_ID_RE = re.compile(r"\A[0-9a-f]{16}\Z")
 _VALID_ENVS = ("staging", "production")
 
-# /deploy/status poll schedule (truealpha#860). A fixed 10 s interval made a short
-# operation wait for its own verdict: a secret supply that finished 7.1 s after its
-# trigger was seen by the second poll, 10 s in. The schedule starts at 2 s and grows by a
-# quarter per pause up to the old 10 s, which it reaches ~40 s in (pauses 2, 2.5, 3.1,
-# 3.9, 4.9, 6.1, 7.6, 9.5, then 10). A short operation is seen about a second after it
-# finishes; any operation costs at most five polls more than before, and the runner's
-# steady-state status load (one poll per 10 s per waiting caller) is unchanged.
 STATUS_POLL_INITIAL_SECONDS = 2.0
 STATUS_POLL_BACKOFF = 1.25
 STATUS_POLL_MAX_SECONDS = 10.0
-
-# A `not_found` answer is normal for a moment right after the trigger. One that lasts
-# longer than this is a lost request: the runner restarted and dropped its in-memory
-# deploy state (#666). The poll then fails at once; it does not wait for the full budget.
 STATUS_NOT_FOUND_GRACE_SECONDS = 90.0
 
 
 class RunnerLostDeploymentError(RuntimeError):
-    """The runner has no record of a deploy it accepted: the request is lost (#666).
-
-    Raised only when ``not_found`` answers outlast ``not_found_grace``. A gateway error,
-    a timeout and a failed deploy are other errors: the runner may still hold that deploy,
-    so a caller must not submit it again.
-    """
+    """The runner has no record of an accepted deploy."""
 
 
 class RunnerInterruptedError(RunnerLostDeploymentError):
-    """The runner restarted while it ran this deploy: its outcome is unknown (#1439).
-
-    The runner saves its deploy records, so after a restart it answers ``interrupted``
-    for a deploy that was in flight, not ``not_found``. Like a lost request this is a
-    transient fault, and requesting the same coordinates again is safe: the config-hash
-    gate skips a service that already matches.
-    """
+    """The runner restarted while a deploy was in flight."""
 
 
 def status_poll_delays(
@@ -70,12 +36,7 @@ def status_poll_delays(
     backoff: float = STATUS_POLL_BACKOFF,
     maximum: float = STATUS_POLL_MAX_SECONDS,
 ) -> Iterator[float]:
-    """The pauses between successive ``/deploy/status`` polls, without end.
-
-    ``initial``, then each pause ``backoff`` times the previous one, never above
-    ``maximum``. ``backoff=1`` with ``maximum=initial`` is a fixed interval. The
-    arguments are checked here, before the first poll is sent, not at the first pause.
-    """
+    """Yield successive pauses between status polls."""
     if initial < 0 or maximum < 0 or backoff < 1:
         raise ValueError(
             "poll delays need initial >= 0, maximum >= 0 and backoff >= 1, got "
@@ -98,13 +59,7 @@ def status_poll_attempts(
     backoff: float = STATUS_POLL_BACKOFF,
     maximum: float = STATUS_POLL_MAX_SECONDS,
 ) -> int:
-    """The fewest polls whose pauses, taken together, cover ``budget_seconds``.
-
-    :func:`poll_platform_deploy_status` pauses after every unsettled poll, the last one
-    included, so ``n`` polls give up after the first ``n`` pauses; this returns the
-    smallest ``n >= 1`` for which those add up to at least the budget. With a fixed
-    10 s schedule that is ``ceil(budget / 10)``, the count deploy_v2 always used.
-    """
+    """Calculate the number of polls required to cover the budget."""
     budget = max(0.0, float(budget_seconds))
     if initial <= 0 or maximum <= 0:
         raise ValueError("a poll schedule that never pauses cannot cover a time budget")
@@ -230,13 +185,7 @@ def trigger_platform_deploy(
     action: str | None = None,
     oidc_token: str | None = None,
 ) -> dict:
-    """Trigger an iac_runner platform deploy of ``services`` at ``ref`` to ``env``.
-
-    ``env`` is ``staging``|``production``; ``ref`` a 40-hex infra2 commit (the iac_ref);
-    ``services`` the short service names (``["redis"]``, or ``["__all__"]``). Returns the
-    webhook's JSON response. Raises ``ValueError`` for a bad env/ref/secret before any POST,
-    and ``httpx.HTTPError`` on transport / non-2xx. ``transport`` is injected for tests.
-    """
+    """Trigger an iac_runner platform deploy for specified services."""
     _validate_request(env, ref, secret, base_url)
     if not all(isinstance(service, str) for service in services):
         raise ValueError("services must be a non-empty list of non-empty strings")
@@ -295,30 +244,7 @@ def poll_platform_deploy_status(
     backoff: float = 1.0,
     max_interval: float | None = None,
 ) -> dict:
-    """Poll ``/deploy/status`` until the deploy reaches a terminal state (mirrors the bash loop).
-
-    The pause after the first unsettled poll is ``interval``; each later pause is
-    ``backoff`` times the previous one, capped at ``max_interval`` (default: ``interval``,
-    i.e. a fixed interval). deploy_v2 passes the :data:`STATUS_POLL_INITIAL_SECONDS`
-    schedule (truealpha#860).
-
-    A push that touches ``bootstrap/06.iac_runner`` recreates the runner while deploys
-    are in flight (#666: three times on 2026-09-08). While the container is being
-    recreated Traefik answers 404 without a JSON body, then 502/503/504; those are
-    tolerated for ``gateway_grace`` seconds of consecutive gateway errors before the
-    poll fails — naming the restart — instead of on the first one.
-
-    A ``not_found`` answer is tolerated for ``not_found_grace`` seconds. A longer run of
-    ``not_found`` answers means the runner has no record of the deploy: the poll fails
-    and names the deployment and that cause (#666), as a :class:`RunnerLostDeploymentError`
-    that a caller can tell from every other failure. Only a real status resets this timer.
-    A gateway or transport error does not: after a runner recreation the gateway can flap
-    between not_found and 502, and each answer would otherwise reset the other's timer.
-
-    Returns the final status dict. A terminal status is anything other than ``running`` /
-    ``pending`` / ``in_progress``. Raises ``ValueError`` for a bad env/ref/secret/base_url
-    BEFORE any request, and ``TimeoutError`` if it never settles within ``attempts``.
-    """
+    """Poll /deploy/status until the deploy reaches a terminal state."""
     _validate_request(env, ref, secret, base_url)
     if services is not None and not all(
         isinstance(service, str) for service in services

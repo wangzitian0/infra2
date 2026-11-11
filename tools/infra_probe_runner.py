@@ -1,22 +1,5 @@
 #!/usr/bin/env python3
-"""The single resident alerting sidecar (#543): infra probes + watcher plugins.
-
-One process, one container (`platform-alerting-probes${ENV_SUFFIX}`), all
-resident/continuous watching:
-
-  1. the probe loop (INFRA_PROBE_SPECS / PUBLIC_ROUTE_PROBE_SPECS), alerting
-     through the internal bridge;
-  2. registered watcher plugins (common/observability/watchers/resident.py) — the container
-     breakdown watch and the deploy-queue guard, formerly two separate compose
-     sidecars — invoked once per loop iteration with their own per-watcher
-     state and self-paced intervals.
-
-The compose healthcheck (state-file freshness) covers the WHOLE loop: a hung
-probe cycle OR a hung watcher stalls the next state write, the file goes
-stale, and the container flips unhealthy -> Dokploy restarts it (#163/#475
-monitor-the-monitor; the standalone sidecars had no healthcheck at all).
-See common/observability/watchers/resident.py for the plugin surface + timing budget.
-"""
+"""Resident alerting sidecar for infra probes and watcher plugins."""
 # alert-delivery-exempt: the probe ENGINE — delivers on behalf of every registered internal probe signal (per-spec, not per-module); review=2027-04-01
 
 from __future__ import annotations
@@ -122,11 +105,7 @@ def _log_send(stream_key: str, results: list, severity_override: str | None) -> 
 def _cascades_to_failing_root(
     name: str, dep_of: dict[str, str], failed_names: set[str]
 ) -> bool:
-    """True if `name` is a cascade symptom to suppress: its `depends_on` chain leads to a
-    failing ROOT. False — i.e. keep alerting — when the immediate dependency is healthy (a
-    real independent failure) OR the chain forms a cycle (no root → fail closed). A probe
-    with no `depends_on` is itself a root and is never suppressed.
-    """
+    """Return True if probe failure cascades from failing root."""
     cur = dep_of.get(name)
     if not cur:
         return False  # no dependency -> this IS a root, always page
@@ -144,9 +123,7 @@ def _cascades_to_failing_root(
 def _resolve_failing_root(
     name: str, dep_of: dict[str, str], failed_names: set[str]
 ) -> str:
-    """The deepest failing node `name`'s depends_on chain reaches — the actual root being
-    paged. Only meaningful for a cascade symptom (caller guarantees a root exists). For
-    A->B->C this returns C, not the immediate dependency B."""
+    """Return deepest failing node in depends_on chain."""
     seen = {name}
     root = name
     cur = dep_of.get(name)
@@ -165,18 +142,7 @@ class ProbeGroup(NamedTuple):
 
 
 def _configure_logging() -> None:
-    """Give the process a root handler, and let the two watchers speak at INFO.
-
-    Without a handler, `logging`'s handler of last resort emits WARNING and above only —
-    so every `logger.info` in the watchers was silently dropped, and the only thing they
-    could say was a warning. That is why the deploy-queue guard's one line per sweep was
-    a per-compose WARNING (32,236 lines in 24 h on production) and why its replacement,
-    a single INFO summary, appeared nowhere at all when v1.1.78 reached staging.
-
-    The root stays at WARNING so nothing else in the process becomes chatty; the two
-    watcher loggers are raised to INFO explicitly. httpx/httpcore are pinned to WARNING
-    in common.observability.watchers.breakdown_watch, which polls the Docker socket every minute.
-    """
+    """Configure root and watcher logging levels."""
     # force=True: basicConfig is a no-op once the root logger has any handler, so
     # without it a library that configured logging first would leave the root level and
     # handler as it wanted them — and the summaries back where they started.
