@@ -11,7 +11,7 @@ objects. Definitions are JSON; provisioning is a post-merge `invoke` apply step
 
 | File | Purpose |
 |------|---------|
-| `alert_rules.json` | OTEL log-error rule, RED SLO and business-anomaly metric rules, and a telemetry-absence rule: `FinanceReportBackendErrorLogs`, `FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`, `FinanceReportStatementParseFailureSpike`, `FinanceReportRateLimitSaturation`, `FinanceReportAsyncTaskFailures`, and `FinanceReportBackendTelemetryAbsent`. The threshold, window, severity and no-data decision for each rule are in SOP-004C of [ops.observability.md](../../../docs/ssot/ops.observability.md). |
+| `alert_rules.json` | OTEL log-error rule, RED SLO and business-anomaly metric rules, and a telemetry-absence rule: `FinanceReportBackendErrorLogs`, `FinanceReportHigh5xxRate`, `FinanceReportHigh5xxRateStable`, `FinanceReportP95LatencyHigh`, `FinanceReportP95LatencyHighStable` (the `Stable` rules read FastAPI's stable HTTP metric, seconds; #1465), `FinanceReportStatementParseFailureSpike`, `FinanceReportRateLimitSaturation`, `FinanceReportAsyncTaskFailures`, and `FinanceReportBackendTelemetryAbsent`. The threshold, window, severity and no-data decision for each rule are in SOP-004C of [ops.observability.md](../../../docs/ssot/ops.observability.md). |
 | `dashboard.json` | Baseline dashboard: backend error rate + latency, frontend web-vitals + exceptions. Stored in SigNoz's v5 query shape with a `layout`, and sent as the dashboard map itself (no `{"data": …}` wrapper). |
 | `shared_tasks.py` | Idempotent apply/print invoke tasks, plus the read-only `verify-alert-routing` / `verify-dashboard` and the explicit `test-alert-channel`. |
 

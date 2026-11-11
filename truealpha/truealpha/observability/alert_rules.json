@@ -92,8 +92,8 @@
       "match_type": "at_least_once",
       "eval_window": "5m0s",
       "frequency": "1m",
-      "promql": "absent_over_time({\"http.server.duration.count\", \"service.name\"=\"truealpha-app\", \"deployment.environment.name\"=\"production\"}[15m])",
-      "summary": "Severity P1 (15m absent): truealpha-app exported no HTTP duration metrics for 15 minutes"
+      "promql": "absent_over_time({\"http.server.duration.count\", \"service.name\"=\"truealpha-app\", \"deployment.environment.name\"=\"production\"}[15m]) and on() absent_over_time({\"process.uptime\", \"service.name\"=\"truealpha-app\", \"deployment.environment.name\"=\"production\"}[15m])",
+      "summary": "Severity P1 (15m absent): truealpha-app exported no HTTP duration metrics for 15 minutes (fires only when both the legacy HTTP metric and the process.uptime heartbeat are absent; infra2#1465)"
     }
   ]
 }

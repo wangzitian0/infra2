@@ -123,8 +123,8 @@
       "match_type": "at_least_once",
       "eval_window": "5m0s",
       "frequency": "1m",
-      "promql": "absent_over_time({\"http.server.request.count\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\"}[10m])",
-      "summary": "finance-report-backend has reported no request metrics for 10 minutes: the backend is down or its OTLP export stopped, and every other finance_report rule is blind until it recovers. Severity P1. Runbook: docs/ssot/ops.observability.md SOP-004C."
+      "promql": "absent_over_time({\"http.server.request.count\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\"}[10m]) and on() absent_over_time({\"db.pool.size\",\"service.name\"=\"finance-report-backend\",\"deployment.environment.name\"=\"production\"}[10m])",
+      "summary": "finance-report-backend has reported no request metrics for 10 minutes: the backend is down or its OTLP export stopped, and every other finance_report rule is blind until it recovers. Severity P1 (fires only when both the request counter and the db.pool.size gauge are absent; infra2#1465). Runbook: docs/ssot/ops.observability.md SOP-004C."
     }
   ]
 }

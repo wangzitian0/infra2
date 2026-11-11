@@ -326,9 +326,13 @@ _APP_METRICS: dict[str, dict[str, set[str]]] = {
         "http.response.status_code": {"200", "307", "404", "500", "502", "503"},
     },
     "http.server.request.duration.count": {
+        "http.response.status_code_class": {"1xx", "2xx", "3xx", "4xx", "5xx"},
         "http.response.status_code": {"200", "307", "404", "500", "502", "503"},
         "http.route": {"/health", "/livez", "/readyz", "/mcp", "/api/statements"},
     },
+    # Gauges that exist without a request: the "no telemetry" rules read them (#1465).
+    "db.pool.size": {},
+    "process.uptime": {},
     "http.server.duration.count": {
         "http.status_code": {"200", "500", "502", "503"},
         "http.target": {"/health", "/api/v1/system/health", "/api/v1/trade"},
@@ -441,27 +445,66 @@ def test_promql_regex_matchers_are_anchored() -> None:
         assert value.startswith("^") and value.endswith("$"), (name, value)
 
 
-# The probe routes the 5xx ratio and the p95 leave out (finance_report health/system routers).
+# The probe routes that each rule family leaves out. finance_report: its health/system
+# routers. truealpha: the llm-service probe paths (the legacy rules use `http.target`, the
+# stable ones `http.route`, and also leave out /livez and /readyz).
 _PROBE_ROUTE_EXCLUSION = ("http.route", "!~", "^(/health|/ping|/ping/toggle)$")
+_TRUEALPHA_LEGACY_PROBES = ("http.target", "!~", "^(/health|/api/v1/system/health)$")
+_TRUEALPHA_STABLE_PROBES = (
+    "http.route",
+    "!~",
+    "^(/health|/livez|/readyz|/api/v1/system/health)$",
+)
+
+# (rule, service, 5xx matcher, probe exclusion, label that only the rule's own series carry)
+_FIVE_XX_RULES = [
+    (
+        "FinanceReportHigh5xxRate",
+        "finance-report-backend",
+        ("http.response.status_code_class", "=", "5xx"),
+        _PROBE_ROUTE_EXCLUSION,
+        None,
+    ),
+    (
+        "FinanceReportHigh5xxRateStable",
+        "finance-report-backend",
+        ("http.response.status_code", "=~", "^5..$"),
+        _PROBE_ROUTE_EXCLUSION,
+        "http.response.status_code",
+    ),
+    (
+        "TrueAlphaHigh5xxRate",
+        "truealpha-app",
+        ("http.status_code", "=~", "^5..$"),
+        _TRUEALPHA_LEGACY_PROBES,
+        None,
+    ),
+    (
+        "TrueAlphaHigh5xxRateStable",
+        "truealpha-app",
+        ("http.response.status_code", "=~", "^5..$"),
+        _TRUEALPHA_STABLE_PROBES,
+        None,
+    ),
+]
 
 
 @pytest.mark.parametrize(
-    ("rule", "five_xx_matcher"),
-    [
-        ("FinanceReportHigh5xxRate", ("http.response.status_code_class", "=", "5xx")),
-        (
-            "FinanceReportHigh5xxRateStable",
-            ("http.response.status_code", "=~", "^5..$"),
-        ),
-    ],
+    ("rule", "service", "five_xx_matcher", "probes", "own_series_label"),
+    _FIVE_XX_RULES,
 )
 def test_5xx_rule_needs_a_minimum_5xx_count_and_ignores_probe_traffic(
-    rule: str, five_xx_matcher: tuple[str, str, str]
+    rule: str,
+    service: str,
+    five_xx_matcher: tuple[str, str, str],
+    probes: tuple[str, str, str],
+    own_series_label: str | None,
 ) -> None:
     """#906: the old ratio divided by clamp_min(total_rate, 1) and required every point
     of the window, so a low-traffic outage never fired; healthy /health probes also
     diluted a user-facing outage below 5%. Every selector now excludes the probe
-    routes, the ratio is not clamped, and at least 5 5xx must exist in the window."""
+    routes, the ratio is not clamped, and at least 5 5xx must exist in the window.
+    #1465: the same shape for the rules that read the stable metric."""
     promql = _promql_rules()[rule]
     selectors = _selectors(promql)
     ratio, guard = promql.split(" and on() ", 1)
@@ -471,32 +514,54 @@ def test_5xx_rule_needs_a_minimum_5xx_count_and_ignores_probe_traffic(
     assert re.fullmatch(r"\(sum\(increase\(.*\)\) / sum\(increase\(.*\)\)\)", ratio)
     assert len(selectors) == 3
     for _metric, matchers in selectors:
-        assert _PROBE_ROUTE_EXCLUSION in matchers
+        assert probes in matchers
+        assert ("service.name", "=", service) in matchers
     five_xx = [m for _metric, m in selectors if five_xx_matcher in m]
-    if rule.endswith("Stable"):
-        # `.count` of the stable histogram has the name of finance_report's custom
-        # histogram too (#1465): every selector, the denominator included, must require
-        # the label that only the stable series carry.
-        assert all(
-            any(label == "http.response.status_code" for label, _op, _v in matchers)
-            for _metric, matchers in selectors
-        )
     assert len(five_xx) == 2  # the ratio's numerator and the count guard
+    if own_series_label is not None:
+        # `.count` of the stable histogram has the name of finance_report's custom histogram
+        # too (#1465): every selector, the denominator included, must require the label that
+        # only the stable series carry.
+        for _metric, matchers in selectors:
+            assert any(label == own_series_label for label, _op, _v in matchers)
 
 
-@pytest.mark.parametrize(
-    ("rule", "metric", "scale"),
-    [
-        ("FinanceReportP95LatencyHigh", "http.server.request.duration.bucket", ""),
-        (
-            "FinanceReportP95LatencyHighStable",
-            "http.server.request.duration.bucket",
-            " \\* 1000",
-        ),
-    ],
-)
+_P95_RULES = [
+    # (rule, service, metric, scale pattern, probe exclusion)
+    (
+        "FinanceReportP95LatencyHigh",
+        "finance-report-backend",
+        "http.server.request.duration.bucket",
+        "",
+        _PROBE_ROUTE_EXCLUSION,
+    ),
+    (
+        "FinanceReportP95LatencyHighStable",
+        "finance-report-backend",
+        "http.server.request.duration.bucket",
+        r" \* 1000",
+        _PROBE_ROUTE_EXCLUSION,
+    ),
+    (
+        "TrueAlphaP95LatencyHigh",
+        "truealpha-app",
+        "http.server.duration.bucket",
+        "",
+        _TRUEALPHA_LEGACY_PROBES,
+    ),
+    (
+        "TrueAlphaP95LatencyHighStable",
+        "truealpha-app",
+        "http.server.request.duration.bucket",
+        r" \* 1000",
+        _TRUEALPHA_STABLE_PROBES,
+    ),
+]
+
+
+@pytest.mark.parametrize(("rule", "service", "metric", "scale", "probes"), _P95_RULES)
 def test_p95_rule_pages_only_on_a_sustained_non_probe_breach(
-    rule: str, metric: str, scale: str
+    rule: str, service: str, metric: str, scale: str, probes: tuple[str, str, str]
 ) -> None:
     """#906 live check (2026-09-24, 24 h): with /health included the p95 was mostly the
     health endpoint's own latency (p50 1412 ms, max 10 s), and 1500 ms / at_least_once
@@ -506,7 +571,8 @@ def test_p95_rule_pages_only_on_a_sustained_non_probe_breach(
     SigNoz drops NaN points before all_times, and the p95 is NaN in any minute with no
     non-probe request, so a lone slow request would pass "all remaining points above".
     `>= 0` drops the NaN and `or on() vector(0)` puts a 0 in its place, so a quiet
-    minute breaks the streak instead of vanishing from it."""
+    minute breaks the streak instead of vanishing from it. #1465: the stable histogram
+    is in seconds, so its rules multiply by 1000 before the comparison."""
     payload = _rendered_rules()[rule]
     promql = payload["condition"]["compositeQuery"]["queries"][0]["spec"]["query"]
     (threshold,) = payload["condition"]["thresholds"]["spec"]
@@ -516,7 +582,8 @@ def test_p95_rule_pages_only_on_a_sustained_non_probe_breach(
     assert threshold["target"] == 3000.0
     assert payload["evaluation"]["spec"]["evalWindow"] == "10m0s"
     assert [name for name, _ in selectors] == [metric]
-    assert _PROBE_ROUTE_EXCLUSION in selectors[0][1]
+    assert probes in selectors[0][1]
+    assert ("service.name", "=", service) in selectors[0][1]
     assert re.fullmatch(
         r"\(histogram_quantile\(0\.95, sum by \(le\) \(rate\(\{[^{}]*\}\[5m\]\)\)\)"
         + scale
@@ -595,9 +662,36 @@ def test_truealpha_stable_rules_read_only_the_stable_http_metric() -> None:
         }
 
 
-def test_backend_telemetry_absence_is_expressed_in_promql() -> None:
+@pytest.mark.parametrize(
+    ("rule", "service", "window", "legacy", "survivor"),
+    [
+        (
+            "FinanceReportBackendTelemetryAbsent",
+            "finance-report-backend",
+            "10m",
+            "http.server.request.count",
+            "db.pool.size",
+        ),
+        (
+            "TrueAlphaAppTelemetryAbsent",
+            "truealpha-app",
+            "15m",
+            "http.server.duration.count",
+            "process.uptime",
+        ),
+    ],
+)
+def test_backend_telemetry_absence_is_expressed_in_promql(
+    rule: str, service: str, window: str, legacy: str, survivor: str
+) -> None:
     """#906: alertOnAbsent is a no-op on SigNoz PromQL rules, so rules that
-    must fire on missing data say so in the query."""
+    must fire on missing data say so in the query.
+
+    #1465: the HTTP metric that these rules read stops when an App moves to FastAPI's
+    built-in telemetry, and the stable HTTP metric has no series on a quiet service
+    (the probe paths are excluded). The rule therefore fires only when the legacy metric
+    AND a gauge that exists without a request are both absent: silent while either lives,
+    whatever the order in which the App and the rule reach production."""
     absent = {
         name: promql
         for name, promql in _promql_rules().items()
@@ -608,17 +702,18 @@ def test_backend_telemetry_absence_is_expressed_in_promql() -> None:
         "FinanceReportBackendTelemetryAbsent",
         "TrueAlphaAppTelemetryAbsent",
     }
-    fr_promql = absent["FinanceReportBackendTelemetryAbsent"]
-    assert fr_promql.startswith("absent_over_time(") and fr_promql.endswith("[10m])")
-    assert [metric for metric, _ in _selectors(fr_promql)] == [
-        "http.server.request.count"
-    ]
-
-    ta_promql = absent["TrueAlphaAppTelemetryAbsent"]
-    assert ta_promql.startswith("absent_over_time(") and ta_promql.endswith("[15m])")
-    assert [metric for metric, _ in _selectors(ta_promql)] == [
-        "http.server.duration.count"
-    ]
+    promql = absent[rule]
+    assert re.fullmatch(
+        r"absent_over_time\(\{[^{}]*\}\[" + window + r"\]\)"
+        r" and on\(\) "
+        r"absent_over_time\(\{[^{}]*\}\[" + window + r"\]\)",
+        promql,
+    ), promql
+    selectors = _selectors(promql)
+    assert [metric for metric, _ in selectors] == [legacy, survivor]
+    for _metric, matchers in selectors:
+        assert ("service.name", "=", service) in matchers
+        assert ("deployment.environment.name", "=", "production") in matchers
 
 
 def test_metric_alert_definition_renders_signoz_v5_payload() -> None:
