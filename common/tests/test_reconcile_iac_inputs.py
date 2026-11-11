@@ -926,6 +926,9 @@ def _run_runner_block(
     promote_prod: bool,
     changed_files: str,
     with_ssh_credentials: bool = True,
+    blank: tuple[str, ...] = (),
+    health_status: str = "200",
+    ssh_exit: int = 0,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     """Run the update block with stubbed ssh, curl and sleep; return the run and the ssh calls."""
     import os
@@ -934,7 +937,8 @@ def _run_runner_block(
     bin_dir.mkdir()
     ssh_log = tmp_path / "ssh.log"
     (bin_dir / "ssh").write_text(
-        f'#!/bin/sh\necho "$*" >> "{ssh_log}"\ncat > /dev/null\n', encoding="utf-8"
+        f'#!/bin/sh\necho "$*" >> "{ssh_log}"\ncat > /dev/null\nexit {ssh_exit}\n',
+        encoding="utf-8",
     )
     (bin_dir / "curl").write_text(
         "#!/bin/sh\n"
@@ -942,7 +946,7 @@ def _run_runner_block(
         '  if [ "$1" = "-o" ]; then echo ok > "$2"; fi\n'
         "  shift\n"
         "done\n"
-        "printf 200\n",
+        f"printf {health_status}\n",
         encoding="utf-8",
     )
     (bin_dir / "sleep").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -974,6 +978,8 @@ def _run_runner_block(
         "INFRA2_WATCHDOG_SSH_HOST": "host.example" if with_ssh_credentials else "",
         "INFRA2_WATCHDOG_SSH_USER": "root" if with_ssh_credentials else "",
     }
+    for name in blank:
+        env[name] = ""
     result = subprocess.run(
         ["bash", "-eo", "pipefail", "-c", header + _runner_bootstrap_block()],
         cwd=repo,
@@ -1042,6 +1048,53 @@ def test_production_runner_update_refuses_to_run_without_ssh_credentials(
     assert result.returncode == 1
     assert "INFRA2_WATCHDOG_SSH_PRIVATE_KEY is required" in result.stdout
     assert ssh_calls == []
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "INFRA2_WATCHDOG_SSH_PRIVATE_KEY",
+        "INFRA2_WATCHDOG_SSH_HOST",
+        "INFRA2_WATCHDOG_SSH_USER",
+    ],
+)
+def test_production_runner_update_needs_each_ssh_credential(tmp_path, name) -> None:
+    """Each credential alone stops the production update: a missing host or user must not
+    become an `ssh root@` call."""
+    result, ssh_calls = _run_runner_block(
+        tmp_path, promote_prod=True, changed_files=_RUNNER_CHANGE, blank=(name,)
+    )
+    assert result.returncode == 1
+    assert f"{name} is required" in result.stdout
+    assert ssh_calls == []
+
+
+def test_production_runner_update_fails_when_the_runner_stays_unhealthy(
+    tmp_path,
+) -> None:
+    """The health gate of the production run: a runner that answers 503 after the update stops
+    the release before any service deploys on it."""
+    result, ssh_calls = _run_runner_block(
+        tmp_path,
+        promote_prod=True,
+        changed_files=_RUNNER_CHANGE,
+        health_status="503",
+    )
+    assert result.returncode == 1
+    assert len(ssh_calls) == 1
+    assert "IaC Runner public health attempt 12/12" in result.stdout
+    assert (
+        "IaC Runner public health stayed unhealthy after 12 attempts" in result.stdout
+    )
+
+
+def test_production_runner_update_fails_when_the_ssh_deploy_fails(tmp_path) -> None:
+    result, ssh_calls = _run_runner_block(
+        tmp_path, promote_prod=True, changed_files=_RUNNER_CHANGE, ssh_exit=1
+    )
+    assert result.returncode != 0
+    assert len(ssh_calls) == 1
+    assert "IaC Runner public health attempt" not in result.stdout
 
 
 def test_post_deploy_app_hooks_execute_smoke_and_record_results(
