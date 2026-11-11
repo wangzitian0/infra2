@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 import re
 
+from infra2_sdk.ci import PR_BEHIND_MAX_AGE_SECONDS, is_pr_behind_fresh
+
 from common.gate.inventory import (
     _declared_deploy_globs,
     _deploy_triggering,
@@ -49,7 +51,9 @@ PENDING_STATES = frozenset(
 )
 
 
-def _check_pr_state_and_conflicts(facts: HeadFacts, reasons: Reasons) -> bool:
+def _check_pr_state_and_conflicts(
+    facts: HeadFacts, reasons: Reasons, *, now: float | None = None
+) -> bool:
     """Validate PR state, base branch, mergeability, and conflict status."""
     owner = False
     if facts.state == "OPEN" and not facts.last_push_at:
@@ -117,6 +121,30 @@ def _check_pr_state_and_conflicts(facts: HeadFacts, reasons: Reasons) -> bool:
             reasons.append(f"mergeStateStatus is {facts.merge_state}, not CLEAN")
         else:
             reasons.append(f"mergeStateStatus is {facts.merge_state}, not CLEAN", ACT)
+    elif (
+        is_open
+        and facts.merge_state == "BEHIND"
+        and now is not None
+        and not is_pr_behind_fresh(
+            facts.first_behind_at,
+            now=now,
+            max_age_seconds=PR_BEHIND_MAX_AGE_SECONDS,
+        )
+    ):
+        hours = PR_BEHIND_MAX_AGE_SECONDS // 3600
+        if facts.first_behind_at is None:
+            reasons.append(
+                f"mergeStateStatus is BEHIND and base divergence timestamp could not "
+                f"be verified within {hours}h: rebase onto {facts.base}",
+                ACT,
+            )
+        else:
+            age_h = max(0, int((now - facts.first_behind_at) // 3600))
+            reasons.append(
+                f"mergeStateStatus is BEHIND ({age_h}h > {hours}h conflict-free "
+                f"window): rebase onto {facts.base}",
+                ACT,
+            )
 
     if facts.changed_files and len(facts.files) < facts.changed_files:
         reasons.append(
@@ -330,7 +358,7 @@ def _check_root_repo_rules_and_drift(facts: HeadFacts, reasons: Reasons) -> bool
 
 
 def _check_checks_green_and_stale(
-    facts: HeadFacts, *, is_open: bool, reasons: Reasons
+    facts: HeadFacts, *, is_open: bool, now: float | None = None, reasons: Reasons
 ) -> None:
     """Validate check outcomes and detect stale green runs against updated base."""
     not_green = sorted(
@@ -351,8 +379,13 @@ def _check_checks_green_and_stale(
             ACT if finished_red else WAIT,
         )
 
+    fresh_window = now is not None and is_pr_behind_fresh(
+        facts.first_behind_at,
+        now=now,
+        max_age_seconds=PR_BEHIND_MAX_AGE_SECONDS,
+    )
     stale = sorted(set(facts.files) & set(facts.base_changed_files))
-    if stale and not not_green and is_open:
+    if stale and not not_green and is_open and not fresh_window:
         shown = ", ".join(stale[:4]) + (
             f" (+{len(stale) - 4} more)" if len(stale) > 4 else ""
         )
@@ -508,14 +541,14 @@ def evaluate(
     reasons = Reasons()
 
     # Step 1: PR state, base branch, conflicts, and truncation
-    owner1 = _check_pr_state_and_conflicts(facts, reasons)
+    owner1 = _check_pr_state_and_conflicts(facts, reasons, now=now)
 
     # Step 2: Root repo rules, drift, self-governing closure, and deploy triggers
     owner2 = _check_root_repo_rules_and_drift(facts, reasons)
 
     # Step 3: CI checks greenness and freshness
     _check_checks_green_and_stale(
-        facts, is_open=(facts.state == "OPEN"), reasons=reasons
+        facts, is_open=(facts.state == "OPEN"), now=now, reasons=reasons
     )
 
     # Step 4: Review threads and decision

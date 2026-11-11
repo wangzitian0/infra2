@@ -173,7 +173,13 @@ def test_terminal_pr_states():
 
 def test_conflicts_behind_changes_requested_and_thread_overflow_are_action():
     assert _pr(_facts(merge_state="DIRTY")).state == ACTION
-    assert _pr(_facts(merge_state="BEHIND")).state == ACTION
+    assert _pr(_facts(merge_state="BEHIND"), gate=3).state == ACTION
+    assert _pr(_facts(merge_state="BEHIND"), gate=0).state == ACTION
+    assert "READY" in _pr(_facts(merge_state="BEHIND"), gate=0).detail
+    assert (
+        _pr(_facts(merge_state="BEHIND", head_at=NOW - 2 * MIN), gate=1).state
+        == WAITING
+    )
     assert _pr(_facts(review_decision="CHANGES_REQUESTED")).state == ACTION
     overflow = _pr(_facts(threads_total=150))
     assert overflow.state == ACTION and "only 100 read" in overflow.detail

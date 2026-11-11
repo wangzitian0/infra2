@@ -17,8 +17,7 @@
 - **合流真源唯一**：目标分支正确，PR `mergeable`，无冲突；检查与合流必须针对同一个 `head SHA`，禁止用本地旧结果或旧 review 代替。
 - **Merge Authority 全绿**：[`docs/ssot/ci-gate-inventory.yaml`](ci-gate-inventory.yaml) 中该变更适用且 `blocks_merge: true` 的检查全部成功；pending、failure、cancelled、意外 skipped 或无法读取均视为不满足。
 - **Review 已闭环（加权阻塞）**：required review 已满足，所有 actionable conversation / review threads 已处理并 resolved；不得自行忽略、dismiss 或用过期 review 代替当前 head 审查。未 resolved 的 review 发现（不论来源——human reviewer、Copilot、/code-review 等）按 severity 加权计分：high=1.0、middle=0.5、low=0.25，未标注 severity 的按 middle 计。**未 resolved 发现的加权总分 ≥ 1.0 即视为未闭环、禁止合流**，不要求单条 high 才阻塞——例如 2 条 middle 或 4 条 low 累计到位同样阻塞。达到门槛后必须逐条修复，或取得 owner 对具体发现的明确豁免并留痕，方可标记为已处理。
-- **绿必须是当前的**：检查只证明它跑过的那棵树。兄弟 PR 合入后改写了本 PR 也动的文件时，
-  所有检查**仍然是绿的**——因为没有一个重跑过。因此必须比较 `base...head`，交集非空即更新分支重跑。
+- **绿必须是当前的（24h 无冲突合流窗口）**：无冲突的 PR（`mergeable=MERGEABLE`）在落后 `main` 不超过 24 小时（`infra2_sdk.ci.PR_BEHIND_MAX_AGE_SECONDS = 86400`）时，允许 `mergeStateStatus=BEHIND` 直接合流而无需每次兄弟 PR 合入后重新变基（rebase），合入后的完整回归由 `push: main` 上的 post-merge CI（`infra-ci.yml` 等）保障。当落后超过 24 小时、无法核验分叉时间，或超出 24 小时窗口且兄弟 PR 改写了本 PR 也动的文件（`base...head` 交集非空）时，门禁返回 `ACT`（Exit 3）要求先更新分支重跑。
 - **必需检查必须在场**：`blocks_merge: true` 的检查不仅要绿，还必须**确实报告过**。
   `detect-changes` 失败时其下游 job 是 skipped 而非 run，GitHub 仍接受为已满足——
   因此必需集须以 `ci-gate-inventory.yaml` 为准逐个核对在场与结论，而不是只看已报告的检查是否为绿。

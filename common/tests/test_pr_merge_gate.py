@@ -708,6 +708,53 @@ def test_a_base_that_changed_other_files_leaves_the_head_ready():
     ).ready
 
 
+def test_behind_within_24h_merges_without_rebase_and_over_24h_blocks():
+    # Conflict-free BEHIND within 24h (even if base touched an overlapping file) is ready;
+    # post-merge CI on main validates the integrated tree.
+    fresh = gate.evaluate(
+        _facts(
+            merge_state="BEHIND",
+            first_behind_at=NOW - 3600,
+            base_changed_files=("common/probe_specs.py",),
+        ),
+        now=NOW,
+    )
+    assert fresh.ready, fresh.reasons
+
+    # Over 24h behind fails closed with ACT (exit 3).
+    stale_behind = gate.evaluate(
+        _facts(
+            merge_state="BEHIND",
+            first_behind_at=NOW - 86401,
+        ),
+        now=NOW,
+    )
+    assert not stale_behind.ready and stale_behind.exit_code == 3
+    assert any("24h conflict-free window" in r for r in stale_behind.reasons)
+
+    # BEHIND with unreadable divergence timestamp fails closed with ACT.
+    unverified_behind = gate.evaluate(
+        _facts(merge_state="BEHIND", first_behind_at=None),
+        now=NOW,
+    )
+    assert not unverified_behind.ready and unverified_behind.exit_code == 3
+    assert any(
+        "divergence timestamp could not be verified" in r
+        for r in unverified_behind.reasons
+    )
+
+    # CONFLICTING always blocks even when within 24h.
+    conflicting = gate.evaluate(
+        _facts(
+            mergeable="CONFLICTING",
+            merge_state="BEHIND",
+            first_behind_at=NOW - 60,
+        ),
+        now=NOW,
+    )
+    assert not conflicting.ready and conflicting.exit_code == 3
+
+
 def test_stale_green_is_not_reported_on_top_of_a_failing_check():
     # Naming both would send the caller to update a branch whose checks are red
     # anyway; the failure is the thing to fix first.

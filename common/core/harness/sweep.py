@@ -71,10 +71,9 @@ CHECK_GREEN = frozenset({"pass", "skipping"})
 CHECK_RED = frozenset({"fail", "cancel"})
 MERGE_STATES_ACTION = {
     "DIRTY": "merge conflict (DIRTY)",
-    "BEHIND": "branch behind base (BEHIND)",
 }
 MERGE_STATES_KNOWN = frozenset(
-    {"CLEAN", "BLOCKED", "UNSTABLE", "HAS_HOOKS", "UNKNOWN", "DRAFT"}
+    {"CLEAN", "BEHIND", "BLOCKED", "UNSTABLE", "HAS_HOOKS", "UNKNOWN", "DRAFT"}
 ) | frozenset(MERGE_STATES_ACTION)
 RUN_ACTIVE = frozenset({"queued", "in_progress", "waiting", "pending", "requested"})
 # tools/pr_merge_gate exit codes (#740).
@@ -383,12 +382,12 @@ def classify_pr(
             f"({f.merge_state}) — read the gate output @ {head}",
             (f.head, "gate-not-yet"),
         )
-    if f.merge_state == "CLEAN":
+    if f.merge_state in ("CLEAN", "BEHIND"):
         return Status(
             key,
             ACTION,
             f"mergeable by facts (no gate configured) @ {head}",
-            (f.head, "clean"),
+            (f.head, f.merge_state.lower()),
         )
     return Status(
         key,
