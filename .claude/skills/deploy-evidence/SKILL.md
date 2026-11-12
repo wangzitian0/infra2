@@ -39,7 +39,7 @@ A "deploy" covers only the tag it names. Immediately before dispatch, get a live
 ```bash
 uv run --locked python -m tools.harness prod-queue  # must exit 0 immediately before the dispatch
 gh workflow run reconcile-iac-inputs.yml -f promote_prod=true -f after=vX.Y.Z
-gh run watch <run-id> --exit-status  # run in the background; the host wakes you when it ends
+gh run view <run-id> --json status,conclusion  # one read per wake-up; `waiting` means the run awaits production approval
 ```
 Exit 1: a production run is active. Do not dispatch, because a dispatch cancels a pending run. Wait until each run completes. Cancel a run that waits for approval only when your own command output started it, or with an owner reply. Exit 4: GitHub is unreadable. Do not dispatch.
 
