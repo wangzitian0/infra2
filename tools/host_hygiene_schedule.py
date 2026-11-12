@@ -29,6 +29,11 @@ DEFAULT_TIMEZONE = "Asia/Singapore"
 # "server" type (with a null serverId) is accepted by schedule.create but never
 # executes the command — that silent no-op is what let host garbage accumulate.
 DEFAULT_SCHEDULE_TYPE = "dokploy-server"
+# Unused images younger than 24 h stay, so a release of the same day stays available
+# for a fast rollback. A longer limit frees nothing at several releases per day: on
+# 2026-11-11 every unused image was younger than 48 h, the root disk was at 81 %
+# and the probe `host-disk` paged at 80 % (#1621).
+DEFAULT_IMAGE_PRUNE_UNTIL = "24h"
 # Preview containers are owned by infra2's preview lifecycle; generic hygiene only
 # EXCLUDES them, never prunes them. The pattern is derived from the canonical
 # sources so it can't silently drift from real container names:
@@ -326,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--container-prune-until", default="72h")
     parser.add_argument("--builder-prune-until", default="72h")
-    parser.add_argument("--image-prune-until", default="72h")
+    parser.add_argument("--image-prune-until", default=DEFAULT_IMAGE_PRUNE_UNTIL)
     parser.add_argument("--network-prune-until", default="all")
     parser.add_argument("--journal-vacuum-time", default="3d")
     parser.add_argument("--journal-vacuum-size", default="1G")
