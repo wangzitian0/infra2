@@ -22,13 +22,15 @@ from pathlib import Path
 
 import yaml
 
+from common.gate.production_contract import UNCLASSIFIED_SCHEDULED_JOBS
+
 ROOT = Path(__file__).resolve().parents[2]
 VERSION_FILE = ROOT / ".python-version"
 # A reusable workflow runs in the caller's checkout, so it cannot read this file.
 REUSABLE_TEMPLATES = ".github/workflows/templates/"
+# The gate's own list of unclassified production jobs (one source, #1340).
 PRODUCTION_JOBS = {
-    (".github/workflows/ops-checks.yml", "host-hygiene-schedule"),
-    (".github/workflows/ops-checks.yml", "facet-reconcile"),
+    (".github/workflows/ops-checks.yml", job) for job in UNCLASSIFIED_SCHEDULED_JOBS
 }
 # bootstrap/05.vault is on Dokploy-native autoDeploy (tools/dokploy_env.py
 # AUTODEPLOY_ALLOWLIST): a merge can rebuild the production unsealer at once.
@@ -85,14 +87,18 @@ def test_the_version_file_names_one_minor_version() -> None:
 def test_every_setup_python_step_reads_the_version_file_or_is_a_production_pin() -> (
     None
 ):
-    seen: dict[tuple[str, str], dict] = {}
-    for rel, job, step in _workflow_steps():
-        if str(step.get("uses", "")).startswith("actions/setup-python"):
-            seen[(rel, job)] = step.get("with") or {}
+    # Every step, not one per job: a second setup-python step in a job is checked too.
+    seen: list[tuple[tuple[str, str], dict]] = [
+        ((rel, job), step.get("with") or {})
+        for rel, job, step in _workflow_steps()
+        if str(step.get("uses", "")).startswith("actions/setup-python")
+    ]
     assert len(seen) >= 10, "the scan found too few setup-python steps"
-    assert PRODUCTION_JOBS <= set(seen), "a production job lost its setup-python step"
+    assert PRODUCTION_JOBS <= {key for key, _ in seen}, (
+        "a production job lost its setup-python step"
+    )
     wrong = []
-    for key, inputs in seen.items():
+    for key, inputs in seen:
         if key in PRODUCTION_JOBS:
             if not re.fullmatch(r"3\.\d+", str(inputs.get("python-version", ""))) or (
                 "python-version-file" in inputs
