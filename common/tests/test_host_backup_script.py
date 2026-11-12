@@ -61,7 +61,35 @@ exit 0
 """,
     # Off-host uploads go to their own log, so the call order of the archive steps
     # stays readable in SHIM_LOG.
-    "rclone": """#!/usr/bin/env bash\necho "rclone $*" >> "$RCLONE_LOG"\n""",
+    # A fake remote under FAKE_REMOTE_ROOT: `fake-remote:infra2/a/b` is `$ROOT/infra2/a/b`.
+    # FAKE_RCLONE_COPY_FAIL=1 fails every upload; FAKE_RCLONE_SIZE_FAIL=1 fails `size`;
+    # FAKE_RCLONE_SIZE_EXTRA_BYTES=N makes the remote look N bytes larger.
+    "rclone": """#!/usr/bin/env bash
+echo "rclone $*" >> "$RCLONE_LOG"
+path_of() { printf '%s/%s' "$FAKE_REMOTE_ROOT" "${1#*:}"; }
+case "$1" in
+  copyto)
+    if [ -n "${FAKE_RCLONE_COPY_FAIL:-}" ]; then echo "upload failed" >&2; exit 1; fi
+    mkdir -p "$(dirname "$(path_of "$3")")"
+    cp "$2" "$(path_of "$3")"
+    ;;
+  size)
+    if [ -n "${FAKE_RCLONE_SIZE_FAIL:-}" ]; then echo "size failed" >&2; exit 1; fi
+    dir="$(path_of "${@: -1}")"
+    count=0
+    bytes=0
+    if [ -d "$dir" ]; then
+      while IFS= read -r file; do
+        count=$((count + 1))
+        bytes=$((bytes + $(wc -c < "$file")))
+      done < <(find "$dir" -type f)
+    fi
+    bytes=$((bytes + ${FAKE_RCLONE_SIZE_EXTRA_BYTES:-0}))
+    printf '{"count":%s,"bytes":%s,"sizeless":0}\\n' "$count" "$bytes"
+    ;;
+esac
+exit 0
+""",
     "stat": """#!/usr/bin/env bash\nwc -c < "${@: -1}" | tr -d ' '\n""",
     "sha256sum": """#!/usr/bin/env bash\necho "0000000000000000000000000000000000000000000000000000000000000000  $1"\n""",
 }
@@ -110,6 +138,7 @@ def host(tmp_path: Path):
         # The scheduled runs always upload off-host (docs/ssot/ops.recovery.md).
         "BACKUP_REMOTE": "fake-remote:infra2",
         "RCLONE_LOG": str(rclone_log),
+        "FAKE_REMOTE_ROOT": str(tmp_path / "remote"),
     }
     tool_versions = Path.home() / ".tool-versions"
     if tool_versions.exists():
@@ -120,7 +149,13 @@ def host(tmp_path: Path):
     if asdf_dir.exists():
         env["ASDF_DATA_DIR"] = os.environ.get("ASDF_DATA_DIR", str(asdf_dir))
         env["ASDF_DIR"] = os.environ.get("ASDF_DIR", str(asdf_dir))
-    return {"env": env, "out": out, "log": log, "rclone_log": rclone_log}
+    return {
+        "env": env,
+        "out": out,
+        "log": log,
+        "rclone_log": rclone_log,
+        "remote": tmp_path / "remote",
+    }
 
 
 def _run(
@@ -138,6 +173,12 @@ def _run(
         timeout=60,
     )
     manifests = sorted(host["out"].glob("*/manifest.json"))
+    if not manifests and proc.returncode == 0:
+        # A verified off-host run removes its local directory (#1624); the latest
+        # manifest in the output directory is the record that stays.
+        manifests = sorted(
+            host["out"].glob("*-manifest.json"), key=lambda p: p.stat().st_mtime
+        )
     manifest = json.loads(manifests[-1].read_text()) if manifests else {}
     return proc, manifest, host["log"].read_text().splitlines()
 
@@ -227,7 +268,6 @@ def test_a_failing_service_does_not_stop_the_rest(host) -> None:
         host,
         FAKE_PG_FAIL="finance_report-postgres",
         FAKE_TAR_EXIT="clickhouse=2",
-        BACKUP_KEEP="1",
     )
     assert proc.returncode == 1
     assert _ids(manifest) == ALL_SERVICES - {
@@ -245,22 +285,77 @@ def test_a_failing_service_does_not_stop_the_rest(host) -> None:
     # a failed dump or tar leaves no half-written archive behind
     assert not list(run_dir.glob("finance_report_postgres_*"))
     assert not list(run_dir.glob("platform_clickhouse_*"))
-    # retention is skipped on a failed run: older good runs survive
+    # a failed run keeps its own directory and never touches another run
+    assert run_dir.is_dir()
     assert all(run_dir.exists() for run_dir in old)
 
 
-def test_retention_keeps_the_newest_runs_on_success(host) -> None:
-    for i in range(1, 6):
-        (host["out"] / f"production-2026010{i}T000000Z").mkdir()
-        os.utime(host["out"] / f"production-2026010{i}T000000Z", (i, i))
+def _remote_files(host) -> list[Path]:
+    return sorted(
+        p
+        for p in (host["remote"] / "infra2/weekly/production").rglob("*")
+        if p.is_file()
+    )
+
+
+def test_a_verified_upload_removes_the_local_run_and_keeps_the_latest_manifest(
+    host,
+) -> None:
+    """#1624: Google is the store; the local run is a temporary copy."""
+    proc, manifest, _ = _run(host)
+    assert proc.returncode == 0, proc.stderr
+    assert not list(host["out"].glob("production-*/")), "the local run must be gone"
+    assert (host["out"] / "production-manifest.json").is_file()
+    # every artifact and the run manifest are in the remote run
+    assert len(_remote_files(host)) == len(manifest["artifacts"]) + 1
+    report = proc.stdout.strip().splitlines()[-1]
+    assert report.startswith("fake-remote:infra2/weekly/production/"), report
+    assert report.endswith("/manifest.json"), report
+    assert "removed local" in proc.stderr
+
+
+def test_the_script_removes_only_its_own_run(host) -> None:
+    older_production = host["out"] / "production-20260101T000000Z"
+    older_production.mkdir()
+    (older_production / "old.tar.gz").write_text("old", encoding="utf-8")
     staging_dir = host["out"] / "staging-20260101T000000Z"
     staging_dir.mkdir()
-    proc, _, _ = _run(host, BACKUP_KEEP="2")
+    proc, _, _ = _run(host)
     assert proc.returncode == 0, proc.stderr
-    kept = sorted(p.name for p in host["out"].glob("production-*/"))
-    assert len(kept) == 2
-    assert "production-20260105T000000Z" in kept
-    assert staging_dir.exists(), "production retention must not prune staging"
+    assert (older_production / "old.tar.gz").is_file(), "another run is never touched"
+    assert staging_dir.is_dir(), "another environment is never touched"
+    assert [p.name for p in host["out"].glob("production-2*/")] == [
+        older_production.name
+    ]
+
+
+def test_a_remote_run_that_differs_keeps_the_local_run(host) -> None:
+    proc, _, _ = _run(host, FAKE_RCLONE_SIZE_EXTRA_BYTES="1")
+    assert proc.returncode == 1
+    assert "does not hold the same files" in proc.stderr
+    (run_dir,) = host["out"].glob("production-2*/")
+    assert (run_dir / "manifest.json").is_file()
+    assert Path(proc.stdout.strip().splitlines()[-1]) == run_dir / "manifest.json"
+    assert (host["out"] / "production-manifest.json").is_file()
+
+
+def test_a_remote_size_that_cannot_be_read_keeps_the_local_run(host) -> None:
+    proc, _, _ = _run(host, FAKE_RCLONE_SIZE_FAIL="1")
+    assert proc.returncode == 1
+    assert "local run kept" in proc.stderr
+    assert len(list(host["out"].glob("production-2*/"))) == 1
+
+
+def test_a_failed_upload_keeps_the_local_run(host) -> None:
+    proc, _, _ = _run(host, FAKE_RCLONE_COPY_FAIL="1")
+    assert proc.returncode != 0
+    (run_dir,) = host["out"].glob("production-2*/")
+    assert run_dir.is_dir()
+    assert "removed local" not in proc.stderr
+
+
+def test_the_script_has_no_local_retention_count() -> None:
+    assert "BACKUP_KEEP" not in SCRIPT.read_text(encoding="utf-8")
 
 
 def test_redis_save_authenticates_and_only_dump_rdb_is_archived(host) -> None:
@@ -402,10 +497,10 @@ def test_a_local_only_run_deletes_no_earlier_run(host) -> None:
     for i in range(1, 4):
         (host["out"] / f"production-2026010{i}T000000Z").mkdir()
 
-    proc, _, _ = _run(host, BACKUP_REMOTE=None, BACKUP_LOCAL_ONLY="1", BACKUP_KEEP="1")
+    proc, _, _ = _run(host, BACKUP_REMOTE=None, BACKUP_LOCAL_ONLY="1")
 
     assert proc.returncode == 0, proc.stderr
-    assert len(list(host["out"].glob("production-*/"))) == 4
+    assert len(list(host["out"].glob("production-*/"))) == 4, "own run stays: only copy"
 
 
 def test_a_run_through_a_symlink_finds_the_emitter(host, tmp_path) -> None:

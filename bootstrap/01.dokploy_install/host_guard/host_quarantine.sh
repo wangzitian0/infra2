@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Quarantine VPS host litter with a 15-day retention manifest and retire stale cron jobs.
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 case "${1:---check}" in
   --check|--stage|--list|--purge-expired) MODE="${1:---check}" ;;
@@ -324,47 +325,8 @@ if [[ "${MODE}" == "--purge-expired" ]]; then
     exit 0
   fi
 
-  python3 - "${INFRA2_QUARANTINE_DIR}" "${manifest}" "${INFRA2_QUARANTINE_NOW_EPOCH}" <<'PY'
-import json
-import os
-import pathlib
-import shutil
-import sys
-
-quarantine_dir = pathlib.Path(sys.argv[1]).resolve()
-manifest_path = pathlib.Path(sys.argv[2])
-now_epoch = int(sys.argv[3])
-
-lines = manifest_path.read_text(encoding="utf-8").splitlines()
-records = [json.loads(line) for line in lines if line.strip()]
-
-batches = {}
-for rec in records:
-    bid = rec["batch_id"]
-    batches.setdefault(bid, []).append(rec)
-
-purged_batches = set()
-for bid, recs in batches.items():
-    if all(r.get("status") == "quarantined" and int(r["purge_after_epoch"]) <= now_epoch for r in recs):
-        batch_dir = (quarantine_dir / bid).resolve()
-        if batch_dir.parent != quarantine_dir:
-            raise SystemExit(f"refusing to purge path outside quarantine dir: {batch_dir}")
-        if batch_dir.exists():
-            shutil.rmtree(batch_dir)
-        purged_batches.add(bid)
-
-if purged_batches:
-    for rec in records:
-        if rec["batch_id"] in purged_batches:
-            rec["status"] = "purged"
-            rec["purged_at_epoch"] = now_epoch
-    tmp_path = manifest_path.with_suffix(".jsonl.tmp")
-    tmp_path.write_text(
-        "".join(json.dumps(r, sort_keys=True) + "\n" for r in records),
-        encoding="utf-8",
-    )
-    os.chmod(tmp_path, 0o600)
-    tmp_path.replace(manifest_path)
-PY
+  # quarantine_purge.py is the only definition of the purge rule; the scheduled
+  # host hygiene script (tools/host_hygiene_schedule.py) embeds the same file.
+  python3 "${SCRIPT_DIR}/quarantine_purge.py" "${INFRA2_QUARANTINE_DIR}" "${INFRA2_QUARANTINE_NOW_EPOCH}"
   exit 0
 fi

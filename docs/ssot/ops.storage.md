@@ -66,7 +66,8 @@
     1. 只读扫描：`bootstrap/01.dokploy_install/host_guard/host_quarantine.sh --check`（零副作用列出残留项、权限漂移与退役 cron）。
     2. 迁入回收站：`host_quarantine.sh --stage`（先备份并注释退役 cron，再按原始相对路径 `mv` 至 `/data/backups/quarantine/<batch-id>/files/`，并将 `/tmp/F3CNN` 活跃锁目录收敛为 `0700`/`0600` 原地保留）。
     3. 观察期核查：`host_quarantine.sh --list`（保留 15 天观察期，期间若需回滚可直接按 `original_path` 迁回）。
-    4. 到期物理清理：观察期满 15 天后执行 `host_quarantine.sh --purge-expired`（仅删除 `now_epoch >= purge_after_epoch` 的到期批次并更新清单状态为 `purged`）。
+    4. 到期物理清理：观察期满 15 天后执行 `host_quarantine.sh --purge-expired`（仅删除 `now_epoch >= purge_after_epoch` 的到期批次并更新清单状态为 `purged`）。清理规则只有一份定义：`bootstrap/01.dokploy_install/host_guard/quarantine_purge.py`。批次内已是 `purged` 或 `archived_to_gdrive_and_purged` 的记录不阻止整批清理；出现其他状态的记录则整批保留（#1624）。
+    5. 自动执行：宿主机卫生计划（`tools/host_hygiene_schedule.py`，每天由 `ops-checks.yml` 的 `host-hygiene-schedule` 重新写入，宿主机每日 4 次执行）内嵌同一份 `quarantine_purge.py`，到期批次不再依赖人工执行。手动重放仍用步骤 4 的命令。
 
 ---
 

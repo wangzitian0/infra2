@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 import sys
+import time
+from pathlib import Path
 
 from tools import host_hygiene_schedule as hh
 
@@ -179,6 +182,115 @@ def test_default_image_prune_keeps_unused_images_for_at_most_24_hours(capsys) ->
     for line in prune_lines:
         assert f"until={hh.DEFAULT_IMAGE_PRUNE_UNTIL}" in line, line
         assert "until=72h" not in line, line
+
+
+def test_default_builder_prune_keeps_cache_for_at_most_24_hours(capsys) -> None:
+    """#1624: on 2026-11-12 the build cache held 5.7 GB; `until=24h` freed 5.69 GB."""
+    match = re.fullmatch(r"(\d+)h", hh.DEFAULT_BUILDER_PRUNE_UNTIL)
+    assert match is not None, hh.DEFAULT_BUILDER_PRUNE_UNTIL
+    assert 1 <= int(match.group(1)) <= 24
+
+    assert hh.main(["--emit-script"]) == 0
+    prune_lines = [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if "docker builder prune -af" in line
+    ]
+    assert len(prune_lines) == 1, prune_lines
+    for line in prune_lines:
+        assert f"until={hh.DEFAULT_BUILDER_PRUNE_UNTIL}" in line, line
+        assert "until=72h" not in line, line
+
+
+def _manifest_line(batch: str, status: str, purge_after: int, name: str) -> str:
+    record = {
+        "batch_id": batch,
+        "original_path": f"/root/{name}",
+        "purge_after_epoch": purge_after,
+        "status": status,
+    }
+    return json.dumps(record) + "\n"
+
+
+def _run_purge_step(quarantine: Path) -> subprocess.CompletedProcess[str]:
+    """Run only the quarantine step of the scheduled script, as the host shell does."""
+    script = "\n".join(
+        ["set -eu", *hh.build_quarantine_purge_step(dry_run=False), "echo AFTER-STEP"]
+    )
+    return subprocess.run(
+        ["bash", "-c", script],
+        env={
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "INFRA2_QUARANTINE_DIR": str(quarantine),
+        },
+        text=True,
+        capture_output=True,
+        timeout=60,
+    )
+
+
+def test_scheduled_script_purges_an_expired_mixed_batch_and_keeps_a_live_one(
+    tmp_path: Path,
+) -> None:
+    """#1624: the purge ran only by hand and skipped a batch with an archived record."""
+    now = int(time.time())
+    quarantine = tmp_path / "quarantine"
+    for batch in ("old", "new"):
+        (quarantine / batch / "files").mkdir(parents=True)
+        (quarantine / batch / "files" / "payload").write_text("x", encoding="utf-8")
+    (quarantine / "manifest.jsonl").write_text(
+        _manifest_line("old", "archived_to_gdrive_and_purged", now - 99, "a")
+        + _manifest_line("old", "quarantined", now - 99, "b")
+        + _manifest_line("new", "quarantined", now + 86_400, "c"),
+        encoding="utf-8",
+    )
+
+    proc = _run_purge_step(quarantine)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "purged quarantine batch old" in proc.stdout
+    assert not (quarantine / "old").exists()
+    assert (quarantine / "new" / "files" / "payload").exists()
+    statuses = [
+        json.loads(line)["status"]
+        for line in (quarantine / "manifest.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert sorted(statuses) == [
+        "archived_to_gdrive_and_purged",
+        "purged",
+        "quarantined",
+    ]
+
+
+def test_a_failing_quarantine_purge_does_not_stop_the_hygiene_script(
+    tmp_path: Path,
+) -> None:
+    quarantine = tmp_path / "quarantine"
+    quarantine.mkdir()
+    (quarantine / "manifest.jsonl").write_text("not json\n", encoding="utf-8")
+
+    proc = _run_purge_step(quarantine)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "::warning::quarantine purge failed" in proc.stdout
+    assert "AFTER-STEP" in proc.stdout
+
+
+def test_a_host_without_a_quarantine_manifest_skips_the_purge(tmp_path: Path) -> None:
+    proc = _run_purge_step(tmp_path / "missing")
+    assert proc.returncode == 0, proc.stderr
+    assert "skipping quarantine purge" in proc.stdout
+    assert "AFTER-STEP" in proc.stdout
+
+
+def test_the_full_script_embeds_the_one_shared_purge_rule() -> None:
+    source = hh.QUARANTINE_PURGE_SOURCE.read_text(encoding="utf-8")
+    assert "def purge_expired" in source
+    assert source.strip() in _script()
+    assert source.strip() not in _script(dry_run=True)
+    assert "[dry-run] purge expired quarantine batches" in _script(dry_run=True)
 
 
 if "pytest" not in sys.modules:  # pragma: no cover

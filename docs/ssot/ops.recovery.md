@@ -188,9 +188,13 @@ A run must name its target (#1030):
 - An emitter that prints no services fails the run; it does not write an empty manifest.
 - On 2026-10-05, a manual run without the remote replaced both canonical manifests with `local:` URIs, and the watchdog paged on all 17 artifacts (#1013, #1014).
 
-Local retention keeps the
-most recent `BACKUP_KEEP` (default 7) run directories **per environment** and is
-skipped on a failed run. Run directories are named `production-<timestamp>` or
+The off-host copy is the store (owner decision 2026-11-12, #1624). Temporary files
+stay local while a run works. After every archive and the run manifest are uploaded,
+the script compares the remote run with the local run directory (file count and
+total bytes) and removes the local directory only when both are equal. A failed
+run, a failed upload or a mismatch keeps the local directory (the only copy) and
+the run exits 1. A run never touches the directory of another run. There is no
+local retention count. Run directories are named `production-<timestamp>` or
 `staging-<timestamp>` under `/data/backups/infra2`; each run's manifest records
 its environment. The latest pointers are `production-manifest.json` and
 `staging-manifest.json` in that directory. The off-host latest manifests are
