@@ -144,7 +144,7 @@ def test_a_batch_id_that_leaves_the_quarantine_directory_is_refused(
         json.dumps(_record("../victim", "quarantined", EXPIRED)) + "\n",
         encoding="utf-8",
     )
-    with pytest.raises(SystemExit, match="outside quarantine dir"):
+    with pytest.raises(SystemExit, match="refusing to purge quarantine batch"):
         qp.purge_expired(quarantine, NOW)
     assert victim.exists()
 
@@ -178,7 +178,7 @@ def test_a_refused_batch_does_not_block_the_other_expired_batches(
     with (quarantine / "manifest.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(_record("../victim", "quarantined", EXPIRED)) + "\n")
 
-    with pytest.raises(SystemExit, match="outside quarantine dir"):
+    with pytest.raises(SystemExit, match="refusing to purge quarantine batch"):
         qp.purge_expired(quarantine, NOW)
 
     assert not (quarantine / "good").exists()
@@ -196,8 +196,42 @@ def test_a_batch_id_that_is_a_symlink_into_the_quarantine_is_refused(
     with (quarantine / "manifest.jsonl").open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(_record("lnk", "quarantined", EXPIRED)) + "\n")
 
-    with pytest.raises(SystemExit, match="outside quarantine dir"):
+    with pytest.raises(SystemExit, match="refusing to purge quarantine batch"):
         qp.purge_expired(quarantine, NOW)
 
     assert (quarantine / "inner" / "files" / "payload").exists()
     assert (quarantine / "lnk").is_symlink()
+
+
+def test_a_batch_id_that_names_a_file_is_refused_and_the_others_still_purge(
+    tmp_path: Path,
+) -> None:
+    """A file named like a batch made `rmtree` raise before the manifest rewrite."""
+    quarantine = _setup(tmp_path, [_record("zgood", "quarantined", EXPIRED)])
+    (quarantine / "afile").write_text("not a batch directory", encoding="utf-8")
+    with (quarantine / "manifest.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(_record("afile", "quarantined", EXPIRED)) + "\n")
+
+    with pytest.raises(SystemExit, match="refusing to purge quarantine batch"):
+        qp.purge_expired(quarantine, NOW)
+
+    assert (quarantine / "afile").read_text(encoding="utf-8") == "not a batch directory"
+    assert not (quarantine / "zgood").exists()
+    statuses = _statuses(quarantine)
+    assert statuses[("zgood", "purged")] == 1
+    assert statuses[("afile", "quarantined")] == 1
+
+
+def test_a_batch_id_with_a_nul_byte_is_refused_and_the_others_still_purge(
+    tmp_path: Path,
+) -> None:
+    """The operating system rejects a NUL byte with ValueError; it must not stop the run."""
+    quarantine = _setup(tmp_path, [_record("good", "quarantined", EXPIRED)])
+    with (quarantine / "manifest.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(_record("bad\x00id", "quarantined", EXPIRED)) + "\n")
+
+    with pytest.raises(SystemExit, match="refusing to purge quarantine batch"):
+        qp.purge_expired(quarantine, NOW)
+
+    assert not (quarantine / "good").exists()
+    assert _statuses(quarantine)[("good", "purged")] == 1

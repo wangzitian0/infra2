@@ -45,20 +45,26 @@ def purge_expired(quarantine_dir: pathlib.Path, now_epoch: int) -> list[str]:
             continue
         if any(int(r["purge_after_epoch"]) > now_epoch for r in pending):
             continue
-        # A batch id is one plain directory name. A path, a symlink or a name that
-        # resolves outside the quarantine directory is refused. The other batches
-        # still run, and the run exits non-zero at the end.
-        batch_dir = quarantine_dir / batch_id
-        if (
-            not batch_id
-            or pathlib.PurePath(batch_id).name != batch_id
-            or batch_dir.is_symlink()
-            or batch_dir.resolve().parent != quarantine_dir
-        ):
+        # A batch id is one plain directory name. A path, a symlink, a name that
+        # resolves outside the quarantine directory, a file or a name the operating
+        # system rejects is refused. A failure on one batch never stops the other
+        # batches: they still run, and the run exits non-zero at the end.
+        try:
+            batch_dir = quarantine_dir / batch_id
+            if (
+                not batch_id
+                or pathlib.PurePath(batch_id).name != batch_id
+                or batch_dir.is_symlink()
+                or batch_dir.resolve().parent != quarantine_dir
+                or (batch_dir.exists() and not batch_dir.is_dir())
+            ):
+                refused.append(batch_id)
+                continue
+            if batch_dir.exists():
+                shutil.rmtree(batch_dir)
+        except (OSError, ValueError):
             refused.append(batch_id)
             continue
-        if batch_dir.exists():
-            shutil.rmtree(batch_dir)
         purged.add(batch_id)
 
     if purged:
@@ -77,7 +83,8 @@ def purge_expired(quarantine_dir: pathlib.Path, now_epoch: int) -> list[str]:
         print(f"purged quarantine batch {batch_id}")
     if refused:
         raise SystemExit(
-            "refusing to purge path outside quarantine dir: " + ", ".join(refused)
+            "refusing to purge quarantine batch(es) that are not plain directories "
+            "inside the quarantine dir: " + ", ".join(repr(b) for b in refused)
         )
     return sorted(purged)
 
