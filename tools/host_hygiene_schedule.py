@@ -45,6 +45,7 @@ QUARANTINE_PURGE_SOURCE = (
     / "bootstrap/01.dokploy_install/host_guard/quarantine_purge.py"
 )
 DEFAULT_QUARANTINE_DIR = "/data/backups/quarantine"
+QUARANTINE_HEREDOC_END = "QUARANTINE_PURGE_PY"
 # Preview containers are owned by infra2's preview lifecycle; generic hygiene only
 # EXCLUDES them, never prunes them. The pattern is derived from the canonical
 # sources so it can't silently drift from real container names:
@@ -70,14 +71,22 @@ def build_quarantine_purge_step(*, dry_run: bool) -> list[str]:
             f'echo "[dry-run] purge expired quarantine batches in '
             f'${{INFRA2_QUARANTINE_DIR:-{DEFAULT_QUARANTINE_DIR}}}"'
         ]
+    source_lines = QUARANTINE_PURGE_SOURCE.read_text(encoding="utf-8").splitlines()
+    # The quoted terminator keeps the shell from expanding `$` and backticks in the
+    # embedded file. A line equal to the terminator would end the heredoc early.
+    if QUARANTINE_HEREDOC_END in source_lines:
+        raise ValueError(
+            f"{QUARANTINE_PURGE_SOURCE} holds a line equal to the heredoc terminator "
+            f"{QUARANTINE_HEREDOC_END}"
+        )
     return [
         f'QUARANTINE_DIR="${{INFRA2_QUARANTINE_DIR:-{DEFAULT_QUARANTINE_DIR}}}"',
         'echo "Purging expired quarantine batches"',
         'if [ -f "$QUARANTINE_DIR/manifest.jsonl" ] && command -v python3 >/dev/null 2>&1; then',
-        '  python3 - "$QUARANTINE_DIR" "$(date -u +%s)" <<\'QUARANTINE_PURGE_PY\' '
+        f'  python3 - "$QUARANTINE_DIR" "$(date -u +%s)" <<\'{QUARANTINE_HEREDOC_END}\' '
         '|| echo "::warning::quarantine purge failed; continuing"',
-        *QUARANTINE_PURGE_SOURCE.read_text(encoding="utf-8").splitlines(),
-        "QUARANTINE_PURGE_PY",
+        *source_lines,
+        QUARANTINE_HEREDOC_END,
         "else",
         '  echo "::warning::no quarantine manifest or python3; skipping quarantine purge"',
         "fi",

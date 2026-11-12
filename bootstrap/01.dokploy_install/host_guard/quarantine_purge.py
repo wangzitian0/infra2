@@ -35,6 +35,7 @@ def purge_expired(quarantine_dir: pathlib.Path, now_epoch: int) -> list[str]:
         batches.setdefault(rec["batch_id"], []).append(rec)
 
     purged: set[str] = set()
+    refused: list[str] = []
     for batch_id, recs in batches.items():
         pending = [r for r in recs if r.get("status") == "quarantined"]
         known = all(
@@ -44,11 +45,18 @@ def purge_expired(quarantine_dir: pathlib.Path, now_epoch: int) -> list[str]:
             continue
         if any(int(r["purge_after_epoch"]) > now_epoch for r in pending):
             continue
-        batch_dir = (quarantine_dir / batch_id).resolve()
-        if batch_dir.parent != quarantine_dir:
-            raise SystemExit(
-                f"refusing to purge path outside quarantine dir: {batch_dir}"
-            )
+        # A batch id is one plain directory name. A path, a symlink or a name that
+        # resolves outside the quarantine directory is refused. The other batches
+        # still run, and the run exits non-zero at the end.
+        batch_dir = quarantine_dir / batch_id
+        if (
+            not batch_id
+            or pathlib.PurePath(batch_id).name != batch_id
+            or batch_dir.is_symlink()
+            or batch_dir.resolve().parent != quarantine_dir
+        ):
+            refused.append(batch_id)
+            continue
         if batch_dir.exists():
             shutil.rmtree(batch_dir)
         purged.add(batch_id)
@@ -65,6 +73,12 @@ def purge_expired(quarantine_dir: pathlib.Path, now_epoch: int) -> list[str]:
         )
         os.chmod(tmp_path, 0o600)
         tmp_path.replace(manifest_path)
+    for batch_id in sorted(purged):
+        print(f"purged quarantine batch {batch_id}")
+    if refused:
+        raise SystemExit(
+            "refusing to purge path outside quarantine dir: " + ", ".join(refused)
+        )
     return sorted(purged)
 
 
@@ -74,9 +88,7 @@ def main(argv: list[str]) -> int:
             "usage: quarantine_purge.py <quarantine_dir> <now_epoch>", file=sys.stderr
         )
         return 2
-    purged = purge_expired(pathlib.Path(argv[0]), int(argv[1]))
-    for batch_id in purged:
-        print(f"purged quarantine batch {batch_id}")
+    purge_expired(pathlib.Path(argv[0]), int(argv[1]))
     return 0
 
 

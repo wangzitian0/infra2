@@ -63,7 +63,8 @@ exit 0
     # stays readable in SHIM_LOG.
     # A fake remote under FAKE_REMOTE_ROOT: `fake-remote:infra2/a/b` is `$ROOT/infra2/a/b`.
     # FAKE_RCLONE_COPY_FAIL=1 fails every upload; FAKE_RCLONE_SIZE_FAIL=1 fails `size`;
-    # FAKE_RCLONE_SIZE_EXTRA_BYTES=N makes the remote look N bytes larger.
+    # FAKE_RCLONE_SIZE_EXTRA_BYTES=N / FAKE_RCLONE_SIZE_EXTRA_FILES=N add N (also
+    # negative) bytes or files to the size answer: a larger or a partial remote run.
     "rclone": """#!/usr/bin/env bash
 echo "rclone $*" >> "$RCLONE_LOG"
 path_of() { printf '%s/%s' "$FAKE_REMOTE_ROOT" "${1#*:}"; }
@@ -85,6 +86,7 @@ case "$1" in
       done < <(find "$dir" -type f)
     fi
     bytes=$((bytes + ${FAKE_RCLONE_SIZE_EXTRA_BYTES:-0}))
+    count=$((count + ${FAKE_RCLONE_SIZE_EXTRA_FILES:-0}))
     printf '{"count":%s,"bytes":%s,"sizeless":0}\\n' "$count" "$bytes"
     ;;
 esac
@@ -329,8 +331,17 @@ def test_the_script_removes_only_its_own_run(host) -> None:
     ]
 
 
-def test_a_remote_run_that_differs_keeps_the_local_run(host) -> None:
-    proc, _, _ = _run(host, FAKE_RCLONE_SIZE_EXTRA_BYTES="1")
+@pytest.mark.parametrize(
+    ("knob", "value"),
+    [
+        ("FAKE_RCLONE_SIZE_EXTRA_BYTES", "1"),  # more bytes than local
+        ("FAKE_RCLONE_SIZE_EXTRA_BYTES", "-1"),  # a partial upload: fewer bytes
+        ("FAKE_RCLONE_SIZE_EXTRA_FILES", "1"),  # an extra remote file
+        ("FAKE_RCLONE_SIZE_EXTRA_FILES", "-1"),  # a missing remote file, same bytes
+    ],
+)
+def test_a_remote_run_that_differs_keeps_the_local_run(host, knob, value) -> None:
+    proc, _, _ = _run(host, **{knob: value})
     assert proc.returncode == 1
     assert "does not hold the same files" in proc.stderr
     (run_dir,) = host["out"].glob("production-2*/")

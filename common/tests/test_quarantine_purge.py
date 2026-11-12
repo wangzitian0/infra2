@@ -166,3 +166,38 @@ def test_the_command_line_reports_each_purged_batch(tmp_path: Path, capsys) -> N
 def test_the_command_line_refuses_wrong_arguments(capsys) -> None:
     assert qp.main(["only-one"]) == 2
     assert "usage" in capsys.readouterr().err
+
+
+def test_a_refused_batch_does_not_block_the_other_expired_batches(
+    tmp_path: Path,
+) -> None:
+    """One bad batch id used to abort the run before the manifest was rewritten."""
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    quarantine = _setup(tmp_path, [_record("good", "quarantined", EXPIRED)])
+    with (quarantine / "manifest.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(_record("../victim", "quarantined", EXPIRED)) + "\n")
+
+    with pytest.raises(SystemExit, match="outside quarantine dir"):
+        qp.purge_expired(quarantine, NOW)
+
+    assert not (quarantine / "good").exists()
+    assert victim.exists()
+    statuses = _statuses(quarantine)
+    assert statuses[("good", "purged")] == 1
+    assert statuses[("../victim", "quarantined")] == 1
+
+
+def test_a_batch_id_that_is_a_symlink_into_the_quarantine_is_refused(
+    tmp_path: Path,
+) -> None:
+    quarantine = _setup(tmp_path, [_record("inner", "quarantined", LIVE)])
+    (quarantine / "lnk").symlink_to(quarantine / "inner", target_is_directory=True)
+    with (quarantine / "manifest.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(_record("lnk", "quarantined", EXPIRED)) + "\n")
+
+    with pytest.raises(SystemExit, match="outside quarantine dir"):
+        qp.purge_expired(quarantine, NOW)
+
+    assert (quarantine / "inner" / "files" / "payload").exists()
+    assert (quarantine / "lnk").is_symlink()

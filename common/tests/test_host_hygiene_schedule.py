@@ -9,6 +9,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from tools import host_hygiene_schedule as hh
 
 
@@ -291,6 +293,49 @@ def test_the_full_script_embeds_the_one_shared_purge_rule() -> None:
     assert source.strip() in _script()
     assert source.strip() not in _script(dry_run=True)
     assert "[dry-run] purge expired quarantine batches" in _script(dry_run=True)
+
+
+def test_the_shell_never_expands_the_embedded_purge_text(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The heredoc terminator is quoted: `$(...)` and backticks in the file stay text."""
+    marker = tmp_path / "expanded"
+    source = tmp_path / "purge.py"
+    source.write_text(
+        f'"""A `touch {marker}` and $(touch {marker}) inside the embedded file."""\n'
+        "import sys\n"
+        'print("embedded file ran", sys.argv[1:] != [])\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(hh, "QUARANTINE_PURGE_SOURCE", source)
+    quarantine = tmp_path / "quarantine"
+    quarantine.mkdir()
+    (quarantine / "manifest.jsonl").write_text("", encoding="utf-8")
+
+    proc = _run_purge_step(quarantine)
+
+    assert proc.returncode == 0, proc.stderr
+    assert "embedded file ran True" in proc.stdout
+    assert not marker.exists(), "the shell expanded text of the embedded file"
+
+
+def test_a_purge_file_with_a_line_equal_to_the_terminator_is_refused(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "purge.py"
+    source.write_text(
+        f"print(1)\n{hh.QUARANTINE_HEREDOC_END}\nprint(2)\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(hh, "QUARANTINE_PURGE_SOURCE", source)
+    with pytest.raises(ValueError, match="heredoc terminator"):
+        hh.build_quarantine_purge_step(dry_run=False)
+
+
+def test_the_real_purge_file_never_ends_the_heredoc_early() -> None:
+    lines = hh.QUARANTINE_PURGE_SOURCE.read_text(encoding="utf-8").splitlines()
+    assert hh.QUARANTINE_HEREDOC_END not in lines
+    step = hh.build_quarantine_purge_step(dry_run=False)
+    assert step.count(hh.QUARANTINE_HEREDOC_END) == 1, "one terminator line, at the end"
 
 
 if "pytest" not in sys.modules:  # pragma: no cover
