@@ -13,7 +13,7 @@
 | Service code and probes | `platform/30.todo/app.py` | Probes, status document, startup `validate_startup_environment`, custom OTel metrics, telemetry bootstrap |
 | Web UI & capability matrix | `platform/30.todo/ui.py` | HTML UI rendering and capability matrix view |
 | Container topology | `platform/30.todo/compose.yaml` | App container, vault-agent sidecar, Traefik routers, `IAC_MOUNT_SHA256_*` fingerprint env vars |
-| Image | `platform/30.todo/Dockerfile` | Python 3.11 image. It installs the `infra2-sdk` wheel that `uv.lock` pins, with its hash. |
+| Image | `platform/30.todo/Dockerfile` | Python image of the version in `.python-version`, pinned by digest. It installs the `infra2-sdk` wheel that `uv.lock` pins, with its hash. |
 | Deployer and facets | `platform/30.todo/deploy.py` | `TodoDeployer`: probe, signal, secrets, telemetry identity, Postgres role, `rendered_mount_fingerprints()` |
 | Secret & env contract | `platform/30.todo/env.manifest.json` | Enforced at startup via `assert_environment` and used to generate `secrets.ctmpl` and `vault-policy.hcl` |
 | Runtime verification hooks | `platform/30.todo/runtime-hooks.manifest.json` | 5-slot schema v2 runtime verification hooks (`smoke`, `preview_gate`, `staging_gate`, `prod_gate`, `scheduled_audit`), executed by `tools/reconcile_iac_inputs.py` |

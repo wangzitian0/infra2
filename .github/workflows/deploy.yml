@@ -120,7 +120,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version-file: .python-version
 
       - name: Install runtime dependencies
         # common/env.py reads secret stores through infra2-sdk; install the wheel uv.lock
