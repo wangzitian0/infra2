@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=c7ebafb5ea74d0f139cc076aea6b71fb4bfba8209d56cab92d22cd34a423483d -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=53f8fe698aa2bbfdeb576086376d912a90431cc7d136c8c2b7878d7ab787abf2 -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -13,8 +13,6 @@
 - **Fix an owner hold by deletion:** Delete the rule or gate branch that holds non-production work. Do not add logic that reads a command to permit it. Such logic lets unsafe commands through.
 - **Define guard scope from what it must govern, not from today's passing tree.** Let the guard fail on existing violations, then repair them. A guard never seen failing is not yet evidence of protection.
 - **Worktree self-sufficiency:** Every worktree must resolve its dependencies, toolchain, skills, and configuration internally. Tools and tests must not navigate upward with `../..` to locate files in parent checkouts.
-- **Physical context verification:** Static file existence does not prove host runtime context injection. Query zero-token host introspection and plugin validators (`ws-host-probe`, `agy plugin validate --strict --json`, `claude plugin validate --strict --json`, `codex debug prompt-input`, `codex app-server`) across root and worktree directories.
-- **Host verification scope:** Verify Desktop apps (`Claude.app`, `ChatGPT.app`, `Antigravity.app`) and their paired CLIs through official zero-token control, RPC, and debug endpoints rather than LLM self-report prompts.
 - **Local and remote test segregation:** Inner-loop verification runs only focused tests on changed files (`pytest <file>::<test> -x`). Full-suite regression runs on remote CI, or locally at most once before merge.
 - **Bounded file reads:** Pass `StartLine` and `EndLine` (`<= 800` lines per call) when reading existing files with `read_file` or `view_file`.
 
@@ -85,6 +83,8 @@ Full procedures are in [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.
 4. **Green must be current and actually reported:** Use `python -m tools.pr_merge_gate <n> --policy either --request-review --merge` rather than reading checks visually. Exit codes: 0 ready (`--merge` executes autonomously), 1 wait, 2 review set, 3 action required, 4 could not evaluate (pull main or retry). When the review set of rule 6 is the only exit-2 reason, get the independent review and merge with `gh pr merge --squash --match-head-commit <sha>`. A production path of rule 6 stops the merge whatever the exit code. Exit 2 for a base other than main means retarget the PR. Release code here is `tools/reconcile_iac_inputs.py`, `tools/deploy_v2.py`, `tools/promotion_soak_guard.py`, and their imports.
 5. **Production reservation:** the Root section of that name is the only definition of what the owner decides. This repository also names as production: L1 bootstrap self-update, a runner rebuild (the `bootstrap` job of `deploy.yml`, whatever its `type` input), and the observability apply. `tools/pr_merge_gate.self_governing_files()` computes the gate's closure (`ops.merge-gate.md`).
 
+   **Release train skill:** `release-train` owns Staging batching and the open production decision scan.
+
    **Three-stage lifecycle -- merge != deploy (owner instruction, 2026-09-25):**
    - **Stage 1 -- Code Merge:** `git merge` lands commits on `main` (zero service impact).
    - **Stage 2 -- Staging Deploy:** Triggered by pushing tag `vX.Y.Z` (auto-deploys staging soak only).
@@ -109,6 +109,7 @@ Full procedures are in [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.
 | Open a PR, decide merge readiness, or merge | [`docs/ssot/ops.merge-gate.md`](docs/ssot/ops.merge-gate.md) |
 | Write code/docs, split tasks with STAR, or apply operating principles | [`docs/ssot/core.engineering.md`](docs/ssot/core.engineering.md) |
 | Find technical truth, architecture, or SOPs | [`docs/ssot/README.md`](docs/ssot/README.md), generated from `MANIFEST.yaml` |
+| Batch the Staging train, or read open production decisions | [`release-train`](.agents/skills/release-train/SKILL.md) |
 | Find the current task | [`docs/project/README.md`](docs/project/README.md) |
 | Integrate an App or onboard | [`docs/onboarding/README.md`](docs/onboarding/README.md) |
 | Change an infrastructure layer | Its README: [bootstrap](bootstrap/README.md), [platform](platform/README.md), [tools](tools/README.md), or [common](common/README.md) |

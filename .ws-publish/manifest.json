@@ -2,13 +2,13 @@
   "adapter": "rules-v2",
   "dirty_inputs": [],
   "inputs": {
-    "repo": "0d578bcfe5ac233d8d37159513d8f1662ed468b24e1a7839e2aa460beb6df569",
-    "root": "3876ab8d266471921adc41a49ef3648c10c41ff2e8563e0913bf6e724ab9c3b5",
-    "skills": "27aba0f738f6007a28ee12af1792ed3699761d3bf77951af7344ecf6d8aec473"
+    "repo": "1e747384c965f8838a70423e097deb96e9444bb5ae789785463e8371f4c46e7d",
+    "root": "29af9406b00c0fbac0a88feb4a0d4a399b39725373dfb801f40fecb64cf52cff",
+    "skills": "ddd1e6a587ddb85f2aa9fdd912c7d9b3c03853581a18ddf8cde43702060d3545"
   },
   "language": "en",
   "outputs": {
-    "AGENTS.md": "9bb44e61f4a802559316f4a461416901b148372be3019827ab3089e2cb462773"
+    "AGENTS.md": "67a985b96a5391fe6f4d2c15e205bb5b6795800eea1e71e730f63e1f6153f2f0"
   },
   "profiles": [
     "code",
@@ -18,8 +18,10 @@
   "schema": 2,
   "skills": {
     "files": {
-      ".agents/skills/deploy-evidence/SKILL.md": "724c2aff6b8469a62e13bec18ed355472e71f9be8035475f016d3b13c91a57c0",
-      ".claude/skills/deploy-evidence/SKILL.md": "724c2aff6b8469a62e13bec18ed355472e71f9be8035475f016d3b13c91a57c0"
+      ".agents/skills/deploy-evidence/SKILL.md": "05f7babdd9e50fee434433afff0a1095083793eb4eb2a361eeb3f972cd8a8925",
+      ".agents/skills/release-train/SKILL.md": "372fc616747e60db89c7d37595a3de68cabd4f0425b25e556bc5922113c20b8d",
+      ".claude/skills/deploy-evidence/SKILL.md": "05f7babdd9e50fee434433afff0a1095083793eb4eb2a361eeb3f972cd8a8925",
+      ".claude/skills/release-train/SKILL.md": "372fc616747e60db89c7d37595a3de68cabd4f0425b25e556bc5922113c20b8d"
     },
     "link_dirs": [
       ".claude/skills"
@@ -27,7 +29,7 @@
     "links": {},
     "root": ".agents/skills"
   },
-  "source_revision": "e7dc248cb573521d04ce1a60d08fb00f49f09270",
+  "source_revision": "4dfeb92356ff808b8805b44839e4c4b53bf1febb",
   "target": {
     "remote": "github.com/wangzitian0/infra2",
     "repo": "infra2",
