@@ -163,5 +163,23 @@ def test_main_emit_script_prints_without_api(capsys) -> None:
     assert "docker image prune" in capsys.readouterr().out
 
 
+def test_default_image_prune_keeps_unused_images_for_at_most_24_hours(capsys) -> None:
+    """#1621: a 72 h limit freed 0 bytes at several releases per day (disk at 81 %)."""
+    match = re.fullmatch(r"(\d+)h", hh.DEFAULT_IMAGE_PRUNE_UNTIL)
+    assert match is not None, hh.DEFAULT_IMAGE_PRUNE_UNTIL
+    assert 1 <= int(match.group(1)) <= 24
+
+    assert hh.main(["--emit-script"]) == 0
+    prune_lines = [
+        line
+        for line in capsys.readouterr().out.splitlines()
+        if "docker image prune -af" in line
+    ]
+    assert len(prune_lines) == 1, prune_lines
+    for line in prune_lines:
+        assert f"until={hh.DEFAULT_IMAGE_PRUNE_UNTIL}" in line, line
+        assert "until=72h" not in line, line
+
+
 if "pytest" not in sys.modules:  # pragma: no cover
     pass
