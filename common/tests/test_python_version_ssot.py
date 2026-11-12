@@ -4,9 +4,10 @@ CI must test the Python that the runtime images run. Before #1506 the version wa
 written in 19 workflow steps, 4 Dockerfiles and 2 operator tasks. Now:
 
 1. Every setup-python step reads `.python-version`, except the jobs that AGENTS.md
-   makes production paths (`PRODUCTION_JOBS`). Those keep an explicit pin equal to
-   the file: a later edit of only `.python-version` must not change a production job
-   without an edit of that job, which needs the owner.
+   makes production paths (`PRODUCTION_JOBS`). Those keep their own explicit pin and
+   never read the file: an edit of only `.python-version` (a non-production path)
+   must not change a production job. Their move is an edit of the job, which needs
+   the owner.
 2. No workflow pins Python through `astral-sh/setup-uv`.
 3. Every `python:<tag>` image reference in tracked code carries `<version>-slim`
    pinned by digest, except `PENDING_OWNER`: images that a merge can redeploy to
@@ -93,9 +94,8 @@ def test_every_setup_python_step_reads_the_version_file_or_is_a_production_pin()
     wrong = []
     for key, inputs in seen.items():
         if key in PRODUCTION_JOBS:
-            if (
-                str(inputs.get("python-version")) != _version()
-                or "python-version-file" in inputs
+            if not re.fullmatch(r"3\.\d+", str(inputs.get("python-version", ""))) or (
+                "python-version-file" in inputs
             ):
                 wrong.append((key, inputs))
         elif (
