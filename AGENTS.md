@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=c7ebafb5ea74d0f139cc076aea6b71fb4bfba8209d56cab92d22cd34a423483d -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=3206ecb52fa825f43d036e99f94c9f691ff0384e1982811d19e3925459b878f8 -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -13,8 +13,6 @@
 - **Fix an owner hold by deletion:** Delete the rule or gate branch that holds non-production work. Do not add logic that reads a command to permit it. Such logic lets unsafe commands through.
 - **Define guard scope from what it must govern, not from today's passing tree.** Let the guard fail on existing violations, then repair them. A guard never seen failing is not yet evidence of protection.
 - **Worktree self-sufficiency:** Every worktree must resolve its dependencies, toolchain, skills, and configuration internally. Tools and tests must not navigate upward with `../..` to locate files in parent checkouts.
-- **Physical context verification:** Static file existence does not prove host runtime context injection. Query zero-token host introspection and plugin validators (`ws-host-probe`, `agy plugin validate --strict --json`, `claude plugin validate --strict --json`, `codex debug prompt-input`, `codex app-server`) across root and worktree directories.
-- **Host verification scope:** Verify Desktop apps (`Claude.app`, `ChatGPT.app`, `Antigravity.app`) and their paired CLIs through official zero-token control, RPC, and debug endpoints rather than LLM self-report prompts.
 - **Local and remote test segregation:** Inner-loop verification runs only focused tests on changed files (`pytest <file>::<test> -x`). Full-suite regression runs on remote CI, or locally at most once before merge.
 - **Bounded file reads:** Pass `StartLine` and `EndLine` (`<= 800` lines per call) when reading existing files with `read_file` or `view_file`.
 
