@@ -11,8 +11,14 @@
 #
 # One failing service never stops the others: every service is attempted, the
 # manifest lists the ones that succeeded, and the run exits 1 naming each
-# failure (the verifier then reports the missing service). Local retention is
-# skipped on a failed run, so older good runs are not rotated away.
+# failure (the verifier then reports the missing service).
+#
+# The off-host copy is the store (owner decision 2026-11-12, #1624). Temporary files
+# stay local while a run works. After every archive and the manifest are uploaded,
+# the script compares the remote run with the local run directory (file count and
+# bytes) and removes the local directory only when they are equal. A failed run, a
+# failed upload or a mismatch keeps the local directory: it is then the only copy.
+# The script never touches the directory of another run.
 #
 # Usage (on the VPS, where /data and the docker socket live):
 #   BACKUP_REMOTE=gdrive-backup:infra2 tools/host_backup.sh           # archive + upload off-host (weekly)
@@ -31,7 +37,6 @@
 #   BACKUP_LOCAL_ONLY  1 = archive locally only; mutually exclusive with BACKUP_REMOTE
 #   BACKUP_TIER        optional retention tier: weekly (default) | quarterly
 #   BACKUP_DATA_ROOT   host data root holding the service data paths (default /data)
-#   BACKUP_KEEP        local run directories to keep per environment (default 7)
 #   ENV_SUFFIX         optional container suffix (e.g. -staging); default production ("")
 #   PG_SUPERUSER       postgres superuser for pg_dumpall (default: postgres)
 set -euo pipefail
@@ -66,7 +71,6 @@ case "${SUFFIX}" in
   *) echo "unsupported ENV_SUFFIX '${SUFFIX}': expected empty or -staging" >&2; exit 2 ;;
 esac
 PG_SUPERUSER="${PG_SUPERUSER:-postgres}"
-BACKUP_KEEP="${BACKUP_KEEP:-7}"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"
 RUN_DIR="${OUTPUT_DIR}/${ENVIRONMENT}-${TS}"
 MANIFEST="${RUN_DIR}/manifest.json"
@@ -249,23 +253,49 @@ if [ -n "${REMOTE}" ]; then
 fi
 
 if [ "${#failures[@]}" -gt 0 ]; then
-  echo "host_backup: ${#failures[@]} service(s) FAILED: ${failures[*]}; local retention skipped" >&2
+  echo "host_backup: ${#failures[@]} service(s) FAILED: ${failures[*]}; local run kept: ${RUN_DIR}" >&2
   echo "${MANIFEST}"
   exit 1
 fi
 
 if [ -z "${REMOTE}" ]; then
-  # A local-only run deletes nothing: the runs it would rotate away can be the
-  # local copies of off-host runs.
+  # A local-only run keeps its files: they are the only copy.
   echo "${MANIFEST}"
   exit 0
 fi
 
-# Local Retention: keep BACKUP_KEEP runs per environment. Legacy unsuffixed
-# directories are left intact until an operator verifies and retires them.
-find "${OUTPUT_DIR}" -maxdepth 1 -type d -name "${ENVIRONMENT}-*" -print | sort -r | tail -n +$((BACKUP_KEEP + 1)) | while IFS= read -r old; do
-  rm -rf -- "${old}"
-done
+# remote_run_matches_local: exit 0 only when the remote run holds exactly the files
+# of RUN_DIR (same file count, same total bytes). An unreadable remote answer is a
+# mismatch.
+remote_run_matches_local() {
+  local remote_json
+  remote_json="$(rclone size --json "${RUN_REMOTE}")" || return 1
+  python3 - "${RUN_DIR}" "${remote_json}" <<'PY'
+import json
+import os
+import sys
+
+run_dir, remote = sys.argv[1], json.loads(sys.argv[2])
+count = size = 0
+for root, _, names in os.walk(run_dir):
+    for name in names:
+        count += 1
+        size += os.lstat(os.path.join(root, name)).st_size
+sys.exit(0 if remote.get("count") == count and remote.get("bytes") == size else 1)
+PY
+}
+
+# Local copy: Google is the store. Remove this run only when the remote run is equal.
+REPORT="${MANIFEST}"
+RESULT=0
+if remote_run_matches_local; then
+  rm -rf -- "${RUN_DIR}"
+  echo "host_backup: removed local ${RUN_DIR}; ${RUN_REMOTE} holds the same files" >&2
+  REPORT="${RUN_REMOTE}/manifest.json"
+else
+  echo "host_backup: ERROR ${RUN_REMOTE} does not hold the same files as ${RUN_DIR}; local run kept" >&2
+  RESULT=1
+fi
 
 # Remote Retention: automated lifecycle policy on off-host backend (Google Drive)
 if [ -n "${REMOTE}" ]; then
@@ -282,4 +312,5 @@ if [ -n "${REMOTE}" ]; then
   fi
 fi
 
-echo "${MANIFEST}"
+echo "${REPORT}"
+exit "${RESULT}"

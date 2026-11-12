@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from urllib.parse import quote
 
 from common.deploy.env_config import PREVIEW_KINDS
@@ -34,6 +35,17 @@ DEFAULT_SCHEDULE_TYPE = "dokploy-server"
 # 2026-11-11 every unused image was younger than 48 h, the root disk was at 81 %
 # and the probe `host-disk` paged at 80 % (#1621).
 DEFAULT_IMAGE_PRUNE_UNTIL = "24h"
+# Build cache entries follow the same limit. On 2026-11-12 the cache held 5.7 GB and
+# a prune with `until=24h` freed 5.69 GB (#1624).
+DEFAULT_BUILDER_PRUNE_UNTIL = "24h"
+# The purge rule of expired quarantine batches lives in one file. `host_quarantine.sh`
+# runs it from the checkout; the scheduled host script embeds its text (#1624).
+QUARANTINE_PURGE_SOURCE = (
+    Path(__file__).resolve().parents[1]
+    / "bootstrap/01.dokploy_install/host_guard/quarantine_purge.py"
+)
+DEFAULT_QUARANTINE_DIR = "/data/backups/quarantine"
+QUARANTINE_HEREDOC_END = "QUARANTINE_PURGE_PY"
 # Preview containers are owned by infra2's preview lifecycle; generic hygiene only
 # EXCLUDES them, never prunes them. The pattern is derived from the canonical
 # sources so it can't silently drift from real container names:
@@ -47,6 +59,38 @@ PR_PREVIEW_CONTAINER_PATTERN = (
     rf"^finance_report-({'|'.join(_PREVIEW_SERVICES)})"
     rf"-({'|'.join(PREVIEW_KINDS)})-[a-z0-9][a-z0-9-]*$"
 )
+
+
+def build_quarantine_purge_step(*, dry_run: bool) -> list[str]:
+    """Shell lines that purge expired quarantine batches (#1624).
+
+    Before this step the purge ran only by hand, so expired batches stayed on disk.
+    """
+    if dry_run:
+        return [
+            f'echo "[dry-run] purge expired quarantine batches in '
+            f'${{INFRA2_QUARANTINE_DIR:-{DEFAULT_QUARANTINE_DIR}}}"'
+        ]
+    source_lines = QUARANTINE_PURGE_SOURCE.read_text(encoding="utf-8").splitlines()
+    # The quoted terminator keeps the shell from expanding `$` and backticks in the
+    # embedded file. A line equal to the terminator would end the heredoc early.
+    if QUARANTINE_HEREDOC_END in source_lines:
+        raise ValueError(
+            f"{QUARANTINE_PURGE_SOURCE} holds a line equal to the heredoc terminator "
+            f"{QUARANTINE_HEREDOC_END}"
+        )
+    return [
+        f'QUARANTINE_DIR="${{INFRA2_QUARANTINE_DIR:-{DEFAULT_QUARANTINE_DIR}}}"',
+        'echo "Purging expired quarantine batches"',
+        'if [ -f "$QUARANTINE_DIR/manifest.jsonl" ] && command -v python3 >/dev/null 2>&1; then',
+        f'  python3 - "$QUARANTINE_DIR" "$(date -u +%s)" <<\'{QUARANTINE_HEREDOC_END}\' '
+        '|| echo "::warning::quarantine purge failed; continuing"',
+        *source_lines,
+        QUARANTINE_HEREDOC_END,
+        "else",
+        '  echo "::warning::no quarantine manifest or python3; skipping quarantine purge"',
+        "fi",
+    ]
 
 
 def build_hygiene_script(
@@ -202,6 +246,8 @@ def build_hygiene_script(
         else:
             lines.append(f"{command} || true")
 
+    lines.extend(build_quarantine_purge_step(dry_run=dry_run))
+
     lines.extend(
         [
             'echo "Disk usage after host hygiene:"',
@@ -330,7 +376,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--container-prune-until", default="72h")
-    parser.add_argument("--builder-prune-until", default="72h")
+    parser.add_argument("--builder-prune-until", default=DEFAULT_BUILDER_PRUNE_UNTIL)
     parser.add_argument("--image-prune-until", default=DEFAULT_IMAGE_PRUNE_UNTIL)
     parser.add_argument("--network-prune-until", default="all")
     parser.add_argument("--journal-vacuum-time", default="3d")
