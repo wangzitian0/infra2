@@ -484,6 +484,32 @@ def wait_for_containers_absent(
     return False
 
 
+_RUNNING_DEPLOY_STATUSES = ("running", "queued", "pending", "in_progress")
+_DEPLOY_SETTLE_ATTEMPTS = 20
+_DEPLOY_SETTLE_SECONDS = 3
+
+
+def _settle_running_deploy(client, compose_id: str, sleep) -> None:
+    """Cancel a deploy that still runs for the compose and wait until it stops, so the
+    teardown cannot race a late ``up --build`` that would leave containers behind."""
+    latest = client.get_latest_deployment(compose_id)
+    if (
+        not latest
+        or str(latest.get("status", "")).lower() not in _RUNNING_DEPLOY_STATUSES
+    ):
+        return
+    client.cancel_compose_deployment(compose_id)
+    for _ in range(_DEPLOY_SETTLE_ATTEMPTS):
+        latest = client.get_latest_deployment(compose_id)
+        if (
+            not latest
+            or str(latest.get("status", "")).lower() not in _RUNNING_DEPLOY_STATUSES
+        ):
+            return
+        sleep(_DEPLOY_SETTLE_SECONDS)
+    raise RuntimeError(f"deploy of compose {compose_id} did not stop after cancel")
+
+
 def down(
     kind: str,
     value: int | str | None,
@@ -512,6 +538,7 @@ def down(
     compose_id = None
     if existing:
         compose_id = existing["composeId"]
+        _settle_running_deploy(client, compose_id, _sleep or time.sleep)
         client.delete_compose(compose_id, delete_volumes=True)
     cleared = wait_for_containers_absent(
         client, service, f"-{alias.alias}", attempts=attempts, _sleep=_sleep

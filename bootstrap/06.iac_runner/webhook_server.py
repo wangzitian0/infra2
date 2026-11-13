@@ -57,6 +57,7 @@ PREVIEW_SLOT_CAP = 2
 PREVIEW_SLOT_TTL_SECONDS = 3600
 PREVIEW_MAX_BODY_BYTES = 4096
 PREVIEW_MAX_UNITS = 3
+PREVIEW_BINDING_TTL_SECONDS = 60
 PREVIEW_BRANCH_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._/-]{0,99}\Z")
 MAX_REQUEST_BODY_BYTES = 65536
 EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -89,6 +90,7 @@ _in_flight_deploys: set[DeploymentKey] = set()
 _recent_deploys: dict[DeploymentKey, tuple[float, dict]] = {}
 # Live Preview slots: PR number -> wall-clock start. Saved with the deploy records.
 _preview_slots: dict[int, float] = {}
+_pr_binding_ok: dict[tuple, float] = {}  # (pr, ref, branch) -> monotonic time of a pass
 _seen_nonces: dict[str, float] = {}
 _nonce_lock = threading.Lock()
 if hasattr(app, "config"):
@@ -1083,7 +1085,12 @@ def _fetch_pull(pr: int) -> dict:
 
 
 def _pr_binding_error(parsed: dict) -> str | None:
-    """The request must name a real, open PR of this repository: its head branch and SHA."""
+    """The request must name a real, open PR of this repository: its head branch and SHA.
+    A positive answer is kept for PREVIEW_BINDING_TTL_SECONDS per (pr, ref, branch)."""
+    cache_key = (parsed["pr"], parsed["ref"], parsed["branch"])
+    now = time.monotonic()
+    if now - _pr_binding_ok.get(cache_key, float("-inf")) < PREVIEW_BINDING_TTL_SECONDS:
+        return None
     try:
         pull = _fetch_pull(parsed["pr"])
         head = pull["head"]
@@ -1102,6 +1109,10 @@ def _pr_binding_error(parsed: dict) -> str | None:
     for ok, why in checks:
         if not ok:
             return f"PR {parsed['pr']} {why}"
+    for key, at in list(_pr_binding_ok.items()):
+        if now - at >= PREVIEW_BINDING_TTL_SECONDS:
+            del _pr_binding_ok[key]
+    _pr_binding_ok[cache_key] = now
     return None
 
 
@@ -1266,17 +1277,18 @@ def preview_deploy():
                 del _preview_slots[pr]
         if parsed["down"] and parsed["pr"] not in _preview_slots:
             return jsonify({"error": f"{pr_label} has no live slot"}), 404
-    if not parsed["down"]:
-        binding_error = _pr_binding_error(parsed)
-        if binding_error:
-            return jsonify({"error": binding_error}), 400
     import sync_runner
 
     lock = sync_runner.try_deployment_lock()
-    if lock is None:
+    if lock is None:  # a busy answer costs no GitHub call
         return jsonify(
             {"error": "busy: a deploy or another Preview holds the runner; retry later"}
         ), 503
+    if not parsed["down"]:
+        binding_error = _pr_binding_error(parsed)
+        if binding_error:
+            sync_runner.release_deployment_lock(lock)
+            return jsonify({"error": binding_error}), 400
     with _deploy_state_lock:
         if not parsed["down"]:
             if parsed["pr"] not in _preview_slots and (

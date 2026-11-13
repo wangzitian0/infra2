@@ -172,7 +172,6 @@ def test_preview_todo_service_repeats_the_staging_compose_fields():
     slot = _services("platform/30.todo/preview.compose.yaml")["todo"]
     for field in (
         "build",
-        "image",
         "container_name",
         "mem_limit",
         "cpu_shares",
@@ -181,6 +180,7 @@ def test_preview_todo_service_repeats_the_staging_compose_fields():
         assert slot[field] == prod[field], field
     assert slot["healthcheck"]["test"] == prod["healthcheck"]["test"]
     shared = set(slot["environment"]) & set(prod["environment"])
+    assert "image" not in slot  # a built service names no image: the runner names it
     assert len(shared) == 18
     assert {
         k for k in shared if slot["environment"][k] != prod["environment"][k]
@@ -210,10 +210,13 @@ def test_slot_backing_services_use_the_platform_unit_images():
         == _services("platform/01.postgres/compose.yaml")["postgres"]["image"]
     )
     s3 = _services("platform/03.s3/compose.yaml")["s3"]
-    assert slot["s3"]["build"] == s3["build"] and slot["s3"]["image"] == s3["image"]
+    assert slot["s3"]["build"] == s3["build"] and "image" not in slot["s3"]
+    assert slot["s3-init"]["build"] == s3["build"]
 
 
 def test_slot_postgres_keeps_no_data_across_up():
     postgres = _services("platform/30.todo/preview.compose.yaml")["postgres"]
-    assert "/var/lib/postgresql/data" in postgres["tmpfs"]
+    assert any(
+        t.startswith("/var/lib/postgresql/data:size=") for t in postgres["tmpfs"]
+    )
     assert not postgres.get("volumes")

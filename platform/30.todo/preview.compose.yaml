@@ -8,6 +8,7 @@ services:
     image: redis:alpine
     container_name: platform-redis${ENV_SUFFIX}
     mem_limit: 128m
+    cpu_shares: 128
     command: ["sh", "-c", 'exec redis-server --save "" --loglevel warning --requirepass "$$REDIS_PASSWORD"']
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
@@ -28,9 +29,10 @@ services:
     image: postgres:16-alpine
     container_name: platform-postgres${ENV_SUFFIX}
     mem_limit: 256m
+    cpu_shares: 256
     # No data survives `up`: a second `up` with new secrets cannot hit an old password.
     tmpfs:
-      - /var/lib/postgresql/data
+      - /var/lib/postgresql/data:size=128m
     environment:
       # The slot's only role is the canary login (POSTGRES_USER is a superuser of this
       # throwaway server only). It matches CANARY_POSTGRES_USER of the todo service.
@@ -51,13 +53,14 @@ services:
 
   s3:
     # Built from the platform S3 Dockerfile: the image carries the mc client used below.
+    # A built service names no image: the runner gives it a slot-scoped name (#1647).
     build:
       context: ../..
       dockerfile: platform/03.s3/Dockerfile
     pull_policy: build
-    image: platform-s3:${CONFIGURATION_SHA256:-}
     container_name: platform-s3${ENV_SUFFIX}
     mem_limit: 256m
+    cpu_shares: 256
     environment:
       RUSTFS_CONSOLE_ENABLE: "false"
       RUSTFS_HEALTH_ENDPOINT_ENABLE: "true"
@@ -80,10 +83,13 @@ services:
 
   s3-init:
     # One shot: create the canary bucket, then exit. The todo service starts after it.
-    image: platform-s3:${CONFIGURATION_SHA256:-}
-    pull_policy: never
+    build:
+      context: ../..
+      dockerfile: platform/03.s3/Dockerfile
+    pull_policy: build
     container_name: platform-s3-init${ENV_SUFFIX}
     mem_limit: 64m
+    cpu_shares: 128
     depends_on:
       s3:
         condition: service_healthy
@@ -109,7 +115,6 @@ services:
     build:
       context: ../..
       dockerfile: platform/30.todo/Dockerfile
-    image: platform-todo:${CONFIGURATION_SHA256:-}
     container_name: platform-todo${ENV_SUFFIX}
     mem_limit: 256m
     cpu_shares: 512

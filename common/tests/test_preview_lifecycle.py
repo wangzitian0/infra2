@@ -69,6 +69,9 @@ class FakeDokploy:
     def get_containers(self):
         return []  # teardown reads the inventory: the slot has no containers left
 
+    def get_latest_deployment(self, compose_id):
+        return None  # no deploy runs while the slot is taken down
+
     def get_github_provider_id(self):
         return self._github_id
 

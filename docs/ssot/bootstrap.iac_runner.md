@@ -355,14 +355,20 @@ changed files 换算成 `services` 传给 `/deploy`。要点：
 | `GIT_REPO_URL` | Git 仓库地址 | `https://github.com/wangzitian0/infra2.git` |
 | `IAC_PREVIEW_WEBHOOK_SECRET` | 仅供 `/preview` 验签的 Preview 专用签名密钥（可选；缺失时 `/preview` 返回 503，`/deploy` 不受影响）。**不得**与 `WEBHOOK_SECRET` 相同 | owner 生成 `openssl rand -hex 32`；`human` 来源，不由 runner 生成 |
 
-**Preview 密钥（owner 创建，agent 不创建）**：名字 `IAC_PREVIEW_WEBHOOK_SECRET`，runner 端路径同 `secret/data/bootstrap/production/iac_runner`（字段 `IAC_PREVIEW_WEBHOOK_SECRET`，由 vault-agent 渲染进 `/vault/secrets/.env`，runner 入口脚本 source 它；`compose.yaml` 不需要新增环境变量）。PR CI 端使用同名 GitHub Actions secret `IAC_PREVIEW_WEBHOOK_SECRET`（T3c）。创建：
+**Preview 密钥（owner 授权创建，agent 不自创）**：名字 `IAC_PREVIEW_WEBHOOK_SECRET`。人工值放 1Password（vault `Infra2`）item `bootstrap/iac_runner` 的同名字段；runner 读的是 Vault `secret/data/bootstrap/production/iac_runner` 的同名字段（vault-agent 渲染进 `/vault/secrets/.env`，runner 入口脚本 source 它；`compose.yaml` 不需要新增环境变量）。PR CI 端用同名 GitHub Actions secret（T3c）。`invoke env.set ... --type=bootstrap` **只写 1Password**，而 `deploy.yml` 的 bootstrap 重建脚本不跑 supply，所以必须单独把值复制进 Vault：
 
 ```bash
+# 1. 写 1Password（同一个值也写进 GitHub Actions secret IAC_PREVIEW_WEBHOOK_SECRET）
 invoke env.set IAC_PREVIEW_WEBHOOK_SECRET=$(openssl rand -hex 32) \
   --project=bootstrap --service=iac_runner --type=bootstrap
+# 2. 复制进 Vault：pre-compose 运行 Deployer.apply_secret_supply（1Password -> Vault；
+#    值变化时重启 iac-runner-vault-agent 与 iac-runner，请在 runner 空闲时做；需要 Vault root token）
+DEPLOY_ENV=production invoke iac-runner.pre-compose
+# 3. 重建 runner（需要 owner 在 production environment 批准该 SHA）
+gh workflow run deploy.yml -R wangzitian0/infra2 --ref main -f service=bootstrap/iac-runner
 ```
 
-创建后需重建 runner（`bootstrap/06.iac_runner/**` 变更走 `deploy.yml` 的 bootstrap 带外重建，需 owner 批准）。
+应急直写（会被下一次 reconcile 报为漂移）：`invoke env.set IAC_PREVIEW_WEBHOOK_SECRET=<同一个值> --project=bootstrap --service=iac_runner --type=app_vars --break-glass`。在步骤 2 与 3 都完成之前，`/preview` 返回 503，`/deploy` 不受影响。
 
 **设置命令**:
 ```bash

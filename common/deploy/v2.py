@@ -1171,7 +1171,7 @@ def _handle_preview_raw_compose(args: argparse.Namespace) -> int:
     sha = args.iac_ref.strip().lower()
     # Check the compose first: a refused file reaches no Dokploy call.
     compose = render_runner_compose(
-        args.service, read_compose_at(args.service, sha), sha
+        args.service, read_compose_at(args.service, sha), sha, int(args.version_ref)
     )
     from common.deploy.dokploy_client import get_dokploy
 

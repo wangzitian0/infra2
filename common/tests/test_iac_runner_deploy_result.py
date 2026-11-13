@@ -2737,6 +2737,48 @@ def test_preview_binds_the_request_to_a_real_open_pr_of_this_repository(
     assert _post(server)[1] == 400  # fail closed when GitHub cannot be read
 
 
+def test_a_busy_answer_costs_no_github_call(monkeypatch, tmp_path) -> None:
+    server = _preview_server(monkeypatch, _preview_body(), tmp_path=tmp_path)
+    runner = sys.modules["sync_runner"]
+
+    github_calls: list[int] = []
+
+    def counting(pr):
+        github_calls.append(pr)
+        raise OSError("must not be needed while the runner is busy")
+
+    monkeypatch.setattr(server, "_fetch_pull", counting)
+    held = runner.try_deployment_lock()
+    try:
+        for _ in range(3):
+            body, code = _post(server)
+            assert code == 503 and "busy" in body["error"]
+        assert github_calls == []  # a busy answer spends no GitHub call
+    finally:
+        runner.release_deployment_lock(held)
+
+
+def test_a_passing_pr_binding_is_cached_for_a_minute(monkeypatch, tmp_path) -> None:
+    server = _preview_server(monkeypatch, _preview_body(), tmp_path=tmp_path)
+    _fake_run_preview(monkeypatch)
+    real_fetch = server._fetch_pull
+    calls: list[int] = []
+
+    def counting(pr):
+        calls.append(pr)
+        return real_fetch(pr)
+
+    monkeypatch.setattr(server, "_fetch_pull", counting)
+    for _ in range(3):
+        assert _post(server)[1] == 202
+        _wait_until(lambda: not server._in_flight_deploys)
+    assert calls == [7]
+    monkeypatch.setattr(server, "PREVIEW_BINDING_TTL_SECONDS", 0)
+    assert _post(server)[1] == 202
+    _wait_until(lambda: not server._in_flight_deploys)
+    assert calls == [7, 7]
+
+
 def test_a_failed_up_frees_its_slot_at_once(monkeypatch, tmp_path) -> None:
     server = _preview_server(monkeypatch, _preview_body(), tmp_path=tmp_path)
     _fake_run_preview(monkeypatch, success=False)
