@@ -15,7 +15,6 @@ FEISHU_WEBHOOK_PATH_PREFIX = "/open-apis/bot/v2/hook/"
 SIGNOZ_ALERT_SCHEMA_VERSION = "v2alpha1"
 SIGNOZ_ALERT_VERSION = "v5"
 SIGNOZ_FEISHU_CHANNEL_PREFIX = "infra2-feishu-alerts"
-ERROR_LOG_LEVELS = ("ERROR", "CRITICAL", "FATAL")
 MAX_MESSAGE_CHARS = 3500
 JSON_UTF8 = "application/json; charset=utf-8"
 TRUNCATION_SUFFIX = "\n...[truncated]"

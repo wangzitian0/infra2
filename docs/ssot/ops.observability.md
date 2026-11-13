@@ -261,7 +261,7 @@ collector 4317/4318 在 Docker 网络内 `expose`，另将 4318 仅绑定宿主�
 
 ### 4.5 查询 + synthetic round-trip(分钟级,采集自证)
 
-- **查询(勿重造)**:SigNoz `invoke signoz.shared.query-logs` / `list-services`(key 在 Vault `secret/platform/<env>/signoz`);OpenPanel 查询 CLI 在 app 仓库 `common/observability/openpanel_query.py`(本仓库只引用)。
+- **查询(勿重造)**:SigNoz 诊断 `python -m tools.diagnose <service> --env staging|production --since 30m`(错误日志、最慢 trace、5xx 率、窗口内部署;经 SSH 读 ClickHouse,无需 key);OpenPanel 查询 CLI 在 app 仓库 `common/observability/openpanel_query.py`(本仓库只引用)。
 - **synthetic round-trip**(`infra-probe-runner`,写读探针节流):
   - `signoz-roundtrip`:每 5min 写一条 OTLP log,再从 `signoz_logs.distributed_logs_v2` 按 nonce 查回 → 证 collector→ClickHouse ingest/storage 可用。
   - `openpanel-roundtrip`:每 5min 向 OpenPanel `/track` 写,再从 `openpanel.events` 查回 → 证 API→worker/storage 可用。

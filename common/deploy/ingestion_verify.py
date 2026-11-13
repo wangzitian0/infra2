@@ -7,7 +7,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from common.observability.signoz_queries import ENVIRONMENT_ATTRIBUTE
+from common.observability.signoz_queries import logs_query, traces_query
 
 DEFAULT_CLICKHOUSE_URL = "http://platform-clickhouse:8123"
 DEFAULT_WINDOW_MINUTES = 15
@@ -17,11 +17,6 @@ DEFAULT_POLL_INTERVAL = 10.0
 
 class IngestionSmokeError(RuntimeError):
     """Raised when the deployed version is not provably ingesting."""
-
-
-def _ch_string(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace("'", "\\'")
-    return f"'{escaped}'"
 
 
 def _clickhouse_query(base_url: str, query: str) -> str:
@@ -42,42 +37,11 @@ def _clickhouse_query(base_url: str, query: str) -> str:
         return response.read().decode("utf-8", errors="replace")
 
 
-def _logs_count_query(
-    *, service_name: str, environment: str, version: str | None, window_minutes: int
-) -> str:
-    where = [
-        f"resources_string['service.name'] = {_ch_string(service_name)}",
-        f"resources_string['{ENVIRONMENT_ATTRIBUTE}'] = {_ch_string(environment)}",
-        f"timestamp >= toUnixTimestamp64Nano(now64(3) - INTERVAL {int(window_minutes)} MINUTE)",
-    ]
-    if version:
-        where.append(f"resources_string['service.version'] = {_ch_string(version)}")
-    return "SELECT count() FROM signoz_logs.distributed_logs_v2 WHERE " + " AND ".join(
-        where
-    )
-
-
-def _traces_count_query(
-    *, service_name: str, environment: str, version: str | None, window_minutes: int
-) -> str:
-    where = [
-        f"serviceName = {_ch_string(service_name)}",
-        f"resources_string['{ENVIRONMENT_ATTRIBUTE}'] = {_ch_string(environment)}",
-        f"timestamp >= now() - INTERVAL {int(window_minutes)} MINUTE",
-    ]
-    if version:
-        where.append(f"resources_string['service.version'] = {_ch_string(version)}")
-    return (
-        "SELECT count() FROM signoz_traces.distributed_signoz_index_v3 WHERE "
-        + " AND ".join(where)
-    )
-
-
 def _count(clickhouse_url: str, query: str) -> int:
     body = _clickhouse_query(clickhouse_url, query).strip()
     if not body:
         return 0
-    first = body.splitlines()[0].strip()
+    first = body.splitlines()[0].split("\t")[0].strip()
     try:
         return int(first)
     except ValueError as exc:
@@ -121,14 +85,14 @@ def verify_deploy_ingestion(
             return _count(resolved_url, query)
 
     passed: list[str] = []
-    for kind, build in (("logs", _logs_count_query), ("traces", _traces_count_query)):
+    for kind, build in (("logs", logs_query), ("traces", traces_query)):
         total = _poll(
             counter,
             build(
                 service_name=service_name,
                 environment=environment,
                 version=None,
-                window_minutes=window_minutes,
+                window_seconds=window_minutes * 60,
             ),
             attempts=poll_attempts,
             interval=poll_interval,
@@ -151,7 +115,7 @@ def verify_deploy_ingestion(
                 service_name=service_name,
                 environment=environment,
                 version=expected_version,
-                window_minutes=window_minutes,
+                window_seconds=window_minutes * 60,
             ),
             attempts=poll_attempts,
             interval=poll_interval,
@@ -177,9 +141,7 @@ __all__ = [
     "DEFAULT_WINDOW_MINUTES",
     "IngestionSmokeError",
     "_count",
-    "_logs_count_query",
     "_poll",
     "_resolve_clickhouse_url",
-    "_traces_count_query",
     "verify_deploy_ingestion",
 ]

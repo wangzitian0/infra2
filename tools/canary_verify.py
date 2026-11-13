@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shlex
 import subprocess
 import urllib.error
@@ -36,6 +35,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from common.deploy.vps_ssh import resolve_ssh_credentials as _resolve_ssh_credentials
+from common.deploy.vps_ssh import ssh_cmd as _ssh_cmd
 from common.observability.signoz_queries import (
     DEFAULT_WINDOW_SECONDS,
     logs_query,
@@ -47,8 +48,6 @@ TELEMETRY_SERVICE_NAME = "platform-todo"
 BRIDGE_HEALTHY_STATUSES = frozenset({"healthy"})
 # A timestamp may run ahead of the local clock by this much before it counts as skew.
 CLOCK_SKEW_TOLERANCE_SECONDS = 60
-DEFAULT_VPS_HOST = "103.214.23.41"
-DEFAULT_SSH_KEY = Path.home() / ".ssh" / "id_ed25519_infra"
 
 
 @dataclass
@@ -125,40 +124,6 @@ def _resolve_locked_sdk_version(
         return version("infra2-sdk")
     except Exception:
         return ""
-
-
-def _ssh_cmd(
-    command: str, host: str, user: str, key_path: str, port: int = 22
-) -> tuple[int, str, str]:
-    ssh_args = [
-        "ssh",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "ConnectTimeout=10",
-        "-o",
-        "StrictHostKeyChecking=no",
-        "-o",
-        "UserKnownHostsFile=/dev/null",
-        "-p",
-        str(port),
-    ]
-    if key_path and os.path.exists(key_path):
-        ssh_args.extend(["-i", key_path])
-    ssh_args.append(f"{user}@{host}")
-    ssh_args.append(command)
-    res = subprocess.run(ssh_args, capture_output=True, text=True)
-    return res.returncode, res.stdout, res.stderr
-
-
-def _resolve_ssh_credentials() -> tuple[str, str, str, int]:
-    host = os.environ.get("INFRA2_WATCHDOG_SSH_HOST", "").strip() or DEFAULT_VPS_HOST
-    user = os.environ.get("INFRA2_WATCHDOG_SSH_USER", "").strip() or "root"
-    key_path = os.environ.get("INFRA2_WATCHDOG_SSH_KEY_PATH", "").strip()
-    if not key_path and DEFAULT_SSH_KEY.exists():
-        key_path = str(DEFAULT_SSH_KEY)
-    port = int(os.environ.get("INFRA2_WATCHDOG_SSH_PORT", "") or "22")
-    return host, user, key_path, port
 
 
 def _as_utc(now: datetime | None) -> datetime:
