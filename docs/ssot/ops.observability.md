@@ -18,7 +18,7 @@
 |------|----------------|------|
 | **采集 - 存储** | [platform/03.clickhouse](../../platform/03.clickhouse/) | ClickHouse + ZooKeeper |
 | **采集 - 应用** | [platform/11.signoz](../../platform/11.signoz/) | Query Service + Frontend + OTLP Collector |
-| **告警 - 规则** | **SigNoz Alert Manager** + `finance_report/finance_report/observability/alert_rules.json`、`truealpha/truealpha/observability/alert_rules.json`、`platform/12.alerting/alert_rules.json`(config-as-code,`common/observability_dashboards.py::ALERT_RULES_FILES`) | 告警规则 |
+| **告警 - 规则** | **SigNoz Alert Manager** + `finance_report/finance_report/observability/alert_rules.json`、`truealpha/truealpha/observability/alert_rules.json`、`common/alerting/standard_rules.py`(标准错误日志规则表;config-as-code,`common/observability_dashboards.py::load_alert_definitions` 为 `production` 与 `staging` 各展开一份,staging 规则名加 `Staging` 后缀,只发 report 不呼出,#1649) | 告警规则 |
 | **告警 - 通知** | [platform/12.alerting](../../platform/12.alerting/) | SigNoz webhook → Feishu custom bot / app bot bridge(飞书交互卡片,格式见 §3.1);in-band probe runner |
 | **告警 - 密钥源头** | 1Password `platform/{env}/alerting` → 运行时镜像 Vault `secret/platform/{env}/alerting` | Feishu 凭据 + 可选 bridge basic auth |
 | **带外 watchdog** | [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/)(轻量带外,边缘 30min)+ [`.github/workflows/ops-checks.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/ops-checks.yml)(日级带外审计) | 只判 VPS 自己报告不了的:整机/整栈失联、告警链路自身失效;分工见 §1.1 |
@@ -294,7 +294,9 @@ collector 4317/4318 在 Docker 网络内 `expose`，另将 4318 仅绑定宿主�
 
 ### 4.6 告警/仪表盘 config-as-code(#373 / #1389)
 
-定义签入 `finance_report/finance_report/observability/alert_rules.json`(含 `FinanceReportBackendErrorLogs` + RED/business/遥测缺失规则；同目录含 `dashboard.json` 与 `shared_tasks.py`)、`truealpha/truealpha/observability/alert_rules.json`、`platform/12.alerting/alert_rules.json`(`common/observability_dashboards.py::ALERT_RULES_FILES`，#1389)，**不在 UI 手点**;声明式 apply 见 SOP-004B/C 与 [ops.pipeline.md](./ops.pipeline.md)(apply 折进 tag reconcile 的目标态)。
+定义签入 `finance_report/finance_report/observability/alert_rules.json`(含 `FinanceReportBackendErrorLogs` + RED/business/遥测缺失规则；同目录含 `dashboard.json` 与 `shared_tasks.py`)、`truealpha/truealpha/observability/alert_rules.json`、`common/alerting/standard_rules.py`(标准错误日志规则表,#1649;`common/observability_dashboards.py::load_alert_definitions` 合并,#1389)，**不在 UI 手点**;声明式 apply 见 SOP-004B/C 与 [ops.pipeline.md](./ops.pipeline.md)(apply 折进 tag reconcile 的目标态)。
+
+**Staging(#1649)**:标准规则表与各服务目录里的规则都为 `production` 和 `staging` 各生成一份(PromQL 中的 `{env}` 由加载器填入);staging 规则名加 `Staging` 后缀,桥按 `environment=staging` 标签只发 report 到报告群,从不呼出。`PlatformTodoProbeFailures` 由 `apply-alerts --prune` 删除(#1648)。staging 心跳过期(>90 分钟)在每日 watchdog 报告里是一条 note,不呼出。每日生产 e2e 冒烟(`e2e-regressions-smoke`)红灯时开一个 `prod.e2e-smoke` 状态 issue,每日 watchdog 报告把它列在最前,绿灯关闭。
 
 SigNoz dashboards (#1464). `common/observability_dashboards.py::DASHBOARD_FILES` lists every dashboard. `apply-dashboard` and `verify-dashboard` handle each file by its `title`:
 
@@ -350,7 +352,7 @@ SigNoz dashboards (#1464). `common/observability_dashboards.py::DASHBOARD_FILES`
 | L3 Finance Report | fr-app backend | RED SLO: ≥5 5xx and >5% of non-probe requests in 5m / non-probe p95 > 3000ms for 10m | P0/P1 | code (`FinanceReportHigh5xxRate`, `FinanceReportP95LatencyHigh`, and the `Stable` pair that reads the stable HTTP metric, #1465) |
 | L3 Finance Report | fr-app backend | business anomaly: parse spike / rate-limit / async failure | P1/P2/P1 | code (`FinanceReport{StatementParseFailureSpike,RateLimitSaturation,AsyncTaskFailures}`) |
 | L3 Finance Report | fr-app backend | no request metrics from production for 10m (backend down or OTLP export stopped) | P1 | code (`FinanceReportBackendTelemetryAbsent`) |
-| L3 TrueAlpha | truealpha-app llm | 端点与身份已签发(#906);`truealpha/truealpha/observability/alert_rules.json` 签入错误日志、RED SLO 与遥测缺失规则(#1389);`platform/12.alerting/alert_rules.json` 同步签入平台层错误日志规则(`PlatformAlertingErrorLogs`, `PlatformTodoErrorLogs`) | P0/P1 | code (`TrueAlphaAppErrorLogs`, `TrueAlphaHigh5xxRate`, `TrueAlphaP95LatencyHigh`, their `Stable` twins that read the stable HTTP metric (#1465), `TrueAlphaAppTelemetryAbsent`);签发 ✅ `test_truealpha_app.py` |
+| L3 TrueAlpha | truealpha-app llm | 端点与身份已签发(#906);`truealpha/truealpha/observability/alert_rules.json` 签入错误日志、RED SLO 与遥测缺失规则(#1389);`common/alerting/standard_rules.py` 签入平台层错误日志规则(`PlatformAlertingErrorLogs`, `PlatformTodoErrorLogs`) | P0/P1 | code (`TrueAlphaAppErrorLogs`, `TrueAlphaHigh5xxRate`, `TrueAlphaP95LatencyHigh`, their `Stable` twins that read the stable HTTP metric (#1465), `TrueAlphaAppTelemetryAbsent`);签发 ✅ `test_truealpha_app.py` |
 | L3 TrueAlpha | data_engine(Dagster) | host 网络容器经 `http://127.0.0.1:14318` 上报 OTLP(#1231, §4.2);错误日志规则签入 `truealpha/truealpha/observability/alert_rules.json`(#1389),存活同时由容器 healthcheck + breakdown watch 守卫 | P1 | code (`TrueAlphaDataEngineErrorLogs`) |
 | L3 Finance Report | fr-app public route | `report[-staging].zitian.party/` (web) or `/api/health` fails | P0 prod / P2 staging | Live in-band public-route probes (`finance-report-{web,api}-public-route`);prod web 另由 Cloudflare 作为产品外部入口(2 次连续失败)|
 | Cross-cutting | Vault app tokens / rendered env | missing / malformed / invalid / low-TTL / `<no value>` | P0/P1 | Docker healthcheck + `vault-audit.self-refresh` |
@@ -449,7 +451,7 @@ Runbook 入库仅交付操作路径；#723 要求的一次现场演练、完整�
 可选 `FEISHU_REPORT_CHAT_ID`(#903,仅 app 模式):带 `delivery=report` 标签的推送(见 SOP-006)改投这个报告群;未设置时仍投告警群,不丢消息。报告卡片无论投到哪都以 `[报告]` 开头(§3.1)。bridge `/health` 的 `report_route` 显示当前走 `report-chat` 还是 `pager-fallback`。
 
 ### SOP-004 / SOP-004B / SOP-004C: 应用 OTEL 错误告警 + 全栈告警目录 config-as-code(#373 / #1106 / #1389)
-1. bridge 健康 + SigNoz API key + Feishu channel(SOP-002/004 步骤)。config-as-code 告警规则目录跨 `finance_report/finance_report/observability/alert_rules.json`、`truealpha/truealpha/observability/alert_rules.json` 与 `platform/12.alerting/alert_rules.json`(`common/observability_dashboards.py::ALERT_RULES_FILES`,#1389)统一加载与校验。
+1. bridge 健康 + SigNoz API key + Feishu channel(SOP-002/004 步骤)。config-as-code 告警规则目录跨 `finance_report/finance_report/observability/alert_rules.json`、`truealpha/truealpha/observability/alert_rules.json` 与 `common/alerting/standard_rules.py`(`common/observability_dashboards.py::load_alert_definitions`,#1389)统一加载与校验。
 2. 应用定义(幂等):
    ```bash
    uv run python -m invoke fr-observability.shared.apply-alerts

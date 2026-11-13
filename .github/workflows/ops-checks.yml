@@ -1127,12 +1127,13 @@ jobs:
           PY
 
   e2e-regressions-smoke:
-    # schedule-signal-exempt: observational real-run proof of the e2e_regressions
-    # smoke tier (docs/ssot/ops.e2e-regressions.md §2's declared CI trigger, which
-    # no workflow actually ran until this job — 6 SSOT docs cited these test files
-    # as "Proof" while nothing produced that evidence). Read-only HTTP/Playwright
-    # checks against the live production estate; delivers no alerts and must
-    # never gate merges. e2e_regressions/ deps are an opt-in `uv` group (#515: kept
+    # signal: e2e-regressions-smoke
+    # Real-run proof of the e2e_regressions smoke tier (docs/ssot/ops.e2e-regressions.md
+    # §2's declared CI trigger). Read-only HTTP/Playwright checks against the live
+    # production estate; never gates merges. A red run opens one issue (key
+    # prod.e2e-smoke) and a green run closes it (page_dedup). The job holds no secret:
+    # the daily watchdog reports the open issue first in its card.
+    # e2e_regressions/ deps are an opt-in `uv` group (#515: kept
     # out of infra-ci's default install so the fast PR unit-test job never pays for
     # deps it doesn't import) — this job is the one place that installs and runs it.
     name: e2e regressions smoke (production)
@@ -1140,6 +1141,15 @@ jobs:
     # Pinned to 24.04: ubuntu-latest moved to 26.04 and the Playwright walks of truealpha failed there (truealpha#1471).
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      # The page-dedup state, one issue per job (common/observability/page_dedup.py).
+      issues: write
+    env:
+      GITHUB_SERVER_URL: ${{ github.server_url }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_RUN_ID: ${{ github.run_id }}
     steps:
       - uses: actions/checkout@v7
 
@@ -1175,3 +1185,57 @@ jobs:
         run: |
           cd ${{ github.workspace }}
           uv run --group e2e --locked pytest e2e_regressions/tests -m smoke -v
+
+      - name: Install runtime dependencies
+        if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        run: |
+          sdk_requirement="$(python tools/sdk_requirement.py)"
+          python -m pip install --no-deps "$sdk_requirement"
+          python -m pip install -e .
+
+      # A red smoke run opens one issue (key prod.e2e-smoke); the same red on a later
+      # day is a `[报告] 仍未恢复 · 第 N 天`; a green run closes it (page_dedup).
+      - name: Alert on confirmed failure
+        if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os
+          from common.observability.page_dedup import Finding, dedup_page, run_url_from_env
+
+          detail = "production e2e smoke suite failed (e2e_regressions/tests -m smoke)"
+          outcome = dedup_page(
+              os.environ,
+              job="e2e-regressions-smoke",
+              label="生产 e2e 冒烟",
+              findings=[Finding("prod.e2e-smoke", detail)],
+              detail=detail,
+              page_message=(
+                  f"🚨 {detail}.\nRun: {run_url_from_env(os.environ)}"
+              ),
+              # No Feishu secret here: the daily watchdog reads the state issue and
+              # puts it first in the report card (tools/out_of_band_watchdog.py).
+              deliver_page=lambda _env, message: print(message),
+              deliver_report=lambda text, _env: print(text) or True,
+          )
+          raise SystemExit(outcome.exit_code)
+          PY
+
+      - name: Resolve the paged failures
+        if: success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os
+          from common.observability.page_dedup import resolve_page_state
+
+          outcome = resolve_page_state(
+              os.environ,
+              job="e2e-regressions-smoke",
+              label="生产 e2e 冒烟",
+              deliver_page=lambda _env, message: print(message),
+          )
+          raise SystemExit(outcome.exit_code)
+          PY

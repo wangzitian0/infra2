@@ -13,6 +13,8 @@ from common.core.no_new_wheels_lint import (
     registered_signal_names,
 )
 
+ROOT = Path(__file__).resolve().parents[2]
+
 
 def test_current_tree_passes() -> None:
     signals = registered_signal_names()
@@ -181,3 +183,64 @@ def test_workflow_callsite_without_signal_or_direct_pager_on_day_report_fails(
     assert any(
         "bypass-dedup.yml job 'audit'" in err and "dedup_page" in err for err in errors
     )
+
+
+def test_e2e_smoke_job_opens_and_closes_one_issue(monkeypatch, capsys) -> None:
+    """#1649: the real steps of `e2e-regressions-smoke`, executed. A red run opens one
+    issue with key prod.e2e-smoke; the same red again opens no second issue; a green run
+    closes it. The job names a registered signal, holds no secret and has no
+    schedule-signal-exempt marker. The daily watchdog reports the open issue first."""
+    from common.observability import page_dedup as pd
+    from common.tests.test_page_dedup import SCHEDULED, FakeIssues, _execute, _steps
+    from tools import out_of_band_watchdog as watchdog
+
+    text = (ROOT / ".github/workflows/ops-checks.yml").read_text(encoding="utf-8")
+    block = text.split("\n  e2e-regressions-smoke:\n", 1)[1].split("\n  [a-z", 1)[0]
+    assert "# signal: e2e-regressions-smoke" in block
+    assert "schedule-signal-exempt" not in block
+    assert "secrets." not in block  # a production-credential job needs a contract row
+    assert "e2e-regressions-smoke" in registered_signal_names()
+    steps = _steps("e2e-regressions-smoke")
+    assert steps["Alert on confirmed failure"]["if"].startswith("failure() &&")
+    assert steps["Resolve the paged failures"]["if"].startswith("success() &&")
+
+    api = FakeIssues()
+    monkeypatch.setattr(pd, "_api_from_env", lambda _env: api)
+    for name, value in SCHEDULED.items():
+        monkeypatch.setenv(name, value)
+    job = "e2e-regressions-smoke"
+    alert, resolve = "Alert on confirmed failure", "Resolve the paged failures"
+
+    assert _execute(job, alert) == 0
+    assert _execute(job, alert) == 0  # the same red again: still one issue
+    assert api.open_titles() == [pd.state_title(job)]
+    (issue,) = api.issues.values()
+    assert "prod.e2e-smoke" in issue["body"]
+    assert capsys.readouterr().out.count("production e2e smoke suite failed") >= 1
+
+    monkeypatch.setattr(watchdog, "GitHubIssues", lambda *_a: api)
+    (result,) = watchdog.run_e2e_smoke_state_check({**SCHEDULED, "GITHUB_TOKEN": "t"})
+    assert result.ok and "Production e2e smoke is red" in result.note
+
+    assert _execute(job, resolve) == 0
+    assert api.open_titles() == []
+    assert watchdog.run_e2e_smoke_state_check({**SCHEDULED, "GITHUB_TOKEN": "t"}) == []
+
+
+def test_unreadable_e2e_state_is_a_warning_note_not_silence(monkeypatch) -> None:
+    """#1649: a failed GitHub state read shows as a warning line in the report."""
+    from common.observability import page_dedup as pd
+    from tools import out_of_band_watchdog as watchdog
+
+    class Broken:
+        def open_issues(self, *, with_body: bool = False):
+            raise RuntimeError("HTTP 502")
+
+    monkeypatch.setattr(watchdog, "GitHubIssues", lambda *_a: Broken())
+    env = {"GITHUB_REPOSITORY": "o/r", "GITHUB_TOKEN": "t"}
+    (result,) = watchdog.run_e2e_smoke_state_check(env)
+
+    assert (
+        result.ok and "could not be read" in result.note and "HTTP 502" in result.note
+    )
+    assert pd.UNREADABLE == "unreadable"

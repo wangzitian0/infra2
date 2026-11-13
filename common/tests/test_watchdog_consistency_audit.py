@@ -740,3 +740,14 @@ def test_the_iac_runner_condition_has_one_pager_and_the_daily_step_reports() -> 
         "condition iac-runner-health has 2 paging owners: "
         "['internal:production.iac-runner-http', 'self:global.infra2.iac-runner-health']"
     ]
+
+
+def test_staging_audit_rows_are_reports_and_production_rows_are_alerts() -> None:
+    """#1649: staging never pages, so its SigNoz rows are `report`; production pages."""
+    rows = _load_audit()._signoz_signal_entries()
+
+    staging = [r for r in rows if r["environment"] == "staging"]
+    production = [r for r in rows if r["environment"] == "production"]
+    assert staging and production
+    assert {r["type"] for r in staging} == {"report"}
+    assert {r["type"] for r in production} == {"alert"}

@@ -137,7 +137,6 @@ def test_observability_files_are_dynamically_discovered_from_service_dirs(
     assert tuple(p.relative_to(ROOT).as_posix() for p in obs.ALERT_RULES_FILES) == (
         "finance_report/finance_report/observability/alert_rules.json",
         "truealpha/truealpha/observability/alert_rules.json",
-        "platform/12.alerting/alert_rules.json",
     )
     assert tuple(p.relative_to(ROOT).as_posix() for p in obs.DASHBOARD_FILES) == (
         "finance_report/finance_report/observability/dashboard.json",

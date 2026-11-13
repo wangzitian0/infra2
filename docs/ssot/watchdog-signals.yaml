@@ -787,6 +787,21 @@ signals:
     tier: day
     type: report
 
+  # The daily production e2e smoke (#1649). ops-checks.yml `e2e-regressions-smoke`
+  # (cron "13 5 * * *"): a red run opens one page_dedup issue (key prod.e2e-smoke),
+  # reports "仍未恢复 · 第 N 天" while it stays red, and a green run closes it.
+  - signal_id: global.infra2.e2e-regressions-smoke
+    environment: global
+    component: iac
+    signal: e2e-regressions-smoke
+    primary_owner: self
+    failure_class: service-health
+    layer: github
+    severity: warning
+    cadence: 1d
+    tier: day
+    type: report
+
   # Scheduled ops-checks jobs (#425 T2 & T4 cadence convergence).
   - signal_id: global.infra2.deploy-guard-audit
     environment: global

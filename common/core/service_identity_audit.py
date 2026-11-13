@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.core.service_identity import ServiceIdentity  # noqa: E402
+from common.alerting.standard_rules import ENVIRONMENTS, STANDARD_RULES  # noqa: E402
 from common.core.registry import all_services, service_attrs  # noqa: E402
 from common.observability.watchdog_audit import audit as audit_watchdog  # noqa: E402
 
@@ -60,21 +61,28 @@ def audit() -> list[str]:
                     f"deployment boundary lacks {marker}: {path.relative_to(ROOT)}"
                 )
 
-    for path in _owned_alert_catalogs():
-        data = json.loads(path.read_text(encoding="utf-8"))
-        service_id = str(data.get("service_id", ""))
-        environment = str(data.get("environment", ""))
-        if service_id not in registered:
-            errors.append(
-                f"alert catalog has unknown service_id {service_id!r}: {path.relative_to(ROOT)}"
-            )
-            continue
-        try:
-            ServiceIdentity.build(service_id, environment)
-        except ValueError as exc:
-            errors.append(
-                f"invalid alert catalog identity {path.relative_to(ROOT)}: {exc}"
-            )
+    catalogs = [
+        (str(path.relative_to(ROOT)), json.loads(path.read_text(encoding="utf-8")))
+        for path in _owned_alert_catalogs()
+    ]
+    catalogs.append(("common/alerting/standard_rules.py", {"rules": STANDARD_RULES}))
+    for label, data in catalogs:
+        # Rules of the standard table carry their own service_id; a catalog has one.
+        service_ids = {
+            str(data.get("service_id") or rule.get("service_id", ""))
+            for rule in data["rules"]
+        }
+        for service_id in sorted(service_ids):
+            if service_id not in registered:
+                errors.append(
+                    f"alert catalog has unknown service_id {service_id!r}: {label}"
+                )
+                continue
+            for environment in ENVIRONMENTS:
+                try:
+                    ServiceIdentity.build(service_id, environment)
+                except ValueError as exc:
+                    errors.append(f"invalid alert catalog identity {label}: {exc}")
 
     errors.extend(f"watchdog: {error}" for error in audit_watchdog())
     return errors

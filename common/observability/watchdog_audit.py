@@ -343,32 +343,49 @@ def _signoz_signal_entries() -> list[dict[str, Any]]:
     ``test_signoz_rows_derive_from_every_alert_rule`` holds the two readers together.
     Every rule pages through the bridge from the VPS.
     """
-    entries: list[dict[str, Any]] = []
+    from common.alerting.delivery import is_report_only_environment
+    from common.alerting.standard_rules import (
+        ENVIRONMENTS,
+        STANDARD_RULES,
+        expand_rules,
+    )
+
+    catalogs: list[dict[str, Any]] = [{"rules": list(STANDARD_RULES)}]
     for path in sorted(ROOT.glob("**/alert_rules.json")):
         relative = path.relative_to(ROOT)
         if relative.parts[0] in {"repos", "oh-my-code-agent"} or any(
             part.startswith(".") for part in relative.parts
         ):
             continue
-        data = json.loads(path.read_text(encoding="utf-8"))
-        environment = str(data.get("environment") or "")
-        for rule in data.get("rules") or []:
-            name = str(rule["alert_name"])
-            entries.append(
-                {
-                    "signal_id": f"{environment}.{name}.signoz",
-                    "environment": environment,
-                    "component": str(rule.get("service_id") or data.get("service_id")),
-                    "signal": name,
-                    "primary_owner": "signoz",
-                    "failure_class": "service-health",
-                    "severity": str(rule.get("severity") or "warning"),
-                    "tier": "minute",
-                    "type": "alert",
-                    "consecutive_failures": 1,
-                    "renotify_window_sec": 0,
-                }
-            )
+        catalogs.append(json.loads(path.read_text(encoding="utf-8")))
+
+    entries: list[dict[str, Any]] = []
+    for data in catalogs:
+        # No top-level `environment`: the loader expands the catalog for each one.
+        declared = str(data.get("environment") or "")
+        for environment in (declared,) if declared else ENVIRONMENTS:
+            report_only = is_report_only_environment(environment)
+            rules = data.get("rules") or []
+            for rule in rules if declared else expand_rules(rules, environment):
+                name = str(rule["alert_name"])
+                entries.append(
+                    {
+                        "signal_id": f"{environment}.{name}.signoz",
+                        "environment": environment,
+                        "component": str(
+                            rule.get("service_id") or data.get("service_id")
+                        ),
+                        "signal": name,
+                        "primary_owner": "signoz",
+                        "failure_class": "service-health",
+                        "severity": str(rule.get("severity") or "warning"),
+                        # Staging never pages (#904): the bridge sends it as a report.
+                        "tier": "day" if report_only else "minute",
+                        "type": "report" if report_only else "alert",
+                        "consecutive_failures": 1,
+                        "renotify_window_sec": 0,
+                    }
+                )
     return entries
 
 
