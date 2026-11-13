@@ -78,7 +78,7 @@ platform compose 中的镜像禁止浮动 tag——上游静默漂移且不可�
 
 ### Rule 7: 发布前 Schema 与枚举双向校验 (Pre-Deploy Schema Gate, #698)
 在任何涉及持久化存储的应用部署销毁或重启容器前，必须执行 Pre-Deploy Schema Gate（`tools/pre_deploy_schema_check.py`）：
-- **双向严格比对**：代码缺失 DB 已有枚举（`missing_in_code`）或 DB 缺失代码枚举（`missing_in_db`）均视为不兼容阻断项。例外（#1658）：`missing_in_db` 且仅有 `missing_in_db` 的差异，若镜像内一个比数据库 alembic head 更新的待执行迁移写出了该枚举类型名和全部缺失标签，则不阻断，并输出 `PENDING_MIGRATION_COVERS: <枚举> (<revision>)`；镜像入口在门禁之后执行 `alembic upgrade head`。`missing_in_code`、大小写漂移、未被待执行迁移点名的差异、读不到数据库 head 或迁移文件时，仍然阻断。
+- **双向严格比对**：代码缺失 DB 已有枚举（`missing_in_code`）或 DB 缺失代码枚举（`missing_in_db`）均视为不兼容阻断项。例外（#1658）：整个枚举类型在数据库中不存在（`missing_in_db` 为其全部标签），且使用该类型的每一张表都不在数据库中，则不阻断，并输出 `NEW_TABLE_COVERS: <枚举> (<表>)`。依据：镜像入口在门禁之后执行 `alembic upgrade head`，新表只能由待执行迁移创建，新表的列只能引用迁移时已存在的类型，所以同一迁移会创建该类型；门禁不读取迁移文件（文本与 `ast` 两种读法都被独立复核证明不能确定 `upgrade()` 的实际效果）。仍然阻断：已有类型缺少标签、`missing_in_code`、大小写漂移、类型的某张表已在数据库中（漂移）、读不到表清单。已知限制：新标签加到已有类型上（`ALTER TYPE ... ADD VALUE`）不在此例外内，需要拆成两次发布。
 - **Fail-Closed 原则**：数据库查询失败、连接超时或解析异常一律视为不满足，强制中断发布流程。
 - **未评估即阻断（#718 review）**：没有数据库 URL、服务未登记代码侧枚举来源（`ENUM_SOURCES`）或该来源导入失败/没有任何原生枚举，均输出 `NOT EVALUATED` 并以退出码 3 阻断——“什么都没比”绝不等于“0 处不一致”。退出码：0 通过 · 1 不一致或 DB 失败 · 3 未评估。
 - **代码侧真源**：服务自己的 SQLAlchemy metadata（finance_report：`import src.orm_registry` 后的 `src.database:Base.metadata`，Postgres 枚举类型名取自 `Enum(name=...)`），因此门禁在应用自己的 Python 环境里运行（`--app-path <finance_report checkout>/apps/backend`）。已通过 `common.deploy.schema_gate` 接入 `common.deploy.promote`（在容器替换前通过 SSH 在待发布镜像内执行 `tools/pre_deploy_schema_check.py`）。

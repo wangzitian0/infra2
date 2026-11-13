@@ -8,14 +8,17 @@ caused finance_report backend to fail during startup, bringing the service down 
 
 Audit-hardened (反事实审计 2026-09-16):
 - Bidirectional comparison: missing_in_db AND missing_in_code both block deploy.
-  DB superset is the most dangerous runtime divergence.
+  DB superset is the most dangerous runtime divergence. One exception (#1658): a whole
+  enum type that the database lacks, and that only tables missing from the database use,
+  does not block: the image's start-up migration creates those tables and so the type.
+  See ``cover_with_new_tables``.
 - Fail-closed: any exception (query failure, parse error) blocks deploy.
   A check that silently fails is worse than no check.
 - Never a silent pass (#718 review): a gate that cannot load its code-side enums or
   has no database to compare against has not evaluated anything, so it exits
   ``EXIT_NOT_EVALUATED`` — non-zero, like a finding.
 
-Exit codes: 0 verified (0 discrepancies) · 1 blocked (discrepancy or DB failure) ·
+Exit codes: 0 verified (0 discrepancies, or only covered ones) · 1 blocked (discrepancy or DB failure) ·
 3 not evaluated (an input is unavailable) — also blocking.
 
 The code side is the service's own SQLAlchemy metadata, so the gate runs where the
@@ -35,7 +38,7 @@ import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Collection, Iterator, Mapping, Sequence
 
 EXIT_OK = 0
 EXIT_BLOCKED = 1
@@ -61,8 +64,6 @@ class EnumSource:
     against ``migration_table`` (default ``alembic_version.version_num``) (#609).
     ``preconditions`` declares named read-only SQL predicates ``(name, sql, remedy)``
     that must all hold before any container is replaced (#609).
-    ``migrations_path`` (relative to ``--app-path`` or the working directory) holds the
-    alembic revision files; empty turns the pending-migration tolerance off (#1658).
     """
 
     metadata: str
@@ -72,7 +73,6 @@ class EnumSource:
     migration_table: str = "alembic_version"
     migration_column: str = "version_num"
     preconditions: tuple[tuple[str, str, str], ...] = ()
-    migrations_path: str = ""
 
 
 # finance_report's backend is the ``src`` package under apps/backend of the
@@ -86,7 +86,6 @@ ENUM_SOURCES: dict[str, EnumSource] = {
         metadata="src.database:Base.metadata",
         imports=("src.orm_registry",),
         app_path="<finance_report checkout>/apps/backend",
-        migrations_path="migrations/versions",
     ),
 }
 
@@ -281,92 +280,32 @@ def check_enums(
     return discrepancies
 
 
-_REVISION_RE = re.compile(r"""^revision\b[^=\n]*=\s*["']([^"']+)["']""", re.MULTILINE)
-_DOWN_REVISION_RE = re.compile(r"^down_revision\b[^=\n]*=\s*(.+)$", re.MULTILINE)
-_QUOTED_RE = re.compile(r"""["']([^"']+)["']""")
-
-
-def _revision_graph(versions_dir: Path) -> dict[str, tuple[tuple[str, ...], str]]:
-    """``{revision: (parent revisions, file text)}`` for every alembic file in ``versions_dir``."""
-    graph: dict[str, tuple[tuple[str, ...], str]] = {}
-    for path in sorted(versions_dir.glob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        revision = _REVISION_RE.search(text)
-        if revision is None:
-            continue
-        down = _DOWN_REVISION_RE.search(text)
-        parents = tuple(_QUOTED_RE.findall(down.group(1))) if down else ()
-        graph[revision.group(1)] = (parents, text)
-    return graph
-
-
-def _pending_revisions(
-    graph: Mapping[str, tuple[tuple[str, ...], str]], applied_heads: Sequence[str]
-) -> dict[str, str]:
-    """``{revision: file text}`` of every revision newer than the applied heads.
-
-    A head that the files do not know has no children, so nothing is pending.
-    """
-    children: dict[str, list[str]] = {}
-    for revision, (parents, _text) in graph.items():
-        for parent in parents:
-            children.setdefault(parent, []).append(revision)
-    pending: dict[str, str] = {}
-    queue = list(applied_heads)
-    while queue:
-        for child in children.get(queue.pop(), ()):
-            if child not in pending:
-                pending[child] = graph[child][1]
-                queue.append(child)
-    return pending
-
-
-def _migration_names(text: str, discrepancy: EnumDiscrepancy) -> bool:
-    """True when the migration text names the enum type and quotes every missing label."""
-    if not re.search(rf"\b{re.escape(discrepancy.enum_name)}\b", text):
-        return False
-    return all(
-        re.search(rf"""["']{re.escape(label)}["']""", text)
-        for label in discrepancy.missing_in_db
-    )
-
-
-def cover_with_pending_migrations(
+def cover_with_new_tables(
     discrepancies: Sequence[EnumDiscrepancy],
     *,
-    applied_heads: Sequence[str],
-    versions_dir: Path,
-) -> tuple[list[EnumDiscrepancy], list[tuple[str, str]]]:
-    """Split off the additive discrepancies that a pending migration will fix (#1658).
+    enum_tables: Mapping[str, frozenset[str]],
+    db_tables: Collection[str],
+) -> tuple[list[EnumDiscrepancy], list[tuple[str, tuple[str, ...]]]]:
+    """Split off a whole enum type that only tables missing from the database use (#1658).
 
-    The image runs ``alembic upgrade head`` after this gate, so a type or label that code
-    declares and the database lacks is fine when a migration newer than the database's head
-    names it. Returns ``(blocking, covered)`` with ``covered`` as ``(enum name, revision)``.
-    Only ``missing_in_db`` can be covered; a DB-only label and a casing drift always block.
-    An unknown head covers nothing. The caller treats any error here as "nothing covered".
+    The image runs ``alembic upgrade head`` after this gate. A table that the database
+    lacks is created by a pending migration, and a column of that table can only name a
+    type that exists by then, so the same migration creates the type. Nothing here reads
+    migration code. Covered: a type that the database lacks entirely, when every table
+    that uses it is missing from the database and nothing else is wrong with it. Always
+    blocking: a label that an existing type lacks, a DB-only label, a casing drift, and a
+    type that any table already in the database uses. Returns ``(blocking, covered)``
+    with ``covered`` as ``(enum name, its new tables)``.
     """
-    pending = _pending_revisions(_revision_graph(versions_dir), applied_heads)
+    existing = set(db_tables)
     blocking: list[EnumDiscrepancy] = []
-    covered: list[tuple[str, str]] = []
+    covered: list[tuple[str, tuple[str, ...]]] = []
     for discrepancy in discrepancies:
-        revision = None
-        if (
-            discrepancy.missing_in_db
-            and not discrepancy.missing_in_code
-            and not discrepancy.casing_mismatches
-        ):
-            revision = next(
-                (
-                    rev
-                    for rev, text in sorted(pending.items())
-                    if _migration_names(text, discrepancy)
-                ),
-                None,
-            )
-        if revision is None:
-            blocking.append(discrepancy)
+        tables = enum_tables.get(discrepancy.enum_name, frozenset())
+        if not discrepancy.db_values and tables and not tables & existing:
+            covered.append((discrepancy.enum_name, tuple(sorted(tables))))
         else:
-            covered.append((discrepancy.enum_name, revision))
+            blocking.append(discrepancy)
     return blocking, covered
 
 
@@ -402,27 +341,40 @@ def _enum_type(column_type: Any) -> Any | None:
     return None
 
 
-def enums_from_metadata(metadata: Any) -> dict[str, tuple[str, ...]]:
-    """``{postgres enum type name: labels}`` for every native enum column on ``metadata``."""
+def _native_enum_columns(metadata: Any) -> Iterator[tuple[str, Any]]:
+    """``(table name, native enum type)`` for every native enum column on ``metadata``."""
     tables = getattr(metadata, "tables", None)
     if not isinstance(tables, Mapping):
         raise GateNotEvaluated(
             f"{type(metadata).__name__} is not a SQLAlchemy MetaData (no .tables)"
         )
-    enums: dict[str, tuple[str, ...]] = {}
-    for table in tables.values():
+    for key, table in tables.items():
         for column in table.columns:
             enum_type = _enum_type(column.type)
-            if enum_type is None:
-                continue
-            labels = tuple(str(label) for label in enum_type.enums)
-            known = enums.setdefault(enum_type.name, labels)
-            if set(known) != set(labels):
-                raise GateNotEvaluated(
-                    f"enum type {enum_type.name!r} is declared with different labels "
-                    f"on two columns: {sorted(known)} vs {sorted(labels)}"
-                )
+            if enum_type is not None:
+                yield key.rsplit(".", 1)[-1], enum_type
+
+
+def enums_from_metadata(metadata: Any) -> dict[str, tuple[str, ...]]:
+    """``{postgres enum type name: labels}`` for every native enum column on ``metadata``."""
+    enums: dict[str, tuple[str, ...]] = {}
+    for _table, enum_type in _native_enum_columns(metadata):
+        labels = tuple(str(label) for label in enum_type.enums)
+        known = enums.setdefault(enum_type.name, labels)
+        if set(known) != set(labels):
+            raise GateNotEvaluated(
+                f"enum type {enum_type.name!r} is declared with different labels "
+                f"on two columns: {sorted(known)} vs {sorted(labels)}"
+            )
     return enums
+
+
+def enum_tables_from_metadata(metadata: Any) -> dict[str, frozenset[str]]:
+    """``{postgres enum type name: names of the tables whose columns use it}`` (#1658)."""
+    users: dict[str, set[str]] = {}
+    for table, enum_type in _native_enum_columns(metadata):
+        users.setdefault(enum_type.name, set()).add(table)
+    return {name: frozenset(tables) for name, tables in users.items()}
 
 
 def load_code_enums_for_service(
@@ -634,16 +586,17 @@ def evaluate_db_preconditions(
     )
 
 
-def fetch_applied_heads(db_url: str, source: EnumSource) -> tuple[str, ...]:
-    """The alembic heads recorded in the target database (#1658)."""
-    return _with_libpq_cursor(
-        db_url,
-        lambda cur: query_applied_migrations(
-            cur,
-            migration_table=source.migration_table,
-            migration_column=source.migration_column,
-        ),
-    )
+def fetch_db_tables(db_url: str) -> frozenset[str]:
+    """The names of every table in the target database (#1658)."""
+
+    def read(cursor: Any) -> frozenset[str]:
+        cursor.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema');"
+        )
+        return frozenset(str(row[0]) for row in cursor.fetchall())
+
+    return _with_libpq_cursor(db_url, read)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -705,19 +658,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"APPLIED_MIGRATION: {','.join(applied_migrations)}")
 
     discrepancies = check_enums(code_enums, db_enums)
-    covered: list[tuple[str, str]] = []
-    if discrepancies and source is not None and source.migrations_path:
-        base = Path(args.app_path).expanduser() if args.app_path else Path.cwd()
+    covered: list[tuple[str, tuple[str, ...]]] = []
+    if discrepancies:
         try:
-            discrepancies, covered = cover_with_pending_migrations(
+            discrepancies, covered = cover_with_new_tables(
                 discrepancies,
-                applied_heads=fetch_applied_heads(db_url, source),
-                versions_dir=base / source.migrations_path,
+                enum_tables=enum_tables_from_metadata(
+                    _resolve(ENUM_SOURCES[args.service].metadata)
+                ),
+                db_tables=fetch_db_tables(db_url),
             )
-        except Exception:  # noqa: BLE001 - fail closed: an unreadable head or file covers nothing
+        except Exception:  # noqa: BLE001 - fail closed: an unreadable input covers nothing
             covered = []
-    for enum_name, revision in covered:
-        print(f"PENDING_MIGRATION_COVERS: {enum_name} ({revision})")
+    for enum_name, tables in covered:
+        print(f"NEW_TABLE_COVERS: {enum_name} ({', '.join(tables)})")
     # Printed on stdout (never stderr) in both branches below, as a stable-format line a
     # caller can grep for, regardless of whether the gate itself passed or blocked. This
     # process normally runs remotely, over SSH inside the app's own container
@@ -753,7 +707,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"Pre-deploy schema check verified for service: {args.service} "
         f"({len(code_enums)} enum types, 0 discrepancies"
-        f"{f', {len(covered)} covered by pending migrations' if covered else ''})"
+        f"{f', {len(covered)} covered by new tables' if covered else ''})"
     )
     print(f"ROLLBACK_CLASS: {rollback_class}")
     return EXIT_OK
