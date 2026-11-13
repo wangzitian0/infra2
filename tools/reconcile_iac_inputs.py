@@ -99,7 +99,7 @@ SERVICE_TO_APP_REPO_ID: dict[str, str] = {
 def _stage_slots_csv(stage: str) -> str:
     """Return comma-separated deploy+post hook slots for ``stage`` from ``STAGE_HOOK_PLANS`` (#1608)."""
     plan_spec = stage_hook_plan(stage)
-    return ",".join(s for s in (plan_spec.deploy_slot, plan_spec.post_slot) if s)
+    return ",".join(s for s in (plan_spec.operation_slot, plan_spec.post_slot) if s)
 
 
 def _discover_local_service_hook_manifests(

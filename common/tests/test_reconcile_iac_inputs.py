@@ -3155,7 +3155,7 @@ def test_stage_hook_plans_ssot_and_workflow_wiring() -> None:
     covered_slots = {
         slot
         for plan in STAGE_HOOK_PLANS.values()
-        for slot in (plan.deploy_slot, plan.post_slot)
+        for slot in (plan.operation_slot, plan.post_slot)
         if slot
     }
     assert covered_slots == set(HOOK_SLOTS)
