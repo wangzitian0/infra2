@@ -12,7 +12,6 @@ import infra2_sdk
 from infra2_sdk.runtime.config_schema import (
     EnvironmentField,
     EnvironmentManifest,
-    _FieldSource,
 )
 from infra2_sdk.secrets import render_agent_policy, render_agent_template
 
@@ -229,7 +228,7 @@ def _scaffold_manifest(
                 has_default=False,
                 sensitive=True,
                 group="Database",
-                source=_FieldSource.HUMAN,
+                source="human",
             ),
         )
     return EnvironmentManifest(
@@ -378,7 +377,7 @@ def read_root():
 
 
 def _generate_dockerfile(port: int) -> str:
-    return f"""FROM python:3.12-slim
+    return f"""FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 
 WORKDIR /app
 
