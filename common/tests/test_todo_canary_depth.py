@@ -1984,6 +1984,10 @@ def test_todo_runtime_hooks_manifest_declares_all_five_slots() -> None:
         assert "python3 probe_health.py" in spec.run, slot_name
         assert "urllib.request.urlopen" not in spec.run, slot_name
     assert "--require-service platform/todo" in manifest.slots["staging_gate"].run
+    for gate in ("staging_gate", "prod_gate"):
+        assert manifest.slots[gate].run.endswith(" --gate"), gate
+        assert "EXPECTED_SHA" in manifest.slots[gate].required_env, gate
+    assert "--gate" not in manifest.slots["smoke"].run
     assert (SERVICE_DIR / "probe_health.py").is_file()
 
     for slot in HOOK_SLOTS:
@@ -2034,3 +2038,59 @@ def test_todo_rendered_mount_fingerprints_and_compose_labels(deploy) -> None:
         "infra2.mount.secrets.ctmpl.sha256=${IAC_MOUNT_SHA256_SECRETS_CTMPL:-}"
         in agent_labels
     )
+
+
+def test_probe_health_gate_fails_on_red_canary_and_sha_mismatch(
+    monkeypatch,
+) -> None:
+    """AC3 (#1635): gate mode fails on a red verdict, a missing verdict and a SHA mismatch."""
+    from types import SimpleNamespace
+
+    probe = _load("probe_health_gate", SERVICE_DIR / "probe_health.py")
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD^{commit}"],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    ).stdout.strip()
+    monkeypatch.chdir(ROOT)
+    monkeypatch.setenv("EXPECTED_SHA", "HEAD")
+    base = {"ok": True, "service": "platform/todo", "git_sha": sha}
+
+    def run(body: dict, *flags: str) -> int:
+        monkeypatch.setattr(
+            probe,
+            "poll_until_healthy",
+            lambda *a, **k: SimpleNamespace(body=json.dumps(body)),
+        )
+        return probe.main(["https://x.example", *flags])
+
+    good = {**base, "canary": {"ok": True, "checked_at": "2026-11-13T00:00:00Z"}}
+    assert run(good, "--gate") == 0
+    for bad in (
+        {**base, "canary": {"ok": False}},
+        dict(base),
+        {**good, "git_sha": "0" * 40},
+    ):
+        with pytest.raises(AssertionError):
+            run(bad, "--gate")
+    assert run({**base, "canary": {"ok": False}}) == 0  # no gate: status only
+
+
+def test_health_body_carries_the_cached_canary_verdict(app, monkeypatch) -> None:
+    """#1635: public /api/health stays 200 and holds `canary` and `git_sha`, no host or error."""
+    from starlette.testclient import TestClient
+
+    _env(monkeypatch)
+    _patch_probes(
+        app,
+        monkeypatch,
+        s3={"status": "fail", "latency_ms": 2.0, "detail": "AccessDenied"},
+    )
+    response = TestClient(app.fastapi_app).get("/api/health")
+    body = response.json()
+    assert response.status_code == 200
+    assert body["canary"]["ok"] is False
+    assert "git_sha" in body
+    assert "AccessDenied" not in response.text

@@ -925,6 +925,7 @@ def _resolved_git_sha() -> str:
 @fastapi_app.api_route("/api/health", methods=["GET", "HEAD"], tags=["Observability"])
 def fastapi_api_health() -> Response:
     git_sha = _resolved_git_sha()
+    verdict = cached_canary_status()
     return JSONResponse(
         status_code=200,
         content={
@@ -934,6 +935,10 @@ def fastapi_api_health() -> Response:
             "domain": "todo.zitian.party",
             "version": git_sha,
             "git_sha": git_sha,
+            "canary": {
+                "ok": verdict.get("ok") is True,
+                "checked_at": verdict.get("timestamp"),
+            },
             "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
         },
     )

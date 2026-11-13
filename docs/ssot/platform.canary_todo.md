@@ -56,7 +56,7 @@ The document returns HTTP 200 only when every gating check passes. It returns HT
 
 | Surface | Who can reach it | Used by |
 |---------|------------------|---------|
-| `GET /api/health` | Public (Traefik router priority 100, exact path) | Container healthcheck, external probes |
+| `GET /api/health` | Public (Traefik router priority 100, exact path) | Container healthcheck, `staging_gate` and `prod_gate` |
 | `GET /api/canary/status` | The Docker network, and SSO users through the protected router | Probe runner (`todo-canary-status`), the dashboard |
 | `GET /` and the rest | SSO users only (Authentik ForwardAuth, priority 10) | People |
 
@@ -84,7 +84,7 @@ A deploy therefore turns the pillar red for one window, not for the rest of the 
 
 - **Startup environment validation**: `validate_startup_environment()` in `platform/30.todo/app.py` calls `assert_environment(ENV_MANIFEST_PATH, environ=environ, require_injected=True)` during `main()` startup so missing required variables in `platform/30.todo/env.manifest.json` fail closed before Uvicorn binds.
 - **Mount fingerprints**: `TodoDeployer.rendered_mount_fingerprints()` in `platform/30.todo/deploy.py` computes SHA-256 digests of the rendered `vault-agent.hcl` and `secrets.ctmpl` files and injects `IAC_MOUNT_SHA256_VAULT_AGENT_HCL` and `IAC_MOUNT_SHA256_SECRETS_CTMPL` into `platform/30.todo/compose.yaml`, forcing container recreation when secret templates change.
-- **Runtime verification hooks**: `platform/30.todo/runtime-hooks.manifest.json` declares the 5-slot schema v2 verification contract (`smoke`, `preview_gate`, `staging_gate`, `prod_gate`, `scheduled_audit`) and is registered in `tools/reconcile_iac_inputs.py` (`LOCAL_SERVICE_HOOK_MANIFESTS`).
+- **Runtime verification hooks**: `platform/30.todo/runtime-hooks.manifest.json` declares the 5-slot schema v2 verification contract (`smoke`, `preview_gate`, `staging_gate`, `prod_gate`, `scheduled_audit`). `staging_gate` and `prod_gate` pass only when the `/api/health` body has `canary.ok` true and `git_sha` equal to the commit of `EXPECTED_SHA`; `smoke` reads the HTTP status and is registered in `tools/reconcile_iac_inputs.py` (`LOCAL_SERVICE_HOOK_MANIFESTS`).
 - **Dashboard & custom OTel metrics**: `platform/30.todo/dashboard.json` defines the SigNoz v5 dashboard discovered by `common/observability_dashboards.py`, charting `canary.probe.duration_ms` and `canary.probe.outcomes`.
 
 ## 4. Credentials

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import subprocess
 from collections.abc import Sequence
 
 from infra2_sdk.deploy import default_http_get, poll_until_healthy
@@ -20,6 +22,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--require-service",
         default="",
         help="Require payload['service'] to equal this value.",
+    )
+    parser.add_argument(
+        "--gate",
+        action="store_true",
+        help="Require canary.ok true and git_sha equal to the commit of $EXPECTED_SHA.",
     )
     parser.add_argument(
         "--timeout",
@@ -41,6 +48,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise AssertionError(response.body)
     if args.require_service and payload.get("service") != args.require_service:
         raise AssertionError(response.body)
+    if args.gate:
+        expected = subprocess.run(
+            ["git", "rev-parse", f"{os.environ['EXPECTED_SHA']}^{{commit}}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        canary = payload.get("canary")
+        if not isinstance(canary, dict) or canary.get("ok") is not True:
+            raise AssertionError(f"canary verdict is not ok: {canary!r}")
+        if payload.get("git_sha") != expected:
+            raise AssertionError(f"git_sha {payload.get('git_sha')!r} != {expected}")
     return 0
 
 

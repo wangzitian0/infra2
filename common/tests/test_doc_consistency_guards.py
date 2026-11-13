@@ -396,3 +396,18 @@ def test_delivery_model_has_one_owner() -> None:
     assert not copies, (
         f"Stage model copied outside ops.pipeline.md section 2.0: {copies}"
     )
+
+
+def test_docs_claim_no_unrun_canary_verify_soak() -> None:
+    """#1635: no workflow runs `canary_verify` or a 10 minute soak, so docs must not claim it."""
+    pattern = re.compile(
+        r"canary_verify --env staging|10 分钟浸润|runs Canary verification"
+    )
+    files = [ROOT / "init.md", *sorted((ROOT / "docs").rglob("*.md"))]
+    hits = [
+        f"{f.relative_to(ROOT)}:{n}"
+        for f in files
+        for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1)
+        if pattern.search(line)
+    ]
+    assert hits == []
