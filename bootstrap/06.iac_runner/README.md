@@ -154,7 +154,7 @@ authoritative version of all three.
 
 3. **Soak in staging**, then promote the same immutable tag:
    ```bash
-   gh workflow run reconcile-iac-inputs.yml -f promote_prod=true -f ref=v1.2.4
+   gh workflow run reconcile-iac-inputs.yml -f promote_prod=true -f after=v1.2.4
    ```
    Requires the `production` GitHub Environment. Production is never reached by
    skipping staging, and the `production/v1.2.4` marker is what records that it was.

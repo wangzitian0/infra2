@@ -106,11 +106,11 @@ def test_fails_distinctly_on_absent_traces() -> None:
 
 
 def test_logs_query_uses_nanosecond_bound_and_resource_filters() -> None:
-    q = smoke._logs_count_query(
+    q = smoke.logs_query(
         service_name="finance-report-backend",
         environment="staging",
         version="v0.1.20",
-        window_minutes=15,
+        window_seconds=900,
     )
     assert "distributed_logs_v2" in q
     assert "toUnixTimestamp64Nano(" in q  # avoids the DateTime64 overflow

@@ -88,3 +88,10 @@ def test_the_key_is_stored_under_the_environment_it_was_created_in(
         ("platform", "signoz", environment)
     ]
     assert stores[0][3].values["api_key"] == "key"
+
+
+def test_no_signoz_query_invoke_task() -> None:
+    """Telemetry queries live in `python -m tools.diagnose`, not in invoke tasks (#1651)."""
+    source = (ROOT / "platform/11.signoz/shared_tasks.py").read_text()
+    assert "def query_logs" not in source
+    assert "def list_services" not in source

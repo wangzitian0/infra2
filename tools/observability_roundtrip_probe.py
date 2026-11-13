@@ -15,6 +15,7 @@ import urllib.request
 import uuid
 
 from common.core.service_identity import ServiceIdentity
+from common.deploy.ingestion_verify import _clickhouse_query
 from common.observability.openpanel import openpanel_env
 from common.observability.probe_environment import (
     DEFAULT_ALERTING_ENV_FILE,
@@ -283,7 +284,7 @@ def _wait_for_count(clickhouse_url: str, query: str) -> int:
 
 
 def _clickhouse_count(base_url: str, query: str) -> int:
-    body = _clickhouse_query(base_url, query).strip()
+    body = _clickhouse_query(_normalize_url(base_url), query).strip()
     if not body:
         return 0
     first = body.splitlines()[0].strip()
@@ -293,19 +294,6 @@ def _clickhouse_count(base_url: str, query: str) -> int:
         raise RuntimeError(
             f"unexpected ClickHouse count response: {body[:200]!r}"
         ) from exc
-
-
-def _clickhouse_query(base_url: str, query: str) -> str:
-    request = urllib.request.Request(
-        _normalize_url(base_url),
-        data=query.encode("utf-8"),
-        method="POST",
-    )
-    with urllib.request.urlopen(  # noqa: S310 - internal Docker-network probe URL.
-        request,
-        timeout=10.0,
-    ) as response:
-        return response.read().decode("utf-8", errors="replace")
 
 
 def _post_json(

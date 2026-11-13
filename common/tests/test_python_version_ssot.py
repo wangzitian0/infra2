@@ -26,8 +26,6 @@ from common.gate.production_contract import UNCLASSIFIED_SCHEDULED_JOBS
 
 ROOT = Path(__file__).resolve().parents[2]
 VERSION_FILE = ROOT / ".python-version"
-# A reusable workflow runs in the caller's checkout, so it cannot read this file.
-REUSABLE_TEMPLATES = ".github/workflows/templates/"
 # The gate's own list of unclassified production jobs (one source, #1340).
 PRODUCTION_JOBS = {
     (".github/workflows/ops-checks.yml", job) for job in UNCLASSIFIED_SCHEDULED_JOBS
@@ -66,8 +64,6 @@ def _workflow_steps():
         ".github/workflows/**/*.yml",
         ".github/workflows/**/*.yaml",
     ):
-        if rel.startswith(REUSABLE_TEMPLATES):
-            continue
         doc = yaml.safe_load((ROOT / rel).read_text(encoding="utf-8")) or {}
         for job_id, job in (doc.get("jobs") or {}).items():
             for step in job.get("steps") or []:

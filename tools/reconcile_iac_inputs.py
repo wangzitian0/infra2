@@ -49,7 +49,7 @@ from common.deploy.app_contract import (
 )
 from common.deploy.dependencies import explain_fanout
 from common.deploy.transient_failure import classify_failure
-from common.deploy.contract import all_service_keys, service_spec
+from common.deploy.contract import all_service_keys, service_spec, validate_iac_ref_form
 from common.deploy.preflight import (
     assert_app_version_ref_matches_train,
     assert_app_version_ref_on_main,
@@ -84,6 +84,7 @@ from infra2_sdk.manifests import (
 )
 from infra2_sdk.refs import (
     assert_after_on_main,  # noqa: F401  (re-exported; #616)
+    classify_ref,
     next_patch_tag,
     resolve_image_ref,
 )
@@ -2240,16 +2241,11 @@ def main(argv: list[str] | None = None) -> int:
         help="existing release tag for --advance-train-service (repeatable)",
     )
     parser.add_argument(
-        "--run-post-deploy-hooks",
-        action="store_true",
-        help="execute post-deploy App hooks after successful deploy_v2 commands (#1416, #1493)",
-    )
-    parser.add_argument(
         "--post-deploy-hook-slot",
         default="",
         help=(
             "comma-separated hook slot(s) from HOOK_SLOTS to run when "
-            "--run-post-deploy-hooks is enabled (defaults to 'smoke,staging_gate' "
+            "post-deploy hooks run (defaults to 'smoke,staging_gate' "
             "for staging and 'smoke,prod_gate' for prod via STAGE_HOOK_PLANS; #1608)"
         ),
     )
@@ -2560,10 +2556,14 @@ def main(argv: list[str] | None = None) -> int:
                 "::error::first production marker requires an explicit known-production "
                 "--before release"
             )
-    # Fail-closed BEFORE planning/deploying: an apply run must promote a tag that is
-    # reachable from reviewed main (Infra-011). dry-run is plan-only, so it may inspect
-    # any ref (e.g. preview a not-yet-merged tag).
+    # Fail-closed BEFORE planning/deploying: an apply run must promote a release tag
+    # (a branch such as `main` is refused, #1628) that is reachable from reviewed main
+    # (Infra-011). dry-run is plan-only, so it may inspect any ref.
     if not args.dry_run:
+        try:
+            validate_iac_ref_form(target_env, classify_ref(args.after))
+        except ValueError as exc:
+            raise SystemExit(f"::error::{exc}") from exc
         assert_after_on_main(args.after, repo_root)
     changed_files = (
         list(args.changed_file)
@@ -2631,8 +2631,7 @@ def main(argv: list[str] | None = None) -> int:
         results = run_deploy_commands(applied)
     hook_results: list[dict[str, object]] = []
     if (
-        args.run_post_deploy_hooks
-        and applied
+        applied
         and not args.dry_run
         and not any(result.get("returncode") != 0 for result in results)
     ):
