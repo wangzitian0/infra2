@@ -12,6 +12,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from common.observability.signoz_queries import ERROR_LOG_LEVELS
+
 ENVIRONMENTS = ("production", "staging")
 ENV_PLACEHOLDER = "{env}"
 STAGING_NAME_SUFFIX = "Staging"
@@ -32,7 +34,7 @@ def _error_logs(
         "frequency": "1m",
         "summary": (
             f"Severity P1 (15m total > {threshold}): {service_name} emitted more than "
-            f"{threshold} ERROR/FATAL log lines in 15 minutes. "
+            f"{threshold} {'/'.join(ERROR_LOG_LEVELS)} log lines in 15 minutes. "
             "Runbook: docs/ssot/ops.observability.md SOP-004B."
         ),
     }

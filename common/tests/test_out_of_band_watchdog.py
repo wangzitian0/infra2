@@ -83,6 +83,8 @@ def _load_watchdog():
     sys.modules["out_of_band_watchdog"] = module
     assert spec.loader is not None
     spec.loader.exec_module(module)
+    # The e2e smoke state check reads GitHub; these tests must not (#1649).
+    module.run_e2e_smoke_state_check = lambda _env: []
     return module
 
 

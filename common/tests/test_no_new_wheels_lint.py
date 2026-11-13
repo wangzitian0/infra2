@@ -225,3 +225,22 @@ def test_e2e_smoke_job_opens_and_closes_one_issue(monkeypatch, capsys) -> None:
     assert _execute(job, resolve) == 0
     assert api.open_titles() == []
     assert watchdog.run_e2e_smoke_state_check({**SCHEDULED, "GITHUB_TOKEN": "t"}) == []
+
+
+def test_unreadable_e2e_state_is_a_warning_note_not_silence(monkeypatch) -> None:
+    """#1649: a failed GitHub state read shows as a warning line in the report."""
+    from common.observability import page_dedup as pd
+    from tools import out_of_band_watchdog as watchdog
+
+    class Broken:
+        def open_issues(self, *, with_body: bool = False):
+            raise RuntimeError("HTTP 502")
+
+    monkeypatch.setattr(watchdog, "GitHubIssues", lambda *_a: Broken())
+    env = {"GITHUB_REPOSITORY": "o/r", "GITHUB_TOKEN": "t"}
+    (result,) = watchdog.run_e2e_smoke_state_check(env)
+
+    assert (
+        result.ok and "could not be read" in result.note and "HTTP 502" in result.note
+    )
+    assert pd.UNREADABLE == "unreadable"

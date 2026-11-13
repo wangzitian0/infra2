@@ -343,6 +343,7 @@ def _signoz_signal_entries() -> list[dict[str, Any]]:
     ``test_signoz_rows_derive_from_every_alert_rule`` holds the two readers together.
     Every rule pages through the bridge from the VPS.
     """
+    from common.alerting.delivery import is_report_only_environment
     from common.alerting.standard_rules import (
         ENVIRONMENTS,
         STANDARD_RULES,
@@ -363,6 +364,7 @@ def _signoz_signal_entries() -> list[dict[str, Any]]:
         # No top-level `environment`: the loader expands the catalog for each one.
         declared = str(data.get("environment") or "")
         for environment in (declared,) if declared else ENVIRONMENTS:
+            report_only = is_report_only_environment(environment)
             rules = data.get("rules") or []
             for rule in rules if declared else expand_rules(rules, environment):
                 name = str(rule["alert_name"])
@@ -378,8 +380,8 @@ def _signoz_signal_entries() -> list[dict[str, Any]]:
                         "failure_class": "service-health",
                         "severity": str(rule.get("severity") or "warning"),
                         # Staging never pages (#904): the bridge sends it as a report.
-                        "tier": "day" if environment == "staging" else "minute",
-                        "type": "report" if environment == "staging" else "alert",
+                        "tier": "day" if report_only else "minute",
+                        "type": "report" if report_only else "alert",
                         "consecutive_failures": 1,
                         "renotify_window_sec": 0,
                     }

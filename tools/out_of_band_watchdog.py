@@ -44,6 +44,7 @@ from common.deploy.dokploy_client import get_dokploy  # noqa: E402
 from common.observability.page_dedup import (  # noqa: E402
     REPORT as DEDUP_REPORT,
     RESOLVED as DEDUP_RESOLVED,
+    UNREADABLE,
     Finding,
     GitHubIssues,
     dedup_page,
@@ -422,6 +423,16 @@ def run_e2e_smoke_state_check(current_env: Mapping[str, str]) -> list[CheckResul
     lookup = find_state(
         GitHubIssues(repository, token), E2E_SMOKE_JOB, trusted_authors(current_env)
     )
+    if lookup.kind == UNREADABLE:
+        return [
+            CheckResult(
+                E2E_SMOKE_JOB,
+                True,
+                "state issue unreadable",
+                "service-health",
+                note=f"Warning: the e2e smoke state could not be read ({lookup.detail}).",
+            )
+        ]
     if not lookup.numbers:
         return []
     keys = ", ".join(lookup.state.keys) if lookup.state else "unknown"

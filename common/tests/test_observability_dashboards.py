@@ -3810,3 +3810,29 @@ def test_apply_alerts_applies_every_rule_when_the_clock_stays_under_the_deadline
 
     assert fake.posted == order
     assert run.errors == []
+
+
+def test_standard_rules_name_every_counted_log_level() -> None:
+    """#1649: the summary of an error-log rule lists the levels its filter counts."""
+    from common.alerting.standard_rules import STANDARD_RULES
+    from common.observability.signoz_queries import ERROR_LOG_LEVELS
+
+    for rule in STANDARD_RULES:
+        assert "/".join(ERROR_LOG_LEVELS) in rule["summary"], rule["alert_name"]
+        assert "ERROR/FATAL" not in rule["summary"]
+
+
+def test_standard_rules_file_is_under_the_apply_path_filter() -> None:
+    """#1649: an edit of the standard table must trigger the observability apply."""
+    import fnmatch
+
+    text = (ROOT / ".github/workflows/reconcile-iac-inputs.yml").read_text(
+        encoding="utf-8"
+    )
+    line = next(
+        row for row in text.splitlines() if "common/observability_dashboards.py" in row
+    )
+    patterns = line.strip().rstrip(")").split("|")
+    assert any(
+        fnmatch.fnmatch("common/alerting/standard_rules.py", p) for p in patterns
+    )

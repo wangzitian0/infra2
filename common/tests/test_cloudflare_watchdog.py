@@ -473,7 +473,7 @@ def test_a_broken_config_pages_itself_and_resolves_nothing_it_could_not_check(
 
 
 @needs_node
-def test_status_stays_far_inside_githubs_4096_byte_read(world) -> None:
+def test_status_stays_far_inside_githubs_16384_byte_read(world) -> None:
     """#911 review: every served text is cut, even from records stored untrimmed."""
     size = world["statusSize"]
     assert size["status"] == 200
