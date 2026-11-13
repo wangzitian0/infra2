@@ -449,3 +449,59 @@ def test_the_promotion_reminder_task_is_a_dispatch_choice_that_selects_the_diges
         in workflow["on"]["workflow_dispatch"]["inputs"]["task"]["options"]
     )
     assert "inputs.task == 'promotion-reminder'" in workflow["jobs"]["digest"]["if"]
+
+
+def test_a_red_app_hook_resolves_only_when_a_run_evaluates_that_hook_green(
+    monkeypatch, tmp_path
+) -> None:
+    """#1634 review (high): no workflow re-checks `staging_gate`. A later tag that does not
+    run the hook must not resolve it; only a run that evaluates it green does."""
+    w = World(monkeypatch, tmp_path)
+    name, job = "reconcile-iac-inputs.yml", "reconcile"
+    alert, resolve = "Alert on failure", "Resolve the reconcile failure alert"
+    key = "app-hook:truealpha/app:staging_gate:staging"
+    deploy = {"RECONCILE_PHASE": "reconcile-deploy"}
+
+    def result(*hooks: tuple[str, str]) -> None:
+        (tmp_path / "reconcile-result.json").write_text(
+            json.dumps(
+                {
+                    "alert_text": "⚠️ Post-deploy hook FAILED for v1.0.0",
+                    "hook_results": [
+                        {
+                            "service": "truealpha/app",
+                            "slot": slot,
+                            "environment": "staging",
+                            "status": status,
+                            "version_ref": "v0.2.90",
+                            "summary": "journey failed",
+                        }
+                        for slot, status in hooks
+                    ],
+                }
+            )
+        )
+
+    # tag vN: the hook is red -> one page, the key is in the state issue
+    result(("staging_gate", "fail"))
+    assert w.step(name, job, alert, ok=False, event="push", **deploy)
+    assert len(w.cards) == 1 and w.cards[0]["header"]["template"] == "red"
+    (state,) = w.api.issues.values()
+    assert key in state["body"]
+
+    # tag vN+1: no App change, no hook ran -> nothing is resolved, no RESOLVED card
+    result()
+    assert w.step(name, job, resolve, ok=True, event="push", **deploy)
+    assert len(w.cards) == 1
+    assert w.api.open_titles() and key in state["body"]
+
+    # tag vN+1 with another hook green: the red key was still not evaluated
+    result(("smoke", "pass"))
+    w.step(name, job, resolve, ok=True, event="push", **deploy)
+    assert len(w.cards) == 1 and w.api.open_titles()
+
+    # tag vN+2: the hook runs green -> the key resolves with one RESOLVED card
+    result(("staging_gate", "pass"))
+    w.step(name, job, resolve, ok=True, event="push", **deploy)
+    assert len(w.cards) == 2 and w.titles()[1].startswith("✅ [已恢复]")
+    assert w.api.open_titles() == []

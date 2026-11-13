@@ -2865,6 +2865,8 @@ def test_no_workflow_reads_the_deleted_hook_secret() -> None:
             for body in _expressions(yaml.safe_load(text))
             for m in _SECRET_NAME.finditer(body)
         )
+        # the bracket form `secrets['NAME']` is not a `secrets.NAME` read
+        or "ZAI_CODING_CN_API_KEY" in text.upper()
         or re.search(r"^\s*AI_API_KEY:", text, re.M)
     ]
     assert bad == []
@@ -4353,12 +4355,17 @@ def test_summary_is_rendered_from_records(monkeypatch, tmp_path) -> None:
 
 
 def test_reconcile_imports_no_issue_writer() -> None:
-    """#1634: the release train opens no issue; the ops-checks watchdog is the one writer."""
+    """#1634: the release train opens no issue; ``page_dedup`` in the workflow is the one writer.
+
+    The two writer names must not appear anywhere in the module: not as an import, an
+    alias, a bare name or an attribute (``_trail.GitHubIssues``)."""
     source = Path(reconcile.__file__).read_text(encoding="utf-8")
-    imported = {
-        alias.name
-        for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.ImportFrom)
-        for alias in node.names
-    }
-    assert not imported & {"GitHubIssues", "reconcile_issue_trail"}
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names.update(a.name.rsplit(".", 1)[-1] for a in node.names)
+    assert not names & {"GitHubIssues", "reconcile_issue_trail"}

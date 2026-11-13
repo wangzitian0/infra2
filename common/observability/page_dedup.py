@@ -288,12 +288,15 @@ class Decision:
     note: str = ""
 
 
-def _unproven(lookup: Lookup, unevaluated: Sequence[str]) -> str:
+def _unproven(
+    lookup: Lookup, unevaluated: Sequence[str], green: Sequence[str] = ()
+) -> str:
     """Which recorded finding belongs to a check this run did not evaluate, or ''.
 
     ``unevaluated`` are key prefixes: a skipped section, a quota that could not be
     read, a check that answered "could not tell". Its recorded findings have not
-    recovered, they are unknown; ``""`` (all) when nothing was observed.
+    recovered, they are unknown; ``""`` (all) when nothing was observed. ``green`` are
+    exact keys this run evaluated green: they never count as unproven.
     """
     if not unevaluated:
         return ""
@@ -303,7 +306,11 @@ def _unproven(lookup: Lookup, unevaluated: Sequence[str]) -> str:
     if state.total > len(state.keys):
         return "the recorded findings were cut short"
     hit = next(
-        (key for key in state.keys if any(key.startswith(p) for p in unevaluated)),
+        (
+            key
+            for key in state.keys
+            if key not in green and any(key.startswith(p) for p in unevaluated)
+        ),
         None,
     )
     return "" if hit is None else f"`{hit}` was not evaluated in this run"
@@ -317,6 +324,7 @@ def decide(
     now: float,
     observed_clean: bool = False,
     unevaluated: Sequence[str] = (),
+    green: Sequence[str] = (),
 ) -> Decision:
     """Evaluate findings against recorded state and return action decision."""
     if mode == OFF:
@@ -338,7 +346,7 @@ def decide(
                 return Decision(
                     NONE, "open-only run (drill or branch dispatch) never resolves"
                 )
-            unproven = _unproven(lookup, unevaluated)
+            unproven = _unproven(lookup, unevaluated, green)
             if unproven:
                 return Decision(
                     NONE, f"cannot prove the paged findings are gone: {unproven}"
@@ -620,6 +628,7 @@ def dedup_page(
     run_url: str | None = None,
     observed_clean: bool = False,
     unevaluated: Sequence[str] = (),
+    green: Sequence[str] = (),
     detail: str = "",
     mode: str | None = None,
     now: float | None = None,
@@ -655,6 +664,7 @@ def dedup_page(
             now=now,
             observed_clean=observed_clean,
             unevaluated=unevaluated,
+            green=green,
         )
     except Exception as exc:  # noqa: BLE001 - a bug here must page, never silence.
         print(
@@ -743,6 +753,7 @@ def resolve_page_state(
     label: str = "",
     run_url: str | None = None,
     unevaluated: Sequence[str] = (),
+    green: Sequence[str] = (),
     mode: str | None = None,
     now: float | None = None,
     api: StateApi | None = None,
@@ -758,6 +769,7 @@ def resolve_page_state(
         run_url=run_url,
         observed_clean=True,
         unevaluated=unevaluated,
+        green=green,
         mode=mode,
         now=now,
         api=api,

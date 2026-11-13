@@ -51,6 +51,7 @@ from common.deploy.app_contract import (
 )
 from common.alerting.stage_card import show_stage_card
 from common.deploy.dependencies import explain_fanout
+from common.deploy.deploy_guard_audit import app_hook_pair
 from common.deploy.transient_failure import classify_failure
 from common.deploy.contract import all_service_keys, service_spec, validate_iac_ref_form
 from common.deploy.preflight import (
@@ -1393,7 +1394,6 @@ def run_scheduled_app_audits(
     env_overrides: Mapping[str, str] | None = None,
     manifest_fetcher: Callable[[str], bytes] | None = None,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-    run_url: str = "",
     services: Sequence[str] | None = None,
 ) -> list[dict[str, object]]:
     """Execute a scheduled runtime hook slot across registered Apps and local services (#1493, #1521)."""
@@ -2000,6 +2000,32 @@ def resolve_workflow_failure_alert(
     return (crash_fallback_text, None)
 
 
+def hook_findings_from_result(
+    result_path: Path,
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """The App hooks of one run: ``(red (key, detail) pairs, keys that ran green)`` (#1634).
+
+    The keys are ``app_hook_pair`` keys, the same ones the nightly audit pages. An
+    unreadable or missing result file gives two empty lists: no hook was evaluated.
+    """
+    try:
+        data = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return [], []
+    items = data.get("hook_results") if isinstance(data, Mapping) else None
+    red: list[tuple[str, str]] = []
+    green: list[str] = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        pair = app_hook_pair(item)
+        if item.get("status") == "pass":
+            green.append(pair[0])
+        else:
+            red.append(pair)
+    return sorted(red), green
+
+
 _HARNESS_DIRS = frozenset({"tools", "common", "harness", ".github"})
 
 
@@ -2367,13 +2393,11 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{svc}={tag}")
         return 0
     if args.run_scheduled_audit:
-        run_url = os.environ.get("GITHUB_RUN_URL", "") or github_run_url(os.environ)
         hook_results = run_scheduled_app_audits(
             repo_root,
             target_env=target_env,
             slot="scheduled_audit",
             base_domain=args.domain,
-            run_url=run_url,
             services=args.sync_service or None,
         )
         out_payload = {"scheduled_audit_results": hook_results}

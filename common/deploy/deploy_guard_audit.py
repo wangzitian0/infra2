@@ -398,6 +398,28 @@ def _load_hook_results(
     return [item for item in items if isinstance(item, dict)]
 
 
+def app_hook_pair(item: Mapping[str, Any]) -> tuple[str, str]:
+    """The ``(identity_key, detail_line)`` of one App hook result: the one spelling of the key."""
+    svc = str(item.get("service") or "?")
+    slot = str(item.get("slot") or "scheduled_audit")
+    norm_env = (
+        "production"
+        if str(item.get("environment") or "staging") in ("prod", "production")
+        else "staging"
+    )
+    vref = str(item.get("version_ref") or "?")
+    raw_summary = (
+        str(item.get("summary") or "").strip()
+        or str(item.get("stderr_tail") or "").strip()
+        or "hook failed"
+    )
+    summary_line = raw_summary.splitlines()[0][:200]
+    return (
+        f"app-hook:{svc}:{slot}:{norm_env}",
+        f"- {svc} [{slot} @ {vref}]: {summary_line}",
+    )
+
+
 def confirmed_finding_pairs(
     env: Mapping[str, str] | None = None,
     *,
@@ -417,22 +439,7 @@ def confirmed_finding_pairs(
     for item in sorted(hook_items, key=lambda r: str(r.get("service") or "")):
         if item.get("status") == "pass":
             continue
-        svc = str(item.get("service") or "?")
-        slot = str(item.get("slot") or "scheduled_audit")
-        norm_env = (
-            "production"
-            if str(item.get("environment") or "staging") in ("prod", "production")
-            else "staging"
-        )
-        vref = str(item.get("version_ref") or "?")
-        raw_summary = (
-            str(item.get("summary") or "").strip()
-            or str(item.get("stderr_tail") or "").strip()
-            or "hook failed"
-        )
-        summary_line = raw_summary.splitlines()[0][:200]
-        key = f"app-hook:{svc}:{slot}:{norm_env}"
-        hook_pairs.append((key, f"- {svc} [{slot} @ {vref}]: {summary_line}"))
+        hook_pairs.append(app_hook_pair(item))
     if hook_pairs:
         pairs.extend(hook_pairs)
     else:
