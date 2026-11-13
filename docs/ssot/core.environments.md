@@ -24,36 +24,7 @@
 
 ## 2. 架构模型 - 从左到右生命周期与两大七寸
 
-```mermaid
-flowchart LR
-    subgraph L2R["从左到右推进链路 (Left-to-Right Pipeline)"]
-        subgraph Runners["无状态执行器 (Stateless Runners)"]
-            DevStation["本地开发工作站<br/>(Local Dev / pre-commit)"]
-            GHARunner["GitHub PR CI Runner<br/>(无状态临时虚拟机)"]
-            IaCRunner["IaC Runner / deploy_v2<br/>(宿主机无状态任务触发器)"]
-        end
-
-        subgraph ChokePoints["🎯 两大致命七寸 (The Two Critical Gates)"]
-            Gate1["【七寸 1】GitHub PR CI<br/>Merge Authority 全绿<br/>(阻断坏代码合入主干)"]
-            Gate2["【七寸 2】Staging 预发环境<br/>不可变 Tag 浸泡验证<br/>(阻断坏发布进生产)"]
-        end
-
-        subgraph DeployEnvs["有状态部署环境 (3 Stateful Envs + DR)"]
-            Preview["1. Preview 瞬态隔离环境<br/>(App post-merge 切 tag 前瞬态拉起 / 跑完 preview_gate 立即 --down)"]
-            Staging["2. Staging 集成预发环境<br/>(火车粒度 <=4 PRs · smoke + staging_gate)"]
-            Production["3. Production 生产环境<br/>(火车粒度 >=15 PRs 或 >=48h · smoke + prod_gate)"]
-            DR["[目标态] DR 异地灾备<br/>(冷备/定期演练)"]
-        end
-    end
-
-    DevStation -->|提交 PR| GHARunner
-    GHARunner --> Gate1
-    Gate1 -->|合流 main · 瞬态验证后切 vX.Y.Z 并 --down| Preview
-    Preview -->|生成不可变 App Tag 入列火车| Staging
-    Staging --> Gate2
-    Gate2 -->|显式 Promote| Production
-    Production -.->|Google Drive 加密备份流| DR
-```
+环境之间的交付阶段、阶段记录与变更种类见 [`ops.pipeline.md` §2.0](./ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases);本文只定义环境。
 
 ---
 

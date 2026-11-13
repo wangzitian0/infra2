@@ -55,15 +55,15 @@ Code to PR and Tiered deploy move a change. Periodic report and Alert and watch 
 
 The question of a stage is the same for every change kind.
 
-| Stage | Question | Record subject | Trigger | Budget |
+| Stage | Question | Record subject | Trigger | State |
 |---|---|---|---|---|
-| Local | Does the change pass the cheap checks? | none | each save | 30 s |
-| CI | Is this head correct alone? | PR head SHA | each PR push | 3-4 min |
-| Preview | Does this head work from zero, alone? | PR head SHA | each PR push; holds the merge | 240 s for infra2 |
-| Staging | Does the release work with all other changes and with real data? | release tag | each release-tag push | 15 min |
-| Prod | Does the release serve users? | the same tag | each promotion; the owner approves the tag | 15 min after the approval |
+| Local | Does the change pass the cheap checks? | none | each save | exists |
+| CI | Is this head correct alone? | PR head SHA | each PR push | exists |
+| Preview | Does this head work from zero, alone? | PR head SHA | each PR push; holds the merge | target |
+| Staging | Does the release work with all other changes and with real data? | release tag | each release-tag push | exists |
+| Prod | Does the release serve users? | the same tag | each promotion; the owner approves the tag | exists |
 
-The main-branch regression is the post of the merge. The Staging pre reads it.
+Budgets come from the Workspace tier "Pipeline time contract", not from this file. "exists" means main runs it today. "target" means it is the goal and no check runs it yet. The main-branch regression is the post of the merge. The Staging pre reads it.
 
 **Three phases and the record**
 
@@ -100,21 +100,25 @@ The main-branch regression is the post of the merge. The Staging pre reads it.
 
 **Matrix 1: deliver a change (stage by kind)**
 
+Each cell starts with its state: "exists" or "target". A rule whose check does not exist yet is a target. An absent check holds nothing.
+
 | Stage | App | SDK | Infra | Harness |
 |---|---|---|---|---|
-| Local | lint, unit, podman integration | unit, import purity, size | lint, unit, compose render | rule-text checklist, `ws-agents-lint`, gate unit tests |
-| CI | unit checks within the budget | PR CI | `infra-ci.yml`; the CVE scan blocks a fixable CRITICAL or HIGH finding | `infra-ci.yml` plus the self-governance checks |
-| Preview | own stack from zero; `preview_gate` reports each check | the Canary pin PR runs the infra Preview with the new version | the changed units from zero in a slot per PR | the changed gate replays merged PRs |
-| Staging | door: the sync cuts the app tag from the Preview record and opens the pin PR; post: `staging_gate` per check, nightly `scheduled_audit` | proof: the Canary `staging_gate` reads the Canary verdict | door: the tag push only; pre: the main post record; post: every app's `staging_gate` and the Canary | release code: its own tag; rules and skills: one render PR per repository, merged in one cycle |
-| Prod | the same tag; `prod_gate` per check | only inside consumer tags; app pin PRs open after the version is verified | pre runs before the approval and reads the staging post record; the marker follows post | a production-path edit waits for the owner's approval of its head SHA; other edits run at the next promotion |
+| Local | exists: lint, unit, podman integration | exists: unit, import purity, size | exists: lint, unit, compose render | exists: rule-text checklist, `ws-agents-lint`, gate unit tests |
+| CI | exists: unit checks within the budget | exists: PR CI | exists: `infra-ci.yml`; the Trivy scan blocks a PR with a fixable CRITICAL or HIGH finding | exists: `infra-ci.yml` plus the self-governance checks |
+| Preview | target: own stack from zero; `preview_gate` reports each check | target: the Canary pin PR runs the infra Preview with the new version | target: the changed units from zero in a slot per PR | target: the changed gate replays merged PRs |
+| Staging | target: door: the sync cuts the app tag from the Preview record and opens the pin PR; post: `staging_gate` per check, nightly `scheduled_audit` | target: proof: the Canary `staging_gate` reads the Canary verdict | target: door: the tag push only; pre: the main post record; post: every app's `staging_gate` and the Canary | target: release code: its own tag; rules and skills: one render PR per repository, merged in one cycle |
+| Prod | target: the same tag; `prod_gate` per check | target: only inside consumer tags; app pin PRs open after the version is verified | target: pre runs before the approval and reads the staging post record; the marker follows post | exists: a production-path edit waits for the owner's approval of its head SHA; other edits run at the next promotion |
 
 **Matrix 2: watch and fix (flow by kind)**
 
+The same states apply.
+
 | Flow | App | SDK | Infra | Harness |
 |---|---|---|---|---|
-| Alert and watch | standard rules from the service identity: Prod pages, Staging reports; standard logs, metrics and traces from one SDK call | no runtime of its own: a fault shows in a consumer, whose lock file names the SDK version | the same standard rules for platform services; the Canary probe every 60 s | a train or gate failure is a card with the first cause |
-| Find the cause | one diagnosis command per app and environment: errors, slow traces, 5xx, deploys | the command lists each deploy with its SDK version, so an SDK cause shows as the pin move | the same command for a platform unit | the failed record names the stage, phase, check id and run |
-| Periodic report | digest section "Delivery": pass rate and p90 per stage, rows of kind `app` | rows of kind `sdk` | rows of kind `infra` | rows of kind `harness` |
+| Alert and watch | target: standard rules from the service identity: Prod pages, Staging reports; standard logs, metrics and traces from one SDK call | target: no runtime of its own: a fault shows in a consumer, whose lock file names the SDK version | target: the same standard rules for platform services; the Canary probe every 60 s | target: a train or gate failure is a card with the first cause |
+| Find the cause | target: one diagnosis command per app and environment: errors, slow traces, 5xx, deploys | target: the command lists each deploy with its SDK version, so an SDK cause shows as the pin move | target: the same command for a platform unit | target: the failed record names the stage, phase, check id and run |
+| Periodic report | target: digest section "Delivery": pass rate and p90 per stage, rows of kind `app` | target: rows of kind `sdk` | target: rows of kind `infra` | target: rows of kind `harness` |
 
 Each record names its `units` with a kind prefix (`app:`, `sdk:`, `infra:`, `harness:`), so each report splits by kind.
 

@@ -149,6 +149,6 @@ Residual risks:
 
 ## 线上测试
 
-- **Merge 与部署解耦**：普通开发 PR 以 `github_ci.merge_authority` 为合流门禁；Preview 的 post 记录按 [`ops.pipeline.md` §2.0](ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases) 规则 4 阻塞合并，staging proof 不阻塞普通 PR。以 [`docs/ssot/ops.pipeline.md`](ops.pipeline.md) 和锁定版本 infra2-sdk 的 `infra2_sdk/data/stages.yaml`（stage 词汇）为准。
+- **Merge 与部署解耦**：普通开发 PR 以 `github_ci.merge_authority` 为合流门禁；Preview 阻塞合并是目标态（[`ops.pipeline.md` §2.0](ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases) 规则 4）:只有某个 Preview 检查在 `docs/ssot/ci-gate-inventory.yaml` 中有 `blocks_merge: true` 的行之后才生效;在此之前，任何 Preview 记录都不阻塞合并，staging proof 也不阻塞普通 PR。stage id 来自锁定版本 infra2-sdk 的 `infra2_sdk/data/stages.yaml`;阶段、记录与合并阻塞规则以 §2.0 和该 inventory 为准。
 - **测试过程**：需要 runtime proof 时，请假设自己就是用户，从 web / cli / ssh 等真实入口验证，并保存证据。
 - **发布与晋升**：release tag 必须来自 reviewed main；平台 tag 自动晋升 staging。staging 使用同一不可变 tag 验证并完成 soak 后，才可显式 promote prod，禁止跳过 staging。
