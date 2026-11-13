@@ -92,6 +92,7 @@ def _runs(
     expr = re.sub(r"!(?!=)", " not ", expr)
     expr = expr.replace("__NE__", "!=").replace("&&", " and ").replace("||", " or ")
     expr = re.sub(r"env\.(\w+)", r'_env.get("\1", "")', expr)
+    expr = expr.replace("github.event.schedule", "_schedule")
     expr = expr.replace("github.event_name", "_event").replace("inputs.dry_run", "_dry")
     expr = expr.replace("success()", "_ok").replace("failure()", "(not _ok)")
     expr = expr.replace("always()", "True").replace("!cancelled()", "True")
@@ -99,7 +100,7 @@ def _runs(
         eval(  # noqa: S307 - the expression is a checked-in workflow condition
             expr,
             {"__builtins__": {}},
-            {"_ok": ok, "_env": env, "_event": event, "_dry": dry},
+            {"_ok": ok, "_env": env, "_event": event, "_dry": dry, "_schedule": ""},
         )
     )
 

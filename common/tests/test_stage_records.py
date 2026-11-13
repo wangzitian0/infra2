@@ -710,3 +710,17 @@ def test_one_github_get_helper_and_one_card_publish_flow() -> None:
     for name in ("_headers",):
         assert not hasattr(stage_records, name)
     assert not hasattr(release_card, "_deliver_card")
+
+
+def test_the_digest_alert_and_resolve_steps_skip_the_reminder_run() -> None:
+    """A reminder run builds no digest, so it neither pages nor resolves the digest alert."""
+    steps = yaml.safe_load((ROOT / ".github/workflows/ops-checks.yml").read_text())[
+        "jobs"
+    ]["digest"]["steps"]
+    named = {s["name"]: s for s in steps}
+    for name in (
+        "Alert on failure",
+        "Resolve the digest failure alert",
+        "Build and send digest",
+    ):
+        assert "github.event.schedule != '0 13 * * *'" in named[name]["if"], name
