@@ -140,6 +140,7 @@ def build_signoz_log_alert_rule_payload(
     frequency: str = "1m",
     service_id: str = "",
     environment: str = "production",
+    runbook_url: str = "",
 ) -> dict[str, Any]:
     """Build a SigNoz v5 threshold rule counting a service's error-level OTEL logs.
 
@@ -217,7 +218,7 @@ def build_signoz_log_alert_rule_payload(
             **identity.alert_labels(severity=severity),
             "team": "infra",
         },
-        "annotations": {"description": summary, "summary": summary},
+        "annotations": _rule_annotations(summary, service_name, identity, runbook_url),
         "notificationSettings": {
             "groupBy": [],
             "renotify": {"enabled": False, "interval": "30m", "alertStates": []},
@@ -247,6 +248,7 @@ def build_signoz_metric_alert_rule_payload(
     group_by: list[str] | None = None,
     service_id: str = "",
     environment: str = "production",
+    runbook_url: str = "",
 ) -> dict[str, Any]:
     """Build a SigNoz v5 PromQL rule for metric alerts.
 
@@ -309,7 +311,7 @@ def build_signoz_metric_alert_rule_payload(
             **identity.alert_labels(severity=severity),
             "team": "infra",
         },
-        "annotations": {"description": summary, "summary": summary},
+        "annotations": _rule_annotations(summary, service_name, identity, runbook_url),
         "notificationSettings": {
             "groupBy": group_by or [],
             "renotify": {"enabled": False, "interval": "30m", "alertStates": []},
@@ -344,6 +346,23 @@ def find_signoz_rule_id(rules_response: Any, alert_name: str) -> str | None:
         rule_id = rule.get("id") or rule.get("ruleId")
         return str(rule_id) if rule_id else None
     return None
+
+
+def _rule_annotations(
+    summary: str, service_name: str, identity: Any, runbook_url: str
+) -> dict[str, str]:
+    """Annotations of a rule. ``next_step`` is the diagnose command of its service."""
+    annotations = {
+        "description": summary,
+        "summary": summary,
+        "next_step": (
+            f"python -m tools.diagnose {service_name} "
+            f"--env {identity.environment} --since 30m"
+        ),
+    }
+    if runbook_url:
+        annotations["runbook_url"] = runbook_url
+    return annotations
 
 
 def _signoz_filter_literal(value: str) -> str:

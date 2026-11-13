@@ -307,7 +307,7 @@ def test_a_signoz_rule_page_shows_every_field() -> None:
         "现象": "finance_report backend 5xx rate is above 5% for 5 minutes.",
         "开始于": "2026-09-24 15:54（UTC+8）(已持续 5 分钟)",
         "影响": DEFAULT_IMPACT,
-        "下一步": DEFAULT_ACTION,
+        "下一步": "python -m tools.diagnose finance-report-backend --env production --since 30m",
         "Runbook": f"[ops.observability.md#7-标准操作程序-playbooks]({RUNBOOK_SECTION})",
     }
     assert card["header"]["title"]["content"] == (
