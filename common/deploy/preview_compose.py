@@ -16,6 +16,7 @@ from pathlib import Path
 import yaml
 
 from common.deploy.env_config import preview_service_config
+from common.deploy.yaml_text import safe_load_text
 
 ROOT = Path(__file__).resolve().parents[2]
 INFRA2_GIT_URL = "https://github.com/wangzitian0/infra2.git"
@@ -181,7 +182,7 @@ def render_runner_compose(service: str, text: str, sha: str) -> str:
         raise ValueError(f"sha must be 40 lowercase hex characters, got {sha!r}")
     config = preview_service_config(service)
     try:
-        doc = yaml.safe_load(text)
+        doc = safe_load_text(yaml, text)
     except yaml.YAMLError as exc:
         raise _refuse(
             service, f"YAML does not parse ({exc.__class__.__name__})"
