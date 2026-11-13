@@ -39,7 +39,11 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.core.environ import normalize_env_name  # noqa: E402
-from common.core.constants import PROJECT_REPOS  # noqa: E402
+from common.core.constants import (  # noqa: E402
+    GITHUB_OWNER,
+    GITHUB_REPO,
+    PROJECT_REPOS as _APP_PROJECT_REPOS,
+)  # noqa: E402
 from common.deploy.env_config import (  # noqa: E402
     PREVIEW_ENVIRONMENT,
     PREVIEW_KINDS,
@@ -53,6 +57,8 @@ ALWAYS_KEEP_ALIASES: frozenset[str] = frozenset()
 # an orphan the current preview contract no longer permits. Derived from
 # PREVIEW_KINDS so only active kinds are recognized.
 VALID_KIND_PREFIXES = tuple(f"{kind}-" for kind in PREVIEW_KINDS)
+# App projects map to their app repo. Platform slots (`pr-<N>`) belong to infra2 PRs.
+PROJECT_REPOS = {**_APP_PROJECT_REPOS, "platform": f"{GITHUB_OWNER}/{GITHUB_REPO}"}
 APP_REPO = PROJECT_REPOS.get("finance_report", "wangzitian0/finance_report")
 
 
