@@ -179,7 +179,6 @@ jobs:
         if: ${{ !cancelled() && github.event.inputs.dry_run != 'true' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          AI_API_KEY: ${{ secrets.ZAI_CODING_CN_API_KEY }}
           TA_EMAIL: ${{ secrets.TA_EMAIL }}
           TA_MEMBER_EMAIL: ${{ secrets.TA_MEMBER_EMAIL }}
           TA_PASSWORD: ${{ secrets.TA_PASSWORD }}
