@@ -244,7 +244,7 @@ def main(
     )
     from common.gate.types import EXIT_OWNER, EXIT_READY, EXIT_UNEVALUABLE, EXIT_WAIT
 
-    if args.replay:
+    if args.replay is not None:
         from common.gate.replay import run_replay
 
         try:

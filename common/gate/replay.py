@@ -18,6 +18,8 @@ from common.gate.client import collect
 from common.gate.types import ROOT, HeadFacts, Runner, _epoch
 
 REPLAY_TIMEOUT_S = 120
+# The settling policy of the merge command (`--policy either`): replay what a merge sees.
+MERGE_POLICY = "either"
 # One process of one gate: read `[{"facts", "now"}]` on stdin, print one verdict each.
 # It uses only names that origin/main has, so a main without this module can run it.
 _EVALUATE_SCRIPT = """
@@ -29,9 +31,10 @@ def tuples(value):
     return tuple(tuples(v) for v in value) if isinstance(value, list) else value
 
 out = []
-for item in json.load(sys.stdin):
+payload = json.load(sys.stdin)
+for item in payload["items"]:
     facts = HeadFacts(**{k: tuples(v) for k, v in item["facts"].items()})
-    v = evaluate(facts, now=item["now"])
+    v = evaluate(facts, now=item["now"], policy=payload["policy"])
     out.append({"ready": v.ready, "exit_code": v.exit_code, "reasons": list(v.reasons)})
 print("REPLAY_VERDICTS " + json.dumps(out))
 """
@@ -87,13 +90,18 @@ def evaluate_in_process_of(ref: str | None, *, root: Path = ROOT) -> Evaluator:
 
     def run(items: Sequence[tuple[HeadFacts, float]]) -> list[dict]:
         payload = json.dumps(
-            [
-                {
-                    "facts": {f.name: getattr(facts, f.name) for f in fields(facts)},
-                    "now": now,
-                }
-                for facts, now in items
-            ]
+            {
+                "policy": MERGE_POLICY,
+                "items": [
+                    {
+                        "facts": {
+                            f.name: getattr(facts, f.name) for f in fields(facts)
+                        },
+                        "now": now,
+                    }
+                    for facts, now in items
+                ],
+            }
         )
         args = [sys.executable, "-c", _EVALUATE_SCRIPT]
         if ref is None:
@@ -136,9 +144,12 @@ def compare(
     items: Sequence[tuple[HeadFacts, float]], *, main: Evaluator, head: Evaluator
 ) -> dict:
     """``{"direction", "rows"}``: one row for each PR whose verdict changed."""
+    if not items:
+        raise ValueError("the replay set is empty: no verdict to compare")
     main_verdicts, head_verdicts = main(items), head(items)
     rows = []
-    for (facts, _), m, h in zip(items, main_verdicts, head_verdicts):
+    # strict: a short verdict list raises, so a replay never passes while empty.
+    for (facts, _), m, h in zip(items, main_verdicts, head_verdicts, strict=True):
         direction = _direction(m, h)
         if direction != "equal":
             rows.append(
@@ -165,6 +176,16 @@ def compare(
 
 def run_replay(count: int, *, repo: str, gh: Runner, root: Path = ROOT) -> dict:
     """The replay of the last ``count`` merged PRs: head checkout against origin/main."""
+    if count < 1:
+        raise ValueError(f"the replay count must be at least 1, not {count}")
+    # A stale or shallow ref would compare against an old main.
+    subprocess.run(
+        ["git", "fetch", "--quiet", "origin", "main"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        timeout=REPLAY_TIMEOUT_S,
+    )
     items = fetch(count, repo=repo, gh=gh)
     return compare(
         items,
