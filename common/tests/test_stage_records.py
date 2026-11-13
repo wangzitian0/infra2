@@ -103,6 +103,7 @@ def test_writer_emits_three_valid_records(monkeypatch, tmp_path) -> None:
         "contract",
         "provenance",
         "app_pins",
+        "hook_env",
     ]
     assert [(c.name, c.seconds) for c in loaded["operation"].checks] == [
         ("staging:platform/alerting", 12.5)

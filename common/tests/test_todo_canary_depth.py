@@ -1960,7 +1960,7 @@ def test_postgres_probe_crud_executes_write_read_delete_roundtrip(app) -> None:
     assert PG_PASSWORD not in bad_res["detail"]
 
 
-def test_todo_runtime_hooks_manifest_declares_all_five_slots() -> None:
+def test_todo_runtime_hooks_manifest_declares_all_five_slots(tmp_path) -> None:
     """#1503, #1554, #1608: platform/30.todo/runtime-hooks.manifest.json conforms to
     RuntimeHooksManifest schema v2, declares all 5 HOOK_SLOTS without duplicating inline Python
     one-liners across slots, and delegates to probe_health.py."""
@@ -1997,7 +1997,7 @@ def test_todo_runtime_hooks_manifest_declares_all_five_slots() -> None:
             app_url="https://todo-staging.example.com",
             environment="staging",
             version_ref="v1.0.0",
-            cwd=SERVICE_DIR,
+            cwd=tmp_path,
             ambient_env={"PATH": "/usr/bin:/bin"},
             runner=lambda cmd, **kw: subprocess.CompletedProcess(
                 cmd, 0, stdout="ok\n", stderr=""

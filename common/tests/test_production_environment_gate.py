@@ -392,10 +392,7 @@ def test_the_real_workflow_tree_satisfies_the_gate_entry_point():
 
 
 def test_the_benign_secret_list_is_pinned():
-    assert NON_PRODUCTION_SECRETS == (
-        "GITHUB_TOKEN",
-        "ZAI_CODING_CN_API_KEY",
-    )
+    assert NON_PRODUCTION_SECRETS == ("GITHUB_TOKEN",)
 
 
 def test_zero_class_pending_entries_remain_in_ungated_jobs():

@@ -18,12 +18,8 @@ from collections.abc import Iterator, Mapping
 import yaml
 
 # Default deny (#1138): a job that reads any secret not named here holds a production
-# credential. These secrets reach only alert and report channels, a model API, or the
-# job's own GitHub token.
-NON_PRODUCTION_SECRETS = (
-    "GITHUB_TOKEN",
-    "ZAI_CODING_CN_API_KEY",
-)
+# credential. The job's own GitHub token is the only secret named here.
+NON_PRODUCTION_SECRETS = ("GITHUB_TOKEN",)
 
 # Jobs that can change production. Value: the full production condition, or None when
 # the job always runs against production. The environment condition must equal it after

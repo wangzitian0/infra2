@@ -1225,7 +1225,7 @@ def test_post_deploy_app_hooks_execute_smoke_and_record_results(
     )
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
-    assert sorted(fetched) == [("finance_report/app", SHA), ("truealpha/app", SHA)]
+    assert sorted(set(fetched)) == [("finance_report/app", SHA), ("truealpha/app", SHA)]
     assert sorted(executed) == sorted(
         [
             ("smoke", "https://report-staging.zitian.party", "staging", "v0.2.47"),
@@ -2260,7 +2260,7 @@ def test_run_scheduled_app_audits_executes_scheduled_audit_and_records_trail(
     monkeypatch, capsys, tmp_path
 ) -> None:
     """#1493: run_scheduled_app_audits discovers Apps declaring scheduled_audit, forwards
-    AI_API_KEY via env_overrides, records the issue trail, and main(--run-scheduled-audit)
+    TA_EMAIL from the env, records the issue trail, and main(--run-scheduled-audit)
     returns 1 when any audit fails."""
     from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
     from infra2_sdk.refs import ResolvedRef
@@ -2292,7 +2292,7 @@ def test_run_scheduled_app_audits_executes_scheduled_audit_and_records_trail(
                     "run": "echo ok",
                     "bootstrap": "",
                     "timeout_seconds": 30,
-                    "required_env": ["AI_API_KEY"]
+                    "required_env": ["TA_EMAIL"]
                     if slot_name == "scheduled_audit"
                     else [],
                     "optional_env": [],
@@ -2318,7 +2318,7 @@ def test_run_scheduled_app_audits_executes_scheduled_audit_and_records_trail(
         **_kw,
     ):
         seen_calls.append(
-            (slot, app_url, version_ref, str((ambient_env or {}).get("AI_API_KEY", "")))
+            (slot, app_url, version_ref, str((ambient_env or {}).get("TA_EMAIL", "")))
         )
         return HookRunResult(
             service="finance_report/app",
@@ -2343,8 +2343,7 @@ def test_run_scheduled_app_audits_executes_scheduled_audit_and_records_trail(
         ),
     )
     monkeypatch.setenv("GITHUB_TOKEN", "tok-audit")
-    monkeypatch.setenv("ZAI_CODING_CN_API_KEY", "zai-secret-key")
-    monkeypatch.delenv("AI_API_KEY", raising=False)
+    monkeypatch.setenv("TA_EMAIL", "ta@example.test")
 
     rc = main(["--repo-root", str(tmp_path), "--run-scheduled-audit"])
     assert rc == 1
@@ -2360,13 +2359,13 @@ def test_run_scheduled_app_audits_executes_scheduled_audit_and_records_trail(
             "scheduled_audit",
             "https://report-staging.zitian.party",
             "v0.2.50",
-            "zai-secret-key",
+            "ta@example.test",
         ),
         (
             "scheduled_audit",
             "https://truealpha-staging.truealpha.club",
             "v0.2.83",
-            "zai-secret-key",
+            "ta@example.test",
         ),
     ]
     assert recorded_trails == [("scheduled_audit", 2)]
@@ -2742,11 +2741,11 @@ def _load_workflows() -> dict[str, dict]:
 
 def test_workflow_steps_that_run_hook_slots_supply_every_runner_secret_env() -> None:
     """#1529: each step that runs an App hook slot gets each name of
-    HOOK_RUNNER_SECRET_ENV from the secret that the table names. Run 42809042184 failed with
+    HOOK_RUNNER_SECRET_NAMES from the secret of the same name. Run 42809042184 failed with
     ``missing required hook env: AI_API_KEY`` because reconcile-iac-inputs.yml did not."""
     from common.deploy import app_contract
 
-    table = dict(app_contract.HOOK_RUNNER_SECRET_ENV)
+    table = {name: name for name in app_contract.HOOK_RUNNER_SECRET_NAMES}
     workflows = _load_workflows()
 
     # The scan must find both known runners. An empty scan would pass without checking.
@@ -2760,18 +2759,208 @@ def test_workflow_steps_that_run_hook_slots_supply_every_runner_secret_env() -> 
 
     # Mutation proof 1: a job env without the name fails.
     mutated = yaml.safe_load(yaml.safe_dump(workflows))
-    del mutated["reconcile-iac-inputs.yml"]["jobs"]["reconcile"]["env"]["AI_API_KEY"]
+    del mutated["reconcile-iac-inputs.yml"]["jobs"]["reconcile"]["env"]["TA_EMAIL"]
     problems = _unsupplied_runner_env(mutated, table)
     assert len(problems) == 1
     assert "reconcile-iac-inputs.yml job 'reconcile'" in problems[0]
-    assert "AI_API_KEY must be ${{ secrets.ZAI_CODING_CN_API_KEY }}" in problems[0]
+    assert "TA_EMAIL must be ${{ secrets.TA_EMAIL }}" in problems[0]
 
     # Mutation proof 2: the name from another secret fails.
     mutated = yaml.safe_load(yaml.safe_dump(workflows))
-    mutated["reconcile-iac-inputs.yml"]["jobs"]["reconcile"]["env"]["AI_API_KEY"] = (
+    mutated["reconcile-iac-inputs.yml"]["jobs"]["reconcile"]["env"]["TA_EMAIL"] = (
         "${{ secrets.OTHER_API_KEY }}"
     )
     assert len(_unsupplied_runner_env(mutated, table)) == 1
+
+
+def _manifest_required_names() -> set[str]:
+    """Return every ``required_env`` name of the real App manifests, minus the context names."""
+    from common.deploy import app_contract
+
+    names: set[str] = set()
+    for raw in (_REAL_FR_HOOKS_MANIFEST_JSON, _REAL_TA_HOOKS_MANIFEST_JSON):
+        for spec in json.loads(raw)["slots"].values():
+            names.update(spec.get("required_env") or ())
+    return names - set(app_contract.HOOK_RUNNER_CONTEXT_ENV)
+
+
+def test_hook_runner_secret_env_names_only_required_names() -> None:
+    """#1633: the allow-list holds exactly the secret names that an App manifest requires.
+    A name that no manifest requires gives a secret to no consumer (``AI_API_KEY`` did)."""
+    from common.deploy import app_contract
+
+    assert set(app_contract.HOOK_RUNNER_SECRET_NAMES) == _manifest_required_names()
+
+
+def test_workflow_hook_secret_names_equal_the_allow_list() -> None:
+    """#1633: in each hook-slot step, the env names that an App manifest requires come from a
+    secret of the same name, and these names are the allow-list."""
+    from common.deploy import app_contract
+
+    required = _manifest_required_names()
+    steps = _hook_slot_steps(_load_workflows())
+    assert steps
+    for file_name, job_id, step_name, env in steps:
+        supplied = {name for name in required if _secret_name(env.get(name)) == name}
+        assert supplied == set(app_contract.HOOK_RUNNER_SECRET_NAMES), (
+            file_name,
+            job_id,
+            step_name,
+        )
+
+
+def _ta_manifest_requiring_ta_email(required_slot: str = "staging_gate"):
+    from infra2_sdk.manifests import HOOK_SLOTS, RuntimeHooksManifest
+
+    return RuntimeHooksManifest.from_dict(
+        {
+            "schema_version": 2,
+            "service": "truealpha/app",
+            "slots": {
+                slot: {
+                    "run": "echo ok",
+                    "bootstrap": "",
+                    "timeout_seconds": 30,
+                    "required_env": ["TA_EMAIL"] if slot == required_slot else [],
+                    "optional_env": [],
+                    "artifacts_dir": f"artifacts/{slot}",
+                }
+                for slot in HOOK_SLOTS
+            },
+        }
+    )
+
+
+def test_train_fails_before_any_deploy_when_a_pinned_hook_env_value_is_missing(
+    monkeypatch, tmp_path
+) -> None:
+    """#1633: a pinned manifest requires TA_EMAIL and the job env has none. main exits non-zero
+    with the service, the slot and the name, and runs 0 deploy commands. The ``pre`` record
+    names the check ``hook_env``."""
+    from infra2_sdk.refs import ResolvedRef
+
+    (tmp_path / "harness").mkdir(parents=True)
+    (tmp_path / "harness" / "repos.yaml").write_text(
+        "schema_version: 1\nrepositories:\n"
+        "  - id: truealpha\n    role: external-application\n    release_tag: v0.2.89\n",
+        encoding="utf-8",
+    )
+    deploy_calls: list[object] = []
+    monkeypatch.setattr(reconcile, "assert_after_on_main", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        reconcile, "assert_app_version_ref_on_main", lambda *_a, **_kw: None
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
+    )
+    manifest = _ta_manifest_requiring_ta_email()
+    monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
+    monkeypatch.setattr(
+        reconcile,
+        "run_deploy_commands",
+        lambda cmds, **_kw: deploy_calls.extend(cmds) or [],
+    )
+    emitted: list[tuple[str, list[str]]] = []
+    real_emit = reconcile.StageRun.emit
+    monkeypatch.setattr(
+        reconcile.StageRun,
+        "emit",
+        lambda self, phase, started, checks, **kw: (
+            emitted.append((phase, [c.name for c in checks]))
+            or real_emit(self, phase, started, checks, **kw)
+        ),
+    )
+    monkeypatch.delenv("TA_EMAIL", raising=False)
+
+    with pytest.raises(SystemExit) as raised:
+        main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--after",
+                "v9.9.9",
+                "--env",
+                "staging",
+                "--changed-file",
+                "harness/repos.yaml",
+            ]
+        )
+    message = str(raised.value)
+    assert "truealpha/app" in message
+    assert "staging_gate" in message
+    assert "TA_EMAIL" in message
+    assert deploy_calls == []
+    assert ("pre", ["provenance", "app_pins", "hook_env"]) in [
+        (phase, [n for n in names if n != "contract"]) for phase, names in emitted
+    ]
+
+
+def test_scheduled_audit_fails_a_service_with_a_missing_hook_env_value_without_running_it(
+    monkeypatch, tmp_path
+) -> None:
+    """#1633: the same missing name gives a failed result for the service. The hook executor
+    gets 0 calls."""
+    from infra2_sdk.refs import ResolvedRef
+
+    (tmp_path / "harness").mkdir(parents=True)
+    (tmp_path / "harness" / "repos.yaml").write_text(
+        "schema_version: 1\nrepositories:\n"
+        "  - id: truealpha\n    role: external-application\n    release_tag: v0.2.89\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
+    )
+    manifest = _ta_manifest_requiring_ta_email("scheduled_audit")
+    monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        reconcile, "execute_app_hook_slot", lambda *_a, **_kw: calls.append("x")
+    )
+    monkeypatch.delenv("TA_EMAIL", raising=False)
+
+    results = reconcile.run_scheduled_app_audits(
+        tmp_path,
+        slot="scheduled_audit",
+        services=["truealpha/app"],
+        record_trail=False,
+        runner=subprocess.run,
+    )
+    assert calls == []
+    assert [(r["service"], r["status"], r["ok"]) for r in results] == [
+        ("truealpha/app", "fail", False)
+    ]
+    assert "TA_EMAIL" in str(results[0]["missing_env_error"])
+    assert "scheduled_audit" in str(results[0]["missing_env_error"])
+
+
+def test_git_tracks_no_hook_artifacts_file() -> None:
+    """#1633: a hook run writes ``.artifacts/``; no tracked path may sit under such a directory."""
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+    assert tracked
+    assert [p for p in tracked if ".artifacts" in Path(p).parts] == []
+
+
+def test_no_workflow_reads_the_deleted_hook_secret() -> None:
+    """#1633: no workflow reads ``secrets.ZAI_CODING_CN_API_KEY`` or sets ``AI_API_KEY``."""
+    texts = {
+        p.name: p.read_text(encoding="utf-8")
+        for p in sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
+    }
+    assert texts
+    bad = [
+        name
+        for name, text in texts.items()
+        if "secrets.ZAI_CODING_CN_API_KEY" in text
+        or re.search(r"^\s*AI_API_KEY:", text, re.M)
+    ]
+    assert bad == []
 
 
 # --- #1603: the bun that App hook commands call must exist on the hook runner -------------
@@ -2976,13 +3165,13 @@ def test_hook_slot_steps_install_the_bun_that_manifest_commands_call() -> None:
 def _required_env_without_source(raw_manifest: dict) -> dict[str, tuple[str, ...]]:
     """Map each slot to its ``required_env`` names that the infra2 runner never supplies.
 
-    The runner supplies the names of HOOK_RUNNER_SECRET_ENV (from a secret) and of
+    The runner supplies the names of HOOK_RUNNER_SECRET_NAMES (from a secret) and of
     HOOK_RUNNER_CONTEXT_ENV (from the deploy request).
     """
     from common.deploy import app_contract
 
     manifest = reconcile.RuntimeHooksManifest.from_dict(raw_manifest)
-    supplied = set(app_contract.HOOK_RUNNER_SECRET_ENV) | set(
+    supplied = set(app_contract.HOOK_RUNNER_SECRET_NAMES) | set(
         app_contract.HOOK_RUNNER_CONTEXT_ENV
     )
     gaps = {
@@ -3111,7 +3300,7 @@ def test_run_post_deploy_app_hooks_records_failed_entry_on_missing_required_hook
         slot: str,
         **_kw,
     ):
-        raise ValueError("missing required hook env: ['AI_API_KEY']")
+        raise ValueError("missing required hook env: ['TA_EMAIL']")
 
     monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
 
@@ -3317,7 +3506,7 @@ def test_audit_app_hooks_fails_closed_on_unsupplied_required_env(
     monkeypatch, capsys, tmp_path
 ) -> None:
     """#1534: audit_app_hooks rejects any slot whose required_env lacks an infra2 source in
-    HOOK_RUNNER_SECRET_ENV | HOOK_RUNNER_CONTEXT_ENV instead of masking it with a dry-run placeholder."""
+    HOOK_RUNNER_SECRET_NAMES | HOOK_RUNNER_CONTEXT_ENV."""
     from infra2_sdk.refs import ResolvedRef
 
     (tmp_path / "harness").mkdir(parents=True, exist_ok=True)
@@ -3355,10 +3544,6 @@ def test_audit_app_hooks_fails_closed_on_unsupplied_required_env(
     assert (
         "finance_report/app: unsupplied required_env 'UNSUPPLIED_SMOKE_SECRET' in slot 'smoke'"
         in out["errors"]
-    )
-    assert any(
-        "finance_report/app: smoke: missing required hook env" in err
-        for err in out["errors"]
     )
 
 
