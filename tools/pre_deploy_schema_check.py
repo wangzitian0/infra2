@@ -622,7 +622,7 @@ def migrations_pending(db_url: str, source: EnumSource, app_path: str | None) ->
     the caller treats a raise as "nothing covered": no ``script_location`` in alembic.ini, a
     missing alembic.ini, several version rows, a row that does not resolve to a revision
     (``base``, an unknown id, or a symbol the image does not know), several heads in the
-    image. A database with no version row has nothing pending.
+    image. A database with no version row is not treated as pending: the gate blocks, although alembic would run every migration from base.
     """
     from alembic.config import Config
     from alembic.script import ScriptDirectory

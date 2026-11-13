@@ -347,11 +347,20 @@ class _UnknownRevision(Exception):
     """Stands in for alembic's CommandError, raised for an id that no file defines."""
 
 
-class _FakeScript:
-    """alembic's ScriptDirectory. Defaults: revisions 0073 -> 0074, one head 0074."""
+class _MultipleHeads(Exception):
+    """Stands in for alembic's CommandError: "The script directory has multiple heads"."""
 
-    known = {"0073": "0073", "0074": "0074", "head": "0074"}
-    heads = ["0074"]
+
+class _FakeScript:
+    """alembic's ScriptDirectory. Revisions 0073 -> 0074; `head` and the prefix `0074` resolve to 0074."""
+
+    known = {
+        "0073_stmt_gin_trace_trig_perf": "0073_stmt_gin_trace_trig_perf",
+        "0074_statement_runs": "0074_statement_runs",
+        "0074": "0074_statement_runs",
+        "head": "0074_statement_runs",
+    }
+    heads = ["0074_statement_runs"]
     location = ""
 
     @classmethod
@@ -368,7 +377,9 @@ class _FakeScript:
 
     def get_current_head(self):
         if len(self.heads) != 1:
-            raise RuntimeError("Multiple head revisions are present")
+            raise _MultipleHeads(
+                "The script directory has multiple heads (due to branching)"
+            )
         return self.heads[0]
 
 
@@ -389,8 +400,8 @@ class _FakeConfig:
 
 @pytest.fixture
 def fake_alembic(monkeypatch: pytest.MonkeyPatch):
-    _FakeScript.heads = ["0074"]
-    _FakeScript.known = {"0073": "0073", "0074": "0074", "head": "0074"}
+    _FakeScript.heads = ["0074_statement_runs"]
+    _FakeScript.known = dict(_FakeScript.known)
     monkeypatch.setitem(sys.modules, "alembic", ModuleType("alembic"))
     monkeypatch.setitem(
         sys.modules, "alembic.config", SimpleNamespace(Config=_FakeConfig)
@@ -414,14 +425,14 @@ def _pending(app_path="/app") -> bool:
 def test_migrations_are_pending_when_the_database_is_behind_the_image_head(
     fake_alembic,
 ) -> None:
-    fake_alembic(("0073",))
+    fake_alembic(("0073_stmt_gin_trace_trig_perf",))
     assert _pending() is True
 
 
 def test_no_migration_is_pending_when_the_database_is_at_the_image_head(
     fake_alembic,
 ) -> None:
-    fake_alembic(("0074",))
+    fake_alembic(("0074_statement_runs",))
     assert _pending() is False
 
 
@@ -431,8 +442,18 @@ def test_a_symbolic_head_row_resolves_before_the_comparison(fake_alembic) -> Non
     assert _pending() is False
 
 
-def test_a_database_with_no_revision_row_has_no_pending_migration(fake_alembic) -> None:
+def test_a_database_with_no_revision_row_is_not_treated_as_pending(
+    fake_alembic,
+) -> None:
+    """No version row: the function returns False, so the gate blocks (alembic would run every migration)."""
     fake_alembic(())
+    assert _pending() is False
+
+
+def test_a_prefix_row_resolves_to_its_revision_before_the_comparison(
+    fake_alembic,
+) -> None:
+    fake_alembic(("0074",))
     assert _pending() is False
 
 
@@ -451,28 +472,28 @@ def test_the_base_revision_raises_because_it_resolves_to_no_revision(
 
 
 def test_several_version_rows_raise(fake_alembic) -> None:
-    fake_alembic(("0073", "0074"))
+    fake_alembic(("0073_stmt_gin_trace_trig_perf", "0074_statement_runs"))
     with pytest.raises(ValueError, match="holds 2 rows"):
         _pending()
 
 
 def test_several_heads_in_the_image_raise(fake_alembic) -> None:
     _FakeScript.heads = ["0074a", "0074b"]
-    fake_alembic(("0073",))
-    with pytest.raises(RuntimeError, match="Multiple head"):
+    fake_alembic(("0073_stmt_gin_trace_trig_perf",))
+    with pytest.raises(_MultipleHeads, match="multiple heads"):
         _pending()
 
 
 def test_a_relative_script_location_is_resolved_against_the_app_path(
     fake_alembic,
 ) -> None:
-    fake_alembic(("0073",))
+    fake_alembic(("0073_stmt_gin_trace_trig_perf",))
     _pending("/srv/app")
     assert _FakeScript.location == "/srv/app/migrations"
 
 
 def test_the_config_file_is_the_alembic_ini_of_the_app_path(fake_alembic) -> None:
-    fake_alembic(("0073",))
+    fake_alembic(("0073_stmt_gin_trace_trig_perf",))
     _pending("/srv/app")
     assert _FakeConfig.path == "/srv/app/alembic.ini"
 
@@ -481,7 +502,7 @@ def test_an_alembic_ini_without_script_location_raises(
     fake_alembic, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """No fallback directory: the entrypoint fails on the same file, so the gate blocks."""
-    fake_alembic(("0073",))
+    fake_alembic(("0073_stmt_gin_trace_trig_perf",))
     monkeypatch.setattr(_FakeConfig, "defaults", {})
     with pytest.raises(ValueError, match="no script_location"):
         _pending()
