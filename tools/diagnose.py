@@ -18,13 +18,13 @@ from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from common.deploy.vps_ssh import resolve_ssh_credentials, ssh_cmd
 from common.deploy.release_markers import PRODUCTION_MARKER_PREFIX, RELEASE_TAG_RE
 from common.observability.signoz_queries import (
     error_logs_query,
     slow_traces_query,
     status_5xx_query,
 )
-from tools.canary_verify import _resolve_ssh_credentials, _ssh_cmd
 
 _SINCE_RE = re.compile(r"\A([0-9]+)([smhd])\Z")
 _UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
@@ -42,13 +42,13 @@ def parse_since(text: str) -> int:
 
 
 def ssh_runner() -> Runner:
-    host, user, key_path, port = _resolve_ssh_credentials()
+    host, user, key_path, port = resolve_ssh_credentials()
 
     def run(query: str) -> str:
         command = (
             f"docker exec {_CLICKHOUSE} clickhouse-client --query {shlex.quote(query)}"
         )
-        code, stdout, stderr = _ssh_cmd(command, host, user, key_path, port)
+        code, stdout, stderr = ssh_cmd(command, host, user, key_path, port)
         if code != 0:
             raise RuntimeError(f"ClickHouse query failed: {stderr.strip()[:300]}")
         return stdout
@@ -105,7 +105,9 @@ def diagnose(
     }
     lines = [f"== Error logs ({service}, {environment}, last {window_seconds}s)"]
     logs = _rows(run(error_logs_query(**args)))
-    lines += [f"{r[0]}  trace={r[1] or '-'}  {r[2] if len(r) > 2 else ''}" for r in logs]
+    lines += [
+        f"{r[0]}  trace={r[1] or '-'}  {r[2] if len(r) > 2 else ''}" for r in logs
+    ]
     if not logs:
         lines.append("none")
 

@@ -10,7 +10,11 @@ import pytest
 from common.observability import signoz_queries as q
 from tools import diagnose
 
-_GIT_ENV = {"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t", "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"}
+_GIT_ENV = {
+    "GIT_COMMITTER_NAME": "t",
+    "GIT_COMMITTER_EMAIL": "t@t",
+    "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin",
+}
 
 
 def _fake_run(query: str) -> str:
@@ -25,10 +29,22 @@ def _fake_run(query: str) -> str:
 
 def _git_repo(path, tags: dict[str, str]):
     def git(*args, env=None):
-        subprocess.run(["git", *args], cwd=path, check=True, env=env, capture_output=True)
+        subprocess.run(
+            ["git", *args], cwd=path, check=True, env=env, capture_output=True
+        )
 
     git("init", "-q")
-    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x")
+    git(
+        "-c",
+        "user.name=t",
+        "-c",
+        "user.email=t@t",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "x",
+    )
     for tag, when in tags.items():
         git("tag", "-a", tag, "-m", tag, env={**_GIT_ENV, "GIT_COMMITTER_DATE": when})
     return path
