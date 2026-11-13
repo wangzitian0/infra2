@@ -203,8 +203,9 @@ signals:
     consecutive_failures: 2
     renotify_window_sec: 0
 
-  # #1648: the public route of the runner health, probed by the 60 s runner next to the
-  # internal iac-runner-http; together they are the one pager of iac-runner-health.
+  # #1648: the public route of the runner, probed by the 60 s runner. It accepts 200 and
+  # 503 (judges the route only); the internal iac-runner-http is the one pager of the
+  # iac-runner-health condition and pages a 503.
   - signal_id: production.iac-runner.public-route
     environment: production
     component: iac-runner

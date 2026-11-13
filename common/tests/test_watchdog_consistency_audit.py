@@ -743,7 +743,8 @@ def test_the_iac_runner_condition_has_one_pager_and_the_daily_step_reports() -> 
 
 
 def test_the_probe_runner_covers_the_internal_and_the_public_runner_health() -> None:
-    """#1648: the one pager of iac-runner-health probes both routes every 60 s."""
+    """#1648: the 60 s runner probes the internal health (the pager of iac-runner-health)
+    and the public route (the route only: 503 is not its failure)."""
     from common.observability.probe_specs import (
         render_probe_spec_text,
         render_public_route_spec_text,
@@ -756,5 +757,7 @@ def test_the_probe_runner_covers_the_internal_and_the_public_runner_health() -> 
         " ", ""
     )
     assert "https://iac.zitian.party/health" in public
+    (line,) = [row for row in public.splitlines() if "iac-runner-public-route" in row]
+    assert "200,503" in line.replace(" ", "")  # a 503 /health pages once, not twice
     audit = _load_audit()
     assert ("production", "iac-runner-public-route") in audit._vps_public_routes()
