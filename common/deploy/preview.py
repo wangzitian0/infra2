@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
@@ -42,7 +43,7 @@ class PreviewResult:
     sha: str | None
     url: str
     healthy: bool | None  # None when no health check was performed (down / --no-wait)
-    containers_cleared: bool | None = None
+    containers_cleared: bool | None = None  # set by down(); None for up()
 
 
 # The source env's app compose to read AppRole creds from (its name in Dokploy).
@@ -74,6 +75,15 @@ def _source_app_vault_creds(client, project: str, source_env: str) -> dict[str, 
             f"{missing}; run `invoke setup-approle --project {project}` first"
         )
     return creds
+
+
+def render_throwaway_secrets(config) -> dict[str, str]:
+    """Generate one fresh value for each throwaway secret a Preview config names.
+
+    Each call returns new values, so two slots never share a secret. Values are
+    ``token_urlsafe`` strings: safe in a URL, a shell word and a SQL literal.
+    """
+    return {name: secrets.token_urlsafe(24) for name in config.throwaway_secrets}
 
 
 def _validate_domain(domain: str) -> str:
@@ -145,7 +155,7 @@ def _preview_env_vars(
         "IAC_CONFIG_HASH": config_hash,
     }
     vault_template = os.environ.get("VAULT_SECRETS_TEMPLATE", "")
-    if vault_template:
+    if vault_template and not config.throwaway_secrets:
         env_vars["VAULT_SECRETS_TEMPLATE"] = vault_template
     from common.deploy.contract import service_spec
     from common.core.service_identity import ServiceIdentity
@@ -284,7 +294,14 @@ def up(
         iac_ref=iac_ref,
         _now=_now,
     )
-    env_vars.update(_source_app_vault_creds(client, config.project, config.secret_env))
+    if config.throwaway_secrets:
+        # A platform Preview never reads Vault: the slot gets its own secrets, and they
+        # die with the slot. Nothing is printed or written to the repository.
+        env_vars.update(render_throwaway_secrets(config))
+    else:
+        env_vars.update(
+            _source_app_vault_creds(client, config.project, config.secret_env)
+        )
 
     gh_id = github_id if github_id is not None else client.get_github_provider_id()
     if not gh_id:
@@ -468,7 +485,6 @@ def down(
     domain: str,
     client,
     service: str = "finance_report/app",
-    wait: bool = False,
     attempts: int = 6,
     _sleep=None,
 ) -> PreviewResult:
@@ -479,39 +495,20 @@ def down(
 
     Finds the alias's compose by its deterministic name and deletes it with
     delete_volumes=True so the throwaway `preview_db` named volume is removed too —
-    nothing the preview wrote survives teardown. A no-op (compose_id=None) if the
-    alias was already gone, so teardown is safely idempotent.
+    nothing the preview wrote survives teardown. A missing compose (already gone) is
+    not an early exit: every call reads the container inventory until two consecutive
+    reads show zero containers of the slot, so teardown is idempotent and always proved.
     """
     config = preview_service_config(service)
     alias = preview_alias(kind, value, slug_prefix=config.slug_prefix)
     existing = _find_compose_for_down(client, config.project, alias)
     url = alias.app_url(domain=domain, base_subdomain=config.base_subdomain)
-    slot_suffix = f"-{alias.alias}"
-    if not existing:
-        cleared = (
-            wait_for_containers_absent(
-                client, service, slot_suffix, attempts=attempts, _sleep=_sleep
-            )
-            if wait
-            else None
-        )
-        return PreviewResult(
-            action="down",
-            alias=alias.alias,
-            compose_id=None,
-            sha=None,
-            url=url,
-            healthy=None,
-            containers_cleared=cleared,
-        )
-    compose_id = existing["composeId"]
-    client.delete_compose(compose_id, delete_volumes=True)
-    cleared = (
-        wait_for_containers_absent(
-            client, service, slot_suffix, attempts=attempts, _sleep=_sleep
-        )
-        if wait
-        else None
+    compose_id = None
+    if existing:
+        compose_id = existing["composeId"]
+        client.delete_compose(compose_id, delete_volumes=True)
+    cleared = wait_for_containers_absent(
+        client, service, f"-{alias.alias}", attempts=attempts, _sleep=_sleep
     )
     return PreviewResult(
         action="down",

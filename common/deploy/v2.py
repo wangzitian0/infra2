@@ -62,7 +62,7 @@ from common.deploy.preflight import (
     enforce_data_lane_red_lines,
     resolve_data_lane,
 )
-from common.deploy.env_config import env_config
+from common.deploy.env_config import env_config, preview_service_config
 from common.core.registry import domain_for_service
 from common.deploy.app_contract import encode_rendered_templates, verify_app_manifests
 from common.deploy.promote import deploy as _deploy_fixed
@@ -171,6 +171,66 @@ class DeployV2Result:
     detail: dict
 
 
+def _deploy_platform_preview(
+    service: str,
+    deploy_type: str,
+    version_ref,
+    iac_ref: str,
+    *,
+    client,
+    domain: str,
+    code_reviewed: bool | None,
+    wait: bool,
+    timeout: int,
+) -> DeployV2Result:
+    """Deploy a platform unit into its Preview slot through the one Preview lifecycle.
+
+    The unit's Preview compose is rendered with throwaway secrets (``preview.up``), so the
+    slot reads no Vault. ``version_ref`` names the slot only (a PR number or a branch);
+    the code is the infra2 ``iac_ref``. Capability is registry membership.
+    """
+    preview_service_config(
+        service
+    )  # fails before side effects for an unregistered unit
+    spec = deploy_type_spec(deploy_type)
+    alias_value = (
+        _default_main(version_ref)
+        if spec.alias_kind == "branch"
+        else str(version_ref).strip()
+    )
+    iac_sha = resolve_to_sha(iac_ref, repo=_INFRA2_REPO)
+    target = make_target(
+        deploy_type,
+        service=service,
+        version=iac_sha,
+        iac_ref=iac_sha,
+        alias_value=alias_value,
+    )
+    validate_deploy_target(target, service_spec(service))
+    data_lane = enforce_data_lane_red_lines(target, code_reviewed=code_reviewed)
+    result = _preview_up(
+        spec.alias_kind,
+        alias_value,
+        code=iac_sha,
+        service=service,
+        iac_ref=iac_sha,
+        domain=domain,
+        client=client,
+        branch=iac_ref.strip(),
+        wait=wait,
+        health_timeout=timeout,
+        repo=_INFRA2_REPO,
+    )
+    detail = {
+        "alias": result.alias,
+        "compose_id": result.compose_id,
+        "sha": result.sha,
+        "url": result.url,
+        "healthy": result.healthy,
+    }
+    return DeployV2Result(target, data_lane, "preview-lifecycle", detail)
+
+
 def _deploy_platform(
     service: str,
     deploy_type: str,
@@ -193,15 +253,15 @@ def _deploy_platform(
     ``version_ref`` is forwarded to the runner only when it names an APP release — a tag
     or sha that differs from the ``iac_ref`` — for a digest-pinned platform service such
     as ``truealpha/data_engine`` to pin (truealpha#712); ``main``, or a ref equal to the
-    ``iac_ref`` (the reconcile's shape), is ignored. Platform services have no preview —
-    only ``staging`` / ``prod``.
+    ``iac_ref`` (the reconcile's shape), is ignored. This path serves ``staging`` / ``prod``
+    only; a platform Preview goes to ``_deploy_platform_preview``.
     """
     spec = service_spec(service)
     type_spec = deploy_type_spec(deploy_type)
     if type_spec.env not in ("staging", "prod"):
         raise ValueError(
             f"platform service {service!r} deploys to staging/prod only "
-            f"(type {deploy_type!r} -> env {type_spec.env!r}); iac-pinned services have no preview"
+            f"(type {deploy_type!r} -> env {type_spec.env!r})"
         )
     iac_sha = resolve_to_sha(iac_ref, repo=_INFRA2_REPO)
     # The record: a platform service's version identity IS the infra2 commit (no app code).
@@ -570,12 +630,9 @@ def _deploy_preview_v2(
     iac_ref: str = "main",
     verify_manifests: bool = False,
 ) -> DeployV2Result:
-    if not svc_spec.supports_preview:
-        raise ValueError(
-            f"{service!r} does not support preview/canary deploys yet "
-            "(common.deploy.contract.ServiceSpec.supports_preview=False) — register a "
-            "common.deploy.env_config.preview_service_config entry for it first (#522)."
-        )
+    preview_service_config(
+        service
+    )  # the registry is the capability; fails before side effects
     previous_template = os.environ.get("VAULT_SECRETS_TEMPLATE")
     injected_template = False
     if verify_manifests and previous_template is None:
@@ -769,6 +826,18 @@ def deploy_v2(
     if svc_spec.iac_pinned:  # platform service -> iac_runner /deploy webhook
         if normalized_expected_sha is not None:
             raise ValueError("--expected-sha is only supported for app-backed deploys")
+        if spec.env == "preview":
+            return _deploy_platform_preview(
+                service,
+                deploy_type,
+                version_ref,
+                iac_ref,
+                client=client,
+                domain=domain,
+                code_reviewed=code_reviewed,
+                wait=wait,
+                timeout=timeout,
+            )
         return _deploy_platform(
             service,
             deploy_type,
@@ -1035,10 +1104,11 @@ def _handle_teardown(args: argparse.Namespace) -> int:
                 "alias": down_result.alias,
                 "compose_id": down_result.compose_id,
                 "url": down_result.url,
+                "containers_cleared": down_result.containers_cleared,
             }
         )
     )
-    return 0
+    return 0 if down_result.containers_cleared else 1
 
 
 def _handle_platform_batch(args: argparse.Namespace, service_names: list[str]) -> int:
@@ -1072,7 +1142,12 @@ def main(argv: list[str] | None = None) -> int:
 
         client = None
         should_verify_manifests = not args.no_verify_manifests
-        if not service_spec(args.service).iac_pinned:
+        # Staging and production of a platform unit go through the runner (no client).
+        # Its Preview goes through the Preview lifecycle and needs the Dokploy client.
+        if (
+            not service_spec(args.service).iac_pinned
+            or deploy_type_spec(args.deploy_type).env == "preview"
+        ):
             from common.deploy.dokploy_client import get_dokploy
 
             client = get_dokploy(host=f"cloud.{infra_domain()}")

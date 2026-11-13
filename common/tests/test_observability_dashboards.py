@@ -255,19 +255,51 @@ _EXPECTED_RULES = {
     "PlatformAlertingErrorLogs": ("threshold_rule", "error", 5, "4", "15m0s", ""),
     "PlatformTodoErrorLogs": ("threshold_rule", "error", 10, "4", "15m0s", ""),
 }
+# Every rule has a staging twin named `<rule>Staging` (#1649).
+_ALL_RULE_NAMES = set(_EXPECTED_RULES) | {f"{name}Staging" for name in _EXPECTED_RULES}
 # docs/ssot/ops.observability.md §3: the severity label is the P level.
 _P_LEVEL_BY_SEVERITY = {"critical": "P0", "error": "P1", "warning": "P2"}
 
 
-def _rendered_rules() -> dict[str, dict]:
+def _rendered_rules(environment: str = "production") -> dict[str, dict]:
     return {
-        d.alert_name: d.to_signoz_payload(["chan-1"]) for d in load_alert_definitions()
+        d.alert_name: d.to_signoz_payload(["chan-1"])
+        for d in load_alert_definitions()
+        if d.environment == environment
     }
 
 
 def test_the_catalog_holds_exactly_the_reviewed_rules() -> None:
     """#906: adding, dropping or renaming a rule has to update the reviewed table."""
     assert set(_rendered_rules()) == set(_EXPECTED_RULES)
+
+
+def test_staging_catalog_is_derived_with_report_delivery() -> None:
+    """#1649: every production rule has one staging twin from the same source. The twin
+    filters on staging and is a report; no catalog file holds a standard rule name."""
+    from common.alerting import is_report_payload
+    from common.alerting.standard_rules import STANDARD_RULES
+
+    production, staging = _rendered_rules(), _rendered_rules("staging")
+
+    assert {f"{name}Staging" for name in production} == set(staging)
+    for name, payload in staging.items():
+        (query,) = payload["condition"]["compositeQuery"]["queries"]
+        text = json.dumps(query["spec"])
+        assert (
+            "deployment.environment.name = 'staging'" in text  # log filter
+            or 'deployment.environment.name\\"=\\"staging\\"' in text  # PromQL
+        ), name
+        assert "production" not in text, name
+        assert is_report_payload({"commonLabels": payload["labels"]}), name
+        assert not is_report_payload(
+            {"commonLabels": production[name.removesuffix("Staging")]["labels"]}
+        ), name
+    standard = {rule["alert_name"] for rule in STANDARD_RULES}
+    for path in ALERT_RULES_FILES:
+        text = path.read_text(encoding="utf-8")
+        assert not [n for n in standard if f'"{n}"' in text], path
+        assert '"environment"' not in text.split('"rules"')[0], path
 
 
 @pytest.mark.parametrize("alert_name", sorted(_EXPECTED_RULES))
@@ -2111,7 +2143,7 @@ def test_every_rendered_rule_is_bound_to_the_bridge_channel_by_name() -> None:
     channel's name there and keep `usePolicy` off so those channels are the ones used."""
     payloads = render_alert_payloads()
 
-    assert {p["alert"] for p in payloads} == set(_EXPECTED_RULES)
+    assert {p["alert"] for p in payloads} == set(_ALL_RULE_NAMES)
     for payload in payloads:
         assert _spec_channels(payload) == [[BRIDGE_CHANNEL]], payload["alert"]
         assert payload["schemaVersion"] == "v2alpha1"
@@ -2250,7 +2282,7 @@ def _routing_problem_objects(rules=None, channels=None, **kwargs) -> list:
     return check_alert_routing(
         rules if rules is not None else _stored_rules(),
         channels if channels is not None else _CHANNELS_RESPONSE,
-        expected_alerts=_EXPECTED_RULES,
+        expected_alerts=_ALL_RULE_NAMES,
         channel_name=BRIDGE_CHANNEL,
         managed_source=_MANAGED,
         **kwargs,
@@ -2533,7 +2565,7 @@ def test_apply_alerts_binds_the_channel_name_not_the_id(monkeypatch) -> None:
     assert module.apply_alerts(object()) is True
 
     posted = [payload for method, _, payload in calls if method == "POST"]
-    assert {p["alert"] for p in posted} == set(_EXPECTED_RULES)
+    assert {p["alert"] for p in posted} == set(_ALL_RULE_NAMES)
     for payload in posted:
         assert _spec_channels(payload) == [[BRIDGE_CHANNEL]]
 
@@ -2971,7 +3003,7 @@ def test_apply_alerts_binds_every_rule_to_the_channel_name_end_to_end(
 
     (channel,) = fake.channels
     assert channel["id"] != channel["name"] == BRIDGE_CHANNEL
-    assert {r["alert"] for r in fake.rules.values()} == set(_EXPECTED_RULES)
+    assert {r["alert"] for r in fake.rules.values()} == set(_ALL_RULE_NAMES)
     for rule in fake.rules.values():
         assert _spec_channels(rule) == [[BRIDGE_CHANNEL]], rule["alert"]
         assert channel["id"] not in json.dumps(rule)
@@ -3004,7 +3036,7 @@ def test_owner_approved_sequence_reaches_a_green_verify(monkeypatch) -> None:
 
     with pytest.raises(Exit):
         module.verify_alert_routing(object())
-    assert sum("[unbound]" in e for e in errors) >= len(_EXPECTED_RULES)
+    assert sum("[unbound]" in e for e in errors) >= len(_ALL_RULE_NAMES)
     assert any(
         "[stale]" in e and "FinanceReportReconciliationAnomaly" in e for e in errors
     )
@@ -3778,3 +3810,29 @@ def test_apply_alerts_applies_every_rule_when_the_clock_stays_under_the_deadline
 
     assert fake.posted == order
     assert run.errors == []
+
+
+def test_standard_rules_name_every_counted_log_level() -> None:
+    """#1649: the summary of an error-log rule lists the levels its filter counts."""
+    from common.alerting.standard_rules import STANDARD_RULES
+    from common.observability.signoz_queries import ERROR_LOG_LEVELS
+
+    for rule in STANDARD_RULES:
+        assert "/".join(ERROR_LOG_LEVELS) in rule["summary"], rule["alert_name"]
+        assert "ERROR/FATAL" not in rule["summary"]
+
+
+def test_standard_rules_file_is_under_the_apply_path_filter() -> None:
+    """#1649: an edit of the standard table must trigger the observability apply."""
+    import fnmatch
+
+    text = (ROOT / ".github/workflows/reconcile-iac-inputs.yml").read_text(
+        encoding="utf-8"
+    )
+    line = next(
+        row for row in text.splitlines() if "common/observability_dashboards.py" in row
+    )
+    patterns = line.strip().rstrip(")").split("|")
+    assert any(
+        fnmatch.fnmatch("common/alerting/standard_rules.py", p) for p in patterns
+    )

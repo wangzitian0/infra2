@@ -79,7 +79,7 @@ change of `ok` or of the failing route set is a verdict change under the write
 budget below; a liveness ping never changes either. `detail` is stored cut to 300
 characters; a route list longer than 32 names, or with a name over 64 characters,
 is stored as unknown. `/status` serves at most 120 characters of any text field
-and stays under 3 KB in the worst incident (GitHub reads 4096 bytes).
+and stays under 3 KB in the worst incident (GitHub reads 16384 bytes).
 
 ## Required Secrets
 

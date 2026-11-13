@@ -34,6 +34,8 @@ SHORT_SHA = "1af32e6"
 @pytest.fixture(autouse=True)
 def _stub_resolver(monkeypatch):
     monkeypatch.setattr(pl, "resolve_to_sha", lambda code, repo=None: FULL_SHA)
+    # Teardown always polls the inventory twice; no test waits for the backoff.
+    monkeypatch.setattr(pl.time, "sleep", lambda _s: None)
 
 
 class FakeDokploy:
@@ -63,6 +65,9 @@ class FakeDokploy:
         self.found: list[tuple] = []
         self.ensured: list[tuple] = []
         self.deployment_queries = 0
+
+    def get_containers(self):
+        return []  # teardown reads the inventory: the slot has no containers left
 
     def get_github_provider_id(self):
         return self._github_id

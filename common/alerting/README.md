@@ -21,6 +21,10 @@ This package decomposes the monolithic alerting module into four focused modules
   - Builds SigNoz log-based and metric-based alert rule definitions.
   - Provides channel and rule discovery helpers.
 
+- `standard_rules.py`:
+  - Holds the one table of standard SigNoz error-log rules.
+  - Expands a rule list for `production` and `staging` (`{env}` placeholder, `Staging` name suffix).
+
 - `delivery.py`:
   - Validates Feishu webhook URLs and OpenAPI base URLs.
   - Checks TCP reachability to Feishu endpoints.

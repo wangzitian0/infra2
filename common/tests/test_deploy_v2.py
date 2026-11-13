@@ -823,8 +823,7 @@ def test_truealpha_staging_routes_fixed_with_its_own_service(calls):
 
 
 def test_truealpha_preview_routes_to_preview_backend_with_its_own_service(calls):
-    # #522: truealpha/app now has its own preview compose (ServiceSpec.supports_preview=
-    # True, deploy_env_config.preview_service_config("truealpha/app")) — it must route
+    # #522: truealpha/app now has its own preview compose (deploy_env_config.preview_service_config("truealpha/app")) — it must route
     # through the SAME preview backend as finance_report/app, but carrying its own
     # service key so the backend resolves truealpha's project/compose/DB, never
     # finance_report's internals.
@@ -972,6 +971,67 @@ def test_cli_passes_surface_through(cli, capsys, monkeypatch):
     assert rec["image_poll_seconds"] is None
     out = json.loads(capsys.readouterr().out)
     assert out["env"] == "staging" and out["backend"] == "deploy-primitive"
+
+
+def test_cli_platform_preview_builds_the_dokploy_client_and_reaches_preview_up(
+    monkeypatch, calls, capsys
+):
+    # #1676 review: main() gave an iac_pinned unit no client, so the Preview command
+    # crashed. The real deploy_v2 runs here; only the factory and the backend are stubbed.
+    import common.deploy.dokploy_client as dk
+
+    class _Client:
+        pass
+
+    made = []
+    monkeypatch.setattr(dk, "get_dokploy", lambda host: made.append(host) or _Client())
+    rc = dv2.main(
+        [
+            "--service",
+            "platform/todo",
+            "--type",
+            "preview/pr",
+            "--version-ref",
+            "7",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "zitian.party",
+        ]
+    )
+    assert rc == 0
+    assert made == ["cloud.zitian.party"]
+    assert isinstance(calls["preview"]["client"], _Client)
+    assert calls["preview"]["service"] == "platform/todo"
+
+
+def test_cli_platform_staging_builds_no_dokploy_client(monkeypatch):
+    import common.deploy.dokploy_client as dk
+
+    monkeypatch.setattr(
+        dk, "get_dokploy", lambda host: pytest.fail("staging goes through the runner")
+    )
+    sent = {}
+    monkeypatch.setattr(
+        dv2,
+        "trigger_platform_deploy",
+        lambda **kw: sent.update(kw) or {"status": "accepted", "deployment_id": "d1"},
+    )
+    monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    rc = dv2.main(
+        [
+            "--service",
+            "platform/redis",
+            "--type",
+            "staging",
+            "--iac-ref",
+            "v0.0.0",
+            "--domain",
+            "zitian.party",
+            "--no-wait",
+        ]
+    )
+    assert rc == 0 and sent["services"] == ["platform/redis"]
 
 
 def test_cli_dokploy_host_ignores_a_per_service_domain_override(cli, monkeypatch):
@@ -1134,7 +1194,7 @@ def test_fixed_deploy_verify_can_be_disabled(calls):
 # --- teardown: the --down flag folds in the retired preview-lifecycle `down` ------
 
 
-def _fake_down_result(kind, value, *, domain, client):
+def _fake_down_result(kind, value, *, domain, client, cleared=True):
     from types import SimpleNamespace
 
     return SimpleNamespace(
@@ -1142,7 +1202,25 @@ def _fake_down_result(kind, value, *, domain, client):
         alias=f"{kind}-{value}",
         compose_id="cmp-1",
         url=f"https://report-{kind}-{value}.{domain}",
+        containers_cleared=cleared,
     )
+
+
+def test_cli_down_exits_nonzero_when_slot_containers_survive(monkeypatch, capsys):
+    import common.deploy.dokploy_client as dk
+
+    monkeypatch.setattr(dk, "get_dokploy", lambda host: "client")
+    monkeypatch.setattr(
+        dv2,
+        "_preview_down",
+        lambda kind, value, *, domain, client, service: _fake_down_result(
+            kind, value, domain=domain, client=client, cleared=False
+        ),
+    )
+    argv = ["--type", "preview/pr", "--version-ref", "5", "--iac-ref", "main"]
+    rc = dv2.main([*argv, "--domain", "zp.io", "--down"])
+    assert rc == 1
+    assert json.loads(capsys.readouterr().out)["containers_cleared"] is False
 
 
 def test_cli_down_tears_down_the_selected_preview_alias(monkeypatch, capsys):
@@ -1472,9 +1550,45 @@ def test_platform_prod_requires_code_reviewed(monkeypatch):
         _platform(monkeypatch, deploy_type="prod", version_ref="")
 
 
-def test_platform_rejects_preview_type(monkeypatch):
+def test_platform_preview_routes_to_runner_preview(monkeypatch, calls):
+    # T3a (#1647): a registered platform unit reaches the Preview lifecycle, never the
+    # staging/prod webhook. The code is the infra2 iac_ref; version_ref names the slot only.
+    trigger = []
+    monkeypatch.setattr(
+        dv2, "trigger_platform_deploy", lambda **kw: trigger.append(kw) or {}
+    )
+    res = _deploy(service="platform/todo", deploy_type="preview/pr", version_ref=5)
+    assert trigger == []
+    assert res.backend == "preview-lifecycle"
+    preview = calls["preview"]
+    assert (preview["service"], preview["kind"], str(preview["value"])) == (
+        "platform/todo",
+        "pr",
+        "5",
+    )
+    assert preview["code"] == SHA_IAC and preview["repo"] == dv2._INFRA2_REPO
+
+
+def test_platform_preview_without_registry_entry_fails_before_side_effects(calls):
+    # The registry is the capability: platform/redis has no Preview entry.
+    with pytest.raises(ValueError, match="no preview config registered"):
+        _deploy(service="platform/redis", deploy_type="preview/pr", version_ref=5)
+    assert calls["preview"] is None
+
+
+def test_platform_staging_still_rejects_a_non_deployable_env(monkeypatch):
     with pytest.raises(ValueError, match="staging/prod only"):
-        _platform(monkeypatch, deploy_type="preview/pr", version_ref=5)
+        dv2._deploy_platform(
+            "platform/redis",
+            "preview/pr",
+            "main",
+            runner_url="",
+            secret="",
+            triggered_by="t",
+            code_reviewed=None,
+            wait=False,
+            timeout=1,
+        )
 
 
 def test_platform_ignores_version_ref(monkeypatch):

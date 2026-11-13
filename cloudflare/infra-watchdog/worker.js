@@ -63,7 +63,7 @@ const RUN_INTERVAL_MS = 30 * 60 * 1000;
 const LOOP_FAILURE_RUNS = 2;
 const LOOP_RECOVERY_RUNS = 2;
 // Every stored or served free-text field is cut to this; GitHub reads /status
-// through a 4096-byte window.
+// through a 16384-byte window (tools/out_of_band_watchdog.py).
 const DETAIL_MAX = 300;
 // /status serves at most this much of any one text field (worst case tested < 3 KB).
 const STATUS_TEXT_MAX = 120;

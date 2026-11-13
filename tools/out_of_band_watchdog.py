@@ -44,9 +44,13 @@ from common.deploy.dokploy_client import get_dokploy  # noqa: E402
 from common.observability.page_dedup import (  # noqa: E402
     REPORT as DEDUP_REPORT,
     RESOLVED as DEDUP_RESOLVED,
+    UNREADABLE,
     Finding,
+    GitHubIssues,
     dedup_page,
+    find_state,
     resolve_page_state,
+    trusted_authors,
 )
 from common.observability import scheduled_job_start  # noqa: E402
 from common.observability.estate_scheduler_liveness import (  # noqa: E402
@@ -355,7 +359,7 @@ def _run_worker_status_once(
     try:
         with urlopen(request, timeout=timeout) as response:  # noqa: S310
             status = response.status
-            body = response.read(4096).decode("utf-8", errors="replace")
+            body = response.read(16384).decode("utf-8", errors="replace")
     except HTTPError as exc:
         detail = exc.read(512).decode("utf-8", errors="replace")
         return red(f"HTTP {exc.code}; body={_one_line(detail)}")
@@ -391,8 +395,77 @@ def _run_worker_status_once(
         WORKER_STATUS_CHECK,
         True,
         f"worker last run fresh: age={age}s (max {max_age_seconds}s)",
-        note=_worker_delivered_findings_note(last_run),
+        note="\n".join(
+            filter(
+                None,
+                (
+                    _worker_delivered_findings_note(last_run),
+                    _stale_unpaged_heartbeat_note(payload),
+                ),
+            )
+        ),
     )
+
+
+E2E_SMOKE_JOB = "e2e-regressions-smoke"
+
+
+def run_e2e_smoke_state_check(current_env: Mapping[str, str]) -> list[CheckResult]:
+    """Report note while the daily production smoke is red: its state issue is open.
+
+    The smoke job holds no Feishu secret; it only opens and closes the state issue
+    (ops-checks.yml). This check puts that issue in the daily report, never a page.
+    """
+    repository = (current_env.get("GITHUB_REPOSITORY") or "").strip()
+    token = (current_env.get("GITHUB_TOKEN") or "").strip()
+    if "/" not in repository or not token:
+        return []
+    lookup = find_state(
+        GitHubIssues(repository, token), E2E_SMOKE_JOB, trusted_authors(current_env)
+    )
+    if lookup.kind == UNREADABLE:
+        return [
+            CheckResult(
+                E2E_SMOKE_JOB,
+                True,
+                "state issue unreadable",
+                "service-health",
+                note=f"Warning: the e2e smoke state could not be read ({lookup.detail}).",
+            )
+        ]
+    if not lookup.numbers:
+        return []
+    keys = ", ".join(lookup.state.keys) if lookup.state else "unknown"
+    return [
+        CheckResult(
+            E2E_SMOKE_JOB,
+            True,
+            f"state issue #{lookup.numbers[0]} is open",
+            "service-health",
+            note=(
+                f"Production e2e smoke is red (key {keys}, issue "
+                f"#{lookup.numbers[0]}); it closes on the next green run."
+            ),
+        )
+    ]
+
+
+def _stale_unpaged_heartbeat_note(payload: Mapping[str, object]) -> str:
+    """Report note for each unpaged (staging) heartbeat the Worker calls stale or missing.
+
+    The Worker never pages staging (#904), so this daily note is the only message.
+    """
+    heartbeats = payload.get("heartbeats")
+    stale = [
+        f"{beat.get('environment')}/{beat.get('name')} ({beat.get('state')})"
+        for beat in (heartbeats if isinstance(heartbeats, list) else [])
+        if isinstance(beat, dict)
+        and beat.get("paged") is False
+        and beat.get("state") in ("stale", "missing")
+    ]
+    if not stale:
+        return ""
+    return "Unpaged heartbeat is not fresh (report only): " + ", ".join(stale)
 
 
 def _worker_delivered_findings_note(last_run: Mapping[str, object]) -> str:
@@ -1552,11 +1625,15 @@ def _run_all_watchdog_checks(
     retry_delay_seconds: float,
     ssh_config: SshConfig,
 ) -> list[CheckResult]:
-    results = run_http_checks(
-        http_targets,
-        timeout,
-        max_attempts=retry_max_attempts,
-        retry_delay_seconds=retry_delay_seconds,
+    # First, so its note leads the report card.
+    results = run_e2e_smoke_state_check(current_env)
+    results.extend(
+        run_http_checks(
+            http_targets,
+            timeout,
+            max_attempts=retry_max_attempts,
+            retry_delay_seconds=retry_delay_seconds,
+        )
     )
     results.extend(
         run_worker_status_check(

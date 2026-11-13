@@ -29,6 +29,7 @@ from common.alerting import (
     signoz_feishu_channel_name,
     signoz_rule_channel_problems,
 )
+from common.alerting.standard_rules import ENVIRONMENTS, STANDARD_RULES, expand_rules
 from common.core.registry import _LAYERS
 
 # Repository root: common/observability_dashboards.py -> repo root is parents[1].
@@ -208,10 +209,17 @@ def load_alert_definitions(
     else:
         paths = list(path)
 
+    # The standard table joins the discovered catalogs only; an explicit path is read alone.
+    sources: list[tuple[Path | str, Any]] = (
+        [("common/alerting/standard_rules.py", {"rules": list(STANDARD_RULES)})]
+        if path is None
+        else []
+    )
+    sources += [(file_path, _load_json(file_path)) for file_path in paths]
+
     definitions: list[AlertDefinition] = []
     seen: set[str] = set()
-    for file_path in paths:
-        data = _load_json(file_path)
+    for file_path, data in sources:
         rules = data.get("rules") if isinstance(data, dict) else None
         if not isinstance(rules, list) or not rules:
             raise ObservabilityDefinitionError(
@@ -219,8 +227,14 @@ def load_alert_definitions(
             )
 
         default_service_id = str(data.get("service_id") or "").strip()
-        environment = str(data.get("environment") or "").strip()
-        for raw in rules:
+        # A catalog without a top-level `environment` serves every environment.
+        declared = str(data.get("environment") or "").strip()
+        pairs = (
+            [(declared, rule) for rule in rules]
+            if declared
+            else [(e, r) for e in ENVIRONMENTS for r in expand_rules(rules, e)]
+        )
+        for environment, raw in pairs:
             if not isinstance(raw, dict):
                 raise ObservabilityDefinitionError(
                     f"Each rule must be an object: {file_path}"

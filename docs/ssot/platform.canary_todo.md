@@ -132,6 +132,10 @@ Each run emits one `canary.run` span with one `canary.check.<name>` child span p
 
 **Log lines (#1436).** A run where every check passes logs one INFO line, `canary run ok: 3 write paths passed`. A run with a failed or unconfigured gating check logs `canary run red: ...` at ERROR. A check that does not pass logs a WARNING, `canary check <name> is <status>: <reason>`. `app.py` sets the `httpx` and `httpcore` loggers to WARNING after `init_service`. Before this, `httpx` logged one INFO line for each successful probe request, so the root level INFO exported three such lines for each run. They were 75% of the exported log lines (24 h, SigNoz ClickHouse, 2026-11-05). A successful probe request now logs nothing. A WARNING or ERROR record of these libraries is still exported. `httpx` logs no WARNING for a refused connection or an HTTP 5xx response, so the service line `canary check <name> is fail: <reason>` is the log of a failed probe. `common/tests/test_todo_probe_log_noise.py` loads the real app and proves each rule.
 
+## 5A. Preview slot (#1647)
+
+`platform/30.todo/preview.compose.yaml` runs the Canary in slot `preview/pr-<N>` with its own Redis, Postgres and S3 on a private network. The slot reads no Vault. `common.deploy.preview.render_throwaway_secrets` generates `REDIS_PASSWORD`, `CANARY_POSTGRES_PASSWORD`, `CANARY_S3_ACCESS_KEY` and `CANARY_S3_SECRET_KEY` on each render. The values go to the slot's Dokploy env only, and `down` deletes them with the slot. Entry point: `python -m common.deploy.v2 --service platform/todo --type preview/pr --version-ref <N>`. Only `/api/health` is routed in the slot, because the slot has no Authentik.
+
 ## 6. Constraints
 
 ### Do

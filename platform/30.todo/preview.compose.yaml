@@ -1,0 +1,176 @@
+# Preview slot of the Canary Todo (#1647). It reads no Vault. The Preview render gives
+# REDIS_PASSWORD, CANARY_POSTGRES_PASSWORD, CANARY_S3_ACCESS_KEY and CANARY_S3_SECRET_KEY
+# as fresh values for this slot (common.deploy.preview.render_throwaway_secrets).
+# The slot runs its own Redis, Postgres and S3 on a private network. Nothing is shared
+# with staging or production, and the volumes are deleted with the slot.
+services:
+  redis:
+    image: redis:alpine
+    container_name: platform-redis${ENV_SUFFIX}
+    mem_limit: 128m
+    command: ["sh", "-c", 'exec redis-server --save "" --loglevel warning --requirepass "$$REDIS_PASSWORD"']
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+    healthcheck:
+      test: ["CMD-SHELL", 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks:
+      - slot
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: platform-postgres${ENV_SUFFIX}
+    mem_limit: 256m
+    # No data survives `up`: a second `up` with new secrets cannot hit an old password.
+    tmpfs:
+      - /var/lib/postgresql/data
+    environment:
+      # The slot's only role is the canary login (POSTGRES_USER is a superuser of this
+      # throwaway server only). It matches CANARY_POSTGRES_USER of the todo service.
+      POSTGRES_USER: canary_ro
+      POSTGRES_PASSWORD: ${CANARY_POSTGRES_PASSWORD:?required}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U canary_ro -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks:
+      - slot
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  s3:
+    # Built from the platform S3 Dockerfile: the image carries the mc client used below.
+    build:
+      context: ../..
+      dockerfile: platform/03.s3/Dockerfile
+    pull_policy: build
+    image: platform-s3:${CONFIGURATION_SHA256:-}
+    container_name: platform-s3${ENV_SUFFIX}
+    mem_limit: 256m
+    environment:
+      RUSTFS_CONSOLE_ENABLE: "false"
+      RUSTFS_HEALTH_ENDPOINT_ENABLE: "true"
+      RUSTFS_ACCESS_KEY: ${CANARY_S3_ACCESS_KEY:?required}
+      RUSTFS_SECRET_KEY: ${CANARY_S3_SECRET_KEY:?required}
+    command: ["--address", ":9000", "/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9000/minio/health/live || exit 1"]
+      start_period: 10s
+      interval: 5s
+      retries: 12
+      timeout: 3s
+    networks:
+      - slot
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  s3-init:
+    # One shot: create the canary bucket, then exit. The todo service starts after it.
+    image: platform-s3:${CONFIGURATION_SHA256:-}
+    pull_policy: never
+    container_name: platform-s3-init${ENV_SUFFIX}
+    mem_limit: 64m
+    depends_on:
+      s3:
+        condition: service_healthy
+    restart: "no"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mc alias set slot http://platform-s3${ENV_SUFFIX}:9000 "$$ACCESS_KEY" "$$SECRET_KEY" >/dev/null
+        exec mc mb --ignore-existing slot/platform-canary
+    environment:
+      ACCESS_KEY: ${CANARY_S3_ACCESS_KEY:?required}
+      SECRET_KEY: ${CANARY_S3_SECRET_KEY:?required}
+    networks:
+      - slot
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  todo:
+    build:
+      context: ../..
+      dockerfile: platform/30.todo/Dockerfile
+    image: platform-todo:${CONFIGURATION_SHA256:-}
+    container_name: platform-todo${ENV_SUFFIX}
+    mem_limit: 256m
+    cpu_shares: 512
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+    environment:
+      PORT: "8000"
+      INTERNAL_DOMAIN: ${INTERNAL_DOMAIN:-zitian.party}
+      ENV_SUFFIX: ${ENV_SUFFIX:-}
+      POSTGRES_HOST: platform-postgres${ENV_SUFFIX}
+      POSTGRES_PORT: "5432"
+      CANARY_POSTGRES_USER: canary_ro
+      CANARY_POSTGRES_DATABASE: postgres
+      CANARY_POSTGRES_PASSWORD: ${CANARY_POSTGRES_PASSWORD:?required}
+      REDIS_HOST: platform-redis${ENV_SUFFIX}
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+      CANARY_S3_ENDPOINT_URL: http://platform-s3${ENV_SUFFIX}:9000
+      CANARY_S3_BUCKET: platform-canary
+      CANARY_S3_ACCESS_KEY: ${CANARY_S3_ACCESS_KEY:?required}
+      CANARY_S3_SECRET_KEY: ${CANARY_S3_SECRET_KEY:?required}
+      # The three informational probes read the shared platform services, as in staging.
+      SIGNOZ_OTEL_COLLECTOR: http://platform-signoz-otel-collector:13133
+      OPENPANEL_API_URL: http://platform-openpanel-api:3000/healthcheck
+      AUTHENTIK_ENDPOINT: http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/
+      GIT_COMMIT_SHA: ${INFRA_IAC_REF:-unknown}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    networks:
+      - slot
+      - dokploy-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=dokploy-network"
+      - "traefik.http.services.platform-todo${ENV_DOMAIN_SUFFIX}.loadbalancer.server.port=8000"
+      # The slot has no Authentik. Only the health path is public.
+      - "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.rule=Host(`todo${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && Path(`/api/health`)"
+      - "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.tls=true"
+      - "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.priority=100"
+      - "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.service=platform-todo${ENV_DOMAIN_SUFFIX}"
+
+networks:
+  slot: {}
+  dokploy-network:
+    external: true

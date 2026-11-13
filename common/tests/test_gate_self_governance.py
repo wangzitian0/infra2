@@ -387,3 +387,11 @@ def test_every_repository_module_the_gate_runs_is_in_the_closure() -> None:
     closure = set(gate.self_governing_files())
     outside = [p for p in loaded if p not in closure]
     assert not outside, f"the gate runs these files outside its closure: {outside}"
+
+
+def test_replay_test_is_in_closure() -> None:
+    """The replay module is gate code: its test changes what the replay proves (#1653)."""
+    path = "common/tests/test_gate_replay.py"
+    assert (ROOT / path).is_file()
+    assert "common/gate/replay.py" in gate.self_governing_files()
+    assert path in gate.self_governing_files()

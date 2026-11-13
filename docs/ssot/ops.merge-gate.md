@@ -120,6 +120,8 @@ Limits of the lock:
   k is the number of changed gate files with a direction proof. `--request-review` adds up to 2, and `--merge` adds 1.
   Each call can try up to 3 times.
 
+`python -m tools.pr_merge_gate --replay M --json` replays the last M merged PRs through this checkout's gate and the gate of `origin/main`, with the settling policy `either` of the merge command. It prints each verdict that changed and the direction: `stricter`, `looser`, `equal` or `mixed` (#1653). A gate edit shows its replay. A replay makes 1 + 3M `gh` calls and exits 4 for an empty set, a short verdict list or a failed fetch of `origin/main`.
+
 Residual risks:
 
 - The lock does not cover the production credentials that ungated jobs read.

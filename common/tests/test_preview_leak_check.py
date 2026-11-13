@@ -343,3 +343,59 @@ def test_detect_legacy_pr_compose_in_test_env_as_closed_pr() -> None:
     assert [(c.compose_id, reason) for c, reason in result["leaks"]] == [
         ("DSJ7jnbs8zz39s545ahmL", "closed-PR preview (pr-2656)")
     ]
+
+
+def _platform_slots():
+    return [
+        {
+            "name": "platform",
+            "environments": [
+                {
+                    "name": "preview",
+                    "compose": [
+                        {"name": "platform-todo-preview-pr-10", "composeId": "pt_10"},
+                        {"name": "platform-todo-preview-pr-20", "composeId": "pt_20"},
+                    ],
+                }
+            ],
+        }
+    ]
+
+
+def test_platform_slot_is_judged_against_infra2_prs_not_an_app_repo() -> None:
+    seen = []
+
+    def opener(request, timeout=0):
+        url = request.full_url
+        seen.append(url)
+        # infra2 has PR 10 open. finance_report has PR 20 open: it must not count.
+        if "/wangzitian0/infra2/" in url:
+            batch = [{"number": 10}]
+        elif "finance_report" in url:
+            batch = [{"number": 20}]
+        else:
+            batch = []
+        return _Resp(json.dumps(batch).encode())
+
+    result = plc.detect(_FakeClient(_platform_slots()), token="tok", opener=opener)
+    assert {c.compose_id for c, _ in result["leaks"]} == {"pt_20"}
+    assert any("/wangzitian0/infra2/pulls" in u for u in seen)
+
+
+def test_one_platform_prefix_per_unit_not_per_project(monkeypatch) -> None:
+    from common.deploy import env_config
+
+    other = env_config.PreviewServiceConfig(
+        project="platform",
+        slug_prefix="platform-other-preview",
+        compose_path="x",
+        db_name="",
+        base_subdomain="other",
+    )
+    monkeypatch.setitem(env_config._PREVIEW_SERVICE_CONFIGS, "platform/other", other)
+    projects = _platform_slots()
+    projects[0]["environments"][0]["compose"].append(
+        {"name": "platform-other-preview-pr-30", "composeId": "po_30"}
+    )
+    found = {c.compose_id: c.alias for c in plc.collect_preview_composes(projects)}
+    assert found == {"pt_10": "pr-10", "pt_20": "pr-20", "po_30": "pr-30"}
