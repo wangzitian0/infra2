@@ -973,6 +973,67 @@ def test_cli_passes_surface_through(cli, capsys, monkeypatch):
     assert out["env"] == "staging" and out["backend"] == "deploy-primitive"
 
 
+def test_cli_platform_preview_builds_the_dokploy_client_and_reaches_preview_up(
+    monkeypatch, calls, capsys
+):
+    # #1676 review: main() gave an iac_pinned unit no client, so the Preview command
+    # crashed. The real deploy_v2 runs here; only the factory and the backend are stubbed.
+    import common.deploy.dokploy_client as dk
+
+    class _Client:
+        pass
+
+    made = []
+    monkeypatch.setattr(dk, "get_dokploy", lambda host: made.append(host) or _Client())
+    rc = dv2.main(
+        [
+            "--service",
+            "platform/todo",
+            "--type",
+            "preview/pr",
+            "--version-ref",
+            "7",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "zitian.party",
+        ]
+    )
+    assert rc == 0
+    assert made == ["cloud.zitian.party"]
+    assert isinstance(calls["preview"]["client"], _Client)
+    assert calls["preview"]["service"] == "platform/todo"
+
+
+def test_cli_platform_staging_builds_no_dokploy_client(monkeypatch):
+    import common.deploy.dokploy_client as dk
+
+    monkeypatch.setattr(
+        dk, "get_dokploy", lambda host: pytest.fail("staging goes through the runner")
+    )
+    sent = {}
+    monkeypatch.setattr(
+        dv2,
+        "trigger_platform_deploy",
+        lambda **kw: sent.update(kw) or {"status": "accepted", "deployment_id": "d1"},
+    )
+    monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    rc = dv2.main(
+        [
+            "--service",
+            "platform/redis",
+            "--type",
+            "staging",
+            "--iac-ref",
+            "v0.0.0",
+            "--domain",
+            "zitian.party",
+            "--no-wait",
+        ]
+    )
+    assert rc == 0 and sent["services"] == ["platform/redis"]
+
+
 def test_cli_dokploy_host_ignores_a_per_service_domain_override(cli, monkeypatch):
     # #550 regression: truealpha/app's own public --domain (truealpha.club) must never
     # redirect the Dokploy CONTROL-PLANE host — there is exactly one Dokploy instance,

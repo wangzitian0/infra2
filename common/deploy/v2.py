@@ -1142,7 +1142,12 @@ def main(argv: list[str] | None = None) -> int:
 
         client = None
         should_verify_manifests = not args.no_verify_manifests
-        if not service_spec(args.service).iac_pinned:
+        # Staging and production of a platform unit go through the runner (no client).
+        # Its Preview goes through the Preview lifecycle and needs the Dokploy client.
+        if (
+            not service_spec(args.service).iac_pinned
+            or deploy_type_spec(args.deploy_type).env == "preview"
+        ):
             from common.deploy.dokploy_client import get_dokploy
 
             client = get_dokploy(host=f"cloud.{infra_domain()}")

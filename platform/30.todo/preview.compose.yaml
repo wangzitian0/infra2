@@ -28,6 +28,9 @@ services:
     image: postgres:16-alpine
     container_name: platform-postgres${ENV_SUFFIX}
     mem_limit: 256m
+    # No data survives `up`: a second `up` with new secrets cannot hit an old password.
+    tmpfs:
+      - /var/lib/postgresql/data
     environment:
       # The slot's only role is the canary login (POSTGRES_USER is a superuser of this
       # throwaway server only). It matches CANARY_POSTGRES_USER of the todo service.
@@ -137,7 +140,7 @@ services:
       SIGNOZ_OTEL_COLLECTOR: http://platform-signoz-otel-collector:13133
       OPENPANEL_API_URL: http://platform-openpanel-api:3000/healthcheck
       AUTHENTIK_ENDPOINT: http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/
-      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
+      GIT_COMMIT_SHA: ${INFRA_IAC_REF:-unknown}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-}
       OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-}
@@ -164,6 +167,7 @@ services:
       - "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
       - "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.tls=true"
       - "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.priority=100"
       - "traefik.http.routers.platform-todo-public${ENV_DOMAIN_SUFFIX}.service=platform-todo${ENV_DOMAIN_SUFFIX}"
 
 networks:

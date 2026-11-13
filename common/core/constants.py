@@ -250,6 +250,8 @@ SERVICE_TO_SUBMODULE_PATH: dict[str, str] = _load_service_to_submodule_path()
 PROJECT_REPOS: dict[str, str] = {
     service.split("/", 1)[0]: repo for service, repo in APP_SOURCES.items()
 }
+# The platform Preview slots (`pr-<N>`) belong to infra2 PRs, not to an app repo.
+PROJECT_REPOS["platform"] = f"{GITHUB_OWNER}/{GITHUB_REPO}"
 
 
 __all__ = [

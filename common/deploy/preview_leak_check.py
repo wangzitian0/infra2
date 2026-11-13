@@ -72,14 +72,15 @@ def collect_preview_composes(projects: list[dict]) -> list[PreviewCompose]:
     preview_env = normalize_env_name(PREVIEW_ENVIRONMENT)
     from common.deploy.env_config import _PREVIEW_SERVICE_CONFIGS
 
-    registered_projects = {
-        cfg.project: f"{cfg.slug_prefix}-" for cfg in _PREVIEW_SERVICE_CONFIGS.values()
-    }
+    # One prefix per registered unit: two units of one project never overwrite each other.
+    registered_projects: dict[str, list[str]] = {}
+    for cfg in _PREVIEW_SERVICE_CONFIGS.values():
+        registered_projects.setdefault(cfg.project, []).append(f"{cfg.slug_prefix}-")
 
     for project in projects:
         pname = str(project.get("name") or "")
-        prefix = registered_projects.get(pname)
-        if not prefix:
+        prefixes = registered_projects.get(pname)
+        if not prefixes:
             continue
         for env in project.get("environments") or []:
             env_name = normalize_env_name(env.get("name"))
@@ -90,7 +91,8 @@ def collect_preview_composes(projects: list[dict]) -> list[PreviewCompose]:
                 cid = compose.get("composeId")
                 if not cid:
                     continue
-                if env_name == preview_env and cname.startswith(prefix):
+                prefix = next((p for p in prefixes if cname.startswith(p)), None)
+                if env_name == preview_env and prefix:
                     alias = cname[len(prefix) :]
                 elif env_name == preview_env and cname.startswith(VALID_KIND_PREFIXES):
                     alias = cname

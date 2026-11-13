@@ -160,3 +160,60 @@ def test_teardown_reports_survivors_of_the_slot():
     )
     assert client.deleted == [("cmp-1", True)]
     assert result.containers_cleared is False
+
+
+def _services(path: str) -> dict:
+    return yaml.safe_load((REPO_ROOT / path).read_text())["services"]
+
+
+def test_preview_todo_service_repeats_the_staging_compose_fields():
+    # The preview compose is a copy. Every repeated field must stay equal to compose.yaml.
+    prod = _services("platform/30.todo/compose.yaml")["todo"]
+    slot = _services("platform/30.todo/preview.compose.yaml")["todo"]
+    for field in (
+        "build",
+        "image",
+        "container_name",
+        "mem_limit",
+        "cpu_shares",
+        "logging",
+    ):
+        assert slot[field] == prod[field], field
+    assert slot["healthcheck"]["test"] == prod["healthcheck"]["test"]
+    shared = set(slot["environment"]) & set(prod["environment"])
+    assert len(shared) == 18
+    assert {
+        k for k in shared if slot["environment"][k] != prod["environment"][k]
+    } == set()
+    # Secrets are the only environment names the slot adds.
+    config = preview_service_config(SERVICE)
+    assert set(slot["environment"]) - set(prod["environment"]) == set(
+        config.throwaway_secrets
+    )
+    # Every slot label equals a production label, except the slot's own Docker network.
+    own = {"traefik.docker.network=dokploy-network"}
+    assert set(slot["labels"]) - own <= set(prod["labels"])
+    public = [
+        x for x in prod["labels"] if "todo-public" in x or "services.platform-todo" in x
+    ]
+    assert public and set(public) <= set(slot["labels"])
+
+
+def test_slot_backing_services_use_the_platform_unit_images():
+    slot = _services("platform/30.todo/preview.compose.yaml")
+    assert (
+        slot["redis"]["image"]
+        == _services("platform/02.redis/compose.yaml")["redis"]["image"]
+    )
+    assert (
+        slot["postgres"]["image"]
+        == _services("platform/01.postgres/compose.yaml")["postgres"]["image"]
+    )
+    s3 = _services("platform/03.s3/compose.yaml")["s3"]
+    assert slot["s3"]["build"] == s3["build"] and slot["s3"]["image"] == s3["image"]
+
+
+def test_slot_postgres_keeps_no_data_across_up():
+    postgres = _services("platform/30.todo/preview.compose.yaml")["postgres"]
+    assert "/var/lib/postgresql/data" in postgres["tmpfs"]
+    assert not postgres.get("volumes")
