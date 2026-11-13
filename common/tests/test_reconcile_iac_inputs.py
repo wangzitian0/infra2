@@ -474,7 +474,9 @@ def test_main_refuses_a_staging_apply_on_a_branch_or_sha_before_provenance(
     """#1628: a staging dispatch on `main` must stop before any deploy unit runs."""
     reached: list[str] = []
     monkeypatch.setattr(
-        reconcile, "assert_after_on_main", lambda *_a, **_kw: reached.append("provenance")
+        reconcile,
+        "assert_after_on_main",
+        lambda *_a, **_kw: reached.append("provenance"),
     )
     monkeypatch.setattr(
         reconcile, "build_plan", lambda *_a, **_kw: reached.append("plan")
@@ -2571,7 +2573,9 @@ def test_local_service_hook_manifests_discovery_and_execution(monkeypatch) -> No
     ]
 
 
-def test_reconcile_workflow_always_runs_gates_and_every_sync_exits_after_its_pr() -> None:
+def test_reconcile_workflow_always_runs_gates_and_every_sync_exits_after_its_pr() -> (
+    None
+):
     """#1521, #1590, #1628: no dispatch input skips the post-deploy gates, and a sync
     (schedule or dispatch) opens or updates its PR and exits 0 without deploying."""
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
