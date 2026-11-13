@@ -6,7 +6,8 @@ Dokploy never clones the PR branch. Anything the allow list does not name is ref
 path mounts (the Docker socket), ``privileged``, ``cap_add``, ``devices``, ``ports``, host
 ``network_mode``/``pid``/``ipc``, extra networks and network options (aliases), an ``image``
 beside ``build``, missing, zero or large resource limits (memory, tmpfs, logs), and Traefik
-rules outside the slot's host.
+rules outside the slot's host. The file is limited to 64 KiB and holds no YAML anchor or
+alias (an alias bomb of under 1 KiB expands to gigabytes when a check prints a value).
 The renderer renames each service to a slot-unique name and gives each built service a
 slot-scoped image name, so a PR compose can neither shadow a production DNS name on the shared
 ``dokploy-network`` nor overwrite a production image tag. A PR number is also an App PR number,
@@ -19,15 +20,17 @@ import functools
 import re
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
-from common.deploy.env_config import preview_service_config
+from common.deploy.env_config import _PREVIEW_SERVICE_CONFIGS, preview_service_config
 from common.deploy.yaml_text import safe_load_text
 
 ROOT = Path(__file__).resolve().parents[2]
 INFRA2_GIT_URL = "https://github.com/wangzitian0/infra2.git"
 SHA40_RE = re.compile(r"\A[0-9a-f]{40}\Z")
+MAX_COMPOSE_BYTES = 64 * 1024
 
 # The build context a Preview compose file names; it becomes the git context of the PR head.
 _REPO_CONTEXT = "../.."
@@ -74,6 +77,8 @@ _MIN_MEM_BYTES = 6 * 1024**2  # a memory limit of 0 means "no limit" to Docker
 _MAX_MEM_BYTES = 1024**3
 _MAX_TMPFS_BYTES = 256 * 1024**2
 _MAX_TMPFS_ENTRIES = 4  # per service; at most 4 * 256m = 1g, the largest mem_limit
+_TMPFS_OPTIONS = ("size", "mode")  # nr_blocks, nr_inodes and the rest are refused
+_LOG_OPTIONS = {"max-size", "max-file"}
 _MAX_LOG_BYTES = 10 * 1024**2
 _MAX_LOG_FILES = 3
 _MAX_CPU_SHARES = 1024
@@ -81,7 +86,6 @@ _MAX_CPUS = 1.0
 _SERVICE_NAME_RE = re.compile(r"\A[a-z0-9][a-z0-9-]*\Z")
 _SIZE_RE = re.compile(r"\A([0-9]+)([bkmg]?)b?\Z", re.IGNORECASE)
 _SIZE_UNITS = {"": 1, "b": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
-_APP_PREVIEW_ROOTS = ("finance_report", "truealpha")
 _APP_NAME_RE = re.compile(
     r"\Atraefik\.http\.(?:routers|services)\.([A-Za-z0-9_-]+)" + _SUFFIX + r"\."
 )
@@ -89,6 +93,26 @@ _APP_NAME_RE = re.compile(
 
 class PreviewComposeRefused(ValueError):
     """The compose file breaks the allow list; nothing is sent to Dokploy."""
+
+
+class _AliasRefused(yaml.YAMLError):
+    """The compose file holds a YAML anchor or alias."""
+
+
+class _NoAliasLoader(yaml.SafeLoader):
+    """Raise on the first anchor or alias, before any check reads a value."""
+
+    def compose_node(self, parent, index):
+        event = self.peek_event()
+        if isinstance(event, yaml.AliasEvent) or event.anchor is not None:
+            raise _AliasRefused("YAML anchors and aliases are not allowed")
+        return super().compose_node(parent, index)
+
+
+# ``safe_load_text`` takes a module-like object; this one loads with ``_NoAliasLoader``.
+_NO_ALIAS_YAML = SimpleNamespace(
+    safe_load=lambda text: yaml.load(text, _NoAliasLoader)  # noqa: S506
+)
 
 
 def assert_runner_unit(service: str) -> None:
@@ -210,35 +234,39 @@ def reserved_service_names(root: Path = ROOT) -> frozenset[str]:
 @functools.lru_cache(maxsize=4)
 def app_preview_names(root: Path = ROOT) -> frozenset[str]:
     """Every container name, router name and Traefik service name (without the slot suffix)
-    that an App PR Preview of the checkout in ``root`` runs. A slot of this repository gets
-    the same ``-pr-<N>`` suffix, and PR numbers overlap between repositories, so equal names
-    would collide on ``dokploy-network`` and in Traefik. Fail closed when an App has none."""
+    that an App PR Preview of the checkout in ``root`` runs. The App units are the units of
+    ``_PREVIEW_SERVICE_CONFIGS`` that have no throwaway secrets; each one's ``compose_path``
+    is read. A slot of this repository gets the same ``-pr-<N>`` suffix, and PR numbers
+    overlap between repositories, so equal names would collide on ``dokploy-network`` and in
+    Traefik. Fail closed when a registered App unit has no readable compose or no name."""
     names: set[str] = set()
-    for top in _APP_PREVIEW_ROOTS:
+    for unit, config in sorted(_PREVIEW_SERVICE_CONFIGS.items()):
+        if config.throwaway_secrets:
+            continue
+        path = root / config.compose_path
+        try:
+            doc = safe_load_text(_NO_ALIAS_YAML, path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            raise PreviewComposeRefused(
+                f"App Preview compose of {unit} is unreadable ({exc.__class__.__name__})"
+            ) from exc
         found: set[str] = set()
-        for path in sorted((root / top).glob("**/preview/compose.yaml")):
-            try:
-                doc = safe_load_text(yaml, path.read_text(encoding="utf-8"))
-            except (OSError, yaml.YAMLError) as exc:
-                raise PreviewComposeRefused(
-                    f"App Preview compose {path} is unreadable ({exc.__class__.__name__})"
-                ) from exc
-            for spec in ((doc or {}).get("services") or {}).values():
-                if not isinstance(spec, dict):
-                    continue
-                if spec.get("container_name"):
-                    found.add(str(spec["container_name"]).replace("${ENV_SUFFIX}", ""))
-                labels = spec.get("labels") or []
-                keys = (
-                    labels
-                    if isinstance(labels, dict)
-                    else (i.split("=", 1)[0] for i in labels if isinstance(i, str))
-                )
-                for key in keys:
-                    if match := _APP_NAME_RE.match(str(key)):
-                        found.add(match[1])
+        for spec in ((doc or {}).get("services") or {}).values():
+            if not isinstance(spec, dict):
+                continue
+            if spec.get("container_name"):
+                found.add(str(spec["container_name"]).replace("${ENV_SUFFIX}", ""))
+            labels = spec.get("labels") or []
+            keys = (
+                labels
+                if isinstance(labels, dict)
+                else (i.split("=", 1)[0] for i in labels if isinstance(i, str))
+            )
+            for key in keys:
+                if match := _APP_NAME_RE.match(str(key)):
+                    found.add(match[1])
         if not found:
-            raise PreviewComposeRefused(f"no App Preview names found under {top}/")
+            raise PreviewComposeRefused(f"no App Preview names found for {unit}")
         names |= found
     return frozenset(names)
 
@@ -281,11 +309,24 @@ def _check_resources(service: str, name: str, spec: dict) -> None:
             service, f"tmpfs of {name!r} must be a list of at most {_MAX_TMPFS_ENTRIES}"
         )
     for tmp in tmpfs:
-        options = str(tmp).split(":", 1)[1] if ":" in str(tmp) else ""
-        sizes = [o[5:] for o in options.split(",") if o.startswith("size=")]
-        if len(sizes) != 1 or not (
-            0 < _size_bytes(service, "tmpfs size", sizes[0]) <= _MAX_TMPFS_BYTES
+        path, _, options = tmp.partition(":") if isinstance(tmp, str) else ("", "", "")
+        if not path.startswith("/"):
+            raise _refuse(service, f"tmpfs {tmp!r} must be an absolute container path")
+        # Only size= and mode=, each once: nr_blocks or nr_inodes can lift the size limit.
+        parts = [o.partition("=") for o in options.split(",")]
+        keys = [key for key, _, _ in parts]
+        if (
+            not set(keys) <= set(_TMPFS_OPTIONS)
+            or len(set(keys)) != len(keys)
+            or "size" not in keys
+            or not all(equals for _, equals, _ in parts)
         ):
+            raise _refuse(
+                service,
+                f"tmpfs {tmp!r} may hold one size= and one mode= and no other option",
+            )
+        size = next(value for key, _, value in parts if key == "size")
+        if not 0 < _size_bytes(service, "tmpfs size", size) <= _MAX_TMPFS_BYTES:
             raise _refuse(
                 service, f"tmpfs {tmp!r} needs size= above 0 and at most 256m"
             )
@@ -302,8 +343,11 @@ def _check_logging(service: str, name: str, spec: dict) -> None:
             service, f"service {name!r} needs logging with the json-file driver"
         )
     options = logging.get("options")
-    if not isinstance(options, dict):
-        raise _refuse(service, f"logging of {name!r} sets no options")
+    if not isinstance(options, dict) or set(options) != _LOG_OPTIONS:
+        raise _refuse(
+            service,
+            f"logging options of {name!r} must be exactly max-size and max-file",
+        )
     size, files = options.get("max-size"), options.get("max-file")
     if size is None or not (
         0 < _size_bytes(service, "max-size", size) <= _MAX_LOG_BYTES
@@ -398,9 +442,6 @@ def _check_service(
             or not str(volume).split(":")[1].startswith("/")
         ):
             raise _refuse(service, f"volume {volume!r} is not a declared named volume")
-    for tmp in spec.get("tmpfs", []):
-        if not isinstance(tmp, str) or not tmp.startswith("/"):
-            raise _refuse(service, f"tmpfs {tmp!r} must be an absolute container path")
     networks = spec.get("networks", [])
     if isinstance(networks, dict):
         if any(options for options in networks.values()):
@@ -464,10 +505,11 @@ def render_runner_compose(service: str, text: str, sha: str, pr: int) -> str:
 
 def _render(service: str, config, text: str, sha: str, pr: int) -> str:
     try:
-        doc = safe_load_text(yaml, text)
+        doc = safe_load_text(_NO_ALIAS_YAML, text)
     except yaml.YAMLError as exc:
         raise _refuse(
-            service, f"YAML does not parse ({exc.__class__.__name__})"
+            service,
+            f"YAML does not parse or has an anchor or alias ({exc.__class__.__name__})",
         ) from exc
     if not isinstance(doc, dict) or not isinstance(doc.get("services"), dict):
         raise _refuse(service, "top level must be a mapping with services")
@@ -499,15 +541,9 @@ def _render(service: str, config, text: str, sha: str, pr: int) -> str:
         name: _check_service(service, name, spec, declared, config, sha, pr, app_names)
         for name, spec in services.items()
     }
-    reserved = reserved_service_names()
     renamed = {}
     for name, spec in checked.items():
         spec = _rename_depends_on(spec, pr, known, service)
-        final = spec["container_name"].replace("${ENV_SUFFIX}", _slot_suffix(pr))
-        if final in reserved:
-            raise _refuse(service, f"container name {final!r} is a production name")
-        if _slot_name(name, pr) in reserved:
-            raise _refuse(service, f"service name {name!r} is a production name")
         _refuse_app_name(service, "service name", name, app_names)
         renamed[_slot_name(name, pr)] = spec
     doc["services"] = renamed
@@ -525,4 +561,8 @@ def read_compose_at(service: str, sha: str, *, root: Path = ROOT) -> str:
     )
     if result.returncode != 0:
         raise ValueError(f"commit {sha[:12]} has no {path}")
+    if len(result.stdout.encode("utf-8")) > MAX_COMPOSE_BYTES:
+        raise _refuse(
+            service, f"the file is larger than {MAX_COMPOSE_BYTES // 1024} KiB"
+        )
     return result.stdout

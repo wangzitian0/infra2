@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -567,10 +568,133 @@ def test_a_router_cannot_point_at_an_app_preview_traefik_service(name):
 
 
 def test_app_preview_names_fail_closed_when_an_app_has_no_preview_compose(tmp_path):
-    (tmp_path / "truealpha").mkdir()
-    (tmp_path / "finance_report").mkdir()
-    with pytest.raises(PreviewComposeRefused, match="no App Preview names"):
+    with pytest.raises(PreviewComposeRefused, match="finance_report/app is unreadable"):
         app_preview_names.__wrapped__(tmp_path)
+
+
+def test_an_app_unit_registered_without_a_preview_compose_fails_closed(
+    tmp_path, monkeypatch
+):
+    # The App list comes from the registry: a new App unit is read, never silently skipped.
+    for unit, config in pc_registry().items():
+        if not config.throwaway_secrets:
+            path = tmp_path / config.compose_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text((ROOT / config.compose_path).read_text())
+    monkeypatch.setitem(
+        pc_registry(),
+        "newapp/app",
+        replace(
+            pc_registry()["truealpha/app"],
+            compose_path="newapp/preview/compose.yaml",
+        ),
+    )
+    with pytest.raises(PreviewComposeRefused, match="newapp/app is unreadable"):
+        app_preview_names.__wrapped__(tmp_path)
+
+
+def pc_registry():
+    from common.deploy.env_config import _PREVIEW_SERVICE_CONFIGS
+
+    return _PREVIEW_SERVICE_CONFIGS
+
+
+def test_no_production_name_can_equal_a_slot_name():
+    # The renderer adds -pr-<N> to each name; a production name that already ends in
+    # -pr-<N> would collide with a slot. This guard replaces a branch that could not fire.
+    slot_like = re.compile(r"-pr-[0-9]+\Z")
+    names = reserved_service_names()
+    assert "vault" in names  # not green-while-empty
+    assert [n for n in names if slot_like.search(n)] == []
+
+
+def test_the_slot_name_guard_sees_a_real_collision(tmp_path):
+    (tmp_path / "platform").mkdir()
+    (tmp_path / "platform" / "compose.yaml").write_text(
+        "services:\n  vault-pr-7:\n    image: x\n"
+    )
+    names = reserved_service_names.__wrapped__(tmp_path)
+    assert [n for n in names if re.search(r"-pr-[0-9]+\Z", n)] == ["vault-pr-7"]
+
+
+@pytest.mark.parametrize(
+    "tmpfs",
+    [
+        "/x:size=1m,nr_blocks=0",
+        "/x:size=1m,nr_inodes=0",
+        "/x:size=1m,size=2m",
+        "/x:size=1m,",
+        "/x:size=1m,,mode=1777",
+        "/x:",
+    ],
+)
+def test_a_tmpfs_option_other_than_size_and_mode_is_refused(tmpfs):
+    doc = _doc()
+    doc["services"]["postgres"]["tmpfs"] = [tmpfs]
+    with pytest.raises(PreviewComposeRefused, match="tmpfs"):
+        _render(doc)
+
+
+def test_a_tmpfs_with_size_and_mode_passes():
+    doc = _doc()
+    doc["services"]["postgres"]["tmpfs"] = ["/x:size=128m,mode=1777"]
+    assert _render(doc)
+
+
+@pytest.mark.parametrize("key", ["compress", "mode", "max-buffer-size", "tag"])
+def test_a_logging_option_other_than_max_size_and_max_file_is_refused(key):
+    doc = _doc()
+    doc["services"]["redis"]["logging"]["options"][key] = "x"
+    with pytest.raises(PreviewComposeRefused, match="exactly max-size and max-file"):
+        _render(doc)
+
+
+ALIAS_BOMB = "a: &a [x, x, x, x]\nb: &b [*a, *a, *a, *a]\nc: &c [*b, *b, *b, *b]\n"
+
+
+def test_an_alias_is_refused_before_any_check_and_the_message_holds_no_value():
+    text = TODO_COMPOSE + "\nx-bomb: &a [1]\n"
+    with pytest.raises(PreviewComposeRefused, match="anchor or alias") as info:
+        render_runner_compose(UNIT, text, SHA, PR)
+    assert "[1]" not in str(info.value)
+    bomb = TODO_COMPOSE.replace("mem_limit: 64m", "mem_limit: *x", 1)
+    with pytest.raises(PreviewComposeRefused, match="anchor or alias"):
+        render_runner_compose(UNIT, "x: &x 64m\n" + bomb, SHA, PR)
+
+
+def test_an_alias_bomb_is_refused_fast():
+    import time
+
+    start = time.monotonic()
+    with pytest.raises(PreviewComposeRefused, match="anchor or alias"):
+        render_runner_compose(UNIT, ALIAS_BOMB, SHA, PR)
+    assert time.monotonic() - start < 2
+
+
+def test_the_app_preview_files_are_read_without_aliases(tmp_path):
+    for config in pc_registry().values():
+        if not config.throwaway_secrets:
+            path = tmp_path / config.compose_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("services:\n  a: &a\n    container_name: x\n  b: *a\n")
+    with pytest.raises(PreviewComposeRefused, match="unreadable"):
+        app_preview_names.__wrapped__(tmp_path)
+
+
+def test_a_compose_file_over_64_kib_is_refused_before_parsing(monkeypatch):
+    import subprocess
+
+    from common.deploy.preview_compose import MAX_COMPOSE_BYTES, read_compose_at
+
+    class Done:
+        returncode = 0
+        stdout = "#" * (MAX_COMPOSE_BYTES + 1)
+
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: Done())
+    with pytest.raises(PreviewComposeRefused, match="larger than 64 KiB"):
+        read_compose_at(UNIT, SHA)
+    Done.stdout = "#" * MAX_COMPOSE_BYTES
+    assert read_compose_at(UNIT, SHA) == Done.stdout
 
 
 def test_down_cancels_a_running_deploy_before_it_deletes_the_compose(monkeypatch):
