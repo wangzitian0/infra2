@@ -51,6 +51,7 @@ from common.deploy.app_contract import (
 )
 from common.alerting.stage_card import show_stage_card
 from common.deploy.dependencies import explain_fanout
+from common.deploy.deploy_guard_audit import app_hook_pair
 from common.deploy.transient_failure import classify_failure
 from common.deploy.contract import all_service_keys, service_spec, validate_iac_ref_form
 from common.deploy.preflight import (
@@ -69,13 +70,7 @@ from common.deploy.release_markers import (
     newest_release_tag,
     version_key,
 )
-from common.observability.issue_trail import (
-    CheckVerdict,
-    GitHubIssues,
-    Trail,
-    issue_trail_mode,
-    reconcile_issue_trail,
-)
+from common.observability.issue_trail import CheckVerdict
 from infra2_sdk.deploy import DeployRequest
 from infra2_sdk.manifests import (
     FORBIDDEN_HOOK_ENV_NAMES,
@@ -950,8 +945,6 @@ def sync_app_releases(
 #: the tag's own commit, so a plain tag fetch sends nothing and leaves it shallow. `--unshallow`
 #: is not used: git refuses it on a complete repository.
 _FULL_HISTORY_DEPTH = "--depth=2147483647"
-APP_HOOK_TITLE_PREFIX = "app-hook is red: "
-APP_HOOK_ISSUE_SOURCE = "app runtime hook"
 
 
 def _slot_release_ref(
@@ -1051,112 +1044,6 @@ def resolve_app_hook_cwd(
     except Exception:
         tmp_dir.cleanup()
         return Path(repo_root), None
-
-
-def record_app_hook_issue_trail(
-    hook_results: Sequence[Mapping[str, object]],
-    *,
-    target_env: str = "staging",
-    slot: str = "",
-    run_url: str = "",
-    env: Mapping[str, str] | None = None,
-    issues_factory: Callable[[str, str], object] = GitHubIssues,
-) -> int:
-    """Open, comment on, or close an incident issue in the target App repository (#1416, #1590)."""
-    if not hook_results:
-        return 0
-    current_env = dict(os.environ if env is None else env)
-    token = (
-        current_env.get("GITHUB_TOKEN") or current_env.get("GH_TOKEN") or ""
-    ).strip()
-    if not token:
-        return 0
-    mode = issue_trail_mode(current_env)
-    if mode == "off":
-        effective_env = {**current_env, "GITHUB_EVENT_NAME": "workflow_dispatch"}
-        mode = issue_trail_mode(effective_env)
-    else:
-        effective_env = current_env
-
-    by_service: dict[str, list[Mapping[str, object]]] = {}
-    for entry in hook_results:
-        svc = str(entry.get("service") or "").strip()
-        if svc:
-            by_service.setdefault(svc, []).append(entry)
-
-    rc = 0
-    norm_env = "production" if target_env in ("prod", "production") else "staging"
-    context_label = (
-        f"app hook {slot} ({norm_env})" if slot else f"post-deploy hook ({norm_env})"
-    )
-    fallback_repo = current_env.get("GITHUB_REPOSITORY", "wangzitian0/infra2")
-    for svc, items in sorted(by_service.items()):
-        app_repo = APP_SOURCES.get(svc, fallback_repo)
-        trail = Trail(complete=False)
-        for item in items:
-            item_slot = str(item.get("slot") or slot or "smoke")
-            status = str(item.get("status") or "fail")
-            name = f"{svc}:{item_slot}:{norm_env}"
-            if status == "pass":
-                trail.green.add(name)
-            else:
-                summary = str(item.get("summary") or f"{item_slot} failed")
-                stderr_tail = str(item.get("stderr_tail") or "")
-                app_url = str(item.get("app_url") or "")
-                version_ref = str(item.get("version_ref") or "")
-                detail = (
-                    f"service={svc} env={norm_env} version_ref={version_ref} "
-                    f"app_url={app_url}\n{summary}\n{stderr_tail}"
-                ).strip()
-                trail.failing[name] = CheckVerdict(
-                    name=name,
-                    ok=False,
-                    detail=detail,
-                    severity="high",
-                    failure_domain="app",
-                )
-        res = reconcile_issue_trail(
-            issues_factory(app_repo, token),
-            trail,
-            mode=mode,
-            run_url=run_url or github_run_url(current_env),
-            context=context_label,
-            env=effective_env,
-            title_prefix=APP_HOOK_TITLE_PREFIX,
-            source=APP_HOOK_ISSUE_SOURCE,
-        )
-        if res == 0:
-            if (
-                mode == "full"
-                and trail.green
-                and fallback_repo
-                and fallback_repo != app_repo
-            ):
-                green_res = reconcile_issue_trail(
-                    issues_factory(fallback_repo, token),
-                    Trail(green=set(trail.green), complete=False),
-                    mode=mode,
-                    run_url=run_url or github_run_url(current_env),
-                    context=context_label,
-                    env=effective_env,
-                    title_prefix=APP_HOOK_TITLE_PREFIX,
-                    source=APP_HOOK_ISSUE_SOURCE,
-                )
-                rc = rc or green_res
-        else:
-            if fallback_repo and fallback_repo != app_repo:
-                res = reconcile_issue_trail(
-                    issues_factory(fallback_repo, token),
-                    trail,
-                    mode=mode,
-                    run_url=run_url or github_run_url(current_env),
-                    context=context_label,
-                    env=effective_env,
-                    title_prefix=APP_HOOK_TITLE_PREFIX,
-                    source=APP_HOOK_ISSUE_SOURCE,
-                )
-            rc = rc or res
-    return rc
 
 
 def audit_app_hooks(
@@ -1398,8 +1285,6 @@ def run_post_deploy_app_hooks(
     slot: str = "smoke",
     manifest_fetcher: Callable[[str], bytes] | None = None,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-    record_issues: bool = True,
-    issues_factory: Callable[[str, str], object] = GitHubIssues,
 ) -> list[dict[str, object]]:
     """Execute post-deploy verification hook slot(s) for each deployed App or local service (#1416, #1493, #1521)."""
     slots = _parse_hook_slots(slot)
@@ -1496,24 +1381,6 @@ def run_post_deploy_app_hooks(
             }
             for svc in services_sorted:
                 hook_results.extend(futures[svc].result())
-    if (
-        record_issues
-        and hook_results
-        and (os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"))
-    ):
-        for single_slot in slots:
-            slot_results = [
-                r for r in hook_results if str(r.get("slot") or "") == single_slot
-            ]
-            if slot_results:
-                record_app_hook_issue_trail(
-                    slot_results,
-                    target_env=target_env,
-                    slot=single_slot,
-                    run_url=github_run_url(os.environ),
-                    env=os.environ,
-                    issues_factory=issues_factory,
-                )
     return hook_results
 
 
@@ -1527,12 +1394,9 @@ def run_scheduled_app_audits(
     env_overrides: Mapping[str, str] | None = None,
     manifest_fetcher: Callable[[str], bytes] | None = None,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-    issues_factory: Callable[[str, str], object] = GitHubIssues,
-    record_trail: bool = True,
-    run_url: str = "",
     services: Sequence[str] | None = None,
 ) -> list[dict[str, object]]:
-    """Execute a scheduled runtime hook slot across registered Apps and local services and record the GitHub Issue trail (#1493, #1521)."""
+    """Execute a scheduled runtime hook slot across registered Apps and local services (#1493, #1521)."""
     if slot not in HOOK_SLOTS:
         raise ValueError(f"unknown hook slot {slot!r}; allowed: {list(HOOK_SLOTS)}")
     effective_domain = base_domain.strip() or domain
@@ -1653,19 +1517,6 @@ def run_scheduled_app_audits(
             entry["missing_env_error"] = missing_env_error
         results.append(entry)
 
-    if (
-        record_trail
-        and results
-        and (effective_ambient.get("GITHUB_TOKEN") or effective_ambient.get("GH_TOKEN"))
-    ):
-        record_app_hook_issue_trail(
-            results,
-            target_env=target_env,
-            slot=slot,
-            run_url=run_url or github_run_url(effective_ambient),
-            env=effective_ambient,
-            issues_factory=issues_factory,
-        )
     return results
 
 
@@ -2149,6 +2000,32 @@ def resolve_workflow_failure_alert(
     return (crash_fallback_text, None)
 
 
+def hook_findings_from_result(
+    result_path: Path,
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """The App hooks of one run: ``(red (key, detail) pairs, keys that ran green)`` (#1634).
+
+    The keys are ``app_hook_pair`` keys, the same ones the nightly audit pages. An
+    unreadable or missing result file gives two empty lists: no hook was evaluated.
+    """
+    try:
+        data = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return [], []
+    items = data.get("hook_results") if isinstance(data, Mapping) else None
+    red: list[tuple[str, str]] = []
+    green: list[str] = []
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        pair = app_hook_pair(item)
+        if item.get("status") == "pass":
+            green.append(pair[0])
+        else:
+            red.append(pair)
+    return sorted(red), green
+
+
 _HARNESS_DIRS = frozenset({"tools", "common", "harness", ".github"})
 
 
@@ -2435,14 +2312,8 @@ def main(argv: list[str] | None = None) -> int:
         "--run-scheduled-audit",
         action="store_true",
         help=(
-            "execute the scheduled_audit runtime hook slot across registered Apps "
-            "and record the GitHub Issue audit trail (#1493)"
+            "execute the scheduled_audit runtime hook slot across registered Apps (#1493)"
         ),
-    )
-    parser.add_argument(
-        "--no-hook-issue-trail",
-        action="store_true",
-        help="disable recording GitHub Issue trails when running App runtime hooks (#1493)",
     )
     parser.add_argument(
         "--target-url",
@@ -2522,14 +2393,11 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{svc}={tag}")
         return 0
     if args.run_scheduled_audit:
-        run_url = os.environ.get("GITHUB_RUN_URL", "") or github_run_url(os.environ)
         hook_results = run_scheduled_app_audits(
             repo_root,
             target_env=target_env,
             slot="scheduled_audit",
             base_domain=args.domain,
-            record_trail=not args.no_hook_issue_trail,
-            run_url=run_url,
             services=args.sync_service or None,
         )
         out_payload = {"scheduled_audit_results": hook_results}

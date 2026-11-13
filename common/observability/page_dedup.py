@@ -47,6 +47,8 @@ MAX_DETAIL_CHARS = 300
 TRUSTED_AUTHORS = ("github-actions[bot]",)
 
 PAGE, REPORT, RESOLVED, NONE = "page", "report", "resolved", "none"
+#: Some recorded keys are green now, others stay red: record the red ones, send nothing.
+NARROW = "narrow"
 #: `unevaluated` for a run that observed nothing: every recorded finding is unproven.
 ALL_UNEVALUATED = ("",)
 FOUND, ABSENT, CORRUPT, UNREADABLE = "found", "none", "corrupt", "unreadable"
@@ -282,6 +284,8 @@ class Decision:
     day: int = 0
     added: tuple[str, ...] = ()
     removed: tuple[str, ...] = ()
+    #: For NARROW: the keys that stay recorded.
+    remaining: tuple[str, ...] = ()
     #: Record the identity once the page was delivered.
     write: bool = False
     #: A line appended to the page: the dedup state itself was unusable.
@@ -309,6 +313,15 @@ def _unproven(lookup: Lookup, unevaluated: Sequence[str]) -> str:
     return "" if hit is None else f"`{hit}` was not evaluated in this run"
 
 
+def _sticky_keys(lookup: Lookup, prefix: str, green: Sequence[str]) -> list[str]:
+    """The recorded keys under ``prefix`` that no run evaluated green."""
+    if not prefix or lookup.state is None:
+        return []
+    return [
+        key for key in lookup.state.keys if key.startswith(prefix) and key not in green
+    ]
+
+
 def decide(
     identity: Identity,
     lookup: Lookup,
@@ -317,8 +330,13 @@ def decide(
     now: float,
     observed_clean: bool = False,
     unevaluated: Sequence[str] = (),
+    sticky_prefix: str = "",
+    green: Sequence[str] = (),
 ) -> Decision:
-    """Evaluate findings against recorded state and return action decision."""
+    """Evaluate findings against recorded state and return action decision.
+
+    A recorded key that starts with ``sticky_prefix`` is resolved only when it is in
+    ``green`` (a run evaluated it and it passed): no other run resolves it."""
     if mode == OFF:
         if identity.keys:
             return Decision(PAGE, "dedup is off for this run: paging as before")
@@ -338,6 +356,20 @@ def decide(
                 return Decision(
                     NONE, "open-only run (drill or branch dispatch) never resolves"
                 )
+            if sticky_prefix and lookup.state is None:
+                return Decision(
+                    NONE, "recorded state is unreadable: sticky findings kept"
+                )
+            held = _sticky_keys(lookup, sticky_prefix, green)
+            if held:
+                reason = f"`{held[0]}` is still red: no run evaluated it green"
+                assert lookup.state is not None
+                removed = tuple(k for k in lookup.state.keys if k not in held)
+                if removed:
+                    return Decision(
+                        NARROW, reason, removed=removed, remaining=tuple(held)
+                    )
+                return Decision(NONE, reason)
             unproven = _unproven(lookup, unevaluated)
             if unproven:
                 return Decision(
@@ -527,6 +559,36 @@ def _record(
         print(f"page dedup: opened #{number} ({state_title(job)})")
 
 
+def _narrow(
+    api: StateApi,
+    job: str,
+    label: str,
+    lookup: Lookup,
+    decision: Decision,
+    *,
+    run_url: str,
+) -> None:
+    """Record only the keys that stay red; ``since`` and ``incident_since`` are kept."""
+    old = lookup.state
+    assert old is not None and lookup.numbers
+    identity = make_identity(job, decision.remaining)
+    state = State(
+        identity.fingerprint,
+        identity.shown[:MAX_STORED_KEYS],
+        old.since,
+        old.incident_since,
+        len(identity.keys),
+    )
+    number = lookup.numbers[0]
+    api.update_body(number, state_body(job, label, state, identity, run_url))
+    api.comment(
+        number,
+        f"Recovered, no longer recorded: {', '.join(f'`{k}`' for k in decision.removed)}. "
+        f"Still red: {len(identity.keys)}. Run: {run_url or '(no run URL)'}",
+    )
+    print(f"page dedup: narrowed #{number} ({state_title(job)})")
+
+
 def _change_comment(decision: Decision, identity: Identity, run_url: str) -> str:
     lines = [
         f"Paged again: {decision.reason}; now {len(identity.keys)} finding(s) "
@@ -620,6 +682,8 @@ def dedup_page(
     run_url: str | None = None,
     observed_clean: bool = False,
     unevaluated: Sequence[str] = (),
+    sticky_prefix: str = "",
+    green: Sequence[str] = (),
     detail: str = "",
     mode: str | None = None,
     now: float | None = None,
@@ -648,6 +712,17 @@ def dedup_page(
                 if api is not None
                 else Lookup(UNREADABLE, detail="no GITHUB_TOKEN or GITHUB_REPOSITORY")
             )
+        carried = _sticky_keys(lookup, sticky_prefix, green)
+        if carried and identity.keys:
+            # a recorded sticky key that this run did not clear is still red: keep it
+            identity = make_identity(
+                job,
+                [
+                    *findings,
+                    *(Finding(key, "(not evaluated in this run)") for key in carried),
+                ],
+                env,
+            )
         decision = decide(
             identity,
             lookup,
@@ -655,6 +730,8 @@ def dedup_page(
             now=now,
             observed_clean=observed_clean,
             unevaluated=unevaluated,
+            sticky_prefix=sticky_prefix,
+            green=green,
         )
     except Exception as exc:  # noqa: BLE001 - a bug here must page, never silence.
         print(
@@ -672,6 +749,15 @@ def dedup_page(
 
     if decision.action == NONE:
         return Outcome(NONE, decision.reason)
+
+    if decision.action == NARROW:
+        assert api is not None and lookup.state is not None
+        code = _exec_state_sync(
+            lambda: _narrow(api, job, label, lookup, decision, run_url=run_url),
+            job,
+            "the recorded state could not be narrowed ({exc_type}: {exc}); the next run retries",
+        )
+        return Outcome(NONE, decision.reason, exit_code=code)
 
     if decision.action == REPORT:
         assert identity is not None and lookup.state is not None
@@ -743,6 +829,8 @@ def resolve_page_state(
     label: str = "",
     run_url: str | None = None,
     unevaluated: Sequence[str] = (),
+    sticky_prefix: str = "",
+    green: Sequence[str] = (),
     mode: str | None = None,
     now: float | None = None,
     api: StateApi | None = None,
@@ -758,6 +846,8 @@ def resolve_page_state(
         run_url=run_url,
         observed_clean=True,
         unevaluated=unevaluated,
+        sticky_prefix=sticky_prefix,
+        green=green,
         mode=mode,
         now=now,
         api=api,
@@ -774,6 +864,7 @@ __all__ = [
     "Identity",
     "Lookup",
     "MAX_SHOWN_KEY_CHARS",
+    "NARROW",
     "NONE",
     "Outcome",
     "PAGE",

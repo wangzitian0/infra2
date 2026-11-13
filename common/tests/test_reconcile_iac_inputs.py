@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import subprocess
@@ -1910,91 +1911,10 @@ def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
             else ta_manifest_path.read_bytes()
         ),
         runner=_capturing_runner,
-        record_issues=False,
     )
     assert [r["status"] for r in hook_results] == ["pass", "pass"]
     assert hook_results[0]["cwd"] != str(fr_sub)
     assert hook_results[1]["cwd"] != str(ta_sub)
-
-
-def test_record_app_hook_issue_trail_opens_and_closes_app_issues() -> None:
-    """#1416 (Fix 3): record_app_hook_issue_trail opens an issue on the target App repo
-    when a post-deploy hook fails and closes it when the hook passes on a subsequent run."""
-
-    class _FakeIssueApi:
-        def __init__(self, repo: str) -> None:
-            self.repo = repo
-            self.issues: list[dict] = []
-            self.comments: list[tuple[int, str]] = []
-            self.closed: list[int] = []
-
-        def open_issues(self, *, with_body: bool = False) -> list[dict]:
-            return list(self.issues)
-
-        def create(self, title: str, body: str, labels) -> int:
-            num = len(self.issues) + 10
-            self.issues.append({"number": num, "title": title, "body": body})
-            return num
-
-        def comment(self, number: int, body: str) -> None:
-            self.comments.append((number, body))
-
-        def close(self, number: int) -> None:
-            self.closed.append(number)
-
-    apis: dict[str, _FakeIssueApi] = {}
-
-    def _factory(repo: str, _token: str) -> _FakeIssueApi:
-        return apis.setdefault(repo, _FakeIssueApi(repo))
-
-    env = {
-        "GITHUB_TOKEN": "tok-123",
-        "GITHUB_EVENT_NAME": "schedule",
-        "GITHUB_REPOSITORY": "wangzitian0/infra2",
-    }
-    rc_fail = reconcile.record_app_hook_issue_trail(
-        [
-            {
-                "service": "truealpha/app",
-                "slot": "smoke",
-                "status": "fail",
-                "app_url": "https://truealpha-staging.truealpha.club",
-                "version_ref": "v0.2.80",
-                "summary": "run exited with code 1",
-                "stderr_tail": "HTTP 502 Bad Gateway",
-            }
-        ],
-        target_env="staging",
-        run_url="https://github.com/wangzitian0/infra2/actions/runs/999",
-        env=env,
-        issues_factory=_factory,
-    )
-    assert rc_fail == 0
-    assert "wangzitian0/truealpha" in apis
-    ta_api = apis["wangzitian0/truealpha"]
-    assert len(ta_api.issues) == 1
-    assert ta_api.issues[0]["title"] == "app-hook is red: truealpha/app:smoke:staging"
-
-    # Subsequent passing run closes the issue
-    rc_pass = reconcile.record_app_hook_issue_trail(
-        [
-            {
-                "service": "truealpha/app",
-                "slot": "smoke",
-                "status": "pass",
-                "app_url": "https://truealpha-staging.truealpha.club",
-                "version_ref": "v0.2.80",
-                "summary": "smoke passed",
-                "stderr_tail": "",
-            }
-        ],
-        target_env="staging",
-        run_url="https://github.com/wangzitian0/infra2/actions/runs/1000",
-        env=env,
-        issues_factory=_factory,
-    )
-    assert rc_pass == 0
-    assert ta_api.closed == [10]
 
 
 def test_audit_app_hooks_cli_validates_both_apps(monkeypatch, capsys, tmp_path) -> None:
@@ -2204,7 +2124,6 @@ def test_run_post_deploy_app_hooks_executes_smoke_and_staging_gate_in_order(
         }
     )
     executed_slots: list[str] = []
-    recorded_trails: list[tuple[str, list[str]]] = []
 
     def _fake_exec(
         _m, slot: str, *, app_url: str, environment: str, version_ref: str, **_kw
@@ -2221,12 +2140,7 @@ def test_run_post_deploy_app_hooks_executes_smoke_and_staging_gate_in_order(
             duration_seconds=0.1,
         )
 
-    def _fake_record(results, *, slot: str = "", **_kw):
-        recorded_trails.append((slot, [str(r.get("slot")) for r in results]))
-        return 0
-
     monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
-    monkeypatch.setattr(reconcile, "record_app_hook_issue_trail", _fake_record)
     monkeypatch.setenv("GITHUB_TOKEN", "tok-test")
 
     plan = build_plan(
@@ -2250,13 +2164,9 @@ def test_run_post_deploy_app_hooks_executes_smoke_and_staging_gate_in_order(
     assert executed_slots == ["smoke", "staging_gate"]
     assert [r["slot"] for r in results] == ["smoke", "staging_gate"]
     assert all(r["ok"] is True for r in results)
-    assert recorded_trails == [
-        ("smoke", ["smoke"]),
-        ("staging_gate", ["staging_gate"]),
-    ]
 
 
-def test_run_scheduled_app_audits_executes_scheduled_audit_and_records_trail(
+def test_run_scheduled_app_audits_executes_scheduled_audit(
     monkeypatch, capsys, tmp_path
 ) -> None:
     """#1493: run_scheduled_app_audits discovers Apps declaring scheduled_audit, forwards
@@ -2305,7 +2215,6 @@ def test_run_scheduled_app_audits_executes_scheduled_audit_and_records_trail(
     monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
 
     seen_calls: list[tuple[str, str, str, str]] = []
-    recorded_trails: list[tuple[str, int]] = []
 
     def _fake_exec(
         _m,
@@ -2335,13 +2244,6 @@ def test_run_scheduled_app_audits_executes_scheduled_audit_and_records_trail(
         )
 
     monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
-    monkeypatch.setattr(
-        reconcile,
-        "record_app_hook_issue_trail",
-        lambda results, *, slot="", **_kw: (
-            recorded_trails.append((slot, len(results))) or 0
-        ),
-    )
     monkeypatch.setenv("GITHUB_TOKEN", "tok-audit")
     monkeypatch.setenv("TA_EMAIL", "ta@example.test")
 
@@ -2368,7 +2270,6 @@ def test_run_scheduled_app_audits_executes_scheduled_audit_and_records_trail(
             "ta@example.test",
         ),
     ]
-    assert recorded_trails == [("scheduled_audit", 2)]
 
 
 def _unwired_hook_slots(
@@ -2529,7 +2430,6 @@ def test_local_service_hook_manifests_discovery_and_execution(monkeypatch) -> No
         after="v3.2.0",
         target_env="staging",
         slot="smoke,staging_gate",
-        record_issues=False,
     )
     assert [r["slot"] for r in post_results] == ["smoke", "staging_gate"]
     assert all(
@@ -2557,7 +2457,6 @@ def test_local_service_hook_manifests_discovery_and_execution(monkeypatch) -> No
         ROOT,
         target_env="prod",
         slot="scheduled_audit",
-        record_trail=False,
         services=["platform/todo"],
     )
     assert len(audit_results) == 1
@@ -2927,7 +2826,6 @@ def test_scheduled_audit_fails_a_service_with_a_missing_hook_env_value_without_r
         tmp_path,
         slot="scheduled_audit",
         services=["truealpha/app"],
-        record_trail=False,
         runner=subprocess.run,
     )
     assert calls == []
@@ -2948,7 +2846,12 @@ def test_git_tracks_no_hook_artifacts_file() -> None:
 
 
 def test_no_workflow_reads_the_deleted_hook_secret() -> None:
-    """#1633: no workflow reads ``secrets.ZAI_CODING_CN_API_KEY`` or sets ``AI_API_KEY``."""
+    """#1633: no workflow reads ``secrets.ZAI_CODING_CN_API_KEY`` or sets ``AI_API_KEY``.
+
+    Secret names are not case sensitive, so names compare in upper case. The names come
+    from the production contract's own expression parser."""
+    from common.gate.production_contract import _SECRET_NAME, _expressions
+
     texts = {
         p.name: p.read_text(encoding="utf-8")
         for p in sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
@@ -2957,7 +2860,13 @@ def test_no_workflow_reads_the_deleted_hook_secret() -> None:
     bad = [
         name
         for name, text in texts.items()
-        if "secrets.ZAI_CODING_CN_API_KEY" in text
+        if any(
+            m.group(1).upper() == "ZAI_CODING_CN_API_KEY"
+            for body in _expressions(yaml.safe_load(text))
+            for m in _SECRET_NAME.finditer(body)
+        )
+        # the bracket form `secrets['NAME']` is not a `secrets.NAME` read
+        or "ZAI_CODING_CN_API_KEY" in text.upper()
         or re.search(r"^\s*AI_API_KEY:", text, re.M)
     ]
     assert bad == []
@@ -3317,7 +3226,6 @@ def test_run_post_deploy_app_hooks_records_failed_entry_on_missing_required_hook
         after="v3.2.0",
         target_env="staging",
         slot="staging_gate",
-        record_issues=False,
     )
     assert len(post_results) == 1
     assert post_results[0]["service"] == "platform/todo"
@@ -3643,116 +3551,6 @@ def test_failure_alert_text_classifies_deploy_failure_hook_failure_and_success()
     )
 
 
-def test_record_app_hook_issue_trail_falls_back_to_infra2_under_app_hook_prefix() -> (
-    None
-):
-    """#1590: cross-repo 403 falls back to `wangzitian0/infra2` using native
-    `title_prefix='app-hook is red: '` with zero dict side-channel mutations."""
-    from common.observability.issue_trail import WriteFailed
-
-    class _FakeIssueApi:
-        def __init__(self, repo: str, *, forbid_writes: bool = False) -> None:
-            self.repo = repo
-            self.forbid_writes = forbid_writes
-            self.issues: list[dict] = []
-            self.comments: list[tuple[int, str]] = []
-            self.closed: list[int] = []
-
-        def open_issues(self, *, with_body: bool = False) -> list[dict]:
-            return list(self.issues)
-
-        def create(self, title: str, body: str, labels) -> int:
-            if self.forbid_writes:
-                raise WriteFailed("HTTP 403 Resource not accessible by integration")
-            num = 1572 if self.repo == "wangzitian0/infra2" else len(self.issues) + 10
-            self.issues.append({"number": num, "title": title, "body": body})
-            return num
-
-        def comment(self, number: int, body: str) -> None:
-            if self.forbid_writes:
-                raise WriteFailed("HTTP 403 Resource not accessible by integration")
-            self.comments.append((number, body))
-
-        def close(self, number: int) -> None:
-            if self.forbid_writes:
-                raise WriteFailed("HTTP 403 Resource not accessible by integration")
-            self.closed.append(number)
-
-    apis = {
-        "wangzitian0/truealpha": _FakeIssueApi(
-            "wangzitian0/truealpha", forbid_writes=True
-        ),
-        "wangzitian0/infra2": _FakeIssueApi("wangzitian0/infra2"),
-    }
-    env = {
-        "GITHUB_TOKEN": "tok-123",
-        "GITHUB_EVENT_NAME": "schedule",
-        "GITHUB_REPOSITORY": "wangzitian0/infra2",
-    }
-
-    fail_item = {
-        "service": "truealpha/app",
-        "slot": "staging_gate",
-        "status": "fail",
-        "version_ref": "v0.2.87",
-        "summary": "missing required hook env",
-    }
-    assert (
-        reconcile.record_app_hook_issue_trail(
-            [fail_item],
-            target_env="staging",
-            slot="staging_gate",
-            env=env,
-            issues_factory=lambda repo, _tok: apis[repo],
-        )
-        == 0
-    )
-    assert "issue_trail_action" not in fail_item
-    assert apis["wangzitian0/infra2"].issues == [
-        {
-            "number": 1572,
-            "title": "app-hook is red: truealpha/app:staging_gate:staging",
-            "body": apis["wangzitian0/infra2"].issues[0]["body"],
-        }
-    ]
-    assert "app runtime hook" in apis["wangzitian0/infra2"].issues[0]["body"]
-
-    # Repeat failure comments on #1572 instead of creating a duplicate
-    assert (
-        reconcile.record_app_hook_issue_trail(
-            [dict(fail_item)],
-            target_env="staging",
-            slot="staging_gate",
-            env=env,
-            issues_factory=lambda repo, _tok: apis[repo],
-        )
-        == 0
-    )
-    assert len(apis["wangzitian0/infra2"].issues) == 1
-    assert [n for n, _ in apis["wangzitian0/infra2"].comments] == [1572]
-
-    # Passing run closes the fallback issue in wangzitian0/infra2
-    assert (
-        reconcile.record_app_hook_issue_trail(
-            [
-                {
-                    "service": "truealpha/app",
-                    "slot": "staging_gate",
-                    "status": "pass",
-                    "version_ref": "v0.2.87",
-                    "summary": "passed",
-                }
-            ],
-            target_env="staging",
-            slot="staging_gate",
-            env=env,
-            issues_factory=lambda repo, _tok: apis[repo],
-        )
-        == 0
-    )
-    assert apis["wangzitian0/infra2"].closed == [1572]
-
-
 def test_resolve_workflow_failure_alert_and_scheduled_audit_json_contract(
     monkeypatch, tmp_path, capsys
 ) -> None:
@@ -3837,7 +3635,6 @@ def test_resolve_workflow_failure_alert_and_scheduled_audit_json_contract(
             summary="nightly verdict failed",
         ),
     )
-    monkeypatch.setattr(reconcile, "record_app_hook_issue_trail", lambda *_a, **_kw: 0)
     sched_out = tmp_path / "scheduled-audit-result.json"
     rc = main(
         [
@@ -4115,7 +3912,6 @@ def _record_hook_checkouts(monkeypatch, tmp_path) -> list[tuple[str, str]]:
             summary="ok",
         ),
     )
-    monkeypatch.setattr(reconcile, "record_app_hook_issue_trail", lambda *_a, **_kw: 0)
     monkeypatch.setenv("GITHUB_TOKEN", "tok")
     seen: list[tuple[str, str]] = []
 
@@ -4155,7 +3951,6 @@ def test_post_deploy_smoke_asks_for_no_release_tag(monkeypatch, tmp_path) -> Non
         after="v1.2.3",
         target_env="production",
         slot="smoke",
-        record_issues=False,
     )
     assert seen == [("finance_report/app", "")]
 
@@ -4167,7 +3962,6 @@ def test_post_deploy_smoke_asks_for_no_release_tag(monkeypatch, tmp_path) -> Non
         after="v1.2.3",
         target_env="staging",
         slot="smoke,scheduled_audit",
-        record_issues=False,
     )
     assert seen == [("finance_report/app", "v0.2.50")]
 
@@ -4203,7 +3997,6 @@ def test_post_deploy_asks_for_the_release_tag_whichever_slot_reads_the_lineage(
         after="v1.2.3",
         target_env="staging",
         slot=slot,
-        record_issues=False,
     )
     assert seen == [("finance_report/app", expected)]
 
@@ -4409,7 +4202,6 @@ def test_run_post_deploy_app_hooks_executes_services_concurrently_and_stops_slot
         after="v3.1.50",
         target_env="staging",
         slot="smoke,staging_gate",
-        record_issues=False,
     )
     # finance_report/app stopped after failed smoke, while platform/todo & truealpha/app
     # still ran both smoke and staging_gate concurrently and reported full verdicts!
@@ -4560,3 +4352,20 @@ def test_summary_is_rendered_from_records(monkeypatch, tmp_path) -> None:
     empty = tmp_path / "empty.md"
     reconcile.write_summary(records=[], dry_run=False, path=str(empty))
     assert not empty.exists()
+
+
+def test_reconcile_imports_no_issue_writer() -> None:
+    """#1634: the release train opens no issue; ``page_dedup`` in the workflow is the one writer.
+
+    The two writer names must not appear anywhere in the module: not as an import, an
+    alias, a bare name or an attribute (``_trail.GitHubIssues``)."""
+    source = Path(reconcile.__file__).read_text(encoding="utf-8")
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute):
+            names.add(node.attr)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names.update(a.name.rsplit(".", 1)[-1] for a in node.names)
+    assert not names & {"GitHubIssues", "reconcile_issue_trail"}

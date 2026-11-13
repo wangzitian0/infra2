@@ -55,8 +55,9 @@ run-name: Reconcile IaC Inputs (${{ inputs.promote_prod && 'PROD' || 'staging' }
 permissions:
   # Explicit production promotion records an immutable production/v* marker.
   contents: write
-  # Pull-based App release sync opens/updates PRs and records hook failure issues (#1416).
+  # Pull-based App release sync opens/updates PRs (#1416).
   pull-requests: write
+  # only the `Alert on failure` and `Resolve the reconcile failure alert` steps (page_dedup state issue)
   issues: write
   # the promotion guard lists this workflow's runs for the promoted tag (gh api .../runs)
   actions: read
@@ -446,9 +447,13 @@ jobs:
           import os
           from pathlib import Path
           from common.observability.issue_trail import FULL
+          from common.deploy.deploy_guard_audit import APP_HOOK_KEY_PREFIX
           from common.observability.page_dedup import dedup_page
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
-          from tools.reconcile_iac_inputs import resolve_workflow_failure_alert
+          from tools.reconcile_iac_inputs import (
+              hook_findings_from_result,
+              resolve_workflow_failure_alert,
+          )
 
           run_url = "/".join(
               v for v in (
@@ -472,11 +477,16 @@ jobs:
           # one dedup state per environment: a staging recovery never resolves production
           job = "reconcile-iac-inputs-" + ("production" if os.environ.get("INPUT_PROMOTE_PROD") == "true" else "staging")
           phase = os.environ.get("RECONCILE_PHASE") or "reconcile"
+          # each red App hook is its own finding, keyed as the nightly audit keys it (#1634)
+          red_hooks, green_hooks = hook_findings_from_result(Path("reconcile-result.json"))
+          findings = red_hooks or [(phase, alert_text.splitlines()[0])]
           outcome = dedup_page(
               os.environ,
               job=job,
               label="IaC 输入对账",
-              findings=[(phase, alert_text.splitlines()[0])],
+              findings=findings,
+              sticky_prefix=APP_HOOK_KEY_PREFIX,
+              green=green_hooks,
               detail=alert_text,
               page_message=alert_text,
               deliver_page=deliver_out_of_band_alert,
@@ -498,14 +508,21 @@ jobs:
           import os
           from common.observability.issue_trail import FULL
           from common.observability.page_dedup import resolve_page_state
+          from pathlib import Path
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
+          from common.deploy.deploy_guard_audit import APP_HOOK_KEY_PREFIX
+          from tools.reconcile_iac_inputs import hook_findings_from_result
 
           job = "reconcile-iac-inputs-" + ("production" if os.environ.get("INPUT_PROMOTE_PROD") == "true" else "staging")
+          # a red hook key stays open until a run evaluates that hook green (#1634)
+          _, green_hooks = hook_findings_from_result(Path("reconcile-result.json"))
           outcome = resolve_page_state(
               os.environ,
               job=job,
               label="IaC 输入对账",
               deliver_page=deliver_out_of_band_alert,
+              sticky_prefix=APP_HOOK_KEY_PREFIX,
+              green=green_hooks,
               mode=FULL if os.environ.get("GITHUB_EVENT_NAME") == "push" else None,
           )
           raise SystemExit(outcome.exit_code)
