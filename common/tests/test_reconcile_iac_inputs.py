@@ -2938,6 +2938,31 @@ def test_scheduled_audit_fails_a_service_with_a_missing_hook_env_value_without_r
     assert "scheduled_audit" in str(results[0]["missing_env_error"])
 
 
+def test_git_tracks_no_hook_artifacts_file() -> None:
+    """#1633: a hook run writes ``.artifacts/``; no tracked path may sit under such a directory."""
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+    assert tracked
+    assert [p for p in tracked if ".artifacts" in Path(p).parts] == []
+
+
+def test_no_workflow_reads_the_deleted_hook_secret() -> None:
+    """#1633: no workflow reads ``secrets.ZAI_CODING_CN_API_KEY`` or sets ``AI_API_KEY``."""
+    texts = {
+        p.name: p.read_text(encoding="utf-8")
+        for p in sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
+    }
+    assert texts
+    bad = [
+        name
+        for name, text in texts.items()
+        if "secrets.ZAI_CODING_CN_API_KEY" in text
+        or re.search(r"^\s*AI_API_KEY:", text, re.M)
+    ]
+    assert bad == []
+
+
 # --- #1603: the bun that App hook commands call must exist on the hook runner -------------
 
 _BUN_COMMAND = re.compile(r"\bbunx?\b")
