@@ -17,6 +17,11 @@ from common.observability.signoz_queries import ERROR_LOG_LEVELS
 ENVIRONMENTS = ("production", "staging")
 ENV_PLACEHOLDER = "{env}"
 STAGING_NAME_SUFFIX = "Staging"
+STANDARD_RUNBOOK_URL = (
+    "https://github.com/wangzitian0/infra2/blob/main/docs/ssot/ops.observability.md"
+    "#sop-004--sop-004b--sop-004c-应用-otel-错误告警--全栈告警目录-config-as-code"
+    "373--1106--1389"
+)
 
 
 def _error_logs(
@@ -34,8 +39,7 @@ def _error_logs(
         "frequency": "1m",
         "summary": (
             f"Severity P1 (15m total > {threshold}): {service_name} emitted more than "
-            f"{threshold} {'/'.join(ERROR_LOG_LEVELS)} log lines in 15 minutes. "
-            "Runbook: docs/ssot/ops.observability.md SOP-004B."
+            f"{threshold} {'/'.join(ERROR_LOG_LEVELS)} log lines in 15 minutes."
         ),
     }
 

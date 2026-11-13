@@ -1,5 +1,6 @@
 {
   "$comment": "Config-as-code SigNoz alert rules for truealpha (#906/#723). Rules here are service-specific; the standard error-log rules come from common/alerting/standard_rules.py. The environment is the {env} placeholder, filled by the loader for production and staging.",
+  "runbook_url": "https://github.com/wangzitian0/infra2/blob/main/docs/ssot/ops.observability.md#sop-004--sop-004b--sop-004c-应用-otel-错误告警--全栈告警目录-config-as-code373--1106--1389",
   "service_id": "truealpha/app",
   "rules": [
     {

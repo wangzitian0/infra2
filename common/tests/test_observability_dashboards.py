@@ -302,6 +302,23 @@ def test_staging_catalog_is_derived_with_report_delivery() -> None:
         assert '"environment"' not in text.split('"rules"')[0], path
 
 
+def test_every_catalog_rule_carries_next_step_and_runbook_url() -> None:
+    """#1651: each rule, staging copies included, tells the on-call the diagnose
+    command of its service and environment, and links the runbook. The summary no
+    longer ends with the runbook text."""
+    for environment in ("production", "staging"):
+        rules = _rendered_rules(environment)
+        assert rules
+        for name, payload in rules.items():
+            annotations = payload["annotations"]
+            service = payload["labels"]["service"]
+            assert annotations["next_step"] == (
+                f"python -m tools.diagnose {service} --env {environment} --since 30m"
+            ), name
+            assert annotations["runbook_url"].startswith("https://"), name
+            assert "Runbook:" not in annotations["summary"], name
+
+
 @pytest.mark.parametrize("alert_name", sorted(_EXPECTED_RULES))
 def test_rule_renders_its_reviewed_threshold_window_and_severity(alert_name) -> None:
     """#906: every rule renders the threshold, window, severity and absence choice
