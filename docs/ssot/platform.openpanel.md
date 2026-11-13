@@ -112,7 +112,7 @@ OpenPanel 是**单实例**；环境隔离靠**每个环境一个 project / clien
 
 ### SOP-004: 查询分析数据（已发布 CLI）
 
-OpenPanel 事件分析由 app 仓库已发布的查询 CLI `common/observability/openpanel_query.py` 完成，使用 OpenPanel query API token，存于 Vault `secret/platform/<env>/openpanel/api_key`。本仓库不重新实现查询逻辑。遥测（traces/logs）查询见 [ops.observability.md](ops.observability.md) 的 `invoke signoz.shared.query-logs` / `list-services`。
+OpenPanel 事件分析由 app 仓库已发布的查询 CLI `common/observability/openpanel_query.py` 完成，使用 OpenPanel query API token，存于 Vault `secret/platform/<env>/openpanel/api_key`。本仓库不重新实现查询逻辑。遥测（traces/logs）查询见 [ops.observability.md](ops.observability.md) 的 `python -m tools.diagnose`。
 
 `platform/12.alerting` 额外运行 `openpanel-roundtrip` synthetic probe：用
 同一份 per-env finance client-id 向 OpenPanel `/track` 写入
