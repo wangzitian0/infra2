@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import re
+import ast
 import subprocess
 from datetime import datetime, timezone
 
@@ -83,14 +83,21 @@ def test_error_log_levels_have_one_definition() -> None:
 
     root = Path(__file__).resolve().parents[2]
     owner = root / "common/observability/signoz_queries.py"
-    needle = re.compile(r"""['"]ERROR['"]\s*,\s*['"](CRITICAL|FATAL)['"]""")
+    levels = frozenset(q.ERROR_LOG_LEVELS)
+
+    def has_copy(path: Path) -> bool:
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, (ast.Tuple, ast.List, ast.Set)) and node.elts:
+                values = [e.value for e in node.elts if isinstance(e, ast.Constant)]
+                if len(values) == len(node.elts) and set(values) == levels:
+                    return True
+        return False
+
     hits = [
         str(path.relative_to(root))
         for base in ("common", "tools")
         for path in (root / base).rglob("*.py")
-        if path != owner
-        and "tests" not in path.parts
-        and needle.search(path.read_text())
+        if path != owner and "tests" not in path.parts and has_copy(path)
     ]
     assert hits == []
     assert q.ERROR_LOG_LEVELS == ("ERROR", "CRITICAL", "FATAL")
