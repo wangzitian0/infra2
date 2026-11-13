@@ -87,6 +87,8 @@ _TESTS_BY_MODULE = {
     "common/gate/evaluator.py": ("common/tests/test_gate_pipeline.py",),
     # It proves that each required check can report on any PR (#1138 round 4).
     "common/gate/inventory.py": ("common/tests/test_required_checks_can_report.py",),
+    # It proves that a looser gate edit shows as a changed verdict (#1653).
+    "common/gate/replay.py": ("common/tests/test_gate_replay.py",),
     "common/gate/self_governance.py": ("common/tests/test_gate_self_governance.py",),
     # It proves the key, copy and failure rules of the YAML parse cache (#1602).
     "common/gate/types.py": ("common/tests/test_gate_yaml_parse_cache.py",),

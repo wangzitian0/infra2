@@ -208,6 +208,13 @@ def main(
         help="report scope classification and lock state for a PR or file paths (#1104)",
     )
     parser.add_argument(
+        "--replay",
+        type=int,
+        metavar="N",
+        help="replay the last N merged PRs through this checkout's gate and the gate "
+        "of origin/main; print each verdict that changed (#1653)",
+    )
+    parser.add_argument(
         "--policy",
         choices=("clock", "event", "either"),
         default="clock",
@@ -236,6 +243,25 @@ def main(
         lock_state,
     )
     from common.gate.types import EXIT_OWNER, EXIT_READY, EXIT_UNEVALUABLE, EXIT_WAIT
+
+    if args.replay is not None:
+        from common.gate.replay import run_replay
+
+        try:
+            report = run_replay(args.replay, repo=args.repo, gh=gh)
+        except Exception as exc:  # noqa: BLE001 - any failure means "could not run"
+            warning(f"could not replay: {type(exc).__name__}: {exc}")
+            return EXIT_UNEVALUABLE
+        if args.json:
+            print(json.dumps(report))
+        else:
+            print(f"replayed={report['replayed']} direction={report['direction']}")
+            for r in report["rows"]:
+                print(
+                    f"#{r['number']} main={r['main']} head={r['head']} "
+                    f"{r['direction']} +{r['reasons_added']} -{r['reasons_removed']}"
+                )
+        return EXIT_READY
 
     if args.scope:
         if len(args.targets) == 1 and args.targets[0].isdigit():
