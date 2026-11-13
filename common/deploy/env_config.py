@@ -337,6 +337,9 @@ class PreviewServiceConfig:
         PreviewReadinessProbe("/api/health"),
     )
     secret_env: str = "staging"  # which env's Vault app-secrets path a preview borrows (no per-alias path)
+    # Names of secrets the render generates for each slot. A non-empty tuple marks an
+    # infra2 platform unit: its Preview reads no Vault, and the values die with the slot.
+    throwaway_secrets: tuple[str, ...] = ()
 
 
 # finance_report/app is the original (and, pre-#522, only) preview-capable service; its
@@ -367,6 +370,21 @@ _PREVIEW_SERVICE_CONFIGS: dict[str, PreviewServiceConfig] = {
         db_name="truealpha",
         base_subdomain="truealpha",
     ),
+    # T3a (#1647): the Canary Todo carries its own Redis, Postgres and S3 in the slot.
+    # The Preview reads no Vault: the render generates each secret below for the slot.
+    "platform/todo": PreviewServiceConfig(
+        project="platform",
+        slug_prefix="platform-todo-preview",
+        compose_path="platform/30.todo/preview.compose.yaml",
+        db_name="",
+        base_subdomain="todo",
+        throwaway_secrets=(
+            "REDIS_PASSWORD",
+            "CANARY_POSTGRES_PASSWORD",
+            "CANARY_S3_ACCESS_KEY",
+            "CANARY_S3_SECRET_KEY",
+        ),
+    ),
 }
 
 
@@ -375,8 +393,8 @@ def preview_service_config(service: str) -> PreviewServiceConfig:
 
     Raises ``ValueError`` for a service with no registered preview config — the same
     fail-closed shape as ``app_compose_env_config`` for the fixed-env overlay. Callers
-    (``common.deploy.preview``) should gate on ``ServiceSpec.supports_preview`` first so this
-    is a defensive re-check, not the primary guard.
+    (``common.deploy.preview``) call it as the one capability check: a service is
+    Preview-capable if and only if it has an entry here.
     """
     config = _PREVIEW_SERVICE_CONFIGS.get(service)
     if config is None:

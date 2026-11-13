@@ -329,3 +329,21 @@ def test_truealpha_app_carries_the_data_engine_as_its_companion():
     for companion in spec.companions:
         assert service_spec(companion).iac_pinned is True
     assert service_spec("finance_report/app").companions == ()
+
+
+def test_preview_capability_is_the_config_registry():
+    # T3a (#1647): Preview capability is membership of the config registry, nothing else.
+    import dataclasses
+
+    from common.deploy.env_config import (
+        _PREVIEW_SERVICE_CONFIGS,
+        preview_service_config,
+    )
+
+    assert "supports_preview" not in {f.name for f in dataclasses.fields(ServiceSpec)}
+    assert "platform/todo" in _PREVIEW_SERVICE_CONFIGS
+    for key in _PREVIEW_SERVICE_CONFIGS:
+        assert preview_service_config(key) is _PREVIEW_SERVICE_CONFIGS[key]
+        service_spec(key)  # every registered unit is a known service
+    with pytest.raises(ValueError, match="no preview config registered"):
+        preview_service_config("platform/redis")

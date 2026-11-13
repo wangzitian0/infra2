@@ -34,6 +34,8 @@ SHORT_SHA = FULL_SHA[:7]
 @pytest.fixture(autouse=True)
 def _stub_resolver(monkeypatch):
     monkeypatch.setattr(pl, "resolve_to_sha", lambda code, repo=None: FULL_SHA)
+    # Teardown always polls the inventory twice; no test waits for the backoff.
+    monkeypatch.setattr(pl.time, "sleep", lambda _s: None)
 
 
 class ConvergenceFakeDokploy:
@@ -60,6 +62,9 @@ class ConvergenceFakeDokploy:
         ] = {}  # assigned appName -> composeId (ephemeral DB)
         self._seq = 0
         self._deployed = False
+
+    def get_containers(self):
+        return []  # the container inventory is empty once Dokploy pruned the project
 
     # --- read side ---------------------------------------------------------
     def get_github_provider_id(self):
@@ -244,7 +249,7 @@ def test_check_containers_absent_detects_survivor_containers():
     ]
 
 
-def test_down_with_wait_true_verifies_physical_container_absence():
+def test_down_verifies_physical_container_absence():
     # Sequence: first read sees a container, next two reads see empty (2 consecutive clean reads)
     client = ContainerListFakeDokploy(
         [
@@ -258,7 +263,6 @@ def test_down_with_wait_true_verifies_physical_container_absence():
         "main",
         domain="zitian.party",
         client=client,
-        wait=True,
         attempts=5,
         _sleep=lambda _: None,
     )
@@ -266,7 +270,7 @@ def test_down_with_wait_true_verifies_physical_container_absence():
     assert client.call_count >= 3
 
 
-def test_down_with_wait_true_detects_container_survivors():
+def test_down_detects_container_survivors():
     # Container never disappears
     client = ContainerListFakeDokploy([[{"name": "/finance-report-branch-main"}]])
     result = pl.down(
@@ -274,7 +278,6 @@ def test_down_with_wait_true_detects_container_survivors():
         "main",
         domain="zitian.party",
         client=client,
-        wait=True,
         attempts=3,
         _sleep=lambda _: None,
     )
