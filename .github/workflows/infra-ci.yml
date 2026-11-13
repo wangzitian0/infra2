@@ -195,6 +195,19 @@ jobs:
           OP_VAULT_ID: dummy-op-vault-id
           OP_ITEM_ID: dummy-op-item-id
 
+      - name: Trivy vulnerability and config scan
+        # #1637: a fixable CRITICAL or HIGH finding blocks the PR. DS-0002 sits in .trivyignore.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.2
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
       - name: Install lint dependencies
         # Install PyYAML and infra2-sdk for compose resource and image pin validation.
         run: python3 -m pip install --quiet pyyaml "$(python3 tools/sdk_requirement.py)"

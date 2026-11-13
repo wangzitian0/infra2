@@ -32,7 +32,7 @@
 - **Vault 配置**：[`bootstrap/05.vault/compose.yaml`](https://github.com/wangzitian0/infra2/blob/main/bootstrap/05.vault/compose.yaml)
 - **主机防火墙**：[`bootstrap/01.dokploy_install/hostfw/`](https://github.com/wangzitian0/infra2/blob/main/bootstrap/01.dokploy_install/hostfw/)（规则 `hostfw.nft`、单元 `infra2-hostfw.service`、CF IP 刷新定时器 `infra2-hostfw-cf-refresh.timer`、操作脚本 `hostfw.sh`；约束由 `common/tests/test_host_firewall.py` 固定）
 - **SSH 与 fail2ban 基线**：[`bootstrap/01.dokploy_install/host_guard/`](https://github.com/wangzitian0/infra2/blob/main/bootstrap/01.dokploy_install/host_guard/)（`sshd_hardening.conf`、`fail2ban_sshd.local`、`configure_ssh_fail2ban.sh`、`auth_log_alert.sh`；约束由 `common/tests/test_sshd_fail2ban_config.py` 固定）
-- **容器与供应链安全基线**：[`docs/ssot/compose-security-baseline.json`](./compose-security-baseline.json)、[`docs/ssot/supply-chain-baseline.json`](./supply-chain-baseline.json)、[`.github/workflows/trivy-scan.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/trivy-scan.yml)（约束由 `common/tests/test_compose_security_baseline.py` 与 `common/tests/test_supply_chain_pins.py` 固定）
+- **容器与供应链安全基线**：[`docs/ssot/compose-security-baseline.json`](./compose-security-baseline.json)、[`docs/ssot/supply-chain-baseline.json`](./supply-chain-baseline.json)、[`.github/workflows/infra-ci.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/infra-ci.yml)（job `validate-compose` 的 Trivy 步骤；DS-0002 例外在 `.trivyignore`）（约束由 `common/tests/test_compose_security_baseline.py` 与 `common/tests/test_supply_chain_pins.py` 固定）
 
 ---
 
