@@ -32,6 +32,12 @@ def _op_cli_is_absent(argv, *_args, **_kwargs):
 
 
 @pytest.fixture(autouse=True)
+def _stage_records_off_the_worktree(monkeypatch, tmp_path):
+    """A test that runs a reconcile writes its stage records into its own directory (#1645)."""
+    monkeypatch.setenv("STAGE_RECORD_DIR", str(tmp_path / "stage-records"))
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_op_cli(monkeypatch):
     """Keep unit tests off the 1Password CLI of the developer shell.
 

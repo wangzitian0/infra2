@@ -32,6 +32,7 @@ from common.alerting import (
 )
 from common.alerting.types import _one_line
 from common.core.registry import domain_for_service
+from common.observability.delivery_section import delivery_lines, summarize_delivery
 
 _DEFAULT_URLOPEN = urlopen
 _SKIPPED_RUN_EVENTS = frozenset({"push", "pull_request", "pull_request_target"})
@@ -844,6 +845,13 @@ def _resolve_stability_lines(
     return []
 
 
+def _delivery_lines(summary: Mapping[str, Any]) -> list[str]:
+    """The Delivery lines of the digest. A failed read of the records shows as one line."""
+    if summary.get("delivery_error"):
+        return [f"stage records unavailable ({summary['delivery_error']})"]
+    return delivery_lines(summary.get("delivery") or {})
+
+
 def _digest_cadence(summary: Mapping[str, Any]) -> tuple[str, int]:
     window_days = _as_int(summary.get("window_days")) or DIGEST_WINDOW_DAYS
     if window_days >= MONTHLY_WINDOW_DAYS:
@@ -944,6 +952,11 @@ def build_digest_message(
                 f"- {job_name}: {counts.get('success', 0)}/{counts.get('total', 0)} ok "
                 f"(fail={counts.get('failure', 0)})"
             )
+    delivery = _delivery_lines(summary)
+    if delivery:
+        lines.append("")
+        lines.append("Delivery (stage records):")
+        lines.extend(f"- {line}" for line in delivery)
     stale_issues = summary.get("stale_issues")
     if isinstance(stale_issues, list) and stale_issues:
         lines.append("")
@@ -1117,6 +1130,12 @@ def build_digest_card(
             )
         sections.append("\n".join(job_lines))
 
+    delivery = _delivery_lines(summary)
+    if delivery:
+        sections.append(
+            "**🚚 交付记录 (Delivery)**\n" + "\n".join(f"• {line}" for line in delivery)
+        )
+
     failed_urls = summary.get("failed_run_urls", [])
     if isinstance(failed_urls, list) and failed_urls:
         fail_lines = ["**🚨 近期失败运行 (Recent Failed Runs)**"] + [
@@ -1186,6 +1205,7 @@ def run_digest_cli(
     stale_fetcher=None,
     deliverer=None,
     stability_collector=None,
+    delivery_fetcher=None,
 ) -> int:
     """CLI runner for the weekly/daily watchdog digest."""
     import argparse
@@ -1258,6 +1278,18 @@ def run_digest_cli(
         stale = active_stale_fetcher(repository, token, stale_days=stale_days, now=now)
         summary["stale_issues"] = summarize_stale_issues(stale)
 
+    if delivery_fetcher is not None and _env_enabled(
+        current_env, "WATCHDOG_DIGEST_DELIVERY"
+    ):
+        try:
+            summary["delivery"] = summarize_delivery(
+                delivery_fetcher(
+                    repository, token, since=now - timedelta(days=window_days)
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - the digest still goes out without the section
+            summary["delivery_error"] = type(exc).__name__
+
     opt = current_env.get("WATCHDOG_DIGEST_INCLUDE_STABILITY", "").strip().lower()
     should_include_stability = opt not in {"0", "false", "no"}
 
@@ -1283,9 +1315,10 @@ def run_digest_cli(
 def main(
     env: Mapping[str, str] | None = None,
     argv: list[str] | None = None,
+    **kwargs: Any,
 ) -> int:
     """CLI entrypoint for weekly/daily watchdog digest."""
-    return run_digest_cli(env, argv)
+    return run_digest_cli(env, argv, **kwargs)
 
 
 __all__ = [

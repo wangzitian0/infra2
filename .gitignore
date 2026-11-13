@@ -101,3 +101,4 @@ docs/.site/
 .envrc
 .omo/
 /handover*.md
+stage-records/

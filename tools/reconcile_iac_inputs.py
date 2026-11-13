@@ -13,6 +13,7 @@ import argparse
 import ast
 import concurrent.futures
 from collections.abc import Mapping
+from contextlib import contextmanager
 import json
 import os
 import re
@@ -47,6 +48,7 @@ from common.deploy.app_contract import (
     query_serving_release,
     validate_app_release_evidence,
 )
+from common.alerting.stage_card import show_stage_card
 from common.deploy.dependencies import explain_fanout
 from common.deploy.transient_failure import classify_failure
 from common.deploy.contract import all_service_keys, service_spec, validate_iac_ref_form
@@ -59,6 +61,7 @@ from common.deploy.env_config import (
     preview_alias,
     preview_service_config,
 )
+from common.deploy.stage_record import sdk_unit, utc_now, write_stage_record
 from common.deploy.release_markers import (
     PRODUCTION_MARKER_PREFIX,
     RELEASE_TAG_RE,
@@ -82,6 +85,7 @@ from infra2_sdk.manifests import (
     build_hook_env,
     stage_hook_plan,
 )
+from infra2_sdk.stage_record import StageRecord
 from infra2_sdk.refs import (
     assert_after_on_main,  # noqa: F401  (re-exported; #616)
     classify_ref,
@@ -1899,6 +1903,7 @@ def run_deploy_commands(
     results: list[dict] = []
     for command in commands:
         attempts: list[dict] = []
+        began = time.monotonic()
         while True:
             attempt = {"n": len(attempts) + 1, "cause": None, "at": clock()}
             attempts.append(attempt)
@@ -1926,6 +1931,7 @@ def run_deploy_commands(
             "stdout": completed.stdout,
             "stderr": completed.stderr,
             "attempts": attempts,
+            "seconds": round(time.monotonic() - began, 3),
         }
         if completed.returncode == 0 and completed.stdout.strip():
             try:
@@ -2089,57 +2095,171 @@ def resolve_workflow_failure_alert(
     return (crash_fallback_text, None)
 
 
+_HARNESS_DIRS = frozenset({"tools", "common", "harness", ".github"})
+
+
+def plan_units(plan: ReconcilePlan, repo_root: Path) -> tuple[str, ...]:
+    """The units of a stage record: services of the plan, changed harness trees and the SDK pin."""
+    harness = {f.split("/", 1)[0] for f in plan.dropped if "/" in f} & _HARNESS_DIRS
+    return (
+        *(f"{'app' if s in APP_SOURCES else 'infra'}:{s}" for s in plan.services),
+        *(f"harness:{d}" for d in sorted(harness)),
+        sdk_unit(repo_root if (repo_root / "uv.lock").is_file() else REPO_ROOT),
+    )
+
+
+@contextmanager
+def timed_check(checks: list[CheckVerdict], name: str):
+    """Append one check for the block: green when it ends, red (and re-raise) when it raises."""
+    began = time.monotonic()
+    try:
+        yield
+    except BaseException as exc:
+        detail = str(exc) or type(exc).__name__
+        checks.append(
+            CheckVerdict(
+                name, False, detail[:300], seconds=round(time.monotonic() - began, 3)
+            )
+        )
+        raise
+    checks.append(
+        CheckVerdict(name, True, "", seconds=round(time.monotonic() - began, 3))
+    )
+
+
+class StageRun:
+    """The records of one reconcile run. ``emit`` writes one record and updates the card."""
+
+    def __init__(
+        self, *, env: str, subject: str, dry_run: bool, units: Sequence[str] = ()
+    ) -> None:
+        self.env, self.subject, self.dry_run, self.units = (
+            env,
+            subject,
+            dry_run,
+            tuple(units),
+        )
+        github_event = os.environ.get("GITHUB_EVENT_NAME", "workflow_dispatch")
+        self.event = {"push": "tag", "schedule": "schedule"}.get(
+            github_event, "dispatch"
+        )
+        self.ref = os.environ.get("GITHUB_REF") or subject
+        self.run_url = github_run_url(os.environ)
+        self.records: list[StageRecord] = []
+        self.card_id = ""
+
+    def emit(
+        self,
+        phase: str,
+        started_at: str,
+        checks: Sequence[CheckVerdict],
+        uncovered: Sequence[str] = (),
+    ) -> None:
+        """A record that cannot be written is a warning: a record must not stop a deploy."""
+        try:
+            record = write_stage_record(
+                env=self.env,
+                phase=phase,
+                subject=self.subject,
+                ref=self.ref,
+                event=self.event,
+                run_url=self.run_url,
+                started_at=started_at,
+                checks=checks,
+                units=self.units,
+                uncovered=uncovered,
+                persist=not self.dry_run,
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"::warning::stage record {phase} not written: {type(exc).__name__}: {exc}"
+            )
+            return
+        self.records.append(record)
+        if not self.dry_run:
+            self.card_id = show_stage_card(os.environ, self.records, self.card_id)
+
+
+def operation_checks(results: Sequence[dict], *, dry_run: bool) -> list[CheckVerdict]:
+    """One check for each deploy command that ran. A run without a command has one green check."""
+    if not results:
+        return [
+            CheckVerdict(
+                "deploy", True, "dry run" if dry_run else "no deploy command applied"
+            )
+        ]
+    checks = []
+    for item in results:
+        attempts = item.get("attempts") or []
+        detail = (
+            "; ".join(f"attempt {a['n']}: {a['cause'] or 'ok'}" for a in attempts)
+            if len(attempts) > 1
+            else ""
+        )
+        if item.get("returncode") != 0 and not detail:
+            detail = str(item.get("stderr") or "")[-200:]
+        checks.append(
+            CheckVerdict(
+                f"{item['type']}:{item['service']}",
+                item.get("returncode") == 0,
+                detail,
+                seconds=float(item.get("seconds") or 0.0),
+            )
+        )
+    return checks
+
+
+def post_checks(hook_results: Sequence[dict]) -> list[CheckVerdict]:
+    """One check for each hook slot that ran. No hook ran: one green check that says so."""
+    if not hook_results:
+        return [CheckVerdict("hooks", True, "no service with a hook slot was applied")]
+    return [
+        CheckVerdict(
+            f"{item['service']}:{item['slot']}",
+            item.get("status") == "pass",
+            str(item.get("summary") or "")[:300],
+            seconds=float(item.get("duration_seconds") or 0.0),
+        )
+        for item in hook_results
+    ]
+
+
+def _cell(text: str) -> str:
+    """One Markdown table cell: no pipe and no line break."""
+    return " ".join(text.replace("|", "\\|").split())[:400]
+
+
 def write_summary(
     *,
-    plan: ReconcilePlan,
-    commands: Sequence[DeployCommand],
-    results: Sequence[dict],
+    records: Sequence[StageRecord],
     dry_run: bool,
     path: str | None = None,
 ) -> None:
+    """Render the stage records of this run as the job summary. The records are the only source."""
     target = path or os.environ.get("GITHUB_STEP_SUMMARY")
-    if not target:
+    if not (target and records):
         return
+    last = records[-1]
     lines = [
         "## IaC Input Reconcile",
         "",
         f"- Mode: `{'dry-run' if dry_run else 'apply'}`",
-        f"- Changed files: `{len(plan.changed_files)}`",
-        f"- Selected services: `{', '.join(plan.services) if plan.services else 'none'}`",
-        f"- Dropped files: `{len(plan.dropped)}`",
-        f"- Commands: `{len(commands)}`",
+        f"- Stage: `{last.env}` `{last.subject}` ({last.event})",
+        f"- Units: `{', '.join(last.units) or 'none'}`",
+        f"- Uncovered by a hook: `{', '.join(last.uncovered) or 'none'}`",
     ]
-    if plan.ignored:
-        lines.append(
-            "- Ignored services: "
-            + ", ".join(
-                f"`{service}` ({reason})" for service, reason in plan.ignored.items()
-            )
-        )
-    if plan.not_yet_in_production:
-        lines.append(
-            "- Staging-only (not yet in production): "
-            + ", ".join(f"`{service}`" for service in plan.not_yet_in_production)
-        )
-    if results:
-        failed = [item for item in results if item.get("returncode") != 0]
-        lines.append(
-            f"- Deploy results: `{len(results) - len(failed)} ok / {len(failed)} failed`"
-        )
-        for item in results:
-            attempts = item.get("attempts") or []
-            if len(attempts) > 1:
-                steps = "; ".join(
-                    f"attempt {a['n']} at {a['at']}: {a['cause'] or 'ok'}"
-                    for a in attempts
-                )
-                lines.append(f"- Retried `{item['service']}` ({item['type']}): {steps}")
-    lines.append("")
-    lines.append("```json")
-    lines.append(
-        json.dumps({"plan": plan.to_dict(), "results": list(results)}, indent=2)
-    )
-    lines.append("```")
+    for record in records:
+        lines += [
+            "",
+            f"### {record.phase}: {record.verdict}",
+            "",
+            "| check | result | seconds | detail |",
+            "|---|---|---|---|",
+        ]
+        lines += [
+            f"| `{c.name}` | {'ok' if c.ok else 'FAILED'} | {c.seconds:g} | {_cell(c.detail)} |"
+            for c in record.checks
+        ]
     with open(target, "a", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
 
@@ -2538,98 +2658,126 @@ def main(argv: list[str] | None = None) -> int:
     if not args.after:
         raise SystemExit("::error::--after is required for IaC input reconcile")
 
-    # Validate the durable desired-state coordinate before any production side
-    # effect.  A branch, SHA, or pre-release must never deploy successfully and
-    # only then fail while trying to record its marker.
-    effective_before = args.before
-    if promote_prod:
-        current_production = assert_production_marker_advances(args.after, repo_root)
-        if current_production:
-            if effective_before and effective_before != current_production:
-                raise SystemExit(
-                    "::error::production before must match current marker release "
-                    f"{current_production}; got {effective_before}"
-                )
-            effective_before = current_production
-        elif not effective_before:
-            raise SystemExit(
-                "::error::first production marker requires an explicit known-production "
-                "--before release"
-            )
-    # Fail-closed BEFORE planning/deploying: an apply run must promote a release tag
-    # (a branch such as `main` is refused, #1628) that is reachable from reviewed main
-    # (Infra-011). dry-run is plan-only, so it may inspect any ref.
-    if not args.dry_run:
-        try:
-            validate_iac_ref_form(target_env, classify_ref(args.after))
-        except ValueError as exc:
-            raise SystemExit(f"::error::{exc}") from exc
-        assert_after_on_main(args.after, repo_root)
-    changed_files = (
-        list(args.changed_file)
-        if args.changed_file
-        else changed_files_from_git(repo_root, effective_before or None, args.after)
-    )
-    tag_overrides: dict[str, str] | None = None
-    if args.app_release_tag:
-        tag_overrides = load_app_release_tags(
-            repo_root, rev=args.after
-        ) or load_app_release_tags(repo_root)
-        for item in args.app_release_tag:
-            if "=" not in item:
-                raise SystemExit(
-                    f"::error::expected SERVICE=TAG for --app-release-tag, got {item!r}"
-                )
-            svc, tag = item.split("=", 1)
-            tag_overrides[svc.strip()] = tag.strip()
-    plan = build_plan(
-        changed_files,
-        repo_root=repo_root,
-        before=effective_before or None,
-        after=args.after,
-        app_release_tags=tag_overrides,
-    )
-    commands = build_deploy_commands(
-        plan,
-        iac_ref=args.after,
-        domain=args.domain,
-        timeout=args.timeout,
-    )
-    applied = commands_to_apply(
-        commands,
+    stage = StageRun(
+        env=stage_hook_plan(target_env).stage_id,
+        subject=f"tag:{args.after}",
         dry_run=args.dry_run,
-        promote_prod=promote_prod,
-        target_env=target_env,
     )
-    if applied and not args.dry_run:
-        for cmd in applied:
-            is_bootstrap = "--bootstrap" in cmd.argv
-            for svc in (s.strip() for s in cmd.service.split(",") if s.strip()):
-                if svc in APP_SOURCES:
-                    app_tag = plan.app_release_tags.get(svc, "")
-                    if app_tag:
-                        try:
-                            assert_app_version_ref_matches_train(
-                                svc,
-                                app_tag,
-                                cmd.deploy_type,
-                                bootstrap=is_bootstrap,
-                                iac_ref=args.after,
-                                repo_root=repo_root,
-                            )
-                            assert_app_version_ref_on_main(
-                                app_tag,
-                                cmd.deploy_type,
-                                service=svc,
-                                repo_root=repo_root,
-                            )
-                        except (ValueError, RuntimeError) as exc:
-                            raise SystemExit(f"::error::{exc}") from exc
+    pre_checks: list[CheckVerdict] = []
+    pre_started = utc_now()
+    try:
+        with timed_check(pre_checks, "contract"):
+            # Validate the durable desired-state coordinate before any production side
+            # effect.  A branch, SHA, or pre-release must never deploy successfully and
+            # only then fail while trying to record its marker.
+            effective_before = args.before
+            if promote_prod:
+                current_production = assert_production_marker_advances(
+                    args.after, repo_root
+                )
+                if current_production:
+                    if effective_before and effective_before != current_production:
+                        raise SystemExit(
+                            "::error::production before must match current marker release "
+                            f"{current_production}; got {effective_before}"
+                        )
+                    effective_before = current_production
+                elif not effective_before:
+                    raise SystemExit(
+                        "::error::first production marker requires an explicit known-production "
+                        "--before release"
+                    )
+            if not args.dry_run:
+                try:
+                    validate_iac_ref_form(target_env, classify_ref(args.after))
+                except ValueError as exc:
+                    raise SystemExit(f"::error::{exc}") from exc
+        # Fail-closed BEFORE planning/deploying: an apply run must promote a release tag
+        # (a branch such as `main` is refused, #1628) that is reachable from reviewed main
+        # (Infra-011). dry-run is plan-only, so it may inspect any ref.
+        if not args.dry_run:
+            with timed_check(pre_checks, "provenance"):
+                assert_after_on_main(args.after, repo_root)
+        changed_files = (
+            list(args.changed_file)
+            if args.changed_file
+            else changed_files_from_git(repo_root, effective_before or None, args.after)
+        )
+        tag_overrides: dict[str, str] | None = None
+        if args.app_release_tag:
+            tag_overrides = load_app_release_tags(
+                repo_root, rev=args.after
+            ) or load_app_release_tags(repo_root)
+            for item in args.app_release_tag:
+                if "=" not in item:
+                    raise SystemExit(
+                        f"::error::expected SERVICE=TAG for --app-release-tag, got {item!r}"
+                    )
+                svc, tag = item.split("=", 1)
+                tag_overrides[svc.strip()] = tag.strip()
+        plan = build_plan(
+            changed_files,
+            repo_root=repo_root,
+            before=effective_before or None,
+            after=args.after,
+            app_release_tags=tag_overrides,
+        )
+        commands = build_deploy_commands(
+            plan,
+            iac_ref=args.after,
+            domain=args.domain,
+            timeout=args.timeout,
+        )
+        applied = commands_to_apply(
+            commands,
+            dry_run=args.dry_run,
+            promote_prod=promote_prod,
+            target_env=target_env,
+        )
+        stage.units = plan_units(plan, repo_root)
+        if applied and not args.dry_run:
+            with timed_check(pre_checks, "app_pins"):
+                for cmd in applied:
+                    is_bootstrap = "--bootstrap" in cmd.argv
+                    for svc in (s.strip() for s in cmd.service.split(",") if s.strip()):
+                        if svc in APP_SOURCES:
+                            app_tag = plan.app_release_tags.get(svc, "")
+                            if app_tag:
+                                try:
+                                    assert_app_version_ref_matches_train(
+                                        svc,
+                                        app_tag,
+                                        cmd.deploy_type,
+                                        bootstrap=is_bootstrap,
+                                        iac_ref=args.after,
+                                        repo_root=repo_root,
+                                    )
+                                    assert_app_version_ref_on_main(
+                                        app_tag,
+                                        cmd.deploy_type,
+                                        service=svc,
+                                        repo_root=repo_root,
+                                    )
+                                except (ValueError, RuntimeError) as exc:
+                                    raise SystemExit(f"::error::{exc}") from exc
+    except BaseException as exc:
+        if all(check.ok for check in pre_checks):
+            pre_checks.append(CheckVerdict("plan", False, str(exc)[:300]))
+        stage.emit("pre", pre_started, pre_checks)
+        raise
+    stage.emit("pre", pre_started, pre_checks)
     deferred = [command for command in commands if command not in applied]
     results: list[dict] = []
+    operation_started = utc_now()
     if applied:
         results = run_deploy_commands(applied)
+    stage.emit(
+        "operation",
+        operation_started,
+        operation_checks(results, dry_run=args.dry_run),
+    )
     hook_results: list[dict[str, object]] = []
+    post_started = utc_now()
     if (
         applied
         and not args.dry_run
@@ -2648,6 +2796,19 @@ def main(argv: list[str] | None = None) -> int:
             slot=effective_slot,
         )
     hooks_failed = any(item.get("status") != "pass" for item in hook_results)
+    if not args.dry_run and not any(r.get("returncode") != 0 for r in results):
+        hooked = {str(item["service"]) for item in hook_results}
+        stage.emit(
+            "post",
+            post_started,
+            post_checks(hook_results),
+            uncovered=[
+                unit
+                for unit in stage.units
+                if unit.split(":", 1)[0] in ("app", "infra")
+                and unit.split(":", 1)[1] not in hooked
+            ],
+        )
     production_marker = ""
     marker_pending = ""
     if (
@@ -2696,7 +2857,7 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.output_json).write_text(
             json.dumps(payload, indent=2), encoding="utf-8"
         )
-    write_summary(plan=plan, commands=commands, results=results, dry_run=args.dry_run)
+    write_summary(records=stage.records, dry_run=args.dry_run)
     return (
         1
         if (any(result.get("returncode") != 0 for result in results) or hooks_failed)

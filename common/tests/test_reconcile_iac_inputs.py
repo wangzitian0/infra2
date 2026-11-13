@@ -4314,3 +4314,107 @@ def test_print_changed_app_releases_cli_for_cumulative_promotion_guard(
         "finance_report/app=v0.2.61",
         "truealpha/app=v0.2.89",
     ]
+
+
+def test_summary_is_rendered_from_records(monkeypatch, tmp_path) -> None:
+    """The run summary holds the records of the run and nothing that the plan builds (#1645)."""
+    from common.deploy.stage_record import write_stage_record
+    from infra2_sdk.observability import CheckVerdict
+
+    def record(phase, checks, **kw):
+        return write_stage_record(
+            env="staging.release_validation",
+            phase=phase,
+            subject="tag:v3.1.23",
+            ref="refs/tags/v3.1.23",
+            event="tag",
+            run_url="https://github.com/o/r/actions/runs/777",
+            started_at="2026-11-01T00:00:00Z",
+            checks=checks,
+            units=("infra:platform/alerting", "sdk:3.29.0"),
+            persist=False,
+            **kw,
+        )
+
+    records = [
+        record("pre", [CheckVerdict("contract", True, seconds=0.5)]),
+        record(
+            "operation",
+            [
+                CheckVerdict(
+                    "staging:platform/alerting",
+                    False,
+                    "attempt 1: a|b\nc",
+                    seconds=12.5,
+                )
+            ],
+            uncovered=("infra:platform/alerting",),
+        ),
+    ]
+    target = tmp_path / "summary.md"
+    reconcile.write_summary(records=records, dry_run=False, path=str(target))
+    text = target.read_text(encoding="utf-8")
+    assert "### pre: pass" in text and "### operation: fail" in text
+    assert "| `contract` | ok | 0.5 |  |" in text
+    assert (
+        "| `staging:platform/alerting` | FAILED | 12.5 | attempt 1: a\\|b c |" in text
+    )
+    assert "- Units: `infra:platform/alerting, sdk:3.29.0`" in text
+    assert "- Uncovered by a hook: `infra:platform/alerting`" in text
+    for plan_line in (
+        "Changed files",
+        "Selected services",
+        "Dropped files",
+        "Commands:",
+        "```json",
+    ):
+        assert plan_line not in text
+    # No record, no summary: the plan alone is not a source.
+    empty = tmp_path / "empty.md"
+    reconcile.write_summary(records=[], dry_run=False, path=str(empty))
+    assert not empty.exists()
+
+
+def test_main_writes_the_summary_from_the_records_it_wrote(
+    monkeypatch, tmp_path
+) -> None:
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.setattr(reconcile, "assert_after_on_main", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        reconcile,
+        "run_deploy_commands",
+        lambda cmds, **_kw: [
+            {
+                "service": c.service,
+                "type": c.deploy_type,
+                "returncode": 0,
+                "stdout": "{}",
+                "stderr": "",
+                "seconds": 7.0,
+            }
+            for c in cmds
+        ],
+    )
+    assert (
+        main(
+            [
+                "--before",
+                "v3.1.22",
+                "--after",
+                "v3.1.23",
+                "--env",
+                "staging",
+                "--changed-file",
+                "platform/12.alerting/compose.yaml",
+            ]
+        )
+        == 0
+    )
+    text = summary.read_text(encoding="utf-8")
+    assert [line for line in text.splitlines() if line.startswith("### ")] == [
+        "### pre: pass",
+        "### operation: pass",
+        "### post: pass",
+    ]
+    assert "| `staging:platform/alerting` | ok | 7 |  |" in text
