@@ -90,12 +90,6 @@ class ServiceSpec:
             ``truealpha/data_engine`` (truealpha#712): one release request promotes
             the three images, so the engine can no longer sit a release behind the app
             with every gate green. A companion failure fails the request.
-        supports_preview: Whether ``common.deploy.preview`` can serve this service's
-            preview/canary deploy types. False fails a preview/canary target closed. True
-            requires a matching entry in
-            ``common.deploy.env_config.preview_service_config`` (project / compose path /
-            DB name / base_subdomain, #522) — the preview lifecycle looks the service up
-            there rather than assuming finance_report's internals.
     """
 
     key: str
@@ -109,7 +103,6 @@ class ServiceSpec:
     identity_component: str = "app"
     worker_identity_service_name: str = ""
     companions: tuple[str, ...] = ()
-    supports_preview: bool = True
 
     def resolved_identity_service_name(self) -> str:
         if self.identity_service_name:
@@ -183,7 +176,6 @@ SERVICES: dict[str, ServiceSpec] = {
             "ghcr.io/wangzitian0/truealpha-llm-service",
         ),
         identity_service_name="truealpha-app",
-        supports_preview=True,
         companions=("truealpha/data_engine",),
     ),
 }

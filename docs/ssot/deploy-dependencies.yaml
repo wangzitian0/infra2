@@ -96,6 +96,8 @@ services:
     depends_on:
       - uv.lock
       - tools/sdk_requirement.py
+      # The Preview compose builds the slot's own S3 from this Dockerfile (#1647).
+      - platform/03.s3/Dockerfile
 
   bootstrap/iac-runner:
     depends_on:
