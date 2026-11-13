@@ -79,17 +79,6 @@ class AlertingDeployer(Deployer):
             expected="200,302",
             env_shared=True,
         ),
-        # #1648: the public route of the runner. It judges the route only: 503 is a
-        # route that works while the runner reports a dead prerequisite; the internal
-        # iac-runner-http pages that, so one fault pages once.
-        PublicRouteFacet(
-            name="iac-runner-public-route",
-            subdomain="iac",
-            service_id="bootstrap/iac-runner",
-            path="/health",
-            expected="200,503",
-            env_shared=True,
-        ),
     )
     probes = (
         ProbeFacet(
@@ -134,6 +123,20 @@ class AlertingDeployer(Deployer):
             target="http://iac-runner:8080/health",
             expected="200",
             severity="warning",
+            service_id="bootstrap/iac-runner",
+        ),
+        # #1648: the public route of the runner health, in this group so the runner's
+        # cascade suppression sees both. A failing iac-runner-http (a stopped runner or a
+        # dead prerequisite) suppresses this probe; a healthy iac-runner-http with a dead
+        # public route pages once, from this probe. expected stays 200: Traefik answers
+        # 404 for a stopped container and for a lost route alike.
+        ProbeFacet(
+            name="iac-runner-public-http",
+            kind="http",
+            target="https://iac.zitian.party/health",
+            expected="200",
+            severity="warning",
+            depends_on="iac-runner-http",
             service_id="bootstrap/iac-runner",
         ),
         # --- the path every deploy depends on (#658 recommendation 5) ---

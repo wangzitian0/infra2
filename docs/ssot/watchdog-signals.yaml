@@ -125,7 +125,7 @@ conditions:
 
   iac-runner-health:
     signals:
-      - production.iac-runner-http # the 60 s probe pages
+      - production.iac-runner-http # the 60 s probe pages; iac-runner-public-http depends on it
       - global.infra2.iac-runner-health # the daily step goes red, never pages
 
 # PlatformTodoProbeFailures was deleted from the catalog (platform/12.alerting/alert_rules.json).
@@ -193,23 +193,6 @@ signals:
     environment: production
     component: vault
     signal: vault-public-route
-    primary_owner: self
-    layer: vps
-    failure_class: service-health
-    severity: critical
-    cadence: 60s
-    tier: minute
-    type: alert
-    consecutive_failures: 2
-    renotify_window_sec: 0
-
-  # #1648: the public route of the runner, probed by the 60 s runner. It accepts 200 and
-  # 503 (judges the route only); the internal iac-runner-http is the one pager of the
-  # iac-runner-health condition and pages a 503.
-  - signal_id: production.iac-runner.public-route
-    environment: production
-    component: iac-runner
-    signal: iac-runner-public-route
     primary_owner: self
     layer: vps
     failure_class: service-health
