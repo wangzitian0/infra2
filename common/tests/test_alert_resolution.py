@@ -579,3 +579,67 @@ def test_the_app_hook_key_prefix_has_one_literal() -> None:
         for _ in range(p.read_text(encoding="utf-8").count("app-hook:"))
     ]
     assert hits == ["common/deploy/deploy_guard_audit.py"]
+
+
+FINANCE_KEY = "app-hook:finance_report/app:staging_gate:staging"
+
+
+def _red_hooks_then_green_finance(w, tmp_path):
+    """truealpha red, finance red, then finance runs green: the state keeps truealpha only."""
+    _write_result(tmp_path, "hook FAILED", ("truealpha/app", "staging_gate", "fail"))
+    w.step(NAME, JOB, ALERT, ok=False, event="push", **DEPLOY)
+    _write_result(
+        tmp_path, "hook FAILED", ("finance_report/app", "staging_gate", "fail")
+    )
+    w.step(NAME, JOB, ALERT, ok=False, event="push", **DEPLOY)
+    (state,) = w.api.issues.values()
+    assert TRUEALPHA_KEY in state["body"] and FINANCE_KEY in state["body"]
+    cards = len(w.cards)
+    _write_result(tmp_path, None, ("finance_report/app", "staging_gate", "pass"))
+    w.step(NAME, JOB, RESOLVE, ok=True, event="push", **DEPLOY)
+    assert len(w.cards) == cards  # no card: truealpha is still red
+    return state, cards
+
+
+def test_a_green_hook_leaves_the_state_while_another_stays_red(
+    monkeypatch, tmp_path
+) -> None:
+    """#1634 round 3 (S1): the key that ran green is removed; the last green resolves once."""
+    w = World(monkeypatch, tmp_path)
+    state, cards = _red_hooks_then_green_finance(w, tmp_path)
+    assert TRUEALPHA_KEY in state["body"] and FINANCE_KEY not in state["body"]
+    assert w.api.open_titles()
+    _write_result(tmp_path, None, ("truealpha/app", "staging_gate", "pass"))
+    w.step(NAME, JOB, RESOLVE, ok=True, event="push", **DEPLOY)
+    assert len(w.cards) == cards + 1
+    assert w.titles()[-1].startswith("✅ [已恢复]") and w.api.open_titles() == []
+    assert sum(t.startswith("✅") for t in w.titles()) == 1
+
+
+def test_a_hook_that_ran_green_pages_as_new_when_it_fails_again(
+    monkeypatch, tmp_path
+) -> None:
+    """#1634 round 3 (S1b): a stale green key must not hide a new failure of that hook."""
+    w = World(monkeypatch, tmp_path)
+    state, cards = _red_hooks_then_green_finance(w, tmp_path)
+    _write_result(
+        tmp_path, "hook FAILED", ("finance_report/app", "staging_gate", "fail")
+    )
+    w.step(NAME, JOB, ALERT, ok=False, event="push", **DEPLOY)
+    assert len(w.cards) == cards + 1 and w.cards[-1]["header"]["template"] == "red"
+    assert FINANCE_KEY in state["body"] and TRUEALPHA_KEY in state["body"]
+
+
+def test_an_unreadable_state_marker_is_not_resolved_by_a_green_run(
+    monkeypatch, tmp_path
+) -> None:
+    """#1634 round 3 (S4): with a sticky prefix, a state that cannot be read fails closed."""
+    w = World(monkeypatch, tmp_path)
+    _write_result(tmp_path, "hook FAILED", ("truealpha/app", "staging_gate", "fail"))
+    w.step(NAME, JOB, ALERT, ok=False, event="push", **DEPLOY)
+    (state,) = w.api.issues.values()
+    state["body"] = re.sub(r"\{.*?\}", "{broken", state["body"], flags=re.S)
+    _write_result(tmp_path, None)
+    w.step(NAME, JOB, RESOLVE, ok=True, event="push", **DEPLOY)
+    assert all(not t.startswith("✅") for t in w.titles())
+    assert w.api.open_titles()

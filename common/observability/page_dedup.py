@@ -47,6 +47,8 @@ MAX_DETAIL_CHARS = 300
 TRUSTED_AUTHORS = ("github-actions[bot]",)
 
 PAGE, REPORT, RESOLVED, NONE = "page", "report", "resolved", "none"
+#: Some recorded keys are green now, others stay red: record the red ones, send nothing.
+NARROW = "narrow"
 #: `unevaluated` for a run that observed nothing: every recorded finding is unproven.
 ALL_UNEVALUATED = ("",)
 FOUND, ABSENT, CORRUPT, UNREADABLE = "found", "none", "corrupt", "unreadable"
@@ -282,6 +284,8 @@ class Decision:
     day: int = 0
     added: tuple[str, ...] = ()
     removed: tuple[str, ...] = ()
+    #: For NARROW: the keys that stay recorded.
+    remaining: tuple[str, ...] = ()
     #: Record the identity once the page was delivered.
     write: bool = False
     #: A line appended to the page: the dedup state itself was unusable.
@@ -352,11 +356,20 @@ def decide(
                 return Decision(
                     NONE, "open-only run (drill or branch dispatch) never resolves"
                 )
+            if sticky_prefix and lookup.state is None:
+                return Decision(
+                    NONE, "recorded state is unreadable: sticky findings kept"
+                )
             held = _sticky_keys(lookup, sticky_prefix, green)
             if held:
-                return Decision(
-                    NONE, f"`{held[0]}` is still red: no run evaluated it green"
-                )
+                reason = f"`{held[0]}` is still red: no run evaluated it green"
+                assert lookup.state is not None
+                removed = tuple(k for k in lookup.state.keys if k not in held)
+                if removed:
+                    return Decision(
+                        NARROW, reason, removed=removed, remaining=tuple(held)
+                    )
+                return Decision(NONE, reason)
             unproven = _unproven(lookup, unevaluated)
             if unproven:
                 return Decision(
@@ -546,6 +559,36 @@ def _record(
         print(f"page dedup: opened #{number} ({state_title(job)})")
 
 
+def _narrow(
+    api: StateApi,
+    job: str,
+    label: str,
+    lookup: Lookup,
+    decision: Decision,
+    *,
+    run_url: str,
+) -> None:
+    """Record only the keys that stay red; ``since`` and ``incident_since`` are kept."""
+    old = lookup.state
+    assert old is not None and lookup.numbers
+    identity = make_identity(job, decision.remaining)
+    state = State(
+        identity.fingerprint,
+        identity.shown[:MAX_STORED_KEYS],
+        old.since,
+        old.incident_since,
+        len(identity.keys),
+    )
+    number = lookup.numbers[0]
+    api.update_body(number, state_body(job, label, state, identity, run_url))
+    api.comment(
+        number,
+        f"Recovered, no longer recorded: {', '.join(f'`{k}`' for k in decision.removed)}. "
+        f"Still red: {len(identity.keys)}. Run: {run_url or '(no run URL)'}",
+    )
+    print(f"page dedup: narrowed #{number} ({state_title(job)})")
+
+
 def _change_comment(decision: Decision, identity: Identity, run_url: str) -> str:
     lines = [
         f"Paged again: {decision.reason}; now {len(identity.keys)} finding(s) "
@@ -707,6 +750,15 @@ def dedup_page(
     if decision.action == NONE:
         return Outcome(NONE, decision.reason)
 
+    if decision.action == NARROW:
+        assert api is not None and lookup.state is not None
+        code = _exec_state_sync(
+            lambda: _narrow(api, job, label, lookup, decision, run_url=run_url),
+            job,
+            "the recorded state could not be narrowed ({exc_type}: {exc}); the next run retries",
+        )
+        return Outcome(NONE, decision.reason, exit_code=code)
+
     if decision.action == REPORT:
         assert identity is not None and lookup.state is not None
         text = report_text(
@@ -812,6 +864,7 @@ __all__ = [
     "Identity",
     "Lookup",
     "MAX_SHOWN_KEY_CHARS",
+    "NARROW",
     "NONE",
     "Outcome",
     "PAGE",
