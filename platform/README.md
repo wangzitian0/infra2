@@ -121,15 +121,17 @@ clickhouse ──► signoz ──► alerting
 
 ## Adding New Service
 
-Follow [`docs/onboarding/07.new-service-sop.md`](../docs/onboarding/07.new-service-sop.md) and scaffold the service via `infra2_sdk.scaffold`:
+Follow [`docs/onboarding/07.new-service-sop.md`](../docs/onboarding/07.new-service-sop.md) and scaffold the service via `tools.scaffold` (moved out of `infra2-sdk`):
 
 ```bash
-uv run python -m infra2_sdk.scaffold \
-  --service-name <service> \
-  --tier 30 \
+uv run python -m tools.scaffold \
+  <service> \
+  --project platform \
   --port 8000 \
+  --template fastapi \
+  --db postgres \
   --profile infra2 \
-  --output-dir .
+  --out-dir .
 ```
 
 Each platform service declares its metadata and facets on its `Deployer` subclass in `platform/{nn}.{service}/deploy.py` (collected via AST by `common.core.registry.service_attrs()`):

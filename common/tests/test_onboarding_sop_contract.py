@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from infra2_sdk.scaffold import main
+from tools.scaffold import main
 
 
 def _get_sop_text() -> str:
@@ -39,7 +39,7 @@ def test_onboarding_sop_scaffold_command_flags_are_valid() -> None:
 
     # Extract the scaffold command block
     match = re.search(
-        r"```bash\s*\n\s*uv run python -m infra2_sdk\.scaffold\s+(.*?)\n\s*```",
+        r"```bash\s*\n\s*uv run python -m tools\.scaffold\s+(.*?)\n\s*```",
         text,
         re.DOTALL,
     )
@@ -62,7 +62,7 @@ def test_onboarding_sop_scaffold_command_flags_are_valid() -> None:
     # Execute main() with scaffold_service mocked to avoid writing files to disk
     from unittest.mock import patch
 
-    with patch("infra2_sdk.scaffold.scaffold_service") as mock_scaffold:
+    with patch("tools.scaffold.scaffold_service") as mock_scaffold:
         mock_scaffold.return_value = []
         ret = main(cleaned_tokens)
         assert ret == 0, f"scaffold CLI returned non-zero code {ret}"

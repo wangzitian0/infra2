@@ -393,7 +393,7 @@ def test_the_llm_start_period_is_not_below_the_sdk_standard(tmp_path: Path) -> N
     gave up at about 60 s. On 2026-10-23 a busy host stretched the boot to 69 s, and the
     deploy gate rolled back a server that was ready 10 s later. The number comes from the
     SDK here, so the standard has one source."""
-    from infra2_sdk.scaffold import scaffold_service
+    from tools.scaffold import scaffold_service
 
     scaffold_service("standard", tmp_path, profile="infra2")
     scaffolded = yaml.safe_load((tmp_path / "compose.yaml").read_text(encoding="utf-8"))
