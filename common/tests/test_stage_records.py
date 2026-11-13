@@ -906,3 +906,74 @@ def test_one_github_get_helper_and_one_card_publish_flow() -> None:
     for name in ("_headers",):
         assert not hasattr(stage_records, name)
     assert not hasattr(release_card, "_deliver_card")
+
+
+# -- a production run writes its post record in `operation` (#1646) -----------------------------
+
+
+def _prod_run_with_gate(monkeypatch, tmp_path, *, gate_ok: bool):
+    """Drive a production promotion whose hook runner returns smoke and prod_gate results."""
+    records, argv = _drive_prod_promotion(
+        monkeypatch, tmp_path, lambda tag, *_a, **_k: f"production/{tag}"
+    )
+
+    def hooks(plan, applied, *, slot, **_kw):
+        return [
+            {
+                "service": "platform/alerting",
+                "slot": one,
+                "status": "fail" if one == "prod_gate" and not gate_ok else "pass",
+                "summary": "boom" if one == "prod_gate" and not gate_ok else "ok",
+                "version_ref": "v3.1.23",
+                "duration_seconds": 1.0,
+            }
+            for one in slot.split(",")
+        ]
+
+    monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", hooks)
+    code = reconcile.main(argv)
+    loaded = [
+        StageRecord.from_dict(json.loads(f.read_text())) for f in records.iterdir()
+    ]
+    return code, loaded
+
+
+def test_a_passing_production_run_writes_a_post_record_and_the_card_says_passed(
+    monkeypatch, tmp_path
+) -> None:
+    from common.alerting.stage_card import render_stage_card
+
+    code, loaded = _prod_run_with_gate(monkeypatch, tmp_path, gate_ok=True)
+    assert code == 0
+    post = [r for r in loaded if r.phase == "post"]
+    assert len(post) == 1 and post[0].verdict == "pass"
+    assert [c.name for c in post[0].checks] == ["platform/alerting:prod_gate"]
+    assert "Passed" in render_stage_card(loaded)["header"]["title"]["content"]
+
+
+def test_a_red_prod_gate_writes_a_red_post_record_and_no_marker(
+    monkeypatch, tmp_path
+) -> None:
+    from common.alerting.stage_card import render_stage_card
+
+    code, loaded = _prod_run_with_gate(monkeypatch, tmp_path, gate_ok=False)
+    assert code == 1
+    post = [r for r in loaded if r.phase == "post"]
+    assert len(post) == 1 and post[0].verdict == "fail"
+    assert "Failed" in render_stage_card(loaded)["header"]["title"]["content"]
+    operation = next(r for r in loaded if r.phase == "operation")
+    assert "production_marker" not in [c.name for c in operation.checks]
+
+
+def test_the_digest_counts_a_passing_production_run_and_the_reminder_stays_silent(
+    monkeypatch, tmp_path
+) -> None:
+    from common.observability.delivery_section import summarize_delivery
+
+    _, loaded = _prod_run_with_gate(monkeypatch, tmp_path, gate_ok=True)
+    dicts = [r.to_dict() for r in loaded]
+    assert {d["phase"] for d in dicts} == {"pre", "operation", "post"}
+    assert summarize_delivery(dicts)["prod"]["all"]["passed"] == 1
+    # the production post record marks the tag promoted, with or without a marker tag
+    post = [d for d in dicts if d["phase"] == "post"]
+    assert promotion_reminder.pending_promotion([_post("v3.1.23")], post, []) is None

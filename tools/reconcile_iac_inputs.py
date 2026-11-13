@@ -2586,6 +2586,26 @@ def run_pre(
     return train
 
 
+def emit_post_record(
+    stage: StageRun,
+    started: str,
+    hook_results: Sequence[dict[str, object]],
+) -> None:
+    """The ``post`` record: one check for each gate hook, and the units no hook covered."""
+    hooked = {str(item["service"]) for item in hook_results}
+    stage.emit(
+        "post",
+        started,
+        post_checks(hook_results),
+        uncovered=[
+            unit
+            for unit in stage.units
+            if unit.split(":", 1)[0] in ("app", "infra")
+            and unit.split(":", 1)[1] not in hooked
+        ],
+    )
+
+
 def run_operation(
     args: argparse.Namespace,
     repo_root: Path,
@@ -2647,6 +2667,7 @@ def run_operation(
     if train.applied:
         results = run_deploy_commands(train.applied)
     deploy_failed = any(result.get("returncode") != 0 for result in results)
+    hooks_started = utc_now()
     if train.applied and not args.dry_run and not deploy_failed and operation_slots:
         hook_results = run_post_deploy_app_hooks(
             train.plan,
@@ -2697,6 +2718,12 @@ def run_operation(
             *marker_checks,
         ],
     )
+    # A production run has no `post` job: its `post` record holds the verdict of `prod_gate`,
+    # written green or red after the marker step, so the stage card ends Passed or Failed.
+    if promote_prod and not args.dry_run:
+        gate_results = [item for item in hook_results if item.get("slot") != "smoke"]
+        if gate_results:
+            emit_post_record(stage, hooks_started, gate_results)
     facts: dict[str, object] = {
         "plan": train.plan.to_dict(),
         "commands": [command.to_dict() for command in train.commands],
@@ -2756,18 +2783,7 @@ def run_post(
             slot=post_slots,
         )
     if not args.dry_run:
-        hooked = {str(item["service"]) for item in hook_results}
-        stage.emit(
-            "post",
-            started,
-            post_checks(hook_results),
-            uncovered=[
-                unit
-                for unit in stage.units
-                if unit.split(":", 1)[0] in ("app", "infra")
-                and unit.split(":", 1)[1] not in hooked
-            ],
-        )
+        emit_post_record(stage, started, hook_results)
     return PhaseOutcome(
         not any(item.get("status") != "pass" for item in hook_results),
         hook_results=hook_results,
@@ -2782,6 +2798,8 @@ def run_train(
     target_env: str,
 ) -> int:
     """Run the phases of ``--phase`` for ``args.after``; the exit code is 1 when one fails."""
+    if args.phase == "post" and promote_prod:
+        raise SystemExit("::error::production post runs inside operation")
     phases = PHASES if args.phase == "all" else (args.phase,)
     stage = StageRun(
         env=stage_hook_plan(target_env).stage_id,

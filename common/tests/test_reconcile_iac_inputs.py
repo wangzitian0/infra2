@@ -4590,10 +4590,11 @@ def test_marker_written_only_after_prod_gate_passes(
     monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order))
     assert main(_TRAIN_ARGV) == 0
     assert order == ["deploy", gate, "marker"]
-    # 4. the post phase alone for a production run writes no marker and runs no hook
+    # 4. the post phase alone for a production run is refused: no marker, no hook
     order = _train_stubs(monkeypatch, tmp_path / "d")
     monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order))
-    assert main(["--phase", "post", *_TRAIN_ARGV]) == 0
+    with pytest.raises(SystemExit, match="production post runs inside operation"):
+        main(["--phase", "post", *_TRAIN_ARGV])
     assert order == []
     # 5. a failed prod_gate: the marker is NOT written (#1563)
     order = _train_stubs(monkeypatch, tmp_path / "e")
@@ -4754,10 +4755,10 @@ def test_each_phase_writes_its_own_result_for_the_alert_job(
     green = tmp_path / "green.json"
     order = _train_stubs(monkeypatch, tmp_path / "g")
     monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order))
-    assert main(["--phase", "post", "--output-json", str(green), *_TRAIN_ARGV]) == 0
-    data = json.loads(green.read_text())
     # a production run has no post phase: `operation` ran `prod_gate`
-    assert data["alert_text"] is None and data["hook_results"] == []
+    with pytest.raises(SystemExit, match="production post runs inside operation"):
+        main(["--phase", "post", "--output-json", str(green), *_TRAIN_ARGV])
+    assert order == [] and not green.exists()
 
 
 def _tagged_repo(tmp_path: Path, tags: list[str], markers: list[str]) -> Path:

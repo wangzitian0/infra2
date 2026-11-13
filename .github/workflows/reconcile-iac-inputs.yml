@@ -423,8 +423,8 @@ jobs:
     # The operation passed, or `phase=post` runs this job alone (the operation is skipped by
     # design). It makes no deploy call and holds no `contents: write`. A production run
     # executes `smoke` and `prod_gate` in `operation` and writes the marker after both, so
-    # this job is for staging only and a production run needs one owner approval, not two.
-    if: ${{ !cancelled() && !inputs.promote_prod && github.event_name != 'schedule' && !inputs.sync_app_releases && !inputs.run_hook_slot && inputs.phase != 'pre' && (needs.operation.result == 'success' || (inputs.phase == 'post' && needs.operation.result == 'skipped')) }}
+    # this job is for staging only (`phase=post` for production runs it so the tool refuses) and a production run needs one owner approval, not two.
+    if: ${{ !cancelled() && (!inputs.promote_prod || inputs.phase == 'post') && github.event_name != 'schedule' && !inputs.sync_app_releases && !inputs.run_hook_slot && inputs.phase != 'pre' && (needs.operation.result == 'success' || (inputs.phase == 'post' && needs.operation.result == 'skipped')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
