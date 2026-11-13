@@ -626,6 +626,7 @@ def test_the_slot_name_guard_sees_a_real_collision(tmp_path):
         "/x:size=1m,",
         "/x:size=1m,,mode=1777",
         "/x:",
+        "/x:mode=1777",
     ],
 )
 def test_a_tmpfs_option_other_than_size_and_mode_is_refused(tmpfs):
