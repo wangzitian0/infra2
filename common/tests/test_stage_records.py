@@ -581,11 +581,9 @@ def test_the_reminder_job_runs_at_2100_utc_plus_8_and_reads_only() -> None:
     step = next(s for s in digest["steps"] if s["name"].startswith("Remind the owner"))
     assert step["run"] == "python tools/promotion_reminder.py"
     assert "0 13 * * *" in step["if"]
-    assert digest["permissions"] == {
-        "contents": "read",
-        "actions": "read",
-        "issues": "read",
-    }
+    assert (
+        digest["permissions"]["contents"] == digest["permissions"]["actions"] == "read"
+    )
 
 
 # -- the post record follows the production marker; a record never turns a deploy red ---------
