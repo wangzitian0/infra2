@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import calendar
 import json
 import subprocess
 import time
@@ -11,8 +12,18 @@ from collections.abc import Sequence
 
 from infra2_sdk.deploy import default_http_get, poll_until_healthy
 
-GATE_VERDICT_WAIT_SECONDS = 100
+GATE_VERDICT_WAIT_SECONDS = 90
+GATE_MAX_VERDICT_AGE_SECONDS = 180
+GATE_REQUEST_TIMEOUT_SECONDS = 10
 GATE_POLL_SECONDS = 10
+
+
+def _verdict_age_seconds(checked_at: object) -> float | None:
+    try:
+        stamp = calendar.timegm(time.strptime(str(checked_at), "%Y-%m-%dT%H:%M:%SZ"))
+    except ValueError:
+        return None
+    return time.time() - stamp
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -35,7 +46,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--timeout",
         type=int,
-        default=15,
+        default=GATE_REQUEST_TIMEOUT_SECONDS,
         help="HTTP request timeout in seconds.",
     )
     args = parser.parse_args(argv)
@@ -76,6 +87,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         canary = payload.get("canary")
         if not isinstance(canary, dict) or canary.get("ok") is not True:
             raise AssertionError(f"canary verdict is not ok: {canary!r}")
+        age = _verdict_age_seconds(canary.get("checked_at"))
+        if age is None or age > GATE_MAX_VERDICT_AGE_SECONDS:
+            raise AssertionError(f"canary verdict is stale or unreadable: {canary!r}")
         if payload.get("git_sha") != expected:
             raise AssertionError(f"git_sha {payload.get('git_sha')!r} != {expected}")
     return 0

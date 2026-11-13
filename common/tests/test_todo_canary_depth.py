@@ -2065,10 +2065,10 @@ def test_probe_health_gate_fails_on_red_canary_and_sha_mismatch(
         )
         return probe.main(["https://x.example", *flags])
 
-    good = {**base, "canary": {"ok": True, "checked_at": "2026-11-13T00:00:00Z"}}
+    good = {**base, "canary": {"ok": True, "checked_at": _now()}}
     assert run(good, "--gate", "HEAD") == 0
     for bad in (
-        {**base, "canary": {"ok": False, "checked_at": "2026-11-13T00:00:00Z"}},
+        {**base, "canary": {"ok": False, "checked_at": _now()}},
         dict(base),
         {**good, "git_sha": "0" * 40},
     ):
@@ -2137,8 +2137,8 @@ def test_probe_health_gate_waits_for_a_verdict_not_a_pass(monkeypatch) -> None:
         )
 
     pending = {"ok": False, "checked_at": None}
-    green = {"ok": True, "checked_at": "2026-11-13T00:00:00Z"}
-    red = {"ok": False, "checked_at": "2026-11-13T00:00:00Z"}
+    green = {"ok": True, "checked_at": _now()}
+    red = {"ok": False, "checked_at": _now()}
 
     serve([pending, pending, green])
     assert probe.main(["https://x.example", "--gate", "HEAD"]) == 0
@@ -2151,6 +2151,47 @@ def test_probe_health_gate_waits_for_a_verdict_not_a_pass(monkeypatch) -> None:
     assert sleeps == []
 
     serve([pending])
-    with pytest.raises(AssertionError, match="no canary verdict after 100s"):
+    with pytest.raises(AssertionError, match="no canary verdict after 90s"):
         probe.main(["https://x.example", "--gate", "HEAD"])
-    assert sum(sleeps) >= 100
+    assert sum(sleeps) >= 90
+
+
+def _now(offset: float = 0.0) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + offset))
+
+
+def test_probe_health_gate_refuses_stale_verdict_and_missing_field_without_wait(
+    monkeypatch,
+) -> None:
+    """#1635: a verdict older than 180 s fails; a missing `canary` field fails with no wait."""
+    from types import SimpleNamespace
+
+    probe = _load("probe_health_stale", SERVICE_DIR / "probe_health.py")
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD^{commit}"],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    ).stdout.strip()
+    monkeypatch.chdir(ROOT)
+    sleeps: list[float] = []
+    monkeypatch.setattr(probe.time, "sleep", sleeps.append)
+
+    def run(canary) -> int:
+        body = {"ok": True, "git_sha": sha}
+        if canary is not None:
+            body["canary"] = canary
+        monkeypatch.setattr(
+            probe,
+            "poll_until_healthy",
+            lambda *a, **k: SimpleNamespace(body=json.dumps(body)),
+        )
+        return probe.main(["https://x.example", "--gate", "HEAD"])
+
+    assert run({"ok": True, "checked_at": _now(-60)}) == 0
+    with pytest.raises(AssertionError, match="stale"):
+        run({"ok": True, "checked_at": _now(-400)})
+    with pytest.raises(AssertionError):
+        run(None)
+    assert sleeps == []
