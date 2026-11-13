@@ -23,7 +23,8 @@ MERGE_POLICY = "either"
 # One process of one gate: read `[{"facts", "now"}]` on stdin, print one verdict each.
 # It uses only names that origin/main has, so a main without this module can run it.
 _EVALUATE_SCRIPT = """
-import json, sys
+import json, os, sys
+sys.path.insert(0, os.getcwd())  # the tree of this gate, also under PYTHONSAFEPATH
 from common.gate.evaluator import evaluate
 from common.gate.types import HeadFacts
 
