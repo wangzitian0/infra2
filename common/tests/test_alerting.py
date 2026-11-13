@@ -25,13 +25,11 @@ from common.alerting import (
     _signoz_filter_literal,
     build_feishu_alert_card,
     build_feishu_app_card_payload,
-    build_feishu_app_message_payload,
     build_feishu_card_payload,
-    build_feishu_text_payload,
     build_signoz_channel_payload,
     build_signoz_log_alert_rule_payload,
     build_signoz_metric_alert_rule_payload,
-    deliver_feishu_app_text,
+    deliver_feishu_app_card,
     feishu_host_reachable,
     find_signoz_channel_id,
     find_signoz_rule_id,
@@ -99,20 +97,6 @@ def test_feishu_webhook_validation_is_https_and_host_scoped() -> None:
         validate_feishu_webhook_url("https://open.feishu.cn/open-apis/bot/v2/hook/")
 
 
-def test_feishu_message_truncation_respects_max_length() -> None:
-    """Infra-007 alerting: truncation suffix must not exceed Feishu limit."""
-    text = "x" * (MAX_MESSAGE_CHARS + 100)
-
-    webhook_payload = build_feishu_text_payload(text)
-    assert len(webhook_payload["content"]["text"]) <= MAX_MESSAGE_CHARS
-    assert webhook_payload["content"]["text"].endswith("\n...[truncated]")
-
-    app_payload = build_feishu_app_message_payload("oc_test", text)
-    app_text = json.loads(app_payload["content"])["text"]
-    assert len(app_text) <= MAX_MESSAGE_CHARS
-    assert app_text.endswith("\n...[truncated]")
-
-
 def test_alertmanager_payload_is_rendered_as_feishu_text() -> None:
     """Infra-007 alerting: SigNoz webhook payloads become Feishu text messages."""
     payload = {
@@ -136,9 +120,6 @@ def test_alertmanager_payload_is_rendered_as_feishu_text() -> None:
     assert "级别：P0" in text.splitlines()
     assert "对象：example-backend" in text.splitlines()
     assert "现象：GET /api/health returned 503" in text.splitlines()
-
-    feishu_payload = build_feishu_text_payload(text)
-    assert feishu_payload == {"msg_type": "text", "content": {"text": text}}
 
 
 @pytest.mark.parametrize(
@@ -264,9 +245,11 @@ def test_deliver_out_of_band_card_supports_app_webhook_and_fallback(
         lambda url, card, **kw: calls.append(("webhook_card", url)) or {"code": 0},
     )
     monkeypatch.setattr(
-        alerting,
-        "deliver_feishu_text",
-        lambda url, text, **kw: calls.append(("webhook_text", text)) or {"code": 0},
+        alerting.delivery,
+        "_deliver_feishu_webhook",
+        lambda url, payload, **kw: (
+            calls.append(("webhook_text", payload["content"]["text"])) or {"code": 0}
+        ),
     )
 
     res_app = deliver_out_of_band_card(
@@ -531,14 +514,6 @@ def test_signoz_api_response_helpers_find_channel_and_rule_ids() -> None:
     assert find_signoz_channel_id({"data": []}, "missing") is None
 
 
-def test_feishu_app_message_payload_stringifies_content() -> None:
-    """Infra-007 alerting: Feishu app bot payload follows OpenAPI contract."""
-    payload = build_feishu_app_message_payload("oc_test", "hello")
-    assert payload["receive_id"] == "oc_test"
-    assert payload["msg_type"] == "text"
-    assert payload["content"] == '{"text": "hello"}'
-
-
 def test_feishu_app_delivery_fetches_token_then_sends_message(monkeypatch) -> None:
     """Infra-007 alerting: app bot mode uses tenant token and chat_id."""
     requests = []
@@ -566,11 +541,11 @@ def test_feishu_app_delivery_fetches_token_then_sends_message(monkeypatch) -> No
 
     monkeypatch.setattr("common.alerting.urlopen", fake_urlopen)
 
-    result = deliver_feishu_app_text(
+    result = deliver_feishu_app_card(
         app_id="cli_test",
         app_secret="secret",
         chat_id="oc_test",
-        text="hello",
+        card={"header": {}},
     )
 
     assert result["data"]["message_id"] == "om_test"
@@ -1446,3 +1421,134 @@ def test_breakdown_watch_rebreak_suppression_ceiling_escalates() -> None:
     assert escalated.container == name
     assert name not in chronic
     assert name not in chronic_context
+
+
+# AC1 of #1648: text leaves this repository only through the private fallback and the
+# thread-reply helper. Each allowed line is (file, stripped text, occurrences).
+_TEXT_SEND_PATTERN = (
+    r"deliver_feishu_(app_)?text|deliver_out_of_band_text|build_feishu_text_payload"
+    r"|msg_type.{0,12}text"
+)
+_ALLOWED_TEXT_SENDS = {
+    # reply_feishu_app_text: the rollback follow-up under the release card (#1370)
+    ("common/alerting/delivery.py", '"msg_type": "text",'): 2,
+    # _deliver_text_fallback, the webhook payload
+    (
+        "common/alerting/delivery.py",
+        '{"msg_type": "text", "content": {"text": message}},',
+    ): 1,
+}
+
+
+def test_only_the_private_fallback_sends_text() -> None:
+    """A text sender that comes back (a public one, or a worker body) fails here."""
+    import collections
+
+    found = subprocess.run(
+        [
+            "git",
+            "grep",
+            "-nE",
+            _TEXT_SEND_PATTERN,
+            "--",
+            "common",
+            "tools",
+            "cloudflare",
+        ]
+        + [":!common/tests"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert found.returncode in (0, 1), found.stderr
+    seen: collections.Counter[tuple[str, str]] = collections.Counter()
+    for line in found.stdout.splitlines():
+        path, _number, text = line.split(":", 2)
+        seen[(path, text.strip())] += 1
+    assert dict(seen) == _ALLOWED_TEXT_SENDS
+
+
+def test_the_text_fallback_cuts_to_the_message_limit_and_is_private(
+    monkeypatch,
+) -> None:
+    from common.alerting import delivery
+
+    assert not hasattr(delivery, "deliver_out_of_band_text")
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        delivery,
+        "_deliver_feishu_webhook",
+        lambda url, payload, **kw: sent.append(payload),
+    )
+    env = {"FEISHU_WEBHOOK_URL": "https://open.feishu.cn/open-apis/bot/v2/hook/tok"}
+    delivery._deliver_text_fallback(env, "x" * (MAX_MESSAGE_CHARS + 100), timeout=1.0)
+
+    text = sent[0]["content"]["text"]
+    assert len(text) <= MAX_MESSAGE_CHARS
+    assert text.endswith("\n...[truncated]")
+
+
+def _assert_card_standard(card: dict) -> None:
+    """#1648 card standard: a title of at most 40 characters, a symptom first, at most
+    12 body lines, at most one link."""
+    title = card["header"]["title"]["content"]
+    body = "\n".join(
+        element["text"]["content"]
+        for element in card["elements"]
+        if element.get("tag") == "div" and "text" in element
+    )
+    lines = [line for line in body.splitlines() if line.strip()]
+    assert 0 < len(title) <= 40
+    assert 0 < len(lines) <= 12
+    assert len(re.findall(r"https?://", body)) <= 1
+    assert card["header"]["template"] in {"red", "orange", "yellow", "green", "blue"}
+
+
+def test_text_to_card_follows_the_card_standard() -> None:
+    from common.alerting import text_to_card
+
+    message = "\n".join(
+        ["🚨 production platform-todo canary is failing for 3 runs in a row"]
+        + [f"detail {n}" for n in range(30)]
+        + ["Run: https://github.com/wangzitian0/infra2/actions/runs/1"]
+    )
+    card = text_to_card(message, template="red")
+
+    _assert_card_standard(card)
+    body = card["elements"][0]["text"]["content"]
+    assert body.splitlines()[0] == message.splitlines()[0]  # a cut title keeps its line
+    assert "…及另外" in body
+    assert "fields" not in json.dumps(card)  # no empty KPI block
+
+
+def test_report_card_without_kpi_fields_has_no_kpi_block() -> None:
+    from common.alerting import build_feishu_report_card
+
+    card = build_feishu_report_card(
+        title="t", template="blue", kpi_fields=(), sections=["body"]
+    )
+    assert [element["tag"] for element in card["elements"]] == ["div"]
+
+
+def test_deliver_infra2_report_sends_a_report_card(monkeypatch) -> None:
+    import common.alerting as alerting
+
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        alerting, "deliver_feishu_app_card", lambda **kw: sent.append(kw) or {}
+    )
+    env = {
+        "INFRA2_REPORTS_FEISHU_APP_ID": "a",
+        "INFRA2_REPORTS_FEISHU_APP_SECRET": "b",
+        "INFRA2_REPORTS_FEISHU_CHAT_ID": "oc_reports",
+    }
+    assert alerting.deliver_infra2_report(
+        "DNS drift report · zitian.party\nin sync", env
+    )
+
+    (call,) = sent
+    assert call["chat_id"] == "oc_reports"
+    _assert_card_standard(call["card"])
+    assert call["card"]["header"]["template"] == "blue"
+    assert call["card"]["header"]["title"]["content"].startswith("[报告] ")

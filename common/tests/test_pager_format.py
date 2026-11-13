@@ -479,8 +479,8 @@ def test_deliver_infra2_report_titles_every_report_once(monkeypatch) -> None:
     sent = []
     monkeypatch.setattr(
         alerting,
-        "deliver_feishu_app_text",
-        lambda **kwargs: sent.append(kwargs["text"]),
+        "deliver_feishu_app_card",
+        lambda **kwargs: sent.append(kwargs["card"]["header"]["title"]["content"]),
     )
     env = {"INFRA2_REPORTS_FEISHU_APP_ID": "a", "INFRA2_REPORTS_FEISHU_APP_SECRET": "b"}
     env["INFRA2_REPORTS_FEISHU_CHAT_ID"] = "c"

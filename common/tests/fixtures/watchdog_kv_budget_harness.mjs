@@ -7,6 +7,7 @@
 // an ES module copy (.mjs) because worker.js has no package.json beside it.
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { cardText } from "./watchdog_card_text.mjs";
 
 const [, , workerPath, varsPath] = process.argv;
 const worker = (await import(pathToFileURL(workerPath).href)).default;
@@ -400,7 +401,7 @@ async function detection(deathAt) {
   globalThis.fetch = async (input, init = {}) => {
     const url = String(input);
     if (url.startsWith("https://feishu.invalid/")) {
-      const text = JSON.parse(init.body).content.text;
+      const text = cardText(JSON.parse(init.body).card);
       if (firstSeen.entrypoint === undefined && /级别：P0\n环境：production\n对象：\S+ · \S+-public-route\n现象：从 Cloudflare 访问不到外部入口 /.test(text)) {
         firstSeen.entrypoint = clock;
       }

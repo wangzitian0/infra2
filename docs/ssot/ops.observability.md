@@ -180,6 +180,20 @@ probe runner 一次推送覆盖一组内所有失败探针,整条推送的 sever
   `container` / `compose`、`impact`、`next_step`、`runbook_url`、`log_tail`。SigNoz 规则加 `runbook_url` annotation 即得具体
   锚点(规则本身归 #906)。
 
+### 3.2 一切都是卡片;一个来源只呼一个条件(#1648)
+
+- **没有文本推送**:Worker、每日 watchdog、报告原语(`deliver_infra2_report`)、deploy 回滚、摘要与稳定性报告全部发交互卡片
+  (`common/alerting/card.py::text_to_card`、`build_feishu_report_card`)。唯一保留的文本是 `delivery.py` 里私有的
+  `_deliver_text_fallback`(卡片发送失败时同一内容)和 thread 回复。Worker 的回落是邮件,不是文本。
+  `common/tests/test_alerting.py::test_only_the_private_fallback_sends_text` 守住这一条。
+- **卡片标准**:标题最多 40 字符;首行是现象;正文最多 12 行;一个链接;颜色随级别(恢复为绿,报告为蓝)。
+- **一个条件一个呼出者**:`watchdog-signals.yaml` 的 `conditions` 列出盯同一条件的信号,其中至多一个 `type: alert`。
+  `primary_owner: signoz` 的行不手写,由 `watchdog_audit.py` 读 `alert_rules.json` 目录逐规则派生(测试保证它与
+  `load_alert_definitions` 相等)。多出的呼出者让 `common/observability/watchdog_audit.py` 失败,没有豁免清单。
+  目录删掉一条规则后,SigNoz 里仍留着它,直到 `apply-observability.yml` 以 `mode=prune-alerts` 运行(production 步骤)。
+- **每条呼出都会恢复**:失败告警走 `dedup_page`,配对一个 `resolve_page_state` 步骤;测试
+  `common/tests/test_alert_resolution.py` 逐个作业验证一次红、一次绿恰好发出一张"已恢复"卡片。
+
 ---
 
 ## 4. 采集 (Collection / OTLP)

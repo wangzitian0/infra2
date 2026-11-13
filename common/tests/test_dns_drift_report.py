@@ -42,26 +42,6 @@ def test_format_report_flags_missing_and_confirms_in_sync() -> None:
     assert "✅ in sync" in ok
 
 
-def test_delivery_mode_prefers_app_then_webhook(monkeypatch) -> None:
-    m = _mod()
-    for k in (
-        "DNS_DRIFT_FEISHU_APP_ID",
-        "DNS_DRIFT_FEISHU_APP_SECRET",
-        "DNS_DRIFT_FEISHU_CHAT_ID",
-        "DNS_DRIFT_FEISHU_WEBHOOK_URL",
-    ):
-        monkeypatch.delenv(k, raising=False)
-    assert m.delivery_mode() is None  # nothing configured -> no-op
-
-    monkeypatch.setenv("DNS_DRIFT_FEISHU_WEBHOOK_URL", "https://hook")
-    assert m.delivery_mode() == "webhook"
-
-    monkeypatch.setenv("DNS_DRIFT_FEISHU_APP_ID", "a")
-    monkeypatch.setenv("DNS_DRIFT_FEISHU_APP_SECRET", "s")
-    monkeypatch.setenv("DNS_DRIFT_FEISHU_CHAT_ID", "oc_x")
-    assert m.delivery_mode() == "app"  # app bot preferred over webhook
-
-
 def test_expected_records_strips_wrapping_quotes(monkeypatch) -> None:
     """CF_RECORDS arrives quoted from op; the wrapping quotes must be stripped, else the
     first/last name keeps a stray quote and falsely reports MISSING (the live-drill bug)."""
@@ -112,3 +92,28 @@ def test_actual_records_never_turns_observation_failure_into_empty_zone(
 
     with pytest.raises(RuntimeError, match="observation failed"):
         m._actual_records(_DummyDns)
+
+
+def test_dns_drift_report_goes_out_as_a_card_in_the_card_standard(monkeypatch) -> None:
+    """#1648: the report reaches the reports chat as a card (the only delivery left)."""
+    import common.alerting as alerting
+    from common.tests.test_alerting import _assert_card_standard
+
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        alerting, "deliver_feishu_app_card", lambda **kw: sent.append(kw["card"])
+    )
+    env = {
+        "INFRA2_REPORTS_FEISHU_APP_ID": "a",
+        "INFRA2_REPORTS_FEISHU_APP_SECRET": "b",
+        "INFRA2_REPORTS_FEISHU_CHAT_ID": "oc_reports",
+    }
+    drift = m.compute_drift({"op.x", "a.x"}, {"a.x", "stray.x"})
+    report = m.format_report(drift, "zitian.party", 2, 2)
+
+    assert alerting.deliver_infra2_report(report, env)
+
+    (card,) = sent
+    _assert_card_standard(card)
+    assert "MISSING in Cloudflare" in card["elements"][0]["text"]["content"]
+    assert not hasattr(m, "deliver") and not hasattr(m, "main")  # the text path is gone

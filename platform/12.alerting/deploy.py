@@ -125,6 +125,20 @@ class AlertingDeployer(Deployer):
             severity="warning",
             service_id="bootstrap/iac-runner",
         ),
+        # #1648: the public route of the runner health, in this group so the runner's
+        # cascade suppression sees both. A failing iac-runner-http (a stopped runner or a
+        # dead prerequisite) suppresses this probe; a healthy iac-runner-http with a dead
+        # public route pages once, from this probe. expected stays 200: Traefik answers
+        # 404 for a stopped container and for a lost route alike.
+        ProbeFacet(
+            name="iac-runner-public-http",
+            kind="http",
+            target="https://iac.zitian.party/health",
+            expected="200",
+            severity="warning",
+            depends_on="iac-runner-http",
+            service_id="bootstrap/iac-runner",
+        ),
         # --- the path every deploy depends on (#658 recommendation 5) ---
         # 2026-09-04..08: the runner's git fetch timed out (120 s), the on-main compare
         # call got API 403, and Dokploy's clone of infra2 waited 136 s on github.com:443

@@ -8,6 +8,7 @@
 // fetch() or one KV operation made during one scheduled() invocation.
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { cardText } from "./watchdog_card_text.mjs";
 
 const [, , workerPath, varsPath] = process.argv;
 const worker = (await import(pathToFileURL(workerPath).href)).default;
@@ -51,6 +52,7 @@ class World {
     this.resendFails = false;
     this.fetches = [];
     this.messages = [];
+    this.cards = [];
     const base = { ...vars };
     if (withoutConfigVars) {
       delete base.WATCHDOG_TARGETS_JSON;
@@ -103,7 +105,10 @@ class World {
     }
     if (url.startsWith(`${FEISHU}/open-apis/im/`)) {
       if (this.feishuSendFails) return new Response(JSON.stringify({ code: 230002 }), { status: 400 });
-      this.messages.push(JSON.parse(JSON.parse(init.body).content).text);
+      const sent = JSON.parse(init.body);
+      const card = JSON.parse(sent.content);
+      this.cards.push({ msgType: sent.msg_type, card });
+      this.messages.push(cardText(card));
       return new Response(JSON.stringify({ code: 0 }), { status: 200 });
     }
     if (url.startsWith("https://api.resend.com/")) {
@@ -119,7 +124,7 @@ class World {
   // One cron invocation, with everything it cost.
   async cron(at) {
     clock = at;
-    const before = { ...this.ops, fetches: this.fetches.length, messages: this.messages.length };
+    const before = { ...this.ops, fetches: this.fetches.length, messages: this.messages.length, cards: this.cards.length };
     const putsBefore = { ...this.putsByKey };
     firedTimers = [];
     const original = globalThis.fetch;
@@ -147,6 +152,7 @@ class World {
       subrequests: fetched.length + kvGets + kvPuts + kvDeletes,
       putKeys: Object.keys(this.putsByKey).filter((k) => this.putsByKey[k] !== (putsBefore[k] || 0)),
       messages: this.messages.slice(before.messages),
+      cards: this.cards.slice(before.cards),
       firedTimers: [...firedTimers],
     };
   }
@@ -251,7 +257,7 @@ const results = {};
   delete world.routes[down];
   freshHeartbeats(world, START + 7 * HOUR);
   runs.push(await world.cron(START + 7 * HOUR));
-  results.entrypointDown = runs.map((run) => ({ messages: run.messages, putKeys: run.putKeys, error: run.error }));
+  results.entrypointDown = runs.map((run) => ({ messages: run.messages, cards: run.cards, putKeys: run.putKeys, error: run.error }));
 }
 
 // A network error counts the same as a wrong status.

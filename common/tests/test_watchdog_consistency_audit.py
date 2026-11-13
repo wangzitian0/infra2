@@ -23,7 +23,7 @@ def test_watchdog_signal_inventory_has_required_ownership_fields() -> None:
     signals = inventory["signals"]
 
     assert inventory["version"] == 2
-    assert {"internal", "cloudflare", "github", "excluded", "self"} == set(
+    assert {"internal", "cloudflare", "github", "signoz", "excluded", "self"} == set(
         inventory["owners"]
     )
     assert len({signal["signal_id"] for signal in signals}) == len(signals)
@@ -624,3 +624,119 @@ def test_monthly_ops_summary_signal_registered_as_month_report() -> None:
     assert monthly["layer"] == "github"
     assert monthly["failure_class"] == "watchdog-liveness"
     assert audit._validate_tier_and_type(monthly, monthly["signal_id"]) == []
+
+
+# --- one source pages each condition (#1648) ------------------------------------------
+
+
+def _signal(signal_id: str, owner: str, type_: str = "alert") -> dict:
+    return {"signal_id": signal_id, "primary_owner": owner, "type": type_}
+
+
+def test_signoz_rows_derive_from_every_alert_rule() -> None:
+    from common.observability_dashboards import load_alert_definitions
+
+    audit = _load_audit()
+    rows = audit._signoz_signal_entries()
+
+    assert {
+        (row["signal"], row["environment"], row["component"], row["severity"])
+        for row in rows
+    } == {
+        (rule.alert_name, rule.environment, rule.service_id, rule.severity)
+        for rule in load_alert_definitions()
+    }
+    assert {row["primary_owner"] for row in rows} == {"signoz"}
+    assert audit._validate_inventory(rows) == []  # tier, type and debounce hold
+    assert audit.LAYER_OF_OWNER["signoz"] == "vps"
+
+
+def test_a_condition_with_two_paging_owners_fails() -> None:
+    audit = _load_audit()
+    signals = [_signal("a", "internal"), _signal("b", "signoz")]
+    inventory = {"conditions": {"disk": {"signals": ["a", "b"]}}}
+
+    (error,) = audit._condition_errors(inventory, signals)
+    assert error == "condition disk has 2 paging owners: ['internal:a', 'signoz:b']"
+
+
+def test_a_second_owner_that_only_reports_or_is_excluded_is_allowed() -> None:
+    audit = _load_audit()
+    signals = [
+        _signal("a", "internal"),
+        _signal("b", "github", "report"),
+        _signal("c", "excluded"),
+    ]
+    inventory = {"conditions": {"disk": {"signals": ["a", "b", "c"]}}}
+
+    assert audit._condition_errors(inventory, signals) == []
+
+
+def test_a_condition_naming_an_unknown_signal_fails() -> None:
+    audit = _load_audit()
+    inventory = {"conditions": {"disk": {"signals": ["missing"]}}}
+
+    assert audit._condition_errors(inventory, []) == [
+        "condition disk: unknown signal missing"
+    ]
+
+
+def test_the_current_registry_has_one_pager_per_condition(monkeypatch) -> None:
+    """Canary Todo: the probe runner pages; the SigNoz rule PlatformTodoProbeFailures is
+    deleted. Putting the rule back is a second pager and fails the audit."""
+    audit = _load_audit()
+    inventory = audit._load_inventory()
+
+    assert audit._condition_errors(inventory, inventory["signals"]) == []
+    assert "PlatformTodoProbeFailures" not in {
+        row["signal"] for row in audit._signoz_signal_entries()
+    }
+    rule = {
+        "signal_id": "production.PlatformTodoProbeFailures.signoz",
+        "signal": "PlatformTodoProbeFailures",
+        "primary_owner": "signoz",
+        "type": "alert",
+    }
+    assert audit._condition_errors(inventory, [*inventory["signals"], rule]) == [
+        "condition canary-todo has 2 paging owners: "
+        "['internal:production.todo-canary-status', "
+        "'signoz:production.PlatformTodoProbeFailures.signoz']"
+    ]
+
+
+def test_a_handwritten_signoz_row_is_rejected(monkeypatch) -> None:
+    import pytest
+
+    audit = _load_audit()
+    real = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
+    real["signals"].append(
+        {
+            "signal_id": "production.X.signoz",
+            "environment": "production",
+            "component": "todo",
+            "signal": "X",
+            "primary_owner": "signoz",
+        }
+    )
+    monkeypatch.setattr(audit.yaml, "safe_load", lambda _text: real)
+    with pytest.raises(ValueError, match="derive from the SigNoz alert rule files"):
+        audit._load_inventory()
+
+
+def test_the_iac_runner_condition_has_one_pager_and_the_daily_step_reports() -> None:
+    """#1648: the 60 s probe pages; the daily Runner-health step is a registered report.
+    A daily step that pages again is a second pager and fails the audit."""
+    audit = _load_audit()
+    inventory = audit._load_inventory()
+    by_id = {signal["signal_id"]: signal for signal in inventory["signals"]}
+
+    assert by_id["production.iac-runner-http"]["type"] == "alert"
+    assert by_id["global.infra2.iac-runner-health"]["type"] == "report"
+    assert audit._condition_errors(inventory, inventory["signals"]) == []
+
+    daily = {**by_id["global.infra2.iac-runner-health"], "type": "alert"}
+    signals = [s for s in inventory["signals"] if s is not by_id[daily["signal_id"]]]
+    assert audit._condition_errors(inventory, [*signals, daily]) == [
+        "condition iac-runner-health has 2 paging owners: "
+        "['internal:production.iac-runner-http', 'self:global.infra2.iac-runner-health']"
+    ]

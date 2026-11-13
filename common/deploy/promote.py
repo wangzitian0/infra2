@@ -557,7 +557,7 @@ def _notify_rollback_event(
             warning(f"rollback_notifier callback failed: {exc}")
         return
     # A production run that has a release card shows the rollback on the card and in its
-    # thread. The card replaces the text message. A run without a card sends the text.
+    # thread. A run without a release card sends its own rollback card.
     try:
         from common.alerting import release_card
 
@@ -568,7 +568,7 @@ def _notify_rollback_event(
 
     def send_text() -> None:
         try:
-            from common.alerting.delivery import deliver_out_of_band_text
+            from common.alerting import deliver_out_of_band_card, text_to_card
 
             if any(
                 os.environ.get(key)
@@ -579,7 +579,13 @@ def _notify_rollback_event(
                     "FEISHU_APP_ID",
                 )
             ):
-                deliver_out_of_band_text(os.environ, text)
+                deliver_out_of_band_card(
+                    os.environ,
+                    text_to_card(
+                        text, template="red" if severity == "P0" else "orange"
+                    ),
+                    fallback_text=text,
+                )
         except Exception as exc:  # noqa: BLE001
             warning(f"out-of-band rollback alert delivery skipped/failed: {exc}")
 

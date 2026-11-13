@@ -1113,18 +1113,38 @@ async function outagesResponse(request, env) {
 // Delivery
 // ---------------------------------------------------------------------------
 
-async function sendFeishu(env, text) {
+// The pager message as an interactive card (common/alerting/ text_to_card): the first
+// line is the title, at most CARD_TITLE_CHARS; when it is cut, the body keeps it whole.
+const CARD_TITLE_CHARS = 40;
+const CARD_COLORS = { "🔴": "red", "🟠": "orange", "🟡": "yellow", "✅": "green" };
+
+function alertCard(text) {
+  const [head, ...rest] = text.split("\n");
+  const chars = [...head];
+  const title = chars.length > CARD_TITLE_CHARS ? `${chars.slice(0, CARD_TITLE_CHARS - 1).join("")}…` : head;
+  const body = (title === head ? rest : [head, ...rest]).join("\n").trim();
+  return {
+    config: { wide_screen_mode: true },
+    header: {
+      template: CARD_COLORS[chars[0]] || "red",
+      title: { tag: "plain_text", content: title },
+    },
+    elements: [{ tag: "div", text: { tag: "lark_md", content: body } }],
+  };
+}
+
+async function sendFeishu(env, card) {
   const mode = String(env.ALERT_DELIVERY_MODE || "feishu_webhook").trim();
   if (mode === "feishu_app") {
-    return sendFeishuApp(env, text);
+    return sendFeishuApp(env, card);
   }
   if (mode !== "feishu_webhook") {
     throw new Error(`Unsupported ALERT_DELIVERY_MODE: ${mode}`);
   }
-  return sendFeishuWebhook(env, text);
+  return sendFeishuWebhook(env, card);
 }
 
-async function sendFeishuWebhook(env, text) {
+async function sendFeishuWebhook(env, card) {
   const webhookUrl = String(env.FEISHU_WEBHOOK_URL || "");
   if (!webhookUrl) {
     throw new Error("FEISHU_WEBHOOK_URL is required");
@@ -1132,14 +1152,14 @@ async function sendFeishuWebhook(env, text) {
   const response = await fetch(webhookUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ msg_type: "text", content: { text } }),
+    body: JSON.stringify({ msg_type: "interactive", card }),
   });
   if (!response.ok) {
     throw new Error(`Feishu delivery failed: HTTP ${response.status}`);
   }
 }
 
-async function sendFeishuApp(env, text) {
+async function sendFeishuApp(env, card) {
   const appId = String(env.FEISHU_APP_ID || "");
   const appSecret = String(env.FEISHU_APP_SECRET || "");
   const chatId = String(env.FEISHU_CHAT_ID || "");
@@ -1166,8 +1186,8 @@ async function sendFeishuApp(env, text) {
     },
     body: JSON.stringify({
       receive_id: chatId,
-      msg_type: "text",
-      content: JSON.stringify({ text }),
+      msg_type: "interactive",
+      content: JSON.stringify(card),
     }),
   });
   const messageBody = await messageResponse.json();
@@ -1181,7 +1201,7 @@ async function deliverAlert(env, text, kind) {
   // a Feishu outage cannot silently swallow an alert. Email is sent only when
   // Feishu delivery fails (escalation), to avoid duplicate noise on every alert.
   try {
-    await sendFeishu(env, text);
+    await sendFeishu(env, alertCard(text));
   } catch (feishuError) {
     const ts = Date.now();
     const fe = errorText(feishuError);

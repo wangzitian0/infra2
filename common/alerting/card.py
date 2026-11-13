@@ -15,6 +15,7 @@ from common.alerting.types import (
     DEFAULT_ACTION,
     DEFAULT_IMPACT,
     DELIVERY_LABEL,
+    EMOJI_TEMPLATE,
     FEISHU_BODY_LIMITS,
     FIELD_SEPARATOR,
     MAX_FIELD_CHARS,
@@ -57,6 +58,9 @@ from common.alerting.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+CARD_TITLE_CHARS = 40
+CARD_BODY_LINES = 12
 
 _CHAT_ID_PLACEHOLDER = "oc_" + "0" * 32
 
@@ -686,19 +690,16 @@ def build_feishu_report_card(
     hr_after_sections: set[int] | None = None,
 ) -> dict[str, Any]:
     """Build a standard Feishu interactive report card with KPI fields, sections, and actions."""
-    elements: list[dict[str, Any]] = [
+    kpi_blocks = [
         {
-            "tag": "div",
-            "fields": [
-                {
-                    "is_short": True,
-                    "text": {"tag": "lark_md", "content": f"**{label}**\n{value}"},
-                }
-                for label, value in kpi_fields
-            ],
-        },
-        {"tag": "hr"},
+            "is_short": True,
+            "text": {"tag": "lark_md", "content": f"**{label}**\n{value}"},
+        }
+        for label, value in kpi_fields
     ]
+    elements: list[dict[str, Any]] = (
+        [{"tag": "div", "fields": kpi_blocks}, {"tag": "hr"}] if kpi_blocks else []
+    )
     divider_indices = hr_after_sections or set()
     for idx, section in enumerate(sections):
         if not section:
@@ -742,21 +743,24 @@ def build_feishu_app_card_payload(chat_id: str, card: dict[str, Any]) -> dict[st
     }
 
 
-def build_feishu_text_payload(text: str) -> dict[str, Any]:
-    """Build a Feishu custom bot text payload."""
-    message = text.strip() or "SigNoz alert"
-    if len(message) > MAX_MESSAGE_CHARS:
-        message = _truncate_message(message)
-    return {"msg_type": "text", "content": {"text": message}}
-
-
-def build_feishu_app_message_payload(chat_id: str, text: str) -> dict[str, Any]:
-    """Build a Feishu OpenAPI text message payload."""
-    message = text.strip() or "SigNoz alert"
-    if len(message) > MAX_MESSAGE_CHARS:
-        message = _truncate_message(message)
-    return {
-        "receive_id": chat_id,
-        "msg_type": "text",
-        "content": json.dumps({"text": message}, ensure_ascii=False),
-    }
+def text_to_card(text: str, *, template: str | None = None) -> dict[str, Any]:
+    """Render a plain message as a card: the first line is the title (at most 40
+    characters), the other lines are one block of at most 12 lines, and no KPI block.
+    One plain message only: a page of several items is a ``PagerMessage`` rendered by
+    ``render_pager_card``. Without ``template`` the first emoji picks the colour
+    (``EMOJI_TEMPLATE``; red when there is none)."""
+    lines = [
+        _clip(line.strip(), MAX_SUMMARY_LINE_CHARS)
+        for line in text.strip().splitlines()
+        if line.strip()
+    ] or ["infra2"]
+    template = template or EMOJI_TEMPLATE.get(lines[0][:1], "red")
+    title = _clip(lines[0], CARD_TITLE_CHARS)
+    body = ([lines[0]] if title != lines[0] else []) + lines[1:]
+    if len(body) > CARD_BODY_LINES:
+        body = body[: CARD_BODY_LINES - 1] + [
+            f"…及另外 {len(body) - CARD_BODY_LINES + 1} 行"
+        ]
+    return build_feishu_report_card(
+        title=title, template=template, kpi_fields=(), sections=["\n".join(body)]
+    )
