@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from pathlib import Path
 
 import pytest
@@ -11,7 +12,10 @@ import yaml
 from common.deploy import preview as pl
 from common.deploy import v2 as dv2
 from common.deploy.preview_compose import (
+    _MAX_TMPFS_ENTRIES,
     INFRA2_GIT_URL,
+    _slot_suffix,
+    app_preview_names,
     reserved_service_names,
     PreviewComposeRefused,
     assert_runner_unit,
@@ -144,6 +148,52 @@ def _mutations():
     def no_mem_limit(d):
         del d["services"]["redis"]["mem_limit"]
 
+    def mem_limit_zero(d):
+        d["services"]["redis"]["mem_limit"] = "0"
+
+    def tmpfs_size_zero(d):
+        d["services"]["postgres"]["tmpfs"] = ["/var/lib/postgresql/data:size=0"]
+
+    def tmpfs_too_many(d):
+        d["services"]["postgres"]["tmpfs"] = [
+            f"/t{n}:size=1m" for n in range(_MAX_TMPFS_ENTRIES + 1)
+        ]
+
+    def tmpfs_string(d):
+        d["services"]["postgres"]["tmpfs"] = "/var/lib/postgresql/data:size=1m"
+
+    def logging_missing(d):
+        del d["services"]["redis"]["logging"]
+
+    def logging_no_options(d):
+        d["services"]["redis"]["logging"] = {"driver": "json-file"}
+
+    def logging_no_max_size(d):
+        del d["services"]["redis"]["logging"]["options"]["max-size"]
+
+    def logging_huge_max_size(d):
+        d["services"]["redis"]["logging"]["options"]["max-size"] = "500g"
+
+    def logging_zero_max_size(d):
+        d["services"]["redis"]["logging"]["options"]["max-size"] = "0"
+
+    def logging_no_max_file(d):
+        del d["services"]["redis"]["logging"]["options"]["max-file"]
+
+    def logging_many_files(d):
+        d["services"]["redis"]["logging"]["options"]["max-file"] = "4"
+
+    def logging_not_a_mapping(d):
+        d["services"]["redis"]["logging"] = "json-file"
+
+    def no_container_name(d):
+        del d["services"]["redis"]["container_name"]
+
+    def dict_labels(d):
+        d["services"]["todo"]["labels"] = dict(
+            label.split("=", 1) for label in d["services"]["todo"]["labels"]
+        )
+
     def big_mem_limit(d):
         d["services"]["redis"]["mem_limit"] = "2g"
 
@@ -202,11 +252,25 @@ def _mutations():
         uppercase_service_name,
         foreign_prefix_container,
         no_mem_limit,
+        mem_limit_zero,
         big_mem_limit,
         big_cpu_shares,
         no_cpu_limit,
         tmpfs_without_size,
         tmpfs_too_big,
+        tmpfs_size_zero,
+        tmpfs_too_many,
+        tmpfs_string,
+        logging_missing,
+        logging_no_options,
+        logging_no_max_size,
+        logging_huge_max_size,
+        logging_zero_max_size,
+        logging_no_max_file,
+        logging_many_files,
+        logging_not_a_mapping,
+        no_container_name,
+        dict_labels,
         too_many_services,
         too_many_builds,
         all_entrypoints,
@@ -240,6 +304,54 @@ def test_a_malicious_preview_compose_is_refused(mutate):
     doc = copy.deepcopy(_doc())
     mutate(doc)
     with pytest.raises(PreviewComposeRefused):
+        _render(doc)
+
+
+@pytest.mark.parametrize("value", [0, "0", "0g", "0b", "00", "0m", "5m", "5242879"])
+def test_a_memory_limit_below_the_docker_minimum_is_refused(value):
+    doc = _doc()
+    doc["services"]["redis"]["mem_limit"] = value
+    with pytest.raises(PreviewComposeRefused, match="6m-1g"):
+        _render(doc)
+
+
+@pytest.mark.parametrize("value", ["6m", "1g", "1024m", 1024**3, 6 * 1024**2])
+def test_the_memory_limit_bounds_are_inclusive(value):
+    doc = _doc()
+    doc["services"]["redis"]["mem_limit"] = value
+    assert _render(doc)
+
+
+@pytest.mark.parametrize("size", ["0", "0m", "00", "0b"])
+def test_a_tmpfs_of_size_zero_is_refused(size):
+    doc = _doc()
+    doc["services"]["postgres"]["tmpfs"] = [f"/var/lib/postgresql/data:size={size}"]
+    with pytest.raises(PreviewComposeRefused, match="above 0"):
+        _render(doc)
+
+
+def test_the_tmpfs_entry_cap_is_inclusive():
+    doc = _doc()
+    doc["services"]["postgres"]["tmpfs"] = [
+        f"/t{n}:size=1m" for n in range(_MAX_TMPFS_ENTRIES)
+    ]
+    assert _render(doc)
+
+
+@pytest.mark.parametrize("size", ["10m", "10240k", "1k", 1024])
+def test_the_log_size_bounds_are_inclusive(size):
+    doc = _doc()
+    doc["services"]["redis"]["logging"]["options"].update(
+        {"max-size": size, "max-file": 3}
+    )
+    assert _render(doc)
+
+
+@pytest.mark.parametrize("size", ["11m", "10241k", "1g", "0b"])
+def test_a_log_size_over_the_cap_or_zero_is_refused(size):
+    doc = _doc()
+    doc["services"]["redis"]["logging"]["options"]["max-size"] = size
+    with pytest.raises(PreviewComposeRefused, match="max-size"):
         _render(doc)
 
 
@@ -349,9 +461,116 @@ def test_infra2_slot_names_never_equal_an_app_pr_preview_name():
 
 def test_preview_alias_suffix_is_the_one_the_renderer_assumes():
     alias = pl.preview_alias("pr", PR, slug_prefix="platform-todo-preview")
-    assert (
-        pl._preview_coordinates(UNIT, alias, "example.test").env_suffix == f"-pr-{PR}"
-    )
+    coordinates = pl._preview_coordinates(UNIT, alias, "example.test")
+    assert coordinates.env_suffix == _slot_suffix(PR)
+    assert coordinates.env_domain_suffix == _slot_suffix(PR)
+
+
+def test_every_preview_service_has_a_container_name_the_teardown_check_can_see():
+    out = yaml.safe_load(render_runner_compose(UNIT, TODO_COMPOSE, SHA, PR))
+    suffix = _slot_suffix(PR)
+    names = [s["container_name"] for s in out["services"].values()]
+    assert len(names) == len(out["services"]) > 0
+    assert all(n.startswith("platform-") and n.endswith("${ENV_SUFFIX}") for n in names)
+    containers = [{"name": n.replace("${ENV_SUFFIX}", suffix)} for n in names]
+
+    class Inventory:
+        def get_containers(self):
+            return containers
+
+    absent, survivors = pl.check_containers_absent(Inventory(), UNIT, suffix)
+    assert not absent
+    assert survivors == sorted(row["name"] for row in containers)
+
+
+def _app_names() -> frozenset[str]:
+    names = app_preview_names()
+    # not green-while-empty: both App repositories contribute, and a router name is there
+    assert {"truealpha-web", "truealpha-api"} <= names
+    assert {"finance_report-backend", "finance-report-web"} <= names
+    return names
+
+
+def _valid_service_names() -> list[str]:
+    return sorted(n for n in _app_names() if re.fullmatch(r"[a-z0-9][a-z0-9-]*", n))
+
+
+def test_an_app_preview_name_is_found_by_its_container_router_and_traefik_service():
+    names = _app_names()
+    assert "truealpha-app-vault-agent" in names  # a container name
+    assert "finance-report-api" in names  # a router and a Traefik service name
+    assert not any("${" in n or n.endswith("-pr-") for n in names)
+
+
+@pytest.mark.parametrize("name", _valid_service_names())
+def test_a_service_named_like_an_app_preview_container_is_refused(name):
+    # infra2 PR 7 renames service `<name>` to `<name>-pr-7`; App PR 7 runs `<name>-pr-7`.
+    doc = _doc()
+    doc["services"][name] = copy.deepcopy(doc["services"]["redis"])
+    doc["services"][name]["container_name"] = "platform-x${ENV_SUFFIX}"
+    with pytest.raises(PreviewComposeRefused, match="App PR Previews"):
+        _render(doc)
+
+
+def test_a_service_with_a_neutral_name_is_renamed_not_refused():
+    doc = _doc()
+    doc["services"]["neutral-web"] = copy.deepcopy(doc["services"]["redis"])
+    doc["services"]["neutral-web"]["container_name"] = "platform-x${ENV_SUFFIX}"
+    out = yaml.safe_load(_render(doc))
+    assert f"neutral-web-pr-{PR}" in out["services"]
+
+
+def _router_labels(router: str, service: str | None = None) -> list[str]:
+    rule = "Host(`todo${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
+    return [
+        "traefik.enable=true",
+        f"traefik.http.routers.{router}${{ENV_DOMAIN_SUFFIX}}.rule={rule}",
+        *(
+            [
+                f"traefik.http.routers.{router}${{ENV_DOMAIN_SUFFIX}}.service={service}${{ENV_DOMAIN_SUFFIX}}"
+            ]
+            if service
+            else []
+        ),
+    ]
+
+
+def _with_labels(labels: list[str]) -> dict:
+    doc = _doc()
+    doc["services"]["todo"]["labels"] = labels
+    return doc
+
+
+def test_the_neutral_router_labels_pass():
+    assert _render(_with_labels(_router_labels("neutral-router")))
+
+
+@pytest.mark.parametrize("name", sorted(app_preview_names()))
+def test_a_router_named_like_an_app_preview_router_is_refused(name):
+    with pytest.raises(PreviewComposeRefused, match="App PR Previews"):
+        _render(_with_labels(_router_labels(name)))
+
+
+@pytest.mark.parametrize("name", sorted(app_preview_names()))
+def test_a_traefik_service_named_like_an_app_preview_one_is_refused(name):
+    labels = _router_labels("neutral-router") + [
+        f"traefik.http.services.{name}${{ENV_DOMAIN_SUFFIX}}.loadbalancer.server.port=8000"
+    ]
+    with pytest.raises(PreviewComposeRefused, match="App PR Previews"):
+        _render(_with_labels(labels))
+
+
+@pytest.mark.parametrize("name", sorted(app_preview_names()))
+def test_a_router_cannot_point_at_an_app_preview_traefik_service(name):
+    with pytest.raises(PreviewComposeRefused, match="App PR Previews"):
+        _render(_with_labels(_router_labels("neutral-router", service=name)))
+
+
+def test_app_preview_names_fail_closed_when_an_app_has_no_preview_compose(tmp_path):
+    (tmp_path / "truealpha").mkdir()
+    (tmp_path / "finance_report").mkdir()
+    with pytest.raises(PreviewComposeRefused, match="no App Preview names"):
+        app_preview_names.__wrapped__(tmp_path)
 
 
 def test_down_cancels_a_running_deploy_before_it_deletes_the_compose(monkeypatch):

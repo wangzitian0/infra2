@@ -353,20 +353,26 @@ changed files 换算成 `services` 传给 `/deploy`。要点：
 |-----|------|---------|
 | `WEBHOOK_SECRET` | GitHub webhook 验证密钥 | `openssl rand -hex 32` |
 | `GIT_REPO_URL` | Git 仓库地址 | `https://github.com/wangzitian0/infra2.git` |
-| `IAC_PREVIEW_WEBHOOK_SECRET` | 仅供 `/preview` 验签的 Preview 专用签名密钥（可选；缺失时 `/preview` 返回 503，`/deploy` 不受影响）。**不得**与 `WEBHOOK_SECRET` 相同 | owner 生成 `openssl rand -hex 32`；`human` 来源，不由 runner 生成 |
+| `IAC_PREVIEW_WEBHOOK_SECRET` | 仅供 `/preview` 验签的 Preview 专用签名密钥（可选；缺失时 `/preview` 返回 503，`/deploy` 不受影响）。**不得**与 `WEBHOOK_SECRET` 相同 | `openssl rand -hex 32`；创建权见下；`human` 来源，不由 runner 生成 |
 
-**Preview 密钥（owner 授权创建，agent 不自创）**：名字 `IAC_PREVIEW_WEBHOOK_SECRET`。人工值放 1Password（vault `Infra2`）item `bootstrap/iac_runner` 的同名字段；runner 读的是 Vault `secret/data/bootstrap/production/iac_runner` 的同名字段（vault-agent 渲染进 `/vault/secrets/.env`，runner 入口脚本 source 它；`compose.yaml` 不需要新增环境变量）。PR CI 端用同名 GitHub Actions secret（T3c）。`invoke env.set ... --type=bootstrap` **只写 1Password**，而 `deploy.yml` 的 bootstrap 重建脚本不跑 supply，所以必须单独把值复制进 Vault：
+**Preview 密钥的创建权**：由 owner 创建；或由 owner 在聊天中为一次具名变更，委托给编排会话（orchestrating session）创建。委托不是常设授权，下一次变更要重新委托。子 agent 不创建这个密钥，也不运行下面的步骤 1–3。
+
+**Preview 密钥的位置**：名字 `IAC_PREVIEW_WEBHOOK_SECRET`。人工值放 1Password（vault `Infra2`）item `bootstrap/iac_runner` 的同名字段；runner 读的是 Vault `secret/data/bootstrap/production/iac_runner` 的同名字段（vault-agent 渲染进 `/vault/secrets/.env`，runner 入口脚本 source 它；`compose.yaml` 不需要新增环境变量）。PR CI 端用同名 GitHub Actions secret（T3c）。`invoke env.set ... --type=bootstrap` **只写 1Password**，而 `deploy.yml` 的 bootstrap 重建脚本不跑 supply，所以必须单独把值复制进 Vault：
 
 ```bash
 # 1. 写 1Password（同一个值也写进 GitHub Actions secret IAC_PREVIEW_WEBHOOK_SECRET）
 invoke env.set IAC_PREVIEW_WEBHOOK_SECRET=$(openssl rand -hex 32) \
   --project=bootstrap --service=iac_runner --type=bootstrap
 # 2. 复制进 Vault：pre-compose 运行 Deployer.apply_secret_supply（1Password -> Vault；
-#    值变化时重启 iac-runner-vault-agent 与 iac-runner，请在 runner 空闲时做；需要 Vault root token）
+#    值变化时重启 iac-runner-vault-agent 与 iac-runner，请在 runner 空闲时做；需要 Vault root token）。
+#    必须在合并提交或其之后的 checkout 里运行：supply 会删除 manifest 未列出的 Vault key，
+#    旧 checkout 看不到本字段，会跳过它，并删掉应急直写的副本
 DEPLOY_ENV=production invoke iac-runner.pre-compose
-# 3. 重建 runner（需要 owner 在 production environment 批准该 SHA）
+# 3. 重建 runner（需要 owner 在 production environment 批准该 SHA，并在场）
 gh workflow run deploy.yml -R wangzitian0/infra2 --ref main -f service=bootstrap/iac-runner
 ```
+
+步骤 2 写生产 Vault 并重启生产 runner，步骤 3 重建生产 runner；二者都是 production 变更。步骤 2 由 owner 运行，或由获得上述委托的编排会话运行。批准 `production` environment 之前，先核对该 workflow run 的 `headSha` 等于已批准的合并 SHA；`deploy.yml` 以 dispatch 当时的 main 顶端为 `GITHUB_SHA`，main 在批准前前进过，就会重建另一个提交。
 
 应急直写（会被下一次 reconcile 报为漂移）：`invoke env.set IAC_PREVIEW_WEBHOOK_SECRET=<同一个值> --project=bootstrap --service=iac_runner --type=app_vars --break-glass`。在步骤 2 与 3 都完成之前，`/preview` 返回 503，`/deploy` 不受影响。
 

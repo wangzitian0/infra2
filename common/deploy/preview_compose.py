@@ -5,10 +5,12 @@ head commit, checks it against an allow list, and uploads the checked text as a 
 Dokploy never clones the PR branch. Anything the allow list does not name is refused: host
 path mounts (the Docker socket), ``privileged``, ``cap_add``, ``devices``, ``ports``, host
 ``network_mode``/``pid``/``ipc``, extra networks and network options (aliases), an ``image``
-beside ``build``, missing or large resource limits, and Traefik rules outside the slot's host.
+beside ``build``, missing, zero or large resource limits (memory, tmpfs, logs), and Traefik
+rules outside the slot's host.
 The renderer renames each service to a slot-unique name and gives each built service a
 slot-scoped image name, so a PR compose can neither shadow a production DNS name on the shared
-``dokploy-network`` nor overwrite a production image tag.
+``dokploy-network`` nor overwrite a production image tag. A PR number is also an App PR number,
+so a service, router or Traefik service name that an App PR Preview runs is refused.
 """
 
 from __future__ import annotations
@@ -52,7 +54,8 @@ _SERVICE_KEYS = {
     "networks",
     "volumes",
 }
-_SUFFIX = r"\$\{ENV_DOMAIN_SUFFIX\}"
+_DOMAIN_SUFFIX_REF = "${ENV_DOMAIN_SUFFIX}"
+_SUFFIX = re.escape(_DOMAIN_SUFFIX_REF)
 _LABEL_RE = re.compile(
     r"\Atraefik\.http\.(?P<kind>routers|services)\.(?P<name>[A-Za-z0-9_-]+"
     + _SUFFIX
@@ -67,13 +70,21 @@ _ROUTER_VALUES = {
 _SERVICE_LABEL_KEYS = {"loadbalancer.server.port"}
 _MAX_SERVICES = 6
 _MAX_BUILDS = 3
+_MIN_MEM_BYTES = 6 * 1024**2  # a memory limit of 0 means "no limit" to Docker
 _MAX_MEM_BYTES = 1024**3
 _MAX_TMPFS_BYTES = 256 * 1024**2
+_MAX_TMPFS_ENTRIES = 4  # per service; at most 4 * 256m = 1g, the largest mem_limit
+_MAX_LOG_BYTES = 10 * 1024**2
+_MAX_LOG_FILES = 3
 _MAX_CPU_SHARES = 1024
 _MAX_CPUS = 1.0
 _SERVICE_NAME_RE = re.compile(r"\A[a-z0-9][a-z0-9-]*\Z")
 _SIZE_RE = re.compile(r"\A([0-9]+)([bkmg]?)b?\Z", re.IGNORECASE)
 _SIZE_UNITS = {"": 1, "b": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
+_APP_PREVIEW_ROOTS = ("finance_report", "truealpha")
+_APP_NAME_RE = re.compile(
+    r"\Atraefik\.http\.(?:routers|services)\.([A-Za-z0-9_-]+)" + _SUFFIX + r"\."
+)
 
 
 class PreviewComposeRefused(ValueError):
@@ -95,16 +106,27 @@ def _refuse(service: str, detail: str) -> PreviewComposeRefused:
 
 
 def _labels(service: str, raw) -> dict[str, str]:
-    if isinstance(raw, dict):
-        items = {str(k): str(v) for k, v in raw.items()}
-    elif isinstance(raw, list) and all(isinstance(i, str) and "=" in i for i in raw):
-        items = dict(i.split("=", 1) for i in raw)
-    else:
+    """Compose substitutes variables in label values, not in mapping keys; so a router name
+    in the key of the dict form would keep a literal ``${ENV_DOMAIN_SUFFIX}``. List form only."""
+    if not (
+        isinstance(raw, list) and all(isinstance(i, str) and "=" in i for i in raw)
+    ):
         raise _refuse(service, "labels must be a list of key=value strings")
-    return items
+    return dict(i.split("=", 1) for i in raw)
 
 
-def _check_labels(service: str, labels: dict[str, str], base_subdomain: str) -> None:
+def _refuse_app_name(service: str, what: str, name: str, app_names) -> None:
+    if name in app_names:
+        raise _refuse(
+            service,
+            f"{what} {name!r} equals a name that App PR Previews run (the slot suffix "
+            "-pr-<N> is shared with the App repositories)",
+        )
+
+
+def _check_labels(
+    service: str, labels: dict[str, str], base_subdomain: str, app_names
+) -> None:
     host = re.escape(base_subdomain)
     rule_re = re.compile(
         r"\AHost\(`" + host + _SUFFIX + r"\.\$\{INTERNAL_DOMAIN\}`\)"
@@ -121,6 +143,12 @@ def _check_labels(service: str, labels: dict[str, str], base_subdomain: str) -> 
         if not match:
             raise _refuse(service, f"label {key!r} is not allowed")
         kind, rest = match["kind"], match["rest"]
+        _refuse_app_name(
+            service,
+            f"Traefik {kind[:-1]} name",
+            match["name"].removesuffix(_DOMAIN_SUFFIX_REF),
+            app_names,
+        )
         if kind == "services" and rest in _SERVICE_LABEL_KEYS:
             if not value.isdigit() or not 1 <= int(value) <= 65535:
                 raise _refuse(service, f"server port {value!r} is not 1-65535")
@@ -137,6 +165,12 @@ def _check_labels(service: str, labels: dict[str, str], base_subdomain: str) -> 
                     raise _refuse(
                         service, f"router service {value!r} is not slot-scoped"
                     )
+                _refuse_app_name(
+                    service,
+                    "router service",
+                    value.removesuffix(_DOMAIN_SUFFIX_REF),
+                    app_names,
+                )
             elif rest == "priority":
                 if not re.fullmatch(r"[0-9]{1,4}", value):
                     raise _refuse(
@@ -173,6 +207,42 @@ def reserved_service_names(root: Path = ROOT) -> frozenset[str]:
     return frozenset(names)
 
 
+@functools.lru_cache(maxsize=4)
+def app_preview_names(root: Path = ROOT) -> frozenset[str]:
+    """Every container name, router name and Traefik service name (without the slot suffix)
+    that an App PR Preview of the checkout in ``root`` runs. A slot of this repository gets
+    the same ``-pr-<N>`` suffix, and PR numbers overlap between repositories, so equal names
+    would collide on ``dokploy-network`` and in Traefik. Fail closed when an App has none."""
+    names: set[str] = set()
+    for top in _APP_PREVIEW_ROOTS:
+        found: set[str] = set()
+        for path in sorted((root / top).glob("**/preview/compose.yaml")):
+            try:
+                doc = safe_load_text(yaml, path.read_text(encoding="utf-8"))
+            except (OSError, yaml.YAMLError) as exc:
+                raise PreviewComposeRefused(
+                    f"App Preview compose {path} is unreadable ({exc.__class__.__name__})"
+                ) from exc
+            for spec in ((doc or {}).get("services") or {}).values():
+                if not isinstance(spec, dict):
+                    continue
+                if spec.get("container_name"):
+                    found.add(str(spec["container_name"]).replace("${ENV_SUFFIX}", ""))
+                labels = spec.get("labels") or []
+                keys = (
+                    labels
+                    if isinstance(labels, dict)
+                    else (i.split("=", 1)[0] for i in labels if isinstance(i, str))
+                )
+                for key in keys:
+                    if match := _APP_NAME_RE.match(str(key)):
+                        found.add(match[1])
+        if not found:
+            raise PreviewComposeRefused(f"no App Preview names found under {top}/")
+        names |= found
+    return frozenset(names)
+
+
 def _size_bytes(service: str, what: str, value) -> int:
     match = _SIZE_RE.match(str(value).strip())
     if not match:
@@ -183,8 +253,9 @@ def _size_bytes(service: str, what: str, value) -> int:
 def _check_resources(service: str, name: str, spec: dict) -> None:
     if "mem_limit" not in spec:
         raise _refuse(service, f"service {name!r} sets no mem_limit")
-    if _size_bytes(service, "mem_limit", spec["mem_limit"]) > _MAX_MEM_BYTES:
-        raise _refuse(service, f"mem_limit of {name!r} is over 1g")
+    mem = _size_bytes(service, "mem_limit", spec["mem_limit"])
+    if not _MIN_MEM_BYTES <= mem <= _MAX_MEM_BYTES:
+        raise _refuse(service, f"mem_limit of {name!r} must be 6m-1g (0 is no limit)")
     shares, cpus = spec.get("cpu_shares"), spec.get("cpus")
     if (shares is None) == (cpus is None):
         raise _refuse(
@@ -204,14 +275,48 @@ def _check_resources(service: str, name: str, spec: dict) -> None:
         raise _refuse(
             service, f"cpus of {name!r} must be above 0 and at most {_MAX_CPUS}"
         )
-    for tmp in spec.get("tmpfs", []):
+    tmpfs = spec.get("tmpfs", [])
+    if not isinstance(tmpfs, list) or len(tmpfs) > _MAX_TMPFS_ENTRIES:
+        raise _refuse(
+            service, f"tmpfs of {name!r} must be a list of at most {_MAX_TMPFS_ENTRIES}"
+        )
+    for tmp in tmpfs:
         options = str(tmp).split(":", 1)[1] if ":" in str(tmp) else ""
         sizes = [o[5:] for o in options.split(",") if o.startswith("size=")]
-        if (
-            len(sizes) != 1
-            or _size_bytes(service, "tmpfs size", sizes[0]) > _MAX_TMPFS_BYTES
+        if len(sizes) != 1 or not (
+            0 < _size_bytes(service, "tmpfs size", sizes[0]) <= _MAX_TMPFS_BYTES
         ):
-            raise _refuse(service, f"tmpfs {tmp!r} needs size= of at most 256m")
+            raise _refuse(
+                service, f"tmpfs {tmp!r} needs size= above 0 and at most 256m"
+            )
+
+
+def _check_logging(service: str, name: str, spec: dict) -> None:
+    """The json-file log of a container has no limit unless the options set one."""
+    logging = spec.get("logging")
+    if (
+        not isinstance(logging, dict)
+        or logging.get("driver", "json-file") != "json-file"
+    ):
+        raise _refuse(
+            service, f"service {name!r} needs logging with the json-file driver"
+        )
+    options = logging.get("options")
+    if not isinstance(options, dict):
+        raise _refuse(service, f"logging of {name!r} sets no options")
+    size, files = options.get("max-size"), options.get("max-file")
+    if size is None or not (
+        0 < _size_bytes(service, "max-size", size) <= _MAX_LOG_BYTES
+    ):
+        raise _refuse(
+            service, f"logging max-size of {name!r} must be above 0 and at most 10m"
+        )
+    if files is None or not re.fullmatch(r"[0-9]+", str(files)):
+        raise _refuse(service, f"logging max-file of {name!r} must be a number")
+    if not 1 <= int(files) <= _MAX_LOG_FILES:
+        raise _refuse(
+            service, f"logging max-file of {name!r} must be 1-{_MAX_LOG_FILES}"
+        )
 
 
 def _check_service(
@@ -222,6 +327,7 @@ def _check_service(
     config,
     sha: str,
     pr: int,
+    app_names,
 ) -> dict:
     """Check one service; return it with its build context and image name rewritten."""
     if not isinstance(spec, dict):
@@ -233,16 +339,19 @@ def _check_service(
         )
     if not _SERVICE_NAME_RE.match(name):
         raise _refuse(service, f"service name {name!r} must match [a-z0-9][a-z0-9-]*")
+    # Every container carries the slot suffix, so the teardown check can see it.
     container = spec.get("container_name")
-    if container is not None and not (
-        str(container).endswith("${ENV_SUFFIX}")
-        and str(container).startswith(f"{config.project}-")
+    if not (
+        isinstance(container, str)
+        and container.endswith("${ENV_SUFFIX}")
+        and container.startswith(f"{config.project}-")
     ):
         raise _refuse(
             service,
-            f"container_name of {name!r} must start with {config.project}- and end with ${{ENV_SUFFIX}}",
+            f"container_name of {name!r} is required; it must start with {config.project}- and end with ${{ENV_SUFFIX}}",
         )
     _check_resources(service, name, spec)
+    _check_logging(service, name, spec)
     if "build" in spec:
         build = spec["build"]
         dockerfile = (
@@ -273,7 +382,7 @@ def _check_service(
         spec = {
             **spec,
             "build": {**build, "context": f"{INFRA2_GIT_URL}#{sha}"},
-            "image": f"{slug}-{name}-preview-pr-{pr}:{sha[:12]}",
+            "image": f"{slug}-{name}-preview{_slot_suffix(pr)}:{sha[:12]}",
         }
     elif "pull_policy" in spec:
         raise _refuse(
@@ -302,15 +411,20 @@ def _check_service(
         raise _refuse(service, "networks must be a list")
     if not set(networks) <= {_SLOT_NETWORK, _PROXY_NETWORK}:
         raise _refuse(service, f"networks {sorted(map(str, networks))} are not allowed")
-    if spec.get("logging", {}).get("driver", "json-file") != "json-file":
-        raise _refuse(service, "only the json-file log driver is allowed")
     if "labels" in spec:
-        _check_labels(service, _labels(service, spec["labels"]), config.base_subdomain)
+        _check_labels(
+            service, _labels(service, spec["labels"]), config.base_subdomain, app_names
+        )
     return spec
 
 
+def _slot_suffix(pr: int) -> str:
+    """The one place that spells the slot suffix. It equals ``ENV_SUFFIX`` of alias ``pr-<N>``."""
+    return f"-pr-{pr}"
+
+
 def _slot_name(name: str, pr: int) -> str:
-    return f"{name}-pr-{pr}"
+    return f"{name}{_slot_suffix(pr)}"
 
 
 def _rename_depends_on(spec: dict, pr: int, known: set[str], service: str) -> dict:
@@ -380,20 +494,21 @@ def _render(service: str, config, text: str, sha: str, pr: int) -> str:
     ):
         raise _refuse(service, f"more than {_MAX_BUILDS} builds")
     known = set(services)
+    app_names = app_preview_names()
     checked = {
-        name: _check_service(service, name, spec, declared, config, sha, pr)
+        name: _check_service(service, name, spec, declared, config, sha, pr, app_names)
         for name, spec in services.items()
     }
     reserved = reserved_service_names()
     renamed = {}
     for name, spec in checked.items():
         spec = _rename_depends_on(spec, pr, known, service)
-        if "container_name" in spec:
-            final = spec["container_name"].replace("${ENV_SUFFIX}", f"-pr-{pr}")
-            if final in reserved:
-                raise _refuse(service, f"container name {final!r} is a production name")
+        final = spec["container_name"].replace("${ENV_SUFFIX}", _slot_suffix(pr))
+        if final in reserved:
+            raise _refuse(service, f"container name {final!r} is a production name")
         if _slot_name(name, pr) in reserved:
             raise _refuse(service, f"service name {name!r} is a production name")
+        _refuse_app_name(service, "service name", name, app_names)
         renamed[_slot_name(name, pr)] = spec
     doc["services"] = renamed
     return yaml.safe_dump(doc, sort_keys=False)
