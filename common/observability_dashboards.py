@@ -29,7 +29,12 @@ from common.alerting import (
     signoz_feishu_channel_name,
     signoz_rule_channel_problems,
 )
-from common.alerting.standard_rules import ENVIRONMENTS, STANDARD_RULES, expand_rules
+from common.alerting.standard_rules import (
+    ENVIRONMENTS,
+    STANDARD_RULES,
+    STANDARD_RUNBOOK_URL,
+    expand_rules,
+)
 from common.core.registry import _LAYERS
 
 # Repository root: common/observability_dashboards.py -> repo root is parents[1].
@@ -120,6 +125,7 @@ class LogErrorAlertDefinition:
     match_type: str = "at_least_once"
     eval_window: str = "5m0s"
     frequency: str = "1m"
+    runbook_url: str = ""
 
     def to_signoz_payload(self, channel_names: list[str]) -> dict[str, Any]:
         """Render this definition into a SigNoz threshold-rule payload.
@@ -138,6 +144,7 @@ class LogErrorAlertDefinition:
             frequency=self.frequency,
             service_id=self.service_id,
             environment=self.environment,
+            runbook_url=self.runbook_url,
         )
 
 
@@ -159,6 +166,7 @@ class MetricAlertDefinition:
     frequency: str = "1m"
     service_name: str = ""
     group_by: list[str] | None = None
+    runbook_url: str = ""
 
     def to_signoz_payload(self, channel_names: list[str]) -> dict[str, Any]:
         """Render this definition into a SigNoz metric threshold-rule payload.
@@ -181,6 +189,7 @@ class MetricAlertDefinition:
             group_by=self.group_by,
             service_id=self.service_id,
             environment=self.environment,
+            runbook_url=self.runbook_url,
         )
 
 
@@ -211,7 +220,12 @@ def load_alert_definitions(
 
     # The standard table joins the discovered catalogs only; an explicit path is read alone.
     sources: list[tuple[Path | str, Any]] = (
-        [("common/alerting/standard_rules.py", {"rules": list(STANDARD_RULES)})]
+        [
+            (
+                "common/alerting/standard_rules.py",
+                {"rules": list(STANDARD_RULES), "runbook_url": STANDARD_RUNBOOK_URL},
+            )
+        ]
         if path is None
         else []
     )
@@ -227,6 +241,7 @@ def load_alert_definitions(
             )
 
         default_service_id = str(data.get("service_id") or "").strip()
+        catalog_runbook_url = str(data.get("runbook_url") or "").strip()
         # A catalog without a top-level `environment` serves every environment.
         declared = str(data.get("environment") or "").strip()
         pairs = (
@@ -301,6 +316,7 @@ def load_alert_definitions(
                         group_by=_string_list(
                             raw.get("group_by"), "group_by", alert_name, file_path
                         ),
+                        runbook_url=str(raw.get("runbook_url") or catalog_runbook_url),
                     )
                 )
                 continue
@@ -332,6 +348,7 @@ def load_alert_definitions(
                     match_type=str(raw.get("match_type") or "at_least_once"),
                     eval_window=str(raw.get("eval_window") or "5m0s"),
                     frequency=str(raw.get("frequency") or "1m"),
+                    runbook_url=str(raw.get("runbook_url") or catalog_runbook_url),
                 )
             )
     return definitions
