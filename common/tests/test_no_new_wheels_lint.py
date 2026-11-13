@@ -219,9 +219,7 @@ def test_e2e_smoke_job_opens_and_closes_one_issue(monkeypatch, capsys) -> None:
     assert capsys.readouterr().out.count("production e2e smoke suite failed") >= 1
 
     monkeypatch.setattr(watchdog, "GitHubIssues", lambda *_a: api)
-    (result,) = watchdog.run_e2e_smoke_state_check(
-        {**SCHEDULED, "GITHUB_TOKEN": "t"}
-    )
+    (result,) = watchdog.run_e2e_smoke_state_check({**SCHEDULED, "GITHUB_TOKEN": "t"})
     assert result.ok and "Production e2e smoke is red" in result.note
 
     assert _execute(job, resolve) == 0
