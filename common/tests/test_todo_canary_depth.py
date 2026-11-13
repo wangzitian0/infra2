@@ -2068,13 +2068,15 @@ def test_probe_health_gate_fails_on_red_canary_and_sha_mismatch(
     good = {**base, "canary": {"ok": True, "checked_at": "2026-11-13T00:00:00Z"}}
     assert run(good, "--gate", "HEAD") == 0
     for bad in (
-        {**base, "canary": {"ok": False}},
+        {**base, "canary": {"ok": False, "checked_at": "2026-11-13T00:00:00Z"}},
         dict(base),
         {**good, "git_sha": "0" * 40},
     ):
         with pytest.raises(AssertionError):
             run(bad, "--gate", "HEAD")
-    assert run({**base, "canary": {"ok": False}}) == 0  # no gate: status only
+    assert (
+        run({**base, "canary": {"ok": False, "checked_at": "t"}}) == 0
+    )  # no gate: status only
 
 
 def test_health_body_carries_the_cached_canary_verdict(app, monkeypatch) -> None:
@@ -2097,3 +2099,58 @@ def test_health_body_carries_the_cached_canary_verdict(app, monkeypatch) -> None
     assert body["canary"]["checked_at"]
     assert "git_sha" in body
     assert "AccessDenied" not in response.text
+
+
+def test_probe_health_gate_waits_for_a_verdict_not_a_pass(monkeypatch) -> None:
+    """#1635: gate mode polls until a verdict exists; a red verdict ends the wait at once."""
+    from types import SimpleNamespace
+
+    probe = _load("probe_health_wait", SERVICE_DIR / "probe_health.py")
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD^{commit}"],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    ).stdout.strip()
+    monkeypatch.chdir(ROOT)
+    sleeps: list[float] = []
+    clock = [0.0]
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(probe.time, "sleep", fake_sleep)
+    monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
+
+    def serve(canaries: list) -> None:
+        calls = iter(canaries)
+        monkeypatch.setattr(
+            probe,
+            "poll_until_healthy",
+            lambda *a, **k: SimpleNamespace(
+                body=json.dumps(
+                    {"ok": True, "git_sha": sha, "canary": next(calls, canaries[-1])}
+                )
+            ),
+        )
+
+    pending = {"ok": False, "checked_at": None}
+    green = {"ok": True, "checked_at": "2026-11-13T00:00:00Z"}
+    red = {"ok": False, "checked_at": "2026-11-13T00:00:00Z"}
+
+    serve([pending, pending, green])
+    assert probe.main(["https://x.example", "--gate", "HEAD"]) == 0
+    assert sleeps == [10, 10]
+
+    sleeps.clear()
+    serve([red])
+    with pytest.raises(AssertionError):
+        probe.main(["https://x.example", "--gate", "HEAD"])
+    assert sleeps == []
+
+    serve([pending])
+    with pytest.raises(AssertionError, match="no canary verdict after 150s"):
+        probe.main(["https://x.example", "--gate", "HEAD"])
+    assert sum(sleeps) >= 150

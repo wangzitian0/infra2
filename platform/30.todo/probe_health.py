@@ -6,9 +6,13 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import time
 from collections.abc import Sequence
 
 from infra2_sdk.deploy import default_http_get, poll_until_healthy
+
+GATE_VERDICT_WAIT_SECONDS = 150
+GATE_POLL_SECONDS = 10
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -37,13 +41,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     url = f"{args.base_url.rstrip('/')}/api/health"
-    response = poll_until_healthy(
-        url,
-        http_get=default_http_get(timeout=float(args.timeout)),
-        max_attempts=1,
-        interval_seconds=0.0,
-    )
-    payload = json.loads(response.body)
+    deadline = time.monotonic() + GATE_VERDICT_WAIT_SECONDS
+    while True:
+        response = poll_until_healthy(
+            url,
+            http_get=default_http_get(timeout=float(args.timeout)),
+            max_attempts=1,
+            interval_seconds=0.0,
+        )
+        payload = json.loads(response.body)
+        canary = payload.get("canary")
+        # Gate mode waits for a verdict, not for a pass: a red verdict ends the wait.
+        pending = (
+            args.gate and isinstance(canary, dict) and not canary.get("checked_at")
+        )
+        if not pending:
+            break
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"no canary verdict after {GATE_VERDICT_WAIT_SECONDS}s: {canary!r}"
+            )
+        time.sleep(GATE_POLL_SECONDS)
     if payload.get("ok") is not True:
         raise AssertionError(response.body)
     if args.require_service and payload.get("service") != args.require_service:
