@@ -2819,7 +2819,7 @@ def main(argv: list[str] | None = None) -> int:
                 "from main (#1511). Record it by hand: see docs/ssot/ops.pipeline.md, "
                 "section on the production marker."
             )
-        except Exception as exc:  # noqa: BLE001 - the post record is written first, then it re-raises
+        except (Exception, SystemExit) as exc:  # noqa: BLE001 - record_production_marker fails with SystemExit; the post record is written first, then it re-raises
             marker_error = exc
             detail = f"{type(exc).__name__}: {exc}"
         marker_checks.append(

@@ -40,6 +40,7 @@ name: Ops Checks
           - vault-self-refresh-audit
           - secrets-reconcile
           - e2e-regressions-smoke
+          - promotion-reminder
           - all
       dry_run:
         description: "Run checks without sending Feishu notifications"
@@ -410,7 +411,7 @@ jobs:
   digest:
     # signal: monthly-ops-summary
     name: Build and send weekly digest
-    if: ${{ (github.event_name == 'schedule' && (github.event.schedule == '0 1 * * 1' || github.event.schedule == '0 2 1 * *' || github.event.schedule == '0 13 * * *')) || (github.event_name == 'workflow_dispatch' && (inputs.task == 'watchdog-weekly-digest' || inputs.task == 'all')) }}
+    if: ${{ (github.event_name == 'schedule' && (github.event.schedule == '0 1 * * 1' || github.event.schedule == '0 2 1 * *' || github.event.schedule == '0 13 * * *')) || (github.event_name == 'workflow_dispatch' && (inputs.task == 'watchdog-weekly-digest' || inputs.task == 'promotion-reminder' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -452,7 +453,7 @@ jobs:
           python -m pip install -e .
 
       - name: Configure SSH key
-        if: ${{ github.event.schedule != '0 13 * * *' }}
+        if: ${{ github.event.schedule != '0 13 * * *' && inputs.task != 'promotion-reminder' }}
         env:
           INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
         run: |
@@ -463,13 +464,13 @@ jobs:
           echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_stability_report" >> "$GITHUB_ENV"
 
       - name: Build and send digest
-        if: ${{ github.event.schedule != '0 13 * * *' }}
+        if: ${{ github.event.schedule != '0 13 * * *' && inputs.task != 'promotion-reminder' }}
         run: python tools/watchdog_weekly_digest.py ${{ github.event.schedule == '0 2 1 * *' && '--monthly' || '' }}
 
       # The reminder reads stage records and sends one card; it dispatches nothing (#1645).
       # It runs in this job because the job already holds the Feishu secrets and is classified.
       - name: Remind the owner of a green staging tag
-        if: ${{ github.event.schedule == '0 13 * * *' || inputs.task == 'all' }}
+        if: ${{ github.event.schedule == '0 13 * * *' || inputs.task == 'promotion-reminder' || inputs.task == 'all' }}
         env:
           PROMOTION_REMINDER_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
         run: python tools/promotion_reminder.py
@@ -477,7 +478,7 @@ jobs:
       # Two Mondays (08-31, 09-07) the stability report died on the watchdog ledger and
       # nothing paged: the digest job had no failure path (#658, recommendation 4).
       - name: Alert on failure
-        if: failure() && env.INFRA2_STABILITY_REPORT_DRY_RUN != '1' && github.event.schedule != '0 13 * * *'
+        if: failure() && env.INFRA2_STABILITY_REPORT_DRY_RUN != '1' && github.event.schedule != '0 13 * * *' && inputs.task != 'promotion-reminder'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
@@ -506,7 +507,7 @@ jobs:
           PY
 
       - name: Resolve the digest failure alert
-        if: success() && env.INFRA2_STABILITY_REPORT_DRY_RUN != '1' && github.event.schedule != '0 13 * * *'
+        if: success() && env.INFRA2_STABILITY_REPORT_DRY_RUN != '1' && github.event.schedule != '0 13 * * *' && inputs.task != 'promotion-reminder'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |

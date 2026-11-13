@@ -668,13 +668,14 @@ def test_a_crashing_production_marker_writes_the_failed_post_record_then_raises(
     monkeypatch, tmp_path
 ) -> None:
     def crash(tag, *_a, **_k):
-        raise RuntimeError("git push exploded")
+        raise SystemExit("cannot push production marker")
 
     records, argv = _drive_prod_promotion(monkeypatch, tmp_path, crash)
-    with pytest.raises(RuntimeError, match="exploded"):
+    with pytest.raises(SystemExit, match="cannot push production marker"):
         reconcile.main(argv)
     post = _post_of(records)
     assert post.verdict == "fail" and post.checks[-1].name == "production_marker"
+    assert "cannot push production marker" in post.checks[-1].detail
 
 
 def test_the_sdk_unit_never_raises(monkeypatch, capsys) -> None:
@@ -710,17 +711,3 @@ def test_one_github_get_helper_and_one_card_publish_flow() -> None:
     for name in ("_headers",):
         assert not hasattr(stage_records, name)
     assert not hasattr(release_card, "_deliver_card")
-
-
-def test_the_digest_alert_and_resolve_steps_skip_the_reminder_run() -> None:
-    """A reminder run builds no digest, so it neither pages nor resolves the digest alert."""
-    steps = yaml.safe_load((ROOT / ".github/workflows/ops-checks.yml").read_text())[
-        "jobs"
-    ]["digest"]["steps"]
-    named = {s["name"]: s for s in steps}
-    for name in (
-        "Alert on failure",
-        "Resolve the digest failure alert",
-        "Build and send digest",
-    ):
-        assert "github.event.schedule != '0 13 * * *'" in named[name]["if"], name

@@ -81,7 +81,14 @@ def _step(workflow: str, job: str, step_name: str) -> dict:
 
 
 def _runs(
-    step: dict, *, ok: bool, env: dict, event: str = "schedule", dry: bool = False
+    step: dict,
+    *,
+    ok: bool,
+    env: dict,
+    event: str = "schedule",
+    dry: bool = False,
+    schedule: str = "",
+    task: str = "",
 ):
     """Would GitHub run this step? Evaluates the `if:` of the workflow (the forms that
     these steps use) for a job whose earlier steps all succeeded (ok) or one failed."""
@@ -92,7 +99,9 @@ def _runs(
     expr = re.sub(r"!(?!=)", " not ", expr)
     expr = expr.replace("__NE__", "!=").replace("&&", " and ").replace("||", " or ")
     expr = re.sub(r"env\.(\w+)", r'_env.get("\1", "")', expr)
-    expr = expr.replace("github.event.schedule", "_schedule")
+    expr = expr.replace("github.event.schedule", "_schedule").replace(
+        "inputs.task", "_task"
+    )
     expr = expr.replace("github.event_name", "_event").replace("inputs.dry_run", "_dry")
     expr = expr.replace("success()", "_ok").replace("failure()", "(not _ok)")
     expr = expr.replace("always()", "True").replace("!cancelled()", "True")
@@ -100,7 +109,14 @@ def _runs(
         eval(  # noqa: S307 - the expression is a checked-in workflow condition
             expr,
             {"__builtins__": {}},
-            {"_ok": ok, "_env": env, "_event": event, "_dry": dry, "_schedule": ""},
+            {
+                "_ok": ok,
+                "_env": env,
+                "_event": event,
+                "_dry": dry,
+                "_schedule": schedule,
+                "_task": task,
+            },
         )
     )
 
@@ -374,3 +390,62 @@ def test_a_staging_failure_does_not_hide_a_production_failure(
         "ops-checks paged: reconcile-iac-inputs-production",
         "ops-checks paged: reconcile-iac-inputs-staging",
     ]
+
+
+DIGEST_STEPS = (
+    "Configure SSH key",
+    "Build and send digest",
+    "Remind the owner of a green staging tag",
+    "Alert on failure",
+    "Resolve the digest failure alert",
+)
+
+
+@pytest.mark.parametrize(
+    ("event", "schedule", "task", "expected"),
+    [
+        ("schedule", "0 13 * * *", "", {"Remind the owner of a green staging tag"}),
+        ("workflow_dispatch", "", "promotion-reminder", {"Remind the owner of a green staging tag"}),
+        ("schedule", "0 1 * * 1", "", {"Configure SSH key", "Build and send digest", "Resolve the digest failure alert"}),
+        ("workflow_dispatch", "", "watchdog-weekly-digest", {"Configure SSH key", "Build and send digest", "Resolve the digest failure alert"}),
+    ],
+    ids=["cron-reminder", "task-reminder", "cron-digest", "task-digest"],
+)  # fmt: skip
+def test_a_reminder_run_runs_only_the_reminder_step(
+    event, schedule, task, expected
+) -> None:
+    """The reminder (cron or task=promotion-reminder) builds no digest, so it neither pages nor
+    resolves the digest alert; a digest run does not send the reminder."""
+    ran = {
+        name
+        for name in DIGEST_STEPS
+        if _runs(
+            _step("ops-checks.yml", "digest", name),
+            ok=True,
+            env={},
+            event=event,
+            schedule=schedule,
+            task=task,
+        )
+    }
+    assert ran == expected
+    paged = _runs(
+        _step("ops-checks.yml", "digest", "Alert on failure"),
+        ok=False,
+        env={},
+        event=event,
+        schedule=schedule,
+        task=task,
+    )
+    assert paged is (not expected.isdisjoint({"Build and send digest"}))
+
+
+def test_the_promotion_reminder_task_is_a_dispatch_choice_that_selects_the_digest_job() -> (
+    None
+):
+    workflow = yaml.safe_load((WORKFLOWS / "ops-checks.yml").read_text())
+    assert (
+        "promotion-reminder"
+        in workflow["on"]["workflow_dispatch"]["inputs"]["task"]["options"]
+    )
+    assert "inputs.task == 'promotion-reminder'" in workflow["jobs"]["digest"]["if"]
