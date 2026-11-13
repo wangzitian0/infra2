@@ -386,7 +386,7 @@ Each staging soak and each production promotion writes three records: `pre`, `op
 - **Checks.** `pre`: `contract`, `provenance`, `app_pins`. `operation`: one check for each deploy command, with its seconds.
   `post`: one check for each hook slot. A failed `operation` writes no `post` record. A dry run writes no record.
 - **Units.** `app:<service>` and `infra:<service>` come from the deploy plan. `harness:<dir>` comes from changed files outside
-  every service. `sdk:<version>` comes from `uv.lock`. `uncovered` lists the services that no hook slot checked.
+  every service. `sdk:<version>` is the installed infra2-sdk (the wheel that `tools/sdk_requirement.py` reads from `uv.lock`). `uncovered` lists the services that no hook slot checked.
 - **Upload.** Each record is the artifact `stage-<env>-<phase>-<subject>` (the colon of the subject becomes a hyphen). The
   writer sets `STAGE_RECORD_<PHASE>` in `GITHUB_ENV`, and an upload step with `if: always()` reads it.
 - **Reader.** `tools/stage_records.py list` (a thin entry of `common/deploy/stage_record_reader.py`, standard library only) prints the records that pass the provenance checks of

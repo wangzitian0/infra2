@@ -6,6 +6,7 @@ import io
 import json
 import urllib.error
 import zipfile
+from importlib.metadata import version as metadata_version
 from pathlib import Path
 
 import pytest
@@ -110,7 +111,7 @@ def test_writer_emits_three_valid_records(monkeypatch, tmp_path) -> None:
     ]
     assert "infra:platform/alerting" in loaded["post"].units
     assert loaded["post"].uncovered == ()
-    assert any(u.startswith("sdk:") for u in loaded["post"].units)
+    assert f"sdk:{metadata_version('infra2-sdk')}" in loaded["post"].units
     assert {r.verdict for r in loaded.values()} == {"pass"}
 
 

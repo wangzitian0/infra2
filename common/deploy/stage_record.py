@@ -16,9 +16,9 @@ import argparse
 import json
 import os
 import sys
-import tomllib
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timezone
+from importlib.metadata import version
 from pathlib import Path
 
 from infra2_sdk.observability import CheckVerdict
@@ -39,13 +39,10 @@ def artifact_name(env: str, phase: str, subject: str) -> str:
     return f"stage-{env}-{phase}-{subject.replace(':', '-')}"
 
 
-def sdk_unit(repo_root: str | Path = ".") -> str:
-    """The unit ``sdk:<version>`` of the infra2-sdk that ``uv.lock`` pins."""
-    lock = tomllib.loads((Path(repo_root) / "uv.lock").read_text(encoding="utf-8"))
-    for package in lock.get("package", ()):
-        if package.get("name") == "infra2-sdk":
-            return f"sdk:{package['version']}"
-    raise ValueError("uv.lock does not pin infra2-sdk")
+def sdk_unit() -> str:
+    """The unit ``sdk:<version>`` of the infra2-sdk that runs. CI installs the wheel that
+    ``tools/sdk_requirement.py`` reads from ``uv.lock``, and that script is the one reader of the lock."""
+    return f"sdk:{version('infra2-sdk')}"
 
 
 def write_stage_record(

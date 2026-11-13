@@ -2098,13 +2098,13 @@ def resolve_workflow_failure_alert(
 _HARNESS_DIRS = frozenset({"tools", "common", "harness", ".github"})
 
 
-def plan_units(plan: ReconcilePlan, repo_root: Path) -> tuple[str, ...]:
+def plan_units(plan: ReconcilePlan) -> tuple[str, ...]:
     """The units of a stage record: services of the plan, changed harness trees and the SDK pin."""
     harness = {f.split("/", 1)[0] for f in plan.dropped if "/" in f} & _HARNESS_DIRS
     return (
         *(f"{'app' if s in APP_SOURCES else 'infra'}:{s}" for s in plan.services),
         *(f"harness:{d}" for d in sorted(harness)),
-        sdk_unit(repo_root if (repo_root / "uv.lock").is_file() else REPO_ROOT),
+        sdk_unit(),
     )
 
 
@@ -2734,7 +2734,7 @@ def main(argv: list[str] | None = None) -> int:
             promote_prod=promote_prod,
             target_env=target_env,
         )
-        stage.units = plan_units(plan, repo_root)
+        stage.units = plan_units(plan)
         if applied and not args.dry_run:
             with timed_check(pre_checks, "app_pins"):
                 for cmd in applied:
