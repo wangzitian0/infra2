@@ -467,6 +467,34 @@ def test_main_rejects_invalid_prod_ref_before_provenance_or_deploy(
     assert provenance_called is False
 
 
+@pytest.mark.parametrize("bad_after", ["main", "d" * 40])
+def test_main_refuses_a_staging_apply_on_a_branch_or_sha_before_provenance(
+    monkeypatch, bad_after
+) -> None:
+    """#1628: a staging dispatch on `main` must stop before any deploy unit runs."""
+    reached: list[str] = []
+    monkeypatch.setattr(
+        reconcile, "assert_after_on_main", lambda *_a, **_kw: reached.append("provenance")
+    )
+    monkeypatch.setattr(
+        reconcile, "build_plan", lambda *_a, **_kw: reached.append("plan")
+    )
+
+    with pytest.raises(SystemExit, match="requires a release-tag iac_ref"):
+        main(
+            [
+                "--after",
+                bad_after,
+                "--env",
+                "staging",
+                "--changed-file",
+                "platform/12.alerting/compose.yaml",
+            ]
+        )
+
+    assert reached == []
+
+
 @pytest.mark.parametrize("extra", [[], ["--dry-run"]])
 def test_main_requires_first_production_baseline_before_provenance(
     monkeypatch,
@@ -1100,7 +1128,7 @@ def test_production_runner_update_fails_when_the_ssh_deploy_fails(tmp_path) -> N
 def test_post_deploy_app_hooks_execute_smoke_and_record_results(
     monkeypatch, capsys, tmp_path
 ) -> None:
-    """#1416 (M2): --run-post-deploy-hooks resolves each deployed App's release_tag SHA
+    """#1416 (M2): post-deploy hooks resolve each deployed App's release_tag SHA
     and environment URL, fetches runtime-hooks.manifest.json, executes the smoke slot,
     and records hook_results in the reconcile JSON payload."""
     from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
@@ -1191,7 +1219,6 @@ def test_post_deploy_app_hooks_execute_smoke_and_record_results(
             "v3.1.23",
             "--changed-file",
             "harness/repos.yaml",
-            "--run-post-deploy-hooks",
         ]
     )
     assert rc == 0
@@ -1311,7 +1338,6 @@ def test_post_deploy_app_hooks_failure_blocks_prod_marker_and_returns_nonzero(
             "--promote-prod",
             "--changed-file",
             "harness/repos.yaml",
-            "--run-post-deploy-hooks",
         ]
     )
     assert rc == 1
@@ -2545,33 +2571,34 @@ def test_local_service_hook_manifests_discovery_and_execution(monkeypatch) -> No
     ]
 
 
-def test_reconcile_workflow_defaults_run_post_deploy_hooks_and_schedule_exits_after_pr_sync() -> (
-    None
-):
-    """#1521, #1590: schedule events run --sync-app-releases --create-pr and exit 0
-    without deploying; tag pushes default run_post_deploy_hooks to true."""
-    workflow_text = WORKFLOW.read_text(encoding="utf-8")
-    assert (
-        "INPUT_RUN_POST_DEPLOY_HOOKS: ${{ inputs.run_post_deploy_hooks }}"
-        in workflow_text
+def test_reconcile_workflow_always_runs_gates_and_every_sync_exits_after_its_pr() -> None:
+    """#1521, #1590, #1628: no dispatch input skips the post-deploy gates, and a sync
+    (schedule or dispatch) opens or updates its PR and exits 0 without deploying."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    inputs = workflow["on"]["workflow_dispatch"]["inputs"]
+    assert "run_post_deploy_hooks" not in inputs
+    script = next(
+        step["run"]
+        for step in workflow["jobs"]["reconcile"]["steps"]
+        if step.get("name") == "Reconcile changed IaC inputs"
     )
-    assert (
-        'run_post_deploy_hooks="${INPUT_RUN_POST_DEPLOY_HOOKS:-true}"' in workflow_text
-    )
-    assert 'if [[ "$run_post_deploy_hooks" == "true" ]]; then' in workflow_text
-    assert "inputs.run_post_deploy_hooks != false" not in workflow_text
-    sched_idx = workflow_text.index(
+    assert "run_post_deploy_hooks" not in script
+    # the flag is deleted: hooks always run, so no script passes or tests it (#1628)
+    assert "--run-post-deploy-hooks" not in script
+    with pytest.raises(SystemExit) as refused:
+        reconcile.main(["--run-post-deploy-hooks"])
+    assert refused.value.code == 2  # argparse: unrecognized argument
+    sched_idx = script.index(
         'if [[ "$EVENT_NAME" == "schedule" || "${{ inputs.sync_app_releases || false }}" == "true" ]]; then'
     )
-    deploy_idx = workflow_text.index("RECONCILE_PHASE=reconcile-deploy")
-    sched_block = workflow_text[sched_idx:deploy_idx]
+    sched_block = script[sched_idx : script.index("RECONCILE_PHASE=reconcile-deploy")]
     assert "--sync-app-releases --apply-repos-yaml --sync-gitlinks" in sched_block
     assert "sync_args+=(--create-pr)" in sched_block
-    assert (
-        'if [[ "$EVENT_NAME" == "schedule" ]]; then\n              exit 0'
-        in sched_block
-    )
-    assert "synced_infra_tag" not in workflow_text
+    assert "promote_prod" not in sched_block
+    # the last fragment is the `echo "` that opens the deploy phase
+    body = [line.strip() for line in sched_block.splitlines() if line.strip()][:-1]
+    assert body[-2:] == ["exit 0", "fi"]
+    assert "synced_infra_tag" not in script
 
 
 def test_main_run_hook_slot_resolves_local_service_manifest_and_url(
@@ -2647,7 +2674,6 @@ def test_main_run_hook_slot_resolves_local_service_manifest_and_url(
 # --- #1529: the env that the hook runner supplies to App hook slots ----------------------
 
 _HOOK_SLOT_FLAGS = (
-    "--run-post-deploy-hooks",
     "--run-hook-slot",
     "--run-scheduled-audit",
 )
@@ -3139,7 +3165,7 @@ def test_stage_hook_plans_ssot_and_workflow_wiring() -> None:
 
     workflow_text = WORKFLOW.read_text(encoding="utf-8")
     assert "--post-deploy-hook-slot" not in workflow_text
-    assert "args+=(--run-post-deploy-hooks)" in workflow_text
+    assert "--run-post-deploy-hooks" not in workflow_text
     assert '[[ -n "$INPUT_AFTER" ]] && hook_args+=(--version-ref "$INPUT_AFTER")' in (
         workflow_text
     )

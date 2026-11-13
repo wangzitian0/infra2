@@ -748,6 +748,31 @@ def test_fixed_env_rejects_non_tag_iac_ref(calls, bad_iac):
     assert calls["fixed"] is None
 
 
+@pytest.mark.parametrize("bad_iac", ["main", "d" * 40])
+def test_platform_batch_rejects_non_tag_iac_ref_before_resolving_it(
+    calls, monkeypatch, bad_iac
+):
+    # #1628: the multi-service batch (the reconcile's shape) resolved a branch to its tip
+    # sha and posted it to the runner; it must fail closed like the single-service path.
+    resolved: list[str] = []
+    monkeypatch.setattr(
+        dv2, "resolve_to_sha", lambda ref, **_kw: resolved.append(ref) or "0" * 40
+    )
+    with pytest.raises(ValueError, match="requires a release-tag iac_ref"):
+        dv2._deploy_platform_batch(
+            ["platform/redis", "platform/alerting"],
+            "staging",
+            bad_iac,
+            runner_url="https://iac.example",
+            secret="s",
+            triggered_by="deploy_v2",
+            code_reviewed=True,
+            wait=True,
+            timeout=120,
+        )
+    assert resolved == []
+
+
 # --- gates ------------------------------------------------------------------
 
 
