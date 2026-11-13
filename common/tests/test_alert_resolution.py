@@ -50,12 +50,6 @@ SPLIT_STEPS = [
         "Resolve the leaked-preview alert",
     ),
     (
-        "ops-checks.yml",
-        "host-hygiene-schedule",
-        "Alert on failure",
-        "Resolve the host-hygiene alert",
-    ),
-    (
         "reconcile-iac-inputs.yml",
         "reconcile",
         "Alert on failure",

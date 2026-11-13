@@ -9,7 +9,7 @@ job with its own hand-copied alert step:
 - **config drift** (`tools/dokploy_config_drift.py`, was
   ``config-drift-report.yml``): declared IaC source-config hash at the latest
   explicit production marker vs the deployed hash.
-- **dns drift** (`common/deploy/dns_drift.py`, was ``dns-drift-report.yml``):
+- **dns drift** (`tools/dns_drift_report.py`, was ``dns-drift-report.yml``):
   declared DNS records vs live Cloudflare.
 
 Each absorbed tool stays a library (its own tests keep passing; operators can

@@ -636,10 +636,6 @@ jobs:
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '27 4 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'host-hygiene-schedule' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
-    permissions:
-      contents: read
-      # the page-dedup state, one issue per job (common/observability/page_dedup.py)
-      issues: write
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
@@ -680,49 +676,27 @@ jobs:
 
       - name: Alert on failure
         if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
           import os
-          from common.observability.page_dedup import dedup_page, run_url_from_env
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
 
-          outcome = dedup_page(
-              os.environ,
-              job="host-hygiene-schedule",
-              label="VPS host-hygiene 计划任务",
-              findings=[("host-hygiene-schedule", "the host-hygiene schedule could not be ensured")],
-              detail="the host-hygiene schedule could not be ensured",
-              page_message=(
-                  "🚨 VPS host-hygiene schedule could not be ensured.\n"
-                  "The generic host GC (docker/journald/disk prune) may not be "
-                  "provisioned on the VPS — host disk can fill silently. Check the "
-                  "Dokploy schedule 'finance-report-vps-host-hygiene'.\n"
-                  f"Run: {run_url_from_env(os.environ)}"
-              ),
-              deliver_page=deliver_out_of_band_alert,
+          run_url = "/".join(
+              v for v in (
+                  os.environ.get("GITHUB_SERVER_URL"),
+                  os.environ.get("GITHUB_REPOSITORY"),
+                  "actions/runs",
+                  os.environ.get("GITHUB_RUN_ID"),
+              ) if v
           )
-          raise SystemExit(outcome.exit_code)
-          PY
-
-      - name: Resolve the host-hygiene alert
-        if: success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          python - <<'PY'
-          import os
-          from common.observability.page_dedup import resolve_page_state
-          from tools.out_of_band_watchdog import deliver_out_of_band_alert
-
-          outcome = resolve_page_state(
+          deliver_out_of_band_alert(
               os.environ,
-              job="host-hygiene-schedule",
-              label="VPS host-hygiene 计划任务",
-              deliver_page=deliver_out_of_band_alert,
+              "🚨 VPS host-hygiene schedule could not be ensured.\n"
+              "The generic host GC (docker/journald/disk prune) may not be "
+              "provisioned on the VPS — host disk can fill silently. Check the "
+              "Dokploy schedule 'finance-report-vps-host-hygiene'.\n"
+              f"Run: {run_url}",
           )
-          raise SystemExit(outcome.exit_code)
           PY
 
   facet-reconcile:
