@@ -61,6 +61,8 @@ class EnumSource:
     against ``migration_table`` (default ``alembic_version.version_num``) (#609).
     ``preconditions`` declares named read-only SQL predicates ``(name, sql, remedy)``
     that must all hold before any container is replaced (#609).
+    ``migrations_path`` (relative to ``--app-path`` or the working directory) holds the
+    alembic revision files; empty turns the pending-migration tolerance off (#1658).
     """
 
     metadata: str
@@ -70,6 +72,7 @@ class EnumSource:
     migration_table: str = "alembic_version"
     migration_column: str = "version_num"
     preconditions: tuple[tuple[str, str, str], ...] = ()
+    migrations_path: str = ""
 
 
 # finance_report's backend is the ``src`` package under apps/backend of the
@@ -83,6 +86,7 @@ ENUM_SOURCES: dict[str, EnumSource] = {
         metadata="src.database:Base.metadata",
         imports=("src.orm_registry",),
         app_path="<finance_report checkout>/apps/backend",
+        migrations_path="migrations/versions",
     ),
 }
 
@@ -275,6 +279,95 @@ def check_enums(
             )
 
     return discrepancies
+
+
+_REVISION_RE = re.compile(r"""^revision\b[^=\n]*=\s*["']([^"']+)["']""", re.MULTILINE)
+_DOWN_REVISION_RE = re.compile(r"^down_revision\b[^=\n]*=\s*(.+)$", re.MULTILINE)
+_QUOTED_RE = re.compile(r"""["']([^"']+)["']""")
+
+
+def _revision_graph(versions_dir: Path) -> dict[str, tuple[tuple[str, ...], str]]:
+    """``{revision: (parent revisions, file text)}`` for every alembic file in ``versions_dir``."""
+    graph: dict[str, tuple[tuple[str, ...], str]] = {}
+    for path in sorted(versions_dir.glob("*.py")):
+        text = path.read_text(encoding="utf-8")
+        revision = _REVISION_RE.search(text)
+        if revision is None:
+            continue
+        down = _DOWN_REVISION_RE.search(text)
+        parents = tuple(_QUOTED_RE.findall(down.group(1))) if down else ()
+        graph[revision.group(1)] = (parents, text)
+    return graph
+
+
+def _pending_revisions(
+    graph: Mapping[str, tuple[tuple[str, ...], str]], applied_heads: Sequence[str]
+) -> dict[str, str]:
+    """``{revision: file text}`` of every revision newer than the applied heads.
+
+    A head that the files do not know has no children, so nothing is pending.
+    """
+    children: dict[str, list[str]] = {}
+    for revision, (parents, _text) in graph.items():
+        for parent in parents:
+            children.setdefault(parent, []).append(revision)
+    pending: dict[str, str] = {}
+    queue = list(applied_heads)
+    while queue:
+        for child in children.get(queue.pop(), ()):
+            if child not in pending:
+                pending[child] = graph[child][1]
+                queue.append(child)
+    return pending
+
+
+def _migration_names(text: str, discrepancy: EnumDiscrepancy) -> bool:
+    """True when the migration text names the enum type and quotes every missing label."""
+    if not re.search(rf"\b{re.escape(discrepancy.enum_name)}\b", text):
+        return False
+    return all(
+        re.search(rf"""["']{re.escape(label)}["']""", text)
+        for label in discrepancy.missing_in_db
+    )
+
+
+def cover_with_pending_migrations(
+    discrepancies: Sequence[EnumDiscrepancy],
+    *,
+    applied_heads: Sequence[str],
+    versions_dir: Path,
+) -> tuple[list[EnumDiscrepancy], list[tuple[str, str]]]:
+    """Split off the additive discrepancies that a pending migration will fix (#1658).
+
+    The image runs ``alembic upgrade head`` after this gate, so a type or label that code
+    declares and the database lacks is fine when a migration newer than the database's head
+    names it. Returns ``(blocking, covered)`` with ``covered`` as ``(enum name, revision)``.
+    Only ``missing_in_db`` can be covered; a DB-only label and a casing drift always block.
+    An unknown head covers nothing. The caller treats any error here as "nothing covered".
+    """
+    pending = _pending_revisions(_revision_graph(versions_dir), applied_heads)
+    blocking: list[EnumDiscrepancy] = []
+    covered: list[tuple[str, str]] = []
+    for discrepancy in discrepancies:
+        revision = None
+        if (
+            discrepancy.missing_in_db
+            and not discrepancy.missing_in_code
+            and not discrepancy.casing_mismatches
+        ):
+            revision = next(
+                (
+                    rev
+                    for rev, text in sorted(pending.items())
+                    if _migration_names(text, discrepancy)
+                ),
+                None,
+            )
+        if revision is None:
+            blocking.append(discrepancy)
+        else:
+            covered.append((discrepancy.enum_name, revision))
+    return blocking, covered
 
 
 def _resolve(reference: str) -> Any:
@@ -541,6 +634,18 @@ def evaluate_db_preconditions(
     )
 
 
+def fetch_applied_heads(db_url: str, source: EnumSource) -> tuple[str, ...]:
+    """The alembic heads recorded in the target database (#1658)."""
+    return _with_libpq_cursor(
+        db_url,
+        lambda cur: query_applied_migrations(
+            cur,
+            migration_table=source.migration_table,
+            migration_column=source.migration_column,
+        ),
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Pre-deploy schema & enum check gate (#698)"
@@ -600,6 +705,19 @@ def main(argv: list[str] | None = None) -> int:
         print(f"APPLIED_MIGRATION: {','.join(applied_migrations)}")
 
     discrepancies = check_enums(code_enums, db_enums)
+    covered: list[tuple[str, str]] = []
+    if discrepancies and source is not None and source.migrations_path:
+        base = Path(args.app_path).expanduser() if args.app_path else Path.cwd()
+        try:
+            discrepancies, covered = cover_with_pending_migrations(
+                discrepancies,
+                applied_heads=fetch_applied_heads(db_url, source),
+                versions_dir=base / source.migrations_path,
+            )
+        except Exception:  # noqa: BLE001 - fail closed: an unreadable head or file covers nothing
+            covered = []
+    for enum_name, revision in covered:
+        print(f"PENDING_MIGRATION_COVERS: {enum_name} ({revision})")
     # Printed on stdout (never stderr) in both branches below, as a stable-format line a
     # caller can grep for, regardless of whether the gate itself passed or blocked. This
     # process normally runs remotely, over SSH inside the app's own container
@@ -634,7 +752,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"Pre-deploy schema check verified for service: {args.service} "
-        f"({len(code_enums)} enum types, 0 discrepancies)"
+        f"({len(code_enums)} enum types, 0 discrepancies"
+        f"{f', {len(covered)} covered by pending migrations' if covered else ''})"
     )
     print(f"ROLLBACK_CLASS: {rollback_class}")
     return EXIT_OK
