@@ -79,14 +79,15 @@ class AlertingDeployer(Deployer):
             expected="200,302",
             env_shared=True,
         ),
-        # #1648: the public route of the runner health; the one pager of the
-        # iac-runner-health condition covers it with the internal iac-runner-http.
+        # #1648: the public route of the runner. It judges the route only: 503 is a
+        # route that works while the runner reports a dead prerequisite; the internal
+        # iac-runner-http pages that, so one fault pages once.
         PublicRouteFacet(
             name="iac-runner-public-route",
             subdomain="iac",
             service_id="bootstrap/iac-runner",
             path="/health",
-            expected="200",
+            expected="200,503",
             env_shared=True,
         ),
     )
