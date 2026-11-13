@@ -35,22 +35,103 @@
 > 这是「什么触发什么」的**唯一权威**。环境**定义**(每个环境是什么、域名、隔离)在
 > [core.environments.md](./core.environments.md);此处只讲**触发与交付**。
 
-### 2.0 三过程,三闸门(解耦)
+### 2.0 Delivery model: five flows, five stages, three phases
 
-「开发 / 测试 / 发布」是三个**各自优化**的过程,用**不同触发器 + 不同闸门**解耦,互不拖累:
+One model covers all delivery work. [core.environments.md](./core.environments.md) defines the environments. This section defines the stages that use them. Release tags and the Staging and Prod rules stay in sections 3 and 6.
 
-| 过程 | 目标 | 触发 | 闸门(放行条件)| 碰 prod? |
-|------|------|------|----------------|----------|
-| **开发** | 快 | PR / push | **CI(lint+单测+E2E)绿即可 merge**;merge **绝不**触发真实 staging/prod 部署 | 否 |
-| **测试** | 提前检测 | PR CI 内 | **reconcile `--dry-run` plan**:此改动一旦发布会重部署哪些 `iac_pinned` 服务 + plan 能否 build(fan-out/契约/import 在 PR 就 resolve) | 否 |
-| **发布** | prod 稳 | release tag | **分级 + fail-closed**:tag→自动 staging(soak);prod→**显式 promote**;来源守卫(on-main,§6)+ `--staging-validated` + `--code-reviewed` | 是,**显式** |
+**Five flows**
 
-三条解耦铁律:**「merge」≠「部署」**(开发快)· **部署前校验在 PR 就跑**(测试提前)· **「打 tag」≠「动 prod」**(发布稳)。
-因为 `deploy_v2` 是 app + platform 的统一前门,所有部署侧守卫都在此收口。
+| Flow | What it does | Driven by |
+|---|---|---|
+| Find the cause | Turn an alert or an issue into a cause and a fix. | an event |
+| Code to PR | Write the change and prove it before the merge. | a push |
+| Tiered deploy | Take a release through Staging, then Prod, with health checks. | a tag; the owner's approval for Prod |
+| Periodic report | Show pass rate, time and the top failures. | the clock |
+| Alert and watch | Detect a red state, then page or report. | a red state |
 
-**核心铁律**:
+Code to PR and Tiered deploy move a change. Periodic report and Alert and watch watch the environments. Find the cause closes the loop: it ends in a new Code to PR change or in a closed issue.
+
+**Five stages: one question each**
+
+The question of a stage is the same for every change kind.
+
+| Stage | Question | Record subject | Trigger | Budget |
+|---|---|---|---|---|
+| Local | Does the change pass the cheap checks? | none | each save | 30 s |
+| CI | Is this head correct alone? | PR head SHA | each PR push | 3-4 min |
+| Preview | Does this head work from zero, alone? | PR head SHA | each PR push; holds the merge | 240 s for infra2 |
+| Staging | Does the release work with all other changes and with real data? | release tag | each release-tag push | 15 min |
+| Prod | Does the release serve users? | the same tag | each promotion; the owner approves the tag | 15 min after the approval |
+
+The main-branch regression is the post of the merge. The Staging pre reads it.
+
+**Three phases and the record**
+
+| Term | Meaning |
+|---|---|
+| Pre | Checks before the change touches the environment. A failure stops the stage. Pre changes no state. |
+| Operation | The change itself and its quick proof (`smoke`). A pass lets the chain go on. |
+| Post | Deeper health, soak and regression checks. Post is its own loop and does not hold the operation. |
+| Record | One JSON file per phase. A missing, expired or unreadable record means "not pass". |
+
+**Four change kinds**
+
+| | App | SDK | Infra | Harness |
+|---|---|---|---|---|
+| Source | finance_report, truealpha | infra2-sdk | `platform/`, `bootstrap/`, `common/deploy/` | dev_env rules and skills; infra2 gates, workflows and release code; `harness/repos.yaml` |
+| Artifact | app image and app tag | wheel version | infra2 release tag | rendered rule commit; gate or release-code commit |
+| Blast radius | one app | every service that pins the version | every app on the host | every pipeline and every agent |
+| Own environment | yes | no: the Canary, then the apps | yes | no: a replay, then the next real run |
+| Door into the train | a bot PR moves the app pin in `harness/repos.yaml` | a bot PR moves the Canary pin; app pin PRs open after the Canary passes | merge, then a release tag | release code: its own release tag; rules and skills: one render PR per repository |
+| Proved by | its own hook checks | the Canary Todo `staging_gate` | the changed units from zero, then every app's `staging_gate` | a replay on recorded inputs, then the record of the next run |
+
+**Rules**
+
+1. A stage asks one question for every kind. A kind changes only the artifact, the door and the prover.
+2. Each phase writes one record with at least one check. An empty check list is invalid.
+3. Pre of stage N+1 reads the post record of stage N for the same subject. A missing record, an old record, a record of another subject, or a record from a pull-request run refuses the stage.
+4. A stage that passes pre and operation lets the chain go on. Its post runs on its own and can run again with no deploy. Preview is the one exception: it is torn down at once, so its post runs before the teardown and holds the merge.
+5. Proof isolation grows with the blast radius: App < Infra < SDK < Harness. A harness or release-code change rides its own release tag. An SDK version goes to the Canary first. An infra change deploys from zero in a Preview slot. App and infra changes may share a release tag (at most 4 PRs).
+6. A kind with no environment of its own uses its consumers in a fixed order. SDK: Canary, then the apps. Harness: replay, then its own tag, then every later run. No step skips the order.
+7. One train reaches Staging and Prod: the infra2 release tag. Each kind enters it through one door. A bot opens each pin PR and each render PR. The bot closes a PR that a newer PR replaces. A green PR merges through the merge gate.
+8. Budgets come from the Workspace tier, not from the SDK `stages.yaml`.
+9. Alert is event-driven. Report is time-driven ([ops.observability.md](./ops.observability.md) section 2, `docs/ssot/watchdog-signals.yaml`).
+10. Find the cause, Periodic report and Alert and watch read records and telemetry. They never deploy.
+
+**Matrix 1: deliver a change (stage by kind)**
+
+| Stage | App | SDK | Infra | Harness |
+|---|---|---|---|---|
+| Local | lint, unit, podman integration | unit, import purity, size | lint, unit, compose render | rule-text checklist, `ws-agents-lint`, gate unit tests |
+| CI | unit checks within the budget | PR CI | `infra-ci.yml`; the CVE scan blocks a fixable CRITICAL or HIGH finding | `infra-ci.yml` plus the self-governance checks |
+| Preview | own stack from zero; `preview_gate` reports each check | the Canary pin PR runs the infra Preview with the new version | the changed units from zero in a slot per PR | the changed gate replays merged PRs |
+| Staging | door: the sync cuts the app tag from the Preview record and opens the pin PR; post: `staging_gate` per check, nightly `scheduled_audit` | proof: the Canary `staging_gate` reads the Canary verdict | door: the tag push only; pre: the main post record; post: every app's `staging_gate` and the Canary | release code: its own tag; rules and skills: one render PR per repository, merged in one cycle |
+| Prod | the same tag; `prod_gate` per check | only inside consumer tags; app pin PRs open after the version is verified | pre runs before the approval and reads the staging post record; the marker follows post | a production-path edit waits for the owner's approval of its head SHA; other edits run at the next promotion |
+
+**Matrix 2: watch and fix (flow by kind)**
+
+| Flow | App | SDK | Infra | Harness |
+|---|---|---|---|---|
+| Alert and watch | standard rules from the service identity: Prod pages, Staging reports; standard logs, metrics and traces from one SDK call | no runtime of its own: a fault shows in a consumer, whose lock file names the SDK version | the same standard rules for platform services; the Canary probe every 60 s | a train or gate failure is a card with the first cause |
+| Find the cause | one diagnosis command per app and environment: errors, slow traces, 5xx, deploys | the command lists each deploy with its SDK version, so an SDK cause shows as the pin move | the same command for a platform unit | the failed record names the stage, phase, check id and run |
+| Periodic report | digest section "Delivery": pass rate and p90 per stage, rows of kind `app` | rows of kind `sdk` | rows of kind `infra` | rows of kind `harness` |
+
+Each record names its `units` with a kind prefix (`app:`, `sdk:`, `infra:`, `harness:`), so each report splits by kind.
+
+**Frequency tiers.** The environments in [core.environments.md](./core.environments.md) run at these rates (window 2026-11-05 to 2026-11-12 UTC).
+
+| Tier | Rate | Stage |
+|---|---|---|
+| per edit | each save | Local |
+| per PR push | 209 runs of `infra-ci.yml` | CI and Preview |
+| per merge | 97 PRs | CI |
+| per release tag | 36 tags; 35 staging runs | Staging |
+| per promotion | 6 `production/v*` markers | Prod |
+| per pin move | sync every 2 h | door |
+| minute, hour, day, month | probe 60 s; Worker 30 min; leak check 1 h; 7 daily jobs; weekly and monthly digest | Staging, Prod, Preview, host |
+
+**Core rules**
 - **preview 瞬态闭环验证**(`preview/branch` 与 `preview/pr`)——App 合流 `main` 后,在切出 `vX.Y.Z` tag 进入 Staging 火车前,由 `sync_app_releases(..., cut_missing_app_tag=True)` (内部调用 `verify_and_cut_app_preview_tag`) 瞬态拉起 `preview/branch` (`main`),执行 `preview_gate` 钩子(验证 0 帧冷启动、空库 Alembic 迁移、Vault 模板渲染与最小真实 E2E),通过后才推送 App `vX.Y.Z` tag,并在 `finally` 中**立即执行 `--down` 销毁**(连同临时数据库卷),绝不留存常驻 preview 容器(#1416, #1554)。
-- **三段式 `Pre -> Deploy (smoke) -> Post` 钩子计划 SSOT (`infra2_sdk.manifests.STAGE_HOOK_PLANS`)**——全仓删除手写 `DEFAULT_STAGE_HOOK_SLOTS`,统一由 SDK `stage_hook_plan(stage)` 驱动五槽位 schema v2 (`smoke`, `preview_gate`, `staging_gate`, `prod_gate`, `scheduled_audit`):`Pre` 在部署任何容器前跑完契约/来源/火车版本预检 (`assert_app_version_ref_matches_train`, #1544) 与累计 staging_gate 浸泡核验 (`--require-staging-gate`, #1563);`Deploy` 容器就绪后先跑零安装快速表面验活 `smoke` (`<= 120s`),再并发推进各服务 `Post` 门禁 (`preview -> preview_gate`、`staging -> smoke + staging_gate`、`prod -> smoke + prod_gate`、`schedule -> scheduled_audit`, #1608)。
 - **staging / prod 只部署 release tag**(不可变镜像,不接受 branch/sha);staging 与 prod **钉同一个 tag**
   (**promote-not-rebuild**,不是部署 main sha),App 的固定环境版本由 `harness/repos.yaml` (`release_tag`) 驱动。
 - 统一入口 `tools/deploy_v2.py`;**prod 对真实数据 deny-by-default**,缺 `--staging-validated --code-reviewed` 直接 fail-closed。
@@ -396,13 +477,6 @@ promote tier(`common.deploy.promote.deploy`,app + staging|prod,跑在 GitHub Act
 即为缺失),并在其后通过公网 `/api/health` 校验 HTTP 200、`status == "ok"` 与版本身份(`version`/`git_sha`
 匹配目标 `image_tag`,#569);`wait=True` 时默认开启,失败走同一条 failure snapshot 路径。
 
-### 5.4 Env × Stage Result Contract (Retired)
-
-原 SDK delivery 模块历史拥有的 Env×Stage 证据 schema 已随 deploy_v2 canary（#1477）及 SDK 3.21.0 废弃。
-所有相关的旧 stage 探针与测试均已安全移除，不再保留无消费者的冗余代码。
-
----
-
 ## 6. 设计约束 (Dos & Don'ts)
 
 ### ✅ 推荐
@@ -434,8 +508,6 @@ promote tier(`common.deploy.promote.deploy`,app + staging|prod,跑在 GitHub Act
   - The owner sets the GitHub environment: required reviewer, no admin bypass, deployment branches `main`
     and `v*` tags. `prevent_self_review` stays off, so the owner can dispatch and approve a run.
     The agent token has no admin right on the repository and cannot approve a deployment.
-  - Open: the iac-runner webhook accepts a request signed with `IAC_WEBHOOK_SECRET` for any environment.
-    A production request needs a proof from a run in the `production` environment (follow-up of #1125).
 - 禁止跳过 staging 直接 prod。
 - 禁止手改 production 服务配置(必须经 GitOps)。
 - 禁止手推 `gh-pages`(统一 Actions 发布)。

@@ -483,14 +483,7 @@ compose、env、secret 路径、**外部镜像 tag**、Traefik 路由 label、�
 
 ## 5. 迭代速度对比
 
-| 环境 | 部署频率 | 变更范围 | 自动化程度 | 回滚成本 |
-|------|---------|---------|-----------|---------|
-| Local Dev | 每次保存 | 单个文件 | 热重载 | 0 (无影响) |
-| Local Docker | 每小时 | 多个服务 | docker compose up | 低 (重启容器) |
-| Preview | 按需 / PR | 完整功能栈 + 独立临时 DB | `deploy_v2 --type preview/*` | 0 (`--down` 销毁栈与卷) |
-| Staging | 每个 Release Tag | 稳定候选版本 | `vX.Y.Z` Tag 自动部署 | 中 (发布前向修复 tag) |
-| Production | 按需晋升 | 已验证的 Release Tag | 显式 Promote + Owner 审批 | 高 (影响真实用户) |
-| DR | 被动触发 | 全量恢复 | 手动 | 极高 (业务中断) |
+各环境的触发频率见 [`ops.pipeline.md` §2.0](./ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases)。
 
 ---
 

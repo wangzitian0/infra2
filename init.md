@@ -22,12 +22,9 @@
 3. **Remote-First Secrets and Manifest v2 Supply Chain (`docs/ssot/bootstrap.vars_and_secrets.md`):**
    - 1Password is the sole authority for static bootstrap secrets. Vault is the runtime secret store for L2/L4 services. Dokploy holds non-secret environment variables.
    - Do not store plaintext `.env` files in git. Application manifests (`EnvironmentManifest`) drive Vault policy and template generation through `infra2_sdk.secrets`.
-4. **Four-Axis Deployment Coordinate and Three-Stage Lifecycle (`docs/ssot/core.environments.md`, `docs/ssot/ops.pipeline.md`):**
+4. **Four-Axis Deployment Coordinate (`docs/ssot/core.environments.md`, `docs/ssot/ops.pipeline.md`):**
    - Every deployment binds four explicit coordinates: `--service`, `--type` (`staging`, `prod`, `canary`, `preview`), `--iac-ref`, and `--domain` (`tools/deploy_v2.py`).
-   - Changes progress through three isolated stages:
-     - **Stage 1:** Code merges to `main` with zero container impact.
-     - **Stage 2:** Release tag `vX.Y.Z` auto-deploys to `staging` and runs Canary verification.
-     - **Stage 3:** Owner-authorized production deploy or promote runs, followed by physical Touch Reality verification.
+   - The stages, phases and change kinds are defined once in [`docs/ssot/ops.pipeline.md` section 2.0](docs/ssot/ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases).
 5. **Workspace Harness Without Ownership Merger (`docs/ssot/core.harness.md`, `harness/repos.yaml`):**
    - `repos/finance_report` and `repos/truealpha` are autonomous application checkouts (`contract: snapshot`).
    - `oh-my-code-agent/` is independent workspace tooling (`contract: snapshot`).

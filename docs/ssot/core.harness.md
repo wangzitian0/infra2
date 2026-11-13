@@ -106,14 +106,11 @@ Workspace 块不进任何机器全局文件。物证、投递表与归档记录�
 这一边界延续 [`core.md` §3.1](./core.md#31-repository-dependency-boundary) 与已归档
 [`Infra-018`](../project/archive/Infra-018.repository_boundary_decoupling.md) 的源码解耦结论。
 
-### 5.2 交付生命周期与发布边界（三阶段契约）
+### 5.2 交付生命周期与发布边界
 
-Harness 与 infra2 的变更严格执行三阶段物理隔离生命周期（`AGENTS.md` §5 与 [`ops.pipeline.md`](./ops.pipeline.md)）：
+Harness 与 infra2 的交付阶段、阶段记录与变更种类由 [`ops.pipeline.md` §2.0](./ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases) 唯一定义;合并不等于部署,生产部署需 Owner 批准。
 
-- **Stage 1 —— Code Merge（代码合并到 main）**：PR 通过 `tools.pr_merge_gate` 门禁（Exit Code 0）后，Agent 拥有 Standing Merge Authority 自主合并权限。物理特征为零容器重启、零线上服务影响；**合入 main 绝不等于交付完成（Merge ≠ Deploy）**。
-- **Stage 2 —— Staging Deploy & Soak（发布 Tag 触发 Staging 部署与浸润）**：由语义化版本发布 Tag（`vX.Y.Z`）推送触发。流水线针对 Staging 环境进行部署 Reconcile，强制执行至少 10 分钟浸润（Soak >= 10m）并通过 Canary Todo 四支柱物理探针校验（`tools.canary_verify --env staging`）。Tag 推送绝不触碰 Prod。
-- **Stage 3 —— Production Deploy & Promote（Owner 授权生产发布与物理验收）**：生产环境部署与变更属于全系统唯一的人工审批硬性卡点（Sole human approval gate）。发布前必须由 Agent 提交 Prod Gatekeeper 三阶段状态报告并获得 Owner 在当前会话的显式授权（`deploy`），随后由 Agent 自主闭环推进 Promote 并执行 Touch Reality 物理验收（真实容器 digest、Ledger JSON 轮转、Cloudflare Watchdog 状态及 `tools.canary_verify --env production`）。
-- **交付状态不变量（Delivery State Invariant）**：触碰 `platform/`、`bootstrap/`、Compose 配置或线上运行时的任务，在完成 Stage 2 浸润与 Stage 3 生产验收（或获得明确 `hold` 处置）前，必须保持开启并标记 `prod-pending`，严禁在 Stage 1 代码合并后直接宣称完成或静默关闭 Issue。
+- **交付状态不变量（Delivery State Invariant）**：触碰 `platform/`、`bootstrap/`、Compose 配置或线上运行时的任务，在完成 Staging 浸润与 Prod 生产验收（或获得明确 `hold` 处置）前，必须保持开启并标记 `prod-pending`，严禁在代码合并后直接宣称完成或静默关闭 Issue。
 
 ## 6. Workspace Operation
 
