@@ -203,6 +203,22 @@ signals:
     consecutive_failures: 2
     renotify_window_sec: 0
 
+  # #1648: the public route of the runner health, probed by the 60 s runner next to the
+  # internal iac-runner-http; together they are the one pager of iac-runner-health.
+  - signal_id: production.iac-runner.public-route
+    environment: production
+    component: iac-runner
+    signal: iac-runner-public-route
+    primary_owner: self
+    layer: vps
+    failure_class: service-health
+    severity: critical
+    cadence: 60s
+    tier: minute
+    type: alert
+    consecutive_failures: 2
+    renotify_window_sec: 0
+
   - signal_id: production.s3.public-route
     environment: production
     component: s3

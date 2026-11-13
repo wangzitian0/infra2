@@ -1717,8 +1717,9 @@ def _handle_paged_failures(
     )
 
     # A dedup note changes the text; the plain card then carries the page.
+    CURRENT_PAGE.clear()
     if page_card is not None:
-        PAGE_CARDS[message] = page_card
+        CURRENT_PAGE.update(text=message, card=page_card)
 
     if dry_run:
         print(message)
@@ -1989,16 +1990,32 @@ def _ssh_capture(config: SshConfig | None, timeout: float = 20.0):
     return unit_runtime
 
 
-#: page text -> the structured card of that page (a page of several items, rendered by
-#: ``render_pager_card``). ``deliver_out_of_band_alert`` sends it for exactly that text.
-PAGE_CARDS: dict[str, dict] = {}
+#: The page being delivered, as its text and its structured card (a page of several
+#: items, rendered by ``render_pager_card``). ``_handle_paged_failures`` sets it before
+#: the dedup step, which hands the page to ``deliver_out_of_band_alert`` as text.
+CURRENT_PAGE: dict = {}
+
+
+def _page_card(message: str) -> dict:
+    """The card for ``message``: the structured card of the current page, with any
+    text that the dedup step added after the page as one more line (never a cut of
+    the items); else the one plain message as a card (``text_to_card``)."""
+    page_text = CURRENT_PAGE.get("text")
+    if page_text and message.startswith(page_text):
+        card = CURRENT_PAGE["card"]
+        note = message[len(page_text) :].strip()
+        if not note:
+            return card
+        element = {"tag": "div", "text": {"tag": "plain_text", "content": note}}
+        return {**card, "elements": [*card["elements"], element]}
+    return text_to_card(message)
 
 
 def deliver_out_of_band_alert(env: Mapping[str, str], message: str) -> None:
     """Send a direct Feishu alert card without using the infra2 bridge.
 
-    A page that has a card in ``PAGE_CARDS`` sends it; any other message is one plain
-    message and becomes a card (``text_to_card``)."""
+    The current page sends its structured card; any other message is one plain message
+    and becomes a card (``text_to_card``)."""
     config = out_of_band_app_config(env)
     mode = config["mode"]
     if mode not in {"feishu_app", "feishu_webhook"}:
@@ -2008,9 +2025,7 @@ def deliver_out_of_band_alert(env: Mapping[str, str], message: str) -> None:
             "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL or FEISHU_WEBHOOK_URL "
             "is required for feishu_webhook mode"
         )
-    deliver_out_of_band_card(
-        env, PAGE_CARDS.get(message) or text_to_card(message), fallback_text=message
-    )
+    deliver_out_of_band_card(env, _page_card(message), fallback_text=message)
 
 
 def _failure_domain_for_http_target(name: str) -> str:

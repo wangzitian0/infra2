@@ -305,3 +305,71 @@ def test_the_runner_health_step_goes_red_and_never_pages(monkeypatch, tmp_path) 
     }
     assert world.run(script) == 0
     assert world.cards == [] and world.reports == []
+
+
+def test_a_green_staging_run_does_not_resolve_a_production_failure(
+    monkeypatch, tmp_path
+) -> None:
+    """#1648 review: staging and production keep one dedup state each."""
+    w = World(monkeypatch, tmp_path)
+    name = "reconcile-iac-inputs.yml"
+    deploy = {"RECONCILE_PHASE": "reconcile-deploy"}
+
+    w.step(
+        name,
+        "reconcile",
+        "Alert on failure",
+        ok=False,
+        event="workflow_dispatch",
+        INPUT_PROMOTE_PROD="true",
+        GITHUB_REF="refs/heads/main",
+        **deploy,
+    )
+    assert len(w.cards) == 1
+    # a green staging tag push
+    w.step(
+        name,
+        "reconcile",
+        "Resolve the reconcile failure alert",
+        ok=True,
+        event="push",
+        INPUT_PROMOTE_PROD="false",
+        GITHUB_REF="refs/tags/v9.9.9",
+        **deploy,
+    )
+    assert len(w.cards) == 1
+    assert w.api.open_titles() == ["ops-checks paged: reconcile-iac-inputs-production"]
+
+
+def test_a_staging_failure_does_not_hide_a_production_failure(
+    monkeypatch, tmp_path
+) -> None:
+    w = World(monkeypatch, tmp_path)
+    name = "reconcile-iac-inputs.yml"
+    deploy = {"RECONCILE_PHASE": "reconcile-deploy"}
+
+    w.step(
+        name,
+        "reconcile",
+        "Alert on failure",
+        ok=False,
+        event="push",
+        INPUT_PROMOTE_PROD="false",
+        GITHUB_REF="refs/tags/v9.9.9",
+        **deploy,
+    )
+    w.step(
+        name,
+        "reconcile",
+        "Alert on failure",
+        ok=False,
+        event="workflow_dispatch",
+        INPUT_PROMOTE_PROD="true",
+        GITHUB_REF="refs/heads/main",
+        **deploy,
+    )
+    assert len(w.cards) == 2  # production paged, not reported as the staging failure
+    assert sorted(w.api.open_titles()) == [
+        "ops-checks paged: reconcile-iac-inputs-production",
+        "ops-checks paged: reconcile-iac-inputs-staging",
+    ]

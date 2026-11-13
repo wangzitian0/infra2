@@ -3138,3 +3138,46 @@ def test_card_colour_follows_the_level_like_the_worker() -> None:
     for emoji, colour in EMOJI_TEMPLATE.items():
         assert text_to_card(f"{emoji} title\nbody")["header"]["template"] == colour
     assert text_to_card("no emoji")["header"]["template"] == "red"
+
+
+def test_a_dedup_note_on_a_page_of_three_items_keeps_all_three_on_the_card(
+    monkeypatch,
+) -> None:
+    """#1648 review: the card is not looked up by the exact text; a note that dedup adds
+    to the text is one more line on the card and never drops an item."""
+    import common.alerting as alerting
+
+    cards: list[dict] = []
+    monkeypatch.setattr(
+        alerting, "deliver_feishu_card", lambda url, card, **kw: cards.append(card)
+    )
+    watchdog = _load_watchdog()
+    paged = [
+        watchdog.CheckResult(
+            name=f"check-{n}",
+            ok=False,
+            detail=f"failure detail {n}",
+            failure_domain="backup",
+            severity="P1",
+        )
+        for n in range(3)
+    ]
+    env = {
+        "FEISHU_WEBHOOK_URL": "https://open.feishu.cn/open-apis/bot/v2/hook/tok",
+        "GITHUB_RUN_ID": "1",
+    }
+    watchdog._handle_paged_failures(env, paged, [], dry_run=False)
+    text = watchdog.format_failure_message(
+        paged, run_url=watchdog._github_run_url(env)
+    )
+    note = "注:仍未恢复(第 2 天),报告群不可用(x),回落到告警群。"
+
+    watchdog.deliver_out_of_band_alert(env, f"{text}\n{note}")
+
+    blob = json.dumps(cards[-1], ensure_ascii=False)
+    for n in range(3):
+        assert f"check-{n}" in blob
+    assert note in blob
+    # an unrelated plain message is not given the page's card
+    watchdog.deliver_out_of_band_alert(env, "✅ [已恢复] x · 全部已恢复")
+    assert "check-0" not in json.dumps(cards[-1], ensure_ascii=False)

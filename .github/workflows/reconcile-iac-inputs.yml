@@ -471,10 +471,12 @@ jobs:
               print(skip_notice)
               raise SystemExit(0)
           assert alert_text is not None
+          # one dedup state per environment: a staging recovery never resolves production
+          job = "reconcile-iac-inputs-" + ("production" if os.environ.get("INPUT_PROMOTE_PROD") == "true" else "staging")
           phase = os.environ.get("RECONCILE_PHASE") or "reconcile"
           outcome = dedup_page(
               os.environ,
-              job="reconcile-iac-inputs",
+              job=job,
               label="IaC 输入对账",
               findings=[(phase, alert_text.splitlines()[0])],
               detail=alert_text,
@@ -492,6 +494,7 @@ jobs:
         if: success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) && env.RECONCILE_PHASE == 'reconcile-deploy'
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          INPUT_PROMOTE_PROD: ${{ inputs.promote_prod || false }}
         run: |
           python - <<'PY'
           import os
@@ -499,9 +502,10 @@ jobs:
           from common.observability.page_dedup import resolve_page_state
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
 
+          job = "reconcile-iac-inputs-" + ("production" if os.environ.get("INPUT_PROMOTE_PROD") == "true" else "staging")
           outcome = resolve_page_state(
               os.environ,
-              job="reconcile-iac-inputs",
+              job=job,
               label="IaC 输入对账",
               deliver_page=deliver_out_of_band_alert,
               mode=FULL if os.environ.get("GITHUB_EVENT_NAME") == "push" else None,

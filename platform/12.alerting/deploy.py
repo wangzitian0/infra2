@@ -79,6 +79,16 @@ class AlertingDeployer(Deployer):
             expected="200,302",
             env_shared=True,
         ),
+        # #1648: the public route of the runner health; the one pager of the
+        # iac-runner-health condition covers it with the internal iac-runner-http.
+        PublicRouteFacet(
+            name="iac-runner-public-route",
+            subdomain="iac",
+            service_id="bootstrap/iac-runner",
+            path="/health",
+            expected="200",
+            env_shared=True,
+        ),
     )
     probes = (
         ProbeFacet(

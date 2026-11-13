@@ -567,7 +567,7 @@ def test_vps_public_route_signals_registered_with_minute_tier_and_debounce() -> 
         and s.get("layer") == "vps"
         and str(s.get("signal", "")).endswith("-public-route")
     ]
-    assert len(vps_route_signals) == 14
+    assert len(vps_route_signals) == 15  # #1648: iac-runner-public-route
 
     audit = _load_audit()
     for entry in vps_route_signals:
@@ -740,3 +740,21 @@ def test_the_iac_runner_condition_has_one_pager_and_the_daily_step_reports() -> 
         "condition iac-runner-health has 2 paging owners: "
         "['internal:production.iac-runner-http', 'self:global.infra2.iac-runner-health']"
     ]
+
+
+def test_the_probe_runner_covers_the_internal_and_the_public_runner_health() -> None:
+    """#1648: the one pager of iac-runner-health probes both routes every 60 s."""
+    from common.observability.probe_specs import (
+        render_probe_spec_text,
+        render_public_route_spec_text,
+    )
+
+    internal = render_probe_spec_text()
+    public = render_public_route_spec_text("production", "zitian.party")
+
+    assert "iac-runner-http|http|http://iac-runner:8080/health" in internal.replace(
+        " ", ""
+    )
+    assert "https://iac.zitian.party/health" in public
+    audit = _load_audit()
+    assert ("production", "iac-runner-public-route") in audit._vps_public_routes()
