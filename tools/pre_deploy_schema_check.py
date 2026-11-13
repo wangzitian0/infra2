@@ -618,22 +618,26 @@ def fetch_db_tables(db_url: str) -> frozenset[str]:
 def migrations_pending(db_url: str, source: EnumSource, app_path: str | None) -> bool:
     """True when the image has a migration that the database has not run (#1658).
 
-    Uses alembic's own script directory, which the image carries, so an unknown revision
-    fails the way ``alembic upgrade`` fails: a database revision that the image does not
-    know (a rollback to an older image) raises, and a database with no ``alembic_version``
-    row or table is not "pending" but unstamped, so this returns False or raises.
+    Uses alembic's own script directory, which the image carries. Every failure raises, and
+    the caller treats a raise as "nothing covered": no ``script_location`` in alembic.ini, a
+    missing alembic.ini, several version rows, a row that does not resolve to a revision
+    (``base``, an unknown id, or a symbol the image does not know), several heads in the
+    image. A database with no version row has nothing pending.
     """
     from alembic.config import Config
     from alembic.script import ScriptDirectory
 
     base = Path(app_path).expanduser() if app_path else Path.cwd()
     config = Config(str(base / ALEMBIC_INI))
-    location = Path(config.get_main_option("script_location") or "migrations")
+    script_location = config.get_main_option("script_location")
+    if script_location is None:
+        raise ValueError(f"{ALEMBIC_INI} has no script_location")
+    location = Path(script_location)
     config.set_main_option(
         "script_location", str(location if location.is_absolute() else base / location)
     )
     script = ScriptDirectory.from_config(config)
-    revisions = _with_libpq_cursor(
+    rows = _with_libpq_cursor(
         db_url,
         lambda cursor: query_applied_migrations(
             cursor,
@@ -641,9 +645,16 @@ def migrations_pending(db_url: str, source: EnumSource, app_path: str | None) ->
             migration_column=source.migration_column,
         ),
     )
-    for revision in revisions:
-        script.get_revision(revision)
-    return bool(revisions) and set(revisions) != set(script.get_heads())
+    if len(rows) > 1:
+        raise ValueError(
+            f"{source.migration_table} holds {len(rows)} rows; one head allows one row"
+        )
+    if not rows:
+        return False
+    applied = script.get_revision(rows[0])
+    if applied is None:
+        raise ValueError(f"database revision {rows[0]!r} resolves to no revision")
+    return applied.revision != script.get_current_head()
 
 
 def main(argv: list[str] | None = None) -> int:
