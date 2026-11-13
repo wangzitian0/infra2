@@ -10,9 +10,10 @@
 
 version: 1
 
-# The six SSOT families. A key belongs to the family named by its first dot segment
-# (`ops.pipeline` -> `ops`). Each family needs at least one entry. The guard test
-# `test_ssot_families_are_declared_and_cover_every_entry` enforces both rules.
+# SSOT families. A key belongs to the family named by its first dot segment
+# (`ops.pipeline` -> `ops`). The guard test `test_ssot_families_are_declared_and_cover_every_entry`
+# enforces: 6 to 8 families, a non-empty boundary for each, every key in a declared family,
+# and no declared family without an entry.
 families:
   core:
     boundary: Architecture, environments, engineering process, harness, and the App runtime contract.

@@ -42,7 +42,7 @@ As-is:
 
 To-be:
 
-- [x] Define the infra2 SSOT HLS model with 6 families. They are declared in
+- [x] Define the infra2 SSOT HLS model with 6 families (the guard allows 6 to 8). They are declared in
   `docs/ssot/MANIFEST.yaml` (`families`) and guarded by
   `test_ssot_families_are_declared_and_cover_every_entry`.
 - [ ] Define child binding rules for clauses that cannot stand alone, from

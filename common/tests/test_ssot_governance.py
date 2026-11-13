@@ -173,11 +173,15 @@ def test_code_owned_ssot_entries_have_test_or_code_proofs() -> None:
 def test_ssot_families_are_declared_and_cover_every_entry() -> None:
     """Each manifest key maps to one declared family. Six to eight families, none empty."""
     manifest = _load_manifest()
-    families = manifest["families"]
+    families = manifest.get("families")
+    assert isinstance(families, dict), "MANIFEST.yaml must declare a families mapping"
 
     assert 6 <= len(families) <= 8, f"expected 6 to 8 families, got {len(families)}"
     for name, family in families.items():
-        assert family["boundary"].strip(), f"family {name} has no boundary"
+        boundary = family.get("boundary") if isinstance(family, dict) else None
+        assert isinstance(boundary, str) and boundary.strip(), (
+            f"family {name} has no boundary"
+        )
 
     used: set[str] = set()
     for key in manifest["entries"]:
