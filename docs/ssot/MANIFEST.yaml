@@ -9,6 +9,25 @@
 # longer machine/contract description. Category/grouping is derived from the key prefix.
 
 version: 1
+
+# SSOT families. A key belongs to the family named by its first dot segment
+# (`ops.pipeline` -> `ops`). The guard test `test_ssot_families_are_declared_and_cover_every_entry`
+# enforces: 6 to 8 families, a non-empty boundary for each, every key in a declared family,
+# and no declared family without an entry.
+families:
+  core:
+    boundary: Architecture, environments, engineering process, harness, and the App runtime contract.
+  bootstrap:
+    boundary: The host layer under the platform, with DNS, certificates, variables, secrets, the IaC runner, and the no-dependency bootstrap.
+  platform:
+    boundary: Shared services that Apps and the Canary use, with domain, SSO, automation, OpenPanel, and Canary Todo.
+  db:
+    boundary: Data stores and their access, with overview, Vault integration, platform Postgres, Redis, and ClickHouse.
+  ops:
+    boundary: How the system is delivered and operated, with pipeline, gates, deploy dependencies, lifecycle, observability, recovery, storage, and tests.
+  watchdog:
+    boundary: The signal catalog that the watchdog reads.
+
 entries:
   core:
     owner: docs/ssot/core.md

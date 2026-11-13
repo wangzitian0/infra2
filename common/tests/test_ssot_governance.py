@@ -168,3 +168,26 @@ def test_code_owned_ssot_entries_have_test_or_code_proofs() -> None:
         assert entry.get("proofs"), (
             f"{key} must declare at least one proof anchor in MANIFEST.yaml"
         )
+
+
+def test_ssot_families_are_declared_and_cover_every_entry() -> None:
+    """Each manifest key maps to one declared family. Six to eight families, none empty."""
+    manifest = _load_manifest()
+    families = manifest.get("families")
+    assert isinstance(families, dict), "MANIFEST.yaml must declare a families mapping"
+
+    assert 6 <= len(families) <= 8, f"expected 6 to 8 families, got {len(families)}"
+    for name, family in families.items():
+        boundary = family.get("boundary") if isinstance(family, dict) else None
+        assert isinstance(boundary, str) and boundary.strip(), (
+            f"family {name} has no boundary"
+        )
+
+    used: set[str] = set()
+    for key in manifest["entries"]:
+        family = key.split(".", 1)[0]
+        assert family in families, f"entry {key} has undeclared family {family}"
+        used.add(family)
+
+    empty = set(families) - used
+    assert not empty, f"declared families with no entry: {sorted(empty)}"
