@@ -566,15 +566,8 @@ def test_build_digest_card_and_estate_app_health(monkeypatch) -> None:
         "deliver_out_of_band_card",
         lambda env, c, **kw: sent.append(("card", c)),
     )
-    monkeypatch.setattr(
-        digest,
-        "deliver_out_of_band_text",
-        lambda env, m, **kw: sent.append(("text", m)),
-    )
     digest.deliver_digest({}, msg, card=card)
     assert sent[-1][0] == "card"
-    digest.deliver_digest({"WATCHDOG_DIGEST_FORMAT": "text"}, msg, card=card)
-    assert sent[-1][0] == "text"
 
     monkeypatch.setattr(digest, "fetch_recent_runs", lambda *a, **kw: [])
     monkeypatch.setattr(digest, "fetch_recent_run_logs", lambda *a, **kw: {})

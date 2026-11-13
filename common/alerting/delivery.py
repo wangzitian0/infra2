@@ -13,10 +13,9 @@ from urllib.request import Request
 import common.alerting
 from common.alerting.card import (
     build_feishu_app_card_payload,
-    build_feishu_app_message_payload,
     build_feishu_card_payload,
-    build_feishu_text_payload,
     feishu_request_body,
+    text_to_card,
 )
 from common.alerting.types import (
     FEISHU_WEBHOOK_HOSTS,
@@ -27,7 +26,9 @@ from common.alerting.types import (
     FeishuDeliveryError,
     InvalidFeishuAppConfig,
     InvalidWebhookUrl,
+    MAX_MESSAGE_CHARS,
     _required,
+    _truncate_message,
 )
 
 INFRA2_REPORTS_ENV = (
@@ -127,15 +128,6 @@ def redacted_app_config(app_id: str, chat_id: str, api_base: str) -> dict[str, s
     }
 
 
-def deliver_feishu_text(
-    webhook_url: str, text: str, timeout: float = 10.0
-) -> dict[str, Any]:
-    """Send a text message to Feishu (custom bot) and return the decoded response."""
-    return _deliver_feishu_webhook(
-        webhook_url, build_feishu_text_payload(text), timeout=timeout
-    )
-
-
 def deliver_feishu_card(
     webhook_url: str, card: dict[str, Any], timeout: float = 10.0
 ) -> dict[str, Any]:
@@ -171,26 +163,6 @@ def _deliver_feishu_webhook(
         message = decoded.get("msg") or decoded.get("message") or "unknown error"
         raise FeishuDeliveryError(f"Feishu webhook rejected message: {message}")
     return decoded
-
-
-def deliver_feishu_app_text(
-    *,
-    app_id: str,
-    app_secret: str,
-    chat_id: str,
-    text: str,
-    api_base: str = "https://open.feishu.cn",
-    timeout: float = 10.0,
-) -> dict[str, Any]:
-    """Send a text message to a Feishu chat using app bot OpenAPI."""
-    safe_chat_id = _required("FEISHU_CHAT_ID", chat_id)
-    return _deliver_feishu_app_message(
-        app_id=app_id,
-        app_secret=app_secret,
-        message_payload=build_feishu_app_message_payload(safe_chat_id, text),
-        api_base=api_base,
-        timeout=timeout,
-    )
 
 
 def deliver_feishu_app_card(
@@ -338,7 +310,7 @@ def out_of_band_app_config(env: Mapping[str, str]) -> dict[str, str]:
 
 
 def deliver_infra2_report(text: str, env: Mapping[str, str] | None = None) -> bool:
-    """Post a daily-report message to the shared 'infra2 reports' Lark group via the infra2
+    """Post a daily-report card to the shared 'infra2 reports' Lark group via the infra2
     Feishu app bot. The single delivery entry every periodic REPORT reconciler uses (DNS drift,
     config drift, …) so the channel + credentials live in one place, not per-tool.
 
@@ -354,11 +326,11 @@ def deliver_infra2_report(text: str, env: Mapping[str, str] | None = None) -> bo
     app_id, app_secret, chat_id = (e.get(name, "") for name in INFRA2_REPORTS_ENV)
     if not (app_id and app_secret and chat_id):
         return False
-    common.alerting.deliver_feishu_app_text(
+    common.alerting.deliver_feishu_app_card(
         app_id=app_id,
         app_secret=app_secret,
         chat_id=chat_id,
-        text=as_report(text),
+        card=text_to_card(as_report(text), template="blue"),
         api_base=e.get("INFRA2_REPORTS_FEISHU_API_BASE", "https://open.feishu.cn"),
     )
     return True
@@ -408,36 +380,6 @@ def _post_json(
     return decoded
 
 
-def deliver_out_of_band_text(
-    env: Mapping[str, str], text: str, *, timeout: float = 10.0
-) -> dict[str, Any]:
-    """Deliver text through the out-of-band Feishu webhook/app path.
-
-    Shared by the weekly digest, the positive stability report, and the Google
-    Drive sync token-expiry alert so every out-of-band sender selects the
-    delivery mode identically. Prefers ``INFRA2_OUT_OF_BAND_*`` settings (used in
-    GitHub Actions) and falls back to the generic ``ALERT_DELIVERY_MODE`` /
-    ``FEISHU_*`` names.
-    """
-    config = out_of_band_app_config(env)
-    if config["mode"] == "feishu_app":
-        return common.alerting.deliver_feishu_app_text(
-            app_id=config["app_id"],
-            app_secret=config["app_secret"],
-            chat_id=config["chat_id"],
-            api_base=config["api_base"],
-            text=text,
-            timeout=timeout,
-        )
-    if not config["webhook_url"]:
-        raise InvalidFeishuAppConfig(
-            "Feishu webhook URL or app credentials are required for out-of-band delivery"
-        )
-    return common.alerting.deliver_feishu_text(
-        config["webhook_url"], text, timeout=timeout
-    )
-
-
 def deliver_out_of_band_card(
     env: Mapping[str, str],
     card: dict[str, Any],
@@ -448,8 +390,8 @@ def deliver_out_of_band_card(
     """Deliver an interactive card through the out-of-band Feishu webhook/app path.
 
     Uses the same ``INFRA2_OUT_OF_BAND_*`` / ``FEISHU_*`` environment resolution as
-    :func:`deliver_out_of_band_text`. When ``fallback_text`` is provided and card
-    delivery fails with :class:`FeishuDeliveryError`, falls back to plain-text delivery.
+    the rest of this module. When ``fallback_text`` is provided and card delivery
+    fails with :class:`FeishuDeliveryError`, the same message goes out as text.
     """
     config = out_of_band_app_config(env)
     try:
@@ -471,5 +413,36 @@ def deliver_out_of_band_card(
         )
     except FeishuDeliveryError:
         if fallback_text is not None:
-            return deliver_out_of_band_text(env, fallback_text, timeout=timeout)
+            return _deliver_text_fallback(env, fallback_text, timeout=timeout)
         raise
+
+
+def _deliver_text_fallback(
+    env: Mapping[str, str], text: str, *, timeout: float
+) -> dict[str, Any]:
+    """The one text send: the same message as text when its card cannot be delivered."""
+    config = out_of_band_app_config(env)
+    message = text.strip() or "infra2 alert"
+    if len(message) > MAX_MESSAGE_CHARS:
+        message = _truncate_message(message)
+    if config["mode"] == "feishu_app":
+        return _deliver_feishu_app_message(
+            app_id=config["app_id"],
+            app_secret=config["app_secret"],
+            message_payload={
+                "receive_id": _required("FEISHU_CHAT_ID", config["chat_id"]),
+                "msg_type": "text",
+                "content": json.dumps({"text": message}, ensure_ascii=False),
+            },
+            api_base=config["api_base"],
+            timeout=timeout,
+        )
+    if not config["webhook_url"]:
+        raise InvalidFeishuAppConfig(
+            "Feishu webhook URL or app credentials are required for out-of-band delivery"
+        )
+    return _deliver_feishu_webhook(
+        config["webhook_url"],
+        {"msg_type": "text", "content": {"text": message}},
+        timeout=timeout,
+    )

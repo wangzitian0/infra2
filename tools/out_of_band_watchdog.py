@@ -26,9 +26,8 @@ from common.alerting import (  # noqa: E402
     REPORT_TITLE_PREFIX,
     PagerItem,
     PagerMessage,
-    deliver_feishu_app_text,
-    deliver_feishu_text,
     deliver_infra2_report,
+    deliver_out_of_band_card,
     firing_title,
     format_time,
     highest_level,
@@ -36,6 +35,7 @@ from common.alerting import (  # noqa: E402
     pager_level,
     redact_credentials,
     render_pager_text,
+    text_to_card,
 )
 from common.deploy.queue import deployment_start_epoch  # noqa: E402
 from common.deploy.dokploy_client import get_dokploy  # noqa: E402
@@ -1973,29 +1973,20 @@ def _ssh_capture(config: SshConfig | None, timeout: float = 20.0):
 
 
 def deliver_out_of_band_alert(env: Mapping[str, str], message: str) -> None:
-    """Send a direct Feishu alert without using the infra2 bridge."""
+    """Send a direct Feishu alert card without using the infra2 bridge."""
     config = out_of_band_app_config(env)
     mode = config["mode"]
-    if mode == "feishu_app":
-        deliver_feishu_app_text(
-            app_id=config["app_id"],
-            app_secret=config["app_secret"],
-            chat_id=config["chat_id"],
-            api_base=config["api_base"],
-            text=message,
-        )
-        return
-
-    if mode != "feishu_webhook":
+    if mode not in {"feishu_app", "feishu_webhook"}:
         raise ValueError(f"Unsupported out-of-band delivery mode: {mode}")
-
-    webhook_url = config["webhook_url"]
-    if not webhook_url:
+    if mode == "feishu_webhook" and not config["webhook_url"]:
         raise ValueError(
             "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL or FEISHU_WEBHOOK_URL "
             "is required for feishu_webhook mode"
         )
-    deliver_feishu_text(webhook_url, message)
+    template = "green" if message.lstrip().startswith("✅") else "red"
+    deliver_out_of_band_card(
+        env, text_to_card(message, template=template), fallback_text=message
+    )
 
 
 def _failure_domain_for_http_target(name: str) -> str:

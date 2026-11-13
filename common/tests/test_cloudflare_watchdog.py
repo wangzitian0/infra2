@@ -578,7 +578,7 @@ HARNESS_START = 1_790_208_000
 
 @needs_node
 def test_worker_messages_follow_the_shared_field_order(world) -> None:
-    """#905: the Worker's text uses common/alerting/'s labels, separator and order: a
+    """#905: the Worker's card uses common/alerting/'s labels, separator and order: a
     page shows every field but the log tail, a recovery 级别 through 开始于."""
     runs = world["entrypointDown"]
     (page,) = _blocks(runs[1]["messages"][0])
@@ -593,6 +593,34 @@ def test_worker_messages_follow_the_shared_field_order(world) -> None:
         '从外部网络执行 `curl -I "https://cloud.zitian.party"`;'
         "若 VPS 心跳也过期,就是整机或它的出网中断"
     )
+
+
+@needs_node
+def test_worker_page_is_an_interactive_card_in_the_card_standard(world) -> None:
+    """#1648: the page goes out as an interactive card (never msg_type text), its fields
+    are PAGER_FIELDS in order, and it keeps the card standard: a title of at most 40
+    characters, at most 12 body lines, one Runbook link (the failing URL in 现象 and the
+    curl in 下一步 are quoted targets, not links the owner follows)."""
+    (sent,) = world["entrypointDown"][1]["cards"]
+    card = sent["card"]
+    title = card["header"]["title"]["content"]
+    body = card["elements"][0]["text"]["content"]
+    lines = [line for line in body.splitlines() if line.strip()]
+
+    assert sent["msgType"] == "interactive"
+    assert card["header"]["template"] == "red"  # P0: the entrypoint is critical
+    assert title == "🔴 [P0 告警] Cloudflare 带外 watchdog · 1 项"
+    assert len(title) <= 40 and len(lines) <= 12
+    assert [line for line in lines if line.startswith("Runbook：https://")] == [
+        lines[-1]
+    ]
+    labels = [line.partition(FIELD_SEPARATOR)[0] for line in lines]
+    assert [label for label in labels if label in PAGER_FIELDS] == list(
+        PAGER_FIELDS[:8]
+    )
+    recovery = world["entrypointDown"][4]["cards"][0]
+    assert recovery["msgType"] == "interactive"
+    assert recovery["card"]["header"]["template"] == "green"
 
 
 @needs_node

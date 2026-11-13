@@ -28,7 +28,6 @@ from common.alerting import (
     REPORT_TITLE_PREFIX,
     build_feishu_report_card,
     deliver_out_of_band_card,
-    deliver_out_of_band_text,
 )
 from common.alerting.types import _one_line
 from common.core.registry import domain_for_service
@@ -1158,18 +1157,11 @@ def deliver_digest(
     env: Mapping[str, str],
     message: str,
     *,
-    card: dict[str, Any] | None = None,
+    card: dict[str, Any],
     card_sender=None,
-    text_sender=None,
 ) -> None:
-    """Deliver digest via the shared out-of-band Feishu webhook/app path."""
-    active_card_sender = card_sender or deliver_out_of_band_card
-    active_text_sender = text_sender or deliver_out_of_band_text
-    fmt = env.get("WATCHDOG_DIGEST_FORMAT", "card").strip().lower()
-    if card is not None and fmt != "text":
-        active_card_sender(env, card, fallback_text=message)
-        return
-    active_text_sender(env, message)
+    """Deliver the digest card via the shared out-of-band Feishu webhook/app path."""
+    (card_sender or deliver_out_of_band_card)(env, card, fallback_text=message)
 
 
 def _env_enabled(env: Mapping[str, str], name: str, *, default: str = "1") -> bool:

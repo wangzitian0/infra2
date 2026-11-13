@@ -554,11 +554,6 @@ def test_non_dry_run_delivers_card_by_default_and_text_when_requested(
         "deliver_out_of_band_card",
         lambda env, card, **kw: delivered.append(("card", card)),
     )
-    monkeypatch.setattr(
-        report,
-        "deliver_out_of_band_text",
-        lambda env, msg, **kw: delivered.append(("text", msg)),
-    )
 
     prod_summary, staging_lines = report._summarize_all_environments(
         {"production": _ledger("production"), "staging": _ledger("staging")},
@@ -581,20 +576,6 @@ def test_non_dry_run_delivers_card_by_default_and_text_when_requested(
         == 0
     )
     assert delivered[-1][0] == "card"
-
-    assert (
-        report.run(
-            {"INFRA2_STABILITY_REPORT_FORMAT": "text"},
-            ledger_files={
-                "production": paths["production"],
-                "staging": paths["staging"],
-            },
-            outages_file=paths["outages"],
-            now=NOW,
-        )
-        == 0
-    )
-    assert delivered[-1][0] == "text"
 
 
 def test_empty_ledger_never_renders_green_card_or_100pct_all_clear() -> None:

@@ -447,10 +447,12 @@ jobs:
           INPUT_AFTER: ${{ inputs.after || github.ref_name }}
           INPUT_PROMOTE_PROD: ${{ inputs.promote_prod || false }}
           RECONCILE_PHASE: ${{ env.RECONCILE_PHASE || '' }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
           import os
           from pathlib import Path
+          from common.observability.page_dedup import dedup_page
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from tools.reconcile_iac_inputs import resolve_workflow_failure_alert
 
@@ -473,7 +475,36 @@ jobs:
               print(skip_notice)
               raise SystemExit(0)
           assert alert_text is not None
-          deliver_out_of_band_alert(os.environ, alert_text)
+          phase = os.environ.get("RECONCILE_PHASE") or "reconcile"
+          outcome = dedup_page(
+              os.environ,
+              job="reconcile-iac-inputs",
+              label="IaC 输入对账",
+              findings=[(phase, alert_text.splitlines()[0])],
+              detail=alert_text,
+              page_message=alert_text,
+              deliver_page=deliver_out_of_band_alert,
+          )
+          raise SystemExit(outcome.exit_code)
+          PY
+
+      - name: Resolve the reconcile failure alert
+        if: success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os
+          from common.observability.page_dedup import resolve_page_state
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          outcome = resolve_page_state(
+              os.environ,
+              job="reconcile-iac-inputs",
+              label="IaC 输入对账",
+              deliver_page=deliver_out_of_band_alert,
+          )
+          raise SystemExit(outcome.exit_code)
           PY
 
       - name: Upload reconcile result

@@ -8,6 +8,7 @@
 // common/tests/test_heartbeat_contract.py.
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { cardText } from "./watchdog_card_text.mjs";
 
 const [, , workerPath, varsPath, beatsPath] = process.argv;
 const worker = (await import(pathToFileURL(workerPath).href)).default;
@@ -43,7 +44,7 @@ for (const [label, beat] of Object.entries(beats)) {
   globalThis.fetch = async (input, init = {}) => {
     const url = String(input);
     if (url.startsWith("https://feishu.invalid/")) {
-      messages.push(JSON.parse(init.body).content.text);
+      messages.push(cardText(JSON.parse(init.body).card));
       return new Response("ok", { status: 200 });
     }
     if (url.startsWith("https://hc-ping.com/")) return new Response("ok", { status: 200 });

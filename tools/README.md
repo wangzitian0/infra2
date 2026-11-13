@@ -14,8 +14,7 @@ reusable logic belongs in `common/` (see the division-of-labor note below):
    gates), `reconcile_iac_inputs.py` (tag reconcile), `promotion_soak_guard.py`
    (the prod-promotion guard's staging-soak lookup, #970), `out_of_band_watchdog.py`
    / `watchdog_issue_trail.py` / `watchdog_weekly_digest.py` (scheduled
-   watchdogs), `dns_drift_report.py` /
-   `dokploy_config_drift.py` (drift reports), `pr_merge_gate.py` (the AGENTS.md
+   watchdogs), `dokploy_config_drift.py` (drift reports), `pr_merge_gate.py` (the AGENTS.md
    session merge authority as a check: checks, threads, settling, protected and
    deploy-triggering paths, plus GitHub's own `mergeable`/`mergeStateStatus`
    and a stale-green guard -- green proves the tree the checks ran on, so a

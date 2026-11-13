@@ -2073,7 +2073,7 @@ def test_reconcile_workflow_skips_deploy_outage_alert_when_sync_app_releases_fai
 ) -> None:
     """#1463: reconcile-iac-inputs.yml records RECONCILE_PHASE=sync-app-releases before
     the pull-based App release PR sync and RECONCILE_PHASE=reconcile-deploy before the tag
-    deploy step, and Alert on failure skips deliver_out_of_band_alert when a failure occurs
+    deploy step, and Alert on failure skips the page (dedup_page) when a failure occurs
     during sync-app-releases before reconcile-result.json exists."""
     import tools.out_of_band_watchdog as watchdog
 
@@ -2125,7 +2125,9 @@ def test_reconcile_workflow_skips_deploy_outage_alert_when_sync_app_releases_fai
 
     # Case 2: failure during reconcile-deploy (no reconcile-result.json) -> pages Feishu
     monkeypatch.setenv("RECONCILE_PHASE", "reconcile-deploy")
-    exec(compile(py_body, "<alert-on-failure>", "exec"), {})
+    with pytest.raises(SystemExit) as exc_info:
+        exec(compile(py_body, "<alert-on-failure>", "exec"), {})
+    assert exc_info.value.code == 0  # the page went out through dedup_page
     assert len(delivered) == 1
     assert "🚨 IaC reconcile FAILED for v3.1.25 (staging soak)" in delivered[0]
 

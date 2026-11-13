@@ -339,10 +339,12 @@ jobs:
         if: always()
         env:
           IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
           import json, os, sys, urllib.request
           from common.observability.issue_trail import RUNNER_HEALTH_SOURCE, CheckVerdict, record_verdicts
+          from common.observability.page_dedup import dedup_page, resolve_page_state
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
 
           def record(ok, detail):
@@ -375,7 +377,12 @@ jobs:
           if not failed:
               record(True, "every deploy prerequisite is true")
               print("iac-runner health: every deploy prerequisite is true")
-              sys.exit(0)
+              sys.exit(resolve_page_state(
+                  os.environ,
+                  job="iac-runner-health",
+                  label="iac-runner 部署前置条件",
+                  deliver_page=deliver_out_of_band_alert,
+              ).exit_code)
           record(False, "iac-runner cannot deploy: " + ", ".join(failed))
           run_url = "/".join(
               v for v in (
@@ -385,13 +392,20 @@ jobs:
                   os.environ.get("GITHUB_RUN_ID"),
               ) if v
           )
-          deliver_out_of_band_alert(
+          dedup_page(
               os.environ,
-              "🚨 iac-runner cannot deploy: " + ", ".join(failed) + ".\n"
-              "Every platform deploy and every app companion deploy goes through the runner; "
-              "with a dead 1Password service account they fail with onepassword_auth_failed "
-              "(#625, 2026-09-04..07).\n"
-              f"Health: {url}\nRun: {run_url}",
+              job="iac-runner-health",
+              label="iac-runner 部署前置条件",
+              findings=[(name, name) for name in failed],
+              detail="\n".join(failed),
+              page_message=(
+                  "🚨 iac-runner cannot deploy: " + ", ".join(failed) + ".\n"
+                  "Every platform deploy and every app companion deploy goes through the runner; "
+                  "with a dead 1Password service account they fail with onepassword_auth_failed "
+                  "(#625, 2026-09-04..07).\n"
+                  f"Health: {url}\nRun: {run_url}"
+              ),
+              deliver_page=deliver_out_of_band_alert,
           )
           sys.exit(1)
           PY
@@ -417,8 +431,8 @@ jobs:
       contents: read
       # the ops-checks run list and logs
       actions: read
-      # the stale-open-issues section
-      issues: read
+      # the stale-open-issues section; the page-dedup state of the failure alert
+      issues: write
     env:
       GITHUB_TOKEN: ${{ github.token }}
       INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
@@ -468,28 +482,50 @@ jobs:
       # nothing paged: the digest job had no failure path (#658, recommendation 4).
       - name: Alert on failure
         if: failure() && env.INFRA2_STABILITY_REPORT_DRY_RUN != '1'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
           import os
+          from common.observability.page_dedup import dedup_page, run_url_from_env
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
 
-          run_url = "/".join(
-              v for v in (
-                  os.environ.get("GITHUB_SERVER_URL"),
-                  os.environ.get("GITHUB_REPOSITORY"),
-                  "actions/runs",
-                  os.environ.get("GITHUB_RUN_ID"),
-              ) if v
-          )
-          deliver_out_of_band_alert(
+          outcome = dedup_page(
               os.environ,
-              "🚨 Weekly watchdog digest / stability report FAILED.\n"
-              "The week's digest or the positive availability report was not delivered. "
-              "Broken is one of: the production availability ledger read over SSH "
-              "(missing, empty or stale), the Worker /outages fetch, or the Feishu "
-              "delivery -- not necessarily the estate.\n"
-              f"Run: {run_url}",
+              job="weekly-digest",
+              label="每周 watchdog 摘要",
+              findings=[("weekly-digest", "the digest or the stability report was not delivered")],
+              detail="the digest or the stability report was not delivered",
+              page_message=(
+                  "🚨 Weekly watchdog digest / stability report FAILED.\n"
+                  "The week's digest or the positive availability report was not delivered. "
+                  "Broken is one of: the production availability ledger read over SSH "
+                  "(missing, empty or stale), the Worker /outages fetch, or the Feishu "
+                  "delivery -- not necessarily the estate.\n"
+                  f"Run: {run_url_from_env(os.environ)}"
+              ),
+              deliver_page=deliver_out_of_band_alert,
           )
+          raise SystemExit(outcome.exit_code)
+          PY
+
+      - name: Resolve the digest failure alert
+        if: success() && env.INFRA2_STABILITY_REPORT_DRY_RUN != '1'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os
+          from common.observability.page_dedup import resolve_page_state
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          outcome = resolve_page_state(
+              os.environ,
+              job="weekly-digest",
+              label="每周 watchdog 摘要",
+              deliver_page=deliver_out_of_band_alert,
+          )
+          raise SystemExit(outcome.exit_code)
           PY
 
   preview-leak-check:
@@ -498,6 +534,10 @@ jobs:
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '47 * * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'preview-leak-check' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
+    permissions:
+      contents: read
+      # the page-dedup state, one issue per job (common/observability/page_dedup.py)
+      issues: write
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
@@ -543,29 +583,51 @@ jobs:
 
       - name: Alert on leaked previews
         if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
           import os
+          from common.observability.page_dedup import dedup_page, run_url_from_env
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
 
-          run_url = "/".join(
-              v for v in (
-                  os.environ.get("GITHUB_SERVER_URL"),
-                  os.environ.get("GITHUB_REPOSITORY"),
-                  "actions/runs",
-                  os.environ.get("GITHUB_RUN_ID"),
-              ) if v
-          )
-          deliver_out_of_band_alert(
+          outcome = dedup_page(
               os.environ,
-              "🚨 Dokploy preview LEAK detected.\n"
-              "A preview stack outlived its lifecycle (a 1:1 teardown was skipped "
-              "or failed). This is an exception, not routine — root-cause the "
-              "teardown, then remediate per the SOP "
-              "(docs/ssot/ops.pipeline.md#preview): "
-              "`python -m tools.preview_leak_check --remediate`.\n"
-              f"Run (see leak list): {run_url}",
+              job="preview-leak-check",
+              label="Dokploy 预览泄漏",
+              findings=[("preview-leak-check", "a preview stack outlived its lifecycle")],
+              detail="a preview stack outlived its lifecycle",
+              page_message=(
+                  "🚨 Dokploy preview LEAK detected.\n"
+                  "A preview stack outlived its lifecycle (a 1:1 teardown was skipped "
+                  "or failed). This is an exception, not routine — root-cause the "
+                  "teardown, then remediate per the SOP "
+                  "(docs/ssot/ops.pipeline.md#preview): "
+                  "`python -m tools.preview_leak_check --remediate`.\n"
+                  f"Run (see leak list): {run_url_from_env(os.environ)}"
+              ),
+              deliver_page=deliver_out_of_band_alert,
           )
+          raise SystemExit(outcome.exit_code)
+          PY
+
+      - name: Resolve the leaked-preview alert
+        if: success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os
+          from common.observability.page_dedup import resolve_page_state
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          outcome = resolve_page_state(
+              os.environ,
+              job="preview-leak-check",
+              label="Dokploy 预览泄漏",
+              deliver_page=deliver_out_of_band_alert,
+          )
+          raise SystemExit(outcome.exit_code)
           PY
 
   host-hygiene-schedule:
@@ -574,6 +636,10 @@ jobs:
     if: ${{ (github.event_name == 'schedule' && github.event.schedule == '27 4 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'host-hygiene-schedule' || inputs.task == 'all')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
+    permissions:
+      contents: read
+      # the page-dedup state, one issue per job (common/observability/page_dedup.py)
+      issues: write
     env:
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
@@ -614,27 +680,49 @@ jobs:
 
       - name: Alert on failure
         if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
           import os
+          from common.observability.page_dedup import dedup_page, run_url_from_env
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
 
-          run_url = "/".join(
-              v for v in (
-                  os.environ.get("GITHUB_SERVER_URL"),
-                  os.environ.get("GITHUB_REPOSITORY"),
-                  "actions/runs",
-                  os.environ.get("GITHUB_RUN_ID"),
-              ) if v
-          )
-          deliver_out_of_band_alert(
+          outcome = dedup_page(
               os.environ,
-              "🚨 VPS host-hygiene schedule could not be ensured.\n"
-              "The generic host GC (docker/journald/disk prune) may not be "
-              "provisioned on the VPS — host disk can fill silently. Check the "
-              "Dokploy schedule 'finance-report-vps-host-hygiene'.\n"
-              f"Run: {run_url}",
+              job="host-hygiene-schedule",
+              label="VPS host-hygiene 计划任务",
+              findings=[("host-hygiene-schedule", "the host-hygiene schedule could not be ensured")],
+              detail="the host-hygiene schedule could not be ensured",
+              page_message=(
+                  "🚨 VPS host-hygiene schedule could not be ensured.\n"
+                  "The generic host GC (docker/journald/disk prune) may not be "
+                  "provisioned on the VPS — host disk can fill silently. Check the "
+                  "Dokploy schedule 'finance-report-vps-host-hygiene'.\n"
+                  f"Run: {run_url_from_env(os.environ)}"
+              ),
+              deliver_page=deliver_out_of_band_alert,
           )
+          raise SystemExit(outcome.exit_code)
+          PY
+
+      - name: Resolve the host-hygiene alert
+        if: success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os
+          from common.observability.page_dedup import resolve_page_state
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          outcome = resolve_page_state(
+              os.environ,
+              job="host-hygiene-schedule",
+              label="VPS host-hygiene 计划任务",
+              deliver_page=deliver_out_of_band_alert,
+          )
+          raise SystemExit(outcome.exit_code)
           PY
 
   facet-reconcile:
