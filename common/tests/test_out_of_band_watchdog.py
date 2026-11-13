@@ -3167,9 +3167,7 @@ def test_a_dedup_note_on_a_page_of_three_items_keeps_all_three_on_the_card(
         "GITHUB_RUN_ID": "1",
     }
     watchdog._handle_paged_failures(env, paged, [], dry_run=False)
-    text = watchdog.format_failure_message(
-        paged, run_url=watchdog._github_run_url(env)
-    )
+    text = watchdog.format_failure_message(paged, run_url=watchdog._github_run_url(env))
     note = "注:仍未恢复(第 2 天),报告群不可用(x),回落到告警群。"
 
     watchdog.deliver_out_of_band_alert(env, f"{text}\n{note}")
