@@ -97,9 +97,8 @@ if [ -z "${SERVICES:-}" ]; then
   REAL_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || python3 -c "import os, sys; print(os.path.realpath(sys.argv[1]))" "${BASH_SOURCE[0]}")"
   SCRIPT_DIR="$(cd "$(dirname "${REAL_PATH}")" && pwd)"
   REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-  if [ "${BACKUP_SYNC_REPO:-}" = "1" ] || [ "${REPO_ROOT}" = "/opt/infra2" ]; then
-    git -C "${REPO_ROOT}" pull --ff-only -q origin main 2>/dev/null || echo "WARN host_backup: git pull --ff-only in ${REPO_ROOT} failed; proceeding with current checkout" >&2
-  fi
+  # The script never updates the checkout. The owner approves each commit, and the
+  # checkout moves to that commit by a fast-forward merge (issue #1688).
   SERVICES="$(PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}" python3 -m common.backup.emitter --environment "${ENVIRONMENT}" --data-root "${DATA_ROOT}")"
 fi
 if [ -z "${SERVICES//[[:space:]]/}" ]; then

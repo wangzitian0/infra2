@@ -218,13 +218,16 @@ off-host manifest and restored artifact for every required entry.
 
 The host runs the script from the `/opt/infra2` checkout through a symlink:
 `/usr/local/sbin/infra2-host-backup.sh -> /opt/infra2/tools/host_backup.sh`. The
-script resolves the link to find `common.backup.emitter` in that checkout. Keep the
-checkout clean: a local edit blocks the Sunday `git pull` of the restore rehearsal
-cron. After a change merges, update the checkout and confirm it is clean:
+script resolves the link to find `common.backup.emitter` in that checkout. The script
+never updates the checkout. The owner approves each commit, and the checkout moves to
+that commit by a fast-forward merge (issue #1688). Keep the checkout clean: a local
+edit blocks the restore rehearsal `git pull` until that pull is removed. After an
+approved update, confirm the checkout:
 
 ```bash
 git -C /opt/infra2 status --short   # must print nothing
-git -C /opt/infra2 pull -q origin main
+git -C /opt/infra2 merge --ff-only <approved-sha>
+git -C /opt/infra2 rev-parse HEAD   # must print <approved-sha>
 readlink -f /usr/local/sbin/infra2-host-backup.sh   # /opt/infra2/tools/host_backup.sh
 ```
 

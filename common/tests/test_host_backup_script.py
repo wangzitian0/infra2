@@ -561,8 +561,8 @@ def test_an_empty_service_list_fails_instead_of_writing_an_empty_manifest(
     assert latest.read_text(encoding="utf-8") == '{"off-host": "record"}'
 
 
-def test_backup_syncs_repo_before_emitting_services(host, tmp_path) -> None:
-    """When BACKUP_SYNC_REPO=1 (or REPO_ROOT=/opt/infra2), git pull --ff-only runs before archiving."""
+def test_backup_never_runs_git_even_with_the_old_sync_switch(host, tmp_path) -> None:
+    """The script never updates the checkout (#1688). The old switch BACKUP_SYNC_REPO=1 changes nothing."""
     bin_dir = Path(host["env"]["PATH"].split(os.pathsep)[0])
     git_shim = bin_dir / "git"
     git_shim.write_text('#!/usr/bin/env bash\necho "git $*" >> "$SHIM_LOG"\nexit 0\n')
@@ -571,13 +571,7 @@ def test_backup_syncs_repo_before_emitting_services(host, tmp_path) -> None:
     proc, manifest, calls = _run(host, BACKUP_SYNC_REPO="1")
     assert proc.returncode == 0, proc.stderr
     assert _ids(manifest) == ALL_SERVICES
-    assert (
-        calls[0].startswith("git -C ") and "pull --ff-only -q origin main" in calls[0]
-    )
-    first_archive_idx = min(
-        i for i, c in enumerate(calls) if c.startswith(("docker ", "tar "))
-    )
-    assert first_archive_idx > 0
+    assert [c for c in calls if c.startswith("git ")] == [], calls
 
 
 def test_backup_archives_availability_ledger_when_present(host, tmp_path) -> None:
