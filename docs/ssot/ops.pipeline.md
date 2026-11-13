@@ -61,9 +61,9 @@ The question of a stage is the same for every change kind.
 | CI | Is this head correct alone? | PR head SHA | each PR push | exists |
 | Preview | Does this head work from zero, alone? | PR head SHA | each PR push; holds the merge | target |
 | Staging | Does the release work with all other changes and with real data? | release tag | each release-tag push | exists |
-| Prod | Does the release serve users? | the same tag | each promotion; the owner approves the tag | exists |
+| Prod | Does the release serve users? | the same tag | each promotion; the owner approves the tag; the train gate asks for a promotion at 15 or more unpromoted PRs or 48 h (`prod_gatekeeper`) | exists |
 
-Budgets come from the Workspace tier "Pipeline time contract", not from this file. "exists" means main runs it today. "target" means it is the goal and no check runs it yet. The main-branch regression is the post of the merge. The Staging pre reads it.
+Budgets come from the Workspace tier "Pipeline time contract", not from this file. "exists" means main runs it today. "target" means it is the goal and no check runs it yet. The main-branch regression is the post of the merge. target: the Staging pre reads it.
 
 **Three phases and the record**
 
@@ -81,9 +81,9 @@ Budgets come from the Workspace tier "Pipeline time contract", not from this fil
 | Source | finance_report, truealpha | infra2-sdk | `platform/`, `bootstrap/`, `common/deploy/` | dev_env rules and skills; infra2 gates, workflows and release code; `harness/repos.yaml` |
 | Artifact | app image and app tag | wheel version | infra2 release tag | rendered rule commit; gate or release-code commit |
 | Blast radius | one app | every service that pins the version | every app on the host | every pipeline and every agent |
-| Own environment | yes | no: the Canary, then the apps | yes | no: a replay, then the next real run |
-| Door into the train | a bot PR moves the app pin in `harness/repos.yaml` | a bot PR moves the Canary pin; app pin PRs open after the Canary passes | merge, then a release tag | release code: its own release tag; rules and skills: one render PR per repository |
-| Proved by | its own hook checks | the Canary Todo `staging_gate` | the changed units from zero, then every app's `staging_gate` | a replay on recorded inputs, then the record of the next run |
+| Own environment | exists: yes | exists: no, the Canary, then the apps | exists: yes | target: no, a replay, then the next real run |
+| Door into the train | exists: a bot PR moves the app pin in `harness/repos.yaml` | target: a bot PR moves the Canary pin; app pin PRs open after the Canary passes | exists: merge, then a release tag | exists: release code has its own release tag. target: rules and skills use one render PR per repository |
+| Proved by | exists: its own hook checks | exists: the Canary Todo `staging_gate` | exists: every app's `staging_gate`. target: the changed units from zero first | target: a replay on recorded inputs, then the record of the next run |
 
 **Rules**
 
@@ -100,15 +100,15 @@ Budgets come from the Workspace tier "Pipeline time contract", not from this fil
 
 **Matrix 1: deliver a change (stage by kind)**
 
-Each cell starts with its state: "exists" or "target". A rule whose check does not exist yet is a target. An absent check holds nothing.
+Each cell starts with its state: "exists" or "target". A rule whose check does not exist yet is a target. A target part holds nothing until its check exists. An existing part holds as it does today; for example a red `staging_gate` stops the production promotion.
 
 | Stage | App | SDK | Infra | Harness |
 |---|---|---|---|---|
 | Local | exists: lint, unit, podman integration | exists: unit, import purity, size | exists: lint, unit, compose render | exists: rule-text checklist, `ws-agents-lint`, gate unit tests |
-| CI | exists: unit checks within the budget | exists: PR CI | exists: `infra-ci.yml`; the Trivy scan blocks a PR with a fixable CRITICAL or HIGH finding | exists: `infra-ci.yml` plus the self-governance checks |
+| CI | exists: unit checks run on each PR push. target: within the Workspace-tier budget (today p50 5.3 min finance_report, 7.3 min truealpha). | exists: PR CI | exists: `infra-ci.yml`; the Trivy scan blocks a PR with a fixable CRITICAL or HIGH finding | exists: `infra-ci.yml` plus the self-governance checks |
 | Preview | target: own stack from zero; `preview_gate` reports each check | target: the Canary pin PR runs the infra Preview with the new version | target: the changed units from zero in a slot per PR | target: the changed gate replays merged PRs |
-| Staging | target: door: the sync cuts the app tag from the Preview record and opens the pin PR; post: `staging_gate` per check, nightly `scheduled_audit` | target: proof: the Canary `staging_gate` reads the Canary verdict | target: door: the tag push only; pre: the main post record; post: every app's `staging_gate` and the Canary | target: release code: its own tag; rules and skills: one render PR per repository, merged in one cycle |
-| Prod | target: the same tag; `prod_gate` per check | target: only inside consumer tags; app pin PRs open after the version is verified | target: pre runs before the approval and reads the staging post record; the marker follows post | exists: a production-path edit waits for the owner's approval of its head SHA; other edits run at the next promotion |
+| Staging | exists: the bot pin PR in `harness/repos.yaml`, `smoke` and `staging_gate` on each tag push, the nightly `scheduled_audit`. target: the sync cuts the app tag from the Preview record; `staging_gate` per check. | exists: the Canary `staging_gate` on each tag push (it reads the health route). target: it reads the Canary verdict. | exists: a tag push deploys staging and runs `staging_gate`. target: pre reads the main post record; post covers every app and the Canary. | exists: release code has its own tag. target: rules and skills use one render PR per repository, merged in one cycle. |
+| Prod | exists: the same tag and `prod_gate`. target: `prod_gate` per check. | exists: only inside consumer tags. target: app pin PRs open after the version is verified. | exists: the marker follows post (`prod_gate`). target: pre runs before the approval and reads the staging post record. | exists: a production-path edit waits for the owner's approval of its head SHA; other edits run at the next promotion. |
 
 **Matrix 2: watch and fix (flow by kind)**
 
@@ -116,7 +116,7 @@ The same states apply.
 
 | Flow | App | SDK | Infra | Harness |
 |---|---|---|---|---|
-| Alert and watch | target: standard rules from the service identity: Prod pages, Staging reports; standard logs, metrics and traces from one SDK call | target: no runtime of its own: a fault shows in a consumer, whose lock file names the SDK version | target: the same standard rules for platform services; the Canary probe every 60 s | target: a train or gate failure is a card with the first cause |
+| Alert and watch | target: standard rules from the service identity: Prod pages, Staging reports; standard logs, metrics and traces from one SDK call | exists: no runtime of its own; a fault shows in a consumer. exists: the consumer's lock file names the SDK version. | exists: the Canary probe every 60 s. target: the same standard rules for platform services. | target: a train or gate failure is a card with the first cause |
 | Find the cause | target: one diagnosis command per app and environment: errors, slow traces, 5xx, deploys | target: the command lists each deploy with its SDK version, so an SDK cause shows as the pin move | target: the same command for a platform unit | target: the failed record names the stage, phase, check id and run |
 | Periodic report | target: digest section "Delivery": pass rate and p90 per stage, rows of kind `app` | target: rows of kind `sdk` | target: rows of kind `infra` | target: rows of kind `harness` |
 
@@ -126,25 +126,25 @@ Each record names its `units` with a kind prefix (`app:`, `sdk:`, `infra:`, `har
 
 | Tier | Rate | Stage |
 |---|---|---|
-| per edit | each save | Local |
-| per PR push | 209 runs of `infra-ci.yml` | CI and Preview |
-| per merge | 97 PRs | CI |
-| per release tag | 36 tags; 35 staging runs | Staging |
-| per promotion | 6 `production/v*` markers | Prod |
-| per pin move | sync every 2 h | door |
+| per edit | each save | exists: Local |
+| per PR push | 209 runs of `infra-ci.yml` | exists: CI. target: Preview. |
+| per merge | 97 PRs | exists: CI |
+| per release tag | 36 tags; 35 staging runs | exists: Staging |
+| per promotion | 6 `production/v*` markers | exists: Prod |
+| per pin move | sync every 2 h | exists: door |
 | minute, hour, day, month | probe 60 s; Worker 30 min; leak check 1 h; 7 daily jobs; weekly and monthly digest | Staging, Prod, Preview, host |
 
 **Core rules**
 - A merge is not a deploy. A merge to main changes no running service. Staging runs only from a release tag. Production runs only from the tag that the owner approves.
 - `deploy_v2` is the single deploy entry point for every unit.
-- **preview 瞬态闭环验证**(`preview/branch` 与 `preview/pr`)——App 合流 `main` 后,在切出 `vX.Y.Z` tag 进入 Staging 火车前,由 `sync_app_releases(..., cut_missing_app_tag=True)` (内部调用 `verify_and_cut_app_preview_tag`) 瞬态拉起 `preview/branch` (`main`),执行 `preview_gate` 钩子(验证 0 帧冷启动、空库 Alembic 迁移、Vault 模板渲染与最小真实 E2E),通过后才推送 App `vX.Y.Z` tag,并在 `finally` 中**立即执行 `--down` 销毁**(连同临时数据库卷),绝不留存常驻 preview 容器(#1416, #1554)。
+- **preview 瞬态闭环验证**(`preview/branch` 与 `preview/pr`)——App 合流 `main` 后,在切出 `vX.Y.Z` tag 进入 Staging 火车前,由手动标志 `--cut-missing-app-tag`(无 workflow 传入,目标态)驱动的 `sync_app_releases(..., cut_missing_app_tag=True)` (内部调用 `verify_and_cut_app_preview_tag`) 瞬态拉起 `preview/branch` (`main`),执行 `preview_gate` 钩子(验证 0 帧冷启动、空库 Alembic 迁移、Vault 模板渲染与最小真实 E2E),通过后才推送 App `vX.Y.Z` tag,并在 `finally` 中**立即执行 `--down` 销毁**(连同临时数据库卷),绝不留存常驻 preview 容器(#1416, #1554)。
 - **staging / prod 只部署 release tag**(不可变镜像,不接受 branch/sha);staging 与 prod **钉同一个 tag**
   (**promote-not-rebuild**,不是部署 main sha),App 的固定环境版本由 `harness/repos.yaml` (`release_tag`) 驱动。
 - 统一入口 `tools/deploy_v2.py`;**prod 对真实数据 deny-by-default**,缺 `--staging-validated --code-reviewed` 直接 fail-closed。
 
 | 目标 | 触发 | 部署什么 | 入口(示意)| 验证钩子 (`STAGE_HOOK_PLANS`) | 数据 | 生命周期 |
 |------|------|---------|------|------|------|---------|
-| **preview**(branch/pr)| App 合流 `main` 自动切 tag 前瞬态拉起 (`--cut-missing-app-tag`) 或手动按需 | 分支名 (`main`) / PR# | `deploy_v2 --type preview/{branch,pr}` | `preview_gate` | 临时 DB | `finally` 立即 `--down` |
+| **preview**(branch/pr)| 手动 `--cut-missing-app-tag`(无 workflow 传入)或手动按需 | 分支名 (`main`) / PR# | `deploy_v2 --type preview/{branch,pr}` | `preview_gate` | 临时 DB | `finally` 立即 `--down` |
 | **app staging** | **release tag 推送**(`reconcile-iac-inputs.yml` 读 `harness/repos.yaml`)或手动 `--bootstrap` | release tag(钉和 prod 同一个)| `deploy_v2 --type staging --version-ref vX.Y.Z` | `smoke` -> `staging_gate` (跨服务并发) | staging 数据 | 长期(同构 prod)|
 | **app prod** | **显式 promote**(`reconcile-iac-inputs.yml` `promote_prod=true`)或手动 `--bootstrap` | **同一个 release tag** | `deploy_v2 --type prod --version-ref vX.Y.Z --staging-validated --code-reviewed` | `smoke` -> `prod_gate` (跨服务并发) | 真实 prod 数据 | 长期 |
 | **平台服务**(iac_pinned)**staging** | **release tag 推送**(`v*.*.*`)→ **自动 staging**(soak)| **该 tag** 作 `iac_ref` | `reconcile-iac-inputs.yml` → `deploy_v2 → iac_runner` | `smoke` -> `staging_gate` (含 `platform/todo`) | — | 长期 |

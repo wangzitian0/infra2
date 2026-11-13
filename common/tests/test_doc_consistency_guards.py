@@ -379,7 +379,7 @@ def test_delivery_model_has_one_owner() -> None:
     owner = ROOT / "docs/ssot/ops.pipeline.md"
     assert "### 2.0 Delivery model" in owner.read_text(encoding="utf-8")
     stage_model = re.compile(
-        r"^\s*[-*]?\s*\*{0,2}Stage [123]\b.{0,4}(?:—|--|-|:)|三阶段|三段式|Pre\s*(?:->|→)\s*Deploy",
+        r"^\s*[-*]?\s*\*{0,2}Stage [123]\b.{0,4}(?:—|--|-|:)|三阶段|三段式|交付阶段.{0,6}SSOT|阶段定义|Pre\s*(?:->|→)\s*Deploy",
         re.M,
     )
     scanned = [

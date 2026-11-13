@@ -1,7 +1,7 @@
-# 环境模型与交付阶段 SSOT (Environment & Delivery Architecture)
+# 环境模型 SSOT (Environment Architecture)
 
 > **SSOT Key**: `core.environments`  
-> **核心定义**: 基础设施生命周期遵循**从左到右推进的严格阶段链条**。系统架构严格区分**无状态执行器 (Stateless Runners)**与**有状态部署环境 (Deployment Environments)**：
+> **核心定义**: 本文只定义环境。交付阶段、阶段记录与变更种类见 [`ops.pipeline.md` §2.0](./ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases)。
 > 
 > - **部署只认三环境**：`preview`（PR 临时动态）、`staging`（单例预发）、`production`（单例生产），加目标态 `DR`（异地灾备）。
 > - **无状态执行器**：本地开发工作站、GitHub PR CI 虚拟机、宿主机 IaC Runner 仅负责代码测试与编排触发，不持有应用持久化状态。
@@ -15,16 +15,12 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **阶段定义与词汇** | 已安装的 infra2-sdk 发布件：`infra2_sdk/data/stages.yaml`（经 `infra2_sdk.ci.load_delivery_stages()` 读取，版本以 `uv.lock` 为准） | 从左到右的统一交付阶段语义；infra2 不保留本地副本 |
+| **阶段 id 与阶段模型** | stage id 来自 SDK `stages.yaml`；阶段模型（问题、阶段、合并阻塞）见 [`ops.pipeline.md` §2.0](./ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases) | infra2 不在此保留副本 |
 | **门禁清单** | [`docs/ssot/ci-gate-inventory.yaml`](./ci-gate-inventory.yaml) | 七寸 1 (Merge Authority) 的所有阻断门禁 |
 | **环境配置与部署** | Dokploy Project/Environment + `deploy_v2` | 远端环境变量和发布前门 |
 | **数据与域名隔离** | `DATA_PATH` / `ENV_SUFFIX` / `ENV_DOMAIN_SUFFIX` | 有状态部署环境间的数据与网络隔离 |
 
 ---
-
-## 2. 架构模型 - 从左到右生命周期与两大七寸
-
-环境之间的交付阶段、阶段记录与变更种类见 [`ops.pipeline.md` §2.0](./ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases);本文只定义环境。
 
 ---
 
