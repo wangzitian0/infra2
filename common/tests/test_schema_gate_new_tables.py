@@ -30,9 +30,13 @@ def _missing(name: str, *labels: str) -> EnumDiscrepancy:
     return EnumDiscrepancy(name, labels, (), labels, (), ())
 
 
-def _cover(discrepancies, enum_tables, db_tables):
+def _cover(discrepancies, enum_tables, db_tables, *, stamped=True):
+    tables = set(db_tables) | ({"alembic_version"} if stamped else set())
     return cover_with_new_tables(
-        discrepancies, enum_tables=enum_tables, db_tables=db_tables
+        discrepancies,
+        enum_tables=enum_tables,
+        db_tables=tables,
+        migration_table="alembic_version",
     )
 
 
@@ -164,6 +168,34 @@ def test_enum_tables_reject_an_object_that_is_not_metadata() -> None:
         enum_tables_from_metadata(SimpleNamespace())
 
 
+def test_a_database_without_the_migration_table_covers_nothing() -> None:
+    """An empty or unstamped database: the entrypoint creates nothing or stamps head and skips the migrations."""
+    discrepancy = _missing(KIND, "extract")
+    tables = {KIND: frozenset({"statement_runs"})}
+    assert _cover([discrepancy], tables, set(), stamped=False) == ([discrepancy], [])
+    assert _cover([discrepancy], tables, {"users"}, stamped=False) == (
+        [discrepancy],
+        [],
+    )
+
+
+def test_the_table_list_query_is_the_pinned_information_schema_query() -> None:
+    assert gate.DB_TABLES_SQL == (
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema NOT IN ('pg_catalog', 'information_schema');"
+    )
+
+
+def test_enum_tables_read_a_type_decorator_over_an_enum() -> None:
+    wrapped = SimpleNamespace(
+        impl_instance=SimpleNamespace(name=KIND, enums=["extract"], native_enum=True)
+    )
+    metadata = SimpleNamespace(
+        tables={"t": SimpleNamespace(columns=[SimpleNamespace(type=wrapped)])}
+    )
+    assert enum_tables_from_metadata(metadata) == {KIND: frozenset({"t"})}
+
+
 class _Connection:
     def __init__(self, rows):
         self._rows = rows
@@ -210,7 +242,9 @@ def _run_main(service: str) -> int:
 def test_main_passes_when_only_a_new_table_uses_the_missing_type_and_reports_it(
     run_app: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(gate, "fetch_db_tables", lambda _url: frozenset({"users"}))
+    monkeypatch.setattr(
+        gate, "fetch_db_tables", lambda _url: frozenset({"users", "alembic_version"})
+    )
     rc = _run_main(run_app)
     out = capsys.readouterr().out
     assert rc == gate.EXIT_OK
@@ -238,6 +272,25 @@ def test_main_blocks_when_the_table_list_cannot_be_read(
     monkeypatch.setattr(gate, "fetch_db_tables", unreadable)
     assert _run_main(run_app) == gate.EXIT_BLOCKED
     assert KIND in capsys.readouterr().err
+
+
+def test_main_blocks_an_unstamped_database_and_names_no_cover(
+    run_app: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(gate, "fetch_db_tables", lambda _url: frozenset({"users"}))
+    assert _run_main(run_app) == gate.EXIT_BLOCKED
+    assert "NEW_TABLE_COVERS" not in capsys.readouterr().out
+
+
+def test_main_names_the_reason_when_coverage_is_not_applied(
+    run_app: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def unreadable(_url):
+        raise OSError("information_schema is unreadable")
+
+    monkeypatch.setattr(gate, "fetch_db_tables", unreadable)
+    assert _run_main(run_app) == gate.EXIT_BLOCKED
+    assert "NOTE: new-table coverage not applied (OSError)" in capsys.readouterr().err
 
 
 def test_main_does_not_read_the_table_list_when_nothing_differs(
@@ -276,4 +329,4 @@ def test_fetch_db_tables_returns_the_table_names(
     assert gate.fetch_db_tables("postgresql://db/app") == frozenset(
         {"users", "statements"}
     )
-    assert "information_schema.tables" in seen[0]
+    assert seen == [gate.DB_TABLES_SQL]

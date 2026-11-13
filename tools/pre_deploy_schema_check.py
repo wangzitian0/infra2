@@ -10,8 +10,9 @@ Audit-hardened (反事实审计 2026-09-16):
 - Bidirectional comparison: missing_in_db AND missing_in_code both block deploy.
   DB superset is the most dangerous runtime divergence. One exception (#1658): a whole
   enum type that the database lacks, and that only tables missing from the database use,
-  does not block: the image's start-up migration creates those tables and so the type.
-  See ``cover_with_new_tables``.
+  does not block (the database must hold ``alembic_version``): the image's start-up
+  migration creates those tables and so the type. The labels of that type are proved by
+  the service's CI, not compared here. See ``cover_with_new_tables``.
 - Fail-closed: any exception (query failure, parse error) blocks deploy.
   A check that silently fails is worse than no check.
 - Never a silent pass (#718 review): a gate that cannot load its code-side enums or
@@ -285,6 +286,7 @@ def cover_with_new_tables(
     *,
     enum_tables: Mapping[str, frozenset[str]],
     db_tables: Collection[str],
+    migration_table: str,
 ) -> tuple[list[EnumDiscrepancy], list[tuple[str, tuple[str, ...]]]]:
     """Split off a whole enum type that only tables missing from the database use (#1658).
 
@@ -292,12 +294,18 @@ def cover_with_new_tables(
     lacks is created by a pending migration, and a column of that table can only name a
     type that exists by then, so the same migration creates the type. Nothing here reads
     migration code. Covered: a type that the database lacks entirely, when every table
-    that uses it is missing from the database and nothing else is wrong with it. Always
-    blocking: a label that an existing type lacks, a DB-only label, a casing drift, and a
-    type that any table already in the database uses. Returns ``(blocking, covered)``
-    with ``covered`` as ``(enum name, its new tables)``.
+    that uses it is missing from the database. Always blocking: a label that an existing
+    type lacks, a DB-only label, a casing drift, a type that any table already in the
+    database uses, and every type when the database has no ``migration_table`` (an empty
+    or unstamped database: the entrypoint would create nothing, or stamp head and skip the
+    migrations). Labels of a covered type are not compared here; the service's CI proves
+    that its migrated database equals the ORM (finance_report
+    ``scripts/check_migrated_enums.py``). Returns ``(blocking, covered)`` with ``covered``
+    as ``(enum name, its new tables)``.
     """
     existing = set(db_tables)
+    if migration_table not in existing:
+        return list(discrepancies), []
     blocking: list[EnumDiscrepancy] = []
     covered: list[tuple[str, tuple[str, ...]]] = []
     for discrepancy in discrepancies:
@@ -586,14 +594,19 @@ def evaluate_db_preconditions(
     )
 
 
+# Visible to the connecting role only (information_schema lists the tables that the role
+# owns or has a privilege on); schema names are dropped, matching the ORM's table names.
+DB_TABLES_SQL = (
+    "SELECT table_name FROM information_schema.tables "
+    "WHERE table_schema NOT IN ('pg_catalog', 'information_schema');"
+)
+
+
 def fetch_db_tables(db_url: str) -> frozenset[str]:
     """The names of every table in the target database (#1658)."""
 
     def read(cursor: Any) -> frozenset[str]:
-        cursor.execute(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_schema NOT IN ('pg_catalog', 'information_schema');"
-        )
+        cursor.execute(DB_TABLES_SQL)
         return frozenset(str(row[0]) for row in cursor.fetchall())
 
     return _with_libpq_cursor(db_url, read)
@@ -667,9 +680,14 @@ def main(argv: list[str] | None = None) -> int:
                     _resolve(ENUM_SOURCES[args.service].metadata)
                 ),
                 db_tables=fetch_db_tables(db_url),
+                migration_table=ENUM_SOURCES[args.service].migration_table,
             )
-        except Exception:  # noqa: BLE001 - fail closed: an unreadable input covers nothing
+        except Exception as exc:  # noqa: BLE001 - fail closed: an unreadable input covers nothing
             covered = []
+            print(
+                f"NOTE: new-table coverage not applied ({type(exc).__name__})",
+                file=sys.stderr,
+            )
     for enum_name, tables in covered:
         print(f"NEW_TABLE_COVERS: {enum_name} ({', '.join(tables)})")
     # Printed on stdout (never stderr) in both branches below, as a stable-format line a
