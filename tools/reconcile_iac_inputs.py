@@ -79,7 +79,7 @@ from common.deploy.release_markers import (
     newest_release_tag,
     version_key,
 )
-from tools.promotion_soak_guard import require_upstream_post, required_staging_gates
+from common.deploy.promotion_guard import require_upstream_post, required_staging_gates
 from infra2_sdk.deploy import DeployRequest
 from infra2_sdk.observability import CheckVerdict
 from infra2_sdk.manifests import (

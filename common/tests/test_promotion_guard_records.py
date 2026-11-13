@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-import tools.promotion_soak_guard as guard
+from common.deploy import promotion_guard as guard
 import tools.reconcile_iac_inputs as reconcile
 from common.deploy import stage_record as writer
 from common.deploy import stage_record_reader as stage_records
@@ -451,3 +451,29 @@ def test_the_guard_reads_only_the_artifact_and_run_endpoints() -> None:
         "/repos/{repo}/actions/artifacts",
         "/repos/{repo}/compare/{sha}",
     }, endpoints
+
+
+def test_the_guard_cli_calls_the_common_function_and_exits_nonzero_on_a_refusal(
+    monkeypatch, capsys
+) -> None:
+    import tools.promotion_soak_guard as cli
+
+    seen: dict[str, object] = {}
+
+    def fake(after, repo_root, *, before, required, releases):
+        seen.update(
+            after=after, before=before, required=dict(required), releases=releases()
+        )
+        raise SystemExit("::error::upstream_post refused: x")
+
+    monkeypatch.setattr(cli, "require_upstream_post", fake)
+    argv = ["--after", "v1.0.2", "--before", "v1.0.0", "--release", "v1.0.1",
+            "--require", "finance_report/app=v0.2.61"]  # fmt: skip
+    assert cli.main(argv) == 1
+    assert seen == {
+        "after": "v1.0.2",
+        "before": "v1.0.0",
+        "required": {"finance_report/app": "v0.2.61"},
+        "releases": ["v1.0.1"],
+    }
+    assert "upstream_post refused" in capsys.readouterr().err
