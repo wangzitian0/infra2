@@ -35,7 +35,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -45,6 +44,7 @@ if str(ROOT) not in sys.path:
 
 from invoke import Context  # noqa: E402
 
+from common.core.ref_worktree import run_at_ref  # noqa: E402
 from common.deploy.config_hash import (  # noqa: E402
     _compose_artifact_files,
     _dependency_paths_from_globs,
@@ -210,29 +210,13 @@ def hashes_with_ref_code(
     root = root or ROOT
     if not _on_main(ref, root):
         raise RuntimeError(f"{ref} is not on main; its code does not run here")
-    with tempfile.TemporaryDirectory(prefix="config-drift-") as tmp:
-        tree = Path(tmp) / "tree"
-        subprocess.run(
-            ["git", "worktree", "add", "--detach", "--quiet", str(tree), ref],
-            cwd=root,
-            check=True,
-            capture_output=True,
-        )
-        try:
-            proc = subprocess.run(
-                [sys.executable, "-c", _REF_HASH_SCRIPT, json.dumps(service_ids)],
-                cwd=tree,
-                capture_output=True,
-                text=True,
-                timeout=REF_RUN_TIMEOUT_S,
-                env=_release_env(),
-            )
-        finally:
-            subprocess.run(
-                ["git", "worktree", "remove", "--force", str(tree)],
-                cwd=root,
-                capture_output=True,
-            )
+    proc = run_at_ref(
+        ref,
+        [sys.executable, "-c", _REF_HASH_SCRIPT, json.dumps(service_ids)],
+        root=root,
+        timeout=REF_RUN_TIMEOUT_S,
+        env=_release_env(),
+    )
     line = next(
         (x for x in proc.stdout.splitlines() if x.startswith("REF_HASHES ")), None
     )

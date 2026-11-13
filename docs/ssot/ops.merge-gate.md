@@ -119,6 +119,7 @@ Limits of the lock:
 - One run makes at most 9 + N + 2k `gh` calls. N is the number of workflow files.
   k is the number of changed gate files with a direction proof. `--request-review` adds up to 2, and `--merge` adds 1.
   Each call can try up to 3 times.
+- `python -m tools.pr_merge_gate --replay N --json` replays the last N merged PRs through this checkout's gate and the gate of `origin/main`. It prints each verdict that changed and the direction: `stricter`, `looser`, `equal` or `mixed` (#1653). A gate edit shows its replay.
 
 Residual risks:
 
