@@ -126,6 +126,7 @@ def test_workflow_runs_daily_and_can_be_dispatched() -> None:
         "facet-reconcile",
         "vault-self-refresh-audit",
         "secrets-reconcile",
+        "e2e-regressions-smoke",  # #1649
     ]
 
 
@@ -284,7 +285,11 @@ def _worker_status_response(monkeypatch, watchdog, last_run: dict) -> list:
 
         def read(self, _limit):
             return json.dumps(
-                {"ok": last_run.get("ok", True), "lastRun": last_run}
+                {
+                    "ok": last_run.get("ok", True),
+                    "lastRun": last_run,
+                    "heartbeats": last_run.get("heartbeats", []),
+                }
             ).encode()
 
     def fake_urlopen(request, **_kwargs):
@@ -2033,6 +2038,49 @@ def test_main_judges_the_worker_on_running_and_delivering(
     assert set(trail.failing) == paged
     assert ("cloudflare-worker-status" in trail.green) is (not paged)
     assert ["ok=False failures=2" in report for report in reports] == reported_note
+
+
+def _heartbeat(state: str, age: int, environment: str = "staging") -> dict:
+    return {
+        "environment": environment,
+        "name": "platform-alerting-probes",
+        "paged": environment == "production",
+        "state": state,
+        "ageSeconds": age,
+    }
+
+
+@pytest.mark.parametrize(
+    ("heartbeat", "reported"),
+    [
+        (_heartbeat("stale", 5400 + 60), True),
+        (_heartbeat("missing", 0), True),
+        (_heartbeat("fresh", 600), False),
+        (_heartbeat("stale", 99999, "production"), False),  # the Worker pages it
+    ],
+    ids=["stale-staging", "missing-staging", "fresh-staging", "production-stale"],
+)
+def test_stale_staging_heartbeat_reports(
+    monkeypatch, tmp_path, heartbeat, reported
+) -> None:
+    """#1649: a stale or missing unpaged (staging) heartbeat in /status gives one report
+    note in the daily run and no page; a fresh one, or a paged production one, adds none."""
+    watchdog = _load_watchdog()
+    _worker_status_response(
+        monkeypatch, watchdog, {**FRESH_CLEAN_RUN, "heartbeats": [heartbeat]}
+    )
+    (result,) = watchdog.run_worker_status_check(
+        {
+            "INFRA2_WATCHDOG_WORKER_STATUS_URL": "",
+            "INFRA2_WATCHDOG_WORKER_STATUS_TOKEN": "status-token",
+        },
+        timeout=3,
+    )
+
+    assert result.ok is True  # never a page
+    assert ("not fresh (report only)" in result.note) is reported
+    if reported:
+        assert "staging/platform-alerting-probes" in result.note
 
 
 def test_main_sends_nothing_on_a_green_day(monkeypatch, tmp_path) -> None:

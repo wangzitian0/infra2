@@ -675,9 +675,14 @@ def mark_report_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def is_report_payload(payload: dict[str, Any]) -> bool:
-    """True when the payload asks to be delivered as a report (``delivery=report``)."""
-    label = _dict(payload.get("commonLabels")).get(DELIVERY_LABEL, "")
-    return str(label).strip().lower() == REPORT_DELIVERY
+    """True for ``delivery=report`` or a report-only ``environment`` label (staging)."""
+    from common.alerting.delivery import is_report_only_environment
+
+    labels = _dict(payload.get("commonLabels"))
+    if str(labels.get(DELIVERY_LABEL, "")).strip().lower() == REPORT_DELIVERY:
+        return True
+    environment = str(labels.get("environment") or "")
+    return bool(environment) and is_report_only_environment(environment)
 
 
 def build_feishu_report_card(

@@ -836,6 +836,37 @@ def test_bridge_sends_a_report_to_the_report_chat_and_a_page_to_the_pager(
     ]
 
 
+def test_staging_signoz_payload_is_a_report(monkeypatch) -> None:
+    """#1649: a SigNoz firing labelled `environment=staging` goes to the report chat
+    as a report; the same payload with `environment=production` is a page."""
+    from common.alerting import is_report_payload
+
+    def firing(environment: str) -> dict:
+        labels = {
+            "alertname": "PlatformTodoErrorLogs",
+            "severity": "error",
+            "environment": environment,
+        }
+        return {
+            "status": "firing",
+            "commonLabels": labels,
+            "alerts": [{"status": "firing", "labels": labels}],
+        }
+
+    assert is_report_payload(firing("staging")) is True
+    assert is_report_payload(firing("production")) is False
+    post, sent, stop = _bridge_under_test(monkeypatch, report_chat="oc_reports")
+    try:
+        assert post(firing("staging")) == 202
+        assert post(firing("production")) == 202
+    finally:
+        stop()
+
+    assert [s["chat"] for s in sent] == ["oc_reports", "oc_pager"]
+    assert sent[0]["title"].startswith("[报告]")
+    assert not sent[1]["title"].startswith("[报告]")
+
+
 def test_bridge_without_a_report_chat_marks_reports_in_the_pager_chat(
     monkeypatch,
 ) -> None:
