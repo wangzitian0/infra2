@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from common.observability.signoz_queries import ERROR_LOG_LEVELS
 from common.alerting.types import (
-    ERROR_LOG_LEVELS,
     SIGNOZ_ALERT_SCHEMA_VERSION,
     SIGNOZ_ALERT_VERSION,
     SIGNOZ_FEISHU_CHANNEL_PREFIX,
