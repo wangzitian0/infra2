@@ -137,7 +137,6 @@
   "common/tests/test_project_index_generated.py": 0.05,
   "common/tests/test_project_index_ordering.py": 0.01,
   "common/tests/test_project_lifecycle_governance.py": 0.01,
-  "common/tests/test_promotion_soak_guard.py": 0.2,
   "common/tests/test_pytest_durations_config.py": 1.73,
   "common/tests/test_recall_drill.py": 2.38,
   "common/tests/test_recency.py": 0.02,

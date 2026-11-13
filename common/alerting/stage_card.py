@@ -5,16 +5,20 @@ A stage task (a staging soak of one release tag, a production promotion) writes 
 one card: the failed check ids first, then the passed ones, with the seconds of each check, the
 env, the tag and the run URL. The card has at most ``MAX_CHECK_LINES`` check lines.
 
-The reconcile run creates the card after the ``pre`` record and updates it by message id after
-each later record. Only the Feishu app can update a card. In webhook mode there is no card: the
-records are still written and ``show_stage_card`` prints ``::warning::``. It never raises, and it
-never waits longer than ``STAGE_CARD_BUDGET_SECONDS`` for Feishu: a card must not stop a deploy.
+The three jobs of the reconcile run (``pre``, ``operation``, ``post``) each upload their record.
+The ``alert`` job downloads them and calls ``show_run_card`` once (#1646). Only the Feishu app can
+update a card. In webhook mode there is no card: the records are still written and
+``show_stage_card`` prints ``::warning::``. It never raises, and it never waits longer than
+``STAGE_CARD_BUDGET_SECONDS`` for Feishu: a card must not stop a deploy.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import sys
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 import common.alerting
@@ -103,3 +107,27 @@ def show_stage_card(
             flush=True,
         )
         return message_id
+
+
+def show_run_card(directory: str | Path, env: Mapping[str, str]) -> str:
+    """One card from the record files in ``directory``: the records of the jobs of one run.
+
+    A file that is not a valid record, or records of more than one stage, give no card and one
+    ``::warning::``. It never raises.
+    """
+    records: list[StageRecord] = []
+    for path in sorted(Path(directory).glob("*.json")):
+        try:
+            records.append(StageRecord.from_dict(json.loads(path.read_text("utf-8"))))
+        except (OSError, ValueError) as exc:
+            print(f"::warning title=Stage card::{path.name} is not a record: {exc}")
+    if not records or len({(r.env, r.subject) for r in records}) != 1:
+        print(
+            "::warning title=Stage card::no card: the files are not the records of one stage"
+        )
+        return ""
+    return show_stage_card(env, records)
+
+
+if __name__ == "__main__":
+    show_run_card(sys.argv[1] if len(sys.argv) > 1 else "stage-records", os.environ)

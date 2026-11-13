@@ -114,7 +114,7 @@ flowchart TB
 
 ### 3.1 发布驱动部署（release tag → staging；显式 promote → prod）
 
-一个变更到达运行中的服务只有三条路，**合并到 `main` 不是其中之一**。完整触发模型、staging/prod 晋升链路与 `promotion_soak_guard` 规则的**唯一权威定义**见 [ops.pipeline.md §2–3](./ops.pipeline.md#2-部署目标与触发-deploy-targets--triggers)；本节仅定义 IaC Runner 进程自身的接收与执行契约。
+一个变更到达运行中的服务只有三条路，**合并到 `main` 不是其中之一**。完整触发模型、staging/prod 晋升链路与晋升守卫（`pre` 作业的 `upstream_post`）规则的**唯一权威定义**见 [ops.pipeline.md §2–3](./ops.pipeline.md#2-部署目标与触发-deploy-targets--triggers)；本节仅定义 IaC Runner 进程自身的接收与执行契约。
 
 **Runner `/deploy` 接收与幂等契约**:
 1. `/deploy` 只接受精确 40 位 commit SHA；tag → SHA 的解析在 GitHub Actions 侧完成（§4.4）。

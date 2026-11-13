@@ -28,6 +28,7 @@ from tools.reconcile_iac_inputs import (
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "reconcile-iac-inputs.yml"
+SETUP_ACTION = ROOT / ".github" / "actions" / "train-setup" / "action.yml"
 SHA = "a" * 40
 
 
@@ -38,6 +39,13 @@ def _stub_app_version_ref_on_main(monkeypatch) -> None:
     monkeypatch.setattr(
         reconcile, "assert_app_version_ref_on_main", lambda *_a, **_kw: None
     )
+
+
+@pytest.fixture(autouse=True)
+def _stub_upstream_post(monkeypatch) -> None:
+    """A production `pre` reads GitHub stage records (#1646). Offline reconcile unit tests stub
+    that read; common/tests/test_promotion_guard_records.py tests it and its refusals."""
+    monkeypatch.setattr(reconcile, "require_upstream_post", lambda *_a, **_kw: None)
 
 
 def test_plan_selects_alerting_when_baked_tooling_changes() -> None:
@@ -607,7 +615,7 @@ def test_reconcile_workflow_contract() -> None:
     # NOT main-push triggered (which would promote a moving sha).
     assert workflow["on"]["push"]["tags"] == ["v*.*.*"]
     assert "branches" not in workflow["on"]["push"]
-    assert workflow["jobs"]["reconcile"]["timeout-minutes"] == 120
+    assert workflow["jobs"]["operation"]["timeout-minutes"] == 120
     assert "python -m tools.reconcile_iac_inputs" in text
     assert "IAC_WEBHOOK_SECRET is required" in text
     assert "--timeout 3300" in text
@@ -620,12 +628,13 @@ def test_reconcile_workflow_contract() -> None:
     assert "--promote-prod" in text
     # the provenance guard relies on origin/main being resolvable in a tag-push checkout;
     # lock the exact fetch step so a future workflow edit can't silently break the guard.
-    assert "refs/remotes/origin/main" in text
-    assert workflow["permissions"]["contents"] == "write"
-    assert "production/v* marker" in text.lower()
-    assert 'production_before="${production_marker#production/}"' in text
-    assert "first production marker requires an explicit known-production" in text
-    assert 'before="$production_before"' in text
+    assert "refs/remotes/origin/main" in SETUP_ACTION.read_text(encoding="utf-8")
+    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["jobs"]["operation"]["permissions"]["contents"] == "write"
+    assert "production/<tag> marker" in text
+    # one source of the base release: no bash copy of the production marker logic remains
+    assert "production_before" not in text and "production/v*.*.*" not in text
+    assert "--print-changed-files" in text
 
 
 def test_reconcile_workflow_run_name_shows_the_release_tag() -> None:
@@ -644,42 +653,33 @@ def test_reconcile_workflow_run_name_shows_the_release_tag() -> None:
 def test_reconcile_job_runs_on_ubuntu_24_04_for_playwright() -> None:
     """#1543: ubuntu-latest is 26.04, where Playwright 1.57.0 has no chromium build."""
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    runs_on = workflow["jobs"]["reconcile"]["runs-on"]
-    assert runs_on == "ubuntu-24.04"
+    assert {job: spec["runs-on"] for job, spec in workflow["jobs"].items()} == {
+        job: "ubuntu-24.04" for job in ("pre", "operation", "post", "alert")
+    }
 
 
 def test_promote_prod_refuses_a_tag_without_a_green_staging_soak() -> None:
     """2026-09-07: v1.1.61 was promoted to production while its own staging reconcile had
-    failed; production alerting crash-looped until the rollback. The guard step runs only
-    on an explicit production promotion and needs a green push-triggered run of this
-    workflow for the same tag — a dispatch run (dry run, or a promotion) does not count."""
+    failed; production alerting crash-looped until the rollback. The guard is the
+    `upstream_post` check of the `pre` job: it reads stage records and runs before the owner
+    is asked (its refusals are tested in test_promotion_guard_records.py)."""
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    steps = workflow["jobs"]["reconcile"]["steps"]
-    names = [step.get("name") for step in steps]
-    guard = steps[
-        names.index("Production promotion guard (soak, identity, change set)")
-    ]
-    assert names.index("Fetch origin/main for provenance guard") < names.index(
-        guard["name"]
-    )
-    assert names.index(guard["name"]) < names.index("Reconcile changed IaC inputs")
-    assert "inputs.promote_prod" in guard["if"] and "workflow_dispatch" in guard["if"]
-    assert guard["env"]["GH_TOKEN"] == "${{ github.token }}"
-    # gh run list needs actions: read on the workflow token (review on #641)
-    # and Layer 2 GitHub OIDC requires id-token: write (#1126)
-    assert workflow["permissions"] == {
+    pre = workflow["jobs"]["pre"]
+    names = [step.get("name") for step in pre["steps"]]
+    assert names.index("Set up the train") < names.index("Pre phase")
+    script = pre["steps"][names.index("Pre phase")]["run"]
+    assert "--phase pre" in script and "--promote-prod" in script
+    # the record reader needs actions: read on the workflow token (review on #641)
+    assert pre["permissions"] == {"contents": "read", "actions": "read"}
+    assert pre["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
+    # Layer 2 GitHub OIDC requires id-token: write (#1126), only in the job that deploys
+    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["jobs"]["operation"]["permissions"] == {
         "contents": "write",
         "pull-requests": "write",
-        "issues": "write",
-        "actions": "read",
         "id-token": "write",
     }
-    script = guard["run"]
-    # the soak lookup is the tested tool (common/tests/test_promotion_soak_guard.py), which
-    # finds the run by commit and owns the "has no green staging soak" refusal (#970).
-    assert 'python -m tools.promotion_soak_guard "$after"' in script
-    assert "merge-base --is-ancestor" in script
-    assert "production/v*.*.*" in script and "git diff --stat" in script
+    assert workflow["jobs"]["alert"]["permissions"]["issues"] == "write"
 
 
 _RUNNER_FINAL_STDERR = (
@@ -762,7 +762,7 @@ def test_failure_alert_falls_back_to_the_stderr_tail_and_is_silent_on_success() 
 
 def test_reconcile_workflow_pages_on_failure_with_the_runner_diagnostics() -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    job = workflow["jobs"]["reconcile"]
+    job = workflow["jobs"]["alert"]
     for key in (
         "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE",
         "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL",
@@ -772,15 +772,29 @@ def test_reconcile_workflow_pages_on_failure_with_the_runner_diagnostics() -> No
         "INFRA2_OUT_OF_BAND_FEISHU_API_BASE",
     ):
         assert job["env"][key] == "${{ secrets.%s }}" % key
+    # a refusal in `pre`, which holds no secret, still pages through this job
+    assert job["needs"] == ["pre", "operation", "post"]
+    assert "needs.pre.result == 'failure' && 'pre'" in job["env"]["FAILED_JOB"]
     names = [step.get("name") for step in job["steps"]]
     alert = job["steps"][names.index("Alert on failure")]
     assert (
-        names.index("Reconcile changed IaC inputs")
+        names.index("Merge the results of the train jobs")
         < names.index("Alert on failure")
-        < names.index("Upload reconcile result")
+        < names.index("Resolve the reconcile failure alert")
     )
-    assert alert["if"].startswith("failure()") and "inputs.dry_run" in alert["if"]
+    assert alert["if"].startswith("env.FAILED_JOB != ''")
+    assert "inputs.dry_run" in alert["if"]
     assert "deliver_out_of_band_alert" in alert["run"] and "alert_text" in alert["run"]
+    # the result files of the three jobs reach this job as artifacts
+    uploads = {
+        step["with"]["name"]
+        for name in ("pre", "operation", "post")
+        for step in workflow["jobs"][name]["steps"]
+        if step.get("name") == "Upload reconcile result"
+    }
+    assert uploads == {
+        f"iac-input-reconcile-result-{n}" for n in ("pre", "operation", "post")
+    }
 
 
 def test_github_run_url_is_real_or_clearly_absent() -> None:
@@ -905,13 +919,13 @@ def test_reconcile_workflow_folds_in_bootstrap_and_observability_apply_on_promot
     observability apply (after tools.reconcile_iac_inputs) when promote_prod=true. The
     behaviour of the update block is tested by running it below."""
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    job = workflow["jobs"]["reconcile"]
+    job = workflow["jobs"]["operation"]
     assert job["env"]["SIGNOZ_API_KEY"] == "${{ secrets.SIGNOZ_API_KEY }}"
 
     steps = job["steps"]
     names = [step.get("name") for step in steps]
-    assert "Install uv" in names
-    reconcile_idx = names.index("Reconcile changed IaC inputs")
+    assert "astral-sh/setup-uv" in SETUP_ACTION.read_text(encoding="utf-8")
+    reconcile_idx = names.index("Operation phase")
     obs_idx = names.index("Reconcile SigNoz observability (alerts + dashboard)")
     assert reconcile_idx < obs_idx
 
@@ -920,7 +934,9 @@ def test_reconcile_workflow_folds_in_bootstrap_and_observability_apply_on_promot
     non_dry_run_idx = script.index('if [[ "$dry_run" != "true" ]]; then')
     bootstrap_idx = script.index("< scripts/deploy_iac_runner_bootstrap.sh")
     health_idx = script.index("IaC Runner public health attempt ${attempt}/12")
-    run_reconcile_idx = script.index("\npython -m tools.reconcile_iac_inputs")
+    run_reconcile_idx = script.index(
+        '\npython -m tools.reconcile_iac_inputs "${args[@]}"'
+    )
     assert non_dry_run_idx < bootstrap_idx < health_idx < run_reconcile_idx
 
     obs_step = steps[obs_idx]
@@ -940,14 +956,12 @@ def test_reconcile_workflow_folds_in_bootstrap_and_observability_apply_on_promot
 def _runner_bootstrap_block() -> str:
     """The bash of the in-train runner update, cut out of the real workflow step."""
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    steps = workflow["jobs"]["reconcile"]["steps"]
+    steps = workflow["jobs"]["operation"]["steps"]
     script = next(
-        step["run"]
-        for step in steps
-        if step.get("name") == "Reconcile changed IaC inputs"
+        step["run"] for step in steps if step.get("name") == "Operation phase"
     )
     start = script.index("# IaC Runner Bootstrap Update")
-    end = script.index("\nargs=(--after")
+    end = script.index("\nargs=(--phase operation")
     return script[start:end]
 
 
@@ -2019,32 +2033,40 @@ def test_sync_app_releases_create_pr_surfaces_gh_stderr_on_failure(
 def test_reconcile_workflow_skips_deploy_outage_alert_when_sync_app_releases_fails(
     monkeypatch, tmp_path, capsys
 ) -> None:
-    """#1463: reconcile-iac-inputs.yml records RECONCILE_PHASE=sync-app-releases before
-    the pull-based App release PR sync and RECONCILE_PHASE=reconcile-deploy before the tag
-    deploy step, and Alert on failure skips the page (dedup_page) when a failure occurs
-    during sync-app-releases before reconcile-result.json exists."""
+    """#1463: the `alert` job of reconcile-iac-inputs.yml sets RECONCILE_PHASE=sync-app-releases
+    for a sync run and RECONCILE_PHASE=reconcile-deploy only when a deploy job succeeded, and
+    Alert on failure skips the page (dedup_page) when a failure occurs during
+    sync-app-releases before reconcile-result.json exists."""
     import tools.out_of_band_watchdog as watchdog
 
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    steps = workflow["jobs"]["reconcile"]["steps"]
+    alert_job = workflow["jobs"]["alert"]
+    steps = alert_job["steps"]
     names = [step.get("name") for step in steps]
-    reconcile_step = steps[names.index("Reconcile changed IaC inputs")]
     alert_step = steps[names.index("Alert on failure")]
 
-    reconcile_script = reconcile_step["run"]
-    sync_phase_idx = reconcile_script.index(
-        'echo "RECONCILE_PHASE=sync-app-releases" >> "$GITHUB_ENV"'
+    operation_script = next(
+        step["run"]
+        for step in workflow["jobs"]["operation"]["steps"]
+        if step.get("name") == "Operation phase"
     )
-    sync_cmd_idx = reconcile_script.index(
+    assert "RECONCILE_PHASE" not in operation_script
+    sync_cmd_idx = operation_script.index(
         'python -m tools.reconcile_iac_inputs "${sync_args[@]}"'
     )
-    deploy_phase_idx = reconcile_script.index(
-        'echo "RECONCILE_PHASE=reconcile-deploy" >> "$GITHUB_ENV"'
-    )
-    deploy_cmd_idx = reconcile_script.index(
+    deploy_cmd_idx = operation_script.index(
         'python -m tools.reconcile_iac_inputs "${args[@]}"'
     )
-    assert sync_phase_idx < sync_cmd_idx < deploy_phase_idx < deploy_cmd_idx
+    assert sync_cmd_idx < deploy_cmd_idx
+    phase = alert_job["env"]["RECONCILE_PHASE"]
+    assert (
+        "(github.event_name == 'schedule' || inputs.sync_app_releases) && 'sync-app-releases'"
+        in phase
+    )
+    assert (
+        "needs.operation.result == 'success' || needs.post.result == 'success'" in phase
+    )
+    assert "!inputs.run_hook_slot && 'reconcile-deploy'" in phase
 
     assert alert_step["env"]["RECONCILE_PHASE"] == "${{ env.RECONCILE_PHASE || '' }}"
     alert_run = alert_step["run"]
@@ -2483,8 +2505,8 @@ def test_reconcile_workflow_always_runs_gates_and_every_sync_exits_after_its_pr(
     assert "run_post_deploy_hooks" not in inputs
     script = next(
         step["run"]
-        for step in workflow["jobs"]["reconcile"]["steps"]
-        if step.get("name") == "Reconcile changed IaC inputs"
+        for step in workflow["jobs"]["operation"]["steps"]
+        if step.get("name") == "Operation phase"
     )
     assert "run_post_deploy_hooks" not in script
     # the flag is deleted: hooks always run, so no script passes or tests it (#1628)
@@ -2495,12 +2517,13 @@ def test_reconcile_workflow_always_runs_gates_and_every_sync_exits_after_its_pr(
     sched_idx = script.index(
         'if [[ "$EVENT_NAME" == "schedule" || "${{ inputs.sync_app_releases || false }}" == "true" ]]; then'
     )
-    sched_block = script[sched_idx : script.index("RECONCILE_PHASE=reconcile-deploy")]
+    sched_block = script[
+        sched_idx : script.index('python -m tools.reconcile_iac_inputs "${args[@]}"')
+    ]
     assert "--sync-app-releases --apply-repos-yaml --sync-gitlinks" in sched_block
     assert "sync_args+=(--create-pr)" in sched_block
     assert "promote_prod" not in sched_block
-    # the last fragment is the `echo "` that opens the deploy phase
-    body = [line.strip() for line in sched_block.splitlines() if line.strip()][:-1]
+    body = [line.strip() for line in sched_block.splitlines() if line.strip()]
     assert body[-2:] == ["exit 0", "fi"]
     assert "synced_infra_tag" not in script
 
@@ -2580,13 +2603,18 @@ def test_main_run_hook_slot_resolves_local_service_manifest_and_url(
 _HOOK_SLOT_FLAGS = (
     "--run-hook-slot",
     "--run-scheduled-audit",
+    "--phase post",
 )
 
 
 def _secret_name(value: object) -> str | None:
-    """Return NAME when ``value`` is exactly the expression ``${{ secrets.NAME }}``."""
+    """Return NAME when ``value`` is the expression ``${{ secrets.NAME }}``, or the form that
+    the `post` job uses, ``${{ !inputs.promote_prod && secrets.NAME || '' }}``: a production
+    run passes no hook secret, because the owner approved `operation` alone (#1646)."""
     match = re.fullmatch(
-        r"\$\{\{\s*secrets\.([A-Za-z0-9_]+)\s*\}\}", str(value).strip()
+        r"\$\{\{\s*(?:!inputs\.promote_prod\s*&&\s*)?secrets\.([A-Za-z0-9_]+)"
+        r"(?:\s*\|\|\s*'')?\s*\}\}",
+        str(value).strip(),
     )
     return match.group(1) if match else None
 
@@ -2631,9 +2659,36 @@ def _unsupplied_runner_env(
     return problems
 
 
+def _expand_composites(workflow: dict) -> dict:
+    """Replace each ``uses: ./.github/actions/<name>`` step by the steps of that composite action,
+    with its inputs from ``with``, so a test sees the steps that the job runs (#1646)."""
+    for job in (workflow.get("jobs") or {}).values():
+        steps: list[dict] = []
+        for step in job.get("steps") or []:
+            uses = str(step.get("uses") or "")
+            if not uses.startswith("./.github/actions/"):
+                steps.append(step)
+                continue
+            action = yaml.safe_load(
+                (ROOT / uses.removeprefix("./") / "action.yml").read_text("utf-8")
+            )
+            inputs = {k: str(v.get("default", "")) for k, v in action["inputs"].items()}
+            inputs |= {k: str(v) for k, v in (step.get("with") or {}).items()}
+            for inner in action["runs"]["steps"]:
+                gate = re.fullmatch(
+                    r"\$\{\{\s*inputs\.(\w+) == '(\w+)'\s*\}\}",
+                    str(inner.get("if", "")),
+                )
+                if gate and inputs.get(gate.group(1)) != gate.group(2):
+                    continue
+                steps.append({k: v for k, v in inner.items() if k != "if"})
+        job["steps"] = steps
+    return workflow
+
+
 def _load_workflows() -> dict[str, dict]:
     return {
-        path.name: yaml.safe_load(path.read_text(encoding="utf-8"))
+        path.name: _expand_composites(yaml.safe_load(path.read_text(encoding="utf-8")))
         for path in sorted((ROOT / ".github" / "workflows").glob("*.y*ml"))
     }
 
@@ -2650,23 +2705,25 @@ def test_workflow_steps_that_run_hook_slots_supply_every_runner_secret_env() -> 
     # The scan must find both known runners. An empty scan would pass without checking.
     runners = {(file_name, job) for file_name, job, _, _ in _hook_slot_steps(workflows)}
     assert {
-        ("reconcile-iac-inputs.yml", "reconcile"),
+        ("reconcile-iac-inputs.yml", "operation"),
+        ("reconcile-iac-inputs.yml", "post"),
         ("ops-checks.yml", "audit"),
     } <= runners
     assert table
     assert _unsupplied_runner_env(workflows, table) == []
 
-    # Mutation proof 1: a job env without the name fails.
-    mutated = yaml.safe_load(yaml.safe_dump(workflows))
-    del mutated["reconcile-iac-inputs.yml"]["jobs"]["reconcile"]["env"]["TA_EMAIL"]
-    problems = _unsupplied_runner_env(mutated, table)
-    assert len(problems) == 1
-    assert "reconcile-iac-inputs.yml job 'reconcile'" in problems[0]
-    assert "TA_EMAIL must be ${{ secrets.TA_EMAIL }}" in problems[0]
+    # Mutation proof 1: a job env without the name fails, in each train job that runs hooks.
+    for job in ("operation", "post"):
+        mutated = yaml.safe_load(yaml.safe_dump(workflows))
+        del mutated["reconcile-iac-inputs.yml"]["jobs"][job]["env"]["TA_EMAIL"]
+        problems = _unsupplied_runner_env(mutated, table)
+        assert len(problems) == 1
+        assert f"reconcile-iac-inputs.yml job {job!r}" in problems[0]
+        assert "TA_EMAIL must be ${{ secrets.TA_EMAIL }}" in problems[0]
 
     # Mutation proof 2: the name from another secret fails.
     mutated = yaml.safe_load(yaml.safe_dump(workflows))
-    mutated["reconcile-iac-inputs.yml"]["jobs"]["reconcile"]["env"]["TA_EMAIL"] = (
+    mutated["reconcile-iac-inputs.yml"]["jobs"]["operation"]["env"]["TA_EMAIL"] = (
         "${{ secrets.OTHER_API_KEY }}"
     )
     assert len(_unsupplied_runner_env(mutated, table)) == 1
@@ -2734,8 +2791,9 @@ def test_train_fails_before_any_deploy_when_a_pinned_hook_env_value_is_missing(
     monkeypatch, tmp_path
 ) -> None:
     """#1633: a pinned manifest requires TA_EMAIL and the job env has none. main exits non-zero
-    with the service, the slot and the name, and runs 0 deploy commands. The ``pre`` record
-    names the check ``hook_env``."""
+    with the service, the slot and the name, and runs 0 deploy commands. The ``operation``
+    record names the check ``hook_env``: the ``pre`` job holds no secret, so it cannot read the
+    value (#1646)."""
     from infra2_sdk.refs import ResolvedRef
 
     (tmp_path / "harness").mkdir(parents=True)
@@ -2791,9 +2849,80 @@ def test_train_fails_before_any_deploy_when_a_pinned_hook_env_value_is_missing(
     assert "staging_gate" in message
     assert "TA_EMAIL" in message
     assert deploy_calls == []
-    assert ("pre", ["provenance", "app_pins", "hook_env"]) in [
+    assert [
         (phase, [n for n in names if n != "contract"]) for phase, names in emitted
-    ]
+    ] == [("pre", ["provenance", "app_pins"]), ("operation", ["hook_env"])]
+
+
+def _hook_env_run(monkeypatch, tmp_path, *, slot: str, promote: bool) -> list[object]:
+    """Run the train through `hook_env` with TA_EMAIL set and `slot` requiring it."""
+    from infra2_sdk.refs import ResolvedRef
+
+    (tmp_path / "harness").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "harness" / "repos.yaml").write_text(
+        "schema_version: 1\nrepositories:\n"
+        "  - id: truealpha\n    role: external-application\n    release_tag: v0.2.89\n",
+        encoding="utf-8",
+    )
+    deploys: list[object] = []
+    monkeypatch.setenv("STAGE_RECORD_DIR", str(tmp_path / "records"))
+    monkeypatch.setenv("TA_EMAIL", "set")
+    monkeypatch.setattr(reconcile, "assert_after_on_main", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        reconcile, "assert_production_marker_advances", lambda *_a, **_kw: "v9.9.8"
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "assert_app_version_ref_matches_train",
+        lambda *_a, **_kw: None,
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "resolve_image_ref",
+        lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "fetch_hooks_manifest",
+        lambda *_a, **_kw: _ta_manifest_requiring_ta_email(slot),
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "run_deploy_commands",
+        lambda cmds, **_kw: deploys.extend(cmds) or [],
+    )
+    monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", lambda *_a, **_kw: [])
+    args = ["--repo-root", str(tmp_path), "--phase", "operation", "--after", "v9.9.9",
+            "--changed-file", "harness/repos.yaml"]  # fmt: skip
+    args += (
+        ["--promote-prod", "--before", "v9.9.8"] if promote else ["--env", "staging"]
+    )
+    try:
+        main(args)
+    except SystemExit as refused:
+        return [str(refused)]
+    return deploys
+
+
+def test_a_production_gate_that_needs_a_hook_secret_fails_hook_env_before_the_deploy(
+    monkeypatch, tmp_path
+) -> None:
+    """#1646: `post` of a production run holds no hook secret (the owner approved `operation`
+    alone). A `prod_gate` that requires one fails the check in `operation`, though the
+    secret is set there, instead of failing in `post` after the deploy and the marker."""
+    refused = _hook_env_run(monkeypatch, tmp_path, slot="prod_gate", promote=True)
+    assert (
+        len(refused) == 1
+        and "TA_EMAIL" in str(refused[0])
+        and "prod_gate" in str(refused[0])
+    )
+    # staging passes the same gate: `post` of a staging run holds the secret
+    assert (
+        _hook_env_run(monkeypatch, tmp_path / "s", slot="staging_gate", promote=False)
+        != []
+    )
+    # a production smoke is run by `operation`, which holds the secret
+    assert _hook_env_run(monkeypatch, tmp_path / "p", slot="smoke", promote=True) != []
 
 
 def test_scheduled_audit_fails_a_service_with_a_missing_hook_env_value_without_running_it(
@@ -2983,14 +3112,15 @@ def test_hook_slot_steps_install_the_bun_that_manifest_commands_call() -> None:
     } <= found
     runners = {(file_name, job) for file_name, job, _, _ in _hook_slot_steps(workflows)}
     assert {
-        ("reconcile-iac-inputs.yml", "reconcile"),
+        ("reconcile-iac-inputs.yml", "operation"),
+        ("reconcile-iac-inputs.yml", "post"),
         ("ops-checks.yml", "audit"),
     } <= runners
     assert _hook_steps_without_bun(workflows, raw_manifests) == []
 
     def mutated_copy() -> tuple[dict[str, dict], list[dict]]:
         copy = yaml.safe_load(yaml.safe_dump(workflows))
-        return copy, copy["reconcile-iac-inputs.yml"]["jobs"]["reconcile"]["steps"]
+        return copy, copy["reconcile-iac-inputs.yml"]["jobs"]["operation"]["steps"]
 
     # Mutation proof 1: a job without the setup step gives exactly one problem.
     mutated, steps = mutated_copy()
@@ -2999,8 +3129,8 @@ def test_hook_slot_steps_install_the_bun_that_manifest_commands_call() -> None:
     steps[:] = kept
     problems = _hook_steps_without_bun(mutated, raw_manifests)
     assert len(problems) == 1
-    assert "reconcile-iac-inputs.yml job 'reconcile'" in problems[0]
-    assert "step 'Reconcile changed IaC inputs'" in problems[0]
+    assert "reconcile-iac-inputs.yml job 'operation'" in problems[0]
+    assert "step 'Operation phase'" in problems[0]
     assert "truealpha/app slot 'staging_gate' bootstrap" in problems[0]
     assert "truealpha/app slot 'preview_gate' bootstrap" in problems[0]
     assert "bun install --frozen-lockfile" in problems[0]
@@ -3201,8 +3331,9 @@ def test_run_post_deploy_app_hooks_records_failed_entry_on_missing_required_hook
 ) -> None:
     """#1533: when a hook slot raises ValueError('missing required hook env: ...'),
     run_post_deploy_app_hooks records a failed HookRunResult (status='fail', ok=False,
-    exit_code=1) instead of an unhandled traceback, and judge_staging_gate rejects it."""
-    from tools.promotion_soak_guard import judge_staging_gate
+    exit_code=1) instead of an unhandled traceback, and the promotion guard rejects its
+    post record (staging_gates_verdict)."""
+    from common.deploy.stage_record_reader import staging_gates_verdict
 
     def _fake_exec(
         manifest,
@@ -3235,7 +3366,13 @@ def test_run_post_deploy_app_hooks_records_failed_entry_on_missing_required_hook
     assert post_results[0]["exit_code"] == 1
     assert "missing required hook env" in str(post_results[0]["missing_env_error"])
 
-    ok, detail = judge_staging_gate(post_results, {"platform/todo": "v3.2.0"})
+    record = {
+        "checks": [
+            {"name": c.name, "ok": c.ok, "detail": c.detail}
+            for c in reconcile.post_checks(post_results)
+        ]
+    }
+    ok, detail = staging_gates_verdict([record], {"platform/todo": "v3.2.0"})
     assert ok is False
     assert detail == "failed staging_gate for platform/todo@v3.2.0"
 
@@ -4215,11 +4352,11 @@ def test_run_post_deploy_app_hooks_executes_services_concurrently_and_stops_slot
     }
 
 
-def test_print_changed_app_releases_cli_for_cumulative_promotion_guard(
-    capsys, tmp_path
+def test_required_staging_gates_name_every_app_release_since_the_marker(
+    tmp_path,
 ) -> None:
-    """#1563: --print-changed-app-releases --before <marker> --after <tag> emits
-    SERVICE=TAG lines for every App service selected across cumulative tags."""
+    """#1563: the App releases that a production promotion carries, selected across cumulative
+    tags, are the ones whose staging_gate the `pre` job requires (#1646)."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
@@ -4276,23 +4413,16 @@ def test_print_changed_app_releases_cli_for_cumulative_promotion_guard(
     _git(repo, "commit", "-q", "-am", "v3.1.50")
     _git(repo, "tag", "v3.1.50")
 
-    rc = main(
-        [
-            "--repo-root",
-            str(repo),
-            "--print-changed-app-releases",
-            "--before",
-            "v3.1.48",
-            "--after",
-            "v3.1.50",
-        ]
+    plan = build_plan(
+        reconcile.changed_files_from_git(repo, "v3.1.48", "v3.1.50"),
+        repo_root=repo,
+        before="v3.1.48",
+        after="v3.1.50",
     )
-    assert rc == 0
-    lines = capsys.readouterr().out.strip().splitlines()
-    assert lines == [
-        "finance_report/app=v0.2.61",
-        "truealpha/app=v0.2.89",
-    ]
+    assert reconcile.required_staging_gates(plan) == {
+        "finance_report/app": "v0.2.61",
+        "truealpha/app": "v0.2.89",
+    }
 
 
 def test_summary_is_rendered_from_records(monkeypatch, tmp_path) -> None:
@@ -4369,3 +4499,304 @@ def test_reconcile_imports_no_issue_writer() -> None:
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             names.update(a.name.rsplit(".", 1)[-1] for a in node.names)
     assert not names & {"GitHubIssues", "reconcile_issue_trail"}
+
+
+# --- #1646: the release train has three phases ------------------------------------------
+
+
+def _hooks_by_slot(order: list[str], *, fail: str = ""):
+    """A stand-in for the hook runner: one result per call, named after the slot."""
+
+    def run(plan, applied, *, slot, **_kw):
+        order.append(f"hooks:{slot}")
+        return [
+            {
+                "service": "platform/alerting",
+                "slot": slot,
+                "status": "fail" if slot == fail else "pass",
+                "summary": "boom" if slot == fail else "ok",
+                "version_ref": "v3.1.23",
+                "duration_seconds": 1.0,
+            }
+        ]
+
+    return run
+
+
+def _train_stubs(monkeypatch, tmp_path, *, returncode: int = 0) -> list[str]:
+    """Stub the deploy, the marker and the guards of a release run; return the call order."""
+    order: list[str] = []
+    monkeypatch.setenv("STAGE_RECORD_DIR", str(tmp_path / "records"))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(reconcile, "assert_after_on_main", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        reconcile, "assert_production_marker_advances", lambda *_a, **_k: "v3.1.22"
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "record_production_marker",
+        lambda tag, *_a, **_k: order.append("marker") or f"production/{tag}",
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "run_deploy_commands",
+        lambda cmds, **_k: (
+            order.append("deploy")
+            or [
+                {
+                    "service": c.service,
+                    "type": c.deploy_type,
+                    "returncode": returncode,
+                    "stdout": "{}",
+                    "stderr": "boom" if returncode else "",
+                }
+                for c in cmds
+            ]
+        ),
+    )
+    return order
+
+
+_TRAIN_ARGV = ["--before", "v3.1.22", "--after", "v3.1.23", "--promote-prod",
+               "--changed-file", "platform/12.alerting/compose.yaml"]  # fmt: skip
+
+
+def test_marker_written_only_after_prod_gate_passes(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    """AC6 (#1646). The marker `production/<tag>` is written by the `operation` phase, after
+    the deploy and its quick proof (`smoke`), and before the `post` phase, which runs
+    `prod_gate`. A `post` job that pushed the marker would hold `contents: write`, which makes
+    it a production job with a second owner approval (`common/gate/production_contract.py`).
+    So no failed deploy and no failed `smoke` writes the marker, and `post` never writes it."""
+    # 1. a failed deploy: nothing after it runs
+    order = _train_stubs(monkeypatch, tmp_path / "a", returncode=1)
+    monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order))
+    assert main(_TRAIN_ARGV) == 1
+    assert order == ["deploy"]
+    # 2. a failed smoke: the marker is not written and the gate does not run
+    order = _train_stubs(monkeypatch, tmp_path / "b")
+    monkeypatch.setattr(
+        reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order, fail="smoke")
+    )
+    assert main(_TRAIN_ARGV) == 1
+    assert order == ["deploy", "hooks:smoke"]
+    # 3. everything green: the marker follows the smoke and precedes the gate
+    order = _train_stubs(monkeypatch, tmp_path / "c")
+    monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order))
+    assert main(_TRAIN_ARGV) == 0
+    assert order == ["deploy", "hooks:smoke", "marker", "hooks:prod_gate"]
+    # 4. the post phase alone writes no marker and makes no deploy call
+    order = _train_stubs(monkeypatch, tmp_path / "d")
+    monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order))
+    assert main(["--phase", "post", *_TRAIN_ARGV]) == 0
+    assert order == ["hooks:prod_gate"]
+    # 5. a failed gate does not hold the marker back: it is the operation that wrote it
+    order = _train_stubs(monkeypatch, tmp_path / "e")
+    monkeypatch.setattr(
+        reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order, fail="prod_gate")
+    )
+    assert main(_TRAIN_ARGV) == 1
+    assert order == ["deploy", "hooks:smoke", "marker", "hooks:prod_gate"]
+    capsys.readouterr()
+    # the workflow: `post` holds no `contents: write`, `operation` is the one job that does
+    jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
+    assert jobs["operation"]["permissions"]["contents"] == "write"
+    for name in ("pre", "post", "alert"):
+        assert jobs[name]["permissions"]["contents"] == "read", name
+
+
+def test_post_phase_dispatch_runs_no_deploy(monkeypatch, tmp_path, capsys) -> None:
+    """AC3 (#1646): `--phase post` with a tag runs the gate hook and writes the post record,
+    and makes no deploy call. A branch or a sha is refused before any hook runs."""
+    order = _train_stubs(monkeypatch, tmp_path)
+    monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order))
+    argv = ["--phase", "post", "--after", "v3.1.23", "--env", "staging",
+            "--changed-file", "platform/12.alerting/compose.yaml"]  # fmt: skip
+    assert main(argv) == 0
+    assert order == ["hooks:staging_gate"]  # no `deploy`, no `smoke`, no marker
+    (record,) = (tmp_path / "records").iterdir()
+    assert record.name == "stage-staging.release_validation-post-tag-v3.1.23.json"
+    assert json.loads(record.read_text())["event"] == "dispatch"
+    for ref in ("main", "a" * 40, "v3.1"):
+        order.clear()
+        with pytest.raises(SystemExit):
+            main([*argv[:3], ref, *argv[4:]])
+        assert order == [], ref
+    capsys.readouterr()
+
+
+def test_post_phase_alone_refuses_a_tag_outside_main(monkeypatch, tmp_path) -> None:
+    order = _train_stubs(monkeypatch, tmp_path)
+    monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order))
+
+    def refuse(*_a, **_k):
+        raise SystemExit("::error::not reachable from origin/main")
+
+    monkeypatch.setattr(reconcile, "assert_after_on_main", refuse)
+    with pytest.raises(SystemExit, match="not reachable"):
+        main(["--phase", "post", "--after", "v3.1.23", "--env", "staging",
+              "--changed-file", "platform/12.alerting/compose.yaml"])  # fmt: skip
+    assert order == []
+
+
+def test_failure_alert_state_follows_failed_job() -> None:
+    """AC5 (#1646): the state of the alert is the state of the failed job."""
+    failed = [
+        {"service": "platform/alerting", "type": "staging", "returncode": 1,
+         "stderr": "deploy_v2 failed: runner down"}
+    ]  # fmt: skip
+    hooks = [
+        {"service": "truealpha/app", "slot": "staging_gate", "status": "fail",
+         "summary": "journey failed", "version_ref": "v0.2.90"}
+    ]  # fmt: skip
+    common = {"after": "v1.2.3", "run_url": "https://x/runs/1", "promote_prod": False}
+    checks = [
+        reconcile.CheckVerdict("contract", True),
+        reconcile.CheckVerdict("upstream_post", False, "main CI: failed check unit"),
+    ]
+    refused = reconcile.failure_alert_text(
+        results=[], failed_job="pre", failed_checks=checks, **common
+    )
+    assert refused is not None
+    assert refused.splitlines()[0].endswith(": refused; nothing was deployed.")
+    assert "- upstream_post: main CI: failed check unit" in refused
+    assert "contract" not in refused  # a passed check is not listed
+
+    deploy = reconcile.failure_alert_text(
+        results=failed, failed_job="operation", **common
+    )
+    assert deploy is not None and deploy.splitlines()[0].endswith(
+        "(staging soak): deploy failed."
+    )
+    assert "- staging platform/alerting: deploy_v2 failed: runner down" in deploy
+
+    hook = reconcile.failure_alert_text(
+        results=[], hook_results=hooks, failed_job="post", **common
+    )
+    assert hook is not None and hook.splitlines()[0].endswith(
+        "succeeded): hook failed."
+    )
+    assert "- truealpha/app [staging_gate @ v0.2.90]: journey failed" in hook
+
+    # a failed smoke of the operation is a hook failure, not a deploy failure
+    smoke = reconcile.failure_alert_text(
+        results=[{"returncode": 0}],
+        hook_results=hooks,
+        failed_job="operation",
+        **common,
+    )
+    assert smoke is not None and "hook failed" in smoke.splitlines()[0]
+    assert "deploy failed" not in smoke
+
+    # no job: the text that a single-job run sent, unchanged
+    legacy = reconcile.failure_alert_text(results=failed, **common)
+    assert legacy is not None and legacy.splitlines()[0] == (
+        "🚨 IaC reconcile FAILED for v1.2.3 (staging soak)."
+    )
+    # a job that crashed before it wrote a result: the fallback names the state
+    for job, state in reconcile.ALERT_STATE_BY_JOB.items():
+        text, _ = reconcile.resolve_workflow_failure_alert(
+            Path("/nonexistent/reconcile-result.json"), failed_job=job, **common
+        )
+        assert text is not None and f"; state: {state}." in text.replace("\n", " ")
+
+
+def test_each_phase_writes_its_own_result_for_the_alert_job(
+    monkeypatch, tmp_path
+) -> None:
+    """The failed job writes the alert text of its own state into its result file."""
+    order = _train_stubs(monkeypatch, tmp_path, returncode=1)
+    monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order))
+    result = tmp_path / "operation.json"
+    assert (
+        main(["--phase", "operation", "--output-json", str(result), *_TRAIN_ARGV]) == 1
+    )
+    data = json.loads(result.read_text())
+    assert data["phase"] == "operation" and "deploy failed" in data["alert_text"]
+
+    def refuse(*_a, **_k):
+        raise SystemExit("::error::tag is not on main")
+
+    monkeypatch.setattr(reconcile, "assert_after_on_main", refuse)
+    pre = tmp_path / "pre.json"
+    with pytest.raises(SystemExit):
+        main(["--phase", "pre", "--output-json", str(pre), *_TRAIN_ARGV])
+    data = json.loads(pre.read_text())
+    assert data["phase"] == "pre" and "refused" in data["alert_text"]
+    assert "- provenance: ::error::tag is not on main" in data["alert_text"]
+
+    monkeypatch.undo()
+    green = tmp_path / "green.json"
+    order = _train_stubs(monkeypatch, tmp_path / "g")
+    monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order))
+    assert main(["--phase", "post", "--output-json", str(green), *_TRAIN_ARGV]) == 0
+    data = json.loads(green.read_text())
+    assert data["alert_text"] is None and data["hook_results"][0]["slot"] == "prod_gate"
+
+
+def _tagged_repo(tmp_path: Path, tags: list[str], markers: list[str]) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    _git(repo, "init", "-q", "-b", "main")
+    for index, tag in enumerate(tags):
+        (repo / f"f{index}.txt").write_text(tag)
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-q", "-m", tag)
+        _git(repo, "tag", tag)
+    for marker in markers:
+        _git(repo, "tag", f"production/{marker}", marker)
+    return repo
+
+
+def test_production_before_is_the_newest_marker_older_than_the_tag(tmp_path) -> None:
+    """One function names the base of a production run for the guard, the operation and the
+    post phase. The marker that the operation writes for the tag is not older than the tag, so
+    the post phase after it still gets the base that the operation had."""
+    repo = _tagged_repo(tmp_path, ["v1.0.0", "v1.0.1", "v1.0.2"], ["v1.0.0", "v1.0.1"])
+    assert reconcile.production_before("v1.0.2", repo) == "v1.0.1"
+    assert reconcile.production_before("v1.0.1", repo) == "v1.0.0"
+    with pytest.raises(SystemExit, match="cannot move backward"):
+        reconcile.production_before("v1.0.0", repo)
+    only = _tagged_repo(tmp_path / "x", ["v1.0.0"], ["v1.0.0"])
+    assert reconcile.production_before("v1.0.0", only) is None
+    none = _tagged_repo(tmp_path / "y", ["v1.0.0"], [])
+    assert reconcile.production_before("v1.0.0", none) is None
+
+
+def test_plan_base_names_the_base_release_of_staging_and_production(tmp_path) -> None:
+    repo = _tagged_repo(tmp_path, ["v1.0.0", "v1.0.1", "v1.0.2"], ["v1.0.0"])
+    prod = {"promote_prod": True, "repo_root": repo}
+    assert reconcile.plan_base("v1.0.2", "", **prod) == "v1.0.0"
+    assert reconcile.plan_base("v1.0.2", "v1.0.0", **prod) == "v1.0.0"
+    with pytest.raises(SystemExit, match="must match current marker release v1.0.0"):
+        reconcile.plan_base("v1.0.2", "v1.0.1", **prod)
+    stage = {"promote_prod": False, "repo_root": repo}
+    assert reconcile.plan_base("v1.0.2", "", **stage) == ""
+    assert reconcile.plan_base("v1.0.2", "", previous_tag=True, **stage) == "v1.0.1"
+    assert (
+        reconcile.plan_base("v1.0.2", "v1.0.0", previous_tag=True, **stage) == "v1.0.0"
+    )
+    assert reconcile.plan_base("v1.0.0", "", previous_tag=True, **stage) == ""
+    bare = _tagged_repo(tmp_path / "z", ["v1.0.0", "v1.0.1"], [])
+    with pytest.raises(SystemExit, match="first production marker requires"):
+        reconcile.plan_base("v1.0.1", "", promote_prod=True, repo_root=bare)
+    assert reconcile.releases_between("v1.0.0", "v1.0.2", repo) == ["v1.0.1", "v1.0.2"]
+
+
+def test_print_changed_files_uses_the_same_base_as_the_train(tmp_path, capsys) -> None:
+    repo = _tagged_repo(tmp_path, ["v1.0.0", "v1.0.1", "v1.0.2"], ["v1.0.0"])
+    assert (
+        main(["--repo-root", str(repo), "--print-changed-files", "--after", "v1.0.2"])
+        == 0
+    )
+    assert capsys.readouterr().out.split() == ["f2.txt"]  # staging: the previous tag
+    assert (
+        main(["--repo-root", str(repo), "--print-changed-files", "--promote-prod",
+              "--after", "v1.0.2"]) == 0
+    )  # fmt: skip
+    assert capsys.readouterr().out.split() == [
+        "f1.txt",
+        "f2.txt",
+    ]  # production: the marker

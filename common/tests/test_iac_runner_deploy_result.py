@@ -1151,8 +1151,8 @@ def test_deploy_platform_triggers_on_iac_runner_bootstrap_changes() -> None:
     reconcile_spec = yaml.safe_load(RECONCILE_WORKFLOW.read_text(encoding="utf-8"))
     reconcile_step = next(
         s
-        for s in reconcile_spec["jobs"]["reconcile"]["steps"]
-        if s.get("name") == "Reconcile changed IaC inputs"
+        for s in reconcile_spec["jobs"]["operation"]["steps"]
+        if s.get("name") == "Operation phase"
     )["run"]
     assert "bootstrap/06.iac_runner/*" in reconcile_step
     assert "scripts/deploy_iac_runner_bootstrap.sh" in reconcile_step
@@ -1160,7 +1160,7 @@ def test_deploy_platform_triggers_on_iac_runner_bootstrap_changes() -> None:
     assert "Check IaC Runner health" in reconcile_step
     assert reconcile_step.index(
         "Deploy IaC Runner bootstrap changes"
-    ) < reconcile_step.index("python -m tools.reconcile_iac_inputs")
+    ) < reconcile_step.index('python -m tools.reconcile_iac_inputs "${args[@]}"')
 
 
 def test_deploy_platform_no_longer_triggers_platform_service_deploys() -> None:
@@ -1402,11 +1402,9 @@ def test_deploy_workflow_push_paths_cover_every_runner_dockerfile_copy_source() 
     assert "push" not in triggers, "deploy.yml must not declare on.push"
 
     reconcile_wf = yaml.safe_load(RECONCILE_WORKFLOW.read_text(encoding="utf-8"))
-    reconcile_steps = reconcile_wf["jobs"]["reconcile"]["steps"]
+    reconcile_steps = reconcile_wf["jobs"]["operation"]["steps"]
     run_script = next(
-        s["run"]
-        for s in reconcile_steps
-        if s.get("name") == "Reconcile changed IaC inputs"
+        s["run"] for s in reconcile_steps if s.get("name") == "Operation phase"
     )
     non_comment_lines = [
         line for line in run_script.splitlines() if not line.lstrip().startswith("#")

@@ -3173,7 +3173,7 @@ def test_apply_observability_workflow_watches_every_alert_rules_file() -> None:
             encoding="utf-8"
         )
     )
-    reconcile_steps = reconcile_wf["jobs"]["reconcile"]["steps"]
+    reconcile_steps = reconcile_wf["jobs"]["operation"]["steps"]
     obs_step = next(
         s
         for s in reconcile_steps

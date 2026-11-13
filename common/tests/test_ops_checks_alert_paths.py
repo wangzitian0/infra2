@@ -94,17 +94,18 @@ def test_ops_checks_audit_job_installs_uv_before_the_hook_audit() -> None:
     The audit job must install uv, with the reconcile job's version, after Python
     and before that step. The cache is off: the hook step is skipped in a dry run,
     and setup-uv then fails its post step with "Cache path does not exist"."""
-    reconcile_workflow = ROOT / ".github" / "workflows" / "reconcile-iac-inputs.yml"
-    reconcile_steps = yaml.safe_load(reconcile_workflow.read_text(encoding="utf-8"))[
-        "jobs"
-    ]["reconcile"]["steps"]
+    # the release train installs uv in its composite action (#1646)
+    train_setup = ROOT / ".github" / "actions" / "train-setup" / "action.yml"
+    reconcile_steps = yaml.safe_load(train_setup.read_text(encoding="utf-8"))["runs"][
+        "steps"
+    ]
     reconcile_uv_uses = [
         step["uses"]
         for step in reconcile_steps
         if str(step.get("uses", "")).startswith("astral-sh/setup-uv@")
     ]
     assert reconcile_uv_uses, (
-        "job reconcile of reconcile-iac-inputs.yml has no astral-sh/setup-uv step"
+        "the train-setup action of reconcile-iac-inputs.yml has no astral-sh/setup-uv step"
     )
     expected_uses = reconcile_uv_uses[0]
 

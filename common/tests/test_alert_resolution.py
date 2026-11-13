@@ -58,7 +58,7 @@ SPLIT_STEPS = [
     ),
     (
         "reconcile-iac-inputs.yml",
-        "reconcile",
+        "alert",
         "Alert on failure",
         "Resolve the reconcile failure alert",
     ),
@@ -91,7 +91,10 @@ def _runs(
     task: str = "",
 ):
     """Would GitHub run this step? Evaluates the `if:` of the workflow (the forms that
-    these steps use) for a job whose earlier steps all succeeded (ok) or one failed."""
+    these steps use) for a job whose earlier steps all succeeded (ok) or one failed.
+    In the `alert` job of the release train, "failed" is `env.FAILED_JOB`: a job it needs
+    failed (#1646)."""
+    env = {"FAILED_JOB": "" if ok else "operation", **env}
     expr = str(step.get("if", "success()")).strip()
     if expr.startswith("${{"):
         expr = expr.removeprefix("${{").removesuffix("}}").strip()
@@ -233,7 +236,7 @@ def test_a_failed_promotion_is_not_resolved_by_a_sync_only_run(
 
     w.step(
         name,
-        "reconcile",
+        "alert",
         alert,
         ok=False,
         event="workflow_dispatch",
@@ -244,14 +247,12 @@ def test_a_failed_promotion_is_not_resolved_by_a_sync_only_run(
     assert len(w.cards) == 1 and w.api.open_titles()
 
     # the next scheduled run: sync-only, green
-    ran = w.step(
-        name, "reconcile", resolve, ok=True, RECONCILE_PHASE="sync-app-releases"
-    )
+    ran = w.step(name, "alert", resolve, ok=True, RECONCILE_PHASE="sync-app-releases")
     assert not ran and len(w.cards) == 1 and w.api.open_titles()
     # a dry run of a deploy phase does not resolve either
     monkeypatch.setenv("INPUT_DRY_RUN", "true")
     assert not _runs(
-        _step(name, "reconcile", resolve),
+        _step(name, "alert", resolve),
         ok=True,
         env={"RECONCILE_PHASE": "reconcile-deploy"},
         event="workflow_dispatch",
@@ -259,7 +260,7 @@ def test_a_failed_promotion_is_not_resolved_by_a_sync_only_run(
     )
 
     # the next green deploy run
-    w.step(name, "reconcile", resolve, ok=True, RECONCILE_PHASE="reconcile-deploy")
+    w.step(name, "alert", resolve, ok=True, RECONCILE_PHASE="reconcile-deploy")
     assert len(w.cards) == 2 and w.titles()[1].startswith("✅ [已恢复]")
     assert w.api.open_titles() == []
 
@@ -275,13 +276,13 @@ def test_the_tag_push_train_pages_once_and_resolves(monkeypatch, tmp_path) -> No
         "GITHUB_REF": "refs/tags/v9.9.9",
     }
 
-    w.step(name, "reconcile", "Alert on failure", ok=False, **push)
+    w.step(name, "alert", "Alert on failure", ok=False, **push)
     assert len(w.cards) == 1
-    w.step(name, "reconcile", "Alert on failure", ok=False, **push)
+    w.step(name, "alert", "Alert on failure", ok=False, **push)
     assert len(w.cards) == 1  # the same failure again: not a second page
     assert len(w.reports) == 1  # ... it is a report in the reports chat
 
-    w.step(name, "reconcile", "Resolve the reconcile failure alert", ok=True, **push)
+    w.step(name, "alert", "Resolve the reconcile failure alert", ok=True, **push)
     assert len(w.cards) == 2 and w.titles()[1].startswith("✅ [已恢复]")
     assert w.api.open_titles() == []
 
@@ -334,7 +335,7 @@ def test_a_green_staging_run_does_not_resolve_a_production_failure(
 
     w.step(
         name,
-        "reconcile",
+        "alert",
         "Alert on failure",
         ok=False,
         event="workflow_dispatch",
@@ -346,7 +347,7 @@ def test_a_green_staging_run_does_not_resolve_a_production_failure(
     # a green staging tag push
     w.step(
         name,
-        "reconcile",
+        "alert",
         "Resolve the reconcile failure alert",
         ok=True,
         event="push",
@@ -367,7 +368,7 @@ def test_a_staging_failure_does_not_hide_a_production_failure(
 
     w.step(
         name,
-        "reconcile",
+        "alert",
         "Alert on failure",
         ok=False,
         event="push",
@@ -377,7 +378,7 @@ def test_a_staging_failure_does_not_hide_a_production_failure(
     )
     w.step(
         name,
-        "reconcile",
+        "alert",
         "Alert on failure",
         ok=False,
         event="workflow_dispatch",
@@ -457,7 +458,7 @@ def test_a_red_app_hook_resolves_only_when_a_run_evaluates_that_hook_green(
     """#1634 review (high): no workflow re-checks `staging_gate`. A later tag that does not
     run the hook must not resolve it; only a run that evaluates it green does."""
     w = World(monkeypatch, tmp_path)
-    name, job = "reconcile-iac-inputs.yml", "reconcile"
+    name, job = "reconcile-iac-inputs.yml", "alert"
     alert, resolve = "Alert on failure", "Resolve the reconcile failure alert"
     key = "app-hook:truealpha/app:staging_gate:staging"
     deploy = {"RECONCILE_PHASE": "reconcile-deploy"}
@@ -507,7 +508,7 @@ def test_a_red_app_hook_resolves_only_when_a_run_evaluates_that_hook_green(
     assert w.api.open_titles() == []
 
 
-NAME, JOB = "reconcile-iac-inputs.yml", "reconcile"
+NAME, JOB = "reconcile-iac-inputs.yml", "alert"
 ALERT, RESOLVE = "Alert on failure", "Resolve the reconcile failure alert"
 DEPLOY = {"RECONCILE_PHASE": "reconcile-deploy"}
 TRUEALPHA_KEY = "app-hook:truealpha/app:staging_gate:staging"

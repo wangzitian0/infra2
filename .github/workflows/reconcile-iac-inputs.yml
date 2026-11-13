@@ -8,6 +8,11 @@ run-name: Reconcile IaC Inputs (${{ inputs.promote_prod && 'PROD' || 'staging' }
 # It diffs the previous release tag -> this tag, fans the changed iac_pinned services into
 # deploy_v2/iac_runner (pinned to the tag), where the Deployer config-hash gate decides
 # no-op vs real redeploy. Dokploy native autoDeploy stays disabled.
+#
+# The train has three jobs (#1646): `pre` (guards; no secret, no environment), `operation`
+# (deploy, smoke, production marker; the only job that waits for the owner) and `post` (the
+# gate hooks; no deploy, so `phase=post` can run it again alone). An `alert` job reports the
+# state of the three. docs/ssot/ops.pipeline.md section 2.0 is the model.
 
 "on":
   push:
@@ -24,6 +29,12 @@ run-name: Reconcile IaC Inputs (${{ inputs.promote_prod && 'PROD' || 'staging' }
         description: "Release tag (vX.Y.Z) to deploy; defaults to this workflow ref. A branch or sha fails before any deploy."
         required: false
         default: ""
+      phase:
+        description: "all = pre, operation, post. pre = the guards only (no deploy, no owner approval). post = the gate hooks again for a tag (no deploy)."
+        required: false
+        type: choice
+        options: ["all", "pre", "post"]
+        default: "all"
       dry_run:
         description: "Plan and summarize without invoking deploy_v2"
         required: false
@@ -52,16 +63,10 @@ run-name: Reconcile IaC Inputs (${{ inputs.promote_prod && 'PROD' || 'staging' }
         required: false
         default: ""
 
+# Each job sets its own permissions. A job that holds `contents: write` or reads a secret is
+# a production job in common/gate/production_contract.py.
 permissions:
-  # Explicit production promotion records an immutable production/v* marker.
-  contents: write
-  # Pull-based App release sync opens/updates PRs (#1416).
-  pull-requests: write
-  # only the `Alert on failure` and `Resolve the reconcile failure alert` steps (page_dedup state issue)
-  issues: write
-  # the promotion guard lists this workflow's runs for the promoted tag (gh api .../runs)
-  actions: read
-  id-token: write
+  contents: read
 
 concurrency:
   # A run that waits for the owner holds its group. A production promotion has its own
@@ -71,14 +76,90 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  reconcile:
-    # alert-delivery-exempt: event-driven tag/prod deploy failure alert (not a scheduled check); review=2027-05-01
-    name: reconcile iac-pinned inputs
-    # A production promotion waits for the owner. A tag push reconciles staging only (#1125).
-    environment: ${{ inputs.promote_prod && 'production' || 'staging' }}
+  pre:
+    name: pre (guards and upstream record)
+    # No `environment` and no secret: the owner is asked to approve `operation` only after this
+    # job passed. For a production promotion it reads the post record of the staging soak and
+    # of the main CI run (#1646). Not a deploy run (sync, hook slot, schedule): skipped.
+    if: ${{ github.event_name != 'schedule' && !inputs.sync_app_releases && !inputs.run_hook_slot && inputs.phase != 'post' }}
     # Pinned to 24.04: ubuntu-latest is 26.04, where Playwright 1.57.0 has no chromium build (#1543).
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # the record reader lists artifacts and runs
+      actions: read
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up the train
+        uses: ./.github/actions/train-setup
+
+      # Release-tag guards, in tools/reconcile_iac_inputs.py: the tag form (#1628), the tag on
+      # origin/main (Infra-011), the App pins, and for a production promotion the upstream
+      # record check. 2026-09-07 incident (#635 / #712): an unattended promote_prod picked up
+      # v1.1.61 whose own staging reconcile had FAILED. The guard reads stage records, not a
+      # run listing, which was eventually consistent once (#970). A dispatch-triggered staging
+      # run does not count; the remedy is a new tag.
+      - name: Pre phase
+        env:
+          INPUT_AFTER: ${{ inputs.after || github.ref_name }}
+          INPUT_BEFORE: ${{ inputs.before || '' }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run || false }}
+          INPUT_PROMOTE_PROD: ${{ inputs.promote_prod || false }}
+        run: |
+          set -euo pipefail
+          args=(--phase pre --after "$INPUT_AFTER" --domain "$INTERNAL_DOMAIN"
+                --output-json reconcile-result.json)
+          [[ -n "$INPUT_BEFORE" ]] && args+=(--before "$INPUT_BEFORE")
+          [[ "$INPUT_DRY_RUN" == "true" ]] && args+=(--dry-run)
+          if [[ "$INPUT_PROMOTE_PROD" == "true" ]]; then
+            args+=(--promote-prod --env prod)
+          else
+            args+=(--env staging)
+          fi
+          python -m tools.reconcile_iac_inputs "${args[@]}"
+
+      - name: Upload reconcile result
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: iac-input-reconcile-result-pre
+          path: reconcile-result.json
+          if-no-files-found: ignore
+
+      - name: Upload stage record pre
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        if: always() && env.STAGE_RECORD_PRE != ''
+        with:
+          name: ${{ env.STAGE_RECORD_PRE }}
+          path: stage-records/${{ env.STAGE_RECORD_PRE }}.json
+          if-no-files-found: ignore
+
+  operation:
+    # alert-delivery-exempt: event-driven tag/prod deploy failure alert (not a scheduled check); review=2027-05-01
+    name: operation (deploy, smoke, marker)
+    needs: pre
+    # `pre` passed. A run that is not a deploy run (sync, hook slot, schedule) skips `pre` and
+    # runs here. A failed or cancelled `pre` never reaches the environment gate.
+    if: ${{ !cancelled() && inputs.phase != 'pre' && inputs.phase != 'post' && (needs.pre.result == 'success' || (needs.pre.result == 'skipped' && (github.event_name == 'schedule' || inputs.sync_app_releases || inputs.run_hook_slot))) }}
+    # A production promotion waits for the owner. A tag push reconciles staging only (#1125).
+    # This is the only job with an environment: one production promotion needs one approval.
+    environment: ${{ inputs.promote_prod && 'production' || 'staging' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
+    permissions:
+      # the production/<tag> marker; the pull-based App release sync pushes a branch (#1416)
+      contents: write
+      pull-requests: write
+      id-token: write
     env:
       IAC_WEBHOOK_SECRET: ${{ secrets.IAC_WEBHOOK_SECRET }}
       DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
@@ -98,41 +179,16 @@ jobs:
       TA_MEMBER_EMAIL: ${{ secrets.TA_MEMBER_EMAIL }}
       TA_PASSWORD: ${{ secrets.TA_PASSWORD }}
       TA_MCP_TOKEN: ${{ secrets.TA_MCP_TOKEN }}
-      # A failed reconcile pages out of band (#658): the runner's per-service error_kind is
-      # the earliest machine-readable point of every deploy-chain incident of 2026-09-04..08.
-      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
-      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
-      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
-      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
-      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
-      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
+      - name: Set up the train
+        uses: ./.github/actions/train-setup
         with:
-          python-version-file: .python-version
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v8.3.2
-        with:
-          enable-cache: true
-          cache-dependency-glob: "uv.lock"
-
-      # The truealpha hook slots run `bun install` and `bunx playwright` in their bootstrap.
-      # A hook step must not change the runner system, so the job installs bun (#1603).
-      # The action ref is a commit SHA, not a tag, because the job env holds secrets.
-      - name: Install bun
-        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: "1.4.4"
-
-      - name: Install runtime dependencies
-        run: uv pip install --system invoke httpx python-dotenv pyyaml rich "$(python tools/sdk_requirement.py)"
+          bun: "true"
 
       - name: Configure SSH key for the pre-deploy schema gate
         if: env.INFRA2_WATCHDOG_SSH_PRIVATE_KEY != ''
@@ -143,62 +199,7 @@ jobs:
           chmod 600 ~/.ssh/infra2_schema_gate
           echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_schema_gate" >> "$GITHUB_ENV"
 
-      # A tag-push checkout has the full history (fetch-depth: 0) but no origin/main
-      # remote-tracking ref. The reconcile guard (assert_after_on_main) refuses any tag
-      # not reachable from origin/main, so make that ref resolvable here.
-      - name: Fetch origin/main for provenance guard
-        run: git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-
-      # Production promotion guard (2026-09-07 incident, #635 / #712): an unattended
-      # promote_prod picked up v1.1.61 whose own staging reconcile had FAILED (the generated
-      # alerting template aborted on a missing key); production alerting crash-looped until
-      # the rollback. The soak that a tag push runs on staging is the precondition for
-      # production, so the promotion refuses a tag without a green push-triggered run of this
-      # workflow. A dispatch-triggered staging run does not count (it may have been a dry run,
-      # or a promotion itself); the remedy is a new tag. The identity of the promoted tag is
-      # checked here as well, and the change set production will receive is listed.
-      # The soak lookup is tools/promotion_soak_guard.py (#970): GitHub's branch-filtered run
-      # listing is eventually consistent, so it finds the run by the tag's commit, retries only
-      # an empty listing (bounded), and still refuses on anything but a green soak.
-      - name: Production promotion guard (soak, identity, change set)
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.promote_prod }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          INPUT_AFTER: ${{ inputs.after || '' }}
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          after="${INPUT_AFTER:-$REF_NAME}"
-          if [[ ! "$after" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::promote_prod promotes a release tag (vX.Y.Z); got '$after'."
-            exit 1
-          fi
-          if ! git rev-parse -q --verify "refs/tags/$after" >/dev/null; then
-            echo "::error::release tag '$after' does not exist."
-            exit 1
-          fi
-          if ! git merge-base --is-ancestor "$after" origin/main; then
-            echo "::error::release tag '$after' is not reachable from origin/main."
-            exit 1
-          fi
-          marker="$(git tag --list 'production/v*.*.*' --sort=-v:refname | head -n1 || true)"
-          echo "production marker: ${marker:-<none>}"
-          gate_args=()
-          if [[ -n "$marker" ]]; then
-            gate_args+=(--since-tag "${marker#production/}")
-            changed_app_releases="$(python -m tools.reconcile_iac_inputs --print-changed-app-releases --before "${marker#production/}" --after "$after")"
-            while IFS= read -r req; do
-              [[ -n "$req" ]] && gate_args+=(--require-staging-gate "$req")
-            done <<< "$changed_app_releases"
-          fi
-          python -m tools.promotion_soak_guard "$after" "${gate_args[@]}"
-          if [[ -n "$marker" ]]; then
-            echo "change set production receives (${marker#production/} -> $after):"
-            git diff --stat "${marker#production/}" "$after" -- . ':!docs' ':!*.md' | tail -n 60
-          fi
-
-      - name: Reconcile changed IaC inputs
+      - name: Operation phase
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
@@ -209,8 +210,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # after = the release tag being promoted; before = the previous v*.*.* tag.
-          # staging/prod accept tags only, so reconcile always pins the tag (not a sha).
+          # after = the release tag being promoted. staging/prod accept tags only, so the
+          # train always pins the tag (not a sha).
           after="$REF_NAME"
           before="${INPUT_BEFORE:-}"
           dry_run="false"
@@ -223,30 +224,16 @@ jobs:
             dry_run="$INPUT_DRY_RUN"
             promote_prod="$INPUT_PROMOTE_PROD"
           fi
+          base_args=(--after "$after")
+          [[ -n "$before" ]] && base_args+=(--before "$before")
+          [[ "$promote_prod" == "true" ]] && base_args+=(--promote-prod)
 
           changed_files=""
           if [[ "$EVENT_NAME" != "schedule" ]]; then
-            if [[ "$promote_prod" == "true" ]]; then
-              # Production is cumulative from its own desired-state marker, not from
-              # the previous staging candidate.  Otherwise vN+1/vN+2 staging-only
-              # changes are silently skipped when vN+3 is finally promoted.
-              production_marker="$(git tag --list 'production/v*.*.*' --sort=-v:refname | head -n1 || true)"
-              if [[ -n "$production_marker" ]]; then
-                production_before="${production_marker#production/}"
-                if [[ -n "$before" && "$before" != "$production_before" ]]; then
-                  echo "::error::production before must match $production_marker; got '$before'."
-                  exit 1
-                fi
-                before="$production_before"
-              elif [[ -z "$before" ]]; then
-                echo "::error::first production marker requires an explicit known-production 'before' release."
-                exit 1
-              fi
-            elif [[ -z "$before" ]]; then
-              # Staging remains incremental from the immediately previous release.
-              before="$(git tag --list 'v*.*.*' --sort=-v:refname --merged "${after}^" 2>/dev/null | head -n1 || true)"
-            fi
-            echo "Promoting release tag '$after' (base '${before:-<none>}')"
+            # One source of the base release: production starts from its own marker, staging
+            # from the previous release tag (tools.reconcile_iac_inputs.plan_base).
+            changed_files="$(python -m tools.reconcile_iac_inputs --print-changed-files "${base_args[@]}")"
+            echo "Promoting release tag '$after'"
 
             if [[ "$dry_run" != "true" && -z "${IAC_WEBHOOK_SECRET:-}" ]]; then
               echo "::error::IAC_WEBHOOK_SECRET is required for IaC input reconcile."
@@ -255,12 +242,6 @@ jobs:
             if [[ "$dry_run" != "true" && -z "${IAC_RUNNER_URL:-}" ]]; then
               echo "::error::IAC_RUNNER_URL is required for IaC input reconcile."
               exit 1
-            fi
-
-            if [[ -n "$before" ]]; then
-              changed_files="$(git diff --name-only "$before" "$after")"
-            else
-              changed_files="$(git diff-tree --no-commit-id --name-only -r "$after")"
             fi
           fi
 
@@ -351,16 +332,15 @@ jobs:
             fi
           fi
 
-          args=(--after "$after"
-                --domain "$INTERNAL_DOMAIN"
+          args=(--phase operation --domain "$INTERNAL_DOMAIN"
                 --timeout 3300
-                --output-json reconcile-result.json)
-          [[ -n "$before" ]] && args+=(--before "$before")
+                --output-json reconcile-result.json
+                "${base_args[@]}")
           [[ "$dry_run" == "true" ]] && args+=(--dry-run)
-          # Post-deploy hooks always run (staging: smoke + staging_gate; prod: smoke +
-          # prod_gate). No input skips them: a deploy without its gates is no evidence (#1628).
+          # The `smoke` hook runs here; the gate hook (staging_gate, prod_gate) runs in `post`.
+          # No input skips them: a deploy without its gates is no evidence (#1628).
           if [[ "$promote_prod" == "true" ]]; then
-            args+=(--promote-prod --env prod)
+            args+=(--env prod)
           else
             args+=(--env staging)
           fi
@@ -381,17 +361,14 @@ jobs:
             else
               sync_args+=(--create-pr)
             fi
-            echo "RECONCILE_PHASE=sync-app-releases" >> "$GITHUB_ENV"
             python -m tools.reconcile_iac_inputs "${sync_args[@]}"
             # A sync only opens or updates the sync PR. The staging train is the tag push
             # that follows its merge; a sync on main never deploys main (#1628).
             exit 0
           fi
 
-          echo "RECONCILE_PHASE=reconcile-deploy" >> "$GITHUB_ENV"
           python -m tools.reconcile_iac_inputs "${args[@]}"
 
-          echo "RECONCILE_BEFORE=$before" >> "$GITHUB_ENV"
           echo "RECONCILE_AFTER=$after" >> "$GITHUB_ENV"
 
       - name: Reconcile SigNoz observability (alerts + dashboard)
@@ -401,12 +378,7 @@ jobs:
           DEPLOY_ENV: production
         run: |
           set -euo pipefail
-          changed_files=""
-          if [[ -n "${RECONCILE_BEFORE:-}" ]]; then
-            changed_files="$(git diff --name-only "$RECONCILE_BEFORE" "$RECONCILE_AFTER")"
-          else
-            changed_files="$(git diff-tree --no-commit-id --name-only -r "$RECONCILE_AFTER")"
-          fi
+          changed_files="$(python -m tools.reconcile_iac_inputs --print-changed-files --after "$RECONCILE_AFTER" --promote-prod)"
 
           obs_changed="false"
           while IFS= read -r file; do
@@ -428,15 +400,161 @@ jobs:
             uv run --locked python -m invoke fr-observability.shared.apply-dashboard
           fi
 
+      - name: Upload reconcile result
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: iac-input-reconcile-result-operation
+          path: reconcile-result.json
+          if-no-files-found: ignore
+
+      - name: Upload stage record operation
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        if: always() && env.STAGE_RECORD_OPERATION != ''
+        with:
+          name: ${{ env.STAGE_RECORD_OPERATION }}
+          path: stage-records/${{ env.STAGE_RECORD_OPERATION }}.json
+          if-no-files-found: ignore
+
+  post:
+    name: post (gate hooks and record)
+    needs: operation
+    # The operation passed, or `phase=post` runs this job alone (the operation is skipped by
+    # design). It makes no deploy call and holds no `contents: write`: the production marker is
+    # written by `operation`, so a production run needs one owner approval, not two.
+    if: ${{ !cancelled() && github.event_name != 'schedule' && !inputs.sync_app_releases && !inputs.run_hook_slot && inputs.phase != 'pre' && (needs.operation.result == 'success' || (inputs.phase == 'post' && needs.operation.result == 'skipped')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
+      INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
+      # HOOK_RUNNER_SECRET_NAMES in common/deploy/app_contract.py names these secrets (#1534).
+      # Only the staging_gate of truealpha reads them. A production run passes none: prod_gate
+      # needs APP_URL only, and the owner approved `operation` alone.
+      TA_EMAIL: ${{ !inputs.promote_prod && secrets.TA_EMAIL || '' }}
+      TA_MEMBER_EMAIL: ${{ !inputs.promote_prod && secrets.TA_MEMBER_EMAIL || '' }}
+      TA_PASSWORD: ${{ !inputs.promote_prod && secrets.TA_PASSWORD || '' }}
+      TA_MCP_TOKEN: ${{ !inputs.promote_prod && secrets.TA_MCP_TOKEN || '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up the train
+        uses: ./.github/actions/train-setup
+        with:
+          bun: "true"
+
+      - name: Post phase
+        env:
+          INPUT_AFTER: ${{ inputs.after || github.ref_name }}
+          INPUT_BEFORE: ${{ inputs.before || '' }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run || false }}
+          INPUT_PROMOTE_PROD: ${{ inputs.promote_prod || false }}
+        run: |
+          set -euo pipefail
+          args=(--phase post --after "$INPUT_AFTER" --domain "$INTERNAL_DOMAIN"
+                --output-json reconcile-result.json)
+          [[ -n "$INPUT_BEFORE" ]] && args+=(--before "$INPUT_BEFORE")
+          [[ "$INPUT_DRY_RUN" == "true" ]] && args+=(--dry-run)
+          if [[ "$INPUT_PROMOTE_PROD" == "true" ]]; then
+            args+=(--promote-prod --env prod)
+          else
+            args+=(--env staging)
+          fi
+          python -m tools.reconcile_iac_inputs "${args[@]}"
+
+      - name: Upload reconcile result
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: iac-input-reconcile-result-post
+          path: reconcile-result.json
+          if-no-files-found: ignore
+
+      - name: Upload stage record post
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        if: always() && env.STAGE_RECORD_POST != ''
+        with:
+          name: ${{ env.STAGE_RECORD_POST }}
+          path: stage-records/${{ env.STAGE_RECORD_POST }}.json
+          if-no-files-found: ignore
+
+  alert:
+    # alert-delivery-exempt: event-driven tag/prod deploy failure alert (not a scheduled check); review=2027-05-01
+    name: alert and stage card
+    needs: [pre, operation, post]
+    # Reads the results and records of the three jobs. It holds only the delivery secrets of
+    # the alert, so a refusal in `pre` (which holds no secret) still reaches the owner.
+    if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      # only the `Alert on failure` and `Resolve the reconcile failure alert` steps (page_dedup state issue)
+      issues: write
+    env:
+      # What the failed job was, and whether the run reached the deploy phase. A sync-only run,
+      # a manual hook slot run and a refused run neither page nor resolve a deploy failure.
+      FAILED_JOB: ${{ needs.pre.result == 'failure' && 'pre' || needs.operation.result == 'failure' && 'operation' || needs.post.result == 'failure' && 'post' || '' }}
+      RECONCILE_PHASE: ${{ (github.event_name == 'schedule' || inputs.sync_app_releases) && 'sync-app-releases' || (needs.operation.result == 'success' || needs.post.result == 'success') && !inputs.run_hook_slot && 'reconcile-deploy' || '' }}
+      # A failed reconcile pages out of band (#658): the runner's per-service error_kind is
+      # the earliest machine-readable point of every deploy-chain incident of 2026-09-04..08.
+      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up the train
+        uses: ./.github/actions/train-setup
+
+      - name: Download the results of the train jobs
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: iac-input-reconcile-result-*
+
+      - name: Download the stage records of the train jobs
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: stage-*
+          path: stage-records
+          merge-multiple: true
+
+      # One result file for the alert steps: the first alert text of the three jobs and every hook result.
+      - name: Merge the results of the train jobs
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(iac-input-reconcile-result-*/reconcile-result.json)
+          if (( ${#files[@]} )); then
+            jq -s '{alert_text: ([.[].alert_text | select(. != null)] | first), hook_results: ([.[].hook_results // []] | add // [])}' "${files[@]}" > reconcile-result.json
+          fi
+
       # v1.1.57's reconcile (2026-09-07 08:35Z) recorded onepassword_auth_failed for
       # platform/alerting and unknown_invoke_failure for truealpha/data_engine twenty minutes
       # before the production incident and produced only a red checkmark (#658).
       - name: Alert on failure
-        if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        if: env.FAILED_JOB != '' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
         env:
           INPUT_AFTER: ${{ inputs.after || github.ref_name }}
           INPUT_PROMOTE_PROD: ${{ inputs.promote_prod || false }}
           RECONCILE_PHASE: ${{ env.RECONCILE_PHASE || '' }}
+          FAILED_JOB: ${{ env.FAILED_JOB || '' }}
           GITHUB_TOKEN: ${{ github.token }}
           # a second red run of the same failure is a report in the reports chat
           INFRA2_REPORTS_FEISHU_APP_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_ID }}
@@ -469,6 +587,7 @@ jobs:
               promote_prod=os.environ.get("INPUT_PROMOTE_PROD") == "true",
               run_url=run_url,
               reconcile_phase=os.environ.get("RECONCILE_PHASE") or "",
+              failed_job=os.environ.get("FAILED_JOB") or "",
           )
           if skip_notice:
               print(skip_notice)
@@ -499,7 +618,7 @@ jobs:
       # Only a run that reached the deploy phase proves the deploy path is healthy again:
       # a sync-only, dry-run or refused run neither pages nor resolves.
       - name: Resolve the reconcile failure alert
-        if: success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) && env.RECONCILE_PHASE == 'reconcile-deploy'
+        if: env.FAILED_JOB == '' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) && env.RECONCILE_PHASE == 'reconcile-deploy'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           INPUT_PROMOTE_PROD: ${{ inputs.promote_prod || false }}
@@ -528,37 +647,8 @@ jobs:
           raise SystemExit(outcome.exit_code)
           PY
 
-      - name: Upload reconcile result
-        uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: iac-input-reconcile-result
-          path: reconcile-result.json
-          if-no-files-found: ignore
-
-      - name: Upload stage record pre
-        uses: actions/upload-artifact@v7
+      # One card for the stage, from the records of the three jobs. It never stops the run.
+      - name: Show the stage card
+        if: ${{ !cancelled() && github.event_name != 'schedule' && !inputs.sync_app_releases && !inputs.run_hook_slot }}
         continue-on-error: true
-        if: always() && env.STAGE_RECORD_PRE != ''
-        with:
-          name: ${{ env.STAGE_RECORD_PRE }}
-          path: stage-records/${{ env.STAGE_RECORD_PRE }}.json
-          if-no-files-found: ignore
-
-      - name: Upload stage record operation
-        uses: actions/upload-artifact@v7
-        continue-on-error: true
-        if: always() && env.STAGE_RECORD_OPERATION != ''
-        with:
-          name: ${{ env.STAGE_RECORD_OPERATION }}
-          path: stage-records/${{ env.STAGE_RECORD_OPERATION }}.json
-          if-no-files-found: ignore
-
-      - name: Upload stage record post
-        uses: actions/upload-artifact@v7
-        continue-on-error: true
-        if: always() && env.STAGE_RECORD_POST != ''
-        with:
-          name: ${{ env.STAGE_RECORD_POST }}
-          path: stage-records/${{ env.STAGE_RECORD_POST }}.json
-          if-no-files-found: ignore
+        run: python -m common.alerting.stage_card stage-records
