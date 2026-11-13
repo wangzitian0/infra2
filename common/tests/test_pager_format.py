@@ -589,6 +589,10 @@ def test_a_value_is_shown_never_interpreted(value) -> None:
 # ---- the runbook links resolve ------------------------------------------------------
 
 
+from common.alerting.standard_rules import STANDARD_RUNBOOK_URL  # noqa: E402
+from common.observability_dashboards import load_alert_definitions  # noqa: E402
+
+
 def _github_anchor(heading: str) -> str:
     """GitHub's heading anchor: lowercased, punctuation and symbols dropped (``-``
     and ``_`` kept), spaces to ``-``."""
@@ -623,6 +627,8 @@ def test_every_runbook_link_the_bridge_uses_resolves() -> None:
         *alerting._RUNBOOK_BY_ALERT_OVERRIDE.values(),
         *alerting._RUNBOOK_BY_DOMAIN.values(),
         *alerting._RUNBOOK_BY_ALERT.values(),
+        STANDARD_RUNBOOK_URL,
+        *(d.runbook_url for d in load_alert_definitions()),
     }
     missing = []
     for url in sorted(urls):
