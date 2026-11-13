@@ -18,7 +18,10 @@ def _build_workspace(root) -> None:  # type: ignore[no-untyped-def]
     body_variant = body + "# truealpha note\n"
     other = "import os\n\n" + "".join(f"other_{i} = {i}\n" for i in range(300))
     dup = "MARKER = 'dup'\n" + "x = 2\n" * 20
-    put("repos/infra2-sdk/src/infra2_sdk/alpha.py", "VALUE = 1\n" + "pad_a = 'x' * 40\n" * 30)
+    put(
+        "repos/infra2-sdk/src/infra2_sdk/alpha.py",
+        "VALUE = 1\n" + "pad_a = 'x' * 40\n" * 30,
+    )
     put("common/sub/shared_impl.py", body)
     put("repos/truealpha/common/shared_impl.py", body_variant)
     # a divergent same-name pair: near-zero line overlap, below the bar
