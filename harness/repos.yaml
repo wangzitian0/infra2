@@ -88,7 +88,7 @@ repositories:
     contract: snapshot
     source: https://github.com/wangzitian0/truealpha
     release_identity: app-image-ref-or-digest
-    release_tag: v0.2.93
+    release_tag: v0.2.94
     # The production host is the bare product domain (Deployer.domain of truealpha/app).
     health:
       staging: https://truealpha-staging.truealpha.club/api/health
