@@ -2151,6 +2151,6 @@ def test_probe_health_gate_waits_for_a_verdict_not_a_pass(monkeypatch) -> None:
     assert sleeps == []
 
     serve([pending])
-    with pytest.raises(AssertionError, match="no canary verdict after 150s"):
+    with pytest.raises(AssertionError, match="no canary verdict after 100s"):
         probe.main(["https://x.example", "--gate", "HEAD"])
-    assert sum(sleeps) >= 150
+    assert sum(sleeps) >= 100

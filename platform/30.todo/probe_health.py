@@ -11,7 +11,7 @@ from collections.abc import Sequence
 
 from infra2_sdk.deploy import default_http_get, poll_until_healthy
 
-GATE_VERDICT_WAIT_SECONDS = 150
+GATE_VERDICT_WAIT_SECONDS = 100
 GATE_POLL_SECONDS = 10
 
 
