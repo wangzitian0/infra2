@@ -472,6 +472,9 @@ def _deploy_platform_batch(
             f"iac_pinned batch deploys to staging/prod only "
             f"(type {deploy_type!r} -> env {type_spec.env!r})"
         )
+    # The same two guards as deploy_v2(): a batch must not resolve a branch to a sha (#1628).
+    validate_iac_ref_form(deploy_type, classify_ref(iac_ref))
+    assert_iac_ref_on_main(iac_ref, deploy_type)
     iac_sha = resolve_to_sha(iac_ref, repo=_INFRA2_REPO)
     targets: list[DeployTarget] = []
     data_lanes: set[str] = set()
