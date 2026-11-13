@@ -288,15 +288,12 @@ class Decision:
     note: str = ""
 
 
-def _unproven(
-    lookup: Lookup, unevaluated: Sequence[str], green: Sequence[str] = ()
-) -> str:
+def _unproven(lookup: Lookup, unevaluated: Sequence[str]) -> str:
     """Which recorded finding belongs to a check this run did not evaluate, or ''.
 
     ``unevaluated`` are key prefixes: a skipped section, a quota that could not be
     read, a check that answered "could not tell". Its recorded findings have not
-    recovered, they are unknown; ``""`` (all) when nothing was observed. ``green`` are
-    exact keys this run evaluated green: they never count as unproven.
+    recovered, they are unknown; ``""`` (all) when nothing was observed.
     """
     if not unevaluated:
         return ""
@@ -306,14 +303,19 @@ def _unproven(
     if state.total > len(state.keys):
         return "the recorded findings were cut short"
     hit = next(
-        (
-            key
-            for key in state.keys
-            if key not in green and any(key.startswith(p) for p in unevaluated)
-        ),
+        (key for key in state.keys if any(key.startswith(p) for p in unevaluated)),
         None,
     )
     return "" if hit is None else f"`{hit}` was not evaluated in this run"
+
+
+def _sticky_keys(lookup: Lookup, prefix: str, green: Sequence[str]) -> list[str]:
+    """The recorded keys under ``prefix`` that no run evaluated green."""
+    if not prefix or lookup.state is None:
+        return []
+    return [
+        key for key in lookup.state.keys if key.startswith(prefix) and key not in green
+    ]
 
 
 def decide(
@@ -324,9 +326,13 @@ def decide(
     now: float,
     observed_clean: bool = False,
     unevaluated: Sequence[str] = (),
+    sticky_prefix: str = "",
     green: Sequence[str] = (),
 ) -> Decision:
-    """Evaluate findings against recorded state and return action decision."""
+    """Evaluate findings against recorded state and return action decision.
+
+    A recorded key that starts with ``sticky_prefix`` is resolved only when it is in
+    ``green`` (a run evaluated it and it passed): no other run resolves it."""
     if mode == OFF:
         if identity.keys:
             return Decision(PAGE, "dedup is off for this run: paging as before")
@@ -346,7 +352,12 @@ def decide(
                 return Decision(
                     NONE, "open-only run (drill or branch dispatch) never resolves"
                 )
-            unproven = _unproven(lookup, unevaluated, green)
+            held = _sticky_keys(lookup, sticky_prefix, green)
+            if held:
+                return Decision(
+                    NONE, f"`{held[0]}` is still red: no run evaluated it green"
+                )
+            unproven = _unproven(lookup, unevaluated)
             if unproven:
                 return Decision(
                     NONE, f"cannot prove the paged findings are gone: {unproven}"
@@ -628,6 +639,7 @@ def dedup_page(
     run_url: str | None = None,
     observed_clean: bool = False,
     unevaluated: Sequence[str] = (),
+    sticky_prefix: str = "",
     green: Sequence[str] = (),
     detail: str = "",
     mode: str | None = None,
@@ -657,6 +669,17 @@ def dedup_page(
                 if api is not None
                 else Lookup(UNREADABLE, detail="no GITHUB_TOKEN or GITHUB_REPOSITORY")
             )
+        carried = _sticky_keys(lookup, sticky_prefix, green)
+        if carried and identity.keys:
+            # a recorded sticky key that this run did not clear is still red: keep it
+            identity = make_identity(
+                job,
+                [
+                    *findings,
+                    *(Finding(key, "(not evaluated in this run)") for key in carried),
+                ],
+                env,
+            )
         decision = decide(
             identity,
             lookup,
@@ -664,6 +687,7 @@ def dedup_page(
             now=now,
             observed_clean=observed_clean,
             unevaluated=unevaluated,
+            sticky_prefix=sticky_prefix,
             green=green,
         )
     except Exception as exc:  # noqa: BLE001 - a bug here must page, never silence.
@@ -753,6 +777,7 @@ def resolve_page_state(
     label: str = "",
     run_url: str | None = None,
     unevaluated: Sequence[str] = (),
+    sticky_prefix: str = "",
     green: Sequence[str] = (),
     mode: str | None = None,
     now: float | None = None,
@@ -769,6 +794,7 @@ def resolve_page_state(
         run_url=run_url,
         observed_clean=True,
         unevaluated=unevaluated,
+        sticky_prefix=sticky_prefix,
         green=green,
         mode=mode,
         now=now,

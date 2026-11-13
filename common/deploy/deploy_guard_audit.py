@@ -398,6 +398,10 @@ def _load_hook_results(
     return [item for item in items if isinstance(item, dict)]
 
 
+#: The prefix of every App hook finding key: the one spelling, used by every writer and reader.
+APP_HOOK_KEY_PREFIX = "app-hook:"
+
+
 def app_hook_pair(item: Mapping[str, Any]) -> tuple[str, str]:
     """The ``(identity_key, detail_line)`` of one App hook result: the one spelling of the key."""
     svc = str(item.get("service") or "?")
@@ -415,7 +419,7 @@ def app_hook_pair(item: Mapping[str, Any]) -> tuple[str, str]:
     )
     summary_line = raw_summary.splitlines()[0][:200]
     return (
-        f"app-hook:{svc}:{slot}:{norm_env}",
+        f"{APP_HOOK_KEY_PREFIX}{svc}:{slot}:{norm_env}",
         f"- {svc} [{slot} @ {vref}]: {summary_line}",
     )
 
@@ -472,7 +476,7 @@ def unevaluated_prefixes(
         or checks[key].get("status") not in ("pass", "fail")
     ]
     if hook_items is None:
-        prefixes.append("app-hook:")
+        prefixes.append(APP_HOOK_KEY_PREFIX)
     return prefixes
 
 
