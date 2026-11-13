@@ -188,8 +188,9 @@ probe runner 一次推送覆盖一组内所有失败探针,整条推送的 sever
   `common/tests/test_alerting.py::test_only_the_private_fallback_sends_text` 守住这一条。
 - **卡片标准**:标题最多 40 字符;首行是现象;正文最多 12 行;一个链接;颜色随级别(恢复为绿,报告为蓝)。
 - **一个条件一个呼出者**:`watchdog-signals.yaml` 的 `conditions` 列出盯同一条件的信号,其中至多一个 `type: alert`。
-  `primary_owner: signoz` 的行不手写,由 `load_alert_definitions` 逐规则派生。多出的呼出者让
-  `common/observability/watchdog_audit.py` 失败,除非 `double_owner_debt` 写明编号与原因。
+  `primary_owner: signoz` 的行不手写,由 `watchdog_audit.py` 读 `alert_rules.json` 目录逐规则派生(测试保证它与
+  `load_alert_definitions` 相等)。多出的呼出者让 `common/observability/watchdog_audit.py` 失败,没有豁免清单。
+  目录删掉一条规则后,SigNoz 里仍留着它,直到 `apply-observability.yml` 以 `mode=prune-alerts` 运行(production 步骤)。
 - **每条呼出都会恢复**:失败告警走 `dedup_page`,配对一个 `resolve_page_state` 步骤;测试
   `common/tests/test_alert_resolution.py` 逐个作业验证一次红、一次绿恰好发出一张"已恢复"卡片。
 

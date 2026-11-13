@@ -2579,8 +2579,10 @@ def test_workflow_records_the_watchdog_verdicts_as_issues() -> None:
     assert (
         "RUNNER_HEALTH_SOURCE" in health["run"] and "record_verdicts" in health["run"]
     )
-    # the Feishu page is still delivered, after the verdict is recorded
-    assert health["run"].index("record(False") < health["run"].index("dedup_page(")
+    # the 60 s probe iac-runner-http pages this condition: the daily step never does
+    assert "deliver_out_of_band_alert" not in health["run"]
+    assert "dedup_page" not in health["run"]
+    assert "sys.exit(1)" in health["run"]
 
 
 def test_the_drill_input_reaches_the_tool_only_through_env() -> None:
@@ -3078,3 +3080,61 @@ def test_watchdog_report_is_a_card_in_the_card_standard(monkeypatch) -> None:
     (card,) = cards
     _assert_card_standard(card)
     assert card["header"]["template"] == "blue"
+
+
+def test_a_page_of_several_items_is_a_pager_card_that_names_every_item(
+    monkeypatch,
+) -> None:
+    """#1648 review: text_to_card is for one plain message; three failing checks must
+    all be on the card (render_pager_card), not cut to the first one."""
+    import common.alerting as alerting
+    from common.alerting import text_to_card
+
+    cards: list[dict] = []
+    monkeypatch.setattr(
+        alerting, "deliver_feishu_card", lambda url, card, **kw: cards.append(card)
+    )
+    watchdog = _load_watchdog()
+    paged = [
+        watchdog.CheckResult(
+            name=f"check-{n}",
+            ok=False,
+            detail=f"failure detail {n}",
+            failure_domain="backup",
+            severity="P1",
+        )
+        for n in range(3)
+    ]
+    env = {
+        "FEISHU_WEBHOOK_URL": "https://open.feishu.cn/open-apis/bot/v2/hook/tok",
+        "GITHUB_RUN_ID": "1",
+    }
+    code = watchdog._handle_paged_failures(env, paged, [], dry_run=False)
+
+    assert code == 1
+    (card,) = cards
+    blob = json.dumps(card, ensure_ascii=False)
+    for n in range(3):
+        assert f"check-{n}" in blob
+    assert card["header"]["template"] == "orange"  # P1, as the Worker colours it
+    # the plain-text renderer would have cut the page to its first item
+    cut = json.dumps(
+        text_to_card(watchdog.format_failure_message(paged, run_url="")),
+        ensure_ascii=False,
+    )
+    assert "check-2" not in cut
+
+
+def test_card_colour_follows_the_level_like_the_worker() -> None:
+    """#1648 review: P0 red, P1 orange, P2 yellow, resolved green; the Worker's map."""
+    from common.alerting import EMOJI_TEMPLATE, text_to_card
+
+    assert EMOJI_TEMPLATE == {
+        "🔴": "red",
+        "🟠": "orange",
+        "🟡": "yellow",
+        "✅": "green",
+    }
+    for emoji, colour in EMOJI_TEMPLATE.items():
+        assert text_to_card(f"{emoji} title\nbody")["header"]["template"] == colour
+    assert text_to_card("no emoji")["header"]["template"] == "red"

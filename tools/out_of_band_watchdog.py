@@ -26,6 +26,7 @@ from common.alerting import (  # noqa: E402
     REPORT_TITLE_PREFIX,
     PagerItem,
     PagerMessage,
+    _LEVEL_TEMPLATE,
     deliver_infra2_report,
     deliver_out_of_band_card,
     firing_title,
@@ -34,6 +35,7 @@ from common.alerting import (  # noqa: E402
     out_of_band_app_config,
     pager_level,
     redact_credentials,
+    render_pager_card,
     render_pager_text,
     text_to_card,
 )
@@ -1315,7 +1317,14 @@ _DEFAULT_IMPACT = "未归类的检查失败:按现象判断影响范围"
 def format_failure_message(
     results: list[CheckResult], *, run_url: str, now: float | None = None
 ) -> str:
-    """Build the Feishu page for failed paging checks (see route_failures).
+    """The text of the Feishu page for failed paging checks (see route_failures)."""
+    return render_pager_text(failure_pager_message(results, run_url=run_url, now=now))
+
+
+def failure_pager_message(
+    results: list[CheckResult], *, run_url: str, now: float | None = None
+) -> PagerMessage:
+    """The page for failed paging checks as a structure: one text and one card render it.
 
     #905: the pager layout every source shares (``common.alerting.PAGER_FIELDS``).
     """
@@ -1342,12 +1351,10 @@ def format_failure_message(
     preamble = ["来源：GitHub Actions 日级带外审计 → 飞书直发(不经 bridge)"]
     if run_url:
         preamble.append(f"运行：{run_url}")
-    return render_pager_text(
-        PagerMessage(
-            title=firing_title(level, f"GitHub 日级带外审计 · {len(items)} 项"),
-            firing=items,
-            preamble=tuple(preamble),
-        )
+    return PagerMessage(
+        title=firing_title(level, f"GitHub 日级带外审计 · {len(items)} 项"),
+        firing=items,
+        preamble=tuple(preamble),
     )
 
 
@@ -1702,7 +1709,17 @@ def _handle_paged_failures(
     *,
     dry_run: bool,
 ) -> int:
-    message = format_failure_message(paged, run_url=_github_run_url(current_env))
+    pager = failure_pager_message(paged, run_url=_github_run_url(current_env))
+    message = render_pager_text(pager)
+    page_card = render_pager_card(
+        pager,
+        template=_LEVEL_TEMPLATE[highest_level(r.severity for r in paged)],
+    )
+
+    # A dedup note changes the text; the plain card then carries the page.
+    if page_card is not None:
+        PAGE_CARDS[message] = page_card
+
     if dry_run:
         print(message)
         _emit_structured_log(
@@ -1972,8 +1989,16 @@ def _ssh_capture(config: SshConfig | None, timeout: float = 20.0):
     return unit_runtime
 
 
+#: page text -> the structured card of that page (a page of several items, rendered by
+#: ``render_pager_card``). ``deliver_out_of_band_alert`` sends it for exactly that text.
+PAGE_CARDS: dict[str, dict] = {}
+
+
 def deliver_out_of_band_alert(env: Mapping[str, str], message: str) -> None:
-    """Send a direct Feishu alert card without using the infra2 bridge."""
+    """Send a direct Feishu alert card without using the infra2 bridge.
+
+    A page that has a card in ``PAGE_CARDS`` sends it; any other message is one plain
+    message and becomes a card (``text_to_card``)."""
     config = out_of_band_app_config(env)
     mode = config["mode"]
     if mode not in {"feishu_app", "feishu_webhook"}:
@@ -1983,9 +2008,8 @@ def deliver_out_of_band_alert(env: Mapping[str, str], message: str) -> None:
             "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL or FEISHU_WEBHOOK_URL "
             "is required for feishu_webhook mode"
         )
-    template = "green" if message.lstrip().startswith("✅") else "red"
     deliver_out_of_band_card(
-        env, text_to_card(message, template=template), fallback_text=message
+        env, PAGE_CARDS.get(message) or text_to_card(message), fallback_text=message
     )
 
 

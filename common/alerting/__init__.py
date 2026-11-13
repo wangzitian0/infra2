@@ -55,6 +55,7 @@ from common.alerting.signoz import (
     signoz_rule_channels,
 )
 from common.alerting.types import (
+    EMOJI_TEMPLATE,
     DEFAULT_ACTION,
     DEFAULT_IMPACT,
     DELIVERY_LABEL,
@@ -120,6 +121,7 @@ from common.alerting.types import (
 )
 
 __all__ = [
+    "EMOJI_TEMPLATE",
     "DEFAULT_ACTION",
     "DEFAULT_IMPACT",
     "DELIVERY_LABEL",

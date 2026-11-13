@@ -6,8 +6,9 @@
 #                                common/observability/probe_specs.py::render_probe_spec_text)
 #   primary_owner=cloudflare -> cloudflare/infra-watchdog/wrangler.toml
 #   primary_owner=github     -> tools/out_of_band_watchdog.py
-#   primary_owner=signoz     -> one row per SigNoz alert rule, derived from the rule
-#                                files (common/observability_dashboards.py::
+#   primary_owner=signoz     -> one row per SigNoz alert rule, derived from the
+#                                alert_rules.json catalogs by watchdog_audit.py
+#                                (a test holds that reader equal to
 #                                load_alert_definitions); never handwritten here
 #   primary_owner=excluded   -> intentionally unwatched; requires exclusion_reason
 #                                + revalidation_condition
@@ -122,6 +123,14 @@ conditions:
     signals:
       - production.todo-canary-status # in-band probe runner, every 60 s
 
+  iac-runner-health:
+    signals:
+      - production.iac-runner-http # the 60 s probe pages
+      - global.infra2.iac-runner-health # the daily step goes red, never pages
+
+# PlatformTodoProbeFailures was deleted from the catalog (platform/12.alerting/alert_rules.json).
+# SigNoz keeps it until an apply-observability.yml run with mode=prune-alerts (a production
+# run); until then production has two pagers for canary-todo.
 signoz_conditions:
   PlatformTodoProbeFailures: canary-todo
 
@@ -783,6 +792,21 @@ signals:
     environment: global
     component: iac
     signal: deploy-guard-audit
+    primary_owner: self
+    failure_class: config-drift
+    layer: github
+    severity: critical
+    cadence: 1d
+    tier: day
+    type: report
+
+  # #1648: the daily "Runner health" step of ops-checks.yml `watchdog` reads the same
+  # /health as the 60 s probe production.iac-runner-http, which pages. The step keeps its
+  # check, goes red and records its verdict for the issue trail; it sends no Feishu message.
+  - signal_id: global.infra2.iac-runner-health
+    environment: global
+    component: iac-runner
+    signal: iac-runner-health
     primary_owner: self
     failure_class: config-drift
     layer: github
