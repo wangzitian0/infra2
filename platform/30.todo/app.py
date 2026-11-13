@@ -831,6 +831,12 @@ def cached_canary_status() -> Dict[str, Any]:
         return document
 
 
+def peek_canary_verdict() -> Dict[str, Any]:
+    """The last status document without a probe run; empty before the first run."""
+    cached = _STATUS_CACHE  # one atomic read; the lock is held during a slow run
+    return dict(cached[1]) if cached else {}
+
+
 SERVER_START_TIME = time.time()
 
 
@@ -925,6 +931,7 @@ def _resolved_git_sha() -> str:
 @fastapi_app.api_route("/api/health", methods=["GET", "HEAD"], tags=["Observability"])
 def fastapi_api_health() -> Response:
     git_sha = _resolved_git_sha()
+    verdict = peek_canary_verdict()
     return JSONResponse(
         status_code=200,
         content={
@@ -934,6 +941,10 @@ def fastapi_api_health() -> Response:
             "domain": "todo.zitian.party",
             "version": git_sha,
             "git_sha": git_sha,
+            "canary": {
+                "ok": verdict.get("ok") is True,
+                "checked_at": verdict.get("timestamp"),
+            },
             "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
         },
     )

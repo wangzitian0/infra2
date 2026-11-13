@@ -1984,6 +1984,10 @@ def test_todo_runtime_hooks_manifest_declares_all_five_slots() -> None:
         assert "python3 probe_health.py" in spec.run, slot_name
         assert "urllib.request.urlopen" not in spec.run, slot_name
     assert "--require-service platform/todo" in manifest.slots["staging_gate"].run
+    for gate in ("staging_gate", "prod_gate"):
+        assert manifest.slots[gate].run.endswith(' --gate "$EXPECTED_SHA"'), gate
+        assert "EXPECTED_SHA" in manifest.slots[gate].required_env, gate
+    assert "--gate" not in manifest.slots["smoke"].run
     assert (SERVICE_DIR / "probe_health.py").is_file()
 
     for slot in HOOK_SLOTS:
@@ -2034,3 +2038,160 @@ def test_todo_rendered_mount_fingerprints_and_compose_labels(deploy) -> None:
         "infra2.mount.secrets.ctmpl.sha256=${IAC_MOUNT_SHA256_SECRETS_CTMPL:-}"
         in agent_labels
     )
+
+
+def test_probe_health_gate_fails_on_red_canary_and_sha_mismatch(
+    monkeypatch,
+) -> None:
+    """AC3 (#1635): gate mode fails on a red verdict, a missing verdict and a SHA mismatch."""
+    from types import SimpleNamespace
+
+    probe = _load("probe_health_gate", SERVICE_DIR / "probe_health.py")
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD^{commit}"],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    ).stdout.strip()
+    monkeypatch.chdir(ROOT)
+    base = {"ok": True, "service": "platform/todo", "git_sha": sha}
+
+    def run(body: dict, *flags: str) -> int:
+        monkeypatch.setattr(
+            probe,
+            "poll_until_healthy",
+            lambda *a, **k: SimpleNamespace(body=json.dumps(body)),
+        )
+        return probe.main(["https://x.example", *flags])
+
+    good = {**base, "canary": {"ok": True, "checked_at": _now()}}
+    assert run(good, "--gate", "HEAD") == 0
+    for bad in (
+        {**base, "canary": {"ok": False, "checked_at": _now()}},
+        dict(base),
+        {**good, "git_sha": "0" * 40},
+    ):
+        with pytest.raises(AssertionError):
+            run(bad, "--gate", "HEAD")
+    assert (
+        run({**base, "canary": {"ok": False, "checked_at": "t"}}) == 0
+    )  # no gate: status only
+
+
+def test_health_body_carries_the_cached_canary_verdict(app, monkeypatch) -> None:
+    """#1635: public /api/health stays 200 and holds `canary` and `git_sha`, no host or error."""
+    from starlette.testclient import TestClient
+
+    _env(monkeypatch)
+    _patch_probes(
+        app,
+        monkeypatch,
+        s3={"status": "fail", "latency_ms": 2.0, "detail": "AccessDenied"},
+    )
+    client = TestClient(app.fastapi_app)
+    assert client.get("/api/health").json()["canary"]["ok"] is False  # no run yet
+    app.cached_canary_status()
+    response = client.get("/api/health")
+    body = response.json()
+    assert response.status_code == 200
+    assert body["canary"]["ok"] is False
+    assert body["canary"]["checked_at"]
+    assert "git_sha" in body
+    assert "AccessDenied" not in response.text
+
+
+def test_probe_health_gate_waits_for_a_verdict_not_a_pass(monkeypatch) -> None:
+    """#1635: gate mode polls until a verdict exists; a red verdict ends the wait at once."""
+    from types import SimpleNamespace
+
+    probe = _load("probe_health_wait", SERVICE_DIR / "probe_health.py")
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD^{commit}"],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    ).stdout.strip()
+    monkeypatch.chdir(ROOT)
+    sleeps: list[float] = []
+    clock = [0.0]
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(probe.time, "sleep", fake_sleep)
+    monkeypatch.setattr(probe.time, "monotonic", lambda: clock[0])
+
+    def serve(canaries: list) -> None:
+        calls = iter(canaries)
+        monkeypatch.setattr(
+            probe,
+            "poll_until_healthy",
+            lambda *a, **k: SimpleNamespace(
+                body=json.dumps(
+                    {"ok": True, "git_sha": sha, "canary": next(calls, canaries[-1])}
+                )
+            ),
+        )
+
+    pending = {"ok": False, "checked_at": None}
+    green = {"ok": True, "checked_at": _now()}
+    red = {"ok": False, "checked_at": _now()}
+
+    serve([pending, pending, green])
+    assert probe.main(["https://x.example", "--gate", "HEAD"]) == 0
+    assert sleeps == [10, 10]
+
+    sleeps.clear()
+    serve([red])
+    with pytest.raises(AssertionError):
+        probe.main(["https://x.example", "--gate", "HEAD"])
+    assert sleeps == []
+
+    serve([pending])
+    with pytest.raises(AssertionError, match="no canary verdict after 90s"):
+        probe.main(["https://x.example", "--gate", "HEAD"])
+    assert sum(sleeps) >= 90
+
+
+def _now(offset: float = 0.0) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + offset))
+
+
+def test_probe_health_gate_refuses_stale_verdict_and_missing_field_without_wait(
+    monkeypatch,
+) -> None:
+    """#1635: a verdict older than 180 s fails; a missing `canary` field fails with no wait."""
+    from types import SimpleNamespace
+
+    probe = _load("probe_health_stale", SERVICE_DIR / "probe_health.py")
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD^{commit}"],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    ).stdout.strip()
+    monkeypatch.chdir(ROOT)
+    sleeps: list[float] = []
+    monkeypatch.setattr(probe.time, "sleep", sleeps.append)
+
+    def run(canary) -> int:
+        body = {"ok": True, "git_sha": sha}
+        if canary is not None:
+            body["canary"] = canary
+        monkeypatch.setattr(
+            probe,
+            "poll_until_healthy",
+            lambda *a, **k: SimpleNamespace(body=json.dumps(body)),
+        )
+        return probe.main(["https://x.example", "--gate", "HEAD"])
+
+    assert run({"ok": True, "checked_at": _now(-60)}) == 0
+    with pytest.raises(AssertionError, match="stale"):
+        run({"ok": True, "checked_at": _now(-400)})
+    with pytest.raises(AssertionError):
+        run(None)
+    assert sleeps == []

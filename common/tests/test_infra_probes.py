@@ -2604,3 +2604,112 @@ def test_a_page_carries_the_probe_target_and_expectation(monkeypatch) -> None:
         "expected": "200,429",
     }
     assert alert["startsAt"] == "2026-09-24T08:00:00Z"
+
+
+# --- #1648: the runner health, internal and public, pages once -----------------------
+
+
+def _iac_runner_specs() -> str:
+    """The two real iac-runner probe lines, rendered as the deployer renders them."""
+    from common.observability.probe_specs import (
+        render_probe_spec_text,
+        resolve_env_suffix,
+    )
+
+    text = resolve_env_suffix(render_probe_spec_text(), "")
+    lines = [ln for ln in text.splitlines() if ln.startswith("iac-runner-")]
+    assert [ln.split("|")[0] for ln in lines] == [
+        "iac-runner-http",
+        "iac-runner-public-http",
+    ]
+    assert lines[1].split("|")[2] == "https://iac.zitian.party/health"
+    assert (
+        lines[1].split("|")[3] == "200"
+    )  # Traefik 404s a stopped runner and a lost route
+    assert lines[1].split("|")[6] == "iac-runner-http"  # the cascade root
+    return "\n".join(lines)
+
+
+def _iac_runner_pages(monkeypatch, tmp_path, runs: list[dict]) -> list[list[str]]:
+    """Run the real probe loop once per entry of `runs` (probe name -> ok); return the
+    probe names of each firing page."""
+    runner = _load_probe_runner()
+    posted: list[dict] = []
+    monkeypatch.setenv("INFRA_PROBE_SPECS", _iac_runner_specs())
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    monkeypatch.setattr(
+        runner, "post_alert_bridge_payload", lambda _u, p, **_k: posted.append(p)
+    )
+    current: dict = {}
+    monkeypatch.setattr(
+        runner,
+        "run_probes",
+        lambda specs: [_result(s, ok=current[s.name]) for s in specs],
+    )
+    for ok in runs:
+        current.clear()
+        current.update(ok)
+        runner.run_once(state_path=tmp_path / "s.json", failure_threshold=1)
+    return [
+        sorted(
+            str(a["labels"].get("probe") or a["labels"].get("instance") or a["labels"])
+            for a in p["alerts"]
+        )
+        for p in posted
+        if p["status"] == "firing"
+    ]
+
+
+def test_a_stopped_runner_pages_once(monkeypatch, tmp_path) -> None:
+    """The internal probe has no connection and the public route answers 404: one page."""
+    pages = _iac_runner_pages(
+        monkeypatch,
+        tmp_path,
+        [{"iac-runner-http": False, "iac-runner-public-http": False}],
+    )
+    assert len(pages) == 1 and len(pages[0]) == 1
+
+
+def test_a_dead_prerequisite_pages_once_and_the_later_public_failure_adds_none(
+    monkeypatch, tmp_path
+) -> None:
+    pages = _iac_runner_pages(
+        monkeypatch,
+        tmp_path,
+        [
+            {"iac-runner-http": False, "iac-runner-public-http": True},  # /health 503
+            {"iac-runner-http": False, "iac-runner-public-http": False},  # then 404
+        ],
+    )
+    assert len(pages) == 1 and len(pages[0]) == 1
+
+
+def test_a_lost_route_pages_once_from_the_public_probe(monkeypatch, tmp_path) -> None:
+    pages = _iac_runner_pages(
+        monkeypatch,
+        tmp_path,
+        [{"iac-runner-http": True, "iac-runner-public-http": False}],
+    )
+    assert len(pages) == 1 and len(pages[0]) == 1
+    assert "public" in pages[0][0]
+
+
+def test_the_public_runner_probe_must_depend_on_the_internal_one(
+    monkeypatch, tmp_path
+) -> None:
+    """Mutation guard: without `depends_on`, a stopped runner pages twice."""
+    runner = _load_probe_runner()
+    specs = _iac_runner_specs().replace("|iac-runner-http|", "||")
+    assert specs.count("|iac-runner-http|") == 0
+    posted: list[dict] = []
+    monkeypatch.setenv("INFRA_PROBE_SPECS", specs)
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    monkeypatch.setattr(
+        runner, "post_alert_bridge_payload", lambda _u, p, **_k: posted.append(p)
+    )
+    monkeypatch.setattr(
+        runner, "run_probes", lambda specs: [_result(s, ok=False) for s in specs]
+    )
+    runner.run_once(state_path=tmp_path / "s.json", failure_threshold=1)
+    firing = [p for p in posted if p["status"] == "firing"]
+    assert sum(len(p["alerts"]) for p in firing) == 2

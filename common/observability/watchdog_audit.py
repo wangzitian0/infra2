@@ -30,7 +30,7 @@ INVENTORY = ROOT / "docs/ssot/watchdog-signals.yaml"
 WRANGLER = ROOT / "cloudflare/infra-watchdog/wrangler.toml"
 OUT_OF_BAND = ROOT / "tools/out_of_band_watchdog.py"
 
-VALID_OWNERS = {"internal", "cloudflare", "github", "excluded", "self"}
+VALID_OWNERS = {"internal", "cloudflare", "github", "signoz", "excluded", "self"}
 
 # #425 T5: the four cadence tiers + two signal types from ops.observability.md §2
 # (the SSOT law landed by #425 T1/#426). `tier`/`type` are OPTIONAL on a signal
@@ -48,7 +48,12 @@ REPORT_TIERS = {"day", "month"}
 # #902: which layer each owner pages from. `self` signals page from their own
 # code path, which may run on the VPS or in a GitHub job, so they declare it.
 VALID_LAYERS = {"vps", "cloudflare", "github"}
-LAYER_OF_OWNER = {"internal": "vps", "cloudflare": "cloudflare", "github": "github"}
+LAYER_OF_OWNER = {
+    "internal": "vps",
+    "cloudflare": "cloudflare",
+    "github": "github",
+    "signoz": "vps",
+}
 PHASE_REF = re.compile(r"^#\d+$")
 
 
@@ -69,6 +74,7 @@ def audit() -> list[str]:
     errors.extend(_validate_inventory(signals))
     errors.extend(_validate_layers(inventory, signals))
     errors.extend(_vps_public_route_errors(signals))
+    errors.extend(_condition_errors(inventory, signals))
 
     internal_specs = _compose_probe_specs()
     worker_targets, worker_heartbeats, worker_identities = _worker_keys()
@@ -203,9 +209,11 @@ def _validate_inventory(signals: list[dict[str, Any]]) -> list[str]:
         if owner not in VALID_OWNERS:
             errors.append(f"invalid primary_owner for {signal_id}: {owner}")
         try:
-            service_id_for_component(
-                str(signal.get("component", "")), signal=str(signal.get("signal", ""))
-            )
+            if owner != "signoz":  # a rule carries its own service_id
+                service_id_for_component(
+                    str(signal.get("component", "")),
+                    signal=str(signal.get("signal", "")),
+                )
         except ValueError as exc:
             errors.append(f"unresolvable service identity for {signal_id}: {exc}")
         errors.extend(_validate_tier_and_type(signal, signal_id))
@@ -284,6 +292,84 @@ def _validate_layers(
             f"relayering_debt {signal_id} is no longer a violation; remove the entry"
         )
     return errors
+
+
+def _condition_errors(
+    inventory: dict[str, Any], signals: list[dict[str, Any]]
+) -> list[str]:
+    """One source pages each condition.
+
+    ``conditions`` names the signals that watch one real-world condition. At most one
+    of them may page (type alert); the others report or are excluded. A condition with
+    two pagers fails. ``signoz_conditions`` adds a SigNoz rule row to its condition while
+    the rule file holds the rule.
+    """
+    by_id = {str(signal.get("signal_id")): signal for signal in signals}
+    errors: list[str] = []
+    members: dict[str, list[str]] = {
+        str(name): [str(i) for i in (spec or {}).get("signals") or []]
+        for name, spec in (inventory.get("conditions") or {}).items()
+    }
+    for rule, condition in (inventory.get("signoz_conditions") or {}).items():
+        for signal_id, signal in by_id.items():
+            if signal.get("primary_owner") == "signoz" and signal.get("signal") == rule:
+                members.setdefault(str(condition), []).append(signal_id)
+    for name, ids in members.items():
+        pagers = []
+        for signal_id in ids:
+            signal = by_id.get(signal_id)
+            if signal is None:
+                errors.append(f"condition {name}: unknown signal {signal_id}")
+            elif signal.get("primary_owner") != "excluded" and (
+                signal.get("type") == "alert"
+            ):
+                pagers.append(signal_id)
+        if len(pagers) > 1:
+            owners = sorted(
+                f"{by_id[signal_id]['primary_owner']}:{signal_id}"
+                for signal_id in pagers
+            )
+            errors.append(f"condition {name} has {len(pagers)} paging owners: {owners}")
+    return errors
+
+
+def _signoz_signal_entries() -> list[dict[str, Any]]:
+    """One ``primary_owner: signoz`` signal per SigNoz alert rule in the rule files.
+
+    The rule files are the source: a rule needs no handwritten row, and a rule cannot
+    exist outside the registry. A domain package may not import the flat loader
+    ``common.observability_dashboards`` (``test_import_boundaries.py``), so this reads
+    the files like ``common/core/service_identity_audit.py`` does;
+    ``test_signoz_rows_derive_from_every_alert_rule`` holds the two readers together.
+    Every rule pages through the bridge from the VPS.
+    """
+    entries: list[dict[str, Any]] = []
+    for path in sorted(ROOT.glob("**/alert_rules.json")):
+        relative = path.relative_to(ROOT)
+        if relative.parts[0] in {"repos", "oh-my-code-agent"} or any(
+            part.startswith(".") for part in relative.parts
+        ):
+            continue
+        data = json.loads(path.read_text(encoding="utf-8"))
+        environment = str(data.get("environment") or "")
+        for rule in data.get("rules") or []:
+            name = str(rule["alert_name"])
+            entries.append(
+                {
+                    "signal_id": f"{environment}.{name}.signoz",
+                    "environment": environment,
+                    "component": str(rule.get("service_id") or data.get("service_id")),
+                    "signal": name,
+                    "primary_owner": "signoz",
+                    "failure_class": "service-health",
+                    "severity": str(rule.get("severity") or "warning"),
+                    "tier": "minute",
+                    "type": "alert",
+                    "consecutive_failures": 1,
+                    "renotify_window_sec": 0,
+                }
+            )
+    return entries
 
 
 def _vps_public_route_errors(signals: list[dict[str, Any]]) -> list[str]:
@@ -460,7 +546,15 @@ def _load_inventory() -> dict[str, Any]:
             f"{stray} — the internal plane is derived from ProbeFacet/SignalFacet "
             f"declarations (#543); declare facets on the service's deploy.py instead"
         )
-    inventory["signals"] = handwritten + render_internal_signal_entries()
+    stray = [s["signal_id"] for s in handwritten if s.get("primary_owner") == "signoz"]
+    if stray:
+        raise ValueError(
+            f"handwritten `primary_owner: signoz` entries in {INVENTORY.name}: "
+            f"{stray} -- the rows derive from the SigNoz alert rule files"
+        )
+    inventory["signals"] = (
+        handwritten + render_internal_signal_entries() + _signoz_signal_entries()
+    )
     return inventory
 
 

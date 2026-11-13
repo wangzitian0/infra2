@@ -39,7 +39,6 @@ if str(ROOT) not in sys.path:
 from common.alerting import (  # noqa: E402
     as_report,
     deliver_out_of_band_card,
-    deliver_out_of_band_text,
 )
 from common.observability.ledger import (  # noqa: E402
     apply_unavailability,
@@ -304,13 +303,8 @@ def run(
     if env.get("INFRA2_STABILITY_REPORT_DRY_RUN") == "1":
         print(message)
         return 0
-    if env.get("INFRA2_STABILITY_REPORT_FORMAT", "card").strip().lower() == "text":
-        deliver_out_of_band_text(env, message)
-    else:
-        card = build_stability_card(
-            prod_summary, staging_lines=staging_lines, title=title
-        )
-        deliver_out_of_band_card(env, card, fallback_text=message)
+    card = build_stability_card(prod_summary, staging_lines=staging_lines, title=title)
+    deliver_out_of_band_card(env, card, fallback_text=message)
     print(message)
     return 0
 

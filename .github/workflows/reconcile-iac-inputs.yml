@@ -438,10 +438,17 @@ jobs:
           INPUT_AFTER: ${{ inputs.after || github.ref_name }}
           INPUT_PROMOTE_PROD: ${{ inputs.promote_prod || false }}
           RECONCILE_PHASE: ${{ env.RECONCILE_PHASE || '' }}
+          GITHUB_TOKEN: ${{ github.token }}
+          # a second red run of the same failure is a report in the reports chat
+          INFRA2_REPORTS_FEISHU_APP_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_ID }}
+          INFRA2_REPORTS_FEISHU_APP_SECRET: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_SECRET }}
+          INFRA2_REPORTS_FEISHU_CHAT_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_CHAT_ID }}
         run: |
           python - <<'PY'
           import os
           from pathlib import Path
+          from common.observability.issue_trail import FULL
+          from common.observability.page_dedup import dedup_page
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from tools.reconcile_iac_inputs import resolve_workflow_failure_alert
 
@@ -464,7 +471,46 @@ jobs:
               print(skip_notice)
               raise SystemExit(0)
           assert alert_text is not None
-          deliver_out_of_band_alert(os.environ, alert_text)
+          # one dedup state per environment: a staging recovery never resolves production
+          job = "reconcile-iac-inputs-" + ("production" if os.environ.get("INPUT_PROMOTE_PROD") == "true" else "staging")
+          phase = os.environ.get("RECONCILE_PHASE") or "reconcile"
+          outcome = dedup_page(
+              os.environ,
+              job=job,
+              label="IaC 输入对账",
+              findings=[(phase, alert_text.splitlines()[0])],
+              detail=alert_text,
+              page_message=alert_text,
+              deliver_page=deliver_out_of_band_alert,
+              # the tag push is the staging train: dedup runs for it too
+              mode=FULL if os.environ.get("GITHUB_EVENT_NAME") == "push" else None,
+          )
+          raise SystemExit(outcome.exit_code)
+          PY
+
+      # Only a run that reached the deploy phase proves the deploy path is healthy again:
+      # a sync-only, dry-run or refused run neither pages nor resolves.
+      - name: Resolve the reconcile failure alert
+        if: success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) && env.RECONCILE_PHASE == 'reconcile-deploy'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_PROMOTE_PROD: ${{ inputs.promote_prod || false }}
+        run: |
+          python - <<'PY'
+          import os
+          from common.observability.issue_trail import FULL
+          from common.observability.page_dedup import resolve_page_state
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          job = "reconcile-iac-inputs-" + ("production" if os.environ.get("INPUT_PROMOTE_PROD") == "true" else "staging")
+          outcome = resolve_page_state(
+              os.environ,
+              job=job,
+              label="IaC 输入对账",
+              deliver_page=deliver_out_of_band_alert,
+              mode=FULL if os.environ.get("GITHUB_EVENT_NAME") == "push" else None,
+          )
+          raise SystemExit(outcome.exit_code)
           PY
 
       - name: Upload reconcile result

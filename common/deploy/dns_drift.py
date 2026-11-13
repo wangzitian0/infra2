@@ -1,29 +1,12 @@
 #!/usr/bin/env python3
-"""Daily DNS drift report — the first T3 reconciler (intent ↔ external reality).
+"""DNS drift check: intent versus external reality (read-only, a report, no gate).
 
-Compares the DNS the tooling INTENDS (bootstrap/02.dns_and_cert's DEFAULT_RECORDS, normalized)
-against what Cloudflare ACTUALLY serves, and posts a daily report to a dedicated Feishu/Lark
-group. This is the only way to manage drift whose truth lives outside the repo: a record can be
-hand-added/removed in the Cloudflare UI with no PR, so no internal test can catch it (see #280).
+Compares the DNS that the tooling INTENDS (bootstrap/02.dns_and_cert DEFAULT_RECORDS,
+normalized) against what Cloudflare ACTUALLY serves. ``tools/facet_reconcile.py`` runs it
+and delivers the report card; this module only observes and formats.
 
-Properties (by design):
-  * READ-ONLY on Cloudflare — GET only; the single side effect is the Lark message.
-  * REPORT, not gate — it gates nothing (no deploy/PR depends on it). Finding DRIFT is reported,
-    never an error; it posts daily even when in-sync (delivery self-proves the path, #425). Exit
-    semantics, kept honest: no-op exit 0 only when NOT fully configured; a fully-configured run
-    that can't read Cloudflare or post to Lark exits non-zero, so a BROKEN reconciler is visible
-    (a silently-green broken reconciler would be exactly the lie this is meant to catch).
-  * SINGLE-SOURCED intent — reuses DEFAULT_RECORDS + _normalize_record + the CF client from the
-    DNS tooling itself, so it checks the same records the tooling manages, not a third copy.
-
-Config (env, wired from GitHub secrets/vars in ops-checks.yml's facet-reconcile job — #542):
-  CF_API_TOKEN, CF_ZONE_ID | CF_ZONE_NAME   Cloudflare read access
-  INTERNAL_DOMAIN                            e.g. zitian.party
-  CF_RECORDS (optional)                      comma list override; else DEFAULT_RECORDS
-  Delivery (one of):
-    app bot  — DNS_DRIFT_FEISHU_{APP_ID,APP_SECRET,CHAT_ID}[, API_BASE]: send via the existing
-               infra2 Feishu app bot to the 'infra2 reports' group it was added to (preferred).
-    webhook  — DNS_DRIFT_FEISHU_WEBHOOK_URL: a custom-bot webhook.
+Config (env): CF_API_TOKEN, CF_ZONE_ID | CF_ZONE_NAME, INTERNAL_DOMAIN,
+CF_RECORDS (optional comma list override of DEFAULT_RECORDS).
 """
 
 from __future__ import annotations
@@ -33,8 +16,6 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-
-import httpx
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -94,57 +75,6 @@ def format_report(drift: DnsDrift, domain: str, n_expected: int, n_actual: int) 
     return "\n".join(lines)
 
 
-def _post_to_webhook(webhook: str, text: str) -> None:
-    """Post to a Feishu/Lark custom-bot webhook."""
-    from common.alerting import validate_feishu_webhook_url
-
-    # Validate the URL is an allowed Feishu/Lark host before posting (same SSRF guard the rest
-    # of the codebase uses), so an injected/typo'd webhook can't be POSTed to.
-    url = validate_feishu_webhook_url(webhook)
-    resp = httpx.post(
-        url, json={"msg_type": "text", "content": {"text": text}}, timeout=15.0
-    )
-    resp.raise_for_status()
-    body = resp.json()
-    # Lark custom bot returns {"code":0} or {"StatusCode":0} on success.
-    if body.get("code") not in (0, None) or body.get("StatusCode") not in (0, None):
-        raise RuntimeError(f"Lark webhook rejected the message: {body}")
-
-
-def delivery_mode() -> str | None:
-    """Which delivery is configured: 'app' (bot in a named group, by chat_id) preferred over
-    'webhook'. App mode reuses the existing infra2 Feishu app bot, so the report lands in the
-    'infra2 reports' group it was added to."""
-    if (
-        os.environ.get("DNS_DRIFT_FEISHU_CHAT_ID")
-        and os.environ.get("DNS_DRIFT_FEISHU_APP_ID")
-        and os.environ.get("DNS_DRIFT_FEISHU_APP_SECRET")
-    ):
-        return "app"
-    if os.environ.get("DNS_DRIFT_FEISHU_WEBHOOK_URL", "").strip():
-        return "webhook"
-    return None
-
-
-def deliver(text: str) -> None:
-    """Send the report via whichever Feishu delivery is configured (app bot or webhook)."""
-    mode = delivery_mode()
-    if mode == "app":
-        from common.alerting import deliver_feishu_app_text
-
-        deliver_feishu_app_text(
-            app_id=os.environ["DNS_DRIFT_FEISHU_APP_ID"],
-            app_secret=os.environ["DNS_DRIFT_FEISHU_APP_SECRET"],
-            chat_id=os.environ["DNS_DRIFT_FEISHU_CHAT_ID"],
-            text=text,
-            api_base="https://open.feishu.cn",
-        )
-    elif mode == "webhook":
-        _post_to_webhook(os.environ["DNS_DRIFT_FEISHU_WEBHOOK_URL"].strip(), text)
-    else:
-        raise RuntimeError("no Feishu delivery configured (app creds or webhook)")
-
-
 def _expected_records(dns) -> list[str]:
     domain = os.environ["INTERNAL_DOMAIN"]
     # CF_RECORDS may arrive quoted (op stores it as "cloud,op,..."); strip wrapping quotes
@@ -184,42 +114,3 @@ def _actual_records(dns) -> list[str]:
             "Cloudflare DNS record observation returned a non-list result"
         )
     return [r["name"] for r in result if r.get("type") in ("A", "CNAME")]
-
-
-def main() -> int:
-    have_zone = bool(os.environ.get("CF_ZONE_ID") or os.environ.get("CF_ZONE_NAME"))
-    # No-op cleanly ONLY when not fully configured (so the job is never a noisy red before the
-    # secrets exist). Validate everything the live path needs up front — including the values
-    # read later (INTERNAL_DOMAIN, the zone, a delivery target) — so a partial config can't
-    # raise mid-run.
-    if not (
-        os.environ.get("CF_API_TOKEN")
-        and delivery_mode()
-        and os.environ.get("INTERNAL_DOMAIN")
-        and have_zone
-    ):
-        print(
-            "dns-drift-report: not fully configured (need CF_API_TOKEN, INTERNAL_DOMAIN, "
-            "CF_ZONE_ID|CF_ZONE_NAME, and a delivery target — either "
-            "DNS_DRIFT_FEISHU_{APP_ID,APP_SECRET,CHAT_ID} or DNS_DRIFT_FEISHU_WEBHOOK_URL) — "
-            "skipping.",
-            file=sys.stderr,
-        )
-        return 0  # not-yet-configured is not a failure
-    # Fully configured below: any Cloudflare/Feishu error propagates (non-zero) on purpose, so a
-    # broken-but-configured reconciler is a visible red rather than a silent green.
-
-    dns = _dns_tasks()
-    expected = set(_expected_records(dns))
-    actual = set(_actual_records(dns))
-    drift = compute_drift(expected, actual)
-    report = format_report(
-        drift, os.environ.get("INTERNAL_DOMAIN", "?"), len(expected), len(actual)
-    )
-    print(report)
-    deliver(report)  # daily delivery self-proves the path, drift or not
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

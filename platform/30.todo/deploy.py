@@ -29,6 +29,7 @@ class TodoDeployer(Deployer):
     service_port = 8000
     service_name = "todo"
     canary_slot = CANARY_SLOT
+    redeploy_on_ref_change = True
     secret_key = ""
 
     backups = ()

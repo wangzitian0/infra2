@@ -70,7 +70,7 @@ def test_rendered_specs_name_equivalence_via_live_check_helper() -> None:
     assert missing_probe_names(generated, frozen) == []
     assert parse_probe_names(generated) == parse_probe_names(frozen)
     assert (
-        len(parse_probe_names(generated)) == 32
+        len(parse_probe_names(generated)) == 33
     )  # frozen count: +2 GitHub #658, +2 truealpha/app #608, +2 finance_report/app, +3 app-layer postgres/redis, +1 todo canary status #991
 
 

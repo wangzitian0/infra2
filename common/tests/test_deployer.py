@@ -1811,3 +1811,53 @@ def test_sync_pipeline_logs_error_on_preflight_failures(monkeypatch) -> None:
         "Error: Could not verify VAULT_APP_TOKEN:" in e and "assert_after_on_main" in e
         for e in errors
     )
+
+
+class TestRedeployOnRefChange:
+    """#1635: the Canary redeploys when the deploy_ref differs; other units keep the skip."""
+
+    OLD, NEW = "a" * 40, "b" * 40
+
+    def _step(self, monkeypatch, *, flag: bool, remote_ref: str):
+        from common.deploy.sync_pipeline import (
+            _IDENTITY_FIELDS,
+            SOURCE_CONFIG_HASH_VERSION,
+            SyncPipeline,
+        )
+
+        monkeypatch.setenv("IAC_DEPLOY_REF", self.NEW)
+        d = MagicMock()
+        d.redeploy_on_ref_change = flag
+        d.service = "todo"
+        d.telemetry_service_name = None
+        d.compute_local_config_hash.return_value = "h"
+        d.service_id_from_path.return_value = "platform/todo"
+        d._find_remote_compose.return_value = {}
+        pipe = SyncPipeline(d, MagicMock())
+        pipe.ctx.env = {"ENV": "staging"}
+        # First pass builds the expected identity, then the remote mirrors it.
+        d.get_remote_config_identity.return_value = {}
+        pipe.step_identities_and_drift()
+        expected = pipe.ctx.runtime_identity.deploy_env()
+        remote = {k: expected[env] for k, env in _IDENTITY_FIELDS}
+        remote.update(
+            runtime_hash="h",
+            source_hash=f"{SOURCE_CONFIG_HASH_VERSION}:h",
+            deploy_ref=remote_ref,
+        )
+        d.get_remote_config_identity.return_value = remote
+        d.verify_still_in_service.return_value = None
+        return pipe.step_identities_and_drift()
+
+    def test_equal_hash_different_ref_redeploys_the_canary(self, monkeypatch):
+        assert self._step(monkeypatch, flag=True, remote_ref=self.OLD) is None
+
+    def test_equal_hash_equal_ref_skips_the_canary(self, monkeypatch):
+        assert (
+            self._step(monkeypatch, flag=True, remote_ref=self.NEW).action == "skipped"
+        )
+
+    def test_other_unit_with_different_ref_still_skips(self, monkeypatch):
+        assert (
+            self._step(monkeypatch, flag=False, remote_ref=self.OLD).action == "skipped"
+        )

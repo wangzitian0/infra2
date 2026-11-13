@@ -132,6 +132,10 @@ class Deployer:
     Optional: secret_key (name in Vault), env_var_name (display name)
     """
 
+    # True: an equal config hash does not skip the deploy when the remote deploy_ref differs
+    # from the train's commit (the Canary must run the ref that it verifies, #1635).
+    redeploy_on_ref_change: bool = False
+
     # Required
     service: str = ""
     compose_path: str = ""

@@ -20,7 +20,7 @@ Canary service at `todo.zitian.party`. It proves the platform's real runtime pat
 6. **Authentik** (`platform/10.authentik`): SSO liveness.
 7. **Startup & Runtime Governance**:
    - `env.manifest.json`: enforced fail-closed at startup via `validate_startup_environment()` (`assert_environment`).
-   - `runtime-hooks.manifest.json`: 4-slot runtime verification hooks (`smoke`, `preview_gate`, `staging_gate`, `scheduled_audit`).
+   - `runtime-hooks.manifest.json`: 5-slot runtime verification hooks (`smoke`, `preview_gate`, `staging_gate`, `prod_gate`, `scheduled_audit`); `staging_gate` and `prod_gate` run `probe_health.py --gate`.
    - `IAC_MOUNT_SHA256_*`: mount fingerprints injected by `TodoDeployer.rendered_mount_fingerprints()` into `compose.yaml`.
 
 ## Endpoints

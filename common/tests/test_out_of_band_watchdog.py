@@ -38,8 +38,8 @@ def _no_real_feishu(monkeypatch):
     def refuse(*_args, **_kwargs):
         raise AssertionError("a test tried to deliver to Feishu for real")
 
-    monkeypatch.setattr(alerting, "deliver_feishu_app_text", refuse)
-    monkeypatch.setattr(alerting, "deliver_feishu_text", refuse)
+    monkeypatch.setattr(alerting, "deliver_feishu_app_card", refuse)
+    monkeypatch.setattr(alerting, "deliver_feishu_card", refuse)
 
 
 def _page_blocks(message: str) -> list[dict[str, str]]:
@@ -108,18 +108,21 @@ def test_workflow_runs_daily_and_can_be_dispatched() -> None:
     assert jobs["digest"]["permissions"] == {
         "contents": "read",
         "actions": "read",
-        "issues": "read",
+        "issues": "write",
     }
     writers = [
         name
         for name, job in jobs.items()
         if (job.get("permissions") or {}).get("issues") == "write"
     ]
-    # #962: the three daily jobs that page keep their page-dedup state as issues.
+    # #962: the daily jobs that page keep their page-dedup state as issues; #1648 adds
+    # the digest and preview-leak-check failure alerts.
     # #1493: audit records scheduled_audit App runtime hook verdicts as issues.
     assert writers == [
         "audit",
         "watchdog",
+        "digest",
+        "preview-leak-check",
         "facet-reconcile",
         "vault-self-refresh-audit",
         "secrets-reconcile",
@@ -827,10 +830,10 @@ def test_out_of_band_delivery_supports_existing_feishu_app_mode(monkeypatch) -> 
     watchdog = _load_watchdog()
     calls = []
 
+    import common.alerting as alerting
+
     monkeypatch.setattr(
-        watchdog,
-        "deliver_feishu_app_text",
-        lambda **kwargs: calls.append(kwargs),
+        alerting, "deliver_feishu_app_card", lambda **kwargs: calls.append(kwargs)
     )
 
     watchdog.deliver_out_of_band_alert(
@@ -844,15 +847,17 @@ def test_out_of_band_delivery_supports_existing_feishu_app_mode(monkeypatch) -> 
         "hello",
     )
 
-    assert calls == [
-        {
-            "app_id": "cli_test",
-            "app_secret": "secret",
-            "chat_id": "oc_test",
-            "api_base": "https://open.feishu.cn",
-            "text": "hello",
-        }
-    ]
+    (call,) = calls
+    assert {
+        key: call[key] for key in ("app_id", "app_secret", "chat_id", "api_base")
+    } == {
+        "app_id": "cli_test",
+        "app_secret": "secret",
+        "chat_id": "oc_test",
+        "api_base": "https://open.feishu.cn",
+    }
+    assert call["card"]["header"]["title"]["content"] == "hello"
+    assert call["card"]["header"]["template"] == "red"
 
 
 def test_webhook_mode_error_mentions_primary_and_fallback_env_names() -> None:
@@ -2574,10 +2579,10 @@ def test_workflow_records_the_watchdog_verdicts_as_issues() -> None:
     assert (
         "RUNNER_HEALTH_SOURCE" in health["run"] and "record_verdicts" in health["run"]
     )
-    # the Feishu page is still delivered, after the verdict is recorded
-    assert health["run"].index("record(False") < health["run"].index(
-        "deliver_out_of_band_alert("
-    )
+    # the 60 s probe iac-runner-http pages this condition: the daily step never does
+    assert "deliver_out_of_band_alert" not in health["run"]
+    assert "dedup_page" not in health["run"]
+    assert "sys.exit(1)" in health["run"]
 
 
 def test_the_drill_input_reaches_the_tool_only_through_env() -> None:
@@ -3014,3 +3019,163 @@ def test_estate_check_pages_again_when_a_second_workflow_stops_not_on_a_new_read
     assert keys[0] == keys[1]
     assert keys[2] != keys[1] and len(keys[2]) == 2
     assert keys[3] != keys[2]
+
+
+def test_watchdog_page_is_a_card_in_the_card_standard(monkeypatch) -> None:
+    """#1648: a page of the watchdog is a card, titled by its first line (40 characters
+    at most), with at most 12 body lines and one link; a resolved page is green."""
+    import common.alerting as alerting
+    from common.alerting import format_signoz_alert
+    from common.tests.test_alerting import _assert_card_standard
+
+    cards: list[dict] = []
+    monkeypatch.setattr(
+        alerting, "deliver_feishu_card", lambda url, card, **kw: cards.append(card)
+    )
+    page = format_signoz_alert(
+        {
+            "status": "firing",
+            "commonLabels": {"alertname": "ExampleBackendDown", "severity": "critical"},
+            "alerts": [
+                {
+                    "labels": {
+                        "alertname": "ExampleBackendDown",
+                        "instance": "example",
+                    },
+                    "annotations": {"summary": "GET /api/health returned 503"},
+                }
+            ],
+        }
+    )
+    env = {"FEISHU_WEBHOOK_URL": "https://open.feishu.cn/open-apis/bot/v2/hook/tok"}
+    watchdog = _load_watchdog()
+
+    watchdog.deliver_out_of_band_alert(env, page)
+    watchdog.deliver_out_of_band_alert(
+        env, "✅ [已恢复] 示例 · 全部已恢复\n已恢复 1 项"
+    )
+
+    red, green = cards
+    _assert_card_standard(red)
+    assert red["header"]["template"] == "red"
+    assert red["header"]["title"]["content"] == page.splitlines()[0]
+    assert green["header"]["template"] == "green"
+
+
+def test_watchdog_report_is_a_card_in_the_card_standard(monkeypatch) -> None:
+    """#1648: the daily report of the watchdog is a blue card in the reports chat."""
+    import common.alerting as alerting
+    from common.tests.test_alerting import _assert_card_standard
+
+    cards: list[dict] = []
+    monkeypatch.setattr(
+        alerting, "deliver_feishu_app_card", lambda **kw: cards.append(kw["card"])
+    )
+    watchdog = _load_watchdog()
+
+    assert watchdog.deliver_infra2_report(
+        "Infra2 GitHub watchdog · 2 checks\nbackup ok\nssh ok", REPORT_ENV
+    )
+
+    (card,) = cards
+    _assert_card_standard(card)
+    assert card["header"]["template"] == "blue"
+
+
+def test_a_page_of_several_items_is_a_pager_card_that_names_every_item(
+    monkeypatch,
+) -> None:
+    """#1648 review: text_to_card is for one plain message; three failing checks must
+    all be on the card (render_pager_card), not cut to the first one."""
+    import common.alerting as alerting
+    from common.alerting import text_to_card
+
+    cards: list[dict] = []
+    monkeypatch.setattr(
+        alerting, "deliver_feishu_card", lambda url, card, **kw: cards.append(card)
+    )
+    watchdog = _load_watchdog()
+    paged = [
+        watchdog.CheckResult(
+            name=f"check-{n}",
+            ok=False,
+            detail=f"failure detail {n}",
+            failure_domain="backup",
+            severity="P1",
+        )
+        for n in range(3)
+    ]
+    env = {
+        "FEISHU_WEBHOOK_URL": "https://open.feishu.cn/open-apis/bot/v2/hook/tok",
+        "GITHUB_RUN_ID": "1",
+    }
+    code = watchdog._handle_paged_failures(env, paged, [], dry_run=False)
+
+    assert code == 1
+    (card,) = cards
+    blob = json.dumps(card, ensure_ascii=False)
+    for n in range(3):
+        assert f"check-{n}" in blob
+    assert card["header"]["template"] == "orange"  # P1, as the Worker colours it
+    # the plain-text renderer would have cut the page to its first item
+    cut = json.dumps(
+        text_to_card(watchdog.format_failure_message(paged, run_url="")),
+        ensure_ascii=False,
+    )
+    assert "check-2" not in cut
+
+
+def test_card_colour_follows_the_level_like_the_worker() -> None:
+    """#1648 review: P0 red, P1 orange, P2 yellow, resolved green; the Worker's map."""
+    from common.alerting import EMOJI_TEMPLATE, text_to_card
+
+    assert EMOJI_TEMPLATE == {
+        "🔴": "red",
+        "🟠": "orange",
+        "🟡": "yellow",
+        "✅": "green",
+    }
+    for emoji, colour in EMOJI_TEMPLATE.items():
+        assert text_to_card(f"{emoji} title\nbody")["header"]["template"] == colour
+    assert text_to_card("no emoji")["header"]["template"] == "red"
+
+
+def test_a_dedup_note_on_a_page_of_three_items_keeps_all_three_on_the_card(
+    monkeypatch,
+) -> None:
+    """#1648 review: the card is not looked up by the exact text; a note that dedup adds
+    to the text is one more line on the card and never drops an item."""
+    import common.alerting as alerting
+
+    cards: list[dict] = []
+    monkeypatch.setattr(
+        alerting, "deliver_feishu_card", lambda url, card, **kw: cards.append(card)
+    )
+    watchdog = _load_watchdog()
+    paged = [
+        watchdog.CheckResult(
+            name=f"check-{n}",
+            ok=False,
+            detail=f"failure detail {n}",
+            failure_domain="backup",
+            severity="P1",
+        )
+        for n in range(3)
+    ]
+    env = {
+        "FEISHU_WEBHOOK_URL": "https://open.feishu.cn/open-apis/bot/v2/hook/tok",
+        "GITHUB_RUN_ID": "1",
+    }
+    watchdog._handle_paged_failures(env, paged, [], dry_run=False)
+    text = watchdog.format_failure_message(paged, run_url=watchdog._github_run_url(env))
+    note = "注:仍未恢复(第 2 天),报告群不可用(x),回落到告警群。"
+
+    watchdog.deliver_out_of_band_alert(env, f"{text}\n{note}")
+
+    blob = json.dumps(cards[-1], ensure_ascii=False)
+    for n in range(3):
+        assert f"check-{n}" in blob
+    assert note in blob
+    # an unrelated plain message is not given the page's card
+    watchdog.deliver_out_of_band_alert(env, "✅ [已恢复] x · 全部已恢复")
+    assert "check-0" not in json.dumps(cards[-1], ensure_ascii=False)
