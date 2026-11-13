@@ -2425,6 +2425,7 @@ def test_diagnose_failure_classifies_dokploy_deployment_error_with_log_tail(
 PREVIEW_SECRET = "test-preview-secret"
 DEPLOY_SECRET = "test-webhook-secret"
 PREVIEW_BRANCH = "claude/issue1647-x"
+PREVIEW_UNIT = "platform/todo"
 
 
 def _preview_body(**overrides) -> dict:
@@ -2433,7 +2434,7 @@ def _preview_body(**overrides) -> dict:
         "pr": 7,
         "ref": DEPLOY_SHA,
         "branch": PREVIEW_BRANCH,
-        "services": ["platform/todo"],
+        "services": [PREVIEW_UNIT],
         "down": False,
         "triggered_by": "ci",
     }
@@ -2461,9 +2462,21 @@ def _sign_request(server, body: dict, signing_secret: str) -> None:
     server.request.json = body
 
 
-def _preview_server(monkeypatch, body: dict, *, signing_secret: str, preview_secret):
-    """Load webhook_server with a fake Flask whose request carries a signed `body`."""
-    _load_module("sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch)
+def _preview_server(
+    monkeypatch,
+    body: dict,
+    *,
+    signing_secret: str = PREVIEW_SECRET,
+    preview_secret=PREVIEW_SECRET,
+    tmp_path=None,
+):
+    """Load webhook_server with a fake Flask whose request carries a signed `body`.
+
+    The deployment lock and the state file live in tmp_path; GitHub says that the PR is
+    open, from this repository, with the head that `body` names."""
+    sync_runner = _load_module(
+        "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
     fake_flask = types.ModuleType("flask")
 
     class FakeFlask:
@@ -2487,6 +2500,21 @@ def _preview_server(monkeypatch, body: dict, *, signing_secret: str, preview_sec
         IAC_RUNNER / "webhook_server.py",
         monkeypatch,
     )
+    if tmp_path is not None:
+        monkeypatch.setattr(server, "DEPLOY_STATE_FILE", tmp_path / "state.json")
+        monkeypatch.setattr(sync_runner, "DEPLOYMENT_LOCK_FILE", tmp_path / "lock")
+
+    def open_pull(pr):
+        return {
+            "state": "open",
+            "head": {
+                "repo": {"full_name": "wangzitian0/infra2"},
+                "ref": PREVIEW_BRANCH,
+                "sha": DEPLOY_SHA,
+            },
+        }
+
+    monkeypatch.setattr(server, "_fetch_pull", open_pull)
     _sign_request(server, body, signing_secret)
     return server
 
@@ -2494,12 +2522,9 @@ def _preview_server(monkeypatch, body: dict, *, signing_secret: str, preview_sec
 @pytest.mark.parametrize(
     "bad_type", ["staging", "prod", "production", "preview/branch", "", None]
 )
-def test_preview_rejects_staging_prod_types(monkeypatch, bad_type) -> None:
+def test_preview_rejects_staging_prod_types(monkeypatch, tmp_path, bad_type) -> None:
     server = _preview_server(
-        monkeypatch,
-        _preview_body(type=bad_type),
-        signing_secret=PREVIEW_SECRET,
-        preview_secret=PREVIEW_SECRET,
+        monkeypatch, _preview_body(type=bad_type), tmp_path=tmp_path
     )
     body, status_code = server.preview_deploy()
     assert status_code == 400
@@ -2507,95 +2532,335 @@ def test_preview_rejects_staging_prod_types(monkeypatch, bad_type) -> None:
     assert not server._in_flight_deploys
 
 
-def test_preview_rejects_deploy_secret(monkeypatch) -> None:
+def test_preview_rejects_deploy_secret(monkeypatch, tmp_path) -> None:
     server = _preview_server(
-        monkeypatch,
-        _preview_body(),
-        signing_secret=DEPLOY_SECRET,
-        preview_secret=PREVIEW_SECRET,
+        monkeypatch, _preview_body(), signing_secret=DEPLOY_SECRET, tmp_path=tmp_path
     )
     body, status_code = server.preview_deploy()
     assert (status_code, body["error"]) == (401, "Invalid signature")
     assert not server._in_flight_deploys
 
 
-def test_preview_refuses_when_its_secret_is_unset(monkeypatch) -> None:
+def test_preview_refuses_when_its_secret_is_unset(monkeypatch, tmp_path) -> None:
     server = _preview_server(
         monkeypatch,
         _preview_body(),
         signing_secret=DEPLOY_SECRET,
         preview_secret=None,
+        tmp_path=tmp_path,
     )
     body, status_code = server.preview_deploy()
     assert status_code == 503
     assert "IAC_PREVIEW_WEBHOOK_SECRET is not set" in body["error"]
 
 
-def test_preview_refuses_unregistered_unit(monkeypatch) -> None:
+def test_preview_refuses_when_its_secret_equals_the_deploy_secret(
+    monkeypatch, tmp_path
+) -> None:
     server = _preview_server(
         monkeypatch,
-        _preview_body(services=["platform/postgres"]),
-        signing_secret=PREVIEW_SECRET,
-        preview_secret=PREVIEW_SECRET,
+        _preview_body(),
+        signing_secret=DEPLOY_SECRET,
+        preview_secret=DEPLOY_SECRET,
+        tmp_path=tmp_path,
+    )
+    body, status_code = server.preview_deploy()
+    assert status_code == 503
+    assert "equals WEBHOOK_SECRET" in body["error"]
+    assert not server._in_flight_deploys
+
+
+@pytest.mark.parametrize(
+    "unit", ["platform/postgres", "finance_report/app", "truealpha/app"]
+)
+def test_preview_serves_platform_units_only(monkeypatch, tmp_path, unit) -> None:
+    server = _preview_server(
+        monkeypatch, _preview_body(services=[unit]), tmp_path=tmp_path
     )
     body, status_code = server.preview_deploy()
     assert status_code == 400
-    assert "no preview config registered" in body["error"]
+    assert not server._in_flight_deploys
+
+
+def _fake_run_preview(monkeypatch, *, release=None, calls=None, success=True):
+    def fake(pr, ref, services, down, domain):
+        if calls is not None:
+            calls.append({"pr": pr, "services": list(services), "down": down})
+        if release is not None and not down:
+            release.wait(timeout=10)
+        return {
+            "slot": f"pr-{pr}",
+            "units": [],
+            "seconds": 0.0,
+            "success": success,
+        }
+
+    monkeypatch.setattr(sys.modules["sync_runner"], "run_preview", fake)
+
+
+def _post(server, **overrides):
+    body = _preview_body(**overrides)
+    _sign_request(server, body, PREVIEW_SECRET)
+    return server.preview_deploy()
+
+
+def _wait_until(predicate) -> None:
+    deadline = time.time() + 10
+    while not predicate() and time.time() < deadline:
+        time.sleep(0.02)
+    assert predicate()
 
 
 def test_preview_slot_cap(monkeypatch, tmp_path) -> None:
+    server = _preview_server(monkeypatch, _preview_body(), tmp_path=tmp_path)
+    _fake_run_preview(monkeypatch)
+
+    def post_and_settle(**overrides):
+        result = _post(server, **overrides)
+        _wait_until(lambda: not server._in_flight_deploys)
+        return result
+
+    assert post_and_settle(pr=1)[1] == 202
+    assert post_and_settle(pr=2)[1] == 202
+    body_3, code_3 = post_and_settle(pr=3)
+    assert code_3 == 429
+    assert "slot cap" in body_3["error"]
+    # a new head of a live PR is the same slot, so the cap does not apply
+    assert post_and_settle(pr=1, ref=DEPLOY_SHA)[1] == 202
+    # a teardown frees its slot, then PR 3 fits
+    assert post_and_settle(pr=2, down=True, branch=None)[1] == 202
+    assert 2 not in server._preview_slots
+    assert post_and_settle(pr=3)[1] == 202
+
+
+def test_preview_runs_each_unit_once_whatever_the_duplicates(
+    monkeypatch, tmp_path
+) -> None:
+    server = _preview_server(monkeypatch, _preview_body(), tmp_path=tmp_path)
+    calls: list[dict] = []
+    _fake_run_preview(monkeypatch, calls=calls)
+    assert _post(server, services=[PREVIEW_UNIT] * 25)[1] == 202
+    _wait_until(lambda: not server._in_flight_deploys)
+    assert calls == [{"pr": 7, "services": [PREVIEW_UNIT], "down": False}]
+
+
+def test_preview_refuses_more_than_three_units_and_a_big_body(
+    monkeypatch, tmp_path
+) -> None:
+    server = _preview_server(monkeypatch, _preview_body(), tmp_path=tmp_path)
+    many = [f"platform/unit{n}" for n in range(4)]
+    body, code = _post(server, services=many)
+    assert code == 400 and "at most 3 units" in body["error"]
+    body, code = _post(server, triggered_by="x" * 5000)
+    assert code == 413
+    assert not server._in_flight_deploys
+
+
+def test_preview_down_of_an_unknown_slot_is_404_and_takes_no_lock(
+    monkeypatch, tmp_path
+) -> None:
+    server = _preview_server(monkeypatch, _preview_body(), tmp_path=tmp_path)
+
+    def no_lock():
+        raise AssertionError("the deployment lock must not be taken")
+
+    monkeypatch.setattr(sys.modules["sync_runner"], "try_deployment_lock", no_lock)
+    for pr in range(1, 61):
+        body, code = _post(server, pr=pr, down=True, branch=None)
+        assert code == 404, body
+    assert not server._in_flight_deploys
+
+
+def test_preview_answers_busy_at_once_when_a_deploy_holds_the_lock(
+    monkeypatch, tmp_path
+) -> None:
+    server = _preview_server(monkeypatch, _preview_body(), tmp_path=tmp_path)
+    runner = sys.modules["sync_runner"]
+    held = runner.try_deployment_lock()  # a /deploy holds the lock
+    assert held is not None
+    try:
+        body, code = _post(server)
+        assert code == 503 and "busy" in body["error"]
+        assert not server._in_flight_deploys and not server._preview_slots
+    finally:
+        runner.release_deployment_lock(held)
+
+
+def test_preview_allows_one_live_request_per_pr(monkeypatch, tmp_path) -> None:
     import threading
 
     release = threading.Event()
-
-    def fake_run_preview(pr, ref, branch, services, down, domain):
-        if not down:
-            release.wait(timeout=10)
-        return {"slot": f"pr-{pr}", "units": [], "seconds": 0.0, "success": True}
-
-    server = _preview_server(
-        monkeypatch,
-        _preview_body(),
-        signing_secret=PREVIEW_SECRET,
-        preview_secret=PREVIEW_SECRET,
-    )
-    monkeypatch.setattr(server, "DEPLOY_STATE_FILE", tmp_path / "state.json")
-    monkeypatch.setattr(sys.modules["sync_runner"], "run_preview", fake_run_preview)
-
-    def post(pr: int, *, down: bool = False, ref: str = DEPLOY_SHA):
-        body = _preview_body(
-            pr=pr, ref=ref, down=down, **({"branch": None} if down else {})
-        )
-        _sign_request(server, body, PREVIEW_SECRET)
-        return server.preview_deploy()
-
+    server = _preview_server(monkeypatch, _preview_body(), tmp_path=tmp_path)
+    _fake_run_preview(monkeypatch, release=release)
     try:
-        assert post(1)[1] == 202
-        assert post(2)[1] == 202
-        body_3, code_3 = post(3)
-        assert code_3 == 429
-        assert "slot cap" in body_3["error"]
-        # a new head of PR 1 is a new request but the same slot, so the cap does not apply
-        assert post(1, ref="b" * 40)[1] == 202
-        # a teardown frees its slot, then PR 3 fits
-        assert post(2, down=True)[1] == 202
-        deadline = time.time() + 10
-        while 2 in server._preview_slots and time.time() < deadline:
-            time.sleep(0.05)
-        assert post(3)[1] == 202
+        assert _post(server)[1] == 202
+        body, code = _post(server, ref="b" * 40)
+        assert code == 409
     finally:
         release.set()
+        _wait_until(lambda: not server._in_flight_deploys)
 
 
-def test_runner_and_client_read_one_table_of_route_types(monkeypatch) -> None:
+def test_preview_binds_the_request_to_a_real_open_pr_of_this_repository(
+    monkeypatch, tmp_path
+) -> None:
+    server = _preview_server(monkeypatch, _preview_body(), tmp_path=tmp_path)
+    _fake_run_preview(monkeypatch)
+    pull = {
+        "state": "open",
+        "head": {
+            "repo": {"full_name": "wangzitian0/infra2"},
+            "ref": PREVIEW_BRANCH,
+            "sha": DEPLOY_SHA,
+        },
+    }
+
+    def with_head(**changes):
+        head = {**pull["head"], **changes}
+        return {**pull, "head": head}
+
+    for label, fetched, overrides in (
+        ("main as pr-7", pull, {"branch": "main"}),
+        ("fork PR", with_head(repo={"full_name": "evil/infra2"}), {}),
+        ("closed PR", {**pull, "state": "closed"}, {}),
+        ("another head sha", with_head(sha="c" * 40), {}),
+    ):
+        monkeypatch.setattr(server, "_fetch_pull", lambda _pr, fetched=fetched: fetched)
+        body, code = _post(server, **overrides)
+        assert code == 400, label
+        assert not server._in_flight_deploys, label
+
+    def unreadable(_pr):
+        raise OSError("no network")
+
+    monkeypatch.setattr(server, "_fetch_pull", unreadable)
+    assert _post(server)[1] == 400  # fail closed when GitHub cannot be read
+
+
+def test_a_failed_up_frees_its_slot_at_once(monkeypatch, tmp_path) -> None:
+    server = _preview_server(monkeypatch, _preview_body(), tmp_path=tmp_path)
+    _fake_run_preview(monkeypatch, success=False)
+    assert _post(server)[1] == 202
+    _wait_until(lambda: not server._in_flight_deploys)
+    assert server._preview_slots == {}
+
+
+def test_preview_slots_survive_a_restart(monkeypatch, tmp_path) -> None:
+    server = _preview_server(monkeypatch, _preview_body(), tmp_path=tmp_path)
+    _fake_run_preview(monkeypatch)
+    assert _post(server)[1] == 202
+    _wait_until(lambda: not server._in_flight_deploys)
+    assert 7 in server._preview_slots
+    server._preview_slots.clear()
+    server._load_state()
+    assert 7 in server._preview_slots
+
+
+def test_runner_and_client_read_one_table_of_route_types(monkeypatch, tmp_path) -> None:
     from common.deploy import iac_runner_client
 
-    server = _preview_server(
-        monkeypatch,
-        _preview_body(),
-        signing_secret=PREVIEW_SECRET,
-        preview_secret=PREVIEW_SECRET,
-    )
+    server = _preview_server(monkeypatch, _preview_body(), tmp_path=tmp_path)
     assert server.ROUTE_TYPES == iac_runner_client.ROUTE_TYPES
     assert server.ROUTE_TYPES["/preview"] == ["preview/pr"]
     assert "preview/pr" not in server.ROUTE_TYPES["/deploy"]
+
+
+def test_the_image_carries_the_route_table_and_a_missing_table_closes_only_preview(
+    monkeypatch, tmp_path
+) -> None:
+    dockerfile = (IAC_RUNNER / "Dockerfile").read_text()
+    assert "COPY bootstrap/06.iac_runner/route_types.json ." in dockerfile
+    table = json.loads((IAC_RUNNER / "route_types.json").read_text())
+    # the image layout without the file: webhook_server.py alone in a directory
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    (bare / "webhook_server.py").write_text(
+        (IAC_RUNNER / "webhook_server.py").read_text()
+    )
+    _preview_server(monkeypatch, _preview_body(), tmp_path=tmp_path)  # fake flask
+    server = _load_module(
+        "webhook_server_bare", bare / "webhook_server.py", monkeypatch
+    )
+    assert server.ROUTE_TYPES == {"/deploy": table["/deploy"]}  # /deploy keeps its envs
+
+
+# --- the Preview run itself (sync_runner.run_preview) ------------------------------------
+
+
+def _runner_with_fake_child(monkeypatch, tmp_path, handler):
+    sync_runner = _load_module(
+        "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
+    commands: list[dict] = []
+
+    def fake_run(command, **kwargs):
+        commands.append({"command": command, **kwargs})
+        return handler(command, kwargs)
+
+    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(sync_runner, "prepare_preview_checkout", lambda *a: True)
+    monkeypatch.setattr(sync_runner, "WORKSPACE", tmp_path)
+    return sync_runner, commands
+
+
+def test_preview_run_stops_at_its_deadline_kills_the_child_and_tears_the_slot_down(
+    monkeypatch, tmp_path
+) -> None:
+    def handler(command, kwargs):
+        if "--down" in command:
+            return types.SimpleNamespace(returncode=0, stdout="{}", stderr="")
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    runner, commands = _runner_with_fake_child(monkeypatch, tmp_path, handler)
+    monkeypatch.setattr(runner, "PREVIEW_DEADLINE_SECONDS", 30)
+    result = runner.run_preview(7, DEPLOY_SHA, [PREVIEW_UNIT], False, "example.test")
+    assert result["timeout"] is True and result["success"] is False
+    assert result["units"][0]["status"] == "timeout"
+    assert result["torn_down"] is True
+    up, down = commands
+    assert up["timeout"] <= 30 and "--down" not in up["command"]
+    assert "--down" in down["command"]
+
+
+def test_preview_child_gets_an_allow_listed_environment(monkeypatch, tmp_path) -> None:
+    for name in (
+        "VAULT_ROLE_ID",
+        "VAULT_SECRET_ID",
+        "OP_SERVICE_ACCOUNT_TOKEN",
+        "WEBHOOK_SECRET",
+        "IAC_PREVIEW_WEBHOOK_SECRET",
+    ):
+        monkeypatch.setenv(name, "must-not-leak")
+    monkeypatch.setenv("DOKPLOY_API_KEY", "dokploy-key")
+    monkeypatch.setenv("INTERNAL_DOMAIN", "example.test")
+
+    def handler(command, kwargs):
+        return types.SimpleNamespace(returncode=0, stdout='{"detail": {}}', stderr="")
+
+    runner, commands = _runner_with_fake_child(monkeypatch, tmp_path, handler)
+    runner.run_preview(7, DEPLOY_SHA, [PREVIEW_UNIT], False, "example.test")
+    env = commands[0]["env"]
+    assert env["DOKPLOY_API_KEY"] == "dokploy-key"
+    assert not {"VAULT_ROLE_ID", "VAULT_SECRET_ID", "OP_SERVICE_ACCOUNT_TOKEN"} & set(
+        env
+    )
+    assert not {"WEBHOOK_SECRET", "IAC_PREVIEW_WEBHOOK_SECRET"} & set(env)
+
+
+def test_preview_result_carries_no_line_of_child_output(monkeypatch, tmp_path) -> None:
+    def handler(command, kwargs):
+        if "--down" in command:
+            return types.SimpleNamespace(returncode=0, stdout="{}", stderr="")
+        return types.SimpleNamespace(
+            returncode=1,
+            stdout="token=s3cr3t-stdout",
+            stderr="Traceback\nValueError: password=s3cr3t-stderr",
+        )
+
+    runner, _ = _runner_with_fake_child(monkeypatch, tmp_path, handler)
+    result = runner.run_preview(7, DEPLOY_SHA, [PREVIEW_UNIT], False, "example.test")
+    text = json.dumps(result)
+    assert "s3cr3t" not in text
+    assert result["units"][0]["status"] == "failed"
+    assert result["units"][0]["error_kind"]
+    assert result["torn_down"] is True  # a failed up takes the slot down at once

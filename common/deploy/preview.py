@@ -265,6 +265,7 @@ def up(
     health_timeout: int = 600,
     health_interval: int = 10,
     repo: str | None = None,
+    compose_file: str | None = None,
     http_get=None,
     _now=time.time,
     _sleep=time.sleep,
@@ -303,22 +304,27 @@ def up(
             _source_app_vault_creds(client, config.project, config.secret_env)
         )
 
-    gh_id = github_id if github_id is not None else client.get_github_provider_id()
-    if not gh_id:
-        raise RuntimeError(
-            "no GitHub provider configured in Dokploy; add one in Settings -> Git "
-            "Providers before deploying a preview (the compose template is pulled from "
-            "the infra2 repo, not uploaded raw)."
+    if compose_file is not None:
+        # The runner route (#1647): the checked compose text is uploaded as it is, so
+        # Dokploy never clones a PR branch to read the compose file.
+        source_fields = dict(source_type="raw", compose_file=compose_file)
+    else:
+        gh_id = github_id if github_id is not None else client.get_github_provider_id()
+        if not gh_id:
+            raise RuntimeError(
+                "no GitHub provider configured in Dokploy; add one in Settings -> Git "
+                "Providers before deploying a preview (the compose template is pulled "
+                "from the infra2 repo, not uploaded raw)."
+            )
+        source_fields = dict(
+            source_type="github",
+            githubId=gh_id,
+            repository=repo_name,
+            owner=repo_owner,
+            branch=branch,
+            composePath=config.compose_path,
+            autoDeploy=False,
         )
-    source_fields = dict(
-        source_type="github",
-        githubId=gh_id,
-        repository=repo_name,
-        owner=repo_owner,
-        branch=branch,
-        composePath=config.compose_path,
-        autoDeploy=False,
-    )
 
     had_existing_compose = (
         _find_compose(client, config.project, alias.compose_name) is not None

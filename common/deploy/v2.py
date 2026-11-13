@@ -68,6 +68,7 @@ from common.core.registry import domain_for_service
 from common.deploy.app_contract import encode_rendered_templates, verify_app_manifests
 from common.deploy.promote import deploy as _deploy_fixed
 from common.deploy.preview import _validate_domain
+from common.deploy.preview_compose import read_compose_at, render_runner_compose
 from common.deploy.preview import down as _preview_down
 from common.deploy.preview import up as _preview_up
 from infra2_sdk.refs import (
@@ -183,6 +184,7 @@ def _deploy_platform_preview(
     code_reviewed: bool | None,
     wait: bool,
     timeout: int,
+    compose_file: str | None = None,
 ) -> DeployV2Result:
     """Deploy a platform unit into its Preview slot through the one Preview lifecycle.
 
@@ -221,6 +223,7 @@ def _deploy_platform_preview(
         wait=wait,
         health_timeout=timeout,
         repo=_INFRA2_REPO,
+        compose_file=compose_file,
     )
     detail = {
         "alias": result.alias,
@@ -1001,6 +1004,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--iac-ref names the PR head branch",
     )
     parser.add_argument(
+        "--raw-compose",
+        action="store_true",
+        help="runner use, preview/pr of a platform unit: --iac-ref is a 40-hex commit; "
+        "its Preview compose is read from this checkout, checked, and uploaded as raw text",
+    )
+    parser.add_argument(
         "--staging-validated",
         action="store_true",
         help="assert this code already passed staging (required for prod)",
@@ -1155,6 +1164,33 @@ def _handle_preview_via_runner(args: argparse.Namespace) -> int:
     return 0 if final.get("status") == "completed" else 1
 
 
+def _handle_preview_raw_compose(args: argparse.Namespace) -> int:
+    """Bring up a platform Preview slot from a checked raw compose (runner child, #1647)."""
+    if args.deploy_type not in ROUTE_TYPES["/preview"] or args.down:
+        raise ValueError("--raw-compose is for an up of preview/pr only")
+    sha = args.iac_ref.strip().lower()
+    # Check the compose first: a refused file reaches no Dokploy call.
+    compose = render_runner_compose(
+        args.service, read_compose_at(args.service, sha), sha
+    )
+    from common.deploy.dokploy_client import get_dokploy
+
+    result = _deploy_platform_preview(
+        args.service,
+        args.deploy_type,
+        args.version_ref,
+        sha,
+        client=get_dokploy(host=f"cloud.{infra_domain()}"),
+        domain=_validate_domain(args.domain),
+        code_reviewed=None,
+        wait=not args.no_wait,
+        timeout=args.timeout,
+        compose_file=compose,
+    )
+    print(json.dumps({"service": args.service, "detail": result.detail}))
+    return 0
+
+
 def _handle_platform_batch(args: argparse.Namespace, service_names: list[str]) -> int:
     result = _deploy_platform_batch(
         service_names,
@@ -1179,6 +1215,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.via_runner:
             return _handle_preview_via_runner(args)
+        if args.raw_compose:
+            return _handle_preview_raw_compose(args)
         if args.down:
             return _handle_teardown(args)
 

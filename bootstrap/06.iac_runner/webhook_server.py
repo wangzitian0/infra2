@@ -42,12 +42,21 @@ DEPLOY_STATE_FILE = (
 MAX_PERSISTED_DEPLOYS = 64
 SIGNATURE_TTL_SECONDS = 300
 # The one table of values each route accepts in its `env` (/deploy) or `type` (/preview)
-# field. common/deploy/iac_runner_client.py reads the same file.
-ROUTE_TYPES: dict[str, list[str]] = json.loads(
-    Path(__file__).with_name("route_types.json").read_text(encoding="utf-8")
-)
+# field. common/deploy/iac_runner_client.py reads the same file. A missing file closes only
+# /preview: /deploy keeps its two environments (a test pins this fallback to the file).
+try:
+    ROUTE_TYPES: dict[str, list[str]] = json.loads(
+        Path(__file__).with_name("route_types.json").read_text(encoding="utf-8")
+    )
+except (OSError, ValueError):
+    logging.getLogger(__name__).error(
+        "route_types.json is unreadable; /preview is closed"
+    )
+    ROUTE_TYPES = {"/deploy": ["staging", "production"]}
 PREVIEW_SLOT_CAP = 2
 PREVIEW_SLOT_TTL_SECONDS = 3600
+PREVIEW_MAX_BODY_BYTES = 4096
+PREVIEW_MAX_UNITS = 3
 PREVIEW_BRANCH_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._/-]{0,99}\Z")
 MAX_REQUEST_BODY_BYTES = 65536
 EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -78,6 +87,8 @@ _deploy_state_lock = threading.Lock()
 DeploymentKey = tuple[str, str, tuple[str, ...]]
 _in_flight_deploys: set[DeploymentKey] = set()
 _recent_deploys: dict[DeploymentKey, tuple[float, dict]] = {}
+# Live Preview slots: PR number -> wall-clock start. Saved with the deploy records.
+_preview_slots: dict[int, float] = {}
 _seen_nonces: dict[str, float] = {}
 _nonce_lock = threading.Lock()
 if hasattr(app, "config"):
@@ -434,6 +445,7 @@ def _save_state_locked() -> None:
     payload = {
         "version": 1,
         "in_flight": [_key_to_json(key) for key in sorted(_in_flight_deploys)],
+        "preview_slots": {str(pr): at for pr, at in _preview_slots.items()},
         "recent": [
             {
                 "key": _key_to_json(key),
@@ -491,6 +503,9 @@ def _load_state() -> None:
         return
     with _deploy_state_lock:
         _recent_deploys.update(restored)
+        for pr, at in (data.get("preview_slots") or {}).items():
+            if str(pr).isdigit() and isinstance(at, (int, float)):
+                _preview_slots[int(pr)] = float(at)
         _save_state_locked()  # drops what is too old and writes the interrupted records
 
 
@@ -1043,9 +1058,9 @@ def deployment_status():
 
 
 # --- /preview: Preview slots for PR CI (#1647) -------------------------------------------
-# A PR job holds only IAC_PREVIEW_WEBHOOK_SECRET. It can bring a Preview slot up or down
-# and nothing else: the runner keeps the Dokploy key and runs trusted main code.
-_preview_slots: dict[int, float] = {}  # PR number -> monotonic start of its live slot
+# A PR job holds only IAC_PREVIEW_WEBHOOK_SECRET. It can bring a platform Preview slot up or
+# down and nothing else. The runner keeps the Dokploy key. It checks the PR's compose file
+# against an allow list and uploads the checked text; Dokploy never clones the PR branch.
 
 
 def _preview_key(parsed: dict) -> DeploymentKey:
@@ -1053,6 +1068,41 @@ def _preview_key(parsed: dict) -> DeploymentKey:
     return _deployment_key(
         "preview", parsed["ref"], parsed["services"], f"pr-{parsed['pr']}", action
     )
+
+
+def _fetch_pull(pr: int) -> dict:
+    headers = {"Accept": "application/vnd.github+json"}
+    token = os.environ.get("GITHUB_TOKEN", "")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{OIDC_ALLOWED_REPO}/pulls/{pr}", headers=headers
+    )
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _pr_binding_error(parsed: dict) -> str | None:
+    """The request must name a real, open PR of this repository: its head branch and SHA."""
+    try:
+        pull = _fetch_pull(parsed["pr"])
+        head = pull["head"]
+        checks = (
+            (pull["state"] == "open", "is not open"),
+            (
+                head["repo"]["full_name"] == OIDC_ALLOWED_REPO,
+                "is not from this repository",
+            ),
+            (head["ref"] == parsed["branch"], "has another head branch"),
+            (head["sha"].lower() == parsed["ref"], "has another head commit"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("PR %s could not be read from GitHub: %s", parsed["pr"], exc)
+        return "the PR could not be verified with GitHub"
+    for ok, why in checks:
+        if not ok:
+            return f"PR {parsed['pr']} {why}"
+    return None
 
 
 def _parse_preview_request():
@@ -1066,6 +1116,18 @@ def _parse_preview_request():
             },
             503,
         )
+    if hmac.compare_digest(secret, WEBHOOK_SECRET):
+        return None, (
+            {
+                "error": "IAC_PREVIEW_WEBHOOK_SECRET equals WEBHOOK_SECRET; "
+                "/preview is closed until the owner makes them differ"
+            },
+            503,
+        )
+    if "/preview" not in ROUTE_TYPES:
+        return None, ({"error": "route table is missing; /preview is closed"}, 503)
+    if len(request.data or b"") > PREVIEW_MAX_BODY_BYTES:
+        return None, ({"error": f"body over {PREVIEW_MAX_BODY_BYTES} bytes"}, 413)
     if not verify_iac_request(secret):
         return None, ({"error": "Invalid signature"}, 401)
     payload = request.json or {}
@@ -1103,12 +1165,15 @@ def _parse_preview_request():
             {"error": "services must be a non-empty list of non-empty strings"},
             400,
         )
+    units = sorted({s.strip() for s in services})
+    if len(units) > PREVIEW_MAX_UNITS:
+        return None, ({"error": f"at most {PREVIEW_MAX_UNITS} units per request"}, 400)
     try:
         import sync_runner  # noqa: F401  (puts the repo checkout on sys.path)
-        from common.deploy.env_config import preview_service_config
+        from common.deploy.preview_compose import assert_runner_unit
 
-        for service in services:
-            preview_service_config(service.strip())
+        for service in units:
+            assert_runner_unit(service)
     except ValueError as exc:
         return None, ({"error": str(exc)}, 400)
     except ImportError as exc:
@@ -1118,12 +1183,13 @@ def _parse_preview_request():
         "ref": ref,
         "branch": None if down else branch,
         "down": down,
-        "services": [s.strip() for s in services],
+        "services": units,
         "triggered_by": str(payload.get("triggered_by") or "unknown"),
     }, None
 
 
-def _run_preview(parsed: dict) -> None:
+def _run_preview(parsed: dict, lock) -> None:
+    """Run one Preview request in its thread; release the deployment lock at the end."""
     key = _preview_key(parsed)
     response: dict | None = None
     try:
@@ -1132,7 +1198,6 @@ def _run_preview(parsed: dict) -> None:
         result = sync_runner.run_preview(
             parsed["pr"],
             parsed["ref"],
-            parsed["branch"],
             parsed["services"],
             parsed["down"],
             os.environ.get("INTERNAL_DOMAIN", ""),
@@ -1149,16 +1214,36 @@ def _run_preview(parsed: dict) -> None:
     except Exception as exc:
         logger.exception("Preview failed before producing a result")
         response = _failed_response(
-            key, "preview", parsed["ref"], parsed["triggered_by"], str(exc)
+            key, "preview", parsed["ref"], parsed["triggered_by"], type(exc).__name__
         )
     finally:
-        with _deploy_state_lock:
-            if response is not None:
-                _recent_deploys[key] = (time.monotonic(), response)
-                if parsed["down"] and response["status"] == "completed":
-                    _preview_slots.pop(parsed["pr"], None)
-            _in_flight_deploys.discard(key)
-            _save_state_locked()
+        try:
+            import sync_runner
+
+            sync_runner.release_deployment_lock(lock)
+        finally:
+            with _deploy_state_lock:
+                if response is not None:
+                    _recent_deploys[key] = (time.monotonic(), response)
+                    # a finished down, or a failed up (the runner already tore it down),
+                    # frees the slot
+                    if parsed["down"] == (response["status"] == "completed"):
+                        _preview_slots.pop(parsed["pr"], None)
+                _in_flight_deploys.discard(key)
+                _save_state_locked()
+
+
+def _preview_progress(parsed: dict, key: DeploymentKey, duplicate: bool) -> dict:
+    return _in_progress_response(
+        "preview",
+        parsed["ref"],
+        parsed["triggered_by"],
+        duplicate,
+        parsed["services"],
+        f"pr-{parsed['pr']}",
+        key[4],
+        status_url="/preview/status",
+    )
 
 
 @app.route("/preview", methods=["POST"])
@@ -1167,28 +1252,37 @@ def preview_deploy():
     if error:
         return jsonify(error[0]), error[1]
     key = _preview_key(parsed)
+    pr_label = f"pr-{parsed['pr']}"
     with _deploy_state_lock:
         if key in _in_flight_deploys:
+            return jsonify(_preview_progress(parsed, key, True)), 202
+        if any(k[0] == "preview" and k[3] == pr_label for k in _in_flight_deploys):
             return jsonify(
-                _in_progress_response(
-                    "preview",
-                    parsed["ref"],
-                    parsed["triggered_by"],
-                    True,
-                    parsed["services"],
-                    f"pr-{parsed['pr']}",
-                    key[4],
-                    status_url="/preview/status",
-                )
-            ), 202
+                {"error": f"a request for {pr_label} is already running"}
+            ), 409
+        now = time.time()
+        for pr, started in list(_preview_slots.items()):
+            if now - started > PREVIEW_SLOT_TTL_SECONDS:
+                del _preview_slots[pr]
+        if parsed["down"] and parsed["pr"] not in _preview_slots:
+            return jsonify({"error": f"{pr_label} has no live slot"}), 404
+    if not parsed["down"]:
+        binding_error = _pr_binding_error(parsed)
+        if binding_error:
+            return jsonify({"error": binding_error}), 400
+    import sync_runner
+
+    lock = sync_runner.try_deployment_lock()
+    if lock is None:
+        return jsonify(
+            {"error": "busy: a deploy or another Preview holds the runner; retry later"}
+        ), 503
+    with _deploy_state_lock:
         if not parsed["down"]:
-            now = time.monotonic()
-            for pr, started in list(_preview_slots.items()):
-                if now - started > PREVIEW_SLOT_TTL_SECONDS:
-                    del _preview_slots[pr]
             if parsed["pr"] not in _preview_slots and (
                 len(_preview_slots) >= PREVIEW_SLOT_CAP
             ):
+                sync_runner.release_deployment_lock(lock)
                 return jsonify(
                     {
                         "error": f"Preview slot cap reached ({PREVIEW_SLOT_CAP} live "
@@ -1202,21 +1296,10 @@ def preview_deploy():
         )  # a Preview request always runs; never a cache hit
         _in_flight_deploys.add(key)
         _save_state_locked()
-    thread = threading.Thread(target=_run_preview, args=(parsed,))
+    thread = threading.Thread(target=_run_preview, args=(parsed, lock))
     thread.daemon = True
     thread.start()
-    return jsonify(
-        _in_progress_response(
-            "preview",
-            parsed["ref"],
-            parsed["triggered_by"],
-            False,
-            parsed["services"],
-            f"pr-{parsed['pr']}",
-            key[4],
-            status_url="/preview/status",
-        )
-    ), 202
+    return jsonify(_preview_progress(parsed, key, False)), 202
 
 
 @app.route("/preview/status", methods=["POST"])
@@ -1227,18 +1310,7 @@ def preview_status():
     key = _preview_key(parsed)
     with _deploy_state_lock:
         if key in _in_flight_deploys:
-            return jsonify(
-                _in_progress_response(
-                    "preview",
-                    parsed["ref"],
-                    parsed["triggered_by"],
-                    False,
-                    parsed["services"],
-                    f"pr-{parsed['pr']}",
-                    key[4],
-                    status_url="/preview/status",
-                )
-            ), 200
+            return jsonify(_preview_progress(parsed, key, False)), 200
         recent = _recent_result(key)
         if recent:
             return jsonify(recent), 200
