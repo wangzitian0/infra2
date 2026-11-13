@@ -363,6 +363,7 @@ class SyncPipeline:
             and local_hash == remote_hash
             and remote_source_identity_valid
             and remote_service_identity_valid
+            and not (deployer.redeploy_on_ref_change and remote_ref != deploy_ref)
         ):
             try:
                 existing = deployer._find_remote_compose(e)
