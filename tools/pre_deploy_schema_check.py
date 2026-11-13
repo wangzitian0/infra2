@@ -8,14 +8,18 @@ caused finance_report backend to fail during startup, bringing the service down 
 
 Audit-hardened (反事实审计 2026-09-16):
 - Bidirectional comparison: missing_in_db AND missing_in_code both block deploy.
-  DB superset is the most dangerous runtime divergence.
+  DB superset is the most dangerous runtime divergence. One exception (#1658): a
+  missing_in_db discrepancy that a migration newer than the database's alembic head
+  fixes in its ``upgrade()`` statements (``ENUM(..., name=<type>)`` that creates the type,
+  or ``ALTER TYPE <type> ADD VALUE '<label>'``) does not block. See
+  ``cover_with_pending_migrations``.
 - Fail-closed: any exception (query failure, parse error) blocks deploy.
   A check that silently fails is worse than no check.
 - Never a silent pass (#718 review): a gate that cannot load its code-side enums or
   has no database to compare against has not evaluated anything, so it exits
   ``EXIT_NOT_EVALUATED`` — non-zero, like a finding.
 
-Exit codes: 0 verified (0 discrepancies) · 1 blocked (discrepancy or DB failure) ·
+Exit codes: 0 verified (0 discrepancies, or only covered ones) · 1 blocked (discrepancy or DB failure) ·
 3 not evaluated (an input is unavailable) — also blocking.
 
 The code side is the service's own SQLAlchemy metadata, so the gate runs where the
@@ -28,11 +32,12 @@ application imports (its image or virtualenv), not from infra2's environment::
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib
 import os
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -281,54 +286,164 @@ def check_enums(
     return discrepancies
 
 
-_REVISION_RE = re.compile(r"""^revision\b[^=\n]*=\s*["']([^"']+)["']""", re.MULTILINE)
-_DOWN_REVISION_RE = re.compile(r"^down_revision\b[^=\n]*=\s*(.+)$", re.MULTILINE)
-_QUOTED_RE = re.compile(r"""["']([^"']+)["']""")
+@dataclass(frozen=True)
+class _Revision:
+    parents: tuple[str, ...]
+    upgrade: ast.FunctionDef | None
+    module: ast.Module
 
 
-def _revision_graph(versions_dir: Path) -> dict[str, tuple[tuple[str, ...], str]]:
-    """``{revision: (parent revisions, file text)}`` for every alembic file in ``versions_dir``."""
-    graph: dict[str, tuple[tuple[str, ...], str]] = {}
-    for path in sorted(versions_dir.glob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        revision = _REVISION_RE.search(text)
-        if revision is None:
+@dataclass
+class _EnumEvidence:
+    """What the pending revisions do to one enum type (#1658)."""
+
+    created: set[str] = field(default_factory=set)
+    added: set[str] = field(default_factory=set)
+    creates: bool = False
+    dropped: bool = False
+    revisions: set[str] = field(default_factory=set)
+
+
+def _assigned_literal(module: ast.Module, name: str) -> Any:
+    """The literal value of a top-level ``name = ...`` or ``name: T = ...``, else None."""
+    for node in module.body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        elif isinstance(node, ast.AnnAssign):
+            target, value = node.target, node.value
+        else:
             continue
-        down = _DOWN_REVISION_RE.search(text)
-        parents = tuple(_QUOTED_RE.findall(down.group(1))) if down else ()
-        graph[revision.group(1)] = (parents, text)
+        if isinstance(target, ast.Name) and target.id == name and value is not None:
+            try:
+                return ast.literal_eval(value)
+            except ValueError:
+                return None
+    return None
+
+
+def _revision_graph(versions_dir: Path) -> dict[str, _Revision]:
+    """``{revision: _Revision}`` for every alembic file in ``versions_dir``."""
+    graph: dict[str, _Revision] = {}
+    for path in sorted(versions_dir.glob("*.py")):
+        module = ast.parse(path.read_text(encoding="utf-8"))
+        revision = _assigned_literal(module, "revision")
+        if not isinstance(revision, str):
+            continue
+        down = _assigned_literal(module, "down_revision")
+        parents = (down,) if isinstance(down, str) else tuple(down or ())
+        upgrade = next(
+            (
+                node
+                for node in module.body
+                if isinstance(node, ast.FunctionDef) and node.name == "upgrade"
+            ),
+            None,
+        )
+        graph[revision] = _Revision(parents, upgrade, module)
     return graph
 
 
 def _pending_revisions(
-    graph: Mapping[str, tuple[tuple[str, ...], str]], applied_heads: Sequence[str]
-) -> dict[str, str]:
-    """``{revision: file text}`` of every revision newer than the applied heads.
+    graph: Mapping[str, _Revision], applied_heads: Sequence[str]
+) -> dict[str, _Revision]:
+    """Every revision newer than the applied heads; empty when a head is unknown.
 
-    A head that the files do not know has no children, so nothing is pending.
+    One unknown head makes ``alembic upgrade head`` fail, so nothing is covered then.
     """
+    if not applied_heads or any(head not in graph for head in applied_heads):
+        return {}
     children: dict[str, list[str]] = {}
-    for revision, (parents, _text) in graph.items():
-        for parent in parents:
+    for revision, entry in graph.items():
+        for parent in entry.parents:
             children.setdefault(parent, []).append(revision)
-    pending: dict[str, str] = {}
+    pending: dict[str, _Revision] = {}
     queue = list(applied_heads)
     while queue:
         for child in children.get(queue.pop(), ()):
             if child not in pending:
-                pending[child] = graph[child][1]
+                pending[child] = graph[child]
                 queue.append(child)
     return pending
 
 
-def _migration_names(text: str, discrepancy: EnumDiscrepancy) -> bool:
-    """True when the migration text names the enum type and quotes every missing label."""
-    if not re.search(rf"\b{re.escape(discrepancy.enum_name)}\b", text):
-        return False
-    return all(
-        re.search(rf"""["']{re.escape(label)}["']""", text)
-        for label in discrepancy.missing_in_db
+def _enum_call_name(node: ast.Call) -> str | None:
+    """The ``name=`` of a call to ``ENUM(...)`` or ``Enum(...)``, else None."""
+    func = node.func
+    called = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+    if called not in ("ENUM", "Enum"):
+        return None
+    for keyword in node.keywords:
+        if (
+            keyword.arg == "name"
+            and isinstance(keyword.value, ast.Constant)
+            and isinstance(keyword.value.value, str)
+        ):
+            return keyword.value.value
+    return None
+
+
+def _without_downgrade(module: ast.Module) -> list[ast.AST]:
+    nodes: list[ast.AST] = []
+    for top in module.body:
+        if isinstance(top, ast.FunctionDef) and top.name == "downgrade":
+            continue
+        nodes.extend(ast.walk(top))
+    return nodes
+
+
+def _enum_evidence(pending: Mapping[str, _Revision], enum_name: str) -> _EnumEvidence:
+    """What the pending ``upgrade()`` statements do to one enum type.
+
+    Evidence is code, not text: a comment, ``downgrade()`` and an unrelated string never
+    count. A type exists after ``upgrade()`` when an ``ENUM(..., name=<type>)`` call
+    creates it (``op.create_table`` and friends) or, with ``create_type=False``, a
+    ``.create(...)`` call runs. A label is added by ``ALTER TYPE <type> ADD VALUE '<label>'``.
+    """
+    name = re.escape(enum_name)
+    alter = re.compile(
+        rf"""\bALTER\s+TYPE\s+"?{name}"?\s+ADD\s+VALUE\s+(?:IF\s+NOT\s+EXISTS\s+)?'([^']+)'""",
+        re.IGNORECASE,
     )
+    drop = re.compile(
+        rf"""\bDROP\s+TYPE\s+(?:IF\s+EXISTS\s+)?"?{name}"?(?![\w])""", re.IGNORECASE
+    )
+    evidence = _EnumEvidence()
+    for revision_id, revision in pending.items():
+        if revision.upgrade is None:
+            continue
+        upgrade_nodes = list(ast.walk(revision.upgrade))
+        explicit_create = any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "create"
+            for node in upgrade_nodes
+        )
+        for node in upgrade_nodes:
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                added = alter.findall(node.value)
+                evidence.added.update(added)
+                evidence.dropped |= bool(drop.search(node.value))
+                if added:
+                    evidence.revisions.add(revision_id)
+        for node in _without_downgrade(revision.module):
+            if not isinstance(node, ast.Call) or _enum_call_name(node) != enum_name:
+                continue
+            no_auto_create = any(
+                keyword.arg == "create_type"
+                and isinstance(keyword.value, ast.Constant)
+                and keyword.value.value is False
+                for keyword in node.keywords
+            )
+            if no_auto_create and not explicit_create:
+                continue
+            evidence.creates = True
+            evidence.revisions.add(revision_id)
+            evidence.created.update(
+                arg.value
+                for arg in node.args
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+            )
+    return evidence
 
 
 def cover_with_pending_migrations(
@@ -339,34 +454,37 @@ def cover_with_pending_migrations(
 ) -> tuple[list[EnumDiscrepancy], list[tuple[str, str]]]:
     """Split off the additive discrepancies that a pending migration will fix (#1658).
 
-    The image runs ``alembic upgrade head`` after this gate, so a type or label that code
-    declares and the database lacks is fine when a migration newer than the database's head
-    names it. Returns ``(blocking, covered)`` with ``covered`` as ``(enum name, revision)``.
-    Only ``missing_in_db`` can be covered; a DB-only label and a casing drift always block.
-    An unknown head covers nothing. The caller treats any error here as "nothing covered".
+    The image runs ``alembic upgrade head`` after this gate. A type that the database
+    lacks is covered when the pending ``upgrade()`` statements create it with every
+    missing label. A label that an existing type lacks is covered when they add it with
+    ``ALTER TYPE ... ADD VALUE``. A type that a pending revision drops is never covered.
+    Returns ``(blocking, covered)`` with ``covered`` as ``(enum name, revisions)``.
+    Only ``missing_in_db`` can be covered; a DB-only label and a casing drift always
+    block. The caller treats any error here (an unreadable or invalid file) as "nothing
+    covered".
     """
     pending = _pending_revisions(_revision_graph(versions_dir), applied_heads)
     blocking: list[EnumDiscrepancy] = []
     covered: list[tuple[str, str]] = []
     for discrepancy in discrepancies:
-        revision = None
+        evidence = _enum_evidence(pending, discrepancy.enum_name)
+        missing = set(discrepancy.missing_in_db)
+        if not discrepancy.db_values:
+            fixed = evidence.creates and missing <= evidence.created | evidence.added
+        else:
+            fixed = missing <= evidence.added
         if (
-            discrepancy.missing_in_db
+            missing
+            and fixed
+            and not evidence.dropped
             and not discrepancy.missing_in_code
             and not discrepancy.casing_mismatches
         ):
-            revision = next(
-                (
-                    rev
-                    for rev, text in sorted(pending.items())
-                    if _migration_names(text, discrepancy)
-                ),
-                None,
+            covered.append(
+                (discrepancy.enum_name, ",".join(sorted(evidence.revisions)))
             )
-        if revision is None:
-            blocking.append(discrepancy)
         else:
-            covered.append((discrepancy.enum_name, revision))
+            blocking.append(discrepancy)
     return blocking, covered
 
 
