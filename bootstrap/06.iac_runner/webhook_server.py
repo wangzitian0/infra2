@@ -41,6 +41,14 @@ DEPLOY_STATE_FILE = (
 )
 MAX_PERSISTED_DEPLOYS = 64
 SIGNATURE_TTL_SECONDS = 300
+# The one table of values each route accepts in its `env` (/deploy) or `type` (/preview)
+# field. common/deploy/iac_runner_client.py reads the same file.
+ROUTE_TYPES: dict[str, list[str]] = json.loads(
+    Path(__file__).with_name("route_types.json").read_text(encoding="utf-8")
+)
+PREVIEW_SLOT_CAP = 2
+PREVIEW_SLOT_TTL_SECONDS = 3600
+PREVIEW_BRANCH_RE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._/-]{0,99}\Z")
 MAX_REQUEST_BODY_BYTES = 65536
 EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 DEPLOYMENT_ID_RE = re.compile(r"^[0-9a-f]{16}$")
@@ -96,10 +104,11 @@ def verify_signature(payload: bytes, signature: str) -> bool:
 
 
 def verify_iac_signature(
-    payload: bytes, signature: str, timestamp: str, nonce: str
+    payload: bytes, signature: str, timestamp: str, nonce: str, secret: str
 ) -> bool:
-    if not WEBHOOK_SECRET:
-        logger.error("WEBHOOK_SECRET is not configured")
+    """Verify a signed request against one route's secret. An empty secret fails closed."""
+    if not secret:
+        logger.error("The signing secret of this route is not configured")
         return False
     if not timestamp or not nonce:
         return False
@@ -116,7 +125,7 @@ def verify_iac_signature(
     signed_payload = f"{timestamp}.{nonce}.".encode() + payload
     expected = (
         "sha256="
-        + hmac.new(WEBHOOK_SECRET.encode(), signed_payload, hashlib.sha256).hexdigest()
+        + hmac.new(secret.encode(), signed_payload, hashlib.sha256).hexdigest()
     )
     if not signature or not hmac.compare_digest(expected, signature):
         return False
@@ -136,12 +145,14 @@ def verify_iac_signature(
     return True
 
 
-def verify_iac_request() -> bool:
+def verify_iac_request(secret: str | None = None) -> bool:
+    """Verify the request signature. `/deploy` uses WEBHOOK_SECRET; `/preview` passes its own."""
     return verify_iac_signature(
         request.data,
         request.headers.get("X-Hub-Signature-256", ""),
         request.headers.get("X-IAC-Timestamp", ""),
         request.headers.get("X-IAC-Nonce", ""),
+        WEBHOOK_SECRET if secret is None else secret,
     )
 
 
@@ -516,6 +527,7 @@ def _in_progress_response(
     services: list[str] | None = None,
     version_ref: str | None = None,
     action: str = "sync",
+    status_url: str = "/deploy/status",
 ) -> dict:
     key = _deployment_key(env, ref, services, version_ref, action)
     response = {
@@ -525,7 +537,7 @@ def _in_progress_response(
         "ref": ref,
         "triggered_by": triggered_by,
         "requested_services": list(key[2]),
-        "status_url": "/deploy/status",
+        "status_url": status_url,
     }
     if version_ref:
         response["version_ref"] = version_ref
@@ -803,8 +815,10 @@ def version_deploy():
     if not ref:
         return jsonify({"error": "Ref must be an exact 40-character commit SHA"}), 400
 
-    if env not in ("staging", "production"):
-        return jsonify({"error": "Invalid env (must be staging or production)"}), 400
+    if env not in ROUTE_TYPES["/deploy"]:
+        return jsonify(
+            {"error": f"Invalid env (must be {' or '.join(ROUTE_TYPES['/deploy'])})"}
+        ), 400
 
     services = payload.get("services")
     if env == "production":
@@ -940,8 +954,10 @@ def deployment_status():
     deployment_id = payload.get("deployment_id")
     if not ref:
         return jsonify({"error": "Ref must be an exact 40-character commit SHA"}), 400
-    if env not in ("staging", "production"):
-        return jsonify({"error": "Invalid env (must be staging or production)"}), 400
+    if env not in ROUTE_TYPES["/deploy"]:
+        return jsonify(
+            {"error": f"Invalid env (must be {' or '.join(ROUTE_TYPES['/deploy'])})"}
+        ), 400
 
     services = payload.get("services")
     if services is not None:
@@ -1022,6 +1038,216 @@ def deployment_status():
             "deployment_id": _deployment_id(key),
             "env": env,
             "ref": ref,
+        }
+    ), 404
+
+
+# --- /preview: Preview slots for PR CI (#1647) -------------------------------------------
+# A PR job holds only IAC_PREVIEW_WEBHOOK_SECRET. It can bring a Preview slot up or down
+# and nothing else: the runner keeps the Dokploy key and runs trusted main code.
+_preview_slots: dict[int, float] = {}  # PR number -> monotonic start of its live slot
+
+
+def _preview_key(parsed: dict) -> DeploymentKey:
+    action = "down" if parsed["down"] else "up"
+    return _deployment_key(
+        "preview", parsed["ref"], parsed["services"], f"pr-{parsed['pr']}", action
+    )
+
+
+def _parse_preview_request():
+    """Verify and parse a /preview request: (parsed, None) or (None, (body, status))."""
+    secret = os.environ.get("IAC_PREVIEW_WEBHOOK_SECRET", "")
+    if not secret:
+        return None, (
+            {
+                "error": "IAC_PREVIEW_WEBHOOK_SECRET is not set on the runner; "
+                "/preview is closed until the owner creates it"
+            },
+            503,
+        )
+    if not verify_iac_request(secret):
+        return None, ({"error": "Invalid signature"}, 401)
+    payload = request.json or {}
+    if not isinstance(payload, dict):
+        return None, ({"error": "JSON object required"}, 400)
+    allowed = ROUTE_TYPES["/preview"]
+    if payload.get("type") not in allowed:
+        return None, (
+            {"error": f"Invalid type (must be {' or '.join(allowed)})"},
+            400,
+        )
+    pr = payload.get("pr")
+    if isinstance(pr, bool) or not isinstance(pr, int) or pr < 1:
+        return None, ({"error": "pr must be a positive integer"}, 400)
+    ref = validate_deploy_ref(payload.get("ref"))
+    if not ref:
+        return None, ({"error": "Ref must be an exact 40-character commit SHA"}, 400)
+    down = payload.get("down", False)
+    if not isinstance(down, bool):
+        return None, ({"error": "down must be a boolean"}, 400)
+    branch = payload.get("branch")
+    if not down and not (
+        isinstance(branch, str)
+        and PREVIEW_BRANCH_RE.fullmatch(branch)
+        and ".." not in branch
+    ):
+        return None, ({"error": "branch must name the PR head branch"}, 400)
+    services = payload.get("services")
+    if (
+        not isinstance(services, list)
+        or not services
+        or not all(isinstance(s, str) and s.strip() for s in services)
+    ):
+        return None, (
+            {"error": "services must be a non-empty list of non-empty strings"},
+            400,
+        )
+    try:
+        import sync_runner  # noqa: F401  (puts the repo checkout on sys.path)
+        from common.deploy.env_config import preview_service_config
+
+        for service in services:
+            preview_service_config(service.strip())
+    except ValueError as exc:
+        return None, ({"error": str(exc)}, 400)
+    except ImportError as exc:
+        return None, ({"error": f"runner checkout is not ready: {exc}"}, 503)
+    return {
+        "pr": pr,
+        "ref": ref,
+        "branch": None if down else branch,
+        "down": down,
+        "services": [s.strip() for s in services],
+        "triggered_by": str(payload.get("triggered_by") or "unknown"),
+    }, None
+
+
+def _run_preview(parsed: dict) -> None:
+    key = _preview_key(parsed)
+    response: dict | None = None
+    try:
+        import sync_runner
+
+        result = sync_runner.run_preview(
+            parsed["pr"],
+            parsed["ref"],
+            parsed["branch"],
+            parsed["services"],
+            parsed["down"],
+            os.environ.get("INTERNAL_DOMAIN", ""),
+        )
+        response = {
+            "status": "completed" if result["success"] else "failed",
+            "deployment_id": _deployment_id(key),
+            "env": "preview",
+            "ref": parsed["ref"],
+            "triggered_by": parsed["triggered_by"],
+            "requested_services": list(key[2]),
+            **result,
+        }
+    except Exception as exc:
+        logger.exception("Preview failed before producing a result")
+        response = _failed_response(
+            key, "preview", parsed["ref"], parsed["triggered_by"], str(exc)
+        )
+    finally:
+        with _deploy_state_lock:
+            if response is not None:
+                _recent_deploys[key] = (time.monotonic(), response)
+                if parsed["down"] and response["status"] == "completed":
+                    _preview_slots.pop(parsed["pr"], None)
+            _in_flight_deploys.discard(key)
+            _save_state_locked()
+
+
+@app.route("/preview", methods=["POST"])
+def preview_deploy():
+    parsed, error = _parse_preview_request()
+    if error:
+        return jsonify(error[0]), error[1]
+    key = _preview_key(parsed)
+    with _deploy_state_lock:
+        if key in _in_flight_deploys:
+            return jsonify(
+                _in_progress_response(
+                    "preview",
+                    parsed["ref"],
+                    parsed["triggered_by"],
+                    True,
+                    parsed["services"],
+                    f"pr-{parsed['pr']}",
+                    key[4],
+                    status_url="/preview/status",
+                )
+            ), 202
+        if not parsed["down"]:
+            now = time.monotonic()
+            for pr, started in list(_preview_slots.items()):
+                if now - started > PREVIEW_SLOT_TTL_SECONDS:
+                    del _preview_slots[pr]
+            if parsed["pr"] not in _preview_slots and (
+                len(_preview_slots) >= PREVIEW_SLOT_CAP
+            ):
+                return jsonify(
+                    {
+                        "error": f"Preview slot cap reached ({PREVIEW_SLOT_CAP} live "
+                        "slots); tear one down or retry later",
+                        "live_slots": sorted(f"pr-{pr}" for pr in _preview_slots),
+                    }
+                ), 429
+            _preview_slots.setdefault(parsed["pr"], now)
+        _recent_deploys.pop(
+            key, None
+        )  # a Preview request always runs; never a cache hit
+        _in_flight_deploys.add(key)
+        _save_state_locked()
+    thread = threading.Thread(target=_run_preview, args=(parsed,))
+    thread.daemon = True
+    thread.start()
+    return jsonify(
+        _in_progress_response(
+            "preview",
+            parsed["ref"],
+            parsed["triggered_by"],
+            False,
+            parsed["services"],
+            f"pr-{parsed['pr']}",
+            key[4],
+            status_url="/preview/status",
+        )
+    ), 202
+
+
+@app.route("/preview/status", methods=["POST"])
+def preview_status():
+    parsed, error = _parse_preview_request()
+    if error:
+        return jsonify(error[0]), error[1]
+    key = _preview_key(parsed)
+    with _deploy_state_lock:
+        if key in _in_flight_deploys:
+            return jsonify(
+                _in_progress_response(
+                    "preview",
+                    parsed["ref"],
+                    parsed["triggered_by"],
+                    False,
+                    parsed["services"],
+                    f"pr-{parsed['pr']}",
+                    key[4],
+                    status_url="/preview/status",
+                )
+            ), 200
+        recent = _recent_result(key)
+        if recent:
+            return jsonify(recent), 200
+    return jsonify(
+        {
+            "status": "not_found",
+            "deployment_id": _deployment_id(key),
+            "env": "preview",
+            "ref": parsed["ref"],
         }
     ), 404
 

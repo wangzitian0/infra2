@@ -210,12 +210,7 @@ worker-only restart an orphaned `invoke` child may still run while a retry start
 
 ### 4.1 端点概览
 
-| Endpoint | Method | Description | 触发方式 |
-|----------|--------|-------------|---------|
-| `/health` | GET | 健康检查 | 手动 / 监控 |
-| `/webhook` | POST | GitHub push 接收器；验签后**不部署任何东西**（合并不是发布，staging 跟 release tag） | GitHub 自动触发 |
-| `/deploy` | POST | 版本部署（GitOps）| GitHub Actions |
-| `/deploy/status` | POST | 按 deployment_id 轮询该次部署的终态 | `deploy_v2` |
+端点表的唯一来源：[`ops.pipeline.md` §5.1](./ops.pipeline.md#51-endpoints)。`/preview` 的密钥见 §6.1。
 
 ### 4.2 `/health` - 健康检查
 
@@ -358,6 +353,16 @@ changed files 换算成 `services` 传给 `/deploy`。要点：
 |-----|------|---------|
 | `WEBHOOK_SECRET` | GitHub webhook 验证密钥 | `openssl rand -hex 32` |
 | `GIT_REPO_URL` | Git 仓库地址 | `https://github.com/wangzitian0/infra2.git` |
+| `IAC_PREVIEW_WEBHOOK_SECRET` | 仅供 `/preview` 验签的 Preview 专用签名密钥（可选；缺失时 `/preview` 返回 503，`/deploy` 不受影响）。**不得**与 `WEBHOOK_SECRET` 相同 | owner 生成 `openssl rand -hex 32`；`human` 来源，不由 runner 生成 |
+
+**Preview 密钥（owner 创建，agent 不创建）**：名字 `IAC_PREVIEW_WEBHOOK_SECRET`，runner 端路径同 `secret/data/bootstrap/production/iac_runner`（字段 `IAC_PREVIEW_WEBHOOK_SECRET`，由 vault-agent 渲染进 `/vault/secrets/.env`，runner 入口脚本 source 它；`compose.yaml` 不需要新增环境变量）。PR CI 端使用同名 GitHub Actions secret `IAC_PREVIEW_WEBHOOK_SECRET`（T3c）。创建：
+
+```bash
+invoke env.set IAC_PREVIEW_WEBHOOK_SECRET=$(openssl rand -hex 32) \
+  --project=bootstrap --service=iac_runner --type=bootstrap
+```
+
+创建后需重建 runner（`bootstrap/06.iac_runner/**` 变更走 `deploy.yml` 的 bootstrap 带外重建，需 owner 批准）。
 
 **设置命令**:
 ```bash

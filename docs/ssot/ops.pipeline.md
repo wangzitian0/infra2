@@ -427,6 +427,10 @@ An `interrupted` answer (the runner restarted while it ran the deploy, #1439) is
 | `/webhook` | POST | GitHub push receiver. **Deploys nothing**: a merge is not a release. staging 由 release tag 经 `reconcile-iac-inputs.yml` 自动晋升，prod 由显式 promote，app 的 PR 走 preview 栈；infra2 自身没有常驻 preview，PR 期也不部署任何 App（#1477）。此前它会用未打标的 main HEAD 部署 staging（对每个声明了 `common/**`/`tools/**` 的服务，等于「合并即部署」），该路径已移除。|
 | `/deploy` | POST | 版本部署;`wait=true` 为 legacy 直等 |
 | `/deploy/status` | POST | 用 `/deploy` 返回的 `deployment_id` 签名轮询同一操作的真实 sync 结果 |
+| `/preview` | POST | PR CI 的 Preview 槽位 `pr-<N>`：只接受 `type=preview/pr`（含 `down`）、Preview 注册表中的单元、PR 号、PR head 分支与其 tip SHA。用独立密钥 `IAC_PREVIEW_WEBHOOK_SECRET` 验签：`staging`/`prod`/其他 type → 400，`/deploy` 密钥 → 401，runner 未配置该密钥 → 503；同时存活槽位上限 2（超出 → 429，TTL 1 h）。runner 运行**可信的 main 代码**，不运行 PR 代码，Dokploy 密钥不出 runner。返回 202，用 `/preview/status` 轮询；结果含 `slot`、`units`（逐单元 `status`/`seconds`）、`seconds`，不含密钥值 |
+| `/preview/status` | POST | 用与 `/preview` 相同的请求体和密钥轮询该槽位操作的结果 |
+
+每个路由允许的 `env`/`type` 值只在 [`bootstrap/06.iac_runner/route_types.json`](../../bootstrap/06.iac_runner/route_types.json) 一处声明；`webhook_server.py` 与 `common/deploy/iac_runner_client.py` 都读它。
 
 ### 5.2 服务映射规则(fan-out)
 

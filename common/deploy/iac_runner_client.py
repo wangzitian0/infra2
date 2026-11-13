@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Client for the iac_runner /deploy webhook."""
+"""Client for the iac_runner /deploy and /preview webhooks."""
 
 from __future__ import annotations
 
@@ -10,12 +10,18 @@ import os
 import re
 import time
 from collections.abc import Iterator
+from pathlib import Path
 
 import httpx
 
 _SHA40_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 _DEPLOYMENT_ID_RE = re.compile(r"\A[0-9a-f]{16}\Z")
-_VALID_ENVS = ("staging", "production")
+# The one table of values each route accepts; webhook_server.py reads the same file.
+ROUTE_TYPES: dict[str, list[str]] = json.loads(
+    (
+        Path(__file__).resolve().parents[2] / "bootstrap/06.iac_runner/route_types.json"
+    ).read_text(encoding="utf-8")
+)
 
 STATUS_POLL_INITIAL_SECONDS = 2.0
 STATUS_POLL_BACKOFF = 1.25
@@ -118,14 +124,19 @@ def _json_object_or_none(resp) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def _validate_request(env: str, ref: str, secret: str, base_url: str) -> None:
+def _validate_request(
+    env: str, ref: str, secret: str, base_url: str, route: str = "/deploy"
+) -> None:
     """Fail closed BEFORE signing/posting — never sign with an empty secret or bad target."""
-    if env not in _VALID_ENVS:
-        raise ValueError(f"env must be one of {_VALID_ENVS}, got {env!r}")
+    if env not in ROUTE_TYPES[route]:
+        raise ValueError(f"env must be one of {ROUTE_TYPES[route]}, got {env!r}")
     if not _SHA40_RE.match(ref or ""):
         raise ValueError(f"ref must be a 40-hex commit sha, got {ref!r}")
     if not secret:
-        raise ValueError("IAC_WEBHOOK_SECRET is required to sign the request")
+        raise ValueError(
+            "IAC_WEBHOOK_SECRET (/deploy) or IAC_PREVIEW_WEBHOOK_SECRET (/preview) "
+            "is required to sign the request"
+        )
     if not base_url:
         raise ValueError("iac_runner base_url is required")
 
@@ -184,9 +195,15 @@ def trigger_platform_deploy(
     version_ref: str | None = None,
     action: str | None = None,
     oidc_token: str | None = None,
+    route: str = "/deploy",
+    extra: dict | None = None,
 ) -> dict:
-    """Trigger an iac_runner platform deploy for specified services."""
-    _validate_request(env, ref, secret, base_url)
+    """Trigger an iac_runner platform deploy for specified services.
+
+    ``route`` is the endpoint path. A ``/preview`` call names the Preview type in ``env``,
+    carries ``extra`` (pr, branch, down) and must be signed with the Preview secret.
+    """
+    _validate_request(env, ref, secret, base_url, route)
     if not all(isinstance(service, str) for service in services):
         raise ValueError("services must be a non-empty list of non-empty strings")
     normalized_services = sorted({service.strip() for service in services})
@@ -194,12 +211,13 @@ def trigger_platform_deploy(
         raise ValueError("services must be a non-empty list of non-empty strings")
 
     body: dict = {
-        "env": env,
+        "env" if route == "/deploy" else "type": env,
         "ref": ref,
         "triggered_by": triggered_by,
         "wait": wait,
         "services": normalized_services,
         **({"action": action} if action and action != "sync" else {}),
+        **(extra or {}),
     }
     if version_ref is not None:
         # The app release a digest-pinned platform service should pin (truealpha#712);
@@ -212,7 +230,7 @@ def trigger_platform_deploy(
         if token:
             headers["Authorization"] = f"Bearer {token}"
     resp = transport(
-        f"{base_url.rstrip('/')}/deploy",
+        f"{base_url.rstrip('/')}{route}",
         content=payload,
         headers=headers,
         timeout=timeout,
@@ -243,9 +261,11 @@ def poll_platform_deploy_status(
     not_found_grace: float = STATUS_NOT_FOUND_GRACE_SECONDS,
     backoff: float = 1.0,
     max_interval: float | None = None,
+    route: str = "/deploy",
+    extra: dict | None = None,
 ) -> dict:
-    """Poll /deploy/status until the deploy reaches a terminal state."""
-    _validate_request(env, ref, secret, base_url)
+    """Poll ``{route}/status`` until the deploy reaches a terminal state."""
+    _validate_request(env, ref, secret, base_url, route)
     if services is not None and not all(
         isinstance(service, str) for service in services
     ):
@@ -261,7 +281,12 @@ def poll_platform_deploy_status(
         raise ValueError("services must be a non-empty list of non-empty strings")
     if deployment_id is not None and not _DEPLOYMENT_ID_RE.match(deployment_id):
         raise ValueError("deployment_id must be 16 lowercase hex characters")
-    status_coordinate = {"env": env, "ref": ref, "triggered_by": triggered_by}
+    status_coordinate = {
+        "env" if route == "/deploy" else "type": env,
+        "ref": ref,
+        "triggered_by": triggered_by,
+        **(extra or {}),
+    }
     if normalized_services is not None:
         status_coordinate["services"] = normalized_services
     if action and action != "sync":
@@ -287,7 +312,7 @@ def poll_platform_deploy_status(
         headers = _signed_headers(secret, payload, now=now, nonce=nonce_factory())
         try:
             resp = transport(
-                f"{base_url.rstrip('/')}/deploy/status",
+                f"{base_url.rstrip('/')}{route}/status",
                 content=payload,
                 headers=headers,
                 timeout=timeout,
@@ -372,6 +397,7 @@ def poll_platform_deploy_status(
 
 
 __all__ = [
+    "ROUTE_TYPES",
     "STATUS_NOT_FOUND_GRACE_SECONDS",
     "STATUS_POLL_BACKOFF",
     "STATUS_POLL_INITIAL_SECONDS",

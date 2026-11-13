@@ -2585,3 +2585,43 @@ def test_deploy_v2_defaults_app_version_ref_from_repos_yaml_and_threads_bootstra
     assert rc == 0
     assert recorded_train_checks[-1] == ("truealpha/app", "v0.2.79", "staging", True)
     assert "[AUDIT] deploy_v2 bootstrap=True" in capsys.readouterr().err
+
+
+def test_via_runner_sends_the_preview_request_signed_for_the_preview_route(
+    monkeypatch, capsys
+):
+    seen = {}
+
+    def fake_trigger_and_poll(**kwargs):
+        seen.update(kwargs)
+        return {}, {"status": "completed", "slot": "pr-7"}
+
+    monkeypatch.setattr(dv2, "_trigger_and_poll", fake_trigger_and_poll)
+    monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, repo: "c" * 40)
+    monkeypatch.setenv("IAC_RUNNER_URL", "https://iac.example")
+    monkeypatch.setenv("IAC_PREVIEW_WEBHOOK_SECRET", "preview-secret")
+    monkeypatch.setenv("IAC_WEBHOOK_SECRET", "deploy-secret")
+    code = dv2.main(
+        [
+            "--service", "platform/todo", "--type", "preview/pr", "--version-ref", "7",
+            "--iac-ref", "feature-x", "--domain", "example.test", "--via-runner",
+        ]
+    )  # fmt: skip
+    assert code == 0
+    assert seen["route"] == "/preview" and seen["env"] == "preview/pr"
+    assert seen["secret"] == "preview-secret"
+    assert seen["extra"] == {"pr": 7, "branch": "feature-x", "down": False}
+    assert seen["ref"] == "c" * 40
+
+
+def test_via_runner_refuses_a_fixed_env_type(monkeypatch):
+    monkeypatch.setattr(
+        dv2, "_trigger_and_poll", lambda **kw: pytest.fail("must not reach the runner")
+    )
+    code = dv2.main(
+        [
+            "--service", "platform/todo", "--type", "staging", "--iac-ref", "v1.2.3",
+            "--domain", "example.test", "--via-runner",
+        ]
+    )  # fmt: skip
+    assert code == 1

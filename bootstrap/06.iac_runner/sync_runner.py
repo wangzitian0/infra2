@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -1033,6 +1034,117 @@ def sync_services_by_version(
         f"({result.succeeded} succeeded, {result.failed} failed) ==="
     )
     return result
+
+
+# Env of the Preview child: it never holds a signing secret of the runner.
+_PREVIEW_CHILD_DROP = ("WEBHOOK_SECRET", "IAC_PREVIEW_WEBHOOK_SECRET")
+
+
+def _branch_tip(repo_path: Path, branch: str) -> str | None:
+    result = subprocess.run(
+        [
+            "git",
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            f"refs/remotes/origin/{branch}^{{commit}}",
+        ],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+    )
+    return result.stdout.strip().lower() if result.returncode == 0 else None
+
+
+def _run_preview_unit(
+    repo_path: Path, service: str, pr: int, iac_ref: str, down: bool, domain: str
+) -> dict:
+    """Run `common.deploy.v2` for one unit and return its public status (no output text)."""
+    started = time.monotonic()
+    env_vars = {k: v for k, v in os.environ.items() if k not in _PREVIEW_CHILD_DROP}
+    env_vars["PYTHONPATH"] = str(repo_path)
+    command = [
+        sys.executable,
+        "-m",
+        "common.deploy.v2",
+        "--service",
+        service,
+        "--type",
+        "preview/pr",
+        "--version-ref",
+        str(pr),
+        "--iac-ref",
+        iac_ref,
+        "--domain",
+        domain,
+    ] + (["--down"] if down else [])
+    unit: dict = {"service": service}
+    try:
+        result = subprocess.run(
+            command,
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            env=env_vars,
+            timeout=DEPLOY_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        unit.update(status="failed", error=f"Timeout after {DEPLOY_TIMEOUT}s")
+    else:
+        unit["status"] = "ok" if result.returncode == 0 else "failed"
+        if result.returncode != 0:
+            unit["error"] = diagnose_failure(result.stderr, result.stdout)["summary"]
+        else:
+            try:
+                last = json.loads(result.stdout.strip().splitlines()[-1])
+                detail = last.get("detail", last)
+                unit.update({k: detail[k] for k in ("url", "healthy") if k in detail})
+            except (ValueError, IndexError, AttributeError):
+                pass
+    unit["seconds"] = round(time.monotonic() - started, 1)
+    return unit
+
+
+def run_preview(
+    pr: int,
+    ref: str,
+    branch: str | None,
+    services: list[str],
+    down: bool,
+    domain: str,
+) -> dict:
+    """Bring Preview slot `pr-<pr>` up or down for each unit and return its public result.
+
+    The code that runs is the trusted tip of GIT_BRANCH, never the PR head: the PR head
+    only names the infra2 branch that Dokploy clones for the unit's compose file. An up
+    request must carry the exact branch tip as `ref`.
+    """
+    started = time.monotonic()
+    slot = f"pr-{pr}"
+
+    def outcome(units: list[dict], error: str | None = None) -> dict:
+        result = {
+            "slot": slot,
+            "down": down,
+            "units": units,
+            "seconds": round(time.monotonic() - started, 1),
+            "success": error is None and all(u["status"] == "ok" for u in units),
+        }
+        return {**result, "error": error} if error else result
+
+    with file_lock(DEPLOYMENT_LOCK_FILE, "deployment"):
+        repo_path = WORKSPACE / REPO_NAME
+        if not update_repo():
+            return outcome([], "Failed to update repo")
+        if not down and _branch_tip(repo_path, branch or "") != ref.lower():
+            return outcome([], f"Branch {branch!r} does not point at ref {ref[:12]}")
+        iac_ref = ref if down else str(branch)
+        units = [
+            _run_preview_unit(repo_path, service, pr, iac_ref, down, domain)
+            for service in sorted(services)
+        ]
+    return outcome(units)
 
 
 if __name__ == "__main__":

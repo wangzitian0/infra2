@@ -161,12 +161,7 @@ authoritative version of all three.
 
 ## Endpoints
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/webhook` | POST | GitHub push receiver — authenticates the delivery and deploys nothing (a merge is not a release; staging follows a release tag) |
-| `/deploy` | POST | SHA-based deployment (GitOps) |
-| `/deploy/status` | POST | Poll the exact deployment ID returned by `/deploy` |
+The endpoint table lives in one place: [`docs/ssot/ops.pipeline.md` §5.1](../../docs/ssot/ops.pipeline.md#51-endpoints). The values each route accepts are in [`route_types.json`](route_types.json).
 
 ### Version-Based Deployment
 

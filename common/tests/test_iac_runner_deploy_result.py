@@ -2418,3 +2418,184 @@ def test_diagnose_failure_classifies_dokploy_deployment_error_with_log_tail(
     assert "502 Bad Gateway" in diagnostic["summary"]
     assert "/etc/dokploy/logs/truealpha/dep-1366.log" in diagnostic["fix_hint"]
     assert "/etc/dokploy/logs/truealpha/dep-1366.log" in diagnostic["next_action"]
+
+
+# --- /preview (#1647 T3b) ----------------------------------------------------------------
+
+PREVIEW_SECRET = "test-preview-secret"
+DEPLOY_SECRET = "test-webhook-secret"
+PREVIEW_BRANCH = "claude/issue1647-x"
+
+
+def _preview_body(**overrides) -> dict:
+    body = {
+        "type": "preview/pr",
+        "pr": 7,
+        "ref": DEPLOY_SHA,
+        "branch": PREVIEW_BRANCH,
+        "services": ["platform/todo"],
+        "down": False,
+        "triggered_by": "ci",
+    }
+    body.update(overrides)
+    return body
+
+
+def _sign_request(server, body: dict, signing_secret: str) -> None:
+    """Point the fake request of `server` at a new signed `body`."""
+    global _nonce_counter
+    payload = json.dumps(body, separators=(",", ":")).encode()
+    _nonce_counter += 1
+    timestamp, nonce = str(int(time.time())), f"preview-nonce-{_nonce_counter:04d}"
+    signature = hmac.new(
+        signing_secret.encode(),
+        f"{timestamp}.{nonce}.".encode() + payload,
+        hashlib.sha256,
+    ).hexdigest()
+    server.request.headers = {
+        "X-Hub-Signature-256": f"sha256={signature}",
+        "X-IAC-Timestamp": timestamp,
+        "X-IAC-Nonce": nonce,
+    }
+    server.request.data = payload
+    server.request.json = body
+
+
+def _preview_server(monkeypatch, body: dict, *, signing_secret: str, preview_secret):
+    """Load webhook_server with a fake Flask whose request carries a signed `body`."""
+    _load_module("sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch)
+    fake_flask = types.ModuleType("flask")
+
+    class FakeFlask:
+        def __init__(self, _name):
+            pass
+
+        def route(self, *_args, **_kwargs):
+            return lambda func: func
+
+    fake_flask.Flask = FakeFlask
+    fake_flask.jsonify = lambda payload: payload
+    fake_flask.request = types.SimpleNamespace(headers={}, data=b"", json=None)
+    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    monkeypatch.setenv("WEBHOOK_SECRET", DEPLOY_SECRET)
+    if preview_secret is None:
+        monkeypatch.delenv("IAC_PREVIEW_WEBHOOK_SECRET", raising=False)
+    else:
+        monkeypatch.setenv("IAC_PREVIEW_WEBHOOK_SECRET", preview_secret)
+    server = _load_module(
+        "webhook_server_preview_under_test",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+    _sign_request(server, body, signing_secret)
+    return server
+
+
+@pytest.mark.parametrize(
+    "bad_type", ["staging", "prod", "production", "preview/branch", "", None]
+)
+def test_preview_rejects_staging_prod_types(monkeypatch, bad_type) -> None:
+    server = _preview_server(
+        monkeypatch,
+        _preview_body(type=bad_type),
+        signing_secret=PREVIEW_SECRET,
+        preview_secret=PREVIEW_SECRET,
+    )
+    body, status_code = server.preview_deploy()
+    assert status_code == 400
+    assert "Invalid type" in body["error"]
+    assert not server._in_flight_deploys
+
+
+def test_preview_rejects_deploy_secret(monkeypatch) -> None:
+    server = _preview_server(
+        monkeypatch,
+        _preview_body(),
+        signing_secret=DEPLOY_SECRET,
+        preview_secret=PREVIEW_SECRET,
+    )
+    body, status_code = server.preview_deploy()
+    assert (status_code, body["error"]) == (401, "Invalid signature")
+    assert not server._in_flight_deploys
+
+
+def test_preview_refuses_when_its_secret_is_unset(monkeypatch) -> None:
+    server = _preview_server(
+        monkeypatch,
+        _preview_body(),
+        signing_secret=DEPLOY_SECRET,
+        preview_secret=None,
+    )
+    body, status_code = server.preview_deploy()
+    assert status_code == 503
+    assert "IAC_PREVIEW_WEBHOOK_SECRET is not set" in body["error"]
+
+
+def test_preview_refuses_unregistered_unit(monkeypatch) -> None:
+    server = _preview_server(
+        monkeypatch,
+        _preview_body(services=["platform/postgres"]),
+        signing_secret=PREVIEW_SECRET,
+        preview_secret=PREVIEW_SECRET,
+    )
+    body, status_code = server.preview_deploy()
+    assert status_code == 400
+    assert "no preview config registered" in body["error"]
+
+
+def test_preview_slot_cap(monkeypatch, tmp_path) -> None:
+    import threading
+
+    release = threading.Event()
+
+    def fake_run_preview(pr, ref, branch, services, down, domain):
+        if not down:
+            release.wait(timeout=10)
+        return {"slot": f"pr-{pr}", "units": [], "seconds": 0.0, "success": True}
+
+    server = _preview_server(
+        monkeypatch,
+        _preview_body(),
+        signing_secret=PREVIEW_SECRET,
+        preview_secret=PREVIEW_SECRET,
+    )
+    monkeypatch.setattr(server, "DEPLOY_STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(sys.modules["sync_runner"], "run_preview", fake_run_preview)
+
+    def post(pr: int, *, down: bool = False, ref: str = DEPLOY_SHA):
+        body = _preview_body(
+            pr=pr, ref=ref, down=down, **({"branch": None} if down else {})
+        )
+        _sign_request(server, body, PREVIEW_SECRET)
+        return server.preview_deploy()
+
+    try:
+        assert post(1)[1] == 202
+        assert post(2)[1] == 202
+        body_3, code_3 = post(3)
+        assert code_3 == 429
+        assert "slot cap" in body_3["error"]
+        # a new head of PR 1 is a new request but the same slot, so the cap does not apply
+        assert post(1, ref="b" * 40)[1] == 202
+        # a teardown frees its slot, then PR 3 fits
+        assert post(2, down=True)[1] == 202
+        deadline = time.time() + 10
+        while 2 in server._preview_slots and time.time() < deadline:
+            time.sleep(0.05)
+        assert post(3)[1] == 202
+    finally:
+        release.set()
+
+
+def test_runner_and_client_read_one_table_of_route_types(monkeypatch) -> None:
+    from common.deploy import iac_runner_client
+
+    server = _preview_server(
+        monkeypatch,
+        _preview_body(),
+        signing_secret=PREVIEW_SECRET,
+        preview_secret=PREVIEW_SECRET,
+    )
+    assert server.ROUTE_TYPES == iac_runner_client.ROUTE_TYPES
+    assert server.ROUTE_TYPES["/preview"] == ["preview/pr"]
+    assert "preview/pr" not in server.ROUTE_TYPES["/deploy"]

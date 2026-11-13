@@ -899,3 +899,62 @@ def test_poll_raises_a_typed_error_for_an_interrupted_deploy_at_once():
 
     assert type(err.value).__name__ == "RunnerInterruptedError" and len(calls) == 2
     assert classify_failure(f"deploy_v2 failed: {err.value}\n")[0] is True
+
+
+def test_preview_call_posts_to_preview_and_signs_with_the_given_secret():
+    calls, transport = _capture()
+    trigger_platform_deploy(
+        env="preview/pr",
+        ref=SHA,
+        services=["platform/todo"],
+        base_url="https://iac.example/",
+        secret="preview-secret",
+        transport=transport,
+        route="/preview",
+        extra={"pr": 7, "branch": "feature-x", "down": False},
+        now=lambda: 1700000000,
+        nonce="n" * 16,
+    )
+    call = calls[0]
+    body = json.loads(call["content"])
+    assert call["url"] == "https://iac.example/preview"
+    assert body["type"] == "preview/pr" and "env" not in body
+    assert (body["pr"], body["branch"], body["down"]) == (7, "feature-x", False)
+    assert call["headers"]["X-Hub-Signature-256"] == _sign(
+        "preview-secret", "1700000000", "n" * 16, call["content"]
+    )
+
+
+@pytest.mark.parametrize(
+    "route,env",
+    [("/preview", "staging"), ("/preview", "production"), ("/deploy", "preview/pr")],
+)
+def test_each_route_accepts_only_its_own_types(route, env):
+    _, transport = _capture()
+    with pytest.raises(ValueError, match="env must be one of"):
+        trigger_platform_deploy(
+            env=env,
+            ref=SHA,
+            services=["redis"],
+            base_url="u",
+            secret=SECRET,
+            transport=transport,
+            route=route,
+        )
+
+
+def test_preview_poll_goes_to_preview_status_with_the_request_coordinates():
+    calls, transport = _capture([{"status": "completed"}])
+    poll_platform_deploy_status(
+        env="preview/pr",
+        ref=SHA,
+        services=["platform/todo"],
+        base_url="https://iac.example",
+        secret="preview-secret",
+        transport=transport,
+        route="/preview",
+        extra={"pr": 7, "down": True},
+        attempts=1,
+    )
+    assert calls[0]["url"] == "https://iac.example/preview/status"
+    assert json.loads(calls[0]["content"])["pr"] == 7

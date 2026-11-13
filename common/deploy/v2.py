@@ -35,6 +35,7 @@ from common.deploy.iac_runner_client import (
     STATUS_POLL_BACKOFF,
     STATUS_POLL_INITIAL_SECONDS,
     STATUS_POLL_MAX_SECONDS,
+    ROUTE_TYPES,
     RunnerLostDeploymentError,
     poll_platform_deploy_status,
     status_poll_attempts,
@@ -387,6 +388,8 @@ def _trigger_and_poll(
     started: float,
     version_ref: str | None = None,
     action: str | None = None,
+    route: str = "/deploy",
+    extra: dict | None = None,
 ) -> tuple[dict, dict | None]:
     """Fire the signed ``/deploy`` request and, when ``wait``, poll it to a terminal status.
 
@@ -404,7 +407,12 @@ def _trigger_and_poll(
     """
     runner_args = {
         key: value
-        for key, value in (("version_ref", version_ref), ("action", action))
+        for key, value in (
+            ("version_ref", version_ref),
+            ("action", action),
+            ("extra", extra),
+            ("route", route if route != "/deploy" else None),
+        )
         if value is not None
     }
     submissions = _STAGING_SUBMISSIONS if env == "staging" else 1
@@ -986,6 +994,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "ephemeral DB) instead of deploying; valid only for preview types",
     )
     parser.add_argument(
+        "--via-runner",
+        action="store_true",
+        help="preview/pr only: bring the slot up or down through the runner /preview "
+        "route, signed with IAC_PREVIEW_WEBHOOK_SECRET (no Dokploy key needed); "
+        "--iac-ref names the PR head branch",
+    )
+    parser.add_argument(
         "--staging-validated",
         action="store_true",
         help="assert this code already passed staging (required for prod)",
@@ -1111,6 +1126,35 @@ def _handle_teardown(args: argparse.Namespace) -> int:
     return 0 if down_result.containers_cleared else 1
 
 
+def _handle_preview_via_runner(args: argparse.Namespace) -> int:
+    """Up or down of a Preview slot through the runner /preview route (PR CI, #1647)."""
+    if args.deploy_type not in ROUTE_TYPES["/preview"]:
+        raise ValueError(
+            f"--via-runner takes only {ROUTE_TYPES['/preview']}, got {args.deploy_type!r}"
+        )
+    services = [s.strip() for s in args.service.split(",") if s.strip()]
+    started = time.monotonic()
+    _, final = _trigger_and_poll(
+        env=args.deploy_type,
+        ref=resolve_to_sha(args.iac_ref, repo=_INFRA2_REPO),
+        services=services,
+        url=os.getenv("IAC_RUNNER_URL", ""),
+        secret=os.getenv("IAC_PREVIEW_WEBHOOK_SECRET", ""),
+        triggered_by="deploy_v2",
+        wait=True,
+        timeout=args.timeout,
+        started=started,
+        route="/preview",
+        extra={
+            "pr": int(args.version_ref),
+            "branch": args.iac_ref.strip(),
+            "down": args.down,
+        },
+    )
+    print(json.dumps(final))
+    return 0 if final.get("status") == "completed" else 1
+
+
 def _handle_platform_batch(args: argparse.Namespace, service_names: list[str]) -> int:
     result = _deploy_platform_batch(
         service_names,
@@ -1133,6 +1177,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.via_runner:
+            return _handle_preview_via_runner(args)
         if args.down:
             return _handle_teardown(args)
 
