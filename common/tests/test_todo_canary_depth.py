@@ -1985,7 +1985,7 @@ def test_todo_runtime_hooks_manifest_declares_all_five_slots() -> None:
         assert "urllib.request.urlopen" not in spec.run, slot_name
     assert "--require-service platform/todo" in manifest.slots["staging_gate"].run
     for gate in ("staging_gate", "prod_gate"):
-        assert manifest.slots[gate].run.endswith(" --gate"), gate
+        assert manifest.slots[gate].run.endswith(' --gate "$EXPECTED_SHA"'), gate
         assert "EXPECTED_SHA" in manifest.slots[gate].required_env, gate
     assert "--gate" not in manifest.slots["smoke"].run
     assert (SERVICE_DIR / "probe_health.py").is_file()
@@ -2055,7 +2055,6 @@ def test_probe_health_gate_fails_on_red_canary_and_sha_mismatch(
         cwd=ROOT,
     ).stdout.strip()
     monkeypatch.chdir(ROOT)
-    monkeypatch.setenv("EXPECTED_SHA", "HEAD")
     base = {"ok": True, "service": "platform/todo", "git_sha": sha}
 
     def run(body: dict, *flags: str) -> int:
@@ -2067,14 +2066,14 @@ def test_probe_health_gate_fails_on_red_canary_and_sha_mismatch(
         return probe.main(["https://x.example", *flags])
 
     good = {**base, "canary": {"ok": True, "checked_at": "2026-11-13T00:00:00Z"}}
-    assert run(good, "--gate") == 0
+    assert run(good, "--gate", "HEAD") == 0
     for bad in (
         {**base, "canary": {"ok": False}},
         dict(base),
         {**good, "git_sha": "0" * 40},
     ):
         with pytest.raises(AssertionError):
-            run(bad, "--gate")
+            run(bad, "--gate", "HEAD")
     assert run({**base, "canary": {"ok": False}}) == 0  # no gate: status only
 
 
@@ -2088,9 +2087,13 @@ def test_health_body_carries_the_cached_canary_verdict(app, monkeypatch) -> None
         monkeypatch,
         s3={"status": "fail", "latency_ms": 2.0, "detail": "AccessDenied"},
     )
-    response = TestClient(app.fastapi_app).get("/api/health")
+    client = TestClient(app.fastapi_app)
+    assert client.get("/api/health").json()["canary"]["ok"] is False  # no run yet
+    app.cached_canary_status()
+    response = client.get("/api/health")
     body = response.json()
     assert response.status_code == 200
     assert body["canary"]["ok"] is False
+    assert body["canary"]["checked_at"]
     assert "git_sha" in body
     assert "AccessDenied" not in response.text

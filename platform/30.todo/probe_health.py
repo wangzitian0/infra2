@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 from collections.abc import Sequence
 
@@ -25,8 +24,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--gate",
-        action="store_true",
-        help="Require canary.ok true and git_sha equal to the commit of $EXPECTED_SHA.",
+        metavar="REF",
+        default="",
+        help="Require canary.ok true and git_sha equal to the commit of REF.",
     )
     parser.add_argument(
         "--timeout",
@@ -50,7 +50,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise AssertionError(response.body)
     if args.gate:
         expected = subprocess.run(
-            ["git", "rev-parse", f"{os.environ['EXPECTED_SHA']}^{{commit}}"],
+            ["git", "rev-parse", f"{args.gate}^{{commit}}"],
             check=True,
             capture_output=True,
             text=True,

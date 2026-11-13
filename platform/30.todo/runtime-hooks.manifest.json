@@ -23,7 +23,7 @@
       ]
     },
     "staging_gate": {
-      "run": "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo --gate",
+      "run": "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo --gate \"$EXPECTED_SHA\"",
       "timeout_seconds": 180,
       "required_env": [
         "APP_URL",
@@ -34,7 +34,7 @@
       ]
     },
     "prod_gate": {
-      "run": "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo --gate",
+      "run": "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo --gate \"$EXPECTED_SHA\"",
       "timeout_seconds": 120,
       "required_env": [
         "APP_URL",
