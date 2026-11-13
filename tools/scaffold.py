@@ -9,7 +9,11 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import infra2_sdk
-from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest, _FieldSource
+from infra2_sdk.runtime.config_schema import (
+    EnvironmentField,
+    EnvironmentManifest,
+    _FieldSource,
+)
 from infra2_sdk.secrets import render_agent_policy, render_agent_template
 
 
@@ -229,7 +233,8 @@ def _scaffold_manifest(
             ),
         )
     return EnvironmentManifest(
-        source=f"scaffold:{_clean_ident(project)}/{_clean_ident(service_name)}", fields=fields
+        source=f"scaffold:{_clean_ident(project)}/{_clean_ident(service_name)}",
+        fields=fields,
     )
 
 
@@ -313,11 +318,15 @@ def _generate_env_example(service_name: str, port: int, db: str = "postgres") ->
         "OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318",
     ]
     if db == "postgres":
-        lines.append(f"DATABASE_URL=postgresql://postgres:postgres@localhost:5432/{svc}")
+        lines.append(
+            f"DATABASE_URL=postgresql://postgres:postgres@localhost:5432/{svc}"
+        )
     return "\n".join(lines) + "\n"
 
 
-def _generate_fastapi_app(service_name: str, db: str = "postgres", profile: str = "infra2") -> str:
+def _generate_fastapi_app(
+    service_name: str, db: str = "postgres", profile: str = "infra2"
+) -> str:
     svc = _clean_ident(service_name)
     if profile == "standalone":
         note = (
@@ -348,7 +357,9 @@ def check_db() -> tuple[bool, str]:
 """
         db_kw = ", db_checker=check_db"
     else:
-        imports = "from fastapi import FastAPI\nfrom infra2_sdk.fastapi import init_service"
+        imports = (
+            "from fastapi import FastAPI\nfrom infra2_sdk.fastapi import init_service"
+        )
         db_blk = db_kw = ""
     return f'''"""Application entry point for {svc}."""
 
@@ -415,7 +426,9 @@ def scaffold_service(
         raise ValueError(f"unsupported template {template!r}: only 'fastapi' exists")
     target_dir.mkdir(parents=True, exist_ok=True)
     files: dict[str, str] = {
-        "compose.yaml": _generate_compose_yaml(name, project, port, db, profile=profile),
+        "compose.yaml": _generate_compose_yaml(
+            name, project, port, db, profile=profile
+        ),
         "entrypoint.sh": _generate_entrypoint_sh(port, profile=profile),
         "Dockerfile": _generate_dockerfile(port),
         "requirements.txt": _generate_requirements_txt(template=template, db=db),
@@ -457,7 +470,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     a = p.parse_args(argv)
     out = Path(a.out_dir or f"./{a.name}")
     try:
-        created = scaffold_service(a.name, out, a.project, a.port, a.template, a.db, a.profile)
+        created = scaffold_service(
+            a.name, out, a.project, a.port, a.template, a.db, a.profile
+        )
         print(f"Successfully scaffolded '{a.name}' in {out.resolve()}:")
         for f in created:
             print(f"  - {f}")

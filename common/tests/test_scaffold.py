@@ -71,9 +71,15 @@ def test_scaffold_deploy_py_ast_facet_compliance(tmp_path: Path):
             if isinstance(target, ast.Name):
                 attributes[target.id] = item.value
 
-    assert "probes" in attributes, "Literal 'probes' assignment missing in ClassDef.body"
-    assert "signals" in attributes, "Literal 'signals' assignment missing in ClassDef.body"
-    assert "secrets" in attributes, "Literal 'secrets' assignment missing in ClassDef.body"
+    assert "probes" in attributes, (
+        "Literal 'probes' assignment missing in ClassDef.body"
+    )
+    assert "signals" in attributes, (
+        "Literal 'signals' assignment missing in ClassDef.body"
+    )
+    assert "secrets" in attributes, (
+        "Literal 'secrets' assignment missing in ClassDef.body"
+    )
 
     # Confirm probes is a literal tuple of ProbeFacet calls
     probes_val = attributes["probes"]
@@ -185,7 +191,10 @@ def test_scaffold_app_py_wires_db_healthcheck(tmp_path: Path):
     out_pg = tmp_path / "pg_app"
     scaffold_service("pg-service", out_pg, db="postgres")
     app_pg = (out_pg / "app.py").read_text(encoding="utf-8")
-    assert "from infra2_sdk.runtime.postgres import PostgresSettings, probe_postgres" in app_pg
+    assert (
+        "from infra2_sdk.runtime.postgres import PostgresSettings, probe_postgres"
+        in app_pg
+    )
     assert "db_checker=check_db" in app_pg
 
     out_none = tmp_path / "none_app"
@@ -212,7 +221,9 @@ def test_scaffolded_postgres_app_builds_its_settings_from_an_explicit_dsn(
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "from_env"
     ]
-    assert from_env_calls == [], "the generated app must not read the environment through from_env"
+    assert from_env_calls == [], (
+        "the generated app must not read the environment through from_env"
+    )
     assert "from_env(" not in source
 
     assignments = [
@@ -220,7 +231,8 @@ def test_scaffolded_postgres_app_builds_its_settings_from_an_explicit_dsn(
         for node in tree.body
         if isinstance(node, ast.Assign)
         and any(
-            isinstance(target, ast.Name) and target.id == "db_settings" for target in node.targets
+            isinstance(target, ast.Name) and target.id == "db_settings"
+            for target in node.targets
         )
     ]
     assert len(assignments) == 1, "app.py must assign db_settings once"
@@ -265,7 +277,9 @@ def test_scaffold_requirements_txt_includes_extras(tmp_path: Path):
 def test_scaffold_requirement_follows_the_sdk_version(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(infra2_sdk, "__version__", "9.8.7")
 
-    assert "infra2-sdk[fastapi,otel,postgres]>=9.8.7\n" in _generate_requirements_txt(db="postgres")
+    assert "infra2-sdk[fastapi,otel,postgres]>=9.8.7\n" in _generate_requirements_txt(
+        db="postgres"
+    )
     assert "infra2-sdk[fastapi,otel]>=9.8.7\n" in _generate_requirements_txt(db="none")
 
 
@@ -285,7 +299,9 @@ def test_scaffold_requirement_keeps_only_the_release_part(
 ):
     monkeypatch.setattr(infra2_sdk, "__version__", sdk_version)
 
-    assert _generate_requirements_txt(db="none").endswith(f"infra2-sdk[fastapi,otel]>={bound}\n")
+    assert _generate_requirements_txt(db="none").endswith(
+        f"infra2-sdk[fastapi,otel]>={bound}\n"
+    )
 
 
 def test_scaffold_requirement_rejects_a_version_without_a_release_part(
@@ -299,7 +315,9 @@ def test_scaffold_requirement_rejects_a_version_without_a_release_part(
 
 def test_scaffold_cli_subcommand_forwarding(tmp_path: Path):
     out1 = tmp_path / "sub_test"
-    code1 = main(["scaffold", "forwarded-svc", "--out-dir", str(out1), "--profile", "standalone"])
+    code1 = main(
+        ["scaffold", "forwarded-svc", "--out-dir", str(out1), "--profile", "standalone"]
+    )
     assert code1 == 0
     assert (out1 / ".env.example").exists()
 
@@ -311,7 +329,10 @@ def test_scaffold_secrets_template_comes_from_the_sdk_renderer(tmp_path: Path):
     template = (out_dir / "secrets.ctmpl").read_text(encoding="utf-8")
 
     assert "Generated from scaffold:apps/demo_service by infra2_sdk.secrets" in template
-    assert '{{- with secret (printf "secret/data/apps/%s/demo_service" $env) }}' in template
+    assert (
+        '{{- with secret (printf "secret/data/apps/%s/demo_service" $env) }}'
+        in template
+    )
     assert 'DATABASE_URL={{ printf "%q" .Data.data.DATABASE_URL }}' in template
     assert "range $k, $v" not in template, "the hand-written wildcard template is gone"
 
@@ -342,7 +363,9 @@ def test_scaffold_without_database_declares_no_secret_fields(tmp_path: Path):
 
 @pytest.mark.parametrize("profile", ["infra2", "standalone"])
 @pytest.mark.parametrize("db", ["postgres", "none"])
-def test_scaffold_dockerfile_starts_an_app_that_exists(tmp_path: Path, profile: str, db: str):
+def test_scaffold_dockerfile_starts_an_app_that_exists(
+    tmp_path: Path, profile: str, db: str
+):
     out_dir = tmp_path / f"docker_{profile}_{db}"
     created = scaffold_service("demo-service", out_dir, profile=profile, db=db)
 
@@ -356,10 +379,20 @@ def test_scaffold_dockerfile_starts_an_app_that_exists(tmp_path: Path, profile: 
 def test_scaffold_generic_template_is_gone(tmp_path: Path, capsys):
     with pytest.raises(ValueError, match="template"):
         scaffold_service("demo-service", tmp_path / "generic", template="generic")
-    assert not (tmp_path / "generic").exists(), "a rejected template must not write files"
+    assert not (tmp_path / "generic").exists(), (
+        "a rejected template must not write files"
+    )
 
     with pytest.raises(SystemExit) as exc:
-        main(["demo-service", "--template", "generic", "--out-dir", str(tmp_path / "cli")])
+        main(
+            [
+                "demo-service",
+                "--template",
+                "generic",
+                "--out-dir",
+                str(tmp_path / "cli"),
+            ]
+        )
     assert exc.value.code == 2
     assert "invalid choice" in capsys.readouterr().err
 
@@ -394,7 +427,9 @@ def test_standalone_app_passes_strict_otel_false_and_says_why(tmp_path: Path, db
 
     app_text = (tmp_path / "app" / "app.py").read_text(encoding="utf-8")
 
-    options = {keyword.arg: keyword.value for keyword in _init_service_call(app_text).keywords}
+    options = {
+        keyword.arg: keyword.value for keyword in _init_service_call(app_text).keywords
+    }
     assert ast.literal_eval(options["strict_otel"]) is False
     assert "# A laptop sets no ENVIRONMENT, so strict_otel=False lets" in app_text
     # The compose file defaults ENV to local_dev, so the comment says what a deployment must do.
@@ -408,11 +443,15 @@ def test_infra2_app_keeps_the_strict_default(tmp_path: Path, db: str):
 
     app_text = (tmp_path / "app" / "app.py").read_text(encoding="utf-8")
 
-    assert "strict_otel" not in {keyword.arg for keyword in _init_service_call(app_text).keywords}
+    assert "strict_otel" not in {
+        keyword.arg for keyword in _init_service_call(app_text).keywords
+    }
     assert "strict_otel" not in app_text
 
 
-def _run_generated_app(tmp_path: Path, profile: str, code: str) -> subprocess.CompletedProcess:
+def _run_generated_app(
+    tmp_path: Path, profile: str, code: str
+) -> subprocess.CompletedProcess:
     """Scaffold an app without a database, then run ``code`` in the app directory.
 
     The child process has no variable except PATH and the path of the SDK under test. It has
@@ -450,8 +489,9 @@ def test_infra2_app_stops_at_import_without_a_tier(tmp_path: Path):
     result = _run_generated_app(tmp_path, "infra2", "import app")
 
     assert result.returncode != 0
-    assert "ValueError: ENVIRONMENT is required; set one of ENVIRONMENT, ENV, APP_ENV" in (
-        result.stderr
+    assert (
+        "ValueError: ENVIRONMENT is required; set one of ENVIRONMENT, ENV, APP_ENV"
+        in (result.stderr)
     )
 
 
@@ -518,7 +558,9 @@ def test_scaffold_vault_agent_healthcheck_accepts_an_empty_env_file_when_no_secr
 # Issue #102. Keep these tests together at the end of the file: other branches add tests above.
 
 
-def _run_postgres_app(app_dir: Path, profile: str, variables: dict[str, str], code: str):
+def _run_postgres_app(
+    app_dir: Path, profile: str, variables: dict[str, str], code: str
+):
     """Scaffold an app with a database, then run ``code`` in its directory.
 
     The child process has PATH, the path of the SDK under test and ``variables``. It has no
@@ -559,10 +601,16 @@ def test_generated_postgres_app_stops_with_a_clear_error_without_database_url(
 
 @pytest.mark.parametrize("profile", ["infra2", "standalone"])
 def test_generated_postgres_app_uses_a_set_database_url(tmp_path: Path, profile: str):
-    variables = {"DATABASE_URL": " postgresql+asyncpg://u:p@db.invalid/app ", "ENV": "local_dev"}
+    variables = {
+        "DATABASE_URL": " postgresql+asyncpg://u:p@db.invalid/app ",
+        "ENV": "local_dev",
+    }
 
     result = _run_postgres_app(
-        tmp_path / "app", profile, variables, "import app\nprint(app.db_settings.psycopg_dsn)"
+        tmp_path / "app",
+        profile,
+        variables,
+        "import app\nprint(app.db_settings.psycopg_dsn)",
     )
 
     assert result.returncode == 0, result.stderr
@@ -570,11 +618,15 @@ def test_generated_postgres_app_uses_a_set_database_url(tmp_path: Path, profile:
 
 
 @pytest.mark.parametrize("profile", ["infra2", "standalone"])
-def test_scaffold_compose_passes_the_sdk_memory_lint(tmp_path: Path, profile: str) -> None:
+def test_scaffold_compose_passes_the_sdk_memory_lint(
+    tmp_path: Path, profile: str
+) -> None:
     from infra2_sdk.rules.compose import inspect_compose
     from tools.scaffold import _generate_compose_yaml
 
-    report = inspect_compose(_generate_compose_yaml("web-app", "apps", 8000, profile=profile))
+    report = inspect_compose(
+        _generate_compose_yaml("web-app", "apps", 8000, profile=profile)
+    )
     assert report.is_valid, report
 
 
