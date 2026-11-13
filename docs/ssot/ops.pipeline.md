@@ -384,14 +384,14 @@ Each staging soak and each production promotion writes three records: `pre`, `op
   `infra-ci.yml` writes the `post` record of a commit on main (`github_ci.merge_authority`). The job runs on a push to main
   only, and it needs every `blocks_merge: true` job of `ci-gate-inventory.yaml`. A cancelled job means no record.
 - **Checks.** `pre`: `contract`, `provenance`, `app_pins`. `operation`: one check for each deploy command, with its seconds.
-  `post`: one check for each hook slot. A failed `operation` writes no `post` record. A dry run writes no record.
+  `post`: one check for each hook slot, and for a production promotion the check `production_marker` (the record is written after the marker; a rejected or failed marker is a failed `post`). A failed `operation` writes no `post` record. A dry run writes no record.
 - **Units.** `app:<service>` and `infra:<service>` come from the deploy plan. `harness:<dir>` comes from changed files outside
   every service. `sdk:<version>` is the installed infra2-sdk (the wheel that `tools/sdk_requirement.py` reads from `uv.lock`). `uncovered` lists the services that no hook slot checked.
 - **Upload.** Each record is the artifact `stage-<env>-<phase>-<subject>` (the colon of the subject becomes a hyphen). The
   writer sets `STAGE_RECORD_<PHASE>` in `GITHUB_ENV`, and an upload step with `if: always()` reads it.
 - **Reader.** `tools/stage_records.py list` (a thin entry of `common/deploy/stage_record_reader.py`, standard library only) prints the records that pass the provenance checks of
   `tools/ci_tree_reuse.py`: not expired, same repository, the workflow that owns the env, an allowed event, and a record that
-  names its own artifact and run. `--last N` keeps the newest N subjects.
+  names its own artifact and run. The run must also have built the subject: a `sha:` record needs a run on `main` with that `head_sha`; a `tag:` record needs a tag push on that tag at the commit of the tag, or a dispatch from `main`. A run of any other branch never counts. The output is JSON. `--last N` keeps the newest N subjects.
 - **Card.** `common/alerting/stage_card.py` renders the records of one (env, subject) as one card: failed check ids first,
   then passed checks, at most 12 lines, with seconds, env, tag and run URL. The reconcile run creates the card after `pre`
   and edits it by message id after each later record. In Feishu webhook mode the card step prints `::warning::`; the records

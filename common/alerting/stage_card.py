@@ -19,7 +19,7 @@ from typing import Any
 
 import common.alerting
 from common.alerting.card import build_feishu_report_card
-from common.alerting.release_card import MESSAGE_ID_PATTERN, bounded
+from common.alerting.release_card import bounded, publish_card
 from common.alerting.types import redact_secrets
 from infra2_sdk.stage_record import StageRecord
 
@@ -79,8 +79,7 @@ def show_stage_card(
 ) -> str:
     """Create the card (no ``message_id``) or update it. Return the message id, or ``message_id``."""
     try:
-        config = common.alerting.out_of_band_app_config(env)
-        if config["mode"] != "feishu_app":
+        if common.alerting.out_of_band_app_config(env)["mode"] != "feishu_app":
             print(
                 "::warning title=Stage card::Feishu is in webhook mode, which cannot "
                 "update a card; the stage records are written and no card is sent",
@@ -89,30 +88,14 @@ def show_stage_card(
             )
             return message_id
         card = render_stage_card(records)
-        common_args = dict(app_id=config["app_id"], app_secret=config["app_secret"])
-
-        def send() -> str:
-            if message_id:
-                common.alerting.update_feishu_app_card(
-                    message_id=message_id,
-                    card=card,
-                    api_base=config["api_base"],
-                    **common_args,
-                )
-                return message_id
-            created = common.alerting.message_id_of(
-                common.alerting.deliver_feishu_app_card(
-                    chat_id=config["chat_id"],
-                    card=card,
-                    api_base=config["api_base"],
-                    **common_args,
-                )
+        return (
+            bounded(
+                lambda: publish_card(env, card, message_id),
+                STAGE_CARD_BUDGET_SECONDS,
+                message_id,
             )
-            if created and not MESSAGE_ID_PATTERN.match(created):
-                raise ValueError("the Feishu message id has an unexpected shape")
-            return created
-
-        return bounded(send, STAGE_CARD_BUDGET_SECONDS, message_id) or message_id
+            or message_id
+        )
     except Exception as exc:  # noqa: BLE001 - a card never stops a deploy
         print(
             f"::warning title=Stage card::{type(exc).__name__}: no card update",

@@ -732,10 +732,11 @@ jobs:
       - name: Write the post record of this commit
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
-        run: python -m common.deploy.stage_record ci-post
+        run: python -m common.deploy.stage_record
 
       - name: Upload the record
         uses: actions/upload-artifact@v7
+        continue-on-error: true
         if: always() && env.STAGE_RECORD_POST != ''
         with:
           name: ${{ env.STAGE_RECORD_POST }}

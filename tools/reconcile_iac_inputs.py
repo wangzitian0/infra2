@@ -2796,12 +2796,46 @@ def main(argv: list[str] | None = None) -> int:
             slot=effective_slot,
         )
     hooks_failed = any(item.get("status") != "pass" for item in hook_results)
+    production_marker = ""
+    marker_pending = ""
+    marker_checks: list[CheckVerdict] = []
+    marker_error: BaseException | None = None
+    if (
+        promote_prod
+        and not args.dry_run
+        and not any(result.get("returncode") != 0 for result in results)
+        and not hooks_failed
+    ):
+        marker_began = time.monotonic()
+        try:
+            production_marker = record_production_marker(args.after, repo_root)
+            detail = production_marker
+        except ProductionMarkerRejected as exc:
+            marker_pending = production_marker_tag(args.after)
+            detail = f"pending: {exc}"
+            print(
+                f"::warning::production marker {marker_pending} is pending: GitHub "
+                "rejects a GitHub App push for a commit whose workflow files differ "
+                "from main (#1511). Record it by hand: see docs/ssot/ops.pipeline.md, "
+                "section on the production marker."
+            )
+        except Exception as exc:  # noqa: BLE001 - the post record is written first, then it re-raises
+            marker_error = exc
+            detail = f"{type(exc).__name__}: {exc}"
+        marker_checks.append(
+            CheckVerdict(
+                "production_marker",
+                bool(production_marker),
+                detail[:300],
+                seconds=round(time.monotonic() - marker_began, 3),
+            )
+        )
     if not args.dry_run and not any(r.get("returncode") != 0 for r in results):
         hooked = {str(item["service"]) for item in hook_results}
         stage.emit(
             "post",
             post_started,
-            post_checks(hook_results),
+            [*post_checks(hook_results), *marker_checks],
             uncovered=[
                 unit
                 for unit in stage.units
@@ -2809,24 +2843,8 @@ def main(argv: list[str] | None = None) -> int:
                 and unit.split(":", 1)[1] not in hooked
             ],
         )
-    production_marker = ""
-    marker_pending = ""
-    if (
-        promote_prod
-        and not args.dry_run
-        and not any(result.get("returncode") != 0 for result in results)
-        and not hooks_failed
-    ):
-        try:
-            production_marker = record_production_marker(args.after, repo_root)
-        except ProductionMarkerRejected:
-            marker_pending = production_marker_tag(args.after)
-            print(
-                f"::warning::production marker {marker_pending} is pending: GitHub "
-                "rejects a GitHub App push for a commit whose workflow files differ "
-                "from main (#1511). Record it by hand: see docs/ssot/ops.pipeline.md, "
-                "section on the production marker."
-            )
+    if marker_error is not None:
+        raise marker_error
 
     run_url = github_run_url(os.environ)
     raw_alert_text = failure_alert_text(

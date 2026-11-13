@@ -21,6 +21,7 @@ from tools import promotion_reminder
 ROOT = Path(__file__).resolve().parents[2]
 RUN_URL = "https://github.com/o/r/actions/runs/777"
 RECONCILE = ".github/workflows/reconcile-iac-inputs.yml"
+TAG_COMMIT = "c" * 40
 
 
 # -- the writer ---------------------------------------------------------------------------
@@ -314,7 +315,13 @@ class FakeGitHub:
         head_repository_id=1,
         name=None,
         created="2026-11-02T00:00:00Z",
+        head_branch=None,
+        head_sha=None,
     ):
+        kind, _, ident = record["subject"].partition(":")
+        # What a run of the right commit looks like: main for a commit, the tag for a tag push.
+        branch = head_branch or (ident if kind == "tag" and event == "push" else "main")
+        sha = head_sha or (TAG_COMMIT if kind == "tag" else ident)
         name = name or stage_records.PREFIX + (
             f"{record['env']}-{record['phase']}-{record['subject'].replace(':', '-')}"
         )
@@ -332,7 +339,12 @@ class FakeGitHub:
                 },
             }
         )
-        self.runs[run] = {"path": path, "event": event}
+        self.runs[run] = {
+            "path": path,
+            "event": event,
+            "head_branch": branch,
+            "head_sha": sha,
+        }
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as archive:
             archive.writestr(f"{name}.json", json.dumps(record))
@@ -346,6 +358,8 @@ class FakeGitHub:
                     self.artifacts, key=lambda a: a["created_at"], reverse=True
                 )
             }
+        elif "/repos/o/r/commits/" in url:
+            body = {"sha": TAG_COMMIT}
         elif "/actions/runs/" in url:
             body = self.runs[int(url.rsplit("/", 1)[1])]
         elif url in self.zips:  # the API answers 302 to the signed host
@@ -405,6 +419,59 @@ def test_list_skips_an_artifact_that_fails_a_provenance_check(knob) -> None:
     assert [r["subject"] for r in _list(gh)] == ["tag:v1.0.0"]
 
 
+@pytest.mark.parametrize(
+    ("subject", "knob"),
+    [
+        # a branch push that uploads a green record for another SHA
+        ("sha:" + "d" * 40, {"head_branch": "feature", "head_sha": "e" * 40}),
+        # the right SHA on a branch that is not main
+        ("sha:" + "d" * 40, {"head_branch": "feature"}),
+        # main, but the run built another commit
+        ("sha:" + "d" * 40, {"head_sha": "e" * 40}),
+        # a tag push whose run built another commit than the tag
+        ("tag:v2.0.0", {"head_sha": "e" * 40}),
+        # a tag record from a branch push
+        ("tag:v2.0.0", {"head_branch": "feature"}),
+        # a dispatch from a branch other than main
+        ("tag:v2.0.0", {"event": "workflow_dispatch", "head_branch": "feature"}),
+    ],
+    ids=[
+        "branch-other-sha",
+        "branch-right-sha",
+        "main-other-sha",
+        "tag-other-commit",
+        "tag-branch",
+        "dispatch-branch",
+    ],
+)
+def test_list_refuses_a_record_that_its_run_did_not_build(subject, knob) -> None:
+    gh = FakeGitHub()
+    env = (
+        "github_ci.merge_authority"
+        if subject.startswith("sha")
+        else "staging.release_validation"
+    )
+    path = ".github/workflows/infra-ci.yml" if subject.startswith("sha") else RECONCILE
+    gh.add(
+        _record(
+            env=env,
+            subject="sha:" + "a" * 40 if subject.startswith("sha") else "tag:v1.0.0",
+            run=1,
+        ),
+        run=1,
+        path=path,
+    )
+    gh.add(_record(env=env, subject=subject, run=2), run=2, path=path, **knob)
+    kept = {r["subject"] for r in _list(gh)}
+    assert subject not in kept and kept  # the control stays
+
+
+def test_list_accepts_a_dispatched_tag_record_from_main() -> None:
+    gh = FakeGitHub()
+    gh.add(_record(subject="tag:v2.0.0"), event="workflow_dispatch")
+    assert [r["subject"] for r in _list(gh)] == ["tag:v2.0.0"]
+
+
 def test_list_skips_a_record_whose_run_url_names_another_run() -> None:
     gh = FakeGitHub()
     gh.add(_record(run=555), run=777)
@@ -441,6 +508,7 @@ def test_the_tools_entry_is_the_reader() -> None:
 
 
 def test_stage_records_has_no_read_command_and_no_third_party_import() -> None:
+    """Only the standard library and the one GET helper of ``common.deploy``."""
     source = (ROOT / "common/deploy/stage_record_reader.py").read_text()
     imports = {
         line.split()[1].split(".")[0]
@@ -448,9 +516,10 @@ def test_stage_records_has_no_read_command_and_no_third_party_import() -> None:
         if line.startswith(("import ", "from "))
     }
     stdlib = set(__import__("sys").stdlib_module_names)
-    assert imports <= stdlib
+    assert imports <= stdlib | {"common"}
     with pytest.raises(SystemExit):
         stage_records.main(["read"])
+    assert "\t" not in source.split("def main")[1]
 
 
 # -- the daily reminder -------------------------------------------------------------------
@@ -517,3 +586,129 @@ def test_the_reminder_job_runs_at_2100_utc_plus_8_and_reads_only() -> None:
         "actions": "read",
         "issues": "read",
     }
+
+
+# -- the post record follows the production marker; a record never turns a deploy red ---------
+
+
+def _drive_prod_promotion(monkeypatch, tmp_path, marker):
+    records = tmp_path / "records"
+    monkeypatch.setenv("STAGE_RECORD_DIR", str(records))
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    monkeypatch.setattr(reconcile, "assert_after_on_main", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        reconcile, "assert_production_marker_advances", lambda *_a, **_k: "v3.1.22"
+    )
+    monkeypatch.setattr(reconcile, "record_production_marker", marker)
+    monkeypatch.setattr(
+        reconcile,
+        "run_deploy_commands",
+        lambda cmds, **_k: [
+            {
+                "service": c.service,
+                "type": c.deploy_type,
+                "returncode": 0,
+                "stdout": "{}",
+            }
+            for c in cmds
+        ],
+    )
+    monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", lambda *_a, **_k: [])
+    argv = [
+        "--before", "v3.1.22", "--after", "v3.1.23", "--promote-prod",
+        "--changed-file", "platform/12.alerting/compose.yaml",
+    ]  # fmt: skip
+    return records, argv
+
+
+def _post_of(records: Path) -> StageRecord:
+    return StageRecord.from_dict(json.loads(next(records.glob("*-post-*")).read_text()))
+
+
+def test_the_post_record_follows_a_recorded_production_marker(
+    monkeypatch, tmp_path
+) -> None:
+    order: list[str] = []
+    records, argv = _drive_prod_promotion(
+        monkeypatch,
+        tmp_path,
+        lambda tag, *_a, **_k: order.append("marker") or f"production/{tag}",
+    )
+    real_emit = reconcile.StageRun.emit
+    monkeypatch.setattr(
+        reconcile.StageRun,
+        "emit",
+        lambda self, phase, *a, **k: (
+            order.append(phase) or real_emit(self, phase, *a, **k)
+        ),
+    )
+    assert reconcile.main(argv) == 0
+    assert order == ["pre", "operation", "marker", "post"]
+    post = _post_of(records)
+    assert post.verdict == "pass"
+    assert [(c.name, c.ok, c.detail) for c in post.checks][-1] == (
+        "production_marker", True, "production/v3.1.23",
+    )  # fmt: skip
+
+
+def test_a_rejected_production_marker_gives_a_failed_post_record(
+    monkeypatch, tmp_path
+) -> None:
+    def rejected(tag, *_a, **_k):
+        raise reconcile.ProductionMarkerRejected("GitHub App push refused")
+
+    records, argv = _drive_prod_promotion(monkeypatch, tmp_path, rejected)
+    assert reconcile.main(argv) == 0  # the deploy outcome does not change
+    post = _post_of(records)
+    assert post.verdict == "fail"
+    marker = post.checks[-1]
+    assert (marker.name, marker.ok) == ("production_marker", False)
+    assert "GitHub App push refused" in marker.detail
+
+
+def test_a_crashing_production_marker_writes_the_failed_post_record_then_raises(
+    monkeypatch, tmp_path
+) -> None:
+    def crash(tag, *_a, **_k):
+        raise RuntimeError("git push exploded")
+
+    records, argv = _drive_prod_promotion(monkeypatch, tmp_path, crash)
+    with pytest.raises(RuntimeError, match="exploded"):
+        reconcile.main(argv)
+    post = _post_of(records)
+    assert post.verdict == "fail" and post.checks[-1].name == "production_marker"
+
+
+def test_the_sdk_unit_never_raises(monkeypatch, capsys) -> None:
+    def missing(_name):
+        raise writer.PackageNotFoundError
+
+    monkeypatch.setattr(writer, "version", missing)
+    assert writer.sdk_unit() == "sdk:unknown"
+    assert "::warning::" in capsys.readouterr().out
+    plan = reconcile.build_plan(["platform/12.alerting/compose.yaml"])
+    assert "sdk:unknown" in reconcile.plan_units(plan)
+
+
+def test_every_record_upload_step_is_allowed_to_fail() -> None:
+    for rel, job in (
+        (RECONCILE, "reconcile"),
+        (".github/workflows/infra-ci.yml", "record"),
+    ):
+        steps = yaml.safe_load((ROOT / rel).read_text())["jobs"][job]["steps"]
+        uploads = [s for s in steps if "STAGE_RECORD_" in str(s.get("if", ""))]
+        assert len(uploads) == (3 if job == "reconcile" else 1)
+        assert all(s["continue-on-error"] is True for s in uploads), rel
+
+
+def test_one_github_get_helper_and_one_card_publish_flow() -> None:
+    import tools.ci_tree_reuse as reuse
+    from common.alerting import release_card, stage_card
+    from common.deploy import github_api
+
+    assert reuse.get_json is github_api.get_json
+    assert stage_records.get_json is github_api.get_json
+    assert stage_card.publish_card is release_card.publish_card
+    for name in ("_headers",):
+        assert not hasattr(stage_records, name)
+    assert not hasattr(release_card, "_deliver_card")

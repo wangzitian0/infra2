@@ -27,11 +27,13 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-API = "https://api.github.com"
+from common.deploy.github_api import Opener, get_json, github_headers
+
+AGENT = "infra2-stage-records/1.0"
 PREFIX = "stage-"
 MAX_PAGES = 100
 PHASES = ("pre", "operation", "post")
@@ -49,8 +51,6 @@ WRITERS: dict[str, tuple[str, frozenset[str]]] = {
     ),
 }
 
-Opener = Callable[..., Any]
-
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args: Any, **kwargs: Any) -> None:
@@ -61,24 +61,10 @@ def open_url(request: urllib.request.Request, timeout: float = 30) -> Any:
     return urllib.request.build_opener(_NoRedirect).open(request, timeout=timeout)
 
 
-def _headers(token: str) -> dict[str, str]:
-    return {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "infra2-stage-records/1.0",
-    }
-
-
-def get_json(path: str, token: str, opener: Opener) -> Any:
-    request = urllib.request.Request(f"{API}{path}", headers=_headers(token))
-    with opener(request, timeout=30) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
 def _download(url: str, token: str, opener: Opener) -> bytes:
     """The zip bytes. GitHub answers 302; the signed target takes no Authorization header."""
     try:
-        request = urllib.request.Request(url, headers=_headers(token))
+        request = urllib.request.Request(url, headers=github_headers(token, AGENT))
         with opener(request, timeout=60) as response:
             return response.read()
     except urllib.error.HTTPError as err:
@@ -104,7 +90,7 @@ def _checked_record(
         or repo_id != origin.get("head_repository_id")
     ):
         return None
-    run = get_json(f"/repos/{repo}/actions/runs/{run_id}", token, opener)
+    run = get_json(f"/repos/{repo}/actions/runs/{run_id}", token, opener, AGENT)
     archive = zipfile.ZipFile(
         io.BytesIO(_download(str(artifact["archive_download_url"]), token, opener))
     )
@@ -128,16 +114,40 @@ def _checked_record(
         or artifact.get("name") != f"{PREFIX}{env}-{phase}-{subject.replace(':', '-')}"
         or not str(record.get("run_url", "")).endswith(f"/actions/runs/{run_id}")
         or not isinstance(record.get("checks"), list)
+        or not _run_is_the_subject(run, subject, repo, token, opener)
     ):
         return None
     return record
+
+
+def _run_is_the_subject(
+    run: dict, subject: str, repo: str, token: str, opener: Opener
+) -> bool:
+    """The run built the commit that the subject names, on main or on that tag.
+
+    ``sha:<commit>``: a run on main whose ``head_sha`` is the commit. ``tag:<tag>`` from a tag
+    push: a run on that tag whose ``head_sha`` is the commit of the tag. ``tag:<tag>`` from a
+    dispatch: a run on main. A run of any other branch never counts, whatever it uploaded.
+    """
+    kind, _, ident = subject.partition(":")
+    branch, head = run.get("head_branch"), run.get("head_sha")
+    if kind == "sha":
+        return branch == "main" and head == ident
+    if kind != "tag":
+        return False
+    if run.get("event") == "push":
+        commit = get_json(f"/repos/{repo}/commits/{ident}", token, opener, AGENT)
+        return branch == ident and head == commit.get("sha")
+    return branch == "main"
 
 
 def _artifacts(repo: str, token: str, opener: Opener) -> Iterator[dict]:
     """Artifacts of the repository, newest first."""
     for page in range(1, MAX_PAGES + 1):
         query = urllib.parse.urlencode({"per_page": 100, "page": page})
-        data = get_json(f"/repos/{repo}/actions/artifacts?{query}", token, opener)
+        data = get_json(
+            f"/repos/{repo}/actions/artifacts?{query}", token, opener, AGENT
+        )
         items = [a for a in data.get("artifacts", []) if isinstance(a, dict)]
         yield from items
         if len(items) < 100:
@@ -213,7 +223,9 @@ def main(argv: list[str] | None = None) -> int:
     cmd.add_argument("--phase", choices=PHASES, default="")
     cmd.add_argument("--last", type=int, default=0, help="newest N subjects")
     cmd.add_argument("--since-days", type=float, default=0.0)
-    cmd.add_argument("--json", action="store_true")
+    cmd.add_argument(
+        "--json", action="store_true", help="accepted; the output is always JSON"
+    )
     args = parser.parse_args(argv)
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN", "")
     if not (args.repo and token):
@@ -233,23 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         last=args.last,
         since=since,
     )
-    if args.json:
-        print(json.dumps(records, indent=2, sort_keys=True))
-    else:
-        for r in records:
-            print(
-                "\t".join(
-                    str(r[k])
-                    for k in (
-                        "env",
-                        "phase",
-                        "subject",
-                        "verdict",
-                        "finished_at",
-                        "run_url",
-                    )
-                )
-            )
+    print(json.dumps(records, indent=2, sort_keys=True))
     return 0
 
 

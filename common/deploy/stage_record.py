@@ -6,19 +6,17 @@ Every stage task writes one ``infra2_sdk.stage_record.StageRecord`` after each p
 record. A workflow step uploads each file as the artifact ``stage-<env>-<phase>-<subject>``;
 ``tools/stage_records.py`` (the reader, ``common/deploy/stage_record_reader.py``) reads them back.
 
-The ``ci-post`` command writes the post record of one commit on main from the ``needs``
+Running the module writes the post record of one commit on main from the ``needs``
 context of the ``record`` job.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
-import sys
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timezone
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from infra2_sdk.observability import CheckVerdict
@@ -41,8 +39,13 @@ def artifact_name(env: str, phase: str, subject: str) -> str:
 
 def sdk_unit() -> str:
     """The unit ``sdk:<version>`` of the infra2-sdk that runs. CI installs the wheel that
-    ``tools/sdk_requirement.py`` reads from ``uv.lock``, and that script is the one reader of the lock."""
-    return f"sdk:{version('infra2-sdk')}"
+    ``tools/sdk_requirement.py`` reads from ``uv.lock``, and that script is the one reader of the lock.
+    It never raises: a missing package gives ``sdk:unknown`` and a warning."""
+    try:
+        return f"sdk:{version('infra2-sdk')}"
+    except PackageNotFoundError:
+        print("::warning::infra2-sdk is not installed; the SDK unit is sdk:unknown")
+        return "sdk:unknown"
 
 
 def write_stage_record(
@@ -129,13 +132,5 @@ def ci_post_record(env: Mapping[str, str], directory: str | Path | None = None):
     )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=("ci-post",))
-    parser.parse_args(argv)
-    ci_post_record(os.environ)
-    return 0
-
-
 if __name__ == "__main__":
-    sys.exit(main())
+    ci_post_record(os.environ)

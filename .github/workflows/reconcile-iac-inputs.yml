@@ -477,6 +477,7 @@ jobs:
 
       - name: Upload stage record pre
         uses: actions/upload-artifact@v7
+        continue-on-error: true
         if: always() && env.STAGE_RECORD_PRE != ''
         with:
           name: ${{ env.STAGE_RECORD_PRE }}
@@ -485,6 +486,7 @@ jobs:
 
       - name: Upload stage record operation
         uses: actions/upload-artifact@v7
+        continue-on-error: true
         if: always() && env.STAGE_RECORD_OPERATION != ''
         with:
           name: ${{ env.STAGE_RECORD_OPERATION }}
@@ -493,6 +495,7 @@ jobs:
 
       - name: Upload stage record post
         uses: actions/upload-artifact@v7
+        continue-on-error: true
         if: always() && env.STAGE_RECORD_POST != ''
         with:
           name: ${{ env.STAGE_RECORD_POST }}

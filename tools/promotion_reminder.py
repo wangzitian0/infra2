@@ -29,7 +29,8 @@ from common.deploy.release_markers import (  # noqa: E402
     PRODUCTION_MARKER_PREFIX,
     version_key,
 )
-from common.deploy.stage_record_reader import get_json, list_records, open_url  # noqa: E402
+from common.deploy.github_api import get_json  # noqa: E402
+from common.deploy.stage_record_reader import AGENT, list_records, open_url  # noqa: E402
 
 LOOKBACK_DAYS = 30
 PROMOTE_COMMAND = (
@@ -98,6 +99,7 @@ def main() -> int:
         f"/repos/{repo}/git/matching-refs/tags/{PRODUCTION_MARKER_PREFIX}",
         token,
         open_url,
+        AGENT,
     )
     record = pending_promotion(
         staging, production, [r["ref"].removeprefix("refs/tags/") for r in refs]
