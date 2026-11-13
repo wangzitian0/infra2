@@ -1,4 +1,4 @@
-<!-- WS_STATIC_START adapter=rules-v2 inputs=fad3502e795b3c1b225694041f5a8137664e9b2120d7d4523541b9f2866ecdcc -->
+<!-- WS_STATIC_START adapter=rules-v2 inputs=21a8d961da27571f4a4a91669fe7078ff3a44402565397585008a33d332a5bd3 -->
 <!-- Generated file: do not edit by hand. These rules are maintained in the owner's rule source and re-rendered here. -->
 
 ## Engineering discipline
@@ -19,7 +19,7 @@
 ## Delivery and merge
 
 - **ASD-STE100 specification for all artifacts:** Write committed artifacts, rules, code, comments, commits, and docs in ASD-STE100 English. Keep instructions `<= 20` words and descriptions `<= 25` words in active voice without vague qualifiers. Operational skills (`skills/**/SKILL.md`) follow the target repository's language policy.
-- **Deliverable format:** Deliver a mergeable PR or a traceable issue, rather than a process-only report. Use issues and PRs as the collaboration bus. Search for an existing similar issue before creating one; update it if it exists. Write a new issue to the issue form of its type.
+- **Deliverable format:** Deliver a mergeable PR or a traceable issue, rather than a process-only report. Use issues and PRs as the collaboration bus. Search for an existing similar issue before creating one; update it if it exists. Write a new issue to the issue form of its type in `.github/ISSUE_TEMPLATE/` of the repository, else of its owner's `.github` repository.
 - **Fail fast left to right:** Put the cheapest and likeliest failure checks first.
 - **Review standing authorization:** Resolve a review thread after verifying in source code (not redacted diffs) that it is fixed or obsolete. Never resolve actionable or unverified feedback. Turn false reports into falsifiable invariant tests.
 - **Weighted review gates:** Each repository defines its own severity weights and blocking thresholds. Read literal `severity: <level>` tags; do not infer severity from prose.
