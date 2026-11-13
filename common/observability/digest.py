@@ -567,6 +567,34 @@ def summarize_watchdog_log_events(logs_by_run: Mapping[str, str]) -> dict[str, A
     }
 
 
+BACKUP_CHECK_NAMES = (
+    "infra2-backup-production",
+    "infra2-backup-staging",
+    "infra2-restore-rehearsal",
+)
+
+
+def summarize_backup_checks(
+    logs_by_run: Mapping[str, str],
+) -> dict[str, dict[str, int]]:
+    """Count the ok and fail events of each backup check. Dry-run runs are skipped."""
+    counts: dict[str, dict[str, int]] = {
+        name: {"ok": 0, "fail": 0} for name in BACKUP_CHECK_NAMES
+    }
+    for log_text in logs_by_run.values():
+        events = _parse_watchdog_events(log_text)
+        if any(event.get("dry_run") is True for event in events):
+            continue
+        for event in events:
+            name = str(event.get("name") or "")
+            if event.get("event") != "watchdog.check" or name not in counts:
+                continue
+            status = str(event.get("status") or "").lower()
+            if status in ("ok", "fail"):
+                counts[name][status] += 1
+    return counts
+
+
 def _parse_watchdog_events(log_text: str) -> list[dict[str, Any]]:
     decoder = json.JSONDecoder()
     events: list[dict[str, Any]] = []
@@ -916,6 +944,16 @@ def build_digest_message(
             lines.append(f"Failure domains: {domain_text}")
         if audit.get("log_fetch_error_count"):
             lines.append(f"Log fetch errors: {audit['log_fetch_error_count']}")
+    backup_checks = summary.get("backup_checks")
+    if isinstance(backup_checks, Mapping):
+        observed = sum(int(c["ok"]) + int(c["fail"]) for c in backup_checks.values())
+        lines.append("")
+        lines.append("Backup checks:")
+        if observed == 0:
+            lines.append("none observed in the reviewed logs")
+        for name in BACKUP_CHECK_NAMES:
+            counts = backup_checks.get(name, {"ok": 0, "fail": 0})
+            lines.append(f"{name}: ok {counts['ok']} | fail {counts['fail']}")
     stab_lines = _resolve_stability_lines(
         summary,
         stability_lines=stability_lines,
@@ -972,6 +1010,32 @@ def build_digest_message(
 build_digest_text = build_digest_message
 
 
+BACKUP_CHECK_LABELS = {
+    "infra2-backup-production": "生产备份",
+    "infra2-backup-staging": "预发备份",
+    "infra2-restore-rehearsal": "恢复演练",
+}
+
+
+def _backup_checks_kpi_text(backup_checks: Mapping[str, Any]) -> str:
+    """Text of the backup KPI. A check without events shows ⚪, never a green count."""
+    observed = sum(
+        _as_int(counts.get("ok")) + _as_int(counts.get("fail"))
+        for counts in backup_checks.values()
+        if isinstance(counts, Mapping)
+    )
+    if observed == 0:
+        return "⚪ none observed"
+    parts = []
+    for name in BACKUP_CHECK_NAMES:
+        counts = backup_checks.get(name, {})
+        ok = _as_int(counts.get("ok"))
+        fail = _as_int(counts.get("fail"))
+        icon = "🔴" if fail else ("🟢" if ok else "⚪")
+        parts.append(f"{icon} {BACKUP_CHECK_LABELS[name]} ok {ok}/fail {fail}")
+    return " · ".join(parts)
+
+
 def build_digest_card(
     summary: Mapping[str, Any],
     repository: str,
@@ -1026,6 +1090,9 @@ def build_digest_card(
             f"`{repository}` · {len(stale_issues)} stale",
         ),
     ]
+    backup_checks = summary.get("backup_checks")
+    if isinstance(backup_checks, Mapping):
+        kpi_fields.append(("备份检查 (Backup)", _backup_checks_kpi_text(backup_checks)))
     sections: list[str] = []
     hr_after: set[int] = set()
 
@@ -1259,6 +1326,7 @@ def run_digest_cli(
             max_logs=max_logs,
         )
         summary["log_audit"] = summarize_watchdog_log_events(logs)
+        summary["backup_checks"] = summarize_backup_checks(logs)
     if _env_enabled(current_env, "WATCHDOG_DIGEST_ESTATE_HEALTH"):
         domain = (current_env.get("INTERNAL_DOMAIN") or DEFAULT_INTERNAL_DOMAIN).strip()
         summary["estate_apps"] = active_health_fetcher(domain)

@@ -985,3 +985,114 @@ def test_dry_run_watchdog_logs_are_not_alerts_without_delivery() -> None:
     assert "试运行已排除 **1**" in json.dumps(
         digest.build_digest_card(summary, "o/r"), ensure_ascii=False
     )
+
+
+def test_backup_checks_count_ok_and_fail_per_check_name() -> None:
+    """The weekly digest counts each backup check by name (#1699)."""
+    digest = _load_module()
+    logs = {
+        "run-1": '{"event":"watchdog.check","name":"infra2-backup-production","status":"ok"}\n'
+        '{"event":"watchdog.check","name":"infra2-backup-staging","status":"fail"}',
+        "run-2": '{"event":"watchdog.check","name":"infra2-backup-production","status":"fail"}\n'
+        '{"event":"watchdog.check","name":"infra2-restore-rehearsal","status":"ok"}\n'
+        '{"event":"watchdog.check","name":"infra2-docker","status":"fail"}',
+    }
+
+    assert digest.summarize_backup_checks(logs) == {
+        "infra2-backup-production": {"ok": 1, "fail": 1},
+        "infra2-backup-staging": {"ok": 0, "fail": 1},
+        "infra2-restore-rehearsal": {"ok": 1, "fail": 0},
+    }
+
+
+def test_backup_checks_from_a_dry_run_are_not_counted() -> None:
+    digest = _load_module()
+    logs = {
+        "dry": '{"event":"watchdog.run.start","dry_run":true}\n'
+        '{"event":"watchdog.check","name":"infra2-backup-production","status":"fail"}',
+    }
+
+    assert digest.summarize_backup_checks(logs)["infra2-backup-production"] == {
+        "ok": 0,
+        "fail": 0,
+    }
+
+
+def _summary_with_backup_checks(backup_checks: dict) -> dict:
+    return {
+        "week_start_utc": "2026-07-10",
+        "week_end_utc": "2026-07-17",
+        "total_runs": 1,
+        "success_count": 1,
+        "failure_count": 0,
+        "cancelled_count": 0,
+        "other_count": 0,
+        "success_rate_pct": 100.0,
+        "backup_checks": backup_checks,
+    }
+
+
+def test_build_digest_message_says_none_observed_when_no_backup_event_exists() -> None:
+    """A window without backup events says so. It never shows an empty success (#1699)."""
+    digest = _load_module()
+    message = digest.build_digest_message(
+        _summary_with_backup_checks(digest.summarize_backup_checks({})),
+        repository="wangzitian0/infra2",
+    )
+
+    assert "Backup checks:" in message
+    assert "none observed in the reviewed logs" in message
+    assert "infra2-backup-production: ok 0 | fail 0" in message
+
+
+def test_build_digest_message_shows_backup_counts_when_events_exist() -> None:
+    digest = _load_module()
+    message = digest.build_digest_message(
+        _summary_with_backup_checks(
+            {
+                "infra2-backup-production": {"ok": 3, "fail": 1},
+                "infra2-backup-staging": {"ok": 4, "fail": 0},
+                "infra2-restore-rehearsal": {"ok": 1, "fail": 0},
+            }
+        ),
+        repository="wangzitian0/infra2",
+    )
+
+    assert "infra2-backup-production: ok 3 | fail 1" in message
+    assert "infra2-backup-staging: ok 4 | fail 0" in message
+    assert "none observed" not in message
+
+
+def test_build_digest_card_says_none_observed_when_no_backup_event_exists() -> None:
+    import json
+
+    digest = _load_module()
+    card = digest.build_digest_card(
+        _summary_with_backup_checks(digest.summarize_backup_checks({})),
+        repository="wangzitian0/infra2",
+    )
+
+    assert "⚪ none observed" in json.dumps(card, ensure_ascii=False)
+
+
+def test_build_digest_card_marks_a_check_without_events_as_empty_not_green() -> None:
+    """A check with no event shows ⚪. A green icon would hide an empty window (#1699)."""
+    import json
+
+    digest = _load_module()
+    card = digest.build_digest_card(
+        _summary_with_backup_checks(
+            {
+                "infra2-backup-production": {"ok": 3, "fail": 1},
+                "infra2-backup-staging": {"ok": 4, "fail": 0},
+                "infra2-restore-rehearsal": {"ok": 0, "fail": 0},
+            }
+        ),
+        repository="wangzitian0/infra2",
+    )
+    text = json.dumps(card, ensure_ascii=False)
+
+    assert "🔴 生产备份 ok 3/fail 1" in text
+    assert "🟢 预发备份 ok 4/fail 0" in text
+    assert "⚪ 恢复演练 ok 0/fail 0" in text
+    assert "🟢 恢复演练" not in text
