@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from datetime import datetime, timezone
 
@@ -22,7 +23,7 @@ def _fake_run(query: str) -> str:
         return "200\t5\n"
     if "ORDER BY duration_nano" in query:
         return "abc123\t812.5\tGET /api/x\t200\n"
-    if "severity_number" in query:
+    if "severity_text" in query:
         return "2026-11-13 01:00:00\tdeadbeef\tboom happened\n"
     raise AssertionError(query)
 
@@ -74,3 +75,25 @@ def test_builders_scope_by_service_environment_and_reject_unsafe_input() -> None
         assert "'svc'" in sql and "'staging'" in sql and "60 SECOND" in sql
         with pytest.raises(ValueError):
             build(service_name="a'; --", environment="staging")
+
+
+def test_error_log_levels_have_one_definition() -> None:
+    """Only `signoz_queries.py` may list the error severities (#1651)."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    owner = root / "common/observability/signoz_queries.py"
+    needle = re.compile(r"""['"]ERROR['"]\s*,\s*['"](CRITICAL|FATAL)['"]""")
+    hits = [
+        str(path.relative_to(root))
+        for base in ("common", "tools")
+        for path in (root / base).rglob("*.py")
+        if path != owner
+        and "tests" not in path.parts
+        and needle.search(path.read_text())
+    ]
+    assert hits == []
+    assert q.ERROR_LOG_LEVELS == ("ERROR", "CRITICAL", "FATAL")
+    assert "'ERROR', 'CRITICAL', 'FATAL'" in q.error_logs_query(
+        service_name="svc", environment="staging"
+    )

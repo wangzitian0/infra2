@@ -284,7 +284,7 @@ def _wait_for_count(clickhouse_url: str, query: str) -> int:
 
 
 def _clickhouse_count(base_url: str, query: str) -> int:
-    body = _clickhouse_query(base_url, query).strip()
+    body = _clickhouse_query(_normalize_url(base_url), query).strip()
     if not body:
         return 0
     first = body.splitlines()[0].strip()

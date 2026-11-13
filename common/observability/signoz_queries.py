@@ -20,6 +20,9 @@ DEFAULT_WINDOW_SECONDS = 3600
 
 ENVIRONMENT_ATTRIBUTE = "deployment.environment.name"
 
+# The one definition of an error log: alert rules and `tools.diagnose` both use it.
+ERROR_LOG_LEVELS = ("ERROR", "CRITICAL", "FATAL")
+
 # Distributed tables: the same family that the other SigNoz queries in this
 # repository use (common/deploy/ingestion_verify.py, platform/11.signoz).
 TRACES_TABLE = "signoz_traces.distributed_signoz_index_v3"
@@ -48,6 +51,10 @@ def _window(window_seconds: int) -> int:
             f"window_seconds must be a positive integer: {window_seconds!r}"
         )
     return window_seconds
+
+
+def _levels() -> str:
+    return ", ".join(f"'{level}'" for level in ERROR_LOG_LEVELS)
 
 
 def _version(version: str | None) -> str:
@@ -118,7 +125,7 @@ def error_logs_query(
         f"FROM {LOGS_TABLE} "
         f"WHERE resources_string['service.name'] = {service} "
         f"AND resources_string['{ENVIRONMENT_ATTRIBUTE}'] = {env} "
-        "AND severity_number >= 17 "
+        f"AND severity_text IN ({_levels()}) "
         f"AND timestamp >= toUnixTimestamp64Nano(now64(3) - INTERVAL {seconds} SECOND) "
         f"ORDER BY timestamp DESC LIMIT {int(limit)}"
     )
