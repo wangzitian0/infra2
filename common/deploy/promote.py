@@ -581,7 +581,9 @@ def _notify_rollback_event(
             ):
                 deliver_out_of_band_card(
                     os.environ,
-                    text_to_card(text, template="red" if severity == "P0" else "orange"),
+                    text_to_card(
+                        text, template="red" if severity == "P0" else "orange"
+                    ),
                     fallback_text=text,
                 )
         except Exception as exc:  # noqa: BLE001

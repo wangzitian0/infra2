@@ -247,10 +247,9 @@ def test_deliver_out_of_band_card_supports_app_webhook_and_fallback(
     monkeypatch.setattr(
         alerting.delivery,
         "_deliver_feishu_webhook",
-        lambda url, payload, **kw: calls.append(
-            ("webhook_text", payload["content"]["text"])
-        )
-        or {"code": 0},
+        lambda url, payload, **kw: (
+            calls.append(("webhook_text", payload["content"]["text"])) or {"code": 0}
+        ),
     )
 
     res_app = deliver_out_of_band_card(
@@ -1446,7 +1445,16 @@ def test_only_the_private_fallback_sends_text() -> None:
     import collections
 
     found = subprocess.run(
-        ["git", "grep", "-nE", _TEXT_SEND_PATTERN, "--", "common", "tools", "cloudflare"]
+        [
+            "git",
+            "grep",
+            "-nE",
+            _TEXT_SEND_PATTERN,
+            "--",
+            "common",
+            "tools",
+            "cloudflare",
+        ]
         + [":!common/tests"],
         cwd=ROOT,
         capture_output=True,
@@ -1469,7 +1477,9 @@ def test_the_text_fallback_cuts_to_the_message_limit_and_is_private(
     assert not hasattr(delivery, "deliver_out_of_band_text")
     sent: list[dict] = []
     monkeypatch.setattr(
-        delivery, "_deliver_feishu_webhook", lambda url, payload, **kw: sent.append(payload)
+        delivery,
+        "_deliver_feishu_webhook",
+        lambda url, payload, **kw: sent.append(payload),
     )
     env = {"FEISHU_WEBHOOK_URL": "https://open.feishu.cn/open-apis/bot/v2/hook/tok"}
     delivery._deliver_text_fallback(env, "x" * (MAX_MESSAGE_CHARS + 100), timeout=1.0)
@@ -1533,7 +1543,9 @@ def test_deliver_infra2_report_sends_a_report_card(monkeypatch) -> None:
         "INFRA2_REPORTS_FEISHU_APP_SECRET": "b",
         "INFRA2_REPORTS_FEISHU_CHAT_ID": "oc_reports",
     }
-    assert alerting.deliver_infra2_report("DNS drift report · zitian.party\nin sync", env)
+    assert alerting.deliver_infra2_report(
+        "DNS drift report · zitian.party\nin sync", env
+    )
 
     (call,) = sent
     assert call["chat_id"] == "oc_reports"

@@ -753,7 +753,9 @@ def text_to_card(text: str, *, template: str) -> dict[str, Any]:
     title = _clip(lines[0], CARD_TITLE_CHARS)
     body = ([lines[0]] if title != lines[0] else []) + lines[1:]
     if len(body) > CARD_BODY_LINES:
-        body = body[: CARD_BODY_LINES - 1] + [f"…及另外 {len(body) - CARD_BODY_LINES + 1} 行"]
+        body = body[: CARD_BODY_LINES - 1] + [
+            f"…及另外 {len(body) - CARD_BODY_LINES + 1} 行"
+        ]
     return build_feishu_report_card(
         title=title, template=template, kpi_fields=(), sections=["\n".join(body)]
     )

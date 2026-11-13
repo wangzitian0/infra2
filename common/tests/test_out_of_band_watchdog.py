@@ -849,7 +849,9 @@ def test_out_of_band_delivery_supports_existing_feishu_app_mode(monkeypatch) -> 
     )
 
     (call,) = calls
-    assert {key: call[key] for key in ("app_id", "app_secret", "chat_id", "api_base")} == {
+    assert {
+        key: call[key] for key in ("app_id", "app_secret", "chat_id", "api_base")
+    } == {
         "app_id": "cli_test",
         "app_secret": "secret",
         "chat_id": "oc_test",
@@ -3035,7 +3037,10 @@ def test_watchdog_page_is_a_card_in_the_card_standard(monkeypatch) -> None:
             "commonLabels": {"alertname": "ExampleBackendDown", "severity": "critical"},
             "alerts": [
                 {
-                    "labels": {"alertname": "ExampleBackendDown", "instance": "example"},
+                    "labels": {
+                        "alertname": "ExampleBackendDown",
+                        "instance": "example",
+                    },
                     "annotations": {"summary": "GET /api/health returned 503"},
                 }
             ],
@@ -3045,7 +3050,9 @@ def test_watchdog_page_is_a_card_in_the_card_standard(monkeypatch) -> None:
     watchdog = _load_watchdog()
 
     watchdog.deliver_out_of_band_alert(env, page)
-    watchdog.deliver_out_of_band_alert(env, "✅ [已恢复] 示例 · 全部已恢复\n已恢复 1 项")
+    watchdog.deliver_out_of_band_alert(
+        env, "✅ [已恢复] 示例 · 全部已恢复\n已恢复 1 项"
+    )
 
     red, green = cards
     _assert_card_standard(red)

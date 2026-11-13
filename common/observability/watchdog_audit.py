@@ -345,29 +345,42 @@ def _condition_errors(
 
 
 def _signoz_signal_entries() -> list[dict[str, Any]]:
-    """One ``primary_owner: signoz`` signal per SigNoz alert rule (``load_alert_definitions``).
+    """One ``primary_owner: signoz`` signal per SigNoz alert rule in the rule files.
 
     The rule files are the source: a rule needs no handwritten row, and a rule cannot
-    exist outside the registry. Every rule pages through the bridge from the VPS.
+    exist outside the registry. A domain package may not import the flat loader
+    ``common.observability_dashboards`` (``test_import_boundaries.py``), so this reads
+    the files like ``common/core/service_identity_audit.py`` does;
+    ``test_signoz_rows_derive_from_every_alert_rule`` holds the two readers together.
+    Every rule pages through the bridge from the VPS.
     """
-    from common.observability_dashboards import load_alert_definitions
-
-    return [
-        {
-            "signal_id": f"{rule.environment}.{rule.alert_name}.signoz",
-            "environment": rule.environment,
-            "component": rule.service_id,
-            "signal": rule.alert_name,
-            "primary_owner": "signoz",
-            "failure_class": "service-health",
-            "severity": rule.severity,
-            "tier": "minute",
-            "type": "alert",
-            "consecutive_failures": 1,
-            "renotify_window_sec": 0,
-        }
-        for rule in load_alert_definitions()
-    ]
+    entries: list[dict[str, Any]] = []
+    for path in sorted(ROOT.glob("**/alert_rules.json")):
+        relative = path.relative_to(ROOT)
+        if relative.parts[0] in {"repos", "oh-my-code-agent"} or any(
+            part.startswith(".") for part in relative.parts
+        ):
+            continue
+        data = json.loads(path.read_text(encoding="utf-8"))
+        environment = str(data.get("environment") or "")
+        for rule in data.get("rules") or []:
+            name = str(rule["alert_name"])
+            entries.append(
+                {
+                    "signal_id": f"{environment}.{name}.signoz",
+                    "environment": environment,
+                    "component": str(rule.get("service_id") or data.get("service_id")),
+                    "signal": name,
+                    "primary_owner": "signoz",
+                    "failure_class": "service-health",
+                    "severity": str(rule.get("severity") or "warning"),
+                    "tier": "minute",
+                    "type": "alert",
+                    "consecutive_failures": 1,
+                    "renotify_window_sec": 0,
+                }
+            )
+    return entries
 
 
 def _vps_public_route_errors(signals: list[dict[str, Any]]) -> list[str]:

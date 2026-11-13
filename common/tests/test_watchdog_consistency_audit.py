@@ -639,8 +639,12 @@ def test_signoz_rows_derive_from_every_alert_rule() -> None:
     audit = _load_audit()
     rows = audit._signoz_signal_entries()
 
-    assert {row["signal"] for row in rows} == {
-        rule.alert_name for rule in load_alert_definitions()
+    assert {
+        (row["signal"], row["environment"], row["component"], row["severity"])
+        for row in rows
+    } == {
+        (rule.alert_name, rule.environment, rule.service_id, rule.severity)
+        for rule in load_alert_definitions()
     }
     assert {row["primary_owner"] for row in rows} == {"signoz"}
     assert audit._validate_inventory(rows) == []  # tier, type and debounce hold
@@ -680,13 +684,20 @@ def test_a_condition_naming_an_unknown_signal_fails() -> None:
 def test_double_owner_debt_needs_a_phase_and_ends_when_paid() -> None:
     audit = _load_audit()
     two = [_signal("a", "internal"), _signal("b", "signoz")]
-    debt = {"condition": "disk", "phase": "#1648", "reason": "apply is a production step"}
-    inventory = {"conditions": {"disk": {"signals": ["a", "b"]}}, "double_owner_debt": [debt]}
+    debt = {
+        "condition": "disk",
+        "phase": "#1648",
+        "reason": "apply is a production step",
+    }
+    inventory = {
+        "conditions": {"disk": {"signals": ["a", "b"]}},
+        "double_owner_debt": [debt],
+    }
 
     assert audit._condition_errors(inventory, two) == []
-    assert audit._condition_errors(inventory, two[:1] + [_signal("b", "signoz", "report")]) == [
-        "double_owner_debt disk is no longer a violation; remove the entry"
-    ]
+    assert audit._condition_errors(
+        inventory, two[:1] + [_signal("b", "signoz", "report")]
+    ) == ["double_owner_debt disk is no longer a violation; remove the entry"]
     inventory["double_owner_debt"] = [{"condition": "disk"}]
     assert audit._condition_errors(inventory, two) == [
         "double_owner_debt disk: needs a phase issue (#N) and a reason"
