@@ -232,6 +232,7 @@ entries:
       - common/tests/test_dokploy_config_drift.py
       - common/tests/test_deploy_guard_audit_mutations.py
       - common/tests/test_ci_tree_reuse.py
+      - common/tests/test_stage_records.py
   ops.e2e:
     owner: docs/ssot/ops.e2e-regressions.md
     summary: 部署验证、E2E 测试
@@ -307,6 +308,8 @@ entries:
     proofs:
       - common/tests/test_alerting.py
       - common/tests/test_release_card.py
+      - common/tests/test_stage_card.py
+      - common/tests/test_digest_delivery_section.py
       - common/tests/test_cloudflare_watchdog.py
       - common/tests/test_out_of_band_watchdog.py
       - common/tests/test_watchdog_consistency_audit.py

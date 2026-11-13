@@ -4316,3 +4316,62 @@ def test_print_changed_app_releases_cli_for_cumulative_promotion_guard(
         "finance_report/app=v0.2.61",
         "truealpha/app=v0.2.89",
     ]
+
+
+def test_summary_is_rendered_from_records(monkeypatch, tmp_path) -> None:
+    """The run summary holds the records of the run and nothing that the plan builds (#1645)."""
+    from common.deploy.stage_record import write_stage_record
+    from infra2_sdk.observability import CheckVerdict
+
+    def record(phase, checks, **kw):
+        return write_stage_record(
+            env="staging.release_validation",
+            phase=phase,
+            subject="tag:v3.1.23",
+            ref="refs/tags/v3.1.23",
+            event="tag",
+            run_url="https://github.com/o/r/actions/runs/777",
+            started_at="2026-11-01T00:00:00Z",
+            checks=checks,
+            units=("infra:platform/alerting", "sdk:3.29.0"),
+            persist=False,
+            **kw,
+        )
+
+    records = [
+        record("pre", [CheckVerdict("contract", True, seconds=0.5)]),
+        record(
+            "operation",
+            [
+                CheckVerdict(
+                    "staging:platform/alerting",
+                    False,
+                    "attempt 1: a|b\nc",
+                    seconds=12.5,
+                )
+            ],
+            uncovered=("infra:platform/alerting",),
+        ),
+    ]
+    target = tmp_path / "summary.md"
+    reconcile.write_summary(records=records, dry_run=False, path=str(target))
+    text = target.read_text(encoding="utf-8")
+    assert "### pre: pass" in text and "### operation: fail" in text
+    assert "| `contract` | ok | 0.5 |  |" in text
+    assert (
+        "| `staging:platform/alerting` | FAILED | 12.5 | attempt 1: a\\|b c |" in text
+    )
+    assert "- Units: `infra:platform/alerting, sdk:3.29.0`" in text
+    assert "- Uncovered by a hook: `infra:platform/alerting`" in text
+    for plan_line in (
+        "Changed files",
+        "Selected services",
+        "Dropped files",
+        "Commands:",
+        "```json",
+    ):
+        assert plan_line not in text
+    # No record, no summary: the plan alone is not a source.
+    empty = tmp_path / "empty.md"
+    reconcile.write_summary(records=[], dry_run=False, path=str(empty))
+    assert not empty.exists()

@@ -27,36 +27,29 @@ Standard library only: the step runs before any dependency is installed.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import sys
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
+from pathlib import Path
 from typing import Any
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from common.deploy.github_api import API, Opener, get_json  # noqa: E402,F401
 
 MARKER_PREFIX = "unit-green-"
 WORKFLOW_PATH = ".github/workflows/infra-ci.yml"
 SHARD_ARTIFACT_PREFIX = "infra2-coverage-data-shard"
 SHARD_JOB = re.compile(r"^Unit tests shard (\d+)/(\d+)$")
-API = "https://api.github.com"
 _SHA = re.compile(r"^[0-9a-f]{40}$")
-
-Opener = Callable[..., Any]
 
 
 def _get(path: str, token: str, opener: Opener) -> Any:
-    request = urllib.request.Request(
-        f"{API}{path}",
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-            "User-Agent": "infra2-ci-tree-reuse/1.0",
-        },
-    )
-    with opener(request, timeout=20) as response:
-        return json.loads(response.read().decode("utf-8"))
+    return get_json(path, token, opener, "infra2-ci-tree-reuse/1.0")
 
 
 def _items(data: Any, key: str) -> list[dict]:

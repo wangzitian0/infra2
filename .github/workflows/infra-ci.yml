@@ -698,3 +698,47 @@ jobs:
             targets+=("repos/infra2-sdk/tests")
           fi
           python tools/lint_anti_tautology.py "${targets[@]}"
+
+  # The CI post record of a commit on main (#1645). The production pre record of a release
+  # reads it, so it names every job of the merge authority (`blocks_merge: true` in
+  # docs/ssot/ci-gate-inventory.yaml). always(): a failed job is a red check, not a missing one.
+  record:
+    name: Write the CI stage record
+    needs:
+      - validate-compose
+      - harness-check
+      - test-deployer-logic
+      - test-1password-healthcheck
+      - validate-vault-agent
+      - validate-deployers
+      - lint-python
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install the SDK that uv.lock pins
+        run: |
+          pip install pyyaml
+          pip install --no-deps "$(python tools/sdk_requirement.py)"
+
+      - name: Write the post record of this commit
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python -m common.deploy.stage_record
+
+      - name: Upload the record
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        if: always() && env.STAGE_RECORD_POST != ''
+        with:
+          name: ${{ env.STAGE_RECORD_POST }}
+          path: stage-records/${{ env.STAGE_RECORD_POST }}.json
+          if-no-files-found: ignore

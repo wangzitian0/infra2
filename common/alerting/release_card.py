@@ -175,26 +175,53 @@ def card_from_environment(
     )
 
 
+def publish_card(
+    env: Mapping[str, str],
+    rendered: dict[str, Any],
+    message_id: str = "",
+    *,
+    timeout: float = 10.0,
+) -> str:
+    """Create the card (no ``message_id``) or replace it. Return the message id.
+
+    The one create-or-update flow of every card that moves (release card, stage card). It
+    needs the Feishu app mode and raises when a call fails: the callers turn that into a
+    warning. In another mode it returns an empty string.
+    """
+    config = common.alerting.out_of_band_app_config(env)
+    if config["mode"] != "feishu_app":
+        return ""
+    if message_id:
+        common.alerting.update_feishu_app_card(
+            app_id=config["app_id"],
+            app_secret=config["app_secret"],
+            message_id=message_id,
+            card=rendered,
+            api_base=config["api_base"],
+            timeout=timeout,
+        )
+        return message_id
+    created = common.alerting.message_id_of(
+        common.alerting.deliver_feishu_app_card(
+            app_id=config["app_id"],
+            app_secret=config["app_secret"],
+            chat_id=config["chat_id"],
+            api_base=config["api_base"],
+            card=rendered,
+            timeout=timeout,
+        )
+    )
+    if created and not MESSAGE_ID_PATTERN.match(created):
+        raise ValueError("the Feishu message id has an unexpected shape")
+    return created
+
+
 def open_release_card(
     env: Mapping[str, str], card: ReleaseCard, *, timeout: float = 10.0
 ) -> str:
     """Create the card. Return its message id, or an empty string when none exists."""
     try:
-        config = common.alerting.out_of_band_app_config(env)
-        if config["mode"] != "feishu_app":
-            return ""
-        response = common.alerting.deliver_feishu_app_card(
-            app_id=config["app_id"],
-            app_secret=config["app_secret"],
-            chat_id=config["chat_id"],
-            api_base=config["api_base"],
-            card=render_release_card(card),
-            timeout=timeout,
-        )
-        message_id = common.alerting.message_id_of(response)
-        if message_id and not MESSAGE_ID_PATTERN.match(message_id):
-            raise ValueError("the Feishu message id has an unexpected shape")
-        return message_id
+        return publish_card(env, render_release_card(card), timeout=timeout)
     except Exception as exc:  # noqa: BLE001 - a notification never stops a deploy
         _warn("open", exc)
         return ""
@@ -209,18 +236,11 @@ def advance_release_card(
 ) -> bool:
     """Replace the card with the new state. Return true when the update went out."""
     try:
-        config = common.alerting.out_of_band_app_config(env)
-        if not message_id or config["mode"] != "feishu_app":
+        if not message_id:
             return False
-        common.alerting.update_feishu_app_card(
-            app_id=config["app_id"],
-            app_secret=config["app_secret"],
-            message_id=message_id,
-            card=render_release_card(card),
-            api_base=config["api_base"],
-            timeout=timeout,
+        return bool(
+            publish_card(env, render_release_card(card), message_id, timeout=timeout)
         )
-        return True
     except Exception as exc:  # noqa: BLE001 - a notification never stops a deploy
         _warn("advance", exc)
         return False
