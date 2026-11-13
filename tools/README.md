@@ -11,8 +11,8 @@ reusable logic belongs in `common/` (see the division-of-labor note below):
    (pre-deploy enum & schema compatibility gate, #698), `deploy_guard_audit.py` /
    `ci_gate_audit.py` / `service_identity_audit.py` / `lint_compose_resource_limits.py` /
    `coverage_regression_audit.py` (infra-ci
-   gates), `reconcile_iac_inputs.py` (tag reconcile), `promotion_soak_guard.py` (the
-   prod-promotion guard that reads stage records in `--phase pre`, #1646), `stage_records.py` (the record reader),
+   gates), `reconcile_iac_inputs.py` (tag reconcile), `promotion_soak_guard.py` (CLI of the
+   prod-promotion guard in `common/deploy/promotion_guard.py`, #1646), `stage_records.py` (the record reader),
    `out_of_band_watchdog.py`
    / `watchdog_issue_trail.py` / `watchdog_weekly_digest.py` (scheduled
    watchdogs), `dokploy_config_drift.py` (drift reports), `pr_merge_gate.py` (the AGENTS.md

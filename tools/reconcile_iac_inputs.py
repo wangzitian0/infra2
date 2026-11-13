@@ -70,7 +70,7 @@ from common.deploy.release_markers import (
     version_key,
 )
 from common.observability.issue_trail import CheckVerdict
-from tools.promotion_soak_guard import require_upstream_post, required_staging_gates
+from common.deploy.promotion_guard import require_upstream_post, required_staging_gates
 from infra2_sdk.deploy import DeployRequest
 from infra2_sdk.manifests import (
     FORBIDDEN_HOOK_ENV_NAMES,
