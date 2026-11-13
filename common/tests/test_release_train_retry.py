@@ -11,11 +11,13 @@ import subprocess
 
 import pytest
 
+from common.deploy.stage_record import write_stage_record
 from tools.reconcile_iac_inputs import (
     DeployCommand,
     build_deploy_commands,
     build_plan,
     run_deploy_commands,
+    operation_checks,
     write_summary,
 )
 
@@ -76,12 +78,20 @@ def test_a_dns_failure_on_the_first_pull_then_success_is_green_with_two_attempts
     assert script.argvs[0] == script.argvs[1] == command.argv  # same run, same tag
     assert sleeps == [30.0]
     summary = tmp_path / "summary.md"
-    write_summary(
-        plan=PLAN, commands=[command], results=results, dry_run=False, path=str(summary)
+    operation = write_stage_record(
+        env="staging.release_validation",
+        phase="operation",
+        subject="tag:v1.0.0",
+        ref="refs/tags/v1.0.0",
+        event="tag",
+        run_url="https://github.com/o/r/actions/runs/1",
+        started_at="2026-11-01T00:00:00Z",
+        checks=operation_checks(results, dry_run=False),
+        persist=False,
     )
-    assert (
-        "Retried" in summary.read_text() and "server misbehaving" in summary.read_text()
-    )
+    write_summary(records=[operation], dry_run=False, path=str(summary))
+    text = summary.read_text()
+    assert "server misbehaving" in text and "attempt 2: ok" in text
 
 
 def test_the_third_transient_failure_fails_the_unit():

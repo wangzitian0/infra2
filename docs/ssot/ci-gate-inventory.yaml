@@ -128,6 +128,15 @@ gates:
     # workflow, so the audit's coverage invariant requires it declared.
     blocks_merge: false
     failure_semantics: The built docs site fails to publish to GitHub Pages after a merge to main.
+  - id: infra_ci.stage_record
+    stage: github_ci.merge_authority
+    task_category: change_detection
+    workflow: .github/workflows/infra-ci.yml
+    job: record
+    # A push to main only. It reports the result of the blocks_merge jobs as a stage record
+    # (#1645); it gates nothing, and it holds no secret.
+    blocks_merge: false
+    failure_semantics: The CI post record of a commit on main is not written or not uploaded.
   - id: infra_ci.deploy_graph_audit
     stage: ops.scheduled_cleanup
     task_category: drift_report
