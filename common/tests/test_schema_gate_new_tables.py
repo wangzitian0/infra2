@@ -30,13 +30,12 @@ def _missing(name: str, *labels: str) -> EnumDiscrepancy:
     return EnumDiscrepancy(name, labels, (), labels, (), ())
 
 
-def _cover(discrepancies, enum_tables, db_tables, *, stamped=True):
-    tables = set(db_tables) | ({"alembic_version"} if stamped else set())
+def _cover(discrepancies, enum_tables, db_tables, *, pending=True):
     return cover_with_new_tables(
         discrepancies,
         enum_tables=enum_tables,
-        db_tables=tables,
-        migration_table="alembic_version",
+        db_tables=db_tables,
+        migrations_pending=pending,
     )
 
 
@@ -168,12 +167,11 @@ def test_enum_tables_reject_an_object_that_is_not_metadata() -> None:
         enum_tables_from_metadata(SimpleNamespace())
 
 
-def test_a_database_without_the_migration_table_covers_nothing() -> None:
-    """An empty or unstamped database: the entrypoint creates nothing or stamps head and skips the migrations."""
+def test_no_pending_migration_covers_nothing() -> None:
+    """The database is already at the image's head and still lacks the table: drift, not a new table."""
     discrepancy = _missing(KIND, "extract")
     tables = {KIND: frozenset({"statement_runs"})}
-    assert _cover([discrepancy], tables, set(), stamped=False) == ([discrepancy], [])
-    assert _cover([discrepancy], tables, {"users"}, stamped=False) == (
+    assert _cover([discrepancy], tables, {"users"}, pending=False) == (
         [discrepancy],
         [],
     )
@@ -239,12 +237,15 @@ def _run_main(service: str) -> int:
     return gate.main(["--service", service, "--db-url", "postgresql://db/app"])
 
 
+def _stub(monkeypatch: pytest.MonkeyPatch, *, tables, pending=True) -> None:
+    monkeypatch.setattr(gate, "fetch_db_tables", lambda _url: frozenset(tables))
+    monkeypatch.setattr(gate, "migrations_pending", lambda *_args: pending)
+
+
 def test_main_passes_when_only_a_new_table_uses_the_missing_type_and_reports_it(
     run_app: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(
-        gate, "fetch_db_tables", lambda _url: frozenset({"users", "alembic_version"})
-    )
+    _stub(monkeypatch, tables={"users"})
     rc = _run_main(run_app)
     out = capsys.readouterr().out
     assert rc == gate.EXIT_OK
@@ -256,41 +257,48 @@ def test_main_passes_when_only_a_new_table_uses_the_missing_type_and_reports_it(
 def test_main_blocks_when_the_table_already_exists_in_the_database(
     run_app: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    monkeypatch.setattr(
-        gate, "fetch_db_tables", lambda _url: frozenset({"statement_runs"})
-    )
+    _stub(monkeypatch, tables={"statement_runs"})
     assert _run_main(run_app) == gate.EXIT_BLOCKED
     assert KIND in capsys.readouterr().err
 
 
-def test_main_blocks_when_the_table_list_cannot_be_read(
+def test_main_blocks_when_no_migration_is_pending(
     run_app: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    def unreadable(_url):
-        raise OSError("information_schema is unreadable")
-
-    monkeypatch.setattr(gate, "fetch_db_tables", unreadable)
-    assert _run_main(run_app) == gate.EXIT_BLOCKED
-    assert KIND in capsys.readouterr().err
-
-
-def test_main_blocks_an_unstamped_database_and_names_no_cover(
-    run_app: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setattr(gate, "fetch_db_tables", lambda _url: frozenset({"users"}))
+    _stub(monkeypatch, tables={"users"}, pending=False)
     assert _run_main(run_app) == gate.EXIT_BLOCKED
     assert "NEW_TABLE_COVERS" not in capsys.readouterr().out
 
 
-def test_main_names_the_reason_when_coverage_is_not_applied(
+def test_main_blocks_and_names_the_reason_when_the_table_list_cannot_be_read(
     run_app: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     def unreadable(_url):
         raise OSError("information_schema is unreadable")
 
+    _stub(monkeypatch, tables=set())
     monkeypatch.setattr(gate, "fetch_db_tables", unreadable)
     assert _run_main(run_app) == gate.EXIT_BLOCKED
-    assert "NOTE: new-table coverage not applied (OSError)" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert KIND in err
+    assert "NOTE: new-table coverage not applied (OSError)" in err
+
+
+def test_main_blocks_and_names_the_reason_when_the_database_revision_is_unknown(
+    run_app: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    class CommandError(Exception):
+        pass
+
+    def unknown(*_args):
+        raise CommandError("Can't locate revision identified by 'x'")
+
+    _stub(monkeypatch, tables={"users"})
+    monkeypatch.setattr(gate, "migrations_pending", unknown)
+    assert _run_main(run_app) == gate.EXIT_BLOCKED
+    assert (
+        "NOTE: new-table coverage not applied (CommandError)" in capsys.readouterr().err
+    )
 
 
 def test_main_does_not_read_the_table_list_when_nothing_differs(
@@ -307,6 +315,9 @@ def test_main_does_not_read_the_table_list_when_nothing_differs(
     calls: list[str] = []
     monkeypatch.setattr(
         gate, "fetch_db_tables", lambda url: calls.append(url) or frozenset()
+    )
+    monkeypatch.setattr(
+        gate, "migrations_pending", lambda *_args: calls.append("pending") or True
     )
     assert _run_main(run_app) == gate.EXIT_OK
     assert calls == []
@@ -330,3 +341,97 @@ def test_fetch_db_tables_returns_the_table_names(
         {"users", "statements"}
     )
     assert seen == [gate.DB_TABLES_SQL]
+
+
+class _FakeScript:
+    """alembic's ScriptDirectory for revisions "0073" -> "0074" (head)."""
+
+    known = {"0073", "0074"}
+    heads = ["0074"]
+    location = ""
+
+    @classmethod
+    def from_config(cls, config):
+        cls.location = config.options["script_location"]
+        return cls()
+
+    def get_revision(self, revision):
+        if revision not in self.known:
+            raise KeyError(f"Can't locate revision identified by {revision!r}")
+
+    def get_heads(self):
+        return list(self.heads)
+
+
+class _FakeConfig:
+    def __init__(self, path):
+        self.path = path
+        self.options = {"script_location": "migrations"}
+
+    def get_main_option(self, name):
+        return self.options.get(name)
+
+    def set_main_option(self, name, value):
+        self.options[name] = value
+
+
+@pytest.fixture
+def fake_alembic(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setitem(sys.modules, "alembic", ModuleType("alembic"))
+    monkeypatch.setitem(
+        sys.modules, "alembic.config", SimpleNamespace(Config=_FakeConfig)
+    )
+    monkeypatch.setitem(
+        sys.modules, "alembic.script", SimpleNamespace(ScriptDirectory=_FakeScript)
+    )
+
+    def rows(revisions):
+        monkeypatch.setattr(gate, "_with_libpq_cursor", lambda _url, _fn: revisions)
+
+    return rows
+
+
+def _pending(app_path="/app") -> bool:
+    return gate.migrations_pending(
+        "postgresql://db/app", gate.EnumSource(metadata="m:b"), app_path
+    )
+
+
+def test_migrations_are_pending_when_the_database_is_behind_the_image_head(
+    fake_alembic,
+) -> None:
+    fake_alembic(("0073",))
+    assert _pending() is True
+
+
+def test_no_migration_is_pending_when_the_database_is_at_the_image_head(
+    fake_alembic,
+) -> None:
+    fake_alembic(("0074",))
+    assert _pending() is False
+
+
+def test_a_database_with_no_revision_row_has_no_pending_migration(fake_alembic) -> None:
+    fake_alembic(())
+    assert _pending() is False
+
+
+def test_a_database_revision_that_the_image_does_not_know_raises(fake_alembic) -> None:
+    fake_alembic(("0099",))
+    with pytest.raises(KeyError):
+        _pending()
+
+
+def test_several_database_revisions_that_are_not_the_heads_are_pending(
+    fake_alembic,
+) -> None:
+    fake_alembic(("0073", "0074"))
+    assert _pending() is True
+
+
+def test_a_relative_script_location_is_resolved_against_the_app_path(
+    fake_alembic,
+) -> None:
+    fake_alembic(("0073",))
+    _pending("/srv/app")
+    assert _FakeScript.location == "/srv/app/migrations"

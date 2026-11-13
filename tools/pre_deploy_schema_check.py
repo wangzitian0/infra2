@@ -10,9 +10,10 @@ Audit-hardened (反事实审计 2026-09-16):
 - Bidirectional comparison: missing_in_db AND missing_in_code both block deploy.
   DB superset is the most dangerous runtime divergence. One exception (#1658): a whole
   enum type that the database lacks, and that only tables missing from the database use,
-  does not block (the database must hold ``alembic_version``): the image's start-up
-  migration creates those tables and so the type. The labels of that type are proved by
-  the service's CI, not compared here. See ``cover_with_new_tables``.
+  does not block while migrations are pending (alembic's script directory in the image
+  against ``alembic_version``): the image's start-up migration creates those tables and so
+  the type. The labels of that type are proved by the service's CI, not compared here.
+  See ``cover_with_new_tables``.
 - Fail-closed: any exception (query failure, parse error) blocks deploy.
   A check that silently fails is worse than no check.
 - Never a silent pass (#718 review): a gate that cannot load its code-side enums or
@@ -286,26 +287,26 @@ def cover_with_new_tables(
     *,
     enum_tables: Mapping[str, frozenset[str]],
     db_tables: Collection[str],
-    migration_table: str,
+    migrations_pending: bool,
 ) -> tuple[list[EnumDiscrepancy], list[tuple[str, tuple[str, ...]]]]:
     """Split off a whole enum type that only tables missing from the database use (#1658).
 
-    The image runs ``alembic upgrade head`` after this gate. A table that the database
-    lacks is created by a pending migration, and a column of that table can only name a
-    type that exists by then, so the same migration creates the type. Nothing here reads
-    migration code. Covered: a type that the database lacks entirely, when every table
-    that uses it is missing from the database. Always blocking: a label that an existing
-    type lacks, a DB-only label, a casing drift, a type that any table already in the
-    database uses, and every type when the database has no ``migration_table`` (an empty
-    or unstamped database: the entrypoint would create nothing, or stamp head and skip the
-    migrations). Labels of a covered type are not compared here; the service's CI proves
-    that its migrated database equals the ORM (finance_report
-    ``scripts/check_migrated_enums.py``). Returns ``(blocking, covered)`` with ``covered``
-    as ``(enum name, its new tables)``.
+    The image runs ``alembic upgrade head`` after this gate. When migrations are pending
+    (``migrations_pending``), a table that the database lacks is created by one of them, and
+    a column of that table can only name a type that exists by then, so the same migration
+    creates the type. That holds if the migration declares the column with the ORM's type;
+    the service's CI proves it, labels included (finance_report
+    ``scripts/check_migrated_enums.py``, job ``schema-migrations``). Nothing here reads
+    migration code. Covered: a type that the database lacks entirely, when every table that
+    uses it is missing from the database. Always blocking: a label that an existing type
+    lacks, a DB-only label, a casing drift, a type that any table already in the database
+    uses, and every type when no migration is pending (a database that is already at the
+    image's head and still lacks the table is drift). Returns ``(blocking, covered)`` with
+    ``covered`` as ``(enum name, its new tables)``.
     """
-    existing = set(db_tables)
-    if migration_table not in existing:
+    if not migrations_pending:
         return list(discrepancies), []
+    existing = set(db_tables)
     blocking: list[EnumDiscrepancy] = []
     covered: list[tuple[str, tuple[str, ...]]] = []
     for discrepancy in discrepancies:
@@ -596,6 +597,8 @@ def evaluate_db_preconditions(
 
 # Visible to the connecting role only (information_schema lists the tables that the role
 # owns or has a privilege on); schema names are dropped, matching the ORM's table names.
+ALEMBIC_INI = "alembic.ini"
+
 DB_TABLES_SQL = (
     "SELECT table_name FROM information_schema.tables "
     "WHERE table_schema NOT IN ('pg_catalog', 'information_schema');"
@@ -610,6 +613,37 @@ def fetch_db_tables(db_url: str) -> frozenset[str]:
         return frozenset(str(row[0]) for row in cursor.fetchall())
 
     return _with_libpq_cursor(db_url, read)
+
+
+def migrations_pending(db_url: str, source: EnumSource, app_path: str | None) -> bool:
+    """True when the image has a migration that the database has not run (#1658).
+
+    Uses alembic's own script directory, which the image carries, so an unknown revision
+    fails the way ``alembic upgrade`` fails: a database revision that the image does not
+    know (a rollback to an older image) raises, and a database with no ``alembic_version``
+    row or table is not "pending" but unstamped, so this returns False or raises.
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    base = Path(app_path).expanduser() if app_path else Path.cwd()
+    config = Config(str(base / ALEMBIC_INI))
+    location = Path(config.get_main_option("script_location") or "migrations")
+    config.set_main_option(
+        "script_location", str(location if location.is_absolute() else base / location)
+    )
+    script = ScriptDirectory.from_config(config)
+    revisions = _with_libpq_cursor(
+        db_url,
+        lambda cursor: query_applied_migrations(
+            cursor,
+            migration_table=source.migration_table,
+            migration_column=source.migration_column,
+        ),
+    )
+    for revision in revisions:
+        script.get_revision(revision)
+    return bool(revisions) and set(revisions) != set(script.get_heads())
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -680,7 +714,9 @@ def main(argv: list[str] | None = None) -> int:
                     _resolve(ENUM_SOURCES[args.service].metadata)
                 ),
                 db_tables=fetch_db_tables(db_url),
-                migration_table=ENUM_SOURCES[args.service].migration_table,
+                migrations_pending=migrations_pending(
+                    db_url, ENUM_SOURCES[args.service], args.app_path
+                ),
             )
         except Exception as exc:  # noqa: BLE001 - fail closed: an unreadable input covers nothing
             covered = []
