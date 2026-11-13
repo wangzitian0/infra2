@@ -131,6 +131,8 @@ Each record names its `units` with a kind prefix (`app:`, `sdk:`, `infra:`, `har
 | minute, hour, day, month | probe 60 s; Worker 30 min; leak check 1 h; 7 daily jobs; weekly and monthly digest | Staging, Prod, Preview, host |
 
 **Core rules**
+- A merge is not a deploy. A merge to main changes no running service. Staging runs only from a release tag. Production runs only from the tag that the owner approves.
+- `deploy_v2` is the single deploy entry point for every unit.
 - **preview 瞬态闭环验证**(`preview/branch` 与 `preview/pr`)——App 合流 `main` 后,在切出 `vX.Y.Z` tag 进入 Staging 火车前,由 `sync_app_releases(..., cut_missing_app_tag=True)` (内部调用 `verify_and_cut_app_preview_tag`) 瞬态拉起 `preview/branch` (`main`),执行 `preview_gate` 钩子(验证 0 帧冷启动、空库 Alembic 迁移、Vault 模板渲染与最小真实 E2E),通过后才推送 App `vX.Y.Z` tag,并在 `finally` 中**立即执行 `--down` 销毁**(连同临时数据库卷),绝不留存常驻 preview 容器(#1416, #1554)。
 - **staging / prod 只部署 release tag**(不可变镜像,不接受 branch/sha);staging 与 prod **钉同一个 tag**
   (**promote-not-rebuild**,不是部署 main sha),App 的固定环境版本由 `harness/repos.yaml` (`release_tag`) 驱动。
