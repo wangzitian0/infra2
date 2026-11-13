@@ -55,8 +55,9 @@ run-name: Reconcile IaC Inputs (${{ inputs.promote_prod && 'PROD' || 'staging' }
 permissions:
   # Explicit production promotion records an immutable production/v* marker.
   contents: write
-  # Pull-based App release sync opens/updates PRs and records hook failure issues (#1416).
+  # Pull-based App release sync opens/updates PRs (#1416).
   pull-requests: write
+  # only the `Alert on failure` and `Resolve the reconcile failure alert` steps (page_dedup state issue)
   issues: write
   # the promotion guard lists this workflow's runs for the promoted tag (gh api .../runs)
   actions: read
