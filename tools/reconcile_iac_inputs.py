@@ -2095,6 +2095,19 @@ def failure_alert_text(
         lines.append(f"Run: {run_url}")
         return "\n".join(lines)
 
+    # a phase that stopped on a check before any deploy result (``hook_env`` of the operation)
+    if failed_job and any(not check.ok for check in failed_checks):
+        lines = [
+            f"🚨 IaC reconcile FAILED for {after} ({kind}): {ALERT_STATE_BY_JOB[failed_job]}."
+        ]
+        lines += [
+            f"- {check.name}: {check.detail.strip()[:200] or 'failed'}"
+            for check in failed_checks
+            if not check.ok
+        ]
+        lines.append(f"Run: {run_url}")
+        return "\n".join(lines)
+
     return None
 
 

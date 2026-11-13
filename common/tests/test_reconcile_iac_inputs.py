@@ -2893,7 +2893,8 @@ def _hook_env_run(monkeypatch, tmp_path, *, slot: str, promote: bool) -> list[ob
     )
     monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", lambda *_a, **_kw: [])
     args = ["--repo-root", str(tmp_path), "--phase", "operation", "--after", "v9.9.9",
-            "--changed-file", "harness/repos.yaml"]  # fmt: skip
+            "--changed-file", "harness/repos.yaml",
+            "--output-json", str(tmp_path / "result.json")]  # fmt: skip
     args += (
         ["--promote-prod", "--before", "v9.9.8"] if promote else ["--env", "staging"]
     )
@@ -2916,6 +2917,9 @@ def test_a_production_gate_that_needs_a_hook_secret_fails_hook_env_before_the_de
         and "TA_EMAIL" in str(refused[0])
         and "prod_gate" in str(refused[0])
     )
+    # the operation writes the alert text of its state for the `alert` job
+    alert = json.loads((tmp_path / "result.json").read_text())["alert_text"]
+    assert "deploy failed" in alert and "- hook_env:" in alert and "TA_EMAIL" in alert
     # staging passes the same gate: `post` of a staging run holds the secret
     assert (
         _hook_env_run(monkeypatch, tmp_path / "s", slot="staging_gate", promote=False)
@@ -4689,6 +4693,23 @@ def test_failure_alert_state_follows_failed_job() -> None:
     )
     assert smoke is not None and "hook failed" in smoke.splitlines()[0]
     assert "deploy failed" not in smoke
+
+    # a check that stopped the operation before any deploy result (`hook_env`)
+    env_check = reconcile.CheckVerdict(
+        "hook_env", False, "truealpha/app staging_gate: TA_EMAIL"
+    )
+    stopped = reconcile.failure_alert_text(
+        results=[], failed_job="operation", failed_checks=[env_check], **common
+    )
+    assert stopped is not None
+    assert stopped.splitlines()[0].endswith("(staging soak): deploy failed.")
+    assert "- hook_env: truealpha/app staging_gate: TA_EMAIL" in stopped
+    assert (
+        reconcile.failure_alert_text(
+            results=[], failed_job="operation", failed_checks=[], **common
+        )
+        is None
+    )
 
     # no job: the text that a single-job run sent, unchanged
     legacy = reconcile.failure_alert_text(results=failed, **common)
