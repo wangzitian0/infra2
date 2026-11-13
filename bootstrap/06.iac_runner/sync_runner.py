@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -1033,6 +1034,203 @@ def sync_services_by_version(
         f"({result.succeeded} succeeded, {result.failed} failed) ==="
     )
     return result
+
+
+# --- Preview slots for PR CI (#1647) ------------------------------------------------------
+# One Preview run holds the deployment lock for at most PREVIEW_DEADLINE_SECONDS, plus
+# PREVIEW_TEARDOWN_SECONDS to take a failed or late slot down. The child runs trusted main
+# code with an allow-listed environment: no Vault AppRole, no 1Password token, no signing
+# secret.
+PREVIEW_DEADLINE_SECONDS = 600
+PREVIEW_TEARDOWN_SECONDS = 120
+_PREVIEW_CHILD_ENV = (
+    "PATH",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "DOKPLOY_API_KEY",
+    "INTERNAL_DOMAIN",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+)
+
+
+def try_deployment_lock():
+    """Take the deployment lock without waiting. Return the open lock file, or None when
+    a deploy holds it. Release it with ``release_deployment_lock``."""
+    DEPLOYMENT_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(DEPLOYMENT_LOCK_FILE, "w")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        return None
+    return handle
+
+
+def release_deployment_lock(handle) -> None:
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+
+def _preview_git(repo_path: Path, args: list[str], deadline: float) -> bool:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return False
+    try:
+        result = subprocess.run(
+            ["git"] + args,
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=min(GIT_COMMAND_TIMEOUT_SECONDS, remaining),
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return result.returncode == 0
+
+
+def prepare_preview_checkout(repo_path: Path, sha: str | None, deadline: float) -> bool:
+    """Put the checkout on the tip of GIT_BRANCH (trusted code) and, for an up, fetch
+    commit ``sha``. Each git call stops at ``deadline``; none is retried."""
+    branch = f"refs/remotes/origin/{GIT_BRANCH}"
+    steps = [
+        ["reset", "--hard", "HEAD"],
+        ["clean", "-fd"],
+        [
+            "fetch",
+            "--no-recurse-submodules",
+            "--force",
+            "origin",
+            f"+refs/heads/{GIT_BRANCH}:{branch}",
+        ],
+        *(
+            [
+                ["fetch", "--no-recurse-submodules", "origin", sha],
+                ["cat-file", "-e", f"{sha}^{{commit}}"],
+            ]
+            if sha
+            else []
+        ),
+        ["checkout", "--force", "--detach", branch],
+    ]
+    return repo_path.exists() and all(
+        _preview_git(repo_path, step, deadline) for step in steps
+    )
+
+
+def _run_preview_unit(
+    repo_path: Path,
+    service: str,
+    pr: int,
+    sha: str,
+    down: bool,
+    domain: str,
+    deadline: float,
+) -> dict:
+    """Run `common.deploy.v2` for one unit. The result holds structured fields only: no
+    line of child output reaches the caller."""
+    started = time.monotonic()
+    remaining = deadline - started
+    unit: dict = {"service": service}
+    if remaining <= 0:
+        return {**unit, "status": "timeout", "seconds": 0.0}
+    env_vars = {k: os.environ[k] for k in _PREVIEW_CHILD_ENV if k in os.environ}
+    env_vars["PYTHONPATH"] = str(repo_path)
+    command = [
+        sys.executable,
+        "-m",
+        "common.deploy.v2",
+        "--service",
+        service,
+        "--type",
+        "preview/pr",
+        "--version-ref",
+        str(pr),
+        "--iac-ref",
+        sha,
+        "--domain",
+        domain,
+    ] + (["--down"] if down else ["--raw-compose", "--timeout", str(int(remaining))])
+    try:
+        result = subprocess.run(
+            command,
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            env=env_vars,
+            timeout=min(DEPLOY_TIMEOUT, remaining),
+        )
+    except subprocess.TimeoutExpired:
+        unit["status"] = "timeout"
+    else:
+        unit["status"] = "ok" if result.returncode == 0 else "failed"
+        if result.returncode != 0:
+            unit["error_kind"] = diagnose_failure(result.stderr, result.stdout)[
+                "error_kind"
+            ]
+        else:
+            try:
+                detail = json.loads(result.stdout.strip().splitlines()[-1])
+                detail = detail.get("detail", detail)
+                unit.update(
+                    url=str(detail["url"]) if "url" in detail else None,
+                    healthy=bool(detail["healthy"]) if "healthy" in detail else None,
+                )
+            except (ValueError, IndexError, AttributeError):
+                pass
+    unit["seconds"] = round(time.monotonic() - started, 1)
+    return unit
+
+
+def run_preview(
+    pr: int,
+    ref: str,
+    services: list[str],
+    down: bool,
+    domain: str,
+) -> dict:
+    """Bring Preview slot `pr-<pr>` up or down for each unit and return its public result.
+
+    The caller holds the deployment lock. The code that runs is the trusted tip of
+    GIT_BRANCH. Commit `ref` (the PR head) supplies only the unit's compose text, which the
+    child checks and uploads as raw text, and the build context. After a failed or late
+    up, the slot is taken down at once.
+    """
+    started = time.monotonic()
+    deadline = started + PREVIEW_DEADLINE_SECONDS
+    slot = f"pr-{pr}"
+    repo_path = WORKSPACE / REPO_NAME
+    ordered = sorted(set(services))
+
+    def outcome(units: list[dict], error: str | None = None, **extra) -> dict:
+        result = {
+            "slot": slot,
+            "down": down,
+            "units": units,
+            "seconds": round(time.monotonic() - started, 1),
+            "success": error is None and all(u["status"] == "ok" for u in units),
+            "timeout": any(u["status"] == "timeout" for u in units),
+            **extra,
+        }
+        return {**result, "error": error} if error else result
+
+    if not prepare_preview_checkout(repo_path, None if down else ref, deadline):
+        return outcome([], "Preview checkout failed")
+    units = [
+        _run_preview_unit(repo_path, s, pr, ref, down, domain, deadline)
+        for s in ordered
+    ]
+    if down or all(u["status"] == "ok" for u in units):
+        return outcome(units)
+    teardown_deadline = time.monotonic() + PREVIEW_TEARDOWN_SECONDS
+    torn = [
+        _run_preview_unit(repo_path, s, pr, ref, True, domain, teardown_deadline)
+        for s in ordered
+    ]
+    return outcome(units, torn_down=all(u["status"] == "ok" for u in torn))
 
 
 if __name__ == "__main__":

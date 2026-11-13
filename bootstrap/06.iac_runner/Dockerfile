@@ -40,6 +40,7 @@ RUN sdk="$(python /tmp/sdk/sdk_requirement.py /tmp/sdk/uv.lock)" \
 
 COPY bootstrap/06.iac_runner/webhook_server.py .
 COPY bootstrap/06.iac_runner/sync_runner.py .
+COPY bootstrap/06.iac_runner/route_types.json .
 
 RUN mkdir -p /workspace && \
     git config --global --add safe.directory /workspace/infra2 && \

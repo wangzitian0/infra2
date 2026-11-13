@@ -63,6 +63,9 @@ class ConvergenceFakeDokploy:
         self._seq = 0
         self._deployed = False
 
+    def get_latest_deployment(self, compose_id):
+        return None  # no deploy runs while the slot is taken down
+
     def get_containers(self):
         return []  # the container inventory is empty once Dokploy pruned the project
 

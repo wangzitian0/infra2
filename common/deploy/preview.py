@@ -265,6 +265,7 @@ def up(
     health_timeout: int = 600,
     health_interval: int = 10,
     repo: str | None = None,
+    compose_file: str | None = None,
     http_get=None,
     _now=time.time,
     _sleep=time.sleep,
@@ -303,22 +304,27 @@ def up(
             _source_app_vault_creds(client, config.project, config.secret_env)
         )
 
-    gh_id = github_id if github_id is not None else client.get_github_provider_id()
-    if not gh_id:
-        raise RuntimeError(
-            "no GitHub provider configured in Dokploy; add one in Settings -> Git "
-            "Providers before deploying a preview (the compose template is pulled from "
-            "the infra2 repo, not uploaded raw)."
+    if compose_file is not None:
+        # The runner route (#1647): the checked compose text is uploaded as it is, so
+        # Dokploy never clones a PR branch to read the compose file.
+        source_fields = dict(source_type="raw", compose_file=compose_file)
+    else:
+        gh_id = github_id if github_id is not None else client.get_github_provider_id()
+        if not gh_id:
+            raise RuntimeError(
+                "no GitHub provider configured in Dokploy; add one in Settings -> Git "
+                "Providers before deploying a preview (the compose template is pulled "
+                "from the infra2 repo, not uploaded raw)."
+            )
+        source_fields = dict(
+            source_type="github",
+            githubId=gh_id,
+            repository=repo_name,
+            owner=repo_owner,
+            branch=branch,
+            composePath=config.compose_path,
+            autoDeploy=False,
         )
-    source_fields = dict(
-        source_type="github",
-        githubId=gh_id,
-        repository=repo_name,
-        owner=repo_owner,
-        branch=branch,
-        composePath=config.compose_path,
-        autoDeploy=False,
-    )
 
     had_existing_compose = (
         _find_compose(client, config.project, alias.compose_name) is not None
@@ -478,6 +484,32 @@ def wait_for_containers_absent(
     return False
 
 
+_RUNNING_DEPLOY_STATUSES = ("running", "queued", "pending", "in_progress")
+_DEPLOY_SETTLE_ATTEMPTS = 20
+_DEPLOY_SETTLE_SECONDS = 3
+
+
+def _settle_running_deploy(client, compose_id: str, sleep) -> None:
+    """Cancel a deploy that still runs for the compose and wait until it stops, so the
+    teardown cannot race a late ``up --build`` that would leave containers behind."""
+    latest = client.get_latest_deployment(compose_id)
+    if (
+        not latest
+        or str(latest.get("status", "")).lower() not in _RUNNING_DEPLOY_STATUSES
+    ):
+        return
+    client.cancel_compose_deployment(compose_id)
+    for _ in range(_DEPLOY_SETTLE_ATTEMPTS):
+        latest = client.get_latest_deployment(compose_id)
+        if (
+            not latest
+            or str(latest.get("status", "")).lower() not in _RUNNING_DEPLOY_STATUSES
+        ):
+            return
+        sleep(_DEPLOY_SETTLE_SECONDS)
+    raise RuntimeError(f"deploy of compose {compose_id} did not stop after cancel")
+
+
 def down(
     kind: str,
     value: int | str | None,
@@ -506,6 +538,7 @@ def down(
     compose_id = None
     if existing:
         compose_id = existing["composeId"]
+        _settle_running_deploy(client, compose_id, _sleep or time.sleep)
         client.delete_compose(compose_id, delete_volumes=True)
     cleared = wait_for_containers_absent(
         client, service, f"-{alias.alias}", attempts=attempts, _sleep=_sleep
