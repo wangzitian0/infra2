@@ -114,23 +114,16 @@ failure_classes:
 
 # One source pages each condition (#1648). `conditions` lists the signals that watch
 # one real-world condition; at most one of them may be `type: alert`, the others
-# report or are excluded. A second pager fails the audit unless `double_owner_debt`
-# names the condition with the issue that retires it; the audit fails once a debt
-# entry stops being a violation, so the list only shrinks with the work that pays it.
+# report or are excluded. `signoz_conditions` maps a SigNoz rule name to the condition
+# it watches: the rule joins that condition while its rule file holds it. A second
+# pager fails the audit.
 conditions:
   canary-todo:
     signals:
       - production.todo-canary-status # in-band probe runner, every 60 s
-      - production.PlatformTodoProbeFailures.signoz # SigNoz rule on the probe metric
 
-double_owner_debt:
-  - condition: canary-todo
-    phase: "#1648"
-    reason: >-
-      The probe runner keeps the page. Deleting the SigNoz rule PlatformTodoProbeFailures
-      edits platform/12.alerting/alert_rules.json, and that edit runs the observability
-      apply, a production step. The owner approves the apply; then remove the rule
-      and this entry.
+signoz_conditions:
+  PlatformTodoProbeFailures: canary-todo
 
 # Paging signals still in the wrong layer. Each entry names the #901 phase
 # issue that moves or retires it; the audit fails once an entry stops being a

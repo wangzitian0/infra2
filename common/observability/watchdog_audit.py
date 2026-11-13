@@ -301,18 +301,20 @@ def _condition_errors(
 
     ``conditions`` names the signals that watch one real-world condition. At most one
     of them may page (type alert); the others report or are excluded. A condition with
-    two pagers fails, unless ``double_owner_debt`` names it with the issue that pays it;
-    a debt entry that is no longer a violation fails, so the list only shrinks.
+    two pagers fails. ``signoz_conditions`` adds a SigNoz rule row to its condition while
+    the rule file holds the rule.
     """
     by_id = {str(signal.get("signal_id")): signal for signal in signals}
-    debt = {
-        str(entry.get("condition")): entry
-        for entry in inventory.get("double_owner_debt") or []
-    }
     errors: list[str] = []
-    violations: set[str] = set()
-    for name, spec in (inventory.get("conditions") or {}).items():
-        ids = [str(signal_id) for signal_id in (spec or {}).get("signals") or []]
+    members: dict[str, list[str]] = {
+        str(name): [str(i) for i in (spec or {}).get("signals") or []]
+        for name, spec in (inventory.get("conditions") or {}).items()
+    }
+    for rule, condition in (inventory.get("signoz_conditions") or {}).items():
+        for signal_id, signal in by_id.items():
+            if signal.get("primary_owner") == "signoz" and signal.get("signal") == rule:
+                members.setdefault(str(condition), []).append(signal_id)
+    for name, ids in members.items():
         pagers = []
         for signal_id in ids:
             signal = by_id.get(signal_id)
@@ -323,24 +325,11 @@ def _condition_errors(
             ):
                 pagers.append(signal_id)
         if len(pagers) > 1:
-            violations.add(name)
-            if name not in debt:
-                owners = sorted(
-                    f"{by_id[signal_id]['primary_owner']}:{signal_id}"
-                    for signal_id in pagers
-                )
-                errors.append(
-                    f"condition {name} has {len(pagers)} paging owners: {owners}"
-                )
-    for name, entry in debt.items():
-        if not PHASE_REF.match(str(entry.get("phase", ""))) or not entry.get("reason"):
-            errors.append(
-                f"double_owner_debt {name}: needs a phase issue (#N) and a reason"
+            owners = sorted(
+                f"{by_id[signal_id]['primary_owner']}:{signal_id}"
+                for signal_id in pagers
             )
-    for name in sorted(set(debt) - violations):
-        errors.append(
-            f"double_owner_debt {name} is no longer a violation; remove the entry"
-        )
+            errors.append(f"condition {name} has {len(pagers)} paging owners: {owners}")
     return errors
 
 

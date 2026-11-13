@@ -254,7 +254,6 @@ _EXPECTED_RULES = {
     ),
     "PlatformAlertingErrorLogs": ("threshold_rule", "error", 5, "4", "15m0s", ""),
     "PlatformTodoErrorLogs": ("threshold_rule", "error", 10, "4", "15m0s", ""),
-    "PlatformTodoProbeFailures": ("promql_rule", "error", 0.0, "1", "5m0s", "count"),
 }
 # docs/ssot/ops.observability.md §3: the severity label is the P level.
 _P_LEVEL_BY_SEVERITY = {"critical": "P0", "error": "P1", "warning": "P2"}

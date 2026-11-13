@@ -681,41 +681,23 @@ def test_a_condition_naming_an_unknown_signal_fails() -> None:
     ]
 
 
-def test_double_owner_debt_needs_a_phase_and_ends_when_paid() -> None:
-    audit = _load_audit()
-    two = [_signal("a", "internal"), _signal("b", "signoz")]
-    debt = {
-        "condition": "disk",
-        "phase": "#1648",
-        "reason": "apply is a production step",
-    }
-    inventory = {
-        "conditions": {"disk": {"signals": ["a", "b"]}},
-        "double_owner_debt": [debt],
-    }
-
-    assert audit._condition_errors(inventory, two) == []
-    assert audit._condition_errors(
-        inventory, two[:1] + [_signal("b", "signoz", "report")]
-    ) == ["double_owner_debt disk is no longer a violation; remove the entry"]
-    inventory["double_owner_debt"] = [{"condition": "disk"}]
-    assert audit._condition_errors(inventory, two) == [
-        "double_owner_debt disk: needs a phase issue (#N) and a reason"
-    ]
-
-
-def test_the_current_registry_has_only_the_declared_double_owner() -> None:
-    """Today's tree: the Canary Todo has two pagers (the probe runner and a SigNoz rule).
-    The debt names the issue that retires it; every other condition has one pager."""
+def test_the_current_registry_has_one_pager_per_condition(monkeypatch) -> None:
+    """Canary Todo: the probe runner pages; the SigNoz rule PlatformTodoProbeFailures is
+    deleted. Putting the rule back is a second pager and fails the audit."""
     audit = _load_audit()
     inventory = audit._load_inventory()
 
     assert audit._condition_errors(inventory, inventory["signals"]) == []
-    assert [entry["condition"] for entry in inventory["double_owner_debt"]] == [
-        "canary-todo"
-    ]
-    without_debt = {**inventory, "double_owner_debt": []}
-    assert audit._condition_errors(without_debt, inventory["signals"]) == [
+    assert "PlatformTodoProbeFailures" not in {
+        row["signal"] for row in audit._signoz_signal_entries()
+    }
+    rule = {
+        "signal_id": "production.PlatformTodoProbeFailures.signoz",
+        "signal": "PlatformTodoProbeFailures",
+        "primary_owner": "signoz",
+        "type": "alert",
+    }
+    assert audit._condition_errors(inventory, [*inventory["signals"], rule]) == [
         "condition canary-todo has 2 paging owners: "
         "['internal:production.todo-canary-status', "
         "'signoz:production.PlatformTodoProbeFailures.signoz']"
