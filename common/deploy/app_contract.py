@@ -20,7 +20,6 @@ import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any
 
 from infra2_sdk.deploy import (
@@ -67,20 +66,15 @@ FIXED_DEPLOY_TYPES = frozenset(
     {"staging", "prod", DeployType.STAGING, DeployType.PRODUCTION}
 )
 APP_HOOKS_MANIFEST_PATH = "runtime-hooks.manifest.json"
-#: Pairs of (env name, GitHub Actions secret) for the env that the infra2 hook runner takes
-#: from a secret. The env name is one that an App manifest lists in ``required_env`` or
-#: ``optional_env``. Each workflow step that runs an App hook slot sets each env name from
-#: its secret (#1529); a test parses the workflows and fails on a step that does not.
-_HOOK_RUNNER_SECRET_PAIRS: tuple[tuple[str, str], ...] = (
-    ("AI_API_KEY", "ZAI_CODING_CN_API_KEY"),
-    ("TA_EMAIL", "TA_EMAIL"),
-    ("TA_MEMBER_EMAIL", "TA_MEMBER_EMAIL"),
-    ("TA_PASSWORD", "TA_PASSWORD"),
-    ("TA_MCP_TOKEN", "TA_MCP_TOKEN"),
-)
-#: The same pairs as a read-only mapping: env name -> secret name.
-HOOK_RUNNER_SECRET_ENV: Mapping[str, str] = MappingProxyType(
-    dict(_HOOK_RUNNER_SECRET_PAIRS)
+#: Env names that the infra2 hook runner takes from a GitHub Actions secret of the same name.
+#: An App manifest lists each name in ``required_env`` or ``optional_env``. Each workflow step
+#: that runs an App hook slot sets each name from its secret (#1529); a test parses the
+#: workflows and fails on a step that does not.
+HOOK_RUNNER_SECRET_NAMES: tuple[str, ...] = (
+    "TA_EMAIL",
+    "TA_MEMBER_EMAIL",
+    "TA_PASSWORD",
+    "TA_MCP_TOKEN",
 )
 
 
@@ -653,19 +647,17 @@ def fetch_hooks_manifest(
     return RuntimeHooksManifest.from_dict(raw)
 
 
-def execute_app_hook_slot(
+def hook_env_for_slot(
     manifest_or_path: RuntimeHooksManifest | str | Path,
     slot: str,
     *,
     app_url: str,
-    environment: str = "staging",
-    version_ref: str = "main",
+    environment: str,
+    version_ref: str,
     cwd: Path | None = None,
     ambient_env: Mapping[str, str] | None = None,
-    result_path: Path | None = None,
-    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
-) -> HookRunResult:
-    """Load (if needed) and execute one verification hook slot via ``infra2_sdk.manifests``."""
+) -> tuple[RuntimeHooksManifest, dict[str, str]]:
+    """Return the manifest and ambient env of one hook slot, or raise ``ValueError`` on a missing name."""
     if slot not in HOOK_SLOTS:
         raise ValueError(f"unknown hook slot {slot!r}; allowed: {list(HOOK_SLOTS)}")
     manifest = (
@@ -706,6 +698,32 @@ def execute_app_hook_slot(
         version_ref=version_ref,
         artifacts_dir=augmented_slot_spec.artifacts_dir,
         ambient_env=effective_ambient,
+    )
+    return augmented_manifest, effective_ambient
+
+
+def execute_app_hook_slot(
+    manifest_or_path: RuntimeHooksManifest | str | Path,
+    slot: str,
+    *,
+    app_url: str,
+    environment: str = "staging",
+    version_ref: str = "main",
+    cwd: Path | None = None,
+    ambient_env: Mapping[str, str] | None = None,
+    result_path: Path | None = None,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> HookRunResult:
+    """Load (if needed) and execute one verification hook slot via ``infra2_sdk.manifests``."""
+    cleaned_url = app_url.strip()
+    augmented_manifest, effective_ambient = hook_env_for_slot(
+        manifest_or_path,
+        slot,
+        app_url=cleaned_url,
+        environment=environment,
+        version_ref=version_ref,
+        cwd=cwd,
+        ambient_env=ambient_env,
     )
     return run_hook_slot(
         augmented_manifest,
@@ -883,7 +901,7 @@ __all__ = [
     "FIXED_DEPLOY_TYPES",
     "Gap",
     "HOOK_RUNNER_CONTEXT_ENV",
-    "HOOK_RUNNER_SECRET_ENV",
+    "HOOK_RUNNER_SECRET_NAMES",
     "HOOK_SLOTS",
     "HookRunResult",
     "HookSlotSpec",
@@ -899,6 +917,7 @@ __all__ = [
     "execute_app_hook_slot",
     "fetch_hooks_manifest",
     "git_url",
+    "hook_env_for_slot",
     "load_hooks_manifest",
     "next_app_release_tag",
     "parse_compose_contract",

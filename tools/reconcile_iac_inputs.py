@@ -21,7 +21,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Sequence
@@ -37,10 +37,11 @@ from common.core.registry import domain_for_service, service_attrs
 from common.deploy.app_contract import (
     APP_HOOKS_MANIFEST_PATH,
     HOOK_RUNNER_CONTEXT_ENV,
-    HOOK_RUNNER_SECRET_ENV,
+    HOOK_RUNNER_SECRET_NAMES,
     HOOK_SLOTS,
     RuntimeHooksManifest,
     execute_app_hook_slot,
+    hook_env_for_slot,
     fetch_hooks_manifest,
     git_url,
     load_hooks_manifest,
@@ -76,7 +77,6 @@ from infra2_sdk.manifests import (
     STAGE_HOOK_PLANS,  # noqa: F401
     HookRunResult,
     StageHookPlan,  # noqa: F401
-    build_hook_env,
     stage_hook_plan,
 )
 from infra2_sdk.stage_record import StageRecord
@@ -1051,12 +1051,23 @@ def audit_app_hooks(
     services: Sequence[str] = (),
     manifest_fetcher: Callable[[str], bytes] | None = None,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    ambient_env: Mapping[str, str] | None = None,
+    pinned_tags: Mapping[str, str] | None = None,
+    slots: Sequence[str] | None = None,
+    target_env: str = "staging",
 ) -> dict[str, object]:
-    """Validate 4-slot ``runtime-hooks.manifest.json`` contracts for all registered Apps (#1416)."""
+    """Validate ``runtime-hooks.manifest.json`` contracts for registered Apps (#1416).
+
+    Names mode (``ambient_env`` is None) checks each ``required_env`` name against the
+    runner sources. Value mode also builds the env of each slot from ``ambient_env`` and
+    fails on a missing or empty value (#1633). ``pinned_tags`` and ``slots`` narrow the check
+    to the release train: the pins at the deploy ref, and only the stage slots.
+    """
     target_services = (
         [str(s) for s in services if str(s)] if services else sorted(APP_SOURCES.keys())
     )
-    pinned_tags = load_app_release_tags(repo_root, runner=runner)
+    if pinned_tags is None:
+        pinned_tags = load_app_release_tags(repo_root, runner=runner)
     checked: dict[str, dict[str, object]] = {}
     errors: list[str] = []
 
@@ -1082,13 +1093,13 @@ def audit_app_hooks(
             checked[service] = {"ok": False, "error": str(exc)}
             continue
 
-        supplied = set(HOOK_RUNNER_SECRET_ENV) | set(HOOK_RUNNER_CONTEXT_ENV)
+        supplied = set(HOOK_RUNNER_SECRET_NAMES) | set(HOOK_RUNNER_CONTEXT_ENV)
         slot_errors: list[str] = []
         if manifest.schema_version != 2:
             slot_errors.append(
                 f"expected schema_version 2, got {manifest.schema_version!r}"
             )
-        for slot_name in HOOK_SLOTS:
+        for slot_name in slots or HOOK_SLOTS:
             if slot_name not in manifest.slots:
                 slot_errors.append(f"missing slot {slot_name!r}")
                 continue
@@ -1105,46 +1116,21 @@ def audit_app_hooks(
                     slot_errors.append(
                         f"unsupplied required_env {env_name!r} in slot {slot_name!r}"
                     )
-        for dry_slot in ("smoke", "prod_gate", "scheduled_audit"):
-            if dry_slot not in manifest.slots:
+            if ambient_env is None:
                 continue
-            spec = manifest.slots[dry_slot]
-            augmented_opt = tuple(
-                dict.fromkeys(
-                    [
-                        *spec.optional_env,
-                        "INFRA2_HOOK_APP_URL",
-                        "BASE_URL",
-                        "DEPLOY_ENV",
-                    ]
-                )
-            )
-            ambient = {
-                "APP_URL": "https://staging.example.invalid",
-                "INFRA2_HOOK_APP_URL": "https://staging.example.invalid",
-                "BASE_URL": "https://staging.example.invalid",
-                "DEPLOY_BASE_URL": "https://staging.example.invalid",
-                "STAGING_BASE_URL": "https://staging.example.invalid",
-                "TA_BASE_URL": "https://staging.example.invalid",
-                "ENVIRONMENT": "staging",
-                "DEPLOY_ENV": "staging",
-                "APP_VERSION_REF": pinned_tag or "v0.1.0",
-                "EXPECTED_SHA": pinned_tag or "v0.1.0",
-            }
-            for sec_key in HOOK_RUNNER_SECRET_ENV:
-                ambient.setdefault(sec_key, "dry-run-secret")
             try:
-                build_hook_env(
-                    replace(spec, optional_env=augmented_opt),
-                    slot=dry_slot,
-                    app_url="https://staging.example.invalid",
-                    environment="staging",
-                    version_ref=pinned_tag or "v0.1.0",
-                    artifacts_dir=spec.artifacts_dir,
-                    ambient_env=ambient,
+                hook_env_for_slot(
+                    manifest,
+                    slot_name,
+                    app_url=_app_url_for(service, target_env, "zitian.party"),
+                    environment="production"
+                    if target_env in ("prod", "production")
+                    else "staging",
+                    version_ref=pinned_tag or "main",
+                    ambient_env=ambient_env,
                 )
             except ValueError as exc:
-                slot_errors.append(f"{dry_slot}: {exc}")
+                slot_errors.append(f"{slot_name}: {exc}")
         if slot_errors:
             errors.extend(f"{service}: {err}" for err in slot_errors)
             checked[service] = {
@@ -1166,6 +1152,24 @@ def audit_app_hooks(
         "services": checked,
         "errors": errors,
     }
+
+
+def _missing_env_errors(audit: Mapping[str, object]) -> dict[str, str]:
+    """Return ``{service: message}`` for each audited service with a missing hook env value."""
+    failures: dict[str, str] = {}
+    for service, info in dict(audit.get("services", {})).items():  # type: ignore[call-overload]
+        lines = [e for e in info.get("errors", ()) if "missing required hook env:" in e]
+        if lines:
+            failures[service] = f"{service}: " + "; ".join(lines)
+    return failures
+
+
+def _app_url_for(service: str, target_env: str, domain: str) -> str:
+    """Return the public URL of an App service in ``target_env``."""
+    norm_env = "prod" if target_env in ("prod", "production") else "staging"
+    return app_compose_env_config(service, norm_env).app_url(
+        domain=domain_for_service(service) or domain
+    )
 
 
 def resolve_app_hook_coordinates(
@@ -1193,13 +1197,11 @@ def resolve_app_hook_coordinates(
             version_ref, repo=git_url(repo_slug), runner=runner
         )
         resolved_sha = resolved.sha.lower()
-    resolved_url = app_url.strip()
-    if not resolved_url:
-        effective_domain = domain_for_service(service) or domain
-        norm_env = "prod" if target_env in ("prod", "production") else "staging"
-        cfg = app_compose_env_config(service, norm_env)
-        resolved_url = cfg.app_url(domain=effective_domain)
-    return version_ref, resolved_sha, resolved_url
+    return (
+        version_ref,
+        resolved_sha,
+        app_url.strip() or _app_url_for(service, target_env, domain),
+    )
 
 
 def _parse_hook_slots(slot_spec: str) -> tuple[str, ...]:
@@ -1214,6 +1216,61 @@ def _parse_hook_slots(slot_spec: str) -> tuple[str, ...]:
         if item not in seen:
             seen.append(item)
     return tuple(seen)
+
+
+def _hook_env_failure(
+    service: str,
+    slot: str,
+    environment: str,
+    app_url: str,
+    version_ref: str,
+    message: str,
+) -> HookRunResult:
+    """Return the failed result of a hook slot that never ran because of a missing env name."""
+    return HookRunResult(
+        service=service,
+        slot=slot,
+        environment=environment,
+        app_url=app_url,
+        version_ref=version_ref,
+        status="fail",
+        exit_code=1,
+        duration_seconds=0.0,
+        summary=message,
+        stderr_tail=message,
+    )
+
+
+def _run_hook_slot_or_fail(
+    manifest: RuntimeHooksManifest,
+    slot: str,
+    *,
+    app_url: str,
+    environment: str,
+    version_ref: str,
+    **kwargs: object,
+) -> tuple[HookRunResult, str | None]:
+    """Run one hook slot. A missing env name gives a failed result and its message, not a raise."""
+    try:
+        res = execute_app_hook_slot(
+            manifest,
+            slot,
+            app_url=app_url,
+            environment=environment,
+            version_ref=version_ref,
+            **kwargs,  # type: ignore[arg-type]
+        )
+    except ValueError as exc:
+        if "missing required hook env:" not in str(exc):
+            raise
+        message = str(exc)
+        return (
+            _hook_env_failure(
+                manifest.service, slot, environment, app_url, version_ref, message
+            ),
+            message,
+        )
+    return res, None
 
 
 def run_post_deploy_app_hooks(
@@ -1282,33 +1339,15 @@ def run_post_deploy_app_hooks(
                 hook_env_name = (
                     "production" if target_env in ("prod", "production") else "staging"
                 )
-                missing_env_error: str | None = None
-                try:
-                    res = execute_app_hook_slot(
-                        manifest,
-                        single_slot,
-                        app_url=app_url,
-                        environment=hook_env_name,
-                        version_ref=version_ref,
-                        cwd=hook_cwd,
-                        runner=runner,
-                    )
-                except ValueError as exc:
-                    if "missing required hook env:" not in str(exc):
-                        raise
-                    missing_env_error = str(exc)
-                    res = HookRunResult(
-                        service=manifest.service,
-                        slot=single_slot,
-                        environment=hook_env_name,
-                        app_url=app_url,
-                        version_ref=version_ref,
-                        status="fail",
-                        exit_code=1,
-                        duration_seconds=0.0,
-                        summary=missing_env_error,
-                        stderr_tail=missing_env_error,
-                    )
+                res, missing_env_error = _run_hook_slot_or_fail(
+                    manifest,
+                    single_slot,
+                    app_url=app_url,
+                    environment=hook_env_name,
+                    version_ref=version_ref,
+                    cwd=hook_cwd,
+                    runner=runner,
+                )
                 entry = res.to_dict()
                 entry["service"] = service
                 entry["service_id"] = service
@@ -1373,8 +1412,44 @@ def run_scheduled_app_audits(
             if v is not None:
                 effective_ambient[str(k)] = str(v)
 
+    app_targets = [svc for svc in target_services if svc in APP_SOURCES]
+    env_failures = (
+        _missing_env_errors(
+            audit_app_hooks(
+                repo_root,
+                services=app_targets,
+                manifest_fetcher=manifest_fetcher,
+                runner=runner,
+                ambient_env=effective_ambient,
+                pinned_tags=pinned_tags,
+                slots=(slot,),
+                target_env=target_env,
+            )
+        )
+        if app_targets
+        else {}
+    )
+    hook_env_name = "production" if target_env in ("prod", "production") else "staging"
+
     results: list[dict[str, object]] = []
     for service in target_services:
+        if service in env_failures:
+            message = env_failures[service]
+            version_ref = pinned_tags.get(service) or "main"
+            app_url = _app_url_for(service, target_env, effective_domain)
+            entry = _hook_env_failure(
+                service, slot, hook_env_name, app_url, version_ref, message
+            ).to_dict()
+            entry.update(
+                service=service,
+                service_id=service,
+                slot=slot,
+                ok=False,
+                app_url=app_url,
+                missing_env_error=message,
+            )
+            results.append(entry)
+            continue
         rel_local = local_manifests.get(service) or LOCAL_SERVICE_HOOK_MANIFESTS.get(
             service
         )
@@ -1416,38 +1491,17 @@ def run_scheduled_app_audits(
                 repo_root=repo_root,
                 runner=runner,
             )
-        hook_env_name = (
-            "production" if target_env in ("prod", "production") else "staging"
-        )
-        missing_env_error: str | None = None
         try:
-            try:
-                res = execute_app_hook_slot(
-                    manifest,
-                    slot,
-                    app_url=app_url,
-                    environment=hook_env_name,
-                    version_ref=version_ref,
-                    cwd=hook_cwd,
-                    ambient_env=effective_ambient,
-                    runner=runner,
-                )
-            except ValueError as exc:
-                if "missing required hook env:" not in str(exc):
-                    raise
-                missing_env_error = str(exc)
-                res = HookRunResult(
-                    service=manifest.service,
-                    slot=slot,
-                    environment=hook_env_name,
-                    app_url=app_url,
-                    version_ref=version_ref,
-                    status="fail",
-                    exit_code=1,
-                    duration_seconds=0.0,
-                    summary=missing_env_error,
-                    stderr_tail=missing_env_error,
-                )
+            res, missing_env_error = _run_hook_slot_or_fail(
+                manifest,
+                slot,
+                app_url=app_url,
+                environment=hook_env_name,
+                version_ref=version_ref,
+                cwd=hook_cwd,
+                ambient_env=effective_ambient,
+                runner=runner,
+            )
         finally:
             if tmp_checkout is not None:
                 tmp_checkout.cleanup()
@@ -2313,18 +2367,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{svc}={tag}")
         return 0
     if args.run_scheduled_audit:
-        env_overrides = {
-            name: value
-            for name, secret in HOOK_RUNNER_SECRET_ENV.items()
-            if (value := os.environ.get(name) or os.environ.get(secret))
-        } or None
         run_url = os.environ.get("GITHUB_RUN_URL", "") or github_run_url(os.environ)
         hook_results = run_scheduled_app_audits(
             repo_root,
             target_env=target_env,
             slot="scheduled_audit",
             base_domain=args.domain,
-            env_overrides=env_overrides,
             run_url=run_url,
             services=args.sync_service or None,
         )
@@ -2578,6 +2626,9 @@ def main(argv: list[str] | None = None) -> int:
             promote_prod=promote_prod,
             target_env=target_env,
         )
+        effective_slot = args.post_deploy_hook_slot or _stage_slots_csv(
+            "prod" if promote_prod else "staging"
+        )
         stage.units = plan_units(plan)
         if applied and not args.dry_run:
             with timed_check(pre_checks, "app_pins"):
@@ -2604,6 +2655,32 @@ def main(argv: list[str] | None = None) -> int:
                                     )
                                 except (ValueError, RuntimeError) as exc:
                                     raise SystemExit(f"::error::{exc}") from exc
+            with timed_check(pre_checks, "hook_env"):
+                hook_services = sorted(
+                    {
+                        svc
+                        for cmd in applied
+                        for svc in (s.strip() for s in cmd.service.split(","))
+                        if svc in APP_SOURCES
+                    }
+                )
+                hook_audit = (
+                    audit_app_hooks(
+                        repo_root,
+                        services=hook_services,
+                        ambient_env=os.environ,
+                        pinned_tags=plan.app_release_tags,
+                        slots=_parse_hook_slots(effective_slot),
+                        target_env=target_env,
+                    )
+                    if hook_services
+                    else {"ok": True, "errors": []}
+                )
+                if not hook_audit["ok"]:
+                    raise SystemExit(
+                        "::error::app hook env check failed: "
+                        + "; ".join(map(str, hook_audit["errors"]))  # type: ignore[call-overload]
+                    )
     except BaseException as exc:
         if all(check.ok for check in pre_checks):
             pre_checks.append(CheckVerdict("plan", False, str(exc)[:300]))
@@ -2627,9 +2704,6 @@ def main(argv: list[str] | None = None) -> int:
         and not args.dry_run
         and not any(result.get("returncode") != 0 for result in results)
     ):
-        effective_slot = args.post_deploy_hook_slot or _stage_slots_csv(
-            "prod" if promote_prod else "staging"
-        )
         hook_results = run_post_deploy_app_hooks(
             plan,
             applied,

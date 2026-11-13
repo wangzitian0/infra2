@@ -93,9 +93,7 @@ jobs:
       IAC_RUNNER_URL: ${{ vars.IAC_RUNNER_URL || 'https://iac.zitian.party' }}
       INTERNAL_DOMAIN: ${{ vars.INTERNAL_DOMAIN || 'zitian.party' }}
       SIGNOZ_API_KEY: ${{ secrets.SIGNOZ_API_KEY }}
-      # The hook slot staging_gate of finance_report lists AI_API_KEY in required_env (#1529).
-      # HOOK_RUNNER_SECRET_ENV in common/deploy/app_contract.py names these secrets (#1534).
-      AI_API_KEY: ${{ secrets.ZAI_CODING_CN_API_KEY }}
+      # HOOK_RUNNER_SECRET_NAMES in common/deploy/app_contract.py names these secrets (#1534).
       TA_EMAIL: ${{ secrets.TA_EMAIL }}
       TA_MEMBER_EMAIL: ${{ secrets.TA_MEMBER_EMAIL }}
       TA_PASSWORD: ${{ secrets.TA_PASSWORD }}

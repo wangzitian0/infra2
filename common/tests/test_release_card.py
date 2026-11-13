@@ -797,10 +797,15 @@ def test_the_text_fallback_of_a_rollback_is_bounded_too(monkeypatch) -> None:
         monkeypatch.setenv(key, value)
     monkeypatch.delenv(rc.MESSAGE_ID_ENV, raising=False)
 
+    before = set(threading.enumerate())
     started = time.monotonic()
     promote._notify_rollback_event(EVENT)
     elapsed = time.monotonic() - started
     release.set()
+    # The abandoned delivery thread resolves `urlopen` when it resumes. Wait for it here,
+    # while this test's fake is still in place: it must not send into a later test's fake.
+    for thread in set(threading.enumerate()) - before:
+        thread.join(5)
 
     assert elapsed < 3
 
