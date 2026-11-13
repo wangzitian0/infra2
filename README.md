@@ -164,7 +164,7 @@ DEPLOY_ENV=production invoke fr-app.shared.status
 
 应用仓库（`repos/finance_report`、`repos/truealpha`）保持独立发布节奏，通过 GitHub Actions 发送签名的 `AppDeployRequest` 或调用 `python -m tools.deploy_v2` 统一前门完成部署。完整契约与操作手册见：
 
-- **应用部署与三阶段晋升契约**：[docs/ssot/ops.pipeline.md](docs/ssot/ops.pipeline.md)
+- **应用部署与交付模型**：[docs/ssot/ops.pipeline.md](docs/ssot/ops.pipeline.md)
 - **环境隔离与四轴坐标（`deploy_v2`）**：[docs/ssot/core.environments.md](docs/ssot/core.environments.md)
 - **服务准入与退役原子 Saga（`service.onboard`）**：[docs/ssot/ops.service-lifecycle.md](docs/ssot/ops.service-lifecycle.md)
 - **Finance Report 模块说明**：[finance_report/README.md](finance_report/README.md) · [Infra-009 归档记录](docs/project/archive/Infra-009.finance_report_deploy.md)

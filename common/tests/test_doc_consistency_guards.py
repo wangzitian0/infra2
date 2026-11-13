@@ -372,3 +372,27 @@ def test_canary_todo_docs_match_deep_probe_and_manifest_contracts() -> None:
         assert "validate_startup_environment" in text or "assert_environment" in text, (
             f"missing startup env validation reference in {rel_path}"
         )
+
+
+def test_delivery_model_has_one_owner() -> None:
+    """Only ops.pipeline.md section 2.0 defines the delivery stages."""
+    owner = ROOT / "docs/ssot/ops.pipeline.md"
+    assert "### 2.0 Delivery model" in owner.read_text(encoding="utf-8")
+    stage_model = re.compile(
+        r"^\s*[-*]?\s*\*{0,2}Stage [123]\b.{0,4}(?:—|--|-|:)|三阶段|三段式|交付阶段.{0,6}SSOT|阶段定义|Pre\s*(?:->|→)\s*Deploy",
+        re.M,
+    )
+    scanned = [
+        ROOT / "init.md",
+        ROOT / "README.md",
+        *sorted((ROOT / "docs/ssot").glob("*.md")),
+        *sorted((ROOT / "docs/onboarding").glob("*.md")),
+    ]
+    copies = [
+        str(path.relative_to(ROOT))
+        for path in scanned
+        if path != owner and stage_model.search(path.read_text(encoding="utf-8"))
+    ]
+    assert not copies, (
+        f"Stage model copied outside ops.pipeline.md section 2.0: {copies}"
+    )

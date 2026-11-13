@@ -1,7 +1,7 @@
-# 环境模型与交付阶段 SSOT (Environment & Delivery Architecture)
+# 环境模型 SSOT (Environment Architecture)
 
 > **SSOT Key**: `core.environments`  
-> **核心定义**: 基础设施生命周期遵循**从左到右推进的严格阶段链条**。系统架构严格区分**无状态执行器 (Stateless Runners)**与**有状态部署环境 (Deployment Environments)**：
+> **核心定义**: 本文只定义环境。交付阶段、阶段记录与变更种类见 [`ops.pipeline.md` §2.0](./ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases)。
 > 
 > - **部署只认三环境**：`preview`（PR 临时动态）、`staging`（单例预发）、`production`（单例生产），加目标态 `DR`（异地灾备）。
 > - **无状态执行器**：本地开发工作站、GitHub PR CI 虚拟机、宿主机 IaC Runner 仅负责代码测试与编排触发，不持有应用持久化状态。
@@ -15,45 +15,12 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **阶段定义与词汇** | 已安装的 infra2-sdk 发布件：`infra2_sdk/data/stages.yaml`（经 `infra2_sdk.ci.load_delivery_stages()` 读取，版本以 `uv.lock` 为准） | 从左到右的统一交付阶段语义；infra2 不保留本地副本 |
+| **阶段 id 与阶段模型** | stage id 来自 SDK `stages.yaml`；阶段模型（问题、阶段、合并阻塞）见 [`ops.pipeline.md` §2.0](./ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases) | infra2 不在此保留副本 |
 | **门禁清单** | [`docs/ssot/ci-gate-inventory.yaml`](./ci-gate-inventory.yaml) | 七寸 1 (Merge Authority) 的所有阻断门禁 |
 | **环境配置与部署** | Dokploy Project/Environment + `deploy_v2` | 远端环境变量和发布前门 |
 | **数据与域名隔离** | `DATA_PATH` / `ENV_SUFFIX` / `ENV_DOMAIN_SUFFIX` | 有状态部署环境间的数据与网络隔离 |
 
 ---
-
-## 2. 架构模型 - 从左到右生命周期与两大七寸
-
-```mermaid
-flowchart LR
-    subgraph L2R["从左到右推进链路 (Left-to-Right Pipeline)"]
-        subgraph Runners["无状态执行器 (Stateless Runners)"]
-            DevStation["本地开发工作站<br/>(Local Dev / pre-commit)"]
-            GHARunner["GitHub PR CI Runner<br/>(无状态临时虚拟机)"]
-            IaCRunner["IaC Runner / deploy_v2<br/>(宿主机无状态任务触发器)"]
-        end
-
-        subgraph ChokePoints["🎯 两大致命七寸 (The Two Critical Gates)"]
-            Gate1["【七寸 1】GitHub PR CI<br/>Merge Authority 全绿<br/>(阻断坏代码合入主干)"]
-            Gate2["【七寸 2】Staging 预发环境<br/>不可变 Tag 浸泡验证<br/>(阻断坏发布进生产)"]
-        end
-
-        subgraph DeployEnvs["有状态部署环境 (3 Stateful Envs + DR)"]
-            Preview["1. Preview 瞬态隔离环境<br/>(App post-merge 切 tag 前瞬态拉起 / 跑完 preview_gate 立即 --down)"]
-            Staging["2. Staging 集成预发环境<br/>(火车粒度 <=4 PRs · smoke + staging_gate)"]
-            Production["3. Production 生产环境<br/>(火车粒度 >=15 PRs 或 >=48h · smoke + prod_gate)"]
-            DR["[目标态] DR 异地灾备<br/>(冷备/定期演练)"]
-        end
-    end
-
-    DevStation -->|提交 PR| GHARunner
-    GHARunner --> Gate1
-    Gate1 -->|合流 main · 瞬态验证后切 vX.Y.Z 并 --down| Preview
-    Preview -->|生成不可变 App Tag 入列火车| Staging
-    Staging --> Gate2
-    Gate2 -->|显式 Promote| Production
-    Production -.->|Google Drive 加密备份流| DR
-```
 
 ---
 
@@ -483,14 +450,7 @@ compose、env、secret 路径、**外部镜像 tag**、Traefik 路由 label、�
 
 ## 5. 迭代速度对比
 
-| 环境 | 部署频率 | 变更范围 | 自动化程度 | 回滚成本 |
-|------|---------|---------|-----------|---------|
-| Local Dev | 每次保存 | 单个文件 | 热重载 | 0 (无影响) |
-| Local Docker | 每小时 | 多个服务 | docker compose up | 低 (重启容器) |
-| Preview | 按需 / PR | 完整功能栈 + 独立临时 DB | `deploy_v2 --type preview/*` | 0 (`--down` 销毁栈与卷) |
-| Staging | 每个 Release Tag | 稳定候选版本 | `vX.Y.Z` Tag 自动部署 | 中 (发布前向修复 tag) |
-| Production | 按需晋升 | 已验证的 Release Tag | 显式 Promote + Owner 审批 | 高 (影响真实用户) |
-| DR | 被动触发 | 全量恢复 | 手动 | 极高 (业务中断) |
+各环境的触发频率见 [`ops.pipeline.md` §2.0](./ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases)。
 
 ---
 
