@@ -442,7 +442,8 @@ MIN_STEPS_CALLING_THE_SCRIPT = {
     "workflows/deploy.yml": 1,
     "workflows/infra-ci.yml": 3,
     "workflows/ops-checks.yml": 8,
-    "workflows/reconcile-iac-inputs.yml": 1,
+    # the three jobs of the release train install through this composite action (#1646)
+    "actions/train-setup/action.yml": 1,
 }
 
 

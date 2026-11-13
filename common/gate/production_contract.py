@@ -27,7 +27,7 @@ NON_PRODUCTION_SECRETS = ("GITHUB_TOKEN",)
 GATED_JOBS: dict[tuple[str, str], str | None] = {
     ("deploy.yml", "deploy"): "inputs.type == 'prod'",
     ("deploy.yml", "bootstrap"): None,
-    ("reconcile-iac-inputs.yml", "reconcile"): "inputs.promote_prod",
+    ("reconcile-iac-inputs.yml", "operation"): "inputs.promote_prod",
     ("apply-observability.yml", "apply"): None,
     ("deploy-cloudflare-watchdog.yml", "deploy"): None,
 }
@@ -51,6 +51,37 @@ UNGATED_JOBS: dict[tuple[str, str], str] = {
         "ops-checks.yml",
         "facet-reconcile",
     ): "scheduled read-only drift report (#1127)",
+    (
+        "reconcile-iac-inputs.yml",
+        "post",
+    ): "gate hooks of a deployed release: read-only health checks; it reads only the staging test-account secrets and a production run passes none (#1646)",
+    (
+        "reconcile-iac-inputs.yml",
+        "alert",
+    ): "failure alert and stage card of a release run: reads only the Feishu delivery secrets (#1646)",
+}
+
+# An ungated job that appears here may read only the secrets named for it. A job without an
+# entry may read any secret (the older entries above). The three jobs of the release train
+# (#1646): `pre` reads no secret and needs no entry; `operation` is gated; `post` and `alert`
+# are ungated and bounded, so an edit that adds a deploy secret to either of them fails.
+UNGATED_SECRET_LIMITS: dict[tuple[str, str], frozenset[str]] = {
+    ("reconcile-iac-inputs.yml", "post"): frozenset(
+        {"TA_EMAIL", "TA_MEMBER_EMAIL", "TA_PASSWORD", "TA_MCP_TOKEN"}
+    ),
+    ("reconcile-iac-inputs.yml", "alert"): frozenset(
+        {
+            "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE",
+            "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL",
+            "INFRA2_OUT_OF_BAND_FEISHU_APP_ID",
+            "INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET",
+            "INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID",
+            "INFRA2_OUT_OF_BAND_FEISHU_API_BASE",
+            "INFRA2_REPORTS_FEISHU_APP_ID",
+            "INFRA2_REPORTS_FEISHU_APP_SECRET",
+            "INFRA2_REPORTS_FEISHU_CHAT_ID",
+        }
+    ),
 }
 
 # Retired workflow files removed in #1500. Kept as an empty set so callers importing
@@ -251,7 +282,9 @@ def contract_errors(
     workflows: dict[str, dict],
     gated: dict[tuple[str, str], str | None],
     ungated: dict[tuple[str, str], str],
+    limits: Mapping[tuple[str, str], frozenset[str]] | None = None,
 ) -> list[str]:
+    limits = UNGATED_SECRET_LIMITS if limits is None else limits
     errors: list[str] = []
     seen: set[tuple[str, str]] = set()
     for workflow_name, workflow in workflows.items():
@@ -270,6 +303,11 @@ def contract_errors(
                 if _writes_contents(workflow, job):
                     errors.append(
                         f"{workflow_name}:{job_name} is ungated and holds permission contents: write"
+                    )
+                if key in limits and (extra := _secrets_read(job) - limits[key]):
+                    errors.append(
+                        f"{workflow_name}:{job_name} is ungated and reads {sorted(extra)} "
+                        "outside its secret limit"
                     )
             elif credentials := _production_credentials(workflow, job):
                 errors.append(

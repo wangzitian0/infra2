@@ -49,7 +49,6 @@ from common.deploy.app_contract import (
     query_serving_release,
     validate_app_release_evidence,
 )
-from common.alerting.stage_card import show_stage_card
 from common.deploy.dependencies import explain_fanout
 from common.deploy.deploy_guard_audit import app_hook_pair
 from common.deploy.transient_failure import classify_failure
@@ -71,6 +70,7 @@ from common.deploy.release_markers import (
     version_key,
 )
 from common.observability.issue_trail import CheckVerdict
+from common.deploy.promotion_guard import require_upstream_post, required_staging_gates
 from infra2_sdk.deploy import DeployRequest
 from infra2_sdk.manifests import (
     FORBIDDEN_HOOK_ENV_NAMES,
@@ -198,14 +198,10 @@ def production_marker_tag(release_tag: str) -> str:
     return f"{PRODUCTION_MARKER_PREFIX}{release_tag}"
 
 
-def assert_production_marker_advances(
-    release_tag: str,
-    repo_root: Path,
-    *,
-    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
-) -> str | None:
-    """Validate marker history and return the current production release, if any."""
-    production_marker_tag(release_tag)
+def _marker_releases(
+    repo_root: Path, runner: Callable[..., subprocess.CompletedProcess]
+) -> list[str]:
+    """The release of every production marker; a marker that is not ``production/vX.Y.Z`` fails."""
     listed = runner(
         [
             "git",
@@ -230,7 +226,18 @@ def assert_production_marker_advances(
     ]
     if invalid:
         raise SystemExit(f"::error::invalid production marker(s): {', '.join(invalid)}")
-    candidates = [m.removeprefix(PRODUCTION_MARKER_PREFIX) for m in markers]
+    return [m.removeprefix(PRODUCTION_MARKER_PREFIX) for m in markers]
+
+
+def assert_production_marker_advances(
+    release_tag: str,
+    repo_root: Path,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> str | None:
+    """Validate marker history and return the current production release, if any."""
+    production_marker_tag(release_tag)
+    candidates = _marker_releases(repo_root, runner)
     if not candidates:
         return None
 
@@ -241,6 +248,98 @@ def assert_production_marker_advances(
             f"to {release_tag}; publish a newer revert release instead"
         )
     return current
+
+
+def production_before(
+    release_tag: str,
+    repo_root: Path,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> str | None:
+    """The release that a production run of ``release_tag`` starts from: the newest marker
+    older than ``release_tag``, or None. The one source for the guard, the operation and the
+    post phase. The operation writes the marker of ``release_tag``; the post phase after it
+    still gets the same answer, because that marker is not older than itself.
+    """
+    current = assert_production_marker_advances(release_tag, repo_root, runner=runner)
+    if current is None or version_key(current) < version_key(release_tag):
+        return current
+    older = [
+        m
+        for m in _marker_releases(repo_root, runner)
+        if version_key(m) < version_key(release_tag)
+    ]
+    return max(older, key=version_key, default=None)
+
+
+def plan_base(
+    after: str,
+    before: str,
+    *,
+    promote_prod: bool,
+    repo_root: Path,
+    previous_tag: bool = False,
+) -> str:
+    """The ``before`` release of the change set of ``after``.
+
+    Production is cumulative from its own marker (``production_before``): staging-only
+    changes of vN+1 and vN+2 are not skipped when vN+3 is promoted. An explicit ``before``
+    must equal that marker. Staging starts from ``before``, or from the previous release
+    tag when ``previous_tag`` is true.
+    """
+    if promote_prod:
+        marker = production_before(after, repo_root)
+        if marker:
+            if before and before != marker:
+                raise SystemExit(
+                    "::error::production before must match current marker release "
+                    f"{marker}; got {before}"
+                )
+            return marker
+        if not before:
+            raise SystemExit(
+                "::error::first production marker requires an explicit known-production "
+                "--before release"
+            )
+        return before
+    if before or not previous_tag:
+        return before
+    listed = subprocess.run(
+        [
+            "git",
+            "tag",
+            "--list",
+            "v*.*.*",
+            "--sort=-v:refname",
+            "--merged",
+            f"{after}^",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    tags = [t for t in listed.stdout.split() if RELEASE_TAG_RE.fullmatch(t)]
+    return tags[0] if listed.returncode == 0 and tags else ""
+
+
+def releases_between(marker: str, after: str, repo_root: Path) -> list[str]:
+    """The release tags newer than ``marker`` up to and including ``after`` (#1563)."""
+    listed = subprocess.run(
+        ["git", "tag", "--list", "v*.*.*"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return sorted(
+        (
+            t
+            for t in listed.stdout.split()
+            if RELEASE_TAG_RE.fullmatch(t)
+            and version_key(marker) < version_key(t) <= version_key(after)
+        ),
+        key=version_key,
+    )
 
 
 class ProductionMarkerRejected(Exception):
@@ -1899,6 +1998,14 @@ def github_run_url(env: Mapping[str, str]) -> str:
     return f"{server}/{repository}/actions/runs/{run_id}"
 
 
+#: The state of a failure alert, from the train job that failed (#1646).
+ALERT_STATE_BY_JOB = {
+    "pre": "refused",
+    "operation": "deploy failed",
+    "post": "hook failed",
+}
+
+
 def failure_alert_text(
     *,
     after: str,
@@ -1906,17 +2013,37 @@ def failure_alert_text(
     run_url: str,
     promote_prod: bool,
     hook_results: Sequence[Mapping[str, object]] = (),
+    failed_job: str = "",
+    failed_checks: Sequence[CheckVerdict] = (),
 ) -> str | None:
     """One Feishu message for a failed reconcile: which tag, which environment, and per
     service the runner's error_kind and next action — the earliest machine-readable point
     of every deploy-chain incident of 2026-09-04..08 (infra2#658), or an explicit
     post-deploy hook alert when container deploys succeeded (#1577). ``None`` when nothing
-    failed."""
-    failed = [item for item in results if item.get("returncode") != 0]
-    if failed:
+    failed.
+
+    ``failed_job`` is the train job that failed (``pre``, ``operation``, ``post``). It sets
+    the state in ``ALERT_STATE_BY_JOB``: ``pre`` is "refused" and lists the ``failed_checks``;
+    ``operation`` is "deploy failed" (a failed ``smoke`` hook is "hook failed"); ``post`` is
+    "hook failed". Without a job the text is the one that a single-job run sent.
+    """
+    kind = "PRODUCTION promotion" if promote_prod else "staging soak"
+    if failed_job == "pre":
         lines = [
-            f"🚨 IaC reconcile FAILED for {after} ({'PRODUCTION promotion' if promote_prod else 'staging soak'})."
+            f"🛑 IaC reconcile REFUSED for {after} ({kind}): {ALERT_STATE_BY_JOB['pre']}; "
+            "nothing was deployed."
         ]
+        lines += [
+            f"- {check.name}: {check.detail.strip()[:200] or 'failed'}"
+            for check in failed_checks
+            if not check.ok
+        ]
+        lines.append(f"Run: {run_url}")
+        return "\n".join(lines)
+    failed = [item for item in results if item.get("returncode") != 0]
+    state = f": {ALERT_STATE_BY_JOB['operation']}." if failed_job and failed else ""
+    if failed:
+        lines = [f"🚨 IaC reconcile FAILED for {after} ({kind}){state or '.'}"]
         for item in failed:
             env = str(item.get("type") or "?")
             services = str(item.get("service") or "?")
@@ -1948,10 +2075,8 @@ def failure_alert_text(
 
     failed_hooks = [item for item in hook_results if item.get("status") != "pass"]
     if failed_hooks:
-        kind = "PRODUCTION promotion" if promote_prod else "staging soak"
-        lines = [
-            f"⚠️ Post-deploy hook FAILED for {after} ({kind}; container deploys succeeded)."
-        ]
+        head = f"⚠️ Post-deploy hook FAILED for {after} ({kind}; container deploys succeeded)."
+        lines = [head[:-1] + f": {ALERT_STATE_BY_JOB['post']}." if failed_job else head]
         for item in failed_hooks:
             svc = str(item.get("service") or "?")
             slot = str(item.get("slot") or "?")
@@ -1966,6 +2091,19 @@ def failure_alert_text(
         lines.append(f"Run: {run_url}")
         return "\n".join(lines)
 
+    # a phase that stopped on a check before any deploy result (``hook_env`` of the operation)
+    if failed_job and any(not check.ok for check in failed_checks):
+        lines = [
+            f"🚨 IaC reconcile FAILED for {after} ({kind}): {ALERT_STATE_BY_JOB[failed_job]}."
+        ]
+        lines += [
+            f"- {check.name}: {check.detail.strip()[:200] or 'failed'}"
+            for check in failed_checks
+            if not check.ok
+        ]
+        lines.append(f"Run: {run_url}")
+        return "\n".join(lines)
+
     return None
 
 
@@ -1976,8 +2114,13 @@ def resolve_workflow_failure_alert(
     promote_prod: bool,
     run_url: str,
     reconcile_phase: str = "",
+    failed_job: str = "",
 ) -> tuple[str | None, str | None]:
-    """Resolve ``(alert_text_to_send, skip_notice)`` for the workflow ``Alert on failure`` step (#1577)."""
+    """Resolve ``(alert_text_to_send, skip_notice)`` for the workflow ``Alert on failure`` step (#1577).
+
+    The failed phase writes its own ``alert_text`` into the result file. When it wrote none
+    (it crashed first) the fallback names the state of ``failed_job``.
+    """
     if reconcile_phase == "sync-app-releases" and not result_path.exists():
         return (
             None,
@@ -1993,9 +2136,12 @@ def resolve_workflow_failure_alert(
             if isinstance(alert_text, str) and alert_text.strip():
                 return (alert_text, None)
     kind = "PRODUCTION promotion" if promote_prod else "staging soak"
+    state = ALERT_STATE_BY_JOB.get(failed_job, "")
     crash_fallback_text = (
         f"🚨 IaC reconcile FAILED for {after} ({kind}) before any "
-        f"deploy result was recorded (guard, provenance or runner unreachable).\nRun: {run_url}"
+        f"deploy result was recorded (guard, provenance or runner unreachable)"
+        + (f"; state: {state}" if state else "")
+        + f".\nRun: {run_url}"
     )
     return (crash_fallback_text, None)
 
@@ -2059,7 +2205,8 @@ def timed_check(checks: list[CheckVerdict], name: str):
 
 
 class StageRun:
-    """The records of one reconcile run. ``emit`` writes one record and updates the card."""
+    """The records that one process writes. ``emit`` writes one record; the ``alert`` job of the
+    workflow renders the card from the records of all three jobs (#1646)."""
 
     def __init__(
         self, *, env: str, subject: str, dry_run: bool, units: Sequence[str] = ()
@@ -2077,7 +2224,6 @@ class StageRun:
         self.ref = os.environ.get("GITHUB_REF") or subject
         self.run_url = github_run_url(os.environ)
         self.records: list[StageRecord] = []
-        self.card_id = ""
 
     def emit(
         self,
@@ -2107,8 +2253,6 @@ class StageRun:
             )
             return
         self.records.append(record)
-        if not self.dry_run:
-            self.card_id = show_stage_card(os.environ, self.records, self.card_id)
 
 
 def operation_checks(results: Sequence[dict], *, dry_run: bool) -> list[CheckVerdict]:
@@ -2141,14 +2285,21 @@ def operation_checks(results: Sequence[dict], *, dry_run: bool) -> list[CheckVer
 
 
 def post_checks(hook_results: Sequence[dict]) -> list[CheckVerdict]:
-    """One check for each hook slot that ran. No hook ran: one green check that says so."""
+    """One check for each hook slot that ran. No hook ran: one green check that says so.
+
+    The detail starts with ``[<version_ref>]`` when the hook has a version: the guard of a
+    production promotion reads it back (``staging_gates_verdict``, #1563).
+    """
     if not hook_results:
         return [CheckVerdict("hooks", True, "no service with a hook slot was applied")]
     return [
         CheckVerdict(
             f"{item['service']}:{item['slot']}",
             item.get("status") == "pass",
-            str(item.get("summary") or "")[:300],
+            (
+                (f"[{item['version_ref']}] " if item.get("version_ref") else "")
+                + str(item.get("summary") or "")
+            )[:300],
             seconds=float(item.get("duration_seconds") or 0.0),
         )
         for item in hook_results
@@ -2193,6 +2344,507 @@ def write_summary(
         ]
     with open(target, "a", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
+
+
+PHASES = ("pre", "operation", "post")
+
+
+@dataclass
+class TrainPlan:
+    """What every phase of one release run needs. Each phase builds it again from git."""
+
+    plan: ReconcilePlan
+    commands: list[DeployCommand]
+    applied: list[DeployCommand]
+    slots: str
+    before: str
+
+
+@dataclass
+class PhaseOutcome:
+    """What an operation or post phase returns: pass or fail, and what it ran."""
+
+    ok: bool
+    results: list[dict] = field(default_factory=list)
+    hook_results: list[dict[str, object]] = field(default_factory=list)
+    facts: dict[str, object] = field(default_factory=dict)
+
+
+def plan_train(
+    args: argparse.Namespace,
+    repo_root: Path,
+    *,
+    before: str,
+    promote_prod: bool,
+    target_env: str,
+) -> TrainPlan:
+    """The plan, the deploy commands and the hook slots of ``args.after``."""
+    changed_files = (
+        list(args.changed_file)
+        if args.changed_file
+        else changed_files_from_git(repo_root, before or None, args.after)
+    )
+    tag_overrides: dict[str, str] | None = None
+    if args.app_release_tag:
+        tag_overrides = load_app_release_tags(
+            repo_root, rev=args.after
+        ) or load_app_release_tags(repo_root)
+        for item in args.app_release_tag:
+            if "=" not in item:
+                raise SystemExit(
+                    f"::error::expected SERVICE=TAG for --app-release-tag, got {item!r}"
+                )
+            svc, tag = item.split("=", 1)
+            tag_overrides[svc.strip()] = tag.strip()
+    plan = build_plan(
+        changed_files,
+        repo_root=repo_root,
+        before=before or None,
+        after=args.after,
+        app_release_tags=tag_overrides,
+    )
+    commands = build_deploy_commands(
+        plan, iac_ref=args.after, domain=args.domain, timeout=args.timeout
+    )
+    return TrainPlan(
+        plan=plan,
+        commands=commands,
+        applied=commands_to_apply(
+            commands,
+            dry_run=args.dry_run,
+            promote_prod=promote_prod,
+            target_env=target_env,
+        ),
+        slots=args.post_deploy_hook_slot or _stage_slots_csv(target_env),
+        before=before,
+    )
+
+
+def split_hook_slots(slots: str, target_env: str) -> tuple[str, str]:
+    """``(operation slots, post slots)`` as CSV. Staging: the operation slot of the stage plan
+    (``smoke``) runs in the operation phase and the gate in the post phase. Production: both
+    run in the operation phase, ``smoke`` first, so the marker follows ``prod_gate`` (#1563)
+    and the ``post`` job needs no ``contents: write``."""
+    operation_slot = stage_hook_plan(target_env).operation_slot
+    parsed = _parse_hook_slots(slots)
+    if target_env == "prod":
+        return (
+            ",".join(
+                [s for s in parsed if s == operation_slot]
+                + [s for s in parsed if s != operation_slot]
+            ),
+            "",
+        )
+    return (
+        ",".join(slot for slot in parsed if slot == operation_slot),
+        ",".join(slot for slot in parsed if slot != operation_slot),
+    )
+
+
+def assert_release_ref(
+    args: argparse.Namespace, repo_root: Path, target_env: str
+) -> None:
+    """The ref is a release tag on main. ``--dry-run`` plans only, so it may read any ref."""
+    if args.dry_run:
+        return
+    try:
+        validate_iac_ref_form(target_env, classify_ref(args.after))
+    except ValueError as exc:
+        raise SystemExit(f"::error::{exc}") from exc
+    assert_after_on_main(args.after, repo_root)
+
+
+def _write_payload(
+    args: argparse.Namespace, payload: dict[str, object], stage: "StageRun"
+) -> None:
+    print(json.dumps(payload, sort_keys=True))
+    if args.output_json:
+        Path(args.output_json).write_text(
+            json.dumps(payload, indent=2), encoding="utf-8"
+        )
+    write_summary(records=stage.records, dry_run=args.dry_run)
+
+
+def _alert_payload(
+    args: argparse.Namespace,
+    job: str,
+    *,
+    promote_prod: bool,
+    failed_checks: Sequence[CheckVerdict] = (),
+    results: Sequence[Mapping[str, object]] = (),
+    hook_results: Sequence[Mapping[str, object]] = (),
+) -> dict[str, object]:
+    """The part of the result file that the ``alert`` job reads."""
+    return {
+        "phase": job,
+        "alert_text": failure_alert_text(
+            after=args.after,
+            results=results,
+            hook_results=hook_results,
+            run_url=github_run_url(os.environ),
+            promote_prod=promote_prod,
+            failed_job=job,
+            failed_checks=failed_checks,
+        ),
+        "hook_results": list(hook_results),
+        "results": list(results),
+        "promote_prod": promote_prod,
+        "dry_run": args.dry_run,
+    }
+
+
+def run_pre(
+    args: argparse.Namespace,
+    repo_root: Path,
+    stage: StageRun,
+    *,
+    promote_prod: bool,
+    target_env: str,
+) -> TrainPlan:
+    """Phase ``pre``: guards that change no state. A failure writes a red record and re-raises."""
+    checks: list[CheckVerdict] = []
+    started = utc_now()
+    try:
+        before = ""
+        with timed_check(checks, "contract"):
+            # Validate the durable desired-state coordinate before any production side
+            # effect. A branch, SHA, or pre-release must never deploy successfully and
+            # only then fail while trying to record its marker.
+            before = plan_base(
+                args.after,
+                args.before,
+                promote_prod=promote_prod,
+                repo_root=repo_root,
+                previous_tag=not args.changed_file,
+            )
+            if not args.dry_run:
+                try:
+                    validate_iac_ref_form(target_env, classify_ref(args.after))
+                except ValueError as exc:
+                    raise SystemExit(f"::error::{exc}") from exc
+        # Fail-closed BEFORE planning/deploying: an apply run must promote a release tag
+        # (a branch such as `main` is refused, #1628) that is reachable from reviewed main
+        # (Infra-011). dry-run is plan-only, so it may inspect any ref.
+        if not args.dry_run:
+            with timed_check(checks, "provenance"):
+                assert_after_on_main(args.after, repo_root)
+        train = plan_train(
+            args,
+            repo_root,
+            before=before,
+            promote_prod=promote_prod,
+            target_env=target_env,
+        )
+        stage.units = plan_units(train.plan)
+        if train.applied and not args.dry_run:
+            with timed_check(checks, "app_pins"):
+                for cmd in train.applied:
+                    is_bootstrap = "--bootstrap" in cmd.argv
+                    for svc in (s.strip() for s in cmd.service.split(",") if s.strip()):
+                        if svc in APP_SOURCES:
+                            app_tag = train.plan.app_release_tags.get(svc, "")
+                            if app_tag:
+                                try:
+                                    assert_app_version_ref_matches_train(
+                                        svc,
+                                        app_tag,
+                                        cmd.deploy_type,
+                                        bootstrap=is_bootstrap,
+                                        iac_ref=args.after,
+                                        repo_root=repo_root,
+                                    )
+                                    assert_app_version_ref_on_main(
+                                        app_tag,
+                                        cmd.deploy_type,
+                                        service=svc,
+                                        repo_root=repo_root,
+                                    )
+                                except (ValueError, RuntimeError) as exc:
+                                    raise SystemExit(f"::error::{exc}") from exc
+        if promote_prod and not args.dry_run:
+            with timed_check(checks, "upstream_post"):
+                require_upstream_post(
+                    args.after,
+                    repo_root,
+                    before=train.before,
+                    required=required_staging_gates(train.plan),
+                    releases=releases_between,
+                )
+    except BaseException as exc:
+        if all(check.ok for check in checks):
+            checks.append(CheckVerdict("plan", False, str(exc)[:300]))
+        stage.emit("pre", started, checks)
+        _write_payload(
+            args,
+            _alert_payload(
+                args, "pre", promote_prod=promote_prod, failed_checks=checks
+            ),
+            stage,
+        )
+        raise
+    stage.emit("pre", started, checks)
+    return train
+
+
+def emit_post_record(
+    stage: StageRun,
+    started: str,
+    hook_results: Sequence[dict[str, object]],
+) -> None:
+    """The ``post`` record: one check for each gate hook, and the units no hook covered."""
+    hooked = {str(item["service"]) for item in hook_results}
+    stage.emit(
+        "post",
+        started,
+        post_checks(hook_results),
+        uncovered=[
+            unit
+            for unit in stage.units
+            if unit.split(":", 1)[0] in ("app", "infra")
+            and unit.split(":", 1)[1] not in hooked
+        ],
+    )
+
+
+def run_operation(
+    args: argparse.Namespace,
+    repo_root: Path,
+    stage: StageRun,
+    train: TrainPlan,
+    *,
+    promote_prod: bool,
+    target_env: str,
+) -> PhaseOutcome:
+    """Phase ``operation``: the deploy, its hooks and the production marker.
+
+    A production run executes ``smoke`` and ``prod_gate`` here and writes the marker only
+    after both passed: a failed gate leaves the marker behind, so the next promotion still
+    scans the staging gates of this release (#1563). A ``post`` job that pushed the marker
+    would hold ``contents: write`` and need a second owner approval.
+    """
+    checks: list[CheckVerdict] = []
+    started = utc_now()
+    results: list[dict] = []
+    hook_results: list[dict[str, object]] = []
+    operation_slots, post_slots = split_hook_slots(train.slots, target_env)
+    if train.applied and not args.dry_run:
+        try:
+            with timed_check(checks, "hook_env"):
+                hook_services = sorted(
+                    {
+                        svc
+                        for cmd in train.applied
+                        for svc in (s.strip() for s in cmd.service.split(","))
+                        if svc in APP_SOURCES
+                    }
+                )
+                errors: list[object] = []
+                for slots in (operation_slots, post_slots):
+                    if hook_services and slots:
+                        errors += audit_app_hooks(
+                            repo_root,
+                            services=hook_services,
+                            ambient_env=os.environ,
+                            pinned_tags=train.plan.app_release_tags,
+                            slots=_parse_hook_slots(slots),
+                            target_env=target_env,
+                        )["errors"]  # type: ignore[call-overload]
+                if errors:
+                    raise SystemExit(
+                        "::error::app hook env check failed: "
+                        + "; ".join(map(str, errors))
+                    )
+        except BaseException:
+            stage.emit("operation", started, checks)
+            _write_payload(
+                args,
+                _alert_payload(
+                    args, "operation", promote_prod=promote_prod, failed_checks=checks
+                ),
+                stage,
+            )
+            raise
+    if train.applied:
+        results = run_deploy_commands(train.applied)
+    deploy_failed = any(result.get("returncode") != 0 for result in results)
+    hooks_started = utc_now()
+    if train.applied and not args.dry_run and not deploy_failed and operation_slots:
+        hook_results = run_post_deploy_app_hooks(
+            train.plan,
+            train.applied,
+            repo_root=repo_root,
+            after=args.after,
+            target_env=target_env,
+            domain=args.domain,
+            slot=operation_slots,
+        )
+    hooks_failed = any(item.get("status") != "pass" for item in hook_results)
+    production_marker = ""
+    marker_pending = ""
+    marker_error: BaseException | None = None
+    marker_checks: list[CheckVerdict] = []
+    if promote_prod and not args.dry_run and not deploy_failed and not hooks_failed:
+        marker_began = time.monotonic()
+        try:
+            production_marker = record_production_marker(args.after, repo_root)
+            detail = production_marker
+        except ProductionMarkerRejected as exc:
+            marker_pending = production_marker_tag(args.after)
+            detail = f"pending: {exc}"
+            print(
+                f"::warning::production marker {marker_pending} is pending: GitHub "
+                "rejects a GitHub App push for a commit whose workflow files differ "
+                "from main (#1511). Record it by hand: see docs/ssot/ops.pipeline.md, "
+                "section on the production marker."
+            )
+        except (Exception, SystemExit) as exc:  # noqa: BLE001 - record_production_marker fails with SystemExit; the record is written first, then it re-raises
+            marker_error = exc
+            detail = f"{type(exc).__name__}: {exc}"
+        marker_checks.append(
+            CheckVerdict(
+                "production_marker",
+                bool(production_marker),
+                detail[:300],
+                seconds=round(time.monotonic() - marker_began, 3),
+            )
+        )
+    stage.emit(
+        "operation",
+        started,
+        [
+            *checks,
+            *operation_checks(results, dry_run=args.dry_run),
+            *(post_checks(hook_results) if hook_results else []),
+            *marker_checks,
+        ],
+    )
+    # A production run has no `post` job: its `post` record holds the verdict of `prod_gate`,
+    # written green or red after the marker step, so the stage card ends Passed or Failed.
+    if promote_prod and not args.dry_run:
+        gate_results = [item for item in hook_results if item.get("slot") != "smoke"]
+        if gate_results:
+            emit_post_record(stage, hooks_started, gate_results)
+    facts: dict[str, object] = {
+        "plan": train.plan.to_dict(),
+        "commands": [command.to_dict() for command in train.commands],
+        # what actually ran this invocation vs what is left for a deliberate next step
+        # (prod promotion, or — in dry-run — everything is just a plan).
+        "applied": [command.to_dict() for command in train.applied],
+        "deferred": [
+            command.to_dict()
+            for command in train.commands
+            if command not in train.applied
+        ],
+        "target_env": target_env,
+        "production_marker": production_marker,
+        "marker_pending": marker_pending,
+    }
+    if marker_error is not None:
+        _write_payload(
+            args,
+            _alert_payload(
+                args,
+                "operation",
+                promote_prod=promote_prod,
+                results=results,
+                hook_results=hook_results,
+            )
+            | facts,
+            stage,
+        )
+        raise marker_error
+    return PhaseOutcome(
+        not (deploy_failed or hooks_failed), results, hook_results, facts
+    )
+
+
+def run_post(
+    args: argparse.Namespace,
+    repo_root: Path,
+    stage: StageRun,
+    train: TrainPlan,
+    *,
+    promote_prod: bool,
+    target_env: str,
+) -> PhaseOutcome:
+    """Phase ``post``: the gate hooks (``staging_gate`` or ``prod_gate``). It never deploys,
+    so it can run again alone on a tag. It writes only its record."""
+    started = utc_now()
+    _, post_slots = split_hook_slots(train.slots, target_env)
+    hook_results: list[dict[str, object]] = []
+    if train.applied and not args.dry_run and post_slots:
+        hook_results = run_post_deploy_app_hooks(
+            train.plan,
+            train.applied,
+            repo_root=repo_root,
+            after=args.after,
+            target_env=target_env,
+            domain=args.domain,
+            slot=post_slots,
+        )
+    if not args.dry_run:
+        emit_post_record(stage, started, hook_results)
+    return PhaseOutcome(
+        not any(item.get("status") != "pass" for item in hook_results),
+        hook_results=hook_results,
+    )
+
+
+def run_train(
+    args: argparse.Namespace,
+    repo_root: Path,
+    *,
+    promote_prod: bool,
+    target_env: str,
+) -> int:
+    """Run the phases of ``--phase`` for ``args.after``; the exit code is 1 when one fails."""
+    if args.phase == "post" and promote_prod:
+        raise SystemExit("::error::production post runs inside operation")
+    phases = PHASES if args.phase == "all" else (args.phase,)
+    stage = StageRun(
+        env=stage_hook_plan(target_env).stage_id,
+        subject=f"tag:{args.after}",
+        dry_run=args.dry_run,
+    )
+    kwargs = {"promote_prod": promote_prod, "target_env": target_env}
+    if "pre" in phases:
+        train = run_pre(args, repo_root, stage, **kwargs)
+    else:
+        # operation and post start from the same two guards that ``pre`` ran.
+        assert_release_ref(args, repo_root, target_env)
+        before = plan_base(
+            args.after,
+            args.before,
+            promote_prod=promote_prod,
+            repo_root=repo_root,
+            previous_tag=not args.changed_file,
+        )
+        train = plan_train(args, repo_root, before=before, **kwargs)
+        stage.units = plan_units(train.plan)
+    results: list[dict] = []
+    hook_results: list[dict[str, object]] = []
+    facts: dict[str, object] = {"plan": train.plan.to_dict(), "target_env": target_env}
+    failed_job = ""
+    for name, run in (("operation", run_operation), ("post", run_post)):
+        # a production run executes its gate in `operation`; it has no `post` phase
+        if name not in phases or failed_job or (name == "post" and promote_prod):
+            continue
+        outcome = run(args, repo_root, stage, train, **kwargs)
+        results += outcome.results
+        hook_results += outcome.hook_results
+        facts |= outcome.facts
+        failed_job = "" if outcome.ok else name
+    payload = _alert_payload(
+        args,
+        failed_job or phases[-1],
+        promote_prod=promote_prod,
+        results=results,
+        hook_results=hook_results,
+    )
+    if not failed_job:
+        payload["alert_text"] = None
+    _write_payload(args, payload | facts, stage)
+    return 1 if failed_job else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -2301,11 +2953,21 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
-        "--print-changed-app-releases",
+        "--print-changed-files",
         action="store_true",
         help=(
-            "emit SERVICE=TAG lines for App services selected between --before and "
-            "--after for cumulative promotion soak verification (#1563)"
+            "print the files that changed between the base release and --after, one per "
+            "line; the base is the production marker for --promote-prod (#1646)"
+        ),
+    )
+    parser.add_argument(
+        "--phase",
+        choices=("all", *PHASES),
+        default="all",
+        help=(
+            "run one phase of the release train: pre (guards and the upstream record), "
+            "operation (deploy, smoke, marker) or post (the gate hooks, no deploy). "
+            "The default runs the three in order (#1646)"
         ),
     )
     parser.add_argument(
@@ -2372,26 +3034,6 @@ def main(argv: list[str] | None = None) -> int:
     target_env = "prod" if promote_prod else "staging"
 
     repo_root = Path(args.repo_root).resolve()
-    if args.print_changed_app_releases:
-        if not args.before or not args.after:
-            raise SystemExit(
-                "::error::--print-changed-app-releases requires both --before and --after"
-            )
-        changed = (
-            list(args.changed_file)
-            if args.changed_file
-            else changed_files_from_git(repo_root, args.before, args.after)
-        )
-        plan = build_plan(
-            changed,
-            repo_root=repo_root,
-            before=args.before,
-            after=args.after,
-        )
-        for svc in sorted(s for s in plan.selected if s in APP_SOURCES):
-            if tag := plan.app_release_tags.get(svc, ""):
-                print(f"{svc}={tag}")
-        return 0
     if args.run_scheduled_audit:
         hook_results = run_scheduled_app_audits(
             repo_root,
@@ -2573,256 +3215,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if not args.after:
         raise SystemExit("::error::--after is required for IaC input reconcile")
-
-    stage = StageRun(
-        env=stage_hook_plan(target_env).stage_id,
-        subject=f"tag:{args.after}",
-        dry_run=args.dry_run,
-    )
-    pre_checks: list[CheckVerdict] = []
-    pre_started = utc_now()
-    try:
-        with timed_check(pre_checks, "contract"):
-            # Validate the durable desired-state coordinate before any production side
-            # effect.  A branch, SHA, or pre-release must never deploy successfully and
-            # only then fail while trying to record its marker.
-            effective_before = args.before
-            if promote_prod:
-                current_production = assert_production_marker_advances(
-                    args.after, repo_root
-                )
-                if current_production:
-                    if effective_before and effective_before != current_production:
-                        raise SystemExit(
-                            "::error::production before must match current marker release "
-                            f"{current_production}; got {effective_before}"
-                        )
-                    effective_before = current_production
-                elif not effective_before:
-                    raise SystemExit(
-                        "::error::first production marker requires an explicit known-production "
-                        "--before release"
-                    )
-            if not args.dry_run:
-                try:
-                    validate_iac_ref_form(target_env, classify_ref(args.after))
-                except ValueError as exc:
-                    raise SystemExit(f"::error::{exc}") from exc
-        # Fail-closed BEFORE planning/deploying: an apply run must promote a release tag
-        # (a branch such as `main` is refused, #1628) that is reachable from reviewed main
-        # (Infra-011). dry-run is plan-only, so it may inspect any ref.
-        if not args.dry_run:
-            with timed_check(pre_checks, "provenance"):
-                assert_after_on_main(args.after, repo_root)
-        changed_files = (
-            list(args.changed_file)
-            if args.changed_file
-            else changed_files_from_git(repo_root, effective_before or None, args.after)
-        )
-        tag_overrides: dict[str, str] | None = None
-        if args.app_release_tag:
-            tag_overrides = load_app_release_tags(
-                repo_root, rev=args.after
-            ) or load_app_release_tags(repo_root)
-            for item in args.app_release_tag:
-                if "=" not in item:
-                    raise SystemExit(
-                        f"::error::expected SERVICE=TAG for --app-release-tag, got {item!r}"
-                    )
-                svc, tag = item.split("=", 1)
-                tag_overrides[svc.strip()] = tag.strip()
-        plan = build_plan(
-            changed_files,
-            repo_root=repo_root,
-            before=effective_before or None,
-            after=args.after,
-            app_release_tags=tag_overrides,
-        )
-        commands = build_deploy_commands(
-            plan,
-            iac_ref=args.after,
-            domain=args.domain,
-            timeout=args.timeout,
-        )
-        applied = commands_to_apply(
-            commands,
-            dry_run=args.dry_run,
+    if args.print_changed_files:
+        base = plan_base(
+            args.after,
+            args.before,
             promote_prod=promote_prod,
-            target_env=target_env,
-        )
-        effective_slot = args.post_deploy_hook_slot or _stage_slots_csv(
-            "prod" if promote_prod else "staging"
-        )
-        stage.units = plan_units(plan)
-        if applied and not args.dry_run:
-            with timed_check(pre_checks, "app_pins"):
-                for cmd in applied:
-                    is_bootstrap = "--bootstrap" in cmd.argv
-                    for svc in (s.strip() for s in cmd.service.split(",") if s.strip()):
-                        if svc in APP_SOURCES:
-                            app_tag = plan.app_release_tags.get(svc, "")
-                            if app_tag:
-                                try:
-                                    assert_app_version_ref_matches_train(
-                                        svc,
-                                        app_tag,
-                                        cmd.deploy_type,
-                                        bootstrap=is_bootstrap,
-                                        iac_ref=args.after,
-                                        repo_root=repo_root,
-                                    )
-                                    assert_app_version_ref_on_main(
-                                        app_tag,
-                                        cmd.deploy_type,
-                                        service=svc,
-                                        repo_root=repo_root,
-                                    )
-                                except (ValueError, RuntimeError) as exc:
-                                    raise SystemExit(f"::error::{exc}") from exc
-            with timed_check(pre_checks, "hook_env"):
-                hook_services = sorted(
-                    {
-                        svc
-                        for cmd in applied
-                        for svc in (s.strip() for s in cmd.service.split(","))
-                        if svc in APP_SOURCES
-                    }
-                )
-                hook_audit = (
-                    audit_app_hooks(
-                        repo_root,
-                        services=hook_services,
-                        ambient_env=os.environ,
-                        pinned_tags=plan.app_release_tags,
-                        slots=_parse_hook_slots(effective_slot),
-                        target_env=target_env,
-                    )
-                    if hook_services
-                    else {"ok": True, "errors": []}
-                )
-                if not hook_audit["ok"]:
-                    raise SystemExit(
-                        "::error::app hook env check failed: "
-                        + "; ".join(map(str, hook_audit["errors"]))  # type: ignore[call-overload]
-                    )
-    except BaseException as exc:
-        if all(check.ok for check in pre_checks):
-            pre_checks.append(CheckVerdict("plan", False, str(exc)[:300]))
-        stage.emit("pre", pre_started, pre_checks)
-        raise
-    stage.emit("pre", pre_started, pre_checks)
-    deferred = [command for command in commands if command not in applied]
-    results: list[dict] = []
-    operation_started = utc_now()
-    if applied:
-        results = run_deploy_commands(applied)
-    stage.emit(
-        "operation",
-        operation_started,
-        operation_checks(results, dry_run=args.dry_run),
-    )
-    hook_results: list[dict[str, object]] = []
-    post_started = utc_now()
-    if (
-        applied
-        and not args.dry_run
-        and not any(result.get("returncode") != 0 for result in results)
-    ):
-        hook_results = run_post_deploy_app_hooks(
-            plan,
-            applied,
             repo_root=repo_root,
-            after=args.after,
-            target_env=target_env,
-            domain=args.domain,
-            slot=effective_slot,
+            previous_tag=not args.changed_file,
         )
-    hooks_failed = any(item.get("status") != "pass" for item in hook_results)
-    production_marker = ""
-    marker_pending = ""
-    marker_checks: list[CheckVerdict] = []
-    marker_error: BaseException | None = None
-    if (
-        promote_prod
-        and not args.dry_run
-        and not any(result.get("returncode") != 0 for result in results)
-        and not hooks_failed
-    ):
-        marker_began = time.monotonic()
-        try:
-            production_marker = record_production_marker(args.after, repo_root)
-            detail = production_marker
-        except ProductionMarkerRejected as exc:
-            marker_pending = production_marker_tag(args.after)
-            detail = f"pending: {exc}"
-            print(
-                f"::warning::production marker {marker_pending} is pending: GitHub "
-                "rejects a GitHub App push for a commit whose workflow files differ "
-                "from main (#1511). Record it by hand: see docs/ssot/ops.pipeline.md, "
-                "section on the production marker."
-            )
-        except (Exception, SystemExit) as exc:  # noqa: BLE001 - record_production_marker fails with SystemExit; the post record is written first, then it re-raises
-            marker_error = exc
-            detail = f"{type(exc).__name__}: {exc}"
-        marker_checks.append(
-            CheckVerdict(
-                "production_marker",
-                bool(production_marker),
-                detail[:300],
-                seconds=round(time.monotonic() - marker_began, 3),
-            )
-        )
-    if not args.dry_run and not any(r.get("returncode") != 0 for r in results):
-        hooked = {str(item["service"]) for item in hook_results}
-        stage.emit(
-            "post",
-            post_started,
-            [*post_checks(hook_results), *marker_checks],
-            uncovered=[
-                unit
-                for unit in stage.units
-                if unit.split(":", 1)[0] in ("app", "infra")
-                and unit.split(":", 1)[1] not in hooked
-            ],
-        )
-    if marker_error is not None:
-        raise marker_error
-
-    run_url = github_run_url(os.environ)
-    raw_alert_text = failure_alert_text(
-        after=args.after,
-        results=results,
-        hook_results=hook_results,
-        run_url=run_url,
-        promote_prod=promote_prod,
-    )
-    payload = {
-        "alert_text": raw_alert_text,
-        "plan": plan.to_dict(),
-        "commands": [command.to_dict() for command in commands],
-        # what actually ran this invocation vs what is left for a deliberate next step
-        # (prod promotion, or — in dry-run — everything is just a plan).
-        "applied": [command.to_dict() for command in applied],
-        "deferred": [command.to_dict() for command in deferred],
-        "promote_prod": promote_prod,
-        "target_env": target_env,
-        "production_marker": production_marker,
-        "marker_pending": marker_pending,
-        "results": results,
-        "hook_results": hook_results,
-        "dry_run": args.dry_run,
-    }
-    print(json.dumps(payload, sort_keys=True))
-    if args.output_json:
-        Path(args.output_json).write_text(
-            json.dumps(payload, indent=2), encoding="utf-8"
-        )
-    write_summary(records=stage.records, dry_run=args.dry_run)
-    return (
-        1
-        if (any(result.get("returncode") != 0 for result in results) or hooks_failed)
-        else 0
-    )
+        print("\n".join(changed_files_from_git(repo_root, base or None, args.after)))
+        return 0
+    return run_train(args, repo_root, promote_prod=promote_prod, target_env=target_env)
 
 
 if __name__ == "__main__":

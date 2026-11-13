@@ -378,7 +378,7 @@ def test_every_selector_in_the_table_is_a_non_empty_string_or_none():
 def test_the_table_holds_the_full_conditions_of_the_real_workflows():
     assert {k: v for k, v in GATED_JOBS.items() if v is not None} == {
         ("deploy.yml", "deploy"): "inputs.type == 'prod'",
-        ("reconcile-iac-inputs.yml", "reconcile"): "inputs.promote_prod",
+        ("reconcile-iac-inputs.yml", "operation"): "inputs.promote_prod",
     }
 
 

@@ -57,12 +57,13 @@ def _drive_staging_reconcile(monkeypatch, tmp_path, *, returncode=0) -> Path:
     monkeypatch.setattr(
         reconcile,
         "run_post_deploy_app_hooks",
-        lambda *_a, **_k: [
+        lambda *_a, slot, **_k: [
             {
                 "service": "platform/alerting",
-                "slot": "smoke",
+                "slot": slot,
                 "status": "pass",
                 "summary": "ok",
+                "version_ref": "v3.1.23",
                 "duration_seconds": 3.0,
             }
         ],
@@ -103,14 +104,18 @@ def test_writer_emits_three_valid_records(monkeypatch, tmp_path) -> None:
         "contract",
         "provenance",
         "app_pins",
-        "hook_env",
     ]
-    assert [(c.name, c.seconds) for c in loaded["operation"].checks] == [
-        ("staging:platform/alerting", 12.5)
+    # `hook_env` needs the secret values, which only the `operation` job holds (#1646)
+    assert [(c.name, c.seconds) for c in loaded["operation"].checks][1:] == [
+        ("staging:platform/alerting", 12.5),
+        ("platform/alerting:smoke", 3.0),
     ]
+    assert loaded["operation"].checks[0].name == "hook_env"
     assert [(c.name, c.seconds) for c in loaded["post"].checks] == [
-        ("platform/alerting:smoke", 3.0)
+        ("platform/alerting:staging_gate", 3.0)
     ]
+    # the gate hook records the version it checked: the production guard reads it back (#1563)
+    assert loaded["post"].checks[0].detail == "[v3.1.23] ok"
     assert "infra:platform/alerting" in loaded["post"].units
     assert loaded["post"].uncovered == ()
     assert f"sdk:{metadata_version('infra2-sdk')}" in loaded["post"].units
@@ -127,7 +132,8 @@ def test_failed_operation_writes_no_post_record_and_a_red_operation_record(
         json.loads(next(p for p in records.glob("*-operation-*")).read_text())
     )
     assert operation.verdict == "fail"
-    assert operation.checks[0].detail == "boom"
+    deploy = next(c for c in operation.checks if c.name.startswith("staging:"))
+    assert deploy.detail == "boom"
 
 
 def test_a_failed_guard_writes_a_red_pre_record_and_reraises(
@@ -187,18 +193,15 @@ def test_the_writer_names_each_upload_step_variable(monkeypatch, tmp_path) -> No
 
 
 def test_each_reconcile_upload_step_reads_the_variable_the_writer_sets() -> None:
-    steps = yaml.safe_load((ROOT / RECONCILE).read_text())["jobs"]["reconcile"]["steps"]
-    uploads = {
-        s["name"]: s
-        for s in steps
-        if s.get("name", "").startswith("Upload stage record")
-    }
-    assert set(uploads) == {
-        "Upload stage record pre",
-        "Upload stage record operation",
-        "Upload stage record post",
-    }
+    """Each train job uploads the record of its own phase (#1646)."""
+    jobs = yaml.safe_load((ROOT / RECONCILE).read_text())["jobs"]
     for phase in ("pre", "operation", "post"):
+        uploads = {
+            s["name"]: s
+            for s in jobs[phase]["steps"]
+            if s.get("name", "").startswith("Upload stage record")
+        }
+        assert set(uploads) == {f"Upload stage record {phase}"}
         step = uploads[f"Upload stage record {phase}"]
         var = f"STAGE_RECORD_{phase.upper()}"
         assert step["if"] == f"always() && env.{var} != ''"
@@ -303,6 +306,10 @@ class FakeGitHub:
         self.runs: dict[int, dict] = {}
         self.zips: dict[str, bytes] = {}
         self.auth_to_signed_host: list[str | None] = []
+        #: the commit of every tag and the answer of ``compare/<sha>...main``
+        self.commit = TAG_COMMIT
+        self.compare_status = "behind"
+        self.fail_on: str | None = None
 
     def add(
         self,
@@ -322,7 +329,7 @@ class FakeGitHub:
         kind, _, ident = record["subject"].partition(":")
         # What a run of the right commit looks like: main for a commit, the tag for a tag push.
         branch = head_branch or (ident if kind == "tag" and event == "push" else "main")
-        sha = head_sha or (TAG_COMMIT if kind == "tag" else ident)
+        sha = head_sha or (self.commit if kind == "tag" else ident)
         name = name or stage_records.PREFIX + (
             f"{record['env']}-{record['phase']}-{record['subject'].replace(':', '-')}"
         )
@@ -353,14 +360,18 @@ class FakeGitHub:
 
     def __call__(self, request, timeout=0):
         url = request.full_url
-        if url.startswith("https://api.github.com/repos/o/r/actions/artifacts"):
+        if self.fail_on and self.fail_on in url:
+            raise urllib.error.HTTPError(url, 502, "Bad Gateway", {}, None)
+        if "/compare/" in url:
+            body = {"status": self.compare_status}
+        elif url.startswith("https://api.github.com/repos/o/r/actions/artifacts"):
             body = {
                 "artifacts": sorted(
                     self.artifacts, key=lambda a: a["created_at"], reverse=True
                 )
             }
         elif "/repos/o/r/commits/" in url:
-            body = {"sha": TAG_COMMIT}
+            body = {"sha": self.commit}
         elif "/actions/runs/" in url:
             body = self.runs[int(url.rsplit("/", 1)[1])]
         elif url in self.zips:  # the API answers 302 to the signed host
@@ -502,13 +513,189 @@ def test_list_filters_by_stage_phase_subject_and_keeps_the_last_subjects() -> No
     assert len(_list(gh, subject="tag:v1.0.0")) == 3
 
 
+def _read(gh, **kw):
+    kw = {
+        "env": "staging.release_validation",
+        "subject": "tag:v1.0.0",
+        "event": "push",
+    } | kw
+    return stage_records.read_record("o/r", "tok", opener=gh, **kw)
+
+
+def test_read_passes_a_green_record_of_a_tag_push_run_on_main() -> None:
+    gh = FakeGitHub()
+    gh.add(_record())
+    reading = _read(gh)
+    assert (reading.exit_code, reading.ok) == (0, True)
+    assert "pass" in reading.detail and reading.record["subject"] == "tag:v1.0.0"
+
+
+@pytest.mark.parametrize(
+    ("knob", "reason"),
+    [
+        ({"expired": True}, "expired"),
+        ({"head_repository_id": 2}, "fork"),
+        ({"path": "not-the-writer"}, "workflow that owns the env"),
+        ({"event": "pull_request"}, "event 'pull_request' is not allowed"),
+        ({"event": "workflow_dispatch", "head_branch": "main"}, "not 'push'"),
+        ({"head_sha": "e" * 40}, "did not build the commit"),
+        ({"name": "stage-staging.release_validation-post-tag-v9.9.9"}, "no artifact"),
+    ],
+    ids=["expired", "fork", "workflow", "pull-request", "dispatch", "head-sha", "name"],
+)
+def test_reader_refuses_forged_or_stale(knob, reason) -> None:
+    """AC11 (#1645, #1646): each of these records makes `read` exit 1, with the reason."""
+    gh = FakeGitHub()
+    gh.add(_record(), **knob)
+    reading = _read(gh)
+    assert reading.exit_code == 1, reading.detail
+    assert reason in reading.detail
+
+
+def test_reader_refuses_forged_or_stale_other_tag_and_forged_verdict() -> None:
+    # a record for another tag
+    gh = FakeGitHub()
+    gh.add(_record(subject="tag:v2.0.0"))
+    assert _read(gh).exit_code == 1
+    # a verdict that says pass over a failed check: `read` judges the checks
+    gh = FakeGitHub()
+    forged = _record()
+    forged["checks"] = [{"name": "truealpha/app:staging_gate", "ok": False}]
+    assert forged["verdict"] == "pass"
+    gh.add(forged)
+    reading = _read(gh)
+    assert reading.exit_code == 1 and "truealpha/app:staging_gate" in reading.detail
+    # a record with no check at all
+    gh = FakeGitHub()
+    empty = _record()
+    empty["checks"] = []
+    gh.add(empty)
+    assert _read(gh).exit_code == 1
+    # a tag commit that is not on main
+    gh = FakeGitHub()
+    gh.compare_status = "diverged"
+    gh.add(_record())
+    reading = _read(gh)
+    assert reading.exit_code == 1 and "not on main" in reading.detail
+
+
+def test_reader_refuses_forged_or_stale_api_failure_is_exit_four() -> None:
+    for broken in ("/actions/artifacts", "/actions/runs/", "/compare/"):
+        gh = FakeGitHub()
+        gh.add(_record())
+        gh.fail_on = broken
+        reading = _read(gh)
+        assert reading.exit_code == 4, broken
+        assert "cannot read" in reading.detail
+
+
+def test_read_skips_a_newer_dispatch_run_and_judges_the_push_run_below_it() -> None:
+    gh = FakeGitHub()
+    gh.add(_record(run=1), run=1, created="2026-11-01T00:00:00Z")
+    gh.add(
+        _record(run=2),
+        run=2,
+        event="workflow_dispatch",
+        head_branch="main",
+        created="2026-11-02T00:00:00Z",
+    )
+    reading = _read(gh)
+    assert reading.exit_code == 0 and reading.record["run_url"].endswith("/runs/1")
+
+
+def test_read_judges_the_newest_record_of_a_rerun() -> None:
+    red = _record(run=1)
+    red["checks"] = [{"name": "c", "ok": False, "detail": "", "seconds": 1.0}]
+    gh = FakeGitHub()
+    gh.add(red, run=1, created="2026-11-01T00:00:00Z")
+    gh.add(_record(run=2), run=2, created="2026-11-02T00:00:00Z")
+    assert _read(gh).exit_code == 0
+
+
+def test_the_read_command_maps_the_verdict_to_the_exit_code(
+    monkeypatch, capsys
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    argv = ["read", "--repo", "o/r", "--env", "staging.release_validation",
+            "--subject", "tag:v1.0.0", "--event", "push"]  # fmt: skip
+    for code in (0, 1, 4):
+        monkeypatch.setattr(
+            stage_records,
+            "read_record",
+            lambda *_a, _code=code, **_k: stage_records.Reading(
+                _code, f"detail {_code}"
+            ),
+        )
+        assert stage_records.main(argv) == code
+        assert f"detail {code}" in capsys.readouterr().out
+    monkeypatch.delenv("GITHUB_TOKEN")
+    assert stage_records.main(argv) == 2
+
+
+@pytest.mark.parametrize(
+    ("checks", "expected"),
+    [
+        ([], "missing staging_gate for finance_report@v1.2.9"),
+        (
+            [("finance_report:smoke", "[v1.2.9] ok", True)],
+            "missing staging_gate for finance_report@v1.2.9",
+        ),
+        (
+            [("finance_report:staging_gate", "[v1.2.8] ok", True)],
+            "missing staging_gate for finance_report@v1.2.9",
+        ),
+        (
+            [("finance_report:staging_gate", "[v1.2.9] boom", False)],
+            "failed staging_gate for finance_report@v1.2.9",
+        ),
+        (
+            [
+                ("finance_report:staging_gate", "[v1.2.9] ok", True),
+                ("finance_report:staging_gate", "[v1.2.9] boom", False),
+            ],
+            "failed staging_gate for finance_report@v1.2.9",
+        ),
+    ],
+    ids=["empty", "only-smoke", "wrong-version", "failed", "mixed"],
+)
+def test_the_staging_gate_verdict_refuses_a_missing_or_failed_release(
+    checks, expected
+) -> None:
+    """The cases of the old `judge_staging_gate` (#1493, #1563), on post records."""
+    record = {"checks": [{"name": n, "detail": d, "ok": ok} for n, d, ok in checks]}
+    ok, detail = stage_records.staging_gates_verdict(
+        [record], {"finance_report": "v1.2.9"}
+    )
+    assert ok is False and expected in detail
+
+
+def test_the_staging_gate_verdict_passes_a_green_release_and_an_empty_requirement() -> (
+    None
+):
+    record = {
+        "checks": [
+            {"name": "finance_report:smoke", "detail": "[v1.2.9] ok", "ok": True},
+            {
+                "name": "finance_report:staging_gate",
+                "detail": "[v1.2.9] ok",
+                "ok": True,
+            },
+        ]
+    }
+    ok, detail = stage_records.staging_gates_verdict(
+        [record], {"finance_report": "v1.2.9"}
+    )
+    assert ok is True and "staging_gate passed for finance_report@v1.2.9" in detail
+    assert stage_records.staging_gates_verdict([], {})[0] is True
+
+
 def test_the_tools_entry_is_the_reader() -> None:
     import tools.stage_records as shim
 
     assert shim.main is stage_records.main
 
 
-def test_stage_records_has_no_read_command_and_no_third_party_import() -> None:
+def test_stage_records_reader_has_no_third_party_import() -> None:
     """Only the standard library and the one GET helper of ``common.deploy``."""
     source = (ROOT / "common/deploy/stage_record_reader.py").read_text()
     imports = {
@@ -518,7 +705,7 @@ def test_stage_records_has_no_read_command_and_no_third_party_import() -> None:
     }
     stdlib = set(__import__("sys").stdlib_module_names)
     assert imports <= stdlib | {"common"}
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit):  # `read` needs an env and a subject
         stage_records.main(["read"])
     assert "\t" not in source.split("def main")[1]
 
@@ -595,6 +782,7 @@ def _drive_prod_promotion(monkeypatch, tmp_path, marker):
     monkeypatch.setenv("STAGE_RECORD_DIR", str(records))
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     monkeypatch.setattr(reconcile, "assert_after_on_main", lambda *_a, **_k: None)
+    monkeypatch.setattr(reconcile, "require_upstream_post", lambda *_a, **_k: None)
     monkeypatch.setattr(
         reconcile, "assert_production_marker_advances", lambda *_a, **_k: "v3.1.22"
     )
@@ -620,11 +808,13 @@ def _drive_prod_promotion(monkeypatch, tmp_path, marker):
     return records, argv
 
 
-def _post_of(records: Path) -> StageRecord:
-    return StageRecord.from_dict(json.loads(next(records.glob("*-post-*")).read_text()))
+def _operation_of(records: Path) -> StageRecord:
+    return StageRecord.from_dict(
+        json.loads(next(records.glob("*-operation-*")).read_text())
+    )
 
 
-def test_the_post_record_follows_a_recorded_production_marker(
+def test_the_operation_record_follows_a_recorded_production_marker(
     monkeypatch, tmp_path
 ) -> None:
     order: list[str] = []
@@ -642,15 +832,16 @@ def test_the_post_record_follows_a_recorded_production_marker(
         ),
     )
     assert reconcile.main(argv) == 0
-    assert order == ["pre", "operation", "marker", "post"]
-    post = _post_of(records)
-    assert post.verdict == "pass"
-    assert [(c.name, c.ok, c.detail) for c in post.checks][-1] == (
+    # the marker is written by the operation, before its record; a production run has no post
+    assert order == ["pre", "marker", "operation"]
+    operation = _operation_of(records)
+    assert operation.verdict == "pass"
+    assert [(c.name, c.ok, c.detail) for c in operation.checks][-1] == (
         "production_marker", True, "production/v3.1.23",
     )  # fmt: skip
 
 
-def test_a_rejected_production_marker_gives_a_failed_post_record(
+def test_a_rejected_production_marker_gives_a_failed_operation_record(
     monkeypatch, tmp_path
 ) -> None:
     def rejected(tag, *_a, **_k):
@@ -658,14 +849,14 @@ def test_a_rejected_production_marker_gives_a_failed_post_record(
 
     records, argv = _drive_prod_promotion(monkeypatch, tmp_path, rejected)
     assert reconcile.main(argv) == 0  # the deploy outcome does not change
-    post = _post_of(records)
-    assert post.verdict == "fail"
-    marker = post.checks[-1]
+    operation = _operation_of(records)
+    assert operation.verdict == "fail"
+    marker = operation.checks[-1]
     assert (marker.name, marker.ok) == ("production_marker", False)
     assert "GitHub App push refused" in marker.detail
 
 
-def test_a_crashing_production_marker_writes_the_failed_post_record_then_raises(
+def test_a_crashing_production_marker_writes_the_failed_operation_record_then_raises(
     monkeypatch, tmp_path
 ) -> None:
     def crash(tag, *_a, **_k):
@@ -674,9 +865,10 @@ def test_a_crashing_production_marker_writes_the_failed_post_record_then_raises(
     records, argv = _drive_prod_promotion(monkeypatch, tmp_path, crash)
     with pytest.raises(SystemExit, match="cannot push production marker"):
         reconcile.main(argv)
-    post = _post_of(records)
-    assert post.verdict == "fail" and post.checks[-1].name == "production_marker"
-    assert "cannot push production marker" in post.checks[-1].detail
+    operation = _operation_of(records)
+    assert operation.verdict == "fail"
+    assert operation.checks[-1].name == "production_marker"
+    assert "cannot push production marker" in operation.checks[-1].detail
 
 
 def test_the_sdk_unit_never_raises(monkeypatch, capsys) -> None:
@@ -692,13 +884,15 @@ def test_the_sdk_unit_never_raises(monkeypatch, capsys) -> None:
 
 def test_every_record_upload_step_is_allowed_to_fail() -> None:
     for rel, job in (
-        (RECONCILE, "reconcile"),
+        (RECONCILE, "pre"),
+        (RECONCILE, "operation"),
+        (RECONCILE, "post"),
         (".github/workflows/infra-ci.yml", "record"),
     ):
         steps = yaml.safe_load((ROOT / rel).read_text())["jobs"][job]["steps"]
         uploads = [s for s in steps if "STAGE_RECORD_" in str(s.get("if", ""))]
-        assert len(uploads) == (3 if job == "reconcile" else 1)
-        assert all(s["continue-on-error"] is True for s in uploads), rel
+        assert len(uploads) == 1, (rel, job)
+        assert all(s["continue-on-error"] is True for s in uploads), (rel, job)
 
 
 def test_one_github_get_helper_and_one_card_publish_flow() -> None:
@@ -712,3 +906,74 @@ def test_one_github_get_helper_and_one_card_publish_flow() -> None:
     for name in ("_headers",):
         assert not hasattr(stage_records, name)
     assert not hasattr(release_card, "_deliver_card")
+
+
+# -- a production run writes its post record in `operation` (#1646) -----------------------------
+
+
+def _prod_run_with_gate(monkeypatch, tmp_path, *, gate_ok: bool):
+    """Drive a production promotion whose hook runner returns smoke and prod_gate results."""
+    records, argv = _drive_prod_promotion(
+        monkeypatch, tmp_path, lambda tag, *_a, **_k: f"production/{tag}"
+    )
+
+    def hooks(plan, applied, *, slot, **_kw):
+        return [
+            {
+                "service": "platform/alerting",
+                "slot": one,
+                "status": "fail" if one == "prod_gate" and not gate_ok else "pass",
+                "summary": "boom" if one == "prod_gate" and not gate_ok else "ok",
+                "version_ref": "v3.1.23",
+                "duration_seconds": 1.0,
+            }
+            for one in slot.split(",")
+        ]
+
+    monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", hooks)
+    code = reconcile.main(argv)
+    loaded = [
+        StageRecord.from_dict(json.loads(f.read_text())) for f in records.iterdir()
+    ]
+    return code, loaded
+
+
+def test_a_passing_production_run_writes_a_post_record_and_the_card_says_passed(
+    monkeypatch, tmp_path
+) -> None:
+    from common.alerting.stage_card import render_stage_card
+
+    code, loaded = _prod_run_with_gate(monkeypatch, tmp_path, gate_ok=True)
+    assert code == 0
+    post = [r for r in loaded if r.phase == "post"]
+    assert len(post) == 1 and post[0].verdict == "pass"
+    assert [c.name for c in post[0].checks] == ["platform/alerting:prod_gate"]
+    assert "Passed" in render_stage_card(loaded)["header"]["title"]["content"]
+
+
+def test_a_red_prod_gate_writes_a_red_post_record_and_no_marker(
+    monkeypatch, tmp_path
+) -> None:
+    from common.alerting.stage_card import render_stage_card
+
+    code, loaded = _prod_run_with_gate(monkeypatch, tmp_path, gate_ok=False)
+    assert code == 1
+    post = [r for r in loaded if r.phase == "post"]
+    assert len(post) == 1 and post[0].verdict == "fail"
+    assert "Failed" in render_stage_card(loaded)["header"]["title"]["content"]
+    operation = next(r for r in loaded if r.phase == "operation")
+    assert "production_marker" not in [c.name for c in operation.checks]
+
+
+def test_the_digest_counts_a_passing_production_run_and_the_reminder_stays_silent(
+    monkeypatch, tmp_path
+) -> None:
+    from common.observability.delivery_section import summarize_delivery
+
+    _, loaded = _prod_run_with_gate(monkeypatch, tmp_path, gate_ok=True)
+    dicts = [r.to_dict() for r in loaded]
+    assert {d["phase"] for d in dicts} == {"pre", "operation", "post"}
+    assert summarize_delivery(dicts)["prod"]["all"]["passed"] == 1
+    # the production post record marks the tag promoted, with or without a marker tag
+    post = [d for d in dicts if d["phase"] == "post"]
+    assert promotion_reminder.pending_promotion([_post("v3.1.23")], post, []) is None
