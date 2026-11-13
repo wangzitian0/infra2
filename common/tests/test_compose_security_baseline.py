@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,8 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BASELINE_PATH = REPO_ROOT / "docs/ssot/compose-security-baseline.json"
-TRIVY_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/trivy-scan.yml"
+WORKFLOWS_DIR = REPO_ROOT / ".github/workflows"
+TRIVYIGNORE_PATH = REPO_ROOT / ".trivyignore"
 
 
 def _git_tracked_compose_files() -> list[Path]:
@@ -176,22 +178,38 @@ def test_compose_security_ratchet_detects_mutations(tmp_path: Path) -> None:
     assert stale2 == {"missing_non_root": ["platform/demo/compose.yaml::hardened"]}
 
 
-def test_trivy_workflow_scans_vulnerabilities_and_misconfigs() -> None:
-    """CI Trivy scan workflow must exist and scan vuln,misconfig for CRITICAL,HIGH (#724-R3)."""
-    assert TRIVY_WORKFLOW_PATH.exists(), f"Missing {TRIVY_WORKFLOW_PATH}"
-    wf = yaml.safe_load(TRIVY_WORKFLOW_PATH.read_text(encoding="utf-8"))
-    assert wf["permissions"] == {"contents": "read"}
-    jobs = wf.get("jobs") or {}
-    assert "trivy-fs" in jobs
-    steps = jobs["trivy-fs"].get("steps") or []
-    trivy_steps = [
-        s for s in steps if "aquasecurity/trivy-action" in str(s.get("uses", ""))
+def test_one_trivy_step_blocks_merge_in_infra_ci() -> None:
+    """Exactly one Trivy use exists, in a merge-blocking PR job (#1637)."""
+    uses = [
+        (path.name, job_id, step)
+        for path in sorted(WORKFLOWS_DIR.rglob("*.y*ml"))
+        for job_id, job in (
+            (yaml.safe_load(path.read_text(encoding="utf-8")) or {}).get("jobs") or {}
+        ).items()
+        for step in job.get("steps") or []
+        if "trivy" in str(step.get("uses", "")) + str(step.get("run", ""))
     ]
-    assert len(trivy_steps) == 1
-    with_args = trivy_steps[0].get("with") or {}
-    assert with_args.get("scan-type") == "fs"
-    assert "vuln" in str(with_args.get("scanners", ""))
-    assert "misconfig" in str(with_args.get("scanners", ""))
-    assert "CRITICAL" in str(with_args.get("severity", ""))
-    assert "HIGH" in str(with_args.get("severity", ""))
-    assert str(with_args.get("exit-code", "")) == "1"
+    assert [(f, j) for f, j, _ in uses] == [("infra-ci.yml", "validate-compose")]
+    inventory = yaml.safe_load(
+        (REPO_ROOT / "docs/ssot/ci-gate-inventory.yaml").read_text(encoding="utf-8")
+    )
+    blocking = {
+        (g["workflow"], g["job"])
+        for g in inventory["gates"]
+        if g.get("blocks_merge") is True
+    }
+    assert (".github/workflows/infra-ci.yml", "validate-compose") in blocking
+    uses_ref, with_args = uses[0][2]["uses"], uses[0][2]["with"]
+    assert re.fullmatch(r"aquasecurity/trivy-action@[0-9a-f]{40}( #.*)?", uses_ref)
+    assert re.fullmatch(r"v\d+\.\d+\.\d+", str(with_args["version"]))
+    assert with_args["scan-type"] == "fs"
+    assert with_args["scanners"] == "vuln,misconfig"
+    assert with_args["severity"] == "CRITICAL,HIGH"
+    assert with_args["ignore-unfixed"] is True
+    assert str(with_args["exit-code"]) == "1"
+    ignored = [
+        line.strip()
+        for line in TRIVYIGNORE_PATH.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    assert "DS-0002" in ignored

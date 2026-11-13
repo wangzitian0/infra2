@@ -55,12 +55,12 @@ from common.alerting.signoz import (
     signoz_rule_channels,
 )
 from common.alerting.types import (
+    EMOJI_TEMPLATE,
     DEFAULT_ACTION,
     DEFAULT_IMPACT,
     DELIVERY_LABEL,
     DISPLAY_TIMEZONE,
     DISPLAY_TIMEZONE_LABEL,
-    ERROR_LOG_LEVELS,
     FEISHU_BODY_LIMITS,
     FEISHU_WEBHOOK_HOSTS,
     FEISHU_WEBHOOK_PATH_PREFIX,
@@ -121,12 +121,12 @@ from common.alerting.types import (
 )
 
 __all__ = [
+    "EMOJI_TEMPLATE",
     "DEFAULT_ACTION",
     "DEFAULT_IMPACT",
     "DELIVERY_LABEL",
     "DISPLAY_TIMEZONE",
     "DISPLAY_TIMEZONE_LABEL",
-    "ERROR_LOG_LEVELS",
     "FEISHU_BODY_LIMITS",
     "FEISHU_WEBHOOK_HOSTS",
     "FEISHU_WEBHOOK_PATH_PREFIX",

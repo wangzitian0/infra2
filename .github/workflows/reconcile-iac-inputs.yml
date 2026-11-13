@@ -21,7 +21,7 @@ run-name: Reconcile IaC Inputs (${{ inputs.promote_prod && 'PROD' || 'staging' }
         required: false
         default: ""
       after:
-        description: "Target release tag to promote; defaults to this workflow ref"
+        description: "Release tag (vX.Y.Z) to deploy; defaults to this workflow ref. A branch or sha fails before any deploy."
         required: false
         default: ""
       dry_run:
@@ -39,11 +39,6 @@ run-name: Reconcile IaC Inputs (${{ inputs.promote_prod && 'PROD' || 'staging' }
         required: false
         type: boolean
         default: false
-      run_post_deploy_hooks:
-        description: "Execute post-deploy App hooks after successful deploy_v2 commands"
-        required: false
-        type: boolean
-        default: true
       run_hook_slot:
         description: "Optional explicit App runtime hook slot (smoke, preview_gate, staging_gate, prod_gate, scheduled_audit) to execute"
         required: false
@@ -212,7 +207,6 @@ jobs:
           INPUT_AFTER: ${{ inputs.after || '' }}
           INPUT_DRY_RUN: ${{ inputs.dry_run || false }}
           INPUT_PROMOTE_PROD: ${{ inputs.promote_prod || false }}
-          INPUT_RUN_POST_DEPLOY_HOOKS: ${{ inputs.run_post_deploy_hooks }}
         run: |
           set -euo pipefail
 
@@ -221,7 +215,6 @@ jobs:
           after="$REF_NAME"
           before="${INPUT_BEFORE:-}"
           dry_run="false"
-          run_post_deploy_hooks="${INPUT_RUN_POST_DEPLOY_HOOKS:-true}"
           # Release decoupling: a tag push auto-applies STAGING only (soak). Prod is an
           # explicit, deliberate promotion via workflow_dispatch (promote_prod=true) —
           # a tag push NEVER auto-deploys prod.
@@ -365,10 +358,8 @@ jobs:
                 --output-json reconcile-result.json)
           [[ -n "$before" ]] && args+=(--before "$before")
           [[ "$dry_run" == "true" ]] && args+=(--dry-run)
-          if [[ "$run_post_deploy_hooks" == "true" ]]; then
-            # stage_hook_plan: staging -> smoke + staging_gate; prod -> smoke + prod_gate
-            args+=(--run-post-deploy-hooks)
-          fi
+          # Post-deploy hooks always run (staging: smoke + staging_gate; prod: smoke +
+          # prod_gate). No input skips them: a deploy without its gates is no evidence (#1628).
           if [[ "$promote_prod" == "true" ]]; then
             args+=(--promote-prod --env prod)
           else
@@ -388,14 +379,14 @@ jobs:
             sync_args=(--sync-app-releases --apply-repos-yaml --sync-gitlinks --output-json sync-app-releases.json)
             if [[ "$dry_run" == "true" ]]; then
               sync_args+=(--dry-run)
-            elif [[ "$promote_prod" != "true" ]]; then
+            else
               sync_args+=(--create-pr)
             fi
             echo "RECONCILE_PHASE=sync-app-releases" >> "$GITHUB_ENV"
             python -m tools.reconcile_iac_inputs "${sync_args[@]}"
-            if [[ "$EVENT_NAME" == "schedule" ]]; then
-              exit 0
-            fi
+            # A sync only opens or updates the sync PR. The staging train is the tag push
+            # that follows its merge; a sync on main never deploys main (#1628).
+            exit 0
           fi
 
           echo "RECONCILE_PHASE=reconcile-deploy" >> "$GITHUB_ENV"
@@ -448,10 +439,15 @@ jobs:
           INPUT_PROMOTE_PROD: ${{ inputs.promote_prod || false }}
           RECONCILE_PHASE: ${{ env.RECONCILE_PHASE || '' }}
           GITHUB_TOKEN: ${{ github.token }}
+          # a second red run of the same failure is a report in the reports chat
+          INFRA2_REPORTS_FEISHU_APP_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_ID }}
+          INFRA2_REPORTS_FEISHU_APP_SECRET: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_SECRET }}
+          INFRA2_REPORTS_FEISHU_CHAT_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_CHAT_ID }}
         run: |
           python - <<'PY'
           import os
           from pathlib import Path
+          from common.observability.issue_trail import FULL
           from common.observability.page_dedup import dedup_page
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from tools.reconcile_iac_inputs import resolve_workflow_failure_alert
@@ -475,34 +471,44 @@ jobs:
               print(skip_notice)
               raise SystemExit(0)
           assert alert_text is not None
+          # one dedup state per environment: a staging recovery never resolves production
+          job = "reconcile-iac-inputs-" + ("production" if os.environ.get("INPUT_PROMOTE_PROD") == "true" else "staging")
           phase = os.environ.get("RECONCILE_PHASE") or "reconcile"
           outcome = dedup_page(
               os.environ,
-              job="reconcile-iac-inputs",
+              job=job,
               label="IaC 输入对账",
               findings=[(phase, alert_text.splitlines()[0])],
               detail=alert_text,
               page_message=alert_text,
               deliver_page=deliver_out_of_band_alert,
+              # the tag push is the staging train: dedup runs for it too
+              mode=FULL if os.environ.get("GITHUB_EVENT_NAME") == "push" else None,
           )
           raise SystemExit(outcome.exit_code)
           PY
 
+      # Only a run that reached the deploy phase proves the deploy path is healthy again:
+      # a sync-only, dry-run or refused run neither pages nor resolves.
       - name: Resolve the reconcile failure alert
-        if: success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        if: success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) && env.RECONCILE_PHASE == 'reconcile-deploy'
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          INPUT_PROMOTE_PROD: ${{ inputs.promote_prod || false }}
         run: |
           python - <<'PY'
           import os
+          from common.observability.issue_trail import FULL
           from common.observability.page_dedup import resolve_page_state
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
 
+          job = "reconcile-iac-inputs-" + ("production" if os.environ.get("INPUT_PROMOTE_PROD") == "true" else "staging")
           outcome = resolve_page_state(
               os.environ,
-              job="reconcile-iac-inputs",
+              job=job,
               label="IaC 输入对账",
               deliver_page=deliver_out_of_band_alert,
+              mode=FULL if os.environ.get("GITHUB_EVENT_NAME") == "push" else None,
           )
           raise SystemExit(outcome.exit_code)
           PY

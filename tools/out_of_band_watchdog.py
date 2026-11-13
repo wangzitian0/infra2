@@ -26,6 +26,7 @@ from common.alerting import (  # noqa: E402
     REPORT_TITLE_PREFIX,
     PagerItem,
     PagerMessage,
+    _LEVEL_TEMPLATE,
     deliver_infra2_report,
     deliver_out_of_band_card,
     firing_title,
@@ -34,6 +35,7 @@ from common.alerting import (  # noqa: E402
     out_of_band_app_config,
     pager_level,
     redact_credentials,
+    render_pager_card,
     render_pager_text,
     text_to_card,
 )
@@ -1315,7 +1317,14 @@ _DEFAULT_IMPACT = "未归类的检查失败:按现象判断影响范围"
 def format_failure_message(
     results: list[CheckResult], *, run_url: str, now: float | None = None
 ) -> str:
-    """Build the Feishu page for failed paging checks (see route_failures).
+    """The text of the Feishu page for failed paging checks (see route_failures)."""
+    return render_pager_text(failure_pager_message(results, run_url=run_url, now=now))
+
+
+def failure_pager_message(
+    results: list[CheckResult], *, run_url: str, now: float | None = None
+) -> PagerMessage:
+    """The page for failed paging checks as a structure: one text and one card render it.
 
     #905: the pager layout every source shares (``common.alerting.PAGER_FIELDS``).
     """
@@ -1342,12 +1351,10 @@ def format_failure_message(
     preamble = ["来源：GitHub Actions 日级带外审计 → 飞书直发(不经 bridge)"]
     if run_url:
         preamble.append(f"运行：{run_url}")
-    return render_pager_text(
-        PagerMessage(
-            title=firing_title(level, f"GitHub 日级带外审计 · {len(items)} 项"),
-            firing=items,
-            preamble=tuple(preamble),
-        )
+    return PagerMessage(
+        title=firing_title(level, f"GitHub 日级带外审计 · {len(items)} 项"),
+        firing=items,
+        preamble=tuple(preamble),
     )
 
 
@@ -1702,7 +1709,18 @@ def _handle_paged_failures(
     *,
     dry_run: bool,
 ) -> int:
-    message = format_failure_message(paged, run_url=_github_run_url(current_env))
+    pager = failure_pager_message(paged, run_url=_github_run_url(current_env))
+    message = render_pager_text(pager)
+    page_card = render_pager_card(
+        pager,
+        template=_LEVEL_TEMPLATE[highest_level(r.severity for r in paged)],
+    )
+
+    # A dedup note changes the text; the plain card then carries the page.
+    CURRENT_PAGE.clear()
+    if page_card is not None:
+        CURRENT_PAGE.update(text=message, card=page_card)
+
     if dry_run:
         print(message)
         _emit_structured_log(
@@ -1972,8 +1990,32 @@ def _ssh_capture(config: SshConfig | None, timeout: float = 20.0):
     return unit_runtime
 
 
+#: The page being delivered, as its text and its structured card (a page of several
+#: items, rendered by ``render_pager_card``). ``_handle_paged_failures`` sets it before
+#: the dedup step, which hands the page to ``deliver_out_of_band_alert`` as text.
+CURRENT_PAGE: dict = {}
+
+
+def _page_card(message: str) -> dict:
+    """The card for ``message``: the structured card of the current page, with any
+    text that the dedup step added after the page as one more line (never a cut of
+    the items); else the one plain message as a card (``text_to_card``)."""
+    page_text = CURRENT_PAGE.get("text")
+    if page_text and message.startswith(page_text):
+        card = CURRENT_PAGE["card"]
+        note = message[len(page_text) :].strip()
+        if not note:
+            return card
+        element = {"tag": "div", "text": {"tag": "plain_text", "content": note}}
+        return {**card, "elements": [*card["elements"], element]}
+    return text_to_card(message)
+
+
 def deliver_out_of_band_alert(env: Mapping[str, str], message: str) -> None:
-    """Send a direct Feishu alert card without using the infra2 bridge."""
+    """Send a direct Feishu alert card without using the infra2 bridge.
+
+    The current page sends its structured card; any other message is one plain message
+    and becomes a card (``text_to_card``)."""
     config = out_of_band_app_config(env)
     mode = config["mode"]
     if mode not in {"feishu_app", "feishu_webhook"}:
@@ -1983,10 +2025,7 @@ def deliver_out_of_band_alert(env: Mapping[str, str], message: str) -> None:
             "INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL or FEISHU_WEBHOOK_URL "
             "is required for feishu_webhook mode"
         )
-    template = "green" if message.lstrip().startswith("✅") else "red"
-    deliver_out_of_band_card(
-        env, text_to_card(message, template=template), fallback_text=message
-    )
+    deliver_out_of_band_card(env, _page_card(message), fallback_text=message)
 
 
 def _failure_domain_for_http_target(name: str) -> str:

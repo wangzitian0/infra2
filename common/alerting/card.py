@@ -15,6 +15,7 @@ from common.alerting.types import (
     DEFAULT_ACTION,
     DEFAULT_IMPACT,
     DELIVERY_LABEL,
+    EMOJI_TEMPLATE,
     FEISHU_BODY_LIMITS,
     FIELD_SEPARATOR,
     MAX_FIELD_CHARS,
@@ -742,14 +743,18 @@ def build_feishu_app_card_payload(chat_id: str, card: dict[str, Any]) -> dict[st
     }
 
 
-def text_to_card(text: str, *, template: str) -> dict[str, Any]:
+def text_to_card(text: str, *, template: str | None = None) -> dict[str, Any]:
     """Render a plain message as a card: the first line is the title (at most 40
-    characters), the other lines are one block of at most 12 lines, and no KPI block."""
+    characters), the other lines are one block of at most 12 lines, and no KPI block.
+    One plain message only: a page of several items is a ``PagerMessage`` rendered by
+    ``render_pager_card``. Without ``template`` the first emoji picks the colour
+    (``EMOJI_TEMPLATE``; red when there is none)."""
     lines = [
         _clip(line.strip(), MAX_SUMMARY_LINE_CHARS)
         for line in text.strip().splitlines()
         if line.strip()
     ] or ["infra2"]
+    template = template or EMOJI_TEMPLATE.get(lines[0][:1], "red")
     title = _clip(lines[0], CARD_TITLE_CHARS)
     body = ([lines[0]] if title != lines[0] else []) + lines[1:]
     if len(body) > CARD_BODY_LINES:

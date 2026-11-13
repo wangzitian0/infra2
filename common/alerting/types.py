@@ -15,7 +15,6 @@ FEISHU_WEBHOOK_PATH_PREFIX = "/open-apis/bot/v2/hook/"
 SIGNOZ_ALERT_SCHEMA_VERSION = "v2alpha1"
 SIGNOZ_ALERT_VERSION = "v5"
 SIGNOZ_FEISHU_CHANNEL_PREFIX = "infra2-feishu-alerts"
-ERROR_LOG_LEVELS = ("ERROR", "CRITICAL", "FATAL")
 MAX_MESSAGE_CHARS = 3500
 JSON_UTF8 = "application/json; charset=utf-8"
 TRUNCATION_SUFFIX = "\n...[truncated]"
@@ -62,6 +61,12 @@ _LEVEL_BY_SEVERITY = {
 _LEVEL_RANK = {"P0": 0, "P1": 1, "P2": 2}
 _LEVEL_EMOJI = {"P0": "🔴", "P1": "🟠", "P2": "🟡"}
 _LEVEL_TEMPLATE = {"P0": "red", "P1": "orange", "P2": "yellow"}
+#: The card colour of a message by the emoji that starts its first line (the Worker's
+#: ``CARD_COLORS`` is the same map): P0 red, P1 orange, P2 yellow, resolved green.
+EMOJI_TEMPLATE = {
+    **{_LEVEL_EMOJI[level]: _LEVEL_TEMPLATE[level] for level in _LEVEL_EMOJI},
+    "✅": "green",
+}
 
 _REPO_BLOB = "https://github.com/wangzitian0/infra2/blob/main"
 _P0_RUNBOOK_BASE = f"{_REPO_BLOB}/docs/runbooks/infra022-p0.md"
