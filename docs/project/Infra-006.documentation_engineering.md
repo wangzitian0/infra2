@@ -42,8 +42,10 @@ As-is:
 
 To-be:
 
-- [ ] Define the infra2 SSOT HLS model with 6-8 families, concept boundaries,
-  and child binding rules in
+- [x] Define the infra2 SSOT HLS model with 6 families. They are declared in
+  `docs/ssot/MANIFEST.yaml` (`families`) and guarded by
+  `test_ssot_families_are_declared_and_cover_every_entry`.
+- [ ] Define child binding rules for clauses that cannot stand alone, from
   [finance_report#821](https://github.com/wangzitian0/finance_report/issues/821).
 - [ ] Feed infra2 manifest and SSOT files into report-only design metrics for
   family coverage, orphan files, duplicate owners, clause binding,
