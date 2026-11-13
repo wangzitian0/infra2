@@ -62,12 +62,7 @@ from common.deploy.env_config import (
     preview_alias,
     preview_service_config,
 )
-from common.deploy.stage_record import CI_ENV, sdk_unit, utc_now, write_stage_record
-from common.deploy.stage_record_reader import (
-    EXIT_UNREADABLE,
-    read_record,
-    staging_gates_verdict,
-)
+from common.deploy.stage_record import sdk_unit, utc_now, write_stage_record
 from common.deploy.release_markers import (
     PRODUCTION_MARKER_PREFIX,
     RELEASE_TAG_RE,
@@ -75,6 +70,7 @@ from common.deploy.release_markers import (
     version_key,
 )
 from common.observability.issue_trail import CheckVerdict
+from tools.promotion_soak_guard import require_upstream_post, required_staging_gates
 from infra2_sdk.deploy import DeployRequest
 from infra2_sdk.manifests import (
     FORBIDDEN_HOOK_ENV_NAMES,
@@ -2425,10 +2421,20 @@ def plan_train(
 
 
 def split_hook_slots(slots: str, target_env: str) -> tuple[str, str]:
-    """``(operation slots, post slots)`` as CSV. The operation slot of the stage plan
-    (``smoke``) runs in the operation phase; every other slot (the gate) runs in the post phase."""
+    """``(operation slots, post slots)`` as CSV. Staging: the operation slot of the stage plan
+    (``smoke``) runs in the operation phase and the gate in the post phase. Production: both
+    run in the operation phase, ``smoke`` first, so the marker follows ``prod_gate`` (#1563)
+    and the ``post`` job needs no ``contents: write``."""
     operation_slot = stage_hook_plan(target_env).operation_slot
     parsed = _parse_hook_slots(slots)
+    if target_env == "prod":
+        return (
+            ",".join(
+                [s for s in parsed if s == operation_slot]
+                + [s for s in parsed if s != operation_slot]
+            ),
+            "",
+        )
     return (
         ",".join(slot for slot in parsed if slot == operation_slot),
         ",".join(slot for slot in parsed if slot != operation_slot),
@@ -2446,84 +2452,6 @@ def assert_release_ref(
     except ValueError as exc:
         raise SystemExit(f"::error::{exc}") from exc
     assert_after_on_main(args.after, repo_root)
-
-
-def required_staging_gates(plan: ReconcilePlan) -> dict[str, str]:
-    """``service -> release tag`` of each App whose release this promotion carries (#1563)."""
-    return {
-        svc: tag
-        for svc in sorted(plan.selected)
-        if svc in APP_SOURCES and (tag := plan.app_release_tags.get(svc, ""))
-    }
-
-
-def require_upstream_post(
-    after: str,
-    repo_root: Path,
-    train: TrainPlan,
-    *,
-    env: Mapping[str, str] = os.environ,
-) -> None:
-    """Refuse a production promotion unless the records of the stage before are green (#1646).
-
-    Three facts, each read from a post record and none from a run listing: the staging soak of
-    this tag (a tag-push run, tag on main), the main CI run of the tag commit, and a green
-    ``staging_gate`` of every App release since the last production marker (#1563). The check
-    runs in the ``pre`` job, before the owner is asked. It prints each reading, so a refusal
-    names the failed check id, and ends with ``SystemExit`` on any doubt.
-    """
-    repo = env.get("GITHUB_REPOSITORY", "")
-    token = env.get("GITHUB_TOKEN") or env.get("GH_TOKEN", "")
-    if not (repo and token):
-        raise SystemExit(
-            "::error::upstream_post: GITHUB_REPOSITORY and GITHUB_TOKEN are required"
-        )
-    commit = subprocess.run(
-        ["git", "rev-parse", "--verify", f"{after}^{{commit}}"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
-    staging_env = stage_hook_plan("staging").stage_id
-
-    def staging(tag: str):
-        return read_record(
-            repo,
-            token,
-            env=staging_env,
-            subject=f"tag:{tag}",
-            phase="post",
-            event="push",
-        )
-
-    readings = {
-        "staging soak": staging(after),
-        "main CI": read_record(
-            repo, token, env=CI_ENV, subject=f"sha:{commit}", phase="post", event="push"
-        ),
-    }
-    required = required_staging_gates(train.plan) if train.before else {}
-    window: list[dict] = []
-    if required:
-        for tag in releases_between(train.before, after, repo_root):
-            reading = readings["staging soak"] if tag == after else staging(tag)
-            if reading.exit_code == EXIT_UNREADABLE:
-                readings[f"staging soak {tag}"] = reading
-            elif reading.ok and reading.record:
-                window.append(reading.record)
-    refusals = []
-    for name, reading in readings.items():
-        print(f"upstream_post: {name}: {reading.detail}")
-        if not reading.ok:
-            refusals.append(f"{name}: {reading.detail}")
-    if required and not refusals:
-        gates_ok, gates = staging_gates_verdict(window, required)
-        print(f"upstream_post: staging_gate since {train.before}: {gates}")
-        if not gates_ok:
-            refusals.append(f"staging_gate: {gates}")
-    if refusals:
-        raise SystemExit("::error::upstream_post refused: " + " | ".join(refusals))
 
 
 def _write_payload(
@@ -2635,7 +2563,13 @@ def run_pre(
                                     raise SystemExit(f"::error::{exc}") from exc
         if promote_prod and not args.dry_run:
             with timed_check(checks, "upstream_post"):
-                require_upstream_post(args.after, repo_root, train)
+                require_upstream_post(
+                    args.after,
+                    repo_root,
+                    before=train.before,
+                    required=required_staging_gates(train.plan),
+                    releases=releases_between,
+                )
     except BaseException as exc:
         if all(check.ok for check in checks):
             checks.append(CheckVerdict("plan", False, str(exc)[:300]))
@@ -2661,10 +2595,12 @@ def run_operation(
     promote_prod: bool,
     target_env: str,
 ) -> PhaseOutcome:
-    """Phase ``operation``: the deploy, the quick proof (``smoke``) and the production marker.
+    """Phase ``operation``: the deploy, its hooks and the production marker.
 
-    The marker is written here, after the deploy and its ``smoke``: a ``post`` job that
-    pushed it would hold ``contents: write`` and need a second owner approval.
+    A production run executes ``smoke`` and ``prod_gate`` here and writes the marker only
+    after both passed: a failed gate leaves the marker behind, so the next promotion still
+    scans the staging gates of this release (#1563). A ``post`` job that pushed the marker
+    would hold ``contents: write`` and need a second owner approval.
     """
     checks: list[CheckVerdict] = []
     started = utc_now()
@@ -2682,23 +2618,13 @@ def run_operation(
                         if svc in APP_SOURCES
                     }
                 )
-                # The `post` job of a production run holds no hook secret, so its slots are
-                # audited without them: a gate that needs one fails here, before the deploy.
-                post_env = {
-                    k: v
-                    for k, v in os.environ.items()
-                    if not (promote_prod and k in HOOK_RUNNER_SECRET_NAMES)
-                }
                 errors: list[object] = []
-                for slots, ambient in (
-                    (operation_slots, os.environ),
-                    (post_slots, post_env),
-                ):
+                for slots in (operation_slots, post_slots):
                     if hook_services and slots:
                         errors += audit_app_hooks(
                             repo_root,
                             services=hook_services,
-                            ambient_env=ambient,
+                            ambient_env=os.environ,
                             pinned_tags=train.plan.app_release_tags,
                             slots=_parse_hook_slots(slots),
                             target_env=target_env,
@@ -2882,7 +2808,8 @@ def run_train(
     facts: dict[str, object] = {"plan": train.plan.to_dict(), "target_env": target_env}
     failed_job = ""
     for name, run in (("operation", run_operation), ("post", run_post)):
-        if name not in phases or failed_job:
+        # a production run executes its gate in `operation`; it has no `post` phase
+        if name not in phases or failed_job or (name == "post" and promote_prod):
             continue
         outcome = run(args, repo_root, stage, train, **kwargs)
         results += outcome.results

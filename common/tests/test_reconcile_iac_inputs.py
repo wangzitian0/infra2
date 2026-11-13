@@ -2905,28 +2905,19 @@ def _hook_env_run(monkeypatch, tmp_path, *, slot: str, promote: bool) -> list[ob
     return deploys
 
 
-def test_a_production_gate_that_needs_a_hook_secret_fails_hook_env_before_the_deploy(
+def test_a_production_gate_that_needs_a_hook_secret_passes_hook_env_in_operation(
     monkeypatch, tmp_path
 ) -> None:
-    """#1646: `post` of a production run holds no hook secret (the owner approved `operation`
-    alone). A `prod_gate` that requires one fails the check in `operation`, though the
-    secret is set there, instead of failing in `post` after the deploy and the marker."""
-    refused = _hook_env_run(monkeypatch, tmp_path, slot="prod_gate", promote=True)
-    assert (
-        len(refused) == 1
-        and "TA_EMAIL" in str(refused[0])
-        and "prod_gate" in str(refused[0])
-    )
-    # the operation writes the alert text of its state for the `alert` job
-    alert = json.loads((tmp_path / "result.json").read_text())["alert_text"]
-    assert "deploy failed" in alert and "- hook_env:" in alert and "TA_EMAIL" in alert
+    """#1563: `prod_gate` runs in `operation`, the job the owner approved, which holds the
+    hook secrets. The `hook_env` check audits it there with the secret set."""
+    deploys = _hook_env_run(monkeypatch, tmp_path, slot="prod_gate", promote=True)
+    # the run passes `hook_env` and reaches the marker, which the bare test repo cannot resolve
+    assert deploys == ["::error::cannot resolve production release 'v9.9.9'"]
     # staging passes the same gate: `post` of a staging run holds the secret
     assert (
         _hook_env_run(monkeypatch, tmp_path / "s", slot="staging_gate", promote=False)
         != []
     )
-    # a production smoke is run by `operation`, which holds the secret
-    assert _hook_env_run(monkeypatch, tmp_path / "p", slot="smoke", promote=True) != []
 
 
 def test_scheduled_audit_fails_a_service_with_a_missing_hook_env_value_without_running_it(
@@ -4509,20 +4500,26 @@ def test_reconcile_imports_no_issue_writer() -> None:
 
 
 def _hooks_by_slot(order: list[str], *, fail: str = ""):
-    """A stand-in for the hook runner: one result per call, named after the slot."""
+    """A stand-in for the hook runner: one call is logged as ``hooks:<csv>`` and gives one
+    result per slot, in order, up to the first slot named ``fail`` (as the real runner)."""
 
     def run(plan, applied, *, slot, **_kw):
         order.append(f"hooks:{slot}")
-        return [
-            {
-                "service": "platform/alerting",
-                "slot": slot,
-                "status": "fail" if slot == fail else "pass",
-                "summary": "boom" if slot == fail else "ok",
-                "version_ref": "v3.1.23",
-                "duration_seconds": 1.0,
-            }
-        ]
+        results = []
+        for one in slot.split(","):
+            results.append(
+                {
+                    "service": "platform/alerting",
+                    "slot": one,
+                    "status": "fail" if one == fail else "pass",
+                    "summary": "boom" if one == fail else "ok",
+                    "version_ref": "v3.1.23",
+                    "duration_seconds": 1.0,
+                }
+            )
+            if one == fail:
+                break
+        return results
 
     return run
 
@@ -4569,46 +4566,51 @@ _TRAIN_ARGV = ["--before", "v3.1.22", "--after", "v3.1.23", "--promote-prod",
 def test_marker_written_only_after_prod_gate_passes(
     monkeypatch, tmp_path, capsys
 ) -> None:
-    """AC6 (#1646). The marker `production/<tag>` is written by the `operation` phase, after
-    the deploy and its quick proof (`smoke`), and before the `post` phase, which runs
-    `prod_gate`. A `post` job that pushed the marker would hold `contents: write`, which makes
-    it a production job with a second owner approval (`common/gate/production_contract.py`).
-    So no failed deploy and no failed `smoke` writes the marker, and `post` never writes it."""
+    """AC6 (#1646, #1563). The marker `production/<tag>` is written by the `operation` phase
+    after the deploy, `smoke` and `prod_gate`, in that order. A failed deploy, `smoke` or
+    `prod_gate` leaves it unwritten. The `post` job never writes it: it would hold
+    `contents: write`, a production job with a second owner approval."""
+    gate = "hooks:smoke,prod_gate"
     # 1. a failed deploy: nothing after it runs
     order = _train_stubs(monkeypatch, tmp_path / "a", returncode=1)
     monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order))
     assert main(_TRAIN_ARGV) == 1
     assert order == ["deploy"]
-    # 2. a failed smoke: the marker is not written and the gate does not run
+    # 2. a failed smoke: no marker
     order = _train_stubs(monkeypatch, tmp_path / "b")
     monkeypatch.setattr(
-        reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order, fail="smoke")
+        reconcile,
+        "run_post_deploy_app_hooks",
+        _hooks_by_slot(order, fail="smoke"),
     )
     assert main(_TRAIN_ARGV) == 1
-    assert order == ["deploy", "hooks:smoke"]
-    # 3. everything green: the marker follows the smoke and precedes the gate
+    assert order == ["deploy", gate]
+    # 3. everything green: the marker follows prod_gate
     order = _train_stubs(monkeypatch, tmp_path / "c")
     monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order))
     assert main(_TRAIN_ARGV) == 0
-    assert order == ["deploy", "hooks:smoke", "marker", "hooks:prod_gate"]
-    # 4. the post phase alone writes no marker and makes no deploy call
+    assert order == ["deploy", gate, "marker"]
+    # 4. the post phase alone for a production run writes no marker and runs no hook
     order = _train_stubs(monkeypatch, tmp_path / "d")
     monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order))
     assert main(["--phase", "post", *_TRAIN_ARGV]) == 0
-    assert order == ["hooks:prod_gate"]
-    # 5. a failed gate does not hold the marker back: it is the operation that wrote it
+    assert order == []
+    # 5. a failed prod_gate: the marker is NOT written (#1563)
     order = _train_stubs(monkeypatch, tmp_path / "e")
     monkeypatch.setattr(
-        reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order, fail="prod_gate")
+        reconcile,
+        "run_post_deploy_app_hooks",
+        _hooks_by_slot(order, fail="prod_gate"),
     )
     assert main(_TRAIN_ARGV) == 1
-    assert order == ["deploy", "hooks:smoke", "marker", "hooks:prod_gate"]
+    assert order == ["deploy", gate]  # no "marker"
     capsys.readouterr()
-    # the workflow: `post` holds no `contents: write`, `operation` is the one job that does
+    # the workflow: `operation` is the one job with `contents: write`; `post` is staging only
     jobs = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]
     assert jobs["operation"]["permissions"]["contents"] == "write"
     for name in ("pre", "post", "alert"):
         assert jobs[name]["permissions"]["contents"] == "read", name
+    assert "!inputs.promote_prod" in jobs["post"]["if"]
 
 
 def test_post_phase_dispatch_runs_no_deploy(monkeypatch, tmp_path, capsys) -> None:
@@ -4754,7 +4756,8 @@ def test_each_phase_writes_its_own_result_for_the_alert_job(
     monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", _hooks_by_slot(order))
     assert main(["--phase", "post", "--output-json", str(green), *_TRAIN_ARGV]) == 0
     data = json.loads(green.read_text())
-    assert data["alert_text"] is None and data["hook_results"][0]["slot"] == "prod_gate"
+    # a production run has no post phase: `operation` ran `prod_gate`
+    assert data["alert_text"] is None and data["hook_results"] == []
 
 
 def _tagged_repo(tmp_path: Path, tags: list[str], markers: list[str]) -> Path:

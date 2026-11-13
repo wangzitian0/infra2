@@ -10,7 +10,7 @@ run-name: Reconcile IaC Inputs (${{ inputs.promote_prod && 'PROD' || 'staging' }
 # no-op vs real redeploy. Dokploy native autoDeploy stays disabled.
 #
 # The train has three jobs (#1646): `pre` (guards; no secret, no environment), `operation`
-# (deploy, smoke, production marker; the only job that waits for the owner) and `post` (the
+# (deploy, hooks, production marker; the only job that waits for the owner) and `post` (the
 # gate hooks; no deploy, so `phase=post` can run it again alone). An `alert` job reports the
 # state of the three. docs/ssot/ops.pipeline.md section 2.0 is the model.
 
@@ -337,7 +337,7 @@ jobs:
                 --output-json reconcile-result.json
                 "${base_args[@]}")
           [[ "$dry_run" == "true" ]] && args+=(--dry-run)
-          # The `smoke` hook runs here; the gate hook (staging_gate, prod_gate) runs in `post`.
+          # `smoke` runs here. prod_gate runs here too, before the marker; staging_gate runs in `post`.
           # No input skips them: a deploy without its gates is no evidence (#1628).
           if [[ "$promote_prod" == "true" ]]; then
             args+=(--env prod)
@@ -421,9 +421,10 @@ jobs:
     name: post (gate hooks and record)
     needs: operation
     # The operation passed, or `phase=post` runs this job alone (the operation is skipped by
-    # design). It makes no deploy call and holds no `contents: write`: the production marker is
-    # written by `operation`, so a production run needs one owner approval, not two.
-    if: ${{ !cancelled() && github.event_name != 'schedule' && !inputs.sync_app_releases && !inputs.run_hook_slot && inputs.phase != 'pre' && (needs.operation.result == 'success' || (inputs.phase == 'post' && needs.operation.result == 'skipped')) }}
+    # design). It makes no deploy call and holds no `contents: write`. A production run
+    # executes `smoke` and `prod_gate` in `operation` and writes the marker after both, so
+    # this job is for staging only and a production run needs one owner approval, not two.
+    if: ${{ !cancelled() && !inputs.promote_prod && github.event_name != 'schedule' && !inputs.sync_app_releases && !inputs.run_hook_slot && inputs.phase != 'pre' && (needs.operation.result == 'success' || (inputs.phase == 'post' && needs.operation.result == 'skipped')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:

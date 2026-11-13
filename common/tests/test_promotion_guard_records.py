@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+import tools.promotion_soak_guard as guard
 import tools.reconcile_iac_inputs as reconcile
 from common.deploy import stage_record as writer
 from common.deploy import stage_record_reader as stage_records
@@ -64,7 +65,7 @@ def world(repo, monkeypatch, tmp_path):
     gh = FakeGitHub()
     gh.commit = _git(repo, "rev-parse", f"{TAG}^{{commit}}")
     monkeypatch.setattr(
-        reconcile,
+        guard,
         "read_record",
         lambda *a, **k: stage_records.read_record(*a, opener=gh, **k),
     )
@@ -266,7 +267,7 @@ def test_the_guard_runs_for_a_promotion_that_deploys_nothing(world) -> None:
 
 def test_a_staging_pre_and_a_dry_run_read_no_record(world, monkeypatch) -> None:
     monkeypatch.setattr(
-        reconcile,
+        guard,
         "read_record",
         lambda *_a, **_k: pytest.fail("only a production promotion reads records"),
     )
@@ -437,7 +438,6 @@ def test_guard_lists_no_runs() -> None:
         if pattern.search(line)
     ]
     assert hits == []
-    assert not (ROOT / "tools" / "promotion_soak_guard.py").exists()
 
 
 def test_the_guard_reads_only_the_artifact_and_run_endpoints() -> None:

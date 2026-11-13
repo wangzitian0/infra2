@@ -832,8 +832,8 @@ def test_the_operation_record_follows_a_recorded_production_marker(
         ),
     )
     assert reconcile.main(argv) == 0
-    # the marker is written by the operation, before its record and before the post phase
-    assert order == ["pre", "marker", "operation", "post"]
+    # the marker is written by the operation, before its record; a production run has no post
+    assert order == ["pre", "marker", "operation"]
     operation = _operation_of(records)
     assert operation.verdict == "pass"
     assert [(c.name, c.ok, c.detail) for c in operation.checks][-1] == (
