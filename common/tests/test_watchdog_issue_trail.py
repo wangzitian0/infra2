@@ -136,8 +136,17 @@ def test_dedup_is_title_equality_not_containment() -> None:
             {"number": 5, "title": title_for("infra2-ssh-extra")},
         ]
     )
+    with pytest.raises(ValueError, match="open-only"):
+        reconcile_issue_trail(
+            api,
+            _trail([_red("infra2-ssh")], green=["infra2-ssh-extra"]),
+            mode=OPEN_ONLY,
+        )
     reconcile_issue_trail(
-        api, _trail([_red("infra2-ssh")], green=["infra2-ssh-extra"]), mode=OPEN_ONLY
+        api,
+        _trail([_red("infra2-ssh")], green=["infra2-ssh-extra"]),
+        mode=FULL,
+        close=False,
     )
     assert [title for title, _, _ in api.created] == [title_for("infra2-ssh")]
     assert api.comments == []
@@ -202,7 +211,10 @@ def test_a_drill_or_branch_run_never_closes() -> None:
     red = _red("estate-scheduler-liveness", "STALE: capped at 0h")
     assert (
         reconcile_issue_trail(
-            api, _trail([red], green=["cloudflare-worker-status"]), mode=OPEN_ONLY
+            api,
+            _trail([red], green=["cloudflare-worker-status"]),
+            mode=FULL,
+            close=False,
         )
         == 0
     )
@@ -261,7 +273,7 @@ def test_a_complete_trail_retires_issues_of_checks_that_no_longer_report() -> No
     assert "is red" in bodies[3]
     # a drill or branch dispatch never closes, retired or not
     drill = FakeIssues([_issue(1, "infra2-ssh")])
-    reconcile_issue_trail(drill, trail, mode=OPEN_ONLY)
+    reconcile_issue_trail(drill, trail, mode=FULL, close=False)
     assert drill.closed == []
 
 
@@ -489,7 +501,18 @@ def test_a_missing_file_is_every_step_red(tmp_path: Path) -> None:
     ],
 )
 def test_the_run_kind_decides_what_may_be_written(env, mode) -> None:
-    assert issue_trail_mode(env) == mode
+    expected = (OFF, False) if mode == OFF else (FULL, mode == FULL)
+    assert trail_tool._run_policy(env) == expected
+    sdk_mode = (
+        OFF
+        if mode == OFF
+        and (
+            env.get("WATCHDOG_DRY_RUN") == "1"
+            or env.get("INFRA2_WATCHDOG_SSH_TARGETS_OVERRIDDEN") == "1"
+        )
+        else FULL
+    )
+    assert issue_trail_mode(env) == sdk_mode
 
 
 # --- the REST client -----------------------------------------------------------------

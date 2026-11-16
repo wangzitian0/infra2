@@ -8,7 +8,6 @@ the recreated collector re-mounts a stale file. These tests pin that wiring.
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 from unittest import mock
 
@@ -20,6 +19,7 @@ from common.deploy.config_hash import (
     _repo_rel,
     config_hash_from_items,
 )
+from common.tests.conftest import load_repo_module
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -33,12 +33,9 @@ ENVIRONMENT_NAME_RULE = {
 
 
 def _load_signoz_deployer():
-    path = ROOT / "platform/11.signoz/deploy.py"
-    spec = importlib.util.spec_from_file_location("signoz_deploy_under_test", path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.SigNozDeployer
+    return load_repo_module(
+        "platform/11.signoz/deploy.py", "signoz_deploy_under_test"
+    ).SigNozDeployer
 
 
 def test_composing_delivers_collector_config():

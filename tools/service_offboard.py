@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import subprocess
 import sys
 from typing import Any
@@ -25,20 +24,10 @@ from infra2_sdk.secrets import policy_name
 from common.console import error, header, info, success, warning
 from common.core.environ import get_env, infra_domain, with_env_suffix
 from common.deploy.dokploy_client import get_dokploy
-
-
-def _clean_ident(value: str) -> str:
-    """Normalize identifier for Postgres/Vault (lowercase, replace '-' with '_')."""
-    return re.sub(r"[^a-zA-Z0-9_]", "_", value.strip().lower())
-
-
-def check_op_signed_in(runner: Any = subprocess.run) -> bool:
-    """Validate 1Password CLI is installed and signed in."""
-    try:
-        res = runner(["op", "whoami"], capture_output=True, text=True, timeout=5)
-        return res.returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
+from common.security.store import (
+    check_op_signed_in,
+    clean_ident as _clean_ident,
+)
 
 
 def offboard_service(

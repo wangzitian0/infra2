@@ -18,6 +18,7 @@ from common.alerting import (
     build_signoz_channel_payload,
     signoz_feishu_channel_name,
 )
+from common.tests.conftest import load_repo_module
 from common.observability_dashboards import (
     ALERT_RULES_FILE,
     ALERT_RULES_FILES,
@@ -1590,13 +1591,7 @@ def test_apply_dashboard_raises_nonzero_exit_when_list_fails(monkeypatch) -> Non
 
 
 def _load_signoz_alert_probe():
-    spec = importlib.util.spec_from_file_location(
-        "signoz_alert_rule_probe_under_test", SIGNOZ_ALERT_PROBE
-    )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_repo_module(SIGNOZ_ALERT_PROBE, "signoz_alert_rule_probe_under_test")
 
 
 def test_signoz_alert_canary_uses_disabled_v5_promql_payload() -> None:
@@ -3245,13 +3240,9 @@ _CURL_FAILED = ("", False)  # no output at all: connection error or timeout
 
 
 def _load_real_alerting():
-    spec = importlib.util.spec_from_file_location(
-        "alerting_retry_under_test", ROOT / "platform/12.alerting/shared_tasks.py"
+    return load_repo_module(
+        "platform/12.alerting/shared_tasks.py", "alerting_retry_under_test"
     )
-    assert spec and spec.loader
-    alerting = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(alerting)
-    return alerting
 
 
 def _real_signoz_request(monkeypatch):

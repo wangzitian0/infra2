@@ -365,55 +365,32 @@ class AppDeployer(Deployer):
         return True
 
     @classmethod
-    def _ensure_secret_key(cls, env: str | None = None) -> bool:
-        """Auto-provision SECRET_KEY in Vault (#447).
-
-        app-web's session JWT signing (auth/config.ts) hard-fails without this
-        in production; secrets.ctmpl now renders it. Unlike the MinIO bucket
-        below, generating a random signing secret needs no docker CLI, so
-        (unlike _ensure_minio_bucket) this runs from the iac-runner's sync
-        path too, and heals staging/production without a manual Vault step.
-        """
+    def _ensure_vault_secret(
+        cls, key: str, length: int, *, env: str | None = None
+    ) -> bool:
         secrets = cls.secrets_backend(env=env)
         try:
-            existing = secrets.get("SECRET_KEY")
+            existing = secrets.get(key)
         except VaultSecrets.VaultSecretNotFoundError:
             existing = None
         if existing:
-            info("Vault secret exists: SECRET_KEY")
+            info(f"Vault secret exists: {key}")
             return True
-        if secrets.set("SECRET_KEY", generate_password(48)):
-            success("Vault: SECRET_KEY generated and stored")
+        if secrets.set(key, generate_password(length)):
+            success(f"Vault: {key} generated and stored")
             return True
-        error("Failed to store SECRET_KEY in Vault")
+        error(f"Failed to store {key} in Vault")
         return False
 
     @classmethod
-    def _ensure_app_service_db_password(cls, env: str | None = None) -> bool:
-        """Auto-provision app_service_login's DB password in Vault (truealpha#432
-        Stage A).
+    def _ensure_secret_key(cls, env: str | None = None) -> bool:
+        """Auto-provision SECRET_KEY in Vault (#447)."""
+        return cls._ensure_vault_secret("SECRET_KEY", 48, env=env)
 
-        db/roles.sql creates a scoped app_service_login role (mart_readonly +
-        app_runtime, no DDL) but sets no password of its own — that happens out of
-        band, here, exactly like SECRET_KEY. db/apply_migrations.sh forwards this
-        value to psql on every migration run, so a rotation here takes effect
-        automatically on the next deploy. DATABASE_URL itself is unchanged by this —
-        nothing authenticates as app_service_login yet — so a missing/rotated value
-        here is inert, never a runtime outage, unlike SECRET_KEY or the S3 keys.
-        """
-        secrets = cls.secrets_backend(env=env)
-        try:
-            existing = secrets.get("APP_SERVICE_DB_PASSWORD")
-        except VaultSecrets.VaultSecretNotFoundError:
-            existing = None
-        if existing:
-            info("Vault secret exists: APP_SERVICE_DB_PASSWORD")
-            return True
-        if secrets.set("APP_SERVICE_DB_PASSWORD", generate_password(32)):
-            success("Vault: APP_SERVICE_DB_PASSWORD generated and stored")
-            return True
-        error("Failed to store APP_SERVICE_DB_PASSWORD in Vault")
-        return False
+    @classmethod
+    def _ensure_app_service_db_password(cls, env: str | None = None) -> bool:
+        """Auto-provision app_service_login's DB password in Vault (truealpha#432 Stage A)."""
+        return cls._ensure_vault_secret("APP_SERVICE_DB_PASSWORD", 32, env=env)
 
     @classmethod
     def _ensure_s3_bucket(cls, c):

@@ -98,18 +98,11 @@ def evaluate_supply_chain_ratchet(
     actual: dict[str, list[str]], baseline: dict[str, list[str]]
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """Return (new_regressions, stale_baseline_entries) across supply-chain pin lists."""
-    regressions: dict[str, list[str]] = {}
-    stale: dict[str, list[str]] = {}
-    for key in ("unpinned_compose_images", "unpinned_dockerfile_froms"):
-        actual_set = set(actual.get(key, []))
-        base_set = set(baseline.get(key, []))
-        added = sorted(actual_set - base_set)
-        removed = sorted(base_set - actual_set)
-        if added:
-            regressions[key] = added
-        if removed:
-            stale[key] = removed
-    return regressions, stale
+    from common.tests.conftest import evaluate_keyed_ratchet
+
+    return evaluate_keyed_ratchet(
+        actual, baseline, ("unpinned_compose_images", "unpinned_dockerfile_froms")
+    )
 
 
 def find_automerge_violations(config_obj: Any, path_prefix: str = "") -> list[str]:

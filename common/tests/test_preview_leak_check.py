@@ -183,17 +183,18 @@ def test_fetch_open_prs_and_branches_paginate_and_failsafe() -> None:
     assert plc.fetch_remote_branches("tok", opener=_raising_opener) is None
 
 
-def test_detect_reports_leaks_without_deleting() -> None:
-    def opener(request, timeout=0):
-        url = request.full_url
-        if "/pulls" in url:
-            return _Resp(json.dumps([{"number": 5}]).encode())
-        if "/branches" in url:
-            return _Resp(json.dumps([{"name": "main"}]).encode())
-        return _Resp(b"[]")
+def _leak_opener(request, timeout=0):
+    url = request.full_url
+    if "/pulls" in url:
+        return _Resp(json.dumps([{"number": 5}]).encode())
+    if "/branches" in url:
+        return _Resp(json.dumps([{"name": "main"}]).encode())
+    return _Resp(b"[]")
 
+
+def test_detect_reports_leaks_without_deleting() -> None:
     client = _FakeClient(_projects())
-    result = plc.detect(client, token="tok", opener=opener)
+    result = plc.detect(client, token="tok", opener=_leak_opener)
     assert client.deleted == []  # detection never deletes
     assert {c.compose_id for c, _ in result["leaks"]} == {
         "mainslug",
@@ -207,16 +208,8 @@ def test_detect_reports_leaks_without_deleting() -> None:
 
 
 def test_remediate_deletes_confirmed_leaks_with_volumes() -> None:
-    def opener(request, timeout=0):
-        url = request.full_url
-        if "/pulls" in url:
-            return _Resp(json.dumps([{"number": 5}]).encode())
-        if "/branches" in url:
-            return _Resp(json.dumps([{"name": "main"}]).encode())
-        return _Resp(b"[]")
-
     client = _FakeClient(_projects())
-    leaks = plc.detect(client, token="tok", opener=opener)["leaks"]
+    leaks = plc.detect(client, token="tok", opener=_leak_opener)["leaks"]
     plc.remediate(client, leaks)
     assert sorted(cid for cid, _ in client.deleted) == [
         "canary",

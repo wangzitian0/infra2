@@ -11,7 +11,6 @@ topology (one sidecar, no separate watcher services).
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -20,6 +19,7 @@ import yaml
 from common.observability.watchers.breakdown_watch import BreakdownWatch
 from common.observability.watchers.deploy_queue_guard import DeployQueueGuard
 from common.observability.watchers.resident import ResidentWatcher, build_watchers
+from common.tests.conftest import load_repo_module
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "platform/12.alerting/compose.yaml"
@@ -34,12 +34,9 @@ def _production_probe_environment(monkeypatch):
 
 
 def _load_probe_runner():
-    path = ROOT / "tools/infra_probe_runner.py"
-    spec = importlib.util.spec_from_file_location("infra_probe_runner_watchers", path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_repo_module(
+        "tools/infra_probe_runner.py", "infra_probe_runner_watchers"
+    )
 
 
 # ---------------------------------------------------------------------------

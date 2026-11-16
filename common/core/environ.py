@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from common.core.constants import (
     DEPLOYMENT_ENV_PREVIEW,
@@ -445,3 +446,19 @@ def with_env_suffix(
     else:
         suffix = (env or get_env()).get("ENV_SUFFIX", "") or ""
     return f"{name}{suffix}" if suffix else name
+
+
+def resolve_lazy_attr(
+    name: str,
+    mapping: Mapping[str, str],
+    pkg_globals: dict[str, Any],
+    pkg_name: str,
+) -> Any:
+    """PEP 562 module attribute resolver shared by lazy-import packages."""
+    if name not in mapping:
+        raise AttributeError(f"module {pkg_name!r} has no attribute {name!r}")
+    import importlib
+
+    value = getattr(importlib.import_module(mapping[name]), name)
+    pkg_globals[name] = value
+    return value

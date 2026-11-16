@@ -10,11 +10,12 @@ for their healthchecks."""
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 
 import pytest
 from invoke.exceptions import CommandTimedOut
+
+from common.tests.conftest import load_repo_module
 
 ROOT = Path(__file__).resolve().parents[2]
 DEPLOY = ROOT / "truealpha/truealpha/20.data_engine/deploy.py"
@@ -24,13 +25,7 @@ OLD = "ghcr.io/wangzitian0/truealpha-data-engine@sha256:" + "0" * 64
 
 
 def _load():
-    spec = importlib.util.spec_from_file_location(
-        "truealpha_data_engine_deploy_595", DEPLOY
-    )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_repo_module(DEPLOY, "truealpha_data_engine_deploy_595")
 
 
 class _Result:

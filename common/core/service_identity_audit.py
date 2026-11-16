@@ -14,7 +14,10 @@ if str(ROOT) not in sys.path:
 from common.core.service_identity import ServiceIdentity  # noqa: E402
 from common.alerting.standard_rules import ENVIRONMENTS, STANDARD_RULES  # noqa: E402
 from common.core.registry import all_services, service_attrs  # noqa: E402
-from common.observability.watchdog_audit import audit as audit_watchdog  # noqa: E402
+from common.observability.watchdog_audit import (  # noqa: E402
+    audit as audit_watchdog,
+    run_audit_cli,
+)
 
 DEPLOY_BOUNDARIES = (
     ROOT / "common/deploy/deployer.py",
@@ -89,13 +92,7 @@ def audit() -> list[str]:
 
 
 def main() -> int:
-    errors = audit()
-    if errors:
-        for error in errors:
-            print(f"ERROR: {error}")
-        return 1
-    print("service identity audit passed")
-    return 0
+    return run_audit_cli(audit, "service identity audit passed")
 
 
 if __name__ == "__main__":

@@ -7,7 +7,6 @@ its environment must stop: it must not report itself as production.
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -16,6 +15,7 @@ import pytest
 
 import common.observability.probes as probes
 from common.observability.probe_dispatch import _chronic_digest_payload
+from common.tests.conftest import load_repo_module
 from tools import observability_roundtrip_probe as roundtrip
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -30,12 +30,7 @@ _PROBE_ENVIRONMENT_VARIABLES = (
 
 
 def _load_probe_runner():
-    path = ROOT / "tools/infra_probe_runner.py"
-    spec = importlib.util.spec_from_file_location("infra_probe_runner_1208", path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_repo_module("tools/infra_probe_runner.py", "infra_probe_runner_1208")
 
 
 @pytest.fixture(autouse=True)

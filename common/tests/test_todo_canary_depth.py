@@ -18,7 +18,6 @@ import contextlib
 import contextvars
 import http.server
 import json
-import importlib.util
 import re
 import secrets
 import socket
@@ -28,6 +27,8 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+from common.tests.conftest import load_repo_module
 from urllib.parse import unquote, urlsplit
 
 import pytest
@@ -54,11 +55,7 @@ S3_SECRET_KEY = secrets.token_urlsafe(24)
 
 
 def _load(name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_repo_module(path, name)
 
 
 @pytest.fixture(autouse=True)
@@ -285,11 +282,18 @@ def test_redis_probe_reports_unconfigured_without_a_password(app) -> None:
     assert redis.commands == [], "an unconfigured check sends nothing"
 
 
-def test_redis_probe_fails_on_noauth_after_auth_reports_ok(app) -> None:
-    """A server that accepts AUTH but then answers `-NOAUTH` must fail, never pass."""
-    redis = FakeRedis(
-        password=REDIS_PW, ping_reply=b"-NOAUTH Authentication required.\r\n"
-    )
+@pytest.mark.parametrize(
+    ("redis_kwargs", "expected_detail"),
+    [
+        ({"ping_reply": b"-NOAUTH Authentication required.\r\n"}, "NOAUTH"),
+        ({"get_reply": b"$5\r\nstale\r\n"}, "GET returned"),
+    ],
+)
+def test_redis_probe_fails_on_unexpected_reply(
+    app, redis_kwargs, expected_detail
+) -> None:
+    """A server returning -NOAUTH after AUTH or stale GET data must fail."""
+    redis = FakeRedis(password=REDIS_PW, **redis_kwargs)
     try:
         result = app._probe_redis(
             "127.0.0.1", redis.port, password=REDIS_PW, timeout=1.0
@@ -297,7 +301,7 @@ def test_redis_probe_fails_on_noauth_after_auth_reports_ok(app) -> None:
     finally:
         redis.close()
     assert result["status"] == "fail"
-    assert "NOAUTH" in result["detail"]
+    assert expected_detail in result["detail"]
 
 
 def test_redis_probe_fails_on_rejected_credentials_without_leaking_them(app) -> None:
@@ -343,18 +347,6 @@ def test_redis_probe_values_differ_between_runs(app) -> None:
         redis.close()
     values = [c[3] for c in redis.commands if c[0].upper() == "SETEX"]
     assert len(values) == 2 and values[0] != values[1]
-
-
-def test_redis_probe_fails_when_get_returns_a_different_value(app) -> None:
-    redis = FakeRedis(password=REDIS_PW, get_reply=b"$5\r\nstale\r\n")
-    try:
-        result = app._probe_redis(
-            "127.0.0.1", redis.port, password=REDIS_PW, timeout=1.0
-        )
-    finally:
-        redis.close()
-    assert result["status"] == "fail"
-    assert "GET returned" in result["detail"]
 
 
 # ---------------------------------------------------------------------- 2. Postgres
@@ -514,9 +506,10 @@ def test_s3_probe_puts_gets_and_deletes_one_object_under_the_canary_prefix(app) 
     assert leftover == {}, "the canary object must be deleted"
 
 
-def test_s3_probe_fails_when_the_put_is_denied(app) -> None:
-    """Liveness passed while writes failed. A denied PUT must fail the check."""
-    server = FakeS3(deny=("PUT",))
+@pytest.mark.parametrize("method", ["PUT", "DELETE"])
+def test_s3_probe_fails_when_object_op_is_denied(app, method: str) -> None:
+    """Denied PUT or DELETE must fail the S3 probe check."""
+    server = FakeS3(deny=(method,))
     try:
         result = app._probe_s3(**_s3_args(server))
     finally:
@@ -536,16 +529,6 @@ def test_s3_probe_fails_on_corrupt_read_and_still_cleans_up(app) -> None:
     assert result["status"] == "fail"
     assert "differs" in result["detail"]
     assert methods[-1] == "DELETE" and leftover == {}
-
-
-def test_s3_probe_fails_when_the_delete_is_denied(app) -> None:
-    server = FakeS3(deny=("DELETE",))
-    try:
-        result = app._probe_s3(**_s3_args(server))
-    finally:
-        server.close()
-    assert result["status"] == "fail"
-    assert "AccessDenied" in result["detail"]
 
 
 @pytest.mark.parametrize("missing", ["bucket", "access_key", "secret_key"])

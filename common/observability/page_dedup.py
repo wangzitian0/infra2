@@ -21,7 +21,9 @@ from common.alerting import (
     since_text,
 )
 from common.observability.issue_trail import (
+    BOUND_CAP_ENV,
     DRY_RUN_ENV,
+    FULL,
     ISSUE_LABELS,
     OFF,
     OPEN_ONLY,
@@ -29,6 +31,23 @@ from common.observability.issue_trail import (
     issue_trail_mode,
     scrub,
 )
+
+
+def _dedup_run_mode(env: Mapping[str, str]) -> str:
+    """Resolve page-dedup run mode (full/open-only/off) for workflow triggers."""
+    if issue_trail_mode(env) == OFF:
+        return OFF
+    event = env.get("GITHUB_EVENT_NAME", "")
+    if event not in ("schedule", "workflow_dispatch"):
+        return OFF
+    if (env.get(BOUND_CAP_ENV) or "").strip():
+        return OPEN_ONLY
+    return (
+        FULL
+        if event == "schedule" or env.get("GITHUB_REF") == "refs/heads/main"
+        else OPEN_ONLY
+    )
+
 
 STATE_TITLE_PREFIX = "ops-checks paged: "
 MARKER = "infra2-page-dedup"
@@ -703,7 +722,7 @@ def dedup_page(
     identity: Identity | None = None
     lookup = Lookup(ABSENT)
     try:
-        run_mode = issue_trail_mode(env) if mode is None else mode
+        run_mode = _dedup_run_mode(env) if mode is None else mode
         identity = make_identity(job, findings, env)
         if run_mode != OFF and (identity.keys or observed_clean):
             api = api or _api_from_env(env)

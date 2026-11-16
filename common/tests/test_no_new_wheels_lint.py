@@ -5,6 +5,8 @@ from __future__ import annotations
 import datetime
 from pathlib import Path
 
+import pytest
+
 from common.core.no_new_wheels_lint import (
     day_report_self_signals,
     lint_python_callsites,
@@ -86,12 +88,24 @@ def test_exempt_marker_with_reason_passes(tmp_path: Path) -> None:
     )
 
 
-def test_exempt_marker_without_review_date_fails(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("header", "expected_error"),
+    [
+        ("# alert-delivery-exempt: missing review date", "review=YYYY-MM-DD"),
+        (
+            "# nowheel: reason=domain-semantics; review=2026-10-01",
+            "exemption expired on 2026-10-01",
+        ),
+    ],
+)
+def test_invalid_exempt_markers_fail(
+    tmp_path: Path, header: str, expected_error: str
+) -> None:
     (tmp_path / "tools").mkdir()
     (tmp_path / "common").mkdir()
-    rogue = tmp_path / "tools" / "engine.py"
-    rogue.write_text(
-        "# alert-delivery-exempt: missing review date\n"
+    engine_file = tmp_path / "tools" / "engine.py"
+    engine_file.write_text(
+        f"{header}\n"
         "from common.observability.probes import post_alert_bridge_payload\n"
         "post_alert_bridge_payload({})\n"
     )
@@ -99,23 +113,7 @@ def test_exempt_marker_without_review_date_fails(tmp_path: Path) -> None:
         root=tmp_path, signals=set(), today=datetime.date(2026, 10, 20)
     )
     assert len(errors) == 1
-    assert "review=YYYY-MM-DD" in errors[0]
-
-
-def test_expired_exempt_marker_fails(tmp_path: Path) -> None:
-    (tmp_path / "tools").mkdir()
-    (tmp_path / "common").mkdir()
-    expired = tmp_path / "tools" / "engine.py"
-    expired.write_text(
-        "# nowheel: reason=domain-semantics; review=2026-10-01\n"
-        "from common.observability.probes import post_alert_bridge_payload\n"
-        "post_alert_bridge_payload({})\n"
-    )
-    errors = lint_python_callsites(
-        root=tmp_path, signals=set(), today=datetime.date(2026, 10, 20)
-    )
-    assert len(errors) == 1
-    assert "exemption expired on 2026-10-01" in errors[0]
+    assert expected_error in errors[0]
 
 
 def test_scheduled_job_expired_nowheel_fails(tmp_path: Path) -> None:

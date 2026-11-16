@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import types
 
 import yaml
 
@@ -704,19 +705,26 @@ def test_ssh_uses_default_root_identity_when_no_ci_override_env_set(
     monkeypatch.delenv("INFRA2_WATCHDOG_SSH_KEY_PATH", raising=False)
     monkeypatch.delenv("INFRA2_WATCHDOG_SSH_PORT", raising=False)
     monkeypatch.delenv("INFRA2_WATCHDOG_SSH_USER", raising=False)
+
+
+def _patch_subprocess_ssh_capture(monkeypatch, stdout: str = "ok"):
     captured = {}
 
     def fake_run(args, **kwargs):
         captured["args"] = args
-
-        class Result:
-            returncode = 0
-            stdout = "ok"
-            stderr = ""
-
-        return Result()
+        return types.SimpleNamespace(returncode=0, stdout=stdout, stderr="")
 
     monkeypatch.setattr(vault_self_refresh_audit_module.subprocess, "run", fake_run)
+    return captured
+
+
+def test_ssh_defaults_when_ci_override_env_vars_absent(monkeypatch) -> None:
+    """When INFRA2_WATCHDOG_SSH_* are unset, `_ssh` falls back to root@<host> and
+    default SSH port/key (preserves local developer execution)."""
+    monkeypatch.delenv("INFRA2_WATCHDOG_SSH_KEY_PATH", raising=False)
+    monkeypatch.delenv("INFRA2_WATCHDOG_SSH_PORT", raising=False)
+    monkeypatch.delenv("INFRA2_WATCHDOG_SSH_USER", raising=False)
+    captured = _patch_subprocess_ssh_capture(monkeypatch)
 
     vault_self_refresh_audit_module._ssh("vps.example", "echo hi")
 
@@ -733,19 +741,7 @@ def test_ssh_uses_ci_override_env_vars_when_present(monkeypatch) -> None:
     monkeypatch.setenv("INFRA2_WATCHDOG_SSH_KEY_PATH", "/home/runner/.ssh/infra2_ci")
     monkeypatch.setenv("INFRA2_WATCHDOG_SSH_PORT", "2222")
     monkeypatch.setenv("INFRA2_WATCHDOG_SSH_USER", "deploy")
-    captured = {}
-
-    def fake_run(args, **kwargs):
-        captured["args"] = args
-
-        class Result:
-            returncode = 0
-            stdout = "ok"
-            stderr = ""
-
-        return Result()
-
-    monkeypatch.setattr(vault_self_refresh_audit_module.subprocess, "run", fake_run)
+    captured = _patch_subprocess_ssh_capture(monkeypatch)
 
     vault_self_refresh_audit_module._ssh("vps.example", "echo hi")
 
@@ -756,29 +752,39 @@ def test_ssh_uses_ci_override_env_vars_when_present(monkeypatch) -> None:
     assert "StrictHostKeyChecking=no" in args
 
 
-def test_remote_container_state_captures_started_at(monkeypatch) -> None:
-    """#531: the live adapter must thread Docker's State.StartedAt through so
-    classify_container can derive restart recency from it."""
+def _patch_fake_ssh(
+    monkeypatch,
+    *,
+    stdout: str = "",
+    returncode: int = 0,
+    stderr: str = "",
+):
     captured = {}
 
     def fake_ssh(host, command):
         captured["host"] = host
         captured["command"] = command
-
-        class Result:
-            returncode = 0
-            stdout = (
-                '{"State":{"Status":"running",'
-                '"StartedAt":"2026-07-06T12:56:39.626381256Z",'
-                '"Health":{"Status":"healthy"}},'
-                '"RestartCount":1781,'
-                '"Mounts":[{"Destination":"/secrets/.env"}]}'
-            )
-            stderr = ""
-
-        return Result()
+        return types.SimpleNamespace(
+            returncode=returncode, stdout=stdout, stderr=stderr
+        )
 
     monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
+    return captured
+
+
+def test_remote_container_state_captures_started_at(monkeypatch) -> None:
+    """#531: the live adapter must thread Docker's State.StartedAt through so
+    classify_container can derive restart recency from it."""
+    captured = _patch_fake_ssh(
+        monkeypatch,
+        stdout=(
+            '{"State":{"Status":"running",'
+            '"StartedAt":"2026-07-06T12:56:39.626381256Z",'
+            '"Health":{"Status":"healthy"}},'
+            '"RestartCount":1781,'
+            '"Mounts":[{"Destination":"/secrets/.env"}]}'
+        ),
+    )
 
     result = _remote_container_state("vps.example", "platform-prefect-services")
 
@@ -793,20 +799,7 @@ def test_remote_container_logs_bounds_with_since_flag(monkeypatch) -> None:
     """#531: `docker logs` must carry a `--since` bound (default DEFAULT_LOG_SINCE)
     so a long-lived container's tail window can't still contain a resolved
     incident's log spam from weeks ago."""
-    captured = {}
-
-    def fake_ssh(host, command):
-        captured["host"] = host
-        captured["command"] = command
-
-        class Result:
-            returncode = 0
-            stdout = "recent log line"
-            stderr = ""
-
-        return Result()
-
-    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
+    captured = _patch_fake_ssh(monkeypatch, stdout="recent log line")
 
     result = _remote_container_logs("vps.example", "platform-prefect-services")
 
@@ -821,23 +814,10 @@ def test_remote_container_logs_bounds_with_since_flag(monkeypatch) -> None:
 
 def test_remote_secret_file_state_parses_stat_json(monkeypatch) -> None:
     """#166: live adapter emits valid JSON from remote shell stat output."""
-    captured = {}
-
-    def fake_ssh(host, command):
-        captured["host"] = host
-        captured["command"] = command
-
-        class Result:
-            returncode = 0
-            stdout = (
-                '{"exists":true,"readable":true,"size":44,'
-                '"mtime":123,"has_no_value":false}'
-            )
-            stderr = ""
-
-        return Result()
-
-    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
+    captured = _patch_fake_ssh(
+        monkeypatch,
+        stdout='{"exists":true,"readable":true,"size":44,"mtime":123,"has_no_value":false}',
+    )
 
     result = _remote_secret_file_state("vps.example", "platform-postgres-vault-agent")
 
@@ -855,20 +835,10 @@ def test_remote_secret_file_state_parses_stat_json(monkeypatch) -> None:
 def test_remote_secret_file_text_returns_raw_cat_output(monkeypatch) -> None:
     """#526: the raw-content fetch used for optional-field inertness checks
     just `cat`s the rendered file and returns stdout verbatim."""
-    captured = {}
-
-    def fake_ssh(host, command):
-        captured["host"] = host
-        captured["command"] = command
-
-        class Result:
-            returncode = 0
-            stdout = 'LLM_ENCRYPTION_KEYS=""\nOTHER_KEY="value"\n'
-            stderr = ""
-
-        return Result()
-
-    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
+    captured = _patch_fake_ssh(
+        monkeypatch,
+        stdout='LLM_ENCRYPTION_KEYS=""\nOTHER_KEY="value"\n',
+    )
 
     result = _remote_secret_file_text("vps.example", "finance_report-app-vault-agent")
 
@@ -879,15 +849,7 @@ def test_remote_secret_file_text_returns_raw_cat_output(monkeypatch) -> None:
 
 
 def test_remote_secret_file_text_returns_empty_on_ssh_failure(monkeypatch) -> None:
-    def fake_ssh(host, command):
-        class Result:
-            returncode = 1
-            stdout = ""
-            stderr = "connection refused"
-
-        return Result()
-
-    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
+    _patch_fake_ssh(monkeypatch, returncode=1, stderr="connection refused")
 
     assert _remote_secret_file_text("vps.example", "some-vault-agent") == ""
 
@@ -1046,23 +1008,15 @@ def test_collect_live_observations_skips_token_lookup_for_approle_service(
             "verify_vault_token must not be called for an AppRole service"
         )
 
-    def fake_ssh(host, command):
-        class Result:
-            returncode = 0
-            stdout = (
-                '{"exists":true,"readable":true,"size":10,"mtime":1,'
-                '"has_no_value":false}'
-            )
-            stderr = ""
-
-        return Result()
-
     monkeypatch.setattr("common.core.environ.get_env", fake_get_env)
     monkeypatch.setattr("common.deploy.dokploy_client.get_dokploy", fake_get_dokploy)
     monkeypatch.setattr(
         vault_self_refresh_audit_module, "verify_vault_token", fail_if_called
     )
-    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
+    _patch_fake_ssh(
+        monkeypatch,
+        stdout='{"exists":true,"readable":true,"size":10,"mtime":1,"has_no_value":false}',
+    )
 
     observations = collect_live_observations([service], env="production")
 
@@ -1115,28 +1069,20 @@ def test_collect_live_observations_falls_back_to_legacy_dokploy_services(
         requested_envs.append(env_name)
         return {"VPS_HOST": "vps.example", "INTERNAL_DOMAIN": "example.test"}
 
-    def fake_ssh(host, command):
-        class Result:
-            returncode = 0
-            stdout = (
-                '{"exists":true,"readable":true,"size":10,"mtime":1,'
-                '"has_no_value":false}'
-            )
-            stderr = ""
-
-        return Result()
-
     def fake_container_state(host, container_name):
         if "minio" in container_name:
             return {"status": "running", "healthy": True, "container": container_name}
         return {"status": "missing", "healthy": False, "container": container_name}
 
+    _patch_fake_ssh(
+        monkeypatch,
+        stdout='{"exists":true,"readable":true,"size":10,"mtime":1,"has_no_value":false}',
+    )
     monkeypatch.setattr("common.core.environ.get_env", fake_get_env)
     monkeypatch.setattr(
         "common.deploy.dokploy_client.get_dokploy",
         lambda host=None: FakeDokployClient(),
     )
-    monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
     monkeypatch.setattr(
         vault_self_refresh_audit_module,
         "_remote_container_state",

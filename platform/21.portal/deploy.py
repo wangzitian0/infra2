@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from invoke import task
 
-from common.deploy.config_hash import mount_fingerprint_env
+from common.deploy.config_hash import prepare_delivered_mounts
 from common.deploy.deployer import Deployer, make_tasks
 from common.console import env_vars, error, run_with_status, success, header
 from common.core.facets import BackupFacet, Exemption
@@ -136,12 +136,11 @@ class PortalDeployer(Deployer):
     def composing(cls, c, env_vars):
         """Deliver config.yml, then deploy (`sync` skips pre_compose)."""
         env = cls.env()
-        if not cls._deliver_config(c, env):
-            raise RuntimeError("Failed to deliver Homer config.yml to host")
-        # The label fingerprint recreates the container when config.yml changes (#1438).
         env_vars.update(
-            mount_fingerprint_env(
-                {"config.yml": cls._render_config(env)},
+            prepare_delivered_mounts(
+                delivered=cls._deliver_config(c, env),
+                error_message="Failed to deliver Homer config.yml to host",
+                rendered={"config.yml": cls._render_config(env)},
                 service=cls.service,
                 template_dir=Path(__file__).parent,
             )

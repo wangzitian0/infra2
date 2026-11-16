@@ -15,9 +15,7 @@ from infra2_sdk.runtime.config_schema import (
 )
 from infra2_sdk.secrets import render_agent_policy, render_agent_template
 
-
-def _clean_ident(value: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_]", "_", value.strip().lower())
+from common.security.store import clean_ident as _clean_ident
 
 
 def _generate_compose_yaml(

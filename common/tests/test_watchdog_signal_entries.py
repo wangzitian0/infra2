@@ -11,7 +11,6 @@ signal cannot pass.
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 
 import pytest
@@ -19,6 +18,7 @@ import yaml
 
 from common.core.registry import service_attrs, service_id_for_component
 from common.observability.signal_entries import render_internal_signal_entries
+from common.tests.conftest import load_repo_module
 
 ROOT = Path(__file__).resolve().parents[2]
 FROZEN = Path(__file__).parent / "fixtures/watchdog_internal_signals_frozen.yaml"
@@ -26,13 +26,9 @@ AUDIT = ROOT / "common/observability/watchdog_audit.py"
 
 
 def _probe_runner():
-    spec = importlib.util.spec_from_file_location(
-        "infra_probe_runner_for_signal_entries", ROOT / "tools/infra_probe_runner.py"
+    return load_repo_module(
+        "tools/infra_probe_runner.py", "infra_probe_runner_for_signal_entries"
     )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 # The probe runner's actual shared debounce (tools/infra_probe_runner.py

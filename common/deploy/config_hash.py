@@ -357,6 +357,24 @@ def mount_fingerprint_env(
     return out
 
 
+def prepare_delivered_mounts(
+    *,
+    delivered: bool,
+    error_message: str,
+    rendered: dict[str, str | bytes | None],
+    service: str,
+    template_dir: Path | str | None = None,
+) -> dict[str, str]:
+    """Fail if host file delivery failed, else return mount fingerprint env vars."""
+    if not delivered:
+        raise RuntimeError(error_message)
+    return mount_fingerprint_env(
+        rendered,
+        service=service,
+        template_dir=template_dir,
+    )
+
+
 def service_label_text(service: dict) -> str:
     """All label keys and values of one compose service as one string."""
     labels = service.get("labels", [])

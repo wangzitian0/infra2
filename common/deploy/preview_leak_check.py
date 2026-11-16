@@ -187,59 +187,25 @@ def select_orphans(
     return out
 
 
-def fetch_open_pr_numbers(
+def _fetch_repo_field_set(
     token: str | None,
     *,
-    repo: str = APP_REPO,
+    repo: str,
+    endpoint: str,
+    field: str,
+    expected_type: type,
     opener=urllib.request.urlopen,
-) -> set[int] | None:
-    """Open PR numbers for the app repo, or None if it can't be determined."""
+) -> set | None:
     if not token or not repo:
         return None
-    numbers: set[int] = set()
+    collected: set = set()
     page = 1
-    while page <= 10:  # bound: 1000 PRs is far more than this repo ever has open
+    separator = "&" if "?" in endpoint else "?"
+    while page <= 10:  # bound: 1000 items is far more than active PRs/branches
         url = (
-            f"https://api.github.com/repos/{repo}/pulls"
-            f"?state=open&per_page=100&page={page}"
+            f"https://api.github.com/repos/{repo}/{endpoint}"
+            f"{separator}per_page=100&page={page}"
         )
-        request = urllib.request.Request(
-            url,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "infra2-preview-leak-check/1.0",
-            },
-        )
-        try:
-            with opener(request, timeout=20) as response:
-                batch = json.loads(response.read().decode("utf-8"))
-        except Exception:  # noqa: BLE001 - any failure -> "unknown", fail safe
-            return None
-        if not isinstance(batch, list) or not batch:
-            break
-        for pr in batch:
-            if isinstance(pr, dict) and isinstance(pr.get("number"), int):
-                numbers.add(pr["number"])
-        if len(batch) < 100:
-            break
-        page += 1
-    return numbers
-
-
-def fetch_remote_branches(
-    token: str | None,
-    *,
-    repo: str = APP_REPO,
-    opener=urllib.request.urlopen,
-) -> set[str] | None:
-    """Active branch names for the app repo, or None if they can't be determined."""
-    if not token or not repo:
-        return None
-    branches: set[str] = set()
-    page = 1
-    while page <= 10:
-        url = f"https://api.github.com/repos/{repo}/branches?per_page=100&page={page}"
         request = urllib.request.Request(
             url,
             headers={
@@ -256,12 +222,46 @@ def fetch_remote_branches(
         if not isinstance(batch, list) or not batch:
             break
         for entry in batch:
-            if isinstance(entry, dict) and isinstance(entry.get("name"), str):
-                branches.add(entry["name"])
+            if isinstance(entry, dict) and isinstance(entry.get(field), expected_type):
+                collected.add(entry[field])
         if len(batch) < 100:
             break
         page += 1
-    return branches
+    return collected
+
+
+def fetch_open_pr_numbers(
+    token: str | None,
+    *,
+    repo: str = APP_REPO,
+    opener=urllib.request.urlopen,
+) -> set[int] | None:
+    """Open PR numbers for the app repo, or None if it can't be determined."""
+    return _fetch_repo_field_set(
+        token,
+        repo=repo,
+        endpoint="pulls?state=open",
+        field="number",
+        expected_type=int,
+        opener=opener,
+    )
+
+
+def fetch_remote_branches(
+    token: str | None,
+    *,
+    repo: str = APP_REPO,
+    opener=urllib.request.urlopen,
+) -> set[str] | None:
+    """Active branch names for the app repo, or None if they can't be determined."""
+    return _fetch_repo_field_set(
+        token,
+        repo=repo,
+        endpoint="branches",
+        field="name",
+        expected_type=str,
+        opener=opener,
+    )
 
 
 def remediate(client, leaks: list[tuple[PreviewCompose, str]]) -> list[str]:

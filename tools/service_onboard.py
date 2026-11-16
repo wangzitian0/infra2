@@ -16,7 +16,6 @@ import io
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 import sys
 from typing import Any, Mapping
@@ -28,11 +27,10 @@ from infra2_sdk.secrets import policy_name
 from common.console import error, header, info, success, warning
 from common.core.environ import get_env, infra_domain, with_env_suffix
 from common.deploy.dokploy_client import get_dokploy
-
-
-def _clean_ident(value: str) -> str:
-    """Normalize identifier for Postgres/Vault (lowercase, replace '-' with '_')."""
-    return re.sub(r"[^a-zA-Z0-9_]", "_", value.strip().lower())
+from common.security.store import (
+    check_op_signed_in,
+    clean_ident as _clean_ident,
+)
 
 
 def _load_postgres_tasks():
@@ -49,15 +47,6 @@ def _load_postgres_tasks():
     sys.modules[mod_name] = mod
     spec.loader.exec_module(mod)
     return mod
-
-
-def check_op_signed_in(runner: Any = subprocess.run) -> bool:
-    """Validate 1Password CLI is installed and signed in."""
-    try:
-        res = runner(["op", "whoami"], capture_output=True, text=True, timeout=5)
-        return res.returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
 
 
 def get_or_create_db_credentials(

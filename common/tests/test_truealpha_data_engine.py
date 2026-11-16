@@ -1,4 +1,3 @@
-import importlib.util
 import json
 import re
 import subprocess
@@ -10,28 +9,20 @@ import yaml
 
 from common.core import registry as service_registry
 
+from common.tests.conftest import load_repo_module
+
 ROOT = Path(__file__).resolve().parents[2]
 SERVICE_DIR = ROOT / "truealpha/truealpha/20.data_engine"
 
 
 def _load_deploy_module():
-    spec = importlib.util.spec_from_file_location(
-        "truealpha_data_engine_deploy", SERVICE_DIR / "deploy.py"
-    )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_repo_module(SERVICE_DIR / "deploy.py", "truealpha_data_engine_deploy")
 
 
 def _load_shared_tasks_module():
-    spec = importlib.util.spec_from_file_location(
-        "truealpha_data_engine_shared_tasks", SERVICE_DIR / "shared_tasks.py"
+    return load_repo_module(
+        SERVICE_DIR / "shared_tasks.py", "truealpha_data_engine_shared_tasks"
     )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 class _Secrets:
@@ -207,13 +198,7 @@ def test_deployer_fails_closed_on_missing_or_malformed_release_inputs(monkeypatc
 
 
 def _load_s3_deploy_module():
-    spec = importlib.util.spec_from_file_location(
-        "platform_s3_deploy", ROOT / "platform/03.s3/deploy.py"
-    )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_repo_module("platform/03.s3/deploy.py", "platform_s3_deploy")
 
 
 def test_the_dialled_s3_port_matches_the_one_minio_publishes():

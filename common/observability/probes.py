@@ -306,6 +306,25 @@ def post_alert_bridge_payload(
     return json.loads(response_body) if response_body else {}
 
 
+def post_env_alert(payload: dict, watcher_logger) -> None:
+    """Deliver a best-effort watcher alert using ALERT_BRIDGE_URL env config."""
+    bridge_url = os.environ.get("ALERT_BRIDGE_URL", "").strip()
+    if not bridge_url:
+        watcher_logger.warning(
+            "ALERT_BRIDGE_URL unset; alert not delivered: %s", payload
+        )
+        return
+    try:
+        post_alert_bridge_payload(
+            bridge_url,
+            payload,
+            username=os.environ.get("BRIDGE_BASIC_AUTH_USERNAME", ""),
+            password=os.environ.get("BRIDGE_BASIC_AUTH_PASSWORD", ""),
+        )
+    except Exception as exc:  # alerting is best-effort; never crash the loop
+        watcher_logger.error("alert bridge delivery failed: %s", exc)
+
+
 def _run_http(
     spec: ProbeSpec,
     *,

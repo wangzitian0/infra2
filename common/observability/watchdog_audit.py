@@ -57,14 +57,18 @@ LAYER_OF_OWNER = {
 PHASE_REF = re.compile(r"^#\d+$")
 
 
-def main() -> int:
-    errors = audit()
+def run_audit_cli(audit_fn, pass_message: str) -> int:
+    errors = audit_fn()
     if errors:
-        for error in errors:
-            print(f"ERROR: {error}")
+        for err in errors:
+            print(f"ERROR: {err}")
         return 1
-    print("watchdog consistency audit passed")
+    print(pass_message)
     return 0
+
+
+def main() -> int:
+    return run_audit_cli(audit, "watchdog consistency audit passed")
 
 
 def audit() -> list[str]:

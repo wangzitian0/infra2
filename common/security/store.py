@@ -21,10 +21,12 @@ resolves a token from 1Password. The human exporting it is the one running ``op 
 from __future__ import annotations
 
 import os
+import re
 import secrets as _secrets
 import string
+import subprocess
 import sys
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from infra2_sdk.secrets import (
     OnePasswordBackend,
@@ -259,3 +261,17 @@ def verify_vault_token(
 # ``vault_token``; ``common.security`` exports the names below (#955 removed the copies).
 generate_secret_token = generate_password
 resolve_vault_token = vault_token
+
+
+def clean_ident(value: str) -> str:
+    """Normalize identifier for Postgres/Vault (lowercase, non-alnum -> '_')."""
+    return re.sub(r"[^a-zA-Z0-9_]", "_", value.strip().lower())
+
+
+def check_op_signed_in(runner: Any = subprocess.run) -> bool:
+    """Validate 1Password CLI is installed and signed in."""
+    try:
+        res = runner(["op", "whoami"], capture_output=True, text=True, timeout=5)
+        return res.returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False

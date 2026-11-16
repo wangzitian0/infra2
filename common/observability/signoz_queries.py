@@ -63,6 +63,29 @@ def _version(version: str | None) -> str:
     return f" AND resources_string['service.version'] = {_literal(version, 'version')}"
 
 
+def _signal_count_query(
+    *,
+    select_expr: str,
+    table: str,
+    service_col: str,
+    time_expr: str,
+    service_name: str,
+    environment: str,
+    window_seconds: int,
+    version: str | None,
+) -> str:
+    service = _literal(service_name, "service_name")
+    env = _literal(environment, "environment")
+    seconds = _window(window_seconds)
+    return (
+        f"SELECT {select_expr} "
+        f"FROM {table} "
+        f"WHERE {service_col} = {service} "
+        f"AND resources_string['{ENVIRONMENT_ATTRIBUTE}'] = {env} "
+        f"AND timestamp >= {time_expr.format(seconds=seconds)}" + _version(version)
+    )
+
+
 def traces_query(
     *,
     service_name: str,
@@ -71,15 +94,15 @@ def traces_query(
     version: str | None = None,
 ) -> str:
     """Build the span count and latest span time for one service and environment."""
-    service = _literal(service_name, "service_name")
-    env = _literal(environment, "environment")
-    seconds = _window(window_seconds)
-    return (
-        "SELECT count(), toDateTime(max(timestamp), 'UTC') "
-        f"FROM {TRACES_TABLE} "
-        f"WHERE serviceName = {service} "
-        f"AND resources_string['{ENVIRONMENT_ATTRIBUTE}'] = {env} "
-        f"AND timestamp >= now() - INTERVAL {seconds} SECOND" + _version(version)
+    return _signal_count_query(
+        select_expr="count(), toDateTime(max(timestamp), 'UTC')",
+        table=TRACES_TABLE,
+        service_col="serviceName",
+        time_expr="now() - INTERVAL {seconds} SECOND",
+        service_name=service_name,
+        environment=environment,
+        window_seconds=window_seconds,
+        version=version,
     )
 
 
@@ -95,16 +118,15 @@ def logs_query(
     `timestamp` of the logs table is UInt64 nanoseconds. The time bound must be
     in nanoseconds too, or ClickHouse raises DECIMAL_OVERFLOW.
     """
-    service = _literal(service_name, "service_name")
-    env = _literal(environment, "environment")
-    seconds = _window(window_seconds)
-    return (
-        "SELECT count(), toDateTime(intDiv(max(timestamp), 1000000000), 'UTC') "
-        f"FROM {LOGS_TABLE} "
-        f"WHERE resources_string['service.name'] = {service} "
-        f"AND resources_string['{ENVIRONMENT_ATTRIBUTE}'] = {env} "
-        f"AND timestamp >= toUnixTimestamp64Nano(now64(3) - INTERVAL {seconds} SECOND)"
-        + _version(version)
+    return _signal_count_query(
+        select_expr="count(), toDateTime(intDiv(max(timestamp), 1000000000), 'UTC')",
+        table=LOGS_TABLE,
+        service_col="resources_string['service.name']",
+        time_expr="toUnixTimestamp64Nano(now64(3) - INTERVAL {seconds} SECOND)",
+        service_name=service_name,
+        environment=environment,
+        window_seconds=window_seconds,
+        version=version,
     )
 
 

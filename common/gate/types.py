@@ -62,20 +62,22 @@ GH_TIMEOUT_S = 200
 Runner = Callable[[Sequence[str]], str]
 
 
+def _gate_path(attr: str, default: Path) -> Path:
+    """Resolve a path attribute on tools.pr_merge_gate when monkeypatched in tests."""
+    gate_mod = sys.modules.get("tools.pr_merge_gate")
+    if gate_mod and hasattr(gate_mod, attr):
+        return Path(getattr(gate_mod, attr))
+    return default
+
+
 def _get_root() -> Path:
     """Dynamic resolver for repository root, honoring test monkeypatches on tools.pr_merge_gate."""
-    gate_mod = sys.modules.get("tools.pr_merge_gate")
-    if gate_mod and hasattr(gate_mod, "ROOT"):
-        return Path(gate_mod.ROOT)
-    return ROOT
+    return _gate_path("ROOT", ROOT)
 
 
 def _get_workflow_dir() -> Path:
     """Dynamic resolver for workflow directory, honoring test monkeypatches."""
-    gate_mod = sys.modules.get("tools.pr_merge_gate")
-    if gate_mod and hasattr(gate_mod, "WORKFLOW_DIR"):
-        return Path(gate_mod.WORKFLOW_DIR)
-    return WORKFLOW_DIR
+    return _gate_path("WORKFLOW_DIR", WORKFLOW_DIR)
 
 
 def _get_yaml():

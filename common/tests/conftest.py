@@ -2,7 +2,57 @@
 
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+
 import pytest
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def load_repo_module(rel_path: str | Path, module_name: str):
+    """Load any repo module (including digit-prefixed platform dirs) cleanly."""
+    target = Path(rel_path)
+    path = target if target.is_absolute() else _REPO_ROOT / target
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    assert spec and spec.loader, f"Cannot load module {module_name!r} from {path}"
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def evaluate_keyed_ratchet(
+    actual: dict[str, list[str]],
+    baseline: dict[str, list[str]],
+    keys: tuple[str, ...],
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Return (new_regressions, stale_baseline_entries) across ratchet keys."""
+    regressions: dict[str, list[str]] = {}
+    stale: dict[str, list[str]] = {}
+    for key in keys:
+        actual_set = set(actual.get(key, []))
+        base_set = set(baseline.get(key, []))
+        added = sorted(actual_set - base_set)
+        removed = sorted(base_set - actual_set)
+        if added:
+            regressions[key] = added
+        if removed:
+            stale[key] = removed
+    return regressions, stale
+
+
+def assert_backend_cold_start_budget(compose_path: Path, end_marker: str) -> None:
+    """Assert backend healthcheck start_period covers cold-start migrations."""
+    import re
+
+    source = compose_path.read_text(encoding="utf-8")
+    backend_start = source.index("\n  backend:")
+    backend_end = source.index(end_marker)
+    backend_block = source[backend_start:backend_end]
+    match = re.search(r"start_period:\s*([0-9]+)s", backend_block)
+    assert match is not None
+    assert int(match.group(1)) >= 450
+
 
 # The variables that choose the deployment environment of a process. ``get_env`` has no
 # default (#1039), so a test that needs an environment sets it, and no test inherits one
