@@ -1,4 +1,0 @@
-{
-  "/deploy": ["staging", "production"],
-  "/preview": ["preview/pr"]
-}

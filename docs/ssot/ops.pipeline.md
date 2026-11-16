@@ -137,9 +137,9 @@ Each record names its `units` with a kind prefix (`app:`, `sdk:`, `infra:`, `har
 **Core rules**
 - A merge is not a deploy. A merge to main changes no running service. Staging runs only from a release tag. Production runs only from the tag that the owner approves.
 - `deploy_v2` is the single deploy entry point for every unit.
-- **preview 瞬态闭环验证（区分 `preview/branch` 与 `preview/pr`）**：
+- **preview 瞬态闭环验证（统一经 `deploy_v2`）**：
   - **`preview/branch`（App cut-tag 门禁）**——App 合流 `main` 后、切出 `vX.Y.Z` tag 进入 Staging 火车前，由 `--cut-missing-app-tag` 驱动的 `sync_app_releases(..., cut_missing_app_tag=True)`（`verify_and_cut_app_preview_tag`）瞬态拉起 `preview/branch`（`main`），通过 GitHub Compare 计算 `prev_sha...main_sha` 差异并注入 `INFRA2_TOUCHED_FILES`，执行 App `runtime-hooks.manifest.json` 的 `preview_gate`（含 `smoke`、`preview_minimum_e2e` 与 `touched_files`），通过后才推送 App `vX.Y.Z` tag，并在 `finally` 中立即 `--down` 销毁（连同临时 DB 卷），不留常驻 preview 容器（#1416, #1554, infra2#1721）。
-  - **`preview/pr`（平台单元 `/preview` 槽位）**——仅服务声明了 `throwaway_secrets` 的平台单元（如 `platform/todo`；App 单元返回 400）。由 CI 或手动向 `iac-runner` `/preview` 发起并在 `finally` 销毁；服务端需 `IAC_PREVIEW_WEBHOOK_SECRET`（区别于 `IAC_WEBHOOK_SECRET`）否则返回 503。
+  - **`preview/pr`（平台探针 / App 统一入口）**——通过 `deploy_v2 --type preview/pr` 拉起独立临时槽位（平台单元如 `platform/todo` 使用 `throwaway_secrets` 与私有网络），执行同一套 SDK 钩子（`smoke` → `preview_gate`），并在 `finally` 中 `--down` 清理，不维护独立 `/preview` webhook 或双密钥分支。
 - **staging / prod 只部署 release tag**(不可变镜像,不接受 branch/sha);staging 与 prod **钉同一个 tag**
   (**promote-not-rebuild**,不是部署 main sha),App 的固定环境版本由 `harness/repos.yaml` (`release_tag`) 驱动。
 - 统一入口 `tools/deploy_v2.py`;**prod 对真实数据 deny-by-default**,缺 `--staging-validated --code-reviewed` 直接 fail-closed。
@@ -147,7 +147,7 @@ Each record names its `units` with a kind prefix (`app:`, `sdk:`, `infra:`, `har
 | 目标 | 触发 | 部署什么 | 入口(示意)| 验证钩子 (`STAGE_HOOK_PLANS`) | 数据 | 生命周期 |
 |------|------|---------|------|------|------|---------|
 | **preview/branch**（App 切 tag 门禁）| 手动 `--cut-missing-app-tag`（无 workflow 传入）| 分支名（`main`）| `deploy_v2 --type preview/branch` | `preview_gate`（注入 `INFRA2_TOUCHED_FILES`）| 临时 DB | `finally` 立即 `--down` |
-| **preview/pr**（平台单元 PR 槽位）| PR CI / `/preview` 或手动按需（仅限 `throwaway_secrets` 单元）| PR# | `deploy_v2 --type preview/pr` / `/preview` | `preview_gate` | 临时 DB | `finally` 立即 `--down` |
+| **preview/pr**（PR 槽位）| 手动按需 | PR# | `deploy_v2 --type preview/pr` | `preview_gate` | 临时 DB / `throwaway_secrets` | `finally` 立即 `--down` |
 | **app staging** | **release tag 推送**(`reconcile-iac-inputs.yml` 读 `harness/repos.yaml`)或手动 `--bootstrap` | release tag(钉和 prod 同一个)| `deploy_v2 --type staging --version-ref vX.Y.Z` | `smoke` -> `staging_gate` (跨服务并发) | staging 数据 | 长期(同构 prod)|
 | **app prod** | **显式 promote**(`reconcile-iac-inputs.yml` `promote_prod=true`)或手动 `--bootstrap` | **同一个 release tag** | `deploy_v2 --type prod --version-ref vX.Y.Z --staging-validated --code-reviewed` | `smoke` -> `prod_gate` (跨服务并发) | 真实 prod 数据 | 长期 |
 | **平台服务**(iac_pinned)**staging** | **release tag 推送**(`v*.*.*`)→ **自动 staging**(soak)| **该 tag** 作 `iac_ref` | `reconcile-iac-inputs.yml` → `deploy_v2 → iac_runner` | `smoke` -> `staging_gate` (含 `platform/todo`) | — | 长期 |
@@ -430,10 +430,6 @@ An `interrupted` answer (the runner restarted while it ran the deploy, #1439) is
 | `/webhook` | POST | GitHub push receiver. **Deploys nothing**: a merge is not a release. staging 由 release tag 经 `reconcile-iac-inputs.yml` 自动晋升，prod 由显式 promote，app 的 PR 走 preview 栈；infra2 自身没有常驻 preview（#1477）。此前它会用未打标的 main HEAD 部署 staging（对每个声明了 `common/**`/`tools/**` 的服务，等于「合并即部署」），该路径已移除。|
 | `/deploy` | POST | 版本部署;`wait=true` 为 legacy 直等 |
 | `/deploy/status` | POST | 用 `/deploy` 返回的 `deployment_id` 签名轮询同一操作的真实 sync 结果 |
-| `/preview` | POST | PR CI 的 Preview 槽位 `pr-<N>`，**只服务平台单元**（注册表里带 `throwaway_secrets` 的单元，今天是 `platform/todo`；App 单元 → 400，App Preview 属于 App 仓库）。请求体 ≤ 4 KiB，字段：`type=preview/pr`、`pr`、`ref`（PR head SHA）、`branch`（PR head 分支）、`services`（去重，≤ 3）、`down`。验签用独立密钥 `IAC_PREVIEW_WEBHOOK_SECRET`：其他 type → 400，`/deploy` 密钥 → 401，未配置或与 `WEBHOOK_SECRET` 相同 → 503。`up` 前用 GitHub API 核对 PR 已开、来自本仓库、head 分支与 SHA 与请求一致，否则 400。**runner 从 PR head SHA 读出该单元的 Preview compose，按白名单检查（拒绝宿主路径挂载、`privileged`、`cap_add`、`ports`、host 网络、额外网络与网络选项如 `aliases`、`build` 旁的 `image`、不在 6m–1g 的 `mem_limit`（0 即无限制）、缺失或过大的 `cpu_shares`、tmpfs `size` 为 0 或超过 256m 或每服务超过 4 项、json-file 日志缺 `max-size`（≤ 10m）或 `max-file`（≤ 3）、缺 `container_name`、字典形式的 `labels`、与 App PR Preview 同名的服务名、router 名或 Traefik service 名、超过 6 个服务或 3 个构建、槽位 host 之外或非 `websecure`/`letsencrypt` 的 Traefik 规则），再以 raw 文本上传 Dokploy；Dokploy 不克隆 PR 分支。** 每个服务被改名为 `<name>-pr-<N>`（`dokploy-network` 上的 DNS 名因此不会与生产服务重名），带 `build` 的服务由 runner 赋予槽位专属镜像名（不会覆盖宿主上的生产镜像标签），构建上下文指向该 SHA 的 git 上下文。拆除前先取消仍在运行的 Dokploy 部署。镜像与构建缓存在拆除后仍留在宿主上。PR 代码仍会在 Dokploy 上作为槽位容器运行（它接入 `dokploy-network`），这是 Preview 的固有范围；runner 自己只运行可信的 main 代码，子进程环境为白名单（无 Vault AppRole、无 1Password token、无签名密钥），Dokploy 密钥不出 runner。同时存活槽位 ≤ 2（超出 → 429，TTL 1 h，槽位表随部署记录落盘）；每个 PR 同时只有一个请求（再来 → 409）；未知槽位的 `down` → 404 且不取锁；有 `/deploy` 或另一个 Preview 持锁时立即 503 `busy`；一次运行硬上限 600 s（子进程被杀，槽位被拆除，结果 `timeout: true`），拆除另有 120 s。返回 202，用 `/preview/status` 轮询；结果只含结构化字段（`slot`、`units` 的 `status`/`seconds`/`error_kind`、`timeout`、`torn_down`），不含子进程输出或密钥值 |
-| `/preview/status` | POST | 用与 `/preview` 相同的请求体和密钥轮询该槽位操作的结果 |
-
-每个路由允许的 `env`/`type` 值只在 [`bootstrap/06.iac_runner/route_types.json`](../../bootstrap/06.iac_runner/route_types.json) 一处声明；`webhook_server.py` 与 `common/deploy/iac_runner_client.py` 都读它。
 
 ### 5.2 服务映射规则(fan-out)
 
