@@ -712,3 +712,66 @@ def test_one_github_get_helper_and_one_card_publish_flow() -> None:
     for name in ("_headers",):
         assert not hasattr(stage_records, name)
     assert not hasattr(release_card, "_deliver_card")
+
+
+def test_verified_sdk_versions_returns_only_canary_staging_gate_passed_versions() -> (
+    None
+):
+    """#1635: only staging.release_validation post records whose Canary staging_gate is ok verify sdk:X."""
+    from common.deploy.stage_record_reader import verified_sdk_versions
+
+    records = [
+        # Valid Canary pass (even when downstream finance_report failed)
+        {
+            "env": "staging.release_validation",
+            "phase": "post",
+            "event": "tag",
+            "subject": "tag:v3.1.73",
+            "verdict": "fail",
+            "units": ["platform/todo", "finance_report/app", "sdk:3.29.0"],
+            "checks": [
+                {"name": "platform/todo:staging_gate", "ok": True},
+                {"name": "finance_report/app:staging_gate", "ok": False},
+            ],
+        },
+        # Canary staging_gate failed -> must NOT verify 3.30.0
+        {
+            "env": "staging.release_validation",
+            "phase": "post",
+            "event": "tag",
+            "subject": "tag:v3.1.74",
+            "verdict": "fail",
+            "units": ["platform/todo", "sdk:3.30.0"],
+            "checks": [
+                {"name": "platform/todo:staging_gate", "ok": False},
+            ],
+        },
+        # Non-tag event (e.g. schedule) -> must NOT verify 3.31.0
+        {
+            "env": "staging.release_validation",
+            "phase": "post",
+            "event": "schedule",
+            "subject": "tag:v3.1.75",
+            "units": ["sdk:3.31.0"],
+            "checks": [{"name": "platform/todo:staging_gate", "ok": True}],
+        },
+        # Wrong env / phase -> ignored
+        {
+            "env": "preview.runtime",
+            "phase": "post",
+            "event": "pull_request",
+            "subject": "tag:v3.1.76",
+            "units": ["sdk:3.32.0"],
+            "checks": [{"name": "platform/todo:staging_gate", "ok": True}],
+        },
+        # Unrecognized placeholder -> ignored
+        {
+            "env": "staging.release_validation",
+            "phase": "post",
+            "event": "tag",
+            "subject": "tag:v3.1.77",
+            "units": ["sdk:unknown"],
+            "checks": [{"name": "staging_gate:platform/todo", "ok": True}],
+        },
+    ]
+    assert verified_sdk_versions(records) == {"3.29.0"}

@@ -27,7 +27,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -37,6 +37,9 @@ AGENT = "infra2-stage-records/1.0"
 PREFIX = "stage-"
 MAX_PAGES = 100
 PHASES = ("pre", "operation", "post")
+CANARY_STAGING_GATE_CHECKS = frozenset(
+    {"platform/todo:staging_gate", "staging_gate:platform/todo"}
+)
 _RECONCILE = ".github/workflows/reconcile-iac-inputs.yml"
 #: env -> (workflow path, events that may write its records)
 WRITERS: dict[str, tuple[str, frozenset[str]]] = {
@@ -209,6 +212,62 @@ def list_records(
     return records
 
 
+def verified_sdk_versions(
+    records: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    repo: str = "",
+    token: str = "",
+    since_days: float = 30.0,
+    opener: Opener = open_url,
+) -> set[str]:
+    """Return ``X`` from ``sdk:X`` units in staging release post records where Canary ``staging_gate`` passed (#1635)."""
+    loaded = records
+    if loaded is None:
+        resolved_repo = repo or os.environ.get("GITHUB_REPOSITORY", "")
+        resolved_token = (
+            token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN", "")
+        )
+        if not (resolved_repo and resolved_token):
+            raise ValueError("verified_sdk_versions requires repo and token")
+        since = (
+            datetime.now(timezone.utc) - timedelta(days=since_days)
+            if since_days > 0
+            else None
+        )
+        loaded = list_records(
+            resolved_repo,
+            resolved_token,
+            env="staging.release_validation",
+            phase="post",
+            since=since,
+            opener=opener,
+        )
+    verified: set[str] = set()
+    for rec in loaded:
+        if (
+            rec.get("env") != "staging.release_validation"
+            or rec.get("phase") != "post"
+            or rec.get("event") not in ("tag", "push")
+        ):
+            continue
+        if not str(rec.get("subject") or "").startswith("tag:"):
+            continue
+        checks = rec.get("checks") or ()
+        if not any(
+            isinstance(chk, Mapping)
+            and chk.get("name") in CANARY_STAGING_GATE_CHECKS
+            and chk.get("ok") is True
+            for chk in checks
+        ):
+            continue
+        for unit in rec.get("units") or ():
+            if isinstance(unit, str) and unit.startswith("sdk:"):
+                version_str = unit.removeprefix("sdk:").strip()
+                if version_str and version_str != "unknown":
+                    verified.add(version_str)
+    return verified
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -222,18 +281,34 @@ def main(argv: list[str] | None = None) -> int:
     cmd.add_argument("--subject", default="", help="e.g. tag:v1.2.3")
     cmd.add_argument("--phase", choices=PHASES, default="")
     cmd.add_argument("--last", type=int, default=0, help="newest N subjects")
-    cmd.add_argument("--since-days", type=float, default=0.0)
+    cmd.add_argument("--since-days", type=float, default=30.0)
     cmd.add_argument(
         "--json", action="store_true", help="accepted; the output is always JSON"
     )
+    vsdk = sub.add_parser(
+        "verified-sdks",
+        help="print sorted Canary-verified infra2-sdk versions from staging records",
+    )
+    vsdk.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY", ""))
+    vsdk.add_argument("--since-days", type=float, default=30.0)
     args = parser.parse_args(argv)
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN", "")
     if not (args.repo and token):
         print("stage_records: --repo and GITHUB_TOKEN are required", file=sys.stderr)
         return 2
+    if args.command == "verified-sdks":
+        versions = sorted(
+            verified_sdk_versions(
+                repo=args.repo,
+                token=token,
+                since_days=args.since_days,
+            )
+        )
+        print(json.dumps(versions, indent=2))
+        return 0
     since = (
         datetime.now(timezone.utc) - timedelta(days=args.since_days)
-        if args.since_days
+        if args.since_days > 0
         else None
     )
     records = list_records(

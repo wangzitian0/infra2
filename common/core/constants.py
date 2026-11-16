@@ -43,6 +43,10 @@ _DEFAULT_SERVICE_TO_SUBMODULE_PATH: dict[str, str] = {
     "finance_report/app": "repos/finance_report",
     "truealpha/app": "repos/truealpha",
 }
+_DEFAULT_APP_SDK_LOCKS: dict[str, str] = {
+    "finance_report/app": "apps/backend/uv.lock",
+    "truealpha/app": "uv.lock",
+}
 
 
 def _repo_slug(raw_source: str) -> str:
@@ -244,6 +248,37 @@ def _load_service_to_submodule_path(
     return out if out else dict(_DEFAULT_SERVICE_TO_SUBMODULE_PATH)
 
 
+def load_app_sdk_locks(
+    repos_yaml: Path = HARNESS_REPOS_YAML,
+) -> dict[str, str]:
+    """Derive ``{service_id: sdk_lock_relpath}`` from ``harness/repos.yaml`` (#1635)."""
+    data = _load_repos_yaml_data(repos_yaml)
+    if data is None:
+        return dict(_DEFAULT_APP_SDK_LOCKS)
+
+    out: dict[str, str] = {}
+    repositories = data.get("repositories")
+    if isinstance(repositories, list):
+        for entry in repositories:
+            if not isinstance(entry, Mapping):
+                continue
+            if (
+                entry.get("role") != "external-application"
+                and "sdk_lock" not in entry
+                and "release_tag" not in entry
+            ):
+                continue
+            raw_lock = str(entry.get("sdk_lock") or "").strip()
+            raw_path = str(entry.get("path") or "").strip()
+            raw_id = str(entry.get("id") or "").strip()
+            app_name = Path(raw_path).name if raw_path else raw_id.replace("-", "_")
+            if app_name and raw_lock:
+                out[f"{app_name}/app"] = raw_lock
+
+    return out if out else dict(_DEFAULT_APP_SDK_LOCKS)
+
+
+APP_SDK_LOCKS: dict[str, str] = load_app_sdk_locks()
 APP_SOURCES: dict[str, str] = _load_app_sources_from_repos_yaml()
 APP_REPO_ID_TO_SERVICE: dict[str, str] = _load_app_repo_id_to_service()
 SERVICE_TO_SUBMODULE_PATH: dict[str, str] = _load_service_to_submodule_path()
@@ -254,7 +289,9 @@ PROJECT_REPOS: dict[str, str] = {
 
 __all__ = [
     "APP_REPO_ID_TO_SERVICE",
+    "APP_SDK_LOCKS",
     "APP_SOURCES",
+    "load_app_sdk_locks",
     "DEPLOYMENT_ENV_PREVIEW",
     "DEPLOYMENT_ENV_PRODUCTION",
     "DEPLOYMENT_ENV_STAGING",

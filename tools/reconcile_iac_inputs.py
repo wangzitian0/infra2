@@ -31,10 +31,13 @@ import yaml
 
 from common.core.constants import (
     APP_REPO_ID_TO_SERVICE,
+    APP_SDK_LOCKS,
     APP_SOURCES,
     REPO_ROOT,
     SERVICE_TO_SUBMODULE_PATH,
+    load_app_sdk_locks,
 )
+from common.core.sdk_usage_census import sdk_requirement
 from common.core.registry import domain_for_service, service_attrs
 from common.deploy.app_contract import (
     APP_HOOKS_MANIFEST_PATH,
@@ -66,6 +69,7 @@ from common.deploy.env_config import (
     preview_service_config,
 )
 from common.deploy.stage_record import sdk_unit, utc_now, write_stage_record
+from common.deploy.stage_record_reader import verified_sdk_versions
 from common.deploy.release_markers import (
     PRODUCTION_MARKER_PREFIX,
     RELEASE_TAG_RE,
@@ -642,6 +646,248 @@ def verify_and_cut_app_preview_tag(
     return preview_url
 
 
+def _extract_sdk_version_from_requirement(requirement: str) -> str:
+    """Return ``X.Y.Z`` from a direct-wheel or PEP-508 requirement string."""
+    match = re.search(
+        r"infra2[_-]sdk[-= ]+([0-9]+\.[0-9]+\.[0-9]+)", requirement, re.IGNORECASE
+    )
+    return match.group(1) if match else ""
+
+
+def locked_sdk_version_for_app_ref(
+    service: str,
+    ref: str,
+    *,
+    repo_root: Path = REPO_ROOT,
+    runner: Callable[..., subprocess.CompletedProcess] | None = None,
+) -> str:
+    """Fetch ``<app_repo>@<ref>:<sdk_lock>`` and extract its SDK version via ``tools.sdk_requirement`` (#1635)."""
+    run = runner or subprocess.run
+    repo_slug = APP_SOURCES.get(service)
+    if not repo_slug:
+        raise ValueError(f"unknown app service {service!r}")
+    locks = load_app_sdk_locks(repo_root / HARNESS_REPOS_PATH)
+    lock_rel = locks.get(service) or APP_SDK_LOCKS.get(service)
+    if not lock_rel:
+        raise ValueError(f"no sdk_lock configured for {service!r}")
+    res = run(
+        [
+            "gh",
+            "api",
+            f"/repos/{repo_slug}/contents/{lock_rel}?ref={ref}",
+            "-H",
+            "Accept: application/vnd.github.raw",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if res.returncode != 0:
+        detail = (res.stderr or res.stdout or "").strip()
+        raise ValueError(
+            f"failed to fetch {repo_slug}:{lock_rel}@{ref} ({detail or f'exit {res.returncode}'})"
+        )
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        lock_copy = Path(tmp_dir) / "pinned.lock"
+        lock_copy.write_text(res.stdout, encoding="utf-8")
+        req = sdk_requirement(lock_copy)
+    sdk_ver = _extract_sdk_version_from_requirement(req)
+    if not sdk_ver:
+        raise ValueError(f"could not parse infra2-sdk version from {req!r}")
+    return sdk_ver
+
+
+def assert_app_sdk_version_verified(
+    service: str,
+    app_tag: str,
+    *,
+    repo_root: Path = REPO_ROOT,
+    verified_versions: set[str] | None = None,
+    runner: Callable[..., subprocess.CompletedProcess] | None = None,
+) -> str:
+    """Reject App tags whose locked SDK has not passed Canary ``staging_gate`` (#1635)."""
+    sdk_ver = locked_sdk_version_for_app_ref(
+        service,
+        app_tag,
+        repo_root=repo_root,
+        runner=runner,
+    )
+    verified = (
+        set(verified_versions)
+        if verified_versions is not None
+        else verified_sdk_versions(
+            repo=os.environ.get("GITHUB_REPOSITORY", "wangzitian0/infra2")
+        )
+    )
+    if sdk_ver not in verified:
+        raise ValueError(
+            f"{service}@{app_tag} pins infra2-sdk {sdk_ver}, which has not passed "
+            f"platform/todo staging_gate in staging.release_validation post records "
+            f"(verified={sorted(verified)})"
+        )
+    return sdk_ver
+
+
+def _open_or_update_pr(
+    repo_root: Path,
+    *,
+    pr_branch: str,
+    commit_msg: str,
+    pr_body: str,
+    paths_to_add: Sequence[str],
+    base_branch: str = "main",
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> dict[str, object]:
+    """Commit ``paths_to_add``, push ``pr_branch``, reset HEAD, and open or update PR (#1639)."""
+    pr_created = False
+    pr_updated = False
+    pr_url = ""
+    pr_number: int | None = None
+
+    orig_head = runner(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    runner(
+        ["git", "add", *paths_to_add],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    runner(
+        [
+            "git",
+            "-c",
+            "user.name=github-actions[bot]",
+            "-c",
+            "user.email=41898282+github-actions[bot]@users.noreply.github.com",
+            "commit",
+            "-m",
+            commit_msg,
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    runner(
+        [
+            "git",
+            "push",
+            "--force-with-lease",
+            "origin",
+            f"HEAD:refs/heads/{pr_branch}",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    runner(
+        ["git", "reset", "--hard", orig_head],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    listed_prs = runner(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--head",
+            pr_branch,
+            "--base",
+            base_branch,
+            "--state",
+            "open",
+            "--json",
+            "number,url",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    existing_prs: list[dict[str, object]] = []
+    if listed_prs.returncode == 0 and (listed_prs.stdout or "").strip():
+        try:
+            parsed = json.loads(listed_prs.stdout)
+            if isinstance(parsed, list):
+                existing_prs = [p for p in parsed if isinstance(p, dict)]
+        except ValueError:
+            existing_prs = []
+    if existing_prs:
+        raw_num = existing_prs[0].get("number")
+        if isinstance(raw_num, int):
+            pr_number = raw_num
+        pr_url = str(existing_prs[0].get("url") or "")
+        try:
+            runner(
+                [
+                    "gh",
+                    "pr",
+                    "edit",
+                    str(pr_number or pr_branch),
+                    "--title",
+                    commit_msg,
+                    "--body",
+                    pr_body,
+                ],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            sys.stderr.write(
+                f"gh pr command failed (exit {exc.returncode}): {(exc.stderr or exc.stdout or '').strip()}\n"
+            )
+            raise
+        pr_updated = True
+    else:
+        try:
+            created_pr = runner(
+                [
+                    "gh",
+                    "pr",
+                    "create",
+                    "--base",
+                    base_branch,
+                    "--head",
+                    pr_branch,
+                    "--title",
+                    commit_msg,
+                    "--body",
+                    pr_body,
+                ],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            sys.stderr.write(
+                f"gh pr command failed (exit {exc.returncode}): {(exc.stderr or exc.stdout or '').strip()}\n"
+            )
+            raise
+        pr_url = (created_pr.stdout or "").strip()
+        m_num = re.search(r"/pull/([0-9]+)$", pr_url)
+        if m_num:
+            pr_number = int(m_num.group(1))
+        pr_created = True
+
+    return {
+        "pr_created": pr_created,
+        "pr_updated": pr_updated,
+        "pr_url": pr_url,
+        "pr_number": pr_number,
+    }
+
+
 def sync_app_releases(
     repo_root: Path = REPO_ROOT,
     *,
@@ -654,6 +900,7 @@ def sync_app_releases(
     dry_run: bool = False,
     domain: str = "zitian.party",
     manifest_fetcher: Callable[[str], bytes] | None = None,
+    verified_sdk_versions_override: set[str] | None = None,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> dict[str, object]:
     """Pull-based App version sync against remote App repositories (#1416, #1554)."""
@@ -704,6 +951,7 @@ def sync_app_releases(
             target_sha = main_sha
 
         drifted = bool(target_tag and target_tag != pinned_tag)
+        sdk_held_reason = ""
         if drifted:
             if (apply_repos_yaml or create_pr) and not dry_run:
                 assert_app_version_ref_on_main(
@@ -712,6 +960,20 @@ def sync_app_releases(
                     service=service,
                     repo=repo_url,
                 )
+            if not dry_run:
+                try:
+                    assert_app_sdk_version_verified(
+                        service,
+                        target_tag,
+                        repo_root=repo_root,
+                        verified_versions=verified_sdk_versions_override,
+                        runner=runner,
+                    )
+                except ValueError as exc:
+                    sdk_held_reason = str(exc)
+                    sys.stderr.write(f"::warning::{sdk_held_reason}\n")
+                    drifted = False
+        if drifted:
             updates[service] = target_tag
             if target_sha:
                 target_shas[service] = target_sha
@@ -729,6 +991,7 @@ def sync_app_releases(
             "target_sha": target_sha,
             "preview_verified": preview_verified,
             "preview_url": preview_url,
+            "sdk_held_reason": sdk_held_reason,
             "needs_update": drifted,
         }
 
@@ -774,56 +1037,6 @@ def sync_app_releases(
         )
         paths_to_add = [HARNESS_REPOS_PATH, *gitlinks_updated]
         if create_pr and repos_yaml_updated and not dry_run:
-            orig_head = runner(
-                ["git", "rev-parse", "HEAD"],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=True,
-            ).stdout.strip()
-            runner(
-                ["git", "add", *paths_to_add],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            runner(
-                [
-                    "git",
-                    "-c",
-                    "user.name=github-actions[bot]",
-                    "-c",
-                    "user.email=41898282+github-actions[bot]@users.noreply.github.com",
-                    "commit",
-                    "-m",
-                    commit_msg,
-                ],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            runner(
-                [
-                    "git",
-                    "push",
-                    "--force-with-lease",
-                    "origin",
-                    f"HEAD:refs/heads/{pr_branch}",
-                ],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            runner(
-                ["git", "reset", "--hard", orig_head],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
             body_lines = [
                 "Automated pull-based App release train sync (#1416).",
                 "",
@@ -840,92 +1053,19 @@ def sync_app_releases(
                 f"Next `infra2` release tag candidate: `{next_infra_tag}`"
             )
             pr_body = "\n".join(body_lines)
-
-            listed_prs = runner(
-                [
-                    "gh",
-                    "pr",
-                    "list",
-                    "--head",
-                    pr_branch,
-                    "--base",
-                    "main",
-                    "--state",
-                    "open",
-                    "--json",
-                    "number,url",
-                ],
-                cwd=repo_root,
-                capture_output=True,
-                text=True,
+            pr_result = _open_or_update_pr(
+                repo_root,
+                pr_branch=pr_branch,
+                commit_msg=commit_msg,
+                pr_body=pr_body,
+                paths_to_add=paths_to_add,
+                runner=runner,
             )
-            existing_prs: list[dict[str, object]] = []
-            if listed_prs.returncode == 0 and (listed_prs.stdout or "").strip():
-                try:
-                    parsed = json.loads(listed_prs.stdout)
-                    if isinstance(parsed, list):
-                        existing_prs = [p for p in parsed if isinstance(p, dict)]
-                except ValueError:
-                    existing_prs = []
-            if existing_prs:
-                raw_num = existing_prs[0].get("number")
-                if isinstance(raw_num, int):
-                    pr_number = raw_num
-                pr_url = str(existing_prs[0].get("url") or "")
-                try:
-                    runner(
-                        [
-                            "gh",
-                            "pr",
-                            "edit",
-                            str(pr_number or pr_branch),
-                            "--title",
-                            commit_msg,
-                            "--body",
-                            pr_body,
-                        ],
-                        cwd=repo_root,
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                    )
-                except subprocess.CalledProcessError as exc:
-                    sys.stderr.write(
-                        f"gh pr command failed (exit {exc.returncode}): {(exc.stderr or exc.stdout or '').strip()}\n"
-                    )
-                    raise
-                pr_updated = True
-            else:
-                try:
-                    created_pr = runner(
-                        [
-                            "gh",
-                            "pr",
-                            "create",
-                            "--base",
-                            "main",
-                            "--head",
-                            pr_branch,
-                            "--title",
-                            commit_msg,
-                            "--body",
-                            pr_body,
-                        ],
-                        cwd=repo_root,
-                        capture_output=True,
-                        text=True,
-                        check=True,
-                    )
-                except subprocess.CalledProcessError as exc:
-                    sys.stderr.write(
-                        f"gh pr command failed (exit {exc.returncode}): {(exc.stderr or exc.stdout or '').strip()}\n"
-                    )
-                    raise
-                pr_url = (created_pr.stdout or "").strip()
-                m_num = re.search(r"/pull/([0-9]+)$", pr_url)
-                if m_num:
-                    pr_number = int(m_num.group(1))
-                pr_created = True
+            pr_created = bool(pr_result["pr_created"])
+            pr_updated = bool(pr_result["pr_updated"])
+            pr_url = str(pr_result["pr_url"])
+            raw_num = pr_result["pr_number"]
+            pr_number = raw_num if isinstance(raw_num, int) else None
 
     return {
         "apps": entries,
@@ -940,6 +1080,130 @@ def sync_app_releases(
         "pr_url": pr_url,
         "pr_number": pr_number,
         "dry_run": dry_run,
+    }
+
+
+def _rewrite_sdk_wheel_pin(
+    pyproject_path: Path, current_sdk: str, target_sdk: str
+) -> bool:
+    """Update ``infra2-sdk`` wheel URL version in ``pyproject.toml`` when present."""
+    if not pyproject_path.is_file() or not current_sdk:
+        return False
+    text = pyproject_path.read_text(encoding="utf-8")
+    updated = re.sub(
+        rf"v{re.escape(current_sdk)}/infra2_sdk-{re.escape(current_sdk)}-",
+        f"v{target_sdk}/infra2_sdk-{target_sdk}-",
+        text,
+    )
+    if updated == text:
+        return False
+    pyproject_path.write_text(updated, encoding="utf-8")
+    return True
+
+
+def sync_sdk_pins(
+    repo_root: Path = REPO_ROOT,
+    *,
+    create_pr: bool = False,
+    pr_branch: str = "chore/sdk-bump-infra2",
+    latest_sdk: str | None = None,
+    verified_versions: set[str] | None = None,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> dict[str, object]:
+    """Open Canary bump PR for ``infra2`` first, holding downstream App bumps until verified (#1639)."""
+    if latest_sdk is not None:
+        target_sdk = latest_sdk.strip().removeprefix("v")
+    else:
+        rel_proc = runner(
+            [
+                "gh",
+                "release",
+                "view",
+                "--repo",
+                "wangzitian0/infra2-sdk",
+                "--json",
+                "tagName",
+                "--jq",
+                ".tagName",
+            ],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        target_sdk = (rel_proc.stdout or "").strip().removeprefix("v")
+
+    lock_rel = "uv" + ".lock"
+    lock_file = repo_root / lock_rel
+    current_sdk = ""
+    if lock_file.is_file():
+        current_sdk = _extract_sdk_version_from_requirement(sdk_requirement(lock_file))
+
+    needs_infra2_bump = bool(
+        target_sdk
+        and (
+            not current_sdk
+            or version_key(f"v{target_sdk}") > version_key(f"v{current_sdk}")
+        )
+    )
+    verified = (
+        set(verified_versions)
+        if verified_versions is not None
+        else verified_sdk_versions(
+            repo=os.environ.get("GITHUB_REPOSITORY", "wangzitian0/infra2")
+        )
+    )
+    canary_verified = bool(target_sdk and target_sdk in verified)
+    held_apps = [] if canary_verified else sorted(APP_SOURCES.keys())
+    eligible_apps = sorted(APP_SOURCES.keys()) if canary_verified else []
+
+    pr_created = False
+    pr_updated = False
+    pr_url = ""
+    pr_number: int | None = None
+    if needs_infra2_bump and create_pr:
+        pyproject_path = repo_root / "pyproject.toml"
+        _rewrite_sdk_wheel_pin(pyproject_path, current_sdk, target_sdk)
+        runner(
+            ["uv", "lock"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        commit_msg = f"chore(sdk): bump infra2-sdk to v{target_sdk} (canary)"
+        pr_body = (
+            f"Bump `infra2-sdk` pin in `infra2` (Canary `platform/todo`) from "
+            f"`v{current_sdk or 'unknown'}` to `v{target_sdk}` (#1639).\n\n"
+            f"Downstream App SDK bumps remain held until Canary `staging_gate` "
+            f"records `sdk:{target_sdk}` in `staging.release_validation`."
+        )
+        pr_result = _open_or_update_pr(
+            repo_root,
+            pr_branch=pr_branch,
+            commit_msg=commit_msg,
+            pr_body=pr_body,
+            paths_to_add=["pyproject.toml", lock_rel],
+            runner=runner,
+        )
+        pr_created = bool(pr_result["pr_created"])
+        pr_updated = bool(pr_result["pr_updated"])
+        pr_url = str(pr_result["pr_url"])
+        raw_num = pr_result["pr_number"]
+        pr_number = raw_num if isinstance(raw_num, int) else None
+
+    return {
+        "latest_sdk": target_sdk,
+        "current_infra2_sdk": current_sdk,
+        "needs_infra2_bump": needs_infra2_bump,
+        "canary_verified": canary_verified,
+        "held_apps": held_apps,
+        "eligible_apps": eligible_apps,
+        "pr_branch": pr_branch if create_pr and needs_infra2_bump else "",
+        "pr_created": pr_created,
+        "pr_updated": pr_updated,
+        "pr_url": pr_url,
+        "pr_number": pr_number,
     }
 
 
@@ -2551,6 +2815,11 @@ def main(argv: list[str] | None = None) -> int:
         help="query upstream App repositories and sync harness/repos.yaml release_tag pins (#1416)",
     )
     parser.add_argument(
+        "--sync-sdk-pins",
+        action="store_true",
+        help="bump Canary infra2-sdk pin first and hold downstream App bumps until verified (#1639)",
+    )
+    parser.add_argument(
         "--sync-service",
         action="append",
         default=[],
@@ -2638,6 +2907,22 @@ def main(argv: list[str] | None = None) -> int:
                 json.dumps(audit_res, indent=2), encoding="utf-8"
             )
         return 0 if audit_res.get("ok") else 1
+    if args.sync_sdk_pins:
+        sdk_res = sync_sdk_pins(
+            repo_root,
+            create_pr=args.create_pr,
+            pr_branch=(
+                "chore/sdk-bump-infra2"
+                if args.pr_branch == "chore/sync-app-releases"
+                else args.pr_branch
+            ),
+        )
+        print(json.dumps(sdk_res, sort_keys=True))
+        if args.output_json:
+            Path(args.output_json).write_text(
+                json.dumps(sdk_res, indent=2), encoding="utf-8"
+            )
+        return 0
     if args.sync_app_releases:
         sync_res = sync_app_releases(
             repo_root,
@@ -2897,6 +3182,12 @@ def main(argv: list[str] | None = None) -> int:
                                         service=svc,
                                         repo_root=repo_root,
                                     )
+                                    if not promote_prod:
+                                        assert_app_sdk_version_verified(
+                                            svc,
+                                            app_tag,
+                                            repo_root=repo_root,
+                                        )
                                 except (ValueError, RuntimeError) as exc:
                                     raise SystemExit(f"::error::{exc}") from exc
             with timed_check(pre_checks, "hook_env"):

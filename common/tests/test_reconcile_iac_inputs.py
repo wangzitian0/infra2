@@ -106,6 +106,18 @@ def test_companion_service_promoted_once_after_app_and_excluded_from_platform_ba
     assert staging_cmds[2].argv[staging_cmds[2].argv.index("--iac-ref") + 1] == "v1.2.3"
 
 
+@pytest.fixture(autouse=True)
+def _stub_app_sdk_version_verified(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep offline tests isolated unless explicitly testing SDK verification (#1635)."""
+    if "sdk" in request.node.name.lower():
+        return
+    monkeypatch.setattr(
+        reconcile, "assert_app_sdk_version_verified", lambda *_a, **_kw: None
+    )
+
+
 def test_changed_app_services_from_repos_yaml_detects_single_app_tag_bump() -> None:
     before_yaml = yaml.safe_dump(
         {
@@ -4531,3 +4543,253 @@ def test_hook_heartbeat_emits_to_stderr(
     assert "[hook-start] platform/alerting:smoke (staging)" in captured.err
     assert "[hook-heartbeat] platform/alerting:smoke (staging) running" in captured.err
     assert "[hook-done] platform/alerting:smoke (staging) status=pass" in captured.err
+
+
+def test_staging_deploy_rejects_app_tag_with_unverified_sdk_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1635 AC1: staging deploy pre-check refuses an App tag whose locked SDK lacks Canary verification."""
+    lock_rel = "uv" + ".lock"
+    sample_lock = (ROOT / lock_rel).read_text(encoding="utf-8")
+    current_match = re.search(r"infra2_sdk-([0-9]+\.[0-9]+\.[0-9]+)-", sample_lock)
+    assert current_match
+    locked_ver = current_match.group(1)
+
+    (tmp_path / "harness").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "harness" / "repos.yaml").write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    path: repos/finance_report\n"
+        "    source: https://github.com/wangzitian0/finance_report\n"
+        "    release_tag: v0.2.69\n"
+        "    sdk_lock: apps/backend/" + lock_rel + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(reconcile, "validate_iac_ref_form", lambda *_a, **_kw: None)
+    monkeypatch.setattr(reconcile, "assert_after_on_main", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        reconcile,
+        "load_app_release_tags",
+        lambda *_a, **_kw: {"finance_report/app": "v0.2.69"},
+    )
+    monkeypatch.setattr(
+        reconcile, "audit_app_hooks", lambda *_a, **_kw: {"ok": True, "errors": []}
+    )
+    monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", lambda *_a, **_kw: [])
+    deploy_calls: list[list[object]] = []
+    monkeypatch.setattr(
+        reconcile,
+        "run_deploy_commands",
+        lambda cmds: (
+            deploy_calls.append(list(cmds))
+            or [
+                {"type": c.deploy_type, "service": c.service, "returncode": 0}
+                for c in cmds
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "verified_sdk_versions",
+        lambda **_kw: {"0.0.1"},
+    )
+    monkeypatch.setattr(
+        reconcile.subprocess,
+        "run",
+        lambda cmd, **_kw: subprocess.CompletedProcess(
+            cmd, 0, stdout=sample_lock, stderr=""
+        ),
+    )
+
+    with pytest.raises(SystemExit, match="staging_gate"):
+        main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--after",
+                "v3.1.74",
+                "--changed-file",
+                "finance_report/finance_report/10.app/compose.yaml",
+                "--app-release-tag",
+                "finance_report/app=v0.2.70",
+            ]
+        )
+    assert deploy_calls == []
+
+    # When Canary staging_gate has verified that SDK version, pre-check passes and deploys.
+    monkeypatch.setattr(reconcile, "verified_sdk_versions", lambda **_kw: {locked_ver})
+    rc = main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--after",
+            "v3.1.74",
+            "--changed-file",
+            "finance_report/finance_report/10.app/compose.yaml",
+            "--app-release-tag",
+            "finance_report/app=v0.2.70",
+        ]
+    )
+    assert rc == 0
+    assert len(deploy_calls) == 1
+
+
+def test_sync_app_releases_holds_tag_with_unverified_sdk_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#1635 AC2: sync_app_releases holds candidate tags pinning an unverified SDK."""
+    lock_rel = "uv" + ".lock"
+    sample_lock = (ROOT / lock_rel).read_text(encoding="utf-8")
+    current_match = re.search(r"infra2_sdk-([0-9]+\.[0-9]+\.[0-9]+)-", sample_lock)
+    assert current_match
+    locked_ver = current_match.group(1)
+
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    initial_yaml = (
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    path: repos/finance_report\n"
+        "    source: https://github.com/wangzitian0/finance_report\n"
+        "    release_tag: v0.2.69\n"
+        "    sdk_lock: apps/backend/" + lock_rel + "\n"
+        "  - id: truealpha\n"
+        "    role: external-application\n"
+        "    path: repos/truealpha\n"
+        "    source: https://github.com/wangzitian0/truealpha\n"
+        "    release_tag: v0.2.96\n"
+        "    sdk_lock: " + lock_rel + "\n"
+    )
+    repos_yaml.write_text(initial_yaml, encoding="utf-8")
+
+    def _fake_refs(repo_url: str, **_kw):
+        if "finance_report" in repo_url:
+            return (SHA, {"v0.2.69": "1" * 40, "v0.2.70": SHA})
+        return ("2" * 40, {"v0.2.96": "2" * 40})
+
+    monkeypatch.setattr(reconcile, "_query_remote_app_refs", _fake_refs)
+    monkeypatch.setattr(reconcile, "newest_release_tag", lambda **_kw: "v3.1.74")
+
+    def _runner(cmd, **_kw):
+        argv = [str(item) for item in cmd]
+        if argv[:2] == ["gh", "api"]:
+            return subprocess.CompletedProcess(argv, 0, stdout=sample_lock, stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    held_res = reconcile.sync_app_releases(
+        tmp_path,
+        apply_repos_yaml=True,
+        verified_sdk_versions_override={"0.0.1"},
+        runner=_runner,
+    )
+    assert held_res["updates"] == {}
+    assert held_res["repos_yaml_updated"] is False
+    assert "staging_gate" in str(
+        held_res["apps"]["finance_report/app"]["sdk_held_reason"]
+    )
+    assert repos_yaml.read_text(encoding="utf-8") == initial_yaml
+    assert "::warning::" in capsys.readouterr().err
+
+    ok_res = reconcile.sync_app_releases(
+        tmp_path,
+        apply_repos_yaml=True,
+        verified_sdk_versions_override={locked_ver},
+        runner=_runner,
+    )
+    assert ok_res["updates"] == {"finance_report/app": "v0.2.70"}
+    assert ok_res["repos_yaml_updated"] is True
+
+
+def test_sync_sdk_pins_holds_app_prs_until_canary_verified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1639: Canary infra2 bumps first; downstream Apps wait until Canary staging_gate verifies SDK."""
+    lock_rel = "uv" + ".lock"
+    sample_lock = (ROOT / lock_rel).read_text(encoding="utf-8")
+    current_match = re.search(r"infra2_sdk-([0-9]+\.[0-9]+\.[0-9]+)-", sample_lock)
+    assert current_match
+    locked_ver = current_match.group(1)
+
+    old_ver = "3.28.0"
+    assert locked_ver != old_ver
+    (tmp_path / lock_rel).write_text(
+        sample_lock.replace(locked_ver, old_ver), encoding="utf-8"
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        f'"infra2-sdk @ https://example.com/releases/download/v{old_ver}/infra2_sdk-{old_ver}-py3-none-any.whl"\n',
+        encoding="utf-8",
+    )
+
+    calls: list[list[str]] = []
+
+    def _runner(cmd, **_kw):
+        argv = [str(item) for item in cmd]
+        calls.append(argv)
+        if argv == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(argv, 0, stdout="deadbeef\n", stderr="")
+        if argv[:3] == ["gh", "pr", "list"]:
+            return subprocess.CompletedProcess(argv, 0, stdout="[]", stderr="")
+        if argv[:3] == ["gh", "pr", "create"]:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                stdout="https://github.com/wangzitian0/infra2/pull/1800\n",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(
+        reconcile, "APP_SOURCES", {"finance_report/app": "w/f", "truealpha/app": "w/t"}
+    )
+    res_held = reconcile.sync_sdk_pins(
+        tmp_path,
+        create_pr=True,
+        latest_sdk=f"v{locked_ver}",
+        verified_versions={old_ver},
+        runner=_runner,
+    )
+    assert res_held["needs_infra2_bump"] is True
+    assert res_held["canary_verified"] is False
+    assert res_held["held_apps"] == ["finance_report/app", "truealpha/app"]
+    assert res_held["eligible_apps"] == []
+    assert res_held["pr_created"] is True
+    assert res_held["pr_number"] == 1800
+    assert f"infra2_sdk-{locked_ver}-" in (tmp_path / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+    assert ["uv", "lock"] in calls
+
+    res_ready = reconcile.sync_sdk_pins(
+        tmp_path,
+        create_pr=False,
+        latest_sdk=locked_ver,
+        verified_versions={old_ver, locked_ver},
+        runner=_runner,
+    )
+    assert res_ready["canary_verified"] is True
+    assert res_ready["held_apps"] == []
+    assert res_ready["eligible_apps"] == ["finance_report/app", "truealpha/app"]
+
+
+def test_open_or_update_pr_shared_by_app_and_sdk_sync() -> None:
+    """Both sync_app_releases and sync_sdk_pins delegate PR management to _open_or_update_pr."""
+    source_path = ROOT / "tools" / "reconcile_iac_inputs.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    callees: dict[str, set[str]] = {}
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in (
+            "sync_app_releases",
+            "sync_sdk_pins",
+        ):
+            callees[node.name] = {
+                sub.func.id
+                for sub in ast.walk(node)
+                if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+            }
+    assert "_open_or_update_pr" in callees["sync_app_releases"]
+    assert "_open_or_update_pr" in callees["sync_sdk_pins"]

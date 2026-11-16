@@ -20,6 +20,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from common.core import env_inventory as envinv  # noqa: E402
+from common.core.constants import APP_SDK_LOCKS  # noqa: E402
 
 CENSUS_SELF_REL_PATHS = frozenset(
     {
@@ -1153,9 +1154,23 @@ def _extract_sdk_version(text: str) -> str | None:
     return None
 
 
-def consumer_pinned_version(root: Path) -> str | None:
+def _consumer_lock_candidates(consumer_name: str = "") -> tuple[str, ...]:
+    """Return ordered lock relative paths for ``consumer_name`` using ``APP_SDK_LOCKS``."""
+    base_lock = "uv" + ".lock"
+    app_lock = "apps/backend/" + base_lock
+    configured = APP_SDK_LOCKS.get(consumer_name) or APP_SDK_LOCKS.get(
+        f"{consumer_name}/app"
+    )
+    if configured:
+        return (configured,)
+    if consumer_name == "infra2":
+        return (base_lock,)
+    return (base_lock, app_lock)
+
+
+def consumer_pinned_version(root: Path, *, consumer_name: str = "") -> str | None:
     """Extract the pinned infra2-sdk version from a consumer repository."""
-    for rel in ("uv.lock", "apps/backend/uv.lock"):
+    for rel in _consumer_lock_candidates(consumer_name):
         lock_path = root / rel
         if lock_path.is_file():
             try:
@@ -1185,7 +1200,7 @@ def compute_m3(
     lagging_repos: list[str] = []
 
     for repo, root in sorted(consumers.items()):
-        pinned = consumer_pinned_version(root)
+        pinned = consumer_pinned_version(root, consumer_name=repo)
         if pinned is None:
             per_repo[repo] = {
                 "pinned_version": None,
@@ -1619,6 +1634,9 @@ def run_census(
     consumers: dict[str, Path] | None = None,
     latest_version: str | None = None,
     out_dir: Path | None = None,
+    *,
+    verified_from_records: bool = False,
+    records_repo: str = "wangzitian0/infra2",
 ) -> dict[str, Any]:
     """Execute the full M1 through M6 usage census and return the structured report."""
     resolved_pkg = resolve_sdk_pkg_root(pkg_root)
@@ -1626,6 +1644,12 @@ def run_census(
         dict(consumers) if consumers is not None else default_consumers(REPO_ROOT)
     )
     target_version = resolve_latest_sdk_version(resolved_pkg, latest_version)
+    if latest_version is None and verified_from_records:
+        from common.deploy.stage_record_reader import verified_sdk_versions
+
+        verified_versions = verified_sdk_versions(repo=records_repo)
+        if verified_versions:
+            target_version = max(verified_versions, key=_parse_version_tuple)
     left_the_packages = load_left_the_packages(resolved_pkg)
     package_scoped_left = load_package_scoped_left_names(resolved_pkg)
 
@@ -1840,6 +1864,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Expected latest SDK version (defaults to SDK pyproject.toml or installed version).",
     )
     parser.add_argument(
+        "--verified-from-records",
+        action="store_true",
+        help="Use the newest Canary staging_gate-verified SDK version from stage records.",
+    )
+    parser.add_argument(
+        "--records-repo",
+        default="wangzitian0/infra2",
+        help="GitHub repository holding stage records when --verified-from-records is set.",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         default=None,
@@ -1913,6 +1947,8 @@ def main(argv: list[str] | None = None) -> int:
             consumers=consumers,
             latest_version=args.latest_version,
             out_dir=args.out,
+            verified_from_records=args.verified_from_records,
+            records_repo=args.records_repo,
         )
     except FileNotFoundError as exc:
         parser.error(str(exc))
