@@ -519,6 +519,41 @@ def _query_remote_app_refs(
     return main_sha, tag_shas
 
 
+def _compute_preview_touched_files(
+    repo_slug: str,
+    prev_sha: str,
+    main_sha: str,
+    *,
+    repo_root: Path = REPO_ROOT,
+    runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+) -> list[str]:
+    """Return changed repo-relative paths between ``prev_sha`` and ``main_sha``."""
+    if not prev_sha or not main_sha or prev_sha == main_sha or not repo_slug:
+        return []
+    res = runner(
+        [
+            "gh",
+            "api",
+            f"repos/{repo_slug}/compare/{prev_sha}...{main_sha}",
+            "--paginate",
+            "--jq",
+            ".files[].filename",
+        ],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if res.returncode != 0:
+        detail = (res.stderr or res.stdout or "").strip()
+        print(
+            f"warning: compare {repo_slug} {prev_sha[:7]}...{main_sha[:7]} failed ({detail}); skipping INFRA2_TOUCHED_FILES",
+            file=sys.stderr,
+        )
+        return []
+    return [line.strip() for line in (res.stdout or "").splitlines() if line.strip()]
+
+
 def verify_and_cut_app_preview_tag(
     service: str,
     *,
@@ -526,6 +561,7 @@ def verify_and_cut_app_preview_tag(
     repo_url: str,
     main_sha: str,
     next_tag: str,
+    prev_sha: str = "",
     repo_root: Path = REPO_ROOT,
     domain: str = "zitian.party",
     timeout: int = 1800,
@@ -604,6 +640,16 @@ def verify_and_cut_app_preview_tag(
             runner=runner,
         )
         try:
+            touched_files = _compute_preview_touched_files(
+                repo_slug,
+                prev_sha,
+                main_sha,
+                repo_root=repo_root,
+                runner=runner,
+            )
+            ambient_env = dict(os.environ)
+            if touched_files:
+                ambient_env["INFRA2_TOUCHED_FILES"] = " ".join(touched_files)
             hook_res = execute_app_hook_slot(
                 manifest,
                 stage_hook_plan("preview").post_slot,
@@ -611,6 +657,7 @@ def verify_and_cut_app_preview_tag(
                 environment="preview",
                 version_ref=main_sha[:7],
                 cwd=hook_cwd,
+                ambient_env=ambient_env,
                 runner=runner,
             )
         finally:
@@ -943,6 +990,7 @@ def sync_app_releases(
                     repo_url=repo_url,
                     main_sha=main_sha,
                     next_tag=computed_next_tag,
+                    prev_sha=latest_tag_sha,
                     repo_root=repo_root,
                     domain=domain,
                     manifest_fetcher=manifest_fetcher,
