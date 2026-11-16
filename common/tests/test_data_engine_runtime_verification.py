@@ -23,14 +23,10 @@ IMAGE = f"ghcr.io/wangzitian0/truealpha-data-engine@{DIGEST}"
 OLD = "ghcr.io/wangzitian0/truealpha-data-engine@sha256:" + "0" * 64
 
 
+from common.tests.conftest import load_repo_module
+
 def _load():
-    spec = importlib.util.spec_from_file_location(
-        "truealpha_data_engine_deploy_595", DEPLOY
-    )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_repo_module(DEPLOY, "truealpha_data_engine_deploy_595")
 
 
 class _Result:

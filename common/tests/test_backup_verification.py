@@ -30,16 +30,15 @@ from common.backup.rehearsal import (
 )
 
 
+from common.tests.conftest import load_repo_module
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
 def _load_backup_verification_tool():
-    path = ROOT / "common/backup/backup_verification_cli.py"
-    spec = importlib.util.spec_from_file_location("backup_verification_tool", path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_repo_module(
+        "common/backup/backup_verification_cli.py", "backup_verification_tool"
+    )
 
 
 def test_legacy_backup_and_rehearsal_predecessors_removed() -> None:
@@ -744,8 +743,14 @@ def test_restore_filter_resumes_after_copy_terminator(tmp_path) -> None:
     assert result["filtered_role_statements"] == 1
 
 
-def test_restore_reaps_psql_when_it_exits_mid_stream(tmp_path) -> None:
-    """psql runs with ON_ERROR_STOP=1, so it can close the pipe while we write."""
+@pytest.mark.parametrize(
+    ("wait_rc", "expected_match"),
+    [(3, "exit code 3"), (0, "stopped reading")],
+)
+def test_restore_handles_early_psql_pipe_exit(
+    tmp_path, wait_rc: int, expected_match: str
+) -> None:
+    """EPIPE reaps psql and fails closed even if wait returns 0."""
     from common.backup.rehearsal import BackupRestoreError
 
     class EarlyExitStdin:
@@ -763,38 +768,9 @@ def test_restore_reaps_psql_when_it_exits_mid_stream(tmp_path) -> None:
         def __exit__(self, *args):
             pass
 
-    payload = b"".join(b"INSERT INTO t VALUES (%d);\n" % i for i in range(50))
-
-    # The subprocess exit code is the real diagnosis, so it must be reaped and
-    # surfaced instead of letting the raw BrokenPipeError escape.
-    with pytest.raises(BackupRestoreError, match="exit code 3"):
-        _fake_restore(payload, tmp_path, stdin_cls=EarlyExitStdin, wait_rc=3)
-
-
-def test_restore_rejects_a_psql_that_stopped_reading_but_exited_zero(tmp_path) -> None:
-    """An EPIPE with exit 0 means psql quit early: the restore is incomplete."""
-    from common.backup.rehearsal import BackupRestoreError
-
-    class EarlyExitStdin:
-        def __init__(self) -> None:
-            self.count = 0
-
-        def write(self, data: bytes) -> None:
-            self.count += 1
-            if self.count > 2:
-                raise BrokenPipeError(32, "Broken pipe")
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            pass
-
-    payload = b"".join(b"INSERT INTO t VALUES (%d);\n" % i for i in range(50))
-
-    # rc == 0 must NOT launder a truncated stream into a pass.
-    with pytest.raises(BackupRestoreError, match="stopped reading"):
-        _fake_restore(payload, tmp_path, stdin_cls=EarlyExitStdin, wait_rc=0)
+    payload = b"".join(b"INSERT INTO t VALUES (%d);\n" % idx for idx in range(50))
+    with pytest.raises(BackupRestoreError, match=expected_match):
+        _fake_restore(payload, tmp_path, stdin_cls=EarlyExitStdin, wait_rc=wait_rc)
 
 
 def test_restore_reaps_psql_when_the_write_loop_raises_something_else(tmp_path) -> None:

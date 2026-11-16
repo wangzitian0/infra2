@@ -250,14 +250,9 @@ def test_finance_preview_requires_exact_version_on_backend_and_frontend():
 
 
 def test_preview_backend_health_budget_covers_measured_cold_start():
-    source = COMPOSE_PATH.read_text(encoding="utf-8")
-    backend_start = source.index("\n  backend:")
-    frontend_start = source.index("\n  frontend:")
-    backend_block = source[backend_start:frontend_start]
-    match = re.search(r"start_period:\s*([0-9]+)s", backend_block)
+    from common.tests.conftest import assert_backend_cold_start_budget
 
-    assert match is not None
-    assert int(match.group(1)) >= 450
+    assert_backend_cold_start_budget(COMPOSE_PATH, "\n  frontend:")
 
 
 # --- up: create path -------------------------------------------------------------

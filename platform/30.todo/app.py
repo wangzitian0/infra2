@@ -329,16 +329,6 @@ def probe_postgres_crud(
     )
 
 
-def _probe_tcp(host: str, port: int, timeout: float = 2.0) -> Dict[str, Any]:
-    start = time.perf_counter()
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            pass
-        return _outcome("pass", start, f"Connected to {host}:{port}")
-    except Exception as exc:
-        return _outcome("fail", start, str(exc))
-
-
 async def _probe_http_async(url: str, timeout: float = 3.0) -> Dict[str, Any]:
     from infra2_sdk.runtime.http import HttpClientSettings, probe_http
 

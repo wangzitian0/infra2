@@ -168,39 +168,29 @@ def test_main_emit_script_prints_without_api(capsys) -> None:
     assert "docker image prune" in capsys.readouterr().out
 
 
-def test_default_image_prune_keeps_unused_images_for_at_most_24_hours(capsys) -> None:
-    """#1621: a 72 h limit freed 0 bytes at several releases per day (disk at 81 %)."""
-    match = re.fullmatch(r"(\d+)h", hh.DEFAULT_IMAGE_PRUNE_UNTIL)
-    assert match is not None, hh.DEFAULT_IMAGE_PRUNE_UNTIL
+@pytest.mark.parametrize(
+    ("attr_name", "command"),
+    [
+        ("DEFAULT_IMAGE_PRUNE_UNTIL", "docker image prune -af"),
+        ("DEFAULT_BUILDER_PRUNE_UNTIL", "docker builder prune -af"),
+    ],
+)
+def test_default_prune_keeps_artifacts_for_at_most_24_hours(
+    capsys, attr_name: str, command: str
+) -> None:
+    """#1621/#1624: image and builder prune windows default to <= 24h."""
+    default_until = getattr(hh, attr_name)
+    match = re.fullmatch(r"(\d+)h", default_until)
+    assert match is not None, default_until
     assert 1 <= int(match.group(1)) <= 24
 
     assert hh.main(["--emit-script"]) == 0
     prune_lines = [
-        line
-        for line in capsys.readouterr().out.splitlines()
-        if "docker image prune -af" in line
+        line for line in capsys.readouterr().out.splitlines() if command in line
     ]
     assert len(prune_lines) == 1, prune_lines
     for line in prune_lines:
-        assert f"until={hh.DEFAULT_IMAGE_PRUNE_UNTIL}" in line, line
-        assert "until=72h" not in line, line
-
-
-def test_default_builder_prune_keeps_cache_for_at_most_24_hours(capsys) -> None:
-    """#1624: on 2026-11-12 the build cache held 5.7 GB; `until=24h` freed 5.69 GB."""
-    match = re.fullmatch(r"(\d+)h", hh.DEFAULT_BUILDER_PRUNE_UNTIL)
-    assert match is not None, hh.DEFAULT_BUILDER_PRUNE_UNTIL
-    assert 1 <= int(match.group(1)) <= 24
-
-    assert hh.main(["--emit-script"]) == 0
-    prune_lines = [
-        line
-        for line in capsys.readouterr().out.splitlines()
-        if "docker builder prune -af" in line
-    ]
-    assert len(prune_lines) == 1, prune_lines
-    for line in prune_lines:
-        assert f"until={hh.DEFAULT_BUILDER_PRUNE_UNTIL}" in line, line
+        assert f"until={default_until}" in line, line
         assert "until=72h" not in line, line
 
 

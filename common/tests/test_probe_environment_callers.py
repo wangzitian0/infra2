@@ -29,13 +29,10 @@ _PROBE_ENVIRONMENT_VARIABLES = (
 )
 
 
+from common.tests.conftest import load_repo_module
+
 def _load_probe_runner():
-    path = ROOT / "tools/infra_probe_runner.py"
-    spec = importlib.util.spec_from_file_location("infra_probe_runner_1208", path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_repo_module("tools/infra_probe_runner.py", "infra_probe_runner_1208")
 
 
 @pytest.fixture(autouse=True)

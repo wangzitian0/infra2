@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 from common.tests.compose_env import compose_services, raw_environment
+from common.tests.conftest import load_repo_module
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVICE_DIR = ROOT / "truealpha/truealpha/10.app"
@@ -15,23 +16,13 @@ COLLECTOR_HOST_LOOPBACK_OTLP_HTTP = "http://127.0.0.1:14318"
 
 
 def _load_deploy_module():
-    spec = importlib.util.spec_from_file_location(
-        "truealpha_app_deploy", SERVICE_DIR / "deploy.py"
-    )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_repo_module(SERVICE_DIR / "deploy.py", "truealpha_app_deploy")
 
 
 def _load_shared_tasks_module():
-    spec = importlib.util.spec_from_file_location(
-        "truealpha_app_shared_tasks", SERVICE_DIR / "shared_tasks.py"
+    return load_repo_module(
+        SERVICE_DIR / "shared_tasks.py", "truealpha_app_shared_tasks"
     )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def test_api_router_does_not_claim_the_bare_api_prefix() -> None:

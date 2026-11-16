@@ -64,13 +64,10 @@ OUTAGES = {
 }
 
 
+from common.tests.conftest import load_repo_module
+
 def _load_module():
-    spec = importlib.util.spec_from_file_location("stability_report", MODULE_PATH)
-    if spec is None or spec.loader is None:
-        raise AssertionError("Failed to load stability_report module")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_repo_module(MODULE_PATH, "stability_report")
 
 
 def _files(tmp_path, production: dict, staging: dict, outages: dict) -> dict:

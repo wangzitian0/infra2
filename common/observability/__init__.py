@@ -61,13 +61,9 @@ __all__ = sorted(_LAZY)
 
 
 def __getattr__(name: str):
-    if name not in _LAZY:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    import importlib
+    from common.core.environ import resolve_lazy_attr
 
-    value = getattr(importlib.import_module(_LAZY[name]), name)
-    globals()[name] = value  # 只解析一次
-    return value
+    return resolve_lazy_attr(name, _LAZY, globals(), __name__)
 
 
 def __dir__() -> "list[str]":

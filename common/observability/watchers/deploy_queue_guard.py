@@ -166,23 +166,9 @@ def _list_composes(client):
 
 
 def _post_alert(payload: dict) -> None:
-    bridge_url = os.environ.get("ALERT_BRIDGE_URL", "").strip()
-    if not bridge_url:
-        logger.warning("ALERT_BRIDGE_URL unset; alert not delivered: %s", payload)
-        return
-    from common.observability.probes import post_alert_bridge_payload
+    from common.observability.probes import post_env_alert
 
-    try:
-        # The bridge enforces Basic Auth when BRIDGE_BASIC_AUTH_* is set; pass it
-        # or these alerts get 401'd and silently dropped.
-        post_alert_bridge_payload(
-            bridge_url,
-            payload,
-            username=os.environ.get("BRIDGE_BASIC_AUTH_USERNAME", ""),
-            password=os.environ.get("BRIDGE_BASIC_AUTH_PASSWORD", ""),
-        )
-    except Exception as exc:  # alerting is best-effort; never crash the loop
-        logger.error("alert bridge delivery failed: %s", exc)
+    post_env_alert(payload, logger)
 
 
 def _remediate(client, stuck, grace_seconds: int) -> None:

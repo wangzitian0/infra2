@@ -591,7 +591,13 @@ def test_get_compose_deployments_filters_malformed_records() -> None:
     ]
 
 
-def test_wait_for_new_deployment_record_fails_on_error_status(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("status", "expected_match"),
+    [("error", "entered error"), ("queued", "still 'queued' after 0s"), ("", "still 'unknown' after 0s")],
+)
+def test_wait_for_new_deployment_record_fails_on_terminal_or_incomplete_status(
+    monkeypatch, status: str, expected_match: str
+) -> None:
     import common.deploy.deployer as deployer
     from common.deploy.deployer import Deployer
 
@@ -599,9 +605,9 @@ def test_wait_for_new_deployment_record_fails_on_error_status(monkeypatch) -> No
 
     class Client:
         def get_compose_deployments(self, compose_id):
-            return [{"deploymentId": "new", "status": "error"}]
+            return [{"deploymentId": "new", "status": status}]
 
-    with pytest.raises(RuntimeError, match="entered error"):
+    with pytest.raises(RuntimeError, match=expected_match):
         Deployer._wait_for_new_deployment_record(
             Client(), "compose-1", {"old"}, timeout_seconds=0, interval_seconds=1
         )
@@ -623,46 +629,6 @@ def test_wait_for_new_deployment_record_accepts_success_status(monkeypatch) -> N
         )
         is True
     )
-
-
-def test_wait_for_new_deployment_record_raises_when_ours_is_still_in_progress(
-    monkeypatch,
-) -> None:
-    """`queued`/`running` at the deadline is neither "no record" (which would let the
-    caller re-trigger) nor success: it raises, naming the state and the env override."""
-    import pytest
-
-    import common.deploy.deployer as deployer
-    from common.deploy.deployer import Deployer
-
-    monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
-
-    class Client:
-        def get_compose_deployments(self, compose_id):
-            return [{"deploymentId": "new", "status": "queued"}]
-
-    with pytest.raises(RuntimeError, match="still 'queued' after 0s"):
-        Deployer._wait_for_new_deployment_record(
-            Client(), "compose-1", {"old"}, timeout_seconds=0, interval_seconds=1
-        )
-
-
-def test_wait_for_new_deployment_record_raises_when_record_status_is_empty_or_none(
-    monkeypatch,
-) -> None:
-    import common.deploy.deployer as deployer
-    from common.deploy.deployer import Deployer
-
-    monkeypatch.setattr(deployer.time, "monotonic", lambda: 100.0)
-
-    class Client:
-        def get_compose_deployments(self, compose_id):
-            return [{"deploymentId": "new", "status": ""}]
-
-    with pytest.raises(RuntimeError, match="still 'unknown' after 0s"):
-        Deployer._wait_for_new_deployment_record(
-            Client(), "compose-1", {"old"}, timeout_seconds=0, interval_seconds=1
-        )
 
 
 def test_wait_for_new_deployment_record_waits_through_running_to_done(
@@ -1435,35 +1401,28 @@ def test_await_effective_config_hash_uses_the_clock_in_force_at_call_time(monkey
     assert len(reads) == 3
 
 
-def test_approle_preflight_passes_for_non_approle_compose(tmp_path):
+@pytest.mark.parametrize(
+    ("compose_body", "env_content"),
+    [
+        ("services:\n  x:\n    image: foo\n", "FOO=1"),
+        (
+            "environment:\n  - VAULT_ROLE_ID=${VAULT_ROLE_ID:-}\n",
+            "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\nVAULT_ADDR=https://vault.example",
+        ),
+    ],
+)
+def test_approle_preflight_happy_paths(tmp_path, compose_body: str, env_content: str):
     from common.deploy.deployer import Deployer
 
-    cf = tmp_path / "compose.yaml"
-    cf.write_text("services:\n  x:\n    image: foo\n")
+    compose_file = tmp_path / "compose.yaml"
+    compose_file.write_text(compose_body)
 
-    class D(Deployer):
+    class TestDeployer(Deployer):
         service = "x"
-        compose_path = str(cf)
+        compose_path = str(compose_file)
         data_path = "/data/x"
 
-    D._assert_approle_creds_present("FOO=1")  # no raise
-
-
-def test_approle_preflight_passes_when_creds_present(tmp_path):
-    from common.deploy.deployer import Deployer
-
-    cf = tmp_path / "compose.yaml"
-    cf.write_text("environment:\n  - VAULT_ROLE_ID=${VAULT_ROLE_ID:-}\n")
-
-    class D(Deployer):
-        service = "x"
-        compose_path = str(cf)
-        data_path = "/data/x"
-
-    # VAULT_ADDR is required too (see test below); include it so this stays a happy path.
-    D._assert_approle_creds_present(
-        "VAULT_ROLE_ID=r\nVAULT_SECRET_ID=s\nVAULT_ADDR=https://vault.example"
-    )  # no raise
+    TestDeployer._assert_approle_creds_present(env_content)
 
 
 def test_approle_preflight_requires_vault_addr(tmp_path):

@@ -52,13 +52,9 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    if name not in _SDK_BACKED:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    import importlib
+    from common.core.environ import resolve_lazy_attr
 
-    value = getattr(importlib.import_module(_SDK_BACKED[name]), name)
-    globals()[name] = value  # resolve once
-    return value
+    return resolve_lazy_attr(name, _SDK_BACKED, globals(), __name__)
 
 
 def __dir__() -> list[str]:

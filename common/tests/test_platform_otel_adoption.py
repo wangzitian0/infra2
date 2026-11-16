@@ -171,12 +171,10 @@ def _app_service(app: Path) -> str:
     return name
 
 
+from common.tests.conftest import load_repo_module
+
 def _load(name: str, path: Path):
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_repo_module(path, name)
 
 
 # ------------------------------------------------------------------ the scanner itself

@@ -32,13 +32,12 @@ ENVIRONMENT_NAME_RULE = {
 }
 
 
+from common.tests.conftest import load_repo_module
+
 def _load_signoz_deployer():
-    path = ROOT / "platform/11.signoz/deploy.py"
-    spec = importlib.util.spec_from_file_location("signoz_deploy_under_test", path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module.SigNozDeployer
+    return load_repo_module(
+        "platform/11.signoz/deploy.py", "signoz_deploy_under_test"
+    ).SigNozDeployer
 
 
 def test_composing_delivers_collector_config():

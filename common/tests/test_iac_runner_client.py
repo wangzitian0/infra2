@@ -270,35 +270,42 @@ def test_poll_validates_inputs_before_post():
         )
 
 
-def test_trigger_carries_a_validated_version_ref_when_given():
-    """truealpha#712: the app release a digest-pinned platform service should pin rides
-    in the payload — and only there; an absent version_ref leaves the payload byte-identical
-    to before, so every other platform deploy is untouched."""
+@pytest.mark.parametrize(
+    ("extra_kwargs", "expected_field", "expected_value"),
+    [
+        ({"version_ref": "v0.0.46"}, "version_ref", "v0.0.46"),
+        ({"action": "secrets-supply"}, "action", "secrets-supply"),
+    ],
+)
+def test_trigger_carries_optional_payload_field_only_when_given(
+    extra_kwargs, expected_field, expected_value
+):
+    """Optional fields ride in the signed body when passed, omitted otherwise."""
     calls, transport = _capture()
     trigger_platform_deploy(
-        env="production",
+        env="staging",
         ref=SHA,
-        services=["truealpha/data_engine"],
-        base_url="https://iac.example",
+        services=["finance_report/app"],
+        base_url="https://iac.example/",
         secret=SECRET,
         now=lambda: 1700000000.0,
         nonce="n" * 16,
         transport=transport,
-        version_ref="v0.0.46",
+        **extra_kwargs,
     )
-    assert json.loads(calls[0]["content"])["version_ref"] == "v0.0.46"
-    calls, transport = _capture()
+    assert json.loads(calls[0]["content"])[expected_field] == expected_value
+    default_calls, default_transport = _capture()
     trigger_platform_deploy(
-        env="production",
+        env="staging",
         ref=SHA,
-        services=["truealpha/data_engine"],
-        base_url="https://iac.example",
+        services=["finance_report/app"],
+        base_url="https://iac.example/",
         secret=SECRET,
         now=lambda: 1700000000.0,
         nonce="n" * 16,
-        transport=transport,
+        transport=default_transport,
     )
-    assert "version_ref" not in json.loads(calls[0]["content"])
+    assert expected_field not in json.loads(default_calls[0]["content"])
 
 
 def test_version_ref_is_a_tag_or_a_sha_before_any_post():
@@ -314,37 +321,6 @@ def test_version_ref_is_a_tag_or_a_sha_before_any_post():
             version_ref="main; rm -rf /",
         )
     assert calls == []
-
-
-def test_trigger_and_poll_carry_a_secrets_supply_action():
-    """deploy_v2 asks the runner for the secret supply alone before an app stack's
-    Dokploy promote (#649); the action rides in the signed body and the status coordinate."""
-    calls, transport = _capture()
-    trigger_platform_deploy(
-        env="staging",
-        ref=SHA,
-        services=["finance_report/app"],
-        base_url="https://iac.example/",
-        secret=SECRET,
-        now=lambda: 1700000000.0,
-        nonce="n" * 16,
-        transport=transport,
-        action="secrets-supply",
-    )
-    assert json.loads(calls[0]["content"])["action"] == "secrets-supply"
-    # the default action is not serialized: legacy runners keep their exact payload
-    calls2, transport2 = _capture()
-    trigger_platform_deploy(
-        env="staging",
-        ref=SHA,
-        services=["finance_report/app"],
-        base_url="https://iac.example/",
-        secret=SECRET,
-        now=lambda: 1700000000.0,
-        nonce="n" * 16,
-        transport=transport2,
-    )
-    assert "action" not in json.loads(calls2[0]["content"])
 
 
 def test_poll_survives_a_runner_recreate_inside_the_grace_window():

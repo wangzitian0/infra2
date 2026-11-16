@@ -6,6 +6,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 UNSEALER = ROOT / "bootstrap/05.vault/unsealer.py"
@@ -52,8 +54,14 @@ class _Client:
         return self.responses[url]
 
 
-def test_unsealer_health_rejects_stale_connect_token(monkeypatch) -> None:
-    """Infra-011.2: /health 200 is insufficient when bearer auth is 401."""
+@pytest.mark.parametrize(
+    ("sync_status", "token_status"),
+    [("ACTIVE", 401), ("TOKEN_NEEDED", 200)],
+)
+def test_unsealer_health_requires_valid_token_and_active_sync(
+    monkeypatch, sync_status: str, token_status: int
+) -> None:
+    """Infra-011.2: stale Connect bearer token or non-ACTIVE sync stays unhealthy."""
     unsealer = _load_unsealer(monkeypatch)
     responses = {
         "http://op-connect-api:8080/health": _Response(
@@ -61,38 +69,17 @@ def test_unsealer_health_rejects_stale_connect_token(monkeypatch) -> None:
             {
                 "dependencies": [
                     {"service": "sqlite", "status": "ACTIVE"},
-                    {"service": "sync", "status": "ACTIVE"},
-                    {"service": "1Password", "status": "ACTIVE"},
+                    {"service": "sync", "status": sync_status},
+                    {
+                        "service": "1Password",
+                        "status": "ACTIVE" if token_status == 401 else "UNINITIALIZED",
+                    },
                 ]
             },
         ),
-        "http://op-connect-api:8080/v1/vaults/vault-id/items/item-id": _Response(401),
-        "http://vault:8200/v1/sys/health": _Response(200, {"sealed": False}),
-    }
-    monkeypatch.setattr(
-        unsealer.httpx,
-        "Client",
-        lambda **_kwargs: _Client(responses),
-    )
-
-    assert unsealer.health_check() == 1
-
-
-def test_unsealer_health_requires_active_connect_sync(monkeypatch) -> None:
-    """Infra-011.2: TOKEN_NEEDED keeps the unsealer unhealthy."""
-    unsealer = _load_unsealer(monkeypatch)
-    responses = {
-        "http://op-connect-api:8080/health": _Response(
-            200,
-            {
-                "dependencies": [
-                    {"service": "sqlite", "status": "ACTIVE"},
-                    {"service": "sync", "status": "TOKEN_NEEDED"},
-                    {"service": "1Password", "status": "UNINITIALIZED"},
-                ]
-            },
+        "http://op-connect-api:8080/v1/vaults/vault-id/items/item-id": _Response(
+            token_status
         ),
-        "http://op-connect-api:8080/v1/vaults/vault-id/items/item-id": _Response(200),
         "http://vault:8200/v1/sys/health": _Response(200, {"sealed": False}),
     }
     monkeypatch.setattr(

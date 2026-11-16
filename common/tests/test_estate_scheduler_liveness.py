@@ -194,11 +194,18 @@ def test_the_bound_follows_the_workflow_cron(text, age, status) -> None:
     assert verdict.status == status, verdict
 
 
-def test_the_largest_gap_of_several_crons_sets_the_bound() -> None:
-    text = "on:\n  schedule:\n    - cron: '0 1,7 * * *'\n"  # gap 18 h, bound 37 h
-    ok = FakeGitHub({REPO_A: [wf("w", text, age=timedelta(hours=36))]})
+@pytest.mark.parametrize(
+    ("cron_expr", "ok_delta", "stale_delta"),
+    [
+        ("0 1,7 * * *", timedelta(hours=36), timedelta(hours=38)),
+        ("0 1 * * 1", timedelta(days=14), timedelta(days=15)),
+    ],
+)
+def test_cron_gap_sets_freshness_bound(cron_expr, ok_delta, stale_delta) -> None:
+    text = f"on:\n  schedule:\n    - cron: '{cron_expr}'\n"
+    ok = FakeGitHub({REPO_A: [wf("w", text, age=ok_delta)]})
     assert _verdicts(ok, repositories=(REPO_A,))[0].status == est.OK
-    stale = FakeGitHub({REPO_A: [wf("w", text, age=timedelta(hours=38))]})
+    stale = FakeGitHub({REPO_A: [wf("w", text, age=stale_delta)]})
     assert _verdicts(stale, repositories=(REPO_A,))[0].status == est.STALE
 
 
@@ -430,14 +437,6 @@ def test_the_gap_is_measured_from_the_crons(crons, gap) -> None:
 def test_a_schedule_it_cannot_measure_is_rejected(crons) -> None:
     with pytest.raises(est.ScheduleError):
         est.largest_gap(crons)
-
-
-def test_a_weekly_workflow_gets_a_weekly_bound() -> None:
-    weekly = "on:\n  schedule:\n    - cron: '0 1 * * 1'\n"  # bound 7 d x 2 + 1 h
-    ok = FakeGitHub({REPO_A: [wf("w", weekly, age=timedelta(days=14))]})
-    assert _verdicts(ok, repositories=(REPO_A,))[0].status == est.OK
-    stale = FakeGitHub({REPO_A: [wf("w", weekly, age=timedelta(days=15))]})
-    assert _verdicts(stale, repositories=(REPO_A,))[0].status == est.STALE
 
 
 def test_a_schedule_it_cannot_measure_is_red() -> None:

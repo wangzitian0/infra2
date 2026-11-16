@@ -190,14 +190,9 @@ def test_staging_deploy_assembles_axes_and_triggers():
 
 def test_fixed_finance_report_backend_health_budget_covers_cold_start():
     """The fixed stack must tolerate the same migration-heavy boot as preview."""
-    source = FIXED_FINANCE_REPORT_COMPOSE.read_text(encoding="utf-8")
-    backend_start = source.index("\n  backend:")
-    worker_start = source.index("\n  prefect-worker:")
-    backend_block = source[backend_start:worker_start]
-    match = re.search(r"start_period:\s*([0-9]+)s", backend_block)
+    from common.tests.conftest import assert_backend_cold_start_budget
 
-    assert match is not None
-    assert int(match.group(1)) >= 450
+    assert_backend_cold_start_budget(FIXED_FINANCE_REPORT_COMPOSE, "\n  prefect-worker:")
 
 
 def test_branch_is_reasserted_on_every_deploy_when_given():
@@ -406,11 +401,20 @@ def test_finance_report_deploy_has_no_app_host_override():
     assert "APP_HOST" not in env
 
 
-def test_prod_refuses_unvalidated_digest_promote_not_rebuild():
+@pytest.mark.parametrize(
+    ("env_name", "domain", "expected_match"),
+    [
+        ("prod", "zitian.party", "requires a staging deploy"),
+        ("preview", "zitian.party", "per-PR dynamic env"),
+        ("staging", "zitian.party\nINJECT=1", "invalid domain"),
+    ],
+)
+def test_deploy_rejects_invalid_targets_before_any_side_effect(
+    env_name: str, domain: str, expected_match: str
+):
     client = FakeDokploy()
-    with pytest.raises(ValueError, match="requires a staging deploy"):
-        dp.deploy("prod", "deadbeef", domain="zitian.party", client=client)
-    # the gate prevents ANY side effect: neither env mutation nor deploy
+    with pytest.raises(ValueError, match=expected_match):
+        dp.deploy(env_name, "deadbeef", domain=domain, client=client)
     assert client.updated == []
     assert client.deployed == []
 
@@ -435,28 +439,10 @@ def test_prod_break_glass_overrides_the_staging_gate():
     assert client.deployed == ["lNn9gVS1Zyw79Jzw5dlbu"]
 
 
-def test_preview_is_rejected_as_dynamic():
-    client = FakeDokploy()
-    with pytest.raises(ValueError, match="per-PR dynamic env"):
-        dp.deploy("preview", "deadbeef", domain="zitian.party", client=client)
-    # the gate prevents ANY side effect: neither env mutation nor deploy
-    assert client.updated == []
-    assert client.deployed == []
-
-
 def test_sha_is_lowercased_via_the_resolver():
     client = FakeDokploy()
     plan = dp.deploy("staging", "DEADBEEF", domain="zitian.party", client=client)
     assert plan.sha == "deadbeef"
-
-
-def test_domain_with_newline_is_rejected_before_any_side_effect():
-    # a newline in domain would corrupt the line-based compose env / inject a var
-    client = FakeDokploy()
-    with pytest.raises(ValueError, match="invalid domain"):
-        dp.deploy("staging", "deadbeef", domain="zitian.party\nINJECT=1", client=client)
-    assert client.updated == []
-    assert client.deployed == []
 
 
 def test_data_lane_is_derived_from_env_config_not_caller_supplied():

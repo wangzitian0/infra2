@@ -96,18 +96,11 @@ def evaluate_baseline_ratchet(
     actual: dict[str, list[str]], baseline: dict[str, list[str]]
 ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """Return (new_regressions, stale_baseline_entries) across both dimensions."""
-    regressions: dict[str, list[str]] = {}
-    stale: dict[str, list[str]] = {}
-    for key in ("missing_non_root", "missing_cap_drop_all"):
-        actual_set = set(actual.get(key, []))
-        base_set = set(baseline.get(key, []))
-        added = sorted(actual_set - base_set)
-        removed = sorted(base_set - actual_set)
-        if added:
-            regressions[key] = added
-        if removed:
-            stale[key] = removed
-    return regressions, stale
+    from common.tests.conftest import evaluate_keyed_ratchet
+
+    return evaluate_keyed_ratchet(
+        actual, baseline, ("missing_non_root", "missing_cap_drop_all")
+    )
 
 
 def test_compose_security_baseline_ratchet_matches_repo() -> None:

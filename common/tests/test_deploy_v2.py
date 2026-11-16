@@ -164,7 +164,16 @@ def test_repo_for_service_falls_back_to_app_repo_for_unknown_service():
     assert dv2._repo_for_service("some/unregistered-service") == dv2._APP_REPO
 
 
-def test_deploy_resolves_version_ref_against_the_services_own_repo(monkeypatch, calls):
+@pytest.mark.parametrize(
+    ("deploy_kwargs", "expected_repo"),
+    [
+        ({"service": "truealpha/app"}, "https://github.com/wangzitian0/truealpha.git"),
+        ({"repo": "https://example.invalid/other.git"}, "https://example.invalid/other.git"),
+    ],
+)
+def test_deploy_version_ref_repo_resolution(
+    monkeypatch, calls, deploy_kwargs, expected_repo
+):
     seen_repos = []
 
     def recording_resolve_image_ref(ref, **kw):
@@ -172,24 +181,8 @@ def test_deploy_resolves_version_ref_against_the_services_own_repo(monkeypatch, 
         return _fake_resolve_image_ref(ref, **kw)
 
     monkeypatch.setattr(dv2, "resolve_image_ref", recording_resolve_image_ref)
-    _deploy(service="truealpha/app", deploy_type="staging", version_ref="v0.0.3")
-    assert seen_repos == ["https://github.com/wangzitian0/truealpha.git"]
-
-
-def test_deploy_repo_override_wins_over_service_default(monkeypatch, calls):
-    seen_repos = []
-
-    def recording_resolve_image_ref(ref, **kw):
-        seen_repos.append(kw.get("repo"))
-        return _fake_resolve_image_ref(ref, **kw)
-
-    monkeypatch.setattr(dv2, "resolve_image_ref", recording_resolve_image_ref)
-    _deploy(
-        deploy_type="staging",
-        version_ref="v0.0.3",
-        repo="https://example.invalid/other.git",
-    )
-    assert seen_repos == ["https://example.invalid/other.git"]
+    _deploy(deploy_type="staging", version_ref="v0.0.3", **deploy_kwargs)
+    assert seen_repos == [expected_repo]
 
 
 # --- #465: app→infra on-main compatibility guard (assert_iac_ref_on_main) ---
@@ -662,26 +655,20 @@ def test_preview_branch_expected_sha_rejects_mismatch_before_side_effect(calls):
     assert calls["image_waits"] == []
 
 
-def test_image_readiness_failure_stops_before_preview_side_effect(calls, monkeypatch):
+@pytest.mark.parametrize(
+    ("deploy_type", "version_ref"),
+    [("preview/branch", "main"), ("staging", "v1.2.3")],
+)
+def test_image_readiness_failure_stops_before_side_effects(
+    calls, monkeypatch, deploy_type, version_ref
+):
     def boom(*_args, **_kw):
         raise RuntimeError("required image artifacts")
 
     monkeypatch.setattr(dv2, "_wait_for_image_dependencies", boom)
 
     with pytest.raises(RuntimeError, match="required image artifacts"):
-        _deploy(deploy_type="preview/branch", version_ref="main")
-
-    assert calls["preview"] is None and calls["fixed"] is None
-
-
-def test_image_readiness_failure_stops_before_fixed_side_effect(calls, monkeypatch):
-    def boom(*_args, **_kw):
-        raise RuntimeError("required image artifacts")
-
-    monkeypatch.setattr(dv2, "_wait_for_image_dependencies", boom)
-
-    with pytest.raises(RuntimeError, match="required image artifacts"):
-        _deploy(deploy_type="staging", version_ref="v1.2.3")
+        _deploy(deploy_type=deploy_type, version_ref=version_ref)
 
     assert calls["preview"] is None and calls["fixed"] is None
 
@@ -1272,8 +1259,16 @@ def test_cli_down_tears_down_the_selected_preview_alias(monkeypatch, capsys):
     assert out["action"] == "down" and out["alias"] == "pr-5"
 
 
-def test_cli_down_rejects_a_fixed_env(monkeypatch, capsys):
-    # staging/prod have no ephemeral alias to remove — --down must fail closed.
+@pytest.mark.parametrize(
+    ("deploy_type", "version_ref", "domain", "expected_error"),
+    [
+        ("staging", "v1.2.3", "zp.io", "--down only tears down preview"),
+        ("preview/branch", "main", "bad domain", "invalid domain"),
+    ],
+)
+def test_cli_down_rejects_invalid_targets_before_client(
+    monkeypatch, capsys, deploy_type, version_ref, domain, expected_error
+):
     import common.deploy.dokploy_client as dk
 
     monkeypatch.setattr(
@@ -1284,47 +1279,18 @@ def test_cli_down_rejects_a_fixed_env(monkeypatch, capsys):
     rc = dv2.main(
         [
             "--type",
-            "staging",
+            deploy_type,
             "--version-ref",
-            "v1.2.3",
+            version_ref,
             "--iac-ref",
-            "v1.2.3",
+            version_ref,
             "--domain",
-            "zp.io",
+            domain,
             "--down",
         ]
     )
     assert rc == 1
-    assert "--down only tears down preview" in capsys.readouterr().err
-
-
-def test_cli_down_rejects_a_malformed_domain(monkeypatch, capsys):
-    # a whitespace/empty domain would corrupt cloud.<domain>; --down must reject it
-    # before building the Dokploy client — the same guard the preview backend applies on up.
-    import common.deploy.dokploy_client as dk
-
-    monkeypatch.setattr(
-        dk,
-        "get_dokploy",
-        lambda host: pytest.fail(
-            "must not build a client for a malformed --down domain"
-        ),
-    )
-    rc = dv2.main(
-        [
-            "--type",
-            "preview/branch",
-            "--version-ref",
-            "main",
-            "--iac-ref",
-            "main",
-            "--domain",
-            "bad domain",
-            "--down",
-        ]
-    )
-    assert rc == 1
-    assert "invalid domain" in capsys.readouterr().err
+    assert expected_error in capsys.readouterr().err
 
 
 def test_cli_verify_flags_default_on_and_flip(cli):

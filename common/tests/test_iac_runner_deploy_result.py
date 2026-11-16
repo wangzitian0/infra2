@@ -177,26 +177,43 @@ def test_sync_result_classifies_onepassword_service_account_deleted(
     assert "OP_SERVICE_ACCOUNT_TOKEN" in diagnostic["next_action"]
 
 
-def test_sync_result_classifies_dokploy_auth_over_vault_red_herring(
+@pytest.mark.parametrize(
+    ("mod_suffix", "message", "expected_kind", "expected_action"),
+    [
+        (
+            "dokploy_auth",
+            "WARNING: vault token lookup: permission denied on capabilities-self\n"
+            "alerting sync failed: No GitHub provider found",
+            "dokploy_auth_failed",
+            "DOKPLOY_API_KEY",
+        ),
+        (
+            "transient_aborted",
+            "app: secret supply failed: transient transport error talking to Vault, "
+            "retried 1 time(s) without success: Connection aborted.",
+            "transient_transport",
+            "1x",
+        ),
+    ],
+)
+def test_sync_result_classifies_failure_diagnostics(
     monkeypatch,
+    mod_suffix: str,
+    message: str,
+    expected_kind: str,
+    expected_action: str,
 ) -> None:
-    """A wiped DOKPLOY_API_KEY surfaces as 'No GitHub provider found'. Even when
-    unrelated 'permission denied'/'vault' strings share the output, it must route
-    to dokploy_auth_failed — not be mis-classified as vault_permission_denied
-    (the red herring that masked the empty key for a full investigation)."""
+    """Route Dokploy auth and transient transport failures to accurate diagnostics."""
     sync_runner = _load_module(
-        "sync_runner_dokploy_auth_under_test",
+        f"sync_runner_{mod_suffix}_under_test",
         IAC_RUNNER / "sync_runner.py",
         monkeypatch,
     )
 
-    diagnostic = sync_runner.diagnose_failure(
-        "WARNING: vault token lookup: permission denied on capabilities-self\n"
-        "alerting sync failed: No GitHub provider found"
-    )
+    diagnostic = sync_runner.diagnose_failure(message)
 
-    assert diagnostic["error_kind"] == "dokploy_auth_failed"
-    assert "DOKPLOY_API_KEY" in diagnostic["next_action"]
+    assert diagnostic["error_kind"] == expected_kind
+    assert expected_action in diagnostic["next_action"]
 
 
 def test_sync_result_classifies_a_retry_exhausted_tls_blip_as_transient_transport(
@@ -223,26 +240,6 @@ def test_sync_result_classifies_a_retry_exhausted_tls_blip_as_transient_transpor
     assert "UNEXPECTED_EOF" in diagnostic["summary"]
     assert "2x" in diagnostic["next_action"]
     assert "container" not in diagnostic["next_action"]  # no more "go read the logs"
-
-
-def test_sync_result_classifies_an_aborted_connection_as_transient_transport(
-    monkeypatch,
-) -> None:
-    """The other two markers #810 names (ECONNRESET / Connection aborted) must route
-    the same way as the SSL EOF case, not just the exact incident's literal text."""
-    sync_runner = _load_module(
-        "sync_runner_transient_transport_aborted_under_test",
-        IAC_RUNNER / "sync_runner.py",
-        monkeypatch,
-    )
-
-    diagnostic = sync_runner.diagnose_failure(
-        "app: secret supply failed: transient transport error talking to Vault, "
-        "retried 1 time(s) without success: Connection aborted."
-    )
-
-    assert diagnostic["error_kind"] == "transient_transport"
-    assert "1x" in diagnostic["next_action"]
 
 
 @pytest.mark.parametrize(
@@ -732,12 +729,15 @@ def test_run_invoke_task_preloads_stdlib_platform_before_repo_path(
     assert "PYTHONPATH" not in captured["kwargs"]["env"]
 
 
-def test_run_invoke_task_materializes_staging_isolation_env(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize(
+    ("env_name", "expected_suffix"), [("staging", "-staging"), ("production", "")]
+)
+def test_run_invoke_task_materializes_deploy_isolation_env(
+    monkeypatch, tmp_path, env_name: str, expected_suffix: str
 ) -> None:
-    """#161: IaC Runner child tasks receive staging isolation variables."""
+    """#161: IaC Runner child tasks materialize DEPLOY_ENV and isolation suffixes."""
     sync_runner = _load_module(
-        "sync_runner_staging_env_under_test",
+        f"sync_runner_{env_name}_env_under_test",
         IAC_RUNNER / "sync_runner.py",
         monkeypatch,
     )
@@ -749,13 +749,13 @@ def test_run_invoke_task_materializes_staging_isolation_env(
 
     monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
 
-    result = sync_runner.run_invoke_task("postgres.sync", tmp_path, "staging")
+    result = sync_runner.run_invoke_task("postgres.sync", tmp_path, env_name)
 
     assert result["success"] is True
     invoke_env = captured["kwargs"]["env"]
-    assert invoke_env["DEPLOY_ENV"] == "staging"
-    assert invoke_env["ENV_SUFFIX"] == "-staging"
-    assert invoke_env["ENV_DOMAIN_SUFFIX"] == "-staging"
+    assert invoke_env["DEPLOY_ENV"] == env_name
+    assert invoke_env["ENV_SUFFIX"] == expected_suffix
+    assert invoke_env["ENV_DOMAIN_SUFFIX"] == expected_suffix
 
 
 def test_run_invoke_task_propagates_exact_deploy_ref(monkeypatch, tmp_path) -> None:
@@ -827,32 +827,6 @@ def test_run_invoke_task_logs_safe_child_env(monkeypatch, tmp_path) -> None:
     )  # the AppRole token travels as VAULT_TOKEN (PR-E)
     assert "role-abc" not in summary
     assert "secret-xyz" not in summary
-
-
-def test_run_invoke_task_materializes_production_without_suffix(
-    monkeypatch, tmp_path
-) -> None:
-    """#161: production deploys must not get staging-style suffixes."""
-    sync_runner = _load_module(
-        "sync_runner_production_env_under_test",
-        IAC_RUNNER / "sync_runner.py",
-        monkeypatch,
-    )
-    captured = {}
-
-    def fake_run(args, **kwargs):
-        captured["kwargs"] = kwargs
-        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
-
-    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
-
-    result = sync_runner.run_invoke_task("postgres.sync", tmp_path, "production")
-
-    assert result["success"] is True
-    invoke_env = captured["kwargs"]["env"]
-    assert invoke_env["DEPLOY_ENV"] == "production"
-    assert invoke_env["ENV_SUFFIX"] == ""
-    assert invoke_env["ENV_DOMAIN_SUFFIX"] == ""
 
 
 @pytest.mark.parametrize(
@@ -1036,69 +1010,36 @@ def _approle_env(monkeypatch, *, with_addr: bool = True) -> None:
         monkeypatch.delenv("VAULT_ADDR", raising=False)
 
 
-def test_run_invoke_task_approle_login_failure_yields_no_root_token(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize(
+    ("mod_suffix", "with_addr", "returncode", "stdout"),
+    [
+        ("login_fail", True, 2, ""),
+        ("no_addr", False, 0, ""),
+        ("bad_json", True, 0, "not-json"),
+    ],
+)
+def test_run_invoke_task_approle_login_edge_cases_yield_no_root_token(
+    monkeypatch,
+    tmp_path,
+    mod_suffix: str,
+    with_addr: bool,
+    returncode: int,
+    stdout: str,
 ) -> None:
-    """#369: a failed AppRole login (sealed Vault / bad creds) returns None — the child
-    gets NO VAULT_ROOT_TOKEN rather than a bogus one (it then fails closed with a clear
-    'VAULT_ROOT_TOKEN not set' diagnostic instead of deploying with a broken token)."""
-    _approle_env(monkeypatch)
+    """#369: failed/absent/unparseable AppRole login yields no VAULT_ROOT_TOKEN."""
+    _approle_env(monkeypatch, with_addr=with_addr)
     sync_runner = _load_module(
-        "sync_runner_login_fail", IAC_RUNNER / "sync_runner.py", monkeypatch
-    )
-    captured = {}
-
-    def fake_run(args, **kwargs):
-        if args[:3] == ["vault", "write", "-format=json"]:
-            return types.SimpleNamespace(
-                returncode=2, stdout="", stderr="Error: Vault is sealed"
-            )
-        captured["invoke_env"] = kwargs["env"]
-        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
-
-    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
-
-    sync_runner.run_invoke_task("postgres.sync", tmp_path, "staging")
-    assert "VAULT_ROOT_TOKEN" not in captured["invoke_env"]
-
-
-def test_run_invoke_task_approle_login_skipped_without_vault_addr(
-    monkeypatch, tmp_path
-) -> None:
-    """#369: with role/secret but no VAULT_ADDR, login is not even attempted (returns None);
-    no Vault subprocess is spawned and the child gets no VAULT_ROOT_TOKEN."""
-    _approle_env(monkeypatch, with_addr=False)
-    sync_runner = _load_module(
-        "sync_runner_no_addr", IAC_RUNNER / "sync_runner.py", monkeypatch
+        f"sync_runner_{mod_suffix}", IAC_RUNNER / "sync_runner.py", monkeypatch
     )
     captured = {}
 
     def fake_run(args, **kwargs):
         if args[:1] == ["vault"]:
-            raise AssertionError("must not attempt AppRole login without VAULT_ADDR")
-        captured["invoke_env"] = kwargs["env"]
-        return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
-
-    monkeypatch.setattr(sync_runner.subprocess, "run", fake_run)
-
-    sync_runner.run_invoke_task("postgres.sync", tmp_path, "staging")
-    assert "VAULT_ROOT_TOKEN" not in captured["invoke_env"]
-
-
-def test_run_invoke_task_approle_login_unparseable_response_yields_no_root_token(
-    monkeypatch, tmp_path
-) -> None:
-    """#369: a 0-exit login whose JSON lacks auth.client_token is handled, not crashed —
-    returns None so the child gets no token."""
-    _approle_env(monkeypatch)
-    sync_runner = _load_module(
-        "sync_runner_bad_json", IAC_RUNNER / "sync_runner.py", monkeypatch
-    )
-    captured = {}
-
-    def fake_run(args, **kwargs):
-        if args[:3] == ["vault", "write", "-format=json"]:
-            return types.SimpleNamespace(returncode=0, stdout="not-json", stderr="")
+            if not with_addr:
+                raise AssertionError("must not attempt AppRole login without VAULT_ADDR")
+            return types.SimpleNamespace(
+                returncode=returncode, stdout=stdout, stderr="Error"
+            )
         captured["invoke_env"] = kwargs["env"]
         return types.SimpleNamespace(returncode=0, stdout="ok", stderr="")
 

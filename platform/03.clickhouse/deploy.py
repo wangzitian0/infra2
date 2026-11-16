@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from common.deploy.config_hash import mount_fingerprint_env
+from common.deploy.config_hash import prepare_delivered_mounts
 from common.deploy.deployer import Deployer, make_tasks
 from common.console import success, info, run_with_status, error
 from common.core.facets import BackupFacet, Exemption
@@ -105,13 +105,12 @@ class ClickHouseDeployer(Deployer):
     @classmethod
     def composing(cls, c, env_vars):
         """Deliver config.xml, then deploy (`sync` skips pre_compose)."""
-        e = cls.env()
-        if not cls._deliver_config(c, e):
-            raise RuntimeError("Failed to deliver ClickHouse config.xml to host")
-        # The label fingerprint recreates the container when config.xml changes (#1438).
+        env = cls.env()
         env_vars.update(
-            mount_fingerprint_env(
-                {"config.xml": cls._render_config(e)},
+            prepare_delivered_mounts(
+                delivered=cls._deliver_config(c, env),
+                error_message="Failed to deliver ClickHouse config.xml to host",
+                rendered={"config.xml": cls._render_config(env)},
                 service=cls.service,
                 template_dir=Path(__file__).parent,
             )

@@ -17,6 +17,9 @@ from common.core.harness.prod_queue import ProductionQueue, render_queue_lines
 from common.core.harness.manifest import (
     HEALTH_ENVIRONMENTS,
     RELEASE_TAG_RE,
+    _git,
+    _parent_pin,
+    _value,
     load_manifest,
 )
 
@@ -112,38 +115,6 @@ class WorkspaceStatus:
             ),
             "repositories": [item.to_dict() for item in self.repositories],
         }
-
-
-def _git(
-    checkout: Path,
-    *args: str,
-    runner: Runner = subprocess.run,
-) -> subprocess.CompletedProcess:
-    return runner(
-        ["git", "-C", str(checkout), *args],
-        capture_output=True,
-        text=True,
-    )
-
-
-def _value(
-    checkout: Path,
-    *args: str,
-    runner: Runner = subprocess.run,
-) -> str | None:
-    completed = _git(checkout, *args, runner=runner)
-    if completed.returncode != 0:
-        return None
-    value = completed.stdout.strip()
-    return value or None
-
-
-def _parent_pin(root: Path, relative: str, *, runner: Runner) -> str | None:
-    value = _value(root, "ls-tree", "HEAD", "--", relative, runner=runner)
-    if not value:
-        return None
-    metadata = value.split("\t", 1)[0].split()
-    return metadata[2].lower() if len(metadata) >= 3 else None
 
 
 def _remote_ref(checkout: Path, *, runner: Runner) -> str | None:

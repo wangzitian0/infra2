@@ -31,13 +31,12 @@ class _RecordingStore:
         return True
 
 
+from common.tests.conftest import load_repo_module
+
 def _load_signoz_shared_tasks():
-    path = ROOT / "platform/11.signoz/shared_tasks.py"
-    spec = importlib.util.spec_from_file_location("signoz_shared_tasks_env_test", path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_repo_module(
+        "platform/11.signoz/shared_tasks.py", "signoz_shared_tasks_env_test"
+    )
 
 
 def _run_create_api_key(monkeypatch, process_environment: str) -> list[tuple]:

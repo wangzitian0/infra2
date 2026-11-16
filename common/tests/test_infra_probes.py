@@ -35,13 +35,12 @@ def _production_probe_environment(monkeypatch):
     monkeypatch.setenv("ENV", "production")
 
 
+from common.tests.conftest import load_repo_module
+
 def _load_probe_runner():
-    path = ROOT / "tools/infra_probe_runner.py"
-    spec = importlib.util.spec_from_file_location("infra_probe_runner_under_test", path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_repo_module(
+        "tools/infra_probe_runner.py", "infra_probe_runner_under_test"
+    )
 
 
 class FakeResponse:
@@ -1081,28 +1080,19 @@ def _two_probe_runner(monkeypatch, ok: dict):
     return runner, posted
 
 
-def test_cascade_suppresses_dependent_when_root_also_fails(
-    monkeypatch, tmp_path
+@pytest.mark.parametrize(
+    ("root_healthy", "expected_services"),
+    [(False, {"root"}), (True, {"dep"})],
+)
+def test_cascade_suppression_depends_on_root_health(
+    monkeypatch, tmp_path, root_healthy: bool, expected_services: set[str]
 ) -> None:
-    """A probe whose declared `depends_on` is ALSO failing is a cascade symptom — suppress
-    it and page only the root (page the deepest failed node, not the cascade)."""
-    runner, posted = _two_probe_runner(monkeypatch, {"root": False, "dep": False})
+    """Suppress dependent alert iff root also fails."""
+    runner, posted = _two_probe_runner(monkeypatch, {"root": root_healthy, "dep": False})
     assert runner.run_once(state_path=tmp_path / "s.json", failure_threshold=1) == 1
     firing = [p for p in posted if p["status"] == "firing"]
     services = {a["labels"]["service"] for a in firing[0]["alerts"]}
-    assert services == {"root"}  # dep cascade-suppressed; only the root pages
-
-
-def test_cascade_does_not_suppress_when_root_is_healthy(monkeypatch, tmp_path) -> None:
-    """If the dependency is healthy, the dependent's failure is a real independent fault —
-    it must still page (never silently swallowed by the cascade rule)."""
-    runner, posted = _two_probe_runner(monkeypatch, {"root": True, "dep": False})
-    assert runner.run_once(state_path=tmp_path / "s.json", failure_threshold=1) == 1
-    firing = [p for p in posted if p["status"] == "firing"]
-    services = {a["labels"]["service"] for a in firing[0]["alerts"]}
-    assert services == {
-        "dep"
-    }  # not suppressed — root is fine, dep is a genuine failure
+    assert services == expected_services
 
 
 def test_cascade_cycle_is_not_suppressed_fail_closed(monkeypatch, tmp_path) -> None:

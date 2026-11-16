@@ -16,13 +16,10 @@ MODULE_PATH = ROOT / "common" / "observability" / "digest.py"
 WORKFLOW_PATH = ROOT / ".github/workflows/ops-checks.yml"
 
 
+from common.tests.conftest import load_repo_module
+
 def _load_module():
-    spec = importlib.util.spec_from_file_location("watchdog_weekly_digest", MODULE_PATH)
-    if spec is None or spec.loader is None:
-        raise AssertionError("Failed to load watchdog_weekly_digest module")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_repo_module(MODULE_PATH, "watchdog_weekly_digest")
 
 
 class _Response:
