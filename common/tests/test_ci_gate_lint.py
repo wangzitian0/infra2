@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 import pytest
 import yaml
 
@@ -139,3 +140,147 @@ def test_main_missing_directory_fails_closed(tmp_path: Path) -> None:
     with patch.object(sys, "argv", ["ci_gate_lint", str(non_existent)]):
         exit_code = main()
         assert exit_code == 1, "Missing directory must exit 1 (fail-closed)"
+
+
+def test_reconcile_plan_gate_fetches_pr_base_sha_and_fails_on_diff_error(
+    tmp_path: Path,
+) -> None:
+    """#1622:shallow PR checkouts must fetch the PR base SHA explicitly and fail closed."""
+    wf_path = Path(__file__).resolve().parents[2] / ".github/workflows/infra-ci.yml"
+    workflow = yaml.safe_load(wf_path.read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["test-deployer-logic"]["steps"]
+    step = next(
+        item
+        for item in steps
+        if item.get("name") == "Gate reconcile plan builds for changed files"
+    )
+    script_template = step["run"]
+    assert "origin/main...HEAD" not in script_template
+    assert "mapfile" not in script_template
+    assert "github.event.pull_request.base.sha" in script_template
+
+    bare_repo = tmp_path / "remote.git"
+    work_repo = tmp_path / "work"
+    shallow_repo = tmp_path / "shallow"
+    subprocess.run(
+        ["git", "init", "--bare", "-b", "main", str(bare_repo)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(bare_repo),
+            "config",
+            "uploadpack.allowAnySHA1InWant",
+            "true",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "clone", str(bare_repo), str(work_repo)],
+        check=True,
+        capture_output=True,
+    )
+    for cfg_key, cfg_val in (
+        ("user.email", "ci@example.test"),
+        ("user.name", "CI Test"),
+    ):
+        subprocess.run(
+            ["git", "-C", str(work_repo), "config", cfg_key, cfg_val],
+            check=True,
+            capture_output=True,
+        )
+    (work_repo / "base.txt").write_text("base\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(work_repo), "add", "base.txt"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(work_repo), "commit", "-m", "base commit"],
+        check=True,
+        capture_output=True,
+    )
+    base_sha = subprocess.check_output(
+        ["git", "-C", str(work_repo), "rev-parse", "HEAD"],
+        text=True,
+    ).strip()
+    subprocess.run(
+        ["git", "-C", str(work_repo), "push", "-u", "origin", "main"],
+        check=True,
+        capture_output=True,
+    )
+
+    subprocess.run(
+        ["git", "-C", str(work_repo), "checkout", "-b", "feature/test"],
+        check=True,
+        capture_output=True,
+    )
+    (work_repo / "changed.py").write_text("value = 1\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(work_repo), "add", "changed.py"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(work_repo), "commit", "-m", "pr commit"],
+        check=True,
+        capture_output=True,
+    )
+    pr_sha = subprocess.check_output(
+        ["git", "-C", str(work_repo), "rev-parse", "HEAD"],
+        text=True,
+    ).strip()
+    subprocess.run(
+        ["git", "-C", str(work_repo), "push", "-u", "origin", "feature/test"],
+        check=True,
+        capture_output=True,
+    )
+
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "--depth",
+            "1",
+            "--branch",
+            "feature/test",
+            f"file://{bare_repo}",
+            str(shallow_repo),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    def _run_step(
+        target_base: str, has_non_doc: str = "true"
+    ) -> subprocess.CompletedProcess[str]:
+        rendered = (
+            script_template.replace("${{ github.workspace }}", str(shallow_repo))
+            .replace("${{ github.event.pull_request.base.sha }}", target_base)
+            .replace("${{ needs.detect-changes.outputs.has_non_doc }}", has_non_doc)
+            .replace(
+                "uv run --locked python -m tools.reconcile_iac_inputs",
+                "printf 'RECONCILE:%s\\n'",
+            )
+        )
+        return subprocess.run(
+            ["bash", "-c", rendered],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    ok_res = _run_step(base_sha, has_non_doc="true")
+    assert ok_res.returncode == 0, ok_res.stderr
+    assert "changed.py" in ok_res.stdout
+
+    empty_res = _run_step(pr_sha, has_non_doc="true")
+    assert empty_res.returncode != 0
+    assert "zero changed files" in empty_res.stdout + empty_res.stderr
+
+    bad_sha_res = _run_step("deadbeef" * 5, has_non_doc="true")
+    assert bad_sha_res.returncode != 0
