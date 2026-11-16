@@ -2698,3 +2698,26 @@ def test_the_public_runner_probe_must_depend_on_the_internal_one(
     runner.run_once(state_path=tmp_path / "s.json", failure_threshold=1)
     firing = [p for p in posted if p["status"] == "firing"]
     assert sum(len(p["alerts"]) for p in firing) == 2
+
+
+def test_host_cpu_honors_elevated_failure_threshold_while_other_probes_keep_default(
+    monkeypatch, tmp_path
+) -> None:
+    """#1708: INFRA_PROBE_HOST_CPU_FAILURE_THRESHOLD throttles host-cpu bursts without delaying siblings."""
+    monkeypatch.setenv("INFRA_PROBE_SPECS", _HOST_SPECS)
+    monkeypatch.delenv("PUBLIC_ROUTE_PROBE_SPECS", raising=False)
+    monkeypatch.setenv("INFRA_PROBE_HOST_CPU_FAILURE_THRESHOLD", "5")
+    runner, posted, _beats, script, _bridge = _scripted_runner(monkeypatch)
+    state_path = tmp_path / "state.json"
+
+    for loop in range(4):
+        script["results"] = {"host-cpu": "95.0", "host-mem": "90.0"}
+        runner.run_once(state_path=state_path, failure_threshold=3)
+
+    assert len(posted) == 1
+    assert _firing_names(posted[0]) == ["host-mem"]
+
+    script["results"] = {"host-cpu": "95.0", "host-mem": "90.0"}
+    runner.run_once(state_path=state_path, failure_threshold=3)
+    assert len(posted) == 2
+    assert _firing_names(posted[1]) == ["host-cpu", "host-mem"]

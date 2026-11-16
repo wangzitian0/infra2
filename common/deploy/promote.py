@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Internal fixed-compose app deploy backend used by deploy_v2.
+# alert-delivery-exempt: event-driven production rollback card; review=2027-05-01
 
 This module is not the public deploy surface. ``deploy_v2(service, type, version_ref,
 iac_ref)`` resolves the coordinate, enforces the data-lane red lines, and then calls this

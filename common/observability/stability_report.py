@@ -1,4 +1,5 @@
 """Weekly positive stability report from the VPS availability ledger (#904).
+# alerts-as: monthly-ops-summary
 
 Thin runner. It reads each environment's ledger file from the VPS over SSH (the
 way ``tools/out_of_band_watchdog.py`` reads backup manifests), fetches the
@@ -38,7 +39,7 @@ if str(ROOT) not in sys.path:
 
 from common.alerting import (  # noqa: E402
     as_report,
-    deliver_out_of_band_card,
+    deliver_report_card,
 )
 from common.observability.ledger import (  # noqa: E402
     apply_unavailability,
@@ -304,7 +305,7 @@ def run(
         print(message)
         return 0
     card = build_stability_card(prod_summary, staging_lines=staging_lines, title=title)
-    deliver_out_of_band_card(env, card, fallback_text=message)
+    deliver_report_card(env, card, fallback_text=message)
     print(message)
     return 0
 

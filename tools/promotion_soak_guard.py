@@ -424,6 +424,18 @@ class GhClient:
     def recent_push_runs(self) -> list[dict]:
         return self._runs()
 
+    def _runs_for_commit_any_event(self, sha: str) -> list[dict]:
+        query = urlencode({"head_sha": sha, "per_page": PER_PAGE})
+        path = f"repos/{self.repo}/actions/workflows/{self.workflow}/runs?{query}"
+        out = self._exec(["gh", "api", path])
+        try:
+            runs = json.loads(out)["workflow_runs"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise LookupFailed(f"gh api {path}: unreadable response ({exc})") from exc
+        if not isinstance(runs, list) or not all(isinstance(r, dict) for r in runs):
+            raise LookupFailed(f"gh api {path}: workflow_runs is not a list of runs")
+        return runs
+
     def hook_results_for_run(self, run_id: int) -> list[dict[str, Any]]:
         """Download ``iac-input-reconcile-result`` artifact for ``run_id`` and return ``hook_results`` (#1563)."""
         meta_path = f"repos/{self.repo}/actions/runs/{run_id}/artifacts"
@@ -465,7 +477,7 @@ class GhClient:
     def hook_results_in_window(
         self, tag: str, *, since_tag: str = ""
     ) -> list[dict[str, Any]]:
-        """Collect ``hook_results`` from concluded green push runs in ``(since_tag, tag]`` (#1563)."""
+        """Collect ``hook_results`` from concluded green push/dispatch runs in ``(since_tag, tag]`` (#1563)."""
         target_key = _tag_key(tag)
         if target_key is None:
             raise LookupFailed(
@@ -479,10 +491,10 @@ class GhClient:
                     f"invalid --since-tag {since_tag!r} for cumulative soak window"
                 )
         seen_ids: set[int] = set()
-        selected_ids: list[int] = []
+        selected_runs: list[tuple[str, int]] = []
+        green_shas: set[str] = set()
+        failed_shas: list[str] = []
         for run_obj in self.recent_push_runs():
-            if run_obj.get("event") != "push" or run_obj.get("conclusion") != "success":
-                continue
             branch_key = _tag_key(str(run_obj.get("head_branch") or ""))
             if branch_key is None:
                 continue
@@ -492,13 +504,49 @@ class GhClient:
                 in_window = branch_key == target_key
             if not in_window:
                 continue
-            raw_id = run_obj.get("id")
-            if isinstance(raw_id, int) and raw_id not in seen_ids:
-                seen_ids.add(raw_id)
-                selected_ids.append(raw_id)
+            event = run_obj.get("event")
+            conclusion = run_obj.get("conclusion")
+            sha = str(run_obj.get("head_sha") or "").strip()
+            if event in ("push", "workflow_dispatch") and conclusion == "success":
+                raw_id = run_obj.get("id")
+                if isinstance(raw_id, int) and raw_id not in seen_ids:
+                    seen_ids.add(raw_id)
+                    selected_runs.append((str(run_obj.get("created_at") or ""), raw_id))
+                if sha:
+                    green_shas.add(sha)
+            elif event == "push" and conclusion not in (None, "success"):
+                if sha and sha not in failed_shas:
+                    failed_shas.append(sha)
+        for sha in failed_shas:
+            if sha in green_shas:
+                continue
+            for rerun in self._runs_for_commit_any_event(sha):
+                if (
+                    rerun.get("event") in ("push", "workflow_dispatch")
+                    and rerun.get("conclusion") == "success"
+                ):
+                    raw_id = rerun.get("id")
+                    if isinstance(raw_id, int) and raw_id not in seen_ids:
+                        seen_ids.add(raw_id)
+                        selected_runs.append(
+                            (str(rerun.get("created_at") or ""), raw_id)
+                        )
+        selected_runs.sort(key=lambda item: (item[0], item[1]), reverse=True)
         combined: list[dict[str, Any]] = []
-        for rid in selected_ids:
-            combined.extend(self.hook_results_for_run(rid))
+        seen_staging_gates: set[tuple[str, str]] = set()
+        for _created_at, rid in selected_runs:
+            for entry in self.hook_results_for_run(rid):
+                if str(entry.get("slot") or "").strip() == "staging_gate":
+                    key = (
+                        str(
+                            entry.get("service_id") or entry.get("service") or ""
+                        ).strip(),
+                        str(entry.get("version_ref") or "").strip(),
+                    )
+                    if key in seen_staging_gates:
+                        continue
+                    seen_staging_gates.add(key)
+                combined.append(entry)
         return combined
 
 

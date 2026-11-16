@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Daily reminder: a release tag is green in staging and not in production (#1645).
+# alerts-as: monthly-ops-summary
 
 The tag counts as green in staging when its ``staging.release_validation`` post record passes.
 It counts as in production when a passing ``prod.release_integrity`` post record or a
@@ -23,7 +24,7 @@ if str(ROOT) not in sys.path:
 
 from common.alerting import (  # noqa: E402
     build_feishu_report_card,
-    deliver_out_of_band_card,
+    deliver_report_card,
 )
 from common.deploy.release_markers import (  # noqa: E402
     PRODUCTION_MARKER_PREFIX,
@@ -112,9 +113,7 @@ def main() -> int:
         print(card)
         return 0
     try:
-        deliver_out_of_band_card(
-            env, card, fallback_text=card["header"]["title"]["content"]
-        )
+        deliver_report_card(env, card, fallback_text=card["header"]["title"]["content"])
     except Exception as exc:  # noqa: BLE001 - a reminder never fails the run
         print(f"::warning::promotion reminder not delivered: {type(exc).__name__}")
     return 0

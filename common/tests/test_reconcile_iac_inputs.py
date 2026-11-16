@@ -4793,3 +4793,62 @@ def test_open_or_update_pr_shared_by_app_and_sdk_sync() -> None:
             }
     assert "_open_or_update_pr" in callees["sync_app_releases"]
     assert "_open_or_update_pr" in callees["sync_sdk_pins"]
+
+
+def test_run_scheduled_app_audits_waits_for_staging_health_when_enabled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """#1708: WAIT_FOR_STAGING_READY=1 polls /health before launching staging scheduled_audit."""
+    from infra2_sdk.manifests import HookRunResult
+
+    events: list[tuple[str, object]] = []
+    attempts = {"count": 0}
+
+    class _HealthResp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    def _fake_urlopen(req_or_url, timeout=5):
+        attempts["count"] += 1
+        events.append(("health", attempts["count"]))
+        if attempts["count"] < 3:
+            raise OSError("restarting")
+        return _HealthResp()
+
+    def _fake_exec(manifest, slot, *, app_url, environment, version_ref, cwd, **_kw):
+        events.append(("hook", (manifest.service, app_url, environment)))
+        return HookRunResult(
+            service=manifest.service,
+            slot=slot,
+            environment=environment,
+            app_url=app_url,
+            version_ref=version_ref,
+            status="pass",
+            exit_code=0,
+            duration_seconds=0.02,
+        )
+
+    monkeypatch.setenv("WAIT_FOR_STAGING_READY", "1")
+    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen)
+    monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
+    monkeypatch.setattr(reconcile.time, "sleep", lambda _s: None)
+
+    res = reconcile.run_scheduled_app_audits(
+        ROOT,
+        target_env="staging",
+        slot="scheduled_audit",
+        services=["platform/todo"],
+        force_replay=True,
+    )
+    assert len(res) == 1 and res[0]["ok"] is True
+    assert events == [
+        ("health", 1),
+        ("health", 2),
+        ("health", 3),
+        ("hook", ("platform/todo", "https://todo-staging.zitian.party", "staging")),
+    ]

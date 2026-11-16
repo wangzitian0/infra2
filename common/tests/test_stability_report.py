@@ -546,7 +546,7 @@ def test_non_dry_run_delivers_card_by_default_and_text_when_requested(
     delivered: list[tuple[str, object]] = []
     monkeypatch.setattr(
         report,
-        "deliver_out_of_band_card",
+        "deliver_report_card",
         lambda env, card, **kw: delivered.append(("card", card)),
     )
 
@@ -798,7 +798,7 @@ def test_run_passes_the_watchdog_outcome_to_the_delivered_card(
     )
     cards: list[dict] = []
     monkeypatch.setattr(
-        report, "deliver_out_of_band_card", lambda env, card, **kw: cards.append(card)
+        report, "deliver_report_card", lambda env, card, **kw: cards.append(card)
     )
     code = report.run(
         {"INFRA2_WATCHDOG_OUTCOME": "failure"},
@@ -827,3 +827,38 @@ def test_cadence_label_comes_from_the_window_length(
     assert f"Infra2 {cadence} availability" in report.build_report_message(summary)
     card = report.build_stability_card(summary)
     assert f"Infra2 {cadence} availability" in card["header"]["title"]["content"]
+
+
+def test_stability_report_run_delivers_to_reports_chat_not_pager_chat(
+    tmp_path, monkeypatch
+) -> None:
+    """#1707: stability_report.run posts its card to INFRA2_REPORTS_FEISHU_CHAT_ID, never PAGER_CHAT."""
+    import common.alerting as alerting
+
+    report = _load_module()
+    paths = _files(
+        tmp_path, _ledger("production"), _ledger("staging"), {"ok": True, "outages": []}
+    )
+    sent: list[dict] = []
+    monkeypatch.setattr(
+        alerting,
+        "deliver_feishu_app_card",
+        lambda **kw: sent.append(kw) or {"data": {"message_id": "om_r"}},
+    )
+    env = {
+        "INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE": "feishu_app",
+        "INFRA2_OUT_OF_BAND_FEISHU_APP_ID": "cli_pager",
+        "INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET": "pager_sec",
+        "INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID": "oc_pager",
+        "INFRA2_REPORTS_FEISHU_APP_ID": "cli_reports",
+        "INFRA2_REPORTS_FEISHU_APP_SECRET": "reports_sec",
+        "INFRA2_REPORTS_FEISHU_CHAT_ID": "oc_reports",
+    }
+    rc = report.run(
+        env,
+        ledger_files={"production": paths["production"], "staging": paths["staging"]},
+        outages_file=paths["outages"],
+        now=NOW,
+    )
+    assert rc == 0
+    assert [call["chat_id"] for call in sent] == ["oc_reports"]

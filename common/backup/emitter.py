@@ -7,10 +7,16 @@ execution targets for host backup runners.
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Sequence
 
 from common.backup.verification import BackupEntry, load_backup_inventory
+
+LEDGER_SERVICE_ID = "observability/availability_ledger"
+LEDGER_FILENAME = "availability-ledger.json"
 
 
 @dataclass(frozen=True)
@@ -89,6 +95,7 @@ def emit_backup_targets(
     data_root: str = "/data",
     environment: str = "production",
     suffix: str | None = None,
+    ledger_dir: str | Path | None = None,
 ) -> list[HostBackupTarget]:
     """Emit sorted host backup targets from the backup inventory."""
     if entries is None:
@@ -99,6 +106,22 @@ def emit_backup_targets(
 
     adapter = DokployDockerAdapter(data_root=data_root, suffix=suffix)
     targets = [adapter.resolve(entry) for entry in entries]
+    if ledger_dir is not None and str(ledger_dir).strip():
+        ledger_path = Path(str(ledger_dir).strip())
+        if (ledger_path / LEDGER_FILENAME).is_file():
+            targets.append(
+                HostBackupTarget(
+                    service_id=LEDGER_SERVICE_ID,
+                    kind="path",
+                    primary_target=str(ledger_path),
+                )
+            )
+        elif ledger_path.is_dir():
+            print(
+                f"WARN {LEDGER_SERVICE_ID}: directory {ledger_path} exists "
+                f"without {LEDGER_FILENAME}; skipping archive",
+                file=sys.stderr,
+            )
     targets.sort(key=lambda t: (_kind_priority(t), t.service_id))
     return targets
 
@@ -108,6 +131,7 @@ def emit_runner_lines(
     data_root: str = "/data",
     environment: str = "production",
     suffix: str | None = None,
+    ledger_dir: str | Path | None = None,
 ) -> list[str]:
     """Emit pipe-delimited runner lines for host backup scripts."""
     targets = emit_backup_targets(
@@ -115,6 +139,7 @@ def emit_runner_lines(
         data_root=data_root,
         environment=environment,
         suffix=suffix,
+        ledger_dir=ledger_dir,
     )
     return [target.to_runner_line() for target in targets]
 
@@ -138,12 +163,35 @@ def main() -> int:
         default=None,
         help="Explicit container and path suffix (e.g. -staging).",
     )
+    parser.add_argument(
+        "--ledger-dir",
+        default=None,
+        help="Host availability ledger directory.",
+    )
     args = parser.parse_args()
 
+    effective_suffix = (
+        args.suffix
+        if args.suffix is not None
+        else ("-staging" if args.environment == "staging" else "")
+    )
+    default_ledger = Path(
+        f"{os.environ.get('BACKUP_LEDGER_ROOT', '/var/lib/infra2-availability-ledger')}{effective_suffix}"
+    )
+    ledger_dir = (
+        args.ledger_dir
+        if args.ledger_dir is not None
+        else (
+            str(default_ledger)
+            if (default_ledger / LEDGER_FILENAME).is_file()
+            else None
+        )
+    )
     lines = emit_runner_lines(
         data_root=args.data_root,
         environment=args.environment,
         suffix=args.suffix,
+        ledger_dir=ledger_dir,
     )
     for line in lines:
         print(line)

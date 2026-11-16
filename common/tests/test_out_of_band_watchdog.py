@@ -2578,8 +2578,8 @@ def test_a_dry_run_prints_a_page_holding_only_the_paging_classes(
 
 
 def test_the_report_secrets_reach_only_the_run_watchdog_step() -> None:
-    """#908: without them report-only failures page as a config failure; with them
-    in the job env every other step (inline scripts included) would hold them."""
+    """#908 & #1707: keep report secrets out of job env so unrelated steps/inline scripts
+    cannot read them; inject them only on the watchdog and daily report steps."""
     from common.alerting import INFRA2_REPORTS_ENV
 
     job = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["watchdog"]
@@ -2587,15 +2587,20 @@ def test_the_report_secrets_reach_only_the_run_watchdog_step() -> None:
         step.get("name"): sorted(set(INFRA2_REPORTS_ENV) & set(step.get("env") or {}))
         for step in job["steps"]
     }
-    run = next(step for step in job["steps"] if step.get("name") == "Run watchdog")
+    report_steps = (
+        "Run watchdog",
+        "Build and send daily positive stability report",
+    )
 
     assert set(INFRA2_REPORTS_ENV).isdisjoint(job["env"])
     assert {name: found for name, found in holders.items() if found} == {
-        "Run watchdog": sorted(INFRA2_REPORTS_ENV)
+        step_name: sorted(INFRA2_REPORTS_ENV) for step_name in report_steps
     }
-    assert {name: run["env"][name] for name in INFRA2_REPORTS_ENV} == {
-        name: "${{ secrets.%s }}" % name for name in INFRA2_REPORTS_ENV
-    }
+    for step_name in report_steps:
+        step = next(item for item in job["steps"] if item.get("name") == step_name)
+        assert {name: step["env"][name] for name in INFRA2_REPORTS_ENV} == {
+            name: "${{ secrets.%s }}" % name for name in INFRA2_REPORTS_ENV
+        }
 
 
 def test_workflow_records_the_watchdog_verdicts_as_issues() -> None:

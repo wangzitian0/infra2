@@ -1,4 +1,5 @@
 """One Feishu card for each stage task, rendered from its stage records (#1645).
+# alert-delivery-exempt: stage progress card helper routed by stage env; review=2027-05-01
 
 A stage task (a staging soak of one release tag, a production promotion) writes the records
 ``pre``, ``operation`` and ``post``. This module renders the records of one (env, subject) as
@@ -79,10 +80,17 @@ def show_stage_card(
 ) -> str:
     """Create the card (no ``message_id``) or update it. Return the message id, or ``message_id``."""
     try:
-        if common.alerting.out_of_band_app_config(env)["mode"] != "feishu_app":
+        stage_env = records[-1].env.split(".", 1)[0] if records else ""
+        is_report = common.alerting.is_report_only_environment(stage_env)
+        config = (
+            common.alerting.reports_app_config(env)
+            if is_report
+            else common.alerting.out_of_band_app_config(env)
+        )
+        if config["mode"] != "feishu_app":
             print(
-                "::warning title=Stage card::Feishu is in webhook mode, which cannot "
-                "update a card; the stage records are written and no card is sent",
+                "::warning title=Stage card::Feishu is in webhook mode or reports app is "
+                "unconfigured; the stage records are written and no card is sent",
                 file=sys.stderr,
                 flush=True,
             )
@@ -90,7 +98,7 @@ def show_stage_card(
         card = render_stage_card(records)
         return (
             bounded(
-                lambda: publish_card(env, card, message_id),
+                lambda: publish_card(env, card, message_id, report=is_report),
                 STAGE_CARD_BUDGET_SECONDS,
                 message_id,
             )

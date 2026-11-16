@@ -1,4 +1,5 @@
 """One Feishu card for each production release.
+# alert-delivery-exempt: defines publish_card release/stage card primitive; review=2027-05-01
 
 A production deploy request waits for the owner before it deploys. Before this module,
 the only trace of the wait, of the deploy phases and of the result was a log line. This
@@ -181,6 +182,7 @@ def publish_card(
     message_id: str = "",
     *,
     timeout: float = 10.0,
+    report: bool = False,
 ) -> str:
     """Create the card (no ``message_id``) or replace it. Return the message id.
 
@@ -188,7 +190,11 @@ def publish_card(
     needs the Feishu app mode and raises when a call fails: the callers turn that into a
     warning. In another mode it returns an empty string.
     """
-    config = common.alerting.out_of_band_app_config(env)
+    config = (
+        common.alerting.reports_app_config(env)
+        if report
+        else common.alerting.out_of_band_app_config(env)
+    )
     if config["mode"] != "feishu_app":
         return ""
     if message_id:

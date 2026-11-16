@@ -111,3 +111,19 @@ def test_staging_inventory_and_emitter_exclude_prod_only_services() -> None:
     assert len(staging_entries) == 14
     assert prod_only.isdisjoint(staging_entry_ids)
     assert staging_target_ids == staging_entry_ids
+
+
+def test_emitter_includes_availability_ledger_when_present_and_keeps_s3_last(
+    tmp_path: Path,
+) -> None:
+    """#1694: emitter owns observability/availability_ledger so staging emits 15 targets with s3 last."""
+    ledger_dir = tmp_path / "ledger"
+    ledger_dir.mkdir()
+    (ledger_dir / "availability-ledger.json").write_text("{}", encoding="utf-8")
+
+    targets = emit_backup_targets(environment="staging", ledger_dir=ledger_dir)
+    ids = {target.service_id for target in targets}
+
+    assert len(targets) == 15
+    assert "observability/availability_ledger" in ids
+    assert targets[-1].service_id == "platform/s3"

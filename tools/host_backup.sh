@@ -99,7 +99,7 @@ if [ -z "${SERVICES:-}" ]; then
   REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
   # The script never updates the checkout. The owner approves each commit, and the
   # checkout moves to that commit by a fast-forward merge (issue #1688).
-  SERVICES="$(PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}" python3 -m common.backup.emitter --environment "${ENVIRONMENT}" --data-root "${DATA_ROOT}")"
+  SERVICES="$(PYTHONPATH="${REPO_ROOT}:${PYTHONPATH:-}" python3 -m common.backup.emitter --environment "${ENVIRONMENT}" --data-root "${DATA_ROOT}" --ledger-dir "${LEDGER_DIR}")"
 fi
 if [ -z "${SERVICES//[[:space:]]/}" ]; then
   # An empty list would write a manifest with 0 artifacts and exit 0.
@@ -209,24 +209,6 @@ while IFS= read -r line; do
     failures+=("${line%%|*}")
   fi
 done <<< "${SERVICES}"
-
-if [ -d "${LEDGER_DIR}" ] && [ -f "${LEDGER_DIR}/availability-ledger.json" ]; then
-  set +e
-  (
-    set -e
-    archive="${RUN_DIR}/observability_availability_ledger_${TS}.tar.gz"
-    archive_tree "observability/availability_ledger" "${archive}" "${LEDGER_DIR}" .
-    emit_artifact "observability/availability_ledger" "${archive}" "filesystem_archive"
-  ) < /dev/null
-  rc=$?
-  set -e
-  if [ "${rc}" -ne 0 ]; then
-    echo "FAILED observability/availability_ledger (exit ${rc})" >&2
-    failures+=("observability/availability_ledger")
-  fi
-elif [ -d "${LEDGER_DIR}" ]; then
-  echo "WARN observability/availability_ledger: directory ${LEDGER_DIR} exists without availability-ledger.json; skipping archive" >&2
-fi
 
 {
   echo "{"

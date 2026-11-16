@@ -751,3 +751,107 @@ def test_look_up_soak_fetches_hook_results_artifacts_across_cumulative_tags_and_
     assert rc_missing == 1
     out_missing = capsys.readouterr().out
     assert "missing staging_gate for truealpha/app@v0.2.90" in out_missing
+
+
+def test_hook_results_in_window_recovers_tag_with_green_dispatch_rerun_on_same_sha(
+    capsys,
+) -> None:
+    """#1563: a tag commit whose initial push soak failed still satisfies the cumulative
+    window when a subsequent workflow_dispatch run on the same commit passed staging_gate."""
+    sha_49 = "c" * 40
+    sha_50 = "d" * 40
+    run_49_failed = run("failure", branch="v3.1.49", sha=sha_49, n=49)
+    run_49_dispatch_green = run(
+        "success", event="workflow_dispatch", branch="main", sha=sha_49, n=149
+    )
+    run_50_green = run("success", branch="v3.1.50", sha=sha_50, n=50)
+
+    zip_49_dispatch = _reconcile_artifact_zip(
+        [
+            {
+                "service": "finance_report/app",
+                "slot": "staging_gate",
+                "version_ref": "v0.2.61",
+                "status": "pass",
+                "ok": True,
+            }
+        ]
+    )
+    zip_50_green = _reconcile_artifact_zip(
+        [
+            {
+                "service": "truealpha/app",
+                "slot": "staging_gate",
+                "version_ref": "v0.2.89",
+                "status": "pass",
+                "ok": True,
+            }
+        ]
+    )
+
+    def _runner(argv, *, text=True, **_kw):
+        if argv[:2] == ["git", "rev-parse"]:
+            return _completed(sha_50 + "\n")
+        path = argv[2]
+        if "event=push" in path:
+            return _completed(
+                json.dumps({"workflow_runs": [run_50_green, run_49_failed]})
+            )
+        if f"head_sha={sha_49}" in path:
+            return _completed(
+                json.dumps({"workflow_runs": [run_49_dispatch_green, run_49_failed]})
+            )
+        if path == "repos/o/r/actions/runs/149/artifacts":
+            return _completed(
+                json.dumps(
+                    {
+                        "artifacts": [
+                            {
+                                "id": 9149,
+                                "name": "iac-input-reconcile-result",
+                                "expired": False,
+                            }
+                        ]
+                    }
+                )
+            )
+        if path == "repos/o/r/actions/runs/50/artifacts":
+            return _completed(
+                json.dumps(
+                    {
+                        "artifacts": [
+                            {
+                                "id": 9050,
+                                "name": "iac-input-reconcile-result",
+                                "expired": False,
+                            }
+                        ]
+                    }
+                )
+            )
+        if path == "repos/o/r/actions/artifacts/9149/zip":
+            assert text is False
+            return subprocess.CompletedProcess(argv, 0, zip_49_dispatch, b"")
+        if path == "repos/o/r/actions/artifacts/9050/zip":
+            assert text is False
+            return subprocess.CompletedProcess(argv, 0, zip_50_green, b"")
+        raise AssertionError(f"unexpected gh/git call: {argv}")
+
+    client = GhClient("o/r", run=_runner)
+    rc = main(
+        [
+            "v3.1.50",
+            "--since-tag",
+            "v3.1.48",
+            "--require-staging-gate",
+            "finance_report/app=v0.2.61",
+            "--require-staging-gate",
+            "truealpha/app=v0.2.89",
+            "--attempts",
+            "1",
+            "--delay",
+            "0",
+        ],
+        client=client,
+    )
+    assert rc == 0, capsys.readouterr().out
