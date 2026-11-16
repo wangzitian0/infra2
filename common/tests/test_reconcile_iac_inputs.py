@@ -4921,3 +4921,49 @@ def test_preview_gate_passes_infra2_touched_files_from_compare(
         captured["ambient_env"].get("INFRA2_TOUCHED_FILES")
         == "apps/frontend/src/app/(main)/portfolio/page.tsx apps/backend/src/routers/portfolio.py"
     )
+
+
+def test_preview_gate_touched_files_survives_build_hook_env(tmp_path) -> None:
+    """Real execute_app_hook_slot passes INFRA2_TOUCHED_FILES to the subprocess even if manifest omits it."""
+    from common.deploy import app_contract
+    from infra2_sdk.manifests import HOOK_SLOTS, RuntimeHooksManifest
+
+    manifest = RuntimeHooksManifest.from_dict(
+        {
+            "schema_version": 2,
+            "service": "finance_report/app",
+            "slots": {
+                slot_name: {
+                    "run": "echo ok",
+                    "bootstrap": "",
+                    "timeout_seconds": 30,
+                    "required_env": [],
+                    "optional_env": [],
+                }
+                for slot_name in HOOK_SLOTS
+            },
+        }
+    )
+    seen_envs: list[dict[str, str]] = []
+
+    def _capture_runner(argv, **kwargs):
+        seen_envs.append(dict(kwargs.get("env") or {}))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    res = app_contract.execute_app_hook_slot(
+        manifest,
+        "preview_gate",
+        app_url="https://report-branch-main.zitian.party",
+        environment="preview",
+        version_ref="2" * 7,
+        cwd=tmp_path,
+        ambient_env={
+            "PATH": "/usr/bin",
+            "INFRA2_TOUCHED_FILES": "apps/frontend/src/app/(main)/portfolio/page.tsx",
+        },
+        runner=_capture_runner,
+    )
+    assert res.status == "pass"
+    assert seen_envs and seen_envs[-1].get("INFRA2_TOUCHED_FILES") == (
+        "apps/frontend/src/app/(main)/portfolio/page.tsx"
+    )

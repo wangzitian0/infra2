@@ -102,6 +102,7 @@ _HOOK_OPTIONAL_CONTEXT_ENV: tuple[str, ...] = (
     "INFRA2_HOOK_APP_URL",
     "BASE_URL",
     "DEPLOY_ENV",
+    "INFRA2_TOUCHED_FILES",
 )
 #: Env names that the runner fills from the deploy request when the ambient env holds none.
 #: A manifest may list these in ``required_env`` without a secret.

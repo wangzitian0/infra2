@@ -528,16 +528,21 @@ def _compute_preview_touched_files(
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> list[str]:
     """Return changed repo-relative paths between ``prev_sha`` and ``main_sha``."""
-    if not prev_sha or not main_sha or prev_sha == main_sha or not repo_slug:
+    if (
+        not prev_sha
+        or is_zero_sha(prev_sha)
+        or not main_sha
+        or prev_sha == main_sha
+        or not repo_slug
+    ):
         return []
     res = runner(
         [
             "gh",
             "api",
             f"repos/{repo_slug}/compare/{prev_sha}...{main_sha}",
-            "--paginate",
             "--jq",
-            ".files[].filename",
+            "(.files // [])[].filename",
         ],
         cwd=repo_root,
         capture_output=True,
@@ -547,7 +552,7 @@ def _compute_preview_touched_files(
     if res.returncode != 0:
         detail = (res.stderr or res.stdout or "").strip()
         print(
-            f"warning: compare {repo_slug} {prev_sha[:7]}...{main_sha[:7]} failed ({detail}); skipping INFRA2_TOUCHED_FILES",
+            f"::warning::compare {repo_slug} {prev_sha[:7]}...{main_sha[:7]} failed ({detail}); skipping INFRA2_TOUCHED_FILES",
             file=sys.stderr,
         )
         return []
@@ -650,6 +655,8 @@ def verify_and_cut_app_preview_tag(
             ambient_env = dict(os.environ)
             if touched_files:
                 ambient_env["INFRA2_TOUCHED_FILES"] = " ".join(touched_files)
+            else:
+                ambient_env.pop("INFRA2_TOUCHED_FILES", None)
             hook_res = execute_app_hook_slot(
                 manifest,
                 stage_hook_plan("preview").post_slot,
