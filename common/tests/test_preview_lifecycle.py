@@ -699,6 +699,54 @@ def test_down_falls_back_to_legacy_pr_compose_in_test_env():
     assert all(env_name != "test" for _, _, env_name in fake_branch.found)
 
 
+def test_down_fails_when_container_remains_after_second_read(monkeypatch):
+    """#1650 AC6: --down fails non-zero when read 1 sees 0 containers and read 2 sees a survivor."""
+    import common.deploy.dokploy_client as dokploy_client
+    import common.deploy.v2 as deploy_v2
+
+    class SecondReadSurvivorDokploy(FakeDokploy):
+        def __init__(self) -> None:
+            super().__init__(existing={"composeId": "cmp-second-read"})
+            self.reads = 0
+
+        def get_containers(self):
+            self.reads += 1
+            if self.reads == 1:
+                return []
+            return [{"name": "/finance-report-pr-5"}]
+
+    unit_client = SecondReadSurvivorDokploy()
+    res = pl.down(
+        "pr",
+        5,
+        domain="zitian.party",
+        client=unit_client,
+        attempts=2,
+        _sleep=lambda _seconds: None,
+    )
+    assert unit_client.reads == 2
+    assert res.containers_cleared is False
+
+    cli_client = SecondReadSurvivorDokploy()
+    monkeypatch.setattr(dokploy_client, "get_dokploy", lambda **_kwargs: cli_client)
+    monkeypatch.setattr(pl.time, "sleep", lambda _seconds: None)
+    rc = deploy_v2.main(
+        [
+            "--type",
+            "preview/pr",
+            "--version-ref",
+            "5",
+            "--iac-ref",
+            "main",
+            "--domain",
+            "zitian.party",
+            "--down",
+        ]
+    )
+    assert rc == 1
+    assert cli_client.reads == 6
+
+
 # --- the readiness poller --------------------------------------------------------
 
 

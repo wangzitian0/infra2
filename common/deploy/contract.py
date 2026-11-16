@@ -138,12 +138,11 @@ def worker_telemetry_env(
 
 
 # finance_report and truealpha/app have a BESPOKE deploy_v2 backend (fixed-compose
-# promote path via common.deploy.promote; finance_report additionally supports the preview
-# lifecycle via common.deploy.preview — truealpha/app does not yet, #500). EVERY OTHER
-# service is ``iac_pinned`` and routes to the iac_runner /deploy webhook — and its facts
-# (subdomain, prod_only) are DERIVED from its deploy.py Deployer class via
-# common.core.registry, the single source of truth (Infra-013: never hand-copy service
-# facts into a parallel list).
+# promote path via common.deploy.promote; both support the preview lifecycle via
+# common.deploy.preview). EVERY OTHER service is ``iac_pinned`` and routes to the
+# iac_runner /deploy webhook — and its facts (subdomain, prod_only) are DERIVED from its
+# deploy.py Deployer class via common.core.registry, the single source of truth
+# (Infra-013: never hand-copy service facts into a parallel list).
 _APP_KEY = "finance_report/app"
 _TRUEALPHA_APP_KEY = "truealpha/app"
 
