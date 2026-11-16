@@ -535,6 +535,7 @@ jobs:
           name: iac-input-reconcile-result
           path: reconcile-result.json
           if-no-files-found: ignore
+          overwrite: true
 
       - name: Upload stage record pre
         uses: actions/upload-artifact@v7
@@ -544,6 +545,7 @@ jobs:
           name: ${{ env.STAGE_RECORD_PRE }}
           path: stage-records/${{ env.STAGE_RECORD_PRE }}.json
           if-no-files-found: ignore
+          overwrite: true
 
       - name: Upload stage record operation
         uses: actions/upload-artifact@v7
@@ -553,6 +555,7 @@ jobs:
           name: ${{ env.STAGE_RECORD_OPERATION }}
           path: stage-records/${{ env.STAGE_RECORD_OPERATION }}.json
           if-no-files-found: ignore
+          overwrite: true
 
       - name: Upload stage record post
         uses: actions/upload-artifact@v7
@@ -562,3 +565,4 @@ jobs:
           name: ${{ env.STAGE_RECORD_POST }}
           path: stage-records/${{ env.STAGE_RECORD_POST }}.json
           if-no-files-found: ignore
+          overwrite: true
