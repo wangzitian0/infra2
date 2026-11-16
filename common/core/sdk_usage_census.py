@@ -159,20 +159,25 @@ def default_consumers(root: Path = REPO_ROOT) -> dict[str, Path]:
 def list_repo_files(root: Path, suffix: str | None = None) -> list[str]:
     """List tracked or untracked non-ignored files in a repository root."""
     if (root / ".git").exists():
-        proc = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(root),
-                "ls-files",
-                "--cached",
-                "--others",
-                "--exclude-standard",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            proc = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "ls-files",
+                    "--cached",
+                    "--others",
+                    "--exclude-standard",
+                ],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"git ls-files failed for {root}: {(exc.stderr or '').strip()}"
+            ) from exc
         raw = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
     else:
         raw = [
@@ -301,6 +306,7 @@ def load_surface_justifications(
     for candidate in (
         pkg_root.parent.parent / "tests" / "surface.json",
         pkg_root.parent / "tests" / "surface.json",
+        REPO_ROOT / "repos" / "infra2-sdk" / "tests" / "surface.json",
     ):
         if candidate.is_file():
             try:
