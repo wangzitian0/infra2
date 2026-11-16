@@ -44,6 +44,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -57,10 +59,24 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Preflight — SIGNOZ_API_KEY present
+        env:
+          INPUT_MODE: ${{ inputs.mode || 'apply' }}
         run: |
           if [ -z "${SIGNOZ_API_KEY}" ]; then
             echo "::error::SIGNOZ_API_KEY secret is not set — cannot apply observability config."
             exit 1
+          fi
+          if [ "${INPUT_MODE}" != "canary" ]; then
+            marker="$(git tag --list 'production/v*.*.*' --sort=-v:refname | head -n1 || true)"
+            if [ -z "${marker}" ]; then
+              echo "::error::No production/v*.*.* marker tag found — cannot verify platform-alerting parity."
+              exit 1
+            fi
+            prod_tag="${marker#production/}"
+            if ! git diff --quiet "${prod_tag}" HEAD -- platform/12.alerting common/alerting common/observability_dashboards.py; then
+              echo "::error::Alerting/observability code changed since ${prod_tag}; promote platform-alerting to production before applying observability rules."
+              exit 1
+            fi
           fi
 
       - name: Canary — SigNoz alert rule payload

@@ -242,3 +242,20 @@ def test_unreadable_e2e_state_is_a_warning_note_not_silence(monkeypatch) -> None
         result.ok and "could not be read" in result.note and "HTTP 502" in result.note
     )
     assert pd.UNREADABLE == "unreadable"
+
+
+def test_report_signal_calling_pager_card_primitive_fails(tmp_path: Path) -> None:
+    """#1707: a module declaring a type=report signal must not call a pager card primitive."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "common").mkdir()
+    rogue = tmp_path / "tools" / "leaky_report.py"
+    rogue.write_text(
+        "# alerts-as: monthly-ops-summary\n"
+        "from common.alerting import deliver_out_of_band_card\n"
+        "deliver_out_of_band_card({}, {})\n",
+        encoding="utf-8",
+    )
+    errors = lint_python_callsites(root=tmp_path, signals=registered_signal_names())
+    assert len(errors) == 1
+    assert "deliver_out_of_band_card" in errors[0]
+    assert "type=report" in errors[0]

@@ -21,6 +21,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -1869,6 +1871,30 @@ def run_post_deploy_app_hooks(
     return hook_results
 
 
+def _wait_for_staging_app_ready(
+    app_url: str,
+    *,
+    timeout_seconds: float = 90.0,
+) -> None:
+    """Poll staging ``/health`` until HTTP < 500 or timeout elapses (#1708)."""
+    health_url = f"{app_url.rstrip('/')}/health"
+    deadline = time.monotonic() + max(0.0, timeout_seconds)
+    while True:
+        try:
+            with urllib.request.urlopen(health_url, timeout=5) as response:
+                status = getattr(response, "status", 200)
+                if status < 500:
+                    return
+        except urllib.error.HTTPError as exc:
+            if exc.code < 500:
+                return
+        except OSError:
+            pass
+        if time.monotonic() >= deadline:
+            return
+        time.sleep(2.0)
+
+
 def run_scheduled_app_audits(
     repo_root: Path = REPO_ROOT,
     *,
@@ -1980,6 +2006,11 @@ def run_scheduled_app_audits(
                 runner=runner,
             )
         try:
+            if (
+                effective_ambient.get("WAIT_FOR_STAGING_READY") == "1"
+                and hook_env_name == "staging"
+            ):
+                _wait_for_staging_app_ready(app_url)
             _res, entry = _run_hook_slot_with_dedup(
                 manifest,
                 slot,

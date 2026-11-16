@@ -1,4 +1,5 @@
 """Watchdog weekly and daily digest domain logic (#1311).
+# alerts-as: monthly-ops-summary
 
 Canonical domain module for aggregating GitHub Actions watchdog runs, auditing
 structured alert-recall logs, checking stale open issues, probing estate
@@ -27,7 +28,7 @@ from infra2_sdk.routing import resolve_service_url
 from common.alerting import (
     REPORT_TITLE_PREFIX,
     build_feishu_report_card,
-    deliver_out_of_band_card,
+    deliver_report_card,
 )
 from common.alerting.types import _one_line
 from common.core.registry import domain_for_service
@@ -1246,8 +1247,8 @@ def deliver_digest(
     card: dict[str, Any],
     card_sender=None,
 ) -> None:
-    """Deliver the digest card via the shared out-of-band Feishu webhook/app path."""
-    (card_sender or deliver_out_of_band_card)(env, card, fallback_text=message)
+    """Deliver the digest card via the shared infra2 reports Feishu app path (#1707)."""
+    (card_sender or deliver_report_card)(env, card, fallback_text=message)
 
 
 def _env_enabled(env: Mapping[str, str], name: str, *, default: str = "1") -> bool:

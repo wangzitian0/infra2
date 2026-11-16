@@ -152,6 +152,7 @@ def build_signoz_log_alert_rule_payload(
 
     ``alertOnAbsent`` stays off: no error logs is the healthy state for this count.
     """
+    from common.alerting.delivery import is_report_only_environment
     from common.core.service_identity import ServiceIdentity
 
     identity = ServiceIdentity.build(
@@ -160,6 +161,12 @@ def build_signoz_log_alert_rule_payload(
         component=service_name,
         service_name=service_name,
     )
+    labels = {
+        **identity.alert_labels(severity=severity),
+        "team": "infra",
+    }
+    if is_report_only_environment(identity.environment):
+        labels["delivery"] = "report"
     log_filter = " AND ".join(
         (
             f"resource.service.name = {_signoz_filter_literal(service_name)}",
@@ -214,10 +221,7 @@ def build_signoz_log_alert_rule_payload(
             "kind": "rolling",
             "spec": {"evalWindow": eval_window, "frequency": frequency},
         },
-        "labels": {
-            **identity.alert_labels(severity=severity),
-            "team": "infra",
-        },
+        "labels": labels,
         "annotations": _rule_annotations(summary, service_name, identity, runbook_url),
         "notificationSettings": {
             "groupBy": [],
@@ -257,6 +261,7 @@ def build_signoz_metric_alert_rule_payload(
     v0.143). A PromQL rule that must fire on missing data says so in the query,
     with ``absent_over_time(...)``.
     """
+    from common.alerting.delivery import is_report_only_environment
     from common.core.service_identity import ServiceIdentity
 
     identity = ServiceIdentity.build(
@@ -265,6 +270,12 @@ def build_signoz_metric_alert_rule_payload(
         component=service_name,
         service_name=service_name,
     )
+    labels = {
+        **identity.alert_labels(severity=severity),
+        "team": "infra",
+    }
+    if is_report_only_environment(identity.environment):
+        labels["delivery"] = "report"
     return {
         "alert": _required("alert_name", alert_name),
         "alertType": "METRIC_BASED_ALERT",
@@ -307,10 +318,7 @@ def build_signoz_metric_alert_rule_payload(
             "kind": "rolling",
             "spec": {"evalWindow": eval_window, "frequency": frequency},
         },
-        "labels": {
-            **identity.alert_labels(severity=severity),
-            "team": "infra",
-        },
+        "labels": labels,
         "annotations": _rule_annotations(summary, service_name, identity, runbook_url),
         "notificationSettings": {
             "groupBy": group_by or [],

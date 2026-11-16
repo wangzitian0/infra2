@@ -36,14 +36,22 @@ SIGNALS_YAML = ROOT / "docs/ssot/watchdog-signals.yaml"
 OPS_CHECKS = ROOT / ".github/workflows/ops-checks.yml"
 PRIMITIVES = (
     "deliver_out_of_band_alert(",
+    "deliver_out_of_band_card(",
+    "deliver_report_card(",
     "post_alert_bridge_payload(",
     "deliver_infra2_report(",
+    "publish_card(",
+)
+PAGER_ONLY_PRIMITIVES = (
+    "deliver_out_of_band_alert(",
+    "deliver_out_of_band_card(",
 )
 # The primitives' own defining modules and the shared engine are the plumbing,
 # not callsites; tests exercise callsites by design.
 SCAN_EXEMPT_FILES = {
     "tools/out_of_band_watchdog.py",  # defines deliver_out_of_band_alert
     "common/alerting/delivery.py",  # defines deliver_infra2_report + the shared engine
+    "common/alerting/release_card.py",  # defines publish_card release/stage card primitive
     "common/observability/probes.py",  # defines post_alert_bridge_payload
     "common/core/no_new_wheels_lint.py",
 }
@@ -105,13 +113,26 @@ def day_report_self_signals(signals_yaml: Path = SIGNALS_YAML) -> set[str]:
     }
 
 
+def report_type_signals(signals_yaml: Path = SIGNALS_YAML) -> set[str]:
+    """Return every signal name registered as ``type: report`` (#1707)."""
+    return {
+        str(s.get("signal", ""))
+        for s in _load_signals(signals_yaml)
+        if s.get("type") == "report"
+    }
+
+
 def lint_python_callsites(
     root: Path = ROOT,
     signals: set[str] | None = None,
     *,
+    report_signals: set[str] | None = None,
     today: datetime.date | None = None,
 ) -> list[str]:
     signals = signals if signals is not None else registered_signal_names()
+    report_only = (
+        report_signals if report_signals is not None else report_type_signals()
+    )
     current_date = today if today is not None else datetime.date.today()
     errors: list[str] = []
     for folder in ("tools", "common"):
@@ -148,6 +169,14 @@ def lint_python_callsites(
                         f"{rel}: '# alerts-as: {name}' does not match any "
                         f"registered signal in {SIGNALS_YAML.name}"
                     )
+                elif name in report_only and "dedup_page(" not in text:
+                    for prim in PAGER_ONLY_PRIMITIVES:
+                        if prim in text:
+                            errors.append(
+                                f"{rel}: '# alerts-as: {name}' is a type=report "
+                                f"signal and must not call pager primitive "
+                                f"{prim.rstrip('(')} (#1707)"
+                            )
     return errors
 
 

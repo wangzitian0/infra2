@@ -309,7 +309,29 @@ def out_of_band_app_config(env: Mapping[str, str]) -> dict[str, str]:
     }
 
 
-def deliver_infra2_report(text: str, env: Mapping[str, str] | None = None) -> bool:
+def reports_app_config(env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Resolve Feishu app settings for the shared infra2 reports chat (#1707)."""
+    e = os.environ if env is None else env
+    app_id, app_secret, chat_id = (
+        e.get(name, "").strip() for name in INFRA2_REPORTS_ENV
+    )
+    return {
+        "mode": "feishu_app" if (app_id and app_secret and chat_id) else "unconfigured",
+        "app_id": app_id,
+        "app_secret": app_secret,
+        "chat_id": chat_id,
+        "api_base": (
+            e.get("INFRA2_REPORTS_FEISHU_API_BASE") or "https://open.feishu.cn"
+        ).strip(),
+    }
+
+
+def deliver_infra2_report(
+    text: str,
+    env: Mapping[str, str] | None = None,
+    *,
+    card: dict[str, Any] | None = None,
+) -> bool:
     """Post a daily-report card to the shared 'infra2 reports' Lark group via the infra2
     Feishu app bot. The single delivery entry every periodic REPORT reconciler uses (DNS drift,
     config drift, …) so the channel + credentials live in one place, not per-tool.
@@ -322,18 +344,42 @@ def deliver_infra2_report(text: str, env: Mapping[str, str] | None = None) -> bo
     Every report starts with ``REPORT_TITLE_PREFIX`` (#905), added here once for all
     senders, so a report never reads like a page.
     """
-    e = os.environ if env is None else env
-    app_id, app_secret, chat_id = (e.get(name, "") for name in INFRA2_REPORTS_ENV)
-    if not (app_id and app_secret and chat_id):
+    config = reports_app_config(env)
+    if config["mode"] != "feishu_app":
         return False
+    payload_card = (
+        card if card is not None else text_to_card(as_report(text), template="blue")
+    )
     common.alerting.deliver_feishu_app_card(
-        app_id=app_id,
-        app_secret=app_secret,
-        chat_id=chat_id,
-        card=text_to_card(as_report(text), template="blue"),
-        api_base=e.get("INFRA2_REPORTS_FEISHU_API_BASE", "https://open.feishu.cn"),
+        app_id=config["app_id"],
+        app_secret=config["app_secret"],
+        chat_id=config["chat_id"],
+        card=payload_card,
+        api_base=config["api_base"],
     )
     return True
+
+
+def deliver_report_card(
+    env: Mapping[str, str],
+    card: dict[str, Any],
+    *,
+    fallback_text: str | None = None,
+    timeout: float = 10.0,
+) -> dict[str, Any]:
+    """Deliver an interactive report card to the infra2 reports chat (#1707)."""
+    del fallback_text
+    config = reports_app_config(env)
+    if config["mode"] != "feishu_app":
+        return {}
+    return common.alerting.deliver_feishu_app_card(
+        app_id=config["app_id"],
+        app_secret=config["app_secret"],
+        chat_id=config["chat_id"],
+        api_base=config["api_base"],
+        card=card,
+        timeout=timeout,
+    )
 
 
 def as_report(text: str) -> str:

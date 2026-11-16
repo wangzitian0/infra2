@@ -141,6 +141,16 @@ def _chronic_digest_payload(
     )
 
 
+def _effective_failure_threshold(probe_name: str, default_threshold: int) -> int:
+    """Return effective consecutive-failure threshold for a probe (#1708)."""
+    base = max(1, default_threshold)
+    if probe_name == "host-cpu":
+        raw = os.getenv("INFRA_PROBE_HOST_CPU_FAILURE_THRESHOLD", "").strip()
+        if raw.isdigit() and int(raw) > 0:
+            return max(base, int(raw))
+    return base
+
+
 def _should_send(
     group_name: str,
     results: list,
@@ -185,7 +195,9 @@ def _should_send(
     page = {
         key
         for key, result in failing.items()
-        if streaks[key] >= max(1, failure_threshold) or result.spec.name in paged_names
+        if streaks[key]
+        >= _effective_failure_threshold(result.spec.name, failure_threshold)
+        or result.spec.name in paged_names
     }
     if not page:
         if not active:

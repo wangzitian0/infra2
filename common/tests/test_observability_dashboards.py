@@ -454,6 +454,11 @@ def test_promql_regex_matchers_are_anchored() -> None:
 # routers. truealpha: the llm-service probe paths (the legacy rules use `http.target`, the
 # stable ones `http.route`, and also leave out /livez and /readyz).
 _PROBE_ROUTE_EXCLUSION = ("http.route", "!~", "^(/health|/ping|/ping/toggle)$")
+_FINANCE_P95_ROUTE_EXCLUSION = (
+    "http.route",
+    "!~",
+    "^(/health|/ping|/ping/toggle|/statements/upload|/statements/[^/]+/review/approve|/chat|/chat/suggestions|/workflow/events|/workflow/status)$",
+)
 _TRUEALPHA_STABLE_PROBES = (
     "http.route",
     "!~",
@@ -512,7 +517,7 @@ _P95_RULES = [
         "finance-report-backend",
         "http.server.request.duration.bucket",
         r" \* 1000",
-        _PROBE_ROUTE_EXCLUSION,
+        _FINANCE_P95_ROUTE_EXCLUSION,
     ),
     (
         "TrueAlphaP95LatencyHigh",
@@ -3727,3 +3732,76 @@ def test_standard_rules_file_is_under_the_apply_path_filter() -> None:
     assert any(
         fnmatch.fnmatch("common/alerting/standard_rules.py", p) for p in patterns
     )
+
+
+def test_staging_signoz_rules_carry_delivery_report_label_and_prod_rules_do_not() -> (
+    None
+):
+    """#1649: staging SigNoz rules carry delivery=report while prod rules stay unlabelled."""
+    from common.alerting import (
+        build_signoz_log_alert_rule_payload,
+        build_signoz_metric_alert_rule_payload,
+    )
+
+    stg_log = build_signoz_log_alert_rule_payload(
+        alert_name="TestLogStaging",
+        service_name="finance-report-backend",
+        channel_names=["infra2-feishu-alerts-staging"],
+        summary="s",
+        environment="staging",
+    )
+    prod_log = build_signoz_log_alert_rule_payload(
+        alert_name="TestLogProd",
+        service_name="finance-report-backend",
+        channel_names=["infra2-feishu-alerts-production"],
+        summary="s",
+        environment="production",
+    )
+    stg_metric = build_signoz_metric_alert_rule_payload(
+        alert_name="TestMetricStaging",
+        promql="up",
+        channel_names=["infra2-feishu-alerts-staging"],
+        summary="s",
+        environment="staging",
+    )
+    prod_metric = build_signoz_metric_alert_rule_payload(
+        alert_name="TestMetricProd",
+        promql="up",
+        channel_names=["infra2-feishu-alerts-production"],
+        summary="s",
+        environment="production",
+    )
+    assert stg_log["labels"].get("delivery") == "report"
+    assert stg_metric["labels"].get("delivery") == "report"
+    assert "delivery" not in prod_log["labels"]
+    assert "delivery" not in prod_metric["labels"]
+
+
+def test_apply_observability_preflight_blocks_when_alerting_code_leads_production_marker() -> (
+    None
+):
+    """#1649: apply-observability.yml preflight blocks non-canary apply ahead of production marker."""
+    checkout = _apply_observability_step("Checkout")
+    assert checkout.get("with", {}).get("fetch-depth") == 0
+    preflight = _apply_observability_step("Preflight — SIGNOZ_API_KEY present")
+    script = preflight["run"]
+    assert "production/v*.*.*" in script
+    assert "git diff --quiet" in script
+    assert (
+        "platform/12.alerting common/alerting common/observability_dashboards.py"
+        in script
+    )
+
+
+def test_finance_p95_rule_excludes_slow_ai_and_upload_routes() -> None:
+    """#1708: FinanceReportP95LatencyHigh excludes slow upload, review, chat, and SSE routes."""
+    promql = _promql_rules()["FinanceReportP95LatencyHigh"]
+    for slow_route in (
+        "/statements/upload",
+        "/statements/[^/]+/review/approve",
+        "/chat",
+        "/chat/suggestions",
+        "/workflow/events",
+        "/workflow/status",
+    ):
+        assert slow_route in promql

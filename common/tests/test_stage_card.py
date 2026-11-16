@@ -18,6 +18,9 @@ APP_ENV = {
     "INFRA2_OUT_OF_BAND_FEISHU_APP_ID": "cli_app",
     "INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET": "secret",
     "INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID": "oc_chat",
+    "INFRA2_REPORTS_FEISHU_APP_ID": "cli_app",
+    "INFRA2_REPORTS_FEISHU_APP_SECRET": "secret",
+    "INFRA2_REPORTS_FEISHU_CHAT_ID": "oc_chat",
 }
 
 
@@ -160,3 +163,28 @@ def test_a_failing_feishu_call_warns_and_keeps_the_message_id(
     monkeypatch.setattr(common.alerting, "update_feishu_app_card", broken)
     assert stage_card.show_stage_card(APP_ENV, _records(), "om_abc") == "om_abc"
     assert "::warning" in capsys.readouterr().err
+
+
+def test_staging_stage_card_routes_to_reports_chat_and_prod_routes_to_pager_chat(
+    monkeypatch,
+) -> None:
+    """#1707: staging stage cards deliver to REPORT_CHAT and prod stage cards deliver to PAGER_CHAT."""
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        common.alerting,
+        "deliver_feishu_app_card",
+        lambda **kw: calls.append(kw) or {"data": {"message_id": "om_routed"}},
+    )
+    env = {
+        **APP_ENV,
+        "INFRA2_REPORTS_FEISHU_APP_ID": "cli_report",
+        "INFRA2_REPORTS_FEISHU_APP_SECRET": "report_secret",
+        "INFRA2_REPORTS_FEISHU_CHAT_ID": "oc_report_chat",
+    }
+    prod_record = StageRecord.from_dict(
+        {**_records()[0].to_dict(), "env": "prod.release_integrity"}
+    )
+
+    assert stage_card.show_stage_card(env, _records()[:1]) == "om_routed"
+    assert stage_card.show_stage_card(env, [prod_record]) == "om_routed"
+    assert [call["chat_id"] for call in calls] == ["oc_report_chat", "oc_chat"]
