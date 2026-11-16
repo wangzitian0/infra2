@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 from pathlib import Path
 
 import pytest
+
+from common.tests.conftest import load_repo_module
 
 from common.backup.verification import (
     BackupEntry,
@@ -28,9 +29,6 @@ from common.backup.rehearsal import (
     materialize_artifact,
     planned_artifact_path,
 )
-
-
-from common.tests.conftest import load_repo_module
 
 ROOT = Path(__file__).resolve().parents[2]
 

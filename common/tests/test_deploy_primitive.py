@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import functools
-import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -192,7 +191,9 @@ def test_fixed_finance_report_backend_health_budget_covers_cold_start():
     """The fixed stack must tolerate the same migration-heavy boot as preview."""
     from common.tests.conftest import assert_backend_cold_start_budget
 
-    assert_backend_cold_start_budget(FIXED_FINANCE_REPORT_COMPOSE, "\n  prefect-worker:")
+    assert_backend_cold_start_budget(
+        FIXED_FINANCE_REPORT_COMPOSE, "\n  prefect-worker:"
+    )
 
 
 def test_branch_is_reasserted_on_every_deploy_when_given():

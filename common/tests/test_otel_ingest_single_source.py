@@ -13,7 +13,6 @@ and ``otel-collector-config.yaml`` (a hand-maintained list). These tests pin tha
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 
 import yaml
@@ -23,6 +22,7 @@ from common.core.environ import (
     OTLP_TRACES_PATH,
     otel_ingest_endpoint,
 )
+from common.tests.conftest import load_repo_module
 from common.deploy.env_config import (
     cors_allowed_origins,
     otel_env,
@@ -45,8 +45,6 @@ _LEGACY_CORS_ORIGINS = [
     "http://localhost:3000",
 ]
 
-
-from common.tests.conftest import load_repo_module
 
 def _load_signoz_deployer():
     return load_repo_module(

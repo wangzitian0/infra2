@@ -16,7 +16,6 @@ import io
 import json
 import os
 from pathlib import Path
-import re
 import subprocess
 import sys
 from typing import Any, Mapping

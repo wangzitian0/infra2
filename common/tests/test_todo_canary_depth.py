@@ -18,7 +18,6 @@ import contextlib
 import contextvars
 import http.server
 import json
-import importlib.util
 import re
 import secrets
 import socket
@@ -28,6 +27,8 @@ import sys
 import threading
 import time
 from pathlib import Path
+
+from common.tests.conftest import load_repo_module
 from urllib.parse import unquote, urlsplit
 
 import pytest
@@ -52,8 +53,6 @@ WRONG_PW = secrets.token_urlsafe(16)
 S3_ACCESS_KEY = "AK" + secrets.token_hex(8).upper()
 S3_SECRET_KEY = secrets.token_urlsafe(24)
 
-
-from common.tests.conftest import load_repo_module
 
 def _load(name: str, path: Path):
     return load_repo_module(path, name)
@@ -290,7 +289,9 @@ def test_redis_probe_reports_unconfigured_without_a_password(app) -> None:
         ({"get_reply": b"$5\r\nstale\r\n"}, "GET returned"),
     ],
 )
-def test_redis_probe_fails_on_unexpected_reply(app, redis_kwargs, expected_detail) -> None:
+def test_redis_probe_fails_on_unexpected_reply(
+    app, redis_kwargs, expected_detail
+) -> None:
     """A server returning -NOAUTH after AUTH or stale GET data must fail."""
     redis = FakeRedis(password=REDIS_PW, **redis_kwargs)
     try:

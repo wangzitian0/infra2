@@ -168,7 +168,10 @@ def test_repo_for_service_falls_back_to_app_repo_for_unknown_service():
     ("deploy_kwargs", "expected_repo"),
     [
         ({"service": "truealpha/app"}, "https://github.com/wangzitian0/truealpha.git"),
-        ({"repo": "https://example.invalid/other.git"}, "https://example.invalid/other.git"),
+        (
+            {"repo": "https://example.invalid/other.git"},
+            "https://example.invalid/other.git",
+        ),
     ],
 )
 def test_deploy_version_ref_repo_resolution(

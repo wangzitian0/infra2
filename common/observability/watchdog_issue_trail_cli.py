@@ -37,6 +37,7 @@ if str(ROOT) not in sys.path:
 
 from common.observability.estate_scheduler_liveness import BOUND_CAP_ENV  # noqa: E402
 from common.observability.issue_trail import (  # noqa: E402
+    FULL,
     OFF,
     VERDICTS_ENV,
     GitHubIssues,
@@ -44,6 +45,20 @@ from common.observability.issue_trail import (  # noqa: E402
     load_trail,
     reconcile_issue_trail,
 )
+
+
+def _run_policy(env: Mapping[str, str]) -> tuple[str, bool]:
+    """Return (issue_trail mode, should_close) for this watchdog run."""
+    if issue_trail_mode(env) == OFF:
+        return OFF, False
+    event = env.get("GITHUB_EVENT_NAME", "")
+    if event not in ("schedule", "workflow_dispatch"):
+        return OFF, False
+    has_cap = bool((env.get(BOUND_CAP_ENV) or "").strip())
+    should_close = (not has_cap) and (
+        event == "schedule" or env.get("GITHUB_REF") == "refs/heads/main"
+    )
+    return FULL, should_close
 
 
 def run_context(env: Mapping[str, str]) -> str:
@@ -71,7 +86,7 @@ def _run_url(env: Mapping[str, str]) -> str:
 
 def main(env: Mapping[str, str] | None = None, *, issues_factory=GitHubIssues) -> int:
     current = os.environ if env is None else env
-    mode = issue_trail_mode(current)
+    mode, should_close = _run_policy(current)
     if mode == OFF:
         print(
             "issue trail: off for this run (dry run, manual SSH diagnostics, or not scheduled/dispatched)"
@@ -103,6 +118,7 @@ def main(env: Mapping[str, str] | None = None, *, issues_factory=GitHubIssues) -
         run_url=_run_url(current),
         context=run_context(current),
         env=current,
+        close=should_close,
     )
 
 

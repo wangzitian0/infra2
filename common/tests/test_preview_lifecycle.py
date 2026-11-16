@@ -8,7 +8,6 @@ path itself still needs a real smoke test (see the PR body).
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import httpx

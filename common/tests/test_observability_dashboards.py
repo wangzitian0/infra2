@@ -18,6 +18,7 @@ from common.alerting import (
     build_signoz_channel_payload,
     signoz_feishu_channel_name,
 )
+from common.tests.conftest import load_repo_module
 from common.observability_dashboards import (
     ALERT_RULES_FILE,
     ALERT_RULES_FILES,
@@ -1588,8 +1589,6 @@ def test_apply_dashboard_raises_nonzero_exit_when_list_fails(monkeypatch) -> Non
     assert exc.value.code == 1
     assert calls == [("GET", "/api/v1/dashboards", None)]
 
-
-from common.tests.conftest import load_repo_module
 
 def _load_signoz_alert_probe():
     return load_repo_module(SIGNOZ_ALERT_PROBE, "signoz_alert_rule_probe_under_test")

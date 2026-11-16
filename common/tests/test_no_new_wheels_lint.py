@@ -92,7 +92,10 @@ def test_exempt_marker_with_reason_passes(tmp_path: Path) -> None:
     ("header", "expected_error"),
     [
         ("# alert-delivery-exempt: missing review date", "review=YYYY-MM-DD"),
-        ("# nowheel: reason=domain-semantics; review=2026-10-01", "exemption expired on 2026-10-01"),
+        (
+            "# nowheel: reason=domain-semantics; review=2026-10-01",
+            "exemption expired on 2026-10-01",
+        ),
     ],
 )
 def test_invalid_exempt_markers_fail(

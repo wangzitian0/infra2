@@ -7,12 +7,13 @@ SigNoz key into the production store (#1039).
 
 from __future__ import annotations
 
-import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+from common.tests.conftest import load_repo_module
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -30,8 +31,6 @@ class _RecordingStore:
         self.values[key] = value
         return True
 
-
-from common.tests.conftest import load_repo_module
 
 def _load_signoz_shared_tasks():
     return load_repo_module(

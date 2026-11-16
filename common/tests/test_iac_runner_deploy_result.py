@@ -1036,7 +1036,9 @@ def test_run_invoke_task_approle_login_edge_cases_yield_no_root_token(
     def fake_run(args, **kwargs):
         if args[:1] == ["vault"]:
             if not with_addr:
-                raise AssertionError("must not attempt AppRole login without VAULT_ADDR")
+                raise AssertionError(
+                    "must not attempt AppRole login without VAULT_ADDR"
+                )
             return types.SimpleNamespace(
                 returncode=returncode, stdout=stdout, stderr="Error"
             )

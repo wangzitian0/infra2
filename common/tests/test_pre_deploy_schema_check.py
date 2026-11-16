@@ -565,7 +565,12 @@ def test_main_prints_no_rollback_class_when_not_evaluated(
     ],
 )
 def test_data_precondition_and_migration_floor_gate(
-    monkeypatch, capsys, migration: str, seeded: bool, expected_rc: str, expect_err: bool
+    monkeypatch,
+    capsys,
+    migration: str,
+    seeded: bool,
+    expected_rc: str,
+    expect_err: bool,
 ) -> None:
     """#609 AC1/AC2/AC3: precondition & migration floor gate aborts when unmet and passes once met."""
     suffix = "fail" if expect_err else "pass"

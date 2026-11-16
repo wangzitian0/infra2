@@ -1,4 +1,3 @@
-import importlib.util
 import re
 from pathlib import Path
 

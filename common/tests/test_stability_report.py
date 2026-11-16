@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import io
 import json
 import subprocess
@@ -14,6 +13,7 @@ import pytest
 
 from common.observability import local_ledger
 from common.observability.local_ledger import host_ledger_path
+from common.tests.conftest import load_repo_module
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "common" / "observability" / "stability_report.py"
@@ -63,8 +63,6 @@ OUTAGES = {
     ],
 }
 
-
-from common.tests.conftest import load_repo_module
 
 def _load_module():
     return load_repo_module(MODULE_PATH, "stability_report")

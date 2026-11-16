@@ -23,6 +23,7 @@ row in `STRICT_OTEL_POLICY`.
 from __future__ import annotations
 
 import ast
+from common.tests.conftest import load_repo_module
 import importlib.metadata
 import importlib.util
 import re
@@ -170,8 +171,6 @@ def _app_service(app: Path) -> str:
     ]
     return name
 
-
-from common.tests.conftest import load_repo_module
 
 def _load(name: str, path: Path):
     return load_repo_module(path, name)

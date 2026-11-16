@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import subprocess
 from pathlib import Path
@@ -18,6 +17,7 @@ from common.observability.probes import (
     parse_probe_specs,
     run_probe,
 )
+from common.tests.conftest import load_repo_module
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -34,8 +34,6 @@ def _production_probe_environment(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("ENV", "production")
 
-
-from common.tests.conftest import load_repo_module
 
 def _load_probe_runner():
     return load_repo_module(
@@ -1088,7 +1086,9 @@ def test_cascade_suppression_depends_on_root_health(
     monkeypatch, tmp_path, root_healthy: bool, expected_services: set[str]
 ) -> None:
     """Suppress dependent alert iff root also fails."""
-    runner, posted = _two_probe_runner(monkeypatch, {"root": root_healthy, "dep": False})
+    runner, posted = _two_probe_runner(
+        monkeypatch, {"root": root_healthy, "dep": False}
+    )
     assert runner.run_once(state_path=tmp_path / "s.json", failure_threshold=1) == 1
     firing = [p for p in posted if p["status"] == "firing"]
     services = {a["labels"]["service"] for a in firing[0]["alerts"]}
@@ -1795,8 +1795,6 @@ def test_truealpha_app_is_probed_inside_and_on_its_product_domain() -> None:
     """#608's open half: the two truealpha/app containers had no probe, and the app's
     public surface lives on its own domain (bare in production, prefixed in staging —
     truealpha#474), which the public-route renderer could not express."""
-    import importlib.util
-
     from common.observability.probe_specs import (
         render_probe_spec_text,
         render_public_route_spec_text,
@@ -1830,12 +1828,9 @@ def test_truealpha_app_is_probed_inside_and_on_its_product_domain() -> None:
     assert "https://report.zitian.party/api/health" in prod
 
     # The hosts are the ones the deploy ships as APP_HOST — one formula, two readers.
-    spec = importlib.util.spec_from_file_location(
-        "truealpha_app_deploy_for_probes", ROOT / "truealpha/truealpha/10.app/deploy.py"
+    module = load_repo_module(
+        "truealpha/truealpha/10.app/deploy.py", "truealpha_app_deploy_for_probes"
     )
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
     overrides = module.AppDeployer.compose_env_overrides
     assert (
         overrides(env="production", domain="truealpha.club", env_suffix="")["APP_HOST"]

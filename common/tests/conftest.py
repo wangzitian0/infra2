@@ -53,6 +53,7 @@ def assert_backend_cold_start_budget(compose_path: Path, end_marker: str) -> Non
     assert match is not None
     assert int(match.group(1)) >= 450
 
+
 # The variables that choose the deployment environment of a process. ``get_env`` has no
 # default (#1039), so a test that needs an environment sets it, and no test inherits one
 # from the developer shell or from an earlier test in the same worker.

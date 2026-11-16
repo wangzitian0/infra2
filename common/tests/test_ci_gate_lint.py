@@ -75,8 +75,18 @@ def test_lint_excessive_shards_flagged(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("filename", "job_name", "run_cmd", "expected_error"),
     [
-        ("pr_bench.yml", "Run benchmark", "python -m pytest -m benchmark", "runs banned gate pattern 'benchmark'"),
-        ("pr_workers.yml", "Run tests", "pytest -n 4 tests/", "uses hardcoded pytest worker count '-n 4'"),
+        (
+            "pr_bench.yml",
+            "Run benchmark",
+            "python -m pytest -m benchmark",
+            "runs banned gate pattern 'benchmark'",
+        ),
+        (
+            "pr_workers.yml",
+            "Run tests",
+            "pytest -n 4 tests/",
+            "uses hardcoded pytest worker count '-n 4'",
+        ),
     ],
 )
 def test_lint_flags_banned_pr_gate_patterns(

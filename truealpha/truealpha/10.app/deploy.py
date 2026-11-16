@@ -365,7 +365,9 @@ class AppDeployer(Deployer):
         return True
 
     @classmethod
-    def _ensure_vault_secret(cls, key: str, length: int, *, env: str | None = None) -> bool:
+    def _ensure_vault_secret(
+        cls, key: str, length: int, *, env: str | None = None
+    ) -> bool:
         secrets = cls.secrets_backend(env=env)
         try:
             existing = secrets.get(key)

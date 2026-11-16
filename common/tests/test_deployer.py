@@ -593,7 +593,11 @@ def test_get_compose_deployments_filters_malformed_records() -> None:
 
 @pytest.mark.parametrize(
     ("status", "expected_match"),
-    [("error", "entered error"), ("queued", "still 'queued' after 0s"), ("", "still 'unknown' after 0s")],
+    [
+        ("error", "entered error"),
+        ("queued", "still 'queued' after 0s"),
+        ("", "still 'unknown' after 0s"),
+    ],
 )
 def test_wait_for_new_deployment_record_fails_on_terminal_or_incomplete_status(
     monkeypatch, status: str, expected_match: str

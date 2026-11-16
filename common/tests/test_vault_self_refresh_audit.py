@@ -705,6 +705,8 @@ def test_ssh_uses_default_root_identity_when_no_ci_override_env_set(
     monkeypatch.delenv("INFRA2_WATCHDOG_SSH_KEY_PATH", raising=False)
     monkeypatch.delenv("INFRA2_WATCHDOG_SSH_PORT", raising=False)
     monkeypatch.delenv("INFRA2_WATCHDOG_SSH_USER", raising=False)
+
+
 def _patch_subprocess_ssh_capture(monkeypatch, stdout: str = "ok"):
     captured = {}
 
@@ -762,7 +764,9 @@ def _patch_fake_ssh(
     def fake_ssh(host, command):
         captured["host"] = host
         captured["command"] = command
-        return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+        return types.SimpleNamespace(
+            returncode=returncode, stdout=stdout, stderr=stderr
+        )
 
     monkeypatch.setattr(vault_self_refresh_audit_module, "_ssh", fake_ssh)
     return captured

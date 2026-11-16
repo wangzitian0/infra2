@@ -320,7 +320,9 @@ class SigNozDeployer(Deployer):
             prepare_delivered_mounts(
                 delivered=cls._deliver_collector_config(c, env),
                 error_message="Failed to deliver otel-collector config to host",
-                rendered={"otel-collector-config.yaml": cls._render_collector_config(env)},
+                rendered={
+                    "otel-collector-config.yaml": cls._render_collector_config(env)
+                },
                 service=cls.service,
                 template_dir=Path(__file__).parent,
             )

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -11,12 +10,12 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 import yaml
 
+from common.tests.conftest import load_repo_module
+
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "common" / "observability" / "digest.py"
 WORKFLOW_PATH = ROOT / ".github/workflows/ops-checks.yml"
 
-
-from common.tests.conftest import load_repo_module
 
 def _load_module():
     return load_repo_module(MODULE_PATH, "watchdog_weekly_digest")

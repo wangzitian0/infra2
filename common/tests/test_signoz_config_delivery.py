@@ -8,7 +8,6 @@ the recreated collector re-mounts a stale file. These tests pin that wiring.
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 from unittest import mock
 
@@ -20,6 +19,7 @@ from common.deploy.config_hash import (
     _repo_rel,
     config_hash_from_items,
 )
+from common.tests.conftest import load_repo_module
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -31,8 +31,6 @@ ENVIRONMENT_NAME_RULE = {
     "action": "insert",
 }
 
-
-from common.tests.conftest import load_repo_module
 
 def _load_signoz_deployer():
     return load_repo_module(
