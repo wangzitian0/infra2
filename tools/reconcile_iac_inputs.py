@@ -12,15 +12,17 @@ from __future__ import annotations
 import argparse
 import ast
 import concurrent.futures
-from collections.abc import Mapping
-from contextlib import contextmanager
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from collections.abc import Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1242,6 +1244,110 @@ def _hook_env_failure(
     )
 
 
+_HOOK_HEARTBEAT_SECONDS = 30.0
+_VERDICT_CACHE_LOCK = threading.Lock()
+
+
+def hook_verdict_key(
+    service: str,
+    source_sha: str,
+    slot: str,
+    environment: str,
+    manifest: RuntimeHooksManifest | Mapping[str, object],
+) -> str:
+    """Return the deterministic SHA-256 verdict key for S4.1/S4.2 dedup (#1602)."""
+    manifest_dict = (
+        manifest.to_dict() if hasattr(manifest, "to_dict") else dict(manifest)
+    )
+    manifest_hash = hashlib.sha256(
+        json.dumps(manifest_dict, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    payload = {
+        "service": service,
+        "source_sha": source_sha,
+        "slot": slot,
+        "environment": environment,
+        "manifest_hash": manifest_hash,
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _resolve_verdict_cache_path(verdict_cache_path: Path | None) -> Path | None:
+    if verdict_cache_path is not None:
+        return Path(verdict_cache_path)
+    raw = os.environ.get("INFRA2_HOOK_VERDICT_CACHE", "").strip()
+    return Path(raw) if raw else None
+
+
+def _should_force_hook_replay(force_replay: bool | None) -> bool:
+    if force_replay is not None:
+        return force_replay
+    return os.environ.get("GITHUB_EVENT_NAME", "") not in ("", "schedule")
+
+
+def _cached_pass_result(
+    cache_path: Path | None,
+    key: str,
+    *,
+    service: str,
+    slot: str,
+    environment: str,
+    app_url: str,
+    version_ref: str,
+    force_replay: bool,
+) -> HookRunResult | None:
+    if cache_path is None or force_replay:
+        return None
+    with _VERDICT_CACHE_LOCK:
+        if not cache_path.is_file():
+            return None
+        try:
+            data = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+    entry = data.get(key) if isinstance(data, Mapping) else None
+    if not isinstance(entry, Mapping) or entry.get("status") != "pass":
+        return None
+    return HookRunResult(
+        service=service,
+        slot=slot,
+        environment=environment,
+        app_url=app_url,
+        version_ref=version_ref,
+        status="pass",
+        exit_code=0,
+        duration_seconds=0.0,
+        summary=f"skipped cached pass verdict ({key[:12]})",
+    )
+
+
+def _record_hook_verdict(cache_path: Path | None, key: str, res: HookRunResult) -> None:
+    if cache_path is None:
+        return
+    with _VERDICT_CACHE_LOCK:
+        data: dict[str, object] = {}
+        if cache_path.is_file():
+            try:
+                loaded = json.loads(cache_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    data = loaded
+            except (OSError, ValueError):
+                data = {}
+        data[key] = {
+            "status": res.status,
+            "exit_code": res.exit_code,
+            "service": res.service,
+            "slot": res.slot,
+            "environment": res.environment,
+        }
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(
+            json.dumps(data, indent=2, sort_keys=True), encoding="utf-8"
+        )
+
+
 def _run_hook_slot_or_fail(
     manifest: RuntimeHooksManifest,
     slot: str,
@@ -1249,9 +1355,26 @@ def _run_hook_slot_or_fail(
     app_url: str,
     environment: str,
     version_ref: str,
+    heartbeat_seconds: float = _HOOK_HEARTBEAT_SECONDS,
     **kwargs: object,
 ) -> tuple[HookRunResult, str | None]:
-    """Run one hook slot. A missing env name gives a failed result and its message, not a raise."""
+    """Run one hook slot with a periodic stderr heartbeat; missing env names return a failed result."""
+    started = time.monotonic()
+    stop_event = threading.Event()
+    sys.stderr.write(f"[hook-start] {manifest.service}:{slot} ({environment})\n")
+    sys.stderr.flush()
+
+    def _emit_heartbeat() -> None:
+        while not stop_event.wait(heartbeat_seconds):
+            elapsed = time.monotonic() - started
+            sys.stderr.write(
+                f"[hook-heartbeat] {manifest.service}:{slot} ({environment}) "
+                f"running ({elapsed:.1f}s)\n"
+            )
+            sys.stderr.flush()
+
+    heartbeat_thread = threading.Thread(target=_emit_heartbeat, daemon=True)
+    heartbeat_thread.start()
     try:
         res = execute_app_hook_slot(
             manifest,
@@ -1271,7 +1394,106 @@ def _run_hook_slot_or_fail(
             ),
             message,
         )
+    finally:
+        stop_event.set()
+        heartbeat_thread.join(timeout=1.0)
+    elapsed = time.monotonic() - started
+    sys.stderr.write(
+        f"[hook-done] {manifest.service}:{slot} ({environment}) "
+        f"status={res.status} ({elapsed:.1f}s)\n"
+    )
+    sys.stderr.flush()
     return res, None
+
+
+def _build_hook_result_entry(
+    res: HookRunResult,
+    *,
+    service: str,
+    slot: str,
+    app_url: str,
+    source_sha: str,
+    hook_cwd: Path,
+    missing_env_error: str | None = None,
+    verdict_key: str = "",
+    skipped_cached: bool = False,
+) -> dict[str, object]:
+    entry = res.to_dict()
+    entry["service"] = service
+    entry["service_id"] = service
+    entry["slot"] = slot
+    entry["ok"] = res.status == "pass"
+    entry["app_url"] = app_url
+    entry["source_sha"] = source_sha
+    entry["cwd"] = str(hook_cwd)
+    if verdict_key:
+        entry["verdict_key"] = verdict_key
+    if skipped_cached:
+        entry["skipped_cached"] = True
+    if missing_env_error is not None:
+        entry["missing_env_error"] = missing_env_error
+    return entry
+
+
+def _run_hook_slot_with_dedup(
+    manifest: RuntimeHooksManifest,
+    slot: str,
+    *,
+    service: str,
+    app_url: str,
+    environment: str,
+    version_ref: str,
+    source_sha: str,
+    hook_cwd: Path,
+    verdict_cache_path: Path | None = None,
+    force_replay: bool | None = None,
+    heartbeat_seconds: float = _HOOK_HEARTBEAT_SECONDS,
+    **kwargs: object,
+) -> tuple[HookRunResult, dict[str, object]]:
+    key = hook_verdict_key(service, source_sha, slot, environment, manifest)
+    cache_path = _resolve_verdict_cache_path(verdict_cache_path)
+    effective_force = _should_force_hook_replay(force_replay)
+    cached = _cached_pass_result(
+        cache_path,
+        key,
+        service=service,
+        slot=slot,
+        environment=environment,
+        app_url=app_url,
+        version_ref=version_ref,
+        force_replay=effective_force,
+    )
+    if cached is not None:
+        return cached, _build_hook_result_entry(
+            cached,
+            service=service,
+            slot=slot,
+            app_url=app_url,
+            source_sha=source_sha,
+            hook_cwd=hook_cwd,
+            verdict_key=key,
+            skipped_cached=True,
+        )
+    res, missing_env_error = _run_hook_slot_or_fail(
+        manifest,
+        slot,
+        app_url=app_url,
+        environment=environment,
+        version_ref=version_ref,
+        heartbeat_seconds=heartbeat_seconds,
+        **kwargs,
+    )
+    _record_hook_verdict(cache_path, key, res)
+    return res, _build_hook_result_entry(
+        res,
+        service=service,
+        slot=slot,
+        app_url=app_url,
+        source_sha=source_sha,
+        hook_cwd=hook_cwd,
+        missing_env_error=missing_env_error,
+        verdict_key=key,
+    )
 
 
 def run_post_deploy_app_hooks(
@@ -1285,6 +1507,9 @@ def run_post_deploy_app_hooks(
     slot: str = "smoke",
     manifest_fetcher: Callable[[str], bytes] | None = None,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    verdict_cache_path: Path | None = None,
+    force_replay: bool | None = None,
+    heartbeat_seconds: float = _HOOK_HEARTBEAT_SECONDS,
 ) -> list[dict[str, object]]:
     """Execute post-deploy verification hook slot(s) for each deployed App or local service (#1416, #1493, #1521)."""
     slots = _parse_hook_slots(slot)
@@ -1340,25 +1565,21 @@ def run_post_deploy_app_hooks(
                 hook_env_name = (
                     "production" if target_env in ("prod", "production") else "staging"
                 )
-                res, missing_env_error = _run_hook_slot_or_fail(
+                res, entry = _run_hook_slot_with_dedup(
                     manifest,
                     single_slot,
+                    service=service,
                     app_url=app_url,
                     environment=hook_env_name,
                     version_ref=version_ref,
+                    source_sha=source_sha,
+                    hook_cwd=hook_cwd,
+                    verdict_cache_path=verdict_cache_path,
+                    force_replay=force_replay,
+                    heartbeat_seconds=heartbeat_seconds,
                     cwd=hook_cwd,
                     runner=runner,
                 )
-                entry = res.to_dict()
-                entry["service"] = service
-                entry["service_id"] = service
-                entry["slot"] = single_slot
-                entry["ok"] = res.status == "pass"
-                entry["app_url"] = app_url
-                entry["source_sha"] = source_sha
-                entry["cwd"] = str(hook_cwd)
-                if missing_env_error is not None:
-                    entry["missing_env_error"] = missing_env_error
                 svc_results.append(entry)
                 if res.status != "pass":
                     break
@@ -1395,6 +1616,9 @@ def run_scheduled_app_audits(
     manifest_fetcher: Callable[[str], bytes] | None = None,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     services: Sequence[str] | None = None,
+    verdict_cache_path: Path | None = None,
+    force_replay: bool | None = None,
+    heartbeat_seconds: float = _HOOK_HEARTBEAT_SECONDS,
 ) -> list[dict[str, object]]:
     """Execute a scheduled runtime hook slot across registered Apps and local services (#1493, #1521)."""
     if slot not in HOOK_SLOTS:
@@ -1492,12 +1716,18 @@ def run_scheduled_app_audits(
                 runner=runner,
             )
         try:
-            res, missing_env_error = _run_hook_slot_or_fail(
+            _res, entry = _run_hook_slot_with_dedup(
                 manifest,
                 slot,
+                service=service,
                 app_url=app_url,
                 environment=hook_env_name,
                 version_ref=version_ref,
+                source_sha=source_sha,
+                hook_cwd=hook_cwd,
+                verdict_cache_path=verdict_cache_path,
+                force_replay=force_replay,
+                heartbeat_seconds=heartbeat_seconds,
                 cwd=hook_cwd,
                 ambient_env=effective_ambient,
                 runner=runner,
@@ -1505,16 +1735,6 @@ def run_scheduled_app_audits(
         finally:
             if tmp_checkout is not None:
                 tmp_checkout.cleanup()
-        entry = res.to_dict()
-        entry["service"] = service
-        entry["service_id"] = service
-        entry["slot"] = slot
-        entry["ok"] = res.status == "pass"
-        entry["app_url"] = app_url
-        entry["source_sha"] = source_sha
-        entry["cwd"] = str(hook_cwd)
-        if missing_env_error is not None:
-            entry["missing_env_error"] = missing_env_error
         results.append(entry)
 
     return results

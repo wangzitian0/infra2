@@ -6,6 +6,7 @@ import ast
 import json
 import re
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -4369,3 +4370,164 @@ def test_reconcile_imports_no_issue_writer() -> None:
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             names.update(a.name.rsplit(".", 1)[-1] for a in node.names)
     assert not names & {"GitHubIssues", "reconcile_issue_trail"}
+
+
+def test_hook_verdict_key_and_scheduled_dedup_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1602 (S3.2, S4.1, S4.2): hook verdict keys dedup identical scheduled audits
+    and force replay on workflow_dispatch while emitting stderr heartbeats."""
+    from infra2_sdk.manifests import HookRunResult, HookSlotSpec, RuntimeHooksManifest
+
+    manifest = RuntimeHooksManifest(
+        schema_version=2,
+        service="platform/alerting",
+        slots={
+            "smoke": HookSlotSpec(run="echo ok", timeout_seconds=30),
+            "preview_gate": HookSlotSpec(run="echo ok", timeout_seconds=30),
+            "staging_gate": HookSlotSpec(run="echo ok", timeout_seconds=30),
+            "prod_gate": HookSlotSpec(run="echo ok", timeout_seconds=30),
+            "scheduled_audit": HookSlotSpec(run="echo ok", timeout_seconds=30),
+        },
+    )
+    key_first = reconcile.hook_verdict_key(
+        "platform/alerting", "abc123", "scheduled_audit", "staging", manifest
+    )
+    key_same = reconcile.hook_verdict_key(
+        "platform/alerting", "abc123", "scheduled_audit", "staging", manifest
+    )
+    key_other_sha = reconcile.hook_verdict_key(
+        "platform/alerting", "def456", "scheduled_audit", "staging", manifest
+    )
+    assert key_first == key_same
+    assert key_first != key_other_sha
+
+    calls: list[str] = []
+
+    def _fake_exec(
+        loaded_manifest,
+        slot_name: str,
+        *,
+        app_url: str,
+        environment: str,
+        version_ref: str,
+        **_kwargs,
+    ) -> HookRunResult:
+        calls.append(f"{loaded_manifest.service}:{slot_name}:{environment}")
+        time.sleep(0.05)
+        return HookRunResult(
+            service=loaded_manifest.service,
+            slot=slot_name,
+            environment=environment,
+            app_url=app_url,
+            version_ref=version_ref,
+            status="pass",
+            exit_code=0,
+            duration_seconds=0.05,
+            summary="ok",
+        )
+
+    cache_file = tmp_path / "verdict-cache.json"
+    monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "schedule")
+
+    first_res, first_entry = reconcile._run_hook_slot_with_dedup(
+        manifest,
+        "scheduled_audit",
+        service="platform/alerting",
+        app_url="https://alerting-staging.zitian.party",
+        environment="staging",
+        version_ref="main",
+        source_sha="abc123",
+        hook_cwd=tmp_path,
+        verdict_cache_path=cache_file,
+        heartbeat_seconds=0.015,
+    )
+    assert first_res.status == "pass"
+    assert first_entry.get("skipped_cached") is None
+    assert len(calls) == 1
+
+    # Identical scheduled run hits the verdict cache without invoking execute_app_hook_slot.
+    second_res, second_entry = reconcile._run_hook_slot_with_dedup(
+        manifest,
+        "scheduled_audit",
+        service="platform/alerting",
+        app_url="https://alerting-staging.zitian.party",
+        environment="staging",
+        version_ref="main",
+        source_sha="abc123",
+        hook_cwd=tmp_path,
+        verdict_cache_path=cache_file,
+        heartbeat_seconds=0.015,
+    )
+    assert second_res.status == "pass"
+    assert second_entry["skipped_cached"] is True
+    assert len(calls) == 1
+
+    # Manual workflow_dispatch bypasses cached pass verdicts and forces replay.
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    replay_res, replay_entry = reconcile._run_hook_slot_with_dedup(
+        manifest,
+        "scheduled_audit",
+        service="platform/alerting",
+        app_url="https://alerting-staging.zitian.party",
+        environment="staging",
+        version_ref="main",
+        source_sha="abc123",
+        hook_cwd=tmp_path,
+        verdict_cache_path=cache_file,
+        heartbeat_seconds=0.015,
+    )
+    assert replay_res.status == "pass"
+    assert replay_entry.get("skipped_cached") is None
+    assert len(calls) == 2
+
+
+def test_hook_heartbeat_emits_to_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#1602 (S3.2): long-running hooks emit periodic heartbeat lines to stderr."""
+    from infra2_sdk.manifests import HookRunResult, HookSlotSpec, RuntimeHooksManifest
+
+    manifest = RuntimeHooksManifest(
+        schema_version=2,
+        service="platform/alerting",
+        slots={
+            "smoke": HookSlotSpec(run="echo ok", timeout_seconds=30),
+            "preview_gate": HookSlotSpec(run="echo ok", timeout_seconds=30),
+            "staging_gate": HookSlotSpec(run="echo ok", timeout_seconds=30),
+            "prod_gate": HookSlotSpec(run="echo ok", timeout_seconds=30),
+            "scheduled_audit": HookSlotSpec(run="echo ok", timeout_seconds=30),
+        },
+    )
+
+    def _slow_exec(*_args, **_kwargs) -> HookRunResult:
+        time.sleep(0.06)
+        return HookRunResult(
+            service="platform/alerting",
+            slot="smoke",
+            environment="staging",
+            app_url="https://alerting-staging.zitian.party",
+            version_ref="main",
+            status="pass",
+            exit_code=0,
+            duration_seconds=0.06,
+            summary="ok",
+        )
+
+    monkeypatch.setattr(reconcile, "execute_app_hook_slot", _slow_exec)
+    res, missing = reconcile._run_hook_slot_or_fail(
+        manifest,
+        "smoke",
+        app_url="https://alerting-staging.zitian.party",
+        environment="staging",
+        version_ref="main",
+        heartbeat_seconds=0.015,
+    )
+    assert res.status == "pass"
+    assert missing is None
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "[hook-start] platform/alerting:smoke (staging)" in captured.err
+    assert "[hook-heartbeat] platform/alerting:smoke (staging) running" in captured.err
+    assert "[hook-done] platform/alerting:smoke (staging) status=pass" in captured.err

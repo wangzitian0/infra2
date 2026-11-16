@@ -440,13 +440,26 @@ jobs:
       - name: Gate reconcile plan builds for changed files
         if: github.event_name == 'pull_request'
         run: |
+          set -e
           cd ${{ github.workspace }}
-          git fetch --no-tags --no-recurse-submodules origin +refs/heads/main:refs/remotes/origin/main
-          mapfile -t files < <(git diff --name-only --ignore-submodules=all origin/main...HEAD)
+          base="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$base" ]; then
+            echo "::error::pull_request base SHA is missing"
+            exit 1
+          fi
+          git fetch --no-tags --no-recurse-submodules --depth=1 origin "$base"
+          if ! diff_out="$(git diff --name-only --ignore-submodules=all "${base}..HEAD")"; then
+            echo "::error::git diff against PR base ${base} failed"
+            exit 1
+          fi
+          if [ -z "$diff_out" ] && [ "${{ needs.detect-changes.outputs.has_non_doc }}" = "true" ]; then
+            echo "::error::non-doc PR yielded zero changed files against ${base}"
+            exit 1
+          fi
           args=(--after HEAD --dry-run)
-          for f in "${files[@]}"; do
-            [[ -n "$f" ]] && args+=(--changed-file "$f")
-          done
+          while IFS= read -r changed_file; do
+            [[ -n "$changed_file" ]] && args+=(--changed-file "$changed_file")
+          done <<< "$diff_out"
           uv run --locked python -m tools.reconcile_iac_inputs "${args[@]}"
 
       # #504/#541: the inventory's `blocks_merge: true` gates vs the LIVE GitHub branch
