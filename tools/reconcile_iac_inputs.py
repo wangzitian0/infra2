@@ -556,7 +556,13 @@ def _compute_preview_touched_files(
             file=sys.stderr,
         )
         return []
-    return [line.strip() for line in (res.stdout or "").splitlines() if line.strip()]
+    files = [line.strip() for line in (res.stdout or "").splitlines() if line.strip()]
+    if len(files) >= 300:
+        print(
+            f"::warning::compare {repo_slug} {prev_sha[:7]}...{main_sha[:7]} returned {len(files)} files (GitHub compare API 300-file cap may truncate INFRA2_TOUCHED_FILES)",
+            file=sys.stderr,
+        )
+    return files
 
 
 def verify_and_cut_app_preview_tag(
