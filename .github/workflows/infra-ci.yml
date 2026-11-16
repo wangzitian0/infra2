@@ -68,12 +68,23 @@ jobs:
       pull-requests: read
     outputs:
       has_non_doc: ${{ steps.check.outputs.has_non_doc }}
+      gate_changed: ${{ steps.gate.outputs.gate_changed }}
       reuse_run_id: ${{ steps.reuse.outputs.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install the SDK that uv.lock pins
+        run: |
+          pip install pyyaml
+          pip install --no-deps "$(python tools/sdk_requirement.py)"
 
       - name: Check whether every changed file is Markdown
         id: check
@@ -96,36 +107,6 @@ jobs:
           changed=$(git diff --name-only "$base" "$head")
           echo "Changed files:"
           echo "$changed"
-          # AGENTS.md and CLAUDE.md are load-bearing config, not prose: CLAUDE.md
-          # decides whether AGENTS.md is read at all, and AGENTS.md is the
-          # constitution. Classing them as docs meant every change to them
-          # skipped every required check -- including the test that guards them.
-          #
-          # docs/project/*.md and docs/ssot/README.md sit on a generation
-          # relation, which makes them config too -- on opposite sides of it.
-          # docs/project/*.md are INPUTS: docs/project/README.md is projected
-          # from each Infra-NNN doc's H1 and Status line. docs/ssot/README.md
-          # is an OUTPUT: its tables are projected from MANIFEST.yaml, and it
-          # is listed because hand-editing a generated block is the other way
-          # to put an index out of sync. (MANIFEST.yaml itself needs no rule --
-          # it is not Markdown, so it was never classed doc-only.) Adding, renaming
-          # or re-statusing a project doc -- or hand-editing a generated block
-          # -- is the change that makes an index stale, and until #777 it was
-          # also the change that skipped the tests proving the index is in
-          # sync (test_project_index_generated / test_ssot_index_generated).
-          # #505 is the recorded instance: Infra-004/005 showing the wrong
-          # status, Infra-010/014/016 missing outright.
-          #
-          # Deliberately coarser than the generators' own input set. They skip
-          # *.TODOWRITE.md and *.SUMMARY.md, so a precise rule would restate
-          # tools/gen_project_index.py's _SKIP_SUFFIXES here -- a second copy
-          # that can drift. Which way it drifts is what decides it: a coarse
-          # rule is a superset, so drift costs an extra CI run; a precise one
-          # that falls behind stops classifying a real input and the gate goes
-          # quiet. Measured over 300 merged pull requests (97 days), precise
-          # flips 2 and coarse flips 5, the extra 3 being TODOWRITE edits --
-          # three runs of a ~2-minute job per quarter, on free public runners,
-          # to keep the rule in one place and wrong in the safe direction.
           if echo "$changed" | grep -qvE '\.md$' \
             || echo "$changed" | grep -qE '^(AGENTS|CLAUDE)\.md$' \
             || echo "$changed" | grep -qE '^docs/project/.*\.md$' \
@@ -134,6 +115,36 @@ jobs:
           else
             echo "has_non_doc=false" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Check whether any changed file is self-governing
+        id: gate
+        if: github.event_name == 'pull_request'
+        run: |
+          set -e
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          changed=$(git diff --name-only "$base" "$head")
+          git rev-parse --verify origin/main >/dev/null 2>&1 || git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+          gate_changed="$(printf '%s\n' "$changed" | python -c '
+          import json, sys
+          from pathlib import Path
+          from common.core.ref_worktree import run_at_ref
+          files = [line.strip() for line in sys.stdin if line.strip()]
+          if not files:
+              print("false")
+              raise SystemExit(0)
+          script = (
+              "import json, sys\n"
+              "from common.gate.self_governance import is_self_governing\n"
+              "files = json.load(sys.stdin)\n"
+              "print(\"true\" if any(is_self_governing(path) for path in files) else \"false\")\n"
+          )
+          proc = run_at_ref("origin/main", [sys.executable, "-c", script], root=Path("."), timeout=60, stdin=json.dumps(files))
+          if proc.returncode != 0:
+              raise SystemExit(proc.stderr or proc.returncode)
+          print(proc.stdout.strip().splitlines()[-1])
+          ')"
+          echo "gate_changed=${gate_changed}" >> "$GITHUB_OUTPUT"
 
       # A squash merge onto an unchanged base gives main the tree that the pull
       # request's merge ref already passed (14 of 20 merges, #1602). For such a push
@@ -748,6 +759,126 @@ jobs:
         run: python -m common.deploy.stage_record
 
       - name: Upload the record
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        if: always() && env.STAGE_RECORD_POST != ''
+        with:
+          name: ${{ env.STAGE_RECORD_POST }}
+          path: stage-records/${{ env.STAGE_RECORD_POST }}.json
+          if-no-files-found: ignore
+
+  harness-replay:
+    name: Replay Merge Gate
+    needs: detect-changes
+    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.gate_changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install the SDK that uv.lock pins
+        run: |
+          pip install pyyaml rich invoke
+          pip install --no-deps "$(python tools/sdk_requirement.py)"
+
+      - name: Replay last 20 merged PRs against origin/main
+        id: replay
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+          python -m tools.pr_merge_gate --replay 20 --repo "${{ github.repository }}" --json > replay-report.json
+          python - <<'PY'
+          import json, os, subprocess
+
+          marker = "<!-- harness-replay-comment -->"
+          report = json.loads(open("replay-report.json", encoding="utf-8").read())
+          print(f"replayed={report['replayed']} direction={report['direction']} changed={len(report['rows'])}")
+          lines = [
+              marker,
+              f"### Merge Gate Replay (`{report['replayed']}` PRs vs `origin/main`): **{report['direction']}**",
+              "",
+          ]
+          if report["rows"]:
+              lines.append("| PR | `main` | `head` | Direction | Added reasons | Removed reasons |")
+              lines.append("|---|---|---|---|---|---|")
+              for row in report["rows"]:
+                  lines.append(
+                      f"| #{row['number']} | `{row['main']}` | `{row['head']}` | `{row['direction']}` "
+                      f"| {', '.join(row['reasons_added']) or '-'} | {', '.join(row['reasons_removed']) or '-'} |"
+                  )
+          else:
+              lines.append("Zero verdict changes across all replayed PRs.")
+          body = "\n".join(lines) + "\n"
+          repo = os.environ["GITHUB_REPOSITORY"]
+          pr_num = os.environ["PR_NUMBER"]
+          comments = json.loads(subprocess.check_output(["gh", "api", f"/repos/{repo}/issues/{pr_num}/comments"], text=True))
+          existing = next((c["id"] for c in comments if marker in str(c.get("body", ""))), None)
+          if existing is not None:
+              subprocess.run(
+                  ["gh", "api", f"/repos/{repo}/issues/comments/{existing}", "-X", "PATCH", "-f", f"body={body}"],
+                  check=True,
+              )
+          else:
+              subprocess.run(
+                  ["gh", "api", f"/repos/{repo}/issues/{pr_num}/comments", "-X", "POST", "-f", f"body={body}"],
+                  check=True,
+              )
+          PY
+
+      - name: Write the gate replay preview stage record
+        if: always() && steps.replay.outcome != 'skipped'
+        env:
+          REPLAY_OUTCOME: ${{ steps.replay.outcome }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          from common.gate.self_governance import is_self_governing
+          from common.observability.issue_trail import CheckVerdict
+          from common.deploy.stage_record import utc_now, write_stage_record
+
+          diff = subprocess.check_output(
+              ["git", "diff", "--name-only", os.environ["PR_BASE_SHA"], os.environ["PR_HEAD_SHA"]],
+              text=True,
+          ).splitlines()
+          units = sorted({f"harness:{path}" for path in diff if path and is_self_governing(path)}) or ["harness:gate"]
+          detail = "unknown"
+          report_path = Path("replay-report.json")
+          if report_path.is_file() and report_path.stat().st_size > 0:
+              detail = json.loads(report_path.read_text(encoding="utf-8")).get("direction", detail)
+          now = utc_now()
+          write_stage_record(
+              env="preview.runtime",
+              phase="post",
+              subject=f"sha:{os.environ['PR_HEAD_SHA']}",
+              ref=os.environ["GITHUB_REF"],
+              event="pull_request",
+              run_url=f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+              started_at=now,
+              checks=[CheckVerdict(name="harness-replay", ok=os.environ["REPLAY_OUTCOME"] == "success", detail=detail, seconds=0.0)],
+              units=units,
+          )
+          PY
+
+      - name: Upload the gate replay stage record
         uses: actions/upload-artifact@v7
         continue-on-error: true
         if: always() && env.STAGE_RECORD_POST != ''

@@ -137,6 +137,15 @@ gates:
     # (#1645); it gates nothing, and it holds no secret.
     blocks_merge: false
     failure_semantics: The CI post record of a commit on main is not written or not uploaded.
+  - id: infra_ci.harness_replay
+    stage: github_ci.merge_authority
+    task_category: gate_replay
+    workflow: .github/workflows/infra-ci.yml
+    job: harness-replay
+    # Runs only when a PR touches a file of `self_governing_files()`; posts the verdict
+    # diff against origin/main (#1653). Does not block on `looser`, fails only on error.
+    blocks_merge: false
+    failure_semantics: The merge-gate replay over the last 20 merged PRs failed to execute or report.
   - id: infra_ci.deploy_graph_audit
     stage: ops.scheduled_cleanup
     task_category: drift_report
