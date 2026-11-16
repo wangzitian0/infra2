@@ -880,3 +880,80 @@ def test_live_infra2_repository_census_contract() -> None:
         metrics["M6"]["passed"],
     ) == (0, 0, 0, True)
     assert census.evaluate_checks(report) == []
+
+
+def test_m3_compares_with_newest_canary_verified_sdk(
+    synthetic_workspace: tuple[Path, dict[str, Path]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1635: --verified-from-records compares M3 lag against the newest Canary-verified SDK."""
+    import common.deploy.stage_record_reader as reader
+
+    pkg_root, consumers = synthetic_workspace
+    lock_text = (census.REPO_ROOT / ("uv" + ".lock")).read_text(encoding="utf-8")
+    current_ver = census.consumer_pinned_version(census.REPO_ROOT) or "3.30.0"
+    for root in consumers.values():
+        _write(
+            root,
+            "apps/backend/pyproject.toml"
+            if root.name == "consumer_b"
+            else "pyproject.toml",
+            "",
+        )
+        # Reuse a valid locked wheel hash line while rewriting the locked version string for M3 test.
+        rewritten = lock_text.replace(current_ver, "3.29.0")
+        _write(root, "uv" + ".lock", rewritten)
+
+    monkeypatch.setattr(reader, "verified_sdk_versions", lambda repo="": {"3.29.0"})
+    rc_ok = census.main(
+        [
+            "--sdk-src",
+            str(pkg_root),
+            "--repo",
+            f"infra2={consumers['consumer_a']}",
+            "--repo",
+            f"truealpha={consumers['consumer_b']}",
+            "--verified-from-records",
+        ]
+    )
+    assert rc_ok == 0
+    rep = census.run_census(
+        pkg_root=pkg_root,
+        consumers=consumers,
+        verified_from_records=True,
+    )
+    assert rep["latest_version"] == "3.29.0"
+    assert rep["metrics"]["M3"]["all_up_to_date"] is True
+
+    monkeypatch.setattr(
+        reader, "verified_sdk_versions", lambda repo="": {"3.29.0", "3.31.0"}
+    )
+    rep_behind = census.run_census(
+        pkg_root=pkg_root,
+        consumers=consumers,
+        verified_from_records=True,
+    )
+    assert rep_behind["latest_version"] == "3.31.0"
+    assert rep_behind["metrics"]["M3"]["all_up_to_date"] is False
+
+
+def test_m3_reads_lock_path_from_repos_yaml(tmp_path: Path) -> None:
+    """#1635: consumer_pinned_version locates an App lock path via harness/repos.yaml sdk_lock."""
+    from common.core.constants import load_app_sdk_locks
+
+    locks = load_app_sdk_locks()
+    assert locks["finance_report/app"] == "apps/backend/" + "uv.lock"
+    assert locks["truealpha/app"] == "uv" + ".lock"
+
+    fr_root = tmp_path / "finance_report"
+    lock_rel = Path(locks["finance_report/app"])
+    lock_file = fr_root / lock_rel
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    lock_text = (census.REPO_ROOT / ("uv" + ".lock")).read_text(encoding="utf-8")
+    current_ver = census.consumer_pinned_version(census.REPO_ROOT)
+    assert current_ver
+    lock_file.write_text(lock_text, encoding="utf-8")
+    assert (
+        census.consumer_pinned_version(fr_root, consumer_name="finance_report")
+        == current_ver
+    )
