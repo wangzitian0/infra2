@@ -68,7 +68,7 @@ jobs:
       pull-requests: read
     outputs:
       has_non_doc: ${{ steps.check.outputs.has_non_doc }}
-      gate_changed: ${{ steps.check.outputs.gate_changed }}
+      gate_changed: ${{ steps.gate.outputs.gate_changed }}
       reuse_run_id: ${{ steps.reuse.outputs.run_id }}
     steps:
       - name: Checkout
@@ -102,7 +102,6 @@ jobs:
           # as "not doc-only" (run everything) rather than fail the check.
           if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
             echo "has_non_doc=true" >> "$GITHUB_OUTPUT"
-            echo "gate_changed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           changed=$(git diff --name-only "$base" "$head")
@@ -116,9 +115,17 @@ jobs:
           else
             echo "has_non_doc=false" >> "$GITHUB_OUTPUT"
           fi
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            git rev-parse --verify origin/main >/dev/null 2>&1 || git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
-            gate_changed="$(printf '%s\n' "$changed" | python -c '
+
+      - name: Check whether any changed file is self-governing
+        id: gate
+        if: github.event_name == 'pull_request'
+        run: |
+          set -e
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          changed=$(git diff --name-only "$base" "$head")
+          git rev-parse --verify origin/main >/dev/null 2>&1 || git fetch --no-tags --quiet origin +refs/heads/main:refs/remotes/origin/main
+          gate_changed="$(printf '%s\n' "$changed" | python -c '
           import json, sys
           from pathlib import Path
           from common.core.ref_worktree import run_at_ref
@@ -137,10 +144,7 @@ jobs:
               raise SystemExit(proc.stderr or proc.returncode)
           print(proc.stdout.strip().splitlines()[-1])
           ')"
-            echo "gate_changed=${gate_changed}" >> "$GITHUB_OUTPUT"
-          else
-            echo "gate_changed=false" >> "$GITHUB_OUTPUT"
-          fi
+          echo "gate_changed=${gate_changed}" >> "$GITHUB_OUTPUT"
 
       # A squash merge onto an unchanged base gives main the tree that the pull
       # request's merge ref already passed (14 of 20 merges, #1602). For such a push
@@ -786,7 +790,7 @@ jobs:
 
       - name: Install the SDK that uv.lock pins
         run: |
-          pip install pyyaml
+          pip install pyyaml rich invoke
           pip install --no-deps "$(python tools/sdk_requirement.py)"
 
       - name: Replay last 20 merged PRs against origin/main
@@ -858,7 +862,7 @@ jobs:
           units = sorted({f"harness:{path}" for path in diff if path and is_self_governing(path)}) or ["harness:gate"]
           detail = "unknown"
           report_path = Path("replay-report.json")
-          if report_path.is_file():
+          if report_path.is_file() and report_path.stat().st_size > 0:
               detail = json.loads(report_path.read_text(encoding="utf-8")).get("direction", detail)
           now = utc_now()
           write_stage_record(
