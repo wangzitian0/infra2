@@ -392,3 +392,70 @@ def test_one_platform_prefix_per_unit_not_per_project(monkeypatch) -> None:
     )
     found = {c.compose_id: c.alias for c in plc.collect_preview_composes(projects)}
     assert found == {"pt_10": "pr-10", "pt_20": "pr-20", "po_30": "pr-30"}
+
+
+def test_detect_flags_stale_ephemeral_branch_main_and_keeps_fresh() -> None:
+    class _AgedClient(_FakeClient):
+        def __init__(self, projects, deployments_by_id, compose_by_id):
+            super().__init__(projects)
+            self._deps = deployments_by_id
+            self._comps = compose_by_id
+
+        def get_compose_deployments(self, compose_id: str):
+            return self._deps.get(compose_id, [])
+
+        def get_compose(self, compose_id: str):
+            return self._comps.get(compose_id, {})
+
+    projects = [
+        {
+            "name": "finance_report",
+            "environments": [
+                {
+                    "name": "preview",
+                    "compose": [
+                        {
+                            "name": "finance-report-preview-branch-main",
+                            "composeId": "bm_stale",
+                        }
+                    ],
+                },
+            ],
+        },
+        {
+            "name": "truealpha",
+            "environments": [
+                {
+                    "name": "preview",
+                    "compose": [
+                        {
+                            "name": "truealpha-preview-branch-main",
+                            "composeId": "bm_fresh",
+                        }
+                    ],
+                },
+            ],
+        },
+    ]
+    # bm_stale: last deployed ~17.5 hours ago -> leaked even while `main` is active and token is None.
+    # bm_fresh: compose created 20 days ago, but deployed 10 min ago -> kept.
+    client = _AgedClient(
+        projects,
+        deployments_by_id={
+            "bm_stale": [{"finishedAt": "2026-11-14T10:00:00Z"}],
+            "bm_fresh": [{"finishedAt": "2026-11-15T03:23:20Z"}],
+        },
+        compose_by_id={
+            "bm_stale": {"createdAt": "2026-10-19T07:46:03Z"},
+            "bm_fresh": {"createdAt": "2026-10-19T07:46:03Z"},
+        },
+    )
+    from datetime import datetime, timezone
+
+    now_epoch = datetime(2026, 11, 15, 3, 33, 20, tzinfo=timezone.utc).timestamp()
+    result = plc.detect(client, token=None, now_epoch=now_epoch)
+    assert [
+        (c.compose_id, "leaked ephemeral preview" in why) for c, why in result["leaks"]
+    ] == [("bm_stale", True)]
+    plc.remediate(client, result["leaks"])
+    assert client.deleted == [("bm_stale", True)]

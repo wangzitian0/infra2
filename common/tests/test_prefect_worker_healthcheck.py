@@ -242,3 +242,20 @@ def test_a_hanging_api_times_out_unhealthy_before_the_docker_kill(
     assert 2.5 < elapsed < HANG_MAX_ELAPSED_SECONDS, (
         f"urlopen timeout=3 should fire at ~3s, took {elapsed:.1f}s"
     )
+
+
+def test_prefect_services_enables_flow_runs_db_vacuum_with_retention() -> None:
+    services = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]
+    for svc_name in ("prefect-server", "prefect-services"):
+        env = services[svc_name]["environment"]
+        enabled = {
+            part.strip()
+            for part in str(
+                env.get("PREFECT_SERVER_SERVICES_DB_VACUUM_ENABLED") or ""
+            ).split(",")
+            if part.strip()
+        }
+        assert {"events", "flow_runs"}.issubset(enabled), svc_name
+        assert str(
+            env.get("PREFECT_SERVER_SERVICES_DB_VACUUM_RETENTION_PERIOD") or ""
+        ).strip(), svc_name

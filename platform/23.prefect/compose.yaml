@@ -100,6 +100,9 @@ services:
     environment:
       ENV_SUFFIX: ${ENV_SUFFIX}
       PREFECT_SERVER_API_HOST: 0.0.0.0
+      # Enable flow_runs + orphaned logs vacuum alongside default events (#1694/ops hygiene).
+      PREFECT_SERVER_SERVICES_DB_VACUUM_ENABLED: "events,flow_runs"
+      PREFECT_SERVER_SERVICES_DB_VACUUM_RETENTION_PERIOD: "14 days"
       # Redis messaging
       PREFECT_MESSAGING_BROKER: prefect_redis.messaging
       PREFECT_MESSAGING_CACHE: prefect_redis.messaging
@@ -176,6 +179,9 @@ services:
         exec prefect server services start
     environment:
       ENV_SUFFIX: ${ENV_SUFFIX}
+      # Prefect 3 defaults DB_VACUUM_ENABLED to {"events"} only, leaving flow_runs and logs unpruned.
+      PREFECT_SERVER_SERVICES_DB_VACUUM_ENABLED: "events,flow_runs"
+      PREFECT_SERVER_SERVICES_DB_VACUUM_RETENTION_PERIOD: "14 days"
       PREFECT_MESSAGING_BROKER: prefect_redis.messaging
       PREFECT_MESSAGING_CACHE: prefect_redis.messaging
       PREFECT_REDIS_MESSAGING_HOST: platform-redis${ENV_SUFFIX}

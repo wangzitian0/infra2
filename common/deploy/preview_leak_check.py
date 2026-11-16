@@ -30,8 +30,10 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -44,6 +46,7 @@ from common.core.constants import (  # noqa: E402
     GITHUB_REPO,
     PROJECT_REPOS as _APP_PROJECT_REPOS,
 )  # noqa: E402
+from common.deploy.dokploy_adapter import get_compose_deployments  # noqa: E402
 from common.deploy.env_config import (  # noqa: E402
     PREVIEW_ENVIRONMENT,
     PREVIEW_KINDS,
@@ -51,6 +54,11 @@ from common.deploy.env_config import (  # noqa: E402
 
 # No preview alias is permanently exempt from leak detection (#1500).
 ALWAYS_KEEP_ALIASES: frozenset[str] = frozenset()
+# `branch-main` is an ephemeral post-merge preview gate slot (`verify_and_cut_app_preview_tag`,
+# #1554), never a long-lived branch preview. Any surviving `branch-main` compose past the
+# bounded run window is a missed `--down` leak even though `main` stays an active branch.
+EPHEMERAL_BRANCH_ALIASES: frozenset[str] = frozenset({"branch-main"})
+DEFAULT_EPHEMERAL_BRANCH_MAX_AGE_SECONDS = 7200
 # Every current alias is `<kind>-<slug>` for a known kind (branch/pr);
 # an alias with no known kind prefix (e.g. the bare `main` slug from before the
 # branch-main rename, or retired `canary-preview`/`commit-*`/`tag-*` aliases) is
@@ -273,7 +281,72 @@ def remediate(client, leaks: list[tuple[PreviewCompose, str]]) -> list[str]:
     return lines
 
 
-def detect(client, *, token: str | None, opener=urllib.request.urlopen) -> dict:
+def _parse_iso_epoch(raw: object) -> float | None:
+    if not isinstance(raw, str):
+        return None
+    text = raw.strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _compose_last_activity_epoch(client, compose_id: str) -> float | None:
+    """Return latest deployment or compose creation epoch for ``compose_id``."""
+    timestamps: list[float] = []
+    if hasattr(client, "get_compose_deployments") or hasattr(client, "get_compose"):
+        for dep in get_compose_deployments(client, compose_id):
+            for key in ("finishedAt", "startedAt", "createdAt"):
+                ts = _parse_iso_epoch(dep.get(key))
+                if ts is not None:
+                    timestamps.append(ts)
+    if not timestamps and hasattr(client, "get_compose"):
+        try:
+            comp = client.get_compose(compose_id)
+        except Exception:  # noqa: BLE001 - unreadable -> unknown, fail safe
+            comp = None
+        if isinstance(comp, dict):
+            ts = _parse_iso_epoch(comp.get("createdAt"))
+            if ts is not None:
+                timestamps.append(ts)
+    return max(timestamps) if timestamps else None
+
+
+def ephemeral_branch_leak_reason(
+    client,
+    compose: PreviewCompose,
+    *,
+    now_epoch: float,
+    max_age_seconds: int = DEFAULT_EPHEMERAL_BRANCH_MAX_AGE_SECONDS,
+) -> str | None:
+    """Flag an ephemeral ``branch-main`` preview that outlived its bounded window."""
+    if compose.alias not in EPHEMERAL_BRANCH_ALIASES:
+        return None
+    last_activity = _compose_last_activity_epoch(client, compose.compose_id)
+    if last_activity is None:
+        return None
+    age = now_epoch - last_activity
+    if age > max_age_seconds:
+        return (
+            f"leaked ephemeral preview ({compose.alias}, "
+            f"age {age / 3600:.1f}h > {max_age_seconds / 3600:.1f}h)"
+        )
+    return None
+
+
+def detect(
+    client,
+    *,
+    token: str | None,
+    opener=urllib.request.urlopen,
+    now_epoch: float | None = None,
+    ephemeral_max_age_seconds: int = DEFAULT_EPHEMERAL_BRANCH_MAX_AGE_SECONDS,
+) -> dict:
     """Detect leaked previews (no mutation). Pure: lists, classifies, reports."""
     projects = client.list_projects()
     composes = collect_preview_composes(projects)
@@ -293,6 +366,19 @@ def detect(client, *, token: str | None, opener=urllib.request.urlopen) -> dict:
         open_prs_by_project=open_prs_by_project,
         active_branches_by_project=active_branches_by_project,
     )
+    flagged_ids = {c.compose_id for c, _ in leaks}
+    current_epoch = time.time() if now_epoch is None else now_epoch
+    for c in composes:
+        if c.compose_id in flagged_ids:
+            continue
+        reason = ephemeral_branch_leak_reason(
+            client,
+            c,
+            now_epoch=current_epoch,
+            max_age_seconds=ephemeral_max_age_seconds,
+        )
+        if reason is not None:
+            leaks.append((c, reason))
     fetch_ok = (
         all(v is not None for v in open_prs_by_project.values())
         if open_prs_by_project
