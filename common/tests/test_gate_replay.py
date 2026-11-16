@@ -190,3 +190,23 @@ def test_run_replay_judges_main_by_origin_main_and_head_by_the_checkout(
     got = run_replay(1, repo="x/y", gh=None, root=tmp_path)
     assert calls == ["origin/main", None]
     assert got["rows"][0]["reasons_removed"] == ["origin/main"]
+
+
+def test_job_runs_only_for_self_governing_files() -> None:
+    """#1653 AC3: harness-replay runs on PRs changing self_governing_files() and skips docs-only PRs."""
+    from pathlib import Path
+    import yaml
+    from common.gate.self_governance import is_self_governing
+
+    wf_path = Path(__file__).resolve().parents[2] / ".github/workflows/infra-ci.yml"
+    wf = yaml.safe_load(wf_path.read_text(encoding="utf-8"))
+    detect_job = wf["jobs"]["detect-changes"]
+    assert "gate_changed" in detect_job["outputs"]
+    replay_job = wf["jobs"]["harness-replay"]
+    assert (
+        replay_job["if"]
+        == "github.event_name == 'pull_request' && needs.detect-changes.outputs.gate_changed == 'true'"
+    )
+    assert not is_self_governing("docs/README.md")
+    assert is_self_governing("common/gate/evaluator.py")
+    assert is_self_governing("docs/ssot/ops.merge-gate.md")
