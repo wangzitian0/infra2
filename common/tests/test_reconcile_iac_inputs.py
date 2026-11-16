@@ -3420,7 +3420,10 @@ def test_sync_app_releases_cut_missing_app_tag_runs_ephemeral_preview_gate_and_a
     deploy_v2_calls_fail = [c for c in commands_seen if "tools.deploy_v2" in c]
     assert len(deploy_v2_calls_fail) == 2
     assert "--down" in deploy_v2_calls_fail[1]
-    assert not any(c[:2] == ["gh", "api"] for c in commands_seen)
+    assert not any(
+        len(c) >= 3 and c[:2] == ["gh", "api"] and "/git/refs" in c[2]
+        for c in commands_seen
+    )
 
 
 def test_audit_app_hooks_fails_closed_on_unsupplied_required_env(
@@ -4852,3 +4855,115 @@ def test_run_scheduled_app_audits_waits_for_staging_health_when_enabled(
         ("health", 3),
         ("hook", ("platform/todo", "https://todo-staging.zitian.party", "staging")),
     ]
+
+
+def test_preview_gate_passes_infra2_touched_files_from_compare(
+    monkeypatch, tmp_path
+) -> None:
+    """finance_report#3034: verify_and_cut_app_preview_tag computes diff against prev_sha and passes INFRA2_TOUCHED_FILES."""
+    from types import SimpleNamespace
+
+    prev_sha = "1" * 40
+    main_sha = "2" * 40
+    captured: dict[str, object] = {}
+
+    monkeypatch.delenv("INFRA2_TOUCHED_FILES", raising=False)
+    monkeypatch.setattr(
+        reconcile, "assert_app_version_ref_on_main", lambda *a, **k: main_sha
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "fetch_hooks_manifest",
+        lambda *a, **k: SimpleNamespace(slots={"preview_gate": SimpleNamespace()}),
+    )
+    monkeypatch.setattr(
+        reconcile, "resolve_app_hook_cwd", lambda *a, **k: (tmp_path, None)
+    )
+    monkeypatch.setattr(
+        reconcile,
+        "stage_hook_plan",
+        lambda _stage: SimpleNamespace(post_slot="preview_gate"),
+    )
+
+    def _fake_exec(manifest, slot, *, ambient_env=None, **kwargs):
+        captured["slot"] = slot
+        captured["ambient_env"] = dict(ambient_env or {})
+        return SimpleNamespace(status="pass", summary="ok")
+
+    monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
+
+    def _fake_runner(argv, **_kwargs):
+        if argv[:3] == [
+            "gh",
+            "api",
+            f"repos/wangzitian0/finance_report/compare/{prev_sha}...{main_sha}",
+        ]:
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                "apps/frontend/src/app/(main)/portfolio/page.tsx\napps/backend/src/routers/portfolio.py\n",
+                "",
+            )
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    reconcile.verify_and_cut_app_preview_tag(
+        "finance_report/app",
+        repo_slug="wangzitian0/finance_report",
+        repo_url="https://github.com/wangzitian0/finance_report.git",
+        main_sha=main_sha,
+        prev_sha=prev_sha,
+        next_tag="v1.2.3",
+        runner=_fake_runner,
+    )
+
+    assert captured["slot"] == "preview_gate"
+    assert (
+        captured["ambient_env"].get("INFRA2_TOUCHED_FILES")
+        == "apps/frontend/src/app/(main)/portfolio/page.tsx apps/backend/src/routers/portfolio.py"
+    )
+
+
+def test_preview_gate_touched_files_survives_build_hook_env(tmp_path) -> None:
+    """Real execute_app_hook_slot passes INFRA2_TOUCHED_FILES to the subprocess even if manifest omits it."""
+    from common.deploy import app_contract
+    from infra2_sdk.manifests import HOOK_SLOTS, RuntimeHooksManifest
+
+    manifest = RuntimeHooksManifest.from_dict(
+        {
+            "schema_version": 2,
+            "service": "finance_report/app",
+            "slots": {
+                slot_name: {
+                    "run": "echo ok",
+                    "bootstrap": "",
+                    "timeout_seconds": 30,
+                    "required_env": [],
+                    "optional_env": [],
+                }
+                for slot_name in HOOK_SLOTS
+            },
+        }
+    )
+    seen_envs: list[dict[str, str]] = []
+
+    def _capture_runner(argv, **kwargs):
+        seen_envs.append(dict(kwargs.get("env") or {}))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    res = app_contract.execute_app_hook_slot(
+        manifest,
+        "preview_gate",
+        app_url="https://report-branch-main.zitian.party",
+        environment="preview",
+        version_ref="2" * 7,
+        cwd=tmp_path,
+        ambient_env={
+            "PATH": "/usr/bin",
+            "INFRA2_TOUCHED_FILES": "apps/frontend/src/app/(main)/portfolio/page.tsx",
+        },
+        runner=_capture_runner,
+    )
+    assert res.status == "pass"
+    assert seen_envs and seen_envs[-1].get("INFRA2_TOUCHED_FILES") == (
+        "apps/frontend/src/app/(main)/portfolio/page.tsx"
+    )
