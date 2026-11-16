@@ -4967,3 +4967,24 @@ def test_preview_gate_touched_files_survives_build_hook_env(tmp_path) -> None:
     assert seen_envs and seen_envs[-1].get("INFRA2_TOUCHED_FILES") == (
         "apps/frontend/src/app/(main)/portfolio/page.tsx"
     )
+
+
+def test_compute_preview_touched_files_warns_on_compare_cap(capsys) -> None:
+    """_compute_preview_touched_files warns to stderr when GitHub Compare returns >=300 files."""
+    prev_sha = "1" * 40
+    main_sha = "2" * 40
+    many_files = "\n".join(f"apps/backend/src/f_{i}.py" for i in range(300))
+
+    def _fake_runner(argv, **_kwargs):
+        return subprocess.CompletedProcess(argv, 0, many_files, "")
+
+    files = reconcile._compute_preview_touched_files(
+        "wangzitian0/finance_report",
+        prev_sha,
+        main_sha,
+        runner=_fake_runner,
+    )
+    assert len(files) == 300
+    err = capsys.readouterr().err
+    assert "::warning::" in err
+    assert "300-file cap" in err

@@ -137,14 +137,17 @@ Each record names its `units` with a kind prefix (`app:`, `sdk:`, `infra:`, `har
 **Core rules**
 - A merge is not a deploy. A merge to main changes no running service. Staging runs only from a release tag. Production runs only from the tag that the owner approves.
 - `deploy_v2` is the single deploy entry point for every unit.
-- **preview 瞬态闭环验证**(`preview/branch` 与 `preview/pr`)——App 合流 `main` 后,在切出 `vX.Y.Z` tag 进入 Staging 火车前,由手动标志 `--cut-missing-app-tag`(无 workflow 传入,目标态)驱动的 `sync_app_releases(..., cut_missing_app_tag=True)` (内部调用 `verify_and_cut_app_preview_tag`) 瞬态拉起 `preview/branch` (`main`),执行 `preview_gate` 钩子(验证 0 帧冷启动、空库 Alembic 迁移、Vault 模板渲染与最小真实 E2E),通过后才推送 App `vX.Y.Z` tag,并在 `finally` 中**立即执行 `--down` 销毁**(连同临时数据库卷),绝不留存常驻 preview 容器(#1416, #1554)。
+- **preview 瞬态闭环验证（区分 `preview/branch` 与 `preview/pr`）**：
+  - **`preview/branch`（App cut-tag 门禁）**——App 合流 `main` 后、切出 `vX.Y.Z` tag 进入 Staging 火车前，由 `--cut-missing-app-tag` 驱动的 `sync_app_releases(..., cut_missing_app_tag=True)`（`verify_and_cut_app_preview_tag`）瞬态拉起 `preview/branch`（`main`），通过 GitHub Compare 计算 `prev_sha...main_sha` 差异并注入 `INFRA2_TOUCHED_FILES`，执行 App `runtime-hooks.manifest.json` 的 `preview_gate`（含 `smoke`、`preview_minimum_e2e` 与 `touched_files`），通过后才推送 App `vX.Y.Z` tag，并在 `finally` 中立即 `--down` 销毁（连同临时 DB 卷），不留常驻 preview 容器（#1416, #1554, infra2#1721）。
+  - **`preview/pr`（平台单元 `/preview` 槽位）**——仅服务声明了 `throwaway_secrets` 的平台单元（如 `platform/todo`；App 单元返回 400）。由 CI 或手动向 `iac-runner` `/preview` 发起并在 `finally` 销毁；服务端需 `IAC_PREVIEW_WEBHOOK_SECRET`（区别于 `IAC_WEBHOOK_SECRET`）否则返回 503。
 - **staging / prod 只部署 release tag**(不可变镜像,不接受 branch/sha);staging 与 prod **钉同一个 tag**
   (**promote-not-rebuild**,不是部署 main sha),App 的固定环境版本由 `harness/repos.yaml` (`release_tag`) 驱动。
 - 统一入口 `tools/deploy_v2.py`;**prod 对真实数据 deny-by-default**,缺 `--staging-validated --code-reviewed` 直接 fail-closed。
 
 | 目标 | 触发 | 部署什么 | 入口(示意)| 验证钩子 (`STAGE_HOOK_PLANS`) | 数据 | 生命周期 |
 |------|------|---------|------|------|------|---------|
-| **preview**(branch/pr)| 手动 `--cut-missing-app-tag`(无 workflow 传入)或手动按需 | 分支名 (`main`) / PR# | `deploy_v2 --type preview/{branch,pr}` | `preview_gate` | 临时 DB | `finally` 立即 `--down` |
+| **preview/branch**（App 切 tag 门禁）| 手动 `--cut-missing-app-tag`（无 workflow 传入）| 分支名（`main`）| `deploy_v2 --type preview/branch` | `preview_gate`（注入 `INFRA2_TOUCHED_FILES`）| 临时 DB | `finally` 立即 `--down` |
+| **preview/pr**（平台单元 PR 槽位）| PR CI / `/preview` 或手动按需（仅限 `throwaway_secrets` 单元）| PR# | `deploy_v2 --type preview/pr` / `/preview` | `preview_gate` | 临时 DB | `finally` 立即 `--down` |
 | **app staging** | **release tag 推送**(`reconcile-iac-inputs.yml` 读 `harness/repos.yaml`)或手动 `--bootstrap` | release tag(钉和 prod 同一个)| `deploy_v2 --type staging --version-ref vX.Y.Z` | `smoke` -> `staging_gate` (跨服务并发) | staging 数据 | 长期(同构 prod)|
 | **app prod** | **显式 promote**(`reconcile-iac-inputs.yml` `promote_prod=true`)或手动 `--bootstrap` | **同一个 release tag** | `deploy_v2 --type prod --version-ref vX.Y.Z --staging-validated --code-reviewed` | `smoke` -> `prod_gate` (跨服务并发) | 真实 prod 数据 | 长期 |
 | **平台服务**(iac_pinned)**staging** | **release tag 推送**(`v*.*.*`)→ **自动 staging**(soak)| **该 tag** 作 `iac_ref` | `reconcile-iac-inputs.yml` → `deploy_v2 → iac_runner` | `smoke` -> `staging_gate` (含 `platform/todo`) | — | 长期 |
