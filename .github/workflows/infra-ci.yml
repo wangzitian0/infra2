@@ -459,7 +459,7 @@ jobs:
             exit 1
           fi
           git fetch --no-tags --no-recurse-submodules --depth=1 origin "$base"
-          if ! diff_out="$(git diff --name-only --ignore-submodules=all "${base}..HEAD")"; then
+          if ! diff_out="$(git diff --name-only "${base}..HEAD")"; then
             echo "::error::git diff against PR base ${base} failed"
             exit 1
           fi
