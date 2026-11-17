@@ -10,33 +10,14 @@ from __future__ import annotations
 import importlib.util
 import subprocess
 import sys
-import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 WEBHOOK_SERVER = ROOT / "bootstrap/06.iac_runner/webhook_server.py"
 
 
-def _stub_flask(monkeypatch):
-    """webhook_server imports flask (a runtime-only dep, not in the test env). Stub the
-    bits the module touches at import: Flask(), app.config, and @app.route."""
-    flask = types.ModuleType("flask")
-
-    class _App:
-        config: dict = {}
-
-        def route(self, *_a, **_k):
-            return lambda fn: fn
-
-    flask.Flask = lambda *_a, **_k: _App()
-    flask.request = types.SimpleNamespace()
-    flask.jsonify = lambda *a, **k: (a, k)
-    monkeypatch.setitem(sys.modules, "flask", flask)
-
-
 def _load(monkeypatch, name: str):
     monkeypatch.setenv("GIT_REPO_URL", "https://github.com/wangzitian0/infra2")
-    _stub_flask(monkeypatch)
     spec = importlib.util.spec_from_file_location(name, WEBHOOK_SERVER)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)

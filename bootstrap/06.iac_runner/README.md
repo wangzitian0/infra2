@@ -163,9 +163,10 @@ authoritative version of all three.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/webhook` | POST | GitHub push receiver — authenticates the delivery and deploys nothing (a merge is not a release; staging follows a release tag) |
+| `/health`, `/livez`, `/readyz` | GET | Runner dependency health and Kubernetes/Docker probes |
+| `/openapi.json` | GET | Auto-generated OpenAPI 3.1 schema |
 | `/deploy` | POST | SHA-based deployment (GitOps) |
+| `/deploy/status/{deployment_id}` | GET | Poll deployment status by deployment ID |
 | `/deploy/status` | POST | Poll the exact deployment ID returned by `/deploy` |
 
 ### Version-Based Deployment

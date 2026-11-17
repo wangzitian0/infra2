@@ -40,19 +40,6 @@ AFTER_LINE = "after wait_for_runner_idle"
 
 
 def _load_webhook_server(monkeypatch, tmp_path, name: str):
-    fake_flask = types.ModuleType("flask")
-
-    class FakeFlask:
-        def __init__(self, _name):
-            pass
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    fake_flask.Flask = FakeFlask
-    fake_flask.jsonify = lambda payload: payload
-    fake_flask.request = types.SimpleNamespace(headers={}, data=b"", json={})
-    monkeypatch.setitem(sys.modules, "flask", fake_flask)
     monkeypatch.setenv("GIT_REPO_URL", "https://github.com/wangzitian0/infra2")
     monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
     monkeypatch.setenv("DOKPLOY_API_KEY", "test-dokploy-key")
@@ -72,9 +59,18 @@ def _load_webhook_server(monkeypatch, tmp_path, name: str):
     monkeypatch.setattr(module, "WORKSPACE", workspace)
     monkeypatch.setattr(module, "op_service_account_works", lambda: True)
     monkeypatch.setattr(
-        module, "_dependency_checks", lambda: {"python:flask": True, "binary:op": True}
+        module,
+        "_dependency_checks",
+        lambda: {"python:fastapi": True, "binary:op": True},
     )
     return module
+
+
+def _get_health(webhook_server) -> tuple[dict, int]:
+    from starlette.testclient import TestClient
+
+    resp = TestClient(webhook_server.app).get("/health")
+    return resp.json(), resp.status_code
 
 
 def test_health_reports_the_in_flight_count_outside_checks(
@@ -84,7 +80,7 @@ def test_health_reports_the_in_flight_count_outside_checks(
         monkeypatch, tmp_path, "webhook_server_idle_count"
     )
 
-    body, status_code = webhook_server.health()
+    body, status_code = _get_health(webhook_server)
 
     # A count of 0 must not turn a healthy runner into "degraded" (0 is falsy).
     assert status_code == 200
@@ -96,7 +92,7 @@ def test_health_reports_the_in_flight_count_outside_checks(
     webhook_server._in_flight_deploys.add(
         webhook_server._deployment_key("staging", DEPLOY_SHA)
     )
-    body, status_code = webhook_server.health()
+    body, status_code = _get_health(webhook_server)
 
     assert status_code == 200
     assert body["status"] == "healthy"
@@ -116,7 +112,7 @@ def test_degraded_health_still_reports_the_in_flight_count(
         webhook_server._deployment_key("staging", DEPLOY_SHA)
     )
 
-    body, status_code = webhook_server.health()
+    body, status_code = _get_health(webhook_server)
 
     assert status_code == 503
     assert body["status"] == "degraded"
@@ -150,15 +146,20 @@ def test_an_interrupted_deploy_leaves_no_key_in_flight(
         webhook_server._run_deployment("staging", DEPLOY_SHA, "ci")
 
     assert key not in webhook_server._in_flight_deploys
-    assert webhook_server.health()[0]["in_flight_deploys"] == 0
+    assert _get_health(webhook_server)[0]["in_flight_deploys"] == 0
     # A poll learns that the run ended; a retry deploys again (a failure is not reused).
-    monkeypatch.setattr(webhook_server, "verify_iac_request", lambda: True)
-    webhook_server.request.json = {
-        "env": "staging",
-        "ref": DEPLOY_SHA,
-        "triggered_by": "ci",
-    }
-    status_body, status_code = webhook_server.deployment_status()
+    from starlette.testclient import TestClient
+
+    monkeypatch.setattr(webhook_server, "verify_iac_request", lambda *_a, **_k: True)
+    resp = TestClient(webhook_server.app).post(
+        "/deploy/status",
+        json={
+            "env": "staging",
+            "ref": DEPLOY_SHA,
+            "triggered_by": "ci",
+        },
+    )
+    status_body, status_code = resp.json(), resp.status_code
     assert status_code == 200
     assert status_body["status"] == "failed"
     assert f"Deployment interrupted by {interruption.__name__}" in status_body["error"]
