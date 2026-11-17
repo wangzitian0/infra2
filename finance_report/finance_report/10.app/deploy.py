@@ -391,7 +391,11 @@ class AppDeployer(Deployer):
                 f"S3 bucket '{bucket_name}' returned 404 on {endpoint_url}; "
                 "creating with S3 root credentials"
             )
-            root_env = effective_env if effective_env in ("staging", "production") else "staging"
+            root_env = (
+                effective_env
+                if effective_env in ("staging", "production")
+                else "staging"
+            )
             try:
                 root_secrets = get_secrets("platform", "minio", root_env)
                 root_user = root_secrets.get("root_user") or "admin"
