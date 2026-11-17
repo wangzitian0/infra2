@@ -13,6 +13,8 @@ from typing import Protocol
 
 from infra2_sdk.deploy import canonical_json_bytes
 
+from infra2_sdk.observability import GitHubIssues, issue_trail_mode, scrub
+
 from common.alerting import (
     DISPLAY_TIMEZONE,
     REPORT_TITLE_PREFIX,
@@ -20,17 +22,13 @@ from common.alerting import (
     format_time,
     since_text,
 )
-from common.observability.issue_trail import (
-    BOUND_CAP_ENV,
-    DRY_RUN_ENV,
-    FULL,
-    ISSUE_LABELS,
-    OFF,
-    OPEN_ONLY,
-    GitHubIssues,
-    issue_trail_mode,
-    scrub,
-)
+from common.observability.estate_scheduler_liveness import BOUND_CAP_ENV
+
+ISSUE_LABELS = ("incident",)
+DRY_RUN_ENV = "WATCHDOG_DRY_RUN"
+FULL = "full"
+OPEN_ONLY = "open-only"
+OFF = "off"
 
 
 def _dedup_run_mode(env: Mapping[str, str]) -> str:

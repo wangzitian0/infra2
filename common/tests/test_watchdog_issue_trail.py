@@ -15,13 +15,8 @@ from urllib.error import HTTPError, URLError
 import pytest
 import yaml
 
-from common.observability import issue_trail as trail_lib
-from common.observability.issue_trail import (
-    FULL,
-    OFF,
-    OPEN_ONLY,
-    RUNNER_HEALTH_SOURCE,
-    WATCHDOG_SOURCE,
+import infra2_sdk.observability as trail_lib
+from infra2_sdk.observability import (
     CheckVerdict,
     GitHubIssues,
     ListingFailed,
@@ -33,7 +28,13 @@ from common.observability.issue_trail import (
     record_verdicts,
     title_for,
 )
+
 from common.observability import watchdog_issue_trail_cli as trail_tool
+from common.observability.page_dedup import FULL, OFF, OPEN_ONLY
+from common.observability.watchdog_issue_trail_cli import (
+    RUNNER_HEALTH_SOURCE,
+    WATCHDOG_SOURCE,
+)
 
 RUN_URL = "https://github.com/wangzitian0/infra2/actions/runs/42"
 WORKFLOW = Path(__file__).resolve().parents[2] / ".github/workflows/ops-checks.yml"

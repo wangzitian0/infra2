@@ -78,8 +78,8 @@ from common.deploy.release_markers import (
     newest_release_tag,
     version_key,
 )
-from common.observability.issue_trail import CheckVerdict
 from infra2_sdk.deploy import DeployRequest
+from infra2_sdk.observability import CheckVerdict
 from infra2_sdk.manifests import (
     FORBIDDEN_HOOK_ENV_NAMES,
     FORBIDDEN_HOOK_ENV_PREFIXES,

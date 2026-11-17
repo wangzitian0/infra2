@@ -35,16 +35,20 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from common.observability.estate_scheduler_liveness import BOUND_CAP_ENV  # noqa: E402
-from common.observability.issue_trail import (  # noqa: E402
-    FULL,
-    OFF,
-    VERDICTS_ENV,
+from infra2_sdk.observability import (  # noqa: E402
     GitHubIssues,
     issue_trail_mode,
     load_trail,
     reconcile_issue_trail,
 )
+
+from common.observability.estate_scheduler_liveness import BOUND_CAP_ENV  # noqa: E402
+
+VERDICTS_ENV = "INFRA2_WATCHDOG_VERDICTS_PATH"
+WATCHDOG_SOURCE = "out-of-band-watchdog"
+RUNNER_HEALTH_SOURCE = "iac-runner-health"
+FULL = "full"
+OFF = "off"
 
 
 def _run_policy(env: Mapping[str, str]) -> tuple[str, bool]:

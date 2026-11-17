@@ -449,9 +449,8 @@ jobs:
           python - <<'PY'
           import os
           from pathlib import Path
-          from common.observability.issue_trail import FULL
           from common.deploy.deploy_guard_audit import APP_HOOK_KEY_PREFIX
-          from common.observability.page_dedup import dedup_page
+          from common.observability.page_dedup import FULL, dedup_page
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from tools.reconcile_iac_inputs import (
               hook_findings_from_result,
@@ -509,8 +508,7 @@ jobs:
         run: |
           python - <<'PY'
           import os
-          from common.observability.issue_trail import FULL
-          from common.observability.page_dedup import resolve_page_state
+          from common.observability.page_dedup import FULL, resolve_page_state
           from pathlib import Path
           from tools.out_of_band_watchdog import deliver_out_of_band_alert
           from common.deploy.deploy_guard_audit import APP_HOOK_KEY_PREFIX
