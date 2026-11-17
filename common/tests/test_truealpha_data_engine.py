@@ -304,6 +304,13 @@ def test_a_release_request_pins_the_tag_digest_in_vault_before_reading_it(monkey
         asked.append((image, ref))
         return new_digest
 
+    import hashlib
+    from infra2_sdk.runtime.environment import assert_distinct_release_identity
+
+    expected_release = (
+        "release-manifest:"
+        + hashlib.sha256(f"v0.0.46:{new_digest}".encode()).hexdigest()
+    )
     assert (
         deployer.pin_release("v0.0.46", secrets=secrets, resolve=resolve) == new_digest
     )
@@ -311,12 +318,33 @@ def test_a_release_request_pins_the_tag_digest_in_vault_before_reading_it(monkey
     assert secrets.writes == [
         ("IMAGE_DIGEST", new_digest),
         ("GIT_COMMIT_SHA", "v0.0.46"),
+        ("RELEASE_ID", expected_release),
     ]
     # compose_env_base now reads the pinned values, not the ones Vault held before
     env = deployer.compose_env_base(
         {"ENV": "staging", "DATA_PATH": "/tmp/x", "ENV_SUFFIX": "-staging"}
     )
-    assert env["IMAGE_DIGEST"] == new_digest and env["GIT_COMMIT_SHA"] == "v0.0.46"
+    assert (
+        env["IMAGE_DIGEST"] == new_digest
+        and env["GIT_COMMIT_SHA"] == "v0.0.46"
+        and env["RELEASE_ID"] == expected_release
+    )
+    assert_distinct_release_identity(
+        [
+            {
+                "environment": "staging",
+                "release_id": expected_release,
+                "git_commit_sha": "v0.0.46",
+                "image_digest": new_digest,
+            },
+            {
+                "environment": "production",
+                "release_id": "release-manifest:" + "b" * 64,
+                "git_commit_sha": "v0.0.45",
+                "image_digest": "sha256:" + "a" * 64,
+            },
+        ]
+    )
 
 
 def test_pin_release_fails_closed_on_a_bad_ref_or_an_unresolvable_tag(monkeypatch):

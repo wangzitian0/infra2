@@ -206,9 +206,14 @@ services:
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       # Was defaulted by the hand-written secrets.ctmpl; the generated template renders
       # only human / runtime values, so the deployment states these here.
+      ENVIRONMENT: ${ENV}
       APP_ENV: ${ENV}
       NODE_ENV: production
       S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://${APP_HOST}}
+      NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT: ${NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OPENPANEL_CLIENT_ID: ${OPENPANEL_CLIENT_ID:-}
+      OPENPANEL_ENVIRONMENT: ${OPENPANEL_ENVIRONMENT:-${ENV}}
       HOSTNAME: 0.0.0.0
       PORT: "3000"
     healthcheck:
