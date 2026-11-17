@@ -188,16 +188,20 @@ class DataEngineDeployer(Deployer):
             raise ValueError(
                 f"registry returned a malformed digest for {candidate}: {digest!r}"
             )
+        release_id = f"release-manifest:{hashlib.sha256(f'{candidate}:{digest}'.encode()).hexdigest()}"
         backend = secrets if secrets is not None else cls.secrets_backend()
         for key, value in (
             ("IMAGE_DIGEST", digest),
             ("GIT_COMMIT_SHA", candidate),
+            ("RELEASE_ID", release_id),
         ):
             if not backend.set(key, value):
                 raise RuntimeError(
                     f"Vault refused to pin {key} for release {candidate}"
                 )
-        success(f"{cls.service}: pinned release {candidate} -> {digest[:19]}… in Vault")
+        success(
+            f"{cls.service}: pinned release {candidate} -> {digest[:19]}… ({release_id[:31]}…) in Vault"
+        )
         return digest
 
     @classmethod

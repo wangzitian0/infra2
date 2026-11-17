@@ -26,8 +26,8 @@
 x-app-runtime-env: &app_runtime_env
   ENVIRONMENT: ${ENV}
   INFRA_ENVIRONMENT: ${INFRA_ENVIRONMENT:-${ENV}}
-  S3_ENDPOINT: http://platform-s3:9000
-  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://s3.${INTERNAL_DOMAIN}}
+  S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000
+  S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-https://s3${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}}
   S3_BUCKET: ${S3_BUCKET:-statements}
   # An empty S3_PUBLIC_BUCKET stops finance_report at boot (#1466); it reads `s3_public_bucket or bucket`.
   S3_PUBLIC_BUCKET: ${S3_PUBLIC_BUCKET:-${S3_BUCKET:-statements}}
@@ -329,6 +329,7 @@ services:
       # when unset, which config-gates the FE OTel SDK to a no-op (same as OpenPanel).
       NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT: ${NEXT_PUBLIC_OTEL_EXPORTER_OTLP_ENDPOINT:-}
       NEXT_PUBLIC_DEPLOYMENT_ENVIRONMENT: ${ENV}
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}
       NEXT_PUBLIC_GIT_SHA: ${GIT_COMMIT_SHA:-unknown}
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:3000" ]

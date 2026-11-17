@@ -348,10 +348,13 @@ class AppDeployer(Deployer):
         cls,
         *,
         env: str | None = None,
-        endpoint_url: str = "http://platform-s3:9000",
+        endpoint_url: str | None = None,
     ) -> bool:
         e = cls._env_for(env)
         effective_env = env or cls._require_env_name(e)
+        if endpoint_url is None:
+            env_suffix = "-staging" if effective_env == "staging" else ""
+            endpoint_url = f"http://platform-s3{env_suffix}:9000"
         secrets = cls.secrets_backend(env=effective_env)
         try:
             access_key = secrets.get("S3_ACCESS_KEY")
@@ -388,8 +391,13 @@ class AppDeployer(Deployer):
                 f"S3 bucket '{bucket_name}' returned 404 on {endpoint_url}; "
                 "creating with S3 root credentials"
             )
+            root_env = (
+                effective_env
+                if effective_env in ("staging", "production")
+                else "staging"
+            )
             try:
-                root_secrets = get_secrets("platform", "minio", "production")
+                root_secrets = get_secrets("platform", "minio", root_env)
                 root_user = root_secrets.get("root_user") or "admin"
                 root_password = root_secrets.get("root_password")
             except VaultSecrets.VaultError as exc:
@@ -397,7 +405,7 @@ class AppDeployer(Deployer):
                 return False
             if not root_password:
                 error(
-                    "S3 root_password missing in secret/platform/production/minio; "
+                    f"S3 root_password missing in secret/platform/{root_env}/minio; "
                     f"cannot create bucket '{bucket_name}'"
                 )
                 return False

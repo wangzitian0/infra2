@@ -118,23 +118,27 @@ def test_backend_only_configuration_stays_off_the_worker() -> None:
     assert "${OTEL_WORKER_RESOURCE_ATTRIBUTES" in worker["OTEL_RESOURCE_ATTRIBUTES"]
 
 
-def test_s3_endpoints_use_the_singleton_s3_service() -> None:
+def test_s3_endpoints_isolate_staging_and_preview_from_production() -> None:
     services = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]
     for name in ("backend", "prefect-worker"):
         env = _environment(services[name])
-        assert env.get("S3_ENDPOINT") == "http://platform-s3:9000", name
+        assert env.get("S3_ENDPOINT") == "http://platform-s3${ENV_SUFFIX}:9000", name
         assert (
             env.get("S3_PUBLIC_ENDPOINT")
-            == "${S3_PUBLIC_ENDPOINT:-https://s3.${INTERNAL_DOMAIN}}"
+            == "${S3_PUBLIC_ENDPOINT:-https://s3${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}}"
         ), name
+    frontend_env = _environment(services["frontend"])
+    assert frontend_env.get("GIT_COMMIT_SHA") == "${GIT_COMMIT_SHA:-unknown}"
 
     preview_compose = ROOT / "finance_report/finance_report/preview/compose.yaml"
     preview_services = yaml.safe_load(preview_compose.read_text(encoding="utf-8"))[
         "services"
     ]
     preview_backend = _environment(preview_services["backend"])
-    assert preview_backend.get("S3_ENDPOINT") == "http://platform-s3:9000"
+    assert preview_backend.get("S3_ENDPOINT") == "http://platform-s3-staging:9000"
     assert preview_backend.get("S3_PUBLIC_ENDPOINT") == "${S3_PUBLIC_ENDPOINT:-}"
+    preview_frontend = _environment(preview_services["frontend"])
+    assert preview_frontend.get("GIT_COMMIT_SHA") == "${GIT_COMMIT_SHA:-unknown}"
 
 
 def test_preview_backend_disables_storage_sweep_and_raises_rate_limit() -> None:
@@ -195,7 +199,7 @@ def test_ensure_s3_bucket_via_api_succeeds_when_head_returns_200(monkeypatch) ->
     assert calls == [
         (
             "HEAD",
-            "http://platform-s3:9000",
+            "http://platform-s3-staging:9000",
             "finance-report-staging",
             "ak-staging",
             "sk-staging",
@@ -242,21 +246,21 @@ def test_ensure_s3_bucket_via_api_creates_missing_bucket_on_404(monkeypatch) -> 
     assert calls == [
         (
             "HEAD",
-            "http://platform-s3:9000",
+            "http://platform-s3-staging:9000",
             "finance-report-staging",
             "ak-staging",
             "sk-staging",
         ),
         (
             "PUT",
-            "http://platform-s3:9000",
+            "http://platform-s3-staging:9000",
             "finance-report-staging",
             "minio-root",
             "minio-root-password",
         ),
         (
             "HEAD",
-            "http://platform-s3:9000",
+            "http://platform-s3-staging:9000",
             "finance-report-staging",
             "ak-staging",
             "sk-staging",
