@@ -48,6 +48,9 @@ TELEMETRY_SERVICE_NAME = "platform-todo"
 BRIDGE_HEALTHY_STATUSES = frozenset({"healthy"})
 # A timestamp may run ahead of the local clock by this much before it counts as skew.
 CLOCK_SKEW_TOLERANCE_SECONDS = 60
+# Startup grace after container State.StartedAt to absorb deploy restart probe ticks (#1720;
+# covers integer-second epoch truncation plus compose.yaml start_period=10s).
+RESTART_GRACE_SECONDS = 15
 
 
 @dataclass
@@ -207,22 +210,52 @@ def _ledger_count(value: object) -> int | None:
     return None
 
 
+def _parse_container_started_at(raw: str | None) -> int | None:
+    """Parse Docker State.StartedAt RFC3339 timestamp into UTC epoch seconds (#1720)."""
+    if not raw:
+        return None
+    text = raw.strip()
+    if not text or text.startswith("0001-01-01"):
+        return None
+    # Docker emits up to 9 fractional second digits (e.g. .123456789Z); Python <3.11 or
+    # strict ISO parsers expect <=6 digits, so drop sub-second fraction (seconds precision).
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    if "." in text:
+        head, tail = text.split(".", 1)
+        tz_pos = next((i for i, ch in enumerate(tail) if ch in "+-"), len(tail))
+        text = head + tail[tz_pos:]
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
+
+
 def _evaluate_ledger_signal(
     signal: object,
     now: datetime,
     window_seconds: int = DEFAULT_WINDOW_SECONDS,
+    container_started_at: int | None = None,
 ) -> tuple[bool, str, dict[str, Any]]:
-    """Fail-closed judgement of one ledger signal (#1223).
+    """Fail-closed judgement of one ledger signal (#1223, #1720).
 
     The signal passes when it has at least one ok run and either:
-    1. it has no failed run, or
-    2. the last failed run is older than the window and the last ok run is inside it.
+    1. it has no failed run,
+    2. the last failed run is older than the window and the last ok run is inside it, or
+    3. the last failed run occurred at or before the active container's startup grace
+       (`container_started_at + RESTART_GRACE_SECONDS`) and a subsequent ok run is inside
+       the window (`lastOkAt > lastFailAt`).
 
     `lastFailAt` and `lastOkAt` are the epoch seconds that the probe runner writes
     (`common.observability.local_ledger`). A signal with failures and a missing or
     malformed time fails the check: the ledger then does not say how old they are.
     """
     details: dict[str, Any] = {"window_seconds": window_seconds}
+    if container_started_at is not None:
+        details["container_started_at"] = container_started_at
     if not isinstance(signal, dict):
         return False, "entry missing for the signal today", details
     ok_count = _ledger_count(signal.get("ok"))
@@ -249,13 +282,23 @@ def _evaluate_ledger_signal(
     details["last_fail_age_seconds"] = fail_age
     details["last_ok_age_seconds"] = ok_age
     ages = f"last fail {fail_age}s ago, last ok {ok_age}s ago"
+    ok_in_window = -CLOCK_SKEW_TOLERANCE_SECONDS <= ok_age <= window_seconds
     if fail_age <= window_seconds:
-        return (
-            False,
-            f"{counts}: a run failed within the last {window_seconds}s ({ages})",
-            details,
+        is_restart_failure = (
+            container_started_at is not None
+            and last_fail <= container_started_at + RESTART_GRACE_SECONDS
+            and last_ok > last_fail
+            and ok_in_window
         )
-    if not -CLOCK_SKEW_TOLERANCE_SECONDS <= ok_age <= window_seconds:
+        if not is_restart_failure:
+            return (
+                False,
+                f"{counts}: a run failed within the last {window_seconds}s ({ages})",
+                details,
+            )
+        details["ignored_pre_startup_failure"] = True
+        return True, f"{counts} ({ages}; ignored deploy-restart failure)", details
+    if not ok_in_window:
         return (
             False,
             f"{counts}: no ok run within the last {window_seconds}s ({ages})",
@@ -350,6 +393,8 @@ def verify_canary(
         f"docker exec platform-clickhouse clickhouse-client --query {logs_sql} && "
         f'echo "=== LEDGER ===" && '
         f'jq -c ".days | to_entries[-1] | {{day: .key, runs: .value.runs, signal: .value.signals[\\"{signal_id}\\"]}}" {ledger_path} && '
+        f'echo "=== CONTAINER_STARTED_AT ===" && '
+        f"docker inspect -f '{{{{.State.StartedAt}}}}' {container} && "
         f'echo "=== ALERT_BRIDGE ===" && '
         f"docker exec {bridge_container} python3 -c \"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/health').read().decode())\""
     )
@@ -416,8 +461,14 @@ def verify_canary(
             ledger_data = parsed_ledger
     except ValueError:
         pass
+    container_started_at = _parse_container_started_at(
+        sections.get("CONTAINER_STARTED_AT")
+    )
     ledger_ok, ledger_summary, ledger_check = _evaluate_ledger_signal(
-        ledger_data.get("signal"), _as_utc(now), window_seconds=max_age_seconds
+        ledger_data.get("signal"),
+        _as_utc(now),
+        window_seconds=max_age_seconds,
+        container_started_at=container_started_at,
     )
     monitoring_ok = ledger_ok and gating_ok and health_ok
 

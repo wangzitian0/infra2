@@ -65,9 +65,15 @@ def _canned_stdout(
     status: str = HEALTHY_STATUS_LINE,
     sdk: str | None = None,
     environment: str = "production",
+    container_started_at: str | None = None,
 ) -> str:
     sdk_version = (
         sdk if sdk is not None else _resolve_locked_sdk_version(environment=environment)
+    )
+    started_section = (
+        f"=== CONTAINER_STARTED_AT ===\n{container_started_at}\n"
+        if container_started_at is not None
+        else ""
     )
     return (
         "=== STATUS ===\n"
@@ -80,6 +86,7 @@ def _canned_stdout(
         f"{logs}\n"
         "=== LEDGER ===\n"
         f"{ledger}\n"
+        f"{started_section}"
         "=== ALERT_BRIDGE ===\n"
         f"{bridge}\n"
     )
@@ -625,6 +632,7 @@ def _monitoring_report(
     environment: str = "staging",
     status: str = HEALTHY_STATUS_LINE,
     health_body: dict[str, object] | None = None,
+    container_started_at: str | None = None,
     **kwargs: object,
 ) -> CanaryRealityReport:
     """Run the verifier on a ledger line that holds `signal`, with fresh telemetry."""
@@ -635,6 +643,7 @@ def _monitoring_report(
         ledger=ledger,
         status=status,
         environment=environment,
+        container_started_at=container_started_at,
     )
     report, _commands = _verify_with_canned_ssh(
         environment, stdout, health_body=health_body, **kwargs
@@ -927,3 +936,72 @@ def test_canary_verify_reads_expected_sdk_from_release_ref_uv_lock(tmp_path) -> 
     assert mutated_report.sdk.ok is False
     assert mutated_report.expected_sdk == "3.7.1"
     assert mutated_report.all_ok is False
+
+
+# --- Deploy-restart ledger grace rule (issue #1720) -------------------------
+
+
+def test_deploy_restart_failure_clears_once_healthy_after_startup() -> None:
+    """#1720: a transient probe failure at/before container startup passes once ok ticks land."""
+    # Exact incident geometry: deploy restarted container 797s ago; last fail 797s ago, last ok 55s ago.
+    started_iso = (FIXED_NOW - timedelta(seconds=797)).strftime(
+        "%Y-%m-%dT%H:%M:%S.987654321Z"
+    )
+    signal = _signal(ok=364, fail=1, fail_age=797, ok_age=55)
+
+    report = _monitoring_report(
+        signal, environment="production", container_started_at=started_iso
+    )
+    assert report.monitoring.ok is True
+    assert report.all_ok is True
+    assert "ignored deploy-restart failure" in report.monitoring.summary
+    assert (
+        report.monitoring.details["ledger_check"]["ignored_pre_startup_failure"] is True
+    )
+
+    # Failure during the 10s start_period (e.g., 10s after StartedAt) also clears once recovered.
+    startup_grace_signal = _signal(ok=10, fail=1, fail_age=787, ok_age=55)
+    grace_report = _monitoring_report(
+        startup_grace_signal,
+        environment="production",
+        container_started_at=started_iso,
+    )
+    assert grace_report.monitoring.ok is True
+
+
+def test_post_startup_real_failure_still_fails_within_window() -> None:
+    """#1720 falsifiability: a failure after steady-state startup must still fail."""
+    started_iso = (FIXED_NOW - timedelta(seconds=1200)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Failure occurred 600s after StartedAt (well past 15s startup grace).
+    signal = _signal(ok=364, fail=1, fail_age=600, ok_age=55)
+
+    report = _monitoring_report(
+        signal, environment="production", container_started_at=started_iso
+    )
+    assert report.monitoring.ok is False
+    assert report.all_ok is False
+    assert "a run failed within the last 3600s" in report.monitoring.summary
+
+
+def test_restart_failure_without_subsequent_ok_fails_closed() -> None:
+    """#1720: if no healthy probe succeeded after the restart failure, stay red."""
+    started_iso = (FIXED_NOW - timedelta(seconds=800)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # lastOkAt is older than lastFailAt -> latest probe failed.
+    signal = _signal(ok=364, fail=1, fail_age=797, ok_age=850)
+
+    report = _monitoring_report(
+        signal, environment="production", container_started_at=started_iso
+    )
+    assert report.monitoring.ok is False
+    assert report.all_ok is False
+
+
+def test_missing_or_zero_container_started_at_fails_closed() -> None:
+    """#1720: missing or placeholder Docker StartedAt never excuses a recent failure."""
+    signal = _signal(ok=364, fail=1, fail_age=797, ok_age=55)
+    for raw in ("", "0001-01-01T00:00:00Z", "not-a-timestamp"):
+        report = _monitoring_report(
+            signal, environment="production", container_started_at=raw
+        )
+        assert report.monitoring.ok is False
+        assert report.all_ok is False
