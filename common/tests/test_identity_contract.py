@@ -323,12 +323,12 @@ def test_only_the_todo_page_reads_the_commit_from_the_environment() -> None:
         for path in _non_test_python()
         if ENV_KEY in _read_env_vars(path.read_text(encoding="utf-8"))
     )
-    assert readers == ["platform/30.todo/app.py"]
+    assert readers == []
     platform_row = contract_table()["platform"]
     documented = [
         tick for tick in _ticks(platform_row["Reader"]) if tick.endswith(".py")
     ]
-    assert documented == readers
+    assert documented == ["platform/30.todo/app.py"]
 
 
 def test_contract_code_anchors_exist() -> None:
