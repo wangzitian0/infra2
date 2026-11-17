@@ -656,3 +656,58 @@ def test_unmet_accepts_pre_migration_alias_names_and_rejects_attribute_mismatch(
     assert [g.env for g in app_contract.unmet(mismatched_source, provided)] == [
         "AI_PROVIDER"
     ]
+
+
+def test_render_release_template_supersedes_overlapping_alias() -> None:
+    stack_manifest = EnvironmentManifest(
+        source="infra2/finance_report/app",
+        fields=(
+            DATABASE,
+            _field(
+                "LLM_API_KEY",
+                "human",
+                aliases=("AI_API_KEY", "ZAI_API_KEY"),
+                store_key="ZAI_API_KEY",
+                empty_ok=True,
+                sensitive=True,
+            ),
+        ),
+    )
+    pre_migration = _manifest(
+        DATABASE,
+        _field(
+            "AI_API_KEY",
+            "human",
+            aliases=("ZAI_API_KEY",),
+            store_key="ZAI_API_KEY",
+            empty_ok=True,
+            sensitive=True,
+        ),
+    )
+    post_migration = _manifest(
+        DATABASE,
+        _field(
+            "LLM_API_KEY",
+            "human",
+            aliases=("AI_API_KEY", "ZAI_API_KEY"),
+            store_key="ZAI_API_KEY",
+            empty_ok=True,
+            sensitive=True,
+        ),
+    )
+    pre_tpl, _ = app_contract.render_release_template(
+        "finance_report/app",
+        [("fr-pre", pre_migration)],
+        stack_manifest_body=stack_manifest,
+        committed_policy=FR_POLICY,
+    )
+    post_tpl, _ = app_contract.render_release_template(
+        "finance_report/app",
+        [("fr-post", post_migration)],
+        stack_manifest_body=stack_manifest,
+        committed_policy=FR_POLICY,
+    )
+    assert "AI_API_KEY=" in pre_tpl
+    assert "LLM_API_KEY=" not in pre_tpl
+    assert "LLM_API_KEY=" in post_tpl
+    assert "AI_API_KEY=" not in post_tpl
