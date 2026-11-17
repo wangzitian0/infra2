@@ -49,7 +49,7 @@ services:
   unsealer:
     mem_limit: 1g
     build: .
-    image: bootstrap-vault-unsealer:python3.11
+    image: bootstrap-vault-unsealer:python3.12
     container_name: vault-unsealer
     restart: always
     environment:

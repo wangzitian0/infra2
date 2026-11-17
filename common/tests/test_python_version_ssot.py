@@ -32,7 +32,7 @@ PRODUCTION_JOBS = {
 }
 # bootstrap/05.vault is on Dokploy-native autoDeploy (tools/dokploy_env.py
 # AUTODEPLOY_ALLOWLIST): a merge can rebuild the production unsealer at once.
-PENDING_OWNER = {"bootstrap/05.vault/Dockerfile": "python:3.11-slim"}
+PENDING_OWNER: dict[str, str] = {}
 IMAGE_REF = re.compile(r"(?<![\w./-])(?:docker\.io/)?(?:library/)?python:([\w.@:-]+)")
 SCANNED_SUFFIXES = (".py", ".sh", ".yml", ".yaml", ".toml")
 SKIPPED_PREFIXES = (
