@@ -469,9 +469,7 @@ def collect(
             closing_errors.append(err)
         elif labels is not None:
             closing_map[issue_num] = labels
-    closing_issue_labels = tuple(
-        (num, closing_map[num]) for num in sorted(closing_map)
-    )
+    closing_issue_labels = tuple((num, closing_map[num]) for num in sorted(closing_map))
     closing_issue_read_error = "; ".join(closing_errors)
     cited_shas = _cited_approved_shas(body_text, comments)
     owner_login = owner.casefold()

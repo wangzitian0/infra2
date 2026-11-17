@@ -3445,7 +3445,10 @@ class _ClosingIssueGh(_Gh):
 
     def __call__(self, argv):
         argv_list = list(argv)
-        if argv_list[:2] == ["api", "graphql"] and "closingIssuesReferences" in argv_list[3]:
+        if (
+            argv_list[:2] == ["api", "graphql"]
+            and "closingIssuesReferences" in argv_list[3]
+        ):
             return json.dumps(
                 {
                     "data": {
@@ -3496,9 +3499,9 @@ def test_closing_issue_with_blocking_label_blocks_merge(keyword_ref, blocking_la
     assert verdict_gql.outcome == "action"
     assert verdict_gql.action_required is True
     assert not verdict_gql.owner_required
-    assert any(
-        "#1545" in r and blocking_label in r for r in verdict_gql.reasons
-    ), verdict_gql.reasons
+    assert any("#1545" in r and blocking_label in r for r in verdict_gql.reasons), (
+        verdict_gql.reasons
+    )
 
     # Path 2: Body fallback via REST when GraphQL closingIssuesReferences omits the issue.
     gh_rest = _ClosingIssueGh(
@@ -3511,9 +3514,9 @@ def test_closing_issue_with_blocking_label_blocks_merge(keyword_ref, blocking_la
     assert not verdict_rest.ready
     assert verdict_rest.exit_code == 3
     assert verdict_rest.outcome == "action"
-    assert any(
-        "#1545" in r and blocking_label in r for r in verdict_rest.reasons
-    ), verdict_rest.reasons
+    assert any("#1545" in r and blocking_label in r for r in verdict_rest.reasons), (
+        verdict_rest.reasons
+    )
 
 
 @pytest.mark.parametrize(
@@ -3559,7 +3562,9 @@ def test_unreadable_closing_issue_labels_fails_closed_as_unevaluable():
     gh = _ClosingIssueGh(
         body="Fixes #1545",
         closing_refs=[],
-        issue_error=RuntimeError("gh api repos/wangzitian0/infra2/issues/1545: HTTP 502"),
+        issue_error=RuntimeError(
+            "gh api repos/wangzitian0/infra2/issues/1545: HTTP 502"
+        ),
     )
     facts = gate.collect(704, gh=gh)
     assert "#1545" in facts.closing_issue_read_error
