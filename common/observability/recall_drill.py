@@ -1,4 +1,4 @@
-"""Deterministic dry-run recall drill for all 8 watchdog failure classes.
+"""Deterministic dry-run recall drill for all 9 watchdog failure classes.
 
 Simulates each failure class from docs/ssot/watchdog-signals.yaml,
 verifies pager layer assignment and PAGER_FIELDS formatting.
@@ -99,6 +99,16 @@ SIMULATED_FAILURES: dict[str, dict[str, Any]] = {
         "action": "Inspect github actions queue status and runner health.",
         "runbook": "docs/ssot/ops.observability.md#sop-006",
     },
+    "ops-scheduler": {
+        "signal_id": "production.github.ops-checks-scheduler",
+        "level": "P0",
+        "target": "ops-checks-scheduler",
+        "symptom": "ops-checks scheduler missed its daily heartbeat past 93600 seconds.",
+        "since": "2026-10-28 12:00:00 UTC+8",
+        "impact": "GitHub Actions ops-checks scheduler stopped ticking.",
+        "action": "Inspect .github/workflows/ops-checks.yml and GitHub Actions status.",
+        "runbook": "docs/ssot/ops.observability.md#sop-005b",
+    },
 }
 
 
@@ -118,7 +128,7 @@ class DrillClassResult:
 
 @dataclass(frozen=True)
 class RecallDrillReport:
-    """Report summarizing the 8-class recall drill outcome."""
+    """Report summarizing the 9-class recall drill outcome."""
 
     status: str
     dry_run: bool
@@ -141,7 +151,7 @@ def run_recall_drill(
     dry_run: bool = True,
     inventory: dict[str, Any] | None = None,
 ) -> RecallDrillReport:
-    """Run deterministic recall drill for all 8 watchdog failure classes.
+    """Run deterministic recall drill for all 9 watchdog failure classes.
 
     Verify signal routing, pager layer assignment, and alert fields.
     Refuse execution when dry_run is False.

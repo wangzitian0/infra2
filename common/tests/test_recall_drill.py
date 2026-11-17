@@ -1,4 +1,4 @@
-"""Tests for 8-class dry-run recall drill."""
+"""Tests for 9-class dry-run recall drill."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from common.observability.recall_drill import (
 )
 
 
-def test_load_failure_classes_matches_eight_ssot_classes() -> None:
-    """Verify loading failure classes returns the 8 SSOT classes from watchdog-signals.yaml."""
+def test_load_failure_classes_matches_nine_ssot_classes() -> None:
+    """Verify loading failure classes returns the 9 SSOT classes from watchdog-signals.yaml."""
     classes = load_failure_classes()
     expected_classes = {
         "host-reachability": "cloudflare",
@@ -23,18 +23,19 @@ def test_load_failure_classes_matches_eight_ssot_classes() -> None:
         "config-drift": "github",
         "peer-scheduler": "github",
         "scheduled-job-start": "github",
+        "ops-scheduler": "cloudflare",
     }
     assert classes == expected_classes
 
 
 def test_run_recall_drill_dry_run_verifies_all_classes() -> None:
-    """Run recall drill in dry-run mode and verify all 8 classes pass."""
+    """Run recall drill in dry-run mode and verify all 9 classes pass."""
     report = run_recall_drill(dry_run=True)
 
     assert report.status == "pass"
     assert report.dry_run is True
-    assert report.total_classes == 8
-    assert len(report.results) == 8
+    assert report.total_classes == 9
+    assert len(report.results) == 9
 
     expected_classes = load_failure_classes()
     for class_name, expected_layer in expected_classes.items():
