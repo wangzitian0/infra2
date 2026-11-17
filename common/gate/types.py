@@ -58,6 +58,7 @@ MAX_THREAD_COMMENTS = 20
 MAX_PR_COMMENTS = 100  # newest PR conversation comments read for verification
 NO_CHECKS_REPORTED = "no checks reported"
 GH_TIMEOUT_S = 200
+BLOCKING_CLOSING_ISSUE_LABELS = frozenset({"needs-prod-proof", "prod-pending"})
 
 Runner = Callable[[Sequence[str]], str]
 
@@ -174,6 +175,9 @@ class HeadFacts:
     # Tree SHA of the current head and tree SHAs approved before a mechanical rebase (#924).
     head_tree_sha: str = ""
     approved_tree_shas: tuple[str, ...] = ()
+    # Closing-issue labels and read error (#1545): fail closed when labels are unread.
+    closing_issue_labels: tuple[tuple[int, tuple[str, ...]], ...] = ()
+    closing_issue_read_error: str = ""
 
     def reviews_on_head(self) -> tuple[tuple[str, str, float], ...]:
         return tuple(r for r in self.reviews if r[1] == self.head_sha)
