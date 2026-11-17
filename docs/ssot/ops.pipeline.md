@@ -98,6 +98,62 @@ Budgets come from the Workspace tier "Pipeline time contract", not from this fil
 9. Alert is event-driven. Report is time-driven ([ops.observability.md](./ops.observability.md) section 2, `docs/ssot/watchdog-signals.yaml`).
 10. Find the cause, Periodic report and Alert and watch read records and telemetry. They never deploy.
 
+**Hook grid: 15 cells, two owners, one policy table**
+
+A cell is one stage and one phase. A stage moves the artifact one step. Pre answers "can it move?". Post answers "is the result good?".
+
+| Stage | Pre | Operation | Post |
+|---|---|---|---|
+| Local | App: the fast check of the changed files | the push | App: a deeper local run that holds nothing |
+| CI | App: the PR checks with recorded LLM answers | Platform: the build of the artifact | App: the main-branch regression |
+| Preview | Platform: `contract` | Platform: the deploy from zero. App: `smoke`. | App: `preview_gate` |
+| Staging | Platform: `contract`, `provenance`, `env`, `upstream_post` | Platform: the deploy of the release tag. App: `smoke`. | App: `staging_gate` |
+| Prod | Platform: the same four checks, then the owner's approval | Platform: the promotion of the same artifact. App: `smoke`. | App: `prod_gate` |
+
+State: the SDK has the Preview, Staging and Prod rows (`STAGE_HOOK_PLANS`). The Local row and the CI row are targets.
+
+- The Platform owns 8 cells: the 5 operations and the pre of Preview, Staging and Prod. An App cannot change them.
+- An App owns 7 cells: the pre of Local and CI, and the 5 post cells. It also owns `smoke`.
+- Before the artifact exists, a check can read only the code, so the App owns pre. After that, the App checks the running service in post.
+- The clock is a second trigger of the Staging post and the Prod post. It is not a 16th cell. Its check list is `scheduled_audit`.
+
+**Roles**
+
+1. The SDK is the scheduler. For one cell it reads the policy table and the manifest. It runs each check within its time limit, gives each check the scale, writes the record and returns the verdict.
+2. Each App and the Canary Todo own one manifest, `runtime-hooks.manifest.json`. The manifest lists the checks of each App-owned cell. It cannot change a budget or a scale.
+3. A caller starts the scheduler. The callers are a git hook (Local), the CI workflow (CI), the infra2 release code (Preview, Staging, Prod) and the clock.
+4. The Canary Todo runs each new scheduler version and each new policy version first (rule 6).
+
+State: `run_hook_slot` in the SDK runs `smoke`, the three gate lists and `scheduled_audit`. Local and CI have no scheduler entry.
+
+**One policy table (target)**
+
+- One data file in infra2-sdk has one row for each cell. A row names the owner, the check list, the trigger, the time budget, the scale, and "blocks" or "reports".
+- `STAGE_HOOK_PLANS`, the slot time limits and the tables of this section come from that file. No second copy stays in code or in a document.
+- A change to the file is a change of kind SDK: the Canary first, then the Apps.
+- Each record names the policy version. The Delivery report shows the pass rate, the time and the policy version of each cell.
+- Rule 8 applies until the file exists and the Workspace tier points to it.
+
+State: these facts are in four places. The Workspace tier and the `auto` skill hold the budgets. `manifests.py` in the SDK holds the check lists and the time limits. `stages.yaml` in the SDK holds the stage ids. This section holds the owners and the triggers.
+
+**Scale ladder (target)**
+
+Each stage makes one more thing real. A data-dependent check, for example a benchmark, grows with the stage.
+
+| Stage | Code | Runtime | Data | LLM | Scale of a data-dependent check |
+|---|---|---|---|---|---|
+| Local | the changed files | none | fixtures | recorded answers; a prompt hash compare | none |
+| CI | all files | none | fixtures | recorded answers | none |
+| Preview | the artifact | from zero | seed data | real: a small fixed number of calls | small |
+| Staging | the release tag | with all other changes | Staging data | real | medium on each tag; full on the clock |
+| Prod | the same artifact | serves users | real data, read only | real | read-only samples of real results on the clock |
+
+- An App declares a data-dependent check one time. It lists the check in the post of Preview and Staging and in the clock list. The scheduler gives the scale.
+- A sample of n cases finds a defect that fails at rate p with probability 1 - (1 - p)^n. At 95%: n = 3 finds p >= 63%, n = 20 finds p >= 14%, n = 100 finds p >= 3%.
+- Prod gets no test write. A Prod check reads real results.
+
+State on 2026-11-17 UTC: finance_report runs `pdf_corpus_oracle` and `financial_scenario_benchmark` only in the nightly `scheduled_audit` on Staging. Its `staging_gate` runs the `canary` corpus. truealpha runs `nightly_verdicts` only in the nightly run. No Preview check list names a benchmark.
+
 **Matrix 1: deliver a change (stage by kind)**
 
 Each cell starts with its state: "exists" or "target". A rule whose check does not exist yet is a target. A target part holds nothing until its check exists. An existing part holds as it does today; for example a red `staging_gate` stops the production promotion.
