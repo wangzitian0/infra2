@@ -86,6 +86,60 @@ class FreeDeployer(Deployer):
             return None
         return "" if out == ABSENT_SENTINEL else out
 
+    @staticmethod
+    def _parse_host_config(host_text: str) -> tuple[str, str]:
+        """Extract (uuid, path) from host config JSON or raise ValueError."""
+        try:
+            cfg = json.loads(host_text)
+        except Exception as exc:
+            raise ValueError(f"Existing remote config is malformed: {exc}") from exc
+        existing_uuid = None
+        existing_path = None
+        inbounds = cfg.get("inbounds", []) if isinstance(cfg, dict) else []
+        if inbounds and isinstance(inbounds[0], dict):
+            users = inbounds[0].get("users", [])
+            if users and isinstance(users[0], dict):
+                existing_uuid = users[0].get("uuid")
+            transport = inbounds[0].get("transport")
+            if isinstance(transport, dict):
+                existing_path = transport.get("path")
+        if not existing_uuid or not existing_path:
+            raise ValueError("Existing remote config is missing required uuid or path")
+        return str(existing_uuid), str(existing_path)
+
+    @classmethod
+    def verify_still_in_service(cls, c, compose_id: str) -> str | None:
+        """Ensure containers are healthy and the host config.json exists and matches (#1615)."""
+        in_service_error = super().verify_still_in_service(c, compose_id)
+        if in_service_error:
+            return in_service_error
+
+        env = cls.env()
+        host = env.get("VPS_HOST")
+        if not host:
+            return None
+        user = env.get("VPS_SSH_USER", "root")
+        if user != "root":
+            raise RuntimeError(
+                f"FreeDeployer requires root SSH access; unsupported VPS_SSH_USER: {user}"
+            )
+        config_remote_path = f"{cls.data_path_for_env(env)}/config.json"
+        host_text = cls._read_remote_config(c, f"{user}@{host}", config_remote_path)
+        if host_text is None:
+            raise RuntimeError(f"cannot read host config {config_remote_path}")
+        if not host_text:
+            return f"host config {config_remote_path} is absent"
+        try:
+            existing_uuid, existing_path = cls._parse_host_config(host_text)
+        except ValueError as exc:
+            return f"host config {config_remote_path} is invalid ({exc})"
+        rendered = cls._render_config(existing_uuid, existing_path)
+        if rendered is None:
+            return f"missing local template for {config_remote_path}"
+        if host_text != rendered.strip():
+            return f"host config {config_remote_path} drifted from rendered template"
+        return None
+
     @classmethod
     def _ensure_remote_config(cls, c) -> tuple[str, str] | None:
         env = cls.env()
@@ -114,22 +168,9 @@ class FreeDeployer(Deployer):
             return None
         if host_text:
             try:
-                cfg = json.loads(host_text)
-                inbounds = cfg.get("inbounds", [])
-                if inbounds:
-                    users = inbounds[0].get("users", [])
-                    if users:
-                        existing_uuid = users[0].get("uuid")
-                    existing_path = inbounds[0].get("transport", {}).get("path")
-                if not existing_uuid or not existing_path:
-                    error(
-                        "Existing remote config is missing required uuid or path, refusing to overwrite"
-                    )
-                    return None
-            except Exception as exc:
-                error(
-                    f"Existing remote config is malformed, refusing to overwrite: {exc}"
-                )
+                existing_uuid, existing_path = cls._parse_host_config(host_text)
+            except ValueError as exc:
+                error(f"{exc}, refusing to overwrite")
                 return None
 
         free_uuid = existing_uuid or os.getenv("FREE_UUID") or str(uuid.uuid4())
@@ -272,14 +313,8 @@ class FreeDeployer(Deployer):
         host_text = cls._read_remote_config(c, f"{user}@{host}", config_remote_path)
         if host_text:
             try:
-                cfg = json.loads(host_text)
-                inbounds = cfg.get("inbounds", [])
-                if inbounds:
-                    users = inbounds[0].get("users", [])
-                    if users:
-                        free_uuid = users[0].get("uuid")
-                    free_path = inbounds[0].get("transport", {}).get("path")
-            except Exception as exc:
+                free_uuid, free_path = cls._parse_host_config(host_text)
+            except ValueError as exc:
                 warning(f"Failed to parse remote config: {exc}")
                 return
 
