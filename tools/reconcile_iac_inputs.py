@@ -22,13 +22,14 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 import yaml
 
 from common.core.constants import (
@@ -70,6 +71,7 @@ from common.deploy.env_config import (
     preview_alias,
     preview_service_config,
 )
+from common.deploy.github_api import API as GITHUB_API, github_headers
 from common.deploy.stage_record import sdk_unit, utc_now, write_stage_record
 from common.deploy.stage_record_reader import verified_sdk_versions
 from common.deploy.release_markers import (
@@ -255,11 +257,103 @@ class ProductionMarkerRejected(Exception):
     """GitHub refused the marker push of the workflow token (#1511)."""
 
 
+class UnverifiedSdkError(ValueError):
+    """App release pins an infra2-sdk version without Canary staging_gate pass (#1635)."""
+
+
+def _resolve_github_repo(
+    repo_root: Path,
+    runner: Callable[..., subprocess.CompletedProcess],
+) -> str:
+    """Resolve ``owner/repo`` from env or ``origin`` remote URL."""
+    env_repo = (
+        os.environ.get("GITHUB_REPOSITORY") or os.environ.get("GH_REPO") or ""
+    ).strip()
+    if "/" in env_repo:
+        return env_repo
+    remote = runner(
+        ["git", "remote", "get-url", "origin"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    if remote.returncode != 0:
+        return ""
+    url = (remote.stdout or "").strip()
+    match = re.search(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?$", url)
+    return match.group(1) if match else ""
+
+
+def _create_production_marker_via_api(
+    marker: str,
+    target_sha: str,
+    repo: str,
+    token: str,
+    *,
+    opener: Callable[..., Any],
+) -> None:
+    """Create ``refs/tags/<marker>`` via GitHub Git Data API, verifying immutability (#1511)."""
+    headers = github_headers(token, "infra2-reconcile/1.0")
+    ref_name = f"refs/tags/{marker}"
+    encoded_marker = urllib.parse.quote(marker, safe="/")
+    get_req = urllib.request.Request(
+        f"{GITHUB_API}/repos/{repo}/git/ref/tags/{encoded_marker}",
+        headers=headers,
+        method="GET",
+    )
+    try:
+        with opener(get_req, timeout=20) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        entries = payload if isinstance(payload, list) else [payload]
+        existing = next(
+            (
+                item
+                for item in entries
+                if isinstance(item, dict) and item.get("ref") == ref_name
+            ),
+            None,
+        )
+        if existing is not None:
+            obj = existing.get("object") or {}
+            obj_type = str(obj.get("type") or "")
+            existing_sha = str(obj.get("sha") or "").strip().lower()
+            if obj_type == "tag" and existing_sha:
+                tag_req = urllib.request.Request(
+                    f"{GITHUB_API}/repos/{repo}/git/tags/{existing_sha}",
+                    headers=headers,
+                    method="GET",
+                )
+                with opener(tag_req, timeout=20) as tag_resp:
+                    tag_data = json.loads(tag_resp.read().decode("utf-8"))
+                existing_sha = (
+                    str((tag_data.get("object") or {}).get("sha") or "").strip().lower()
+                )
+            if existing_sha != target_sha:
+                raise SystemExit(
+                    f"::error::refusing to move immutable production marker {marker}: "
+                    f"{existing_sha[:12]} != {target_sha[:12]}"
+                )
+            return
+    except urllib.error.HTTPError as exc:
+        if exc.code != 404:
+            raise
+
+    post_req = urllib.request.Request(
+        f"{GITHUB_API}/repos/{repo}/git/refs",
+        data=json.dumps({"ref": ref_name, "sha": target_sha}).encode("utf-8"),
+        headers={**headers, "Content-Type": "application/json"},
+        method="POST",
+    )
+    with opener(post_req, timeout=20):
+        return
+
+
 def record_production_marker(
     release_tag: str,
     repo_root: Path,
     *,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    opener: Callable[..., Any] | None = None,
 ) -> str:
     """Record a successful explicit production promotion as an immutable tag.
 
@@ -312,8 +406,32 @@ def record_production_marker(
     if pushed.returncode != 0:
         detail = pushed.stderr.strip()
         # Measured in #1511: the Actions token cannot create a ref at a commit whose
-        # workflow files differ from main. The deploy is done; only the record is late.
+        # workflow files differ from main via git push; fall back to Git Data API.
         if "refusing to allow a GitHub App" in pushed.stderr:
+            token = (
+                os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
+            ).strip()
+            repo = _resolve_github_repo(repo_root, runner)
+            if token and repo:
+                try:
+                    _create_production_marker_via_api(
+                        marker,
+                        target_sha,
+                        repo,
+                        token,
+                        opener=opener or urllib.request.urlopen,
+                    )
+                    return marker
+                except (
+                    urllib.error.HTTPError,
+                    urllib.error.URLError,
+                    OSError,
+                    ValueError,
+                ) as api_exc:
+                    raise ProductionMarkerRejected(
+                        f"cannot push production marker {marker}: {detail} "
+                        f"(GitHub API fallback failed: {api_exc})"
+                    ) from api_exc
             raise ProductionMarkerRejected(
                 f"cannot push production marker {marker}: {detail}"
             )
@@ -782,7 +900,7 @@ def assert_app_sdk_version_verified(
         )
     )
     if sdk_ver not in verified:
-        raise ValueError(
+        raise UnverifiedSdkError(
             f"{service}@{app_tag} pins infra2-sdk {sdk_ver}, which has not passed "
             f"platform/todo staging_gate in staging.release_validation post records "
             f"(verified={sorted(verified)})"
@@ -1032,7 +1150,7 @@ def sync_app_releases(
                         verified_versions=verified_sdk_versions_override,
                         runner=runner,
                     )
-                except ValueError as exc:
+                except UnverifiedSdkError as exc:
                     sdk_held_reason = str(exc)
                     sys.stderr.write(f"::warning::{sdk_held_reason}\n")
                     drifted = False

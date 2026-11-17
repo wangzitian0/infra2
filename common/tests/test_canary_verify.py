@@ -938,6 +938,122 @@ def test_canary_verify_reads_expected_sdk_from_release_ref_uv_lock(tmp_path) -> 
     assert mutated_report.all_ok is False
 
 
+def test_canary_verify_resolves_remote_production_marker_when_local_stale(
+    tmp_path,
+) -> None:
+    """#1559: canary_verify resolves newest refs/tags/production/* from origin and fetches it."""
+    import subprocess
+
+    def _lock_with(ver: str) -> str:
+        return (
+            "version = 1\n\n"
+            "[[package]]\n"
+            'name = "infra2-sdk"\n'
+            f'version = "{ver}"\n'
+            f'source = {{ url = "https://example.invalid/infra2_sdk-{ver}-py3-none-any.whl" }}\n'
+        )
+
+    origin = tmp_path / "origin.git"
+    subprocess.run(
+        ["git", "init", "--bare", "-b", "main", str(origin)],
+        check=True,
+        capture_output=True,
+    )
+
+    author = tmp_path / "author"
+    subprocess.run(
+        ["git", "clone", str(origin), str(author)], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(author), "checkout", "-B", "main"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(author), "config", "user.email", "t@example.com"], check=True
+    )
+    subprocess.run(
+        ["git", "-C", str(author), "config", "user.name", "Test"], check=True
+    )
+    (author / "uv.lock").write_text(_lock_with("3.6.0"), encoding="utf-8")
+    subprocess.run(["git", "-C", str(author), "add", "uv.lock"], check=True)
+    subprocess.run(
+        ["git", "-C", str(author), "commit", "-m", "v1.2.41"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "-C", str(author), "tag", "v1.2.41"], check=True)
+    subprocess.run(["git", "-C", str(author), "tag", "production/v1.2.41"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(author),
+            "push",
+            "origin",
+            "HEAD:main",
+            "v1.2.41",
+            "production/v1.2.41",
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    # Local stale checkout only knows production/v1.2.41.
+    stale_local = tmp_path / "stale_local"
+    subprocess.run(
+        ["git", "clone", str(origin), str(stale_local)], check=True, capture_output=True
+    )
+
+    # Origin later advances to v1.2.44 + production/v1.2.44 (SDK 3.7.1) without local fetching.
+    (author / "uv.lock").write_text(_lock_with("3.7.1"), encoding="utf-8")
+    subprocess.run(["git", "-C", str(author), "add", "uv.lock"], check=True)
+    subprocess.run(
+        ["git", "-C", str(author), "commit", "-m", "v1.2.44"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "-C", str(author), "tag", "v1.2.44"], check=True)
+    subprocess.run(["git", "-C", str(author), "tag", "production/v1.2.44"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(author),
+            "push",
+            "origin",
+            "HEAD:main",
+            "v1.2.44",
+            "production/v1.2.44",
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+    assert (
+        _resolve_locked_sdk_version(environment="production", repo_root=stale_local)
+        == "3.7.1"
+    )
+
+    # If origin becomes unreachable, fallback to local production marker still works.
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(stale_local),
+            "remote",
+            "set-url",
+            "origin",
+            str(tmp_path / "missing.git"),
+        ],
+        check=True,
+    )
+    assert (
+        _resolve_locked_sdk_version(environment="production", repo_root=stale_local)
+        == "3.6.0"
+    )
+
+
 # --- Deploy-restart ledger grace rule (issue #1720) -------------------------
 
 

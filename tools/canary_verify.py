@@ -98,15 +98,54 @@ def _resolve_locked_sdk_version(
     root = repo_root or Path(__file__).resolve().parents[1]
     try:
         from common.deploy.release_markers import (
+            PRODUCTION_MARKER_PREFIX,
             newest_release_tag,
             production_marker,
+            remote_production_marker,
         )
 
-        ref = (
-            production_marker(repo_root=root, runner=runner)
-            if environment == "production"
-            else newest_release_tag(repo_root=root, runner=runner)
-        )
+        if environment == "production":
+            remote_ver = remote_production_marker(repo_root=root, runner=runner)
+            if remote_ver:
+                marker_ref = f"{PRODUCTION_MARKER_PREFIX}{remote_ver}"
+                proc = runner(
+                    ["git", "-C", str(root), "show", f"{marker_ref}:uv.lock"],
+                    capture_output=True,
+                    text=True,
+                )
+                if proc.returncode != 0:
+                    fetched = runner(
+                        [
+                            "git",
+                            "-C",
+                            str(root),
+                            "fetch",
+                            "--no-tags",
+                            "origin",
+                            f"refs/tags/{marker_ref}:refs/tags/{marker_ref}",
+                        ],
+                        capture_output=True,
+                        text=True,
+                    )
+                    if fetched.returncode == 0:
+                        proc = runner(
+                            ["git", "-C", str(root), "show", f"{marker_ref}:uv.lock"],
+                            capture_output=True,
+                            text=True,
+                        )
+                if proc.returncode != 0:
+                    proc = runner(
+                        ["git", "-C", str(root), "show", f"{remote_ver}:uv.lock"],
+                        capture_output=True,
+                        text=True,
+                    )
+                if proc.returncode == 0:
+                    version_str = _parse_sdk_version_from_lock_text(proc.stdout)
+                    if version_str:
+                        return version_str
+            ref = production_marker(repo_root=root, runner=runner)
+        else:
+            ref = newest_release_tag(repo_root=root, runner=runner)
         proc = runner(
             ["git", "-C", str(root), "show", f"{ref}:uv.lock"],
             capture_output=True,
