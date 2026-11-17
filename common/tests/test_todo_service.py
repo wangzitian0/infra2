@@ -244,20 +244,28 @@ def test_todo_app_endpoints_contract(monkeypatch) -> None:
     assert data["ok"] is True
     assert data["service"] == "platform/todo"
     assert data["domain"] == "todo.zitian.party"
+    assert data["environment"] == "unknown"
+    assert data["configuration_sha256"] == "unknown"
     assert data["version"] == "unknown"
     assert data["git_sha"] == "unknown"
 
     monkeypatch.setenv("GIT_COMMIT_SHA", "abcdef1234567890")
+    monkeypatch.setenv("ENVIRONMENT", "staging")
+    monkeypatch.setenv("CONFIGURATION_SHA256", "deadbeef01234567")
     reloaded = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(reloaded)
     reloaded_client = TestClient(reloaded.fastapi_app, raise_server_exceptions=False)
     resp_ver = reloaded_client.get("/api/health")
     assert resp_ver.status_code == 200
     data_ver = resp_ver.json()
+    assert data_ver["environment"] == "staging"
+    assert data_ver["configuration_sha256"] == "deadbeef01234567"
     assert data_ver["version"] == "abcdef1234567890"
     assert data_ver["git_sha"] == "abcdef1234567890"
     assert reloaded_client.get("/health").json()["git_sha"] == "abcdef1234567890"
     monkeypatch.delenv("GIT_COMMIT_SHA", raising=False)
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.delenv("CONFIGURATION_SHA256", raising=False)
 
     # 2. /api/canary/status
     resp = client.get("/api/canary/status")

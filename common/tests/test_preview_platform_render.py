@@ -82,7 +82,7 @@ def test_todo_preview_render_holds_no_vault_path_no_approle_no_production_host()
     # Every data host of the slot carries the slot suffix: none is a production or
     # staging container.
     todo_env = services["todo"]["environment"]
-    for key in ("POSTGRES_HOST", "REDIS_HOST", "CANARY_S3_ENDPOINT_URL"):
+    for key in ("POSTGRES_HOST", "REDIS_HOST", "S3_ENDPOINT"):
         assert "${ENV_SUFFIX}" in todo_env[key], (key, todo_env[key])
     assert client.created and client.created[0]["name"].endswith("-pr-5")
 
@@ -181,7 +181,7 @@ def test_preview_todo_service_repeats_the_staging_compose_fields():
         assert slot[field] == prod[field], field
     assert slot["healthcheck"]["test"] == prod["healthcheck"]["test"]
     shared = set(slot["environment"]) & set(prod["environment"])
-    assert len(shared) == 20
+    assert len(shared) == 22
     assert {
         k for k in shared if slot["environment"][k] != prod["environment"][k]
     } == set()

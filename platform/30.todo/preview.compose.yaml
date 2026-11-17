@@ -1,5 +1,5 @@
 # Preview slot of the Canary Todo (#1647). It reads no Vault. The Preview render gives
-# REDIS_PASSWORD, CANARY_POSTGRES_PASSWORD, CANARY_S3_ACCESS_KEY and CANARY_S3_SECRET_KEY
+# REDIS_PASSWORD, CANARY_POSTGRES_PASSWORD, S3_ACCESS_KEY and S3_SECRET_KEY
 # as fresh values for this slot (common.deploy.preview.render_throwaway_secrets).
 # The slot runs its own Redis, Postgres and S3 on a private network. Nothing is shared
 # with staging or production, and the volumes are deleted with the slot.
@@ -69,8 +69,8 @@ services:
     environment:
       RUSTFS_CONSOLE_ENABLE: "false"
       RUSTFS_HEALTH_ENDPOINT_ENABLE: "true"
-      RUSTFS_ACCESS_KEY: ${CANARY_S3_ACCESS_KEY:?required}
-      RUSTFS_SECRET_KEY: ${CANARY_S3_SECRET_KEY:?required}
+      RUSTFS_ACCESS_KEY: ${S3_ACCESS_KEY:?required}
+      RUSTFS_SECRET_KEY: ${S3_SECRET_KEY:?required}
     command: ["--address", ":9000", "/data"]
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9000/minio/health/live || exit 1"]
@@ -103,8 +103,8 @@ services:
         mc alias set slot http://platform-s3${ENV_SUFFIX}:9000 "$$ACCESS_KEY" "$$SECRET_KEY" >/dev/null
         exec mc mb --ignore-existing slot/platform-canary
     environment:
-      ACCESS_KEY: ${CANARY_S3_ACCESS_KEY:?required}
-      SECRET_KEY: ${CANARY_S3_SECRET_KEY:?required}
+      ACCESS_KEY: ${S3_ACCESS_KEY:?required}
+      SECRET_KEY: ${S3_SECRET_KEY:?required}
     networks:
       - slot
     logging:
@@ -130,6 +130,8 @@ services:
         condition: service_completed_successfully
     environment:
       PORT: "8000"
+      ENVIRONMENT: ${ENV}
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       INTERNAL_DOMAIN: ${INTERNAL_DOMAIN:-zitian.party}
       ENV_SUFFIX: ${ENV_SUFFIX:-}
       POSTGRES_HOST: platform-postgres${ENV_SUFFIX}
@@ -143,10 +145,10 @@ services:
       REDIS_HOST: platform-redis${ENV_SUFFIX}
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
-      CANARY_S3_ENDPOINT_URL: http://platform-s3${ENV_SUFFIX}:9000
-      CANARY_S3_BUCKET: platform-canary
-      CANARY_S3_ACCESS_KEY: ${CANARY_S3_ACCESS_KEY:?required}
-      CANARY_S3_SECRET_KEY: ${CANARY_S3_SECRET_KEY:?required}
+      S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000
+      S3_BUCKET: platform-canary
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?required}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?required}
       # The three informational probes read the shared platform services, as in staging.
       SIGNOZ_OTEL_COLLECTOR: http://platform-signoz-otel-collector:13133
       OPENPANEL_API_URL: http://platform-openpanel-api:3000/healthcheck

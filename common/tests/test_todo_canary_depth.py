@@ -544,7 +544,7 @@ def test_s3_probe_reports_unconfigured_when_credentials_are_missing(
     finally:
         server.close()
     assert result["status"] == "unconfigured"
-    assert "CANARY_S3" in result["detail"]
+    assert "S3_" in result["detail"]
     assert requests == [], "no request may be sent without credentials"
 
 
@@ -599,6 +599,10 @@ def _env(monkeypatch, **values: str) -> None:
         "REDIS_PASSWORD",
         "CANARY_POSTGRES_USER",
         "CANARY_POSTGRES_PASSWORD",
+        "S3_ENDPOINT",
+        "S3_BUCKET",
+        "S3_ACCESS_KEY",
+        "S3_SECRET_KEY",
         "CANARY_S3_ENDPOINT_URL",
         "CANARY_S3_BUCKET",
         "CANARY_S3_ACCESS_KEY",
@@ -616,10 +620,10 @@ def test_run_all_checks_hands_each_probe_its_credentials(app, monkeypatch) -> No
         REDIS_PASSWORD=REDIS_PW,
         CANARY_POSTGRES_USER="canary_ro",
         CANARY_POSTGRES_PASSWORD=PG_PASSWORD,
-        CANARY_S3_ENDPOINT_URL="http://platform-s3-staging:9000",
-        CANARY_S3_BUCKET="platform-canary",
-        CANARY_S3_ACCESS_KEY=S3_ACCESS_KEY,
-        CANARY_S3_SECRET_KEY=S3_SECRET_KEY,
+        S3_ENDPOINT="http://platform-s3-staging:9000",
+        S3_BUCKET="platform-canary",
+        S3_ACCESS_KEY=S3_ACCESS_KEY,
+        S3_SECRET_KEY=S3_SECRET_KEY,
     )
     calls: dict[str, dict] = {}
 
@@ -715,7 +719,7 @@ def test_an_unconfigured_write_path_is_red_but_never_a_failure(
     gap = {
         "status": "unconfigured",
         "latency_ms": 0.1,
-        "detail": "CANARY_S3_ACCESS_KEY, CANARY_S3_SECRET_KEY not configured",
+        "detail": "S3_ACCESS_KEY, S3_SECRET_KEY not configured",
     }
     _patch_probes(app, monkeypatch, s3=gap)
 
@@ -1457,9 +1461,25 @@ def test_todo_manifest_sources_each_secret_from_the_right_class() -> None:
     assert pg.source == "runtime" and not pg.empty_ok and pg.sensitive
     assert not pg.provided_by, "a generated value, not the Postgres superuser password"
 
-    for env in ("CANARY_S3_ACCESS_KEY", "CANARY_S3_SECRET_KEY"):
+    for env in ("S3_ACCESS_KEY", "S3_SECRET_KEY"):
         assert fields[env].source == "human"
         assert fields[env].empty_ok and fields[env].sensitive
+        assert fields[env].store_key == f"CANARY_{env}"
+
+    from infra2_sdk.runtime.environment import check_shared_env_conformance
+
+    # CANARY_POSTGRES_* are least-privilege read-only role fields (canary_ro) generated
+    # at secret-supply time; every other todo field must conform to shared_env.yaml.
+    non_pg_issues = [
+        msg
+        for msg in check_shared_env_conformance(fields)
+        if not msg.startswith("CANARY_POSTGRES_")
+    ]
+    assert non_pg_issues == []
+    assert (
+        "CANARY_S3_BUCKET is deprecated: use S3_BUCKET"
+        in check_shared_env_conformance([*fields, "CANARY_S3_BUCKET"])
+    )
 
 
 def test_todo_policy_never_reads_the_superuser_secrets() -> None:

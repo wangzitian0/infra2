@@ -265,7 +265,9 @@ def sso_setup(c):
         error("Missing INTERNAL_DOMAIN")
         return
 
-    tier = resolve_environment_tier(env.get("ENV") or "production")
+    tier = resolve_environment_tier(
+        env.get("ENVIRONMENT") or env.get("ENV") or "production"
+    )
     coords = derive_preview_coordinates("todo", tier, base_domain=internal_domain)
     suffix = coords.env_suffix
     domain_suffix = coords.env_domain_suffix
