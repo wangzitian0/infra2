@@ -163,6 +163,7 @@ services:
       S3_BUCKET: finance-report-staging
       S3_PUBLIC_BUCKET: finance-report-staging
       S3_PRESIGN_EXPIRY_SECONDS: "900"
+      LLM_PROVIDER: ${LLM_PROVIDER:-zai}
       CORS_ORIGINS: ${NEXT_PUBLIC_APP_URL:-}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: http://platform-signoz-otel-collector:4318

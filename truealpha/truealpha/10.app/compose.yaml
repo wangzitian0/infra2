@@ -116,6 +116,7 @@ services:
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       # Was defaulted by the hand-written secrets.ctmpl; the generated template renders
       # only human / runtime values, so the deployment states these here.
+      ENVIRONMENT: ${ENV}
       APP_ENV: ${ENV}
       NODE_ENV: production
       S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000

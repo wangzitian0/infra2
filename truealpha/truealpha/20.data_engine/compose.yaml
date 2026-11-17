@@ -16,6 +16,7 @@ x-dagster-service: &dagster-service
       condition: service_healthy
   entrypoint: ["/bin/sh", "/opt/truealpha/dagster-entrypoint.sh"]
   environment: &dagster-env
+    ENVIRONMENT: ${ENV}
     APP_ENV: ${ENV}
     # Host-loopback MinIO (#602); was derived inside the hand-written secrets.ctmpl.
     S3_ENDPOINT: http://127.0.0.1:${TA_MINIO_S3_PORT}
@@ -37,6 +38,7 @@ x-dagster-service: &dagster-service
     TRUEALPHA_RELEASE_MANIFEST_ID: ${RELEASE_ID:-${RELEASE_MANIFEST_ID:?RELEASE_ID is required}}
     TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST: ${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?IMAGE_DIGEST is required}}
     TRUEALPHA_CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
+    CAPTURE_APPROVED_BY: ${CAPTURE_APPROVED_BY:?CAPTURE_APPROVED_BY is required}
     TRUEALPHA_CAPTURE_APPROVED_BY: ${CAPTURE_APPROVED_BY:?CAPTURE_APPROVED_BY is required}
     # Host-loopback OTLP HTTP collector (#1231): network_mode: host cannot resolve
     # platform-signoz-otel-collector on dokploy-network, so platform/11.signoz

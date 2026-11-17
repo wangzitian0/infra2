@@ -247,11 +247,38 @@ def _attribute(field: EnvironmentField, name: str) -> object:
     return tuple(sorted(value)) if name == "aliases" else value
 
 
+def _satisfies_alias(
+    wanted_env: str,
+    wanted: Mapping[str, object],
+    have_env: str,
+    have: Mapping[str, object],
+) -> bool:
+    """Return True when ``have`` covers ``wanted`` via declared primary or alias names."""
+    have_aliases = have.get("aliases") or ()
+    wanted_aliases = wanted.get("aliases") or ()
+    have_names = {
+        have_env,
+        *(have_aliases if isinstance(have_aliases, (tuple, list)) else ()),
+    }
+    wanted_names = {
+        wanted_env,
+        *(wanted_aliases if isinstance(wanted_aliases, (tuple, list)) else ()),
+    }
+    if not wanted_names <= have_names:
+        return False
+    return all(
+        wanted[name] == have[name]
+        for name in CONTRACT_ATTRIBUTES
+        if name not in {"env", "aliases"}
+    )
+
+
 def unmet(release: Contract, provided: Sequence[Contract]) -> list[Gap]:
     """What ``release`` needs and none of the ``provided`` contracts supplies.
 
     ``provided`` holds one contract per manifest of the stack. A variable is met when one of
-    them declares it with the same attributes. ``provided`` may supply more than the release
+    them declares it with the same attributes (or covers an older primary name as an alias
+    with identical contract attributes). ``provided`` may supply more than the release
     needs: an older release deploys on a newer infra2, and a field that a release dropped
     stays until no release needs it.
     """
@@ -259,6 +286,13 @@ def unmet(release: Contract, provided: Sequence[Contract]) -> list[Gap]:
     for env, wanted in sorted(release.items()):
         declared = [contract[env] for contract in provided if env in contract]
         if wanted in declared:
+            continue
+        if any(
+            _satisfies_alias(env, wanted, have_env, have)
+            for contract in provided
+            for have_env, have in contract.items()
+            if env == have_env or env in (have.get("aliases") or ())
+        ):
             continue
         if not declared:
             gaps.append(Gap(env, f"missing (source {wanted['source']})"))

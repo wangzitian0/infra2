@@ -1519,3 +1519,55 @@ def test_doc_only_treats_sdk_vocabulary_as_known_and_mutation_fails(tmp_path):
         "OTEL_EXPORTER_OTLP_ENDPOINT": ["fx:docs/ssot/ops.observability.md:1"],
         "SERVICE_NAME": ["fx:docs/ssot/ops.observability.md:2"],
     }
+
+
+def test_contract_accepts_expand_phase_manifest_alias_in_compose(tmp_path):
+    from common.security.registry import Service
+
+    w(
+        tmp_path,
+        "svc/env.manifest.json",
+        """{
+            "contract_version": 2,
+            "fields": [
+                {
+                    "field": "environment",
+                    "env": "ENVIRONMENT",
+                    "aliases": ["APP_ENV"],
+                    "source": "code"
+                },
+                {
+                    "field": "api_key",
+                    "env": "LLM_API_KEY",
+                    "aliases": ["AI_API_KEY"],
+                    "source": "human"
+                }
+            ]
+        }""",
+    )
+    w(
+        tmp_path,
+        "svc/compose.yaml",
+        """services:
+  app:
+    image: ghcr.io/wangzitian0/svc:latest
+    environment:
+      ENVIRONMENT: ${ENV}
+      APP_ENV: ${ENV}
+      UNDECLARED_VAR: foo
+""",
+    )
+    w(tmp_path, "svc/secrets.ctmpl", "LLM_API_KEY=ok\nAI_API_KEY=bad\n")
+    inv_ = envinv.run({"infra2": tmp_path})
+    svc = Service(
+        directory="svc",
+        project="svc",
+        service="app",
+        manifests=("svc/env.manifest.json",),
+    )
+    keys_map, comps, _edges, comp_of = envinv.analyze(inv_, [])
+    rows = envinv.contract(inv_, keys_map, [svc], comp_of, comps)
+    assert len(rows) == 1
+    assert rows[0]["compose_first_party_not_in_manifest"] == ["UNDECLARED_VAR"]
+    assert rows[0]["ctmpl_not_in_manifest"] == ["AI_API_KEY"]
+    assert rows[0]["store_key_not_rendered"] == []

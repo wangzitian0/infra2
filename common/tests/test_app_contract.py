@@ -614,3 +614,45 @@ def test_fetch_and_execute_app_hook_slot(tmp_path: Path) -> None:
     assert isinstance(result, HookRunResult)
     assert result.status == "pass"
     assert result.exit_code == 0
+
+
+def test_unmet_accepts_pre_migration_alias_names_and_rejects_attribute_mismatch() -> (
+    None
+):
+    provided = [
+        app_contract.parse_contract(
+            _manifest(
+                _field("LLM_PROVIDER", "code", injected=True, aliases=("AI_PROVIDER",)),
+                _field("ENVIRONMENT", "code", injected=True, aliases=("APP_ENV",)),
+                _field(
+                    "CAPTURE_APPROVED_BY",
+                    "decision",
+                    injected=True,
+                    aliases=("TRUEALPHA_CAPTURE_APPROVED_BY",),
+                ),
+            ),
+            label="infra2",
+        )
+    ]
+    pre_migration = app_contract.parse_contract(
+        _manifest(
+            _field("AI_PROVIDER", "code", injected=True),
+            _field("APP_ENV", "code", injected=True),
+            _field(
+                "TRUEALPHA_CAPTURE_APPROVED_BY",
+                "decision",
+                injected=True,
+                aliases=("CAPTURE_APPROVED_BY",),
+            ),
+        ),
+        label="old-release",
+    )
+    assert app_contract.unmet(pre_migration, provided) == []
+
+    mismatched_source = app_contract.parse_contract(
+        _manifest(_field("AI_PROVIDER", "human", injected=True)),
+        label="bad-release",
+    )
+    assert [g.env for g in app_contract.unmet(mismatched_source, provided)] == [
+        "AI_PROVIDER"
+    ]
