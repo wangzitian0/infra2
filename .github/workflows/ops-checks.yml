@@ -14,6 +14,7 @@ name: Ops Checks
   schedule:
     - cron: "17 2 * * *"
     - cron: "37 2 * * *"
+    - cron: "47 3 * * *" # daily finance_report staging DB test-tenant & trace_records purge (#1624 AC2)
     - cron: "0 1 * * 1"
     - cron: "0 2 1 * *" # monthly operational quality & recall summary (#425 T4)
     - cron: "47 * * * *" # hourly Dokploy preview leak detection
@@ -39,6 +40,7 @@ name: Ops Checks
           - facet-reconcile
           - vault-self-refresh-audit
           - secrets-reconcile
+          - staging-db-hygiene
           - e2e-regressions-smoke
           - promotion-reminder
           - all
@@ -70,7 +72,7 @@ permissions:
   actions: read
 
 concurrency:
-  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'iac-input-reconcile-main' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && github.event.schedule == '27 8 * * *' && 'infra2-secrets-reconcile' || github.event_name == 'schedule' && github.event.schedule == '13 5 * * *' && 'e2e-regressions-smoke' || github.event_name == 'schedule' && github.event.schedule == '0 13 * * *' && 'infra2-promotion-reminder' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) }}
+  group: ${{ github.event_name == 'schedule' && github.event.schedule == '17 2 * * *' && 'infra2-out-of-band-watchdog' || github.event_name == 'schedule' && github.event.schedule == '37 2 * * *' && 'iac-input-reconcile-main' || github.event_name == 'schedule' && github.event.schedule == '47 3 * * *' && 'infra2-staging-db-hygiene' || github.event_name == 'schedule' && github.event.schedule == '47 * * * *' && 'infra2-preview-leak-check' || github.event_name == 'schedule' && github.event.schedule == '27 4 * * *' && 'infra2-host-hygiene-schedule' || github.event_name == 'schedule' && github.event.schedule == '17 7 * * *' && 'infra2-facet-reconcile' || github.event_name == 'schedule' && github.event.schedule == '17 8 * * *' && 'infra2-vault-self-refresh-audit' || github.event_name == 'schedule' && github.event.schedule == '27 8 * * *' && 'infra2-secrets-reconcile' || github.event_name == 'schedule' && github.event.schedule == '13 5 * * *' && 'e2e-regressions-smoke' || github.event_name == 'schedule' && github.event.schedule == '0 13 * * *' && 'infra2-promotion-reminder' || github.event_name == 'schedule' && 'infra2-watchdog-weekly-digest' || github.event_name == 'workflow_dispatch' && format('ops-checks-{0}', inputs.task) }}
   cancel-in-progress: false
 
 env:
@@ -1128,6 +1130,114 @@ jobs:
               label="密钥对账与容量",
               # A quota that could not be read is not a quota that is fine.
               unevaluated=unevaluated_prefixes(load_report(os.environ)),
+              deliver_page=deliver_out_of_band_alert,
+          )
+          raise SystemExit(outcome.exit_code)
+          PY
+
+  staging-db-hygiene:
+    # signal: staging-db-hygiene
+    name: Purge aged finance_report staging DB rows
+    if: ${{ (github.event_name == 'schedule' && github.event.schedule == '47 3 * * *') || (github.event_name == 'workflow_dispatch' && (inputs.task == 'staging-db-hygiene' || inputs.task == 'all')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    env:
+      INFRA2_WATCHDOG_SSH_HOST: ${{ secrets.INFRA2_WATCHDOG_SSH_HOST }}
+      INFRA2_WATCHDOG_SSH_USER: ${{ secrets.INFRA2_WATCHDOG_SSH_USER }}
+      INFRA2_WATCHDOG_SSH_PORT: ${{ vars.INFRA2_WATCHDOG_SSH_PORT }}
+      INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE: ${{ secrets.INFRA2_OUT_OF_BAND_ALERT_DELIVERY_MODE }}
+      INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_WEBHOOK_URL }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
+      INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
+      INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      GITHUB_SERVER_URL: ${{ github.server_url }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      GITHUB_RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install runtime dependencies
+        run: |
+          sdk_requirement="$(python tools/sdk_requirement.py)"
+          python -m pip install --no-deps "$sdk_requirement"
+          python -m pip install -e .
+
+      - name: Configure SSH key
+        env:
+          INFRA2_WATCHDOG_SSH_PRIVATE_KEY: ${{ secrets.INFRA2_WATCHDOG_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${INFRA2_WATCHDOG_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "::error::INFRA2_WATCHDOG_SSH_PRIVATE_KEY secret is required for staging DB hygiene."
+            exit 1
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$INFRA2_WATCHDOG_SSH_PRIVATE_KEY" > ~/.ssh/infra2_staging_db_hygiene
+          chmod 600 ~/.ssh/infra2_staging_db_hygiene
+          echo "INFRA2_WATCHDOG_SSH_KEY_PATH=$HOME/.ssh/infra2_staging_db_hygiene" >> "$GITHUB_ENV"
+
+      - name: Purge aged staging test tenants and trace_records
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}" == "true" ]]; then
+            python -m tools.staging_db_hygiene --older-than-days 14
+          else
+            python -m tools.staging_db_hygiene --older-than-days 14 --apply
+          fi
+
+      - name: Alert on failure
+        if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          INFRA2_REPORTS_FEISHU_APP_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_ID }}
+          INFRA2_REPORTS_FEISHU_APP_SECRET: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_SECRET }}
+          INFRA2_REPORTS_FEISHU_CHAT_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import os
+          from common.observability.page_dedup import Finding, dedup_page, run_url_from_env
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          detail = "finance_report staging DB retention job failed"
+          outcome = dedup_page(
+              os.environ,
+              job="staging-db-hygiene",
+              label="Staging 库定期清理",
+              findings=[Finding("staging-db-hygiene", detail)],
+              detail=detail,
+              page_message=(
+                  f"🚨 {detail}.\nRun: {run_url_from_env(os.environ)}"
+              ),
+              deliver_page=deliver_out_of_band_alert,
+          )
+          raise SystemExit(outcome.exit_code)
+          PY
+
+      - name: Resolve the paged failures
+        if: success() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os
+          from common.observability.page_dedup import resolve_page_state
+          from tools.out_of_band_watchdog import deliver_out_of_band_alert
+
+          outcome = resolve_page_state(
+              os.environ,
+              job="staging-db-hygiene",
+              label="Staging 库定期清理",
               deliver_page=deliver_out_of_band_alert,
           )
           raise SystemExit(outcome.exit_code)

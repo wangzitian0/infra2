@@ -202,6 +202,13 @@ gates:
     job: secrets-reconcile
     blocks_merge: false
     failure_semantics: Declared secrets diverge from 1Password, or the account is near a capacity limit.
+  - id: infra_ci.staging_db_hygiene
+    stage: ops.scheduled_cleanup
+    task_category: host_hygiene
+    workflow: .github/workflows/ops-checks.yml
+    job: staging-db-hygiene
+    blocks_merge: false
+    failure_semantics: The scheduled finance_report staging test-tenant and trace_records purge failed.
   - id: infra_ci.e2e_regressions_smoke
     stage: prod.release_integrity
     task_category: e2e_regression

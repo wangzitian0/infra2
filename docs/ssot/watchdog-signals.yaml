@@ -802,6 +802,18 @@ signals:
     tier: day
     type: report
 
+  - signal_id: global.infra2.staging-db-hygiene
+    environment: global
+    component: iac
+    signal: staging-db-hygiene
+    primary_owner: self
+    failure_class: service-health
+    layer: github
+    severity: warning
+    cadence: 1d
+    tier: day
+    type: report
+
   # Scheduled ops-checks jobs (#425 T2 & T4 cadence convergence).
   - signal_id: global.infra2.deploy-guard-audit
     environment: global

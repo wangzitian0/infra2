@@ -1161,6 +1161,7 @@ DEDUPED_JOBS = {
         "Resolve the paged failures",
     ),
     "secrets-reconcile": ("Alert on confirmed findings", "Resolve the paged findings"),
+    "staging-db-hygiene": ("Alert on failure", "Resolve the paged failures"),
 }
 
 
