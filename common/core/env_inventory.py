@@ -3300,17 +3300,15 @@ def contract(inv, keys, services, comp_of=None, comps=None):
     comps = comps or {}
     rows = []
     for s in services:
-        mkeys, msrc = set(), {}
+        mkeys, malias, msrc = set(), set(), {}
         for mp in s.manifests:
             for o in inv.occ:
-                if (
-                    o.layer == "manifest"
-                    and o.repo == "infra2"
-                    and o.path == mp
-                    and not o.extra.get("alias_of")
-                ):
-                    mkeys.add(o.key)
-                    msrc[o.key] = o.extra.get("source")
+                if o.layer == "manifest" and o.repo == "infra2" and o.path == mp:
+                    if o.extra.get("alias_of"):
+                        malias.add(o.key)
+                    else:
+                        mkeys.add(o.key)
+                        msrc[o.key] = o.extra.get("source")
         d = s.directory
         ctm = {
             o.key
@@ -3359,7 +3357,7 @@ def contract(inv, keys, services, comp_of=None, comps=None):
                 ctmpl_not_in_manifest=sorted(ctm - mkeys - excl),
                 store_key_not_rendered=sorted(need_store - ctm - excl),
                 compose_first_party_not_in_manifest=sorted(
-                    first_party - mkeys - ctm - excl
+                    first_party - mkeys - malias - ctm - excl
                 ),
                 code_reads=len(code_reads),
                 code_reads_not_declared=sorted(
