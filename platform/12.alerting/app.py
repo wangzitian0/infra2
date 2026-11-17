@@ -8,10 +8,13 @@ import os
 import secrets
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from infra2_sdk.fastapi import init_service
+from pydantic import BaseModel, ConfigDict, Field
 
 from common.alerting import (
     AlertingError,
@@ -62,6 +65,51 @@ def _alerting_readiness_checker() -> tuple[bool, str]:
         return False, str(exc)
 
 
+class FeishuHealthResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    status: str
+    reachable: bool
+    mode: str
+
+
+class FeishuHealthErrorResponse(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    status: str
+    detail: str | None = None
+    error: str | None = None
+    mode: str | None = None
+
+
+class SigNozAlertPayload(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    status: str | None = None
+    commonLabels: dict[str, Any] = Field(default_factory=dict)
+    alerts: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class WebhookAcceptedResponse(BaseModel):
+    status: str = "accepted"
+    feishu: dict[str, Any]
+
+
+class WebhookErrorResponse(BaseModel):
+    status: str
+    error: str | None = None
+
+
+for _schema_model in (
+    FeishuHealthResponse,
+    FeishuHealthErrorResponse,
+    SigNozAlertPayload,
+    WebhookAcceptedResponse,
+    WebhookErrorResponse,
+):
+    _schema_model.model_rebuild(_types_namespace=globals())
+
+
+_basic_security = HTTPBasic(auto_error=False)
+
+
 # FastAPI service with the infra2_sdk standard runtime.
 # init_service mounts /livez, /readyz and /health. /health is the SDK report.
 # _alerting_readiness_checker is its one check: a bad delivery config gives 503.
@@ -80,7 +128,33 @@ init_service(
 )
 
 
-@fastapi_app.get("/health/feishu", include_in_schema=True)
+def _custom_openapi() -> dict[str, Any]:
+    if fastapi_app.openapi_schema:
+        return fastapi_app.openapi_schema
+    schema = get_openapi(
+        title=fastapi_app.title,
+        version=fastapi_app.version,
+        routes=fastapi_app.routes,
+    )
+    schemas = schema.setdefault("components", {}).setdefault("schemas", {})
+    schemas.setdefault("SigNozAlertPayload", SigNozAlertPayload.model_json_schema())
+    fastapi_app.openapi_schema = schema
+    return schema
+
+
+fastapi_app.openapi = _custom_openapi  # type: ignore[method-assign]
+
+
+@fastapi_app.get(
+    "/health/feishu",
+    include_in_schema=True,
+    tags=["Observability"],
+    response_model=FeishuHealthResponse,
+    responses={
+        200: {"model": FeishuHealthResponse},
+        503: {"model": FeishuHealthErrorResponse},
+    },
+)
 def health_feishu() -> JSONResponse:
     try:
         metadata = _validate_delivery_config()
@@ -102,8 +176,35 @@ def health_feishu() -> JSONResponse:
     )
 
 
-@fastapi_app.post("/signoz/webhook", include_in_schema=True)
-async def signoz_webhook(request: Request) -> JSONResponse:
+@fastapi_app.post(
+    "/signoz/webhook",
+    include_in_schema=True,
+    status_code=202,
+    tags=["Webhook"],
+    response_model=WebhookAcceptedResponse,
+    responses={
+        202: {"model": WebhookAcceptedResponse},
+        400: {"model": WebhookErrorResponse},
+        401: {"model": WebhookErrorResponse},
+        411: {"model": WebhookErrorResponse},
+        413: {"model": WebhookErrorResponse},
+        502: {"model": WebhookErrorResponse},
+    },
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/SigNozAlertPayload"}
+                }
+            },
+        }
+    },
+)
+async def signoz_webhook(
+    request: Request,
+    _credentials: HTTPBasicCredentials | None = Depends(_basic_security),
+) -> JSONResponse:
     if not _is_basic_auth_valid(request.headers.get("authorization")):
         return JSONResponse(status_code=401, content={"status": "unauthorized"})
 
