@@ -95,6 +95,8 @@ services:
         exec python /app/app.py
     environment:
       PORT: "8000"
+      ENVIRONMENT: ${ENV}
+      CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       INTERNAL_DOMAIN: ${INTERNAL_DOMAIN:-zitian.party}
       ENV_SUFFIX: ${ENV_SUFFIX:-}
       POSTGRES_HOST: platform-postgres${ENV_SUFFIX}
@@ -107,8 +109,8 @@ services:
       TODO_POSTGRES_DATABASE: postgres
       REDIS_HOST: platform-redis${ENV_SUFFIX}
       REDIS_PORT: "6379"
-      CANARY_S3_ENDPOINT_URL: http://platform-s3${ENV_SUFFIX}:9000
-      CANARY_S3_BUCKET: platform-canary
+      S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000
+      S3_BUCKET: platform-canary
       SIGNOZ_OTEL_COLLECTOR: http://platform-signoz-otel-collector:13133
       OPENPANEL_API_URL: http://platform-openpanel-api:3000/healthcheck
       AUTHENTIK_ENDPOINT: http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/

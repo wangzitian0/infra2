@@ -95,7 +95,7 @@ The vault-agent sidecar renders `/secrets/.env` from Vault. The app container so
 |----------|--------------|--------|-----------------|
 | `REDIS_PASSWORD` | `runtime`, `provided_by` | Vault `platform/<env>/redis` key `password` | None |
 | `CANARY_POSTGRES_PASSWORD` | `runtime` | Generated once into Vault `platform/<env>/todo` | None |
-| `CANARY_S3_ACCESS_KEY`, `CANARY_S3_SECRET_KEY` | `human` | 1Password item `platform/<env>/todo`, copied to Vault on deploy | Create once per environment (below) |
+| `S3_ACCESS_KEY`, `S3_SECRET_KEY` (Vault keys `CANARY_S3_ACCESS_KEY`, `CANARY_S3_SECRET_KEY`) | `human` | 1Password item `platform/<env>/todo`, copied to Vault on deploy | Create once per environment (below) |
 
 The policy lets the canary read only `platform/<env>/todo` and `platform/<env>/redis`. It cannot read the Postgres or S3 root credentials.
 
@@ -134,7 +134,7 @@ Each run emits one `canary.run` span with one `canary.check.<name>` child span p
 
 ## 5A. Preview slot (#1647)
 
-`platform/30.todo/preview.compose.yaml` runs the Canary in slot `preview/pr-<N>` with its own Redis, Postgres and S3 on a private network. The slot reads no Vault. `common.deploy.preview.render_throwaway_secrets` generates `REDIS_PASSWORD`, `CANARY_POSTGRES_PASSWORD`, `CANARY_S3_ACCESS_KEY` and `CANARY_S3_SECRET_KEY` on each render. The values go to the slot's Dokploy env only, and `down` deletes them with the slot. Entry point: `python -m common.deploy.v2 --service platform/todo --type preview/pr --version-ref <N>`. Only `/api/health` is routed in the slot, because the slot has no Authentik.
+`platform/30.todo/preview.compose.yaml` runs the Canary in slot `preview/pr-<N>` with its own Redis, Postgres and S3 on a private network. The slot reads no Vault. `common.deploy.preview.render_throwaway_secrets` generates `REDIS_PASSWORD`, `CANARY_POSTGRES_PASSWORD`, `TODO_POSTGRES_PASSWORD`, `S3_ACCESS_KEY` and `S3_SECRET_KEY` on each render. The values go to the slot's Dokploy env only, and `down` deletes them with the slot. Entry point: `python -m common.deploy.v2 --service platform/todo --type preview/pr --version-ref <N>`. Only `/api/health` is routed in the slot, because the slot has no Authentik.
 
 ## 6. Constraints
 

@@ -99,10 +99,10 @@ CANARY_DEPENDENCY_MANIFEST = DependencyManifest(
             _HOSTED_TIERS,
             frozenset(
                 {
-                    "CANARY_S3_ENDPOINT_URL",
-                    "CANARY_S3_BUCKET",
-                    "CANARY_S3_ACCESS_KEY",
-                    "CANARY_S3_SECRET_KEY",
+                    "S3_ENDPOINT",
+                    "S3_BUCKET",
+                    "S3_ACCESS_KEY",
+                    "S3_SECRET_KEY",
                 }
             ),
         ),
@@ -299,6 +299,8 @@ class TodoHealthResponse(BaseModel):
     status: str
     service: str
     domain: str
+    environment: str = "unknown"
+    configuration_sha256: str = "unknown"
     version: str
     git_sha: str
     canary: CanaryHealthSummary
@@ -633,10 +635,10 @@ def _probe_s3(
     missing = [
         name
         for name, value in (
-            ("CANARY_S3_ENDPOINT_URL", endpoint_url),
-            ("CANARY_S3_BUCKET", bucket),
-            ("CANARY_S3_ACCESS_KEY", access_key),
-            ("CANARY_S3_SECRET_KEY", secret_key),
+            ("S3_ENDPOINT", endpoint_url),
+            ("S3_BUCKET", bucket),
+            ("S3_ACCESS_KEY", access_key),
+            ("S3_SECRET_KEY", secret_key),
         )
         if not value
     ]
@@ -891,12 +893,18 @@ def run_all_checks() -> Dict[str, Any]:
     redis_host = os.environ.get("REDIS_HOST", f"platform-redis{suffix}")
     redis_port = int(os.environ.get("REDIS_PORT", "6379"))
     redis_password = os.environ.get("REDIS_PASSWORD") or None
-    s3_endpoint = os.environ.get(
-        "CANARY_S3_ENDPOINT_URL", f"http://platform-s3{suffix}:9000"
+    s3_endpoint = (
+        os.environ.get("S3_ENDPOINT")
+        or os.environ.get("CANARY_S3_ENDPOINT_URL")
+        or f"http://platform-s3{suffix}:9000"
     )
-    s3_bucket = os.environ.get("CANARY_S3_BUCKET", "")
-    s3_access_key = os.environ.get("CANARY_S3_ACCESS_KEY", "")
-    s3_secret_key = os.environ.get("CANARY_S3_SECRET_KEY", "")
+    s3_bucket = os.environ.get("S3_BUCKET") or os.environ.get("CANARY_S3_BUCKET", "")
+    s3_access_key = os.environ.get("S3_ACCESS_KEY") or os.environ.get(
+        "CANARY_S3_ACCESS_KEY", ""
+    )
+    s3_secret_key = os.environ.get("S3_SECRET_KEY") or os.environ.get(
+        "CANARY_S3_SECRET_KEY", ""
+    )
     signoz_url = os.environ.get(
         "SIGNOZ_OTEL_COLLECTOR", "http://platform-signoz-otel-collector:13133"
     )
@@ -1035,9 +1043,15 @@ def _canary_readiness_checker() -> tuple[bool, str]:
 
 def _todo_health_extra() -> Dict[str, Any]:
     verdict = peek_canary_verdict()
+    env_name = resolve_runtime_env(None, RuntimeEnvKey.ENVIRONMENT).value or "unknown"
+    config_sha = (
+        resolve_runtime_env(None, RuntimeEnvKey.CONFIGURATION_SHA256).value or "unknown"
+    )
     return {
         "ok": True,
         "domain": "todo.zitian.party",
+        "environment": env_name,
+        "configuration_sha256": config_sha,
         "canary": {
             "ok": verdict.get("ok") is True,
             "checked_at": verdict.get("timestamp"),
