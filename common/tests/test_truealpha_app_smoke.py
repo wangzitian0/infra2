@@ -26,7 +26,18 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 _ENV = {"APP_HOST": "truealpha-staging.truealpha.club"}
-_GREEN = {"/api/health": 200, "/api/auth/login": 401, "/api/mcp/": 200}
+_GREEN_LEGACY = {
+    "/api/health": 200,
+    "/api/v1/auth/session": 404,
+    "/api/auth/login": 401,
+    "/api/mcp/": 200,
+}
+_GREEN_V1 = {
+    "/api/health": 200,
+    "/api/v1/auth/session": 200,
+    "/api/v1/auth/login": 401,
+    "/api/mcp/": 200,
+}
 
 
 @pytest.fixture(scope="module")
@@ -70,8 +81,9 @@ def _install(monkeypatch, deployer, responders: dict[str, object]) -> None:
 
 
 def test_green_path_passes(deployer, monkeypatch):
-    _install(monkeypatch, deployer, dict(_GREEN))
-    assert deployer.verify_runtime_applied(None, dict(_ENV)) is None
+    for responders in (_GREEN_LEGACY, _GREEN_V1):
+        _install(monkeypatch, deployer, dict(responders))
+        assert deployer.verify_runtime_applied(None, dict(_ENV)) is None
 
 
 def test_base_url_construction(deployer, monkeypatch):
@@ -119,7 +131,7 @@ def test_455_class_llm_unreachable_fails_the_deploy(deployer, monkeypatch):
     _expect_failure(
         deployer,
         monkeypatch,
-        {**_GREEN, "/api/health": urllib.error.URLError("connection refused")},
+        {**_GREEN_V1, "/api/health": urllib.error.URLError("connection refused")},
         "GET /api/health",
     )
 
@@ -128,8 +140,14 @@ def test_463_class_login_shadowed_404_fails_the_deploy(deployer, monkeypatch):
     _expect_failure(
         deployer,
         monkeypatch,
-        {**_GREEN, "/api/auth/login": 404},
+        {**_GREEN_LEGACY, "/api/auth/login": 404},
         "POST /api/auth/login -> 404",
+    )
+    _expect_failure(
+        deployer,
+        monkeypatch,
+        {**_GREEN_V1, "/api/v1/auth/login": 404},
+        "POST /api/v1/auth/login -> 404",
     )
 
 
@@ -137,8 +155,8 @@ def test_447_class_login_500_fails_the_deploy(deployer, monkeypatch):
     _expect_failure(
         deployer,
         monkeypatch,
-        {**_GREEN, "/api/auth/login": 500},
-        "POST /api/auth/login -> 500",
+        {**_GREEN_V1, "/api/v1/auth/login": 500},
+        "POST /api/v1/auth/login -> 500",
     )
 
 
@@ -146,6 +164,6 @@ def test_461_class_mcp_dead_fails_the_deploy(deployer, monkeypatch):
     _expect_failure(
         deployer,
         monkeypatch,
-        {**_GREEN, "/api/mcp/": 502},
+        {**_GREEN_V1, "/api/mcp/": 502},
         "POST /api/mcp/ initialize -> 502",
     )
