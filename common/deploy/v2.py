@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -44,6 +45,7 @@ from common.deploy.contract import (
     DeployTarget,
     DeployTypeSpec,
     ServiceSpec,
+    classify_iac_ref,
     default_version_ref,
     deploy_type_spec,
     make_deploy_target,
@@ -171,6 +173,42 @@ class DeployV2Result:
     detail: dict
 
 
+def _resolve_branch_sha(branch: str, *, repo: str = _INFRA2_REPO) -> str:
+    """Resolve a non-main branch name to its 40-hex commit SHA via ``git ls-remote``."""
+    rref = f"refs/heads/{branch}"
+    try:
+        res = subprocess.run(
+            ["git", "ls-remote", repo, rref],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError(f"git ls-remote failed for {rref!r} in {repo}: {exc}") from exc
+    for line in res.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == rref:
+            candidate = parts[0].strip().lower()
+            short_sha(candidate)
+            return candidate
+    raise ValueError(f"deploy ref {branch!r} ({rref}) not found in {repo}")
+
+
+def _resolve_iac_sha(
+    iac_ref: str, *, deploy_type: str, repo: str = _INFRA2_REPO
+) -> str:
+    """Resolve ``iac_ref`` to a 40-hex commit SHA, supporting PR/preview branch refs."""
+    cleaned = iac_ref.strip()
+    try:
+        classify_ref(cleaned)
+    except ValueError:
+        if classify_iac_ref(deploy_type, cleaned) == "branch":
+            return _resolve_branch_sha(cleaned, repo=repo)
+        raise
+    return resolve_to_sha(cleaned, repo=repo)
+
+
 def _deploy_platform_preview(
     service: str,
     deploy_type: str,
@@ -198,7 +236,7 @@ def _deploy_platform_preview(
         if spec.alias_kind == "branch"
         else str(version_ref).strip()
     )
-    iac_sha = resolve_to_sha(iac_ref, repo=_INFRA2_REPO)
+    iac_sha = _resolve_iac_sha(iac_ref, deploy_type=deploy_type, repo=_INFRA2_REPO)
     target = make_target(
         deploy_type,
         service=service,
@@ -607,7 +645,7 @@ def _resolve_app_refs(
             f"not expected sha {normalized_expected_sha!r}"
         )
 
-    iac_sha = resolve_to_sha(iac_ref, repo=_INFRA2_REPO)
+    iac_sha = _resolve_iac_sha(iac_ref, deploy_type=spec.key, repo=_INFRA2_REPO)
     clone_ref = iac_ref.strip()
 
     return resolved, alias_value, iac_sha, clone_ref
@@ -820,7 +858,7 @@ def deploy_v2(
     domain = domain_for_service(service) or domain
     svc_spec = service_spec(service)
     normalized_expected_sha = _normalize_expected_sha(expected_sha)
-    validate_iac_ref_form(deploy_type, classify_ref(iac_ref))
+    validate_iac_ref_form(deploy_type, classify_iac_ref(deploy_type, iac_ref))
     spec = deploy_type_spec(deploy_type)
     assert_iac_ref_on_main(iac_ref, deploy_type)
     if svc_spec.iac_pinned:  # platform service -> iac_runner /deploy webhook

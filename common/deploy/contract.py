@@ -42,6 +42,7 @@ from dataclasses import dataclass, replace
 from functools import lru_cache
 
 import yaml
+from infra2_sdk.refs import classify_ref
 from infra2_sdk.runtime.environment import is_preview_alias
 
 from common.core.constants import REPO_ROOT
@@ -554,14 +555,40 @@ def validate_ref_form(deploy_type: str, form: str) -> None:
 # legitimately clones a branch/tag iac_ref), so it keys on the type's env rather than the
 # version_ref form matrix.
 _TAG_ONLY_IAC_ENVS = ("staging", "prod")
+_BRANCH_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
+
+
+def _is_valid_branch_ref(ref: str) -> bool:
+    """Return True when ``ref`` is a syntactically safe Git branch name."""
+    if (
+        not ref
+        or ref.startswith(("refs/", "/", ".", "-"))
+        or ref.endswith(("/", ".", ".lock"))
+    ):
+        return False
+    if "//" in ref or ".." in ref or "@{" in ref:
+        return False
+    return _BRANCH_REF_RE.fullmatch(ref) is not None
+
+
+def classify_iac_ref(deploy_type: str, iac_ref: str) -> str:
+    """Classify ``iac_ref`` for ``deploy_type``, allowing PR/preview branch names."""
+    cleaned = iac_ref.strip()
+    try:
+        return classify_ref(cleaned)
+    except ValueError:
+        spec = deploy_type_spec(deploy_type)
+        if spec.env == "preview" and _is_valid_branch_ref(cleaned):
+            return "branch"
+        raise
 
 
 def validate_iac_ref_form(deploy_type: str, iac_form: str) -> None:
     """Fail closed when ``iac_ref`` form violates the deploy type's environment contract.
 
-    ``iac_form`` is a ``classify_ref`` output. staging/prod must pin IaC to a release tag
-    (``vX.Y.Z``); a ``branch``/``sha`` iac_ref raises here rather than letting a moving
-    infra2 ref reach a fixed env. preview clones a GitHub branch or tag ref via Dokploy
+    ``iac_form`` is a ``classify_iac_ref`` / ``classify_ref`` output. staging/prod must pin IaC
+    to a release tag (``vX.Y.Z``); a ``branch``/``sha`` iac_ref raises here rather than letting a
+    moving infra2 ref reach a fixed env. preview clones a GitHub branch or tag ref via Dokploy
     and therefore rejects a bare 40-hex ``sha`` ``iac_ref``.
     """
     spec = deploy_type_spec(deploy_type)

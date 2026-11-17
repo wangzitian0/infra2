@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import subprocess
 import pytest
 import yaml
@@ -148,11 +149,9 @@ def test_reconcile_plan_gate_fetches_pr_base_sha_and_fails_on_diff_error(
     """#1622:shallow PR checkouts must fetch the PR base SHA explicitly and fail closed."""
     wf_path = Path(__file__).resolve().parents[2] / ".github/workflows/infra-ci.yml"
     workflow = yaml.safe_load(wf_path.read_text(encoding="utf-8"))
-    steps = workflow["jobs"]["test-deployer-logic"]["steps"]
+    steps = workflow["jobs"]["preview"]["steps"]
     step = next(
-        item
-        for item in steps
-        if item.get("name") == "Gate reconcile plan builds for changed files"
+        item for item in steps if item.get("name") == "Compute PR changed files"
     )
     script_template = step["run"]
     assert "origin/main...HEAD" not in script_template
@@ -262,13 +261,10 @@ def test_reconcile_plan_gate_fetches_pr_base_sha_and_fails_on_diff_error(
             script_template.replace("${{ github.workspace }}", str(shallow_repo))
             .replace("${{ github.event.pull_request.base.sha }}", target_base)
             .replace("${{ needs.detect-changes.outputs.has_non_doc }}", has_non_doc)
-            .replace(
-                "uv run --locked python -m tools.reconcile_iac_inputs",
-                "printf 'RECONCILE:%s\\n'",
-            )
         )
         return subprocess.run(
             ["bash", "-c", rendered],
+            env={"PATH": os.environ.get("PATH", ""), "RUNNER_TEMP": str(tmp_path)},
             capture_output=True,
             text=True,
             check=False,
@@ -393,15 +389,15 @@ def test_reconcile_plan_gate_fetches_pr_base_sha_and_fails_on_diff_error(
             "-c",
             script_template.replace("${{ github.workspace }}", str(sub_clone))
             .replace("${{ github.event.pull_request.base.sha }}", sub_base)
-            .replace("${{ needs.detect-changes.outputs.has_non_doc }}", "true")
-            .replace(
-                "uv run --locked python -m tools.reconcile_iac_inputs",
-                "printf 'RECONCILE:%s\\n'",
-            ),
+            .replace("${{ needs.detect-changes.outputs.has_non_doc }}", "true"),
         ],
+        env={
+            "PATH": subprocess.os.environ.get("PATH", ""),
+            "RUNNER_TEMP": str(tmp_path),
+        },
         capture_output=True,
         text=True,
         check=False,
     )
     assert sub_res.returncode == 0, sub_res.stderr
-    assert "RECONCILE:--changed-file\nRECONCILE:ext-tool" in sub_res.stdout
+    assert "ext-tool" in (tmp_path / "pr_changed_files.txt").read_text(encoding="utf-8")
