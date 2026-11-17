@@ -125,6 +125,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     async function loadTodos() {
       try {
         const res = await fetch('/api/todos');
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
         todos = await res.json();
         renderTodos();
       } catch (err) {
@@ -178,7 +181,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
     async function toggleTodo(id) {
       try {
-        await fetch(`/api/todos/${id}/toggle`, { method: 'PUT' });
+        const current = todos.find((t) => t.id === id);
+        const body = current ? { completed: !current.completed } : {};
+        await fetch(`/api/todos/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
         await loadTodos();
       } catch (err) {
         console.error("Toggle failed:", err);

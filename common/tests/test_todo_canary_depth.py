@@ -1075,7 +1075,6 @@ def test_only_the_health_path_is_served_without_sso(
         served_by_app
         | {
             "/api/todos/1",
-            "/api/todos/1/toggle",
             "/api/canary/status/",
             "/api/canary/status/extra",
             "/api/health/extra",
@@ -1192,6 +1191,7 @@ def test_main_starts_no_second_telemetry_bootstrap(
     for key, value in _issued_telemetry_env("staging").items():
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("CANARY_POSTGRES_PASSWORD", PG_PASSWORD)
+    monkeypatch.setenv("TODO_POSTGRES_PASSWORD", PG_PASSWORD)
     # main() installs a SIGTERM handler and starts the server: do neither in the test run
     monkeypatch.setattr(signal, "signal", lambda *args: None)
     server = types.ModuleType("uvicorn")
@@ -1752,6 +1752,21 @@ def test_redaction_removes_any_password_clause_not_only_the_known_value(deploy) 
     assert "some-other-value" not in cleaned and "and-this" not in cleaned
     assert "known-secret-1" not in cleaned
     assert cleaned.count("<redacted>") == 3
+
+
+def test_todos_storage_sql_provisions_todo_app_role_and_table(deploy) -> None:
+    sql = deploy.TodoDeployer.todos_storage_sql(PG_PASSWORD)
+    normalized = " ".join(sql.split())
+    assert "CREATE ROLE todo_app LOGIN NOSUPERUSER" in normalized
+    assert "ALTER ROLE todo_app WITH LOGIN NOSUPERUSER" in normalized
+    assert f"PASSWORD '{PG_PASSWORD}'" in normalized
+    assert "CREATE TABLE IF NOT EXISTS todos" in normalized
+    assert (
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE todos TO todo_app" in normalized
+    )
+    assert "GRANT USAGE, SELECT ON SEQUENCE todos_id_seq TO todo_app" in normalized
+    assert "SUPERUSER" not in normalized.replace("NOSUPERUSER", "")
+    assert "default_transaction_read_only" not in normalized
 
 
 # ------------------------------------------- #1503: 1:1 runtime capability parity

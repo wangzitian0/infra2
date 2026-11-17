@@ -31,10 +31,12 @@ import time
 import threading
 import urllib.parse
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Body, FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from infra2_sdk.fastapi import init_service
 from infra2_sdk.runtime.config_schema import assert_environment
@@ -51,6 +53,7 @@ from infra2_sdk.runtime.health import (
     ProbeResult,
     run_probes,
 )
+from pydantic import BaseModel, StrictBool, StrictStr
 
 LOGGER = logging.getLogger("platform-todo")
 SERVICE_TRACER_NAME = "platform-todo"
@@ -113,53 +116,235 @@ STATUS_CACHE_TTL_SECONDS = 30.0
 _STATUS_LOCK = threading.Lock()
 _STATUS_CACHE: tuple[float, Dict[str, Any]] | None = None
 
-_todos_lock = threading.Lock()
 
-# In-memory fallback if postgres is initializing or offline during probe
-_FALLBACK_TODOS: List[Dict[str, Any]] = [
-    {
-        "id": 1,
-        "title": "平台 Postgres 读写链路校验",
-        "completed": True,
-        "capability": "postgres",
-        "created_at": "2026-09-24T20:00:00Z",
-    },
-    {
-        "id": 2,
-        "title": "平台 Redis 缓存与分布式锁校验",
-        "completed": True,
-        "capability": "redis",
-        "created_at": "2026-09-24T20:01:00Z",
-    },
-    {
-        "id": 3,
-        "title": "平台 S3 兼容对象存储与预签名上传校验",
-        "completed": True,
-        "capability": "s3",
-        "created_at": "2026-09-24T20:02:00Z",
-    },
-    {
-        "id": 4,
-        "title": "平台 SigNoz OpenTelemetry 追踪采集校验",
-        "completed": True,
-        "capability": "signoz",
-        "created_at": "2026-09-24T20:03:00Z",
-    },
-    {
-        "id": 5,
-        "title": "平台 OpenPanel 事件打点分析校验",
-        "completed": True,
-        "capability": "openpanel",
-        "created_at": "2026-09-24T20:04:00Z",
-    },
-    {
-        "id": 6,
-        "title": "平台 Authentik SSO 与 GitHub OAuth 单点登录受验",
-        "completed": True,
-        "capability": "authentik",
-        "created_at": "2026-09-25T11:00:00Z",
-    },
-]
+class _TodoStoreUnavailable(RuntimeError):
+    """Raised when persistent PostgreSQL storage for todos is not configured."""
+
+
+def _is_psycopg_error(exc: Exception) -> bool:
+    return type(exc).__module__.startswith("psycopg")
+
+
+def _format_todo_timestamp(value: Any) -> str:
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if value is None:
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return str(value)
+
+
+def _row_to_todo(row: tuple[Any, ...]) -> Dict[str, Any]:
+    return {
+        "id": int(row[0]),
+        "title": str(row[1]),
+        "completed": bool(row[2]),
+        "capability": str(row[3] or "general"),
+        "created_at": _format_todo_timestamp(row[4]),
+    }
+
+
+def _connect_todo_db():
+    host = os.environ.get("POSTGRES_HOST", "").strip()
+    port_raw = os.environ.get("POSTGRES_PORT", "5432").strip() or "5432"
+    user = os.environ.get("TODO_POSTGRES_USER", "").strip()
+    password = os.environ.get("TODO_POSTGRES_PASSWORD", "").strip()
+    dbname = os.environ.get("TODO_POSTGRES_DATABASE", "postgres").strip() or "postgres"
+    missing = [
+        name
+        for name, val in (
+            ("POSTGRES_HOST", host),
+            ("TODO_POSTGRES_USER", user),
+            ("TODO_POSTGRES_PASSWORD", password),
+        )
+        if not val
+    ]
+    if missing:
+        raise _TodoStoreUnavailable(
+            f"Missing PostgreSQL todo storage configuration: {', '.join(missing)}"
+        )
+    import psycopg
+
+    return psycopg.connect(
+        host=host,
+        port=int(port_raw),
+        user=user,
+        password=password,
+        dbname=dbname,
+        connect_timeout=5,
+        options="-c statement_timeout=5000",
+    )
+
+
+def _ensure_todos_schema(conn: Any) -> None:
+    """Create the todos table only if absent (superusers in preview/local DBs); deployed todo_app relies on TodoDeployer."""
+    exists_row = conn.execute("SELECT to_regclass('public.todos')").fetchone()
+    if exists_row and exists_row[0]:
+        return
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS todos (
+            id SERIAL PRIMARY KEY,
+            title TEXT NOT NULL,
+            completed BOOLEAN NOT NULL DEFAULT FALSE,
+            capability TEXT NOT NULL DEFAULT 'general',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
+
+
+def _list_todos_db() -> List[Dict[str, Any]]:
+    with _connect_todo_db() as conn:
+        _ensure_todos_schema(conn)
+        rows = conn.execute(
+            "SELECT id, title, completed, capability, created_at FROM todos ORDER BY id ASC"
+        ).fetchall()
+        return [_row_to_todo(r) for r in rows]
+
+
+def _create_todo_db(title: str, completed: bool, capability: str) -> Dict[str, Any]:
+    with _connect_todo_db() as conn:
+        _ensure_todos_schema(conn)
+        row = conn.execute(
+            "INSERT INTO todos (title, completed, capability) VALUES (%s, %s, %s) "
+            "RETURNING id, title, completed, capability, created_at",
+            (title, completed, capability),
+        ).fetchone()
+        if not row:
+            raise _TodoStoreUnavailable("INSERT into todos returned no row")
+        return _row_to_todo(row)
+
+
+def _patch_todo_db(
+    todo_id: int,
+    *,
+    title: str | None = None,
+    completed: bool | None = None,
+    capability: str | None = None,
+) -> Dict[str, Any] | None:
+    with _connect_todo_db() as conn:
+        _ensure_todos_schema(conn)
+        updates: List[str] = []
+        params: List[Any] = []
+        if title is not None:
+            updates.append("title = %s")
+            params.append(title)
+        if completed is not None:
+            updates.append("completed = %s")
+            params.append(completed)
+        if capability is not None:
+            updates.append("capability = %s")
+            params.append(capability)
+        if not updates:
+            updates.append("completed = NOT completed")
+        params.append(todo_id)
+        row = conn.execute(
+            f"UPDATE todos SET {', '.join(updates)} WHERE id = %s "
+            "RETURNING id, title, completed, capability, created_at",
+            tuple(params),
+        ).fetchone()
+        return _row_to_todo(row) if row else None
+
+
+def _delete_todo_db(todo_id: int) -> Dict[str, Any] | None:
+    with _connect_todo_db() as conn:
+        _ensure_todos_schema(conn)
+        row = conn.execute(
+            "DELETE FROM todos WHERE id = %s "
+            "RETURNING id, title, completed, capability, created_at",
+            (todo_id,),
+        ).fetchone()
+        return _row_to_todo(row) if row else None
+
+
+class TodoErrorResponse(BaseModel):
+    error: str
+    detail: str | None = None
+
+
+class TodoItem(BaseModel):
+    id: int
+    title: str
+    completed: bool
+    capability: str = "general"
+    created_at: str
+
+
+class TodoCreateRequest(BaseModel):
+    title: StrictStr | None = None
+    completed: StrictBool = False
+    capability: StrictStr = "general"
+
+
+class TodoPatchRequest(BaseModel):
+    title: StrictStr | None = None
+    completed: StrictBool | None = None
+    capability: StrictStr | None = None
+
+
+class TodoDeleteResponse(BaseModel):
+    ok: bool
+    deleted_id: int
+    item: TodoItem
+
+
+class CanaryHealthSummary(BaseModel):
+    ok: bool
+    checked_at: str | None = None
+
+
+class TodoHealthResponse(BaseModel):
+    ok: bool
+    status: str
+    service: str
+    domain: str
+    version: str
+    git_sha: str
+    canary: CanaryHealthSummary
+    uptime_seconds: float
+
+
+class CanaryCheckOutcome(BaseModel):
+    status: str
+    latency_ms: float | None = None
+    detail: str
+
+
+class CanaryStatusResponse(BaseModel):
+    ok: bool
+    unconfigured: List[str]
+    failed: List[str]
+    service: str
+    domain: str
+    timestamp: str
+    gating: List[str]
+    informational: List[str]
+    checks: Dict[str, CanaryCheckOutcome]
+    age_seconds: float | None = None
+
+
+class AuthMeResponse(BaseModel):
+    authenticated: bool
+    username: str | None = None
+    name: str | None = None
+    email: str | None = None
+    groups: List[str]
+
+
+for _model in (
+    TodoErrorResponse,
+    TodoItem,
+    TodoCreateRequest,
+    TodoPatchRequest,
+    TodoDeleteResponse,
+    CanaryHealthSummary,
+    TodoHealthResponse,
+    CanaryCheckOutcome,
+    CanaryStatusResponse,
+    AuthMeResponse,
+):
+    _model.model_rebuild(_types_namespace=globals())
 
 try:
     from ui import HTML_TEMPLATE
@@ -848,6 +1033,27 @@ def _canary_readiness_checker() -> tuple[bool, str]:
         return False, f"canary status check failed: {exc}"
 
 
+def _todo_health_extra() -> Dict[str, Any]:
+    verdict = peek_canary_verdict()
+    return {
+        "ok": True,
+        "domain": "todo.zitian.party",
+        "canary": {
+            "ok": verdict.get("ok") is True,
+            "checked_at": verdict.get("timestamp"),
+        },
+        "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
+    }
+
+
+def _db_unavailable_response(exc: Exception) -> JSONResponse:
+    LOGGER.warning("Todo PostgreSQL storage unavailable: %s", exc)
+    return JSONResponse(
+        status_code=503,
+        content={"error": "Todo database unavailable", "detail": str(exc)},
+    )
+
+
 # ---------------------------------------------------------------------------
 # FastAPI runtime with turnkey infra2-sdk observability and lifecycle hooks
 # ---------------------------------------------------------------------------
@@ -875,7 +1081,34 @@ init_service(
     require_issued_identity=True,
     check_timeout_seconds=READINESS_TIMEOUT_SECONDS,
     suppress_probe_telemetry=True,
+    health_extra=_todo_health_extra,
 )
+
+
+@fastapi_app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    del request
+    errors = exc.errors()
+    first = errors[0] if errors else {}
+    err_type = first.get("type", "")
+    loc = first.get("loc", ())
+    if err_type == "json_invalid":
+        message = "Invalid JSON body"
+    elif "completed" in loc:
+        message = "Field 'completed' must be a boolean"
+    elif "title" in loc:
+        message = "Field 'title' must be a string"
+    elif "capability" in loc:
+        message = "Field 'capability' must be a string"
+    else:
+        message = first.get("msg", "Invalid request body")
+    return JSONResponse(
+        status_code=400,
+        content={"error": message, "detail": str(exc)},
+    )
+
 
 # The probes call httpx, and httpx logs one INFO line for each successful request. With the
 # root logger at INFO, those lines were 75% of the exported log lines (#1436). The libraries
@@ -893,7 +1126,7 @@ async def add_cors_headers(request: Request, call_next: Any) -> Response:
             headers={
                 "Access-Control-Allow-Origin": "*",
                 "Access-Control-Allow-Methods": (
-                    "GET, POST, PUT, DELETE, OPTIONS, HEAD"
+                    "GET, POST, PATCH, PUT, DELETE, OPTIONS, HEAD"
                 ),
                 "Access-Control-Allow-Headers": ("Content-Type, Authorization"),
                 "Content-Length": "0",
@@ -902,36 +1135,38 @@ async def add_cors_headers(request: Request, call_next: Any) -> Response:
     response = await call_next(request)
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Methods"] = (
-        "GET, POST, PUT, DELETE, OPTIONS, HEAD"
+        "GET, POST, PATCH, PUT, DELETE, OPTIONS, HEAD"
     )
     response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     return response
 
 
-@fastapi_app.get("/api/health", tags=["Observability"])
+@fastapi_app.get(
+    "/api/health",
+    tags=["Observability"],
+    response_model=TodoHealthResponse,
+    operation_id="get_api_health",
+)
 @fastapi_app.head("/api/health", include_in_schema=False)
 def fastapi_api_health() -> Response:
     rel = getattr(fastapi_app.state, "service_release", {})
-    verdict = peek_canary_verdict()
-    return JSONResponse(
-        status_code=200,
-        content={
-            "ok": True,
-            "status": "healthy",
-            "service": "platform/todo",
-            "domain": "todo.zitian.party",
-            "version": rel.get("version", "unknown"),
-            "git_sha": rel.get("git_sha", "unknown"),
-            "canary": {
-                "ok": verdict.get("ok") is True,
-                "checked_at": verdict.get("timestamp"),
-            },
-            "uptime_seconds": round(time.time() - SERVER_START_TIME, 1),
-        },
-    )
+    payload = {
+        **_todo_health_extra(),
+        "status": "healthy",
+        "service": "platform/todo",
+        "version": rel.get("version", "unknown"),
+        "git_sha": rel.get("git_sha", "unknown"),
+    }
+    return JSONResponse(status_code=200, content=payload)
 
 
-@fastapi_app.get("/api/canary/status", tags=["Observability"])
+@fastapi_app.get(
+    "/api/canary/status",
+    tags=["Observability"],
+    response_model=CanaryStatusResponse,
+    responses={503: {"model": CanaryStatusResponse}},
+    operation_id="get_canary_status",
+)
 @fastapi_app.head("/api/canary/status", include_in_schema=False)
 def fastapi_api_canary_status() -> Response:
     result = cached_canary_status()
@@ -939,82 +1174,122 @@ def fastapi_api_canary_status() -> Response:
     return JSONResponse(status_code=status_code, content=result)
 
 
-@fastapi_app.get("/api/todos", tags=["Todos"])
+@fastapi_app.get(
+    "/api/todos",
+    tags=["Todos"],
+    response_model=List[TodoItem],
+    responses={503: {"model": TodoErrorResponse}},
+    operation_id="list_todos",
+)
 @fastapi_app.head("/api/todos", include_in_schema=False)
 def fastapi_get_todos() -> Response:
-    with _todos_lock:
-        items = [dict(t) for t in _FALLBACK_TODOS]
+    try:
+        items = _list_todos_db()
+    except Exception as exc:  # noqa: BLE001 - fail closed as 503 only for DB outages
+        if isinstance(exc, (_TodoStoreUnavailable, OSError)) or _is_psycopg_error(exc):
+            return _db_unavailable_response(exc)
+        raise
     return JSONResponse(status_code=200, content=items)
 
 
-@fastapi_app.post("/api/todos", tags=["Todos"], status_code=201)
-async def fastapi_create_todo(request: Request) -> Response:
+@fastapi_app.post(
+    "/api/todos",
+    tags=["Todos"],
+    status_code=201,
+    response_model=TodoItem,
+    responses={
+        400: {"model": TodoErrorResponse},
+        503: {"model": TodoErrorResponse},
+    },
+    operation_id="create_todo",
+)
+def fastapi_create_todo(payload: TodoCreateRequest) -> Response:
+    title = (
+        payload.title.strip()
+        if payload.title is not None
+        else f"Todo #{int(time.time())}"
+    )
+    if not title:
+        return JSONResponse(
+            status_code=400, content={"error": "Field 'title' must not be blank"}
+        )
     try:
-        payload = await request.json()
-    except Exception as err:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "Invalid JSON body", "detail": str(err)},
-        )
-    if not isinstance(payload, dict):
-        return JSONResponse(status_code=400, content={"error": "Invalid JSON body"})
-    if "completed" in payload and not isinstance(payload["completed"], bool):
-        return JSONResponse(
-            status_code=400, content={"error": "Field 'completed' must be a boolean"}
-        )
-    if "title" in payload and not isinstance(payload["title"], str):
-        return JSONResponse(
-            status_code=400, content={"error": "Field 'title' must be a string"}
-        )
-    with _todos_lock:
-        new_id = max((t["id"] for t in _FALLBACK_TODOS), default=0) + 1
-        title = (
-            str(payload["title"]).strip() if "title" in payload else f"Todo #{new_id}"
-        )
-        item = {
-            "id": new_id,
-            "title": title,
-            "completed": payload.get("completed", False),
-            "capability": str(payload.get("capability", "general")),
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        }
-        _FALLBACK_TODOS.append(item)
-        item_copy = dict(item)
-    return JSONResponse(status_code=201, content=item_copy)
+        item = _create_todo_db(title, bool(payload.completed), str(payload.capability))
+    except Exception as exc:  # noqa: BLE001 - fail closed as 503 only for DB outages
+        if isinstance(exc, (_TodoStoreUnavailable, OSError)) or _is_psycopg_error(exc):
+            return _db_unavailable_response(exc)
+        raise
+    return JSONResponse(status_code=201, content=item)
 
 
-@fastapi_app.put("/api/todos/{todo_id}/toggle", tags=["Todos"])
-def fastapi_toggle_todo(todo_id: int) -> Response:
-    item_copy = None
-    with _todos_lock:
-        for t in _FALLBACK_TODOS:
-            if t["id"] == todo_id:
-                t["completed"] = not t["completed"]
-                item_copy = dict(t)
-                break
-    if item_copy is not None:
-        return JSONResponse(status_code=200, content=item_copy)
+@fastapi_app.patch(
+    "/api/todos/{todo_id}",
+    tags=["Todos"],
+    response_model=TodoItem,
+    responses={
+        400: {"model": TodoErrorResponse},
+        404: {"model": TodoErrorResponse},
+        503: {"model": TodoErrorResponse},
+    },
+    operation_id="update_todo",
+)
+def fastapi_update_todo(
+    todo_id: int,
+    payload: TodoPatchRequest | None = Body(default=None),
+) -> Response:
+    patch = payload or TodoPatchRequest()
+    title = patch.title.strip() if patch.title is not None else None
+    if patch.title is not None and not title:
+        return JSONResponse(
+            status_code=400, content={"error": "Field 'title' must not be blank"}
+        )
+    try:
+        updated = _patch_todo_db(
+            todo_id,
+            title=title,
+            completed=patch.completed,
+            capability=patch.capability,
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed as 503 only for DB outages
+        if isinstance(exc, (_TodoStoreUnavailable, OSError)) or _is_psycopg_error(exc):
+            return _db_unavailable_response(exc)
+        raise
+    if updated is not None:
+        return JSONResponse(status_code=200, content=updated)
     return JSONResponse(status_code=404, content={"error": "Todo not found"})
 
 
-@fastapi_app.delete("/api/todos/{todo_id}", tags=["Todos"])
+@fastapi_app.delete(
+    "/api/todos/{todo_id}",
+    tags=["Todos"],
+    response_model=TodoDeleteResponse,
+    responses={
+        404: {"model": TodoErrorResponse},
+        503: {"model": TodoErrorResponse},
+    },
+    operation_id="delete_todo",
+)
 def fastapi_delete_todo(todo_id: int) -> Response:
-    removed_copy = None
-    with _todos_lock:
-        for idx, t in enumerate(_FALLBACK_TODOS):
-            if t["id"] == todo_id:
-                removed = _FALLBACK_TODOS.pop(idx)
-                removed_copy = dict(removed)
-                break
-    if removed_copy is not None:
+    try:
+        removed = _delete_todo_db(todo_id)
+    except Exception as exc:  # noqa: BLE001 - fail closed as 503 only for DB outages
+        if isinstance(exc, (_TodoStoreUnavailable, OSError)) or _is_psycopg_error(exc):
+            return _db_unavailable_response(exc)
+        raise
+    if removed is not None:
         return JSONResponse(
             status_code=200,
-            content={"ok": True, "deleted_id": todo_id, "item": removed_copy},
+            content={"ok": True, "deleted_id": todo_id, "item": removed},
         )
     return JSONResponse(status_code=404, content={"error": "Todo not found"})
 
 
-@fastapi_app.get("/api/auth/me", tags=["Auth"])
+@fastapi_app.get(
+    "/api/auth/me",
+    tags=["Auth"],
+    response_model=AuthMeResponse,
+    operation_id="get_auth_me",
+)
 @fastapi_app.head("/api/auth/me", include_in_schema=False)
 def fastapi_auth_me(request: Request) -> Response:
     username = request.headers.get("X-authentik-username", "")
@@ -1035,9 +1310,11 @@ def fastapi_auth_me(request: Request) -> Response:
     )
 
 
-@fastapi_app.get("/", tags=["UI"], response_class=HTMLResponse)
+@fastapi_app.get(
+    "/", tags=["UI"], response_class=HTMLResponse, operation_id="get_ui_index"
+)
 @fastapi_app.head("/", include_in_schema=False)
-@fastapi_app.get("/index.html", tags=["UI"], response_class=HTMLResponse)
+@fastapi_app.get("/index.html", include_in_schema=False, response_class=HTMLResponse)
 @fastapi_app.head("/index.html", include_in_schema=False)
 def fastapi_ui_index(request: Request) -> HTMLResponse:
     username = request.headers.get("X-authentik-username", "")

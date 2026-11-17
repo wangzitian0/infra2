@@ -80,6 +80,8 @@ class TodoDeployer(Deployer):
     # CANARY_POSTGRES_USER (common/tests/test_todo_canary_depth.py keeps them equal).
     CANARY_PG_ROLE = "canary_ro"
     CANARY_PG_CONNECTION_LIMIT = 5
+    TODO_PG_ROLE = "todo_app"
+    TODO_PG_CONNECTION_LIMIT = 20
     # token_urlsafe(32), the SDK's generator for runtime secrets, yields only these characters.
     # A value outside this set is refused: it cannot be quoted into SQL without doubt.
     _CANARY_PG_PASSWORD = re.compile(r"[A-Za-z0-9_-]{16,128}")
@@ -115,6 +117,40 @@ class TodoDeployer(Deployer):
             f"ALTER ROLE {role} SET default_transaction_read_only = on;\n"
         )
 
+    @classmethod
+    def todos_storage_sql(cls, password: str) -> str:
+        """Idempotent SQL for the todos persistence role, table, and minimal DML grants."""
+        if not cls._CANARY_PG_PASSWORD.fullmatch(password or ""):
+            raise ValueError(
+                "todo Postgres password must be 16-128 characters from [A-Za-z0-9_-]"
+            )
+        role = cls.TODO_PG_ROLE
+        attributes = (
+            "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION "
+            f"CONNECTION LIMIT {cls.TODO_PG_CONNECTION_LIMIT}"
+        )
+        return (
+            "SET log_min_error_statement = 'panic';\n"
+            "SET log_statement = 'none';\n"
+            "SET log_min_duration_statement = -1;\n"
+            "DO $do$\nBEGIN\n"
+            f"  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{role}') THEN\n"
+            f"    CREATE ROLE {role} {attributes};\n"
+            "  END IF;\n"
+            "END\n$do$;\n"
+            f"ALTER ROLE {role} WITH {attributes} PASSWORD '{password}';\n"
+            "CREATE TABLE IF NOT EXISTS todos (\n"
+            "  id SERIAL PRIMARY KEY,\n"
+            "  title TEXT NOT NULL,\n"
+            "  completed BOOLEAN NOT NULL DEFAULT FALSE,\n"
+            "  capability TEXT NOT NULL DEFAULT 'general',\n"
+            "  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()\n"
+            ");\n"
+            "ALTER TABLE todos ADD COLUMN IF NOT EXISTS capability TEXT NOT NULL DEFAULT 'general';\n"
+            f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE todos TO {role};\n"
+            f"GRANT USAGE, SELECT ON SEQUENCE todos_id_seq TO {role};\n"
+        )
+
     @staticmethod
     def redact_password(text: str, password: str) -> str:
         """Remove the password, and any `PASSWORD '...'` clause, from text that is printed.
@@ -135,8 +171,9 @@ class TodoDeployer(Deployer):
         the role, and a deploy must not report that as healthy.
         """
         e = cls.env()
+        backend = cls.secrets_backend(env=env)
         try:
-            password = cls.secrets_backend(env=env).get("CANARY_POSTGRES_PASSWORD")
+            password = backend.get("CANARY_POSTGRES_PASSWORD")
         except Exception as exc:  # noqa: BLE001 - an unreadable store is a deploy failure
             error(
                 f"{cls.service}: cannot read CANARY_POSTGRES_PASSWORD from Vault: {exc}"
@@ -152,6 +189,16 @@ class TodoDeployer(Deployer):
         except ValueError as exc:
             error(f"{cls.service}: {exc}")
             return False
+        try:
+            todo_password = backend.get("TODO_POSTGRES_PASSWORD")
+        except Exception:  # noqa: BLE001 - optional in legacy canary-only tests
+            todo_password = None
+        if todo_password:
+            try:
+                sql += cls.todos_storage_sql(todo_password)
+            except ValueError as exc:
+                error(f"{cls.service}: {exc}")
+                return False
         container = f"platform-postgres{e.get('ENV_SUFFIX') or ''}"
         result = c.run(
             f"ssh root@{e['VPS_HOST']} "
@@ -161,9 +208,12 @@ class TodoDeployer(Deployer):
             warn=True,
         )
         if result.failed:
+            stderr_clean = cls.redact_password((result.stderr or "").strip(), password)
+            if todo_password:
+                stderr_clean = cls.redact_password(stderr_clean, todo_password)
             error(
                 f"{cls.service}: could not provision Postgres role {cls.CANARY_PG_ROLE}: "
-                f"{cls.redact_password((result.stderr or '').strip(), password)}"
+                f"{stderr_clean}"
             )
             return False
         info(
