@@ -324,7 +324,7 @@ def test_active_docs_python_imports_dotted_refs_and_test_paths_resolve() -> None
 
 
 def test_python_import_and_dotted_repo_ref_guards_reject_invalid_symbols() -> None:
-    bad_md = "```python\nfrom common.observability.issue_trail import GhIssueApi\n```\n"
+    bad_md = "```python\nfrom infra2_sdk.observability import GhIssueApi\n```\n"
     assert any(
         "GhIssueApi" in e for e in _check_python_code_block_imports(bad_md, "README.md")
     )

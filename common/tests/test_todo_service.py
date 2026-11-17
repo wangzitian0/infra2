@@ -104,11 +104,15 @@ def test_todo_app_endpoints_contract(monkeypatch) -> None:
     assert data["git_sha"] == "unknown"
 
     monkeypatch.setenv("GIT_COMMIT_SHA", "abcdef1234567890")
-    resp_ver = client.get("/api/health")
+    reloaded = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reloaded)
+    reloaded_client = TestClient(reloaded.fastapi_app, raise_server_exceptions=False)
+    resp_ver = reloaded_client.get("/api/health")
     assert resp_ver.status_code == 200
     data_ver = resp_ver.json()
     assert data_ver["version"] == "abcdef1234567890"
     assert data_ver["git_sha"] == "abcdef1234567890"
+    assert reloaded_client.get("/health").json()["git_sha"] == "abcdef1234567890"
     monkeypatch.delenv("GIT_COMMIT_SHA", raising=False)
 
     # 2. /api/canary/status
@@ -579,6 +583,23 @@ def test_todo_fastapi_endpoints_contract() -> None:
     resp_api_health = client.get("/api/health")
     assert resp_api_health.status_code == 200
     assert resp_api_health.json()["service"] == "platform/todo"
+
+    # 5. OpenAPI schemas on /livez, /readyz, /health and unique operationIds
+    openapi_res = client.get("/openapi.json")
+    assert openapi_res.status_code == 200
+    paths = openapi_res.json()["paths"]
+    for rp in ("/health", "/livez", "/readyz"):
+        schema = paths[rp]["get"]["responses"]["200"]["content"]["application/json"][
+            "schema"
+        ]
+        assert "$ref" in schema, f"{rp} missing schema ref: {schema}"
+    op_ids = [
+        op["operationId"]
+        for path_item in paths.values()
+        for op in path_item.values()
+        if isinstance(op, dict) and "operationId" in op
+    ]
+    assert len(op_ids) == len(set(op_ids))
 
     # 5. Todo REST API
     resp_todos = client.get("/api/todos")

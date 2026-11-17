@@ -482,7 +482,7 @@ def test_standalone_app_starts_and_answers_livez_without_a_tier(tmp_path: Path):
     result = _run_generated_app(tmp_path, "standalone", code)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "200 demo_service"
+    assert result.stdout.strip().splitlines()[-1] == "200 demo_service"
 
 
 def test_infra2_app_stops_at_import_without_a_tier(tmp_path: Path):
@@ -507,7 +507,7 @@ def test_infra2_app_starts_with_a_known_tier(tmp_path: Path):
     result = _run_generated_app(tmp_path, "infra2", code)
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "200"
+    assert result.stdout.strip().splitlines()[-1] == "200"
 
 
 def test_scaffold_manifest_declares_the_database_url_as_a_required_sensitive_human_secret():

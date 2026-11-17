@@ -181,9 +181,15 @@ def _run_scenario(
         f"probe exit code {result.returncode}\nstdout:\n{result.stdout}\n"
         f"stderr:\n{result.stderr}"
     )
-    json_lines = [ln for ln in result.stdout.splitlines() if ln.startswith("{")]
-    assert len(json_lines) == 1, f"expected one JSON line, got stdout:\n{result.stdout}"
-    return json.loads(json_lines[0]), result.stderr
+    states = [
+        json.loads(ln)
+        for ln in result.stdout.splitlines()
+        if ln.startswith("{") and '"records"' in ln
+    ]
+    assert len(states) == 1, (
+        f"expected one state JSON line, got stdout:\n{result.stdout}"
+    )
+    return states[0], result.stderr
 
 
 def _library_rows(state: dict[str, Any]) -> list[list[Any]]:

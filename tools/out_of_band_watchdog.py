@@ -52,6 +52,8 @@ from common.observability.page_dedup import (  # noqa: E402
     resolve_page_state,
     trusted_authors,
 )
+from infra2_sdk.observability import CheckVerdict, record_verdicts  # noqa: E402
+
 from common.observability import scheduled_job_start  # noqa: E402
 from common.observability.estate_scheduler_liveness import (  # noqa: E402
     BOUND_CAP_ENV,
@@ -62,11 +64,9 @@ from common.observability.estate_scheduler_liveness import (  # noqa: E402
     github_getter,
     parse_bound_cap_hours,
 )
-from common.observability.issue_trail import (  # noqa: E402
+from common.observability.watchdog_issue_trail_cli import (  # noqa: E402
     VERDICTS_ENV,
     WATCHDOG_SOURCE,
-    CheckVerdict,
-    record_verdicts,
 )
 
 #: #908: the Worker's `/health` always answers `{"ok": true}`, so it could not

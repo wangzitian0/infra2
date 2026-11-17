@@ -25,13 +25,17 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+from infra2_sdk.observability import ListingFailed
+
 from common.observability import page_dedup as pd
-from common.observability.issue_trail import FULL, OFF, OPEN_ONLY, ListingFailed
 from common.observability.page_dedup import (
     ABSENT,
     CORRUPT,
     FOUND,
+    FULL,
     NONE,
+    OFF,
+    OPEN_ONLY,
     PAGE,
     REPORT,
     RESOLVED,

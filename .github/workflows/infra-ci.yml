@@ -852,7 +852,7 @@ jobs:
           import json, os, subprocess
           from pathlib import Path
           from common.gate.self_governance import is_self_governing
-          from common.observability.issue_trail import CheckVerdict
+          from infra2_sdk.observability import CheckVerdict
           from common.deploy.stage_record import utc_now, write_stage_record
 
           diff = subprocess.check_output(

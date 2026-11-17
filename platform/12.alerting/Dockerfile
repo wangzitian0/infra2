@@ -9,7 +9,7 @@ RUN pip install --no-cache-dir httpx python-dotenv rich invoke "pyyaml>=6,<7" \
     "opentelemetry-api>=1.24,<2" "opentelemetry-sdk>=1.24,<2" \
     "opentelemetry-exporter-otlp-proto-http>=1.24,<2" \
     "opentelemetry-instrumentation-logging>=0.45b0,<1" \
-    "fastapi>=0.110,<1" "uvicorn[standard]>=0.28,<1"
+    "fastapi>=0.162,<1" "uvicorn[standard]>=0.28,<1"
 
 # infra2-sdk is not on PyPI: uv.lock is the only pin. tools/sdk_requirement.py reads the
 # wheel URL and sha256 from the lock, and pip verifies the hash (#1115).

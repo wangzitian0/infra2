@@ -96,14 +96,18 @@ def _run_probe(app_path: Path) -> tuple[dict, str]:
         f"probe exit code {result.returncode}\nstdout:\n{result.stdout}\n"
         f"stderr:\n{result.stderr}"
     )
-    json_lines = [ln for ln in result.stdout.splitlines() if ln.startswith("{")]
-    assert len(json_lines) == 1, f"expected one JSON line, got stdout:\n{result.stdout}"
-    return json.loads(json_lines[0]), result.stderr
+    lines = [json.loads(ln) for ln in result.stdout.splitlines() if ln.startswith("{")]
+    states = [item for item in lines if "handlers" in item]
+    logs = [item for item in lines if "logger" in item]
+    assert len(states) == 1, (
+        f"expected one state JSON line, got stdout:\n{result.stdout}"
+    )
+    return (states[0], logs), result.stderr
 
 
 def test_todo_main_leaves_root_logger_at_info_with_otel_handler() -> None:
     """After `main()`, the root level is INFO and both handlers are present."""
-    state, stderr = _run_probe(TODO_APP)
+    (state, logs), _stderr = _run_probe(TODO_APP)
 
     assert state["level"] == logging.INFO, (
         f"root level is {state['level']}, expected {logging.INFO}; handlers: "
@@ -116,10 +120,14 @@ def test_todo_main_leaves_root_logger_at_info_with_otel_handler() -> None:
         if h.startswith("opentelemetry.") and h.endswith(".LoggingHandler")
     ]
     assert len(otel_handlers) == 1, state["handlers"]
-    # The stream handler writes the app INFO line from main(). A dropped INFO line fails here.
-    assert "INFO platform-todo Canary Todo service starting on port 8000" in stderr, (
-        stderr
-    )
+    # The stream handler writes structured JSON to stdout. A dropped INFO line fails here.
+    assert any(
+        entry.get("level") == "INFO"
+        and entry.get("logger") == "platform-todo"
+        and "Canary Todo service starting on port 8000" in entry.get("message", "")
+        and entry.get("service.name") == "platform-todo"
+        for entry in logs
+    ), logs
 
 
 def test_the_probe_child_does_not_inherit_conflicting_version_variables(
@@ -132,7 +140,7 @@ def test_the_probe_child_does_not_inherit_conflicting_version_variables(
     monkeypatch.setenv("IMAGE_TAG", "2.0.0")
     monkeypatch.setenv("APP_ENV", "production")
 
-    state, _stderr = _run_probe(TODO_APP)
+    (state, _logs), _stderr = _run_probe(TODO_APP)
 
     assert state["inherited"] == [], state
     assert state["level"] == logging.INFO, state

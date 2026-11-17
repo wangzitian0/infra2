@@ -307,7 +307,7 @@ step recorded completely, closes issues of checks nobody records any more), titl
 close when green in a scheduled run (or a plain dispatch on main). Drills and
 branch dispatches never close; dry runs and SSH-override runs write nothing. A
 failed listing never falls through to create; a failed write exits 1. Logic in
-`common/observability/issue_trail.py`.
+`infra2_sdk.observability` and `common/observability/watchdog_issue_trail_cli.py`.
 
 ```bash
 GITHUB_EVENT_NAME=workflow_dispatch GITHUB_REF=refs/heads/feature \

@@ -349,7 +349,8 @@ jobs:
         run: |
           python - <<'PY'
           import json, os, sys, urllib.request
-          from common.observability.issue_trail import RUNNER_HEALTH_SOURCE, CheckVerdict, record_verdicts
+          from infra2_sdk.observability import CheckVerdict, record_verdicts
+          from common.observability.watchdog_issue_trail_cli import RUNNER_HEALTH_SOURCE
           def record(ok, detail):
               # truealpha#876 W4: recorded before paging, so a failed delivery still leaves a
               # verdict; a failed write never stops the page (the trail then reports no verdict).
@@ -405,7 +406,7 @@ jobs:
       # One issue per red check (exact title; comment while it stays red), closed by the
       # next green scheduled run — in addition to Feishu, never instead. A step above
       # that recorded no verdict is itself red. Mode (schedule / drill / dry run) is
-      # decided by common/observability/issue_trail.py::issue_trail_mode from the env above.
+      # decided by infra2_sdk.observability.issue_trail_mode from the env above.
       - name: Record the verdicts as GitHub issues
         if: ${{ !cancelled() }}
         run: python tools/watchdog_issue_trail.py

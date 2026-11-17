@@ -908,19 +908,10 @@ async def add_cors_headers(request: Request, call_next: Any) -> Response:
     return response
 
 
-def _resolved_git_sha() -> str:
-    raw = (
-        os.environ.get("GIT_COMMIT_SHA", "").strip()
-        or (
-            resolve_runtime_env(None, RuntimeEnvKey.SERVICE_VERSION).value or ""
-        ).strip()
-    )
-    return raw or "unknown"
-
-
-@fastapi_app.api_route("/api/health", methods=["GET", "HEAD"], tags=["Observability"])
+@fastapi_app.get("/api/health", tags=["Observability"])
+@fastapi_app.head("/api/health", include_in_schema=False)
 def fastapi_api_health() -> Response:
-    git_sha = _resolved_git_sha()
+    rel = getattr(fastapi_app.state, "service_release", {})
     verdict = peek_canary_verdict()
     return JSONResponse(
         status_code=200,
@@ -929,8 +920,8 @@ def fastapi_api_health() -> Response:
             "status": "healthy",
             "service": "platform/todo",
             "domain": "todo.zitian.party",
-            "version": git_sha,
-            "git_sha": git_sha,
+            "version": rel.get("version", "unknown"),
+            "git_sha": rel.get("git_sha", "unknown"),
             "canary": {
                 "ok": verdict.get("ok") is True,
                 "checked_at": verdict.get("timestamp"),
@@ -940,16 +931,16 @@ def fastapi_api_health() -> Response:
     )
 
 
-@fastapi_app.api_route(
-    "/api/canary/status", methods=["GET", "HEAD"], tags=["Observability"]
-)
+@fastapi_app.get("/api/canary/status", tags=["Observability"])
+@fastapi_app.head("/api/canary/status", include_in_schema=False)
 def fastapi_api_canary_status() -> Response:
     result = cached_canary_status()
     status_code = 200 if result.get("ok") else 503
     return JSONResponse(status_code=status_code, content=result)
 
 
-@fastapi_app.api_route("/api/todos", methods=["GET", "HEAD"], tags=["Todos"])
+@fastapi_app.get("/api/todos", tags=["Todos"])
+@fastapi_app.head("/api/todos", include_in_schema=False)
 def fastapi_get_todos() -> Response:
     with _todos_lock:
         items = [dict(t) for t in _FALLBACK_TODOS]
@@ -1023,7 +1014,8 @@ def fastapi_delete_todo(todo_id: int) -> Response:
     return JSONResponse(status_code=404, content={"error": "Todo not found"})
 
 
-@fastapi_app.api_route("/api/auth/me", methods=["GET", "HEAD"], tags=["Auth"])
+@fastapi_app.get("/api/auth/me", tags=["Auth"])
+@fastapi_app.head("/api/auth/me", include_in_schema=False)
 def fastapi_auth_me(request: Request) -> Response:
     username = request.headers.get("X-authentik-username", "")
     groups = [
@@ -1043,12 +1035,10 @@ def fastapi_auth_me(request: Request) -> Response:
     )
 
 
-@fastapi_app.api_route(
-    "/", methods=["GET", "HEAD"], tags=["UI"], response_class=HTMLResponse
-)
-@fastapi_app.api_route(
-    "/index.html", methods=["GET", "HEAD"], tags=["UI"], response_class=HTMLResponse
-)
+@fastapi_app.get("/", tags=["UI"], response_class=HTMLResponse)
+@fastapi_app.head("/", include_in_schema=False)
+@fastapi_app.get("/index.html", tags=["UI"], response_class=HTMLResponse)
+@fastapi_app.head("/index.html", include_in_schema=False)
 def fastapi_ui_index(request: Request) -> HTMLResponse:
     username = request.headers.get("X-authentik-username", "")
     name = request.headers.get("X-authentik-name", "")
@@ -1069,7 +1059,9 @@ def fastapi_ui_index(request: Request) -> HTMLResponse:
             "未检测到 ForwardAuth 头 (开发/直连模式)"
             "</span>"
         )
-    resolved_sha = _resolved_git_sha()
+    resolved_sha = getattr(fastapi_app.state, "service_release", {}).get(
+        "git_sha", "unknown"
+    )
     sha = resolved_sha[:7] if resolved_sha != "unknown" else "unknown"
     rendered = HTML_TEMPLATE.replace("${GIT_COMMIT_SHA}", sha).replace(
         "${AUTH_BADGE}", auth_badge
