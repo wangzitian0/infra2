@@ -141,7 +141,7 @@ services:
         fi
         
         echo "Starting uvicorn with 1 worker..."
-        exec uvicorn webhook_server:app --host 0.0.0.0 --port 8080 --workers 1
+        exec uvicorn webhook_server:app --host 0.0.0.0 --port 8080 --workers 1 --timeout-keep-alive 95
     environment:
       - WEBHOOK_PORT=8080
       - GIT_BRANCH=${GIT_BRANCH:-main}

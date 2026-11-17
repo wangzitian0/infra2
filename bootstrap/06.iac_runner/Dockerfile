@@ -47,4 +47,4 @@ RUN mkdir -p /workspace && \
 
 EXPOSE 8080
 
-CMD ["uvicorn", "webhook_server:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]
+CMD ["uvicorn", "webhook_server:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--timeout-keep-alive", "95"]

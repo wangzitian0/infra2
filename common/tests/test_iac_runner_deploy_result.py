@@ -1471,6 +1471,12 @@ def test_removed_github_webhook_and_openapi_contract(monkeypatch) -> None:
         ]["$ref"]
         == "#/components/schemas/DeployStatusRequest"
     )
+    assert (
+        paths["/deploy/status"]["post"]["responses"]["409"]["content"][
+            "application/json"
+        ]["schema"]["$ref"]
+        == "#/components/schemas/RunnerErrorResponse"
+    )
     op_ids = [
         op["operationId"]
         for pi in paths.values()
@@ -1478,6 +1484,88 @@ def test_removed_github_webhook_and_openapi_contract(monkeypatch) -> None:
         if isinstance(op, dict) and "operationId" in op
     ]
     assert len(op_ids) == len(set(op_ids))
+
+
+@pytest.mark.asyncio
+async def test_wait_deploy_does_not_block_event_loop_and_enforces_body_limit(
+    monkeypatch,
+) -> None:
+    """PR #1746 audit fixes: blocking sync/wait runs in threadpool and >64 KiB bodies fail with 413."""
+    import asyncio
+    import threading
+    import httpx
+
+    sync_runner = _load_module(
+        "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
+    )
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
+    webhook_server = _load_module(
+        "webhook_server_async_loop_safety",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_sync(env, ref, *_args, **kwargs):
+        entered.set()
+        assert release.wait(timeout=5.0)
+        return sync_runner.SyncResult(
+            env=env,
+            ref=ref,
+            requested_services=["platform/redis"],
+            results=[
+                sync_runner.ServiceSyncResult(
+                    service="platform/redis", task="redis.sync", success=True
+                )
+            ],
+        )
+
+    monkeypatch.setattr(sync_runner, "sync_services_by_version", slow_sync)
+
+    raw_deploy = json.dumps(
+        {
+            "env": "staging",
+            "ref": DEPLOY_SHA,
+            "wait": True,
+            "triggered_by": "ci",
+            "services": ["platform/redis"],
+        }
+    ).encode("utf-8")
+    deploy_headers = {
+        **_signed_headers(monkeypatch, raw_deploy),
+        "Content-Type": "application/json",
+    }
+
+    transport = httpx.ASGITransport(app=webhook_server.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        oversized = b"{" + b"a" * (webhook_server.MAX_REQUEST_BODY_BYTES + 10) + b"}"
+        res_413 = await client.post("/deploy", content=oversized)
+        assert res_413.status_code == 413
+
+        res_413_status = await client.post("/deploy/status", content=oversized)
+        assert res_413_status.status_code == 413
+
+        deploy_task = asyncio.create_task(
+            client.post("/deploy", content=raw_deploy, headers=deploy_headers)
+        )
+        for _ in range(100):
+            if entered.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert entered.is_set()
+
+        try:
+            # While slow_sync is blocked inside wait=True /deploy, the asyncio event loop remains responsive
+            live_resp = await asyncio.wait_for(client.get("/livez"), timeout=1.0)
+            assert live_resp.status_code == 200
+        finally:
+            release.set()
+
+        deploy_resp = await deploy_task
+        assert deploy_resp.status_code == 200
+        assert deploy_resp.json()["status"] == "completed"
 
 
 def test_a_remembered_failure_is_retried_not_replayed(monkeypatch) -> None:
