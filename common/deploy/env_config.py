@@ -381,6 +381,7 @@ _PREVIEW_SERVICE_CONFIGS: dict[str, PreviewServiceConfig] = {
         throwaway_secrets=(
             "REDIS_PASSWORD",
             "CANARY_POSTGRES_PASSWORD",
+            "TODO_POSTGRES_PASSWORD",
             "CANARY_S3_ACCESS_KEY",
             "CANARY_S3_SECRET_KEY",
         ),
