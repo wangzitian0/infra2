@@ -284,3 +284,124 @@ def test_reconcile_plan_gate_fetches_pr_base_sha_and_fails_on_diff_error(
 
     bad_sha_res = _run_step("deadbeef" * 5, has_non_doc="true")
     assert bad_sha_res.returncode != 0
+
+    sub_src = tmp_path / "sub_src"
+    subprocess.run(
+        ["git", "init", "-b", "main", str(sub_src)], check=True, capture_output=True
+    )
+    for cfg_key, cfg_val in (
+        ("user.email", "ci@example.test"),
+        ("user.name", "CI Test"),
+    ):
+        subprocess.run(
+            ["git", "-C", str(sub_src), "config", cfg_key, cfg_val],
+            check=True,
+            capture_output=True,
+        )
+    (sub_src / "README.md").write_text("sub\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(sub_src), "add", "README.md"], check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "-C", str(sub_src), "commit", "-m", "sub init"],
+        check=True,
+        capture_output=True,
+    )
+
+    sub_clone = tmp_path / "sub_shallow"
+    subprocess.run(
+        ["git", "-C", str(work_repo), "checkout", "main"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(work_repo), "checkout", "-b", "feature/submodule"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(work_repo),
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            str(sub_src),
+            "ext-tool",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(work_repo), "commit", "-m", "add submodule"],
+        check=True,
+        capture_output=True,
+    )
+    sub_base = subprocess.check_output(
+        ["git", "-C", str(work_repo), "rev-parse", "HEAD"], text=True
+    ).strip()
+    (sub_src / "README.md").write_text("sub v2\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(sub_src), "commit", "-am", "sub v2"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(work_repo),
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "update",
+            "--remote",
+            "ext-tool",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(work_repo), "commit", "-am", "bump submodule"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(work_repo), "push", "-u", "origin", "feature/submodule"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "clone",
+            "--depth",
+            "1",
+            "--branch",
+            "feature/submodule",
+            f"file://{bare_repo}",
+            str(sub_clone),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    sub_res = subprocess.run(
+        [
+            "bash",
+            "-c",
+            script_template.replace("${{ github.workspace }}", str(sub_clone))
+            .replace("${{ github.event.pull_request.base.sha }}", sub_base)
+            .replace("${{ needs.detect-changes.outputs.has_non_doc }}", "true")
+            .replace(
+                "uv run --locked python -m tools.reconcile_iac_inputs",
+                "printf 'RECONCILE:%s\\n'",
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert sub_res.returncode == 0, sub_res.stderr
+    assert "RECONCILE:--changed-file\nRECONCILE:ext-tool" in sub_res.stdout
