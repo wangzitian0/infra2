@@ -13,7 +13,7 @@ import sys
 
 from common.deploy.vps_ssh import resolve_ssh_credentials, ssh_cmd
 
-STAGING_BACKEND_CONTAINER = "finance-report-backend-staging"
+STAGING_BACKEND_CONTAINER = "finance_report-backend-staging"
 STAGING_POSTGRES_CONTAINER = "finance_report-postgres-staging"
 STAGING_DATABASE = "finance_report"
 DEFAULT_RETENTION_DAYS = 14
@@ -28,10 +28,7 @@ def build_remote_command(*, older_than_days: int, apply: bool) -> str:
         f"docker exec {STAGING_POSTGRES_CONTAINER} "
         f"psql -U postgres -d {STAGING_DATABASE} -tAc {shlex.quote(size_sql)}"
     )
-    purge_parts = [
-        "docker",
-        "exec",
-        STAGING_BACKEND_CONTAINER,
+    purge_args = [
         "python",
         "scripts/purge_test_accounts.py",
         "--rotate-append-only",
@@ -39,8 +36,13 @@ def build_remote_command(*, older_than_days: int, apply: bool) -> str:
         str(older_than_days),
     ]
     if apply:
-        purge_parts.append("--apply")
-    purge_cmd = shlex.join(purge_parts)
+        purge_args.append("--apply")
+    inner_script = (
+        f"set -eu; set -a; . /secrets/.env; set +a; exec {shlex.join(purge_args)}"
+    )
+    purge_cmd = shlex.join(
+        ["docker", "exec", STAGING_BACKEND_CONTAINER, "sh", "-c", inner_script]
+    )
     return (
         f'echo "=== SIZE_BEFORE ===" && {size_cmd} && '
         f'echo "=== PURGE ===" && {purge_cmd} && '

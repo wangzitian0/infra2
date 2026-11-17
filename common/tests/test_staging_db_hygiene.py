@@ -20,12 +20,33 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_build_remote_command_targets_only_staging_and_respects_apply() -> None:
+    backend_compose = yaml.safe_load(
+        (ROOT / "finance_report/finance_report/10.app/compose.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    postgres_compose = yaml.safe_load(
+        (ROOT / "finance_report/finance_report/01.postgres/compose.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    expected_backend = backend_compose["services"]["backend"]["container_name"].replace(
+        "${ENV_SUFFIX}", "-staging"
+    )
+    expected_postgres = postgres_compose["services"]["postgres"][
+        "container_name"
+    ].replace("${ENV_SUFFIX}", "-staging")
+    assert STAGING_BACKEND_CONTAINER == expected_backend
+    assert STAGING_POSTGRES_CONTAINER == expected_postgres
+
     dry = build_remote_command(older_than_days=DEFAULT_RETENTION_DAYS, apply=False)
-    assert STAGING_BACKEND_CONTAINER in dry
-    assert STAGING_POSTGRES_CONTAINER in dry
+    assert f"docker exec {expected_backend} sh -c " in dry
+    assert ". /secrets/.env" in dry
+    assert f"docker exec {expected_postgres} " in dry
     assert "--rotate-append-only --older-than-days 14" in dry
     assert "--apply" not in dry
-    assert "production" not in dry
+    assert "finance_report-backend " not in dry
+    assert "finance_report-postgres " not in dry
 
     applied = build_remote_command(older_than_days=14, apply=True)
     assert "--rotate-append-only --older-than-days 14 --apply" in applied
