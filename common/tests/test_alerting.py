@@ -611,6 +611,7 @@ _IMPORT_TO_PIP_NAME = {
     "psycopg": "psycopg",
     "boto3": "boto3",
     "fastapi": "fastapi",
+    "pydantic": "pydantic",
     "uvicorn": "uvicorn",
 }
 
@@ -1583,3 +1584,41 @@ def test_deliver_infra2_report_sends_a_report_card(monkeypatch) -> None:
     _assert_card_standard(call["card"])
     assert call["card"]["header"]["template"] == "blue"
     assert call["card"]["header"]["title"]["content"].startswith("[报告] ")
+
+
+def test_alerting_openapi_schema_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#1648 AC18: /openapi.json declares typed schemas and HTTPBasic security."""
+    from starlette.testclient import TestClient
+
+    module = _load_alerting_app("alerting_openapi_test", monkeypatch)
+    resp = TestClient(module.fastapi_app).get("/openapi.json")
+    assert resp.status_code == 200
+    spec = resp.json()
+
+    schemas = spec["components"]["schemas"]
+    security_schemes = spec["components"]["securitySchemes"]
+    assert "HTTPBasic" in security_schemes
+    assert security_schemes["HTTPBasic"]["scheme"] == "basic"
+
+    webhook_op = spec["paths"]["/signoz/webhook"]["post"]
+    assert webhook_op["requestBody"]["required"] is True
+    req_schema_ref = webhook_op["requestBody"]["content"]["application/json"]["schema"][
+        "$ref"
+    ]
+    assert req_schema_ref == "#/components/schemas/SigNozAlertPayload"
+    assert "SigNozAlertPayload" in schemas
+    assert {"HTTPBasic": []} in webhook_op["security"]
+    for code in ("202", "400", "401", "411", "413", "502"):
+        assert code in webhook_op["responses"], code
+        assert (
+            "$ref"
+            in webhook_op["responses"][code]["content"]["application/json"]["schema"]
+        )
+
+    feishu_op = spec["paths"]["/health/feishu"]["get"]
+    for code in ("200", "503"):
+        assert code in feishu_op["responses"], code
+        assert (
+            "$ref"
+            in feishu_op["responses"][code]["content"]["application/json"]["schema"]
+        )
