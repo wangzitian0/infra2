@@ -56,6 +56,34 @@ def _signed_headers(monkeypatch, payload: bytes = b"") -> dict[str, str]:
     }
 
 
+def _post_signed(
+    webhook_server,
+    path: str,
+    payload: dict,
+    monkeypatch,
+    extra_headers: dict[str, str] | None = None,
+) -> tuple[dict, int]:
+    from starlette.testclient import TestClient
+
+    raw = json.dumps(payload).encode("utf-8")
+    headers = {
+        **_signed_headers(monkeypatch, raw),
+        "Content-Type": "application/json",
+        **(extra_headers or {}),
+    }
+    response = TestClient(webhook_server.app).post(path, content=raw, headers=headers)
+    return response.json(), response.status_code
+
+
+def _get_signed(webhook_server, path: str, monkeypatch) -> tuple[dict, int]:
+    from starlette.testclient import TestClient
+
+    response = TestClient(webhook_server.app).get(
+        path, headers=_signed_headers(monkeypatch)
+    )
+    return response.json(), response.status_code
+
+
 def test_sync_services_returns_structured_failure_result(monkeypatch) -> None:
     """#182: sync result reports real failed service tasks."""
     sync_runner = _load_module(
@@ -343,23 +371,7 @@ def test_deploy_wait_returns_500_when_sync_fails(monkeypatch) -> None:
     sync_runner = _load_module(
         "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
     )
-    fake_flask = types.ModuleType("flask")
-
-    class FakeFlask:
-        def __init__(self, _name):
-            pass
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    fake_flask.Flask = FakeFlask
-    fake_flask.jsonify = lambda payload: payload
-    fake_flask.request = types.SimpleNamespace(
-        headers=_signed_headers(monkeypatch),
-        data=b"",
-        json={"env": "staging", "ref": DEPLOY_SHA, "wait": True, "triggered_by": "ci"},
-    )
-    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
     webhook_server = _load_module(
         "webhook_server_under_test", IAC_RUNNER / "webhook_server.py", monkeypatch
     )
@@ -379,9 +391,13 @@ def test_deploy_wait_returns_500_when_sync_fails(monkeypatch) -> None:
     )
     monkeypatch.setattr(sync_runner, "sync_services_by_version", lambda *_args: failed)
 
-    response = webhook_server.version_deploy()
+    body, status_code = _post_signed(
+        webhook_server,
+        "/deploy",
+        {"env": "staging", "ref": DEPLOY_SHA, "wait": True, "triggered_by": "ci"},
+        monkeypatch,
+    )
 
-    body, status_code = response
     assert status_code == 500
     assert body["status"] == "failed"
     assert body["result"]["failed"] == 1
@@ -392,28 +408,7 @@ def test_deploy_wait_returns_500_when_sync_fails(monkeypatch) -> None:
 def test_deploy_wait_string_false_keeps_async_path(monkeypatch) -> None:
     """#182: string wait=false must not become truthy."""
     _load_module("sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch)
-    fake_flask = types.ModuleType("flask")
-
-    class FakeFlask:
-        def __init__(self, _name):
-            pass
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    fake_flask.Flask = FakeFlask
-    fake_flask.jsonify = lambda payload: payload
-    fake_flask.request = types.SimpleNamespace(
-        headers=_signed_headers(monkeypatch),
-        data=b"",
-        json={
-            "env": "staging",
-            "ref": DEPLOY_SHA,
-            "wait": "false",
-            "triggered_by": "ci",
-        },
-    )
-    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
     webhook_server = _load_module(
         "webhook_server_bool_under_test",
         IAC_RUNNER / "webhook_server.py",
@@ -434,7 +429,12 @@ def test_deploy_wait_string_false_keeps_async_path(monkeypatch) -> None:
 
     monkeypatch.setattr(webhook_server.threading, "Thread", FakeThread)
 
-    body, status_code = webhook_server.version_deploy()
+    body, status_code = _post_signed(
+        webhook_server,
+        "/deploy",
+        {"env": "staging", "ref": DEPLOY_SHA, "wait": "false", "triggered_by": "ci"},
+        monkeypatch,
+    )
 
     assert status_code == 202
     assert body["status"] == "in_progress"
@@ -448,24 +448,7 @@ def test_async_deploy_status_reports_completed_result(monkeypatch) -> None:
     sync_runner = _load_module(
         "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
     )
-    fake_flask = types.ModuleType("flask")
-
-    class FakeFlask:
-        def __init__(self, _name):
-            pass
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    fake_flask.Flask = FakeFlask
-    fake_flask.jsonify = lambda payload: payload
-    fake_request = types.SimpleNamespace(
-        headers=_signed_headers(monkeypatch),
-        data=b"",
-        json={"env": "staging", "ref": DEPLOY_SHA, "wait": False, "triggered_by": "ci"},
-    )
-    fake_flask.request = fake_request
-    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
     webhook_server = _load_module(
         "webhook_server_async_status_under_test",
         IAC_RUNNER / "webhook_server.py",
@@ -499,13 +482,21 @@ def test_async_deploy_status_reports_completed_result(monkeypatch) -> None:
 
     monkeypatch.setattr(webhook_server.threading, "Thread", ImmediateThread)
 
-    body, status_code = webhook_server.version_deploy()
+    body, status_code = _post_signed(
+        webhook_server,
+        "/deploy",
+        {"env": "staging", "ref": DEPLOY_SHA, "wait": False, "triggered_by": "ci"},
+        monkeypatch,
+    )
 
     assert status_code == 202
     assert body["status"] == "in_progress"
-    fake_request.headers = _signed_headers(monkeypatch)
-    fake_request.json = {"env": "staging", "ref": DEPLOY_SHA, "triggered_by": "ci"}
-    status_body, status_code = webhook_server.deployment_status()
+    status_body, status_code = _post_signed(
+        webhook_server,
+        "/deploy/status",
+        {"env": "staging", "ref": DEPLOY_SHA, "triggered_by": "ci"},
+        monkeypatch,
+    )
 
     assert status_code == 200
     assert status_body["status"] == "completed"
@@ -514,32 +505,28 @@ def test_async_deploy_status_reports_completed_result(monkeypatch) -> None:
     assert "stdout" not in status_body["result"]["results"][0]
     assert "stderr" not in status_body["result"]["results"][0]
 
+    rest_body, rest_code = _get_signed(
+        webhook_server, f"/deploy/status/{body['deployment_id']}", monkeypatch
+    )
+    assert rest_code == 200
+    assert rest_body["status"] == "completed"
+    assert rest_body["deployment_id"] == body["deployment_id"]
+
 
 def test_deploy_wait_rejects_invalid_literal(monkeypatch) -> None:
-    fake_flask = types.ModuleType("flask")
-
-    class FakeFlask:
-        def __init__(self, _name):
-            pass
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    fake_flask.Flask = FakeFlask
-    fake_flask.jsonify = lambda payload: payload
-    fake_flask.request = types.SimpleNamespace(
-        headers=_signed_headers(monkeypatch),
-        data=b"",
-        json={"env": "staging", "ref": DEPLOY_SHA, "wait": "sometimes"},
-    )
-    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
     webhook_server = _load_module(
         "webhook_server_invalid_bool_under_test",
         IAC_RUNNER / "webhook_server.py",
         monkeypatch,
     )
 
-    body, status_code = webhook_server.version_deploy()
+    body, status_code = _post_signed(
+        webhook_server,
+        "/deploy",
+        {"env": "staging", "ref": DEPLOY_SHA, "wait": "sometimes"},
+        monkeypatch,
+    )
 
     assert status_code == 400
     assert body["error"] == "wait must be a boolean"
@@ -547,30 +534,19 @@ def test_deploy_wait_rejects_invalid_literal(monkeypatch) -> None:
 
 def test_deploy_rejects_mutable_ref(monkeypatch) -> None:
     """Infra-011.10: /deploy must only accept immutable commit SHAs."""
-    fake_flask = types.ModuleType("flask")
-
-    class FakeFlask:
-        def __init__(self, _name):
-            self.config = {}
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    fake_flask.Flask = FakeFlask
-    fake_flask.jsonify = lambda payload: payload
-    fake_flask.request = types.SimpleNamespace(
-        headers=_signed_headers(monkeypatch),
-        data=b"",
-        json={"env": "staging", "ref": "main", "wait": False},
-    )
-    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
     webhook_server = _load_module(
         "webhook_server_mutable_ref_under_test",
         IAC_RUNNER / "webhook_server.py",
         monkeypatch,
     )
 
-    body, status_code = webhook_server.version_deploy()
+    body, status_code = _post_signed(
+        webhook_server,
+        "/deploy",
+        {"env": "staging", "ref": "main", "wait": False},
+        monkeypatch,
+    )
 
     assert status_code == 400
     assert body["error"] == "Ref must be an exact 40-character commit SHA"
@@ -578,19 +554,8 @@ def test_deploy_rejects_mutable_ref(monkeypatch) -> None:
 
 def test_health_reports_missing_runtime_dependency(monkeypatch, tmp_path) -> None:
     """Infra-011.7: /health fails before deploy when runner dependencies drift."""
-    fake_flask = types.ModuleType("flask")
+    from starlette.testclient import TestClient
 
-    class FakeFlask:
-        def __init__(self, _name):
-            pass
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    fake_flask.Flask = FakeFlask
-    fake_flask.jsonify = lambda payload: payload
-    fake_flask.request = types.SimpleNamespace(headers={}, data=b"", json={})
-    monkeypatch.setitem(sys.modules, "flask", fake_flask)
     webhook_server = _load_module(
         "webhook_server_health_deps_under_test",
         IAC_RUNNER / "webhook_server.py",
@@ -608,9 +573,10 @@ def test_health_reports_missing_runtime_dependency(monkeypatch, tmp_path) -> Non
         lambda: {"python:PyYAML": False, "binary:op": True},
     )
 
-    body, status_code = webhook_server.health()
+    res = TestClient(webhook_server.app).get("/health")
+    body = res.json()
 
-    assert status_code == 503
+    assert res.status_code == 503
     assert body["status"] == "degraded"
     assert body["checks"]["python:PyYAML"] is False
 
@@ -619,20 +585,9 @@ def test_health_requires_runner_process_service_account_token(
     monkeypatch, tmp_path
 ) -> None:
     """Infra-011.2: rendered secrets are insufficient if the process env is stale."""
+    from starlette.testclient import TestClient
+
     monkeypatch.delenv("OP_SERVICE_ACCOUNT_TOKEN", raising=False)
-    fake_flask = types.ModuleType("flask")
-
-    class FakeFlask:
-        def __init__(self, _name):
-            pass
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    fake_flask.Flask = FakeFlask
-    fake_flask.jsonify = lambda payload: payload
-    fake_flask.request = types.SimpleNamespace(headers={}, data=b"", json={})
-    monkeypatch.setitem(sys.modules, "flask", fake_flask)
     webhook_server = _load_module(
         "webhook_server_health_op_token_under_test",
         IAC_RUNNER / "webhook_server.py",
@@ -650,9 +605,10 @@ def test_health_requires_runner_process_service_account_token(
         lambda: {"python:PyYAML": True, "binary:op": True},
     )
 
-    body, status_code = webhook_server.health()
+    res = TestClient(webhook_server.app).get("/health")
+    body = res.json()
 
-    assert status_code == 503
+    assert res.status_code == 503
     assert body["checks"]["op_service_account_token"] is False
 
 
@@ -1456,70 +1412,160 @@ def test_iac_runner_bootstrap_deploy_script_uses_confirmed_dokploy_env() -> None
     assert "if [ -f /secrets/.env ]; then" in script
 
 
-def test_a_push_to_main_deploys_nothing(monkeypatch) -> None:
-    """A merge is not a release: staging follows a release tag, production a promotion.
+def test_removed_github_webhook_and_openapi_contract(monkeypatch) -> None:
+    """#1647 AC13/AC14: /webhook is removed; FastAPI /openapi.json, /livez, /readyz, and GET /deploy/status/{id} are active."""
+    from starlette.testclient import TestClient
 
-    This handler used to sync services to staging from an untagged main HEAD — a fourth
-    delivery path contradicting the three in ops.pipeline.md, and the reason "merge"
-    silently meant "deploy" for every service declaring common/** or tools/**.
-    """
     monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
+    webhook_server = _load_module(
+        "webhook_server_openapi_contract",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+    client = TestClient(webhook_server.app)
+
+    assert not hasattr(webhook_server, "run_sync")
+    assert not hasattr(webhook_server, "webhook")
+    assert client.post("/webhook", json={"ref": "refs/heads/main"}).status_code == 404
+
+    assert client.get("/livez").status_code == 200
+    assert client.get("/livez").json() == {"status": "alive", "service": "iac-runner"}
+
+    # GET /deploy/status/{deployment_id} auth + validation + 404
+    assert client.get(f"/deploy/status/{'a' * 16}").status_code == 401
+    bad_id, bad_code = _get_signed(
+        webhook_server, "/deploy/status/not-hex", monkeypatch
+    )
+    assert bad_code == 400
+    assert "16 lowercase hex" in bad_id["error"]
+    miss, miss_code = _get_signed(
+        webhook_server, f"/deploy/status/{'a' * 16}", monkeypatch
+    )
+    assert miss_code == 404
+    assert miss["status"] == "not_found"
+
+    # OpenAPI contract
+    openapi = client.get("/openapi.json")
+    assert openapi.status_code == 200
+    spec = openapi.json()
+    paths = spec["paths"]
+    assert "/webhook" not in paths
+    for expected_path in (
+        "/health",
+        "/livez",
+        "/readyz",
+        "/deploy",
+        "/deploy/status",
+        "/deploy/status/{deployment_id}",
+    ):
+        assert expected_path in paths, expected_path
+    assert (
+        paths["/deploy"]["post"]["requestBody"]["content"]["application/json"][
+            "schema"
+        ]["$ref"]
+        == "#/components/schemas/DeployRequest"
+    )
+    assert (
+        paths["/deploy/status"]["post"]["requestBody"]["content"]["application/json"][
+            "schema"
+        ]["$ref"]
+        == "#/components/schemas/DeployStatusRequest"
+    )
+    assert (
+        paths["/deploy/status"]["post"]["responses"]["409"]["content"][
+            "application/json"
+        ]["schema"]["$ref"]
+        == "#/components/schemas/RunnerErrorResponse"
+    )
+    op_ids = [
+        op["operationId"]
+        for pi in paths.values()
+        for op in pi.values()
+        if isinstance(op, dict) and "operationId" in op
+    ]
+    assert len(op_ids) == len(set(op_ids))
+
+
+@pytest.mark.asyncio
+async def test_wait_deploy_does_not_block_event_loop_and_enforces_body_limit(
+    monkeypatch,
+) -> None:
+    """PR #1746 audit fixes: blocking sync/wait runs in threadpool and >64 KiB bodies fail with 413."""
+    import asyncio
+    import threading
+    import httpx
+
     sync_runner = _load_module(
         "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
     )
-    fake_flask = types.ModuleType("flask")
-
-    class FakeFlask:
-        def __init__(self, _name):
-            pass
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    fake_flask.Flask = FakeFlask
-    fake_flask.jsonify = lambda payload: payload
-    body = json.dumps(
-        {
-            "ref": "refs/heads/main",
-            "after": "d505ba0caca8" + "0" * 28,
-            "commits": [{"modified": ["common/secrets_registry.py"]}],
-        }
-    ).encode()
-    signature = hmac.new(b"test-webhook-secret", body, hashlib.sha256).hexdigest()
-    fake_flask.request = types.SimpleNamespace(
-        headers={
-            "X-Hub-Signature-256": f"sha256={signature}",
-            "X-GitHub-Event": "push",
-        },
-        data=body,
-        json=json.loads(body),
-    )
-    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
     webhook_server = _load_module(
-        "webhook_server_push_path", IAC_RUNNER / "webhook_server.py", monkeypatch
+        "webhook_server_async_loop_safety",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
     )
 
-    # Behaviour first: nothing this handler does may reach a sync, by any route.
-    started: list = []
-    for name in ("sync_services", "sync_services_by_version"):
-        monkeypatch.setattr(
-            sync_runner, name, lambda *a, **k: started.append(a), raising=False
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_sync(env, ref, *_args, **kwargs):
+        entered.set()
+        assert release.wait(timeout=5.0)
+        return sync_runner.SyncResult(
+            env=env,
+            ref=ref,
+            requested_services=["platform/redis"],
+            results=[
+                sync_runner.ServiceSyncResult(
+                    service="platform/redis", task="redis.sync", success=True
+                )
+            ],
         )
 
-    response = webhook_server.webhook()
+    monkeypatch.setattr(sync_runner, "sync_services_by_version", slow_sync)
 
-    assert not started, "a push to main must not start a sync"
-    # And structurally: since the legacy /sync endpoint was retired there is no function
-    # in this module that can start one at all — /deploy is the only way in.
-    assert not hasattr(webhook_server, "run_sync"), (
-        "a sync entry point outside /deploy is how 'merge' quietly meant 'deploy'"
-    )
-    assert response["status"] == "ignored"
-    assert "release tag" in response["reason"]
-    # The signature still has to pass — a webhook that 401s is a broken thing whatever
-    # the handler decides to do with the payload (#585).
-    fake_flask.request.headers["X-Hub-Signature-256"] = "sha256=" + "0" * 64
-    assert webhook_server.webhook()[1] == 401
+    raw_deploy = json.dumps(
+        {
+            "env": "staging",
+            "ref": DEPLOY_SHA,
+            "wait": True,
+            "triggered_by": "ci",
+            "services": ["platform/redis"],
+        }
+    ).encode("utf-8")
+    deploy_headers = {
+        **_signed_headers(monkeypatch, raw_deploy),
+        "Content-Type": "application/json",
+    }
+
+    transport = httpx.ASGITransport(app=webhook_server.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        oversized = b"{" + b"a" * (webhook_server.MAX_REQUEST_BODY_BYTES + 10) + b"}"
+        res_413 = await client.post("/deploy", content=oversized)
+        assert res_413.status_code == 413
+
+        res_413_status = await client.post("/deploy/status", content=oversized)
+        assert res_413_status.status_code == 413
+
+        deploy_task = asyncio.create_task(
+            client.post("/deploy", content=raw_deploy, headers=deploy_headers)
+        )
+        for _ in range(100):
+            if entered.is_set():
+                break
+            await asyncio.sleep(0.01)
+        assert entered.is_set()
+
+        try:
+            # While slow_sync is blocked inside wait=True /deploy, the asyncio event loop remains responsive
+            live_resp = await asyncio.wait_for(client.get("/livez"), timeout=1.0)
+            assert live_resp.status_code == 200
+        finally:
+            release.set()
+
+        deploy_resp = await deploy_task
+        assert deploy_resp.status_code == 200
+        assert deploy_resp.json()["status"] == "completed"
 
 
 def test_a_remembered_failure_is_retried_not_replayed(monkeypatch) -> None:
@@ -1534,19 +1580,6 @@ def test_a_remembered_failure_is_retried_not_replayed(monkeypatch) -> None:
     sync_runner = _load_module(
         "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
     )
-    fake_flask = types.ModuleType("flask")
-
-    class FakeFlask:
-        def __init__(self, _name):
-            pass
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    fake_flask.Flask = FakeFlask
-    fake_flask.jsonify = lambda payload: payload
-    fake_flask.request = types.SimpleNamespace()
-    monkeypatch.setitem(sys.modules, "flask", fake_flask)
     webhook_server = _load_module(
         "webhook_server_under_test", IAC_RUNNER / "webhook_server.py", monkeypatch
     )
@@ -1595,16 +1628,18 @@ def test_a_remembered_failure_is_retried_not_replayed(monkeypatch) -> None:
     # A remembered FAILURE is not served: the request deploys again.
     webhook_server._recent_deploys.clear()
     webhook_server._recent_deploys[key] = (time.monotonic(), _stored(success=False))
-    fake_flask.request.headers = _signed_headers(monkeypatch)
-    fake_flask.request.data = b""
-    fake_flask.request.json = {
-        "env": "staging",
-        "ref": DEPLOY_SHA,
-        "wait": True,
-        "triggered_by": "deploy_v2",
-        "services": services,
-    }
-    body, status_code = webhook_server.version_deploy()
+    body, status_code = _post_signed(
+        webhook_server,
+        "/deploy",
+        {
+            "env": "staging",
+            "ref": DEPLOY_SHA,
+            "wait": True,
+            "triggered_by": "deploy_v2",
+            "services": services,
+        },
+        monkeypatch,
+    )
     assert started, "a remembered failure must not stand in for a real retry"
     assert body.get("cached") is not True
     assert status_code == 200
@@ -1613,16 +1648,18 @@ def test_a_remembered_failure_is_retried_not_replayed(monkeypatch) -> None:
     started.clear()
     webhook_server._recent_deploys.clear()
     webhook_server._recent_deploys[key] = (time.monotonic(), _stored(success=True))
-    fake_flask.request.headers = _signed_headers(monkeypatch)
-    fake_flask.request.data = b""
-    fake_flask.request.json = {
-        "env": "staging",
-        "ref": DEPLOY_SHA,
-        "wait": True,
-        "triggered_by": "deploy_v2",
-        "services": services,
-    }
-    body2, status_code2 = webhook_server.version_deploy()
+    body2, status_code2 = _post_signed(
+        webhook_server,
+        "/deploy",
+        {
+            "env": "staging",
+            "ref": DEPLOY_SHA,
+            "wait": True,
+            "triggered_by": "deploy_v2",
+            "services": services,
+        },
+        monkeypatch,
+    )
     assert not started
     assert body2.get("cached") is True
     assert status_code2 == 200
@@ -1653,19 +1690,6 @@ def test_a_retry_in_flight_is_reported_over_the_failure_it_retries(
     sync_runner = _load_module(
         "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
     )
-    fake_flask = types.ModuleType("flask")
-
-    class FakeFlask:
-        def __init__(self, _name):
-            pass
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    fake_flask.Flask = FakeFlask
-    fake_flask.jsonify = lambda payload: payload
-    fake_flask.request = types.SimpleNamespace(headers={}, data=b"", json={})
-    monkeypatch.setitem(sys.modules, "flask", fake_flask)
     webhook_server = _load_module(
         "webhook_server_retry_in_flight_under_test",
         IAC_RUNNER / "webhook_server.py",
@@ -1739,9 +1763,9 @@ def test_a_retry_in_flight_is_reported_over_the_failure_it_retries(
         "version_ref": version_ref,
         **({"action": action} if action != "sync" else {}),
     }
-    fake_flask.request.headers = _signed_headers(monkeypatch)
-    fake_flask.request.json = {**request_json, "wait": False}
-    body, status_code = webhook_server.version_deploy()
+    body, status_code = _post_signed(
+        webhook_server, "/deploy", {**request_json, "wait": False}, monkeypatch
+    )
     assert status_code == 202
     assert body["status"] == "in_progress"
     assert body.get("cached") is not True
@@ -1749,9 +1773,14 @@ def test_a_retry_in_flight_is_reported_over_the_failure_it_retries(
     assert len(pending) == 1 and key in webhook_server._in_flight_deploys
 
     def _poll(payload: dict) -> tuple[dict, int]:
-        fake_flask.request.headers = _signed_headers(monkeypatch)
-        fake_flask.request.json = payload
-        return webhook_server.deployment_status()
+        return _post_signed(webhook_server, "/deploy/status", payload, monkeypatch)
+
+    # Also verify RESTful GET /deploy/status/{deployment_id} sees in-flight before remembered failure
+    rest_flight, rest_flight_code = _get_signed(
+        webhook_server, f"/deploy/status/{deployment_id}", monkeypatch
+    )
+    assert rest_flight_code == 200
+    assert rest_flight["status"] == "in_progress"
 
     # The retry's poll sees the retry, not the failure it is retrying — and the
     # in-progress answer carries the same id (and action) the poll asked about.
@@ -1789,19 +1818,6 @@ def test_deploy_cache_reuses_only_when_requested_services_match(monkeypatch) -> 
     sync_runner = _load_module(
         "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
     )
-    fake_flask = types.ModuleType("flask")
-
-    class FakeFlask:
-        def __init__(self, _name):
-            pass
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    fake_flask.Flask = FakeFlask
-    fake_flask.jsonify = lambda payload: payload
-    fake_flask.request = types.SimpleNamespace()
-    monkeypatch.setitem(sys.modules, "flask", fake_flask)
     webhook_server = _load_module(
         "webhook_server_under_test", IAC_RUNNER / "webhook_server.py", monkeypatch
     )
@@ -1829,16 +1845,6 @@ def test_deploy_cache_reuses_only_when_requested_services_match(monkeypatch) -> 
     )
     webhook_server._recent_deploys[key] = (time.monotonic(), response_postgres)
 
-    fake_flask.request.headers = _signed_headers(monkeypatch)
-    fake_flask.request.data = b""
-    fake_flask.request.json = {
-        "env": "staging",
-        "ref": DEPLOY_SHA,
-        "wait": True,
-        "triggered_by": "ci",
-        "services": ["platform/redis"],
-    }
-
     started = []
 
     def fake_sync_services_by_version(env, ref, triggered_by, services):
@@ -1860,7 +1866,18 @@ def test_deploy_cache_reuses_only_when_requested_services_match(monkeypatch) -> 
         sync_runner, "sync_services_by_version", fake_sync_services_by_version
     )
 
-    body, status_code = webhook_server.version_deploy()
+    body, status_code = _post_signed(
+        webhook_server,
+        "/deploy",
+        {
+            "env": "staging",
+            "ref": DEPLOY_SHA,
+            "wait": True,
+            "triggered_by": "ci",
+            "services": ["platform/redis"],
+        },
+        monkeypatch,
+    )
     assert "cached" not in body
     assert started == [("staging", DEPLOY_SHA, ["platform/redis"])]
 
@@ -1869,18 +1886,19 @@ def test_deploy_cache_reuses_only_when_requested_services_match(monkeypatch) -> 
     webhook_server._recent_deploys.clear()
     webhook_server._recent_deploys[key] = (time.monotonic(), response_postgres)
 
-    fake_flask.request.headers = _signed_headers(monkeypatch)
-    fake_flask.request.data = b""
-    fake_flask.request.json = {
-        "env": "staging",
-        "ref": DEPLOY_SHA,
-        "wait": True,
-        "triggered_by": "ci",
-        "services": ["platform/postgres"],
-    }
-
     started.clear()
-    body2, status_code2 = webhook_server.version_deploy()
+    body2, status_code2 = _post_signed(
+        webhook_server,
+        "/deploy",
+        {
+            "env": "staging",
+            "ref": DEPLOY_SHA,
+            "wait": True,
+            "triggered_by": "ci",
+            "services": ["platform/postgres"],
+        },
+        monkeypatch,
+    )
     assert body2.get("cached") is True
     assert not started  # No new deployment triggered
 
@@ -1888,19 +1906,6 @@ def test_deploy_cache_reuses_only_when_requested_services_match(monkeypatch) -> 
 def test_deployment_identity_includes_normalized_service_set(monkeypatch) -> None:
     """Infra-011.19: same env/ref with different services must be distinct operations."""
     monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
-    fake_flask = types.ModuleType("flask")
-
-    class FakeFlask:
-        def __init__(self, _name):
-            pass
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    fake_flask.Flask = FakeFlask
-    fake_flask.jsonify = lambda payload: payload
-    fake_flask.request = types.SimpleNamespace()
-    monkeypatch.setitem(sys.modules, "flask", fake_flask)
     webhook_server = _load_module(
         "webhook_server_identity_under_test",
         IAC_RUNNER / "webhook_server.py",
@@ -1931,23 +1936,6 @@ def test_deployment_identity_includes_normalized_service_set(monkeypatch) -> Non
 def test_status_fails_closed_when_legacy_coordinate_is_ambiguous(monkeypatch) -> None:
     """Infra-011.19: old env/ref-only polling must never return another service result."""
     monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
-    fake_flask = types.ModuleType("flask")
-
-    class FakeFlask:
-        def __init__(self, _name):
-            pass
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    fake_flask.Flask = FakeFlask
-    fake_flask.jsonify = lambda payload: payload
-    fake_flask.request = types.SimpleNamespace(
-        headers=_signed_headers(monkeypatch),
-        data=b"",
-        json={"env": "staging", "ref": DEPLOY_SHA, "triggered_by": "ci"},
-    )
-    monkeypatch.setitem(sys.modules, "flask", fake_flask)
     webhook_server = _load_module(
         "webhook_server_ambiguous_status_under_test",
         IAC_RUNNER / "webhook_server.py",
@@ -1959,7 +1947,12 @@ def test_status_fails_closed_when_legacy_coordinate_is_ambiguous(monkeypatch) ->
     redis = webhook_server._deployment_key("staging", DEPLOY_SHA, ["platform/redis"])
     webhook_server._in_flight_deploys.update({postgres, redis})
 
-    body, status_code = webhook_server.deployment_status()
+    body, status_code = _post_signed(
+        webhook_server,
+        "/deploy/status",
+        {"env": "staging", "ref": DEPLOY_SHA, "triggered_by": "ci"},
+        monkeypatch,
+    )
 
     assert status_code == 409
     assert "Ambiguous deployment" in body["error"]
@@ -1976,35 +1969,10 @@ def test_secrets_supply_action_is_its_own_deployment_and_reaches_the_sync(
     Dokploy promote. The action must reach sync_services_by_version (which sets
     DEPLOY_ACTION for the child) and must key a different deployment than a plain sync
     of the same coordinates, or the 600 s request cache would answer one with the other."""
-    # the webhook imports `sync_runner` by that name: load it under it so the fake below
-    # is the one it calls (the other tests do the same)
     sync_runner = _load_module(
         "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
     )
-    fake_flask = types.ModuleType("flask")
-
-    class FakeFlask:
-        def __init__(self, _name):
-            pass
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    fake_flask.Flask = FakeFlask
-    fake_flask.jsonify = lambda payload: payload
-    fake_flask.request = types.SimpleNamespace(
-        headers=_signed_headers(monkeypatch),
-        data=b"",
-        json={
-            "env": "staging",
-            "ref": DEPLOY_SHA,
-            "wait": True,
-            "triggered_by": "deploy_v2",
-            "services": ["finance_report/app"],
-            "action": "secrets-supply",
-        },
-    )
-    monkeypatch.setitem(sys.modules, "flask", fake_flask)
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
     webhook_server = _load_module(
         "webhook_server_action_under_test",
         IAC_RUNNER / "webhook_server.py",
@@ -2026,7 +1994,15 @@ def test_secrets_supply_action_is_its_own_deployment_and_reaches_the_sync(
         )
 
     monkeypatch.setattr(sync_runner, "sync_services_by_version", fake_sync)
-    body, status_code = webhook_server.version_deploy()
+    payload = {
+        "env": "staging",
+        "ref": DEPLOY_SHA,
+        "wait": True,
+        "triggered_by": "deploy_v2",
+        "services": ["finance_report/app"],
+        "action": "secrets-supply",
+    }
+    body, status_code = _post_signed(webhook_server, "/deploy", payload, monkeypatch)
     assert status_code == 200
     assert seen["action"] == "secrets-supply"
     assert body["action"] == "secrets-supply"
@@ -2039,9 +2015,9 @@ def test_secrets_supply_action_is_its_own_deployment_and_reaches_the_sync(
     assert webhook_server._deployment_id(plain) != webhook_server._deployment_id(supply)
     assert body["deployment_id"] == webhook_server._deployment_id(supply)
     # a plain sync of the same coordinates is NOT served from the supply's cached result
-    fake_flask.request.headers = _signed_headers(monkeypatch)
-    fake_flask.request.json = {**fake_flask.request.json, "action": "sync"}
-    body2, _ = webhook_server.version_deploy()
+    body2, _ = _post_signed(
+        webhook_server, "/deploy", {**payload, "action": "sync"}, monkeypatch
+    )
     assert body2.get("cached") is not True
     assert body2.get("action") != "secrets-supply"
 
@@ -2078,17 +2054,7 @@ def test_async_secrets_supply_response_id_matches_the_status_lookup(
     sync_runner = _load_module(
         "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
     )
-    fake_flask = types.ModuleType("flask")
-
-    class FakeFlask:
-        def __init__(self, _name):
-            pass
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    fake_flask.Flask = FakeFlask
-    fake_flask.jsonify = lambda payload: payload
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
     request_json = {
         "env": "staging",
         "ref": DEPLOY_SHA,
@@ -2097,10 +2063,6 @@ def test_async_secrets_supply_response_id_matches_the_status_lookup(
         "services": ["finance_report/app"],
         "action": "secrets-supply",
     }
-    fake_flask.request = types.SimpleNamespace(
-        headers=_signed_headers(monkeypatch), data=b"", json=dict(request_json)
-    )
-    monkeypatch.setitem(sys.modules, "flask", fake_flask)
     webhook_server = _load_module(
         "webhook_server_async_action_under_test",
         IAC_RUNNER / "webhook_server.py",
@@ -2122,7 +2084,9 @@ def test_async_secrets_supply_response_id_matches_the_status_lookup(
         )
 
     monkeypatch.setattr(sync_runner, "sync_services_by_version", fake_sync)
-    body, status_code = webhook_server.version_deploy()
+    body, status_code = _post_signed(
+        webhook_server, "/deploy", dict(request_json), monkeypatch
+    )
     expected = webhook_server._deployment_id(
         webhook_server._deployment_key(
             "staging", DEPLOY_SHA, ["finance_report/app"], action="secrets-supply"
@@ -2131,9 +2095,12 @@ def test_async_secrets_supply_response_id_matches_the_status_lookup(
     assert body["deployment_id"] == expected
     # and the status lookup with the same coordinates + action finds it (fresh
     # signature: nonces are single-use)
-    fake_flask.request.headers = _signed_headers(monkeypatch)
-    fake_flask.request.json = {**request_json, "deployment_id": body["deployment_id"]}
-    status_body, status_code = webhook_server.deployment_status()
+    status_body, status_code = _post_signed(
+        webhook_server,
+        "/deploy/status",
+        {**request_json, "deployment_id": body["deployment_id"]},
+        monkeypatch,
+    )
     assert status_code == 200, status_body
     assert status_body["deployment_id"] == expected
 
@@ -2171,17 +2138,7 @@ def test_production_deploy_requires_valid_github_oidc_token(monkeypatch) -> None
     sync_runner = _load_module(
         "sync_runner", IAC_RUNNER / "sync_runner.py", monkeypatch
     )
-    fake_flask = types.ModuleType("flask")
-
-    class FakeFlask:
-        def __init__(self, _name):
-            pass
-
-        def route(self, *_args, **_kwargs):
-            return lambda func: func
-
-    fake_flask.Flask = FakeFlask
-    fake_flask.jsonify = lambda payload: payload
+    monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
     request_json = {
         "env": "production",
         "ref": DEPLOY_SHA,
@@ -2189,10 +2146,6 @@ def test_production_deploy_requires_valid_github_oidc_token(monkeypatch) -> None
         "triggered_by": "deploy_v2",
         "services": ["platform/redis"],
     }
-    fake_flask.request = types.SimpleNamespace(
-        headers=_signed_headers(monkeypatch), data=b"", json=dict(request_json)
-    )
-    monkeypatch.setitem(sys.modules, "flask", fake_flask)
     webhook_server = _load_module(
         "webhook_server_oidc_under_test",
         IAC_RUNNER / "webhook_server.py",
@@ -2200,7 +2153,9 @@ def test_production_deploy_requires_valid_github_oidc_token(monkeypatch) -> None
     )
 
     # 1. Missing OIDC token -> 403
-    body, status_code = webhook_server.version_deploy()
+    body, status_code = _post_signed(
+        webhook_server, "/deploy", dict(request_json), monkeypatch
+    )
     assert status_code == 403
     assert "OIDC Bearer token" in body["error"]
 
@@ -2218,11 +2173,13 @@ def test_production_deploy_requires_valid_github_oidc_token(monkeypatch) -> None
         }
     )
     monkeypatch.setattr(webhook_server, "_fetch_github_jwks", lambda: [jwk])
-    fake_flask.request.headers = {
-        **_signed_headers(monkeypatch),
-        "Authorization": f"Bearer {bad_token}",
-    }
-    body, status_code = webhook_server.version_deploy()
+    body, status_code = _post_signed(
+        webhook_server,
+        "/deploy",
+        dict(request_json),
+        monkeypatch,
+        extra_headers={"Authorization": f"Bearer {bad_token}"},
+    )
     assert status_code == 403
     assert "environment must be 'production'" in body["error"]
 
@@ -2239,11 +2196,13 @@ def test_production_deploy_requires_valid_github_oidc_token(monkeypatch) -> None
         }
     )
     monkeypatch.setattr(webhook_server, "_fetch_github_jwks", lambda: [jwk_aud])
-    fake_flask.request.headers = {
-        **_signed_headers(monkeypatch),
-        "Authorization": f"Bearer {wrong_aud_token}",
-    }
-    body, status_code = webhook_server.version_deploy()
+    body, status_code = _post_signed(
+        webhook_server,
+        "/deploy",
+        dict(request_json),
+        monkeypatch,
+        extra_headers={"Authorization": f"Bearer {wrong_aud_token}"},
+    )
     assert status_code == 403
     assert "Unexpected OIDC audience" in body["error"]
 
@@ -2265,11 +2224,13 @@ def test_production_deploy_requires_valid_github_oidc_token(monkeypatch) -> None
         }
         tok, jwk_bad = _mint_rs256_jwt(base_claims)
         monkeypatch.setattr(webhook_server, "_fetch_github_jwks", lambda j=jwk_bad: [j])
-        fake_flask.request.headers = {
-            **_signed_headers(monkeypatch),
-            "Authorization": f"Bearer {tok}",
-        }
-        body, status_code = webhook_server.version_deploy()
+        body, status_code = _post_signed(
+            webhook_server,
+            "/deploy",
+            dict(request_json),
+            monkeypatch,
+            extra_headers={"Authorization": f"Bearer {tok}"},
+        )
         assert status_code == 403
         assert expected_err in body["error"]
 
@@ -2302,11 +2263,13 @@ def test_production_deploy_requires_valid_github_oidc_token(monkeypatch) -> None
             env=env, ref=ref, requested_services=list(services or []), results=[]
         ),
     )
-    fake_flask.request.headers = {
-        **_signed_headers(monkeypatch),
-        "Authorization": f"Bearer {good_token}",
-    }
-    body, status_code = webhook_server.version_deploy()
+    body, status_code = _post_signed(
+        webhook_server,
+        "/deploy",
+        dict(request_json),
+        monkeypatch,
+        extra_headers={"Authorization": f"Bearer {good_token}"},
+    )
     assert status_code == 202
     assert body["triggered_by"] == "github-oidc:wangzitian0"
 

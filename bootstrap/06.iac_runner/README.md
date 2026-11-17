@@ -12,7 +12,8 @@ GitOps deployment control plane for syncing reviewed, immutable revisions to Dok
 └──────────────────┘
 ```
 
-A push to `main` reaches `/webhook`, is authenticated, and deploys nothing — see
+A merge to `main` deploys nothing — GitHub Actions calls signed `/deploy` only on a
+release tag (`vX.Y.Z`) or explicit production promotion; see
 [Deployment Flows](#deployment-flows).
 
 1. GitHub resolves an approved source/tag to an exact 40-character commit SHA.
@@ -80,17 +81,13 @@ into Dokploy. The runner reads/repairs platform/finance_report service runtime s
 during sync (via a per-deploy AppRole login), but cannot delete secrets or mutate bootstrap
 root credentials. See docs/ssot/bootstrap.iac_runner.md §6.4.
 
-### 3. Configure GitHub Webhook
+### 3. Deploy Control Authentication
 
-1. Go to repo Settings → Webhooks → Add webhook
-2. Payload URL: `https://iac.{your-domain}/webhook`
-3. Content type: `application/json`
-4. Secret: (the WEBHOOK_SECRET from Vault)
-5. Events: Just the push event
-
-The hook stays configured and authenticated — a webhook that 401s is a broken thing
-regardless, and `/deploy` is served by the same process — but a push to `main` starts no
-deploy. Staging follows a release tag; production follows an explicit promotion.
+Signed requests to `/deploy` and `/deploy/status*` authenticate via `WEBHOOK_SECRET`
+(HMAC-SHA256 + timestamp + nonce), and `env=production` additionally requires a GitHub
+Actions OIDC Bearer token. Legacy `POST /webhook` has been retired (`main` pushes do not
+trigger deployments; staging follows a release tag and production follows explicit
+promotion).
 
 ### 4. Deploy
 
@@ -128,8 +125,7 @@ reconcile-iac-inputs.yml with promote_prod=true, at a tag that has soaked in sta
 ```
 
 **A merge to `main`**: nothing deploys. `main` ahead of the newest tag means
-*unreleased*, which is the normal state, not drift. `/webhook` authenticates the push
-and answers `ignored`. An app repository's PR or branch can stand up an ephemeral
+*unreleased*, which is the normal state, not drift. An app repository's PR or branch can stand up an ephemeral
 preview stack via `deploy_v2 --type preview/{pr,branch}`; infra2 has no persistent
 preview environment.
 
@@ -163,9 +159,10 @@ authoritative version of all three.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/webhook` | POST | GitHub push receiver — authenticates the delivery and deploys nothing (a merge is not a release; staging follows a release tag) |
+| `/health`, `/livez`, `/readyz` | GET | Runner dependency health and Kubernetes/Docker probes |
+| `/openapi.json` | GET | Auto-generated OpenAPI 3.1 schema |
 | `/deploy` | POST | SHA-based deployment (GitOps) |
+| `/deploy/status/{deployment_id}` | GET | Poll deployment status by deployment ID |
 | `/deploy/status` | POST | Poll the exact deployment ID returned by `/deploy` |
 
 ### Version-Based Deployment

@@ -140,8 +140,8 @@ services:
           echo "WARNING: SSH key not found, remote operations may fail"
         fi
         
-        echo "Starting gunicorn with 1 worker, 4 threads..."
-        exec gunicorn -w 1 --threads 4 -b 0.0.0.0:8080 --timeout 120 webhook_server:app
+        echo "Starting uvicorn with 1 worker..."
+        exec uvicorn webhook_server:app --host 0.0.0.0 --port 8080 --workers 1 --timeout-keep-alive 95
     environment:
       - WEBHOOK_PORT=8080
       - GIT_BRANCH=${GIT_BRANCH:-main}

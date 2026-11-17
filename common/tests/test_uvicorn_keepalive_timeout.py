@@ -16,6 +16,7 @@ UVICORN_COMPOSE_TARGETS = (
     ("finance_report/finance_report/preview/compose.yaml", "backend"),
     ("truealpha/truealpha/10.app/compose.yaml", "llm"),
     ("truealpha/truealpha/preview/compose.yaml", "llm"),
+    ("bootstrap/06.iac_runner/compose.yaml", "iac-runner"),
 )
 
 _KEEPALIVE_PATTERN = re.compile(r"--timeout-keep-alive(?:=|\s+)(\d+)\b")

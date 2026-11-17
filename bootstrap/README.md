@@ -76,8 +76,7 @@ HashiCorp Vault 秘密管理。
 
 ### 6. [IaC Runner](./06.iac_runner/README.md)
 Platform 层服务的部署控制面。GitHub Actions 以 release tag 为坐标、经 `deploy_v2` 调用其签名 `/deploy`；
-tag 推送自动晋升 staging，prod 由 `promote_prod=true` 显式放行。GitHub push webhook（`/webhook`）只验签、
-**不部署**——合并不是发布（[ops.pipeline.md](../docs/ssot/ops.pipeline.md) §2）。
+tag 推送自动晋升 staging，prod 由 `promote_prod=true` 显式放行（合并不是发布，见 [ops.pipeline.md](../docs/ssot/ops.pipeline.md) §2）。
 
 **状态**：✅ 已部署  
 **域名**：`iac.$INTERNAL_DOMAIN`  

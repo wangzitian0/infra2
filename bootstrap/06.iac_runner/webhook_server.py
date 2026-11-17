@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""
-GitHub Webhook Server for IaC Runner
+"""IaC Runner control plane HTTP service (FastAPI).
 
-Receives GitHub push events and triggers sync for changed services.
+Receives signed /deploy requests from GitHub Actions and runs invoke {service}.sync.
 """
 
 import base64
@@ -21,17 +20,28 @@ import tempfile
 import threading
 import time
 import urllib.request
+from collections.abc import Mapping
 from pathlib import Path
-from flask import Flask, request, jsonify
+from typing import Any, Dict, List
 
-app = Flask(__name__)
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from infra2_sdk.fastapi import init_service
+from pydantic import BaseModel, ConfigDict
+from starlette.concurrency import run_in_threadpool
+
+app = FastAPI(
+    title="Infra2 IaC Runner",
+    description="GitOps deployment control plane webhook service",
+    docs_url="/docs",
+    redoc_url=None,
+)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
 WORKSPACE = Path("/workspace")
 GIT_REPO_URL = os.environ.get("GIT_REPO_URL")
-GIT_BRANCH = os.environ.get("GIT_BRANCH") or "main"
 SECRETS_FILE = Path("/secrets/.env")
 RECENT_DEPLOY_TTL_SECONDS = 600
 # Deploy records live on the /workspace volume, beside the repo checkout (#1439).
@@ -45,7 +55,9 @@ MAX_REQUEST_BODY_BYTES = 65536
 EXACT_COMMIT_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 DEPLOYMENT_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 REQUIRED_PYTHON_MODULES = {
-    "flask": "flask",
+    "fastapi": "fastapi",
+    "uvicorn": "uvicorn",
+    "pydantic": "pydantic",
     "httpx": "httpx",
     "invoke": "invoke",
     "python-dotenv": "dotenv",
@@ -72,27 +84,9 @@ _in_flight_deploys: set[DeploymentKey] = set()
 _recent_deploys: dict[DeploymentKey, tuple[float, dict]] = {}
 _seen_nonces: dict[str, float] = {}
 _nonce_lock = threading.Lock()
-if hasattr(app, "config"):
-    app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BODY_BYTES
 
 if not GIT_REPO_URL:
     raise RuntimeError("GIT_REPO_URL environment variable must be set")
-
-
-def verify_signature(payload: bytes, signature: str) -> bool:
-    if not WEBHOOK_SECRET:
-        logger.error("WEBHOOK_SECRET is not configured")
-        return False
-
-    if not signature or not signature.startswith("sha256="):
-        return False
-
-    expected = (
-        "sha256="
-        + hmac.new(WEBHOOK_SECRET.encode(), payload, hashlib.sha256).hexdigest()
-    )
-
-    return hmac.compare_digest(expected, signature)
 
 
 def verify_iac_signature(
@@ -136,12 +130,12 @@ def verify_iac_signature(
     return True
 
 
-def verify_iac_request() -> bool:
+def verify_iac_request(raw_body: bytes, headers: Mapping[str, str]) -> bool:
     return verify_iac_signature(
-        request.data,
-        request.headers.get("X-Hub-Signature-256", ""),
-        request.headers.get("X-IAC-Timestamp", ""),
-        request.headers.get("X-IAC-Nonce", ""),
+        raw_body,
+        headers.get("X-Hub-Signature-256", ""),
+        headers.get("X-IAC-Timestamp", ""),
+        headers.get("X-IAC-Nonce", ""),
     )
 
 
@@ -695,8 +689,72 @@ def _file_has_bytes(path: Path) -> bool:
         return False
 
 
-@app.route("/health", methods=["GET"])
-def health():
+class RunnerErrorResponse(BaseModel):
+    error: str
+    model_config = ConfigDict(extra="allow")
+
+
+class RunnerHealthResponse(BaseModel):
+    status: str
+    checks: Dict[str, bool]
+    in_flight_deploys: int
+    git_sha: str
+
+
+class DeployRequest(BaseModel):
+    env: str = "staging"
+    ref: str | None = None
+    tag: str | None = None
+    triggered_by: str = "unknown"
+    wait: bool | str = False
+    services: List[str] | None = None
+    version_ref: str | None = None
+    action: str | None = "sync"
+    model_config = ConfigDict(extra="allow")
+
+
+class DeployStatusRequest(BaseModel):
+    env: str = "staging"
+    ref: str | None = None
+    tag: str | None = None
+    triggered_by: str = "unknown"
+    services: List[str] | None = None
+    deployment_id: str | None = None
+    version_ref: str | None = None
+    action: str | None = "sync"
+    model_config = ConfigDict(extra="allow")
+
+
+class DeployResultResponse(BaseModel):
+    status: str
+    deployment_id: str | None = None
+    env: str | None = None
+    ref: str | None = None
+    triggered_by: str | None = None
+    requested_services: List[str] | None = None
+    version_ref: str | None = None
+    action: str | None = None
+    cached: bool | None = None
+    wait: bool | None = None
+    error: str | None = None
+    output: str | None = None
+    services: List[Any] | None = None
+    candidate_deployment_ids: List[str] | None = None
+    expected_deployment_id: str | None = None
+    model_config = ConfigDict(extra="allow")
+
+
+for _model in (
+    RunnerErrorResponse,
+    RunnerHealthResponse,
+    DeployRequest,
+    DeployStatusRequest,
+    DeployResultResponse,
+):
+    _model.model_rebuild(_types_namespace=globals())
+
+
+def _runner_checks() -> dict[str, bool]:
     checks = {
         "http": True,
         "vault_secrets": _file_has_bytes(SECRETS_FILE),
@@ -710,11 +768,62 @@ def health():
         "dokploy_api_key": bool(os.environ.get("DOKPLOY_API_KEY", "").strip()),
     }
     checks.update(_dependency_checks())
-
     repo_name = Path(GIT_REPO_URL).stem if GIT_REPO_URL else "unknown"
-    workspace_path = WORKSPACE / repo_name
-    checks["git_workspace"] = workspace_path.exists()
+    checks["git_workspace"] = (WORKSPACE / repo_name).exists()
+    return checks
 
+
+def _runner_readiness_checker() -> tuple[bool, str]:
+    checks = _runner_checks()
+    failing = [name for name, ok in checks.items() if not ok]
+    if failing:
+        return False, f"failing={','.join(failing)}"
+    return True, "runner ready"
+
+
+init_service(
+    app,
+    name="iac-runner",
+    db_checker=_runner_readiness_checker,
+    enable_otel=False,
+)
+# Replace SDK generic /health with runner's flat boolean checks + in_flight_deploys contract.
+app.router.routes[:] = [
+    r for r in app.router.routes if getattr(r, "path", None) != "/health"
+]
+
+_orig_openapi = app.openapi
+
+
+def _custom_openapi() -> Dict[str, Any]:
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = _orig_openapi()
+    schemas = schema.setdefault("components", {}).setdefault("schemas", {})
+    for model in (DeployRequest, DeployStatusRequest):
+        model_schema = model.model_json_schema(
+            ref_template="#/components/schemas/{model}"
+        )
+        defs = model_schema.pop("$defs", None) or {}
+        for def_name, def_schema in defs.items():
+            schemas.setdefault(def_name, def_schema)
+        schemas[model.__name__] = model_schema
+    app.openapi_schema = schema
+    return app.openapi_schema
+
+
+app.openapi = _custom_openapi  # type: ignore[method-assign]
+
+
+@app.get(
+    "/health",
+    tags=["Observability"],
+    response_model=RunnerHealthResponse,
+    responses={503: {"model": RunnerHealthResponse}},
+    operation_id="get_health",
+)
+def health() -> JSONResponse:
+    checks = _runner_checks()
     all_healthy = all(checks.values())
     status_code = 200 if all_healthy else 503
 
@@ -724,53 +833,14 @@ def health():
     with _deploy_state_lock:
         in_flight_deploys = len(_in_flight_deploys)
 
-    return jsonify(
-        {
+    return JSONResponse(
+        content={
             "status": "healthy" if all_healthy else "degraded",
             "checks": checks,
             "in_flight_deploys": in_flight_deploys,
             "git_sha": os.environ.get("GIT_SHA", "unknown").strip() or "unknown",
-        }
-    ), status_code
-
-
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    signature = request.headers.get("X-Hub-Signature-256", "")
-    if not verify_signature(request.data, signature):
-        return jsonify({"error": "Invalid signature"}), 401
-
-    event = request.headers.get("X-GitHub-Event", "")
-    if event != "push":
-        return jsonify({"status": "ignored", "event": event})
-
-    payload = request.json
-
-    ref = payload.get("ref", "")
-    if ref != f"refs/heads/{GIT_BRANCH}":
-        return jsonify({"status": "ignored", "reason": f"Not {GIT_BRANCH} branch"})
-
-    # A merge is not a release, so this endpoint deploys nothing.
-    #
-    # The delivery model has exactly three ways a change reaches a running service
-    # (docs/ssot/ops.pipeline.md §2-3): an app PR gets a preview stack; a release tag
-    # auto-promotes staging through reconcile-iac-inputs.yml; production is an explicit,
-    # human promotion. infra2 itself has no persistent preview environment — a PR's
-    # deploy_v2 canary is its preview.
-    #
-    # Deploying staging from an untagged main HEAD, which this handler used to do, is a
-    # fourth path that contradicts all three: it makes "merge" mean "deploy", it puts
-    # staging on a commit no tag names, and it does so from a webhook nobody watches.
-    # It was silently dead from at least 2026-07-20 to 2026-09-09 (#585) with no service
-    # visibly out of date, which is the strongest evidence available that nothing needs
-    # it. The hook stays live and authenticated because a webhook that 401s is a broken
-    # thing regardless, and because /deploy still uses this server.
-    return jsonify(
-        {
-            "status": "ignored",
-            "reason": "a push to main is not a deploy trigger; staging follows a release tag",
-            "commit": payload.get("after", "")[:8],
-        }
+        },
+        status_code=status_code,
     )
 
 
@@ -783,36 +853,73 @@ def _keys_for_legacy_status(env: str, ref: str) -> list[DeploymentKey]:
     return sorted(key for key in keys if key[:2] == (env, ref))
 
 
-@app.route("/deploy", methods=["POST"])
-def version_deploy():
-    if not verify_iac_request():
-        return jsonify({"error": "Invalid signature"}), 401
+def _parse_json_object(raw_body: bytes) -> dict[str, Any] | None:
+    if not raw_body.strip():
+        return {}
+    try:
+        parsed = json.loads(raw_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
-    payload = request.json or {}
-    if not isinstance(payload, dict):
-        return jsonify({"error": "JSON object required"}), 400
+
+class _RequestBodyError(Exception):
+    def __init__(self, status_code: int, message: str) -> None:
+        self.status_code = status_code
+        self.message = message
+
+
+async def _read_body_with_limit(request: Request) -> bytes:
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared = int(content_length)
+        except ValueError as exc:
+            raise _RequestBodyError(400, "Invalid Content-Length header") from exc
+        if declared < 0:
+            raise _RequestBodyError(400, "Invalid Content-Length header")
+        if declared > MAX_REQUEST_BODY_BYTES:
+            raise _RequestBodyError(413, "Request body exceeds maximum size")
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_REQUEST_BODY_BYTES:
+            raise _RequestBodyError(413, "Request body exceeds maximum size")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _process_deploy_request(
+    raw_body: bytes, headers: Mapping[str, str]
+) -> tuple[dict[str, Any], int]:
+    if not verify_iac_request(raw_body, headers):
+        return {"error": "Invalid signature"}, 401
+
+    payload = _parse_json_object(raw_body)
+    if payload is None:
+        return {"error": "JSON object required"}, 400
     env = payload.get("env", "staging")
-    # Support both 'ref' (generic) and 'tag' (legacy/specific)
     ref = validate_deploy_ref(payload.get("ref") or payload.get("tag"))
     triggered_by = payload.get("triggered_by", "unknown")
     try:
         wait = parse_bool(payload.get("wait", False))
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        return {"error": str(exc)}, 400
 
     if not ref:
-        return jsonify({"error": "Ref must be an exact 40-character commit SHA"}), 400
+        return {"error": "Ref must be an exact 40-character commit SHA"}, 400
 
     if env not in ("staging", "production"):
-        return jsonify({"error": "Invalid env (must be staging or production)"}), 400
+        return {"error": "Invalid env (must be staging or production)"}, 400
 
     services = payload.get("services")
     if env == "production":
         oidc_ok, oidc_err, oidc_claims = verify_github_oidc_token(
-            request.headers.get("Authorization", "")
+            headers.get("Authorization", "")
         )
         if not oidc_ok:
-            return jsonify({"error": oidc_err}), 403
+            return {"error": oidc_err}, 403
         actor = str(oidc_claims.get("actor") or "").strip()
         if actor and triggered_by in ("unknown", "deploy_v2"):
             triggered_by = f"github-oidc:{actor}"
@@ -820,19 +927,19 @@ def version_deploy():
         if not isinstance(services, list) or not all(
             isinstance(s, str) for s in services
         ):
-            return jsonify({"error": "services must be a list of strings"}), 400
+            return {"error": "services must be a list of strings"}, 400
         if not services or any(not service.strip() for service in services):
-            return jsonify(
-                {"error": "services must be a non-empty list of non-empty strings"}
-            ), 400
+            return {
+                "error": "services must be a non-empty list of non-empty strings"
+            }, 400
 
     try:
         version_ref = validate_version_ref(payload.get("version_ref"))
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        return {"error": str(exc)}, 400
     action = payload.get("action") or "sync"
     if action not in DEPLOY_ACTIONS:
-        return jsonify({"error": f"action must be one of {list(DEPLOY_ACTIONS)}"}), 400
+        return {"error": f"action must be one of {list(DEPLOY_ACTIONS)}"}, 400
     logger.info(
         f"Deployment: {ref} to {env} by {triggered_by}"
         + (f" (version_ref {version_ref})" if version_ref else "")
@@ -844,9 +951,9 @@ def version_deploy():
         with _deploy_state_lock:
             recent = _reusable_result(key)
             if recent:
-                return jsonify({**recent, "cached": True}), 200
+                return {**recent, "cached": True}, 200
             if key in _in_flight_deploys:
-                return jsonify(
+                return (
                     _in_progress_response(
                         env,
                         ref,
@@ -855,8 +962,9 @@ def version_deploy():
                         services,
                         version_ref=version_ref,
                         action=action,
-                    )
-                ), 202
+                    ),
+                    202,
+                )
             _in_flight_deploys.add(key)
             _save_state_locked()
 
@@ -868,23 +976,24 @@ def version_deploy():
             **_version_kwargs(version_ref),
             **_action_kwargs(action),
         )
-        response = _recent_result(key) or {
-            "status": "failed",
-            "env": env,
-            "ref": ref,
-            "triggered_by": triggered_by,
-            "error": "Deployment finished without a stored result",
-        }
+        with _deploy_state_lock:
+            response = _recent_result(key) or {
+                "status": "failed",
+                "env": env,
+                "ref": ref,
+                "triggered_by": triggered_by,
+                "error": "Deployment finished without a stored result",
+            }
         status_code = 200 if response.get("status") == "completed" else 500
-        return jsonify(response), status_code
+        return response, status_code
 
     key = _deployment_key(env, ref, services, version_ref, action)
     with _deploy_state_lock:
         recent = _reusable_result(key)
         if recent:
-            return jsonify({**recent, "cached": True}), 200
+            return {**recent, "cached": True}, 200
         if key in _in_flight_deploys:
-            return jsonify(
+            return (
                 _in_progress_response(
                     env,
                     ref,
@@ -893,8 +1002,9 @@ def version_deploy():
                     services,
                     version_ref=version_ref,
                     action=action,
-                )
-            ), 202
+                ),
+                202,
+            )
         _in_flight_deploys.add(key)
         _save_state_locked()
 
@@ -911,7 +1021,7 @@ def version_deploy():
     thread.daemon = True
     thread.start()
 
-    return jsonify(
+    return (
         {
             **_in_progress_response(
                 env,
@@ -922,66 +1032,146 @@ def version_deploy():
                 action=action,
             ),
             "wait": False,
+        },
+        202,
+    )
+
+
+@app.post(
+    "/deploy",
+    tags=["Deploy"],
+    response_model=DeployResultResponse,
+    responses={
+        202: {"model": DeployResultResponse},
+        400: {"model": RunnerErrorResponse},
+        401: {"model": RunnerErrorResponse},
+        403: {"model": RunnerErrorResponse},
+        413: {"model": RunnerErrorResponse},
+        500: {"model": DeployResultResponse},
+    },
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/DeployRequest"}
+                }
+            },
         }
-    ), 202
+    },
+    operation_id="trigger_deploy",
+)
+async def version_deploy(request: Request) -> JSONResponse:
+    try:
+        raw_body = await _read_body_with_limit(request)
+    except _RequestBodyError as exc:
+        return JSONResponse({"error": exc.message}, status_code=exc.status_code)
+    body, status_code = await run_in_threadpool(
+        _process_deploy_request, raw_body, request.headers
+    )
+    return JSONResponse(body, status_code=status_code)
 
 
-@app.route("/deploy/status", methods=["POST"])
-def deployment_status():
-    if not verify_iac_request():
-        return jsonify({"error": "Invalid signature"}), 401
+@app.get(
+    "/deploy/status/{deployment_id}",
+    tags=["Deploy"],
+    response_model=DeployResultResponse,
+    responses={
+        400: {"model": RunnerErrorResponse},
+        401: {"model": RunnerErrorResponse},
+        404: {"model": DeployResultResponse},
+    },
+    operation_id="get_deploy_status",
+)
+def deployment_status_by_id(deployment_id: str, request: Request) -> JSONResponse:
+    if not verify_iac_request(b"", request.headers):
+        return JSONResponse({"error": "Invalid signature"}, status_code=401)
+    if not DEPLOYMENT_ID_RE.fullmatch(deployment_id):
+        return JSONResponse(
+            {"error": "deployment_id must be 16 lowercase hex characters"},
+            status_code=400,
+        )
+    with _deploy_state_lock:
+        for key in _in_flight_deploys:
+            if _deployment_id(key) == deployment_id:
+                return JSONResponse(
+                    _in_progress_response(
+                        key[0],
+                        key[1],
+                        "unknown",
+                        services=list(key[2]),
+                        version_ref=(key[3] if len(key) > 3 and key[3] else None),
+                        action=(key[4] if len(key) > 4 and key[4] else "sync"),
+                    ),
+                    status_code=200,
+                )
+        for key in list(_recent_deploys):
+            if _deployment_id(key) == deployment_id:
+                recent = _recent_result(key)
+                if recent:
+                    return JSONResponse(recent, status_code=200)
+    return JSONResponse(
+        {"status": "not_found", "deployment_id": deployment_id},
+        status_code=404,
+    )
 
-    payload = request.json or {}
-    if not isinstance(payload, dict):
-        return jsonify({"error": "JSON object required"}), 400
+
+def _process_status_request(
+    raw_body: bytes, headers: Mapping[str, str]
+) -> tuple[dict[str, Any], int]:
+    if not verify_iac_request(raw_body, headers):
+        return {"error": "Invalid signature"}, 401
+
+    payload = _parse_json_object(raw_body)
+    if payload is None:
+        return {"error": "JSON object required"}, 400
     env = payload.get("env", "staging")
     ref = validate_deploy_ref(payload.get("ref") or payload.get("tag"))
     triggered_by = payload.get("triggered_by", "unknown")
     deployment_id = payload.get("deployment_id")
     if not ref:
-        return jsonify({"error": "Ref must be an exact 40-character commit SHA"}), 400
+        return {"error": "Ref must be an exact 40-character commit SHA"}, 400
     if env not in ("staging", "production"):
-        return jsonify({"error": "Invalid env (must be staging or production)"}), 400
+        return {"error": "Invalid env (must be staging or production)"}, 400
 
     services = payload.get("services")
     if services is not None:
         if not isinstance(services, list) or not all(
             isinstance(s, str) for s in services
         ):
-            return jsonify({"error": "services must be a list of strings"}), 400
+            return {"error": "services must be a list of strings"}, 400
         if not services or any(not service.strip() for service in services):
-            return jsonify(
-                {"error": "services must be a non-empty list of non-empty strings"}
-            ), 400
+            return {
+                "error": "services must be a non-empty list of non-empty strings"
+            }, 400
     if deployment_id is not None and (
         not isinstance(deployment_id, str)
         or not DEPLOYMENT_ID_RE.fullmatch(deployment_id)
     ):
-        return jsonify(
-            {"error": "deployment_id must be 16 lowercase hex characters"}
-        ), 400
+        return {"error": "deployment_id must be 16 lowercase hex characters"}, 400
 
     try:
         version_ref = validate_version_ref(payload.get("version_ref"))
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        return {"error": str(exc)}, 400
     action = payload.get("action") or "sync"
     if action not in DEPLOY_ACTIONS:
-        return jsonify({"error": f"action must be one of {list(DEPLOY_ACTIONS)}"}), 400
+        return {"error": f"action must be one of {list(DEPLOY_ACTIONS)}"}, 400
     with _deploy_state_lock:
         if services is not None:
             key = _deployment_key(env, ref, services, version_ref, action)
         else:
             candidates = _keys_for_legacy_status(env, ref)
             if len(candidates) > 1:
-                return jsonify(
+                return (
                     {
                         "error": "Ambiguous deployment; deployment_id and services are required",
                         "candidate_deployment_ids": [
                             _deployment_id(item) for item in candidates
                         ],
-                    }
-                ), 409
+                    },
+                    409,
+                )
             key = (
                 candidates[0]
                 if candidates
@@ -990,19 +1180,15 @@ def deployment_status():
 
         expected_id = _deployment_id(key)
         if deployment_id is not None and deployment_id != expected_id:
-            return jsonify(
+            return (
                 {
                     "error": "deployment_id does not match env/ref/services",
                     "expected_deployment_id": expected_id,
-                }
-            ), 409
-        # A run in flight answers before any remembered result (2026-09-17). While a key
-        # is in flight, a remembered result belongs to an EARLIER run: _run_deployment
-        # stores its result and discards the key under this same lock. A failure stays
-        # remembered for the TTL even after a retry starts (_reusable_result), so reading
-        # it first handed the retry's poll the failure being retried (truealpha v0.0.83).
+                },
+                409,
+            )
         if key in _in_flight_deploys:
-            return jsonify(
+            return (
                 _in_progress_response(
                     env,
                     ref,
@@ -1010,25 +1196,63 @@ def deployment_status():
                     services=list(key[2]),
                     version_ref=(key[3] if len(key) > 3 and key[3] else None),
                     action=(key[4] if len(key) > 4 and key[4] else "sync"),
-                )
-            ), 200
+                ),
+                200,
+            )
         recent = _recent_result(key)
         if recent:
-            return jsonify(recent), 200
+            return recent, 200
 
-    return jsonify(
+    return (
         {
             "status": "not_found",
             "deployment_id": _deployment_id(key),
             "env": env,
             "ref": ref,
+        },
+        404,
+    )
+
+
+@app.post(
+    "/deploy/status",
+    tags=["Deploy"],
+    response_model=DeployResultResponse,
+    responses={
+        400: {"model": RunnerErrorResponse},
+        401: {"model": RunnerErrorResponse},
+        404: {"model": DeployResultResponse},
+        409: {"model": RunnerErrorResponse},
+        413: {"model": RunnerErrorResponse},
+    },
+    openapi_extra={
+        "requestBody": {
+            "required": True,
+            "content": {
+                "application/json": {
+                    "schema": {"$ref": "#/components/schemas/DeployStatusRequest"}
+                }
+            },
         }
-    ), 404
+    },
+    operation_id="poll_deploy_status",
+)
+async def deployment_status(request: Request) -> JSONResponse:
+    try:
+        raw_body = await _read_body_with_limit(request)
+    except _RequestBodyError as exc:
+        return JSONResponse({"error": exc.message}, status_code=exc.status_code)
+    body, status_code = await run_in_threadpool(
+        _process_status_request, raw_body, request.headers
+    )
+    return JSONResponse(body, status_code=status_code)
 
 
 _load_state()
 
 
 if __name__ == "__main__":
+    import uvicorn
+
     port = int(os.environ.get("WEBHOOK_PORT", 8080))
-    app.run(host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port, workers=1, timeout_keep_alive=95)

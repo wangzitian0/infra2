@@ -47,4 +47,4 @@ RUN mkdir -p /workspace && \
 
 EXPOSE 8080
 
-CMD ["gunicorn", "-w", "1", "--threads", "4", "-b", "0.0.0.0:8080", "--timeout", "120", "webhook_server:app"]
+CMD ["uvicorn", "webhook_server:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1", "--timeout-keep-alive", "95"]

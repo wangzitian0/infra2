@@ -51,12 +51,7 @@ def _runner(monkeypatch, state_dir: Path):
     sync = types.ModuleType("sync_runner")
     sync.calls = []
     sync.sync_services_by_version = lambda *a, **k: sync.calls.append(a) or _RESULT
-    flask = types.ModuleType("flask")
-    flask.Flask = lambda _n: types.SimpleNamespace(route=lambda *a, **k: lambda f: f)
-    flask.jsonify = lambda payload: payload
-    flask.request = types.SimpleNamespace()
     monkeypatch.setitem(sys.modules, "sync_runner", sync)
-    monkeypatch.setitem(sys.modules, "flask", flask)
     monkeypatch.setenv("IAC_RUNNER_STATE_DIR", str(state_dir))
     monkeypatch.setenv("WEBHOOK_SECRET", "test-webhook-secret")
     _n[0] += 1
@@ -64,9 +59,19 @@ def _runner(monkeypatch, state_dir: Path):
 
 
 def _call(ws, handler, payload):
-    ws.request.headers = _signed_headers(_SECRET_ALREADY_SET)
-    ws.request.data, ws.request.json = b"", payload
-    return getattr(ws, handler)()
+    from starlette.testclient import TestClient
+
+    raw = json.dumps(payload).encode("utf-8")
+    route = "/deploy" if handler == "version_deploy" else "/deploy/status"
+    res = TestClient(ws.app).post(
+        route,
+        content=raw,
+        headers={
+            **_signed_headers(_SECRET_ALREADY_SET, raw),
+            "Content-Type": "application/json",
+        },
+    )
+    return res.json(), res.status_code
 
 
 def _deploy(ws, **extra):
