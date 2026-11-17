@@ -120,11 +120,37 @@ State: the SDK has the Preview, Staging and Prod rows (`STAGE_HOOK_PLANS`). The 
 **Roles**
 
 1. The SDK is the scheduler. For one cell it reads the policy table and the manifest. It runs each check within its time limit, gives each check the scale, writes the record and returns the verdict.
-2. Each App and the Canary Todo own one manifest, `runtime-hooks.manifest.json`. The manifest lists the checks of each App-owned cell. It cannot change a budget or a scale.
+2. Each App and the Canary Todo own one manifest, `runtime-hooks.manifest.json`. The manifest has one row for each check. It cannot change a budget or a scale.
 3. A caller starts the scheduler. The callers are a git hook (Local), the CI workflow (CI), the infra2 release code (Preview, Staging, Prod) and the clock.
 4. The Canary Todo runs each new scheduler version and each new policy version first (rule 6).
 
 State: `run_hook_slot` in the SDK runs `smoke`, the three gate lists and `scheduled_audit`. Local and CI have no scheduler entry.
+
+**Flow control**
+
+1. No engine runs the chain. A trigger starts each stage. The scheduler runs one cell for each call.
+2. The record is the only link between two stages (rule 3). A stage with no valid upstream record does not start.
+3. In a cell, the scheduler starts the cheapest checks first and runs independent checks at the same time.
+4. Local pre stops at the first failed check. Every other App-owned cell runs each check and records each verdict.
+5. Each check has a time limit. Each cell has a time budget.
+6. The policy table says if a cell blocks or reports. A cell that reports does not stop the chain.
+
+State: `run_hook_slot` runs the checks of a list in order and stops at the first failure. The list has one time limit. Items 3 to 6 are targets.
+
+**Check rows (target)**
+
+- The code of a check is one file in the repository of the App. The manifest has one row for each check: an id, a command and the needs of the check.
+- A need is one of: the code, recorded LLM answers, a running service, a real LLM, Staging data, a real provider. A row also says if the check writes data and if it accepts a scale.
+- The default cells of a check come from its needs. A check that needs only the code runs in Local pre and CI pre.
+- A check that needs a running service runs in each deploy stage that gives its needs: `smoke` in the operation, every other check in post.
+- A check that writes data does not run in Prod.
+- A row can add or remove a cell. The scheduler refuses a cell that does not give the needs of the check.
+- A row can set a check to off. A removed cell and an off check each give a reason and an issue. No environment variable and no command flag skips a check.
+- The record lists an off check as "skipped". A skipped check is not a pass. A cell where no check ran fails (rule 2).
+- An App cannot remove or set to off a Platform check.
+- The scheduler prints the table of checks by cells for each manifest.
+
+State: a manifest lists the checks of each slot, so a check that runs in two slots has two entries. finance_report keeps a private table of needs for its end-to-end tests (`common/testing/matrix.py`).
 
 **One policy table (target)**
 
