@@ -251,15 +251,29 @@ class AppDeployer(Deployer):
         if health != 200:
             failures.append(f"GET /api/health -> {health} (expected 200)")
 
-        # Bogus credentials on purpose: ANY auth-shaped 4xx proves app-web's
+        # Bogus credentials on purpose: ANY auth-shaped 4xx proves the login
         # handler answered. 404 = the #463 shadowing class; 5xx = the #447
-        # missing-secret class.
+        # missing-secret class. Probe /api/v1/auth/session first to select the
+        # OpenAPI v1 route (truealpha#1716) vs legacy Next.js route.
+        session = cls._probe_status(
+            urllib.request.Request(f"{base_url}/api/v1/auth/session")
+        )
+        if session == 200:
+            login_path = "/api/v1/auth/login"
+        elif session == 404:
+            login_path = "/api/auth/login"
+        else:
+            failures.append(
+                f"GET /api/v1/auth/session -> {session} (expected 200 or 404)"
+            )
+            return failures
+
         login_body = json.dumps(
             {"email": "smoke@invalid.example", "password": "smoke-invalid"}
         ).encode()
         login = cls._probe_status(
             urllib.request.Request(
-                f"{base_url}/api/auth/login",
+                f"{base_url}{login_path}",
                 data=login_body,
                 headers={"Content-Type": "application/json"},
                 method="POST",
@@ -267,7 +281,7 @@ class AppDeployer(Deployer):
         )
         if login not in {400, 401, 422, 429}:
             failures.append(
-                f"POST /api/auth/login -> {login} (expected an auth-shaped 400/401/422/429)"
+                f"POST {login_path} -> {login} (expected an auth-shaped 400/401/422/429)"
             )
 
         # One real MCP call (JSON-RPC initialize) through the public MCP route.

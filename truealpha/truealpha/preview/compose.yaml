@@ -205,6 +205,11 @@ services:
       # Strip /api prefix before forwarding to the llm-service
       - "traefik.http.middlewares.truealpha-api-strip${ENV_DOMAIN_SUFFIX}.stripprefix.prefixes=/api"
       - "traefik.http.routers.truealpha-api${ENV_DOMAIN_SUFFIX}.middlewares=truealpha-api-strip${ENV_DOMAIN_SUFFIX}@docker"
+      - "traefik.http.routers.truealpha-v1${ENV_DOMAIN_SUFFIX}.rule=Host(`truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`) && PathPrefix(`/api/v1`)"
+      - "traefik.http.routers.truealpha-v1${ENV_DOMAIN_SUFFIX}.entrypoints=websecure"
+      - "traefik.http.routers.truealpha-v1${ENV_DOMAIN_SUFFIX}.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.truealpha-v1${ENV_DOMAIN_SUFFIX}.service=truealpha-api${ENV_DOMAIN_SUFFIX}"
+      - "traefik.http.routers.truealpha-v1${ENV_DOMAIN_SUFFIX}.priority=20"
 
   web:
     image: ghcr.io/wangzitian0/truealpha-app-web:${IMAGE_TAG:-${RELEASE_MANIFEST_ID:?IMAGE_TAG must be set}}

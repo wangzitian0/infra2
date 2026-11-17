@@ -51,8 +51,16 @@ def test_api_router_does_not_claim_the_bare_api_prefix() -> None:
         label for label in web_labels if ".rule=" in label and "truealpha-web" in label
     )
     # web's router must stay a bare Host() match (no PathPrefix of its own) so it
-    # remains the catch-all for every /api/* path the llm router no longer claims.
+    # remains the catch-all for every non-v1, non-MCP/health path.
     assert "PathPrefix" not in web_rule_label.split(".rule=", 1)[1]
+
+    v1_rule = next(
+        label for label in llm_labels if ".rule=" in label and "truealpha-v1" in label
+    ).split(".rule=", 1)[1]
+    assert "PathPrefix(`/api/v1`)" in v1_rule and "${APP_HOST}" in v1_rule
+    assert not any(
+        "truealpha-v1" in label and "stripprefix" in label for label in llm_labels
+    )
 
 
 def test_both_routers_use_the_computed_app_host_not_the_literal_prefix_pattern() -> (
@@ -162,6 +170,13 @@ def test_preview_api_router_does_not_claim_the_bare_api_prefix() -> None:
     )
     assert "PathPrefix(`/api/mcp`)" in rule
     assert "Path(`/api/health`)" in rule
+    v1_rule = next(
+        label for label in llm_labels if ".rule=" in label and "truealpha-v1" in label
+    ).split(".rule=", 1)[1]
+    assert "PathPrefix(`/api/v1`)" in v1_rule
+    assert not any(
+        "truealpha-v1" in label and "stripprefix" in label for label in llm_labels
+    )
 
 
 def _services_exporting_otlp(compose: Path) -> set[str]:
