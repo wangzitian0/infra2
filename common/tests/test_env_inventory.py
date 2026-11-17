@@ -1557,7 +1557,7 @@ def test_contract_accepts_expand_phase_manifest_alias_in_compose(tmp_path):
       UNDECLARED_VAR: foo
 """,
     )
-    w(tmp_path, "svc/secrets.ctmpl", "LLM_API_KEY=ok\n")
+    w(tmp_path, "svc/secrets.ctmpl", "LLM_API_KEY=ok\nAI_API_KEY=bad\n")
     inv_ = envinv.run({"infra2": tmp_path})
     svc = Service(
         directory="svc",
@@ -1569,4 +1569,5 @@ def test_contract_accepts_expand_phase_manifest_alias_in_compose(tmp_path):
     rows = envinv.contract(inv_, keys_map, [svc], comp_of, comps)
     assert len(rows) == 1
     assert rows[0]["compose_first_party_not_in_manifest"] == ["UNDECLARED_VAR"]
+    assert rows[0]["ctmpl_not_in_manifest"] == ["AI_API_KEY"]
     assert rows[0]["store_key_not_rendered"] == []
