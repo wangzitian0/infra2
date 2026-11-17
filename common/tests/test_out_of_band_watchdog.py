@@ -128,6 +128,7 @@ def test_workflow_runs_daily_and_can_be_dispatched() -> None:
         "facet-reconcile",
         "vault-self-refresh-audit",
         "secrets-reconcile",
+        "staging-db-hygiene",  # #1624 AC2
         "e2e-regressions-smoke",  # #1649
     ]
 
