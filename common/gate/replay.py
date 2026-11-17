@@ -24,6 +24,7 @@ MERGE_POLICY = "either"
 # It uses only names that origin/main has, so a main without this module can run it.
 _EVALUATE_SCRIPT = """
 import json, os, sys
+from dataclasses import fields, is_dataclass
 sys.path.insert(0, os.getcwd())  # the tree of this gate, also under PYTHONSAFEPATH
 from common.gate.evaluator import evaluate
 from common.gate.types import HeadFacts
@@ -31,10 +32,12 @@ from common.gate.types import HeadFacts
 def tuples(value):
     return tuple(tuples(v) for v in value) if isinstance(value, list) else value
 
+known = {f.name for f in fields(HeadFacts)} if is_dataclass(HeadFacts) else None
 out = []
 payload = json.load(sys.stdin)
 for item in payload["items"]:
-    facts = HeadFacts(**{k: tuples(v) for k, v in item["facts"].items()})
+    raw = {k: tuples(v) for k, v in item["facts"].items() if known is None or k in known}
+    facts = HeadFacts(**raw)
     v = evaluate(facts, now=item["now"], policy=payload["policy"])
     out.append({"ready": v.ready, "exit_code": v.exit_code, "reasons": list(v.reasons)})
 print("REPLAY_VERDICTS " + json.dumps(out))

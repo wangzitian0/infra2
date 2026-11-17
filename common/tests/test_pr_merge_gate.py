@@ -3583,3 +3583,44 @@ def test_unreadable_closing_issue_labels_fails_closed_as_unevaluable():
     verdict_bad = gate.evaluate(facts_bad, now=READY_AT)
     assert verdict_bad.exit_code == 4
     assert verdict_bad.outcome == "unevaluable"
+
+
+def test_replay_evaluate_script_ignores_unknown_head_facts_fields():
+    """#1545 / #1653: replay _EVALUATE_SCRIPT filters unknown future HeadFacts fields."""
+    import dataclasses
+    import subprocess
+    import sys
+
+    from common.gate.replay import _EVALUATE_SCRIPT
+
+    facts = _facts()
+    payload = json.dumps(
+        {
+            "policy": "either",
+            "items": [
+                {
+                    "facts": {
+                        **{
+                            f.name: getattr(facts, f.name)
+                            for f in dataclasses.fields(facts)
+                        },
+                        "future_unknown_field": [["nested", 1]],
+                    },
+                    "now": NOW,
+                }
+            ],
+        }
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", _EVALUATE_SCRIPT],
+        cwd=ROOT,
+        input=payload,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    line = next(x for x in proc.stdout.splitlines() if x.startswith("REPLAY_VERDICTS "))
+    verdicts = json.loads(line.removeprefix("REPLAY_VERDICTS "))
+    assert len(verdicts) == 1
+    assert verdicts[0]["exit_code"] == 0
+    assert verdicts[0]["ready"] is True
