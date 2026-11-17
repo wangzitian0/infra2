@@ -410,6 +410,133 @@ def test_free_client_info_reports_a_failed_read(monkeypatch) -> None:
     assert any(CONFIG_PATH in message for message in errors)
 
 
+def _run_free_drift_step(monkeypatch, ctx: _FakeContext):
+    """Run SyncPipeline.step_identities_and_drift for FreeDeployer with matching hashes."""
+    from common.deploy.deployer import Deployer
+    from common.deploy.sync_pipeline import (
+        _IDENTITY_FIELDS,
+        SOURCE_CONFIG_HASH_VERSION,
+        ConsoleLogger,
+        SyncPipeline,
+    )
+
+    module = _load_deploy_module("platform/25.free")
+    cls = module.FreeDeployer
+    ref = "a" * 40
+    monkeypatch.setenv("IAC_DEPLOY_REF", ref)
+    monkeypatch.setattr(
+        cls,
+        "env",
+        classmethod(
+            lambda _c: {
+                "ENV": "production",
+                "INTERNAL_DOMAIN": "x.test",
+                "VPS_HOST": "h",
+                "VPS_SSH_USER": "root",
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        cls,
+        "compute_local_config_hash",
+        classmethod(lambda _c, _ctx, _env: "h"),
+    )
+    monkeypatch.setattr(
+        cls,
+        "service_id_from_path",
+        classmethod(lambda _c: "platform/free"),
+    )
+    monkeypatch.setattr(
+        cls,
+        "_find_remote_compose",
+        classmethod(lambda _c, _e: {"composeId": "cid-free"}),
+    )
+    monkeypatch.setattr(
+        Deployer,
+        "verify_still_in_service",
+        classmethod(lambda _c, _ctx, _cid: None),
+    )
+    warnings: list[str] = []
+    pipe = SyncPipeline(
+        cls, ctx, force=False, logger=ConsoleLogger(warning=warnings.append)
+    )
+    monkeypatch.setattr(cls, "get_remote_config_identity", classmethod(lambda _c: {}))
+    pipe.ctx.env = cls.env()
+    # Compute expected identity via first call, then mirror it on remote.
+    from common.core.service_identity import ServiceIdentity
+
+    expected = ServiceIdentity.build(
+        "platform/free",
+        "production",
+        component="free",
+        service_name="free",
+        version=ref,
+        iac_ref=ref,
+    ).deploy_env()
+    remote = {k: expected[env_key] for k, env_key in _IDENTITY_FIELDS}
+    remote.update(
+        runtime_hash="h",
+        source_hash=f"{SOURCE_CONFIG_HASH_VERSION}:h",
+        deploy_ref=ref,
+    )
+    monkeypatch.setattr(
+        cls, "get_remote_config_identity", classmethod(lambda _c: remote)
+    )
+    return pipe.step_identities_and_drift(), warnings, pipe, module
+
+
+def test_free_sync_pipeline_forces_redeploy_when_host_config_absent(
+    monkeypatch,
+) -> None:
+    """#1615: absent /data/platform/free/config.json forces redeploy even when hash matches."""
+    ctx = _FakeContext(ABSENT + "\n")
+    res, warnings, pipe, module = _run_free_drift_step(monkeypatch, ctx)
+    assert res is None
+    assert any(CONFIG_PATH in w and "absent" in w for w in warnings)
+
+    uploads: list[str] = []
+    monkeypatch.setenv("FREE_UUID", FREE_UUID)
+    monkeypatch.setenv("FREE_PATH", FREE_PATH)
+    monkeypatch.setattr(
+        module,
+        "run_with_status",
+        lambda _c, cmd, _d: uploads.append(cmd) or _Result(),
+    )
+    monkeypatch.setattr(
+        module.FreeDeployer, "_prepare_dirs", classmethod(lambda _c, _ctx: True)
+    )
+    monkeypatch.setattr(
+        module.Deployer,
+        "composing",
+        classmethod(lambda _c, _ctx, _env: "cid-free"),
+    )
+    assert pipe.step_prepare_and_deploy() is None
+    assert any(cmd.startswith("scp ") for cmd in uploads)
+
+
+def test_free_sync_pipeline_skips_when_host_config_matches_template(
+    monkeypatch,
+) -> None:
+    module = _load_deploy_module("platform/25.free")
+    current = module.FreeDeployer._render_config(FREE_UUID, FREE_PATH)
+    res, _warnings, _pipe, _mod = _run_free_drift_step(
+        monkeypatch, _FakeContext(current)
+    )
+    assert res is not None
+    assert res.action == "skipped"
+
+
+def test_free_sync_pipeline_skips_fail_closed_when_host_config_unreadable(
+    monkeypatch,
+) -> None:
+    res, warnings, _pipe, _mod = _run_free_drift_step(
+        monkeypatch, _FakeContext("", ok=False)
+    )
+    assert res is not None
+    assert res.action == "skipped"
+    assert any("fail-closed" in w for w in warnings)
+
+
 # --- review findings of PR #1447 (head 7762f85) -------------------------------------
 
 
