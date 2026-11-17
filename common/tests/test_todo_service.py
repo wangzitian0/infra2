@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import importlib.util
 import time
+import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 
+import psycopg
 import pytest
 from starlette.testclient import TestClient
 
@@ -22,6 +25,147 @@ def _no_ambient_telemetry_env(monkeypatch):
     """The app starts telemetry while it loads. The shell of a developer must not decide
     whether it loads (#1209)."""
     clear_telemetry_env(monkeypatch)
+
+
+class _FakeTodoCursor:
+    def __init__(self, rows: list[tuple] | None = None) -> None:
+        self._rows = rows or []
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self):
+        return list(self._rows)
+
+
+class _FakeTodoPgConnection:
+    def __init__(self, store: "_FakeTodoPgStore") -> None:
+        self._store = store
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    def execute(self, sql: str, params: tuple = ()) -> _FakeTodoCursor:
+        normalized = " ".join(sql.split())
+        if normalized.startswith("SELECT to_regclass"):
+            return _FakeTodoCursor([("todos" if self._store.table_created else None,)])
+        if normalized.startswith("CREATE TABLE IF NOT EXISTS todos"):
+            self._store.table_created = True
+            return _FakeTodoCursor()
+        if normalized.startswith(
+            "SELECT id, title, completed, capability, created_at FROM todos"
+        ):
+            return _FakeTodoCursor(
+                [
+                    (
+                        item["id"],
+                        item["title"],
+                        item["completed"],
+                        item["capability"],
+                        item["created_at"],
+                    )
+                    for item in sorted(self._store.rows, key=lambda r: r["id"])
+                ]
+            )
+        if normalized.startswith("INSERT INTO todos"):
+            title, completed, capability = params
+            self._store.next_id += 1
+            row = {
+                "id": self._store.next_id,
+                "title": title,
+                "completed": bool(completed),
+                "capability": capability,
+                "created_at": datetime(2026, 11, 17, 5, 0, 0, tzinfo=timezone.utc),
+            }
+            self._store.rows.append(row)
+            return _FakeTodoCursor(
+                [
+                    (
+                        row["id"],
+                        row["title"],
+                        row["completed"],
+                        row["capability"],
+                        row["created_at"],
+                    )
+                ]
+            )
+        if normalized.startswith("UPDATE todos SET"):
+            set_clause = normalized.split("UPDATE todos SET ", 1)[1].split(
+                " WHERE id = %s", 1
+            )[0]
+            todo_id = params[-1]
+            values = list(params[:-1])
+            target = next((r for r in self._store.rows if r["id"] == todo_id), None)
+            if target is None:
+                return _FakeTodoCursor([])
+            idx = 0
+            for assignment in (part.strip() for part in set_clause.split(",")):
+                if assignment == "completed = NOT completed":
+                    target["completed"] = not target["completed"]
+                elif assignment == "title = %s":
+                    target["title"] = values[idx]
+                    idx += 1
+                elif assignment == "completed = %s":
+                    target["completed"] = bool(values[idx])
+                    idx += 1
+                elif assignment == "capability = %s":
+                    target["capability"] = values[idx]
+                    idx += 1
+            return _FakeTodoCursor(
+                [
+                    (
+                        target["id"],
+                        target["title"],
+                        target["completed"],
+                        target["capability"],
+                        target["created_at"],
+                    )
+                ]
+            )
+        if normalized.startswith("DELETE FROM todos WHERE id = %s"):
+            todo_id = params[0]
+            for pos, row in enumerate(self._store.rows):
+                if row["id"] == todo_id:
+                    removed = self._store.rows.pop(pos)
+                    return _FakeTodoCursor(
+                        [
+                            (
+                                removed["id"],
+                                removed["title"],
+                                removed["completed"],
+                                removed["capability"],
+                                removed["created_at"],
+                            )
+                        ]
+                    )
+            return _FakeTodoCursor([])
+        raise AssertionError(f"Unexpected SQL in fake todo DB: {sql}")
+
+
+class _FakeTodoPgStore:
+    def __init__(self) -> None:
+        self.table_created = False
+        self.next_id = 0
+        self.rows: list[dict] = []
+
+    def connect(self, *args, **kwargs) -> _FakeTodoPgConnection:
+        return _FakeTodoPgConnection(self)
+
+
+def _wire_fake_todo_pg(
+    monkeypatch, store: _FakeTodoPgStore | None = None
+) -> _FakeTodoPgStore:
+    pg_store = store or _FakeTodoPgStore()
+    monkeypatch.setenv("POSTGRES_HOST", "platform-postgres")
+    monkeypatch.setenv("POSTGRES_PORT", "5432")
+    monkeypatch.setenv("TODO_POSTGRES_USER", "todo_app")
+    monkeypatch.setenv("TODO_POSTGRES_PASSWORD", "test_todo_pg_pass_1234")
+    monkeypatch.setenv("TODO_POSTGRES_DATABASE", "postgres")
+    monkeypatch.setattr(psycopg, "connect", pg_store.connect)
+    return pg_store
 
 
 def test_todo_service_registered_in_service_registry() -> None:
@@ -134,12 +278,16 @@ def test_todo_app_endpoints_contract(monkeypatch) -> None:
     for name, c in checks.items():
         assert c["status"] == "pass"
 
-    # 3. /api/todos (GET)
+    # 3. /api/todos fails closed with 503 before PostgreSQL is configured
+    assert client.get("/api/todos").status_code == 503
+
+    # Wire fake persistent PostgreSQL store for CRUD roundtrips
+    _wire_fake_todo_pg(monkeypatch)
+
+    # 3b. /api/todos (GET on clean database)
     resp = client.get("/api/todos")
     assert resp.status_code == 200
-    todos = resp.json()
-    assert isinstance(todos, list)
-    assert len(todos) >= 5
+    assert resp.json() == []
 
     # 4. /api/todos (POST valid item)
     resp = client.post(
@@ -172,12 +320,21 @@ def test_todo_app_endpoints_contract(monkeypatch) -> None:
     err_body = resp.json()
     assert "completed" in err_body.get("error", "")
 
-    # 6. /api/todos/{id}/toggle (PUT)
-    resp = client.put(f"/api/todos/{created_id}/toggle")
+    # 6. /api/todos/{id} (PATCH empty toggle + explicit field update)
+    resp = client.patch(f"/api/todos/{created_id}")
     assert resp.status_code == 200
     toggled = resp.json()
     assert toggled["id"] == created_id
     assert toggled["completed"] is True
+
+    resp = client.patch(
+        f"/api/todos/{created_id}",
+        json={"title": "Updated Canary Task", "completed": False},
+    )
+    assert resp.status_code == 200
+    updated = resp.json()
+    assert updated["title"] == "Updated Canary Task"
+    assert updated["completed"] is False
 
     # 7. /api/todos/{id} (DELETE)
     resp = client.delete(f"/api/todos/{created_id}")
@@ -561,14 +718,13 @@ def test_todo_readiness_passes_only_on_an_ok_document(monkeypatch, path: str) ->
     assert client.get(path).status_code == 200
 
 
-def test_todo_fastapi_endpoints_contract() -> None:
-    """Verify Canary Todo exposes FastAPI endpoints via infra2_sdk.fastapi."""
-    spec = importlib.util.spec_from_file_location(
-        "todo_app_fastapi", REPO_ROOT / "platform/30.todo/app.py"
-    )
-    assert spec is not None and spec.loader is not None
-    todo_mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(todo_mod)
+def test_todo_fastapi_endpoints_contract(monkeypatch) -> None:
+    """Verify Canary Todo exposes FastAPI endpoints with strict OpenAPI schemas."""
+    _wire_fake_todo_pg(monkeypatch)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        todo_mod = _load_todo_module("todo_app_fastapi")
+    assert caught == [], [str(w.message) for w in caught]
 
     client = TestClient(todo_mod.fastapi_app)
 
@@ -584,15 +740,43 @@ def test_todo_fastapi_endpoints_contract() -> None:
     assert resp_api_health.status_code == 200
     assert resp_api_health.json()["service"] == "platform/todo"
 
-    # 5. OpenAPI schemas on /livez, /readyz, /health and unique operationIds
+    # 5. OpenAPI schemas on all JSON routes, typed request bodies, and unique operationIds
     openapi_res = client.get("/openapi.json")
     assert openapi_res.status_code == 200
-    paths = openapi_res.json()["paths"]
-    for rp in ("/health", "/livez", "/readyz"):
-        schema = paths[rp]["get"]["responses"]["200"]["content"]["application/json"][
-            "schema"
-        ]
-        assert "$ref" in schema, f"{rp} missing schema ref: {schema}"
+    spec_doc = openapi_res.json()
+    paths = spec_doc["paths"]
+    for rp, method in (
+        ("/health", "get"),
+        ("/livez", "get"),
+        ("/readyz", "get"),
+        ("/api/health", "get"),
+        ("/api/canary/status", "get"),
+        ("/api/todos", "post"),
+        ("/api/todos/{todo_id}", "patch"),
+        ("/api/todos/{todo_id}", "delete"),
+        ("/api/auth/me", "get"),
+    ):
+        resp_200 = paths[rp][method]["responses"].get("200") or paths[rp][method][
+            "responses"
+        ].get("201")
+        schema = resp_200["content"]["application/json"]["schema"]
+        assert "$ref" in schema, f"{method.upper()} {rp} missing $ref schema: {schema}"
+    todos_get_schema = paths["/api/todos"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]
+    assert todos_get_schema["type"] == "array"
+    assert "$ref" in todos_get_schema["items"]
+    for write_method, write_path in (
+        ("post", "/api/todos"),
+        ("patch", "/api/todos/{todo_id}"),
+    ):
+        req_schema = paths[write_path][write_method]["requestBody"]["content"][
+            "application/json"
+        ]["schema"]
+        assert "$ref" in req_schema or "anyOf" in req_schema, (
+            f"{write_method.upper()} {write_path} missing Pydantic requestBody schema: {req_schema}"
+        )
+    assert "/api/todos/{todo_id}/toggle" not in paths
     op_ids = [
         op["operationId"]
         for path_item in paths.values()
@@ -601,7 +785,57 @@ def test_todo_fastapi_endpoints_contract() -> None:
     ]
     assert len(op_ids) == len(set(op_ids))
 
-    # 5. Todo REST API
+    # 6. Todo REST API
     resp_todos = client.get("/api/todos")
     assert resp_todos.status_code == 200
     assert isinstance(resp_todos.json(), list)
+
+
+def test_todo_persists_across_module_reloads(monkeypatch) -> None:
+    """Todos stored via one app instance remain visible after reloading app.py."""
+    store = _wire_fake_todo_pg(monkeypatch)
+    mod_a = _load_todo_module("todo_app_reload_a")
+    client_a = TestClient(mod_a.fastapi_app)
+    created = client_a.post(
+        "/api/todos",
+        json={"title": "Survive Restart", "capability": "postgres"},
+    )
+    assert created.status_code == 201
+    todo_id = created.json()["id"]
+
+    mod_b = _load_todo_module("todo_app_reload_b")
+    client_b = TestClient(mod_b.fastapi_app)
+    listed = client_b.get("/api/todos")
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()] == [todo_id]
+    assert listed.json()[0]["title"] == "Survive Restart"
+    assert len(store.rows) == 1
+
+
+def test_todo_db_unavailable_fails_closed_with_503(monkeypatch) -> None:
+    """Missing DB credentials or psycopg OperationalError returns HTTP 503."""
+    todo_mod = _load_todo_module("todo_app_503")
+    client = TestClient(todo_mod.fastapi_app, raise_server_exceptions=False)
+    for key in (
+        "POSTGRES_HOST",
+        "TODO_POSTGRES_USER",
+        "TODO_POSTGRES_PASSWORD",
+        "TODO_POSTGRES_DATABASE",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    res_unconfigured = client.get("/api/todos")
+    assert res_unconfigured.status_code == 503
+    assert "error" in res_unconfigured.json()
+
+    monkeypatch.setenv("POSTGRES_HOST", "platform-postgres")
+    monkeypatch.setenv("TODO_POSTGRES_USER", "todo_app")
+    monkeypatch.setenv("TODO_POSTGRES_PASSWORD", "test_todo_pg_pass_1234")
+    monkeypatch.setenv("TODO_POSTGRES_DATABASE", "postgres")
+
+    def _boom(*args, **kwargs):
+        raise psycopg.OperationalError("connection refused")
+
+    monkeypatch.setattr(psycopg, "connect", _boom)
+    res_down = client.post("/api/todos", json={"title": "Should Fail Closed"})
+    assert res_down.status_code == 503
+    assert "error" in res_down.json()

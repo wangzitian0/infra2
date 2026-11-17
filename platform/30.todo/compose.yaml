@@ -102,6 +102,9 @@ services:
       # Dedicated read-only role. TodoDeployer.CANARY_PG_ROLE creates it on every sync.
       CANARY_POSTGRES_USER: canary_ro
       CANARY_POSTGRES_DATABASE: postgres
+      # Dedicated todos persistence role. TodoDeployer.TODO_PG_ROLE creates it with todos DML grants.
+      TODO_POSTGRES_USER: todo_app
+      TODO_POSTGRES_DATABASE: postgres
       REDIS_HOST: platform-redis${ENV_SUFFIX}
       REDIS_PORT: "6379"
       CANARY_S3_ENDPOINT_URL: http://platform-s3${ENV_SUFFIX}:9000

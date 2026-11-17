@@ -83,6 +83,7 @@ def _run_probe(app_path: Path) -> tuple[dict, str]:
     )
     env["ENV"] = "staging"
     env["CANARY_POSTGRES_PASSWORD"] = "canary_test_password_0123456789"
+    env["TODO_POSTGRES_PASSWORD"] = "todo_test_password_0123456789"
     env["PORT"] = "8000"
     result = subprocess.run(
         [sys.executable, "-c", _PROBE_SCRIPT, str(app_path)],
