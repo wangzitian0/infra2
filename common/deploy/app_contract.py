@@ -384,11 +384,22 @@ def render_release_template(
         else parse_manifest(raw_stack, label=stack_path)
     )
 
+    release_names = {
+        name
+        for entry in release_fields.values()
+        for name in (entry.env, *entry.aliases)
+    }
     merged_fields: dict[str, EnvironmentField] = {}
     for entry in stack_manifest.fields:
         if entry.env in service.exclude_envs:
             continue
-        merged_fields[entry.env] = release_fields.get(entry.env, entry)
+        if entry.env in release_fields:
+            merged_fields[entry.env] = release_fields[entry.env]
+            continue
+        if any(name in release_names for name in (entry.env, *entry.aliases)):
+            # A migrated release field shares an alias with this stack baseline entry.
+            continue
+        merged_fields[entry.env] = entry
     for env, entry in release_fields.items():
         if env not in merged_fields:
             merged_fields[env] = entry
