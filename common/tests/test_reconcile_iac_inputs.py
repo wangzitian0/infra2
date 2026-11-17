@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import ast
+import io
 import json
 import re
 import subprocess
 import time
+import urllib.error
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -404,7 +407,11 @@ def _marker_runner(push_code: int, push_stderr: str, tag: str = "v1.2.3"):
     return runner
 
 
-def test_production_marker_push_rejected_by_github_app_rule_raises_rejected() -> None:
+def test_production_marker_push_rejected_by_github_app_rule_raises_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
     with pytest.raises(reconcile.ProductionMarkerRejected) as raised:
         record_production_marker(
             "v1.2.3", ROOT, runner=_marker_runner(1, APP_REJECTION)
@@ -413,6 +420,130 @@ def test_production_marker_push_rejected_by_github_app_rule_raises_rejected() ->
     assert str(raised.value) == (
         f"cannot push production marker production/v1.2.3: {APP_REJECTION}"
     )
+
+
+class _FakeApiResponse:
+    def __init__(self, payload: object) -> None:
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> _FakeApiResponse:
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+
+def test_production_marker_api_fallback_creates_ref_when_push_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1511: when git push fails with GitHub App rejection, fall back to Git Data API."""
+    monkeypatch.setenv("GITHUB_TOKEN", "ghs_test_token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "wangzitian0/infra2")
+    requests: list[tuple[str, str, bytes | None]] = []
+
+    def opener(req, timeout=20):  # noqa: ARG001
+        requests.append((req.get_method(), req.full_url, req.data))
+        if req.get_method() == "GET":
+            raise urllib.error.HTTPError(
+                req.full_url, 404, "Not Found", Message(), io.BytesIO(b"")
+            )
+        if req.get_method() == "POST":
+            return _FakeApiResponse(
+                {
+                    "ref": "refs/tags/production/v1.2.3",
+                    "object": {"type": "commit", "sha": "b" * 40},
+                }
+            )
+        raise AssertionError(f"unexpected HTTP call: {req.get_method()} {req.full_url}")
+
+    marker = record_production_marker(
+        "v1.2.3", ROOT, runner=_marker_runner(1, APP_REJECTION), opener=opener
+    )
+
+    assert marker == "production/v1.2.3"
+    assert [r[0] for r in requests] == ["GET", "POST"]
+    assert requests[0][1].endswith(
+        "/repos/wangzitian0/infra2/git/ref/tags/production/v1.2.3"
+    )
+    assert requests[1][1].endswith("/repos/wangzitian0/infra2/git/refs")
+    assert json.loads(requests[1][2].decode("utf-8")) == {
+        "ref": "refs/tags/production/v1.2.3",
+        "sha": "b" * 40,
+    }
+
+
+def test_production_marker_api_fallback_checks_existing_sha_and_fails_on_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1511: GET existing ref is idempotent on same SHA and fails closed on SHA mismatch."""
+    monkeypatch.setenv("GITHUB_TOKEN", "ghs_test_token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "wangzitian0/infra2")
+
+    def matching_opener(req, timeout=20):  # noqa: ARG001
+        assert req.get_method() == "GET"
+        return _FakeApiResponse(
+            {
+                "ref": "refs/tags/production/v1.2.3",
+                "object": {"type": "commit", "sha": "b" * 40},
+            }
+        )
+
+    assert (
+        record_production_marker(
+            "v1.2.3",
+            ROOT,
+            runner=_marker_runner(1, APP_REJECTION),
+            opener=matching_opener,
+        )
+        == "production/v1.2.3"
+    )
+
+    def mismatch_opener(req, timeout=20):  # noqa: ARG001
+        assert req.get_method() == "GET"
+        return _FakeApiResponse(
+            {
+                "ref": "refs/tags/production/v1.2.3",
+                "object": {"type": "commit", "sha": "c" * 40},
+            }
+        )
+
+    with pytest.raises(
+        SystemExit, match="refusing to move immutable production marker"
+    ):
+        record_production_marker(
+            "v1.2.3",
+            ROOT,
+            runner=_marker_runner(1, APP_REJECTION),
+            opener=mismatch_opener,
+        )
+
+
+def test_production_marker_api_fallback_raises_rejected_when_api_also_rejects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1511: raise ProductionMarkerRejected if the Git Data API fallback is also rejected."""
+    monkeypatch.setenv("GITHUB_TOKEN", "ghs_test_token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "wangzitian0/infra2")
+
+    def rejecting_opener(req, timeout=20):  # noqa: ARG001
+        if req.get_method() == "GET":
+            raise urllib.error.HTTPError(
+                req.full_url, 404, "Not Found", Message(), io.BytesIO(b"")
+            )
+        raise urllib.error.HTTPError(
+            req.full_url, 403, "Forbidden", Message(), io.BytesIO(b"")
+        )
+
+    with pytest.raises(reconcile.ProductionMarkerRejected, match="API fallback failed"):
+        record_production_marker(
+            "v1.2.3",
+            ROOT,
+            runner=_marker_runner(1, APP_REJECTION),
+            opener=rejecting_opener,
+        )
 
 
 @pytest.mark.parametrize("stderr", ["network down", "refusing to update this ref"])
@@ -4706,6 +4837,83 @@ def test_sync_app_releases_holds_tag_with_unverified_sdk_version(
     )
     assert ok_res["updates"] == {"finance_report/app": "v0.2.70"}
     assert ok_res["repos_yaml_updated"] is True
+
+
+def test_sync_app_releases_missing_token_sdk_record_fails_not_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """#1733: missing token / SDK record read failure must exit non-zero and leave sdk_held_reason empty."""
+    lock_rel = "uv" + ".lock"
+    sample_lock = (ROOT / lock_rel).read_text(encoding="utf-8")
+
+    repos_yaml = tmp_path / "harness" / "repos.yaml"
+    repos_yaml.parent.mkdir(parents=True, exist_ok=True)
+    repos_yaml.write_text(
+        "schema_version: 1\n"
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    role: external-application\n"
+        "    path: repos/finance_report\n"
+        "    source: https://github.com/wangzitian0/finance_report\n"
+        "    release_tag: v0.2.69\n"
+        "    sdk_lock: apps/backend/" + lock_rel + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.setattr(
+        reconcile,
+        "_query_remote_app_refs",
+        lambda *_a, **_kw: (SHA, {"v0.2.69": "1" * 40, "v0.2.70": SHA}),
+    )
+
+    def _runner(cmd, **_kw):
+        argv = [str(item) for item in cmd]
+        if argv[:2] == ["gh", "api"]:
+            return subprocess.CompletedProcess(argv, 0, stdout=sample_lock, stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    with pytest.raises(ValueError, match="requires repo and token"):
+        reconcile.sync_app_releases(
+            tmp_path,
+            services=("finance_report/app",),
+            create_pr=True,
+            runner=_runner,
+        )
+
+    monkeypatch.setattr(
+        reconcile,
+        "locked_sdk_version_for_app_ref",
+        lambda *_a, **_kw: "3.32.0",
+    )
+    with pytest.raises(ValueError, match="requires repo and token"):
+        main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--sync-app-releases",
+                "--sync-service",
+                "finance_report/app",
+                "--create-pr",
+            ]
+        )
+    assert "sdk_held_reason" not in capsys.readouterr().out
+
+    # Transient SDK record read failure (e.g. malformed JSON / ValueError) also raises instead of holding.
+    monkeypatch.setenv("GITHUB_TOKEN", "ghs_test_token")
+    monkeypatch.setattr(
+        reconcile,
+        "verified_sdk_versions",
+        lambda **_kw: (_ for _ in ()).throw(json.JSONDecodeError("bad json", "{", 1)),
+    )
+    with pytest.raises(json.JSONDecodeError):
+        reconcile.sync_app_releases(
+            tmp_path,
+            services=("finance_report/app",),
+            create_pr=True,
+            runner=_runner,
+        )
 
 
 def test_sync_sdk_pins_holds_app_prs_until_canary_verified(

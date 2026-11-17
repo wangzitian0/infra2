@@ -81,6 +81,50 @@ def production_marker(*, repo_root: str | Path, runner=subprocess.run) -> str:
     )
 
 
+def remote_production_marker(
+    *,
+    repo_root: str | Path,
+    remote: str = "origin",
+    runner=subprocess.run,
+) -> str | None:
+    """Resolve the newest ``production/vX.Y.Z`` marker from ``remote`` (#1559).
+
+    Returns ``None`` when ``remote`` is missing or unreachable so callers can fall
+    back to local git tags in offline unit tests.
+    """
+    try:
+        result = runner(
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "ls-remote",
+                "--tags",
+                remote,
+                f"refs/tags/{PRODUCTION_MARKER_PREFIX}*",
+            ],
+            capture_output=True,
+            text=True,
+        )
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    prefix = f"refs/tags/{PRODUCTION_MARKER_PREFIX}"
+    candidates: list[str] = []
+    for line in result.stdout.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        ref = parts[1].removesuffix("^{}")
+        if not ref.startswith(prefix):
+            continue
+        cleaned = ref.removeprefix(prefix)
+        if RELEASE_TAG_RE.fullmatch(cleaned):
+            candidates.append(cleaned)
+    return max(candidates, key=version_key) if candidates else None
+
+
 @dataclass(frozen=True)
 class MarkerStatus:
     """Where production is pinned, next to the newest release infra2 has cut."""
@@ -176,6 +220,7 @@ __all__ = [
     "marker_status_from_tags",
     "newest_release_tag",
     "production_marker",
+    "remote_production_marker",
     "version_key",
 ]
 
