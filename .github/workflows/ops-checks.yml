@@ -403,6 +403,64 @@ jobs:
           sys.exit(1)
           PY
 
+      # #1448: external liveness heartbeat for ops-checks itself; Cloudflare Worker alerts
+      # if this daily ping is missed beyond maxAgeSeconds (93600 s).
+      - name: Ping Cloudflare watchdog scheduler heartbeat (#1448)
+        if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) && (github.event_name == 'schedule' || github.ref == 'refs/heads/main') }}
+        env:
+          INFRA2_WATCHDOG_HEARTBEAT_URL: ${{ vars.INFRA2_WATCHDOG_HEARTBEAT_URL }}
+          INFRA2_WATCHDOG_HEARTBEAT_TOKEN: ${{ secrets.INFRA2_WATCHDOG_HEARTBEAT_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json, os, sys, time, urllib.error, urllib.request
+
+          DEFAULT_URL = "https://infra2-cloudflare-watchdog.wangzitian-ai.workers.dev/heartbeat"
+          url = (os.environ.get("INFRA2_WATCHDOG_HEARTBEAT_URL") or "").strip()
+          if not url:
+              status_url = (os.environ.get("INFRA2_WATCHDOG_WORKER_STATUS_URL") or "").strip()
+              if status_url.endswith("/status"):
+                  url = status_url[: -len("/status")] + "/heartbeat"
+              else:
+                  url = DEFAULT_URL
+          token = (os.environ.get("INFRA2_WATCHDOG_HEARTBEAT_TOKEN") or "").strip()
+          if not token:
+              print("::error::INFRA2_WATCHDOG_HEARTBEAT_TOKEN is missing; cannot send ops-checks scheduler heartbeat.", file=sys.stderr)
+              sys.exit(1)
+
+          payload = json.dumps({
+              "env": "production",
+              "name": "ops-checks-scheduler",
+              "ok": True,
+              "detail": "ops-checks watchdog scheduler tick",
+              "timestamp": int(time.time()),
+          }).encode("utf-8")
+          request = urllib.request.Request(
+              url,
+              data=payload,
+              headers={
+                  "Authorization": f"Bearer {token}",
+                  "Content-Type": "application/json",
+                  "User-Agent": "infra2-ops-checks/1.0",
+              },
+              method="POST",
+          )
+          last_error = ""
+          for attempt in range(1, 4):
+              try:
+                  with urllib.request.urlopen(request, timeout=15) as response:
+                      body = response.read(512).decode("utf-8", errors="replace")
+                      if 200 <= response.status < 300:
+                          print(f"ops-checks scheduler heartbeat sent (HTTP {response.status}): {body}")
+                          sys.exit(0)
+                      last_error = f"HTTP {response.status}: {body}"
+              except (urllib.error.URLError, OSError) as exc:
+                  last_error = str(exc)
+              if attempt < 3:
+                  time.sleep(5)
+          print(f"::error::ops-checks scheduler heartbeat failed after 3 attempts: {last_error}", file=sys.stderr)
+          sys.exit(1)
+          PY
+
       # truealpha#876 W4: Feishu alone left no record that the 2026-09-16
       # cloudflare-worker-status incident (run 35048603264) was seen or that it ended.
       # One issue per red check (exact title; comment while it stays red), closed by the

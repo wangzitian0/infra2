@@ -96,16 +96,16 @@ def _names(message: str, section: str) -> list[str]:
 
 
 @needs_node
-def test_a_quiet_run_is_three_gets_two_reads_one_write_and_the_deadman(world) -> None:
+def test_a_quiet_run_is_three_gets_three_reads_one_write_and_the_deadman(world) -> None:
     quiet = world["quiet"]
     assert quiet["error"] is None
     assert quiet["fetched"] == [
         *_entrypoint_urls(),
         "https://hc-ping.com/test-worker-check",
     ]
-    assert (quiet["kvGets"], quiet["kvPuts"], quiet["kvDeletes"]) == (2, 1, 0)
+    assert (quiet["kvGets"], quiet["kvPuts"], quiet["kvDeletes"]) == (3, 1, 0)
     assert quiet["putKeys"] == ["watchdog:last-run"]
-    assert quiet["subrequests"] == 7
+    assert quiet["subrequests"] == 8
     assert quiet["messages"] == []
 
 
@@ -428,12 +428,12 @@ def test_a_feishu_outage_escalates_to_email(world) -> None:
     (email,) = escalation["messages"]
     assert email.startswith("EMAIL 🔴 [P0 告警] Cloudflare 带外 watchdog")
     assert "primary Feishu delivery failed" in email
-    # token refused, email sent: 7 + token + email
-    assert escalation["subrequests"] == 9
-    # the dearest run of all: token ok, send refused, email sent -- still within 10
+    # token refused, email sent: 8 + token + email
+    assert escalation["subrequests"] == 10
+    # the dearest run of all: token ok, send refused, email sent
     assert escalation["sendFailedError"] is None
     assert escalation["sendFailedMessages"] == 1
-    assert escalation["sendFailedSubrequests"] == 10
+    assert escalation["sendFailedSubrequests"] == 11
 
 
 # ---- read endpoints ----------------------------------------------------------------
@@ -449,7 +449,7 @@ def test_status_reports_the_workers_own_health_not_the_targets(world) -> None:
     last_run = status["lastRun"]
     assert last_run["ok"] is True
     assert last_run["routeTargetCount"] == 3
-    assert last_run["heartbeatTargetCount"] == 2
+    assert last_run["heartbeatTargetCount"] == 3
     assert last_run["failureCount"] == 1
     assert last_run["activeAlertCount"] == 1
     assert status["staleOk"] is False
@@ -477,7 +477,7 @@ def test_status_stays_far_inside_githubs_16384_byte_read(world) -> None:
     """#911 review: every served text is cut, even from records stored untrimmed."""
     size = world["statusSize"]
     assert size["status"] == 200
-    assert size["bytes"] < 3072
+    assert size["bytes"] < 4096
     # a runner cannot store more than 300 characters of detail
     assert size["storedDetailLength"] == 300
     assert size["storedRoutes"] == 32
@@ -697,6 +697,7 @@ def test_every_runbook_the_worker_links_resolves(world) -> None:
     messages = [
         *world["entrypointDown"][1]["messages"],
         *world["vpsDown"]["messages"],
+        *world["opsChecksMissed"]["firing"],
         *world["loopUnhealthy"]["messages"][1],
         *world["configBroken"]["messages"],
     ]
@@ -715,6 +716,9 @@ def test_every_runbook_the_worker_links_resolves(world) -> None:
         ),
         ("host-reachability", "platform-alerting-probes"): (
             f"{BLOB}/docs/runbooks/infra022-p0.md#watchdog-silent"
+        ),
+        ("ops-scheduler", "ops-checks-scheduler"): (
+            f"{BLOB}/docs/ssot/ops.observability.md#sop-005b-github-兜底带外-watchdog日级"
         ),
         ("alert-pipeline", "platform-alerting-probes"): (
             f"{BLOB}/platform/12.alerting/README.md#infra-service-probes"
@@ -745,6 +749,8 @@ def test_worker_prose_is_chinese(world) -> None:
         *world["entrypointDown"][4]["messages"],
         *world["networkError"],
         *world["vpsDown"]["messages"],
+        *world["opsChecksMissed"]["firing"],
+        *world["opsChecksMissed"]["recovered"],
         *world["loopUnhealthy"]["messages"][1],
         *world["loopUnhealthy"]["messages"][4],
         *world["configBroken"]["messages"],
@@ -899,3 +905,23 @@ def test_evaluate_heartbeat_marks_stale_delivery_proof_unhealthy() -> None:
         assert out[key]["reason"] == "delivery proof stale"
         assert out[key]["failureClass"] == "alert-pipeline"
     assert out["persistedLoop"]["lastDeliveryOkAt"] == 1800000000 - 4000
+
+
+@needs_node
+def test_ops_checks_scheduler_missed_ping_pages_p0_and_recovers(world) -> None:
+    """#1448: when ops-checks misses its daily heartbeat past maxAgeSeconds (93600 s),
+    the Worker pages P0 ops-scheduler and resolves once POST /heartbeat refreshes it."""
+    missed = world["opsChecksMissed"]
+    (firing,) = missed["firing"]
+    page = _block(firing, "firing", "ops-checks-scheduler")
+    assert (page["级别"], page["环境"], page["对象"]) == (
+        "P0",
+        "production",
+        "infra/github · ops-checks-scheduler",
+    )
+    assert page["现象"].startswith("`ops-checks` 定时调度未按期心跳 — 心跳过期:")
+    assert page["影响"].startswith("[ops-scheduler] ")
+    assert missed["posted"]["persisted"] is True
+    (recovered,) = missed["recovered"]
+    block = _block(recovered, "resolved", "ops-checks-scheduler")
+    assert block["现象"].startswith("心跳恢复新鲜(")

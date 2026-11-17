@@ -182,3 +182,197 @@ def test_ops_checks_audit_job_runs_all_deploy_guards_before_scheduled_app_hooks(
     alert_step = audit_steps[alert_idx]
     assert "dedup_page(" in alert_step["run"]
     assert "confirmed_finding_pairs(" in alert_step["run"]
+
+
+def test_ops_checks_watchdog_emits_scheduler_heartbeat_and_worker_alerts_when_missed(
+    tmp_path: Path,
+) -> None:
+    """#1448 (Mutation evidence): ops-checks.yml watchdog emits the scheduler heartbeat
+    POST /heartbeat, and cloudflare/infra-watchdog/worker.js accepts it, stays quiet
+    while fresh, pages P0 ops-scheduler when missed past 93600s, and resolves on recovery.
+    Removing the ping step or breaking its payload/token fails this test."""
+    import json
+    import os
+    import shutil
+    import subprocess
+    import sys
+    import textwrap
+    import threading
+    import tomllib
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    import pytest
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    watchdog_job = workflow["jobs"]["watchdog"]
+    steps = watchdog_job["steps"]
+    names = [step.get("name") for step in steps]
+    step_name = "Ping Cloudflare watchdog scheduler heartbeat (#1448)"
+    assert step_name in names, f"{step_name!r} missing from ops-checks.yml watchdog"
+    assert names.index(step_name) < names.index("Record the verdicts as GitHub issues")
+    ping_step = steps[names.index(step_name)]
+    assert "dry_run" in ping_step["if"] and "!cancelled()" in ping_step["if"]
+    assert (
+        ping_step["env"]["INFRA2_WATCHDOG_HEARTBEAT_TOKEN"]
+        == "${{ secrets.INFRA2_WATCHDOG_HEARTBEAT_TOKEN }}"
+    )
+
+    run_script = ping_step["run"]
+    marker = "python - <<'PY'\n"
+    assert marker in run_script and "\nPY" in run_script
+    python_src = textwrap.dedent(run_script.split(marker, 1)[1].rsplit("\nPY", 1)[0])
+
+    captured: list[dict] = []
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            raw = self.rfile.read(length).decode("utf-8")
+            captured.append(
+                {
+                    "path": self.path,
+                    "auth": self.headers.get("Authorization"),
+                    "body": json.loads(raw),
+                }
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"ok":true,"persisted":true}')
+
+        def log_message(self, *_args):
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = server.server_address[1]
+        proc = subprocess.run(
+            [sys.executable, "-c", python_src],
+            env={
+                **os.environ,
+                "INFRA2_WATCHDOG_HEARTBEAT_URL": f"http://127.0.0.1:{port}/heartbeat",
+                "INFRA2_WATCHDOG_HEARTBEAT_TOKEN": "test-hb-token",
+            },
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr + proc.stdout
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert len(captured) == 1
+    req = captured[0]
+    assert req["path"] == "/heartbeat"
+    assert req["auth"] == "Bearer test-hb-token"
+    assert req["body"]["env"] == "production"
+    assert req["body"]["name"] == "ops-checks-scheduler"
+    assert req["body"]["ok"] is True
+
+    worker_mjs = tmp_path / "worker.mjs"
+    worker_mjs.write_text(
+        (ROOT / "cloudflare/infra-watchdog/worker.js").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    wrangler_vars = tomllib.loads(
+        (ROOT / "cloudflare/infra-watchdog/wrangler.toml").read_text(encoding="utf-8")
+    )["vars"]
+    card_text_js = (ROOT / "common/tests/fixtures/watchdog_card_text.mjs").as_uri()
+    driver = f"""
+    import worker from {json.dumps(worker_mjs.as_uri())};
+    import {{ cardText }} from {json.dumps(card_text_js)};
+    const vars = {json.dumps(wrangler_vars)};
+    const payload = {json.dumps(req["body"])};
+    const kv = new Map();
+    const messages = [];
+    let clock = 1790208000000;
+    Date.now = () => clock;
+    console.log = () => {{}};
+    globalThis.fetch = async (input, init = {{}}) => {{
+      const u = String(input);
+      if (u.startsWith("https://feishu.invalid/")) {{
+        messages.push(cardText(JSON.parse(init.body).card));
+        return new Response("ok", {{ status: 200 }});
+      }}
+      return new Response("ok", {{ status: 200 }});
+    }};
+    const env = {{
+      ...vars,
+      ALERT_DELIVERY_MODE: "feishu_webhook",
+      FEISHU_WEBHOOK_URL: "https://feishu.invalid/hook",
+      HEARTBEAT_TOKEN: "test-hb-token",
+      WATCHDOG_DEADMAN_PING_URL: "https://hc-ping.com/test",
+      WATCHDOG_STATE: {{
+        async get(k) {{ return kv.has(k) ? kv.get(k) : null; }},
+        async put(k, v) {{ kv.set(k, v); }},
+        async delete(k) {{ kv.delete(k); }},
+      }},
+    }};
+    const seedRunners = (at) => {{
+      for (const [k, e] of [
+        ["heartbeat:production:platform-alerting-probes", "production"],
+        ["heartbeat:staging:platform-alerting-probes-staging", "staging"],
+      ]) {{
+        kv.set(k, JSON.stringify({{ environment: e, ok: true, schema: 2, receivedAt: at - 60000, failingPublicRoutes: [], lastDeliveryOkAt: Math.floor(at / 1000) }}));
+      }}
+    }};
+    const postBeat = async () => {{
+      const r = await worker.fetch(new Request("https://w.invalid/heartbeat", {{
+        method: "POST",
+        headers: {{ Authorization: "Bearer test-hb-token", "Content-Type": "application/json" }},
+        body: JSON.stringify({{ ...payload, timestamp: Math.floor(clock / 1000) }}),
+      }}), env);
+      return r.json();
+    }};
+    const runCron = async () => {{
+      const before = messages.length;
+      const p = [];
+      await worker.scheduled({{ scheduledTime: clock }}, env, {{ waitUntil: (x) => p.push(x) }});
+      await Promise.all(p);
+      return messages.slice(before);
+    }};
+
+    const firstPost = await postBeat();
+    clock += 3600 * 1000;
+    seedRunners(clock);
+    const freshMsgs = await runCron();
+
+    clock += 91000 * 1000;
+    seedRunners(clock);
+    const missedMsgs = await runCron();
+
+    clock += 60 * 1000;
+    const recoverPost = await postBeat();
+    clock += 1800 * 1000;
+    seedRunners(clock);
+    const recoveredMsgs = await runCron();
+
+    console.log = process.stdout.write.bind(process.stdout);
+    process.stdout.write(JSON.stringify({{ firstPost, freshMsgs, missedMsgs, recoverPost, recoveredMsgs }}));
+    """
+    res = subprocess.run(
+        [node, "--input-type=module", "-e", driver],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    assert out["firstPost"]["persisted"] is True
+    assert out["freshMsgs"] == []
+    assert len(out["missedMsgs"]) == 1
+    assert "infra/github · ops-checks-scheduler" in out["missedMsgs"][0]
+    assert "[ops-scheduler]" in out["missedMsgs"][0]
+    assert out["recoverPost"]["persisted"] is True
+    assert len(out["recoveredMsgs"]) == 1
+    assert "✅ [已恢复]" in out["recoveredMsgs"][0]
+    assert "ops-checks-scheduler" in out["recoveredMsgs"][0]

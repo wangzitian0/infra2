@@ -53,6 +53,10 @@ for (const [label, beat] of Object.entries(beats)) {
   try {
     const { failing_route_under_test: _unused, ...body } = beat;
     clock = body.timestamp * 1000;
+    map.set(
+      "heartbeat:production:ops-checks-scheduler",
+      JSON.stringify({ ok: true, detail: "ops-checks fresh", receivedAt: clock }),
+    );
     const response = await worker.fetch(
       new Request("https://watchdog.invalid/heartbeat", {
         method: "POST",
