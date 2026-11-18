@@ -115,9 +115,12 @@ from common.gate import (
     thread_weight,
 )
 
+from common.gate.types import BLOCKING_CLOSING_ISSUE_LABELS
+
 __all__ = [
     "ABSENT",
     "AUTOMATED_REVIEWERS",
+    "BLOCKING_CLOSING_ISSUE_LABELS",
     "BLOCKING_SEVERITY_TOTAL",
     "COPILOT_BOT_ID",
     "DEFAULT_REPO",

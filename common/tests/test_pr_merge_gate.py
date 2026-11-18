@@ -3431,3 +3431,282 @@ def test_no_exit_path_labels_a_non_production_pr_owner():
         assert verdict.exit_code != EXIT_OWNER, (facts, verdict.reasons)
         assert not verdict.owner_required, (facts, verdict.reasons)
         assert "needs the owner" not in gate.render(facts, verdict)
+
+
+# --- #1545: closing-issue label protection -----------------------------------
+
+
+_UNSET_CLOSING_REFS = object()
+
+
+class _ClosingIssueGh(_Gh):
+    def __init__(
+        self,
+        *,
+        closing_refs=None,
+        closing_refs_block=_UNSET_CLOSING_REFS,
+        graphql_errors=None,
+        issue_labels=None,
+        issue_error=None,
+        **kw,
+    ):
+        super().__init__(**kw)
+        self.closing_refs = closing_refs if closing_refs is not None else []
+        self.closing_refs_block = closing_refs_block
+        self.graphql_errors = graphql_errors
+        self.issue_labels = issue_labels or {}
+        self.issue_error = issue_error
+
+    def __call__(self, argv):
+        argv_list = list(argv)
+        if (
+            argv_list[:2] == ["api", "graphql"]
+            and "closingIssuesReferences" in argv_list[3]
+        ):
+            self.calls.append(argv_list)
+            block = (
+                {"pageInfo": {"hasNextPage": False}, "nodes": self.closing_refs}
+                if self.closing_refs_block is _UNSET_CLOSING_REFS
+                else self.closing_refs_block
+            )
+            payload = {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "closingIssuesReferences": block,
+                            "reviewThreads": {"totalCount": 0, "nodes": []},
+                        }
+                    }
+                }
+            }
+            if self.graphql_errors is not None:
+                payload["errors"] = self.graphql_errors
+            return json.dumps(payload)
+        if argv_list[:1] == ["api"] and "/issues/" in argv_list[1]:
+            self.calls.append(argv_list)
+            if self.issue_error is not None:
+                raise self.issue_error
+            issue_num = int(argv_list[1].rsplit("/", 1)[-1])
+            labels = self.issue_labels.get(issue_num, [])
+            return json.dumps(
+                {"number": issue_num, "labels": [{"name": name} for name in labels]}
+            )
+        return super().__call__(argv)
+
+
+@pytest.mark.parametrize(
+    "keyword_ref",
+    [
+        "Closes #1545",
+        "Closes: #1545",
+        "Fixes #1545",
+        "Resolves #1545",
+        "closes wangzitian0/infra2#1545",
+        "Fixes https://github.com/wangzitian0/infra2/issues/1545",
+        "fixed #1545",
+    ],
+)
+@pytest.mark.parametrize("blocking_label", ["needs-prod-proof", "prod-pending"])
+def test_closing_issue_with_blocking_label_blocks_merge(keyword_ref, blocking_label):
+    """#1545: Closes|Fixes|Resolves #N blocks merge (ACT) when #N carries prod-pending or needs-prod-proof."""
+    # Path 1: GraphQL closingIssuesReferences reports the issue and its labels.
+    gh_graphql = _ClosingIssueGh(
+        body=keyword_ref,
+        closing_refs=[
+            {"number": 1545, "labels": {"nodes": [{"name": blocking_label}]}}
+        ],
+    )
+    facts_gql = gate.collect(704, gh=gh_graphql)
+    verdict_gql = gate.evaluate(facts_gql, now=READY_AT)
+    assert not verdict_gql.ready
+    assert verdict_gql.exit_code == 3
+    assert verdict_gql.outcome == "action"
+    assert verdict_gql.action_required is True
+    assert not verdict_gql.owner_required
+    assert any("#1545" in r and blocking_label in r for r in verdict_gql.reasons), (
+        verdict_gql.reasons
+    )
+
+    # Path 2: Body fallback via REST when GraphQL closingIssuesReferences omits the issue.
+    gh_rest = _ClosingIssueGh(
+        body=f"Summary\n\n{keyword_ref}",
+        closing_refs=[],
+        issue_labels={1545: [blocking_label]},
+    )
+    facts_rest = gate.collect(704, gh=gh_rest)
+    assert any("/issues/1545" in c[1] for c in gh_rest.calls if len(c) > 1)
+    verdict_rest = gate.evaluate(facts_rest, now=READY_AT)
+    assert not verdict_rest.ready
+    assert verdict_rest.exit_code == 3
+    assert verdict_rest.outcome == "action"
+    assert any("#1545" in r and blocking_label in r for r in verdict_rest.reasons), (
+        verdict_rest.reasons
+    )
+
+
+def test_sidebar_or_commit_linked_closing_issue_without_body_keyword_blocks_merge():
+    """#1545: GraphQL closingIssuesReferences blocks merge even with no closing keyword in body."""
+    gh = _ClosingIssueGh(
+        body="Commit message linked the issue, body mentions nothing.",
+        closing_refs=[
+            {"number": 1545, "labels": {"nodes": [{"name": "prod-pending"}]}}
+        ],
+    )
+    facts = gate.collect(704, gh=gh)
+    assert not any("/issues/" in c[1] for c in gh.calls if len(c) > 1)
+    verdict = gate.evaluate(facts, now=READY_AT)
+    assert not verdict.ready
+    assert verdict.exit_code == 3
+    assert verdict.outcome == "action"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Refs #1545",
+        "Refs #1644\nCloses other/repo#1545",
+        "Closes https://github.com/other/repo/issues/1545",
+        "Example: `Closes #1545`",
+        "```markdown\nFixes #1545\n```",
+        "This PR closes\n#1545 in prose across lines",
+    ],
+)
+def test_refs_keyword_passes_even_when_issue_has_blocking_label(body):
+    """#1545: Refs #N, cross-repo refs, code spans, and newline prose must not block merge."""
+    gh = _ClosingIssueGh(
+        body=body,
+        closing_refs=[],
+        issue_labels={1545: ["prod-pending", "needs-prod-proof"]},
+    )
+    facts = gate.collect(704, gh=gh)
+    assert facts.closing_issue_labels == ()
+    assert facts.closing_issue_read_error == ""
+    assert not any("/issues/" in c[1] for c in gh.calls if len(c) > 1)
+    verdict = gate.evaluate(facts, now=READY_AT)
+    assert verdict.ready
+    assert verdict.exit_code == 0
+    assert verdict.outcome == "ready"
+
+
+def test_closing_issue_with_non_blocking_labels_passes():
+    """#1545: Closing an issue without needs-prod-proof or prod-pending passes cleanly."""
+    gh = _ClosingIssueGh(
+        body="Closes #1545",
+        closing_refs=[
+            {"number": 1545, "labels": {"nodes": [{"name": "bug"}, {"name": "infra"}]}}
+        ],
+    )
+    facts = gate.collect(704, gh=gh)
+    verdict = gate.evaluate(facts, now=READY_AT)
+    assert verdict.ready
+    assert verdict.exit_code == 0
+
+
+def test_unreadable_closing_issue_labels_fails_closed_as_unevaluable():
+    """#1545: Unreadable or truncated closing-issue labels fail closed as UNEVALUABLE (exit 4)."""
+    gh = _ClosingIssueGh(
+        body="Fixes #1545",
+        closing_refs=[],
+        issue_error=RuntimeError(
+            "gh api repos/wangzitian0/infra2/issues/1545: HTTP 502"
+        ),
+    )
+    facts = gate.collect(704, gh=gh)
+    assert "#1545" in facts.closing_issue_read_error
+    verdict = gate.evaluate(facts, now=READY_AT)
+    assert not verdict.ready
+    assert verdict.exit_code == 4
+    assert verdict.outcome == "unevaluable"
+    assert verdict.unevaluable is True
+
+    # Malformed GraphQL closingIssuesReferences node, explicit null, errors, and truncation fail closed.
+    bad_gql_cases = [
+        _ClosingIssueGh(
+            body="Refs #1545", closing_refs=[{"number": 1545, "labels": None}]
+        ),
+        _ClosingIssueGh(
+            body="Refs #1545",
+            closing_refs=[{"number": 1545, "labels": {"nodes": ["bad-label"]}}],
+        ),
+        _ClosingIssueGh(body="Refs #1545", closing_refs_block=None),
+        _ClosingIssueGh(
+            body="Refs #1545",
+            closing_refs_block={
+                "pageInfo": {"hasNextPage": True},
+                "nodes": [],
+            },
+        ),
+        _ClosingIssueGh(
+            body="Refs #1545",
+            closing_refs=[
+                {
+                    "number": 1545,
+                    "labels": {"pageInfo": {"hasNextPage": True}, "nodes": []},
+                }
+            ],
+        ),
+        _ClosingIssueGh(
+            body="Refs #1545",
+            graphql_errors=[{"message": "partial failure"}],
+        ),
+    ]
+    for gh_bad in bad_gql_cases:
+        facts_bad = gate.collect(704, gh=gh_bad)
+        assert facts_bad.closing_issue_read_error, facts_bad
+        verdict_bad = gate.evaluate(facts_bad, now=READY_AT)
+        assert verdict_bad.exit_code == 4
+        assert verdict_bad.outcome == "unevaluable"
+
+
+def test_replay_evaluate_script_ignores_unknown_head_facts_fields():
+    """#1545 / #1653: replay _EVALUATE_SCRIPT filters unknown future HeadFacts fields without dropping known ones."""
+    import dataclasses
+    import subprocess
+    import sys
+
+    from common.gate.replay import _EVALUATE_SCRIPT
+
+    ready_facts = _facts()
+    blocked_facts = _facts(closing_issue_labels=((1545, ("prod-pending",)),))
+    payload = json.dumps(
+        {
+            "policy": "either",
+            "items": [
+                {
+                    "facts": {
+                        **{
+                            f.name: getattr(ready_facts, f.name)
+                            for f in dataclasses.fields(ready_facts)
+                        },
+                        "future_unknown_field": [["nested", 1]],
+                    },
+                    "now": NOW,
+                },
+                {
+                    "facts": {
+                        **{
+                            f.name: getattr(blocked_facts, f.name)
+                            for f in dataclasses.fields(blocked_facts)
+                        },
+                        "future_unknown_field": [["nested", 2]],
+                    },
+                    "now": NOW,
+                },
+            ],
+        }
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", _EVALUATE_SCRIPT],
+        cwd=ROOT,
+        input=payload,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    line = next(x for x in proc.stdout.splitlines() if x.startswith("REPLAY_VERDICTS "))
+    verdicts = json.loads(line.removeprefix("REPLAY_VERDICTS "))
+    assert len(verdicts) == 2
+    assert verdicts[0]["exit_code"] == 0
+    assert verdicts[0]["ready"] is True
+    assert verdicts[1]["exit_code"] == 3
+    assert verdicts[1]["ready"] is False

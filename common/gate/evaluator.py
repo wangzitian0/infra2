@@ -25,6 +25,7 @@ from common.gate.types import (
     ABSENT,
     ACT,
     AUTOMATED_REVIEWERS,
+    BLOCKING_CLOSING_ISSUE_LABELS,
     BLOCKING_SEVERITY_TOTAL,
     GREEN_BUCKETS,
     GREEN_STATES,
@@ -528,6 +529,24 @@ def _check_settling_window(
     return remaining
 
 
+def _check_closing_issues(facts: HeadFacts, reasons: Reasons) -> None:
+    """Block premature closing of issues carrying prod-pending or needs-prod-proof (#1545)."""
+    if facts.closing_issue_read_error:
+        reasons.append(
+            f"could not read closing issue labels: {facts.closing_issue_read_error}",
+            UNEVALUABLE,
+        )
+    for issue_number, labels in facts.closing_issue_labels:
+        blocking = sorted(set(labels) & BLOCKING_CLOSING_ISSUE_LABELS)
+        if blocking:
+            reasons.append(
+                f"PR closes #{issue_number} which carries blocking label(s) "
+                f"({', '.join(blocking)}): use 'Refs #{issue_number}' instead of "
+                "a closing keyword until production proof is complete",
+                ACT,
+            )
+
+
 def evaluate(
     facts: HeadFacts,
     *,
@@ -554,7 +573,10 @@ def evaluate(
     # Step 4: Review threads and decision
     _check_reviews(facts, reasons)
 
-    # Step 5: Settling window
+    # Step 5: Closing issue label protection (#1545)
+    _check_closing_issues(facts, reasons)
+
+    # Step 6: Settling window
     remaining = _check_settling_window(
         facts,
         now=now,

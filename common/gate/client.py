@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from collections.abc import Sequence
@@ -24,6 +25,7 @@ from common.gate.types import (
     _epoch,
     _get_subprocess,
     _is_local_root_repo,
+    _repo_slug,
 )
 
 
@@ -273,6 +275,121 @@ def _pr_comments(block: object) -> tuple[tuple[str, float], ...]:
     return tuple(found)
 
 
+_FENCED_CODE_RE = re.compile(r"(?ms)^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?^[ \t]*\1[ \t]*$")
+_INLINE_CODE_RE = re.compile(r"(`+)[^\n]+?\1")
+_CLOSING_KEYWORD_RE = re.compile(
+    r"\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)"
+    r"(?:[ \t]*:[ \t]*|[ \t]+)"
+    r"(?:"
+    r"https?://github\.com/([\w.-]+/[\w.-]+)/issues/(\d+)"
+    r"|"
+    r"(?:([\w.-]+/[\w.-]+))?#(\d+)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_markdown_code(text: str) -> str:
+    """Remove fenced code blocks and inline code spans before scanning PR body."""
+    cleaned = _FENCED_CODE_RE.sub("", text or "")
+    return _INLINE_CODE_RE.sub("", cleaned)
+
+
+def _closing_issues_from_graphql(
+    block: object, *, present: bool = True
+) -> tuple[dict[int, tuple[str, ...]], str]:
+    """Extract {issue_number: (label, ...)} from GraphQL closingIssuesReferences."""
+    if not present:
+        return {}, ""
+    if block is None:
+        return {}, "closingIssuesReferences is null"
+    if not isinstance(block, dict):
+        return {}, "closingIssuesReferences is not an object"
+    page_info = block.get("pageInfo")
+    if page_info is not None and (
+        not isinstance(page_info, dict) or bool(page_info.get("hasNextPage"))
+    ):
+        return {}, "closingIssuesReferences truncated (hasNextPage=true)"
+    nodes = block.get("nodes")
+    if not isinstance(nodes, list):
+        return {}, "closingIssuesReferences.nodes is missing or not a list"
+    found: dict[int, tuple[str, ...]] = {}
+    for node in nodes:
+        if not isinstance(node, dict):
+            return {}, "closingIssuesReferences node is not an object"
+        number = node.get("number")
+        if not isinstance(number, int) or isinstance(number, bool):
+            return {}, "closingIssuesReferences node missing integer number"
+        labels_block = node.get("labels")
+        if not isinstance(labels_block, dict) or not isinstance(
+            labels_block.get("nodes"), list
+        ):
+            return {}, f"closingIssuesReferences #{number} labels unreadable"
+        labels_page_info = labels_block.get("pageInfo")
+        if labels_page_info is not None and (
+            not isinstance(labels_page_info, dict)
+            or bool(labels_page_info.get("hasNextPage"))
+        ):
+            return (
+                {},
+                f"closingIssuesReferences #{number} labels truncated (hasNextPage=true)",
+            )
+        names: set[str] = set()
+        for lbl in labels_block["nodes"]:
+            if (
+                not isinstance(lbl, dict)
+                or not isinstance(lbl.get("name"), str)
+                or not lbl["name"]
+            ):
+                return (
+                    {},
+                    f"closingIssuesReferences #{number} contains malformed label entry",
+                )
+            names.add(lbl["name"])
+        found[number] = tuple(sorted(names))
+    return found, ""
+
+
+def _body_closing_issue_numbers(body_text: str, repo: str) -> tuple[int, ...]:
+    """Same-repo issue numbers referenced with an explicit closing keyword in body."""
+    target_slug = _repo_slug(repo).casefold()
+    numbers: list[int] = []
+    seen: set[int] = set()
+    cleaned = _strip_markdown_code(body_text)
+    for match in _CLOSING_KEYWORD_RE.finditer(cleaned):
+        url_repo, url_num, short_repo, short_num = match.groups()
+        ref_repo = url_repo or short_repo
+        raw_num = url_num or short_num
+        if ref_repo and _repo_slug(ref_repo).casefold() != target_slug:
+            continue
+        num = int(raw_num)
+        if num not in seen:
+            seen.add(num)
+            numbers.append(num)
+    return tuple(numbers)
+
+
+def _issue_labels(
+    repo: str, number: int, *, gh: Runner
+) -> tuple[tuple[str, ...] | None, str]:
+    """Fetch labels for one issue via REST API; return (labels, error)."""
+    try:
+        payload = json.loads(gh(["api", f"repos/{repo}/issues/{number}"]))
+    except (RuntimeError, json.JSONDecodeError) as exc:
+        return None, f"issue #{number}: {exc}"
+    if not isinstance(payload, dict) or not isinstance(payload.get("labels"), list):
+        return None, f"issue #{number}: unexpected response shape"
+    names: set[str] = set()
+    for lbl in payload["labels"]:
+        if isinstance(lbl, dict) and isinstance(lbl.get("name"), str) and lbl["name"]:
+            names.add(lbl["name"])
+        elif isinstance(lbl, str) and lbl:
+            names.add(lbl)
+        else:
+            return None, f"issue #{number}: malformed label entry"
+    return tuple(sorted(names)), ""
+
+
 def collect(
     number: int, *, repo: str = DEFAULT_REPO, gh: Runner | None = None
 ) -> HeadFacts:
@@ -318,6 +435,7 @@ def collect(
                 "query=query{repository(owner:%s,name:%s){pullRequest(number:%d)"
                 "{author{__typename login} "
                 "comments(last:%d){nodes{body createdAt lastEditedAt}} "
+                "closingIssuesReferences(first:20){pageInfo{hasNextPage} nodes{number labels(first:20){pageInfo{hasNextPage} nodes{name}}}} "
                 "reviewThreads(first:%d){totalCount nodes{isResolved "
                 "comments(first:%d){nodes{body}}}}}}}"
                 % (
@@ -376,6 +494,25 @@ def collect(
     )
     comments = _pr_comments(pull.get("comments"))
     body_text = str(view.get("body") or "")
+    closing_map, closing_err = _closing_issues_from_graphql(
+        pull.get("closingIssuesReferences"),
+        present="closingIssuesReferences" in pull,
+    )
+    closing_errors: list[str] = []
+    if threads.get("errors"):
+        closing_errors.append(f"GraphQL errors: {threads['errors']}"[:200])
+    if closing_err:
+        closing_errors.append(closing_err)
+    for issue_num in _body_closing_issue_numbers(body_text, repo):
+        if issue_num in closing_map:
+            continue
+        labels, err = _issue_labels(repo, issue_num, gh=gh)
+        if err:
+            closing_errors.append(err)
+        elif labels is not None:
+            closing_map[issue_num] = labels
+    closing_issue_labels = tuple((num, closing_map[num]) for num in sorted(closing_map))
+    closing_issue_read_error = "; ".join(closing_errors)
     cited_shas = _cited_approved_shas(body_text, comments)
     owner_login = owner.casefold()
     owner_approved_oids = tuple(
@@ -410,6 +547,8 @@ def collect(
             lock_failures=lock,
             head_tree_sha=head_tree_sha,
             approved_tree_shas=approved_tree_shas,
+            closing_issue_labels=closing_issue_labels,
+            closing_issue_read_error=closing_issue_read_error,
             number=int(view["number"]),
             state=str(view.get("state") or ""),
             draft=bool(view.get("isDraft")),
