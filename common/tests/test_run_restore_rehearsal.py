@@ -510,7 +510,9 @@ def test_default_fallback_rehearsal_invariants_pass_restore_scalar_check(
 
 def test_truealpha_rehearsal_invariants_support_slice3_and_slice4_relations() -> None:
     """Restore invariants accept both legacy topt_* and converged Slice 3/4 relations."""
-    invariants = " ".join(_build_rehearsal_invariants("truealpha/postgres", "truealpha"))
+    invariants = " ".join(
+        _build_rehearsal_invariants("truealpha/postgres", "truealpha")
+    )
     assert "to_regclass('mart.capture_status') IS NOT NULL" in invariants
     assert "FROM mart.capture_status WHERE complete = true" in invariants
     assert "FROM mart.topt_capture_status WHERE complete = true" in invariants
@@ -550,7 +552,9 @@ def test_truealpha_collect_rehearsal_evidence_switches_on_regclass() -> None:
             raise AssertionError(f"unexpected SQL: {sql}")
         return result
 
-    with patch("tools.run_restore_rehearsal.subprocess.run", side_effect=fake_run_post_slice4):
+    with patch(
+        "tools.run_restore_rehearsal.subprocess.run", side_effect=fake_run_post_slice4
+    ):
         tables, size_bytes, stats = _collect_rehearsal_evidence(
             "ta-rehearsal", "postgres", "truealpha", "truealpha/postgres"
         )
@@ -589,7 +593,9 @@ def test_truealpha_collect_rehearsal_evidence_switches_on_regclass() -> None:
             raise AssertionError(f"unexpected SQL: {sql}")
         return result
 
-    with patch("tools.run_restore_rehearsal.subprocess.run", side_effect=fake_run_legacy):
+    with patch(
+        "tools.run_restore_rehearsal.subprocess.run", side_effect=fake_run_legacy
+    ):
         tables_l, size_l, stats_l = _collect_rehearsal_evidence(
             "ta-rehearsal", "postgres", "truealpha", "truealpha/postgres"
         )

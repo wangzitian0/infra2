@@ -168,7 +168,8 @@ def _collect_rehearsal_evidence(
         )
         gppe_sql = (
             "SELECT count(*) FROM mart.topt_gppe_results WHERE payload->>'availability' = 'available'"
-            if query_val("SELECT to_regclass('mart.topt_gppe_results') IS NOT NULL") == "t"
+            if query_val("SELECT to_regclass('mart.topt_gppe_results') IS NOT NULL")
+            == "t"
             else "SELECT count(*) FROM mart.metric_node_values WHERE availability_status = 'available' AND node_key = 'gppe_uniform_charge_v0'"
         )
         domain_stats = {
