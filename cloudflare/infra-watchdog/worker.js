@@ -37,6 +37,16 @@ const DEFAULT_HEARTBEATS = [
     severity: "critical",
   },
   {
+    environment: "production",
+    name: "ops-checks-scheduler",
+    service_id: "infra/github",
+    maxAgeSeconds: 93600,
+    minWriteIntervalSeconds: 43200,
+    statusChangeWritesPerDay: 2,
+    failureClass: "ops-scheduler",
+    severity: "critical",
+  },
+  {
     environment: "staging",
     name: "platform-alerting-probes-staging",
     service_id: "platform/alerting",
@@ -65,7 +75,7 @@ const LOOP_RECOVERY_RUNS = 2;
 // Every stored or served free-text field is cut to this; GitHub reads /status
 // through a 16384-byte window (tools/out_of_band_watchdog.py).
 const DETAIL_MAX = 300;
-// /status serves at most this much of any one text field (worst case tested < 3 KB).
+// /status serves at most this much of any one text field (worst case tested < 4 KB).
 const STATUS_TEXT_MAX = 120;
 // #905: every pager message has one layout (ops.observability.md §3.1). These are
 // common/alerting/'s PAGER_FIELDS in the same order (the Worker has no log tail);
@@ -448,17 +458,22 @@ function heartbeatObservations(state, heartbeat, verdict, outage) {
     service_id: heartbeat.service_id || "infra/unregistered",
   };
   const fresh = verdict.state === "fresh" || verdict.state === "unhealthy";
+  const failureClass = heartbeat.failureClass || "host-reachability";
+  const isScheduler = failureClass === "ops-scheduler";
   const stale = {
     ...common,
     identity: `${key}:heartbeat-stale`,
-    failureClass: "host-reachability",
+    failureClass,
     severity: pagerLevel(heartbeat.severity),
     status: fresh ? "ok" : "failing",
     since: outage ? outage.start : undefined,
-    summary: "VPS 或它的出网中断",
+    summary: isScheduler ? "`ops-checks` 定时调度未按期心跳" : "VPS 或它的出网中断",
     detail: verdict.detail,
     recovery: `心跳恢复新鲜(${verdict.ageSeconds}s 前)`,
   };
+  if (isScheduler) {
+    return [stale];
+  }
   const loopDetail = fresh ? trimText(verdict.record.detail) : "";
   const quotedDetail = loopDetail ? quote(loopDetail) : "";
   const unhealthy = {
@@ -519,6 +534,9 @@ function loopStatus(state, key, identity, verdict) {
 // include up to one heartbeat write interval of uptime) and ends at the first
 // fresh heartbeat after it. Returns the open outage, if any.
 function trackOutageEdge(state, heartbeat, verdict, nowMs) {
+  if (heartbeat.failureClass === "ops-scheduler") {
+    return null;
+  }
   const open = state.outages.find(
     (edge) => edge.environment === heartbeat.environment && edge.name === heartbeat.name && edge.end === null,
   );
@@ -714,6 +732,8 @@ function impactText(obs) {
       return obs.url
         ? `用户从公网打不开 ${obs.url}`
         : "VPS 或它的出网中断:带内探测与告警一起静默,所有产品可能不可用";
+    case "ops-scheduler":
+      return "GitHub Actions 的 `ops-checks` 定时任务未运行:日级巡检、备份校验与对账可能已静默";
     case "alert-pipeline":
       return "带内探测循环或告警投递失效:VPS 上的新故障可能无人告知";
     default:
@@ -728,6 +748,8 @@ function suggestedAction(obs) {
       return obs.url
         ? `从外部网络执行 \`curl -I "${obs.url}"\`;若 VPS 心跳也过期,就是整机或它的出网中断`
         : "通过 SSH 登录 VPS,检查宿主机、它的网络与 `platform-alerting-probes` 容器";
+    case "ops-scheduler":
+      return "检查 `.github/workflows/ops-checks.yml` 是否被禁用或调度滞后,及 https://www.githubstatus.com";
     case "alert-pipeline":
       return "查看 `platform-alerting-probes` 的日志:探测循环或它的告警投递在失败";
     default:
@@ -742,6 +764,8 @@ function runbookUrl(obs) {
       return obs.url
         ? `${REPO_BLOB}/platform/12.alerting/README.md#public-route-probes`
         : `${REPO_BLOB}/docs/runbooks/infra022-p0.md#watchdog-silent`;
+    case "ops-scheduler":
+      return `${REPO_BLOB}/docs/ssot/ops.observability.md#sop-005b-github-兜底带外-watchdog日级`;
     case "alert-pipeline":
       return `${REPO_BLOB}/platform/12.alerting/README.md#infra-service-probes`;
     default:
@@ -791,20 +815,38 @@ function budgetVar(raw, fallback, { min, max = Infinity }) {
   return Math.min(max, Math.max(min, value));
 }
 
-function heartbeatWritePolicy(env) {
-  const minWriteIntervalMs =
-    budgetVar(env.WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS, DEFAULT_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS, {
-      min: MIN_HEARTBEAT_WRITE_INTERVAL_SECONDS,
-    }) * 1000;
+function heartbeatWritePolicy(env, heartbeat = null) {
+  const envInterval = budgetVar(
+    env.WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS,
+    DEFAULT_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS,
+    { min: MIN_HEARTBEAT_WRITE_INTERVAL_SECONDS },
+  );
+  const hbInterval =
+    heartbeat && heartbeat.minWriteIntervalSeconds !== undefined
+      ? budgetVar(heartbeat.minWriteIntervalSeconds, envInterval, { min: MIN_HEARTBEAT_WRITE_INTERVAL_SECONDS })
+      : envInterval;
+  const minWriteIntervalMs = Math.max(envInterval, hbInterval) * 1000;
+
+  const envBudget = Math.floor(
+    budgetVar(env.WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY, DEFAULT_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY, {
+      min: 0,
+      max: MAX_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY,
+    }),
+  );
+  const hbBudget =
+    heartbeat && heartbeat.statusChangeWritesPerDay !== undefined
+      ? Math.floor(
+          budgetVar(heartbeat.statusChangeWritesPerDay, envBudget, {
+            min: 0,
+            max: MAX_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY,
+          }),
+        )
+      : envBudget;
+
   return {
     minWriteIntervalMs,
     livenessRefreshMs: minWriteIntervalMs * LIVENESS_REFRESH_INTERVALS,
-    statusChangeWritesPerDay: Math.floor(
-      budgetVar(env.WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY, DEFAULT_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY, {
-        min: 0,
-        max: MAX_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY,
-      }),
-    ),
+    statusChangeWritesPerDay: Math.min(envBudget, hbBudget),
   };
 }
 
@@ -886,12 +928,12 @@ function heartbeatWrite(existing, incoming, nowMs, policy) {
   };
 }
 
-function configuredHeartbeatKeys(env) {
+function configuredHeartbeatsMap(env) {
   const heartbeats = filterByEnvironment(
     parseJsonList(env.WATCHDOG_HEARTBEATS_JSON, DEFAULT_HEARTBEATS),
     enabledEnvironments(env),
   );
-  return new Set(heartbeats.map((heartbeat) => heartbeatKey(heartbeat.environment, heartbeat.name)));
+  return new Map(heartbeats.map((heartbeat) => [heartbeatKey(heartbeat.environment, heartbeat.name), heartbeat]));
 }
 
 function failingPublicRoutes(raw) {
@@ -944,7 +986,7 @@ async function recordHeartbeat(request, env) {
   let environment;
   let name;
   let key;
-  let configuredKeys;
+  let configuredHeartbeats;
   try {
     environment = safeId(payload.env || payload.environment || "production");
     if (environment === "prod") {
@@ -952,16 +994,17 @@ async function recordHeartbeat(request, env) {
     }
     name = safeId(payload.name || "infra-probe-runner");
     key = heartbeatKey(environment, name);
-    configuredKeys = configuredHeartbeatKeys(env);
+    configuredHeartbeats = configuredHeartbeatsMap(env);
   } catch (error) {
     // A malformed env/name (or heartbeat config) must not bubble up as an
     // unhandled 500/CF-1101; degrade visibly with a queryable event.
     logEvent({ event: "watchdog.heartbeat.error", timestamp: Date.now(), status: "fail", error: errorText(error) });
     return jsonResponse({ ok: true, persisted: false, degraded: true });
   }
+  const configuredHeartbeat = configuredHeartbeats.get(key);
   // Only keys the Worker reads are stored: an unconfigured name would spend the
   // shared put() budget on a record nobody checks.
-  if (!configuredKeys.has(key)) {
+  if (!configuredHeartbeat) {
     logEvent({ event: "watchdog.heartbeat.ignored", timestamp: Date.now(), status: "fail", key });
     return jsonResponse({ ok: false, key, persisted: false, error: "not a configured heartbeat" }, 404);
   }
@@ -989,7 +1032,12 @@ async function recordHeartbeat(request, env) {
   let decision;
   try {
     const existingRaw = await env.WATCHDOG_STATE.get(key);
-    decision = heartbeatWrite(parseHeartbeatRecord(existingRaw), incoming, now, heartbeatWritePolicy(env));
+    decision = heartbeatWrite(
+      parseHeartbeatRecord(existingRaw),
+      incoming,
+      now,
+      heartbeatWritePolicy(env, configuredHeartbeat),
+    );
     if (decision.write) {
       await env.WATCHDOG_STATE.put(key, JSON.stringify(decision.value));
     }

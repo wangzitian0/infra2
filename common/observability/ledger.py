@@ -147,6 +147,9 @@ def summarize_ledger(ledger: Mapping[str, Any]) -> dict[str, Any]:
     return summary
 
 
+NON_VPS_OUTAGE_NAMES = frozenset({"ops-checks-scheduler"})
+
+
 def outage_intervals(
     outages: Iterable[Any], *, environment: str, now: datetime
 ) -> tuple[list[tuple[float, float]], int]:
@@ -160,6 +163,8 @@ def outage_intervals(
             unreadable += 1
             continue
         if outage.get("environment") != environment:
+            continue
+        if outage.get("name") in NON_VPS_OUTAGE_NAMES:
             continue
         start, end = outage.get("start"), outage.get("end")
         if not _is_number(start) or not (end is None or _is_number(end)):

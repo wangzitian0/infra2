@@ -60,9 +60,17 @@ def day(tmp_path_factory, budget_vars) -> dict:
     return json.loads(result.stdout)
 
 
-def _per_key_bound(budget_vars: dict[str, str]) -> int:
+def _per_key_bound(budget_vars: dict[str, str], heartbeat: dict | None = None) -> int:
     interval = int(budget_vars["WATCHDOG_HEARTBEAT_MIN_WRITE_INTERVAL_SECONDS"])
     status_changes = int(budget_vars["WATCHDOG_HEARTBEAT_STATUS_CHANGE_WRITES_PER_DAY"])
+    if heartbeat:
+        interval = max(
+            interval, int(heartbeat.get("minWriteIntervalSeconds", interval))
+        )
+        status_changes = min(
+            status_changes,
+            int(heartbeat.get("statusChangeWritesPerDay", status_changes)),
+        )
     return math.ceil(86400 / interval) + status_changes
 
 
@@ -110,9 +118,23 @@ def test_out_of_range_budget_vars_cannot_raise_the_runtime_bound(
         "hugeBudget",
     ):
         assert day[scenario]["puts"] <= per_key, (scenario, day[scenario]["puts"])
-    heartbeat_keys = len(json.loads(budget_vars["WATCHDOG_HEARTBEATS_JSON"]))
+    heartbeats = json.loads(budget_vars["WATCHDOG_HEARTBEATS_JSON"])
     runtime_worst_case = (
-        heartbeat_keys * per_key + CRON_RUNS_PER_DAY * CRON_PUTS_PER_RUN
+        sum(
+            math.ceil(
+                86400
+                / max(
+                    RUNTIME_MIN_INTERVAL,
+                    int(hb.get("minWriteIntervalSeconds", RUNTIME_MIN_INTERVAL)),
+                )
+            )
+            + min(
+                RUNTIME_MAX_STATUS_CHANGES,
+                int(hb.get("statusChangeWritesPerDay", RUNTIME_MAX_STATUS_CHANGES)),
+            )
+            for hb in heartbeats
+        )
+        + CRON_RUNS_PER_DAY * CRON_PUTS_PER_RUN
     )
     assert runtime_worst_case < KV_FREE_DAILY_PUTS * 0.5
 
@@ -174,10 +196,14 @@ def test_a_cron_run_writes_exactly_one_key_even_when_every_run_transitions(
 
 
 def test_worst_case_day_is_within_the_904_budget(day, budget_vars) -> None:
-    keys = day["heartbeatKeys"]
-    bound = keys * _per_key_bound(budget_vars) + CRON_RUNS_PER_DAY * CRON_PUTS_PER_RUN
+    heartbeats = json.loads(budget_vars["WATCHDOG_HEARTBEATS_JSON"])
+    bound = (
+        sum(_per_key_bound(budget_vars, hb) for hb in heartbeats)
+        + CRON_RUNS_PER_DAY * CRON_PUTS_PER_RUN
+    )
+    runner_max = max(day[s]["puts"] for s in ("healthy", "failing", "flapping"))
     measured = (
-        keys * max(day[s]["puts"] for s in ("healthy", "failing", "flapping"))
+        sum(min(runner_max, _per_key_bound(budget_vars, hb)) for hb in heartbeats)
         + day["cronDay"]["puts"]
     )
     assert measured <= bound <= KV_DAILY_PUT_BUDGET, (measured, bound)

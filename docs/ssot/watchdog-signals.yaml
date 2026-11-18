@@ -112,6 +112,9 @@ failure_classes:
   scheduled-job-start:
     pager: github
     covers: a scheduled ops-checks job that GitHub failed before it started, so its own alert never ran
+  ops-scheduler:
+    pager: cloudflare
+    covers: infra2 ops-checks scheduler stopped ticking (missed its daily heartbeat)
 
 # One source pages each condition (#1648). `conditions` lists the signals that watch
 # one real-world condition; at most one of them may be `type: alert`, the others
@@ -463,6 +466,23 @@ signals:
     tier: hour
     type: alert
     consecutive_failures: 1 # stale_threshold is the debounce
+    renotify_window_sec: 21600 # WATCHDOG_RENOTIFY_SECONDS
+
+  # External heartbeat for infra2's own ops-checks scheduler (#1448): the daily
+  # watchdog job pings POST /heartbeat on Cloudflare Worker; when no ping arrives
+  # within 26 h (93600 s), the Worker pages P0 ops-scheduler out of band.
+  - signal_id: production.github.ops-checks-scheduler
+    environment: production
+    component: github
+    signal: ops-checks-scheduler
+    primary_owner: cloudflare
+    failure_class: ops-scheduler
+    severity: critical
+    cadence: 1d
+    stale_threshold: 26h
+    tier: hour
+    type: alert
+    consecutive_failures: 1 # stale_threshold (93600s) is the debounce
     renotify_window_sec: 21600 # WATCHDOG_RENOTIFY_SECONDS
 
   # Staging is recorded by the Worker and shown on /status, never paged (#904).

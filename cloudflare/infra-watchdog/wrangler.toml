@@ -25,9 +25,9 @@ WATCHDOG_RENOTIFY_SECONDS = "21600"
 WATCHDOG_STATUS_MAX_AGE_SECONDS = "7200"
 # KV free tier: 1000 put()/day for the whole account (#904 budget: <= 200/day).
 # Worst-case daily puts =
-#   heartbeat keys * (ceil(86400 / MIN_WRITE_INTERVAL) + STATUS_CHANGE_WRITES_PER_DAY)
+#   2 runner heartbeat keys * (ceil(86400 / 1800) + 24) + 1 ops-checks key * (2 + 2)
 #   + 48 cron runs * 1 (the state document on a transition, else the last-run record)
-#   = 2 * (48 + 24) + 48 = 192; healthy steady state 2 * 48 + 48 = 144.
+#   = 2 * (48 + 24) + 4 + 48 = 196; healthy steady state 2 * 48 + 1 + 48 = 145.
 # Only configured heartbeat keys are stored, and a runner's liveness ping never
 # changes the stored verdict (2026-09-15: that alternation wrote on every post).
 # A 1800 s refresh still keeps a live runner's record far below maxAgeSeconds 5400.
@@ -52,6 +52,7 @@ WATCHDOG_TARGETS_JSON = """
 WATCHDOG_HEARTBEATS_JSON = """
 [
   {"environment":"production","name":"platform-alerting-probes","service_id":"platform/alerting","maxAgeSeconds":5400,"severity":"critical"},
+  {"environment":"production","name":"ops-checks-scheduler","service_id":"infra/github","maxAgeSeconds":93600,"minWriteIntervalSeconds":43200,"statusChangeWritesPerDay":2,"failureClass":"ops-scheduler","severity":"critical"},
   {"environment":"staging","name":"platform-alerting-probes-staging","service_id":"platform/alerting","maxAgeSeconds":5400,"severity":"warning"}
 ]
 """

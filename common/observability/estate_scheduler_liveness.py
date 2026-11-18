@@ -31,7 +31,8 @@ The schedule is read from the parsed YAML (``on.schedule[*].cron``), so flow sty
 quoted keys and the boolean ``on`` key are handled. The estate with no scheduled
 workflow is UNVERIFIABLE, not green. Workflows outside ``.github/workflows/`` are
 skipped. The watchdog runs daily, so detection lags a stop by up to bound + 24 h.
-Nothing automated watches the scheduler of ``ops-checks.yml`` itself.
+The scheduler of ``ops-checks.yml`` itself is watched out of band by the Cloudflare
+Worker via the ``ops-checks-scheduler`` heartbeat (#1448).
 
 Canonical cron and bound primitives live in ``infra2_sdk`` (#1270).
 """

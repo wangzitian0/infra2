@@ -21,6 +21,7 @@ const HOUR = 60 * MIN;
 const FEISHU = "https://feishu.invalid";
 const DEADMAN = "https://hc-ping.com/test-worker-check";
 const PROD_HB = "heartbeat:production:platform-alerting-probes";
+const OPS_CHECKS_HB = "heartbeat:production:ops-checks-scheduler";
 const STAGING_HB = "heartbeat:staging:platform-alerting-probes-staging";
 const TARGETS = JSON.parse(vars.WATCHDOG_TARGETS_JSON);
 
@@ -214,6 +215,7 @@ function record(at, fields = {}) {
 
 function freshHeartbeats(world, at, fields = {}) {
   world.heartbeat(PROD_HB, record(at - MIN, fields));
+  world.heartbeat(OPS_CHECKS_HB, record(at - MIN));
   world.heartbeat(STAGING_HB, record(at - MIN));
 }
 
@@ -354,6 +356,7 @@ for (const [label, fields, age] of [
   const messages = [];
   for (const at of [START, START + CRON_MS]) {
     world.heartbeat(PROD_HB, record(at - age, fields));
+    world.heartbeat(OPS_CHECKS_HB, record(at - MIN));
     world.heartbeat(STAGING_HB, record(at - MIN));
     messages.push(...(await world.cron(at)).messages);
   }
@@ -366,6 +369,7 @@ for (const [label, fields, age] of [
   const world = new World();
   const lastContact = START + 5 * MIN;
   world.heartbeat(PROD_HB, record(lastContact));
+  world.heartbeat(OPS_CHECKS_HB, record(lastContact));
   world.heartbeat(STAGING_HB, record(lastContact));
   const runs = [];
   // stale from START + 5 min + 5400 s onwards
@@ -438,6 +442,7 @@ for (const [label, fields, age] of [
 {
   const world = new World();
   world.heartbeat(PROD_HB, record(START - MIN));
+  world.heartbeat(OPS_CHECKS_HB, record(START - MIN));
   world.heartbeat(STAGING_HB, record(START - 3 * HOUR, { ok: false, detail: "staging loop broken" }));
   const run = await world.cron(START);
   const status = await world.status(START + MIN);
@@ -453,6 +458,7 @@ for (const [label, fields, age] of [
   const world = new World();
   for (const target of TARGETS) world.routes[target.url] = 522;
   world.heartbeat(PROD_HB, record(START - 3 * HOUR));
+  world.heartbeat(OPS_CHECKS_HB, record(START - MIN));
   const runs = [];
   for (const at of [START, START + CRON_MS, START + 2 * CRON_MS]) runs.push(await world.cron(at));
   results.allDown = runs.map((run) => ({
@@ -668,9 +674,9 @@ for (const [label, fields, age] of [
     entrypoints,
     loops: { "production:platform-alerting-probes": { bad: 2, good: 1 } },
     outages: [{ environment: "production", name: "platform-alerting-probes", start: START, detectedAt: START, end: null, reason: "stale" }],
-    lastRun: { ranAt: START, ok: false, routeTargetCount: 3, heartbeatTargetCount: 2, failureCount: 7, activeAlertCount: 6, suppressed: TARGETS.map((t) => t.name), deliveryError: long },
+    lastRun: { ranAt: START, ok: false, routeTargetCount: 3, heartbeatTargetCount: 3, failureCount: 7, activeAlertCount: 6, suppressed: TARGETS.map((t) => t.name), deliveryError: long },
   }));
-  for (const key of [PROD_HB, STAGING_HB]) {
+  for (const key of [PROD_HB, OPS_CHECKS_HB, STAGING_HB]) {
     world.heartbeat(key, { ok: false, detail: long, receivedAt: START, schema: 2, failingPublicRoutes: routes, lastDeliveryOkAt: 1 });
   }
   const status = await world.status(START + MIN);
@@ -719,6 +725,7 @@ for (const [label, fields, age] of [
   const world = new World({ overrides: { WATCHDOG_TARGETS_JSON: JSON.stringify(many) } });
   for (const target of many) world.routes[target.url] = 503;
   world.heartbeat(PROD_HB, record(START - 3 * HOUR));
+  world.heartbeat(OPS_CHECKS_HB, record(START - MIN));
   const messages = [];
   for (const at of [START, START + CRON_MS]) messages.push(...(await world.cron(at)).messages);
   results.manyDown = messages;
@@ -769,6 +776,7 @@ function shortTargets(prefix, count) {
   const runs = [];
   for (const at of [START, START + CRON_MS]) {
     world.heartbeat(PROD_HB, record(at - MIN, { ok: false, detail: `bridge failing ${"x".repeat(1000)}` }));
+    world.heartbeat(OPS_CHECKS_HB, record(at - MIN));
     world.heartbeat(STAGING_HB, record(at - MIN));
     runs.push(...(await world.cron(at)).messages);
   }
@@ -785,6 +793,35 @@ function shortTargets(prefix, count) {
     runs.push(...(await world.cron(at)).messages);
   }
   results.longUrl = runs;
+}
+
+// #1448: ops-checks scheduler misses its daily heartbeat past maxAgeSeconds (93600 s),
+// Worker pages P0 ops-scheduler, and resolves when POST /heartbeat refreshes it.
+{
+  const world = new World();
+  const lastContact = START;
+  world.heartbeat(PROD_HB, record(START + 27 * HOUR - MIN));
+  world.heartbeat(OPS_CHECKS_HB, record(lastContact));
+  world.heartbeat(STAGING_HB, record(START + 27 * HOUR - MIN));
+  const stale = await world.cron(START + 27 * HOUR);
+  const outagesWhileStale = await world.outages(START + 27 * HOUR + MIN);
+  const posted = await world.post(START + 27 * HOUR + MIN, {
+    env: "production",
+    name: "ops-checks-scheduler",
+    ok: true,
+    detail: "ops-checks watchdog scheduler tick",
+    timestamp: Math.floor((START + 27 * HOUR + MIN) / 1000),
+  });
+  world.heartbeat(PROD_HB, record(START + 27 * HOUR + CRON_MS - MIN));
+  world.heartbeat(STAGING_HB, record(START + 27 * HOUR + CRON_MS - MIN));
+  const recovered = await world.cron(START + 27 * HOUR + CRON_MS);
+  results.opsChecksMissed = {
+    firing: stale.messages,
+    cards: stale.cards,
+    outages: outagesWhileStale.body.outages,
+    posted: posted.body,
+    recovered: recovered.messages,
+  };
 }
 
 // Endpoints that no longer exist.

@@ -12,6 +12,7 @@ Every 30 minutes, from Cloudflare, outside the VPS:
 | Check | Pages | Class |
 |---|---|---|
 | Production probe-runner heartbeat older than `maxAgeSeconds` (or missing) | P0 "VPS 或它的出网中断" (the VPS or its egress is down) | host-reachability |
+| Production `ops-checks-scheduler` heartbeat older than `maxAgeSeconds` (`93600` s / 26 h, or missing) | P0 "`ops-checks` 定时调度未按期心跳" (`ops-checks.yml` scheduler stopped ticking) | ops-scheduler |
 | Production v2 heartbeat fresh with `ok=false` (the probe loop or its delivery is unhealthy) for 2 consecutive runs; resolves after 2 healthy runs | P1, naming the runner's `detail` | alert-pipeline |
 | One external entrypoint per product (`dokploy`, `finance-report-web`, `truealpha-web`, production) fails 2 consecutive runs | P0 | host-reachability |
 | Staging heartbeat | never; shown on `/status` | — |
@@ -79,7 +80,7 @@ change of `ok` or of the failing route set is a verdict change under the write
 budget below; a liveness ping never changes either. `detail` is stored cut to 300
 characters; a route list longer than 32 names, or with a name over 64 characters,
 is stored as unknown. `/status` serves at most 120 characters of any text field
-and stays under 3 KB in the worst incident (GitHub reads 16384 bytes).
+and stays under 4 KB in the worst incident (GitHub reads 16384 bytes).
 
 ## Required Secrets
 
@@ -108,8 +109,9 @@ wrangler secret put WATCHDOG_DEADMAN_PING_URL
 ```
 
 `HEARTBEAT_TOKEN` must match `INFRA_PROBE_HEARTBEAT_TOKEN` in the platform
-alerting deployment. `WATCHDOG_STATUS_TOKEN` is required for authenticated
-GitHub audit checks of `/status`.
+alerting deployment and `INFRA2_WATCHDOG_HEARTBEAT_TOKEN` in GitHub Actions
+secrets (`ops-checks.yml` `watchdog` job). `WATCHDOG_STATUS_TOKEN` is required for
+authenticated GitHub audit checks of `/status`.
 `WATCHDOG_DEADMAN_PING_URL` is a separate Healthchecks.io check URL, stored only
 as a Worker secret. Configure its period for 30 minutes and choose a grace and
 notification route based on a controlled missed-ping drill. The notification
@@ -219,9 +221,9 @@ The Worker stays on the Workers Free plan. Measured by
 
 | Per cron run | Subrequests |
 |---|---|
-| quiet | 7 = 3 entrypoint GETs + production heartbeat read + state read + one write + dead-man ping |
-| alert (Feishu app mode) | 9 = quiet + token + send |
-| Feishu send fails after a token, email fallback | 10 |
+| quiet | 8 = 3 entrypoint GETs + 2 production heartbeat reads + state read + one write + dead-man ping |
+| alert (Feishu app mode) | 10 = quiet + token + send |
+| Feishu send fails after a token, email fallback | 11 |
 
 Each run writes exactly one KV key: the state document (`watchdog:state`: alert
 state, entrypoint streaks, outage edges, the run record) when anything
@@ -255,14 +257,16 @@ every later heartbeat `put()` throws `KV put() limit exceeded for the day.` unti
 Worst-case puts per UTC day:
 
 ```
-heartbeat keys * (ceil(86400 / interval) + status-change budget)   2 * (48 + 24) = 144
-+ cron runs * 1                                                    48 * 1        =  48
-                                                                                  = 192
+runner heartbeat keys * (ceil(86400 / interval) + status-change budget)  2 * (48 + 24) = 144
++ ops-checks-scheduler key (43200s interval + 2 status-change budget)        2 + 2      =   4
++ cron runs * 1                                                             48 * 1      =  48
+                                                                                        = 196
 ```
 
-A healthy day costs `2 * 48 + 48 = 144` (measured 140: 46 refreshes per key). Whatever the Worker env
-says, the runtime clamps (interval ≥ 600 s, budget ≤ 24) cap it at
-`2 * (144 + 24) + 48 = 384`. Before the liveness rule (2026-09-15/16) the liveness
+A healthy day costs `2 * 48 + 1 + 48 = 145`. Whatever the Worker env
+says, the runtime clamps (runner interval ≥ 600 s, budget ≤ 24; `ops-checks-scheduler`
+interval ≥ 43200 s, budget ≤ 2) cap it at
+`2 * (144 + 24) + 4 + 48 = 388`. Before the liveness rule (2026-09-15/16) the liveness
 ping's `ok=true` and a failing verdict alternated on every ~70 s probe loop and each
 alternation was written: 1198 and 1157 puts/day. The daily ops check
 (`tools/secrets_reconcile.py`) reports yesterday's `cloudflare.kv.write` against the

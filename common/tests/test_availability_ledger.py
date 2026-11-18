@@ -437,3 +437,30 @@ def test_apply_unavailability_preserves_real_failure_domain_and_separates_probe_
     assert "[infra-service]" in report_msg
     assert "探针故障 20 次 + 采样空窗 10 次" in report_msg
     assert "仅受采样空窗影响 (10 次)" in report_msg
+
+
+def test_negative_non_vps_scheduler_outage_does_not_degrade_vps_availability() -> None:
+    """#1448: ops-checks-scheduler is GitHub Actions liveness, not VPS downtime;
+    even a 27 h ops-checks-scheduler outage record must leave VPS availability at 100%."""
+    applied = _apply(
+        [
+            {
+                "environment": "production",
+                "name": "ops-checks-scheduler",
+                "start": _ms(23, 0),
+                "end": _ms(24, 3),
+                "reason": "stale",
+            }
+        ]
+    )
+    assert applied["unavailability"] == {
+        "environment": "production",
+        "minutes": 0.0,
+        "gap_minutes": 0.0,
+        "outage_minutes": 0.0,
+        "outage_count": 0,
+        "unreadable": 0,
+    }
+    summary = summarize_ledger(applied)
+    assert summary["overall_uptime_pct"] == 100.0
+    assert summary["perfect_count"] == summary["signal_count"]
