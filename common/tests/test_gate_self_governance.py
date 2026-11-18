@@ -293,7 +293,7 @@ ORDINARY_PATHS = (
     "tools/ci_gate_ruleset_audit.py",
     "tools/env_tool.py",
     "tools/lint_compose_resource_limits.py",
-    "tools/promotion_soak_guard.py",
+    "tools/promotion_reminder.py",
     "tools/service_identity_audit.py",
     "common/alerting/__init__.py",
     "common/common.py",
