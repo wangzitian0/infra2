@@ -506,3 +506,57 @@ def test_default_fallback_rehearsal_invariants_pass_restore_scalar_check(
     )
     assert res["status"] == "pass"
     assert res["invariants_checked"] == len(invariants)
+
+
+def test_truealpha_rehearsal_invariants_support_slice3_and_slice4_relations() -> None:
+    """Restore invariants accept both legacy topt_* and converged Slice 3/4 relations."""
+    invariants = " ".join(_build_rehearsal_invariants("truealpha/postgres", "truealpha"))
+    assert "to_regclass('mart.capture_status') IS NOT NULL" in invariants
+    assert "FROM mart.capture_status WHERE complete = true" in invariants
+    assert "FROM mart.topt_capture_status WHERE complete = true" in invariants
+    assert "to_regclass('mart.topt_gppe_results') IS NOT NULL" in invariants
+    assert "FROM mart.topt_gppe_results" in invariants
+    assert "FROM mart.metric_node_values WHERE availability_status = 'available' AND node_key LIKE 'gppe_%'" in invariants
+    assert "cnt < 80" in invariants
+    assert "cnt < 1400" in invariants
+
+
+def test_truealpha_collect_rehearsal_evidence_switches_on_regclass() -> None:
+    """Evidence collection switches from topt_* to Slice 3/4 tables when migrated."""
+    from tools.run_restore_rehearsal import _collect_rehearsal_evidence
+
+    seen_sql: list[str] = []
+
+    def fake_run_post_slice4(cmd, *args, **kwargs):
+        sql = cmd[-1]
+        seen_sql.append(sql)
+        result = MagicMock(returncode=0)
+        if "information_schema.tables" in sql:
+            result.stdout = "82\n"
+        elif "to_regclass('mart.capture_status')" in sql:
+            result.stdout = "t\n"
+        elif "FROM mart.capture_status" in sql:
+            result.stdout = "711\n"
+        elif "to_regclass('mart.topt_gppe_results')" in sql:
+            result.stdout = "f\n"
+        elif "FROM mart.metric_node_values" in sql:
+            result.stdout = "3000\n"
+        elif "pg_database_size" in sql:
+            result.stdout = "123456\n"
+        else:
+            raise AssertionError(f"unexpected SQL: {sql}")
+        return result
+
+    with patch("tools.run_restore_rehearsal.subprocess.run", side_effect=fake_run_post_slice4):
+        tables, size_bytes, stats = _collect_rehearsal_evidence(
+            "ta-rehearsal", "postgres", "truealpha", "truealpha/postgres"
+        )
+
+    assert tables == 82
+    assert size_bytes == 123456
+    assert stats == {
+        "topt_capture_complete_count": 711,
+        "topt_gppe_available_count": 3000,
+    }
+    assert any("FROM mart.capture_status" in s for s in seen_sql)
+    assert any("FROM mart.metric_node_values" in s for s in seen_sql)
