@@ -674,7 +674,7 @@ for (const [label, fields, age] of [
     entrypoints,
     loops: { "production:platform-alerting-probes": { bad: 2, good: 1 } },
     outages: [{ environment: "production", name: "platform-alerting-probes", start: START, detectedAt: START, end: null, reason: "stale" }],
-    lastRun: { ranAt: START, ok: false, routeTargetCount: 3, heartbeatTargetCount: 2, failureCount: 7, activeAlertCount: 6, suppressed: TARGETS.map((t) => t.name), deliveryError: long },
+    lastRun: { ranAt: START, ok: false, routeTargetCount: 3, heartbeatTargetCount: 3, failureCount: 7, activeAlertCount: 6, suppressed: TARGETS.map((t) => t.name), deliveryError: long },
   }));
   for (const key of [PROD_HB, OPS_CHECKS_HB, STAGING_HB]) {
     world.heartbeat(key, { ok: false, detail: long, receivedAt: START, schema: 2, failingPublicRoutes: routes, lastDeliveryOkAt: 1 });
@@ -804,6 +804,7 @@ function shortTargets(prefix, count) {
   world.heartbeat(OPS_CHECKS_HB, record(lastContact));
   world.heartbeat(STAGING_HB, record(START + 27 * HOUR - MIN));
   const stale = await world.cron(START + 27 * HOUR);
+  const outagesWhileStale = await world.outages(START + 27 * HOUR + MIN);
   const posted = await world.post(START + 27 * HOUR + MIN, {
     env: "production",
     name: "ops-checks-scheduler",
@@ -817,6 +818,7 @@ function shortTargets(prefix, count) {
   results.opsChecksMissed = {
     firing: stale.messages,
     cards: stale.cards,
+    outages: outagesWhileStale.body.outages,
     posted: posted.body,
     recovered: recovered.messages,
   };

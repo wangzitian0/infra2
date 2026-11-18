@@ -75,7 +75,7 @@ const LOOP_RECOVERY_RUNS = 2;
 // Every stored or served free-text field is cut to this; GitHub reads /status
 // through a 16384-byte window (tools/out_of_band_watchdog.py).
 const DETAIL_MAX = 300;
-// /status serves at most this much of any one text field (worst case tested < 3 KB).
+// /status serves at most this much of any one text field (worst case tested < 4 KB).
 const STATUS_TEXT_MAX = 120;
 // #905: every pager message has one layout (ops.observability.md §3.1). These are
 // common/alerting/'s PAGER_FIELDS in the same order (the Worker has no log tail);
@@ -534,6 +534,9 @@ function loopStatus(state, key, identity, verdict) {
 // include up to one heartbeat write interval of uptime) and ends at the first
 // fresh heartbeat after it. Returns the open outage, if any.
 function trackOutageEdge(state, heartbeat, verdict, nowMs) {
+  if (heartbeat.failureClass === "ops-scheduler") {
+    return null;
+  }
   const open = state.outages.find(
     (edge) => edge.environment === heartbeat.environment && edge.name === heartbeat.name && edge.end === null,
   );

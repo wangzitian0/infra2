@@ -921,6 +921,7 @@ def test_ops_checks_scheduler_missed_ping_pages_p0_and_recovers(world) -> None:
     )
     assert page["现象"].startswith("`ops-checks` 定时调度未按期心跳 — 心跳过期:")
     assert page["影响"].startswith("[ops-scheduler] ")
+    assert missed["outages"] == []
     assert missed["posted"]["persisted"] is True
     (recovered,) = missed["recovered"]
     block = _block(recovered, "resolved", "ops-checks-scheduler")

@@ -184,47 +184,37 @@ def test_ops_checks_audit_job_runs_all_deploy_guards_before_scheduled_app_hooks(
     assert "confirmed_finding_pairs(" in alert_step["run"]
 
 
-def test_ops_checks_watchdog_emits_scheduler_heartbeat_and_worker_alerts_when_missed(
-    tmp_path: Path,
-) -> None:
-    """#1448 (Mutation evidence): ops-checks.yml watchdog emits the scheduler heartbeat
-    POST /heartbeat, and cloudflare/infra-watchdog/worker.js accepts it, stays quiet
-    while fresh, pages P0 ops-scheduler when missed past 93600s, and resolves on recovery.
-    Removing the ping step or breaking its payload/token fails this test."""
-    import json
-    import os
-    import shutil
-    import subprocess
-    import sys
-    import textwrap
-    import threading
-    import tomllib
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-    import pytest
-
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node is not installed")
-
+def _ops_checks_scheduler_ping_step() -> tuple[dict, str]:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
-    watchdog_job = workflow["jobs"]["watchdog"]
-    steps = watchdog_job["steps"]
+    steps = workflow["jobs"]["watchdog"]["steps"]
     names = [step.get("name") for step in steps]
     step_name = "Ping Cloudflare watchdog scheduler heartbeat (#1448)"
     assert step_name in names, f"{step_name!r} missing from ops-checks.yml watchdog"
     assert names.index(step_name) < names.index("Record the verdicts as GitHub issues")
     ping_step = steps[names.index(step_name)]
-    assert "dry_run" in ping_step["if"] and "!cancelled()" in ping_step["if"]
-    assert (
-        ping_step["env"]["INFRA2_WATCHDOG_HEARTBEAT_TOKEN"]
-        == "${{ secrets.INFRA2_WATCHDOG_HEARTBEAT_TOKEN }}"
-    )
-
     run_script = ping_step["run"]
     marker = "python - <<'PY'\n"
     assert marker in run_script and "\nPY" in run_script
+    import textwrap
+
     python_src = textwrap.dedent(run_script.split(marker, 1)[1].rsplit("\nPY", 1)[0])
+    return ping_step, python_src
+
+
+def _eval_ping_step_if(expr: str, *, event_name: str, cancelled: bool = False) -> bool:
+    assert expr.startswith("${{") and expr.endswith("}}")
+    inner = expr[3:-2].strip()
+    assert inner == "!cancelled() && github.event_name == 'schedule'", inner
+    return (not cancelled) and event_name == "schedule"
+
+
+def _emit_ops_checks_ping(python_src: str) -> dict:
+    import json
+    import os
+    import subprocess
+    import sys
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     captured: list[dict] = []
 
@@ -270,12 +260,49 @@ def test_ops_checks_watchdog_emits_scheduler_heartbeat_and_worker_alerts_when_mi
         server.server_close()
 
     assert len(captured) == 1
-    req = captured[0]
+    return captured[0]
+
+
+def test_ops_checks_watchdog_step_emits_scheduler_heartbeat_only_on_schedule() -> None:
+    """#1448 (Mutation evidence, no-node): ops-checks.yml watchdog pings POST /heartbeat
+    only on scheduled runs (so manual dispatches never throttle or mask 02:17 UTC)."""
+    ping_step, python_src = _ops_checks_scheduler_ping_step()
+    assert (
+        ping_step["env"]["INFRA2_WATCHDOG_HEARTBEAT_TOKEN"]
+        == "${{ secrets.INFRA2_WATCHDOG_HEARTBEAT_TOKEN }}"
+    )
+    if_expr = ping_step["if"]
+    assert _eval_ping_step_if(if_expr, event_name="schedule") is True
+    assert _eval_ping_step_if(if_expr, event_name="workflow_dispatch") is False
+    assert _eval_ping_step_if(if_expr, event_name="schedule", cancelled=True) is False
+
+    req = _emit_ops_checks_ping(python_src)
     assert req["path"] == "/heartbeat"
     assert req["auth"] == "Bearer test-hb-token"
     assert req["body"]["env"] == "production"
     assert req["body"]["name"] == "ops-checks-scheduler"
     assert req["body"]["ok"] is True
+
+
+def test_ops_checks_watchdog_emits_scheduler_heartbeat_and_worker_alerts_when_missed(
+    tmp_path: Path,
+) -> None:
+    """#1448 (Mutation evidence): cloudflare/infra-watchdog/worker.js accepts the
+    ops-checks.yml heartbeat, stays quiet while fresh, pages P0 ops-scheduler without
+    polluting /outages when missed past 93600s, and resolves on recovery."""
+    import json
+    import shutil
+    import subprocess
+    import tomllib
+
+    import pytest
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+
+    _ping_step, python_src = _ops_checks_scheduler_ping_step()
+    req = _emit_ops_checks_ping(python_src)
 
     worker_mjs = tmp_path / "worker.mjs"
     worker_mjs.write_text(
@@ -309,6 +336,7 @@ def test_ops_checks_watchdog_emits_scheduler_heartbeat_and_worker_alerts_when_mi
       ALERT_DELIVERY_MODE: "feishu_webhook",
       FEISHU_WEBHOOK_URL: "https://feishu.invalid/hook",
       HEARTBEAT_TOKEN: "test-hb-token",
+      WATCHDOG_STATUS_TOKEN: "test-status-token",
       WATCHDOG_DEADMAN_PING_URL: "https://hc-ping.com/test",
       WATCHDOG_STATE: {{
         async get(k) {{ return kv.has(k) ? kv.get(k) : null; }},
@@ -339,6 +367,12 @@ def test_ops_checks_watchdog_emits_scheduler_heartbeat_and_worker_alerts_when_mi
       await Promise.all(p);
       return messages.slice(before);
     }};
+    const getOutages = async () => {{
+      const r = await worker.fetch(new Request("https://w.invalid/outages", {{
+        headers: {{ Authorization: "Bearer test-status-token" }},
+      }}), env);
+      return (await r.json()).outages;
+    }};
 
     const firstPost = await postBeat();
     clock += 3600 * 1000;
@@ -348,6 +382,7 @@ def test_ops_checks_watchdog_emits_scheduler_heartbeat_and_worker_alerts_when_mi
     clock += 91000 * 1000;
     seedRunners(clock);
     const missedMsgs = await runCron();
+    const outagesWhileMissed = await getOutages();
 
     clock += 60 * 1000;
     const recoverPost = await postBeat();
@@ -356,7 +391,7 @@ def test_ops_checks_watchdog_emits_scheduler_heartbeat_and_worker_alerts_when_mi
     const recoveredMsgs = await runCron();
 
     console.log = process.stdout.write.bind(process.stdout);
-    process.stdout.write(JSON.stringify({{ firstPost, freshMsgs, missedMsgs, recoverPost, recoveredMsgs }}));
+    process.stdout.write(JSON.stringify({{ firstPost, freshMsgs, missedMsgs, outagesWhileMissed, recoverPost, recoveredMsgs }}));
     """
     res = subprocess.run(
         [node, "--input-type=module", "-e", driver],
@@ -372,6 +407,7 @@ def test_ops_checks_watchdog_emits_scheduler_heartbeat_and_worker_alerts_when_mi
     assert len(out["missedMsgs"]) == 1
     assert "infra/github · ops-checks-scheduler" in out["missedMsgs"][0]
     assert "[ops-scheduler]" in out["missedMsgs"][0]
+    assert out["outagesWhileMissed"] == []
     assert out["recoverPost"]["persisted"] is True
     assert len(out["recoveredMsgs"]) == 1
     assert "✅ [已恢复]" in out["recoveredMsgs"][0]

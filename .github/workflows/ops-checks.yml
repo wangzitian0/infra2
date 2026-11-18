@@ -404,9 +404,11 @@ jobs:
           PY
 
       # #1448: external liveness heartbeat for ops-checks itself; Cloudflare Worker alerts
-      # if this daily ping is missed beyond maxAgeSeconds (93600 s).
+      # if this daily ping is missed beyond maxAgeSeconds (93600 s). Restricted to
+      # scheduled runs so manual dispatches neither mask a dead scheduler nor throttle
+      # the next scheduled 02:17 UTC ping.
       - name: Ping Cloudflare watchdog scheduler heartbeat (#1448)
-        if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) && (github.event_name == 'schedule' || github.ref == 'refs/heads/main') }}
+        if: ${{ !cancelled() && github.event_name == 'schedule' }}
         env:
           INFRA2_WATCHDOG_HEARTBEAT_URL: ${{ vars.INFRA2_WATCHDOG_HEARTBEAT_URL }}
           INFRA2_WATCHDOG_HEARTBEAT_TOKEN: ${{ secrets.INFRA2_WATCHDOG_HEARTBEAT_TOKEN }}
