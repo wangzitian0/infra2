@@ -537,8 +537,8 @@ A deploy that starts between the last poll and the recreate is not protected.
 
 配置身份拆成两个正交平面,禁止再用一个 hash 同时回答两个问题:
 
-- `IAC_CONFIG_HASH`:**runtime fingerprint**,覆盖 compose、实际运行 env、local artifacts 与声明依赖;
-  只服务于同一环境的幂等/no-op 与 secret/runtime-config 变化触发。
+- `CONFIGURATION_SHA256`:**runtime fingerprint**,覆盖 compose、实际运行 env、local artifacts 与声明依赖;
+  只服务于同一环境的幂等/no-op 与 secret/runtime-config 变化触发。(旧变量 `IAC_CONFIG_HASH` 已停止写入,仅在 drift/watchdog 读取端保留只读过渡回退。)
 - `IAC_SOURCE_CONFIG_HASH`:带 schema 版本的 **source fingerprint**,只覆盖 release 可重算的源码、
   非秘密部署坐标、local artifacts 与声明依赖;`IAC_DEPLOY_REF`(exact 40-char SHA)证明该 fingerprint
   来自哪一个不可变 revision。
@@ -557,7 +557,7 @@ passes the sha256 of the rendered bytes as the variable `IAC_MOUNT_SHA256_<NAME>
 variable in the label `iac.mount-sha256.<name>`. A content change recreates only the services that mount
 that file. `Deployer.composing()` refuses to deploy when the compose needs a variable that is not set,
 and `tools/deploy_guard_audit.py` fails when a mounting service has no such label.
-The variables are not part of `IAC_CONFIG_HASH`, `IAC_SOURCE_CONFIG_HASH` or `IAC_DEPLOY_REF`.
+The variables are not part of `CONFIGURATION_SHA256`, `IAC_SOURCE_CONFIG_HASH` or `IAC_DEPLOY_REF`.
 
 服务一旦声明 `runtime_only_config_keys`，必须显式实现不访问 secret backend 的
 `source_config_env_base`；合同测试枚举所有这类 Deployer，并校验 runtime-only key 不进入 source
@@ -794,7 +794,7 @@ git fetch --tags && git tag -l "v*.*.*" | sort -V | tail -5
   用完即删;main 的代码在 release 之后改过输入枚举或 env plane 时会算出不同的 hash。release 代码
   跑不起来时退回本 checkout 的公式,并在该行 note 里写明原因。服务在新 release 中输入
   未变化时允许保留旧 deploy ref,避免无意义重启;ref 不是“必须等于最新 tag”的重部署开关。runtime secret 只进入
-  `IAC_CONFIG_HASH`,不参与 release fidelity。旧部署缺 source identity 时分类为 `legacy_identity`,
+  `CONFIGURATION_SHA256`,不参与 release fidelity。旧部署缺 source identity 时分类为 `legacy_identity`,
   不伪装成 DRIFT;下次正常 release/reconcile 会迁移。
 - **载体**:ops-checks.yml 的 `facet-reconcile` job（#542 起与 compose_id/dns 漂移合并为单一日对账）
   ——**日报,strict detection,绝不自动 remediate**:真实 drift / detector error / structural mismatch

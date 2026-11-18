@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -17,6 +18,7 @@ if str(ROOT) not in sys.path:
 from common.core.harness import sweep as harness_sweep  # noqa: E402
 from common.core.harness.manifest import check_workspace, load_manifest  # noqa: E402
 from common.core.harness import prod_queue as harness_prod_queue  # noqa: E402
+from common.core.sdk_usage_census import sdk_version as read_sdk_version  # noqa: E402
 from common.core.harness.status import (  # noqa: E402
     WorkspaceStatus,
     fetch_json,
@@ -268,12 +270,29 @@ def main(argv: list[str] | None = None) -> int:
         root, manifest, fetch=args.fetch, submodules_expected=submodules_expected
     )
     if args.online:
+        runner_cfg = manifest.get("iac_runner") if isinstance(manifest, dict) else None
+        runner_domain = os.environ.get("INTERNAL_DOMAIN", "").strip() or "zitian.party"
+        runner_health_url = (
+            os.environ.get("IAC_RUNNER_HEALTH_URL", "").strip()
+            or (
+                str(runner_cfg.get("health") or "").strip()
+                if isinstance(runner_cfg, dict)
+                else ""
+            )
+            or (
+                f"https://iac.{runner_domain}/health"
+                if (root / "bootstrap" / "06.iac_runner").is_dir()
+                else ""
+            )
+        ) or None
         result = observe_online(
             result,
             root,
             manifest,
             fetcher=fetch_json,
             queue_reader=harness_prod_queue.read_production_queue,
+            sdk_lock_reader=read_sdk_version,
+            iac_runner_health_url=runner_health_url,
         )
     if args.json_output:
         print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))

@@ -394,13 +394,20 @@ commit `sha`（身份）+ `image_ref`（要拉的已发布镜像）——**code 
 |------|---------|---------|--------------------------|
 | `staging` | staging | — | **仅 release tag**（`vX.Y.Z`；同 prod）|
 | `prod` | prod | — | **仅 release tag**（`vX.Y.Z`）|
-| `preview/branch` | preview | `branch-<name>`（默认 main）| branch |
+| `preview` | preview | 由 `version_ref` 派生 | `branch`（`main` → `preview/branch`）或 `pr`（`pr-<N>` / `1..999999` → `preview/pr`）|
+| `preview/branch` | preview | `branch-<name>`（默认 `main`）| branch |
 | `preview/pr` | preview | `pr-<N>` | PR 号 |
 
+**四种正交、两两不相交的 `version_ref` 形态**（`deploy_contract.classify_version_ref`）：
+1. `branch`：`\Amain\Z`
+2. `tag`：`\Av\d+\.\d+\.\d+\Z`
+3. `pr`：`\A(?:pr-([1-9]\d*)|([1-9]\d{0,5}))\Z`（至多 6 位正整数，永不与 7–40 位十六进制 SHA 重叠）
+4. `sha`：`\A[0-9a-fA-F]{7,40}\Z`
+
 **三条框架护栏（与业务无关，保持稳定）**：
-1. **type 选策略/配置，不是内嵌值的扁平枚举**：每实例数据（分支名/PR 号/tag）走 `version_ref`+派生槽，type 集合保持小。
-2. **公共内核 + per-type 配置**：入口 resolve `type → spec` 一次，后续公共代码跑；禁散落 `switch(type)`。
-3. **fail-closed by construction**：未知 type 拒；形态不匹配当场拒；绝不让"参数全空"隐式触发未声明的部署类型。
+1. **type 选策略/配置，不是内嵌值的扁平枚举**：外层只传正交的 `preview` / `staging` / `prod`，由 `resolve_deploy_type_for_ref(type, version_ref)` 在控制面派生 `preview/branch` 或 `preview/pr`。
+2. **公共内核 + per-type 配置**：入口 resolve `type → spec` 一次，并按 `ServiceSpec.artifact_source`（`"infra2"` vs `"app"`，与 `iac_pinned` 解耦）分派；控制面缺省自动推导 `iac_ref`（`staging`/`prod` 取最新 `vX.Y.Z` release tag，`preview` 取 `main`）与 `domain`（`infra_domain()`）。`deploy_v2` 对外收敛为 `DeployOptions` / `DeployDeps`（兼容保留平铺关键字调用）。
+3. **fail-closed by construction**：未知 type 拒；形态不匹配当场拒；`artifact_source="infra2"` 在 `staging`/`prod` 只接受单个 ref（`version_ref` 与 `iac_ref` 冲突即拒）；绝不让"参数全空"隐式触发未声明的部署类型。
 
 **version 寻址语义（已落地，不再是 TBD）**：`version_ref` 按 `type` 解释——preview/pr 是 PR 号（`resolve_pr` →
 PR head 镜像）；preview/branch 接受分支（默认 main）；staging 与 prod 是 release tag（拉长期保留的 `:vX.Y.Z`，且默认对齐 `harness/repos.yaml`）。`image_ref` 由**形态**决定（code→短 sha、release→tag），
@@ -415,17 +422,16 @@ compose、env、secret 路径、**外部镜像 tag**、Traefik 路由 label、�
 
 **于是四轴各管一件正交的事**：
 
-| 轴 | 它定 | app | 平台服务 |
-|----|------|-----|----------|
-| `iac_ref` | **HOW**（IaC：compose/env/secret/镜像 pin/路由，全部）| infra2 commit | infra2 commit |
-| `service` | **WHICH**（部署哪个已注册服务）| `finance_report/app` | `platform/redis` … |
-| `type` | **哪种 env 制度**（派生 env + preview 槽 + 门控）| 4 种 | `staging` / `prod`（prod_only 无 preview）|
-| `version_ref` | **哪个 app-code 制品** | 代码面（PR/branch/tag）| **空**——平台制品 = `iac_ref` 钉的栈，无独立代码版本 |
+| 轴 | 它定 | app (`artifact_source="app"`) | 平台服务 (`artifact_source="infra2"`) |
+|----|------|-------------------------------|----------------------------------------|
+| `iac_ref` | **HOW**（IaC：compose/env/secret/镜像 pin/路由；缺省由控制面推导）| infra2 commit / release tag | 同单一坐标（与 `version_ref` 等价）|
+| `service` | **WHICH**（部署哪个已注册服务）| `finance_report/app` / `truealpha/app` / `truealpha/data_engine` | `platform/redis` / `platform/todo` … |
+| `type` | **哪种 env 制度**（`staging` / `prod` / `preview`）| 3 种正交类型 | `staging` / `prod`（已注册 preview 者含 `preview`）|
+| `version_ref` | **哪个制品版本**（或 preview 槽）| 代码面（PR / `main` / tag / SHA）| 对 `staging`/`prod` 即单一 infra2 release tag；对 `preview` 为 preview 槽 |
 
-**∴ 任一次部署 = 这个四元组里的一个点。** `version_ref` 对平台服务**优雅退化为空**（坐标不需要新增轴）。
+**∴ 任一次部署 = 这个正交坐标里的一个点。** 平台服务（`artifact_source="infra2"`）在 `staging`/`prod` 只需传 `version_ref`（不与 `iac_ref` 冲突）；`truealpha/data_engine`虽由 `iac_pinned` runner 调度，但因 `artifact_source="app"` 而遵循 App 制品语义，外层不再需要写 `pinned_ref == iac_ref` 特判。
 
-> **实现注**：「退化为空」已在当前实现中落地：`iac_pinned` 平台服务以 `iac_ref` 解析出的 infra2 sha 作为
-> `DeployTarget.code_version` 身份，并忽略 `version_ref`。这是 impl 层的退化，不是新增坐标轴。
+> **实现注**：`DeployOptions` 与 `DeployDeps` 收拢了 `deploy_v2` 的策略开关与注入依赖，调用方省略 `iac_ref` 或 `domain` 时由控制面统一派生。
 
 **反例排查（之前扫描标的「gap」其实都不是坐标 gap，全在 `iac_ref` 或 per-service deployer 里）**：
 

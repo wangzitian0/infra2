@@ -33,13 +33,8 @@ def _normalize_extras(extras: str) -> str:
     return ",".join(dict.fromkeys(items))
 
 
-def sdk_requirement(lock: Path, *, extras: str = "") -> str:
-    """`infra2-sdk @ <wheel url>#sha256=<digest>` (or `infra2-sdk[extras] @ ...`) from the lock.
-
-    Raises ValueError when the lock does not pin exactly one direct wheel with a
-    sha256 hash or when ``extras`` contains invalid identifiers.
-    """
-    normalized_extras = _normalize_extras(extras)
+def _sdk_package(lock: Path) -> dict:
+    """Return the single locked ``infra2-sdk`` package table from ``lock``."""
     packages = [
         package
         for package in tomllib.loads(lock.read_text(encoding="utf-8")).get(
@@ -51,7 +46,25 @@ def sdk_requirement(lock: Path, *, extras: str = "") -> str:
         raise ValueError(
             f"{lock}: expected one {PACKAGE} package, found {len(packages)}"
         )
-    (package,) = packages
+    return packages[0]
+
+
+def sdk_version(lock: Path) -> str:
+    """Return the locked ``infra2-sdk`` version string (for example ``3.32.0``) from ``lock``."""
+    version = str(_sdk_package(lock).get("version") or "").strip()
+    if not version:
+        raise ValueError(f"{lock}: {PACKAGE} has no version")
+    return version
+
+
+def sdk_requirement(lock: Path, *, extras: str = "") -> str:
+    """`infra2-sdk @ <wheel url>#sha256=<digest>` (or `infra2-sdk[extras] @ ...`) from the lock.
+
+    Raises ValueError when the lock does not pin exactly one direct wheel with a
+    sha256 hash or when ``extras`` contains invalid identifiers.
+    """
+    normalized_extras = _normalize_extras(extras)
+    package = _sdk_package(lock)
     url = package.get("source", {}).get("url")
     wheels = package.get("wheels", [])
     if not url or len(wheels) != 1 or wheels[0].get("url") != url:
@@ -70,10 +83,18 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="Optional comma-separated extras (for example fastapi,postgres,s3,http).",
     )
+    parser.add_argument(
+        "--version",
+        action="store_true",
+        help="Print only the locked infra2-sdk version string instead of a pip requirement.",
+    )
     parser.add_argument("lock", nargs="?", default="uv.lock", type=Path)
     args = parser.parse_args(argv)
     try:
-        print(sdk_requirement(args.lock, extras=args.extras))
+        if args.version:
+            print(sdk_version(args.lock))
+        else:
+            print(sdk_requirement(args.lock, extras=args.extras))
     except (OSError, ValueError, tomllib.TOMLDecodeError) as error:
         print(f"sdk_requirement: {error}", file=sys.stderr)
         return 1

@@ -66,7 +66,7 @@ VPS 初始化时安装 Dokploy 容器平台。
 
 **状态**：✅ 已部署  
 **域名**：`op.$INTERNAL_DOMAIN`  
-**API 版本**：1.8.1
+**API 版本**：1.8.2
 
 ### 5. [Vault](./05.vault/README.md)
 HashiCorp Vault 秘密管理。

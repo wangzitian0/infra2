@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tools.sdk_requirement import sdk_requirement
+from tools.sdk_requirement import sdk_requirement, sdk_version
 
 ROOT = Path(__file__).resolve().parents[2]
 LOCK = ROOT / "uv.lock"
@@ -79,6 +79,7 @@ def test_invalid_extras_are_refused(bad_extras: str) -> None:
 
 def test_the_installed_sdk_is_the_locked_release() -> None:
     assert version("infra2-sdk") == _locked()["version"]
+    assert sdk_version(LOCK) == _locked()["version"]
 
 
 def _with_two_wheels(text: str) -> str:
