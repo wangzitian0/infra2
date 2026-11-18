@@ -43,7 +43,6 @@ from functools import lru_cache
 from typing import Literal
 
 import yaml
-from infra2_sdk.refs import classify_ref
 from infra2_sdk.runtime.environment import is_preview_alias
 
 from common.core.constants import APP_REPO_ID_TO_SERVICE, REPO_ROOT
@@ -51,9 +50,14 @@ from common.core import registry as service_registry
 from common.deploy.env_config import env_config, preview_alias
 
 _SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")  # a resolved, image-addressable commit sha
+# Pairwise-disjoint version_ref forms (#1781). Do not import newer infra2_sdk.refs helpers
+# here because iac-runner task collection runs on RUNNER_SDK = 3.23.0 until rebuild.
+_BRANCH_REF_RE = re.compile(r"\Amain\Z")
+_TAG_REF_RE = re.compile(r"\Av\d+\.\d+\.\d+\Z")
 # PR refs: either explicit `pr-<N>` or 1-6 digit integer (strictly < 7 chars so it
 # never collides with 7-40 hex commit SHAs).
 _PR_REF_RE = re.compile(r"\A(?:pr-([1-9]\d*)|([1-9]\d{0,5}))\Z")
+_SHORT_OR_FULL_SHA_RE = re.compile(r"\A[0-9a-fA-F]{7,40}\Z")
 ArtifactSource = Literal["infra2", "app"]
 
 
@@ -500,9 +504,17 @@ def classify_version_ref(ref: str | int) -> str:
     cleaned = str(ref).strip() if ref is not None else ""
     if not cleaned:
         raise ValueError("version_ref must be non-empty")
+    if _BRANCH_REF_RE.fullmatch(cleaned):
+        return "branch"
+    if _TAG_REF_RE.fullmatch(cleaned):
+        return "tag"
     if _PR_REF_RE.fullmatch(cleaned):
         return "pr"
-    return classify_ref(cleaned)
+    if _SHORT_OR_FULL_SHA_RE.fullmatch(cleaned):
+        return "sha"
+    raise ValueError(
+        f"unrecognized version_ref {ref!r}; expected 'main', 'vX.Y.Z', 'pr-<N>', 1-6 digit PR, or 7-40 hex SHA"
+    )
 
 
 def normalize_pr_number(ref: str | int) -> int:

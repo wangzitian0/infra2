@@ -595,10 +595,10 @@ def _deploy_platform_batch(
     data_lanes: set[str] = set()
     for service in services:
         spec = service_spec(service)
-        if not spec.iac_pinned:
+        if not spec.iac_pinned or spec.artifact_source != "infra2":
             raise ValueError(
-                f"{service!r} is not iac_pinned; batch deploy only supports "
-                "platform/backing services"
+                f"{service!r} (iac_pinned={spec.iac_pinned}, artifact_source={spec.artifact_source!r}); "
+                "batch deploy only supports infra2-sourced services"
             )
         target = make_deploy_target(
             service=service, env=type_spec.env, code_version=iac_sha, iac_ref=iac_sha

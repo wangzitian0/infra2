@@ -10,10 +10,9 @@ from types import SimpleNamespace
 
 from invoke.exceptions import CommandTimedOut
 from common.console import error, success
+from common.deploy.contract import classify_version_ref
 from common.deploy.deployer import Deployer, make_tasks
 from common.core.facets import BackupFacet, Exemption, SecretsFacet
-
-from infra2_sdk.refs import classify_ref
 
 shared_tasks = sys.modules.get("truealpha.20.data_engine.shared")
 
@@ -167,7 +166,7 @@ class DataEngineDeployer(Deployer):
         """
         candidate = str(version_ref).strip()
         try:
-            form = classify_ref(candidate)
+            form = classify_version_ref(candidate)
         except ValueError as exc:
             raise ValueError(
                 f"DEPLOY_VERSION_REF must be a vX.Y.Z tag or a commit sha, got {version_ref!r}"

@@ -129,6 +129,7 @@ def calls(monkeypatch):
     monkeypatch.setattr(dv2, "resolve_image_ref", _fake_resolve_image_ref)
     monkeypatch.setattr(dv2, "resolve_pr", _fake_resolve_pr)
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "newest_release_tag", lambda **kw: "v0.0.0")
     monkeypatch.setattr(dv2, "verify_app_manifests", lambda *a, **kw: {})
     return rec
 
@@ -558,7 +559,7 @@ def test_prod_tag_routes_fixed_and_pulls_the_tag_not_the_sha(calls):
 def test_prod_rejects_non_tag_version_ref_fail_closed(calls, bad):
     # prod accepts a release TAG only; a code ref (or the retired release-branch form)
     # fails closed before any backend. release/0.1 is now an unrecognized ref entirely.
-    with pytest.raises(ValueError, match="does not accept|unrecognized deploy ref"):
+    with pytest.raises(ValueError, match="does not accept|unrecognized"):
         _deploy(
             deploy_type="prod",
             version_ref=bad,
@@ -615,7 +616,7 @@ def test_deploy_v2_rollback_class_is_none_when_the_gate_never_ran(calls):
 
 @pytest.mark.parametrize("bad", ["main", "c" * 40, "release/0.1"])
 def test_staging_rejects_code_forms_fail_closed(calls, bad):
-    with pytest.raises(ValueError, match="does not accept|unrecognized deploy ref"):
+    with pytest.raises(ValueError, match="does not accept|unrecognized"):
         _deploy(deploy_type="staging", version_ref=bad)
     assert calls["fixed"] is None
 
@@ -1014,6 +1015,7 @@ def test_cli_platform_staging_builds_no_dokploy_client(monkeypatch):
         lambda **kw: sent.update(kw) or {"status": "accepted", "deployment_id": "d1"},
     )
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "newest_release_tag", lambda **kw: "v0.0.0")
     rc = dv2.main(
         [
             "--service",
@@ -1359,6 +1361,7 @@ def _platform(monkeypatch, *, poll_status="completed", **over):
         lambda **kw: {"status": poll_status, "deployment_id": "d1"},
     )
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "newest_release_tag", lambda **kw: "v0.0.0")
     base = dict(
         service="platform/redis",
         deploy_type="staging",
@@ -1395,6 +1398,7 @@ def test_platform_wait_uses_timeout_budget_for_status_poll(monkeypatch):
         lambda **kw: seen.update(kw) or {"status": "completed", "deployment_id": "d1"},
     )
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "newest_release_tag", lambda **kw: "v0.0.0")
 
     deploy_v2(
         service="platform/redis",
@@ -1485,6 +1489,7 @@ def test_platform_batch_cli_routes_services_once(monkeypatch, capsys):
         lambda **kw: {"status": "completed", "deployment_id": "d1"},
     )
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "newest_release_tag", lambda **kw: "v0.0.0")
 
     rc = dv2.main(
         [
@@ -1599,6 +1604,17 @@ def test_platform_wait_polls_and_records_final(monkeypatch):
 def test_platform_wait_raises_on_failed_deploy(monkeypatch):
     with pytest.raises(RuntimeError, match="ended 'failed'"):
         _platform(monkeypatch, poll_status="failed")
+
+
+def test_platform_batch_rejects_app_sourced_companion(monkeypatch):
+    monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "assert_iac_ref_on_main", lambda *a, **k: None)
+    with pytest.raises(ValueError, match="artifact_source='app'"):
+        dv2._deploy_platform_batch(
+            services=["platform/redis", "truealpha/data_engine"],
+            deploy_type="staging",
+            version_ref="v0.0.0",
+        )
 
 
 def test_wait_for_image_dependencies_retries_until_all_artifacts_exist(monkeypatch):
