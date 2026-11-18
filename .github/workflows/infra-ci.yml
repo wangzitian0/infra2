@@ -748,18 +748,23 @@ jobs:
         id: plan
         env:
           IS_FORK_PR: ${{ github.event.pull_request.head.repo.fork }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           cd "${{ github.workspace }}"
           uv run --locked python - <<'PY'
+          import json
           import os
           from pathlib import Path
 
           from common.deploy.env_config import preview_service_config
+          from common.deploy.stage_record import utc_now
           from tools.reconcile_iac_inputs import build_plan
 
-          changed_path = Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "pr_changed_files.txt"
+          started_at = utc_now()
+          runner_temp = Path(os.environ.get("RUNNER_TEMP", "/tmp"))
+          changed_path = runner_temp / "pr_changed_files.txt"
           changed = [
               line.strip()
               for line in changed_path.read_text(encoding="utf-8").splitlines()
@@ -778,24 +783,28 @@ jobs:
                   continue
               if cfg.throwaway_secrets:
                   affected.append(service)
+          uncovered = [s for s in sorted(plan.selected) if s not in affected]
 
           print(f"build_plan selected={sorted(plan.selected)} reasons={plan.selected}")
-          is_fork = os.environ.get("IS_FORK_PR", "").lower() == "true"
+          is_fork = (
+              os.environ.get("IS_FORK_PR", "").lower() == "true"
+              or os.environ.get("PR_HEAD_REPO", "") != os.environ.get("GITHUB_REPOSITORY", "")
+          )
           has_key = bool(os.environ.get("DOKPLOY_API_KEY", "").strip())
+          run_preview = "false"
+          plan_error = ""
           if not affected:
               print(
                   "No throwaway_secrets previewable platform service affected by this PR; "
                   "passing Preview Runtime Gate cleanly."
               )
-              run_preview = "false"
           elif is_fork:
               print(
                   f"Fork PR cannot access DOKPLOY_API_KEY; skipping preview deploy for "
                   f"{affected} cleanly."
               )
-              run_preview = "false"
           elif not has_key:
-              raise SystemExit(
+              plan_error = (
                   f"::error::DOKPLOY_API_KEY is required on non-fork PRs when "
                   f"throwaway_secrets preview service(s) {affected} are affected"
               )
@@ -803,45 +812,175 @@ jobs:
               print(f"Affected throwaway_secrets preview services: {affected}")
               run_preview = "true"
 
+          (runner_temp / "preview_plan.json").write_text(
+              json.dumps(
+                  {
+                      "started_at": started_at,
+                      "affected": affected,
+                      "uncovered": uncovered,
+                      "selected": dict(plan.selected),
+                      "is_fork": is_fork,
+                      "run_preview": run_preview == "true",
+                  }
+              ),
+              encoding="utf-8",
+          )
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
               fh.write(f"run_preview={run_preview}\n")
               fh.write(f"services={' '.join(affected)}\n")
+          if plan_error:
+              raise SystemExit(plan_error)
           PY
 
       - name: Deploy affected previewable platform services
+        id: deploy
         if: steps.plan.outputs.run_preview == 'true'
         env:
           AFFECTED_PREVIEW_SERVICES: ${{ steps.plan.outputs.services }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           cd "${{ github.workspace }}"
           for svc in $AFFECTED_PREVIEW_SERVICES; do
-            echo "Deploying preview slot for ${svc} (PR #${{ github.event.pull_request.number }}, branch ${{ github.event.pull_request.head.ref }})"
+            echo "Deploying preview slot for ${svc} (PR #${PR_NUMBER}, branch ${PR_HEAD_REF})"
             uv run --locked python -m tools.deploy_v2 \
               --service "$svc" \
               --type preview/pr \
-              --version-ref "${{ github.event.pull_request.number }}" \
-              --iac-ref "${{ github.event.pull_request.head.ref }}" \
+              --version-ref "$PR_NUMBER" \
+              --iac-ref "$PR_HEAD_REF" \
               --domain "${INTERNAL_DOMAIN}"
           done
 
       - name: Tear down preview slot
+        id: teardown
         if: always() && steps.plan.outputs.run_preview == 'true'
         env:
           AFFECTED_PREVIEW_SERVICES: ${{ steps.plan.outputs.services }}
+          PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           cd "${{ github.workspace }}"
+          rc=0
           for svc in $AFFECTED_PREVIEW_SERVICES; do
-            echo "Tearing down preview slot for ${svc} (PR #${{ github.event.pull_request.number }})"
+            echo "Tearing down preview slot for ${svc} (PR #${PR_NUMBER})"
             uv run --locked python -m tools.deploy_v2 \
               --service "$svc" \
               --type preview/pr \
-              --version-ref "${{ github.event.pull_request.number }}" \
-              --iac-ref "${{ github.event.pull_request.head.ref }}" \
+              --version-ref "$PR_NUMBER" \
+              --iac-ref "$PR_HEAD_REF" \
               --domain "${INTERNAL_DOMAIN}" \
-              --down
+              --down || rc=1
           done
+          exit "$rc"
+
+      - name: Write the preview runtime stage record
+        if: always()
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PLAN_OUTCOME: ${{ steps.plan.outcome }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          TEARDOWN_OUTCOME: ${{ steps.teardown.outcome }}
+        run: |
+          set -euo pipefail
+          cd "${{ github.workspace }}"
+          uv run --locked python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          from infra2_sdk.observability import CheckVerdict
+          from common.deploy.stage_record import utc_now, write_stage_record
+
+          plan_path = Path(os.environ.get("RUNNER_TEMP", "/tmp")) / "preview_plan.json"
+          if plan_path.is_file():
+              plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
+          else:
+              plan_data = {
+                  "started_at": utc_now(),
+                  "affected": [],
+                  "uncovered": [],
+                  "selected": {},
+                  "is_fork": False,
+                  "run_preview": False,
+              }
+
+          def _unit_ref(service: str) -> str:
+              prefix = "app" if service.startswith(("finance_report/", "truealpha/")) else "infra"
+              return f"{prefix}:{service}"
+
+          plan_outcome = os.environ.get("PLAN_OUTCOME", "unknown")
+          deploy_outcome = os.environ.get("DEPLOY_OUTCOME", "skipped")
+          teardown_outcome = os.environ.get("TEARDOWN_OUTCOME", "skipped")
+          affected = list(plan_data.get("affected") or [])
+          uncovered = list(plan_data.get("uncovered") or [])
+          selected = dict(plan_data.get("selected") or {})
+          run_preview = bool(plan_data.get("run_preview"))
+
+          checks = [
+              CheckVerdict(
+                  name="preview-plan",
+                  ok=plan_outcome == "success",
+                  detail=plan_outcome,
+                  seconds=0.0,
+              )
+          ]
+          if run_preview:
+              checks.append(
+                  CheckVerdict(
+                      name="preview-deploy",
+                      ok=deploy_outcome == "success",
+                      detail=deploy_outcome,
+                      seconds=0.0,
+                  )
+              )
+              checks.append(
+                  CheckVerdict(
+                      name="preview-teardown",
+                      ok=teardown_outcome == "success",
+                      detail=teardown_outcome,
+                      seconds=0.0,
+                  )
+              )
+
+          write_stage_record(
+              env="preview.runtime",
+              phase="post",
+              subject=f"pr:{os.environ['PR_NUMBER']}",
+              ref=os.environ["GITHUB_REF"],
+              event="pull_request",
+              run_url=f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+              started_at=plan_data.get("started_at") or utc_now(),
+              checks=checks,
+              units=[_unit_ref(svc) for svc in affected],
+              uncovered=[_unit_ref(svc) for svc in uncovered],
+          )
+
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "").strip()
+          if summary_path:
+              lines = [
+                  f"### Preview Runtime Gate (PR #{os.environ['PR_NUMBER']})",
+                  "",
+                  f"- Plan: `{plan_outcome}`",
+                  f"- Affected throwaway preview services: {', '.join(f'`{s}`' for s in affected) or 'none'}",
+                  f"- Deploy: `{deploy_outcome}` | Teardown: `{teardown_outcome}`",
+                  f"- Uncovered `build_plan` services: {', '.join(f'`{s}` ({selected.get(s, \"\")})' for s in uncovered) or 'none'}",
+                  "",
+              ]
+              with open(summary_path, "a", encoding="utf-8") as fh:
+                  fh.write("\n".join(lines))
+          PY
+
+      - name: Upload the preview runtime stage record
+        # gate-exempt: uploading the stage record artifact is observability only; artifact service downtime must not fail the PR gate.
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
+        if: always() && env.STAGE_RECORD_POST != ''
+        with:
+          name: ${{ env.STAGE_RECORD_POST }}
+          path: stage-records/${{ env.STAGE_RECORD_POST }}.json
+          if-no-files-found: ignore
 
   # The CI post record of a commit on main (#1645). The production pre record of a release
   # reads it, so it names every job of the merge authority (`blocks_merge: true` in

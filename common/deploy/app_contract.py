@@ -784,6 +784,49 @@ def execute_app_hook_slot(
     )
 
 
+def local_hooks_manifest_path(service: str, *, root: Path = REPO_ROOT) -> Path | None:
+    """Return local ``runtime-hooks.manifest.json`` path for ``service``, if present."""
+    from common.core.registry import service_attrs
+
+    meta = service_attrs().get(service)
+    if not meta or not meta.compose_path:
+        return None
+    manifest_path = (
+        Path(root) / Path(meta.compose_path).parent / APP_HOOKS_MANIFEST_PATH
+    )
+    return manifest_path if manifest_path.is_file() else None
+
+
+def run_service_hooks(
+    service: str,
+    slot: str,
+    *,
+    app_url: str,
+    environment: str = "preview",
+    version_ref: str = "main",
+    root: Path = REPO_ROOT,
+    ambient_env: Mapping[str, str] | None = None,
+    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> HookRunResult | None:
+    """Execute local ``runtime-hooks.manifest.json`` ``slot`` for ``service``, if present."""
+    manifest_path = local_hooks_manifest_path(service, root=root)
+    if manifest_path is None:
+        return None
+    manifest = load_hooks_manifest(manifest_path, root=root)
+    if slot not in manifest.slots:
+        return None
+    return execute_app_hook_slot(
+        manifest,
+        slot,
+        app_url=app_url,
+        environment=environment,
+        version_ref=version_ref,
+        cwd=manifest_path.parent,
+        ambient_env=ambient_env,
+        runner=runner,
+    )
+
+
 def git_url(repository: str) -> str:
     """Return the HTTPS Git clone URL for a ``owner/repo`` GitHub slug."""
     return f"https://github.com/{repository}.git"
@@ -965,6 +1008,7 @@ __all__ = [
     "git_url",
     "hook_env_for_slot",
     "load_hooks_manifest",
+    "local_hooks_manifest_path",
     "next_app_release_tag",
     "parse_compose_contract",
     "parse_contract",
@@ -975,6 +1019,7 @@ __all__ = [
     "query_serving_release",
     "render_release_template",
     "run_hook_slot",
+    "run_service_hooks",
     "service_for_id",
     "service_stack_manifest",
     "service_vault_policy",

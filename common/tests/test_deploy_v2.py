@@ -96,7 +96,9 @@ class _Plan:
 @pytest.fixture
 def calls(monkeypatch):
     """Record backend invocations + stub the resolvers — no git, no Dokploy."""
-    rec = {"preview": None, "fixed": None, "image_waits": []}
+    from types import SimpleNamespace
+
+    rec = {"preview": None, "fixed": None, "image_waits": [], "hooks": []}
 
     def fake_up(kind, value, **kw):
         rec["preview"] = {"kind": kind, "value": value, **kw}
@@ -130,6 +132,14 @@ def calls(monkeypatch):
     monkeypatch.setattr(dv2, "resolve_pr", _fake_resolve_pr)
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
     monkeypatch.setattr(dv2, "verify_app_manifests", lambda *a, **kw: {})
+    monkeypatch.setattr(
+        dv2,
+        "run_service_hooks",
+        lambda service, slot, **kw: (
+            rec["hooks"].append({"service": service, "slot": slot, **kw})
+            or SimpleNamespace(status="pass", summary="ok")
+        ),
+    )
     return rec
 
 
@@ -2606,6 +2616,8 @@ def test_platform_preview_pr_accepts_pr_branch_iac_ref_and_resolves_head_sha(
         ("preview/pr", "../escape"),
         ("preview/pr", "refs/heads/feat/x"),
         ("preview/pr", "-flag"),
+        ("preview/pr", "feat/.hidden"),
+        ("preview/pr", "feat/branch.lock/tip"),
         ("staging", "feat/ws4-pr-preview-gate"),
         ("prod", "feat/ws4-pr-preview-gate"),
     ],
@@ -2647,3 +2659,27 @@ def test_platform_preview_pr_branch_iac_ref_fails_when_remote_ref_absent(
             iac_ref="feat/missing-branch",
         )
     assert calls["preview"] is None
+
+
+def test_platform_preview_runs_preview_gate_hooks_and_fails_closed(monkeypatch, calls):
+    from types import SimpleNamespace
+
+    res = _deploy(service="platform/todo", deploy_type="preview/pr", version_ref="42")
+    assert res.detail["preview_gate"] == "pass"
+    assert calls["hooks"] == [
+        {
+            "service": "platform/todo",
+            "slot": "preview_gate",
+            "app_url": "https://report-x.zitian.party",
+            "environment": "preview",
+            "version_ref": SHA_IAC[:7],
+        }
+    ]
+
+    monkeypatch.setattr(
+        dv2,
+        "run_service_hooks",
+        lambda *_a, **_kw: SimpleNamespace(status="fail", summary="probe failed"),
+    )
+    with pytest.raises(RuntimeError, match="preview_gate hook failed"):
+        _deploy(service="platform/todo", deploy_type="preview/pr", version_ref="42")

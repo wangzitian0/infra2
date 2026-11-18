@@ -585,6 +585,8 @@ def _is_valid_branch_ref(ref: str) -> bool:
         return False
     if "//" in ref or ".." in ref or "@{" in ref:
         return False
+    if any(part.startswith(".") or part.endswith(".lock") for part in ref.split("/")):
+        return False
     return _BRANCH_REF_RE.fullmatch(ref) is not None
 
 

@@ -66,7 +66,11 @@ from common.deploy.preflight import (
 )
 from common.deploy.env_config import env_config, preview_service_config
 from common.core.registry import domain_for_service
-from common.deploy.app_contract import encode_rendered_templates, verify_app_manifests
+from common.deploy.app_contract import (
+    encode_rendered_templates,
+    run_service_hooks,
+    verify_app_manifests,
+)
 from common.deploy.promote import deploy as _deploy_fixed
 from common.deploy.preview import _validate_domain
 from common.deploy.preview import down as _preview_down
@@ -259,12 +263,29 @@ def _deploy_platform_preview(
         health_timeout=timeout,
         repo=_INFRA2_REPO,
     )
+    hook_status: str | None = None
+    if wait:
+        hook_res = run_service_hooks(
+            service,
+            "preview_gate",
+            app_url=result.url,
+            environment="preview",
+            version_ref=iac_sha[:7],
+        )
+        if hook_res is not None:
+            hook_status = hook_res.status
+            if hook_res.status != "pass":
+                raise RuntimeError(
+                    f"preview_gate hook failed for {service} ({result.alias}): "
+                    f"{hook_res.summary}"
+                )
     detail = {
         "alias": result.alias,
         "compose_id": result.compose_id,
         "sha": result.sha,
         "url": result.url,
         "healthy": result.healthy,
+        "preview_gate": hook_status,
     }
     return DeployV2Result(target, data_lane, "preview-lifecycle", detail)
 

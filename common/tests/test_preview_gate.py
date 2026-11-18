@@ -101,24 +101,86 @@ def test_preview_job_wires_unified_deploy_v2_and_always_teardown() -> None:
     assert "build_plan" in plan_step["run"]
     assert "throwaway_secrets" in plan_step["run"]
     assert "::error::DOKPLOY_API_KEY is required on non-fork PRs" in plan_step["run"]
+    assert "head.repo.full_name" in str(plan_step["env"].get("PR_HEAD_REPO") or "")
 
     deploy_step = next(
         s
         for s in steps
         if s.get("name") == "Deploy affected previewable platform services"
     )
+    deploy_env = deploy_step.get("env") or {}
+    assert deploy_env.get("PR_NUMBER") == "${{ github.event.pull_request.number }}"
+    assert deploy_env.get("PR_HEAD_REF") == "${{ github.event.pull_request.head.ref }}"
     deploy_run = deploy_step["run"]
     assert "tools.deploy_v2" in deploy_run
     assert "--type preview/pr" in deploy_run
-    assert "${{ github.event.pull_request.number }}" in deploy_run
-    assert "${{ github.event.pull_request.head.ref }}" in deploy_run
+    assert "${{ github.event.pull_request" not in deploy_run
+    assert '"$PR_NUMBER"' in deploy_run
+    assert '"$PR_HEAD_REF"' in deploy_run
 
     down_step = next(s for s in steps if s.get("name") == "Tear down preview slot")
     assert "always()" in str(down_step.get("if") or "")
+    down_env = down_step.get("env") or {}
+    assert down_env.get("PR_NUMBER") == "${{ github.event.pull_request.number }}"
+    assert down_env.get("PR_HEAD_REF") == "${{ github.event.pull_request.head.ref }}"
     down_run = down_step["run"]
     assert "tools.deploy_v2" in down_run
     assert "--type preview/pr" in down_run
     assert "--down" in down_run
+    assert "|| rc=1" in down_run
+    assert 'exit "$rc"' in down_run
+    assert "${{ github.event.pull_request" not in down_run
+
+    record_step = next(
+        s for s in steps if s.get("name") == "Write the preview runtime stage record"
+    )
+    assert "always()" in str(record_step.get("if") or "")
+    assert 'env="preview.runtime"' in record_step["run"]
+    assert "write_stage_record" in record_step["run"]
+    assert "GITHUB_STEP_SUMMARY" in record_step["run"]
+
+    upload_step = next(
+        s for s in steps if s.get("name") == "Upload the preview runtime stage record"
+    )
+    assert "actions/upload-artifact@" in str(upload_step.get("uses") or "")
+
+
+def test_run_service_hooks_executes_todo_preview_gate_and_skips_unmanifested(
+    monkeypatch,
+) -> None:
+    import subprocess
+    from common.deploy.app_contract import run_service_hooks
+
+    calls: list[tuple[list[str], dict]] = []
+
+    def fake_runner(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok\n", stderr="")
+
+    res = run_service_hooks(
+        "platform/todo",
+        "preview_gate",
+        app_url="https://todo-pr-42.zitian.party",
+        environment="preview",
+        version_ref="abcdef0",
+        ambient_env={"PATH": "/usr/bin:/bin"},
+        runner=fake_runner,
+    )
+    assert res is not None
+    assert res.status == "pass"
+    assert len(calls) == 1
+    assert Path(calls[0][1]["cwd"]) == ROOT / "platform/30.todo"
+    assert calls[0][1]["env"]["APP_URL"] == "https://todo-pr-42.zitian.party"
+
+    assert (
+        run_service_hooks(
+            "platform/redis",
+            "preview_gate",
+            app_url="https://redis-pr-42.zitian.party",
+            runner=fake_runner,
+        )
+        is None
+    )
 
 
 def test_build_plan_selects_throwaway_preview_service_for_todo_and_ignores_unrelated() -> (
