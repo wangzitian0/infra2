@@ -688,6 +688,9 @@ jobs:
         if: failure() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          INFRA2_REPORTS_FEISHU_APP_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_ID }}
+          INFRA2_REPORTS_FEISHU_APP_SECRET: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_SECRET }}
+          INFRA2_REPORTS_FEISHU_CHAT_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_CHAT_ID }}
         run: |
           python - <<'PY'
           import os
