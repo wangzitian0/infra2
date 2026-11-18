@@ -623,7 +623,6 @@ def _build_deploy_env_vars(
         "TRAEFIK_ENABLE": "true",
         "INTERNAL_DOMAIN": domain,
         "CONFIGURATION_SHA256": config_hash,
-        "IAC_CONFIG_HASH": config_hash,
     }
     from common.deploy.contract import service_spec, worker_telemetry_env
     from common.core.service_identity import ServiceIdentity

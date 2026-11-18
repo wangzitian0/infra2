@@ -1127,14 +1127,14 @@ def test_a_dokploy_record_is_stale_only_with_per_unit_runtime_evidence() -> None
             [_container("app", config="")],
             CURRENT,
             False,
-            "no container carries IAC_CONFIG_HASH",
+            "no container carries CONFIGURATION_SHA256",
         ),
         ([], CURRENT, False, "no container of this unit on the host"),
         (
             [_container("app")],
             "",
             False,
-            "Dokploy holds no IAC_CONFIG_HASH for this unit, so its current config "
+            "Dokploy holds no CONFIGURATION_SHA256 for this unit, so its current config "
             "cannot be matched",
         ),
         (
@@ -1263,7 +1263,7 @@ def test_dokploy_status_check_gathers_per_unit_runtime_evidence() -> None:
     results = watchdog.run_dokploy_status_check(
         {"DOKPLOY_API_KEY": "secret"},
         client_factory=lambda *, host: _evidence_client(
-            env_text=f"A=1\nIAC_CONFIG_HASH={CURRENT}\n"
+            env_text=f"A=1\nCONFIGURATION_SHA256={CURRENT}\n"
         ),
         unit_runtime=unit_runtime,
     )
@@ -1278,6 +1278,31 @@ def test_dokploy_status_check_gathers_per_unit_runtime_evidence() -> None:
     )
     expected = datetime(2026, 9, 24, tzinfo=UTC).timestamp()
     assert [result.recorded_at for result in results] == [expected, expected]
+
+
+def test_dokploy_unit_runtime_prefers_configuration_sha256_and_falls_back() -> None:
+    watchdog = _load_watchdog()
+
+    class _Client:
+        def __init__(self, env_text: str) -> None:
+            self._env = env_text
+
+        def get_compose(self, _cid: str) -> dict:
+            return {"appName": "unit-proj", "env": self._env}
+
+    ok_both, msg_both = watchdog._dokploy_unit_runtime(
+        _Client(f"CONFIGURATION_SHA256={CURRENT}\nIAC_CONFIG_HASH={OLD}\n"),
+        "cid",
+        lambda _p: (0, f"/app|running|0|healthy|{CURRENT}\n", ""),
+    )
+    assert ok_both is True, msg_both
+
+    ok_legacy, msg_legacy = watchdog._dokploy_unit_runtime(
+        _Client(f"IAC_CONFIG_HASH={CURRENT}\n"),
+        "cid",
+        lambda _p: (0, f"/app|running|0|healthy|{CURRENT}\n", ""),
+    )
+    assert ok_legacy is True, msg_legacy
 
 
 @pytest.mark.parametrize(
@@ -1305,7 +1330,7 @@ def test_no_per_unit_evidence_keeps_the_dokploy_error_a_failure(
     results = watchdog.run_dokploy_status_check(
         {"DOKPLOY_API_KEY": "secret"},
         client_factory=lambda *, host: _evidence_client(
-            env_text=f"IAC_CONFIG_HASH={CURRENT}"
+            env_text=f"CONFIGURATION_SHA256={CURRENT}"
         ),
         unit_runtime=unit_runtime,
     )
@@ -2511,7 +2536,8 @@ def test_a_failed_pull_under_a_green_host_sweep_is_a_failure_not_stale(
         dokploy_check=lambda env, **_kwargs: real_check(
             env,
             client_factory=lambda *, host: _evidence_client(
-                env_text=f"IAC_CONFIG_HASH={CURRENT}", created_at=recent.isoformat()
+                env_text=f"CONFIGURATION_SHA256={CURRENT}",
+                created_at=recent.isoformat(),
             ),
             unit_runtime=old_version_running,
         ),

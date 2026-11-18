@@ -152,7 +152,6 @@ def _preview_env_vars(
         "TRAEFIK_ENABLE": "true",
         "INTERNAL_DOMAIN": domain,
         "CONFIGURATION_SHA256": config_hash,
-        "IAC_CONFIG_HASH": config_hash,
     }
     vault_template = os.environ.get("VAULT_SECRETS_TEMPLATE", "")
     if vault_template and not config.throwaway_secrets:

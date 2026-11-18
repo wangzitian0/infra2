@@ -114,9 +114,10 @@ DOKPLOY_STATUS_FAMILY = "dokploy-status:"
 #: runtime evidence does (the unit's own containers run healthy on the current
 #: config), because an old version can keep running healthy after a failed pull.
 DOKPLOY_RECORD_MAX_AGE_HOURS = 72
-#: Every config-bound app container carries the IAC_CONFIG_HASH it was created
+#: Every config-bound app container carries the CONFIGURATION_SHA256 it was created
 #: with, and Dokploy's compose env holds the current one (ops.pipeline.md).
-CONFIG_HASH_KEY = "IAC_CONFIG_HASH"
+CONFIG_HASH_KEY = "CONFIGURATION_SHA256"
+_LEGACY_CONFIG_HASH_KEY = "IAC_CONFIG_HASH"
 #: `docker inspect` line per container of one unit. Only the config hash is taken
 #: from the environment; no other variable leaves the host. A container created
 #: after the CONFIGURATION_SHA256 rename carries that key; an older container
@@ -1168,11 +1169,17 @@ def _dokploy_unit_runtime(
     try:
         record = get_compose(compose_id)
         project = str(record.get("appName") or "").strip()
-        expected = ""
+        found_hashes: dict[str, str] = {}
         for line in str(record.get("env") or "").splitlines():
             key, separator, value = line.partition("=")
-            if separator and key.strip() == CONFIG_HASH_KEY:
-                expected = value.strip()
+            cleaned_key = key.strip()
+            if separator and cleaned_key in {CONFIG_HASH_KEY, _LEGACY_CONFIG_HASH_KEY}:
+                found_hashes[cleaned_key] = value.strip()
+        expected = (
+            found_hashes.get(CONFIG_HASH_KEY)
+            or found_hashes.get(_LEGACY_CONFIG_HASH_KEY)
+            or ""
+        )
         if not project:
             return (
                 False,

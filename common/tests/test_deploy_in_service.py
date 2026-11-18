@@ -539,7 +539,7 @@ def _redis_sync(
         def composing(cls, c, env):
             deployed.append(env)
             remote.update(
-                runtime_hash=env["IAC_CONFIG_HASH"],
+                runtime_hash=env["CONFIGURATION_SHA256"],
                 source_hash=env["IAC_SOURCE_CONFIG_HASH"],
                 deploy_ref=env["IAC_DEPLOY_REF"],
             )
