@@ -952,6 +952,7 @@ def test_m3_reads_lock_path_from_repos_yaml(tmp_path: Path) -> None:
     lock_text = (census.REPO_ROOT / ("uv" + ".lock")).read_text(encoding="utf-8")
     current_ver = census.consumer_pinned_version(census.REPO_ROOT)
     assert current_ver
+    assert census.sdk_version(census.REPO_ROOT / ("uv" + ".lock")) == current_ver
     lock_file.write_text(lock_text, encoding="utf-8")
     assert (
         census.consumer_pinned_version(fr_root, consumer_name="finance_report")

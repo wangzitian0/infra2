@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
-from common.core.constants import load_app_sdk_locks
+from common.core.constants import _load_service_to_submodule_path, load_app_sdk_locks
 from common.core.harness.prod_queue import ProductionQueue, render_queue_lines
 from common.core.harness.manifest import (
     HEALTH_ENVIRONMENTS,
@@ -571,11 +571,13 @@ def _read_sdk_locks(
 ) -> dict[str, str] | None:
     if reader is None:
         return None
+    repos_yaml = root / "harness" / "repos.yaml"
     targets: dict[str, Path] = {"infra2": root / _ROOT_LOCK_NAME}
-    for service, rel_path in load_app_sdk_locks(
-        root / "harness" / "repos.yaml"
-    ).items():
-        targets[service] = root / rel_path
+    submodules = _load_service_to_submodule_path(repos_yaml)
+    for service, rel_path in load_app_sdk_locks(repos_yaml).items():
+        sub_path = submodules.get(service)
+        if sub_path:
+            targets[service] = root / sub_path / rel_path
     locks: dict[str, str] = {}
     for label, lock_path in targets.items():
         if not lock_path.is_file():

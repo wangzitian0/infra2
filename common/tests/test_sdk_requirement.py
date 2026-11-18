@@ -149,6 +149,16 @@ def test_the_cli_prints_nothing_and_fails_on_a_bad_lock(tmp_path) -> None:
     )
     assert (result.returncode, result.stdout) == (1, "")
 
+    ok_version = subprocess.run(
+        [sys.executable, str(SCRIPT), "--version", str(LOCK)],
+        capture_output=True,
+        text=True,
+    )
+    assert (ok_version.returncode, ok_version.stdout.strip()) == (
+        0,
+        _locked()["version"],
+    )
+
 
 _IMAGE_ASSIGN_RE = re.compile(
     r'^RUN sdk="\$\(python /tmp/sdk/sdk_requirement\.py'

@@ -639,6 +639,7 @@ def test_offline_status_text_is_unchanged(monkeypatch, tmp_path: Path, capsys) -
 
 def test_online_text_has_a_blank_line_and_the_table(monkeypatch, tmp_path, capsys):
     harness = _patch_cli(monkeypatch, FakeFetcher(BODIES))
+    monkeypatch.delenv("IAC_RUNNER_HEALTH_URL", raising=False)
     monkeypatch.setattr("common.deploy.release_markers.marker_status", _markers(BEHIND))
     _write_lock(tmp_path, LOCK)
 
@@ -653,6 +654,7 @@ def test_online_text_has_a_blank_line_and_the_table(monkeypatch, tmp_path, capsy
 def test_online_json_shape(monkeypatch, tmp_path: Path, capsys) -> None:
     outcomes = {**BODIES, _url("truealpha", "staging"): TimeoutError("timed out")}
     harness = _patch_cli(monkeypatch, FakeFetcher(outcomes))
+    monkeypatch.delenv("IAC_RUNNER_HEALTH_URL", raising=False)
     monkeypatch.setattr("common.deploy.release_markers.marker_status", _markers(BEHIND))
     _write_lock(
         tmp_path,
@@ -913,14 +915,20 @@ def test_online_status_reports_sdk_locks_and_iac_runner(tmp_path: Path) -> None:
     (tmp_path / "uv.lock").write_text("# mock lock", encoding="utf-8")
     (tmp_path / "repos" / "truealpha").mkdir(parents=True, exist_ok=True)
     (tmp_path / "repos" / "truealpha" / "uv.lock").write_text("# ta", encoding="utf-8")
+    # finance_report submodule uninitialized on disk: must be skipped, never read from root.
     _write_lock(
         tmp_path,
         "repositories:\n"
+        "  - id: finance-report\n"
+        "    path: repos/finance_report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.1.88\n"
+        "    sdk_lock: apps/backend/uv.lock\n"
         "  - id: truealpha\n"
         "    path: repos/truealpha\n"
         "    role: external-application\n"
         "    release_tag: v0.2.77\n"
-        "    sdk_lock: repos/truealpha/uv.lock\n",
+        "    sdk_lock: uv.lock\n",
     )
 
     runner_url = "https://iac.example.test/health"
