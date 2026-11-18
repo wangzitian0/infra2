@@ -957,15 +957,21 @@ jobs:
               uncovered=[_unit_ref(svc) for svc in uncovered],
           )
 
+          affected_summary = ", ".join(f"`{s}`" for s in affected) or "none"
+          uncovered_items = []
+          for service in uncovered:
+              reason = selected.get(service, "")
+              uncovered_items.append(f"`{service}` ({reason})")
+          uncovered_summary = ", ".join(uncovered_items) or "none"
           summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "").strip()
           if summary_path:
               lines = [
                   f"### Preview Runtime Gate (PR #{os.environ['PR_NUMBER']})",
                   "",
                   f"- Plan: `{plan_outcome}`",
-                  f"- Affected throwaway preview services: {', '.join(f'`{s}`' for s in affected) or 'none'}",
+                  f"- Affected throwaway preview services: {affected_summary}",
                   f"- Deploy: `{deploy_outcome}` | Teardown: `{teardown_outcome}`",
-                  f"- Uncovered `build_plan` services: {', '.join(f'`{s}` ({selected.get(s, \"\")})' for s in uncovered) or 'none'}",
+                  f"- Uncovered `build_plan` services: {uncovered_summary}",
                   "",
               ]
               with open(summary_path, "a", encoding="utf-8") as fh:
