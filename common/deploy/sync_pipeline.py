@@ -426,7 +426,6 @@ class SyncPipeline:
             )
 
         env_vars_dict["CONFIGURATION_SHA256"] = local_hash or ""
-        env_vars_dict["IAC_CONFIG_HASH"] = local_hash or ""
         env_vars_dict["IAC_SOURCE_CONFIG_HASH"] = source_hash or ""
         env_vars_dict["IAC_DEPLOY_REF"] = deploy_ref
         env_vars_dict.update(runtime_identity.deploy_env())

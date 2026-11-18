@@ -321,6 +321,23 @@ def test_deployed_identities_includes_truealpha_and_excludes_unmanaged_projects(
     assert not any(key.startswith("someone-elses-project/") for key in identities)
 
 
+def test_deployed_identities_prefers_configuration_sha256_over_legacy_hash(
+    monkeypatch,
+) -> None:
+    class _DualHashClient(_FakeDokployClientForIdentities):
+        def _request(self, method: str, path: str):
+            return {
+                "env": (
+                    "CONFIGURATION_SHA256=deploy-canonical\n"
+                    "IAC_CONFIG_HASH=deploy-legacy\n"
+                )
+            }
+
+    monkeypatch.setattr("common.deploy.dokploy_client.DokployClient", _DualHashClient)
+    identities = drift._deployed_identities()
+    assert identities["truealpha/app"].runtime_hash == "deploy-canonical"
+
+
 def test_strict_blockers_fail_on_detector_and_structural_errors() -> None:
     rows = [
         Row("platform/a", "in_sync"),

@@ -69,7 +69,7 @@ def test_compose_pins_one_digest_and_keeps_dagster_on_host_loopback():
     services = compose["services"]
     expected_image = (
         "ghcr.io/wangzitian0/truealpha-data-engine@"
-        "${IMAGE_DIGEST:-${DATA_ENGINE_IMAGE_DIGEST:?IMAGE_DIGEST is required}}"
+        "${IMAGE_DIGEST:?IMAGE_DIGEST is required}"
     )
     for name in ("dagster-webserver", "dagster-daemon", "dagster-code-server"):
         service = services[name]
@@ -822,12 +822,9 @@ def _deployer_with(monkeypatch, values):
     return deployer
 
 
-def test_legacy_vault_names_still_deploy_and_reach_compose_under_canonical_names(
-    monkeypatch,
-):
-    """The release tooling and live Vault still write the legacy names. The deploy must
-    accept them and hand compose the canonical names, or the next release fails."""
-    deployer = _deployer_with(monkeypatch, _legacy_only_values())
+def test_canonical_vault_names_deploy_without_legacy_aliases(monkeypatch):
+    """Canonical IMAGE_DIGEST and RELEASE_ID suffice; legacy aliases are retired."""
+    deployer = _deployer_with(monkeypatch, _secret_values("a"))
     assert deployer.ensure_runtime_secrets() is True
     base = deployer.compose_env_base({})
     assert base["IMAGE_DIGEST"] == "sha256:" + "a" * 64
@@ -836,21 +833,18 @@ def test_legacy_vault_names_still_deploy_and_reach_compose_under_canonical_names
     assert "RELEASE_MANIFEST_ID" not in base
 
 
-def test_canonical_vault_name_wins_over_a_stale_legacy_value(monkeypatch):
-    """`pin_release` writes IMAGE_DIGEST. A stale legacy digest must never override it."""
+def test_legacy_only_vault_names_are_no_longer_accepted(monkeypatch):
+    """Legacy DATA_ENGINE_IMAGE_DIGEST / RELEASE_MANIFEST_ID alone fail closed (#1781)."""
+    deployer = _deployer_with(monkeypatch, _legacy_only_values())
+    assert deployer.ensure_runtime_secrets() is False
+    with pytest.raises(ValueError, match="IMAGE_DIGEST must be configured"):
+        deployer.compose_env_base({})
+
+
+def test_deploy_still_fails_closed_when_canonical_vault_names_missing(monkeypatch):
     values = _secret_values("a")
-    values["DATA_ENGINE_IMAGE_DIGEST"] = "sha256:" + "f" * 64
-    values["RELEASE_MANIFEST_ID"] = "release-manifest:" + "e" * 64
-    deployer = _deployer_with(monkeypatch, values)
-    base = deployer.compose_env_base({})
-    assert base["IMAGE_DIGEST"] == "sha256:" + "a" * 64
-    assert base["RELEASE_ID"] == "release-manifest:" + "b" * 64
-
-
-def test_deploy_still_fails_closed_when_neither_vault_name_exists(monkeypatch):
-    values = _legacy_only_values()
-    del values["DATA_ENGINE_IMAGE_DIGEST"]
-    del values["RELEASE_MANIFEST_ID"]
+    del values["IMAGE_DIGEST"]
+    del values["RELEASE_ID"]
     deployer = _deployer_with(monkeypatch, values)
     assert deployer.ensure_runtime_secrets() is False
     with pytest.raises(ValueError, match="IMAGE_DIGEST must be configured"):

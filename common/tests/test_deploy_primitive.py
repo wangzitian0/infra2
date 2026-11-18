@@ -631,7 +631,8 @@ def test_deploy_sets_cache_bust_and_static_infra_keys():
     )
     # IAC_CONFIG_HASH is the per-deploy cache-bust (short sha, forces redeploy even on
     # the same digest)
-    assert plan.env_vars["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1000000"
+    assert plan.env_vars["CONFIGURATION_SHA256"] == f"deploy-{SHORT_SHA}-1000000"
+    assert "IAC_CONFIG_HASH" not in plan.env_vars
     assert plan.env_vars["COMPOSE_PROFILES"] == "app"
     assert plan.env_vars["TRAEFIK_ENABLE"] == "true"
     assert plan.env_vars["INTERNAL_DOMAIN"] == "zitian.party"
@@ -649,9 +650,9 @@ def test_cache_bust_differs_for_two_deploys_in_the_same_second():
     h2 = dp.deploy(
         "staging", FULL_SHA, domain="z.p", client=c2, _now=lambda: 1.8
     ).env_vars
-    assert h1["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1200"
-    assert h2["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1800"
-    assert h1["IAC_CONFIG_HASH"] != h2["IAC_CONFIG_HASH"]
+    assert h1["CONFIGURATION_SHA256"] == f"deploy-{SHORT_SHA}-1200"
+    assert h2["CONFIGURATION_SHA256"] == f"deploy-{SHORT_SHA}-1800"
+    assert h1["CONFIGURATION_SHA256"] != h2["CONFIGURATION_SHA256"]
 
 
 def test_deploy_replaces_compose_env_and_removes_model_overrides():
@@ -1079,7 +1080,8 @@ def test_deploy_verify_config_confirms_pushed_hash_rolled_out():
         verify_config=True,
         _now=lambda: 1000,
     )
-    assert plan.env_vars["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1000000"
+    assert plan.env_vars["CONFIGURATION_SHA256"] == f"deploy-{SHORT_SHA}-1000000"
+    assert "IAC_CONFIG_HASH" not in plan.env_vars
     assert client.deployed == ["A6V-hbJlgHMwgPDoTDnhH"]
 
 
@@ -1250,7 +1252,8 @@ def test_deploy_fast_swap_uses_deterministic_config_hash():
         service="truealpha/app",
         iac_ref="b" * 40,
     )
-    assert plan.env_vars["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-{'b' * 7}"
+    assert plan.env_vars["CONFIGURATION_SHA256"] == f"deploy-{SHORT_SHA}-{'b' * 7}"
+    assert "IAC_CONFIG_HASH" not in plan.env_vars
 
 
 def test_deploy_fast_swap_falls_back_to_ms_hash_when_iac_ref_missing():
@@ -1265,7 +1268,8 @@ def test_deploy_fast_swap_falls_back_to_ms_hash_when_iac_ref_missing():
         iac_ref="",
         _now=lambda: 1000,
     )
-    assert plan.env_vars["IAC_CONFIG_HASH"] == f"deploy-{SHORT_SHA}-1000000"
+    assert plan.env_vars["CONFIGURATION_SHA256"] == f"deploy-{SHORT_SHA}-1000000"
+    assert "IAC_CONFIG_HASH" not in plan.env_vars
 
 
 # --- public /api/health version-identity smoke gate (#569) ------------------------

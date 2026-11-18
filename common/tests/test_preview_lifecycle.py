@@ -402,7 +402,7 @@ def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
     )
     assert env["INTERNAL_DOMAIN"] == "zitian.party"
     # cache-bust is keyed on the RESOLVED sha (short form), not the alias token
-    assert env["IAC_CONFIG_HASH"] == f"preview-{SHORT_SHA}-1000000"
+    assert "IAC_CONFIG_HASH" not in env
     assert env["CONFIGURATION_SHA256"] == f"preview-{SHORT_SHA}-1000000"
     assert "PREVIEW_DB_USER" not in env
     assert "PREVIEW_DB_NAME" not in env

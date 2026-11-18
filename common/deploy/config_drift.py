@@ -413,6 +413,7 @@ def _deployed_identities() -> dict[str, DeployedIdentity]:
                 for line in env_str.splitlines():
                     key, separator, value = line.partition("=")
                     if separator and key in {
+                        "CONFIGURATION_SHA256",
                         "IAC_CONFIG_HASH",
                         "IAC_SOURCE_CONFIG_HASH",
                         "IAC_DEPLOY_REF",
@@ -420,7 +421,8 @@ def _deployed_identities() -> dict[str, DeployedIdentity]:
                         values[key] = value.strip()
                 if values:
                     out[f"{p['name']}/{cp['name']}"] = DeployedIdentity(
-                        runtime_hash=values.get("IAC_CONFIG_HASH"),
+                        runtime_hash=values.get("CONFIGURATION_SHA256")
+                        or values.get("IAC_CONFIG_HASH"),
                         source_hash=values.get("IAC_SOURCE_CONFIG_HASH"),
                         deploy_ref=values.get("IAC_DEPLOY_REF"),
                     )

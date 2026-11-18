@@ -79,7 +79,7 @@ services:
       - dokploy-network
 
   llm:
-    image: ghcr.io/wangzitian0/truealpha-llm-service:${IMAGE_TAG:-${RELEASE_MANIFEST_ID:?IMAGE_TAG must be set}}
+    image: ghcr.io/wangzitian0/truealpha-llm-service:${IMAGE_TAG:?IMAGE_TAG must be set}
     pull_policy: always
     container_name: truealpha-llm${ENV_SUFFIX}
     restart: always
@@ -177,7 +177,7 @@ services:
       - "traefik.http.routers.truealpha-v1${ENV_DOMAIN_SUFFIX}.priority=20"
 
   web:
-    image: ghcr.io/wangzitian0/truealpha-app-web:${IMAGE_TAG:-${RELEASE_MANIFEST_ID:?IMAGE_TAG must be set}}
+    image: ghcr.io/wangzitian0/truealpha-app-web:${IMAGE_TAG:?IMAGE_TAG must be set}
     pull_policy: always
     container_name: truealpha-web${ENV_SUFFIX}
     restart: always
