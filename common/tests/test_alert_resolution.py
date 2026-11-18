@@ -30,7 +30,6 @@ REPORTS = {
     "INFRA2_REPORTS_FEISHU_CHAT_ID": "oc_reports",
 }
 SCHEDULED = {
-    **REPORTS,
     "GITHUB_EVENT_NAME": "schedule",
     "GITHUB_REPOSITORY": "wangzitian0/infra2",
     "GITHUB_SERVER_URL": "https://github.com",
@@ -55,6 +54,12 @@ SPLIT_STEPS = [
         "preview-leak-check",
         "Alert on leaked previews",
         "Resolve the leaked-preview alert",
+    ),
+    (
+        "ops-checks.yml",
+        "host-hygiene-schedule",
+        "Alert on failure",
+        "Resolve the host-hygiene alert",
     ),
     (
         "reconcile-iac-inputs.yml",
@@ -129,6 +134,8 @@ class World:
         self.monkeypatch = monkeypatch
         for key, value in SCHEDULED.items():
             monkeypatch.setenv(key, value)
+        for key in REPORTS:
+            monkeypatch.delenv(key, raising=False)
         monkeypatch.delenv("INFRA2_WATCHDOG_VERDICTS_PATH", raising=False)
         monkeypatch.chdir(tmp_path)  # no reconcile-result.json: the crash alert
         monkeypatch.setattr(page_dedup, "_api_from_env", lambda env: self.api)
@@ -163,8 +170,27 @@ class World:
 
     def step(self, workflow, job, name, *, ok, event="schedule", **env) -> bool:
         """Run a step the way the workflow gates it; True when GitHub would run it."""
+        data = yaml.safe_load((WORKFLOWS / workflow).read_text(encoding="utf-8"))
+        job_body = data["jobs"][job]
+        (step,) = [s for s in job_body["steps"] if s.get("name") == name]
+        declared = {
+            **(data.get("env") or {}),
+            **(job_body.get("env") or {}),
+            **(step.get("env") or {}),
+        }
+        for key, value in REPORTS.items():
+            if declared.get(key) == f"${{{{ secrets.{key} }}}}":
+                self.monkeypatch.setenv(key, value)
+            else:
+                self.monkeypatch.delenv(key, raising=False)
+        if declared.get("GITHUB_TOKEN") in (
+            "${{ github.token }}",
+            "${{ secrets.GITHUB_TOKEN }}",
+        ):
+            self.monkeypatch.setenv("GITHUB_TOKEN", SCHEDULED["GITHUB_TOKEN"])
+        else:
+            self.monkeypatch.delenv("GITHUB_TOKEN", raising=False)
         self.set(GITHUB_EVENT_NAME=event, **env)
-        step = _step(workflow, job, name)
         merged = {**os.environ}
         if not _runs(step, ok=ok, env=merged, event=event):
             return False
@@ -213,6 +239,37 @@ def test_each_resolve_step_runs_on_success_after_its_alert_with_its_token(
     assert _runs(step, ok=True, env=env)
     assert not _runs(step, ok=False, env=env)
     assert step["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
+
+
+def test_host_hygiene_schedule_routes_day2_to_reports_and_skips_dry_run(
+    monkeypatch, tmp_path
+) -> None:
+    """#1648 review: host-hygiene-schedule wires INFRA2_REPORTS_FEISHU_* so Day 2+
+    unchanged failures route to the reports chat instead of paging again, and dry_run skips."""
+    w = World(monkeypatch, tmp_path)
+    wf, job, alert, resolve = (
+        "ops-checks.yml",
+        "host-hygiene-schedule",
+        "Alert on failure",
+        "Resolve the host-hygiene alert",
+    )
+    assert not _runs(
+        _step(wf, job, alert), ok=False, env={}, event="workflow_dispatch", dry=True
+    )
+    assert not _runs(
+        _step(wf, job, resolve), ok=True, env={}, event="workflow_dispatch", dry=True
+    )
+
+    assert w.step(wf, job, alert, ok=False)
+    assert len(w.cards) == 1 and len(w.reports) == 0
+
+    assert w.step(wf, job, alert, ok=False)
+    assert len(w.cards) == 1  # unchanged failure does not re-page
+    assert len(w.reports) == 1  # routed to reports chat via declared secrets
+
+    assert w.step(wf, job, resolve, ok=True)
+    assert len(w.cards) == 2 and w.titles()[1].startswith("✅ [已恢复]")
+    assert w.api.open_titles() == []
 
 
 def test_a_resolve_step_that_runs_on_failure_is_caught() -> None:

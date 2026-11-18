@@ -9,11 +9,12 @@ job with its own hand-copied alert step:
 - **config drift** (`tools/dokploy_config_drift.py`, was
   ``config-drift-report.yml``): declared IaC source-config hash at the latest
   explicit production marker vs the deployed hash.
-- **dns drift** (`tools/dns_drift_report.py`, was ``dns-drift-report.yml``):
+- **dns drift** (`common/deploy/dns_drift.py`, was ``dns-drift-report.yml``):
   declared DNS records vs live Cloudflare.
 
-Each absorbed tool stays a library (its own tests keep passing; operators can
-still run it standalone) — what died is the three separate workflow
+Each absorbed check stays testable as a library (its own tests keep passing;
+the standalone drift scripts keep their CLIs, while `common/deploy/dns_drift.py`
+is a library module without `main()`) — what died is the three separate workflow
 jobs/crons/alert-step copies.
 
 Deliberately NOT absorbed: `tools/preview_leak_check.py`. It is an HOURLY

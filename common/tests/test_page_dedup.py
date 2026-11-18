@@ -1155,6 +1155,7 @@ def _execute(job: str, step: str) -> int:
 #: job -> (alert step, resolve step)
 DEDUPED_JOBS = {
     "audit": ("Alert on confirmed failure", "Resolve the paged failures"),
+    "host-hygiene-schedule": ("Alert on failure", "Resolve the host-hygiene alert"),
     "facet-reconcile": ("Alert on confirmed findings", "Resolve the paged findings"),
     "vault-self-refresh-audit": (
         "Alert on confirmed failure",
@@ -1176,11 +1177,10 @@ def test_each_deduplicated_job_is_wired_through_page_dedup(job) -> None:
 
     # issues: write for this job only, never workflow-wide (least privilege per job)
     assert workflow["permissions"] == {"contents": "read", "actions": "read"}
-    assert body["permissions"] == {
-        "contents": "read",
-        "actions": "read",
-        "issues": "write",
-    }
+    expected_perms = {"contents": "read", "issues": "write"}
+    if job != "host-hygiene-schedule":
+        expected_perms["actions"] = "read"
+    assert body["permissions"] == expected_perms
     # the token reaches only the two steps that use it, not the job's other steps
     assert "GITHUB_TOKEN" not in body["env"]
     assert steps[alert]["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
