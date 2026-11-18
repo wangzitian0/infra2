@@ -253,7 +253,8 @@ def test_deploy_commands_use_deploy_v2_and_prod_review_signals() -> None:
     assert "--code-reviewed" not in commands[0].argv
     assert "--code-reviewed" in commands[1].argv
     assert "--staging-validated" in commands[1].argv
-    assert commands[1].argv[commands[1].argv.index("--iac-ref") + 1] == SHA
+    assert commands[1].argv[commands[1].argv.index("--version-ref") + 1] == SHA
+    assert "--iac-ref" not in commands[1].argv
 
 
 def test_deploy_commands_batch_services_by_environment() -> None:

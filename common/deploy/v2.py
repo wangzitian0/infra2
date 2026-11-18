@@ -40,19 +40,24 @@ from common.deploy.iac_runner_client import (
     status_poll_attempts,
     trigger_platform_deploy,
 )
+from common.core.constants import APP_SOURCES, REPO_ROOT
 from common.deploy.contract import (
     DeployTarget,
     DeployTypeSpec,
     ServiceSpec,
+    classify_version_ref,
     default_version_ref,
     deploy_type_spec,
     make_deploy_target,
     make_target,
+    normalize_pr_number,
+    resolve_deploy_type_for_ref,
     service_spec,
     validate_deploy_target,
     validate_iac_ref_form,
     validate_ref_form,
 )
+from common.deploy.release_markers import newest_release_tag
 from common.deploy.preflight import (
     _image_manifest_exists,
     _wait_for_image_dependencies,
@@ -78,8 +83,6 @@ from infra2_sdk.refs import (
     short_sha,
 )
 
-from common.core.constants import APP_SOURCES
-
 _APP_SERVICE = "finance_report/app"
 _SERVICE_REPOS: dict[str, str] = {
     service: f"https://github.com/{repo}.git" for service, repo in APP_SOURCES.items()
@@ -89,6 +92,8 @@ _APP_REPO = _SERVICE_REPOS.get(
 )
 _INFRA2_REPO = "https://github.com/wangzitian0/infra2"
 __all__ = [
+    "DeployDeps",
+    "DeployOptions",
     "DeployV2Result",
     "_image_manifest_exists",
     "assert_app_version_ref_matches_train",
@@ -101,9 +106,54 @@ __all__ = [
 ]
 
 
+@dataclass(frozen=True)
+class DeployOptions:
+    """Optional policy gates, verification flags, and timeouts for ``deploy_v2``."""
+
+    wait: bool = True
+    timeout: int = 600
+    staging_validated: bool = False
+    code_reviewed: bool | None = None
+    break_glass: bool = False
+    bootstrap: bool = False
+    force_promote: bool = False
+    pause_rollback: bool = False
+    max_rollback_attempts: int = 2
+    verify_vault: bool = True
+    verify_config: bool = True
+    verify_smoke: bool = True
+    verify_ingestion: bool = False
+    verify_manifests: bool = False
+    image_wait_seconds: float | None = None
+    image_poll_seconds: float | None = None
+    expected_sha: str | None = None
+    triggered_by: str = "deploy_v2"
+
+
+@dataclass(frozen=True)
+class DeployDeps:
+    """Optional injectable transport / runtime dependencies for ``deploy_v2``."""
+
+    client: Any = None
+    domain: str | None = None
+    repo: str | None = None
+    iac_runner_url: str | None = None
+    iac_webhook_secret: str | None = None
+
+
+_UNSET = object()
+
+
 def _default_main(version_ref) -> str:
     """A ``branch`` version_ref defaults to the main tip when omitted."""
     return (str(version_ref).strip() if version_ref is not None else "") or "main"
+
+
+def _default_iac_ref(env: str) -> str:
+    """Derive default ``iac_ref`` inside the control plane when callers omit it."""
+    if env in ("staging", "prod"):
+        return newest_release_tag(repo_root=REPO_ROOT)
+    return "main"
 
 
 def _repo_for_service(service: str) -> str:
@@ -117,21 +167,22 @@ def _resolve_for_type(spec, version_ref, *, repo: str):
     The ``type`` decides how ``version_ref`` is read (a discriminated union), and the
     matrix (``accepted_forms``) fails closed on a form the type does not take:
 
-    - ``preview/pr``      — ``version_ref`` IS a PR number (``resolve_pr`` -> PR-head image);
-                            its slot is that number.
+    - ``preview/pr``      — ``version_ref`` IS a PR ref (``pr-<N>`` or 1-6 digit int ->
+                            ``resolve_pr`` -> PR-head image); its slot is that number.
     - ``preview/branch``  — a branch tip (default main); slot ``branch-<name>``.
     - ``staging`` / ``prod`` — ``version_ref`` is a release tag ``vX.Y.Z``: validate its form
                             against the type, then ``resolve_image_ref``.
     """
     if spec.alias_kind == "pr":
-        return resolve_pr(version_ref, repo=repo), version_ref
+        pr_num = normalize_pr_number(version_ref)
+        return resolve_pr(pr_num, repo=repo), pr_num
     # `branch` defaults to the main tip; the other ref types require an explicit version_ref.
     ref = (
         _default_main(version_ref)
         if spec.alias_kind == "branch"
         else str(version_ref).strip()
     )
-    validate_ref_form(spec.key, classify_ref(ref))
+    validate_ref_form(spec.key, classify_version_ref(ref))
     resolved = resolve_image_ref(ref, repo=repo)
     # A bare short sha resolves to itself (not a 40-hex commit) — reject with a surface-level
     # message instead of letting it surface late as an opaque code_version contract error.
@@ -192,15 +243,15 @@ def _deploy_platform_preview(
     preview_service_config(
         service
     )  # fails before side effects for an unregistered unit
-    spec = deploy_type_spec(deploy_type)
+    spec = resolve_deploy_type_for_ref(deploy_type, version_ref)
     alias_value = (
         _default_main(version_ref)
         if spec.alias_kind == "branch"
-        else str(version_ref).strip()
+        else normalize_pr_number(version_ref)
     )
     iac_sha = resolve_to_sha(iac_ref, repo=_INFRA2_REPO)
     target = make_target(
-        deploy_type,
+        spec.key,
         service=service,
         version=iac_sha,
         iac_ref=iac_sha,
@@ -282,17 +333,13 @@ def _deploy_platform(
     # it settles — terminal success is "completed", failure is "failed" (verified live).
     url = runner_url or os.getenv("IAC_RUNNER_URL", "")
     sec = secret or os.getenv("IAC_WEBHOOK_SECRET", "")
-    # An app release to pin (truealpha#712): forwarded only when it names one — a tag or
-    # a sha, never the ``main`` default — so every other platform service sees nothing new.
-    pinned_ref = (version_ref or "").strip()
-    pinned_ref = pinned_ref if pinned_ref and pinned_ref != "main" else None
-    if pinned_ref is not None and pinned_ref == iac_ref.strip():
-        # The reconcile pins both axes to the infra2 release tag (tools/reconcile_iac_inputs:
-        # "iac_pinned services ignore version_ref"); an infra2 tag is never an app release,
-        # so it must not reach a digest-pinning deployer (v1.1.59 would have asked the
-        # registry for truealpha-data-engine:v1.1.59). Only a ref that differs from the
-        # iac_ref names an app release.
-        pinned_ref = None
+    # Only services whose artifact comes from an App repo (e.g. truealpha/data_engine)
+    # forward DEPLOY_VERSION_REF to pin an app image release. Pure infra2 services never do.
+    pinned_ref: str | None = None
+    ver_clean = (version_ref or "").strip()
+    if spec.artifact_source == "app" and ver_clean:
+        validate_ref_form(type_spec.key, classify_version_ref(ver_clean))
+        pinned_ref = ver_clean
     started = time.monotonic()
     response, final = _trigger_and_poll(
         env=env,
@@ -509,14 +556,15 @@ def _supply_app_secrets(
 def _deploy_platform_batch(
     services: list[str],
     deploy_type: str,
-    iac_ref: str,
+    iac_ref: str = "",
     *,
-    runner_url: str | None,
-    secret: str | None,
-    triggered_by: str,
-    code_reviewed: bool | None,
-    wait: bool,
-    timeout: int,
+    version_ref: str = "",
+    runner_url: str | None = None,
+    secret: str | None = None,
+    triggered_by: str = "deploy_v2",
+    code_reviewed: bool | None = None,
+    wait: bool = True,
+    timeout: int = 600,
 ) -> dict:
     """Route multiple iac_pinned services through one deploy_v2/iac_runner call.
 
@@ -532,18 +580,25 @@ def _deploy_platform_batch(
             f"iac_pinned batch deploys to staging/prod only "
             f"(type {deploy_type!r} -> env {type_spec.env!r})"
         )
+    iac_clean = str(iac_ref or "").strip()
+    ver_clean = str(version_ref or "").strip()
+    if iac_clean and ver_clean and iac_clean != ver_clean:
+        raise ValueError(
+            f"platform batch accepts one infra2 ref; got conflicting version_ref={ver_clean!r} and iac_ref={iac_clean!r}"
+        )
+    effective_iac_ref = iac_clean or ver_clean or _default_iac_ref(type_spec.env)
     # The same two guards as deploy_v2(): a batch must not resolve a branch to a sha (#1628).
-    validate_iac_ref_form(deploy_type, classify_ref(iac_ref))
-    assert_iac_ref_on_main(iac_ref, deploy_type)
-    iac_sha = resolve_to_sha(iac_ref, repo=_INFRA2_REPO)
+    validate_iac_ref_form(deploy_type, classify_ref(effective_iac_ref))
+    assert_iac_ref_on_main(effective_iac_ref, deploy_type)
+    iac_sha = resolve_to_sha(effective_iac_ref, repo=_INFRA2_REPO)
     targets: list[DeployTarget] = []
     data_lanes: set[str] = set()
     for service in services:
         spec = service_spec(service)
-        if not spec.iac_pinned:
+        if not spec.iac_pinned or spec.artifact_source != "infra2":
             raise ValueError(
-                f"{service!r} is not iac_pinned; batch deploy only supports "
-                "platform/backing services"
+                f"{service!r} (iac_pinned={spec.iac_pinned}, artifact_source={spec.artifact_source!r}); "
+                "batch deploy only supports infra2-sourced services"
             )
         target = make_deploy_target(
             service=service, env=type_spec.env, code_version=iac_sha, iac_ref=iac_sha
@@ -771,92 +826,234 @@ def _deploy_fixed_v2(
     return DeployV2Result(target, data_lane, "deploy-primitive", detail)
 
 
-def deploy_v2(
+def _resolve_options_and_deps(
     *,
-    service: str,
-    deploy_type: str,
-    version_ref,
-    iac_ref: str,
-    client,
-    domain: str,
-    wait: bool = True,
-    staging_validated: bool = False,
-    break_glass: bool = False,
-    bootstrap: bool = False,
-    force_promote: bool = False,
-    pause_rollback: bool = False,
-    max_rollback_attempts: int = 2,
-    code_reviewed: bool | None = None,
-    verify_vault: bool = True,
-    verify_config: bool = True,
-    verify_smoke: bool = True,
-    verify_ingestion: bool = False,
-    timeout: int = 600,
-    expected_sha: str | None = None,
-    repo: str | None = None,
-    iac_runner_url: str | None = None,
-    iac_webhook_secret: str | None = None,
-    triggered_by: str = "deploy_v2",
-    image_wait_seconds: float | None = None,
-    image_poll_seconds: float | None = None,
-    verify_manifests: bool = False,
+    options: DeployOptions | None,
+    deps: DeployDeps | None,
+    client: Any,
+    domain: Any,
+    wait: Any,
+    staging_validated: Any,
+    break_glass: Any,
+    bootstrap: Any,
+    force_promote: Any,
+    pause_rollback: Any,
+    max_rollback_attempts: Any,
+    code_reviewed: Any,
+    verify_vault: Any,
+    verify_config: Any,
+    verify_smoke: Any,
+    verify_ingestion: Any,
+    timeout: Any,
+    expected_sha: Any,
+    repo: Any,
+    iac_runner_url: Any,
+    iac_webhook_secret: Any,
+    triggered_by: Any,
+    image_wait_seconds: Any,
+    image_poll_seconds: Any,
+    verify_manifests: Any,
+) -> tuple[DeployOptions, DeployDeps]:
+    base_opt = options or DeployOptions()
+    base_dep = deps or DeployDeps()
+
+    def _pick(override: Any, current: Any) -> Any:
+        return current if override is _UNSET else override
+
+    resolved_opt = DeployOptions(
+        wait=_pick(wait, base_opt.wait),
+        timeout=_pick(timeout, base_opt.timeout),
+        staging_validated=_pick(staging_validated, base_opt.staging_validated),
+        code_reviewed=_pick(code_reviewed, base_opt.code_reviewed),
+        break_glass=_pick(break_glass, base_opt.break_glass),
+        bootstrap=_pick(bootstrap, base_opt.bootstrap),
+        force_promote=_pick(force_promote, base_opt.force_promote),
+        pause_rollback=_pick(pause_rollback, base_opt.pause_rollback),
+        max_rollback_attempts=_pick(
+            max_rollback_attempts, base_opt.max_rollback_attempts
+        ),
+        verify_vault=_pick(verify_vault, base_opt.verify_vault),
+        verify_config=_pick(verify_config, base_opt.verify_config),
+        verify_smoke=_pick(verify_smoke, base_opt.verify_smoke),
+        verify_ingestion=_pick(verify_ingestion, base_opt.verify_ingestion),
+        verify_manifests=_pick(verify_manifests, base_opt.verify_manifests),
+        image_wait_seconds=_pick(image_wait_seconds, base_opt.image_wait_seconds),
+        image_poll_seconds=_pick(image_poll_seconds, base_opt.image_poll_seconds),
+        expected_sha=_pick(expected_sha, base_opt.expected_sha),
+        triggered_by=_pick(triggered_by, base_opt.triggered_by),
+    )
+    resolved_dep = DeployDeps(
+        client=_pick(client, base_dep.client),
+        domain=_pick(domain, base_dep.domain),
+        repo=_pick(repo, base_dep.repo),
+        iac_runner_url=_pick(iac_runner_url, base_dep.iac_runner_url),
+        iac_webhook_secret=_pick(iac_webhook_secret, base_dep.iac_webhook_secret),
+    )
+    return resolved_opt, resolved_dep
+
+
+def _resolve_control_plane_iac_ref(
+    svc_spec: ServiceSpec,
+    spec: DeployTypeSpec,
+    version_ref: Any,
+    iac_ref: str | None,
+) -> tuple[str, Any]:
+    """Derive ``(effective_iac_ref, effective_version_ref)`` inside the control plane.
+
+    - For ``artifact_source == "infra2"`` in ``staging``/``prod``: ``version_ref`` IS the
+      infra2 ref (accepting either ``version_ref`` or ``iac_ref``, rejecting conflicts, and
+      defaulting to ``newest_release_tag`` when both are empty).
+    - For ``artifact_source == "infra2"`` in ``preview``: ``version_ref`` selects the preview
+      slot and ``iac_ref`` defaults to ``"main"`` when omitted.
+    - For ``artifact_source == "app"``: ``iac_ref`` defaults to ``newest_release_tag`` on
+      ``staging``/``prod`` and ``"main"`` on ``preview``.
+    """
+    iac_clean = str(iac_ref or "").strip()
+    ver_clean = str(version_ref).strip() if version_ref is not None else ""
+    if svc_spec.artifact_source == "infra2":
+        if spec.env == "preview":
+            return (iac_clean or _default_iac_ref(spec.env)), version_ref
+        if ver_clean and iac_clean and ver_clean != iac_clean:
+            raise ValueError(
+                f"service {svc_spec.key!r} accepts one infra2 ref; got conflicting "
+                f"version_ref={ver_clean!r} and iac_ref={iac_clean!r}"
+            )
+        effective_iac = iac_clean or ver_clean or _default_iac_ref(spec.env)
+        if ver_clean:
+            validate_ref_form(spec.key, classify_version_ref(ver_clean))
+        return effective_iac, ""
+    effective_iac = iac_clean or _default_iac_ref(spec.env)
+    return effective_iac, version_ref
+
+
+def deploy_v2(
+    service: str = _APP_SERVICE,
+    deploy_type: str = "staging",
+    version_ref: Any = "",
+    *,
+    iac_ref: str = "",
+    options: DeployOptions | None = None,
+    deps: DeployDeps | None = None,
+    client: Any = _UNSET,
+    domain: Any = _UNSET,
+    wait: Any = _UNSET,
+    staging_validated: Any = _UNSET,
+    break_glass: Any = _UNSET,
+    bootstrap: Any = _UNSET,
+    force_promote: Any = _UNSET,
+    pause_rollback: Any = _UNSET,
+    max_rollback_attempts: Any = _UNSET,
+    code_reviewed: Any = _UNSET,
+    verify_vault: Any = _UNSET,
+    verify_config: Any = _UNSET,
+    verify_smoke: Any = _UNSET,
+    verify_ingestion: Any = _UNSET,
+    timeout: Any = _UNSET,
+    expected_sha: Any = _UNSET,
+    repo: Any = _UNSET,
+    iac_runner_url: Any = _UNSET,
+    iac_webhook_secret: Any = _UNSET,
+    triggered_by: Any = _UNSET,
+    image_wait_seconds: Any = _UNSET,
+    image_poll_seconds: Any = _UNSET,
+    verify_manifests: Any = _UNSET,
 ) -> DeployV2Result:
-    """Execute one deploy_v2 coordinate ``(service, type, version_ref, iac_ref)``."""
-    if force_promote:
+    """Execute one orthogonal deploy coordinate ``(service, deploy_type, version_ref)``."""
+    opt, dep = _resolve_options_and_deps(
+        options=options,
+        deps=deps,
+        client=client,
+        domain=domain,
+        wait=wait,
+        staging_validated=staging_validated,
+        break_glass=break_glass,
+        bootstrap=bootstrap,
+        force_promote=force_promote,
+        pause_rollback=pause_rollback,
+        max_rollback_attempts=max_rollback_attempts,
+        code_reviewed=code_reviewed,
+        verify_vault=verify_vault,
+        verify_config=verify_config,
+        verify_smoke=verify_smoke,
+        verify_ingestion=verify_ingestion,
+        timeout=timeout,
+        expected_sha=expected_sha,
+        repo=repo,
+        iac_runner_url=iac_runner_url,
+        iac_webhook_secret=iac_webhook_secret,
+        triggered_by=triggered_by,
+        image_wait_seconds=image_wait_seconds,
+        image_poll_seconds=image_poll_seconds,
+        verify_manifests=verify_manifests,
+    )
+    if opt.force_promote:
         print(
             f"[AUDIT] deploy_v2 force_promote=True for {service} ({deploy_type}, {version_ref!r})",
             file=sys.stderr,
         )
-    if pause_rollback:
+    if opt.pause_rollback:
         print(
             f"[AUDIT] deploy_v2 pause_rollback=True for {service} ({deploy_type}, {version_ref!r})",
             file=sys.stderr,
         )
-    if bootstrap:
+    if opt.bootstrap:
         print(
             f"[AUDIT] deploy_v2 bootstrap=True for {service} ({deploy_type}, {version_ref!r})",
             file=sys.stderr,
         )
-    domain = domain_for_service(service) or domain
+    effective_domain = (
+        domain_for_service(service)
+        or (str(dep.domain).strip() if dep.domain is not None else "")
+        or infra_domain()
+    )
     svc_spec = service_spec(service)
-    normalized_expected_sha = _normalize_expected_sha(expected_sha)
-    validate_iac_ref_form(deploy_type, classify_ref(iac_ref))
-    spec = deploy_type_spec(deploy_type)
-    assert_iac_ref_on_main(iac_ref, deploy_type)
-    if svc_spec.iac_pinned:  # platform service -> iac_runner /deploy webhook
+    normalized_expected_sha = _normalize_expected_sha(opt.expected_sha)
+    spec = resolve_deploy_type_for_ref(deploy_type, version_ref)
+    effective_iac_ref, effective_input_version = _resolve_control_plane_iac_ref(
+        svc_spec, spec, version_ref, iac_ref
+    )
+    validate_iac_ref_form(spec.key, classify_ref(effective_iac_ref))
+    assert_iac_ref_on_main(effective_iac_ref, spec.key)
+    effective_client = dep.client
+    if effective_client is None and (not svc_spec.iac_pinned or spec.env == "preview"):
+        from common.deploy.dokploy_client import get_dokploy
+
+        effective_client = get_dokploy(host=f"cloud.{infra_domain()}")
+
+    if svc_spec.iac_pinned:  # platform or companion service -> iac_runner / preview
         if normalized_expected_sha is not None:
             raise ValueError("--expected-sha is only supported for app-backed deploys")
         if spec.env == "preview":
             return _deploy_platform_preview(
                 service,
-                deploy_type,
-                version_ref,
-                iac_ref,
-                client=client,
-                domain=domain,
-                code_reviewed=code_reviewed,
-                wait=wait,
-                timeout=timeout,
+                spec.key,
+                effective_input_version,
+                effective_iac_ref,
+                client=effective_client,
+                domain=effective_domain,
+                code_reviewed=opt.code_reviewed,
+                wait=opt.wait,
+                timeout=opt.timeout,
             )
         return _deploy_platform(
             service,
-            deploy_type,
-            iac_ref,
-            runner_url=iac_runner_url,
-            secret=iac_webhook_secret,
-            triggered_by=triggered_by,
-            code_reviewed=code_reviewed,
-            wait=wait,
-            timeout=timeout,
-            version_ref=version_ref,
+            spec.key,
+            effective_iac_ref,
+            runner_url=dep.iac_runner_url,
+            secret=dep.iac_webhook_secret,
+            triggered_by=opt.triggered_by,
+            code_reviewed=opt.code_reviewed,
+            wait=opt.wait,
+            timeout=opt.timeout,
+            version_ref=effective_input_version,
         )
 
-    effective_version_ref = version_ref
+    effective_version_ref = effective_input_version
     if spec.env in ("staging", "prod") and not (
         str(effective_version_ref).strip() if effective_version_ref is not None else ""
     ):
         try:
-            train_tag = default_version_ref(service, iac_ref=iac_ref)
+            train_tag = default_version_ref(service, iac_ref=effective_iac_ref)
         except TypeError:
             train_tag = default_version_ref(service)
         if train_tag:
@@ -866,47 +1063,47 @@ def deploy_v2(
         service,
         spec,
         effective_version_ref,
-        iac_ref,
+        effective_iac_ref,
         normalized_expected_sha,
-        repo,
+        dep.repo,
     )
     if spec.env in ("staging", "prod"):
         assert_app_version_ref_matches_train(
             service,
             str(effective_version_ref).strip(),
-            deploy_type,
-            bootstrap=bootstrap,
-            iac_ref=iac_ref,
+            spec.key,
+            bootstrap=opt.bootstrap,
+            iac_ref=effective_iac_ref,
         )
         assert_app_version_ref_on_main(
             str(effective_version_ref).strip(),
-            deploy_type,
+            spec.key,
             service=service,
-            repo=repo,
+            repo=dep.repo,
         )
     target = make_target(
-        deploy_type,
+        spec.key,
         service=service,
         version=resolved.sha,
         iac_ref=iac_sha,
         alias_value=alias_value,
     )
     validate_deploy_target(target, service_spec(service))
-    data_lane = enforce_data_lane_red_lines(target, code_reviewed=code_reviewed)
+    data_lane = enforce_data_lane_red_lines(target, code_reviewed=opt.code_reviewed)
 
     if env_config(spec.env).requires_staging_first and not (
-        staging_validated or break_glass or force_promote
+        opt.staging_validated or opt.break_glass or opt.force_promote
     ):
         raise ValueError(
-            f"deploy type {deploy_type!r} requires a prior staging deploy "
+            f"deploy type {spec.key!r} requires a prior staging deploy "
             "(pass staging_validated, or break_glass for an emergency)"
         )
 
     _wait_for_image_dependencies(
         svc_spec,
         resolved.image_ref,
-        timeout=image_wait_seconds,
-        poll_seconds=image_poll_seconds,
+        timeout=opt.image_wait_seconds,
+        poll_seconds=opt.image_poll_seconds,
     )
 
     if env_config(target.env).dynamic:
@@ -917,40 +1114,40 @@ def deploy_v2(
             alias_value,
             service,
             resolved,
-            domain,
-            client,
+            effective_domain,
+            effective_client,
             clone_ref,
-            wait,
-            timeout,
+            opt.wait,
+            opt.timeout,
             data_lane,
-            iac_ref=iac_ref,
-            verify_manifests=verify_manifests,
+            iac_ref=effective_iac_ref,
+            verify_manifests=opt.verify_manifests,
         )
 
     return _deploy_fixed_v2(
         target,
         resolved,
         service,
-        domain,
-        client,
+        effective_domain,
+        effective_client,
         clone_ref,
-        wait,
-        timeout,
-        staging_validated,
-        break_glass,
-        force_promote,
-        pause_rollback,
-        max_rollback_attempts,
-        verify_vault,
-        verify_config,
-        verify_smoke,
-        verify_ingestion,
-        iac_runner_url,
-        iac_webhook_secret,
-        triggered_by,
+        opt.wait,
+        opt.timeout,
+        opt.staging_validated,
+        opt.break_glass,
+        opt.force_promote,
+        opt.pause_rollback,
+        opt.max_rollback_attempts,
+        opt.verify_vault,
+        opt.verify_config,
+        opt.verify_smoke,
+        opt.verify_ingestion,
+        dep.iac_runner_url,
+        dep.iac_webhook_secret,
+        opt.triggered_by,
         data_lane,
-        iac_ref=iac_ref,
-        verify_manifests=verify_manifests,
+        iac_ref=effective_iac_ref,
+        verify_manifests=opt.verify_manifests,
     )
 
 
@@ -961,22 +1158,25 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--type",
         required=True,
         dest="deploy_type",
-        help="deploy type: staging | prod | preview/branch | preview/pr",
+        help="deploy type: staging | prod | preview (also accepts preview/branch, preview/pr)",
     )
     parser.add_argument(
         "--version-ref",
         default="",
-        help="version surface, interpreted by --type: a PR# (preview/pr), a release tag "
-        "vX.Y.Z (staging / prod, defaults to harness/repos.yaml release_tag), or a branch "
-        "(preview/branch, defaults to main); ignored for iac_pinned platform/backing services",
+        help="version surface: pr-<N> or 1-6 digit PR# (preview), main (preview), or release "
+        "tag vX.Y.Z (staging / prod; defaults to harness/repos.yaml for apps or latest infra2 "
+        "release tag for platform services)",
     )
     parser.add_argument(
         "--iac-ref",
-        required=True,
-        help="infra2 ref pinning the IaC: main | vX.Y.Z",
+        default="",
+        help="optional infra2 ref override (control plane defaults to latest release tag on "
+        "staging/prod and main on preview)",
     )
     parser.add_argument(
-        "--domain", required=True, help="base domain, e.g. zitian.party"
+        "--domain",
+        default="",
+        help="optional base domain override (defaults to service domain or infra_domain())",
     )
     parser.add_argument("--no-wait", action="store_true", help="do not health-check")
     parser.add_argument(
@@ -1077,7 +1277,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
 
 def _handle_teardown(args: argparse.Namespace) -> int:
-    spec = deploy_type_spec(args.deploy_type)
+    spec = resolve_deploy_type_for_ref(args.deploy_type, args.version_ref)
     if spec.env != "preview":
         raise ValueError(
             f"--down only tears down preview/* aliases; type {args.deploy_type!r} "
@@ -1086,10 +1286,12 @@ def _handle_teardown(args: argparse.Namespace) -> int:
     if spec.alias_kind == "branch":
         alias_value = _default_main(args.version_ref)
     else:
-        alias_value = args.version_ref
+        alias_value = str(normalize_pr_number(args.version_ref))
     from common.deploy.dokploy_client import get_dokploy
 
-    domain = _validate_domain(args.domain)
+    domain = _validate_domain(
+        domain_for_service(args.service) or args.domain or infra_domain()
+    )
     down_result = _preview_down(
         spec.alias_kind,
         alias_value,
@@ -1116,6 +1318,7 @@ def _handle_platform_batch(args: argparse.Namespace, service_names: list[str]) -
         service_names,
         args.deploy_type,
         args.iac_ref,
+        version_ref=args.version_ref,
         runner_url=os.getenv("IAC_RUNNER_URL", ""),
         secret=os.getenv("IAC_WEBHOOK_SECRET", ""),
         triggered_by="deploy_v2",
@@ -1141,9 +1344,6 @@ def main(argv: list[str] | None = None) -> int:
             return _handle_platform_batch(args, service_names)
 
         client = None
-        should_verify_manifests = not args.no_verify_manifests
-        # Staging and production of a platform unit go through the runner (no client).
-        # Its Preview goes through the Preview lifecycle and needs the Dokploy client.
         if (
             not service_spec(args.service).iac_pinned
             or deploy_type_spec(args.deploy_type).env == "preview"
@@ -1151,31 +1351,38 @@ def main(argv: list[str] | None = None) -> int:
             from common.deploy.dokploy_client import get_dokploy
 
             client = get_dokploy(host=f"cloud.{infra_domain()}")
-        result = deploy_v2(
-            service=args.service,
-            deploy_type=args.deploy_type,
-            version_ref=args.version_ref,
-            iac_ref=args.iac_ref,
-            client=client,
-            domain=args.domain,
+
+        options = DeployOptions(
             wait=not args.no_wait,
+            timeout=args.timeout,
             staging_validated=args.staging_validated,
+            code_reviewed=True if args.code_reviewed else None,
             break_glass=args.break_glass,
             bootstrap=args.bootstrap,
             force_promote=args.force_promote,
             pause_rollback=args.pause_rollback,
             max_rollback_attempts=args.max_rollback_attempts,
-            code_reviewed=True if args.code_reviewed else None,
             verify_vault=not args.skip_vault_check,
             verify_config=not args.no_verify_config,
             verify_smoke=not args.no_verify_smoke,
             verify_ingestion=args.verify_ingestion,
-            timeout=args.timeout,
-            expected_sha=args.expected_sha,
-            repo=args.repo,
+            verify_manifests=not args.no_verify_manifests,
             image_wait_seconds=args.image_wait_seconds,
             image_poll_seconds=args.image_poll_seconds,
-            verify_manifests=should_verify_manifests,
+            expected_sha=args.expected_sha,
+        )
+        deps = DeployDeps(
+            client=client,
+            domain=args.domain or None,
+            repo=args.repo,
+        )
+        result = deploy_v2(
+            service=args.service,
+            deploy_type=args.deploy_type,
+            version_ref=args.version_ref,
+            iac_ref=args.iac_ref,
+            options=options,
+            deps=deps,
         )
     except (ValueError, RuntimeError, TimeoutError, httpx.HTTPError) as exc:
         print(f"deploy_v2 failed: {exc}", file=sys.stderr)

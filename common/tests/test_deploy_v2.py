@@ -129,6 +129,7 @@ def calls(monkeypatch):
     monkeypatch.setattr(dv2, "resolve_image_ref", _fake_resolve_image_ref)
     monkeypatch.setattr(dv2, "resolve_pr", _fake_resolve_pr)
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "newest_release_tag", lambda **kw: "v0.0.0")
     monkeypatch.setattr(dv2, "verify_app_manifests", lambda *a, **kw: {})
     return rec
 
@@ -558,7 +559,7 @@ def test_prod_tag_routes_fixed_and_pulls_the_tag_not_the_sha(calls):
 def test_prod_rejects_non_tag_version_ref_fail_closed(calls, bad):
     # prod accepts a release TAG only; a code ref (or the retired release-branch form)
     # fails closed before any backend. release/0.1 is now an unrecognized ref entirely.
-    with pytest.raises(ValueError, match="does not accept|unrecognized deploy ref"):
+    with pytest.raises(ValueError, match="does not accept|unrecognized"):
         _deploy(
             deploy_type="prod",
             version_ref=bad,
@@ -615,7 +616,7 @@ def test_deploy_v2_rollback_class_is_none_when_the_gate_never_ran(calls):
 
 @pytest.mark.parametrize("bad", ["main", "c" * 40, "release/0.1"])
 def test_staging_rejects_code_forms_fail_closed(calls, bad):
-    with pytest.raises(ValueError, match="does not accept|unrecognized deploy ref"):
+    with pytest.raises(ValueError, match="does not accept|unrecognized"):
         _deploy(deploy_type="staging", version_ref=bad)
     assert calls["fixed"] is None
 
@@ -926,7 +927,13 @@ def cli(monkeypatch):
     monkeypatch.setattr(dk, "get_dokploy", lambda host: f"client@{host}")
 
     def fake_deploy_v2(**kw):
+        from dataclasses import asdict
+
         rec.update(kw)
+        if kw.get("options") is not None:
+            rec.update(asdict(kw["options"]))
+        if kw.get("deps") is not None:
+            rec.update(asdict(kw["deps"]))
         target = make_target(
             kw["deploy_type"], service=kw["service"], version=SHA_CODE, iac_ref=SHA_IAC
         )
@@ -1008,6 +1015,7 @@ def test_cli_platform_staging_builds_no_dokploy_client(monkeypatch):
         lambda **kw: sent.update(kw) or {"status": "accepted", "deployment_id": "d1"},
     )
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "newest_release_tag", lambda **kw: "v0.0.0")
     rc = dv2.main(
         [
             "--service",
@@ -1353,11 +1361,11 @@ def _platform(monkeypatch, *, poll_status="completed", **over):
         lambda **kw: {"status": poll_status, "deployment_id": "d1"},
     )
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "newest_release_tag", lambda **kw: "v0.0.0")
     base = dict(
         service="platform/redis",
         deploy_type="staging",
-        version_ref="ignored",
-        iac_ref="v0.0.0",  # staging/prod pin IaC to a release tag
+        version_ref="v0.0.0",  # staging/prod pin IaC to a release tag
         client=object(),
         domain="zitian.party",
     )
@@ -1390,12 +1398,12 @@ def test_platform_wait_uses_timeout_budget_for_status_poll(monkeypatch):
         lambda **kw: seen.update(kw) or {"status": "completed", "deployment_id": "d1"},
     )
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "newest_release_tag", lambda **kw: "v0.0.0")
 
     deploy_v2(
         service="platform/redis",
         deploy_type="staging",
-        version_ref="ignored",
-        iac_ref="v0.0.0",
+        version_ref="v0.0.0",
         client=object(),
         domain="zitian.party",
         timeout=120,
@@ -1481,6 +1489,7 @@ def test_platform_batch_cli_routes_services_once(monkeypatch, capsys):
         lambda **kw: {"status": "completed", "deployment_id": "d1"},
     )
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "newest_release_tag", lambda **kw: "v0.0.0")
 
     rc = dv2.main(
         [
@@ -1560,15 +1569,21 @@ def test_platform_staging_still_rejects_a_non_deployable_env(monkeypatch):
         )
 
 
-def test_platform_ignores_version_ref(monkeypatch):
-    # version_ref must NOT be resolved for an iac-pinned service
+def test_platform_infra2_service_uses_single_version_ref_and_rejects_conflict(
+    monkeypatch,
+):
+    # Pure infra2 services accept a single version_ref (without iac_ref), never resolve
+    # app refs, and fail closed when conflicting version_ref and iac_ref are passed.
     def boom(*a, **k):
-        raise AssertionError("platform must not resolve version_ref")
+        raise AssertionError("platform must not resolve app version_ref")
 
     monkeypatch.setattr(dv2, "resolve_image_ref", boom)
     monkeypatch.setattr(dv2, "resolve_pr", boom)
-    sent, _res = _platform(monkeypatch, version_ref="whatever-garbage")
+    sent, _res = _platform(monkeypatch, version_ref="v0.0.0")
     assert sent["ref"] == SHA_IAC
+    assert sent.get("version_ref") is None
+    with pytest.raises(ValueError, match="conflicting"):
+        _platform(monkeypatch, version_ref="v0.0.1", iac_ref="v0.0.2")
 
 
 def test_platform_skips_app_image_readiness(monkeypatch):
@@ -1589,6 +1604,17 @@ def test_platform_wait_polls_and_records_final(monkeypatch):
 def test_platform_wait_raises_on_failed_deploy(monkeypatch):
     with pytest.raises(RuntimeError, match="ended 'failed'"):
         _platform(monkeypatch, poll_status="failed")
+
+
+def test_platform_batch_rejects_app_sourced_companion(monkeypatch):
+    monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
+    monkeypatch.setattr(dv2, "assert_iac_ref_on_main", lambda *a, **k: None)
+    with pytest.raises(ValueError, match="artifact_source='app'"):
+        dv2._deploy_platform_batch(
+            services=["platform/redis", "truealpha/data_engine"],
+            deploy_type="staging",
+            version_ref="v0.0.0",
+        )
 
 
 def test_wait_for_image_dependencies_retries_until_all_artifacts_exist(monkeypatch):
@@ -1670,18 +1696,72 @@ def test_fixed_deploy_keeps_the_shared_domain_for_services_without_an_override(c
 
 
 def test_platform_forwards_only_an_app_release_as_version_ref(monkeypatch):
-    """truealpha#712: a digest-pinned platform service (truealpha/data_engine) pins the
-    app release named by version_ref. The reconcile pins both axes to the infra2 tag
-    (version_ref == iac_ref), which is never an app release and must not reach the
-    deployer — v1.1.59's staging reconcile would have asked the registry for
-    truealpha-data-engine:v1.1.59. `main` (deploy.yml's default) is not forwarded either."""
-    sent, _res = _platform(monkeypatch, version_ref="v0.0.47")
+    """truealpha#712 / #1781: truealpha/data_engine has artifact_source='app' and forwards
+    its app release version_ref to the runner; pure infra2 services never forward one."""
+    sent, _res = _platform(
+        monkeypatch,
+        service="truealpha/data_engine",
+        version_ref="v0.0.47",
+        iac_ref="v0.0.0",
+    )
     assert sent["version_ref"] == "v0.0.47"
-    sent, _res = _platform(monkeypatch, version_ref="main")
+    # Even if app tag and iac_ref happen to match string-wise, artifact_source='app' forwards it.
+    sent, _res = _platform(
+        monkeypatch,
+        service="truealpha/data_engine",
+        version_ref="v0.0.47",
+        iac_ref="v0.0.47",
+    )
+    assert sent["version_ref"] == "v0.0.47"
+    # Infra-only sync of truealpha/data_engine omits version_ref -> runner keeps Vault digest.
+    sent, _res = _platform(
+        monkeypatch,
+        service="truealpha/data_engine",
+        version_ref="",
+        iac_ref="v0.0.0",
+    )
     assert sent.get("version_ref") is None
-    # the helper pins iac_ref to v0.0.0: the same tag as version_ref is the reconcile's shape
-    sent, _res = _platform(monkeypatch, version_ref="v0.0.0")
-    assert sent.get("version_ref") is None
+    # Pure infra2 service (platform/redis) rejects a non-tag or conflicting ref.
+    with pytest.raises(ValueError, match="does not accept a 'branch' version_ref"):
+        _platform(
+            monkeypatch,
+            service="truealpha/data_engine",
+            version_ref="main",
+            iac_ref="v0.0.0",
+        )
+
+
+def test_orthogonal_preview_type_resolves_branch_and_pr_and_defaults_iac_ref(
+    calls, monkeypatch
+):
+    """#1781: callers can pass deploy_type='preview' with version_ref='main' or 'pr-7'."""
+    res_branch = deploy_v2(
+        service="finance_report/app",
+        deploy_type="preview",
+        version_ref="main",
+        client=object(),
+    )
+    assert res_branch.target.sub_domain == "report-branch-main"
+    assert calls["preview"]["kind"] == "branch" and calls["preview"]["value"] == "main"
+
+    res_pr = deploy_v2(
+        service="finance_report/app",
+        deploy_type="preview",
+        version_ref="pr-7",
+        client=object(),
+    )
+    assert res_pr.target.sub_domain == "report-pr-7"
+    assert calls["preview"]["kind"] == "pr" and calls["preview"]["value"] == 7
+
+    res_todo = deploy_v2(
+        service="platform/todo",
+        deploy_type="preview",
+        version_ref="pr-42",
+        client=object(),
+    )
+    assert res_todo.backend == "preview-lifecycle"
+    assert calls["preview"]["service"] == "platform/todo"
+    assert calls["preview"]["value"] == 42
 
 
 # --- app-stack secret supply through the runner before a Dokploy promote (#649) --------

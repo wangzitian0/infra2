@@ -10,13 +10,13 @@ from types import SimpleNamespace
 
 from invoke.exceptions import CommandTimedOut
 from common.console import error, success
+from common.deploy.contract import classify_version_ref
 from common.deploy.deployer import Deployer, make_tasks
 from common.core.facets import BackupFacet, Exemption, SecretsFacet
 
 shared_tasks = sys.modules.get("truealpha.20.data_engine.shared")
 
 _IMAGE_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
-_VERSION_REF = re.compile(r"^(v[0-9]+\.[0-9]+\.[0-9]+|[0-9a-f]{7,40})$")
 _IMAGE = "ghcr.io/wangzitian0/truealpha-data-engine"
 # A registry lookup that never got an answer (a dropped connection, a timeout, a reset) is
 # retried; an answer — 404, 401/403, a malformed digest — is final and fails the deploy.
@@ -165,10 +165,18 @@ class DataEngineDeployer(Deployer):
         all is retried (``_PIN_RESOLVE_BACKOFF_SECONDS``); the last such failure raises.
         """
         candidate = str(version_ref).strip()
-        if not _VERSION_REF.fullmatch(candidate):
+        try:
+            form = classify_version_ref(candidate)
+        except ValueError as exc:
+            raise ValueError(
+                f"DEPLOY_VERSION_REF must be a vX.Y.Z tag or a commit sha, got {version_ref!r}"
+            ) from exc
+        if form not in ("tag", "sha"):
             raise ValueError(
                 f"DEPLOY_VERSION_REF must be a vX.Y.Z tag or a commit sha, got {version_ref!r}"
             )
+        if form == "sha":
+            candidate = candidate.lower()
         resolver = resolve or _registry_digest
         attempts = len(_PIN_RESOLVE_BACKOFF_SECONDS) + 1
         for attempt in range(1, attempts + 1):

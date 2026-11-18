@@ -40,15 +40,25 @@ import re
 import subprocess
 from dataclasses import dataclass, replace
 from functools import lru_cache
+from typing import Literal
 
 import yaml
 from infra2_sdk.runtime.environment import is_preview_alias
 
-from common.core.constants import REPO_ROOT
+from common.core.constants import APP_REPO_ID_TO_SERVICE, REPO_ROOT
 from common.core import registry as service_registry
 from common.deploy.env_config import env_config, preview_alias
 
 _SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")  # a resolved, image-addressable commit sha
+# Pairwise-disjoint version_ref forms (#1781). Do not import newer infra2_sdk.refs helpers
+# here because iac-runner task collection runs on RUNNER_SDK = 3.23.0 until rebuild.
+_BRANCH_REF_RE = re.compile(r"\Amain\Z")
+_TAG_REF_RE = re.compile(r"\Av\d+\.\d+\.\d+\Z")
+# PR refs: either explicit `pr-<N>` or 1-6 digit integer (strictly < 7 chars so it
+# never collides with 7-40 hex commit SHAs).
+_PR_REF_RE = re.compile(r"\A(?:pr-([1-9]\d*)|([1-9]\d{0,5}))\Z")
+_SHORT_OR_FULL_SHA_RE = re.compile(r"\A[0-9a-fA-F]{7,40}\Z")
+ArtifactSource = Literal["infra2", "app"]
 
 
 @dataclass(frozen=True)
@@ -103,6 +113,7 @@ class ServiceSpec:
     identity_component: str = "app"
     worker_identity_service_name: str = ""
     companions: tuple[str, ...] = ()
+    artifact_source: ArtifactSource = "infra2"
 
     def resolved_identity_service_name(self) -> str:
         if self.identity_service_name:
@@ -157,6 +168,7 @@ SERVICES: dict[str, ServiceSpec] = {
         ),
         identity_service_name="finance-report-backend",
         worker_identity_service_name="finance-report-worker",
+        artifact_source="app",
     ),
     # #500: version-pinned staging promotion (finance_report's fixed-compose path,
     # generalized). #522: preview/canary wired via common.deploy.preview (generalized
@@ -176,8 +188,17 @@ SERVICES: dict[str, ServiceSpec] = {
         ),
         identity_service_name="truealpha-app",
         companions=("truealpha/data_engine",),
+        artifact_source="app",
     ),
 }
+
+
+_APP_COMPANION_KEYS: frozenset[str] = frozenset(
+    companion
+    for spec in SERVICES.values()
+    if spec.artifact_source == "app"
+    for companion in spec.companions
+)
 
 
 @lru_cache(maxsize=1)
@@ -187,6 +208,7 @@ def _iac_pinned_specs() -> dict[str, ServiceSpec]:
     These route to the iac_runner webhook; their subdomain / prod_only come straight from
     the deploy.py the iac_runner already syncs, so deploy_v2 can never drift from the deploy
     fan-out (no per-service hand-registration — all platform + app-backing services at once).
+    App companions (e.g. ``truealpha/data_engine``) inherit ``artifact_source="app"``.
     """
     out: dict[str, ServiceSpec] = {}
     for sid, meta in service_registry.service_attrs().items():
@@ -199,6 +221,7 @@ def _iac_pinned_specs() -> dict[str, ServiceSpec]:
             prod_only=meta.prod_only,
             not_yet_in_production=meta.not_yet_in_production,
             iac_pinned=True,
+            artifact_source="app" if sid in _APP_COMPANION_KEYS else "infra2",
         )
     return out
 
@@ -456,6 +479,9 @@ _ALL_REF_FORMS = _CODE_FORMS + _RELEASE_FORMS
 DEPLOY_TYPES: dict[str, DeployTypeSpec] = {
     "staging": DeployTypeSpec("staging", env="staging", accepted_forms=_RELEASE_FORMS),
     "prod": DeployTypeSpec("prod", env="prod", accepted_forms=_RELEASE_FORMS),
+    "preview": DeployTypeSpec(
+        "preview", env="preview", alias_kind=None, accepted_forms=("branch", "pr")
+    ),
     "preview/branch": DeployTypeSpec(
         "preview/branch", env="preview", alias_kind="branch", accepted_forms=("branch",)
     ),
@@ -464,11 +490,58 @@ DEPLOY_TYPES: dict[str, DeployTypeSpec] = {
     ),
 }
 
-_APP_REPO_ID_TO_SERVICE: dict[str, str] = {
-    "finance-report": "finance_report/app",
-    "truealpha": "truealpha/app",
-}
 _HARNESS_REPOS_REL_PATH = "harness/repos.yaml"
+
+
+def classify_version_ref(ref: str | int) -> str:
+    """Classify ``version_ref`` into one of 4 pairwise-disjoint forms:
+
+    - ``branch``: literal ``main``
+    - ``tag``: ``vX.Y.Z``
+    - ``pr``: ``pr-<N>`` or 1-6 digit positive integer (``1``..``999999``)
+    - ``sha``: 7-40 hex characters
+    """
+    cleaned = str(ref).strip() if ref is not None else ""
+    if not cleaned:
+        raise ValueError("version_ref must be non-empty")
+    if _BRANCH_REF_RE.fullmatch(cleaned):
+        return "branch"
+    if _TAG_REF_RE.fullmatch(cleaned):
+        return "tag"
+    if _PR_REF_RE.fullmatch(cleaned):
+        return "pr"
+    if _SHORT_OR_FULL_SHA_RE.fullmatch(cleaned):
+        return "sha"
+    raise ValueError(
+        f"unrecognized version_ref {ref!r}; expected 'main', 'vX.Y.Z', 'pr-<N>', 1-6 digit PR, or 7-40 hex SHA"
+    )
+
+
+def normalize_pr_number(ref: str | int) -> int:
+    """Parse ``pr-<N>`` or a positive 1-6 digit PR integer into ``int``."""
+    cleaned = str(ref).strip() if ref is not None else ""
+    match = _PR_REF_RE.fullmatch(cleaned)
+    if match is None:
+        raise ValueError(
+            f"PR number must be 'pr-<N>' or a 1-6 digit positive integer, got {ref!r}"
+        )
+    return int(match.group(1) or match.group(2))
+
+
+def resolve_deploy_type_for_ref(
+    deploy_type: str, version_ref: str | int | None = None
+) -> DeployTypeSpec:
+    """Resolve ``deploy_type`` (collapsing ``preview`` + ``version_ref`` to branch/pr)."""
+    spec = deploy_type_spec(deploy_type)
+    if spec.key != "preview":
+        return spec
+    cleaned = str(version_ref).strip() if version_ref is not None else ""
+    candidate = cleaned or "main"
+    form = classify_version_ref(candidate)
+    validate_ref_form("preview", form)
+    if form == "pr":
+        return DEPLOY_TYPES["preview/pr"]
+    return DEPLOY_TYPES["preview/branch"]
 
 
 def default_version_ref(
@@ -513,7 +586,7 @@ def default_version_ref(
         if entry.get("role") != "external-application":
             continue
         repo_id = str(entry.get("id") or "")
-        mapped_service = _APP_REPO_ID_TO_SERVICE.get(repo_id)
+        mapped_service = APP_REPO_ID_TO_SERVICE.get(repo_id)
         release_tag = entry.get("release_tag")
         if (
             mapped_service == service
