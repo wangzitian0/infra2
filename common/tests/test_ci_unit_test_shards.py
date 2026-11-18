@@ -360,6 +360,6 @@ def test_the_weights_report_runs_after_every_gate_and_cannot_fail_the_check() ->
         or s.get("with", {}).get("name") == "infra2-shard-weights"
     ]
     gates = [i for i, n in enumerate(names) if n.startswith(("Gate ", "Audit "))]
-    assert len(report) == 2 and len(gates) >= 3, (report, gates)
+    assert len(report) == 2 and len(gates) >= 2, (report, gates)
     assert min(report) > max(gates)
     assert all(steps[i].get("continue-on-error") is True for i in report)

@@ -100,6 +100,7 @@ def test_preview_job_wires_unified_deploy_v2_and_always_teardown() -> None:
     )
     assert "build_plan" in plan_step["run"]
     assert "throwaway_secrets" in plan_step["run"]
+    assert "::error::DOKPLOY_API_KEY is required on non-fork PRs" in plan_step["run"]
 
     deploy_step = next(
         s

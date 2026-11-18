@@ -795,10 +795,10 @@ jobs:
               )
               run_preview = "false"
           elif not has_key:
-              print(
-                  f"DOKPLOY_API_KEY is unset; skipping preview deploy for {affected} cleanly."
+              raise SystemExit(
+                  f"::error::DOKPLOY_API_KEY is required on non-fork PRs when "
+                  f"throwaway_secrets preview service(s) {affected} are affected"
               )
-              run_preview = "false"
           else:
               print(f"Affected throwaway_secrets preview services: {affected}")
               run_preview = "true"

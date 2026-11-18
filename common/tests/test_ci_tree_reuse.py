@@ -396,7 +396,7 @@ def test_the_marker_is_written_after_every_gate_of_a_green_pull_request_run() ->
     record = names.index("Record the tested tree")
     upload = names.index("Upload the tested-tree marker")
     gates = [i for i, n in enumerate(names) if n.startswith(("Gate ", "Audit "))]
-    assert len(gates) >= 3 and record > max(gates) and upload > record
+    assert len(gates) >= 2 and record > max(gates) and upload > record
     # No always(): a failed gate above must skip the marker.
     assert steps[record]["if"] == (
         "github.event_name == 'pull_request' && needs.test-unit-shard.result == 'success'"

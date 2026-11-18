@@ -42,7 +42,6 @@ from dataclasses import dataclass, replace
 from functools import lru_cache
 
 import yaml
-from infra2_sdk.refs import classify_ref
 from infra2_sdk.runtime.environment import is_preview_alias
 
 from common.core.constants import REPO_ROOT
@@ -555,7 +554,25 @@ def validate_ref_form(deploy_type: str, form: str) -> None:
 # legitimately clones a branch/tag iac_ref), so it keys on the type's env rather than the
 # version_ref form matrix.
 _TAG_ONLY_IAC_ENVS = ("staging", "prod")
+_TAG_REF_RE = re.compile(r"\Av\d+\.\d+\.\d+\Z")
+_SHORT_OR_FULL_SHA_RE = re.compile(r"\A[0-9a-fA-F]{7,40}\Z")
 _BRANCH_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
+
+
+def _classify_base_ref(ref: str) -> str:
+    """Classify standard deploy ref forms locally (compatible with runner SDK)."""
+    cleaned = ref.strip()
+    if not cleaned:
+        raise ValueError("deploy ref must be non-empty")
+    if _TAG_REF_RE.match(cleaned):
+        return "tag"
+    if cleaned == "main":
+        return "branch"
+    if _SHORT_OR_FULL_SHA_RE.match(cleaned):
+        return "sha"
+    raise ValueError(
+        f"unrecognized deploy ref {ref!r}: expected 'main', 'vX.Y.Z', or a commit sha"
+    )
 
 
 def _is_valid_branch_ref(ref: str) -> bool:
@@ -575,7 +592,7 @@ def classify_iac_ref(deploy_type: str, iac_ref: str) -> str:
     """Classify ``iac_ref`` for ``deploy_type``, allowing PR/preview branch names."""
     cleaned = iac_ref.strip()
     try:
-        return classify_ref(cleaned)
+        return _classify_base_ref(cleaned)
     except ValueError:
         spec = deploy_type_spec(deploy_type)
         if spec.env == "preview" and _is_valid_branch_ref(cleaned):
