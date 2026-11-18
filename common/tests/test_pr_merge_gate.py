@@ -431,6 +431,7 @@ def test_collect_reads_the_newest_commit_as_the_last_push():
     # killed no tests.
     assert sorted(gate._required_checks()[0]) == [
         "Lint Python Code",
+        "Preview Runtime Gate",
         "Test 1Password Healthcheck",
         "Test Deployer Hash Logic",
         "Validate Compose Files",

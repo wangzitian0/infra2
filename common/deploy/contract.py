@@ -554,14 +554,60 @@ def validate_ref_form(deploy_type: str, form: str) -> None:
 # legitimately clones a branch/tag iac_ref), so it keys on the type's env rather than the
 # version_ref form matrix.
 _TAG_ONLY_IAC_ENVS = ("staging", "prod")
+_TAG_REF_RE = re.compile(r"\Av\d+\.\d+\.\d+\Z")
+_SHORT_OR_FULL_SHA_RE = re.compile(r"\A[0-9a-fA-F]{7,40}\Z")
+_BRANCH_REF_RE = re.compile(r"\A[A-Za-z0-9._/-]+\Z")
+
+
+def _classify_base_ref(ref: str) -> str:
+    """Classify standard deploy ref forms locally (compatible with runner SDK)."""
+    cleaned = ref.strip()
+    if not cleaned:
+        raise ValueError("deploy ref must be non-empty")
+    if _TAG_REF_RE.match(cleaned):
+        return "tag"
+    if cleaned == "main":
+        return "branch"
+    if _SHORT_OR_FULL_SHA_RE.match(cleaned):
+        return "sha"
+    raise ValueError(
+        f"unrecognized deploy ref {ref!r}: expected 'main', 'vX.Y.Z', or a commit sha"
+    )
+
+
+def _is_valid_branch_ref(ref: str) -> bool:
+    """Return True when ``ref`` is a syntactically safe Git branch name."""
+    if (
+        not ref
+        or ref.startswith(("refs/", "/", ".", "-"))
+        or ref.endswith(("/", ".", ".lock"))
+    ):
+        return False
+    if "//" in ref or ".." in ref or "@{" in ref:
+        return False
+    if any(part.startswith(".") or part.endswith(".lock") for part in ref.split("/")):
+        return False
+    return _BRANCH_REF_RE.fullmatch(ref) is not None
+
+
+def classify_iac_ref(deploy_type: str, iac_ref: str) -> str:
+    """Classify ``iac_ref`` for ``deploy_type``, allowing PR/preview branch names."""
+    cleaned = iac_ref.strip()
+    try:
+        return _classify_base_ref(cleaned)
+    except ValueError:
+        spec = deploy_type_spec(deploy_type)
+        if spec.env == "preview" and _is_valid_branch_ref(cleaned):
+            return "branch"
+        raise
 
 
 def validate_iac_ref_form(deploy_type: str, iac_form: str) -> None:
     """Fail closed when ``iac_ref`` form violates the deploy type's environment contract.
 
-    ``iac_form`` is a ``classify_ref`` output. staging/prod must pin IaC to a release tag
-    (``vX.Y.Z``); a ``branch``/``sha`` iac_ref raises here rather than letting a moving
-    infra2 ref reach a fixed env. preview clones a GitHub branch or tag ref via Dokploy
+    ``iac_form`` is a ``classify_iac_ref`` / ``classify_ref`` output. staging/prod must pin IaC
+    to a release tag (``vX.Y.Z``); a ``branch``/``sha`` iac_ref raises here rather than letting a
+    moving infra2 ref reach a fixed env. preview clones a GitHub branch or tag ref via Dokploy
     and therefore rejects a bare 40-hex ``sha`` ``iac_ref``.
     """
     spec = deploy_type_spec(deploy_type)

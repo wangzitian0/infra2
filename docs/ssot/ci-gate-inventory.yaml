@@ -19,9 +19,10 @@
 # See docs/project/archive/Infra-016.ci_gate_inventory.md.
 #
 # Every gate added by that backfill is `blocks_merge: false`: the set of blocks_merge:true
-# gates still equals, exactly, the 7 required status checks in the live branch ruleset, which
-# is what makes widening the audit provably non-loosening. Promoting any of these to
-# blocks_merge: true is a separate change that must add the ruleset context alongside it.
+# gates equals, exactly, the 8 required status checks in the live branch ruleset (7
+# github_ci.merge_authority gates plus infra_ci.preview_runtime), which is what makes
+# widening the audit provably non-loosening. Promoting any of these to blocks_merge: true
+# is a separate change that must add the ruleset context alongside it.
 version: 1
 repo_prefix: infra_ci.
 gates:
@@ -96,12 +97,19 @@ gates:
     job: harness-check
     blocks_merge: true
     failure_semantics: harness/repos.yaml is internally inconsistent (schema, governance/role mismatch, missing authority file, or an unexpected non-optional uninitialized checkout).
+  - id: infra_ci.preview_runtime
+    stage: preview.runtime
+    task_category: preview_runtime
+    workflow: .github/workflows/infra-ci.yml
+    job: preview
+    blocks_merge: true
+    failure_semantics: An affected throwaway-secrets platform Preview slot fails to deploy, pass readiness, or tear down cleanly.
   - id: infra_ci.detect_changes
     stage: github_ci.merge_authority
     task_category: change_detection
     workflow: .github/workflows/infra-ci.yml
     job: detect-changes
-    # Not itself one of the 7 required-status-check names in the branch
+    # Not itself one of the 8 required-status-check names in the branch
     # ruleset, so it cannot directly block merge the way the other gates
     # above do -- but every other job in this workflow depends on it
     # (needs: detect-changes) and is skipped, not merely deprioritized, if

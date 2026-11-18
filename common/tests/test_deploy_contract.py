@@ -347,3 +347,19 @@ def test_preview_capability_is_the_config_registry():
         service_spec(key)  # every registered unit is a known service
     with pytest.raises(ValueError, match="no preview config registered"):
         preview_service_config("platform/redis")
+
+
+def test_classify_iac_ref_accepts_preview_branches_and_rejects_bad_segments():
+    from common.deploy.contract import classify_iac_ref
+
+    assert classify_iac_ref("preview/pr", "feat/ws4-pr-preview-gate") == "branch"
+    assert classify_iac_ref("preview/pr", "main") == "branch"
+    assert classify_iac_ref("preview/pr", "v1.2.3") == "tag"
+    assert classify_iac_ref("preview/pr", "d" * 40) == "sha"
+
+    for bad in ("feat/.hidden", "feat/branch.lock/tip", "feat/a..b", "bad ref", ""):
+        with pytest.raises(ValueError):
+            classify_iac_ref("preview/pr", bad)
+
+    with pytest.raises(ValueError):
+        classify_iac_ref("prod", "feat/ws4-pr-preview-gate")

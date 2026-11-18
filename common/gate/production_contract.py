@@ -55,6 +55,10 @@ UNGATED_JOBS: dict[tuple[str, str], str] = {
         "ops-checks.yml",
         "staging-db-hygiene",
     ): "scheduled staging-only finance_report test-tenant and trace_records purge (#1624 AC2)",
+    (
+        "infra-ci.yml",
+        "preview",
+    ): "PR preview runtime gate deploys throwaway-secrets slot only and tears it down (#1647)",
 }
 
 # Retired workflow files removed in #1500. Kept as an empty set so callers importing

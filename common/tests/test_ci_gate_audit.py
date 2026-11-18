@@ -345,6 +345,7 @@ def test_widening_coverage_did_not_change_what_blocks_merge() -> None:
         "infra_ci.deployer_classes",
         "infra_ci.lint_python",
         "infra_ci.harness_check",
+        "infra_ci.preview_runtime",
     }, (
         "the blocks_merge set changed; if that is intended, update the live branch "
         "ruleset's required_status_checks in the same change and edit this list"
