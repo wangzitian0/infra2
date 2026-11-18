@@ -91,8 +91,26 @@ def _build_rehearsal_invariants(service_id: str, db: str) -> tuple[str, ...]:
             "SELECT 1",
             db_exists_check,
             "DO $$ BEGIN IF (SELECT count(*) FROM information_schema.tables WHERE table_schema IN ('raw', 'staging', 'mart', 'app')) < 50 THEN RAISE EXCEPTION 'table count below threshold (<50)'; END IF; END $$;",
-            "DO $$ BEGIN IF (SELECT count(*) FROM mart.topt_capture_status WHERE complete = true) < 80 THEN RAISE EXCEPTION 'topt_capture_status count below threshold (<80)'; END IF; END $$;",
-            "DO $$ BEGIN IF (SELECT count(*) FROM mart.topt_gppe_results WHERE payload->>'availability' = 'available') < 1400 THEN RAISE EXCEPTION 'topt_gppe_results available below threshold (<1400)'; END IF; END $$;",
+            (
+                "DO $$ DECLARE cnt bigint; BEGIN "
+                "IF to_regclass('mart.capture_status') IS NOT NULL THEN "
+                "SELECT count(*) INTO cnt FROM mart.capture_status WHERE complete = true; "
+                "ELSE "
+                "SELECT count(*) INTO cnt FROM mart.topt_capture_status WHERE complete = true; "
+                "END IF; "
+                "IF cnt < 80 THEN RAISE EXCEPTION 'capture_status count below threshold (<80): %', cnt; END IF; "
+                "END $$;"
+            ),
+            (
+                "DO $$ DECLARE cnt bigint; BEGIN "
+                "IF to_regclass('mart.topt_gppe_results') IS NOT NULL THEN "
+                "SELECT count(*) INTO cnt FROM mart.topt_gppe_results WHERE payload->>'availability' = 'available'; "
+                "ELSE "
+                "SELECT count(*) INTO cnt FROM mart.metric_node_values WHERE availability_status = 'available' AND node_key = 'gppe_uniform_charge_v0'; "
+                "END IF; "
+                "IF cnt < 1400 THEN RAISE EXCEPTION 'gppe available count below threshold (<1400): %', cnt; END IF; "
+                "END $$;"
+            ),
         )
     return (
         "SELECT 1",
@@ -143,17 +161,20 @@ def _collect_rehearsal_evidence(
                 "SELECT count(*) FROM information_schema.tables WHERE table_schema IN ('raw', 'staging', 'mart', 'app')"
             )
         )
+        capture_sql = (
+            "SELECT count(*) FROM mart.capture_status WHERE complete = true"
+            if query_val("SELECT to_regclass('mart.capture_status') IS NOT NULL") == "t"
+            else "SELECT count(*) FROM mart.topt_capture_status WHERE complete = true"
+        )
+        gppe_sql = (
+            "SELECT count(*) FROM mart.topt_gppe_results WHERE payload->>'availability' = 'available'"
+            if query_val("SELECT to_regclass('mart.topt_gppe_results') IS NOT NULL")
+            == "t"
+            else "SELECT count(*) FROM mart.metric_node_values WHERE availability_status = 'available' AND node_key = 'gppe_uniform_charge_v0'"
+        )
         domain_stats = {
-            "topt_capture_complete_count": int(
-                query_val(
-                    "SELECT count(*) FROM mart.topt_capture_status WHERE complete = true"
-                )
-            ),
-            "topt_gppe_available_count": int(
-                query_val(
-                    "SELECT count(*) FROM mart.topt_gppe_results WHERE payload->>'availability' = 'available'"
-                )
-            ),
+            "topt_capture_complete_count": int(query_val(capture_sql)),
+            "topt_gppe_available_count": int(query_val(gppe_sql)),
         }
     else:
         tables_count = int(

@@ -506,3 +506,105 @@ def test_default_fallback_rehearsal_invariants_pass_restore_scalar_check(
     )
     assert res["status"] == "pass"
     assert res["invariants_checked"] == len(invariants)
+
+
+def test_truealpha_rehearsal_invariants_support_slice3_and_slice4_relations() -> None:
+    """Restore invariants accept both legacy topt_* and converged Slice 3/4 relations."""
+    invariants = " ".join(
+        _build_rehearsal_invariants("truealpha/postgres", "truealpha")
+    )
+    assert "to_regclass('mart.capture_status') IS NOT NULL" in invariants
+    assert "FROM mart.capture_status WHERE complete = true" in invariants
+    assert "FROM mart.topt_capture_status WHERE complete = true" in invariants
+    assert "to_regclass('mart.topt_gppe_results') IS NOT NULL" in invariants
+    assert "FROM mart.topt_gppe_results" in invariants
+    assert (
+        "FROM mart.metric_node_values WHERE availability_status = 'available' AND node_key = 'gppe_uniform_charge_v0'"
+        in invariants
+    )
+    assert "cnt < 80" in invariants
+    assert "cnt < 1400" in invariants
+
+
+def test_truealpha_collect_rehearsal_evidence_switches_on_regclass() -> None:
+    """Evidence collection switches between legacy topt_* and converged Slice 3/4 tables."""
+    from tools.run_restore_rehearsal import _collect_rehearsal_evidence
+
+    seen_post: list[str] = []
+
+    def fake_run_post_slice4(cmd, *args, **kwargs):
+        sql = cmd[-1]
+        seen_post.append(sql)
+        result = MagicMock(returncode=0)
+        if "information_schema.tables" in sql:
+            result.stdout = "82\n"
+        elif "to_regclass('mart.capture_status')" in sql:
+            result.stdout = "t\n"
+        elif "FROM mart.capture_status" in sql:
+            result.stdout = "711\n"
+        elif "to_regclass('mart.topt_gppe_results')" in sql:
+            result.stdout = "f\n"
+        elif "FROM mart.metric_node_values" in sql:
+            result.stdout = "1999\n"
+        elif "pg_database_size" in sql:
+            result.stdout = "123456\n"
+        else:
+            raise AssertionError(f"unexpected SQL: {sql}")
+        return result
+
+    with patch(
+        "tools.run_restore_rehearsal.subprocess.run", side_effect=fake_run_post_slice4
+    ):
+        tables, size_bytes, stats = _collect_rehearsal_evidence(
+            "ta-rehearsal", "postgres", "truealpha", "truealpha/postgres"
+        )
+
+    assert tables == 82
+    assert size_bytes == 123456
+    assert stats == {
+        "topt_capture_complete_count": 711,
+        "topt_gppe_available_count": 1999,
+    }
+    assert any("FROM mart.capture_status" in s for s in seen_post)
+    assert any(
+        "FROM mart.metric_node_values" in s and "gppe_uniform_charge_v0" in s
+        for s in seen_post
+    )
+
+    seen_legacy: list[str] = []
+
+    def fake_run_legacy(cmd, *args, **kwargs):
+        sql = cmd[-1]
+        seen_legacy.append(sql)
+        result = MagicMock(returncode=0)
+        if "information_schema.tables" in sql:
+            result.stdout = "90\n"
+        elif "to_regclass('mart.capture_status')" in sql:
+            result.stdout = "f\n"
+        elif "FROM mart.topt_capture_status" in sql:
+            result.stdout = "650\n"
+        elif "to_regclass('mart.topt_gppe_results')" in sql:
+            result.stdout = "t\n"
+        elif "FROM mart.topt_gppe_results" in sql:
+            result.stdout = "7488\n"
+        elif "pg_database_size" in sql:
+            result.stdout = "654321\n"
+        else:
+            raise AssertionError(f"unexpected SQL: {sql}")
+        return result
+
+    with patch(
+        "tools.run_restore_rehearsal.subprocess.run", side_effect=fake_run_legacy
+    ):
+        tables_l, size_l, stats_l = _collect_rehearsal_evidence(
+            "ta-rehearsal", "postgres", "truealpha", "truealpha/postgres"
+        )
+
+    assert tables_l == 90
+    assert size_l == 654321
+    assert stats_l == {
+        "topt_capture_complete_count": 650,
+        "topt_gppe_available_count": 7488,
+    }
+    assert any("FROM mart.topt_capture_status" in s for s in seen_legacy)
+    assert any("FROM mart.topt_gppe_results" in s for s in seen_legacy)
