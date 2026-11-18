@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tools.sdk_requirement import sdk_requirement
+from tools.sdk_requirement import sdk_requirement, sdk_version
 
 ROOT = Path(__file__).resolve().parents[2]
 LOCK = ROOT / "uv.lock"
@@ -79,6 +79,7 @@ def test_invalid_extras_are_refused(bad_extras: str) -> None:
 
 def test_the_installed_sdk_is_the_locked_release() -> None:
     assert version("infra2-sdk") == _locked()["version"]
+    assert sdk_version(LOCK) == _locked()["version"]
 
 
 def _with_two_wheels(text: str) -> str:
@@ -147,6 +148,16 @@ def test_the_cli_prints_nothing_and_fails_on_a_bad_lock(tmp_path) -> None:
         [sys.executable, str(SCRIPT), str(lock)], capture_output=True, text=True
     )
     assert (result.returncode, result.stdout) == (1, "")
+
+    ok_version = subprocess.run(
+        [sys.executable, str(SCRIPT), "--version", str(LOCK)],
+        capture_output=True,
+        text=True,
+    )
+    assert (ok_version.returncode, ok_version.stdout.strip()) == (
+        0,
+        _locked()["version"],
+    )
 
 
 _IMAGE_ASSIGN_RE = re.compile(

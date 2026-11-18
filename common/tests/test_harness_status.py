@@ -639,6 +639,7 @@ def test_offline_status_text_is_unchanged(monkeypatch, tmp_path: Path, capsys) -
 
 def test_online_text_has_a_blank_line_and_the_table(monkeypatch, tmp_path, capsys):
     harness = _patch_cli(monkeypatch, FakeFetcher(BODIES))
+    monkeypatch.delenv("IAC_RUNNER_HEALTH_URL", raising=False)
     monkeypatch.setattr("common.deploy.release_markers.marker_status", _markers(BEHIND))
     _write_lock(tmp_path, LOCK)
 
@@ -653,6 +654,7 @@ def test_online_text_has_a_blank_line_and_the_table(monkeypatch, tmp_path, capsy
 def test_online_json_shape(monkeypatch, tmp_path: Path, capsys) -> None:
     outcomes = {**BODIES, _url("truealpha", "staging"): TimeoutError("timed out")}
     harness = _patch_cli(monkeypatch, FakeFetcher(outcomes))
+    monkeypatch.delenv("IAC_RUNNER_HEALTH_URL", raising=False)
     monkeypatch.setattr("common.deploy.release_markers.marker_status", _markers(BEHIND))
     _write_lock(
         tmp_path,
@@ -907,3 +909,59 @@ def test_observe_online_computes_train_gate_metrics_and_threshold(
     assert count_prompt_status.train_gate is not None
     assert count_prompt_status.train_gate["total_unpromoted_prs"] == 15
     assert count_prompt_status.train_gate["prod_gatekeeper"] == "PROMPT_REQUIRED"
+
+
+def test_online_status_reports_sdk_locks_and_iac_runner(tmp_path: Path) -> None:
+    (tmp_path / "uv.lock").write_text("# mock lock", encoding="utf-8")
+    (tmp_path / "repos" / "truealpha").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "repos" / "truealpha" / "uv.lock").write_text("# ta", encoding="utf-8")
+    # finance_report submodule uninitialized on disk: must be skipped, never read from root.
+    _write_lock(
+        tmp_path,
+        "repositories:\n"
+        "  - id: finance-report\n"
+        "    path: repos/finance_report\n"
+        "    role: external-application\n"
+        "    release_tag: v0.1.88\n"
+        "    sdk_lock: apps/backend/uv.lock\n"
+        "  - id: truealpha\n"
+        "    path: repos/truealpha\n"
+        "    role: external-application\n"
+        "    release_tag: v0.2.77\n"
+        "    sdk_lock: uv.lock\n",
+    )
+
+    runner_url = "https://iac.example.test/health"
+    outcomes = {
+        **BODIES,
+        runner_url: {"status": "healthy", "git_sha": "5b634b2"},
+    }
+    observed = observe_online(
+        _status(),
+        tmp_path,
+        _manifest(),
+        fetcher=FakeFetcher(outcomes),
+        marker_status=_markers(BEHIND),
+        now=lambda: datetime.fromisoformat("2026-10-15T13:41:53+08:00"),
+        sdk_lock_reader=lambda p: "3.32.0" if p == tmp_path / "uv.lock" else "3.31.0",
+        iac_runner_health_url=runner_url,
+    )
+    assert observed.sdk_locks == {"infra2": "v3.32.0", "truealpha/app": "v3.31.0"}
+    assert observed.iac_runner == {"status": "healthy", "git_sha": "5b634b2"}
+    payload = observed.to_dict()
+    assert payload["sdk_locks"] == {"infra2": "v3.32.0", "truealpha/app": "v3.31.0"}
+    assert payload["iac_runner"] == {"status": "healthy", "git_sha": "5b634b2"}
+    rendered = render_online_table(observed)
+    assert "sdk_locks: infra2=v3.32.0  truealpha/app=v3.31.0" in rendered
+    assert "iac_runner: git_sha=5b634b2  status=healthy" in rendered
+
+    down = observe_online(
+        _status(),
+        tmp_path,
+        _manifest(),
+        fetcher=FakeFetcher({**BODIES, runner_url: urllib.error.URLError("down")}),
+        marker_status=_markers(BEHIND),
+        iac_runner_health_url=runner_url,
+    )
+    assert down.iac_runner == {"status": "unreachable", "note": "URLError"}
+    assert "iac_runner: status=unreachable  (URLError)" in render_online_table(down)

@@ -39,6 +39,20 @@ def sdk_requirement(path: Path = REPO_ROOT / "uv.lock") -> str:
     ).stdout.strip()
 
 
+def sdk_version(path: Path = REPO_ROOT / "uv.lock") -> str:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "tools/sdk_requirement.py"),
+            "--version",
+            str(path),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
 SKIP_SYMBOL_NAMES = {"main", "build_parser", "__version__", "__all__"}
 MODULE_DUNDER_ATTRS = frozenset(
     {

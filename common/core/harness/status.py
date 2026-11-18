@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
+from common.core.constants import _load_service_to_submodule_path, load_app_sdk_locks
 from common.core.harness.prod_queue import ProductionQueue, render_queue_lines
 from common.core.harness.manifest import (
     HEALTH_ENVIRONMENTS,
@@ -91,6 +92,8 @@ class WorkspaceStatus:
     observed_at: str | None = None  # UTC time of the `--online` reads
     train_gate: dict[str, Any] | None = None
     prod_queue: ProductionQueue | None = None
+    sdk_locks: dict[str, str] | None = None
+    iac_runner: dict[str, str] | None = None
 
     @property
     def ok(self) -> bool:
@@ -113,6 +116,8 @@ class WorkspaceStatus:
                 if self.prod_queue is not None
                 else {}
             ),
+            **({"sdk_locks": self.sdk_locks} if self.sdk_locks is not None else {}),
+            **({"iac_runner": self.iac_runner} if self.iac_runner is not None else {}),
             "repositories": [item.to_dict() for item in self.repositories],
         }
 
@@ -557,6 +562,53 @@ def _compute_train_gate(
     }
 
 
+_ROOT_LOCK_NAME = "uv.lock"
+
+
+def _read_sdk_locks(
+    root: Path,
+    reader: Callable[[Path], str] | None,
+) -> dict[str, str] | None:
+    if reader is None:
+        return None
+    repos_yaml = root / "harness" / "repos.yaml"
+    targets: dict[str, Path] = {"infra2": root / _ROOT_LOCK_NAME}
+    submodules = _load_service_to_submodule_path(repos_yaml)
+    for service, rel_path in load_app_sdk_locks(repos_yaml).items():
+        sub_path = submodules.get(service)
+        if sub_path:
+            targets[service] = root / sub_path / rel_path
+    locks: dict[str, str] = {}
+    for label, lock_path in targets.items():
+        if not lock_path.is_file():
+            continue
+        try:
+            ver = reader(lock_path).strip()
+        except Exception:  # noqa: BLE001 - report malformed lock cleanly without crashing status
+            ver = "unknown"
+        if ver:
+            locks[label] = (
+                f"v{ver}" if ver[0].isdigit() and not ver.startswith("v") else ver
+            )
+    return locks or None
+
+
+def _probe_iac_runner(url: str | None, fetcher: Fetcher) -> dict[str, str] | None:
+    if not url or not str(url).strip():
+        return None
+    try:
+        body = fetcher(str(url).strip(), HEALTH_TIMEOUT_SECONDS)
+    except Exception as exc:  # noqa: BLE001 - network or HTTP error is reported as status=unreachable
+        return {"status": "unreachable", "note": type(exc).__name__}
+    if not isinstance(body, dict):
+        return {"status": "unknown", "note": "invalid health payload"}
+    raw_status = str(body.get("status") or "unknown").strip()
+    raw_sha = str(body.get("git_sha") or "unknown").strip()
+    if any(ord(c) < 32 or ord(c) == 127 for c in raw_status + raw_sha):
+        return {"status": "unknown", "note": "unprintable health field"}
+    return {"status": raw_status, "git_sha": raw_sha}
+
+
 def observe_online(
     status: WorkspaceStatus,
     root: Path,
@@ -567,6 +619,8 @@ def observe_online(
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     runner: Runner = subprocess.run,
     queue_reader: Callable[[Path], ProductionQueue] | None = None,
+    sdk_lock_reader: Callable[[Path], str] | None = None,
+    iac_runner_health_url: str | None = None,
 ) -> WorkspaceStatus:
     """`status` plus what each repository serves online and its contract lock.
 
@@ -599,8 +653,15 @@ def observe_online(
     observed_at = observed_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
     train_gate = _compute_train_gate(items, root, observed_dt, runner=runner)
     prod_queue = queue_reader(root) if queue_reader is not None else None
+    sdk_locks = _read_sdk_locks(root, sdk_lock_reader)
+    iac_runner = _probe_iac_runner(iac_runner_health_url, fetcher)
     return WorkspaceStatus(
-        tuple(items), observed_at, train_gate=train_gate, prod_queue=prod_queue
+        tuple(items),
+        observed_at,
+        train_gate=train_gate,
+        prod_queue=prod_queue,
+        sdk_locks=sdk_locks,
+        iac_runner=iac_runner,
     )
 
 
@@ -637,6 +698,17 @@ def render_online_table(status: WorkspaceStatus) -> list[str]:
         )
     if status.prod_queue is not None:
         lines.extend(render_queue_lines(status.prod_queue))
+    if status.sdk_locks:
+        pairs = "  ".join(f"{name}={ver}" for name, ver in status.sdk_locks.items())
+        lines.append(f"sdk_locks: {pairs}")
+    if status.iac_runner is not None:
+        ir = status.iac_runner
+        parts = [f"status={ir.get('status', 'unknown')}"]
+        if ir.get("git_sha"):
+            parts.insert(0, f"git_sha={ir['git_sha']}")
+        if ir.get("note"):
+            parts.append(f"({ir['note']})")
+        lines.append("iac_runner: " + "  ".join(parts))
     return lines
 
 
