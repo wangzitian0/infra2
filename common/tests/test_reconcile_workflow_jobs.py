@@ -456,3 +456,16 @@ def test_the_alert_job_merges_the_results_of_the_three_jobs() -> None:
         ],
     }
     assert merged(pre) == {"alert_text": None, "hook_results": []}
+
+
+def test_show_stage_card_receives_reports_feishu_env() -> None:
+    """Show the stage card needs INFRA2_REPORTS_FEISHU_* in alert job/step env for staging cards."""
+    alert_job = _load()["jobs"]["alert"]
+    step = next(s for s in alert_job["steps"] if s.get("name") == "Show the stage card")
+    effective_env = {**(alert_job.get("env") or {}), **(step.get("env") or {})}
+    for key in (
+        "INFRA2_REPORTS_FEISHU_APP_ID",
+        "INFRA2_REPORTS_FEISHU_APP_SECRET",
+        "INFRA2_REPORTS_FEISHU_CHAT_ID",
+    ):
+        assert effective_env.get(key) == f"${{{{ secrets.{key} }}}}"

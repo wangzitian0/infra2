@@ -521,6 +521,10 @@ jobs:
       INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_APP_SECRET }}
       INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_CHAT_ID }}
       INFRA2_OUT_OF_BAND_FEISHU_API_BASE: ${{ secrets.INFRA2_OUT_OF_BAND_FEISHU_API_BASE }}
+      # staging stage cards and repeat-failure reports use the reports Feishu app
+      INFRA2_REPORTS_FEISHU_APP_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_ID }}
+      INFRA2_REPORTS_FEISHU_APP_SECRET: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_SECRET }}
+      INFRA2_REPORTS_FEISHU_CHAT_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_CHAT_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -563,10 +567,6 @@ jobs:
           RECONCILE_PHASE: ${{ env.RECONCILE_PHASE || '' }}
           FAILED_JOB: ${{ env.FAILED_JOB || '' }}
           GITHUB_TOKEN: ${{ github.token }}
-          # a second red run of the same failure is a report in the reports chat
-          INFRA2_REPORTS_FEISHU_APP_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_ID }}
-          INFRA2_REPORTS_FEISHU_APP_SECRET: ${{ secrets.INFRA2_REPORTS_FEISHU_APP_SECRET }}
-          INFRA2_REPORTS_FEISHU_CHAT_ID: ${{ secrets.INFRA2_REPORTS_FEISHU_CHAT_ID }}
         run: |
           python - <<'PY'
           import os

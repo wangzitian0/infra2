@@ -632,7 +632,7 @@ promote tier(`common.deploy.promote.deploy`,app + staging|prod,跑在 GitHub Act
 - **A production job waits for the owner (#1125, #1035).** Each job that can change production declares
   `environment: production`. The job stops at `waiting` until a required reviewer approves the run.
   - Conditional jobs use `environment: ${{ <production condition> && 'production' || 'staging' }}`.
-    The jobs are `deploy.yml` `deploy` (`inputs.type == 'prod'`) and `reconcile-iac-inputs.yml` `reconcile`
+    The jobs are `deploy.yml` `deploy` (`inputs.type == 'prod'`) and `reconcile-iac-inputs.yml` `operation`
     (`inputs.promote_prod`).
   - These jobs always use `production`: `deploy.yml` `bootstrap`, `apply-observability.yml` `apply`,
     and `deploy-cloudflare-watchdog.yml` `deploy`.

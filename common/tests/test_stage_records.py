@@ -832,8 +832,8 @@ def test_the_operation_record_follows_a_recorded_production_marker(
         ),
     )
     assert reconcile.main(argv) == 0
-    # the marker is written by the operation, before its record; a production run has no post
-    assert order == ["pre", "marker", "operation"]
+    # the marker is written by the operation, before its record; operation then writes the post record
+    assert order == ["pre", "marker", "operation", "post"]
     operation = _operation_of(records)
     assert operation.verdict == "pass"
     assert [(c.name, c.ok, c.detail) for c in operation.checks][-1] == (
@@ -1040,3 +1040,23 @@ def test_the_digest_counts_a_passing_production_run_and_the_reminder_stays_silen
     # the production post record marks the tag promoted, with or without a marker tag
     post = [d for d in dicts if d["phase"] == "post"]
     assert promotion_reminder.pending_promotion([_post("v3.1.23")], post, []) is None
+
+
+def test_hookless_production_promotion_writes_post_record_and_card_passes(
+    monkeypatch, tmp_path
+) -> None:
+    """A hookless production promotion still writes a passing `post` record so stage_card ends Passed."""
+    from common.alerting.stage_card import render_stage_card
+
+    records, argv = _drive_prod_promotion(
+        monkeypatch, tmp_path, lambda tag, *_a, **_k: f"production/{tag}"
+    )
+    monkeypatch.setattr(reconcile, "run_post_deploy_app_hooks", lambda *_a, **_k: [])
+    assert reconcile.main(argv) == 0
+    loaded = [
+        StageRecord.from_dict(json.loads(f.read_text())) for f in records.iterdir()
+    ]
+    post = [r for r in loaded if r.phase == "post"]
+    assert len(post) == 1 and post[0].verdict == "pass"
+    assert post[0].checks[0].name == "hooks" and post[0].checks[0].ok is True
+    assert render_stage_card(loaded)["header"]["title"]["content"].endswith("Passed")

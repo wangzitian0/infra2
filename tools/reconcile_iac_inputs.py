@@ -3418,11 +3418,12 @@ def run_operation(
             *marker_checks,
         ],
     )
-    # A production run has no `post` job: its `post` record holds the verdict of `prod_gate`,
-    # written green or red after the marker step, so the stage card ends Passed or Failed.
-    if promote_prod and not args.dry_run:
+    # A production run has no `post` job: its `post` record holds the verdict of `prod_gate`
+    # (or a passing hooks check when no service has a gate hook), so the stage card ends
+    # Passed or Failed instead of staying at "operation done".
+    if promote_prod and not args.dry_run and not deploy_failed and marker_error is None:
         gate_results = [item for item in hook_results if item.get("slot") != "smoke"]
-        if gate_results:
+        if gate_results or not hooks_failed:
             emit_post_record(stage, hooks_started, gate_results)
     facts: dict[str, object] = {
         "plan": train.plan.to_dict(),
