@@ -12,6 +12,7 @@ import time
 from collections.abc import Iterator
 
 import httpx
+from infra2_sdk.refs import classify_ref
 
 _SHA40_RE = re.compile(r"\A[0-9a-f]{40}\Z")
 _DEPLOYMENT_ID_RE = re.compile(r"\A[0-9a-f]{16}\Z")
@@ -130,17 +131,20 @@ def _validate_request(env: str, ref: str, secret: str, base_url: str) -> None:
         raise ValueError("iac_runner base_url is required")
 
 
-_VERSION_REF_RE = re.compile(r"\A(v[0-9]+\.[0-9]+\.[0-9]+|[0-9a-f]{7,40})\Z")
-
-
 def _validate_version_ref(version_ref: str) -> str:
     """A release tag or a commit sha — the only two shapes a Deployer may pin from."""
     candidate = str(version_ref).strip()
-    if not _VERSION_REF_RE.match(candidate):
+    try:
+        form = classify_ref(candidate)
+    except ValueError as exc:
+        raise ValueError(
+            f"version_ref must be a vX.Y.Z tag or a 7-40 hex commit sha, got {version_ref!r}"
+        ) from exc
+    if form not in ("tag", "sha"):
         raise ValueError(
             f"version_ref must be a vX.Y.Z tag or a 7-40 hex commit sha, got {version_ref!r}"
         )
-    return candidate
+    return candidate.lower() if form == "sha" else candidate
 
 
 def _fetch_actions_oidc_token(

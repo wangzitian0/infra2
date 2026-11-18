@@ -27,6 +27,7 @@ from typing import Any, Dict, List
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from infra2_sdk.fastapi import init_service
+from infra2_sdk.refs import classify_ref
 from pydantic import BaseModel, ConfigDict
 from starlette.concurrency import run_in_threadpool
 
@@ -306,17 +307,23 @@ def _normalize_services(services: list[str] | None) -> tuple[str, ...]:
     return tuple(sorted({service.strip() for service in services}))
 
 
-VERSION_REF_RE = re.compile(r"\A(v[0-9]+\.[0-9]+\.[0-9]+|[0-9a-f]{7,40})\Z")
-
-
 def validate_version_ref(value) -> str | None:
     """Optional app release the platform deploy should pin (truealpha#712): a vX.Y.Z
     tag or a commit sha, or None when absent. Anything else is a 400, never coerced."""
     if value is None or value == "":
         return None
-    if not isinstance(value, str) or not VERSION_REF_RE.fullmatch(value.strip()):
+    if not isinstance(value, str):
         raise ValueError("version_ref must be a vX.Y.Z tag or a 7-40 hex commit sha")
-    return value.strip()
+    cleaned = value.strip()
+    try:
+        form = classify_ref(cleaned)
+    except ValueError as exc:
+        raise ValueError(
+            "version_ref must be a vX.Y.Z tag or a 7-40 hex commit sha"
+        ) from exc
+    if form not in ("tag", "sha"):
+        raise ValueError("version_ref must be a vX.Y.Z tag or a 7-40 hex commit sha")
+    return cleaned.lower() if form == "sha" else cleaned
 
 
 DEPLOY_ACTIONS = ("sync", "secrets-supply")

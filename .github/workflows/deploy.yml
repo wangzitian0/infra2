@@ -23,23 +23,23 @@ on:
         required: false
         default: finance_report/app
       type:
-        description: "Deploy type (the scenario)"
+        description: "Deploy type (staging | prod | preview)"
         required: false
         default: staging
         type: choice
-        options: [staging, prod, preview/branch, preview/pr]
+        options: [staging, prod, preview]
       version_ref:
-        description: "Version surface, interpreted by type: PR# (preview/pr) | tag vX.Y.Z (staging/prod, defaults to harness/repos.yaml release_tag) | branch (preview/branch, defaults to main)"
+        description: "Version surface: pr-<N> or PR# (preview) | main (preview) | tag vX.Y.Z (staging/prod; defaults to harness/repos.yaml for apps or latest infra2 tag for platform)"
         required: false
         default: ""
       iac_ref:
-        description: "infra2 ref surface: main | vX.Y.Z"
+        description: "Optional infra2 ref override (defaults to latest release tag on staging/prod, main on preview)"
         required: false
-        default: "main"
+        default: ""
       domain:
-        description: "Base domain"
+        description: "Optional base domain override (defaults to service domain or INTERNAL_DOMAIN)"
         required: false
-        default: "zitian.party"
+        default: ""
       staging_validated:
         description: "prod only — assert this code already passed staging"
         required: false
@@ -148,8 +148,8 @@ jobs:
           SERVICE_INPUT: ${{ github.event.inputs.service || 'finance_report/app' }}
           TYPE_INPUT: ${{ github.event.inputs.type }}
           VERSION_REF_INPUT: ${{ github.event.inputs.version_ref || '' }}
-          IAC_REF_INPUT: ${{ github.event.inputs.iac_ref || 'main' }}
-          DOMAIN_INPUT: ${{ github.event.inputs.domain || 'zitian.party' }}
+          IAC_REF_INPUT: ${{ github.event.inputs.iac_ref || '' }}
+          DOMAIN_INPUT: ${{ github.event.inputs.domain || '' }}
           STAGING_VALIDATED_INPUT: ${{ github.event.inputs.staging_validated }}
           CODE_REVIEWED_INPUT: ${{ github.event.inputs.code_reviewed }}
           BREAK_GLASS_INPUT: ${{ github.event.inputs.break_glass }}
@@ -173,9 +173,9 @@ jobs:
           args=(--service "$SERVICE_INPUT"
                 --type "$TYPE_INPUT"
                 --version-ref "$VERSION_REF_INPUT"
-                --iac-ref "$IAC_REF_INPUT"
-                --domain "$DOMAIN_INPUT"
                 --timeout "$TIMEOUT_INPUT")
+          [[ -n "$IAC_REF_INPUT" ]] && args+=(--iac-ref "$IAC_REF_INPUT")
+          [[ -n "$DOMAIN_INPUT" ]] && args+=(--domain "$DOMAIN_INPUT")
           [[ "$STAGING_VALIDATED_INPUT" == "true" ]] && args+=(--staging-validated)
           [[ "$CODE_REVIEWED_INPUT" == "true" ]] && args+=(--code-reviewed)
           [[ "$BREAK_GLASS_INPUT" == "true" ]] && args+=(--break-glass)

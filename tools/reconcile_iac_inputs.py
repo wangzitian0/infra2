@@ -2331,15 +2331,12 @@ def _single_service_deploy_command(
         service,
         "--type",
         deploy_type,
-        "--version-ref",
-        version_ref,
-        "--iac-ref",
-        iac_ref,
-        "--domain",
-        domain,
-        "--timeout",
-        str(timeout),
     ]
+    if version_ref:
+        argv.extend(["--version-ref", version_ref])
+    if iac_ref:
+        argv.extend(["--iac-ref", iac_ref])
+    argv.extend(["--domain", domain, "--timeout", str(timeout)])
     if deploy_type == "prod":
         argv.append("--code-reviewed")
         if staging_validated:
@@ -2369,7 +2366,16 @@ def build_deploy_commands(
         platform_services = [
             svc
             for svc in services
-            if service_spec(svc).iac_pinned and svc not in companion_services
+            if service_spec(svc).iac_pinned
+            and service_spec(svc).artifact_source == "infra2"
+            and svc not in companion_services
+        ]
+        infra_only_app_companions = [
+            svc
+            for svc in services
+            if service_spec(svc).iac_pinned
+            and service_spec(svc).artifact_source == "app"
+            and svc not in companion_services
         ]
         if platform_services:
             argv = [
@@ -2380,12 +2386,7 @@ def build_deploy_commands(
                 ",".join(platform_services),
                 "--type",
                 deploy_type,
-                # iac_pinned services ignore version_ref (their artifact IS the iac_ref stack),
-                # but staging/prod accept tags only — pin both axes to the promoted release tag
-                # so the command is self-consistent and never carries a moving ref to a fixed env.
                 "--version-ref",
-                iac_ref,
-                "--iac-ref",
                 iac_ref,
                 "--domain",
                 domain,
@@ -2401,6 +2402,19 @@ def build_deploy_commands(
                     service=",".join(platform_services),
                     deploy_type=deploy_type,
                     argv=argv,
+                )
+            )
+        for companion in infra_only_app_companions:
+            commands.append(
+                _single_service_deploy_command(
+                    companion,
+                    deploy_type,
+                    version_ref="",
+                    iac_ref=iac_ref,
+                    domain=domain,
+                    timeout=timeout,
+                    staging_validated=companion in plan.staging_services,
+                    python_executable=python_executable,
                 )
             )
         for app_svc in app_services:

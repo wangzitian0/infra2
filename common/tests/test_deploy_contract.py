@@ -13,10 +13,13 @@ from common.deploy.contract import (
     SERVICES,
     DeployTarget,
     ServiceSpec,
+    classify_version_ref,
     default_version_ref,
     deploy_type_spec,
     make_deploy_target,
     make_target,
+    normalize_pr_number,
+    resolve_deploy_type_for_ref,
     service_spec,
     sub_domain_for,
     validate_deploy_target,
@@ -347,3 +350,45 @@ def test_preview_capability_is_the_config_registry():
         service_spec(key)  # every registered unit is a known service
     with pytest.raises(ValueError, match="no preview config registered"):
         preview_service_config("platform/redis")
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("main", "branch"),
+        ("v1.2.3", "tag"),
+        ("pr-42", "pr"),
+        ("42", "pr"),
+        ("999999", "pr"),
+        ("1234567", "sha"),  # 7 hex digits -> sha, disjoint from 1..6 digit PRs
+        ("deadbeef", "sha"),
+        ("a" * 40, "sha"),
+    ],
+)
+def test_version_ref_patterns_are_disjoint(raw, expected):
+    assert classify_version_ref(raw) == expected
+
+
+@pytest.mark.parametrize("bad", ["", "feature/foo", "v1.2", "pr-0", "0", "1" * 41])
+def test_version_ref_rejects_unrecognized_forms(bad):
+    with pytest.raises(ValueError, match="unrecognized|non-empty"):
+        classify_version_ref(bad)
+
+
+def test_normalize_pr_number_and_preview_type_resolution():
+    assert normalize_pr_number("pr-42") == 42
+    assert normalize_pr_number(42) == 42
+    assert resolve_deploy_type_for_ref("preview", "main").key == "preview/branch"
+    assert resolve_deploy_type_for_ref("preview", "pr-42").key == "preview/pr"
+    assert resolve_deploy_type_for_ref("preview", "42").key == "preview/pr"
+    assert resolve_deploy_type_for_ref("staging", "v1.2.3").key == "staging"
+    with pytest.raises(ValueError, match="does not accept a 'tag' version_ref"):
+        resolve_deploy_type_for_ref("preview", "v1.2.3")
+
+
+def test_service_spec_artifact_source_and_companion_inheritance():
+    assert service_spec("finance_report/app").artifact_source == "app"
+    assert service_spec("truealpha/app").artifact_source == "app"
+    assert service_spec("truealpha/data_engine").artifact_source == "app"
+    assert service_spec("platform/todo").artifact_source == "infra2"
+    assert service_spec("platform/redis").artifact_source == "infra2"
