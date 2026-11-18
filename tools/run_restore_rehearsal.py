@@ -106,7 +106,7 @@ def _build_rehearsal_invariants(service_id: str, db: str) -> tuple[str, ...]:
                 "IF to_regclass('mart.topt_gppe_results') IS NOT NULL THEN "
                 "SELECT count(*) INTO cnt FROM mart.topt_gppe_results WHERE payload->>'availability' = 'available'; "
                 "ELSE "
-                "SELECT count(*) INTO cnt FROM mart.metric_node_values WHERE availability_status = 'available' AND node_key LIKE 'gppe_%'; "
+                "SELECT count(*) INTO cnt FROM mart.metric_node_values WHERE availability_status = 'available' AND node_key = 'gppe_uniform_charge_v0'; "
                 "END IF; "
                 "IF cnt < 1400 THEN RAISE EXCEPTION 'gppe available count below threshold (<1400): %', cnt; END IF; "
                 "END $$;"
@@ -169,7 +169,7 @@ def _collect_rehearsal_evidence(
         gppe_sql = (
             "SELECT count(*) FROM mart.topt_gppe_results WHERE payload->>'availability' = 'available'"
             if query_val("SELECT to_regclass('mart.topt_gppe_results') IS NOT NULL") == "t"
-            else "SELECT count(*) FROM mart.metric_node_values WHERE availability_status = 'available' AND node_key LIKE 'gppe_%'"
+            else "SELECT count(*) FROM mart.metric_node_values WHERE availability_status = 'available' AND node_key = 'gppe_uniform_charge_v0'"
         )
         domain_stats = {
             "topt_capture_complete_count": int(query_val(capture_sql)),
