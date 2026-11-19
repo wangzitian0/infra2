@@ -28,10 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_ROOTS = ("bootstrap", "platform", "finance_report", "truealpha")
 
 # Either the Deployer's hash or a service's own configuration digest recreates the agent.
-CACHE_BUST_VARIABLES = (
-    "CONFIGURATION_SHA256",
-    "TRUEALPHA_CONFIGURATION_SHA256",
-)
+CACHE_BUST_VARIABLES = ("CONFIGURATION_SHA256",)
 
 # Promote-tier app compose files: the ones common.deploy.promote.deploy() governs for
 # finance_report/app and truealpha/app, fixed envs and preview alike. Their app services

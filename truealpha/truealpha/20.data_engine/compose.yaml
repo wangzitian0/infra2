@@ -30,10 +30,6 @@ x-dagster-service: &dagster-service
     RELEASE_ID: ${RELEASE_ID:?RELEASE_ID is required}
     IMAGE_DIGEST: ${IMAGE_DIGEST:?IMAGE_DIGEST is required}
     CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
-    # Retained until truealpha upstream required-env.generated.json drops injected=true TRUEALPHA_* fields.
-    TRUEALPHA_RELEASE_MANIFEST_ID: ${RELEASE_ID:?RELEASE_ID is required}
-    TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST: ${IMAGE_DIGEST:?IMAGE_DIGEST is required}
-    TRUEALPHA_CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:?CONFIGURATION_SHA256 is required}
     CAPTURE_APPROVED_BY: ${CAPTURE_APPROVED_BY:?CAPTURE_APPROVED_BY is required}
     # Host-loopback OTLP HTTP collector (#1231): network_mode: host cannot resolve
     # platform-signoz-otel-collector on dokploy-network, so platform/11.signoz
