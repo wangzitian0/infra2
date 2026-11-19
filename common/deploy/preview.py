@@ -36,6 +36,35 @@ PreviewType = Literal["branch", "pr"]
 
 
 @dataclass(frozen=True)
+class PreviewOptions:
+    """Optional service, git-source, and readiness flags for ``preview.up``."""
+
+    service: str = "finance_report/app"
+    image_ref: str | None = None
+    iac_ref: str = ""
+    branch: str = "main"
+    wait: bool = True
+    health_timeout: int = 600
+    health_interval: int = 10
+
+
+@dataclass(frozen=True)
+class PreviewDeps:
+    """Optional injectable Dokploy, git-source, HTTP, and clock deps for ``preview.up``."""
+
+    client: Any = None
+    domain: str = ""
+    github_id: str | None = None
+    repo_owner: str = "wangzitian0"
+    repo_name: str = "infra2"
+    repo: str | None = None
+    http_get: Any = None
+    now: Callable[[], float] = time.time
+    sleep: Callable[[float], None] = time.sleep
+    monotonic: Callable[[], float] = time.monotonic
+
+
+@dataclass(frozen=True)
 class PreviewResult:
     action: str  # "up" | "down"
     alias: str
@@ -251,47 +280,36 @@ def up(
     value: int | str | None,
     *,
     code: str,
-    domain: str,
-    client,
-    service: str = "finance_report/app",
-    image_ref: str | None = None,
-    iac_ref: str = "",
-    github_id: str | None = None,
-    repo_owner: str = "wangzitian0",
-    repo_name: str = "infra2",
-    branch: str = "main",
-    wait: bool = True,
-    health_timeout: int = 600,
-    health_interval: int = 10,
-    repo: str | None = None,
-    http_get=None,
-    _now=time.time,
-    _sleep=time.sleep,
-    _monotonic=time.monotonic,
+    options: PreviewOptions | None = None,
+    deps: PreviewDeps | None = None,
 ) -> PreviewResult:
     """Deploy code to the preview stack for one alias."""
-    _validate_domain(domain)
-    config = preview_service_config(service)
+    opt = options or PreviewOptions()
+    dep = deps or PreviewDeps()
+    _validate_domain(dep.domain)
+    if dep.client is None:
+        raise ValueError("preview.up requires deps.client")
+    config = preview_service_config(opt.service)
 
     alias = preview_alias(kind, value, slug_prefix=config.slug_prefix)
-    if repo is None:
-        slug = APP_SOURCES.get(service)
+    if dep.repo is None:
+        slug = APP_SOURCES.get(opt.service)
         if not slug:
             raise ValueError(
-                f"Service {service!r} has no registered source repository in APP_SOURCES"
+                f"Service {opt.service!r} has no registered source repository in APP_SOURCES"
             )
         effective_repo = f"https://github.com/{slug}.git"
     else:
-        effective_repo = repo
+        effective_repo = dep.repo
     sha = resolve_to_sha(code, repo=effective_repo)
     env_vars = _preview_env_vars(
         alias,
-        service=service,
+        service=opt.service,
         sha=sha,
-        domain=domain,
-        image_ref=image_ref,
-        iac_ref=iac_ref,
-        _now=_now,
+        domain=dep.domain,
+        image_ref=opt.image_ref,
+        iac_ref=opt.iac_ref,
+        _now=dep.now,
     )
     if config.throwaway_secrets:
         # A platform Preview never reads Vault: the slot gets its own secrets, and they
@@ -299,10 +317,14 @@ def up(
         env_vars.update(render_throwaway_secrets(config))
     else:
         env_vars.update(
-            _source_app_vault_creds(client, config.project, config.secret_env)
+            _source_app_vault_creds(dep.client, config.project, config.secret_env)
         )
 
-    gh_id = github_id if github_id is not None else client.get_github_provider_id()
+    gh_id = (
+        dep.github_id
+        if dep.github_id is not None
+        else dep.client.get_github_provider_id()
+    )
     if not gh_id:
         raise RuntimeError(
             "no GitHub provider configured in Dokploy; add one in Settings -> Git "
@@ -312,24 +334,24 @@ def up(
     source_fields = dict(
         source_type="github",
         githubId=gh_id,
-        repository=repo_name,
-        owner=repo_owner,
-        branch=branch,
+        repository=dep.repo_name,
+        owner=dep.repo_owner,
+        branch=opt.branch,
         composePath=config.compose_path,
         autoDeploy=False,
     )
 
     had_existing_compose = (
-        _find_compose(client, config.project, alias.compose_name) is not None
+        _find_compose(dep.client, config.project, alias.compose_name) is not None
     )
     compose_id = _ensure_preview_compose(
-        client=client, config=config, alias=alias, _sleep=_sleep
+        client=dep.client, config=config, alias=alias, _sleep=dep.sleep
     )
 
     healthy: bool | None = None
-    url = alias.app_url(domain=domain, base_subdomain=config.base_subdomain)
+    url = alias.app_url(domain=dep.domain, base_subdomain=config.base_subdomain)
     expected_versions = {
-        "runtime": image_ref or sha[:7],
+        "runtime": opt.image_ref or sha[:7],
         "source": sha[:7],
     }
 
@@ -339,30 +361,30 @@ def up(
     # deployment record (same boundary as fixed-compose promotion, infra2#525).
     with compose_write_lock(compose_id):
         before_ids = (
-            _deployment_ids(client.get_compose_deployments(compose_id))
-            if wait
+            _deployment_ids(dep.client.get_compose_deployments(compose_id))
+            if opt.wait
             else set()
         )
 
         # Configure source + env on BOTH paths. Dokploy's compose.create persists ONLY
         # basic fields, so github binding and env must be re-applied before every deploy.
         # update_compose_env with replace=True replaces stale keys while preserving runtime AppRole credentials.
-        client.update_compose(compose_id, **source_fields)
-        client.update_compose_env(compose_id, env_vars=env_vars, replace=True)
+        dep.client.update_compose(compose_id, **source_fields)
+        dep.client.update_compose_env(compose_id, env_vars=env_vars, replace=True)
 
         # A public 200 may still come from the old stack. Snapshot before this trigger and
         # require a new deployment record to reach terminal-good before probing routes.
-        trigger_epoch = _now()
-        client.deploy_compose(compose_id)
-        if wait:
+        trigger_epoch = dep.now()
+        dep.client.deploy_compose(compose_id)
+        if opt.wait:
             try:
                 wait_for_rollout(
-                    client,
+                    dep.client,
                     compose_id,
                     before_ids,
-                    timeout=health_timeout,
-                    interval=health_interval,
-                    _sleep=_sleep,
+                    timeout=opt.health_timeout,
+                    interval=opt.health_interval,
+                    _sleep=dep.sleep,
                     min_started_at=trigger_epoch,
                 )
             except RuntimeError as exc:
@@ -371,45 +393,49 @@ def up(
                     or "deploy rollout entered error" not in str(exc)
                 ):
                     raise
-                client.delete_compose(compose_id, delete_volumes=True)
-                if callable(getattr(client, "get_containers", None)):
+                dep.client.delete_compose(compose_id, delete_volumes=True)
+                if callable(getattr(dep.client, "get_containers", None)):
                     wait_for_containers_absent(
-                        client,
-                        service,
+                        dep.client,
+                        opt.service,
                         alias.env_suffix,
-                        _sleep=_sleep,
+                        _sleep=dep.sleep,
                     )
                 compose_id = _ensure_preview_compose(
-                    client=client, config=config, alias=alias, _sleep=_sleep
+                    client=dep.client, config=config, alias=alias, _sleep=dep.sleep
                 )
-                before_ids = _deployment_ids(client.get_compose_deployments(compose_id))
-                client.update_compose(compose_id, **source_fields)
-                client.update_compose_env(compose_id, env_vars=env_vars, replace=True)
-                trigger_epoch = _now()
-                client.deploy_compose(compose_id)
+                before_ids = _deployment_ids(
+                    dep.client.get_compose_deployments(compose_id)
+                )
+                dep.client.update_compose(compose_id, **source_fields)
+                dep.client.update_compose_env(
+                    compose_id, env_vars=env_vars, replace=True
+                )
+                trigger_epoch = dep.now()
+                dep.client.deploy_compose(compose_id)
                 wait_for_rollout(
-                    client,
+                    dep.client,
                     compose_id,
                     before_ids,
-                    timeout=health_timeout,
-                    interval=health_interval,
-                    _sleep=_sleep,
+                    timeout=opt.health_timeout,
+                    interval=opt.health_interval,
+                    _sleep=dep.sleep,
                     min_started_at=trigger_epoch,
                 )
             healthy = _wait_for_readiness(
                 url,
                 config.readiness_probes,
                 expected_versions=expected_versions,
-                timeout=health_timeout,
-                interval=health_interval,
-                http_get=http_get,
-                _sleep=_sleep,
-                _now=_monotonic,
+                timeout=opt.health_timeout,
+                interval=opt.health_interval,
+                http_get=dep.http_get,
+                _sleep=dep.sleep,
+                _now=dep.monotonic,
             )
             if not healthy:
                 raise TimeoutError(
                     f"preview {alias.alias} did not serve the requested deployment "
-                    f"identity on every public surface within {health_timeout}s"
+                    f"identity on every public surface within {opt.health_timeout}s"
                 )
 
     return PreviewResult(

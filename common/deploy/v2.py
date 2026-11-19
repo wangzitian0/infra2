@@ -70,8 +70,8 @@ from common.deploy.preflight import (
 from common.deploy.env_config import env_config, preview_service_config
 from common.core.registry import domain_for_service
 from common.deploy.app_contract import encode_rendered_templates, verify_app_manifests
-from common.deploy.promote import deploy as _deploy_fixed
-from common.deploy.preview import _validate_domain
+from common.deploy.promote import PromoteDeps, PromoteOptions, deploy as _deploy_fixed
+from common.deploy.preview import PreviewDeps, PreviewOptions, _validate_domain
 from common.deploy.preview import down as _preview_down
 from common.deploy.preview import up as _preview_up
 from infra2_sdk.refs import (
@@ -139,9 +139,6 @@ class DeployDeps:
     repo: str | None = None
     iac_runner_url: str | None = None
     iac_webhook_secret: str | None = None
-
-
-_UNSET = object()
 
 
 def _default_main(version_ref) -> str:
@@ -230,9 +227,7 @@ def _deploy_platform_preview(
     *,
     client,
     domain: str,
-    code_reviewed: bool | None,
-    wait: bool,
-    timeout: int,
+    opt: DeployOptions,
 ) -> DeployV2Result:
     """Deploy a platform unit into its Preview slot through the one Preview lifecycle.
 
@@ -258,19 +253,23 @@ def _deploy_platform_preview(
         alias_value=alias_value,
     )
     validate_deploy_target(target, service_spec(service))
-    data_lane = enforce_data_lane_red_lines(target, code_reviewed=code_reviewed)
+    data_lane = enforce_data_lane_red_lines(target, code_reviewed=opt.code_reviewed)
     result = _preview_up(
         spec.alias_kind,
         alias_value,
         code=iac_sha,
-        service=service,
-        iac_ref=iac_sha,
-        domain=domain,
-        client=client,
-        branch=iac_ref.strip(),
-        wait=wait,
-        health_timeout=timeout,
-        repo=_INFRA2_REPO,
+        options=PreviewOptions(
+            service=service,
+            iac_ref=iac_sha,
+            branch=iac_ref.strip(),
+            wait=opt.wait,
+            health_timeout=opt.timeout,
+        ),
+        deps=PreviewDeps(
+            client=client,
+            domain=domain,
+            repo=_INFRA2_REPO,
+        ),
     )
     detail = {
         "alias": result.alias,
@@ -287,13 +286,9 @@ def _deploy_platform(
     deploy_type: str,
     iac_ref: str,
     *,
-    runner_url: str | None,
-    secret: str | None,
-    triggered_by: str,
-    code_reviewed: bool | None,
-    wait: bool,
-    timeout: int,
     version_ref: str | None = None,
+    options: DeployOptions | None = None,
+    deps: DeployDeps | None = None,
 ) -> DeployV2Result:
     """Route a platform (iac_pinned) service to the iac_runner ``/deploy`` webhook.
 
@@ -307,6 +302,8 @@ def _deploy_platform(
     ``iac_ref`` (the reconcile's shape), is ignored. This path serves ``staging`` / ``prod``
     only; a platform Preview goes to ``_deploy_platform_preview``.
     """
+    opt = options or DeployOptions()
+    dep = deps or DeployDeps()
     spec = service_spec(service)
     type_spec = deploy_type_spec(deploy_type)
     if type_spec.env not in ("staging", "prod"):
@@ -323,7 +320,7 @@ def _deploy_platform(
     # RL-DATA-1 applies to platform prod too: a prod deploy must carry an explicit
     # code_reviewed signal (deny-by-default), same as the app path — a prod platform service
     # (e.g. postgres) sits on real prod data.
-    data_lane = enforce_data_lane_red_lines(target, code_reviewed=code_reviewed)
+    data_lane = enforce_data_lane_red_lines(target, code_reviewed=opt.code_reviewed)
 
     env = "production" if type_spec.env == "prod" else "staging"
     # iac_runner's SERVICE_TASK_MAP keys on the FULL service key (e.g. "platform/redis"),
@@ -331,8 +328,8 @@ def _deploy_platform(
     # We always FIRE the trigger with wait=False (the signed POST returns promptly, no 60s
     # timeout on a slow rollout); when the caller wants to wait we poll /deploy/status until
     # it settles — terminal success is "completed", failure is "failed" (verified live).
-    url = runner_url or os.getenv("IAC_RUNNER_URL", "")
-    sec = secret or os.getenv("IAC_WEBHOOK_SECRET", "")
+    url = dep.iac_runner_url or os.getenv("IAC_RUNNER_URL", "")
+    sec = dep.iac_webhook_secret or os.getenv("IAC_WEBHOOK_SECRET", "")
     # Only services whose artifact comes from an App repo (e.g. truealpha/data_engine)
     # forward DEPLOY_VERSION_REF to pin an app image release. Pure infra2 services never do.
     pinned_ref: str | None = None
@@ -347,16 +344,16 @@ def _deploy_platform(
         services=[service],
         url=url,
         secret=sec,
-        triggered_by=triggered_by,
-        wait=wait,
-        timeout=timeout,
+        triggered_by=opt.triggered_by,
+        wait=opt.wait,
+        timeout=opt.timeout,
         started=started,
         version_ref=pinned_ref,
     )
     detail = {"env": env, "ref": iac_sha, "services": [service], "iac_runner": response}
     if pinned_ref:
         detail["version_ref"] = pinned_ref
-    if wait:
+    if opt.wait:
         detail["iac_runner_final"] = final
         status = str(final.get("status", "")).lower()
         _progress(f"iac-runner sync of {service} to {env}", status, started)
@@ -559,12 +556,8 @@ def _deploy_platform_batch(
     iac_ref: str = "",
     *,
     version_ref: str = "",
-    runner_url: str | None = None,
-    secret: str | None = None,
-    triggered_by: str = "deploy_v2",
-    code_reviewed: bool | None = None,
-    wait: bool = True,
-    timeout: int = 600,
+    options: DeployOptions | None = None,
+    deps: DeployDeps | None = None,
 ) -> dict:
     """Route multiple iac_pinned services through one deploy_v2/iac_runner call.
 
@@ -572,6 +565,8 @@ def _deploy_platform_batch(
     post-merge reconcile fan-out so a manifest-wide input change produces one
     terminal-status wait per environment, not one wait per service.
     """
+    opt = options or DeployOptions()
+    dep = deps or DeployDeps()
     if not services:
         raise ValueError("at least one service is required")
     type_spec = deploy_type_spec(deploy_type)
@@ -604,12 +599,14 @@ def _deploy_platform_batch(
             service=service, env=type_spec.env, code_version=iac_sha, iac_ref=iac_sha
         )
         validate_deploy_target(target, spec)
-        data_lanes.add(enforce_data_lane_red_lines(target, code_reviewed=code_reviewed))
+        data_lanes.add(
+            enforce_data_lane_red_lines(target, code_reviewed=opt.code_reviewed)
+        )
         targets.append(target)
 
     env = "production" if type_spec.env == "prod" else "staging"
-    url = runner_url or os.getenv("IAC_RUNNER_URL", "")
-    sec = secret or os.getenv("IAC_WEBHOOK_SECRET", "")
+    url = dep.iac_runner_url or os.getenv("IAC_RUNNER_URL", "")
+    sec = dep.iac_webhook_secret or os.getenv("IAC_WEBHOOK_SECRET", "")
     started = time.monotonic()
     response, final = _trigger_and_poll(
         env=env,
@@ -617,13 +614,13 @@ def _deploy_platform_batch(
         services=services,
         url=url,
         secret=sec,
-        triggered_by=triggered_by,
-        wait=wait,
-        timeout=timeout,
+        triggered_by=opt.triggered_by,
+        wait=opt.wait,
+        timeout=opt.timeout,
         started=started,
     )
     detail = {"env": env, "ref": iac_sha, "services": services, "iac_runner": response}
-    if wait:
+    if opt.wait:
         detail["iac_runner_final"] = final
         status = str(final.get("status", "")).lower()
         _progress(f"iac-runner sync of {', '.join(services)} to {env}", status, started)
@@ -670,7 +667,6 @@ def _resolve_app_refs(
 
 def _deploy_preview_v2(
     target: DeployTarget,
-    svc_spec: ServiceSpec,
     spec: DeployTypeSpec,
     alias_value: str,
     service: str,
@@ -678,19 +674,17 @@ def _deploy_preview_v2(
     domain: str,
     client: Any,
     clone_ref: str,
-    wait: bool,
-    timeout: int,
     data_lane: list[str],
     *,
     iac_ref: str = "main",
-    verify_manifests: bool = False,
+    opt: DeployOptions,
 ) -> DeployV2Result:
     preview_service_config(
         service
     )  # the registry is the capability; fails before side effects
     previous_template = os.environ.get("VAULT_SECRETS_TEMPLATE")
     injected_template = False
-    if verify_manifests and previous_template is None:
+    if opt.verify_manifests and previous_template is None:
         rendered = verify_app_manifests(
             service,
             source_sha=resolved.sha,
@@ -706,15 +700,19 @@ def _deploy_preview_v2(
             spec.alias_kind,
             alias_value,
             code=resolved.sha,
-            service=service,
-            image_ref=resolved.image_ref,
-            iac_ref=target.iac_ref,
-            domain=domain,
-            client=client,
-            branch=clone_ref,
-            wait=wait,
-            health_timeout=timeout,
-            repo=_repo_for_service(service),
+            options=PreviewOptions(
+                service=service,
+                image_ref=resolved.image_ref,
+                iac_ref=target.iac_ref,
+                branch=clone_ref,
+                wait=opt.wait,
+                health_timeout=opt.timeout,
+            ),
+            deps=PreviewDeps(
+                client=client,
+                domain=domain,
+                repo=_repo_for_service(service),
+            ),
         )
     finally:
         if injected_template:
@@ -737,28 +735,15 @@ def _deploy_fixed_v2(
     domain: str,
     client: Any,
     clone_ref: str,
-    wait: bool,
-    timeout: int,
-    staging_validated: bool,
-    break_glass: bool,
-    force_promote: bool,
-    pause_rollback: bool,
-    max_rollback_attempts: int,
-    verify_vault: bool,
-    verify_config: bool,
-    verify_smoke: bool,
-    verify_ingestion: bool,
-    iac_runner_url: str | None,
-    iac_webhook_secret: str | None,
-    triggered_by: str,
     data_lane: list[str],
     *,
     iac_ref: str = "main",
-    verify_manifests: bool = False,
+    opt: DeployOptions,
+    dep: DeployDeps,
 ) -> DeployV2Result:
     previous_template = os.environ.get("VAULT_SECRETS_TEMPLATE")
     injected_template = False
-    if verify_manifests and previous_template is None:
+    if opt.verify_manifests and previous_template is None:
         rendered = verify_app_manifests(
             service,
             source_sha=resolved.sha,
@@ -774,40 +759,44 @@ def _deploy_fixed_v2(
             service,
             target.env,
             target.iac_ref,
-            runner_url=iac_runner_url,
-            secret=iac_webhook_secret,
-            triggered_by=triggered_by,
-            timeout=timeout,
+            runner_url=dep.iac_runner_url,
+            secret=dep.iac_webhook_secret,
+            triggered_by=opt.triggered_by,
+            timeout=opt.timeout,
         )
         promote_started = time.monotonic()
         plan = _deploy_fixed(
             target.env,
             resolved.sha,
-            domain=domain,
-            client=client,
-            service=service,
-            image_ref=resolved.image_ref,
-            iac_ref=target.iac_ref,
-            branch=clone_ref,
-            wait=wait,
-            timeout=timeout,
-            staging_validated=staging_validated,
-            break_glass=break_glass,
-            force_promote=force_promote,
-            pause_rollback=pause_rollback,
-            max_rollback_attempts=max_rollback_attempts,
-            verify_vault=verify_vault,
-            repo=_repo_for_service(service),
-            verify_config=verify_config,
-            verify_smoke=verify_smoke,
-            verify_ingestion=verify_ingestion,
+            options=PromoteOptions(
+                service=service,
+                image_ref=resolved.image_ref,
+                iac_ref=target.iac_ref,
+                branch=clone_ref,
+                wait=opt.wait,
+                timeout=opt.timeout,
+                staging_validated=opt.staging_validated,
+                break_glass=opt.break_glass,
+                force_promote=opt.force_promote,
+                pause_rollback=opt.pause_rollback,
+                max_rollback_attempts=opt.max_rollback_attempts,
+                verify_vault=opt.verify_vault,
+                verify_config=opt.verify_config,
+                verify_smoke=opt.verify_smoke,
+                verify_ingestion=opt.verify_ingestion,
+            ),
+            deps=PromoteDeps(
+                client=client,
+                domain=domain,
+                repo=_repo_for_service(service),
+            ),
         )
     finally:
         if injected_template:
             os.environ.pop("VAULT_SECRETS_TEMPLATE", None)
     _progress(
         f"Dokploy promote of {service} to {target.env}",
-        "in service" if wait else "triggered",
+        "in service" if opt.wait else "triggered",
         promote_started,
     )
     detail = {
@@ -819,77 +808,11 @@ def _deploy_fixed_v2(
         "iac_ref": target.iac_ref,
         "secret_supply": secret_supply,
         "rollback_class": plan.rollback_class,
-        "force_promote": force_promote,
-        "pause_rollback": pause_rollback,
-        "max_rollback_attempts": max_rollback_attempts,
+        "force_promote": opt.force_promote,
+        "pause_rollback": opt.pause_rollback,
+        "max_rollback_attempts": opt.max_rollback_attempts,
     }
     return DeployV2Result(target, data_lane, "deploy-primitive", detail)
-
-
-def _resolve_options_and_deps(
-    *,
-    options: DeployOptions | None,
-    deps: DeployDeps | None,
-    client: Any,
-    domain: Any,
-    wait: Any,
-    staging_validated: Any,
-    break_glass: Any,
-    bootstrap: Any,
-    force_promote: Any,
-    pause_rollback: Any,
-    max_rollback_attempts: Any,
-    code_reviewed: Any,
-    verify_vault: Any,
-    verify_config: Any,
-    verify_smoke: Any,
-    verify_ingestion: Any,
-    timeout: Any,
-    expected_sha: Any,
-    repo: Any,
-    iac_runner_url: Any,
-    iac_webhook_secret: Any,
-    triggered_by: Any,
-    image_wait_seconds: Any,
-    image_poll_seconds: Any,
-    verify_manifests: Any,
-) -> tuple[DeployOptions, DeployDeps]:
-    base_opt = options or DeployOptions()
-    base_dep = deps or DeployDeps()
-
-    def _pick(override: Any, current: Any) -> Any:
-        return current if override is _UNSET else override
-
-    resolved_opt = DeployOptions(
-        wait=_pick(wait, base_opt.wait),
-        timeout=_pick(timeout, base_opt.timeout),
-        staging_validated=_pick(staging_validated, base_opt.staging_validated),
-        code_reviewed=_pick(code_reviewed, base_opt.code_reviewed),
-        break_glass=_pick(break_glass, base_opt.break_glass),
-        bootstrap=_pick(bootstrap, base_opt.bootstrap),
-        force_promote=_pick(force_promote, base_opt.force_promote),
-        pause_rollback=_pick(pause_rollback, base_opt.pause_rollback),
-        max_rollback_attempts=_pick(
-            max_rollback_attempts, base_opt.max_rollback_attempts
-        ),
-        verify_vault=_pick(verify_vault, base_opt.verify_vault),
-        verify_config=_pick(verify_config, base_opt.verify_config),
-        verify_smoke=_pick(verify_smoke, base_opt.verify_smoke),
-        verify_ingestion=_pick(verify_ingestion, base_opt.verify_ingestion),
-        verify_manifests=_pick(verify_manifests, base_opt.verify_manifests),
-        image_wait_seconds=_pick(image_wait_seconds, base_opt.image_wait_seconds),
-        image_poll_seconds=_pick(image_poll_seconds, base_opt.image_poll_seconds),
-        expected_sha=_pick(expected_sha, base_opt.expected_sha),
-        triggered_by=_pick(triggered_by, base_opt.triggered_by),
-    )
-    resolved_dep = DeployDeps(
-        client=_pick(client, base_dep.client),
-        domain=_pick(domain, base_dep.domain),
-        repo=_pick(repo, base_dep.repo),
-        iac_runner_url=_pick(iac_runner_url, base_dep.iac_runner_url),
-        iac_webhook_secret=_pick(iac_webhook_secret, base_dep.iac_webhook_secret),
-    )
-    return resolved_opt, resolved_dep
 
 
 def _resolve_control_plane_iac_ref(
@@ -934,58 +857,10 @@ def deploy_v2(
     iac_ref: str = "",
     options: DeployOptions | None = None,
     deps: DeployDeps | None = None,
-    client: Any = _UNSET,
-    domain: Any = _UNSET,
-    wait: Any = _UNSET,
-    staging_validated: Any = _UNSET,
-    break_glass: Any = _UNSET,
-    bootstrap: Any = _UNSET,
-    force_promote: Any = _UNSET,
-    pause_rollback: Any = _UNSET,
-    max_rollback_attempts: Any = _UNSET,
-    code_reviewed: Any = _UNSET,
-    verify_vault: Any = _UNSET,
-    verify_config: Any = _UNSET,
-    verify_smoke: Any = _UNSET,
-    verify_ingestion: Any = _UNSET,
-    timeout: Any = _UNSET,
-    expected_sha: Any = _UNSET,
-    repo: Any = _UNSET,
-    iac_runner_url: Any = _UNSET,
-    iac_webhook_secret: Any = _UNSET,
-    triggered_by: Any = _UNSET,
-    image_wait_seconds: Any = _UNSET,
-    image_poll_seconds: Any = _UNSET,
-    verify_manifests: Any = _UNSET,
 ) -> DeployV2Result:
     """Execute one orthogonal deploy coordinate ``(service, deploy_type, version_ref)``."""
-    opt, dep = _resolve_options_and_deps(
-        options=options,
-        deps=deps,
-        client=client,
-        domain=domain,
-        wait=wait,
-        staging_validated=staging_validated,
-        break_glass=break_glass,
-        bootstrap=bootstrap,
-        force_promote=force_promote,
-        pause_rollback=pause_rollback,
-        max_rollback_attempts=max_rollback_attempts,
-        code_reviewed=code_reviewed,
-        verify_vault=verify_vault,
-        verify_config=verify_config,
-        verify_smoke=verify_smoke,
-        verify_ingestion=verify_ingestion,
-        timeout=timeout,
-        expected_sha=expected_sha,
-        repo=repo,
-        iac_runner_url=iac_runner_url,
-        iac_webhook_secret=iac_webhook_secret,
-        triggered_by=triggered_by,
-        image_wait_seconds=image_wait_seconds,
-        image_poll_seconds=image_poll_seconds,
-        verify_manifests=verify_manifests,
-    )
+    opt = options or DeployOptions()
+    dep = deps or DeployDeps()
     if opt.force_promote:
         print(
             f"[AUDIT] deploy_v2 force_promote=True for {service} ({deploy_type}, {version_ref!r})",
@@ -1031,21 +906,15 @@ def deploy_v2(
                 effective_iac_ref,
                 client=effective_client,
                 domain=effective_domain,
-                code_reviewed=opt.code_reviewed,
-                wait=opt.wait,
-                timeout=opt.timeout,
+                opt=opt,
             )
         return _deploy_platform(
             service,
             spec.key,
             effective_iac_ref,
-            runner_url=dep.iac_runner_url,
-            secret=dep.iac_webhook_secret,
-            triggered_by=opt.triggered_by,
-            code_reviewed=opt.code_reviewed,
-            wait=opt.wait,
-            timeout=opt.timeout,
             version_ref=effective_input_version,
+            options=opt,
+            deps=dep,
         )
 
     effective_version_ref = effective_input_version
@@ -1109,7 +978,6 @@ def deploy_v2(
     if env_config(target.env).dynamic:
         return _deploy_preview_v2(
             target,
-            svc_spec,
             spec,
             alias_value,
             service,
@@ -1117,11 +985,9 @@ def deploy_v2(
             effective_domain,
             effective_client,
             clone_ref,
-            opt.wait,
-            opt.timeout,
             data_lane,
             iac_ref=effective_iac_ref,
-            verify_manifests=opt.verify_manifests,
+            opt=opt,
         )
 
     return _deploy_fixed_v2(
@@ -1131,23 +997,10 @@ def deploy_v2(
         effective_domain,
         effective_client,
         clone_ref,
-        opt.wait,
-        opt.timeout,
-        opt.staging_validated,
-        opt.break_glass,
-        opt.force_promote,
-        opt.pause_rollback,
-        opt.max_rollback_attempts,
-        opt.verify_vault,
-        opt.verify_config,
-        opt.verify_smoke,
-        opt.verify_ingestion,
-        dep.iac_runner_url,
-        dep.iac_webhook_secret,
-        opt.triggered_by,
         data_lane,
         iac_ref=effective_iac_ref,
-        verify_manifests=opt.verify_manifests,
+        opt=opt,
+        dep=dep,
     )
 
 
@@ -1319,12 +1172,15 @@ def _handle_platform_batch(args: argparse.Namespace, service_names: list[str]) -
         args.deploy_type,
         args.iac_ref,
         version_ref=args.version_ref,
-        runner_url=os.getenv("IAC_RUNNER_URL", ""),
-        secret=os.getenv("IAC_WEBHOOK_SECRET", ""),
-        triggered_by="deploy_v2",
-        code_reviewed=True if args.code_reviewed else None,
-        wait=not args.no_wait,
-        timeout=args.timeout,
+        options=DeployOptions(
+            code_reviewed=True if args.code_reviewed else None,
+            wait=not args.no_wait,
+            timeout=args.timeout,
+        ),
+        deps=DeployDeps(
+            iac_runner_url=os.getenv("IAC_RUNNER_URL", ""),
+            iac_webhook_secret=os.getenv("IAC_WEBHOOK_SECRET", ""),
+        ),
     )
     print(json.dumps(result))
     return 0

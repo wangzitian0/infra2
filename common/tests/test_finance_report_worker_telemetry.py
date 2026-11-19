@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 
 from common.deploy import promote as dp
+from common.deploy.promote import PromoteDeps, PromoteOptions
 from common.deploy.contract import SERVICES
 from common.observability_dashboards import load_dashboard
 from common.tests.compose_env import container_env
@@ -38,9 +39,8 @@ def _pushed_env() -> dict[str, str]:
     dp.deploy(
         "staging",
         FULL_SHA,
-        domain="zitian.party",
-        client=client,
-        iac_ref="b" * 40,
+        options=PromoteOptions(iac_ref="b" * 40),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
     )
     return client.updated[0][1]
 

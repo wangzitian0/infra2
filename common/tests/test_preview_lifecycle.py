@@ -14,6 +14,7 @@ import httpx
 import pytest
 
 from common.deploy import preview as pl
+from common.deploy.preview import PreviewDeps, PreviewOptions
 from common.tests.compose_env import container_env
 
 COMPOSE_PATH = (
@@ -154,13 +155,14 @@ def test_up_fast_fails_when_dokploy_reports_deploy_error():
             "pr",
             5,
             code="main",
-            domain="z.p",
-            client=client,
-            http_get=never_healthy,
-            health_timeout=600,
-            health_interval=10,
-            _sleep=lambda _s: None,
-            _monotonic=iter([0, 700]).__next__,
+            options=PreviewOptions(health_timeout=600, health_interval=10),
+            deps=PreviewDeps(
+                client=client,
+                domain="z.p",
+                http_get=never_healthy,
+                sleep=lambda _s: None,
+                monotonic=iter([0, 700]).__next__,
+            ),
         )
     assert polls["n"] == 0  # failed before the first HTTP health poll — no 600s wait
 
@@ -183,10 +185,12 @@ def test_up_recreates_existing_compose_with_delete_volumes_on_rollout_error():
         "branch",
         "main",
         code="main",
-        domain="zitian.party",
-        client=client,
-        http_get=_ok_get,
-        _sleep=lambda _s: None,
+        deps=PreviewDeps(
+            client=client,
+            domain="zitian.party",
+            http_get=_ok_get,
+            sleep=lambda _s: None,
+        ),
     )
 
     assert client.deleted == [("cmp-wedged", True)]
@@ -209,9 +213,7 @@ def test_up_waits_for_own_terminal_rollout_before_public_readiness():
         "branch",
         "main",
         code="main",
-        domain="zitian.party",
-        client=client,
-        http_get=readiness_get,
+        deps=PreviewDeps(client=client, domain="zitian.party", http_get=readiness_get),
     )
 
     assert result.healthy is True
@@ -233,12 +235,14 @@ def test_finance_preview_requires_exact_version_on_backend_and_frontend():
             "branch",
             "main",
             code="main",
-            domain="zitian.party",
-            client=client,
-            http_get=stale_frontend,
-            health_timeout=600,
-            _sleep=lambda _s: None,
-            _monotonic=iter([0, 700]).__next__,
+            options=PreviewOptions(health_timeout=600),
+            deps=PreviewDeps(
+                client=client,
+                domain="zitian.party",
+                http_get=stale_frontend,
+                sleep=lambda _s: None,
+                monotonic=iter([0, 700]).__next__,
+            ),
         )
 
     assert "https://report-branch-main.zitian.party/api/health" in seen
@@ -260,10 +264,12 @@ def test_up_creates_compose_when_absent_and_deploys():
         "pr",
         5,
         code="main",
-        domain="zitian.party",
-        client=client,
-        http_get=_ok_get,
-        _now=lambda: 1000,
+        deps=PreviewDeps(
+            client=client,
+            domain="zitian.party",
+            http_get=_ok_get,
+            now=lambda: 1000,
+        ),
     )
     # one compose created with the deterministic alias name — BASIC fields only.
     # Dokploy's compose.create silently drops source/env, so they must NOT be relied on
@@ -308,9 +314,8 @@ def test_up_adopts_deterministic_compose_after_create_timeout():
         "pr",
         5,
         code="main",
-        domain="zitian.party",
-        client=client,
-        wait=False,
+        options=PreviewOptions(wait=False),
+        deps=PreviewDeps(client=client, domain="zitian.party"),
     )
 
     assert len(client.created) == 1
@@ -342,10 +347,8 @@ def test_up_retries_alias_read_after_ambiguous_create_until_commit_is_visible():
         "pr",
         5,
         code="main",
-        domain="zitian.party",
-        client=client,
-        wait=False,
-        _sleep=sleeps.append,
+        options=PreviewOptions(wait=False),
+        deps=PreviewDeps(client=client, domain="zitian.party", sleep=sleeps.append),
     )
 
     assert len(client.created) == 1
@@ -365,10 +368,10 @@ def test_up_preserves_create_timeout_when_alias_did_not_appear():
             "pr",
             5,
             code="main",
-            domain="zitian.party",
-            client=client,
-            wait=False,
-            _sleep=lambda _seconds: None,
+            options=PreviewOptions(wait=False),
+            deps=PreviewDeps(
+                client=client, domain="zitian.party", sleep=lambda _seconds: None
+            ),
         )
 
     assert client.deployed == []
@@ -380,11 +383,10 @@ def test_up_env_has_short_sha_suffix_and_ephemeral_db_knobs():
         "branch",
         "feat/test-branch",
         code="abc1234",
-        domain="zitian.party",
-        client=client,
-        http_get=_ok_get,
-        iac_ref="b" * 40,
-        _now=lambda: 1000,
+        options=PreviewOptions(iac_ref="b" * 40),
+        deps=PreviewDeps(
+            client=client, domain="zitian.party", http_get=_ok_get, now=lambda: 1000
+        ),
     )
     # env is applied via update_compose_env (compose.create drops the env blob), so it is
     # asserted on the env_update, not on create.
@@ -432,12 +434,10 @@ def test_up_app_domain_override_does_not_leak_into_the_otel_endpoint():
         "branch",
         "feat/test-branch",
         code="abc1234",
-        service="truealpha/app",
-        domain="truealpha.club",
-        client=client,
-        http_get=_ok_get,
-        iac_ref="b" * 40,
-        _now=lambda: 1000,
+        options=PreviewOptions(service="truealpha/app", iac_ref="b" * 40),
+        deps=PreviewDeps(
+            client=client, domain="truealpha.club", http_get=_ok_get, now=lambda: 1000
+        ),
     )
     _cid, env = client.env_updates[0]
     # app's OWN routing: follows the override, unchanged.
@@ -459,12 +459,10 @@ def test_truealpha_preview_llm_container_receives_the_collector_and_the_alias_id
         "branch",
         "feat/test-branch",
         code="abc1234",
-        service="truealpha/app",
-        domain="truealpha.club",
-        client=client,
-        http_get=_ok_get,
-        iac_ref="b" * 40,
-        _now=lambda: 1000,
+        options=PreviewOptions(service="truealpha/app", iac_ref="b" * 40),
+        deps=PreviewDeps(
+            client=client, domain="truealpha.club", http_get=_ok_get, now=lambda: 1000
+        ),
     )
     _cid, pushed = client.env_updates[0]
 
@@ -492,7 +490,12 @@ def test_up_self_provisions_the_preview_environment():
     # The dynamic preview env is created-if-absent (idempotent) so a first-ever preview on
     # a fresh box needs no out-of-band env-ensure step.
     client = FakeDokploy(existing=None)
-    pl.up("pr", 5, code="main", domain="zitian.party", client=client, http_get=_ok_get)
+    pl.up(
+        "pr",
+        5,
+        code="main",
+        deps=PreviewDeps(client=client, domain="zitian.party", http_get=_ok_get),
+    )
     assert ("finance_report", "preview") in client.ensured
 
 
@@ -501,7 +504,12 @@ def test_up_fails_closed_when_source_env_app_compose_missing():
     # never deploy a preview whose vault-agent would crash-loop.
     client = FakeDokploy(existing=None, source_app=False)
     with pytest.raises(RuntimeError, match="cannot source preview Vault creds"):
-        pl.up("pr", 5, code="main", domain="z.p", client=client, http_get=_ok_get)
+        pl.up(
+            "pr",
+            5,
+            code="main",
+            deps=PreviewDeps(client=client, domain="z.p", http_get=_ok_get),
+        )
     assert client.created == [] and client.deployed == []
 
 
@@ -509,7 +517,12 @@ def test_up_fails_closed_when_source_env_has_no_vault_creds():
     # The source compose exists but carries no VAULT_ROLE_ID/SECRET_ID -> fail closed.
     client = FakeDokploy(existing=None, source_creds=False)
     with pytest.raises(RuntimeError, match="missing Vault creds"):
-        pl.up("pr", 5, code="main", domain="z.p", client=client, http_get=_ok_get)
+        pl.up(
+            "pr",
+            5,
+            code="main",
+            deps=PreviewDeps(client=client, domain="z.p", http_get=_ok_get),
+        )
     assert client.created == [] and client.deployed == []
 
 
@@ -517,7 +530,12 @@ def test_up_injects_source_env_vault_creds():
     # The preview vault-agent logs in with the SOURCE env's AppRole creds (the same role
     # staging runs with), read off that env's app compose and merged into the preview env.
     client = FakeDokploy(existing=None)
-    pl.up("pr", 5, code="main", domain="zitian.party", client=client, http_get=_ok_get)
+    pl.up(
+        "pr",
+        5,
+        code="main",
+        deps=PreviewDeps(client=client, domain="zitian.party", http_get=_ok_get),
+    )
     _cid, env = client.env_updates[0]
     assert env["VAULT_ADDR"] == "https://vault.test"
     assert env["VAULT_ROLE_ID"] == "rid-test"
@@ -535,9 +553,7 @@ def test_up_updates_existing_compose_in_place():
         "branch",
         "main",
         code="main",
-        domain="zitian.party",
-        client=client,
-        http_get=_ok_get,
+        deps=PreviewDeps(client=client, domain="zitian.party", http_get=_ok_get),
     )
     # re-run finds + updates the SAME compose; never creates a second one
     assert client.created == []
@@ -570,7 +586,12 @@ def test_up_updates_existing_compose_in_place():
 
 def test_up_looks_up_compose_by_deterministic_preview_name():
     client = FakeDokploy(existing=None)
-    pl.up("pr", 7, code="main", domain="z.p", client=client, http_get=_ok_get)
+    pl.up(
+        "pr",
+        7,
+        code="main",
+        deps=PreviewDeps(client=client, domain="z.p", http_get=_ok_get),
+    )
     # the alias is looked up by its deterministic name in the preview env (alongside the
     # source-app creds lookup, which is a separate find)
     assert ("finance-report-preview-pr-7", "finance_report", "preview") in client.found
@@ -586,10 +607,12 @@ def test_up_no_wait_skips_health_check():
         "pr",
         5,
         code="main",
-        domain="z.p",
-        client=client,
-        wait=False,
-        http_get=lambda u, t: called.append(u) or (200, "ok"),
+        options=PreviewOptions(wait=False),
+        deps=PreviewDeps(
+            client=client,
+            domain="z.p",
+            http_get=lambda u, t: called.append(u) or (200, "ok"),
+        ),
     )
     assert called == []  # health getter never consulted
     assert result.healthy is None
@@ -603,12 +626,14 @@ def test_up_raises_when_health_never_passes():
             "pr",
             5,
             code="main",
-            domain="z.p",
-            client=client,
-            http_get=lambda u, t: (503, "down"),
-            health_timeout=600,
-            _sleep=lambda _s: None,
-            _monotonic=iter([0, 700]).__next__,
+            options=PreviewOptions(health_timeout=600),
+            deps=PreviewDeps(
+                client=client,
+                domain="z.p",
+                http_get=lambda u, t: (503, "down"),
+                sleep=lambda _s: None,
+                monotonic=iter([0, 700]).__next__,
+            ),
         )
     # the deploy still happened; health is a post-deploy gate, not a pre-gate
     assert client.deployed == ["cmp-new"]
@@ -617,7 +642,12 @@ def test_up_raises_when_health_never_passes():
 def test_up_rejects_bad_domain_before_any_side_effect():
     client = FakeDokploy(existing=None)
     with pytest.raises(ValueError, match="invalid domain"):
-        pl.up("pr", 5, code="main", domain="z.p\nINJECT=1", client=client)
+        pl.up(
+            "pr",
+            5,
+            code="main",
+            deps=PreviewDeps(client=client, domain="z.p\nINJECT=1"),
+        )
     assert client.created == []
     assert client.deployed == []
 
@@ -625,7 +655,7 @@ def test_up_rejects_bad_domain_before_any_side_effect():
 def test_up_fails_closed_without_github_provider():
     client = FakeDokploy(existing=None, github_id=None)
     with pytest.raises(RuntimeError, match="no GitHub provider"):
-        pl.up("pr", 5, code="main", domain="z.p", client=client)
+        pl.up("pr", 5, code="main", deps=PreviewDeps(client=client, domain="z.p"))
     assert client.created == []
     assert client.deployed == []
 
@@ -635,16 +665,32 @@ def test_up_fails_closed_if_environment_cannot_be_ensured():
     # never try to create a compose in a non-existent environment.
     client = FakeDokploy(existing=None, environment_id=None)
     with pytest.raises(RuntimeError, match="could not ensure"):
-        pl.up("pr", 5, code="main", domain="z.p", client=client)
+        pl.up("pr", 5, code="main", deps=PreviewDeps(client=client, domain="z.p"))
     assert client.created == []
 
 
 def test_up_invalid_alias_makes_no_calls():
     client = FakeDokploy(existing=None)
     with pytest.raises(ValueError, match="positive PR number"):
-        pl.up("pr", "0", code="main", domain="z.p", client=client)
+        pl.up("pr", "0", code="main", deps=PreviewDeps(client=client, domain="z.p"))
     assert client.created == []
     assert client.deployed == []
+
+
+def test_up_signature_collapsed_rejects_flat_legacy_kwargs():
+    import inspect
+
+    sig = inspect.signature(pl.up)
+    assert list(sig.parameters) == ["kind", "value", "code", "options", "deps"]
+    client = FakeDokploy(existing=None)
+    for bad_kw in (
+        {"domain": "z.p"},
+        {"client": client},
+        {"wait": False},
+        {"service": "truealpha/app"},
+    ):
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            pl.up("pr", 5, code="main", **bad_kw)
 
 
 # --- down: teardown destroys the ephemeral DB volume -----------------------------
@@ -834,10 +880,8 @@ def test_up_image_ref_overrides_short_sha_for_releases():
         "branch",
         "main",
         code="main",
-        domain="z.p",
-        client=client,
-        http_get=release_get,
-        image_ref="v1.2.3",
+        options=PreviewOptions(image_ref="v1.2.3"),
+        deps=PreviewDeps(client=client, domain="z.p", http_get=release_get),
     )
     _cid, env = client.env_updates[0]
     assert env["IMAGE_TAG"] == "v1.2.3" and env["GIT_COMMIT_SHA"] == "v1.2.3"

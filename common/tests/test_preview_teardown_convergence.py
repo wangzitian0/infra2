@@ -26,6 +26,7 @@ from __future__ import annotations
 import pytest
 
 import common.deploy.preview as pl
+from common.deploy.preview import PreviewDeps
 
 FULL_SHA = "1af32e6daf17e2c58383dd2c0bfaea13bc11e517"
 SHORT_SHA = FULL_SHA[:7]
@@ -153,7 +154,10 @@ def test_record_keyed_by_stable_name_while_dokploy_mangles_appname(kind, value):
     # docker project runs under Dokploy's SUFFIXED appName (name != appName, per reality).
     client = ConvergenceFakeDokploy()
     pl.up(
-        kind, value, code="main", domain="zitian.party", client=client, http_get=_ok_get
+        kind,
+        value,
+        code="main",
+        deps=PreviewDeps(client=client, domain="zitian.party", http_get=_ok_get),
     )
 
     alias = pl.preview_alias(kind, value)
@@ -174,7 +178,10 @@ def test_down_leaves_zero_orphans_despite_appname_suffix(kind, value):
     # name != appName — the real orphan-proof guarantee.
     client = ConvergenceFakeDokploy()
     pl.up(
-        kind, value, code="main", domain="zitian.party", client=client, http_get=_ok_get
+        kind,
+        value,
+        code="main",
+        deps=PreviewDeps(client=client, domain="zitian.party", http_get=_ok_get),
     )
     pl.down(kind, value, domain="zitian.party", client=client)
 
@@ -190,7 +197,12 @@ def test_teardown_is_composeid_based_not_name_based():
     # NOT what the current stack runs under, so it would survive — i.e. keying teardown
     # off the bare name (the #310 bug) leaks. The real lifecycle never does this.
     client = ConvergenceFakeDokploy()
-    pl.up("pr", 7, code="main", domain="zitian.party", client=client, http_get=_ok_get)
+    pl.up(
+        "pr",
+        7,
+        code="main",
+        deps=PreviewDeps(client=client, domain="zitian.party", http_get=_ok_get),
+    )
     bare_name = pl.preview_alias("pr", 7).compose_name
     client.docker_projects[bare_name] = "cmp-stray"  # a #310-style divergent project
     pl.down("pr", 7, domain="zitian.party", client=client)

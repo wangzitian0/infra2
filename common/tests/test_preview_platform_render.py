@@ -15,6 +15,7 @@ import pytest
 import yaml
 
 from common.deploy import preview as pl
+from common.deploy.preview import PreviewDeps, PreviewOptions
 from common.deploy.env_config import preview_service_config
 from common.tests.test_preview_lifecycle import FakeDokploy
 
@@ -47,12 +48,14 @@ def _render(slot: int) -> tuple[NoVaultDokploy, dict[str, str]]:
         "pr",
         slot,
         code="main",
-        domain="zitian.party",
-        client=client,
-        service=SERVICE,
-        repo="https://github.com/wangzitian0/infra2",
-        http_get=lambda url, timeout: (200, "{}"),
-        _sleep=lambda _s: None,
+        options=PreviewOptions(service=SERVICE),
+        deps=PreviewDeps(
+            client=client,
+            domain="zitian.party",
+            repo="https://github.com/wangzitian0/infra2",
+            http_get=lambda url, timeout: (200, "{}"),
+            sleep=lambda _s: None,
+        ),
     )
     ((_, env_vars),) = client.env_updates
     return client, env_vars
@@ -112,13 +115,15 @@ def test_app_preview_still_reads_the_source_env_creds():
         "pr",
         5,
         code="main",
-        domain="zitian.party",
-        client=client,
-        http_get=lambda url, timeout: (
-            200,
-            '{"git_sha":"1af32e6","version":"1af32e6"}',
+        deps=PreviewDeps(
+            client=client,
+            domain="zitian.party",
+            http_get=lambda url, timeout: (
+                200,
+                '{"git_sha":"1af32e6","version":"1af32e6"}',
+            ),
+            sleep=lambda _s: None,
         ),
-        _sleep=lambda _s: None,
     )
     assert client.env_updates[0][1]["VAULT_ROLE_ID"] == "rid-test"
 
