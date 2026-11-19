@@ -893,18 +893,10 @@ def run_all_checks() -> Dict[str, Any]:
     redis_host = os.environ.get("REDIS_HOST", f"platform-redis{suffix}")
     redis_port = int(os.environ.get("REDIS_PORT", "6379"))
     redis_password = os.environ.get("REDIS_PASSWORD") or None
-    s3_endpoint = (
-        os.environ.get("S3_ENDPOINT")
-        or os.environ.get("CANARY_S3_ENDPOINT_URL")
-        or f"http://platform-s3{suffix}:9000"
-    )
-    s3_bucket = os.environ.get("S3_BUCKET") or os.environ.get("CANARY_S3_BUCKET", "")
-    s3_access_key = os.environ.get("S3_ACCESS_KEY") or os.environ.get(
-        "CANARY_S3_ACCESS_KEY", ""
-    )
-    s3_secret_key = os.environ.get("S3_SECRET_KEY") or os.environ.get(
-        "CANARY_S3_SECRET_KEY", ""
-    )
+    s3_endpoint = os.environ.get("S3_ENDPOINT") or f"http://platform-s3{suffix}:9000"
+    s3_bucket = os.environ.get("S3_BUCKET", "")
+    s3_access_key = os.environ.get("S3_ACCESS_KEY", "")
+    s3_secret_key = os.environ.get("S3_SECRET_KEY", "")
     signoz_url = os.environ.get(
         "SIGNOZ_OTEL_COLLECTOR", "http://platform-signoz-otel-collector:13133"
     )
