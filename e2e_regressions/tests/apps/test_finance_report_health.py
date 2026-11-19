@@ -9,6 +9,18 @@ import httpx
 from conftest import TestConfig
 
 
+_HEALTHY_CHECK_STATUSES = frozenset({"present", "healthy", "ok"})
+
+
+def _is_check_healthy(value: object) -> bool:
+    """Accept legacy bool True and K4 structured check dicts (`status`)."""
+    if value is True:
+        return True
+    if isinstance(value, dict):
+        return str(value.get("status", "")).lower() in _HEALTHY_CHECK_STATUSES
+    return False
+
+
 def _health_url(config: TestConfig) -> str:
     return f"{config.FINANCE_REPORT_API_URL.rstrip('/')}/health"
 
@@ -28,7 +40,9 @@ async def test_finance_report_health_endpoint(config: TestConfig):
 
         checks = data.get("checks")
         assert isinstance(checks, dict) and checks, "Health response missing checks"
-        unhealthy = sorted(name for name, ok in checks.items() if ok is not True)
+        unhealthy = sorted(
+            name for name, ok in checks.items() if not _is_check_healthy(ok)
+        )
         assert not unhealthy, f"Health response contains unhealthy checks: {unhealthy}"
 
 
