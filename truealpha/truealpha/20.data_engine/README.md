@@ -46,8 +46,8 @@ The Vault KV v2 API/template path is
 logical path `secret/truealpha/<environment>/data_engine` (the CLI inserts the
 `data/` segment).
 
-- `DATA_ENGINE_IMAGE_DIGEST`: full `sha256:<64 hex>` digest from the accepted image workflow.
-- `RELEASE_MANIFEST_ID`: content-addressed `release-manifest:<64 hex>` identifier.
+- `IMAGE_DIGEST`: full `sha256:<64 hex>` digest from the accepted image workflow.
+- `RELEASE_ID`: content-addressed `release-manifest:<64 hex>` identifier.
 - `CAPTURE_APPROVED_BY`: recorded scope approver/decision identifier.
 - `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET`.
 - Optional: `S3_REGION`, `OPENFIGI_API_KEY`, `TWELVE_DATA_API_KEY`, moomoo defensive budget/throttle fields, `GIT_COMMIT_SHA`, and the filing-extraction model provider `LLM_API_KEY` (truealpha#70; empty key = no provider seated).

@@ -874,16 +874,18 @@ def test_data_engine_exports_otel_over_host_loopback_matching_signoz_collector()
     assert deployer.telemetry_service_name == "truealpha-data-engine"
 
 
-def test_compose_injects_both_canonical_and_legacy_release_variable_names():
-    """#1271 expand phase: truealpha releases before v0.2.4 (and v0.2.5) read the
-    legacy TRUEALPHA_* container variable names, while v0.2.4+ read the canonical
-    names. Injecting both in compose allows both image generations to boot."""
+def test_compose_injects_canonical_release_variable_names_without_legacy_aliases():
+    """#1781: truealpha v0.2.114+ reads canonical RELEASE_ID, IMAGE_DIGEST, and
+    CONFIGURATION_SHA256; the legacy TRUEALPHA_* compose aliases are retired."""
     compose = yaml.safe_load((SERVICE_DIR / "compose.yaml").read_text(encoding="utf-8"))
     for role in ("dagster-code-server", "dagster-webserver", "dagster-daemon"):
         env = compose["services"][role]["environment"]
-        assert env["RELEASE_ID"] == env["TRUEALPHA_RELEASE_MANIFEST_ID"]
-        assert env["IMAGE_DIGEST"] == env["TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST"]
-        assert env["CONFIGURATION_SHA256"] == env["TRUEALPHA_CONFIGURATION_SHA256"]
+        assert "RELEASE_ID" in env
+        assert "IMAGE_DIGEST" in env
+        assert "CONFIGURATION_SHA256" in env
+        assert "TRUEALPHA_RELEASE_MANIFEST_ID" not in env
+        assert "TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST" not in env
+        assert "TRUEALPHA_CONFIGURATION_SHA256" not in env
 
 
 #: A field of these sources reaches the container through the Vault template. The entrypoint
