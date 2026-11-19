@@ -303,6 +303,7 @@ DEPLOY_SECRETS = frozenset(
         "SIGNOZ_API_KEY",
     }
 )
+ALLOWED_POST_SPLIT_OPERATION_SECRETS = frozenset({"INFRA2_RELEASE_BOT_TOKEN"})
 
 
 def test_the_contract_gates_a_production_run_through_the_same_single_job() -> None:
@@ -319,11 +320,16 @@ def test_the_contract_gates_a_production_run_through_the_same_single_job() -> No
     # AFTER: the secrets of the old job are read by `operation`, `post` and `alert` only
     reads = {name: contract._secrets_read(job) for name, job in jobs.items()}
     assert reads["pre"] == set()
-    assert set().union(*reads.values()) == set(BEFORE_SECRETS)
+    assert (
+        set().union(*reads.values())
+        == set(BEFORE_SECRETS) | ALLOWED_POST_SPLIT_OPERATION_SECRETS
+    )
+    assert ALLOWED_POST_SPLIT_OPERATION_SECRETS <= reads["operation"]
     # every deploy secret and `contents: write` stay in the gated job
     assert DEPLOY_SECRETS <= reads["operation"]
     for name in ("pre", "post", "alert"):
         assert not DEPLOY_SECRETS & reads[name], name
+        assert not ALLOWED_POST_SPLIT_OPERATION_SECRETS & reads[name], name
         assert not contract._writes_contents(workflow, jobs[name]), name
     assert contract._writes_contents(workflow, jobs["operation"])
     # the two ungated jobs read only what their limit names, and nothing is unclassified
@@ -469,3 +475,53 @@ def test_show_stage_card_receives_reports_feishu_env() -> None:
         "INFRA2_REPORTS_FEISHU_CHAT_ID",
     ):
         assert effective_env.get(key) == f"${{{{ secrets.{key} }}}}"
+
+
+def _sync_token_violations(workflow: dict) -> list[str]:
+    """Verify the sync-app-releases path uses INFRA2_RELEASE_BOT_TOKEN for push & PR (#1791)."""
+    found: list[str] = []
+    op = workflow["jobs"]["operation"]
+    checkout = next(s for s in op["steps"] if s.get("name") == "Checkout")
+    token = str((checkout.get("with") or {}).get("token") or "")
+    for required in (
+        "secrets.INFRA2_RELEASE_BOT_TOKEN",
+        "github.event_name == 'schedule'",
+        "inputs.sync_app_releases",
+        "|| github.token",
+    ):
+        if required not in token:
+            found.append(f"operation Checkout token missing {required!r}")
+
+    phase = next(s for s in op["steps"] if s.get("name") == "Operation phase")
+    if (phase.get("env") or {}).get(
+        "SYNC_PR_TOKEN"
+    ) != "${{ secrets.INFRA2_RELEASE_BOT_TOKEN }}":
+        found.append(
+            "Operation phase env SYNC_PR_TOKEN must read INFRA2_RELEASE_BOT_TOKEN"
+        )
+    run_script = str(phase.get("run") or "")
+    expected_call = (
+        'GITHUB_TOKEN="${SYNC_PR_TOKEN:-$GITHUB_TOKEN}" '
+        'GH_TOKEN="${SYNC_PR_TOKEN:-$GITHUB_TOKEN}" '
+        'python -m tools.reconcile_iac_inputs "${sync_args[@]}"'
+    )
+    if expected_call not in run_script:
+        found.append(
+            "sync_args invocation must override GITHUB_TOKEN and GH_TOKEN with SYNC_PR_TOKEN"
+        )
+    return found
+
+
+def test_sync_app_releases_uses_bot_token_for_checkout_and_pr_creation() -> None:
+    """#1791: checkout push credentials and gh PR calls prefer INFRA2_RELEASE_BOT_TOKEN on sync runs."""
+    assert _sync_token_violations(_load()) == []
+
+    no_checkout_token = _mutate(
+        ["jobs", "operation", "steps", 0, "with", "token"], "${{ github.token }}"
+    )
+    assert _sync_token_violations(no_checkout_token)
+
+    no_sync_env = _mutate(
+        ["jobs", "operation", "steps", 3, "env", "SYNC_PR_TOKEN"], None
+    )
+    assert _sync_token_violations(no_sync_env)
