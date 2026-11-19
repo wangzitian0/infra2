@@ -33,10 +33,10 @@ AST (``common/core/registry.py``), never by importing ``deploy.py`` (no import
 side effects). Facet declarations must therefore be LITERAL constructor calls
 with literal arguments, assigned directly on the top-level Deployer subclass::
 
-    class MinioDeployer(Deployer):
+    class S3Deployer(Deployer):
         probes = (
-            ProbeFacet(name="minio-internal-http", kind="http",
-                       target="http://platform-minio${ENV_SUFFIX}:9000/minio/health/live",
+            ProbeFacet(name="s3-internal-http", kind="http",
+                       target="http://platform-s3${ENV_SUFFIX}:9000/minio/health/live",
                        expected="200"),
         )
 

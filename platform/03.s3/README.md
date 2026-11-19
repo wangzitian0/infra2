@@ -23,7 +23,7 @@ invoke s3.status
   - Rendered into tmpfs in-memory volume `/secrets/.env` and exported as generic `S3_*` and engine-specific `RUSTFS_*`/`MINIO_*` variables.
   - No secrets in Dokploy env vars or on unencrypted disk.
 - **Downstream Compatibility**:
-  - Container maintains Docker network aliases: `platform-s3`, `platform-rustfs`, and `platform-minio`.
+  - Container maintains Docker network aliases: `platform-s3` and `platform-rustfs`.
   - Zero code modifications required for existing downstream consumers (`truealpha`, `finance_report`).
   - Supports standard AWS S3 SDK, boto3, `mc`, and `rc`.
 
@@ -57,7 +57,7 @@ invoke s3.status
 
 The platform keeps compatibility aliases during the transition from MinIO to RustFS:
 - **Python Module Imports**: Retired. Consumers import canonical `platform.03.s3.shared`.
-- **Docker Network**: Containers expose the `platform-minio` network alias together with `platform-s3`.
+- **Docker Network**: Retired. The `platform-minio` alias is gone; use `platform-s3`.
 - **Vault Secret Paths**: Secrets stay at `secret/platform/<env>/minio` to avoid secret migrations.
 - **Backup Identifiers**: Automated backup processes accept `platform/minio-*` archive names during the retention window.
 
