@@ -13,10 +13,8 @@ from common.console import header, success, error, warning, info
 @task
 def status(c):
     """Check S3 Object Storage status: container health + both endpoints."""
-    # Check container health via docker (try platform-s3 then fallback to platform-minio)
+    # Check container health via docker.
     result = check_service(c, "s3", "mc ready local")
-    if not result.get("is_ready"):
-        result = check_service(c, "minio", "mc ready local")
 
     if not result.get("is_ready"):
         return result
@@ -100,15 +98,7 @@ def _ensure_admin_alias(c, container_name: str, e: dict) -> bool:
 
 
 def _resolve_s3_container(c, env_suffix: str) -> str:
-    container_name = f"platform-s3{env_suffix}"
-    probe = c.run(
-        f"docker inspect --format '{{{{.State.Running}}}}' {container_name}",
-        hide=True,
-        warn=True,
-    )
-    if not probe.ok or probe.stdout.strip() != "true":
-        container_name = f"platform-minio{env_suffix}"
-    return container_name
+    return f"platform-s3{env_suffix}"
 
 
 def _create_bucket_resource(c, container_name: str, bucket_name: str) -> bool:

@@ -48,7 +48,7 @@ to the promoted digest; recording a Dokploy config hash alone is insufficient.
 - All three Dagster roles use host networking. They reach the environment's
   loopback-only Postgres port (`15432` Staging, `15433` Production) and the loopback
   S3 API port (`19000` Staging, `19001` Production) served by the platform S3
-  storage (`platform-s3`, with `platform-minio` alias).
+  storage (`platform-s3`).
 - Dagster UI binds only to host loopback (`13001` Staging, `13002` Production), has
   `traefik.enable=false`, and is accessed through an SSH tunnel.
 - Dagster run/event/schedule metadata uses the environment Postgres `dagster` schema.

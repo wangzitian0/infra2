@@ -667,6 +667,40 @@ def test_run_all_checks_hands_each_probe_its_credentials(app, monkeypatch) -> No
 OK_RESULT = {"status": "pass", "latency_ms": 1.0, "detail": "ok"}
 
 
+def test_retired_canary_s3_names_do_not_configure_the_s3_probe(
+    app, monkeypatch
+) -> None:
+    """CANARY_S3_* were replaced by the shared S3_* names. Setting only the old names
+    must leave the probe without an endpoint override, bucket and credentials."""
+    _env(
+        monkeypatch,
+        ENV_SUFFIX="-staging",
+        CANARY_S3_ENDPOINT_URL="http://old-host:9000",
+        CANARY_S3_BUCKET="old-bucket",
+        CANARY_S3_ACCESS_KEY="old-access",
+        CANARY_S3_SECRET_KEY="old-secret",
+    )
+    seen: dict = {}
+
+    def s3(**kwargs):
+        seen.update(kwargs)
+        return {"status": "pass", "latency_ms": 1.0, "detail": "s3"}
+
+    monkeypatch.setattr(app, "_probe_redis", lambda *a, **k: dict(OK_RESULT))
+    monkeypatch.setattr(app, "_probe_postgres", lambda *a, **k: dict(OK_RESULT))
+    monkeypatch.setattr(app, "_probe_s3", s3)
+    monkeypatch.setattr(app, "_probe_http", lambda *a, **k: dict(OK_RESULT))
+
+    app.run_all_checks()
+
+    assert seen == {
+        "endpoint_url": "http://platform-s3-staging:9000",
+        "bucket": "",
+        "access_key": "",
+        "secret_key": "",
+    }
+
+
 def _patch_probes(app, monkeypatch, **overrides) -> None:
     """Every probe passes except the ones named: redis, postgres, s3, and http by host."""
     redis = overrides.get("redis", OK_RESULT)
@@ -1464,7 +1498,7 @@ def test_todo_manifest_sources_each_secret_from_the_right_class() -> None:
     for env in ("S3_ACCESS_KEY", "S3_SECRET_KEY"):
         assert fields[env].source == "human"
         assert fields[env].empty_ok and fields[env].sensitive
-        assert fields[env].store_key == f"CANARY_{env}"
+        assert not fields[env].store_key, "the Vault key is the canonical env name"
 
     from infra2_sdk.runtime.environment import check_shared_env_conformance
 

@@ -36,7 +36,6 @@ class S3Deployer(Deployer):
         base = super().compose_env_base(env)
         host_port = cls._S3_HOST_PORTS.get(base.get("ENV", ""), "127.0.0.1:0")
         base["S3_HOST_PORT"] = host_port
-        base["MINIO_S3_HOST_PORT"] = host_port  # backward compatibility
         return base
 
     service = "s3"

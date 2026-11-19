@@ -117,7 +117,6 @@ services:
       # Was defaulted by the hand-written secrets.ctmpl; the generated template renders
       # only human / runtime values, so the deployment states these here.
       ENVIRONMENT: ${ENV}
-      APP_ENV: ${ENV}
       NODE_ENV: production
       S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000
       # Telemetry (infra2#906, docs/ssot/ops.observability.md 4.2). The endpoint is the ONE
@@ -214,7 +213,6 @@ services:
       # Was defaulted by the hand-written secrets.ctmpl; the generated template renders
       # only human / runtime values, so the deployment states these here.
       ENVIRONMENT: ${ENV}
-      APP_ENV: ${ENV}
       NODE_ENV: production
       S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://${APP_HOST}}

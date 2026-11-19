@@ -120,7 +120,7 @@ services:
     # S3 write from a host-network consumer, and 127.0.0.1:9000 pointed at
     # nothing.
     ports:
-      - "${S3_HOST_PORT:-${MINIO_S3_HOST_PORT:-127.0.0.1:0}}:9000"
+      - "${S3_HOST_PORT:-127.0.0.1:0}:9000"
     volumes:
       - secrets:/secrets:ro
       - ${DATA_PATH}:/data
@@ -129,7 +129,6 @@ services:
         aliases:
           - platform-s3${ENV_SUFFIX}
           - platform-rustfs${ENV_SUFFIX}
-          - platform-minio${ENV_SUFFIX}
     logging:
       driver: json-file
       options:

@@ -14,7 +14,6 @@ x-dagster-service: &dagster-service
   entrypoint: ["/bin/sh", "/opt/truealpha/dagster-entrypoint.sh"]
   environment: &dagster-env
     ENVIRONMENT: ${ENV}
-    APP_ENV: ${ENV}
     # Host-loopback MinIO (#602); was derived inside the hand-written secrets.ctmpl.
     S3_ENDPOINT: http://127.0.0.1:${TA_MINIO_S3_PORT}
     GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:-unknown}

@@ -55,7 +55,6 @@ CONTAINERS = {
     "redis": "platform-redis",
     "authentik": "platform-authentik-server",
     "s3": "platform-s3",
-    "minio": "platform-minio",
     "clickhouse": "platform-clickhouse",
     "signoz": "platform-signoz",
 }

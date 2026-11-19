@@ -34,19 +34,20 @@ if [ "${2:-}" = "-" ]; then
 fi
 : "${VAULT_TOKEN:?set VAULT_TOKEN or pass '-' and pipe it on stdin}"
 
-MINIO="platform-s3${SUFFIX}"
-if ! docker inspect --format '{{.State.Running}}' "$MINIO" 2>/dev/null | grep -q true; then
-  MINIO="platform-minio${SUFFIX}"
+S3C="platform-s3${SUFFIX}"
+if ! docker inspect --format '{{.State.Running}}' "$S3C" 2>/dev/null | grep -q true; then
+  echo "S3 container $S3C is not running" >&2
+  exit 1
 fi
 BUCKET="truealpha-raw"
 APP_USER="truealpha_raw"
 POLICY="truealpha_raw_readwrite"
 VAULT_PATH="secret/truealpha/${ENV_NAME}/app"
-M() { docker exec "$MINIO" "$@"; }
+M() { docker exec "$S3C" "$@"; }
 
 echo "== mc alias (from the container's own vault-rendered root creds)"
 # The alias in a recreated container starts empty — never assume it works.
-docker exec "$MINIO" sh -c '. /secrets/.env && mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null' && echo alias-ok
+docker exec "$S3C" sh -c '. /secrets/.env && mc alias set local http://localhost:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null' && echo alias-ok
 
 echo "== bucket (private, never-expire)"
 M mc mb "local/$BUCKET" --ignore-existing
@@ -78,7 +79,7 @@ cat > "$TMP_POLICY" <<POL
  {"Effect":"Allow","Action":["s3:GetBucketLocation","s3:ListBucket"],"Resource":["arn:aws:s3:::${BUCKET}"]},
  {"Effect":"Allow","Action":["s3:DeleteObject","s3:GetObject","s3:PutObject"],"Resource":["arn:aws:s3:::${BUCKET}/*"]}]}
 POL
-docker cp "$TMP_POLICY" "$MINIO:/tmp/${POLICY}.json"
+docker cp "$TMP_POLICY" "$S3C:/tmp/${POLICY}.json"
 rm -f "$TMP_POLICY"
 # The app user is useless without this policy — fail loudly on anything except
 # the idempotent already-exists/already-attached cases.

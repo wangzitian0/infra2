@@ -519,13 +519,6 @@ class AppDeployer(Deployer):
             return
         env_suffix = get_env().get("ENV_SUFFIX", "")
         container = f"platform-s3{env_suffix}"
-        probe = c.run(
-            f"docker inspect --format '{{{{.State.Running}}}}' {container}",
-            hide=True,
-            warn=True,
-        )
-        if not probe.ok or probe.stdout.strip() != "true":
-            container = f"platform-minio{env_suffix}"
         result = c.run(
             f"docker exec {container} mc ilm rm --all --force local/{bucket_name}",
             hide=True,
