@@ -612,6 +612,132 @@ def test_health_requires_runner_process_service_account_token(
     assert body["checks"]["op_service_account_token"] is False
 
 
+def _git_in_workspace(repo_dir: Path, *args: str) -> str:
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    return subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test Runner",
+            "-c",
+            "user.email=runner@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            *args,
+        ],
+        cwd=repo_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=10,
+    ).stdout.strip()
+
+
+def _configure_healthy_runner(webhook_server, monkeypatch, tmp_path: Path) -> Path:
+    secrets_file = tmp_path / "secrets.env"
+    secrets_file.write_text("VAULT_APP_TOKEN=redacted\n", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    repo_dir = workspace / "infra2"
+    repo_dir.mkdir(parents=True)
+    monkeypatch.setenv("OP_SERVICE_ACCOUNT_TOKEN", "sa-token")
+    monkeypatch.setenv("DOKPLOY_API_KEY", "dokploy-key")
+    monkeypatch.setattr(webhook_server, "WEBHOOK_SECRET", "test-webhook-secret")
+    monkeypatch.setattr(webhook_server, "SECRETS_FILE", secrets_file)
+    monkeypatch.setattr(webhook_server, "WORKSPACE", workspace)
+    monkeypatch.setattr(webhook_server, "op_service_account_works", lambda: True)
+    monkeypatch.setattr(
+        webhook_server,
+        "_dependency_checks",
+        lambda: {"python:PyYAML": True, "binary:git": True, "binary:op": True},
+    )
+    return repo_dir
+
+
+def test_health_reports_live_workspace_git_sha_over_stale_env(
+    monkeypatch, tmp_path
+) -> None:
+    """/health reads the mounted workspace HEAD instead of stale container ENV GIT_SHA.
+
+    When bootstrap skips image rebuild, ENV GIT_SHA stays pinned to the older build
+    commit (e.g. 8fb0cfb) while sync_runner updates /workspace/infra2 to a newer SHA.
+
+    ### Mutation evidence
+    - Reverting `/health` `git_sha` to `os.environ.get("GIT_SHA", "unknown")` fails this
+      test because `body["git_sha"]` returns `"8fb0cfb"` instead of `first_sha`/`second_sha`.
+    - Caching workspace SHA at module import time fails the second assertion after the
+      workspace advances from `first_sha` to `second_sha`.
+    """
+    from starlette.testclient import TestClient
+
+    monkeypatch.setenv("GIT_SHA", "8fb0cfb")
+    webhook_server = _load_module(
+        "webhook_server_health_live_sha_under_test",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+    repo_dir = _configure_healthy_runner(webhook_server, monkeypatch, tmp_path)
+    _git_in_workspace(repo_dir, "init")
+    (repo_dir / "README.md").write_text("v1\n", encoding="utf-8")
+    _git_in_workspace(repo_dir, "add", "README.md")
+    _git_in_workspace(repo_dir, "commit", "-m", "v1")
+    first_sha = _git_in_workspace(repo_dir, "rev-parse", "--short", "HEAD")
+
+    client = TestClient(webhook_server.app)
+    res1 = client.get("/health")
+    assert res1.status_code == 200
+    assert res1.json()["git_sha"] == first_sha
+    assert res1.json()["git_sha"] != "8fb0cfb"
+
+    # Simulate sync_runner advancing the mounted workspace without container rebuild.
+    (repo_dir / "README.md").write_text("v2\n", encoding="utf-8")
+    _git_in_workspace(repo_dir, "add", "README.md")
+    _git_in_workspace(repo_dir, "commit", "-m", "v2")
+    second_sha = _git_in_workspace(repo_dir, "rev-parse", "--short", "HEAD")
+    assert second_sha != first_sha
+
+    res2 = client.get("/health")
+    assert res2.status_code == 200
+    assert res2.json()["git_sha"] == second_sha
+
+
+def test_health_git_sha_falls_back_to_env_when_workspace_git_fails(
+    monkeypatch, tmp_path
+) -> None:
+    """/health falls back to GIT_SHA env (or 'unknown') when workspace git fails.
+
+    ### Mutation evidence
+    - Dropping the `returncode == 0` check or `(OSError, subprocess.SubprocessError)`
+      guard raises/returns empty instead of falling back to `"8fb0cfb"` and `"unknown"`.
+    """
+    from starlette.testclient import TestClient
+
+    monkeypatch.setenv("GIT_SHA", "8fb0cfb")
+    webhook_server = _load_module(
+        "webhook_server_health_sha_fallback_under_test",
+        IAC_RUNNER / "webhook_server.py",
+        monkeypatch,
+    )
+    _configure_healthy_runner(webhook_server, monkeypatch, tmp_path)
+    client = TestClient(webhook_server.app)
+
+    # Non-git workspace directory -> git exits non-zero -> falls back to GIT_SHA env.
+    res_env = client.get("/health")
+    assert res_env.status_code == 200
+    assert res_env.json()["git_sha"] == "8fb0cfb"
+
+    # Subprocess timeout with blank GIT_SHA -> bounded fallback to "unknown".
+    monkeypatch.setenv("GIT_SHA", "   ")
+
+    def timed_out(*_args, **_kwargs):
+        raise subprocess.TimeoutExpired(cmd="git", timeout=2)
+
+    monkeypatch.setattr(webhook_server.subprocess, "run", timed_out)
+    res_unknown = client.get("/health")
+    assert res_unknown.status_code == 200
+    assert res_unknown.json()["git_sha"] == "unknown"
+
+
 def test_vault_audit_task_import_does_not_require_pyyaml() -> None:
     """Infra-011.7: optional audit inventory parsing cannot break invoke startup."""
     script = """

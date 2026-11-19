@@ -761,6 +761,31 @@ for _model in (
     _model.model_rebuild(_types_namespace=globals())
 
 
+def _workspace_repo_path() -> Path:
+    """Return the mounted workspace checkout directory for GIT_REPO_URL."""
+    repo_name = Path(GIT_REPO_URL).stem if GIT_REPO_URL else "unknown"
+    return WORKSPACE / repo_name
+
+
+def _workspace_git_sha() -> str:
+    """Return the live workspace short commit SHA, falling back to GIT_SHA env."""
+    repo_path = _workspace_repo_path()
+    if repo_path.is_dir():
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(repo_path), "rev-parse", "--short", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            sha = result.stdout.strip()
+            if result.returncode == 0 and sha:
+                return sha
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return os.environ.get("GIT_SHA", "unknown").strip() or "unknown"
+
+
 def _runner_checks() -> dict[str, bool]:
     checks = {
         "http": True,
@@ -775,8 +800,7 @@ def _runner_checks() -> dict[str, bool]:
         "dokploy_api_key": bool(os.environ.get("DOKPLOY_API_KEY", "").strip()),
     }
     checks.update(_dependency_checks())
-    repo_name = Path(GIT_REPO_URL).stem if GIT_REPO_URL else "unknown"
-    checks["git_workspace"] = (WORKSPACE / repo_name).exists()
+    checks["git_workspace"] = _workspace_repo_path().exists()
     return checks
 
 
@@ -845,7 +869,7 @@ def health() -> JSONResponse:
             "status": "healthy" if all_healthy else "degraded",
             "checks": checks,
             "in_flight_deploys": in_flight_deploys,
-            "git_sha": os.environ.get("GIT_SHA", "unknown").strip() or "unknown",
+            "git_sha": _workspace_git_sha(),
         },
         status_code=status_code,
     )

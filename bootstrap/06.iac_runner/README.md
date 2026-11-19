@@ -26,7 +26,7 @@ release tag (`vX.Y.Z`) or explicit production promotion; see
 
 The `sync` task uses two independent identities:
 
-- `IAC_CONFIG_HASH` includes effective runtime inputs, including declared runtime secrets, and controls idempotent deploy/no-op behavior.
+- `CONFIGURATION_SHA256` includes effective runtime inputs, including declared runtime secrets, and controls idempotent deploy/no-op behavior.
 - `IAC_SOURCE_CONFIG_HASH` is versioned and secret-independent; `IAC_DEPLOY_REF` records the exact revision that produced it.
 
 A deployment skips only when the runtime hash matches and a valid source identity already exists. Missing legacy identity triggers one migration reconcile.

@@ -41,7 +41,7 @@ uv run invoke alerting.status
 `secret/platform/{env}/alerting` so the vault-agent can render runtime secrets.
 
 The probe heartbeat URL/token are runtime-only config inputs: they participate in
-`IAC_CONFIG_HASH` so rotation reconciles the service, but are excluded from the
+`CONFIGURATION_SHA256` so rotation reconciles the service, but are excluded from the
 secret-independent `IAC_SOURCE_CONFIG_HASH`. The drift workflow therefore does not
 need 1Password access and cannot mistake a missing CI secret for production drift.
 
@@ -379,7 +379,7 @@ registry does not mark `type: report`. It reports, without paging: the public
 Dokploy entrypoint, SSH reachability, Docker daemon reachability, container
 health, the `platform-alerting` in-container `/health` endpoint, the staging
 backup, Dokploy compose/application status (an `error` is listed as stale only
-when that unit's own containers run healthy on the current `IAC_CONFIG_HASH`),
+when that unit's own containers run healthy on the current `CONFIGURATION_SHA256`),
 and the findings the Worker already delivered.
 The closed-loop boundary is explicit: host/route/alert-delivery failures
 are machine-audited. SigNoz/OpenPanel now also have synthetic write-then-query

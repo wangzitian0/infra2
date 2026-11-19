@@ -4,13 +4,13 @@ truealpha#447 / infra2#562-followup).
 secrets.ctmpl is a single-file bind mount: a checkout that rewrites the file gives it a
 new inode, the running agent keeps the old one, and Compose recreates a service only when
 its resolved config changes. The Deployer folds every `./`-relative bind mount — the
-template included — into IAC_CONFIG_HASH, so an agent that reads the variable is recreated
+template included — into CONFIGURATION_SHA256, so an agent that reads the variable is recreated
 by exactly the deploy that changed its template. An agent that does not read it ships every
 template edit as a silent no-op: on 2026-09-15 thirteen agents fleet-wide (created in
 June/July) still rendered June's templates while the file on disk matched HEAD; on 2026-09-07
 truealpha/data_engine staging rendered nothing for the `LLM_*` keys v1.1.56 "deployed".
 
-The promote tier (common.deploy.promote.deploy()) additionally sets IAC_CONFIG_HASH fresh on
+The promote tier (common.deploy.promote.deploy()) additionally sets CONFIGURATION_SHA256 fresh on
 every call so a same-digest promote is never a Dokploy no-op — which only holds for the app
 services that read it too (truealpha-app-vault-agent-staging kept rendering a template
 without SECRET_KEY across two full redeploys until the variable was added).
@@ -30,7 +30,6 @@ COMPOSE_ROOTS = ("bootstrap", "platform", "finance_report", "truealpha")
 # Either the Deployer's hash or a service's own configuration digest recreates the agent.
 CACHE_BUST_VARIABLES = (
     "CONFIGURATION_SHA256",
-    "IAC_CONFIG_HASH",
     "TRUEALPHA_CONFIGURATION_SHA256",
 )
 
@@ -86,7 +85,7 @@ def test_vault_agent_is_recreated_when_its_template_changes(relative_path):
     assert any(name in environment for name in CACHE_BUST_VARIABLES), (
         f"{relative_path}: vault-agent reads none of {CACHE_BUST_VARIABLES}, so a "
         "secrets.ctmpl edit never recreates it and ships as a silent no-op (#628). Add "
-        "`IAC_CONFIG_HASH: ${IAC_CONFIG_HASH:-}` to its `environment:` block."
+        "`CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}` to its `environment:` block."
     )
 
 
@@ -108,7 +107,7 @@ def test_vault_agent_forwards_every_env_its_template_reads(relative_path):
 
 
 @pytest.mark.parametrize("relative_path", PROMOTE_TIER_COMPOSE_FILES)
-def test_promote_tier_secret_consumers_carry_iac_config_hash(relative_path):
+def test_promote_tier_secret_consumers_carry_configuration_sha256(relative_path):
     services = _services(ROOT / relative_path)
     consumers = {
         name: spec

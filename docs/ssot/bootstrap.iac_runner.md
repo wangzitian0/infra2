@@ -171,14 +171,14 @@ def sync_service(service_name):
     current_config = load_compose_yaml() + fetch_env_vars()
     new_hash = sha256(current_config)
     
-    stored_hash = get_from_dokploy_env("IAC_CONFIG_HASH")
+    stored_hash = get_from_dokploy_env("CONFIGURATION_SHA256")
     
     if new_hash == stored_hash:
         print("Config unchanged, skipping deploy")
         return
     
     deploy_to_dokploy(service_name, current_config)
-    update_dokploy_env("IAC_CONFIG_HASH", new_hash)
+    update_dokploy_env("CONFIGURATION_SHA256", new_hash)
 ```
 
 **优势**:
