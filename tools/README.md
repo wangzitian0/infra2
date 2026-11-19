@@ -283,7 +283,7 @@ alert bridge, the staging backup, Dokploy per-compose/application status — sti
 run and go into one daily report via `common/alerting/delivery.py::deliver_infra2_report`. A
 Dokploy `error` is listed there as a stale record only when that unit's own
 containers (compose project = `appName`, read over SSH) run healthy on the
-current `IAC_CONFIG_HASH`; otherwise it stays a failure, labelled with its age
+current `CONFIGURATION_SHA256`; otherwise it stays a failure, labelled with its age
 past 72 h. A missing or rejected (401/403) `DOKPLOY_API_KEY`, or a missing report
 secret, is a `configuration` failure and pages.
 It also checks every scheduled workflow of the estate repositories
