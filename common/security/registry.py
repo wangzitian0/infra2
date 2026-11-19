@@ -145,9 +145,9 @@ SERVICES: tuple[Service, ...] = (
         "finance_report",
         "app",
         ("finance_report/finance_report/10.app/env.manifest.json",),
-        # _ensure_minio_bucket reads the bucket name back to decide whether the scoped
-        # user already exists; the compose supplies the same name to the container.
-        store_only_keys=("S3_BUCKET",),
+        # _ensure_minio_bucket reads S3_BUCKET; ZAI_API_KEY stays in Vault while
+        # production serves < v0.2.85 and until retired post-promotion.
+        store_only_keys=("S3_BUCKET", "ZAI_API_KEY"),
     ),
     Service(
         "finance_report/finance_report/preview",

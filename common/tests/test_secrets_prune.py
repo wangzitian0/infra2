@@ -151,7 +151,7 @@ def test_every_registered_service_declares_where_its_operator_keys_are_read():
     documented = {s.id: s.store_only_keys for s in SERVICES if s.store_only_keys}
     assert documented == {
         "platform/authentik": ("root_token",),
-        "finance_report/app": ("S3_BUCKET",),
+        "finance_report/app": ("S3_BUCKET", "ZAI_API_KEY"),
         "truealpha/app": ("S3_BUCKET",),
         "truealpha/data_engine": (
             "CAPTURE_APPROVED_BY",
