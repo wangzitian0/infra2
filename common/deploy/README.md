@@ -51,16 +51,14 @@ tasks = make_tasks(PostgresDeployer)
 ### Triggering a Fixed-Environment Promotion
 ```python
 from common.deploy.dokploy_client import get_dokploy
-from common.deploy.promote import deploy
+from common.deploy.promote import PromoteDeps, PromoteOptions, deploy
 
 # Orchestrates staging promotion for an app release tag (CLI front door: tools.deploy_v2)
 plan = deploy(
     "staging",
     "v1.1.96",
-    domain="zitian.party",
-    client=get_dokploy(),
-    service="finance_report/app",
-    iac_ref="v1.1.96",
+    options=PromoteOptions(service="finance_report/app", iac_ref="v1.1.96"),
+    deps=PromoteDeps(client=get_dokploy(), domain="zitian.party"),
 )
 assert plan.env == "staging"
 ```

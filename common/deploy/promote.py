@@ -57,6 +57,39 @@ from infra2_sdk.deploy import VERSION_KEYS, default_http_get, poll_until_healthy
 
 
 @dataclass(frozen=True)
+class PromoteOptions:
+    """Optional policy, ref, and verification flags for ``promote.deploy``."""
+
+    service: str = "finance_report/app"
+    staging_validated: bool = False
+    break_glass: bool = False
+    force_promote: bool = False
+    pause_rollback: bool = False
+    max_rollback_attempts: int = 2
+    image_ref: str | None = None
+    iac_ref: str = ""
+    branch: str | None = None
+    wait: bool = False
+    timeout: int = 600
+    verify_vault: bool = False
+    verify_config: bool = False
+    verify_smoke: bool = True
+    verify_ingestion: bool = False
+
+
+@dataclass(frozen=True)
+class PromoteDeps:
+    """Optional injectable transport / runtime dependencies for ``promote.deploy``."""
+
+    client: Any = None
+    domain: str = ""
+    repo: str | None = None
+    rollback_notifier: Callable[[dict[str, Any]], None] | None = None
+    http_get: Any = None
+    now: Callable[[], float] | None = None
+
+
+@dataclass(frozen=True)
 class DeployPlan:
     env: str
     sha: str
@@ -778,27 +811,17 @@ def _handle_post_deploy_failure(
 def _execute_dokploy_rollout(
     client: Any,
     compose_id: str,
-    service: str,
     env_vars: dict[str, str],
-    branch: str | None,
-    wait: bool,
-    timeout: int,
-    config_hash: str,
-    verify_config: bool,
-    verify_smoke: bool,
-    verify_ingestion: bool,
+    *,
     env_suffix: str,
     service_name: str,
     deploy_environment: str,
     image_tag: str,
+    config_hash: str,
     app_url: str,
-    http_get: Any = None,
-    *,
-    rollback_class: str | None = None,
-    force_promote: bool = False,
-    pause_rollback: bool = False,
-    max_rollback_attempts: int = 2,
-    rollback_notifier: Callable[[dict[str, Any]], None] | None = None,
+    rollback_class: str | None,
+    opt: PromoteOptions,
+    dep: PromoteDeps,
 ) -> None:
     """Execute Dokploy compose deployment under compose write lock."""
     with compose_write_lock(compose_id):
@@ -817,50 +840,50 @@ def _execute_dokploy_rollout(
 
         before_ids = (
             _deployment_ids(client.get_compose_deployments(compose_id))
-            if wait
+            if opt.wait
             else set()
         )
-        if branch:
-            client.update_compose(compose_id, branch=branch)
+        if opt.branch:
+            client.update_compose(compose_id, branch=opt.branch)
         client.update_compose_env(compose_id, env_vars=env_vars, replace=True)
         try:
             trigger_epoch = time.time()
             client.deploy_compose(compose_id)
-            if wait:
+            if opt.wait:
                 wait_for_rollout(
                     client,
                     compose_id,
                     before_ids,
-                    timeout=timeout,
+                    timeout=opt.timeout,
                     min_started_at=trigger_epoch,
                 )
-            if verify_config:
+            if opt.verify_config:
                 verify_effective_config_hash(
                     client,
                     compose_id,
                     config_hash,
                     expected_keys=set(env_vars) | set(RUNTIME_ENV_KEYS_TO_PRESERVE),
-                    timeout=timeout,
+                    timeout=opt.timeout,
                 )
-            if wait:
-                verify_in_service(client, service, env_suffix, timeout=timeout)
-                if verify_smoke:
+            if opt.wait:
+                verify_in_service(client, opt.service, env_suffix, timeout=opt.timeout)
+                if opt.verify_smoke:
                     try:
                         verify_public_health(
                             f"{app_url.rstrip('/')}/api/health",
                             expected_version=image_tag,
-                            timeout=timeout,
-                            http_get=http_get,
+                            timeout=opt.timeout,
+                            http_get=dep.http_get,
                         )
                     except Exception as smoke_exc:
-                        if not force_promote:
+                        if not opt.force_promote:
                             raise
                         print(
                             f"[AUDIT] force_promote=True: bypassing public /api/health "
-                            f"gate for {service} ({image_tag}): {smoke_exc}",
+                            f"gate for {opt.service} ({image_tag}): {smoke_exc}",
                             file=sys.stderr,
                         )
-            if verify_ingestion:
+            if opt.verify_ingestion:
                 from common.deploy.ingestion_verify import verify_deploy_ingestion
 
                 verify_deploy_ingestion(
@@ -874,16 +897,16 @@ def _execute_dokploy_rollout(
                 exc=exc,
                 client=client,
                 compose_id=compose_id,
-                service=service,
+                service=opt.service,
                 deploy_environment=deploy_environment,
                 image_tag=image_tag,
                 previous_image_tag=previous_image_tag,
                 previous_rollback_attempts=previous_rollback_attempts,
                 env_vars=env_vars,
                 rollback_class=rollback_class,
-                pause_rollback=pause_rollback,
-                max_rollback_attempts=max_rollback_attempts,
-                rollback_notifier=rollback_notifier,
+                pause_rollback=opt.pause_rollback,
+                max_rollback_attempts=opt.max_rollback_attempts,
+                rollback_notifier=dep.rollback_notifier,
             )
             raise
 
@@ -892,27 +915,8 @@ def deploy(
     env: str,
     code: str,
     *,
-    domain: str,
-    client,
-    service: str = "finance_report/app",
-    staging_validated: bool = False,
-    break_glass: bool = False,
-    force_promote: bool = False,
-    pause_rollback: bool = False,
-    max_rollback_attempts: int = 2,
-    rollback_notifier: Callable[[dict[str, Any]], None] | None = None,
-    repo: str | None = None,
-    image_ref: str | None = None,
-    iac_ref: str = "",
-    branch: str | None = None,
-    wait: bool = False,
-    timeout: int = 600,
-    verify_vault: bool = False,
-    verify_config: bool = False,
-    verify_smoke: bool = True,
-    verify_ingestion: bool = False,
-    http_get: Any = None,
-    _now=None,
+    options: PromoteOptions | None = None,
+    deps: PromoteDeps | None = None,
 ) -> DeployPlan:
     """Deploy a resolved app commit to a fixed app environment.
 
@@ -920,83 +924,76 @@ def deploy(
     env   -> deploy_env_config (which compose, URL, suffix, default data).
     data  -> derived from the env's data_default; callers cannot override it here.
     """
-    if _now is None:
-        _now = time.time
-    if force_promote:
+    opt = options or PromoteOptions()
+    dep = deps or PromoteDeps()
+    if dep.client is None:
+        raise ValueError("promote.deploy requires deps.client")
+    now_fn = dep.now if dep.now is not None else time.time
+    if opt.force_promote:
         print(
-            f"[AUDIT] force_promote=True requested for {service} -> {env} (code={code!r})",
+            f"[AUDIT] force_promote=True requested for {opt.service} -> {env} (code={code!r})",
             file=sys.stderr,
         )
-    if pause_rollback:
+    if opt.pause_rollback:
         print(
-            f"[AUDIT] pause_rollback=True requested for {service} -> {env} (code={code!r})",
+            f"[AUDIT] pause_rollback=True requested for {opt.service} -> {env} (code={code!r})",
             file=sys.stderr,
         )
     sha, cfg, data_lane, deploy_environment = _validate_deploy_preconditions(
-        service=service,
+        service=opt.service,
         env=env,
-        domain=domain,
+        domain=dep.domain,
         code=code,
-        repo=repo,
-        staging_validated=staging_validated,
-        break_glass=break_glass or force_promote,
+        repo=dep.repo,
+        staging_validated=opt.staging_validated,
+        break_glass=opt.break_glass or opt.force_promote,
     )
 
     _preflight_deploy(
-        service=service,
-        client=client,
+        service=opt.service,
+        client=dep.client,
         compose_id=cfg.compose_id,
         deploy_environment=deploy_environment,
-        verify_vault=verify_vault,
+        verify_vault=opt.verify_vault,
     )
 
-    image_tag = image_ref or sha[:7]
+    image_tag = opt.image_ref or sha[:7]
     rollback_class = _evaluate_schema_gate(
-        service,
+        opt.service,
         cfg,
         image_tag,
-        force_promote=force_promote,
+        force_promote=opt.force_promote,
     )
 
-    if cfg.fast_swap and iac_ref:
-        config_hash = f"deploy-{image_tag}-{iac_ref[:7]}"
+    if cfg.fast_swap and opt.iac_ref:
+        config_hash = f"deploy-{image_tag}-{opt.iac_ref[:7]}"
     else:
-        config_hash = f"deploy-{image_tag}-{int(_now() * 1000)}"
+        config_hash = f"deploy-{image_tag}-{int(now_fn() * 1000)}"
 
     env_vars, identity = _build_deploy_env_vars(
-        service=service,
+        service=opt.service,
         env=env,
-        domain=domain,
+        domain=dep.domain,
         deploy_environment=deploy_environment,
         cfg=cfg,
         image_tag=image_tag,
-        iac_ref=iac_ref,
+        iac_ref=opt.iac_ref,
         config_hash=config_hash,
     )
 
     _execute_dokploy_rollout(
-        client=client,
-        compose_id=cfg.compose_id,
-        service=service,
-        env_vars=env_vars,
-        branch=branch,
-        wait=wait,
-        timeout=timeout,
-        config_hash=config_hash,
-        verify_config=verify_config,
-        verify_smoke=verify_smoke,
-        verify_ingestion=verify_ingestion,
+        dep.client,
+        cfg.compose_id,
+        env_vars,
         env_suffix=cfg.env_suffix,
         service_name=identity.service_name,
         deploy_environment=deploy_environment,
         image_tag=image_tag,
-        app_url=cfg.app_url(domain=domain),
-        http_get=http_get,
+        config_hash=config_hash,
+        app_url=cfg.app_url(domain=dep.domain),
         rollback_class=rollback_class,
-        force_promote=force_promote,
-        pause_rollback=pause_rollback,
-        max_rollback_attempts=max_rollback_attempts,
-        rollback_notifier=rollback_notifier,
+        opt=opt,
+        dep=dep,
     )
 
     return DeployPlan(
@@ -1006,7 +1003,7 @@ def deploy(
         data=data_lane,
         env_vars=env_vars,
         rollback_class=rollback_class,
-        force_promote=force_promote,
-        pause_rollback=pause_rollback,
-        max_rollback_attempts=max_rollback_attempts,
+        force_promote=opt.force_promote,
+        pause_rollback=opt.pause_rollback,
+        max_rollback_attempts=opt.max_rollback_attempts,
     )

@@ -10,6 +10,8 @@ import pytest
 
 from common.deploy import promote as dp
 from common.deploy.promote import (
+    PromoteDeps,
+    PromoteOptions,
     ensure_generated_secrets as _real_ensure_generated_secrets,
 )
 from common.deploy.queue import parse_epoch_seconds
@@ -162,9 +164,8 @@ def test_staging_deploy_assembles_axes_and_triggers():
     plan = dp.deploy(
         "staging",
         FULL_SHA,
-        domain="zitian.party",
-        client=client,
-        iac_ref="b" * 40,
+        options=PromoteOptions(iac_ref="b" * 40),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
     )
 
     # the plan keeps the canonical full sha as the commit identity...
@@ -205,10 +206,8 @@ def test_branch_is_reasserted_on_every_deploy_when_given():
     dp.deploy(
         "staging",
         FULL_SHA,
-        domain="zitian.party",
-        client=client,
-        iac_ref="b" * 40,
-        branch="v1.1.38",
+        options=PromoteOptions(iac_ref="b" * 40, branch="v1.1.38"),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
     )
     assert client.branch_updates == [("A6V-hbJlgHMwgPDoTDnhH", "v1.1.38")]
 
@@ -220,9 +219,8 @@ def test_branch_omitted_leaves_the_composes_source_untouched():
     dp.deploy(
         "staging",
         FULL_SHA,
-        domain="zitian.party",
-        client=client,
-        iac_ref="b" * 40,
+        options=PromoteOptions(iac_ref="b" * 40),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
     )
     assert client.branch_updates == []
 
@@ -235,10 +233,8 @@ def test_truealpha_staging_deploy_resolves_its_own_compose_and_identity():
     plan = dp.deploy(
         "staging",
         FULL_SHA,
-        domain="zitian.party",
-        client=client,
-        service="truealpha/app",
-        iac_ref="b" * 40,
+        options=PromoteOptions(service="truealpha/app", iac_ref="b" * 40),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
     )
 
     assert plan.compose_id == "w4zo_fm9d2PnUY8ULzNO7"
@@ -267,10 +263,8 @@ def test_app_domain_override_does_not_leak_into_the_shared_control_plane_endpoin
     plan = dp.deploy(
         "staging",
         FULL_SHA,
-        domain="truealpha.club",
-        client=client,
-        service="truealpha/app",
-        iac_ref="b" * 40,
+        options=PromoteOptions(service="truealpha/app", iac_ref="b" * 40),
+        deps=PromoteDeps(client=client, domain="truealpha.club"),
     )
     cid, env = client.updated[0]
     assert cid == plan.compose_id
@@ -293,11 +287,10 @@ def test_truealpha_prod_deploy_resolves_its_own_compose_and_identity():
     plan = dp.deploy(
         "prod",
         FULL_SHA,
-        domain="truealpha.club",
-        client=client,
-        service="truealpha/app",
-        staging_validated=True,
-        iac_ref="b" * 40,
+        options=PromoteOptions(
+            service="truealpha/app", staging_validated=True, iac_ref="b" * 40
+        ),
+        deps=PromoteDeps(client=client, domain="truealpha.club"),
     )
 
     assert plan.compose_id == "j-gIAk0GfF0bGOitZN-og"
@@ -326,11 +319,10 @@ def test_truealpha_llm_container_receives_the_collector_endpoint_and_issued_iden
     dp.deploy(
         env_type,
         FULL_SHA,
-        domain="zitian.party",
-        client=client,
-        service="truealpha/app",
-        staging_validated=True,
-        iac_ref="b" * 40,
+        options=PromoteOptions(
+            service="truealpha/app", staging_validated=True, iac_ref="b" * 40
+        ),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
     )
     _, pushed = client.updated[0]
 
@@ -367,10 +359,8 @@ def test_truealpha_staging_deploy_sets_app_host():
     dp.deploy(
         "staging",
         FULL_SHA,
-        domain="zitian.party",
-        client=client,
-        service="truealpha/app",
-        iac_ref="b" * 40,
+        options=PromoteOptions(service="truealpha/app", iac_ref="b" * 40),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
     )
     _, env = client.updated[0]
     assert env["APP_HOST"] == "truealpha-staging.zitian.party"
@@ -383,11 +373,10 @@ def test_truealpha_prod_deploy_sets_app_host_to_the_bare_domain():
     dp.deploy(
         "prod",
         FULL_SHA,
-        domain="truealpha.club",
-        client=client,
-        service="truealpha/app",
-        staging_validated=True,
-        iac_ref="b" * 40,
+        options=PromoteOptions(
+            service="truealpha/app", staging_validated=True, iac_ref="b" * 40
+        ),
+        deps=PromoteDeps(client=client, domain="truealpha.club"),
     )
     _, env = client.updated[0]
     assert env["APP_HOST"] == "truealpha.club"
@@ -397,7 +386,9 @@ def test_finance_report_deploy_has_no_app_host_override():
     """The default Deployer.compose_env_overrides is a no-op: a service with no
     override (finance_report/app) must not gain a stray APP_HOST key."""
     client = FakeDokploy()
-    dp.deploy("staging", FULL_SHA, domain="zitian.party", client=client)
+    dp.deploy(
+        "staging", FULL_SHA, deps=PromoteDeps(client=client, domain="zitian.party")
+    )
     _, env = client.updated[0]
     assert "APP_HOST" not in env
 
@@ -415,7 +406,7 @@ def test_deploy_rejects_invalid_targets_before_any_side_effect(
 ):
     client = FakeDokploy()
     with pytest.raises(ValueError, match=expected_match):
-        dp.deploy(env_name, "deadbeef", domain=domain, client=client)
+        dp.deploy(env_name, "deadbeef", deps=PromoteDeps(client=client, domain=domain))
     assert client.updated == []
     assert client.deployed == []
 
@@ -423,7 +414,10 @@ def test_deploy_rejects_invalid_targets_before_any_side_effect(
 def test_prod_deploys_a_staging_validated_digest():
     client = FakeDokploy()
     plan = dp.deploy(
-        "prod", "deadbeef", domain="zitian.party", client=client, staging_validated=True
+        "prod",
+        "deadbeef",
+        options=PromoteOptions(staging_validated=True),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
     )
     assert plan.compose_id == "lNn9gVS1Zyw79Jzw5dlbu"
     assert plan.data == "prod"
@@ -434,7 +428,10 @@ def test_prod_deploys_a_staging_validated_digest():
 def test_prod_break_glass_overrides_the_staging_gate():
     client = FakeDokploy()
     plan = dp.deploy(
-        "prod", "deadbeef", domain="zitian.party", client=client, break_glass=True
+        "prod",
+        "deadbeef",
+        options=PromoteOptions(break_glass=True),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
     )
     assert plan.env == "prod"
     assert client.deployed == ["lNn9gVS1Zyw79Jzw5dlbu"]
@@ -442,13 +439,17 @@ def test_prod_break_glass_overrides_the_staging_gate():
 
 def test_sha_is_lowercased_via_the_resolver():
     client = FakeDokploy()
-    plan = dp.deploy("staging", "DEADBEEF", domain="zitian.party", client=client)
+    plan = dp.deploy(
+        "staging", "DEADBEEF", deps=PromoteDeps(client=client, domain="zitian.party")
+    )
     assert plan.sha == "deadbeef"
 
 
 def test_data_lane_is_derived_from_env_config_not_caller_supplied():
     client = FakeDokploy()
-    plan = dp.deploy("staging", "deadbeef", domain="zitian.party", client=client)
+    plan = dp.deploy(
+        "staging", "deadbeef", deps=PromoteDeps(client=client, domain="zitian.party")
+    )
     assert plan.data == "staging"
 
 
@@ -607,7 +608,10 @@ def test_deploy_with_wait_snapshots_before_then_polls_the_new_record():
 
     client = FakeDokploy(deployments=deployments)
     plan = dp.deploy(
-        "staging", "deadbeef", domain="zitian.party", client=client, wait=True
+        "staging",
+        "deadbeef",
+        options=PromoteOptions(wait=True),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
     )
     assert plan.sha == "deadbeef"
     assert client.deployed == ["A6V-hbJlgHMwgPDoTDnhH"]
@@ -617,7 +621,9 @@ def test_deploy_without_wait_does_not_poll_deployments():
     # default wait=False: the rollout poll is never consulted (no get_compose_deployments).
     calls = []
     client = FakeDokploy(deployments=lambda self: calls.append(1) or [])
-    dp.deploy("staging", "deadbeef", domain="zitian.party", client=client)
+    dp.deploy(
+        "staging", "deadbeef", deps=PromoteDeps(client=client, domain="zitian.party")
+    )
     assert calls == []
 
 
@@ -627,7 +633,9 @@ def test_deploy_without_wait_does_not_poll_deployments():
 def test_deploy_sets_cache_bust_and_static_infra_keys():
     client = FakeDokploy()
     plan = dp.deploy(
-        "staging", FULL_SHA, domain="zitian.party", client=client, _now=lambda: 1000
+        "staging",
+        FULL_SHA,
+        deps=PromoteDeps(client=client, domain="zitian.party", now=lambda: 1000),
     )
     # IAC_CONFIG_HASH is the per-deploy cache-bust (short sha, forces redeploy even on
     # the same digest)
@@ -645,10 +653,10 @@ def test_cache_bust_differs_for_two_deploys_in_the_same_second():
     c1 = FakeDokploy()
     c2 = FakeDokploy()
     h1 = dp.deploy(
-        "staging", FULL_SHA, domain="z.p", client=c1, _now=lambda: 1.2
+        "staging", FULL_SHA, deps=PromoteDeps(client=c1, domain="z.p", now=lambda: 1.2)
     ).env_vars
     h2 = dp.deploy(
-        "staging", FULL_SHA, domain="z.p", client=c2, _now=lambda: 1.8
+        "staging", FULL_SHA, deps=PromoteDeps(client=c2, domain="z.p", now=lambda: 1.8)
     ).env_vars
     assert h1["CONFIGURATION_SHA256"] == f"deploy-{SHORT_SHA}-1200"
     assert h2["CONFIGURATION_SHA256"] == f"deploy-{SHORT_SHA}-1800"
@@ -659,17 +667,29 @@ def test_deploy_replaces_compose_env_and_removes_model_overrides():
     import inspect
 
     assert not hasattr(dp, "model_overrides_from_env")
-    assert "model_overrides" not in inspect.signature(dp.deploy).parameters
+    assert list(inspect.signature(dp.deploy).parameters) == [
+        "env",
+        "code",
+        "options",
+        "deps",
+    ]
     assert (
         "model_overrides" not in inspect.signature(dp._build_deploy_env_vars).parameters
     )
+    for bad_kw in (
+        {"domain": "zitian.party"},
+        {"client": FakeDokploy()},
+        {"wait": True},
+        {"iac_ref": "b" * 40},
+    ):
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            dp.deploy("staging", FULL_SHA, **bad_kw)
 
     client = FakeDokploy()
     plan = dp.deploy(
         "staging",
         "deadbeef",
-        domain="zitian.party",
-        client=client,
+        deps=PromoteDeps(client=client, domain="zitian.party"),
     )
     assert client.replace_flags == [True]
     assert plan.env_vars["ENV"] == "staging"
@@ -764,7 +784,7 @@ def test_assert_approle_creds_present_skips_an_unregistered_service():
 def test_deploy_raises_before_any_mutation_when_approle_creds_missing():
     client = FakeDokploy(env_str="")
     with pytest.raises(ValueError, match="VAULT_ROLE_ID"):
-        dp.deploy("staging", "deadbeef", domain="z.p", client=client)
+        dp.deploy("staging", "deadbeef", deps=PromoteDeps(client=client, domain="z.p"))
     assert client.updated == []
     assert client.deployed == []
     assert client.branch_updates == []
@@ -788,9 +808,8 @@ def test_deploy_calls_schema_gate_before_any_mutation_when_registered(monkeypatc
         dp.deploy(
             "staging",
             FULL_SHA,
-            domain="zitian.party",
-            client=client,
-            iac_ref="b" * 40,
+            options=PromoteOptions(iac_ref="b" * 40),
+            deps=PromoteDeps(client=client, domain="zitian.party"),
         )
     assert len(calls) == 1
     service, kwargs = calls[0]
@@ -816,10 +835,8 @@ def test_deploy_skips_schema_gate_for_an_unregistered_service(monkeypatch):
     dp.deploy(
         "staging",
         FULL_SHA,
-        domain="zitian.party",
-        client=client,
-        service="truealpha/app",
-        iac_ref="b" * 40,
+        options=PromoteOptions(service="truealpha/app", iac_ref="b" * 40),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
     )
     assert calls == []  # the gate was never even consulted
     assert client.deployed  # yet the deploy proceeded normally to completion
@@ -831,7 +848,10 @@ def test_deploy_carries_the_gates_rollback_class_into_the_returned_plan(monkeypa
     monkeypatch.setattr(dp.schema_gate, "run_schema_gate", lambda *a, **k: "C")
     client = FakeDokploy()
     plan = dp.deploy(
-        "staging", FULL_SHA, domain="zitian.party", client=client, iac_ref="b" * 40
+        "staging",
+        FULL_SHA,
+        options=PromoteOptions(iac_ref="b" * 40),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
     )
     assert plan.rollback_class == "C"
 
@@ -843,10 +863,8 @@ def test_deploy_plan_rollback_class_is_none_for_an_unregistered_service():
     plan = dp.deploy(
         "staging",
         FULL_SHA,
-        domain="zitian.party",
-        client=client,
-        service="truealpha/app",
-        iac_ref="b" * 40,
+        options=PromoteOptions(service="truealpha/app", iac_ref="b" * 40),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
     )
     assert plan.rollback_class is None
 
@@ -870,10 +888,8 @@ def test_deploy_calls_ensure_generated_secrets_before_any_mutation(monkeypatch):
         dp.deploy(
             "prod",
             "deadbeef",
-            domain="truealpha.club",
-            client=client,
-            service="truealpha/app",
-            staging_validated=True,
+            options=PromoteOptions(service="truealpha/app", staging_validated=True),
+            deps=PromoteDeps(client=client, domain="truealpha.club"),
         )
     # env is resolved (prod -> production) before the call, matching identity's env.
     assert calls == [("truealpha/app", "production")]
@@ -893,7 +909,10 @@ def test_deploy_calls_ensure_generated_secrets_with_the_unmapped_staging_env(
     )
     client = FakeDokploy()
     dp.deploy(
-        "staging", FULL_SHA, domain="zitian.party", client=client, iac_ref="b" * 40
+        "staging",
+        FULL_SHA,
+        options=PromoteOptions(iac_ref="b" * 40),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
     )
     assert calls == [("finance_report/app", "staging")]
 
@@ -1000,7 +1019,9 @@ def test_deploy_proceeds_when_secret_provisioning_has_no_vault_access(monkeypatc
         lambda service: _NoVaultAccessDeployer,
     )
     client = FakeDokploy()
-    plan = dp.deploy("staging", FULL_SHA, domain="zitian.party", client=client)
+    plan = dp.deploy(
+        "staging", FULL_SHA, deps=PromoteDeps(client=client, domain="zitian.party")
+    )
     assert plan.sha == FULL_SHA
     assert client.deployed  # the deploy still happened
 
@@ -1022,7 +1043,12 @@ def test_deploy_verify_vault_gates_before_any_mutation(monkeypatch):
     monkeypatch.setattr(dp, "assert_approle_creds_present", lambda *a, **k: None)
     client = FakeDokploy(env_str="VAULT_APP_TOKEN=hvs.x")
     with pytest.raises(RuntimeError, match="preflight failed"):
-        dp.deploy("staging", "deadbeef", domain="z.p", client=client, verify_vault=True)
+        dp.deploy(
+            "staging",
+            "deadbeef",
+            options=PromoteOptions(verify_vault=True),
+            deps=PromoteDeps(client=client, domain="z.p"),
+        )
     # gate runs before mutation: neither env-update nor deploy happened
     assert client.updated == []
     assert client.deployed == []
@@ -1075,10 +1101,8 @@ def test_deploy_verify_config_confirms_pushed_hash_rolled_out():
     plan = dp.deploy(
         "staging",
         FULL_SHA,
-        domain="zitian.party",
-        client=client,
-        verify_config=True,
-        _now=lambda: 1000,
+        options=PromoteOptions(verify_config=True),
+        deps=PromoteDeps(client=client, domain="zitian.party", now=lambda: 1000),
     )
     assert plan.env_vars["CONFIGURATION_SHA256"] == f"deploy-{SHORT_SHA}-1000000"
     assert "IAC_CONFIG_HASH" not in plan.env_vars
@@ -1107,7 +1131,9 @@ def test_staging_deploy_injects_openpanel_client_id():
     from common.observability.openpanel import OPENPANEL_CLIENTS
 
     client = FakeDokploy()
-    dp.deploy("staging", FULL_SHA, domain="zitian.party", client=client)
+    dp.deploy(
+        "staging", FULL_SHA, deps=PromoteDeps(client=client, domain="zitian.party")
+    )
     _, env = client.updated[0]
     assert env["OPENPANEL_CLIENT_ID"] == OPENPANEL_CLIENTS["staging"]
     assert env["OPENPANEL_ENVIRONMENT"] == "staging"
@@ -1119,7 +1145,10 @@ def test_prod_deploy_injects_openpanel_client_id_normalizing_prod_alias():
 
     client = FakeDokploy()
     dp.deploy(
-        "prod", FULL_SHA, domain="zitian.party", client=client, staging_validated=True
+        "prod",
+        FULL_SHA,
+        options=PromoteOptions(staging_validated=True),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
     )
     _, env = client.updated[0]
     assert env["OPENPANEL_CLIENT_ID"] == OPENPANEL_CLIENTS["production"]
@@ -1142,7 +1171,10 @@ def test_deploy_emits_platform_snapshot_on_failure(monkeypatch):
 
     with pytest.raises(RuntimeError, match="dokploy 500"):
         dp.deploy(
-            "staging", FULL_SHA, domain="zitian.party", client=_Boom(), wait=False
+            "staging",
+            FULL_SHA,
+            options=PromoteOptions(wait=False),
+            deps=PromoteDeps(client=_Boom(), domain="zitian.party"),
         )
 
     # snapshot emitted exactly once, keyed on the staging compose id resolved by env_config
@@ -1180,7 +1212,10 @@ def test_deploy_with_wait_fails_when_the_frontend_is_left_created(monkeypatch):
     client._containers = broken
     with pytest.raises(RuntimeError) as excinfo:
         dp.deploy(
-            "staging", "deadbeef", domain="zitian.party", client=client, wait=True
+            "staging",
+            "deadbeef",
+            options=PromoteOptions(wait=True),
+            deps=PromoteDeps(client=client, domain="zitian.party"),
         )
     message = str(excinfo.value)
     assert "not in service after deploy of finance_report/app-staging" in message
@@ -1212,14 +1247,21 @@ def test_deploy_with_wait_waits_for_a_health_check_still_starting(monkeypatch):
 
     client = FakeDokploy(deployments=_rollout_done)
     client._containers = containers
-    dp.deploy("staging", "deadbeef", domain="zitian.party", client=client, wait=True)
+    dp.deploy(
+        "staging",
+        "deadbeef",
+        options=PromoteOptions(wait=True),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
+    )
     assert len(reads) == 3
 
 
 def test_deploy_without_wait_never_consults_the_containers():
     client = FakeDokploy()
     client._containers = lambda self: (_ for _ in ()).throw(AssertionError("consulted"))
-    dp.deploy("staging", "deadbeef", domain="zitian.party", client=client)
+    dp.deploy(
+        "staging", "deadbeef", deps=PromoteDeps(client=client, domain="zitian.party")
+    )
 
 
 def test_verify_in_service_gives_up_at_the_deadline():
@@ -1247,10 +1289,8 @@ def test_deploy_fast_swap_uses_deterministic_config_hash():
     plan = dp.deploy(
         "staging",
         FULL_SHA,
-        domain="zitian.party",
-        client=client,
-        service="truealpha/app",
-        iac_ref="b" * 40,
+        options=PromoteOptions(service="truealpha/app", iac_ref="b" * 40),
+        deps=PromoteDeps(client=client, domain="zitian.party"),
     )
     assert plan.env_vars["CONFIGURATION_SHA256"] == f"deploy-{SHORT_SHA}-{'b' * 7}"
     assert "IAC_CONFIG_HASH" not in plan.env_vars
@@ -1262,11 +1302,8 @@ def test_deploy_fast_swap_falls_back_to_ms_hash_when_iac_ref_missing():
     plan = dp.deploy(
         "staging",
         FULL_SHA,
-        domain="zitian.party",
-        client=client,
-        service="truealpha/app",
-        iac_ref="",
-        _now=lambda: 1000,
+        options=PromoteOptions(service="truealpha/app", iac_ref=""),
+        deps=PromoteDeps(client=client, domain="zitian.party", now=lambda: 1000),
     )
     assert plan.env_vars["CONFIGURATION_SHA256"] == f"deploy-{SHORT_SHA}-1000000"
     assert "IAC_CONFIG_HASH" not in plan.env_vars
@@ -1289,12 +1326,8 @@ def test_deploy_with_wait_verifies_public_health_version_identity(monkeypatch):
     dp.deploy(
         "staging",
         FULL_SHA,
-        image_ref="v0.0.42",
-        domain="zitian.party",
-        client=client,
-        service="truealpha/app",
-        wait=True,
-        http_get=fake_http_get,
+        options=PromoteOptions(service="truealpha/app", image_ref="v0.0.42", wait=True),
+        deps=PromoteDeps(client=client, domain="zitian.party", http_get=fake_http_get),
     )
     assert probed_urls == ["https://truealpha-staging.zitian.party/api/health"]
 
@@ -1315,14 +1348,16 @@ def test_truealpha_prod_deploy_probes_the_host_that_traefik_routes(monkeypatch):
     dp.deploy(
         "prod",
         FULL_SHA,
-        image_ref="v0.0.42",
-        domain="truealpha.club",
-        client=client,
-        service="truealpha/app",
-        staging_validated=True,
-        iac_ref="b" * 40,
-        wait=True,
-        http_get=fake_http_get,
+        options=PromoteOptions(
+            service="truealpha/app",
+            image_ref="v0.0.42",
+            staging_validated=True,
+            iac_ref="b" * 40,
+            wait=True,
+        ),
+        deps=PromoteDeps(
+            client=client, domain="truealpha.club", http_get=fake_http_get
+        ),
     )
     _, env = client.updated[0]
     assert env["APP_HOST"] == "truealpha.club"
@@ -1353,13 +1388,12 @@ def test_deploy_with_wait_fails_closed_and_emits_snapshot_when_public_health_ser
         dp.deploy(
             "staging",
             FULL_SHA,
-            image_ref="v0.0.42",
-            domain="zitian.party",
-            client=client,
-            service="truealpha/app",
-            wait=True,
-            timeout=10,
-            http_get=stale_http_get,
+            options=PromoteOptions(
+                service="truealpha/app", image_ref="v0.0.42", wait=True, timeout=10
+            ),
+            deps=PromoteDeps(
+                client=client, domain="zitian.party", http_get=stale_http_get
+            ),
         )
     assert "v0.0.42" in str(excinfo.value)
     assert emitted == ["w4zo_fm9d2PnUY8ULzNO7"]
@@ -1371,12 +1405,13 @@ def test_deploy_with_wait_skips_public_health_when_verify_smoke_false():
     dp.deploy(
         "staging",
         "deadbeef",
-        domain="zitian.party",
-        client=client,
-        wait=True,
-        verify_smoke=False,
-        http_get=lambda _u: (_ for _ in ()).throw(
-            AssertionError("smoke should not run")
+        options=PromoteOptions(wait=True, verify_smoke=False),
+        deps=PromoteDeps(
+            client=client,
+            domain="zitian.party",
+            http_get=lambda _u: (_ for _ in ()).throw(
+                AssertionError("smoke should not run")
+            ),
         ),
     )
 
@@ -1402,13 +1437,10 @@ def test_force_promote_bypasses_false_positive_schema_and_smoke_gates_with_audit
     plan = dp.deploy(
         "staging",
         FULL_SHA,
-        image_ref="v0.1.99",
-        domain="zitian.party",
-        client=client,
-        wait=True,
-        timeout=5,
-        force_promote=True,
-        http_get=failing_smoke,
+        options=PromoteOptions(
+            image_ref="v0.1.99", wait=True, timeout=5, force_promote=True
+        ),
+        deps=PromoteDeps(client=client, domain="zitian.party", http_get=failing_smoke),
     )
     err = capsys.readouterr().err
     assert plan.force_promote is True
@@ -1435,13 +1467,13 @@ def test_automatic_rollback_restores_previous_version_and_notifies(monkeypatch):
         dp.deploy(
             "staging",
             FULL_SHA,
-            image_ref="v0.1.41",
-            domain="zitian.party",
-            client=client,
-            wait=True,
-            timeout=5,
-            http_get=lambda _u: (200, '{"status": "ok", "version": "v0.1.40"}'),
-            rollback_notifier=notifications.append,
+            options=PromoteOptions(image_ref="v0.1.41", wait=True, timeout=5),
+            deps=PromoteDeps(
+                client=client,
+                domain="zitian.party",
+                http_get=lambda _u: (200, '{"status": "ok", "version": "v0.1.40"}'),
+                rollback_notifier=notifications.append,
+            ),
         )
 
     assert len(client.updated) == 2
@@ -1476,14 +1508,15 @@ def test_pause_rollback_suppresses_automatic_rollback_with_audit_trail(
         dp.deploy(
             "staging",
             FULL_SHA,
-            image_ref="v0.1.41",
-            domain="zitian.party",
-            client=client,
-            wait=True,
-            timeout=5,
-            pause_rollback=True,
-            http_get=lambda _u: (200, '{"status": "ok", "version": "v0.1.40"}'),
-            rollback_notifier=notifications.append,
+            options=PromoteOptions(
+                image_ref="v0.1.41", wait=True, timeout=5, pause_rollback=True
+            ),
+            deps=PromoteDeps(
+                client=client,
+                domain="zitian.party",
+                http_get=lambda _u: (200, '{"status": "ok", "version": "v0.1.40"}'),
+                rollback_notifier=notifications.append,
+            ),
         )
 
     err = capsys.readouterr().err
@@ -1534,14 +1567,21 @@ def test_rollback_circuit_breaker_trips_on_third_consecutive_rollback(monkeypatc
             dp.deploy(
                 "staging",
                 FULL_SHA,
-                image_ref=f"v0.1.4{attempt_idx}",
-                domain="zitian.party",
-                client=client,
-                wait=True,
-                timeout=5,
-                max_rollback_attempts=2,
-                http_get=lambda _u: (200, '{"status": "ok", "version": "v0.1.40"}'),
-                rollback_notifier=notifications.append,
+                options=PromoteOptions(
+                    image_ref=f"v0.1.4{attempt_idx}",
+                    wait=True,
+                    timeout=5,
+                    max_rollback_attempts=2,
+                ),
+                deps=PromoteDeps(
+                    client=client,
+                    domain="zitian.party",
+                    http_get=lambda _u: (
+                        200,
+                        '{"status": "ok", "version": "v0.1.40"}',
+                    ),
+                    rollback_notifier=notifications.append,
+                ),
             )
         assert notifications[-1]["action"] == "rolled_back"
         assert notifications[-1]["attempt"] == attempt_idx
@@ -1552,14 +1592,15 @@ def test_rollback_circuit_breaker_trips_on_third_consecutive_rollback(monkeypatc
         dp.deploy(
             "staging",
             FULL_SHA,
-            image_ref="v0.1.43",
-            domain="zitian.party",
-            client=client,
-            wait=True,
-            timeout=5,
-            max_rollback_attempts=2,
-            http_get=lambda _u: (200, '{"status": "ok", "version": "v0.1.40"}'),
-            rollback_notifier=notifications.append,
+            options=PromoteOptions(
+                image_ref="v0.1.43", wait=True, timeout=5, max_rollback_attempts=2
+            ),
+            deps=PromoteDeps(
+                client=client,
+                domain="zitian.party",
+                http_get=lambda _u: (200, '{"status": "ok", "version": "v0.1.40"}'),
+                rollback_notifier=notifications.append,
+            ),
         )
 
     assert len(notifications) == 3

@@ -9,31 +9,34 @@ call happens — classify_ref stays real, so form validation is exercised for re
 from __future__ import annotations
 
 import ast
+import inspect
 import itertools
 import json
 import subprocess
+from dataclasses import asdict, dataclass
 from pathlib import Path
-
-from common.deploy import preflight as _preflight
-from dataclasses import dataclass
 
 import httpx
 import pytest
 
 import common.deploy.v2 as dv2
+from common.deploy import preflight as _preflight
 from common.deploy.iac_runner_client import (
     RunnerLostDeploymentError,
     status_poll_attempts,
     status_poll_delays,
 )
-from infra2_sdk.refs import ResolvedRef, classify_ref
+from common.deploy.preview import PreviewDeps, PreviewOptions
 from common.deploy.v2 import (
+    DeployDeps,
+    DeployOptions,
     DeployV2Result,
     assert_iac_ref_on_main,
     deploy_v2,
     enforce_data_lane_red_lines,
     resolve_data_lane,
 )
+from infra2_sdk.refs import ResolvedRef, classify_ref
 
 SHA_CODE = "c" * 40
 SHA_IAC = "d" * 40
@@ -98,19 +101,31 @@ def calls(monkeypatch):
     """Record backend invocations + stub the resolvers — no git, no Dokploy."""
     rec = {"preview": None, "fixed": None, "image_waits": []}
 
-    def fake_up(kind, value, **kw):
-        rec["preview"] = {"kind": kind, "value": value, **kw}
+    def fake_up(kind, value, *, code, options=None, deps=None):
+        flat = {
+            "kind": kind,
+            "value": value,
+            "code": code,
+            **(asdict(options) if options else {}),
+            **(asdict(deps) if deps else {}),
+        }
+        rec["preview"] = flat
         alias = "main" if kind == "main" else f"{kind}-{value}"
         return _PreviewResult(
             alias=alias,
             compose_id="cmp-preview",
-            sha=kw["code"],
-            url=f"https://report-x.{kw['domain']}",
+            sha=code,
+            url=f"https://report-x.{flat['domain']}",
             healthy=True,
         )
 
-    def fake_deploy(env, code, **kw):
-        rec["fixed"] = {"env": env, "code": code, **kw}
+    def fake_deploy(env, code, *, options=None, deps=None):
+        rec["fixed"] = {
+            "env": env,
+            "code": code,
+            **(asdict(options) if options else {}),
+            **(asdict(deps) if deps else {}),
+        }
         return _Plan(env=env, sha=code, compose_id=f"cmp-{env}", data="x", env_vars={})
 
     def fake_wait(spec, image_ref, **kw):
@@ -134,18 +149,31 @@ def calls(monkeypatch):
     return rec
 
 
-def _deploy(**over):
-    # Fixed envs accept a tag iac_ref only; preview/canary clone a live ref. Default the
-    # iac_ref to match the type so callers only pass it when the test is about iac_ref itself.
-    fixed = over.get("deploy_type") in ("staging", "prod")
-    base = dict(
-        service="finance_report/app",
-        iac_ref="v0.0.0" if fixed else "main",
-        client=object(),
-        domain="zitian.party",
+def _deploy(
+    *,
+    service: str = "finance_report/app",
+    deploy_type: str = "staging",
+    version_ref="",
+    iac_ref: str | None = None,
+    options: DeployOptions | None = None,
+    deps: DeployDeps | None = None,
+):
+    effective_iac = (
+        iac_ref
+        if iac_ref is not None
+        else ("v0.0.0" if deploy_type in ("staging", "prod") else "main")
     )
-    base.update(over)
-    return deploy_v2(**base)
+    effective_deps = (
+        deps if deps is not None else DeployDeps(client=object(), domain="zitian.party")
+    )
+    return deploy_v2(
+        service=service,
+        deploy_type=deploy_type,
+        version_ref=version_ref,
+        iac_ref=effective_iac,
+        options=options,
+        deps=effective_deps,
+    )
 
 
 # --- per-service source repo resolution (truealpha's first-ever v0.0.3 staging deploy
@@ -166,17 +194,18 @@ def test_repo_for_service_falls_back_to_app_repo_for_unknown_service():
 
 
 @pytest.mark.parametrize(
-    ("deploy_kwargs", "expected_repo"),
+    ("service", "repo", "expected_repo"),
     [
-        ({"service": "truealpha/app"}, "https://github.com/wangzitian0/truealpha.git"),
+        ("truealpha/app", None, "https://github.com/wangzitian0/truealpha.git"),
         (
-            {"repo": "https://example.invalid/other.git"},
+            "finance_report/app",
+            "https://example.invalid/other.git",
             "https://example.invalid/other.git",
         ),
     ],
 )
 def test_deploy_version_ref_repo_resolution(
-    monkeypatch, calls, deploy_kwargs, expected_repo
+    monkeypatch, calls, service, repo, expected_repo
 ):
     seen_repos = []
 
@@ -185,7 +214,12 @@ def test_deploy_version_ref_repo_resolution(
         return _fake_resolve_image_ref(ref, **kw)
 
     monkeypatch.setattr(dv2, "resolve_image_ref", recording_resolve_image_ref)
-    _deploy(deploy_type="staging", version_ref="v0.0.3", **deploy_kwargs)
+    _deploy(
+        service=service,
+        deploy_type="staging",
+        version_ref="v0.0.3",
+        deps=DeployDeps(client=object(), domain="zitian.party", repo=repo),
+    )
     assert seen_repos == [expected_repo]
 
 
@@ -539,8 +573,7 @@ def test_prod_tag_routes_fixed_and_pulls_the_tag_not_the_sha(calls):
     res = _deploy(
         deploy_type="prod",
         version_ref="v1.2.3",
-        staging_validated=True,
-        code_reviewed=True,
+        options=DeployOptions(staging_validated=True, code_reviewed=True),
     )
     assert res.backend == "deploy-primitive"
     # truealpha#447: iac_ref must reach the fixed-compose backend as a re-assertable
@@ -563,8 +596,7 @@ def test_prod_rejects_non_tag_version_ref_fail_closed(calls, bad):
         _deploy(
             deploy_type="prod",
             version_ref=bad,
-            staging_validated=True,
-            code_reviewed=True,
+            options=DeployOptions(staging_validated=True, code_reviewed=True),
         )
     assert calls["fixed"] is None  # fails before any backend
 
@@ -640,7 +672,7 @@ def test_preview_branch_expected_sha_allows_matching_main(calls):
     res = _deploy(
         deploy_type="preview/branch",
         version_ref="main",
-        expected_sha=SHA_CODE,
+        options=DeployOptions(expected_sha=SHA_CODE),
     )
 
     assert res.target.code_version == SHA_CODE
@@ -652,7 +684,7 @@ def test_preview_branch_expected_sha_rejects_mismatch_before_side_effect(calls):
         _deploy(
             deploy_type="preview/branch",
             version_ref="main",
-            expected_sha="e" * 40,
+            options=DeployOptions(expected_sha="e" * 40),
         )
 
     assert calls["preview"] is None
@@ -733,8 +765,7 @@ def test_fixed_env_rejects_non_tag_iac_ref(calls, bad_iac):
             deploy_type="prod",
             version_ref="v1.2.3",
             iac_ref=bad_iac,
-            staging_validated=True,
-            code_reviewed=True,
+            options=DeployOptions(staging_validated=True, code_reviewed=True),
         )
     assert calls["fixed"] is None
 
@@ -754,12 +785,10 @@ def test_platform_batch_rejects_non_tag_iac_ref_before_resolving_it(
             ["platform/redis", "platform/alerting"],
             "staging",
             bad_iac,
-            runner_url="https://iac.example",
-            secret="s",
-            triggered_by="deploy_v2",
-            code_reviewed=True,
-            wait=True,
-            timeout=120,
+            options=DeployOptions(code_reviewed=True, wait=True, timeout=120),
+            deps=DeployDeps(
+                iac_runner_url="https://iac.example", iac_webhook_secret="s"
+            ),
         )
     assert resolved == []
 
@@ -769,7 +798,11 @@ def test_platform_batch_rejects_non_tag_iac_ref_before_resolving_it(
 
 def test_prod_requires_staging_first(calls):
     with pytest.raises(ValueError, match="requires a prior staging"):
-        _deploy(deploy_type="prod", version_ref="v1.2.3", code_reviewed=True)
+        _deploy(
+            deploy_type="prod",
+            version_ref="v1.2.3",
+            options=DeployOptions(code_reviewed=True),
+        )
     assert calls["fixed"] is None
 
 
@@ -777,19 +810,19 @@ def test_prod_break_glass_bypasses_staging_first(calls):
     res = _deploy(
         deploy_type="prod",
         version_ref="v1.2.3",
-        break_glass=True,
-        code_reviewed=True,
+        options=DeployOptions(break_glass=True, code_reviewed=True),
     )
     assert res.backend == "deploy-primitive"
 
 
 @pytest.mark.parametrize("code_reviewed", [False, None])
 def test_prod_data_fails_closed_without_positive_review(calls, code_reviewed):
-    kwargs = dict(deploy_type="prod", version_ref="v1.2.3", staging_validated=True)
-    if code_reviewed is not None:
-        kwargs["code_reviewed"] = code_reviewed
     with pytest.raises(ValueError, match="RL-DATA-1"):
-        _deploy(**kwargs)
+        _deploy(
+            deploy_type="prod",
+            version_ref="v1.2.3",
+            options=DeployOptions(staging_validated=True, code_reviewed=code_reviewed),
+        )
     assert calls["fixed"] is None
 
 
@@ -1180,9 +1213,9 @@ def test_fixed_deploy_verify_can_be_disabled(calls):
     _deploy(
         deploy_type="staging",
         version_ref="v1.2.3",
-        verify_vault=False,
-        verify_config=False,
-        verify_smoke=False,
+        options=DeployOptions(
+            verify_vault=False, verify_config=False, verify_smoke=False
+        ),
     )
     assert calls["fixed"]["verify_vault"] is False
     assert calls["fixed"]["verify_config"] is False
@@ -1348,7 +1381,17 @@ def test_cli_verify_flags_default_on_and_flip(cli):
 # --- platform services route to the iac_runner webhook (iac_pinned) ---------
 
 
-def _platform(monkeypatch, *, poll_status="completed", **over):
+def _platform(
+    monkeypatch,
+    *,
+    poll_status="completed",
+    service="platform/redis",
+    deploy_type="staging",
+    version_ref="v0.0.0",
+    iac_ref="",
+    options: DeployOptions | None = None,
+    deps: DeployDeps | None = None,
+):
     sent = {}
     monkeypatch.setattr(
         dv2,
@@ -1362,15 +1405,16 @@ def _platform(monkeypatch, *, poll_status="completed", **over):
     )
     monkeypatch.setattr(dv2, "resolve_to_sha", lambda ref, **kw: SHA_IAC)
     monkeypatch.setattr(dv2, "newest_release_tag", lambda **kw: "v0.0.0")
-    base = dict(
-        service="platform/redis",
-        deploy_type="staging",
-        version_ref="v0.0.0",  # staging/prod pin IaC to a release tag
-        client=object(),
-        domain="zitian.party",
+    return sent, deploy_v2(
+        service=service,
+        deploy_type=deploy_type,
+        version_ref=version_ref,
+        iac_ref=iac_ref,
+        options=options,
+        deps=deps
+        if deps is not None
+        else DeployDeps(client=object(), domain="zitian.party"),
     )
-    base.update(over)
-    return sent, deploy_v2(**base)
 
 
 def test_platform_service_routes_to_iac_runner(monkeypatch):
@@ -1404,9 +1448,8 @@ def test_platform_wait_uses_timeout_budget_for_status_poll(monkeypatch):
         service="platform/redis",
         deploy_type="staging",
         version_ref="v0.0.0",
-        client=object(),
-        domain="zitian.party",
-        timeout=120,
+        options=DeployOptions(timeout=120),
+        deps=DeployDeps(client=object(), domain="zitian.party"),
     )
 
     # truealpha#860: the poll starts at 2 s and grows to 10 s; the attempt count is the
@@ -1433,8 +1476,12 @@ def test_every_runner_wait_uses_the_short_first_poll_schedule(calls, monkeypatch
     _deploy(
         deploy_type="staging",
         version_ref="v1.2.3",
-        iac_runner_url="https://iac.example",
-        iac_webhook_secret="s",
+        deps=DeployDeps(
+            client=object(),
+            domain="zitian.party",
+            iac_runner_url="https://iac.example",
+            iac_webhook_secret="s",
+        ),
     )
     polls = [kw for kind, kw in order if kind == "poll"]
     assert polls and all(
@@ -1460,8 +1507,12 @@ def test_deploy_phases_report_their_duration_on_stderr(calls, monkeypatch, capsy
     _deploy(
         deploy_type="staging",
         version_ref="v1.2.3",
-        iac_runner_url="https://iac.example",
-        iac_webhook_secret="s",
+        deps=DeployDeps(
+            client=object(),
+            domain="zitian.party",
+            iac_runner_url="https://iac.example",
+            iac_webhook_secret="s",
+        ),
     )
     err = capsys.readouterr().err
     assert (
@@ -1517,7 +1568,10 @@ def test_platform_batch_cli_routes_services_once(monkeypatch, capsys):
 
 def test_platform_prod_maps_to_env_production(monkeypatch):
     sent, _res = _platform(
-        monkeypatch, deploy_type="prod", version_ref="", code_reviewed=True
+        monkeypatch,
+        deploy_type="prod",
+        version_ref="",
+        options=DeployOptions(code_reviewed=True),
     )
     assert sent["env"] == "production"
 
@@ -1560,12 +1614,8 @@ def test_platform_staging_still_rejects_a_non_deployable_env(monkeypatch):
             "platform/redis",
             "preview/pr",
             "main",
-            runner_url="",
-            secret="",
-            triggered_by="t",
-            code_reviewed=None,
-            wait=False,
-            timeout=1,
+            options=DeployOptions(wait=False, timeout=1, triggered_by="t"),
+            deps=DeployDeps(iac_runner_url="", iac_webhook_secret=""),
         )
 
 
@@ -1739,7 +1789,7 @@ def test_orthogonal_preview_type_resolves_branch_and_pr_and_defaults_iac_ref(
         service="finance_report/app",
         deploy_type="preview",
         version_ref="main",
-        client=object(),
+        deps=DeployDeps(client=object()),
     )
     assert res_branch.target.sub_domain == "report-branch-main"
     assert calls["preview"]["kind"] == "branch" and calls["preview"]["value"] == "main"
@@ -1748,7 +1798,7 @@ def test_orthogonal_preview_type_resolves_branch_and_pr_and_defaults_iac_ref(
         service="finance_report/app",
         deploy_type="preview",
         version_ref="pr-7",
-        client=object(),
+        deps=DeployDeps(client=object()),
     )
     assert res_pr.target.sub_domain == "report-pr-7"
     assert calls["preview"]["kind"] == "pr" and calls["preview"]["value"] == 7
@@ -1757,11 +1807,51 @@ def test_orthogonal_preview_type_resolves_branch_and_pr_and_defaults_iac_ref(
         service="platform/todo",
         deploy_type="preview",
         version_ref="pr-42",
-        client=object(),
+        deps=DeployDeps(client=object()),
     )
     assert res_todo.backend == "preview-lifecycle"
     assert calls["preview"]["service"] == "platform/todo"
     assert calls["preview"]["value"] == 42
+
+
+def test_deploy_v2_signature_collapsed_rejects_flat_legacy_kwargs(calls):
+    sig = inspect.signature(deploy_v2)
+    assert list(sig.parameters) == [
+        "service",
+        "deploy_type",
+        "version_ref",
+        "iac_ref",
+        "options",
+        "deps",
+    ]
+    assert not hasattr(dv2, "_resolve_options_and_deps")
+
+    for bad_kw in (
+        {"wait": False},
+        {"client": object()},
+        {"domain": "zitian.party"},
+        {"force_promote": True},
+        {"iac_runner_url": "https://iac.example"},
+    ):
+        with pytest.raises(TypeError, match="unexpected keyword argument"):
+            deploy_v2("finance_report/app", "staging", "v1.2.3", **bad_kw)
+
+    res = deploy_v2(
+        "finance_report/app",
+        "prod",
+        "v1.2.3",
+        iac_ref="v1.0.0",
+        options=DeployOptions(
+            staging_validated=True,
+            code_reviewed=True,
+            force_promote=True,
+            wait=False,
+        ),
+        deps=DeployDeps(client=object(), domain="zitian.party"),
+    )
+    assert calls["fixed"]["force_promote"] is True
+    assert calls["fixed"]["wait"] is False
+    assert res.detail["force_promote"] is True
 
 
 # --- app-stack secret supply through the runner before a Dokploy promote (#649) --------
@@ -1797,8 +1887,12 @@ def test_fixed_app_deploy_runs_the_secret_supply_through_the_runner_first(
     result = _deploy(
         deploy_type="staging",
         version_ref="v1.2.3",
-        iac_runner_url="https://iac.example",
-        iac_webhook_secret="s",
+        deps=DeployDeps(
+            client=object(),
+            domain="zitian.party",
+            iac_runner_url="https://iac.example",
+            iac_webhook_secret="s",
+        ),
     )
     kinds = [k for k, _ in order]
     assert kinds == ["trigger", "poll", "fixed"]
@@ -1816,8 +1910,12 @@ def test_fixed_app_deploy_fails_closed_when_the_supply_fails(calls, monkeypatch)
         _deploy(
             deploy_type="staging",
             version_ref="v1.2.3",
-            iac_runner_url="https://iac.example",
-            iac_webhook_secret="s",
+            deps=DeployDeps(
+                client=object(),
+                domain="zitian.party",
+                iac_runner_url="https://iac.example",
+                iac_webhook_secret="s",
+            ),
         )
     assert calls["fixed"] is None  # never promoted
 
@@ -1888,28 +1986,35 @@ def _run_runner_site(site, env_type):
             service="platform/redis",
             deploy_type=env_type,
             version_ref="",
-            code_reviewed=True,
+            options=DeployOptions(code_reviewed=True),
         )
     if site == "secret-supply":
         return _deploy(
             deploy_type=env_type,
             version_ref="v1.2.3",
-            iac_runner_url="https://iac.example",
-            iac_webhook_secret="s",
-            staging_validated=prod,
-            code_reviewed=True,
+            options=DeployOptions(staging_validated=prod, code_reviewed=True),
+            deps=DeployDeps(
+                client=object(),
+                domain="zitian.party",
+                iac_runner_url="https://iac.example",
+                iac_webhook_secret="s",
+            ),
         )
     assert site == "batch"
     return dv2._deploy_platform_batch(
         ["platform/redis", "platform/alerting"],
         env_type,
         "v0.0.0",
-        runner_url="https://iac.example",
-        secret="s",
-        triggered_by="deploy_v2",
-        code_reviewed=True,
-        wait=True,
-        timeout=120,
+        options=DeployOptions(
+            triggered_by="deploy_v2",
+            code_reviewed=True,
+            wait=True,
+            timeout=120,
+        ),
+        deps=DeployDeps(
+            iac_runner_url="https://iac.example",
+            iac_webhook_secret="s",
+        ),
     )
 
 
@@ -2215,10 +2320,8 @@ def test_preview_and_promote_derive_repo_when_repo_is_none(monkeypatch):
             "pr",
             "999",
             code=SHA_CODE,
-            service="truealpha/app",
-            domain="zitian.party",
-            client=object(),
-            repo=None,
+            options=PreviewOptions(service="truealpha/app"),
+            deps=PreviewDeps(client=object(), domain="zitian.party", repo=None),
         )
     assert seen_repos[-1] == "https://github.com/wangzitian0/truealpha.git"
 
