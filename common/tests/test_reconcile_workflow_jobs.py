@@ -477,32 +477,31 @@ def test_show_stage_card_receives_reports_feishu_env() -> None:
         assert effective_env.get(key) == f"${{{{ secrets.{key} }}}}"
 
 
+_EXPECTED_SYNC_TOKEN_EXPR = (
+    "${{ (github.event_name == 'schedule' || inputs.sync_app_releases) "
+    "&& secrets.INFRA2_RELEASE_BOT_TOKEN || github.token }}"
+)
+
+
 def _sync_token_violations(workflow: dict) -> list[str]:
     """Verify the sync-app-releases path uses INFRA2_RELEASE_BOT_TOKEN for push & PR (#1791)."""
     found: list[str] = []
     op = workflow["jobs"]["operation"]
     checkout = next(s for s in op["steps"] if s.get("name") == "Checkout")
-    token = str((checkout.get("with") or {}).get("token") or "")
-    for required in (
-        "secrets.INFRA2_RELEASE_BOT_TOKEN",
-        "github.event_name == 'schedule'",
-        "inputs.sync_app_releases",
-        "|| github.token",
-    ):
-        if required not in token:
-            found.append(f"operation Checkout token missing {required!r}")
+    if (checkout.get("with") or {}).get("token") != _EXPECTED_SYNC_TOKEN_EXPR:
+        found.append(
+            "operation Checkout token must select INFRA2_RELEASE_BOT_TOKEN on sync runs"
+        )
 
     phase = next(s for s in op["steps"] if s.get("name") == "Operation phase")
-    if (phase.get("env") or {}).get(
-        "SYNC_PR_TOKEN"
-    ) != "${{ secrets.INFRA2_RELEASE_BOT_TOKEN }}":
+    if (phase.get("env") or {}).get("SYNC_PR_TOKEN") != _EXPECTED_SYNC_TOKEN_EXPR:
         found.append(
-            "Operation phase env SYNC_PR_TOKEN must read INFRA2_RELEASE_BOT_TOKEN"
+            "Operation phase env SYNC_PR_TOKEN must select INFRA2_RELEASE_BOT_TOKEN on sync runs"
         )
     run_script = str(phase.get("run") or "")
     expected_call = (
-        'GITHUB_TOKEN="${SYNC_PR_TOKEN:-$GITHUB_TOKEN}" '
-        'GH_TOKEN="${SYNC_PR_TOKEN:-$GITHUB_TOKEN}" '
+        'GITHUB_TOKEN="$SYNC_PR_TOKEN" '
+        'GH_TOKEN="$SYNC_PR_TOKEN" '
         'python -m tools.reconcile_iac_inputs "${sync_args[@]}"'
     )
     if expected_call not in run_script:
@@ -525,3 +524,12 @@ def test_sync_app_releases_uses_bot_token_for_checkout_and_pr_creation() -> None
         ["jobs", "operation", "steps", 3, "env", "SYNC_PR_TOKEN"], None
     )
     assert _sync_token_violations(no_sync_env)
+
+    phase_run = str(_load()["jobs"]["operation"]["steps"][3]["run"])
+    unwrapped_sync_run = _mutate(
+        ["jobs", "operation", "steps", 3, "run"],
+        phase_run.replace(
+            'GITHUB_TOKEN="$SYNC_PR_TOKEN" GH_TOKEN="$SYNC_PR_TOKEN" ', ""
+        ),
+    )
+    assert _sync_token_violations(unwrapped_sync_run)

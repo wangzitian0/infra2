@@ -204,7 +204,7 @@ jobs:
 
       - name: Operation phase
         env:
-          SYNC_PR_TOKEN: ${{ secrets.INFRA2_RELEASE_BOT_TOKEN }}
+          SYNC_PR_TOKEN: ${{ (github.event_name == 'schedule' || inputs.sync_app_releases) && secrets.INFRA2_RELEASE_BOT_TOKEN || github.token }}
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
           INPUT_BEFORE: ${{ inputs.before || '' }}
@@ -365,7 +365,7 @@ jobs:
             else
               sync_args+=(--create-pr)
             fi
-            GITHUB_TOKEN="${SYNC_PR_TOKEN:-$GITHUB_TOKEN}" GH_TOKEN="${SYNC_PR_TOKEN:-$GITHUB_TOKEN}" python -m tools.reconcile_iac_inputs "${sync_args[@]}"
+            GITHUB_TOKEN="$SYNC_PR_TOKEN" GH_TOKEN="$SYNC_PR_TOKEN" python -m tools.reconcile_iac_inputs "${sync_args[@]}"
             # A sync only opens or updates the sync PR. The staging train is the tag push
             # that follows its merge; a sync on main never deploys main (#1628).
             exit 0
