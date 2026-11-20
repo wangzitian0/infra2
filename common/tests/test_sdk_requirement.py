@@ -37,7 +37,6 @@ WHEEL = re.compile(r"infra2[-_]sdk/releases/download/v\d|infra2_sdk-\d+\.\d+\.\d
 IMAGES = {
     "bootstrap/06.iac_runner/Dockerfile",
     "platform/12.alerting/Dockerfile",
-    "platform/30.todo/Dockerfile",
 }
 
 

@@ -2584,7 +2584,7 @@ def test_local_service_hook_manifests_discovery_and_execution(monkeypatch) -> No
 
     monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
 
-    plan = build_plan(["platform/30.todo/app.py"])
+    plan = build_plan(["platform/30.todo/compose.yaml"])
     applied = [
         reconcile.DeployCommand(
             service="platform/todo", deploy_type="staging", argv=["true"]
@@ -3484,7 +3484,7 @@ def test_run_post_deploy_app_hooks_records_failed_entry_on_missing_required_hook
 
     monkeypatch.setattr(reconcile, "execute_app_hook_slot", _fake_exec)
 
-    plan = build_plan(["platform/30.todo/app.py"])
+    plan = build_plan(["platform/30.todo/compose.yaml"])
     applied = [
         reconcile.DeployCommand(
             service="platform/todo", deploy_type="staging", argv=["true"]
@@ -4463,7 +4463,7 @@ def test_run_post_deploy_app_hooks_executes_services_concurrently_and_stops_slot
     monkeypatch.setattr(reconcile, "execute_app_hook_slot", _concurrent_exec)
 
     plan = build_plan(
-        ["platform/30.todo/app.py", "harness/repos.yaml"],
+        ["platform/30.todo/compose.yaml", "harness/repos.yaml"],
         repo_root=tmp_path,
         app_release_tags={
             "finance_report/app": "v0.2.61",

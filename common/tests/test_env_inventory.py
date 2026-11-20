@@ -751,7 +751,7 @@ def test_a_line_of_plain_assignments_is_not_an_inline_environment(inv):
 @pytest.mark.parametrize(
     "path,layer,expected",
     [
-        ("platform/30.todo/app.py", "python", "fx:platform/30.todo"),
+        ("platform/30.todo/probe_health.py", "python", "fx:platform/30.todo"),
         ("platform/30.todo/compose.yaml", "compose", "fx:platform/30.todo"),
         (
             "bootstrap/06.iac_runner/sync_runner.py",

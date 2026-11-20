@@ -93,9 +93,9 @@ services:
       - truealpha/truealpha/observability/dashboard.json
 
   platform/todo:
+    # The image comes prebuilt from infra2-sdk (infra2-sdk#247): the pin in compose.yaml is the
+    # only SDK input, and the compose file is hashed already.
     depends_on:
-      - uv.lock
-      - tools/sdk_requirement.py
       # The Preview compose builds the slot's own S3 from this Dockerfile (#1647).
       - platform/03.s3/Dockerfile
 

@@ -31,8 +31,8 @@ dependencies = [
 ]
 
 [dependency-groups]
-# Default group for `uv sync` and `uv run`. common/tests/test_todo_logging_order.py needs the
-# real OpenTelemetry packages. Same specifiers as the platform/30.todo/Dockerfile (#1213).
+# Default group for `uv sync` and `uv run`: the real OpenTelemetry packages for tests that load
+# a platform app (#1213).
 dev = [
     "opentelemetry-sdk>=1.24,<2",
     "opentelemetry-exporter-otlp-proto-http>=1.24,<2",

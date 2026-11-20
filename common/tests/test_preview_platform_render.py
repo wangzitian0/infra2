@@ -175,8 +175,8 @@ def test_preview_todo_service_repeats_the_staging_compose_fields():
     # The preview compose is a copy. Every repeated field must stay equal to compose.yaml.
     prod = _services("platform/30.todo/compose.yaml")["todo"]
     slot = _services("platform/30.todo/preview.compose.yaml")["todo"]
+    assert "build" not in prod and "build" not in slot
     for field in (
-        "build",
         "image",
         "container_name",
         "mem_limit",

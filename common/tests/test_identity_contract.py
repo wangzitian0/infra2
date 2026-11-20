@@ -317,7 +317,7 @@ def test_read_env_vars_finds_the_forms_it_claims_to_find() -> None:
     assert _read_env_vars(source) == {"A", "B", "C"}
 
 
-def test_only_the_todo_page_reads_the_commit_from_the_environment() -> None:
+def test_no_infra2_python_reads_the_commit_from_the_environment() -> None:
     readers = sorted(
         path.relative_to(ROOT).as_posix()
         for path in _non_test_python()
@@ -328,7 +328,9 @@ def test_only_the_todo_page_reads_the_commit_from_the_environment() -> None:
     documented = [
         tick for tick in _ticks(platform_row["Reader"]) if tick.endswith(".py")
     ]
-    assert documented == ["platform/30.todo/app.py"]
+    # The page that shows the commit lives in infra2-sdk (#247); infra2 reads it back in the gate.
+    assert documented == ["platform/30.todo/probe_health.py"]
+    assert "infra2-sdk, canary/todo/app.py" in platform_row["Reader"]
 
 
 def test_contract_code_anchors_exist() -> None:
@@ -453,7 +455,6 @@ def test_scanner_finds_the_infra2_sdk_imports_of_the_tree() -> None:
     found = scan(names=frozenset(), modules=frozenset({"infra2_sdk"}))
     assert {
         "platform/12.alerting/app.py",
-        "platform/30.todo/app.py",
         "common/deploy/v2.py",
         "common/deploy/preview.py",
     } <= set(found)
