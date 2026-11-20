@@ -561,7 +561,10 @@ def test_logs_query_exact_contract() -> None:
     )
 
 
-@pytest.mark.parametrize("builder", ["traces_query", "logs_query"])
+@pytest.mark.parametrize(
+    "builder",
+    ["traces_query", "logs_query", "gen_ai_spans_query", "gen_ai_metrics_query"],
+)
 @pytest.mark.parametrize(
     "bad_value", ["x' OR 1=1 --", "a b", "", "prod;DROP", "a\\b", "x'"]
 )
@@ -573,7 +576,10 @@ def test_query_builders_reject_unsafe_values(builder: str, bad_value: str) -> No
         build(service_name=bad_value, environment="staging", window_seconds=60)
 
 
-@pytest.mark.parametrize("builder", ["traces_query", "logs_query"])
+@pytest.mark.parametrize(
+    "builder",
+    ["traces_query", "logs_query", "gen_ai_spans_query", "gen_ai_metrics_query"],
+)
 @pytest.mark.parametrize("bad_window", [0, -1, True, 1.5, "60"])
 def test_query_builders_reject_bad_window(builder: str, bad_window: object) -> None:
     build = getattr(signoz_queries, builder)
@@ -1121,3 +1127,155 @@ def test_missing_or_zero_container_started_at_fails_closed() -> None:
         )
         assert report.monitoring.ok is False
         assert report.all_ok is False
+
+
+def test_gen_ai_queries_exact_contract() -> None:
+    spans_sql = signoz_queries.gen_ai_spans_query(
+        service_name="platform-todo", environment="staging", window_seconds=1800
+    )
+    assert "signoz_traces.distributed_signoz_index_v3" in spans_sql
+    assert "serviceName = 'platform-todo'" in spans_sql
+    assert "resources_string['deployment.environment.name'] = 'staging'" in spans_sql
+    assert "INTERVAL 1800 SECOND" in spans_sql
+    assert "attributes_string['infra.llm.call_site'] = 'todo.summary'" in spans_sql
+    assert "attributes_number, 'operation.cost'" in spans_sql
+    assert "stringTagMap" not in spans_sql
+
+    metrics_sql = signoz_queries.gen_ai_metrics_query(
+        service_name="platform-todo", environment="staging", window_seconds=1800
+    )
+    assert "signoz_metrics.distributed_samples_v4" in metrics_sql
+    assert "signoz_metrics.distributed_time_series_v4" in metrics_sql
+    assert "3600000" in metrics_sql
+    assert "resource_attrs['service.name'] = 'platform-todo'" in metrics_sql
+    assert "resource_attrs['deployment.environment.name'] = 'staging'" in metrics_sql
+    assert "gen_ai.client.token.usage" in metrics_sql
+    assert "gen_ai.client.operation.duration" in metrics_sql
+    assert "INTERVAL 1800 SECOND" in metrics_sql
+
+
+def _with_llm_sections(
+    base_stdout: str,
+    *,
+    non_stream: dict[str, object],
+    stream: dict[str, object] | None = None,
+    spans_row: str = "1\t1\t2\t0\t1",
+    metrics_row: str = "2\t2",
+) -> str:
+    stream_doc = stream if stream is not None else non_stream
+    return (
+        base_stdout
+        + "=== LLM_SUMMARY ===\n"
+        + json.dumps(non_stream)
+        + "\n"
+        + "=== LLM_SUMMARY_STREAM ===\n"
+        + json.dumps(stream_doc)
+        + "\n"
+        + "=== GEN_AI_SPANS ===\n"
+        + f"{spans_row}\n"
+        + "=== GEN_AI_METRICS ===\n"
+        + f"{metrics_row}\n"
+    )
+
+
+def test_llm_pillar_unconfigured_and_require_llm_flag() -> None:
+    base = _canned_stdout(
+        traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
+        logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
+        environment="staging",
+    )
+    stdout = _with_llm_sections(
+        base, non_stream={"status": "unconfigured", "detail": "Missing LLM_API_KEY"}
+    )
+    with patch(
+        "tools.canary_verify._probe_public_summary_sso", return_value=(True, 302)
+    ):
+        report_soft, _ = _verify_with_canned_ssh(
+            "staging",
+            stdout,
+            expected_sdk=_resolve_locked_sdk_version(environment="staging"),
+            require_llm=False,
+        )
+        assert report_soft.llm.ok is True
+        assert report_soft.all_ok is True
+        assert "unconfigured" in report_soft.llm.summary
+
+        report_strict, _ = _verify_with_canned_ssh(
+            "staging",
+            stdout,
+            expected_sdk=_resolve_locked_sdk_version(environment="staging"),
+            require_llm=True,
+        )
+        assert report_strict.llm.ok is False
+        assert report_strict.all_ok is False
+        assert "--require-llm" in report_strict.llm.summary
+
+
+def test_llm_pillar_happy_path_and_failure_gates() -> None:
+    base = _canned_stdout(
+        traces=f"500\t{_relative_ts(60, now=FIXED_NOW)}",
+        logs=f"100\t{_relative_ts(120, now=FIXED_NOW)}",
+        environment="staging",
+    )
+    locked = _resolve_locked_sdk_version(environment="staging")
+    pass_body = {"status": "pass", "input_tokens": 120, "output_tokens": 35}
+
+    with patch(
+        "tools.canary_verify._probe_public_summary_sso", return_value=(True, 302)
+    ):
+        report_ok, cmds = _verify_with_canned_ssh(
+            "staging",
+            _with_llm_sections(base, non_stream=pass_body),
+            expected_sdk=locked,
+            require_llm=True,
+        )
+        assert len(cmds) == 1
+        assert report_ok.llm.ok is True
+        assert report_ok.all_ok is True
+
+        # Reject content leak on span.
+        report_leak, _ = _verify_with_canned_ssh(
+            "staging",
+            _with_llm_sections(base, non_stream=pass_body, spans_row="1\t1\t2\t1\t1"),
+            expected_sdk=locked,
+            require_llm=True,
+        )
+        assert report_leak.llm.ok is False
+        assert "privacy leak" in report_leak.llm.summary
+
+        # Reject missing stream usage tokens (stream_options compatibility regression).
+        report_stream, _ = _verify_with_canned_ssh(
+            "staging",
+            _with_llm_sections(
+                base,
+                non_stream=pass_body,
+                stream={"status": "pass", "input_tokens": 0, "output_tokens": 0},
+            ),
+            expected_sdk=locked,
+            require_llm=True,
+        )
+        assert report_stream.llm.ok is False
+        assert "stream usage tokens" in report_stream.llm.summary
+
+        # Reject missing GenAI metrics in SigNoz.
+        report_metrics, _ = _verify_with_canned_ssh(
+            "staging",
+            _with_llm_sections(base, non_stream=pass_body, metrics_row="0\t0"),
+            expected_sdk=locked,
+            require_llm=True,
+        )
+        assert report_metrics.llm.ok is False
+        assert "GenAI metrics missing" in report_metrics.llm.summary
+
+    # Reject unprotected public POST /api/todos/summary (HTTP 200 without SSO).
+    with patch(
+        "tools.canary_verify._probe_public_summary_sso", return_value=(False, 200)
+    ):
+        report_sso, _ = _verify_with_canned_ssh(
+            "staging",
+            _with_llm_sections(base, non_stream=pass_body),
+            expected_sdk=locked,
+            require_llm=True,
+        )
+        assert report_sso.llm.ok is False
+        assert "unprotected" in report_sso.llm.summary

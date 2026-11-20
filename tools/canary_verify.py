@@ -25,6 +25,7 @@ is older than the window and an ok run is inside it. A ledger without the times
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import shlex
 import subprocess
@@ -39,6 +40,8 @@ from common.deploy.vps_ssh import resolve_ssh_credentials as _resolve_ssh_creden
 from common.deploy.vps_ssh import ssh_cmd as _ssh_cmd
 from common.observability.signoz_queries import (
     DEFAULT_WINDOW_SECONDS,
+    gen_ai_metrics_query,
+    gen_ai_spans_query,
     logs_query,
     traces_query,
 )
@@ -46,11 +49,17 @@ from common.observability.signoz_queries import (
 TELEMETRY_SERVICE_NAME = "platform-todo"
 # The bridge /health status that means healthy. The SDK report says "healthy" (#1209).
 BRIDGE_HEALTHY_STATUSES = frozenset({"healthy"})
+SSO_PROTECTED_STATUSES = frozenset({301, 302, 303, 307, 308, 401, 403})
 # A timestamp may run ahead of the local clock by this much before it counts as skew.
 CLOCK_SKEW_TOLERANCE_SECONDS = 60
 # Startup grace after container State.StartedAt to absorb deploy restart probe ticks (#1720;
 # covers integer-second epoch truncation plus compose.yaml start_period=10s).
 RESTART_GRACE_SECONDS = 15
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
 @dataclass
@@ -71,6 +80,177 @@ class CanaryRealityReport:
     installed_sdk: str
     expected_sdk: str = ""
     sdk: PillarResult = field(default_factory=lambda: PillarResult(ok=True, summary=""))
+    llm: PillarResult = field(default_factory=lambda: PillarResult(ok=True, summary=""))
+
+
+def _probe_public_summary_sso(
+    domain: str, timeout: float = 5.0
+) -> tuple[bool, int | str]:
+    """Verify unauthenticated POST /api/todos/summary stays protected by SSO."""
+    opener = urllib.request.build_opener(_NoRedirectHandler())
+    req = urllib.request.Request(
+        f"https://{domain}/api/todos/summary",
+        data=b"{}",
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "tools.canary_verify/1.0",
+        },
+    )
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            code = int(resp.status)
+            return code in SSO_PROTECTED_STATUSES, code
+    except urllib.error.HTTPError as err:
+        return err.code in SSO_PROTECTED_STATUSES, int(err.code)
+    except Exception as err:
+        return False, str(err)
+
+
+def _parse_int_tuple(raw: str, expected_len: int) -> list[int]:
+    parts = (
+        [p.strip() for p in raw.strip().splitlines()[-1].split("\t")]
+        if raw.strip()
+        else []
+    )
+    out: list[int] = []
+    for idx in range(expected_len):
+        val = parts[idx] if idx < len(parts) else "0"
+        out.append(int(val) if val.isdigit() else 0)
+    return out
+
+
+def _evaluate_llm_pillar(
+    *,
+    sections: dict[str, str],
+    domain: str,
+    require_llm: bool,
+) -> PillarResult:
+    if "LLM_SUMMARY" not in sections:
+        if require_llm:
+            return PillarResult(
+                ok=False,
+                summary="LLM summary section missing from verification output",
+            )
+        return PillarResult(ok=True, summary="LLM summary not sampled")
+
+    sso_ok, sso_detail = _probe_public_summary_sso(domain)
+
+    def _load_json(name: str) -> dict[str, Any]:
+        raw = sections.get(name, "").strip()
+        try:
+            parsed = json.loads(raw) if raw else {}
+        except ValueError:
+            return {"raw": raw, "error": "invalid JSON"}
+        return (
+            parsed
+            if isinstance(parsed, dict)
+            else {"raw": raw, "error": "non-object JSON"}
+        )
+
+    non_stream = _load_json("LLM_SUMMARY")
+    stream_data = _load_json("LLM_SUMMARY_STREAM")
+    invoke_cnt, chat_cnt, aligned_cnt, leak_cnt, cost_cnt = _parse_int_tuple(
+        sections.get("GEN_AI_SPANS", ""), 5
+    )
+    tok_series, dur_series = _parse_int_tuple(sections.get("GEN_AI_METRICS", ""), 2)
+    details: dict[str, Any] = {
+        "sso_ok": sso_ok,
+        "sso_status": sso_detail,
+        "non_stream": non_stream,
+        "stream": stream_data,
+        "spans": {
+            "invoke_agent": invoke_cnt,
+            "chat": chat_cnt,
+            "aligned_attrs": aligned_cnt,
+            "content_leaks": leak_cnt,
+            "cost_spans": cost_cnt,
+        },
+        "metrics": {
+            "token_usage_series": tok_series,
+            "duration_series": dur_series,
+        },
+    }
+    if not sso_ok:
+        return PillarResult(
+            ok=False,
+            summary=f"Public /api/todos/summary unprotected (status={sso_detail})",
+            details=details,
+        )
+
+    status = non_stream.get("status")
+    if status == "unconfigured":
+        if require_llm:
+            return PillarResult(
+                ok=False,
+                summary="LLM summary unconfigured (--require-llm set)",
+                details=details,
+            )
+        return PillarResult(
+            ok=True,
+            summary="LLM summary unconfigured (SSO protected)",
+            details=details,
+        )
+
+    if status != "pass":
+        return PillarResult(
+            ok=False,
+            summary=f"LLM summary failed: status={status!r}, detail={non_stream.get('detail') or non_stream.get('error') or 'unknown'}",
+            details=details,
+        )
+
+    problems: list[str] = []
+    if stream_data.get("status") != "pass":
+        problems.append(f"stream status={stream_data.get('status')!r}")
+    if (
+        int(stream_data.get("input_tokens", 0) or 0) <= 0
+        or int(stream_data.get("output_tokens", 0) or 0) <= 0
+    ):
+        problems.append("stream usage tokens missing/zero")
+    if invoke_cnt < 1 or chat_cnt < 1:
+        problems.append(f"GenAI spans missing (invoke={invoke_cnt}, chat={chat_cnt})")
+    if aligned_cnt < 1:
+        problems.append("GenAI aligned dotted attributes missing")
+    if leak_cnt > 0:
+        problems.append(f"GenAI span privacy leak detected (leaks={leak_cnt})")
+    if cost_cnt < 1:
+        problems.append("operation.cost missing on GenAI spans")
+    if tok_series < 1 or dur_series < 1:
+        problems.append(
+            f"GenAI metrics missing in SigNoz (token={tok_series}, duration={dur_series})"
+        )
+
+    if problems:
+        return PillarResult(ok=False, summary="; ".join(problems), details=details)
+    return PillarResult(
+        ok=True,
+        summary=(
+            f"LLM summary passed (stream ok, spans={chat_cnt}, "
+            f"cost_spans={cost_cnt}, metrics ok, SSO protected)"
+        ),
+        details=details,
+    )
+
+
+def _summary_probe_command(container: str, *, stream: bool) -> str:
+    payload_b64 = base64.b64encode(
+        json.dumps({"limit": 5, "stream": stream}).encode("ascii")
+    ).decode("ascii")
+    script = (
+        "import base64, json, urllib.error, urllib.request\n"
+        f"req = urllib.request.Request('http://localhost:8000/api/todos/summary', data=base64.b64decode('{payload_b64}'), headers={{'Content-Type': 'application/json'}})\n"
+        "try:\n"
+        "    print(urllib.request.urlopen(req, timeout=65).read().decode())\n"
+        "except urllib.error.HTTPError as err:\n"
+        "    print(json.dumps({'status': 'error', 'http_status': err.code, 'detail': err.read().decode(errors='replace')[:300]}))\n"
+        "except Exception as err:\n"
+        "    print(json.dumps({'status': 'error', 'detail': str(err)}))\n"
+    )
+    script_b64 = base64.b64encode(script.encode("utf-8")).decode("ascii")
+    return (
+        f"docker exec {container} python3 -c "
+        f"\"import base64; exec(base64.b64decode('{script_b64}').decode())\""
+    )
 
 
 def _parse_sdk_version_from_lock_text(lock_text: str) -> str:
@@ -373,6 +553,7 @@ def verify_canary(
     max_age_seconds: int = DEFAULT_WINDOW_SECONDS,
     now: datetime | None = None,
     repo_root: Path | None = None,
+    require_llm: bool = False,
 ) -> CanaryRealityReport:
     if expected_sdk is None:
         expected_sdk = _resolve_locked_sdk_version(
@@ -404,6 +585,20 @@ def verify_canary(
             window_seconds=max_age_seconds,
         )
     )
+    gen_ai_spans_sql = shlex.quote(
+        gen_ai_spans_query(
+            service_name=TELEMETRY_SERVICE_NAME,
+            environment=environment,
+            window_seconds=max_age_seconds,
+        )
+    )
+    gen_ai_metrics_sql = shlex.quote(
+        gen_ai_metrics_query(
+            service_name=TELEMETRY_SERVICE_NAME,
+            environment=environment,
+            window_seconds=max_age_seconds,
+        )
+    )
 
     # 1. Public Health Check
     health_ok = False
@@ -421,6 +616,8 @@ def verify_canary(
         health_data = {"error": str(err)}
 
     # 2. In-container Canary Status & Installed SDK via SSH
+    llm_non_stream_cmd = _summary_probe_command(container, stream=False)
+    llm_stream_cmd = _summary_probe_command(container, stream=True)
     remote_script = (
         f'echo "=== STATUS ===" && '
         f"docker exec {container} python3 -c \"import urllib.request, json; print(json.dumps(json.loads(urllib.request.urlopen('http://localhost:8000/api/canary/status').read())))\" && "
@@ -435,7 +632,22 @@ def verify_canary(
         f'echo "=== CONTAINER_STARTED_AT ===" && '
         f"docker inspect -f '{{{{.State.StartedAt}}}}' {container} && "
         f'echo "=== ALERT_BRIDGE ===" && '
-        f"docker exec {bridge_container} python3 -c \"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/health').read().decode())\""
+        f"docker exec {bridge_container} python3 -c \"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/health').read().decode())\" && "
+        f'echo "=== LLM_SUMMARY ===" && '
+        f"llm_out=$({llm_non_stream_cmd}) && "
+        f'printf "%s\\n" "$llm_out" && '
+        f'echo "=== LLM_SUMMARY_STREAM ===" && '
+        f"{llm_stream_cmd} && "
+        f'echo "=== GEN_AI_SPANS ===" && '
+        f"gen_ai_spans_out=$(docker exec platform-clickhouse clickhouse-client --query {gen_ai_spans_sql}) && "
+        f'case "$llm_out" in *\'"status":"pass"\'*|*\'"status": "pass"\'*) '
+        f'for _i in 1 2 3 4 5; do set -- $gen_ai_spans_out; [ "${{1:-0}}" -ge 1 ] 2>/dev/null && [ "${{2:-0}}" -ge 1 ] 2>/dev/null && break; sleep 2; gen_ai_spans_out=$(docker exec platform-clickhouse clickhouse-client --query {gen_ai_spans_sql}); done ;; esac && '
+        f'printf "%s\\n" "$gen_ai_spans_out" && '
+        f'echo "=== GEN_AI_METRICS ===" && '
+        f"gen_ai_metrics_out=$(docker exec platform-clickhouse clickhouse-client --query {gen_ai_metrics_sql}) && "
+        f'case "$llm_out" in *\'"status":"pass"\'*|*\'"status": "pass"\'*) '
+        f'for _i in 1 2 3 4 5 6 7 8 9 10 11 12 13; do set -- $gen_ai_metrics_out; [ "${{1:-0}}" -ge 1 ] 2>/dev/null && [ "${{2:-0}}" -ge 1 ] 2>/dev/null && break; sleep 5; gen_ai_metrics_out=$(docker exec platform-clickhouse clickhouse-client --query {gen_ai_metrics_sql}); done ;; esac && '
+        f'printf "%s\\n" "$gen_ai_metrics_out"'
     )
 
     code, stdout, stderr = _ssh_cmd(remote_script, host, user, key_path, port)
@@ -451,6 +663,7 @@ def verify_canary(
             installed_sdk="unknown",
             expected_sdk=expected_sdk or "",
             sdk=fail,
+            llm=fail,
         )
 
     sections: dict[str, str] = {}
@@ -564,12 +777,19 @@ def verify_canary(
         details={"installed_sdk": installed_sdk, "expected_sdk": expected_sdk},
     )
 
+    llm_pillar = _evaluate_llm_pillar(
+        sections=sections,
+        domain=domain,
+        require_llm=require_llm,
+    )
+
     all_ok = (
         tracking_pillar.ok
         and logs_pillar.ok
         and monitoring_pillar.ok
         and alerts_pillar.ok
         and sdk_pillar.ok
+        and llm_pillar.ok
     )
 
     return CanaryRealityReport(
@@ -582,6 +802,7 @@ def verify_canary(
         installed_sdk=installed_sdk,
         expected_sdk=expected_sdk or "",
         sdk=sdk_pillar,
+        llm=llm_pillar,
     )
 
 
@@ -619,6 +840,11 @@ def main(argv: list[str] | None = None) -> int:
             f"seconds (default: {DEFAULT_WINDOW_SECONDS})"
         ),
     )
+    parser.add_argument(
+        "--require-llm",
+        action="store_true",
+        help="Fail verification if LLM summary is unconfigured or unverified",
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
 
@@ -627,6 +853,7 @@ def main(argv: list[str] | None = None) -> int:
         expected_sdk=args.expected_sdk,
         check_sdk=not args.skip_sdk_check,
         max_age_seconds=args.max_age_seconds,
+        require_llm=args.require_llm,
     )
 
     if args.json:
@@ -651,6 +878,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(
             f"5. Alerts:      {'[OK]' if report.alerts.ok else '[FAIL]'} {report.alerts.summary}"
+        )
+        print(
+            f"6. LLM:         {'[OK]' if report.llm.ok else '[FAIL]'} {report.llm.summary}"
         )
 
     return 0 if report.all_ok else 1

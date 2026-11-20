@@ -32,6 +32,7 @@ import threading
 import urllib.parse
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
@@ -53,7 +54,17 @@ from infra2_sdk.runtime.health import (
     ProbeResult,
     run_probes,
 )
-from pydantic import BaseModel, StrictBool, StrictStr
+from infra2_sdk.runtime.llm import (
+    DecodingSpec,
+    LlmSettings,
+    create_llm_agent,
+    llm_call_context,
+    prompt_sha256,
+    redact_llm_error,
+    request_sha256,
+    schema_sha256,
+)
+from pydantic import BaseModel, Field, StrictBool, StrictStr
 
 LOGGER = logging.getLogger("platform-todo")
 SERVICE_TRACER_NAME = "platform-todo"
@@ -194,13 +205,24 @@ def _ensure_todos_schema(conn: Any) -> None:
     )
 
 
-def _list_todos_db() -> List[Dict[str, Any]]:
+def _list_todos_db(limit: int | None = None) -> List[Dict[str, Any]]:
     with _connect_todo_db() as conn:
         _ensure_todos_schema(conn)
-        rows = conn.execute(
-            "SELECT id, title, completed, capability, created_at FROM todos ORDER BY id ASC"
-        ).fetchall()
+        if limit is None:
+            rows = conn.execute(
+                "SELECT id, title, completed, capability, created_at FROM todos ORDER BY id ASC"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, title, completed, capability, created_at FROM todos ORDER BY id DESC LIMIT %s",
+                (limit,),
+            ).fetchall()
         return [_row_to_todo(r) for r in rows]
+
+
+def _recent_todos_db(limit: int = 20) -> List[Dict[str, Any]]:
+    bounded = max(1, min(int(limit), 50))
+    return _list_todos_db(limit=bounded)[:bounded]
 
 
 def _create_todo_db(title: str, completed: bool, capability: str) -> Dict[str, Any]:
@@ -334,6 +356,31 @@ class AuthMeResponse(BaseModel):
     groups: List[str]
 
 
+class TodoSummaryOutput(BaseModel):
+    headline: str
+    open_count: int
+    completed_count: int
+    focus: str
+
+
+class TodoSummaryRequest(BaseModel):
+    limit: int = Field(default=20, ge=1, le=50)
+    stream: StrictBool = False
+
+
+class TodoSummaryResponse(BaseModel):
+    status: str
+    summary: TodoSummaryOutput | None = None
+    todo_count: int = 0
+    model: str | None = None
+    decoding_version: str
+    prompt_sha256: str | None = None
+    request_sha256: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    detail: str = ""
+
+
 for _model in (
     TodoErrorResponse,
     TodoItem,
@@ -345,6 +392,9 @@ for _model in (
     CanaryCheckOutcome,
     CanaryStatusResponse,
     AuthMeResponse,
+    TodoSummaryOutput,
+    TodoSummaryRequest,
+    TodoSummaryResponse,
 ):
     _model.model_rebuild(_types_namespace=globals())
 
@@ -1288,6 +1338,159 @@ def fastapi_delete_todo(todo_id: int) -> Response:
             content={"ok": True, "deleted_id": todo_id, "item": removed},
         )
     return JSONResponse(status_code=404, content={"error": "Todo not found"})
+
+
+TODO_SUMMARY_CALL_SITE = "todo.summary"
+TODO_SUMMARY_DECODING = DecodingSpec(
+    "todo.summary.v1",
+    thinking=False,
+    temperature=0.0,
+    max_tokens=512,
+    timeout=20.0,
+)
+
+
+def _telemetry_providers() -> tuple[Any | None, Any | None]:
+    providers = getattr(fastapi_app.state, "telemetry_providers", None)
+    return (
+        getattr(providers, "tracer_provider", None),
+        getattr(providers, "meter_provider", None),
+    )
+
+
+async def summarize_recent_todos(
+    *,
+    limit: int = 20,
+    stream: bool = False,
+    model_override: Any | None = None,
+    todos_loader: Callable[[int], List[Dict[str, Any]]] | None = None,
+    tracer_provider: Any | None = None,
+    meter_provider: Any | None = None,
+    max_attempts: int = 3,
+    usage_limits: Any | None = None,
+) -> TodoSummaryResponse:
+    """Summarize recent persisted todos through the single SDK Agent entrypoint."""
+    settings = LlmSettings.from_mapping(os.environ)
+    if model_override is None and not (settings.api_key and settings.api_key.strip()):
+        return TodoSummaryResponse(
+            status=UNCONFIGURED,
+            decoding_version=TODO_SUMMARY_DECODING.decoding_version,
+            detail="Missing LLM_API_KEY",
+        )
+
+    bounded_limit = max(1, min(int(limit), 50))
+    items = (todos_loader or _recent_todos_db)(bounded_limit)
+    lines = [
+        f"- [{'done' if item.get('completed') else 'open'}] ({item.get('capability', 'general')}) {item.get('title', '')}"
+        for item in items
+    ]
+    prompt_text = "Recent todos:\n" + ("\n".join(lines) if lines else "(none)")
+    p_sha = prompt_sha256(prompt_text)
+    s_sha = schema_sha256(TodoSummaryOutput)
+    model_label = settings.role_model("small")
+    r_sha = request_sha256(
+        model=model_label,
+        prompt=prompt_text,
+        schema=s_sha,
+        decoding=TODO_SUMMARY_DECODING,
+    )
+
+    from pydantic_ai import UsageLimits
+
+    eff_limits = usage_limits or UsageLimits(
+        request_limit=1,
+        output_tokens_limit=1024,
+        total_tokens_limit=4096,
+        cost_limit=Decimal("0.05"),
+    )
+    default_tp, default_mp = _telemetry_providers()
+    eff_tp = tracer_provider if tracer_provider is not None else default_tp
+    eff_mp = meter_provider if meter_provider is not None else default_mp
+    agent = create_llm_agent(
+        settings,
+        role="small",
+        model=model_override,
+        call_site=TODO_SUMMARY_CALL_SITE,
+        decoding=TODO_SUMMARY_DECODING,
+        output_type=TodoSummaryOutput,
+        instructions=(
+            "Summarize recent infrastructure todo items concisely. "
+            "Report open_count, completed_count, a brief headline, and the next focus."
+        ),
+        usage_limits=eff_limits,
+        max_attempts=max_attempts,
+        tracer_provider=eff_tp,
+        meter_provider=eff_mp,
+    )
+
+    with llm_call_context(
+        call_site=TODO_SUMMARY_CALL_SITE,
+        decoding_version=TODO_SUMMARY_DECODING.decoding_version,
+        prompt_sha256=p_sha,
+    ):
+        if stream:
+            async with agent.run_stream(prompt_text) as stream_res:
+                summary_out = await stream_res.get_output()
+                usage = stream_res.usage
+        else:
+            run_res = await agent.run(prompt_text)
+            summary_out = run_res.output
+            usage = run_res.usage
+        LOGGER.info(
+            "todo summary ok: todos=%d stream=%s model=%s",
+            len(items),
+            stream,
+            model_label,
+        )
+
+    return TodoSummaryResponse(
+        status=PASS,
+        summary=summary_out,
+        todo_count=len(items),
+        model=model_label,
+        decoding_version=TODO_SUMMARY_DECODING.decoding_version,
+        prompt_sha256=p_sha,
+        request_sha256=r_sha,
+        input_tokens=int(getattr(usage, "input_tokens", 0) or 0),
+        output_tokens=int(getattr(usage, "output_tokens", 0) or 0),
+        detail=f"summarized {len(items)} todo item(s)",
+    )
+
+
+@fastapi_app.post(
+    "/api/todos/summary",
+    tags=["Todos"],
+    response_model=TodoSummaryResponse,
+    responses={
+        429: {"model": TodoErrorResponse},
+        502: {"model": TodoErrorResponse},
+        503: {"model": TodoErrorResponse},
+    },
+    operation_id="summarize_todos",
+)
+async def fastapi_summarize_todos(
+    payload: TodoSummaryRequest | None = Body(default=None),
+) -> Response:
+    req = payload or TodoSummaryRequest()
+    from pydantic_ai.exceptions import UsageLimitExceeded
+
+    try:
+        res = await summarize_recent_todos(limit=req.limit, stream=req.stream)
+    except UsageLimitExceeded as exc:
+        return JSONResponse(
+            status_code=429,
+            content={"error": "LLM usage limit exceeded", "detail": type(exc).__name__},
+        )
+    except Exception as exc:  # noqa: BLE001 - fail closed for DB outages and scrub LLM faults
+        if isinstance(exc, (_TodoStoreUnavailable, OSError)) or _is_psycopg_error(exc):
+            return _db_unavailable_response(exc)
+        scrubbed = redact_llm_error(exc)
+        LOGGER.warning("todo summary failed: %s", scrubbed)
+        return JSONResponse(
+            status_code=502,
+            content={"error": "LLM summary failed", "detail": str(scrubbed)},
+        )
+    return JSONResponse(status_code=200, content=res.model_dump(mode="json"))
 
 
 @fastapi_app.get(

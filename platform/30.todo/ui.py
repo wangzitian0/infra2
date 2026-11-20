@@ -97,7 +97,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div class="bg-slate-900/60 border border-slate-800 rounded-xl p-6 shadow-xl backdrop-blur space-y-6">
       <div class="flex justify-between items-center">
         <h2 class="text-base font-semibold text-white">基建受验待办事项 (Verified Todos)</h2>
-        <span id="todoStats" class="text-xs text-slate-400 font-mono">0 completed</span>
+        <div class="flex items-center gap-3">
+          <button type="button" onclick="summarizeTodos()" id="summaryBtn" class="px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 rounded-lg text-xs font-medium transition active:scale-95">
+            ✨ 生成 AI 摘要
+          </button>
+          <span id="todoStats" class="text-xs text-slate-400 font-mono">0 completed</span>
+        </div>
+      </div>
+
+      <div id="todoSummaryBox" class="hidden p-4 bg-slate-950/70 border border-slate-800 rounded-lg text-xs text-slate-300 space-y-1">
+        <div class="flex justify-between items-center">
+          <span class="font-semibold text-emerald-400" id="todoSummaryHeadline"></span>
+          <span class="font-mono text-slate-500" id="todoSummaryMeta"></span>
+        </div>
+        <div class="text-slate-400" id="todoSummaryFocus"></div>
       </div>
 
       <!-- Add Todo Form -->
@@ -242,6 +255,46 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       return text.replace(/[&<>"']/g, function(m) {
         return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[m];
       });
+    }
+
+    async function summarizeTodos() {
+      const btn = document.getElementById('summaryBtn');
+      const box = document.getElementById('todoSummaryBox');
+      const headline = document.getElementById('todoSummaryHeadline');
+      const meta = document.getElementById('todoSummaryMeta');
+      const focus = document.getElementById('todoSummaryFocus');
+      btn.disabled = true;
+      btn.classList.add('opacity-50');
+      try {
+        const res = await fetch('/api/todos/summary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: 20, stream: false }),
+        });
+        const data = await res.json();
+        box.classList.remove('hidden');
+        if (data.status === 'pass' && data.summary) {
+          headline.innerText = data.summary.headline;
+          meta.innerText = `${data.model || 'llm'} · ${data.input_tokens || 0}+${data.output_tokens || 0} tok`;
+          focus.innerText = `未完成 ${data.summary.open_count} / 已完成 ${data.summary.completed_count} · 下一步: ${data.summary.focus}`;
+        } else if (data.status === 'unconfigured') {
+          headline.innerText = 'AI 摘要未配置 (UNCONFIGURED)';
+          meta.innerText = data.decoding_version || '';
+          focus.innerText = data.detail || 'Missing LLM_API_KEY';
+        } else {
+          headline.innerText = 'AI 摘要失败';
+          meta.innerText = `HTTP ${res.status}`;
+          focus.innerText = data.detail || data.error || 'Unknown error';
+        }
+      } catch (err) {
+        box.classList.remove('hidden');
+        headline.innerText = 'AI 摘要请求异常';
+        meta.innerText = '';
+        focus.innerText = String(err);
+      } finally {
+        btn.disabled = false;
+        btn.classList.remove('opacity-50');
+      }
     }
 
     // Auto-run on boot

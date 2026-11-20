@@ -8,7 +8,9 @@ import calendar
 import json
 import subprocess
 import time
-from collections.abc import Sequence
+import urllib.error
+import urllib.request
+from collections.abc import Callable, Sequence
 
 from infra2_sdk.deploy import default_http_get, poll_until_healthy
 
@@ -16,6 +18,31 @@ GATE_VERDICT_WAIT_SECONDS = 90
 GATE_MAX_VERDICT_AGE_SECONDS = 180
 GATE_REQUEST_TIMEOUT_SECONDS = 10
 GATE_POLL_SECONDS = 10
+SSO_PROTECTED_STATUSES = frozenset({301, 302, 303, 307, 308, 401, 403})
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _default_summary_sso_probe(summary_url: str, timeout: float) -> int:
+    """Issue unauthenticated POST /api/todos/summary without following redirects."""
+    opener = urllib.request.build_opener(_NoRedirectHandler())
+    req = urllib.request.Request(
+        summary_url,
+        data=b"{}",
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "canary-todo-probe/1.0",
+        },
+    )
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            return int(resp.status)
+    except urllib.error.HTTPError as err:
+        return int(err.code)
 
 
 def _verdict_age_seconds(checked_at: object) -> float | None:
@@ -26,7 +53,11 @@ def _verdict_age_seconds(checked_at: object) -> float | None:
     return time.time() - stamp
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    summary_probe: Callable[[str, float], int] | None = None,
+) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "base_url",
@@ -36,6 +67,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--require-service",
         default="",
         help="Require payload['service'] to equal this value.",
+    )
+    parser.add_argument(
+        "--verify-summary-sso",
+        action="store_true",
+        help="Verify unauthenticated POST /api/todos/summary stays protected by SSO.",
     )
     parser.add_argument(
         "--gate",
@@ -77,6 +113,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise AssertionError(response.body)
     if args.require_service and payload.get("service") != args.require_service:
         raise AssertionError(response.body)
+    if args.verify_summary_sso:
+        probe = summary_probe or _default_summary_sso_probe
+        summary_url = f"{args.base_url.rstrip('/')}/api/todos/summary"
+        status_code = probe(summary_url, float(args.timeout))
+        if status_code not in SSO_PROTECTED_STATUSES:
+            raise AssertionError(
+                f"unauthenticated POST {summary_url} returned {status_code}; expected SSO redirect/deny"
+            )
     if args.gate:
         expected = subprocess.run(
             ["git", "rev-parse", f"{args.gate}^{{commit}}"],

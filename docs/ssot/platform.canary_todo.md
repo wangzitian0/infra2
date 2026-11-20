@@ -22,6 +22,11 @@
 
 ## 2. What Each Check Proves
 
+This service separates high-frequency internal infrastructure probes from low-frequency metered external capabilities:
+
+1. **60-second internal probes (`GET /api/canary/status`)**: runs six internal checks in parallel (`postgres`, `redis`, `s3` gating; `signoz`, `openpanel`, `authentik` informational). Never place live metered LLM calls inside this 60-second loop (`1,440` ticks/day).
+2. **Metered external capability (`POST /api/todos/summary`)**: summarizes recent `todos` items through **one** unified `pydantic-ai` `Agent` (`run` and `run_stream`) built by `create_llm_agent(..., call_site="todo.summary")` from `infra2_sdk.runtime.llm`. Missing `LLM_API_KEY` returns HTTP 200 with `status: "unconfigured"`. `tools/canary_verify.py` verifies live staging and audit calls at low frequency over the internal Docker network.
+
 `GET /api/canary/status` runs six checks in parallel. Each check has an 8 s deadline. A check that does not finish in time reports `fail`.
 
 Each check reports one of three states:
@@ -58,6 +63,7 @@ The document returns HTTP 200 only when every gating check passes. It returns HT
 |---------|------------------|---------|
 | `GET /api/health` | Public (Traefik router priority 100, exact path) | Container healthcheck, `staging_gate` and `prod_gate` |
 | `GET /api/canary/status` | The Docker network, and SSO users through the protected router | Probe runner (`todo-canary-status`), the dashboard |
+| `POST /api/todos/summary` | SSO users and internal Docker callers (`docker exec` via `tools/canary_verify.py`) | Manual UI trigger and low-frequency LLM verification |
 | `GET /` and the rest | SSO users only (Authentik ForwardAuth, priority 10) | People |
 
 `/api/canary/status` is not public. It shows internal host names and raw errors, and it runs real probes.
@@ -96,6 +102,8 @@ The vault-agent sidecar renders `/secrets/.env` from Vault. The app container so
 | `REDIS_PASSWORD` | `runtime`, `provided_by` | Vault `platform/<env>/redis` key `password` | None |
 | `CANARY_POSTGRES_PASSWORD` | `runtime` | Generated once into Vault `platform/<env>/todo` | None |
 | `S3_ACCESS_KEY`, `S3_SECRET_KEY` (Vault keys `CANARY_S3_ACCESS_KEY`, `CANARY_S3_SECRET_KEY`) | `human` | 1Password item `platform/<env>/todo`, copied to Vault on deploy | Create once per environment (below) |
+| `LLM_API_KEY` | `human`, `empty_ok` | 1Password item `platform/<env>/todo`, copied to Vault on deploy | `uv run invoke env.set LLM_API_KEY=<KEY> --project=platform --env=<env> --service=todo --credential-type=root_vars` |
+| `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_SMALL_MODEL` | `code`, `empty_ok` | `LlmSettings` defaults in `infra2_sdk.runtime.llm` | Optional compose override |
 
 The policy lets the canary read only `platform/<env>/todo` and `platform/<env>/redis`. It cannot read the Postgres or S3 root credentials.
 
@@ -139,9 +147,11 @@ Each run emits one `canary.run` span with one `canary.check.<name>` child span p
 ## 6. Constraints
 
 ### Do
-- Add a new platform capability as a new check in `app.py`. Prove a real write or login, not liveness.
+- Add internal infrastructure checks to `app.py` (`GET /api/canary/status`). Prove a real write or login, not liveness.
+- Put metered external capabilities on dedicated SSO-protected endpoints exercised at low frequency by `tools/canary_verify.py` (never inside the 60 s probe loop).
+- Bound LLM summary runs with `UsageLimits`, single-layer `RetryOnModelErrors` (vendor `max_retries=0`), and `redact_llm_error`.
 - Keep the probe target, the compose container name, and the app route equal. `test_probe_target_matches_the_compose_container_port_and_app_route` guards this.
-- Keep the Dockerfile installing the `infra2-sdk` wheel and its runtime extras (`fastapi,postgres,s3,http`) from `uv.lock` (`test_each_image_installs_the_locked_requirement` and `test_the_image_installs_the_sdk_otel_extra_requirements_as_plain_pins` guard this).
+- Keep the Dockerfile installing the `infra2-sdk` wheel and its runtime extras (`fastapi,postgres,s3,http,pydantic-ai`) from `uv.lock` (`test_each_image_installs_the_locked_requirement` and `test_the_image_installs_the_sdk_otel_extra_requirements_as_plain_pins` guard this).
 
 ### Do not
 - Do not route `/api/canary/status` without SSO. `test_only_the_health_path_is_served_without_sso` evaluates the real Traefik rules.

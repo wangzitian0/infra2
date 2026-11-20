@@ -27,6 +27,8 @@ ERROR_LOG_LEVELS = ("ERROR", "CRITICAL", "FATAL")
 # repository use (common/deploy/ingestion_verify.py, platform/11.signoz).
 TRACES_TABLE = "signoz_traces.distributed_signoz_index_v3"
 LOGS_TABLE = "signoz_logs.distributed_logs_v2"
+METRICS_TABLE = "signoz_metrics.distributed_time_series_v4"
+SAMPLES_TABLE = "signoz_metrics.distributed_samples_v4"
 
 _SAFE_VALUE = re.compile(r"[A-Za-z0-9._-]+")
 
@@ -192,4 +194,73 @@ def status_5xx_query(
         f"AND resources_string['{ENVIRONMENT_ATTRIBUTE}'] = {env} "
         "AND parent_span_id = '' "
         f"AND timestamp >= now() - INTERVAL {seconds} SECOND"
+    )
+
+
+def gen_ai_spans_query(
+    *,
+    service_name: str,
+    environment: str,
+    call_site: str = "todo.summary",
+    window_seconds: int = DEFAULT_WINDOW_SECONDS,
+) -> str:
+    """Build GenAI span counts, aligned attrs, privacy leak, and cost checks."""
+    service = _literal(service_name, "service_name")
+    env = _literal(environment, "environment")
+    site = _literal(call_site, "call_site")
+    seconds = _window(window_seconds)
+    return (
+        "SELECT "
+        f"countIf(name = concat('invoke_agent ', {site})), "
+        "countIf(startsWith(name, 'chat ') "
+        "AND attributes_string['gen_ai.operation.name'] = 'chat'), "
+        f"countIf(attributes_string['infra.llm.call_site'] = {site} "
+        "AND attributes_string['infra.llm.decoding_version'] != '' "
+        "AND attributes_string['infra.llm.prompt_sha256'] != ''), "
+        "countIf(mapContains(attributes_string, 'gen_ai.system_instructions') "
+        "OR mapContains(attributes_string, 'model_request_parameters') "
+        "OR mapContains(attributes_string, 'final_result') "
+        "OR position(attributes_string['gen_ai.input.messages'], '\"content\":') > 0 "
+        "OR position(attributes_string['gen_ai.output.messages'], '\"content\":') > 0 "
+        "OR position(attributes_string['gen_ai.output.messages'], '\"arguments\":') > 0), "
+        "countIf(mapContains(attributes_number, 'operation.cost') "
+        "OR mapContains(attributes_string, 'operation.cost')) "
+        f"FROM {TRACES_TABLE} "
+        f"WHERE serviceName = {service} "
+        f"AND resources_string['{ENVIRONMENT_ATTRIBUTE}'] = {env} "
+        f"AND timestamp >= now() - INTERVAL {seconds} SECOND"
+    )
+
+
+def gen_ai_metrics_query(
+    *,
+    service_name: str,
+    environment: str,
+    window_seconds: int = DEFAULT_WINDOW_SECONDS,
+) -> str:
+    """Build GenAI metric sample presence counts for one service."""
+    service = _literal(service_name, "service_name")
+    env = _literal(environment, "environment")
+    seconds = _window(window_seconds)
+    cutoff = f"toUnixTimestamp64Milli(now64(3) - INTERVAL {seconds} SECOND)"
+    bucket_cutoff = f"intDiv({cutoff}, 3600000) * 3600000"
+    metric_filter = (
+        "(startsWith(metric_name, 'gen_ai.client.token.usage') "
+        "OR startsWith(metric_name, 'gen_ai.client.operation.duration'))"
+    )
+    return (
+        "SELECT "
+        "countIf(startsWith(metric_name, 'gen_ai.client.token.usage')), "
+        "countIf(startsWith(metric_name, 'gen_ai.client.operation.duration')) "
+        f"FROM {SAMPLES_TABLE} "
+        f"WHERE unix_milli >= {cutoff} "
+        f"AND {metric_filter} "
+        "AND fingerprint GLOBAL IN ("
+        "SELECT DISTINCT fingerprint "
+        f"FROM {METRICS_TABLE} "
+        f"WHERE resource_attrs['service.name'] = {service} "
+        f"AND resource_attrs['{ENVIRONMENT_ATTRIBUTE}'] = {env} "
+        f"AND unix_milli >= {bucket_cutoff} "
+        f"AND {metric_filter}"
+        ")"
     )
