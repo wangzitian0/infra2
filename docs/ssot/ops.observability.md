@@ -305,7 +305,7 @@ SigNoz dashboards (#1464). `common/observability_dashboards.py::DASHBOARD_FILES`
 | `finance_report/finance_report/observability/dashboard.json` | `finance-report-backend`, `finance-report-worker`, `finance-report-frontend` | `finance.*` application metrics, plus trace and log panels |
 | `truealpha/truealpha/observability/dashboard.json` | `truealpha-app`, `truealpha-data-engine` | `http.server.request.duration.*` (stable HTTP convention), `http.server.active_requests`. `truealpha-data-engine` exports no metrics: its panel reads logs. |
 | `platform/12.alerting/dashboard.json` | `platform-alerting` | `http.server.request.duration.*` (new HTTP convention), `http.server.active_requests` |
-| `platform/30.todo/dashboard.json` | `platform-todo` | `http.server.request.duration.*` (new HTTP convention), `http.server.active_requests` |
+| `platform/30.todo/dashboard.json` | `platform-todo` | `http.server.request.duration.*` (new HTTP convention), `http.server.active_requests`, `canary.probe.*`, and the LLM panels of #1807 Slice 3: `gen_ai.client.token.usage.sum` by `gen_ai.token.type`, `gen_ai.client.operation.duration.bucket` by `infra.llm.call_site`, and `chat` span attributes `operation.cost`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens` by `infra.llm.call_site` (`operation.cost` is a span attribute, not a metric; the token metric has no `infra.llm.call_site` label) |
 
 - Every query filters on `deployment.environment.name IN $deployment_environment` and on `service.name`. The legacy key `deployment.environment` is not allowed.
 - `common/tests/test_observability_dashboards.py` holds the catalog of metrics per service and fails on a metric the service does not export.
