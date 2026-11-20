@@ -144,6 +144,14 @@ Each run emits one `canary.run` span with one `canary.check.<name>` child span p
 
 `platform/30.todo/preview.compose.yaml` runs the Canary in slot `preview/pr-<N>` with its own Redis, Postgres and S3 on a private network. The slot reads no Vault. `common.deploy.preview.render_throwaway_secrets` generates `REDIS_PASSWORD`, `CANARY_POSTGRES_PASSWORD`, `TODO_POSTGRES_PASSWORD`, `S3_ACCESS_KEY` and `S3_SECRET_KEY` on each render. The values go to the slot's Dokploy env only, and `down` deletes them with the slot. Entry point: `python -m common.deploy.v2 --service platform/todo --type preview/pr --version-ref <N>`. Only `/api/health` is routed in the slot, because the slot has no Authentik.
 
+## 5B. SSO setup operator steps (#1807)
+
+`todo.sso-setup` and `portal.sso-setup` run `authentik.shared.create-root-token`, `setup-admin-group` and `create-proxy-app` in order. A failed step exits non-zero and stops the run.
+
+- `create-root-token` returns success with no SSH call when Vault holds `root_token` or `api_token` at `platform/<env>/authentik`. It never prints a token.
+- Otherwise it runs one script over `ssh -o BatchMode=yes` with a 600 s limit. The script finds the container `platform-authentik-server${ENV_SUFFIX}` of the current environment and takes its compose working directory. It exits 11 when the container is missing. It exits 12 unless exactly one `/etc/dokploy/compose/platform-authentik-*` checkout resolves to that directory. It passes `ENV`, `ENV_SUFFIX`, `ENV_DOMAIN_SUFFIX` and `INTERNAL_DOMAIN` to `docker compose run`.
+- Tests: `common/tests/test_authentik_sso_setup_env.py`.
+
 ## 6. Constraints
 
 ### Do

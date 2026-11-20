@@ -75,6 +75,8 @@ return ak_is_group_member(request.user, name='admins')
 # 1. 创建 Authentik Root Token（需要 Vault Root）
 export VAULT_ROOT_TOKEN=<vault-admin-token>
 DEPLOY_ENV=<env> invoke authentik.shared.create-root-token
+# Skips when Vault holds the token. Else runs in this environment's compose
+# directory only and fails closed (platform.canary_todo.md section 5B).
 
 # 2. 设置 admin 组并添加 akadmin
 DEPLOY_ENV=<env> invoke authentik.shared.setup-admin-group
