@@ -306,9 +306,10 @@ class FakeGitHub:
         self.runs: dict[int, dict] = {}
         self.zips: dict[str, bytes] = {}
         self.auth_to_signed_host: list[str | None] = []
-        #: the commit of every tag and the answer of ``compare/<sha>...main``
+        #: the commit of every tag and the answer of ``compare/main...<sha>``
         self.commit = TAG_COMMIT
         self.compare_status = "behind"
+        self.compare_urls: list[str] = []
         self.fail_on: str | None = None
 
     def add(
@@ -363,6 +364,10 @@ class FakeGitHub:
         if self.fail_on and self.fail_on in url:
             raise urllib.error.HTTPError(url, 502, "Bad Gateway", {}, None)
         if "/compare/" in url:
+            assert "/compare/main..." in url, (
+                f"expected base=main in compare url, got {url}"
+            )
+            self.compare_urls.append(url)
             body = {"status": self.compare_status}
         elif url.startswith("https://api.github.com/repos/o/r/actions/artifacts"):
             body = {
@@ -577,6 +582,26 @@ def test_reader_refuses_forged_or_stale_other_tag_and_forged_verdict() -> None:
     gh.add(_record())
     reading = _read(gh)
     assert reading.exit_code == 1 and "not on main" in reading.detail
+
+
+def test_reader_compares_against_main_base_so_older_main_commits_pass() -> None:
+    """``compare/main...<sha>`` returns ``behind`` for older main commits (#1811)."""
+    for status, expected_exit in (
+        ("behind", 0),
+        ("identical", 0),
+        ("ahead", 1),
+        ("diverged", 1),
+    ):
+        gh = FakeGitHub()
+        gh.compare_status = status
+        gh.add(_record())
+        reading = _read(gh)
+        assert reading.exit_code == expected_exit, status
+        assert gh.compare_urls == [
+            f"https://api.github.com/repos/o/r/compare/main...{TAG_COMMIT}"
+        ]
+        if expected_exit == 1:
+            assert "not on main" in reading.detail
 
 
 def test_reader_refuses_forged_or_stale_api_failure_is_exit_four() -> None:
