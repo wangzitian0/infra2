@@ -234,7 +234,8 @@ def test_the_settle_after_a_review_is_sixty_seconds():
 def test_a_user_pr_with_no_review_keeps_the_twelve_minute_clock():
     verdict = evaluate(_green_facts(), now=NOW, policy="either")
     assert verdict.exit_code == 1 and verdict.quiet_remaining_seconds == 8 * 60
-    assert "--request-review asks Copilot" in verdict.reasons[0]
+    assert "--request-review" not in verdict.reasons[0]
+    assert "### Independent verification of head 0123456" in verdict.reasons[0]
 
 
 def test_a_bot_pr_settles_sixty_seconds_after_its_verification_comment():
@@ -322,10 +323,26 @@ def test_a_bot_pr_with_a_copilot_review_needs_no_comment():
     assert evaluate(reviewed, now=NOW + 2, policy="either").ready
 
 
-def test_a_comment_does_not_replace_the_review_of_a_user_pr():
-    facts = _green_facts(author=USER, comments=((_verification(), NOW - 120),))
-    verdict = evaluate(facts, now=NOW, policy="either")
-    assert verdict.exit_code == 1 and verdict.quiet_remaining_seconds == 8 * 60
+def test_a_user_pr_settles_sixty_seconds_after_its_verification_comment():
+    verified = _green_facts(author=USER, comments=((_verification(), NOW - 59),))
+    waiting = evaluate(verified, now=NOW, policy="either")
+    assert waiting.exit_code == 1 and waiting.quiet_remaining_seconds == 1
+    assert "head verified in a PR comment 59s ago" in waiting.reasons[0]
+    assert evaluate(verified, now=NOW + 2, policy="either").ready  # 61 s
+
+
+def test_an_invalid_verification_comment_does_not_settle_a_user_pr():
+    wrong_sha = _green_facts(
+        author=USER,
+        comments=((_verification("deadbee"), NOW - 120),),
+    )
+    no_tests = _green_facts(
+        author=USER,
+        comments=((_verification(tests="Looks good."), NOW - 120),),
+    )
+    for facts in (wrong_sha, no_tests):
+        verdict = evaluate(facts, now=NOW, policy="either")
+        assert verdict.exit_code == 1 and verdict.quiet_remaining_seconds == 8 * 60
 
 
 def test_the_clock_policy_ignores_the_comment():
