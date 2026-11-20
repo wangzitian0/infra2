@@ -214,6 +214,9 @@ def test_pre_accepts_a_tag_that_is_behind_or_identical_to_main(world, status) ->
     _green(world)
     world.compare_status = status
     assert _pre(world) == 0
+    assert world.compare_urls and all(
+        "/compare/main..." in url for url in world.compare_urls
+    )
 
 
 def test_pre_refuses_a_failed_or_missing_main_ci_record(world, capsys) -> None:
@@ -449,7 +452,7 @@ def test_the_guard_reads_only_the_artifact_and_run_endpoints() -> None:
         "/repos/{repo}/actions/runs/{run_id}",
         "/repos/{repo}/commits/{ident}",
         "/repos/{repo}/actions/artifacts",
-        "/repos/{repo}/compare/{sha}",
+        "/repos/{repo}/compare/main",
     }, endpoints
 
 

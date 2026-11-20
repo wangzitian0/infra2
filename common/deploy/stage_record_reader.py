@@ -48,7 +48,7 @@ CANARY_STAGING_GATE_CHECKS = frozenset(
     {"platform/todo:staging_gate", "staging_gate:platform/todo"}
 )
 EXIT_PASS, EXIT_REFUSED, EXIT_UNREADABLE = 0, 1, 4
-#: ``compare/<sha>...main`` says ``behind`` or ``identical`` when ``sha`` is on main.
+#: ``compare/main...<sha>`` says ``behind`` or ``identical`` when ``sha`` is on main.
 ON_MAIN = ("behind", "identical")
 _RECONCILE = ".github/workflows/reconcile-iac-inputs.yml"
 #: env -> (workflow path, events that may write its records)
@@ -335,7 +335,7 @@ def read_record(
             if on_main:
                 sha = str(run.get("head_sha"))
                 status = get_json(
-                    f"/repos/{repo}/compare/{sha}...main", token, opener, AGENT
+                    f"/repos/{repo}/compare/main...{sha}", token, opener, AGENT
                 ).get("status")
                 if status not in ON_MAIN:
                     return Reading(
