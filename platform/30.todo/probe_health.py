@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import calendar
 import json
+import re
 import subprocess
 import time
 import urllib.error
@@ -19,6 +20,23 @@ GATE_MAX_VERDICT_AGE_SECONDS = 180
 GATE_REQUEST_TIMEOUT_SECONDS = 10
 GATE_POLL_SECONDS = 10
 SSO_PROTECTED_STATUSES = frozenset({301, 302, 303, 307, 308, 401, 403})
+# The Canary image pin of the deployed release (common/deploy/canary_pin.py owns the format).
+CANARY_PIN_RE = re.compile(
+    r"ghcr\.io/wangzitian0/infra2-canary-todo:v(\d+\.\d+\.\d+)@sha256:[0-9a-f]{64}"
+)
+
+
+def pinned_canary_sdk(ref: str, runner=subprocess.run) -> str:
+    """SDK version of the Canary image pin at ``ref``, or "" for a release before #247."""
+    shown = runner(
+        ["git", "show", f"{ref}:platform/30.todo/compose.yaml"],
+        capture_output=True,
+        text=True,
+    )
+    if shown.returncode != 0:
+        return ""
+    found = CANARY_PIN_RE.findall(shown.stdout)
+    return found[0] if found else ""
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -57,6 +75,7 @@ def main(
     argv: Sequence[str] | None = None,
     *,
     summary_probe: Callable[[str, float], int] | None = None,
+    pin_reader: Callable[[str], str] | None = None,
 ) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -136,6 +155,12 @@ def main(
             raise AssertionError(f"canary verdict is stale or unreadable: {canary!r}")
         if payload.get("git_sha") != expected:
             raise AssertionError(f"git_sha {payload.get('git_sha')!r} != {expected}")
+        # The train records sdk:X from the pin; the container must run X (infra2-sdk#247).
+        pinned = (pin_reader or pinned_canary_sdk)(args.gate)
+        if pinned and payload.get("sdk_version") != pinned:
+            raise AssertionError(
+                f"sdk_version {payload.get('sdk_version')!r} != pinned Canary SDK {pinned}"
+            )
     return 0
 
 

@@ -366,7 +366,13 @@ def _resolve_locked_sdk_version(
             return version_str
     except Exception:
         pass
-    version_str = _sdk_version_of_checkout(root)
+    # Production still serves a host-built Canary until a promotion carries the pin: its
+    # last fallback is uv.lock, never the checkout's new pin.
+    version_str = (
+        _read_locked_sdk_version_file(root / "uv.lock")
+        if environment == "production"
+        else _sdk_version_of_checkout(root)
+    )
     if version_str:
         return version_str
     try:

@@ -32,6 +32,7 @@ from common.security import registry as secrets_registry
 from common.core import registry as reg
 from common.observability.probe_specs import render_probe_spec_text
 from common.tests.ambient_env import clear_telemetry_env
+from common.deploy.canary_pin import canary_sdk_version
 from common.tests.compose_env import compose_services, resolve
 from common.tests.docker_host import DockerHost
 from common.tests.traefik_rules import routers_from_labels, serving_router
@@ -575,7 +576,14 @@ def test_probe_health_gate_fails_on_red_canary_and_sha_mismatch(
         cwd=ROOT,
     ).stdout.strip()
     monkeypatch.chdir(ROOT)
-    base = {"ok": True, "service": "platform/todo", "git_sha": sha}
+    pinned = canary_sdk_version()
+    assert probe.pinned_canary_sdk("HEAD") == pinned
+    base = {
+        "ok": True,
+        "service": "platform/todo",
+        "git_sha": sha,
+        "sdk_version": pinned,
+    }
 
     def run(body: dict, *flags: str) -> int:
         monkeypatch.setattr(
@@ -591,6 +599,9 @@ def test_probe_health_gate_fails_on_red_canary_and_sha_mismatch(
         {**base, "canary": {"ok": False, "checked_at": _now()}},
         dict(base),
         {**good, "git_sha": "0" * 40},
+        # the container must run the SDK that the pin names (infra2-sdk#247)
+        {**good, "sdk_version": "0.0.0"},
+        {key: value for key, value in good.items() if key != "sdk_version"},
     ):
         with pytest.raises(AssertionError):
             run(bad, "--gate", "HEAD")
@@ -629,7 +640,12 @@ def test_probe_health_gate_waits_for_a_verdict_not_a_pass(monkeypatch) -> None:
             "poll_until_healthy",
             lambda *a, **k: SimpleNamespace(
                 body=json.dumps(
-                    {"ok": True, "git_sha": sha, "canary": next(calls, canaries[-1])}
+                    {
+                        "ok": True,
+                        "git_sha": sha,
+                        "sdk_version": canary_sdk_version(),
+                        "canary": next(calls, canaries[-1]),
+                    }
                 )
             ),
         )
@@ -677,7 +693,7 @@ def test_probe_health_gate_refuses_stale_verdict_and_missing_field_without_wait(
     monkeypatch.setattr(probe.time, "sleep", sleeps.append)
 
     def run(canary) -> int:
-        body = {"ok": True, "git_sha": sha}
+        body = {"ok": True, "git_sha": sha, "sdk_version": canary_sdk_version()}
         if canary is not None:
             body["canary"] = canary
         monkeypatch.setattr(
@@ -801,3 +817,34 @@ def test_the_probe_runner_sees_the_gap_in_its_observed_text() -> None:
     assert '"unconfigured":["s3"]' in result.observed
     assert '"failed":[]' in result.observed
     assert '"ok":false' in result.observed
+
+
+def test_probe_health_gate_skips_the_sdk_check_for_a_release_without_a_pin(
+    monkeypatch,
+) -> None:
+    """A release before #247 builds the Canary on the host: no pin, so no SDK comparison."""
+    from types import SimpleNamespace
+
+    probe = _load("probe_health_gate_no_pin", SERVICE_DIR / "probe_health.py")
+    sha = subprocess.run(
+        ["git", "rev-parse", "HEAD^{commit}"],
+        check=True,
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+    ).stdout.strip()
+    monkeypatch.chdir(ROOT)
+    body = {"ok": True, "git_sha": sha, "canary": {"ok": True, "checked_at": _now()}}
+    monkeypatch.setattr(
+        probe,
+        "poll_until_healthy",
+        lambda *a, **k: SimpleNamespace(body=json.dumps(body)),
+    )
+    assert (
+        probe.main(["https://x.example", "--gate", "HEAD"], pin_reader=lambda _ref: "")
+        == 0
+    )
+    with pytest.raises(AssertionError, match="pinned Canary SDK 9.9.9"):
+        probe.main(
+            ["https://x.example", "--gate", "HEAD"], pin_reader=lambda _ref: "9.9.9"
+        )

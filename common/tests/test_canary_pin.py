@@ -134,3 +134,33 @@ def test_an_sdk_inside_the_range_still_needs_the_canary(monkeypatch) -> None:
         )
         == "3.35.0"
     )
+
+
+def test_plan_units_carry_sdk_unknown_when_the_pin_is_unreadable(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr(reconcile, "canary_sdk_unit", lambda: canary_sdk_unit(tmp_path))
+    plan = reconcile.build_plan(["platform/12.alerting/compose.yaml"])
+    assert reconcile.plan_units(plan)[-1] == "sdk:unknown"
+
+
+def test_canary_verify_production_fallback_never_reads_the_new_pin(tmp_path) -> None:
+    from tools import canary_verify
+
+    compose = tmp_path / "platform/30.todo/compose.yaml"
+    compose.parent.mkdir(parents=True)
+    compose.write_text(
+        _compose(f"    image: {CANARY_IMAGE_REPOSITORY}:v9.8.7@{DIGEST}\n")
+    )
+
+    def no_git(*_a, **_k):
+        raise OSError("no git")
+
+    staging = canary_verify._resolve_locked_sdk_version(
+        environment="staging", repo_root=tmp_path, runner=no_git
+    )
+    production = canary_verify._resolve_locked_sdk_version(
+        environment="production", repo_root=tmp_path, runner=no_git
+    )
+    assert staging == "9.8.7"
+    assert production != "9.8.7"
