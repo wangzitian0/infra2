@@ -5,7 +5,8 @@ Two containers from the truealpha app repo's GHCR images
 
 - **web** — Next.js (standalone) at `truealpha${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`.
   Reads the Postgres `mart` schema directly (the app's init.md rule 5) via the
-  Vault-rendered `DATABASE_URL`; there is no web→llm API hop.
+  Vault-rendered `DATABASE_URL` (`app_service_login`, `APP_SERVICE_DB_PASSWORD`);
+  migrations run with `MIGRATIONS_DATABASE_URL` (`postgres`). There is no web→llm API hop.
 - **llm** — FastAPI at the same host under `PathPrefix(/api)` (stripped). Scope is
   LLM-call orchestration only: MCP endpoint first, `/chat` later (Tier 3).
 - **data-engine is deployed separately** from `../20.data_engine/` so real-source
@@ -26,13 +27,12 @@ The data engine (`../20.data_engine/`) is issued no telemetry: its Dagster roles
 collector port is never published. With no endpoint the application-side exporter stays
 off, so no identity is issued either; it needs a host-reachable ingest first.
 
-## v1 deploy model (deliberate simplification)
+## Deploy model
 
-`iac_pinned` like a platform service: `deploy_v2 --service truealpha/app --type
-staging --iac-ref vX.Y.Z` → iac_runner → `invoke ta-app.sync` → Dokploy compose.
-Images float on `${IMAGE_TAG:-latest}` (pushed by the app repo's CI on main).
-The finance_report-style promote path (pinned tags, rollout verification,
-per-PR previews) is deferred until there is real mart data to protect.
+`app_pinned` release promotion: `harness/repos.yaml` pins the `release_tag`
+for `truealpha/app`, and `deploy_v2 --service truealpha/app --type staging
+--version-ref vX.Y.Z --iac-ref vA.B.C --domain zitian.party` reconciles Dokploy
+compose through `iac_runner` (`invoke ta-app.sync`).
 
 ## Deploy
 
