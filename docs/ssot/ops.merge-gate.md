@@ -21,15 +21,12 @@
 - **必需检查必须在场**：`blocks_merge: true` 的检查不仅要绿，还必须**确实报告过**。
   `detect-changes` 失败时其下游 job 是 skipped 而非 run，GitHub 仍接受为已满足——
   因此必需集须以 `ci-gate-inventory.yaml` 为准逐个核对在场与结论，而不是只看已报告的检查是否为绿。
-- **静置 (settle)**：An automated review (Copilot) of the **current head SHA** starts a settle time of 60 seconds.
-  Copilot does not review a pull request that an app or bot account opens (#1075).
-  For such a pull request, an independent verification comment replaces the review.
+- **静置 (settle)**：Copilot review is optional and non-blocking; an automated review (if present) or an independent verification comment on the **current head SHA** starts a settle time of 60 seconds.
+  Any pull request (user-opened or bot-opened) may use an independent verification comment to satisfy settling.
   Its heading is `### Independent verification of head <sha7>`, where `<sha7>` is the first 7 characters of the current head SHA.
   A later line of the comment names at least one test, as `test_...` or `path::name`.
   The settle time starts at the creation of the comment, or at its last edit if it has one. The newest matching comment counts.
-  For a pull request that a user opens, a comment does not replace the review.
-  The limit is always 12 minutes after the last push. Without a review or a verification comment, that limit applies.
-  The earlier of the two times decides. A fix-up push does not start a new Copilot review. Request it explicitly.
+  The quiet-clock limit is 12 minutes after the last push. Without a review or a verification comment, that limit applies; the earlier of the two times decides.
 - **变更契约完整**：PR description checklist 完整；代码、测试、SSOT、Project、Layer README / Onboarding 按影响同步；无未解释的 scope drift；PR description 显式引用其推进/关闭的 issue 编号（无则写明 None）——避免 PR 实质推进了某 issue 的 scope 却不留痕迹，导致 issue 可见状态滞后仓库实际进度（#508）。
 - **安全与运维门禁**：无敏感文件；已说明风险、回滚与 0 宕机影响；涉及 state discrepancy、密钥或生产数据时已按对应 SSOT 执行并留证。
 **仍需 owner 的两类，判据各不相同，分别列**：
@@ -44,7 +41,7 @@
   An approval of an older head does not apply. See [Production lock](#production-lock).
   The target environment decides first, then reversibility. When the two disagree, the environment decides.
 - **其二，改动"决定合流的东西"（自我裁决闭包，#787 / #1040 / #1138 / #1340）**：`tools/pr_merge_gate.self_governing_files()` 从 `pr_merge_gate.py` 出发，BFS 它 import 的每个仓内模块、它读的数据文件及各自测试，并显式包含两份规则散文（`AGENTS.md` 与本文件）。门禁仅对生产路径返回 `outcome="owner"` (`owner_required=True`)；闭包内其余非生产路径在获得当前 head 的独立审查前返回 `outcome="review_required"` (`review_required=True`, `owner_required=False`)，审查记录就位后返回 `ready=True`（详见 [Production lock](#production-lock)）。
-- **受保护文件**（`CLAUDE.md`，及各 App 标注为 protected 的架构文档）：修改时在 PR description 中引用授权它的 owner 指令，使授权可追溯。
+- **受保护文件**（各 App 标注为 protected 的架构文档）：按仓库 Protected-file checklist 执行；无需引用 owner 历史消息。
 - **合流后闭环**：使用仓库允许的合流方式；确认 merge commit 已落在目标分支并监看 post-merge checks。失败时立即停止 tag / promote，报告并修复，不得继续发布。
   **但 `cancelled` 在合流前与合流后不是同一个含义**：作为 Merge Authority 一律算不满足（见上）；
   **合流后**监看时，`infra-ci.yml` 设了 `concurrency: cancel-in-progress: true`，兄弟 PR 随后合入
@@ -138,7 +135,7 @@ Residual risks:
 2026-09-22 owner 澄清授权覆盖其名下全部仓库，这条事实随之上提到 workspace 级规则（dev_env#59）；
 本文只保留 infra2 自己的门禁条件。文末仍需 owner 的第二类（改动"决定合流的东西"本身）不属于
 权限保留，而是自我裁决问题：门禁从工作树读规则，AI 合流自己的 PR 时读到的就是该 PR 引入的版本。
-判定与合流统一走 `python -m tools.pr_merge_gate <n> --policy either --request-review --merge`
+判定与合流统一走 `python -m tools.pr_merge_gate <n> --policy either --merge`
 ，不靠肉眼看表。Act on the exit code only (#740):
 
 | Exit | Meaning | Next step |

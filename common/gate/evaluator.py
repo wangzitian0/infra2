@@ -477,10 +477,10 @@ def _check_settling_window(
     automated = [
         r for r in facts.reviews_on_head() if r[0] in AUTOMATED_REVIEWERS and r[2] > 0
     ]
-    # A bot-opened PR gets no Copilot review. An independent verification
-    # comment of the head is its review signal; nothing else shortens its wait.
+    # Copilot review is optional on all PRs; any PR settles after an
+    # independent verification comment of the head SHA naming executed tests.
     bot_unreviewed = not automated and _opened_by_bot(facts)
-    verified_at = _verified_at(facts) if bot_unreviewed else None
+    verified_at = _verified_at(facts) if not automated else None
     if automated:
         reviewed_at = max(r[2] for r in automated)
         event_remaining = math.ceil(reviewed_at + settle_seconds - now)
@@ -505,8 +505,9 @@ def _check_settling_window(
     else:
         event_remaining = None
         event_reason = (
-            f"no automated review on head {facts.head_sha[:7]} yet "
-            "(--request-review asks Copilot for one)"
+            f"no automated review on head {facts.head_sha[:7]} yet and no "
+            f"independent verification: post '{VERIFICATION_HEADING} {facts.head_sha[:7]}' "
+            "and name the tests, or wait out the quiet period"
         )
 
     remaining = 0
