@@ -109,7 +109,12 @@ def _run_script(st, tmp_path, suffix, wd_label, dirs):
         "VAULT_INIT_TOKEN": "t",
     }
     res = subprocess.run(
-        ["bash", "-s"], input=script, capture_output=True, text=True, env=env, timeout=30
+        ["bash", "-s"],
+        input=script,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
     )
     return res, log
 
@@ -144,7 +149,9 @@ def test_script_fails_closed_on_zero_matching_directories(st, tmp_path):
 
 
 def test_script_fails_closed_when_environment_container_missing(st, tmp_path):
-    res, log = _run_script(st, tmp_path, "", "", ["a-platform-authentik-x", "platform-authentik-y"])
+    res, log = _run_script(
+        st, tmp_path, "", "", ["a-platform-authentik-x", "platform-authentik-y"]
+    )
     assert res.returncode == 11
     assert "not found" in res.stderr
     assert not log.exists()
@@ -158,19 +165,30 @@ def test_script_fails_closed_on_two_matching_directories(st, tmp_path):
     alias_dir = root / "platform-authentik-b/code/platform"
     alias_dir.mkdir(parents=True)
     (alias_dir / "10.authentik").symlink_to(real)
-    script = st.build_remote_script("staging", "-staging", "example.test", "", str(root))
+    script = st.build_remote_script(
+        "staging", "-staging", "example.test", "", str(root)
+    )
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     (bin_dir / "docker").write_text(
         "#!/bin/sh\n"
         'if [ "$1" = inspect ]; then printf %s "$FAKE_WD"; exit 0; fi\n'
-        f'echo ran >> {tmp_path}/docker.log\n'
+        f"echo ran >> {tmp_path}/docker.log\n"
     )
     (bin_dir / "docker").chmod(0o755)
     # Realpath comparison makes both directories equal the label: expect fail closed.
-    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAKE_WD": str(real)}
+    env = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "FAKE_WD": str(real),
+    }
     res = subprocess.run(
-        ["bash", "-s"], input=script, capture_output=True, text=True, env=env, timeout=30
+        ["bash", "-s"],
+        input=script,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
     )
     assert res.returncode == 12
     assert not (tmp_path / "docker.log").exists()
@@ -228,7 +246,9 @@ def test_sso_setup_stops_and_exits_nonzero_on_failed_step(rel, monkeypatch):
     deployer = next(
         v for k, v in vars(mod).items() if k.endswith("Deployer") and k != "Deployer"
     )
-    monkeypatch.setattr(deployer, "env", classmethod(lambda cls: _env("", "production")))
+    monkeypatch.setattr(
+        deployer, "env", classmethod(lambda cls: _env("", "production"))
+    )
     with pytest.raises(Exit) as exc:
         mod.sso_setup.body(SimpleNamespace())
     assert exc.value.code == 1
