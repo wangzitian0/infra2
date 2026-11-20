@@ -41,7 +41,6 @@ def build_remote_script(
     env_name: str,
     env_suffix: str,
     internal_domain: str,
-    domain_suffix: str = "",
     compose_root: str = "/etc/dokploy/compose",
 ) -> str:
     """Build the remote script that runs token-init for ONE environment.
@@ -51,7 +50,9 @@ def build_remote_script(
     environment's running `platform-authentik-server${ENV_SUFFIX}` container.
     It runs compose in the project of that container, because the `secrets`
     volume that token-init mounts belongs to that project, and it starts no
-    dependency, so the running server and worker stay as they are.
+    dependency, so the running server and worker stay as they are. It passes
+    `ENV_SUFFIX` into the container, because init-token.sh waits for the server
+    `platform-authentik-server${ENV_SUFFIX}` of this environment.
     Exit codes: 11 container missing, 12 directory match is not exactly one,
     13 container has no compose project label.
     """
@@ -90,21 +91,24 @@ cd "$CHOSEN"
 TMPENV=$(mktemp)
 trap 'rm -f "$TMPENV"' EXIT
 printf 'VAULT_INIT_TOKEN=%s\\n' "$VAULT_INIT_TOKEN" > "$TMPENV"
-printf 'VAULT_INIT_ADDR=%s\\n' {q(vault_url)} >> "$TMPENV"
-ENV={q(env_name)} ENV_SUFFIX={q(env_suffix)} ENV_DOMAIN_SUFFIX={q(domain_suffix)} \
-INTERNAL_DOMAIN={q(internal_domain)} VAULT_ADDR={q(vault_url)} \
-  docker compose --env-file "$TMPENV" -p "$PROJECT" run --rm --no-deps token-init </dev/null
+ENV={q(env_name)} ENV_SUFFIX={q(env_suffix)} VAULT_ADDR={q(vault_url)} \
+  docker compose --env-file "$TMPENV" -p "$PROJECT" run --rm --no-deps \
+  -e ENV_SUFFIX="$ENV_SUFFIX" token-init </dev/null
 """
 
 
-def _run_remote_script(host: str, script: str, token: str) -> tuple[int, str, str]:
+def _run_remote_script(
+    host: str, script: str, token: str, user: str | None = None
+) -> tuple[int, str, str]:
     """Run `script` on the VPS over non-interactive SSH with a bounded run time.
 
     The token goes to the remote shell on stdin, never in the process list.
+    `user` defaults to the SSH user of the watchdog credentials.
     """
     from common.deploy.vps_ssh import ssh_script
 
-    _, user, key_path, port = _ssh_credentials()
+    _, default_user, key_path, port = _ssh_credentials()
+    user = user or default_user
     payload = f"export VAULT_INIT_TOKEN={shlex.quote(token)}\n{script}"
     return ssh_script(
         payload, host, user, key_path, port, timeout=REMOTE_TIMEOUT_SECONDS
@@ -123,13 +127,19 @@ def status(c):
     return check_service(c, "authentik", "ak healthcheck")
 
 
-def _failure_reason(stderr: str) -> str:
-    """Keep only the `FAIL:` lines of the remote script.
+SSH_FAILURES = {
+    124: "SSH run time limit reached",
+    255: "SSH failed: check the host key, the key file and the network",
+}
+
+
+def _failure_reason(rc: int, stderr: str) -> str:
+    """Keep only the `FAIL:` lines of the remote script, else a fixed SSH reason.
 
     Container output can hold a token, so no other remote text reaches the terminal.
     """
     lines = [x.strip() for x in (stderr or "").splitlines() if x.startswith("FAIL:")]
-    return escape("; ".join(lines)[-500:])
+    return escape("; ".join(lines)[-500:] or SSH_FAILURES.get(rc, ""))
 
 
 def _vault_holds_root_token(env_name: str) -> bool:
@@ -205,15 +215,12 @@ def create_root_token(c, force=False):
         return False
 
     info("Running token creation on server...")
-    script = build_remote_script(
-        env_name,
-        env_suffix,
-        internal_domain,
-        e.get("ENV_DOMAIN_SUFFIX") or "",
+    script = build_remote_script(env_name, env_suffix, internal_domain)
+    rc, _out, err = _run_remote_script(
+        vps_host, script, vault_root_token, user=e.get("VPS_SSH_USER")
     )
-    rc, _out, err = _run_remote_script(vps_host, script, vault_root_token)
     if rc != 0:
-        error(f"Failed to create token (exit {rc})", _failure_reason(err) or None)
+        error(f"Failed to create token (exit {rc})", _failure_reason(rc, err) or None)
         return False
 
     # Verify in Vault
@@ -397,8 +404,10 @@ def _ensure_application(
 
 def _bind_policies_to_app(
     client, base_url: str, app_pk: str, policy_pks: dict[str, str]
-) -> None:
+) -> bool:
+    """Bind every group policy. False when one binding fails: the app has no group gate."""
     info("Binding access policies to application...")
+    bound = True
     for group_name, policy_pk in policy_pks.items():
         resp = client.post(
             f"{base_url}/api/v3/policies/bindings/",
@@ -415,10 +424,13 @@ def _bind_policies_to_app(
         elif resp.status_code == 400 and "already exists" in resp.text.lower():
             info(f"Policy binding already exists: {group_name}")
         else:
-            warning(f"Failed to bind policy {group_name}: {resp.status_code}")
+            error(f"Failed to bind policy {group_name}: {resp.status_code}")
+            bound = False
+    return bound
 
 
-def _configure_embedded_outpost(client, base_url: str, provider_id: str) -> None:
+def _configure_embedded_outpost(client, base_url: str, provider_id: str) -> bool:
+    """Add the provider to the embedded outpost. False when forward auth cannot work."""
     info("Configuring embedded outpost...")
     resp = client.get(
         f"{base_url}/api/v3/outposts/instances/?managed=goauthentik.io/outposts/embedded"
@@ -437,14 +449,15 @@ def _configure_embedded_outpost(client, base_url: str, provider_id: str) -> None
                     "config": {"authentik_host": base_url},
                 },
             )
-            if resp.status_code == 200:
-                success("Added provider to embedded outpost")
-            else:
-                warning(f"Failed to update outpost: {resp.status_code}")
+            if resp.status_code != 200:
+                error(f"Failed to update outpost: {resp.status_code}")
+                return False
+            success("Added provider to embedded outpost")
         else:
             info("Provider already in outpost")
-    else:
-        warning("Embedded outpost not found - forward auth may not work")
+        return True
+    error("Embedded outpost not found - forward auth cannot work")
+    return False
 
 
 @task
@@ -516,8 +529,10 @@ def create_proxy_app(
             return False
         app_slug, app_pk = app_info
 
-        _bind_policies_to_app(client, base_url, app_pk, policy_pks)
-        _configure_embedded_outpost(client, base_url, provider_id)
+        if not _bind_policies_to_app(client, base_url, app_pk, policy_pks):
+            return False
+        if not _configure_embedded_outpost(client, base_url, provider_id):
+            return False
 
         info(f"\n✨ SSO protection enabled for {external_host}")
         info(f"Access control: Only users in [{', '.join(group_list)}] can access")

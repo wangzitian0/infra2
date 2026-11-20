@@ -49,8 +49,8 @@ def ssh_script(
 ) -> tuple[int, str, str]:
     """Run `script` through `bash -s` on stdin. No prompt, no TTY, bounded run time.
 
-    The script can carry a Vault token, so this call checks the host key: a first
-    connection records it, and a changed key fails the call (no `StrictHostKeyChecking=no`).
+    The script can carry a Vault token, so this call requires a known host key: an
+    unknown or changed key fails the call (no `StrictHostKeyChecking=no`).
     """
     ssh_args = [
         "ssh",
@@ -59,7 +59,7 @@ def ssh_script(
         "-o",
         "ConnectTimeout=10",
         "-o",
-        "StrictHostKeyChecking=accept-new",
+        "StrictHostKeyChecking=yes",
         "-p",
         str(port),
     ]
