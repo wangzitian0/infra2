@@ -191,6 +191,15 @@ def test_remote_user_comes_from_vps_ssh_user(st, monkeypatch):
     assert seen == {"user": "deployer"}
 
 
+def test_fail_marker_inside_a_line_is_not_shown(st, monkeypatch, capsys):
+    stderr = f"  note FAIL: {SECRET}\nFAIL: real reason\n"
+    _patch(st, monkeypatch, {}, remote=(12, "", stderr))
+    with pytest.raises(Exit):
+        st.create_root_token.body(SimpleNamespace())
+    text = "".join(capsys.readouterr())
+    assert "real reason" in text and SECRET not in text
+
+
 def test_success_output_has_no_token_text(st, monkeypatch, capsys):
     answers = iter([{}, {"root_token": SECRET}])
     calls = _patch(st, monkeypatch, lambda *a, **k: next(answers))
@@ -519,11 +528,19 @@ def test_authentik_task_without_a_root_token_exits_nonzero(st, monkeypatch, name
 
 
 class _Client:
+    """Fake HTTP client: `get` and `post` take the answer or a list of answers."""
+
     def __init__(self, post=None, get=None, patch=None):
+        self.posts = []
         self._post, self._get, self._patch = post, get, patch
 
+    @staticmethod
+    def _pick(answer, index):
+        return answer[index] if isinstance(answer, list) else answer
+
     def post(self, url, json=None):
-        return self._post
+        self.posts.append(json)
+        return self._pick(self._post, len(self.posts) - 1)
 
     def get(self, url):
         return self._get
@@ -536,21 +553,49 @@ def _resp(status, body=None, text=""):
     return SimpleNamespace(status_code=status, json=lambda: body, text=text)
 
 
+NO_BINDING = _resp(200, {"results": []})
+
+
 @pytest.mark.parametrize(
-    "response,expected",
+    "post,expected",
     [
         (_resp(201), True),
         (_resp(400, text="Binding already exists"), True),
+        (
+            _resp(400, text="The fields policy, target, order must make a unique set."),
+            True,
+        ),
         (_resp(400, text="other"), False),
         (_resp(500), False),
     ],
 )
-def test_policy_binding_reports_failure(st, response, expected):
-    client = _Client(post=response)
+def test_policy_binding_reports_failure(st, post, expected):
+    client = _Client(post=post, get=NO_BINDING)
     assert (
         st._bind_policies_to_app(client, "https://x", "app", {"admins": "p"})
         is expected
     )
+
+
+def test_existing_policy_binding_passes_without_a_post(st):
+    client = _Client(post=_resp(500), get=_resp(200, {"results": [{"pk": "b"}]}))
+    assert st._bind_policies_to_app(client, "https://x", "app", {"admins": "p"})
+    assert client.posts == []
+
+
+def test_failed_binding_lookup_does_not_count_as_existing(st):
+    client = _Client(post=_resp(201), get=_resp(403, {"results": [{"pk": "b"}]}))
+    assert st._bind_policies_to_app(client, "https://x", "app", {"admins": "p"})
+    assert len(client.posts) == 1
+
+
+def test_policy_binding_keeps_binding_the_other_groups_after_a_failure(st):
+    client = _Client(post=[_resp(500), _resp(201)], get=NO_BINDING)
+    ok = st._bind_policies_to_app(
+        client, "https://x", "app", {"admins": "p1", "users": "p2"}
+    )
+    assert ok is False
+    assert [x["policy"] for x in client.posts] == ["p1", "p2"]
 
 
 @pytest.mark.parametrize(
@@ -561,11 +606,37 @@ def test_policy_binding_reports_failure(st, response, expected):
         (_resp(200, {"results": [{"pk": "o", "providers": ["9"]}]}), None, True),
         (_resp(200, {"results": []}), None, False),
         (_resp(500), None, False),
+        (_resp(403, {"results": [{"pk": "o", "providers": []}]}), _resp(200), False),
     ],
 )
 def test_outpost_configuration_reports_failure(st, get, patch, expected):
     client = _Client(get=get, patch=patch)
     assert st._configure_embedded_outpost(client, "https://x", "9") is expected
+
+
+_PROXY_STUBS = {
+    "_verify_authentik_auth": True,
+    "_ensure_authentik_groups": {"admins": "g"},
+    "_get_authentik_flows": ("a", "b"),
+    "_ensure_access_policies": {"admins": "p"},
+    "_ensure_proxy_provider": "9",
+    "_ensure_application": ("todo", "pk"),
+    "_bind_policies_to_app": True,
+    "_configure_embedded_outpost": True,
+}
+
+
+def _run_proxy_app(st, monkeypatch, **overrides):
+    _patch(st, monkeypatch, {"root_token": SECRET})
+    for fn, value in {**_PROXY_STUBS, **overrides}.items():
+        monkeypatch.setattr(st, fn, lambda *a, _v=value, **k: _v)
+    return st.create_proxy_app.body(
+        SimpleNamespace(), "Todo", "todo", "https://t.example.test", "todo-svc"
+    )
+
+
+def test_create_proxy_app_succeeds_when_every_step_succeeds(st, monkeypatch):
+    assert _run_proxy_app(st, monkeypatch) is True
 
 
 @pytest.mark.parametrize(
@@ -574,24 +645,8 @@ def test_outpost_configuration_reports_failure(st, get, patch, expected):
 def test_create_proxy_app_exits_nonzero_when_a_final_step_fails(
     st, monkeypatch, failing
 ):
-    _patch(st, monkeypatch, {"root_token": SECRET})
-    stubs = {
-        "_verify_authentik_auth": True,
-        "_ensure_authentik_groups": {"admins": "g"},
-        "_get_authentik_flows": ("a", "b"),
-        "_ensure_access_policies": {"admins": "p"},
-        "_ensure_proxy_provider": "9",
-        "_ensure_application": ("todo", "pk"),
-        "_bind_policies_to_app": True,
-        "_configure_embedded_outpost": True,
-    }
-    stubs[failing] = False
-    for fn, value in stubs.items():
-        monkeypatch.setattr(st, fn, lambda *a, _v=value, **k: _v)
     with pytest.raises(Exit) as exc:
-        st.create_proxy_app.body(
-            SimpleNamespace(), "Todo", "todo", "https://t.example.test", "todo-svc"
-        )
+        _run_proxy_app(st, monkeypatch, **{failing: False})
     assert exc.value.code == 1
 
 

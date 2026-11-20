@@ -405,10 +405,19 @@ def _ensure_application(
 def _bind_policies_to_app(
     client, base_url: str, app_pk: str, policy_pks: dict[str, str]
 ) -> bool:
-    """Bind every group policy. False when one binding fails: the app has no group gate."""
+    """Bind every group policy. False when one binding fails: the app has no group gate.
+
+    A binding that exists counts as bound, so a second run of the setup passes.
+    """
     info("Binding access policies to application...")
     bound = True
     for group_name, policy_pk in policy_pks.items():
+        found = client.get(
+            f"{base_url}/api/v3/policies/bindings/?target={app_pk}&policy={policy_pk}"
+        )
+        if found.status_code == 200 and found.json().get("results"):
+            info(f"Policy binding already exists: {group_name}")
+            continue
         resp = client.post(
             f"{base_url}/api/v3/policies/bindings/",
             json={
@@ -419,9 +428,12 @@ def _bind_policies_to_app(
                 "timeout": 30,
             },
         )
+        text = resp.text.lower()
         if resp.status_code == 201:
             success(f"Bound policy: {group_name} → application")
-        elif resp.status_code == 400 and "already exists" in resp.text.lower():
+        elif resp.status_code == 400 and (
+            "already exists" in text or "unique set" in text
+        ):
             info(f"Policy binding already exists: {group_name}")
         else:
             error(f"Failed to bind policy {group_name}: {resp.status_code}")
@@ -435,29 +447,31 @@ def _configure_embedded_outpost(client, base_url: str, provider_id: str) -> bool
     resp = client.get(
         f"{base_url}/api/v3/outposts/instances/?managed=goauthentik.io/outposts/embedded"
     )
-    if resp.status_code == 200 and resp.json()["results"]:
-        outpost = resp.json()["results"][0]
-        outpost_pk = outpost["pk"]
-        current_providers = outpost.get("providers", [])
-
-        if provider_id not in current_providers:
-            current_providers.append(provider_id)
-            resp = client.patch(
-                f"{base_url}/api/v3/outposts/instances/{outpost_pk}/",
-                json={
-                    "providers": current_providers,
-                    "config": {"authentik_host": base_url},
-                },
-            )
-            if resp.status_code != 200:
-                error(f"Failed to update outpost: {resp.status_code}")
-                return False
-            success("Added provider to embedded outpost")
-        else:
-            info("Provider already in outpost")
+    if resp.status_code != 200:
+        error(f"Failed to read the embedded outpost: {resp.status_code}")
+        return False
+    results = resp.json()["results"]
+    if not results:
+        error("Embedded outpost not found - forward auth cannot work")
+        return False
+    outpost = results[0]
+    current_providers = outpost.get("providers", [])
+    if provider_id in current_providers:
+        info("Provider already in outpost")
         return True
-    error("Embedded outpost not found - forward auth cannot work")
-    return False
+    current_providers.append(provider_id)
+    resp = client.patch(
+        f"{base_url}/api/v3/outposts/instances/{outpost['pk']}/",
+        json={
+            "providers": current_providers,
+            "config": {"authentik_host": base_url},
+        },
+    )
+    if resp.status_code != 200:
+        error(f"Failed to update outpost: {resp.status_code}")
+        return False
+    success("Added provider to embedded outpost")
+    return True
 
 
 @task
