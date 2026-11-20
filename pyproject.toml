@@ -10,7 +10,7 @@ dependencies = [
     # not from this line. Keep this line on the same URL as uv.lock, because
     # `pip install -e .` reads it (#1115). psycopg/boto3 are declared as their
     # own plain entries below instead of via SDK extras.
-    "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v3.33.0/infra2_sdk-3.33.0-py3-none-any.whl",
+    "infra2-sdk @ https://github.com/wangzitian0/infra2-sdk/releases/download/v3.34.0/infra2_sdk-3.34.0-py3-none-any.whl",
     # common/tests unit testing
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
@@ -37,6 +37,8 @@ dev = [
     "opentelemetry-sdk>=1.24,<2",
     "opentelemetry-exporter-otlp-proto-http>=1.24,<2",
     "opentelemetry-instrumentation-logging>=0.45b0,<1",
+    "pydantic-ai-slim[zai]>=2.71.0,<3",
+    "pytest-recording>=0.15,<1",
 ]
 # e2e_regressions/ is a manual/local-only suite (no CI workflow runs it) — kept out
 # of the default `uv sync`/`uv run` install so the infra-ci unit-test job doesn't pay
