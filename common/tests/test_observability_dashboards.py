@@ -794,6 +794,9 @@ SERVICE_METRICS = {
         "http.server.active_requests",
         "canary.probe.duration_ms.bucket",
         "canary.probe.outcomes",
+        # Slice 3 of #1807: emitted by infra2_sdk.runtime.llm (read from staging SigNoz).
+        "gen_ai.client.token.usage.sum",
+        "gen_ai.client.operation.duration.bucket",
     },
     "finance-report-backend": {
         "finance.ai_provider.latency.bucket",
@@ -3805,3 +3808,93 @@ def test_finance_p95_rule_excludes_slow_ai_and_upload_routes() -> None:
         "/workflow/status",
     ):
         assert slow_route in promql
+
+
+_TODO_LLM_PANELS = {
+    # widget id: (dataSource, signal names the first query must read)
+    "todo-llm-token-usage": ("metrics", ["gen_ai.client.token.usage.sum"]),
+    "todo-llm-operation-duration": (
+        "metrics",
+        ["gen_ai.client.operation.duration.bucket"] * 2,
+    ),
+    "todo-llm-cost-by-call-site": ("traces", ["sum(operation.cost)"]),
+    "todo-llm-tokens-by-call-site": (
+        "traces",
+        ["sum(gen_ai.usage.input_tokens)", "sum(gen_ai.usage.output_tokens)"],
+    ),
+}
+
+
+def _todo_llm_problems(dashboard: dict) -> list[str]:
+    widgets = {w["id"]: w for w in dashboard["widgets"]}
+    laid_out = {item["i"] for item in dashboard["layout"]}
+    problems = []
+    for wid, (source, signals) in _TODO_LLM_PANELS.items():
+        if wid not in widgets:
+            problems.append(f"missing panel {wid}")
+            continue
+        if wid not in laid_out:
+            problems.append(f"panel {wid} has no layout entry")
+        queries = widgets[wid]["query"]["builder"]["queryData"]
+        read = [
+            a.get("metricName") or a["expression"]
+            for query in queries
+            for a in query["aggregations"]
+        ]
+        if read != signals or any(q["dataSource"] != source for q in queries):
+            problems.append(f"panel {wid} reads {read} from the wrong source")
+        if wid != "todo-llm-token-usage" and not all(
+            any(g["key"] == "infra.llm.call_site" for g in q.get("groupBy", []))
+            for q in queries
+        ):
+            problems.append(f"panel {wid} is not grouped by infra.llm.call_site")
+        if source == "traces" and not all(
+            "gen_ai.operation.name = 'chat'" in q["filter"]["expression"]
+            for q in queries
+        ):
+            problems.append(f"panel {wid} does not filter on chat spans")
+    return problems
+
+
+def test_todo_dashboard_charts_the_llm_signals_of_slice_3() -> None:
+    """#1807 Slice 3: token usage, duration, and cost per infra.llm.call_site.
+    The names were read from staging SigNoz. operation.cost is a span attribute,
+    so its panel reads traces, not metrics."""
+    path = ROOT / "platform/30.todo/dashboard.json"
+    assert _todo_llm_problems(load_dashboard(path)) == []
+
+
+def test_todo_llm_panel_check_fails_on_each_mutation() -> None:
+    path = ROOT / "platform/30.todo/dashboard.json"
+
+    dropped = load_dashboard(path)
+    dropped["widgets"] = [
+        w for w in dropped["widgets"] if w["id"] != "todo-llm-cost-by-call-site"
+    ]
+    assert "missing panel todo-llm-cost-by-call-site" in _todo_llm_problems(dropped)
+
+    renamed = load_dashboard(path)
+    next(w for w in renamed["widgets"] if w["id"] == "todo-llm-token-usage")["query"][
+        "builder"
+    ]["queryData"][0]["aggregations"][0]["metricName"] = "gen_ai.token.usage"
+    assert any("todo-llm-token-usage reads" in p for p in _todo_llm_problems(renamed))
+
+    ungrouped = load_dashboard(path)
+    next(w for w in ungrouped["widgets"] if w["id"] == "todo-llm-operation-duration")[
+        "query"
+    ]["builder"]["queryData"][0]["groupBy"] = []
+    assert any("not grouped" in p for p in _todo_llm_problems(ungrouped))
+
+    unlaid = load_dashboard(path)
+    unlaid["layout"] = [
+        i for i in unlaid["layout"] if i["i"] != "todo-llm-tokens-by-call-site"
+    ]
+    assert any("no layout entry" in p for p in _todo_llm_problems(unlaid))
+
+    nochat = load_dashboard(path)
+    next(w for w in nochat["widgets"] if w["id"] == "todo-llm-cost-by-call-site")[
+        "query"
+    ]["builder"]["queryData"][0]["filter"][
+        "expression"
+    ] = "(service.name = 'platform-todo')"
+    assert any("chat spans" in p for p in _todo_llm_problems(nochat))
