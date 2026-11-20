@@ -1345,7 +1345,7 @@ TODO_SUMMARY_DECODING = DecodingSpec(
     "todo.summary.v1",
     thinking=False,
     temperature=0.0,
-    max_tokens=256,
+    max_tokens=512,
     timeout=20.0,
 )
 

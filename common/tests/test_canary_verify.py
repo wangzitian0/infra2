@@ -1144,7 +1144,9 @@ def test_gen_ai_queries_exact_contract() -> None:
     metrics_sql = signoz_queries.gen_ai_metrics_query(
         service_name="platform-todo", environment="staging", window_seconds=1800
     )
+    assert "signoz_metrics.distributed_samples_v4" in metrics_sql
     assert "signoz_metrics.distributed_time_series_v4" in metrics_sql
+    assert "3600000" in metrics_sql
     assert "resource_attrs['service.name'] = 'platform-todo'" in metrics_sql
     assert "resource_attrs['deployment.environment.name'] = 'staging'" in metrics_sql
     assert "gen_ai.client.token.usage" in metrics_sql

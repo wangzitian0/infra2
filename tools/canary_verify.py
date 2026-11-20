@@ -240,7 +240,7 @@ def _summary_probe_command(container: str, *, stream: bool) -> str:
         "import base64, json, urllib.error, urllib.request\n"
         f"req = urllib.request.Request('http://localhost:8000/api/todos/summary', data=base64.b64decode('{payload_b64}'), headers={{'Content-Type': 'application/json'}})\n"
         "try:\n"
-        "    print(urllib.request.urlopen(req, timeout=30).read().decode())\n"
+        "    print(urllib.request.urlopen(req, timeout=65).read().decode())\n"
         "except urllib.error.HTTPError as err:\n"
         "    print(json.dumps({'status': 'error', 'http_status': err.code, 'detail': err.read().decode(errors='replace')[:300]}))\n"
         "except Exception as err:\n"
