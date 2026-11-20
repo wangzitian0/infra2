@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from invoke import task
+from invoke.exceptions import Exit
 
 from common.deploy.config_hash import prepare_delivered_mounts
 from common.deploy.deployer import Deployer, make_tasks
@@ -190,7 +191,7 @@ def sso_setup(c):
 
     if not internal_domain:
         error("Missing INTERNAL_DOMAIN")
-        return
+        raise Exit(code=1)
 
     portal_url = f"https://home{domain_suffix}.{internal_domain}"
     internal_host = f"platform-portal{suffix}"
@@ -201,13 +202,13 @@ def sso_setup(c):
         c, "invoke authentik.shared.create-root-token", "Ensure Root Token"
     )
     if not res.ok:
-        return
+        raise Exit(code=1)
 
     res = run_with_status(
         c, "invoke authentik.shared.setup-admin-group", "Ensure Admin Group"
     )
     if not res.ok:
-        return
+        raise Exit(code=1)
 
     cmd = (
         f"invoke authentik.shared.create-proxy-app "
@@ -219,7 +220,7 @@ def sso_setup(c):
     )
     res = run_with_status(c, cmd, "Create SSO Application")
     if not res.ok:
-        return
+        raise Exit(code=1)
 
     success("Portal SSO setup complete")
 

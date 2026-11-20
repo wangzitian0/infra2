@@ -9,11 +9,101 @@ Storage in Vault:
 - secret/platform/<env>/<service>/sso_*: Per-service SSO config
 """
 
+import functools
+import shlex
+
 from invoke import task
+from invoke.exceptions import Exit
 from common.common import check_service
 from common.core.environ import get_env, service_domain
 from common.security.store import vault_token
 from common.console import header, success, error, warning, info
+
+
+def fail_closed(func):
+    """Turn a `False` return into exit code 1, so a caller of `invoke` sees the failure."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+        if result is False:
+            raise Exit(code=1)
+        return result
+
+    return wrapper
+
+
+REMOTE_TIMEOUT_SECONDS = 600
+
+
+def build_remote_script(
+    env_name: str,
+    env_suffix: str,
+    internal_domain: str,
+    domain_suffix: str = "",
+    compose_root: str = "/etc/dokploy/compose",
+) -> str:
+    """Build the remote script that runs token-init for ONE environment.
+
+    The compose checkout glob matches the production and the staging directory.
+    The script picks the directory that is the working directory of this
+    environment's running `platform-authentik-server${ENV_SUFFIX}` container.
+    It exits non-zero when that container is missing or the match is not exactly one.
+    """
+    q = shlex.quote
+    return f"""set -eu
+ENV_NAME={q(env_name)}
+ENV_SUFFIX={q(env_suffix)}
+SERVER="platform-authentik-server$ENV_SUFFIX"
+WD=$(docker inspect -f '{{{{index .Config.Labels "com.docker.compose.project.working_dir"}}}}' "$SERVER" 2>/dev/null || true)
+if [ -z "$WD" ]; then
+  echo "FAIL: container $SERVER not found for environment $ENV_NAME" >&2
+  exit 11
+fi
+WDR=$(cd "$WD" 2>/dev/null && pwd -P || true)
+MATCHES=0
+CHOSEN=""
+for d in {compose_root}/platform-authentik-*/code/platform/10.authentik; do
+  [ -d "$d" ] || continue
+  DR=$(cd "$d" && pwd -P)
+  if [ -n "$WDR" ] && [ "$DR" = "$WDR" ]; then
+    MATCHES=$((MATCHES + 1))
+    CHOSEN="$d"
+  fi
+done
+if [ "$MATCHES" -ne 1 ]; then
+  echo "FAIL: $MATCHES compose directories match $SERVER (working dir $WD); expected 1" >&2
+  exit 12
+fi
+cd "$CHOSEN"
+TMPENV=$(mktemp)
+trap 'rm -f "$TMPENV"' EXIT
+printf 'VAULT_INIT_TOKEN=%s\n' "$VAULT_INIT_TOKEN" > "$TMPENV"
+printf 'VAULT_INIT_ADDR=%s\n' "https://vault.{internal_domain}" >> "$TMPENV"
+ENV={q(env_name)} ENV_SUFFIX={q(env_suffix)} ENV_DOMAIN_SUFFIX={q(domain_suffix)} \
+INTERNAL_DOMAIN={q(internal_domain)} \
+  docker compose run --rm --env-file "$TMPENV" token-init </dev/null
+"""
+
+
+def _run_remote_script(host: str, script: str, token: str) -> tuple[int, str, str]:
+    """Run `script` on the VPS over non-interactive SSH with a bounded run time.
+
+    The token goes to the remote shell on stdin, never in the process list.
+    """
+    from common.deploy.vps_ssh import ssh_script
+
+    _, user, key_path, port = _ssh_credentials()
+    payload = f"export VAULT_INIT_TOKEN={shlex.quote(token)}\n{script}"
+    return ssh_script(
+        payload, host, user, key_path, port, timeout=REMOTE_TIMEOUT_SECONDS
+    )
+
+
+def _ssh_credentials():
+    from common.deploy.vps_ssh import resolve_ssh_credentials
+
+    return resolve_ssh_credentials()
 
 
 @task
@@ -23,6 +113,7 @@ def status(c):
 
 
 @task
+@fail_closed
 def create_root_token(c):
     """Create Authentik Root Token for SSO administration
 
@@ -44,6 +135,12 @@ def create_root_token(c):
 
     e = get_env()
     env_name = e.get("ENV", "production")
+
+    existing = get_secrets("platform", "authentik", env_name)
+    if existing.get("root_token") or existing.get("api_token"):
+        success(f"Authentik Root Token already in Vault for {env_name}; skipping")
+        return True
+
     vault_root_token = vault_token()
 
     if not vault_root_token:
@@ -57,29 +154,15 @@ def create_root_token(c):
         return False
 
     info("Running token creation on server...")
-
-    # Write token to temp file on remote to avoid exposing in process list
-    script = f"""
-set -e
-cd /etc/dokploy/compose/platform-authentik-*/code/platform/10.authentik
-# Create temp env file with token (more secure than command line args)
-TMPENV=$(mktemp)
-echo "VAULT_INIT_TOKEN=$VAULT_INIT_TOKEN" > "$TMPENV"
-echo "VAULT_INIT_ADDR=https://vault.{e["INTERNAL_DOMAIN"]}" >> "$TMPENV"
-docker compose run --rm --env-file "$TMPENV" token-init
-rm -f "$TMPENV"
-"""
-
-    # Pass token via environment variable to SSH, not in command
-    result = c.run(
-        f"ssh root@{e['VPS_HOST']} 'VAULT_INIT_TOKEN=\"$VAULT_INIT_TOKEN\" bash -s'",
-        env={"VAULT_INIT_TOKEN": vault_root_token},
-        in_stream=script,
-        warn=True,
+    script = build_remote_script(
+        env_name,
+        e.get("ENV_SUFFIX") or "",
+        e["INTERNAL_DOMAIN"],
+        e.get("ENV_DOMAIN_SUFFIX") or "",
     )
-
-    if not result.ok:
-        error("Failed to create token")
+    rc, _out, err = _run_remote_script(e["VPS_HOST"], script, vault_root_token)
+    if rc != 0:
+        error("Failed to create token", (err or "").strip()[-500:])
         return False
 
     # Verify in Vault
@@ -91,7 +174,6 @@ rm -f "$TMPENV"
     if root_token:
         success("Authentik Root Token created and stored in Vault")
         info(f"Vault path: secret/platform/{env_name}/authentik (key: root_token)")
-        info(f"Token prefix: {root_token[:20]}...")
         info("\nYou can now create SSO apps:")
         info(
             "  invoke authentik.shared.create-proxy-app --name=Portal --slug=portal ..."
@@ -315,6 +397,7 @@ def _configure_embedded_outpost(client, base_url: str, provider_id: str) -> None
 
 
 @task
+@fail_closed
 def create_proxy_app(
     c, name, slug, external_host, internal_host, port=None, allowed_groups="admins"
 ):
@@ -454,6 +537,7 @@ def list_apps(c):
 
 
 @task
+@fail_closed
 def setup_admin_group(c):
     """Ensure akadmin user is in admins group
 

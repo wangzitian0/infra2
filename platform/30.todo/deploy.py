@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 from invoke import task
+from invoke.exceptions import Exit
 from infra2_sdk.routing import CANARY_SLOT
 
 from common.console import error, header, info, run_with_status, success
@@ -263,7 +264,7 @@ def sso_setup(c):
 
     if not internal_domain:
         error("Missing INTERNAL_DOMAIN")
-        return
+        raise Exit(code=1)
 
     tier = resolve_environment_tier(
         env.get("ENVIRONMENT") or env.get("ENV") or "production"
@@ -282,13 +283,13 @@ def sso_setup(c):
         c, "invoke authentik.shared.create-root-token", "Ensure Root Token"
     )
     if not res.ok:
-        return
+        raise Exit(code=1)
 
     res = run_with_status(
         c, "invoke authentik.shared.setup-admin-group", "Ensure Admin Group"
     )
     if not res.ok:
-        return
+        raise Exit(code=1)
 
     cmd = (
         f"invoke authentik.shared.create-proxy-app "
@@ -300,7 +301,7 @@ def sso_setup(c):
     )
     res = run_with_status(c, cmd, "Create SSO Application")
     if not res.ok:
-        return
+        raise Exit(code=1)
 
     success("Todo SSO setup complete")
 
