@@ -7,14 +7,16 @@ import json
 import logging
 import os
 import sys
+import threading
+import warnings
 from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
 import httpx
 import openai
 import pytest
-from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import (
     InMemoryLogRecordExporter,
     SimpleLogRecordProcessor,
@@ -43,11 +45,7 @@ from infra2_sdk.runtime.llm import (
     redact_llm_error,
     vcr_llm_config,
 )
-from infra2_sdk.runtime.otel import (
-    _JsonLogFormatter,
-    _RedactingLogRecordProcessor,
-    _logging_handler_class,
-)
+from infra2_sdk.runtime.otel import OtelSettings, configure_telemetry
 
 models.ALLOW_MODEL_REQUESTS = False
 
@@ -138,8 +136,53 @@ def _metric_attributes_by_name(
     return out
 
 
+class _Ok200Handler(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length > 0:
+            self.rfile.read(length)
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:
+        del format, args
+
+
+def _load_todo_app_with_sdk_formatter() -> tuple[Any, logging.Formatter]:
+    root = logging.getLogger()
+    saved_handlers = list(root.handlers)
+    root.handlers = []
+    try:
+        todo_mod = _load_todo_app()
+        stream_handlers = [
+            h for h in root.handlers if isinstance(h, logging.StreamHandler)
+        ]
+        assert stream_handlers and stream_handlers[0].formatter is not None
+        return todo_mod, stream_handlers[0].formatter
+    finally:
+        for handler in list(root.handlers):
+            root.removeHandler(handler)
+        for handler in saved_handlers:
+            root.addHandler(handler)
+
+
 @contextmanager
-def _capture_otel_and_logs(logger: logging.Logger):
+def _capture_otel_and_logs(logger: logging.Logger, sdk_formatter: logging.Formatter):
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _Ok200Handler)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+
+    providers = configure_telemetry(
+        OtelSettings(
+            service_name="platform-todo",
+            endpoint=f"http://127.0.0.1:{srv.server_port}",
+            environment="staging",
+            deployment_environment="staging",
+            resource_attributes={},
+        ),
+        set_global=False,
+        capture_logs=False,
+    )
     span_exporter = InMemorySpanExporter()
     tracer_provider = TracerProvider()
     tracer_provider.add_span_processor(SimpleSpanProcessor(span_exporter))
@@ -148,21 +191,22 @@ def _capture_otel_and_logs(logger: logging.Logger):
     meter_provider = MeterProvider(metric_readers=[metric_reader])
 
     log_exporter = InMemoryLogRecordExporter()
-    logger_provider = LoggerProvider()
-    logger_provider.add_log_record_processor(_RedactingLogRecordProcessor())
-    logger_provider.add_log_record_processor(SimpleLogRecordProcessor(log_exporter))
-    otlp_handler = _logging_handler_class()(
-        level=logging.INFO, logger_provider=logger_provider
+    assert providers.logger_provider is not None
+    providers.logger_provider.add_log_record_processor(
+        SimpleLogRecordProcessor(log_exporter)
     )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        from opentelemetry.sdk._logs import LoggingHandler
+
+        otlp_handler = LoggingHandler(
+            level=logging.INFO, logger_provider=providers.logger_provider
+        )
 
     stream_buf = io.StringIO()
     json_handler = logging.StreamHandler(stream_buf)
     json_handler.setLevel(logging.INFO)
-    json_handler.setFormatter(
-        _JsonLogFormatter(
-            {"service.name": "platform-todo", "deployment.environment.name": "staging"}
-        )
-    )
+    json_handler.setFormatter(sdk_formatter)
 
     prev_level = logger.level
     logger.setLevel(logging.INFO)
@@ -183,7 +227,9 @@ def _capture_otel_and_logs(logger: logging.Logger):
         logger.setLevel(prev_level)
         tracer_provider.shutdown()
         meter_provider.shutdown()
-        logger_provider.shutdown()
+        providers.shutdown()
+        srv.shutdown()
+        srv.server_close()
 
 
 def test_summary_unconfigured_without_api_key_and_status_excludes_llm(
@@ -213,11 +259,11 @@ async def test_summary_otel_spans_metrics_logs_and_redaction(
 ) -> None:
     assert "structlog" not in sys.modules
     monkeypatch.setenv("LLM_API_KEY", "test-zai-key")
-    todo_mod = _load_todo_app()
+    todo_mod, sdk_formatter = _load_todo_app_with_sdk_formatter()
 
     fake_model = TestModel(custom_output_args=json.loads(_sample_summary_json()))
 
-    with _capture_otel_and_logs(todo_mod.LOGGER) as (
+    with _capture_otel_and_logs(todo_mod.LOGGER, sdk_formatter) as (
         tracer_provider,
         meter_provider,
         span_exporter,
