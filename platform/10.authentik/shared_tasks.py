@@ -9,11 +9,116 @@ Storage in Vault:
 - secret/platform/<env>/<service>/sso_*: Per-service SSO config
 """
 
+import functools
+import shlex
+
 from invoke import task
+from invoke.exceptions import Exit
+from rich.markup import escape
 from common.common import check_service
 from common.core.environ import get_env, service_domain
 from common.security.store import vault_token
 from common.console import header, success, error, warning, info
+
+
+def fail_closed(func):
+    """Turn a `False` return into exit code 1, so a caller of `invoke` sees the failure."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+        if result is False:
+            raise Exit(code=1)
+        return result
+
+    return wrapper
+
+
+REMOTE_TIMEOUT_SECONDS = 600
+
+
+def build_remote_script(
+    env_name: str,
+    env_suffix: str,
+    internal_domain: str,
+    compose_root: str = "/etc/dokploy/compose",
+) -> str:
+    """Build the remote script that runs token-init for ONE environment.
+
+    The compose checkout glob matches the production and the staging directory.
+    The script picks the directory that is the working directory of this
+    environment's running `platform-authentik-server${ENV_SUFFIX}` container.
+    It runs compose in the project of that container, because the `secrets`
+    volume that token-init mounts belongs to that project, and it starts no
+    dependency, so the running server and worker stay as they are. It passes
+    `ENV_SUFFIX` into the container, because init-token.sh waits for the server
+    `platform-authentik-server${ENV_SUFFIX}` of this environment.
+    Exit codes: 11 container missing, 12 directory match is not exactly one,
+    13 container has no compose project label.
+    """
+    q = shlex.quote
+    vault_url = f"https://vault.{internal_domain}"
+    return f"""set -eu
+ENV_NAME={q(env_name)}
+ENV_SUFFIX={q(env_suffix)}
+SERVER="platform-authentik-server$ENV_SUFFIX"
+WD=$(docker inspect -f '{{{{index .Config.Labels "com.docker.compose.project.working_dir"}}}}' "$SERVER" 2>/dev/null || true)
+if [ -z "$WD" ]; then
+  echo "FAIL: container $SERVER not found for environment $ENV_NAME" >&2
+  exit 11
+fi
+PROJECT=$(docker inspect -f '{{{{index .Config.Labels "com.docker.compose.project"}}}}' "$SERVER" 2>/dev/null || true)
+if [ -z "$PROJECT" ]; then
+  echo "FAIL: container $SERVER has no compose project label" >&2
+  exit 13
+fi
+WDR=$(cd "$WD" 2>/dev/null && pwd -P || true)
+MATCHES=0
+CHOSEN=""
+for d in {compose_root}/platform-authentik-*/code/platform/10.authentik; do
+  [ -d "$d" ] || continue
+  DR=$(cd "$d" && pwd -P)
+  if [ -n "$WDR" ] && [ "$DR" = "$WDR" ]; then
+    MATCHES=$((MATCHES + 1))
+    CHOSEN="$d"
+  fi
+done
+if [ "$MATCHES" -ne 1 ]; then
+  echo "FAIL: $MATCHES compose directories match $SERVER (working dir $WD); expected 1" >&2
+  exit 12
+fi
+cd "$CHOSEN"
+TMPENV=$(mktemp)
+trap 'rm -f "$TMPENV"' EXIT
+printf 'VAULT_INIT_TOKEN=%s\\n' "$VAULT_INIT_TOKEN" > "$TMPENV"
+ENV={q(env_name)} ENV_SUFFIX={q(env_suffix)} VAULT_ADDR={q(vault_url)} \
+  docker compose --env-file "$TMPENV" -p "$PROJECT" run --rm --no-deps \
+  -e ENV_SUFFIX="$ENV_SUFFIX" token-init </dev/null
+"""
+
+
+def _run_remote_script(
+    host: str, script: str, token: str, user: str | None = None
+) -> tuple[int, str, str]:
+    """Run `script` on the VPS over non-interactive SSH with a bounded run time.
+
+    The token goes to the remote shell on stdin, never in the process list.
+    `user` defaults to the SSH user of the watchdog credentials.
+    """
+    from common.deploy.vps_ssh import ssh_script
+
+    _, default_user, key_path, port = _ssh_credentials()
+    user = user or default_user
+    payload = f"export VAULT_INIT_TOKEN={shlex.quote(token)}\n{script}"
+    return ssh_script(
+        payload, host, user, key_path, port, timeout=REMOTE_TIMEOUT_SECONDS
+    )
+
+
+def _ssh_credentials():
+    from common.deploy.vps_ssh import resolve_ssh_credentials
+
+    return resolve_ssh_credentials()
 
 
 @task
@@ -22,12 +127,40 @@ def status(c):
     return check_service(c, "authentik", "ak healthcheck")
 
 
-@task
-def create_root_token(c):
+SSH_FAILURES = {
+    124: "SSH run time limit reached",
+    255: "SSH failed: check the host key, the key file and the network",
+}
+
+
+def _failure_reason(rc: int, stderr: str) -> str:
+    """Keep only the `FAIL:` lines of the remote script, else a fixed SSH reason.
+
+    Container output can hold a token, so no other remote text reaches the terminal.
+    """
+    lines = [x.strip() for x in (stderr or "").splitlines() if x.startswith("FAIL:")]
+    return escape("; ".join(lines)[-500:] or SSH_FAILURES.get(rc, ""))
+
+
+def _vault_holds_root_token(env_name: str) -> bool:
+    """True when Vault holds `root_token` or `api_token` for this environment."""
+    from common.security.store import VaultSecrets, get_secrets
+
+    secrets = get_secrets("platform", "authentik", env_name)
+    try:
+        return bool(secrets.get("root_token") or secrets.get("api_token"))
+    except VaultSecrets.VaultSecretNotFoundError:
+        return False
+
+
+@task(help={"force": "Run token-init even when Vault already holds a token"})
+@fail_closed
+def create_root_token(c, force=False):
     """Create Authentik Root Token for SSO administration
 
     This creates the admin API token stored as 'root_token' in Vault.
     Requires VAULT_TOKEN (the deploy credential) to write to Vault.
+    It skips the run when Vault already holds the token; use --force to run it again.
 
     The Authentik Root Token is used to:
     - Create SSO applications
@@ -38,12 +171,21 @@ def create_root_token(c):
         export VAULT_TOKEN=<deploy or break-glass token>
         invoke authentik.shared.create-root-token
     """
-    from common.security.store import get_secrets
+    from common.security.store import VaultSecrets, get_secrets
 
     header("Creating Authentik Root Token", "SSO Admin Setup")
 
     e = get_env()
     env_name = e.get("ENV", "production")
+    # The suffix follows the environment name, never a stale exported ENV_SUFFIX.
+    env_suffix = get_env(env_name).get("ENV_SUFFIX") or ""
+    if (e.get("ENV_SUFFIX") or "") != env_suffix:
+        error(
+            f"ENV_SUFFIX {e.get('ENV_SUFFIX')!r} does not match environment {env_name}",
+            f"expected {env_suffix!r}; unset ENV_SUFFIX",
+        )
+        return False
+
     vault_root_token = vault_token()
 
     if not vault_root_token:
@@ -56,30 +198,29 @@ def create_root_token(c):
         info("as VAULT_TOKEN (bootstrap/05.vault README)")
         return False
 
+    if not force:
+        try:
+            held = _vault_holds_root_token(env_name)
+        except VaultSecrets.VaultError as exc:
+            error("Cannot read Authentik secrets from Vault", escape(str(exc).strip()))
+            return False
+        if held:
+            success(f"Authentik Root Token already in Vault for {env_name}; skipping")
+            return True
+
+    internal_domain = e.get("INTERNAL_DOMAIN")
+    vps_host = e.get("VPS_HOST")
+    if not internal_domain or not vps_host:
+        error("INTERNAL_DOMAIN and VPS_HOST are required")
+        return False
+
     info("Running token creation on server...")
-
-    # Write token to temp file on remote to avoid exposing in process list
-    script = f"""
-set -e
-cd /etc/dokploy/compose/platform-authentik-*/code/platform/10.authentik
-# Create temp env file with token (more secure than command line args)
-TMPENV=$(mktemp)
-echo "VAULT_INIT_TOKEN=$VAULT_INIT_TOKEN" > "$TMPENV"
-echo "VAULT_INIT_ADDR=https://vault.{e["INTERNAL_DOMAIN"]}" >> "$TMPENV"
-docker compose run --rm --env-file "$TMPENV" token-init
-rm -f "$TMPENV"
-"""
-
-    # Pass token via environment variable to SSH, not in command
-    result = c.run(
-        f"ssh root@{e['VPS_HOST']} 'VAULT_INIT_TOKEN=\"$VAULT_INIT_TOKEN\" bash -s'",
-        env={"VAULT_INIT_TOKEN": vault_root_token},
-        in_stream=script,
-        warn=True,
+    script = build_remote_script(env_name, env_suffix, internal_domain)
+    rc, _out, err = _run_remote_script(
+        vps_host, script, vault_root_token, user=e.get("VPS_SSH_USER")
     )
-
-    if not result.ok:
-        error("Failed to create token")
+    if rc != 0:
+        error(f"Failed to create token (exit {rc})", _failure_reason(rc, err) or None)
         return False
 
     # Verify in Vault
@@ -91,7 +232,6 @@ rm -f "$TMPENV"
     if root_token:
         success("Authentik Root Token created and stored in Vault")
         info(f"Vault path: secret/platform/{env_name}/authentik (key: root_token)")
-        info(f"Token prefix: {root_token[:20]}...")
         info("\nYou can now create SSO apps:")
         info(
             "  invoke authentik.shared.create-proxy-app --name=Portal --slug=portal ..."
@@ -264,9 +404,20 @@ def _ensure_application(
 
 def _bind_policies_to_app(
     client, base_url: str, app_pk: str, policy_pks: dict[str, str]
-) -> None:
+) -> bool:
+    """Bind every group policy. False when one binding fails: the app has no group gate.
+
+    A binding that exists counts as bound, so a second run of the setup passes.
+    """
     info("Binding access policies to application...")
+    bound = True
     for group_name, policy_pk in policy_pks.items():
+        found = client.get(
+            f"{base_url}/api/v3/policies/bindings/?target={app_pk}&policy={policy_pk}"
+        )
+        if found.status_code == 200 and found.json().get("results"):
+            info(f"Policy binding already exists: {group_name}")
+            continue
         resp = client.post(
             f"{base_url}/api/v3/policies/bindings/",
             json={
@@ -277,44 +428,54 @@ def _bind_policies_to_app(
                 "timeout": 30,
             },
         )
+        text = resp.text.lower()
         if resp.status_code == 201:
             success(f"Bound policy: {group_name} → application")
-        elif resp.status_code == 400 and "already exists" in resp.text.lower():
+        elif resp.status_code == 400 and (
+            "already exists" in text or "unique set" in text
+        ):
             info(f"Policy binding already exists: {group_name}")
         else:
-            warning(f"Failed to bind policy {group_name}: {resp.status_code}")
+            error(f"Failed to bind policy {group_name}: {resp.status_code}")
+            bound = False
+    return bound
 
 
-def _configure_embedded_outpost(client, base_url: str, provider_id: str) -> None:
+def _configure_embedded_outpost(client, base_url: str, provider_id: str) -> bool:
+    """Add the provider to the embedded outpost. False when forward auth cannot work."""
     info("Configuring embedded outpost...")
     resp = client.get(
         f"{base_url}/api/v3/outposts/instances/?managed=goauthentik.io/outposts/embedded"
     )
-    if resp.status_code == 200 and resp.json()["results"]:
-        outpost = resp.json()["results"][0]
-        outpost_pk = outpost["pk"]
-        current_providers = outpost.get("providers", [])
-
-        if provider_id not in current_providers:
-            current_providers.append(provider_id)
-            resp = client.patch(
-                f"{base_url}/api/v3/outposts/instances/{outpost_pk}/",
-                json={
-                    "providers": current_providers,
-                    "config": {"authentik_host": base_url},
-                },
-            )
-            if resp.status_code == 200:
-                success("Added provider to embedded outpost")
-            else:
-                warning(f"Failed to update outpost: {resp.status_code}")
-        else:
-            info("Provider already in outpost")
-    else:
-        warning("Embedded outpost not found - forward auth may not work")
+    if resp.status_code != 200:
+        error(f"Failed to read the embedded outpost: {resp.status_code}")
+        return False
+    results = resp.json()["results"]
+    if not results:
+        error("Embedded outpost not found - forward auth cannot work")
+        return False
+    outpost = results[0]
+    current_providers = outpost.get("providers", [])
+    if provider_id in current_providers:
+        info("Provider already in outpost")
+        return True
+    current_providers.append(provider_id)
+    resp = client.patch(
+        f"{base_url}/api/v3/outposts/instances/{outpost['pk']}/",
+        json={
+            "providers": current_providers,
+            "config": {"authentik_host": base_url},
+        },
+    )
+    if resp.status_code != 200:
+        error(f"Failed to update outpost: {resp.status_code}")
+        return False
+    success("Added provider to embedded outpost")
+    return True
 
 
 @task
+@fail_closed
 def create_proxy_app(
     c, name, slug, external_host, internal_host, port=None, allowed_groups="admins"
 ):
@@ -382,8 +543,10 @@ def create_proxy_app(
             return False
         app_slug, app_pk = app_info
 
-        _bind_policies_to_app(client, base_url, app_pk, policy_pks)
-        _configure_embedded_outpost(client, base_url, provider_id)
+        if not _bind_policies_to_app(client, base_url, app_pk, policy_pks):
+            return False
+        if not _configure_embedded_outpost(client, base_url, provider_id):
+            return False
 
         info(f"\n✨ SSO protection enabled for {external_host}")
         info(f"Access control: Only users in [{', '.join(group_list)}] can access")
@@ -401,6 +564,7 @@ def create_proxy_app(
 
 
 @task
+@fail_closed
 def list_apps(c):
     """List all Authentik applications"""
     import httpx
@@ -454,6 +618,7 @@ def list_apps(c):
 
 
 @task
+@fail_closed
 def setup_admin_group(c):
     """Ensure akadmin user is in admins group
 

@@ -75,6 +75,8 @@ return ak_is_group_member(request.user, name='admins')
 # 1. 创建 Authentik Root Token（需要 Vault Root）
 export VAULT_ROOT_TOKEN=<vault-admin-token>
 DEPLOY_ENV=<env> invoke authentik.shared.create-root-token
+# Skips when Vault holds the token (--force runs it again). Else runs in this
+# environment's compose directory only and fails closed (platform.canary_todo.md section 5B).
 
 # 2. 设置 admin 组并添加 akadmin
 DEPLOY_ENV=<env> invoke authentik.shared.setup-admin-group
@@ -227,7 +229,7 @@ curl -I https://home${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}
 | 问题 | 可能原因 | 解决方案 |
 |------|---------|---------|
 | "Token not found in Vault" | Root Token 未创建 | `invoke authentik.shared.create-root-token` |
-| 401 Unauthorized on API | Token 过期或无效 | 重新创建 Root Token |
+| 401 Unauthorized on API | Token 过期或无效 | 在 Authentik 删除 `root-automation` token，再运行 `invoke authentik.shared.create-root-token --force`（`init-token.sh` 重用已存在的 token） |
 | 403 Forbidden after login | 用户不在允许的组 | 将用户加入组或检查策略配置 |
 | Forward Auth 不生效 | Traefik 配置错误 | 检查 compose labels 和 Traefik logs |
 | 重定向循环 | 域名配置不匹配 | 检查 external_host 与实际域名 |

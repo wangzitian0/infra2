@@ -42,3 +42,34 @@ def resolve_ssh_credentials() -> tuple[str, str, str, int]:
         key_path = str(DEFAULT_SSH_KEY)
     port = int(os.environ.get("INFRA2_WATCHDOG_SSH_PORT", "") or "22")
     return host, user, key_path, port
+
+
+def ssh_script(
+    script: str, host: str, user: str, key_path: str, port: int = 22, timeout: int = 600
+) -> tuple[int, str, str]:
+    """Run `script` through `bash -s` on stdin. No prompt, no TTY, bounded run time.
+
+    The script can carry a Vault token, so this call requires a known host key: an
+    unknown or changed key fails the call (no `StrictHostKeyChecking=no`).
+    """
+    ssh_args = [
+        "ssh",
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "ConnectTimeout=10",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-p",
+        str(port),
+    ]
+    if key_path and os.path.exists(key_path):
+        ssh_args.extend(["-i", key_path])
+    ssh_args.extend([f"{user}@{host}", "bash -s"])
+    try:
+        res = subprocess.run(
+            ssh_args, input=script, capture_output=True, text=True, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        return 124, "", f"ssh script timed out after {timeout}s"
+    return res.returncode, res.stdout, res.stderr
