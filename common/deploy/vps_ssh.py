@@ -47,7 +47,11 @@ def resolve_ssh_credentials() -> tuple[str, str, str, int]:
 def ssh_script(
     script: str, host: str, user: str, key_path: str, port: int = 22, timeout: int = 600
 ) -> tuple[int, str, str]:
-    """Run `script` through `bash -s` on stdin. No prompt, no TTY, bounded run time."""
+    """Run `script` through `bash -s` on stdin. No prompt, no TTY, bounded run time.
+
+    The script can carry a Vault token, so this call checks the host key: a first
+    connection records it, and a changed key fails the call (no `StrictHostKeyChecking=no`).
+    """
     ssh_args = [
         "ssh",
         "-o",
@@ -55,9 +59,7 @@ def ssh_script(
         "-o",
         "ConnectTimeout=10",
         "-o",
-        "StrictHostKeyChecking=no",
-        "-o",
-        "UserKnownHostsFile=/dev/null",
+        "StrictHostKeyChecking=accept-new",
         "-p",
         str(port),
     ]

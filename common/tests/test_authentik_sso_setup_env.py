@@ -13,6 +13,8 @@ from invoke.exceptions import Exit
 
 REPO = Path(__file__).resolve().parents[2]
 SECRET = "tok-SECRET-0123456789-abcdefghijklmnop"
+WD_FORMAT = '{{index .Config.Labels "com.docker.compose.project.working_dir"}}'
+PROJECT_FORMAT = '{{index .Config.Labels "com.docker.compose.project"}}'
 
 
 def _load(name: str, rel: str):
@@ -37,10 +39,17 @@ def _env(suffix="-staging", name="staging"):
     }
 
 
-def _patch(st, monkeypatch, secrets, vault="vault-admin", remote=None):
+NAMED = {"staging": _env("-staging", "staging"), "production": _env("", "production")}
+
+
+def _patch(st, monkeypatch, secrets, vault="vault-admin", remote=None, process=None):
+    """Patch the Vault and SSH seams. `process` is the process environment."""
     import common.security.store as store
 
-    monkeypatch.setattr(st, "get_env", lambda: _env())
+    process_env = process if process is not None else NAMED["staging"]
+    monkeypatch.setattr(
+        st, "get_env", lambda name=None: process_env if name is None else NAMED[name]
+    )
     if callable(secrets):
         monkeypatch.setattr(store, "get_secrets", secrets)
     else:
@@ -65,13 +74,80 @@ def test_existing_token_returns_early_without_ssh(st, monkeypatch, capsys, key):
     assert SECRET not in out.out + out.err
 
 
+def test_force_runs_the_script_although_vault_holds_a_token(st, monkeypatch):
+    calls = _patch(st, monkeypatch, {"root_token": SECRET})
+    assert st.create_root_token.body(SimpleNamespace(), force=True) is True
+    assert len(calls) == 1
+
+
+def test_missing_vault_path_does_not_stop_a_first_run(st, monkeypatch):
+    from common.security.store import VaultSecrets
+
+    def missing(key):
+        raise VaultSecrets.VaultSecretNotFoundError("missing")
+
+    # First object serves the skip check; the second serves the check after the script.
+    answers = iter([SimpleNamespace(get=missing), {"root_token": SECRET}])
+    calls = _patch(st, monkeypatch, lambda *a, **k: next(answers))
+    assert st.create_root_token.body(SimpleNamespace()) is True
+    assert len(calls) == 1
+
+
+def test_unreadable_vault_fails_closed_without_ssh(st, monkeypatch):
+    from common.security.store import VaultSecrets
+
+    def denied(key):
+        raise VaultSecrets.VaultAuthError("denied")
+
+    calls = _patch(st, monkeypatch, lambda *a, **k: SimpleNamespace(get=denied))
+    with pytest.raises(Exit) as exc:
+        st.create_root_token.body(SimpleNamespace())
+    assert exc.value.code == 1
+    assert calls == []
+
+
+def test_missing_vault_token_fails_closed_without_ssh(st, monkeypatch):
+    calls = _patch(st, monkeypatch, {}, vault=None)
+    with pytest.raises(Exit) as exc:
+        st.create_root_token.body(SimpleNamespace())
+    assert exc.value.code == 1
+    assert calls == []
+
+
+@pytest.mark.parametrize("missing", ["INTERNAL_DOMAIN", "VPS_HOST"])
+def test_missing_host_or_domain_fails_closed_without_ssh(st, monkeypatch, missing):
+    process = {**NAMED["staging"], missing: None}
+    calls = _patch(st, monkeypatch, {}, process=process)
+    with pytest.raises(Exit) as exc:
+        st.create_root_token.body(SimpleNamespace())
+    assert exc.value.code == 1
+    assert calls == []
+
+
 def test_remote_failure_raises_exit_and_prints_no_token(st, monkeypatch, capsys):
     _patch(st, monkeypatch, {}, vault=SECRET, remote=(12, "", "FAIL: x"))
     with pytest.raises(Exit) as exc:
         st.create_root_token.body(SimpleNamespace())
     assert exc.value.code == 1
-    out = capsys.readouterr()
-    assert SECRET not in out.out + out.err
+    text = "".join(capsys.readouterr())
+    assert SECRET not in text
+    assert "FAIL: x" in text and "exit 12" in text
+
+
+def test_remote_stderr_shows_only_fail_lines(st, monkeypatch, capsys):
+    """init-token.sh prints the generated token to stderr when the Vault write fails."""
+    remote_token = "AUTHENTIK-ROOT-TOKEN-" + "z" * 40
+    stderr = (
+        "Token was generated but not persisted:\n"
+        f"  {remote_token}\n"
+        "FAIL: 0 compose directories match platform-authentik-server\n"
+    )
+    _patch(st, monkeypatch, {}, remote=(1, "", stderr))
+    with pytest.raises(Exit):
+        st.create_root_token.body(SimpleNamespace())
+    text = "".join(capsys.readouterr())
+    assert remote_token not in text and "not persisted" not in text
+    assert "0 compose directories match" in text
 
 
 def test_success_output_has_no_token_text(st, monkeypatch, capsys):
@@ -83,32 +159,69 @@ def test_success_output_has_no_token_text(st, monkeypatch, capsys):
     assert SECRET not in out and SECRET[:20] not in out
 
 
-def _run_script(st, tmp_path, suffix, wd_label, dirs):
-    root = tmp_path / "compose"
-    for d in dirs:
-        (root / d / "code/platform/10.authentik").mkdir(parents=True)
+@pytest.mark.parametrize(
+    "name,empty_suffix", [("staging", "-staging"), ("production", "''")]
+)
+def test_script_built_for_the_named_environment(st, monkeypatch, name, empty_suffix):
+    calls = _patch(st, monkeypatch, {}, process=NAMED[name])
+    with pytest.raises(Exit):
+        # The check after the SSH call finds no token, so the task fails after the call.
+        st.create_root_token.body(SimpleNamespace())
+    assert len(calls) == 1
+    host, script, token = calls[0]
+    assert host == "203.0.113.1" and token == "vault-admin"
+    lines = script.splitlines()
+    assert f"ENV_NAME={name}" in lines
+    assert f"ENV_SUFFIX={empty_suffix}" in lines
+    assert 'SERVER="platform-authentik-server$ENV_SUFFIX"' in lines
+    assert f"ENV={name} " in script
+
+
+def test_stale_exported_suffix_fails_closed_before_any_io(st, monkeypatch):
+    """ENV=production with an exported ENV_SUFFIX=-staging must not reach staging."""
+    process = {**NAMED["production"], "ENV_SUFFIX": "-staging"}
+    calls = _patch(st, monkeypatch, {}, process=process)
+    with pytest.raises(Exit) as exc:
+        st.create_root_token.body(SimpleNamespace())
+    assert exc.value.code == 1
+    assert calls == []
+
+
+def _fake_docker(tmp_path, suffix, wd, project="proj-x", compose_rc=0):
+    """Fake `docker`: answers inspect by exact format string, logs compose calls."""
     bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
+    bin_dir.mkdir(exist_ok=True)
     log = tmp_path / "docker.log"
-    label = wd_label.replace("ROOT", str(root))
+    envfile = tmp_path / "envfile.path"
+    envcopy = tmp_path / "envfile.copy"
     (bin_dir / "docker").write_text(
         "#!/bin/sh\n"
         'if [ "$1" = inspect ]; then\n'
         f'  [ "$4" = "platform-authentik-server{suffix}" ] || exit 1\n'
-        f'  printf %s "{label}"; exit 0\n'
+        f"  case \"$3\" in '{WD_FORMAT}') printf %s '{wd}'; exit 0;; "
+        f"'{PROJECT_FORMAT}') printf %s '{project}'; exit 0;; esac\n"
+        "  exit 1\n"
         "fi\n"
-        f'echo "$PWD ENV_SUFFIX=$ENV_SUFFIX $*" >> {log}\n'
+        'prev=""\n'
+        'for a in "$@"; do\n'
+        f'  if [ "$prev" = --env-file ]; then echo "$a" > {envfile}; cat "$a" > {envcopy}; fi\n'
+        '  prev="$a"\n'
+        "done\n"
+        'echo "$PWD ENV=$ENV ENV_SUFFIX=$ENV_SUFFIX ENV_DOMAIN_SUFFIX=$ENV_DOMAIN_SUFFIX '
+        f'INTERNAL_DOMAIN=$INTERNAL_DOMAIN VAULT_ADDR=$VAULT_ADDR $*" >> {log}\n'
+        f"exit {compose_rc}\n"
     )
     (bin_dir / "docker").chmod(0o755)
-    script = st.build_remote_script(
-        "staging" if suffix else "production", suffix, "example.test", suffix, str(root)
-    )
+    return bin_dir, log, envfile, envcopy
+
+
+def _bash(script, bin_dir):
     env = {
         **os.environ,
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
-        "VAULT_INIT_TOKEN": "t",
+        "VAULT_INIT_TOKEN": "tok-in-envfile",
     }
-    res = subprocess.run(
+    return subprocess.run(
         ["bash", "-s"],
         input=script,
         capture_output=True,
@@ -116,7 +229,20 @@ def _run_script(st, tmp_path, suffix, wd_label, dirs):
         env=env,
         timeout=30,
     )
-    return res, log
+
+
+def _run_script(st, tmp_path, suffix, wd_label, dirs, compose_rc=0, project="proj-x"):
+    root = tmp_path / "compose"
+    for d in dirs:
+        (root / d / "code/platform/10.authentik").mkdir(parents=True)
+    wd = wd_label.replace("ROOT", str(root))
+    bin_dir, log, envfile, envcopy = _fake_docker(
+        tmp_path, suffix, wd, project=project, compose_rc=compose_rc
+    )
+    script = st.build_remote_script(
+        "staging" if suffix else "production", suffix, "example.test", suffix, str(root)
+    )
+    return _bash(script, bin_dir), log, envfile, envcopy
 
 
 @pytest.mark.parametrize(
@@ -125,18 +251,35 @@ def _run_script(st, tmp_path, suffix, wd_label, dirs):
 )
 def test_script_runs_only_in_this_environments_directory(st, tmp_path, suffix, chosen):
     wd = f"ROOT/{chosen}/code/platform/10.authentik"
-    res, log = _run_script(
+    res, log, envfile, envcopy = _run_script(
         st, tmp_path, suffix, wd, ["platform-authentik-stg", "platform-authentik-prd"]
     )
     assert res.returncode == 0, res.stderr
     lines = log.read_text().splitlines()
     assert len(lines) == 1
-    assert f"/{chosen}/code/platform/10.authentik" in lines[0]
-    assert f"ENV_SUFFIX={suffix} " in lines[0]
+    line = lines[0]
+    assert f"/{chosen}/code/platform/10.authentik " in line
+    name = "staging" if suffix else "production"
+    assert f"ENV={name} ENV_SUFFIX={suffix} ENV_DOMAIN_SUFFIX={suffix} " in line
+    assert "INTERNAL_DOMAIN=example.test VAULT_ADDR=https://vault.example.test" in line
+    # Compose joins the running project and starts no dependency.
+    assert " -p proj-x run --rm --no-deps token-init" in line
+    assert "VAULT_INIT_TOKEN=tok-in-envfile" in envcopy.read_text()
+    assert not Path(envfile.read_text().strip()).exists()
+
+
+def test_script_removes_the_token_file_when_compose_fails(st, tmp_path):
+    wd = "ROOT/platform-authentik-stg/code/platform/10.authentik"
+    res, log, envfile, envcopy = _run_script(
+        st, tmp_path, "-staging", wd, ["platform-authentik-stg"], compose_rc=5
+    )
+    assert res.returncode == 5
+    assert envcopy.exists()
+    assert not Path(envfile.read_text().strip()).exists()
 
 
 def test_script_fails_closed_on_zero_matching_directories(st, tmp_path):
-    res, log = _run_script(
+    res, log, *_ = _run_script(
         st,
         tmp_path,
         "-staging",
@@ -149,49 +292,44 @@ def test_script_fails_closed_on_zero_matching_directories(st, tmp_path):
 
 
 def test_script_fails_closed_when_environment_container_missing(st, tmp_path):
-    res, log = _run_script(
-        st, tmp_path, "", "", ["a-platform-authentik-x", "platform-authentik-y"]
+    # The fake answers only for the production container name; staging is asked.
+    root = tmp_path / "compose"
+    (root / "platform-authentik-x/code/platform/10.authentik").mkdir(parents=True)
+    bin_dir, log, *_ = _fake_docker(tmp_path, "", "/nowhere")
+    script = st.build_remote_script(
+        "staging", "-staging", "example.test", "-staging", str(root)
     )
+    res = _bash(script, bin_dir)
     assert res.returncode == 11
     assert "not found" in res.stderr
     assert not log.exists()
 
 
+def test_script_fails_closed_when_container_has_no_project_label(st, tmp_path):
+    wd = "ROOT/platform-authentik-stg/code/platform/10.authentik"
+    res, log, *_ = _run_script(
+        st, tmp_path, "-staging", wd, ["platform-authentik-stg"], project=""
+    )
+    assert res.returncode == 13
+    assert "no compose project label" in res.stderr
+    assert not log.exists()
+
+
 def test_script_fails_closed_on_two_matching_directories(st, tmp_path):
-    # The label path reaches both checkouts when one is a symlink alias of the other.
+    # Two checkouts resolve to one directory when one is a symlink alias of the other.
     root = tmp_path / "compose"
     real = root / "platform-authentik-a/code/platform/10.authentik"
     real.mkdir(parents=True)
     alias_dir = root / "platform-authentik-b/code/platform"
     alias_dir.mkdir(parents=True)
     (alias_dir / "10.authentik").symlink_to(real)
+    bin_dir, log, *_ = _fake_docker(tmp_path, "-staging", str(real))
     script = st.build_remote_script(
-        "staging", "-staging", "example.test", "", str(root)
+        "staging", "-staging", "example.test", "-staging", str(root)
     )
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    (bin_dir / "docker").write_text(
-        "#!/bin/sh\n"
-        'if [ "$1" = inspect ]; then printf %s "$FAKE_WD"; exit 0; fi\n'
-        f"echo ran >> {tmp_path}/docker.log\n"
-    )
-    (bin_dir / "docker").chmod(0o755)
-    # Realpath comparison makes both directories equal the label: expect fail closed.
-    env = {
-        **os.environ,
-        "PATH": f"{bin_dir}:{os.environ['PATH']}",
-        "FAKE_WD": str(real),
-    }
-    res = subprocess.run(
-        ["bash", "-s"],
-        input=script,
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=30,
-    )
+    res = _bash(script, bin_dir)
     assert res.returncode == 12
-    assert not (tmp_path / "docker.log").exists()
+    assert not log.exists()
 
 
 def test_ssh_script_is_noninteractive_and_bounded(monkeypatch):
@@ -207,7 +345,24 @@ def test_ssh_script_is_noninteractive_and_bounded(monkeypatch):
     vps_ssh.ssh_script("echo hi", "h", "root", "", 22, timeout=7)
     assert "BatchMode=yes" in seen["args"] and "ConnectTimeout=10" in seen["args"]
     assert seen["input"] == "echo hi" and seen["timeout"] == 7
-    assert "echo hi" not in seen["args"]
+    assert not any("echo hi" in a for a in seen["args"])
+
+
+def test_ssh_script_checks_the_host_key(monkeypatch):
+    """The script carries a Vault token: a changed host key must fail the call."""
+    from common.deploy import vps_ssh
+
+    seen = {}
+
+    def fake_run(args, **kw):
+        seen["args"] = args
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(vps_ssh.subprocess, "run", fake_run)
+    vps_ssh.ssh_script("x", "h", "root", "")
+    assert "StrictHostKeyChecking=accept-new" in seen["args"]
+    assert "StrictHostKeyChecking=no" not in seen["args"]
+    assert "UserKnownHostsFile=/dev/null" not in seen["args"]
 
 
 def test_ssh_script_timeout_returns_nonzero(monkeypatch):
@@ -221,6 +376,24 @@ def test_ssh_script_timeout_returns_nonzero(monkeypatch):
     assert rc == 124 and "timed out" in err
 
 
+def test_remote_runner_sends_the_token_on_stdin_only(st, monkeypatch):
+    from common.deploy import vps_ssh
+
+    seen = {}
+
+    def fake_run(args, **kw):
+        seen.update(args=args, **kw)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(vps_ssh.subprocess, "run", fake_run)
+    monkeypatch.setattr(st, "_ssh_credentials", lambda: ("h", "root", "", 22))
+    assert st._run_remote_script("203.0.113.1", "echo body", SECRET) == (0, "", "")
+    assert SECRET in seen["input"] and "echo body" in seen["input"]
+    assert SECRET not in " ".join(seen["args"])
+    assert "echo body" not in " ".join(seen["args"])
+    assert seen["args"][-2:] == ["root@203.0.113.1", "bash -s"]
+
+
 def test_fail_closed_turns_false_into_exit(st):
     @st.fail_closed
     def bad():
@@ -232,15 +405,26 @@ def test_fail_closed_turns_false_into_exit(st):
 
 
 @pytest.mark.parametrize(
+    "name", ["create_root_token", "create_proxy_app", "setup_admin_group", "list_apps"]
+)
+def test_authentik_tasks_that_report_false_are_wrapped_by_fail_closed(st, name):
+    """Invoke exits 0 on a False return: each such task needs the wrapper."""
+    assert hasattr(getattr(st, name).body, "__wrapped__")
+
+
+@pytest.mark.parametrize(
     "rel", ["platform/30.todo/deploy.py", "platform/21.portal/deploy.py"]
 )
-def test_sso_setup_stops_and_exits_nonzero_on_failed_step(rel, monkeypatch):
+@pytest.mark.parametrize("failing_step", [0, 1, 2])
+def test_sso_setup_stops_and_exits_nonzero_on_failed_step(
+    rel, failing_step, monkeypatch
+):
     mod = _load("sso_under_test_" + rel.split("/")[1].replace(".", "_"), rel)
     commands = []
 
     def fake_run(c, cmd, desc, hide=True):
-        commands.append(cmd)
-        return SimpleNamespace(ok=False)
+        commands.append(cmd.split()[1])
+        return SimpleNamespace(ok=len(commands) - 1 != failing_step)
 
     monkeypatch.setattr(mod, "run_with_status", fake_run)
     deployer = next(
@@ -252,4 +436,29 @@ def test_sso_setup_stops_and_exits_nonzero_on_failed_step(rel, monkeypatch):
     with pytest.raises(Exit) as exc:
         mod.sso_setup.body(SimpleNamespace())
     assert exc.value.code == 1
-    assert commands == ["invoke authentik.shared.create-root-token"]
+    steps = [
+        "authentik.shared.create-root-token",
+        "authentik.shared.setup-admin-group",
+        "authentik.shared.create-proxy-app",
+    ]
+    assert commands == steps[: failing_step + 1]
+
+
+@pytest.mark.parametrize(
+    "rel", ["platform/30.todo/deploy.py", "platform/21.portal/deploy.py"]
+)
+def test_sso_setup_exits_nonzero_without_internal_domain(rel, monkeypatch):
+    mod = _load("sso_nodomain_" + rel.split("/")[1].replace(".", "_"), rel)
+    commands = []
+    monkeypatch.setattr(
+        mod, "run_with_status", lambda *a, **k: commands.append(a) or None
+    )
+    deployer = next(
+        v for k, v in vars(mod).items() if k.endswith("Deployer") and k != "Deployer"
+    )
+    env = {**_env("", "production"), "INTERNAL_DOMAIN": None}
+    monkeypatch.setattr(deployer, "env", classmethod(lambda cls: env))
+    with pytest.raises(Exit) as exc:
+        mod.sso_setup.body(SimpleNamespace())
+    assert exc.value.code == 1
+    assert commands == []

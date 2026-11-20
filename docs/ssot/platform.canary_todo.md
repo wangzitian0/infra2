@@ -148,9 +148,9 @@ Each run emits one `canary.run` span with one `canary.check.<name>` child span p
 
 `todo.sso-setup` and `portal.sso-setup` run `authentik.shared.create-root-token`, `setup-admin-group` and `create-proxy-app` in order. A failed step exits non-zero and stops the run.
 
-- `create-root-token` returns success with no SSH call when Vault holds `root_token` or `api_token` at `platform/<env>/authentik`. It never prints a token.
-- Otherwise it runs one script over `ssh -o BatchMode=yes` with a 600 s limit. The script finds the container `platform-authentik-server${ENV_SUFFIX}` of the current environment and takes its compose working directory. It exits 11 when the container is missing. It exits 12 unless exactly one `/etc/dokploy/compose/platform-authentik-*` checkout resolves to that directory. It passes `ENV`, `ENV_SUFFIX`, `ENV_DOMAIN_SUFFIX` and `INTERNAL_DOMAIN` to `docker compose run`.
-- Tests: `common/tests/test_authentik_sso_setup_env.py`.
+- `create-root-token` fails closed when the exported `ENV_SUFFIX` differs from the suffix of the environment name (`""` for production, `-<env>` otherwise). It then reads Vault. It returns success with no SSH call when Vault holds `root_token` or `api_token` at `platform/<env>/authentik`. `--force` skips that read and runs the script. It never prints a token: on failure it prints only the `FAIL:` lines of the remote script and the exit code.
+- Otherwise it runs one script over `ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new` with a 600 s limit. The script finds the container `platform-authentik-server${ENV_SUFFIX}` of the current environment and takes its compose working directory and compose project. Exit codes: `11` container missing, `12` not exactly one `/etc/dokploy/compose/platform-authentik-*` checkout resolves to that directory, `13` container has no compose project label, `124` SSH time limit, `255` SSH failure. It runs `docker compose -p <project> run --rm --no-deps token-init` with `ENV`, `ENV_SUFFIX`, `ENV_DOMAIN_SUFFIX`, `INTERNAL_DOMAIN` and `VAULT_ADDR`. The project is the one that owns the `secrets` volume that token-init mounts; `--no-deps` leaves the running server and worker unchanged.
+- Tests: `common/tests/test_authentik_sso_setup_env.py`. The tests use a fake `docker`. Run `invoke authentik.shared.create-root-token --force` on staging to prove the compose step on a real host.
 
 ## 6. Constraints
 

@@ -14,6 +14,7 @@ import shlex
 
 from invoke import task
 from invoke.exceptions import Exit
+from rich.markup import escape
 from common.common import check_service
 from common.core.environ import get_env, service_domain
 from common.security.store import vault_token
@@ -48,9 +49,14 @@ def build_remote_script(
     The compose checkout glob matches the production and the staging directory.
     The script picks the directory that is the working directory of this
     environment's running `platform-authentik-server${ENV_SUFFIX}` container.
-    It exits non-zero when that container is missing or the match is not exactly one.
+    It runs compose in the project of that container, because the `secrets`
+    volume that token-init mounts belongs to that project, and it starts no
+    dependency, so the running server and worker stay as they are.
+    Exit codes: 11 container missing, 12 directory match is not exactly one,
+    13 container has no compose project label.
     """
     q = shlex.quote
+    vault_url = f"https://vault.{internal_domain}"
     return f"""set -eu
 ENV_NAME={q(env_name)}
 ENV_SUFFIX={q(env_suffix)}
@@ -59,6 +65,11 @@ WD=$(docker inspect -f '{{{{index .Config.Labels "com.docker.compose.project.wor
 if [ -z "$WD" ]; then
   echo "FAIL: container $SERVER not found for environment $ENV_NAME" >&2
   exit 11
+fi
+PROJECT=$(docker inspect -f '{{{{index .Config.Labels "com.docker.compose.project"}}}}' "$SERVER" 2>/dev/null || true)
+if [ -z "$PROJECT" ]; then
+  echo "FAIL: container $SERVER has no compose project label" >&2
+  exit 13
 fi
 WDR=$(cd "$WD" 2>/dev/null && pwd -P || true)
 MATCHES=0
@@ -78,11 +89,11 @@ fi
 cd "$CHOSEN"
 TMPENV=$(mktemp)
 trap 'rm -f "$TMPENV"' EXIT
-printf 'VAULT_INIT_TOKEN=%s\n' "$VAULT_INIT_TOKEN" > "$TMPENV"
-printf 'VAULT_INIT_ADDR=%s\n' "https://vault.{internal_domain}" >> "$TMPENV"
+printf 'VAULT_INIT_TOKEN=%s\\n' "$VAULT_INIT_TOKEN" > "$TMPENV"
+printf 'VAULT_INIT_ADDR=%s\\n' {q(vault_url)} >> "$TMPENV"
 ENV={q(env_name)} ENV_SUFFIX={q(env_suffix)} ENV_DOMAIN_SUFFIX={q(domain_suffix)} \
-INTERNAL_DOMAIN={q(internal_domain)} \
-  docker compose run --rm --env-file "$TMPENV" token-init </dev/null
+INTERNAL_DOMAIN={q(internal_domain)} VAULT_ADDR={q(vault_url)} \
+  docker compose --env-file "$TMPENV" -p "$PROJECT" run --rm --no-deps token-init </dev/null
 """
 
 
@@ -112,13 +123,34 @@ def status(c):
     return check_service(c, "authentik", "ak healthcheck")
 
 
-@task
+def _failure_reason(stderr: str) -> str:
+    """Keep only the `FAIL:` lines of the remote script.
+
+    Container output can hold a token, so no other remote text reaches the terminal.
+    """
+    lines = [x.strip() for x in (stderr or "").splitlines() if x.startswith("FAIL:")]
+    return escape("; ".join(lines)[-500:])
+
+
+def _vault_holds_root_token(env_name: str) -> bool:
+    """True when Vault holds `root_token` or `api_token` for this environment."""
+    from common.security.store import VaultSecrets, get_secrets
+
+    secrets = get_secrets("platform", "authentik", env_name)
+    try:
+        return bool(secrets.get("root_token") or secrets.get("api_token"))
+    except VaultSecrets.VaultSecretNotFoundError:
+        return False
+
+
+@task(help={"force": "Run token-init even when Vault already holds a token"})
 @fail_closed
-def create_root_token(c):
+def create_root_token(c, force=False):
     """Create Authentik Root Token for SSO administration
 
     This creates the admin API token stored as 'root_token' in Vault.
     Requires VAULT_TOKEN (the deploy credential) to write to Vault.
+    It skips the run when Vault already holds the token; use --force to run it again.
 
     The Authentik Root Token is used to:
     - Create SSO applications
@@ -129,17 +161,20 @@ def create_root_token(c):
         export VAULT_TOKEN=<deploy or break-glass token>
         invoke authentik.shared.create-root-token
     """
-    from common.security.store import get_secrets
+    from common.security.store import VaultSecrets, get_secrets
 
     header("Creating Authentik Root Token", "SSO Admin Setup")
 
     e = get_env()
     env_name = e.get("ENV", "production")
-
-    existing = get_secrets("platform", "authentik", env_name)
-    if existing.get("root_token") or existing.get("api_token"):
-        success(f"Authentik Root Token already in Vault for {env_name}; skipping")
-        return True
+    # The suffix follows the environment name, never a stale exported ENV_SUFFIX.
+    env_suffix = get_env(env_name).get("ENV_SUFFIX") or ""
+    if (e.get("ENV_SUFFIX") or "") != env_suffix:
+        error(
+            f"ENV_SUFFIX {e.get('ENV_SUFFIX')!r} does not match environment {env_name}",
+            f"expected {env_suffix!r}; unset ENV_SUFFIX",
+        )
+        return False
 
     vault_root_token = vault_token()
 
@@ -153,16 +188,32 @@ def create_root_token(c):
         info("as VAULT_TOKEN (bootstrap/05.vault README)")
         return False
 
+    if not force:
+        try:
+            held = _vault_holds_root_token(env_name)
+        except VaultSecrets.VaultError as exc:
+            error("Cannot read Authentik secrets from Vault", escape(str(exc).strip()))
+            return False
+        if held:
+            success(f"Authentik Root Token already in Vault for {env_name}; skipping")
+            return True
+
+    internal_domain = e.get("INTERNAL_DOMAIN")
+    vps_host = e.get("VPS_HOST")
+    if not internal_domain or not vps_host:
+        error("INTERNAL_DOMAIN and VPS_HOST are required")
+        return False
+
     info("Running token creation on server...")
     script = build_remote_script(
         env_name,
-        e.get("ENV_SUFFIX") or "",
-        e["INTERNAL_DOMAIN"],
+        env_suffix,
+        internal_domain,
         e.get("ENV_DOMAIN_SUFFIX") or "",
     )
-    rc, _out, err = _run_remote_script(e["VPS_HOST"], script, vault_root_token)
+    rc, _out, err = _run_remote_script(vps_host, script, vault_root_token)
     if rc != 0:
-        error("Failed to create token", (err or "").strip()[-500:])
+        error(f"Failed to create token (exit {rc})", _failure_reason(err) or None)
         return False
 
     # Verify in Vault
@@ -484,6 +535,7 @@ def create_proxy_app(
 
 
 @task
+@fail_closed
 def list_apps(c):
     """List all Authentik applications"""
     import httpx
