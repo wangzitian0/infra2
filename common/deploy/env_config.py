@@ -380,7 +380,7 @@ _PREVIEW_SERVICE_CONFIGS: dict[str, PreviewServiceConfig] = {
         base_subdomain="todo",
         throwaway_secrets=(
             "REDIS_PASSWORD",
-            "CANARY_POSTGRES_PASSWORD",
+            "POSTGRES_ADMIN_PASSWORD",
             "TODO_POSTGRES_PASSWORD",
             "S3_ACCESS_KEY",
             "S3_SECRET_KEY",

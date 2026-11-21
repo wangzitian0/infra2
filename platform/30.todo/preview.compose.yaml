@@ -1,5 +1,5 @@
 # Preview slot of the Canary Todo (#1647). It reads no Vault. The Preview render gives
-# REDIS_PASSWORD, CANARY_POSTGRES_PASSWORD, S3_ACCESS_KEY and S3_SECRET_KEY
+# REDIS_PASSWORD, POSTGRES_ADMIN_PASSWORD, TODO_POSTGRES_PASSWORD, S3_ACCESS_KEY and S3_SECRET_KEY
 # as fresh values for this slot (common.deploy.preview.render_throwaway_secrets).
 # The slot runs its own Redis, Postgres and S3 on a private network. Nothing is shared
 # with staging or production, and the volumes are deleted with the slot.
@@ -32,10 +32,10 @@ services:
     tmpfs:
       - /var/lib/postgresql/data
     environment:
-      # The slot's admin role is the canary login (POSTGRES_USER is a superuser of this
-      # throwaway server only). Wait-free init creates todo_app with DML/schema access.
-      POSTGRES_USER: canary_ro
-      POSTGRES_PASSWORD: ${CANARY_POSTGRES_PASSWORD:?required}
+      # The admin role of this throwaway server. Wait-free init creates todo_app, the one
+      # login of the app, with DML and schema access.
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:?required}
       TODO_POSTGRES_PASSWORD: ${TODO_POSTGRES_PASSWORD:?required}
     command:
       - sh
@@ -45,7 +45,7 @@ services:
         printf "CREATE ROLE todo_app LOGIN PASSWORD '%s';\nGRANT CREATE ON SCHEMA public TO todo_app;\n" "$$TODO_POSTGRES_PASSWORD" > /docker-entrypoint-initdb.d/99-todo.sql
         exec docker-entrypoint.sh postgres
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U canary_ro -d postgres"]
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -134,14 +134,6 @@ services:
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       INTERNAL_DOMAIN: ${INTERNAL_DOMAIN:-zitian.party}
       ENV_SUFFIX: ${ENV_SUFFIX:-}
-      POSTGRES_HOST: platform-postgres${ENV_SUFFIX}
-      POSTGRES_PORT: "5432"
-      CANARY_POSTGRES_USER: canary_ro
-      CANARY_POSTGRES_DATABASE: postgres
-      CANARY_POSTGRES_PASSWORD: ${CANARY_POSTGRES_PASSWORD:?required}
-      TODO_POSTGRES_USER: todo_app
-      TODO_POSTGRES_DATABASE: postgres
-      TODO_POSTGRES_PASSWORD: ${TODO_POSTGRES_PASSWORD:?required}
       DATABASE_URL: postgresql://todo_app:${TODO_POSTGRES_PASSWORD}@platform-postgres${ENV_SUFFIX}:5432/postgres
       REDIS_HOST: platform-redis${ENV_SUFFIX}
       REDIS_PORT: "6379"
