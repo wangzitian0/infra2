@@ -1,12 +1,17 @@
-"""Tests for the pre-deploy schema gate's SSH/docker wiring (#698, TODOWRITE:20).
+"""Tests for the pre-deploy schema gate's SSH/docker wiring (#698, #1824, TODOWRITE:20).
 
-No live SSH/docker here -- ``runner`` is always a fake that records the exact commands
-it was asked to run and returns a canned result, so these tests exercise the command
-construction and fail-closed decision logic in isolation.
+No live SSH/docker here. ``runner`` is a fake that records the exact commands and
+returns a canned result, so these tests examine the command and the fail-closed
+decision in isolation. The ``_LAUNCHER`` tests run the launcher in a real Python
+subprocess against a stub SDK and against the installed SDK.
 """
 
 from __future__ import annotations
 
+import json
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -47,7 +52,7 @@ def test_gate_applies_true_for_a_registered_service():
 
 
 def test_gate_applies_false_for_an_unregistered_service():
-    # truealpha/app has no ENUM_SOURCES entry yet -- must not be gated by accident.
+    # truealpha/app has no _SCHEMA_CHECK_SPECS entry (no SQLAlchemy) -- never gated.
     assert sg.gate_applies("truealpha/app") is False
     assert sg.gate_applies("platform/redis") is False
 
@@ -203,24 +208,43 @@ def test_run_schema_gate_returns_rollback_class_on_a_clean_pass():
     assert result == "A"
 
 
-def test_run_schema_gate_docker_command_overrides_entrypoint_and_attaches_network():
+def test_run_schema_gate_docker_command_runs_the_sdk_check_with_the_spec_options():
+    url = "postgresql://u:p@h:5432/db"
     runner = FakeRunner(
         [
-            _ok(stdout='DATABASE_URL="postgresql://u:p@h:5432/db"\n'),
+            _ok(stdout=f'DATABASE_URL="{url}"\n'),
             _ok(stdout="ROLLBACK_CLASS: A\n"),
         ]
     )
     sg.run_schema_gate(**_gate_kwargs(runner=runner, timeout=5))
     docker_call = runner.calls[1]
-    remote_cmd = docker_call["args"][-1]
-    assert "docker run --rm -i --network dokploy-network" in remote_cmd
-    assert "--entrypoint python3" in remote_cmd
-    assert "-e DATABASE_URL=" in remote_cmd
-    assert "ghcr.io/wangzitian0/finance_report-backend:abc1234" in remote_cmd
-    assert "--service finance_report/app" in remote_cmd
-    # the check script itself travels as stdin, never baked into the command string or
-    # left for the remote side to fetch/checkout.
-    assert docker_call["input"] == sg._SCHEMA_CHECK_SCRIPT.read_text(encoding="utf-8")
+    assert docker_call["args"][0] == "ssh"
+    assert docker_call["args"][-2] == "root@1.2.3.4"
+    assert shlex.split(docker_call["args"][-1]) == [
+        "docker",
+        "run",
+        "--rm",
+        "-i",
+        "--network",
+        "dokploy-network",
+        "--memory=1g",
+        "--cpus=1",
+        "--entrypoint",
+        "python3",
+        "ghcr.io/wangzitian0/finance_report-backend:abc1234",
+        "-c",
+        sg._LAUNCHER,
+        "--metadata",
+        "src.database:Base.metadata",
+        "--import",
+        "src.orm_registry",
+        "--label",
+        "finance_report/app",
+    ]
+    # The database URL travels on stdin only; the launcher adds it as --db-url.
+    assert docker_call["input"] == f"{url}\n"
+    assert url not in docker_call["args"][-1]
+    assert docker_call["timeout"] == 5
 
 
 def test_run_schema_gate_blocked_message_includes_the_rollback_class_when_present():
@@ -254,8 +278,9 @@ def test_run_schema_gate_blocks_on_exit_1_discrepancy():
     )
     with pytest.raises(
         sg.SchemaGateError, match="BLOCKED finance_report/app \\(exit 1\\)"
-    ):
+    ) as exc_info:
         sg.run_schema_gate(**_gate_kwargs(runner=runner, timeout=5))
+    assert exc_info.value.verdict == sg.VERDICT_BLOCKED == "BLOCKED"
 
 
 def test_run_schema_gate_blocks_on_exit_3_not_evaluated():
@@ -267,9 +292,10 @@ def test_run_schema_gate_blocks_on_exit_3_not_evaluated():
         ]
     )
     with pytest.raises(
-        sg.SchemaGateError, match="BLOCKED finance_report/app \\(exit 3\\)"
-    ):
+        sg.SchemaGateError, match="NOT EVALUATED finance_report/app \\(exit 3\\)"
+    ) as exc_info:
         sg.run_schema_gate(**_gate_kwargs(runner=runner, timeout=5))
+    assert exc_info.value.verdict == sg.VERDICT_NOT_EVALUATED == "NOT EVALUATED"
 
 
 def test_run_schema_gate_blocks_on_an_unexpected_exit_code():
@@ -280,8 +306,9 @@ def test_run_schema_gate_blocks_on_an_unexpected_exit_code():
             _fail(125, stderr="docker: Error response from daemon: no such image"),
         ]
     )
-    with pytest.raises(sg.SchemaGateError, match="exit 125"):
+    with pytest.raises(sg.SchemaGateError, match="NO VERDICT .*exit 125") as exc_info:
         sg.run_schema_gate(**_gate_kwargs(runner=runner, timeout=5))
+    assert exc_info.value.verdict == sg.VERDICT_NO_VERDICT
 
 
 def test_run_schema_gate_blocks_on_ssh_transport_failure():
@@ -354,15 +381,222 @@ def test_run_schema_gate_sanitizes_db_credentials_on_missing_rollback_class() ->
     assert "postgresql://user:******@db.internal:5432/app" in err_msg
 
 
-def test_enum_sources_single_source_matches_backend_image_repository() -> None:
-    """SSOT guard: tools/pre_deploy_schema_check.py is the single source of EnumSource/ENUM_SOURCES
-    with no duplicate common.deploy.enum_sources module or dual-definition fallback."""
-    from tools import pre_deploy_schema_check as check
+def test_run_schema_gate_timeout_blocks_without_echoing_the_command():
+    """subprocess.TimeoutExpired prints its command; the gate message must not."""
+    secret = "leak_on_timeout_pw"
 
-    assert set(sg._BACKEND_IMAGE_REPOSITORY) == set(check.ENUM_SOURCES)
-    assert not (
-        Path(__file__).resolve().parents[1] / "deploy" / "enum_sources.py"
-    ).exists()
-    script_text = sg._SCHEMA_CHECK_SCRIPT.read_text(encoding="utf-8")
-    assert script_text.count("class EnumSource") == 1
-    assert "common.deploy.enum_sources" not in script_text
+    def runner(args, **kwargs):
+        if "docker exec" in args[-1]:
+            return _ok(stdout=f'DATABASE_URL="postgresql://u:{secret}@h/db"\n')
+        raise subprocess.TimeoutExpired(cmd=[*args, secret], timeout=5)
+
+    with pytest.raises(sg.SchemaGateError, match="TimeoutExpired") as exc_info:
+        sg.run_schema_gate(**_gate_kwargs(runner=runner, timeout=5))
+    assert secret not in str(exc_info.value)
+    assert exc_info.value.verdict == sg.VERDICT_NO_VERDICT
+
+
+def test_run_schema_gate_oserror_blocks_without_echoing_the_command():
+    """An OSError (no ssh binary, a broken pipe) can carry the command; never echo it."""
+    marker = "launcher-command-marker"
+
+    def runner(args, **kwargs):
+        if "docker exec" in args[-1]:
+            return _ok(stdout='DATABASE_URL="postgresql://u:p@h/db"\n')
+        raise OSError(f"cannot run {args[-1]} {marker}")
+
+    with pytest.raises(
+        sg.SchemaGateError, match="did not finish \\(OSError\\)"
+    ) as exc_info:
+        sg.run_schema_gate(**_gate_kwargs(runner=runner, timeout=5))
+    message = str(exc_info.value)
+    assert marker not in message
+    assert "docker run" not in message
+    assert exc_info.value.verdict == sg.VERDICT_NO_VERDICT
+
+
+# --- exit codes: one mapping, equal to the SDK ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("returncode", "verdict"),
+    [
+        (1, "BLOCKED"),
+        (3, "NOT EVALUATED"),
+        (2, "NO VERDICT"),
+        (125, "NO VERDICT"),
+        (255, "NO VERDICT"),
+    ],
+)
+def test_verdict_for_exit_maps_each_code(returncode, verdict):
+    assert sg.verdict_for_exit(returncode) == verdict
+
+
+def test_exit_codes_equal_the_sdk_schema_check_codes():
+    from infra2_sdk.runtime import schema_check
+
+    assert (sg.EXIT_OK, sg.EXIT_BLOCKED, sg.EXIT_NOT_EVALUATED) == (0, 1, 3)
+    assert sg.EXIT_OK == schema_check.EXIT_OK
+    assert sg.EXIT_BLOCKED == schema_check.EXIT_BLOCKED
+    assert sg.EXIT_NOT_EVALUATED == schema_check.EXIT_NOT_EVALUATED
+
+
+# --- _LAUNCHER: runs in the target image ------------------------------------------------
+
+
+def _run_launcher(cwd: Path, argv: list[str], stdin: str, pythonpath: Path | None):
+    env = {"PATH": "/usr/bin:/bin"}
+    if pythonpath is not None:
+        env["PYTHONPATH"] = str(pythonpath)
+    return subprocess.run(
+        [sys.executable, "-c", sg._LAUNCHER, *argv],
+        input=stdin,
+        text=True,
+        capture_output=True,
+        cwd=cwd,
+        env=env,
+        timeout=60,
+    )
+
+
+def _stub_sdk(root: Path, schema_check_source: str | None) -> Path:
+    runtime = root / "stub" / "infra2_sdk" / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime.parent / "__init__.py").write_text("")
+    (runtime / "__init__.py").write_text("")
+    if schema_check_source is not None:
+        (runtime / "schema_check.py").write_text(schema_check_source)
+    return root / "stub"
+
+
+def test_launcher_maps_an_image_without_schema_check_to_not_evaluated(tmp_path):
+    """A finance_report image before v0.2.92 has infra2-sdk 3.x: no schema_check."""
+    stub = _stub_sdk(tmp_path, schema_check_source=None)
+    result = _run_launcher(tmp_path, ["--metadata", "m:x"], "postgresql://h/db\n", stub)
+    assert result.returncode == sg.EXIT_NOT_EVALUATED == 3
+    assert "NOT EVALUATED" in result.stderr
+    assert "infra2_sdk.runtime.schema_check" in result.stderr
+    assert result.stdout == ""
+
+
+def test_launcher_maps_an_image_without_infra2_sdk_to_not_evaluated(tmp_path):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    code = (
+        "import sys, importlib.abc\n"
+        "class Block(importlib.abc.MetaPathFinder):\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name.split('.')[0] == 'infra2_sdk':\n"
+        "            raise ModuleNotFoundError(name)\n"
+        "sys.meta_path.insert(0, Block())\n"
+    )
+    (empty / "sitecustomize.py").write_text(code)
+    result = _run_launcher(
+        tmp_path, ["--metadata", "m:x"], "postgresql://h/db\n", empty
+    )
+    assert result.returncode == sg.EXIT_NOT_EVALUATED
+    assert "NOT EVALUATED" in result.stderr
+
+
+def test_launcher_passes_the_spec_options_and_stdin_url_as_db_url(tmp_path):
+    stub = _stub_sdk(
+        tmp_path,
+        "import json\ndef main(argv):\n    print(json.dumps(argv))\n    return 7\n",
+    )
+    spec_argv = sg.schema_check_argv(
+        "finance_report/app", sg._SCHEMA_CHECK_SPECS["finance_report/app"]
+    )
+    url = "postgresql+asyncpg://u:p@h:5432/db"
+    result = _run_launcher(tmp_path, spec_argv, f"{url}\n", stub)
+    # The launcher returns the SDK exit code unchanged.
+    assert result.returncode == 7, result.stderr
+    assert json.loads(result.stdout) == [*spec_argv, "--db-url", url]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "raise AttributeError('broken module attribute')\n",
+        "def main(argv:\n",  # SyntaxError at import
+    ],
+    ids=["attribute-error", "syntax-error"],
+)
+def test_launcher_maps_a_broken_sdk_import_to_not_evaluated(tmp_path, source):
+    stub = _stub_sdk(tmp_path, source)
+    result = _run_launcher(tmp_path, ["--metadata", "m:x"], "postgresql://h/db\n", stub)
+    assert result.returncode == sg.EXIT_NOT_EVALUATED, result.stderr
+    assert "NOT EVALUATED" in result.stderr
+    assert "does not import" in result.stderr
+
+
+def test_launcher_maps_an_exception_in_main_to_not_evaluated(tmp_path):
+    stub = _stub_sdk(
+        tmp_path,
+        "def main(argv):\n    raise RuntimeError('crash inside main')\n",
+    )
+    result = _run_launcher(tmp_path, ["--metadata", "m:x"], "postgresql://h/db\n", stub)
+    assert result.returncode == sg.EXIT_NOT_EVALUATED, result.stderr
+    assert "schema_check.main raised RuntimeError" in result.stderr
+
+
+@pytest.mark.parametrize("code", [0, 1, 3])
+def test_launcher_keeps_the_return_code_of_main(tmp_path, code):
+    """A real verdict of main, including BLOCKED (1), is never rewritten."""
+    stub = _stub_sdk(tmp_path, f"def main(argv):\n    return {code}\n")
+    result = _run_launcher(tmp_path, ["--metadata", "m:x"], "postgresql://h/db\n", stub)
+    assert result.returncode == code, result.stderr
+    assert "NOT EVALUATED" not in result.stderr
+
+
+def test_launcher_with_the_installed_sdk_and_no_url_is_not_evaluated(tmp_path):
+    """End to end with the real SDK CLI: an empty --db-url compares nothing (exit 3)."""
+    result = subprocess.run(
+        [sys.executable, "-c", sg._LAUNCHER, "--metadata", "absent_module:metadata"],
+        input="\n",
+        text=True,
+        capture_output=True,
+        cwd=tmp_path,
+        timeout=60,
+    )
+    assert result.returncode == sg.EXIT_NOT_EVALUATED, result.stderr
+    assert "no database URL (--db-url)" in result.stderr
+    assert "cannot load enums from absent_module:metadata" in result.stderr
+
+
+# --- the service declaration ---------------------------------------------------------
+
+
+def test_schema_check_specs_name_a_registered_backend_image():
+    """Each gated service is a deploy_v2 service, and its image is one it publishes."""
+    from common.deploy.contract import SERVICES
+
+    assert set(sg._SCHEMA_CHECK_SPECS) == {"finance_report/app"}
+    for service, spec in sg._SCHEMA_CHECK_SPECS.items():
+        assert spec.image_repository in SERVICES[service].image_repositories
+    spec = sg._SCHEMA_CHECK_SPECS["finance_report/app"]
+    assert spec.image_repository == "ghcr.io/wangzitian0/finance_report-backend"
+    assert spec.metadata == "src.database:Base.metadata"
+    assert spec.imports == ("src.orm_registry",)
+
+
+def test_schema_check_argv_lists_each_import_in_order():
+    spec = sg.SchemaCheckSpec(image_repository="r", metadata="a:b", imports=("x", "y"))
+    assert sg.schema_check_argv("s/app", spec) == [
+        "--metadata",
+        "a:b",
+        "--import",
+        "x",
+        "--import",
+        "y",
+        "--label",
+        "s/app",
+    ]
+
+
+def test_infra2_keeps_no_copy_of_the_schema_check():
+    """The SDK owns the check; infra2 holds only the gate wiring (#1824)."""
+    root = Path(__file__).resolve().parents[2]
+    assert not (root / "tools" / "pre_deploy_schema_check.py").exists()
+    gate_source = (root / "common" / "deploy" / "schema_gate.py").read_text()
+    assert "def check_enums" not in gate_source
+    assert "pre_deploy_schema_check" not in gate_source

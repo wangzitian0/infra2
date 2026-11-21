@@ -38,10 +38,10 @@
 ### L3: 发布门禁闭环与告警降噪 (Deploy & Observability)
 - [ ] **T3.1 发布三段式门禁与 Schema 防御（#698）**：
   - [ ] Stage 1: Ephemeral Smoke（构建后启动临时容器冒烟校验）
-  - [x] Stage 2: Pre-flight Gate（`tools/pre_deploy_schema_check.py` 双向严格比对 + fail-closed；缺 DB URL / 代码侧枚举载入失败 = `NOT EVALUATED` 退出码 3 阻断，#718 review 修复；已接入 `deploy_v2`——`common/deploy/promote.py:deploy()` 在任何 Dokploy 变更前调用 `common/deploy/schema_gate.py`，SSH 到 VPS 用即将部署的应用镜像跑检查，退出码 1/3 及任何传输失败均阻断，详见 TODOWRITE 第 20 条）
+  - [x] Stage 2: Pre-flight Gate（`infra2_sdk.runtime.schema_check` in the app image since #1824; before that `tools/pre_deploy_schema_check.py` 双向严格比对 + fail-closed；缺 DB URL / 代码侧枚举载入失败 = `NOT EVALUATED` 退出码 3 阻断，#718 review 修复；已接入 `deploy_v2`——`common/deploy/promote.py:deploy()` 在任何 Dokploy 变更前调用 `common/deploy/schema_gate.py`，SSH 到 VPS 用即将部署的应用镜像跑检查，退出码 1/3 及任何传输失败均阻断，详见 TODOWRITE 第 20 条）
   - [ ] Stage 3: Deploy + Synthetic Probes（部署后打真实业务探针，设 10 分钟观察烘焙期 T_Bake）
 - [ ] **T3.2 安全回滚守则与人工刹车（#722）**：
-  - [x] 明确 `ROLLBACK_CLASS`：仅 Class A（无破坏性 DDL）允许自动回滚；出现 DROP/RENAME/收紧约束（Class C）**严禁自动回滚**，必须人工挂起并 forward-fix。`tools/pre_deploy_schema_check.py::classify_rollback` 已实现并随 Stage 2 门禁的每次比对一起计算、打印（`ROLLBACK_CLASS: A|C`）——门禁本身只有两档可达（casing 漂移必然同时触发 missing_in_code，不存在可达的中间档）。**这只是分类，不是执行器**：下面两项（自动回滚熔断、`--force-promote`）仍未实现，本仓库目前没有任何自动回滚路径可供这个分类去约束。
+  - [x] 明确 `ROLLBACK_CLASS`：仅 Class A（无破坏性 DDL）允许自动回滚；出现 DROP/RENAME/收紧约束（Class C）**严禁自动回滚**，必须人工挂起并 forward-fix。`infra2_sdk.runtime.schema_check.classify_rollback` (moved from `tools/pre_deploy_schema_check.py` in #1824) 已实现并随 Stage 2 门禁的每次比对一起计算、打印（`ROLLBACK_CLASS: A|C`）——门禁本身只有两档可达（casing 漂移必然同时触发 missing_in_code，不存在可达的中间档）。**这只是分类，不是执行器**. Correction (#1824): #722 later added both executors. `common/deploy/promote.py:_handle_post_deploy_failure` runs the automatic rollback with a circuit breaker and refuses it for Class C. `tools/deploy_v2.py --force-promote` (`common/deploy/v2.py`) bypasses the schema and smoke gates and writes `[AUDIT]` lines to stderr. No workflow exposes `force_promote`.
   - [ ] 自动回滚上限熔断：最多自动回滚 1 次，严禁运行 `migrate down`。
   - [ ] 支持 `--force-promote` 强行放行参数（必须携带 `--reason` 与 `--operator` 并留痕）。
 - [ ] **T3.3 告警信噪比治理与 P0 Runbook（#723）**：
@@ -54,7 +54,7 @@
 2. `tools/disk_guardian.sh` 与 systemd timer 磁盘自愈组件。
 3. `tools/host_backup.sh` 异地加密备份脚本（Google Drive / rclone crypt）+ `tools/run_restore_rehearsal.py` 沙箱恢复演练（VPS crontab 周期执行）。
 4. 带外死人开关配置与 Cloudflare Worker 探针集成。
-5. `tools/pre_deploy_schema_check.py` 双向比对与回滚安全门禁（已加固）。
+5. `infra2_sdk.runtime.schema_check` 双向比对与回滚安全门禁（已加固；#1824 removed the infra2 copy `tools/pre_deploy_schema_check.py`）。
 6. P0 告警 Runbook 文档集 (`docs/runbooks/`).
 
 ## PR Links
@@ -88,8 +88,8 @@
 | 3 | 异地备份就绪 | Google Drive 存在加密备份包且 SHA256 吻合 | `rclone lsd gdrive-backup:infra2/` 验证目录存在且可读写 |
 | 4 | 恢复演练闭环 | 自动化还原 Production 异地备份到临时库并通过 SQL 抽样 | `tools/run_restore_rehearsal.py --service-id all` 在新环境标记与最新指针上连续两个周周期跑通，每个服务各输出 `RESTORE_PROOF: PASS`，退出码 0；旧路径曾单次 10.62s 通过，不能代替此项 |
 | 5 | 死人开关兜底 | 宿主机断网 10 分钟外部独立告警 | 停止心跳上报，Healthchecks.io 外部通道（飞书/邮件）在 10 分钟内报警 |
-| 6 | Schema Gate 门禁 | 数据库与代码 Enum/Schema 不一致即阻断；缺输入（无 DB URL / 枚举载入失败）同样阻断；且真的接在 `deploy_v2` 的部署路径上，不只是模块自证 | `pytest common/tests/test_pre_deploy_schema_check.py common/tests/test_schema_gate.py common/tests/test_deploy_primitive.py -k schema_gate` 全绿；实机验证见 TODOWRITE 第 20 条 |
-| 7 | ROLLBACK_CLASS 分类 | 破坏性信号（DROP/RENAME 已落库的枚举，即 missing_in_code）分类为 C，纯新增分类为 A | `pytest common/tests/test_pre_deploy_schema_check.py -k classify_rollback` 全绿；门禁每次比对都打印 `ROLLBACK_CLASS: A|C`。**尚无**自动回滚执行器/熔断/`--force-promote`（T3.2 其余两项未实现）——本行只验证分类，不验证回滚回路。
+| 6 | Schema Gate 门禁 | 数据库与代码 Enum/Schema 不一致即阻断；缺输入（无 DB URL / 枚举载入失败）同样阻断；且真的接在 `deploy_v2` 的部署路径上，不只是模块自证 | `pytest common/tests/test_schema_gate.py common/tests/test_deploy_primitive.py -k schema_gate` 全绿；实机验证见 TODOWRITE 第 20 条 |
+| 7 | ROLLBACK_CLASS 分类 | 破坏性信号（DROP/RENAME 已落库的枚举，即 missing_in_code）分类为 C，纯新增分类为 A | `pytest tests/test_schema_check.py -k classify_rollback` in infra2-sdk 全绿；门禁每次比对都打印 `ROLLBACK_CLASS: A|C`。本行只验证分类，不验证回滚回路。The rollback executor, its circuit breaker and `--force-promote` exist since #722 (`common/deploy/promote.py`, `common/deploy/v2.py`).
 
 ## References
 

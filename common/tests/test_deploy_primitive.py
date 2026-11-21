@@ -794,7 +794,7 @@ def test_deploy_raises_before_any_mutation_when_approle_creds_missing():
 
 
 def test_deploy_calls_schema_gate_before_any_mutation_when_registered(monkeypatch):
-    """finance_report/app IS registered in tools.pre_deploy_schema_check.ENUM_SOURCES —
+    """finance_report/app IS registered in common.deploy.schema_gate._SCHEMA_CHECK_SPECS —
     a blocking gate must stop deploy() before it touches Dokploy at all."""
     calls = []
 
@@ -823,7 +823,7 @@ def test_deploy_calls_schema_gate_before_any_mutation_when_registered(monkeypatc
 
 
 def test_deploy_skips_schema_gate_for_an_unregistered_service(monkeypatch):
-    """truealpha/app has no ENUM_SOURCES entry yet — it must not be gated (a future
+    """truealpha/app has no _SCHEMA_CHECK_SPECS entry — it must not be gated (a future
     service needs registering there first, same as the onboarding SOP already says)."""
     calls = []
     monkeypatch.setattr(
