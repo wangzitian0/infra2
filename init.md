@@ -23,7 +23,7 @@
    - 1Password is the sole authority for static bootstrap secrets. Vault is the runtime secret store for L2/L4 services. Dokploy holds non-secret environment variables.
    - Do not store plaintext `.env` files in git. Application manifests (`EnvironmentManifest`) drive Vault policy and template generation through `infra2_sdk.secrets`.
 4. **Four-Axis Deployment Coordinate (`docs/ssot/core.environments.md`, `docs/ssot/ops.pipeline.md`):**
-   - Every deployment binds four explicit coordinates: `--service`, `--type` (`staging`, `prod`, `canary`, `preview`), `--iac-ref`, and `--domain` (`tools/deploy_v2.py`).
+   - Every deployment binds four explicit coordinates: `--service`, `--type` (`staging`, `prod`, `preview`), `--iac-ref`, and `--domain` (`tools/deploy_v2.py`).
    - The stages, phases and change kinds are defined once in [`docs/ssot/ops.pipeline.md` section 2.0](docs/ssot/ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases).
 5. **Workspace Harness Without Ownership Merger (`docs/ssot/core.harness.md`, `harness/repos.yaml`):**
    - `repos/finance_report` and `repos/truealpha` are autonomous application checkouts (`contract: snapshot`).

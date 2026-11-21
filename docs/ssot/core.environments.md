@@ -3,7 +3,7 @@
 > **SSOT Key**: `core.environments`  
 > **核心定义**: 本文只定义环境。交付阶段、阶段记录与变更种类见 [`ops.pipeline.md` §2.0](./ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases)。
 > 
-> - **部署只认三环境**：`preview`（PR 临时动态）、`staging`（单例预发）、`production`（单例生产），加目标态 `DR`（异地灾备）。
+> - **部署环境**：`preview`（PR 临时动态）、`staging`（单例预发）、`production`（单例生产），加目标态 `DR`（异地灾备）。阶段数量只在 [`ops.pipeline.md` §2.0](./ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases) 定义，本文不计数。
 > - **无状态执行器**：本地开发工作站、GitHub PR CI 虚拟机、宿主机 IaC Runner 仅负责代码测试与编排触发，不持有应用持久化状态。
 > - **两大致命七寸 (The Two Critical Choke Points)**：
 >   1. **【七寸 1】GitHub PR CI (`github_ci.merge_authority`)**：静态检查、单元测试、配置校验与 Schema 双向比对全绿，**阻断劣质代码合入主干**。
@@ -15,7 +15,7 @@
 
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
-| **阶段 id 与阶段模型** | stage id 来自 SDK `stages.yaml`；阶段模型（问题、阶段、合并阻塞）见 [`ops.pipeline.md` §2.0](./ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases) | infra2 不在此保留副本 |
+| **阶段 id、预算与阶段模型** | stage id 与各 cell 预算来自 SDK `stages.yaml`；阶段模型（问题、阶段、合并阻塞）见 [`ops.pipeline.md` §2.0](./ops.pipeline.md#20-delivery-model-five-flows-five-stages-three-phases) | infra2 不在此保留副本 |
 | **门禁清单** | [`docs/ssot/ci-gate-inventory.yaml`](./ci-gate-inventory.yaml) | 七寸 1 (Merge Authority) 的所有阻断门禁 |
 | **环境配置与部署** | Dokploy Project/Environment + `deploy_v2` | 远端环境变量和发布前门 |
 | **数据与域名隔离** | `DATA_PATH` / `ENV_SUFFIX` / `ENV_DOMAIN_SUFFIX` | 有状态部署环境间的数据与网络隔离 |
@@ -40,7 +40,7 @@
 ```bash
 # Finance Report 示例
 cd apps/backend
-uv run pytest  # 单元测试（内存 SQLite）
+uv run pytest <改动对应的测试文件>  # 聚焦测试，单进程（内存 SQLite）
 
 cd apps/frontend
 npm run dev  # Next.js dev server (localhost:3000)
@@ -48,38 +48,9 @@ npm run dev  # Next.js dev server (localhost:3000)
 
 **数据**: 无持久化，使用内存数据库或 Mock
 
-**迭代速度**: ⚡⚡⚡⚡⚡ (秒级)
-
 ---
 
-### 3.2 Local Docker (本地容器)
-
-**位置**: 开发者工作站 (Docker Compose)  
-**用途**: 端到端测试、集成测试、依赖验证  
-**特点**:
-- ✅ **完整栈** - PostgreSQL + Redis + S3 + Backend + Frontend
-- ✅ **真实依赖** - 真实数据库、真实 S3
-- ✅ **快速重置** - `docker compose down -v && docker compose up`
-- ✅ **调试友好** - 容器日志、端口映射
-
-**配置**:
-```bash
-# Finance Report 示例
-docker compose up -d postgres s3 redis  # 启动依赖
-moon run backend:dev  # 后端连接真实 DB
-moon run frontend:dev  # 前端
-
-# 或者完整栈
-docker compose up  # 包括 backend + frontend
-```
-
-**数据**: `/tmp/finance_report/` 或 Docker volumes (可随时删除)
-
-**迭代速度**: ⚡⚡⚡⚡ (分钟级)
-
----
-
-### 3.3 Preview (PR 预览与临时部署环境)
+### 3.2 Preview (PR 预览与临时部署环境)
 
 **位置**: VPS (Dokploy 临时隔离项目)  
 **用途**: PR 预览、功能验证、临时冒烟测试、0-downtime 验证  
@@ -116,18 +87,15 @@ python -m tools.deploy_v2 \
 - ✅ 基础性能测试
 - ✅ 0-downtime bootstrap (新环境从零启动)
 
-**迭代速度**: ⚡⚡⚡ (小时级)
-
 ---
 
-### 3.4 Staging (集成测试环境)
+### 3.3 Staging (集成测试环境)
 
 **位置**: VPS (Dokploy)  
-**用途**: 集成测试、回归测试、UAT、性能测试  
+**用途**: 集成测试、回归测试、UAT  
 **特点**:
 - ✅ **长期运行** - 永久环境，不销毁
 - ✅ **生产镜像** - 与 production 相同的配置
-- ✅ **完整测试** - E2E、性能、安全扫描
 - ✅ **数据保留** - 测试数据持久化（用于回归测试）
 
 **配置**:
@@ -147,18 +115,13 @@ python -m tools.deploy_v2 --service finance_report/app --type staging --version-
 **域名**: `{service}-staging.zitian.party`
 
 **测试点**:
-- ✅ 完整 E2E 测试套件
 - ✅ API 集成测试
-- ✅ 性能基准测试
-- ✅ 安全扫描 (OWASP ZAP)
 - ✅ 数据库迁移测试
 - ⏳ 新备份路径的 Staging 全状态恢复测试待验收（见 Infra-022 T2.1/T2.2）
 
-**迭代速度**: ⚡⚡ (天级)
-
 ---
 
-### 3.5 Production (生产环境)
+### 3.4 Production (生产环境)
 
 **位置**: VPS (Dokploy)  
 **用途**: 生产服务、真实用户访问  
@@ -190,11 +153,9 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 - ✅ 数据库迁移先在 staging 验证
 - ⏳ 滚动切换与快速置换 (in-place fast-swap; Staging 试点已落地，待 W8 迁移解耦后晋升 Prod)
 
-**迭代速度**: ⚡ (周级)
-
 ---
 
-### 3.6 DR (灾备环境)
+### 3.5 DR (灾备环境)
 
 **位置**: Google Drive 异地加密存储；备用 VPS 恢复环境尚未验收\
 **用途**: 数据备份、灾难恢复  
@@ -222,7 +183,6 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 
 | 环境 | ENV_SUFFIX | 容器名示例 |
 |------|-----------|-----------|
-| Local Docker | (无) | `postgres`, `backend`, `frontend` |
 | Preview | `-{kind}-{value}` | `finance_report-backend-pr-123` |
 | Staging | `-staging` | `platform-postgres-staging` |
 | Production | (空) | `platform-postgres` |
@@ -240,7 +200,6 @@ python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref
 
 | 环境 | DATA_PATH / Volume | 说明 |
 |------|--------------------|------|
-| Local | `/tmp/` or volumes | 可随时删除 |
 | Preview | 独立 Docker volume (`preview_db`) | `--down` (`delete_volumes=True`) 时自动销毁 |
 | Staging | `/data/{layer}/staging/` | 持久化 |
 | Production | `/data/{layer}/` | 持久化 + 备份 |

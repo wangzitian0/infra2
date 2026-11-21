@@ -34,17 +34,12 @@
 
 ## 3. 标准操作程序 (Playbooks)
 
-### SOP-001: 本地验证覆盖率门禁
-
-```bash
-uv run python -P -m pytest common/tests -q --cov=common --cov=tools \
-  --cov-report=xml:coverage/infra2-coverage.xml --cov-fail-under=0
-uv run python tools/coverage_regression_audit.py
-```
-
 ### SOP-002: 提交一次覆盖率提升
 
+覆盖率只在 CI 生成。从 PR head 的 `infra-ci.yml` run 下载 artifact `infra2-coverage-context`（`coverage/infra2-coverage.xml`），不在本地跑全量覆盖率。
+
 ```bash
+gh run download <run-id> --name infra2-coverage-context --dir coverage
 uv run python tools/coverage_regression_audit.py --update-baseline
 git add docs/ssot/coverage-baseline.json
 ```
