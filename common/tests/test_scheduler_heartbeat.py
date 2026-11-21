@@ -206,6 +206,7 @@ def test_the_send_needs_only_the_standard_library(tmp_path: Path) -> None:
         "        raise ImportError(name)\n"
         "    return real(name, *a, **k)\n"
         "builtins.__import__ = guard\n"
+        "sys.path.insert(0, sys.argv[2])\n"
         "from common.observability import scheduler_heartbeat as hb\n"
         "class R:\n"
         "    status = 200\n"
@@ -220,7 +221,7 @@ def test_the_send_needs_only_the_standard_library(tmp_path: Path) -> None:
         "print(code, len(sent))\n"
     )
     proc = subprocess.run(
-        [sys.executable, "-c", probe, str(tmp_path / "verdicts.jsonl")],
+        [sys.executable, "-c", probe, str(tmp_path / "verdicts.jsonl"), str(ROOT)],
         cwd=ROOT,
         capture_output=True,
         text=True,

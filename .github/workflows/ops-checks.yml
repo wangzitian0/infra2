@@ -414,7 +414,7 @@ jobs:
           INFRA2_WATCHDOG_HEARTBEAT_TOKEN: ${{ secrets.INFRA2_WATCHDOG_HEARTBEAT_TOKEN }}
         # The module sends on a scheduled run only and records a verdict for the issue
         # trail on each run: sent, failed, or skipped on a manual run (#1877).
-        run: python -m common.observability.scheduler_heartbeat
+        run: python tools/scheduler_heartbeat.py
 
       # truealpha#876 W4: Feishu alone left no record that the 2026-09-16
       # cloudflare-worker-status incident (run 35048603264) was seen or that it ended.

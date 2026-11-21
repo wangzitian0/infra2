@@ -194,10 +194,8 @@ def _ops_checks_scheduler_ping_step() -> tuple[dict, str]:
     assert names.index(step_name) < names.index("Record the verdicts as GitHub issues")
     ping_step = steps[names.index(step_name)]
     # #1877: the step runs the module, which records a verdict on each run.
-    assert (
-        ping_step["run"].strip() == "python -m common.observability.scheduler_heartbeat"
-    )
-    python_src = "common.observability.scheduler_heartbeat"
+    assert ping_step["run"].strip() == "python tools/scheduler_heartbeat.py"
+    python_src = "tools/scheduler_heartbeat.py"
     return ping_step, python_src
 
 
@@ -244,7 +242,7 @@ def _emit_ops_checks_ping(python_src: str, *, event_name: str = "schedule") -> d
     try:
         port = server.server_address[1]
         proc = subprocess.run(
-            [sys.executable, "-m", python_src],
+            [sys.executable, python_src],
             cwd=ROOT,
             env={
                 **{

@@ -18,7 +18,7 @@
 | `probe_environment.py` | The one resolver of a probe process's environment; no default, raises when unset or unknown (#1208) | `resolve_probe_environment()`, `PROBE_ENVIRONMENT_VARIABLES` |
 | `breakdown.py` | Container log triage & failure classification | `BreakdownVerdict`, `analyze_container_logs()`, `classify_reason()`, `build_breakdown_alert_payload()` |
 | `watchdog_issue_trail_cli.py` | Watchdog issue trail CLI and verdict-source constants | `main()`, `VERDICTS_ENV`, `EXPECTED_SOURCES` |
-| `scheduler_heartbeat.py` | Send the ops-checks scheduler heartbeat to the Cloudflare Worker and record its verdict for the issue trail | `send()`, `record()`, `main()`, `HEARTBEAT_SOURCE`, `HEARTBEAT_CHECK` |
+| `scheduler_heartbeat.py` | Send the ops-checks scheduler heartbeat to the Cloudflare Worker and record its verdict for the issue trail (entry: `tools/scheduler_heartbeat.py`) | `send()`, `record()`, `main()`, `HEARTBEAT_SOURCE`, `HEARTBEAT_CHECK` |
 | `openpanel.py` | OpenPanel analytics client configuration SSOT | `OPENPANEL_CLIENTS`, `openpanel_env()` |
 | `local_ledger.py` | VPS availability ledger: per-signal daily ok/fail counts and last ok/fail times written by the probe runner (#904, #1223) | `record_probe_round()`, `host_ledger_path()`, `to_report_days()` |
 | `probe_specs.py` | Probe specs rendered from the registry for the probe runner | `render_probe_spec_text()`, `normalize_specs_text()` |
