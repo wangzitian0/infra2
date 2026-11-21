@@ -27,7 +27,11 @@ from common.deploy.compose_compile import (
 )
 from common.deploy.config_hash import config_hash_from_items
 from common.tests.conftest import load_repo_module
-from common.tests.test_compose_compile import _todo_as_x_infra2, _x_stack
+from common.tests.test_compose_compile import (
+    TODO_HAND_WRITTEN,
+    _todo_source,
+    _x_stack,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 TODO_DIR = "platform/30.todo"
@@ -38,7 +42,7 @@ FULL_SHA = "1af32e6daf17e2c58383dd2c0bfaea13bc11e517"
 
 def _todo_with_preview() -> str:
     """The x-infra2 todo with an ephemeral preview database (an ``x-preview`` block)."""
-    doc = yaml.safe_load(_todo_as_x_infra2())
+    doc = yaml.safe_load(_todo_source())
     doc["x-infra2"]["preview"] = {"db_container": "todo-preview-db${ENV_SUFFIX}"}
     doc["services"]["todo"]["x-preview"] = {"database_url": "postgresql"}
     return yaml.safe_dump(doc, sort_keys=False, width=10**6)
@@ -55,7 +59,7 @@ def _repo_with(monkeypatch, tmp_path: Path, rel: str, text: str) -> Path:
 
 def _template() -> str:
     """The Vault template of the todo stack, by the renderer that the deploy uses."""
-    return vault_template_for(TODO, _todo_as_x_infra2())
+    return vault_template_for(TODO, _todo_source())
 
 
 # --- 1. preview ------------------------------------------------------------------------
@@ -148,6 +152,7 @@ def test_preview_uploads_an_x_infra2_slot_compiled_in_preview_mode_as_raw(
             "compose_file": preview,
             "source_type": "raw",
             "autoDeploy": False,
+            "composePath": "./docker-compose.yml",
         }
     ]
     # A raw slot needs no GitHub provider; this client has none.
@@ -221,7 +226,7 @@ def _drift_at(monkeypatch, files_by_ref: dict[str, dict[str, bytes]]):
 def test_config_drift_compiles_an_x_infra2_stack_with_the_template_at_the_ref(
     monkeypatch,
 ) -> None:
-    source = _todo_as_x_infra2()
+    source = _todo_source()
     head = (ROOT / TODO_MANIFEST).read_bytes()
     drift = _drift_at(
         monkeypatch,
@@ -255,7 +260,7 @@ def load_stack_text(source: str) -> str:
 
 
 def test_config_drift_stops_when_the_manifest_is_absent_at_the_ref(monkeypatch) -> None:
-    drift = _drift_at(monkeypatch, {"v1": {TODO: _todo_as_x_infra2().encode()}})
+    drift = _drift_at(monkeypatch, {"v1": {TODO: _todo_source().encode()}})
     with pytest.raises(ComposeSourceError, match="absent at v1"):
         drift.expected_hash_at(object, MagicMock(), "v1", {"ENV": "production"})
 
@@ -294,7 +299,7 @@ def test_release_template_sha256_of_an_x_infra2_stack_is_the_label(
 ) -> None:
     import common.security.vault_audit as va
 
-    _repo_with(monkeypatch, tmp_path, TODO, _todo_as_x_infra2())
+    _repo_with(monkeypatch, tmp_path, TODO, _todo_source())
     # A stale secrets.ctmpl beside the source must not count: the label is the release.
     (tmp_path / TODO_DIR / "secrets.ctmpl").write_text("stale\n", encoding="utf-8")
     monkeypatch.setattr(va, "REPO_ROOT", tmp_path)
@@ -303,11 +308,19 @@ def test_release_template_sha256_of_an_x_infra2_stack_is_the_label(
     assert va._release_template_sha256(_vault_service(TODO)) == want
 
 
-def test_release_template_sha256_of_a_plain_stack_hashes_secrets_ctmpl() -> None:
-    from common.security.vault_audit import _release_template_sha256
+def test_release_template_sha256_of_a_plain_stack_hashes_secrets_ctmpl(
+    monkeypatch, tmp_path: Path
+) -> None:
+    import common.security.vault_audit as va
 
-    want = hashlib.sha256((ROOT / TODO_DIR / "secrets.ctmpl").read_bytes()).hexdigest()
-    assert _release_template_sha256(_vault_service(TODO)) == want
+    # The hand-written todo, with a template that the registry renderer cannot give.
+    _repo_with(
+        monkeypatch, tmp_path, TODO, TODO_HAND_WRITTEN.read_text(encoding="utf-8")
+    )
+    (tmp_path / TODO_DIR / "secrets.ctmpl").write_text("plain\n", encoding="utf-8")
+    monkeypatch.setattr(va, "REPO_ROOT", tmp_path)
+    want = hashlib.sha256(b"plain\n").hexdigest()
+    assert va._release_template_sha256(_vault_service(TODO)) == want
 
 
 def _fake_ssh(monkeypatch, stdout: str):
@@ -353,7 +366,7 @@ def test_the_audit_passes_a_compiled_sidecar_that_runs_the_release_template(
     import common.security.vault_audit as va
     import common.security.vault_self_refresh_audit as audit
 
-    _repo_with(monkeypatch, tmp_path, TODO, _todo_as_x_infra2())
+    _repo_with(monkeypatch, tmp_path, TODO, _todo_source())
     monkeypatch.setattr(va, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(
         "common.core.environ.get_env",
@@ -383,6 +396,11 @@ def test_the_audit_passes_a_compiled_sidecar_that_runs_the_release_template(
     assert seen == ["docker exec platform-todo-vault-agent cat /vault/secrets.ctmpl"]
     result = va.classify_deployed_template(service, deployed)
     assert result.status == "pass", result
+    # The message names the compiled compose, not the secrets.ctmpl that is not deployed.
+    assert result.summary == (
+        "the template in the vault-agent container matches the compiled "
+        f"{TODO} template"
+    )
 
 
 # --- 4. the six stacks with their own composing() --------------------------------------
@@ -529,6 +547,7 @@ def test_bootstrap_stacks_upload_x_infra2_as_raw(
         "compose_file": compile_stack(source),
         "source_type": "raw",
         "autoDeploy": False,
+        "composePath": "./docker-compose.yml",
     }
     if existing:
         client.create_compose.assert_not_called()
@@ -617,7 +636,7 @@ def test_the_in_service_check_expects_the_compiled_vault_sidecar(
 ) -> None:
     from common.deploy.deployer import Deployer
 
-    compose = _repo_with(monkeypatch, tmp_path, TODO, _todo_as_x_infra2())
+    compose = _repo_with(monkeypatch, tmp_path, TODO, _todo_source())
 
     class _Todo(Deployer):
         service = "todo"

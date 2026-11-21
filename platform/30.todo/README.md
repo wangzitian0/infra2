@@ -21,7 +21,7 @@ Canary service at `todo.zitian.party`. It proves the platform's real runtime pat
 7. **Startup & Runtime Governance**:
    - `env.manifest.json`: enforced fail-closed at startup via `validate_startup_environment()` (`assert_environment`).
    - `runtime-hooks.manifest.json`: 5-slot runtime verification hooks (`smoke`, `preview_gate`, `staging_gate`, `prod_gate`, `scheduled_audit`); `staging_gate` and `prod_gate` run `probe_health.py --gate`.
-   - `IAC_MOUNT_SHA256_*`: mount fingerprints injected by `TodoDeployer.rendered_mount_fingerprints()` into `compose.yaml`.
+   - `compose.yaml` is an `x-infra2` source (#1822 Slice 2). The compiled `vault-agent` sidecar holds its config and template inline and labels them `infra2.vault.config.sha256` and `infra2.vault.template.sha256`. `CONFIGURATION_SHA256` hashes the compiled text, so a template change recreates the sidecar.
 
 ## Endpoints
 

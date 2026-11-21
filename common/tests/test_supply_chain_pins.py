@@ -10,6 +10,8 @@ from typing import Any
 
 import yaml
 
+from common.deploy.compose_compile import load_stack
+
 from tools.sdk_requirement import sdk_requirement
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -55,7 +57,7 @@ def scan_supply_chain_unpinned(
 
     for path in sorted(compose_files):
         rel = path.relative_to(root).as_posix()
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        data = yaml.safe_load(load_stack(path).compiled) or {}
         services = data.get("services") or {}
         if not isinstance(services, dict):
             continue

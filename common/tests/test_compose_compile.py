@@ -26,6 +26,20 @@ from common.deploy.config_hash import config_hash_from_items
 
 ROOT = Path(__file__).resolve().parents[2]
 TODO = "platform/30.todo/compose.yaml"
+# The last hand-written form of TODO (infra2@5856103f), before #1822 Slice 2 moved it to
+# x-infra2. The Cleanup slice of #1822 deletes it.
+TODO_HAND_WRITTEN = ROOT / "common/tests/fixtures/todo_stack_hand_written.yaml"
+# The stacks on x-infra2. A migration adds its file here and proves its equivalence.
+X_INFRA2_FILES = {TODO}
+# The Canary image has no default hosts: /api/canary/status turns red when the compiled
+# todo service lacks one of these. The values are those of the hand-written file.
+CANARY_HOSTS = {
+    "REDIS_HOST": "platform-redis${ENV_SUFFIX}",
+    "S3_ENDPOINT": "http://platform-s3${ENV_SUFFIX}:9000",
+    "SIGNOZ_OTEL_COLLECTOR": "http://platform-signoz-otel-collector:13133",
+    "OPENPANEL_API_URL": "http://platform-openpanel-api:3000/healthcheck",
+    "AUTHENTIK_ENDPOINT": "http://platform-authentik-server${ENV_SUFFIX}:9000/-/health/live/",
+}
 
 
 def _x_stack(**service) -> str:
@@ -40,9 +54,14 @@ def test_every_tracked_compose_file_compiles_to_its_own_bytes() -> None:
     files = tracked_compose_files()
     # 26 files on 2026-11-21; a scan that finds few files proves nothing.
     assert len(files) >= 20, files
-    for path in files:
+    migrated = {
+        p for p in files if has_x_infra2((ROOT / p).read_text(encoding="utf-8"))
+    }
+    assert migrated == X_INFRA2_FILES, (
+        "a stack moved to x-infra2; update X_INFRA2_FILES"
+    )
+    for path in sorted(set(files) - migrated):
         text = (ROOT / path).read_text(encoding="utf-8")
-        assert not has_x_infra2(text), f"{path} uses x-infra2; update this proof"
         compiled = compile_stack(text)
         assert compiled.encode() == text.encode(), path
         env = {"ENV": "staging"}
@@ -162,11 +181,14 @@ def test_unreadable_compiled_text_is_never_raw_eligible() -> None:
 
 def test_real_stacks_classify_as_measured() -> None:
     """Real files: a vault mount and a build block raw; portal has neither (#1822)."""
-    todo = raw_ineligibility(load_stack(TODO).compiled)
-    assert todo == [
+    assert raw_ineligibility(TODO_HAND_WRITTEN.read_text(encoding="utf-8")) == [
         "services.vault-agent mounts './vault-agent.hcl' from the checkout; raw has no checkout",
         "services.vault-agent mounts './secrets.ctmpl' from the checkout; raw has no checkout",
     ]
+    # Slice 2: the x-infra2 todo has the template inline, so it is raw-eligible.
+    todo = load_stack(TODO)
+    assert raw_ineligibility(todo.compiled) == []
+    assert todo.source_type == "raw"
     assert any(
         "`build:`" in r
         for r in raw_ineligibility(load_stack("platform/03.s3/compose.yaml").compiled)
@@ -287,6 +309,24 @@ def test_upsert_raw_compose_updates_an_existing_record_to_raw() -> None:
     client.create_compose.assert_not_called()
     kwargs = client.update_compose.call_args.kwargs
     assert kwargs["source_type"] == "raw" and kwargs["env"] == "A=1\nVAULT_ROLE_ID=r"
+    # A record switched from github keeps its old composePath unless the update resets
+    # it; Dokploy then writes its env file into a directory that a raw deploy wiped (#1889).
+    assert kwargs["composePath"] == "./docker-compose.yml"
+
+
+def test_the_raw_compose_path_is_where_dokploy_writes_the_raw_file() -> None:
+    """Dokploy writes a raw compose to code/docker-compose.yml and its env file to
+    dirname(code/<composePath>) with no mkdir. Only this path puts both in code/."""
+    import posixpath
+
+    from common.deploy.dokploy_adapter import RAW_COMPOSE_PATH, raw_source_fields
+
+    assert raw_source_fields("x")["composePath"] == RAW_COMPOSE_PATH
+    code = "/etc/dokploy/compose/app/code"
+    env_dir = posixpath.dirname(
+        posixpath.normpath(posixpath.join(code, RAW_COMPOSE_PATH))
+    )
+    assert env_dir == code
 
 
 def test_the_dokploy_client_sends_raw_source_and_compose_file() -> None:
@@ -302,44 +342,9 @@ def test_the_dokploy_client_sends_raw_source_and_compose_file() -> None:
 # --- equivalence with the real hand-written file -----------------------------------------
 
 
-def _todo_as_x_infra2() -> str:
-    """The real 30.todo compose written as x-infra2 (the Slice 2 shape), built from the file."""
-    hand = yaml.safe_load((ROOT / TODO).read_text(encoding="utf-8"))["services"]["todo"]
-    keep = ("image", "container_name", "mem_limit", "cpu_shares", "healthcheck")
-    env = {k: v for k, v in hand["environment"].items() if k != "CONFIGURATION_SHA256"}
-    rule = "Host(`todo${ENV_DOMAIN_SUFFIX}.${INTERNAL_DOMAIN}`)"
-    service = {k: hand[k] for k in keep}
-    service.update(
-        command=["python", "/app/app.py"],
-        environment=env,
-        **{
-            "x-vault": {},
-            "x-routes": {
-                "service": "platform-todo",
-                "port": 8000,
-                "routes": [
-                    {
-                        "name": "platform-todo-public",
-                        "rule": rule + " && Path(`/api/health`)",
-                        "tls": True,
-                        "priority": 100,
-                    },
-                    {
-                        "name": "platform-todo",
-                        "rule": rule,
-                        "tls": True,
-                        "priority": 10,
-                        "sso": "todo-auth",
-                    },
-                ],
-            },
-        },
-    )
-    doc = {
-        "x-infra2": {"vault": {"name": "platform-todo"}},
-        "services": {"todo": service},
-    }
-    return yaml.safe_dump(doc, sort_keys=False, width=10**6)
+def _todo_source() -> str:
+    """The real 30.todo compose: an x-infra2 source since #1822 Slice 2."""
+    return (ROOT / TODO).read_text(encoding="utf-8")
 
 
 def _todo_base_files() -> dict[str, str]:
@@ -350,13 +355,31 @@ def _todo_base_files() -> dict[str, str]:
     }
 
 
+def _todo_compiled(source: str | None = None) -> str:
+    source = _todo_source() if source is None else source
+    return compile_stack(source, vault_template=_todo_base_files()["secrets.ctmpl"])
+
+
+def _todo_without(source: str, name: str) -> str:
+    """The todo source without the one line or capability that sets ``name``."""
+    if name == "S3_ENDPOINT":
+        old = "x-capabilities: [s3, otel]"
+        assert source.count(old) == 1
+        return source.replace(old, "x-capabilities: [otel]")
+    lines = [
+        line for line in source.splitlines(True) if line.strip().startswith(f"{name}:")
+    ]
+    assert len(lines) == 1, (name, lines)
+    return source.replace(lines[0], "")
+
+
 def test_the_real_todo_file_is_equivalent_and_a_missing_env_suffix_is_found() -> None:
-    """The pinned SDK gives the x-vault sidecar ENV_SUFFIX (infra2-sdk#268), which
+    """The x-vault sidecar carries ENV_SUFFIX (infra2-sdk#268), which
     30.todo/secrets.ctmpl reads (#1864). A base without it differs."""
-    source = _todo_as_x_infra2()
+    source = _todo_source()
     files = _todo_base_files()
-    compiled = compile_stack(source, vault_template=files["secrets.ctmpl"])
-    base = (ROOT / TODO).read_text(encoding="utf-8")
+    compiled = _todo_compiled()
+    base = TODO_HAND_WRITTEN.read_text(encoding="utf-8")
     assert equivalence_problems(source, compiled, base, files) == []
     without = base.replace(
         "      # secrets.ctmpl reads it to compose DATABASE_URL.\n      ENV_SUFFIX: ${ENV_SUFFIX:-}\n",
@@ -368,11 +391,51 @@ def test_the_real_todo_file_is_equivalent_and_a_missing_env_suffix_is_found() ->
     ]
 
 
-def test_equivalence_reports_a_changed_label_template_or_command() -> None:
-    source = _todo_as_x_infra2()
+def test_the_compiled_todo_sets_each_canary_host_as_the_hand_written_file() -> None:
+    """The Canary image at 4.3.0 has no default hosts (#1822 Slice 2)."""
+    want = {
+        name: value
+        for name, value in yaml.safe_load(
+            TODO_HAND_WRITTEN.read_text(encoding="utf-8")
+        )["services"]["todo"]["environment"].items()
+        if name in CANARY_HOSTS
+    }
+    assert want == CANARY_HOSTS
+    env = yaml.safe_load(_todo_compiled())["services"]["todo"]["environment"]
+    assert {name: env.get(name) for name in CANARY_HOSTS} == CANARY_HOSTS
+
+
+def test_the_compiled_sidecar_forwards_each_env_that_the_template_reads() -> None:
+    """secrets.ctmpl builds DATABASE_URL with `env "ENV_SUFFIX"` (#1864)."""
+    import re
+
+    template = _todo_base_files()["secrets.ctmpl"]
+    reads = set(re.findall(r'env "([A-Z_]+)"', template))
+    assert reads == {"ENV", "ENV_SUFFIX"}
+    sidecar = yaml.safe_load(_todo_compiled())["services"]["vault-agent"]
+    assert sidecar["container_name"] == "platform-todo-vault-agent${ENV_SUFFIX}"
+    env = sidecar["environment"]
+    assert {name: env.get(name) for name in reads} == {
+        "ENV": "${ENV}",
+        "ENV_SUFFIX": "${ENV_SUFFIX:-}",
+    }
+
+
+@pytest.mark.parametrize("name", sorted(CANARY_HOSTS))
+def test_equivalence_finds_a_canary_host_that_the_source_drops(name: str) -> None:
+    source = _todo_without(_todo_source(), name)
     files = _todo_base_files()
-    compiled = compile_stack(source, vault_template=files["secrets.ctmpl"])
-    base = (ROOT / TODO).read_text(encoding="utf-8")
+    base = TODO_HAND_WRITTEN.read_text(encoding="utf-8")
+    assert equivalence_problems(source, _todo_compiled(source), base, files) == [
+        f"services.todo.environment.{name}: only in the base file"
+    ]
+
+
+def test_equivalence_reports_a_changed_label_template_or_command() -> None:
+    source = _todo_source()
+    files = _todo_base_files()
+    compiled = _todo_compiled()
+    base = TODO_HAND_WRITTEN.read_text(encoding="utf-8")
     assert equivalence_problems(source, compiled, base, files) == []
     label = base.replace("priority=100", "priority=99")
     assert any(
@@ -395,8 +458,9 @@ def _git(cwd: Path, *args: str) -> None:
 def test_check_compares_a_migrated_file_with_its_base_ref(tmp_path: Path) -> None:
     stack = tmp_path / "platform/30.todo"
     stack.mkdir(parents=True)
-    for name in ("compose.yaml", "secrets.ctmpl", "vault-agent.hcl"):
+    for name in ("secrets.ctmpl", "vault-agent.hcl"):
         (stack / name).write_bytes((ROOT / "platform/30.todo" / name).read_bytes())
+    (stack / "compose.yaml").write_bytes(TODO_HAND_WRITTEN.read_bytes())
     (tmp_path / "platform/21.portal").mkdir(parents=True)
     (tmp_path / "platform/21.portal/compose.yaml").write_bytes(
         (ROOT / "platform/21.portal/compose.yaml").read_bytes()
@@ -420,7 +484,7 @@ def test_check_compares_a_migrated_file_with_its_base_ref(tmp_path: Path) -> Non
         0,
         [],
     )
-    (stack / "compose.yaml").write_text(_todo_as_x_infra2(), encoding="utf-8")
+    (stack / "compose.yaml").write_text(_todo_source(), encoding="utf-8")
     report = check("HEAD", root=tmp_path)
     assert (report.files, report.plain_identical, report.x_infra2, report.compared) == (
         2,
@@ -429,6 +493,13 @@ def test_check_compares_a_migrated_file_with_its_base_ref(tmp_path: Path) -> Non
         1,
     )
     assert report.problems == []
+    # A source that drops a Canary host fails the check (#1822 Slice 2).
+    (stack / "compose.yaml").write_text(
+        _todo_without(_todo_source(), "AUTHENTIK_ENDPOINT"), encoding="utf-8"
+    )
+    assert check("HEAD", root=tmp_path).problems == [
+        f"{TODO}: services.todo.environment.AUTHENTIK_ENDPOINT: only in the base file"
+    ]
 
 
 def test_check_on_this_tree_proves_every_plain_file_and_fails_on_an_empty_scan(
@@ -436,7 +507,9 @@ def test_check_on_this_tree_proves_every_plain_file_and_fails_on_an_empty_scan(
 ) -> None:
     report = check("HEAD")
     assert report.problems == []
-    assert report.plain_identical == report.files >= 20
+    assert report.files >= 20
+    assert report.x_infra2 == len(X_INFRA2_FILES)
+    assert report.plain_identical == report.files - report.x_infra2
     import common.deploy.compose_equivalence as eq
 
     monkeypatch.setattr(eq, "tracked_compose_files", lambda root=ROOT: [])
@@ -449,10 +522,10 @@ def test_check_reports_a_plain_file_that_the_compile_changes(monkeypatch) -> Non
     import common.deploy.compose_equivalence as eq
 
     monkeypatch.setattr(eq, "compile_stack", lambda text, **k: text + "\n")
-    problems = eq.check("HEAD").problems
-    assert problems and all(
-        "a plain file changed in the compile" in p for p in problems
-    )
+    report = eq.check("HEAD")
+    plain = [p for p in report.problems if not p.startswith(tuple(X_INFRA2_FILES))]
+    assert len(plain) == report.files - len(X_INFRA2_FILES) >= 20
+    assert all("a plain file changed in the compile" in p for p in plain)
 
 
 def test_the_cli_prints_a_plain_file_unchanged(capsys) -> None:

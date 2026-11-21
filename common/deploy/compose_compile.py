@@ -20,6 +20,7 @@ Rules:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,6 +32,18 @@ from common.deploy.config_hash import (
 from common.deploy.yaml_text import safe_load_text
 
 X_INFRA2 = "x-infra2"
+# The files that decide the compiled text of an x-infra2 stack, besides the stack's own
+# directory: the SDK compiler that the runner installs (uv.lock, sdk_requirement.py),
+# this module, and the Vault template renderer with the registry that names the
+# manifests. A change to one can change CONFIGURATION_SHA256 of every x-infra2 stack,
+# so the deploy fan-out selects each such stack (common.deploy.dependencies.explain_fanout).
+COMPILER_INPUT_PATHS: tuple[str, ...] = (
+    "uv.lock",
+    "tools/sdk_requirement.py",
+    "common/deploy/compose_compile.py",
+    "common/security/secrets_render.py",
+    "common/security/registry.py",
+)
 SOURCE_GITHUB = "github"
 SOURCE_RAW = "raw"
 MODES = ("deploy", "preview")
@@ -87,6 +100,17 @@ def _needs_vault_template(text: str) -> bool:
     doc = safe_load_text(_yaml(), text)
     block = doc.get(X_INFRA2) if isinstance(doc, dict) else None
     return isinstance(block, dict) and block.get("vault") is not None
+
+
+def compiles_a_vault_sidecar(text: str) -> bool:
+    """True when the compiled stack of ``text`` runs a ``vault-agent`` sidecar.
+
+    A plain file declares the service ``vault-agent`` itself (at two-space indent). An
+    ``x-infra2`` file gets the sidecar from the compiler when it sets ``x-infra2.vault``.
+    """
+    if has_x_infra2(text):
+        return _needs_vault_template(text)
+    return re.search(r"(?m)^  vault-agent:", text) is not None
 
 
 def _registry_service(compose_path: str | Path):
@@ -259,6 +283,7 @@ def load_stack(compose_path: str | Path, *, mode: str = "deploy") -> StackCompos
 
 __all__ = [
     "COMPILED_TEMPLATE_PATH",
+    "COMPILER_INPUT_PATHS",
     "ComposeSourceError",
     "MODES",
     "SOURCE_GITHUB",
@@ -266,6 +291,7 @@ __all__ = [
     "StackCompose",
     "X_INFRA2",
     "compile_stack",
+    "compiles_a_vault_sidecar",
     "has_x_infra2",
     "is_raw_eligible",
     "load_stack",
