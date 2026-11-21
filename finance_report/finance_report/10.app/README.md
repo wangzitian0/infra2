@@ -33,7 +33,7 @@ Secrets are read from multiple Vault paths:
 
 Stored at: `secret/data/finance_report/<env>/app`. The one source for the keys is `secrets.ctmpl`: `LLM_API_KEY`, `LLM_ENCRYPTION_KEYS`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_PUBLIC_ACCESS_KEY`, `S3_PUBLIC_SECRET_KEY`, `SECRET_KEY`.
 
-Not in Vault (`compose.yaml` sets them; `env.manifest.json` names their source):
+Not in Vault. `compose.yaml` or the application default sets each one; `env.manifest.json` names its source:
 
 | Key | Description |
 |-----|-------------|
@@ -49,9 +49,9 @@ Not in Vault (`compose.yaml` sets them; `env.manifest.json` names their source):
 | `AI_JSON_MAX_TOKENS` | Provider JSON extraction output cap; defaults to `8192` |
 | `AI_JSON_DISABLE_THINKING` | Disable GLM thinking for deterministic JSON extraction; defaults to `true` |
 | `NEXT_PUBLIC_APP_URL` | Frontend URL used by backend-generated links |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | SigNoz OTLP HTTP endpoint (optional Vault override; otherwise rendered — see Observability) |
-| `OTEL_SERVICE_NAME` | OTEL service name (optional Vault override) |
-| `OTEL_RESOURCE_ATTRIBUTES` | OTEL resource attributes (optional Vault override) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | SigNoz OTLP HTTP endpoint (see Observability) |
+| `OTEL_SERVICE_NAME` | OTEL service name |
+| `OTEL_RESOURCE_ATTRIBUTES` | OTEL resource attributes |
 | `API_RATE_LIMIT_REQUESTS` | Optional global limiter override; see Rate-limit capacity below |
 | `API_RATE_LIMIT_WINDOW` | Optional global limiter window override; defaults to 60 seconds |
 

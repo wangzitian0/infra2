@@ -67,7 +67,7 @@ secret/data/finance_report/<env>/app
   - SECRET_KEY
 ```
 
-The template composes `DATABASE_URL` and `REDIS_URL` from the `postgres` and `redis` paths. `S3_ENDPOINT`, `S3_BUCKET`, `LLM_PROVIDER`, `LLM_BASE_URL` and `AI_CHAT_COMPLETIONS_PATH` are not in Vault; `compose.yaml` sets them. `10.app/secrets.ctmpl` is the one source for this list.
+The template composes `DATABASE_URL` and `REDIS_URL` from the `postgres` and `redis` paths. The other app variables are not in Vault: `compose.yaml` or the application default sets each one, and `env.manifest.json` names its source. `10.app/secrets.ctmpl` is the one source for this list.
 
 Model keys are not part of this list. The deploy does not render them (tests in `common/tests` assert it). The infra2 SDK defaults apply.
 
