@@ -5042,6 +5042,75 @@ def test_sync_app_releases_missing_token_sdk_record_fails_not_held(
         )
 
 
+def test_sync_sdk_pins_never_moves_the_pin_down_and_skips_an_unpublished_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil
+    import urllib.error
+
+    from common.deploy.canary_pin import CANARY_COMPOSE_RELS, canary_sdk_version
+
+    for rel in CANARY_COMPOSE_RELS:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / rel, tmp_path / rel)
+    current = canary_sdk_version(tmp_path)
+    major, minor, patch = (int(part) for part in current.split("."))
+    monkeypatch.setattr(reconcile, "APP_SOURCES", {})
+
+    def no_runner(*_a, **_k):
+        raise AssertionError("no git or gh call expected")
+
+    older = f"{major}.{minor - 1 if minor else 0}.{patch}" if minor else "0.0.1"
+    res = reconcile.sync_sdk_pins(
+        tmp_path,
+        create_pr=True,
+        latest_sdk=older,
+        verified_versions=set(),
+        digest_resolver=lambda _v: pytest.fail("no lookup for an older release"),
+        runner=no_runner,
+    )
+    assert res["needs_canary_bump"] is False
+
+    def not_yet(version: str) -> str:
+        raise urllib.error.HTTPError("u", 404, "not found", None, None)
+
+    res = reconcile.sync_sdk_pins(
+        tmp_path,
+        create_pr=True,
+        latest_sdk=f"{major}.{minor}.{patch + 1}",
+        verified_versions=set(),
+        digest_resolver=not_yet,
+        runner=no_runner,
+    )
+    assert res["needs_canary_bump"] is True
+    assert res["canary_image_published"] is False and res["pr_created"] is False
+    assert canary_sdk_version(tmp_path) == current
+
+    def server_error(version: str) -> str:
+        raise urllib.error.HTTPError("u", 503, "unavailable", None, None)
+
+    with pytest.raises(urllib.error.HTTPError):
+        reconcile.sync_sdk_pins(
+            tmp_path,
+            create_pr=True,
+            latest_sdk=f"{major}.{minor}.{patch + 1}",
+            verified_versions=set(),
+            digest_resolver=server_error,
+            runner=no_runner,
+        )
+
+
+def test_the_schedule_branch_runs_the_canary_pin_bot() -> None:
+    text = (ROOT / ".github/workflows/reconcile-iac-inputs.yml").read_text(
+        encoding="utf-8"
+    )
+    branch = text[text.index('if [[ "$EVENT_NAME" == "schedule"') :]
+    branch = branch[: branch.index("exit 0")]
+    assert "--sync-app-releases" in branch
+    assert "--sync-sdk-pins" in branch
+    assert branch.index("--sync-app-releases") < branch.index("--sync-sdk-pins")
+
+
 def test_sync_sdk_pins_holds_app_prs_until_canary_verified(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

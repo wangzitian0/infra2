@@ -233,6 +233,9 @@ def test_resolve_canary_digest_reads_the_registry_header() -> None:
         if "/token?" in url:
             return _Reply(_json.dumps({"token": "t"}).encode())
         assert target.headers["Authorization"] == "Bearer t"
+        accept = target.headers["Accept"]
+        assert "application/vnd.oci.image.index.v1+json" in accept
+        assert "application/vnd.docker.distribution.manifest.v2+json" in accept
         return _Reply(headers={"Docker-Content-Digest": "sha256:" + "d" * 64})
 
     assert resolve_canary_digest("3.35.1", opener=opener) == "sha256:" + "d" * 64

@@ -1437,8 +1437,20 @@ def sync_sdk_pins(
     pr_updated = False
     pr_url = ""
     pr_number: int | None = None
+    image_published = True
     if needs_canary_bump and create_pr:
-        digest = (digest_resolver or resolve_canary_digest)(target_sdk)
+        try:
+            digest = (digest_resolver or resolve_canary_digest)(target_sdk)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 404:
+                raise
+            # infra2-sdk release.yml publishes the image after the GitHub release; the next
+            # scheduled run moves the pin.
+            image_published = False
+            print(
+                f"::notice::infra2-canary-todo:v{target_sdk} is not on ghcr.io yet; no pin PR"
+            )
+    if needs_canary_bump and create_pr and image_published:
         for rel in CANARY_COMPOSE_RELS:
             path = repo_root / rel
             path.write_text(
@@ -1474,6 +1486,7 @@ def sync_sdk_pins(
         "current_canary_sdk": current_sdk,
         "needs_canary_bump": needs_canary_bump,
         "canary_digest": digest,
+        "canary_image_published": image_published,
         "canary_verified": canary_verified,
         "held_apps": held_apps,
         "eligible_apps": eligible_apps,
