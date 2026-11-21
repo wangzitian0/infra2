@@ -526,15 +526,16 @@ def test_free_sync_pipeline_skips_when_host_config_matches_template(
     assert res.action == "skipped"
 
 
-def test_free_sync_pipeline_skips_fail_closed_when_host_config_unreadable(
+def test_free_sync_pipeline_fails_closed_when_host_config_unreadable(
     monkeypatch,
 ) -> None:
-    res, warnings, _pipe, _mod = _run_free_drift_step(
+    """#1897: an unreadable host config is no proof of service, so no skip."""
+    res, _warnings, _pipe, _mod = _run_free_drift_step(
         monkeypatch, _FakeContext("", ok=False)
     )
     assert res is not None
-    assert res.action == "skipped"
-    assert any("fail-closed" in w for w in warnings)
+    assert res.action == "failed"
+    assert f"cannot read host config {CONFIG_PATH}" in res.details
 
 
 # --- review findings of PR #1447 (head 7762f85) -------------------------------------
@@ -704,3 +705,28 @@ def test_mount_fingerprint_env_accepts_empty_string_content() -> None:
     assert mount_fingerprint_env({"a.cfg": ""}) == {
         "IAC_MOUNT_SHA256_A_CFG": hashlib.sha256(b"").hexdigest()
     }
+
+
+def test_free_root_ssh_requirement_raises_at_once(monkeypatch) -> None:
+    """#1899 review: a deterministic config error must not wait for a deadline."""
+    from common.deploy import deployer as deployer_module
+    from common.deploy.deployer import Deployer
+
+    module = _load_deploy_module("platform/25.free")
+    cls = module.FreeDeployer
+    monkeypatch.setattr(
+        cls,
+        "env",
+        classmethod(
+            lambda _c: {"ENV": "production", "VPS_HOST": "h", "VPS_SSH_USER": "deploy"}
+        ),
+    )
+    monkeypatch.setattr(
+        Deployer, "verify_still_in_service", classmethod(lambda _c, _ctx, _cid: None)
+    )
+    slept: list[float] = []
+    monkeypatch.setattr(deployer_module.time, "sleep", slept.append)
+    ctx = _FakeContext("")
+    with pytest.raises(RuntimeError, match="requires root SSH access"):
+        cls.verify_still_in_service(ctx, "cid")
+    assert ctx.commands == [] and slept == []

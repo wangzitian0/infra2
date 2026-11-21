@@ -910,7 +910,8 @@ class Deployer:
 
         Returns an error string when the stack is not in service (sync redeploys it),
         None when it is. Raises when the host cannot be asked (no appName, `docker ps`
-        failed): an unobservable stack is no evidence of a dead one.
+        failed): an unobservable stack is no evidence of a dead one, nor of a live one,
+        so sync fails the service and does not skip or redeploy it (#1897).
         """
         stack = cls._stack_on_host(c, compose_id)
         if stack is None:
@@ -1133,6 +1134,37 @@ class Deployer:
         return None
 
     @classmethod
+    def _read_on_host(
+        cls,
+        stack: _HostStack,
+        command: str,
+        what: str,
+        tool: str,
+        *,
+        deadline: float | None = None,
+    ) -> Any:
+        """Run `command` on the host; a failed read is "not settled yet" (#1897 review).
+
+        A one-off ssh failure must not fail the train. The read repeats every
+        IN_SERVICE_INTERVAL_SECONDS until `deadline` (default: the first failure plus
+        IN_SERVICE_DEADLINE_SECONDS). No successful read by then raises
+        `_StackUnobservable` with the last stderr.
+        """
+        while True:
+            result = stack.run(command)
+            if result.ok:
+                return result
+            now = time.monotonic()
+            if deadline is None:
+                deadline = now + cls.IN_SERVICE_DEADLINE_SECONDS
+            if now >= deadline:
+                raise _StackUnobservable(
+                    f"could not {what} {stack.project}'s containers on {stack.host}: "
+                    f"{(result.stderr or '').strip() or f'{tool} failed'}"
+                )
+            time.sleep(cls.IN_SERVICE_INTERVAL_SECONDS)
+
+    @classmethod
     def _verify_raw_release_binding(cls, stack: _HostStack) -> str | None:
         """The raw stack's running containers carry this release's config hash (#1893).
 
@@ -1155,12 +1187,7 @@ class Deployer:
             f"label=com.docker.compose.project={shlex.quote(stack.project)} "
             f"| xargs -r docker inspect --format {shlex.quote(RAW_ENV_INSPECT_FORMAT)}"
         )
-        result = stack.run(listing)
-        if not result.ok:
-            raise _StackUnobservable(
-                f"could not inspect {stack.project}'s containers on {stack.host}: "
-                f"{(result.stderr or '').strip() or 'docker inspect failed'}"
-            )
+        result = cls._read_on_host(stack, listing, "inspect", "docker inspect")
         carried: dict[str, str] = {}
         for line in (result.stdout or "").splitlines():
             name, _sep, env_json = line.strip().partition(" ")
@@ -1244,12 +1271,9 @@ class Deployer:
         )
         deadline = time.monotonic() + cls.IN_SERVICE_DEADLINE_SECONDS
         while True:
-            result = stack.run(listing)
-            if not result.ok:
-                raise _StackUnobservable(
-                    f"could not list {stack.project}'s containers on {stack.host}: "
-                    f"{result.stderr.strip() or 'docker ps failed'}"
-                )
+            result = cls._read_on_host(
+                stack, listing, "list", "docker ps", deadline=deadline
+            )
             verdict = in_service_verdict(expected, parse_docker_ps(result.stdout))
             if verdict.ok:
                 success(f"{cls.service}: in service — {verdict.message}")
