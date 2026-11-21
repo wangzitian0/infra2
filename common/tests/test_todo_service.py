@@ -61,7 +61,10 @@ def test_todo_traefik_dual_router_auth_contract() -> None:
 
     compose_file = REPO_ROOT / "platform/30.todo/compose.yaml"
     assert compose_file.exists()
-    content = yaml.safe_load(compose_file.read_text())
+    from common.deploy.compose_compile import load_stack
+
+    # The deployed text: x-routes compiles to these labels (#1822 Slice 2).
+    content = yaml.safe_load(load_stack(compose_file).compiled)
 
     labels = content["services"]["todo"]["labels"]
     labels_dict = {}

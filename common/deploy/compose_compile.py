@@ -20,6 +20,7 @@ Rules:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -87,6 +88,17 @@ def _needs_vault_template(text: str) -> bool:
     doc = safe_load_text(_yaml(), text)
     block = doc.get(X_INFRA2) if isinstance(doc, dict) else None
     return isinstance(block, dict) and block.get("vault") is not None
+
+
+def compiles_a_vault_sidecar(text: str) -> bool:
+    """True when the compiled stack of ``text`` runs a ``vault-agent`` sidecar.
+
+    A plain file declares the service ``vault-agent`` itself (at two-space indent). An
+    ``x-infra2`` file gets the sidecar from the compiler when it sets ``x-infra2.vault``.
+    """
+    if has_x_infra2(text):
+        return _needs_vault_template(text)
+    return re.search(r"(?m)^  vault-agent:", text) is not None
 
 
 def _registry_service(compose_path: str | Path):
@@ -266,6 +278,7 @@ __all__ = [
     "StackCompose",
     "X_INFRA2",
     "compile_stack",
+    "compiles_a_vault_sidecar",
     "has_x_infra2",
     "is_raw_eligible",
     "load_stack",

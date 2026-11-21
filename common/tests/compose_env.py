@@ -23,7 +23,10 @@ _UNSUPPORTED = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*(?!:[-+]|\}|[A-Za-z0-9_])"
 
 
 def compose_services(compose_path: Path) -> dict[str, dict]:
-    return yaml.safe_load(compose_path.read_text(encoding="utf-8"))["services"]
+    """The services of the deployed text: an x-infra2 file is compiled first (#1822)."""
+    from common.deploy.compose_compile import load_stack
+
+    return yaml.safe_load(load_stack(compose_path).compiled)["services"]
 
 
 def raw_environment(service: dict) -> dict[str, str]:

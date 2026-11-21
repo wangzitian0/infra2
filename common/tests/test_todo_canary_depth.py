@@ -209,11 +209,14 @@ def test_compose_runs_a_vault_agent_and_mounts_its_secrets_read_only() -> None:
         "the password comes from the rendered file, never from compose env"
     )
     entrypoint = " ".join(todo["entrypoint"])
-    assert ". /secrets/.env" in entrypoint and "exec python" in entrypoint
+    assert ". /secrets/.env" in entrypoint and 'exec "$$@"' in entrypoint
+    assert todo["command"] == ["python", "/app/app.py"]
     agent = services["vault-agent"]
     assert agent["container_name"] == "platform-todo-vault-agent${ENV_SUFFIX}"
     assert agent.get("mem_limit"), "a new container may not add resource-limit debt"
-    assert "./secrets.ctmpl:/etc/vault/secrets.ctmpl:ro" in agent["volumes"]
+    # The template is inline (VAULT_SECRETS_TEMPLATE), not a mount from the checkout.
+    assert agent["volumes"] == ["secrets:/vault/secrets"]
+    assert agent["environment"]["VAULT_SECRETS_TEMPLATE"]
 
 
 def test_secrets_facet_names_the_compose_containers() -> None:
@@ -607,38 +610,22 @@ def test_todo_runtime_hooks_manifest_declares_all_five_slots(tmp_path) -> None:
         assert seen[-1]["APP_VERSION_REF"] == "v1.0.0", slot
 
 
-def test_todo_rendered_mount_fingerprints_and_compose_labels(deploy) -> None:
-    """#1503: TodoDeployer.rendered_mount_fingerprints computes SHA-256 digests for
-    vault-agent.hcl and secrets.ctmpl, merges them in compose_env_base, and compose.yaml
-    labels vault-agent with both fingerprints."""
-    fp = deploy.TodoDeployer.rendered_mount_fingerprints()
-    assert set(fp) == {
-        "IAC_MOUNT_SHA256_VAULT_AGENT_HCL",
-        "IAC_MOUNT_SHA256_SECRETS_CTMPL",
-    }
-    for key, digest in fp.items():
-        assert re.fullmatch(r"[0-9a-f]{64}", digest), (key, digest)
+def test_the_compiled_template_label_replaces_the_mount_fingerprints(deploy) -> None:
+    """#1822 Slice 2: the compiled sidecar holds the template inline and labels it with
+    its SHA-256. The #1503 mount fingerprints of vault-agent.hcl and secrets.ctmpl have
+    no reader left, so the deploy no longer issues them."""
+    import hashlib
 
     base = deploy.TodoDeployer.compose_env_base(
         {"ENV": "staging", "ENV_SUFFIX": "-staging", "INTERNAL_DOMAIN": "example.com"}
     )
-    assert (
-        base["IAC_MOUNT_SHA256_VAULT_AGENT_HCL"]
-        == fp["IAC_MOUNT_SHA256_VAULT_AGENT_HCL"]
-    )
-    assert (
-        base["IAC_MOUNT_SHA256_SECRETS_CTMPL"] == fp["IAC_MOUNT_SHA256_SECRETS_CTMPL"]
-    )
-
-    agent_labels = compose_services(COMPOSE)["vault-agent"]["labels"]
-    assert (
-        "infra2.mount.vault-agent.hcl.sha256=${IAC_MOUNT_SHA256_VAULT_AGENT_HCL:-}"
-        in agent_labels
-    )
-    assert (
-        "infra2.mount.secrets.ctmpl.sha256=${IAC_MOUNT_SHA256_SECRETS_CTMPL:-}"
-        in agent_labels
-    )
+    assert not [k for k in base if k.startswith("IAC_MOUNT_SHA256_")]
+    assert not hasattr(deploy.TodoDeployer, "rendered_mount_fingerprints")
+    agent = compose_services(COMPOSE)["vault-agent"]
+    assert not [label for label in agent["labels"] if "infra2.mount." in label]
+    # The kept secrets.ctmpl (rollback) is the text that the compiled sidecar ships.
+    want = hashlib.sha256((SERVICE_DIR / "secrets.ctmpl").read_bytes()).hexdigest()
+    assert f"infra2.vault.template.sha256={want}" in agent["labels"]
 
 
 def test_probe_health_gate_fails_on_red_canary_and_sha_mismatch(

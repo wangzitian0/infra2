@@ -83,3 +83,44 @@ def test_vault_agent_healthcheck_passes_the_gate(relative_path):
     assert "/v1/auth/token/lookup-self" in probe and "/tmp/.vault_hc" in probe, (
         f"{relative_path}: stage 2 (throttled Vault token lookup, #292) missing"
     )
+
+
+def _x_infra2_vault_composes() -> list[str]:
+    """x-infra2 stacks with a compiled vault-agent. The shell gate cannot see them: the
+    source has no `  vault-agent:` key (#1822 Slice 2)."""
+    from common.deploy.compose_compile import compiles_a_vault_sidecar, has_x_infra2
+
+    found = []
+    for top in COMPOSE_ROOTS:
+        for compose in sorted((ROOT / top).rglob("compose.yaml")):
+            text = compose.read_text(encoding="utf-8")
+            if has_x_infra2(text) and compiles_a_vault_sidecar(text):
+                assert GATE_MARKER not in text
+                found.append(str(compose.relative_to(ROOT)))
+    return found
+
+
+X_INFRA2_VAULT_COMPOSE_FILES = _x_infra2_vault_composes()
+
+
+def test_the_x_infra2_todo_is_checked_here_and_not_by_the_shell_gate():
+    assert "platform/30.todo/compose.yaml" in X_INFRA2_VAULT_COMPOSE_FILES
+    assert not set(X_INFRA2_VAULT_COMPOSE_FILES) & set(VAULT_AGENT_COMPOSE_FILES)
+
+
+@pytest.mark.parametrize("relative_path", X_INFRA2_VAULT_COMPOSE_FILES)
+def test_a_compiled_vault_agent_healthcheck_is_two_stage(relative_path):
+    from common.deploy.compose_compile import load_stack
+
+    agent = yaml.safe_load(load_stack(relative_path).compiled)["services"][
+        "vault-agent"
+    ]
+    assert "rm -f /vault/secrets/.env" in agent["entrypoint"][2]
+    test = agent["healthcheck"]["test"]
+    assert test[0] == "CMD-SHELL"
+    probe = " ".join(test[1:])
+    assert "<no value>" in probe
+    assert "/vault/secrets/.env" in probe and "/vault/.token" in probe
+    assert "/v1/auth/token/lookup-self" in probe and "/tmp/.vault_hc" in probe
+    assert "VAULT_AGENT_MAX_SECRET_AGE_SECONDS" not in probe
+    assert "stat -c %Y" not in probe
