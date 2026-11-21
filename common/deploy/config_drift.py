@@ -139,6 +139,12 @@ def expected_hash_at(
     if compose_path in missing:
         return None, missing
     compose_content = contents[compose_path].decode("utf-8", "replace")
+    # The deploy hashes the compiled text. For an x-infra2 source that text holds the
+    # Vault template of `ref`, which this tree cannot render yet, so fail closed
+    # (infra2#1822 follow-up). A plain file compiles to its own bytes: no change.
+    from common.deploy.compose_compile import refuse_x_infra2
+
+    refuse_x_infra2(compose_content, where=f"config drift {compose_path}@{ref}")
     artifact_items = [(p, contents[p]) for p in artifact_paths if p in contents]
     dep_items = [(p, contents[p]) for p in dep_paths if p in contents]
     return config_hash_from_items(

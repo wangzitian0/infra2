@@ -228,6 +228,21 @@ jobs:
         # ops.standards.md §5 and §6: memory ceilings and no bare :latest tags across all compose files.
         run: python3 tools/lint_compose_resource_limits.py
 
+      - name: Check x-infra2 compose equivalence against the PR base
+        # infra2#1822: each plain compose file must compile to its own bytes. A file that
+        # changes from plain to x-infra2 must equal its hand-written file at the PR base
+        # after the normalizations in common/deploy/compose_equivalence.py.
+        if: github.event_name == 'pull_request'
+        run: |
+          set -e
+          base="${{ github.event.pull_request.base.sha }}"
+          if [ -z "$base" ]; then
+            echo "::error::pull_request base SHA is missing"
+            exit 1
+          fi
+          git fetch --no-tags --no-recurse-submodules --depth=1 origin "$base"
+          python3 -m tools.compose_compile check --base "$base"
+
   harness-check:
     name: Validate Workspace Harness
     needs: detect-changes

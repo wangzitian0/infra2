@@ -35,7 +35,6 @@ from common.deploy import schema_gate
 from common.deploy.env_config import app_compose_env_config, otel_env
 from common.deploy.env_util import RUNTIME_ENV_KEYS_TO_PRESERVE, _parse_env_text
 from common.deploy.queue import deployment_start_epoch
-from common.core import REPO_ROOT
 from common.deploy.failure_snapshot import emit_failure_snapshot
 from common.observability.openpanel import openpanel_env
 from infra2_sdk.refs import resolve_to_sha
@@ -182,7 +181,10 @@ def assert_approle_creds_present(service: str, client, compose_id: str) -> None:
     meta = service_attrs().get(service)
     if not meta or not meta.compose_path:
         return  # no statically-registered compose file to inspect
-    compose_text = (REPO_ROOT / meta.compose_path).read_text(encoding="utf-8")
+    from common.deploy.compose_compile import load_stack
+
+    # The compiled text holds the vault-agent sidecar of an x-infra2 stack (infra2#1822).
+    compose_text = load_stack(meta.compose_path).compiled
     env_text = client.get_compose_env(compose_id)
     missing = check_approle_creds(compose_text, env_text)
     if missing:
@@ -378,8 +380,11 @@ def verify_in_service(
             f"in-service verify: {service} has no registered compose file to read "
             "expectations from"
         )
+    from common.deploy.compose_compile import load_stack
+
+    # in_service reads the compiled text: the sidecar of an x-infra2 stack is in it.
     expected = expected_running_containers(
-        (REPO_ROOT / meta.compose_path).read_text(encoding="utf-8"), env_suffix
+        load_stack(meta.compose_path).compiled, env_suffix
     )
     if not expected:
         raise RuntimeError(

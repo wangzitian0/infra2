@@ -28,6 +28,9 @@ RUNNER_SDK = "4.0.0"
 RUNNER_SDK_NAMES = frozenset(
     {
         ("infra2_sdk.ci", "parse_github_time"),
+        # infra2#1822: secrets_render, reached by compose_compile.vault_template_for.
+        # Checked in the 4.0.0 wheel of uv.lock (also present in 3.23.0).
+        ("infra2_sdk.ci", "validate_manifest_offline"),
         ("infra2_sdk.deploy", "canonical_json_bytes"),
         ("infra2_sdk.observability", "CheckVerdict"),
         ("infra2_sdk.observability", "ConsecutiveObservationState"),
@@ -43,6 +46,10 @@ RUNNER_SDK_NAMES = frozenset(
         ("infra2_sdk.refs", "assert_after_on_main"),
         ("infra2_sdk.refs", "classify_ref"),
         ("infra2_sdk.refs", "resolve_image_digest"),
+        # infra2#1822: compose_compile. Checked in the 4.0.0 wheel of uv.lock; 3.23.0 does
+        # not have them.
+        ("infra2_sdk.rules", "ComposeCompileError"),
+        ("infra2_sdk.rules", "compile_compose"),
         ("infra2_sdk.routing", "CANARY_SLOT"),
         ("infra2_sdk.routing", "derive_preview_coordinates"),
         ("infra2_sdk.routing", "resolve_app_hostname"),
@@ -67,6 +74,9 @@ RUNNER_SDK_NAMES = frozenset(
         ("infra2_sdk.secrets", "VaultTokenTarget"),
         ("infra2_sdk.secrets", "normalize_selector"),
         ("infra2_sdk.secrets", "policy_name"),
+        # infra2#1822: secrets_render. Checked in the 4.0.0 wheel (also present in 3.23.0).
+        ("infra2_sdk.secrets", "render_agent_policy"),
+        ("infra2_sdk.secrets", "render_agent_template"),
         ("infra2_sdk.secrets", "urllib_transport"),
         ("infra2_sdk.secrets", "vault_path"),
         ("infra2_sdk.secrets", "vault_token_status"),

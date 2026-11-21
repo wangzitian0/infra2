@@ -459,6 +459,58 @@ def upsert_github_compose(
     return compose_id
 
 
+def upsert_raw_compose(
+    client: Any,
+    *,
+    service_name: str,
+    project_name: str,
+    env_id: str,
+    compose_file: str,
+    effective_env: str,
+    existing: dict | None,
+    raw_env_str: str,
+    log_info: Callable[[str], None] | None = None,
+) -> str:
+    """Create or update a Dokploy compose service with ``sourceType="raw"``.
+
+    ``compose_file`` is the compiled compose text (infra2#1822). Dokploy stores it as
+    ``composeFile`` and runs it with no checkout. The env follows the same order as
+    :func:`upsert_github_compose`: ``compose.create`` does not reliably store ``env``
+    or ``composeFile``, so a follow-up ``compose.update`` sets both again.
+    """
+    info_log = log_info or logger.info
+    if existing:
+        compose_id = existing["composeId"]
+        info_log("Updating existing compose service (raw source)")
+        client.update_compose(
+            compose_id,
+            compose_file=compose_file,
+            env=effective_env,
+            source_type="raw",
+            autoDeploy=False,
+        )
+        return compose_id
+    info_log("Creating new compose service with raw source")
+    result = client.create_compose(
+        environment_id=env_id,
+        name=service_name,
+        app_name=f"{project_name}-{service_name}",
+        compose_file=compose_file,
+        env=effective_env,
+        source_type="raw",
+        autoDeploy=False,
+    )
+    compose_id = result["composeId"]
+    client.update_compose(
+        compose_id,
+        compose_file=compose_file,
+        env=raw_env_str,
+        source_type="raw",
+        autoDeploy=False,
+    )
+    return compose_id
+
+
 def parse_remote_config_identity(existing: dict | None) -> dict[str, str | None]:
     """Parse configuration identity from Dokploy compose env string."""
     if not existing:
