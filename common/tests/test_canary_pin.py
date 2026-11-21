@@ -252,3 +252,37 @@ def test_resolve_canary_digest_reads_the_registry_header() -> None:
 
     with pytest.raises(CanaryPinError, match="no digest"):
         resolve_canary_digest("3.35.1", opener=bad)
+
+
+def test_only_a_manifest_404_means_not_published() -> None:
+    import io
+    import json as _json
+    import urllib.error
+
+    from common.deploy.canary_pin import CanaryImageMissing, resolve_canary_digest
+
+    class _Reply(io.BytesIO):
+        headers: dict = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    def manifest_404(target, timeout):
+        url = getattr(target, "full_url", target)
+        if "/token?" in url:
+            return _Reply(_json.dumps({"token": "t"}).encode())
+        raise urllib.error.HTTPError(url, 404, "not found", None, None)
+
+    with pytest.raises(CanaryImageMissing):
+        resolve_canary_digest("9.9.9", opener=manifest_404)
+
+    def token_404(target, timeout):
+        raise urllib.error.HTTPError(
+            getattr(target, "full_url", target), 404, "x", None, None
+        )
+
+    with pytest.raises(urllib.error.HTTPError):
+        resolve_canary_digest("9.9.9", opener=token_404)

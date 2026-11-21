@@ -43,6 +43,10 @@ class CanaryPinError(ValueError):
     """The Canary compose does not hold one valid image pin."""
 
 
+class CanaryImageMissing(CanaryPinError):
+    """ghcr.io answers 404 for the manifest of the tag: the image is not published yet."""
+
+
 def canary_image_from_compose_text(text: str) -> tuple[str, str, str]:
     """Return ``(image_ref, sdk_version, digest)`` of the ``todo`` service, or raise."""
     data = safe_load_text(yaml, text) or {}
@@ -110,8 +114,17 @@ def resolve_canary_digest(version: str, *, opener=None) -> str:
         method="HEAD",
         headers={"Authorization": f"Bearer {token}", "Accept": _MANIFEST_ACCEPT},
     )
-    with open_url(request, timeout=20) as reply:
-        digest = reply.headers.get("Docker-Content-Digest", "")
+    import urllib.error
+
+    try:
+        with open_url(request, timeout=20) as reply:
+            digest = reply.headers.get("Docker-Content-Digest", "")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise CanaryImageMissing(
+                f"infra2-canary-todo:v{version} is not on ghcr.io"
+            ) from exc
+        raise
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         raise CanaryPinError(f"ghcr.io gave no digest for v{version}: {digest!r}")
     return digest

@@ -5071,8 +5071,10 @@ def test_sync_sdk_pins_never_moves_the_pin_down_and_skips_an_unpublished_image(
     )
     assert res["needs_canary_bump"] is False
 
+    from common.deploy.canary_pin import CanaryImageMissing
+
     def not_yet(version: str) -> str:
-        raise urllib.error.HTTPError("u", 404, "not found", None, None)
+        raise CanaryImageMissing(version)
 
     res = reconcile.sync_sdk_pins(
         tmp_path,

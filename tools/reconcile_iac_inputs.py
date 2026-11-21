@@ -75,6 +75,7 @@ from common.deploy.stage_record import utc_now, write_stage_record
 from common.deploy.canary_pin import (
     APP_SDK_RANGE,
     CANARY_COMPOSE_RELS,
+    CanaryImageMissing,
     canary_sdk_unit,
     canary_sdk_version,
     in_app_sdk_range,
@@ -1441,11 +1442,9 @@ def sync_sdk_pins(
     if needs_canary_bump and create_pr:
         try:
             digest = (digest_resolver or resolve_canary_digest)(target_sdk)
-        except urllib.error.HTTPError as exc:
-            if exc.code != 404:
-                raise
+        except CanaryImageMissing:
             # infra2-sdk release.yml publishes the image after the GitHub release; the next
-            # scheduled run moves the pin.
+            # scheduled run moves the pin. A token-endpoint error is not this case: it raises.
             image_published = False
             print(
                 f"::notice::infra2-canary-todo:v{target_sdk} is not on ghcr.io yet; no pin PR"
