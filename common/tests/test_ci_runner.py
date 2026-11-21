@@ -9,7 +9,6 @@ import pytest
 from tools.ci_runner import (
     DUMMY_COMPOSE_ENV,
     GATES,
-    _default_pytest_workers,
     _resolve_changed_test_targets,
     _select_changed_compose_targets,
     main,
@@ -158,7 +157,9 @@ def test_ci_runner_unit_tests_timeout_fails(
         return subprocess.CompletedProcess(args=args[0], returncode=0)
 
     monkeypatch.setattr("tools.ci_runner._run_cmd", mock_run_cmd)
-    ret = run_unit_tests(verbose=False, timeout=0.01)
+    ret = run_unit_tests(
+        targets=["common/tests/test_ci_runner.py"], verbose=False, timeout=0.01
+    )
     assert ret == 1
     captured = capsys.readouterr()
     assert "timed out after 0.01s" in captured.out
@@ -181,21 +182,9 @@ def test_resolve_changed_test_targets_maps_source_and_service_paths() -> None:
     assert _resolve_changed_test_targets(["docs/project/README.md"]) == []
 
 
-def test_default_pytest_workers_caps_local_and_uses_auto_in_ci(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("CI", "true")
-    assert _default_pytest_workers() == "auto"
-
-    monkeypatch.delenv("CI", raising=False)
-    monkeypatch.setattr("os.cpu_count", lambda: 14)
-    assert _default_pytest_workers() == "4"
-
-    monkeypatch.setattr("os.cpu_count", lambda: 2)
-    assert _default_pytest_workers() == "2"
-
-
-def test_run_unit_tests_changed_only_executes_fail_fast_subset(
+@pytest.mark.parametrize("argv", [["unit-tests"], ["unit-tests", "--changed"]])
+def test_run_unit_tests_runs_the_diff_targets_in_one_process(
+    argv: list[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import subprocess
@@ -209,13 +198,15 @@ def test_run_unit_tests_changed_only_executes_fail_fast_subset(
     monkeypatch.setattr("tools.ci_runner._run_cmd", mock_run_cmd)
     monkeypatch.setattr(
         "tools.ci_runner._resolve_changed_test_targets",
-        lambda: ["common/tests/test_ci_runner.py"],
+        lambda: ["common/tests/test_ci_runner.py", "common/tests/test_harness.py"],
     )
-    ret = main(["unit-tests", "--changed"])
+    ret = main(argv)
     assert ret == 0
     pytest_cmds = [cmd for cmd in recorded_cmds if "pytest" in cmd]
     assert len(pytest_cmds) == 1
     assert "common/tests/test_ci_runner.py" in pytest_cmds[0]
+    assert "common/tests/test_harness.py" in pytest_cmds[0]
+    assert "common/tests" not in pytest_cmds[0]
     assert "-x" in pytest_cmds[0]
     assert "-n" not in pytest_cmds[0]
 

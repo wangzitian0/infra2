@@ -266,22 +266,6 @@ def _resolve_changed_test_targets(
     return sorted(selected)
 
 
-DEFAULT_LOCAL_PYTEST_MAX_WORKERS: int = 4
-
-
-def _default_pytest_workers() -> str:
-    """Return pytest-xdist worker count.
-
-    Remote CI runners use all cores ('auto'). Local workstations cap workers at
-    DEFAULT_LOCAL_PYTEST_MAX_WORKERS (4) to prevent thermal throttling while
-    leaving cores for IDE and host services.
-    """
-    if os.environ.get("CI") == "true":
-        return "auto"
-    cpu_total = os.cpu_count() or DEFAULT_LOCAL_PYTEST_MAX_WORKERS
-    return str(min(DEFAULT_LOCAL_PYTEST_MAX_WORKERS, max(2, cpu_total // 2)))
-
-
 def _select_changed_compose_targets(
     compose_files: Sequence[Path],
     changed_files: Sequence[str] | None = None,
@@ -728,25 +712,19 @@ def run_unit_tests(
     targets: Sequence[str] | None = None,
     verbose: bool = False,
     timeout: float = 600.0,
-    changed_only: bool = False,
 ) -> int:
-    """Run unit test suite with coverage and isolation."""
-    explicit_targets = list(targets) if targets else []
-    if explicit_targets:
-        test_paths = explicit_targets
-    elif changed_only:
-        resolved = _resolve_changed_test_targets()
-        if resolved:
-            test_paths = resolved
-        else:
-            print(
-                "ℹ️ No affected unit test targets detected for current diff; running fast contract preflight."
-            )
-            test_paths = ["common/tests/test_deployer_contract_light.py"]
-    else:
-        test_paths = ["common/tests"]
+    """Run the named test targets, or the targets of the current diff, in one process.
 
-    print(f"▶ Running infra unit test suite ({', '.join(test_paths)})...")
+    The full suite runs only in CI (`infra-ci.yml` calls pytest directly).
+    """
+    test_paths = list(targets) if targets else _resolve_changed_test_targets()
+    if not test_paths:
+        print(
+            "ℹ️ No affected unit test targets detected for current diff; running fast contract preflight."
+        )
+        test_paths = ["common/tests/test_deployer_contract_light.py"]
+
+    print(f"▶ Running focused unit tests ({', '.join(test_paths)})...")
     start_time = time.monotonic()
 
     # 1. Verify no vendored App manifests exist under contracts/
@@ -763,13 +741,8 @@ def run_unit_tests(
         "pytest",
         *test_paths,
         "-q",
+        "-x",
     ]
-    if changed_only or explicit_targets:
-        cmd.append("-x")
-        if len(test_paths) > 1:
-            cmd.extend(["-n", _default_pytest_workers()])
-    else:
-        cmd.extend(["-n", _default_pytest_workers()])
 
     env = {"PYTHONSAFEPATH": "1"}
     try:
@@ -805,7 +778,7 @@ GATES: dict[str, tuple[str, Callable[..., int]]] = {
         run_lint,
     ),
     "unit-tests": (
-        "Run full unit test suite with coverage and isolation",
+        "Run the named or diff-scoped unit tests in one process",
         run_unit_tests,
     ),
 }
@@ -826,7 +799,7 @@ def run_all(
     failed = False
     for target in suite:
         _, fn = GATES[target]
-        if target in ("compose", "unit-tests"):
+        if target == "compose":
             ret = fn(verbose=verbose, changed_only=changed_only)
         else:
             ret = fn(verbose=verbose)
@@ -869,12 +842,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--with-unit-tests",
         action="store_true",
-        help="When running all targets, also execute the unit test suite.",
+        help="When running all targets, also run the unit tests of the current diff.",
     )
     parser.add_argument(
         "--changed",
         action="store_true",
-        help="Scope unit-tests and compose checks to files modified in the current diff.",
+        help="Scope compose checks to files modified in the current diff. Unit tests always use the diff.",
     )
     parser.add_argument(
         "--agents-only",
@@ -892,7 +865,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "test_targets",
         nargs="*",
-        help="Optional test files or directories when running unit-tests.",
+        help="Test files for unit-tests. Default: the tests of the current diff.",
     )
 
     args = parser.parse_args(argv)
@@ -926,7 +899,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_unit_tests(
             targets=args.test_targets,
             verbose=args.verbose,
-            changed_only=args.changed,
         )
 
     _, fn = GATES[args.target]
