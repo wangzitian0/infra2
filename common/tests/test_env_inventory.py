@@ -1343,6 +1343,17 @@ def test_a_vault_template_value_is_a_secret_ref_not_a_literal():
     template = '{{- with secret (printf "secret/data/platform/%s/todo" $$env) }}\nX={{ .Data.data.x }}'
     assert envinv.classify_value("VAULT_SECRETS_TEMPLATE", template)[0] == "secret-ref"
     assert envinv.classify_value("VAULT_SECRETS_TEMPLATE", "plain-text")[0] == "literal"
+    # Narrowness (review of #1898): only a value that starts as a Vault template is a
+    # reference; anything else stays a literal and G3 SECRET_LITERAL still sees it.
+    for value in (
+        "hunter2",
+        "abc{{def",
+        "{{ .Data.data.pw }}",
+        "c2VjcmV0cGFzc3dvcmQ=",
+        'realpw{{ with secret (printf "x") }}',
+        "{{with secretive}}",
+    ):
+        assert envinv.classify_value("DB_PASSWORD", value)[0] == "literal", value
 
 
 def test_scan_compose_reports_an_x_infra2_compile_failure(tmp_path):

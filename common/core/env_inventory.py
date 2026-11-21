@@ -318,7 +318,9 @@ def classify_value(key: str, value: str | None) -> tuple[str, tuple, bool]:
         return "ref", (key,), False
     if value == "":
         return "empty", (), False
-    if VAULT_TEMPLATE_VALUE.search(value):
+    # The value must BE a Go template (it starts with `{{`) that opens a Vault
+    # `with secret` block; a literal with that text appended stays a literal.
+    if value.lstrip().startswith("{{") and VAULT_TEMPLATE_VALUE.search(value):
         return "secret-ref", (), False
     refs = [r[0] for r in interp_refs(value)]
     if "$(" in value or "`" in value:
