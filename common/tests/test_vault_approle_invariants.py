@@ -20,9 +20,7 @@ import re
 from pathlib import Path
 
 import pytest
-import yaml
 
-from common.deploy.compose_compile import has_x_infra2, load_stack
 from common.security.vault_self_refresh_audit import (
     REPO_ROOT,
     discover_vault_agent_compose_paths,
@@ -35,12 +33,6 @@ VAULT_AGENT_HCLS = sorted(
     if path.relative_to(REPO_ROOT).parts[0] != "repos"
 )
 VAULT_AGENT_COMPOSES = sorted(discover_vault_agent_compose_paths())
-# An x-infra2 stack ships its agent config inline in the compiled compose (#1822 Slice 2).
-X_INFRA2_VAULT_COMPOSES = [
-    p
-    for p in VAULT_AGENT_COMPOSES
-    if has_x_infra2((REPO_ROOT / p).read_text(encoding="utf-8"))
-]
 
 
 def test_discovery_is_non_empty() -> None:
@@ -71,19 +63,6 @@ def test_vault_agent_uses_approle_not_token_file(hcl: Path) -> None:
     )
 
 
-@pytest.mark.parametrize("compose", X_INFRA2_VAULT_COMPOSES)
-def test_a_compiled_vault_agent_config_uses_approle(compose: str) -> None:
-    """The compiled sidecar reads VAULT_AGENT_HCL, not a vault-agent.hcl on disk."""
-    agent = yaml.safe_load(load_stack(compose).compiled)["services"]["vault-agent"]
-    text = agent["environment"]["VAULT_AGENT_HCL"]
-    normalized = re.sub(r"\s+", "", text)
-    assert 'type="token_file"' not in normalized
-    assert 'method "approle"' in text
-    # A failed login or render must stop the agent, not leave a stale /secrets/.env.
-    assert "exit_on_err=true" in normalized
-    assert "exit_on_retry_failure=true" in normalized
-
-
 def test_inventory_is_entirely_approle() -> None:
     """The vault-self-refresh SSOT must mark every service `approle` — no `token_file` rows."""
     non_approle = sorted(s.id for s in load_inventory() if s.auth_method != "approle")
@@ -109,9 +88,8 @@ def test_vault_agent_entrypoint_fails_fast_on_missing_creds(compose: str) -> Non
     so without these guards a missing value flows into the vault-agent, which then hangs
     reaching an empty address / failing to log in — and the dependent service deadlocks on
     ``depends_on: vault-agent: service_healthy`` for the full ~6-min healthcheck window with no
-    actionable error. Assert each guard's *check* is present (not just its message).
-    The text is the deployed one: an x-infra2 stack gets its sidecar from the compiler."""
-    text = load_stack(compose).compiled
+    actionable error. Assert each guard's *check* is present (not just its message)."""
+    text = (REPO_ROOT / compose).read_text(encoding="utf-8")
     missing = [name for name, check in _REQUIRED_GUARDS.items() if check not in text]
     assert not missing, (
         f"{compose} vault-agent entrypoint is missing a fail-fast guard for {missing} — a "

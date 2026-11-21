@@ -588,11 +588,6 @@ self-refresh audit reads `/vault/secrets.ctmpl` in a compiled sidecar and takes 
 sidecar label `infra2.vault.template.sha256`. The `validate-compose` job runs
 `python -m tools.compose_compile check` against the PR base. `python -m tools.compose_compile print <file>`
 prints the compiled text.
-Slice 2: `platform/30.todo/compose.yaml` is the first `x-infra2` stack (`raw`). Its `preview.compose.yaml`
-stays hand-written on `github`, because it builds S3 from the checkout. Repository guards read the
-compiled text through `load_stack(...).compiled`, so they see the injected sidecar. The shell step
-`validate-vault-agent` selects files by the text `  vault-agent:`, so it does not see an `x-infra2` stack;
-`common/tests/test_vault_agent_healthcheck_gate.py` checks the compiled sidecar instead.
 
 服务一旦声明 `runtime_only_config_keys`，必须显式实现不访问 secret backend 的
 `source_config_env_base`；合同测试枚举所有这类 Deployer，并校验 runtime-only key 不进入 source

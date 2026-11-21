@@ -168,10 +168,7 @@ def test_teardown_reports_survivors_of_the_slot():
 
 
 def _services(path: str) -> dict:
-    """The deployed services: an x-infra2 file is compiled first (#1822 Slice 2)."""
-    from common.deploy.compose_compile import load_stack
-
-    return yaml.safe_load(load_stack(path).compiled)["services"]
+    return yaml.safe_load((REPO_ROOT / path).read_text())["services"]
 
 
 def test_preview_todo_service_repeats_the_staging_compose_fields():
@@ -244,12 +241,11 @@ def test_todo_template_composes_database_url_from_the_todo_password():
     assert slot_services["todo"]["environment"]["DATABASE_URL"] == (
         f"postgresql://{role}:${{TODO_POSTGRES_PASSWORD}}@{host}:5432/postgres"
     )
-    agent = _services("platform/30.todo/compose.yaml")["vault-agent"]
-    # The template that the compiled sidecar ships (Compose `$$` is one `$`).
-    template = agent["environment"]["VAULT_SECRETS_TEMPLATE"].replace("$$", "$")
+    template = (REPO_ROOT / "platform/30.todo/secrets.ctmpl").read_text()
     assert (
         'DATABASE_URL={{ printf "%q" (printf '
         f'"postgresql://{role}:%s@{host.replace("${ENV_SUFFIX}", "%s")}:5432/postgres" '
         '.Data.data.TODO_POSTGRES_PASSWORD (env "ENV_SUFFIX")) }}'
     ) in template
+    agent = _services("platform/30.todo/compose.yaml")["vault-agent"]
     assert agent["environment"]["ENV_SUFFIX"] == "${ENV_SUFFIX:-}"

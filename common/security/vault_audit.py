@@ -341,14 +341,8 @@ def classify_deployed_template(
         else _release_template_sha256
     )
     release_sha256 = release_sha_fn(service)
-    # An x-infra2 stack ships the template inside its compiled compose (infra2#1822).
-    release_source = (
-        f"the compiled {service.compose_path} template"
-        if _compose_is_x_infra2(service)
-        else service.secret_template_path
-    )
     evidence = {
-        "template_path": release_source,
+        "template_path": service.secret_template_path,
         "deployed_sha256": deployed_sha256[:12],
         "release_sha256": release_sha256[:12],
     }
@@ -358,7 +352,7 @@ def classify_deployed_template(
             "deployed-template",
             "info",
             "P3",
-            f"could not compare {release_source} "
+            f"could not compare {service.secret_template_path} "
             f"({'deployed' if not deployed_sha256 else 'release'} copy unreadable)",
             evidence,
         )
@@ -368,8 +362,8 @@ def classify_deployed_template(
             "deployed-template",
             "fail",
             "P1",
-            f"the template in the vault-agent container is not {release_source}, which "
-            "this release ships; a template change never reached the container (#628)",
+            f"the mounted {service.secret_template_path} is not the one this release "
+            "ships; a template change never reached the container (#628)",
             evidence,
         )
     return _result(
@@ -377,7 +371,7 @@ def classify_deployed_template(
         "deployed-template",
         "pass",
         "P1",
-        f"the template in the vault-agent container matches {release_source}",
+        f"the mounted /etc/vault/secrets.ctmpl matches {service.secret_template_path}",
         evidence,
     )
 
@@ -663,19 +657,12 @@ def inventory_compose_paths() -> set[str]:
 
 
 def discover_vault_agent_compose_paths(root: Path = REPO_ROOT) -> set[str]:
-    """Every compose file whose deployed stack runs a ``vault-agent`` sidecar.
-
-    A hand-written file declares the sidecar as a service. An ``x-infra2`` file does not:
-    the compiler adds it for ``x-infra2.vault`` (infra2#1822 Slice 2).
-    """
-    from common.deploy.compose_compile import compiles_a_vault_sidecar
-
     paths: set[str] = set()
     for compose_path in root.rglob("compose*.yaml"):
         if any(part.startswith(".") for part in compose_path.relative_to(root).parts):
             continue
         text = compose_path.read_text(encoding="utf-8")
-        if compiles_a_vault_sidecar(text):
+        if re.search(r"(?m)^  vault-agent:", text):
             paths.add(str(compose_path.relative_to(root)))
     return paths
 

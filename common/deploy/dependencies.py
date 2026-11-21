@@ -104,15 +104,23 @@ def match_changed_services(
 ) -> set[str]:
     """Services affected by a set of changed files.
 
-    Affected = a changed file is under the service's own directory, OR matches one
-    of its declared extra dependency globs, OR is an x-infra2 compiler input (then
-    every x-infra2 stack). Other tooling paths (common/, tools/) fan out to nothing.
-
-    One definition: this is the selection of ``explain_fanout``. The runner's own
-    diff path uses this function and logs ``explain_fanout``; they must agree
-    (review of #1882).
+    Affected = a changed file is under the service's own directory OR matches one
+    of its declared extra dependency globs. Tooling-only paths (common/, tools/)
+    match no service and therefore never fan out.
     """
-    return set(explain_fanout(changed_files, manifest).selected)
+    files = list(changed_files)
+    if manifest is None:
+        manifest = load_dependency_manifest()
+
+    affected: set[str] = set()
+    for file_path in files:
+        key = service_key_from_path(file_path)
+        if key:
+            affected.add(key)
+    for service_key, globs in manifest.items():
+        if any(fnmatch.fnmatch(f, g) for g in globs for f in files):
+            affected.add(service_key)
+    return affected
 
 
 def autodeploy_violations(composes, allowlist: set[str] | None = None) -> list[str]:
@@ -174,37 +182,8 @@ def explain_fanout(
             selected.setdefault(service_key, f"declared dep ({hits[0]})")
             matched.update(hits)
 
-    # The compiled text of an x-infra2 stack, and so its CONFIGURATION_SHA256, depends on
-    # the compiler, not only on the stack directory (infra2#1822 Slice 2).
-    from common.deploy.compose_compile import COMPILER_INPUT_PATHS
-
-    compiler_hits = [f for f in files if f in COMPILER_INPUT_PATHS]
-    if compiler_hits:
-        for service_key in x_infra2_stacks():
-            selected.setdefault(
-                service_key, f"x-infra2 compiler input ({compiler_hits[0]})"
-            )
-        matched.update(compiler_hits)
-
     dropped = [f for f in files if f not in matched]
     return FanoutDecision(selected=selected, dropped=dropped)
-
-
-def x_infra2_stacks(root: Path = _ROOT) -> dict[str, str]:
-    """Service key -> compose path of each stack whose ``compose.yaml`` is x-infra2.
-
-    Derived from the files, so a stack that migrates needs no declaration.
-    """
-    from common.deploy.compose_compile import has_x_infra2
-
-    stacks: dict[str, str] = {}
-    for top in CANONICAL_SERVICE_ROOTS:
-        for compose in sorted((root / top).rglob("compose.yaml")):
-            rel = compose.relative_to(root).as_posix()
-            key = service_key_from_path(rel)
-            if key and has_x_infra2(compose.read_text(encoding="utf-8")):
-                stacks.setdefault(key, rel)
-    return stacks
 
 
 def _config_hash_inputs(compose_paths, root: Path):

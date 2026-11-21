@@ -17,8 +17,6 @@ from pathlib import Path
 
 import yaml
 
-from common.deploy.compose_compile import load_stack
-
 ROOT = Path(__file__).resolve().parents[2]
 
 # A one-shot job runs to completion and exits (an init or a migrator). A healthcheck
@@ -91,7 +89,7 @@ def _load_named_services() -> dict[tuple[str, str], dict]:
     """Every long-running named platform service (one-shot jobs excluded)."""
     found: dict[tuple[str, str], dict] = {}
     for path in _platform_compose_files():
-        compose = yaml.safe_load(load_stack(path).compiled) or {}
+        compose = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         rel = path.relative_to(ROOT).as_posix()
         one_shots = _one_shot_jobs(compose)
         for name, service in _named_services(compose).items():
@@ -103,7 +101,7 @@ def _load_named_services() -> dict[tuple[str, str], dict]:
 def _load_one_shots() -> set[tuple[str, str]]:
     found: set[tuple[str, str]] = set()
     for path in _platform_compose_files():
-        compose = yaml.safe_load(load_stack(path).compiled) or {}
+        compose = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         rel = path.relative_to(ROOT).as_posix()
         found |= {(rel, name) for name in _one_shot_jobs(compose)}
     return found
@@ -120,8 +118,6 @@ def test_discovery_finds_platform_services() -> None:
     found = _load_named_services()
     compose_files = {rel for rel, _ in found}
     assert "platform/30.todo/compose.yaml" in compose_files
-    # The compiled x-infra2 todo carries the sidecar (#1822 Slice 2).
-    assert ("platform/30.todo/compose.yaml", "vault-agent") in found
     assert "platform/21.portal/compose.yaml" in compose_files
     assert len(found) >= 20, f"discovery found only {len(found)} named services"
 
