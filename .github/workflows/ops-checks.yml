@@ -408,11 +408,12 @@ jobs:
       # scheduled runs so manual dispatches neither mask a dead scheduler nor throttle
       # the next scheduled 02:17 UTC ping.
       - name: Ping Cloudflare watchdog scheduler heartbeat (#1448)
-        if: ${{ !cancelled() && github.event_name == 'schedule' }}
+        if: ${{ !cancelled() }}
         env:
           INFRA2_WATCHDOG_HEARTBEAT_URL: ${{ vars.INFRA2_WATCHDOG_HEARTBEAT_URL }}
           INFRA2_WATCHDOG_HEARTBEAT_TOKEN: ${{ secrets.INFRA2_WATCHDOG_HEARTBEAT_TOKEN }}
-        # The module records a verdict for the issue trail on each outcome (#1877).
+        # The module sends on a scheduled run only and records a verdict for the issue
+        # trail on each run: sent, failed, or skipped on a manual run (#1877).
         run: python -m common.observability.scheduler_heartbeat
 
       # truealpha#876 W4: Feishu alone left no record that the 2026-09-16

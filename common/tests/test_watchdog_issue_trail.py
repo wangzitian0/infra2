@@ -32,6 +32,8 @@ from infra2_sdk.observability import (
 from common.observability import watchdog_issue_trail_cli as trail_tool
 from common.observability.page_dedup import FULL, OFF, OPEN_ONLY
 from common.observability.watchdog_issue_trail_cli import (
+    HEARTBEAT_CHECK,
+    HEARTBEAT_SOURCE,
     RUNNER_HEALTH_SOURCE,
     WATCHDOG_SOURCE,
 )
@@ -649,6 +651,15 @@ def _tool_env(tmp_path: Path, **extra) -> dict[str, str]:
     return env
 
 
+def _record_heartbeat(env: dict[str, str]) -> None:
+    """#1877: the heartbeat step is an expected source of the trail."""
+    record_verdicts(
+        env["INFRA2_WATCHDOG_VERDICTS_PATH"],
+        source=HEARTBEAT_SOURCE,
+        checks=[CheckVerdict(HEARTBEAT_CHECK, True)],
+    )
+
+
 def test_the_tool_reconciles_the_recorded_verdicts(tmp_path: Path) -> None:
     env = _tool_env(tmp_path)
     record_verdicts(
@@ -661,6 +672,7 @@ def test_the_tool_reconciles_the_recorded_verdicts(tmp_path: Path) -> None:
         source=RUNNER_HEALTH_SOURCE,
         checks=[CheckVerdict(RUNNER_HEALTH_SOURCE, True)],
     )
+    _record_heartbeat(env)
     api = FakeIssues([_issue(4, RUNNER_HEALTH_SOURCE)])
     built = []
 
@@ -751,6 +763,7 @@ def test_the_tool_retires_obsolete_watchdog_checks_without_touching_app_hook_iss
         checks=[CheckVerdict(RUNNER_HEALTH_SOURCE, True)],
         complete=True,
     )
+    _record_heartbeat(env)
     api = FakeIssues(
         [
             _issue(11, "infra2-old-check"),
@@ -782,3 +795,55 @@ def test_the_tool_retires_obsolete_watchdog_checks_without_touching_app_hook_iss
 def test_watchdog_issue_trail_cli_has_no_scoped_proxy_wrapper() -> None:
     """#1590: namespace isolation uses `title_prefix` in `infra2_sdk`, not a CLI proxy."""
     assert not hasattr(trail_tool, "_WatchdogScopedIssueApi")
+
+
+def test_a_manual_run_on_main_keeps_an_open_heartbeat_issue_open(
+    tmp_path: Path,
+) -> None:
+    """#1877: a manual run sends no heartbeat. Its skipped verdict must not close the
+    open issue as green or as retired; the next scheduled send closes it."""
+    from common.observability import scheduler_heartbeat
+
+    def never(*_args, **_kwargs):
+        raise AssertionError("a manual run must send nothing")
+
+    env = _tool_env(
+        tmp_path,
+        GITHUB_EVENT_NAME="workflow_dispatch",
+        INFRA2_WATCHDOG_HEARTBEAT_TOKEN="t0",
+    )
+    for source in (WATCHDOG_SOURCE, RUNNER_HEALTH_SOURCE):
+        record_verdicts(
+            env["INFRA2_WATCHDOG_VERDICTS_PATH"],
+            source=source,
+            checks=[CheckVerdict(source, True)],
+        )
+    assert scheduler_heartbeat.main(env, opener=never) == 0
+    api = FakeIssues([_issue(7, HEARTBEAT_CHECK)])
+    assert trail_tool.main(env, issues_factory=lambda _r, _t: api) == 0
+    assert api.closed == [] and api.created == []
+
+    scheduled = _tool_env(tmp_path / "next", INFRA2_WATCHDOG_HEARTBEAT_TOKEN="t0")
+    (tmp_path / "next").mkdir()
+    for source in (WATCHDOG_SOURCE, RUNNER_HEALTH_SOURCE):
+        record_verdicts(
+            scheduled["INFRA2_WATCHDOG_VERDICTS_PATH"],
+            source=source,
+            checks=[CheckVerdict(source, True)],
+        )
+
+    class _Ok:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return None
+
+        def read(self, _size):
+            return b"{}"
+
+    assert scheduler_heartbeat.main(scheduled, opener=lambda *_a, **_k: _Ok()) == 0
+    assert trail_tool.main(scheduled, issues_factory=lambda _r, _t: api) == 0
+    assert api.closed == [7]

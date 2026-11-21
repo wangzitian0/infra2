@@ -193,27 +193,23 @@ def _ops_checks_scheduler_ping_step() -> tuple[dict, str]:
     assert step_name in names, f"{step_name!r} missing from ops-checks.yml watchdog"
     assert names.index(step_name) < names.index("Record the verdicts as GitHub issues")
     ping_step = steps[names.index(step_name)]
-    # #1877: the step runs the module, which records a verdict on each outcome.
+    # #1877: the step runs the module, which records a verdict on each run.
     assert (
         ping_step["run"].strip() == "python -m common.observability.scheduler_heartbeat"
     )
-    python_src = (
-        "import sys; "
-        f"sys.path.insert(0, {str(ROOT)!r}); "
-        "from common.observability.scheduler_heartbeat import main; "
-        "raise SystemExit(main())"
-    )
+    python_src = "common.observability.scheduler_heartbeat"
     return ping_step, python_src
 
 
 def _eval_ping_step_if(expr: str, *, event_name: str, cancelled: bool = False) -> bool:
     assert expr.startswith("${{") and expr.endswith("}}")
     inner = expr[3:-2].strip()
-    assert inner == "!cancelled() && github.event_name == 'schedule'", inner
-    return (not cancelled) and event_name == "schedule"
+    # #1877: the step runs on each event; the module sends on a scheduled run only.
+    assert inner == "!cancelled()", inner
+    return not cancelled
 
 
-def _emit_ops_checks_ping(python_src: str) -> dict:
+def _emit_ops_checks_ping(python_src: str, *, event_name: str = "schedule") -> dict:
     import json
     import os
     import subprocess
@@ -248,9 +244,15 @@ def _emit_ops_checks_ping(python_src: str) -> dict:
     try:
         port = server.server_address[1]
         proc = subprocess.run(
-            [sys.executable, "-c", python_src],
+            [sys.executable, "-m", python_src],
+            cwd=ROOT,
             env={
-                **os.environ,
+                **{
+                    k: v
+                    for k, v in os.environ.items()
+                    if k != "INFRA2_WATCHDOG_VERDICTS_PATH"
+                },
+                "GITHUB_EVENT_NAME": event_name,
                 "INFRA2_WATCHDOG_HEARTBEAT_URL": f"http://127.0.0.1:{port}/heartbeat",
                 "INFRA2_WATCHDOG_HEARTBEAT_TOKEN": "test-hb-token",
             },
@@ -264,6 +266,9 @@ def _emit_ops_checks_ping(python_src: str) -> dict:
         server.shutdown()
         server.server_close()
 
+    if event_name != "schedule":
+        assert captured == []
+        return {}
     assert len(captured) == 1
     return captured[0]
 
@@ -278,8 +283,9 @@ def test_ops_checks_watchdog_step_emits_scheduler_heartbeat_only_on_schedule() -
     )
     if_expr = ping_step["if"]
     assert _eval_ping_step_if(if_expr, event_name="schedule") is True
-    assert _eval_ping_step_if(if_expr, event_name="workflow_dispatch") is False
     assert _eval_ping_step_if(if_expr, event_name="schedule", cancelled=True) is False
+    # A manual run starts the module and the module sends nothing.
+    assert _emit_ops_checks_ping(python_src, event_name="workflow_dispatch") == {}
 
     req = _emit_ops_checks_ping(python_src)
     assert req["path"] == "/heartbeat"
