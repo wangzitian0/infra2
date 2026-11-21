@@ -249,8 +249,8 @@ def test_the_canary_ro_login_is_gone_and_the_prune_removes_its_vault_key(
     assert [name for name in env if "POSTGRES" in name] == []
     template = (SERVICE_DIR / "secrets.ctmpl").read_text()
     assert "CANARY_POSTGRES_PASSWORD" not in template
-    # The supply prune deletes a Vault key that the registry does not list. The owner
-    # approved this deletion (#1823), so no entry keeps the key.
+    # The supply prune deletes a Vault key that the registry does not list. No entry
+    # keeps the key of the removed login (#1823).
     service = secrets_registry.lookup("platform", "todo")
     assert service.store_only_keys == ()
     kept = secrets_registry.store_keys(service)

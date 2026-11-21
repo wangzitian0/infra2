@@ -103,6 +103,7 @@ The vault-agent sidecar renders `/secrets/.env` from Vault. The app container so
 | `REDIS_PASSWORD` | `runtime`, `provided_by` | Vault `platform/<env>/redis` key `password` | None |
 | `TODO_POSTGRES_PASSWORD` | `runtime` | Generated once into Vault `platform/<env>/todo`. `TodoDeployer` sets it on role `todo_app` at each supply | None |
 | `DATABASE_URL` | `runtime`, `provided_by`, `composed_from` | Composed in `secrets.ctmpl` from Vault key `TODO_POSTGRES_PASSWORD`, role `todo_app` and host `platform-postgres<suffix>`. No Vault key holds it. The Canary reads only this name for Postgres | None |
+| Postgres role `canary_ro` | none | Not used and not provisioned. Staging: dropped on 2026-11-22. Production: the role stays until one manual `DROP ROLE canary_ro`. Its Vault key `CANARY_POSTGRES_PASSWORD` is pruned at the first deploy after #1878 | Owner present for the production `DROP ROLE` |
 | `S3_ACCESS_KEY`, `S3_SECRET_KEY` (Vault keys `CANARY_S3_ACCESS_KEY`, `CANARY_S3_SECRET_KEY`) | `human` | 1Password item `platform/<env>/todo`, copied to Vault on deploy | Create once per environment (below) |
 | `LLM_API_KEY` | `human`, `empty_ok` | 1Password item `platform/<env>/todo`, copied to Vault on deploy | `uv run invoke env.set LLM_API_KEY=<KEY> --project=platform --env=<env> --service=todo --credential-type=root_vars` |
 | `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_SMALL_MODEL` | `code`, `empty_ok` | `LlmSettings` defaults in `infra2_sdk.runtime.llm` | Optional compose override |
