@@ -910,7 +910,8 @@ class Deployer:
 
         Returns an error string when the stack is not in service (sync redeploys it),
         None when it is. Raises when the host cannot be asked (no appName, `docker ps`
-        failed): an unobservable stack is no evidence of a dead one.
+        failed): an unobservable stack is no evidence of a dead one, nor of a live one,
+        so sync fails the service and does not skip or redeploy it (#1897).
         """
         stack = cls._stack_on_host(c, compose_id)
         if stack is None:

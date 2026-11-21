@@ -373,11 +373,18 @@ class SyncPipeline:
                     else None
                 )
             except Exception as exc:  # noqa: BLE001
-                log.log_warning(
+                # Fail closed, as verify_in_service does after a deploy (#1897): an
+                # unchecked stack is not a skip. No redeploy either: the host or the
+                # Dokploy API the redeploy and its proof need did not answer.
+                log.log_error(
                     f"{deployer.service}: could not check the unchanged stack is in "
-                    f"service ({exc}); skipping deploy (fail-closed)"
+                    f"service ({exc}); failing this service's sync (fail-closed, "
+                    "no skip, no redeploy)"
                 )
-                in_service_error = None
+                return SyncResult(
+                    action=SyncAction.FAILED,
+                    details=f"Unchanged stack not proven in service: {exc}",
+                )
 
             if in_service_error:
                 log.log_warning(

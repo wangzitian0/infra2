@@ -526,15 +526,16 @@ def test_free_sync_pipeline_skips_when_host_config_matches_template(
     assert res.action == "skipped"
 
 
-def test_free_sync_pipeline_skips_fail_closed_when_host_config_unreadable(
+def test_free_sync_pipeline_fails_closed_when_host_config_unreadable(
     monkeypatch,
 ) -> None:
-    res, warnings, _pipe, _mod = _run_free_drift_step(
+    """#1897: an unreadable host config is no proof of service, so no skip."""
+    res, _warnings, _pipe, _mod = _run_free_drift_step(
         monkeypatch, _FakeContext("", ok=False)
     )
     assert res is not None
-    assert res.action == "skipped"
-    assert any("fail-closed" in w for w in warnings)
+    assert res.action == "failed"
+    assert f"cannot read host config {CONFIG_PATH}" in res.details
 
 
 # --- review findings of PR #1447 (head 7762f85) -------------------------------------

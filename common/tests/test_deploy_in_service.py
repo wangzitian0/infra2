@@ -601,21 +601,45 @@ def test_an_unchanged_stack_with_an_exited_container_is_redeployed(monkeypatch):
     assert deployed[0]["IAC_DEPLOY_REF"] == RELEASE_SHA
 
 
-def test_an_unchanged_stack_on_an_unreachable_host_is_skipped(monkeypatch):
-    """Unobservable is not dead: like an unreadable remote hash, a host that cannot
-    list the containers skips (with a warning) instead of amplifying the load."""
+def test_an_unchanged_stack_on_an_unreachable_host_fails_not_skips(monkeypatch):
+    """#1897: unobservable is neither dead nor alive. A host that cannot list the
+    containers fails the sync (as verify_in_service does after a deploy); it is not a
+    skip, and it is not a redeploy onto a host that did not answer."""
     redis, deployed = _redis_sync(monkeypatch, remote_hash="h1")
-    warnings: list[str] = []
-    monkeypatch.setattr(deployer_module, "warning", warnings.append)
+    errors: list[str] = []
+    monkeypatch.setattr(deployer_module, "error", errors.append)
     host = _Host(checkout=LAST_DEPLOY_SHA, containers="", listable=False)
 
     result = redis.sync(host)
 
-    assert result["action"] == "skipped" and deployed == []
+    assert result["action"] == "failed", result
+    assert deployed == []
+    assert "not proven in service" in result["details"]
+    assert "timed out" in result["details"]
     assert any(
-        "could not check the unchanged stack is in service" in w and "timed out" in w
-        for w in warnings
+        "could not check the unchanged stack is in service" in e
+        and "timed out" in e
+        and "failing this service's sync" in e
+        for e in errors
     )
+
+
+def test_an_unchanged_stack_whose_compose_lookup_raises_fails_not_skips(monkeypatch):
+    """#1897: a Dokploy API error on the skip-path compose lookup is no proof either."""
+    redis, deployed = _redis_sync(monkeypatch, remote_hash="h1")
+
+    def _lookup_fails(cls, e):
+        raise RuntimeError("dokploy 502 bad gateway")
+
+    monkeypatch.setattr(redis, "_find_remote_compose", classmethod(_lookup_fails))
+    host = _Host(checkout=LAST_DEPLOY_SHA, containers=REDIS_UP)
+
+    result = redis.sync(host)
+
+    assert result["action"] == "failed", result
+    assert deployed == []
+    assert "dokploy 502 bad gateway" in result["details"]
+    assert host.commands == []
 
 
 def test_a_changed_stack_still_fails_on_a_stale_checkout_after_deploy(monkeypatch):
