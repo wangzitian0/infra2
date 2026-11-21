@@ -579,8 +579,13 @@ compose file for the deploy. A file with a top-level `x-infra2` key compiles wit
 `infra2_sdk.rules.compile_compose`. A file without it compiles to the same bytes. `CONFIGURATION_SHA256`
 hashes the compiled text. A plain file keeps `sourceType="github"`. An `x-infra2` stack deploys as
 `sourceType="raw"` (`upsert_raw_compose`) only when its compiled text has no `build:` and no bind mount from
-the checkout; else `Deployer.composing()` stops. Preview, config drift and the vault self-refresh audit stop
-on an `x-infra2` file until each one supports it. The `validate-compose` job runs
+the checkout; else `Deployer.composing()` stops. The stacks that override `composing()` use the same
+path: the platform overrides call `Deployer.composing()`, and `bootstrap/05.vault` and `bootstrap/04.1password`
+call `upsert_raw_compose`. A preview slot compiles with `mode="preview"` and uploads as `raw`
+(`dokploy_adapter.raw_source_fields`). Config drift compiles an `x-infra2` file at a release ref with the
+Vault template rendered from the manifests at that ref (`config_drift.compiled_at_ref`). The vault
+self-refresh audit reads `/vault/secrets.ctmpl` in a compiled sidecar and takes the release hash from the
+sidecar label `infra2.vault.template.sha256`. The `validate-compose` job runs
 `python -m tools.compose_compile check` against the PR base. `python -m tools.compose_compile print <file>`
 prints the compiled text.
 

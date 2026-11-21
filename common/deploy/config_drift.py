@@ -35,6 +35,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,8 +71,10 @@ def _hash_input_paths(
     dep: type[Deployer], c: Context
 ) -> tuple[str, list[str], list[str]]:
     """Repo-relative (compose_path, artifact_paths, dep_paths) for a service, enumerated on disk
-    with the REAL deploy enumeration (so the file set matches what the deploy would hash)."""
-    compose_content = dep.get_compose_content(c)
+    with the REAL deploy enumeration (so the file set matches what the deploy would hash).
+    The deploy enumerates from the compiled text (infra2#1822); a plain file compiles to
+    its own bytes."""
+    compose_content = dep.stack_compose(c).compiled
     artifact_paths = [
         _repo_rel(p) for p in _compose_artifact_files(dep.compose_path, compose_content)
     ]
@@ -107,6 +110,43 @@ def contents_at_ref(ref: str, paths: list[str]) -> dict[str, bytes]:
     return out
 
 
+def compiled_at_ref(compose_path: str, text: str, ref: str) -> str:
+    """The compose text that the deploy at ``ref`` hashed (infra2#1822).
+
+    A plain file returns ``text`` itself. An ``x-infra2`` file compiles with the Vault
+    template rendered from the manifests at ``ref``, by the renderer that the deploy
+    uses (``compose_compile.vault_template_for``). A manifest absent at ``ref`` stops
+    the comparison: the template of that release cannot be rebuilt.
+    """
+    from common.deploy.compose_compile import (
+        ComposeSourceError,
+        compile_stack,
+        has_x_infra2,
+        vault_manifest_paths,
+        vault_template_for,
+    )
+
+    if not has_x_infra2(text):
+        return text
+    manifests = list(vault_manifest_paths(compose_path, text))
+    if not manifests:
+        return compile_stack(text)
+    found = contents_at_ref(ref, manifests)
+    absent = [p for p in manifests if p not in found]
+    if absent:
+        raise ComposeSourceError(
+            f"config drift {compose_path}@{ref}: manifest(s) {absent} absent at {ref}; "
+            "the Vault template of that release cannot be rendered"
+        )
+    with tempfile.TemporaryDirectory(prefix="infra2-drift-manifests-") as tmp:
+        for path, data in found.items():
+            target = Path(tmp) / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        template = vault_template_for(compose_path, text, manifest_root=Path(tmp))
+    return compile_stack(text, vault_template=template)
+
+
 def _source_env_vars(dep: type[Deployer]) -> dict[str, str]:
     """Build the secret-independent env plane used for release identity."""
     e = dep.env()
@@ -138,13 +178,9 @@ def expected_hash_at(
     missing = [p for p in absent if p == compose_path or not (ROOT / p).is_file()]
     if compose_path in missing:
         return None, missing
-    compose_content = contents[compose_path].decode("utf-8", "replace")
-    # The deploy hashes the compiled text. For an x-infra2 source that text holds the
-    # Vault template of `ref`, which this tree cannot render yet, so fail closed
-    # (infra2#1822 follow-up). A plain file compiles to its own bytes: no change.
-    from common.deploy.compose_compile import refuse_x_infra2
-
-    refuse_x_infra2(compose_content, where=f"config drift {compose_path}@{ref}")
+    compose_content = compiled_at_ref(
+        compose_path, contents[compose_path].decode("utf-8", "replace"), ref
+    )
     artifact_items = [(p, contents[p]) for p in artifact_paths if p in contents]
     dep_items = [(p, contents[p]) for p in dep_paths if p in contents]
     return config_hash_from_items(

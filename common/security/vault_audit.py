@@ -718,9 +718,27 @@ def _vault_addr_from_env(env_vars: dict[str, str | None]) -> str | None:
     return None
 
 
+def _compose_is_x_infra2(service: VaultService) -> bool:
+    """True when the stack compose file of ``service`` is an ``x-infra2`` source."""
+    from common.deploy.compose_compile import has_x_infra2
+
+    compose = REPO_ROOT / service.compose_path
+    return compose.is_file() and has_x_infra2(compose.read_text(encoding="utf-8"))
+
+
 def _release_template_sha256(service: VaultService) -> str:
+    """The SHA-256 of the Vault template that this release ships.
+
+    A hand-written stack ships ``secrets.ctmpl`` on disk. An ``x-infra2`` stack ships
+    the template inside its compiled compose, and the compiler writes its SHA-256 to
+    the sidecar label ``infra2.vault.template.sha256`` (infra2#1822).
+    """
     import hashlib
 
+    if _compose_is_x_infra2(service):
+        from common.deploy.compose_compile import load_stack, vault_template_label
+
+        return vault_template_label(load_stack(service.compose_path).compiled)
     path = REPO_ROOT / service.secret_template_path
     if not path.is_file():
         return ""

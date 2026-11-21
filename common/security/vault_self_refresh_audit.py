@@ -7,6 +7,7 @@ compatibility by re-exporting all audit interfaces and symbols.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -14,6 +15,7 @@ import subprocess
 from typing import Any
 
 from common.core.constants import REPO_ROOT
+from common.deploy.compose_compile import COMPILED_TEMPLATE_PATH
 from common.security.vault_audit import (
     CheckResult,
     DEFAULT_LOG_SINCE,
@@ -22,6 +24,7 @@ from common.security.vault_audit import (
     RESTART_RECENCY_WINDOW_SECONDS,
     SECRET_KEYS,
     VaultService,
+    _compose_is_x_infra2,
     audit_from_observations,
     classify_container,
     classify_deployed_template,
@@ -120,21 +123,13 @@ def collect_live_observations(
     dokploy_host = f"cloud.{internal_domain}" if internal_domain else None
     client = get_dokploy(host=dokploy_host)
     observations: dict[str, Any] = {"services": {}}
-    from common.deploy.compose_compile import refuse_x_infra2
-
     for service in services:
         if service.ephemeral:
             observations["services"][service.id] = {"skipped": PREVIEW_STACK_SKIPPED}
             continue
-        # A compiled sidecar reads its template from /vault/secrets.ctmpl, and the release
-        # hash is a compose label, not secrets.ctmpl on disk. This audit reads the old
-        # paths, so it stops on an x-infra2 stack (infra2#1822 follow-up).
-        compose_file = REPO_ROOT / service.compose_path
-        if compose_file.is_file():
-            refuse_x_infra2(
-                compose_file.read_text(encoding="utf-8"),
-                where=f"vault self-refresh audit {service.compose_path}",
-            )
+        # A compiled sidecar reads its template from /vault/secrets.ctmpl; a hand-written
+        # one mounts /etc/vault/secrets.ctmpl (infra2#1822).
+        compiled_sidecar = _compose_is_x_infra2(service)
         compose = client.find_compose_by_name(
             service.dokploy_service,
             project_name=service.project,
@@ -201,7 +196,7 @@ def collect_live_observations(
             "token_lookup": token_lookup,
             "rendered_env": _remote_secret_file_state(vps_host, vault_agent_name),
             "deployed_template_sha256": _remote_template_sha256(
-                vps_host, vault_agent_name
+                vps_host, vault_agent_name, compiled_sidecar=compiled_sidecar
             ),
             "rendered_env_text": (
                 _remote_secret_file_text(vps_host, vault_agent_name)
@@ -312,13 +307,31 @@ def _remote_secret_file_state(host: str, vault_agent_container: str) -> dict[str
     return _remote_json(host, command)
 
 
-def _remote_template_sha256(host: str, vault_agent_container: str) -> str:
+def _remote_template_sha256(
+    host: str, vault_agent_container: str, *, compiled_sidecar: bool = False
+) -> str:
+    """The SHA-256 of the template that the vault-agent container reads.
+
+    A hand-written sidecar mounts ``/etc/vault/secrets.ctmpl``. A compiled sidecar
+    writes ``/vault/secrets.ctmpl`` with ``printf '%s\\n' "$VAULT_SECRETS_TEMPLATE"``,
+    which adds one newline after the template text. The release label hashes the
+    template text, so this function removes that one newline before it hashes.
+    """
+    if not compiled_sidecar:
+        command = (
+            f"docker exec {shlex.quote(vault_agent_container)} "
+            "sh -lc 'sha256sum /etc/vault/secrets.ctmpl 2>/dev/null | cut -d\" \" -f1'"
+        )
+        result = _ssh(host, command)
+        return result.stdout.strip() if result.returncode == 0 else ""
     command = (
         f"docker exec {shlex.quote(vault_agent_container)} "
-        "sh -lc 'sha256sum /etc/vault/secrets.ctmpl 2>/dev/null | cut -d\" \" -f1'"
+        f"cat {shlex.quote(COMPILED_TEMPLATE_PATH)}"
     )
     result = _ssh(host, command)
-    return result.stdout.strip() if result.returncode == 0 else ""
+    if result.returncode != 0 or not result.stdout.endswith("\n"):
+        return ""
+    return hashlib.sha256(result.stdout[:-1].encode("utf-8")).hexdigest()
 
 
 def _remote_secret_file_text(host: str, vault_agent_container: str) -> str:

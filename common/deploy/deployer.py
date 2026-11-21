@@ -1096,7 +1096,8 @@ class Deployer:
             parse_docker_ps,
         )
 
-        expected = expected_running_services(cls.get_compose_content(c))
+        # The compiled text holds the vault-agent sidecar of an x-infra2 stack (#1822).
+        expected = expected_running_services(cls.stack_compose(c).compiled)
         if not expected:
             return None
         listing = (

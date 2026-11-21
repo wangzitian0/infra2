@@ -146,10 +146,18 @@ class VaultDeployer(Deployer):
 
     @classmethod
     def composing(cls, c, env_vars: dict) -> str:
-        """Deploy Vault via Dokploy API (using GitHub provider)"""
-        from common.deploy.dokploy_client import ensure_project, get_dokploy
-        from common.core.constants import GITHUB_BRANCH, GITHUB_OWNER, GITHUB_REPO
+        """Deploy Vault via the Dokploy API.
 
+        A plain compose file uses the GitHub provider. A raw-eligible ``x-infra2`` file
+        uploads its compiled text with ``upsert_raw_compose`` (infra2#1822). An
+        ``x-infra2`` file that is not raw-eligible stops here, before any API call.
+        """
+        from common.deploy.compose_compile import SOURCE_RAW, load_stack
+        from common.deploy.dokploy_client import ensure_project, get_dokploy
+
+        # Repository-relative: the result does not depend on the cwd.
+        stack = load_stack(cls.compose_path)
+        raw = stack.source_type == SOURCE_RAW
         e = cls.env()
         header(f"{cls.service} composing", "Deploying via Dokploy API")
 
@@ -169,8 +177,36 @@ class VaultDeployer(Deployer):
             error("Failed to get environment ID")
             raise Exit("Failed to get environment ID", code=1)
 
-        # Deploy compose using GitHub provider
         client = get_dokploy(host=host)
+        env_content = "\n".join(
+            [f"{k}={v}" for k, v in env_vars.items() if v is not None]
+        )
+        if raw:
+            from common.deploy.dokploy_adapter import upsert_raw_compose
+
+            compose_id = upsert_raw_compose(
+                client,
+                service_name=cls.service,
+                project_name=project_name,
+                env_id=env_id,
+                compose_file=stack.compiled,
+                effective_env=env_content,
+                existing=client.find_compose_by_name(cls.service, project_name),
+                raw_env_str=env_content,
+                log_info=info,
+                app_name=f"bootstrap-{cls.service}",
+            )
+        else:
+            compose_id = cls._upsert_github(client, env_id, project_name, env_content)
+        cls._ensure_domain_and_deploy(client, compose_id, domain)
+        return compose_id
+
+    @classmethod
+    def _upsert_github(
+        cls, client, env_id: str, project_name: str, env_content: str
+    ) -> str:
+        """Create or update the record with the GitHub provider, then set its env."""
+        from common.core.constants import GITHUB_BRANCH, GITHUB_OWNER, GITHUB_REPO
 
         # Get GitHub provider ID
         github_id = client.get_github_provider_id()
@@ -216,12 +252,11 @@ class VaultDeployer(Deployer):
 
         # Update environment variables
         info("Updating environment variables (from common)")
-        # Filter out internal keys or empty values
-        env_content = "\n".join(
-            [f"{k}={v}" for k, v in env_vars.items() if v is not None]
-        )
         client.update_compose(compose_id, env=env_content)
+        return compose_id
 
+    @classmethod
+    def _ensure_domain_and_deploy(cls, client, compose_id: str, domain) -> None:
         # Configure domain via Dokploy API (using ensure_domains for idempotency)
         if cls.subdomain and cls.service_port:
             domain_host = f"{cls.subdomain}.{domain}"
@@ -245,7 +280,6 @@ class VaultDeployer(Deployer):
         client.deploy_compose(compose_id)
 
         success(f"Deployed {cls.service} (composeId: {compose_id})")
-        return compose_id
 
     @classmethod
     def post_compose(cls, c, shared_tasks: Any) -> bool:

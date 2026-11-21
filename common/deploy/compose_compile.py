@@ -89,17 +89,9 @@ def _needs_vault_template(text: str) -> bool:
     return isinstance(block, dict) and block.get("vault") is not None
 
 
-def vault_template_for(compose_path: str | Path, text: str) -> str | None:
-    """The rendered Vault Agent template for an ``x-infra2`` stack with ``vault``.
-
-    The template comes from the stack manifest through ``common.security.secrets_render``,
-    the same renderer that writes ``secrets.ctmpl`` today. A plain file or a stack without
-    ``x-infra2.vault`` needs no template and returns ``None``.
-    """
-    if not has_x_infra2(text) or not _needs_vault_template(text):
-        return None
+def _registry_service(compose_path: str | Path):
+    """The one ``common.security.registry`` service whose directory holds the stack."""
     from common.security.registry import SERVICES
-    from common.security.secrets_render import render
 
     path = Path(compose_path)
     if path.is_absolute():
@@ -111,7 +103,61 @@ def vault_template_for(compose_path: str | Path, text: str) -> str | None:
             f"{path}: x-infra2.vault needs exactly one registry service for "
             f"{directory!r}, found {len(matches)}"
         )
-    return render(matches[0])["secrets.ctmpl"]
+    return matches[0]
+
+
+def vault_manifest_paths(compose_path: str | Path, text: str) -> tuple[str, ...]:
+    """The repository-relative manifests that the Vault template of the stack reads.
+
+    A plain file or a stack without ``x-infra2.vault`` reads none.
+    """
+    if not has_x_infra2(text) or not _needs_vault_template(text):
+        return ()
+    return tuple(_registry_service(compose_path).manifests)
+
+
+def vault_template_for(
+    compose_path: str | Path, text: str, *, manifest_root: Path | None = None
+) -> str | None:
+    """The rendered Vault Agent template for an ``x-infra2`` stack with ``vault``.
+
+    The template comes from the stack manifest through ``common.security.secrets_render``,
+    the same renderer that writes ``secrets.ctmpl`` today. ``manifest_root`` holds the
+    manifests (default: the checkout); the config-drift check passes the manifests of a
+    release ref. A plain file or a stack without ``x-infra2.vault`` returns ``None``.
+    """
+    if not has_x_infra2(text) or not _needs_vault_template(text):
+        return None
+    from common.security.secrets_render import render
+
+    service = _registry_service(compose_path)
+    return render(service, root=manifest_root)["secrets.ctmpl"]
+
+
+# The compiled vault-agent sidecar (infra2_sdk.rules.compose, `x-vault`) writes its
+# template to this path, and labels itself with the SHA-256 of the template text.
+COMPILED_TEMPLATE_PATH = "/vault/secrets.ctmpl"
+VAULT_SIDECAR = "vault-agent"
+VAULT_TEMPLATE_LABEL = "infra2.vault.template.sha256"
+
+
+def vault_template_label(compiled_text: str) -> str:
+    """The ``infra2.vault.template.sha256`` label of the compiled vault-agent sidecar.
+
+    Returns ``""`` when the compiled text has no sidecar or no such label.
+    """
+    doc = safe_load_text(_yaml(), compiled_text)
+    services = doc.get("services") if isinstance(doc, dict) else None
+    sidecar = services.get(VAULT_SIDECAR) if isinstance(services, dict) else None
+    labels = sidecar.get("labels") if isinstance(sidecar, dict) else None
+    if isinstance(labels, dict):
+        value = labels.get(VAULT_TEMPLATE_LABEL)
+        return value if isinstance(value, str) else ""
+    for label in labels if isinstance(labels, list) else ():
+        key, sep, value = str(label).partition("=")
+        if sep and key == VAULT_TEMPLATE_LABEL:
+            return value
+    return ""
 
 
 def _is_host_relative(source: str) -> bool:
@@ -211,20 +257,8 @@ def load_stack(compose_path: str | Path, *, mode: str = "deploy") -> StackCompos
     return stack_from_text(compose_path, disk.read_text(encoding="utf-8"), mode=mode)
 
 
-def refuse_x_infra2(text: str, *, where: str) -> None:
-    """Stop a path that does not handle compiled stacks yet (infra2#1822 follow-up).
-
-    A plain file passes. An ``x-infra2`` file raises, so the path cannot act on the
-    uncompiled source.
-    """
-    if has_x_infra2(text):
-        raise ComposeSourceError(
-            f"{where}: this path does not support x-infra2 compose files yet "
-            "(infra2#1822 Slice 1 follow-up)"
-        )
-
-
 __all__ = [
+    "COMPILED_TEMPLATE_PATH",
     "ComposeSourceError",
     "MODES",
     "SOURCE_GITHUB",
@@ -236,7 +270,10 @@ __all__ = [
     "is_raw_eligible",
     "load_stack",
     "raw_ineligibility",
-    "refuse_x_infra2",
     "stack_from_text",
+    "VAULT_SIDECAR",
+    "VAULT_TEMPLATE_LABEL",
+    "vault_manifest_paths",
     "vault_template_for",
+    "vault_template_label",
 ]

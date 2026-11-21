@@ -230,6 +230,7 @@ def _ensure_preview_compose(
     config: Any,
     alias: Any,
     _sleep: Callable[[float], None] = time.sleep,
+    source_type: str = "github",
 ) -> str:
     """Find existing preview compose or create a new one with retry recovery."""
     existing = _find_compose(client, config.project, alias.compose_name)
@@ -255,7 +256,7 @@ def _ensure_preview_compose(
             environment_id=environment_id,
             name=alias.compose_name,
             app_name=alias.compose_name,
-            source_type="github",
+            source_type=source_type,
         )
     except httpx.HTTPError:
         reconciled = None
@@ -273,6 +274,45 @@ def _ensure_preview_compose(
         return reconciled["composeId"]
 
     return created["composeId"]
+
+
+def _preview_source(
+    config: Any, opt: PreviewOptions, dep: PreviewDeps
+) -> tuple[str, dict[str, Any]]:
+    """The Dokploy source type and ``compose.update`` source fields of a preview slot.
+
+    A plain file keeps the GitHub source: Dokploy pulls ``config.compose_path`` from the
+    infra2 repo. An ``x-infra2`` file compiles with ``mode="preview"`` (it applies
+    ``x-preview``) and uploads the compiled text as ``sourceType="raw"``
+    (infra2#1822). An ``x-infra2`` file that is not raw-eligible stops here, before any
+    Dokploy write.
+    """
+    from common.deploy.compose_compile import SOURCE_RAW, load_stack
+    from common.deploy.dokploy_adapter import raw_source_fields
+
+    stack = load_stack(config.compose_path, mode="preview")
+    if stack.source_type == SOURCE_RAW:
+        return SOURCE_RAW, raw_source_fields(stack.compiled)
+    gh_id = (
+        dep.github_id
+        if dep.github_id is not None
+        else dep.client.get_github_provider_id()
+    )
+    if not gh_id:
+        raise RuntimeError(
+            "no GitHub provider configured in Dokploy; add one in Settings -> Git "
+            "Providers before deploying a preview (the compose template is pulled from "
+            "the infra2 repo, not uploaded raw)."
+        )
+    return "github", dict(
+        source_type="github",
+        githubId=gh_id,
+        repository=dep.repo_name,
+        owner=dep.repo_owner,
+        branch=opt.branch,
+        composePath=config.compose_path,
+        autoDeploy=False,
+    )
 
 
 def up(
@@ -320,41 +360,17 @@ def up(
             _source_app_vault_creds(dep.client, config.project, config.secret_env)
         )
 
-    gh_id = (
-        dep.github_id
-        if dep.github_id is not None
-        else dep.client.get_github_provider_id()
-    )
-    if not gh_id:
-        raise RuntimeError(
-            "no GitHub provider configured in Dokploy; add one in Settings -> Git "
-            "Providers before deploying a preview (the compose template is pulled from "
-            "the infra2 repo, not uploaded raw)."
-        )
-    # A preview pulls config.compose_path from the checkout (sourceType=github), so Dokploy
-    # would run an x-infra2 source uncompiled. Stop until preview compiles (infra2#1822).
-    from common.core.constants import REPO_ROOT
-    from common.deploy.compose_compile import refuse_x_infra2
-
-    refuse_x_infra2(
-        (REPO_ROOT / config.compose_path).read_text(encoding="utf-8"),
-        where=f"preview up {config.compose_path}",
-    )
-    source_fields = dict(
-        source_type="github",
-        githubId=gh_id,
-        repository=dep.repo_name,
-        owner=dep.repo_owner,
-        branch=opt.branch,
-        composePath=config.compose_path,
-        autoDeploy=False,
-    )
+    source_type, source_fields = _preview_source(config, opt, dep)
 
     had_existing_compose = (
         _find_compose(dep.client, config.project, alias.compose_name) is not None
     )
     compose_id = _ensure_preview_compose(
-        client=dep.client, config=config, alias=alias, _sleep=dep.sleep
+        client=dep.client,
+        config=config,
+        alias=alias,
+        _sleep=dep.sleep,
+        source_type=source_type,
     )
 
     healthy: bool | None = None
@@ -411,7 +427,11 @@ def up(
                         _sleep=dep.sleep,
                     )
                 compose_id = _ensure_preview_compose(
-                    client=dep.client, config=config, alias=alias, _sleep=dep.sleep
+                    client=dep.client,
+                    config=config,
+                    alias=alias,
+                    _sleep=dep.sleep,
+                    source_type=source_type,
                 )
                 before_ids = _deployment_ids(
                     dep.client.get_compose_deployments(compose_id)
