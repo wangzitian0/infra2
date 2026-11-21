@@ -52,6 +52,15 @@ def test_ci_runner_dummy_compose_env_complete() -> None:
     assert required_keys.issubset(DUMMY_COMPOSE_ENV.keys())
 
 
+def test_ci_runner_uses_the_one_compose_env_and_command() -> None:
+    """infra2#1884: ci_runner and the CI job share one env and one command builder."""
+    import tools.ci_runner as runner
+    from common.deploy import compose_validate
+
+    assert runner.DUMMY_COMPOSE_ENV is compose_validate.CI_COMPOSE_ENV
+    assert runner.config_command is compose_validate.config_command
+
+
 def test_ci_runner_cli_list(capsys: pytest.CaptureFixture[str]) -> None:
     ret = main(["--list"])
     assert ret == 0
@@ -84,6 +93,57 @@ def test_ci_runner_preflight_gate_succeeds() -> None:
 def test_ci_runner_compose_gate_succeeds() -> None:
     ret = run_compose(verbose=False)
     assert ret == 0
+
+
+def test_ci_runner_compose_gate_validates_compiled_x_infra2_text(monkeypatch) -> None:
+    """infra2#1884: the local mirror runs `docker compose config` on compiled x-infra2 text.
+
+    A plain file keeps the old command `docker compose -f <rel> config`.
+    """
+    import subprocess
+
+    import tools.ci_runner as runner
+    from common.deploy.compose_compile import has_x_infra2, load_stack
+
+    calls: list[tuple[list[str], str | None]] = []
+
+    def fake_run_cmd(cmd, **_kw):
+        cmd = list(cmd)
+        text = None
+        if cmd[:2] == ["docker", "compose"]:
+            text = Path(cmd[cmd.index("-f") + 1]).read_text(encoding="utf-8")
+        calls.append((cmd, text))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(runner.shutil, "which", lambda _name: "/usr/bin/docker")
+    monkeypatch.setattr(
+        runner.subprocess,
+        "run",
+        lambda cmd, **_kw: subprocess.CompletedProcess(cmd, 0, "", ""),
+    )
+    monkeypatch.setattr(runner, "_run_cmd", fake_run_cmd)
+    assert run_compose(verbose=False) == 0
+
+    compose_calls = [(c, t) for c, t in calls if c[:2] == ["docker", "compose"]]
+    todo = "platform/30.todo/compose.yaml"
+    by_rel: dict[str, tuple[list[str], str | None]] = {}
+    for cmd, text in compose_calls:
+        rel = cmd[cmd.index("-f") + 1]
+        if Path(rel).is_absolute():
+            rel = rel[rel.index("compose-validate-") :].split("/", 1)[1]
+        by_rel[rel] = (cmd, text)
+    assert todo in by_rel
+    cmd, text = by_rel[todo]
+    assert text == load_stack(todo).compiled
+    assert text != (ROOT / todo).read_text(encoding="utf-8")
+    plain = [
+        rel
+        for rel in by_rel
+        if not has_x_infra2((ROOT / rel).read_text(encoding="utf-8"))
+    ]
+    assert len(plain) >= 20
+    for rel in plain:
+        assert by_rel[rel][0] == ["docker", "compose", "-f", rel, "config"], rel
 
 
 def test_ci_runner_deployers_gate_succeeds() -> None:

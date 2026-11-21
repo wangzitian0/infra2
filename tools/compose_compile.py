@@ -4,11 +4,14 @@
 Usage:
   python -m tools.compose_compile print <compose path> [--mode preview] [--vault-template FILE]
   python -m tools.compose_compile check --base <git ref>
+  python -m tools.compose_compile validate <compose path>...
 
 `print` writes the text that the deploy uploads and hashes to stdout. It writes the
 Dokploy source type and each raw-eligibility reason to stderr. A plain file prints
 its own bytes. `check` exits 1 when a plain file changes in the compile or a migrated
 x-infra2 file is not equivalent to its hand-written file at the base ref.
+`validate` runs `docker compose config` on each file: a plain file as its source, an
+x-infra2 file as its compiled text (common.deploy.compose_validate, #1884).
 """
 
 from __future__ import annotations
@@ -65,6 +68,15 @@ def _check(args: argparse.Namespace) -> int:
     return 1 if report.problems else 0
 
 
+def _validate(args: argparse.Namespace) -> int:
+    from common.deploy.compose_validate import validate
+
+    failed = validate(args.paths)
+    for path in failed:
+        print(f"ERROR: invalid compose configuration: {path}", file=sys.stderr)
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -74,8 +86,11 @@ def main(argv: list[str] | None = None) -> int:
     p_print.add_argument("--vault-template", default=None)
     p_check = sub.add_parser("check", help="PR-time equivalence against a base ref")
     p_check.add_argument("--base", required=True)
+    p_validate = sub.add_parser("validate", help="docker compose config per file")
+    p_validate.add_argument("paths", nargs="+")
     args = parser.parse_args(argv)
-    return _print(args) if args.command == "print" else _check(args)
+    commands = {"print": _print, "check": _check, "validate": _validate}
+    return commands[args.command](args)
 
 
 if __name__ == "__main__":

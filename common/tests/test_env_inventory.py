@@ -1264,6 +1264,103 @@ def test_g1_service_compose_and_ctmpl_keys_are_in_manifest(repo_scan):
     assert g1_violations(rows) == {}
 
 
+# The hand-written Canary Todo compose had 23 env keys before #1882 moved it to x-infra2.
+TODO_COMPOSE = "platform/30.todo/compose.yaml"
+TODO_INJECTED_KEYS = {
+    "S3_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_SERVICE_NAME",
+    "OTEL_RESOURCE_ATTRIBUTES",
+    "CONFIGURATION_SHA256",
+    "VAULT_ROLE_ID",
+    "VAULT_SECRET_ID",
+    "VAULT_AGENT_HCL",
+    "VAULT_SECRETS_TEMPLATE",
+}
+
+
+def test_g1_reads_the_compiled_x_infra2_stack(repo_scan):
+    """infra2#1884: G1 inventories the keys that the x-infra2 compiler injects into todo."""
+    inv_, _keys, _rows, _docs_only = repo_scan
+    assert not [e for e in inv_.errors if e.startswith("compose compile:")]
+    writes = [
+        o
+        for o in inv_.occ
+        if o.repo == "infra2" and o.path == TODO_COMPOSE and o.layer == "compose"
+    ]
+    keys = {o.key for o in writes}
+    assert len(keys) >= 23, sorted(keys)
+    assert TODO_INJECTED_KEYS <= keys, sorted(TODO_INJECTED_KEYS - keys)
+    source = (envinv.REPO_ROOT / TODO_COMPOSE).read_text(encoding="utf-8").split("\n")
+    origin = source.index("x-infra2:") + 1
+    for o in writes:
+        assert "compiled_line" in o.extra, o
+        assert 1 <= o.line <= len(source), o
+        assert o.key in source[o.line - 1] or o.line == origin, (o.key, o.line)
+    port = [o for o in writes if o.key == "PORT"]
+    assert [source[o.line - 1].strip() for o in port] == ['PORT: "8000"']
+
+
+X_INFRA2_FIXTURE = """\
+# comment
+x-infra2: {}
+services:
+  app:
+    image: example/app:1.0
+    x-capabilities: [s3]
+    environment:
+      PORT: "8000"
+      HOST_NAME: ${HOST_NAME:-app}
+"""
+
+
+def test_scan_compose_reads_the_compiled_text_with_source_lines(tmp_path):
+    w(tmp_path, "svc/compose.yaml", X_INFRA2_FIXTURE)
+    w(tmp_path, "plain/compose.yaml", X_INFRA2_FIXTURE.replace("x-infra2: {}\n", ""))
+    inv_ = envinv.run({"fx": tmp_path})
+    assert inv_.errors == []
+
+    def writes(path):
+        return {
+            o.key: o.line
+            for o in inv_.occ
+            if o.path == path and o.layer == "compose" and o.role == "write"
+        }
+
+    # S3_ENDPOINT comes from the compiler; the source never names it, so it points at x-infra2.
+    assert writes("svc/compose.yaml") == {"PORT": 8, "HOST_NAME": 9, "S3_ENDPOINT": 2}
+    # A plain file is its source text: no compile, no injected key, source line numbers.
+    assert writes("plain/compose.yaml") == {"PORT": 7, "HOST_NAME": 8}
+    reads = {
+        (o.key, o.line)
+        for o in inv_.occ
+        if o.path == "svc/compose.yaml" and o.layer == "compose-interp"
+    }
+    assert ("HOST_NAME", 9) in reads and ("ENV_SUFFIX", 2) in reads
+
+
+def test_a_vault_template_value_is_a_secret_ref_not_a_literal():
+    template = '{{- with secret (printf "secret/data/platform/%s/todo" $$env) }}\nX={{ .Data.data.x }}'
+    assert envinv.classify_value("VAULT_SECRETS_TEMPLATE", template)[0] == "secret-ref"
+    assert envinv.classify_value("VAULT_SECRETS_TEMPLATE", "plain-text")[0] == "literal"
+
+
+def test_scan_compose_reports_an_x_infra2_compile_failure(tmp_path):
+    w(
+        tmp_path,
+        "svc/compose.yaml",
+        X_INFRA2_FIXTURE.replace("[s3]", "[nope]"),
+    )
+    inv_ = envinv.run({"fx": tmp_path})
+    assert [e.split(": ", 2)[:2] for e in inv_.errors] == [
+        ["compose compile", "fx:svc/compose.yaml"]
+    ]
+    # The source is still scanned, so its own keys stay in the inventory.
+    assert {"PORT", "HOST_NAME"} <= {
+        o.key for o in inv_.occ if o.path == "svc/compose.yaml" and o.layer == "compose"
+    }
+
+
 def test_g2_no_failopen_environment_tier_defaults_or_retired_heartbeat_env(repo_scan):
     _inv, keys_map, _rows, _docs_only = repo_scan
     assert g2_violations(keys_map) == {}

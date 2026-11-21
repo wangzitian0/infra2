@@ -17,34 +17,18 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Callable, Sequence
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-# Dummy environment variables for compose validation matching CI requirements.
-DUMMY_COMPOSE_ENV: dict[str, str] = {
-    "DATA_PATH": "/tmp/infra2-data",
-    "ENV": "ci",
-    "ENV_SUFFIX": "-ci",
-    "ENV_DOMAIN_SUFFIX": "ci",
-    "INTERNAL_DOMAIN": "internal.example.test",
-    "VAULT_ADDR": "http://vault.example.test:8200",
-    "FEISHU_APP_ID": "dummy-feishu-app-id",
-    "FEISHU_APP_SECRET": "dummy-feishu-app-secret",
-    "LLM_API_KEY": "dummy-llm-api-key",
-    "IMAGE_TAG": "0000000",
-    "IMAGE_DIGEST": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-    "RELEASE_ID": "release-manifest:0000000000000000000000000000000000000000000000000000000000000000",
-    "CONFIGURATION_SHA256": "0000000000000000000000000000000000000000000000000000000000000000",
-    "CAPTURE_APPROVED_BY": "ci:compose-validation",
-    "TA_POSTGRES_PORT": "15432",
-    "DAGSTER_WEBSERVER_PORT": "13001",
-    "OP_CONNECT_TOKEN": "dummy-op-connect-token",
-    "OP_VAULT_ID": "dummy-op-vault-id",
-    "OP_ITEM_ID": "dummy-op-item-id",
-}
+# infra2#1884: one definition of the compose command and its dummy environment.
+from common.deploy.compose_validate import CI_COMPOSE_ENV as DUMMY_COMPOSE_ENV  # noqa: E402
+from common.deploy.compose_validate import config_command  # noqa: E402
 
 
 def _run_cmd(
@@ -358,9 +342,10 @@ def run_compose(verbose: bool = False, changed_only: bool = False) -> int:
             f"  Docker compose is available. Validating {len(docker_targets)} configuration(s) with docker..."
         )
         failed_compose: list[Path] = []
+        work = Path(tempfile.mkdtemp(prefix="compose-validate-"))
         for file in docker_targets:
             rel = file.relative_to(ROOT)
-            cmd = ["docker", "compose", "-f", str(rel), "config"]
+            cmd = config_command(rel, work)
             res = _run_cmd(
                 cmd,
                 env=DUMMY_COMPOSE_ENV,
@@ -374,6 +359,7 @@ def run_compose(verbose: bool = False, changed_only: bool = False) -> int:
                 failed_compose.append(rel)
             elif verbose:
                 print(f"  ✅ Valid compose: {rel}")
+        shutil.rmtree(work, ignore_errors=True)
 
         if failed_compose:
             print(f"❌ {len(failed_compose)} compose file(s) failed validation.")

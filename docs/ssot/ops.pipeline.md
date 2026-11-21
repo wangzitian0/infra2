@@ -593,6 +593,13 @@ stays hand-written on `github`, because it builds S3 from the checkout. Reposito
 compiled text through `load_stack(...).compiled`, so they see the injected sidecar. The shell step
 `validate-vault-agent` selects files by the text `  vault-agent:`, so it does not see an `x-infra2` stack;
 `common/tests/test_vault_agent_healthcheck_gate.py` checks the compiled sidecar instead.
+infra2#1884: the `validate-compose` step runs `python3 -m tools.compose_compile validate` on each
+`compose.yaml`. A plain file runs `docker compose -f <file> config` on its source. An `x-infra2` file runs it
+on its compiled text (`common/deploy/compose_validate.py`, which also holds the dummy env `CI_COMPOSE_ENV`
+for CI and `tools/ci_runner.py compose`). The env inventory G1 scan (`env_inventory.scan_stack_compose`)
+reads the compiled text of an `x-infra2` file, so the injected keys (sidecar env, `S3_ENDPOINT`, `OTEL_*`)
+are in the inventory. Each record names the source file and a source line; an injected key that the
+source does not name points at the `x-infra2:` line.
 
 服务一旦声明 `runtime_only_config_keys`，必须显式实现不访问 secret backend 的
 `source_config_env_base`；合同测试枚举所有这类 Deployer，并校验 runtime-only key 不进入 source

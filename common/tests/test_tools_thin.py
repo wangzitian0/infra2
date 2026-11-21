@@ -41,7 +41,7 @@ Size = tuple[int, int]
 DEBT: dict[str, Size] = {
     "reconcile_iac_inputs.py": (7, 3764),
     "out_of_band_watchdog.py": (4, 2113),
-    "ci_runner.py": (0, 865),
+    "ci_runner.py": (0, 851),
     "canary_verify.py": (3, 848),
     "infra_probe_runner.py": (1, 774),
     "service_onboard.py": (0, 510),
