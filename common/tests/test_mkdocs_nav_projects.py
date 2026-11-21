@@ -48,7 +48,9 @@ def test_mkdocs_nav_lists_the_archive_index() -> None:
     """Closed projects have one page, the provenance index (#1826). The nav
     must list it, and must list no per-project archive page."""
     text = MKDOCS.read_text(encoding="utf-8")
-    assert (ARCHIVE_DIR / "README.md").is_file(), "missing docs/project/archive/README.md"
+    assert (ARCHIVE_DIR / "README.md").is_file(), (
+        "missing docs/project/archive/README.md"
+    )
     assert "project/archive/README.md" in text, (
         "docs/mkdocs.yml nav does not list project/archive/README.md under "
         "`- Archived Projects:`"
