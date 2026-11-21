@@ -6,6 +6,7 @@ Simplified: minimal class attributes, uses new env.py API.
 from __future__ import annotations
 
 import os
+import re
 import shlex
 import time
 from collections.abc import Callable
@@ -92,6 +93,12 @@ __all__ = [
 # "new" record belongs to a DIFFERENT, unrelated trigger rather than to us. Small
 # margin for clock skew between this process and Dokploy's server.
 _CLOCK_SKEW_TOLERANCE_SECONDS = 5
+
+
+#: The identity labels that compile_compose writes for an x-vault sidecar (#1822).
+_RAW_IDENTITY_LABEL_RE = re.compile(
+    r"infra2\.vault\.(?:config|template)\.sha256=[0-9a-f]{64}"
+)
 
 
 class _HostStack(NamedTuple):
@@ -1061,8 +1068,56 @@ class Deployer:
         return present
 
     @classmethod
+    def _raw_identity_labels(cls) -> tuple[str, ...] | None:
+        """The compiled identity labels of a raw stack; None for a github stack.
+
+        A raw stack has no git checkout on the host: Dokploy wipes ``code/`` and writes
+        ``code/docker-compose.yml`` from the record this deploy just updated (#1822).
+        """
+        from common.core.constants import REPO_ROOT
+        from common.deploy.compose_compile import load_stack
+
+        if not (REPO_ROOT / cls.compose_path).is_file():
+            return None
+        stack = load_stack(cls.compose_path)
+        if stack.source_type != "raw":
+            return None
+        return tuple(sorted(set(_RAW_IDENTITY_LABEL_RE.findall(stack.compiled))))
+
+    @classmethod
+    def _verify_raw_identity(
+        cls, stack: _HostStack, labels: tuple[str, ...]
+    ) -> str | None:
+        """Dokploy wrote this deploy's compiled compose for a raw stack (#1822).
+
+        The git-HEAD proof of #629 cannot apply: there is no clone. A raw deploy first
+        removes ``code/``, so a file that exists was written by a deploy, and the compiled
+        identity labels (Vault agent config and template hashes) must be in it.
+        """
+        path = f"/etc/dokploy/compose/{stack.project}/code/docker-compose.yml"
+        got = stack.run(f"cat {shlex.quote(path)}")
+        if not got.ok:
+            return (
+                f"Dokploy has no raw compose file for {cls.service} at {path}; "
+                "the record reports done on a deploy that wrote nothing"
+            )
+        missing = [label for label in labels if label not in (got.stdout or "")]
+        if missing:
+            return (
+                f"Dokploy's raw compose for {cls.service} lacks this deploy's identity "
+                f"label(s) {', '.join(missing)}; the record reports done on another compose"
+            )
+        return None
+
+    @classmethod
     def _verify_checkout_identity(cls, stack: _HostStack) -> str | None:
-        """Dokploy's checkout for the stack is at the ref this checkout pinned (#629)."""
+        """Dokploy's checkout for the stack is at the ref this checkout pinned (#629).
+
+        A raw stack has no checkout; it proves its identity from the compiled compose
+        that Dokploy wrote (``_verify_raw_identity``)."""
+        raw_labels = cls._raw_identity_labels()
+        if raw_labels is not None:
+            return cls._verify_raw_identity(stack, raw_labels)
         # Fail-closed: a checkout that cannot say what it pinned cannot prove what Dokploy
         # checked out, and that proof is the point (#629).
         pinned = cls._checkout_ref()
