@@ -56,7 +56,18 @@ Use this page for the five failure classes named by [#723](https://github.com/wa
 2. If the code is ahead and migration is additive, review and apply the forward migration through the normal release gate. If DB has labels code removed or renamed, classify C and plan a forward-compatible fix; do not run `migrate down`.
 3. Re-run the same gate on the same exact image and target environment. Record the gate result and only then resume promotion.
 
-**Brake / recovery:** Stop promotion; there is no safe generic `--force-promote` or reverse-migration command in the current implementation. Revert the unpromoted code commit with `git revert <commit>` if needed, then submit and review a new release. A production database already changed requires a forward fix and owner decision.
+**Brake / recovery:** Stop promotion. There is no reverse-migration command. Revert the unpromoted code commit with `git revert <commit>` if needed, then submit and review a new release. A production database already changed requires a forward fix and owner decision.
+
+**Rollback target older than finance_report v0.2.92:** these images have no `infra2_sdk.runtime.schema_check`. The gate always stops them with `NOT EVALUATED` (exit 3). This is intended; there is no fallback to an infra2 copy of the check. Recover in this order:
+
+1. Roll forward to v0.2.92 or v0.2.93. Run `deploy.yml` with `service=finance_report/app`, `type=prod`, `version_ref=<tag>`, `bootstrap=true`, `staging_validated=true` and `code_reviewed=true`. The owner approves the run in the `production` environment.
+2. Only when no v0.2.92 or newer release is safe: run deploy_v2 locally, with the owner present:
+   `python -m tools.deploy_v2 --service finance_report/app --type prod --version-ref <tag> --bootstrap --code-reviewed --force-promote`.
+   It needs `DOKPLOY_API_KEY`, `GITHUB_TOKEN`, `INFRA2_WATCHDOG_SSH_HOST`, `INFRA2_WATCHDOG_SSH_USER`, `INFRA2_WATCHDOG_SSH_KEY_PATH` (a file with the `INFRA2_WATCHDOG_SSH_PRIVATE_KEY` key) and `INFRA2_WATCHDOG_SSH_PORT` when it is not 22.
+   `--force-promote` also skips the staging-first order and the post-swap public `/api/health` version check. Its only audit record is the `[AUDIT]` lines on stderr; keep that output with the incident.
+   No workflow has a `force_promote` input, on purpose.
+
+The automatic rollback (`_handle_post_deploy_failure` in `common/deploy/promote.py`) never runs the gate, so this does not change it. The gap closes when the production release before the current one is v0.2.92 or newer, that is, after the next finance_report production release.
 
 ## Watchdog silent
 

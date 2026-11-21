@@ -396,6 +396,25 @@ def test_run_schema_gate_timeout_blocks_without_echoing_the_command():
     assert exc_info.value.verdict == sg.VERDICT_NO_VERDICT
 
 
+def test_run_schema_gate_oserror_blocks_without_echoing_the_command():
+    """An OSError (no ssh binary, a broken pipe) can carry the command; never echo it."""
+    marker = "launcher-command-marker"
+
+    def runner(args, **kwargs):
+        if "docker exec" in args[-1]:
+            return _ok(stdout='DATABASE_URL="postgresql://u:p@h/db"\n')
+        raise OSError(f"cannot run {args[-1]} {marker}")
+
+    with pytest.raises(
+        sg.SchemaGateError, match="did not finish \\(OSError\\)"
+    ) as exc_info:
+        sg.run_schema_gate(**_gate_kwargs(runner=runner, timeout=5))
+    message = str(exc_info.value)
+    assert marker not in message
+    assert "docker run" not in message
+    assert exc_info.value.verdict == sg.VERDICT_NO_VERDICT
+
+
 # --- exit codes: one mapping, equal to the SDK ---------------------------------------
 
 
@@ -492,6 +511,41 @@ def test_launcher_passes_the_spec_options_and_stdin_url_as_db_url(tmp_path):
     # The launcher returns the SDK exit code unchanged.
     assert result.returncode == 7, result.stderr
     assert json.loads(result.stdout) == [*spec_argv, "--db-url", url]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "raise AttributeError('broken module attribute')\n",
+        "def main(argv:\n",  # SyntaxError at import
+    ],
+    ids=["attribute-error", "syntax-error"],
+)
+def test_launcher_maps_a_broken_sdk_import_to_not_evaluated(tmp_path, source):
+    stub = _stub_sdk(tmp_path, source)
+    result = _run_launcher(tmp_path, ["--metadata", "m:x"], "postgresql://h/db\n", stub)
+    assert result.returncode == sg.EXIT_NOT_EVALUATED, result.stderr
+    assert "NOT EVALUATED" in result.stderr
+    assert "does not import" in result.stderr
+
+
+def test_launcher_maps_an_exception_in_main_to_not_evaluated(tmp_path):
+    stub = _stub_sdk(
+        tmp_path,
+        "def main(argv):\n    raise RuntimeError('crash inside main')\n",
+    )
+    result = _run_launcher(tmp_path, ["--metadata", "m:x"], "postgresql://h/db\n", stub)
+    assert result.returncode == sg.EXIT_NOT_EVALUATED, result.stderr
+    assert "schema_check.main raised RuntimeError" in result.stderr
+
+
+@pytest.mark.parametrize("code", [0, 1, 3])
+def test_launcher_keeps_the_return_code_of_main(tmp_path, code):
+    """A real verdict of main, including BLOCKED (1), is never rewritten."""
+    stub = _stub_sdk(tmp_path, f"def main(argv):\n    return {code}\n")
+    result = _run_launcher(tmp_path, ["--metadata", "m:x"], "postgresql://h/db\n", stub)
+    assert result.returncode == code, result.stderr
+    assert "NOT EVALUATED" not in result.stderr
 
 
 def test_launcher_with_the_installed_sdk_and_no_url_is_not_evaluated(tmp_path):

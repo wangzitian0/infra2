@@ -94,7 +94,9 @@ _SCHEMA_CHECK_SPECS: dict[str, SchemaCheckSpec] = {
 # Runs in the target image as ``python3 -c _LAUNCHER <spec options>``. It reads the
 # database URL from stdin and calls the SDK CLI with an explicit ``--db-url``. An image
 # without ``infra2_sdk.runtime.schema_check`` (an SDK before infra2-sdk#239) exits
-# EXIT_NOT_EVALUATED.
+# EXIT_NOT_EVALUATED. Any other import failure, and an exception that escapes
+# ``main``, also exit EXIT_NOT_EVALUATED: no comparison ran, so the result is not
+# BLOCKED. The return code of ``main`` (0, 1 or 3) and SystemExit pass unchanged.
 _LAUNCHER = f"""\
 import sys
 try:
@@ -106,8 +108,23 @@ except ImportError as exc:
         file=sys.stderr,
     )
     sys.exit({EXIT_NOT_EVALUATED})
+except Exception as exc:
+    print(
+        "NOT EVALUATED - deploy blocked: infra2_sdk.runtime.schema_check "
+        "does not import: " + repr(exc),
+        file=sys.stderr,
+    )
+    sys.exit({EXIT_NOT_EVALUATED})
 db_url = sys.stdin.readline().strip()
-sys.exit(schema_check.main([*sys.argv[1:], "--db-url", db_url]))
+try:
+    code = schema_check.main([*sys.argv[1:], "--db-url", db_url])
+except Exception as exc:
+    print(
+        "NOT EVALUATED - deploy blocked: schema_check.main raised " + repr(exc),
+        file=sys.stderr,
+    )
+    sys.exit({EXIT_NOT_EVALUATED})
+sys.exit(code)
 """
 
 _DOKPLOY_NETWORK = "dokploy-network"
