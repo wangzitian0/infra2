@@ -25,8 +25,8 @@ reusable logic belongs in `common/` (see the division-of-labor note below):
    `orchestrator_guard_hook.py` (an owner-wired Claude Code hook that keeps the
    workspace orchestrator's foreground calls under 4 minutes and its watch armed;
    see [coordination.md](../harness/workspace/coordination.md#orchestrator-liveness)), and
-   `ci_runner.py` (unified local and CI gate runner supporting `--changed` for
-   diff-scoped fail-fast checks with local worker caps `<= 4`).
+   `ci_runner.py` (unified local and CI gate runner; `unit-tests` runs the tests of
+   the current diff in one process, and the full suite runs only in CI).
 
 ## The single resident entry point (#543)
 
