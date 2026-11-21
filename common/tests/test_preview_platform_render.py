@@ -231,12 +231,22 @@ def test_slot_postgres_keeps_no_data_across_up():
 
 
 def test_todo_template_composes_database_url_from_the_todo_password():
-    # The slot URL and the Vault template URL must name the same login and host.
+    # One login: the URL in the template and in the slot uses the role, database and host
+    # that compose.yaml gives the app, so a rename of one cannot leave the URL stale.
+    prod = _services("platform/30.todo/compose.yaml")
+    env = prod["todo"]["environment"]
+    role, database = env["TODO_POSTGRES_USER"], env["TODO_POSTGRES_DATABASE"]
+    host = env["POSTGRES_HOST"].replace("${ENV_SUFFIX}", "%s")
+    assert (role, database, host) == ("todo_app", "postgres", "platform-postgres%s")
     template = (REPO_ROOT / "platform/30.todo/secrets.ctmpl").read_text()
     assert (
         'DATABASE_URL={{ printf "%q" (printf '
-        '"postgresql://todo_app:%s@platform-postgres%s:5432/postgres" '
+        f'"postgresql://{role}:%s@{host}:{env["POSTGRES_PORT"]}/{database}" '
         '.Data.data.TODO_POSTGRES_PASSWORD (env "ENV_SUFFIX")) }}'
     ) in template
-    agent = _services("platform/30.todo/compose.yaml")["vault-agent"]
-    assert agent["environment"]["ENV_SUFFIX"] == "${ENV_SUFFIX:-}"
+    assert prod["vault-agent"]["environment"]["ENV_SUFFIX"] == "${ENV_SUFFIX:-}"
+    slot = _services("platform/30.todo/preview.compose.yaml")["todo"]["environment"]
+    assert slot["DATABASE_URL"] == (
+        f"postgresql://{role}:${{TODO_POSTGRES_PASSWORD:?required}}"
+        f"@{env['POSTGRES_HOST']}:{env['POSTGRES_PORT']}/{database}"
+    )
