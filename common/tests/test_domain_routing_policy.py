@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from common.deploy.compose_compile import load_stack
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -81,7 +83,7 @@ def _literal_value(node: ast.AST) -> Any:
 
 
 def _has_explicit_traefik_routes(compose_path: Path) -> bool:
-    compose = yaml.safe_load(compose_path.read_text(encoding="utf-8"))
+    compose = yaml.safe_load(load_stack(compose_path).compiled)
     services = compose.get("services", {}) if isinstance(compose, dict) else {}
     for service in services.values():
         labels = service.get("labels", []) if isinstance(service, dict) else []
