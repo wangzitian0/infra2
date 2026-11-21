@@ -43,6 +43,7 @@ from common.core.constants import (
 from common.core.sdk_usage_census import sdk_requirement
 from common.core.registry import domain_for_service, service_attrs
 from common.deploy.app_contract import (
+    ACCEPTED_HOOK_SCHEMA_VERSIONS,
     APP_HOOKS_MANIFEST_PATH,
     HOOK_RUNNER_CONTEXT_ENV,
     HOOK_RUNNER_SECRET_NAMES,
@@ -51,6 +52,7 @@ from common.deploy.app_contract import (
     execute_app_hook_slot,
     hook_env_for_slot,
     fetch_hooks_manifest,
+    schema3_empty_cells,
     git_url,
     load_hooks_manifest,
     next_app_release_tag,
@@ -1652,11 +1654,38 @@ def audit_app_hooks(
 
         supplied = set(HOOK_RUNNER_SECRET_NAMES) | set(HOOK_RUNNER_CONTEXT_ENV)
         slot_errors: list[str] = []
-        if manifest.schema_version != 2:
+        if manifest.schema_version not in ACCEPTED_HOOK_SCHEMA_VERSIONS:
             slot_errors.append(
-                f"expected schema_version 2, got {manifest.schema_version!r}"
+                f"expected schema_version in {list(ACCEPTED_HOOK_SCHEMA_VERSIONS)}, "
+                f"got {manifest.schema_version!r}"
             )
         for slot_name in slots or HOOK_SLOTS:
+            if manifest.schema_version == 3:
+                for cell in schema3_empty_cells(manifest, slot_name):
+                    slot_errors.append(
+                        f"no check runs in cell {cell!r} (slot {slot_name!r})"
+                    )
+                for env_name in manifest.required_env:
+                    if env_name not in supplied:
+                        message = f"unsupplied required_env {env_name!r}"
+                        if message not in slot_errors:
+                            slot_errors.append(message)
+                if ambient_env is None:
+                    continue
+                try:
+                    hook_env_for_slot(
+                        manifest,
+                        slot_name,
+                        app_url=_app_url_for(service, target_env, "zitian.party"),
+                        environment="production"
+                        if target_env in ("prod", "production")
+                        else "staging",
+                        version_ref=pinned_tag or "main",
+                        ambient_env=ambient_env,
+                    )
+                except ValueError as exc:
+                    slot_errors.append(f"{slot_name}: {exc}")
+                continue
             if slot_name not in manifest.slots:
                 slot_errors.append(f"missing slot {slot_name!r}")
                 continue
