@@ -23,6 +23,9 @@ RETIRED_NAMES: dict[str, str] = {
     "TRUEALPHA_RELEASE_MANIFEST_ID": "RELEASE_ID",
     "TRUEALPHA_DATA_ENGINE_IMAGE_DIGEST": "IMAGE_DIGEST",
     "TRUEALPHA_CONFIGURATION_SHA256": "CONFIGURATION_SHA256",
+    # Writers stopped in #1781; readers stopped in #1802 (no live container or
+    # Dokploy compose relies on it, read-only probes of 2026-11-22).
+    "IAC_CONFIG_HASH": "CONFIGURATION_SHA256",
     "CANARY_S3_ENDPOINT_URL": "S3_ENDPOINT",
     "CANARY_S3_BUCKET": "S3_BUCKET",
     "CANARY_S3_ACCESS_KEY": "S3_ACCESS_KEY",

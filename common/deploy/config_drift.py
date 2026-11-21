@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Dokploy config-drift detector — is prod running the exact release identity?
 
-The runtime ``IAC_CONFIG_HASH`` remains the deploy idempotence signal and may include secrets.
+The runtime ``CONFIGURATION_SHA256`` remains the deploy idempotence signal and may include secrets.
 Drift uses the separately persisted, versioned ``IAC_SOURCE_CONFIG_HASH`` plus
 ``IAC_DEPLOY_REF``. Both are reconstructible from an immutable release without granting CI
 access to runtime secrets.
@@ -456,15 +456,13 @@ def _deployed_identities() -> dict[str, DeployedIdentity]:
                     key, separator, value = line.partition("=")
                     if separator and key in {
                         "CONFIGURATION_SHA256",
-                        "IAC_CONFIG_HASH",
                         "IAC_SOURCE_CONFIG_HASH",
                         "IAC_DEPLOY_REF",
                     }:
                         values[key] = value.strip()
                 if values:
                     out[f"{p['name']}/{cp['name']}"] = DeployedIdentity(
-                        runtime_hash=values.get("CONFIGURATION_SHA256")
-                        or values.get("IAC_CONFIG_HASH"),
+                        runtime_hash=values.get("CONFIGURATION_SHA256"),
                         source_hash=values.get("IAC_SOURCE_CONFIG_HASH"),
                         deploy_ref=values.get("IAC_DEPLOY_REF"),
                     )

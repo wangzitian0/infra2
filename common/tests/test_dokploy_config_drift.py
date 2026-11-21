@@ -299,7 +299,7 @@ class _FakeDokployClientForIdentities:
     def _request(self, method: str, path: str):
         assert method == "GET"
         assert path == "compose.one?composeId=cid-ta-app"
-        return {"env": "IAC_CONFIG_HASH=deploy-v0.0.11-1785146688203\n"}
+        return {"env": "CONFIGURATION_SHA256=deploy-v0.0.11-1785146688203\n"}
 
 
 def test_deployed_identities_includes_truealpha_and_excludes_unmanaged_projects(
@@ -321,21 +321,21 @@ def test_deployed_identities_includes_truealpha_and_excludes_unmanaged_projects(
     assert not any(key.startswith("someone-elses-project/") for key in identities)
 
 
-def test_deployed_identities_prefers_configuration_sha256_over_legacy_hash(
-    monkeypatch,
-) -> None:
-    class _DualHashClient(_FakeDokployClientForIdentities):
+def test_deployed_identities_ignore_the_retired_hash_key(monkeypatch) -> None:
+    """#1802: IAC_CONFIG_HASH is retired; only CONFIGURATION_SHA256 is the runtime hash."""
+
+    class _LegacyOnlyClient(_FakeDokployClientForIdentities):
         def _request(self, method: str, path: str):
             return {
                 "env": (
-                    "CONFIGURATION_SHA256=deploy-canonical\n"
-                    "IAC_CONFIG_HASH=deploy-legacy\n"
+                    "IAC_CONFIG_HASH=deploy-legacy\nIAC_SOURCE_CONFIG_HASH=v1:source\n"
                 )
             }
 
-    monkeypatch.setattr("common.deploy.dokploy_client.DokployClient", _DualHashClient)
+    monkeypatch.setattr("common.deploy.dokploy_client.DokployClient", _LegacyOnlyClient)
     identities = drift._deployed_identities()
-    assert identities["truealpha/app"].runtime_hash == "deploy-canonical"
+    assert identities["truealpha/app"].runtime_hash is None
+    assert identities["truealpha/app"].source_hash == "v1:source"
 
 
 def test_strict_blockers_fail_on_detector_and_structural_errors() -> None:

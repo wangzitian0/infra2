@@ -1284,7 +1284,7 @@ def test_remote_config_identity_reads_cross_plane_service_coordinates(
             return {
                 "env": "\n".join(
                     (
-                        "IAC_CONFIG_HASH=runtime",
+                        "CONFIGURATION_SHA256=runtime",
                         "IAC_SOURCE_CONFIG_HASH=v1:source",
                         f"IAC_DEPLOY_REF={'a' * 40}",
                         "INFRA_IDENTITY_SCHEMA=v1",

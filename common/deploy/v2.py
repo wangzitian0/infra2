@@ -1079,7 +1079,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-verify-config",
         action="store_true",
-        help="skip the post-deploy effective IAC_CONFIG_HASH check (default: verify)",
+        help="skip the post-deploy effective CONFIGURATION_SHA256 check (default: verify)",
     )
     parser.add_argument(
         "--no-verify-smoke",

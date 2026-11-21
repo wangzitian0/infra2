@@ -9,7 +9,8 @@ file under `tools/` and applies two limits:
    included and the module docstring excluded.
 
 `DEBT` lists each tool that broke a limit when this test was added, with its exact
-measured size. The ledger is a ratchet:
+measured size. The test checks that each entry equals the measured size; review
+rejects a new entry or a raised size:
 
 - a tool not in `DEBT` that breaks a limit fails;
 - a `DEBT` entry whose tool is gone or now obeys both limits fails (delete the entry);
@@ -39,7 +40,7 @@ Size = tuple[int, int]
 # production paths (AGENTS.md merge gate rule 6): the owner approves their edits.
 DEBT: dict[str, Size] = {
     "reconcile_iac_inputs.py": (7, 3764),
-    "out_of_band_watchdog.py": (4, 2121),
+    "out_of_band_watchdog.py": (4, 2113),
     "ci_runner.py": (0, 865),
     "canary_verify.py": (3, 848),
     "infra_probe_runner.py": (1, 774),
@@ -84,7 +85,7 @@ def violates(size: Size) -> bool:
 def ledger_problems(
     tools: dict[str, Size], debt: dict[str, Size]
 ) -> list[tuple[str, str]]:
-    """Return (kind, tool) for each way `tools` and `debt` break the ratchet.
+    """Return (kind, tool) for each way `tools` and `debt` disagree.
 
     `new`: move the tool's logic to common/. `paid`: delete the DEBT entry.
     `changed`: record the measured size in DEBT (a growth also means: move logic out).

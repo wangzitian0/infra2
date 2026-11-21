@@ -519,7 +519,7 @@ signals:
   # Dokploy per-compose/application status (#908). One signal for the family: each
   # unit in `error` is reported as dokploy-status:<project>/<env>/<unit> under it.
   # A unit is a stale record (still listed) only when its own containers run
-  # healthy on the current IAC_CONFIG_HASH; a query rejected with 401/403 is a
+  # healthy on the current CONFIGURATION_SHA256; a query rejected with 401/403 is a
   # configuration failure and pages like every other blind-watchdog failure.
   - signal_id: global.infra2-dokploy-status.github
     environment: global
