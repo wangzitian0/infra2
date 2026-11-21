@@ -260,11 +260,28 @@ def test_the_bootstrap_script_names_the_lock_and_the_script_only_in_its_checkout
     None
 ):
     """The clone is the build context. A `sed` on the script after the checkout would
-    drop the hash from the image of the production runner."""
+    drop the hash from the image of the production runner.
+
+    The only other lines allowed are the read-only `git ls-tree` lines of
+    `runner_inputs_fingerprint`, which decides whether the image rebuilds."""
     script = ROOT / "scripts/deploy_iac_runner_bootstrap.sh"
+    text = script.read_text(encoding="utf-8")
+    fingerprint = text.split("# BEGIN runner_inputs_fingerprint", 1)[1].split(
+        "# END runner_inputs_fingerprint", 1
+    )[0]
+    read_only = [
+        line.strip()
+        for line in fingerprint.splitlines()
+        if not line.lstrip().startswith("#")
+        and ("sdk_requirement" in line or "uv.lock" in line)
+    ]
+    assert read_only and all(
+        line.startswith('git -C "$repo" ls-tree "$sha" -- ') for line in read_only
+    ), read_only
+    outside = text.replace(fingerprint, "")
     named = [
         line.strip()
-        for line in script.read_text(encoding="utf-8").splitlines()
+        for line in outside.splitlines()
         if not line.lstrip().startswith("#")
         and ("sdk_requirement" in line or "uv.lock" in line)
     ]

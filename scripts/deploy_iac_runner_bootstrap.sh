@@ -265,6 +265,19 @@ if ! grep -q '^DOKPLOY_API_KEY=' "$env_file"; then
   fi
 fi
 
+# BEGIN runner_inputs_fingerprint
+# The object ids of every input that the image build reads: the same paths that make
+# reconcile-iac-inputs.yml run this script. A uv.lock change (an SDK bump) must rebuild
+# the image; comparing only bootstrap/06.iac_runner skipped it (v3.1.130 kept an old SDK).
+runner_inputs_fingerprint() {
+  local repo="$1" sha="$2"
+  {
+    git -C "$repo" ls-tree "$sha" -- bootstrap/06.iac_runner scripts/deploy_iac_runner_bootstrap.sh uv.lock
+    git -C "$repo" ls-tree "$sha" -- tools/ | grep -E '[[:space:]]tools/sdk_requirement[^/]*\.py$' || true
+  } 2>/dev/null
+}
+# END runner_inputs_fingerprint
+
 current_health="$(
   docker inspect iac-runner \
     --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null || echo none
@@ -273,13 +286,9 @@ if [ "$current_health" = "healthy" ] \
   && [ -n "$current_git_sha" ] \
   && [ "$current_git_sha" != "<no value>" ]; then
   if git -C "$code_dir" rev-parse -q --verify "${current_git_sha}^{commit}" >/dev/null 2>&1; then
-    current_runner_tree="$(
-      git -C "$code_dir" rev-parse "${current_git_sha}:bootstrap/06.iac_runner" 2>/dev/null || true
-    )"
-    target_runner_tree="$(
-      git -C "$code_dir" rev-parse "${INFRA2_DEPLOY_SHA}:bootstrap/06.iac_runner" 2>/dev/null || true
-    )"
-    if [ -n "$current_runner_tree" ] && [ "$current_runner_tree" = "$target_runner_tree" ]; then
+    current_runner_inputs="$(runner_inputs_fingerprint "$code_dir" "$current_git_sha")"
+    target_runner_inputs="$(runner_inputs_fingerprint "$code_dir" "$INFRA2_DEPLOY_SHA")"
+    if [ -n "$current_runner_inputs" ] && [ "$current_runner_inputs" = "$target_runner_inputs" ]; then
       echo "IaC Runner inputs unchanged from $current_git_sha and container is healthy; skipping image rebuild and recreate"
       exit 0
     fi
