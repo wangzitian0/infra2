@@ -14,7 +14,7 @@
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
 | **目录结构** | [目录结构规范](#4-目录结构规范) | 物理文件布局 |
-| **层级定义** | [`core.harness.md` §5.3](./core.harness.md#53-code-layers) | `infra2-sdk`, `common/`, `tools/`; Bootstrap 与 Platform 见 §2.3 |
+| **层级定义** | [`core.harness.md` §5.3](./core.harness.md#53-code-layers) | `infra2-sdk`, `common/`, `tools/`; Bootstrap 与 Platform 见 [§2.3](#层级定义) |
 | **变量契约** | 远端 SSOT + `.env.example` | 运行时配置入口 |
 | **自动化入口** | [`tasks.py`](https://github.com/wangzitian0/infra2/blob/main/tasks.py) | Invoke 任务加载与执行 |
 | **跨仓库代码契约** | [`infra2-sdk`](https://github.com/wangzitian0/infra2-sdk/releases) | 应用与 infra 固定版本消费的无副作用协议包 |

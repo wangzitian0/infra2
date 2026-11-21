@@ -30,7 +30,7 @@
 
 ```mermaid
 flowchart TB
-    subgraph Libs["common/ (领域开发库)"]
+    subgraph Common["common/ (领域开发库)"]
         Core[core/]
         Security[security/]
         Backup[backup/]
