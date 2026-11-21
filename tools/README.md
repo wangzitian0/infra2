@@ -94,12 +94,10 @@ also enforces compose↔inventory equality and registry-derived `service_id` val
 
 ## Division of labor (`common/` vs `tools/`)
 
-- **`common/`** — importable, unit-testable logic (no `__main__`, no argv).
-- **`tools/`** — thin entry points: argv parsing, env wiring, exit codes.
-  A tool that grows real logic should push it down into `common/` so it gets
-  covered by `common/tests` (pattern: `tools/deploy_guard_audit.py` →
-  `common/deploy/dependencies.py`). Several older scripts still carry embedded logic —
-  treat that as debt to sink, not a pattern to copy.
+The layer definition is in [`docs/ssot/core.harness.md` §5.3](../docs/ssot/core.harness.md#53-code-layers).
+`common/tests/test_tools_thin.py` enforces it. Its `DEBT` ledger records the exact size of each old
+tool that still carries logic; review rejects a new entry or a raised size. Pattern: `tools/deploy_guard_audit.py` →
+`common/deploy/dependencies.py`.
 
 ## Runner (invoke namespaces)
 
