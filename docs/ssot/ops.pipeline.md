@@ -609,6 +609,8 @@ identity。
 会等到 `IN_SERVICE_DEADLINE_SECONDS`。哪些服务必须在线由 compose 文件自己回答:长驻服务都有 healthcheck,
 一次性任务(authentik `token-init`、clickhouse init、signoz `schema-migrator`)没有。
 
+**raw stack 的身份**(#1822 / #1892 / #1893):`x-infra2` 编译出的 raw stack 在宿主机上没有 git checkout,(1) 改为两步:`code/docker-compose.yml` 存在且含编译出的 `infra2.vault.config.sha256` 与 `infra2.vault.template.sha256` 标签;(2) 通过后,项目里每个运行中、设置了 `CONFIGURATION_SHA256` 的容器(todo 为 `todo` 与 `vault-agent`)都必须等于 compose env 记录的值(sync 已证明它等于本地 hash)。标签只随 Vault 配置或模板变化,这一步把证明绑定到本次 release;没有容器设置它则 fail-closed。跳过路径上的 #1247 检查对 raw stack 做同一个绑定,不再因 `git rev-parse` 失败而静默放行。github stack 的证明不变。
+
 **跳过 ≠ 不看容器**(#691 / #698;#718 回归):runtime 与 source identity 都匹配而跳过部署时,Deployer
 (`verify_still_in_service`)仍在宿主机上做 (2) 在线证明,容器 exited/缺失/unhealthy 则强制重部署;但**不做**
 (1) 身份证明——本次 release 没有部署该服务,Dokploy checkout 停在它上一次部署的 ref 是正确状态

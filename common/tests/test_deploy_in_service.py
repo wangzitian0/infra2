@@ -1132,3 +1132,194 @@ def test_a_raw_stack_without_identity_labels_fails_closed(deployer) -> None:
     )
     message = deployer._verify_raw_identity(stack, ())
     assert message and "no identity label" in message
+
+
+_RELEASE_HASH = "1" * 64
+_LAST_HASH = "2" * 64
+
+
+def _inspected(*containers: tuple[str, dict[str, str]]) -> str:
+    """`docker inspect --format RAW_ENV_INSPECT_FORMAT` lines: name, space, env JSON."""
+    import json
+
+    return "".join(
+        f"/{name} {json.dumps([f'{k}={v}' for k, v in env.items()])}\n"
+        for name, env in containers
+    )
+
+
+def _raw(deployer, monkeypatch, *, recorded: str | None = _RELEASE_HASH):
+    """Make the fixture deployer a raw stack whose compose env records `recorded`."""
+    monkeypatch.setattr(
+        deployer, "_raw_identity_labels", classmethod(lambda cls: _LABELS)
+    )
+    monkeypatch.setattr(
+        deployer, "get_remote_config_hash", classmethod(lambda cls: recorded)
+    )
+    return deployer
+
+
+def _raw_stack(answer):
+    seen: list[str] = []
+
+    def run(cmd):
+        seen.append(cmd)
+        return answer
+
+    return deployer_module._HostStack("vps", "platform-app-abc123", run), seen
+
+
+def test_a_raw_stack_binds_its_running_containers_to_this_release(
+    deployer, monkeypatch
+):
+    """#1893: the file labels change only with the Vault config or template, so a
+    dropped deploy that left last release's file matched. The running containers must
+    carry the CONFIGURATION_SHA256 the compose env records."""
+    _raw(deployer, monkeypatch)
+    stack, seen = _raw_stack(
+        _Run(
+            True,
+            _inspected(
+                (
+                    "platform-app",
+                    {"PORT": "8000", "CONFIGURATION_SHA256": _RELEASE_HASH},
+                ),
+                ("platform-app-vault-agent", {"CONFIGURATION_SHA256": _RELEASE_HASH}),
+                ("platform-app-sidecar", {"PORT": "1"}),
+            ),
+        )
+    )
+    assert deployer._verify_raw_release_binding(stack) is None
+    assert len(seen) == 1
+    assert (
+        "docker ps -q --filter label=com.docker.compose.project=platform-app-abc123"
+        in seen[0]
+    )
+    assert "docker inspect --format" in seen[0] and "json .Config.Env" in seen[0]
+
+
+def test_a_raw_container_with_another_configuration_sha256_fails(deployer, monkeypatch):
+    _raw(deployer, monkeypatch)
+    stack, _seen = _raw_stack(
+        _Run(
+            True,
+            _inspected(
+                ("platform-app", {"CONFIGURATION_SHA256": _RELEASE_HASH}),
+                ("platform-app-vault-agent", {"CONFIGURATION_SHA256": _LAST_HASH}),
+            ),
+        )
+    )
+    message = deployer._verify_raw_release_binding(stack)
+    assert message and "run another release" in message
+    assert f"platform-app-vault-agent={_LAST_HASH[:12]}" in message
+    assert "platform-app=" not in message
+    empty, _seen = _raw_stack(
+        _Run(True, _inspected(("platform-app", {"CONFIGURATION_SHA256": ""})))
+    )
+    assert "platform-app=empty" in deployer._verify_raw_release_binding(empty)
+
+
+def test_a_raw_stack_with_no_container_that_sets_configuration_sha256_fails_closed(
+    deployer, monkeypatch
+):
+    _raw(deployer, monkeypatch)
+    for listing in ("", _inspected(("platform-app", {"PORT": "8000"}))):
+        stack, _seen = _raw_stack(_Run(True, listing))
+        message = deployer._verify_raw_release_binding(stack)
+        assert message and "sets CONFIGURATION_SHA256" in message
+    _raw(deployer, monkeypatch, recorded=None)
+    stack, seen = _raw_stack(_Run(True, "should not be read"))
+    message = deployer._verify_raw_release_binding(stack)
+    assert message and "records no CONFIGURATION_SHA256" in message and seen == []
+    _raw(deployer, monkeypatch)
+    broken, _seen = _raw_stack(_Run(False, "", "permission denied"))
+    with pytest.raises(deployer_module._StackUnobservable, match="permission denied"):
+        deployer._verify_raw_release_binding(broken)
+
+
+def test_verify_in_service_binds_a_raw_stack_after_its_containers_settle(
+    deployer, monkeypatch
+):
+    """The post-deploy path: the file proof, the containers, then the release binding."""
+    _raw(deployer, monkeypatch)
+    written = "".join(f"- {label}\n" for label in _LABELS)
+    healthy = _ps(
+        ("backend", "running", "Up 9 seconds (healthy)"),
+        ("frontend", "running", "Up 9 seconds (healthy)"),
+        ("vault-agent", "running", "Up 9 seconds (healthy)"),
+    )
+    stale = _inspected(("platform-app", {"CONFIGURATION_SHA256": _LAST_HASH}))
+    c = _Context([_Run(True, written), _Run(True, healthy), _Run(True, stale)])
+    message = deployer.verify_in_service(c, "cid")
+    assert message and "run another release" in message
+    assert "docker inspect" in c.commands[2] and len(c.commands) == 3
+    fresh = _inspected(("platform-app", {"CONFIGURATION_SHA256": _RELEASE_HASH}))
+    c = _Context([_Run(True, written), _Run(True, healthy), _Run(True, fresh)])
+    assert deployer.verify_in_service(c, "cid") is None
+    assert not any("rev-parse" in cmd for cmd in c.commands)
+
+
+def test_a_github_stack_keeps_its_proofs_without_the_release_binding(
+    deployer, monkeypatch
+):
+    """#1893 is raw only: a github stack proves HEAD (#629) and #1247 as before."""
+    monkeypatch.setattr(
+        deployer,
+        "_verify_raw_release_binding",
+        classmethod(lambda cls, stack: pytest.fail("a github stack was bound")),
+    )
+    healthy = _ps(
+        ("backend", "running", "Up 9 seconds (healthy)"),
+        ("frontend", "running", "Up 9 seconds (healthy)"),
+        ("vault-agent", "running", "Up 9 seconds (healthy)"),
+    )
+    c = _Context([_Run(True, "a" * 40 + "\n"), _Run(True, healthy)])
+    assert deployer.verify_in_service(c, "cid") is None
+    assert len(c.commands) == 2 and "rev-parse HEAD" in c.commands[0]
+    monkeypatch.setattr(
+        deployer,
+        "_find_remote_compose",
+        classmethod(lambda cls, e: {"env": f"IAC_DEPLOY_REF={'b' * 40}\n"}),
+    )
+    stack, seen = _raw_stack(_Run(True, "c" * 40 + "\n"))
+    message = deployer._verify_recorded_deploy_ref_checkout(stack)
+    assert message and "(#1247)" in message and "rev-parse HEAD" in seen[0]
+
+
+def test_the_raw_skip_path_no_longer_returns_a_silent_none(deployer, monkeypatch):
+    """#1893: `git rev-parse` always fails for a raw stack, so #1247 returned None on
+    the verify_still_in_service skip path. A raw stack now takes the binding."""
+    _raw(deployer, monkeypatch)
+    stale, seen = _raw_stack(
+        _Run(True, _inspected(("platform-app", {"CONFIGURATION_SHA256": _LAST_HASH})))
+    )
+    message = deployer._verify_recorded_deploy_ref_checkout(stale)
+    assert message and "run another release" in message
+    assert not any("rev-parse" in cmd for cmd in seen)
+    unset, _seen = _raw_stack(_Run(True, _inspected(("platform-app", {"PORT": "1"}))))
+    assert "sets CONFIGURATION_SHA256" in deployer._verify_recorded_deploy_ref_checkout(
+        unset
+    )
+    fresh, _seen = _raw_stack(
+        _Run(
+            True, _inspected(("platform-app", {"CONFIGURATION_SHA256": _RELEASE_HASH}))
+        )
+    )
+    assert deployer._verify_recorded_deploy_ref_checkout(fresh) is None
+
+
+def test_the_real_todo_containers_set_configuration_sha256() -> None:
+    """The binding needs a container that sets it: in the compiled todo compose, the
+    todo app and its vault-agent sidecar both do."""
+    import yaml
+
+    todo = deployer_module.load_deployer_class("platform/todo")
+    from common.deploy.compose_compile import load_stack
+
+    services = yaml.safe_load(load_stack(todo.compose_path).compiled)["services"]
+    carriers = {
+        name
+        for name, spec in services.items()
+        if "CONFIGURATION_SHA256" in (spec.get("environment") or {})
+    }
+    assert carriers == {"todo", "vault-agent"}

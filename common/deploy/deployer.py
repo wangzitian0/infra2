@@ -100,6 +100,9 @@ _RAW_IDENTITY_LABEL_RE = re.compile(
     r"infra2\.vault\.(?:config|template)\.sha256=[0-9a-f]{64}"
 )
 
+#: One line per container: its name, a space, and its env as a JSON list (#1893).
+RAW_ENV_INSPECT_FORMAT = "{{.Name}} {{json .Config.Env}}"
+
 
 class _HostStack(NamedTuple):
     """A Dokploy compose project on its host, and a way to ask the host about it."""
@@ -872,6 +875,10 @@ class Deployer:
 
         The identity proof holds only right after THIS checkout deployed the stack; a
         sync that skipped the deploy asks `verify_still_in_service` instead.
+
+        A raw stack has no checkout. Its file labels change only with the Vault config or
+        template, so once the containers settle it also proves they run this release's
+        `CONFIGURATION_SHA256` (`_verify_raw_release_binding`, #1893).
         """
         try:
             stack = cls._stack_on_host(c, compose_id)
@@ -880,7 +887,10 @@ class Deployer:
             identity_error = cls._verify_checkout_identity(stack)
             if identity_error:
                 return identity_error
-            return cls._verify_containers_in_service(c, stack)
+            container_error = cls._verify_containers_in_service(c, stack)
+            if container_error or cls._raw_identity_labels() is None:
+                return container_error
+            return cls._verify_raw_release_binding(stack)
         except _StackUnobservable as exc:
             return str(exc)
 
@@ -940,9 +950,15 @@ class Deployer:
         is recorded on the remote compose env, catching half-applied syncs where
         `upsert_github_compose` updated `IAC_DEPLOY_REF` in Dokploy DB before git clone
         completed.
+
+        A raw stack has no checkout, so `git rev-parse` always fails there and this check
+        returned a silent None (#1893). A raw stack proves instead that its running
+        containers carry the recorded `CONFIGURATION_SHA256`.
         """
         from common.deploy.dokploy_adapter import parse_remote_config_identity
 
+        if cls._raw_identity_labels() is not None:
+            return cls._verify_raw_release_binding(stack)
         e = cls.env()
         try:
             existing = cls._find_remote_compose(e)
@@ -1113,6 +1129,65 @@ class Deployer:
             return (
                 f"Dokploy's raw compose for {cls.service} lacks this deploy's identity "
                 f"label(s) {', '.join(missing)}; the record reports done on another compose"
+            )
+        return None
+
+    @classmethod
+    def _verify_raw_release_binding(cls, stack: _HostStack) -> str | None:
+        """The raw stack's running containers carry this release's config hash (#1893).
+
+        The expected value is the compose env `CONFIGURATION_SHA256`. Before each caller
+        runs, sync proves it equal to the local hash: `step_verify_and_finalize` after a
+        deploy, and the skip condition before `verify_still_in_service`. Every running
+        container that sets `CONFIGURATION_SHA256` must hold that value. No such
+        container fails closed: nothing then binds the containers to the release.
+        """
+        import json
+
+        expected = (cls.get_remote_config_hash() or "").strip()
+        if not expected:
+            return (
+                f"{cls.service} is raw but its compose env records no "
+                "CONFIGURATION_SHA256; its containers cannot be bound to a release"
+            )
+        listing = (
+            "docker ps -q --filter "
+            f"label=com.docker.compose.project={shlex.quote(stack.project)} "
+            f"| xargs -r docker inspect --format {shlex.quote(RAW_ENV_INSPECT_FORMAT)}"
+        )
+        result = stack.run(listing)
+        if not result.ok:
+            raise _StackUnobservable(
+                f"could not inspect {stack.project}'s containers on {stack.host}: "
+                f"{(result.stderr or '').strip() or 'docker inspect failed'}"
+            )
+        carried: dict[str, str] = {}
+        for line in (result.stdout or "").splitlines():
+            name, _sep, env_json = line.strip().partition(" ")
+            if not name or not env_json:
+                continue
+            try:
+                env_list = json.loads(env_json)
+            except ValueError:
+                continue
+            for item in env_list if isinstance(env_list, list) else ():
+                key, sep, value = str(item).partition("=")
+                if sep and key == "CONFIGURATION_SHA256":
+                    carried[name.lstrip("/")] = value
+        if not carried:
+            return (
+                f"no running container of {cls.service} sets CONFIGURATION_SHA256; "
+                "the raw stack cannot be bound to this release"
+            )
+        stale = sorted(
+            f"{name}={value[:12] or 'empty'}"
+            for name, value in carried.items()
+            if value != expected
+        )
+        if stale:
+            return (
+                f"{cls.service} containers run another release: {', '.join(stale)} "
+                f"but the compose env records CONFIGURATION_SHA256={expected[:12]}"
             )
         return None
 
