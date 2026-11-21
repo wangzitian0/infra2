@@ -523,3 +523,12 @@ def test_text_at_ref_refuses_an_unknown_base_and_returns_none_for_a_missing_file
     assert "services:" in (
         eq.text_at_ref("HEAD", "platform/30.todo/compose.yaml") or ""
     )
+
+
+def test_check_reports_an_unknown_base_before_any_file_migrates() -> None:
+    """Review of #1870 round 2: with no x-infra2 file, only check() itself reads the base."""
+    from common.deploy import compose_equivalence as eq
+
+    report = eq.check("deadbeefnotaref")
+    assert report.problems and "is not a commit" in report.problems[0], report.problems
+    assert report.files == 0
