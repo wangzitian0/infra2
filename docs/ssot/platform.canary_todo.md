@@ -43,7 +43,7 @@ Each check reports one of three states:
 | Check | Passes when | `fail` when | `unconfigured` when |
 |-------|-------------|-------------|---------------------|
 | `redis` | `AUTH`, `PING`, `SETEX`, `GET` (same random value), `DEL` all succeed | `-NOAUTH`, `-WRONGPASS`, any other error reply, a different value on `GET` | No `REDIS_PASSWORD` |
-| `postgres` | Login with `DATABASE_URL` (role `todo_app`), `SET LOCAL transaction_read_only = off` first, then `SELECT 1`, and a session-scoped temporary table `canary_todo_probe` `CREATE` / `INSERT` / `SELECT` / `DELETE` roundtrip all succeed | Any server `E` (ErrorResponse), a failed login, or a roundtrip mismatch | No role name or password |
+| `postgres` | Login with `DATABASE_URL` (role `todo_app`), `SET LOCAL transaction_read_only = off` first, then `SELECT 1`, and a session-scoped temporary table `canary_todo_probe` `CREATE` / `INSERT` / `SELECT` / `DELETE` roundtrip all succeed | Any server `E` (ErrorResponse), a failed login, or a roundtrip mismatch | `DATABASE_URL` is not set |
 | `s3` | `PUT`, `GET` (same body) and `DELETE` of `canary/<random>` in bucket `platform-canary` succeed | A denied or failed request, a different body | No bucket, access key or secret key |
 
 **Informational checks** (`signoz`, `openpanel`, `authentik`) test HTTP liveness (2xx or 3xx). They appear in `checks`, but they never change `ok` or the HTTP status. Each has its own probe and severity, so an outage must not page a second time as `todo-canary-status`. Custom OpenTelemetry metrics (`canary.probe.duration_ms` histogram and `canary.probe.outcomes` counter) record every probe execution.
