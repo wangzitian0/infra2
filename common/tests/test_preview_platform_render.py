@@ -190,11 +190,13 @@ def test_preview_todo_service_repeats_the_staging_compose_fields():
     assert {
         k for k in shared if slot["environment"][k] != prod["environment"][k]
     } == set()
-    # Secrets are the only environment names the slot adds.
+    # The slot adds only the secrets and DATABASE_URL, which production composes in
+    # secrets.ctmpl from the same password.
     config = preview_service_config(SERVICE)
     assert set(slot["environment"]) - set(prod["environment"]) == set(
         config.throwaway_secrets
-    )
+    ) | {"DATABASE_URL"}
+
     # Every slot label equals a production label, except the slot's own Docker network.
     own = {"traefik.docker.network=dokploy-network"}
     assert set(slot["labels"]) - own <= set(prod["labels"])
@@ -222,3 +224,25 @@ def test_slot_postgres_keeps_no_data_across_up():
     postgres = _services("platform/30.todo/preview.compose.yaml")["postgres"]
     assert "/var/lib/postgresql/data" in postgres["tmpfs"]
     assert not postgres.get("volumes")
+
+
+def test_todo_template_composes_database_url_from_the_todo_password():
+    # One login: the URL in the template and in the slot uses the role, database and host
+    # that compose.yaml gives the app, so a rename of one cannot leave the URL stale.
+    prod = _services("platform/30.todo/compose.yaml")
+    env = prod["todo"]["environment"]
+    role, database = env["TODO_POSTGRES_USER"], env["TODO_POSTGRES_DATABASE"]
+    host = env["POSTGRES_HOST"].replace("${ENV_SUFFIX}", "%s")
+    assert (role, database, host) == ("todo_app", "postgres", "platform-postgres%s")
+    template = (REPO_ROOT / "platform/30.todo/secrets.ctmpl").read_text()
+    assert (
+        'DATABASE_URL={{ printf "%q" (printf '
+        f'"postgresql://{role}:%s@{host}:{env["POSTGRES_PORT"]}/{database}" '
+        '.Data.data.TODO_POSTGRES_PASSWORD (env "ENV_SUFFIX")) }}'
+    ) in template
+    assert prod["vault-agent"]["environment"]["ENV_SUFFIX"] == "${ENV_SUFFIX:-}"
+    slot = _services("platform/30.todo/preview.compose.yaml")["todo"]["environment"]
+    assert slot["DATABASE_URL"] == (
+        f"postgresql://{role}:${{TODO_POSTGRES_PASSWORD}}"
+        f"@{env['POSTGRES_HOST']}:{env['POSTGRES_PORT']}/{database}"
+    )

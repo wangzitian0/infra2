@@ -142,6 +142,7 @@ services:
       TODO_POSTGRES_USER: todo_app
       TODO_POSTGRES_DATABASE: postgres
       TODO_POSTGRES_PASSWORD: ${TODO_POSTGRES_PASSWORD:?required}
+      DATABASE_URL: postgresql://todo_app:${TODO_POSTGRES_PASSWORD}@platform-postgres${ENV_SUFFIX}:5432/postgres
       REDIS_HOST: platform-redis${ENV_SUFFIX}
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}

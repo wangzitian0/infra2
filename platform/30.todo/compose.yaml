@@ -33,6 +33,8 @@ services:
       VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
       VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
       ENV: ${ENV}
+      # secrets.ctmpl reads it to compose DATABASE_URL.
+      ENV_SUFFIX: ${ENV_SUFFIX:-}
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
     healthcheck:
       test:
