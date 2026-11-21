@@ -237,7 +237,7 @@ def test_todo_role_name_is_one_fact_across_deployer_and_database_url(deploy) -> 
     )
 
 
-def test_the_canary_ro_login_is_gone_and_its_vault_key_is_kept_from_the_prune(
+def test_the_canary_ro_login_is_gone_and_the_prune_removes_its_vault_key(
     deploy,
 ) -> None:
     deployer = deploy.TodoDeployer
@@ -251,10 +251,13 @@ def test_the_canary_ro_login_is_gone_and_its_vault_key_is_kept_from_the_prune(
     assert [name for name in env if "POSTGRES" in name] == []
     template = (SERVICE_DIR / "secrets.ctmpl").read_text()
     assert "CANARY_POSTGRES_PASSWORD" not in template
-    # The prune deletes a Vault key that is in no manifest. This entry keeps the key
-    # until the owner approves its deletion in production (#1823).
+    # The supply prune deletes a Vault key that the registry does not list. No entry
+    # keeps the key of the removed login (#1823).
     service = secrets_registry.lookup("platform", "todo")
-    assert service.store_only_keys == ("CANARY_POSTGRES_PASSWORD",)
+    assert service.store_only_keys == ()
+    kept = secrets_registry.store_keys(service)
+    assert "CANARY_POSTGRES_PASSWORD" not in kept
+    assert "TODO_POSTGRES_PASSWORD" in kept, "the key behind DATABASE_URL stays"
 
 
 class _Run:
