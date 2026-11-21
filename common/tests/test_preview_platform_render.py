@@ -190,11 +190,17 @@ def test_preview_todo_service_repeats_the_staging_compose_fields():
     assert {
         k for k in shared if slot["environment"][k] != prod["environment"][k]
     } == set()
-    # Secrets are the only environment names the slot adds.
+    # The slot adds only the secrets and DATABASE_URL, which production composes in
+    # secrets.ctmpl from the same password.
     config = preview_service_config(SERVICE)
     assert set(slot["environment"]) - set(prod["environment"]) == set(
         config.throwaway_secrets
+    ) | {"DATABASE_URL"}
+    assert slot["environment"]["DATABASE_URL"] == (
+        "postgresql://todo_app:${TODO_POSTGRES_PASSWORD:?required}"
+        "@platform-postgres${ENV_SUFFIX}:5432/postgres"
     )
+
     # Every slot label equals a production label, except the slot's own Docker network.
     own = {"traefik.docker.network=dokploy-network"}
     assert set(slot["labels"]) - own <= set(prod["labels"])
@@ -222,3 +228,15 @@ def test_slot_postgres_keeps_no_data_across_up():
     postgres = _services("platform/30.todo/preview.compose.yaml")["postgres"]
     assert "/var/lib/postgresql/data" in postgres["tmpfs"]
     assert not postgres.get("volumes")
+
+
+def test_todo_template_composes_database_url_from_the_todo_password():
+    # The slot URL and the Vault template URL must name the same login and host.
+    template = (REPO_ROOT / "platform/30.todo/secrets.ctmpl").read_text()
+    assert (
+        'DATABASE_URL={{ printf "%q" (printf '
+        '"postgresql://todo_app:%s@platform-postgres%s:5432/postgres" '
+        '.Data.data.TODO_POSTGRES_PASSWORD (env "ENV_SUFFIX")) }}'
+    ) in template
+    agent = _services("platform/30.todo/compose.yaml")["vault-agent"]
+    assert agent["environment"]["ENV_SUFFIX"] == "${ENV_SUFFIX:-}"
