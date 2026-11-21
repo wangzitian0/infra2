@@ -521,7 +521,26 @@ def test_todo_runtime_hooks_manifest_declares_all_five_slots(tmp_path) -> None:
         assert "EXPECTED_SHA" not in command, cid
     assert "--require-service platform/todo" in checks["staging_gate"].argv[-1]
     for gate in ("staging_gate", "prod_gate"):
-        assert checks[gate].argv[-1].endswith(' --gate "$APP_VERSION_REF"'), gate
+        command = checks[gate].argv[-1]
+        assert command.endswith(
+            ' --gate "${APP_VERSION_REF:?APP_VERSION_REF is not set}"'
+        ), gate
+        # An empty ref stops the shell before probe_health runs (#1853 review).
+        empty = subprocess.run(
+            ["sh", "-c", command.replace("python3 probe_health.py", "echo")],
+            env={
+                "PATH": "/usr/bin:/bin",
+                "APP_URL": "https://t",
+                "APP_VERSION_REF": "",
+            },
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        assert empty.returncode != 0 and "APP_VERSION_REF is not set" in empty.stderr, (
+            gate
+        )
     assert "--gate" not in checks["smoke"].argv[-1]
     assert (SERVICE_DIR / "probe_health.py").is_file()
 

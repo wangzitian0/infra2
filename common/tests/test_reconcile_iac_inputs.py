@@ -4453,6 +4453,18 @@ def test_release_ref_is_needed_only_by_the_slot_that_declares_checkout_lineage(
     assert reconcile._slot_release_ref(manifest, (slot,), "v1.2.3") == expected
 
 
+def test_an_off_lineage_check_does_not_ask_for_the_tag_checkout() -> None:
+    """Schema 3 reads checkout_lineage from active checks of the slot cells
+    (slot_checkout_lineage, #1853). An off check runs nothing, so it needs no tag history."""
+    manifest = _hooks_v3("truealpha/app", lineage=("scheduled_audit",))
+    raw = manifest.to_dict()
+    for row in raw["checks"]:
+        if row["id"] == "scheduled_audit":
+            row["off"] = {"reason": "paused", "issue": "infra2#1823"}
+    paused = reconcile.RuntimeHooksManifest.from_dict(raw)
+    assert reconcile._slot_release_ref(paused, ("scheduled_audit",), "v1.2.3") == ""
+
+
 def _record_hook_checkouts(monkeypatch, tmp_path) -> list[tuple[str, str]]:
     """Stub the hook environment of a reconcile run; return the (service, release_ref)
     of every hook checkout that the run asks for."""

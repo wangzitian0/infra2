@@ -59,7 +59,7 @@
       "argv": [
         "sh",
         "-c",
-        "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo --verify-summary-sso --gate \"$APP_VERSION_REF\""
+        "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo --verify-summary-sso --gate \"${APP_VERSION_REF:?APP_VERSION_REF is not set}\""
       ],
       "needs": [
         "code",
@@ -90,7 +90,7 @@
       "argv": [
         "sh",
         "-c",
-        "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo --verify-summary-sso --gate \"$APP_VERSION_REF\""
+        "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo --verify-summary-sso --gate \"${APP_VERSION_REF:?APP_VERSION_REF is not set}\""
       ],
       "needs": [
         "code",
