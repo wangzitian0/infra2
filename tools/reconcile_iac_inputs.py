@@ -72,7 +72,15 @@ from common.deploy.env_config import (
 )
 from common.deploy.github_api import API as GITHUB_API, github_headers
 from common.deploy.stage_record import utc_now, write_stage_record
-from common.deploy.canary_pin import APP_SDK_RANGE, canary_sdk_unit, in_app_sdk_range
+from common.deploy.canary_pin import (
+    APP_SDK_RANGE,
+    CANARY_COMPOSE_RELS,
+    canary_sdk_unit,
+    canary_sdk_version,
+    in_app_sdk_range,
+    resolve_canary_digest,
+    rewrite_canary_pin,
+)
 from common.deploy.stage_record_reader import verified_sdk_versions
 from common.deploy.release_markers import (
     PRODUCTION_MARKER_PREFIX,
@@ -1370,34 +1378,23 @@ def sync_app_releases(
     }
 
 
-def _rewrite_sdk_wheel_pin(
-    pyproject_path: Path, current_sdk: str, target_sdk: str
-) -> bool:
-    """Update ``infra2-sdk`` wheel URL version in ``pyproject.toml`` when present."""
-    if not pyproject_path.is_file() or not current_sdk:
-        return False
-    text = pyproject_path.read_text(encoding="utf-8")
-    updated = re.sub(
-        rf"v{re.escape(current_sdk)}/infra2_sdk-{re.escape(current_sdk)}-",
-        f"v{target_sdk}/infra2_sdk-{target_sdk}-",
-        text,
-    )
-    if updated == text:
-        return False
-    pyproject_path.write_text(updated, encoding="utf-8")
-    return True
-
-
 def sync_sdk_pins(
     repo_root: Path = REPO_ROOT,
     *,
     create_pr: bool = False,
-    pr_branch: str = "chore/sdk-bump-infra2",
+    pr_branch: str = "chore/canary-sdk-pin",
     latest_sdk: str | None = None,
     verified_versions: set[str] | None = None,
+    digest_resolver: Callable[[str], str] | None = None,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
 ) -> dict[str, object]:
-    """Open Canary bump PR for ``infra2`` first, holding downstream App bumps until verified (#1639)."""
+    """Move the Canary image pin to the newest infra2-sdk release; hold App bumps until verified.
+
+    infra2-sdk publishes ``infra2-canary-todo:vX`` with each release tag (infra2-sdk#247). The
+    pin lives in ``platform/30.todo/compose.yaml`` and its preview copy (``canary_pin.py``).
+    The infra2 own SDK pin (``uv.lock``) is a library pin of its tools; this function does
+    not move it (#1823 Step 3).
+    """
     if latest_sdk is not None:
         target_sdk = latest_sdk.strip().removeprefix("v")
     else:
@@ -1420,18 +1417,9 @@ def sync_sdk_pins(
         )
         target_sdk = (rel_proc.stdout or "").strip().removeprefix("v")
 
-    lock_rel = "uv" + ".lock"
-    lock_file = repo_root / lock_rel
-    current_sdk = ""
-    if lock_file.is_file():
-        current_sdk = _extract_sdk_version_from_requirement(sdk_requirement(lock_file))
-
-    needs_infra2_bump = bool(
-        target_sdk
-        and (
-            not current_sdk
-            or version_key(f"v{target_sdk}") > version_key(f"v{current_sdk}")
-        )
+    current_sdk = canary_sdk_version(repo_root)
+    needs_canary_bump = bool(
+        target_sdk and version_key(f"v{target_sdk}") > version_key(f"v{current_sdk}")
     )
     verified = (
         set(verified_versions)
@@ -1444,33 +1432,35 @@ def sync_sdk_pins(
     held_apps = [] if canary_verified else sorted(APP_SOURCES.keys())
     eligible_apps = sorted(APP_SOURCES.keys()) if canary_verified else []
 
+    digest = ""
     pr_created = False
     pr_updated = False
     pr_url = ""
     pr_number: int | None = None
-    if needs_infra2_bump and create_pr:
-        pyproject_path = repo_root / "pyproject.toml"
-        _rewrite_sdk_wheel_pin(pyproject_path, current_sdk, target_sdk)
-        runner(
-            ["uv", "lock"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        commit_msg = f"chore(sdk): bump infra2-sdk to v{target_sdk} (canary)"
+    if needs_canary_bump and create_pr:
+        digest = (digest_resolver or resolve_canary_digest)(target_sdk)
+        for rel in CANARY_COMPOSE_RELS:
+            path = repo_root / rel
+            path.write_text(
+                rewrite_canary_pin(
+                    path.read_text(encoding="utf-8"), target_sdk, digest
+                ),
+                encoding="utf-8",
+            )
+        commit_msg = f"chore(todo): pin the Canary image to infra2-sdk v{target_sdk}"
         pr_body = (
-            f"Bump `infra2-sdk` pin in `infra2` (Canary `platform/todo`) from "
-            f"`v{current_sdk or 'unknown'}` to `v{target_sdk}` (#1639).\n\n"
-            f"Downstream App SDK bumps remain held until Canary `staging_gate` "
-            f"records `sdk:{target_sdk}` in `staging.release_validation`."
+            f"Move the Canary image pin from `v{current_sdk}` to `v{target_sdk}@{digest}` "
+            "(infra2-sdk#247, #1823 Step 0).\n\n"
+            "The next release tag deploys it to staging. Its staging gate requires the "
+            f"running Canary to report `sdk_version == {target_sdk}`, and its record adds "
+            f"`sdk:{target_sdk}` to the verified set. App SDK bumps wait for that."
         )
         pr_result = _open_or_update_pr(
             repo_root,
             pr_branch=pr_branch,
             commit_msg=commit_msg,
             pr_body=pr_body,
-            paths_to_add=["pyproject.toml", lock_rel],
+            paths_to_add=list(CANARY_COMPOSE_RELS),
             runner=runner,
         )
         pr_created = bool(pr_result["pr_created"])
@@ -1481,12 +1471,13 @@ def sync_sdk_pins(
 
     return {
         "latest_sdk": target_sdk,
-        "current_infra2_sdk": current_sdk,
-        "needs_infra2_bump": needs_infra2_bump,
+        "current_canary_sdk": current_sdk,
+        "needs_canary_bump": needs_canary_bump,
+        "canary_digest": digest,
         "canary_verified": canary_verified,
         "held_apps": held_apps,
         "eligible_apps": eligible_apps,
-        "pr_branch": pr_branch if create_pr and needs_infra2_bump else "",
+        "pr_branch": pr_branch if create_pr and needs_canary_bump else "",
         "pr_created": pr_created,
         "pr_updated": pr_updated,
         "pr_url": pr_url,
@@ -3794,7 +3785,7 @@ def main(argv: list[str] | None = None) -> int:
             repo_root,
             create_pr=args.create_pr,
             pr_branch=(
-                "chore/sdk-bump-infra2"
+                "chore/canary-sdk-pin"
                 if args.pr_branch == "chore/sync-app-releases"
                 else args.pr_branch
             ),

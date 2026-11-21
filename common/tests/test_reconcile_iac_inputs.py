@@ -5045,22 +5045,18 @@ def test_sync_app_releases_missing_token_sdk_record_fails_not_held(
 def test_sync_sdk_pins_holds_app_prs_until_canary_verified(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """#1639: Canary infra2 bumps first; downstream Apps wait until Canary staging_gate verifies SDK."""
-    lock_rel = "uv" + ".lock"
-    sample_lock = (ROOT / lock_rel).read_text(encoding="utf-8")
-    current_match = re.search(r"infra2_sdk-([0-9]+\.[0-9]+\.[0-9]+)-", sample_lock)
-    assert current_match
-    locked_ver = current_match.group(1)
+    """#1639, #1823: the Canary image pin moves first; Apps wait until staging verifies it."""
+    import shutil
 
-    old_ver = "3.28.0"
-    assert locked_ver != old_ver
-    (tmp_path / lock_rel).write_text(
-        sample_lock.replace(locked_ver, old_ver), encoding="utf-8"
-    )
-    (tmp_path / "pyproject.toml").write_text(
-        f'"infra2-sdk @ https://example.com/releases/download/v{old_ver}/infra2_sdk-{old_ver}-py3-none-any.whl"\n',
-        encoding="utf-8",
-    )
+    from common.deploy.canary_pin import CANARY_COMPOSE_RELS, canary_sdk_version
+
+    for rel in CANARY_COMPOSE_RELS:
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / rel, tmp_path / rel)
+    current = canary_sdk_version(tmp_path)
+    major, minor, patch = (int(part) for part in current.split("."))
+    target = f"{major}.{minor}.{patch + 1}"
+    digest = "sha256:" + "b" * 64
 
     calls: list[list[str]] = []
 
@@ -5083,34 +5079,42 @@ def test_sync_sdk_pins_holds_app_prs_until_canary_verified(
     monkeypatch.setattr(
         reconcile, "APP_SOURCES", {"finance_report/app": "w/f", "truealpha/app": "w/t"}
     )
+    resolved: list[str] = []
     res_held = reconcile.sync_sdk_pins(
         tmp_path,
         create_pr=True,
-        latest_sdk=f"v{locked_ver}",
-        verified_versions={old_ver},
+        latest_sdk=f"v{target}",
+        verified_versions={current},
+        digest_resolver=lambda version: resolved.append(version) or digest,
         runner=_runner,
     )
-    assert res_held["needs_infra2_bump"] is True
+    assert res_held["needs_canary_bump"] is True
+    assert res_held["current_canary_sdk"] == current
+    assert res_held["canary_digest"] == digest
     assert res_held["canary_verified"] is False
     assert res_held["held_apps"] == ["finance_report/app", "truealpha/app"]
-    assert res_held["eligible_apps"] == []
-    assert res_held["pr_created"] is True
-    assert res_held["pr_number"] == 1800
-    assert f"infra2_sdk-{locked_ver}-" in (tmp_path / "pyproject.toml").read_text(
-        encoding="utf-8"
-    )
-    assert ["uv", "lock"] in calls
+    assert res_held["pr_created"] is True and res_held["pr_number"] == 1800
+    assert resolved == [target]
+    for rel in CANARY_COMPOSE_RELS:
+        assert f"infra2-canary-todo:v{target}@{digest}" in (tmp_path / rel).read_text()
+    assert canary_sdk_version(tmp_path) == target
+    assert ["uv", "lock"] not in calls, "the infra2 own SDK pin does not move"
+    added = [argv for argv in calls if argv[:2] == ["git", "add"]]
+    assert added and all(rel in added[0] for rel in CANARY_COMPOSE_RELS)
 
     res_ready = reconcile.sync_sdk_pins(
         tmp_path,
-        create_pr=False,
-        latest_sdk=locked_ver,
-        verified_versions={old_ver, locked_ver},
+        create_pr=True,
+        latest_sdk=target,
+        verified_versions={current, target},
+        digest_resolver=lambda _v: pytest.fail("no bump: no digest lookup"),
         runner=_runner,
     )
+    assert res_ready["needs_canary_bump"] is False
     assert res_ready["canary_verified"] is True
     assert res_ready["held_apps"] == []
     assert res_ready["eligible_apps"] == ["finance_report/app", "truealpha/app"]
+    assert res_ready["pr_created"] is False
 
 
 def test_open_or_update_pr_shared_by_app_and_sdk_sync() -> None:
