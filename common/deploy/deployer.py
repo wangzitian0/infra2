@@ -1094,6 +1094,13 @@ class Deployer:
         removes ``code/``, so a file that exists was written by a deploy, and the compiled
         identity labels (Vault agent config and template hashes) must be in it.
         """
+        if not labels:
+            # Fail closed: a raw stack without an x-vault sidecar compiles no identity
+            # label, and a file that only exists proves nothing (review of #1892).
+            return (
+                f"{cls.service} is raw but its compiled compose has no identity label; "
+                "Dokploy's raw file cannot be proven to be this deploy's"
+            )
         path = f"/etc/dokploy/compose/{stack.project}/code/docker-compose.yml"
         got = stack.run(f"cat {shlex.quote(path)}")
         if not got.ok:

@@ -1123,3 +1123,12 @@ def test_the_real_todo_stack_is_raw_with_both_identity_labels() -> None:
         "infra2.vault.config.sha256",
         "infra2.vault.template.sha256",
     }
+
+
+def test_a_raw_stack_without_identity_labels_fails_closed(deployer) -> None:
+    """Review of #1892: with no label, the file-exists check alone proves nothing."""
+    stack = deployer_module._HostStack(
+        "vps", "platform-app-abc123", lambda cmd: _Run(True, "services: {}\n")
+    )
+    message = deployer._verify_raw_identity(stack, ())
+    assert message and "no identity label" in message
