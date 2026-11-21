@@ -117,7 +117,7 @@ services:
     # Built and published by infra2-sdk release.yml from canary/todo at the same tag, so the
     # tag is the SDK version the Canary proves (infra2-sdk#247). common/deploy/canary_pin.py
     # is the one reader of this line.
-    image: ghcr.io/wangzitian0/infra2-canary-todo:v3.35.0@sha256:9cb86f8fb7312c985da8bd794c8440a66b48bef7781b406494c89289a683f35c
+    image: ghcr.io/wangzitian0/infra2-canary-todo:v3.35.1@sha256:98655ef683d227ca28659853717bcbe4f0e665c120f55cbffc73c25ab65ffbb4
     container_name: platform-todo${ENV_SUFFIX}
     mem_limit: 256m
     cpu_shares: 512
