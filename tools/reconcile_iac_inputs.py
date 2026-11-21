@@ -53,6 +53,7 @@ from common.deploy.app_contract import (
     hook_env_for_slot,
     fetch_hooks_manifest,
     schema3_empty_cells,
+    slot_checkout_lineage,
     schema3_required_env,
     git_url,
     load_hooks_manifest,
@@ -96,8 +97,6 @@ from common.deploy.promotion_guard import require_upstream_post, required_stagin
 from infra2_sdk.deploy import DeployRequest
 from infra2_sdk.observability import CheckVerdict
 from infra2_sdk.manifests import (
-    FORBIDDEN_HOOK_ENV_NAMES,
-    FORBIDDEN_HOOK_ENV_PREFIXES,
     STAGE_HOOK_PLANS,  # noqa: F401
     HookRunResult,
     StageHookPlan,  # noqa: F401
@@ -1514,13 +1513,7 @@ def _slot_release_ref(
     """Return ``version_ref`` when any requested slot declares ``checkout_lineage=True``."""
     if not isinstance(manifest, RuntimeHooksManifest):
         return ""
-    return (
-        version_ref
-        if any(
-            s in manifest.slots and manifest.slots[s].checkout_lineage for s in slots
-        )
-        else ""
-    )
+    return version_ref if any(slot_checkout_lineage(manifest, s) for s in slots) else ""
 
 
 def resolve_app_hook_cwd(
@@ -1661,48 +1654,15 @@ def audit_app_hooks(
                 f"got {manifest.schema_version!r}"
             )
         for slot_name in slots or HOOK_SLOTS:
-            if manifest.schema_version == 3:
-                for cell in schema3_empty_cells(manifest, slot_name):
-                    slot_errors.append(
-                        f"no check runs in cell {cell!r} (slot {slot_name!r})"
-                    )
-                for env_name in schema3_required_env(manifest, slot_name):
-                    if env_name not in supplied:
-                        message = f"unsupplied required_env {env_name!r}"
-                        if message not in slot_errors:
-                            slot_errors.append(message)
-                if ambient_env is None:
-                    continue
-                try:
-                    hook_env_for_slot(
-                        manifest,
-                        slot_name,
-                        app_url=_app_url_for(service, target_env, "zitian.party"),
-                        environment="production"
-                        if target_env in ("prod", "production")
-                        else "staging",
-                        version_ref=pinned_tag or "main",
-                        ambient_env=ambient_env,
-                    )
-                except ValueError as exc:
-                    slot_errors.append(f"{slot_name}: {exc}")
-                continue
-            if slot_name not in manifest.slots:
-                slot_errors.append(f"missing slot {slot_name!r}")
-                continue
-            spec = manifest.slots[slot_name]
-            for env_name in (*spec.required_env, *spec.optional_env):
-                if env_name in FORBIDDEN_HOOK_ENV_NAMES or env_name.startswith(
-                    FORBIDDEN_HOOK_ENV_PREFIXES
-                ):
-                    slot_errors.append(
-                        f"forbidden secret {env_name!r} in slot {slot_name!r}"
-                    )
-            for env_name in spec.required_env:
+            for cell in schema3_empty_cells(manifest, slot_name):
+                slot_errors.append(
+                    f"no check runs in cell {cell!r} (slot {slot_name!r})"
+                )
+            for env_name in schema3_required_env(manifest, slot_name):
                 if env_name not in supplied:
-                    slot_errors.append(
-                        f"unsupplied required_env {env_name!r} in slot {slot_name!r}"
-                    )
+                    message = f"unsupplied required_env {env_name!r}"
+                    if message not in slot_errors:
+                        slot_errors.append(message)
             if ambient_env is None:
                 continue
             try:
@@ -1731,7 +1691,7 @@ def audit_app_hooks(
                 "ok": True,
                 "source": source,
                 "pinned_tag": pinned_tag,
-                "slots": list(manifest.slots.keys()),
+                "slots": list(slots or HOOK_SLOTS),
             }
 
     return {
@@ -2290,9 +2250,7 @@ def run_scheduled_app_audits(
             if not local_path.is_file():
                 local_path = REPO_ROOT / rel_local
             manifest = load_hooks_manifest(local_path)
-            # Schema 3 never skips a slot: an empty cell runs and fails (run_cell, #1849).
-            if manifest.schema_version == 2 and slot not in manifest.slots:
-                continue
+            # A slot is never skipped: an empty cell runs and fails (run_cell, #1849).
             version_ref = "main"
             source_sha = "local"
             app_url = _local_service_app_url(service, target_env, effective_domain)
@@ -2315,9 +2273,7 @@ def run_scheduled_app_audits(
                 source_sha,
                 manifest_fetcher=manifest_fetcher,
             )
-            # Schema 3 never skips a slot: an empty cell runs and fails (run_cell, #1849).
-            if manifest.schema_version == 2 and slot not in manifest.slots:
-                continue
+            # A slot is never skipped: an empty cell runs and fails (run_cell, #1849).
             hook_cwd, tmp_checkout = resolve_app_hook_cwd(
                 service,
                 source_sha,

@@ -1,58 +1,151 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "service": "platform/todo",
-  "slots": {
-    "smoke": {
-      "run": "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\"",
-      "timeout_seconds": 60,
-      "required_env": [
-        "APP_URL"
+  "required_env": [
+    "APP_URL"
+  ],
+  "optional_env": [
+    "TARGET_URL"
+  ],
+  "checks": [
+    {
+      "id": "smoke",
+      "argv": [
+        "sh",
+        "-c",
+        "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\""
       ],
-      "optional_env": [
-        "TARGET_URL"
-      ]
+      "needs": [
+        "code",
+        "running_service"
+      ],
+      "writes": false,
+      "accepts_scale": false,
+      "timeout_seconds": 60
     },
-    "preview_gate": {
-      "run": "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo",
+    {
+      "id": "preview_gate",
+      "argv": [
+        "sh",
+        "-c",
+        "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo"
+      ],
+      "needs": [
+        "code",
+        "running_service"
+      ],
+      "writes": false,
+      "accepts_scale": false,
       "timeout_seconds": 120,
-      "required_env": [
-        "APP_URL"
-      ],
-      "optional_env": [
-        "TARGET_URL"
-      ]
+      "cells": {
+        "remove": {
+          "staging.post": {
+            "reason": "preview_gate runs in preview.post only (schema 2 slot preview_gate)",
+            "issue": "wangzitian0/infra2#1823"
+          },
+          "prod.post": {
+            "reason": "preview_gate runs in preview.post only (schema 2 slot preview_gate)",
+            "issue": "wangzitian0/infra2#1823"
+          },
+          "scheduled_audit": {
+            "reason": "preview_gate runs in preview.post only (schema 2 slot preview_gate)",
+            "issue": "wangzitian0/infra2#1823"
+          }
+        }
+      }
     },
-    "staging_gate": {
-      "run": "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo --verify-summary-sso --gate \"$EXPECTED_SHA\"",
+    {
+      "id": "staging_gate",
+      "argv": [
+        "sh",
+        "-c",
+        "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo --verify-summary-sso --gate \"$APP_VERSION_REF\""
+      ],
+      "needs": [
+        "code",
+        "running_service"
+      ],
+      "writes": false,
+      "accepts_scale": false,
       "timeout_seconds": 180,
-      "required_env": [
-        "APP_URL",
-        "EXPECTED_SHA"
-      ],
-      "optional_env": [
-        "TARGET_URL"
-      ]
+      "cells": {
+        "remove": {
+          "preview.post": {
+            "reason": "staging_gate runs in staging.post only (schema 2 slot staging_gate)",
+            "issue": "wangzitian0/infra2#1823"
+          },
+          "prod.post": {
+            "reason": "staging_gate runs in staging.post only (schema 2 slot staging_gate)",
+            "issue": "wangzitian0/infra2#1823"
+          },
+          "scheduled_audit": {
+            "reason": "staging_gate runs in staging.post only (schema 2 slot staging_gate)",
+            "issue": "wangzitian0/infra2#1823"
+          }
+        }
+      }
     },
-    "prod_gate": {
-      "run": "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo --verify-summary-sso --gate \"$EXPECTED_SHA\"",
+    {
+      "id": "prod_gate",
+      "argv": [
+        "sh",
+        "-c",
+        "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo --verify-summary-sso --gate \"$APP_VERSION_REF\""
+      ],
+      "needs": [
+        "code",
+        "running_service"
+      ],
+      "writes": false,
+      "accepts_scale": false,
       "timeout_seconds": 120,
-      "required_env": [
-        "APP_URL",
-        "EXPECTED_SHA"
-      ],
-      "optional_env": [
-        "TARGET_URL"
-      ]
+      "cells": {
+        "remove": {
+          "preview.post": {
+            "reason": "prod_gate runs in prod.post only (schema 2 slot prod_gate)",
+            "issue": "wangzitian0/infra2#1823"
+          },
+          "staging.post": {
+            "reason": "prod_gate runs in prod.post only (schema 2 slot prod_gate)",
+            "issue": "wangzitian0/infra2#1823"
+          },
+          "scheduled_audit": {
+            "reason": "prod_gate runs in prod.post only (schema 2 slot prod_gate)",
+            "issue": "wangzitian0/infra2#1823"
+          }
+        }
+      }
     },
-    "scheduled_audit": {
-      "run": "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo --verify-summary-sso",
-      "timeout_seconds": 300,
-      "required_env": [
-        "APP_URL"
+    {
+      "id": "scheduled_audit",
+      "argv": [
+        "sh",
+        "-c",
+        "python3 probe_health.py \"${TARGET_URL:-$APP_URL}\" --require-service platform/todo --verify-summary-sso"
       ],
-      "optional_env": [
-        "TARGET_URL"
-      ]
+      "needs": [
+        "code",
+        "running_service"
+      ],
+      "writes": false,
+      "accepts_scale": false,
+      "timeout_seconds": 300,
+      "cells": {
+        "remove": {
+          "preview.post": {
+            "reason": "scheduled_audit runs in scheduled_audit only (schema 2 slot scheduled_audit)",
+            "issue": "wangzitian0/infra2#1823"
+          },
+          "staging.post": {
+            "reason": "scheduled_audit runs in scheduled_audit only (schema 2 slot scheduled_audit)",
+            "issue": "wangzitian0/infra2#1823"
+          },
+          "prod.post": {
+            "reason": "scheduled_audit runs in scheduled_audit only (schema 2 slot scheduled_audit)",
+            "issue": "wangzitian0/infra2#1823"
+          }
+        }
+      }
     }
-  }
+  ]
 }

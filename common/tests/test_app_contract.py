@@ -13,7 +13,7 @@ import pytest
 from common.deploy import app_contract
 from common.deploy.release_markers import newest_release_tag, production_marker
 from infra2_sdk.deploy import DeployRequest
-from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+from infra2_sdk.manifests import HookRunResult, RuntimeHooksManifest
 from infra2_sdk.refs import ResolvedRef
 from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
 
@@ -580,19 +580,19 @@ def test_query_serving_release_returns_authoritative_dokploy_and_health_state() 
 
 def test_fetch_and_execute_app_hook_slot(tmp_path: Path) -> None:
     raw_hooks = {
-        "schema_version": 2,
+        "schema_version": 3,
         "service": "truealpha/app",
-        "slots": {
-            slot: {
-                "run": "python3 -c \"print('ok')\"",
-                "bootstrap": "",
+        "checks": [
+            {
+                "id": slot,
+                "argv": ["python3", "-c", "print('ok')"],
+                "needs": ["code", "running_service"],
+                "writes": False,
+                "accepts_scale": False,
                 "timeout_seconds": 30,
-                "required_env": [],
-                "optional_env": [],
-                "artifacts_dir": f"artifacts/{slot}",
             }
-            for slot in HOOK_SLOTS
-        },
+            for slot in app_contract.HOOK_SLOTS
+        ],
     }
     manifest_bytes = json.dumps(raw_hooks).encode("utf-8")
     manifest = app_contract.fetch_hooks_manifest(
@@ -601,7 +601,7 @@ def test_fetch_and_execute_app_hook_slot(tmp_path: Path) -> None:
         manifest_fetcher=lambda _url: manifest_bytes,
     )
     assert isinstance(manifest, RuntimeHooksManifest)
-    assert tuple(manifest.slots) == HOOK_SLOTS
+    assert tuple(check.id for check in manifest.checks) == app_contract.HOOK_SLOTS
 
     result = app_contract.execute_app_hook_slot(
         manifest,

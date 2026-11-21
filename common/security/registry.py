@@ -18,7 +18,7 @@ from common.core.constants import REPO_ROOT
 # vault audit installs neither the SDK nor a manifest loader); only manifest loading needs
 # infra2_sdk, so it is imported where it is used.
 if TYPE_CHECKING:
-    from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
+    from infra2_sdk.runtime.config_schema import EnvironmentManifest
 
 ROOT = REPO_ROOT
 ENVIRONMENTS = ("production", "staging")
@@ -215,40 +215,15 @@ def load_manifest(path: str, *, root: Path = ROOT) -> EnvironmentManifest:
     )
 
 
-_RENDER_KEYS = (
-    "source",
-    "provided_by",
-    "composed_from",
-    "store_key",
-    "empty_ok",
-    "scope",
-)
-
-
 def merged_manifest(service: Service, *, root: Path = ROOT) -> EnvironmentManifest:
-    """Union of a service's manifests.
+    """Union of a service's manifests (``infra2_sdk.runtime.merge_manifests``)."""
+    from infra2_sdk.runtime import merge_manifests
 
-    Two apps in one stack may declare the same variable (both truealpha apps read
-    DATABASE_URL); they must agree on how it is produced and rendered, and the first
-    declaration wins for the rest (requiredness, description).
-    """
-    from infra2_sdk.runtime.config_schema import EnvironmentManifest
-
-    fields: dict[str, EnvironmentField] = {}
-    for path in service.manifests:
-        for entry in load_manifest(path, root=root).fields:
-            if entry.env in service.exclude_envs:
-                continue
-            existing = fields.get(entry.env)
-            if existing is not None:
-                for key in _RENDER_KEYS:
-                    if getattr(existing, key) != getattr(entry, key):
-                        raise ValueError(
-                            f"{service.directory}: {entry.env}.{key} declared differently in {path}"
-                        )
-                continue
-            fields[entry.env] = entry
-    return EnvironmentManifest(source=service.id, fields=tuple(fields.values()))
+    return merge_manifests(
+        [(path, load_manifest(path, root=root)) for path in service.manifests],
+        source=service.id,
+        exclude=service.exclude_envs,
+    )
 
 
 def lookup(project: str, service: str, *, preview: bool = False) -> Service | None:

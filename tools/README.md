@@ -49,7 +49,7 @@ automatically from the service's `ProbeFacet`/`SignalFacet` declarations);
 `reconcile-iac-inputs.yml`. It detects changed `iac_pinned` platform services and App `release_tag`
 or `10.app/**` updates in `harness/repos.yaml`, emits per-service `deploy_v2` commands for Apps and
 their declared `companions` (`truealpha/data_engine`) while excluding companions from the platform
-batch, and executes App runtime hooks (`infra2_sdk.manifests.run_hook_slot`) and release evidence
+batch, and executes App runtime hooks (`infra2_sdk.manifests.run_cell`) and release evidence
 checks (`common/deploy/app_contract.py`). `common/deploy/release_markers.py` (`python -m common.deploy.release_markers`)
 prints the production marker next to the newest release and exits non-zero once the marker is too
 old to pin the data engine from the release being promoted (#650) — the ops-checks

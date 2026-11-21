@@ -38,22 +38,19 @@ from infra2_sdk.deploy import (
 from infra2_sdk.manifests import (
     FORBIDDEN_HOOK_ENV_NAMES,
     FORBIDDEN_HOOK_ENV_PREFIXES,
-    HOOK_SLOTS,
     HookRunResult,
-    HookSlotSpec,
     RuntimeHooksManifest,
-    build_hook_env,
     load as load_sdk_manifest,
     load_hooks_manifest,
     resolve_check_cells,
     run_cell,
-    run_hook_slot,
 )
 from infra2_sdk.refs import (
     ResolvedRef,
     next_patch_tag,
     resolve_image_ref,
 )
+from infra2_sdk.runtime import merge_manifests
 from infra2_sdk.runtime.config_schema import EnvironmentField, EnvironmentManifest
 from infra2_sdk.secrets import render_agent_policy, render_agent_template
 
@@ -61,7 +58,7 @@ from common.core.constants import APP_SOURCES, REPO_ROOT
 from common.core.fetch_app_manifests import http_get
 from common.core.registry import ServiceMeta, domain_for_service, service_attrs
 from common.deploy.release_markers import PRODUCTION_MARKER_PREFIX
-from common.security.registry import _RENDER_KEYS, SERVICES, Service
+from common.security.registry import SERVICES, Service
 
 ROOT = REPO_ROOT
 FIXED_DEPLOY_TYPES = frozenset(
@@ -88,13 +85,9 @@ def _hook_context_env(
         ("APP_URL", app_url),
         ("INFRA2_HOOK_APP_URL", app_url),
         ("BASE_URL", app_url),
-        ("DEPLOY_BASE_URL", app_url),
-        ("STAGING_BASE_URL", app_url),
-        ("TA_BASE_URL", app_url),
         ("ENVIRONMENT", environment),
         ("DEPLOY_ENV", environment),
         ("APP_VERSION_REF", version_ref),
-        ("EXPECTED_SHA", version_ref),
     )
 
 
@@ -353,19 +346,20 @@ def render_release_template(
     if not release_bodies:
         raise ValueError(f"no release manifests provided for {service_id}")
 
+    parsed_releases = [
+        (label, parse_manifest(body, label=label)) for label, body in release_bodies
+    ]
+    # merge_manifests raises when two release manifests render one variable differently.
+    merge_manifests(
+        parsed_releases, source=service.directory, exclude=service.exclude_envs
+    )
     release_fields: dict[str, EnvironmentField] = {}
-    for label, body in release_bodies:
-        manifest = parse_manifest(body, label=label)
+    for _label, manifest in parsed_releases:
         for entry in manifest.fields:
             if entry.env in service.exclude_envs:
                 continue
             existing = release_fields.get(entry.env)
             if existing is not None:
-                for key in _RENDER_KEYS:
-                    if getattr(existing, key) != getattr(entry, key):
-                        raise ValueError(
-                            f"{service.directory}: {entry.env}.{key} declared differently in {label}"
-                        )
                 release_fields[entry.env] = replace(
                     existing,
                     required=existing.required or entry.required,
@@ -696,9 +690,8 @@ def fetch_hooks_manifest(
 
 
 #: App hook manifest schemas this runner accepts (infra2#1823 "infra2 accepts ranges").
-#: Schema 2 runs through ``run_hook_slot``; schema 3 through ``run_cell``. infra2 drops 2 when
-#: every app emits 3 and infra2 pins the SDK major that refuses 2 (#1823 Step 3).
-ACCEPTED_HOOK_SCHEMA_VERSIONS: tuple[int, ...] = (2, 3)
+#: Schema 3 runs through ``run_cell``. The pinned SDK refuses schema 2 (#1823 Step 3).
+ACCEPTED_HOOK_SCHEMA_VERSIONS: tuple[int, ...] = (3,)
 
 #: The cells that a schema 3 manifest must fill for each slot the train runs.
 _SLOT_CELLS: dict[str, tuple[str, ...]] = {
@@ -708,6 +701,8 @@ _SLOT_CELLS: dict[str, tuple[str, ...]] = {
     "prod_gate": ("prod.post",),
     "scheduled_audit": ("scheduled_audit",),
 }
+#: The five slots of the release train, in train order. ``_SLOT_CELLS`` is their one source.
+HOOK_SLOTS: tuple[str, ...] = tuple(_SLOT_CELLS)
 
 
 def schema3_empty_cells(manifest: RuntimeHooksManifest, slot: str) -> tuple[str, ...]:
@@ -722,6 +717,16 @@ def schema3_empty_cells(manifest: RuntimeHooksManifest, slot: str) -> tuple[str,
         for cell in resolve_check_cells(check)
     }
     return tuple(cell for cell in _SLOT_CELLS.get(slot, ()) if cell not in filled)
+
+
+def slot_checkout_lineage(manifest: RuntimeHooksManifest, slot: str) -> bool:
+    """True when an active check in a cell of ``slot`` sets ``checkout_lineage``."""
+    cells = set(_SLOT_CELLS.get(slot, ()))
+    return any(
+        check.checkout_lineage and cells & set(resolve_check_cells(check))
+        for check in manifest.checks
+        if check.off is None
+    )
 
 
 def schema3_required_env(manifest: RuntimeHooksManifest, slot: str) -> tuple[str, ...]:
@@ -763,7 +768,7 @@ def _schema3_env(
         if not str(effective_ambient.get(name, "")).strip()
     ]
     if missing:
-        # The same message as build_hook_env for schema 2, so _missing_env_errors sees it.
+        # _missing_env_errors reads this message.
         raise ValueError(f"missing required hook env: {', '.join(missing)}")
     optional = tuple(
         dict.fromkeys([*manifest.optional_env, *_HOOK_OPTIONAL_CONTEXT_ENV])
@@ -794,50 +799,14 @@ def hook_env_for_slot(
             f"hook manifest schema_version {manifest.schema_version!r} is not in "
             f"{list(ACCEPTED_HOOK_SCHEMA_VERSIONS)}"
         )
-    if manifest.schema_version == 3:
-        return _schema3_env(
-            manifest,
-            slot=slot,
-            app_url=app_url.strip(),
-            environment=environment,
-            version_ref=version_ref,
-            ambient_env=ambient_env,
-        )
-    slot_spec: HookSlotSpec = manifest.slots[slot]
-    for name in (*slot_spec.required_env, *slot_spec.optional_env):
-        if name in FORBIDDEN_HOOK_ENV_NAMES or name.startswith(
-            FORBIDDEN_HOOK_ENV_PREFIXES
-        ):
-            raise ValueError(f"forbidden secret in hook slot {slot!r}: {name}")
-    cleaned_url = app_url.strip()
-    effective_ambient: dict[str, str] = dict(
-        os.environ if ambient_env is None else ambient_env
-    )
-    for env_key, default_val in _hook_context_env(
-        cleaned_url, environment, version_ref
-    ):
-        if not str(effective_ambient.get(env_key, "")).strip():
-            effective_ambient[env_key] = default_val
-
-    augmented_optional = tuple(
-        dict.fromkeys([*slot_spec.optional_env, *_HOOK_OPTIONAL_CONTEXT_ENV])
-    )
-    augmented_slot_spec = replace(slot_spec, optional_env=augmented_optional)
-    augmented_manifest = RuntimeHooksManifest(
-        service=manifest.service,
-        slots={**manifest.slots, slot: augmented_slot_spec},
-        schema_version=manifest.schema_version,
-    )
-    _ = build_hook_env(
-        augmented_slot_spec,
+    return _schema3_env(
+        manifest,
         slot=slot,
-        app_url=cleaned_url,
+        app_url=app_url.strip(),
         environment=environment,
         version_ref=version_ref,
-        artifacts_dir=augmented_slot_spec.artifacts_dir,
-        ambient_env=effective_ambient,
+        ambient_env=ambient_env,
     )
-    return augmented_manifest, effective_ambient
 
 
 def execute_app_hook_slot(
@@ -863,20 +832,8 @@ def execute_app_hook_slot(
         cwd=cwd,
         ambient_env=ambient_env,
     )
-    if augmented_manifest.schema_version == 3:
-        # run_cell maps the slot to its cell (smoke follows the environment).
-        return run_cell(
-            augmented_manifest,
-            slot,
-            app_url=cleaned_url,
-            environment=environment,
-            version_ref=version_ref,
-            cwd=cwd,
-            ambient_env=effective_ambient,
-            result_path=result_path,
-            runner=runner,
-        )
-    return run_hook_slot(
+    # run_cell maps the slot to its cell (smoke follows the environment).
+    return run_cell(
         augmented_manifest,
         slot,
         app_url=cleaned_url,
@@ -1055,7 +1012,6 @@ __all__ = [
     "HOOK_RUNNER_SECRET_NAMES",
     "HOOK_SLOTS",
     "HookRunResult",
-    "HookSlotSpec",
     "IGNORED_ATTRIBUTES",
     "PRODUCTION_DEPLOY_BUDGET_SECONDS",
     "PRODUCTION_REQUEST_MAX_AGE_SECONDS",
@@ -1079,8 +1035,8 @@ __all__ = [
     "production_request_accept_until",
     "query_serving_release",
     "render_release_template",
-    "run_hook_slot",
     "service_for_id",
+    "slot_checkout_lineage",
     "service_stack_manifest",
     "service_vault_policy",
     "set_template_env",

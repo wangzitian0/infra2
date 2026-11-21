@@ -16,6 +16,7 @@ import pytest
 import yaml
 
 import tools.reconcile_iac_inputs as reconcile
+from common.deploy.app_contract import HOOK_SLOTS
 from tools.reconcile_iac_inputs import (
     MANIFEST_PATH,
     assert_after_on_main,
@@ -1293,7 +1294,7 @@ def test_post_deploy_app_hooks_execute_smoke_and_record_results(
     """#1416 (M2): post-deploy hooks resolve each deployed App's release_tag SHA
     and environment URL, fetches runtime-hooks.manifest.json, executes the smoke slot,
     and records hook_results in the reconcile JSON payload."""
-    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+    from infra2_sdk.manifests import HookRunResult
     from infra2_sdk.refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
@@ -1331,23 +1332,7 @@ def test_post_deploy_app_hooks_execute_smoke_and_record_results(
         lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
     )
 
-    manifest = RuntimeHooksManifest.from_dict(
-        {
-            "schema_version": 2,
-            "service": "finance_report/app",
-            "slots": {
-                slot: {
-                    "run": "echo ok",
-                    "bootstrap": "",
-                    "timeout_seconds": 30,
-                    "required_env": [],
-                    "optional_env": [],
-                    "artifacts_dir": f"artifacts/{slot}",
-                }
-                for slot in HOOK_SLOTS
-            },
-        }
-    )
+    manifest = _hooks_v3("finance_report/app")
     fetched: list[tuple[str, str]] = []
     executed: list[tuple[str, str, str, str]] = []
 
@@ -1412,7 +1397,7 @@ def test_post_deploy_app_hooks_failure_blocks_prod_marker_and_returns_nonzero(
 ) -> None:
     """#1416 (M2): when a post-deploy smoke hook fails during promote_prod, the production
     marker must NOT advance and main() must return exit code 1."""
-    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+    from infra2_sdk.manifests import HookRunResult
     from infra2_sdk.refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
@@ -1455,23 +1440,7 @@ def test_post_deploy_app_hooks_failure_blocks_prod_marker_and_returns_nonzero(
         "resolve_image_ref",
         lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
     )
-    manifest = RuntimeHooksManifest.from_dict(
-        {
-            "schema_version": 2,
-            "service": "finance_report/app",
-            "slots": {
-                slot: {
-                    "run": "exit 1",
-                    "bootstrap": "",
-                    "timeout_seconds": 30,
-                    "required_env": [],
-                    "optional_env": [],
-                    "artifacts_dir": f"artifacts/{slot}",
-                }
-                for slot in HOOK_SLOTS
-            },
-        }
-    )
+    manifest = _hooks_v3("finance_report/app", run="exit 1")
     monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
     monkeypatch.setattr(
         reconcile,
@@ -1824,122 +1793,543 @@ def test_sync_app_releases_create_pr_pushes_branch_restores_head_and_opens_or_up
     assert any(c[:4] == ["gh", "pr", "edit", "1501"] for c in calls)
 
 
-_REAL_FR_HOOKS_MANIFEST_JSON = """\
-{
-  "schema_version": 2,
+#: Verbatim copies of the app manifests at the release tags of harness/repos.yaml.
+_REAL_FR_HOOKS_MANIFEST_JSON = r"""{
+  "schema_version": 3,
   "service": "finance_report/app",
-  "slots": {
-    "smoke": {
-      "run": "bash tools/smoke_test.sh \\"$INFRA2_HOOK_APP_URL\\"",
-      "timeout_seconds": 120
+  "checks": [
+    {
+      "id": "smoke",
+      "argv": [
+        "sh",
+        "-c",
+        "bash common/runtime/shell/smoke_test.sh \"$APP_URL\""
+      ],
+      "needs": [
+        "code",
+        "running_service"
+      ],
+      "writes": false,
+      "accepts_scale": false,
+      "timeout_seconds": 120,
+      "cells": {
+        "add": {
+          "prod.post": {
+            "reason": "prod gate runs smoke as before",
+            "issue": "wangzitian0/infra2#1823"
+          }
+        }
+      }
     },
-    "preview_gate": {
+    {
+      "id": "preview_minimum_e2e",
+      "argv": [
+        "python",
+        "-m",
+        "common.testing.test_selection",
+        "--stage",
+        "preview_minimum_e2e",
+        "--run"
+      ],
+      "needs": [
+        "code",
+        "running_service",
+        "real_llm"
+      ],
+      "writes": true,
+      "accepts_scale": false,
+      "timeout_seconds": 240,
       "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
-      "run": "bash tools/smoke_test.sh \\"$INFRA2_HOOK_APP_URL\\" && python tools/test_selection.py --stage preview_minimum_e2e --run && python tools/test_selection.py --touched-files ${INFRA2_TOUCHED_FILES:-} --run",
-      "timeout_seconds": 360,
       "optional_env": [
-        "AI_PROVIDER",
-        "AI_BASE_URL",
-        "LARGE_MODEL",
-        "SMALL_MODEL",
-        "MULTIMODAL_MODEL"
-      ]
+        "INFRA2_TOUCHED_FILES",
+        "LLM_PROVIDER",
+        "LLM_BASE_URL"
+      ],
+      "cells": {
+        "remove": {
+          "staging.post": {
+            "reason": "preview-only check (schema 2 slot preview_gate)",
+            "issue": "wangzitian0/infra2#1823"
+          },
+          "scheduled_audit": {
+            "reason": "preview-only check (schema 2 slot preview_gate)",
+            "issue": "wangzitian0/infra2#1823"
+          }
+        }
+      }
     },
-    "staging_gate": {
+    {
+      "id": "touched_files",
+      "argv": [
+        "python",
+        "-m",
+        "common.testing.test_selection",
+        "--touched-files",
+        "--run"
+      ],
+      "needs": [
+        "code",
+        "running_service",
+        "real_llm"
+      ],
+      "writes": true,
+      "accepts_scale": false,
+      "timeout_seconds": 240,
       "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
-      "run": "bash tools/smoke_test.sh \\"$INFRA2_HOOK_APP_URL\\" && python tools/test_selection.py --stage staging_core_e2e --run && STRICT_E2E_GATES=1 python -m pytest tests/e2e/test_ai_provider_connectivity.py -v --tb=short -o addopts=\\"\\" && python tools/test_selection.py --stage staging_ai_ocr --corpus canary --run",
-      "timeout_seconds": 540,
       "optional_env": [
-        "AI_PROVIDER",
-        "AI_BASE_URL",
-        "LARGE_MODEL",
-        "SMALL_MODEL",
-        "MULTIMODAL_MODEL",
+        "INFRA2_TOUCHED_FILES",
+        "LLM_PROVIDER",
+        "LLM_BASE_URL"
+      ],
+      "cells": {
+        "remove": {
+          "staging.post": {
+            "reason": "preview-only check (schema 2 slot preview_gate)",
+            "issue": "wangzitian0/infra2#1823"
+          },
+          "scheduled_audit": {
+            "reason": "preview-only check (schema 2 slot preview_gate)",
+            "issue": "wangzitian0/infra2#1823"
+          }
+        }
+      }
+    },
+    {
+      "id": "staging_core_e2e",
+      "argv": [
+        "python",
+        "-m",
+        "common.testing.test_selection",
+        "--stage",
+        "staging_core_e2e",
+        "--run"
+      ],
+      "needs": [
+        "code",
+        "running_service",
+        "real_llm",
+        "staging_data",
+        "real_provider"
+      ],
+      "writes": true,
+      "accepts_scale": false,
+      "timeout_seconds": 300,
+      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
+      "optional_env": [
+        "LLM_PROVIDER",
+        "LLM_BASE_URL",
         "TEST_USER_EMAIL",
         "TEST_USER_PASSWORD"
-      ]
+      ],
+      "cells": {
+        "remove": {
+          "scheduled_audit": {
+            "reason": "staging-only check (schema 2 slot staging_gate)",
+            "issue": "wangzitian0/infra2#1823"
+          }
+        }
+      }
     },
-    "prod_gate": {
-      "run": "bash tools/smoke_test.sh \\"$INFRA2_HOOK_APP_URL\\"",
-      "timeout_seconds": 180
-    },
-    "scheduled_audit": {
+    {
+      "id": "ai_provider_connectivity",
+      "argv": [
+        "env",
+        "STRICT_E2E_GATES=1",
+        "python",
+        "-m",
+        "pytest",
+        "tests/e2e/test_ai_provider_connectivity.py",
+        "-v",
+        "--tb=short",
+        "-o",
+        "addopts="
+      ],
+      "needs": [
+        "code",
+        "running_service",
+        "real_llm",
+        "staging_data",
+        "real_provider"
+      ],
+      "writes": true,
+      "accepts_scale": false,
+      "timeout_seconds": 120,
       "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
-      "run": "python tools/test_selection.py --stage staging_ai_ocr --corpus audit_replay --run && python tools/test_selection.py --stage staging_ai_ocr --corpus core_journey --run && python -m common.testing.benchmarks.pdf_corpus_oracle --app-url \\"$INFRA2_HOOK_APP_URL\\" --max-workers 1 && python -m common.testing.benchmarks.run_financial_scenario_benchmark --app-url \\"$INFRA2_HOOK_APP_URL\\" --case 1,2,3,4,5,6",
-      "timeout_seconds": 3600,
       "optional_env": [
-        "AI_PROVIDER",
-        "AI_BASE_URL",
-        "LARGE_MODEL",
-        "SMALL_MODEL",
-        "MULTIMODAL_MODEL",
+        "LLM_PROVIDER",
+        "LLM_BASE_URL",
         "TEST_USER_EMAIL",
         "TEST_USER_PASSWORD"
-      ]
+      ],
+      "cells": {
+        "remove": {
+          "scheduled_audit": {
+            "reason": "staging-only check (schema 2 slot staging_gate)",
+            "issue": "wangzitian0/infra2#1823"
+          }
+        }
+      }
+    },
+    {
+      "id": "staging_ai_ocr",
+      "argv": [
+        "python",
+        "-m",
+        "common.testing.test_selection",
+        "--stage",
+        "staging_ai_ocr",
+        "--corpus",
+        "canary",
+        "--run"
+      ],
+      "needs": [
+        "code",
+        "running_service",
+        "real_llm",
+        "staging_data",
+        "real_provider"
+      ],
+      "writes": true,
+      "accepts_scale": false,
+      "timeout_seconds": 300,
+      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
+      "optional_env": [
+        "LLM_PROVIDER",
+        "LLM_BASE_URL",
+        "TEST_USER_EMAIL",
+        "TEST_USER_PASSWORD"
+      ],
+      "cells": {
+        "remove": {
+          "scheduled_audit": {
+            "reason": "staging-only check (schema 2 slot staging_gate)",
+            "issue": "wangzitian0/infra2#1823"
+          }
+        }
+      }
+    },
+    {
+      "id": "audit_replay",
+      "argv": [
+        "python",
+        "-m",
+        "common.testing.test_selection",
+        "--stage",
+        "staging_ai_ocr",
+        "--corpus",
+        "audit_replay",
+        "--run"
+      ],
+      "needs": [
+        "code",
+        "running_service",
+        "real_llm",
+        "staging_data",
+        "real_provider"
+      ],
+      "writes": true,
+      "accepts_scale": false,
+      "timeout_seconds": 1200,
+      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
+      "optional_env": [
+        "LLM_PROVIDER",
+        "LLM_BASE_URL",
+        "TEST_USER_EMAIL",
+        "TEST_USER_PASSWORD"
+      ],
+      "cells": {
+        "remove": {
+          "staging.post": {
+            "reason": "audit-only check (schema 2 slot scheduled_audit)",
+            "issue": "wangzitian0/infra2#1823"
+          }
+        }
+      }
+    },
+    {
+      "id": "core_journey",
+      "argv": [
+        "python",
+        "-m",
+        "common.testing.test_selection",
+        "--stage",
+        "staging_ai_ocr",
+        "--corpus",
+        "core_journey",
+        "--run"
+      ],
+      "needs": [
+        "code",
+        "running_service",
+        "real_llm",
+        "staging_data",
+        "real_provider"
+      ],
+      "writes": true,
+      "accepts_scale": false,
+      "timeout_seconds": 1200,
+      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
+      "optional_env": [
+        "LLM_PROVIDER",
+        "LLM_BASE_URL",
+        "TEST_USER_EMAIL",
+        "TEST_USER_PASSWORD"
+      ],
+      "cells": {
+        "remove": {
+          "staging.post": {
+            "reason": "audit-only check (schema 2 slot scheduled_audit)",
+            "issue": "wangzitian0/infra2#1823"
+          }
+        }
+      }
+    },
+    {
+      "id": "pdf_corpus_oracle",
+      "argv": [
+        "sh",
+        "-c",
+        "python -m tests.benchmarks.pdf_corpus_oracle --app-url \"$APP_URL\" --max-workers 1"
+      ],
+      "needs": [
+        "code",
+        "running_service",
+        "real_llm",
+        "staging_data",
+        "real_provider"
+      ],
+      "writes": true,
+      "accepts_scale": false,
+      "timeout_seconds": 900,
+      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
+      "optional_env": [
+        "LLM_PROVIDER",
+        "LLM_BASE_URL",
+        "TEST_USER_EMAIL",
+        "TEST_USER_PASSWORD"
+      ],
+      "cells": {
+        "remove": {
+          "staging.post": {
+            "reason": "audit-only check (schema 2 slot scheduled_audit)",
+            "issue": "wangzitian0/infra2#1823"
+          }
+        }
+      }
+    },
+    {
+      "id": "financial_scenario_benchmark",
+      "argv": [
+        "sh",
+        "-c",
+        "python -m tests.benchmarks.run_financial_scenario_benchmark --app-url \"$APP_URL\" --case 1,2,3,4,5,6"
+      ],
+      "needs": [
+        "code",
+        "running_service",
+        "real_llm",
+        "staging_data",
+        "real_provider"
+      ],
+      "writes": true,
+      "accepts_scale": false,
+      "timeout_seconds": 900,
+      "bootstrap": "uv pip install --system -r tests/e2e/requirements.txt && playwright install chromium",
+      "optional_env": [
+        "LLM_PROVIDER",
+        "LLM_BASE_URL",
+        "TEST_USER_EMAIL",
+        "TEST_USER_PASSWORD"
+      ],
+      "cells": {
+        "remove": {
+          "staging.post": {
+            "reason": "audit-only check (schema 2 slot scheduled_audit)",
+            "issue": "wangzitian0/infra2#1823"
+          }
+        }
+      }
     }
-  }
+  ]
 }
 """
 
-_REAL_TA_HOOKS_MANIFEST_JSON = """\
-{
-  "schema_version": 2,
+_REAL_TA_HOOKS_MANIFEST_JSON = r"""{
+  "schema_version": 3,
   "service": "truealpha/app",
-  "slots": {
-    "smoke": {
-      "run": "uv run python tools/health_check.py \\"$APP_URL/api/health\\" \\"$APP_VERSION_REF\\" 36",
-      "timeout_seconds": 120,
-      "required_env": [
-        "APP_URL",
-        "APP_VERSION_REF"
-      ]
+  "checks": [
+    {
+      "id": "smoke",
+      "argv": [
+        "sh",
+        "-c",
+        "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 36 --interval-seconds 5 --no-follow-redirects"
+      ],
+      "needs": [
+        "running_service"
+      ],
+      "writes": false,
+      "accepts_scale": false,
+      "timeout_seconds": 120
     },
-    "preview_gate": {
-      "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps chromium",
-      "run": "uv run python tools/health_check.py \\"$APP_URL/api/health\\" \\"$APP_VERSION_REF\\" 36 && bash tools/warm_surface.sh \\"$APP_URL\\" / /research/rankings && (cd apps/app-web && TA_BASE_URL=\\"$APP_URL\\" node e2e/walk-tree.mjs) && uv run python tools/surface_contract.py --authenticated \\"$APP_URL\\"",
-      "timeout_seconds": 360,
-      "required_env": [
-        "APP_URL",
-        "APP_VERSION_REF",
-        "TA_EMAIL",
-        "TA_MEMBER_EMAIL",
-        "TA_PASSWORD",
-        "TA_MCP_TOKEN"
-      ]
+    {
+      "id": "health",
+      "argv": [
+        "sh",
+        "-c",
+        "uv run python -m infra2_sdk.deploy --url \"$APP_URL/api/health\" --expected-version \"$APP_VERSION_REF\" --max-attempts 12 --interval-seconds 5 --no-follow-redirects"
+      ],
+      "needs": [
+        "running_service"
+      ],
+      "writes": false,
+      "accepts_scale": false,
+      "timeout_seconds": 90,
+      "cells": {
+        "remove": {
+          "scheduled_audit": {
+            "reason": "The nightly audit reads /api/health in nightly_verdicts; a second health wait adds nothing.",
+            "issue": "wangzitian0/truealpha#1745"
+          }
+        }
+      }
     },
-    "staging_gate": {
-      "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps chromium",
-      "run": "uv run python tools/health_check.py \\"$APP_URL/api/health\\" \\"$APP_VERSION_REF\\" 36 && bash tools/warm_surface.sh \\"$APP_URL\\" / /research/rankings && (cd apps/app-web && TA_BASE_URL=\\"$APP_URL\\" node e2e/walk-tree.mjs) && uv run python tools/surface_contract.py --authenticated \\"$APP_URL\\"",
-      "timeout_seconds": 420,
-      "required_env": [
-        "APP_URL",
-        "APP_VERSION_REF",
-        "TA_EMAIL",
-        "TA_MEMBER_EMAIL",
-        "TA_PASSWORD",
-        "TA_MCP_TOKEN"
-      ]
+    {
+      "id": "warm_surface",
+      "argv": [
+        "sh",
+        "-c",
+        "bash tools/warm_surface.sh \"$APP_URL\" / /research/rankings"
+      ],
+      "needs": [
+        "running_service"
+      ],
+      "writes": false,
+      "accepts_scale": false,
+      "timeout_seconds": 30,
+      "cells": {
+        "remove": {
+          "prod.post": {
+            "reason": "Warming and walking the surface logs in with Staging test accounts; production runs the health check only.",
+            "issue": "wangzitian0/truealpha#1745"
+          },
+          "scheduled_audit": {
+            "reason": "Warming and walking the surface logs in with Staging test accounts; production runs the health check only.",
+            "issue": "wangzitian0/truealpha#1745"
+          }
+        }
+      }
     },
-    "prod_gate": {
-      "run": "uv run python tools/surface_contract.py \\"$APP_URL\\"",
+    {
+      "id": "walk_tree",
+      "argv": [
+        "sh",
+        "-c",
+        "cd apps/app-web || exit 1; TA_BASE_URL=\"$APP_URL\" exec node e2e/walk-tree.mjs"
+      ],
+      "needs": [
+        "running_service"
+      ],
+      "writes": false,
+      "accepts_scale": false,
       "timeout_seconds": 240,
+      "bootstrap": "cd apps/app-web && bun install --frozen-lockfile && bunx playwright install --with-deps --only-shell chromium",
       "required_env": [
-        "APP_URL"
-      ]
+        "TA_EMAIL",
+        "TA_MEMBER_EMAIL",
+        "TA_PASSWORD",
+        "TA_MCP_TOKEN"
+      ],
+      "cells": {
+        "remove": {
+          "prod.post": {
+            "reason": "Warming and walking the surface logs in with Staging test accounts; production runs the health check only.",
+            "issue": "wangzitian0/truealpha#1745"
+          },
+          "scheduled_audit": {
+            "reason": "Warming and walking the surface logs in with Staging test accounts; production runs the health check only.",
+            "issue": "wangzitian0/truealpha#1745"
+          }
+        }
+      }
     },
-    "scheduled_audit": {
-      "bootstrap": "uv sync --frozen",
-      "run": "uv run python tools/nightly_verdicts.py \\"$APP_URL/api/health\\" --environment \\"$ENVIRONMENT\\" --repo . && uv run python tools/surface_contract.py \\"$APP_URL\\"",
+    {
+      "id": "nightly_verdicts",
+      "argv": [
+        "sh",
+        "-c",
+        "uv run python -m truealpha_tools.nightly_verdicts \"$APP_URL/api/health\" --environment \"$ENVIRONMENT\" --repo ."
+      ],
+      "needs": [
+        "running_service"
+      ],
+      "writes": false,
+      "accepts_scale": false,
       "timeout_seconds": 600,
+      "bootstrap": "uv sync --frozen",
       "checkout_lineage": true,
-      "required_env": [
-        "APP_URL",
-        "ENVIRONMENT"
-      ]
+      "cells": {
+        "remove": {
+          "preview.post": {
+            "reason": "The nightly verdict audit runs on the schedule only.",
+            "issue": "wangzitian0/truealpha#1745"
+          },
+          "staging.post": {
+            "reason": "The nightly verdict audit runs on the schedule only.",
+            "issue": "wangzitian0/truealpha#1745"
+          },
+          "prod.post": {
+            "reason": "The nightly verdict audit runs on the schedule only.",
+            "issue": "wangzitian0/truealpha#1745"
+          }
+        }
+      }
     }
-  }
+  ]
 }
 """
+
+
+def _hooks_v3(
+    service: str,
+    *,
+    run: str = "echo ok",
+    required_env: dict[str, list[str]] | None = None,
+    lineage: tuple[str, ...] = (),
+    manifest_required_env: list[str] | None = None,
+) -> reconcile.RuntimeHooksManifest:
+    """A schema 3 manifest with one check per train slot, in the cells of that slot only."""
+    post_cells = ("preview.post", "staging.post", "prod.post", "scheduled_audit")
+    own = {
+        "preview_gate": "preview.post",
+        "staging_gate": "staging.post",
+        "prod_gate": "prod.post",
+        "scheduled_audit": "scheduled_audit",
+    }
+    checks = []
+    for slot in HOOK_SLOTS:
+        row: dict[str, object] = {
+            "id": slot,
+            "argv": ["sh", "-c", run],
+            "needs": ["code", "running_service"],
+            "writes": False,
+            "accepts_scale": False,
+            "timeout_seconds": 30,
+            "required_env": list((required_env or {}).get(slot, [])),
+            "checkout_lineage": slot in lineage,
+        }
+        if slot != "smoke":
+            reason = {"reason": f"{slot} cell only", "issue": "infra2#1823"}
+            row["cells"] = {"remove": {c: reason for c in post_cells if c != own[slot]}}
+        checks.append(row)
+    return reconcile.RuntimeHooksManifest.from_dict(
+        {
+            "schema_version": 3,
+            "service": service,
+            "required_env": manifest_required_env or [],
+            "checks": checks,
+        }
+    )
 
 
 def test_real_app_runtime_hooks_manifests_execute_unmocked_env_and_cwd(
@@ -2265,7 +2655,7 @@ def test_run_post_deploy_app_hooks_executes_smoke_and_staging_gate_in_order(
 ) -> None:
     """#1493: run_post_deploy_app_hooks with slot='smoke,staging_gate' executes both smoke and
     staging_gate in order for each deployed App and records issue trails per slot."""
-    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+    from infra2_sdk.manifests import HookRunResult
     from infra2_sdk.refs import ResolvedRef
 
     monkeypatch.setattr(
@@ -2273,23 +2663,7 @@ def test_run_post_deploy_app_hooks_executes_smoke_and_staging_gate_in_order(
         "resolve_image_ref",
         lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
     )
-    manifest = RuntimeHooksManifest.from_dict(
-        {
-            "schema_version": 2,
-            "service": "finance_report/app",
-            "slots": {
-                slot_name: {
-                    "run": "echo ok",
-                    "bootstrap": "",
-                    "timeout_seconds": 30,
-                    "required_env": [],
-                    "optional_env": [],
-                    "artifacts_dir": f"artifacts/{slot_name}",
-                }
-                for slot_name in HOOK_SLOTS
-            },
-        }
-    )
+    manifest = _hooks_v3("finance_report/app")
     executed_slots: list[str] = []
 
     def _fake_exec(
@@ -2339,7 +2713,7 @@ def test_run_scheduled_app_audits_executes_scheduled_audit(
     """#1493: run_scheduled_app_audits discovers Apps declaring scheduled_audit, forwards
     TA_EMAIL from the env, records the issue trail, and main(--run-scheduled-audit)
     returns 1 when any audit fails."""
-    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+    from infra2_sdk.manifests import HookRunResult
     from infra2_sdk.refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
@@ -2360,24 +2734,8 @@ def test_run_scheduled_app_audits_executes_scheduled_audit(
         "resolve_image_ref",
         lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
     )
-    manifest = RuntimeHooksManifest.from_dict(
-        {
-            "schema_version": 2,
-            "service": "finance_report/app",
-            "slots": {
-                slot_name: {
-                    "run": "echo ok",
-                    "bootstrap": "",
-                    "timeout_seconds": 30,
-                    "required_env": ["TA_EMAIL"]
-                    if slot_name == "scheduled_audit"
-                    else [],
-                    "optional_env": [],
-                    "artifacts_dir": f"artifacts/{slot_name}",
-                }
-                for slot_name in HOOK_SLOTS
-            },
-        }
+    manifest = _hooks_v3(
+        "finance_report/app", required_env={"scheduled_audit": ["TA_EMAIL"]}
     )
     monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
 
@@ -2460,7 +2818,7 @@ def test_every_declared_hook_slot_is_wired_into_workflows() -> None:
     """#1493 (AC 4): every slot in HOOK_SLOTS ('smoke', 'preview_gate', 'staging_gate',
     'scheduled_audit') is referenced and wired into .github/workflows/*.yml, and adding a
     hypothetical dead slot to HOOK_SLOTS fails the check."""
-    from infra2_sdk.manifests import HOOK_SLOTS
+    from common.deploy import app_contract
 
     workflows_dir = ROOT / ".github" / "workflows"
     workflow_texts = {
@@ -2484,7 +2842,9 @@ def test_every_declared_hook_slot_is_wired_into_workflows() -> None:
     # Also verify each realApp runtime-hooks.manifest.json slot is covered by HOOK_SLOTS and workflows.
     for raw_manifest in (_REAL_FR_HOOKS_MANIFEST_JSON, _REAL_TA_HOOKS_MANIFEST_JSON):
         manifest = reconcile.RuntimeHooksManifest.from_dict(json.loads(raw_manifest))
-        assert _unwired_hook_slots(tuple(manifest.slots.keys()), workflow_texts) == []
+        for slot in HOOK_SLOTS:
+            assert app_contract.schema3_empty_cells(manifest, slot) == (), slot
+        assert _unwired_hook_slots(tuple(HOOK_SLOTS), workflow_texts) == []
 
 
 def test_reconcile_rejects_off_main_app_release_tag_in_sync_and_deploy(
@@ -2880,8 +3240,9 @@ def _manifest_required_names() -> set[str]:
 
     names: set[str] = set()
     for raw in (_REAL_FR_HOOKS_MANIFEST_JSON, _REAL_TA_HOOKS_MANIFEST_JSON):
-        for spec in json.loads(raw)["slots"].values():
-            names.update(spec.get("required_env") or ())
+        manifest = reconcile.RuntimeHooksManifest.from_dict(json.loads(raw))
+        for slot in HOOK_SLOTS:
+            names.update(app_contract.schema3_required_env(manifest, slot))
     return names - set(app_contract.HOOK_RUNNER_CONTEXT_ENV)
 
 
@@ -2911,25 +3272,8 @@ def test_workflow_hook_secret_names_equal_the_allow_list() -> None:
 
 
 def _ta_manifest_requiring_ta_email(required_slot: str = "staging_gate"):
-    from infra2_sdk.manifests import HOOK_SLOTS, RuntimeHooksManifest
 
-    return RuntimeHooksManifest.from_dict(
-        {
-            "schema_version": 2,
-            "service": "truealpha/app",
-            "slots": {
-                slot: {
-                    "run": "echo ok",
-                    "bootstrap": "",
-                    "timeout_seconds": 30,
-                    "required_env": ["TA_EMAIL"] if slot == required_slot else [],
-                    "optional_env": [],
-                    "artifacts_dir": f"artifacts/{slot}",
-                }
-                for slot in HOOK_SLOTS
-            },
-        }
-    )
+    return _hooks_v3("truealpha/app", required_env={required_slot: ["TA_EMAIL"]})
 
 
 def test_train_fails_before_any_deploy_when_a_pinned_hook_env_value_is_missing(
@@ -3149,17 +3493,31 @@ _COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 _SCHEDULED_AUDIT_FLAG = "--run-scheduled-audit"
 
 
+def _slot_checks(manifest: reconcile.RuntimeHooksManifest):
+    """Yield ``(slot, check)`` for each active check in a cell of a train slot."""
+    from common.deploy import app_contract
+    from infra2_sdk.manifests import resolve_check_cells
+
+    for slot in HOOK_SLOTS:
+        cells = set(app_contract._SLOT_CELLS[slot])
+        for check in manifest.checks:
+            if check.off is None and cells & set(resolve_check_cells(check)):
+                yield slot, check
+
+
 def _bun_slots(raw_manifests: tuple[str, ...]) -> list[tuple[str, str, str, str]]:
     """Return (service, slot, field, command) for each bootstrap or run command of a slot
     that calls ``bun`` or ``bunx``."""
     found: list[tuple[str, str, str, str]] = []
     for raw_manifest in raw_manifests:
-        manifest = json.loads(raw_manifest)
-        for slot, spec in manifest["slots"].items():
-            for field in ("bootstrap", "run"):
-                command = spec.get(field) or ""
+        manifest = reconcile.RuntimeHooksManifest.from_dict(json.loads(raw_manifest))
+        for slot, check in _slot_checks(manifest):
+            for field, command in (
+                ("bootstrap", check.bootstrap),
+                ("run", " ".join(check.argv)),
+            ):
                 if _BUN_COMMAND.search(command):
-                    found.append((manifest["service"], slot, field, command))
+                    found.append((manifest.service, slot, field, command))
     return found
 
 
@@ -3301,9 +3659,10 @@ def test_hook_slot_steps_install_the_bun_that_manifest_commands_call() -> None:
 
     # Mutation proof 4: a bun call in a scheduled_audit slot reaches the audit job only.
     ops_manifest = json.loads(_REAL_TA_HOOKS_MANIFEST_JSON)
-    ops_manifest["slots"]["scheduled_audit"]["bootstrap"] = (
-        "bun install --frozen-lockfile"
-    )
+    (audit_check,) = [
+        c for c in ops_manifest["checks"] if c["id"] == "nightly_verdicts"
+    ]
+    audit_check["bootstrap"] = "bun install --frozen-lockfile"
     problems = _hook_steps_without_bun(workflows, (json.dumps(ops_manifest),))
     assert len(problems) == 1
     assert "ops-checks.yml job 'audit'" in problems[0]
@@ -3333,12 +3692,16 @@ def test_hook_slot_steps_install_the_bun_that_manifest_commands_call() -> None:
 
     # Mutation proof 6: the word match finds bun and bunx, and no other word.
     word_manifest = json.loads(_REAL_FR_HOOKS_MANIFEST_JSON)
-    word_manifest["slots"]["smoke"]["run"] = "bash debunk.sh && bundle exec bunker"
+    (word_check,) = [c for c in word_manifest["checks"] if c["id"] == "smoke"]
+    for check in word_manifest["checks"]:
+        check["bootstrap"] = ""
+    word_check["argv"] = ["sh", "-c", "bash debunk.sh && bundle exec bunker"]
     assert _bun_slots((json.dumps(word_manifest),)) == []
-    word_manifest["slots"]["smoke"]["run"] = "cd web && bunx playwright test"
-    assert [slot for _, slot, _, _ in _bun_slots((json.dumps(word_manifest),))] == [
-        "smoke"
-    ]
+    word_check["argv"] = ["sh", "-c", "cd web && bunx playwright test"]
+    assert {slot for _, slot, _, _ in _bun_slots((json.dumps(word_manifest),))} == {
+        "smoke",
+        "prod_gate",
+    }
 
 
 def _required_env_without_source(raw_manifest: dict) -> dict[str, tuple[str, ...]]:
@@ -3354,8 +3717,12 @@ def _required_env_without_source(raw_manifest: dict) -> dict[str, tuple[str, ...
         app_contract.HOOK_RUNNER_CONTEXT_ENV
     )
     gaps = {
-        slot: tuple(name for name in spec.required_env if name not in supplied)
-        for slot, spec in manifest.slots.items()
+        slot: tuple(
+            name
+            for name in app_contract.schema3_required_env(manifest, slot)
+            if name not in supplied
+        )
+        for slot in HOOK_SLOTS
     }
     return {slot: names for slot, names in gaps.items() if names}
 
@@ -3375,9 +3742,8 @@ def test_app_hook_manifest_required_env_has_an_infra2_source(raw_manifest: str) 
 def test_required_env_check_names_an_unknown_required_env() -> None:
     """#1529: the check returns the slot and name of a ``required_env`` entry without source."""
     manifest = json.loads(_REAL_FR_HOOKS_MANIFEST_JSON)
-    manifest["slots"]["staging_gate"].setdefault("required_env", []).append(
-        "NEW_REQUIRED_NAME"
-    )
+    (check,) = [c for c in manifest["checks"] if c["id"] == "staging_core_e2e"]
+    check.setdefault("required_env", []).append("NEW_REQUIRED_NAME")
     assert _required_env_without_source(manifest) == {
         "staging_gate": ("NEW_REQUIRED_NAME",)
     }
@@ -3403,23 +3769,9 @@ def test_hook_runner_context_env_names_reach_a_slot_without_ambient_values(
     ambient env holds none of them. It rejects a ``required_env`` name outside that set,
     and a name that it adds to ``optional_env`` itself."""
     from common.deploy import app_contract
-    from infra2_sdk.manifests import HOOK_SLOTS
 
     def _manifest(required: list[str]) -> reconcile.RuntimeHooksManifest:
-        return reconcile.RuntimeHooksManifest.from_dict(
-            {
-                "schema_version": 2,
-                "service": "finance_report/app",
-                "slots": {
-                    slot: {
-                        "run": "echo ok",
-                        "timeout_seconds": 30,
-                        "required_env": required if slot == "smoke" else [],
-                    }
-                    for slot in HOOK_SLOTS
-                },
-            }
-        )
+        return _hooks_v3("finance_report/app", manifest_required_env=required)
 
     seen: list[dict[str, str]] = []
 
@@ -3521,7 +3873,8 @@ def test_stage_hook_plans_ssot_and_workflow_wiring() -> None:
     """#1608: DEFAULT_STAGE_HOOK_SLOTS / default_hook_slot_for_stage are deleted in favor of
     infra2_sdk.manifests.STAGE_HOOK_PLANS / stage_hook_plan (Pre -> Deploy smoke -> Post gate),
     and reconcile-iac-inputs.yml delegates slot selection to stage_hook_plan."""
-    from infra2_sdk.manifests import HOOK_SLOTS, STAGE_HOOK_PLANS, stage_hook_plan
+    from infra2_sdk.manifests import STAGE_HOOK_PLANS, stage_hook_plan
+    from common.deploy.app_contract import HOOK_SLOTS
 
     assert not hasattr(reconcile, "DEFAULT_STAGE_HOOK_SLOTS")
     assert not hasattr(reconcile, "default_hook_slot_for_stage")
@@ -3560,7 +3913,7 @@ def test_sync_app_releases_cut_missing_app_tag_runs_ephemeral_preview_gate_and_a
     """#1554: when cut_missing_app_tag=True and an App's main is ahead of its latest tag,
     sync_app_releases deploys preview/branch (main), runs preview_gate, cuts and pushes
     refs/tags/vX.Y.Z only on pass, and always runs deploy_v2 --down in finally."""
-    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+    from infra2_sdk.manifests import HookRunResult
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
     repos_yaml.parent.mkdir(parents=True, exist_ok=True)
@@ -3584,22 +3937,7 @@ def test_sync_app_releases_cut_missing_app_tag_runs_ephemeral_preview_gate_and_a
     monkeypatch.setattr(reconcile, "_query_remote_app_refs", _fake_remote)
     monkeypatch.setattr(reconcile, "newest_release_tag", lambda **_kw: "v3.1.40")
 
-    manifest = RuntimeHooksManifest.from_dict(
-        {
-            "schema_version": 2,
-            "service": "finance_report/app",
-            "slots": {
-                slot_name: {
-                    "run": "echo ok",
-                    "bootstrap": "",
-                    "timeout_seconds": 30,
-                    "required_env": [],
-                    "optional_env": [],
-                }
-                for slot_name in HOOK_SLOTS
-            },
-        }
-    )
+    manifest = _hooks_v3("finance_report/app")
     monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
     monkeypatch.setattr(
         reconcile,
@@ -3709,9 +4047,11 @@ def test_audit_app_hooks_fails_closed_on_unsupplied_required_env(
     )
 
     bad_ta = json.loads(_REAL_TA_HOOKS_MANIFEST_JSON)
-    bad_ta["slots"]["staging_gate"]["required_env"].append("UNSUPPLIED_TA_SECRET")
+    (ta_walk,) = [c for c in bad_ta["checks"] if c["id"] == "walk_tree"]
+    ta_walk["required_env"].append("UNSUPPLIED_TA_SECRET")
     bad_fr = json.loads(_REAL_FR_HOOKS_MANIFEST_JSON)
-    bad_fr["slots"]["smoke"]["required_env"] = ["UNSUPPLIED_SMOKE_SECRET"]
+    (fr_smoke,) = [c for c in bad_fr["checks"] if c["id"] == "smoke"]
+    fr_smoke["required_env"] = ["UNSUPPLIED_SMOKE_SECRET"]
 
     monkeypatch.setattr(
         reconcile,
@@ -3726,11 +4066,10 @@ def test_audit_app_hooks_fails_closed_on_unsupplied_required_env(
     out = json.loads(capsys.readouterr().out)
     assert out["ok"] is False
     assert (
-        "truealpha/app: unsupplied required_env 'UNSUPPLIED_TA_SECRET' in slot 'staging_gate'"
-        in out["errors"]
+        "truealpha/app: unsupplied required_env 'UNSUPPLIED_TA_SECRET'" in out["errors"]
     )
     assert (
-        "finance_report/app: unsupplied required_env 'UNSUPPLIED_SMOKE_SECRET' in slot 'smoke'"
+        "finance_report/app: unsupplied required_env 'UNSUPPLIED_SMOKE_SECRET'"
         in out["errors"]
     )
 
@@ -3837,7 +4176,7 @@ def test_resolve_workflow_failure_alert_and_scheduled_audit_json_contract(
     """#1590: resolve_workflow_failure_alert fails closed on missing/corrupt/null JSON,
     skips sync-app-releases failures before deploy, and --run-scheduled-audit writes
     structured scheduled_audit_results for page_dedup."""
-    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+    from infra2_sdk.manifests import HookRunResult
     from infra2_sdk.refs import ResolvedRef
 
     result_file = tmp_path / "reconcile-result.json"
@@ -3889,13 +4228,7 @@ def test_resolve_workflow_failure_alert_and_scheduled_audit_json_contract(
         "resolve_image_ref",
         lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
     )
-    manifest = RuntimeHooksManifest.from_dict(
-        {
-            "schema_version": 2,
-            "service": "truealpha/app",
-            "slots": {s: {"run": "exit 1", "timeout_seconds": 30} for s in HOOK_SLOTS},
-        }
-    )
+    manifest = _hooks_v3("truealpha/app", run="exit 1")
     monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
     monkeypatch.setattr(
         reconcile, "resolve_app_hook_cwd", lambda *_a, **_kw: (tmp_path, None)
@@ -4115,29 +4448,15 @@ def test_hook_checkout_survives_a_refused_tag_fetch_and_says_so(
 def test_release_ref_is_needed_only_by_the_slot_that_declares_checkout_lineage(
     slot, expected
 ) -> None:
-    from infra2_sdk.manifests import HOOK_SLOTS, RuntimeHooksManifest
 
-    manifest = RuntimeHooksManifest.from_dict(
-        {
-            "schema_version": 2,
-            "service": "truealpha/app",
-            "slots": {
-                s: {
-                    "run": "echo ok",
-                    "timeout_seconds": 30,
-                    "checkout_lineage": s == "scheduled_audit",
-                }
-                for s in HOOK_SLOTS
-            },
-        }
-    )
+    manifest = _hooks_v3("truealpha/app", lineage=("scheduled_audit",))
     assert reconcile._slot_release_ref(manifest, (slot,), "v1.2.3") == expected
 
 
 def _record_hook_checkouts(monkeypatch, tmp_path) -> list[tuple[str, str]]:
     """Stub the hook environment of a reconcile run; return the (service, release_ref)
     of every hook checkout that the run asks for."""
-    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+    from infra2_sdk.manifests import HookRunResult
     from infra2_sdk.refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
@@ -4158,24 +4477,7 @@ def _record_hook_checkouts(monkeypatch, tmp_path) -> list[tuple[str, str]]:
         "resolve_image_ref",
         lambda ref, **_kw: ResolvedRef(sha=SHA, image_ref=ref, form="tag"),
     )
-    manifest = RuntimeHooksManifest.from_dict(
-        {
-            "schema_version": 2,
-            "service": "finance_report/app",
-            "slots": {
-                slot_name: {
-                    "run": "echo ok",
-                    "bootstrap": "",
-                    "timeout_seconds": 30,
-                    "required_env": [],
-                    "optional_env": [],
-                    "artifacts_dir": f"artifacts/{slot_name}",
-                    "checkout_lineage": slot_name == "scheduled_audit",
-                }
-                for slot_name in HOOK_SLOTS
-            },
-        }
-    )
+    manifest = _hooks_v3("finance_report/app", lineage=("scheduled_audit",))
     monkeypatch.setattr(reconcile, "fetch_hooks_manifest", lambda *_a, **_kw: manifest)
     monkeypatch.setattr(
         reconcile,
@@ -4388,7 +4690,7 @@ def test_run_post_deploy_app_hooks_executes_services_concurrently_and_stops_slot
     a failing service's own smoke->staging_gate chain without dropping sibling verdicts."""
     import threading
     import time as _time
-    from infra2_sdk.manifests import HOOK_SLOTS, HookRunResult, RuntimeHooksManifest
+    from infra2_sdk.manifests import HookRunResult
     from infra2_sdk.refs import ResolvedRef
 
     repos_yaml = tmp_path / "harness" / "repos.yaml"
@@ -4423,15 +4725,7 @@ def test_run_post_deploy_app_hooks_executes_services_concurrently_and_stops_slot
     )
 
     def _fake_fetch(service: str, _sha: str, **_kw):
-        return RuntimeHooksManifest.from_dict(
-            {
-                "schema_version": 2,
-                "service": service,
-                "slots": {
-                    s: {"run": "echo ok", "timeout_seconds": 30} for s in HOOK_SLOTS
-                },
-            }
-        )
+        return _hooks_v3(service)
 
     monkeypatch.setattr(reconcile, "fetch_hooks_manifest", _fake_fetch)
 
@@ -4649,19 +4943,9 @@ def test_hook_verdict_key_and_scheduled_dedup_cache(
 ) -> None:
     """#1602 (S3.2, S4.1, S4.2): hook verdict keys dedup identical scheduled audits
     and force replay on workflow_dispatch while emitting stderr heartbeats."""
-    from infra2_sdk.manifests import HookRunResult, HookSlotSpec, RuntimeHooksManifest
+    from infra2_sdk.manifests import HookRunResult
 
-    manifest = RuntimeHooksManifest(
-        schema_version=2,
-        service="platform/alerting",
-        slots={
-            "smoke": HookSlotSpec(run="echo ok", timeout_seconds=30),
-            "preview_gate": HookSlotSpec(run="echo ok", timeout_seconds=30),
-            "staging_gate": HookSlotSpec(run="echo ok", timeout_seconds=30),
-            "prod_gate": HookSlotSpec(run="echo ok", timeout_seconds=30),
-            "scheduled_audit": HookSlotSpec(run="echo ok", timeout_seconds=30),
-        },
-    )
+    manifest = _hooks_v3("platform/alerting")
     key_first = reconcile.hook_verdict_key(
         "platform/alerting", "abc123", "scheduled_audit", "staging", manifest
     )
@@ -4759,19 +5043,9 @@ def test_hook_heartbeat_emits_to_stderr(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """#1602 (S3.2): long-running hooks emit periodic heartbeat lines to stderr."""
-    from infra2_sdk.manifests import HookRunResult, HookSlotSpec, RuntimeHooksManifest
+    from infra2_sdk.manifests import HookRunResult
 
-    manifest = RuntimeHooksManifest(
-        schema_version=2,
-        service="platform/alerting",
-        slots={
-            "smoke": HookSlotSpec(run="echo ok", timeout_seconds=30),
-            "preview_gate": HookSlotSpec(run="echo ok", timeout_seconds=30),
-            "staging_gate": HookSlotSpec(run="echo ok", timeout_seconds=30),
-            "prod_gate": HookSlotSpec(run="echo ok", timeout_seconds=30),
-            "scheduled_audit": HookSlotSpec(run="echo ok", timeout_seconds=30),
-        },
-    )
+    manifest = _hooks_v3("platform/alerting")
 
     def _slow_exec(*_args, **_kwargs) -> HookRunResult:
         time.sleep(0.06)
@@ -5335,24 +5609,8 @@ def test_preview_gate_passes_infra2_touched_files_from_compare(
 def test_preview_gate_touched_files_survives_build_hook_env(tmp_path) -> None:
     """Real execute_app_hook_slot passes INFRA2_TOUCHED_FILES to the subprocess even if manifest omits it."""
     from common.deploy import app_contract
-    from infra2_sdk.manifests import HOOK_SLOTS, RuntimeHooksManifest
 
-    manifest = RuntimeHooksManifest.from_dict(
-        {
-            "schema_version": 2,
-            "service": "finance_report/app",
-            "slots": {
-                slot_name: {
-                    "run": "echo ok",
-                    "bootstrap": "",
-                    "timeout_seconds": 30,
-                    "required_env": [],
-                    "optional_env": [],
-                }
-                for slot_name in HOOK_SLOTS
-            },
-        }
-    )
+    manifest = _hooks_v3("finance_report/app")
     seen_envs: list[dict[str, str]] = []
 
     def _capture_runner(argv, **kwargs):

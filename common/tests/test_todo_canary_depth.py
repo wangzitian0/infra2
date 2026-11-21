@@ -482,36 +482,56 @@ def test_todos_storage_sql_provisions_todo_app_role_and_table(deploy) -> None:
 
 
 def test_todo_runtime_hooks_manifest_declares_all_five_slots(tmp_path) -> None:
-    """#1503, #1554, #1608: platform/30.todo/runtime-hooks.manifest.json conforms to
-    RuntimeHooksManifest schema v2, declares all 5 HOOK_SLOTS without duplicating inline Python
-    one-liners across slots, and delegates to probe_health.py."""
+    """#1503, #1554, #1608, #1823: platform/30.todo/runtime-hooks.manifest.json is a schema 3
+    RuntimeHooksManifest. Each of the 5 train slots fills its own cells, and each check
+    delegates to probe_health.py."""
     from common.deploy.app_contract import (
         HOOK_SLOTS,
         execute_app_hook_slot,
         load_hooks_manifest,
+        schema3_empty_cells,
     )
+    from infra2_sdk.manifests import resolve_check_cells
 
-    manifest_path = SERVICE_DIR / "runtime-hooks.manifest.json"
-    manifest = load_hooks_manifest(manifest_path)
-    assert manifest.schema_version == 2
+    manifest = load_hooks_manifest(SERVICE_DIR / "runtime-hooks.manifest.json")
+    assert manifest.schema_version == 3
     assert manifest.service == "platform/todo"
-    assert set(manifest.slots) == set(HOOK_SLOTS)
-    assert manifest.slots["smoke"].timeout_seconds == 60
-    assert manifest.slots["preview_gate"].timeout_seconds == 120
-    assert manifest.slots["staging_gate"].timeout_seconds == 180
-    assert manifest.slots["prod_gate"].timeout_seconds == 120
-    assert manifest.slots["scheduled_audit"].timeout_seconds == 300
-    for slot_name, spec in manifest.slots.items():
-        assert "python3 probe_health.py" in spec.run, slot_name
-        assert "urllib.request.urlopen" not in spec.run, slot_name
-    assert "--require-service platform/todo" in manifest.slots["staging_gate"].run
+    checks = {check.id: check for check in manifest.checks}
+    assert set(checks) == set(HOOK_SLOTS)
+    assert {cid: resolve_check_cells(check) for cid, check in checks.items()} == {
+        "smoke": ("preview.operation", "staging.operation", "prod.operation"),
+        "preview_gate": ("preview.post",),
+        "staging_gate": ("staging.post",),
+        "prod_gate": ("prod.post",),
+        "scheduled_audit": ("scheduled_audit",),
+    }
+    assert {cid: check.timeout_seconds for cid, check in checks.items()} == {
+        "smoke": 60,
+        "preview_gate": 120,
+        "staging_gate": 180,
+        "prod_gate": 120,
+        "scheduled_audit": 300,
+    }
+    for slot in HOOK_SLOTS:
+        assert schema3_empty_cells(manifest, slot) == (), slot
+    for cid, check in checks.items():
+        command = check.argv[-1]
+        assert "python3 probe_health.py" in command, cid
+        assert "urllib.request.urlopen" not in command, cid
+        assert "EXPECTED_SHA" not in command, cid
+    assert "--require-service platform/todo" in checks["staging_gate"].argv[-1]
     for gate in ("staging_gate", "prod_gate"):
-        assert manifest.slots[gate].run.endswith(' --gate "$EXPECTED_SHA"'), gate
-        assert "EXPECTED_SHA" in manifest.slots[gate].required_env, gate
-    assert "--gate" not in manifest.slots["smoke"].run
+        assert checks[gate].argv[-1].endswith(' --gate "$APP_VERSION_REF"'), gate
+    assert "--gate" not in checks["smoke"].argv[-1]
     assert (SERVICE_DIR / "probe_health.py").is_file()
 
     for slot in HOOK_SLOTS:
+        seen: list[dict[str, str]] = []
+
+        def runner(cmd, **kw):
+            seen.append(dict(kw.get("env") or {}))
+            return subprocess.CompletedProcess(cmd, 0, stdout="ok\n", stderr="")
+
         res = execute_app_hook_slot(
             manifest,
             slot,
@@ -520,11 +540,11 @@ def test_todo_runtime_hooks_manifest_declares_all_five_slots(tmp_path) -> None:
             version_ref="v1.0.0",
             cwd=tmp_path,
             ambient_env={"PATH": "/usr/bin:/bin"},
-            runner=lambda cmd, **kw: subprocess.CompletedProcess(
-                cmd, 0, stdout="ok\n", stderr=""
-            ),
+            runner=runner,
         )
         assert res.status == "pass"
+        assert seen, slot
+        assert seen[-1]["APP_VERSION_REF"] == "v1.0.0", slot
 
 
 def test_todo_rendered_mount_fingerprints_and_compose_labels(deploy) -> None:
