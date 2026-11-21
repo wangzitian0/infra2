@@ -8,7 +8,7 @@
 1. **In-Band Health Probes**: Executes HTTP, TCP, and command probes declared by service `ProbeFacet` definitions to verify container liveness and dependencies.
 2. **Container Breakdown Analysis**: Parses Docker daemon events and container stdout/stderr logs upon crash to classify failure modes (OOM, missing secrets, port conflicts, configuration error).
 3. **Watchdog Issue Trail**: Reconciles red watchdog checks with GitHub Issues (truealpha#876 W4), ensuring exact-title deduplication, automatic resolution on green, and drill immutability.
-4. **Resident Watchers**: Pluggable asynchronous monitoring tasks (`ContainerBreakdownWatcher`) executing within the alerting sidecar runner loop.
+4. **Resident Watchers**: Pluggable asynchronous monitoring tasks (`BreakdownWatch`) executing within the alerting sidecar runner loop.
 
 ## Module Map
 
@@ -23,13 +23,13 @@
 | `local_ledger.py` | VPS availability ledger: per-signal daily ok/fail counts and last ok/fail times written by the probe runner (#904, #1223) | `record_probe_round()`, `host_ledger_path()`, `to_report_days()` |
 | `probe_specs.py` | Probe specs rendered from the registry for the probe runner | `render_probe_spec_text()`, `normalize_specs_text()` |
 | `estate_scheduler_liveness.py` | Liveness of every scheduled workflow in the estate repositories | `evaluate_estate_liveness()`, `evaluate_workflows()`, `BOUND_CAP_ENV` |
-| `watchers/` | Alerting sidecar resident watcher plugins: `resident.py` (base and registry), `deploy_queue_guard.py`, `breakdown_watch.py` | `ResidentWatcher`, `build_watchers()`, `DeployQueueGuard`, `ContainerBreakdownWatcher` |
+| `watchers/` | Alerting sidecar resident watcher plugins: `resident.py` (base and registry), `deploy_queue_guard.py`, `breakdown_watch.py` | `ResidentWatcher`, `build_watchers()`, `DeployQueueGuard`, `BreakdownWatch` |
 
 ## Usage Examples
 
 ### Executing In-Band Probes
 ```python
-from common.observability import ProbeSpec, run_probe
+from common.observability.probes import ProbeSpec, run_probe
 
 spec = ProbeSpec(
     name="postgres-tcp",
@@ -46,7 +46,7 @@ if not result.ok:
 
 ### Triaging Container Crashes
 ```python
-from common.observability import analyze_container_logs
+from common.observability.breakdown import analyze_container_logs
 
 verdict = analyze_container_logs("platform-alerting", "ERROR: connection refused")
 print(f"Container breakdown cause: {verdict.cause} ({verdict.detail})")

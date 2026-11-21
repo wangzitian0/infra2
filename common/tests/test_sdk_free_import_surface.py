@@ -23,16 +23,9 @@ OPS_CHECKS = ROOT / ".github/workflows/ops-checks.yml"
 
 MUST_IMPORT_WITHOUT_SDK = [
     "tools.harness",
+    "common.security",
     "common.security.registry",
-]
-
-SDK_BACKED_SECURITY_NAMES = [
-    "SupplyReport",
-    "VaultSecrets",
-    "apply_secret_supply",
-    "generate_secret_token",
-    "prune_orphan_secrets",
-    "resolve_vault_token",
+    "common.observability",
 ]
 
 _BLOCKER = """
@@ -178,48 +171,3 @@ def test_a_module_that_genuinely_needs_the_sdk_still_fails() -> None:
     assert proc.returncode != 0, (
         "common.security.supply imported with SDK blocked — blocker is broken"
     )
-
-
-def test_sdk_backed_security_names_fail_loudly_without_the_sdk() -> None:
-    script = (
-        _BLOCKER.format(module="common.security", root=str(ROOT))
-        + f"\nimport common.security as s\nfor name in {SDK_BACKED_SECURITY_NAMES!r}:\n"
-        "    try:\n"
-        "        getattr(s, name)\n"
-        "    except ImportError as exc:\n"
-        "        assert 'infra2_sdk' in str(exc), f'{name}: {exc}'\n"
-        "    else:\n"
-        "        raise AssertionError(f'{name} did not raise ImportError without SDK')\n"
-    )
-    proc = subprocess.run(
-        [sys.executable, "-c", script],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        timeout=120,
-        stdin=subprocess.DEVNULL,
-    )
-    assert proc.returncode == 0, (
-        f"SDK-backed security names check failed:\n{proc.stderr[-800:]}"
-    )
-
-
-def test_security_lazy_exports_match_the_public_surface_with_the_sdk() -> None:
-    import common.security as security
-    from common.security import prune, store, supply
-
-    owners = {
-        "SupplyReport": supply,
-        "apply_secret_supply": supply,
-        "prune_orphan_secrets": prune,
-        "VaultSecrets": store,
-        "generate_secret_token": store,
-        "resolve_vault_token": store,
-    }
-    assert set(SDK_BACKED_SECURITY_NAMES) == set(security.__all__)
-    assert sorted(owners) == sorted(security.__all__)
-    for name, owner in owners.items():
-        assert getattr(security, name) is getattr(owner, name), name
-    with pytest.raises(AttributeError, match="no attribute 'not_a_name'"):
-        security.not_a_name  # noqa: B018
-    assert set(security.__all__) <= set(dir(security))

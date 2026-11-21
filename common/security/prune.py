@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from infra2_sdk.secrets import SecretsError, vault_path
 
@@ -125,30 +124,10 @@ def prune(
     return report
 
 
-def prune_orphan_secrets(
-    services: Any = None,
-    *,
-    store: Any = None,
-    dry_run: bool = True,
-    environments: tuple[str, ...] | None = None,
-    **kwargs: Any,
-) -> PruneReport:
-    """S-05: Prune orphan secrets from Vault with safe dry_run default."""
-    target_services = SERVICES if services is None else services
-    return prune(
-        services=target_services,
-        environments=environments,
-        apply=not dry_run,
-        store=store,
-        **kwargs,
-    )
-
-
 __all__ = [
     "RESERVED_PREFIXES",
     "PrunePlan",
     "PruneReport",
     "plan_for",
     "prune",
-    "prune_orphan_secrets",
 ]

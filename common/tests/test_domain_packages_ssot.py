@@ -5,7 +5,6 @@ Verifies the 4 domain packages:
 2. common.security (store, supply, prune)
 3. common.backup (rehearsal, verification)
 4. common.observability (breakdown, watchers, probes, issue_trail)
-And validates that compatibility shims preserve full backward compatibility.
 """
 
 from __future__ import annotations
@@ -23,18 +22,8 @@ from common.core import (
     DeploymentEnvironment,
     with_env_suffix,
 )
-from common.observability import (
-    BreakdownVerdict,
-    ContainerBreakdownWatcher,
-    analyze_container_logs,
-    reconcile_issue_trail,
-)
-from common.security import (
-    apply_secret_supply,
-    generate_secret_token,
-    prune_orphan_secrets,
-    resolve_vault_token,
-)
+from common.observability.breakdown import BreakdownVerdict, analyze_container_logs
+from common.security.store import generate_secret_token, resolve_vault_token
 
 
 # ==========================================
@@ -90,17 +79,6 @@ def test_security_vault_token_resolution(monkeypatch) -> None:
     assert resolve_vault_token(custom_env) == "custom-token"
 
 
-def test_security_interfaces_exposed() -> None:
-    """S-03, S-05: Ensure supply and prune interfaces are callable."""
-    assert callable(apply_secret_supply)
-    assert callable(prune_orphan_secrets)
-
-
-# ==========================================
-# 3. common.backup Tests
-# ==========================================
-
-
 def test_backup_inventory_and_rehearsal_spec() -> None:
     """B-01: Verify backup inventory and rehearsal specification."""
     inventory = load_backup_inventory()
@@ -124,7 +102,7 @@ def test_backup_inventory_and_rehearsal_spec() -> None:
 
 
 # ==========================================
-# 4. common.observability Tests
+# 3. common.observability Tests
 # ==========================================
 
 
@@ -138,19 +116,6 @@ def test_observability_breakdown_analysis() -> None:
     vault_log = "Error: VAULT_ROLE_ID and VAULT_SECRET_ID are required to authenticate"
     vault_verdict = analyze_container_logs("vault-agent", vault_log)
     assert "vault approle 凭据缺失" in vault_verdict.cause.lower()
-
-
-def test_observability_watcher_and_trail_aliases() -> None:
-    """O-02 & O-04: Verify watcher and trail entry points."""
-    import inspect
-
-    assert inspect.isclass(ContainerBreakdownWatcher)
-    assert callable(reconcile_issue_trail)
-
-
-# ==========================================
-# 5. Compatibility Shims Tests
-# ==========================================
 
 
 def test_core_package_exports_the_objects_of_core_environ() -> None:

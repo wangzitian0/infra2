@@ -884,10 +884,7 @@ def test_docker_log_frames_are_removed_from_the_log_tail():
 
 def test_dead_shim_find_breakdown_reason_is_removed():
     """Verify dead compatibility alias find_breakdown_reason cannot be imported (#1203)."""
-    import common.observability
     import common.observability.breakdown
 
     assert not hasattr(common.observability.breakdown, "find_breakdown_reason")
     assert "find_breakdown_reason" not in common.observability.breakdown.__all__
-    with pytest.raises(AttributeError):
-        _ = common.observability.find_breakdown_reason

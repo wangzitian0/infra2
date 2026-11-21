@@ -61,9 +61,9 @@ No frozen compatibility shims remain in `common/`.
 The guard asserts that both are *not* structurally shims: migrate one and the table must
 move with it.
 
-`common.security` imports without infra2-sdk (#847): `common/security/__init__.py` loads
-`store`, `supply`, and `prune` lazily (PEP 562), so only touching an SDK-backed name needs
-the wheel; `common/tests/test_sdk_free_import_surface.py`,
+`common.security` imports without infra2-sdk (#847): `common/security/__init__.py` imports
+nothing, and `store`, `supply` and `prune` need the wheel only when a caller imports them;
+`common/tests/test_sdk_free_import_surface.py`,
 `test_secrets_registry.py::test_the_registry_table_is_readable_without_the_sdk` and
 `test_workflow_runtime_deps.py::test_a_job_can_import_what_it_runs` pin this contract.
 
@@ -91,7 +91,8 @@ container = with_env_suffix("platform-postgres", get_env())  # needs DEPLOY_ENV 
 
 ### 2. Secret Supply & Vault Access (`common.security`)
 ```python
-from common.security import VaultSecrets, apply_secret_supply
+from common.security.store import VaultSecrets
+from common.security.supply import apply_secret_supply
 from common.security.registry import lookup
 
 service = lookup("platform", "alerting")  # the secrets row, with its manifests
@@ -126,7 +127,8 @@ result = execute_rehearsal(plan)
 
 ### 4. Observability Probes & Log Triage (`common.observability`)
 ```python
-from common.observability import ProbeSpec, analyze_container_logs, run_probes
+from common.observability.breakdown import analyze_container_logs
+from common.observability.probes import ProbeSpec, run_probes
 
 spec = ProbeSpec(name="pg-tcp", kind="tcp", target="platform-postgres:5432")
 results = run_probes([spec])
