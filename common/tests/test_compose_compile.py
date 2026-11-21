@@ -350,35 +350,29 @@ def _todo_base_files() -> dict[str, str]:
     }
 
 
-def test_equivalence_finds_the_sidecar_env_suffix_gap_in_the_real_todo_file() -> None:
-    """The SDK sidecar has no ENV_SUFFIX; 30.todo/secrets.ctmpl reads it (#1864)."""
+def test_the_real_todo_file_is_equivalent_and_a_missing_env_suffix_is_found() -> None:
+    """The pinned SDK gives the x-vault sidecar ENV_SUFFIX (infra2-sdk#268), which
+    30.todo/secrets.ctmpl reads (#1864). A base without it differs."""
     source = _todo_as_x_infra2()
     files = _todo_base_files()
     compiled = compile_stack(source, vault_template=files["secrets.ctmpl"])
     base = (ROOT / TODO).read_text(encoding="utf-8")
-    assert equivalence_problems(source, compiled, base, files) == [
-        "services.vault-agent.environment.ENV_SUFFIX: only in the base file"
-    ]
+    assert equivalence_problems(source, compiled, base, files) == []
     without = base.replace(
         "      # secrets.ctmpl reads it to compose DATABASE_URL.\n      ENV_SUFFIX: ${ENV_SUFFIX:-}\n",
         "",
     )
     assert without != base
-    assert equivalence_problems(source, compiled, without, files) == []
+    assert equivalence_problems(source, compiled, without, files) == [
+        "services.vault-agent.environment.ENV_SUFFIX: only in the compiled file"
+    ]
 
 
 def test_equivalence_reports_a_changed_label_template_or_command() -> None:
     source = _todo_as_x_infra2()
     files = _todo_base_files()
     compiled = compile_stack(source, vault_template=files["secrets.ctmpl"])
-    base = (
-        (ROOT / TODO)
-        .read_text(encoding="utf-8")
-        .replace(
-            "      ENV_SUFFIX: ${ENV_SUFFIX:-}\n      CONFIGURATION_SHA256",
-            "      CONFIGURATION_SHA256",
-        )
-    )
+    base = (ROOT / TODO).read_text(encoding="utf-8")
     assert equivalence_problems(source, compiled, base, files) == []
     label = base.replace("priority=100", "priority=99")
     assert any(
@@ -434,9 +428,7 @@ def test_check_compares_a_migrated_file_with_its_base_ref(tmp_path: Path) -> Non
         1,
         1,
     )
-    assert report.problems == [
-        "platform/30.todo/compose.yaml: services.vault-agent.environment.ENV_SUFFIX: only in the base file"
-    ]
+    assert report.problems == []
 
 
 def test_check_on_this_tree_proves_every_plain_file_and_fails_on_an_empty_scan(
