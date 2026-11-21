@@ -8,6 +8,7 @@ import calendar
 import json
 import re
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -34,8 +35,17 @@ def pinned_canary_sdk(ref: str, runner=subprocess.run) -> str:
         text=True,
     )
     if shown.returncode != 0:
+        print(
+            f"notice: no Canary compose at {ref}; SDK pin check skipped",
+            file=sys.stderr,
+        )
         return ""
     found = CANARY_PIN_RE.findall(shown.stdout)
+    if not found:
+        print(
+            f"notice: no Canary image pin at {ref}; SDK pin check skipped",
+            file=sys.stderr,
+        )
     return found[0] if found else ""
 
 

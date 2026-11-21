@@ -164,3 +164,26 @@ def test_canary_verify_production_fallback_never_reads_the_new_pin(tmp_path) -> 
     )
     assert staging == "9.8.7"
     assert production != "9.8.7"
+
+
+def test_probe_health_reads_the_pin_format_that_canary_pin_owns() -> None:
+    """probe_health runs in the hook cwd without `common` on the path, so it keeps its own
+    regex. This test keeps the two in step on the real compose and on invalid pins."""
+    from common.tests.conftest import load_repo_module
+
+    probe = load_repo_module(
+        "platform/30.todo/probe_health.py", "probe_health_pin_format"
+    )
+    real = (REPO_ROOT / "platform/30.todo/compose.yaml").read_text(encoding="utf-8")
+    assert probe.CANARY_PIN_RE.findall(real) == [
+        canary_image_from_compose_text(real)[1]
+    ]
+    for bad in (
+        f"{CANARY_IMAGE_REPOSITORY}:v3.35.0",
+        f"{CANARY_IMAGE_REPOSITORY}@{DIGEST}",
+        f"ghcr.io/someone/else:v3.35.0@{DIGEST}",
+        f"{CANARY_IMAGE_REPOSITORY}:latest@{DIGEST}",
+    ):
+        assert probe.CANARY_PIN_RE.findall(bad) == [], bad
+        with pytest.raises(CanaryPinError):
+            canary_image_from_compose_text(_compose(f"    image: {bad}\n"))
