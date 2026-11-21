@@ -69,7 +69,7 @@ executable embeds reviewed Knowledge Packs and ontology; installation proof must
 run outside the build checkout, including after that checkout is removed.
 
 Reviewed snapshot and acceptance evidence live in
-[Infra-019 (Archived)](../docs/project/archive/Infra-019.harness_control_plane.md#todowrite-archived).
+[Infra-019 (Archived)](../docs/project/archive/README.md#infra-019).
 
 ## Workspace Guides
 

@@ -24,7 +24,7 @@
 | **带外 watchdog** | [`cloudflare/infra-watchdog`](../../cloudflare/infra-watchdog/)(轻量带外,边缘 30min)+ [`.github/workflows/ops-checks.yml`](https://github.com/wangzitian0/infra2/blob/main/.github/workflows/ops-checks.yml)(日级带外审计) | 只判 VPS 自己报告不了的:整机/整栈失联、告警链路自身失效;分工见 §1.1 |
 | **信号清单** | [`watchdog-signals.yaml`](watchdog-signals.yaml) | 按信号(非组件)追踪 watchdog 归属 |
 | **报告 - 账本** | VPS probe runner 账本文件(35 天,`common/observability/local_ledger.py`)+ Worker 心跳失联边沿(`/outages`)·`common/observability/ledger.py`(聚合)·`tools/stability_report.py --daily`(日报,GitHub `ops-checks.yml` `watchdog` job) + `tools/watchdog_weekly_digest.py`(周报 7d / 月报 30d,`ops-checks.yml` `digest` job,内聚 `common/observability/digest.py::collect_weekly_stability_section`) | 正向证明,见 §6 |
-| **部署指南** | [Infra-007](../project/archive/Infra-007.signoz_install.md) | SigNoz 安装 |
+| **部署指南** | [Infra-007](../project/archive/README.md#infra-007) | SigNoz 安装 |
 
 In-band 告警路径恒为:`component/app → OTLP Collector → SigNoz → platform/12.alerting → Feishu/Lark`。
 带外检测**独立于 VPS**(SigNoz 与 bridge 都在单台机器上,会和宿主一起挂),故走 Cloudflare 边缘 cron 直发 Feishu。
@@ -231,11 +231,7 @@ graph LR
 
 > **单一全局实例**:SigNoz 是 `prod_only` 单实例。preview/staging/production **全部**打到这个**无后缀** collector,靠 `deployment.environment.name` 区分环境(无 per-env collector)。标识规则见 [core.environments.md](core.environments.md#telemetry-identity)。
 
-| 变量 | 说明 | 示例 |
-|------|------|------|
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP HTTP 端点(所有环境无后缀) | `http://platform-signoz-otel-collector:4318` |
-| `OTEL_SERVICE_NAME` | 服务名 | `finance-report-backend` |
-| `OTEL_RESOURCE_ATTRIBUTES` | `ServiceIdentity` 渲染的完整资源身份 | `deployment.environment.name=production,infra.service.id=finance_report/app,service.version=<version>,infra.iac.ref=<sha>` |
+The infra2-sdk [app integration contract](https://github.com/wangzitian0/infra2-sdk/blob/main/docs/app-integration-contract.md) owns the names of the app-side variables `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`, and the `init_service` start-up that reads them. infra2 owns their values: the endpoint is `http://platform-signoz-otel-collector:4318` in every environment, with no suffix. [core.environments.md](core.environments.md#telemetry-identity) defines the `OTEL_RESOURCE_ATTRIBUTES` keys.
 
 > 表层别名与底层 commit 由 infra2 部署时签发,应用只消费、对缺失 fast-fail。The alert bridge (`platform/alerting`) is the one exception: it pages people, so it keeps running and logs a bad OTEL value (todo refuses to start). The value of `GIT_COMMIT_SHA` for each service class is in [core.environments.md](core.environments.md#commit-identity).
 

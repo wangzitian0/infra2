@@ -67,11 +67,20 @@ def test_code_doc_path_references_resolve() -> None:
     )
 
 
+ARCHIVE_INDEX = ROOT / "docs/project/archive/README.md"
+
+
+def _epic_docs() -> list[Path]:
+    """Active EPIC docs plus the archive index, which keeps the AC table of each
+    closed EPIC (#1826) -- else a test citing an archived AC looks orphaned."""
+    docs = sorted((ROOT / "docs/project").glob("Infra-*.md"))
+    assert ARCHIVE_INDEX.is_file(), f"missing {ARCHIVE_INDEX.relative_to(ROOT)}"
+    return [*docs, ARCHIVE_INDEX]
+
+
 def _defined_ac_ids() -> set[str]:
     defined: set[str] = set()
-    # rglob so archived EPICs under docs/project/archive/ count as defining their ACs too —
-    # else a test citing an archived AC would falsely look orphaned.
-    for path in (ROOT / "docs/project").rglob("Infra-*.md"):
+    for path in _epic_docs():
         defined |= set(
             _AC_RE.findall(path.read_text(encoding="utf-8", errors="ignore"))
         )
@@ -100,7 +109,7 @@ def test_ac_proof_file_paths_in_epics_exist() -> None:
     """Concrete (non-glob) proof file paths cited in EPIC AC tables must exist — no proof-rot
     where an AC points at a renamed/deleted test or tool."""
     missing: list[str] = []
-    for doc in (ROOT / "docs/project").rglob("Infra-*.md"):  # incl. archive/
+    for doc in _epic_docs():  # incl. the archive index
         for line in doc.read_text(encoding="utf-8", errors="ignore").splitlines():
             if not _AC_RE.search(line):
                 continue  # only AC rows carry proof references

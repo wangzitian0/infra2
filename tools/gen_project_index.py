@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Generate the Active/Archived Projects sections in docs/project/README.md from
-each Infra-XXX doc's own H1 title and Status header.
+"""Generate the Active Projects section in docs/project/README.md from each
+active Infra-XXX doc's own H1 title and Status header.
 
 The portfolio previously hand-copied each project's status into the index —
 Infra-004 and Infra-005 drifted to "In Progress" in the index while their own
@@ -10,12 +10,11 @@ drift from what each doc actually says. `test_project_index_generated_matches_
 committed` locks generated == committed; run `python tools/gen_project_index.py
 --write` to regenerate after adding/renaming/re-statusing a project doc.
 
-Archived vs. active is which directory the file lives in (docs/project/ vs.
-docs/project/archive/), not string-matching the status text — a doc whose
-Status says "Archived" but hasn't been moved yet is a real, visible drift this
-generator will NOT paper over (it stays in whichever section its directory
-says, so its status text and its section can visibly disagree — that's the
-day's actual state, not something to silently reconcile).
+Closed projects have no file of their own. Each one is an entry in the
+provenance index docs/project/archive/README.md (#1826), and
+common/tests/test_project_lifecycle_governance.py guards that index. A doc
+whose Status says "Archived" but stays in docs/project/ is a real, visible
+drift: this generator lists it as active and does not hide it.
 """
 
 from __future__ import annotations
@@ -27,15 +26,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_DIR = ROOT / "docs/project"
-ARCHIVE_DIR = PROJECT_DIR / "archive"
 README = PROJECT_DIR / "README.md"
 
 BEGIN_ACTIVE = "<!-- BEGIN GENERATED ACTIVE PROJECTS (tools/gen_project_index.py) -->"
 END_ACTIVE = "<!-- END GENERATED ACTIVE PROJECTS -->"
-BEGIN_ARCHIVED = (
-    "<!-- BEGIN GENERATED ARCHIVED PROJECTS (tools/gen_project_index.py) -->"
-)
-END_ARCHIVED = "<!-- END GENERATED ARCHIVED PROJECTS -->"
 
 _TITLE_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 _STATUS_RE = re.compile(r"^\s*>?\s*\*\*(?:Status|状态)\*\*:?\s*(.+?)\s*$", re.MULTILINE)
@@ -101,11 +95,10 @@ def render_section(directory: Path, link_prefix: str) -> str:
 
 def render_readme() -> str:
     text = README.read_text(encoding="utf-8")
-    for begin, end in ((BEGIN_ACTIVE, END_ACTIVE), (BEGIN_ARCHIVED, END_ARCHIVED)):
-        if begin not in text or end not in text:
-            raise SystemExit(
-                f"gen_project_index: markers not found in {README} — add them once"
-            )
+    if BEGIN_ACTIVE not in text or END_ACTIVE not in text:
+        raise SystemExit(
+            f"gen_project_index: markers not found in {README} — add them once"
+        )
 
     text = (
         text.split(BEGIN_ACTIVE)[0]
@@ -115,15 +108,6 @@ def render_readme() -> str:
         + "\n\n"
         + END_ACTIVE
         + text.split(END_ACTIVE, 1)[1]
-    )
-    text = (
-        text.split(BEGIN_ARCHIVED)[0]
-        + BEGIN_ARCHIVED
-        + "\n\n"
-        + render_section(ARCHIVE_DIR, "./archive/")
-        + "\n\n"
-        + END_ARCHIVED
-        + text.split(END_ARCHIVED, 1)[1]
     )
     return text
 

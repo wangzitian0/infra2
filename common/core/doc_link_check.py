@@ -235,8 +235,8 @@ def main() -> int:
         print(f"      [{label}]({link})")
     print(
         "\nMost dead links here are positional. The two that recur:\n"
-        "  - a project was archived into docs/project/archive/ and a referrer "
-        "still points at the old path;\n"
+        "  - a closed project file was deleted into an entry of "
+        "docs/project/archive/README.md and a referrer still points at it;\n"
         "  - a file moved one directory deeper and its own relative links each "
         "need one more '../'.\n"
         "If a link is genuinely unresolvable because the target's existence is "

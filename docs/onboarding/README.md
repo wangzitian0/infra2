@@ -46,7 +46,7 @@
 
 - **[Project Portfolio](../project/README.md)** - 全量项目索引
 - **进行中项目**：`docs/project/Infra-XXX.*.md`
-- **归档项目**：`docs/project/archive/`
+- **归档项目**：[`docs/project/archive/README.md`](../project/archive/README.md)
 
 ---
 

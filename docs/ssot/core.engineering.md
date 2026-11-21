@@ -120,7 +120,7 @@ schema**，那是个枚举不完的开集。**守卫的输入面比守卫的断�
 - **闭环变更**：必须包含 修改代码 → 更新 SSOT → 验证生效。
 
 **4. Result（结果验证）**
-- **完工自检**：对照 `docs/project/` 中的 Project 检查。未完成记录 todo，完成则移入 `docs/project/archive/`。
+- **完工自检**：对照 `docs/project/` 中的 Project 检查。未完成记录 todo，完成则在 `docs/project/archive/README.md` 加一条索引并删除原文件。
 - **证据闭环**：通过相关 SSOT 文档 "The Proof" 章节定义的测试证明结果。
 - **更新文档**：更新所在目录 README、Project 文档、SSOT 文档。
 

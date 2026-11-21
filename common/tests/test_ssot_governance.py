@@ -132,10 +132,11 @@ def test_project_ac_proof_paths_target_existing_files() -> None:
     assert missing == []
 
 
-def test_redesigned_pipeline_validation_command_targets_existing_files() -> None:
-    """Infra-011 validation commands must stay runnable as proof files move."""
+def test_archive_index_proof_paths_target_existing_files() -> None:
+    """Proof paths in the archive index (#1826) must exist as proof files move."""
     missing: list[str] = []
-    path = PROJECT_DIR / "archive" / "Infra-011.reliability_hardening.md"
+    checked = 0
+    path = PROJECT_DIR / "archive" / "README.md"
 
     for target in BACKTICK_PATH_RE.findall(path.read_text(encoding="utf-8")):
         if not target.startswith(PROOF_PATH_PREFIXES):
@@ -145,18 +146,11 @@ def test_redesigned_pipeline_validation_command_targets_existing_files() -> None
         matches = list(ROOT.glob(_strip_anchor(target))) if "*" in target else []
         if matches:
             continue
+        checked += 1
         if not (ROOT / _strip_anchor(target)).exists():
             missing.append(f"{path.relative_to(ROOT)} -> {target}")
 
-    for line in path.read_text(encoding="utf-8").splitlines():
-        target = line.strip().rstrip("\\")
-        if not target.startswith(PROOF_PATH_PREFIXES):
-            continue
-        if " " in target or "\n" in target:
-            continue
-        if not (ROOT / _strip_anchor(target)).exists():
-            missing.append(f"{path.relative_to(ROOT)} -> {target}")
-
+    assert checked >= 20, f"the scan checked only {checked} proof paths"
     assert missing == []
 
 
