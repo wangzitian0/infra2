@@ -193,12 +193,16 @@ def _ops_checks_scheduler_ping_step() -> tuple[dict, str]:
     assert step_name in names, f"{step_name!r} missing from ops-checks.yml watchdog"
     assert names.index(step_name) < names.index("Record the verdicts as GitHub issues")
     ping_step = steps[names.index(step_name)]
-    run_script = ping_step["run"]
-    marker = "python - <<'PY'\n"
-    assert marker in run_script and "\nPY" in run_script
-    import textwrap
-
-    python_src = textwrap.dedent(run_script.split(marker, 1)[1].rsplit("\nPY", 1)[0])
+    # #1877: the step runs the module, which records a verdict on each outcome.
+    assert (
+        ping_step["run"].strip() == "python -m common.observability.scheduler_heartbeat"
+    )
+    python_src = (
+        "import sys; "
+        f"sys.path.insert(0, {str(ROOT)!r}); "
+        "from common.observability.scheduler_heartbeat import main; "
+        "raise SystemExit(main())"
+    )
     return ping_step, python_src
 
 
