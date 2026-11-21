@@ -1,6 +1,6 @@
 """The IaC Runner image rebuilds when any input that its build reads changes.
 
-v3.1.130 changed uv.lock (infra2-sdk 4.0.0). The bootstrap step ran, but the skip rule
+Release v3.1.130 changed uv.lock (an infra2-sdk major bump). The bootstrap step ran, but the skip rule
 compared only bootstrap/06.iac_runner, so the runner kept an image with an old SDK.
 """
 
@@ -72,7 +72,7 @@ def repo(tmp_path: Path) -> tuple[Path, str]:
         {
             "bootstrap/06.iac_runner/Dockerfile": "FROM python\n",
             "scripts/deploy_iac_runner_bootstrap.sh": "true\n",
-            "uv.lock": 'version = "3.23.0"\n',
+            "uv.lock": "lock-a\n",
             "tools/sdk_requirement.py": "print(1)\n",
             "tools/other.py": "print(2)\n",
             "README.md": "a\n",
