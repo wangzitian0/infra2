@@ -45,7 +45,6 @@ from common.deploy.contract import (
     DeployTarget,
     DeployTypeSpec,
     ServiceSpec,
-    classify_version_ref,
     default_version_ref,
     deploy_type_spec,
     make_deploy_target,
@@ -179,7 +178,7 @@ def _resolve_for_type(spec, version_ref, *, repo: str):
         if spec.alias_kind == "branch"
         else str(version_ref).strip()
     )
-    validate_ref_form(spec.key, classify_version_ref(ref))
+    validate_ref_form(spec.key, classify_ref(ref))
     resolved = resolve_image_ref(ref, repo=repo)
     # A bare short sha resolves to itself (not a 40-hex commit) — reject with a surface-level
     # message instead of letting it surface late as an opaque code_version contract error.
@@ -335,7 +334,7 @@ def _deploy_platform(
     pinned_ref: str | None = None
     ver_clean = (version_ref or "").strip()
     if spec.artifact_source == "app" and ver_clean:
-        validate_ref_form(type_spec.key, classify_version_ref(ver_clean))
+        validate_ref_form(type_spec.key, classify_ref(ver_clean))
         pinned_ref = ver_clean
     started = time.monotonic()
     response, final = _trigger_and_poll(
@@ -843,7 +842,7 @@ def _resolve_control_plane_iac_ref(
             )
         effective_iac = iac_clean or ver_clean or _default_iac_ref(spec.env)
         if ver_clean:
-            validate_ref_form(spec.key, classify_version_ref(ver_clean))
+            validate_ref_form(spec.key, classify_ref(ver_clean))
         return effective_iac, ""
     effective_iac = iac_clean or _default_iac_ref(spec.env)
     return effective_iac, version_ref

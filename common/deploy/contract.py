@@ -43,6 +43,7 @@ from functools import lru_cache
 from typing import Literal
 
 import yaml
+from infra2_sdk.refs import classify_ref
 from infra2_sdk.runtime.environment import is_preview_alias
 
 from common.core.constants import APP_REPO_ID_TO_SERVICE, REPO_ROOT
@@ -50,14 +51,10 @@ from common.core import registry as service_registry
 from common.deploy.env_config import env_config, preview_alias
 
 _SHA_RE = re.compile(r"\A[0-9a-f]{40}\Z")  # a resolved, image-addressable commit sha
-# Pairwise-disjoint version_ref forms (#1781). Do not import newer infra2_sdk.refs helpers
-# here because iac-runner task collection runs on RUNNER_SDK = 3.23.0 until rebuild.
-_BRANCH_REF_RE = re.compile(r"\Amain\Z")
-_TAG_REF_RE = re.compile(r"\Av\d+\.\d+\.\d+\Z")
+# The PR form of a version_ref (#1781). infra2_sdk.refs.classify_ref classifies all forms.
 # PR refs: either explicit `pr-<N>` or 1-6 digit integer (strictly < 7 chars so it
 # never collides with 7-40 hex commit SHAs).
 _PR_REF_RE = re.compile(r"\A(?:pr-([1-9]\d*)|([1-9]\d{0,5}))\Z")
-_SHORT_OR_FULL_SHA_RE = re.compile(r"\A[0-9a-fA-F]{7,40}\Z")
 ArtifactSource = Literal["infra2", "app"]
 
 
@@ -493,34 +490,6 @@ DEPLOY_TYPES: dict[str, DeployTypeSpec] = {
 _HARNESS_REPOS_REL_PATH = "harness/repos.yaml"
 
 
-def classify_version_ref(ref: str | int) -> str:
-    """Equal to ``infra2_sdk.refs.classify_ref`` of infra2-sdk 4.x. This copy stays while the
-    IaC runner image runs an older SDK without the ``pr`` form; delete it after the runner
-    image is rebuilt on 4.x (a production step, infra2#1823 Step 3).
-
-    Classify ``version_ref`` into one of 4 pairwise-disjoint forms:
-
-    - ``branch``: literal ``main``
-    - ``tag``: ``vX.Y.Z``
-    - ``pr``: ``pr-<N>`` or 1-6 digit positive integer (``1``..``999999``)
-    - ``sha``: 7-40 hex characters
-    """
-    cleaned = str(ref).strip() if ref is not None else ""
-    if not cleaned:
-        raise ValueError("version_ref must be non-empty")
-    if _BRANCH_REF_RE.fullmatch(cleaned):
-        return "branch"
-    if _TAG_REF_RE.fullmatch(cleaned):
-        return "tag"
-    if _PR_REF_RE.fullmatch(cleaned):
-        return "pr"
-    if _SHORT_OR_FULL_SHA_RE.fullmatch(cleaned):
-        return "sha"
-    raise ValueError(
-        f"unrecognized version_ref {ref!r}; expected 'main', 'vX.Y.Z', 'pr-<N>', 1-6 digit PR, or 7-40 hex SHA"
-    )
-
-
 def normalize_pr_number(ref: str | int) -> int:
     """Parse ``pr-<N>`` or a positive 1-6 digit PR integer into ``int``."""
     cleaned = str(ref).strip() if ref is not None else ""
@@ -541,7 +510,7 @@ def resolve_deploy_type_for_ref(
         return spec
     cleaned = str(version_ref).strip() if version_ref is not None else ""
     candidate = cleaned or "main"
-    form = classify_version_ref(candidate)
+    form = classify_ref(candidate)
     validate_ref_form("preview", form)
     if form == "pr":
         return DEPLOY_TYPES["preview/pr"]
