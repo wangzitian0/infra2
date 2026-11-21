@@ -73,7 +73,7 @@ services:
     cpu_shares: 512
     depends_on:
       - vault-agent
-    # The Redis password, the Postgres canary password and the S3 canary key come from the
+    # The Redis password, DATABASE_URL and the S3 canary key come from the
     # vault-agent's rendered file. They are never compose env, so Dokploy never stores them.
     entrypoint:
       - sh
@@ -101,14 +101,6 @@ services:
       CONFIGURATION_SHA256: ${CONFIGURATION_SHA256:-}
       INTERNAL_DOMAIN: ${INTERNAL_DOMAIN:-zitian.party}
       ENV_SUFFIX: ${ENV_SUFFIX:-}
-      POSTGRES_HOST: platform-postgres${ENV_SUFFIX}
-      POSTGRES_PORT: "5432"
-      # Dedicated read-only role. TodoDeployer.CANARY_PG_ROLE creates it on every sync.
-      CANARY_POSTGRES_USER: canary_ro
-      CANARY_POSTGRES_DATABASE: postgres
-      # Dedicated todos persistence role. TodoDeployer.TODO_PG_ROLE creates it with todos DML grants.
-      TODO_POSTGRES_USER: todo_app
-      TODO_POSTGRES_DATABASE: postgres
       REDIS_HOST: platform-redis${ENV_SUFFIX}
       REDIS_PORT: "6379"
       S3_ENDPOINT: http://platform-s3${ENV_SUFFIX}:9000

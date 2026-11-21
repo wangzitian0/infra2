@@ -67,8 +67,8 @@ class TodoDeployer(Deployer):
         ),
     )
 
-    # Vault self-refresh facts: the vault-agent renders the Redis password, the Postgres
-    # canary password and the S3 canary key into the app container (AppRole auth).
+    # Vault self-refresh facts: the vault-agent renders the Redis password, DATABASE_URL
+    # and the S3 canary key into the app container (AppRole auth).
     secrets = (
         SecretsFacet(
             vault_agent_container="platform-todo-vault-agent${ENV_SUFFIX}",
@@ -77,51 +77,18 @@ class TodoDeployer(Deployer):
         ),
     )
 
-    # The dedicated Postgres login of the canary. The compose names the same role in
-    # CANARY_POSTGRES_USER (common/tests/test_todo_canary_depth.py keeps them equal).
-    CANARY_PG_ROLE = "canary_ro"
-    CANARY_PG_CONNECTION_LIMIT = 5
+    # The one Postgres login of the Canary Todo. secrets.ctmpl composes DATABASE_URL with
+    # this role (common/tests/test_preview_platform_render.py keeps them equal).
     TODO_PG_ROLE = "todo_app"
     TODO_PG_CONNECTION_LIMIT = 20
     # token_urlsafe(32), the SDK's generator for runtime secrets, yields only these characters.
-    # A value outside this set is refused: it cannot be quoted into SQL without doubt.
-    _CANARY_PG_PASSWORD = re.compile(r"[A-Za-z0-9_-]{16,128}")
-
-    @classmethod
-    def canary_role_sql(cls, password: str) -> str:
-        """Idempotent SQL for the canary role: login only, no grants, read-only sessions.
-
-        `SELECT 1` needs CONNECT, which PUBLIC already holds, so the role gets no GRANT.
-        ALTER ROLE runs on every call, so a rotated Vault password takes effect.
-        """
-        if not cls._CANARY_PG_PASSWORD.fullmatch(password or ""):
-            raise ValueError(
-                "canary Postgres password must be 16-128 characters from [A-Za-z0-9_-]"
-            )
-        role = cls.CANARY_PG_ROLE
-        attributes = (
-            "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION "
-            f"CONNECTION LIMIT {cls.CANARY_PG_CONNECTION_LIMIT}"
-        )
-        return (
-            # The server logs a failed statement with its text by default, and the
-            # ALTER ROLE below carries the password. The session turns that logging off first.
-            "SET log_min_error_statement = 'panic';\n"
-            "SET log_statement = 'none';\n"
-            "SET log_min_duration_statement = -1;\n"
-            "DO $do$\nBEGIN\n"
-            f"  IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{role}') THEN\n"
-            f"    CREATE ROLE {role} {attributes};\n"
-            "  END IF;\n"
-            "END\n$do$;\n"
-            f"ALTER ROLE {role} WITH {attributes} PASSWORD '{password}';\n"
-            f"ALTER ROLE {role} SET default_transaction_read_only = on;\n"
-        )
+    # A value outside this set is refused: it cannot be quoted into SQL or a URL without doubt.
+    _TODO_PG_PASSWORD = re.compile(r"[A-Za-z0-9_-]{16,128}")
 
     @classmethod
     def todos_storage_sql(cls, password: str) -> str:
         """Idempotent SQL for the todos persistence role, table, and minimal DML grants."""
-        if not cls._CANARY_PG_PASSWORD.fullmatch(password or ""):
+        if not cls._TODO_PG_PASSWORD.fullmatch(password or ""):
             raise ValueError(
                 "todo Postgres password must be 16-128 characters from [A-Za-z0-9_-]"
             )
@@ -164,42 +131,32 @@ class TodoDeployer(Deployer):
         return re.sub(r"(?i)(PASSWORD\s+)'[^']*'", r"\1<redacted>", text)
 
     @classmethod
-    def _ensure_canary_postgres_role(cls, c, env: str | None = None) -> bool:
-        """Create or refresh the canary role in the environment's platform Postgres.
+    def _ensure_todo_postgres_role(cls, c, env: str | None = None) -> bool:
+        """Create or refresh the todo_app role and the todos table in the platform Postgres.
 
         The SQL goes over stdin, so the password never appears in an argument list on the
-        runner or on the VPS. Any failure returns False: the canary cannot log in without
+        runner or on the VPS. Any failure returns False: the Canary cannot log in without
         the role, and a deploy must not report that as healthy.
         """
         e = cls.env()
         backend = cls.secrets_backend(env=env)
         try:
-            password = backend.get("CANARY_POSTGRES_PASSWORD")
+            password = backend.get("TODO_POSTGRES_PASSWORD")
         except Exception as exc:  # noqa: BLE001 - an unreadable store is a deploy failure
             error(
-                f"{cls.service}: cannot read CANARY_POSTGRES_PASSWORD from Vault: {exc}"
+                f"{cls.service}: cannot read TODO_POSTGRES_PASSWORD from Vault: {exc}"
             )
             return False
         if not password:
             error(
-                f"{cls.service}: Vault holds no CANARY_POSTGRES_PASSWORD; run the secret supply first"
+                f"{cls.service}: Vault holds no TODO_POSTGRES_PASSWORD; run the secret supply first"
             )
             return False
         try:
-            sql = cls.canary_role_sql(password)
+            sql = cls.todos_storage_sql(password)
         except ValueError as exc:
             error(f"{cls.service}: {exc}")
             return False
-        try:
-            todo_password = backend.get("TODO_POSTGRES_PASSWORD")
-        except Exception:  # noqa: BLE001 - optional in legacy canary-only tests
-            todo_password = None
-        if todo_password:
-            try:
-                sql += cls.todos_storage_sql(todo_password)
-            except ValueError as exc:
-                error(f"{cls.service}: {exc}")
-                return False
         container = f"platform-postgres{e.get('ENV_SUFFIX') or ''}"
         result = c.run(
             f"ssh root@{e['VPS_HOST']} "
@@ -210,16 +167,12 @@ class TodoDeployer(Deployer):
         )
         if result.failed:
             stderr_clean = cls.redact_password((result.stderr or "").strip(), password)
-            if todo_password:
-                stderr_clean = cls.redact_password(stderr_clean, todo_password)
             error(
-                f"{cls.service}: could not provision Postgres role {cls.CANARY_PG_ROLE}: "
+                f"{cls.service}: could not provision Postgres role {cls.TODO_PG_ROLE}: "
                 f"{stderr_clean}"
             )
             return False
-        info(
-            f"{cls.service}: Postgres role {cls.CANARY_PG_ROLE} is present and current"
-        )
+        info(f"{cls.service}: Postgres role {cls.TODO_PG_ROLE} is present and current")
         return True
 
     @classmethod
@@ -250,7 +203,7 @@ class TodoDeployer(Deployer):
         """
         if not super().apply_secret_supply(c, env=env):
             return False
-        return cls._ensure_canary_postgres_role(c, env=env)
+        return cls._ensure_todo_postgres_role(c, env=env)
 
 
 @task

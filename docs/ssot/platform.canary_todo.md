@@ -43,7 +43,7 @@ Each check reports one of three states:
 | Check | Passes when | `fail` when | `unconfigured` when |
 |-------|-------------|-------------|---------------------|
 | `redis` | `AUTH`, `PING`, `SETEX`, `GET` (same random value), `DEL` all succeed | `-NOAUTH`, `-WRONGPASS`, any other error reply, a different value on `GET` | No `REDIS_PASSWORD` |
-| `postgres` | Login as role `canary_ro`, `SET LOCAL transaction_read_only = off` first, then `SELECT 1`, and a session-scoped temporary table `canary_todo_probe` `CREATE` / `INSERT` / `SELECT` / `DELETE` roundtrip all succeed | Any server `E` (ErrorResponse), a failed login, or a roundtrip mismatch | No role name or password |
+| `postgres` | Login with `DATABASE_URL` (role `todo_app`), `SET LOCAL transaction_read_only = off` first, then `SELECT 1`, and a session-scoped temporary table `canary_todo_probe` `CREATE` / `INSERT` / `SELECT` / `DELETE` roundtrip all succeed | Any server `E` (ErrorResponse), a failed login, or a roundtrip mismatch | `DATABASE_URL` is not set |
 | `s3` | `PUT`, `GET` (same body) and `DELETE` of `canary/<random>` in bucket `platform-canary` succeed | A denied or failed request, a different body | No bucket, access key or secret key |
 
 **Informational checks** (`signoz`, `openpanel`, `authentik`) test HTTP liveness (2xx or 3xx). They appear in `checks`, but they never change `ok` or the HTTP status. Each has its own probe and severity, so an outage must not page a second time as `todo-canary-status`. Custom OpenTelemetry metrics (`canary.probe.duration_ms` histogram and `canary.probe.outcomes` counter) record every probe execution.
@@ -101,8 +101,9 @@ The vault-agent sidecar renders `/secrets/.env` from Vault. The app container so
 | Variable | Source class | Origin | Operator action |
 |----------|--------------|--------|-----------------|
 | `REDIS_PASSWORD` | `runtime`, `provided_by` | Vault `platform/<env>/redis` key `password` | None |
-| `CANARY_POSTGRES_PASSWORD` | `runtime` | Generated once into Vault `platform/<env>/todo` | None |
-| `DATABASE_URL` | `runtime`, `provided_by`, `composed_from` | Composed in `secrets.ctmpl` from Vault key `TODO_POSTGRES_PASSWORD`, role `todo_app` and host `platform-postgres<suffix>`. No Vault key holds it. The next Canary image reads only this name for Postgres; the image pinned today ignores it | None |
+| `TODO_POSTGRES_PASSWORD` | `runtime` | Generated once into Vault `platform/<env>/todo`. `TodoDeployer` sets it on role `todo_app` at each supply | None |
+| `DATABASE_URL` | `runtime`, `provided_by`, `composed_from` | Composed in `secrets.ctmpl` from Vault key `TODO_POSTGRES_PASSWORD`, role `todo_app` and host `platform-postgres<suffix>`. No Vault key holds it. The Canary reads only this name for Postgres | None |
+| Vault key `CANARY_POSTGRES_PASSWORD` | none (`store_only_keys`) | The login `canary_ro` is not used and not provisioned. The key and the role stay until the owner approves their deletion in production (#1823) | Owner approval for the deletion |
 | `S3_ACCESS_KEY`, `S3_SECRET_KEY` (Vault keys `CANARY_S3_ACCESS_KEY`, `CANARY_S3_SECRET_KEY`) | `human` | 1Password item `platform/<env>/todo`, copied to Vault on deploy | Create once per environment (below) |
 | `LLM_API_KEY` | `human`, `empty_ok` | 1Password item `platform/<env>/todo`, copied to Vault on deploy | `uv run invoke env.set LLM_API_KEY=<KEY> --project=platform --env=<env> --service=todo --credential-type=root_vars` |
 | `LLM_PROVIDER`, `LLM_BASE_URL`, `LLM_SMALL_MODEL` | `code`, `empty_ok` | `LlmSettings` defaults in `infra2_sdk.runtime.llm` | Optional compose override |
@@ -144,7 +145,7 @@ Each run emits one `canary.run` span with one `canary.check.<name>` child span p
 
 ## 5A. Preview slot (#1647)
 
-`platform/30.todo/preview.compose.yaml` runs the Canary in slot `preview/pr-<N>` with its own Redis, Postgres and S3 on a private network. The slot reads no Vault. `common.deploy.preview.render_throwaway_secrets` generates `REDIS_PASSWORD`, `CANARY_POSTGRES_PASSWORD`, `TODO_POSTGRES_PASSWORD`, `S3_ACCESS_KEY` and `S3_SECRET_KEY` on each render. The values go to the slot's Dokploy env only, and `down` deletes them with the slot. Entry point: `python -m common.deploy.v2 --service platform/todo --type preview/pr --version-ref <N>`. Only `/api/health` is routed in the slot, because the slot has no Authentik.
+`platform/30.todo/preview.compose.yaml` runs the Canary in slot `preview/pr-<N>` with its own Redis, Postgres and S3 on a private network. The slot reads no Vault. `common.deploy.preview.render_throwaway_secrets` generates `REDIS_PASSWORD`, `POSTGRES_ADMIN_PASSWORD`, `TODO_POSTGRES_PASSWORD`, `S3_ACCESS_KEY` and `S3_SECRET_KEY` on each render. The values go to the slot's Dokploy env only, and `down` deletes them with the slot. Entry point: `python -m common.deploy.v2 --service platform/todo --type preview/pr --version-ref <N>`. Only `/api/health` is routed in the slot, because the slot has no Authentik.
 
 ## 5B. SSO setup operator steps (#1807)
 

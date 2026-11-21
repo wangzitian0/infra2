@@ -146,11 +146,13 @@ def test_cli_rejects_an_unknown_service_and_defaults_to_a_dry_run(monkeypatch, c
     assert "secrets prune: 0 clean" in capsys.readouterr().out
 
 
-def test_every_registered_service_declares_where_its_operator_keys_are_read():
-    """A store-only key is a documented exception; the registry must name each one."""
+def test_every_registered_service_declares_its_store_only_keys():
+    """A store-only key is a documented exception; this table names each one."""
     documented = {s.id: s.store_only_keys for s in SERVICES if s.store_only_keys}
     assert documented == {
         "platform/authentik": ("root_token",),
+        # No reader: kept until the owner approves its deletion in production (#1823).
+        "platform/todo": ("CANARY_POSTGRES_PASSWORD",),
         "finance_report/app": ("S3_BUCKET",),
         "truealpha/app": ("S3_BUCKET",),
         "truealpha/data_engine": (
