@@ -64,8 +64,8 @@ infra2/
 ├── scripts/          # 一次性/引导 shell 脚本
 ├── playground/       # 探索性验证脚本 (非生产)
 ├── e2e_regressions/  # E2E 测试
-├── common/             # infra 内部库 (env, deployer, console)
-├── tools/            # CLI 工具 (env, local)
+├── common/           # infra2 own importable logic (docs/ssot/core.harness.md §5.3)
+├── tools/            # thin CLI entry points; logic lives in common/
 └── docs/             # 文档
     ├── ssot/         # SSOT 真理源
     └── project/      # 项目追踪

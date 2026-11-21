@@ -14,7 +14,7 @@
 | 维度 | 物理位置 (SSOT) | 说明 |
 |------|----------------|------|
 | **目录结构** | [目录结构规范](#4-目录结构规范) | 物理文件布局 |
-| **层级定义** | [Repo Root](https://github.com/wangzitian0/infra2/tree/main) | Bootstrap, Platform, Libs, Tools |
+| **层级定义** | [`core.harness.md` §5.3](./core.harness.md#53-code-layers) | `infra2-sdk`, `common/`, `tools/`; Bootstrap 与 Platform 见 §2.3 |
 | **变量契约** | 远端 SSOT + `.env.example` | 运行时配置入口 |
 | **自动化入口** | [`tasks.py`](https://github.com/wangzitian0/infra2/blob/main/tasks.py) | Invoke 任务加载与执行 |
 | **跨仓库代码契约** | [`infra2-sdk`](https://github.com/wangzitian0/infra2-sdk/releases) | 应用与 infra 固定版本消费的无副作用协议包 |
@@ -200,22 +200,9 @@ platform/
 └── README.md
 ```
 
-### Libs 内部库目录结构（领域驱动包）
+### `common/` 目录结构
 
-```
-common/
-├── core/             # SSOT 实体 Service、环境 DeploymentEnvironment、常量
-│   └── README.md
-├── security/         # Vault/1Password 密钥供给、Token 生成、孤儿清理
-│   └── README.md
-├── backup/           # 灾备清单发现、恢复演练规格与沙箱验证
-│   └── README.md
-├── observability/    # 探针规格、容器崩溃日志诊断、看门狗 Issue 留痕
-│   └── README.md
-├── deploy/           # Deployer 基础抽象、预览槽生命周期、晋升机制、Schema 门禁
-│   └── README.md
-└── README.md         # 内部库架构索引
-```
+The layer definition is in [`core.harness.md` §5.3](./core.harness.md#53-code-layers). The package list is in [`common/README.md`](../../common/README.md).
 
 **规则**：
 - ✅ 每个领域包包含专属 `README.md`，定义其领域模型、API 与安全守卫

@@ -112,6 +112,19 @@ Harness 与 infra2 的交付阶段、阶段记录与变更种类由 [`ops.pipeli
 
 - **交付状态不变量（Delivery State Invariant）**：触碰 `platform/`、`bootstrap/`、Compose 配置或线上运行时的任务，在完成 Staging 浸润与 Prod 生产验收（或获得明确 `hold` 处置）前，必须保持开启并标记 `prod-pending`，严禁在代码合并后直接宣称完成或静默关闭 Issue。
 
+### 5.3 Code layers
+
+This section is the one definition of the code layers of `infra2` and `infra2-sdk` (infra2#1823 Step 4). Other documents link here.
+
+| Layer | Definition | Rule | Check |
+|---|---|---|---|
+| `infra2-sdk` | Code that 2 or more repositories use. Its subpackages (`runtime/`, `rules/`, `data/`) are its internal layers. | Each public name has a consumer (SDK P3). | SDK `tests/surface.json`; `common/core/sdk_usage_census.py` |
+| `common/` | The importable logic of one repository: unit-tested, no `__main__`, no argv. | Code moves to the SDK when a second repository needs it. | `common/tests/test_import_boundaries.py` |
+| `tools/` | Thin entry points: argv parsing, environment wiring, exit code. | Logic moves to `common/`. | `common/tests/test_tools_thin.py`: no top-level class, at most 200 lines of top-level statements; a shrink-only ledger lists the old violations |
+| App `common/` | The app defines it (§4, App autonomy). | infra2 removes only app glue that a released SDK replaces. | The app's own checks |
+
+There is no `lib` layer. "Libs" is the retired name of `common/` (#1301). A compatibility wrapper around an SDK name is not a layer: replace the copy with the released contract in one change (SDK P5).
+
 ## 6. Workspace Operation
 
 ```bash

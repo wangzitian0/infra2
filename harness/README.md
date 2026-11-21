@@ -60,8 +60,9 @@ the requirement. Neither App imports SDK source from the workspace checkout.
 | Infrastructure provisioning, secret delivery, deployment and promotion | Use infra2's published deployment interfaces and onboarding paths |
 | Coding-agent profiles, Skills/MCP selection and isolated launch | Use the independently built OMCA CLI; follow its host-version qualification procedure |
 
-Reuse a released contract where it removes duplicate semantics. Keep compatibility
-wrappers when an app's public API differs, and prove their behavior before replacement.
+Reuse a released contract where it removes duplicate semantics. Prove that the released
+contract gives the same behavior, then replace the app copy in one change; keep no
+compatibility wrapper (SDK P5, `docs/ssot/core.harness.md` §5.3).
 Do not move app policy into a common package merely to make directory trees look alike.
 The SDK's installed-wheel smoke is an executable consumer example; OMCA's safe automatic
 qualification does not replace its human TUI/restart/model proof. Its installed
