@@ -43,15 +43,12 @@ from infra2_sdk.observability import (  # noqa: E402
 )
 
 from common.observability.estate_scheduler_liveness import BOUND_CAP_ENV  # noqa: E402
+from common.observability.scheduler_heartbeat import HEARTBEAT_SOURCE  # noqa: E402
 
 VERDICTS_ENV = "INFRA2_WATCHDOG_VERDICTS_PATH"
 WATCHDOG_SOURCE = "out-of-band-watchdog"
 RUNNER_HEALTH_SOURCE = "iac-runner-health"
 # #1877: the scheduler heartbeat step records a verdict on each run (sent, failed or skipped).
-HEARTBEAT_SOURCE = "ops-checks-scheduler-heartbeat"
-# The check has its own name: the trail marks each seen source green by its name, and a
-# skipped check of that same name would then read as green and close an open issue.
-HEARTBEAT_CHECK = "ops-checks-scheduler-heartbeat-send"
 EXPECTED_SOURCES = (WATCHDOG_SOURCE, RUNNER_HEALTH_SOURCE, HEARTBEAT_SOURCE)
 FULL = "full"
 OFF = "off"

@@ -11,11 +11,8 @@ import pytest
 from infra2_sdk.observability import load_trail
 
 from common.observability import scheduler_heartbeat as hb
-from common.observability.watchdog_issue_trail_cli import (
-    EXPECTED_SOURCES,
-    HEARTBEAT_CHECK,
-    HEARTBEAT_SOURCE,
-)
+from common.observability.scheduler_heartbeat import HEARTBEAT_CHECK, HEARTBEAT_SOURCE
+from common.observability.watchdog_issue_trail_cli import EXPECTED_SOURCES
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEDULED = {"GITHUB_EVENT_NAME": "schedule"}
@@ -196,8 +193,40 @@ def test_the_url_falls_back_from_the_status_url_to_the_default() -> None:
     )
 
 
-def test_the_issue_trail_cli_expects_the_heartbeat_source() -> None:
-    text = (ROOT / "common/observability/watchdog_issue_trail_cli.py").read_text(
-        encoding="utf-8"
+def test_the_send_needs_only_the_standard_library(tmp_path: Path) -> None:
+    """A failed dependency install must not stop the heartbeat (the Worker would page)."""
+    import subprocess
+    import sys
+
+    probe = (
+        "import builtins, sys\n"
+        "real = builtins.__import__\n"
+        "def guard(name, *a, **k):\n"
+        "    if name.split('.')[0] in ('infra2_sdk', 'yaml', 'requests'):\n"
+        "        raise ImportError(name)\n"
+        "    return real(name, *a, **k)\n"
+        "builtins.__import__ = guard\n"
+        "from common.observability import scheduler_heartbeat as hb\n"
+        "class R:\n"
+        "    status = 200\n"
+        "    def __enter__(self): return self\n"
+        "    def __exit__(self, *e): return None\n"
+        "    def read(self, n): return b'{}'\n"
+        "sent = []\n"
+        "env = {'GITHUB_EVENT_NAME': 'schedule', 'INFRA2_WATCHDOG_HEARTBEAT_TOKEN': 't0',\n"
+        "       'INFRA2_WATCHDOG_HEARTBEAT_URL': 'http://127.0.0.1:9/heartbeat',\n"
+        "       hb.VERDICTS_ENV: sys.argv[1]}\n"
+        "code = hb.main(env, opener=lambda r, timeout: (sent.append(r.full_url), R())[1])\n"
+        "print(code, len(sent))\n"
     )
-    assert "load_trail(path, expected_sources=EXPECTED_SOURCES)" in text
+    proc = subprocess.run(
+        [sys.executable, "-c", probe, str(tmp_path / "verdicts.jsonl")],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert proc.stdout.strip().splitlines()[-1] == "0 1", proc.stdout + proc.stderr
+    assert "could not record the heartbeat verdict" in proc.stderr
+    assert not (tmp_path / "verdicts.jsonl").exists()

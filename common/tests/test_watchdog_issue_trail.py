@@ -31,8 +31,8 @@ from infra2_sdk.observability import (
 
 from common.observability import watchdog_issue_trail_cli as trail_tool
 from common.observability.page_dedup import FULL, OFF, OPEN_ONLY
+from common.observability.scheduler_heartbeat import HEARTBEAT_CHECK
 from common.observability.watchdog_issue_trail_cli import (
-    HEARTBEAT_CHECK,
     HEARTBEAT_SOURCE,
     RUNNER_HEALTH_SOURCE,
     WATCHDOG_SOURCE,
@@ -847,3 +847,18 @@ def test_a_manual_run_on_main_keeps_an_open_heartbeat_issue_open(
     assert scheduler_heartbeat.main(scheduled, opener=lambda *_a, **_k: _Ok()) == 0
     assert trail_tool.main(scheduled, issues_factory=lambda _r, _t: api) == 0
     assert api.closed == [7]
+
+
+def test_a_heartbeat_step_that_recorded_nothing_opens_an_issue(tmp_path: Path) -> None:
+    """#1877: the heartbeat source is expected; a crashed or absent step is red."""
+    env = _tool_env(tmp_path)
+    for source in (WATCHDOG_SOURCE, RUNNER_HEALTH_SOURCE):
+        record_verdicts(
+            env["INFRA2_WATCHDOG_VERDICTS_PATH"],
+            source=source,
+            checks=[CheckVerdict(source, True)],
+        )
+    api = FakeIssues()
+    trail_tool.main(env, issues_factory=lambda _r, _t: api)
+    assert [title for title, _, _ in api.created] == [title_for(HEARTBEAT_SOURCE)]
+    assert "recorded no verdict" in api.created[0][1]
