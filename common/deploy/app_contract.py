@@ -45,6 +45,8 @@ from infra2_sdk.manifests import (
     build_hook_env,
     load as load_sdk_manifest,
     load_hooks_manifest,
+    resolve_check_cells,
+    run_cell,
     run_hook_slot,
 )
 from infra2_sdk.refs import (
@@ -693,6 +695,82 @@ def fetch_hooks_manifest(
     return RuntimeHooksManifest.from_dict(raw)
 
 
+#: App hook manifest schemas this runner accepts (infra2#1823 "infra2 accepts ranges").
+#: Schema 2 runs through ``run_hook_slot``; schema 3 through ``run_cell``. infra2 drops 2 when
+#: every app emits 3 and infra2 pins the SDK major that refuses 2 (#1823 Step 3).
+ACCEPTED_HOOK_SCHEMA_VERSIONS: tuple[int, ...] = (2, 3)
+
+#: The cells that a schema 3 manifest must fill for each slot the train runs.
+_SLOT_CELLS: dict[str, tuple[str, ...]] = {
+    "smoke": ("preview.operation", "staging.operation", "prod.operation"),
+    "preview_gate": ("preview.post",),
+    "staging_gate": ("staging.post",),
+    "prod_gate": ("prod.post",),
+    "scheduled_audit": ("scheduled_audit",),
+}
+
+
+def schema3_empty_cells(manifest: RuntimeHooksManifest, slot: str) -> tuple[str, ...]:
+    """Cells of ``slot`` in which no check of a schema 3 ``manifest`` runs.
+
+    ``run_cell`` fails a cell with 0 active checks, so an empty cell would fail its stage.
+    """
+    filled = {
+        cell
+        for check in manifest.checks
+        if check.off is None
+        for cell in resolve_check_cells(check)
+    }
+    return tuple(cell for cell in _SLOT_CELLS.get(slot, ()) if cell not in filled)
+
+
+def schema3_required_env(manifest: RuntimeHooksManifest, slot: str) -> tuple[str, ...]:
+    """Required env names of a schema 3 ``slot``: the manifest list plus each active check
+    of its cells."""
+    cells = set(_SLOT_CELLS.get(slot, ()))
+    names = list(manifest.required_env)
+    for check in manifest.checks:
+        if check.off is None and cells & set(resolve_check_cells(check)):
+            names.extend(check.required_env)
+    return tuple(dict.fromkeys(names))
+
+
+def _schema3_env(
+    manifest: RuntimeHooksManifest,
+    *,
+    slot: str = "",
+    app_url: str,
+    environment: str,
+    version_ref: str,
+    ambient_env: Mapping[str, str] | None,
+) -> tuple[RuntimeHooksManifest, dict[str, str]]:
+    for name in (*manifest.required_env, *manifest.optional_env):
+        if name in FORBIDDEN_HOOK_ENV_NAMES or name.startswith(
+            FORBIDDEN_HOOK_ENV_PREFIXES
+        ):
+            raise ValueError(
+                f"forbidden secret in hook manifest {manifest.service!r}: {name}"
+            )
+    effective_ambient: dict[str, str] = dict(
+        os.environ if ambient_env is None else ambient_env
+    )
+    for env_key, default_val in _hook_context_env(app_url, environment, version_ref):
+        if not str(effective_ambient.get(env_key, "")).strip():
+            effective_ambient[env_key] = default_val
+    missing = [
+        name
+        for name in schema3_required_env(manifest, slot)
+        if not str(effective_ambient.get(name, "")).strip()
+    ]
+    if missing:
+        # The same message as build_hook_env for schema 2, so _missing_env_errors sees it.
+        raise ValueError(f"missing required hook env: {', '.join(missing)}")
+    optional = tuple(
+        dict.fromkeys([*manifest.optional_env, *_HOOK_OPTIONAL_CONTEXT_ENV])
+    )
+    return replace(manifest, optional_env=optional), effective_ambient
+
+
 def hook_env_for_slot(
     manifest_or_path: RuntimeHooksManifest | str | Path,
     slot: str,
@@ -711,6 +789,20 @@ def hook_env_for_slot(
         if isinstance(manifest_or_path, RuntimeHooksManifest)
         else load_hooks_manifest(manifest_or_path, root=cwd)
     )
+    if manifest.schema_version not in ACCEPTED_HOOK_SCHEMA_VERSIONS:
+        raise ValueError(
+            f"hook manifest schema_version {manifest.schema_version!r} is not in "
+            f"{list(ACCEPTED_HOOK_SCHEMA_VERSIONS)}"
+        )
+    if manifest.schema_version == 3:
+        return _schema3_env(
+            manifest,
+            slot=slot,
+            app_url=app_url.strip(),
+            environment=environment,
+            version_ref=version_ref,
+            ambient_env=ambient_env,
+        )
     slot_spec: HookSlotSpec = manifest.slots[slot]
     for name in (*slot_spec.required_env, *slot_spec.optional_env):
         if name in FORBIDDEN_HOOK_ENV_NAMES or name.startswith(
@@ -771,6 +863,19 @@ def execute_app_hook_slot(
         cwd=cwd,
         ambient_env=ambient_env,
     )
+    if augmented_manifest.schema_version == 3:
+        # run_cell maps the slot to its cell (smoke follows the environment).
+        return run_cell(
+            augmented_manifest,
+            slot,
+            app_url=cleaned_url,
+            environment=environment,
+            version_ref=version_ref,
+            cwd=cwd,
+            ambient_env=effective_ambient,
+            result_path=result_path,
+            runner=runner,
+        )
     return run_hook_slot(
         augmented_manifest,
         slot,
