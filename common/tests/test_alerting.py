@@ -1622,3 +1622,315 @@ def test_alerting_openapi_schema_contract(monkeypatch: pytest.MonkeyPatch) -> No
             "$ref"
             in feishu_op["responses"][code]["content"]["application/json"]["schema"]
         )
+
+
+# #1816: the finance_report alert rules against the pinned finance_report sources. The
+# routes come from its openapi.json, the failure counters from its telemetry_metrics.py.
+_ROUTE_MATCHER = re.compile(r'"http\.route"\s*(=~|!~|!=|=)\s*"((?:[^"\\]|\\.)*)"')
+_SELECTOR_METRIC = re.compile(r'\{\s*"([^"]+)"')
+
+
+def _finance_report_alert_rules() -> list[dict]:
+    from common.observability_dashboards import ALERT_RULES_FILE
+
+    return json.loads(ALERT_RULES_FILE.read_text(encoding="utf-8"))["rules"]
+
+
+def _route_tokens(op: str, value: str) -> list[str]:
+    """Split one `http.route` matcher into regex tokens: `^(a|b)$` gives `a` and `b`."""
+    if op in {"=", "!="}:
+        return [re.escape(value)]
+    body = value.removeprefix("^").removesuffix("$")
+    if body.startswith("(") and body.endswith(")"):
+        body = body[1:-1]
+    return body.split("|")
+
+
+def _route_token_problems(rules: list[dict], routes: set[str]) -> list[str]:
+    """Each `http.route` token must match one active route template or probe path."""
+    return [
+        f"{rule['alert_name']}: route token {token!r} matches no active route"
+        for rule in rules
+        for op, value in _ROUTE_MATCHER.findall(rule.get("promql", ""))
+        for token in _route_tokens(op, value)
+        if not any(re.fullmatch(token, route) for route in routes)
+    ]
+
+
+def _probe_exclusion_problems(rules: list[dict], probes: frozenset[str]) -> list[str]:
+    """Each `http.route!~` exclusion must leave out every probe path."""
+    return [
+        f"{rule['alert_name']}: route exclusion keeps probe {probe}"
+        for rule in rules
+        for op, value in _ROUTE_MATCHER.findall(rule.get("promql", ""))
+        if op == "!~"
+        for probe in sorted(probes)
+        if not re.fullmatch(value, probe)
+    ]
+
+
+def _unalerted_counters(rules: list[dict], counters: set[str]) -> list[str]:
+    """Counters that no rule selects as its metric."""
+    selected = {
+        metric
+        for rule in rules
+        for metric in _SELECTOR_METRIC.findall(rule.get("promql", ""))
+    }
+    return sorted(counters - selected)
+
+
+def _active_routes() -> set[str]:
+    from infra2_sdk.runtime.otel import PROBE_PATHS
+
+    from common.tests import finance_report_sources as fr
+
+    return fr.pinned_openapi_routes() | set(PROBE_PATHS)
+
+
+def test_finance_report_route_tokens_match_active_openapi_or_probe_routes() -> None:
+    """#1816: a retired route in an exclusion excludes nothing. The renamed
+    `POST /statements` then polluted the interactive p95 alert."""
+    rules = _finance_report_alert_rules()
+    tokens = [
+        token
+        for rule in rules
+        for op, value in _ROUTE_MATCHER.findall(rule.get("promql", ""))
+        for token in _route_tokens(op, value)
+    ]
+    assert len(tokens) == 22  # 3 probes in 3 5xx selectors, 11 + 2 p95 tokens
+    assert _route_token_problems(rules, _active_routes()) == []
+
+
+def test_finance_report_route_exclusions_leave_out_every_sdk_probe_path() -> None:
+    """#1816: /livez and /readyz were missing from the exclusions."""
+    from infra2_sdk.runtime.otel import PROBE_PATHS
+
+    rules = _finance_report_alert_rules()
+    exclusions = [
+        value
+        for rule in rules
+        for op, value in _ROUTE_MATCHER.findall(rule.get("promql", ""))
+        if op == "!~"
+    ]
+    assert len(exclusions) == 4  # 3 in FinanceReportHigh5xxRate, 1 in the p95 rule
+    assert _probe_exclusion_problems(rules, PROBE_PATHS) == []
+
+
+def test_every_finance_report_failure_counter_has_an_alert_rule() -> None:
+    """#1816: a failure counter without a rule fails in silence."""
+    from common.tests import finance_report_sources as fr
+
+    counters = fr.failure_counter_names(fr.read_pinned(fr.TELEMETRY_METRICS))
+    assert {
+        "finance.invariant.violation",
+        "finance.outbox.dead_letter",
+        "finance.market_data.sync_failure",
+    } <= counters
+    assert _unalerted_counters(_finance_report_alert_rules(), counters) == []
+
+
+def test_finance_report_classification_rule_selects_only_failure_outcomes() -> None:
+    """#1816: the outcome filter names ClassifyOutcome values of the pinned app. A stale
+    label (`failure` for `failed`) matches no series, so the rule never fires."""
+    from common.tests import finance_report_sources as fr
+
+    outcomes = fr.classify_outcomes(fr.read_pinned(fr.CLASSIFICATION_RUN))
+    (rule,) = [
+        r
+        for r in _finance_report_alert_rules()
+        if r["alert_name"] == "FinanceReportClassificationFailureSpike"
+    ]
+    (pattern,) = re.findall(r'"outcome"=~"((?:[^"\\]|\\.)*)"', rule["promql"])
+    assert {o for o in outcomes if re.fullmatch(pattern, o)} == {"failed", "timed_out"}
+    assert _SELECTOR_METRIC.findall(rule["promql"]) == [
+        "finance.statement_classification.outcome"
+    ]
+
+
+def test_finance_report_contracts_fail_on_a_stale_route_or_an_unalerted_counter() -> (
+    None
+):
+    """Mutation proof for the three contracts above (#1816)."""
+    from common.tests import finance_report_sources as fr
+
+    rules = _finance_report_alert_rules()
+    stale = [
+        {
+            **rule,
+            "promql": rule["promql"].replace(
+                "/statements/[^/]+/approvals", "/statements/[^/]+/review/approve"
+            ),
+        }
+        for rule in rules
+    ]
+    assert _route_token_problems(stale, _active_routes()) == [
+        "FinanceReportP95LatencyHigh: route token '/statements/[^/]+/review/approve' "
+        "matches no active route"
+    ]
+
+    no_livez = [
+        {**rule, "promql": rule["promql"].replace("|/livez|", "|")}
+        for rule in rules
+        if rule["alert_name"] == "FinanceReportP95LatencyHigh"
+    ]
+    assert _probe_exclusion_problems(no_livez, frozenset({"/livez", "/health"})) == [
+        "FinanceReportP95LatencyHigh: route exclusion keeps probe /livez"
+    ]
+
+    source = fr.read_pinned(fr.TELEMETRY_METRICS)
+    grown = source.replace(
+        "_COUNTER_SPECS: tuple[tuple[str, str, str], ...] = (",
+        "_COUNTER_SPECS: tuple[tuple[str, str, str], ...] = (\n"
+        '    ("ledger_post_failure", "finance.ledger_post.failure", "Ledger post failures."),',
+        1,
+    )
+    assert grown != source
+    assert _unalerted_counters(rules, fr.failure_counter_names(grown)) == [
+        "finance.ledger_post.failure"
+    ]
+
+
+# The tests that read a pinned finance_report source. When every read fails, each of them
+# fails, and no other test fails on PinnedSourceUnavailable (#1816 review).
+_READS_FINANCE_REPORT_SOURCES = [
+    "common/tests/test_alerting.py::test_ci_reads_only_the_pinned_checkout_that_the_ci_step_names",
+    "common/tests/test_alerting.py::test_every_finance_report_failure_counter_has_an_alert_rule",
+    "common/tests/test_alerting.py::test_finance_report_classification_rule_selects_only_failure_outcomes",
+    "common/tests/test_alerting.py::test_finance_report_contracts_fail_on_a_stale_route_or_an_unalerted_counter",
+    "common/tests/test_alerting.py::test_finance_report_route_tokens_match_active_openapi_or_probe_routes",
+    "common/tests/test_observability_dashboards.py::test_every_widget_names_its_service_and_a_metric_it_exports[finance_report/finance_report/observability/dashboard.json]",
+    "common/tests/test_observability_dashboards.py::test_finance_report_alert_rules_select_metrics_the_pinned_app_exports",
+    "common/tests/test_observability_dashboards.py::test_finance_report_metric_contract_fails_on_a_metric_the_app_does_not_export",
+    "common/tests/test_observability_dashboards.py::test_finance_report_service_metrics_come_from_the_pinned_telemetry_source",
+    "common/tests/test_observability_dashboards.py::test_promql_selectors_reach_series_the_app_exports",
+    "common/tests/test_observability_dashboards.py::test_the_dashboard_checks_fail_on_the_change_each_one_guards[finance_report/finance_report/observability/dashboard.json]",
+]
+
+_UNREADABLE_SOURCE_PLUGIN = """
+def pytest_configure(config):
+    from common.tests import finance_report_sources as fr
+
+    def unreadable(relative_path):
+        raise OSError("simulated outage of " + relative_path)
+
+    fr._read = unreadable
+"""
+
+
+def test_an_unreadable_finance_report_source_fails_only_its_contract_tests(
+    tmp_path: Path,
+) -> None:
+    """#1816 review: an import never reads a pinned source. With every read failing, both
+    modules still collect, and only the tests that read finance_report sources fail."""
+    (tmp_path / "fr_unreadable.py").write_text(_UNREADABLE_SOURCE_PLUGIN)
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(
+            [str(tmp_path), str(ROOT), os.environ.get("PYTHONPATH", "")]
+        ),
+        "COLUMNS": "1000",  # keep the exception name in each short summary line
+    }
+    files = [
+        "common/tests/test_observability_dashboards.py",
+        "common/tests/test_alerting.py",
+    ]
+    base = [sys.executable, "-m", "pytest", "-p", "fr_unreadable", "-o", "addopts="]
+    base += ["-n0", "-p", "no:cacheprovider", "-q"]
+    collected = subprocess.run(
+        [*base, "--collect-only", *files],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert collected.returncode == 0, collected.stdout[-2000:] + collected.stderr
+    assert "error" not in collected.stdout.lower().splitlines()[-1]
+
+    this = "common/tests/test_alerting.py::" + sys._getframe().f_code.co_name
+    ran = subprocess.run(
+        [*base, "-rf", "--deselect", this, *files],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    summaries = {
+        line.split(" ", 2)[1]: line
+        for line in ran.stdout.splitlines()
+        if line.startswith("FAILED ")
+    }
+    missing = set(_READS_FINANCE_REPORT_SOURCES) - summaries.keys()
+    assert missing == set(), ran.stdout[-3000:]
+    others = {
+        test: line
+        for test, line in summaries.items()
+        if test not in _READS_FINANCE_REPORT_SOURCES
+    }
+    assert [t for t, line in others.items() if "PinnedSourceUnavailable" in line] == []
+    assert "PinnedSourceUnavailable" in ran.stdout
+    assert "simulated outage of apps/" in ran.stdout
+
+
+def test_ci_reads_only_the_pinned_checkout_that_the_ci_step_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1816 review: with CI set, the reader reads only FINANCE_REPORT_PINNED_CHECKOUT at the
+    pin and never fetches. A missing or unpinned path names the infra-ci step. Without CI
+    and without a checkout at the pin, the reader fetches at the pinned commit."""
+    from common.tests import finance_report_sources as fr
+
+    pin = tmp_path / "pin"
+    (pin / "apps/frontend").mkdir(parents=True)
+    (pin / fr.OPENAPI).write_text("pinned text")
+    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run([*git, "init", "-q"], cwd=pin, check=True, timeout=30)
+    subprocess.run([*git, "add", "."], cwd=pin, check=True, timeout=30)
+    subprocess.run([*git, "commit", "-qm", "pin"], cwd=pin, check=True, timeout=30)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=pin,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    ).stdout.strip()
+
+    fetched: list[str] = []
+    monkeypatch.setattr(fr, "ROOT", tmp_path / "infra2")  # no repos/finance_report
+    monkeypatch.setattr(fr, "pinned_sha", lambda: head)
+    monkeypatch.setattr(fr, "http_get", lambda url: fetched.append(url) or b"fetched")
+    monkeypatch.setenv("CI", "true")
+
+    for configured in (None, str(tmp_path / "absent")):
+        monkeypatch.setattr(fr, "_READS", {})
+        if configured is None:
+            monkeypatch.delenv(fr.PINNED_CHECKOUT_ENV, raising=False)
+        else:
+            monkeypatch.setenv(fr.PINNED_CHECKOUT_ENV, configured)
+        with pytest.raises(fr.PinnedSourceUnavailable) as raised:
+            fr.read_pinned(fr.OPENAPI)
+        assert fr.CI_STEP in str(raised.value)
+
+    monkeypatch.setattr(fr, "_READS", {})
+    monkeypatch.setenv(fr.PINNED_CHECKOUT_ENV, str(pin))
+    monkeypatch.setattr(
+        fr, "pinned_sha", lambda: "0" * 40
+    )  # the checkout is not at the pin
+    with pytest.raises(fr.PinnedSourceUnavailable):
+        fr.read_pinned(fr.OPENAPI)
+
+    monkeypatch.setattr(fr, "_READS", {})
+    monkeypatch.setattr(fr, "pinned_sha", lambda: head)
+    assert fr.read_pinned(fr.OPENAPI) == "pinned text"
+    assert fetched == []
+
+    monkeypatch.delenv("CI")
+    monkeypatch.delenv(fr.PINNED_CHECKOUT_ENV)
+    monkeypatch.setattr(fr, "_READS", {})
+    assert fr.read_pinned(fr.OPENAPI) == "fetched"
+    assert fetched == [
+        f"https://raw.githubusercontent.com/wangzitian0/finance_report/{head}/"
+        "apps/frontend/openapi.json"
+    ]
