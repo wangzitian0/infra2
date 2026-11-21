@@ -20,6 +20,10 @@ ARCHIVE_DIR = PROJECT_DIR / "archive"
 _SKIP_SUFFIXES = (".TODOWRITE.md", ".SUMMARY.md")
 _NAV_ACTIVE_RE = re.compile(r"project/(Infra-[\w.-]+\.md)")
 _NAV_ARCHIVED_RE = re.compile(r"project/archive/(Infra-[\w.-]+\.md)")
+# An uncommented nav entry: a YAML comment line or a trailing comment cannot match.
+_NAV_ARCHIVE_INDEX_RE = re.compile(
+    r"^\s*- Archived Projects: project/archive/README\.md\s*$", re.MULTILINE
+)
 
 
 def _project_doc_names(directory: Path) -> set[str]:
@@ -51,7 +55,7 @@ def test_mkdocs_nav_lists_the_archive_index() -> None:
     assert (ARCHIVE_DIR / "README.md").is_file(), (
         "missing docs/project/archive/README.md"
     )
-    assert "project/archive/README.md" in text, (
+    assert _NAV_ARCHIVE_INDEX_RE.search(text), (
         "docs/mkdocs.yml nav does not list project/archive/README.md under "
         "`- Archived Projects:`"
     )

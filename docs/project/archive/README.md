@@ -26,7 +26,7 @@ Read one file with `git show a77e6f06:docs/project/archive/<file>.md`.
 
 - **Status**: Archived — Completed
 - **Outcome**: OpenPanel analytics runs on the Dokploy host on the shared Postgres, Redis and ClickHouse, with Vault secrets. SSOT: [`platform.openpanel.md`](../../ssot/platform.openpanel.md).
-- **Links**: [#266](https://github.com/wangzitian0/infra2/issues/266) (ClickHouse database), [#268](https://github.com/wangzitian0/infra2/issues/268) (container name collision).
+- **Links**: [#266](https://github.com/wangzitian0/infra2/pull/266) (durable host bind mount for op-ch), [#268](https://github.com/wangzitian0/infra2/pull/268) (isolate op-ch by env-suffixed name).
 - **Source file**: `Infra-021.openpanel_install.md`
 
 <a id="infra-019"></a>
@@ -53,7 +53,7 @@ Read one file with `git show a77e6f06:docs/project/archive/<file>.md`.
 
 - **Status**: Archived — Closed (#460 and #461 completed and frozen; epic #459 closed as not planned)
 - **Outcome**: infra2 CI has a coordinate inventory, [`ci-gate-inventory.yaml`](../../ssot/ci-gate-inventory.yaml), and a fail-closed audit, `tools/ci_gate_audit.py`. The app-side phases 3 and 4 moved into boundary governance (finance_report#876).
-- **Links**: [#459](https://github.com/wangzitian0/infra2/issues/459), [#460](https://github.com/wangzitian0/infra2/issues/460), [#461](https://github.com/wangzitian0/infra2/issues/461), [#465](https://github.com/wangzitian0/infra2/issues/465); finance_report [#876](https://github.com/wangzitian0/finance_report/issues/876).
+- **Links**: [#280](https://github.com/wangzitian0/infra2/issues/280), [#459](https://github.com/wangzitian0/infra2/issues/459), [#460](https://github.com/wangzitian0/infra2/issues/460), [#461](https://github.com/wangzitian0/infra2/issues/461), [#465](https://github.com/wangzitian0/infra2/issues/465); finance_report [#876](https://github.com/wangzitian0/finance_report/issues/876), [#1435](https://github.com/wangzitian0/finance_report/issues/1435), [#1491](https://github.com/wangzitian0/finance_report/issues/1491), [#1492](https://github.com/wangzitian0/finance_report/issues/1492).
 - **Source file**: `Infra-016.ci_gate_inventory.md`
 
 <a id="infra-015"></a>
@@ -62,7 +62,7 @@ Read one file with `git show a77e6f06:docs/project/archive/<file>.md`.
 
 - **Status**: Archived — Completed and live-verified
 - **Outcome**: `deploy_v2` is the one deploy path, addressed by `(service, type, version_ref, iac_ref)`. `deploy.yml` keeps only the IaC Runner bootstrap. The contract is in [`ops.pipeline.md`](../../ssot/ops.pipeline.md) §4.
-- **Links**: [#354](https://github.com/wangzitian0/infra2/pull/354), [#355](https://github.com/wangzitian0/infra2/pull/355), [#356](https://github.com/wangzitian0/infra2/pull/356), [#357](https://github.com/wangzitian0/infra2/pull/357), [#358](https://github.com/wangzitian0/infra2/pull/358), [#359](https://github.com/wangzitian0/infra2/pull/359), [#361](https://github.com/wangzitian0/infra2/pull/361), [#363](https://github.com/wangzitian0/infra2/pull/363), [#365](https://github.com/wangzitian0/infra2/pull/365), [#366](https://github.com/wangzitian0/infra2/pull/366), [#371](https://github.com/wangzitian0/infra2/pull/371); finance_report [#1072](https://github.com/wangzitian0/finance_report/issues/1072), [#1173](https://github.com/wangzitian0/finance_report/pull/1173).
+- **Links**: [#354](https://github.com/wangzitian0/infra2/pull/354), [#355](https://github.com/wangzitian0/infra2/pull/355), [#356](https://github.com/wangzitian0/infra2/pull/356), [#357](https://github.com/wangzitian0/infra2/pull/357), [#358](https://github.com/wangzitian0/infra2/pull/358), [#359](https://github.com/wangzitian0/infra2/pull/359), [#361](https://github.com/wangzitian0/infra2/pull/361), [#363](https://github.com/wangzitian0/infra2/pull/363), [#365](https://github.com/wangzitian0/infra2/pull/365), [#366](https://github.com/wangzitian0/infra2/pull/366), [#371](https://github.com/wangzitian0/infra2/pull/371) (closes [#370](https://github.com/wangzitian0/infra2/issues/370)); finance_report [#1072](https://github.com/wangzitian0/finance_report/issues/1072), [#1173](https://github.com/wangzitian0/finance_report/pull/1173).
 - **Source file**: `Infra-015.deploy_v2_front_door.md`
 
 <a id="infra-014"></a>
@@ -80,7 +80,7 @@ Read one file with `git show a77e6f06:docs/project/archive/<file>.md`.
 
 - **Status**: Archived — Completed (#158, #162, #168, #182, #183 closed; the AC table below stays because tests cite `Infra-011.x` ids)
 - **Outcome**: Deploys wait for the real IaC Runner result, preflight checks fail early, and CI, watchdog and probe outputs share one Env x Stage result schema.
-- **Links**: [#158](https://github.com/wangzitian0/infra2/issues/158), [#162](https://github.com/wangzitian0/infra2/issues/162), [#168](https://github.com/wangzitian0/infra2/issues/168), [#182](https://github.com/wangzitian0/infra2/issues/182), [#183](https://github.com/wangzitian0/infra2/issues/183), [#543](https://github.com/wangzitian0/infra2/issues/543); last full production reconcile tag [`v1.1.48`](https://github.com/wangzitian0/infra2/releases/tag/v1.1.48); infra2-sdk [`v0.3.0`](https://github.com/wangzitian0/infra2-sdk/releases/tag/v0.3.0).
+- **Links**: [#158](https://github.com/wangzitian0/infra2/issues/158), [#162](https://github.com/wangzitian0/infra2/issues/162), [#168](https://github.com/wangzitian0/infra2/issues/168), [#182](https://github.com/wangzitian0/infra2/issues/182), [#183](https://github.com/wangzitian0/infra2/issues/183), [#543](https://github.com/wangzitian0/infra2/issues/543); follow-ups [#186](https://github.com/wangzitian0/infra2/issues/186), [#187](https://github.com/wangzitian0/infra2/issues/187), [#189](https://github.com/wangzitian0/infra2/issues/189), [#191](https://github.com/wangzitian0/infra2/issues/191), [#610](https://github.com/wangzitian0/infra2/issues/610), [#945](https://github.com/wangzitian0/infra2/issues/945), [#1477](https://github.com/wangzitian0/infra2/issues/1477); last full production reconcile tag [`v1.1.48`](https://github.com/wangzitian0/infra2/releases/tag/v1.1.48); infra2-sdk [`v0.3.0`](https://github.com/wangzitian0/infra2-sdk/releases/tag/v0.3.0).
 - **Source file**: `Infra-011.reliability_hardening.md`
 
 <a id="infra-010"></a>
@@ -89,7 +89,7 @@ Read one file with `git show a77e6f06:docs/project/archive/<file>.md`.
 
 - **Status**: Archived — Completed 2026-01-24
 - **Outcome**: The IaC Runner image installs the 1Password CLI and `unzip`, gets AppRole credentials, and passes health checks. The push-to-deploy trigger it recorded is retired; see [`ops.pipeline.md`](../../ssot/ops.pipeline.md) §2 and §3.
-- **Links**: [#101](https://github.com/wangzitian0/infra2/pull/101), [#102](https://github.com/wangzitian0/infra2/pull/102), [#166](https://github.com/wangzitian0/infra2/issues/166).
+- **Links**: [#74](https://github.com/wangzitian0/infra2/pull/74), [#101](https://github.com/wangzitian0/infra2/pull/101), [#102](https://github.com/wangzitian0/infra2/pull/102), [#153](https://github.com/wangzitian0/infra2/pull/153), [#154](https://github.com/wangzitian0/infra2/pull/154), [#166](https://github.com/wangzitian0/infra2/issues/166).
 - **Source file**: `Infra-010.iac_and_service_verification.md`
 
 <a id="infra-009"></a>
@@ -98,7 +98,7 @@ Read one file with `git show a77e6f06:docs/project/archive/<file>.md`.
 
 - **Status**: Archived — Completed (superseded by deploy_v2, Infra-015)
 - **Outcome**: finance_report runs on the platform with its own Postgres and Redis, shared MinIO and Vault-rendered secrets. The app-side EPIC is finance_report `EPIC-007.deployment.md`.
-- **Links**: [#67](https://github.com/wangzitian0/infra2/pull/67), [#116](https://github.com/wangzitian0/infra2/pull/116) (S3 endpoint fix); finance_report [`v0.1.41`](https://github.com/wangzitian0/finance_report/releases/tag/v0.1.41) (first release through the receiver, 2026-07-16).
+- **Links**: [#67](https://github.com/wangzitian0/infra2/pull/67), [#116](https://github.com/wangzitian0/infra2/pull/116) (S3 endpoint fix), [#369](https://github.com/wangzitian0/infra2/issues/369) (AppRole migration); finance_report [#1829](https://github.com/wangzitian0/finance_report/issues/1829) (rate-limit fallback), [`v0.1.41`](https://github.com/wangzitian0/finance_report/releases/tag/v0.1.41) (first release through the receiver, 2026-07-16).
 - **Source file**: `Infra-009.finance_report_deploy.md`
 
 <a id="infra-008"></a>
@@ -107,7 +107,7 @@ Read one file with `git show a77e6f06:docs/project/archive/<file>.md`.
 
 - **Status**: Archived — Completed
 - **Outcome**: Platform services deploy to staging and production in parallel through Dokploy environments. [`core.environments.md`](../../ssot/core.environments.md) defines the environments.
-- **Links**: [#42](https://github.com/wangzitian0/infra2/pull/42).
+- **Links**: [#42](https://github.com/wangzitian0/infra2/pull/42) (merged 2026-01-03).
 - **Source file**: `Infra-008.platform_multi_env.md`
 
 <a id="infra-007"></a>
@@ -174,28 +174,28 @@ Tests in `common/tests/` cite these ids. `common/tests/test_doc_consistency_guar
 | Infra-007.2 | Host checks run outside infra2 and alert through a direct Feishu webhook. | `tools/out_of_band_watchdog.py`, `common/tests/test_out_of_band_watchdog.py` |
 | Infra-007.3 | The external workflow checks the alert bridge over SSH. The bridge stays private. | `.github/workflows/ops-checks.yml`, `tools/out_of_band_watchdog.py` |
 | Infra-011.1 | A deploy waits for the real IaC Runner sync result and fails on a failed sync. | `common/tests/test_iac_runner_deploy_result.py`, `.github/workflows/deploy.yml` |
-| Infra-011.2 | Each P1 dependency and each unhealthy Docker state has an owned watchdog signal. | `common/tests/test_infra_probes.py`, `common/tests/test_out_of_band_watchdog.py`, `common/tests/test_bootstrap_health.py` |
-| Infra-011.3 | The Vault Agent health check reads the token, the rendered files and unresolved values. | `common/tests/test_vault_self_refresh_audit.py` |
-| Infra-011.4 | Persistent data paths have backup inventory, a checksum runner and freshness checks. | `common/tests/test_backup_verification.py`, `common/backup/emitter.py` |
+| Infra-011.2 | Each P1 dependency and each unhealthy Docker state has an owned watchdog signal. | `common/tests/test_infra_probes.py`, `common/tests/test_cloudflare_watchdog.py`, `common/tests/test_bootstrap_health.py`, `common/tests/test_vault_unsealer.py`, `common/tests/test_iac_runner_deploy_result.py`, `common/tests/test_out_of_band_watchdog.py`, `common/tests/test_watchdog_consistency_audit.py`, `platform/12.alerting/compose.yaml`, `cloudflare/infra-watchdog/worker.js`, `docs/ssot/watchdog-signals.yaml`, `tools/watchdog_consistency_audit.py` |
+| Infra-011.3 | The Vault Agent health check reads the token, the rendered files and unresolved values. | `common/tests/test_vault_self_refresh_audit.py`, compose healthchecks |
+| Infra-011.4 | Persistent data paths have backup inventory, a checksum runner and freshness checks. | `common/tests/test_backup_verification.py`, `tools/host_backup.sh`, `common/backup/emitter.py`, per-service `BackupFacet` declarations (derived inventory, #542) |
 | Infra-011.5 | One owner routes each public service: a compose Traefik router or Dokploy, not both. | `common/tests/test_domain_routing_policy.py`, `docs/ssot/platform.domain.md` |
-| Infra-011.6 | IaC Runner sync ensures each runtime secret field before the deploy. | `common/tests/test_deployer.py` |
+| Infra-011.6 | IaC Runner sync ensures each runtime secret field before the deploy. | `common/tests/test_deployer.py`, `platform/*/deploy.py` |
 | Infra-011.7 | The IaC Runner health check covers required modules and binaries. | `common/tests/test_iac_runner_deploy_result.py`, `bootstrap/06.iac_runner/webhook_server.py` |
-| Infra-011.8 | A change to runner bootstrap files rebuilds the IaC Runner out of band before `/deploy`. | `common/tests/test_iac_runner_deploy_result.py`, `scripts/deploy_iac_runner_bootstrap.sh` |
-| Infra-011.9 | Superseded by #543: resident probes replace the hourly route canary. | `common/tests/test_out_of_band_watchdog.py`, `tools/out_of_band_watchdog.py` |
-| Infra-011.10 | Deploy control accepts only commit SHAs and signs each CI call with a nonce. | `common/tests/test_iac_runner_deploy_result.py`, `bootstrap/06.iac_runner/sync_runner.py` |
+| Infra-011.8 | A change to runner bootstrap files rebuilds the IaC Runner out of band before `/deploy`. | `common/tests/test_iac_runner_deploy_result.py`, `common/tests/test_deployer.py`, `.github/workflows/deploy.yml`, `scripts/deploy_iac_runner_bootstrap.sh` |
+| Infra-011.9 | Superseded by #543: resident probes replace the hourly route canary. | `common/tests/test_out_of_band_watchdog.py`, `common/tests/test_infra_probes.py`, `tools/out_of_band_watchdog.py`, `.github/workflows/ops-checks.yml` |
+| Infra-011.10 | Deploy control accepts only commit SHAs and signs each CI call with a nonce. | `common/tests/test_iac_runner_deploy_result.py`, `.github/workflows/deploy.yml`, `bootstrap/06.iac_runner/webhook_server.py`, `bootstrap/06.iac_runner/sync_runner.py` |
 | Infra-011.11 | A Dokploy deployment record is the proof that a deploy applied. | `common/tests/test_deployer.py`, `common/deploy/deployer.py` |
-| Infra-011.12 | Outputs separate environment from stage in one Env x Stage schema. | `common/tests/test_retired_deploy_canary.py`, `docs/ssot/ops.pipeline.md` |
-| Infra-011.13 | External dependencies fail in preflight, before expensive stages. | `common/tests/test_cloudflare_watchdog.py`, `common/tests/test_out_of_band_watchdog.py` |
-| Infra-011.14 | Long CI/CD stages publish budget evidence and budget breaches. | `common/tests/test_iac_runner_deploy_result.py` |
+| Infra-011.12 | Outputs separate environment from stage in one Env x Stage schema. | `docs/ssot/ops.pipeline.md`, `docs/ssot/ops.observability.md`, `common/tests/test_retired_deploy_canary.py` |
+| Infra-011.13 | External dependencies fail in preflight, before expensive stages. | `common/tests/test_cloudflare_watchdog.py`, `common/tests/test_out_of_band_watchdog.py`, `.github/workflows/deploy.yml` |
+| Infra-011.14 | Long CI/CD stages publish budget evidence and budget breaches. | `common/tests/test_iac_runner_deploy_result.py`, `.github/workflows/deploy.yml`, `bootstrap/06.iac_runner/webhook_server.py`, `bootstrap/06.iac_runner/sync_runner.py` |
 | Infra-011.15 | Cross-stage disagreements have definitions and measures. | `common/tests/test_infra_probes.py`, `common/tests/test_cloudflare_watchdog.py` |
-| Infra-011.16 | Automatic reconcile of `iac_pinned` services needs fan-out evidence. | `tools/reconcile_iac_inputs.py`, `common/tests/test_reconcile_iac_inputs.py` |
+| Infra-011.16 | Automatic reconcile of `iac_pinned` services needs fan-out evidence. | `docs/ssot/ops.pipeline.md`, `tools/reconcile_iac_inputs.py`, `common/tests/test_iac_runner_deploy_result.py`, `common/tests/test_reconcile_iac_inputs.py`, `.github/workflows/reconcile-iac-inputs.yml`, `.github/workflows/infra-ci.yml` |
 | Infra-011.17 | A weekly restore into a throwaway target proves the off-host backup. | `common/tests/test_backup_verification.py`, `tools/run_restore_rehearsal.py`, `docs/ssot/ops.recovery.md` |
-| Infra-011.18 | AI merge authority is fail-closed and bound to the current PR head. | `docs/ssot/ci-gate-inventory.yaml` |
-| Infra-011.19 | IaC Runner operation identity is environment, exact ref and service set. | `common/tests/test_iac_runner_client.py`, `common/deploy/iac_runner_client.py` |
-| Infra-011.20 | JavaScript Actions run on Node.js 24 in every workflow. | `common/tests/test_workflow_reference_contract.py` |
-| Infra-011.21 | Reconcile keeps unknown apart from empty and follows the last promotion marker. | `common/tests/test_dokploy_config_drift.py`, `common/tests/test_dns_drift_report.py` |
-| Infra-011.22 | A preview deploy passes only after its own deployment record is done. | `common/tests/test_preview_lifecycle.py`, `common/deploy/preview.py` |
-| Infra-014.1 | Backend telemetry reaches the one SigNoz collector in each environment. | `finance_report/finance_report/10.app/secrets.ctmpl`, `docs/ssot/ops.observability.md` |
-| Infra-014.2 | The browser sends OTLP through one public domain, `otel.${INTERNAL_DOMAIN}`. | `platform/11.signoz/otel-collector-config.yaml`, `platform/11.signoz/deploy.py` |
-| Infra-014.3 | OpenPanel has a client id for production, staging and preview. | `finance_report/finance_report/10.app/deploy.py`, `docs/ssot/platform.openpanel.md` |
-| Infra-014.4 | The shipped CLIs query telemetry and analytics. | `platform/11.signoz/shared_tasks.py`, `docs/ssot/platform.openpanel.md` |
+| Infra-011.18 | AI merge authority is fail-closed and bound to the current PR head. | `AGENTS.md`, `docs/ssot/ops.pipeline.md`, `docs/ssot/ci-gate-inventory.yaml` |
+| Infra-011.19 | IaC Runner operation identity is environment, exact ref and service set. | `docs/ssot/ops.pipeline.md`, `bootstrap/06.iac_runner/webhook_server.py`, `bootstrap/06.iac_runner/sync_runner.py`, `common/deploy/iac_runner_client.py`, `common/deploy/deployer.py`, `tools/dokploy_config_drift.py`, `common/tests/test_iac_runner_client.py`, `common/tests/test_iac_runner_deploy_result.py`, `common/tests/test_deployer.py`, `common/tests/test_dokploy_config_drift.py` |
+| Infra-011.20 | JavaScript Actions run on Node.js 24 in every workflow. | `common/tests/test_workflow_reference_contract.py`, `.github/workflows/reconcile-iac-inputs.yml`, `docs/ssot/ops.pipeline.md` |
+| Infra-011.21 | Reconcile keeps unknown apart from empty and follows the last promotion marker. | `common/tests/test_dns_drift_report.py`, `common/tests/test_dokploy_config_drift.py`, `common/tests/test_reconcile_iac_inputs.py`, `common/tests/test_out_of_band_watchdog.py`, `docs/ssot/ops.pipeline.md`, `docs/ssot/ops.standards.md` |
+| Infra-011.22 | A preview deploy passes only after its own deployment record is done. | `common/tests/test_preview_lifecycle.py`, `common/tests/test_preview_teardown_convergence.py`, `common/tests/test_deploy_v2.py`, `common/tests/test_retired_deploy_canary.py`, `common/tests/test_sdk_contract_adoption.py`, `.github/workflows/ops-checks.yml`, `common/deploy/preview.py`, `finance_report/finance_report/preview/compose.yaml`, `docs/ssot/ops.pipeline.md` |
+| Infra-014.1 | Backend telemetry reaches the one SigNoz collector in each environment. | `finance_report/finance_report/10.app/secrets.ctmpl`, `finance_report/finance_report/preview/secrets.ctmpl`, `docs/ssot/ops.observability.md` |
+| Infra-014.2 | The browser sends OTLP through one public domain, `otel.${INTERNAL_DOMAIN}`. | `platform/11.signoz/compose.yaml`, `platform/11.signoz/deploy.py`, `platform/11.signoz/otel-collector-config.yaml`, `finance_report/finance_report/10.app/compose.yaml`, `finance_report/finance_report/preview/compose.yaml` |
+| Infra-014.3 | OpenPanel has a client id for production, staging and preview. | `finance_report/finance_report/10.app/deploy.py`, `finance_report/finance_report/10.app/compose.yaml`, `finance_report/finance_report/preview/compose.yaml`, `docs/ssot/platform.openpanel.md` |
+| Infra-014.4 | The shipped CLIs query telemetry and analytics. | `platform/11.signoz/shared_tasks.py` (`query_logs`, `list_services`), `docs/ssot/ops.observability.md`, `docs/ssot/platform.openpanel.md` |

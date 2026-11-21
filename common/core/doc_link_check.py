@@ -9,9 +9,10 @@ substantive.
 
 Two mechanisms produced them, and both recur:
 
-1. Archiving a project moves it into ``docs/project/archive/`` and every
-   referrer keeps the old path.
-2. The moved file's own relative links are now one directory deeper, so each
+1. Closing a project deletes its file and adds an entry to the provenance
+   index ``docs/project/archive/README.md`` (#1826). A referrer that keeps the
+   old path is dead; point it at the index entry, ``README.md#infra-nnn``.
+2. A moved file's own relative links are now one directory deeper, so each
    needs one more ``../``.
 
 Neither is a judgement call, which is exactly why leaving them to review was
