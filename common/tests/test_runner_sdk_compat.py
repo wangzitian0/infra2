@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-RUNNER_SDK = "3.23.0"
+RUNNER_SDK = "4.0.0"
 RUNNER_SDK_NAMES = frozenset(
     {
         ("infra2_sdk.ci", "parse_github_time"),
@@ -41,6 +41,7 @@ RUNNER_SDK_NAMES = frozenset(
         ("infra2_sdk.observability", "record_verdicts"),
         ("infra2_sdk.refs", "ReleaseError"),
         ("infra2_sdk.refs", "assert_after_on_main"),
+        ("infra2_sdk.refs", "classify_ref"),
         ("infra2_sdk.refs", "resolve_image_digest"),
         ("infra2_sdk.routing", "CANARY_SLOT"),
         ("infra2_sdk.routing", "derive_preview_coordinates"),
@@ -48,6 +49,7 @@ RUNNER_SDK_NAMES = frozenset(
         ("infra2_sdk.routing", "resolve_service_url"),
         ("infra2_sdk.runtime.config_schema", "EnvironmentField"),
         ("infra2_sdk.runtime.config_schema", "EnvironmentManifest"),
+        ("infra2_sdk.runtime", "merge_manifests"),
         ("infra2_sdk.runtime.environment", "is_preview_alias"),
         ("infra2_sdk.runtime.environment", "resolve_environment_tier"),
         ("infra2_sdk.runtime.health", "DependencyStatus"),

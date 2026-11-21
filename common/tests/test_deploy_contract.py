@@ -13,7 +13,6 @@ from common.deploy.contract import (
     SERVICES,
     DeployTarget,
     ServiceSpec,
-    classify_version_ref,
     default_version_ref,
     deploy_type_spec,
     make_deploy_target,
@@ -350,29 +349,6 @@ def test_preview_capability_is_the_config_registry():
         service_spec(key)  # every registered unit is a known service
     with pytest.raises(ValueError, match="no preview config registered"):
         preview_service_config("platform/redis")
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        ("main", "branch"),
-        ("v1.2.3", "tag"),
-        ("pr-42", "pr"),
-        ("42", "pr"),
-        ("999999", "pr"),
-        ("1234567", "sha"),  # 7 hex digits -> sha, disjoint from 1..6 digit PRs
-        ("deadbeef", "sha"),
-        ("a" * 40, "sha"),
-    ],
-)
-def test_version_ref_patterns_are_disjoint(raw, expected):
-    assert classify_version_ref(raw) == expected
-
-
-@pytest.mark.parametrize("bad", ["", "feature/foo", "v1.2", "pr-0", "0", "1" * 41])
-def test_version_ref_rejects_unrecognized_forms(bad):
-    with pytest.raises(ValueError, match="unrecognized|non-empty"):
-        classify_version_ref(bad)
 
 
 def test_normalize_pr_number_and_preview_type_resolution():
