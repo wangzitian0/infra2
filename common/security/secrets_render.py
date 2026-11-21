@@ -90,8 +90,16 @@ def render_agent_config() -> str:
     return VAULT_AGENT_HCL_TEMPLATE
 
 
-def render(service: Service) -> dict[str, str]:
-    manifest = merged_manifest(service)
+def render(service: Service, *, root: Path | None = None) -> dict[str, str]:
+    """The files of ``service``. ``root`` holds the manifests; the default is ``ROOT``.
+
+    The config-drift check passes a directory that holds the manifests of a release ref.
+    """
+    manifest = (
+        merged_manifest(service)
+        if root is None
+        else _merged_manifest(service, root=root)
+    )
     errors = validate_manifest_offline(manifest)
     if errors:
         raise ValueError(f"{service.directory}: " + "; ".join(errors))

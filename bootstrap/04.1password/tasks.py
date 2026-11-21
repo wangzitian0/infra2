@@ -151,7 +151,12 @@ class OnePasswordDeployer(Deployer):
 
     @classmethod
     def composing(cls, c, env_vars: dict = None) -> bool:
-        """Deploy in Dokploy (automated)"""
+        """Deploy in Dokploy (automated).
+
+        A plain compose file uses the GitHub provider. A raw-eligible ``x-infra2`` file
+        uploads its compiled text with ``upsert_raw_compose`` (infra2#1822). An
+        ``x-infra2`` file that is not raw-eligible fails before any API call.
+        """
         if not isinstance(env_vars, dict):
             from common.core.environ import get_env
 
@@ -164,8 +169,12 @@ class OnePasswordDeployer(Deployer):
         header("1Password composing", "Deploy in Dokploy (automated)")
 
         try:
+            from common.deploy.compose_compile import SOURCE_RAW, load_stack
             from common.deploy.dokploy_client import ensure_project, get_dokploy
 
+            # Repository-relative: the result does not depend on the cwd.
+            stack = load_stack(cls.compose_path)
+            raw = stack.source_type == SOURCE_RAW
             # Ensure project exists
             domain = env_vars.get("INTERNAL_DOMAIN")
             host = f"cloud.{domain}" if domain else None
@@ -185,6 +194,26 @@ class OnePasswordDeployer(Deployer):
 
             # GitHub repository info
             compose_path = cls.compose_path
+
+            if raw:
+                from common.deploy.dokploy_adapter import upsert_raw_compose
+
+                env_content = "\n".join(
+                    [f"{k}={v}" for k, v in env_vars.items() if v is not None]
+                )
+                compose_id = upsert_raw_compose(
+                    client,
+                    service_name="1password-connect",
+                    project_name="bootstrap",
+                    env_id=env_id,
+                    compose_file=stack.compiled,
+                    effective_env=env_content,
+                    existing=existing,
+                    raw_env_str=env_content,
+                    log_info=info,
+                    app_name="bootstrap-1password",
+                )
+                return cls._ensure_domain_and_deploy(client, compose_id, domain)
 
             # Get GitHub provider ID
             github_id = client.get_github_provider_id()
@@ -228,32 +257,7 @@ class OnePasswordDeployer(Deployer):
                 [f"{k}={v}" for k, v in env_vars.items() if v is not None]
             )
             client.update_compose(compose_id, env=env_content)
-
-            # Configure domain via Dokploy API (using ensure_domains for idempotency)
-            if cls.subdomain and cls.service_port:
-                domain_host = f"{cls.subdomain}.{domain}"
-                info(f"Ensuring domain: {domain_host}")
-
-                desired_domains = [
-                    {"host": domain_host, "port": cls.service_port, "https": True}
-                ]
-                result = client.ensure_domains(
-                    compose_id=compose_id,
-                    desired_domains=desired_domains,
-                    service_name=cls.service_name,
-                )
-
-                if result["created"] > 0:
-                    success(f"Domain configured: https://{domain_host}")
-                elif result["skipped"] > 0:
-                    info(f"Domain already configured: {domain_host}")
-
-            info(f"Deploying compose (ID: {compose_id})")
-            client.deploy_compose(compose_id)
-
-            success("1Password Connect deployment triggered")
-            warning("Wait 1-2 minutes for containers to start")
-            return True
+            return cls._ensure_domain_and_deploy(client, compose_id, domain)
 
         except Exception as ex:
             error(f"Deployment failed: {ex}")
@@ -268,6 +272,34 @@ class OnePasswordDeployer(Deployer):
                 ],
             )
             return False
+
+    @classmethod
+    def _ensure_domain_and_deploy(cls, client, compose_id: str, domain) -> bool:
+        # Configure domain via Dokploy API (using ensure_domains for idempotency)
+        if cls.subdomain and cls.service_port:
+            domain_host = f"{cls.subdomain}.{domain}"
+            info(f"Ensuring domain: {domain_host}")
+
+            desired_domains = [
+                {"host": domain_host, "port": cls.service_port, "https": True}
+            ]
+            result = client.ensure_domains(
+                compose_id=compose_id,
+                desired_domains=desired_domains,
+                service_name=cls.service_name,
+            )
+
+            if result["created"] > 0:
+                success(f"Domain configured: https://{domain_host}")
+            elif result["skipped"] > 0:
+                info(f"Domain already configured: {domain_host}")
+
+        info(f"Deploying compose (ID: {compose_id})")
+        client.deploy_compose(compose_id)
+
+        success("1Password Connect deployment triggered")
+        warning("Wait 1-2 minutes for containers to start")
+        return True
 
     @classmethod
     def post_compose(cls, c, shared_tasks=None) -> bool:

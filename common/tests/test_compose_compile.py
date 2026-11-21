@@ -16,7 +16,6 @@ from common.deploy.compose_compile import (
     has_x_infra2,
     load_stack,
     raw_ineligibility,
-    refuse_x_infra2,
 )
 from common.deploy.compose_equivalence import (
     check,
@@ -181,12 +180,6 @@ def test_a_raw_eligible_plain_file_still_uses_github() -> None:
     stack = load_stack("platform/21.portal/compose.yaml")
     assert raw_ineligibility(stack.compiled) == []
     assert stack.source_type == "github"
-
-
-def test_refuse_x_infra2_passes_plain_and_stops_x_infra2() -> None:
-    refuse_x_infra2("services: {}\n", where="probe")
-    with pytest.raises(ComposeSourceError, match="probe: this path does not support"):
-        refuse_x_infra2(_x_stack(), where="probe")
 
 
 # --- deploy: Dokploy source type ---------------------------------------------------------
@@ -481,33 +474,7 @@ def test_the_cli_prints_a_plain_file_unchanged(capsys) -> None:
     assert "# source type: github" in out.err
 
 
-# --- paths that do not support x-infra2 yet stop on it -----------------------------------
-
-
-def test_config_drift_stops_on_an_x_infra2_file_and_hashes_a_plain_one(
-    monkeypatch,
-) -> None:
-    import common.deploy.config_drift as drift
-
-    monkeypatch.setattr(
-        drift, "_hash_input_paths", lambda dep, c: ("s/compose.yaml", [], [])
-    )
-    plain = "services:\n  app:\n    image: a:1\n"
-    monkeypatch.setattr(
-        drift, "contents_at_ref", lambda ref, paths: {"s/compose.yaml": plain.encode()}
-    )
-    got, missing = drift.expected_hash_at(object, MagicMock(), "v1", {"ENV": "prod"})
-    assert (got, missing) == (
-        config_hash_from_items(plain, {"ENV": "prod"}, [], []),
-        [],
-    )
-    monkeypatch.setattr(
-        drift,
-        "contents_at_ref",
-        lambda ref, paths: {"s/compose.yaml": _x_stack().encode()},
-    )
-    with pytest.raises(ComposeSourceError, match="config drift s/compose.yaml@v1"):
-        drift.expected_hash_at(object, MagicMock(), "v1", {"ENV": "prod"})
+# --- base ref reads -----------------------------------------------------------------
 
 
 def test_text_at_ref_refuses_an_unknown_base_and_returns_none_for_a_missing_file() -> (

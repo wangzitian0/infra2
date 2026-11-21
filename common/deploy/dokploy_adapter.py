@@ -459,6 +459,14 @@ def upsert_github_compose(
     return compose_id
 
 
+def raw_source_fields(compose_file: str) -> dict[str, Any]:
+    """The ``compose.update`` fields that make a record run ``compose_file`` (raw source).
+
+    One definition for every raw upload: ``upsert_raw_compose`` and the preview slot.
+    """
+    return {"compose_file": compose_file, "source_type": "raw", "autoDeploy": False}
+
+
 def upsert_raw_compose(
     client: Any,
     *,
@@ -470,6 +478,7 @@ def upsert_raw_compose(
     existing: dict | None,
     raw_env_str: str,
     log_info: Callable[[str], None] | None = None,
+    app_name: str | None = None,
 ) -> str:
     """Create or update a Dokploy compose service with ``sourceType="raw"``.
 
@@ -477,37 +486,25 @@ def upsert_raw_compose(
     ``composeFile`` and runs it with no checkout. The env follows the same order as
     :func:`upsert_github_compose`: ``compose.create`` does not reliably store ``env``
     or ``composeFile``, so a follow-up ``compose.update`` sets both again.
+    ``app_name`` defaults to ``<project_name>-<service_name>``.
     """
     info_log = log_info or logger.info
+    fields = raw_source_fields(compose_file)
     if existing:
         compose_id = existing["composeId"]
         info_log("Updating existing compose service (raw source)")
-        client.update_compose(
-            compose_id,
-            compose_file=compose_file,
-            env=effective_env,
-            source_type="raw",
-            autoDeploy=False,
-        )
+        client.update_compose(compose_id, env=effective_env, **fields)
         return compose_id
     info_log("Creating new compose service with raw source")
     result = client.create_compose(
         environment_id=env_id,
         name=service_name,
-        app_name=f"{project_name}-{service_name}",
-        compose_file=compose_file,
+        app_name=app_name or f"{project_name}-{service_name}",
         env=effective_env,
-        source_type="raw",
-        autoDeploy=False,
+        **fields,
     )
     compose_id = result["composeId"]
-    client.update_compose(
-        compose_id,
-        compose_file=compose_file,
-        env=raw_env_str,
-        source_type="raw",
-        autoDeploy=False,
-    )
+    client.update_compose(compose_id, env=raw_env_str, **fields)
     return compose_id
 
 
