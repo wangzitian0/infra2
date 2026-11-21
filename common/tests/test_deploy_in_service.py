@@ -606,6 +606,7 @@ def test_an_unchanged_stack_on_an_unreachable_host_fails_not_skips(monkeypatch):
     containers fails the sync (as verify_in_service does after a deploy); it is not a
     skip, and it is not a redeploy onto a host that did not answer."""
     redis, deployed = _redis_sync(monkeypatch, remote_hash="h1")
+    monkeypatch.setattr(redis, "IN_SERVICE_DEADLINE_SECONDS", 0)
     errors: list[str] = []
     monkeypatch.setattr(deployer_module, "error", errors.append)
     host = _Host(checkout=LAST_DEPLOY_SHA, containers="", listable=False)
@@ -816,9 +817,12 @@ def test_restart_dependents_needs_a_host(monkeypatch):
     assert deployer_module.Deployer.restart_dependents(_Host(RELEASE_SHA, ""), {}) == []
 
 
-def test_verify_in_service_still_reports_an_unlistable_host_as_a_failure(deployer):
+def test_verify_in_service_still_reports_an_unlistable_host_as_a_failure(
+    deployer, monkeypatch
+):
     """The post-deploy proof keeps its fail-closed message; only the skip path treats
     an unobservable host as no evidence."""
+    monkeypatch.setattr(deployer, "IN_SERVICE_DEADLINE_SECONDS", 0)
     c = _Context([_Run(True, "a" * 40 + "\n"), _Run(False, "", "permission denied")])
     assert (
         deployer.verify_in_service(c, "cid")
@@ -1256,6 +1260,7 @@ def test_a_raw_stack_with_no_container_that_sets_configuration_sha256_fails_clos
     message = deployer._verify_raw_release_binding(stack)
     assert message and "records no CONFIGURATION_SHA256" in message and seen == []
     _raw(deployer, monkeypatch)
+    monkeypatch.setattr(deployer, "IN_SERVICE_DEADLINE_SECONDS", 0)
     broken, _seen = _raw_stack(_Run(False, "", "permission denied"))
     with pytest.raises(deployer_module._StackUnobservable, match="permission denied"):
         deployer._verify_raw_release_binding(broken)
@@ -1347,3 +1352,85 @@ def test_the_real_todo_containers_set_configuration_sha256() -> None:
         if "CONFIGURATION_SHA256" in (spec.get("environment") or {})
     }
     assert carriers == {"todo", "vault-agent"}
+
+
+# --- #1899 review: a one-off ssh failure is "not settled yet", not a verdict -------
+
+_SSH_DOWN = "ssh: connect to host vps port 22: Connection timed out"
+_ALL_HEALTHY = _ps(
+    ("backend", "running", "Up 9 seconds (healthy)"),
+    ("frontend", "running", "Up 9 seconds (healthy)"),
+    ("vault-agent", "running", "Up 9 seconds (healthy)"),
+)
+
+
+def _clock(monkeypatch, *ticks: float) -> None:
+    """time.monotonic answers `ticks` in order; one more call fails the test."""
+    answers = iter(ticks)
+    monkeypatch.setattr(deployer_module.time, "monotonic", lambda: next(answers))
+
+
+def test_one_failed_docker_ps_then_a_good_read_passes(deployer):
+    c = _Context(
+        [
+            _Run(True, "a" * 40 + "\n"),
+            _Run(False, "", _SSH_DOWN),
+            _Run(True, _ALL_HEALTHY),
+        ]
+    )
+    assert deployer.verify_in_service(c, "cid") is None
+    assert len(c.commands) == 3 and c.answers == []
+
+
+def test_docker_ps_failing_until_the_deadline_raises_unobservable(
+    deployer, monkeypatch
+):
+    """Deadline at 0 + 180 s: the read at 10 s retries, the read at 200 s gives up."""
+    _clock(monkeypatch, 0.0, 10.0, 200.0)
+    c = _Context([_Run(False, "", _SSH_DOWN), _Run(False, "", _SSH_DOWN)])
+    with pytest.raises(
+        deployer_module._StackUnobservable, match="Connection timed out"
+    ):
+        deployer.verify_still_in_service(c, "cid")
+    assert len(c.commands) == 2 and c.answers == []
+
+
+def test_one_failed_raw_docker_inspect_then_a_good_read_binds(deployer, monkeypatch):
+    _raw(deployer, monkeypatch)
+    answers = [
+        _Run(False, "", _SSH_DOWN),
+        _Run(
+            True, _inspected(("platform-app", {"CONFIGURATION_SHA256": _RELEASE_HASH}))
+        ),
+    ]
+    stack, seen = _raw_stack(None)
+    stack = stack._replace(run=lambda cmd: seen.append(cmd) or answers.pop(0))
+    assert deployer._verify_raw_release_binding(stack) is None
+    assert len(seen) == 2 and answers == []
+
+
+def test_raw_docker_inspect_failing_until_the_deadline_raises_unobservable(
+    deployer, monkeypatch
+):
+    _raw(deployer, monkeypatch)
+    _clock(monkeypatch, 0.0, 10.0, 200.0)
+    stack, seen = _raw_stack(_Run(False, "", _SSH_DOWN))
+    with pytest.raises(deployer_module._StackUnobservable, match="could not inspect"):
+        deployer._verify_raw_release_binding(stack)
+    assert len(seen) == 3
+
+
+def test_a_compose_without_an_app_name_raises_at_once(deployer, monkeypatch):
+    """Deterministic: no appName names no containers, so no read and no wait."""
+    monkeypatch.setattr(
+        "common.deploy.dokploy_client.get_dokploy",
+        lambda host=None: SimpleNamespace(
+            get_compose=lambda compose_id: {"appName": ""}
+        ),
+    )
+    slept: list[float] = []
+    monkeypatch.setattr(deployer_module.time, "sleep", slept.append)
+    c = _Context([_Run(True, _ALL_HEALTHY)])
+    with pytest.raises(deployer_module._StackUnobservable, match="reports no appName"):
+        deployer.verify_still_in_service(c, "cid")
+    assert c.commands == [] and slept == []

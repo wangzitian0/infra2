@@ -624,7 +624,7 @@ identity。
 (fingerprint 已覆盖 compose、build context 与声明依赖),拿本次 release 的 ref 去比会让每个 release
 重启所有未变服务(redis 重启即让 OpenPanel / Authentik worker 报 NOSCRIPT,#726)。检查本身抛异常(Dokploy
 API 出错、宿主机列不出容器、raw stack `docker inspect` 失败)视为"无证据":该服务的 sync 失败(#1897),
-既不当作在线而跳过,也不重部署——重部署与其后的在线证明需要的正是这台没有应答的宿主机或 API。
+既不当作在线而跳过,也不重部署——重部署与其后的在线证明需要的正是这台没有应答的宿主机或 API。单次 `docker ps` / raw `docker inspect` 失败(如一次 ssh 超时)视为"尚未稳定",按 `IN_SERVICE_INTERVAL_SECONDS` 重读,直到 `IN_SERVICE_DEADLINE_SECONDS` 仍无一次成功读取才算无证据;确定性错误(compose 无 appName、free 要求 root SSH)立即失败,不等待。
 **重建依赖 ⇒ 重启依赖方**(#726 / #713):有些客户端扛不住依赖被重建——redis 重建后 Lua 脚本缓存清空,OpenPanel
 api/worker 只发 `EVALSHA`、从不在 `NOSCRIPT` 后重载脚本,Authentik worker 也不自愈。依赖方在自己的 `deploy.py`
 上声明 `restart_after = (RestartAfterFacet(dependency="platform/redis", services=(<compose service>, ...)),)`;

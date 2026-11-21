@@ -705,3 +705,28 @@ def test_mount_fingerprint_env_accepts_empty_string_content() -> None:
     assert mount_fingerprint_env({"a.cfg": ""}) == {
         "IAC_MOUNT_SHA256_A_CFG": hashlib.sha256(b"").hexdigest()
     }
+
+
+def test_free_root_ssh_requirement_raises_at_once(monkeypatch) -> None:
+    """#1899 review: a deterministic config error must not wait for a deadline."""
+    from common.deploy import deployer as deployer_module
+    from common.deploy.deployer import Deployer
+
+    module = _load_deploy_module("platform/25.free")
+    cls = module.FreeDeployer
+    monkeypatch.setattr(
+        cls,
+        "env",
+        classmethod(
+            lambda _c: {"ENV": "production", "VPS_HOST": "h", "VPS_SSH_USER": "deploy"}
+        ),
+    )
+    monkeypatch.setattr(
+        Deployer, "verify_still_in_service", classmethod(lambda _c, _ctx, _cid: None)
+    )
+    slept: list[float] = []
+    monkeypatch.setattr(deployer_module.time, "sleep", slept.append)
+    ctx = _FakeContext("")
+    with pytest.raises(RuntimeError, match="requires root SSH access"):
+        cls.verify_still_in_service(ctx, "cid")
+    assert ctx.commands == [] and slept == []
