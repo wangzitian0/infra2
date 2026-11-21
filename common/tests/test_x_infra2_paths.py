@@ -152,6 +152,7 @@ def test_preview_uploads_an_x_infra2_slot_compiled_in_preview_mode_as_raw(
             "compose_file": preview,
             "source_type": "raw",
             "autoDeploy": False,
+            "composePath": "./docker-compose.yml",
         }
     ]
     # A raw slot needs no GitHub provider; this client has none.
@@ -546,6 +547,7 @@ def test_bootstrap_stacks_upload_x_infra2_as_raw(
         "compose_file": compile_stack(source),
         "source_type": "raw",
         "autoDeploy": False,
+        "composePath": "./docker-compose.yml",
     }
     if existing:
         client.create_compose.assert_not_called()

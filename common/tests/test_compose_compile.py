@@ -309,6 +309,24 @@ def test_upsert_raw_compose_updates_an_existing_record_to_raw() -> None:
     client.create_compose.assert_not_called()
     kwargs = client.update_compose.call_args.kwargs
     assert kwargs["source_type"] == "raw" and kwargs["env"] == "A=1\nVAULT_ROLE_ID=r"
+    # A record switched from github keeps its old composePath unless the update resets
+    # it; Dokploy then writes its env file into a directory that a raw deploy wiped (#1889).
+    assert kwargs["composePath"] == "./docker-compose.yml"
+
+
+def test_the_raw_compose_path_is_where_dokploy_writes_the_raw_file() -> None:
+    """Dokploy writes a raw compose to code/docker-compose.yml and its env file to
+    dirname(code/<composePath>) with no mkdir. Only this path puts both in code/."""
+    import posixpath
+
+    from common.deploy.dokploy_adapter import RAW_COMPOSE_PATH, raw_source_fields
+
+    assert raw_source_fields("x")["composePath"] == RAW_COMPOSE_PATH
+    code = "/etc/dokploy/compose/app/code"
+    env_dir = posixpath.dirname(
+        posixpath.normpath(posixpath.join(code, RAW_COMPOSE_PATH))
+    )
+    assert env_dir == code
 
 
 def test_the_dokploy_client_sends_raw_source_and_compose_file() -> None:

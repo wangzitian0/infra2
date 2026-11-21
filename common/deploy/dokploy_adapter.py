@@ -459,12 +459,27 @@ def upsert_github_compose(
     return compose_id
 
 
+#: The compose path of a raw Dokploy record: the file Dokploy writes the raw text to.
+RAW_COMPOSE_PATH = "./docker-compose.yml"
+
+
 def raw_source_fields(compose_file: str) -> dict[str, Any]:
     """The ``compose.update`` fields that make a record run ``compose_file`` (raw source).
 
     One definition for every raw upload: ``upsert_raw_compose`` and the preview slot.
     """
-    return {"compose_file": compose_file, "source_type": "raw", "autoDeploy": False}
+    # composePath must point at the raw file: Dokploy writes the raw compose to
+    # code/docker-compose.yml but writes .env to dirname(composePath)/.env with no mkdir,
+    # after it wipes code/. A record switched from github keeps e.g.
+    # "platform/30.todo/compose.yaml", so .env was never written and the stack ran with no
+    # ENV/ENV_SUFFIX (staging v3.1.142, #1889). Dokploy source: builders/compose.ts
+    # getCreateEnvFileCommand; db/schema/compose.ts default "./docker-compose.yml".
+    return {
+        "compose_file": compose_file,
+        "source_type": "raw",
+        "autoDeploy": False,
+        "composePath": RAW_COMPOSE_PATH,
+    }
 
 
 def upsert_raw_compose(
