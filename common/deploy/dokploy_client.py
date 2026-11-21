@@ -303,7 +303,7 @@ class DokployClient:
                         # `project.all` returns a TRUNCATED compose (no `env` /
                         # source fields). Re-fetch the full object via compose.one
                         # so callers that read env — e.g. get_remote_config_hash's
-                        # IAC_CONFIG_HASH post-deploy check — see real values
+                        # CONFIGURATION_SHA256 post-deploy check — see real values
                         # instead of a spurious "none". Let get_compose errors
                         # propagate: silently falling back to the truncated object
                         # would reintroduce the "hash reads as none" bug and hide
@@ -312,7 +312,7 @@ class DokployClient:
                         if not compose_id:
                             # Same hazard, fail closed: a matched compose with no
                             # composeId can't be re-fetched, so returning the
-                            # truncated object would read IAC_CONFIG_HASH as "none"
+                            # truncated object would read CONFIGURATION_SHA256 as "none"
                             # and reintroduce the exact bug this re-fetch fixes.
                             raise RuntimeError(
                                 f"Dokploy compose {name!r} matched but has no "

@@ -554,7 +554,7 @@ A deploy that starts between the last poll and the recreate is not protected.
 配置身份拆成两个正交平面,禁止再用一个 hash 同时回答两个问题:
 
 - `CONFIGURATION_SHA256`:**runtime fingerprint**,覆盖 compose、实际运行 env、local artifacts 与声明依赖;
-  只服务于同一环境的幂等/no-op 与 secret/runtime-config 变化触发。(旧变量 `IAC_CONFIG_HASH` 已停止写入,仅在 drift/watchdog 读取端保留只读过渡回退。)
+  只服务于同一环境的幂等/no-op 与 secret/runtime-config 变化触发。(旧变量 `IAC_CONFIG_HASH` 已退役,见 `common/core/retired_env_names.py`。)
 - `IAC_SOURCE_CONFIG_HASH`:带 schema 版本的 **source fingerprint**,只覆盖 release 可重算的源码、
   非秘密部署坐标、local artifacts 与声明依赖;`IAC_DEPLOY_REF`(exact 40-char SHA)证明该 fingerprint
   来自哪一个不可变 revision。

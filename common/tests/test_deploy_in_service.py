@@ -905,7 +905,7 @@ def test_an_unchanged_stack_is_skipped_only_when_its_newest_record_is_done(
 def test_composing_restores_existing_env_when_deploy_fails(monkeypatch):
     """#1247: if _deploy_compose_with_record_check raises after upsert_github_compose
     wrote the new env to Dokploy DB, composing() restores existing_env so the DB does
-    not falsely claim the failed IAC_DEPLOY_REF / IAC_CONFIG_HASH."""
+    not falsely claim the failed IAC_DEPLOY_REF / CONFIGURATION_SHA256."""
     d = deployer_module
 
     class FailingDeployer(d.Deployer):

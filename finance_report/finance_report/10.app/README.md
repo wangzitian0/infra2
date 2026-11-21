@@ -31,28 +31,27 @@ Secrets are read from multiple Vault paths:
 
 ### Application Secrets
 
-Stored at: `secret/data/finance_report/<env>/app`
+Stored at: `secret/data/finance_report/<env>/app`. The one source for the keys is `secrets.ctmpl`: `LLM_API_KEY`, `LLM_ENCRYPTION_KEYS`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_PUBLIC_ACCESS_KEY`, `S3_PUBLIC_SECRET_KEY`, `SECRET_KEY`.
+
+Not in Vault. `compose.yaml` or the application default sets each one; `env.manifest.json` names its source:
 
 | Key | Description |
 |-----|-------------|
 | `S3_ENDPOINT` | S3 object storage endpoint URL (RustFS) |
-| `S3_ACCESS_KEY` | S3 access key |
-| `S3_SECRET_KEY` | S3 secret key |
 | `S3_BUCKET` | Bucket name for statements |
 | `S3_PUBLIC_ENDPOINT` | Externally reachable S3 API endpoint for short-lived presigned URLs |
 | `S3_PUBLIC_BUCKET` | Public-endpoint bucket alias; defaults to `S3_BUCKET` |
-| `AI_PROVIDER` | AI provider identifier; defaults to `zai` |
-| `ZAI_API_KEY` | AI provider API key. The template renders it as the container variable `AI_API_KEY` |
-| `AI_BASE_URL` | Provider base URL; defaults to Z.AI |
+| `LLM_PROVIDER` | LLM provider identifier; defaults to `zai` |
+| `LLM_BASE_URL` | Provider base URL; defaults to Z.AI |
 | `AI_CHAT_COMPLETIONS_PATH` | Chat completions API path |
 | Model keys | Not set. The infra2 SDK defaults apply (large, small and multimodal roles). Set a role only to customize production |
 | `AI_JSON_TIMEOUT_SECONDS` | Provider JSON extraction timeout; defaults to `360` |
 | `AI_JSON_MAX_TOKENS` | Provider JSON extraction output cap; defaults to `8192` |
 | `AI_JSON_DISABLE_THINKING` | Disable GLM thinking for deterministic JSON extraction; defaults to `true` |
 | `NEXT_PUBLIC_APP_URL` | Frontend URL used by backend-generated links |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | SigNoz OTLP HTTP endpoint (optional Vault override; otherwise rendered — see Observability) |
-| `OTEL_SERVICE_NAME` | OTEL service name (optional Vault override) |
-| `OTEL_RESOURCE_ATTRIBUTES` | OTEL resource attributes (optional Vault override) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | SigNoz OTLP HTTP endpoint (see Observability) |
+| `OTEL_SERVICE_NAME` | OTEL service name |
+| `OTEL_RESOURCE_ATTRIBUTES` | OTEL resource attributes |
 | `API_RATE_LIMIT_REQUESTS` | Optional global limiter override; see Rate-limit capacity below |
 | `API_RATE_LIMIT_WINDOW` | Optional global limiter window override; defaults to 60 seconds |
 

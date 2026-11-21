@@ -486,7 +486,7 @@ class SyncPipeline:
 
         if effective_hash != local_hash:
             log.log_error(
-                "Post-deploy verification failed: effective IAC_CONFIG_HASH is stale "
+                "Post-deploy verification failed: effective CONFIGURATION_SHA256 is stale "
                 f"(expected {local_hash}, got {effective_hash or 'none'})"
             )
             return SyncResult(

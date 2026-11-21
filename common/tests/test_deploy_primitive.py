@@ -637,8 +637,8 @@ def test_deploy_sets_cache_bust_and_static_infra_keys():
         FULL_SHA,
         deps=PromoteDeps(client=client, domain="zitian.party", now=lambda: 1000),
     )
-    # IAC_CONFIG_HASH is the per-deploy cache-bust (short sha, forces redeploy even on
-    # the same digest)
+    # CONFIGURATION_SHA256 is the per-deploy cache-bust (short sha, forces redeploy even
+    # on the same digest)
     assert plan.env_vars["CONFIGURATION_SHA256"] == f"deploy-{SHORT_SHA}-1000000"
     assert "IAC_CONFIG_HASH" not in plan.env_vars
     assert plan.env_vars["COMPOSE_PROFILES"] == "app"
@@ -1058,7 +1058,7 @@ def test_deploy_verify_vault_gates_before_any_mutation(monkeypatch):
 
 
 def test_verify_effective_config_hash_returns_on_match():
-    client = FakeDokploy(env_str="IAC_CONFIG_HASH=deploy-abc-1\nX=y")
+    client = FakeDokploy(env_str="CONFIGURATION_SHA256=deploy-abc-1\nX=y")
     got = dp.verify_effective_config_hash(
         client, "cmp", "deploy-abc-1", _sleep=lambda _s: None, _now=_clock(0)
     )
@@ -1066,12 +1066,26 @@ def test_verify_effective_config_hash_returns_on_match():
 
 
 def test_verify_effective_config_hash_raises_if_never_advances():
-    client = FakeDokploy(env_str="IAC_CONFIG_HASH=deploy-OLD-0")
+    client = FakeDokploy(env_str="CONFIGURATION_SHA256=deploy-OLD-0")
     with pytest.raises(RuntimeError, match="never advanced"):
         dp.verify_effective_config_hash(
             client,
             "cmp",
             "deploy-NEW-1",
+            timeout=600,
+            _sleep=lambda _s: None,
+            _now=_clock(0, 700),
+        )
+
+
+def test_verify_effective_config_hash_ignores_the_retired_key():
+    """#1802: a compose env that holds only IAC_CONFIG_HASH has no effective hash."""
+    client = FakeDokploy(env_str="IAC_CONFIG_HASH=deploy-abc-1")
+    with pytest.raises(RuntimeError, match="never advanced"):
+        dp.verify_effective_config_hash(
+            client,
+            "cmp",
+            "deploy-abc-1",
             timeout=600,
             _sleep=lambda _s: None,
             _now=_clock(0, 700),
@@ -1086,7 +1100,7 @@ def test_verify_effective_config_hash_tolerates_transient_read_error():
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("Dokploy compose.one blip")
-        return "IAC_CONFIG_HASH=deploy-abc-1"
+        return "CONFIGURATION_SHA256=deploy-abc-1"
 
     client = FakeDokploy(env_str=flaky)
     got = dp.verify_effective_config_hash(
@@ -1111,14 +1125,14 @@ def test_deploy_verify_config_confirms_pushed_hash_rolled_out():
 
 def test_verify_effective_config_hash_rejects_unexpected_stale_keys():
     client = FakeDokploy(
-        env_str="IAC_CONFIG_HASH=deploy-abc-1\nVAULT_ROLE_ID=r\nPRIMARY_MODEL=glm-5.2"
+        env_str="CONFIGURATION_SHA256=deploy-abc-1\nVAULT_ROLE_ID=r\nPRIMARY_MODEL=glm-5.2"
     )
     with pytest.raises(RuntimeError, match="PRIMARY_MODEL"):
         dp.verify_effective_config_hash(
             client,
             "cmp",
             "deploy-abc-1",
-            expected_keys={"IAC_CONFIG_HASH", "VAULT_ROLE_ID"},
+            expected_keys={"CONFIGURATION_SHA256", "VAULT_ROLE_ID"},
             _sleep=lambda _s: None,
             _now=_clock(0),
         )
@@ -1282,7 +1296,7 @@ def test_verify_in_service_gives_up_at_the_deadline():
 
 
 def test_deploy_fast_swap_uses_deterministic_config_hash():
-    # R17 (#750): truealpha/app staging has fast_swap=True, so IAC_CONFIG_HASH is
+    # R17 (#750): truealpha/app staging has fast_swap=True, so CONFIGURATION_SHA256 is
     # deterministic (tag + iac_ref) to avoid churning vault-agent when secrets and code are unchanged,
     # while still advancing when iac_ref advances.
     client = FakeDokploy()
@@ -1660,6 +1674,6 @@ def test_parse_remote_config_identity_ignores_commented_env_lines():
     from common.deploy.dokploy_adapter import parse_remote_config_identity
 
     identity = parse_remote_config_identity(
-        {"env": "# IAC_CONFIG_HASH=commented\nIAC_CONFIG_HASH=active-hash\n"}
+        {"env": "# CONFIGURATION_SHA256=commented\nCONFIGURATION_SHA256=active-hash\n"}
     )
     assert identity["runtime_hash"] == "active-hash"

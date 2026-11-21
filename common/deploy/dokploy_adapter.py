@@ -525,8 +525,7 @@ def parse_remote_config_identity(existing: dict | None) -> dict[str, str | None]
         for key, value in _parse_env_text(existing.get("env", "")).items()
     }
     return {
-        "runtime_hash": values.get("CONFIGURATION_SHA256")
-        or values.get("IAC_CONFIG_HASH"),
+        "runtime_hash": values.get("CONFIGURATION_SHA256"),
         "source_hash": values.get("IAC_SOURCE_CONFIG_HASH"),
         "deploy_ref": values.get("IAC_DEPLOY_REF"),
         "identity_schema": values.get("INFRA_IDENTITY_SCHEMA"),
@@ -545,7 +544,7 @@ def await_effective_config_hash(
     _sleep=None,
     _now=None,
 ) -> str | None:
-    """Poll Dokploy effective IAC_CONFIG_HASH until it matches expected hash.
+    """Poll Dokploy effective CONFIGURATION_SHA256 until it matches expected hash.
 
     ``_sleep`` and ``_now`` default to ``time.sleep`` and ``time.monotonic`` at call time.
     A default bound at import time ignores a clock that a test puts on the ``time``

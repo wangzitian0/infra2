@@ -117,16 +117,12 @@ DOKPLOY_RECORD_MAX_AGE_HOURS = 72
 #: Every config-bound app container carries the CONFIGURATION_SHA256 it was created
 #: with, and Dokploy's compose env holds the current one (ops.pipeline.md).
 CONFIG_HASH_KEY = "CONFIGURATION_SHA256"
-_LEGACY_CONFIG_HASH_KEY = "IAC_CONFIG_HASH"
 #: `docker inspect` line per container of one unit. Only the config hash is taken
-#: from the environment; no other variable leaves the host. A container created
-#: after the CONFIGURATION_SHA256 rename carries that key; an older container
-#: still carries IAC_CONFIG_HASH until its next deploy. The format accepts both.
+#: from the environment; no other variable leaves the host.
 UNIT_RUNTIME_FORMAT = (
     "{{.Name}}|{{.State.Status}}|{{.State.ExitCode}}|"
     "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|"
-    '{{range .Config.Env}}{{if or (eq (index (split . "=") 0) "CONFIGURATION_SHA256") '
-    '(eq (index (split . "=") 0) "IAC_CONFIG_HASH")}}'
+    '{{range .Config.Env}}{{if eq (index (split . "=") 0) "CONFIGURATION_SHA256"}}'
     '{{index (split . "=") 1}}{{end}}{{end}}'
 )
 STATE_DISCREPANCY_RUNBOOK = (
@@ -1115,7 +1111,7 @@ def unit_runtime_verdict(
     """Does this unit run healthy on the current config? (proven, why)
 
     Every container must be running and healthy (or have no health check), or be
-    a one-shot that exited 0; every container that carries IAC_CONFIG_HASH must
+    a one-shot that exited 0; every container that carries CONFIGURATION_SHA256 must
     carry the current one, and at least one must carry it. An old version still
     running healthy after a failed deploy is exactly what this rejects.
     """
@@ -1169,17 +1165,11 @@ def _dokploy_unit_runtime(
     try:
         record = get_compose(compose_id)
         project = str(record.get("appName") or "").strip()
-        found_hashes: dict[str, str] = {}
+        expected = ""
         for line in str(record.get("env") or "").splitlines():
             key, separator, value = line.partition("=")
-            cleaned_key = key.strip()
-            if separator and cleaned_key in {CONFIG_HASH_KEY, _LEGACY_CONFIG_HASH_KEY}:
-                found_hashes[cleaned_key] = value.strip()
-        expected = (
-            found_hashes.get(CONFIG_HASH_KEY)
-            or found_hashes.get(_LEGACY_CONFIG_HASH_KEY)
-            or ""
-        )
+            if separator and key.strip() == CONFIG_HASH_KEY:
+                expected = value.strip()
         if not project:
             return (
                 False,

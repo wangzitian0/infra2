@@ -12,7 +12,7 @@ not caller-overridable.
 
 The backend mutates a Dokploy compose's env and triggers a deploy. The Dokploy client is
 injected so it is unit-testable without a live control plane. It owns fixed-compose
-assembly + trigger + readiness/parity: IAC_CONFIG_HASH cache-bust, static infra keys,
+assembly + trigger + readiness/parity: CONFIGURATION_SHA256 cache-bust, static infra keys,
 model-override passthrough, Vault-token preflight, rollout wait, and post-deploy
 effective-config verification.
 """
@@ -416,7 +416,7 @@ def verify_effective_config_hash(
     _sleep=None,
     _now=None,
 ) -> str:
-    """Poll the compose's effective IAC_CONFIG_HASH until it matches expected_hash, then
+    """Poll the compose's effective CONFIGURATION_SHA256 until it matches expected_hash, then
     return it; raise RuntimeError if it never advances within the window. Always returns
     the matched hash on success (never None) — a non-advance is an error, not a value.
 
@@ -432,9 +432,7 @@ def verify_effective_config_hash(
     def _read_hash() -> str | None:
         nonlocal compose_env
         compose_env = client.get_compose_env(compose_id)
-        return _env_value(compose_env, "CONFIGURATION_SHA256") or _env_value(
-            compose_env, "IAC_CONFIG_HASH"
-        )
+        return _env_value(compose_env, "CONFIGURATION_SHA256")
 
     try:
         last_value = await_effective_config_hash(
@@ -452,7 +450,7 @@ def verify_effective_config_hash(
         ) from exc
     if last_value != expected_hash:
         raise RuntimeError(
-            f"post-deploy config verify failed: effective IAC_CONFIG_HASH "
+            f"post-deploy config verify failed: effective CONFIGURATION_SHA256 "
             f"{last_value!r} never advanced to {expected_hash!r} for compose "
             f"{compose_id} within {timeout}s (deploy may not have taken)."
         )
