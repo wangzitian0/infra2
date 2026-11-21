@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -27,7 +28,17 @@ RUNNER_SDK = "3.23.0"
 RUNNER_SDK_NAMES = frozenset(
     {
         ("infra2_sdk.ci", "parse_github_time"),
+        ("infra2_sdk.deploy", "canonical_json_bytes"),
+        ("infra2_sdk.observability", "CheckVerdict"),
+        ("infra2_sdk.observability", "ConsecutiveObservationState"),
+        ("infra2_sdk.observability", "GitHubIssues"),
+        ("infra2_sdk.observability", "IssueApi"),
+        ("infra2_sdk.observability", "Trail"),
+        ("infra2_sdk.observability", "evaluate_consecutive_hysteresis"),
         ("infra2_sdk.observability", "is_recently_flapping"),
+        ("infra2_sdk.observability", "load_trail"),
+        ("infra2_sdk.observability", "reconcile_issue_trail"),
+        ("infra2_sdk.observability", "record_verdicts"),
         ("infra2_sdk.refs", "ReleaseError"),
         ("infra2_sdk.refs", "assert_after_on_main"),
         ("infra2_sdk.refs", "resolve_image_digest"),
@@ -39,9 +50,13 @@ RUNNER_SDK_NAMES = frozenset(
         ("infra2_sdk.runtime.config_schema", "EnvironmentManifest"),
         ("infra2_sdk.runtime.environment", "is_preview_alias"),
         ("infra2_sdk.runtime.environment", "resolve_environment_tier"),
+        ("infra2_sdk.runtime.health", "DependencyStatus"),
         ("infra2_sdk.runtime.otel", "signal_endpoint"),
+        ("infra2_sdk.runtime.postgres", "PostgresSettings"),
+        ("infra2_sdk.runtime.postgres", "probe_postgres"),
         ("infra2_sdk.runtime.s3", "S3Settings"),
         ("infra2_sdk.runtime.s3", "ensure_bucket"),
+        ("infra2_sdk.runtime.s3", "probe_s3"),
         ("infra2_sdk.secrets", "HttpTransport"),
         ("infra2_sdk.secrets", "OnePasswordBackend"),
         ("infra2_sdk.secrets", "SecretsError"),
@@ -76,7 +91,18 @@ LOAD_COLLECTION = (
 def sdk_names_imported_by(source: str) -> set[tuple[str, str]]:
     names: set[tuple[str, str]] = set()
     for node in ast.walk(ast.parse(source)):
-        if isinstance(node, ast.ImportFrom) and node.module:
+        if isinstance(node, ast.Dict):
+            # PEP 562 lazy maps: {"Name": "infra2_sdk.module"} loads Name on first use.
+            for key, value in zip(node.keys, node.values):
+                if (
+                    isinstance(key, ast.Constant)
+                    and isinstance(key.value, str)
+                    and isinstance(value, ast.Constant)
+                    and isinstance(value.value, str)
+                    and value.value.split(".")[0] == "infra2_sdk"
+                ):
+                    names.add((value.value, key.value))
+        elif isinstance(node, ast.ImportFrom) and node.module:
             if node.module.split(".")[0] == "infra2_sdk":
                 names |= {(node.module, alias.name) for alias in node.names}
         elif isinstance(node, ast.Import):
@@ -91,6 +117,9 @@ _LOCAL_ROOTS = frozenset(
 )
 
 
+_MODULE_PATH_RE = re.compile(r"[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)+")
+
+
 def local_files_imported_by(path: Path) -> set[Path]:
     """Repo files that ``path`` imports, function-level imports included.
 
@@ -103,6 +132,11 @@ def local_files_imported_by(path: Path) -> set[Path]:
             modules = [node.module, *(f"{node.module}.{a.name}" for a in node.names)]
         elif isinstance(node, ast.Import):
             modules = [a.name for a in node.names]
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            # A string module path: PEP 562 lazy maps and importlib.import_module.
+            if not _MODULE_PATH_RE.fullmatch(node.value):
+                continue
+            modules = [node.value]
         else:
             continue
         for module in modules:
@@ -135,6 +169,21 @@ def test_the_reach_scan_follows_a_function_level_import(tmp_path: Path) -> None:
     )
     registry = (ROOT / "common/security/registry.py").resolve()
     assert registry in local_files_imported_by(probe)
+
+
+def test_the_scan_follows_a_lazy_map(tmp_path: Path) -> None:
+    """A PEP 562 map loads modules by string (#1853 review follow-up, infra2#1823)."""
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        '_LAZY = {"run_probes": "common.observability.probes",'
+        ' "Trail": "infra2_sdk.observability"}\n',
+        encoding="utf-8",
+    )
+    probes = (ROOT / "common/observability/probes.py").resolve()
+    assert probes in local_files_imported_by(probe)
+    assert ("infra2_sdk.observability", "Trail") in sdk_names_imported_by(
+        probe.read_text(encoding="utf-8")
+    )
 
 
 def test_import_scanner_reports_the_name_that_broke_the_runner() -> None:
