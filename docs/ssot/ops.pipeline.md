@@ -82,7 +82,7 @@ Budgets come from the Workspace tier "Pipeline time contract", not from this fil
 | Artifact | app image and app tag | wheel version | infra2 release tag | rendered rule commit; gate or release-code commit |
 | Blast radius | one app | every service that pins the version | every app on the host | every pipeline and every agent |
 | Own environment | exists: yes | exists: no, the Canary, then the apps | exists: yes | target: no, a replay, then the next real run |
-| Door into the train | exists: a bot PR moves the app pin in `harness/repos.yaml` | exists: the Canary image pin in `platform/30.todo/compose.yaml` (infra2-sdk publishes `infra2-canary-todo:<tag>`, infra2-sdk#247). target: a bot PR moves that pin; app pin PRs open after the Canary passes | exists: merge, then a release tag | target: release code rides its own release tag. target: rules and skills use one render PR per repository |
+| Door into the train | exists: a bot PR moves the app pin in `harness/repos.yaml` | exists: the Canary image pin in `platform/30.todo/compose.yaml` (infra2-sdk publishes `infra2-canary-todo:<tag>`, infra2-sdk#247). exists: `sync_sdk_pins` (schedule branch of `reconcile-iac-inputs.yml`) opens the pin PR `chore/canary-sdk-pin`; app pin PRs open after the Canary passes | exists: merge, then a release tag | target: release code rides its own release tag. target: rules and skills use one render PR per repository |
 | Proved by | exists: its own hook checks | exists: the Canary Todo `staging_gate` | exists: the `staging_gate` of each deployed unit. target: every app's `staging_gate`; the changed units from zero first. | target: a replay on recorded inputs, then the record of the next run |
 
 **Rules**

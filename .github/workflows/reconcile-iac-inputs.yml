@@ -366,6 +366,10 @@ jobs:
               sync_args+=(--create-pr)
             fi
             GITHUB_TOKEN="$SYNC_PR_TOKEN" GH_TOKEN="$SYNC_PR_TOKEN" python -m tools.reconcile_iac_inputs "${sync_args[@]}"
+            # The Canary image pin follows the newest infra2-sdk release (#1823 Step 0).
+            pin_args=(--sync-sdk-pins --output-json sync-sdk-pins.json)
+            [[ "$dry_run" == "true" ]] || pin_args+=(--create-pr)
+            GITHUB_TOKEN="$SYNC_PR_TOKEN" GH_TOKEN="$SYNC_PR_TOKEN" python -m tools.reconcile_iac_inputs "${pin_args[@]}"
             # A sync only opens or updates the sync PR. The staging train is the tag push
             # that follows its merge; a sync on main never deploys main (#1628).
             exit 0

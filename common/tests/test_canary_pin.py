@@ -187,3 +187,102 @@ def test_probe_health_reads_the_pin_format_that_canary_pin_owns() -> None:
         assert probe.CANARY_PIN_RE.findall(bad) == [], bad
         with pytest.raises(CanaryPinError):
             canary_image_from_compose_text(_compose(f"    image: {bad}\n"))
+
+
+def test_rewrite_canary_pin_replaces_exactly_one_pin() -> None:
+    from common.deploy.canary_pin import rewrite_canary_pin
+
+    new_digest = "sha256:" + "c" * 64
+    text = _compose(f"    image: {CANARY_IMAGE_REPOSITORY}:v3.35.0@{DIGEST}\n")
+    out = rewrite_canary_pin(text, "3.36.0", new_digest)
+    assert canary_image_from_compose_text(out)[1:] == ("3.36.0", new_digest)
+    with pytest.raises(CanaryPinError, match="found 2"):
+        rewrite_canary_pin(
+            text + f"# {CANARY_IMAGE_REPOSITORY}:v1.0.0@{DIGEST}\n",
+            "3.36.0",
+            new_digest,
+        )
+    with pytest.raises(CanaryPinError, match="found 0"):
+        rewrite_canary_pin("services: {}\n", "3.36.0", new_digest)
+    with pytest.raises(CanaryPinError, match="invalid pin"):
+        rewrite_canary_pin(text, "latest", new_digest)
+
+
+def test_resolve_canary_digest_reads_the_registry_header() -> None:
+    import io
+    import json as _json
+
+    from common.deploy.canary_pin import resolve_canary_digest
+
+    seen: list[str] = []
+
+    class _Reply(io.BytesIO):
+        def __init__(self, body: bytes = b"", headers: dict | None = None):
+            super().__init__(body)
+            self.headers = headers or {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    def opener(target, timeout):
+        url = getattr(target, "full_url", target)
+        seen.append(f"{getattr(target, 'method', 'GET')} {url}")
+        if "/token?" in url:
+            return _Reply(_json.dumps({"token": "t"}).encode())
+        assert target.headers["Authorization"] == "Bearer t"
+        accept = target.headers["Accept"]
+        assert "application/vnd.oci.image.index.v1+json" in accept
+        assert "application/vnd.docker.distribution.manifest.v2+json" in accept
+        return _Reply(headers={"Docker-Content-Digest": "sha256:" + "d" * 64})
+
+    assert resolve_canary_digest("3.35.1", opener=opener) == "sha256:" + "d" * 64
+    assert (
+        seen[1]
+        == "HEAD https://ghcr.io/v2/wangzitian0/infra2-canary-todo/manifests/v3.35.1"
+    )
+
+    def bad(target, timeout):
+        url = getattr(target, "full_url", target)
+        if "/token?" in url:
+            return _Reply(_json.dumps({"token": "t"}).encode())
+        return _Reply(headers={})
+
+    with pytest.raises(CanaryPinError, match="no digest"):
+        resolve_canary_digest("3.35.1", opener=bad)
+
+
+def test_only_a_manifest_404_means_not_published() -> None:
+    import io
+    import json as _json
+    import urllib.error
+
+    from common.deploy.canary_pin import CanaryImageMissing, resolve_canary_digest
+
+    class _Reply(io.BytesIO):
+        headers: dict = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    def manifest_404(target, timeout):
+        url = getattr(target, "full_url", target)
+        if "/token?" in url:
+            return _Reply(_json.dumps({"token": "t"}).encode())
+        raise urllib.error.HTTPError(url, 404, "not found", None, None)
+
+    with pytest.raises(CanaryImageMissing):
+        resolve_canary_digest("9.9.9", opener=manifest_404)
+
+    def token_404(target, timeout):
+        raise urllib.error.HTTPError(
+            getattr(target, "full_url", target), 404, "x", None, None
+        )
+
+    with pytest.raises(urllib.error.HTTPError):
+        resolve_canary_digest("9.9.9", opener=token_404)

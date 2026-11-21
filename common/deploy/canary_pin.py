@@ -43,6 +43,10 @@ class CanaryPinError(ValueError):
     """The Canary compose does not hold one valid image pin."""
 
 
+class CanaryImageMissing(CanaryPinError):
+    """ghcr.io answers 404 for the manifest of the tag: the image is not published yet."""
+
+
 def canary_image_from_compose_text(text: str) -> tuple[str, str, str]:
     """Return ``(image_ref, sdk_version, digest)`` of the ``todo`` service, or raise."""
     data = safe_load_text(yaml, text) or {}
@@ -77,6 +81,68 @@ def canary_sdk_unit(repo_root: Path = REPO_ROOT) -> str:
             f"::warning::Canary SDK pin unreadable ({exc}); the SDK unit is sdk:unknown"
         )
         return "sdk:unknown"
+
+
+CANARY_COMPOSE_RELS: tuple[str, ...] = (
+    CANARY_COMPOSE_REL,
+    "platform/30.todo/preview.compose.yaml",
+)
+_REGISTRY = "https://ghcr.io"
+_MANIFEST_ACCEPT = ", ".join(
+    (
+        "application/vnd.oci.image.index.v1+json",
+        "application/vnd.oci.image.manifest.v1+json",
+        "application/vnd.docker.distribution.manifest.list.v2+json",
+        "application/vnd.docker.distribution.manifest.v2+json",
+    )
+)
+
+
+def resolve_canary_digest(version: str, *, opener=None) -> str:
+    """The ``sha256:`` digest of ``infra2-canary-todo:v<version>`` on ghcr.io (public pull)."""
+    import json
+    import urllib.request
+
+    open_url = opener or urllib.request.urlopen
+    repository = CANARY_IMAGE_REPOSITORY.removeprefix("ghcr.io/")
+    with open_url(
+        f"{_REGISTRY}/token?scope=repository:{repository}:pull", timeout=20
+    ) as reply:
+        token = json.load(reply)["token"]
+    request = urllib.request.Request(
+        f"{_REGISTRY}/v2/{repository}/manifests/v{version}",
+        method="HEAD",
+        headers={"Authorization": f"Bearer {token}", "Accept": _MANIFEST_ACCEPT},
+    )
+    import urllib.error
+
+    try:
+        with open_url(request, timeout=20) as reply:
+            digest = reply.headers.get("Docker-Content-Digest", "")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise CanaryImageMissing(
+                f"infra2-canary-todo:v{version} is not on ghcr.io"
+            ) from exc
+        raise
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise CanaryPinError(f"ghcr.io gave no digest for v{version}: {digest!r}")
+    return digest
+
+
+def rewrite_canary_pin(text: str, version: str, digest: str) -> str:
+    """Replace the one Canary image pin of a compose text; raise when it is not exactly one."""
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version) or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}", digest
+    ):
+        raise CanaryPinError(f"invalid pin v{version}@{digest}")
+    pattern = re.compile(
+        rf"{re.escape(CANARY_IMAGE_REPOSITORY)}:v\d+\.\d+\.\d+@sha256:[0-9a-f]{{64}}"
+    )
+    found = pattern.findall(text)
+    if len(found) != 1:
+        raise CanaryPinError(f"expected one Canary image pin, found {len(found)}")
+    return pattern.sub(f"{CANARY_IMAGE_REPOSITORY}:v{version}@{digest}", text)
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
