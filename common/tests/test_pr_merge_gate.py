@@ -2870,15 +2870,31 @@ def test_every_outcome_ends_with_the_lock_line(overrides, outcome):
         assert last == f"  {gate.lock_status(facts)}", last
 
 
-@pytest.mark.parametrize("error", [OSError("gh not found"), RuntimeError("HTTP 502")])
-def test_a_runner_error_in_the_lock_read_is_a_failure_not_a_crash(error):
+@pytest.mark.parametrize(
+    "error, expected",
+    [
+        (OSError("gh not found"), ("the lock check failed: OSError: gh not found",)),
+        (
+            RuntimeError("HTTP 502"),
+            (
+                "the production environment could not be read (RuntimeError: HTTP 502)",
+                "cannot list the workflow files at abc",
+            ),
+        ),
+    ],
+    ids=["oserror", "runtime-error"],
+)
+def test_a_runner_error_in_the_lock_read_is_a_failure_not_a_crash(error, expected):
+    """Every row asserts the exact failure text (#1826 Slice 3 review: the RuntimeError row
+    asserted only a non-empty tuple)."""
+
     def broken(argv):
         raise error
 
-    failures = gate._production_lock_failures("wangzitian0/infra2", "abc", gh=broken)
-    assert failures and all(isinstance(f, str) for f in failures)
-    if isinstance(error, OSError):
-        assert failures == ("the lock check failed: OSError: gh not found",)
+    assert (
+        gate._production_lock_failures("wangzitian0/infra2", "abc", gh=broken)
+        == expected
+    )
 
 
 # --- #1138 round 3 R3-1: the proof cannot clear a required-check workflow ------------
@@ -3071,7 +3087,7 @@ def _states(argv, gh, capsys) -> tuple[int, str, str]:
         (
             ["704", "--repo", "wangzitian0/truealpha"],
             lambda: _Gh(),
-            None,
+            0,
             "not_read",
             "the lock is read only for an open PR of this repository",
         ),
@@ -3111,8 +3127,8 @@ def _states(argv, gh, capsys) -> tuple[int, str, str]:
 )
 def test_each_output_names_its_lock_state(argv, gh, code, state, detail, capsys):
     exit_code, json_state, text = _states(argv, gh, capsys)
-    if code is not None:
-        assert exit_code == code
+    # Every row pins its exit code (#1826 Slice 3 review: another-repository skipped it).
+    assert exit_code == code
     assert json_state == state
     assert f"| lock_state={state}" in text and detail in text, text
 
