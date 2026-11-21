@@ -3,8 +3,8 @@
 > **SSOT Key**: `ops.pipeline`
 > **核心定义**: infra2 作为**独立产物**的交付契约——CI/CD、**环境触发模型**、`deploy_v2`
 > 前门、tag 驱动的 reconcile、以及**发布机制**。这是「**什么触发什么、什么是 live、怎么发布**」的
-> **唯一权威**;环境本身的定义（六环境/域名/隔离/遥测标识）见
-> [core.environments.md](./core.environments.md)。
+> **唯一权威**;五个阶段（Local、CI、Preview、Staging、Prod）的唯一定义在本文 §2.0;
+> 环境本身的定义（域名/隔离/遥测标识）见 [core.environments.md](./core.environments.md)。
 >
 > **心智模型（与 app 不同）**:
 > - **app 是消费者**——部署 = 选一个自己的镜像版本跑在平台上;手动或 IaC 触发**都符合预期**。
@@ -63,7 +63,7 @@ The question of a stage is the same for every change kind.
 | Staging | Does the release work with all other changes and with real data? | release tag | each release-tag push | exists |
 | Prod | Does the release serve users? | the same tag | each promotion; the owner approves the tag; the train gate asks for a promotion at 15 or more unpromoted PRs or 48 h (`prod_gatekeeper`) | exists |
 
-Budgets come from the Workspace tier "Pipeline time contract", not from this file. "exists" means main runs it today. "target" means it is the goal and no check runs it yet. The main-branch regression is the post of the merge. exists: the Prod pre reads it (#1646). target: the Staging pre reads it.
+Budgets come from the SDK `stages.yaml` (`src/infra2_sdk/data/stages.yaml`, `budget_seconds` of each cell). This file states no cell budget. "exists" means main runs it today. "target" means it is the goal and no check runs it yet. The main-branch regression is the post of the merge. exists: the Prod pre reads it (#1646). target: the Staging pre reads it.
 
 **Three phases and the record**
 
@@ -95,9 +95,8 @@ Budgets come from the Workspace tier "Pipeline time contract", not from this fil
 6. A kind with no environment of its own uses its consumers in a fixed order. SDK: Canary, then the apps. Harness: replay, then its own tag, then every later run. No step skips the order.
 6a. infra2 accepts ranges, not one SDK version (#1823). An app SDK version must lie in `APP_SDK_RANGE` of `common/deploy/canary_pin.py` and in the Canary-verified set (`verified_sdk_versions`). The hook manifest schema range is `ACCEPTED_HOOK_SCHEMA_VERSIONS` of `common/deploy/app_contract.py`: schema 3 only, since SDK 4.0.0 refuses schema 2. The infra2 own SDK pin (`uv.lock`) is a library pin of its tools; it does not choose the Canary SDK. The `sdk:X` unit of a staging train record is the Canary image pin.
 7. One train reaches Staging and Prod: the infra2 release tag. Each kind enters it through one door. A bot opens each pin PR and each render PR. The bot closes a PR that a newer PR replaces. A green PR merges through the merge gate.
-8. Budgets come from the Workspace tier, not from the SDK `stages.yaml`.
-9. Alert is event-driven. Report is time-driven ([ops.observability.md](./ops.observability.md) section 2, `docs/ssot/watchdog-signals.yaml`).
-10. Find the cause, Periodic report and Alert and watch read records and telemetry. They never deploy.
+8. Alert is event-driven. Report is time-driven ([ops.observability.md](./ops.observability.md) section 2, `docs/ssot/watchdog-signals.yaml`).
+9. Find the cause, Periodic report and Alert and watch read records and telemetry. They never deploy.
 
 **Hook grid: 15 cells, two owners, one policy table**
 
@@ -105,13 +104,13 @@ A cell is one stage and one phase. A stage moves the artifact one step. Pre answ
 
 | Stage | Pre | Operation | Post |
 |---|---|---|---|
-| Local | App: the fast check of the changed files | the push | App: a deeper local run that holds nothing |
+| Local | App: the focused tests of the changed files, in one process | the push | App: a manual run by a person; it holds nothing |
 | CI | App: the PR checks with recorded LLM answers | Platform: the build of the artifact | App: the main-branch regression |
 | Preview | Platform: `contract` | Platform: the deploy from zero. App: `smoke`. | App: `preview_gate` |
 | Staging | Platform: `contract`, `provenance`, `env`, `upstream_post` | Platform: the deploy of the release tag. App: `smoke`. | App: `staging_gate` |
 | Prod | Platform: the same four checks, then the owner's approval | Platform: the promotion of the same artifact. App: `smoke`. | App: `prod_gate` |
 
-State: the SDK has the Preview, Staging and Prod rows (`STAGE_HOOK_PLANS`). The Local row and the CI row are targets.
+State: `stages.yaml` in the SDK has the 15 cells. `STAGE_HOOK_PLANS` derives the Preview, Staging, Prod and schedule rows from it. The Local row and the CI row have no scheduler entry.
 
 - The Platform owns 8 cells: the 5 operations and the pre of Preview, Staging and Prod. An App cannot change them.
 - An App owns 7 cells: the pre of Local and CI, and the 5 post cells. It also owns `smoke`.
@@ -153,15 +152,14 @@ State: `run_cell` runs the checks of a list in order and stops at the first fail
 
 State: a manifest lists the checks of each slot, so a check that runs in two slots has two entries. finance_report keeps a private table of needs for its end-to-end tests (`common/testing/matrix.py`).
 
-**One policy table (target)**
+**One policy table**
 
 - One data file in infra2-sdk has one row for each cell. A row names the owner, the check list, the trigger, the time budget, the scale, and "blocks" or "reports".
-- `STAGE_HOOK_PLANS`, the slot time limits and the tables of this section come from that file. No second copy stays in code or in a document.
+- `STAGE_HOOK_PLANS` and the slot time limits come from that file. Target: the tables of this section come from it too; today they are written by hand.
 - A change to the file is a change of kind SDK: the Canary first, then the Apps.
-- Each record names the policy version. The Delivery report shows the pass rate, the time and the policy version of each cell.
-- Rule 8 applies until the file exists and the Workspace tier points to it.
+- Target: each record names the policy version. The Delivery report shows the pass rate, the time and the policy version of each cell.
 
-State: these facts are in four places. The Workspace tier and the `auto` skill hold the budgets. `manifests.py` in the SDK holds the check lists and the time limits. `stages.yaml` in the SDK holds the stage ids. This section holds the owners and the triggers.
+State: the file exists: `src/infra2_sdk/data/stages.yaml` in infra2-sdk (`policy_version`, 15 cells and `scheduled_audit`). `manifests.py` loads it and derives `STAGE_HOOK_PLANS` from it.
 
 **Scale ladder (target)**
 
@@ -187,8 +185,8 @@ Each cell starts with its state: "exists" or "target". A rule whose check does n
 
 | Stage | App | SDK | Infra | Harness |
 |---|---|---|---|---|
-| Local | exists: lint, unit, podman integration | exists: unit, import purity, size | exists: lint, unit, compose render | exists: rule-text checklist, `ws-agents-lint`, gate unit tests |
-| CI | exists: unit checks run on each PR push. target: within the Workspace-tier budget (today p50 5.3 min finance_report, 7.3 min truealpha). | exists: PR CI | exists: `infra-ci.yml`; the Trivy scan blocks a PR with a fixable CRITICAL or HIGH finding | exists: `infra-ci.yml` plus the self-governance checks |
+| Local | exists: lint, focused unit tests | exists: unit, import purity, size | exists: lint, unit, compose render | exists: rule-text checklist, `ws-agents-lint`, gate unit tests |
+| CI | exists: unit checks run on each PR push. target: within the CI pre budget of `stages.yaml` (today p50 5.3 min finance_report, 7.3 min truealpha). | exists: PR CI | exists: `infra-ci.yml`; the Trivy scan blocks a PR with a fixable CRITICAL or HIGH finding | exists: `infra-ci.yml` plus the self-governance checks |
 | Preview | target: own stack from zero; `preview_gate` reports each check | target: the Canary pin PR runs the infra Preview with the new version | target: the changed units from zero in a slot per PR | target: the changed gate replays merged PRs |
 | Staging | exists: the bot pin PR in `harness/repos.yaml`, `smoke` and `staging_gate` on each tag push that deploys the unit, the nightly `scheduled_audit`. target: the sync cuts the app tag from the Preview record; `staging_gate` per check. | exists: the Canary `staging_gate` on each tag push that deploys the unit (it reads the health route). target: it reads the Canary verdict. | exists: a tag push deploys staging and runs `staging_gate`. target: pre reads the main post record; post covers every app and the Canary. | target: release code rides its own release tag. target: rules and skills use one render PR per repository, merged in one cycle. |
 | Prod | exists: the same tag and `prod_gate`. target: `prod_gate` per check. | exists: only inside consumer tags. target: app pin PRs open after the version is verified. | exists: `pre` runs before the approval and reads the staging post record and the main CI post record (#1646). The marker follows the operation (`smoke`, then `prod_gate`, both in `operation`); a red `prod_gate` leaves it unwritten. | exists: a production-path edit waits for the owner's approval of its head SHA; other edits run at the next promotion. |
