@@ -104,23 +104,15 @@ def match_changed_services(
 ) -> set[str]:
     """Services affected by a set of changed files.
 
-    Affected = a changed file is under the service's own directory OR matches one
-    of its declared extra dependency globs. Tooling-only paths (common/, tools/)
-    match no service and therefore never fan out.
-    """
-    files = list(changed_files)
-    if manifest is None:
-        manifest = load_dependency_manifest()
+    Affected = a changed file is under the service's own directory, OR matches one
+    of its declared extra dependency globs, OR is an x-infra2 compiler input (then
+    every x-infra2 stack). Other tooling paths (common/, tools/) fan out to nothing.
 
-    affected: set[str] = set()
-    for file_path in files:
-        key = service_key_from_path(file_path)
-        if key:
-            affected.add(key)
-    for service_key, globs in manifest.items():
-        if any(fnmatch.fnmatch(f, g) for g in globs for f in files):
-            affected.add(service_key)
-    return affected
+    One definition: this is the selection of ``explain_fanout``. The runner's own
+    diff path uses this function and logs ``explain_fanout``; they must agree
+    (review of #1882).
+    """
+    return set(explain_fanout(changed_files, manifest).selected)
 
 
 def autodeploy_violations(composes, allowlist: set[str] | None = None) -> list[str]:

@@ -6028,3 +6028,21 @@ def test_print_changed_files_uses_the_same_base_as_the_train(tmp_path, capsys) -
         "f1.txt",
         "f2.txt",
     ]  # production: the marker
+
+
+@pytest.mark.parametrize(
+    "compiler_input", ["uv.lock", "common/deploy/compose_compile.py"]
+)
+def test_the_runner_fanout_and_the_plan_agree_on_a_compiler_input(
+    compiler_input,
+) -> None:
+    """Review of #1882: match_changed_services (the runner's own diff path) and
+    explain_fanout (its log and build_plan) must select the same services, and a
+    compiler input selects no plain stack."""
+    from common.deploy.dependencies import explain_fanout, match_changed_services
+
+    files = [compiler_input]
+    selected = match_changed_services(files)
+    assert selected == set(explain_fanout(files).selected)
+    assert "platform/todo" in selected
+    assert "platform/portal" not in selected
