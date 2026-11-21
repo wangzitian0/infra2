@@ -962,13 +962,14 @@ def test_m3_reads_lock_path_from_repos_yaml(tmp_path: Path) -> None:
 
 def test_each_sdk_extra_key_names_the_sdk_file_that_reads_it() -> None:
     """One table (env_inventory.SDK_EXTRA_KEYS) for both tools (infra2#1824). Each file
-    must exist in the pinned SDK and hold the name; a stale file such as scaffold.py
+    must exist in the installed SDK and hold the name; a stale file such as scaffold.py
     fails here."""
     from common.core import env_inventory as envinv
 
-    pkg = Path(__file__).resolve().parents[2] / "repos/infra2-sdk/src/infra2_sdk"
-    if not (pkg / "__init__.py").is_file():
-        pytest.skip("repos/infra2-sdk submodule is not checked out")
+    import infra2_sdk
+
+    # The installed SDK is the uv.lock pin; CI has no submodule checkout (infra-ci.yml).
+    pkg = Path(infra2_sdk.__file__).resolve().parent
     for name, (kind, rel) in envinv.SDK_EXTRA_KEYS.items():
         target = pkg / rel
         assert target.is_file(), (name, rel)

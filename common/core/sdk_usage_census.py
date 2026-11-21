@@ -1015,6 +1015,8 @@ def sdk_env_vocabulary(
             if needle in text:
                 full_vocab.setdefault(name, {"kind": kind, "canonical": name})
         else:
+            # A synthetic test package may lack the file. test_each_sdk_extra_key_names_the
+            # _sdk_file_that_reads_it checks every path against the installed SDK.
             full_vocab.setdefault(name, {"kind": kind, "canonical": name})
 
     return contract_vocab, full_vocab
