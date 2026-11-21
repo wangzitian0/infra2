@@ -508,3 +508,18 @@ def test_config_drift_stops_on_an_x_infra2_file_and_hashes_a_plain_one(
     )
     with pytest.raises(ComposeSourceError, match="config drift s/compose.yaml@v1"):
         drift.expected_hash_at(object, MagicMock(), "v1", {"ENV": "prod"})
+
+
+def test_text_at_ref_refuses_an_unknown_base_and_returns_none_for_a_missing_file() -> (
+    None
+):
+    """Review of #1870: an unknown base ref returned None, so `check` skipped the comparison
+    for a migrated file and exited 0."""
+    from common.deploy import compose_equivalence as eq
+
+    with pytest.raises(ValueError, match="is not a commit"):
+        eq.text_at_ref("deadbeefnotaref", "platform/30.todo/compose.yaml")
+    assert eq.text_at_ref("HEAD", "no/such/compose.yaml") is None
+    assert "services:" in (
+        eq.text_at_ref("HEAD", "platform/30.todo/compose.yaml") or ""
+    )

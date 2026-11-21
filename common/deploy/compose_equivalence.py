@@ -64,16 +64,29 @@ def tracked_compose_files(root: Path = REPO_ROOT) -> list[str]:
 
 
 def text_at_ref(ref: str, path: str, root: Path = REPO_ROOT) -> str | None:
-    """The file text at ``ref``, or None when the file does not exist there."""
-    proc = subprocess.run(
-        ["git", "show", f"{ref}:{path}"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        timeout=_GIT_TIMEOUT,
-        check=False,
-    )
-    return proc.stdout if proc.returncode == 0 else None
+    """The file text at ``ref``, or None when the file does not exist there.
+
+    An unknown ``ref`` raises ``ValueError``: a missing base must not skip the comparison
+    (review of #1870)."""
+
+    def git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=_GIT_TIMEOUT,
+            check=False,
+        )
+
+    if git("rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").returncode != 0:
+        raise ValueError(f"base ref {ref!r} is not a commit in {root}")
+    if git("cat-file", "-e", f"{ref}:{path}").returncode != 0:
+        return None
+    proc = git("show", f"{ref}:{path}")
+    if proc.returncode != 0:
+        raise ValueError(f"git show {ref}:{path} failed: {proc.stderr.strip()[:200]}")
+    return proc.stdout
 
 
 def _code_lines(script: str) -> list[str]:
@@ -247,6 +260,12 @@ class CheckReport:
 
 def check(base_ref: str, root: Path = REPO_ROOT) -> CheckReport:
     report = CheckReport()
+    # A base that git cannot read is a problem even when no file has migrated yet.
+    try:
+        text_at_ref(base_ref, "compose.yaml", root)
+    except ValueError as exc:
+        report.problems.append(str(exc))
+        return report
     for path in tracked_compose_files(root):
         report.files += 1
         text = (root / path).read_text(encoding="utf-8")
