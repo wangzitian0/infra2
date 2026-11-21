@@ -149,9 +149,27 @@ def test_todo_manifest_sources_each_secret_from_the_right_class() -> None:
     assert redis.provided_by == "platform/redis:password"
     assert redis.sensitive
 
-    pg = fields["CANARY_POSTGRES_PASSWORD"]
+    pg = fields["TODO_POSTGRES_PASSWORD"]
     assert pg.source == "runtime" and not pg.empty_ok and pg.sensitive
     assert not pg.provided_by, "a generated value, not the Postgres superuser password"
+
+    url = fields["DATABASE_URL"]
+    assert url.source == "runtime" and url.sensitive
+    assert url.provided_by == "platform/todo:TODO_POSTGRES_PASSWORD"
+    assert not url.store_backed, "composed in the template: no Vault key holds the URL"
+    assert url.composed_keys == ("TODO_POSTGRES_PASSWORD",)
+
+    removed = {
+        "POSTGRES_HOST",
+        "POSTGRES_PORT",
+        "CANARY_POSTGRES_USER",
+        "CANARY_POSTGRES_DATABASE",
+        "CANARY_POSTGRES_PASSWORD",
+        "TODO_POSTGRES_USER",
+        "TODO_POSTGRES_DATABASE",
+    }
+    assert removed.isdisjoint(fields)
+    assert all(not field.aliases for field in manifest.fields)
 
     for env in ("S3_ACCESS_KEY", "S3_SECRET_KEY"):
         assert fields[env].source == "human"
@@ -160,14 +178,8 @@ def test_todo_manifest_sources_each_secret_from_the_right_class() -> None:
 
     from infra2_sdk.runtime.environment import check_shared_env_conformance
 
-    # CANARY_POSTGRES_* are least-privilege read-only role fields (canary_ro) generated
-    # at secret-supply time; every other todo field must conform to shared_env.yaml.
-    non_pg_issues = [
-        msg
-        for msg in check_shared_env_conformance(fields)
-        if not msg.startswith("CANARY_POSTGRES_")
-    ]
-    assert non_pg_issues == []
+    # Every todo field name conforms to shared_env.yaml: no exemption.
+    assert check_shared_env_conformance(fields) == []
     assert (
         "CANARY_S3_BUCKET is deprecated: use S3_BUCKET"
         in check_shared_env_conformance([*fields, "CANARY_S3_BUCKET"])
@@ -211,9 +223,36 @@ def test_secrets_facet_names_the_compose_containers() -> None:
     assert facet.app_containers == (services["todo"]["container_name"],)
 
 
-def test_canary_role_name_is_one_fact_across_deployer_and_compose(deploy) -> None:
+def test_todo_role_name_is_one_fact_across_deployer_and_database_url(deploy) -> None:
+    manifest = secrets_registry.merged_manifest(
+        secrets_registry.lookup("platform", "todo")
+    )
+    (url,) = [field for field in manifest.fields if field.env == "DATABASE_URL"]
+    role = deploy.TodoDeployer.TODO_PG_ROLE
+    assert url.composed_from == (
+        f"postgresql://{role}:{{TODO_POSTGRES_PASSWORD}}"
+        "@platform-postgres{env:ENV_SUFFIX}:5432/postgres"
+    )
+
+
+def test_the_canary_ro_login_is_gone_and_its_vault_key_is_kept_from_the_prune(
+    deploy,
+) -> None:
+    deployer = deploy.TodoDeployer
+    for name in (
+        "CANARY_PG_ROLE",
+        "canary_role_sql",
+        "_ensure_canary_" + "postgres_role",
+    ):
+        assert not hasattr(deployer, name), name
     env = compose_services(COMPOSE)["todo"]["environment"]
-    assert env["CANARY_POSTGRES_USER"] == deploy.TodoDeployer.CANARY_PG_ROLE
+    assert [name for name in env if "POSTGRES" in name] == []
+    template = (SERVICE_DIR / "secrets.ctmpl").read_text()
+    assert "CANARY_POSTGRES_PASSWORD" not in template
+    # The prune deletes a Vault key that is in no manifest. This entry keeps the key
+    # until the owner approves its deletion in production (#1823).
+    service = secrets_registry.lookup("platform", "todo")
+    assert service.store_only_keys == ("CANARY_POSTGRES_PASSWORD",)
 
 
 class _Run:
@@ -261,24 +300,21 @@ def _stub_role_env(monkeypatch, deployer, store_values) -> None:
     )
 
 
-def test_canary_role_sql_is_idempotent_least_privilege_and_read_only(deploy) -> None:
-    sql = deploy.TodoDeployer.canary_role_sql(PG_PASSWORD)
+def test_todos_storage_sql_is_idempotent_and_reapplies_the_password(deploy) -> None:
+    sql = deploy.TodoDeployer.todos_storage_sql(PG_PASSWORD)
     normalized = " ".join(sql.split())
     create_at = normalized.index("CREATE ROLE")
     guard_at = normalized.index("IF NOT EXISTS")
     assert guard_at < create_at, "CREATE ROLE must sit behind an existence guard"
     assert (
-        "ALTER ROLE canary_ro WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"
+        "ALTER ROLE todo_app WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"
         in normalized
     )
     assert f"PASSWORD '{PG_PASSWORD}'" in normalized, (
         "a rotated password must be re-applied"
     )
-    assert "default_transaction_read_only = on" in normalized
-    assert "CONNECTION LIMIT" in normalized
-    assert "GRANT" not in normalized, (
-        "the canary needs CONNECT only, which PUBLIC holds"
-    )
+    assert "CONNECTION LIMIT 20" in normalized
+    assert "canary_ro" not in normalized
     assert "DROP" not in normalized
 
 
@@ -293,21 +329,21 @@ def test_canary_role_sql_is_idempotent_least_privilege_and_read_only(deploy) -> 
         "dollar$$0123456789",
     ],
 )
-def test_canary_role_sql_rejects_passwords_it_cannot_quote_safely(
+def test_todos_storage_sql_rejects_passwords_it_cannot_quote_safely(
     deploy, password
 ) -> None:
     with pytest.raises(ValueError):
-        deploy.TodoDeployer.canary_role_sql(password)
+        deploy.TodoDeployer.todos_storage_sql(password)
 
 
 def test_ensure_role_runs_the_sql_over_stdin_so_the_password_never_hits_argv(
     deploy, monkeypatch
 ) -> None:
     deployer = deploy.TodoDeployer
-    _stub_role_env(monkeypatch, deployer, {"CANARY_POSTGRES_PASSWORD": PG_PASSWORD})
+    _stub_role_env(monkeypatch, deployer, {"TODO_POSTGRES_PASSWORD": PG_PASSWORD})
     host = _Host()
 
-    assert deployer._ensure_canary_postgres_role(host) is True
+    assert deployer._ensure_todo_postgres_role(host) is True
 
     (command,) = host.commands
     assert command.startswith("ssh root@vps.example ")
@@ -315,7 +351,7 @@ def test_ensure_role_runs_the_sql_over_stdin_so_the_password_never_hits_argv(
     assert "ON_ERROR_STOP=1" in command
     assert PG_PASSWORD not in command
     assert PG_PASSWORD in host.stdin[0]
-    assert host.stdin[0] == deployer.canary_role_sql(PG_PASSWORD)
+    assert host.stdin[0] == deployer.todos_storage_sql(PG_PASSWORD)
 
 
 def test_ensure_role_fails_closed_when_the_password_is_not_in_vault(
@@ -324,15 +360,15 @@ def test_ensure_role_fails_closed_when_the_password_is_not_in_vault(
     deployer = deploy.TodoDeployer
     _stub_role_env(monkeypatch, deployer, {})
     host = _Host()
-    assert deployer._ensure_canary_postgres_role(host) is False
+    assert deployer._ensure_todo_postgres_role(host) is False
     assert host.commands == []
 
 
 def test_ensure_role_fails_closed_when_psql_fails(deploy, monkeypatch) -> None:
     deployer = deploy.TodoDeployer
-    _stub_role_env(monkeypatch, deployer, {"CANARY_POSTGRES_PASSWORD": PG_PASSWORD})
+    _stub_role_env(monkeypatch, deployer, {"TODO_POSTGRES_PASSWORD": PG_PASSWORD})
     host = _Host(ok=False, stderr="psql: error: connection refused")
-    assert deployer._ensure_canary_postgres_role(host) is False
+    assert deployer._ensure_todo_postgres_role(host) is False
 
 
 def test_supply_hook_provisions_the_role_only_after_the_supply_succeeded(
@@ -351,7 +387,7 @@ def test_supply_hook_provisions_the_role_only_after_the_supply_succeeded(
     monkeypatch.setattr(Deployer, "apply_secret_supply", classmethod(supply))
     monkeypatch.setattr(
         deployer,
-        "_ensure_canary_postgres_role",
+        "_ensure_todo_postgres_role",
         classmethod(lambda cls, c, env=None: order.append("role") or True),
     )
 
@@ -375,7 +411,7 @@ def test_supply_hook_fails_when_the_role_cannot_be_provisioned(
     )
     monkeypatch.setattr(
         deployer,
-        "_ensure_canary_postgres_role",
+        "_ensure_todo_postgres_role",
         classmethod(lambda cls, c, env=None: False),
     )
     assert deployer.apply_secret_supply(object(), env="staging") is False
@@ -390,10 +426,10 @@ def test_first_sync_creates_the_role_although_no_consumer_exists_yet(
     from common.security import supply as supply_module
 
     deployer = deploy.TodoDeployer
-    _stub_role_env(monkeypatch, deployer, {"CANARY_POSTGRES_PASSWORD": PG_PASSWORD})
+    _stub_role_env(monkeypatch, deployer, {"TODO_POSTGRES_PASSWORD": PG_PASSWORD})
 
     def apply(service, env_name, restart=None, resolver=None):
-        restart(("CANARY_POSTGRES_PASSWORD",))
+        restart(("TODO_POSTGRES_PASSWORD",))
         from types import SimpleNamespace
 
         return SimpleNamespace(
@@ -412,14 +448,14 @@ def test_first_sync_creates_the_role_although_no_consumer_exists_yet(
         if "psql" in DockerHost.remote(command)
     ]
     assert len(psql) == 1, "the role is created on the first sync"
-    assert psql[0][1] == deployer.canary_role_sql(PG_PASSWORD)
+    assert psql[0][1] == deployer.todos_storage_sql(PG_PASSWORD)
 
 
 def test_role_sql_keeps_the_password_out_of_the_server_log(deploy) -> None:
     """A failed ALTER ROLE is logged with its statement text by default. The session turns
     statement logging off before the password statement runs."""
-    sql = " ".join(deploy.TodoDeployer.canary_role_sql(PG_PASSWORD).split())
-    alter = sql.index("ALTER ROLE canary_ro WITH")
+    sql = " ".join(deploy.TodoDeployer.todos_storage_sql(PG_PASSWORD).split())
+    alter = sql.index("ALTER ROLE todo_app WITH")
     for setting in (
         "SET log_min_error_statement = 'panic';",
         "SET log_statement = 'none';",
@@ -434,10 +470,10 @@ def test_a_failed_role_sync_never_prints_the_password(deploy, monkeypatch) -> No
     """psql prints the failing statement with a caret under the error, and that statement
     holds the password."""
     deployer = deploy.TodoDeployer
-    _stub_role_env(monkeypatch, deployer, {"CANARY_POSTGRES_PASSWORD": PG_PASSWORD})
+    _stub_role_env(monkeypatch, deployer, {"TODO_POSTGRES_PASSWORD": PG_PASSWORD})
     stderr = (
         'psql:<stdin>:12: ERROR:  syntax error at or near "x"\n'
-        f"LINE 1: ALTER ROLE canary_ro WITH LOGIN PASSWORD '{PG_PASSWORD}';\n"
+        f"LINE 1: ALTER ROLE todo_app WITH LOGIN PASSWORD '{PG_PASSWORD}';\n"
         "                                                  ^\n"
         f"DETAIL: rejected {PG_PASSWORD}"
     )
@@ -449,7 +485,7 @@ def test_a_failed_role_sync_never_prints_the_password(deploy, monkeypatch) -> No
         lambda *args, **kwargs: printed.append(" ".join(map(str, args))),
     )
 
-    assert deployer._ensure_canary_postgres_role(host) is False
+    assert deployer._ensure_todo_postgres_role(host) is False
 
     assert printed, "the failure must be reported"
     assert all(PG_PASSWORD not in line for line in printed), printed

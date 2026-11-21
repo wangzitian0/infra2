@@ -85,7 +85,7 @@ def test_todo_preview_render_holds_no_vault_path_no_approle_no_production_host()
     # Every data host of the slot carries the slot suffix: none is a production or
     # staging container.
     todo_env = services["todo"]["environment"]
-    for key in ("POSTGRES_HOST", "REDIS_HOST", "S3_ENDPOINT"):
+    for key in ("DATABASE_URL", "REDIS_HOST", "S3_ENDPOINT"):
         assert "${ENV_SUFFIX}" in todo_env[key], (key, todo_env[key])
     assert client.created and client.created[0]["name"].endswith("-pr-5")
 
@@ -186,16 +186,19 @@ def test_preview_todo_service_repeats_the_staging_compose_fields():
         assert slot[field] == prod[field], field
     assert slot["healthcheck"]["test"] == prod["healthcheck"]["test"]
     shared = set(slot["environment"]) & set(prod["environment"])
-    assert len(shared) == 25
+    assert len(shared) == 19
     assert {
         k for k in shared if slot["environment"][k] != prod["environment"][k]
     } == set()
-    # The slot adds only the secrets and DATABASE_URL, which production composes in
-    # secrets.ctmpl from the same password.
+    # The slot adds only the names that production renders from Vault in secrets.ctmpl.
     config = preview_service_config(SERVICE)
-    assert set(slot["environment"]) - set(prod["environment"]) == set(
-        config.throwaway_secrets
-    ) | {"DATABASE_URL"}
+    added = set(slot["environment"]) - set(prod["environment"])
+    assert added == {"REDIS_PASSWORD", "S3_ACCESS_KEY", "S3_SECRET_KEY", "DATABASE_URL"}
+    assert added - {"DATABASE_URL"} < set(config.throwaway_secrets)
+    # Each throwaway secret has a reader in the slot compose file.
+    text = (REPO_ROOT / "platform/30.todo/preview.compose.yaml").read_text()
+    for name in config.throwaway_secrets:
+        assert f"${{{name}" in text, name
 
     # Every slot label equals a production label, except the slot's own Docker network.
     own = {"traefik.docker.network=dokploy-network"}
@@ -227,22 +230,22 @@ def test_slot_postgres_keeps_no_data_across_up():
 
 
 def test_todo_template_composes_database_url_from_the_todo_password():
-    # One login: the URL in the template and in the slot uses the role, database and host
-    # that compose.yaml gives the app, so a rename of one cannot leave the URL stale.
-    prod = _services("platform/30.todo/compose.yaml")
-    env = prod["todo"]["environment"]
-    role, database = env["TODO_POSTGRES_USER"], env["TODO_POSTGRES_DATABASE"]
-    host = env["POSTGRES_HOST"].replace("${ENV_SUFFIX}", "%s")
-    assert (role, database, host) == ("todo_app", "postgres", "platform-postgres%s")
+    # One login: the URL in the template and in the slot names the role that the slot's
+    # Postgres creates and the host of that container.
+    slot_services = _services("platform/30.todo/preview.compose.yaml")
+    postgres = slot_services["postgres"]
+    (init,) = [part for part in postgres["command"] if "CREATE ROLE" in part]
+    role = init.split("CREATE ROLE ", 1)[1].split(" ", 1)[0]
+    host = postgres["container_name"]
+    assert (role, host) == ("todo_app", "platform-postgres${ENV_SUFFIX}")
+    assert slot_services["todo"]["environment"]["DATABASE_URL"] == (
+        f"postgresql://{role}:${{TODO_POSTGRES_PASSWORD}}@{host}:5432/postgres"
+    )
     template = (REPO_ROOT / "platform/30.todo/secrets.ctmpl").read_text()
     assert (
         'DATABASE_URL={{ printf "%q" (printf '
-        f'"postgresql://{role}:%s@{host}:{env["POSTGRES_PORT"]}/{database}" '
+        f'"postgresql://{role}:%s@{host.replace("${ENV_SUFFIX}", "%s")}:5432/postgres" '
         '.Data.data.TODO_POSTGRES_PASSWORD (env "ENV_SUFFIX")) }}'
     ) in template
-    assert prod["vault-agent"]["environment"]["ENV_SUFFIX"] == "${ENV_SUFFIX:-}"
-    slot = _services("platform/30.todo/preview.compose.yaml")["todo"]["environment"]
-    assert slot["DATABASE_URL"] == (
-        f"postgresql://{role}:${{TODO_POSTGRES_PASSWORD}}"
-        f"@{env['POSTGRES_HOST']}:{env['POSTGRES_PORT']}/{database}"
-    )
+    agent = _services("platform/30.todo/compose.yaml")["vault-agent"]
+    assert agent["environment"]["ENV_SUFFIX"] == "${ENV_SUFFIX:-}"
