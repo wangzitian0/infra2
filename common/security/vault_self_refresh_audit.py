@@ -120,10 +120,21 @@ def collect_live_observations(
     dokploy_host = f"cloud.{internal_domain}" if internal_domain else None
     client = get_dokploy(host=dokploy_host)
     observations: dict[str, Any] = {"services": {}}
+    from common.deploy.compose_compile import refuse_x_infra2
+
     for service in services:
         if service.ephemeral:
             observations["services"][service.id] = {"skipped": PREVIEW_STACK_SKIPPED}
             continue
+        # A compiled sidecar reads its template from /vault/secrets.ctmpl, and the release
+        # hash is a compose label, not secrets.ctmpl on disk. This audit reads the old
+        # paths, so it stops on an x-infra2 stack (infra2#1822 follow-up).
+        compose_file = REPO_ROOT / service.compose_path
+        if compose_file.is_file():
+            refuse_x_infra2(
+                compose_file.read_text(encoding="utf-8"),
+                where=f"vault self-refresh audit {service.compose_path}",
+            )
         compose = client.find_compose_by_name(
             service.dokploy_service,
             project_name=service.project,

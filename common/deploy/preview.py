@@ -331,6 +331,15 @@ def up(
             "Providers before deploying a preview (the compose template is pulled from "
             "the infra2 repo, not uploaded raw)."
         )
+    # A preview pulls config.compose_path from the checkout (sourceType=github), so Dokploy
+    # would run an x-infra2 source uncompiled. Stop until preview compiles (infra2#1822).
+    from common.core.constants import REPO_ROOT
+    from common.deploy.compose_compile import refuse_x_infra2
+
+    refuse_x_infra2(
+        (REPO_ROOT / config.compose_path).read_text(encoding="utf-8"),
+        where=f"preview up {config.compose_path}",
+    )
     source_fields = dict(
         source_type="github",
         githubId=gh_id,

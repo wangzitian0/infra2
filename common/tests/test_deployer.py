@@ -1673,6 +1673,11 @@ def test_composing_ensures_domains_before_single_deploy(monkeypatch):
         def _assert_approle_creds_present(cls, env):
             pass
 
+        @classmethod
+        def get_compose_content(cls, c):
+            # A plain compose file: composing() keeps the GitHub source (infra2#1822).
+            return "services:\n  app:\n    image: alpine:3.20\n"
+
     client = MagicMock()
     client.find_compose_by_name.return_value = {"composeId": "cmp-order"}
     client.get_compose_env.return_value = ""

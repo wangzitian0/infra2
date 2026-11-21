@@ -574,6 +574,15 @@ variable in the label `iac.mount-sha256.<name>`. A content change recreates only
 that file. `Deployer.composing()` refuses to deploy when the compose needs a variable that is not set,
 and `tools/deploy_guard_audit.py` fails when a mounting service has no such label.
 The variables are not part of `CONFIGURATION_SHA256`, `IAC_SOURCE_CONFIG_HASH` or `IAC_DEPLOY_REF`.
+Compiled compose (infra2#1822 Slice 1): `common/deploy/compose_compile.py` is the one reader of a stack
+compose file for the deploy. A file with a top-level `x-infra2` key compiles with
+`infra2_sdk.rules.compile_compose`. A file without it compiles to the same bytes. `CONFIGURATION_SHA256`
+hashes the compiled text. A plain file keeps `sourceType="github"`. An `x-infra2` stack deploys as
+`sourceType="raw"` (`upsert_raw_compose`) only when its compiled text has no `build:` and no bind mount from
+the checkout; else `Deployer.composing()` stops. Preview, config drift and the vault self-refresh audit stop
+on an `x-infra2` file until each one supports it. The `validate-compose` job runs
+`python -m tools.compose_compile check` against the PR base. `python -m tools.compose_compile print <file>`
+prints the compiled text.
 
 服务一旦声明 `runtime_only_config_keys`，必须显式实现不访问 secret backend 的
 `source_config_env_base`；合同测试枚举所有这类 Deployer，并校验 runtime-only key 不进入 source

@@ -63,6 +63,7 @@ from common.core.facets import (
 )
 
 if TYPE_CHECKING:
+    from common.deploy.compose_compile import StackCompose
     from invoke import Context
     from common.deploy.dokploy_client import DokployClient
 
@@ -574,8 +575,24 @@ class Deployer:
             raise
 
     @classmethod
+    def stack_compose(cls, c: "Context") -> "StackCompose":
+        """The source and the compiled text of this stack (infra2#1822).
+
+        A plain compose file compiles to the same bytes. The deploy uploads and hashes
+        ``compiled``, never ``source``.
+        """
+        from common.deploy.compose_compile import stack_from_text
+
+        return stack_from_text(cls.compose_path, cls.get_compose_content(c))
+
+    @classmethod
     def composing(cls, c: "Context", env_vars: dict[str, str]) -> str:
-        """Deploy via Dokploy API using GitHub provider. Returns composeId."""
+        """Deploy via the Dokploy API and return the composeId.
+
+        A plain compose file uses the GitHub provider (``sourceType="github"``). A
+        raw-eligible ``x-infra2`` stack uploads its compiled text (``sourceType="raw"``).
+        An ``x-infra2`` stack that is not raw-eligible stops here, before any API call.
+        """
         # Fail closed (#1438): a host-mounted file without its content fingerprint would
         # leave the old container running after a template change.
         missing = missing_mount_fingerprints(cls.compose_path, env_vars)
@@ -591,10 +608,15 @@ class Deployer:
         branch = cls._checkout_ref() or GITHUB_BRANCH
 
         e = cls.env()
-        header(f"{cls.service} composing", "Deploying via Dokploy API (GitHub)")
+        env_name = cls._require_env_name(e)
+        stack = cls.stack_compose(c)
+        source_type = stack.source_type
+        header(
+            f"{cls.service} composing",
+            f"Deploying via Dokploy API ({'raw' if source_type == 'raw' else 'GitHub'})",
+        )
         # Deploy via API
         # Priority: ENV > Class Attribute > Default "platform"
-        env_name = cls._require_env_name(e)
         project_name = cls.project_name(e)
         domain = e.get("INTERNAL_DOMAIN")
         host = f"cloud.{domain}" if domain else None
@@ -613,15 +635,16 @@ class Deployer:
             error("Failed to get environment ID")
             raise ValueError("Failed to get environment ID")
 
-        # Get GitHub provider ID
-        github_id = client.get_github_provider_id()
-        if not github_id:
-            error(
-                "No GitHub provider configured in Dokploy. Please add one in Settings -> Git Providers."
-            )
-            raise ValueError("No GitHub provider found")
+        github_id = None
+        if source_type == "github":
+            github_id = client.get_github_provider_id()
+            if not github_id:
+                error(
+                    "No GitHub provider configured in Dokploy. Please add one in Settings -> Git Providers."
+                )
+                raise ValueError("No GitHub provider found")
 
-        info(f"Using GitHub provider: {github_id}")
+            info(f"Using GitHub provider: {github_id}")
 
         # Format env vars
         env_str = "\n".join(f"{k}={v}" for k, v in env_vars.items() if v is not None)
@@ -637,11 +660,10 @@ class Deployer:
                 )
                 if existing:
                     info(f"Adopting legacy compose {legacy_name} -> {cls.service}")
-                    client.update_compose(
-                        existing["composeId"],
-                        name=cls.service,
-                        composePath=cls.compose_path,
-                    )
+                    adopt = {"name": cls.service}
+                    if source_type == "github":
+                        adopt["composePath"] = cls.compose_path
+                    client.update_compose(existing["composeId"], **adopt)
                     break
 
         # autoDeploy=False on every path. These services are deployed by the
@@ -669,23 +691,39 @@ class Deployer:
         else:
             effective_env = env_str
 
-        from common.deploy.dokploy_adapter import upsert_github_compose
-
-        compose_id = upsert_github_compose(
-            client,
-            service_name=cls.service,
-            project_name=project_name,
-            env_id=env_id,
-            github_id=github_id,
-            repository=GITHUB_REPO,
-            owner=GITHUB_OWNER,
-            branch=branch,
-            compose_path=cls.compose_path,
-            effective_env=effective_env,
-            existing=existing,
-            raw_env_str=env_str,
-            log_info=info,
+        from common.deploy.dokploy_adapter import (
+            upsert_github_compose,
+            upsert_raw_compose,
         )
+
+        if source_type == "raw":
+            compose_id = upsert_raw_compose(
+                client,
+                service_name=cls.service,
+                project_name=project_name,
+                env_id=env_id,
+                compose_file=stack.compiled,
+                effective_env=effective_env,
+                existing=existing,
+                raw_env_str=env_str,
+                log_info=info,
+            )
+        else:
+            compose_id = upsert_github_compose(
+                client,
+                service_name=cls.service,
+                project_name=project_name,
+                env_id=env_id,
+                github_id=github_id,
+                repository=GITHUB_REPO,
+                owner=GITHUB_OWNER,
+                branch=branch,
+                compose_path=cls.compose_path,
+                effective_env=effective_env,
+                existing=existing,
+                raw_env_str=env_str,
+                log_info=info,
+            )
 
         try:
             # Deploy
@@ -1254,10 +1292,11 @@ class Deployer:
         crash-loops on "VAULT_ROLE_ID and VAULT_SECRET_ID are required" and the
         service never starts. Run `vault.setup-approle` first.
         """
-        from pathlib import Path
+        from common.deploy.compose_compile import load_stack
         from common.deploy.preflight import check_approle_creds
 
-        compose_text = Path(cls.compose_path).read_text(encoding="utf-8")
+        # The compiled text holds the vault-agent sidecar of an x-infra2 stack.
+        compose_text = load_stack(cls.compose_path).compiled
         missing = check_approle_creds(compose_text, effective_env)
         if missing:
             cred_missing = [
@@ -1292,7 +1331,9 @@ class Deployer:
         bakes in (a contract, pinned config) flips its hash — keeping the iac-runner fan-out and
         the hash gate in agreement.
         """
-        compose_content = cls.get_compose_content(c)
+        # CONFIGURATION_SHA256 comes from the compiled bytes (infra2#1822). A plain file
+        # compiles to its own bytes, so its hash does not change.
+        compose_content = cls.stack_compose(c).compiled
         return config_hash_from_items(
             compose_content,
             env_vars,

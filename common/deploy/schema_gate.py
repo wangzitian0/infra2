@@ -49,7 +49,6 @@ import subprocess
 from dataclasses import dataclass
 
 from common.deploy.in_service import container_names
-from common.core.constants import REPO_ROOT
 
 # The SDK schema_check exit codes (infra2_sdk.runtime.schema_check). 2 is argparse's
 # usage error. Every code except EXIT_OK blocks the deploy.
@@ -221,7 +220,10 @@ def _ssh_host() -> str:
 
 
 def _vault_agent_container(service: str, compose_path: str, env_suffix: str) -> str:
-    text = (REPO_ROOT / compose_path).read_text(encoding="utf-8")
+    from common.deploy.compose_compile import load_stack
+
+    # The compiled text names the vault-agent sidecar of an x-infra2 stack (infra2#1822).
+    text = load_stack(compose_path).compiled
     names = container_names(text, env_suffix)
     name = names.get(_VAULT_AGENT_SERVICE_KEY)
     if not name:
