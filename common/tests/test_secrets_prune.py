@@ -151,8 +151,6 @@ def test_every_registered_service_declares_its_store_only_keys():
     documented = {s.id: s.store_only_keys for s in SERVICES if s.store_only_keys}
     assert documented == {
         "platform/authentik": ("root_token",),
-        # No reader: kept until the owner approves its deletion in production (#1823).
-        "platform/todo": ("CANARY_POSTGRES_PASSWORD",),
         "finance_report/app": ("S3_BUCKET",),
         "truealpha/app": ("S3_BUCKET",),
         "truealpha/data_engine": (

@@ -117,10 +117,6 @@ SERVICES: tuple[Service, ...] = (
         "platform",
         "todo",
         ("platform/30.todo/env.manifest.json",),
-        # No reader. The Canary logs in with DATABASE_URL and the
-        # role canary_ro is not provisioned. The key stays so that the prune does not
-        # delete it in production before the owner approves that deletion (#1823).
-        store_only_keys=("CANARY_POSTGRES_PASSWORD",),
     ),
     Service(
         "finance_report/finance_report/01.postgres",
